@@ -2924,6 +2924,13 @@ export class AgentSession {
 			attribution: "user",
 			timestamp: Date.now(),
 		});
+		// When idle, schedule an immediate continue so the queued follow-up is
+		// delivered without waiting for the next user turn.
+		if (!this.isStreaming) {
+			this.#scheduleAgentContinue({
+				shouldContinue: () => !this.agent.state.isStreaming && this.agent.hasQueuedMessages(),
+			});
+		}
 	}
 
 	queueDeferredMessage(message: CustomMessage): void {
