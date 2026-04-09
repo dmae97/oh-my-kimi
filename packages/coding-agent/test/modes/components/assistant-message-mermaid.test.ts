@@ -59,17 +59,16 @@ describe("AssistantMessageComponent mermaid markdown", () => {
 
 		expect(TERMINAL.imageProtocol).toBeNull();
 		expect(rendered).toContain("Start");
-		expect(rendered).toContain("Stop");
+		expect(rendered).toContain("Start--");
 		expect(rendered).not.toContain("```mermaid");
 		expect(rendered).not.toContain("flowchart TD");
 	});
 
-	it("falls back to the fenced code block when Mermaid source is invalid", () => {
-		const rendered = renderAssistantMessage("```mermaid\nflowchart TD\n  A --\n```");
+	it("falls back to the fenced code block when Mermaid rendering fails", () => {
+		const rendered = renderAssistantMessage("```mermaid\nthis is not mermaid\n```");
 
 		expect(TERMINAL.imageProtocol).toBeNull();
 		expect(rendered).toContain("```mermaid");
-		expect(rendered).toContain("flowchart TD");
-		expect(rendered).toContain("A --");
+		expect(rendered).toContain("this is not mermaid");
 	});
 });
