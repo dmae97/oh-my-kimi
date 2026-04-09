@@ -1,8 +1,7 @@
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { Container, Image, ImageProtocol, Markdown, Spacer, TERMINAL, Text } from "@oh-my-pi/pi-tui";
-import { formatNumber, logger } from "@oh-my-pi/pi-utils";
+import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
-import { hasPendingMermaid, prerenderMermaid } from "../../modes/theme/mermaid-cache";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { resolveImageOptions } from "../../tools/render-utils";
 
@@ -12,7 +11,6 @@ import { resolveImageOptions } from "../../tools/render-utils";
 export class AssistantMessageComponent extends Container {
 	#contentContainer: Container;
 	#lastMessage?: AssistantMessage;
-	#prerenderInFlight = false;
 	#toolImagesByCallId = new Map<string, ImageContent[]>();
 	#usageInfo?: Usage;
 
@@ -85,43 +83,12 @@ export class AssistantMessageComponent extends Container {
 			this.#contentContainer.addChild(new Text(theme.fg("toolOutput", `[Image: ${image.mimeType}]`), 1, 0));
 		}
 	}
-	#triggerMermaidPrerender(message: AssistantMessage): void {
-		if (!TERMINAL.imageProtocol || this.#prerenderInFlight) return;
-
-		// Check if any text content has pending mermaid blocks
-		const hasPending = message.content.some(c => c.type === "text" && c.text.trim() && hasPendingMermaid(c.text));
-		if (!hasPending) return;
-
-		this.#prerenderInFlight = true;
-
-		// Fire off background prerender
-		void (async () => {
-			try {
-				for (const content of message.content) {
-					if (content.type === "text" && content.text.trim() && hasPendingMermaid(content.text)) {
-						prerenderMermaid(content.text);
-					}
-				}
-			} catch (error) {
-				logger.warn("Background mermaid prerender failed", {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			} finally {
-				this.#prerenderInFlight = false;
-				// Invalidate to re-render with cached images
-				this.invalidate();
-			}
-		})();
-	}
 
 	updateContent(message: AssistantMessage): void {
 		this.#lastMessage = message;
 
 		// Clear content container
 		this.#contentContainer.clear();
-
-		// Trigger background mermaid pre-rendering if needed
-		this.#triggerMermaidPrerender(message);
 
 		const hasVisibleContent = message.content.some(
 			c => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
