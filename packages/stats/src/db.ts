@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import { getConfigRootDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
 import type {
 	AggregatedStats,
+	CostTimeSeriesPoint,
 	FolderStats,
 	MessageStats,
 	ModelPerformancePoint,
@@ -479,4 +480,43 @@ export function getMessageById(id: number): MessageStats | null {
 	const stmt = db.prepare("SELECT * FROM messages WHERE id = ?");
 	const row = stmt.get(id);
 	return row ? rowToMessageStats(row) : null;
+}
+
+/**
+ * Get daily cost time series data for the last N days, broken down by model.
+ */
+export function getCostTimeSeries(days = 90): CostTimeSeriesPoint[] {
+	if (!db) return [];
+
+	const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+
+	const stmt = db.prepare(`
+		SELECT
+			(timestamp / 86400000) * 86400000 as bucket,
+			model,
+			provider,
+			SUM(cost_total) as cost,
+			SUM(cost_input) as cost_input,
+			SUM(cost_output) as cost_output,
+			SUM(cost_cache_read) as cost_cache_read,
+			SUM(cost_cache_write) as cost_cache_write,
+			COUNT(*) as requests
+		FROM messages
+		WHERE timestamp >= ?
+		GROUP BY bucket, model, provider
+		ORDER BY bucket ASC
+	`);
+
+	const rows = stmt.all(cutoff) as any[];
+	return rows.map(row => ({
+		timestamp: row.bucket,
+		model: row.model,
+		provider: row.provider,
+		cost: row.cost,
+		costInput: row.cost_input,
+		costOutput: row.cost_output,
+		costCacheRead: row.cost_cache_read,
+		costCacheWrite: row.cost_cache_write,
+		requests: row.requests,
+	}));
 }

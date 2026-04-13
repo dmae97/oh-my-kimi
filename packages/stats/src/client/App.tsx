@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { getRecentErrors, getRecentRequests, getStats, sync } from "./api";
 import { ChartsContainer } from "./components/ChartsContainer";
+import { CostChart } from "./components/CostChart";
+import { CostSummary } from "./components/CostSummary";
 import { Header } from "./components/Header";
 import { ModelsTable } from "./components/ModelsTable";
 import { RequestDetail } from "./components/RequestDetail";
@@ -8,7 +10,7 @@ import { RequestList } from "./components/RequestList";
 import { StatsGrid } from "./components/StatsGrid";
 import type { DashboardStats, MessageStats } from "./types";
 
-type Tab = "overview" | "requests" | "errors" | "models";
+type Tab = "overview" | "requests" | "errors" | "models" | "costs";
 
 export default function App() {
 	const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -104,6 +106,13 @@ export default function App() {
 					<div className="space-y-6 animate-fade-in">
 						<ChartsContainer modelSeries={stats.modelSeries} />
 						<ModelsTable models={stats.byModel} performanceSeries={stats.modelPerformanceSeries} />
+					</div>
+				)}
+
+				{activeTab === "costs" && (
+					<div className="space-y-6 animate-fade-in">
+						<CostSummary costSeries={stats.costSeries} />
+						<CostChart costSeries={stats.costSeries} />
 					</div>
 				)}
 

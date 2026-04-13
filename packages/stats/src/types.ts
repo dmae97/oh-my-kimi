@@ -141,6 +141,27 @@ export interface ModelPerformancePoint {
 }
 
 /**
+ * Cost time series data point (daily buckets).
+ */
+export interface CostTimeSeriesPoint {
+	/** Bucket timestamp (start of day) */
+	timestamp: number;
+	/** Model name */
+	model: string;
+	/** Provider name */
+	provider: string;
+	/** Total cost for this bucket */
+	cost: number;
+	/** Cost breakdown */
+	costInput: number;
+	costOutput: number;
+	costCacheRead: number;
+	costCacheWrite: number;
+	/** Request count */
+	requests: number;
+}
+
+/**
  * Overall dashboard stats.
  */
 export interface DashboardStats {
@@ -150,6 +171,7 @@ export interface DashboardStats {
 	timeSeries: TimeSeriesPoint[];
 	modelSeries: ModelTimeSeriesPoint[];
 	modelPerformanceSeries: ModelPerformancePoint[];
+	costSeries: CostTimeSeriesPoint[];
 }
 
 /**
