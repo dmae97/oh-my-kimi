@@ -267,4 +267,43 @@ describe("expandInternalUrls", () => {
 			expandInternalUrls("cat memory://root/missing.md", { skills: [], internalRouter: router }),
 		).rejects.toThrow("Failed to resolve memory:// URL in bash command");
 	});
+
+	it("does not match local:/ inside filesystem paths (e.g. /repo/local:/PLAN.md)", async () => {
+		const command = "cat /repo/local:/PLAN.md";
+		await expect(expandInternalUrls(command, { skills: [] })).resolves.toBe(command);
+	});
+
+	it("does not match local:/ after ./ or ../ prefixes", async () => {
+		const command = "cat ./local:/PLAN.md ../local:/other.md";
+		await expect(expandInternalUrls(command, { skills: [] })).resolves.toBe(command);
+	});
+
+	it("still matches standalone local:/ at a real token boundary", async () => {
+		const localOptions = {
+			getArtifactsDir: () => "/tmp/session-artifacts",
+			getSessionId: () => "session-1",
+		};
+		const command = "cat local:/PLAN.md";
+		const expectedPath = resolveLocalUrlToPath("local://PLAN.md", localOptions);
+		await expect(expandInternalUrls(command, { skills: [], localOptions })).resolves.toBe(
+			`cat ${shellEscape(expectedPath)}`,
+		);
+	});
+
+	it("does not match local:/ when embedded in words (e.g., notlocal:/, mylocal:/)", async () => {
+		const command1 = "cat notlocal:/PLAN.md";
+		await expect(expandInternalUrls(command1, { skills: [] })).resolves.toBe(command1);
+
+		const command2 = "cat mylocal:/data.json";
+		await expect(expandInternalUrls(command2, { skills: [] })).resolves.toBe(command2);
+
+		const command3 = "cat getlocal:/file.txt";
+		await expect(expandInternalUrls(command3, { skills: [] })).resolves.toBe(command3);
+
+		const localOptions = {
+			getArtifactsDir: () => "/tmp/session-artifacts",
+			getSessionId: () => "session-1",
+		};
+		await expect(expandInternalUrls(command1, { skills: [], localOptions })).resolves.toBe(command1);
+	});
 });

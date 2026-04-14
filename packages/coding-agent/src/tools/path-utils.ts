@@ -125,7 +125,8 @@ export function normalizeLocalScheme(filePath: string): string {
 }
 
 export function isInternalUrlPath(filePath: string): boolean {
-	const expanded = expandPath(filePath);
+	const normalized = normalizeLocalScheme(filePath);
+	const expanded = expandPath(normalized);
 	for (const prefix of TOP_LEVEL_INTERNAL_URL_PREFIXES) {
 		if (expanded.startsWith(prefix)) return true;
 	}
@@ -141,9 +142,10 @@ export function isInternalUrlPath(filePath: string): boolean {
  * filesystem root is almost never what they intended.
  */
 export function resolveToCwd(filePath: string, cwd: string): string {
-	const expanded = expandPath(filePath);
+	const normalized = normalizeLocalScheme(filePath);
+	const expanded = expandPath(normalized);
 
-	assertNotInternalUrl(expanded, filePath);
+	assertNotInternalUrl(expanded, normalized);
 
 	if (/^\/+$/.test(expanded)) {
 		return cwd;
