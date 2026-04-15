@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { theme } from "../modes/theme/theme";
-import { expandPath } from "../tools/path-utils";
+import { expandPath, normalizeLocalScheme } from "../tools/path-utils";
 import type { HookUIContext } from "./hooks/types";
 
 /**
@@ -11,6 +11,12 @@ import type { HookUIContext } from "./hooks/types";
  */
 export function resolvePath(filePath: string, cwd: string): string {
 	const expanded = expandPath(filePath);
+	const expandedAndNormalized = normalizeLocalScheme(expanded);
+	if (expandedAndNormalized.startsWith("local://")) {
+		throw new Error(
+			`Path "${filePath}" uses internal scheme "local://" and must be resolved through the proper protocol handler, not as a filesystem path.`,
+		);
+	}
 	if (path.isAbsolute(expanded)) {
 		return expanded;
 	}

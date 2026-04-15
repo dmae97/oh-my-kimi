@@ -54,6 +54,14 @@ describe("tool path root alias", () => {
 		expect(() => resolveToCwd("local://PLAN.md", tempDir)).toThrow("internal scheme");
 	});
 
+	it("rejects @local:/ (at-prefix single-slash) as an internal URL", () => {
+		expect(() => resolveToCwd("@local:/PLAN.md", tempDir)).toThrow("internal scheme");
+	});
+
+	it("rejects @local:// (at-prefix double-slash) as an internal URL", () => {
+		expect(() => resolveToCwd("@local://PLAN.md", tempDir)).toThrow("internal scheme");
+	});
+
 	it("greps from cwd when path is slash", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "grep");

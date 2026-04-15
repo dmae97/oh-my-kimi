@@ -126,9 +126,9 @@ export function normalizeLocalScheme(filePath: string): string {
 
 export function isInternalUrlPath(filePath: string): boolean {
 	const normalized = normalizeLocalScheme(filePath);
-	const expanded = expandPath(normalized);
+	const expandedAndNormalized = normalizeLocalScheme(expandPath(normalized));
 	for (const prefix of TOP_LEVEL_INTERNAL_URL_PREFIXES) {
-		if (expanded.startsWith(prefix)) return true;
+		if (expandedAndNormalized.startsWith(prefix)) return true;
 	}
 	return false;
 }
@@ -144,8 +144,9 @@ export function isInternalUrlPath(filePath: string): boolean {
 export function resolveToCwd(filePath: string, cwd: string): string {
 	const normalized = normalizeLocalScheme(filePath);
 	const expanded = expandPath(normalized);
+	const expandedAndNormalized = normalizeLocalScheme(expanded);
 
-	assertNotInternalUrl(expanded, normalized);
+	assertNotInternalUrl(expandedAndNormalized, normalized);
 
 	if (/^\/+$/.test(expanded)) {
 		return cwd;
