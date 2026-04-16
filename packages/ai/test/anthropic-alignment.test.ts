@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as tls from "node:tls";
+import { Effort } from "@oh-my-pi/pi-ai";
 import {
 	applyClaudeToolPrefix,
 	buildAnthropicClientOptions,
@@ -41,10 +42,20 @@ function createAbortedSignal(): AbortSignal {
 	return controller.signal;
 }
 
+type CaptureAnthropicOptions = {
+	isOAuth?: boolean;
+	metadata?: { user_id?: string };
+	thinkingEnabled?: boolean;
+	reasoning?: Effort;
+	temperature?: number;
+	topP?: number;
+	topK?: number;
+};
+
 function captureAnthropicPayload(
 	model: Model<"anthropic-messages">,
 	context: Context,
-	options?: { isOAuth?: boolean; metadata?: { user_id?: string } },
+	options?: CaptureAnthropicOptions,
 ): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamAnthropic(model, context, {
@@ -52,6 +63,11 @@ function captureAnthropicPayload(
 		isOAuth: options?.isOAuth ?? true,
 		signal: createAbortedSignal(),
 		metadata: options?.metadata,
+		thinkingEnabled: options?.thinkingEnabled,
+		reasoning: options?.reasoning,
+		temperature: options?.temperature,
+		topP: options?.topP,
+		topK: options?.topK,
 		onPayload: payload => resolve(payload),
 	});
 	return promise;
@@ -422,6 +438,44 @@ describe("Anthropic request fingerprint alignment", () => {
 				expect(getEnvApiKey("anthropic")).toBe("foundry-env-token");
 			},
 		);
+	});
+
+	it("drops sampling params and requests summarized adaptive thinking for Opus 4.7", async () => {
+		const payload = (await captureAnthropicPayload(
+			{
+				...ANTHROPIC_MODEL,
+				id: "claude-opus-4-7",
+				name: "Claude Opus 4.7",
+				thinking: {
+					mode: "anthropic-adaptive",
+					minLevel: Effort.Minimal,
+					maxLevel: Effort.XHigh,
+				},
+			},
+			{
+				systemPrompt: "Stay concise.",
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				thinkingEnabled: true,
+				reasoning: Effort.High,
+				temperature: 0.2,
+				topP: 0.3,
+				topK: 4,
+			},
+		)) as {
+			temperature?: number;
+			top_p?: number;
+			top_k?: number;
+			thinking?: { type?: string; display?: string };
+			output_config?: { effort?: string };
+		};
+
+		expect(payload.temperature).toBeUndefined();
+		expect(payload.top_p).toBeUndefined();
+		expect(payload.top_k).toBeUndefined();
+		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(payload.output_config).toEqual({ effort: "high" });
 	});
 
 	it("treats tool prefix helpers as no-ops when prefix is empty", () => {
