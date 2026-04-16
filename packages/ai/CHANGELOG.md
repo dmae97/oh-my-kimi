@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added support for Claude Opus 4.7 (`claude-opus-4-7`) model ([#726](https://github.com/can1357/oh-my-pi/issues/726))
+  - Suppresses sampling parameters (temperature/top_p/top_k) that Opus 4.7 rejects
+  - Enables `display: "summarized"` for adaptive thinking to restore visible thinking content
+
 ### Fixed
 
 - Fixed Cursor provider losing conversation history on follow-up turns (model responding "this appears to be the start of our session") by populating `ConversationStateStructure.rootPromptMessagesJson` with JSON blob IDs for the system prompt plus prior user/assistant/tool-result messages. Cursor's server builds the model prompt from `rootPromptMessagesJson`, not from the protobuf `turns[]` tree, so sending only the system prompt there caused prior turns to be dropped
