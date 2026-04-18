@@ -761,9 +761,9 @@ export async function computeEditDiff(
 	if (oldText.length === 0) {
 		return { error: "oldText must not be empty." };
 	}
-	const absolutePath = resolveToCwd(path, cwd);
 
 	try {
+		const absolutePath = resolveToCwd(path, cwd);
 		let rawContent: string;
 		try {
 			rawContent = await readFileTextForDiff(path, absolutePath);

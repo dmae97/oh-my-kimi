@@ -1157,11 +1157,11 @@ export async function computeHashlineDiff(
 	  }
 > {
 	const { path, edits, move } = input;
-	const absolutePath = resolveToCwd(path, cwd);
-	const movePath = move ? resolveToCwd(move, cwd) : undefined;
-	const isMoveOnly = Boolean(movePath) && movePath !== absolutePath && edits.length === 0;
 
 	try {
+		const absolutePath = resolveToCwd(path, cwd);
+		const movePath = move ? resolveToCwd(move, cwd) : undefined;
+		const isMoveOnly = Boolean(movePath) && movePath !== absolutePath && edits.length === 0;
 		const resolvedEdits = resolveHashlineEditsForDiff(edits);
 		const file = Bun.file(absolutePath);
 

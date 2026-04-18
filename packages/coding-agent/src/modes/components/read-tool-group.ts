@@ -176,7 +176,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 						code: entry.contentText ?? "",
 						language: lang,
 						title,
-						status: entry.status === "error" ? "error" : entry.status === "pending" ? "pending" : "complete",
+						status: entry.status === "success" ? "complete" : entry.status,
 						expanded,
 						codeMaxLines: expanded ? undefined : COLLAPSED_PREVIEW_LINES,
 						width,
