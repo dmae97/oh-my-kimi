@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { getDefault } from "../src/config/settings-schema";
 import { ReadToolGroupComponent } from "../src/modes/components/read-tool-group";
 import * as themeModule from "../src/modes/theme/theme";
 
@@ -11,8 +12,28 @@ describe("ReadToolGroupComponent", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("renders warning previews with warning styling instead of success styling", () => {
+	it("keeps inline read previews disabled by default", () => {
+		expect(getDefault("read.toolResultPreview")).toBe(false);
+
 		const component = new ReadToolGroupComponent();
+		component.updateArgs({ path: "/tmp/example.ts" }, "read-0");
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "line 1\nline 2\nline 3\nline 4" }],
+			},
+			false,
+			"read-0",
+		);
+
+		const rendered = Bun.stripANSI(component.render(120).join("\n"));
+
+		expect(rendered).toContain("Read /tmp/example.ts");
+		expect(rendered).not.toContain("line 1");
+		expect(rendered.toLowerCase()).not.toContain("ctrl+o");
+	});
+
+	it("renders warning previews with warning styling instead of success styling", () => {
+		const component = new ReadToolGroupComponent({ showContentPreview: true });
 		component.updateArgs({ path: "/tmp/example.ts" }, "read-1");
 		component.updateResult(
 			{
@@ -32,7 +53,7 @@ describe("ReadToolGroupComponent", () => {
 
 	it("highlights only the collapsed preview lines", () => {
 		const highlightSpy = vi.spyOn(themeModule, "highlightCode");
-		const component = new ReadToolGroupComponent();
+		const component = new ReadToolGroupComponent({ showContentPreview: true });
 		component.updateArgs({ path: "/tmp/example.ts" }, "read-2");
 		component.updateResult(
 			{
@@ -54,5 +75,22 @@ describe("ReadToolGroupComponent", () => {
 		expect(rendered).toContain("line 1");
 		expect(rendered).not.toContain("line 4");
 		expect(rendered.toLowerCase()).toContain("ctrl+o");
+	});
+
+	it("does not render a duplicate summary row when inline previews are enabled", () => {
+		const component = new ReadToolGroupComponent({ showContentPreview: true });
+		component.updateArgs({ path: "/tmp/example.ts", sel: "L10-L20" }, "read-3");
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "line 1\nline 2\nline 3\nline 4" }],
+			},
+			false,
+			"read-3",
+		);
+
+		const rendered = Bun.stripANSI(component.render(120).join("\n"));
+		const matches = rendered.match(/Read \/tmp\/example\.ts:L10-L20/g) ?? [];
+
+		expect(matches).toHaveLength(1);
 	});
 });

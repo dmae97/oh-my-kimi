@@ -1034,6 +1034,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"read.toolResultPreview": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "editing",
+			label: "Inline Read Previews",
+			description: "Render read tool results inline in the transcript instead of summary rows",
+		},
+	},
+
 	"read.prosechunks": {
 		type: "boolean",
 		default: false,

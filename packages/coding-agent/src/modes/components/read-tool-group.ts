@@ -23,6 +23,10 @@ type ReadToolResultDetails = {
 	};
 };
 
+type ReadToolGroupOptions = {
+	showContentPreview?: boolean;
+};
+
 function getSuffixResolution(details: ReadToolResultDetails | undefined): ReadToolSuffixResolution | undefined {
 	if (typeof details?.suffixResolution?.from !== "string" || typeof details.suffixResolution.to !== "string") {
 		return undefined;
@@ -46,9 +50,11 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#entries = new Map<string, ReadEntry>();
 	#text: Text;
 	#expanded = false;
+	#showContentPreview: boolean;
 
-	constructor() {
+	constructor(options: ReadToolGroupOptions = {}) {
 		super();
+		this.#showContentPreview = options.showContentPreview ?? false;
 		this.#text = new Text("", 0, 0);
 		this.addChild(this.#text);
 		this.#updateDisplay();
@@ -111,7 +117,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#updateDisplay(): void {
 		const entries = [...this.#entries.values()];
 
-		// Clear previous children and re-add the text node
+		// Clear previous children and rebuild the summary and preview blocks.
 		this.clear();
 		this.#text = new Text("", 0, 0);
 
@@ -123,13 +129,15 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 		if (entries.length === 1) {
 			const entry = entries[0];
-			const statusSymbol = this.#formatStatus(entry.status);
-			const pathDisplay = this.#formatPath(entry);
-			this.#text.setText(` ${statusSymbol} ${theme.fg("toolTitle", theme.bold("Read"))} ${pathDisplay}`.trimEnd());
-			this.addChild(this.#text);
-
-			// Show content preview (collapsed) or full content (expanded)
-			if (entry.contentText !== undefined) {
+			if (!this.#shouldRenderPreview(entry)) {
+				const statusSymbol = this.#formatStatus(entry.status);
+				const pathDisplay = this.#formatPath(entry);
+				this.#text.setText(
+					` ${statusSymbol} ${theme.fg("toolTitle", theme.bold("Read"))} ${pathDisplay}`.trimEnd(),
+				);
+				this.addChild(this.#text);
+			}
+			if (this.#shouldRenderPreview(entry)) {
 				this.#addContentPreview(entry);
 			}
 			return;
@@ -137,8 +145,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 		const header = `${theme.fg("toolTitle", theme.bold("Read"))}${theme.fg("dim", ` (${entries.length})`)}`;
 		const lines = [` ${theme.format.bullet} ${header}`];
-		const total = entries.length;
-		for (const [index, entry] of entries.entries()) {
+		const entriesWithoutPreview = entries.filter(entry => !this.#shouldRenderPreview(entry));
+		const total = entriesWithoutPreview.length;
+		for (const [index, entry] of entriesWithoutPreview.entries()) {
 			const connector = index === total - 1 ? theme.tree.last : theme.tree.branch;
 			const statusSymbol = this.#formatStatus(entry.status);
 			const pathDisplay = this.#formatPath(entry);
@@ -148,9 +157,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		this.#text.setText(lines.join("\n"));
 		this.addChild(this.#text);
 
-		// Show content for each entry: full when expanded, preview when collapsed
 		for (const entry of entries) {
-			if (entry.contentText !== undefined) {
+			if (this.#shouldRenderPreview(entry)) {
 				this.#addContentPreview(entry);
 			}
 		}
@@ -164,7 +172,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#addContentPreview(entry: ReadEntry): void {
 		const lang = getLanguageFromPath(entry.path);
 		const filePath = shortenPath(entry.path);
-		const title = filePath ? `Read ${filePath}` : "Read";
+		const selectionSuffix = entry.sel ? `:${entry.sel}` : "";
+		const correctionSuffix = entry.correctedFrom ? ` (corrected from ${shortenPath(entry.correctedFrom)})` : "";
+		const title = filePath ? `Read ${filePath}${selectionSuffix}${correctionSuffix}` : `Read${selectionSuffix}`;
 		let cachedWidth: number | undefined;
 		let cachedLines: string[] | undefined;
 		const expanded = this.#expanded;
@@ -192,6 +202,10 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			},
 		};
 		this.addChild(component);
+	}
+
+	#shouldRenderPreview(entry: ReadEntry): boolean {
+		return this.#showContentPreview && entry.contentText !== undefined;
 	}
 
 	#formatPath(entry: ReadEntry): string {

@@ -257,7 +257,9 @@ export class UiHelpers {
 					if (content.name === "read") {
 						if (hasErrorStop && errorMessage) {
 							if (!readGroup) {
-								readGroup = new ReadToolGroupComponent();
+								readGroup = new ReadToolGroupComponent({
+									showContentPreview: this.ctx.settings.get("read.toolResultPreview"),
+								});
 								readGroup.setExpanded(this.ctx.toolOutputExpanded);
 								this.ctx.chatContainer.addChild(readGroup);
 							}
@@ -330,7 +332,9 @@ export class UiHelpers {
 					let component = this.ctx.pendingTools.get(message.toolCallId);
 					if (!component) {
 						if (!readGroup) {
-							readGroup = new ReadToolGroupComponent();
+							readGroup = new ReadToolGroupComponent({
+								showContentPreview: this.ctx.settings.get("read.toolResultPreview"),
+							});
 							readGroup.setExpanded(this.ctx.toolOutputExpanded);
 							this.ctx.chatContainer.addChild(readGroup);
 						}
