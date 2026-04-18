@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { resolveLocalUrlToPath } from "../internal-urls";
+import { normalizeLocalScheme } from "../tools/path-utils";
 
 interface RenameApprovedPlanFileOptions {
 	planFilePath: string;
@@ -10,8 +11,8 @@ interface RenameApprovedPlanFileOptions {
 }
 
 function assertLocalUrl(path: string, label: "source" | "destination"): void {
-	if (!path.startsWith("local://")) {
-		throw new Error(`Approved plan ${label} path must use local:// (received ${path}).`);
+	if (!path.startsWith("local:/") && !path.startsWith("local://")) {
+		throw new Error(`Approved plan ${label} path must use local: scheme with / or // (received ${path}).`);
 	}
 }
 
@@ -24,8 +25,8 @@ export async function renameApprovedPlanFile(options: RenameApprovedPlanFileOpti
 		getArtifactsDir: () => getArtifactsDir(),
 		getSessionId: () => getSessionId(),
 	};
-	const resolvedSource = resolveLocalUrlToPath(planFilePath, resolveOptions);
-	const resolvedDestination = resolveLocalUrlToPath(finalPlanFilePath, resolveOptions);
+	const resolvedSource = resolveLocalUrlToPath(normalizeLocalScheme(planFilePath), resolveOptions);
+	const resolvedDestination = resolveLocalUrlToPath(normalizeLocalScheme(finalPlanFilePath), resolveOptions);
 
 	if (resolvedSource === resolvedDestination) {
 		return;

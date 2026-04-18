@@ -512,7 +512,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			: undefined;
 
 		// Resolve protocol URLs (skill://, agent://, etc.) in extracted cwd.
-		if (cwd?.includes("://")) {
+		if (cwd?.includes("://") || cwd?.includes("local:/")) {
 			cwd = await expandInternalUrls(cwd, { ...internalUrlOptions, noEscape: true });
 		}
 

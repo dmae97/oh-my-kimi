@@ -74,7 +74,7 @@ function normalizeAtPrefix(filePath: string): string {
 		withoutAt.startsWith("artifact://") ||
 		withoutAt.startsWith("skill://") ||
 		withoutAt.startsWith("rule://") ||
-		withoutAt.startsWith("local://") ||
+		withoutAt.startsWith("local:") ||
 		withoutAt.startsWith("mcp://")
 	) {
 		return withoutAt;
@@ -110,6 +110,29 @@ export function expandPath(filePath: string): string {
 	return expandTilde(normalized);
 }
 
+function assertNotInternalUrl(expanded: string, original: string): void {
+	for (const prefix of TOP_LEVEL_INTERNAL_URL_PREFIXES) {
+		if (expanded.startsWith(prefix)) {
+			throw new Error(
+				`Path "${original}" uses internal scheme "${prefix}" and must be resolved through the proper protocol handler, not as a filesystem path.`,
+			);
+		}
+	}
+}
+
+export function normalizeLocalScheme(filePath: string): string {
+	return filePath.replace(/^(local:)\/(?!\/)/, "$1//");
+}
+
+export function isInternalUrlPath(filePath: string): boolean {
+	const normalized = normalizeLocalScheme(filePath);
+	const expandedAndNormalized = normalizeLocalScheme(expandPath(normalized));
+	for (const prefix of TOP_LEVEL_INTERNAL_URL_PREFIXES) {
+		if (expandedAndNormalized.startsWith(prefix)) return true;
+	}
+	return false;
+}
+
 /**
  * Resolve a path relative to the given cwd.
  * Handles ~ expansion and absolute paths.
@@ -119,7 +142,12 @@ export function expandPath(filePath: string): string {
  * filesystem root is almost never what they intended.
  */
 export function resolveToCwd(filePath: string, cwd: string): string {
-	const expanded = expandPath(filePath);
+	const normalized = normalizeLocalScheme(filePath);
+	const expanded = expandPath(normalized);
+	const expandedAndNormalized = normalizeLocalScheme(expanded);
+
+	assertNotInternalUrl(expandedAndNormalized, normalized);
+
 	if (/^\/+$/.test(expanded)) {
 		return cwd;
 	}

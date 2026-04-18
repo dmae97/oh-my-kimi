@@ -1,19 +1,20 @@
 import { resolveLocalUrlToPath } from "../internal-urls";
 import type { ToolSession } from ".";
-import { resolveToCwd } from "./path-utils";
+import { normalizeLocalScheme, resolveToCwd } from "./path-utils";
 import { ToolError } from "./tool-errors";
 
-const LOCAL_URL_PREFIX = "local://";
+const LOCAL_SCHEME_PREFIX = "local:";
 
 export function resolvePlanPath(session: ToolSession, targetPath: string): string {
-	if (targetPath.startsWith(LOCAL_URL_PREFIX)) {
-		return resolveLocalUrlToPath(targetPath, {
+	const normalized = normalizeLocalScheme(targetPath);
+	if (normalized.startsWith(LOCAL_SCHEME_PREFIX)) {
+		return resolveLocalUrlToPath(normalized, {
 			getArtifactsDir: session.getArtifactsDir,
 			getSessionId: session.getSessionId,
 		});
 	}
 
-	return resolveToCwd(targetPath, session.cwd);
+	return resolveToCwd(normalized, session.cwd);
 }
 
 export function enforcePlanModeWrite(

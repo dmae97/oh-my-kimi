@@ -4,14 +4,14 @@ import type { Skill } from "../extensibility/skills";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
 import { validateRelativePath } from "../internal-urls/skill-protocol";
 import type { InternalResource } from "../internal-urls/types";
+import { normalizeLocalScheme } from "./path-utils";
 import { ToolError } from "./tool-errors";
 
 /** Regex to find skill:// tokens in command text. */
 const SKILL_URL_PATTERN = /'skill:\/\/[^'\s")`\\]+'|"skill:\/\/[^"\s')`\\]+"|skill:\/\/[^\s'")`\\]+/g;
 
-/** Regex to find supported internal URL tokens in command text. */
-const INTERNAL_URL_PATTERN =
-	/'(?:skill|agent|artifact|plan|memory|rule|local):\/\/[^'\s")`\\]+'|"(?:skill|agent|artifact|plan|memory|rule|local):\/\/[^"\s')`\\]+"|(?:skill|agent|artifact|plan|memory|rule|local):\/\/[^\s'")`\\]+/g;
+const INTERNAL_URL_PATTERN_INCLUDING_NORMALIZED_LOCAL =
+	/'(?:skill|agent|artifact|plan|memory|rule|local):\/\/[^'\s")`\\]+'|"(?:skill|agent|artifact|plan|memory|rule|local):\/\/[^"\s')`\\]+"|(?:skill|agent|artifact|plan|memory|rule|local):\/\/[^\s'")`\\]+|'local:\/[^'\s")`\\]+'|"local:\/[^"\s')`\\]+"|(?<![./\\\\\w-])local:\/[^\s'")`\\]+/g;
 
 const SUPPORTED_INTERNAL_SCHEMES = ["skill", "agent", "artifact", "plan", "memory", "rule", "local"] as const;
 
@@ -146,12 +146,13 @@ function shellEscape(p: string): string {
 }
 
 async function resolveInternalUrlToPath(
-	url: string,
+	rawUrl: string,
 	skills: readonly Skill[],
 	internalRouter?: InternalUrlResolver,
 	localOptions?: LocalProtocolOptions,
 	ensureLocalParentDirs?: boolean,
 ): Promise<string> {
+	const url = normalizeLocalScheme(rawUrl);
 	const scheme = extractScheme(url);
 	if (!scheme) {
 		throw new ToolError(`Unsupported internal URL in bash command: ${url}`);
@@ -218,9 +219,9 @@ export function expandSkillUrls(command: string, skills: readonly Skill[]): stri
  * Supported schemes: skill://, agent://, artifact://, memory://, rule://, local://
  */
 export async function expandInternalUrls(command: string, options: InternalUrlExpansionOptions): Promise<string> {
-	if (!command.includes("://")) return command;
+	if (!command.includes("://") && !command.includes("local:/")) return command;
 
-	const matches = Array.from(command.matchAll(INTERNAL_URL_PATTERN));
+	const matches = Array.from(command.matchAll(INTERNAL_URL_PATTERN_INCLUDING_NORMALIZED_LOCAL));
 	if (matches.length === 0) return command;
 
 	let expanded = command;
@@ -230,7 +231,8 @@ export async function expandInternalUrls(command: string, options: InternalUrlEx
 		const index = match.index;
 		if (index === undefined) continue;
 
-		const url = unquoteToken(token);
+		const rawUrl = unquoteToken(token);
+		const url = normalizeLocalScheme(rawUrl);
 		const resolvedPath = await resolveInternalUrlToPath(
 			url,
 			options.skills,
