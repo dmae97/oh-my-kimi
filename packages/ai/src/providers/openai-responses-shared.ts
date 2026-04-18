@@ -1,6 +1,7 @@
 import { structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import type OpenAI from "openai";
 import type {
+	ResponseCustomToolCall,
 	ResponseFunctionToolCall,
 	ResponseInput,
 	ResponseInputContent,
@@ -82,9 +83,28 @@ export function collectKnownCallIds(messages: ResponseInput): Set<string> {
 	for (const item of messages) {
 		if (item.type === "function_call" && typeof item.call_id === "string") {
 			knownCallIds.add(item.call_id);
+		} else if (
+			(item as { type?: string }).type === "custom_tool_call" &&
+			typeof (item as { call_id?: string }).call_id === "string"
+		) {
+			knownCallIds.add((item as { call_id: string }).call_id);
 		}
 	}
 	return knownCallIds;
+}
+
+/** Scan replay items for call_ids that were originally custom tool calls. */
+export function collectCustomCallIds(messages: ResponseInput): Set<string> {
+	const customCallIds = new Set<string>();
+	for (const item of messages) {
+		if (
+			(item as { type?: string }).type === "custom_tool_call" &&
+			typeof (item as { call_id?: string }).call_id === "string"
+		) {
+			customCallIds.add((item as { call_id: string }).call_id);
+		}
+	}
+	return customCallIds;
 }
 
 export function convertResponsesInputContent(
@@ -122,6 +142,7 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 	msgIndex: number,
 	knownCallIds: Set<string>,
 	includeThinkingSignatures = true,
+	customCallIds?: Set<string>,
 ): ResponseInput {
 	const outputItems: ResponseInput = [];
 	const isDifferentModel =
@@ -167,6 +188,18 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 			itemId = undefined;
 		}
 		knownCallIds.add(normalized.callId);
+		if (block.customWireName) {
+			const rawInput = typeof block.arguments?.input === "string" ? block.arguments.input : "";
+			customCallIds?.add(normalized.callId);
+			outputItems.push({
+				type: "custom_tool_call",
+				id: itemId,
+				call_id: normalized.callId,
+				name: block.customWireName,
+				input: rawInput,
+			} as ResponseInput[number]);
+			continue;
+		}
 		outputItems.push({
 			type: "function_call",
 			id: itemId,
@@ -185,6 +218,7 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	model: Model<TApi>,
 	strictResponsesPairing: boolean,
 	knownCallIds: ReadonlySet<string>,
+	customCallIds?: ReadonlySet<string>,
 ): void {
 	const textResult = toolResult.content
 		.filter((block): block is TextContent => block.type === "text")
@@ -196,11 +230,20 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 		return;
 	}
 
-	messages.push({
-		type: "function_call_output",
-		call_id: normalized.callId,
-		output: (textResult.length > 0 ? textResult : "(see attached image)").toWellFormed(),
-	});
+	const output = (textResult.length > 0 ? textResult : "(see attached image)").toWellFormed();
+	if (customCallIds?.has(normalized.callId)) {
+		messages.push({
+			type: "custom_tool_call_output",
+			call_id: normalized.callId,
+			output,
+		} as ResponseInput[number]);
+	} else {
+		messages.push({
+			type: "function_call_output",
+			call_id: normalized.callId,
+			output,
+		});
+	}
 
 	if (!hasImages || !model.input.includes("image")) {
 		return;
@@ -233,7 +276,12 @@ export async function processResponsesStream<TApi extends Api>(
 	model: Model<TApi>,
 	options?: ProcessResponsesStreamOptions,
 ): Promise<void> {
-	let currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | null = null;
+	let currentItem:
+		| ResponseReasoningItem
+		| ResponseOutputMessage
+		| ResponseFunctionToolCall
+		| ResponseCustomToolCall
+		| null = null;
 	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null = null;
 	const blocks = output.content;
 	const blockIndex = () => blocks.length - 1;
@@ -266,6 +314,24 @@ export async function processResponsesStream<TApi extends Api>(
 					name: item.name,
 					arguments: {},
 					partialJson: item.arguments || "",
+				};
+				output.content.push(currentBlock);
+				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+			} else if (item.type === "custom_tool_call") {
+				currentItem = item;
+				currentBlock = {
+					type: "toolCall",
+					id: `${item.call_id}|${item.id ?? ""}`,
+					// Preserve the raw wire name (e.g. `apply_patch`). The agent-loop
+					// dispatcher matches it against both `Tool.name` and
+					// `Tool.customWireName`, so this stays wire-accurate through
+					// history replay while still routing to the right handler.
+					name: item.name,
+					arguments: { input: item.input ?? "" },
+					customWireName: item.name,
+					// Custom tools stream a raw string, but we reuse `partialJson` as the
+					// accumulation buffer so later code that inspects the field still works.
+					partialJson: item.input ?? "",
 				};
 				output.content.push(currentBlock);
 				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
@@ -368,6 +434,22 @@ export async function processResponsesStream<TApi extends Api>(
 				currentBlock.partialJson = event.arguments;
 				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
 			}
+		} else if (event.type === "response.custom_tool_call_input.delta") {
+			if (currentItem?.type === "custom_tool_call" && currentBlock?.type === "toolCall") {
+				currentBlock.partialJson += event.delta;
+				currentBlock.arguments = { input: currentBlock.partialJson };
+				stream.push({
+					type: "toolcall_delta",
+					contentIndex: blockIndex(),
+					delta: event.delta,
+					partial: output,
+				});
+			}
+		} else if (event.type === "response.custom_tool_call_input.done") {
+			if (currentItem?.type === "custom_tool_call" && currentBlock?.type === "toolCall") {
+				currentBlock.partialJson = event.input;
+				currentBlock.arguments = { input: event.input };
+			}
 		} else if (event.type === "response.output_item.done") {
 			const item = structuredCloneJSON(event.item);
 			options?.onOutputItemDone?.(item);
@@ -415,6 +497,20 @@ export async function processResponsesStream<TApi extends Api>(
 					id: `${item.call_id}|${item.id}`,
 					name: item.name,
 					arguments: args,
+				};
+				currentBlock = null;
+				stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
+			} else if (item.type === "custom_tool_call") {
+				const rawInput =
+					currentBlock?.type === "toolCall" && currentBlock.partialJson
+						? currentBlock.partialJson
+						: (item.input ?? "");
+				const toolCall: ToolCall = {
+					type: "toolCall",
+					id: `${item.call_id}|${item.id ?? ""}`,
+					name: item.name,
+					arguments: { input: rawInput },
+					customWireName: item.name,
 				};
 				currentBlock = null;
 				stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });

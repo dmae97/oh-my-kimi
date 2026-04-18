@@ -32460,7 +32460,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5-chat-latest": {
 			"id": "gpt-5-chat-latest",
@@ -32480,7 +32481,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": 16384
+			"maxTokens": 16384,
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5-codex": {
 			"id": "gpt-5-codex",
@@ -32505,7 +32507,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5-mini": {
 			"id": "gpt-5-mini",
@@ -32530,7 +32533,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5-nano": {
 			"id": "gpt-5-nano",
@@ -32555,7 +32559,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5-pro": {
 			"id": "gpt-5-pro",
@@ -32580,7 +32585,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.1": {
 			"id": "gpt-5.1",
@@ -32605,7 +32611,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.1-chat-latest": {
 			"id": "gpt-5.1-chat-latest",
@@ -32630,7 +32637,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.1-codex": {
 			"id": "gpt-5.1-codex",
@@ -32655,7 +32663,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.1-codex-max": {
 			"id": "gpt-5.1-codex-max",
@@ -32680,7 +32689,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.1-codex-mini": {
 			"id": "gpt-5.1-codex-mini",
@@ -32705,7 +32715,8 @@
 				"mode": "effort",
 				"minLevel": "medium",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.2": {
 			"id": "gpt-5.2",
@@ -32730,7 +32741,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.2-chat-latest": {
 			"id": "gpt-5.2-chat-latest",
@@ -32755,7 +32767,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.2-codex": {
 			"id": "gpt-5.2-codex",
@@ -32780,7 +32793,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.2-pro": {
 			"id": "gpt-5.2-pro",
@@ -32805,7 +32819,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.3-chat-latest": {
 			"id": "gpt-5.3-chat-latest",
@@ -32825,7 +32840,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": 16384
+			"maxTokens": 16384,
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.3-codex": {
 			"id": "gpt-5.3-codex",
@@ -32850,7 +32866,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.3-codex-spark": {
 			"id": "gpt-5.3-codex-spark",
@@ -32876,7 +32893,8 @@
 				"minLevel": "low",
 				"maxLevel": "xhigh"
 			},
-			"contextPromotionTarget": "openai/gpt-5.3-codex"
+			"contextPromotionTarget": "openai/gpt-5.3-codex",
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.4": {
 			"id": "gpt-5.4",
@@ -32901,7 +32919,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.4-mini": {
 			"id": "gpt-5.4-mini",
@@ -32926,7 +32945,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.4-nano": {
 			"id": "gpt-5.4-nano",
@@ -32951,7 +32971,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.4-pro": {
 			"id": "gpt-5.4-pro",
@@ -32976,7 +32997,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"o1": {
 			"id": "o1",
@@ -33231,7 +33253,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5-codex": {
 			"id": "gpt-5-codex",
@@ -33258,7 +33281,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5-codex-mini": {
 			"id": "gpt-5-codex-mini",
@@ -33285,7 +33309,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.1": {
 			"id": "gpt-5.1",
@@ -33312,7 +33337,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.1-codex": {
 			"id": "gpt-5.1-codex",
@@ -33339,7 +33365,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.1-codex-max": {
 			"id": "gpt-5.1-codex-max",
@@ -33366,7 +33393,8 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.1-codex-mini": {
 			"id": "gpt-5.1-codex-mini",
@@ -33393,7 +33421,8 @@
 				"mode": "effort",
 				"minLevel": "medium",
 				"maxLevel": "high"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.2": {
 			"id": "gpt-5.2",
@@ -33420,7 +33449,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.2-codex": {
 			"id": "gpt-5.2-codex",
@@ -33447,7 +33477,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.3-codex": {
 			"id": "gpt-5.3-codex",
@@ -33474,7 +33505,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.3-codex-spark": {
 			"id": "gpt-5.3-codex-spark",
@@ -33500,7 +33532,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.4": {
 			"id": "gpt-5.4",
@@ -33527,7 +33560,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.4-mini": {
 			"id": "gpt-5.4-mini",
@@ -33554,7 +33588,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.4-nano": {
 			"id": "gpt-5.4-nano",
@@ -33581,7 +33616,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		},
 		"gpt-5.5": {
 			"id": "gpt-5.5",
@@ -33608,7 +33644,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"applyPatchToolType": "freeform"
 		}
 	},
 	"opencode": {

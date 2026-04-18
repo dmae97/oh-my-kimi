@@ -51,6 +51,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	python: pythonToolRenderer as ToolRenderer,
 	calc: calculatorToolRenderer as ToolRenderer,
 	edit: editToolRenderer as ToolRenderer,
+	apply_patch: editToolRenderer as ToolRenderer,
 	find: findToolRenderer as ToolRenderer,
 	grep: grepToolRenderer as ToolRenderer,
 	lsp: lspToolRenderer as ToolRenderer,

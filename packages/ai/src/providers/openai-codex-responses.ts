@@ -2,6 +2,7 @@ import * as os from "node:os";
 import { $env, $flag, abortableSleep, asRecord, logger, readSseJson, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import type OpenAI from "openai";
 import type {
+	ResponseCustomToolCall,
 	ResponseFunctionToolCall,
 	ResponseInput,
 	ResponseInputContent,
@@ -112,7 +113,7 @@ const CODEX_WEBSOCKET_FATAL_PATTERNS = ["websocket error:", "websocket closed be
 const CODEX_RATE_LIMIT_BUDGET_MS = 5 * 60 * 1000;
 
 type CodexTransport = "sse" | "websocket";
-type CodexEventItem = ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall;
+type CodexEventItem = ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall;
 type CodexOutputBlock = ThinkingContent | TextContent | (ToolCall & { partialJson: string });
 
 type CodexWebSocketSessionState = {
@@ -498,12 +499,22 @@ async function buildTransformedCodexRequestBody(
 		params.service_tier = options.serviceTier;
 	}
 	if (context.tools && context.tools.length > 0) {
-		params.tools = convertTools(context.tools);
+		params.tools = convertTools(context.tools, model);
 		if (options?.toolChoice) {
 			const toolChoice = normalizeCodexToolChoice(options.toolChoice);
 			if (toolChoice) {
 				params.tool_choice = toolChoice;
 			}
+		}
+		// When a custom-tool is active, force serial tool-calling. OpenAI's
+		// `parallel_tool_calls` is request-scoped — disabling it here affects
+		// every tool in the turn, not just the custom one. That's coarser
+		// than spec §1's "supports_parallel_tool_calls = false" (which
+		// strictly targets `apply_patch`), but the platform API offers no
+		// per-tool flag.
+		const emittedTools = params.tools as CodexToolPayload[];
+		if (emittedTools.some(t => t.type === "custom")) {
+			params.parallel_tool_calls = false;
 		}
 	}
 
@@ -802,6 +813,16 @@ function handleCodexStreamEvent(args: {
 		return firstTokenTime;
 	}
 
+	if (eventType === "response.custom_tool_call_input.delta") {
+		handleCustomToolCallInputDelta(runtime.currentItem, runtime.currentBlock, rawEvent, stream, output, blockIndex);
+		return firstTokenTime;
+	}
+
+	if (eventType === "response.custom_tool_call_input.done") {
+		handleCustomToolCallInputDone(runtime.currentItem, runtime.currentBlock, rawEvent);
+		return firstTokenTime;
+	}
+
 	if (eventType === "response.output_item.done") {
 		handleOutputItemDone(model, output, stream, runtime, rawEvent, blockIndex);
 		return firstTokenTime;
@@ -837,6 +858,19 @@ function createOutputBlockForItem(item: CodexEventItem): CodexOutputBlock | null
 			name: item.name,
 			arguments: {},
 			partialJson: item.arguments || "",
+		};
+	}
+	if (item.type === "custom_tool_call") {
+		// Wire name flows through unchanged; the agent-loop dispatcher also
+		// matches `Tool.customWireName`. Reuse `partialJson` as the
+		// accumulation buffer for the raw input string.
+		return {
+			type: "toolCall",
+			id: `${item.call_id}|${item.id ?? ""}`,
+			name: item.name,
+			arguments: { input: item.input ?? "" },
+			customWireName: item.name,
+			partialJson: item.input ?? "",
 		};
 	}
 	return null;
@@ -948,6 +982,34 @@ function handleToolCallArgumentsDone(
 	}
 }
 
+function handleCustomToolCallInputDelta(
+	currentItem: CodexEventItem | null,
+	currentBlock: CodexOutputBlock | null,
+	rawEvent: Record<string, unknown>,
+	stream: AssistantMessageEventStream,
+	output: AssistantMessage,
+	blockIndex: () => number,
+): void {
+	if (currentItem?.type !== "custom_tool_call" || currentBlock?.type !== "toolCall") return;
+	const delta = (rawEvent as { delta?: string }).delta || "";
+	currentBlock.partialJson += delta;
+	currentBlock.arguments = { input: currentBlock.partialJson };
+	stream.push({ type: "toolcall_delta", contentIndex: blockIndex(), delta, partial: output });
+}
+
+function handleCustomToolCallInputDone(
+	currentItem: CodexEventItem | null,
+	currentBlock: CodexOutputBlock | null,
+	rawEvent: Record<string, unknown>,
+): void {
+	if (currentItem?.type !== "custom_tool_call" || currentBlock?.type !== "toolCall") return;
+	const input = (rawEvent as { input?: string }).input;
+	if (typeof input === "string") {
+		currentBlock.partialJson = input;
+		currentBlock.arguments = { input };
+	}
+}
+
 function handleOutputItemDone(
 	model: Model<"openai-codex-responses">,
 	output: AssistantMessage,
@@ -994,6 +1056,23 @@ function handleOutputItemDone(
 			id: `${item.call_id}|${item.id}`,
 			name: item.name,
 			arguments: parseStreamingJson(item.arguments || "{}"),
+		};
+		runtime.canSafelyReplayWebsocketOverSse = false;
+		stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
+		return;
+	}
+
+	if (item.type === "custom_tool_call") {
+		const rawInput =
+			runtime.currentBlock?.type === "toolCall" && runtime.currentBlock.partialJson
+				? runtime.currentBlock.partialJson
+				: (item.input ?? "");
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: `${item.call_id}|${item.id ?? ""}`,
+			name: item.name,
+			arguments: { input: rawInput },
+			customWireName: item.name,
 		};
 		runtime.canSafelyReplayWebsocketOverSse = false;
 		stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
@@ -2081,6 +2160,10 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 
 	const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
 	let msgIndex = 0;
+	// Track call_ids that originated as custom tool calls so paired tool-result
+	// messages can be replayed as `custom_tool_call_output` rather than
+	// `function_call_output` (OpenAI rejects mismatched pairs).
+	const customCallIds = new Set<string>();
 
 	for (const msg of transformedMessages) {
 		if (msg.role === "user" || msg.role === "developer") {
@@ -2089,6 +2172,12 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 				| Array<ResponseInput[number]>
 				| undefined;
 			if (historyItems) {
+				for (const item of historyItems) {
+					const maybe = item as { type?: string; call_id?: string };
+					if (maybe.type === "custom_tool_call" && typeof maybe.call_id === "string") {
+						customCallIds.add(maybe.call_id);
+					}
+				}
 				messages.push(...historyItems);
 				msgIndex += 1;
 				continue;
@@ -2110,10 +2199,17 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 			);
 			const historyItems = providerPayload?.items as Array<ResponseInput[number]> | undefined;
 			if (historyItems) {
+				for (const item of historyItems) {
+					const maybe = item as { type?: string; call_id?: string };
+					if (maybe.type === "custom_tool_call" && typeof maybe.call_id === "string") {
+						customCallIds.add(maybe.call_id);
+					}
+				}
 				if (providerPayload?.dt) {
 					messages.push(...historyItems);
 				} else {
 					messages.splice(0, messages.length, ...historyItems);
+					// Keep customCallIds from the pre-splice state since historyItems may re-introduce them.
 				}
 				msgIndex += 1;
 				continue;
@@ -2149,6 +2245,18 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 				if (block.type === "toolCall") {
 					const toolCall = block as ToolCall;
 					const normalized = normalizeResponsesToolCallId(toolCall.id);
+					if (toolCall.customWireName) {
+						const rawInput = typeof toolCall.arguments?.input === "string" ? toolCall.arguments.input : "";
+						customCallIds.add(normalized.callId);
+						outputItems.push({
+							type: "custom_tool_call",
+							id: normalized.itemId,
+							call_id: normalized.callId,
+							name: toolCall.customWireName,
+							input: rawInput,
+						} as ResponseInput[number]);
+						continue;
+					}
 					outputItems.push({
 						type: "function_call",
 						id: normalized.itemId,
@@ -2172,11 +2280,20 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 				.join("\n");
 			const hasImages = msg.content.some(content => content.type === "image");
 			const normalized = normalizeResponsesToolCallId(msg.toolCallId);
-			messages.push({
-				type: "function_call_output",
-				call_id: normalized.callId,
-				output: (textResult.length > 0 ? textResult : "(see attached image)").toWellFormed(),
-			});
+			const output = (textResult.length > 0 ? textResult : "(see attached image)").toWellFormed();
+			if (customCallIds.has(normalized.callId)) {
+				messages.push({
+					type: "custom_tool_call_output",
+					call_id: normalized.callId,
+					output,
+				} as ResponseInput[number]);
+			} else {
+				messages.push({
+					type: "function_call_output",
+					call_id: normalized.callId,
+					output,
+				});
+			}
 			if (hasImages && model.input.includes("image")) {
 				const contentParts: ResponseInputContent[] = [
 					{ type: "input_text", text: "Attached image(s) from tool result:" } satisfies ResponseInputText,
@@ -2226,14 +2343,48 @@ function normalizeInputMessageContent(
 	return maybeWithoutImages.filter(item => item.type !== "input_text" || item.text.trim().length > 0);
 }
 
-function convertTools(tools: Tool[]): Array<{
-	type: "function";
-	name: string;
-	description: string;
-	parameters: Record<string, unknown>;
-	strict?: boolean;
-}> {
-	return tools.map(tool => {
+/**
+ * Whether this Codex-backend model should get the custom-tool grammar
+ * variant for `apply_patch`. codex-rs uses a single serializer for both
+ * the public Responses endpoint and `chatgpt.com/backend-api`, so the
+ * backend already accepts `{type: "custom"}` tools in production — the
+ * gate is the per-model `applyPatchToolType` flag, nothing endpoint-specific.
+ */
+function supportsFreeformApplyPatchCodex(model: Model<"openai-codex-responses">): boolean {
+	return model.applyPatchToolType === "freeform";
+}
+
+type CodexToolPayload =
+	| {
+			type: "function";
+			name: string;
+			description: string;
+			parameters: Record<string, unknown>;
+			strict?: boolean;
+	  }
+	| {
+			type: "custom";
+			name: string;
+			description: string;
+			format: { type: "grammar"; syntax: "lark" | "regex"; definition: string };
+	  };
+
+/** @internal Exported for tests. */
+export function convertTools(tools: Tool[], model: Model<"openai-codex-responses">): CodexToolPayload[] {
+	const allowFreeform = supportsFreeformApplyPatchCodex(model);
+	return tools.map((tool): CodexToolPayload => {
+		if (allowFreeform && tool.customFormat) {
+			return {
+				type: "custom",
+				name: tool.customWireName ?? tool.name,
+				description: tool.description || "",
+				format: {
+					type: "grammar",
+					syntax: tool.customFormat.syntax,
+					definition: tool.customFormat.definition,
+				},
+			};
+		}
 		const strict = !!(!NO_STRICT && tool.strict);
 		const baseParameters = tool.parameters as unknown as Record<string, unknown>;
 		const { schema: parameters, strict: effectiveStrict } = adaptSchemaForStrict(baseParameters, strict);

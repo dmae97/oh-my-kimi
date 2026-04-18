@@ -26,9 +26,10 @@ import { type VimRenderArgs, vimToolRenderer } from "../tools/vim";
 import { Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
 import type { VimToolDetails } from "../vim/types";
 import type { DiffError, DiffResult } from "./diff";
+import { expandApplyPatchToEntries } from "./modes/apply-patch";
 import { type ChunkToolEdit, parseChunkEditPath } from "./modes/chunk";
 import type { HashlineToolEdit } from "./modes/hashline";
-import type { Operation } from "./modes/patch";
+import type { Operation, PatchEditEntry } from "./modes/patch";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // LSP Batching
@@ -79,6 +80,7 @@ interface EditRenderArgs {
 	oldText?: string;
 	newText?: string;
 	patch?: string;
+	input?: string;
 	all?: boolean;
 	// Patch mode fields
 	op?: Operation;
@@ -89,7 +91,19 @@ interface EditRenderArgs {
 	 */
 	previewDiff?: string;
 	// Hashline / chunk mode fields
-	edits?: Partial<HashlineToolEdit | ChunkToolEdit>[];
+	edits?: EditRenderEntry[];
+}
+
+type EditRenderEntry = {
+	path?: string;
+	rename?: string;
+	move?: string;
+	op?: Operation;
+};
+
+interface ApplyPatchRenderSummary {
+	entries: PatchEditEntry[];
+	error?: string;
 }
 
 function isVimRenderArgs(args: EditRenderArgs | VimRenderArgs): args is VimRenderArgs {
@@ -145,8 +159,8 @@ function filePathFromEditEntry(p: string | undefined): string | undefined {
 }
 
 /** Count distinct file paths in an edits array. */
-function countEditFiles(edits: any[]): number {
-	return new Set(edits.map((e: any) => filePathFromEditEntry(e?.path)).filter(Boolean)).size;
+function countEditFiles(edits: EditRenderEntry[]): number {
+	return new Set(edits.map(edit => filePathFromEditEntry(edit.path)).filter(Boolean)).size;
 }
 
 function countLines(text: string): number {
@@ -352,6 +366,18 @@ function getCallPreview(args: EditRenderArgs, rawPath: string, uiTheme: Theme): 
 	return "";
 }
 
+function getApplyPatchRenderSummary(args: EditRenderArgs): ApplyPatchRenderSummary | undefined {
+	if (typeof args.input !== "string") {
+		return undefined;
+	}
+
+	try {
+		return { entries: expandApplyPatchToEntries({ input: args.input }) };
+	} catch (err) {
+		return { entries: [], error: err instanceof Error ? err.message : String(err) };
+	}
+}
+
 function renderDiffSection(
 	diff: string,
 	rawPath: string,
@@ -419,21 +445,28 @@ export const editToolRenderer = {
 			return vimToolRenderer.renderCall(args, options, uiTheme);
 		}
 
+		const applyPatchSummary = getApplyPatchRenderSummary(args);
+		const firstApplyPatchEntry = applyPatchSummary?.entries[0];
 		// Extract path from first edit entry when top-level path is absent (new schema)
 		const firstEdit = Array.isArray(args.edits) && args.edits.length > 0 ? args.edits[0] : undefined;
-		const rawPath = args.file_path || args.path || filePathFromEditEntry((firstEdit as any)?.path) || "";
-		const rename = args.rename || (firstEdit as any)?.rename;
-		const op = args.op || (firstEdit as any)?.op;
+		const rawPath = args.file_path || args.path || filePathFromEditEntry(firstEdit?.path) || firstApplyPatchEntry?.path || "";
+		const rename = args.rename || firstEdit?.rename || firstEdit?.move || firstApplyPatchEntry?.rename;
+		const op = args.op || firstEdit?.op || firstApplyPatchEntry?.op;
 		const { description } = formatEditDescription(rawPath, uiTheme, { rename });
 		const spinner =
 			options?.spinnerFrame !== undefined ? formatStatusIcon("running", uiTheme, options.spinnerFrame) : "";
 		let text = `${formatTitle(getOperationTitle(op), uiTheme)} ${spinner ? `${spinner} ` : ""}${description}`;
 		// Show file count hint for multi-file edits
-		const fileCount = Array.isArray(args.edits) ? countEditFiles(args.edits as any[]) : 0;
+		const fileCount = Array.isArray(args.edits)
+			? countEditFiles(args.edits)
+			: (applyPatchSummary?.entries.length ?? 0);
 		if (fileCount > 1) {
 			text += uiTheme.fg("dim", ` (+${fileCount - 1} more)`);
 		}
 		text += getCallPreview(args, rawPath, uiTheme);
+		if (applyPatchSummary?.error) {
+			text += `\n\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error), CALL_TEXT_PREVIEW_WIDTH))}`;
+		}
 
 		return new Text(text, 0, 0);
 	},

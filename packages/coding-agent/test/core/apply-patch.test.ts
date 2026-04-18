@@ -4,23 +4,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	ApplyPatchError,
+	applyCodexPatch,
 	applyPatch,
 	ParseError,
-	type PatchInput,
+	parseApplyPatch,
 	parseDiffHunks,
 	seekSequence,
 } from "@oh-my-pi/pi-coding-agent/edit";
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Legacy parser for test fixtures (*** Begin Patch format)
+// Test-local adapters over the production Codex envelope API.
+// (Kept as thin shims so the pre-existing tests keep their original shape;
+// the production API returns PatchInput[] directly.)
 // ═══════════════════════════════════════════════════════════════════════════
-
-const BEGIN_PATCH_MARKER = "*** Begin Patch";
-const END_PATCH_MARKER = "*** End Patch";
-const ADD_FILE_MARKER = "*** Add File: ";
-const DELETE_FILE_MARKER = "*** Delete File: ";
-const UPDATE_FILE_MARKER = "*** Update File: ";
-const MOVE_TO_MARKER = "*** Move to: ";
 
 type LegacyHunk =
 	| { type: "add"; path: string; contents: string }
@@ -32,139 +28,16 @@ interface LegacyParseResult {
 }
 
 function parseLegacyPatch(patch: string): LegacyParseResult {
-	let lines = patch.trim().split("\n");
-
-	// Try lenient heredoc mode first
-	if (
-		lines.length >= 4 &&
-		(lines[0] === "<<EOF" || lines[0] === "<<'EOF'" || lines[0] === '<<"EOF"') &&
-		lines[lines.length - 1].endsWith("EOF")
-	) {
-		lines = lines.slice(1, lines.length - 1);
-	}
-
-	// Check boundaries
-	if (lines.length === 0 || lines[0].trim() !== BEGIN_PATCH_MARKER) {
-		throw new ParseError("The first line of the patch must be '*** Begin Patch'");
-	}
-	if (lines[lines.length - 1].trim() !== END_PATCH_MARKER) {
-		throw new ParseError("The last line of the patch must be '*** End Patch'");
-	}
-
-	const hunks: LegacyHunk[] = [];
-	let remainingLines = lines.slice(1, lines.length - 1);
-	let lineNumber = 2;
-
-	while (remainingLines.length > 0) {
-		if (remainingLines[0].trim() === "") {
-			remainingLines = remainingLines.slice(1);
-			lineNumber++;
-			continue;
-		}
-
-		const firstLine = remainingLines[0].trim();
-
-		// Add File
-		if (firstLine.startsWith(ADD_FILE_MARKER)) {
-			const path = firstLine.slice(ADD_FILE_MARKER.length);
-			let contents = "";
-			let linesConsumed = 1;
-
-			for (let i = 1; i < remainingLines.length; i++) {
-				const line = remainingLines[i];
-				if (line.startsWith("+")) {
-					contents += `${line.slice(1)}\n`;
-					linesConsumed++;
-				} else {
-					break;
-				}
-			}
-
-			hunks.push({ type: "add", path, contents });
-			remainingLines = remainingLines.slice(linesConsumed);
-			lineNumber += linesConsumed;
-			continue;
-		}
-
-		// Delete File
-		if (firstLine.startsWith(DELETE_FILE_MARKER)) {
-			const path = firstLine.slice(DELETE_FILE_MARKER.length);
-			hunks.push({ type: "delete", path });
-			remainingLines = remainingLines.slice(1);
-			lineNumber++;
-			continue;
-		}
-
-		// Update File
-		if (firstLine.startsWith(UPDATE_FILE_MARKER)) {
-			const path = firstLine.slice(UPDATE_FILE_MARKER.length);
-			remainingLines = remainingLines.slice(1);
-			lineNumber++;
-
-			let movePath: string | undefined;
-			if (remainingLines.length > 0 && remainingLines[0].startsWith(MOVE_TO_MARKER)) {
-				movePath = remainingLines[0].slice(MOVE_TO_MARKER.length);
-				remainingLines = remainingLines.slice(1);
-				lineNumber++;
-			}
-
-			// Collect diff body until next file marker or end
-			const diffLines: string[] = [];
-			while (remainingLines.length > 0) {
-				const line = remainingLines[0];
-				// Stop at file operation markers (but not *** End of File)
-				if (
-					line.startsWith("*** Add File:") ||
-					line.startsWith("*** Delete File:") ||
-					line.startsWith("*** Update File:")
-				) {
-					break;
-				}
-				diffLines.push(remainingLines[0]);
-				remainingLines = remainingLines.slice(1);
-				lineNumber++;
-			}
-
-			if (diffLines.length === 0) {
-				throw new ParseError(`Update file hunk for path '${path}' is empty`, lineNumber);
-			}
-
-			hunks.push({ type: "update", path, movePath, diffBody: diffLines.join("\n") });
-			continue;
-		}
-
-		throw new ParseError(
-			`'${firstLine}' is not a valid hunk header. Valid: '*** Add File:', '*** Delete File:', '*** Update File:'`,
-			lineNumber,
-		);
-	}
-
+	const hunks = parseApplyPatch(patch).map((h): LegacyHunk => {
+		if (h.op === "create") return { type: "add", path: h.path, contents: h.diff ?? "" };
+		if (h.op === "delete") return { type: "delete", path: h.path };
+		return { type: "update", path: h.path, movePath: h.rename, diffBody: h.diff ?? "" };
+	});
 	return { hunks };
 }
 
-/** Convert legacy hunk to new PatchInput format */
-function legacyHunkToInput(hunk: LegacyHunk): PatchInput {
-	if (hunk.type === "add") {
-		return { path: hunk.path, op: "create", diff: hunk.contents };
-	}
-	if (hunk.type === "delete") {
-		return { path: hunk.path, op: "delete" };
-	}
-	return { path: hunk.path, op: "update", rename: hunk.movePath, diff: hunk.diffBody };
-}
-
-/** Apply a legacy format patch (for test fixtures) */
 async function applyLegacyPatch(patch: string, options: { cwd: string }) {
-	const { hunks } = parseLegacyPatch(patch);
-
-	if (hunks.length === 0) {
-		throw new ApplyPatchError("No files were modified.");
-	}
-
-	for (const hunk of hunks) {
-		const input = legacyHunkToInput(hunk);
-		await applyPatch(input, options);
-	}
+	await applyCodexPatch(patch, options);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -694,5 +567,153 @@ describe("simple replace mode", () => {
 				{ cwd: tempDir },
 			),
 		).rejects.toThrow(/2 occurrences/);
+	});
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Production Codex envelope API — spec §10 edge-case coverage
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("parseApplyPatch (production)", () => {
+	const wrap = (body: string) => `*** Begin Patch\n${body}\n*** End Patch`;
+
+	test("returns PatchInput[] shape directly", () => {
+		const result = parseApplyPatch(wrap("*** Add File: foo.txt\n+hi"));
+		expect(result).toEqual([{ path: "foo.txt", op: "create", diff: "hi\n" }]);
+	});
+
+	test("maps update with rename to op=update + rename field", () => {
+		const result = parseApplyPatch(wrap("*** Update File: a.py\n*** Move to: b.py\n@@\n-old\n+new"));
+		expect(result[0]).toMatchObject({ path: "a.py", op: "update", rename: "b.py" });
+		expect(result[0].diff).toContain("-old");
+	});
+
+	test("zero-hunk patch returns empty array", () => {
+		expect(parseApplyPatch(wrap(""))).toEqual([]);
+	});
+
+	test("heredoc wrapper with double quotes is stripped", () => {
+		const inner = wrap("*** Add File: x.txt\n+content");
+		const wrapped = `<<"EOF"\n${inner}\nEOF`;
+		const result = parseApplyPatch(wrapped);
+		expect(result).toHaveLength(1);
+		expect(result[0].op).toBe("create");
+	});
+
+	test("heredoc wrapper with bare EOF is stripped", () => {
+		const inner = wrap("*** Add File: x.txt\n+content");
+		const wrapped = `<<EOF\n${inner}\nEOF`;
+		expect(parseApplyPatch(wrapped)).toHaveLength(1);
+	});
+
+	test("mismatched heredoc quotes are not stripped", () => {
+		const inner = wrap("*** Add File: x.txt\n+content");
+		// `<<"EOF'` — opener has mismatched quotes; parser should not strip it,
+		// so the begin-patch check fails.
+		const bad = `<<"EOF'\n${inner}\nEOF`;
+		expect(() => parseApplyPatch(bad)).toThrow(ParseError);
+	});
+
+	test("unknown file directive is rejected with spec message", () => {
+		expect(() => parseApplyPatch(wrap("*** Rename File: a"))).toThrow(/is not a valid hunk header/);
+	});
+
+	test("preserves *** End of File marker inside update body", () => {
+		const result = parseApplyPatch(wrap("*** Update File: a.py\n@@\n-x\n+y\n*** End of File"));
+		expect(result[0].diff).toContain("*** End of File");
+	});
+});
+
+describe("applyCodexPatch (production)", () => {
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = path.join(os.tmpdir(), `codex-patch-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		fs.mkdirSync(tempDir, { recursive: true });
+	});
+
+	afterEach(() => {
+		try {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		} catch {
+			// ignore
+		}
+	});
+
+	test("zero-hunk patch throws 'No files were modified.'", async () => {
+		await expect(applyCodexPatch("*** Begin Patch\n*** End Patch", { cwd: tempDir })).rejects.toThrow(
+			"No files were modified.",
+		);
+	});
+
+	test("multi-op patch (add + update + delete) applies in order", async () => {
+		await Bun.write(path.join(tempDir, "old.txt"), "to delete\n");
+		await Bun.write(path.join(tempDir, "keep.txt"), "hello\n");
+
+		const patch = [
+			"*** Begin Patch",
+			"*** Add File: new.txt",
+			"+brand new",
+			"*** Update File: keep.txt",
+			"@@",
+			"-hello",
+			"+HELLO",
+			"*** Delete File: old.txt",
+			"*** End Patch",
+		].join("\n");
+
+		const result = await applyCodexPatch(patch, { cwd: tempDir });
+
+		expect(result.affected.added).toEqual(["new.txt"]);
+		expect(result.affected.modified).toEqual(["keep.txt"]);
+		expect(result.affected.deleted).toEqual(["old.txt"]);
+
+		expect(await Bun.file(path.join(tempDir, "new.txt")).text()).toBe("brand new\n");
+		expect(await Bun.file(path.join(tempDir, "keep.txt")).text()).toBe("HELLO\n");
+		expect(fs.existsSync(path.join(tempDir, "old.txt"))).toBe(false);
+	});
+
+	test("rename reports modified under original path (spec §9.1)", async () => {
+		await Bun.write(path.join(tempDir, "src.txt"), "body\n");
+
+		const patch = [
+			"*** Begin Patch",
+			"*** Update File: src.txt",
+			"*** Move to: dst.txt",
+			"@@",
+			"-body",
+			"+body2",
+			"*** End Patch",
+		].join("\n");
+
+		const result = await applyCodexPatch(patch, { cwd: tempDir });
+
+		expect(result.affected.modified).toEqual(["src.txt"]);
+		expect(result.affected.added).toEqual([]);
+		expect(result.affected.deleted).toEqual([]);
+		expect(fs.existsSync(path.join(tempDir, "src.txt"))).toBe(false);
+		expect(await Bun.file(path.join(tempDir, "dst.txt")).text()).toBe("body2\n");
+	});
+
+	test("partial success: earlier ops stay applied when a later op fails", async () => {
+		await Bun.write(path.join(tempDir, "first.txt"), "a\n");
+
+		const patch = [
+			"*** Begin Patch",
+			"*** Update File: first.txt",
+			"@@",
+			"-a",
+			"+A",
+			"*** Update File: missing.txt",
+			"@@",
+			"-x",
+			"+y",
+			"*** End Patch",
+		].join("\n");
+
+		await expect(applyCodexPatch(patch, { cwd: tempDir })).rejects.toThrow();
+
+		// First op should have landed before the failure.
+		expect(await Bun.file(path.join(tempDir, "first.txt")).text()).toBe("A\n");
 	});
 });

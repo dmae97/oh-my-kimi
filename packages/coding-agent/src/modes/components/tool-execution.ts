@@ -14,7 +14,14 @@ import {
 	type TUI,
 } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
-import { computeEditDiff, computeHashlineDiff, computePatchDiff, type DiffError, type DiffResult } from "../../edit";
+import {
+	computeEditDiff,
+	computeHashlineDiff,
+	computePatchDiff,
+	type DiffError,
+	type DiffResult,
+	expandApplyPatchToEntries,
+} from "../../edit";
 import type { Theme } from "../../modes/theme/theme";
 import { theme } from "../../modes/theme/theme";
 import { BASH_DEFAULT_PREVIEW_LINES } from "../../tools/bash";
@@ -52,6 +59,10 @@ function cloneToolArgs<T>(args: T): T {
 	} catch {
 		return args;
 	}
+}
+
+function isEditLikeToolName(toolName: string): boolean {
+	return toolName === "edit" || toolName === "apply_patch";
 }
 
 export interface ToolExecutionOptions {
@@ -166,7 +177,7 @@ export class ToolExecutionComponent extends Container {
 
 	/**
 	 * Signal that args are complete (tool is about to execute).
-	 * This triggers diff computation for edit tool.
+	 * This triggers diff computation for edit-like tools.
 	 */
 	setArgsComplete(_toolCallId?: string): void {
 		this.#argsComplete = true;
@@ -179,10 +190,39 @@ export class ToolExecutionComponent extends Container {
 	 * This runs async and updates display when done.
 	 */
 	#maybeComputeEditDiff(): void {
-		if (this.#toolName !== "edit") return;
+		if (!isEditLikeToolName(this.#toolName)) return;
 
 		const edits = this.#args?.edits;
-		if (!Array.isArray(edits) || edits.length === 0) return;
+		if (!Array.isArray(edits) || edits.length === 0) {
+			if (this.#toolName !== "apply_patch" || typeof this.#args?.input !== "string") {
+				return;
+			}
+
+			const input = this.#args.input;
+			const argsKey = JSON.stringify({ input });
+			if (this.#editDiffArgsKey === argsKey) return;
+			this.#editDiffArgsKey = argsKey;
+
+			try {
+				const first = expandApplyPatchToEntries({ input })[0];
+				if (!first?.path) return;
+				computePatchDiff(first, this.#cwd, {
+					fuzzyThreshold: this.#editFuzzyThreshold,
+					allowFuzzy: this.#editAllowFuzzy,
+				}).then(result => {
+					if (this.#editDiffArgsKey === argsKey) {
+						this.#editDiffPreview = result;
+						this.#updateDisplay();
+						this.#ui.requestRender();
+					}
+				});
+			} catch (err) {
+				this.#editDiffPreview = { error: err instanceof Error ? err.message : String(err) };
+				this.#updateDisplay();
+				this.#ui.requestRender();
+			}
+			return;
+		}
 
 		const first = edits[0];
 		if (!first || typeof first !== "object") return;
@@ -309,7 +349,7 @@ export class ToolExecutionComponent extends Container {
 	 */
 	#updateSpinnerAnimation(): void {
 		// Spinner for: task tool with partial result, or edit/write while args streaming
-		const isStreamingArgs = !this.#argsComplete && (this.#toolName === "edit" || this.#toolName === "write");
+		const isStreamingArgs = !this.#argsComplete && (isEditLikeToolName(this.#toolName) || this.#toolName === "write");
 		const isBackgroundAsyncTask =
 			this.#toolName === "task" &&
 			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
@@ -603,7 +643,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	#getCallArgsForRender(): any {
-		if (this.#toolName !== "edit") {
+		if (!isEditLikeToolName(this.#toolName)) {
 			return this.#args;
 		}
 		if (!this.#editDiffPreview || !("diff" in this.#editDiffPreview) || !this.#editDiffPreview.diff) {
@@ -639,7 +679,7 @@ export class ToolExecutionComponent extends Container {
 			context.expanded = this.#expanded;
 			context.previewLines = PYTHON_DEFAULT_PREVIEW_LINES;
 			context.timeout = normalizeTimeoutSeconds(this.#args?.timeout, 600);
-		} else if (this.#toolName === "edit") {
+		} else if (isEditLikeToolName(this.#toolName)) {
 			// Edit needs diff preview and renderDiff function
 			context.editDiffPreview = this.#editDiffPreview;
 			context.renderDiff = renderDiff;
