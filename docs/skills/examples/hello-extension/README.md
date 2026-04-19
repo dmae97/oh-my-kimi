@@ -34,6 +34,6 @@ After loading, type `/hello` in the omp prompt to trigger the notification.
 
 - Default export factory receiving `ExtensionAPI`
 - `pi.on("session_start", ...)` — session lifecycle hook
-- `pi.registerCommand(...)` — slash command registration
+- `pi.commands.register(...)` — slash command registration
 - `ctx.ui.notify(...)` — user-facing notification
 - `package.json` with `omp.extensions` manifest field

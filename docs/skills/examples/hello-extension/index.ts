@@ -12,7 +12,8 @@ export default function helloExtension(pi: ExtensionAPI) {
   pi.commands.register("hello", {
     description: "Send a greeting into the conversation",
     handler: async (_args, ctx) => {
-      ctx.ui.notify("Hello from my extension!", "info");
+      await pi.sendMessage("Hello from my extension!", { triggerTurn: false });
+      ctx.ui.notify("Message sent!", "info");
     },
   });
 }

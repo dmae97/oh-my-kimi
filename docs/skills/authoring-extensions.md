@@ -229,7 +229,7 @@ The derived name is the filename stem (or directory name for `index.ts`-style en
 
 ## Important constraints
 
-- **Do not call runtime actions during load.** Methods like `pi.sendMessage()` throw `ExtensionRuntimeNotInitializedError` until after `initialize()` completes. Register handlers/tools/commands during load; perform runtime actions only from event handlers, tools, or commands.
+- **Do not call runtime actions during load.** Methods like `pi.sendMessage()` throw `ExtensionRuntimeNotInitializedError` if called synchronously during module evaluation (before a session is active). Register handlers/tools/commands during load; perform runtime actions only from event handlers, tools, or commands.
 - **`tool_call` errors are fail-closed.** If a `tool_call` handler throws, the tool is blocked.
 - **Command names must not clash with built-ins.** Conflicts are skipped with a diagnostic log.
 - **Reserved shortcuts are ignored** (`ctrl+c`, `ctrl+d`, `ctrl+z`, `ctrl+k`, `ctrl+p`, `ctrl+l`, `ctrl+o`, `ctrl+t`, `ctrl+g`, `shift+tab`, `shift+ctrl+p`, `alt+enter`, `escape`, `enter`).

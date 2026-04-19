@@ -6,9 +6,9 @@
   "description": "Minimal marketplace demonstrating the catalog format",
   "plugins": [
     {
-      "name": "hello-extension",
-      "description": "Minimal extension that greets you on session start and registers /hello",
-      "source": "../hello-extension"
+      "name": "my-plugin",
+      "description": "Minimal extension bundled with this marketplace example",
+      "source": "./my-plugin"
     }
   ]
 }
