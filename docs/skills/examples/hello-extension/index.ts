@@ -9,7 +9,7 @@ export default function helloExtension(pi: ExtensionAPI) {
   });
 
   // Register a /hello slash command that sends a greeting into the conversation.
-  pi.registerCommand("hello", {
+  pi.commands.register("hello", {
     description: "Send a greeting into the conversation",
     handler: async (_args, ctx) => {
       ctx.ui.notify("Hello from my extension!", "info");

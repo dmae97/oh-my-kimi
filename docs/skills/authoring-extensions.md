@@ -37,7 +37,7 @@ export default function myExtension(pi: ExtensionAPI) {
   });
 
   // Slash command: /greet
-  pi.registerCommand("greet", {
+  pi.commands.register("greet", {
     description: "Send a greeting into the conversation",
     handler: async (args, ctx) => {
       const name = args.trim() || "world";
@@ -120,7 +120,7 @@ Multiple entry points are supported:
 ## Registering commands
 
 ```ts
-pi.registerCommand("my-cmd", {
+pi.commands.register("my-cmd", {
   description: "What the command does",
   handler: async (args, ctx) => {
     // args: everything the user typed after /my-cmd
