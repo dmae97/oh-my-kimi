@@ -439,7 +439,7 @@ export const editToolRenderer = {
 
 		// Extract path from first edit entry when top-level path is absent (new schema)
 		const firstEdit = Array.isArray(args.edits) && args.edits.length > 0 ? args.edits[0] : undefined;
-		const rawPath = args.file_path || args.path || (firstEdit as any)?.path || "";
+		const rawPath = args.file_path || args.path || filePathFromEditEntry((firstEdit as any)?.path) || "";
 		const rename = args.rename || (firstEdit as any)?.rename;
 		const op = args.op || (firstEdit as any)?.op;
 		const { description } = formatEditDescription(rawPath, uiTheme, { rename });
@@ -491,9 +491,15 @@ function renderSingleFileResult(
 ): Component {
 	const details = result.details;
 	const isError = result.isError ?? (details && "isError" in details ? details.isError : false);
-	const rawPath = args?.file_path || args?.path || (details && "path" in details ? details.path : "") || "";
-	const op = args?.op || details?.op;
-	const rename = args?.rename || details?.move;
+	const firstEdit = Array.isArray(args?.edits) && args!.edits.length > 0 ? args!.edits[0] : undefined;
+	const rawPath =
+		args?.file_path ||
+		args?.path ||
+		filePathFromEditEntry((firstEdit as any)?.path) ||
+		(details && "path" in details ? details.path : "") ||
+		"";
+	const op = args?.op || (firstEdit as any)?.op || details?.op;
+	const rename = args?.rename || (firstEdit as any)?.rename || details?.move;
 	const { language } = formatEditDescription(rawPath, uiTheme, { rename });
 
 	const metadataLine =
