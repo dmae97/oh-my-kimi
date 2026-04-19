@@ -250,7 +250,7 @@ export async function processResponsesStream<TApi extends Api>(
 			const item = event.item;
 			if (item.type === "reasoning") {
 				currentItem = item;
-				currentBlock = { type: "thinking", thinking: "" };
+				currentBlock = { type: "thinking", thinking: "", itemId: item.id };
 				output.content.push(currentBlock);
 				stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
 			} else if (item.type === "message") {
@@ -304,6 +304,18 @@ export async function processResponsesStream<TApi extends Api>(
 						partial: output,
 					});
 				}
+			}
+		} else if (event.type === "response.reasoning_text.delta") {
+			// Raw reasoning text delta from local providers that stream thinking
+			// directly rather than via the OpenAI summary tracking protocol.
+			if (currentItem?.type === "reasoning" && currentBlock?.type === "thinking") {
+				currentBlock.thinking += event.delta;
+				stream.push({
+					type: "thinking_delta",
+					contentIndex: blockIndex(),
+					delta: event.delta,
+					partial: output,
+				});
 			}
 		} else if (event.type === "response.content_part.added") {
 			if (currentItem?.type === "message") {
@@ -359,16 +371,28 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.output_item.done") {
 			const item = structuredCloneJSON(event.item);
 			options?.onOutputItemDone?.(item);
-			if (item.type === "reasoning" && currentBlock?.type === "thinking") {
-				currentBlock.thinking = item.summary?.map(part => part.text).join("\n\n") || "";
-				currentBlock.thinkingSignature = JSON.stringify(item);
-				stream.push({
-					type: "thinking_end",
-					contentIndex: blockIndex(),
-					content: currentBlock.thinking,
-					partial: output,
-				});
-				currentBlock = null;
+			if (item.type === "reasoning") {
+				const thinking =
+					item.summary?.length > 0
+						? item.summary.map(part => part.text).join("\n\n")
+						: item.content?.[0]?.type === "reasoning_text"
+							? (item.content[0].text ?? "")
+							: "";
+				const reasoningBlock = output.content.find(
+					b => b.type === "thinking" && (b as ThinkingContent).itemId === item.id,
+				) as ThinkingContent | undefined;
+				if (reasoningBlock) {
+					reasoningBlock.thinking = thinking;
+					reasoningBlock.thinkingSignature = JSON.stringify(item);
+					const reasoningBlockIndex = output.content.indexOf(reasoningBlock);
+					stream.push({
+						type: "thinking_end",
+						contentIndex: reasoningBlockIndex,
+						content: thinking,
+						partial: output,
+					});
+				}
+				if ((currentBlock as ThinkingContent | null)?.itemId === item.id) currentBlock = null;
 			} else if (item.type === "message" && currentBlock?.type === "text") {
 				currentBlock.text = item.content
 					.map(part => (part.type === "output_text" ? (part.text ?? "") : (part.refusal ?? "")))
