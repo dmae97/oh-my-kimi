@@ -25,7 +25,7 @@ const sshSchema = Type.Object({
 	host: Type.String({ description: "Host name from managed SSH config or discovered ssh.json files" }),
 	command: Type.String({ description: "Command to execute on the remote host" }),
 	cwd: Type.Optional(Type.String({ description: "Remote working directory (optional)" })),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default: 60)" })),
+	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds", default: 60 })),
 });
 
 export interface SSHToolDetails {

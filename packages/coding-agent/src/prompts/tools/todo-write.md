@@ -17,11 +17,11 @@ The next pending task is auto-promoted to `in_progress` after completing the cur
 
 ## Task Anatomy
 - `content`: Short label (5-10 words). What is being done, not how.
-- `details`: File paths, implementation steps, edge cases. Shown only when task is active.
+- `details`: File paths, implementation steps, edge cases. Shown only when the task is active.
 
 ## Rules
 - Mark tasks completed immediately after finishing — never defer
-- Complete phases in order — do not skip ahead to later phases while earlier ones are pending
+- Complete phases in order — do not skip ahead while earlier ones are pending
 - On blockers: add a new task describing the blocker
 </protocol>
 
@@ -41,10 +41,6 @@ Create a todo list when:
 </example>
 
 <example name="complete">
-{complete: ["task-2"]}
-</example>
-
-<example name="complete-multiple">
 {complete: ["task-2", "task-3"]}
 </example>
 
@@ -58,14 +54,6 @@ Create a todo list when:
 
 <example name="add-phase">
 {add_phase: {name: "Cleanup", tasks: [{content: "Remove dead code"}]}}
-</example>
-
-<example name="remove">
-{remove: ["task-5"]}
-</example>
-
-<example name="abandon">
-{abandon: ["task-4"]}
 </example>
 
 <example name="combined">

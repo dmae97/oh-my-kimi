@@ -42,6 +42,7 @@ const astEditOpSchema = Type.Object({
 
 const astEditSchema = Type.Object({
 	ops: Type.Array(astEditOpSchema, {
+		minItems: 1,
 		description: "Rewrite ops as [{ pat, out }]",
 	}),
 	lang: Type.Optional(Type.String({ description: "Language override" })),

@@ -38,7 +38,7 @@ const bashSchemaBase = Type.Object({
 				"Additional environment variables passed to the command and rendered inline as shell assignments; prefer this for multiline or quote-heavy content",
 		}),
 	),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default: 300)" })),
+	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds", default: 300 })),
 	cwd: Type.Optional(Type.String({ description: "Working directory (default: cwd)" })),
 	head: Type.Optional(Type.Number({ description: "Return only first N lines of output" })),
 	tail: Type.Optional(Type.Number({ description: "Return only last N lines of output" })),

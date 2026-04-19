@@ -2,44 +2,34 @@ Executes bash command in shell session for terminal operations like git, bun, ca
 
 <instruction>
 - You **MUST** use `cwd` parameter to set working directory instead of `cd dir && …`
-- Prefer `env: { NAME: "…" }` for multiline, quote-heavy, or untrusted values instead of inlining them into shell syntax; reference them from the command as `$NAME`
+- Prefer `env: { NAME: "…" }` for multiline, quote-heavy, or untrusted values; reference them as `$NAME`
 - Quote variable expansions like `"$NAME"` to preserve exact content and avoid shell parsing bugs
-- PTY mode is opt-in: set `pty: true` only when command expects a real terminal (for example `sudo`, `ssh` where you need input from the user); default is `false`
+- PTY mode is opt-in: set `pty: true` only when the command needs a real terminal (e.g. `sudo`, `ssh` requiring user input); default is `false`
 - You **MUST** use `;` only when later commands should run regardless of earlier failures
-- `skill://` URIs are auto-resolved to filesystem paths before execution
-	- `python skill://my-skill/scripts/init.py` runs the script from the skill directory
-	- `skill://<name>/<relative-path>` resolves within the skill's base directory
-- Internal URLs are also auto-resolved to filesystem paths before execution.
+- Internal URIs (`skill://`, `agent://`, etc.) are auto-resolved to filesystem paths. Examples: `python skill://my-skill/scripts/init.py` runs the skill script; `skill://<name>/<relative-path>` resolves within the skill directory.
 {{#if asyncEnabled}}
 - Use `async: true` for long-running commands when you don't need immediate output; the call returns a background job ID and the result is delivered automatically as a follow-up.
 {{/if}}
 {{#if autoBackgroundEnabled}}
-- Long-running non-PTY bash commands may auto-background after about {{autoBackgroundThresholdSeconds}}s and continue as background jobs automatically.
+- Long-running non-PTY commands may auto-background after ~{{autoBackgroundThresholdSeconds}}s and continue as background jobs.
 {{/if}}
 {{#if asyncEnabled}}
+- Inspect background jobs with `read jobs://` (`read jobs://<job-id>` for detail). To wait for results, call `poll` — do NOT poll `read jobs://` in a loop or yield and hope for delivery.
 {{else}}
 {{#if autoBackgroundEnabled}}
-- Auto-backgrounded jobs use the same background-job pipeline as explicit async execution.
-{{/if}}
-{{/if}}
-{{#if asyncEnabled}}
-- Use `read jobs://` to inspect all background jobs and `read jobs://<job-id>` for detailed status/output when needed.
-- When you need to wait for async results before continuing, call `poll` — it blocks until jobs complete. Do NOT poll `read jobs://` in a loop or yield and hope for delivery.
-{{else}}
-{{#if autoBackgroundEnabled}}
-- If a command auto-backgrounds, use `read jobs://` to inspect jobs and `poll` when you need to wait for completion instead of polling in a loop.
+- For auto-backgrounded jobs, inspect with `read jobs://` and call `poll` to wait — do NOT poll in a loop.
 {{/if}}
 {{/if}}
 </instruction>
 
 <output>
-Returns the output, and an exit code from command execution.
-- If output truncated, full output can be retrieved from `artifact://<id>`, linked in metadata
+Returns output and exit code.
+- Truncated output is retrievable from `artifact://<id>` (linked in metadata)
 - Exit codes shown on non-zero exit
 </output>
 
 <critical>
-You **MUST** use specialized tools instead of bash for ALL file operations:
+You **MUST NOT** use bash for file operations where specialized tools exist:
 
 |Instead of (WRONG)|Use (CORRECT)|
 |---|---|
@@ -52,11 +42,9 @@ You **MUST** use specialized tools instead of bash for ALL file operations:
 |`ls dir/`|`read(path="dir/")`|
 |`cat <<'EOF' > file`|`write(path="file", content="…")`|
 |`sed -i 's/old/new/' file`|`edit(path="file", edits=[…])`|
-
 {{#if hasAstEdit}}|`sed -i 's/oldFn(/newFn(/' src/*.ts`|`ast_edit({ops:[{pat:"oldFn($$$A)", out:"newFn($$$A)"}], path:"src/"})`|{{/if}}
 {{#if hasAstGrep}}- You **MUST** use `ast_grep` for structural code search instead of bash `grep`/`awk`/`perl` pipelines{{/if}}
 {{#if hasAstEdit}}- You **MUST** use `ast_edit` for structural rewrites instead of bash `sed`/`awk`/`perl` pipelines{{/if}}
-- You **MUST NOT** use Bash for these operations like read, grep, find, edit, write, where specialized tools exist.
-- You **MUST NOT** use `2>&1` | `2>/dev/null` pattern, stdout and stderr are already merged.
-- You **MUST NOT** use `| head -n 50` or `| tail -n 100` pattern, use `head` and `tail` parameters instead.
+- You **MUST NOT** use `2>&1` or `2>/dev/null` — stdout and stderr are already merged
+- You **MUST NOT** use `| head -n 50` or `| tail -n 100` — use `head`/`tail` parameters instead
 </critical>
