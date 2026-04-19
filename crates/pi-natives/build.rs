@@ -107,6 +107,11 @@ const GRAMMARS: &[GrammarSpec] = &[
 		node_types_rel: "src/node-types.json",
 	},
 	GrammarSpec {
+		language:       "dart",
+		package:        "tree-sitter-dart",
+		node_types_rel: "src/node-types.json",
+	},
+	GrammarSpec {
 		language:       "css",
 		package:        "tree-sitter-css",
 		node_types_rel: "src/node-types.json",

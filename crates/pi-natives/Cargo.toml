@@ -42,6 +42,7 @@ tree-sitter-clojure = "0.1"
 tree-sitter-cmake = "0.7.1"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-cpp = "0.23"
+tree-sitter-dart = "0.1"
 tree-sitter-css = "0.25"
 tree-sitter-diff = "0.1"
 tree-sitter-dockerfile = { version = "0.2.0", package = "tree-sitter-dockerfile-updated" }
