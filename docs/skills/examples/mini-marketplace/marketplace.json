@@ -1,0 +1,14 @@
+{
+  "name": "example-marketplace",
+  "owner": {
+    "name": "example"
+  },
+  "description": "Minimal marketplace demonstrating the catalog format",
+  "plugins": [
+    {
+      "name": "hello-extension",
+      "description": "Minimal extension that greets you on session start and registers /hello",
+      "source": "../hello-extension"
+    }
+  ]
+}

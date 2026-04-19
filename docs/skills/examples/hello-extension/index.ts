@@ -1,0 +1,17 @@
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+
+export default function helloExtension(pi: ExtensionAPI) {
+  // Log a greeting to the console whenever a session starts.
+  pi.on("session_start", async (_event, ctx) => {
+    console.log("[hello-extension] session started in", ctx.cwd);
+    ctx.ui.notify("Hello from hello-extension!", "info");
+  });
+
+  // Register a /hello slash command that sends a greeting into the conversation.
+  pi.registerCommand("hello", {
+    description: "Send a greeting into the conversation",
+    handler: async (_args, ctx) => {
+      ctx.ui.notify("Hello from my extension!", "info");
+    },
+  });
+}
