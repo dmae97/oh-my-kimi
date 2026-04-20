@@ -31,7 +31,7 @@
 		"omp": "src/cli.ts"
 	},
 	"scripts": {
-		"build": "bun --cwd=../stats scripts/generate-client-bundle.ts --generate && bun --cwd=../natives run embed:native && bun build --compile --define PI_COMPILED=true --external mupdf --root ../.. ./src/cli.ts --outfile dist/omp && bun --cwd=../natives run embed:native --reset && bun --cwd=../stats scripts/generate-client-bundle.ts --reset",
+		"build": "bun scripts/build-binary.ts",
 		"check": "biome check . && bun run check:types",
 		"check:types": "tsgo -p tsconfig.json --noEmit",
 		"lint": "biome lint .",

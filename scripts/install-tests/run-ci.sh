@@ -4,6 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT_DIR="$(pwd)"
 WORK_DIR="$(mktemp -d)"
+TMP_WORK_DIR="$WORK_DIR/tmp"
+mkdir -p "$TMP_WORK_DIR"
+export TMPDIR="$TMP_WORK_DIR"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 section() {
@@ -13,9 +16,11 @@ section() {
 
 smoke_cli() {
 	local omp_bin="$1"
-	"$omp_bin" --version
-	"$omp_bin" --help >/dev/null
-	"$omp_bin" stats --summary >/dev/null
+	local runtime_dir
+	runtime_dir="$(mktemp -d "$WORK_DIR/compiled-runtime.XXXXXX")"
+	XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" --version
+	XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" --help >/dev/null
+	XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" stats --summary >/dev/null
 }
 
 find_tarball() {
@@ -40,15 +45,6 @@ bun --cwd=packages/coding-agent run build
 BINARY_DIR="$WORK_DIR/binary-bin"
 mkdir -p "$BINARY_DIR"
 cp packages/coding-agent/dist/omp "$BINARY_DIR/omp"
-shopt -s nullglob
-native_addons=(packages/natives/native/pi_natives.*.node)
-shopt -u nullglob
-if [ "${#native_addons[@]}" -eq 0 ]; then
-	echo "No native addon files found in packages/natives/native"
-	exit 1
-fi
-cp "${native_addons[@]}" "$BINARY_DIR/"
-
 smoke_cli "$BINARY_DIR/omp"
 
 section "Source install smoke"
