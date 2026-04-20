@@ -3,7 +3,7 @@ Runs Python cells sequentially in persistent IPython kernel.
 <instruction>
 Kernel persists across calls and cells; **imports, variables, and functions survive — use this.**
 
-**Work incrementally:** one logical step per cell (imports, define, test, use). Pass multiple small cells in one call. Define small reusable functions you can debug individually. Put workflow explanations in the assistant message or cell title.
+**Work incrementally:** one logical step per cell (imports, define, test, use). Pass multiple small cells in one call. Define small reusable functions you can debug individually. You **MUST** put workflow explanations in the assistant message or cell title — never inside cell code.
 
 **On failure:** errors identify the failing cell (e.g., "Cell 3 failed"). Resubmit only the fixed cell (or fixed cell + remaining cells).
 </instruction>
