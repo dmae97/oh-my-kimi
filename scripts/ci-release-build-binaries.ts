@@ -67,11 +67,11 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 	console.log(`Building ${target.outfile}...`);
 	await embedNative(target);
 	if (isDryRun) {
-		console.log(`DRY RUN bun build --compile --define PI_COMPILED=true --root . --external mupdf --target=${target.target} ${entrypoint} --outfile ${target.outfile}`);
+		console.log(`DRY RUN bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --define PI_COMPILED=true --root . --external mupdf --target=${target.target} ${entrypoint} --outfile ${target.outfile}`);
 		return;
 	}
 
-	await $`bun build --compile --define PI_COMPILED=true --root . --external mupdf --target=${target.target} ${entrypoint} --outfile ${target.outfile}`.cwd(
+	await $`bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --define PI_COMPILED=true --root . --external mupdf --target=${target.target} ${entrypoint} --outfile ${target.outfile}`.cwd(
 		repoRoot,
 	);
 }
