@@ -10,6 +10,8 @@ import {
 } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
 import "@oh-my-pi/pi-coding-agent/discovery/claude-plugins";
+import type { Skill } from "@oh-my-pi/pi-coding-agent/capability/skill";
+import type { SlashCommand } from "@oh-my-pi/pi-coding-agent/capability/slash-command";
 
 describe("parseClaudePluginsRegistry", () => {
 	test("parses valid registry", () => {
@@ -345,7 +347,7 @@ describe("listClaudePluginRoots", () => {
 		);
 
 		const { loadCapability } = await import("@oh-my-pi/pi-coding-agent/capability");
-		const result = await loadCapability("skills", { cwd: tempDir });
+		const result = await loadCapability<Skill>("skills", { cwd: tempDir });
 		expect(result.warnings).toEqual([]);
 		expect(result.all.length).toBeGreaterThan(0);
 		const found = result.all.find(skill => skill.name === "manifest-skills:manifest-skill");
@@ -384,13 +386,91 @@ describe("listClaudePluginRoots", () => {
 		await fs.writeFile(path.join(pluginPath, ".claude", "commands", "ship.md"), "Ship it\n");
 
 		const { loadCapability } = await import("@oh-my-pi/pi-coding-agent/capability");
-		const result = await loadCapability("slash-commands", { cwd: tempDir });
+		const result = await loadCapability<SlashCommand>("slash-commands", { cwd: tempDir });
 		expect(result.warnings).toEqual([]);
 		expect(result.all.length).toBeGreaterThan(0);
 		const found = result.all.find(command => command.name === "manifest-commands:ship");
 
 		expect(found).toBeDefined();
 		expect(found?.path).toContain(path.join(".claude", "commands", "ship.md"));
+	});
+	test("ignores manifest skills directory that resolves outside plugin root", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-skills-outside");
+		const outsideDir = path.join(tempDir, "outside-skills", "outside-skill");
+		await fs.mkdir(path.join(pluginsDir), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(outsideDir, { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-skills-outside@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ skills: "../../outside-skills" }),
+		);
+		await fs.writeFile(
+			path.join(outsideDir, "SKILL.md"),
+			"---\nname: outside-skill\ndescription: Outside skill\n---\nBody\n",
+		);
+
+		const { loadCapability } = await import("@oh-my-pi/pi-coding-agent/capability");
+		const result = await loadCapability<Skill>("skills", { cwd: tempDir });
+		expect(result.warnings[0]).toContain("Ignoring skills path outside plugin root");
+		const found = result.all.find(skill => skill.name === "manifest-skills-outside:outside-skill");
+
+		expect(found).toBeUndefined();
+	});
+
+	test("ignores manifest slash commands directory that resolves outside plugin root", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-commands-outside");
+		const outsideDir = path.join(tempDir, "outside-commands");
+		await fs.mkdir(path.join(pluginsDir), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(outsideDir, { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-commands-outside@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ "slash-commands": "../../outside-commands" }),
+		);
+		await fs.writeFile(path.join(outsideDir, "ship.md"), "Ship it\n");
+
+		const { loadCapability } = await import("@oh-my-pi/pi-coding-agent/capability");
+		const result = await loadCapability<SlashCommand>("slash-commands", { cwd: tempDir });
+		expect(result.warnings[0]).toContain("Ignoring slash-commands path outside plugin root");
+		const found = result.all.find(command => command.name === "manifest-commands-outside:ship");
+
+		expect(found).toBeUndefined();
 	});
 });
 

@@ -33,6 +33,11 @@ interface ClaudePluginManifest {
 	"slash-commands"?: string;
 }
 
+interface ResolvedPluginDir {
+	dir: string;
+	warning?: string;
+}
+
 async function readPluginManifest(root: ClaudePluginRoot): Promise<ClaudePluginManifest | null> {
 	const manifestPath = path.join(root.path, ".claude-plugin", "plugin.json");
 	const raw = await readFile(manifestPath);
@@ -47,18 +52,32 @@ async function readPluginManifest(root: ClaudePluginRoot): Promise<ClaudePluginM
 	}
 }
 
+function isWithinPluginRoot(rootPath: string, targetPath: string): boolean {
+	const relative = path.relative(rootPath, targetPath);
+	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 async function resolvePluginDir(
 	root: ClaudePluginRoot,
 	manifestKey: keyof ClaudePluginManifest,
 	fallback: string,
-): Promise<string> {
+): Promise<ResolvedPluginDir> {
 	const manifest = await readPluginManifest(root);
+	const fallbackDir = path.join(root.path, fallback);
 	const configured = manifest?.[manifestKey];
-	if (typeof configured === "string" && configured.trim()) {
-		return path.resolve(root.path, configured.trim());
+	if (typeof configured !== "string" || !configured.trim()) {
+		return { dir: fallbackDir };
 	}
 
-	return path.join(root.path, fallback);
+	const resolved = path.resolve(root.path, configured.trim());
+	if (isWithinPluginRoot(root.path, resolved)) {
+		return { dir: resolved };
+	}
+
+	return {
+		dir: fallbackDir,
+		warning: `[claude-plugins] Ignoring ${String(manifestKey)} path outside plugin root for ${root.id}: ${configured}`,
+	};
 }
 
 // =============================================================================
@@ -74,17 +93,18 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 
 	const results = await Promise.all(
 		roots.map(async root => {
-			const skillsDir = await resolvePluginDir(root, "skills", "skills");
+			const { dir: skillsDir, warning } = await resolvePluginDir(root, "skills", "skills");
 			const result = await scanSkillsFromDir(ctx, {
 				dir: skillsDir,
 				providerId: PROVIDER_ID,
 				level: root.scope,
 			});
-			return { root, result };
+			return { root, result, warning };
 		}),
 	);
 
-	for (const { root, result } of results) {
+	for (const { root, result, warning } of results) {
+		if (warning) warnings.push(warning);
 		for (const skill of result.items) {
 			if (root.plugin) skill.name = `${root.plugin}:${skill.name}`;
 			items.push(skill);
@@ -108,8 +128,8 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 
 	const results = await Promise.all(
 		roots.map(async root => {
-			const commandsDir = await resolvePluginDir(root, "slash-commands", "commands");
-			return loadFilesFromDir<SlashCommand>(ctx, commandsDir, PROVIDER_ID, root.scope, {
+			const { dir: commandsDir, warning } = await resolvePluginDir(root, "slash-commands", "commands");
+			const result = await loadFilesFromDir<SlashCommand>(ctx, commandsDir, PROVIDER_ID, root.scope, {
 				extensions: ["md"],
 				transform: (name, content, filePath, source) => {
 					const cmdName = name.replace(/\.md$/, "");
@@ -122,10 +142,12 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 					};
 				},
 			});
+			return { result, warning };
 		}),
 	);
 
-	for (const result of results) {
+	for (const { result, warning } of results) {
+		if (warning) warnings.push(warning);
 		items.push(...result.items);
 		if (result.warnings) warnings.push(...result.warnings);
 	}
