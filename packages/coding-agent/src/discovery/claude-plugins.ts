@@ -28,6 +28,39 @@ const PROVIDER_ID = "claude-plugins";
 const DISPLAY_NAME = "Claude Code Marketplace";
 const PRIORITY = 70; // Below claude.ts (80) so user .claude/ overrides win
 
+interface ClaudePluginManifest {
+	skills?: string;
+	"slash-commands"?: string;
+}
+
+async function readPluginManifest(root: ClaudePluginRoot): Promise<ClaudePluginManifest | null> {
+	const manifestPath = path.join(root.path, ".claude-plugin", "plugin.json");
+	const raw = await readFile(manifestPath);
+	if (raw === null) return null;
+
+	try {
+		const parsed = JSON.parse(raw);
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+		return parsed as ClaudePluginManifest;
+	} catch {
+		return null;
+	}
+}
+
+async function resolvePluginDir(
+	root: ClaudePluginRoot,
+	manifestKey: keyof ClaudePluginManifest,
+	fallback: string,
+): Promise<string> {
+	const manifest = await readPluginManifest(root);
+	const configured = manifest?.[manifestKey];
+	if (typeof configured === "string" && configured.trim()) {
+		return path.resolve(root.path, configured.trim());
+	}
+
+	return path.join(root.path, fallback);
+}
+
 // =============================================================================
 // Skills
 // =============================================================================
@@ -41,7 +74,7 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 
 	const results = await Promise.all(
 		roots.map(async root => {
-			const skillsDir = path.join(root.path, "skills");
+			const skillsDir = await resolvePluginDir(root, "skills", "skills");
 			const result = await scanSkillsFromDir(ctx, {
 				dir: skillsDir,
 				providerId: PROVIDER_ID,
@@ -75,7 +108,7 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 
 	const results = await Promise.all(
 		roots.map(async root => {
-			const commandsDir = path.join(root.path, "commands");
+			const commandsDir = await resolvePluginDir(root, "slash-commands", "commands");
 			return loadFilesFromDir<SlashCommand>(ctx, commandsDir, PROVIDER_ID, root.scope, {
 				extensions: ["md"],
 				transform: (name, content, filePath, source) => {
