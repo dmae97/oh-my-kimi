@@ -73,7 +73,7 @@ describe("task.simple", () => {
 		expect(properties.context).toBeUndefined();
 		expect(properties.schema).toBeUndefined();
 		expect(tool.description).toContain("Current input mode: `independent`.");
-		expect(tool.description).toContain("Every task assignment must stand on its own.");
+		expect(tool.description).toContain("Every assignment must stand on its own.");
 		expect(tool.description).not.toContain("- `context`:");
 		expect(tool.description).not.toContain("- `schema`:");
 		expect(getAssignmentDescription(tool)).toContain("include any background that would otherwise live in `context`");

@@ -35,13 +35,13 @@ const grepSchema = Type.Object({
 	path: Type.Optional(Type.String({ description: "File or directory to search (default: cwd)" })),
 	glob: Type.Optional(Type.String({ description: "Filter files by glob pattern (e.g., '*.js')" })),
 	type: Type.Optional(Type.String({ description: "Filter by file type (e.g., js, py, rust)" })),
-	i: Type.Optional(Type.Boolean({ description: "Case-insensitive search (default: false)" })),
+	i: Type.Optional(Type.Boolean({ description: "Case-insensitive search", default: false })),
 	pre: Type.Optional(Type.Number({ description: "Lines of context before matches" })),
 	post: Type.Optional(Type.Number({ description: "Lines of context after matches" })),
 	multiline: Type.Optional(Type.Boolean({ description: "Enable multiline matching" })),
-	gitignore: Type.Optional(Type.Boolean({ description: "Respect .gitignore files during search (default: true)" })),
-	limit: Type.Optional(Type.Number({ description: "Limit output to first N matches (default: 20)" })),
-	offset: Type.Optional(Type.Number({ description: "Skip first N entries before applying limit (default: 0)" })),
+	gitignore: Type.Optional(Type.Boolean({ description: "Respect .gitignore files during search", default: true })),
+	limit: Type.Optional(Type.Number({ description: "Limit output to first N matches", default: 20 })),
+	offset: Type.Optional(Type.Number({ description: "Skip first N entries before applying limit", default: 0 })),
 });
 
 export type GrepToolInput = Static<typeof grepSchema>;

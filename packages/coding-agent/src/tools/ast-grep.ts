@@ -40,8 +40,8 @@ const astGrepSchema = Type.Object({
 	path: Type.Optional(Type.String({ description: "File, directory, or glob pattern to search (default: cwd)" })),
 	glob: Type.Optional(Type.String({ description: "Optional glob filter relative to path" })),
 	sel: Type.Optional(Type.String({ description: "Optional selector for contextual pattern mode" })),
-	limit: Type.Optional(Type.Number({ description: "Max matches (default: 50)" })),
-	offset: Type.Optional(Type.Number({ description: "Skip first N matches (default: 0)" })),
+	limit: Type.Optional(Type.Number({ description: "Max matches", default: 50 })),
+	offset: Type.Optional(Type.Number({ description: "Skip first N matches", default: 0 })),
 	context: Type.Optional(Type.Number({ description: "Context lines around each match" })),
 });
 

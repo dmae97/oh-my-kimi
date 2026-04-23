@@ -52,7 +52,7 @@ export const pythonSchema = Type.Object({
 		}),
 		{ description: "Cells to execute sequentially in persistent kernel" },
 	),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default: 30)" })),
+	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds", default: 30 })),
 	cwd: Type.Optional(Type.String({ description: "Working directory (default: cwd)" })),
 	reset: Type.Optional(Type.Boolean({ description: "Restart kernel before execution" })),
 });

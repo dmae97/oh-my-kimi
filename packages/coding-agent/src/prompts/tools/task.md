@@ -9,10 +9,10 @@ Launches subagents to parallelize workflows.
 Current input mode: `default`. Shared `context` and custom task-call `schema` are available.
 {{/if}}
 {{#if schemaFreeMode}}
-Current input mode: `schema-free`. Shared `context` is available, but custom task-call `schema` is disabled. If structured output is required, rely on the selected agent definition or inherited session schema.
+Current input mode: `schema-free`. Shared `context` is available; custom task-call `schema` is disabled. For structured output, rely on the agent definition or inherited session schema.
 {{/if}}
 {{#if independentMode}}
-Current input mode: `independent`. Shared `context` and custom task-call `schema` are both disabled. Every task assignment must stand on its own.
+Current input mode: `independent`. Shared `context` and custom `schema` are both disabled. Every assignment must stand on its own.
 {{/if}}
 
 {{#if contextEnabled}}
@@ -46,11 +46,11 @@ Subagents lack your conversation history. Every decision, file content, and user
 {{/if}}
 - **MUST NOT** tell tasks to run project-wide build/test/lint. Parallel agents share the working tree; each task edits, stops. Caller verifies after all complete.
 - For large payloads (traces, JSON blobs), write to `local://<path>` and pass the path in {{#if contextEnabled}}`context`{{else}}the relevant `assignment`{{/if}}.
-- Prefer `task` agents that investigate **and** edit in one pass. Only launch a dedicated read-only discovery step when the affected files are genuinely unknown and cannot be inferred from the task description.
+- Prefer `task` agents that investigate **and** edit in one pass. Launch a dedicated read-only discovery step only when affected files are genuinely unknown.
 </critical>
 
 <scope>
-Each task: **at most 3–5 files**. Globs in file paths, "update all", or package-wide scope = too broad. Enumerate files explicitly and fan out to a cluster of agents.
+Each task: **at most 3–5 files**. Globs, "update all", or package-wide scope = too broad. Enumerate files explicitly and fan out to a cluster of agents.
 </scope>
 
 <parallelization>
@@ -62,6 +62,7 @@ Each task: **at most 3–5 files**. Globs in file paths, "update all", or packag
 |API exports|Callers|Need signatures|
 |Core module|Dependents|Import dependency|
 |Schema/migration|App logic|Schema dependency|
+
 **Safe to parallelize:** independent modules, isolated file-scoped refactors, tests for existing code.
 </parallelization>
 
@@ -92,7 +93,7 @@ Before invoking:
 {{#if contextEnabled}}
 - `context` contains only session-specific info
 {{else}}
-- Every `assignment` includes its own goal, constraints, and acceptance criteria because shared context is unavailable
+- Every `assignment` includes its own goal, constraints, and acceptance criteria (no shared context)
 {{/if}}
 - Every `assignment` follows the template; no one-liners; edge cases covered
 - Tasks are truly parallel — you can articulate why none depends on another's output
@@ -106,56 +107,53 @@ Before invoking:
 
 {{#if contextEnabled}}
 <example label="Rename exported symbol + update all call sites">
-Two tasks with non-overlapping file sets. Neither depends on the other's edits.
+Two tasks with non-overlapping file sets — demonstrates scope partitioning.
 
 <context>
 ## Goal
 Rename `parseConfig` → `loadConfig` in `src/config/parser.ts` and all callers.
 ## Non-goals
-Do not change function behavior, signature, or tests — rename only.
+No behavior or signature changes; rename only.
 ## Acceptance (global)
 Caller runs `bun check:ts` after both tasks complete. Tasks must NOT run it.
 </context>
 <tasks>
   <task name="RenameExport">
-    <description>Rename the export in parser.ts</description>
     <assignment>
 ## Target
-- File: `src/config/parser.ts`
-- Symbol: exported function `parseConfig`
+- `src/config/parser.ts`: function `parseConfig`
+- If `src/config/index.ts` re-exports it, update the re-export
 - Non-goals: do not touch callers or tests
 
 ## Change
-- Rename `parseConfig` → `loadConfig` (declaration + any JSDoc referencing it)
-- If `src/config/index.ts` re-exports `parseConfig`, update that re-export too
+- Rename `parseConfig` → `loadConfig` (declaration + any JSDoc references)
 
 ## Edge Cases
-- If the function is overloaded, rename all overload signatures
-- Internal helpers named `_parseConfigValue` or similar: leave untouched — different symbols
+- Rename all overload signatures if overloaded
+- Internal helpers like `_parseConfigValue` are different symbols — leave untouched
 - Do not add a backwards-compat alias
 
 ## Acceptance
-- `src/config/parser.ts` exports `loadConfig`; `parseConfig` no longer appears as a top-level export in that file
+- `parseConfig` no longer appears as a top-level export in `parser.ts`
     </assignment>
   </task>
   <task name="UpdateCallers">
-    <description>Update import and call sites in consuming modules</description>
     <assignment>
 ## Target
-- Files: `src/cli/init.ts`, `src/server/bootstrap.ts`, `src/worker/index.ts`
-- Non-goals: do not touch `src/config/parser.ts` or `src/config/index.ts` — handled by sibling task
+- `src/cli/init.ts`, `src/server/bootstrap.ts`, `src/worker/index.ts`
+- Non-goals: do not touch `src/config/parser.ts` or `src/config/index.ts`
 
 ## Change
-- In each file: replace `import { parseConfig }` → `import { loadConfig }` from its config path
+- Replace `import { parseConfig }` → `import { loadConfig }`
 - Replace every call site `parseConfig(` → `loadConfig(`
+- For `import * as cfg` users, update `cfg.parseConfig` property access
 
 ## Edge Cases
-- If a file spreads the import (`import * as cfg from "…"`) and calls `cfg.parseConfig(…)`, update the property access too
-- String literals containing "parseConfig" (log messages, comments) are documentation — leave them
-- If any file re-exports `parseConfig` to an external package boundary, keep the old name via `export { loadConfig as parseConfig }` and add a `// TODO: remove after next major` comment
+- String literals containing "parseConfig" (logs, comments) are documentation — leave them
+- If a file re-exports to an external package boundary, keep the old name via `export { loadConfig as parseConfig }` with a `// TODO: remove after next major` comment
 
 ## Acceptance
-- No bare reference to `parseConfig` (as identifier, not string) remains in the three target files
+- No bare `parseConfig` identifier remains in the three target files
     </assignment>
   </task>
 </tasks>

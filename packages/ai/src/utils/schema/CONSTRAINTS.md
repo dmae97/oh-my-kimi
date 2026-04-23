@@ -32,6 +32,7 @@ When strict mode is requested (`strict=true` at call site), the schema MUST sati
      - `deprecated`, `readOnly`, `writeOnly`
      - `minProperties`, `maxProperties`
      - `$dynamicRef`, `$dynamicAnchor`
+   - Before stripping `default`, its value is inlined into the sibling `description` as ` (default: X)` so that strict-mode providers retain the default hint in free-form text. Inlining is skipped when `description` already contains `(default:` or when no sibling `description` is present.
 
 2. **`const` is normalized to `enum`**
    - If a node contains `const`, strict sanitization converts it to `enum: [const]`.

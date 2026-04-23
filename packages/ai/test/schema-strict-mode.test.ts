@@ -102,6 +102,133 @@ describe("sanitizeSchemaForStrictMode", () => {
 		expect(((objectVariant as Record<string, unknown>).anyOf as unknown[]).length).toBe(1);
 		expect(((nullVariant as Record<string, unknown>).anyOf as unknown[]).length).toBe(1);
 	});
+	it("inlines `default` value into `description` before stripping it", () => {
+		const schema = {
+			type: "number",
+			description: "Timeout in seconds",
+			default: 60,
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+
+		expect(sanitized.default).toBeUndefined();
+		expect(sanitized.description).toBe("Timeout in seconds (default: 60)");
+	});
+
+	it("preserves `default` for various primitive types when inlining", () => {
+		const numberSchema = sanitizeSchemaForStrictMode({
+			type: "number",
+			description: "n",
+			default: 0,
+		});
+		const boolSchema = sanitizeSchemaForStrictMode({
+			type: "boolean",
+			description: "flag",
+			default: true,
+		});
+		const stringSchema = sanitizeSchemaForStrictMode({
+			type: "string",
+			description: "path",
+			default: "cwd",
+		});
+
+		expect(numberSchema.description).toBe("n (default: 0)");
+		expect(boolSchema.description).toBe("flag (default: true)");
+		expect(stringSchema.description).toBe("path (default: cwd)");
+	});
+
+	it("does not double-inline when description already mentions `(default:`", () => {
+		const schema = {
+			type: "number",
+			description: "Timeout in seconds (default: 60)",
+			default: 60,
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+
+		expect(sanitized.description).toBe("Timeout in seconds (default: 60)");
+		expect(sanitized.default).toBeUndefined();
+	});
+
+	it("strips `default` when no sibling description exists (no synthesis)", () => {
+		const schema = {
+			type: "number",
+			default: 60,
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+
+		expect(sanitized.default).toBeUndefined();
+		expect(sanitized.description).toBeUndefined();
+	});
+
+	it("inlines falsy and null defaults without treating them as absent", () => {
+		const boolFalse = sanitizeSchemaForStrictMode({
+			type: "boolean",
+			description: "flag",
+			default: false,
+		});
+		const emptyStr = sanitizeSchemaForStrictMode({
+			type: "string",
+			description: "name",
+			default: "",
+		});
+		const nullDefault = sanitizeSchemaForStrictMode({
+			type: "string",
+			description: "value",
+			default: null,
+		});
+
+		expect(boolFalse.description).toBe("flag (default: false)");
+		expect(boolFalse.default).toBeUndefined();
+		expect(emptyStr.description).toBe("name (default: )");
+		expect(emptyStr.default).toBeUndefined();
+		expect(nullDefault.description).toBe("value (default: null)");
+		expect(nullDefault.default).toBeUndefined();
+	});
+
+	it("inlines defaults on nested object properties via recursion", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				outer: {
+					type: "object",
+					properties: {
+						retries: {
+							type: "number",
+							description: "retry count",
+							default: 3,
+						},
+					},
+					required: ["retries"],
+				},
+			},
+			required: ["outer"],
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+		const outer = (sanitized.properties as Record<string, Record<string, unknown>>).outer;
+		const retries = (outer.properties as Record<string, Record<string, unknown>>).retries;
+
+		expect(retries.default).toBeUndefined();
+		expect(retries.description).toBe("retry count (default: 3)");
+	});
+
+	it("inlines defaults through the type-array (nullable) branch", () => {
+		const schema = {
+			type: ["number", "null"],
+			description: "timeout",
+			default: 60,
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+		const variants = sanitized.anyOf as Array<Record<string, unknown>>;
+		const numberVariant = variants.find(v => v.type === "number");
+
+		expect(numberVariant).toBeDefined();
+		expect((numberVariant as Record<string, unknown>).default).toBeUndefined();
+		expect((numberVariant as Record<string, unknown>).description).toBe("timeout (default: 60)");
+	});
 });
 
 describe("enforceStrictSchema", () => {
