@@ -31,6 +31,11 @@ struct GrammarSpec {
 	node_types_rel: &'static str,
 }
 
+struct LockedPackage {
+	version: String,
+	source:  Option<String>,
+}
+
 #[derive(Deserialize)]
 struct RawTypeRef {
 	#[serde(rename = "type")]
@@ -361,27 +366,6 @@ const GRAMMARS: &[GrammarSpec] = &[
 fn main() {
 	napi_build::setup();
 	generate_chunk_schema();
-
-	let scanner_dir = Path::new("vendor/tree-sitter-glimmer");
-	let scanner_path = scanner_dir.join("scanner.c");
-	let parser_header_path = scanner_dir.join("parser.h");
-
-	println!("cargo:rerun-if-changed={}", scanner_path.display());
-	println!("cargo:rerun-if-changed={}", parser_header_path.display());
-
-	let mut build = cc::Build::new();
-	build
-		.std("c11")
-		.include(scanner_dir)
-		.file(&scanner_path)
-		// Vendored code: suppress warnings (including the ar -D probe noise on
-		// macOS where Apple's ar rejects the deterministic flag).
-		.cargo_warnings(false);
-
-	#[cfg(target_env = "msvc")]
-	build.flag("-utf-8");
-
-	build.compile("tree-sitter-glimmer-scanner");
 }
 
 fn generate_chunk_schema() {
@@ -392,15 +376,17 @@ fn generate_chunk_schema() {
 		.expect("pi-natives should live under the workspace root");
 	let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR should be set"));
 	let output_path = out_dir.join("chunk_schema.json");
-	let locked_versions = locked_package_versions(&workspace_root.join("Cargo.lock"));
+	let locked_packages = locked_packages(&workspace_root.join("Cargo.lock"));
 	let registry_roots = cargo_registry_roots();
+	let git_roots = cargo_git_checkout_roots();
 	let mut languages = BTreeMap::new();
 
 	for grammar in GRAMMARS {
-		let Some(version) = locked_versions.get(grammar.package) else {
+		let Some(locked) = locked_packages.get(grammar.package) else {
 			continue;
 		};
-		let Some(package_dir) = find_registry_package_dir(&registry_roots, grammar.package, version)
+		let Some(package_dir) =
+			find_locked_package_dir(&registry_roots, &git_roots, grammar.package, locked)
 		else {
 			continue;
 		};
@@ -658,6 +644,36 @@ fn cargo_registry_roots() -> Vec<PathBuf> {
 	roots
 }
 
+fn cargo_git_checkout_roots() -> Vec<PathBuf> {
+	let mut roots = Vec::new();
+	if let Some(cargo_home) = env::var_os("CARGO_HOME") {
+		roots.push(PathBuf::from(cargo_home).join("git").join("checkouts"));
+	}
+	if let Some(home) = env::var_os("HOME") {
+		roots.push(
+			PathBuf::from(home)
+				.join(".cargo")
+				.join("git")
+				.join("checkouts"),
+		);
+	}
+	roots
+}
+
+fn find_locked_package_dir(
+	registry_roots: &[PathBuf],
+	git_roots: &[PathBuf],
+	package: &str,
+	locked: &LockedPackage,
+) -> Option<PathBuf> {
+	match locked.source.as_deref() {
+		Some(source) if source.starts_with("git+") => {
+			find_git_package_dir(git_roots, package, &locked.version, git_revision(source))
+		},
+		_ => find_registry_package_dir(registry_roots, package, &locked.version),
+	}
+}
+
 fn find_registry_package_dir(
 	registry_roots: &[PathBuf],
 	package: &str,
@@ -677,32 +693,145 @@ fn find_registry_package_dir(
 	None
 }
 
-fn locked_package_versions(lock_path: &Path) -> HashMap<String, String> {
+fn find_git_package_dir(
+	git_roots: &[PathBuf],
+	package: &str,
+	version: &str,
+	revision: Option<&str>,
+) -> Option<PathBuf> {
+	for git_root in git_roots {
+		let Ok(checkout_dirs) = fs::read_dir(git_root) else {
+			continue;
+		};
+		for checkout_dir in checkout_dirs.flatten() {
+			let Ok(revision_dirs) = fs::read_dir(checkout_dir.path()) else {
+				continue;
+			};
+			for revision_dir in revision_dirs.flatten() {
+				let revision_path = revision_dir.path();
+				let Some(revision_name) = revision_path.file_name().and_then(|name| name.to_str())
+				else {
+					continue;
+				};
+				if !revision_matches(revision_name, revision) {
+					continue;
+				}
+				if let Some(package_dir) = find_manifest_package_dir(&revision_path, package, version) {
+					return Some(package_dir);
+				}
+			}
+		}
+	}
+	None
+}
+
+fn revision_matches(revision_name: &str, revision: Option<&str>) -> bool {
+	revision.is_none_or(|revision| {
+		revision.starts_with(revision_name) || revision_name.starts_with(revision)
+	})
+}
+
+fn find_manifest_package_dir(root: &Path, package: &str, version: &str) -> Option<PathBuf> {
+	if manifest_matches_package(&root.join("Cargo.toml"), package, version) {
+		return Some(root.to_path_buf());
+	}
+
+	let Ok(entries) = fs::read_dir(root) else {
+		return None;
+	};
+	for entry in entries.flatten() {
+		let candidate = entry.path();
+		if candidate.is_dir()
+			&& manifest_matches_package(&candidate.join("Cargo.toml"), package, version)
+		{
+			return Some(candidate);
+		}
+	}
+	None
+}
+
+fn manifest_matches_package(manifest_path: &Path, package: &str, version: &str) -> bool {
+	let Ok(source) = fs::read_to_string(manifest_path) else {
+		return false;
+	};
+	let mut in_package = false;
+	let mut name_matches = false;
+	let mut version_matches = false;
+
+	for line in source.lines() {
+		let trimmed = line.trim();
+		if trimmed.starts_with('[') {
+			in_package = trimmed == "[package]";
+			continue;
+		}
+		if !in_package {
+			continue;
+		}
+		if let Some(value) = toml_string_value(trimmed, "name") {
+			name_matches = value == package;
+			continue;
+		}
+		if let Some(value) = toml_string_value(trimmed, "version") {
+			version_matches = value == version;
+		}
+	}
+
+	name_matches && version_matches
+}
+
+fn git_revision(source: &str) -> Option<&str> {
+	source.rsplit_once('#').and_then(|(_, revision)| {
+		if revision.is_empty() {
+			None
+		} else {
+			Some(revision)
+		}
+	})
+}
+
+fn locked_packages(lock_path: &Path) -> HashMap<String, LockedPackage> {
 	let source = fs::read_to_string(lock_path).expect("Cargo.lock should be readable");
-	let mut versions = HashMap::new();
+	let mut packages = HashMap::new();
 	let mut current_name = None;
 	let mut current_version = None;
+	let mut current_source = None;
 
 	for line in source.lines() {
 		let trimmed = line.trim();
 		if trimmed == "[[package]]" {
 			if let (Some(name), Some(version)) = (current_name.take(), current_version.take()) {
-				versions.insert(name, version);
+				packages.insert(name, LockedPackage { version, source: current_source.take() });
 			}
+			current_source = None;
 			continue;
 		}
-		if let Some(value) = trimmed.strip_prefix("name = \"") {
-			current_name = value.strip_suffix('"').map(ToOwned::to_owned);
+		if let Some(value) = toml_string_value(trimmed, "name") {
+			current_name = Some(value.to_string());
 			continue;
 		}
-		if let Some(value) = trimmed.strip_prefix("version = \"") {
-			current_version = value.strip_suffix('"').map(ToOwned::to_owned);
+		if let Some(value) = toml_string_value(trimmed, "version") {
+			current_version = Some(value.to_string());
+			continue;
+		}
+		if let Some(value) = toml_string_value(trimmed, "source") {
+			current_source = Some(value.to_string());
 		}
 	}
 
 	if let (Some(name), Some(version)) = (current_name, current_version) {
-		versions.insert(name, version);
+		packages.insert(name, LockedPackage { version, source: current_source });
 	}
 
-	versions
+	packages
+}
+
+fn toml_string_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+	let value = line
+		.strip_prefix(key)?
+		.trim_start()
+		.strip_prefix('=')?
+		.trim_start()
+		.strip_prefix('"')?;
+	let end = value.find('"')?;
+	Some(&value[..end])
 }

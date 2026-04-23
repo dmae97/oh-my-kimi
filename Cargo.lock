@@ -2180,7 +2180,6 @@ dependencies = [
  "ast-grep-core",
  "brush-builtins",
  "brush-core",
- "cc",
  "clap",
  "dashmap",
  "globset",
@@ -3262,8 +3261,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-glimmer"
 version = "0.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "295346943475457f55688342f14675e2a54ba3e8f3d224f11d10477d99e70330"
+source = "git+https://github.com/ember-tooling/tree-sitter-glimmer?tag=v1.6.0-tree-sitter-glimmer#88af85568bde3b91acb5d4c352ed094d0c1f9d84"
 dependencies = [
  "cc",
  "tree-sitter",

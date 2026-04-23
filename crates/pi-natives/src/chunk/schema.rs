@@ -123,7 +123,7 @@ mod tests {
 
 	#[test]
 	fn generated_schema_covers_expected_languages() {
-		for language in ["python", "nix", "toml", "typescript", "rust", "yaml"] {
+		for language in ["python", "nix", "toml", "typescript", "rust", "yaml", "handlebars"] {
 			assert!(has_schema(language), "{language} should have generated schema data");
 		}
 	}

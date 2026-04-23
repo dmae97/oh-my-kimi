@@ -138,6 +138,5 @@ windows-sys = { version = "0.61", features = [
 ] }
 [build-dependencies]
 napi-build = "2"
-cc = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

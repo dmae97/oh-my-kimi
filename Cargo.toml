@@ -13,6 +13,7 @@ repository = "https://github.com/can1357/oh-my-pi"
 [patch.crates-io]
 brush-core = { path = "crates/brush-core-vendored" }
 brush-builtins = { path = "crates/brush-builtins-vendored" }
+tree-sitter-glimmer = { git = "https://github.com/ember-tooling/tree-sitter-glimmer", tag = "v1.6.0-tree-sitter-glimmer" }
 [profile.release]
 opt-level = 3
 lto = "fat"
