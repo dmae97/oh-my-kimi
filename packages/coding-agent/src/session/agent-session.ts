@@ -2924,13 +2924,30 @@ export class AgentSession {
 			attribution: "user",
 			timestamp: Date.now(),
 		});
-		// When idle, schedule an immediate continue so the queued follow-up is
-		// delivered without waiting for the next user turn.
-		if (!this.isStreaming) {
+		// When fully idle AND the session is in a resumable assistant-ended state,
+		// schedule an immediate continue so the queued follow-up is delivered
+		// without waiting for the next user turn. We gate on isStreaming (model
+		// actively producing), isRetrying (auto-retry backoff is sleeping between
+		// attempts, #retryPromise set), and the last message being assistant —
+		// agent.continue() only dequeues follow-ups from an assistant-ended state;
+		// resuming from user/toolResult state runs an extra model call on the
+		// stale prompt before draining the queue.
+		if (this.#canAutoContinueForFollowUp()) {
 			this.#scheduleAgentContinue({
-				shouldContinue: () => !this.agent.state.isStreaming && this.agent.hasQueuedMessages(),
+				shouldContinue: () => this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages(),
 			});
 		}
+	}
+
+	/**
+	 * Gate for idle-path follow-up auto-continue. See `#queueFollowUp` for rationale.
+	 */
+	#canAutoContinueForFollowUp(): boolean {
+		if (this.isStreaming) return false;
+		if (this.isRetrying) return false;
+		const messages = this.agent.state.messages;
+		const last = messages[messages.length - 1];
+		return last?.role === "assistant";
 	}
 
 	queueDeferredMessage(message: CustomMessage): void {
