@@ -285,6 +285,8 @@ jobs:
         run: bun run ci:release:verify-natives
       - name: Stage native addons for release
         run: cp packages/natives/native/*.node packages/coding-agent/binaries/
+      - name: Build release archives
+        run: bun run ci:release:build-archives
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
