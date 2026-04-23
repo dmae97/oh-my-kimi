@@ -43,6 +43,7 @@
 	"dependencies": {
 		"@anthropic-ai/sdk": "catalog:",
 		"@aws-sdk/client-bedrock-runtime": "catalog:",
+		"@aws-sdk/credential-provider-node": "catalog:",
 		"@bufbuild/protobuf": "catalog:",
 		"@google/genai": "catalog:",
 		"@oh-my-pi/pi-natives": "catalog:",
@@ -53,6 +54,7 @@
 		"ajv-formats": "catalog:",
 		"openai": "catalog:",
 		"partial-json": "catalog:",
+		"proxy-agent": "catalog:",
 		"zod": "catalog:"
 	},
 	"devDependencies": {

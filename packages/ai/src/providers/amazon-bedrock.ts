@@ -19,8 +19,10 @@ import {
 	type ToolConfiguration,
 	ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
+import { type DefaultProviderInit, defaultProvider } from "@aws-sdk/credential-provider-node";
 import { $env, $flag } from "@oh-my-pi/pi-utils";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
+import { ProxyAgent } from "proxy-agent";
 import type { Effort } from "../model-thinking";
 import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "../model-thinking";
 import { calculateCost } from "../models";
@@ -60,6 +62,51 @@ export interface BedrockOptions extends StreamOptions {
 
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
 
+const BEDROCK_PROXY_ENV_KEYS = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"];
+
+function hasBedrockProxyEnvironment(): boolean {
+	return BEDROCK_PROXY_ENV_KEYS.some(key => Boolean($env[key]?.trim()));
+}
+
+function installBedrockHttp1Transport(config: BedrockRuntimeClientConfig): void {
+	const requestHandler = createBedrockHttp1RequestHandler();
+	config.requestHandler = requestHandler;
+
+	if (hasBedrockProxyEnvironment()) {
+		config.credentialDefaultProvider = createBedrockCredentialDefaultProvider(requestHandler);
+	}
+}
+
+function createBedrockHttp1RequestHandler(): NodeHttpHandler {
+	if (!hasBedrockProxyEnvironment()) {
+		return new NodeHttpHandler();
+	}
+
+	const agent = new ProxyAgent();
+	return new NodeHttpHandler({
+		httpAgent: agent,
+		httpsAgent: agent,
+	});
+}
+
+function createBedrockCredentialDefaultProvider(
+	requestHandler: NodeHttpHandler,
+): NonNullable<BedrockRuntimeClientConfig["credentialDefaultProvider"]> {
+	return (init?: DefaultProviderInit) =>
+		defaultProvider({
+			...init,
+			clientConfig: {
+				...init?.clientConfig,
+				requestHandler,
+			},
+		});
+}
+
+function isHttp2ResponseError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /\bhttp2\b|http\/2/i.test(message);
+}
+
 export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 	model: Model<"bedrock-converse-stream">,
 	context: Context,
@@ -96,6 +143,8 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			region: options.region,
 			profile: options.profile,
 		};
+		let usesHttp1RequestHandler = false;
+		let messageStarted = false;
 
 		// in Node.js/Bun environment only
 		if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
@@ -109,16 +158,15 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				};
 			}
 
-			if ($flag("AWS_BEDROCK_FORCE_HTTP1")) {
-				config.requestHandler = new NodeHttpHandler();
+			if ($flag("AWS_BEDROCK_FORCE_HTTP1") || hasBedrockProxyEnvironment()) {
+				usesHttp1RequestHandler = true;
+				installBedrockHttp1Transport(config);
 			}
 		}
 
 		config.region = config.region || "us-east-1";
 
 		try {
-			const client = new BedrockRuntimeClient(config);
-
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);
 
 			const toolConfig = convertToolConfig(context.tools, options.toolChoice);
@@ -150,38 +198,59 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				url: `https://bedrock-runtime.${config.region}.amazonaws.com/model/${model.id}/converse-stream`,
 				body: commandInput,
 			};
-			const command = new ConverseStreamCommand(commandInput);
 
-			const response = await client.send(command, { abortSignal: options.signal });
+			while (true) {
+				const client = new BedrockRuntimeClient(config);
+				try {
+					const command = new ConverseStreamCommand(commandInput);
+					const response = await client.send(command, { abortSignal: options.signal });
 
-			for await (const item of response.stream!) {
-				if (item.messageStart) {
-					if (item.messageStart.role !== ConversationRole.ASSISTANT) {
-						throw new Error("Unexpected assistant message start but got user message start instead");
+					for await (const item of response.stream!) {
+						if (item.messageStart) {
+							messageStarted = true;
+							if (item.messageStart.role !== ConversationRole.ASSISTANT) {
+								throw new Error("Unexpected assistant message start but got user message start instead");
+							}
+							stream.push({ type: "start", partial: output });
+						} else if (item.contentBlockStart) {
+							if (!firstTokenTime) firstTokenTime = Date.now();
+							handleContentBlockStart(item.contentBlockStart, blocks, output, stream);
+						} else if (item.contentBlockDelta) {
+							if (!firstTokenTime) firstTokenTime = Date.now();
+							handleContentBlockDelta(item.contentBlockDelta, blocks, output, stream);
+						} else if (item.contentBlockStop) {
+							handleContentBlockStop(item.contentBlockStop, blocks, output, stream);
+						} else if (item.messageStop) {
+							output.stopReason = mapStopReason(item.messageStop.stopReason);
+						} else if (item.metadata) {
+							handleMetadata(item.metadata, model, output);
+						} else if (item.internalServerException) {
+							throw new Error(`Internal server error: ${item.internalServerException.message}`);
+						} else if (item.modelStreamErrorException) {
+							throw new Error(`Model stream error: ${item.modelStreamErrorException.message}`);
+						} else if (item.validationException) {
+							throw withHttpStatus(new Error(`Validation error: ${item.validationException.message}`), 400);
+						} else if (item.throttlingException) {
+							throw new Error(`Throttling error: ${item.throttlingException.message}`);
+						} else if (item.serviceUnavailableException) {
+							throw new Error(`Service unavailable: ${item.serviceUnavailableException.message}`);
+						}
 					}
-					stream.push({ type: "start", partial: output });
-				} else if (item.contentBlockStart) {
-					if (!firstTokenTime) firstTokenTime = Date.now();
-					handleContentBlockStart(item.contentBlockStart, blocks, output, stream);
-				} else if (item.contentBlockDelta) {
-					if (!firstTokenTime) firstTokenTime = Date.now();
-					handleContentBlockDelta(item.contentBlockDelta, blocks, output, stream);
-				} else if (item.contentBlockStop) {
-					handleContentBlockStop(item.contentBlockStop, blocks, output, stream);
-				} else if (item.messageStop) {
-					output.stopReason = mapStopReason(item.messageStop.stopReason);
-				} else if (item.metadata) {
-					handleMetadata(item.metadata, model, output);
-				} else if (item.internalServerException) {
-					throw new Error(`Internal server error: ${item.internalServerException.message}`);
-				} else if (item.modelStreamErrorException) {
-					throw new Error(`Model stream error: ${item.modelStreamErrorException.message}`);
-				} else if (item.validationException) {
-					throw withHttpStatus(new Error(`Validation error: ${item.validationException.message}`), 400);
-				} else if (item.throttlingException) {
-					throw new Error(`Throttling error: ${item.throttlingException.message}`);
-				} else if (item.serviceUnavailableException) {
-					throw new Error(`Service unavailable: ${item.serviceUnavailableException.message}`);
+					break;
+				} catch (error) {
+					if (
+						!usesHttp1RequestHandler &&
+						!messageStarted &&
+						output.content.length === 0 &&
+						isHttp2ResponseError(error)
+					) {
+						usesHttp1RequestHandler = true;
+						installBedrockHttp1Transport(config);
+						continue;
+					}
+					throw error;
+				} finally {
+					client.destroy();
 				}
 			}
 
