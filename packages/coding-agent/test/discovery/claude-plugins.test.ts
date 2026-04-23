@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { loadCapability } from "@oh-my-pi/pi-coding-agent/capability";
 import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
 import {
 	clearClaudePluginRootsCache,
@@ -346,7 +347,6 @@ describe("listClaudePluginRoots", () => {
 			"---\nname: manifest-skill\ndescription: Manifest skill\n---\nBody\n",
 		);
 
-		const { loadCapability } = await import("@oh-my-pi/pi-coding-agent/capability");
 		const result = await loadCapability<Skill>("skills", { cwd: tempDir });
 		expect(result.warnings).toEqual([]);
 		expect(result.all.length).toBeGreaterThan(0);
@@ -385,7 +385,6 @@ describe("listClaudePluginRoots", () => {
 		);
 		await fs.writeFile(path.join(pluginPath, ".claude", "commands", "ship.md"), "Ship it\n");
 
-		const { loadCapability } = await import("@oh-my-pi/pi-coding-agent/capability");
 		const result = await loadCapability<SlashCommand>("slash-commands", { cwd: tempDir });
 		expect(result.warnings).toEqual([]);
 		expect(result.all.length).toBeGreaterThan(0);
@@ -427,7 +426,6 @@ describe("listClaudePluginRoots", () => {
 			"---\nname: outside-skill\ndescription: Outside skill\n---\nBody\n",
 		);
 
-		const { loadCapability } = await import("@oh-my-pi/pi-coding-agent/capability");
 		const result = await loadCapability<Skill>("skills", { cwd: tempDir });
 		expect(result.warnings[0]).toContain("Ignoring skills path outside plugin root");
 		const found = result.all.find(skill => skill.name === "manifest-skills-outside:outside-skill");
@@ -465,7 +463,6 @@ describe("listClaudePluginRoots", () => {
 		);
 		await fs.writeFile(path.join(outsideDir, "ship.md"), "Ship it\n");
 
-		const { loadCapability } = await import("@oh-my-pi/pi-coding-agent/capability");
 		const result = await loadCapability<SlashCommand>("slash-commands", { cwd: tempDir });
 		expect(result.warnings[0]).toContain("Ignoring slash-commands path outside plugin root");
 		const found = result.all.find(command => command.name === "manifest-commands-outside:ship");
