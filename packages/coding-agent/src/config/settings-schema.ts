@@ -886,6 +886,8 @@ export const SETTINGS_SCHEMA = {
 
 	"memories.rolloutPayloadPercent": { type: "number", default: 0.7 },
 
+	"memories.phase1InputTokenLimit": { type: "number", default: 4000 },
+
 	"memories.fallbackTokenLimit": { type: "number", default: 16000 },
 
 	"memories.summaryInjectionTokenLimit": { type: "number", default: 5000 },
