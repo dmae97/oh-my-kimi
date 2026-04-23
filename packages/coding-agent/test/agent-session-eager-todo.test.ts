@@ -13,6 +13,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Type } from "@sinclair/typebox";
+import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 class MockAssistantStream extends AssistantMessageEventStream {}
 
@@ -38,26 +39,6 @@ function getToolChoiceName(choice: unknown): string | undefined {
 	if (toolChoice.type === "tool") return toolChoice.name;
 	if (toolChoice.type === "function") return toolChoice.name ?? toolChoice.function?.name;
 	return undefined;
-}
-
-function createAssistantMessage(text: string): AssistantMessage {
-	return {
-		role: "assistant",
-		content: [{ type: "text", text }],
-		api: "anthropic-messages",
-		provider: "anthropic",
-		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
-		timestamp: Date.now(),
-	};
 }
 
 function createToolCallAssistantMessage(name: string, args: Record<string, unknown>): AssistantMessage {

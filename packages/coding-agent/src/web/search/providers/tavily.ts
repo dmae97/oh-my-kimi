@@ -10,7 +10,7 @@ import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { findCredential } from "./utils";
+import { findCredential, isApiKeyAvailable } from "./utils";
 
 const TAVILY_SEARCH_URL = "https://api.tavily.com/search";
 const DEFAULT_NUM_RESULTS = 5;
@@ -151,12 +151,8 @@ export class TavilyProvider extends SearchProvider {
 	readonly id = "tavily";
 	readonly label = "Tavily";
 
-	async isAvailable(): Promise<boolean> {
-		try {
-			return !!(await findApiKey());
-		} catch {
-			return false;
-		}
+	isAvailable(): Promise<boolean> {
+		return isApiKeyAvailable(findApiKey);
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {

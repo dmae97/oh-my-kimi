@@ -330,6 +330,66 @@ function isLikelyNanoGptTextModelId(id: string): boolean {
 	return !NANO_GPT_NON_TEXT_MODEL_TOKENS.some(token => normalized.includes(token));
 }
 
+type SimpleProviderConfig = { apiKey?: string; baseUrl?: string };
+
+function createSimpleOpenAICompletionsOptions(
+	providerId: Parameters<typeof getBundledModels>[0],
+	defaultBaseUrl: string,
+	config?: SimpleProviderConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? defaultBaseUrl;
+	const references = createBundledReferenceMap<"openai-completions">(providerId);
+	return {
+		providerId,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: providerId,
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						return mapWithBundledReference(entry, defaults, reference);
+					},
+				}),
+		}),
+	};
+}
+
+function createSimpleAnthropicProviderOptions(
+	providerId: Parameters<typeof getBundledModels>[0],
+	defaultBaseUrlFallback: string,
+	config?: SimpleProviderConfig,
+): ModelManagerOptions<"anthropic-messages"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = normalizeAnthropicBaseUrl(config?.baseUrl, defaultBaseUrlFallback);
+	const discoveryBaseUrl = toAnthropicDiscoveryBaseUrl(baseUrl);
+	const references = createBundledReferenceMap<"anthropic-messages">(providerId);
+	return {
+		providerId,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "anthropic-messages",
+					provider: providerId,
+					baseUrl: discoveryBaseUrl,
+					headers: buildAnthropicDiscoveryHeaders(apiKey),
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						const model = mapWithBundledReference(entry, defaults, reference);
+						return {
+							...model,
+							name: toModelName(entry.display_name, model.name),
+							baseUrl,
+						};
+					},
+				}),
+		}),
+	};
+}
+
 // ---------------------------------------------------------------------------
 // 1. OpenAI
 // ---------------------------------------------------------------------------
@@ -372,25 +432,7 @@ export interface GroqModelManagerConfig {
 }
 
 export function groqModelManagerOptions(config?: GroqModelManagerConfig): ModelManagerOptions<"openai-completions"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://api.groq.com/openai/v1";
-	const references = createBundledReferenceMap<"openai-completions">("groq");
-	return {
-		providerId: "groq",
-		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
-					api: "openai-completions",
-					provider: "groq",
-					baseUrl,
-					apiKey,
-					mapModel: (entry, defaults) => {
-						const reference = references.get(defaults.id);
-						return mapWithBundledReference(entry, defaults, reference);
-					},
-				}),
-		}),
-	};
+	return createSimpleOpenAICompletionsOptions("groq", "https://api.groq.com/openai/v1", config);
 }
 
 // ---------------------------------------------------------------------------
@@ -405,25 +447,7 @@ export interface CerebrasModelManagerConfig {
 export function cerebrasModelManagerOptions(
 	config?: CerebrasModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://api.cerebras.ai/v1";
-	const references = createBundledReferenceMap<"openai-completions">("cerebras");
-	return {
-		providerId: "cerebras",
-		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
-					api: "openai-completions",
-					provider: "cerebras",
-					baseUrl,
-					apiKey,
-					mapModel: (entry, defaults) => {
-						const reference = references.get(defaults.id);
-						return mapWithBundledReference(entry, defaults, reference);
-					},
-				}),
-		}),
-	};
+	return createSimpleOpenAICompletionsOptions("cerebras", "https://api.cerebras.ai/v1", config);
 }
 
 // ---------------------------------------------------------------------------
@@ -438,25 +462,7 @@ export interface HuggingfaceModelManagerConfig {
 export function huggingfaceModelManagerOptions(
 	config?: HuggingfaceModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://router.huggingface.co/v1";
-	const references = createBundledReferenceMap<"openai-completions">("huggingface");
-	return {
-		providerId: "huggingface",
-		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
-					api: "openai-completions",
-					provider: "huggingface",
-					baseUrl,
-					apiKey,
-					mapModel: (entry, defaults) => {
-						const reference = references.get(defaults.id);
-						return mapWithBundledReference(entry, defaults, reference);
-					},
-				}),
-		}),
-	};
+	return createSimpleOpenAICompletionsOptions("huggingface", "https://router.huggingface.co/v1", config);
 }
 
 // ---------------------------------------------------------------------------
@@ -471,25 +477,7 @@ export interface NvidiaModelManagerConfig {
 export function nvidiaModelManagerOptions(
 	config?: NvidiaModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://integrate.api.nvidia.com/v1";
-	const references = createBundledReferenceMap<"openai-completions">("nvidia");
-	return {
-		providerId: "nvidia",
-		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
-					api: "openai-completions",
-					provider: "nvidia",
-					baseUrl,
-					apiKey,
-					mapModel: (entry, defaults) => {
-						const reference = references.get(defaults.id);
-						return mapWithBundledReference(entry, defaults, reference);
-					},
-				}),
-		}),
-	};
+	return createSimpleOpenAICompletionsOptions("nvidia", "https://integrate.api.nvidia.com/v1", config);
 }
 
 // ---------------------------------------------------------------------------
@@ -502,25 +490,7 @@ export interface XaiModelManagerConfig {
 }
 
 export function xaiModelManagerOptions(config?: XaiModelManagerConfig): ModelManagerOptions<"openai-completions"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://api.x.ai/v1";
-	const references = createBundledReferenceMap<"openai-completions">("xai");
-	return {
-		providerId: "xai",
-		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
-					api: "openai-completions",
-					provider: "xai",
-					baseUrl,
-					apiKey,
-					mapModel: (entry, defaults) => {
-						const reference = references.get(defaults.id);
-						return mapWithBundledReference(entry, defaults, reference);
-					},
-				}),
-		}),
-	};
+	return createSimpleOpenAICompletionsOptions("xai", "https://api.x.ai/v1", config);
 }
 
 // ---------------------------------------------------------------------------
@@ -535,25 +505,7 @@ export interface MistralModelManagerConfig {
 export function mistralModelManagerOptions(
 	config?: MistralModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://api.mistral.ai/v1";
-	const references = createBundledReferenceMap<"openai-completions">("mistral");
-	return {
-		providerId: "mistral",
-		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
-					api: "openai-completions",
-					provider: "mistral",
-					baseUrl,
-					apiKey,
-					mapModel: (entry, defaults) => {
-						const reference = references.get(defaults.id);
-						return mapWithBundledReference(entry, defaults, reference);
-					},
-				}),
-		}),
-	};
+	return createSimpleOpenAICompletionsOptions("mistral", "https://api.mistral.ai/v1", config);
 }
 
 // ---------------------------------------------------------------------------
@@ -1106,25 +1058,7 @@ export interface TogetherModelManagerConfig {
 export function togetherModelManagerOptions(
 	config?: TogetherModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://api.together.xyz/v1";
-	const references = createBundledReferenceMap<"openai-completions">("together");
-	return {
-		providerId: "together",
-		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
-					api: "openai-completions",
-					provider: "together",
-					baseUrl,
-					apiKey,
-					mapModel: (entry, defaults) => {
-						const reference = references.get(defaults.id);
-						return mapWithBundledReference(entry, defaults, reference);
-					},
-				}),
-		}),
-	};
+	return createSimpleOpenAICompletionsOptions("together", "https://api.together.xyz/v1", config);
 }
 
 // ---------------------------------------------------------------------------
@@ -1180,25 +1114,7 @@ export interface QwenPortalModelManagerConfig {
 export function qwenPortalModelManagerOptions(
 	config?: QwenPortalModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://portal.qwen.ai/v1";
-	const references = createBundledReferenceMap<"openai-completions">("qwen-portal");
-	return {
-		providerId: "qwen-portal",
-		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
-					api: "openai-completions",
-					provider: "qwen-portal",
-					baseUrl,
-					apiKey,
-					mapModel: (entry, defaults) => {
-						const reference = references.get(defaults.id);
-						return mapWithBundledReference(entry, defaults, reference);
-					},
-				}),
-		}),
-	};
+	return createSimpleOpenAICompletionsOptions("qwen-portal", "https://portal.qwen.ai/v1", config);
 }
 
 // ---------------------------------------------------------------------------
@@ -1213,25 +1129,7 @@ export interface QianfanModelManagerConfig {
 export function qianfanModelManagerOptions(
 	config?: QianfanModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://qianfan.baidubce.com/v2";
-	const references = createBundledReferenceMap<"openai-completions">("qianfan");
-	return {
-		providerId: "qianfan",
-		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
-					api: "openai-completions",
-					provider: "qianfan",
-					baseUrl,
-					apiKey,
-					mapModel: (entry, defaults) => {
-						const reference = references.get(defaults.id);
-						return mapWithBundledReference(entry, defaults, reference);
-					},
-				}),
-		}),
-	};
+	return createSimpleOpenAICompletionsOptions("qianfan", "https://qianfan.baidubce.com/v2", config);
 }
 
 // ---------------------------------------------------------------------------
@@ -1246,34 +1144,11 @@ export interface CloudflareAiGatewayModelManagerConfig {
 export function cloudflareAiGatewayModelManagerOptions(
 	config?: CloudflareAiGatewayModelManagerConfig,
 ): ModelManagerOptions<"anthropic-messages"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = normalizeAnthropicBaseUrl(
-		config?.baseUrl,
+	return createSimpleAnthropicProviderOptions(
+		"cloudflare-ai-gateway",
 		"https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic",
+		config,
 	);
-	const discoveryBaseUrl = toAnthropicDiscoveryBaseUrl(baseUrl);
-	const references = createBundledReferenceMap<"anthropic-messages">("cloudflare-ai-gateway");
-	return {
-		providerId: "cloudflare-ai-gateway",
-		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
-					api: "anthropic-messages",
-					provider: "cloudflare-ai-gateway",
-					baseUrl: discoveryBaseUrl,
-					headers: buildAnthropicDiscoveryHeaders(apiKey),
-					mapModel: (entry, defaults) => {
-						const reference = references.get(defaults.id);
-						const model = mapWithBundledReference(entry, defaults, reference);
-						return {
-							...model,
-							name: toModelName(entry.display_name, model.name),
-							baseUrl,
-						};
-					},
-				}),
-		}),
-	};
 }
 
 // ---------------------------------------------------------------------------
@@ -1288,31 +1163,7 @@ export interface XiaomiModelManagerConfig {
 export function xiaomiModelManagerOptions(
 	config?: XiaomiModelManagerConfig,
 ): ModelManagerOptions<"anthropic-messages"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = normalizeAnthropicBaseUrl(config?.baseUrl, "https://api.xiaomimimo.com/anthropic");
-	const discoveryBaseUrl = toAnthropicDiscoveryBaseUrl(baseUrl);
-	const references = createBundledReferenceMap<"anthropic-messages">("xiaomi");
-	return {
-		providerId: "xiaomi",
-		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
-					api: "anthropic-messages",
-					provider: "xiaomi",
-					baseUrl: discoveryBaseUrl,
-					headers: buildAnthropicDiscoveryHeaders(apiKey),
-					mapModel: (entry, defaults) => {
-						const reference = references.get(defaults.id);
-						const model = mapWithBundledReference(entry, defaults, reference);
-						return {
-							...model,
-							name: toModelName(entry.display_name, model.name),
-							baseUrl,
-						};
-					},
-				}),
-		}),
-	};
+	return createSimpleAnthropicProviderOptions("xiaomi", "https://api.xiaomimimo.com/anthropic", config);
 }
 
 // ---------------------------------------------------------------------------
@@ -1975,6 +1826,12 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDe
 	),
 ];
 
+const filterActiveToolCallModels = (_id: string, m: ModelsDevModel): boolean => {
+	if (m.tool_call !== true) return false;
+	if (m.status === "deprecated") return false;
+	return true;
+};
+
 const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDescriptor[] = [
 	// --- Cloudflare AI Gateway ---
 	anthropicMessagesDescriptor(
@@ -1986,11 +1843,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDes
 	openAiCompletionsDescriptor("mistral", "mistral", "https://api.mistral.ai/v1"),
 	// --- OpenCode Zen ---
 	openAiCompletionsDescriptor("opencode", "opencode-zen", "https://opencode.ai/zen/v1", {
-		filterModel: (_id, m) => {
-			if (m.tool_call !== true) return false;
-			if (m.status === "deprecated") return false;
-			return true;
-		},
+		filterModel: filterActiveToolCallModels,
 		resolveApi: (modelId, raw) =>
 			resolveApiByRules(
 				modelId,
@@ -2001,11 +1854,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDes
 	}),
 	// --- OpenCode Go ---
 	openAiCompletionsDescriptor("opencode-go", "opencode-go", "https://opencode.ai/zen/go/v1", {
-		filterModel: (_id, m) => {
-			if (m.tool_call !== true) return false;
-			if (m.status === "deprecated") return false;
-			return true;
-		},
+		filterModel: filterActiveToolCallModels,
 		resolveApi: (modelId, raw) =>
 			resolveApiByRules(
 				modelId,
@@ -2019,11 +1868,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDes
 		defaultContextWindow: 128000,
 		defaultMaxTokens: 8192,
 		headers: { ...OPENCODE_HEADERS },
-		filterModel: (_id, m) => {
-			if (m.tool_call !== true) return false;
-			if (m.status === "deprecated") return false;
-			return true;
-		},
+		filterModel: filterActiveToolCallModels,
 		resolveApi: (modelId, raw) =>
 			resolveApiByRules(modelId, raw, COPILOT_API_RESOLUTION_RULES, COPILOT_DEFAULT_RESOLUTION),
 		transformModel: model => {
@@ -2052,11 +1897,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDes
 
 	// --- ZenMux ---
 	openAiCompletionsDescriptor("zenmux", "zenmux", ZENMUX_OPENAI_BASE_URL, {
-		filterModel: (_id, m) => {
-			if (m.tool_call !== true) return false;
-			if (m.status === "deprecated") return false;
-			return true;
-		},
+		filterModel: filterActiveToolCallModels,
 		resolveApi: modelId => {
 			if (modelId.startsWith("anthropic/")) {
 				return { api: "anthropic-messages" as const, baseUrl: ZENMUX_ANTHROPIC_BASE_URL };

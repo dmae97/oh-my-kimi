@@ -27,11 +27,11 @@ import { type Settings, settingsCapability } from "../capability/settings";
 import { type SystemPrompt, systemPromptCapability } from "../capability/system-prompt";
 import type { LoadContext, LoadResult } from "../capability/types";
 import {
+	buildExtensionModuleItems,
 	calculateDepth,
 	createSourceMeta,
 	discoverExtensionModulePaths,
 	expandEnvVarsDeep,
-	getExtensionNameFromPath,
 	getProjectPath,
 	getUserPath,
 } from "./helpers";
@@ -238,20 +238,7 @@ async function loadExtensionModules(ctx: LoadContext): Promise<LoadResult<Extens
 		projectExtensionsDir ? discoverExtensionModulePaths(ctx, projectExtensionsDir) : Promise.resolve([]),
 	]);
 
-	const items: ExtensionModule[] = [
-		...userPaths.map(extPath => ({
-			name: getExtensionNameFromPath(extPath),
-			path: extPath,
-			level: "user" as const,
-			_source: createSourceMeta(PROVIDER_ID, extPath, "user"),
-		})),
-		...projectPaths.map(extPath => ({
-			name: getExtensionNameFromPath(extPath),
-			path: extPath,
-			level: "project" as const,
-			_source: createSourceMeta(PROVIDER_ID, extPath, "project"),
-		})),
-	];
+	const items = buildExtensionModuleItems(PROVIDER_ID, userPaths, projectPaths);
 
 	return { items, warnings: [] };
 }

@@ -294,6 +294,23 @@ function findParagraphEnd(lines: string[], line: number): number {
 	return index;
 }
 
+function cloneUndoStack(stack: VimUndoEntry[]): VimUndoEntry[] {
+	return stack.map(entry => ({
+		before: {
+			...entry.before,
+			lines: [...entry.before.lines],
+			cursor: clonePosition(entry.before.cursor),
+			baseFingerprint: entry.before.baseFingerprint ? { ...entry.before.baseFingerprint } : null,
+		},
+		after: {
+			...entry.after,
+			lines: [...entry.after.lines],
+			cursor: clonePosition(entry.after.cursor),
+			baseFingerprint: entry.after.baseFingerprint ? { ...entry.after.baseFingerprint } : null,
+		},
+	}));
+}
+
 export class VimEngine {
 	buffer: VimBuffer;
 	inputMode: VimInputMode = "normal";
@@ -361,34 +378,8 @@ export class VimEngine {
 					inserted: this.#pendingChange.inserted,
 				}
 			: null;
-		next.#undoStack = this.#undoStack.map(entry => ({
-			before: {
-				...entry.before,
-				lines: [...entry.before.lines],
-				cursor: clonePosition(entry.before.cursor),
-				baseFingerprint: entry.before.baseFingerprint ? { ...entry.before.baseFingerprint } : null,
-			},
-			after: {
-				...entry.after,
-				lines: [...entry.after.lines],
-				cursor: clonePosition(entry.after.cursor),
-				baseFingerprint: entry.after.baseFingerprint ? { ...entry.after.baseFingerprint } : null,
-			},
-		}));
-		next.#redoStack = this.#redoStack.map(entry => ({
-			before: {
-				...entry.before,
-				lines: [...entry.before.lines],
-				cursor: clonePosition(entry.before.cursor),
-				baseFingerprint: entry.before.baseFingerprint ? { ...entry.before.baseFingerprint } : null,
-			},
-			after: {
-				...entry.after,
-				lines: [...entry.after.lines],
-				cursor: clonePosition(entry.after.cursor),
-				baseFingerprint: entry.after.baseFingerprint ? { ...entry.after.baseFingerprint } : null,
-			},
-		}));
+		next.#undoStack = cloneUndoStack(this.#undoStack);
+		next.#redoStack = cloneUndoStack(this.#redoStack);
 		return next;
 	}
 
@@ -913,22 +904,14 @@ export class VimEngine {
 			}
 			case "d": {
 				await this.#applyAtomicChange(tokens, () => {
-					this.register = {
-						kind: visual.linewise ? "line" : "char",
-						text: this.buffer.getText().slice(visual.start, visual.end),
-					};
-					this.buffer.deleteOffsets(visual.start, visual.end);
+					this.#yankAndDeleteRange(visual);
 				});
 				this.#clearSelection();
 				return;
 			}
 			case "c": {
 				await this.#startInsertChange(tokens, () => {
-					this.register = {
-						kind: visual.linewise ? "line" : "char",
-						text: this.buffer.getText().slice(visual.start, visual.end),
-					};
-					this.buffer.deleteOffsets(visual.start, visual.end);
+					this.#yankAndDeleteRange(visual);
 				});
 				this.#clearSelection();
 				return;
@@ -1106,11 +1089,7 @@ export class VimEngine {
 				return nextIndex + 1;
 			case "s":
 				await this.#startInsertChange(["s"], () => {
-					const start = this.buffer.currentOffset();
-					this.register = {
-						kind: "char",
-						text: this.buffer.deleteOffsets(start, Math.min(this.buffer.getText().length, start + count)),
-					};
+					this.#deleteCharsForward(count);
 				});
 				return nextIndex + 1;
 			case "S":
@@ -1118,11 +1097,7 @@ export class VimEngine {
 				return nextIndex + 1;
 			case "x":
 				await this.#applyAtomicChange(["x"], () => {
-					const start = this.buffer.currentOffset();
-					this.register = {
-						kind: "char",
-						text: this.buffer.deleteOffsets(start, Math.min(this.buffer.getText().length, start + count)),
-					};
+					this.#deleteCharsForward(count);
 				});
 				return nextIndex + 1;
 			case "X":
@@ -1559,11 +1534,7 @@ export class VimEngine {
 		if (operator === "d") {
 			const range = this.#resolveMotionRange(motion);
 			await this.#applyAtomicChange(tokens, () => {
-				this.register = {
-					kind: range.linewise ? "line" : "char",
-					text: this.buffer.getText().slice(range.start, range.end),
-				};
-				this.buffer.deleteOffsets(range.start, range.end);
+				this.#yankAndDeleteRange(range);
 			});
 			return;
 		}
@@ -1571,14 +1542,26 @@ export class VimEngine {
 		if (operator === "c") {
 			const range = this.#resolveMotionRange(motion);
 			await this.#startInsertChange(tokens, () => {
-				this.register = {
-					kind: range.linewise ? "line" : "char",
-					text: this.buffer.getText().slice(range.start, range.end),
-				};
-				this.buffer.deleteOffsets(range.start, range.end);
+				this.#yankAndDeleteRange(range);
 			});
 			return;
 		}
+	}
+
+	#yankAndDeleteRange(range: { start: number; end: number; linewise: boolean }): void {
+		this.register = {
+			kind: range.linewise ? "line" : "char",
+			text: this.buffer.getText().slice(range.start, range.end),
+		};
+		this.buffer.deleteOffsets(range.start, range.end);
+	}
+
+	#deleteCharsForward(count: number): void {
+		const start = this.buffer.currentOffset();
+		this.register = {
+			kind: "char",
+			text: this.buffer.deleteOffsets(start, Math.min(this.buffer.getText().length, start + count)),
+		};
 	}
 
 	async #changeWholeLines(count: number, tokens: readonly string[]): Promise<void> {

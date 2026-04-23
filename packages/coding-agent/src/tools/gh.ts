@@ -14,6 +14,7 @@ import ghSearchIssuesDescription from "../prompts/tools/gh-search-issues.md" wit
 import ghSearchPrsDescription from "../prompts/tools/gh-search-prs.md" with { type: "text" };
 import * as git from "../utils/git";
 import type { ToolSession } from ".";
+import { formatShortSha } from "./gh-format";
 import type { OutputMeta } from "./output-meta";
 import { ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -543,14 +544,6 @@ function looksLikeGitHubUrl(value: string | undefined): boolean {
 function normalizeOptionalString(value: string | null | undefined): string | undefined {
 	const normalized = value?.trim();
 	return normalized ? normalized : undefined;
-}
-
-function formatShortSha(value: string | undefined): string | undefined {
-	if (!value) {
-		return undefined;
-	}
-
-	return value.slice(0, 12);
 }
 
 function requireNonEmpty(value: string | null | undefined, label: string): string {

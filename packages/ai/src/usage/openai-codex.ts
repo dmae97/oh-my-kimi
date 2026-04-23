@@ -11,6 +11,7 @@ import type {
 	UsageWindow,
 } from "../usage";
 import { isRecord } from "../utils";
+import { toNumber } from "./shared";
 
 const CODEX_USAGE_PATH = "wham/usage";
 const JWT_AUTH_CLAIM = "https://api.openai.com/auth";
@@ -59,17 +60,6 @@ interface JwtPayload {
 		email?: string;
 	};
 }
-
-const toNumber = (value: unknown): number | undefined => {
-	if (typeof value === "number" && Number.isFinite(value)) return value;
-	if (typeof value === "string") {
-		const trimmed = value.trim();
-		if (!trimmed) return undefined;
-		const parsed = Number(trimmed);
-		if (Number.isFinite(parsed)) return parsed;
-	}
-	return undefined;
-};
 
 const toBoolean = (value: unknown): boolean | undefined => {
 	if (typeof value === "boolean") return value;

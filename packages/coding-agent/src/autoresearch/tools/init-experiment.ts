@@ -15,6 +15,7 @@ import {
 } from "../contract";
 import {
 	abandonUnloggedAutoresearchRuns,
+	collectLoggedRunNumbers,
 	isAutoresearchShCommand,
 	readMaxExperiments,
 	readPendingRunSummary,
@@ -382,14 +383,4 @@ export function createInitExperimentTool(
 
 function renderInitCall(name: string, theme: Theme): string {
 	return `${theme.fg("toolTitle", theme.bold("init_experiment"))} ${theme.fg("accent", truncateToWidth(replaceTabs(name), 100))}`;
-}
-
-function collectLoggedRunNumbers(results: ExperimentState["results"]): Set<number> {
-	const runNumbers = new Set<number>();
-	for (const result of results) {
-		if (result.runNumber !== null) {
-			runNumbers.add(result.runNumber);
-		}
-	}
-	return runNumbers;
 }

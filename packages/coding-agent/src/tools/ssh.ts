@@ -9,7 +9,7 @@ import { loadCapability } from "../discovery";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import sshDescriptionBase from "../prompts/tools/ssh.md" with { type: "text" };
-import { DEFAULT_MAX_BYTES, TailBuffer } from "../session/streaming-output";
+import { DEFAULT_MAX_BYTES, streamTailUpdates, TailBuffer } from "../session/streaming-output";
 import type { SSHHostInfo } from "../ssh/connection-manager";
 import { ensureHostInfo, getHostInfoForHost } from "../ssh/connection-manager";
 import { executeSSH } from "../ssh/ssh-executor";
@@ -168,15 +168,7 @@ export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 			compatEnabled: hostInfo.compatEnabled,
 			artifactPath,
 			artifactId,
-			onChunk: chunk => {
-				tailBuffer.append(chunk);
-				if (onUpdate) {
-					onUpdate({
-						content: [{ type: "text", text: tailBuffer.text() }],
-						details: {},
-					});
-				}
-			},
+			onChunk: streamTailUpdates(tailBuffer, onUpdate),
 		});
 
 		if (result.cancelled) {

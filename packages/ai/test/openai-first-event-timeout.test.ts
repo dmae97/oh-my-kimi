@@ -4,6 +4,7 @@ import { streamAzureOpenAIResponses } from "../src/providers/azure-openai-respon
 import { streamOpenAICompletions } from "../src/providers/openai-completions";
 import { streamOpenAIResponses } from "../src/providers/openai-responses";
 import type { Context, Model, TextContent } from "../src/types";
+import { waitForDelayOrAbort } from "./helpers";
 
 const originalFetch = global.fetch;
 
@@ -88,28 +89,6 @@ function createSseResponse(events: unknown[]): Response {
 		status: 200,
 		headers: { "content-type": "text/event-stream" },
 	});
-}
-
-async function waitForDelayOrAbort(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
-	if (signal?.aborted) {
-		const reason = signal.reason;
-		throw reason instanceof Error ? reason : new Error(String(reason ?? "request aborted"));
-	}
-
-	const { promise, resolve, reject } = Promise.withResolvers<void>();
-	const timer = setTimeout(() => resolve(), delayMs);
-	const onAbort = () => {
-		const reason = signal?.reason;
-		reject(reason instanceof Error ? reason : new Error(String(reason ?? "request aborted")));
-	};
-	signal?.addEventListener("abort", onAbort, { once: true });
-
-	try {
-		await promise;
-	} finally {
-		clearTimeout(timer);
-		signal?.removeEventListener("abort", onAbort);
-	}
 }
 
 function createDelayedFetch(delayMs: number, responseFactory: () => Response): typeof fetch {

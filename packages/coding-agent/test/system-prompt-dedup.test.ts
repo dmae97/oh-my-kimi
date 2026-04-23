@@ -10,6 +10,7 @@ import {
 	loadProjectContextFiles,
 	loadSystemPromptFiles,
 } from "@oh-my-pi/pi-coding-agent/system-prompt";
+import { cleanupTempHome } from "./helpers/temp-home-cleanup";
 
 function escapeRegExp(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -27,19 +28,7 @@ describe("SYSTEM.md prompt assembly", () => {
 		process.env.HOME = tempHomeDir;
 	});
 
-	afterEach(() => {
-		if (tempDir) {
-			fs.rmSync(tempDir, { recursive: true, force: true });
-		}
-		if (tempHomeDir) {
-			fs.rmSync(tempHomeDir, { recursive: true, force: true });
-		}
-		if (originalHome === undefined) {
-			delete process.env.HOME;
-		} else {
-			process.env.HOME = originalHome;
-		}
-	});
+	afterEach(cleanupTempHome(() => ({ tempDir, tempHomeDir, originalHome })));
 
 	it("renders SYSTEM.md exactly once when it is used as the custom base prompt", async () => {
 		const projectDir = path.join(tempDir, "project");

@@ -6,6 +6,7 @@
  * Returns synthesized answers with web search sources.
  */
 import * as os from "node:os";
+import { decodeJwt } from "@oh-my-pi/pi-ai/utils/oauth/openai-codex";
 import { $env, getAgentDbPath, readSseJson } from "@oh-my-pi/pi-utils";
 import packageJson from "../../../../package.json" with { type: "json" };
 import { AgentStorage } from "../../../session/agent-storage";
@@ -43,11 +44,6 @@ interface CodexOAuthCredential {
 	expires: number;
 	accountId?: string;
 }
-
-/** JWT payload structure for extracting account ID */
-type JwtPayload = {
-	[key: string]: unknown;
-};
 
 /** Codex API response structure */
 interface CodexResponseItem {
@@ -92,23 +88,6 @@ interface CodexResponse {
 
 function isImagePlaceholderAnswer(text: string): boolean {
 	return text.trim().toLowerCase() === "(see attached image)";
-}
-
-/**
- * Decodes a JWT token and extracts the payload.
- * @param token - JWT token string
- * @returns Decoded payload, or null if parsing fails
- */
-function decodeJwt(token: string): JwtPayload | null {
-	try {
-		const parts = token.split(".");
-		if (parts.length !== 3) return null;
-		const payload = parts[1] ?? "";
-		const decoded = Buffer.from(payload, "base64").toString("utf-8");
-		return JSON.parse(decoded) as JwtPayload;
-	} catch {
-		return null;
-	}
 }
 
 /**

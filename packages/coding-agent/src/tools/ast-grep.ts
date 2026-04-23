@@ -5,13 +5,14 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { computeLineHash } from "../edit/line-hash";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import astGrepDescription from "../prompts/tools/ast-grep.md" with { type: "text" };
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
+import { createFileRecorder, formatResultPath } from "./file-recorder";
+import { formatMatchLine } from "./match-line-format";
 import type { OutputMeta } from "./output-meta";
 import {
 	combineSearchGlobs,
@@ -155,24 +156,11 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 				return parseError?.[1] ?? error;
 			});
 			const dedupedParseErrors = dedupeParseErrors(normalizedParseErrors);
-			const formatPath = (filePath: string): string => {
-				const cleanPath = filePath.startsWith("/") ? filePath.slice(1) : filePath;
-				if (isDirectory) {
-					return cleanPath.replace(/\\/g, "/");
-				}
-				return path.basename(cleanPath);
-			};
+			const formatPath = (filePath: string): string => formatResultPath(filePath, isDirectory);
 
-			const files = new Set<string>();
-			const fileList: string[] = [];
+			const { record: recordFile, list: fileList } = createFileRecorder();
 			const fileMatchCounts = new Map<string, number>();
 			const matchesByFile = new Map<string, AstFindMatch[]>();
-			const recordFile = (relativePath: string) => {
-				if (!files.has(relativePath)) {
-					files.add(relativePath);
-					fileList.push(relativePath);
-				}
-			};
 			for (const match of result.matches) {
 				const relativePath = formatPath(match.path);
 				recordFile(relativePath);
@@ -211,15 +199,8 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 					const matchLines = match.text.split("\n");
 					const lineNumbers = matchLines.map((_, index) => match.startLine + index);
 					const lineWidth = Math.max(...lineNumbers.map(value => value.toString().length));
-					const formatLine = (lineNumber: number, line: string, isMatch: boolean): string => {
-						const separator = isMatch ? ":" : "-";
-						if (useHashLines) {
-							const ref = `${lineNumber}#${computeLineHash(lineNumber, line)}`;
-							return `${ref}${separator}${line}`;
-						}
-						const padded = lineNumber.toString().padStart(lineWidth, " ");
-						return `${padded}${separator}${line}`;
-					};
+					const formatLine = (lineNumber: number, line: string, isMatch: boolean): string =>
+						formatMatchLine(lineNumber, line, isMatch, { useHashLines, lineWidth });
 					for (let index = 0; index < matchLines.length; index++) {
 						outputLines.push(formatLine(match.startLine + index, matchLines[index], index === 0));
 					}

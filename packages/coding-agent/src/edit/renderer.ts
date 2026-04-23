@@ -1,7 +1,6 @@
 /**
  * Edit tool renderer and LSP batching helpers.
  */
-import type { ToolCallContext } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -16,6 +15,8 @@ import {
 	formatStatusIcon,
 	formatTitle,
 	getDiffStats,
+	getLspBatchRequest,
+	type LspBatchRequest,
 	PREVIEW_LIMITS,
 	replaceTabs,
 	shortenPath,
@@ -33,26 +34,7 @@ import type { Operation } from "./modes/patch";
 // LSP Batching
 // ═══════════════════════════════════════════════════════════════════════════
 
-const LSP_BATCH_TOOLS = new Set(["edit", "write"]);
-
-export interface LspBatchRequest {
-	id: string;
-	flush: boolean;
-}
-
-export function getLspBatchRequest(toolCall: ToolCallContext | undefined): LspBatchRequest | undefined {
-	if (!toolCall) {
-		return undefined;
-	}
-	const hasOtherWrites = toolCall.toolCalls.some(
-		(call, index) => index !== toolCall.index && LSP_BATCH_TOOLS.has(call.name),
-	);
-	if (!hasOtherWrites) {
-		return undefined;
-	}
-	const hasLaterWrites = toolCall.toolCalls.slice(toolCall.index + 1).some(call => LSP_BATCH_TOOLS.has(call.name));
-	return { id: toolCall.batchId, flush: !hasLaterWrites };
-}
+export { getLspBatchRequest, type LspBatchRequest };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Tool Details Types

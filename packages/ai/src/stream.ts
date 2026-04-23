@@ -34,6 +34,7 @@ import type {
 	ThinkingBudgets,
 	ToolChoice,
 } from "./types";
+import { isFoundryEnabled } from "./utils/foundry";
 
 let cachedVertexAdcCredentialsExists: boolean | null = null;
 
@@ -52,13 +53,6 @@ function hasVertexAdcCredentials(): boolean {
 }
 
 type KeyResolver = string | (() => string | undefined);
-
-function isFoundryEnabled(): boolean {
-	const value = $env.CLAUDE_CODE_USE_FOUNDRY;
-	if (!value) return false;
-	const normalized = value.trim().toLowerCase();
-	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
 
 const serviceProviderMap: Record<string, KeyResolver> = {
 	"alibaba-coding-plan": "ALIBABA_CODING_PLAN_API_KEY",

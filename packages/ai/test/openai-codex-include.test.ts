@@ -1,22 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { enrichModelThinking } from "@oh-my-pi/pi-ai/model-thinking";
 import { type RequestBody, transformRequestBody } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
-import type { Model } from "@oh-my-pi/pi-ai/types";
-
-function createCodexModel(id: string): Model<"openai-codex-responses"> {
-	return enrichModelThinking({
-		id,
-		name: id,
-		api: "openai-codex-responses",
-		provider: "openai-codex",
-		baseUrl: "https://api.openai.com/v1",
-		reasoning: true,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 272000,
-		maxTokens: 128000,
-	});
-}
+import { createCodexModel } from "./helpers";
 
 describe("openai-codex include handling", () => {
 	it("always includes reasoning.encrypted_content when caller include is custom", async () => {

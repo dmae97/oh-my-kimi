@@ -4,8 +4,10 @@
  * Provides consistent formatting, truncation, and display patterns across all
  * tool renderers to ensure a unified TUI experience.
  */
+
 import * as os from "node:os";
 import * as path from "node:path";
+import type { ToolCallContext } from "@oh-my-pi/pi-agent-core";
 import type { Ellipsis } from "@oh-my-pi/pi-natives";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { pluralize } from "@oh-my-pi/pi-utils";
@@ -615,4 +617,29 @@ export function formatParseErrors(errors: string[]): string[] {
 			? `Parse issues (${PARSE_ERRORS_LIMIT} / ${deduped.length}):`
 			: "Parse issues:";
 	return [header, ...capped.map(err => `- ${err}`)];
+}
+
+// =============================================================================
+// LSP Batching
+// =============================================================================
+
+const LSP_BATCH_TOOLS = new Set(["edit", "write"]);
+
+export interface LspBatchRequest {
+	id: string;
+	flush: boolean;
+}
+
+export function getLspBatchRequest(toolCall: ToolCallContext | undefined): LspBatchRequest | undefined {
+	if (!toolCall) {
+		return undefined;
+	}
+	const hasOtherWrites = toolCall.toolCalls.some(
+		(call, index) => index !== toolCall.index && LSP_BATCH_TOOLS.has(call.name),
+	);
+	if (!hasOtherWrites) {
+		return undefined;
+	}
+	const hasLaterWrites = toolCall.toolCalls.slice(toolCall.index + 1).some(call => LSP_BATCH_TOOLS.has(call.name));
+	return { id: toolCall.batchId, flush: !hasLaterWrites };
 }

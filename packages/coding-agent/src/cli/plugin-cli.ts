@@ -831,42 +831,7 @@ async function handleEnable(
 	plugins: string[],
 	flags: { json?: boolean; scope?: "user" | "project" },
 ): Promise<void> {
-	if (plugins.length === 0) {
-		console.error(chalk.red(`Usage: ${APP_NAME} plugin enable <plugin> ...`));
-		process.exit(1);
-	}
-
-	const mktMgr = await makeMarketplaceManager();
-	const installedPlugins = new Set((await mktMgr.listInstalledPlugins()).map(p => p.id));
-
-	for (const name of plugins) {
-		if (installedPlugins.has(name)) {
-			try {
-				await mktMgr.setPluginEnabled(name, true, flags.scope);
-				if (flags.json) {
-					console.log(JSON.stringify({ enabled: name }));
-				} else {
-					console.log(chalk.green(`${theme.status.success} Enabled ${name}`));
-				}
-			} catch (err) {
-				console.error(chalk.red(`${theme.status.error} Failed to enable ${name}: ${err}`));
-				process.exit(1);
-			}
-			continue;
-		}
-
-		try {
-			await manager.setEnabled(name, true);
-			if (flags.json) {
-				console.log(JSON.stringify({ enabled: name }));
-			} else {
-				console.log(chalk.green(`${theme.status.success} Enabled ${name}`));
-			}
-		} catch (err) {
-			console.error(chalk.red(`${theme.status.error} Failed to enable ${name}: ${err}`));
-			process.exit(1);
-		}
-	}
+	return handleSetEnabled(manager, plugins, flags, true);
 }
 
 async function handleDisable(
@@ -874,8 +839,21 @@ async function handleDisable(
 	plugins: string[],
 	flags: { json?: boolean; scope?: "user" | "project" },
 ): Promise<void> {
+	return handleSetEnabled(manager, plugins, flags, false);
+}
+
+async function handleSetEnabled(
+	manager: PluginManager,
+	plugins: string[],
+	flags: { json?: boolean; scope?: "user" | "project" },
+	enabled: boolean,
+): Promise<void> {
+	const action = enabled ? "enable" : "disable";
+	const pastTense = enabled ? "Enabled" : "Disabled";
+	const jsonKey = enabled ? "enabled" : "disabled";
+
 	if (plugins.length === 0) {
-		console.error(chalk.red(`Usage: ${APP_NAME} plugin disable <plugin> ...`));
+		console.error(chalk.red(`Usage: ${APP_NAME} plugin ${action} <plugin> ...`));
 		process.exit(1);
 	}
 
@@ -885,28 +863,28 @@ async function handleDisable(
 	for (const name of plugins) {
 		if (installedPlugins.has(name)) {
 			try {
-				await mktMgr.setPluginEnabled(name, false, flags.scope);
+				await mktMgr.setPluginEnabled(name, enabled, flags.scope);
 				if (flags.json) {
-					console.log(JSON.stringify({ disabled: name }));
+					console.log(JSON.stringify({ [jsonKey]: name }));
 				} else {
-					console.log(chalk.green(`${theme.status.success} Disabled ${name}`));
+					console.log(chalk.green(`${theme.status.success} ${pastTense} ${name}`));
 				}
 			} catch (err) {
-				console.error(chalk.red(`${theme.status.error} Failed to disable ${name}: ${err}`));
+				console.error(chalk.red(`${theme.status.error} Failed to ${action} ${name}: ${err}`));
 				process.exit(1);
 			}
 			continue;
 		}
 
 		try {
-			await manager.setEnabled(name, false);
+			await manager.setEnabled(name, enabled);
 			if (flags.json) {
-				console.log(JSON.stringify({ disabled: name }));
+				console.log(JSON.stringify({ [jsonKey]: name }));
 			} else {
-				console.log(chalk.green(`${theme.status.success} Disabled ${name}`));
+				console.log(chalk.green(`${theme.status.success} ${pastTense} ${name}`));
 			}
 		} catch (err) {
-			console.error(chalk.red(`${theme.status.error} Failed to disable ${name}: ${err}`));
+			console.error(chalk.red(`${theme.status.error} Failed to ${action} ${name}: ${err}`));
 			process.exit(1);
 		}
 	}

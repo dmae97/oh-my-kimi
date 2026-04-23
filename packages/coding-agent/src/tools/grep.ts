@@ -6,7 +6,6 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { computeLineHash } from "../edit/line-hash";
 import { type ChunkedGrepMatch, describeChunkedGrepMatch } from "../edit/modes/chunk";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
@@ -16,6 +15,8 @@ import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, t
 import { resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
+import { createFileRecorder } from "./file-recorder";
+import { formatMatchLine } from "./match-line-format";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import {
 	combineSearchGlobs,
@@ -243,15 +244,8 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				? roundRobinSelect(result.matches, effectiveLimit)
 				: result.matches.slice(0, effectiveLimit);
 			const matchLimitReached = result.matches.length > effectiveLimit;
-			const files = new Set<string>();
-			const fileList: string[] = [];
+			const { record: recordFile, list: fileList } = createFileRecorder();
 			const fileMatchCounts = new Map<string, number>();
-			const recordFile = (relativePath: string) => {
-				if (!files.has(relativePath)) {
-					files.add(relativePath);
-					fileList.push(relativePath);
-				}
-			};
 			if (selectedMatches.length === 0) {
 				const details: GrepToolDetails = {
 					scopePath,
@@ -401,15 +395,8 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 						}
 					}
 					const lineWidth = Math.max(...lineNumbers.map(value => value.toString().length));
-					const formatLine = (lineNumber: number, line: string, isMatch: boolean): string => {
-						const separator = isMatch ? ":" : "-";
-						if (useHashLines) {
-							const ref = `${lineNumber}#${computeLineHash(lineNumber, line)}`;
-							return `${ref}${separator}${line}`;
-						}
-						const padded = lineNumber.toString().padStart(lineWidth, " ");
-						return `${padded}${separator}${line}`;
-					};
+					const formatLine = (lineNumber: number, line: string, isMatch: boolean): string =>
+						formatMatchLine(lineNumber, line, isMatch, { useHashLines, lineWidth });
 					if (match.contextBefore) {
 						for (const ctx of match.contextBefore) {
 							outputLines.push(formatLine(ctx.lineNumber, ctx.line, false));

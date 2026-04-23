@@ -197,13 +197,9 @@ export class ToolExecutionComponent extends Container {
 			if (this.#editDiffArgsKey === argsKey) return;
 			this.#editDiffArgsKey = argsKey;
 
-			computeEditDiff(path, oldText, newText, this.#cwd, true, all, this.#editFuzzyThreshold).then(result => {
-				if (this.#editDiffArgsKey === argsKey) {
-					this.#editDiffPreview = result;
-					this.#updateDisplay();
-					this.#ui.requestRender();
-				}
-			});
+			computeEditDiff(path, oldText, newText, this.#cwd, true, all, this.#editFuzzyThreshold).then(result =>
+				this.#applyEditDiffResult(argsKey, result),
+			);
 		} else if ("path" in first && ("diff" in first || ("op" in first && !("content" in first)))) {
 			// Patch mode (has diff or op without content — chunk edits always have content)
 			const { path, op, rename, diff } = first;
@@ -216,13 +212,7 @@ export class ToolExecutionComponent extends Container {
 			computePatchDiff({ path, op, rename, diff }, this.#cwd, {
 				fuzzyThreshold: this.#editFuzzyThreshold,
 				allowFuzzy: this.#editAllowFuzzy,
-			}).then(result => {
-				if (this.#editDiffArgsKey === argsKey) {
-					this.#editDiffPreview = result;
-					this.#updateDisplay();
-					this.#ui.requestRender();
-				}
-			});
+			}).then(result => this.#applyEditDiffResult(argsKey, result));
 		} else if ("loc" in first && "path" in first) {
 			// Hashline mode — group edits by path, preview first file
 			const path = first.path;
@@ -234,15 +224,18 @@ export class ToolExecutionComponent extends Container {
 			if (this.#editDiffArgsKey === argsKey) return;
 			this.#editDiffArgsKey = argsKey;
 
-			computeHashlineDiff({ path, edits: fileEdits, move }, this.#cwd).then(result => {
-				if (this.#editDiffArgsKey === argsKey) {
-					this.#editDiffPreview = result;
-					this.#updateDisplay();
-					this.#ui.requestRender();
-				}
-			});
+			computeHashlineDiff({ path, edits: fileEdits, move }, this.#cwd).then(result =>
+				this.#applyEditDiffResult(argsKey, result),
+			);
 		}
 		// Chunk mode edits don't have a pre-execution diff preview
+	}
+
+	#applyEditDiffResult(argsKey: string, result: DiffResult | DiffError): void {
+		if (this.#editDiffArgsKey !== argsKey) return;
+		this.#editDiffPreview = result;
+		this.#updateDisplay();
+		this.#ui.requestRender();
 	}
 
 	updateResult(

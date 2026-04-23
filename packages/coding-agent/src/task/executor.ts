@@ -14,6 +14,7 @@ import type { PromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
 import type { CustomTool } from "../extensibility/custom-tools/types";
+import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import type { Skill } from "../extensibility/skills";
 import { callTool } from "../mcp/client";
 import type { MCPManager } from "../mcp/manager";
@@ -24,7 +25,7 @@ import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { AuthStorage } from "../session/auth-storage";
 import { SessionManager } from "../session/session-manager";
 import { type ContextFileEntry, truncateTail } from "../tools";
-import { jtdToJsonSchema } from "../tools/jtd-to-json-schema";
+import { jtdToJsonSchema, normalizeSchema } from "../tools/jtd-to-json-schema";
 import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
@@ -163,20 +164,8 @@ function parseStringifiedJson(value: unknown): unknown {
 	}
 }
 
-function normalizeOutputSchema(schema: unknown): { normalized?: unknown; error?: string } {
-	if (schema === undefined || schema === null) return {};
-	if (typeof schema === "string") {
-		try {
-			return { normalized: JSON.parse(schema) };
-		} catch (err) {
-			return { error: err instanceof Error ? err.message : String(err) };
-		}
-	}
-	return { normalized: schema };
-}
-
 function buildOutputValidator(schema: unknown): { validate?: ValidateFunction; error?: string } {
-	const { normalized, error } = normalizeOutputSchema(schema);
+	const { normalized, error } = normalizeSchema(schema);
 	if (error) return { error };
 	if (normalized === undefined) return {};
 	const jsonSchema = jtdToJsonSchema(normalized);
@@ -300,7 +289,7 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		}
 	} else {
 		const allowFallback = exitCode === 0 && !doneAborted && !signalAborted;
-		const { normalized: normalizedSchema, error: schemaError } = normalizeOutputSchema(outputSchema);
+		const { normalized: normalizedSchema, error: schemaError } = normalizeSchema(outputSchema);
 		const hasOutputSchema = normalizedSchema !== undefined && !schemaError;
 		const fallback = allowFallback ? resolveFallbackCompletion(rawOutput, outputSchema) : null;
 		if (fallback) {
@@ -950,7 +939,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
 			const enableMCP = !options.mcpManager;
 
-			const { normalized: normalizedOutputSchema } = normalizeOutputSchema(outputSchema);
+			const { normalized: normalizedOutputSchema } = normalizeSchema(outputSchema);
 
 			const { session } = await createAgentSession({
 				cwd: worktree ?? cwd,
@@ -1050,12 +1039,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						setActiveTools: (toolNames: string[]) =>
 							session.setActiveToolsByName(toolNames.filter(name => !parentOwnedToolNames.has(name))),
 						getCommands: () => [],
-						setModel: async model => {
-							const key = await session.modelRegistry.getApiKey(model);
-							if (!key) return false;
-							await session.setModel(model);
-							return true;
-						},
+						setModel: model => runExtensionSetModel(session, model),
 						getThinkingLevel: () => session.thinkingLevel,
 						setThinkingLevel: level => session.setThinkingLevel(level),
 						getSessionName: () => session.sessionManager.getSessionName(),
@@ -1071,14 +1055,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						shutdown: () => {},
 						getContextUsage: () => session.getContextUsage(),
 						getSystemPrompt: () => session.systemPrompt,
-						compact: async instructionsOrOptions => {
-							const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-							const options =
-								instructionsOrOptions && typeof instructionsOrOptions === "object"
-									? instructionsOrOptions
-									: undefined;
-							await session.compact(instructions, options);
-						},
+						compact: instructionsOrOptions => runExtensionCompact(session, instructionsOrOptions),
 					},
 				);
 				extensionRunner.onError(err => {

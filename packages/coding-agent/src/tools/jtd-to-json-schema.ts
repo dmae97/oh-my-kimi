@@ -197,3 +197,19 @@ function normalizeMixedSchemaNode(schema: unknown): unknown {
 export function jtdToJsonSchema(schema: unknown): unknown {
 	return normalizeMixedSchemaNode(schema);
 }
+
+/**
+ * Normalize a schema input that may be a JSON string, object, or null/undefined.
+ * Returns { normalized } on success, or { error } if JSON parsing fails.
+ */
+export function normalizeSchema(schema: unknown): { normalized?: unknown; error?: string } {
+	if (schema === undefined || schema === null) return {};
+	if (typeof schema === "string") {
+		try {
+			return { normalized: JSON.parse(schema) };
+		} catch (err) {
+			return { error: err instanceof Error ? err.message : String(err) };
+		}
+	}
+	return { normalized: schema };
+}

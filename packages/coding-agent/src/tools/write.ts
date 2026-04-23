@@ -1,13 +1,7 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type {
-	AgentTool,
-	AgentToolContext,
-	AgentToolResult,
-	AgentToolUpdateCallback,
-	ToolCallContext,
-} from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
@@ -32,6 +26,7 @@ import {
 	formatMoreItems,
 	formatStatusIcon,
 	formatTitle,
+	getLspBatchRequest,
 	replaceTabs,
 	shortenPath,
 } from "./render-utils";
@@ -59,22 +54,6 @@ export type WriteToolInput = Static<typeof writeSchema>;
 export interface WriteToolDetails {
 	diagnostics?: FileDiagnosticsResult;
 	meta?: OutputMeta;
-}
-
-const LSP_BATCH_TOOLS = new Set(["edit", "write"]);
-
-function getLspBatchRequest(toolCall: ToolCallContext | undefined): { id: string; flush: boolean } | undefined {
-	if (!toolCall) {
-		return undefined;
-	}
-	const hasOtherWrites = toolCall.toolCalls.some(
-		(call, index) => index !== toolCall.index && LSP_BATCH_TOOLS.has(call.name),
-	);
-	if (!hasOtherWrites) {
-		return undefined;
-	}
-	const hasLaterWrites = toolCall.toolCalls.slice(toolCall.index + 1).some(call => LSP_BATCH_TOOLS.has(call.name));
-	return { id: toolCall.batchId, flush: !hasLaterWrites };
 }
 
 /**

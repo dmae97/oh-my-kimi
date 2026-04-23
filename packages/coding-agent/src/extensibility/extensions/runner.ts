@@ -554,53 +554,35 @@ export class ExtensionRunner {
 	}
 
 	async emitUserBash(event: UserBashEvent): Promise<UserBashEventResult | undefined> {
-		const ctx = this.createContext();
-
-		for (const ext of this.extensions) {
-			const handlers = ext.handlers.get("user_bash");
-			if (!handlers || handlers.length === 0) continue;
-
-			for (const handler of handlers) {
-				try {
-					const handlerResult = await handler(event, ctx);
-					if (handlerResult) {
-						return handlerResult as UserBashEventResult;
-					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: "user_bash",
-						error: message,
-						stack,
-					});
-				}
-			}
-		}
-
-		return undefined;
+		return this.emitUserEvent<UserBashEventResult>(event, "user_bash");
 	}
 
 	async emitUserPython(event: UserPythonEvent): Promise<UserPythonEventResult | undefined> {
+		return this.emitUserEvent<UserPythonEventResult>(event, "user_python");
+	}
+
+	private async emitUserEvent<R>(
+		event: UserBashEvent | UserPythonEvent,
+		eventName: "user_bash" | "user_python",
+	): Promise<R | undefined> {
 		const ctx = this.createContext();
 
 		for (const ext of this.extensions) {
-			const handlers = ext.handlers.get("user_python");
+			const handlers = ext.handlers.get(eventName);
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
 				try {
 					const handlerResult = await handler(event, ctx);
 					if (handlerResult) {
-						return handlerResult as UserPythonEventResult;
+						return handlerResult as R;
 					}
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
 					const stack = err instanceof Error ? err.stack : undefined;
 					this.emitError({
 						extensionPath: ext.path,
-						event: "user_python",
+						event: eventName,
 						error: message,
 						stack,
 					});

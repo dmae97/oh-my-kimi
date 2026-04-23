@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import type Anthropic from "@anthropic-ai/sdk";
 import { streamAnthropic } from "../src/providers/anthropic";
 import type { Context, Model } from "../src/types";
+import { waitForDelayOrAbort } from "./helpers";
 
 const model: Model<"anthropic-messages"> = {
 	id: "claude-sonnet-4-5",
@@ -30,28 +31,6 @@ type MockAnthropicRequest = {
 		request_id: string | null;
 	}>;
 };
-
-async function waitForDelayOrAbort(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
-	if (signal?.aborted) {
-		const reason = signal.reason;
-		throw reason instanceof Error ? reason : new Error(String(reason ?? "request aborted"));
-	}
-
-	const { promise, resolve, reject } = Promise.withResolvers<void>();
-	const timer = setTimeout(() => resolve(), delayMs);
-	const onAbort = () => {
-		const reason = signal?.reason;
-		reject(reason instanceof Error ? reason : new Error(String(reason ?? "request aborted")));
-	};
-	signal?.addEventListener("abort", onAbort, { once: true });
-
-	try {
-		await promise;
-	} finally {
-		clearTimeout(timer);
-		signal?.removeEventListener("abort", onAbort);
-	}
-}
 
 async function waitForAbortAndThrowAbortError(signal: AbortSignal | undefined): Promise<never> {
 	if (signal?.aborted) {

@@ -1,9 +1,9 @@
 /**
  * Prettier formatting utilities for edit benchmarks.
  */
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as prettier from "prettier";
+import { listFiles } from "./shared";
 
 export const PRETTIER_OPTIONS: prettier.Options = {
 	printWidth: 100,
@@ -35,22 +35,6 @@ const parserByExtension: Partial<Record<string, prettier.BuiltInParserName>> = {
 	".scss": "scss",
 	".html": "html",
 };
-
-async function listFiles(rootDir: string, subPath = ""): Promise<string[]> {
-	const entries = await fs.readdir(path.join(rootDir, subPath), { withFileTypes: true });
-	const files: string[] = [];
-
-	for (const entry of entries) {
-		const relativePath = path.join(subPath, entry.name);
-		if (entry.isDirectory()) {
-			files.push(...(await listFiles(rootDir, relativePath)));
-		} else if (entry.isFile()) {
-			files.push(relativePath);
-		}
-	}
-
-	return files.sort();
-}
 
 export interface FormatResult {
 	formatted: string;

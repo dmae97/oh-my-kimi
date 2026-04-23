@@ -5,33 +5,9 @@ import * as path from "node:path";
 import { AuthCredentialStore } from "../src/auth-storage";
 import { buildAnthropicUrl, findAnthropicAuth } from "../src/utils/anthropic-auth";
 import { AnthropicOAuthFlow, refreshAnthropicToken } from "../src/utils/oauth/anthropic";
+import { withEnv } from "./helpers";
 
 const originalFetch = global.fetch;
-
-async function withEnv(overrides: Record<string, string | undefined>, fn: () => void | Promise<void>): Promise<void> {
-	const previous = new Map<string, string | undefined>();
-	for (const key of Object.keys(overrides)) {
-		previous.set(key, Bun.env[key]);
-	}
-	try {
-		for (const [key, value] of Object.entries(overrides)) {
-			if (value === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = value;
-			}
-		}
-		await fn();
-	} finally {
-		for (const [key, value] of previous.entries()) {
-			if (value === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = value;
-			}
-		}
-	}
-}
 
 afterEach(() => {
 	global.fetch = originalFetch;

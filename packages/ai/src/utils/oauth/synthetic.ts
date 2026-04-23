@@ -1,60 +1,16 @@
-/**
- * Synthetic login flow.
- *
- * Synthetic provides OpenAI-compatible and Anthropic-compatible APIs via
- * https://api.synthetic.new/openai/v1.
- *
- * This is not OAuth - it's a simple API key flow:
- * 1. Open browser to Synthetic dashboard
- * 2. User copies their API key
- * 3. User pastes the API key into the CLI
- */
+/** Synthetic login flow (API key paste against https://api.synthetic.new/openai/v1). */
+import { createApiKeyLogin } from "./api-key-login";
 
-import { validateOpenAICompatibleApiKey } from "./api-key-validation";
-import type { OAuthController } from "./types";
-
-const AUTH_URL = "https://dev.synthetic.new/docs/api/overview";
-const API_BASE_URL = "https://api.synthetic.new/openai/v1";
-const VALIDATION_MODEL = "hf:moonshotai/Kimi-K2.5";
-
-/**
- * Login to Synthetic.
- *
- * Opens browser to API keys page, prompts user to paste their API key.
- * Returns the API key directly (not OAuthCredentials - this isn't OAuth).
- */
-export async function loginSynthetic(options: OAuthController): Promise<string> {
-	if (!options.onPrompt) {
-		throw new Error("Synthetic login requires onPrompt callback");
-	}
-
-	options.onAuth?.({
-		url: AUTH_URL,
-		instructions: "Copy your API key from the Synthetic dashboard",
-	});
-
-	const apiKey = await options.onPrompt({
-		message: "Paste your Synthetic API key",
-		placeholder: "sk-...",
-	});
-
-	if (options.signal?.aborted) {
-		throw new Error("Login cancelled");
-	}
-
-	const trimmed = apiKey.trim();
-	if (!trimmed) {
-		throw new Error("API key is required");
-	}
-
-	options.onProgress?.("Validating API key...");
-	await validateOpenAICompatibleApiKey({
+export const loginSynthetic = createApiKeyLogin({
+	providerLabel: "Synthetic",
+	authUrl: "https://dev.synthetic.new/docs/api/overview",
+	instructions: "Copy your API key from the Synthetic dashboard",
+	promptMessage: "Paste your Synthetic API key",
+	placeholder: "sk-...",
+	validation: {
+		kind: "chat-completions",
 		provider: "Synthetic",
-		apiKey: trimmed,
-		baseUrl: API_BASE_URL,
-		model: VALIDATION_MODEL,
-		signal: options.signal,
-	});
-
-	return trimmed;
-}
+		baseUrl: "https://api.synthetic.new/openai/v1",
+		model: "hf:moonshotai/Kimi-K2.5",
+	},
+});

@@ -15,6 +15,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { getKimiCommonHeaders } from "../utils/oauth/kimi";
 import { streamAnthropic } from "./anthropic";
 import { streamOpenAICompletions } from "./openai-completions";
+import { createProviderErrorMessage } from "./shared/error-message";
 
 export type KimiApiFormat = "openai" | "anthropic";
 
@@ -115,34 +116,13 @@ export function streamKimi(
 			stream.push({
 				type: "error",
 				reason: "error",
-				error: createErrorMessage(model, err),
+				error: createProviderErrorMessage(model, err),
 			});
 		}
 	})();
 
 	return stream;
 }
-
-function createErrorMessage(model: Model<Api>, err: unknown) {
-	return {
-		role: "assistant" as const,
-		content: [{ type: "text" as const, text: err instanceof Error ? err.message : String(err) }],
-		api: model.api,
-		provider: model.provider,
-		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "error" as const,
-		timestamp: Date.now(),
-	};
-}
-
 /**
  * Check if a model is a Kimi Code model.
  */

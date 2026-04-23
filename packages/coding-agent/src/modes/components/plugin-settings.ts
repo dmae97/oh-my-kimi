@@ -22,6 +22,21 @@ import type { InstalledPlugin, PluginSettingSchema } from "../../extensibility/p
 import { getSelectListTheme, getSettingsListTheme, theme } from "../../modes/theme/theme";
 import { DynamicBorder } from "./dynamic-border";
 
+/**
+ * Forwards a keystroke to `input`, but cancels via `onCancel` when the user presses Escape.
+ */
+export function handleInputOrEscape(
+	data: string,
+	input: { handleInput(data: string): void },
+	onCancel: () => void,
+): void {
+	if (data === "\x1b" || data === "\x1b\x1b") {
+		onCancel();
+		return;
+	}
+	input.handleInput(data);
+}
+
 // =============================================================================
 // Plugin List Component
 // =============================================================================
@@ -383,11 +398,7 @@ class ConfigInputSubmenu extends Container {
 	}
 
 	handleInput(data: string): void {
-		if (data === "\x1b" || data === "\x1b\x1b") {
-			this.onCancel();
-			return;
-		}
-		this.#input.handleInput(data);
+		handleInputOrEscape(data, this.#input, this.onCancel);
 	}
 }
 

@@ -3,7 +3,7 @@
  * Uses different OAuth credentials than google-gemini-cli for access to additional models.
  */
 import { getAntigravityAuthHeaders } from "../../providers/google-gemini-cli";
-import { OAuthCallbackFlow } from "./callback-server";
+import { runGoogleOAuthLogin } from "./google-oauth-shared";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 const decode = (s: string) => atob(s);
@@ -152,92 +152,17 @@ async function discoverProject(accessToken: string, onProgress?: (message: strin
 	}
 }
 
-async function getUserEmail(accessToken: string): Promise<string | undefined> {
-	try {
-		const response = await fetch("https://www.googleapis.com/oauth2/v1/userinfo?alt=json", {
-			headers: { Authorization: `Bearer ${accessToken}` },
-		});
-
-		if (response.ok) {
-			const data = (await response.json()) as { email?: string };
-			return data.email;
-		}
-	} catch {
-		// Ignore errors, email is optional
-	}
-	return undefined;
-}
-
-class AntigravityOAuthFlow extends OAuthCallbackFlow {
-	constructor(ctrl: OAuthController) {
-		super(ctrl, CALLBACK_PORT, CALLBACK_PATH);
-	}
-
-	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
-		const authParams = new URLSearchParams({
-			client_id: CLIENT_ID,
-			response_type: "code",
-			redirect_uri: redirectUri,
-			scope: SCOPES.join(" "),
-			state,
-			access_type: "offline",
-			prompt: "consent",
-		});
-
-		const url = `${AUTH_URL}?${authParams.toString()}`;
-		return { url, instructions: "Complete the sign-in in your browser." };
-	}
-
-	async exchangeToken(code: string, _state: string, redirectUri: string): Promise<OAuthCredentials> {
-		this.ctrl.onProgress?.("Exchanging authorization code for tokens...");
-
-		const tokenResponse = await fetch(TOKEN_URL, {
-			method: "POST",
-			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: new URLSearchParams({
-				client_id: CLIENT_ID,
-				client_secret: CLIENT_SECRET,
-				code,
-				grant_type: "authorization_code",
-				redirect_uri: redirectUri,
-			}),
-		});
-
-		if (!tokenResponse.ok) {
-			const error = await tokenResponse.text();
-			throw new Error(`Token exchange failed: ${error}`);
-		}
-
-		const tokenData = (await tokenResponse.json()) as {
-			access_token: string;
-			refresh_token: string;
-			expires_in: number;
-		};
-
-		if (!tokenData.refresh_token) {
-			throw new Error("No refresh token received. Please try again.");
-		}
-
-		this.ctrl.onProgress?.("Getting user info...");
-		const email = await getUserEmail(tokenData.access_token);
-		const projectId = await discoverProject(tokenData.access_token, this.ctrl.onProgress);
-
-		return {
-			refresh: tokenData.refresh_token,
-			access: tokenData.access_token,
-			expires: Date.now() + tokenData.expires_in * 1000 - 5 * 60 * 1000,
-			projectId,
-			email,
-		};
-	}
-}
-
-/**
- * Login with Antigravity OAuth
- */
 export async function loginAntigravity(ctrl: OAuthController): Promise<OAuthCredentials> {
-	const flow = new AntigravityOAuthFlow(ctrl);
-	return flow.login();
+	return runGoogleOAuthLogin(ctrl, {
+		clientId: CLIENT_ID,
+		clientSecret: CLIENT_SECRET,
+		authUrl: AUTH_URL,
+		tokenUrl: TOKEN_URL,
+		scopes: SCOPES,
+		callbackPort: CALLBACK_PORT,
+		callbackPath: CALLBACK_PATH,
+		discoverProject,
+	});
 }
 
 /**

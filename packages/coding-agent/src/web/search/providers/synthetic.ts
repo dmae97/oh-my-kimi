@@ -10,7 +10,7 @@ import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { findCredential } from "./utils";
+import { findCredential, isApiKeyAvailable } from "./utils";
 
 const SYNTHETIC_SEARCH_URL = "https://api.synthetic.new/v2/search";
 
@@ -95,12 +95,8 @@ export class SyntheticProvider extends SearchProvider {
 	readonly id = "synthetic";
 	readonly label = "Synthetic";
 
-	async isAvailable(): Promise<boolean> {
-		try {
-			return !!(await findApiKey());
-		} catch {
-			return false;
-		}
+	isAvailable(): Promise<boolean> {
+		return isApiKeyAvailable(findApiKey);
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {

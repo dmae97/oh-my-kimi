@@ -9,6 +9,7 @@ import type {
 	GhRunWatchViewDetails,
 	GhToolDetails,
 } from "./gh";
+import { formatShortSha } from "./gh-format";
 import {
 	formatExpandHint,
 	formatStatusIcon,
@@ -28,14 +29,6 @@ const FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "actio
 const RUNNING_STATUSES = new Set(["in_progress"]);
 const PENDING_STATUSES = new Set(["queued", "requested", "waiting", "pending"]);
 const FALLBACK_WIDTH = 80;
-
-function formatShortSha(value: string | undefined): string | undefined {
-	if (!value) {
-		return undefined;
-	}
-
-	return value.slice(0, 12);
-}
 
 function getWatchHeader(watch: GhRunWatchViewDetails): string {
 	if (watch.mode === "run" && watch.run) {

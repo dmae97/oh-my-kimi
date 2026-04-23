@@ -34,6 +34,7 @@ import type {
 import { isAnthropicOAuthToken, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
+import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
 import { createWatchdog, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
@@ -440,13 +441,6 @@ type FoundryTlsOptions = {
 	cert?: string;
 	key?: string;
 };
-
-function isFoundryEnabled(): boolean {
-	const value = $env.CLAUDE_CODE_USE_FOUNDRY;
-	if (!value) return false;
-	const normalized = value.trim().toLowerCase();
-	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
 
 function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: string): string | undefined {
 	if (model.provider === "github-copilot") {

@@ -5,7 +5,6 @@
  * fallback strategies for finding text in files.
  */
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
 import type { ToolSession } from "../../tools";
@@ -22,6 +21,7 @@ import {
 	restoreLineEndings,
 	stripBom,
 } from "../normalize";
+import { readEditFileText } from "../read-file";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
 
 export interface FuzzyMatch {
@@ -138,17 +138,6 @@ function formatOccurrenceError(path: string, matchOutcome: MatchOutcome): string
 			? ` (showing first ${MAX_RECORDED_MATCHES} of ${matchOutcome.occurrences})`
 			: "";
 	return `Found ${matchOutcome.occurrences} occurrences in ${path}${moreMsg}:\n\n${previews}\n\nAdd more context lines to disambiguate.`;
-}
-
-async function readReplaceFileContent(absolutePath: string, path: string): Promise<string> {
-	try {
-		return await Bun.file(absolutePath).text();
-	} catch (error) {
-		if (isEnoent(error)) {
-			throw new Error(`File not found: ${path}`);
-		}
-		throw error;
-	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1045,7 +1034,7 @@ export async function executeReplaceSingle(
 	}
 
 	const absolutePath = resolvePlanPath(session, path);
-	const rawContent = await readReplaceFileContent(absolutePath, path);
+	const rawContent = await readEditFileText(absolutePath, path);
 	const { bom, text: content } = stripBom(rawContent);
 	const originalEnding = detectLineEnding(content);
 	const normalizedContent = normalizeToLF(content);

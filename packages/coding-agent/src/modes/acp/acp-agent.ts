@@ -40,6 +40,7 @@ import {
 import type { Model } from "@oh-my-pi/pi-ai";
 import { logger, VERSION } from "@oh-my-pi/pi-utils";
 import type { ExtensionUIContext } from "../../extensibility/extensions";
+import { runExtensionCompact } from "../../extensibility/extensions/compact-handler";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
 import { MCPManager } from "../../mcp/manager";
 import type { MCPServerConfig } from "../../mcp/types";
@@ -1163,14 +1164,7 @@ export class AcpAgent implements Agent {
 				shutdown: () => {},
 				getContextUsage: () => record.session.getContextUsage(),
 				getSystemPrompt: () => record.session.systemPrompt,
-				compact: async instructionsOrOptions => {
-					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-					const options =
-						instructionsOrOptions && typeof instructionsOrOptions === "object"
-							? instructionsOrOptions
-							: undefined;
-					await record.session.compact(instructions, options);
-				},
+				compact: instructionsOrOptions => runExtensionCompact(record.session, instructionsOrOptions),
 			},
 			{
 				getContextUsage: () => record.session.getContextUsage(),
@@ -1197,14 +1191,7 @@ export class AcpAgent implements Agent {
 				reload: async () => {
 					await record.session.reload();
 				},
-				compact: async instructionsOrOptions => {
-					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-					const options =
-						instructionsOrOptions && typeof instructionsOrOptions === "object"
-							? instructionsOrOptions
-							: undefined;
-					await record.session.compact(instructions, options);
-				},
+				compact: instructionsOrOptions => runExtensionCompact(record.session, instructionsOrOptions),
 			},
 			acpExtensionUiContext,
 		);

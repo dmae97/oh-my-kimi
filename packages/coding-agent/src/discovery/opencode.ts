@@ -28,10 +28,10 @@ import { type SlashCommand, slashCommandCapability } from "../capability/slash-c
 import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
 
 import {
+	buildExtensionModuleItems,
 	createSourceMeta,
 	discoverExtensionModulePaths,
 	expandEnvVarsDeep,
-	getExtensionNameFromPath,
 	getProjectPath,
 	getUserPath,
 	loadFilesFromDir,
@@ -227,20 +227,7 @@ async function loadExtensionModules(ctx: LoadContext): Promise<LoadResult<Extens
 		projectPluginsDir ? discoverExtensionModulePaths(ctx, projectPluginsDir) : Promise.resolve([]),
 	]);
 
-	const items: ExtensionModule[] = [
-		...userPaths.map(extPath => ({
-			name: getExtensionNameFromPath(extPath),
-			path: extPath,
-			level: "user" as const,
-			_source: createSourceMeta(PROVIDER_ID, extPath, "user"),
-		})),
-		...projectPaths.map(extPath => ({
-			name: getExtensionNameFromPath(extPath),
-			path: extPath,
-			level: "project" as const,
-			_source: createSourceMeta(PROVIDER_ID, extPath, "project"),
-		})),
-	];
+	const items = buildExtensionModuleItems(PROVIDER_ID, userPaths, projectPaths);
 
 	return { items, warnings: [] };
 }

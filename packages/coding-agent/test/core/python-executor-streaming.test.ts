@@ -1,22 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { executePythonWithKernel, type PythonKernelExecutor } from "@oh-my-pi/pi-coding-agent/ipy/executor";
-import type { KernelExecuteOptions, KernelExecuteResult } from "@oh-my-pi/pi-coding-agent/ipy/kernel";
+import { executePythonWithKernel } from "@oh-my-pi/pi-coding-agent/ipy/executor";
 import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
-
-class FakeKernel implements PythonKernelExecutor {
-	private result: KernelExecuteResult;
-	private onExecute: (options?: KernelExecuteOptions) => Promise<void> | void;
-
-	constructor(result: KernelExecuteResult, onExecute: (options?: KernelExecuteOptions) => Promise<void> | void) {
-		this.result = result;
-		this.onExecute = onExecute;
-	}
-
-	async execute(_code: string, options?: KernelExecuteOptions): Promise<KernelExecuteResult> {
-		await this.onExecute(options);
-		return this.result;
-	}
-}
+import { FakeKernel } from "./helpers";
 
 describe("executePythonWithKernel streaming", () => {
 	it("truncates large output and tracks totals", async () => {

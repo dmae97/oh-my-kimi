@@ -10,6 +10,7 @@ import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
+import { isApiKeyAvailable } from "./utils";
 
 const BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search";
 const DEFAULT_NUM_RESULTS = 10;
@@ -132,11 +133,7 @@ export class BraveProvider extends SearchProvider {
 	readonly label = "Brave";
 
 	isAvailable() {
-		try {
-			return !!findApiKey();
-		} catch {
-			return false;
-		}
+		return isApiKeyAvailable(findApiKey);
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {

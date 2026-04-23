@@ -9,7 +9,7 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import type { Theme } from "../modes/theme/theme";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
-import { DEFAULT_MAX_BYTES, TailBuffer } from "../session/streaming-output";
+import { DEFAULT_MAX_BYTES, streamTailUpdates, TailBuffer } from "../session/streaming-output";
 import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import { getSixelLineMask } from "../utils/sixel";
@@ -612,15 +612,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					env: resolvedEnv,
 					artifactPath,
 					artifactId,
-					onChunk: chunk => {
-						tailBuffer.append(chunk);
-						if (onUpdate) {
-							onUpdate({
-								content: [{ type: "text", text: tailBuffer.text() }],
-								details: {},
-							});
-						}
-					},
+					onChunk: streamTailUpdates(tailBuffer, onUpdate),
 				});
 		if (result.cancelled) {
 			if (signal?.aborted) {

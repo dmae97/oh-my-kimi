@@ -283,3 +283,16 @@ export function getLocalizedText(value: LocalizedText, defaultLocale?: string): 
 		value["en-US"] ?? value.en_US ?? value.en ?? Object.values(value).find(v => typeof v === "string") ?? undefined
 	);
 }
+
+/**
+ * Check if content looks like HTML by inspecting the leading tag.
+ */
+export function looksLikeHtml(content: string): boolean {
+	const trimmed = content.trim().toLowerCase();
+	return (
+		trimmed.startsWith("<!doctype") ||
+		trimmed.startsWith("<html") ||
+		trimmed.startsWith("<head") ||
+		trimmed.startsWith("<body")
+	);
+}

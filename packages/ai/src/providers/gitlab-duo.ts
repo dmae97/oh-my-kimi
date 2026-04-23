@@ -6,6 +6,7 @@ import type { OpenAICompletionsOptions } from "./openai-completions";
 import { streamOpenAICompletions } from "./openai-completions";
 import type { OpenAIResponsesOptions } from "./openai-responses";
 import { streamOpenAIResponses } from "./openai-responses";
+import { createProviderErrorMessage } from "./shared/error-message";
 
 const GITLAB_COM_URL = "https://gitlab.com";
 const AI_GATEWAY_URL = "https://cloud.gitlab.com";
@@ -215,26 +216,6 @@ async function getDirectAccessToken(gitlabAccessToken: string): Promise<DirectAc
 	return token;
 }
 
-function getErrorMessage(model: Model<Api>, err: unknown) {
-	return {
-		role: "assistant" as const,
-		content: [{ type: "text" as const, text: err instanceof Error ? err.message : String(err) }],
-		api: model.api,
-		provider: model.provider,
-		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "error" as const,
-		timestamp: Date.now(),
-	};
-}
-
 export function clearGitLabDuoDirectAccessCache(): void {
 	directAccessCache.clear();
 }
@@ -372,7 +353,7 @@ export function streamGitLabDuo(
 			stream.push({
 				type: "error",
 				reason: "error",
-				error: getErrorMessage(model, err),
+				error: createProviderErrorMessage(model, err),
 			});
 		}
 	})();
