@@ -166,6 +166,7 @@ impl_lang!(Toml, language_toml);
 impl_lang!(Diff, language_diff);
 impl_lang!(Xml, language_xml);
 impl_lang!(Regex, language_regex);
+impl_lang!(Dart, language_dart);
 
 // ── Html (custom implementation with injection support) ──────────────────
 
@@ -273,6 +274,7 @@ pub enum SupportLang {
 	Cmake,
 	Cpp,
 	CSharp,
+	Dart,
 	Clojure,
 	Css,
 	Diff,
@@ -335,10 +337,10 @@ impl SupportLang {
 	pub const fn all_langs() -> &'static [Self] {
 		use SupportLang::*;
 		&[
-			Astro, Bash, C, Cmake, Cpp, CSharp, Clojure, Css, Diff, Dockerfile, Elixir, Erlang, Go,
-			Graphql, Handlebars, Haskell, Hcl, Html, Ini, Java, JavaScript, Json, Just, Julia, Kotlin,
-			Lua, Make, Markdown, Nix, ObjC, Ocaml, Odin, Perl, Php, Powershell, Proto, Python, R,
-			Regex, Ruby, Rust, Scala, Solidity, Sql, Starlark, Svelte, Swift, Toml, Tlaplus, Tsx,
+			Astro, Bash, C, Cmake, Cpp, CSharp, Dart, Clojure, Css, Diff, Dockerfile, Elixir, Erlang,
+			Go, Graphql, Handlebars, Haskell, Hcl, Html, Ini, Java, JavaScript, Json, Just, Julia,
+			Kotlin, Lua, Make, Markdown, Nix, ObjC, Ocaml, Odin, Perl, Php, Powershell, Proto, Python,
+			R, Regex, Ruby, Rust, Scala, Solidity, Sql, Starlark, Svelte, Swift, Toml, Tlaplus, Tsx,
 			TypeScript, Verilog, Vue, Xml, Yaml, Zig,
 		]
 	}
@@ -353,6 +355,7 @@ impl SupportLang {
 			Self::Cmake => "cmake",
 			Self::Cpp => "cpp",
 			Self::CSharp => "csharp",
+			Self::Dart => "dart",
 			Self::Clojure => "clojure",
 			Self::Css => "css",
 			Self::Diff => "diff",
@@ -434,6 +437,7 @@ macro_rules! execute_lang_method {
 			S::Cmake => Cmake.$method($($pname,)*),
 			S::Cpp => Cpp.$method($($pname,)*),
 			S::CSharp => CSharp.$method($($pname,)*),
+			S::Dart => Dart.$method($($pname,)*),
 			S::Clojure => Clojure.$method($($pname,)*),
 			S::Css => Css.$method($($pname,)*),
 			S::Diff => Diff.$method($($pname,)*),
@@ -548,6 +552,7 @@ const fn extensions(lang: SupportLang) -> &'static [&'static str] {
 		Cmake => &["cmake"],
 		Cpp => &["cc", "hpp", "cpp", "c++", "hh", "cxx", "cu", "ino"],
 		CSharp => &["cs"],
+		Dart => &["dart"],
 		Clojure => &["clj", "cljs", "cljc", "edn"],
 		Css => &["css", "scss"],
 		Diff => &["diff", "patch"],
@@ -651,6 +656,7 @@ static LANG_ALIASES: phf::Map<&'static str, SupportLang> = phf_map! {
 "csharp"         => SupportLang::CSharp,
 "c#"             => SupportLang::CSharp,
 "cs"             => SupportLang::CSharp,
+"dart"           => SupportLang::Dart,
 "css"            => SupportLang::Css,
 "clj"            => SupportLang::Clojure,
 "cljc"           => SupportLang::Clojure,

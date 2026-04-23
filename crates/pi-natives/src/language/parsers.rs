@@ -23,6 +23,9 @@ pub fn language_cpp() -> TSLanguage {
 pub fn language_c_sharp() -> TSLanguage {
 	tree_sitter_c_sharp::LANGUAGE.into()
 }
+pub fn language_dart() -> TSLanguage {
+	tree_sitter_dart::LANGUAGE.into()
+}
 pub fn language_css() -> TSLanguage {
 	tree_sitter_css::LANGUAGE.into()
 }
