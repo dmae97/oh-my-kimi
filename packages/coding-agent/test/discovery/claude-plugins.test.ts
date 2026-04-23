@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { loadCapability } from "@oh-my-pi/pi-coding-agent/capability";
 import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
 import {
 	clearClaudePluginRootsCache,
@@ -9,6 +10,9 @@ import {
 	parseClaudePluginsRegistry,
 } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
+import "@oh-my-pi/pi-coding-agent/discovery/claude-plugins";
+import type { Skill } from "@oh-my-pi/pi-coding-agent/capability/skill";
+import type { SlashCommand } from "@oh-my-pi/pi-coding-agent/capability/slash-command";
 
 describe("parseClaudePluginsRegistry", () => {
 	test("parses valid registry", () => {
@@ -55,15 +59,26 @@ describe("parseClaudePluginsRegistry", () => {
 
 describe("listClaudePluginRoots", () => {
 	let tempDir: string;
+	let originalHome: string | undefined;
 
 	beforeEach(async () => {
 		clearClaudePluginRootsCache();
 		clearFsCache();
+		originalHome = process.env.HOME;
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "claude-plugins-test-"));
+		process.env.HOME = tempDir;
+		vi.spyOn(os, "homedir").mockReturnValue(tempDir);
 	});
 
 	afterEach(async () => {
 		clearClaudePluginRootsCache();
+		clearFsCache();
+		vi.restoreAllMocks();
+		if (originalHome === undefined) {
+			delete process.env.HOME;
+		} else {
+			process.env.HOME = originalHome;
+		}
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
 
@@ -299,6 +314,160 @@ describe("listClaudePluginRoots", () => {
 		const result = await listClaudePluginRoots(tempDir);
 		expect(result.roots).toHaveLength(1);
 		expect(result.roots[0].scope).toBe("user");
+	});
+	test("reads skills directory from plugin manifest skills field", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-skills");
+		await fs.mkdir(path.join(pluginsDir), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude", "skills", "manifest-skill"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-skills@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ skills: "./.claude/skills" }),
+		);
+		await fs.writeFile(
+			path.join(pluginPath, ".claude", "skills", "manifest-skill", "SKILL.md"),
+			"---\nname: manifest-skill\ndescription: Manifest skill\n---\nBody\n",
+		);
+
+		const result = await loadCapability<Skill>("skills", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		expect(result.all.length).toBeGreaterThan(0);
+		const found = result.all.find(skill => skill.name === "manifest-skills:manifest-skill");
+
+		expect(found).toBeDefined();
+		expect(found?.path).toContain(path.join(".claude", "skills", "manifest-skill", "SKILL.md"));
+	});
+
+	test("reads slash commands directory from plugin manifest slash-commands field", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-commands");
+		await fs.mkdir(path.join(pluginsDir), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude", "commands"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-commands@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ "slash-commands": "./.claude/commands" }),
+		);
+		await fs.writeFile(path.join(pluginPath, ".claude", "commands", "ship.md"), "Ship it\n");
+
+		const result = await loadCapability<SlashCommand>("slash-commands", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		expect(result.all.length).toBeGreaterThan(0);
+		const found = result.all.find(command => command.name === "manifest-commands:ship");
+
+		expect(found).toBeDefined();
+		expect(found?.path).toContain(path.join(".claude", "commands", "ship.md"));
+	});
+	test("ignores manifest skills directory that resolves outside plugin root", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-skills-outside");
+		const outsideDir = path.join(tempDir, "outside-skills", "outside-skill");
+		await fs.mkdir(path.join(pluginsDir), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(outsideDir, { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-skills-outside@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ skills: "../../outside-skills" }),
+		);
+		await fs.writeFile(
+			path.join(outsideDir, "SKILL.md"),
+			"---\nname: outside-skill\ndescription: Outside skill\n---\nBody\n",
+		);
+
+		const result = await loadCapability<Skill>("skills", { cwd: tempDir });
+		expect(result.warnings[0]).toContain("Ignoring skills path outside plugin root");
+		const found = result.all.find(skill => skill.name === "manifest-skills-outside:outside-skill");
+
+		expect(found).toBeUndefined();
+	});
+
+	test("ignores manifest slash commands directory that resolves outside plugin root", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-commands-outside");
+		const outsideDir = path.join(tempDir, "outside-commands");
+		await fs.mkdir(path.join(pluginsDir), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(outsideDir, { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-commands-outside@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ "slash-commands": "../../outside-commands" }),
+		);
+		await fs.writeFile(path.join(outsideDir, "ship.md"), "Ship it\n");
+
+		const result = await loadCapability<SlashCommand>("slash-commands", { cwd: tempDir });
+		expect(result.warnings[0]).toContain("Ignoring slash-commands path outside plugin root");
+		const found = result.all.find(command => command.name === "manifest-commands-outside:ship");
+
+		expect(found).toBeUndefined();
 	});
 });
 
