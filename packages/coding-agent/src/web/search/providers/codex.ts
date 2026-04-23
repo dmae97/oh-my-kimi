@@ -6,6 +6,7 @@
  * Returns synthesized answers with web search sources.
  */
 import * as os from "node:os";
+import { getBundledModels } from "@oh-my-pi/pi-ai";
 import { decodeJwt } from "@oh-my-pi/pi-ai/utils/oauth/openai-codex";
 import { $env, getAgentDbPath, readSseJson } from "@oh-my-pi/pi-utils";
 import packageJson from "../../../../package.json" with { type: "json" };
@@ -17,14 +18,22 @@ import { SearchProvider } from "./base";
 
 const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const CODEX_RESPONSES_PATH = "/codex/responses";
-const DEFAULT_MODEL = "gpt-5-codex-mini";
+const FALLBACK_MODEL = "gpt-5.4";
+const DEFAULT_MODEL_PREFERENCES = ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.1-codex", "gpt-5-codex"];
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
 const DEFAULT_INSTRUCTIONS =
 	"You are a helpful assistant with web search capabilities. Search the web to answer the user's question accurately and cite your sources.";
 
 function getModel(): string {
 	const configuredModel = $env.PI_CODEX_WEB_SEARCH_MODEL?.trim();
-	return configuredModel ? configuredModel : DEFAULT_MODEL;
+	if (configuredModel) return configuredModel;
+
+	const bundledModels = getBundledModels("openai-codex");
+	const bundledIds = new Set(bundledModels.map(model => model.id));
+	const preferred = DEFAULT_MODEL_PREFERENCES.find(modelId => bundledIds.has(modelId));
+	if (preferred) return preferred;
+	const nonMini = bundledModels.find(model => !model.id.includes("mini") && !model.id.includes("spark"));
+	return nonMini?.id ?? bundledModels[0]?.id ?? FALLBACK_MODEL;
 }
 
 export interface CodexSearchParams {
@@ -202,6 +211,7 @@ async function callCodexSearch(
 		method: "POST",
 		headers,
 		body: JSON.stringify(body),
+		signal: options.signal,
 	});
 
 	if (!response.ok) {
