@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.2.0] - 2026-04-23
+
 ### Added
 
 - Added Dart support to `astGrep` and `astEdit` through the native tree-sitter Dart grammar ([#748](https://github.com/can1357/oh-my-pi/pull/748) by [@0fflineuser](https://github.com/0fflineuser))

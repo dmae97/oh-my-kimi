@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.2.0] - 2026-04-23
+
 ### Added
 
 - Added `gpt-5.5` to the built-in model catalog for both OpenAI Responses (`openai`) and local `litellm` (`openai-completions`) providers

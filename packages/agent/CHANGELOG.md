@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.2.0] - 2026-04-23
+
 ### Changed
 
 - Changed tool dispatch to match model-returned tool calls by either internal tool name or custom wire name, enabling custom OpenAI tool names such as `apply_patch`.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.2.0] - 2026-04-23
+
 ### Added
 
 - Added an `apply_patch` edit mode that accepts Codex `*** Begin Patch` envelopes, shares patch-mode execution and diagnostics, and renders streaming per-file diffs in the TUI.
