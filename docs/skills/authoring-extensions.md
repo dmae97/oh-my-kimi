@@ -37,11 +37,19 @@ export default function myExtension(pi: ExtensionAPI) {
   });
 
   // Slash command: /greet
-  pi.commands.register("greet", {
+  pi.registerCommand("greet", {
     description: "Send a greeting into the conversation",
     handler: async (args, ctx) => {
       const name = args.trim() || "world";
-      await pi.sendMessage(`Hello, ${name}!`, { triggerTurn: false });
+      pi.sendMessage(
+        {
+          customType: "greeting",
+          content: `Hello, ${name}!`,
+          display: true,
+          attribution: "user",
+        },
+        { triggerTurn: false }
+      );
       ctx.ui.notify(`Greeted ${name}`, "info");
     },
   });
@@ -71,8 +79,8 @@ omp discovers extension modules in this order:
 
 1. **Project-scoped auto-discovery** — `<cwd>/.omp/extensions/`
 2. **User-scoped auto-discovery** — `~/.omp/agent/extensions/`
-3. **Marketplace-installed plugins** — `~/.claude/plugins/cache/` (extensions shipped inside marketplace plugin packages)
-4. **CLI flag** — `omp --extension-path ./my-ext.ts` (also `-e`; `--hook` is treated as an alias)
+3. **Marketplace-installed plugins** — `~/.omp/plugins/node_modules/` (extensions shipped inside installed plugin packages)
+4. **CLI flag** — `omp --extension ./my-ext.ts` (also `-e`; `--hook` is treated as an alias)
 5. **Settings `extensions` array** — paths listed in `~/.omp/agent/config.yml` or `<cwd>/.omp/settings.json`
 
 Within each scope, de-duplication is by resolved absolute path — first seen wins.
@@ -120,7 +128,7 @@ Multiple entry points are supported:
 ## Registering commands
 
 ```ts
-pi.commands.register("my-cmd", {
+pi.registerCommand("my-cmd", {
   description: "What the command does",
   handler: async (args, ctx) => {
     // args: everything the user typed after /my-cmd
@@ -178,13 +186,16 @@ pi.registerTool({
 ```ts
 pi.on("tool_call", async (event, ctx) => {
   // event.toolName, event.input, event.toolCallId
-  if (event.toolName === "bash" && event.input.command?.includes("rm -rf /")) {
+  if (event.toolName !== "bash") return;
+
+  const command = String((event.input as { command?: unknown }).command ?? "");
+  if (command.includes("rm -rf /")) {
     return { block: true, reason: "Blocked by safety policy" };
   }
 });
 
 pi.on("turn_end", async (_event, ctx) => {
-  ctx.ui.setStatus("tokens", `~${ctx.getContextUsage()?.total ?? "?"} tokens`);
+  ctx.ui.setStatus("tokens", `~${ctx.getContextUsage()?.tokens ?? "?"} tokens`);
 });
 ```
 

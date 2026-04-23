@@ -19,7 +19,7 @@ Restart `omp`. The hook is active for all sessions.
 Or load once:
 
 ```
-omp --extension-path ./safety-hook
+omp --extension ./safety-hook
 ```
 
 ## How it works

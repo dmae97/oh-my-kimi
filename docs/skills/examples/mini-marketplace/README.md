@@ -1,6 +1,6 @@
 # mini-marketplace
 
-A minimal `oh-my-pi` marketplace catalog that demonstrates the `marketplace.json` format. It lists one plugin (`hello-extension`) using a relative path source.
+A minimal `oh-my-pi` marketplace catalog that demonstrates the `marketplace.json` format. It lists one plugin (`my-plugin`) using a relative path source.
 
 ## Install command
 
@@ -26,11 +26,12 @@ omp plugin install my-plugin@example-marketplace
 
 ```
 mini-marketplace/
-  marketplace.json        ← catalog (normally at .claude-plugin/marketplace.json in a real repo)
+  .claude-plugin/
+    marketplace.json      ← catalog
   README.md
   my-plugin/
     package.json          ← omp.extensions manifest
     index.ts              ← extension entry point
 ```
 
-In a real published marketplace, `marketplace.json` lives at `.claude-plugin/marketplace.json` inside the Git repository root. For this local example it is at the directory root so you can point `/marketplace add` directly at this folder.
+Published and local marketplaces use the same catalog location: `.claude-plugin/marketplace.json` inside the marketplace root. Point `/marketplace add` at this folder to load the example.

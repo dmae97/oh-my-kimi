@@ -7,7 +7,7 @@ description: Use when creating a new omp hook. Covers HookAPI, event catalog, bl
 
 Hooks are event-driven interceptors that run alongside the agent loop. They are best used for cross-cutting concerns: safety policy, secret redaction, context pruning, audit logging. A hook module registers handlers via `pi.on(event, handler)` and can block tool execution, override tool output, or rewrite the message context before each LLM call.
 
-> **Relationship to extensions:** The hook subsystem (`HookAPI`) is the legacy API. The extension runner now handles everything hooks can do plus more. Both share the same event model. Use `ExtensionAPI` for new work; use `HookAPI` only if you are maintaining an existing hook module.
+> **Relationship to extensions:** The hook subsystem (`HookAPI`) is the legacy API. The extension runner now handles everything hooks can do plus more. `ExtensionAPI` supports the hook event model plus extension-only events. Use `ExtensionAPI` for new work; use `HookAPI` only if you are maintaining an existing hook module.
 
 ## Factory signature
 
@@ -41,9 +41,6 @@ export default function myExtension(pi: ExtensionAPI): void {
 |---|---|---|
 | `tool_call` | Before every tool execution | `{ block?: boolean; reason?: string }` |
 | `tool_result` | After every tool execution | `{ content?; details?; isError?: boolean }` |
-| `tool_execution_start` | When tool starts (observability) | — |
-| `tool_execution_update` | Streaming tool update | — |
-| `tool_execution_end` | When tool finishes | — |
 
 ### Session lifecycle
 
@@ -65,13 +62,12 @@ export default function myExtension(pi: ExtensionAPI): void {
 
 | Event | Fires | Can return |
 |---|---|---|
-| `before_agent_start` | Before agent starts a turn | `{ message?: { customType; content; display; details }; systemPrompt?: string }` |
+| `before_agent_start` | Before agent starts a turn | `{ message?: { customType; content; display; details; attribution? } }` |
 | `agent_start` | Agent streaming starts | — |
 | `agent_end` | Agent streaming ends | — |
 | `turn_start` | Start of a user→agent turn | — |
 | `turn_end` | End of a user→agent turn | — |
 | `context` | Before each LLM API call | `{ messages?: Message[] }` |
-| `input` | Before user input is submitted | `{ value: string }` |
 | `auto_compaction_start` | Auto-compaction begins | — |
 | `auto_compaction_end` | Auto-compaction ends | — |
 | `auto_retry_start` | Auto-retry begins | — |
@@ -79,12 +75,7 @@ export default function myExtension(pi: ExtensionAPI): void {
 | `ttsr_triggered` | TTSR (too-short response) triggered | — |
 | `todo_reminder` | Todo reminder fires | — |
 
-### User shell/notebook interception
-
-| Event | Fires | Can return |
-|---|---|---|
-| `user_bash` | Before user-initiated bash | `{ result?: BashResult }` |
-| `user_python` | Before user-initiated python | `{ result?: PythonResult }` |
+Extension-only events such as `tool_execution_start`, `tool_execution_update`, `tool_execution_end`, `input`, `user_bash`, and `user_python` require `ExtensionAPI`.
 
 ## Pre-tool blocking contract
 
@@ -129,7 +120,7 @@ omp.on("tool_result", async (event, ctx) => {
 
 Contract:
 
-- Handlers run in registration order; each sees the **accumulated** result so far (middleware chain).
+- Handlers run in registration order. For `HookAPI`, each handler receives the original tool result event, and the last returned override wins.
 - `content` replaces the full content array for the LLM.
 - `details` replaces the structured details object.
 - `isError` overrides the error flag (typed, but note: `HookToolWrapper` behavior for error path rethrows regardless).
@@ -251,13 +242,13 @@ export default function contextFilter(omp: HookAPI): void {
 |---|---|
 | `notify(message, type?)` | Show an in-app notification |
 | `setStatus(key, text)` | Set footer status text (keyed, sorted by key) |
-| `select(title, options, opts?)` | Show a selection dialog |
-| `confirm(title, message, opts?)` | Show a yes/no dialog |
-| `input(title, placeholder?, opts?)` | Show a text input dialog |
-| `editor(title, prefill?, opts?)` | Show a multi-line editor |
+| `select(title, options)` | Show a selection dialog |
+| `confirm(title, message)` | Show a yes/no dialog |
+| `input(title, placeholder?)` | Show a text input dialog |
+| `editor(title, prefill?, { signal }?)` | Show a multi-line editor |
 | `setEditorText(text)` | Set the input editor content |
 | `getEditorText()` | Get current input editor content |
-| `custom(factory, opts?)` | Render a custom TUI component |
+| `custom(factory)` | Render a custom TUI component |
 | `theme` | Current theme object |
 
 `ctx.hasUI` is `false` in headless/print/subagent mode — always guard interactive calls.

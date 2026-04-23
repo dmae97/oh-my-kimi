@@ -1,6 +1,6 @@
 # hello-extension
 
-A minimal `oh-my-pi` extension that demonstrates the two most common authoring patterns: subscribing to `session_start` to log a greeting on load, and registering a `/hello` slash command that sends a notification to the user. It is intentionally small — use it as a copy-paste starting point for your own extension.
+A minimal `oh-my-pi` extension that demonstrates the two most common authoring patterns: subscribing to `session_start` to notify on load, and registering a `/hello` slash command that sends a greeting into the conversation. It is intentionally small — use it as a copy-paste starting point for your own extension.
 
 ## Install
 
@@ -23,7 +23,7 @@ extensions:
 **Option C — load once via CLI flag:**
 
 ```
-omp --extension-path ./hello-extension
+omp --extension ./hello-extension
 ```
 
 ## Usage
@@ -34,6 +34,6 @@ After loading, type `/hello` in the omp prompt to trigger the notification.
 
 - Default export factory receiving `ExtensionAPI`
 - `pi.on("session_start", ...)` — session lifecycle hook
-- `pi.commands.register(...)` — slash command registration
+- `pi.registerCommand(...)` — slash command registration
 - `ctx.ui.notify(...)` — user-facing notification
 - `package.json` with `omp.extensions` manifest field
