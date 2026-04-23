@@ -1886,7 +1886,7 @@ export class ModelRegistry {
 	 * Get API key for a model.
 	 */
 	async getApiKey(model: Model<Api>, sessionId?: string): Promise<string | undefined> {
-		if (this.#keylessProviders.has(model.provider)) {
+		if (this.#keylessProviders.has(model.provider) && !this.authStorage.hasAuth(model.provider)) {
 			return kNoAuth;
 		}
 		return this.authStorage.getApiKey(model.provider, sessionId, { baseUrl: model.baseUrl, modelId: model.id });
@@ -1896,14 +1896,14 @@ export class ModelRegistry {
 	 * Get API key for a provider (e.g., "openai").
 	 */
 	async getApiKeyForProvider(provider: string, sessionId?: string, baseUrl?: string): Promise<string | undefined> {
-		if (this.#keylessProviders.has(provider)) {
+		if (this.#keylessProviders.has(provider) && !this.authStorage.hasAuth(provider)) {
 			return kNoAuth;
 		}
 		return this.authStorage.getApiKey(provider, sessionId, { baseUrl });
 	}
 
 	async #peekApiKeyForProvider(provider: string): Promise<string | undefined> {
-		if (this.#keylessProviders.has(provider)) {
+		if (this.#keylessProviders.has(provider) && !this.authStorage.hasAuth(provider)) {
 			return kNoAuth;
 		}
 		return this.authStorage.peekApiKey(provider);
