@@ -569,8 +569,9 @@ export interface Model<TApi extends Api = any> {
 	compat?: TApi extends "openai-completions" ? OpenAICompat : never;
 	/**
 	 * Which shape to use when exposing the Codex `apply_patch` tool to this model.
-	 * - `"freeform"`: OpenAI custom-tool with a Lark grammar (spec §1.1). Raw patch
-	 *   string, no JSON envelope. Only honored by the `openai-responses` provider.
+	 * Generated catalog policy sets `"freeform"` for first-party GPT-5 Responses
+	 * models that support OpenAI custom tools with a Lark grammar. The freeform
+	 * variant sends a raw patch string with no JSON envelope.
 	 * - `"function"` or undefined: JSON function-tool with `{input: string}` (spec §1.2).
 	 */
 	applyPatchToolType?: "freeform" | "function";

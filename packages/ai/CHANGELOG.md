@@ -1,14 +1,17 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added `gpt-5.5` to the built-in model catalog for both OpenAI Responses (`openai`) and local `litellm` (`openai-completions`) providers
+- Added `gpt-image-2` to the `litellm` built-in model catalog
 - Added `isCopilotTransientModelError()` and `callWithCopilotModelRetry()` helpers in `utils/retry` that detect GitHub Copilot's intermittent `HTTP 400 model_not_supported` responses for preview models (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, ...) and retry the request up to three times with backoff. OpenAI Responses, OpenAI Completions, and Anthropic provider paths now participate in this retry when the model is served through Copilot.
 - Added OpenAI Responses custom-tool grammar support for Codex-style `apply_patch` calls, including freeform streaming, history replay, and forced tool-choice mapping to the custom wire name.
 
 ### Changed
 
+- Updated built-in model metadata with revised `contextWindow`, `maxTokens`, and pricing values for existing entries
+- Changed generated model policies to assign `applyPatchToolType: "freeform"` for first-party GPT-5 OpenAI Responses and Codex models, so regenerated `models.json` preserves the `apply_patch` custom-tool metadata.
 - Renamed `rewriteCopilotAuthError` to `rewriteCopilotError` and extended it to rewrite `HTTP 400 model_not_supported` after retries are exhausted with guidance about Copilot's OAuth-client-specific rollout gap (see opencode#13313).
 
 ### Fixed

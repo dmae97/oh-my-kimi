@@ -2366,8 +2366,9 @@ function normalizeInputMessageContent(
  * Whether this Codex-backend model should get the custom-tool grammar
  * variant for `apply_patch`. codex-rs uses a single serializer for both
  * the public Responses endpoint and `chatgpt.com/backend-api`, so the
- * backend already accepts `{type: "custom"}` tools in production — the
- * gate is the per-model `applyPatchToolType` flag, nothing endpoint-specific.
+ * backend already accepts `{type: "custom"}` tools in production. The
+ * generated model catalog sets `applyPatchToolType` for first-party GPT-5
+ * Codex models; this runtime path only consumes that metadata.
  */
 function supportsFreeformApplyPatchCodex(model: Model<"openai-codex-responses">): boolean {
 	return model.applyPatchToolType === "freeform";

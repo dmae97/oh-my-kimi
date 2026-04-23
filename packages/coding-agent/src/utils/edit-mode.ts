@@ -39,7 +39,7 @@ export function resolveEditMode(session: EditModeSessionLike): EditMode {
 	if (envMode) return envMode;
 
 	if (!$flag("PI_STRICT_EDIT_MODE")) {
-		if (activeModel?.includes("spark")) return "replace";
+		if (activeModel?.includes("spark")) return "apply_patch";
 		if (activeModel?.includes("nano")) return "replace";
 		if (activeModel?.includes("mini")) return "replace";
 		if (activeModel?.includes("haiku")) return "replace";

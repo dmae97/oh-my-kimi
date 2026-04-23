@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Changed Spark models to default to `apply_patch` edit mode instead of `replace`.
 - Tightened the contract for `SearchParams.recency` in `web/search/providers/base.ts`: providers MUST interpret recency as a pure time filter and MUST NOT use it as an implicit signal to change topic scope, content domain, or ranking strategy.
 - Inline read tool previews are now optional via `read.toolResultPreview` and default to off
 

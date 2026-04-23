@@ -536,8 +536,9 @@ function convertConversationMessages(
 
 /**
  * Whether this model should get the OpenAI custom-tool grammar variant
- * for `apply_patch`. Explicit opt-in via `model.applyPatchToolType` in
- * `models.json` — no auto-detection. See Phase 2a.1 in the plan.
+ * for `apply_patch`. The generated model catalog sets
+ * `model.applyPatchToolType` for first-party GPT-5 Responses models; this
+ * runtime path only consumes that metadata.
  * @internal Exported for tests.
  */
 export function supportsFreeformApplyPatch(model: Model<"openai-responses">): boolean {

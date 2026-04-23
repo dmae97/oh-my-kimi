@@ -67,7 +67,7 @@ const plainTool: Tool = {
 
 describe("supportsFreeformApplyPatch", () => {
 	test("absent flag returns false", () => {
-		// No auto-detection — requires explicit opt-in in models.json.
+		// No runtime auto-detection — requires generated model metadata.
 		expect(supportsFreeformApplyPatch(makeModel())).toBe(false);
 	});
 

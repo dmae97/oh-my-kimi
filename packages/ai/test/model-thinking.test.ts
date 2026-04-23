@@ -318,6 +318,44 @@ describe("generated model policies", () => {
 
 		expect(models[0]?.contextPromotionTarget).toBe("openai-codex/gpt-5.2-codex");
 	});
+
+	it("sets freeform apply_patch metadata for first-party GPT-5 Responses models", () => {
+		const models: Model<Api>[] = [
+			createModel({
+				id: "gpt-5.4",
+				api: "openai-responses",
+				provider: "openai",
+			}),
+			createModel({
+				id: "gpt-5.3-codex-spark",
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+			}),
+			{
+				...createModel({
+					id: "gpt-5.3-codex-spark",
+					api: "openai-responses",
+					provider: "opencode",
+				}),
+				applyPatchToolType: "freeform",
+			},
+			{
+				...createModel({
+					id: "gpt-5.4",
+					api: "openai-completions",
+					provider: "litellm",
+				}),
+				applyPatchToolType: "freeform",
+			},
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.applyPatchToolType).toBe("freeform");
+		expect(models[1]?.applyPatchToolType).toBe("freeform");
+		expect(models[2]?.applyPatchToolType).toBeUndefined();
+		expect(models[3]?.applyPatchToolType).toBeUndefined();
+	});
 });
 
 describe("model thinking runtime helpers", () => {
