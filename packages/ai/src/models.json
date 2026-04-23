@@ -33786,31 +33786,6 @@
 				"maxLevel": "xhigh"
 			}
 		},
-		"kimi-k2.6": {
-			"id": "kimi-k2.6",
-			"name": "Kimi K2.6",
-			"api": "openai-completions",
-			"provider": "opencode-go",
-			"baseUrl": "https://opencode.ai/zen/go/v1",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"cost": {
-				"input": 0.96,
-				"output": 4.83,
-				"cacheRead": 0.16,
-				"cacheWrite": 0
-			},
-			"contextWindow": 262144,
-			"maxTokens": 65536,
-			"thinking": {
-				"mode": "effort",
-				"minLevel": "minimal",
-				"maxLevel": "xhigh"
-			}
-		},
 		"kimi-k2.5": {
 			"id": "kimi-k2.5",
 			"name": "Kimi K2.5",
@@ -33953,55 +33928,6 @@
 			},
 			"contextWindow": 1048576,
 			"maxTokens": 128000,
-			"thinking": {
-				"mode": "effort",
-				"minLevel": "minimal",
-				"maxLevel": "xhigh"
-			}
-		},
-		"mimo-v2.5-pro": {
-			"id": "mimo-v2.5-pro",
-			"name": "MiMo V2.5 Pro",
-			"api": "openai-completions",
-			"provider": "opencode-go",
-			"baseUrl": "https://opencode.ai/zen/go/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 1,
-				"output": 3,
-				"cacheRead": 0.2,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1048576,
-			"maxTokens": 64000,
-			"thinking": {
-				"mode": "effort",
-				"minLevel": "minimal",
-				"maxLevel": "xhigh"
-			}
-		},
-		"mimo-v2.5": {
-			"id": "mimo-v2.5",
-			"name": "MiMo V2.5",
-			"api": "openai-completions",
-			"provider": "opencode-go",
-			"baseUrl": "https://opencode.ai/zen/go/v1",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"cost": {
-				"input": 0.4,
-				"output": 2,
-				"cacheRead": 0.08,
-				"cacheWrite": 0
-			},
-			"contextWindow": 262144,
-			"maxTokens": 64000,
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",

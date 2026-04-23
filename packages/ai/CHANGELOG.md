@@ -16,7 +16,6 @@
 
 ## [14.1.3] - 2026-04-17
 
-
 ### Fixed
 
 - Preserved user-provided `session_id` and `x-client-request-id` headers in OpenAI Responses requests instead of overriding them with automatic session-derived values
