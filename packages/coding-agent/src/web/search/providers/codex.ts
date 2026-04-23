@@ -18,8 +18,8 @@ import { SearchProvider } from "./base";
 
 const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const CODEX_RESPONSES_PATH = "/codex/responses";
-const FALLBACK_MODEL = "gpt-5.4";
-const DEFAULT_MODEL_PREFERENCES = ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.1-codex", "gpt-5-codex"];
+const FALLBACK_MODEL = "gpt-5-codex-mini";
+const DEFAULT_MODEL_PREFERENCES = ["gpt-5-codex-mini", "gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.1-codex", "gpt-5-codex"];
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
 const DEFAULT_INSTRUCTIONS =
 	"You are a helpful assistant with web search capabilities. Search the web to answer the user's question accurately and cite your sources.";
