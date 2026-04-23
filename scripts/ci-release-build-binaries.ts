@@ -106,7 +106,7 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 	console.log(`Building ${target.outfile}...`);
 	await embedNative(target);
 	if (isDryRun) {
-		console.log(`DRY RUN bun build --compile --define PI_COMPILED=true --root . --external mupdf --target=${target.target} ${entrypoint} --outfile ${target.outfile}`);
+		console.log(`DRY RUN bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --define PI_COMPILED=true --root . --external mupdf --target=${target.target} ${entrypoint} --outfile ${target.outfile}`);
 		return;
 	}
 
@@ -114,7 +114,24 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 		? { ...Bun.env, BUN_NO_CODESIGN_MACHO_BINARY: "1" }
 		: Bun.env;
 	await runCommand(
-		["bun", "build", "--compile", "--define", "PI_COMPILED=true", "--root", ".", "--external", "mupdf", "--target", target.target, entrypoint, "--outfile", target.outfile],
+		[
+			"bun",
+			"build",
+			"--compile",
+			"--no-compile-autoload-bunfig",
+			"--no-compile-autoload-dotenv",
+			"--define",
+			"PI_COMPILED=true",
+			"--root",
+			".",
+			"--external",
+			"mupdf",
+			"--target",
+			target.target,
+			entrypoint,
+			"--outfile",
+			target.outfile,
+		],
 		repoRoot,
 		buildEnv,
 	);
