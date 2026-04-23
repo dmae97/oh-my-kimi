@@ -292,7 +292,7 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(createAgentSessionSpy.mock.calls[0]?.[0]?.thinkingLevel).toBe(cases[0].expectedThinkingLevel);
 		expect(createAgentSessionSpy.mock.calls[1]?.[0]?.thinkingLevel).toBe(cases[1].expectedThinkingLevel);
 	});
-	it("aborts after 3 reminders when submit_result is never called", async () => {
+	it("fails after 3 reminders when submit_result is never called for a structured task", async () => {
 		const prompts: string[] = [];
 		const session = createMockSession(({ text, promptIndex, emit, state }) => {
 			prompts.push(text);
@@ -310,9 +310,9 @@ describe("runSubprocess submit_result reminders", () => {
 		});
 		expect(prompts).toHaveLength(4);
 		expect(result.exitCode).toBe(1);
-		expect(result.aborted).toBe(true);
+		expect(result.aborted).toBe(false);
 		expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
-		expect(result.abortReason).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+		expect(result.abortReason).toBeUndefined();
 	});
 
 	it("surfaces abort reason when submit_result reports aborted status", async () => {

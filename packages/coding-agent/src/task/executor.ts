@@ -306,9 +306,14 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 			exitCode = 0;
 			stderr = "";
 		} else if (exitCode === 0) {
+			const hasRawOutput = rawOutput.trim().length > 0;
 			rawOutput = rawOutput
 				? `${SUBAGENT_WARNING_MISSING_SUBMIT_RESULT}\n\n${rawOutput}`
 				: SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
+			if (hasOutputSchema || !hasRawOutput) {
+				exitCode = 1;
+				stderr = SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
+			}
 		}
 	}
 
@@ -1106,10 +1111,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			await session.waitForIdle();
 			if (!submitResultCalled && !abortSignal.aborted) {
-				aborted = true;
-				exitCode = 1;
-				abortReasonText ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
-				error ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
+				exitCode = 0;
 			}
 
 			const lastAssistant = session.getLastAssistantMessage();
