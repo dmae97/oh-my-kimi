@@ -26,7 +26,7 @@ import { type VimRenderArgs, vimToolRenderer } from "../tools/vim";
 import { Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
 import type { VimToolDetails } from "../vim/types";
 import type { DiffError, DiffResult } from "./diff";
-import { expandApplyPatchToEntries } from "./modes/apply-patch";
+import { expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
 import { type ChunkToolEdit, parseChunkEditPath } from "./modes/chunk";
 import type { HashlineToolEdit } from "./modes/hashline";
 import type { Operation, PatchEditEntry } from "./modes/patch";
@@ -366,7 +366,9 @@ function getCallPreview(args: EditRenderArgs, rawPath: string, uiTheme: Theme): 
 	return "";
 }
 
-function getApplyPatchRenderSummary(args: EditRenderArgs): ApplyPatchRenderSummary | undefined {
+const MISSING_APPLY_PATCH_END_ERROR = "The last line of the patch must be '*** End Patch'";
+
+function getApplyPatchRenderSummary(args: EditRenderArgs, isPartial: boolean): ApplyPatchRenderSummary | undefined {
 	if (typeof args.input !== "string") {
 		return undefined;
 	}
@@ -374,7 +376,11 @@ function getApplyPatchRenderSummary(args: EditRenderArgs): ApplyPatchRenderSumma
 	try {
 		return { entries: expandApplyPatchToEntries({ input: args.input }) };
 	} catch (err) {
-		return { entries: [], error: err instanceof Error ? err.message : String(err) };
+		const error = err instanceof Error ? err.message : String(err);
+		if (isPartial && error === MISSING_APPLY_PATCH_END_ERROR) {
+			return { entries: expandApplyPatchToPreviewEntries({ input: args.input }) };
+		}
+		return { entries: [], error };
 	}
 }
 
@@ -445,7 +451,7 @@ export const editToolRenderer = {
 			return vimToolRenderer.renderCall(args, options, uiTheme);
 		}
 
-		const applyPatchSummary = getApplyPatchRenderSummary(args);
+		const applyPatchSummary = getApplyPatchRenderSummary(args, options.isPartial);
 		const firstApplyPatchEntry = applyPatchSummary?.entries[0];
 		// Extract path from first edit entry when top-level path is absent (new schema)
 		const firstEdit = Array.isArray(args.edits) && args.edits.length > 0 ? args.edits[0] : undefined;

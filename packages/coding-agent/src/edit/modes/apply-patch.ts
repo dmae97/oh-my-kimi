@@ -9,7 +9,7 @@
  */
 
 import { type Static, Type } from "@sinclair/typebox";
-import { parseApplyPatch } from "../apply-patch/parser";
+import { parseApplyPatch, parseApplyPatchStreaming } from "../apply-patch/parser";
 import { ApplyPatchError } from "../diff";
 import type { PatchEditEntry } from "./patch";
 
@@ -40,6 +40,18 @@ export function expandApplyPatchToEntries(params: ApplyPatchParams): PatchEditEn
 	if (hunks.length === 0) {
 		throw new ApplyPatchError("No files were modified.");
 	}
+	return hunks.map(
+		(h): PatchEditEntry => ({
+			path: h.path,
+			op: h.op,
+			rename: h.rename,
+			diff: h.diff,
+		}),
+	);
+}
+
+export function expandApplyPatchToPreviewEntries(params: ApplyPatchParams): PatchEditEntry[] {
+	const hunks = parseApplyPatchStreaming(params.input);
 	return hunks.map(
 		(h): PatchEditEntry => ({
 			path: h.path,

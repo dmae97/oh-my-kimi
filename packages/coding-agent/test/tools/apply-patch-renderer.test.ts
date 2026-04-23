@@ -72,6 +72,17 @@ describe("apply_patch rendering", () => {
 		expect(rendered).toContain("(+1 more)");
 	});
 
+	it("does not show missing end-marker errors while apply_patch input is streaming", async () => {
+		const uiTheme = await getUiTheme();
+		const input = ["*** Begin Patch", "*** Update File: src/streaming.ts", "@@", "-before", "+after"].join("\n");
+
+		const component = toolRenderers.apply_patch.renderCall({ input }, { expanded: false, isPartial: true }, uiTheme);
+		const rendered = Bun.stripANSI(component.render(160).join("\n"));
+
+		expect(rendered).toContain("src/streaming.ts");
+		expect(rendered).not.toContain("The last line of the patch must be");
+	});
+
 	it("shows an apply_patch parse error preview for malformed input", async () => {
 		const uiTheme = await getUiTheme();
 		const malformedInput = ["*** Begin Patch", "*** Update File: src/bad.ts", "*** End Patch"].join("\n");

@@ -32,11 +32,28 @@ const DELETE_FILE_MARKER = "*** Delete File: ";
 const UPDATE_FILE_MARKER = "*** Update File: ";
 const MOVE_TO_MARKER = "*** Move to: ";
 
+interface ParseApplyPatchOptions {
+	streaming?: boolean;
+}
+
 /**
  * Parse a Codex `*** Begin Patch` envelope into a list of single-file
  * patch inputs.
  */
 export function parseApplyPatch(patchText: string): PatchInput[] {
+	return parseApplyPatchWithOptions(patchText, {});
+}
+
+/**
+ * Best-effort parser for in-progress TUI previews. It tolerates missing
+ * envelope markers and incomplete trailing hunks; do not use it to apply edits.
+ */
+export function parseApplyPatchStreaming(patchText: string): PatchInput[] {
+	return parseApplyPatchWithOptions(patchText, { streaming: true });
+}
+
+function parseApplyPatchWithOptions(patchText: string, options: ParseApplyPatchOptions): PatchInput[] {
+	const streaming = options.streaming === true;
 	let lines = patchText.trim().split("\n");
 
 	// Lenient heredoc strip: <<EOF / <<'EOF' / <<"EOF" ... EOF
@@ -50,14 +67,16 @@ export function parseApplyPatch(patchText: string): PatchInput[] {
 	}
 
 	if (lines.length === 0 || lines[0].trim() !== BEGIN_PATCH_MARKER) {
+		if (streaming) return [];
 		throw new ParseError("The first line of the patch must be '*** Begin Patch'");
 	}
-	if (lines[lines.length - 1].trim() !== END_PATCH_MARKER) {
+	const hasEndMarker = lines[lines.length - 1].trim() === END_PATCH_MARKER;
+	if (!hasEndMarker && !streaming) {
 		throw new ParseError("The last line of the patch must be '*** End Patch'");
 	}
 
 	const hunks: PatchInput[] = [];
-	let remaining = lines.slice(1, lines.length - 1);
+	let remaining = hasEndMarker ? lines.slice(1, lines.length - 1) : lines.slice(1);
 	// Line numbers are 1-based and include the `*** Begin Patch` line (= 1).
 	let lineNumber = 2;
 
@@ -131,6 +150,10 @@ export function parseApplyPatch(patchText: string): PatchInput[] {
 			}
 
 			if (diffLines.length === 0) {
+				if (streaming) {
+					hunks.push({ path, op: "update", rename: movePath, diff: "" });
+					continue;
+				}
 				throw new ParseError(`Update file hunk for path '${path}' is empty`, lineNumber);
 			}
 
@@ -138,6 +161,9 @@ export function parseApplyPatch(patchText: string): PatchInput[] {
 			continue;
 		}
 
+		if (streaming) {
+			break;
+		}
 		throw new ParseError(
 			`'${firstLine}' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'`,
 			lineNumber,

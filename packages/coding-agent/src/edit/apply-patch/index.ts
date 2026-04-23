@@ -15,7 +15,7 @@ import { ApplyPatchError } from "../diff";
 import { type ApplyPatchOptions, type ApplyPatchResult, applyPatch, type PatchInput } from "../modes/patch";
 import { parseApplyPatch } from "./parser";
 
-export { parseApplyPatch } from "./parser";
+export * from "./parser";
 
 export interface ApplyCodexPatchResult {
 	/** Single-file apply results in the order they were attempted. */
