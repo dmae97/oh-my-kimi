@@ -671,6 +671,7 @@ function buildParams(
 	const compat = getCompat(model, resolvedBaseUrl);
 	const messages = convertMessages(model, context, compat);
 	maybeAddOpenRouterAnthropicCacheControl(model, messages);
+	const supportsReasoningParams = model.provider !== "github-copilot";
 
 	// Kimi (including via OpenRouter) calculates TPM rate limits based on max_tokens, not actual output.
 	// Always send max_tokens to avoid their high default causing rate limit issues.
@@ -736,22 +737,27 @@ function buildParams(
 		params.tool_choice = mapToOpenAICompletionsToolChoice(options.toolChoice);
 	}
 
-	if (compat.thinkingFormat === "zai" && model.reasoning) {
+	if (supportsReasoningParams && compat.thinkingFormat === "zai" && model.reasoning) {
 		// Z.ai uses binary thinking: { type: "enabled" | "disabled" }
 		// Must explicitly disable since z.ai defaults to thinking enabled
 		Reflect.set(params, "thinking", { type: options?.reasoning ? "enabled" : "disabled" });
-	} else if (compat.thinkingFormat === "qwen" && model.reasoning) {
+	} else if (supportsReasoningParams && compat.thinkingFormat === "qwen" && model.reasoning) {
 		// Qwen uses top-level enable_thinking: boolean
 		Reflect.set(params, "enable_thinking", !!options?.reasoning);
-	} else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
+	} else if (supportsReasoningParams && compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
 		Reflect.set(params, "chat_template_kwargs", { enable_thinking: !!options?.reasoning });
-	} else if (compat.thinkingFormat === "openrouter" && options?.reasoning && model.reasoning) {
+	} else if (
+		supportsReasoningParams &&
+		compat.thinkingFormat === "openrouter" &&
+		options?.reasoning &&
+		model.reasoning
+	) {
 		// OpenRouter normalizes reasoning across providers via a nested reasoning object.
 		const openRouterParams = params as typeof params & { reasoning?: { effort?: string } };
 		openRouterParams.reasoning = {
 			effort: mapReasoningEffort(options.reasoning, compat.reasoningEffortMap),
 		};
-	} else if (options?.reasoning && model.reasoning && compat.supportsReasoningEffort) {
+	} else if (supportsReasoningParams && options?.reasoning && model.reasoning && compat.supportsReasoningEffort) {
 		// OpenAI-style reasoning_effort
 		Reflect.set(params, "reasoning_effort", mapReasoningEffort(options.reasoning, compat.reasoningEffortMap));
 	}

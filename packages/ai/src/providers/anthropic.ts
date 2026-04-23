@@ -39,7 +39,7 @@ import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } fr
 import { createWatchdog, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
-import { isCopilotTransientModelError } from "../utils/retry";
+import { isCopilotRetryableError } from "../utils/retry";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -622,7 +622,7 @@ function isProviderRetryableStreamEnvelopeError(error: unknown): boolean {
 
 export function isProviderRetryableError(error: unknown, provider?: string): boolean {
 	if (!(error instanceof Error)) return false;
-	if (provider === "github-copilot" && isCopilotTransientModelError(error)) return true;
+	if (provider === "github-copilot" && isCopilotRetryableError(error)) return true;
 	const msg = error.message.toLowerCase();
 	return (
 		/rate.?limit|too many requests|overloaded|service.?unavailable|internal_error|stream error.*received from peer|1302|timed?\s*out while waiting for the first event|timeout waiting for first/i.test(
@@ -1081,9 +1081,6 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	if (model.provider === "github-copilot") {
 		const copilotApiKey = parseGitHubCopilotApiKey(apiKey).accessToken;
 		const betaFeatures = [...extraBetas];
-		if (interleavedThinking) {
-			betaFeatures.push("interleaved-thinking-2025-05-14");
-		}
 		const defaultHeaders = mergeHeaders(
 			{
 				Accept: stream ? "text/event-stream" : "application/json",
@@ -1428,7 +1425,7 @@ function buildParams(
 		params.tools = convertTools(context.tools, isOAuthToken);
 	}
 
-	if (options?.thinkingEnabled && model.reasoning) {
+	if (options?.thinkingEnabled && model.reasoning && model.provider !== "github-copilot") {
 		const mode = model.thinking?.mode;
 		const requestedEffort = options.reasoning;
 		const effort =
@@ -1492,6 +1489,10 @@ function buildParams(
 		params.system = systemBlocks;
 	}
 	disableThinkingIfToolChoiceForced(params);
+	if (model.provider === "github-copilot") {
+		delete params.thinking;
+		delete params.output_config;
+	}
 	ensureMaxTokensForThinking(params, model);
 	applyPromptCaching(params, cacheControl);
 	enforceCacheControlLimit(params, 4);

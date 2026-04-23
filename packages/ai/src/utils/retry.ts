@@ -114,6 +114,20 @@ export function isCopilotTransientModelError(error: unknown): boolean {
 	return extractErrorCode(error) === "model_not_supported";
 }
 
+export function isCopilotRetryableError(error: unknown): boolean {
+	if (isCopilotTransientModelError(error)) return true;
+
+	const status = extractHttpStatusFromError(error);
+	if (status !== undefined) {
+		return status >= 500 || status === 408 || status === 429;
+	}
+
+	const message = error instanceof Error ? error.message : String(error);
+	return /request was aborted|aborted|fetch failed|network error|timed?\s*out|timeout|other side closed/i.test(
+		message,
+	);
+}
+
 function extractErrorCode(error: unknown): string | undefined {
 	if (!error || typeof error !== "object") return undefined;
 	const info = error as ErrorLike;
@@ -147,7 +161,7 @@ export async function callWithCopilotModelRetry<T>(
 			return await fn();
 		} catch (error) {
 			lastError = error;
-			if (!isCopilotTransientModelError(error)) throw error;
+			if (!isCopilotRetryableError(error)) throw error;
 			if (attempt === COPILOT_MODEL_RETRY_MAX_ATTEMPTS - 1) break;
 			await abortableSleep(COPILOT_MODEL_RETRY_BASE_DELAY_MS * (attempt + 1), options.signal);
 		}
