@@ -2047,6 +2047,12 @@ function createBlobId(data: Uint8Array): Uint8Array {
 	return new Uint8Array(createHash("sha256").update(data).digest());
 }
 
+function storeCursorBlob(blobStore: Map<string, Uint8Array>, data: Uint8Array): Uint8Array {
+	const blobId = createBlobId(data);
+	blobStore.set(Buffer.from(blobId).toString("hex"), data);
+	return blobId;
+}
+
 const CURSOR_NATIVE_TOOL_NAMES = new Set(["bash", "read", "write", "delete", "ls", "grep", "lsp", "todo_write"]);
 
 function buildMcpToolDefinitions(tools: Tool[] | undefined): McpToolDefinition[] {
@@ -2106,9 +2112,9 @@ function extractAssistantMessageText(msg: Message): string {
  * Convert context.messages to Cursor's serialized ConversationTurn format.
  * Groups messages into turns: each turn is a user message followed by the assistant's response.
  * Excludes the last user message (which goes in the action).
- * Returns serialized bytes for ConversationStateStructure.turns field.
+ * Returns blob IDs for ConversationStateStructure.turns field.
  */
-function buildConversationTurns(messages: Message[]): Uint8Array[] {
+function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint8Array>): Uint8Array[] {
 	const turns: Uint8Array[] = [];
 
 	// Find turn boundaries - each turn starts with a user message
@@ -2146,9 +2152,10 @@ function buildConversationTurns(messages: Message[]): Uint8Array[] {
 			messageId: crypto.randomUUID(),
 		});
 		const userMessageBytes = toBinary(UserMessageSchema, userMessage);
+		const userMessageId = storeCursorBlob(blobStore, userMessageBytes);
 
 		// Collect and serialize steps until next user message
-		const stepBytes: Uint8Array[] = [];
+		const stepBlobIds: Uint8Array[] = [];
 		i++;
 
 		while (i < messages.length && messages[i].role !== "user" && messages[i].role !== "developer") {
@@ -2163,7 +2170,7 @@ function buildConversationTurns(messages: Message[]): Uint8Array[] {
 							value: create(AssistantMessageSchema, { text }),
 						},
 					});
-					stepBytes.push(toBinary(ConversationStepSchema, step));
+					stepBlobIds.push(storeCursorBlob(blobStore, toBinary(ConversationStepSchema, step)));
 				}
 			} else if (stepMsg.role === "toolResult") {
 				// Include tool results as assistant text for context
@@ -2175,17 +2182,17 @@ function buildConversationTurns(messages: Message[]): Uint8Array[] {
 							value: create(AssistantMessageSchema, { text: `[Tool Result]\n${text}` }),
 						},
 					});
-					stepBytes.push(toBinary(ConversationStepSchema, step));
+					stepBlobIds.push(storeCursorBlob(blobStore, toBinary(ConversationStepSchema, step)));
 				}
 			}
 
 			i++;
 		}
 
-		// Create the serialized turn using Structure types (bytes)
+		// Cursor stores turn parts in the KV blob channel; these fields carry blob IDs.
 		const agentTurn = create(AgentConversationTurnStructureSchema, {
-			userMessage: userMessageBytes,
-			steps: stepBytes,
+			userMessage: userMessageId,
+			steps: stepBlobIds,
 		});
 		const turn = create(ConversationTurnStructureSchema, {
 			turn: {
@@ -2193,7 +2200,7 @@ function buildConversationTurns(messages: Message[]): Uint8Array[] {
 				value: agentTurn,
 			},
 		});
-		turns.push(toBinary(ConversationTurnStructureSchema, turn));
+		turns.push(storeCursorBlob(blobStore, toBinary(ConversationTurnStructureSchema, turn)));
 	}
 
 	return turns;
@@ -2220,8 +2227,7 @@ function buildGrpcRequest(
 		content: context.systemPrompt || "You are a helpful assistant.",
 	});
 	const systemPromptBytes = new TextEncoder().encode(systemPromptJson);
-	const systemPromptId = createBlobId(systemPromptBytes);
-	blobStore.set(Buffer.from(systemPromptId).toString("hex"), systemPromptBytes);
+	const systemPromptId = storeCursorBlob(blobStore, systemPromptBytes);
 
 	const lastMessage = context.messages[context.messages.length - 1];
 	const userText =
@@ -2249,7 +2255,7 @@ function buildGrpcRequest(
 	});
 
 	// Build conversation turns from prior messages (excluding the last user message)
-	const turns = buildConversationTurns(context.messages);
+	const turns = buildConversationTurns(context.messages, blobStore);
 
 	const hasMatchingPrompt = state.conversationState?.rootPromptMessagesJson?.some(entry =>
 		Buffer.from(entry).equals(systemPromptId),
