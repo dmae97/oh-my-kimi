@@ -13,6 +13,11 @@ declare module "*.py" {
 	export default content;
 }
 
+declare module "*.lark" {
+	const content: string;
+	export default content;
+}
+
 // turndown-plugin-gfm has no published types
 declare module "turndown-plugin-gfm" {
 	import type TurndownService from "turndown";

@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { editToolRenderer } from "@oh-my-pi/pi-coding-agent/edit/renderer";
 import { toolRenderers } from "@oh-my-pi/pi-coding-agent/tools/renderers";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
@@ -17,7 +16,7 @@ async function getUiTheme() {
 
 describe("apply_patch rendering", () => {
 	it("registers apply_patch to use the edit renderer", () => {
-		expect(toolRenderers.apply_patch).toBe(editToolRenderer);
+		expect(toolRenderers.apply_patch).toBe(toolRenderers.edit);
 	});
 
 	it("renders apply_patch results through edit UI instead of generic fallback", async () => {
@@ -65,7 +64,7 @@ describe("apply_patch rendering", () => {
 			"*** End Patch",
 		].join("\n");
 
-		const component = editToolRenderer.renderCall({ input }, { expanded: false, isPartial: true }, uiTheme);
+		const component = toolRenderers.apply_patch.renderCall({ input }, { expanded: false, isPartial: true }, uiTheme);
 		const rendered = Bun.stripANSI(component.render(160).join("\n"));
 
 		expect(rendered).toContain("src/first.ts");
@@ -77,7 +76,11 @@ describe("apply_patch rendering", () => {
 		const uiTheme = await getUiTheme();
 		const malformedInput = ["*** Begin Patch", "*** Update File: src/bad.ts", "*** End Patch"].join("\n");
 
-		const component = editToolRenderer.renderCall({ input: malformedInput }, { expanded: false, isPartial: true }, uiTheme);
+		const component = toolRenderers.apply_patch.renderCall(
+			{ input: malformedInput },
+			{ expanded: false, isPartial: true },
+			uiTheme,
+		);
 		const rendered = Bun.stripANSI(component.render(160).join("\n"));
 
 		expect(rendered).toContain("src/bad.ts");

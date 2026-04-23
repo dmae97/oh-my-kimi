@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { convertTools, supportsFreeformApplyPatch } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import {
+	convertTools as convertCodexTools,
+	normalizeCodexToolChoice,
+} from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import {
+	convertTools,
+	mapOpenAIResponsesToolChoiceForTools,
+	supportsFreeformApplyPatch,
+} from "@oh-my-pi/pi-ai/providers/openai-responses";
 import {
 	appendResponsesToolResultMessages,
 	convertResponsesAssistantMessage,
@@ -7,6 +15,7 @@ import {
 } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
 import type { AssistantMessage, Model, Tool, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { Type } from "@sinclair/typebox";
+import type { ResponseStreamEvent } from "openai/resources/responses/responses";
 
 const GRAMMAR = 'start: "*** Begin Patch" LF';
 
@@ -21,6 +30,22 @@ function makeModel(overrides: Partial<Model<"openai-responses">> = {}): Model<"o
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 400000,
+		maxTokens: 128000,
+		...overrides,
+	};
+}
+
+function makeCodexModel(overrides: Partial<Model<"openai-codex-responses">> = {}): Model<"openai-codex-responses"> {
+	return {
+		id: "gpt-5",
+		name: "GPT-5",
+		api: "openai-codex-responses",
+		provider: "openai-codex",
+		baseUrl: "https://chatgpt.com/backend-api",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 272000,
 		maxTokens: 128000,
 		...overrides,
 	};
@@ -97,9 +122,42 @@ describe("convertTools: freeform emission", () => {
 	});
 });
 
+describe("tool choice mapping: freeform emission", () => {
+	const freeformModel = makeModel({ applyPatchToolType: "freeform" });
+
+	test("forced internal edit choice targets custom wire name", () => {
+		expect(mapOpenAIResponsesToolChoiceForTools({ type: "tool", name: "edit" }, [editTool], freeformModel)).toEqual({
+			type: "custom",
+			name: "apply_patch",
+		});
+	});
+
+	test("regular forced choices remain function choices", () => {
+		expect(
+			mapOpenAIResponsesToolChoiceForTools({ type: "tool", name: "read_file" }, [plainTool], freeformModel),
+		).toEqual({
+			type: "function",
+			name: "read_file",
+		});
+	});
+
+	test("codex backend forced internal edit choice targets custom wire name", () => {
+		expect(
+			normalizeCodexToolChoice(
+				{ type: "tool", name: "edit" },
+				[editTool],
+				makeCodexModel({ applyPatchToolType: "freeform" }),
+			),
+		).toEqual({
+			type: "custom",
+			name: "apply_patch",
+		});
+	});
+});
+
 describe("custom_tool_call stream receive", () => {
-	async function* makeStream(events: unknown[]): AsyncIterable<any> {
-		for (const e of events) yield e;
+	async function* makeStream(events: unknown[]): AsyncIterable<ResponseStreamEvent> {
+		for (const e of events) yield e as ResponseStreamEvent;
 	}
 
 	test("aggregates delta events into a ToolCall with input arg", async () => {
@@ -189,56 +247,86 @@ describe("custom_tool_call stream receive", () => {
 		expect(endEvent?.toolCall.name).toBe("apply_patch");
 		expect(endEvent?.toolCall.customWireName).toBe("apply_patch");
 	});
+
+	test("synthesizes a non-empty item id when custom output item id is absent", async () => {
+		const output: AssistantMessage = {
+			role: "assistant",
+			content: [],
+			timestamp: Date.now(),
+			provider: "openai",
+			model: "gpt-5",
+			api: "openai-responses",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+		};
+		const emitted: unknown[] = [];
+		const stream = {
+			push: (e: unknown) => emitted.push(e),
+			end: () => {},
+		} as never;
+
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.output_item.added",
+					item: {
+						type: "custom_tool_call",
+						call_id: "call_missing_item",
+						name: "apply_patch",
+						input: "",
+					},
+				},
+				{
+					type: "response.output_item.done",
+					item: {
+						type: "custom_tool_call",
+						call_id: "call_missing_item",
+						name: "apply_patch",
+						input: "*** Begin Patch\n*** End Patch\n",
+					},
+				},
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		const block = output.content[0];
+		expect(block?.type).toBe("toolCall");
+		expect((block as { id: string }).id).toStartWith("call_missing_item|fc_");
+
+		const endEvent = emitted.find(
+			(e): e is { type: string; toolCall: { id: string } } =>
+				!!e && typeof e === "object" && (e as { type?: string }).type === "toolcall_end",
+		);
+		expect(endEvent?.toolCall.id).toStartWith("call_missing_item|fc_");
+	});
 });
 
 describe("codex-backend convertTools (chatgpt.com/backend-api)", () => {
-	// Dynamic import: loading the codex provider pulls in heavy SDK code we
-	// don't want mixed into module-resolve for unrelated tests.
-	async function getCodexConvertTools() {
-		const mod = (await import("@oh-my-pi/pi-ai/providers/openai-codex-responses")) as {
-			convertTools: (tools: Tool[], model: Model<"openai-codex-responses">) => Array<Record<string, unknown>>;
-		};
-		return mod.convertTools;
-	}
-
-	function makeCodexModel(overrides: Partial<Model<"openai-codex-responses">> = {}): Model<"openai-codex-responses"> {
-		return {
-			id: "gpt-5",
-			name: "GPT-5",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: "https://chatgpt.com/backend-api",
-			reasoning: true,
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 272000,
-			maxTokens: 128000,
-			...overrides,
-		};
-	}
-
-	test("edit tool with customFormat becomes a custom grammar tool when flag is set", async () => {
-		const codexConvertTools = await getCodexConvertTools();
-		const [out] = codexConvertTools([editTool], makeCodexModel({ applyPatchToolType: "freeform" }));
+	test("edit tool with customFormat becomes a custom grammar tool when flag is set", () => {
+		const [out] = convertCodexTools([editTool], makeCodexModel({ applyPatchToolType: "freeform" }));
 		expect(out.type).toBe("custom");
 		expect(out.name).toBe("apply_patch");
+		if (out.type !== "custom") throw new Error("Expected custom tool payload");
 		expect(out.format).toEqual({ type: "grammar", syntax: "lark", definition: GRAMMAR });
 	});
 
-	test("wire shape matches direct-OpenAI convertTools (single serializer contract)", async () => {
-		const codexConvertTools = await getCodexConvertTools();
-		const [codexOut] = codexConvertTools([editTool], makeCodexModel({ applyPatchToolType: "freeform" }));
-		const [openaiOut] = convertTools(
-			[editTool],
-			false,
-			makeModel({ applyPatchToolType: "freeform" }),
-		) as unknown as Array<Record<string, unknown>>;
-		expect(codexOut).toEqual(openaiOut);
+	test("wire shape matches direct-OpenAI convertTools (single serializer contract)", () => {
+		const [codexOut] = convertCodexTools([editTool], makeCodexModel({ applyPatchToolType: "freeform" }));
+		const [openaiOut] = convertTools([editTool], false, makeModel({ applyPatchToolType: "freeform" }));
+		expect(codexOut).toEqual(openaiOut as unknown as typeof codexOut);
 	});
 
-	test("falls back to function tool when flag is absent", async () => {
-		const codexConvertTools = await getCodexConvertTools();
-		const [out] = codexConvertTools([editTool], makeCodexModel());
+	test("falls back to function tool when flag is absent", () => {
+		const [out] = convertCodexTools([editTool], makeCodexModel());
 		expect(out.type).toBe("function");
 		expect(out.name).toBe("edit");
 	});

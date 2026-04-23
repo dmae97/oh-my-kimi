@@ -54,6 +54,11 @@ export function parseTextSignature(
 	return { id: signature };
 }
 
+export function encodeResponsesToolCallId(callId: string, itemId: string | null | undefined): string {
+	const stableItemId = itemId && itemId.length > 0 ? itemId : `fc_${Bun.hash(callId).toString(36)}`;
+	return `${callId}|${stableItemId}`;
+}
+
 export function normalizeResponsesToolCallIdForTransform(
 	id: string,
 	model?: Model<Api>,
@@ -310,7 +315,7 @@ export async function processResponsesStream<TApi extends Api>(
 				currentItem = item;
 				currentBlock = {
 					type: "toolCall",
-					id: `${item.call_id}|${item.id}`,
+					id: encodeResponsesToolCallId(item.call_id, item.id),
 					name: item.name,
 					arguments: {},
 					partialJson: item.arguments || "",
@@ -321,7 +326,7 @@ export async function processResponsesStream<TApi extends Api>(
 				currentItem = item;
 				currentBlock = {
 					type: "toolCall",
-					id: `${item.call_id}|${item.id ?? ""}`,
+					id: encodeResponsesToolCallId(item.call_id, item.id),
 					// Preserve the raw wire name (e.g. `apply_patch`). The agent-loop
 					// dispatcher matches it against both `Tool.name` and
 					// `Tool.customWireName`, so this stays wire-accurate through
@@ -494,7 +499,7 @@ export async function processResponsesStream<TApi extends Api>(
 						: parseStreamingJson(item.arguments || "{}");
 				const toolCall: ToolCall = {
 					type: "toolCall",
-					id: `${item.call_id}|${item.id}`,
+					id: encodeResponsesToolCallId(item.call_id, item.id),
 					name: item.name,
 					arguments: args,
 				};
@@ -507,7 +512,7 @@ export async function processResponsesStream<TApi extends Api>(
 						: (item.input ?? "");
 				const toolCall: ToolCall = {
 					type: "toolCall",
-					id: `${item.call_id}|${item.id ?? ""}`,
+					id: encodeResponsesToolCallId(item.call_id, item.id),
 					name: item.name,
 					arguments: { input: rawInput },
 					customWireName: item.name,

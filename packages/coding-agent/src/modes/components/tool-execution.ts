@@ -206,7 +206,7 @@ export class ToolExecutionComponent extends Container {
 			try {
 				const first = expandApplyPatchToEntries({ input })[0];
 				if (!first?.path) return;
-				computePatchDiff(first, this.#cwd, {
+				computePatchDiff({ ...first, op: first.op ?? "update" }, this.#cwd, {
 					fuzzyThreshold: this.#editFuzzyThreshold,
 					allowFuzzy: this.#editAllowFuzzy,
 				}).then(result => {

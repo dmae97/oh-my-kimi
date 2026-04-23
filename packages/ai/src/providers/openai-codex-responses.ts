@@ -56,7 +56,12 @@ import {
 	transformRequestBody,
 } from "./openai-codex/request-transformer";
 import { parseCodexError } from "./openai-codex/response-handler";
-import { encodeTextSignatureV1, mapOpenAIResponsesStopReason, parseTextSignature } from "./openai-responses-shared";
+import {
+	encodeResponsesToolCallId,
+	encodeTextSignatureV1,
+	mapOpenAIResponsesStopReason,
+	parseTextSignature,
+} from "./openai-responses-shared";
 import { transformMessages } from "./transform-messages";
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
@@ -343,19 +348,33 @@ function extractCodexWebSocketHandshakeHeaders(socket: WebSocket, openEvent?: Ev
 	);
 }
 
-function normalizeCodexToolChoice(choice: ToolChoice | undefined): string | Record<string, unknown> | undefined {
+/** @internal Exported for tests. */
+export function normalizeCodexToolChoice(
+	choice: ToolChoice | undefined,
+	tools: Tool[] = [],
+	model?: Model<"openai-codex-responses">,
+): string | Record<string, unknown> | undefined {
 	if (!choice) return undefined;
 	if (typeof choice === "string") return choice;
+	const allowFreeform = model ? supportsFreeformApplyPatchCodex(model) : false;
+	const mapName = (name: string): Record<string, string> => {
+		const customTool = allowFreeform
+			? tools.find(tool => tool.customFormat && (tool.name === name || tool.customWireName === name))
+			: undefined;
+		return customTool
+			? { type: "custom", name: customTool.customWireName ?? customTool.name }
+			: { type: "function", name };
+	};
 	if (choice.type === "function") {
 		if ("function" in choice && choice.function?.name) {
-			return { type: "function", name: choice.function.name };
+			return mapName(choice.function.name);
 		}
 		if ("name" in choice && choice.name) {
-			return { type: "function", name: choice.name };
+			return mapName(choice.name);
 		}
 	}
 	if (choice.type === "tool" && choice.name) {
-		return { type: "function", name: choice.name };
+		return mapName(choice.name);
 	}
 	return undefined;
 }
@@ -501,7 +520,7 @@ async function buildTransformedCodexRequestBody(
 	if (context.tools && context.tools.length > 0) {
 		params.tools = convertTools(context.tools, model);
 		if (options?.toolChoice) {
-			const toolChoice = normalizeCodexToolChoice(options.toolChoice);
+			const toolChoice = normalizeCodexToolChoice(options.toolChoice, context.tools, model);
 			if (toolChoice) {
 				params.tool_choice = toolChoice;
 			}
@@ -854,7 +873,7 @@ function createOutputBlockForItem(item: CodexEventItem): CodexOutputBlock | null
 	if (item.type === "function_call") {
 		return {
 			type: "toolCall",
-			id: `${item.call_id}|${item.id}`,
+			id: encodeResponsesToolCallId(item.call_id, item.id),
 			name: item.name,
 			arguments: {},
 			partialJson: item.arguments || "",
@@ -866,7 +885,7 @@ function createOutputBlockForItem(item: CodexEventItem): CodexOutputBlock | null
 		// accumulation buffer for the raw input string.
 		return {
 			type: "toolCall",
-			id: `${item.call_id}|${item.id ?? ""}`,
+			id: encodeResponsesToolCallId(item.call_id, item.id),
 			name: item.name,
 			arguments: { input: item.input ?? "" },
 			customWireName: item.name,
@@ -1053,7 +1072,7 @@ function handleOutputItemDone(
 	if (item.type === "function_call") {
 		const toolCall: ToolCall = {
 			type: "toolCall",
-			id: `${item.call_id}|${item.id}`,
+			id: encodeResponsesToolCallId(item.call_id, item.id),
 			name: item.name,
 			arguments: parseStreamingJson(item.arguments || "{}"),
 		};
@@ -1069,7 +1088,7 @@ function handleOutputItemDone(
 				: (item.input ?? "");
 		const toolCall: ToolCall = {
 			type: "toolCall",
-			id: `${item.call_id}|${item.id ?? ""}`,
+			id: encodeResponsesToolCallId(item.call_id, item.id),
 			name: item.name,
 			arguments: { input: rawInput },
 			customWireName: item.name,

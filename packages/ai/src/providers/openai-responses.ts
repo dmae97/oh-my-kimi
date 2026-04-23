@@ -40,7 +40,7 @@ import {
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
-import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
+import { mapToOpenAIResponsesToolChoice, type OpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -391,7 +391,7 @@ function buildParams(
 	if (context.tools) {
 		params.tools = convertTools(context.tools, supportsStrictMode(model), model);
 		if (options?.toolChoice) {
-			params.tool_choice = mapToOpenAIResponsesToolChoice(options.toolChoice);
+			params.tool_choice = mapOpenAIResponsesToolChoiceForTools(options.toolChoice, context.tools, model);
 		}
 		// The apply_patch spec §1 marks only `apply_patch` itself as
 		// `supports_parallel_tool_calls = false`. OpenAI's Responses API
@@ -542,6 +542,23 @@ function convertConversationMessages(
  */
 export function supportsFreeformApplyPatch(model: Model<"openai-responses">): boolean {
 	return model.applyPatchToolType === "freeform";
+}
+
+/** @internal Exported for tests. */
+export function mapOpenAIResponsesToolChoiceForTools(
+	choice: ToolChoice | undefined,
+	tools: Tool[],
+	model: Model<"openai-responses">,
+): OpenAIResponsesToolChoice {
+	const mapped = mapToOpenAIResponsesToolChoice(choice);
+	if (!mapped || typeof mapped === "string" || mapped.type !== "function" || !supportsFreeformApplyPatch(model)) {
+		return mapped;
+	}
+
+	const customTool = tools.find(
+		tool => tool.customFormat && (tool.name === mapped.name || tool.customWireName === mapped.name),
+	);
+	return customTool ? { type: "custom", name: customTool.customWireName ?? customTool.name } : mapped;
 }
 
 /** @internal Exported for tests. */

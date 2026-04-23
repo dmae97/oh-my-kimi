@@ -449,7 +449,8 @@ export const editToolRenderer = {
 		const firstApplyPatchEntry = applyPatchSummary?.entries[0];
 		// Extract path from first edit entry when top-level path is absent (new schema)
 		const firstEdit = Array.isArray(args.edits) && args.edits.length > 0 ? args.edits[0] : undefined;
-		const rawPath = args.file_path || args.path || filePathFromEditEntry(firstEdit?.path) || firstApplyPatchEntry?.path || "";
+		const rawPath =
+			args.file_path || args.path || filePathFromEditEntry(firstEdit?.path) || firstApplyPatchEntry?.path || "";
 		const rename = args.rename || firstEdit?.rename || firstEdit?.move || firstApplyPatchEntry?.rename;
 		const op = args.op || firstEdit?.op || firstApplyPatchEntry?.op;
 		const { description } = formatEditDescription(rawPath, uiTheme, { rename });
@@ -486,7 +487,7 @@ export const editToolRenderer = {
 		}
 
 		const perFileResults = result.details?.perFileResults;
-		const totalFiles = Array.isArray(args?.edits) ? countEditFiles(args!.edits as any[]) : 0;
+		const totalFiles = args?.edits ? countEditFiles(args.edits) : 0;
 		if (perFileResults && (perFileResults.length > 1 || totalFiles > 1)) {
 			return renderMultiFileResult(perFileResults, totalFiles, options, uiTheme);
 		}
@@ -506,15 +507,15 @@ function renderSingleFileResult(
 ): Component {
 	const details = result.details;
 	const isError = result.isError ?? (details && "isError" in details ? details.isError : false);
-	const firstEdit = Array.isArray(args?.edits) && args!.edits.length > 0 ? args!.edits[0] : undefined;
+	const firstEdit = args?.edits?.[0];
 	const rawPath =
 		args?.file_path ||
 		args?.path ||
-		filePathFromEditEntry((firstEdit as any)?.path) ||
+		filePathFromEditEntry(firstEdit?.path) ||
 		(details && "path" in details ? details.path : "") ||
 		"";
-	const op = args?.op || (firstEdit as any)?.op || details?.op;
-	const rename = args?.rename || (firstEdit as any)?.rename || details?.move;
+	const op = args?.op || firstEdit?.op || details?.op;
+	const rename = args?.rename || firstEdit?.rename || firstEdit?.move || details?.move;
 	const { language } = formatEditDescription(rawPath, uiTheme, { rename });
 
 	const metadataLine =
