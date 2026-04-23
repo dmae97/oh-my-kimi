@@ -8,6 +8,7 @@ import {
 	type WritethroughDeferredHandle,
 	writethroughNoop,
 } from "../lsp";
+import applyPatchDescription from "../prompts/tools/apply-patch.md" with { type: "text" };
 import chunkEditDescription from "../prompts/tools/chunk-edit.md" with { type: "text" };
 import hashlineDescription from "../prompts/tools/hashline.md" with { type: "text" };
 import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
@@ -16,6 +17,13 @@ import type { ToolSession } from "../tools";
 import { VimTool, vimSchema } from "../tools/vim";
 import { type EditMode, normalizeEditMode, resolveEditMode } from "../utils/edit-mode";
 import type { VimToolDetails } from "../vim/types";
+import {
+	type ApplyPatchParams,
+	applyPatchSchema,
+	expandApplyPatchToEntries,
+	isApplyPatchParams,
+} from "./modes/apply-patch";
+import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
 import {
 	type ChunkParams,
 	type ChunkToolEdit,
@@ -50,8 +58,10 @@ import {
 import { type EditToolDetails, type EditToolPerFileResult, getLspBatchRequest, type LspBatchRequest } from "./renderer";
 
 export { DEFAULT_EDIT_MODE, type EditMode, normalizeEditMode } from "../utils/edit-mode";
+export * from "./apply-patch";
 export * from "./diff";
 export * from "./line-hash";
+export * from "./modes/apply-patch";
 export * from "./modes/chunk";
 export * from "./modes/hashline";
 export * from "./modes/patch";
@@ -64,10 +74,11 @@ type TInput =
 	| typeof patchEditSchema
 	| typeof hashlineEditParamsSchema
 	| typeof chunkEditParamsSchema
-	| typeof vimSchema;
+	| typeof vimSchema
+	| typeof applyPatchSchema;
 
 type VimParams = Static<typeof vimSchema>;
-type EditParams = ReplaceParams | PatchParams | HashlineParams | ChunkParams | VimParams;
+type EditParams = ReplaceParams | PatchParams | HashlineParams | ChunkParams | VimParams | ApplyPatchParams;
 type EditToolResultDetails = EditToolDetails | VimToolDetails;
 
 type EditModeDefinition = {
@@ -265,6 +276,28 @@ export class EditTool implements AgentTool<TInput> {
 		return this.#getModeDefinition().parameters;
 	}
 
+	/**
+	 * When in `apply_patch` mode, expose the Codex Lark grammar so providers
+	 * that support OpenAI-style custom tools can emit a grammar-constrained
+	 * variant. Providers that don't support custom tools ignore this field
+	 * and fall back to emitting a JSON function tool from `parameters`.
+	 */
+	get customFormat(): { syntax: "lark"; definition: string } | undefined {
+		if (this.mode !== "apply_patch") return undefined;
+		return { syntax: "lark", definition: applyPatchGrammar };
+	}
+
+	/**
+	 * Wire-level tool name used when the custom-tool variant is active. GPT-5+
+	 * is trained on the literal name `apply_patch`; internally this is just a
+	 * mode of the `edit` tool. The agent-loop dispatcher matches both the
+	 * internal `name` and `customWireName`, so returned calls route correctly.
+	 */
+	get customWireName(): string | undefined {
+		if (this.mode !== "apply_patch") return undefined;
+		return "apply_patch";
+	}
+
 	async execute(
 		_toolCallId: string,
 		params: EditParams,
@@ -344,6 +377,36 @@ export class EditTool implements AgentTool<TInput> {
 							}),
 					}));
 					return executePerFile(entries, batchRequest, onUpdate);
+				},
+			},
+			apply_patch: {
+				description: () => prompt.render(applyPatchDescription),
+				parameters: applyPatchSchema,
+				invalidParamsMessage: "Invalid edit parameters for apply_patch mode.",
+				validate: isApplyPatchParams,
+				execute: (
+					tool: EditTool,
+					params: EditParams,
+					signal: AbortSignal | undefined,
+					batchRequest: LspBatchRequest | undefined,
+					onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
+				) => {
+					const entries = expandApplyPatchToEntries(params as ApplyPatchParams);
+					const perFile = entries.map((entry: PatchEditEntry) => ({
+						path: entry.path,
+						run: (br: LspBatchRequest | undefined) =>
+							executePatchSingle({
+								session: tool.session,
+								params: entry,
+								signal,
+								batchRequest: br,
+								allowFuzzy: tool.#allowFuzzy,
+								fuzzyThreshold: tool.#fuzzyThreshold,
+								writethrough: tool.#writethrough,
+								beginDeferredDiagnosticsForPath: p => tool.#beginDeferredDiagnosticsForPath(p),
+							}),
+					}));
+					return executePerFile(perFile, batchRequest, onUpdate);
 				},
 			},
 			hashline: {

@@ -454,7 +454,13 @@ async function executeToolCalls(
 
 	const records = toolCalls.map(toolCall => ({
 		toolCall,
-		tool: tools?.find(t => t.name === toolCall.name),
+		// Tools emitted via OpenAI's custom-tool path (e.g. `apply_patch` on GPT-5)
+		// come back under their wire-level name, which may differ from the
+		// harness-internal `name`. Match on either, preferring `name` for
+		// determinism if both somehow collide.
+		tool:
+			tools?.find(t => t.name === toolCall.name) ??
+			tools?.find(t => t.customWireName !== undefined && t.customWireName === toolCall.name),
 		args: toolCall.arguments as Record<string, unknown>,
 		started: false,
 		result: undefined as AgentToolResult<any> | undefined,
