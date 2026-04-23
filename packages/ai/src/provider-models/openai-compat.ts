@@ -1163,7 +1163,35 @@ export interface XiaomiModelManagerConfig {
 export function xiaomiModelManagerOptions(
 	config?: XiaomiModelManagerConfig,
 ): ModelManagerOptions<"anthropic-messages"> {
-	return createSimpleAnthropicProviderOptions("xiaomi", "https://api.xiaomimimo.com/anthropic", config);
+	const apiKey = config?.apiKey;
+	const baseUrl = normalizeAnthropicBaseUrl(config?.baseUrl, "https://api.xiaomimimo.com/anthropic");
+	// Xiaomi hosts chat completions under /anthropic/* but exposes model
+	// discovery at the OpenAI-style /v1/models endpoint on the root host.
+	const discoveryRoot = baseUrl.endsWith("/anthropic") ? baseUrl.slice(0, -"/anthropic".length) : baseUrl;
+	const discoveryBaseUrl = toAnthropicDiscoveryBaseUrl(discoveryRoot);
+	const references = createBundledReferenceMap<"anthropic-messages">("xiaomi");
+	return {
+		providerId: "xiaomi",
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "anthropic-messages",
+					provider: "xiaomi",
+					baseUrl: discoveryBaseUrl,
+					apiKey,
+					filterModel: (_entry, model) => !model.id.includes("-tts"),
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						const model = mapWithBundledReference(entry, defaults, reference);
+						return {
+							...model,
+							name: toModelName(entry.display_name, model.name),
+							baseUrl,
+						};
+					},
+				}),
+		}),
+	};
 }
 
 // ---------------------------------------------------------------------------
