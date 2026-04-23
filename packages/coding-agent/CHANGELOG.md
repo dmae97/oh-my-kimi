@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Fixed diagnostics rendering to replace tabs before TUI output, preventing compiler messages from breaking tree alignment.
 - Fixed compiled `omp` binaries to ignore project-local `bunfig.toml` and `.env` autoloading at startup, preventing unrelated project config from crashing or preloading code into the CLI
 - Fixed edit tool diff and replace operations to report missing-file failures as `File not found: <path>` errors instead of raw filesystem ENOENT errors
 - Fixed `local://` URL path leak on Linux where `//` collapsing to `/` produced `local:/path` forms that bypassed the internal protocol handler and leaked as filesystem paths, breaking plan mode file resolution

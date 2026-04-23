@@ -212,6 +212,10 @@ interface ParsedDiagnostic {
 	code?: string;
 }
 
+function sanitizeDiagnosticDisplayText(text: string): string {
+	return replaceTabs(text);
+}
+
 function getSeverityRank(severity: ParsedDiagnostic["severity"]): number {
 	switch (severity) {
 		case "error":
@@ -229,13 +233,13 @@ function parseDiagnosticMessage(msg: string): ParsedDiagnostic | null {
 	const match = msg.match(/^(.+?):(\d+):(\d+)\s+\[(\w+)\]\s+(?:\[([^\]]+)\]\s+)?(.+?)(?:\s+\(([^)]+)\))?$/);
 	if (!match) return null;
 	return {
-		filePath: match[1],
+		filePath: sanitizeDiagnosticDisplayText(match[1]),
 		line: parseInt(match[2], 10),
 		col: parseInt(match[3], 10),
 		severity: match[4] as ParsedDiagnostic["severity"],
-		source: match[5],
-		message: match[6],
-		code: match[7],
+		source: match[5] ? sanitizeDiagnosticDisplayText(match[5]) : undefined,
+		message: sanitizeDiagnosticDisplayText(match[6]),
+		code: match[7] ? sanitizeDiagnosticDisplayText(match[7]) : undefined,
 	};
 }
 
@@ -257,7 +261,7 @@ export function formatDiagnostics(
 			existing.push(parsed);
 			byFile.set(parsed.filePath, existing);
 		} else {
-			unparsed.push(msg);
+			unparsed.push(sanitizeDiagnosticDisplayText(msg));
 		}
 	}
 
@@ -274,7 +278,8 @@ export function formatDiagnostics(
 	const headerIcon = diag.errored
 		? theme.styledSymbol("status.error", "error")
 		: theme.styledSymbol("status.warning", "warning");
-	let output = `\n\n${headerIcon} ${theme.fg("toolTitle", "Diagnostics")} ${theme.fg("dim", `(${diag.summary})`)}`;
+	const summary = sanitizeDiagnosticDisplayText(diag.summary);
+	let output = `\n\n${headerIcon} ${theme.fg("toolTitle", "Diagnostics")} ${theme.fg("dim", `(${summary})`)}`;
 
 	const maxDiags = expanded ? diag.messages.length : 5;
 	let diagsShown = 0;

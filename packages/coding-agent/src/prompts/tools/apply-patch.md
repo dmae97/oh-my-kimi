@@ -8,7 +8,7 @@ Your patch language is a stripped‑down, file‑oriented diff format designed t
 *** End Patch
 
 Within that envelope, you get a sequence of file operations.
-You MUST include a header to specify the action you are taking.
+You **MUST** include a header to specify the action you are taking.
 Each operation starts with one of three headers:
 
 *** Add File: <path> - create a new file. Every following line is a + line (the initial contents).
@@ -27,7 +27,6 @@ For instructions on [context_before] and [context_after]:
 - [old_code]
 + [new_code]
 [3 lines of post-context]
-
 - If a code block is repeated so many times in a class or function such that even a single `@@` statement and 3 lines of context cannot uniquely identify the snippet of code, you can use multiple `@@` statements to jump to the right context. For instance:
 
 @@ class BaseClass
@@ -63,7 +62,6 @@ A full patch can combine several operations:
 *** End Patch
 
 It is important to remember:
-
 - You must include a header with your intended action (Add/Delete/Update)
 - You must prefix new lines with `+` even when creating a new file
 - File references can only be relative, NEVER ABSOLUTE.

@@ -263,6 +263,30 @@ describe("lsp regressions", () => {
 		expect(resultText).not.toContain("\t");
 	});
 
+	it("sanitizes tabs in rendered diagnostic output", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const renderOptions: RenderResultOptions = { expanded: false, isPartial: false };
+
+		const result = renderResult(
+			{
+				content: [
+					{
+						type: "text",
+						text: "Diagnostics: 1 error(s)\nsrc/example.go:183:41 [error] [compiler] too many\targuments in call (WrongArgCount)",
+					},
+				],
+			},
+			renderOptions,
+			uiTheme,
+		);
+
+		const resultText = sanitizeText(result.render(120).join("\n"));
+		expect(resultText).not.toContain("\t");
+		expect(resultText.replace(/\s+/g, " ")).toContain("too many arguments in call");
+	});
+
 	it("does not reuse stale file diagnostics after another URI publishes", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-stale-diags-");
 		try {

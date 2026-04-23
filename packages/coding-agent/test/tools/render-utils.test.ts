@@ -1,7 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import { dedupeParseErrors, formatParseErrors, formatScreenshot } from "@oh-my-pi/pi-coding-agent/tools/render-utils";
+import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import {
+	dedupeParseErrors,
+	formatDiagnostics,
+	formatParseErrors,
+	formatScreenshot,
+} from "@oh-my-pi/pi-coding-agent/tools/render-utils";
 
 describe("parse error formatting", () => {
 	it("deduplicates parse errors while preserving order", () => {
@@ -140,5 +146,31 @@ describe("formatScreenshot", () => {
 		expect(lines).toContain(
 			"[Image: original 1600x1200, displayed at 800x600. Multiply coordinates by 2.00 to map to original image.]",
 		);
+	});
+});
+
+describe("formatDiagnostics", () => {
+	it("replaces tabs in rendered diagnostic text", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+
+		const formatted = formatDiagnostics(
+			{
+				errored: true,
+				summary: "1\terror(s)",
+				messages: [
+					"src/example.go:183:41 [error] [compiler] too many\targuments in call (WrongArgCount)",
+					"\tunparsed diagnostic\tmessage",
+				],
+			},
+			true,
+			theme!,
+			() => "go",
+		);
+
+		expect(formatted).not.toContain("\t");
+		expect(formatted.replace(/\s+/g, " ")).toContain("too many arguments in call");
+		expect(formatted.replace(/\s+/g, " ")).toContain("unparsed diagnostic message");
+		expect(formatted.replace(/\s+/g, " ")).toContain("1 error(s)");
 	});
 });
