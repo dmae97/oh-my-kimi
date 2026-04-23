@@ -1357,9 +1357,13 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 						// The OpenAI-compatible root-level `context_length` field mirrors the
 						// total window (e.g. 400k for gpt-5.4), so Copilot's max_prompt_tokens
 						// (the true prompt budget) must take precedence whenever it is present.
+						const contextWindowFallback = toPositiveNumber(
+							entry.context_length,
+							reference?.contextWindow ?? defaults.contextWindow,
+						);
 						const contextWindow = toPositiveNumber(
 							copilotLimits.maxPromptTokens,
-							toPositiveNumber(entry.context_length, reference?.contextWindow ?? defaults.contextWindow),
+							reference ? Math.min(contextWindowFallback, reference.contextWindow) : contextWindowFallback,
 						);
 						const maxTokens = toPositiveNumber(
 							entry.max_completion_tokens,

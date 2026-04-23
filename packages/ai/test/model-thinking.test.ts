@@ -259,7 +259,7 @@ describe("generated model policies", () => {
 		expect(models[3]?.priority).toBe(1);
 	});
 
-	it("does not special-case Copilot Opus 4.6 generated limits", () => {
+	it("normalizes Copilot generated fallback limits", () => {
 		const models: Model<Api>[] = [
 			{
 				...createModel({
@@ -267,8 +267,26 @@ describe("generated model policies", () => {
 					api: "anthropic-messages",
 					provider: "github-copilot",
 				}),
-				contextWindow: 168000,
-				maxTokens: 32000,
+				contextWindow: 144000,
+				maxTokens: 64000,
+			},
+			{
+				...createModel({
+					id: "gpt-5.4-mini",
+					api: "openai-responses",
+					provider: "github-copilot",
+				}),
+				contextWindow: 400000,
+				maxTokens: 128000,
+			},
+			{
+				...createModel({
+					id: "grok-code-fast-1",
+					api: "openai-completions",
+					provider: "github-copilot",
+				}),
+				contextWindow: 128000,
+				maxTokens: 64000,
 			},
 		];
 
@@ -276,6 +294,10 @@ describe("generated model policies", () => {
 
 		expect(models[0]?.contextWindow).toBe(168000);
 		expect(models[0]?.maxTokens).toBe(32000);
+		expect(models[1]?.contextWindow).toBe(272000);
+		expect(models[1]?.maxTokens).toBe(128000);
+		expect(models[2]?.contextWindow).toBe(192000);
+		expect(models[2]?.maxTokens).toBe(64000);
 	});
 
 	it("links spark variants to their base models", () => {
