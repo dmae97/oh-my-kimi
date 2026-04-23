@@ -407,10 +407,8 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	): Promise<AgentToolResult<AskToolDetails>> {
 		// Headless fallback
 		if (!context?.hasUI || !context.ui) {
-			return {
-				content: [{ type: "text" as const, text: "Error: User prompt requires interactive mode" }],
-				details: {},
-			};
+			context?.abort();
+			throw new ToolAbortError("Ask tool requires interactive mode");
 		}
 
 		const extensionUi = context.ui;
