@@ -655,16 +655,6 @@ async fn run_shell_command(
 	} else {
 		minimizer::engine::MinimizerMode::None
 	};
-	let marker_state = if matches!(minimizer_mode, minimizer::engine::MinimizerMode::MarkedCommands)
-	{
-		Some(Arc::new(minimizer::markers::CommandMarkerState::new()))
-	} else {
-		None
-	};
-	if let Some(marker_state) = marker_state.as_ref() {
-		let marker: Arc<dyn brush_core::ExternalCommandOutputMarker> = marker_state.clone();
-		params.set_command_output_marker(marker);
-	}
 	let should_minimize = !matches!(minimizer_mode, minimizer::engine::MinimizerMode::None);
 	let max_capture_bytes = if let Some(config) = options.minimizer.as_ref() {
 		config.max_capture_bytes as usize
@@ -779,46 +769,27 @@ async fn run_shell_command(
 	let mut minimized_out: Option<MinimizerResult> = None;
 	if let Some(OutputRead::Buffered(output)) = reader_output
 		&& let Some(config) = options.minimizer.as_ref()
+		&& !output.exceeded
 	{
-		if output.exceeded {
-			// Exceeded captures still flow through the raw stream already. Only
-			// surface a replacement when we actually need to strip markers.
-			if let Some(marker_state) = marker_state.as_ref() {
-				let stripped = minimizer::engine::strip_markers(&output.text, marker_state);
-				if stripped != output.text {
-					let input_bytes = u32::try_from(output.text.len()).unwrap_or(u32::MAX);
-					let output_bytes = u32::try_from(stripped.len()).unwrap_or(u32::MAX);
-					minimized_out = Some(MinimizerResult {
-						filter: "marker-strip".to_string(),
-						text: stripped,
-						original_text: output.text,
-						input_bytes,
-						output_bytes,
-					});
-				}
-			}
-		} else {
-			let minimized = match (minimizer_mode, marker_state.as_ref()) {
-				(minimizer::engine::MinimizerMode::WholeCommand, _) => {
-					minimizer::apply(&options.command, &output.text, exit_code(&result), config)
-				},
-				(minimizer::engine::MinimizerMode::MarkedCommands, Some(marker_state)) => {
-					minimizer::engine::apply_marked(&output.text, config, marker_state)
-				},
-				_ => minimizer::MinimizerOutput::passthrough(&output.text),
-			};
-			if minimized.changed
-				&& let Some(original) = minimized.original_text
-			{
-				let output_bytes = u32::try_from(minimized.text.len()).unwrap_or(u32::MAX);
-				minimized_out = Some(MinimizerResult {
-					filter: minimized.filter.to_string(),
-					text: minimized.text,
-					original_text: original,
-					input_bytes: u32::try_from(minimized.input_bytes).unwrap_or(u32::MAX),
-					output_bytes,
-				});
-			}
+		let minimized = match minimizer_mode {
+			minimizer::engine::MinimizerMode::WholeCommand => {
+				minimizer::apply(&options.command, &output.text, exit_code(&result), config)
+			},
+			minimizer::engine::MinimizerMode::None => {
+				minimizer::MinimizerOutput::passthrough(&output.text)
+			},
+		};
+		if minimized.changed
+			&& let Some(original) = minimized.original_text
+		{
+			let output_bytes = u32::try_from(minimized.text.len()).unwrap_or(u32::MAX);
+			minimized_out = Some(MinimizerResult {
+				filter: minimized.filter.to_string(),
+				text: minimized.text,
+				original_text: original,
+				input_bytes: u32::try_from(minimized.input_bytes).unwrap_or(u32::MAX),
+				output_bytes,
+			});
 		}
 	}
 	Ok((result, minimized_out))
