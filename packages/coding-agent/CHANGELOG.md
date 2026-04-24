@@ -4,7 +4,6 @@
 
 ### Added
 
-- Added a non-mutating chunk edit `read: true` operation for inspecting chunk content without relying on edit failures or delete previews.
 - Added Markdown pipe-table `row_N` chunk selectors for row-level table edits.
 - Added `resolveToolAlias` export so tool names in CLI and session setup are normalized to canonical names, including mapping legacy `read` references to `open`
 - Added new `open` and `open-chunk` tool prompt documentation pages to describe canonical `open` usage for local files/directories, chunk reads, and URLs
@@ -17,10 +16,9 @@
 - Changed the canonical file/URL reader tool from `read` to `open` across default tool lists and routing, including system prompts, plan mode, cursor handlers, and runtime tool registration
 - Changed runtime and UI handling to render and track `open` tool calls as first-class (with `read` accepted as legacy alias), including ACP mapping, session observers, and streaming message groups
 - Changed chunk edit guidance to document parser-specific region behavior, including TypeScript decorator/JSDoc sibling chunks, Python docstrings as body content, Python opaque nested chunks, Markdown whole-chunk fallbacks, ID volatility, and indentation display differences
-- Changed chunk edit guidance to point agents at `open` as the primary chunk read/discovery operation, with `read: true` documented as a convenience for known selectors.
 - Changed chunk deletion in chunk edit mode to require explicit `delete: true`; `write: null` and bare `{ path }` entries now fail with guidance instead of deleting content.
 - Changed chunk edit validation to reject entries with multiple operation fields instead of choosing one and ignoring the rest.
-- Changed chunk edit validation to reject `write: ""` as an accidental destructive empty replacement; use `read: true` for inspection or `delete: true` for deletion.
+- Changed chunk edit validation to reject `write: ""` as an accidental destructive empty replacement; use the open tool for inspection or `delete: true` for deletion.
 - Changed chunk edit responses to warn when appending or prepending to a container without `~`, since that inserts outside the container rather than inside its body.
 - Changed fetch output logging so URL-fetch artifacts now use `.open.log` naming instead of `.read.log`
 - Changed Bash interception guidance and errors to recommend `open` in place of `read` for cat/head/tail-style commands
@@ -33,6 +31,7 @@
 
 ### Removed
 
+- Removed the chunk edit `read: true` operation; use the open tool to inspect chunks without modifying files.
 - Removed the `replace: { old, new }` chunk edit operation. Use `write` or `insert` for chunk edits instead.
 
 ### Fixed

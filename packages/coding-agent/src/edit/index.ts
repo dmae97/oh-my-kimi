@@ -324,7 +324,7 @@ export class EditTool implements AgentTool<TInput> {
 					}),
 				parameters: chunkEditParamsSchema,
 				invalidParamsMessage:
-					"Invalid edit parameters for chunk mode. Expected `{ edits: [{ path: 'file:selector', ...op }, ...] }` with at least one edit. Each edit needs a `path`; supply exactly one of `read: true`, `write: 'content'`, `insert: { loc, body }`, or `delete: true`.",
+					"Invalid edit parameters for chunk mode. Expected `{ edits: [{ path: 'file:selector', ...op }, ...] }` with at least one edit. Each edit needs a `path`; supply exactly one of `write: 'content'`, `insert: { loc, body }`, or `delete: true`.",
 				validate: isChunkParams,
 				execute: (
 					tool: EditTool,

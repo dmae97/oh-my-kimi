@@ -194,19 +194,6 @@ describe("computeChunkDiff", () => {
 		expect("error" in result).toBe(true);
 	});
 
-	test("returns an empty preview for read-only chunk reads", async () => {
-		const file = path.join(tmpDir, "read.ts");
-		await fs.writeFile(file, "export const x = 1;\n");
-		const result = await computeChunkDiff(
-			{
-				path: "read.ts",
-				edits: [{ path: "read.ts:?", read: true }],
-			},
-			tmpDir,
-		);
-		expect(result).toEqual({ diff: "", firstChangedLine: undefined });
-	});
-
 	test("rejects write:null instead of previewing a delete", async () => {
 		const file = path.join(tmpDir, "null-delete.ts");
 		await fs.writeFile(file, "export const x = 1;\n");

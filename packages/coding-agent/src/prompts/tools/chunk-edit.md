@@ -1,6 +1,5 @@
 Edits files via syntax-aware chunks. Use `read(path="file.ts")` to read and discover chunks before editing.
 - `read` is the canonical read path for chunk source and `sel="?"` tree listings.
-- `read:true` is a non-mutating convenience for an already-known selector.
 - `write` rewrites the entire targeted region — best for most edits.
 - `insert` adds content before/after a chunk.
 - `delete` deletes a targeted chunk and must be explicit.
@@ -10,7 +9,6 @@ Call format: `{"edits": [{"path": "file:chunk#ID~", "write": "new body"}, …]}`
 <rules>
 - **MUST** inspect first with `read`. Never invent chunk paths or IDs. Copy them from the latest `read` output or edit response.
 - `path` format: `file:selector` — e.g. `src/app.ts:fn_foo#ABCD~`. Append `~` for body, `^` for head, or nothing for the whole chunk. Include `#ID` for `write`/`delete`.
-- To inspect a known chunk through this tool, use `{"path":"file:chunk#ID","read":true}`. `read:true` is non-mutating, cannot be mixed with write operations in the same entry, and is not a replacement for `read(path="file", sel="?")` when discovering targets.
 - If the exact chunk path is unclear, run `read(path="file", sel="?")` and copy a selector from that listing.
 {{#if chunkAutoIndent}}
 - Use `\t` for indentation in `content`. Write content at indent-level 0 — the tool re-indents it to match the chunk's position in the file. For example, to replace `~` of a method, write the body starting at column 0:
@@ -51,7 +49,7 @@ You **MUST** use the narrowest region that covers your change. Putting without a
 </critical>
 
 <regions>
-In `read` or `read:true` output, lines marked `^` between the line number and `|` are **head** lines (doc comments, attributes/decorators, signature). Lines without `^` are **body** lines. Use this to decide which region to target:
+In `read` output, lines marked `^` between the line number and `|` are **head** lines (doc comments, attributes/decorators, signature). Lines without `^` are **body** lines. Use this to decide which region to target:
 - `fn_foo#ID~` — **body only (the default choice for most edits).** Head lines (`^`) are preserved automatically — doc comments, attributes, and signature stay untouched. On code leaf chunks, this is rejected because there is no safe body boundary.
 - `fn_foo#ID^` — head only (decorators, attributes, doc comments, signature, opening delimiter). Body stays untouched.
 - `fn_foo#ID` — entire chunk including leading trivia. **You must include doc comments and attributes in `content`; omitting them deletes them.**
@@ -65,11 +63,10 @@ In `read` or `read:true` output, lines marked `^` between the line number and `|
 </regions>
 
 <ops>
-Each edit entry has `path` (`file:selector`) plus **exactly one** operation field — `read`, `write`, `insert`, or `delete`. Never set more than one on the same entry. `write:null`, `write:""`, and bare `{path}` entries are rejected; they do not read or delete.
+Each edit entry has `path` (`file:selector`) plus **exactly one** operation field — `write`, `insert`, or `delete`. Never set more than one on the same entry. `write:null`, `write:""`, and bare `{path}` entries are rejected; they do not delete.
 
 |fields|path (selector part)|effect|
 |---|---|---|
-|`read: true`|`file`, `file:?`, `file:chunk#ID`, `file:chunk#ID~`, or `file:chunk#ID^`|return chunk source without modifying the file|
 |`write: "content"`|`file:chunk#ID`, `file:chunk#ID~`, or `file:chunk#ID^`|write complete new content to the region|
 |`delete: true`|`file:chunk#ID`|delete the chunk explicitly|
 |`insert: {loc, body}`|`file:chunk` or `file:chunk~`|insert before/after the chunk (`loc`: `"prepend"` or `"append"`)|

@@ -198,12 +198,6 @@ export async function computeChunkDiff(
 		options?.signal?.throwIfAborted?.();
 		const { filePath } = parseChunkEditPath(input.path);
 		if (!filePath) return { error: "chunk edit path is empty" };
-		if (input.edits.every(isChunkReadOperation)) {
-			return { diff: "", firstChangedLine: undefined };
-		}
-		if (input.edits.some(hasChunkReadFlag)) {
-			return { error: "`read: true` cannot be mixed with mutating chunk edit operations." };
-		}
 		const { resolvedPath, rawContent, language } = await loadChunkSource({ cwd, path: filePath });
 		options?.signal?.throwIfAborted?.();
 		const { operations } = normalizeChunkEditOperations(input.edits);
@@ -558,12 +552,6 @@ export const chunkToolEditSchema = Type.Object(
 		path: Type.String({
 			description: "File path with chunk selector. Examples: 'src/app.ts:fn_foo#ABCD~', 'src/app.ts:class_Bar'.",
 		}),
-		read: Type.Optional(
-			Type.Boolean({
-				description:
-					"Return a known chunk selector without modifying the file. Prefer the open tool for normal chunk reads and discovery.",
-			}),
-		),
 		write: Type.Optional(
 			Type.Union([Type.String(), Type.Null()], {
 				description:
@@ -676,27 +664,17 @@ function autoCorrectBodyIndent(content: string, index: number): { content: strin
 
 function chunkEditOperationFields(edit: ChunkToolEdit): string[] {
 	const fields: string[] = [];
-	if (edit.read === true) fields.push("read");
 	if (edit.write !== undefined) fields.push("write");
 	if (edit.insert != null) fields.push("insert");
 	if (edit.delete === true) fields.push("delete");
 	return fields;
 }
 
-function hasChunkReadFlag(edit: ChunkToolEdit): boolean {
-	return edit.read === true;
-}
-
-function isChunkReadOperation(edit: ChunkToolEdit): boolean {
-	const fields = chunkEditOperationFields(edit);
-	return fields.length === 1 && fields[0] === "read";
-}
-
 function assertSingleChunkOperation(edit: ChunkToolEdit, index: number): string {
 	const fields = chunkEditOperationFields(edit);
 	if (fields.length === 0) {
 		throw new Error(
-			`Edit ${index + 1}: no operation specified. Use open to inspect chunks, read:true only for a known selector, write:"..." to replace, insert:{loc,body}, or delete:true to delete.`,
+			`Edit ${index + 1}: no operation specified. Use write:"..." to replace, insert:{loc,body} to insert, or delete:true to delete. Use the open tool to inspect chunks.`,
 		);
 	}
 	if (fields.length > 1) {
@@ -715,13 +693,10 @@ function normalizeChunkEditOperations(edits: ChunkToolEdit[]): {
 	const operations = edits.map((edit, index): ChunkEditOperation => {
 		const { selector } = parseChunkEditPath(edit.path);
 		const operation = assertSingleChunkOperation(edit, index);
-		if (operation === "read") {
-			throw new Error("`read: true` is non-mutating and cannot be normalized as an edit operation.");
-		}
 		if (operation === "write") {
 			if (edit.write === null) {
 				throw new Error(
-					`Edit ${index + 1}: write:null no longer deletes chunks. Use delete:true to delete, or open/read:true to inspect chunk content without modifying the file.`,
+					`Edit ${index + 1}: write:null no longer deletes chunks. Use delete:true to delete, or open the chunk to inspect its content without modifying the file.`,
 				);
 			}
 			if (typeof edit.write !== "string") {
@@ -805,58 +780,15 @@ async function writeChunkResult(params: {
 	};
 }
 
-async function readChunkResult(params: {
-	session: ToolSession;
-	resolvedPath: string;
-	sourceExists: boolean;
-	chunkLanguage: string | undefined;
-	edits: ChunkToolEdit[];
-}): Promise<AgentToolResult<EditToolDetails, typeof chunkEditParamsSchema>> {
-	const { session, resolvedPath, sourceExists, chunkLanguage, edits } = params;
-	if (!sourceExists) {
-		throw new Error(`File does not exist: ${resolvedPath}. Cannot read chunk selectors on a non-existent file.`);
-	}
-
-	const texts: string[] = [];
-	for (const edit of edits) {
-		const { selector } = parseChunkEditPath(edit.path);
-		const readPath = selector ? `${resolvedPath}:${selector}` : resolvedPath;
-		const result = await formatChunkedRead({
-			filePath: resolvedPath,
-			readPath,
-			cwd: session.cwd,
-			language: chunkLanguage,
-			anchorStyle: resolveAnchorStyle(session.settings),
-		});
-		texts.push(result.text);
-	}
-
-	return {
-		content: [{ type: "text", text: texts.join("\n\n") }],
-		details: {
-			diff: "",
-			meta: outputMeta().get(),
-		},
-	};
-}
-
 export async function executeChunkSingle(
 	options: ExecuteChunkSingleOptions,
 ): Promise<AgentToolResult<EditToolDetails, typeof chunkEditParamsSchema>> {
 	const { session, path, edits, signal, batchRequest, writethrough, beginDeferredDiagnosticsForPath } = options;
-	const readOnly = edits.every(isChunkReadOperation);
-	if (edits.some(hasChunkReadFlag) && !readOnly) {
-		throw new Error("`read: true` cannot be mixed with mutating chunk edit operations.");
-	}
 	const { resolvedPath, sourceFile, sourceExists, rawContent, chunkLanguage } = await resolveChunkSourceContext(
 		session,
 		path,
-		{ intent: readOnly ? "read" : "write" },
+		{ intent: "write" },
 	);
-	if (readOnly) {
-		return readChunkResult({ session, resolvedPath, sourceExists, chunkLanguage, edits });
-	}
-
 	const parentDir = nodePath.dirname(resolvedPath);
 	if (parentDir && parentDir !== ".") {
 		await fs.mkdir(parentDir, { recursive: true });
