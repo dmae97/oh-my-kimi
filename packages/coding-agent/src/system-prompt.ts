@@ -561,7 +561,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			toolNames = Array.from(tools.keys());
 		} else {
 			// Use defaults
-			toolNames = ["read", "bash", "python", "edit", "write"]; // TODO: Why?
+			toolNames = ["open", "bash", "python", "edit", "write"]; // TODO: Why?
 		}
 	}
 
@@ -573,7 +573,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	}));
 
 	// Filter skills to only include those with read tool
-	const hasRead = tools?.has("read");
+	const hasRead = tools?.has("open");
 	const filteredSkills = hasRead ? skills : [];
 
 	const effectiveSystemPromptCustomization = dedupePromptSource(systemPromptCustomization, [

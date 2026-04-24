@@ -342,7 +342,8 @@ export class SessionObserverOverlayComponent extends Container {
 	#formatToolArgs(toolName: string, args: Record<string, unknown>): string {
 		// Show the most relevant arg for common tools
 		switch (toolName) {
-			case "read":
+			case "read": // legacy alias
+			case "open":
 				return args.path ? `path: ${args.path}` : "";
 			case "write":
 				return args.path ? `path: ${args.path}` : "";

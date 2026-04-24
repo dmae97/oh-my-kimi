@@ -215,17 +215,17 @@ describe("parseArgs", () => {
 		test("parses --no-tools with explicit --tools flags", () => {
 			const result = parseArgs(["--no-tools", "--tools", "read,bash"]);
 			expect(result.noTools).toBe(true);
-			expect(result.tools).toEqual(["read", "bash"]);
+			expect(result.tools).toEqual(["open", "bash"]);
 		});
 
 		test("lowercases tool names passed to --tools", () => {
 			const result = parseArgs(["--tools", "Read,Grep"]);
-			expect(result.tools).toEqual(["read", "grep"]);
+			expect(result.tools).toEqual(["open", "grep"]);
 		});
 
 		test("parses --tools=value with equals syntax", () => {
 			const result = parseArgs(["--tools=read,bash"]);
-			expect(result.tools).toEqual(["read", "bash"]);
+			expect(result.tools).toEqual(["open", "bash"]);
 		});
 
 		test("parses --tools=value with single tool", () => {

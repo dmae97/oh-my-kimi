@@ -6,6 +6,7 @@
  * the specialized tools instead.
  */
 import { type BashInterceptorRule, DEFAULT_BASH_INTERCEPTOR_RULES } from "../config/settings-schema";
+import { resolveToolAlias } from "./index";
 
 export interface InterceptionResult {
 	/** If true, the bash command should be blocked */
@@ -50,7 +51,7 @@ export function checkBashInterception(
 
 	for (const { rule, regex } of compiled) {
 		// Only block if the suggested tool is actually available
-		if (!availableTools.includes(rule.tool)) {
+		if (!availableTools.some(name => resolveToolAlias(name) === rule.tool)) {
 			continue;
 		}
 

@@ -21,8 +21,8 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { parseInternalUrl } from "../internal-urls/parse";
 import type { InternalUrl } from "../internal-urls/types";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
-import readDescription from "../prompts/tools/read.md" with { type: "text" };
-import readChunkDescription from "../prompts/tools/read-chunk.md" with { type: "text" };
+import openDescription from "../prompts/tools/open.md" with { type: "text" };
+import openChunkDescription from "../prompts/tools/open-chunk.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import {
 	DEFAULT_MAX_BYTES,
@@ -71,7 +71,7 @@ import {
 import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const PROSE_LANGUAGES = new Set(["markdown", "text", "log", "asciidoc", "restructuredtext"]);
+const PROSE_LANGUAGES = new Set(["text", "log", "restructuredtext"]);
 
 function isProseLanguage(language: string | undefined): boolean {
 	return language !== undefined && PROSE_LANGUAGES.has(language);
@@ -368,15 +368,15 @@ function prependSuffixResolutionNotice(text: string, suffixResolution?: { from: 
 	return text ? `${notice}\n${text}` : notice;
 }
 
-const readSchema = Type.Object({
+const openSchema = Type.Object({
 	path: Type.String({ description: "Path or URL to read" }),
 	sel: Type.Optional(Type.String({ description: "Selector: chunk path, L10-L50, or raw" })),
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds", default: 20 })),
 });
 
-export type ReadToolInput = Static<typeof readSchema>;
+export type OpenToolInput = Static<typeof openSchema>;
 
-export interface ReadToolDetails {
+export interface OpenToolDetails {
 	kind?: "file" | "url";
 	truncation?: TruncationResult;
 	isDirectory?: boolean;
@@ -391,7 +391,7 @@ export interface ReadToolDetails {
 	meta?: OutputMeta;
 }
 
-type ReadParams = ReadToolInput;
+type OpenParams = OpenToolInput;
 
 /** Parsed representation of the `sel` parameter. */
 type ParsedSelector =
@@ -465,11 +465,11 @@ function parseSqliteSelectorInput(selector: string | undefined): { subPath: stri
  * Reads files with support for images, converted documents (via markit), and text.
  * Directories return a formatted listing with modification times.
  */
-export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
-	readonly name = "read";
+export class OpenTool implements AgentTool<typeof openSchema, OpenToolDetails> {
+	readonly name = "open";
 	readonly label = "Read";
 	readonly description: string;
-	readonly parameters = readSchema;
+	readonly parameters = openSchema;
 	readonly nonAbortable = true;
 	readonly strict = true;
 
@@ -487,11 +487,11 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		this.#inspectImageEnabled = session.settings.get("inspect_image.enabled");
 		this.description =
 			resolveEditMode(session) === "chunk"
-				? prompt.render(readChunkDescription, {
+				? prompt.render(openChunkDescription, {
 						anchorStyle: resolveAnchorStyle(session.settings),
 						chunkAutoIndent: resolveChunkAutoIndent(),
 					})
-				: prompt.render(readDescription, {
+				: prompt.render(openDescription, {
 						DEFAULT_LIMIT: String(this.#defaultLimit),
 						DEFAULT_MAX_LINES: String(DEFAULT_MAX_LINES),
 						IS_HASHLINE_MODE: displayMode.hashLines,
@@ -593,14 +593,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		offset: number | undefined,
 		limit: number | undefined,
 		options: {
-			details?: ReadToolDetails;
+			details?: OpenToolDetails;
 			sourcePath?: string;
 			sourceUrl?: string;
 			sourceInternal?: string;
 			entityLabel: string;
 			ignoreResultLimits?: boolean;
 		},
-	): AgentToolResult<ReadToolDetails> {
+	): AgentToolResult<OpenToolDetails> {
 		const displayMode = resolveFileDisplayMode(this.session);
 		const details = options.details ?? {};
 		const allLines = text.split("\n");
@@ -701,9 +701,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		archivePath: string,
 		subPath: string,
 		limit: number | undefined,
-		details: ReadToolDetails,
+		details: OpenToolDetails,
 		signal?: AbortSignal,
-	): Promise<AgentToolResult<ReadToolDetails>> {
+	): Promise<AgentToolResult<OpenToolDetails>> {
 		const DEFAULT_LIMIT = 500;
 		const effectiveLimit = limit ?? DEFAULT_LIMIT;
 		const entries = archive.listDirectory(subPath);
@@ -727,8 +727,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const output = results.length > 0 ? results.join("\n") : "(empty archive directory)";
 		const text = prependSuffixResolutionNotice(output, details.suffixResolution);
 		const truncation = truncateHead(text, { maxLines: Number.MAX_SAFE_INTEGER });
-		const directoryDetails: ReadToolDetails = { ...details, isDirectory: true };
-		const resultBuilder = toolResult<ReadToolDetails>(directoryDetails).text(truncation.content);
+		const directoryDetails: OpenToolDetails = { ...details, isDirectory: true };
+		const resultBuilder = toolResult<OpenToolDetails>(directoryDetails).text(truncation.content);
 		resultBuilder.sourcePath(archivePath).limits({ resultLimit: limitMeta.resultLimit?.reached });
 		if (truncation.truncated) {
 			directoryDetails.truncation = truncation;
@@ -743,12 +743,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		limit: number | undefined,
 		resolvedArchivePath: ResolvedArchiveReadPath,
 		signal?: AbortSignal,
-	): Promise<AgentToolResult<ReadToolDetails>> {
+	): Promise<AgentToolResult<OpenToolDetails>> {
 		throwIfAborted(signal);
 		const archive = await openArchive(resolvedArchivePath.absolutePath);
 		throwIfAborted(signal);
 
-		const details: ReadToolDetails = {
+		const details: OpenToolDetails = {
 			resolvedPath: resolvedArchivePath.absolutePath,
 			suffixResolution: resolvedArchivePath.suffixResolution,
 		};
@@ -772,7 +772,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const entry = await archive.readFile(resolvedArchivePath.archiveSubPath);
 		const text = decodeUtf8Text(entry.bytes);
 		if (text === null) {
-			return toolResult<ReadToolDetails>(details)
+			return toolResult<OpenToolDetails>(details)
 				.text(
 					prependSuffixResolutionNotice(
 						`[Cannot read binary archive entry '${entry.path}' (${formatBytes(entry.size)})]`,
@@ -799,14 +799,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		sel: string | undefined,
 		resolvedSqlitePath: ResolvedSqliteReadPath,
 		signal?: AbortSignal,
-	): Promise<AgentToolResult<ReadToolDetails>> {
+	): Promise<AgentToolResult<OpenToolDetails>> {
 		throwIfAborted(signal);
 
 		const selectorInput = sel
 			? parseSqliteSelectorInput(sel)
 			: { subPath: resolvedSqlitePath.sqliteSubPath, queryString: resolvedSqlitePath.queryString };
 		const selector = parseSqliteSelector(selectorInput.subPath, selectorInput.queryString);
-		const details: ReadToolDetails = {
+		const details: OpenToolDetails = {
 			resolvedPath: resolvedSqlitePath.absolutePath,
 			suffixResolution: resolvedSqlitePath.suffixResolution,
 		};
@@ -826,7 +826,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					);
 					const truncation = truncateHead(output, { maxLines: Number.MAX_SAFE_INTEGER });
 					details.truncation = truncation.truncated ? truncation : undefined;
-					const resultBuilder = toolResult<ReadToolDetails>(details)
+					const resultBuilder = toolResult<OpenToolDetails>(details)
 						.text(truncation.content)
 						.sourcePath(resolvedSqlitePath.absolutePath)
 						.limits({ resultLimit: listLimit.meta.resultLimit?.reached });
@@ -845,7 +845,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						const remaining = sampleRows.totalCount - sampleRows.rows.length;
 						output += `\n[${remaining} more rows; use sel="${selector.table}?limit=20&offset=${sampleRows.rows.length}" to continue]`;
 					}
-					return toolResult<ReadToolDetails>(details)
+					return toolResult<OpenToolDetails>(details)
 						.text(prependSuffixResolutionNotice(output, resolvedSqlitePath.suffixResolution))
 						.sourcePath(resolvedSqlitePath.absolutePath)
 						.done();
@@ -857,7 +857,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							? getRowByKey(db, selector.table, lookup, selector.key)
 							: getRowByRowId(db, selector.table, selector.key);
 					if (!row) {
-						return toolResult<ReadToolDetails>(details)
+						return toolResult<OpenToolDetails>(details)
 							.text(
 								prependSuffixResolutionNotice(
 									`No row found in table '${selector.table}' for key '${selector.key}'.`,
@@ -867,14 +867,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							.sourcePath(resolvedSqlitePath.absolutePath)
 							.done();
 					}
-					return toolResult<ReadToolDetails>(details)
+					return toolResult<OpenToolDetails>(details)
 						.text(prependSuffixResolutionNotice(renderRow(row), resolvedSqlitePath.suffixResolution))
 						.sourcePath(resolvedSqlitePath.absolutePath)
 						.done();
 				}
 				case "query": {
 					const page = queryRows(db, selector.table, selector);
-					return toolResult<ReadToolDetails>(details)
+					return toolResult<OpenToolDetails>(details)
 						.text(
 							prependSuffixResolutionNotice(
 								renderTable(page.columns, page.rows, {
@@ -892,7 +892,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				}
 				case "raw": {
 					const result = executeReadQuery(db, selector.sql);
-					return toolResult<ReadToolDetails>(details)
+					return toolResult<OpenToolDetails>(details)
 						.text(
 							prependSuffixResolutionNotice(
 								renderTable(result.columns, result.rows, {
@@ -923,11 +923,11 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 	async execute(
 		_toolCallId: string,
-		params: ReadParams,
+		params: OpenParams,
 		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<ReadToolDetails>,
+		_onUpdate?: AgentToolUpdateCallback<OpenToolDetails>,
 		_toolContext?: AgentToolContext,
-	): Promise<AgentToolResult<ReadToolDetails>> {
+	): Promise<AgentToolResult<OpenToolDetails>> {
 		let { path: readPath, sel, timeout } = params;
 		if (readPath.startsWith("file://")) {
 			readPath = expandPath(readPath);
@@ -1071,7 +1071,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (suffixResolution) {
 				text = prependSuffixResolutionNotice(text, suffixResolution);
 			}
-			return toolResult<ReadToolDetails>({
+			return toolResult<OpenToolDetails>({
 				resolvedPath: absolutePath,
 				suffixResolution,
 				chunk: chunkResult.chunk,
@@ -1083,7 +1083,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		// Read the file based on type
 		let content: Array<TextContent | ImageContent>;
-		let details: ReadToolDetails = {};
+		let details: OpenToolDetails = {};
 		let sourcePath: string | undefined;
 		let truncationInfo:
 			| { result: TruncationResult; options: { direction: "head"; startLine?: number; totalFileLines?: number } }
@@ -1178,7 +1178,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				if (suffixResolution) {
 					text = prependSuffixResolutionNotice(text, suffixResolution);
 				}
-				return toolResult<ReadToolDetails>({
+				return toolResult<OpenToolDetails>({
 					resolvedPath: absolutePath,
 					suffixResolution,
 					chunk: chunkResult.chunk,
@@ -1222,7 +1222,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					totalFileLines === 0
 						? "The file is empty."
 						: `Use sel=L1 to read from the start, or sel=L${totalFileLines} to read the last line.`;
-				return toolResult<ReadToolDetails>({ resolvedPath: absolutePath, suffixResolution })
+				return toolResult<OpenToolDetails>({ resolvedPath: absolutePath, suffixResolution })
 					.text(`Line ${startLineDisplay} is beyond end of file (${totalFileLines} lines total). ${suggestion}`)
 					.done();
 			}
@@ -1328,7 +1328,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	 * Handle internal URLs (agent://, artifact://, memory://, skill://, rule://, local://, mcp://).
 	 * Supports pagination via offset/limit but rejects them when query extraction is used.
 	 */
-	async #handleInternalUrl(url: string, offset?: number, limit?: number): Promise<AgentToolResult<ReadToolDetails>> {
+	async #handleInternalUrl(url: string, offset?: number, limit?: number): Promise<AgentToolResult<OpenToolDetails>> {
 		const internalRouter = this.session.internalRouter!;
 
 		// Check if URL has query extraction (agent:// only).
@@ -1355,7 +1355,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		// Resolve the internal URL
 		const resource = await internalRouter.resolve(url);
-		const details: ReadToolDetails = { resolvedPath: resource.sourcePath };
+		const details: OpenToolDetails = { resolvedPath: resource.sourcePath };
 
 		// If extraction was used, return directly (no pagination)
 		if (hasExtraction) {
@@ -1376,7 +1376,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		absolutePath: string,
 		limit: number | undefined,
 		signal?: AbortSignal,
-	): Promise<AgentToolResult<ReadToolDetails>> {
+	): Promise<AgentToolResult<OpenToolDetails>> {
 		const DEFAULT_LIMIT = 500;
 		const effectiveLimit = limit ?? DEFAULT_LIMIT;
 
@@ -1425,7 +1425,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const output = results.join("\n");
 		const truncation = truncateHead(output, { maxLines: Number.MAX_SAFE_INTEGER });
 
-		const details: ReadToolDetails = {
+		const details: OpenToolDetails = {
 			isDirectory: true,
 		};
 
@@ -1445,7 +1445,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 // TUI Renderer
 // =============================================================================
 
-interface ReadRenderArgs {
+interface OpenRenderArgs {
 	path?: string;
 	file_path?: string;
 	sel?: string;
@@ -1456,8 +1456,8 @@ interface ReadRenderArgs {
 	raw?: boolean;
 }
 
-export const readToolRenderer = {
-	renderCall(args: ReadRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+export const openToolRenderer = {
+	renderCall(args: OpenRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		if (isReadableUrlPath(args.file_path || args.path || "")) {
 			return renderReadUrlCall(args, _options, uiTheme);
 		}
@@ -1479,10 +1479,10 @@ export const readToolRenderer = {
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: ReadToolDetails },
+		result: { content: Array<{ type: string; text?: string }>; details?: OpenToolDetails },
 		_options: RenderResultOptions,
 		uiTheme: Theme,
-		args?: ReadRenderArgs,
+		args?: OpenRenderArgs,
 	): Component {
 		const urlDetails = result.details as ReadUrlToolDetails | undefined;
 		if (urlDetails?.kind === "url" || isReadableUrlPath(args?.file_path || args?.path || "")) {

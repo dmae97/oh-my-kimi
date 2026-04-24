@@ -1,15 +1,21 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added `resolveToolAlias` export so tool names in CLI and session setup are normalized to canonical names, including mapping legacy `read` references to `open`
+- Added new `open` and `open-chunk` tool prompt documentation pages to describe canonical `open` usage for local files/directories, chunk reads, and URLs
 - Added full-output retrieval metadata to minimized shell command output by appending an `artifact://<id>` footer with byte counts, allowing users to open the original unminimized command output
 - Added streaming preview API exports from the package (`resolveEditMode`, `EDIT_MODE_STRATEGIES`, and chunk preview helpers) so editors can reuse mode-aware edit preview logic programmatically
 - Added `shellMinimizer` configuration options (`enabled`, `settingsPath`, `only`, `except`, and `maxCaptureBytes`) so users can control shell output minimization behavior
 
 ### Changed
 
+- Changed the canonical file/URL reader tool from `read` to `open` across default tool lists and routing, including system prompts, plan mode, cursor handlers, and runtime tool registration
+- Changed runtime and UI handling to render and track `open` tool calls as first-class (with `read` accepted as legacy alias), including ACP mapping, session observers, and streaming message groups
+- Changed fetch output logging so URL-fetch artifacts now use `.open.log` naming instead of `.read.log`
+- Changed Bash interception guidance and errors to recommend `open` in place of `read` for cat/head/tail-style commands
+- Changed exported SDK tool surface to expose `OpenTool` as canonical and keep `ReadTool` as a compatibility alias
 - Changed session list loading to use parallel workers and fixed-size prefix reads per session file, reducing latency when loading many or large sessions
 - Changed edit call rendering to use mode-aware streaming diff previews, including multi-file chunk edit previews grouped by file path while arguments are still streaming
 - Changed shell execution in both interactive and non-interactive modes to route command output through the configured shell output minimizer

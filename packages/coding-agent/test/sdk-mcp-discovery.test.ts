@@ -105,7 +105,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		await session.activateDiscoveredMCPTools(["mcp_slack_post_message"]);
 
 		expect(session.getActiveToolNames()).toEqual(
-			expect.arrayContaining(["read", "search_tool_bm25", "mcp_github_create_issue", "mcp_slack_post_message"]),
+			expect.arrayContaining(["open", "search_tool_bm25", "mcp_github_create_issue", "mcp_slack_post_message"]),
 		);
 		expect(session.getSelectedMCPToolNames()).toEqual(["mcp_github_create_issue", "mcp_slack_post_message"]);
 	});
@@ -127,7 +127,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			toolNames: ["read", "search_tool_bm25"],
+			toolNames: ["open", "search_tool_bm25"],
 			customTools: [
 				createMcpCustomTool("mcp_github_create_issue", "github", "create_issue"),
 				createMcpCustomTool("mcp_slack_post_message", "slack", "post_message"),
@@ -136,7 +136,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		try {
 			expect(session.getSelectedMCPToolNames()).toEqual(["mcp_github_create_issue"]);
 			expect(session.getActiveToolNames()).toEqual(
-				expect.arrayContaining(["read", "search_tool_bm25", "mcp_github_create_issue"]),
+				expect.arrayContaining(["open", "search_tool_bm25", "mcp_github_create_issue"]),
 			);
 			expect(session.getActiveToolNames()).not.toContain("mcp_slack_post_message");
 		} finally {
@@ -158,7 +158,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			toolNames: ["read", "search_tool_bm25"],
+			toolNames: ["open", "search_tool_bm25"],
 			customTools: [createMcpCustomTool("mcp_github_create_issue", "github", "create_issue")],
 		});
 
@@ -185,7 +185,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			toolNames: ["read", "search_tool_bm25"],
+			toolNames: ["open", "search_tool_bm25"],
 			customTools: [
 				createMcpCustomTool("mcp_github_create_issue", "github", "create_issue"),
 				createMcpCustomTool("mcp_slack_post_message", "slack", "post_message"),
@@ -221,7 +221,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			toolNames: ["read", "search_tool_bm25"],
+			toolNames: ["open", "search_tool_bm25"],
 			customTools: [
 				createMcpCustomTool("mcp_github_create_issue", "github", "create_issue"),
 				createMcpCustomTool("mcp_slack_post_message", "slack", "post_message"),
@@ -232,7 +232,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			expect(resumedSession.serviceTier).toBe("priority");
 			expect(resumedSession.getSelectedMCPToolNames()).toEqual(["mcp_slack_post_message"]);
 			expect(resumedSession.getActiveToolNames()).toEqual(
-				expect.arrayContaining(["read", "search_tool_bm25", "mcp_slack_post_message"]),
+				expect.arrayContaining(["open", "search_tool_bm25", "mcp_slack_post_message"]),
 			);
 			expect(resumedSession.systemPrompt).toContain("mcp_slack_post_message");
 			expect(fs.readFileSync(sessionFile!, "utf8")).toBe(persistedBeforeResume);
@@ -274,7 +274,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			toolNames: ["read", "search_tool_bm25"],
+			toolNames: ["open", "search_tool_bm25"],
 			customTools: [
 				createMcpCustomTool("mcp_github_create_issue", "github", "create_issue"),
 				createMcpCustomTool("mcp_slack_post_message", "slack", "post_message"),
@@ -285,7 +285,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			expect(session.serviceTier).toBe("priority");
 			expect(session.getSelectedMCPToolNames()).toEqual(["mcp_github_create_issue"]);
 			expect(session.getActiveToolNames()).toEqual(
-				expect.arrayContaining(["read", "search_tool_bm25", "mcp_github_create_issue"]),
+				expect.arrayContaining(["open", "search_tool_bm25", "mcp_github_create_issue"]),
 			);
 			expect(session.sessionManager.buildSessionContext().hasPersistedMCPToolSelection).toBe(false);
 			expect(fs.readFileSync(sessionFile!, "utf8")).toBe(persistedBeforeResume);
@@ -310,13 +310,13 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			toolNames: ["read", "search_tool_bm25", "mcp_github_create_issue"],
+			toolNames: ["open", "search_tool_bm25", "mcp_github_create_issue"],
 			customTools: [
 				createMcpCustomTool("mcp_github_create_issue", "github", "create_issue"),
 				createMcpCustomTool("mcp_slack_post_message", "slack", "post_message"),
 			],
 		});
-		await firstSession.setActiveToolsByName(["read", "search_tool_bm25"]);
+		await firstSession.setActiveToolsByName(["open", "search_tool_bm25"]);
 		expect(firstSession.getSelectedMCPToolNames()).toEqual([]);
 		const sessionFile = firstSession.sessionFile;
 		expect(sessionFile).toBeDefined();
@@ -337,7 +337,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			toolNames: ["read", "search_tool_bm25", "mcp_github_create_issue"],
+			toolNames: ["open", "search_tool_bm25", "mcp_github_create_issue"],
 			customTools: [
 				createMcpCustomTool("mcp_github_create_issue", "github", "create_issue"),
 				createMcpCustomTool("mcp_slack_post_message", "slack", "post_message"),
@@ -345,7 +345,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		});
 		try {
 			expect(resumedSession.getSelectedMCPToolNames()).toEqual([]);
-			expect(resumedSession.getActiveToolNames()).toEqual(expect.arrayContaining(["read", "search_tool_bm25"]));
+			expect(resumedSession.getActiveToolNames()).toEqual(expect.arrayContaining(["open", "search_tool_bm25"]));
 			expect(resumedSession.getActiveToolNames()).not.toContain("mcp_github_create_issue");
 		} finally {
 			await resumedSession.dispose();

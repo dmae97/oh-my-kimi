@@ -94,7 +94,8 @@ const ACP_TEXT_LIMIT = 4_000;
 
 export function mapToolKind(toolName: string): ToolKind {
 	switch (toolName) {
-		case "read":
+		case "read": // legacy alias
+		case "open":
 			return "read";
 		case "write":
 		case "edit":

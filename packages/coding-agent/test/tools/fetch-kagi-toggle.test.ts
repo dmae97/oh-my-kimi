@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
+import { OpenTool } from "@oh-my-pi/pi-coding-agent/tools/open";
 import * as imageResize from "@oh-my-pi/pi-coding-agent/utils/image-resize";
 import * as toolsManager from "@oh-my-pi/pi-coding-agent/utils/tools-manager";
 import * as scrapers from "@oh-my-pi/pi-coding-agent/web/scrapers/types";
@@ -59,7 +59,7 @@ describe("read tool URL selector shorthands", () => {
 
 	it("supports embedded raw selectors in URL paths", async () => {
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		const pageUrl = "https://example.com/embedded-raw";
 		const loadPageSpy = vi.spyOn(scrapers, "loadPage").mockImplementation(async requestedUrl => {
 			if (requestedUrl !== pageUrl) {
@@ -85,7 +85,7 @@ describe("read tool URL selector shorthands", () => {
 
 	it("supports embedded line selectors in URL paths", async () => {
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		const pageUrl = "https://example.com/embedded-lines";
 		const loadPageSpy = vi.spyOn(scrapers, "loadPage").mockImplementation(async requestedUrl => {
 			if (requestedUrl !== pageUrl) {
@@ -152,7 +152,7 @@ describe("read tool URL handling", () => {
 
 	it("returns an image content block when fetching image URLs", async () => {
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		const imageBytes = new Uint8Array([137, 80, 78, 71]);
 		vi.spyOn(scrapers, "loadPage").mockResolvedValue({
 			ok: true,
@@ -196,7 +196,7 @@ describe("read tool URL handling", () => {
 
 	it("resizes fetched images before emitting image content blocks", async () => {
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		const resizeSpy = vi.spyOn(imageResize, "resizeImage").mockResolvedValue({
 			buffer: new Uint8Array([1, 2, 3]),
 			mimeType: "image/jpeg",
@@ -242,7 +242,7 @@ describe("read tool URL handling", () => {
 
 	it("keeps markit extracted text for image responses", async () => {
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		const extractedText = "Converted image text content that is definitely longer than fifty characters.";
 		vi.spyOn(imageResize, "resizeImage").mockResolvedValue({
 			buffer: new Uint8Array([1, 2, 3]),
@@ -286,7 +286,7 @@ describe("read tool URL handling", () => {
 	});
 	it("falls back to text-only output for unsupported image MIME types", async () => {
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		const fetchBinarySpy = vi.spyOn(scraperUtils, "fetchBinary");
 		vi.spyOn(scrapers, "loadPage").mockResolvedValue({
 			ok: true,
@@ -309,7 +309,7 @@ describe("read tool URL handling", () => {
 
 	it("uses binary conversion fallback for unsupported image MIME when extension is convertible", async () => {
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		const convertedText = "Converted image text from markit fallback with sufficient length to pass threshold.";
 		const fetchBinarySpy = vi.spyOn(scraperUtils, "fetchBinary").mockResolvedValue({
 			ok: true,
@@ -342,7 +342,7 @@ describe("read tool URL handling", () => {
 
 	it("does not treat text/html at .png paths as inline images", async () => {
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		vi.spyOn(scraperUtils, "fetchBinary").mockResolvedValue({ ok: false, error: "not an image" });
 		vi.spyOn(scrapers, "loadPage").mockResolvedValue({
 			ok: true,
@@ -364,7 +364,7 @@ describe("read tool URL handling", () => {
 
 	it("falls back to textual output when inline image refetch fails", async () => {
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		const convertSpy = vi.spyOn(scraperUtils, "convertWithMarkit");
 		vi.spyOn(scrapers, "loadPage").mockResolvedValue({
 			ok: true,
@@ -390,7 +390,7 @@ describe("read tool URL handling", () => {
 	});
 	it("falls back to text-only output when image payload bytes are invalid", async () => {
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		vi.spyOn(scrapers, "loadPage").mockResolvedValue({
 			ok: true,
 			status: 200,
@@ -431,7 +431,7 @@ describe("read tool URL handling", () => {
 	});
 	it("prefers rendered page content over site-wide llms.txt for deep pages", async () => {
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		const pageUrl = "https://bun.com/reference/bun/UnixSocketOptions";
 		const pageHtml = "<html><body><main><h1>UnixSocketOptions</h1><p>Page-specific docs.</p></main></body></html>";
 		const renderedMarkdown = `# UnixSocketOptions\n\n${"Page-specific API docs. ".repeat(8)}`;
@@ -493,7 +493,7 @@ describe("read tool URL handling", () => {
 
 	it("uses section-scoped llms.txt fallback without requesting the site-wide file", async () => {
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		const pageUrl = "https://example.com/docs/reference/widget";
 		const pageHtml = "<html><body><nav>Docs</nav><main><h1>Widget</h1></main></body></html>";
 		const lowQualityRender = `${"Please enable JavaScript to view this page.\n".repeat(6)}${"navigation\n".repeat(4)}`;
@@ -574,7 +574,7 @@ describe("read tool URL handling", () => {
 	it("prefers Parallel extract before other HTML renderers when configured", async () => {
 		process.env.PARALLEL_API_KEY = "test-parallel-key";
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		const pageUrl = "https://example.com/parallel-page";
 		const pageHtml = "<html><body><main><h1>Parallel Page</h1></main></body></html>";
 		const ensureToolSpy = vi.spyOn(toolsManager, "ensureTool");
@@ -649,7 +649,7 @@ describe("read tool URL handling", () => {
 
 	it("reuses cached output for repeated plain URL reads", async () => {
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		const pageUrl = "https://example.com/repeated-read-cache";
 		const loadPageSpy = vi.spyOn(scrapers, "loadPage").mockResolvedValue({
 			ok: true,
@@ -673,7 +673,7 @@ describe("read tool URL handling", () => {
 
 	it("supports offset and limit for URL reads using cached output", async () => {
 		const session = createSession();
-		const tool = new ReadTool(session);
+		const tool = new OpenTool(session);
 		const pageUrl = "https://example.com/offset-test";
 		const loadPageSpy = vi.spyOn(scrapers, "loadPage").mockResolvedValue({
 			ok: true,
@@ -702,6 +702,6 @@ describe("read tool URL handling", () => {
 		expect(pagedText?.text).toContain("Line 2");
 		expect(pagedText?.text).not.toContain("Line 3");
 		expect(loadPageSpy).not.toHaveBeenCalled();
-		expect(fs.readdirSync(path.join(testDir, "session")).some(file => file.endsWith(".read.log"))).toBe(true);
+		expect(fs.readdirSync(path.join(testDir, "session")).some(file => file.endsWith(".open.log"))).toBe(true);
 	});
 });

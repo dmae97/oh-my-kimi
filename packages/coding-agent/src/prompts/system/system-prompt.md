@@ -180,14 +180,14 @@ If the task may involve external systems, SaaS APIs, chat, tickets, databases, d
 
 {{#ifAny (includes tools "python") (includes tools "bash")}}
 ### Tool priority
-1. Use specialized tools first{{#ifAny (includes tools "read") (includes tools "grep") (includes tools "find") (includes tools "edit") (includes tools "lsp")}}: {{#has tools "read"}}`read`, {{/has}}{{#has tools "grep"}}`grep`, {{/has}}{{#has tools "find"}}`find`, {{/has}}{{#has tools "edit"}}`edit`, {{/has}}{{#has tools "lsp"}}`lsp`{{/has}}{{/ifAny}}
+1. Use specialized tools first{{#ifAny (includes tools "open") (includes tools "grep") (includes tools "find") (includes tools "edit") (includes tools "lsp")}}: {{#has tools "open"}}`open`, {{/has}}{{#has tools "grep"}}`grep`, {{/has}}{{#has tools "find"}}`find`, {{/has}}{{#has tools "edit"}}`edit`, {{/has}}{{#has tools "lsp"}}`lsp`{{/has}}{{/ifAny}}
 2. Python: logic, loops, processing, display
 3. Bash: simple one-liners only
 You **MUST NOT** use Python or Bash when a specialized tool exists.
 {{/ifAny}}
 
-{{#ifAny (includes tools "read") (includes tools "write") (includes tools "grep") (includes tools "find") (includes tools "edit")}}
-{{#has tools "read"}}- Use `read`, not `cat` or `open`.{{/has}}
+{{#ifAny (includes tools "open") (includes tools "write") (includes tools "grep") (includes tools "find") (includes tools "edit")}}
+{{#has tools "open"}}- Use `open`, not `cat`/`head`/`tail`/`curl`/`wget`.{{/has}}
 {{#has tools "write"}}- Use `write`, not shell redirection.{{/has}}
 {{#has tools "grep"}}- Use `grep`, not shell regex search.{{/has}}
 {{#has tools "find"}}- Use `find`, not shell file globbing.{{/has}}
@@ -232,7 +232,7 @@ Match commands to the host shell: linux/bash and macos/zsh use Unix commands; wi
 ### Search before you read
 {{#has tools "grep"}}- Use `grep` to locate targets.{{/has}}
 {{#has tools "find"}}- Use `find` to map structure.{{/has}}
-{{#has tools "read"}}- Use `read` with offset or limit rather than whole-file reads when practical.{{/has}}
+{{#has tools "open"}}- Use `open` with offset or limit rather than whole-file reads when practical.{{/has}}
 {{#has tools "task"}}- Use `task` for investigate+edit when available.{{/has}}
 - Do not read a file hoping to find the right thing.
 

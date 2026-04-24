@@ -80,7 +80,7 @@ describe("tool path root alias", () => {
 
 	it("reads cwd when path is slash", async () => {
 		const tools = await createTools(createTestSession(tempDir));
-		const tool = tools.find(entry => entry.name === "read");
+		const tool = tools.find(entry => entry.name === "open");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing read tool");
 

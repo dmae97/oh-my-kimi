@@ -1,4 +1,4 @@
-Edits files via syntax-aware chunks. Run `read(path="file.ts")` first.
+Edits files via syntax-aware chunks. Run `open(path="file.ts")` first.
 - `write` rewrites the entire targeted region — best for most edits.
 - `replace` does surgical find-and-replace within a chunk — use when making small changes to a large chunk, or batching multiple substitutions.
 - `insert` adds content before/after a chunk.
@@ -8,7 +8,7 @@ Call format: `{"edits": [{"path": "file:chunk#ID~", "write": "new body"}, …]}`
 <rules>
 - **MUST** `read` first. Never invent chunk paths or IDs. Copy them from the latest `read` output or edit response.
 - `path` format: `file:selector` — e.g. `src/app.ts:fn_foo#ABCD~`. Append `~` for body, `^` for head, or nothing for the whole chunk. Include `#ID` for `put`/`find`+`replace`/`delete`.
-- If the exact chunk path is unclear, run `read(path="file", sel="?")` and copy a selector from that listing.
+- If the exact chunk path is unclear, run `open(path="file", sel="?")` and copy a selector from that listing.
 {{#if chunkAutoIndent}}
 - Use `\t` for indentation in `content`. Write content at indent-level 0 — the tool re-indents it to match the chunk's position in the file. For example, to replace `~` of a method, write the body starting at column 0:
   ```
@@ -29,7 +29,7 @@ Call format: `{"edits": [{"path": "file:chunk#ID~", "write": "new body"}, …]}`
 {{/if}}
 - Region suffixes only apply to container chunks (classes, functions, impl blocks, sections). On leaf chunks (enum variants, fields, single statements, and compound statements like `if`/`for`/`while`/`match`/`try`), `~` and `^` silently fall back to whole-chunk replacement — prefer the unsuffixed form and always supply the complete replacement (condition + body, not just the body) to avoid dropping structural parts.
 - `put`, `find`+`replace`, and `delete` require the current ID. `prepend`/`append` do not.
-- **IDs change after every edit.** The edit response always carries the new IDs — use those for the next call or run `read(path="file", sel="?")` to refresh. Never reuse an ID from before the latest edit.
+- **IDs change after every edit.** The edit response always carries the new IDs — use those for the next call or run `open(path="file", sel="?")` to refresh. Never reuse an ID from before the latest edit.
 </rules>
 
 <critical>

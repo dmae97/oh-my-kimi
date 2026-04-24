@@ -55,7 +55,7 @@ describe("createTools", () => {
 		// Core tools should always be present
 		expect(names).toContain("python");
 		expect(names).toContain("bash");
-		expect(names).toContain("read");
+		expect(names).toContain("open");
 		expect(names).toContain("edit");
 		expect(names).toContain("write");
 		expect(names).toContain("grep");
@@ -130,7 +130,7 @@ describe("createTools", () => {
 		const tools = await createTools(session, ["read", "lsp", "write"]);
 		const names = tools.map(t => t.name);
 
-		expect(names).toEqual(["read", "write", "exit_plan_mode"]);
+		expect(names).toEqual(["open", "write", "exit_plan_mode"]);
 	});
 
 	it("excludes lsp tool when disabled", async () => {
@@ -146,7 +146,7 @@ describe("createTools", () => {
 		const tools = await createTools(session, ["read", "write"]);
 		const names = tools.map(t => t.name);
 
-		expect(names).toEqual(["read", "write", "exit_plan_mode"]);
+		expect(names).toEqual(["open", "write", "exit_plan_mode"]);
 	});
 
 	it("ignores vim as an unknown requested tool even when vim edit mode is active", async () => {
@@ -158,7 +158,7 @@ describe("createTools", () => {
 		const tools = await createTools(session, ["read", "vim"]);
 		const names = tools.map(t => t.name);
 
-		expect(names).toEqual(["read", "exit_plan_mode"]);
+		expect(names).toEqual(["open", "exit_plan_mode"]);
 	});
 
 	it("lowercases requested tool subset", async () => {
@@ -166,7 +166,7 @@ describe("createTools", () => {
 		const tools = await createTools(session, ["Read", "Write"]);
 		const names = tools.map(t => t.name);
 
-		expect(names).toEqual(["read", "write", "exit_plan_mode"]);
+		expect(names).toEqual(["open", "write", "exit_plan_mode"]);
 	});
 
 	it("includes hidden tools when explicitly requested", async () => {

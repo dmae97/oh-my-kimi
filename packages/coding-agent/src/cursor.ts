@@ -164,14 +164,14 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 
 	async read(args: Parameters<NonNullable<ICursorExecHandlers["read"]>>[0]) {
 		const toolCallId = decodeToolCallId(args.toolCallId);
-		const toolResultMessage = await executeTool(this.options, "read", toolCallId, { path: args.path });
+		const toolResultMessage = await executeTool(this.options, "open", toolCallId, { path: args.path });
 		return toolResultMessage;
 	}
 
 	async ls(args: Parameters<NonNullable<ICursorExecHandlers["ls"]>>[0]) {
 		const toolCallId = decodeToolCallId(args.toolCallId);
 		// Redirect ls to read tool, which handles directories
-		const toolResultMessage = await executeTool(this.options, "read", toolCallId, { path: args.path });
+		const toolResultMessage = await executeTool(this.options, "open", toolCallId, { path: args.path });
 		return toolResultMessage;
 	}
 

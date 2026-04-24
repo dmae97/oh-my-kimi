@@ -43,10 +43,10 @@ import {
 import { GrepTool } from "./grep";
 import { InspectImageTool } from "./inspect-image";
 import { NotebookTool } from "./notebook";
+import { OpenTool } from "./open";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { PollTool } from "./poll-tool";
 import { PythonTool } from "./python";
-import { ReadTool } from "./read";
 import { RenderMermaidTool } from "./render-mermaid";
 import { createReportToolIssueTool, isAutoQaEnabled } from "./report-tool-issue";
 import { ResolveTool } from "./resolve";
@@ -82,9 +82,9 @@ export * from "./gh";
 export * from "./grep";
 export * from "./inspect-image";
 export * from "./notebook";
+export * from "./open";
 export * from "./poll-tool";
 export * from "./python";
-export * from "./read";
 export * from "./render-mermaid";
 export * from "./report-tool-issue";
 export * from "./resolve";
@@ -230,7 +230,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	grep: s => new GrepTool(s),
 	lsp: LspTool.createIf,
 	notebook: s => new NotebookTool(s),
-	read: s => new ReadTool(s),
+	open: s => new OpenTool(s),
 	inspect_image: s => new InspectImageTool(s),
 	browser: s => new BrowserTool(s),
 	checkpoint: CheckpointTool.createIf,
@@ -243,6 +243,20 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	search_tool_bm25: SearchToolBm25Tool.createIf,
 	write: s => new WriteTool(s),
 };
+
+/**
+ * Legacy tool-name aliases. Accepted wherever users supply tool names
+ * (agent `tools:` fields, `--tools` flags, settings, etc.) and normalized
+ * to the canonical name before lookup.
+ */
+export const TOOL_ALIASES: Record<string, string> = {
+	read: "open",
+};
+
+/** Resolve a possibly-aliased tool name to its canonical registry key. */
+export function resolveToolAlias(name: string): string {
+	return TOOL_ALIASES[name] ?? name;
+}
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	submit_result: s => new SubmitResultTool(s),
@@ -291,7 +305,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const includeSubmitResult = session.requireSubmitResultTool === true;
 	const enableLsp = session.enableLsp ?? true;
 	const requestedTools =
-		toolNames && toolNames.length > 0 ? [...new Set(toolNames.map(name => name.toLowerCase()))] : undefined;
+		toolNames && toolNames.length > 0
+			? [...new Set(toolNames.map(name => resolveToolAlias(name.toLowerCase())))]
+			: undefined;
 	if (requestedTools && !requestedTools.includes("exit_plan_mode")) {
 		requestedTools.push("exit_plan_mode");
 	}

@@ -21,7 +21,7 @@ import type {
 	SessionEntry,
 	SessionManager,
 } from "../../session/session-manager";
-import type { BashToolDetails, FindToolDetails, GrepToolDetails, ReadToolDetails } from "../../tools";
+import type { BashToolDetails, FindToolDetails, GrepToolDetails, OpenToolDetails } from "../../tools";
 import type { TodoItem } from "../../tools/todo-write";
 
 // Re-export for backward compatibility
@@ -477,9 +477,9 @@ export interface BashToolResultEvent extends ToolResultEventBase {
 }
 
 /** Tool result event for read tool */
-export interface ReadToolResultEvent extends ToolResultEventBase {
-	toolName: "read";
-	details: ReadToolDetails | undefined;
+export interface OpenToolResultEvent extends ToolResultEventBase {
+	toolName: "open";
+	details: OpenToolDetails | undefined;
 }
 
 /** Tool result event for edit tool */
@@ -519,7 +519,7 @@ export interface CustomToolResultEvent extends ToolResultEventBase {
  */
 export type ToolResultEvent =
 	| BashToolResultEvent
-	| ReadToolResultEvent
+	| OpenToolResultEvent
 	| EditToolResultEvent
 	| WriteToolResultEvent
 	| GrepToolResultEvent
