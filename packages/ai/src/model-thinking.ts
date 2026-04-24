@@ -283,6 +283,17 @@ export function mapEffortToAnthropicAdaptiveEffort<TApi extends Api>(
 	}
 }
 
+/**
+ * Returns true for Anthropic models with Opus 4.7 API restrictions:
+ * - Sampling parameters (temperature/top_p/top_k) return 400 error
+ * - Thinking content is omitted by default (needs display: "summarized")
+ */
+export function hasOpus47ApiRestrictions(modelId: string): boolean {
+	const parsed = parseAnthropicModel(getCanonicalModelId(modelId));
+	if (!parsed) return false;
+	return semverGte(parsed.version, "4.7") && parsed.kind === "opus";
+}
+
 function anthropicModelHasRealXHighEffort<TApi extends Api>(model: ApiModel<TApi>): boolean {
 	if (model.api !== "anthropic-messages") return false;
 	const parsedModel = parseKnownModel(model.id);

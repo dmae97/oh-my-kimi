@@ -1781,4 +1781,16 @@ describe("ModelRegistry", () => {
 			expect(llama?.input).toEqual(["text", "image"]);
 		});
 	});
+	describe("bundled Anthropic catalog availability", () => {
+		test("includes native Opus 4.7 in available models when Anthropic auth exists", async () => {
+			await authStorage.set("anthropic", [{ type: "api_key", key: "sk-ant-api-test" }]);
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh("offline");
+
+			expect(
+				registry.getAvailable().some(model => model.provider === "anthropic" && model.id === "claude-opus-4-7"),
+			).toBe(true);
+		});
+	});
 });
