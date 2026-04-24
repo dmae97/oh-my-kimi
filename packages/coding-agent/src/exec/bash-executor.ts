@@ -4,8 +4,8 @@
  * Uses brush-core via native bindings for shell execution.
  */
 import * as fs from "node:fs/promises";
-import { executeShell, Shell } from "@oh-my-pi/pi-natives";
-import { Settings } from "../config/settings";
+import { executeShell, type MinimizerOptions, Shell } from "@oh-my-pi/pi-natives";
+import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
 import { getOrCreateSnapshot } from "../utils/shell-snapshot";
 import { NON_INTERACTIVE_ENV } from "./non-interactive-env";
@@ -53,10 +53,24 @@ async function resolveShellCwd(cwd: string | undefined): Promise<string | undefi
 	}
 }
 
+function buildMinimizerOptions(group: ShellMinimizerSettings): MinimizerOptions | undefined {
+	if (!group.enabled) return undefined;
+	return {
+		enabled: true,
+		settingsPath: group.settingsPath || undefined,
+		only: group.only.length > 0 ? group.only : undefined,
+		except: group.except.length > 0 ? group.except : undefined,
+		maxCaptureBytes: group.maxCaptureBytes,
+	};
+}
+
 export async function executeBash(command: string, options?: BashExecutorOptions): Promise<BashResult> {
 	const settings = await Settings.init();
 	const { shell, env: shellEnv, prefix } = settings.getShellConfig();
 	const snapshotPath = shell.includes("bash") ? await getOrCreateSnapshot(shell, shellEnv) : null;
+
+	const minimizer = buildMinimizerOptions(settings.getGroup("shellMinimizer"));
+
 	const commandCwd = await resolveShellCwd(options?.cwd);
 	const commandEnv = options?.env ? { ...NON_INTERACTIVE_ENV, ...options.env } : NON_INTERACTIVE_ENV;
 
@@ -89,7 +103,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		};
 	}
 
-	const sessionKey = buildSessionKey(shell, prefix, snapshotPath, shellEnv, options?.sessionKey);
+	const sessionKey = buildSessionKey(shell, prefix, snapshotPath, shellEnv, options?.sessionKey, minimizer);
 	const persistentSessionBroken = brokenShellSessions.has(sessionKey);
 	if (persistentSessionBroken) {
 		shellSessions.delete(sessionKey);
@@ -97,7 +111,11 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 
 	let shellSession = persistentSessionBroken ? undefined : shellSessions.get(sessionKey);
 	if (!shellSession && !persistentSessionBroken) {
-		shellSession = new Shell({ sessionEnv: shellEnv, snapshotPath: snapshotPath ?? undefined });
+		shellSession = new Shell({
+			sessionEnv: shellEnv,
+			snapshotPath: snapshotPath ?? undefined,
+			minimizer,
+		});
 		shellSessions.set(sessionKey, shellSession);
 	}
 	const userSignal = options?.signal;
@@ -152,6 +170,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 						env: commandEnv,
 						sessionEnv: shellEnv,
 						snapshotPath: snapshotPath ?? undefined,
+						minimizer,
 						timeoutMs: options?.timeout,
 						signal: runAbortController.signal,
 					},
@@ -232,9 +251,13 @@ function buildSessionKey(
 	snapshotPath: string | null,
 	env: Record<string, string>,
 	agentSessionKey?: string,
+	minimizer?: MinimizerOptions,
 ): string {
 	const entries = Object.entries(env);
 	entries.sort(([a], [b]) => a.localeCompare(b));
 	const envSerialized = entries.map(([key, value]) => `${key}=${value}`).join("\n");
-	return [agentSessionKey ?? "", shell, prefix ?? "", snapshotPath ?? "", envSerialized].join("\n");
+	const minimizerSerialized = minimizer ? JSON.stringify(minimizer) : "";
+	return [agentSessionKey ?? "", shell, prefix ?? "", snapshotPath ?? "", envSerialized, minimizerSerialized].join(
+		"\n",
+	);
 }

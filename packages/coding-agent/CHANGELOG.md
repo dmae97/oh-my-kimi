@@ -1,6 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `shellMinimizer` configuration options (`enabled`, `settingsPath`, `only`, `except`, and `maxCaptureBytes`) so users can control shell output minimization behavior
+
+### Changed
+
+- Changed shell execution in both interactive and non-interactive modes to route command output through the configured shell output minimizer
+- Changed default behavior so shell output minimization can now be toggled from settings without code changes
 
 ### Fixed
 

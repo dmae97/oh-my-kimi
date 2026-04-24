@@ -1007,6 +1007,29 @@ export declare function matchesKittySequence(data: string, expectedCodepoint: nu
  */
 export declare function matchesLegacySequence(data: string, keyName: string): boolean
 
+/** N-API opt-in handle for the minimizer. */
+export interface MinimizerOptions {
+  /** Master switch. Absent / false = disabled. */
+  enabled?: boolean
+  /**
+   * Optional path to a TOML settings file whose values override
+   * field-level defaults. `~` is expanded.
+   */
+  settingsPath?: string
+  /**
+   * Opt-in allowlist of program names (e.g. `"git"`). When empty or
+   * absent, all built-in filters are active.
+   */
+  only?: Array<string>
+  /** Program names explicitly excluded from minimization. */
+  except?: Array<string>
+  /**
+   * Maximum captured bytes per command before the engine falls back to
+   * the raw, un-minimized output. Default 4 MiB.
+   */
+  maxCaptureBytes?: number
+}
+
 /** Parsed Kitty keyboard protocol sequence result for a Kitty input sequence. */
 export interface ParsedKittyResult {
   /** Primary codepoint associated with the key. */
@@ -1245,6 +1268,8 @@ export interface ShellExecuteOptions {
   timeoutMs?: number
   /** Optional snapshot file to source on session creation. */
   snapshotPath?: string
+  /** Optional per-command output minimizer configuration. */
+  minimizer?: MinimizerOptions
   /** Abort signal for cancelling the operation. */
   signal?: unknown
 }
@@ -1265,6 +1290,8 @@ export interface ShellOptions {
   sessionEnv?: Record<string, string>
   /** Optional snapshot file to source on session creation. */
   snapshotPath?: string
+  /** Optional per-command output minimizer configuration. */
+  minimizer?: MinimizerOptions
 }
 
 /** Options for running a shell command. */

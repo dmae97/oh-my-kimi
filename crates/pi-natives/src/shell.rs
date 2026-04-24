@@ -26,6 +26,8 @@ use std::{
 #[cfg(windows)]
 mod windows;
 
+mod minimizer;
+
 use brush_builtins::{BuiltinSet, default_builtins};
 use brush_core::{
 	CreateOptions, ExecutionContext, ExecutionControlFlow, ExecutionExitCode, ExecutionResult,
@@ -83,6 +85,7 @@ impl ShellAbortState {
 struct ShellConfig {
 	session_env:   Option<HashMap<String, String>>,
 	snapshot_path: Option<String>,
+	minimizer:     Option<minimizer::MinimizerConfig>,
 }
 
 /// Options for configuring a persistent shell session.
@@ -92,16 +95,20 @@ pub struct ShellOptions {
 	pub session_env:   Option<HashMap<String, String>>,
 	/// Optional snapshot file to source on session creation.
 	pub snapshot_path: Option<String>,
+	/// Optional per-command output minimizer configuration.
+	pub minimizer:     Option<minimizer::MinimizerOptions>,
 }
 
 /// Options for running a shell command (internal, lifetime-free).
 struct ShellRunConfig {
 	/// Command string to execute in the shell.
-	command: String,
+	command:   String,
 	/// Working directory for the command.
-	cwd:     Option<String>,
+	cwd:       Option<String>,
 	/// Environment variables to apply for this command only.
-	env:     Option<HashMap<String, String>>,
+	env:       Option<HashMap<String, String>>,
+	/// Resolved output minimizer config for this command.
+	minimizer: Option<minimizer::MinimizerConfig>,
 }
 
 /// Options for running a shell command.
@@ -145,10 +152,20 @@ impl Shell {
 	///
 	/// The options set session-scoped environment variables and a snapshot path.
 	pub fn new(options: Option<ShellOptions>) -> Self {
-		let config = options.map_or_else(
-			|| ShellConfig { session_env: None, snapshot_path: None },
-			|opt| ShellConfig { session_env: opt.session_env, snapshot_path: opt.snapshot_path },
-		);
+		let config = match options {
+			None => ShellConfig { session_env: None, snapshot_path: None, minimizer: None },
+			Some(opt) => {
+				let minimizer = opt
+					.minimizer
+					.as_ref()
+					.map(minimizer::MinimizerConfig::from_options);
+				ShellConfig {
+					session_env: opt.session_env,
+					snapshot_path: opt.snapshot_path,
+					minimizer,
+				}
+			},
+		};
 		Self {
 			session: Arc::new(TokioMutex::new(None)),
 			abort_state: ShellAbortState::default(),
@@ -174,8 +191,12 @@ impl Shell {
 		let abort_state = self.abort_state.clone();
 		let config = self.config.clone();
 
-		let run_config =
-			ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env };
+		let run_config = ShellRunConfig {
+			command:   options.command,
+			cwd:       options.cwd,
+			env:       options.env,
+			minimizer: config.minimizer.clone(),
+		};
 
 		task::future(env, "shell.run", async move {
 			run_shell_session(session, abort_state, config, run_config, on_chunk, ct).await
@@ -269,6 +290,8 @@ pub struct ShellExecuteOptions<'env> {
 	pub timeout_ms:    Option<u32>,
 	/// Optional snapshot file to source on session creation.
 	pub snapshot_path: Option<String>,
+	/// Optional per-command output minimizer configuration.
+	pub minimizer:     Option<minimizer::MinimizerOptions>,
 	/// Abort signal for cancelling the operation.
 	pub signal:        Option<Unknown<'env>>,
 }
@@ -296,10 +319,17 @@ pub fn execute_shell<'env>(
 	#[napi(ts_arg_type = "((error: Error | null, chunk: string) => void) | undefined | null")]
 	on_chunk: Option<ThreadsafeFunction<String>>,
 ) -> Result<PromiseRaw<'env, ShellExecuteResult>> {
-	let config =
-		ShellConfig { session_env: options.session_env, snapshot_path: options.snapshot_path };
+	let minimizer = options
+		.minimizer
+		.as_ref()
+		.map(minimizer::MinimizerConfig::from_options);
+	let config = ShellConfig {
+		session_env:   options.session_env,
+		snapshot_path: options.snapshot_path,
+		minimizer:     minimizer.clone(),
+	};
 	let run_config =
-		ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env };
+		ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env, minimizer };
 
 	let ct = task::CancelToken::new(options.timeout_ms, options.signal);
 	task::future(env, "shell.execute", async move {
@@ -575,13 +605,36 @@ async fn run_shell_command(
 		}
 	}
 
+	let should_minimize = if let Some(config) = options.minimizer.as_ref() {
+		minimizer::engine::should_minimize(&options.command, config)
+	} else {
+		false
+	};
+	let max_capture_bytes = if let Some(config) = options.minimizer.as_ref() {
+		config.max_capture_bytes as usize
+	} else {
+		0
+	};
+
 	let reader_cancel = CancellationToken::new();
 	let (activity_tx, mut activity_rx) = mpsc::channel::<()>(1);
+	let (reader_callback, final_callback) = if should_minimize {
+		(None, on_chunk)
+	} else {
+		(on_chunk, None)
+	};
 	let mut reader_handle = tokio::spawn({
 		let reader_cancel = reader_cancel.clone();
 		async move {
-			Box::pin(read_output(reader_file, on_chunk, reader_cancel, activity_tx)).await;
-			Result::<()>::Ok(())
+			if should_minimize {
+				let output =
+					read_output_buffered(reader_file, reader_cancel, activity_tx, max_capture_bytes)
+						.await;
+				Result::<OutputRead>::Ok(OutputRead::Buffered(output))
+			} else {
+				Box::pin(read_output(reader_file, reader_callback, reader_cancel, activity_tx)).await;
+				Result::<OutputRead>::Ok(OutputRead::Streaming)
+			}
 		}
 	});
 	let cancel_bridge = tokio::spawn({
@@ -619,13 +672,16 @@ async fn run_shell_command(
 	const READER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
 
 	let mut reader_finished = false;
+	let mut reader_output = None;
 	let mut idle_timer = Box::pin(time::sleep(POST_EXIT_IDLE));
 	let mut max_timer = Box::pin(time::sleep(POST_EXIT_MAX));
 
 	loop {
 		tokio::select! {
 			res = &mut reader_handle => {
-				let _ = res;
+				if let Ok(Ok(output)) = res {
+					reader_output = Some(output);
+				}
 				reader_finished = true;
 				break;
 			}
@@ -643,7 +699,11 @@ async fn run_shell_command(
 	if !reader_finished {
 		reader_cancel.cancel();
 		if let Ok(res) = time::timeout(READER_SHUTDOWN_TIMEOUT, &mut reader_handle).await {
-			let _ = res;
+			if let Ok(output) = res
+				&& let Ok(output) = output
+			{
+				reader_output = Some(output);
+			}
 		} else {
 			reader_handle.abort();
 			let _ = reader_handle.await;
@@ -652,7 +712,21 @@ async fn run_shell_command(
 	cancel_bridge.abort();
 	let _ = cancel_bridge.await;
 
-	result.map_err(|err| Error::from_reason(format!("Shell execution failed: {err}")))
+	let result =
+		result.map_err(|err| Error::from_reason(format!("Shell execution failed: {err}")))?;
+	if let Some(OutputRead::Buffered(output)) = reader_output
+		&& let Some(config) = options.minimizer.as_ref()
+	{
+		if output.exceeded {
+			emit_chunk(&output.text, final_callback.as_ref());
+		} else {
+			let minimized =
+				minimizer::apply(&options.command, &output.text, exit_code(&result), config);
+			let _ = minimized.changed;
+			emit_chunk(&minimized.text, final_callback.as_ref());
+		}
+	}
+	Ok(result)
 }
 
 #[cfg(unix)]
@@ -793,6 +867,16 @@ const fn session_keepalive(result: &ExecutionResult) -> bool {
 	}
 }
 
+enum OutputRead {
+	Streaming,
+	Buffered(BufferedOutput),
+}
+
+struct BufferedOutput {
+	text:     String,
+	exceeded: bool,
+}
+
 async fn read_output(
 	reader: fs::File,
 	on_chunk: Option<ThreadsafeFunction<String>>,
@@ -899,6 +983,69 @@ async fn read_output(
 			emit_chunk(REPLACEMENT, on_chunk.as_ref());
 		}
 	}
+}
+
+async fn read_output_buffered(
+	reader: fs::File,
+	cancel_token: CancellationToken,
+	activity: mpsc::Sender<()>,
+	max_capture_bytes: usize,
+) -> BufferedOutput {
+	const BUF: usize = 65536;
+	let mut buf = vec![0u8; BUF];
+	let mut captured = Vec::new();
+	let mut exceeded = false;
+
+	#[cfg(unix)]
+	let Ok(reader) = register_nonblocking_pipe(reader) else {
+		return BufferedOutput { text: String::new(), exceeded: true };
+	};
+	#[cfg(not(unix))]
+	let reader = tokio::fs::File::from_std(reader);
+	#[cfg(not(unix))]
+	tokio::pin!(reader);
+
+	loop {
+		#[cfg(unix)]
+		let n = {
+			let Ok(mut readiness) = (tokio::select! {
+				ready = reader.readable() => ready,
+				() = cancel_token.cancelled() => break,
+			}) else {
+				break;
+			};
+			match readiness.try_io(|inner| read_nonblocking(inner.get_ref(), &mut buf)) {
+				Ok(Ok(0)) => break,
+				Ok(Ok(n)) => n,
+				Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
+				Ok(Err(_)) => break,
+				Err(_would_block) => continue,
+			}
+		};
+		#[cfg(not(unix))]
+		let n = {
+			let read_future = reader.read(&mut buf);
+			tokio::pin!(read_future);
+			match tokio::select! {
+				res = &mut read_future => res,
+				() = cancel_token.cancelled() => break,
+			} {
+				Ok(0) => break,
+				Ok(n) => n,
+				Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+				Err(_) => break,
+			}
+		};
+		if n > 0 {
+			let _ = activity.try_send(());
+		}
+		if captured.len().saturating_add(n) > max_capture_bytes {
+			exceeded = true;
+		}
+		captured.extend_from_slice(&buf[..n]);
+	}
+
+	BufferedOutput { text: String::from_utf8_lossy(&captured).into_owned(), exceeded }
 }
 
 #[cfg(unix)]
