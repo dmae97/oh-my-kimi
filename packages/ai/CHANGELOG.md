@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.2.1] - 2026-04-24
+
 ### Fixed
 
 - Fixed OpenAI Codex Spark OAuth selection to require a verified ChatGPT Pro account instead of falling back to Plus or unknown-plan accounts.
