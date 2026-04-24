@@ -1282,10 +1282,15 @@ fn build_head_preserved_full_replacement(
 		file_indent_char,
 		normalize_indent,
 	);
-	let mut body = if inferred_body_indent.is_empty() {
+	let effective_body_indent = if inferred_body_indent.is_empty() {
+		compute_insert_indent(state, anchor, true, file_indent_char, file_indent_step)
+	} else {
+		inferred_body_indent
+	};
+	let mut body = if effective_body_indent.is_empty() {
 		normalized_body
 	} else {
-		indent_non_empty_lines(&normalized_body, &inferred_body_indent)
+		indent_non_empty_lines(&normalized_body, &effective_body_indent)
 	};
 	let epilogue_start = body_end.max(first_line_end).min(chunk_end);
 	let raw_epilogue = &state.source[epilogue_start..chunk_end];
