@@ -638,14 +638,8 @@ fn apply_find_replace(
 	touched_paths: &mut Vec<String>,
 	warnings: &mut Vec<String>,
 ) -> Result<(), String> {
-	let target = resolve_edit_target(
-		state,
-		operation,
-		scheduled,
-		default_selector,
-		default_crc,
-		warnings,
-	)?;
+	let target =
+		resolve_edit_target(state, operation, scheduled, default_selector, default_crc, warnings)?;
 	let anchor = target.chunk;
 
 	let (region_start, region_end) = match target.region {
@@ -723,14 +717,8 @@ fn apply_put(
 	touched_paths: &mut Vec<String>,
 	warnings: &mut Vec<String>,
 ) -> Result<(), String> {
-	let target = resolve_edit_target(
-		state,
-		operation,
-		scheduled,
-		default_selector,
-		default_crc,
-		warnings,
-	)?;
+	let target =
+		resolve_edit_target(state, operation, scheduled, default_selector, default_crc, warnings)?;
 	let anchor = target.chunk;
 	if anchor.kind == ChunkKind::Theirs {
 		return Err(
@@ -991,14 +979,8 @@ fn apply_delete(
 	touched_paths: &mut Vec<String>,
 	warnings: &mut Vec<String>,
 ) -> Result<(), String> {
-	let target = resolve_edit_target(
-		state,
-		operation,
-		scheduled,
-		default_selector,
-		default_crc,
-		warnings,
-	)?;
+	let target =
+		resolve_edit_target(state, operation, scheduled, default_selector, default_crc, warnings)?;
 	let anchor = target.chunk;
 	if target.region.is_none() {
 		match anchor.kind {
@@ -1074,14 +1056,8 @@ fn apply_insert(
 	touched_paths: &mut Vec<String>,
 	warnings: &mut Vec<String>,
 ) -> Result<(), String> {
-	let target = resolve_edit_target(
-		state,
-		operation,
-		scheduled,
-		default_selector,
-		default_crc,
-		warnings,
-	)?;
+	let target =
+		resolve_edit_target(state, operation, scheduled, default_selector, default_crc, warnings)?;
 	let anchor = target.chunk;
 	if anchor.kind == ChunkKind::Theirs {
 		return Err(
