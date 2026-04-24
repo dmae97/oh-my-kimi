@@ -473,6 +473,44 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(modelAfterProviderRefresh?.headers?.[leakedHeader]).toBeUndefined();
 	});
 
+	test("transport-only source handoff clears previous source headers immediately", async () => {
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const providerName = "anthropic";
+		const sourceAHeader = "X-Source-A-Header";
+		const sourceBHeader = "X-Source-B-Header";
+
+		registry.registerProvider(
+			providerName,
+			{ headers: { [sourceAHeader]: "from-source-a" } },
+			"ext://a",
+		);
+		for (const model of registry.getAll().filter(entry => entry.provider === providerName)) {
+			expect(model.headers?.[sourceAHeader]).toBe("from-source-a");
+		}
+
+		registry.registerProvider(
+			providerName,
+			{ headers: { [sourceBHeader]: "from-source-b" } },
+			"ext://b",
+		);
+		for (const model of registry.getAll().filter(entry => entry.provider === providerName)) {
+			expect(model.headers?.[sourceAHeader]).toBeUndefined();
+			expect(model.headers?.[sourceBHeader]).toBe("from-source-b");
+		}
+
+		await registry.refresh("offline");
+		for (const model of registry.getAll().filter(entry => entry.provider === providerName)) {
+			expect(model.headers?.[sourceAHeader]).toBeUndefined();
+			expect(model.headers?.[sourceBHeader]).toBe("from-source-b");
+		}
+
+		await registry.refreshProvider(providerName, "offline");
+		for (const model of registry.getAll().filter(entry => entry.provider === providerName)) {
+			expect(model.headers?.[sourceAHeader]).toBeUndefined();
+			expect(model.headers?.[sourceBHeader]).toBe("from-source-b");
+		}
+	});
+
 	test("multiple extension providers survive refresh independently", async () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 

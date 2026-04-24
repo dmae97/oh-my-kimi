@@ -1946,6 +1946,12 @@ export class ModelRegistry {
 		return this.authStorage.hasOAuth(model.provider);
 	}
 
+	#clearRuntimeProviderState(providerName: string): void {
+		this.#runtimeProviderApiKeys.delete(providerName);
+		this.#runtimeProviderOverrides.delete(providerName);
+		this.#runtimeModelOverlays = this.#runtimeModelOverlays.filter(overlay => overlay.provider !== providerName);
+	}
+
 	/**
 	 * Remove custom API/OAuth registrations for a specific extension source.
 	 */
@@ -1962,9 +1968,7 @@ export class ModelRegistry {
 				continue;
 			}
 			this.#runtimeProviderSourceByName.delete(providerName);
-			this.#runtimeProviderApiKeys.delete(providerName);
-			this.#runtimeProviderOverrides.delete(providerName);
-			this.#runtimeModelOverlays = this.#runtimeModelOverlays.filter(overlay => overlay.provider !== providerName);
+			this.#clearRuntimeProviderState(providerName);
 		}
 		this.#reloadStaticModels();
 		this.#rebuildCanonicalIndex();
@@ -2025,6 +2029,7 @@ export class ModelRegistry {
 			});
 		}
 
+		let sourceHandoff = false;
 		if (sourceId) {
 			this.#registeredProviderSources.add(sourceId);
 			const previousSourceId = this.#runtimeProviderSourceByName.get(providerName);
@@ -2034,13 +2039,18 @@ export class ModelRegistry {
 				if (previousProviders && previousProviders.size === 0) {
 					this.#runtimeProvidersBySource.delete(previousSourceId);
 				}
-				this.#runtimeProviderOverrides.delete(providerName);
+				this.#clearRuntimeProviderState(providerName);
+				sourceHandoff = true;
 			}
 			const sourceProviders = this.#runtimeProvidersBySource.get(sourceId) ?? new Set<string>();
 			sourceProviders.add(providerName);
 			this.#runtimeProvidersBySource.set(sourceId, sourceProviders);
 			this.#runtimeProviderSourceByName.set(providerName, sourceId);
 		}
+		if (sourceHandoff) {
+			this.#reloadStaticModels();
+		}
+
 		if (config.apiKey) {
 			this.#customProviderApiKeys.set(providerName, config.apiKey);
 			// Persist runtime API keys so they survive #reloadStaticModels() cycles
