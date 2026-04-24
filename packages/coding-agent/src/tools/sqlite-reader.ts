@@ -162,6 +162,21 @@ function parseLimit(value: string | null, fallback: number): number {
 	return Math.min(parsed, MAX_QUERY_LIMIT);
 }
 
+function validateWhereClause(where: string): void {
+	// Reject SQL comments and statement terminators so `where=` cannot rewrite the
+	// helper's pagination (e.g. `where=1=1 LIMIT 1000000 --`).
+	if (/--|\/\*|\*\/|;/.test(where)) {
+		throw new ToolError(
+			"SQLite 'where' clause must not contain comments or statement terminators; use '?q=SELECT ...' for raw SQL",
+		);
+	}
+	if (/\b(?:limit|offset|union|intersect|except|attach|detach|pragma)\b/i.test(where)) {
+		throw new ToolError(
+			"SQLite 'where' clause must not contain LIMIT/OFFSET/UNION/INTERSECT/EXCEPT/ATTACH/DETACH/PRAGMA; use '?q=SELECT ...' for raw SQL",
+		);
+	}
+}
+
 function parseOffset(value: string | null): number {
 	if (value === null || value.trim().length === 0) {
 		return 0;
@@ -361,6 +376,9 @@ export function parseSqliteSelector(subPath: string, queryString: string): Sqlit
 	}
 
 	const where = params.get("where")?.trim() || undefined;
+	if (where !== undefined) {
+		validateWhereClause(where);
+	}
 	const order = params.get("order")?.trim() || undefined;
 	const hasQueryParams = params.has("limit") || params.has("offset") || order !== undefined || where !== undefined;
 	if (hasQueryParams) {

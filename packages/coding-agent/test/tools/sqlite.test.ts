@@ -288,6 +288,18 @@ describe("SQLite tool support", () => {
 		expect(text).not.toContain("Bob");
 	});
 
+	it("rejects where= clauses that try to bypass pagination", () => {
+		expect(() => parseSqliteSelector("users", "where=1=1 LIMIT 1000000 --&limit=2&offset=0")).toThrow(
+			/comments or statement terminators/i,
+		);
+		expect(() => parseSqliteSelector("users", "where=status='active' LIMIT 1")).toThrow(
+			/LIMIT\/OFFSET\/UNION/i,
+		);
+		expect(() => parseSqliteSelector("users", "where=1=1; DROP TABLE users")).toThrow(
+			/comments or statement terminators/i,
+		);
+	});
+
 	it("executes raw read-only SQL queries", async () => {
 		const result = await readTool.execute("sqlite-raw-query", {
 			path: `${sqlitePath}?q=SELECT+name+FROM+users+ORDER+BY+id+LIMIT+2`,
