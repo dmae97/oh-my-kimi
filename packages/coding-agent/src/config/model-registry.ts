@@ -886,9 +886,8 @@ export class ModelRegistry {
 		const withConfigModels = this.#mergeCustomModels(resolvedDefaults, this.#customModelOverlays);
 		// Merge runtime extension models so they survive refresh() cycles
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
-		const withRuntimeProviderOverrides = this.#applyRuntimeProviderOverrides(combined);
-
-		this.#models = this.#applyModelOverrides(withRuntimeProviderOverrides, this.#modelOverrides);
+		const withModelOverrides = this.#applyModelOverrides(combined, this.#modelOverrides);
+		this.#models = this.#applyRuntimeProviderOverrides(withModelOverrides);
 		this.#rebuildCanonicalIndex();
 	}
 
@@ -1179,8 +1178,8 @@ export class ModelRegistry {
 		const withConfigModels = this.#mergeCustomModels(resolved, this.#customModelOverlays);
 		// Merge runtime extension models so they survive online discovery completion
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
-		const withRuntimeProviderOverrides = this.#applyRuntimeProviderOverrides(combined);
-		this.#models = this.#applyModelOverrides(withRuntimeProviderOverrides, this.#modelOverrides);
+		const withModelOverrides = this.#applyModelOverrides(combined, this.#modelOverrides);
+		this.#models = this.#applyRuntimeProviderOverrides(withModelOverrides);
 		this.#rebuildCanonicalIndex();
 	}
 

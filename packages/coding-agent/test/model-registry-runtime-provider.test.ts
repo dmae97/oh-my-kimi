@@ -295,6 +295,49 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(registry.find("runtime-provider", modelId)).toBeUndefined();
 	});
 
+	test("runtime headers override modelOverrides headers across refresh cycles", async () => {
+		const initialRegistry = new ModelRegistry(authStorage, modelsJsonPath);
+		const targetModel = initialRegistry.getAll().find(model => model.provider === "anthropic");
+		if (!targetModel) throw new Error("Expected bundled anthropic model");
+
+		const modelId = targetModel.id;
+		const sharedHeader = "X-Shared-Provider-Model-Header";
+		const configHeaderValue = "config-header";
+		const runtimeHeaderValue = "runtime-header";
+
+		fs.writeFileSync(
+			modelsJsonPath,
+			JSON.stringify({
+				providers: {
+					anthropic: {
+						modelOverrides: {
+							[modelId]: { headers: { [sharedHeader]: configHeaderValue } },
+						},
+					},
+				},
+			}),
+		);
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		expect(registry.find("anthropic", modelId)?.headers?.[sharedHeader]).toBe(configHeaderValue);
+
+		registry.registerProvider(
+			"anthropic",
+			{ headers: { [sharedHeader]: runtimeHeaderValue } },
+			"ext://runtime",
+		);
+		expect(registry.find("anthropic", modelId)?.headers?.[sharedHeader]).toBe(runtimeHeaderValue);
+
+		await registry.refresh("offline");
+		expect(registry.find("anthropic", modelId)?.headers?.[sharedHeader]).toBe(runtimeHeaderValue);
+
+		await registry.refreshProvider("anthropic", "offline");
+		expect(registry.find("anthropic", modelId)?.headers?.[sharedHeader]).toBe(runtimeHeaderValue);
+
+		registry.clearSourceRegistrations("ext://runtime");
+		expect(registry.find("anthropic", modelId)?.headers?.[sharedHeader]).toBe(configHeaderValue);
+	});
+
 	test("extension-registered API keys survive refresh cycle for auth resolution", async () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 
