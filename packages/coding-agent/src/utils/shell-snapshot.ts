@@ -59,10 +59,9 @@ done
 echo "# Functions" >> "$SNAPSHOT_FILE"
 # Force autoload all functions first
 declare -f > /dev/null 2>&1
-# Get user function names - filter system/private ones, use base64 for special chars
+# Get user function names - filter system/private ones
 declare -F 2>/dev/null | cut -d' ' -f3 | grep -vE '^(_|__)' | grep -vE '${commonToolsRegex}' | while read func; do
-   encoded_func=$(declare -f "$func" | base64)
-   echo "eval \\"\\$(echo '$encoded_func' | base64 -d)\\" > /dev/null 2>&1" >> "$SNAPSHOT_FILE"
+   declare -f "$func" >> "$SNAPSHOT_FILE" 2>/dev/null
 done
 `;
 
