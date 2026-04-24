@@ -96,7 +96,7 @@ function stripLeadingHashlinePrefixes(line: string): string {
 	return result;
 }
 
-function filterTruncationNotices(lines: string[]): string[] {
+function _filterTruncationNotices(lines: string[]): string[] {
 	return lines.filter(line => !READ_TRUNCATION_NOTICE_RE.test(line));
 }
 
@@ -126,9 +126,7 @@ export function stripHashlinePrefixes(lines: string[]): string[] {
 	const { nonEmpty, hashPrefixCount } = collectLinePrefixStats(lines);
 	if (nonEmpty === 0) return lines;
 	if (hashPrefixCount !== nonEmpty) return lines;
-	return lines
-		.filter(line => !READ_TRUNCATION_NOTICE_RE.test(line))
-		.map(line => stripLeadingHashlinePrefixes(line));
+	return lines.filter(line => !READ_TRUNCATION_NOTICE_RE.test(line)).map(line => stripLeadingHashlinePrefixes(line));
 }
 
 const linesSchema = Type.Union([

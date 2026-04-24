@@ -266,7 +266,11 @@ fn translate_msys_segment(segment: &str, install_roots: &[PathBuf]) -> Option<St
 }
 
 fn is_drive_letter(value: &str) -> bool {
-	value.len() == 1 && value.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+	value.len() == 1
+		&& value
+			.chars()
+			.next()
+			.is_some_and(|c| c.is_ascii_alphabetic())
 }
 
 fn is_windows_style_path(value: &str) -> bool {
@@ -283,14 +287,8 @@ mod tests {
 
 	#[test]
 	fn drive_letter_segments_translate_to_windows_paths() {
-		assert_eq!(
-			translate_msys_segment("/c/Users/foo", &[]).as_deref(),
-			Some("C:\\Users\\foo"),
-		);
-		assert_eq!(
-			translate_msys_segment("/d", &[]).as_deref(),
-			Some("D:\\"),
-		);
+		assert_eq!(translate_msys_segment("/c/Users/foo", &[]).as_deref(), Some("C:\\Users\\foo"),);
+		assert_eq!(translate_msys_segment("/d", &[]).as_deref(), Some("D:\\"),);
 	}
 
 	#[test]

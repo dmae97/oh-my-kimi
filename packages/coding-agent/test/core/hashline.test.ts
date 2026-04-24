@@ -959,23 +959,14 @@ describe("stripNewLinePrefixes", () => {
 	});
 
 	it("strips hashline prefixes when generic read truncation notice is present", () => {
-		const lines = [
-			"1#BQ:line one",
-			"2#XS:line two",
-			"",
-			"[42 more lines in file. Use sel=L3 to continue]",
-		];
+		const lines = ["1#BQ:line one", "2#XS:line two", "", "[42 more lines in file. Use sel=L3 to continue]"];
 		const result = stripNewLinePrefixes(lines);
 		expect(result[0]).toBe("line one");
 		expect(result[1]).toBe("line two");
 	});
 
 	it("strips nested hashline prefixes (already-corrupted content re-read)", () => {
-		const lines = [
-			"1#NX:1#BQ:---",
-			"2#TY:2#XS:title: example",
-			"3#JZ:3#BQ:---",
-		];
+		const lines = ["1#NX:1#BQ:---", "2#TY:2#XS:title: example", "3#JZ:3#BQ:---"];
 		const result = stripNewLinePrefixes(lines);
 		expect(result[0]).toBe("---");
 		expect(result[1]).toBe("title: example");
@@ -1013,15 +1004,11 @@ describe("stripHashlinePrefixes", () => {
 	});
 
 	it("strips nested hashline prefixes from already-corrupted content", () => {
-		const lines = [
-			"1#NX:1#BQ:---",
-			"2#TY:2#XS:title",
-		];
+		const lines = ["1#NX:1#BQ:---", "2#TY:2#XS:title"];
 		const result = stripHashlinePrefixes(lines);
 		expect(result[0]).toBe("---");
 		expect(result[1]).toBe("title");
 	});
-
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
