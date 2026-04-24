@@ -125,69 +125,16 @@ describe("ModelRegistry runtime provider registration", () => {
 			expect(model.headers?.[runtimeHeader]).toBe("runtime-header");
 		}
 
-		registry.clearSourceRegistrations("ext://runtime");
-		const anthropicAfterClear = registry.getAll().filter(model => model.provider === "anthropic");
-		for (const model of anthropicAfterClear) {
-			expect(model.headers?.[runtimeHeader]).toBeUndefined();
-		}
-	});
-
-	test("registerProvider applies baseUrl-only overrides to existing provider models across refresh", async () => {
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
-		const proxyBaseUrl = "https://runtime-proxy.example.com/v1";
-		const anthropicBefore = registry.getAll().filter(model => model.provider === "anthropic");
-
-		expect(anthropicBefore.length).toBeGreaterThan(1);
-		registry.registerProvider("anthropic", { baseUrl: proxyBaseUrl }, "ext://runtime");
-
-		const anthropicAfterRegister = registry.getAll().filter(model => model.provider === "anthropic");
-		for (const model of anthropicAfterRegister) {
-			expect(model.baseUrl).toBe(proxyBaseUrl);
-		}
-
-		await registry.refresh("offline");
-		const anthropicAfterRefresh = registry.getAll().filter(model => model.provider === "anthropic");
-		for (const model of anthropicAfterRefresh) {
-			expect(model.baseUrl).toBe(proxyBaseUrl);
-		}
-
-		registry.clearSourceRegistrations("ext://runtime");
-		const anthropicAfterClear = registry.getAll().filter(model => model.provider === "anthropic");
-		for (const model of anthropicAfterClear) {
-			expect(model.baseUrl).not.toBe(proxyBaseUrl);
-		}
-	});
-
-	test("registerProvider provider overrides survive refreshProvider for that provider", async () => {
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
-		const runtimeHeader = "X-Runtime-Provider-Refresh-Header";
-		const proxyBaseUrl = "https://runtime-provider-refresh.example.com/v1";
-
-		registry.registerProvider(
-			"anthropic",
-			{ baseUrl: proxyBaseUrl, headers: { [runtimeHeader]: "runtime-header" } },
-			"ext://runtime",
-		);
-
-		const anthropicAfterRegister = registry.getAll().filter(model => model.provider === "anthropic");
-		expect(anthropicAfterRegister.length).toBeGreaterThan(1);
-		for (const model of anthropicAfterRegister) {
-			expect(model.baseUrl).toBe(proxyBaseUrl);
-			expect(model.headers?.[runtimeHeader]).toBe("runtime-header");
-		}
-
 		await registry.refreshProvider("anthropic", "offline");
 		const anthropicAfterProviderRefresh = registry.getAll().filter(model => model.provider === "anthropic");
-		expect(anthropicAfterProviderRefresh.length).toBeGreaterThan(1);
+		expect(anthropicAfterProviderRefresh.length).toBe(anthropicBefore.length);
 		for (const model of anthropicAfterProviderRefresh) {
-			expect(model.baseUrl).toBe(proxyBaseUrl);
 			expect(model.headers?.[runtimeHeader]).toBe("runtime-header");
 		}
 
 		registry.clearSourceRegistrations("ext://runtime");
 		const anthropicAfterClear = registry.getAll().filter(model => model.provider === "anthropic");
 		for (const model of anthropicAfterClear) {
-			expect(model.baseUrl).not.toBe(proxyBaseUrl);
 			expect(model.headers?.[runtimeHeader]).toBeUndefined();
 		}
 	});

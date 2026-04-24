@@ -876,10 +876,6 @@ export class ModelRegistry {
 		this.#discoverableProviders = discoverableProviders;
 		this.#customModelOverlays = customModels;
 		this.#providerOverrides = overrides;
-		for (const [providerName, runtimeOverride] of this.#runtimeProviderOverrides) {
-			const merged = this.#mergeProviderOverride(this.#providerOverrides.get(providerName), runtimeOverride);
-			this.#providerOverrides.set(providerName, merged);
-		}
 		this.#modelOverrides = modelOverrides;
 		this.#equivalenceConfig = equivalence;
 
@@ -890,8 +886,9 @@ export class ModelRegistry {
 		const withConfigModels = this.#mergeCustomModels(resolvedDefaults, this.#customModelOverlays);
 		// Merge runtime extension models so they survive refresh() cycles
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
+		const withRuntimeProviderOverrides = this.#applyRuntimeProviderOverrides(combined);
 
-		this.#models = this.#applyModelOverrides(combined, this.#modelOverrides);
+		this.#models = this.#applyModelOverrides(withRuntimeProviderOverrides, this.#modelOverrides);
 		this.#rebuildCanonicalIndex();
 	}
 
@@ -1182,7 +1179,8 @@ export class ModelRegistry {
 		const withConfigModels = this.#mergeCustomModels(resolved, this.#customModelOverlays);
 		// Merge runtime extension models so they survive online discovery completion
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
-		this.#models = this.#applyModelOverrides(combined, this.#modelOverrides);
+		const withRuntimeProviderOverrides = this.#applyRuntimeProviderOverrides(combined);
+		this.#models = this.#applyModelOverrides(withRuntimeProviderOverrides, this.#modelOverrides);
 		this.#rebuildCanonicalIndex();
 	}
 
@@ -1682,6 +1680,14 @@ export class ModelRegistry {
 			headers: override.headers ? { ...entry.headers, ...override.headers } : entry.headers,
 		};
 	}
+	#applyRuntimeProviderOverrides(models: Model<Api>[]): Model<Api>[] {
+		if (this.#runtimeProviderOverrides.size === 0) return models;
+		return models.map(model => {
+			const override = this.#runtimeProviderOverrides.get(model.provider);
+			if (!override) return model;
+			return this.#applyProviderTransportOverride(model, override);
+		});
+	}
 	#applyModelOverrides(models: Model<Api>[], overrides: Map<string, Map<string, ModelOverride>>): Model<Api>[] {
 		if (overrides.size === 0) return models;
 		return models.map(model => {
@@ -2091,10 +2097,6 @@ export class ModelRegistry {
 				transportOverride,
 			);
 			this.#runtimeProviderOverrides.set(providerName, nextRuntimeOverride);
-			this.#runtimeModelOverlays = this.#runtimeModelOverlays.map(overlay => {
-				if (overlay.provider !== providerName) return overlay;
-				return this.#applyProviderTransportOverride(overlay, transportOverride);
-			});
 			this.#models = this.#models.map(m => {
 				if (m.provider !== providerName) return m;
 				return this.#applyProviderTransportOverride(m, transportOverride);
