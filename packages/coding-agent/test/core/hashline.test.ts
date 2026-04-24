@@ -232,7 +232,7 @@ describe("validateLineRef", () => {
 
 	it("rejects mismatched hash", () => {
 		const lines = ["hello", "world"];
-		expect(() => validateLineRef({ line: 1, hash: "0000" }, lines)).toThrow(/has changed since last read/);
+		expect(() => validateLineRef({ line: 1, hash: "0000" }, lines)).toThrow(/Edit rejected:.*has changed/);
 	});
 
 	it("validates last line correctly", () => {
