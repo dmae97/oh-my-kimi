@@ -411,6 +411,8 @@ export interface LspClient {
 	isReading: boolean;
 	serverCapabilities?: LspServerCapabilities;
 	lastActivity: number;
+	/** Serializes outbound JSON-RPC writes to the server process. */
+	writeQueue: Promise<void>;
 	/** Tracks active work-done progress tokens from the server */
 	activeProgressTokens: Set<string | number>;
 	/** Resolves when the server's initial project loading completes (or after timeout) */
