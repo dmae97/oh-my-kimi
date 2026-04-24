@@ -13,6 +13,8 @@ pub mod primitives;
 
 pub mod pipeline;
 
+pub mod plan;
+
 use std::borrow::Cow;
 
 pub use config::{MinimizerConfig, MinimizerOptions};
@@ -45,6 +47,13 @@ pub struct MinimizerOutput {
 	/// Name of the dispatch path that produced this output (e.g. `"git"`,
 	/// `"pipeline:gradle"`, or `"passthrough"`). Useful for telemetry.
 	pub filter:       &'static str,
+	/// Original (un-minimized) capture, surfaced only when the filter
+	/// actually rewrote the output. The caller (JS session layer) is expected
+	/// to persist this via its session-scoped `ArtifactManager` and splice an
+	/// `artifact://<id>` reference into [`text`](Self::text) before
+	/// presenting it to the agent. The minimizer itself does not hold onto
+	/// the original past this struct.
+	pub original_text: Option<String>,
 }
 
 impl MinimizerOutput {
@@ -52,14 +61,28 @@ impl MinimizerOutput {
 	pub fn passthrough<'a>(text: impl Into<Cow<'a, str>>) -> Self {
 		let text = text.into().into_owned();
 		let bytes = text.len();
-		Self { text, changed: false, input_bytes: bytes, output_bytes: bytes, filter: "passthrough" }
+		Self {
+			text,
+			changed: false,
+			input_bytes: bytes,
+			output_bytes: bytes,
+			filter: "passthrough",
+			original_text: None,
+		}
 	}
 
 	/// Transformed output. Caller-supplied `input_bytes` lets the savings
 	/// metric compare pre- and post-filter sizes.
-	pub const fn transformed(text: String, input_bytes: usize) -> Self {
+	pub fn transformed(text: String, input_bytes: usize) -> Self {
 		let output_bytes = text.len();
-		Self { text, changed: true, input_bytes, output_bytes, filter: "" }
+		Self {
+			text,
+			changed: true,
+			input_bytes,
+			output_bytes,
+			filter: "",
+			original_text: None,
+		}
 	}
 
 	/// Attach a `filter` label (e.g. `"git"`, `"pipeline:gradle"`) to an
@@ -67,6 +90,17 @@ impl MinimizerOutput {
 	#[must_use]
 	pub const fn labeled(mut self, filter: &'static str) -> Self {
 		self.filter = filter;
+		self
+	}
+
+	/// Record the original capture buffer on this output so the caller can
+	/// persist it as a session artifact and surface an `artifact://<id>`
+	/// reference in [`text`](Self::text). No-op on passthrough outputs.
+	#[must_use]
+	pub fn with_original(mut self, original: impl Into<String>) -> Self {
+		if self.changed {
+			self.original_text = Some(original.into());
+		}
 		self
 	}
 

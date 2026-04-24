@@ -20,6 +20,7 @@ napi = { version = "3", features = ["napi10", "tokio_rt", "tokio_time"] }
 napi-derive = "3"
 brush-core = { version = "0.4.0", path = "../brush-core-vendored" }
 brush-builtins = { version = "0.1.0", path = "../brush-builtins-vendored" }
+brush-parser = "0.3"
 parking_lot = "0.12.5"
 dashmap = "6.1"
 clap = { version = "4", features = ["derive"] }

@@ -656,6 +656,16 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					artifactPath,
 					artifactId,
 					onChunk: streamTailUpdates(tailBuffer, onUpdate),
+					onMinimizedSave: async originalText => {
+						try {
+							const alloc = await this.session.allocateOutputArtifact?.("bash-original");
+							if (!alloc?.path || !alloc.id) return undefined;
+							await Bun.write(alloc.path, originalText);
+							return alloc.id;
+						} catch {
+							return undefined;
+						}
+					},
 				});
 		if (result.cancelled) {
 			if (signal?.aborted) {

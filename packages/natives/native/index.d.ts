@@ -1017,6 +1017,12 @@ export interface MinimizerOptions {
    */
   settingsPath?: string
   /**
+   * Optional xxHash64 digest (hex) of the settings file contents. When
+   * supplied, the engine refuses to honor a settings file whose hash does
+   * not match — a lightweight trust gate for agent-controllable paths.
+   */
+  settingsHash?: string
+  /**
    * Opt-in allowlist of program names (e.g. `"git"`). When empty or
    * absent, all built-in filters are active.
    */
@@ -1028,6 +1034,27 @@ export interface MinimizerOptions {
    * the raw, un-minimized output. Default 4 MiB.
    */
   maxCaptureBytes?: number
+}
+
+/**
+ * Telemetry for a single minimization, surfaced when the minimizer
+ * actually rewrote the command's output. The session layer is expected to
+ * persist `original_text` via its `ArtifactManager` and splice the
+ * resulting `artifact://<id>` reference into whatever is shown to the
+ * agent.
+ */
+export interface MinimizerResult {
+  /**
+   * Dispatch label produced by the minimizer (e.g. `"git"`,
+   * `"pipeline:gradle"`, `"pipeline+builtin"`).
+   */
+  filter: string
+  /** The full original capture, before minimization. */
+  originalText: string
+  /** Captured byte length before minimization. */
+  inputBytes: number
+  /** Byte length of the minimized text the consumer received. */
+  outputBytes: number
 }
 
 /** Parsed Kitty keyboard protocol sequence result for a Kitty input sequence. */
@@ -1282,6 +1309,8 @@ export interface ShellExecuteResult {
   cancelled: boolean
   /** Whether the command timed out before completion. */
   timedOut: boolean
+  /** See [`ShellRunResult::minimized`]. */
+  minimized?: MinimizerResult
 }
 
 /** Options for configuring a persistent shell session. */
@@ -1316,6 +1345,13 @@ export interface ShellRunResult {
   cancelled: boolean
   /** Whether the command timed out before completion. */
   timedOut: boolean
+  /**
+   * When the minimizer rewrote the captured output, this carries the
+   * original buffer + telemetry so the session layer can persist it as
+   * an artifact and splice an `artifact://<id>` reference into the
+   * minimized text shown to the agent. `None` when nothing was rewritten.
+   */
+  minimized?: MinimizerResult
 }
 
 /**

@@ -1,9 +1,9 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added full-output retrieval metadata to minimized shell command output by appending an `artifact://<id>` footer with byte counts, allowing users to open the original unminimized command output
 - Added streaming preview API exports from the package (`resolveEditMode`, `EDIT_MODE_STRATEGIES`, and chunk preview helpers) so editors can reuse mode-aware edit preview logic programmatically
 - Added `shellMinimizer` configuration options (`enabled`, `settingsPath`, `only`, `except`, and `maxCaptureBytes`) so users can control shell output minimization behavior
 

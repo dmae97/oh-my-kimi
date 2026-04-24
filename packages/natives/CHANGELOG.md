@@ -1,10 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added `settingsHash` to `MinimizerOptions` to verify the minimizer `settingsPath` contents against a xxHash64 digest before applying them
+- Added `minimized` output telemetry via `MinimizerResult` on `ShellExecuteResult` and `ShellRunResult`, exposing the applied minimizer filter and original/minimized byte counts when output is rewritten
 - Added a new `minimizer` option to `ShellExecuteOptions` and `ShellOptions` to configure per-command output minimization
 - Added the `MinimizerOptions` API with controls for enabling minimization, overriding settings via `settingsPath`, allow/deny lists (`only`, `except`), and `maxCaptureBytes` capture limits
+
+### Security
+
+- Added trust-gated loading for minimizer settings by requiring a matching `settingsHash` before accepting a settings file
 
 ## [14.2.0] - 2026-04-23
 

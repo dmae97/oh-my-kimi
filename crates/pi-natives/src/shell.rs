@@ -126,6 +126,24 @@ pub struct ShellRunOptions<'env> {
 	pub signal:     Option<Unknown<'env>>,
 }
 
+/// Telemetry for a single minimization, surfaced when the minimizer
+/// actually rewrote the command's output. The session layer is expected to
+/// persist `original_text` via its `ArtifactManager` and splice the
+/// resulting `artifact://<id>` reference into whatever is shown to the
+/// agent.
+#[napi(object)]
+pub struct MinimizerResult {
+	/// Dispatch label produced by the minimizer (e.g. `"git"`,
+	/// `"pipeline:gradle"`, `"pipeline+builtin"`).
+	pub filter:        String,
+	/// The full original capture, before minimization.
+	pub original_text: String,
+	/// Captured byte length before minimization.
+	pub input_bytes:   u32,
+	/// Byte length of the minimized text the consumer received.
+	pub output_bytes:  u32,
+}
+
 /// Result of running a shell command.
 #[napi(object)]
 pub struct ShellRunResult {
@@ -135,6 +153,11 @@ pub struct ShellRunResult {
 	pub cancelled: bool,
 	/// Whether the command timed out before completion.
 	pub timed_out: bool,
+	/// When the minimizer rewrote the captured output, this carries the
+	/// original buffer + telemetry so the session layer can persist it as
+	/// an artifact and splice an `artifact://<id>` reference into the
+	/// minimized text shown to the agent. `None` when nothing was rewritten.
+	pub minimized: Option<MinimizerResult>,
 }
 
 /// Persistent brush-core shell session.
@@ -261,6 +284,7 @@ async fn run_shell_session(
 				exit_code: None,
 				cancelled: matches!(reason, task::AbortReason::Signal),
 				timed_out: matches!(reason, task::AbortReason::Timeout),
+				minimized: None,
 			});
 		}
 	};
@@ -268,11 +292,17 @@ async fn run_shell_session(
 		res.unwrap_or_else(|e| Err(Error::from_reason(format!("Shell execution task failed: {e}"))));
 	abort_state.clear().await;
 
-	let keepalive = res.as_ref().is_ok_and(session_keepalive);
+	let keepalive = res.as_ref().is_ok_and(|pair| session_keepalive(&pair.0));
 	if !keepalive {
 		*session.lock().await = None;
 	}
-	Ok(ShellRunResult { exit_code: Some(exit_code(&res?)), cancelled: false, timed_out: false })
+	let (exec, minimized) = res?;
+	Ok(ShellRunResult {
+		exit_code: Some(exit_code(&exec)),
+		cancelled: false,
+		timed_out: false,
+		minimized,
+	})
 }
 
 /// Options for executing a shell command via brush-core.
@@ -305,6 +335,8 @@ pub struct ShellExecuteResult {
 	pub cancelled: bool,
 	/// Whether the command timed out before completion.
 	pub timed_out: bool,
+	/// See [`ShellRunResult::minimized`].
+	pub minimized: Option<MinimizerResult>,
 }
 
 /// Execute a brush shell command.
@@ -367,6 +399,7 @@ async fn run_shell_oneshot(
 				exit_code: None,
 				cancelled: matches!(reason, task::AbortReason::Signal),
 				timed_out: matches!(reason, task::AbortReason::Timeout),
+				minimized: None,
 			})
 		},
 	};
@@ -374,7 +407,13 @@ async fn run_shell_oneshot(
 	let res = run_result
 		.unwrap_or_else(|e| Err(Error::from_reason(format!("Shell execution task failed: {e}"))));
 
-	Ok(ShellExecuteResult { exit_code: Some(exit_code(&res?)), cancelled: false, timed_out: false })
+	let (exec, minimized) = res?;
+	Ok(ShellExecuteResult {
+		exit_code: Some(exit_code(&exec)),
+		cancelled: false,
+		timed_out: false,
+		minimized,
+	})
 }
 
 fn null_file() -> Result<OpenFile> {
@@ -559,7 +598,7 @@ async fn run_shell_command(
 	options: &ShellRunConfig,
 	on_chunk: Option<ThreadsafeFunction<String>>,
 	cancel_token: CancellationToken,
-) -> Result<ExecutionResult> {
+) -> Result<(ExecutionResult, Option<MinimizerResult>)> {
 	if let Some(cwd) = options.cwd.as_deref() {
 		session
 			.shell
@@ -714,6 +753,7 @@ async fn run_shell_command(
 
 	let result =
 		result.map_err(|err| Error::from_reason(format!("Shell execution failed: {err}")))?;
+	let mut minimized_out: Option<MinimizerResult> = None;
 	if let Some(OutputRead::Buffered(output)) = reader_output
 		&& let Some(config) = options.minimizer.as_ref()
 	{
@@ -722,11 +762,20 @@ async fn run_shell_command(
 		} else {
 			let minimized =
 				minimizer::apply(&options.command, &output.text, exit_code(&result), config);
-			let _ = minimized.changed;
 			emit_chunk(&minimized.text, final_callback.as_ref());
+			if minimized.changed
+				&& let Some(original) = minimized.original_text
+			{
+				minimized_out = Some(MinimizerResult {
+					filter:        minimized.filter.to_string(),
+					original_text: original,
+					input_bytes:   u32::try_from(minimized.input_bytes).unwrap_or(u32::MAX),
+					output_bytes:  u32::try_from(minimized.text.len()).unwrap_or(u32::MAX),
+				});
+			}
 		}
 	}
-	Ok(result)
+	Ok((result, minimized_out))
 }
 
 #[cfg(unix)]

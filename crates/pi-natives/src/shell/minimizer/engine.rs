@@ -9,13 +9,17 @@ use std::{
 };
 
 use crate::shell::minimizer::{
-	MinimizerConfig, MinimizerCtx, MinimizerOutput, detect, filters,
+	MinimizerConfig, MinimizerCtx, MinimizerOutput, detect, filters, plan,
 	pipeline::{self, CompiledPipeline, PipelineRegistry},
 };
 
 /// Return true when the command has an enabled built-in filter or a matching
-/// declarative pipeline.
+/// declarative pipeline, AND the shell command is a single simple command
+/// (pipes and compound commands are off-limits for correctness).
 pub fn should_minimize(command: &str, config: &MinimizerConfig) -> bool {
+	if !matches!(plan::analyze(command), plan::CommandPlan::Single { .. }) {
+		return false;
+	}
 	let Some(identity) = detect::detect(command) else {
 		return false;
 	};
@@ -32,6 +36,13 @@ pub fn should_minimize(command: &str, config: &MinimizerConfig) -> bool {
 ///
 /// Panics inside filters are caught and converted to pass-through output so
 /// minimization can never be the reason a shell command loses output.
+///
+/// When a filter actually rewrites the text, the returned
+/// [`MinimizerOutput`] carries the original buffer in `original_text` so the
+/// JS session layer can persist it via its `ArtifactManager` and splice an
+/// `artifact://<id>` reference back into the visible text before showing it
+/// to the agent. The minimizer itself never formats the reference — ids are
+/// assigned by the session store, not content-addressed.
 pub fn apply(
 	command: &str,
 	captured: &str,
@@ -42,6 +53,24 @@ pub fn apply(
 
 	if input_bytes > config.max_capture_bytes as usize {
 		return MinimizerOutput::passthrough(captured).labeled("too-large");
+	}
+
+	// Structural guard: only single simple commands are safe to minimize.
+	// Pipes almost always feed a downstream parser (awk, jq, rg, …) and
+	// rewriting their input is a correctness bug. Compound commands (`&&`,
+	// `||`, `;`, `&`) produce interleaved output from multiple programs;
+	// one filter cannot reason about the combined buffer.
+	match plan::analyze(command) {
+		plan::CommandPlan::Single { .. } => {},
+		plan::CommandPlan::Piped => {
+			return MinimizerOutput::passthrough(captured).labeled("piped");
+		},
+		plan::CommandPlan::Compound => {
+			return MinimizerOutput::passthrough(captured).labeled("compound");
+		},
+		plan::CommandPlan::Unsupported => {
+			return MinimizerOutput::passthrough(captured).labeled("parse-error");
+		},
 	}
 
 	let Some(identity) = detect::detect(command) else {
@@ -62,7 +91,8 @@ pub fn apply(
 				Err(_) => MinimizerOutput::passthrough(captured),
 			};
 		let label = program_label(&identity.program);
-		return apply_pipeline_overlay(config, &identity.program, rust_output, label);
+		let overlaid = apply_pipeline_overlay(config, &identity.program, rust_output, label);
+		return overlaid.with_original(captured);
 	}
 
 	if let Some(pipeline) = resolve_pipeline(config, &identity.program, subcommand) {
@@ -74,7 +104,9 @@ pub fn apply(
 		if text == captured {
 			return MinimizerOutput::passthrough(captured).labeled("pipeline-noop");
 		}
-		return MinimizerOutput::transformed(text, input_bytes).labeled("pipeline");
+		return MinimizerOutput::transformed(text, input_bytes)
+			.labeled("pipeline")
+			.with_original(captured);
 	}
 
 	record_unknown_command(command);
@@ -167,6 +199,7 @@ fn apply_pipeline_overlay(
 		input_bytes: inner.input_bytes,
 		output_bytes,
 		filter: "pipeline+builtin",
+		original_text: inner.original_text,
 	}
 }
 
