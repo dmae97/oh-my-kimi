@@ -1088,6 +1088,16 @@ function b() {
 			await asyncJobManager.dispose();
 		});
 
+		it("should surface clamped timeout in results", async () => {
+			const result = await bashTool.execute("test-call-timeout-clamp", { command: "echo ok", timeout: 7200 });
+
+			const output = getTextOutput(result);
+			expect(output).toContain("ok");
+			expect(output).toContain("Timeout clamped to 3600s (requested 7200s; allowed range 1-3600s).");
+			expect(result.details?.timeoutSeconds).toBe(3600);
+			expect(result.details?.requestedTimeoutSeconds).toBe(7200);
+		});
+
 		it("should respect timeout", async () => {
 			await expect(bashTool.execute("test-call-10", { command: "sleep 5", timeout: 1 })).rejects.toThrow(
 				/timed out/i,

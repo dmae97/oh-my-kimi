@@ -23,7 +23,7 @@ import { resolveToCwd } from "./path-utils";
 import { formatToolWorkingDirectory, replaceTabs } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
-import { clampTimeout } from "./tool-timeouts";
+import { clampTimeout, TOOL_TIMEOUTS } from "./tool-timeouts";
 
 export const BASH_DEFAULT_PREVIEW_LINES = 10;
 
@@ -74,6 +74,7 @@ export interface BashToolInput {
 export interface BashToolDetails {
 	meta?: OutputMeta;
 	timeoutSeconds?: number;
+	requestedTimeoutSeconds?: number;
 	async?: {
 		state: "running" | "completed" | "failed";
 		jobId: string;
@@ -219,6 +220,13 @@ function getBashEnvForDisplay(args: BashRenderArgs): Record<string, string> | un
 	if (partialEnv && args.env) return { ...partialEnv, ...args.env };
 	return args.env ?? partialEnv;
 }
+
+function formatTimeoutClampNotice(requestedTimeoutSec: number, effectiveTimeoutSec: number): string | undefined {
+	return requestedTimeoutSec !== effectiveTimeoutSec
+		? `Timeout clamped to ${effectiveTimeoutSec}s (requested ${requestedTimeoutSec}s; allowed range ${TOOL_TIMEOUTS.bash.min}-${TOOL_TIMEOUTS.bash.max}s).`
+		: undefined;
+}
+
 /**
  * Bash tool implementation.
  *
@@ -289,9 +297,16 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		timeoutSec: number,
 		headLines?: number,
 		tailLines?: number,
+		options: { requestedTimeoutSec?: number; notices?: string[] } = {},
 	): AgentToolResult<BashToolDetails> {
-		const outputText = this.#formatResultOutput(result, headLines, tailLines);
+		const outputLines = [this.#formatResultOutput(result, headLines, tailLines)];
+		const notices = options.notices?.filter(Boolean) ?? [];
+		if (notices.length > 0) outputLines.push("", ...notices);
+		const outputText = outputLines.join("\n");
 		const details: BashToolDetails = { timeoutSeconds: timeoutSec };
+		if (options.requestedTimeoutSec !== undefined && options.requestedTimeoutSec !== timeoutSec) {
+			details.requestedTimeoutSeconds = options.requestedTimeoutSec;
+		}
 		const resultBuilder = toolResult(details).text(outputText).truncationFromSummary(result, { direction: "tail" });
 		this.#buildResultText(result, timeoutSec, outputText);
 		return resultBuilder.done();
@@ -302,15 +317,22 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		label: string,
 		previewText: string,
 		timeoutSec: number,
+		options: { requestedTimeoutSec?: number; notices?: string[] } = {},
 	): AgentToolResult<BashToolDetails> {
 		const details: BashToolDetails = {
 			timeoutSeconds: timeoutSec,
 			async: { state: "running", jobId, type: "bash" },
 		};
+		if (options.requestedTimeoutSec !== undefined && options.requestedTimeoutSec !== timeoutSec) {
+			details.requestedTimeoutSeconds = options.requestedTimeoutSec;
+		}
 		const lines: string[] = [];
 		const trimmedPreview = previewText.trimEnd();
 		if (trimmedPreview.length > 0) {
 			lines.push(trimmedPreview, "");
+		}
+		if (options.notices?.length) {
+			lines.push(...options.notices, "");
 		}
 		lines.push(`Background job ${jobId} started: ${label}`);
 		lines.push("Result will be delivered automatically when complete.");
@@ -330,6 +352,8 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		commandCwd: string;
 		timeoutMs: number;
 		timeoutSec: number;
+		requestedTimeoutSec?: number;
+		timeoutClampNotice?: string;
 		headLines?: number;
 		tailLines?: number;
 		resolvedEnv?: Record<string, string>;
@@ -372,6 +396,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						options.timeoutSec,
 						options.headLines,
 						options.tailLines,
+						{
+							requestedTimeoutSec: options.requestedTimeoutSec,
+							notices: [options.timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+						},
 					);
 					const finalText = this.#extractTextResult(finalResult);
 					latestText = finalText;
@@ -531,8 +559,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		}
 
 		// Clamp to reasonable range: 1s - 3600s (1 hour)
-		const timeoutSec = clampTimeout("bash", rawTimeout);
+		const requestedTimeoutSec = rawTimeout;
+		const timeoutSec = clampTimeout("bash", requestedTimeoutSec);
 		const timeoutMs = timeoutSec * 1000;
+		const timeoutClampNotice = formatTimeoutClampNotice(requestedTimeoutSec, timeoutSec);
 
 		if (asyncRequested) {
 			if (!this.session.asyncJobManager) {
@@ -543,13 +573,18 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				commandCwd,
 				timeoutMs,
 				timeoutSec,
+				requestedTimeoutSec,
+				timeoutClampNotice,
 				headLines,
 				tailLines,
 				resolvedEnv,
 				onUpdate,
 				startBackgrounded: true,
 			});
-			return this.#buildBackgroundStartResult(job.jobId, job.label, "", timeoutSec);
+			return this.#buildBackgroundStartResult(job.jobId, job.label, "", timeoutSec, {
+				requestedTimeoutSec,
+				notices: [timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+			});
 		}
 
 		if (this.#autoBackgroundEnabled && !pty && this.session.asyncJobManager) {
@@ -560,6 +595,8 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				commandCwd,
 				timeoutMs,
 				timeoutSec,
+				requestedTimeoutSec,
+				timeoutClampNotice,
 				headLines,
 				tailLines,
 				resolvedEnv,
@@ -567,7 +604,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				startBackgrounded,
 			});
 			if (startBackgrounded) {
-				return this.#buildBackgroundStartResult(job.jobId, job.label, "", timeoutSec);
+				return this.#buildBackgroundStartResult(job.jobId, job.label, "", timeoutSec, {
+					requestedTimeoutSec,
+					notices: [timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+				});
 			}
 			const waitResult = await this.#waitForManagedBashJob(job, autoBackgroundWaitMs, signal);
 			if (waitResult.kind === "completed") {
@@ -584,7 +624,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				throw new ToolAbortError(job.getLatestText() || "Command aborted");
 			}
 			job.setBackgrounded(true);
-			return this.#buildBackgroundStartResult(job.jobId, job.label, job.getLatestText(), timeoutSec);
+			return this.#buildBackgroundStartResult(job.jobId, job.label, job.getLatestText(), timeoutSec, {
+				requestedTimeoutSec,
+				notices: [timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+			});
 		}
 
 		// Track output for streaming updates (tail only)
@@ -623,7 +666,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		if (isInteractiveResult(result) && result.timedOut) {
 			throw new ToolError(normalizeResultOutput(result) || `Command timed out after ${timeoutSec} seconds`);
 		}
-		return this.#buildCompletedResult(result, timeoutSec, headLines, tailLines);
+		return this.#buildCompletedResult(result, timeoutSec, headLines, tailLines, {
+			requestedTimeoutSec,
+			notices: [timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+		});
 	}
 }
 
@@ -700,12 +746,16 @@ export const bashToolRenderer = {
 
 				// Build truncation warning
 				const timeoutSeconds = details?.timeoutSeconds ?? renderContext?.timeout;
-				const timeoutLine =
+				const requestedTimeoutSeconds = details?.requestedTimeoutSeconds;
+				const timeoutLabel =
 					typeof timeoutSeconds === "number"
-						? uiTheme.fg(
-								"dim",
-								`${uiTheme.format.bracketLeft}Timeout: ${timeoutSeconds}s${uiTheme.format.bracketRight}`,
-							)
+						? requestedTimeoutSeconds !== undefined && requestedTimeoutSeconds !== timeoutSeconds
+							? `Timeout: ${timeoutSeconds}s (requested ${requestedTimeoutSeconds}s clamped)`
+							: `Timeout: ${timeoutSeconds}s`
+						: undefined;
+				const timeoutLine =
+					timeoutLabel !== undefined
+						? uiTheme.fg("dim", `${uiTheme.format.bracketLeft}${timeoutLabel}${uiTheme.format.bracketRight}`)
 						: undefined;
 				let warningLine: string | undefined;
 				if (details?.meta?.truncation && !showingFullOutput) {
