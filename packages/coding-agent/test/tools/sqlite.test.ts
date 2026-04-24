@@ -292,9 +292,7 @@ describe("SQLite tool support", () => {
 		expect(() => parseSqliteSelector("users", "where=1=1 LIMIT 1000000 --&limit=2&offset=0")).toThrow(
 			/comments or statement terminators/i,
 		);
-		expect(() => parseSqliteSelector("users", "where=status='active' LIMIT 1")).toThrow(
-			/LIMIT\/OFFSET\/UNION/i,
-		);
+		expect(() => parseSqliteSelector("users", "where=status='active' LIMIT 1")).toThrow(/LIMIT\/OFFSET\/UNION/i);
 		expect(() => parseSqliteSelector("users", "where=1=1; DROP TABLE users")).toThrow(
 			/comments or statement terminators/i,
 		);

@@ -1612,6 +1612,22 @@ export const SETTINGS_SCHEMA = {
 		ui: { tab: "tasks", label: "Claude Project Commands", description: "Load commands from .claude/commands/" },
 	},
 
+	"commands.enableOpencodeUser": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tasks",
+			label: "OpenCode User Commands",
+			description: "Load commands from ~/.config/opencode/commands/",
+		},
+	},
+
+	"commands.enableOpencodeProject": {
+		type: "boolean",
+		default: true,
+		ui: { tab: "tasks", label: "OpenCode Project Commands", description: "Load commands from .opencode/commands/" },
+	},
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Providers
 	// ────────────────────────────────────────────────────────────────────────
