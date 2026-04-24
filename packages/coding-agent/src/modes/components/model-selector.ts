@@ -43,6 +43,19 @@ function getAlphaSearchTokens(query: string): string[] {
 	return [...normalizeSearchText(query).matchAll(/[a-z]+/g)].map(match => match[0]).filter(token => token.length > 0);
 }
 
+function computeModelRank(model: Model, roles: Record<string, RoleAssignment | undefined>): number {
+	let i = 0;
+	while (i < MODEL_ROLE_IDS.length) {
+		const role = MODEL_ROLE_IDS[i];
+		const assigned = roles[role];
+		if (assigned && modelsAreEqual(assigned.model, model)) {
+			break;
+		}
+		i++;
+	}
+	return i;
+}
+
 interface ModelItem {
 	kind: "provider";
 	provider: string;
@@ -252,18 +265,7 @@ export class ModelSelectorComponent extends Container {
 		const mruOrder = this.#settings.getStorage()?.getModelUsageOrder() ?? [];
 		const mruIndex = new Map(mruOrder.map((key, i) => [key, i]));
 
-		const modelRank = (model: ModelItem) => {
-			let i = 0;
-			while (i < MODEL_ROLE_IDS.length) {
-				const role = MODEL_ROLE_IDS[i];
-				const assigned = this.#roles[role];
-				if (assigned && modelsAreEqual(assigned.model, model.model)) {
-					break;
-				}
-				i++;
-			}
-			return i;
-		};
+		const modelRank = (item: ModelItem) => computeModelRank(item.model, this.#roles);
 
 		const dateRe = /-(\d{8})$/;
 		const latestRe = /-latest$/;
@@ -325,18 +327,7 @@ export class ModelSelectorComponent extends Container {
 		const mruOrder = this.#settings.getStorage()?.getModelUsageOrder() ?? [];
 		const mruIndex = new Map(mruOrder.map((key, i) => [key, i]));
 
-		const modelRank = (model: CanonicalModelItem) => {
-			let i = 0;
-			while (i < MODEL_ROLE_IDS.length) {
-				const role = MODEL_ROLE_IDS[i];
-				const assigned = this.#roles[role];
-				if (assigned && modelsAreEqual(assigned.model, model.model)) {
-					break;
-				}
-				i++;
-			}
-			return i;
-		};
+		const modelRank = (item: CanonicalModelItem) => computeModelRank(item.model, this.#roles);
 
 		models.sort((a, b) => {
 			const aRank = modelRank(a);

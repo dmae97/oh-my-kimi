@@ -20,12 +20,10 @@ RUN bun install --frozen-lockfile
 RUN bun --cwd=packages/natives run build
 RUN cd packages/coding-agent && bun run build
 
-# Install binary and native addon to PATH
+# Install binary to PATH
 RUN mkdir -p /root/.local/bin && \
-    cp packages/coding-agent/dist/omp /root/.local/bin/ && \
-    cp packages/natives/native/pi_natives.linux-x64-modern.node /root/.local/bin/ && \
-    cp packages/natives/native/pi_natives.linux-x64-baseline.node /root/.local/bin/
+    cp packages/coding-agent/dist/omp /root/.local/bin/
 ENV PATH="/root/.local/bin:$PATH"
 
 # Verify
-RUN omp --version
+RUN HOME=/tmp/omp-home XDG_DATA_HOME=/tmp/omp-xdg omp --version

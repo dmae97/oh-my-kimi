@@ -34,10 +34,12 @@ import type {
 import { isAnthropicOAuthToken, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotAuthError } from "../utils/http-inspector";
-import { createFirstEventWatchdog, getStreamFirstEventTimeoutMs, markFirstStreamEvent } from "../utils/idle-iterator";
+import { isFoundryEnabled } from "../utils/foundry";
+import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
+import { createWatchdog, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
+import { isCopilotRetryableError } from "../utils/retry";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -166,6 +168,18 @@ type AnthropicSamplingParams = MessageCreateParamsStreaming & {
 	top_p?: number;
 	top_k?: number;
 };
+
+/**
+ * Adaptive thinking `display` is supported starting with Claude Opus 4.7.
+ * Older adaptive-thinking models (Opus 4.6, Sonnet 4.6+) reject the field.
+ */
+function supportsAdaptiveThinkingDisplay(modelId: string): boolean {
+	const match = /claude-opus-(\d+)-(\d+)/.exec(modelId);
+	if (!match) return false;
+	const major = Number(match[1]);
+	const minor = Number(match[2]);
+	return major > 4 || (major === 4 && minor >= 7);
+}
 function getCacheControl(
 	baseUrl: string,
 	cacheRetention?: CacheRetention,
@@ -355,7 +369,7 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 	return blocks;
 }
 
-export type AnthropicEffort = "low" | "medium" | "high" | "max";
+export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface AnthropicOptions extends StreamOptions {
 	/**
@@ -427,13 +441,6 @@ type FoundryTlsOptions = {
 	cert?: string;
 	key?: string;
 };
-
-function isFoundryEnabled(): boolean {
-	const value = $env.CLAUDE_CODE_USE_FOUNDRY;
-	if (!value) return false;
-	const normalized = value.trim().toLowerCase();
-	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
 
 function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: string): string | undefined {
 	if (model.provider === "github-copilot") {
@@ -613,8 +620,9 @@ function isProviderRetryableStreamEnvelopeError(error: unknown): boolean {
 	return /stream event order|before message_start/i.test(error.message);
 }
 
-export function isProviderRetryableError(error: unknown): boolean {
+export function isProviderRetryableError(error: unknown, provider?: string): boolean {
 	if (!(error instanceof Error)) return false;
+	if (provider === "github-copilot" && isCopilotRetryableError(error)) return true;
 	const msg = error.message.toLowerCase();
 	return (
 		/rate.?limit|too many requests|overloaded|service.?unavailable|internal_error|stream error.*received from peer|1302|timed?\s*out while waiting for the first event|timeout waiting for first/i.test(
@@ -735,14 +743,17 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 
 				try {
 					const { data: anthropicStream } = await anthropicRequest.withResponse();
-					const firstEventWatchdog = createFirstEventWatchdog(firstEventTimeoutMs, () =>
+					const firstEventWatchdog = createWatchdog(firstEventTimeoutMs, () =>
 						activeAbortTracker.abortLocally(firstEventTimeoutAbortError),
 					);
 					let sawEvent = false;
 					let sawMessageStart = false;
 					let sawTerminalEnvelope = false;
 
-					for await (const event of markFirstStreamEvent(anthropicStream, firstEventWatchdog)) {
+					for await (const event of anthropicStream) {
+						if (!sawEvent) {
+							clearTimeout(firstEventWatchdog);
+						}
 						sawEvent = true;
 
 						if (event.type === "message_start") {
@@ -946,7 +957,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					const isTransientEnvelopeFailure =
 						isTransientStreamParseError(streamFailure) || isTransientStreamEnvelopeError(streamFailure);
 					const canRetryTransientEnvelopeFailure = isTransientEnvelopeFailure && !streamedReplayUnsafeContent;
-					const canRetryProviderFailure = firstTokenTime === undefined && isProviderRetryableError(streamFailure);
+					const canRetryProviderFailure =
+						firstTokenTime === undefined && isProviderRetryableError(streamFailure, model.provider);
 					if (
 						activeAbortTracker.wasCallerAbort() ||
 						providerRetryAttempt >= PROVIDER_MAX_RETRIES ||
@@ -979,7 +991,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			const firstEventTimeoutError = activeAbortTracker.getLocalAbortReason();
 			output.stopReason = activeAbortTracker.wasCallerAbort() ? "aborted" : "error";
 			output.errorMessage = firstEventTimeoutError?.message ?? (await finalizeErrorMessage(error, rawRequestDump));
-			output.errorMessage = rewriteCopilotAuthError(output.errorMessage, error, model.provider);
+			output.errorMessage = rewriteCopilotError(output.errorMessage, error, model.provider);
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -1069,9 +1081,6 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	if (model.provider === "github-copilot") {
 		const copilotApiKey = parseGitHubCopilotApiKey(apiKey).accessToken;
 		const betaFeatures = [...extraBetas];
-		if (interleavedThinking) {
-			betaFeatures.push("interleaved-thinking-2025-05-14");
-		}
 		const defaultHeaders = mergeHeaders(
 			{
 				Accept: stream ? "text/event-stream" : "application/json",
@@ -1416,16 +1425,25 @@ function buildParams(
 		params.tools = convertTools(context.tools, isOAuthToken);
 	}
 
-	if (options?.thinkingEnabled && model.reasoning) {
+	if (options?.thinkingEnabled && model.reasoning && model.provider !== "github-copilot") {
 		const mode = model.thinking?.mode;
 		const requestedEffort = options.reasoning;
 		const effort =
 			options.effort ?? (requestedEffort ? mapEffortToAnthropicAdaptiveEffort(model, requestedEffort) : undefined);
 
 		if (mode === "anthropic-adaptive") {
-			params.thinking = { type: "adaptive" };
+			// Starting with Claude Opus 4.7, adaptive thinking content is omitted from the
+			// response by default. Opt into summarized reasoning so thinking deltas keep
+			// streaming with human-readable content for callers that rely on it.
+			const adaptive: { type: "adaptive"; display?: "summarized" | "omitted" } = { type: "adaptive" };
+			if (supportsAdaptiveThinkingDisplay(model.id)) {
+				adaptive.display = "summarized";
+			}
+			params.thinking = adaptive as typeof params.thinking;
 			if (effort) {
-				params.output_config = { effort };
+				// SDK's OutputConfig.effort type is not yet widened to include the new "xhigh"
+				// level introduced with Claude Opus 4.7. Cast until the SDK catches up.
+				params.output_config = { effort } as typeof params.output_config;
 			}
 		} else {
 			params.thinking = {
@@ -1433,7 +1451,7 @@ function buildParams(
 				budget_tokens: options.thinkingBudgetTokens || 1024,
 			};
 			if (mode === "anthropic-budget-effort" && effort) {
-				params.output_config = { effort };
+				params.output_config = { effort } as typeof params.output_config;
 			}
 		}
 	}
@@ -1471,6 +1489,10 @@ function buildParams(
 		params.system = systemBlocks;
 	}
 	disableThinkingIfToolChoiceForced(params);
+	if (model.provider === "github-copilot") {
+		delete params.thinking;
+		delete params.output_config;
+	}
 	ensureMaxTokensForThinking(params, model);
 	applyPromptCaching(params, cacheControl);
 	enforceCacheControlLimit(params, 4);

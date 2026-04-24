@@ -1,13 +1,29 @@
-Manages a phased task list. Submit an `ops` array — each op mutates state incrementally.
-**Primary op: `update`.** Use it to mark tasks `in_progress` or `completed`. Only reach for other ops when the structure itself needs to change.
+Manages a phased task list. Each field is a verb — set the ones you need in a single call.
+The next pending task is auto-promoted to `in_progress` after completing the current one.
 
-<critical>
-You **MUST** call this tool twice per task:
-1. Before beginning — `{op: "update", id: "task-N", status: "in_progress"}`
-2. Immediately after finishing — `{op: "update", id: "task-N", status: "completed"}`
+<protocol>
+## Fields
 
-You **MUST** keep exactly one task `in_progress` at all times. Mark `completed` immediately — no batching.
-</critical>
+|Field|Type|When to use|
+|---|---|---|
+|`phases`|Phase[]|Initial setup, or full restructure when the plan changes significantly|
+|`complete`|string[]|Mark tasks done|
+|`start`|string|Jump to a specific task out of order|
+|`abandon`|string[]|Drop tasks intentionally|
+|`remove`|string[]|Remove tasks that are no longer relevant|
+|`add_notes`|{id, notes}[]|Append runtime observations to tasks|
+|`add_tasks`|{phase, content, details?}[]|Add tasks to a phase (by name or ID)|
+|`add_phase`|{name, tasks?}|Add a new phase of work discovered mid-task|
+
+## Task Anatomy
+- `content`: Short label (5-10 words). What is being done, not how.
+- `details`: File paths, implementation steps, edge cases. Shown only when the task is active.
+
+## Rules
+- Mark tasks completed immediately after finishing — never defer
+- Complete phases in order — do not skip ahead while earlier ones are pending
+- On blockers: add a new task describing the blocker
+</protocol>
 
 <conditions>
 Create a todo list when:
@@ -17,73 +33,35 @@ Create a todo list when:
 4. New instructions arrive mid-task — capture before proceeding
 </conditions>
 
-<protocol>
-## Operations
+<example name="initial-setup">
+{phases: [
+  {name: "Investigation", tasks: [{content: "Read source"}, {content: "Map callsites"}]},
+  {name: "Implementation", tasks: [{content: "Apply fix", details: "Update parser.ts to handle edge case in line 42"}, {content: "Run tests"}]}
+]}
+</example>
 
-|op|When to use|
-|---|---|
-|`update`|Mark a task in_progress / completed / abandoned, or edit content/notes|
-|`replace`|Initial setup, or full restructure when the plan changes significantly|
-|`add_phase`|Add a new phase of work discovered mid-task|
-|`add_task`|Add a task to an existing phase|
-|`remove_task`|Remove a task that is no longer relevant|
+<example name="complete">
+{complete: ["task-2", "task-3"]}
+</example>
 
-## Statuses
+<example name="add-notes">
+{add_notes: [{id: "task-3", notes: "Found edge case in parser — needs null check"}]}
+</example>
 
-|Status|Meaning|
-|---|---|
-|`pending`|Not started|
-|`in_progress`|Currently working — exactly one at a time|
-|`completed`|Fully done|
-|`abandoned`|Dropped intentionally|
+<example name="add-task">
+{add_tasks: [{phase: "Implementation", content: "Handle retries", details: "Cap exponential backoff in retry.ts"}]}
+</example>
 
-## Rules
-- You **MUST** mark `in_progress` **before** starting work, not after
-- You **MUST** mark `completed` **immediately** — never defer
-- You **MUST** keep exactly **one** task `in_progress`
-- You **MUST** complete phases in order — do not mark later tasks `completed` while earlier ones are `pending`
-- On blockers: keep `in_progress`, add a new task describing the blocker
-- Multiple ops can be batched in one call (e.g., complete current + start next)
-</protocol>
+<example name="add-phase">
+{add_phase: {name: "Cleanup", tasks: [{content: "Remove dead code"}]}}
+</example>
 
-## Task Anatomy
-- `content`: Short label (5-10 words). What is being done, not how.
-- `details`: File paths, implementation steps, edge cases. Shown only when task is active.
-- `notes`: Runtime observations added during execution.
+<example name="combined">
+{complete: ["task-2"], add_notes: [{id: "task-3", notes: "Needs extra validation"}]}
+</example>
 
 <avoid>
 - Single-step tasks — act directly
 - Conversational or informational requests
 - Tasks completable in under 3 trivial steps
 </avoid>
-
-<example name="start-task">
-Mark task-2 in_progress before beginning work:
-ops: [{op: "update", id: "task-2", status: "in_progress"}]
-</example>
-
-<example name="complete-and-advance">
-Finish task-2 and start task-3 in one call:
-ops: [
-  {op: "update", id: "task-2", status: "completed"},
-  {op: "update", id: "task-3", status: "in_progress"}
-]
-</example>
-
-<example name="add_task">
-Add a follow-up task with implementation specifics in `details`:
-ops: [{op: "add_task", phase: "Implementation", after: "task-2", task: {content: "Handle retries", details: "Update retry.ts to cap exponential backoff and preserve AbortSignal handling", status: "pending"}}]
-</example>
-
-<example name="initial-setup">
-Replace is for setup only. Prefer add_phase / add_task for incremental additions.
-ops: [{op: "replace", phases: [
-  {name: "Investigation", tasks: [{content: "Read source"}, {content: "Map callsites"}]},
-  {name: "Implementation", tasks: [{content: "Apply fix", details: "Update parser.ts to handle edge case in line 42"}, {content: "Run tests"}]}
-]}]
-</example>
-
-<example name="skip">
-User: "What does this function do?" / "Add a comment" / "Run npm install"
-→ Do it directly. No list needed.
-</example>

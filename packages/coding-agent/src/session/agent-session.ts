@@ -132,7 +132,7 @@ import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import { assertEditableFile } from "../tools/auto-generated-guard";
 import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
-import { resolveToCwd } from "../tools/path-utils";
+import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
 import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo-write";
 import { ToolError } from "../tools/tool-errors";
@@ -2445,8 +2445,8 @@ export class AgentSession {
 		const state = this.#planModeState;
 		if (!state?.enabled) return null;
 		const sessionPlanUrl = "local://PLAN.md";
-		const resolvedPlanPath = state.planFilePath.startsWith("local://")
-			? resolveLocalUrlToPath(state.planFilePath, {
+		const resolvedPlanPath = state.planFilePath.startsWith("local:")
+			? resolveLocalUrlToPath(normalizeLocalScheme(state.planFilePath), {
 					getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
 					getSessionId: () => this.sessionManager.getSessionId(),
 				})
@@ -2456,7 +2456,7 @@ export class AgentSession {
 			getSessionId: () => this.sessionManager.getSessionId(),
 		});
 		const displayPlanPath =
-			state.planFilePath.startsWith("local://") || resolvedPlanPath !== resolvedSessionPlan
+			state.planFilePath.startsWith("local:") || resolvedPlanPath !== resolvedSessionPlan
 				? state.planFilePath
 				: sessionPlanUrl;
 

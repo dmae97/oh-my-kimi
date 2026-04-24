@@ -30,9 +30,9 @@ import { toolCapability } from "../capability/tool";
 import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
 
 import {
+	buildExtensionModuleItems,
 	createSourceMeta,
 	discoverExtensionModulePaths,
-	getExtensionNameFromPath,
 	loadFilesFromDir,
 	SOURCE_PATHS,
 	scanSkillsFromDir,
@@ -251,20 +251,7 @@ async function loadExtensionModules(ctx: LoadContext): Promise<LoadResult<Extens
 		discoverExtensionModulePaths(ctx, projectExtensionsDir),
 	]);
 
-	const items: ExtensionModule[] = [
-		...userPaths.map(extPath => ({
-			name: getExtensionNameFromPath(extPath),
-			path: extPath,
-			level: "user" as const,
-			_source: createSourceMeta(PROVIDER_ID, extPath, "user"),
-		})),
-		...projectPaths.map(extPath => ({
-			name: getExtensionNameFromPath(extPath),
-			path: extPath,
-			level: "project" as const,
-			_source: createSourceMeta(PROVIDER_ID, extPath, "project"),
-		})),
-	];
+	const items = buildExtensionModuleItems(PROVIDER_ID, userPaths, projectPaths);
 
 	return { items, warnings };
 }

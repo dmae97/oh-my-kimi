@@ -1,3 +1,4 @@
+import type { AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
 import { formatBytes } from "../tools/render-utils";
 import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
@@ -749,4 +750,27 @@ export function formatHeadTruncationNotice(
 	const nextOffset = endLineDisplay + 1;
 	const notice = `[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use sel=L${nextOffset} to continue]`;
 	return `\n\n${notice}`;
+}
+
+// =============================================================================
+// Streaming tail update helper (shared by bash/ssh tools)
+// =============================================================================
+
+/**
+ * Build an onChunk handler that appends to a TailBuffer and emits a streaming
+ * update (when `onUpdate` is defined) with the buffer's current text.
+ */
+export function streamTailUpdates<TDetails, TInput = unknown>(
+	tailBuffer: TailBuffer,
+	onUpdate: AgentToolUpdateCallback<TDetails, TInput> | undefined,
+): (chunk: string) => void {
+	return chunk => {
+		tailBuffer.append(chunk);
+		if (onUpdate) {
+			onUpdate({
+				content: [{ type: "text", text: tailBuffer.text() }],
+				details: {} as TDetails,
+			});
+		}
+	};
 }

@@ -411,7 +411,7 @@ const browserSchema = Type.Object({
 	value: Type.Optional(Type.String({ description: "Value to set (fill)" })),
 	attribute: Type.Optional(Type.String({ description: "Attribute name to read (get_attribute)" })),
 	key: Type.Optional(Type.String({ description: "Keyboard key to press (press)" })),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default: 30)" })),
+	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds", default: 30 })),
 	wait_until: Type.Optional(
 		StringEnum(["load", "domcontentloaded", "networkidle0", "networkidle2"], {
 			description: "Navigation wait condition (goto)",

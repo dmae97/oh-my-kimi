@@ -230,7 +230,7 @@ export class TUI extends Container {
 	#sixelProbeUnsubscribe?: () => void;
 	#showHardwareCursor = $flag("PI_HARDWARE_CURSOR");
 	#clearOnShrink = $flag("PI_CLEAR_ON_SHRINK"); // Clear empty rows when content shrinks (default: off)
-	#maxLinesRendered = 0; // High-water line count used for clear-on-shrink policy
+	#maxLinesRendered = 0; // Line count from last render, used for viewport calculation
 	#fullRedrawCount = 0;
 	#stopped = false;
 
@@ -1066,11 +1066,11 @@ export class TUI extends Container {
 			return;
 		}
 
-		// Content shrunk below the working area and no overlays - re-render to clear empty rows
+		// Content shrunk below the previous render and no overlays - re-render to clear empty rows
 		// (overlays need the padding, so only do this when no overlays are active)
 		// Configurable via setClearOnShrink() or PI_CLEAR_ON_SHRINK=0 env var
-		if (this.#clearOnShrink && newLines.length < this.#maxLinesRendered && this.overlayStack.length === 0) {
-			logRedraw(`clearOnShrink (maxLinesRendered=${this.#maxLinesRendered})`);
+		if (this.#clearOnShrink && newLines.length < this.#previousLines.length && this.overlayStack.length === 0) {
+			logRedraw(`clearOnShrink (prev=${this.#previousLines.length}, new=${newLines.length})`);
 			fullRender(true);
 			return;
 		}
@@ -1144,18 +1144,34 @@ export class TUI extends Container {
 			this.#previousLines = newLines;
 			this.#previousWidth = width;
 			this.#previousHeight = height;
-			this.#viewportTopRow = Math.max(0, this.#maxLinesRendered - height);
+			this.#maxLinesRendered = newLines.length;
+			this.#viewportTopRow = Math.max(0, newLines.length - height);
 			return;
 		}
 
 		// Check if firstChanged is above what was previously visible
-		// Use previousLines.length (not maxLinesRendered) to avoid false positives after content shrinks
 		const previousContentViewportTop = Math.max(0, this.#previousLines.length - height);
 		if (firstChanged < previousContentViewportTop) {
-			// First change is above previous viewport - need full re-render
-			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${previousContentViewportTop})`);
-			fullRender(true);
-			return;
+			const newViewportTop = Math.max(0, newLines.length - height);
+			if (newViewportTop < previousContentViewportTop) {
+				// Viewport needs to shift up — can only be done with a full redraw
+				logRedraw(`viewport shift up (new=${newViewportTop} < prev=${previousContentViewportTop})`);
+				fullRender(true);
+				return;
+			}
+			// Viewport is stable or shifting down — skip invisible above-viewport changes
+			firstChanged = previousContentViewportTop;
+			if (lastChanged < firstChanged) {
+				// All changes are above the viewport — nothing visible to update
+				this.#cursorRow = Math.max(0, newLines.length - 1);
+				this.#maxLinesRendered = newLines.length;
+				this.#viewportTopRow = Math.max(0, newLines.length - height);
+				this.#positionHardwareCursor(cursorPos, newLines.length);
+				this.#previousLines = newLines;
+				this.#previousWidth = width;
+				this.#previousHeight = height;
+				return;
+			}
 		}
 
 		// Render from first changed line to end
@@ -1272,9 +1288,9 @@ export class TUI extends Container {
 		// hardwareCursorRow tracks actual terminal cursor position (for movement)
 		this.#cursorRow = Math.max(0, newLines.length - 1);
 		this.#hardwareCursorRow = finalCursorRow;
-		// Track terminal's working area (grows but doesn't shrink unless cleared)
-		this.#maxLinesRendered = Math.max(this.#maxLinesRendered, newLines.length);
-		this.#viewportTopRow = Math.max(0, this.#maxLinesRendered - height);
+		// Track content height for viewport calculation
+		this.#maxLinesRendered = newLines.length;
+		this.#viewportTopRow = Math.max(0, newLines.length - height);
 
 		// Position hardware cursor for IME
 		this.#positionHardwareCursor(cursorPos, newLines.length);

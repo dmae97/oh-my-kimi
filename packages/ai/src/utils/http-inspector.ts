@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { getLogsDir } from "@oh-my-pi/pi-utils";
-import { extractHttpStatusFromError } from "./retry.js";
+import { extractHttpStatusFromError, isCopilotTransientModelError } from "./retry.js";
 import { formatErrorMessageWithRetryAfter } from "./retry-after.js";
 
 export type RawHttpRequestDump = {
@@ -75,11 +75,15 @@ export function withHttpStatus(error: unknown, status: number): Error {
  * Rewrite error message for GitHub Copilot request failures.
  * Must run AFTER finalizeErrorMessage since it replaces the message entirely.
  *
+ * 400 `model_not_supported` = Copilot routing rollout gap for our OAuth client.
+ *        A preview model (gpt-5.3-codex, gpt-5.4*, ...) flaps between 200 and
+ *        400 because only some of Copilot's backends have the model. After the
+ *        in-request retry exhausts, surface guidance rather than the raw error.
  * 401 = token invalid/expired → credential removal is safe, prompt re-login.
  * 403 = token valid but access denied (plan, model policy, org restriction) →
  *       do NOT reuse the auth-failed string (which triggers credential removal).
  */
-export function rewriteCopilotAuthError(errorMessage: string, error: unknown, provider: string): string {
+export function rewriteCopilotError(errorMessage: string, error: unknown, provider: string): string {
 	if (provider !== "github-copilot") return errorMessage;
 	const status = extractHttpStatusFromError(error);
 	if (status === 401) {
@@ -87,6 +91,9 @@ export function rewriteCopilotAuthError(errorMessage: string, error: unknown, pr
 	}
 	if (status === 403) {
 		return `GitHub Copilot access denied (HTTP 403). Your account may not have access to this model or feature. Check your Copilot plan or model policy settings.`;
+	}
+	if (isCopilotTransientModelError(error)) {
+		return `GitHub Copilot rejected this model (HTTP 400 model_not_supported) after retries. This is a known intermittent rollout gap for preview models on OAuth clients other than VS Code. Try again in a few seconds, switch to a GA model (gpt-5-mini, gpt-5.2), or run this model from VS Code.`;
 	}
 	return errorMessage;
 }

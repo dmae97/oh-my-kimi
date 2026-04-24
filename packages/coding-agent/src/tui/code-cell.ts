@@ -18,7 +18,7 @@ export interface CodeCellOptions {
 	index?: number;
 	total?: number;
 	title?: string;
-	status?: "pending" | "running" | "complete" | "error";
+	status?: "pending" | "running" | "warning" | "complete" | "error";
 	spinnerFrame?: number;
 	duration?: number;
 	output?: string;
@@ -32,6 +32,7 @@ function getState(status?: CodeCellOptions["status"]): State | undefined {
 	if (!status) return undefined;
 	if (status === "complete") return "success";
 	if (status === "error") return "error";
+	if (status === "warning") return "warning";
 	if (status === "running") return "running";
 	return "pending";
 }
@@ -45,9 +46,11 @@ function formatHeader(options: CodeCellOptions, theme: Theme): { title: string; 
 				? "success"
 				: status === "error"
 					? "error"
-					: status === "running"
-						? "running"
-						: "pending",
+					: status === "warning"
+						? "warning"
+						: status === "running"
+							? "running"
+							: "pending",
 			theme,
 			spinnerFrame,
 		);
@@ -78,10 +81,12 @@ export function renderCodeCell(options: CodeCellOptions, theme: Theme): string[]
 	const { title, meta } = formatHeader(options, theme);
 	const state = getState(options.status);
 
-	const rawCodeLines = highlightCode(replaceTabs(code ?? ""), language);
+	const normalizedCode = replaceTabs(code ?? "");
+	const rawCodeLines = normalizedCode.split("\n");
 	const maxCodeLines = expanded ? rawCodeLines.length : Math.min(rawCodeLines.length, codeMaxLines);
-	const codeLines = rawCodeLines.slice(0, maxCodeLines);
-	const hiddenCodeLines = rawCodeLines.length - codeLines.length;
+	const visibleCode = rawCodeLines.slice(0, maxCodeLines).join("\n");
+	const codeLines = highlightCode(visibleCode, language);
+	const hiddenCodeLines = rawCodeLines.length - maxCodeLines;
 	if (hiddenCodeLines > 0) {
 		const hint = formatExpandHint(theme, expanded, hiddenCodeLines > 0);
 		const moreLine = `${formatMoreItems(hiddenCodeLines, "line")}${hint ? ` ${hint}` : ""}`;

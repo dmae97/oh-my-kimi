@@ -18,7 +18,7 @@ import { ensureTool } from "../utils/tools-manager";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../web/parallel";
 import { specialHandlers } from "../web/scrapers";
 import type { RenderResult } from "../web/scrapers/types";
-import { finalizeOutput, loadPage, MAX_OUTPUT_CHARS } from "../web/scrapers/types";
+import { finalizeOutput, loadPage, looksLikeHtml, MAX_OUTPUT_CHARS } from "../web/scrapers/types";
 import { convertWithMarkit, fetchBinary } from "../web/scrapers/utils";
 import { applyListLimit } from "./list-limit";
 import { formatStyledArtifactReference, type OutputMeta } from "./output-meta";
@@ -251,19 +251,6 @@ function resolveImageMimeType(mime: string, extensionHint: string): string | nul
 
 function isInlineImageMimeTypeSupported(mimeType: string): boolean {
 	return SUPPORTED_INLINE_IMAGE_MIME_TYPES.has(mimeType);
-}
-
-/**
- * Check if content looks like HTML
- */
-function looksLikeHtml(content: string): boolean {
-	const trimmed = content.trim().toLowerCase();
-	return (
-		trimmed.startsWith("<!doctype") ||
-		trimmed.startsWith("<html") ||
-		trimmed.startsWith("<head") ||
-		trimmed.startsWith("<body")
-	);
 }
 
 /**

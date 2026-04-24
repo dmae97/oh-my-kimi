@@ -10,6 +10,7 @@ import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
+import { isApiKeyAvailable } from "./utils";
 
 const JINA_SEARCH_URL = "https://s.jina.ai";
 
@@ -83,11 +84,7 @@ export class JinaProvider extends SearchProvider {
 	readonly label = "Jina";
 
 	isAvailable() {
-		try {
-			return !!findApiKey();
-		} catch {
-			return false;
-		}
+		return isApiKeyAvailable(findApiKey);
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {

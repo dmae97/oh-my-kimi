@@ -22,11 +22,10 @@ import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
-	createFirstEventWatchdog,
+	createWatchdog,
 	getOpenAIStreamIdleTimeoutMs,
 	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
-	markFirstStreamEvent,
 } from "../utils/idle-iterator";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
 import { supportsDeveloperRole } from "./openai-responses";
@@ -139,14 +138,15 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				body: params,
 			};
 			const openaiStream = await client.responses.create(params, { signal: requestSignal });
-			const firstEventWatchdog = createFirstEventWatchdog(
+			const firstEventWatchdog = createWatchdog(
 				options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs),
 				() => abortTracker.abortLocally(firstEventTimeoutAbortError),
 			);
 			stream.push({ type: "start", partial: output });
 
 			await processResponsesStream(
-				iterateWithIdleTimeout(markFirstStreamEvent(openaiStream, firstEventWatchdog), {
+				iterateWithIdleTimeout(openaiStream, {
+					watchdog: firstEventWatchdog,
 					idleTimeoutMs,
 					errorMessage: "Azure OpenAI responses stream stalled while waiting for the next event",
 					onIdle: () => requestAbortController.abort(),

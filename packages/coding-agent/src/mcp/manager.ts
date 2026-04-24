@@ -176,6 +176,33 @@ export class MCPManager {
 		}
 	}
 
+	#subscribeAndTrack(name: string, connection: MCPServerConnection, uris: string[], notificationEpoch: number): void {
+		void subscribeToResources(connection, uris)
+			.then(() => {
+				const action = resolveSubscriptionPostAction(
+					this.#notificationsEnabled,
+					this.#notificationsEpoch,
+					notificationEpoch,
+				);
+				if (action === "rollback") {
+					void unsubscribeFromResources(connection, uris).catch(error => {
+						logger.debug("Failed to rollback stale MCP resource subscription", {
+							path: `mcp:${name}`,
+							error,
+						});
+					});
+					return;
+				}
+				if (action === "ignore") {
+					return;
+				}
+				this.#subscribedResources.set(name, new Set(uris));
+			})
+			.catch(error => {
+				logger.debug("Failed to subscribe to MCP resources", { path: `mcp:${name}`, error });
+			});
+	}
+
 	setNotificationsEnabled(enabled: boolean): void {
 		const wasEnabled = this.#notificationsEnabled;
 		this.#notificationsEnabled = enabled;
@@ -189,30 +216,7 @@ export class MCPManager {
 			for (const [name, connection] of this.#connections) {
 				if (connection.capabilities.resources?.subscribe && connection.resources) {
 					const uris = connection.resources.map(r => r.uri);
-					void subscribeToResources(connection, uris)
-						.then(() => {
-							const action = resolveSubscriptionPostAction(
-								this.#notificationsEnabled,
-								this.#notificationsEpoch,
-								notificationEpoch,
-							);
-							if (action === "rollback") {
-								void unsubscribeFromResources(connection, uris).catch(error => {
-									logger.debug("Failed to rollback stale MCP resource subscription", {
-										path: `mcp:${name}`,
-										error,
-									});
-								});
-								return;
-							}
-							if (action === "ignore") {
-								return;
-							}
-							this.#subscribedResources.set(name, new Set(uris));
-						})
-						.catch(error => {
-							logger.debug("Failed to subscribe to MCP resources", { path: `mcp:${name}`, error });
-						});
+					this.#subscribeAndTrack(name, connection, uris, notificationEpoch);
 				}
 			}
 			return;
@@ -830,30 +834,7 @@ export class MCPManager {
 				if (this.#notificationsEnabled && connection.capabilities.resources?.subscribe) {
 					const uris = resources.map(r => r.uri);
 					const notificationEpoch = this.#notificationsEpoch;
-					void subscribeToResources(connection, uris)
-						.then(() => {
-							const action = resolveSubscriptionPostAction(
-								this.#notificationsEnabled,
-								this.#notificationsEpoch,
-								notificationEpoch,
-							);
-							if (action === "rollback") {
-								void unsubscribeFromResources(connection, uris).catch(error => {
-									logger.debug("Failed to rollback stale MCP resource subscription", {
-										path: `mcp:${name}`,
-										error,
-									});
-								});
-								return;
-							}
-							if (action === "ignore") {
-								return;
-							}
-							this.#subscribedResources.set(name, new Set(uris));
-						})
-						.catch(error => {
-							logger.debug("Failed to subscribe to MCP resources", { path: `mcp:${name}`, error });
-						});
+					this.#subscribeAndTrack(name, connection, uris, notificationEpoch);
 				}
 			} catch (error) {
 				logger.debug("Failed to load MCP resources", { path: `mcp:${name}`, error });

@@ -549,8 +549,12 @@ export function isChunkParams(params: unknown): params is ChunkParams {
 		return false;
 	}
 	const first = params.edits[0];
-	if (typeof first !== "object" || first === null || !("path" in first)) return false;
-	return "write" in first || "replace" in first || "insert" in first;
+	// Accept a bare `{ path }` entry: it is interpreted downstream as a chunk
+	// delete. Some providers strip `null` values from tool-call JSON, so a
+	// documented `{ path, write: null }` delete can arrive here as just
+	// `{ path }`. Rejecting that surfaced as a misleading
+	// "Invalid edit parameters for chunk mode." error.
+	return typeof first === "object" && first !== null && "path" in first;
 }
 
 /** Auto-correct indentation for content targeting a body region (`~`) when autoIndent is on.

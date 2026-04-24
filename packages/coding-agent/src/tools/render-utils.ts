@@ -4,8 +4,10 @@
  * Provides consistent formatting, truncation, and display patterns across all
  * tool renderers to ensure a unified TUI experience.
  */
+
 import * as os from "node:os";
 import * as path from "node:path";
+import type { ToolCallContext } from "@oh-my-pi/pi-agent-core";
 import type { Ellipsis } from "@oh-my-pi/pi-natives";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { pluralize } from "@oh-my-pi/pi-utils";
@@ -210,6 +212,10 @@ interface ParsedDiagnostic {
 	code?: string;
 }
 
+function sanitizeDiagnosticDisplayText(text: string): string {
+	return replaceTabs(text);
+}
+
 function getSeverityRank(severity: ParsedDiagnostic["severity"]): number {
 	switch (severity) {
 		case "error":
@@ -227,13 +233,13 @@ function parseDiagnosticMessage(msg: string): ParsedDiagnostic | null {
 	const match = msg.match(/^(.+?):(\d+):(\d+)\s+\[(\w+)\]\s+(?:\[([^\]]+)\]\s+)?(.+?)(?:\s+\(([^)]+)\))?$/);
 	if (!match) return null;
 	return {
-		filePath: match[1],
+		filePath: sanitizeDiagnosticDisplayText(match[1]),
 		line: parseInt(match[2], 10),
 		col: parseInt(match[3], 10),
 		severity: match[4] as ParsedDiagnostic["severity"],
-		source: match[5],
-		message: match[6],
-		code: match[7],
+		source: match[5] ? sanitizeDiagnosticDisplayText(match[5]) : undefined,
+		message: sanitizeDiagnosticDisplayText(match[6]),
+		code: match[7] ? sanitizeDiagnosticDisplayText(match[7]) : undefined,
 	};
 }
 
@@ -255,7 +261,7 @@ export function formatDiagnostics(
 			existing.push(parsed);
 			byFile.set(parsed.filePath, existing);
 		} else {
-			unparsed.push(msg);
+			unparsed.push(sanitizeDiagnosticDisplayText(msg));
 		}
 	}
 
@@ -272,7 +278,8 @@ export function formatDiagnostics(
 	const headerIcon = diag.errored
 		? theme.styledSymbol("status.error", "error")
 		: theme.styledSymbol("status.warning", "warning");
-	let output = `\n\n${headerIcon} ${theme.fg("toolTitle", "Diagnostics")} ${theme.fg("dim", `(${diag.summary})`)}`;
+	const summary = sanitizeDiagnosticDisplayText(diag.summary);
+	let output = `\n\n${headerIcon} ${theme.fg("toolTitle", "Diagnostics")} ${theme.fg("dim", `(${summary})`)}`;
 
 	const maxDiags = expanded ? diag.messages.length : 5;
 	let diagsShown = 0;
@@ -615,4 +622,29 @@ export function formatParseErrors(errors: string[]): string[] {
 			? `Parse issues (${PARSE_ERRORS_LIMIT} / ${deduped.length}):`
 			: "Parse issues:";
 	return [header, ...capped.map(err => `- ${err}`)];
+}
+
+// =============================================================================
+// LSP Batching
+// =============================================================================
+
+const LSP_BATCH_TOOLS = new Set(["edit", "write"]);
+
+export interface LspBatchRequest {
+	id: string;
+	flush: boolean;
+}
+
+export function getLspBatchRequest(toolCall: ToolCallContext | undefined): LspBatchRequest | undefined {
+	if (!toolCall) {
+		return undefined;
+	}
+	const hasOtherWrites = toolCall.toolCalls.some(
+		(call, index) => index !== toolCall.index && LSP_BATCH_TOOLS.has(call.name),
+	);
+	if (!hasOtherWrites) {
+		return undefined;
+	}
+	const hasLaterWrites = toolCall.toolCalls.slice(toolCall.index + 1).some(call => LSP_BATCH_TOOLS.has(call.name));
+	return { id: toolCall.batchId, flush: !hasLaterWrites };
 }

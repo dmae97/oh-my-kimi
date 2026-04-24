@@ -6,7 +6,6 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { computeLineHash } from "../edit/line-hash";
 import { type ChunkedGrepMatch, describeChunkedGrepMatch } from "../edit/modes/chunk";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
@@ -16,6 +15,8 @@ import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, t
 import { resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
+import { createFileRecorder } from "./file-recorder";
+import { formatMatchLine } from "./match-line-format";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import {
 	combineSearchGlobs,
@@ -34,13 +35,13 @@ const grepSchema = Type.Object({
 	path: Type.Optional(Type.String({ description: "File or directory to search (default: cwd)" })),
 	glob: Type.Optional(Type.String({ description: "Filter files by glob pattern (e.g., '*.js')" })),
 	type: Type.Optional(Type.String({ description: "Filter by file type (e.g., js, py, rust)" })),
-	i: Type.Optional(Type.Boolean({ description: "Case-insensitive search (default: false)" })),
+	i: Type.Optional(Type.Boolean({ description: "Case-insensitive search", default: false })),
 	pre: Type.Optional(Type.Number({ description: "Lines of context before matches" })),
 	post: Type.Optional(Type.Number({ description: "Lines of context after matches" })),
 	multiline: Type.Optional(Type.Boolean({ description: "Enable multiline matching" })),
-	gitignore: Type.Optional(Type.Boolean({ description: "Respect .gitignore files during search (default: true)" })),
-	limit: Type.Optional(Type.Number({ description: "Limit output to first N matches (default: 20)" })),
-	offset: Type.Optional(Type.Number({ description: "Skip first N entries before applying limit (default: 0)" })),
+	gitignore: Type.Optional(Type.Boolean({ description: "Respect .gitignore files during search", default: true })),
+	limit: Type.Optional(Type.Number({ description: "Limit output to first N matches", default: 20 })),
+	offset: Type.Optional(Type.Number({ description: "Skip first N entries before applying limit", default: 0 })),
 });
 
 export type GrepToolInput = Static<typeof grepSchema>;
@@ -123,6 +124,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 			};
 			let searchPath: string;
 			let scopePath: string;
+			let exactFilePaths: string[] | undefined;
 			let globFilter = glob ? normalizePathLikeInput(glob) || undefined : undefined;
 			const internalRouter = this.session.internalRouter;
 			if (searchDir?.trim()) {
@@ -141,7 +143,8 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 					const multiSearchPath = await resolveMultiSearchPath(rawPath, this.session.cwd, globFilter);
 					if (multiSearchPath) {
 						searchPath = multiSearchPath.basePath;
-						globFilter = multiSearchPath.glob;
+						globFilter = multiSearchPath.exactFilePaths ? undefined : multiSearchPath.glob;
+						exactFilePaths = multiSearchPath.exactFilePaths;
 						scopePath = multiSearchPath.scopePath;
 					} else {
 						const parsedPath = parseSearchPath(rawPath);
@@ -173,26 +176,61 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 			// Run grep
 			let result: GrepResult;
 			try {
-				result = await grep(
-					{
-						pattern: normalizedPattern,
-						path: searchPath,
-						glob: globFilter,
-						type: type?.trim() || undefined,
-						ignoreCase,
-						multiline: effectiveMultiline,
-						hidden: true,
-						gitignore: useGitignore,
-						cache: false,
-						maxCount: internalLimit,
-						offset: normalizedOffset > 0 ? normalizedOffset : undefined,
-						contextBefore: normalizedContextBefore,
-						contextAfter: normalizedContextAfter,
-						maxColumns: DEFAULT_MAX_COLUMN,
-						mode: effectiveOutputMode,
-					},
-					undefined,
-				);
+				if (exactFilePaths) {
+					const matches: GrepMatch[] = [];
+					let limitReached = false;
+					for (const exactFilePath of exactFilePaths) {
+						const fileResult = await grep(
+							{
+								pattern: normalizedPattern,
+								path: exactFilePath,
+								type: type?.trim() || undefined,
+								ignoreCase,
+								multiline: effectiveMultiline,
+								hidden: true,
+								gitignore: useGitignore,
+								cache: false,
+								contextBefore: normalizedContextBefore,
+								contextAfter: normalizedContextAfter,
+								maxColumns: DEFAULT_MAX_COLUMN,
+								mode: effectiveOutputMode,
+							},
+							undefined,
+						);
+						limitReached = limitReached || Boolean(fileResult.limitReached);
+						const relativeFilePath = path.relative(searchPath, exactFilePath).replace(/\\/g, "/");
+						matches.push(...fileResult.matches.map(match => ({ ...match, path: relativeFilePath })));
+					}
+					const offsetMatches = matches.slice(normalizedOffset);
+					result = {
+						matches: offsetMatches,
+						totalMatches: offsetMatches.length,
+						filesWithMatches: new Set(offsetMatches.map(match => match.path)).size,
+						filesSearched: exactFilePaths.length,
+						limitReached,
+					};
+				} else {
+					result = await grep(
+						{
+							pattern: normalizedPattern,
+							path: searchPath,
+							glob: globFilter,
+							type: type?.trim() || undefined,
+							ignoreCase,
+							multiline: effectiveMultiline,
+							hidden: true,
+							gitignore: useGitignore,
+							cache: false,
+							maxCount: internalLimit,
+							offset: normalizedOffset > 0 ? normalizedOffset : undefined,
+							contextBefore: normalizedContextBefore,
+							contextAfter: normalizedContextAfter,
+							maxColumns: DEFAULT_MAX_COLUMN,
+							mode: effectiveOutputMode,
+						},
+						undefined,
+					);
+				}
 			} catch (err) {
 				if (err instanceof Error && err.message.startsWith("regex parse error")) {
 					throw new ToolError(err.message);
@@ -243,15 +281,8 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				? roundRobinSelect(result.matches, effectiveLimit)
 				: result.matches.slice(0, effectiveLimit);
 			const matchLimitReached = result.matches.length > effectiveLimit;
-			const files = new Set<string>();
-			const fileList: string[] = [];
+			const { record: recordFile, list: fileList } = createFileRecorder();
 			const fileMatchCounts = new Map<string, number>();
-			const recordFile = (relativePath: string) => {
-				if (!files.has(relativePath)) {
-					files.add(relativePath);
-					fileList.push(relativePath);
-				}
-			};
 			if (selectedMatches.length === 0) {
 				const details: GrepToolDetails = {
 					scopePath,
@@ -264,6 +295,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 			}
 			const outputLines: string[] = [];
 			let linesTruncated = false;
+			const hasContextLines = normalizedContextBefore > 0 || normalizedContextAfter > 0;
 			const matchesByFile = new Map<string, GrepMatch[]>();
 			for (const match of selectedMatches) {
 				const relativePath = formatPath(match.path);
@@ -295,10 +327,11 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 					}
 					chunkMatchesByFile.get(match.displayPath)!.push(match);
 				}
-				const renderChunkedMatchesForFile = (relativePath: string) => {
+				const renderChunkedMatchesForFile = (relativePath: string): string[] => {
+					const renderedLines: string[] = [];
 					const fileMatches = chunkMatchesByFile.get(relativePath) ?? [];
 					if (fileMatches.length === 0) {
-						return;
+						return renderedLines;
 					}
 					const lineWidth = fileMatches[0]?.fileLineCount.toString().length ?? 1;
 					const matchesByChunk = new Map<string, ChunkedGrepMatch[]>();
@@ -316,13 +349,14 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 							const anchor = chunkChecksum
 								? `${dashes}@${chunkPath}#${chunkChecksum}`
 								: `${dashes}@${chunkPath}`;
-							outputLines.push(anchor);
+							renderedLines.push(anchor);
 						}
 						for (const match of chunkMatches) {
-							outputLines.push(`    ${match.lineNumber.toString().padStart(lineWidth, " ")} |${match.line}`);
+							renderedLines.push(`    ${match.lineNumber.toString().padStart(lineWidth, " ")} |${match.line}`);
 							fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 						}
 					}
+					return renderedLines;
 				};
 				if (isDirectory) {
 					const filesByDirectory = new Map<string, string[]>();
@@ -336,26 +370,32 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 					for (const [directory, directoryFiles] of filesByDirectory) {
 						if (directory === ".") {
 							for (const relativePath of directoryFiles) {
+								const renderedLines = renderChunkedMatchesForFile(relativePath);
+								if (renderedLines.length === 0) continue;
 								if (outputLines.length > 0) {
 									outputLines.push("");
 								}
 								outputLines.push(`# ${path.basename(relativePath)}`);
-								renderChunkedMatchesForFile(relativePath);
+								outputLines.push(...renderedLines);
 							}
 							continue;
 						}
+						const renderedFiles = directoryFiles
+							.map(relativePath => ({ relativePath, lines: renderChunkedMatchesForFile(relativePath) }))
+							.filter(file => file.lines.length > 0);
+						if (renderedFiles.length === 0) continue;
 						if (outputLines.length > 0) {
 							outputLines.push("");
 						}
 						outputLines.push(`# ${directory}`);
-						for (const relativePath of directoryFiles) {
+						for (const { relativePath, lines } of renderedFiles) {
 							outputLines.push(`## └─ ${path.basename(relativePath)}`);
-							renderChunkedMatchesForFile(relativePath);
+							outputLines.push(...lines);
 						}
 					}
 				} else {
 					for (const relativePath of fileList) {
-						renderChunkedMatchesForFile(relativePath);
+						outputLines.push(...renderChunkedMatchesForFile(relativePath));
 					}
 				}
 				const rawOutput = outputLines.join("\n");
@@ -386,7 +426,8 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				}
 				return resultBuilder.done();
 			}
-			const renderMatchesForFile = (relativePath: string) => {
+			const renderMatchesForFile = (relativePath: string): string[] => {
+				const renderedLines: string[] = [];
 				const fileMatches = matchesByFile.get(relativePath) ?? [];
 				for (const match of fileMatches) {
 					const lineNumbers: number[] = [match.lineNumber];
@@ -401,31 +442,25 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 						}
 					}
 					const lineWidth = Math.max(...lineNumbers.map(value => value.toString().length));
-					const formatLine = (lineNumber: number, line: string, isMatch: boolean): string => {
-						const separator = isMatch ? ":" : "-";
-						if (useHashLines) {
-							const ref = `${lineNumber}#${computeLineHash(lineNumber, line)}`;
-							return `${ref}${separator}${line}`;
-						}
-						const padded = lineNumber.toString().padStart(lineWidth, " ");
-						return `${padded}${separator}${line}`;
-					};
+					const formatLine = (lineNumber: number, line: string, isMatch: boolean): string =>
+						formatMatchLine(lineNumber, line, isMatch, { useHashLines, lineWidth });
 					if (match.contextBefore) {
 						for (const ctx of match.contextBefore) {
-							outputLines.push(formatLine(ctx.lineNumber, ctx.line, false));
+							renderedLines.push(formatLine(ctx.lineNumber, ctx.line, false));
 						}
 					}
-					outputLines.push(formatLine(match.lineNumber, match.line, true));
+					renderedLines.push(formatLine(match.lineNumber, match.line, true));
 					if (match.truncated) {
 						linesTruncated = true;
 					}
 					if (match.contextAfter) {
 						for (const ctx of match.contextAfter) {
-							outputLines.push(formatLine(ctx.lineNumber, ctx.line, false));
+							renderedLines.push(formatLine(ctx.lineNumber, ctx.line, false));
 						}
 					}
 					fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 				}
+				return renderedLines;
 			};
 			if (isDirectory) {
 				const filesByDirectory = new Map<string, string[]>();
@@ -439,27 +474,36 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				for (const [directory, directoryFiles] of filesByDirectory) {
 					if (directory === ".") {
 						for (const relativePath of directoryFiles) {
+							const renderedLines = renderMatchesForFile(relativePath);
+							if (renderedLines.length === 0) continue;
 							if (outputLines.length > 0) {
 								outputLines.push("");
 							}
 							outputLines.push(`# ${path.basename(relativePath)}`);
-							renderMatchesForFile(relativePath);
+							outputLines.push(...renderedLines);
 						}
 						continue;
 					}
+					const renderedFiles = directoryFiles
+						.map(relativePath => ({ relativePath, lines: renderMatchesForFile(relativePath) }))
+						.filter(file => file.lines.length > 0);
+					if (renderedFiles.length === 0) continue;
 					if (outputLines.length > 0) {
 						outputLines.push("");
 					}
 					outputLines.push(`# ${directory}`);
-					for (const relativePath of directoryFiles) {
+					for (const { relativePath, lines } of renderedFiles) {
 						outputLines.push(`## └─ ${path.basename(relativePath)}`);
-						renderMatchesForFile(relativePath);
+						outputLines.push(...lines);
 					}
 				}
 			} else {
 				for (const relativePath of fileList) {
-					renderMatchesForFile(relativePath);
+					outputLines.push(...renderMatchesForFile(relativePath));
 				}
+			}
+			if (hasContextLines && outputLines.length > 0) {
+				outputLines.unshift("[grep] match lines use ':'; context lines use '-'.");
 			}
 			const rawOutput = outputLines.join("\n");
 			const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });

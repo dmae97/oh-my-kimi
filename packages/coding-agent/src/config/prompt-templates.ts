@@ -31,18 +31,10 @@ prompt.registerHelper("jtdToTypeScript", (schema: unknown): string => {
 	}
 });
 
-/**
- * Renders a section separator:
- *
- * ═══════════════════════════════
- *  Name
- * ═══════════════════════════════
- */
-export function sectionSeparator(name: string): string {
-	return `\n\n═══════════${name}═══════════\n`;
-}
-
-prompt.registerHelper("SECTION_SEPERATOR", (name: unknown): string => sectionSeparator(String(name)));
+// `sectionSeparator` + SECTION_SEPARATOR helper live in pi-utils/prompt so every
+// template consumer gets them registered without a coupling back to this module.
+// Re-exported here for call sites that already reference the coding-agent path.
+export { sectionSeparator } from "@oh-my-pi/pi-utils/prompt";
 
 function formatHashlineRef(lineNum: unknown, content: unknown): { num: number; text: string; ref: string } {
 	const num = typeof lineNum === "number" ? lineNum : Number.parseInt(String(lineNum), 10);

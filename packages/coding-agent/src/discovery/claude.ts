@@ -18,6 +18,7 @@ import { type SlashCommand, slashCommandCapability } from "../capability/slash-c
 import { type SystemPrompt, systemPromptCapability } from "../capability/system-prompt";
 import { type CustomTool, toolCapability } from "../capability/tool";
 import type { LoadContext, LoadResult } from "../capability/types";
+import { settings } from "../config/settings";
 import {
 	calculateDepth,
 	createSourceMeta,
@@ -252,48 +253,69 @@ async function loadExtensionModules(ctx: LoadContext): Promise<LoadResult<Extens
 // Slash Commands
 // =============================================================================
 
+/**
+ * Read the Claude command-loading toggles from settings.
+ * Falls back to true (current behavior) when settings are not initialized,
+ * e.g. inside discovery unit tests that run without Settings.init().
+ */
+function readClaudeCommandToggles(): { enableUser: boolean; enableProject: boolean } {
+	try {
+		return {
+			enableUser: settings.get("commands.enableClaudeUser") ?? true,
+			enableProject: settings.get("commands.enableClaudeProject") ?? true,
+		};
+	} catch {
+		return { enableUser: true, enableProject: true };
+	}
+}
+
 async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashCommand>> {
 	const items: SlashCommand[] = [];
 	const warnings: string[] = [];
+	const { enableUser, enableProject } = readClaudeCommandToggles();
 
-	const userBase = getUserClaude(ctx);
-	const userCommandsDir = path.join(userBase, "commands");
+	if (enableUser) {
+		const userBase = getUserClaude(ctx);
+		const userCommandsDir = path.join(userBase, "commands");
 
-	const userResult = await loadFilesFromDir<SlashCommand>(ctx, userCommandsDir, PROVIDER_ID, "user", {
-		extensions: ["md"],
-		transform: (name, content, path, source) => {
-			const cmdName = name.replace(/\.md$/, "");
-			return {
-				name: cmdName,
-				path,
-				content,
-				level: "user",
-				_source: source,
-			};
-		},
-	});
+		const userResult = await loadFilesFromDir<SlashCommand>(ctx, userCommandsDir, PROVIDER_ID, "user", {
+			extensions: ["md"],
+			transform: (name, content, path, source) => {
+				const cmdName = name.replace(/\.md$/, "");
+				return {
+					name: cmdName,
+					path,
+					content,
+					level: "user",
+					_source: source,
+				};
+			},
+		});
 
-	items.push(...userResult.items);
-	if (userResult.warnings) warnings.push(...userResult.warnings);
+		items.push(...userResult.items);
+		if (userResult.warnings) warnings.push(...userResult.warnings);
+	}
 
-	const projectCommandsDir = path.join(ctx.cwd, CONFIG_DIR, "commands");
+	if (enableProject) {
+		const projectCommandsDir = path.join(ctx.cwd, CONFIG_DIR, "commands");
 
-	const projectResult = await loadFilesFromDir<SlashCommand>(ctx, projectCommandsDir, PROVIDER_ID, "project", {
-		extensions: ["md"],
-		transform: (name, content, path, source) => {
-			const cmdName = name.replace(/\.md$/, "");
-			return {
-				name: cmdName,
-				path,
-				content,
-				level: "project",
-				_source: source,
-			};
-		},
-	});
+		const projectResult = await loadFilesFromDir<SlashCommand>(ctx, projectCommandsDir, PROVIDER_ID, "project", {
+			extensions: ["md"],
+			transform: (name, content, path, source) => {
+				const cmdName = name.replace(/\.md$/, "");
+				return {
+					name: cmdName,
+					path,
+					content,
+					level: "project",
+					_source: source,
+				};
+			},
+		});
 
-	items.push(...projectResult.items);
-	if (projectResult.warnings) warnings.push(...projectResult.warnings);
+		items.push(...projectResult.items);
+		if (projectResult.warnings) warnings.push(...projectResult.warnings);
+	}
 
 	return { items, warnings };
 }

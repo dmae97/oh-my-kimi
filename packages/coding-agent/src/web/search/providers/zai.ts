@@ -11,7 +11,7 @@ import { SearchProviderError } from "../../../web/search/types";
 import { dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { findCredential } from "./utils";
+import { findCredential, isApiKeyAvailable } from "./utils";
 
 const ZAI_MCP_URL = "https://api.z.ai/api/mcp/web_search_prime/mcp";
 const ZAI_TOOL_NAME = "webSearchPrime";
@@ -294,12 +294,8 @@ export class ZaiProvider extends SearchProvider {
 	readonly id = "zai";
 	readonly label = "Z.AI";
 
-	async isAvailable(): Promise<boolean> {
-		try {
-			return !!(await findApiKey());
-		} catch {
-			return false;
-		}
+	isAvailable(): Promise<boolean> {
+		return isApiKeyAvailable(findApiKey);
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {

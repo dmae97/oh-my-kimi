@@ -1,4 +1,5 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
+import { TASK_SIMPLE_MODES } from "../task/simple-mode";
 
 /** Unified settings schema - single source of truth for all settings.
  * Unified settings schema - single source of truth for all settings.
@@ -885,6 +886,8 @@ export const SETTINGS_SCHEMA = {
 
 	"memories.rolloutPayloadPercent": { type: "number", default: 0.7 },
 
+	"memories.phase1InputTokenLimit": { type: "number", default: 4000 },
+
 	"memories.fallbackTokenLimit": { type: "number", default: 16000 },
 
 	"memories.summaryInjectionTokenLimit": { type: "number", default: 5000 },
@@ -952,12 +955,12 @@ export const SETTINGS_SCHEMA = {
 	// Edit tool
 	"edit.mode": {
 		type: "enum",
-		values: ["replace", "patch", "hashline", "chunk", "vim"] as const,
+		values: ["replace", "patch", "hashline", "chunk", "vim", "apply_patch"] as const,
 		default: "hashline",
 		ui: {
 			tab: "editing",
 			label: "Edit Mode",
-			description: "Select the edit tool variant (replace, patch, hashline, chunk, or vim)",
+			description: "Select the edit tool variant (replace, patch, hashline, chunk, vim, or apply_patch)",
 		},
 	},
 
@@ -1030,6 +1033,16 @@ export const SETTINGS_SCHEMA = {
 			label: "Default Read Limit",
 			description: "Default number of lines returned when agent calls read without a limit",
 			submenu: true,
+		},
+	},
+
+	"read.toolResultPreview": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "editing",
+			label: "Inline Read Previews",
+			description: "Render read tool results inline in the transcript instead of summary rows",
 		},
 	},
 
@@ -1506,6 +1519,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"task.simple": {
+		type: "enum",
+		values: TASK_SIMPLE_MODES,
+		default: "default",
+		ui: {
+			tab: "tasks",
+			label: "Task Input Mode",
+			description: "How much shared structure the task tool accepts (default, schema-free, or independent)",
+			submenu: true,
+		},
+	},
+
 	"task.maxConcurrency": {
 		type: "number",
 		default: 32,
@@ -1585,6 +1610,22 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: { tab: "tasks", label: "Claude Project Commands", description: "Load commands from .claude/commands/" },
+	},
+
+	"commands.enableOpencodeUser": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tasks",
+			label: "OpenCode User Commands",
+			description: "Load commands from ~/.config/opencode/commands/",
+		},
+	},
+
+	"commands.enableOpencodeProject": {
+		type: "boolean",
+		default: true,
+		ui: { tab: "tasks", label: "OpenCode Project Commands", description: "Load commands from .opencode/commands/" },
 	},
 
 	// ────────────────────────────────────────────────────────────────────────

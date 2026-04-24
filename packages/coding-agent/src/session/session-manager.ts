@@ -286,6 +286,10 @@ export type ReadonlySessionManager = Pick<
 	| "putBlob"
 >;
 
+function createSessionId(): string {
+	return Bun.randomUUIDv7();
+}
+
 /** Generate a unique short ID (8 hex chars, collision-checked) */
 function generateId(byId: { has(id: string): boolean }): string {
 	for (let i = 0; i < 100; i++) {
@@ -1500,7 +1504,7 @@ export class SessionManager {
 		this.#fileEntries = await loadEntriesFromFile(this.#sessionFile, this.storage);
 		if (this.#fileEntries.length > 0) {
 			const header = this.#fileEntries.find(e => e.type === "session") as SessionHeader | undefined;
-			this.#sessionId = header?.id ?? Snowflake.next();
+			this.#sessionId = header?.id ?? createSessionId();
 			this.#sessionName = header?.title;
 			this.#titleSource = header?.titleSource;
 
@@ -1549,7 +1553,7 @@ export class SessionManager {
 		this.#persistErrorReported = false;
 
 		// Create new session ID and header
-		this.#sessionId = Snowflake.next();
+		this.#sessionId = createSessionId();
 		const timestamp = new Date().toISOString();
 		const fileTimestamp = timestamp.replace(/[:.]/g, "-");
 		this.#sessionFile = path.join(this.getSessionDir(), `${fileTimestamp}_${this.#sessionId}.jsonl`);
@@ -1680,7 +1684,7 @@ export class SessionManager {
 		this.#persistChain = Promise.resolve();
 		this.#persistError = undefined;
 		this.#persistErrorReported = false;
-		this.#sessionId = Snowflake.next();
+		this.#sessionId = createSessionId();
 		this.#sessionName = undefined;
 		this.#titleSource = undefined;
 		const timestamp = new Date().toISOString();
@@ -2036,14 +2040,18 @@ export class SessionManager {
 		if (this.#needsFullRewriteOnNextPersist || !this.#flushed) {
 			// Full flush: rewrite the entire file atomically to avoid
 			// duplicating entries if the file already exists (e.g. from ensureOnDisk).
-			void this.#rewriteFile();
+			// Errors are already surfaced through #persistChain/#persistError; the
+			// caller intentionally fires-and-forgets, so swallow the awaited rejection
+			// here to avoid an unhandled rejection when the persist dir races with
+			// test-level tempDir cleanup.
+			this.#rewriteFile().catch(() => {});
 		} else {
-			void this.#queuePersistTask(async () => {
+			this.#queuePersistTask(async () => {
 				const writer = this.#ensurePersistWriter();
 				if (!writer) return;
 				const persistedEntry = await prepareEntryForPersistence(entry, this.#blobStore);
 				await writer.write(persistedEntry);
-			});
+			}).catch(() => {});
 		}
 	}
 
@@ -2554,7 +2562,7 @@ export class SessionManager {
 		// Filter out LabelEntry from path - we'll recreate them from the resolved map
 		const pathWithoutLabels = branchPath.filter(e => e.type !== "label");
 
-		const newSessionId = Snowflake.next();
+		const newSessionId = createSessionId();
 		const timestamp = new Date().toISOString();
 		const fileTimestamp = timestamp.replace(/[:.]/g, "-");
 		const newSessionFile = path.join(this.getSessionDir(), `${fileTimestamp}_${newSessionId}.jsonl`);

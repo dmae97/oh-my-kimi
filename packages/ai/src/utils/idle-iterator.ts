@@ -1,7 +1,7 @@
 import { $env } from "@oh-my-pi/pi-utils";
 
 const DEFAULT_OPENAI_STREAM_IDLE_TIMEOUT_MS = 120_000;
-const DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS = 60_000;
+const DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS = 100_000;
 
 function normalizeIdleTimeoutMs(value: string | undefined, fallback: number): number | undefined {
 	if (value === undefined) return fallback;
@@ -35,59 +35,24 @@ export function getStreamFirstEventTimeoutMs(idleTimeoutMs?: number): number | u
 	return normalizeIdleTimeoutMs($env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS, fallback);
 }
 
-export interface FirstEventWatchdog {
-	markFirstEventReceived(): void;
-	cleanup(): void;
-}
+export type Watchdog = NodeJS.Timeout | undefined;
+
+const dummyWatchdog = setTimeout(() => {}, 1);
+clearTimeout(dummyWatchdog);
 
 /**
  * Starts a watchdog that aborts a request if no first stream event arrives in time.
  * Call `markFirstEventReceived()` as soon as the first event is observed.
  */
-export function createFirstEventWatchdog(timeoutMs: number | undefined, onTimeout: () => void): FirstEventWatchdog {
-	let timer: NodeJS.Timeout | undefined;
+export function createWatchdog(timeoutMs: number | undefined, onTimeout: () => void): Watchdog {
 	if (timeoutMs !== undefined && timeoutMs > 0) {
-		timer = setTimeout(() => {
-			timer = undefined;
-			onTimeout();
-		}, timeoutMs);
+		return setTimeout(onTimeout, timeoutMs);
 	}
-	return {
-		markFirstEventReceived() {
-			if (!timer) return;
-			clearTimeout(timer);
-			timer = undefined;
-		},
-		cleanup() {
-			if (!timer) return;
-			clearTimeout(timer);
-			timer = undefined;
-		},
-	};
-}
-
-/**
- * Wraps an async iterable and clears the watchdog once the first event arrives.
- */
-export async function* markFirstStreamEvent<T>(
-	iterable: AsyncIterable<T>,
-	watchdog: FirstEventWatchdog,
-): AsyncGenerator<T> {
-	let sawFirstEvent = false;
-	try {
-		for await (const item of iterable) {
-			if (!sawFirstEvent) {
-				sawFirstEvent = true;
-				watchdog.markFirstEventReceived();
-			}
-			yield item;
-		}
-	} finally {
-		watchdog.cleanup();
-	}
+	return undefined;
 }
 
 export interface IdleTimeoutIteratorOptions {
+	watchdog?: Watchdog;
 	idleTimeoutMs?: number;
 	firstItemTimeoutMs?: number;
 	errorMessage: string;
@@ -106,26 +71,36 @@ export async function* iterateWithIdleTimeout<T>(
 	iterable: AsyncIterable<T>,
 	options: IdleTimeoutIteratorOptions,
 ): AsyncGenerator<T> {
+	let watchdog = options.watchdog;
 	const firstItemTimeoutMs = options.firstItemTimeoutMs ?? options.idleTimeoutMs;
 	if (
 		(firstItemTimeoutMs === undefined || firstItemTimeoutMs <= 0) &&
 		(options.idleTimeoutMs === undefined || options.idleTimeoutMs <= 0)
 	) {
 		for await (const item of iterable) {
+			watchdog && clearTimeout(watchdog);
+			watchdog = undefined;
 			yield item;
 		}
 		return;
 	}
 
 	const iterator = iterable[Symbol.asyncIterator]();
-	let sawFirstItem = false;
 
-	while (true) {
-		const nextResultPromise = iterator.next().then(
+	const withRacy = <T>(promise: Promise<T>) =>
+		promise.then(
 			result => ({ kind: "next" as const, result }),
 			error => ({ kind: "error" as const, error }),
 		);
-		const activeTimeoutMs = sawFirstItem ? options.idleTimeoutMs : firstItemTimeoutMs;
+
+	let onFirst: (() => void) | null = () => {
+		watchdog && clearTimeout(watchdog);
+		onFirst = null;
+	};
+
+	while (true) {
+		const nextResultPromise = withRacy(iterator.next());
+		const activeTimeoutMs = !onFirst ? options.idleTimeoutMs : firstItemTimeoutMs;
 
 		if (activeTimeoutMs === undefined || activeTimeoutMs <= 0) {
 			const outcome = await nextResultPromise;
@@ -135,7 +110,7 @@ export async function* iterateWithIdleTimeout<T>(
 			if (outcome.result.done) {
 				return;
 			}
-			sawFirstItem = true;
+			onFirst?.();
 			yield outcome.result.value;
 			continue;
 		}
@@ -148,7 +123,7 @@ export async function* iterateWithIdleTimeout<T>(
 		try {
 			const outcome = await Promise.race([nextResultPromise, timeoutPromise]);
 			if (outcome.kind === "timeout") {
-				if (sawFirstItem) {
+				if (!onFirst) {
 					options.onIdle?.();
 				} else {
 					options.onFirstItemTimeout?.();
@@ -157,17 +132,17 @@ export async function* iterateWithIdleTimeout<T>(
 				if (returnPromise) {
 					void returnPromise.catch(() => {});
 				}
-				throw new Error(
-					sawFirstItem ? options.errorMessage : (options.firstItemErrorMessage ?? options.errorMessage),
-				);
+				throw new Error(!onFirst ? options.errorMessage : (options.firstItemErrorMessage ?? options.errorMessage));
 			}
+			watchdog && clearTimeout(watchdog);
+			watchdog = undefined;
 			if (outcome.kind === "error") {
 				throw outcome.error;
 			}
 			if (outcome.result.done) {
 				return;
 			}
-			sawFirstItem = true;
+			onFirst?.();
 			yield outcome.result.value;
 		} finally {
 			clearTimeout(timer);

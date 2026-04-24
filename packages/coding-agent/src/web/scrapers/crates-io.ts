@@ -1,19 +1,6 @@
 import { tryParseJson } from "@oh-my-pi/pi-utils";
 import type { RenderResult, SpecialHandler } from "./types";
-import { buildResult, formatNumber, loadPage } from "./types";
-
-/**
- * Check if content looks like HTML
- */
-function looksLikeHtml(content: string): boolean {
-	const trimmed = content.trim().toLowerCase();
-	return (
-		trimmed.startsWith("<!doctype") ||
-		trimmed.startsWith("<html") ||
-		trimmed.startsWith("<head") ||
-		trimmed.startsWith("<body")
-	);
-}
+import { buildResult, formatNumber, loadPage, looksLikeHtml } from "./types";
 
 /**
  * Handle crates.io URLs via API

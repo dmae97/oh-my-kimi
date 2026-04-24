@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	adjustIndentation,
+	computeEditDiff,
 	computeHashlineDiff,
 	DEFAULT_FUZZY_THRESHOLD,
 	findMatch,
@@ -267,6 +268,38 @@ describe("computeHashlineDiff", () => {
 		if ("diff" in result) {
 			expect(result.diff).toBe("");
 			expect(result.firstChangedLine).toBeUndefined();
+		}
+	});
+
+	test("returns a handled error when the source path is a local URL", async () => {
+		const result = await computeHashlineDiff({ path: "local://PLAN.md", edits: [] }, tempDir);
+
+		expect("error" in result).toBe(true);
+		if ("error" in result) {
+			expect(result.error).toContain('internal scheme "local://"');
+		}
+	});
+});
+
+describe("computeEditDiff", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "edit-diff-edit-"));
+	});
+
+	afterEach(async () => {
+		if (tempDir) {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("returns a handled error when the source path is a local URL", async () => {
+		const result = await computeEditDiff("local:/PLAN.md", "old", "new", tempDir);
+
+		expect("error" in result).toBe(true);
+		if ("error" in result) {
+			expect(result.error).toContain('internal scheme "local://"');
 		}
 	});
 });

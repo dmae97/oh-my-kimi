@@ -371,7 +371,7 @@ function prependSuffixResolutionNotice(text: string, suffixResolution?: { from: 
 const readSchema = Type.Object({
 	path: Type.String({ description: "Path or URL to read" }),
 	sel: Type.Optional(Type.String({ description: "Selector: chunk path, L10-L50, or raw" })),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default: 20)" })),
+	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds", default: 20 })),
 });
 
 export type ReadToolInput = Static<typeof readSchema>;

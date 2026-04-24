@@ -1075,11 +1075,17 @@ export class DapSessionManager {
 	 * MUST be called before the command that triggers the event.
 	 */
 	#prepareStopOutcome(session: DapSession, signal?: AbortSignal, timeoutMs: number = 30_000): Promise<unknown> {
-		return Promise.race([
+		const promises = [
 			session.client.waitForEvent("stopped", undefined, signal, timeoutMs),
 			session.client.waitForEvent("terminated", undefined, signal, timeoutMs),
 			session.client.waitForEvent("exited", undefined, signal, timeoutMs),
-		]);
+		];
+		// Promise.race leaves the losing waiters pending; their timeouts would
+		// otherwise surface as unhandled rejections once they fire.
+		for (const p of promises) {
+			p.catch(() => {});
+		}
+		return Promise.race(promises);
 	}
 
 	/**

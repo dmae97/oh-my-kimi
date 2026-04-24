@@ -37,6 +37,7 @@ import type { SessionContext, SessionManager } from "../session/session-manager"
 import { getRecentSessions } from "../session/session-manager";
 import { STTController, type SttState } from "../stt";
 import type { ExitPlanModeDetails, LspStartupServerInfo } from "../tools";
+import { normalizeLocalScheme } from "../tools/path-utils";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { getSessionAccentAnsi, getSessionAccentHexForTitle } from "../utils/session-color";
@@ -637,8 +638,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#resolvePlanFilePath(planFilePath: string): string {
-		if (planFilePath.startsWith("local://")) {
-			return resolveLocalUrlToPath(planFilePath, {
+		if (planFilePath.startsWith("local:")) {
+			const normalized = normalizeLocalScheme(planFilePath);
+			return resolveLocalUrlToPath(normalized, {
 				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
 				getSessionId: () => this.sessionManager.getSessionId(),
 			});

@@ -14,6 +14,7 @@ import ghSearchIssuesDescription from "../prompts/tools/gh-search-issues.md" wit
 import ghSearchPrsDescription from "../prompts/tools/gh-search-prs.md" with { type: "text" };
 import * as git from "../utils/git";
 import type { ToolSession } from ".";
+import { formatShortSha } from "./gh-format";
 import type { OutputMeta } from "./output-meta";
 import { ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -148,7 +149,7 @@ const ghIssueViewSchema = Type.Object({
 	repo: Type.Optional(
 		Type.String({ description: "Repository in OWNER/REPO format. Omit when passing a full issue URL." }),
 	),
-	comments: Type.Optional(Type.Boolean({ description: "Include issue comments (default: true)." })),
+	comments: Type.Optional(Type.Boolean({ description: "Include issue comments.", default: true })),
 });
 
 const ghPrViewSchema = Type.Object({
@@ -161,7 +162,7 @@ const ghPrViewSchema = Type.Object({
 	repo: Type.Optional(
 		Type.String({ description: "Repository in OWNER/REPO format. Omit when passing a full pull request URL." }),
 	),
-	comments: Type.Optional(Type.Boolean({ description: "Include pull request comments (default: true)." })),
+	comments: Type.Optional(Type.Boolean({ description: "Include pull request comments.", default: true })),
 });
 
 const ghPrDiffSchema = Type.Object({
@@ -217,13 +218,13 @@ const ghPrPushSchema = Type.Object({
 const ghSearchIssuesSchema = Type.Object({
 	query: Type.String({ description: "GitHub issue search query. Supports GitHub search syntax." }),
 	repo: Type.Optional(Type.String({ description: "Repository in OWNER/REPO format to scope the search." })),
-	limit: Type.Optional(Type.Number({ description: "Maximum results to return (default: 10, max: 50)." })),
+	limit: Type.Optional(Type.Number({ description: "Maximum results to return (max: 50).", default: 10 })),
 });
 
 const ghSearchPrsSchema = Type.Object({
 	query: Type.String({ description: "GitHub pull request search query. Supports GitHub search syntax." }),
 	repo: Type.Optional(Type.String({ description: "Repository in OWNER/REPO format to scope the search." })),
-	limit: Type.Optional(Type.Number({ description: "Maximum results to return (default: 10, max: 50)." })),
+	limit: Type.Optional(Type.Number({ description: "Maximum results to return (max: 50).", default: 10 })),
 });
 
 const ghRunWatchSchema = Type.Object({
@@ -239,7 +240,7 @@ const ghRunWatchSchema = Type.Object({
 		}),
 	),
 	tail: Type.Optional(
-		Type.Number({ description: "Number of log lines to include per failed job (default: 15, max: 200)." }),
+		Type.Number({ description: "Number of log lines to include per failed job (max: 200).", default: 15 }),
 	),
 });
 
@@ -543,14 +544,6 @@ function looksLikeGitHubUrl(value: string | undefined): boolean {
 function normalizeOptionalString(value: string | null | undefined): string | undefined {
 	const normalized = value?.trim();
 	return normalized ? normalized : undefined;
-}
-
-function formatShortSha(value: string | undefined): string | undefined {
-	if (!value) {
-		return undefined;
-	}
-
-	return value.slice(0, 12);
 }
 
 function requireNonEmpty(value: string | null | undefined, label: string): string {

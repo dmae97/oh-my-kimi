@@ -1,10 +1,11 @@
 import { $env, $flag } from "@oh-my-pi/pi-utils";
 
-export type EditMode = "replace" | "patch" | "hashline" | "chunk" | "vim";
+export type EditMode = "replace" | "patch" | "hashline" | "chunk" | "vim" | "apply_patch";
 
 export const DEFAULT_EDIT_MODE: EditMode = "hashline";
 
 const EDIT_MODE_IDS = {
+	apply_patch: "apply_patch",
 	chunk: "chunk",
 	hashline: "hashline",
 	patch: "patch",
@@ -38,7 +39,7 @@ export function resolveEditMode(session: EditModeSessionLike): EditMode {
 	if (envMode) return envMode;
 
 	if (!$flag("PI_STRICT_EDIT_MODE")) {
-		if (activeModel?.includes("spark")) return "replace";
+		if (activeModel?.includes("spark")) return "apply_patch";
 		if (activeModel?.includes("nano")) return "replace";
 		if (activeModel?.includes("mini")) return "replace";
 		if (activeModel?.includes("haiku")) return "replace";

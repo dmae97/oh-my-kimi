@@ -74,7 +74,7 @@ function normalizeAtPrefix(filePath: string): string {
 		withoutAt.startsWith("artifact://") ||
 		withoutAt.startsWith("skill://") ||
 		withoutAt.startsWith("rule://") ||
-		withoutAt.startsWith("local://") ||
+		withoutAt.startsWith("local:") ||
 		withoutAt.startsWith("mcp://")
 	) {
 		return withoutAt;
@@ -110,6 +110,29 @@ export function expandPath(filePath: string): string {
 	return expandTilde(normalized);
 }
 
+function assertNotInternalUrl(expanded: string, original: string): void {
+	for (const prefix of TOP_LEVEL_INTERNAL_URL_PREFIXES) {
+		if (expanded.startsWith(prefix)) {
+			throw new Error(
+				`Path "${original}" uses internal scheme "${prefix}" and must be resolved through the proper protocol handler, not as a filesystem path.`,
+			);
+		}
+	}
+}
+
+export function normalizeLocalScheme(filePath: string): string {
+	return filePath.replace(/^(local:)\/(?!\/)/, "$1//");
+}
+
+export function isInternalUrlPath(filePath: string): boolean {
+	const normalized = normalizeLocalScheme(filePath);
+	const expandedAndNormalized = normalizeLocalScheme(expandPath(normalized));
+	for (const prefix of TOP_LEVEL_INTERNAL_URL_PREFIXES) {
+		if (expandedAndNormalized.startsWith(prefix)) return true;
+	}
+	return false;
+}
+
 /**
  * Resolve a path relative to the given cwd.
  * Handles ~ expansion and absolute paths.
@@ -119,7 +142,12 @@ export function expandPath(filePath: string): string {
  * filesystem root is almost never what they intended.
  */
 export function resolveToCwd(filePath: string, cwd: string): string {
-	const expanded = expandPath(filePath);
+	const normalized = normalizeLocalScheme(filePath);
+	const expanded = expandPath(normalized);
+	const expandedAndNormalized = normalizeLocalScheme(expanded);
+
+	assertNotInternalUrl(expandedAndNormalized, normalized);
+
 	if (/^\/+$/.test(expanded)) {
 		return cwd;
 	}
@@ -165,6 +193,7 @@ export interface ResolvedMultiSearchPath {
 	basePath: string;
 	glob?: string;
 	scopePath: string;
+	exactFilePaths?: string[];
 }
 
 export interface ResolvedMultiFindPattern {
@@ -410,6 +439,28 @@ async function areDelimitedTokensResolvable(
 	return true;
 }
 
+async function filterResolvableTokens(
+	tokens: string[],
+	cwd: string,
+	parseBasePath: (value: string) => string,
+): Promise<string[]> {
+	const out: string[] = [];
+	for (const token of tokens) {
+		if (TOP_LEVEL_INTERNAL_URL_PREFIXES.some(prefix => token.startsWith(prefix))) continue;
+		const basePath = parseBasePath(token);
+		const resolvedBasePath = resolveToCwd(basePath, cwd);
+		if (await pathExists(resolvedBasePath)) {
+			out.push(token);
+			continue;
+		}
+		const resolvedExactPath = resolveToCwd(token, cwd);
+		if (await pathExists(resolvedExactPath)) {
+			out.push(token);
+		}
+	}
+	return out;
+}
+
 async function splitDelimitedSearchInput(
 	rawInput: string,
 	cwd: string,
@@ -424,8 +475,11 @@ async function splitDelimitedSearchInput(
 	}
 
 	const commaSeparated = splitTopLevel(trimmed, "comma");
-	if (commaSeparated.length > 1 && (await areDelimitedTokensResolvable(commaSeparated, cwd, parseBasePath, true))) {
-		return [...new Set(commaSeparated)];
+	if (commaSeparated.length > 1) {
+		const resolvable = await filterResolvableTokens(commaSeparated, cwd, parseBasePath);
+		if (resolvable.length >= 1) {
+			return [...new Set(resolvable)];
+		}
 	}
 
 	const whitespaceSeparated = splitTopLevel(trimmed, "whitespace");
@@ -445,7 +499,7 @@ export async function resolveMultiSearchPath(
 	suffixGlob?: string,
 ): Promise<ResolvedMultiSearchPath | undefined> {
 	const pathItems = await splitDelimitedSearchInput(rawPath, cwd, value => parseSearchPath(value).basePath);
-	if (!pathItems || pathItems.length <= 1) {
+	if (!pathItems || pathItems.length < 1) {
 		return undefined;
 	}
 
@@ -458,6 +512,7 @@ export async function resolveMultiSearchPath(
 		}),
 	);
 
+	const allExactFiles = !suffixGlob && parsedItems.every(item => !item.parsedPath.glob && item.stat.isFile());
 	const commonBasePath = findCommonBasePath(parsedItems.map(item => item.absoluteBasePath));
 	const combinedPatterns = parsedItems.map(item => {
 		const relativeBasePath = normalizePosixPath(path.relative(commonBasePath, item.absoluteBasePath)) || ".";
@@ -479,6 +534,7 @@ export async function resolveMultiSearchPath(
 		basePath: commonBasePath,
 		glob: buildBraceUnion(combinedPatterns),
 		scopePath: toScopeDisplay(pathItems),
+		exactFilePaths: allExactFiles ? parsedItems.map(item => item.absoluteBasePath) : undefined,
 	};
 }
 

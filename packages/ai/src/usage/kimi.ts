@@ -11,6 +11,7 @@ import type {
 } from "../usage";
 import { isRecord } from "../utils";
 import { getKimiCommonHeaders, refreshKimiToken } from "../utils/oauth/kimi";
+import { toNumber } from "./shared";
 
 const DEFAULT_BASE_URL = "https://api.kimi.com/coding/v1";
 const USAGE_PATH = "usages";
@@ -27,17 +28,6 @@ type KimiUsageRow = {
 	remaining?: number;
 	resetsAt?: number;
 	window?: UsageWindow;
-};
-
-const toNumber = (value: unknown): number | undefined => {
-	if (typeof value === "number" && Number.isFinite(value)) return value;
-	if (typeof value === "string") {
-		const trimmed = value.trim();
-		if (!trimmed) return undefined;
-		const parsed = Number(trimmed);
-		if (Number.isFinite(parsed)) return parsed;
-	}
-	return undefined;
 };
 
 function normalizeBaseUrl(baseUrl?: string): string {

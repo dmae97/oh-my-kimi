@@ -4,20 +4,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AgentStorage } from "../src/session/agent-storage";
+import { readTableSql } from "./helpers/sqlite-inspect";
 
 const LEGACY_TIMESTAMP = 1_700_000_000;
-
-function readTableSql(dbPath: string, tableName: string): string | null {
-	const db = new Database(dbPath, { readonly: true });
-	try {
-		const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName) as
-			| { sql?: string | null }
-			| undefined;
-		return row?.sql ?? null;
-	} finally {
-		db.close();
-	}
-}
 
 function readSchemaVersion(dbPath: string): number | null {
 	const db = new Database(dbPath, { readonly: true });

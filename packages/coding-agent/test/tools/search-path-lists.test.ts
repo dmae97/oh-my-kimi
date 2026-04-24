@@ -281,4 +281,79 @@ describe("search tool path lists", () => {
 		expect(details?.fileCount).toBe(3);
 		expect(details?.scopePath).toBe("apps, packages, phases");
 	});
+
+	it("grep keeps comma-separated explicit files exact", async () => {
+		await fs.mkdir(path.join(tempDir, "nested"), { recursive: true });
+		await Bun.write(path.join(tempDir, "alpha.txt"), "exact-needle alpha\n");
+		await Bun.write(path.join(tempDir, "beta.txt"), "exact-needle beta\n");
+		await Bun.write(path.join(tempDir, "nested", "alpha.txt"), "exact-needle nested alpha\n");
+		await Bun.write(path.join(tempDir, "nested", "beta.txt"), "exact-needle nested beta\n");
+
+		const tools = await createTools(createTestSession(tempDir));
+		const tool = tools.find(entry => entry.name === "grep");
+		expect(tool).toBeDefined();
+		if (!tool) throw new Error("Missing grep tool");
+
+		const result = await tool.execute("grep-exact-comma-files", {
+			pattern: "exact-needle",
+			path: "alpha.txt,beta.txt",
+		});
+		const text = getText(result);
+		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
+
+		expect(text).toContain("# alpha.txt");
+		expect(text).toContain("# beta.txt");
+		expect(text).toContain("exact-needle alpha");
+		expect(text).toContain("exact-needle beta");
+		expect(text).not.toContain("nested");
+		expect(details?.fileCount).toBe(2);
+		expect(details?.scopePath).toBe("alpha.txt, beta.txt");
+	});
+
+	it("grep renders only file headings that have child lines", async () => {
+		const tools = await createTools(createTestSession(tempDir));
+		const tool = tools.find(entry => entry.name === "grep");
+		expect(tool).toBeDefined();
+		if (!tool) throw new Error("Missing grep tool");
+
+		const result = await tool.execute("grep-no-empty-headings", {
+			pattern: "shared-needle",
+			path: "apps/,packages/,phases/",
+			limit: 2,
+		});
+		const lines = getText(result).split("\n");
+
+		for (let index = 0; index < lines.length; index += 1) {
+			if (!lines[index].startsWith("#")) continue;
+			const nextIndex = lines.findIndex((line, candidateIndex) => candidateIndex > index && line.trim().length > 0);
+			expect(nextIndex, `heading ${lines[index]} should have rendered children`).toBeGreaterThan(index);
+			if (lines[index].startsWith("##")) {
+				expect(lines[nextIndex].startsWith("#")).toBe(false);
+			} else if (!lines[nextIndex].startsWith("##")) {
+				expect(lines[nextIndex].startsWith("#")).toBe(false);
+			}
+		}
+	});
+
+	it("grep explains context-line gutters without changing match and context separators", async () => {
+		await Bun.write(path.join(tempDir, "context.txt"), "#if FLAG\nneedle\n#endif\n");
+
+		const tools = await createTools(createTestSession(tempDir));
+		const tool = tools.find(entry => entry.name === "grep");
+		expect(tool).toBeDefined();
+		if (!tool) throw new Error("Missing grep tool");
+
+		const result = await tool.execute("grep-context-label", {
+			pattern: "needle",
+			path: "context.txt",
+			pre: 1,
+			post: 1,
+		});
+		const text = getText(result);
+
+		expect(text).toContain("match lines use ':'; context lines use '-'");
+		expect(text).toMatch(/1(?:#[A-Z0-9]+)?-#if FLAG/);
+		expect(text).toMatch(/2(?:#[A-Z0-9]+)?:needle/);
+		expect(text).toMatch(/3(?:#[A-Z0-9]+)?-#endif/);
+	});
 });

@@ -26,12 +26,13 @@ import { type Settings, settingsCapability } from "../capability/settings";
 import { type Skill, skillCapability } from "../capability/skill";
 import { type SlashCommand, slashCommandCapability } from "../capability/slash-command";
 import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
+import { settings } from "../config/settings";
 
 import {
+	buildExtensionModuleItems,
 	createSourceMeta,
 	discoverExtensionModulePaths,
 	expandEnvVarsDeep,
-	getExtensionNameFromPath,
 	getProjectPath,
 	getUserPath,
 	loadFilesFromDir,
@@ -227,20 +228,7 @@ async function loadExtensionModules(ctx: LoadContext): Promise<LoadResult<Extens
 		projectPluginsDir ? discoverExtensionModulePaths(ctx, projectPluginsDir) : Promise.resolve([]),
 	]);
 
-	const items: ExtensionModule[] = [
-		...userPaths.map(extPath => ({
-			name: getExtensionNameFromPath(extPath),
-			path: extPath,
-			level: "user" as const,
-			_source: createSourceMeta(PROVIDER_ID, extPath, "user"),
-		})),
-		...projectPaths.map(extPath => ({
-			name: getExtensionNameFromPath(extPath),
-			path: extPath,
-			level: "project" as const,
-			_source: createSourceMeta(PROVIDER_ID, extPath, "project"),
-		})),
-	];
+	const items = buildExtensionModuleItems(PROVIDER_ID, userPaths, projectPaths);
 
 	return { items, warnings: [] };
 }
@@ -249,9 +237,26 @@ async function loadExtensionModules(ctx: LoadContext): Promise<LoadResult<Extens
 // Slash Commands (commands/)
 // =============================================================================
 
+/**
+ * Read the OpenCode command-loading toggles from settings.
+ * Falls back to true (current behavior) when settings are not initialized,
+ * e.g. inside discovery unit tests that run without Settings.init().
+ */
+function readOpencodeCommandToggles(): { enableUser: boolean; enableProject: boolean } {
+	try {
+		return {
+			enableUser: settings.get("commands.enableOpencodeUser") ?? true,
+			enableProject: settings.get("commands.enableOpencodeProject") ?? true,
+		};
+	} catch {
+		return { enableUser: true, enableProject: true };
+	}
+}
+
 async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashCommand>> {
-	const userCommandsDir = getUserPath(ctx, "opencode", "commands");
-	const projectCommandsDir = getProjectPath(ctx, "opencode", "commands");
+	const { enableUser, enableProject } = readOpencodeCommandToggles();
+	const userCommandsDir = enableUser ? getUserPath(ctx, "opencode", "commands") : null;
+	const projectCommandsDir = enableProject ? getProjectPath(ctx, "opencode", "commands") : null;
 
 	const transformCommand =
 		(level: "user" | "project") => (name: string, content: string, filePath: string, source: SourceMeta) => {

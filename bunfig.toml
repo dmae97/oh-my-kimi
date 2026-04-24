@@ -8,6 +8,7 @@ saveTextLockfile = true
 [loader]
 ".md" = "text"
 ".py" = "text"
+".lark" = "text"
 
 [run]
 bun = true

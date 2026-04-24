@@ -23,6 +23,7 @@ export interface ResolveToolDetails {
 	reason: string;
 	sourceToolName?: string;
 	label?: string;
+	sourceResultDetails?: unknown;
 }
 
 function resolveReasonPreview(reason?: string): string | undefined {
@@ -67,14 +68,21 @@ export function queueResolveHandler(
 		onRejected: () => "requeue",
 		onInvoked: async (input: unknown) => {
 			const params = input as ResolveParams;
+			const withResolveDetails = (result: AgentToolResult<unknown>): AgentToolResult<ResolveToolDetails> => ({
+				...result,
+				details: {
+					...detailsFor(params),
+					...(result.details != null ? { sourceResultDetails: result.details } : {}),
+				},
+			});
 			if (params.action === "apply") {
 				const result = await options.apply(params.reason);
-				return { ...result, details: detailsFor(params) };
+				return withResolveDetails(result);
 			}
 			if (params.action === "discard" && options.reject != null) {
 				const result = await options.reject(params.reason);
 				if (result != null) {
-					return { ...result, details: detailsFor(params) };
+					return withResolveDetails(result);
 				}
 			}
 			return {
@@ -154,9 +162,10 @@ export const resolveToolRenderer = {
 		const reason = replaceTabs(details?.reason?.trim() || "No reason provided");
 		const action = details?.action ?? "apply";
 		const isApply = action === "apply" && !result.isError;
+		const isFailedApply = action === "apply" && result.isError;
 		const bgColor = result.isError ? "error" : isApply ? "success" : "warning";
 		const icon = isApply ? uiTheme.status.success : uiTheme.status.error;
-		const verb = isApply ? "Accept" : "Discard";
+		const verb = isApply ? "Accept" : isFailedApply ? "Failed" : "Discard";
 		const separator = ": ";
 		const separatorIndex = label.indexOf(separator);
 		const sourceLabel = separatorIndex > 0 ? label.slice(0, separatorIndex).trim() : undefined;

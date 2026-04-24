@@ -335,7 +335,9 @@ function renderDiagnostics(
 	const parsedDiagnostics = diagLines
 		.map(line => parseDiagnosticLine(line))
 		.filter((diag): diag is ParsedDiagnostic => diag !== null);
-	const fallbackDiagnostics: RawDiagnostic[] = diagLines.map(line => ({ raw: line.trim() }));
+	const fallbackDiagnostics: RawDiagnostic[] = diagLines.map(line => ({
+		raw: sanitizeDiagnosticDisplayText(line.trim()),
+	}));
 
 	if (expanded) {
 		let output = `${icon} ${theme.fg("dim", meta.join(theme.sep.dot))}`;
@@ -651,11 +653,21 @@ interface RawDiagnostic {
 
 type DiagnosticItem = ParsedDiagnostic | RawDiagnostic;
 
+function sanitizeDiagnosticDisplayText(text: string): string {
+	return replaceTabs(text);
+}
+
 function parseDiagnosticLine(line: string): ParsedDiagnostic | null {
 	const match = line.trim().match(/^(.*):(\d+):(\d+)\s+\[(\w+)\]\s*(.*)$/);
 	if (!match) return null;
 	const [, file, lineNum, colNum, severity, message] = match;
-	return { file, line: lineNum, col: colNum, severity: severity.toLowerCase(), message };
+	return {
+		file: sanitizeDiagnosticDisplayText(file),
+		line: lineNum,
+		col: colNum,
+		severity: severity.toLowerCase(),
+		message: sanitizeDiagnosticDisplayText(message),
+	};
 }
 
 function severityToColor(severity: string): "error" | "warning" | "accent" | "dim" {

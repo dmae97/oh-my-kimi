@@ -20,6 +20,7 @@ import {
 } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import { withEnv } from "./helpers";
 
 const ANTHROPIC_MODEL: Model<"anthropic-messages"> = {
 	id: "claude-sonnet-4-5",
@@ -38,31 +39,6 @@ function createAbortedSignal(): AbortSignal {
 	const controller = new AbortController();
 	controller.abort();
 	return controller.signal;
-}
-
-async function withEnv(overrides: Record<string, string | undefined>, fn: () => void | Promise<void>): Promise<void> {
-	const previous = new Map<string, string | undefined>();
-	for (const key of Object.keys(overrides)) {
-		previous.set(key, Bun.env[key]);
-	}
-	try {
-		for (const [key, value] of Object.entries(overrides)) {
-			if (value === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = value;
-			}
-		}
-		await fn();
-	} finally {
-		for (const [key, value] of previous.entries()) {
-			if (value === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = value;
-			}
-		}
-	}
 }
 
 function captureAnthropicPayload(

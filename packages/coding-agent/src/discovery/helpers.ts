@@ -4,7 +4,8 @@ import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { FileType, glob } from "@oh-my-pi/pi-natives";
 import { CONFIG_DIR_NAME, getConfigDirName, getProjectDir, parseFrontmatter, tryParseJson } from "@oh-my-pi/pi-utils";
-import { readDirEntries, readFile } from "../capability/fs";
+import type { ExtensionModule } from "../capability/extension-module";
+import { invalidate as invalidateFsCache, readDirEntries, readFile } from "../capability/fs";
 import { parseRuleConditionAndScope, type Rule, type RuleFrontmatter } from "../capability/rule";
 import type { Skill, SkillFrontmatter } from "../capability/skill";
 import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
@@ -581,6 +582,31 @@ export function getExtensionNameFromPath(extensionPath: string): string {
 	return base;
 }
 
+/**
+ * Build ExtensionModule items from discovered user/project paths.
+ * Shared across providers that expose extension modules via user + project dirs.
+ */
+export function buildExtensionModuleItems(
+	providerId: string,
+	userPaths: string[],
+	projectPaths: string[],
+): ExtensionModule[] {
+	return [
+		...userPaths.map(extPath => ({
+			name: getExtensionNameFromPath(extPath),
+			path: extPath,
+			level: "user" as const,
+			_source: createSourceMeta(providerId, extPath, "user"),
+		})),
+		...projectPaths.map(extPath => ({
+			name: getExtensionNameFromPath(extPath),
+			path: extPath,
+			level: "project" as const,
+			_source: createSourceMeta(providerId, extPath, "project"),
+		})),
+	];
+}
+
 // =============================================================================
 // Claude Code Plugin Cache Helpers
 // =============================================================================
@@ -894,6 +920,19 @@ export function clearClaudePluginRootsCache(): void {
 	if (lastPreloadHome) {
 		void preloadPluginRoots(lastPreloadHome, getProjectDir());
 	}
+}
+
+/**
+ * Invalidate fs caches for installed-plugin registry files and reset the
+ * in-memory plugin roots cache. Used by MarketplaceManager clients after
+ * installing/uninstalling/enabling/disabling plugins.
+ */
+export function clearPluginRootsAndCaches(extraPaths?: readonly string[]): void {
+	const home = os.homedir();
+	invalidateFsCache(path.join(home, ".claude", "plugins", "installed_plugins.json"));
+	invalidateFsCache(path.join(home, getConfigDirName(), "plugins", "installed_plugins.json"));
+	for (const p of extraPaths ?? []) invalidateFsCache(p);
+	clearClaudePluginRootsCache();
 }
 
 // ── Preloaded plugin roots (for sync consumers like LSP config) ─────────────

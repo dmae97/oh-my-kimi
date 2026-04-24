@@ -214,6 +214,19 @@ function noopInfo(): MutationInfo {
 	return { lineNumber: 0, originalSnippet: "", mutatedSnippet: "" };
 }
 
+function applyBinaryOperatorSwap(
+	parsed: Parsed,
+	candidate: Candidate<t.BinaryExpression>,
+	swap: Record<string, t.BinaryExpression["operator"]>,
+): MutationInfo {
+	const node = candidate.path.node;
+	const before = snippetFromSource(parsed.code, node, snippetFromNode(node));
+	const swapped = swap[node.operator];
+	if (!swapped) return noopInfo();
+	node.operator = swapped;
+	return { lineNumber: nodeLine(node), originalSnippet: before, mutatedSnippet: snippetFromNode(node) };
+}
+
 function isLengthMemberExpression(node: t.Node): node is t.MemberExpression {
 	return t.isMemberExpression(node) && !node.computed && t.isIdentifier(node.property, { name: "length" });
 }
@@ -290,12 +303,7 @@ class SwapComparisonMutation extends BaseAstMutation {
 	}
 
 	applyCandidate(parsed: Parsed, candidate: Candidate<t.BinaryExpression>): MutationInfo {
-		const node = candidate.path.node;
-		const before = snippetFromSource(parsed.code, node, snippetFromNode(node));
-		const swapped = this.#swap[node.operator];
-		if (!swapped) return noopInfo();
-		node.operator = swapped;
-		return { lineNumber: nodeLine(node), originalSnippet: before, mutatedSnippet: snippetFromNode(node) };
+		return applyBinaryOperatorSwap(parsed, candidate, this.#swap);
 	}
 }
 
@@ -324,12 +332,7 @@ class SwapEqualityMutation extends BaseAstMutation {
 	}
 
 	applyCandidate(parsed: Parsed, candidate: Candidate<t.BinaryExpression>): MutationInfo {
-		const node = candidate.path.node;
-		const before = snippetFromSource(parsed.code, node, snippetFromNode(node));
-		const swapped = this.#swap[node.operator];
-		if (!swapped) return noopInfo();
-		node.operator = swapped;
-		return { lineNumber: nodeLine(node), originalSnippet: before, mutatedSnippet: snippetFromNode(node) };
+		return applyBinaryOperatorSwap(parsed, candidate, this.#swap);
 	}
 }
 
@@ -431,12 +434,7 @@ class SwapArithmeticMutation extends BaseAstMutation {
 	}
 
 	applyCandidate(parsed: Parsed, candidate: Candidate<t.BinaryExpression>): MutationInfo {
-		const node = candidate.path.node;
-		const before = snippetFromSource(parsed.code, node, snippetFromNode(node));
-		const swapped = this.#swap[node.operator];
-		if (!swapped) return noopInfo();
-		node.operator = swapped;
-		return { lineNumber: nodeLine(node), originalSnippet: before, mutatedSnippet: snippetFromNode(node) };
+		return applyBinaryOperatorSwap(parsed, candidate, this.#swap);
 	}
 }
 

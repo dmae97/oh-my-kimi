@@ -45,7 +45,6 @@ export class PiProtocolHandler implements ProtocolHandler {
 			content,
 			contentType: "text/markdown",
 			size: Buffer.byteLength(content, "utf-8"),
-			sourcePath: "pi://",
 		};
 	}
 
@@ -78,7 +77,6 @@ export class PiProtocolHandler implements ProtocolHandler {
 			content,
 			contentType: "text/markdown",
 			size: Buffer.byteLength(content, "utf-8"),
-			sourcePath: `pi://${normalized}`,
 		};
 	}
 }

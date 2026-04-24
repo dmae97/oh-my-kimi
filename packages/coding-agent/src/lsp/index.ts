@@ -40,6 +40,7 @@ import {
 	type LspParams,
 	type LspToolDetails,
 	lspSchema,
+	type Position,
 	type PublishedDiagnostics,
 	type ServerConfig,
 	type SymbolInformation,
@@ -262,6 +263,10 @@ function getLspServerForFile(config: LspConfig, filePath: string): [string, Serv
 	return servers.length > 0 ? servers[0] : null;
 }
 
+function isProjectAwareLspServer(serverConfig: ServerConfig): boolean {
+	return !serverConfig.createClient && !serverConfig.isLinter;
+}
+
 const DIAGNOSTIC_MESSAGE_LIMIT = 50;
 const SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS = 3000;
 const BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS = 400;
@@ -277,6 +282,21 @@ function limitDiagnosticMessages(messages: string[]): string[] {
 
 const LOCATION_CONTEXT_LINES = 1;
 const REFERENCE_CONTEXT_LIMIT = 50;
+
+const REFERENCES_RETRY_COUNT = 2;
+const REFERENCES_RETRY_DELAY_MS = 250;
+
+function comparePosition(a: Position, b: Position): number {
+	return a.line === b.line ? a.character - b.character : a.line - b.line;
+}
+
+function rangeContainsPosition(range: Location["range"], position: Position): boolean {
+	return comparePosition(range.start, position) <= 0 && comparePosition(position, range.end) <= 0;
+}
+
+function isOnlyQueriedDeclaration(locations: Location[], uri: string, position: Position): boolean {
+	return locations.length === 1 && locations[0]?.uri === uri && rangeContainsPosition(locations[0].range, position);
+}
 
 function normalizeLocationResult(result: Location | Location[] | LocationLink | LocationLink[] | null): Location[] {
 	if (!result) return [];
@@ -560,6 +580,10 @@ async function getDiagnosticsForFile(
 			// Default: use LSP
 			const client = await getOrCreateClient(serverConfig, cwd);
 			throwIfAborted(signal);
+			if (isProjectAwareLspServer(serverConfig)) {
+				await waitForProjectLoaded(client, signal);
+				throwIfAborted(signal);
+			}
 			// Content already synced + didSave sent, wait for fresh diagnostics
 			const minVersion = minVersions?.get(serverName);
 			const expectedDocumentVersion = expectedDocumentVersions?.get(serverName);
@@ -1220,6 +1244,10 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 							continue;
 						}
 						const client = await getOrCreateClient(serverConfig, this.session.cwd);
+						if (isProjectAwareLspServer(serverConfig)) {
+							await waitForProjectLoaded(client, signal);
+							throwIfAborted(signal);
+						}
 						const minVersion = client.diagnosticsVersion;
 						await refreshFile(client, resolved, signal);
 						const expectedDocumentVersion = client.openFiles.get(uri)?.version;
@@ -1512,16 +1540,31 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 					break;
 				}
 				case "references": {
-					const result = (await sendRequest(
-						client,
-						"textDocument/references",
-						{
-							textDocument: { uri },
-							position,
-							context: { includeDeclaration: true },
-						},
-						signal,
-					)) as Location[] | null;
+					let result: Location[] | null = null;
+					for (let attempt = 0; attempt <= REFERENCES_RETRY_COUNT; attempt++) {
+						result = (await sendRequest(
+							client,
+							"textDocument/references",
+							{
+								textDocument: { uri },
+								position,
+								context: { includeDeclaration: true },
+							},
+							signal,
+						)) as Location[] | null;
+
+						const locations = result ?? [];
+						if (!isProjectAwareLspServer(serverConfig) || attempt === REFERENCES_RETRY_COUNT) {
+							break;
+						}
+						if (locations.length > 0 && !isOnlyQueriedDeclaration(locations, uri, position)) {
+							break;
+						}
+
+						await waitForProjectLoaded(client, signal);
+						throwIfAborted(signal);
+						await untilAborted(signal, () => Bun.sleep(REFERENCES_RETRY_DELAY_MS));
+					}
 
 					if (!result || result.length === 0) {
 						output = "No references found";

@@ -190,6 +190,16 @@ export function sanitizeSchemaForStrictMode(
 			continue;
 		}
 
+		if (key === "description" && typeof value === "string" && schema.default !== undefined) {
+			// Preserve `default:` info for strict-mode providers that strip the keyword.
+			// Inline as `(default: X)` text in the description, matching the convention for
+			// runtime-placeholder defaults (e.g. `cwd`) that cannot live in the keyword form.
+			const defaultVal = schema.default;
+			const formatted = typeof defaultVal === "string" ? defaultVal : JSON.stringify(defaultVal);
+			sanitized.description = value.includes("(default:") ? value : `${value} (default: ${formatted})`;
+			continue;
+		}
+
 		sanitized[key] = value;
 	}
 

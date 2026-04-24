@@ -16,11 +16,12 @@ Read the file first. Copy anchors exactly from the latest `read` output. After a
 **`loc` values**
 - `"append"` / `"prepend"` — insert at end/start of file
 - `{ append: "N#ID" }` / `{ prepend: "N#ID" }` — insert after/before anchored line
-- `{ range: { pos: "N#ID", end: "N#ID" } }` — replace inclusive range of lines `pos..end` with new content
-  </operations>
+- `{ range: { pos: "N#ID", end: "N#ID" } }` — replace inclusive range `pos..end` with new content (set `pos == end` for single-line replace)
+</operations>
 
 <examples>
 All examples below reference the same file:
+
 ```ts title="a.ts"
 {{hline  1 "// @ts-ignore"}}
 {{hline  2 "const timeout = 5000;"}}
@@ -44,6 +45,7 @@ All examples below reference the same file:
 
 <example name="replace a block body">
 Replace only the catch body. Do not target the shared boundary line `} catch (err) {`.
+
 ```
 {
   edits: [{
@@ -60,6 +62,7 @@ Replace only the catch body. Do not target the shared boundary line `} catch (er
 
 <example name="replace whole block including closing brace">
 Replace the entire body of `alpha`, including its closing `}`. `end` **MUST** be {{href 7 "}"}} because `content` includes `}`.
+
 ```
 {
   edits: [{
@@ -73,10 +76,13 @@ Replace the entire body of `alpha`, including its closing `}`. `end` **MUST** be
   }]
 }
 ```
-**Wrong**: using `end: {{href 6 "\tlog();"}}` with the same content — line 7 (`}`) survives the replacement AND content emits `}`, producing two closing braces.
+
+**Wrong**: `end: {{href 6 "\tlog();"}}` with the same content — line 7 (`}`) survives AND content emits `}`, producing two closing braces.
 </example>
 
 <example name="replace one line">
+Single-line replace uses `pos == end`.
+
 ```
 {
   edits: [{
@@ -102,6 +108,7 @@ Replace the entire body of `alpha`, including its closing `}`. `end` **MUST** be
 
 <example name="insert before sibling">
 When adding a sibling declaration, prefer `prepend` on the next declaration.
+
 ```
 {
   edits: [{
@@ -120,12 +127,11 @@ When adding a sibling declaration, prefer `prepend` on the next declaration.
 </examples>
 
 <critical>
-- Make the minimum exact edit. Do not rewrite nearby code unless the consumed range requires it.
-- Use anchors exactly as `N#ID` from the latest `read` output.
+- Make the minimum exact edit. Do not rewrite nearby code unless the range requires it.
+- Copy anchors exactly as `N#ID` from the latest `read` output.
 - `range` requires both `pos` and `end`.
-- When your replacement `content` ends with a closing delimiter (`}`, `*/`, `)`, `]`), verify `end` includes the original line carrying that delimiter. If `end` stops one line too early, the original delimiter survives and your content adds a second copy.
-- **Self-check**: compare the last line of `content` with the line immediately after `end` in the file. If they match (e.g., both are `}`), extend `end` to include that line.
-- For a range, either replace only the body or replace the whole range. Do not split range boundaries.
+- **Closing-delimiter check**: when your replacement `content` ends with a closing delimiter (`}`, `*/`, `)`, `]`), compare it against the line immediately after `end` in the file. If they match, extend `end` to include that line — otherwise the original delimiter survives and `content` adds a second copy.
+- For a range, replace only the body or the whole range — don't split range boundaries.
 - `content` must be literal file content with matching indentation. If the file uses tabs, use real tabs.
-- You **MUST NOT** use this tool to reformat or clean up unrelated code. **ALWAYS** use project-specific tooling like linters or code formatters which are much more efficient and reliable.
-  </critical>
+- You **MUST NOT** use this tool to reformat or clean up unrelated code — use project-specific linters or code formatters instead.
+</critical>

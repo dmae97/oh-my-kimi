@@ -382,6 +382,18 @@ handlebars.registerHelper("not", (value: unknown): boolean => !value);
 
 handlebars.registerHelper("jsonStringify", (value: unknown): string => JSON.stringify(value));
 
+/**
+ * {{SECTION_SEPARATOR "Name"}}
+ * Renders a visible section header separator used by system-prompt templates.
+ */
+export function sectionSeparator(name: string): string {
+	return `\n\n═══════════${name}═══════════\n`;
+}
+const sectionSeparatorHelper = (name: unknown): string => sectionSeparator(String(name));
+handlebars.registerHelper("SECTION_SEPARATOR", sectionSeparatorHelper);
+// Legacy misspelled alias retained for external templates copied from pre-rename versions.
+handlebars.registerHelper("SECTION_SEPERATOR", sectionSeparatorHelper);
+
 export function registerHelper(name: string, fn: HelperDelegate): void {
 	handlebars.registerHelper(name, fn);
 }

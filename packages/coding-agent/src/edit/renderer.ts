@@ -1,7 +1,6 @@
 /**
  * Edit tool renderer and LSP batching helpers.
  */
-import type { ToolCallContext } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -16,6 +15,8 @@ import {
 	formatStatusIcon,
 	formatTitle,
 	getDiffStats,
+	getLspBatchRequest,
+	type LspBatchRequest,
 	PREVIEW_LIMITS,
 	replaceTabs,
 	shortenPath,
@@ -25,34 +26,16 @@ import { type VimRenderArgs, vimToolRenderer } from "../tools/vim";
 import { Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
 import type { VimToolDetails } from "../vim/types";
 import type { DiffError, DiffResult } from "./diff";
+import { expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
 import { type ChunkToolEdit, parseChunkEditPath } from "./modes/chunk";
 import type { HashlineToolEdit } from "./modes/hashline";
-import type { Operation } from "./modes/patch";
+import type { Operation, PatchEditEntry } from "./modes/patch";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // LSP Batching
 // ═══════════════════════════════════════════════════════════════════════════
 
-const LSP_BATCH_TOOLS = new Set(["edit", "write"]);
-
-export interface LspBatchRequest {
-	id: string;
-	flush: boolean;
-}
-
-export function getLspBatchRequest(toolCall: ToolCallContext | undefined): LspBatchRequest | undefined {
-	if (!toolCall) {
-		return undefined;
-	}
-	const hasOtherWrites = toolCall.toolCalls.some(
-		(call, index) => index !== toolCall.index && LSP_BATCH_TOOLS.has(call.name),
-	);
-	if (!hasOtherWrites) {
-		return undefined;
-	}
-	const hasLaterWrites = toolCall.toolCalls.slice(toolCall.index + 1).some(call => LSP_BATCH_TOOLS.has(call.name));
-	return { id: toolCall.batchId, flush: !hasLaterWrites };
-}
+export { getLspBatchRequest, type LspBatchRequest };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Tool Details Types
@@ -97,6 +80,7 @@ interface EditRenderArgs {
 	oldText?: string;
 	newText?: string;
 	patch?: string;
+	input?: string;
 	all?: boolean;
 	// Patch mode fields
 	op?: Operation;
@@ -107,7 +91,19 @@ interface EditRenderArgs {
 	 */
 	previewDiff?: string;
 	// Hashline / chunk mode fields
-	edits?: Partial<HashlineToolEdit | ChunkToolEdit>[];
+	edits?: EditRenderEntry[];
+}
+
+type EditRenderEntry = {
+	path?: string;
+	rename?: string;
+	move?: string;
+	op?: Operation;
+};
+
+interface ApplyPatchRenderSummary {
+	entries: PatchEditEntry[];
+	error?: string;
 }
 
 function isVimRenderArgs(args: EditRenderArgs | VimRenderArgs): args is VimRenderArgs {
@@ -163,8 +159,8 @@ function filePathFromEditEntry(p: string | undefined): string | undefined {
 }
 
 /** Count distinct file paths in an edits array. */
-function countEditFiles(edits: any[]): number {
-	return new Set(edits.map((e: any) => filePathFromEditEntry(e?.path)).filter(Boolean)).size;
+function countEditFiles(edits: EditRenderEntry[]): number {
+	return new Set(edits.map(edit => filePathFromEditEntry(edit.path)).filter(Boolean)).size;
 }
 
 function countLines(text: string): number {
@@ -370,6 +366,24 @@ function getCallPreview(args: EditRenderArgs, rawPath: string, uiTheme: Theme): 
 	return "";
 }
 
+const MISSING_APPLY_PATCH_END_ERROR = "The last line of the patch must be '*** End Patch'";
+
+function getApplyPatchRenderSummary(args: EditRenderArgs, isPartial: boolean): ApplyPatchRenderSummary | undefined {
+	if (typeof args.input !== "string") {
+		return undefined;
+	}
+
+	try {
+		return { entries: expandApplyPatchToEntries({ input: args.input }) };
+	} catch (err) {
+		const error = err instanceof Error ? err.message : String(err);
+		if (isPartial && error === MISSING_APPLY_PATCH_END_ERROR) {
+			return { entries: expandApplyPatchToPreviewEntries({ input: args.input }) };
+		}
+		return { entries: [], error };
+	}
+}
+
 function renderDiffSection(
 	diff: string,
 	rawPath: string,
@@ -437,21 +451,29 @@ export const editToolRenderer = {
 			return vimToolRenderer.renderCall(args, options, uiTheme);
 		}
 
+		const applyPatchSummary = getApplyPatchRenderSummary(args, options.isPartial);
+		const firstApplyPatchEntry = applyPatchSummary?.entries[0];
 		// Extract path from first edit entry when top-level path is absent (new schema)
 		const firstEdit = Array.isArray(args.edits) && args.edits.length > 0 ? args.edits[0] : undefined;
-		const rawPath = args.file_path || args.path || (firstEdit as any)?.path || "";
-		const rename = args.rename || (firstEdit as any)?.rename;
-		const op = args.op || (firstEdit as any)?.op;
+		const rawPath =
+			args.file_path || args.path || filePathFromEditEntry(firstEdit?.path) || firstApplyPatchEntry?.path || "";
+		const rename = args.rename || firstEdit?.rename || firstEdit?.move || firstApplyPatchEntry?.rename;
+		const op = args.op || firstEdit?.op || firstApplyPatchEntry?.op;
 		const { description } = formatEditDescription(rawPath, uiTheme, { rename });
 		const spinner =
 			options?.spinnerFrame !== undefined ? formatStatusIcon("running", uiTheme, options.spinnerFrame) : "";
 		let text = `${formatTitle(getOperationTitle(op), uiTheme)} ${spinner ? `${spinner} ` : ""}${description}`;
 		// Show file count hint for multi-file edits
-		const fileCount = Array.isArray(args.edits) ? countEditFiles(args.edits as any[]) : 0;
+		const fileCount = Array.isArray(args.edits)
+			? countEditFiles(args.edits)
+			: (applyPatchSummary?.entries.length ?? 0);
 		if (fileCount > 1) {
 			text += uiTheme.fg("dim", ` (+${fileCount - 1} more)`);
 		}
 		text += getCallPreview(args, rawPath, uiTheme);
+		if (applyPatchSummary?.error) {
+			text += `\n\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error), CALL_TEXT_PREVIEW_WIDTH))}`;
+		}
 
 		return new Text(text, 0, 0);
 	},
@@ -471,7 +493,7 @@ export const editToolRenderer = {
 		}
 
 		const perFileResults = result.details?.perFileResults;
-		const totalFiles = Array.isArray(args?.edits) ? countEditFiles(args!.edits as any[]) : 0;
+		const totalFiles = args?.edits ? countEditFiles(args.edits) : 0;
 		if (perFileResults && (perFileResults.length > 1 || totalFiles > 1)) {
 			return renderMultiFileResult(perFileResults, totalFiles, options, uiTheme);
 		}
@@ -491,9 +513,15 @@ function renderSingleFileResult(
 ): Component {
 	const details = result.details;
 	const isError = result.isError ?? (details && "isError" in details ? details.isError : false);
-	const rawPath = args?.file_path || args?.path || (details && "path" in details ? details.path : "") || "";
-	const op = args?.op || details?.op;
-	const rename = args?.rename || details?.move;
+	const firstEdit = args?.edits?.[0];
+	const rawPath =
+		args?.file_path ||
+		args?.path ||
+		filePathFromEditEntry(firstEdit?.path) ||
+		(details && "path" in details ? details.path : "") ||
+		"";
+	const op = args?.op || firstEdit?.op || details?.op;
+	const rename = args?.rename || firstEdit?.rename || firstEdit?.move || details?.move;
 	const { language } = formatEditDescription(rawPath, uiTheme, { rename });
 
 	const metadataLine =

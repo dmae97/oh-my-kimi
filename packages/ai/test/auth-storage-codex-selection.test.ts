@@ -317,6 +317,49 @@ describe("AuthStorage codex oauth ranking", () => {
 		expect(apiKey).toBe("api-acct-pro");
 	});
 
+	test("does not route codex spark models to a single Plus account", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		await authStorage.set("openai-codex", [{ type: "oauth", ...createCredential("acct-plus", "plus@example.com") }]);
+
+		const plusReport = createCodexUsageReport({
+			accountId: "acct-plus",
+			primary: { usedFraction: 0.05, resetInMs: 30 * 60 * 1000 },
+			secondary: { usedFraction: 0.05, resetInMs: 6 * 24 * 60 * 60 * 1000 },
+		});
+		plusReport.metadata = { ...plusReport.metadata, planType: "plus" };
+		usageByAccount.set("acct-plus", plusReport);
+
+		const apiKey = await authStorage.getApiKey("openai-codex", "session-spark-single-plus", {
+			modelId: "gpt-5.3-codex-spark",
+		});
+		expect(apiKey).toBeUndefined();
+	});
+
+	test("does not fall back to Plus accounts for codex spark models", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-plus-a", "plus-a@example.com") },
+			{ type: "oauth", ...createCredential("acct-plus-b", "plus-b@example.com") },
+		]);
+
+		for (const accountId of ["acct-plus-a", "acct-plus-b"]) {
+			const plusReport = createCodexUsageReport({
+				accountId,
+				primary: { usedFraction: 0.05, resetInMs: 30 * 60 * 1000 },
+				secondary: { usedFraction: 0.05, resetInMs: 6 * 24 * 60 * 60 * 1000 },
+			});
+			plusReport.metadata = { ...plusReport.metadata, planType: "plus" };
+			usageByAccount.set(accountId, plusReport);
+		}
+
+		const apiKey = await authStorage.getApiKey("openai-codex", "session-spark-all-plus", {
+			modelId: "gpt-5.3-codex-spark",
+		});
+		expect(apiKey).toBeUndefined();
+	});
+
 	test("times out slow usage ranking instead of blocking first account selection", async () => {
 		if (!store) throw new Error("test setup failed");
 

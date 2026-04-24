@@ -554,10 +554,10 @@ mod tests {
 			parse_error_lines: Vec::new(),
 			fallback:          false,
 			root_path:         String::new(),
-			root_children:     vec!["class_A".to_owned()],
+			root_children:     vec!["cls_A".to_owned()],
 			chunks:            vec![
-				chunk("class_A", Some(""), &["fn_b"], 0, " "),
-				chunk("fn_b", Some("class_A"), &[], 2, " "),
+				chunk("cls_A", Some(""), &["fn_b"], 0, " "),
+				chunk("fn_b", Some("cls_A"), &[], 2, " "),
 			],
 		};
 		assert_eq!(detect_file_indent_step("", &tree), 2);
@@ -575,8 +575,8 @@ mod tests {
 			parse_error_lines: Vec::new(),
 			fallback:          false,
 			root_path:         String::new(),
-			root_children:     vec!["key_server".to_owned()],
-			chunks:            vec![chunk("key_server", Some(""), &[], 0, " ")],
+			root_children:     vec!["key_ser".to_owned()],
+			chunks:            vec![chunk("key_ser", Some(""), &[], 0, " ")],
 		};
 		let source = "server:\n  host: localhost\n  port: 5432\n";
 		assert_eq!(detect_file_indent_step(source, &tree), 2);
@@ -592,8 +592,8 @@ mod tests {
 			parse_error_lines: Vec::new(),
 			fallback:          false,
 			root_path:         String::new(),
-			root_children:     vec!["fn_main".to_owned()],
-			chunks:            vec![chunk("fn_main", Some(""), &[], 0, "")],
+			root_children:     vec!["fn_mai".to_owned()],
+			chunks:            vec![chunk("fn_mai", Some(""), &[], 0, "")],
 		};
 
 		let source = "fn main() {\n    println!(\"hi\");\n}\n";

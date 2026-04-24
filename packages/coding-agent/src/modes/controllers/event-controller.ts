@@ -66,7 +66,9 @@ export class EventController {
 	#getReadGroup(): ReadToolGroupComponent {
 		if (!this.#lastReadGroup) {
 			this.ctx.chatContainer.addChild(new Text("", 0, 0));
-			const group = new ReadToolGroupComponent();
+			const group = new ReadToolGroupComponent({
+				showContentPreview: this.ctx.settings.get("read.toolResultPreview"),
+			});
 			group.setExpanded(this.ctx.toolOutputExpanded);
 			this.ctx.chatContainer.addChild(group);
 			this.#lastReadGroup = group;

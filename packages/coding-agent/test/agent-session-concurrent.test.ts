@@ -19,29 +19,10 @@ import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { Type } from "@sinclair/typebox";
+import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 // Mock stream that mimics AssistantMessageEventStream
 class MockAssistantStream extends AssistantMessageEventStream {}
-
-function createAssistantMessage(text: string): AssistantMessage {
-	return {
-		role: "assistant",
-		content: [{ type: "text", text }],
-		api: "anthropic-messages",
-		provider: "anthropic",
-		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
-		timestamp: Date.now(),
-	};
-}
 
 describe("AgentSession concurrent prompt guard", () => {
 	let session: AgentSession;
@@ -346,6 +327,47 @@ describe("AgentSession TTSR resume gate", () => {
 		};
 	}
 
+	function pushContinuationStream(stream: MockAssistantStream, onComplete: () => void): void {
+		setTimeout(() => {
+			const partial = makeMsg("");
+			stream.push({ type: "start", partial });
+			setTimeout(() => {
+				onComplete();
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: makeMsg('Fixed: let val = result.expect("msg")'),
+				});
+			}, 80);
+		}, 10);
+	}
+
+	function pushAbortableTtsrStream(stream: MockAssistantStream, signal: AbortSignal | undefined): void {
+		queueMicrotask(() => {
+			const partial = makeMsg("");
+			stream.push({ type: "start", partial });
+			stream.push({
+				type: "text_delta",
+				contentIndex: 0,
+				delta: "let val = result.unwrap(",
+				partial: makeMsg("let val = result.unwrap("),
+			});
+			// TTSR abort should fire synchronously; poll for it
+			const checkAbort = () => {
+				if (signal?.aborted) {
+					stream.push({
+						type: "error",
+						reason: "aborted",
+						error: makeMsg("let val = result.unwrap(", "aborted"),
+					});
+				} else {
+					setTimeout(checkAbort, 2);
+				}
+			};
+			checkAbort();
+		});
+	}
+
 	it("prompt() blocks until TTSR interrupt continuation completes", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		let streamCallCount = 0;
@@ -370,43 +392,12 @@ describe("AgentSession TTSR resume gate", () => {
 
 				if (streamCallCount === 1) {
 					// First stream: emit text that triggers TTSR, then respond to abort
-					queueMicrotask(() => {
-						const partial = makeMsg("");
-						stream.push({ type: "start", partial });
-						stream.push({
-							type: "text_delta",
-							contentIndex: 0,
-							delta: "let val = result.unwrap(",
-							partial: makeMsg("let val = result.unwrap("),
-						});
-						// TTSR abort should fire synchronously; poll for it
-						const checkAbort = () => {
-							if (signal?.aborted) {
-								stream.push({
-									type: "error",
-									reason: "aborted",
-									error: makeMsg("let val = result.unwrap(", "aborted"),
-								});
-							} else {
-								setTimeout(checkAbort, 2);
-							}
-						};
-						checkAbort();
-					});
+					pushAbortableTtsrStream(stream, signal);
 				} else {
 					// Continuation stream: complete normally after a delay
-					setTimeout(() => {
-						const partial = makeMsg("");
-						stream.push({ type: "start", partial });
-						setTimeout(() => {
-							continuationCompleted = true;
-							stream.push({
-								type: "done",
-								reason: "stop",
-								message: makeMsg('Fixed: let val = result.expect("msg")'),
-							});
-						}, 80);
-					}, 10);
+					pushContinuationStream(stream, () => {
+						continuationCompleted = true;
+					});
 				}
 
 				return stream;
@@ -479,18 +470,9 @@ describe("AgentSession TTSR resume gate", () => {
 					});
 				} else {
 					// Continuation stream after deferred TTSR injection
-					setTimeout(() => {
-						const partial = makeMsg("");
-						stream.push({ type: "start", partial });
-						setTimeout(() => {
-							continuationCompleted = true;
-							stream.push({
-								type: "done",
-								reason: "stop",
-								message: makeMsg('Fixed: let val = result.expect("msg")'),
-							});
-						}, 80);
-					}, 10);
+					pushContinuationStream(stream, () => {
+						continuationCompleted = true;
+					});
 				}
 
 				return stream;
@@ -659,28 +641,7 @@ describe("AgentSession TTSR resume gate", () => {
 
 				if (streamCallCount === 1) {
 					// First stream: emit text that triggers TTSR, then respond to abort
-					queueMicrotask(() => {
-						const partial = makeMsg("");
-						stream.push({ type: "start", partial });
-						stream.push({
-							type: "text_delta",
-							contentIndex: 0,
-							delta: "let val = result.unwrap(",
-							partial: makeMsg("let val = result.unwrap("),
-						});
-						const checkAbort = () => {
-							if (signal?.aborted) {
-								stream.push({
-									type: "error",
-									reason: "aborted",
-									error: makeMsg("let val = result.unwrap(", "aborted"),
-								});
-							} else {
-								setTimeout(checkAbort, 2);
-							}
-						};
-						checkAbort();
-					});
+					pushAbortableTtsrStream(stream, signal);
 				} else if (streamCallCount === 2) {
 					// Continuation: return assistant message with a tool call
 					setTimeout(() => {

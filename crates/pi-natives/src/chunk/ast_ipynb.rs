@@ -875,15 +875,15 @@ mod tests {
 			cell3
 				.children
 				.iter()
-				.any(|p| p.starts_with("cell_3.class_Bar")),
-			"cell_3 should contain class_Bar, got {:?}",
+				.any(|p| p.starts_with("cell_3.cls_Bar")),
+			"cell_3 should contain cls_Bar, got {:?}",
 			cell3.children
 		);
 		let bar_method = tree
 			.chunks
 			.iter()
-			.find(|c| c.path == "cell_3.class_Bar.fn_baz");
-		assert!(bar_method.is_some(), "cell_3.class_Bar.fn_baz should exist");
+			.find(|c| c.path == "cell_3.cls_Bar.fn_baz");
+		assert!(bar_method.is_some(), "cell_3.cls_Bar.fn_baz should exist");
 	}
 
 	#[test]

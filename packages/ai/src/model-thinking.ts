@@ -48,6 +48,14 @@ const CODEX_GPT_5_4_PRIORITY_BY_VARIANT: Partial<Record<OpenAIVariant, number>> 
 	nano: 2,
 };
 
+const COPILOT_GENERATED_LIMITS: Record<string, { contextWindow: number; maxTokens: number }> = {
+	"claude-opus-4.6": { contextWindow: 168000, maxTokens: 32000 },
+	"gpt-5.2": { contextWindow: 272000, maxTokens: 128000 },
+	"gpt-5.4": { contextWindow: 272000, maxTokens: 128000 },
+	"gpt-5.4-mini": { contextWindow: 272000, maxTokens: 128000 },
+	"grok-code-fast-1": { contextWindow: 192000, maxTokens: 64000 },
+};
+
 interface GeminiModel {
 	family: "gemini";
 	kind: GeminiKind;
@@ -258,7 +266,7 @@ export function mapEffortToGoogleThinkingLevel<TApi extends Api>(
 export function mapEffortToAnthropicAdaptiveEffort<TApi extends Api>(
 	model: ApiModel<TApi>,
 	effort: Effort,
-): "low" | "medium" | "high" | "max" {
+): "low" | "medium" | "high" | "xhigh" | "max" {
 	switch (requireSupportedEffort(model, effort)) {
 		case Effort.Minimal:
 		case Effort.Low:
@@ -268,12 +276,34 @@ export function mapEffortToAnthropicAdaptiveEffort<TApi extends Api>(
 		case Effort.High:
 			return "high";
 		case Effort.XHigh:
-			return "max";
+			// Opus 4.7+ introduced a distinct "xhigh" effort level (between "high" and "max").
+			// The Anthropic docs scope this to the Messages API only, so Bedrock Converse and
+			// older adaptive-thinking Opus 4.6 models keep the legacy "max" alias.
+			return anthropicModelHasRealXHighEffort(model) ? "xhigh" : "max";
 	}
 }
 
-function applyGeneratedModelPolicy(model: ApiModel<Api>): void {
+function anthropicModelHasRealXHighEffort<TApi extends Api>(model: ApiModel<TApi>): boolean {
+	if (model.api !== "anthropic-messages") return false;
 	const parsedModel = parseKnownModel(model.id);
+	if (parsedModel.family !== "anthropic" || parsedModel.kind !== "opus") return false;
+	return semverGte(parsedModel.version, "4.7");
+}
+
+function applyGeneratedModelPolicy(model: ApiModel<Api>): void {
+	const copilotLimits = model.provider === "github-copilot" ? COPILOT_GENERATED_LIMITS[model.id] : undefined;
+	if (copilotLimits) {
+		model.contextWindow = copilotLimits.contextWindow;
+		model.maxTokens = copilotLimits.maxTokens;
+	}
+
+	const parsedModel = parseKnownModel(model.id);
+	const applyPatchToolType = inferGeneratedApplyPatchToolType(model, parsedModel);
+	if (applyPatchToolType) {
+		model.applyPatchToolType = applyPatchToolType;
+	} else {
+		delete model.applyPatchToolType;
+	}
 	if (parsedModel.family === "anthropic") {
 		applyAnthropicCatalogPolicy(model, parsedModel);
 	}
@@ -296,6 +326,22 @@ function applyAnthropicCatalogPolicy(model: ApiModel<Api>, parsedModel: Anthropi
 		model.contextWindow = 1000000;
 		model.maxTokens = 128000;
 	}
+}
+
+function inferGeneratedApplyPatchToolType(
+	model: ApiModel<Api>,
+	parsedModel: ParsedModel,
+): ApiModel<Api>["applyPatchToolType"] {
+	if (parsedModel.family !== "openai" || parsedModel.version.major !== 5) {
+		return undefined;
+	}
+	if (model.provider === "openai" && model.api === "openai-responses") {
+		return "freeform";
+	}
+	if (model.provider === "openai-codex" && model.api === "openai-codex-responses") {
+		return "freeform";
+	}
+	return undefined;
 }
 
 function applyOpenAICatalogPolicy(model: ApiModel<Api>, parsedModel: OpenAIModel): void {

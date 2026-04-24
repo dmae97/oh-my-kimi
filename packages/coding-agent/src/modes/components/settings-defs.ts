@@ -145,6 +145,24 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		},
 		{ value: "never", label: "Never", description: "Stay on the fallback model until manually changed" },
 	],
+	// Task input mode
+	"task.simple": [
+		{
+			value: "default",
+			label: "Default",
+			description: "Shared context and custom task schema are available",
+		},
+		{
+			value: "schema-free",
+			label: "Schema-free",
+			description: "Shared context stays available, but custom task schema is disabled",
+		},
+		{
+			value: "independent",
+			label: "Independent",
+			description: "No shared context or custom task schema; each task must stand alone",
+		},
+	],
 	// Task max concurrency
 	"task.maxConcurrency": [
 		{ value: "0", label: "Unlimited" },

@@ -2,6 +2,52 @@
 
 ## [Unreleased]
 
+## [14.2.0] - 2026-04-23
+
+### Added
+
+- Added an `apply_patch` edit mode that accepts Codex `*** Begin Patch` envelopes, shares patch-mode execution and diagnostics, and renders streaming per-file diffs in the TUI.
+
+### Changed
+
+- Changed Spark models to default to `apply_patch` edit mode instead of `replace`.
+- Tightened the contract for `SearchParams.recency` in `web/search/providers/base.ts`: providers MUST interpret recency as a pure time filter and MUST NOT use it as an implicit signal to change topic scope, content domain, or ranking strategy.
+- Inline read tool previews are now optional via `read.toolResultPreview` and default to off
+
+### Fixed
+
+- Fixed `apply_patch` streaming previews to avoid showing the missing `*** End Patch` parse error while the patch body is still arriving.
+- Fixed diagnostics rendering to replace tabs before TUI output, preventing compiler messages from breaking tree alignment.
+- Fixed compiled `omp` binaries to ignore project-local `bunfig.toml` and `.env` autoloading at startup, preventing unrelated project config from crashing or preloading code into the CLI
+- Fixed edit tool diff and replace operations to report missing-file failures as `File not found: <path>` errors instead of raw filesystem ENOENT errors
+- Fixed `local://` URL path leak on Linux where `//` collapsing to `/` produced `local:/path` forms that bypassed the internal protocol handler and leaked as filesystem paths, breaking plan mode file resolution
+- Fixed Darwin compiled binaries failing to start under Bun 1.3.12 by ad-hoc signing local and release binary builds after applying Bun's no-codesign workaround ([#754](https://github.com/can1357/oh-my-pi/issues/754))
+- Fixed Tavily web search silently returning off-topic news articles when `--recency` was set. The provider was unconditionally coupling `topic: "news"` to recency, which scoped Tavily's index to news publications and excluded documentation, release notes, GitHub, and all non-news technical content. Technical queries with `--recency` now return the correct corpus.
+- Fixed status-line sanitization to strip OSC, DCS, PM, APC, and 8-bit CSI escape sequences instead of leaving payload fragments in the UI
+- Fixed inline read tool previews to avoid rendering duplicate summary rows above the same code cell
+
+## [14.1.3] - 2026-04-17
+
+### Breaking Changes
+
+- Replaced the legacy `todo_write` `ops`-based API (`replace`, `update`, `add_task`, and `remove_task`) with direct top-level fields, requiring migration of any callers using the old request shape
+- Removed in-place updates to existing task `content`, `details`, and `notes` via `todo_write`; note changes now append through `add_notes`
+- Phased task definitions in `todo_write` now reject `notes` on initial creation, so notes must be added later with `add_notes`
+
+### Added
+
+- Added `complete`, `start`, `abandon`, `remove`, `add_notes`, and `add_tasks` parameters to `todo_write` so callers can complete, jump to, drop, and annotate tasks without op wrappers
+- Added direct `add_phase` support as a top-level argument for inserting a new phase in `todo_write`
+- Added `task.simple` with `default`, `schema-free`, and `independent` modes so the task tool can disable task-call `schema` and shared `context` inputs while preserving agent-defined and inherited subagent schemas
+
+### Changed
+
+- Changed `add_tasks` to insert tasks by phase name or ID and allow multiple tasks to be added in one call
+
+### Fixed
+
+- Fixed task calls in `schema-free` and `independent` modes to return clear mode-specific errors when disallowed `context` or `schema` inputs are provided
+- Fixed newly generated session IDs to use UUIDv7 for new, forked, and branched sessions while preserving resumed session IDs
 ## [14.1.1] - 2026-04-14
 
 ### Breaking Changes
@@ -182,7 +228,6 @@
 ### Fixed
 
 - Fixed typo in system prompt: 'backwards compatibiltity' → 'backwards compatibility'
-
 
 ## [14.0.3] - 2026-04-09
 

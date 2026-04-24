@@ -12,6 +12,10 @@
 
 - Changed truncation debug logging to run only when `debugRedraw` is enabled
 
+### Fixed
+
+- Fixed viewport jumping during streaming and session swap by tracking actual content height instead of high-water mark
+
 ## [14.0.5] - 2026-04-11
 
 ### Changed

@@ -2047,6 +2047,12 @@ function createBlobId(data: Uint8Array): Uint8Array {
 	return new Uint8Array(createHash("sha256").update(data).digest());
 }
 
+function storeCursorBlob(blobStore: Map<string, Uint8Array>, data: Uint8Array): Uint8Array {
+	const blobId = createBlobId(data);
+	blobStore.set(Buffer.from(blobId).toString("hex"), data);
+	return blobId;
+}
+
 const CURSOR_NATIVE_TOOL_NAMES = new Set(["bash", "read", "write", "delete", "ls", "grep", "lsp", "todo_write"]);
 
 function buildMcpToolDefinitions(tools: Tool[] | undefined): McpToolDefinition[] {
@@ -2103,17 +2109,6 @@ function extractAssistantMessageText(msg: Message): string {
 }
 
 /**
- * Hash `data`, insert it into `blobStore`, and return its blob ID.
- * Used to package bytes fields of the `*Structure` protobuf messages,
- * which Cursor's backend resolves via the KV getBlob round-trip.
- */
-function storeBlob(blobStore: Map<string, Uint8Array>, data: Uint8Array): Uint8Array {
-	const id = createBlobId(data);
-	blobStore.set(Buffer.from(id).toString("hex"), data);
-	return id;
-}
-
-/**
  * Derive a stable, UUID-formatted `message_id` from a content key.
  * Ensures identical historical messages hash to the same blob IDs across
  * requests, so `conversationBlobStores` does not grow unboundedly and
@@ -2160,7 +2155,7 @@ function buildRootPromptMessagesJson(
 
 	const pushJson = (obj: unknown) => {
 		const bytes = new TextEncoder().encode(JSON.stringify(obj));
-		entries.push(storeBlob(blobStore, bytes));
+		entries.push(storeCursorBlob(blobStore, bytes));
 	};
 
 	for (let i = 0; i < messages.length; i++) {
@@ -2233,7 +2228,7 @@ function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint
 			messageId: deterministicMessageId(`u:${turns.length}:${userText}`),
 		});
 		const userMessageBytes = toBinary(UserMessageSchema, userMessage);
-		const userMessageBlobId = storeBlob(blobStore, userMessageBytes);
+		const userMessageBlobId = storeCursorBlob(blobStore, userMessageBytes);
 
 		// Collect and serialize steps until next user message
 		const stepBlobIds: Uint8Array[] = [];
@@ -2251,7 +2246,7 @@ function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint
 							value: create(AssistantMessageSchema, { text }),
 						},
 					});
-					stepBlobIds.push(storeBlob(blobStore, toBinary(ConversationStepSchema, step)));
+					stepBlobIds.push(storeCursorBlob(blobStore, toBinary(ConversationStepSchema, step)));
 				}
 			} else if (stepMsg.role === "toolResult") {
 				// Include tool results as assistant text for context
@@ -2263,7 +2258,7 @@ function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint
 							value: create(AssistantMessageSchema, { text: `[Tool Result]\n${text}` }),
 						},
 					});
-					stepBlobIds.push(storeBlob(blobStore, toBinary(ConversationStepSchema, step)));
+					stepBlobIds.push(storeCursorBlob(blobStore, toBinary(ConversationStepSchema, step)));
 				}
 			}
 
@@ -2282,8 +2277,7 @@ function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint
 				value: agentTurn,
 			},
 		});
-		const turnBytes = toBinary(ConversationTurnStructureSchema, turn);
-		turns.push(storeBlob(blobStore, turnBytes));
+		turns.push(storeCursorBlob(blobStore, toBinary(ConversationTurnStructureSchema, turn)));
 	}
 
 	return turns;
@@ -2310,8 +2304,7 @@ function buildGrpcRequest(
 		content: context.systemPrompt || "You are a helpful assistant.",
 	});
 	const systemPromptBytes = new TextEncoder().encode(systemPromptJson);
-	const systemPromptId = createBlobId(systemPromptBytes);
-	blobStore.set(Buffer.from(systemPromptId).toString("hex"), systemPromptBytes);
+	const systemPromptId = storeCursorBlob(blobStore, systemPromptBytes);
 
 	const lastMessage = context.messages[context.messages.length - 1];
 	const userText =

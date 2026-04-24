@@ -18,6 +18,7 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
+import type { TSchema } from "@sinclair/typebox";
 import type { ToolSession } from "..";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
 import type { Theme } from "../modes/theme/theme";
@@ -34,17 +35,16 @@ import { runSubprocess } from "./executor";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
-import { renderCall, renderResult } from "./render";
+import { renderResult, renderCall as renderTaskCall } from "./render";
+import { getTaskSimpleModeCapabilities, type TaskSimpleMode } from "./simple-mode";
 import { renderTemplate } from "./template";
 import {
 	type AgentDefinition,
 	type AgentProgress,
+	getTaskSchema,
 	type SingleResult,
 	type TaskParams,
-	type TaskSchema,
 	type TaskToolDetails,
-	taskSchema,
-	taskSchemaNoIsolation,
 } from "./types";
 import {
 	applyBaseline,
@@ -133,14 +133,52 @@ function renderDescription(
 	isolationEnabled: boolean,
 	asyncEnabled: boolean,
 	disabledAgents: string[],
+	simpleMode: TaskSimpleMode,
 ): string {
 	const filteredAgents = disabledAgents.length > 0 ? agents.filter(a => !disabledAgents.includes(a.name)) : agents;
+	const { contextEnabled, customSchemaEnabled } = getTaskSimpleModeCapabilities(simpleMode);
 	return prompt.render(taskDescriptionTemplate, {
 		agents: filteredAgents,
 		MAX_CONCURRENCY: maxConcurrency,
 		isolationEnabled,
 		asyncEnabled,
+		contextEnabled,
+		customSchemaEnabled,
+		defaultMode: simpleMode === "default",
+		schemaFreeMode: simpleMode === "schema-free",
+		independentMode: simpleMode === "independent",
 	});
+}
+
+function createTaskModeError(text: string): AgentToolResult<TaskToolDetails> {
+	return {
+		content: [{ type: "text", text }],
+		details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+	};
+}
+
+function validateTaskModeParams(simpleMode: TaskSimpleMode, params: TaskParams): string | undefined {
+	const { contextEnabled, customSchemaEnabled } = getTaskSimpleModeCapabilities(simpleMode);
+	const disallowedFields: string[] = [];
+	if (!contextEnabled && params.context !== undefined) {
+		disallowedFields.push("context");
+	}
+	if (!customSchemaEnabled && params.schema !== undefined) {
+		disallowedFields.push("schema");
+	}
+	if (disallowedFields.length === 0) {
+		return undefined;
+	}
+
+	if (simpleMode === "schema-free") {
+		return "task.simple is set to schema-free, so the task tool does not accept `schema`. Remove it and rely on the selected agent definition or inherited session schema.";
+	}
+
+	if (disallowedFields.length === 1) {
+		return `task.simple is set to independent, so the task tool does not accept \`${disallowedFields[0]}\`. Put everything the subagent needs inside each task assignment.`;
+	}
+
+	return "task.simple is set to independent, so the task tool does not accept `context` or `schema`. Put all required background and output expectations inside each task assignment or the selected agent definition.";
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -153,15 +191,22 @@ function renderDescription(
  * Requires async initialization to discover available agents.
  * Use `TaskTool.create(session)` to instantiate.
  */
-export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
+export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 	readonly name = "task";
 	readonly label = "Task";
 	readonly strict = true;
-	readonly parameters: TaskSchema;
-	readonly renderCall = renderCall;
 	readonly renderResult = renderResult;
 	readonly #discoveredAgents: AgentDefinition[];
 	readonly #blockedAgent: string | undefined;
+
+	get parameters(): TSchema {
+		const isolationEnabled = this.session.settings.get("task.isolation.mode") !== "none";
+		return getTaskSchema({ isolationEnabled, simpleMode: this.#getTaskSimpleMode() });
+	}
+
+	renderCall(args: unknown, options: Parameters<typeof renderTaskCall>[1], theme: Theme) {
+		return renderTaskCall(args as TaskParams, options, theme);
+	}
 
 	/** Dynamic description that reflects current disabled-agent settings */
 	get description(): string {
@@ -174,33 +219,42 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			isolationMode !== "none",
 			this.session.settings.get("async.enabled"),
 			disabledAgents,
+			this.#getTaskSimpleMode(),
 		);
 	}
 	private constructor(
 		private readonly session: ToolSession,
 		discoveredAgents: AgentDefinition[],
-		isolationEnabled: boolean,
 	) {
-		this.parameters = isolationEnabled ? taskSchema : taskSchemaNoIsolation;
 		this.#blockedAgent = $env.PI_BLOCKED_AGENT;
 		this.#discoveredAgents = discoveredAgents;
+	}
+
+	#getTaskSimpleMode(): TaskSimpleMode {
+		return this.session.settings.get("task.simple");
 	}
 
 	/**
 	 * Create a TaskTool instance with async agent discovery.
 	 */
 	static async create(session: ToolSession): Promise<TaskTool> {
-		const isolationMode = session.settings.get("task.isolation.mode");
 		const { agents } = await discoverAgents(session.cwd);
-		return new TaskTool(session, agents, isolationMode !== "none");
+		return new TaskTool(session, agents);
 	}
 
 	async execute(
 		_toolCallId: string,
-		params: TaskParams,
+		rawParams: unknown,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 	): Promise<AgentToolResult<TaskToolDetails>> {
+		const params = rawParams as TaskParams;
+		const simpleMode = this.#getTaskSimpleMode();
+		const validationError = validateTaskModeParams(simpleMode, params);
+		if (validationError) {
+			return createTaskModeError(validationError);
+		}
+
 		const asyncEnabled = this.session.settings.get("async.enabled");
 		const selectedAgent = this.#discoveredAgents.find(agent => agent.name === params.agent);
 		if (!asyncEnabled || selectedAgent?.blocking === true) {
@@ -225,7 +279,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const uniqueIds = await outputManager.allocateBatch(taskItems.map(t => t.id));
 		const fallbackAgentSource =
 			this.#discoveredAgents.find(agent => agent.name === params.agent)?.source ?? "bundled";
-		const renderedTasks = taskItems.map(taskItem => renderTemplate(params.context, taskItem));
+		const { contextEnabled } = getTaskSimpleModeCapabilities(simpleMode);
+		const sharedContext = contextEnabled ? params.context : undefined;
+		const renderedTasks = taskItems.map(taskItem => renderTemplate(sharedContext, taskItem, simpleMode));
 		const progressByTaskId = new Map<string, AgentProgress>();
 		for (let index = 0; index < renderedTasks.length; index++) {
 			const renderedTask = renderedTasks[index];
@@ -445,6 +501,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const startTime = Date.now();
 		const { agents, projectAgentsDir } = await discoverAgents(this.session.cwd);
 		const { agent: agentName, context, schema: outputSchema } = params;
+		const simpleMode = this.#getTaskSimpleMode();
+		const { contextEnabled, customSchemaEnabled } = getTaskSimpleModeCapabilities(simpleMode);
+		const sharedContext = contextEnabled ? context : undefined;
 		const isolationMode = this.session.settings.get("task.isolation.mode");
 		const isolationRequested = "isolated" in params ? params.isolated === true : false;
 		const isIsolated = isolationMode !== "none" && isolationRequested;
@@ -530,8 +589,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		});
 		const thinkingLevelOverride = effectiveAgent.thinkingLevel;
 
-		// Output schema priority: caller params > agent frontmatter > inherited from parent session
-		const effectiveOutputSchema = outputSchema ?? effectiveAgent.output ?? this.session.outputSchema;
+		// Output schema priority: task call > agent frontmatter > inherited parent session.
+		// task.simple can disable the task-call override while leaving agent/session schemas intact.
+		const effectiveOutputSchema = customSchemaEnabled
+			? (outputSchema ?? effectiveAgent.output ?? this.session.outputSchema)
+			: (effectiveAgent.output ?? this.session.outputSchema);
 
 		// Handle empty or missing tasks
 		if (!params.tasks || params.tasks.length === 0) {
@@ -539,7 +601,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				content: [
 					{
 						type: "text",
-						text: `No tasks provided. Use: { agent, context, tasks: [{id, description, args}, ...] }`,
+						text: contextEnabled
+							? "No tasks provided. Use: { agent, context?, tasks: [{ id, description, assignment }, ...] }"
+							: "No tasks provided. Use: { agent, tasks: [{ id, description, assignment }, ...] }",
 					},
 				],
 				details: {
@@ -728,8 +792,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			}
 			const tasksWithUniqueIds = tasks.map((t, i) => ({ ...t, id: uniqueIds[i] }));
 
-			// Build full prompts with context prepended
-			const tasksWithContext = tasksWithUniqueIds.map(t => renderTemplate(context, t));
+			// Build full prompts using shared context only when the current task mode allows it.
+			const tasksWithContext = tasksWithUniqueIds.map(t => renderTemplate(sharedContext, t, simpleMode));
 			const availableSkills = [...(this.session.skills ?? [])];
 			const contextFiles = this.session.contextFiles?.filter(
 				file => path.basename(file.path).toLowerCase() !== "agents.md",

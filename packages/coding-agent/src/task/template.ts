@@ -1,5 +1,6 @@
 import { prompt } from "@oh-my-pi/pi-utils";
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
+import { getTaskSimpleModeCapabilities, type TaskSimpleMode } from "./simple-mode";
 import type { TaskItem } from "./types";
 
 interface RenderResult {
@@ -16,16 +17,29 @@ interface RenderResult {
  *
  * If context is provided, it is prepended with a separator.
  */
-export function renderTemplate(context: string | undefined, task: TaskItem): RenderResult {
+export function renderTemplate(
+	context: string | undefined,
+	task: TaskItem,
+	simpleMode: TaskSimpleMode = "default",
+): RenderResult {
 	let { id, description, assignment } = task;
 	assignment = assignment.trim();
-	context = context?.trim();
+	const { contextEnabled } = getTaskSimpleModeCapabilities(simpleMode);
+	context = contextEnabled ? context?.trim() : undefined;
 
 	if (!context || !assignment) {
+		if (simpleMode === "independent" && assignment) {
+			return {
+				task: prompt.render(subagentUserPromptTemplate, { assignment, independentMode: true }),
+				assignment,
+				id,
+				description,
+			};
+		}
 		return { task: assignment || context!, assignment: assignment || context!, id, description };
 	}
 	return {
-		task: prompt.render(subagentUserPromptTemplate, { context, assignment }),
+		task: prompt.render(subagentUserPromptTemplate, { context, assignment, independentMode: false }),
 		assignment,
 		id,
 		description,
