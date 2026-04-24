@@ -7,6 +7,7 @@ import {
 	Legend,
 	LinearScale,
 	LineElement,
+	type Plugin,
 	PointElement,
 	Title,
 	Tooltip,
@@ -60,7 +61,7 @@ interface CostChartProps {
 }
 
 /** Inline Chart.js plugin — draws cost value centered above each bar. */
-function makeBarLabelPlugin(color: string): Parameters<typeof ChartJS.register>[0] {
+function makeBarLabelPlugin(color: string): Plugin<"bar"> {
 	return {
 		id: "costBarLabels",
 		afterDatasetsDraw(chart) {
