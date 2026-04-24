@@ -104,6 +104,11 @@ describe("parseArgs", () => {
 			expect(result.model).toBe("gpt-4o");
 		});
 
+		test("parses --model=value with equals syntax", () => {
+			const result = parseArgs(["--model=gpt-4o"]);
+			expect(result.model).toBe("gpt-4o");
+		});
+
 		test("parses --api-key", () => {
 			const result = parseArgs(["--api-key", "sk-test-key"]);
 			expect(result.apiKey).toBe("sk-test-key");
@@ -216,6 +221,16 @@ describe("parseArgs", () => {
 		test("lowercases tool names passed to --tools", () => {
 			const result = parseArgs(["--tools", "Read,Grep"]);
 			expect(result.tools).toEqual(["read", "grep"]);
+		});
+
+		test("parses --tools=value with equals syntax", () => {
+			const result = parseArgs(["--tools=read,bash"]);
+			expect(result.tools).toEqual(["read", "bash"]);
+		});
+
+		test("parses --tools=value with single tool", () => {
+			const result = parseArgs(["--tools=ask"]);
+			expect(result.tools).toEqual(["ask"]);
 		});
 	});
 

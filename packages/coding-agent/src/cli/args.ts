@@ -60,7 +60,16 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 	};
 
 	for (let i = 0; i < args.length; i++) {
-		const arg = args[i];
+		let arg = args[i];
+
+		// Support --flag=value syntax (e.g. --tools=ask,read)
+		if (arg.startsWith("--") && arg.includes("=")) {
+			const eqIdx = arg.indexOf("=");
+			const value = arg.slice(eqIdx + 1);
+			arg = arg.slice(0, eqIdx);
+			// Insert the value so the existing "args[++i]" logic picks it up
+			args.splice(i + 1, 0, value);
+		}
 
 		if (arg === "--help" || arg === "-h") {
 			result.help = true;
