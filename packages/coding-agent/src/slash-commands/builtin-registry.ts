@@ -572,6 +572,17 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 			await runtime.ctx.handleBtwCommand(question);
 		},
 	},
+ 	{
+		name: "retry",
+		description: "Retry the last failed agent turn",
+		handle: async (_command, runtime) => {
+			const didRetry = await runtime.ctx.session.retry();
+			if (!didRetry) {
+				runtime.ctx.showStatus("Nothing to retry");
+			}
+			runtime.ctx.editor.setText("");
+		},
+	},
 	{
 		name: "background",
 		aliases: ["bg"],

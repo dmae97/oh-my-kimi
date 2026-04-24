@@ -5983,6 +5983,32 @@ export class AgentSession {
 	setAutoRetryEnabled(enabled: boolean): void {
 		this.settings.set("retry.enabled", enabled);
 	}
+	/**
+	 * Manually retry the last failed assistant turn.
+	 * Removes the error message from agent state and re-attempts with a fresh retry budget.
+	 * @returns true if retry was initiated, false if no failed turn to retry or agent is busy
+	 */
+	async retry(): Promise<boolean> {
+		if (this.isStreaming || this.isCompacting || this.isRetrying) return false;
+
+		const messages = this.agent.state.messages;
+		const lastMsg = messages[messages.length - 1];
+		if (lastMsg?.role !== "assistant") return false;
+
+		const assistantMsg = lastMsg as AssistantMessage;
+		if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "aborted") return false;
+
+		// Remove the failed/aborted assistant message (same as auto-retry does before re-attempting)
+		this.agent.replaceMessages(messages.slice(0, -1));
+
+		// Reset retry budget for a fresh attempt
+		this.#retryAttempt = 0;
+
+		// Re-attempt the turn
+		this.#scheduleAgentContinue({ delayMs: 1 });
+
+		return true;
+	}
 
 	// =========================================================================
 	// Bash Execution
