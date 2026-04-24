@@ -637,7 +637,7 @@ fn chunk_read_path_separator_index(read_path: &str) -> Option<usize> {
 fn parse_chunk_read_path(read_path: &str) -> std::result::Result<ParsedChunkReadPath, String> {
 	let raw_selector =
 		chunk_read_path_separator_index(read_path).map(|index| &read_path[(index + 1)..]);
-	let ParsedSelector { selector, crc, region } =
+	let ParsedSelector { selector, crc, region, .. } =
 		split_selector_crc_and_region(raw_selector, None, None)?;
 	Ok(ParsedChunkReadPath { selector, crc, region })
 }

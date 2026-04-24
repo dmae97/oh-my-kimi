@@ -10,6 +10,7 @@ use crate::chunk::{
 	resolve::{
 		ParsedSelector, chunk_region_range, resolve_chunk_selector, resolve_chunk_with_crc,
 		sanitize_chunk_selector, sanitize_crc, split_selector_crc_and_region,
+		verify_any_ancestor_crc_match,
 	},
 	state::{ChunkState, ChunkStateInner, ConflictMeta},
 	types::{
@@ -346,11 +347,24 @@ fn resolve_edit_target(
 			None
 		}
 	});
-	let ParsedSelector { selector: cleaned_selector, crc: cleaned_crc, region: parsed_region } =
-		split_selector_crc_and_region(selector, crc, operation.region)?;
+	let ParsedSelector {
+		selector: cleaned_selector,
+		crc: cleaned_crc,
+		region: parsed_region,
+		all_crcs: parsed_crcs,
+		has_trailing_crc,
+	} = split_selector_crc_and_region(selector, crc, operation.region)?;
 	let batch_auto_accepted =
 		ensure_batch_operation_target_current(scheduled, cleaned_crc.as_deref(), touched_paths);
-	let resolve_crc = if batch_auto_accepted {
+	// When the selector carries multi-segment checksums (e.g.
+	// `fn_exe#VTPJ.try#KVWS.var_run`) or only an intermediate CRC, resolve by
+	// name and verify that at least one of the provided CRCs matches the
+	// resolved chunk or any of its ancestors. This avoids spurious stale
+	// errors when only one segment's CRC has drifted, and accepts CRCs that
+	// anchor ancestor segments rather than the leaf.
+	let lenient_multi_crc =
+		parsed_crcs.len() >= 2 || (!parsed_crcs.is_empty() && !has_trailing_crc);
+	let resolve_crc = if batch_auto_accepted || lenient_multi_crc {
 		None
 	} else {
 		cleaned_crc.as_deref()
@@ -358,7 +372,11 @@ fn resolve_edit_target(
 	let resolved =
 		resolve_chunk_with_crc(state, cleaned_selector.as_deref(), resolve_crc, warnings)?;
 	let mut region = operation.region.or(parsed_region);
-	if !batch_auto_accepted {
+	if batch_auto_accepted {
+		// CRC already validated via touched-paths accounting; skip.
+	} else if lenient_multi_crc {
+		verify_any_ancestor_crc_match(state, resolved.chunk, &parsed_crcs)?;
+	} else {
 		validate_batch_crc(resolved.chunk, resolved.crc.as_deref(), requires_checksum)?;
 	}
 	let chunk = resolved.chunk.clone();
@@ -2516,6 +2534,103 @@ mod tests {
 					.contains("Auto-resolved chunk selector \"run\" to \"cls_Wor.fn_run#")),
 			"expected auto-resolution warning, got {:?}",
 			result.warnings
+		);
+	}
+
+	#[test]
+	fn edit_accepts_multi_crc_inline_segments() {
+		let source = "class Worker {\n\trun(): void {\n\t\tconsole.log(this.name);\n\t}\n}\n";
+		let state = state_for(source, "typescript");
+		let class_chunk = state.inner().chunk("cls_Wor").expect("cls_Wor").clone();
+		let method_chunk = state.inner().chunk("cls_Wor.fn_run").expect("fn_run").clone();
+
+		// Both CRCs present and valid – selector carries `#CRC` on every segment.
+		let sel = format!(
+			"cls_Wor#{parent}.fn_run#{leaf}",
+			parent = class_chunk.checksum,
+			leaf = method_chunk.checksum,
+		);
+		let result = apply_edits(&state, &EditParams {
+			operations:       vec![EditOperation {
+				op:      ChunkEditOp::Put,
+				sel:     Some(sel),
+				crc:     None,
+				region:  None,
+				content: Some("run(): void {\n\tconsole.log(\"multi-crc\");\n}".to_owned()),
+				find:    None,
+			}],
+			default_selector: None,
+			default_crc:      None,
+			anchor_style:     None,
+			cwd:              ".".to_owned(),
+			file_path:        "test.ts".to_owned(),
+			normalize_indent: None,
+		})
+		.expect("multi-crc selector with all fresh CRCs should edit successfully");
+		assert!(result.diff_after.contains("console.log(\"multi-crc\");"), "{}", result.diff_after);
+	}
+
+	#[test]
+	fn edit_accepts_multi_crc_selector_when_only_ancestor_crc_matches() {
+		let source = "class Worker {\n\trun(): void {\n\t\tconsole.log(this.name);\n\t}\n}\n";
+		let state = state_for(source, "typescript");
+		let class_chunk = state.inner().chunk("cls_Wor").expect("cls_Wor").clone();
+
+		// Stale leaf CRC but fresh ancestor CRC. Under the new lenient rule,
+		// at least one provided CRC matches the ancestor chain, so the edit
+		// proceeds.
+		let sel =
+			format!("cls_Wor#{parent}.fn_run#ZZZZ", parent = class_chunk.checksum);
+		let result = apply_edits(&state, &EditParams {
+			operations:       vec![EditOperation {
+				op:      ChunkEditOp::Put,
+				sel:     Some(sel),
+				crc:     None,
+				region:  None,
+				content: Some(
+					"run(): void {\n\tconsole.log(\"any-match\");\n}".to_owned(),
+				),
+				find:    None,
+			}],
+			default_selector: None,
+			default_crc:      None,
+			anchor_style:     None,
+			cwd:              ".".to_owned(),
+			file_path:        "test.ts".to_owned(),
+			normalize_indent: None,
+		})
+		.expect("edit should accept a multi-crc path when any crc matches an ancestor");
+		assert!(result.diff_after.contains("console.log(\"any-match\");"), "{}", result.diff_after);
+	}
+
+	#[test]
+	fn edit_rejects_multi_crc_selector_when_all_crcs_stale() {
+		let source = "class Worker {\n\trun(): void {\n\t\tconsole.log(this.name);\n\t}\n}\n";
+		let state = state_for(source, "typescript");
+
+		let err = apply_edits(&state, &EditParams {
+			operations:       vec![EditOperation {
+				op:      ChunkEditOp::Put,
+				sel:     Some("cls_Wor#XXXX.fn_run#ZZZZ".to_owned()),
+				crc:     None,
+				region:  None,
+				content: Some(
+					"run(): void {\n\tconsole.log(\"should-not-apply\");\n}".to_owned(),
+				),
+				find:    None,
+			}],
+			default_selector: None,
+			default_crc:      None,
+			anchor_style:     None,
+			cwd:              ".".to_owned(),
+			file_path:        "test.ts".to_owned(),
+			normalize_indent: None,
+		})
+		.err()
+		.expect("all-stale multi-crc selector should fail");
+		assert!(
+			err.to_string().contains("None of the provided checksums"),
+			"{err}"
 		);
 	}
 
