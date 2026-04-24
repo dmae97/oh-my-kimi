@@ -196,8 +196,26 @@ pub fn resolve_chunk_selector<'a>(
 	selector: Option<&str>,
 	warnings: &mut Vec<String>,
 ) -> Result<&'a ChunkNode, String> {
-	let ParsedSelector { selector: cleaned_selector, crc: cleaned_crc, .. } =
+	let ParsedSelector { crc: cleaned_crc, .. } =
 		split_selector_crc_and_region(selector, None, None)?;
+	let cleaned_selector = sanitize_chunk_selector(selector);
+	resolve_chunk_selector_impl(state, cleaned_selector.as_deref(), cleaned_crc.as_deref(), warnings)
+}
+
+pub fn resolve_chunk_selector_with_crc_filter<'a>(
+	state: &'a ChunkStateInner,
+	selector: Option<&str>,
+	crc: Option<&str>,
+	warnings: &mut Vec<String>,
+) -> Result<&'a ChunkNode, String> {
+	let ParsedSelector { selector: cleaned_selector, .. } =
+		split_selector_crc_and_region(selector, None, None)?;
+	let cleaned_crc = sanitize_crc(crc);
+	if cleaned_selector.is_none()
+		&& let Some(cleaned_crc) = cleaned_crc.as_deref()
+	{
+		return resolve_chunk_by_checksum(state, cleaned_crc);
+	}
 	resolve_chunk_selector_impl(state, cleaned_selector.as_deref(), cleaned_crc.as_deref(), warnings)
 }
 
