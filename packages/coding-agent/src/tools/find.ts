@@ -129,6 +129,19 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			const includeHidden = hidden ?? true;
 			const timeoutSignal = AbortSignal.timeout(GLOB_TIMEOUT_MS);
 			const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+			const formatMatchPath = (matchPath: string, fileType?: natives.FileType): string => {
+				const hadTrailingSlash = matchPath.endsWith("/") || matchPath.endsWith("\\");
+				const absolutePath = path.isAbsolute(matchPath) ? matchPath : path.resolve(searchPath, matchPath);
+				let relativePath = path.relative(this.session.cwd, absolutePath).replace(/\\/g, "/");
+				if (relativePath.length === 0) {
+					relativePath = ".";
+				}
+				if ((fileType === natives.FileType.Dir || hadTrailingSlash) && !relativePath.endsWith("/")) {
+					relativePath += "/";
+				}
+				return relativePath;
+			};
+
 			const buildResult = (files: string[]): AgentToolResult<FindToolDetails> => {
 				if (files.length === 0) {
 					const details: FindToolDetails = { scopePath, fileCount: 0, files: [], truncated: false };
@@ -176,12 +189,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 					ignore: ["**/node_modules/**", "**/.git/**"],
 					limit: effectiveLimit,
 				});
-				const relativized = results.map(p => {
-					if (p.startsWith(searchPath)) {
-						return p.slice(searchPath.length + 1);
-					}
-					return path.relative(searchPath, p);
-				});
+				const relativized = results.map(p => formatMatchPath(p));
 
 				return buildResult(relativized);
 			}
@@ -225,12 +233,8 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			};
 			const onMatch = onUpdate
 				? (err: Error | null, match: natives.GlobMatch | null) => {
-						if (err || signal?.aborted || !match) return;
-						let relativePath = match.path;
-						if (!relativePath) return;
-						if (match.fileType === natives.FileType.Dir && !relativePath.endsWith("/")) {
-							relativePath += "/";
-						}
+						if (err || signal?.aborted || !match?.path) return;
+						const relativePath = formatMatchPath(match.path, match.fileType);
 						onUpdateMatches.push(relativePath);
 						emitUpdate();
 					}
@@ -254,10 +258,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				);
 
 			try {
-				let result = await doGlob(true);
-				if (result.matches.length === 0 && !timeoutSignal.aborted) {
-					result = await doGlob(false);
-				}
+				const result = await doGlob(true);
 				// Sort by mtime descending (most recent first) in JS instead of native.
 				// This allows native glob to early-terminate at maxResults.
 				result.matches.sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
@@ -276,19 +277,11 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			const relativized: string[] = [];
 			for (const match of matches) {
 				throwIfAborted(signal);
-				const line = match.path;
-				if (!line) {
+				if (!match.path) {
 					continue;
 				}
 
-				const hadTrailingSlash = line.endsWith("/") || line.endsWith("\\");
-				let relativePath = line;
-				const isDirectory = match.fileType === natives.FileType.Dir;
-				if ((isDirectory || hadTrailingSlash) && !relativePath.endsWith("/")) {
-					relativePath += "/";
-				}
-
-				relativized.push(relativePath);
+				relativized.push(formatMatchPath(match.path, match.fileType));
 			}
 
 			return buildResult(relativized);

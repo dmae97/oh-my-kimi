@@ -1463,6 +1463,64 @@ function b() {
 
 			expect(outputLines).toEqual(["z/auth-actions.spec.ts", "a/auth-actions.spec.ts"]);
 		});
+
+		it("should render nested glob results relative to the session cwd", async () => {
+			const nestedDir = path.join(testDir, "apps", "daemon", "src", "telemetry");
+			fs.mkdirSync(nestedDir, { recursive: true });
+			fs.writeFileSync(path.join(nestedDir, "daemon-telemetry.ts"), "telemetry\n");
+
+			const result = await findTool.execute("test-call-14c", {
+				pattern: "apps/daemon/src/**/daemon-telemetry.ts",
+			});
+
+			const outputLines = getTextOutput(result)
+				.split("\n")
+				.map(line => line.trim())
+				.filter(Boolean);
+
+			expect(outputLines).toEqual(["apps/daemon/src/telemetry/daemon-telemetry.ts"]);
+		});
+
+		it("should not double-prefix multi-pattern results under a shared base", async () => {
+			const daemonDir = path.join(testDir, "apps", "daemon", "src");
+			const clientDir = path.join(testDir, "apps", "client", "src");
+			fs.mkdirSync(daemonDir, { recursive: true });
+			fs.mkdirSync(clientDir, { recursive: true });
+			fs.writeFileSync(path.join(daemonDir, "daemon.ts"), "daemon\n");
+			fs.writeFileSync(path.join(clientDir, "client.ts"), "client\n");
+
+			const result = await findTool.execute("test-call-14e", {
+				pattern: "apps/daemon/src/**/*.ts,apps/client/src/**/*.ts",
+			});
+
+			const outputLines = getTextOutput(result)
+				.split("\n")
+				.map(line => line.trim())
+				.filter(Boolean)
+				.sort();
+
+			expect(outputLines).toEqual(["apps/client/src/client.ts", "apps/daemon/src/daemon.ts"]);
+		});
+
+		it("should not disable gitignore after an ignored broad hidden-file search finds no matches", async () => {
+			fs.mkdirSync(path.join(testDir, ".git"));
+			fs.writeFileSync(path.join(testDir, ".gitignore"), ".env*\nignored-generated/\n");
+			fs.writeFileSync(path.join(testDir, ".env.local"), "SECRET=value\n");
+			fs.mkdirSync(path.join(testDir, "ignored-generated"));
+			fs.writeFileSync(path.join(testDir, "ignored-generated", ".env.generated"), "SECRET=value\n");
+
+			const startedAt = performance.now();
+			const result = await findTool.execute("test-call-14d", {
+				pattern: "**/.env*",
+			});
+			const elapsedMs = performance.now() - startedAt;
+
+			const output = getTextOutput(result);
+			expect(output).toContain("No files found matching pattern");
+			expect(output).not.toContain(".env.local");
+			expect(output).not.toContain(".env.generated");
+			expect(elapsedMs).toBeLessThan(1000);
+		});
 	});
 });
 
