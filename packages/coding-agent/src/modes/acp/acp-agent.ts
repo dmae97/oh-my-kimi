@@ -39,11 +39,14 @@ import {
 } from "@agentclientprotocol/sdk";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { logger, VERSION } from "@oh-my-pi/pi-utils";
+import { disableProvider, enableProvider } from "../../capability";
+import { Settings } from "../../config/settings";
 import type { ExtensionUIContext } from "../../extensibility/extensions";
 import { runExtensionCompact } from "../../extensibility/extensions/compact-handler";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
 import { MCPManager } from "../../mcp/manager";
 import type { MCPServerConfig } from "../../mcp/types";
+import { loadAllExtensions } from "../../modes/components/extensions/state-manager";
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import {
@@ -53,10 +56,6 @@ import {
 } from "../../session/session-manager";
 import { parseThinkingLevel } from "../../thinking";
 import { mapAgentSessionEventToAcpSessionUpdates, mapToolKind } from "./acp-event-mapper";
-import { Settings } from "../../config/settings";
-import { disableProvider, enableProvider } from "../../capability";
-import { loadAllExtensions } from "../../modes/components/extensions/state-manager";
-
 
 const ACP_MODE_ID = "default";
 const MODE_CONFIG_ID = "mode";
@@ -386,7 +385,7 @@ export class AcpAgent implements Agent {
 	async extMethod(method: string, params: { [key: string]: unknown }): Promise<{ [key: string]: unknown }> {
 		switch (method) {
 			case "omp/sessions/listAll": {
-				const limit = typeof params["limit"] === "number" ? Math.max(1, Math.min(5000, params["limit"] as number)) : 1000;
+				const limit = typeof params.limit === "number" ? Math.max(1, Math.min(5000, params.limit as number)) : 1000;
 				const sessions = await SessionManager.listAll();
 				const sorted = sessions.sort((l, r) => r.modified.getTime() - l.modified.getTime()).slice(0, limit);
 				return {
@@ -396,7 +395,10 @@ export class AcpAgent implements Agent {
 			}
 			case "omp/projects/list": {
 				const sessions = await SessionManager.listAll();
-				const buckets = new Map<string, { cwd: string; sessionCount: number; lastActivityAt: number; lastTitle: string }>();
+				const buckets = new Map<
+					string,
+					{ cwd: string; sessionCount: number; lastActivityAt: number; lastTitle: string }
+				>();
 				for (const s of sessions) {
 					if (!s.cwd) continue;
 					const ts = s.modified.getTime();
@@ -420,9 +422,9 @@ export class AcpAgent implements Agent {
 				return { projects, totalSessions: sessions.length };
 			}
 			case "omp/chats/byCwd": {
-				const cwd = typeof params["cwd"] === "string" ? (params["cwd"] as string) : undefined;
+				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
 				if (!cwd) throw new Error("cwd required");
-				const limit = typeof params["limit"] === "number" ? Math.max(1, Math.min(500, params["limit"] as number)) : 100;
+				const limit = typeof params.limit === "number" ? Math.max(1, Math.min(500, params.limit as number)) : 100;
 				const sessions = await SessionManager.list(cwd);
 				const sorted = sessions.sort((l, r) => r.modified.getTime() - l.modified.getTime()).slice(0, limit);
 				return { sessions: sorted.map(s => this.#toSessionInfo(s)) };
@@ -434,16 +436,16 @@ export class AcpAgent implements Agent {
 				return { reports: reports ?? [] };
 			}
 			case "omp/extensions": {
-				const cwd = typeof params["cwd"] === "string" ? (params["cwd"] as string) : undefined;
+				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
 				const sm = await Settings.init();
 				const disabledIds = (sm.get("disabledExtensions") as string[] | undefined) ?? [];
 				const extensions = await loadAllExtensions(cwd, disabledIds);
 				return { extensions: extensions as unknown as Array<{ [key: string]: unknown }> };
 			}
 			case "omp/extensions/toggle": {
-				const providerId = params["providerId"];
+				const providerId = params.providerId;
 				if (typeof providerId !== "string") throw new Error("providerId required");
-				if (params["enabled"] === false) {
+				if (params.enabled === false) {
 					disableProvider(providerId);
 					return { enabled: false };
 				}
