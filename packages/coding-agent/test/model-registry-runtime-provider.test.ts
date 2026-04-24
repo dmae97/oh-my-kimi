@@ -261,6 +261,49 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(model?.api).toBe("openai-completions");
 	});
 
+	test("runtime model overlays keep provider overrides across refresh cycles", async () => {
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const runtimeHeader = "X-Runtime-Overlay-Header";
+		const overrideBaseUrl = "https://runtime-overridden.example.com/v1";
+		const modelId = "runtime-override-survivor";
+
+		registry.registerProvider(
+			"runtime-provider",
+			{
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey: "RUNTIME_KEY",
+				api: "openai-completions",
+				models: [{ ...baseModel, id: modelId }],
+			},
+			"ext://runtime",
+		);
+		registry.registerProvider(
+			"runtime-provider",
+			{ baseUrl: overrideBaseUrl, headers: { [runtimeHeader]: "runtime-header" } },
+			"ext://runtime",
+		);
+
+		const modelAfterOverride = registry.find("runtime-provider", modelId);
+		expect(modelAfterOverride).toBeDefined();
+		expect(modelAfterOverride?.baseUrl).toBe(overrideBaseUrl);
+		expect(modelAfterOverride?.headers?.[runtimeHeader]).toBe("runtime-header");
+
+		await registry.refresh("offline");
+		const modelAfterRefresh = registry.find("runtime-provider", modelId);
+		expect(modelAfterRefresh).toBeDefined();
+		expect(modelAfterRefresh?.baseUrl).toBe(overrideBaseUrl);
+		expect(modelAfterRefresh?.headers?.[runtimeHeader]).toBe("runtime-header");
+
+		await registry.refreshProvider("runtime-provider", "offline");
+		const modelAfterProviderRefresh = registry.find("runtime-provider", modelId);
+		expect(modelAfterProviderRefresh).toBeDefined();
+		expect(modelAfterProviderRefresh?.baseUrl).toBe(overrideBaseUrl);
+		expect(modelAfterProviderRefresh?.headers?.[runtimeHeader]).toBe("runtime-header");
+
+		registry.clearSourceRegistrations("ext://runtime");
+		expect(registry.find("runtime-provider", modelId)).toBeUndefined();
+	});
+
 	test("extension-registered API keys survive refresh cycle for auth resolution", async () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 

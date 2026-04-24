@@ -1672,6 +1672,16 @@ export class ModelRegistry {
 			compat: override.compat ? mergeCompat(baseOverride?.compat, override.compat) : baseOverride?.compat,
 		};
 	}
+	#applyProviderTransportOverride<T extends { baseUrl?: string; headers?: Record<string, string> }>(
+		entry: T,
+		override: Pick<ProviderOverride, "baseUrl" | "headers">,
+	): T {
+		return {
+			...entry,
+			baseUrl: override.baseUrl ?? entry.baseUrl,
+			headers: override.headers ? { ...entry.headers, ...override.headers } : entry.headers,
+		};
+	}
 	#applyModelOverrides(models: Model<Api>[], overrides: Map<string, Map<string, ModelOverride>>): Model<Api>[] {
 		if (overrides.size === 0) return models;
 		return models.map(model => {
@@ -2075,18 +2085,19 @@ export class ModelRegistry {
 		}
 
 		if (config.baseUrl || config.headers) {
-			const nextRuntimeOverride = this.#mergeProviderOverride(this.#runtimeProviderOverrides.get(providerName), {
-				baseUrl: config.baseUrl,
-				headers: config.headers,
-			});
+			const transportOverride = { baseUrl: config.baseUrl, headers: config.headers };
+			const nextRuntimeOverride = this.#mergeProviderOverride(
+				this.#runtimeProviderOverrides.get(providerName),
+				transportOverride,
+			);
 			this.#runtimeProviderOverrides.set(providerName, nextRuntimeOverride);
+			this.#runtimeModelOverlays = this.#runtimeModelOverlays.map(overlay => {
+				if (overlay.provider !== providerName) return overlay;
+				return this.#applyProviderTransportOverride(overlay, transportOverride);
+			});
 			this.#models = this.#models.map(m => {
 				if (m.provider !== providerName) return m;
-				return {
-					...m,
-					baseUrl: config.baseUrl ?? m.baseUrl,
-					headers: config.headers ? { ...m.headers, ...config.headers } : m.headers,
-				};
+				return this.#applyProviderTransportOverride(m, transportOverride);
 			});
 			this.#rebuildCanonicalIndex();
 		}
