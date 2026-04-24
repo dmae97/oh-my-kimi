@@ -639,7 +639,7 @@ export class VimTool implements AgentTool<typeof vimSchema, VimToolDetails> {
 
 				await executeVimSteps(engine, steps, {
 					pauseLastStep: params.pause === true,
-					onKbdStep: emitUpdate ? () => emitUpdate() : undefined,
+					onKbdStep: emitUpdate ? () => emitUpdate(true) : undefined,
 					onInsertStep: emitUpdate ? () => emitUpdate(true) : undefined,
 				});
 
