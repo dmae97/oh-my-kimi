@@ -161,6 +161,57 @@ async function resolveChunkSourceContext(session: ToolSession, path: string): Pr
 	};
 }
 
+/**
+ * Preview-safe loader: read raw source without plan-mode enforcement or
+ * editable-file guards. Used by streaming diff previews that must not throw
+ * side-effecting errors while args are still being streamed.
+ */
+export async function loadChunkSource(params: {
+	cwd: string;
+	path: string;
+}): Promise<{ resolvedPath: string; rawContent: string; language: string | undefined; exists: boolean }> {
+	const resolvedPath = nodePath.isAbsolute(params.path) ? params.path : nodePath.resolve(params.cwd, params.path);
+	const sourceFile = Bun.file(resolvedPath);
+	const exists = await sourceFile.exists();
+	const rawContent = exists ? await sourceFile.text() : "";
+	return { resolvedPath, rawContent, language: getLanguageFromPath(resolvedPath), exists };
+}
+
+/**
+ * Compute a unified diff preview for a chunk edit without applying it.
+ * Used for streaming previews while args are still arriving. Returns
+ * `{ error }` on any failure so callers can decide whether to surface it.
+ */
+export async function computeChunkDiff(
+	input: { path: string; edits: ChunkToolEdit[] },
+	cwd: string,
+	options?: { anchorStyle?: ChunkAnchorStyle; signal?: AbortSignal },
+): Promise<{ diff: string; firstChangedLine: number | undefined } | { error: string }> {
+	try {
+		options?.signal?.throwIfAborted?.();
+		const { filePath } = parseChunkEditPath(input.path);
+		if (!filePath) return { error: "chunk edit path is empty" };
+		const { resolvedPath, rawContent, language } = await loadChunkSource({ cwd, path: filePath });
+		options?.signal?.throwIfAborted?.();
+		const { operations } = normalizeChunkEditOperations(input.edits);
+		const result = applyChunkEdits({
+			source: rawContent,
+			language,
+			cwd,
+			filePath: resolvedPath,
+			operations,
+			anchorStyle: options?.anchorStyle,
+		});
+		options?.signal?.throwIfAborted?.();
+		if (!result.changed) {
+			return { diff: "", firstChangedLine: undefined };
+		}
+		return generateUnifiedDiffString(result.diffSourceBefore, result.diffSourceAfter);
+	} catch (err) {
+		return { error: err instanceof Error ? err.message : String(err) };
+	}
+}
+
 function normalizeChunkRegionSyntax(text: string): string {
 	return text.replaceAll("@body", "~").replaceAll("@head", "^");
 }

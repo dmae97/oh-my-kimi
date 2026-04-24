@@ -68,6 +68,7 @@ export * from "./modes/patch";
 export * from "./modes/replace";
 export * from "./normalize";
 export * from "./renderer";
+export * from "./streaming";
 
 type TInput =
 	| typeof replaceEditSchema

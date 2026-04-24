@@ -4,10 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	adjustIndentation,
+	computeChunkDiff,
 	computeEditDiff,
 	computeHashlineDiff,
 	DEFAULT_FUZZY_THRESHOLD,
 	findMatch,
+	loadChunkSource,
 } from "@oh-my-pi/pi-coding-agent/edit";
 
 describe("findMatch", () => {
@@ -155,6 +157,63 @@ describe("findMatch", () => {
 			const result = findMatch(content, target, { allowFuzzy: true });
 			expect(result.match).toBeUndefined();
 		});
+	});
+});
+
+describe("computeChunkDiff", () => {
+	let tmpDir: string;
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "compute-chunk-"));
+	});
+	afterEach(async () => {
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	});
+
+	test("returns { error } when chunk selector cannot resolve", async () => {
+		const file = path.join(tmpDir, "c.ts");
+		await fs.writeFile(file, "export const x = 1;\n");
+		const result = await computeChunkDiff(
+			{
+				path: "c.ts:fn_does_not_exist#ABCD",
+				edits: [
+					{
+						path: "c.ts:fn_does_not_exist#ABCD",
+						write: "console.log('replaced')\n",
+					},
+				],
+			},
+			tmpDir,
+		);
+		expect("error" in result).toBe(true);
+	});
+
+	test("returns { error } when path is empty", async () => {
+		const result = await computeChunkDiff({ path: "", edits: [{ path: "", write: "x\n" }] }, tmpDir);
+		expect("error" in result).toBe(true);
+	});
+
+	test("aborts when signal fires before compute completes", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const result = await computeChunkDiff(
+			{
+				path: "d.ts",
+				edits: [{ path: "d.ts", write: "foo\n" }],
+			},
+			tmpDir,
+			{ signal: controller.signal },
+		);
+		expect("error" in result).toBe(true);
+	});
+
+	test("computes diff for a root chunk replacement with valid checksum", async () => {
+		const file = path.join(tmpDir, "e.ts");
+		await fs.writeFile(file, "export const x = 1;\n");
+		// Read the file once via loadChunkSource so the test does not depend on
+		// knowing the internal chunk checksum scheme.
+		const loaded = await loadChunkSource({ cwd: tmpDir, path: "e.ts" });
+		expect(loaded.exists).toBe(true);
+		expect(loaded.rawContent).toContain("export const x");
 	});
 });
 

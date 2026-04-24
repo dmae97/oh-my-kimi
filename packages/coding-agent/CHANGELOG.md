@@ -1,17 +1,22 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added streaming preview API exports from the package (`resolveEditMode`, `EDIT_MODE_STRATEGIES`, and chunk preview helpers) so editors can reuse mode-aware edit preview logic programmatically
 - Added `shellMinimizer` configuration options (`enabled`, `settingsPath`, `only`, `except`, and `maxCaptureBytes`) so users can control shell output minimization behavior
 
 ### Changed
 
+- Changed edit call rendering to use mode-aware streaming diff previews, including multi-file chunk edit previews grouped by file path while arguments are still streaming
 - Changed shell execution in both interactive and non-interactive modes to route command output through the configured shell output minimizer
 - Changed default behavior so shell output minimization can now be toggled from settings without code changes
 
 ### Fixed
 
+- Fixed streaming chunk previews that could display an incomplete trailing edit as a deletion when partial JSON temporarily converted in-flight values to `null`
+- Fixed edit streaming preview updates to cancel obsolete in-flight computations and avoid rendering stale previews as args change
 - Fixed Mermaid fenced markdown rendering in assistant messages on terminals without image protocol support ([#650](https://github.com/can1357/oh-my-pi/issues/650))
 - Fixed SQLite `read` helper queries to reject `where=` clauses with SQL control syntax that could override the structured selector's pagination; raw SQL remains available through `q=SELECT ...`
 
