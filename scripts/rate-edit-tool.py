@@ -35,6 +35,7 @@ from omp_rpc import (  # noqa: E402
     MessageUpdateEvent,
     RpcClient,
     RpcError,
+    RpcProcessExitError,
     RpcNotification,
     TodoAutoClearEvent,
     TodoItem,
@@ -69,7 +70,7 @@ PROMPT = textwrap.dedent(
 
     1. Map the surface area. Identify operations, selectors, and addressing modes that actually work. Note differences across file types.
 
-    2. Exercise the supported paths. Read: whole-file, structural chunks, nested members, line ranges, raw source. Edit/vim: replace, insert into containers, insert before/after, delete. On `main.md`, check how addressing differs from code files.
+    2. Exercise the supported paths. Read: whole-file, structural chunks, nested members, line ranges, raw source. Edit: replace, insert into containers, insert before/after, delete. On `main.md`, check how addressing differs from code files.
 
     3. Push into awkward cases. Test first/last-child edits, indentation preservation, decorators, docstrings, enum variants, markdown tables, and fenced code blocks. Note whether error messages were clear and actionable.
 
@@ -145,8 +146,8 @@ ORACLE_REVIEW_PROMPT = textwrap.dedent(
 ).strip()
 
 TODOS = [
-    "Map the current read, edit, and vim surface area on main.ts, main.rs, main.py, and main.md.",
-    "Exercise supported read, edit, and vim paths with concrete before/after verification across code and prose fixtures.",
+    "Map the current read and edit surface area on main.ts, main.rs, main.py, and main.md.",
+    "Exercise supported read and edit paths with concrete before/after verification across code and prose fixtures.",
     "Probe awkward selector, indentation, and boundary cases including decorators, docstrings, tables, and fenced blocks.",
     "Summarize what was awkward, impossible, ambiguous, or under-documented with concrete examples.",
 ]
@@ -697,7 +698,7 @@ class ModelProgress:
     todo_items: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
-TOOL_WHITELIST = ("read", "edit", "vim", "todo_write", "report_tool_issue")
+TOOL_WHITELIST = ("open", "edit", "todo_write", "report_tool_issue")
 MODEL_LABEL_WIDTH = 30
 STATUS_WIDTH = 7
 TOKENS_WIDTH = 9
@@ -1148,13 +1149,6 @@ def sync_reference_fixtures(fixtures_dir: Path) -> None:
         (fixtures_dir / name).write_text(content)
 
 
-def require_openrouter_key() -> str:
-    key = os.environ.get("OPENROUTER_API_KEY")
-    if not key:
-        raise SystemExit("OPENROUTER_API_KEY is not set")
-    return key
-
-
 def resolve_omp_bin(raw: str | None) -> str:
     if raw:
         return raw
@@ -1362,7 +1356,6 @@ def run_model_sync(
     workspace_root: Path,
     timeout: float,
     printer: ProgressPrinter,
-    openrouter_key: str,
 ) -> ModelResult:
     started_at = time.time()
     model_slug = slugify(model)
@@ -1394,7 +1387,7 @@ def run_model_sync(
             executable=omp_bin,
             model=model,
             cwd=workspace,
-            env={"OPENROUTER_API_KEY": openrouter_key, "PI_STRICT_EDIT_MODE": "1"},
+            env={"PI_STRICT_EDIT_MODE": "1"},
             thinking="high",
             tools=TOOL_WHITELIST,
             no_skills=True,
@@ -1518,19 +1511,19 @@ def run_model_sync(
         session_state=session_state,
     )
 
-def build_oracle_review_prompt(results: list[ModelResult]) -> str:
+def build_oracle_review_prompt(sources: list[tuple[str, str, str]]) -> str:
     review_sections: list[str] = []
-    for result in sorted(results, key=lambda candidate: (candidate.model, candidate.fixture)):
-        review_text = Path(result.review_path).read_text(encoding="utf-8").strip()
+    for model, fixture, review_path in sorted(sources):
+        review_text = Path(review_path).read_text(encoding="utf-8").strip()
         if not review_text:
             continue
         review_sections.append(
             textwrap.dedent(
                 f"""\
                 <review>
-                <model>{result.model}</model>
-                <fixture>{result.fixture}</fixture>
-                <path>{result.review_path}</path>
+                <model>{model}</model>
+                <fixture>{fixture}</fixture>
+                <path>{review_path}</path>
 
                 {review_text}
                 </review>
@@ -1546,22 +1539,42 @@ def build_oracle_review_prompt(results: list[ModelResult]) -> str:
 
 
 
+def oracle_sources_from_results(results: list[ModelResult]) -> list[tuple[str, str, str]]:
+    return [(r.model, r.fixture, r.review_path) for r in results if r.review_path]
+
+
+def oracle_sources_from_dir(results_dir: Path) -> list[tuple[str, str, str]]:
+    known_fixtures = {fixture for fixture, _ in FIXTURES}
+    sources: list[tuple[str, str, str]] = []
+    for path in sorted(results_dir.glob("review_*.md")):
+        stem = path.stem.removeprefix("review_")
+        model = stem
+        fixture = "unknown"
+        for candidate in known_fixtures:
+            if stem.endswith(f"_{candidate}"):
+                fixture = candidate
+                model = stem[: -len(candidate) - 1].replace("_", "/", 1)
+                break
+        sources.append((model, fixture, str(path)))
+    return sources
+
 def run_oracle_review_sync(
     *,
     model: str,
     omp_bin: str,
-    results: list[ModelResult],
+    sources: list[tuple[str, str, str]],
     results_dir: Path,
     timeout: float,
-    openrouter_key: str,
 ) -> str:
-    prompt = build_oracle_review_prompt(results)
+    prompt = build_oracle_review_prompt(sources)
+    prompt_path = results_dir / "oracle_prompt.md"
+    prompt_path.write_text(prompt, encoding="utf-8")
 
     with RpcClient(
         executable=omp_bin,
         model=model,
         cwd=results_dir,
-        env={"OPENROUTER_API_KEY": openrouter_key, "PI_STRICT_EDIT_MODE": "1"},
+        env={"PI_STRICT_EDIT_MODE": "1"},
         thinking="high",
         tools=(),
         no_skills=True,
@@ -1577,7 +1590,9 @@ def run_oracle_review_sync(
     if not isinstance(review_markdown, str) or not review_markdown.strip():
         raise RpcError("Oracle model completed without synthesis text")
 
-    return review_markdown.strip()
+    synthesis = review_markdown.strip()
+    (results_dir / "oracle_synthesis.md").write_text(synthesis + "\n", encoding="utf-8")
+    return synthesis
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run OpenRouter fixture evaluations through omp RPC mode.")
@@ -1587,12 +1602,44 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=900.0, help="Per run timeout in seconds.")
     parser.add_argument("--model", dest="models", action="append", help="Repeat to limit execution to specific models.")
     parser.add_argument("--oracle-model", default=ORACLE_MODEL, help="Model used to synthesize findings across all reviews.")
+    parser.add_argument(
+    	"--rerun-oracle",
+    	dest="rerun_oracle",
+    	help="Skip fixture runs and only synthesize against review_*.md files in this existing results dir.",
+    )
     return parser.parse_args()
 
 
 async def run_all(args: argparse.Namespace) -> int:
-    openrouter_key = require_openrouter_key()
     omp_bin = resolve_omp_bin(args.omp_bin)
+
+    if args.rerun_oracle:
+        results_dir = Path(args.rerun_oracle).expanduser()
+        if not results_dir.is_dir():
+            print(f"Results dir not found: {results_dir}", file=sys.stderr)
+            return 1
+        sources = oracle_sources_from_dir(results_dir)
+        if not sources:
+            print(f"No review_*.md files found in {results_dir}", file=sys.stderr)
+            return 1
+        try:
+            synthesis = await asyncio.to_thread(
+                run_oracle_review_sync,
+                model=args.oracle_model,
+                omp_bin=omp_bin,
+                sources=sources,
+                results_dir=results_dir,
+                timeout=args.timeout,
+            )
+        except (RpcError, RpcProcessExitError) as exc:
+            err = f"{type(exc).__name__}: {exc}"
+            (results_dir / "oracle_error.txt").write_text(err + "\n", encoding="utf-8")
+            print(f"Oracle synthesis FAILED: {err}", file=sys.stderr)
+            print(f"Saved error to {results_dir}/oracle_error.txt", file=sys.stderr)
+            return 2
+        print(synthesis)
+        return 0
+
     fixtures_dir = Path(args.fixtures_dir).expanduser()
     sync_reference_fixtures(fixtures_dir)
 
@@ -1624,7 +1671,6 @@ async def run_all(args: argparse.Namespace) -> int:
             workspace_root=workspace_root,
             timeout=args.timeout,
             printer=printer,
-            openrouter_key=openrouter_key,
         )
         for model in selected_models
         for fixture_language, fixture_file in model_fixtures[model]
@@ -1636,17 +1682,28 @@ async def run_all(args: argparse.Namespace) -> int:
         printer.finish(f"{failures}/{len(results)} run(s) failed")
         return 1
 
-    oracle_synthesis = await asyncio.to_thread(
-        run_oracle_review_sync,
-        model=args.oracle_model,
-        omp_bin=omp_bin,
-        results=results,
-        results_dir=results_dir,
-        timeout=args.timeout,
-        openrouter_key=openrouter_key,
-    )
+    try:
+        oracle_synthesis = await asyncio.to_thread(
+            run_oracle_review_sync,
+            model=args.oracle_model,
+            omp_bin=omp_bin,
+            sources=oracle_sources_from_results(results),
+            results_dir=results_dir,
+            timeout=args.timeout,
+        )
+    except (RpcError, RpcProcessExitError) as exc:
+        err = f"{type(exc).__name__}: {exc}"
+        (results_dir / "oracle_error.txt").write_text(err + "\n", encoding="utf-8")
+        printer.finish(
+            f"{len(results)} review file(s) saved to {results_dir}.\n"
+            f"Oracle synthesis FAILED ({err}).\n"
+            f"Re-run the synthesis against existing reviews with:\n"
+            f"  python scripts/rate-edit-tool.py --rerun-oracle {results_dir}"
+        )
+        return 2
+
     printer.finish(
-        f"{len(results)} review file(s) completed. Oracle synthesis:\n\n{oracle_synthesis}"
+        f"{len(results)} review file(s) completed. Oracle synthesis saved to {results_dir}/oracle_synthesis.md:\n\n{oracle_synthesis}"
     )
     return 0
 
