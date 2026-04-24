@@ -246,26 +246,64 @@ async function fetchOllamaNativeModels(baseUrl: string): Promise<Model<"openai-r
 	}
 	const payload = (await response.json()) as { models?: Array<{ name?: string; model?: string }> };
 	const entries = payload.models ?? [];
-	const models: Model<"openai-responses">[] = [];
-	for (const entry of entries) {
-		const id = entry.model ?? entry.name;
-		if (!id) {
-			continue;
-		}
-		models.push({
-			id,
-			name: entry.name ?? id,
-			api: "openai-responses",
-			provider: "ollama",
-			baseUrl,
-			reasoning: false,
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128000,
-			maxTokens: 8192,
-		});
-	}
+	const resolved = await Promise.all(
+		entries.map(async (entry): Promise<Model<"openai-responses"> | null> => {
+			const id = entry.model ?? entry.name;
+			if (!id) return null;
+			const { contextWindow, maxTokens } = await fetchOllamaModelLimits(nativeBaseUrl, id);
+			return {
+				id,
+				name: entry.name ?? id,
+				api: "openai-responses",
+				provider: "ollama",
+				baseUrl,
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow,
+				maxTokens,
+			};
+		}),
+	);
+	const models: Model<"openai-responses">[] = resolved.filter((m): m is Model<"openai-responses"> => m !== null);
 	return models.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+/** Ollama's default `num_ctx` when the runtime request does not override it. */
+const OLLAMA_DEFAULT_CONTEXT_WINDOW = 4096;
+/** Cap max output tokens at a value that matches OMP's other openai-responses defaults. */
+const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
+
+/**
+	* Query Ollama's `/api/show` endpoint for a single model and pull its native
+	* context length out of `model_info.<arch>.context_length`. Falls back to
+	* Ollama's default context window when the endpoint or field is unavailable
+	* so discovery still succeeds against older Ollama builds.
+	*/
+async function fetchOllamaModelLimits(
+	nativeBaseUrl: string,
+	modelId: string,
+): Promise<{ contextWindow: number; maxTokens: number }> {
+	try {
+		const response = await fetch(`${nativeBaseUrl}/api/show`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json", Accept: "application/json" },
+			body: JSON.stringify({ model: modelId }),
+		});
+		if (!response.ok) {
+			return { contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW, maxTokens: OLLAMA_DEFAULT_MAX_TOKENS };
+		}
+		const payload = (await response.json()) as { model_info?: Record<string, unknown> };
+		const info = payload.model_info ?? {};
+		for (const [key, value] of Object.entries(info)) {
+			if (key.endsWith(".context_length") && typeof value === "number" && value > 0) {
+				return { contextWindow: value, maxTokens: OLLAMA_DEFAULT_MAX_TOKENS };
+			}
+		}
+	} catch {
+		// fall through to default
+	}
+	return { contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW, maxTokens: OLLAMA_DEFAULT_MAX_TOKENS };
 }
 
 const OPENAI_NON_RESPONSES_PREFIXES = [
