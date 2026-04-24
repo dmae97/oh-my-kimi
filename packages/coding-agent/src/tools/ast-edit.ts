@@ -294,6 +294,23 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 							failOnParseError: false,
 						});
 						const dedupedApplyParseErrors = dedupeParseErrors(applyResult.parseErrors);
+						const { record: recordAppliedFile, list: appliedFileList } = createFileRecorder();
+						const appliedFileReplacementCounts = new Map<string, number>();
+						for (const fileChange of applyResult.fileChanges) {
+							const relativePath = formatPath(fileChange.path);
+							recordAppliedFile(relativePath);
+							appliedFileReplacementCounts.set(
+								relativePath,
+								(appliedFileReplacementCounts.get(relativePath) ?? 0) + fileChange.count,
+							);
+						}
+						for (const change of applyResult.changes) {
+							recordAppliedFile(formatPath(change.path));
+						}
+						const appliedFileReplacements = appliedFileList.map(filePath => ({
+							path: filePath,
+							count: appliedFileReplacementCounts.get(filePath) ?? 0,
+						}));
 						const appliedDetails: AstEditToolDetails = {
 							totalReplacements: applyResult.totalReplacements,
 							filesTouched: applyResult.filesTouched,
@@ -302,9 +319,27 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 							limitReached: applyResult.limitReached,
 							...(dedupedApplyParseErrors.length > 0 ? { parseErrors: dedupedApplyParseErrors } : {}),
 							scopePath,
-							files: fileList,
-							fileReplacements,
+							files: appliedFileList,
+							fileReplacements: appliedFileReplacements,
 						};
+						const stalePreview =
+							applyResult.totalReplacements !== result.totalReplacements ||
+							applyResult.filesTouched !== result.filesTouched ||
+							fileList.some(
+								filePath => appliedFileReplacementCounts.get(filePath) !== fileReplacementCounts.get(filePath),
+							) ||
+							appliedFileList.some(
+								filePath => fileReplacementCounts.get(filePath) !== appliedFileReplacementCounts.get(filePath),
+							);
+						if (stalePreview) {
+							const text =
+								applyResult.totalReplacements === 0
+									? `Preview is stale / no longer matches; no replacements were applied. Preview expected ${result.totalReplacements} replacement${previewReplacementPlural} in ${result.filesTouched} file${previewFilePlural}.`
+									: applyResult.totalReplacements < result.totalReplacements
+										? `Preview is stale / no longer matches; only ${applyResult.totalReplacements} of ${result.totalReplacements} replacements were applied in ${applyResult.filesTouched} of ${result.filesTouched} files.`
+										: `Preview is stale / no longer matches; applied ${applyResult.totalReplacements} replacements but preview expected ${result.totalReplacements}.`;
+							return { ...toolResult(appliedDetails).text(text).done(), isError: true };
+						}
 						const appliedReplacementPlural = applyResult.totalReplacements !== 1 ? "s" : "";
 						const appliedFilePlural = applyResult.filesTouched !== 1 ? "s" : "";
 						const text = `Applied ${applyResult.totalReplacements} replacement${appliedReplacementPlural} in ${applyResult.filesTouched} file${appliedFilePlural}.`;
