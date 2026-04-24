@@ -929,26 +929,26 @@ mod tests {
 			parse_error_lines: Vec::new(),
 			fallback:          false,
 			root_path:         String::new(),
-			root_children:     vec!["fn_handleTerraform".to_owned()],
+			root_children:     vec!["fn_han".to_owned()],
 			chunks:            vec![
-				chunk("", "ROOT", None, vec!["fn_handleTerraform"]),
-				chunk("fn_handleTerraform", "HVJB", Some(""), vec!["fn_handleTerraform.try"]),
-				chunk("fn_handleTerraform.try", "RQPB", Some("fn_handleTerraform"), vec![
-					"fn_handleTerraform.try.if_2",
+				chunk("", "ROOT", None, vec!["fn_han"]),
+				chunk("fn_han", "HVJB", Some(""), vec!["fn_han.try"]),
+				chunk("fn_han.try", "RQPB", Some("fn_han"), vec![
+					"fn_han.try.if_2",
 				]),
-				chunk("fn_handleTerraform.try.if_2", "PKPV", Some("fn_handleTerraform.try"), vec![
-					"fn_handleTerraform.try.if_2.loop",
+				chunk("fn_han.try.if_2", "PKPV", Some("fn_han.try"), vec![
+					"fn_han.try.if_2.loop",
 				]),
 				chunk(
-					"fn_handleTerraform.try.if_2.loop",
+					"fn_han.try.if_2.loop",
 					"MZRS",
-					Some("fn_handleTerraform.try.if_2"),
-					vec!["fn_handleTerraform.try.if_2.loop.if_2"],
+					Some("fn_han.try.if_2"),
+					vec!["fn_han.try.if_2.loop.if_2"],
 				),
 				chunk(
-					"fn_handleTerraform.try.if_2.loop.if_2",
+					"fn_han.try.if_2.loop.if_2",
 					"QKJY",
-					Some("fn_handleTerraform.try.if_2.loop"),
+					Some("fn_han.try.if_2.loop"),
 					vec![],
 				),
 			],
@@ -959,8 +959,8 @@ mod tests {
 	fn resolves_requested_chunk_selector_forms() {
 		let state = state_for_resolution();
 		let selectors = [
-			"fn_handleTerraform.try.if_2#PKPV",
-			"fn_handleTerraform.try.if_2",
+			"fn_han.try.if_2#PKPV",
+			"fn_han.try.if_2",
 			"handleTerraform.try.if_2",
 			"if_2",
 			"if_2#PKPV",
@@ -972,7 +972,7 @@ mod tests {
 			let mut warnings = Vec::new();
 			let resolved = resolve_chunk_with_crc(&state, Some(selector), None, &mut warnings)
 				.unwrap_or_else(|err| panic!("selector {selector} should resolve: {err}"));
-			assert_eq!(resolved.chunk.path, "fn_handleTerraform.try.if_2");
+			assert_eq!(resolved.chunk.path, "fn_han.try.if_2");
 		}
 	}
 
@@ -989,16 +989,16 @@ mod tests {
 			root_children:     vec!["fn_run".to_owned()],
 			chunks:            vec![
 				chunk("", "ROOT", None, vec!["fn_run"]),
-				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_effect_1", "fn_run.var_effect_2"]),
-				chunk("fn_run.var_effect_1", "AAAA", Some("fn_run"), vec![]),
-				chunk("fn_run.var_effect_2", "BBBB", Some("fn_run"), vec![]),
+				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_eff_1", "fn_run.var_eff_2"]),
+				chunk("fn_run.var_eff_1", "AAAA", Some("fn_run"), vec![]),
+				chunk("fn_run.var_eff_2", "BBBB", Some("fn_run"), vec![]),
 			],
 		});
 		let mut warnings = Vec::new();
 		let resolved =
-			resolve_chunk_with_crc(&state, Some("fn_run.var_effect"), Some("BBBB"), &mut warnings)
+			resolve_chunk_with_crc(&state, Some("fn_run.var_eff"), Some("BBBB"), &mut warnings)
 				.expect("stale selector should resolve to same-parent checksum match");
-		assert_eq!(resolved.chunk.path, "fn_run.var_effect_2");
+		assert_eq!(resolved.chunk.path, "fn_run.var_eff_2");
 		assert!(
 			warnings
 				.iter()
@@ -1019,16 +1019,16 @@ mod tests {
 			root_children:     vec!["fn_run".to_owned()],
 			chunks:            vec![
 				chunk("", "ROOT", None, vec!["fn_run"]),
-				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_other", "fn_run.var_effect_1"]),
-				chunk("fn_run.var_other", "BBBB", Some("fn_run"), vec![]),
-				chunk("fn_run.var_effect_1", "BBBB", Some("fn_run"), vec![]),
+				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_oth", "fn_run.var_eff_1"]),
+				chunk("fn_run.var_oth", "BBBB", Some("fn_run"), vec![]),
+				chunk("fn_run.var_eff_1", "BBBB", Some("fn_run"), vec![]),
 			],
 		});
 		let mut warnings = Vec::new();
 		let resolved =
-			resolve_chunk_with_crc(&state, Some("fn_run.var_effect"), Some("BBBB"), &mut warnings)
+			resolve_chunk_with_crc(&state, Some("fn_run.var_eff"), Some("BBBB"), &mut warnings)
 				.expect("best name match should disambiguate same-parent checksum siblings");
-		assert_eq!(resolved.chunk.path, "fn_run.var_effect_1");
+		assert_eq!(resolved.chunk.path, "fn_run.var_eff_1");
 	}
 
 	#[test]
@@ -1044,14 +1044,14 @@ mod tests {
 			root_children:     vec!["fn_run".to_owned()],
 			chunks:            vec![
 				chunk("", "ROOT", None, vec!["fn_run"]),
-				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_effect_1", "fn_run.var_effect_2"]),
-				chunk("fn_run.var_effect_1", "BBBB", Some("fn_run"), vec![]),
-				chunk("fn_run.var_effect_2", "BBBB", Some("fn_run"), vec![]),
+				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_eff_1", "fn_run.var_eff_2"]),
+				chunk("fn_run.var_eff_1", "BBBB", Some("fn_run"), vec![]),
+				chunk("fn_run.var_eff_2", "BBBB", Some("fn_run"), vec![]),
 			],
 		});
 		let mut warnings = Vec::new();
 		let Err(err) =
-			resolve_chunk_with_crc(&state, Some("fn_run.var_effect"), Some("BBBB"), &mut warnings)
+			resolve_chunk_with_crc(&state, Some("fn_run.var_eff"), Some("BBBB"), &mut warnings)
 		else {
 			panic!("ambiguous stale selector should fail closed");
 		};
@@ -1068,22 +1068,22 @@ mod tests {
 			parse_error_lines: Vec::new(),
 			fallback:          false,
 			root_path:         String::new(),
-			root_children:     vec!["class_Server".to_owned()],
+			root_children:     vec!["cls_Ser".to_owned()],
 			chunks:            vec![
-				chunk("", "ROOT", None, vec!["class_Server"]),
-				chunk("class_Server", "CLSS", Some(""), vec!["class_Server.fn_handle"]),
-				chunk("class_Server.fn_handle", "ABCD", Some("class_Server"), vec![]),
+				chunk("", "ROOT", None, vec!["cls_Ser"]),
+				chunk("cls_Ser", "CLSS", Some(""), vec!["cls_Ser.fn_han"]),
+				chunk("cls_Ser.fn_han", "ABCD", Some("cls_Ser"), vec![]),
 			],
 		});
 		let mut warnings = Vec::new();
 		let resolved = resolve_chunk_with_crc(
 			&state,
-			Some("class_Server.fn_handleRequest"),
+			Some("cls_Server.fn_handleRequest"),
 			Some("ABCD"),
 			&mut warnings,
 		)
 		.expect("full untruncated selector should resolve to truncated chunk path");
-		assert_eq!(resolved.chunk.path, "class_Server.fn_handle");
+		assert_eq!(resolved.chunk.path, "cls_Ser.fn_han");
 		assert!(
 			warnings
 				.iter()
