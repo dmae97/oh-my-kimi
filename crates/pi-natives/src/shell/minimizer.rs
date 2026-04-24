@@ -9,6 +9,7 @@ pub mod config;
 pub mod detect;
 pub mod engine;
 pub mod filters;
+pub mod markers;
 pub mod primitives;
 
 pub mod pipeline;

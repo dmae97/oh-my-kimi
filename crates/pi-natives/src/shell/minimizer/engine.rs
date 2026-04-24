@@ -10,27 +10,50 @@ use std::{
 
 use crate::shell::minimizer::{
 	MinimizerConfig, MinimizerCtx, MinimizerOutput, detect, filters,
+	markers::{CommandMarkerState, MarkerKind, ParsedMarker},
 	pipeline::{self, CompiledPipeline, PipelineRegistry},
 	plan,
 };
 
-/// Return true when the command has an enabled built-in filter or a matching
-/// declarative pipeline, AND the shell command is a single simple command
-/// (pipes and compound commands are off-limits for correctness).
+/// Minimization strategy for a shell command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MinimizerMode {
+	/// Stream output unchanged.
+	None,
+	/// Capture the whole command and apply one filter to the whole buffer.
+	WholeCommand,
+	/// Capture the whole command and filter marked external-command segments.
+	MarkedCommands,
+}
+
+/// Return the minimization mode for a command.
+pub fn mode_for(command: &str, config: &MinimizerConfig) -> MinimizerMode {
+	match plan::analyze(command) {
+		plan::CommandPlan::Single { .. } => {
+			let Some(identity) = detect::detect(command) else {
+				return MinimizerMode::None;
+			};
+			if identity_has_filter(&identity, config) {
+				MinimizerMode::WholeCommand
+			} else {
+				MinimizerMode::None
+			}
+		},
+		plan::CommandPlan::Compound => {
+			if config.enabled {
+				MinimizerMode::MarkedCommands
+			} else {
+				MinimizerMode::None
+			}
+		},
+		plan::CommandPlan::Piped | plan::CommandPlan::Unsupported => MinimizerMode::None,
+	}
+}
+
+/// Return true when the command should be captured for minimization.
+#[allow(dead_code, reason = "test-only API surface")]
 pub fn should_minimize(command: &str, config: &MinimizerConfig) -> bool {
-	if !matches!(plan::analyze(command), plan::CommandPlan::Single { .. }) {
-		return false;
-	}
-	let Some(identity) = detect::detect(command) else {
-		return false;
-	};
-	if !config.is_program_enabled(&identity.program) {
-		return false;
-	}
-	if filters::supports(&identity.program, identity.subcommand.as_deref()) {
-		return true;
-	}
-	resolve_pipeline(config, &identity.program, identity.subcommand.as_deref()).is_some()
+	!matches!(mode_for(command, config), MinimizerMode::None)
 }
 
 /// Apply a matching filter to captured output.
@@ -56,11 +79,10 @@ pub fn apply(
 		return MinimizerOutput::passthrough(captured).labeled("too-large");
 	}
 
-	// Structural guard: only single simple commands are safe to minimize.
+	// Structural guard: this whole-buffer path only handles single simple
+	// commands. Compound commands are handled by launch-scoped markers.
 	// Pipes almost always feed a downstream parser (awk, jq, rg, …) and
-	// rewriting their input is a correctness bug. Compound commands (`&&`,
-	// `||`, `;`, `&`) produce interleaved output from multiple programs;
-	// one filter cannot reason about the combined buffer.
+	// rewriting their input is a correctness bug.
 	match plan::analyze(command) {
 		plan::CommandPlan::Single { .. } => {},
 		plan::CommandPlan::Piped => {
@@ -78,6 +100,117 @@ pub fn apply(
 		record_unknown_command(command);
 		return MinimizerOutput::passthrough(captured).labeled("unknown");
 	};
+	apply_identity(&identity, command, captured, exit_code, config)
+}
+
+/// Apply filters to output marked around individual external command launches.
+pub fn apply_marked(
+	captured: &str,
+	config: &MinimizerConfig,
+	markers: &CommandMarkerState,
+) -> MinimizerOutput {
+	let mut text = String::with_capacity(captured.len());
+	let mut original = String::with_capacity(captured.len());
+	let mut cursor = 0;
+	let mut changed = false;
+
+	while let Some(marker) = markers.find_marker(captured, cursor) {
+		text.push_str(&captured[cursor..marker.start]);
+		original.push_str(&captured[cursor..marker.start]);
+
+		match marker.kind {
+			MarkerKind::Start { id } => {
+				let Some(end_marker) = find_matching_end(captured, markers, marker.end, id) else {
+					cursor = marker.end;
+					continue;
+				};
+				let MarkerKind::End { exit_code, .. } = end_marker.kind else {
+					cursor = marker.end;
+					continue;
+				};
+				let segment = &captured[marker.end..end_marker.start];
+				original.push_str(segment);
+				if let Some(command) = markers.command(id) {
+					let minimized =
+						apply_identity(&command.identity, &command.command, segment, exit_code, config);
+					if minimized.changed {
+						changed = true;
+					}
+					text.push_str(&minimized.text);
+				} else {
+					text.push_str(segment);
+				}
+				cursor = end_marker.end;
+			},
+			MarkerKind::End { .. } => {
+				cursor = marker.end;
+			},
+		}
+	}
+
+	text.push_str(&captured[cursor..]);
+	original.push_str(&captured[cursor..]);
+
+	if changed {
+		let output_bytes = text.len();
+		return MinimizerOutput {
+			text,
+			changed: true,
+			input_bytes: original.len(),
+			output_bytes,
+			filter: "compound",
+			original_text: Some(original),
+		};
+	}
+
+	MinimizerOutput::passthrough(original).labeled("compound-noop")
+}
+
+/// Remove command-boundary markers without applying filters.
+pub fn strip_markers(captured: &str, markers: &CommandMarkerState) -> String {
+	let mut text = String::with_capacity(captured.len());
+	let mut cursor = 0;
+	while let Some(marker) = markers.find_marker(captured, cursor) {
+		text.push_str(&captured[cursor..marker.start]);
+		cursor = marker.end;
+	}
+	text.push_str(&captured[cursor..]);
+	text
+}
+
+fn find_matching_end(
+	captured: &str,
+	markers: &CommandMarkerState,
+	from: usize,
+	id: u64,
+) -> Option<ParsedMarker> {
+	let mut cursor = from;
+	while let Some(marker) = markers.find_marker(captured, cursor) {
+		if matches!(marker.kind, MarkerKind::End { id: end_id, .. } if end_id == id) {
+			return Some(marker);
+		}
+		cursor = marker.end;
+	}
+	None
+}
+
+fn identity_has_filter(identity: &detect::CommandIdentity, config: &MinimizerConfig) -> bool {
+	if !config.is_program_enabled(&identity.program) {
+		return false;
+	}
+
+	let subcommand = identity.subcommand.as_deref();
+	filters::supports(&identity.program, subcommand)
+		|| resolve_pipeline(config, &identity.program, subcommand).is_some()
+}
+
+fn apply_identity(
+	identity: &detect::CommandIdentity,
+	command: &str,
+	captured: &str,
+	exit_code: i32,
+	config: &MinimizerConfig,
+) -> MinimizerOutput {
 	if !config.is_program_enabled(&identity.program) {
 		return MinimizerOutput::passthrough(captured).labeled("disabled");
 	}
@@ -105,7 +238,7 @@ pub fn apply(
 		if text == captured {
 			return MinimizerOutput::passthrough(captured).labeled("pipeline-noop");
 		}
-		return MinimizerOutput::transformed(text, input_bytes)
+		return MinimizerOutput::transformed(text, captured.len())
 			.labeled("pipeline")
 			.with_original(captured);
 	}
@@ -262,7 +395,10 @@ pub fn verify_builtin_filters() -> Vec<pipeline::TestOutcome> {
 
 #[cfg(test)]
 mod tests {
+	use brush_core::{ExternalCommandInfo, ExternalCommandOutputMarker};
+
 	use super::*;
+	use crate::shell::minimizer::markers::CommandMarkerState;
 
 	#[test]
 	fn disabled_config_does_not_minimize() {
@@ -288,6 +424,67 @@ mod tests {
 		let out = apply("echo hello", "hello\n", 0, &cfg);
 		assert_eq!(out.text, "hello\n");
 		assert!(!out.changed);
+	}
+
+	#[test]
+	fn compound_commands_use_marked_mode() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		assert_eq!(mode_for("echo start ; git status", &cfg), MinimizerMode::MarkedCommands);
+		assert_eq!(mode_for("false && git status", &cfg), MinimizerMode::MarkedCommands);
+		assert_eq!(mode_for("git status | cat", &cfg), MinimizerMode::None);
+	}
+
+	#[test]
+	fn marked_output_filters_segment_and_preserves_original() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let markers = CommandMarkerState::new();
+		let command_markers = markers
+			.markers_for_external_command(ExternalCommandInfo {
+				command_name:    "git",
+				executable_path: "/usr/bin/git",
+				args:            vec!["status"],
+			})
+			.expect("git marker should be created");
+		let captured = format!(
+			"before\n{}## main\n M file.rs\n{}0{}after\n",
+			command_markers.start_marker,
+			command_markers.end_marker_prefix,
+			command_markers.end_marker_suffix,
+		);
+
+		let out = apply_marked(&captured, &cfg, &markers);
+
+		assert!(out.changed);
+		assert_eq!(out.filter, "compound");
+		assert_eq!(out.original_text.as_deref(), Some("before\n## main\n M file.rs\nafter\n"));
+		assert!(out.text.contains("before\n"));
+		assert!(out.text.contains("unstaged: 1"));
+		assert!(out.text.contains("after\n"));
+	}
+
+	#[test]
+	fn marked_output_strips_markers_without_supported_filter() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let markers = CommandMarkerState::new();
+		let command_markers = markers
+			.markers_for_external_command(ExternalCommandInfo {
+				command_name:    "unknown-tool",
+				executable_path: "/tmp/unknown-tool",
+				args:            vec!["hello"],
+			})
+			.expect("unknown marker should still be created");
+		let captured = format!(
+			"{}raw\n{}0{}",
+			command_markers.start_marker,
+			command_markers.end_marker_prefix,
+			command_markers.end_marker_suffix,
+		);
+
+		let out = apply_marked(&captured, &cfg, &markers);
+
+		assert!(!out.changed);
+		assert_eq!(out.text, "raw\n");
+		assert_eq!(strip_markers(&captured, &markers), "raw\n");
 	}
 }
 

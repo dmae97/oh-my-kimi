@@ -14,7 +14,12 @@ pub struct CommandIdentity {
 /// left streaming unchanged.
 pub fn detect(command: &str) -> Option<CommandIdentity> {
 	let tokens = tokenize(command);
-	let tokens = strip_launch_prefix(&tokens)?;
+	detect_tokens(&tokens)
+}
+
+/// Extract command identity from an already-expanded argv vector.
+pub fn detect_tokens(tokens: &[String]) -> Option<CommandIdentity> {
+	let tokens = strip_launch_prefix(tokens)?;
 	let (program, rest) = tokens.split_first()?;
 	let normalized = normalize_program(program)?;
 	let subcommand = detect_subcommand(&normalized, rest);

@@ -11,11 +11,12 @@
 //!   regardless of what `bar` is. A user piping through `awk`, `jq`, `rg`, or
 //!   any other consumer is almost certainly parsing the output; rewriting it
 //!   would be a correctness bug. The engine falls back to passthrough.
-//! - **Compound commands are opaque.** `a && b`, `a ; b`, `a || b`, and `a & b`
-//!   produce interleaved output and two distinct filter regimes; we don't
-//!   attempt to slice the capture buffer by segment, so we bail.
-//! - **Single simple commands** are the only shape where minimization is safe;
-//!   the engine dispatches them through `detect.rs` as before.
+//! - **Compound commands need launch markers.** `a && b`, `a ; b`, and `a || b`
+//!   cannot be minimized as one combined buffer. The shell runtime can still
+//!   minimize eligible external command launches by marking their output
+//!   boundaries before this engine filters each segment.
+//! - **Single simple commands** are safe for the whole-buffer path; the engine
+//!   dispatches them through `detect.rs` as before.
 //!
 //! When the command fails to parse (syntax error, unsupported construct),
 //! we return `Unsupported` and the engine passes through.
@@ -36,6 +37,8 @@ pub enum CommandPlan {
 	/// safe minimization for this engine.
 	Piped,
 	/// The command has multiple segments joined by `&&`, `||`, `;`, or `&`.
+	/// Foreground external commands inside this shape may still be minimized
+	/// through launch-scoped output markers.
 	Compound,
 	/// Parse failed, a compound shell construct (for loops, subshells, etc.)
 	/// was encountered, or the command was empty.

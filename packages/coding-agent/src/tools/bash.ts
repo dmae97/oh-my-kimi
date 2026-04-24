@@ -30,6 +30,17 @@ export const BASH_DEFAULT_PREVIEW_LINES = 10;
 const BASH_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_AUTO_BACKGROUND_THRESHOLD_MS = 60_000;
 
+async function saveBashOriginalArtifact(session: ToolSession, originalText: string): Promise<string | undefined> {
+	try {
+		const alloc = await session.allocateOutputArtifact?.("bash-original");
+		if (!alloc?.path || !alloc.id) return undefined;
+		await Bun.write(alloc.path, originalText);
+		return alloc.id;
+	} catch {
+		return undefined;
+	}
+}
+
 const bashSchemaBase = Type.Object({
 	command: Type.String({ description: "Command to execute" }),
 	env: Type.Optional(
@@ -390,6 +401,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 							latestText = tailBuffer.text();
 							void reportProgress(latestText, { async: { state: "running", jobId, type: "bash" } });
 						},
+						onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
 					});
 					const finalResult = this.#buildCompletedResult(
 						result,
@@ -656,16 +668,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					artifactPath,
 					artifactId,
 					onChunk: streamTailUpdates(tailBuffer, onUpdate),
-					onMinimizedSave: async originalText => {
-						try {
-							const alloc = await this.session.allocateOutputArtifact?.("bash-original");
-							if (!alloc?.path || !alloc.id) return undefined;
-							await Bun.write(alloc.path, originalText);
-							return alloc.id;
-						} catch {
-							return undefined;
-						}
-					},
+					onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
 				});
 		if (result.cancelled) {
 			if (signal?.aborted) {

@@ -5611,6 +5611,14 @@ export class AgentSession {
 	// Bash Execution
 	// =========================================================================
 
+	async #saveBashOriginalArtifact(originalText: string): Promise<string | undefined> {
+		try {
+			return await this.sessionManager.saveArtifact(originalText, "bash-original");
+		} catch {
+			return undefined;
+		}
+	}
+
 	/**
 	 * Execute a bash command.
 	 * Adds result to agent context and session.
@@ -5647,6 +5655,7 @@ export class AgentSession {
 				signal: this.#bashAbortController.signal,
 				sessionKey: this.sessionId,
 				timeout: clampTimeout("bash") * 1000,
+				onMinimizedSave: originalText => this.#saveBashOriginalArtifact(originalText),
 			});
 
 			this.recordBashResult(command, result, options);

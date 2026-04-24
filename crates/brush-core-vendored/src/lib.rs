@@ -41,7 +41,10 @@ mod wellknownvars;
 
 pub use commands::{CommandArg, ExecutionContext};
 pub use error::{BuiltinError, Error, ErrorKind};
-pub use interp::{ExecutionParameters, ProcessGroupPolicy};
+pub use interp::{
+	ExecutionParameters, ExternalCommandInfo, ExternalCommandOutputMarker,
+	ExternalCommandOutputMarkers, ProcessGroupPolicy,
+};
 pub use results::{ExecutionControlFlow, ExecutionExitCode, ExecutionResult, ExecutionSpawnResult};
 pub use shell::{CreateOptions, Shell, ShellBuilder, ShellBuilderState, ShellFd};
 pub use variables::{ShellValue, ShellVariable};

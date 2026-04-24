@@ -1,8 +1,16 @@
 //! Process management
 
+use std::io::Write;
+
 use tokio_util::sync::CancellationToken;
 
-use crate::{error, sys};
+use crate::{error, openfiles::OpenFile, sys};
+
+struct CompletionMarker {
+	output:            OpenFile,
+	end_marker_prefix: String,
+	end_marker_suffix: String,
+}
 
 /// Tracks a child process being awaited.
 pub struct ChildProcess {
@@ -12,17 +20,28 @@ pub struct ChildProcess {
     child: sys::process::Child,
     /// Tracks whether this process has already been reaped.
     reaped: bool,
+    completion_marker: Option<CompletionMarker>,
 }
 
 impl ChildProcess {
     /// Wraps a child process and its future.
     pub fn new(pid: Option<sys::process::ProcessId>, child: sys::process::Child) -> Self {
-        Self { pid, child, reaped: false }
+        Self { pid, child, reaped: false, completion_marker: None }
     }
 
     /// Returns the process's ID.
     pub const fn pid(&self) -> Option<sys::process::ProcessId> {
         self.pid
+    }
+
+    pub(crate) fn set_completion_marker(
+        &mut self,
+        output: OpenFile,
+        end_marker_prefix: String,
+        end_marker_suffix: String,
+    ) {
+        self.completion_marker =
+            Some(CompletionMarker { output, end_marker_prefix, end_marker_suffix });
     }
 
     /// Waits for the process to exit.
@@ -72,7 +91,9 @@ impl ChildProcess {
             return match status {
                 Some(status) => {
                     let status = status?;
+                    let marker_exit_code = completion_exit_code(&status);
                     self.reaped = true;
+                    self.write_completion_marker(marker_exit_code);
                     Ok(ProcessWaitResult::Completed(output_from_status(status)))
                 }
                 None => {
@@ -81,9 +102,21 @@ impl ChildProcess {
                     } else if let Ok(Some(_)) = self.child.try_wait() {
                         self.reaped = true;
                     }
+                    self.write_completion_marker(130);
                     Ok(ProcessWaitResult::Cancelled)
                 }
             };
+        }
+    }
+
+    fn write_completion_marker(&mut self, exit_code: i32) {
+        if let Some(mut marker) = self.completion_marker.take() {
+            let _ = write!(
+                marker.output,
+                "{}{}{}",
+                marker.end_marker_prefix, exit_code, marker.end_marker_suffix
+            );
+            let _ = marker.output.flush();
         }
     }
 
@@ -124,6 +157,22 @@ impl Drop for ChildProcess {
 
 fn output_from_status(status: std::process::ExitStatus) -> std::process::Output {
     std::process::Output { status, stdout: Vec::new(), stderr: Vec::new() }
+}
+
+fn completion_exit_code(status: &std::process::ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
+        }
+    }
+
+    127
 }
 
 /// Represents the result of waiting for an executing process.

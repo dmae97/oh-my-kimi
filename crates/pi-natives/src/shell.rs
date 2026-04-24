@@ -645,11 +645,22 @@ async fn run_shell_command(
 		}
 	}
 
-	let should_minimize = if let Some(config) = options.minimizer.as_ref() {
-		minimizer::engine::should_minimize(&options.command, config)
+	let minimizer_mode = if let Some(config) = options.minimizer.as_ref() {
+		minimizer::engine::mode_for(&options.command, config)
 	} else {
-		false
+		minimizer::engine::MinimizerMode::None
 	};
+	let marker_state = if matches!(minimizer_mode, minimizer::engine::MinimizerMode::MarkedCommands)
+	{
+		Some(Arc::new(minimizer::markers::CommandMarkerState::new()))
+	} else {
+		None
+	};
+	if let Some(marker_state) = marker_state.as_ref() {
+		let marker: Arc<dyn brush_core::ExternalCommandOutputMarker> = marker_state.clone();
+		params.set_command_output_marker(marker);
+	}
+	let should_minimize = !matches!(minimizer_mode, minimizer::engine::MinimizerMode::None);
 	let max_capture_bytes = if let Some(config) = options.minimizer.as_ref() {
 		config.max_capture_bytes as usize
 	} else {
@@ -759,10 +770,22 @@ async fn run_shell_command(
 		&& let Some(config) = options.minimizer.as_ref()
 	{
 		if output.exceeded {
-			emit_chunk(&output.text, final_callback.as_ref());
+			let text = if let Some(marker_state) = marker_state.as_ref() {
+				minimizer::engine::strip_markers(&output.text, marker_state)
+			} else {
+				output.text
+			};
+			emit_chunk(&text, final_callback.as_ref());
 		} else {
-			let minimized =
-				minimizer::apply(&options.command, &output.text, exit_code(&result), config);
+			let minimized = match (minimizer_mode, marker_state.as_ref()) {
+				(minimizer::engine::MinimizerMode::WholeCommand, _) => {
+					minimizer::apply(&options.command, &output.text, exit_code(&result), config)
+				},
+				(minimizer::engine::MinimizerMode::MarkedCommands, Some(marker_state)) => {
+					minimizer::engine::apply_marked(&output.text, config, marker_state)
+				},
+				_ => minimizer::MinimizerOutput::passthrough(&output.text),
+			};
 			emit_chunk(&minimized.text, final_callback.as_ref());
 			if minimized.changed
 				&& let Some(original) = minimized.original_text
