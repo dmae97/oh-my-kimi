@@ -53,6 +53,10 @@ import {
 } from "../../session/session-manager";
 import { parseThinkingLevel } from "../../thinking";
 import { mapAgentSessionEventToAcpSessionUpdates, mapToolKind } from "./acp-event-mapper";
+import { Settings } from "../../config/settings";
+import { disableProvider, enableProvider } from "../../capability";
+import { loadAllExtensions } from "../../modes/components/extensions/state-manager";
+
 
 const ACP_MODE_ID = "default";
 const MODE_CONFIG_ID = "mode";
@@ -150,10 +154,37 @@ export class AcpAgent implements Agent {
 	#disposePromise: Promise<void> | undefined;
 	#cleanupRegistered = false;
 
+	#listAllCache: { at: number; sessions: StoredSessionInfo[] } | null = null;
+	#listAllInFlight: Promise<StoredSessionInfo[]> | null = null;
+
 	constructor(connection: AgentSideConnection, initialSession: AgentSession, createSession: CreateAcpSession) {
 		this.#connection = connection;
 		this.#initialSession = initialSession;
 		this.#createSession = createSession;
+		// Prefetch the global session list so the first GUI request is instant.
+		void this.#getAllSessionsCached();
+	}
+
+	async #getAllSessionsCached(): Promise<StoredSessionInfo[]> {
+		const TTL = 60_000;
+		const now = Date.now();
+		if (this.#listAllCache && now - this.#listAllCache.at < TTL) {
+			return this.#listAllCache.sessions;
+		}
+		if (this.#listAllInFlight) return this.#listAllInFlight;
+		this.#listAllInFlight = SessionManager.listAll()
+			.then(sessions => {
+				this.#listAllCache = { at: Date.now(), sessions };
+				return sessions;
+			})
+			.finally(() => {
+				this.#listAllInFlight = null;
+			});
+		return this.#listAllInFlight;
+	}
+
+	#invalidateListAllCache(): void {
+		this.#listAllCache = null;
 	}
 
 	async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
@@ -198,6 +229,7 @@ export class AcpAgent implements Agent {
 
 	async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
 		this.#assertAbsoluteCwd(params.cwd);
+		this.#invalidateListAllCache();
 		const record = await this.#createNewSessionRecord(params.cwd, params.mcpServers);
 		const response: NewSessionResponse = {
 			sessionId: record.session.sessionId,
@@ -379,8 +411,77 @@ export class AcpAgent implements Agent {
 		}
 	}
 
-	async extMethod(_method: string, _params: { [key: string]: unknown }): Promise<{ [key: string]: unknown }> {
-		throw new Error("ACP extension methods are not implemented");
+	async extMethod(method: string, params: { [key: string]: unknown }): Promise<{ [key: string]: unknown }> {
+		switch (method) {
+			case "omp/sessions/listAll": {
+				const limit = typeof params["limit"] === "number" ? Math.max(1, Math.min(5000, params["limit"] as number)) : 1000;
+				const sessions = await this.#getAllSessionsCached();
+				const sorted = sessions.sort((l, r) => r.modified.getTime() - l.modified.getTime()).slice(0, limit);
+				return {
+					sessions: sorted.map(s => this.#toSessionInfo(s)),
+					total: sessions.length,
+				};
+			}
+			case "omp/projects/list": {
+				const sessions = await this.#getAllSessionsCached();
+				const buckets = new Map<string, { cwd: string; sessionCount: number; lastActivityAt: number; lastTitle: string }>();
+				for (const s of sessions) {
+					if (!s.cwd) continue;
+					const ts = s.modified.getTime();
+					const existing = buckets.get(s.cwd);
+					if (existing) {
+						existing.sessionCount += 1;
+						if (ts > existing.lastActivityAt) {
+							existing.lastActivityAt = ts;
+							existing.lastTitle = s.title ?? "";
+						}
+					} else {
+						buckets.set(s.cwd, {
+							cwd: s.cwd,
+							sessionCount: 1,
+							lastActivityAt: ts,
+							lastTitle: s.title ?? "",
+						});
+					}
+				}
+				const projects = Array.from(buckets.values()).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+				return { projects, totalSessions: sessions.length };
+			}
+			case "omp/chats/byCwd": {
+				const cwd = typeof params["cwd"] === "string" ? (params["cwd"] as string) : undefined;
+				if (!cwd) throw new Error("cwd required");
+				const limit = typeof params["limit"] === "number" ? Math.max(1, Math.min(500, params["limit"] as number)) : 100;
+				const all = await this.#getAllSessionsCached();
+				const sessions = all.filter(s => s.cwd === cwd);
+				const sorted = sessions.sort((l, r) => r.modified.getTime() - l.modified.getTime()).slice(0, limit);
+				return { sessions: sorted.map(s => this.#toSessionInfo(s)) };
+			}
+			case "omp/usage": {
+				const [firstRecord] = this.#sessions.values();
+				const target = firstRecord?.session ?? this.#initialSession;
+				const reports = await target.fetchUsageReports();
+				return { reports: reports ?? [] };
+			}
+			case "omp/extensions": {
+				const cwd = typeof params["cwd"] === "string" ? (params["cwd"] as string) : undefined;
+				const sm = await Settings.init();
+				const disabledIds = (sm.get("disabledExtensions") as string[] | undefined) ?? [];
+				const extensions = await loadAllExtensions(cwd, disabledIds);
+				return { extensions: extensions as unknown as Array<{ [key: string]: unknown }> };
+			}
+			case "omp/extensions/toggle": {
+				const providerId = params["providerId"];
+				if (typeof providerId !== "string") throw new Error("providerId required");
+				if (params["enabled"] === false) {
+					disableProvider(providerId);
+					return { enabled: false };
+				}
+				enableProvider(providerId);
+				return { enabled: true };
+			}
+			default:
+				throw new Error(`Unknown ACP ext method: ${method}`);
+		}
 	}
 
 	async extNotification(_method: string, _params: { [key: string]: unknown }): Promise<void> {}
