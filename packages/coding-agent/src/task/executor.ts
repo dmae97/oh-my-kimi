@@ -975,6 +975,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				enableLsp: lspEnabled,
 				skipPythonPreflight,
 				enableMCP,
+				mcpManager: options.mcpManager,
 				customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
 			});
 
