@@ -382,6 +382,54 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(modelAfterProviderRefresh?.headers?.[runtimeHeader]).toBe("runtime-header");
 	});
 
+	test("provider source handoff does not retain previous source transport overrides", async () => {
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const providerName = "shared-runtime-provider";
+		const leakedHeader = "X-Old-Source-Header";
+		const sourceBBaseUrl = "https://source-b.example.com/v1";
+
+		registry.registerProvider(
+			providerName,
+			{
+				baseUrl: "https://source-a.example.com/v1",
+				apiKey: "KEY_A",
+				api: "openai-completions",
+				models: [{ ...baseModel, id: "model-a" }],
+			},
+			"ext://a",
+		);
+		registry.registerProvider(
+			providerName,
+			{ baseUrl: "https://override-a.example.com/v1", headers: { [leakedHeader]: "from-source-a" } },
+			"ext://a",
+		);
+		registry.registerProvider(
+			providerName,
+			{
+				baseUrl: sourceBBaseUrl,
+				apiKey: "KEY_B",
+				api: "openai-completions",
+				models: [{ ...baseModel, id: "model-b" }],
+			},
+			"ext://b",
+		);
+
+		expect(registry.find(providerName, "model-a")).toBeUndefined();
+		const modelAfterHandoff = registry.find(providerName, "model-b");
+		expect(modelAfterHandoff?.baseUrl).toBe(sourceBBaseUrl);
+		expect(modelAfterHandoff?.headers?.[leakedHeader]).toBeUndefined();
+
+		await registry.refresh("offline");
+		const modelAfterRefresh = registry.find(providerName, "model-b");
+		expect(modelAfterRefresh?.baseUrl).toBe(sourceBBaseUrl);
+		expect(modelAfterRefresh?.headers?.[leakedHeader]).toBeUndefined();
+
+		await registry.refreshProvider(providerName, "offline");
+		const modelAfterProviderRefresh = registry.find(providerName, "model-b");
+		expect(modelAfterProviderRefresh?.baseUrl).toBe(sourceBBaseUrl);
+		expect(modelAfterProviderRefresh?.headers?.[leakedHeader]).toBeUndefined();
+	});
+
 	test("multiple extension providers survive refresh independently", async () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 

@@ -2035,6 +2035,7 @@ export class ModelRegistry {
 				if (previousProviders && previousProviders.size === 0) {
 					this.#runtimeProvidersBySource.delete(previousSourceId);
 				}
+				this.#runtimeProviderOverrides.delete(providerName);
 			}
 			const sourceProviders = this.#runtimeProvidersBySource.get(sourceId) ?? new Set<string>();
 			sourceProviders.add(providerName);
