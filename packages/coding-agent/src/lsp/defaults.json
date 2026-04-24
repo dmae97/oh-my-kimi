@@ -857,7 +857,8 @@
 		"rootMarkers": [
 			".marksman.toml",
 			".git"
-		]
+		],
+		"warmupTimeoutMs": 15000
 	},
 	"texlab": {
 		"command": "texlab",
