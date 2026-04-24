@@ -14,6 +14,10 @@
 - Changed the shell output minimizer to more aggressively compact successful test runs, git output, large listings, grep/find results, source reads, and dependency manifests
 - Changed compound and piped shell commands to bypass output minimization entirely, keeping minimization limited to eligible whole-command output after the command exits
 
+### Fixed
+
+- Fixed chunk edit batches so later operations can reuse an initially validated checksum after an earlier operation changes that same chunk
+
 ### Removed
 
 - Removed `PI_DEV` loader diagnostic env var and associated console logging in the native addon loader

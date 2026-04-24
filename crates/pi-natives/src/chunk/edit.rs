@@ -29,6 +29,26 @@ struct ScheduledEditOperation {
 	checksum_validated: bool,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct BatchTargetKey {
+	path:     String,
+	checksum: String,
+}
+
+#[derive(Clone)]
+enum CurrentBatchTarget {
+	Path(String),
+	Missing,
+}
+
+#[derive(Clone)]
+struct AppliedEditTarget {
+	before:             ChunkNode,
+	full_chunk_removed: bool,
+}
+
+type CurrentBatchTargets = HashMap<BatchTargetKey, CurrentBatchTarget>;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum InsertPosition {
 	Before,
@@ -225,6 +245,7 @@ pub fn apply_edits(state: &ChunkState, params: &EditParams) -> Result<EditResult
 	let execution_ops = scheduled_ops;
 	let current_default_selector = initial_default_selector.as_deref();
 	let mut current_default_crc = initial_default_crc;
+	let mut current_batch_targets = CurrentBatchTargets::new();
 	let total_ops = params.operations.len();
 
 	for scheduled in execution_ops {
@@ -241,6 +262,7 @@ pub fn apply_edits(state: &ChunkState, params: &EditParams) -> Result<EditResult
 				file_indent_char,
 				normalize_indent,
 				&mut touched_paths,
+				&current_batch_targets,
 				&mut warnings,
 			),
 			ChunkEditOp::Replace => apply_find_replace(
@@ -251,6 +273,7 @@ pub fn apply_edits(state: &ChunkState, params: &EditParams) -> Result<EditResult
 				current_default_crc.as_deref(),
 				normalize_indent,
 				&mut touched_paths,
+				&current_batch_targets,
 				&mut warnings,
 			),
 			ChunkEditOp::Delete => apply_delete(
@@ -260,6 +283,7 @@ pub fn apply_edits(state: &ChunkState, params: &EditParams) -> Result<EditResult
 				current_default_selector,
 				current_default_crc.as_deref(),
 				&mut touched_paths,
+				&current_batch_targets,
 				&mut warnings,
 			),
 			ChunkEditOp::Before | ChunkEditOp::After | ChunkEditOp::Prepend | ChunkEditOp::Append => {
@@ -273,30 +297,34 @@ pub fn apply_edits(state: &ChunkState, params: &EditParams) -> Result<EditResult
 					file_indent_char,
 					normalize_indent,
 					&mut touched_paths,
+					&current_batch_targets,
 					&mut warnings,
 				)
 			},
 		};
 
-		if let Err(err) = result {
-			let display_path = display_path_for_file(&params.file_path, &params.cwd);
-			let sel = operation.sel.as_deref().or(current_default_selector);
-			let context = render_error_context(
-				&original_state,
-				sel,
-				&display_path,
-				params.anchor_style,
-				normalize_indent,
-			);
-			return Err(format!(
-				"Edit operation {}/{} failed ({}): {}\nNo changes were saved. Fix the failing \
-				 operation and retry the entire batch.{context}",
-				scheduled.original_index + 1,
-				total_ops,
-				describe_scheduled_operation(&scheduled),
-				err,
-			));
-		}
+		let applied_target = match result {
+			Ok(applied_target) => applied_target,
+			Err(err) => {
+				let display_path = display_path_for_file(&params.file_path, &params.cwd);
+				let sel = operation.sel.as_deref().or(current_default_selector);
+				let context = render_error_context(
+					&original_state,
+					sel,
+					&display_path,
+					params.anchor_style,
+					normalize_indent,
+				);
+				return Err(format!(
+					"Edit operation {}/{} failed ({}): {}\nNo changes were saved. Fix the failing \
+					 operation and retry the entire batch.{context}",
+					scheduled.original_index + 1,
+					total_ops,
+					describe_scheduled_operation(&scheduled),
+					err,
+				));
+			},
+		};
 
 		state = rebuild_chunk_state(
 			state.source.clone(),
@@ -304,6 +332,7 @@ pub fn apply_edits(state: &ChunkState, params: &EditParams) -> Result<EditResult
 			state.notebook.clone(),
 			state.conflict_meta.clone(),
 		)?;
+		update_current_batch_target(&mut current_batch_targets, &state, &scheduled, &applied_target);
 		if operation.sel.is_none() {
 			current_default_crc = None;
 		}
@@ -500,12 +529,48 @@ fn unique_current_chunk_by_initial_checksum<'a>(
 	}
 }
 
+fn batch_target_key(chunk: &ChunkNode) -> BatchTargetKey {
+	BatchTargetKey { path: chunk.path.clone(), checksum: chunk.checksum.clone() }
+}
+
+fn format_batch_target_key(key: &BatchTargetKey) -> String {
+	if key.path.is_empty() {
+		format!("<root>#{}", key.checksum)
+	} else {
+		format!("{}#{}", key.path, key.checksum)
+	}
+}
+
 fn resolve_current_batch_chunk<'a>(
 	state: &'a ChunkStateInner,
 	cleaned_selector: Option<&str>,
 	scheduled: &ScheduledEditOperation,
+	current_batch_targets: &CurrentBatchTargets,
 	warnings: &mut Vec<String>,
 ) -> Result<&'a ChunkNode, String> {
+	if let Some(initial_chunk) = scheduled.initial_chunk.as_ref() {
+		let key = batch_target_key(initial_chunk);
+		if let Some(current_target) = current_batch_targets.get(&key) {
+			return match current_target {
+				CurrentBatchTarget::Path(path) => state.chunk(path.as_str()).ok_or_else(|| {
+					format!(
+						"Batch target {} was remapped to \"{}\" by an earlier operation, but that chunk \
+						 no longer exists after later edits.",
+						format_batch_target_key(&key),
+						if path.is_empty() {
+							"<root>"
+						} else {
+							path.as_str()
+						}
+					)
+				}),
+				CurrentBatchTarget::Missing => Err(format!(
+					"Batch target {} was removed or could not be remapped after an earlier operation.",
+					format_batch_target_key(&key)
+				)),
+			};
+		}
+	}
 	if let Some(chunk) = unique_current_chunk_by_initial_checksum(state, scheduled) {
 		return Ok(chunk);
 	}
@@ -519,6 +584,7 @@ fn resolve_edit_target(
 	scheduled: &ScheduledEditOperation,
 	default_selector: Option<&str>,
 	default_crc: Option<&str>,
+	current_batch_targets: &CurrentBatchTargets,
 	warnings: &mut Vec<String>,
 ) -> Result<ResolvedEditTarget, String> {
 	let selector = operation.sel.as_deref().or(default_selector);
@@ -532,8 +598,14 @@ fn resolve_edit_target(
 	let ParsedSelector { selector: cleaned_selector, region: parsed_region, .. } =
 		split_selector_crc_and_region(selector, crc, operation.region)?;
 	let mut region = operation.region.or(parsed_region);
-	let chunk =
-		resolve_current_batch_chunk(state, cleaned_selector.as_deref(), scheduled, warnings)?.clone();
+	let chunk = resolve_current_batch_chunk(
+		state,
+		cleaned_selector.as_deref(),
+		scheduled,
+		current_batch_targets,
+		warnings,
+	)?
+	.clone();
 	let python_leaf_control_flow = state.language == "python"
 		&& chunk.leaf
 		&& matches!(
@@ -555,6 +627,63 @@ fn resolve_edit_target(
 	}
 
 	Ok(ResolvedEditTarget { chunk, region })
+}
+
+fn find_current_batch_target_after_edit<'a>(
+	state: &'a ChunkStateInner,
+	before: &ChunkNode,
+) -> Option<&'a ChunkNode> {
+	if let Some(chunk) = state.chunk(before.path.as_str()) {
+		return Some(chunk);
+	}
+	if before.path.is_empty() {
+		return state.chunk("");
+	}
+
+	let same_start_same_kind = state
+		.tree
+		.chunks
+		.iter()
+		.filter(|chunk| {
+			!chunk.path.is_empty()
+				&& chunk.start_line == before.start_line
+				&& chunk.kind == before.kind
+		})
+		.collect::<Vec<_>>();
+	if same_start_same_kind.len() == 1 {
+		return Some(same_start_same_kind[0]);
+	}
+
+	let same_start = state
+		.tree
+		.chunks
+		.iter()
+		.filter(|chunk| !chunk.path.is_empty() && chunk.start_line == before.start_line)
+		.collect::<Vec<_>>();
+	if same_start.len() == 1 {
+		return Some(same_start[0]);
+	}
+
+	None
+}
+
+fn update_current_batch_target(
+	current_batch_targets: &mut CurrentBatchTargets,
+	state: &ChunkStateInner,
+	scheduled: &ScheduledEditOperation,
+	applied_target: &AppliedEditTarget,
+) {
+	let Some(initial_chunk) = scheduled.initial_chunk.as_ref() else {
+		return;
+	};
+	let key = batch_target_key(initial_chunk);
+	let current_target = if applied_target.full_chunk_removed {
+		CurrentBatchTarget::Missing
+	} else {
+		find_current_batch_target_after_edit(state, &applied_target.before)
+			.map_or(CurrentBatchTarget::Missing, |chunk| CurrentBatchTarget::Path(chunk.path.clone()))
+	};
+	current_batch_targets.insert(key, current_target);
 }
 
 /// Re-indent replacement content to match the original matched source's
@@ -637,11 +766,20 @@ fn apply_find_replace(
 	default_crc: Option<&str>,
 	normalize_indent: bool,
 	touched_paths: &mut Vec<String>,
+	current_batch_targets: &CurrentBatchTargets,
 	warnings: &mut Vec<String>,
-) -> Result<(), String> {
-	let target =
-		resolve_edit_target(state, operation, scheduled, default_selector, default_crc, warnings)?;
+) -> Result<AppliedEditTarget, String> {
+	let target = resolve_edit_target(
+		state,
+		operation,
+		scheduled,
+		default_selector,
+		default_crc,
+		current_batch_targets,
+		warnings,
+	)?;
 	let anchor = target.chunk;
+	let target_before = anchor.clone();
 
 	let (region_start, region_end) = match target.region {
 		None => (anchor.start_byte as usize, anchor.end_byte as usize),
@@ -703,7 +841,7 @@ fn apply_find_replace(
 	new_source.push_str(&state.source[abs_end..]);
 	replace_source_and_adjust_conflicts(state, new_source, warnings);
 	touched_paths.push(anchor.path);
-	Ok(())
+	Ok(AppliedEditTarget { before: target_before, full_chunk_removed: false })
 }
 
 fn apply_put(
@@ -716,11 +854,20 @@ fn apply_put(
 	file_indent_char: char,
 	normalize_indent: bool,
 	touched_paths: &mut Vec<String>,
+	current_batch_targets: &CurrentBatchTargets,
 	warnings: &mut Vec<String>,
-) -> Result<(), String> {
-	let target =
-		resolve_edit_target(state, operation, scheduled, default_selector, default_crc, warnings)?;
+) -> Result<AppliedEditTarget, String> {
+	let target = resolve_edit_target(
+		state,
+		operation,
+		scheduled,
+		default_selector,
+		default_crc,
+		current_batch_targets,
+		warnings,
+	)?;
 	let anchor = target.chunk;
+	let target_before = anchor.clone();
 	if anchor.kind == ChunkKind::Theirs {
 		return Err(
 			"Virtual conflict branches cannot be replaced directly. Delete conflict.theirs to accept \
@@ -745,6 +892,7 @@ fn apply_put(
 	);
 
 	let effective_region = target.region;
+	let full_chunk_removed = effective_region.is_none() && replacement.is_empty();
 	if should_preserve_head_for_fallback_body_replace(
 		state,
 		&anchor,
@@ -835,7 +983,7 @@ fn apply_put(
 		replace_source_and_adjust_conflicts(state, new_source, warnings);
 	}
 	touched_paths.push(anchor.path);
-	Ok(())
+	Ok(AppliedEditTarget { before: target_before, full_chunk_removed })
 }
 
 fn requested_region_for_operation(
@@ -978,11 +1126,20 @@ fn apply_delete(
 	default_selector: Option<&str>,
 	default_crc: Option<&str>,
 	touched_paths: &mut Vec<String>,
+	current_batch_targets: &CurrentBatchTargets,
 	warnings: &mut Vec<String>,
-) -> Result<(), String> {
-	let target =
-		resolve_edit_target(state, operation, scheduled, default_selector, default_crc, warnings)?;
+) -> Result<AppliedEditTarget, String> {
+	let target = resolve_edit_target(
+		state,
+		operation,
+		scheduled,
+		default_selector,
+		default_crc,
+		current_batch_targets,
+		warnings,
+	)?;
 	let anchor = target.chunk;
+	let target_before = anchor.clone();
 	if target.region.is_none() {
 		match anchor.kind {
 			ChunkKind::Ours => {
@@ -1000,7 +1157,10 @@ fn apply_delete(
 				);
 				replace_source_and_adjust_conflicts(state, new_source, warnings);
 				touched_paths.push(conflict_path.to_owned());
-				return Ok(());
+				return Ok(AppliedEditTarget {
+					before:             target_before,
+					full_chunk_removed: true,
+				});
 			},
 			ChunkKind::Theirs => {
 				let Some(conflict_path) = anchor.parent_path.as_deref() else {
@@ -1008,7 +1168,10 @@ fn apply_delete(
 				};
 				state.conflict_meta.remove(conflict_path);
 				touched_paths.push(conflict_path.to_owned());
-				return Ok(());
+				return Ok(AppliedEditTarget {
+					before:             target_before,
+					full_chunk_removed: true,
+				});
 			},
 			ChunkKind::Conflict => {
 				state.conflict_meta.remove(anchor.path.as_str());
@@ -1042,7 +1205,10 @@ fn apply_delete(
 		replace_source_and_adjust_conflicts(state, new_source, warnings);
 	}
 	touched_paths.push(anchor.path);
-	Ok(())
+	Ok(AppliedEditTarget {
+		before:             target_before,
+		full_chunk_removed: target.region.is_none(),
+	})
 }
 
 fn apply_insert(
@@ -1055,11 +1221,20 @@ fn apply_insert(
 	file_indent_char: char,
 	normalize_indent: bool,
 	touched_paths: &mut Vec<String>,
+	current_batch_targets: &CurrentBatchTargets,
 	warnings: &mut Vec<String>,
-) -> Result<(), String> {
-	let target =
-		resolve_edit_target(state, operation, scheduled, default_selector, default_crc, warnings)?;
+) -> Result<AppliedEditTarget, String> {
+	let target = resolve_edit_target(
+		state,
+		operation,
+		scheduled,
+		default_selector,
+		default_crc,
+		current_batch_targets,
+		warnings,
+	)?;
 	let anchor = target.chunk;
+	let target_before = anchor.clone();
 	if anchor.kind == ChunkKind::Theirs {
 		return Err(
 			"Virtual conflict branches cannot be edited in place. Delete conflict.theirs to accept \
@@ -1123,7 +1298,7 @@ fn apply_insert(
 		warnings,
 	);
 	touched_paths.push(anchor.path);
-	Ok(())
+	Ok(AppliedEditTarget { before: target_before, full_chunk_removed: false })
 }
 
 fn normalize_operation_literals(operation: &EditOperation) -> EditOperation {
@@ -2808,7 +2983,7 @@ const betaValue = 2;
 			.expect("first top-level chunk")
 			.clone();
 		let first_path = first.path.clone();
-		let first_checksum = first.checksum.clone();
+		let first_checksum = first.checksum;
 
 		let err = apply_edits(
 			&state,
@@ -2845,6 +3020,60 @@ const betaValue = 2;
 		assert!(
 			!err.contains("const alphaValue = 10;"),
 			"fresh content must not show partial in-memory edits: {err}"
+		);
+	}
+
+	#[test]
+	fn edit_batch_maps_reused_checksum_after_target_changes() {
+		let source = "\
+function target(): void {
+\tconsole.log(\"old\");
+}
+
+function helper(): void {
+\tconsole.log(\"helper\");
+}
+";
+		let state = state_for(source, "typescript");
+		let target = state.inner().chunk("fn_tar").expect("fn_tar").clone();
+
+		let result = apply_edits(
+			&state,
+			&edit_params(vec![
+				EditOperation {
+					op:      ChunkEditOp::Put,
+					sel:     Some(format!("#{}", target.checksum)),
+					crc:     None,
+					region:  None,
+					content: Some("function target(): void {\n\tconsole.log(\"middle\");\n}".to_owned()),
+					find:    None,
+				},
+				EditOperation {
+					op:      ChunkEditOp::Put,
+					sel:     Some(format!("#{}", target.checksum)),
+					crc:     None,
+					region:  None,
+					content: Some("function target(): void {\n\tconsole.log(\"final\");\n}".to_owned()),
+					find:    None,
+				},
+			]),
+		)
+		.expect("same-batch reused checksum should follow the changed target");
+
+		assert!(
+			result.diff_after.contains("console.log(\"final\")"),
+			"second edit should apply to the original target:\n{}",
+			result.diff_after
+		);
+		assert!(
+			!result.diff_after.contains("console.log(\"middle\")"),
+			"second edit should replace the first edit on the same target:\n{}",
+			result.diff_after
+		);
+		assert!(
+			result.diff_after.contains("function helper(): void"),
+			"reused checksum must not fall back to root replacement:\n{}",
+			result.diff_after
 		);
 	}
 
