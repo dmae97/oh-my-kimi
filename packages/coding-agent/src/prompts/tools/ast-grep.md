@@ -10,6 +10,7 @@ Performs structural code search using AST matching via native ast-grep.
 - Metavariable names are UPPERCASE and must be the whole AST node — partial-text like `prefix$VAR`, `"hello $NAME"`, or `a $OP b` does NOT work; match the whole node instead
 - When the same metavariable appears twice, both occurrences **MUST** match identical code (`$A == $A` matches `x == x`, not `x == y`)
 - Patterns **MUST** parse as a single valid AST node for the target language. For method fragments or body snippets that don't parse standalone, wrap in valid context (e.g. `class $_ { … }`) and set `sel` to target the inner node — results return for the selected node, not the outer wrapper. If ast-grep reports `Multiple AST nodes are detected`, the pattern isn't a single parseable node — wrap and use `sel`
+- C++ qualified calls used as expression statements need the statement semicolon in the pattern: use `ns::doThing($ARG);`, `$CALLEE($ARG)`, or wrap a statement snippet and select `call_expression`. Without `;`, tree-sitter-cpp may parse `ns::doThing($ARG)` as declaration-like syntax and return no matches
 - For TS declarations/methods, tolerate unknown annotations: `async function $NAME($$$ARGS): $_ { $$$BODY }` or `class $_ { method($ARG: $_): $_ { $$$BODY } }`
 - Declaration forms are structurally distinct — top-level `function foo`, class method `foo()`, and `const foo = () => {}` are different AST shapes; search the right form before concluding absence
 - Loosest existence check: `pat: ["executeBash"]` with `sel: "identifier"`
