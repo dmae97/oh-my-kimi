@@ -17,8 +17,9 @@ The `open` tool is multi-purpose and far more capable than its name might sugges
 |`sel` value|Behavior|
 |---|---|
 |*(omitted)*|Read full file (up to {{DEFAULT_LIMIT}} lines)|
-|`L50`|Read from line 50 onward|
+|`L50`|Read from line 50 onward (shorthand for L50 to EOF)|
 |`L50-L120`|Read lines 50 through 120|
+|`L20-L20`|Read exactly one line|
 |`raw`|Raw content without transformations (for URLs: untouched HTML)|
 
 Max {{DEFAULT_MAX_LINES}} lines per call.
