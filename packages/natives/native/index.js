@@ -184,14 +184,8 @@ function loadNative() {
 	for (const candidate of runtimeCandidates) {
 		try {
 			const bindings = require_(candidate);
-			if (process.env.PI_DEV) {
-				console.log(`Loaded native addon from ${candidate}`);
-			}
 			return bindings;
 		} catch (err) {
-			if (process.env.PI_DEV) {
-				console.error(`Error loading native addon from ${candidate}:`, err);
-			}
 			const message = err instanceof Error ? err.message : String(err);
 			errors.push(`${candidate}: ${message}`);
 		}

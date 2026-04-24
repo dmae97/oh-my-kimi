@@ -317,13 +317,7 @@ These are read as runtime signals; they are usually set by the terminal/OS rathe
 
 ---
 
-## 9) Native loader/debug flags
-
-| Variable | Behavior |
-|---|---|
-| `PI_DEV` | Enables verbose native addon load diagnostics in `packages/natives` |
-
-## 10) TUI runtime flags (shared package, affects coding-agent UX)
+## 9) TUI runtime flags (shared package, affects coding-agent UX)
 
 | Variable | Behavior |
 |---|---|

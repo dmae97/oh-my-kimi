@@ -13,6 +13,10 @@
 
 - Added trust-gated loading for minimizer settings by requiring a matching `settingsHash` before accepting a settings file
 
+### Removed
+
+- Removed `PI_DEV` loader diagnostic env var and associated console logging in the native addon loader
+
 ## [14.2.0] - 2026-04-23
 
 ### Added

@@ -61,7 +61,6 @@ Filename strategy:
 
 - Release: `pi_natives.<platform>-<arch>.node`
 - x64 variant release: `pi_natives.<platform>-<arch>-modern.node` and/or `...-baseline.node`
-- `PI_DEV` enables loader diagnostics but does not change addon filenames
 
 ### Platform-specific variant detection
 
