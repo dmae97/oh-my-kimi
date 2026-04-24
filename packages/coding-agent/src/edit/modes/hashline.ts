@@ -52,12 +52,14 @@ export type HashlineEdit =
 const HASHLINE_PREFIX_RE = /^\s*(?:>>>|>>)?\s*(?:\+?\s*(?:\d+\s*#\s*|#\s*)|\+)\s*[ZPMQVRWSNKTXJBYH]{2}:/;
 const HASHLINE_PREFIX_PLUS_RE = /^\s*(?:>>>|>>)?\s*\+\s*(?:\d+\s*#\s*|#\s*)?[ZPMQVRWSNKTXJBYH]{2}:/;
 const DIFF_PLUS_RE = /^[+](?![+])/;
+const READ_TRUNCATION_NOTICE_RE = /^\[(?:Showing lines \d+-\d+ of \d+|\d+ more lines? in (?:file|\S+))\b.*\bsel=L\d+/;
 
 type LinePrefixStats = {
 	nonEmpty: number;
 	hashPrefixCount: number;
 	diffPlusHashPrefixCount: number;
 	diffPlusCount: number;
+	truncationNoticeCount: number;
 };
 
 function collectLinePrefixStats(lines: string[]): LinePrefixStats {
@@ -66,10 +68,15 @@ function collectLinePrefixStats(lines: string[]): LinePrefixStats {
 		hashPrefixCount: 0,
 		diffPlusHashPrefixCount: 0,
 		diffPlusCount: 0,
+		truncationNoticeCount: 0,
 	};
 
 	for (const line of lines) {
 		if (line.length === 0) continue;
+		if (READ_TRUNCATION_NOTICE_RE.test(line)) {
+			stats.truncationNoticeCount++;
+			continue;
+		}
 		stats.nonEmpty++;
 		if (HASHLINE_PREFIX_RE.test(line)) stats.hashPrefixCount++;
 		if (HASHLINE_PREFIX_PLUS_RE.test(line)) stats.diffPlusHashPrefixCount++;
@@ -77,6 +84,20 @@ function collectLinePrefixStats(lines: string[]): LinePrefixStats {
 	}
 
 	return stats;
+}
+
+function stripLeadingHashlinePrefixes(line: string): string {
+	let result = line;
+	let prev: string;
+	do {
+		prev = result;
+		result = result.replace(HASHLINE_PREFIX_RE, "");
+	} while (result !== prev);
+	return result;
+}
+
+function filterTruncationNotices(lines: string[]): string[] {
+	return lines.filter(line => !READ_TRUNCATION_NOTICE_RE.test(line));
 }
 
 export function stripNewLinePrefixes(lines: string[]): string[] {
@@ -88,20 +109,26 @@ export function stripNewLinePrefixes(lines: string[]): string[] {
 		!stripHash && diffPlusHashPrefixCount === 0 && diffPlusCount > 0 && diffPlusCount >= nonEmpty * 0.5;
 	if (!stripHash && !stripPlus && diffPlusHashPrefixCount === 0) return lines;
 
-	return lines.map(line => {
-		if (stripHash) return line.replace(HASHLINE_PREFIX_RE, "");
-		if (stripPlus) return line.replace(DIFF_PLUS_RE, "");
-		if (diffPlusHashPrefixCount > 0 && HASHLINE_PREFIX_PLUS_RE.test(line)) {
-			return line.replace(HASHLINE_PREFIX_RE, "");
-		}
-		return line;
-	});
+	const mapped = lines
+		.filter(line => !READ_TRUNCATION_NOTICE_RE.test(line))
+		.map(line => {
+			if (stripHash) return stripLeadingHashlinePrefixes(line);
+			if (stripPlus) return line.replace(DIFF_PLUS_RE, "");
+			if (diffPlusHashPrefixCount > 0 && HASHLINE_PREFIX_PLUS_RE.test(line)) {
+				return line.replace(HASHLINE_PREFIX_RE, "");
+			}
+			return line;
+		});
+	return mapped;
 }
 
 export function stripHashlinePrefixes(lines: string[]): string[] {
 	const { nonEmpty, hashPrefixCount } = collectLinePrefixStats(lines);
-	if (nonEmpty === 0 || hashPrefixCount !== nonEmpty) return lines;
-	return lines.map(line => line.replace(HASHLINE_PREFIX_RE, ""));
+	if (nonEmpty === 0) return lines;
+	if (hashPrefixCount !== nonEmpty) return lines;
+	return lines
+		.filter(line => !READ_TRUNCATION_NOTICE_RE.test(line))
+		.map(line => stripLeadingHashlinePrefixes(line));
 }
 
 const linesSchema = Type.Union([
