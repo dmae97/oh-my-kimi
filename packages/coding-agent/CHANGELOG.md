@@ -13,6 +13,7 @@
 
 - Changed the canonical file/URL reader tool from `read` to `open` across default tool lists and routing, including system prompts, plan mode, cursor handlers, and runtime tool registration
 - Changed runtime and UI handling to render and track `open` tool calls as first-class (with `read` accepted as legacy alias), including ACP mapping, session observers, and streaming message groups
+- Changed chunk edit guidance to document parser-specific region behavior, including TypeScript decorator/JSDoc sibling chunks, Python docstrings as body content, Python opaque nested chunks, Markdown whole-chunk fallbacks, ID volatility, and indentation display differences
 - Changed fetch output logging so URL-fetch artifacts now use `.open.log` naming instead of `.read.log`
 - Changed Bash interception guidance and errors to recommend `open` in place of `read` for cat/head/tail-style commands
 - Changed exported SDK tool surface to expose `OpenTool` as canonical and keep `ReadTool` as a compatibility alias
@@ -29,6 +30,10 @@
 - Fixed bash command minimization to save the full unminimized output as a `bash-original` artifact during AgentSession shell execution, enabling `artifact://` access to complete command output
 - Fixed streaming chunk previews that could display an incomplete trailing edit as a deletion when partial JSON temporarily converted in-flight values to `null`
 - Fixed edit streaming preview updates to cancel obsolete in-flight computations and avoid rendering stale previews as args change
+- Fixed chunk edits to reject unsafe `^`/`~` writes on code leaf chunks instead of falling back to whole-chunk replacement and risking structural indentation corruption
+- Fixed chunk `replace` operations to preserve multiline replacement indentation literally instead of stripping leading whitespace from inserted lines
+- Fixed Markdown chunk appends to preserve blank-line separators after line-oriented inserts such as table rows
+- Fixed streaming edit call headers to keep showing the target file path while the edit arguments are still arriving
 - Fixed Mermaid fenced markdown rendering in assistant messages on terminals without image protocol support ([#650](https://github.com/can1357/oh-my-pi/issues/650))
 - Fixed chunk edit path parsing so plan-mode edits to section-addressed `local://PLAN.md:<selector>` paths are classified as writes to the plan file
 - Fixed SQLite `read` helper queries to reject `where=` clauses with SQL control syntax that could override the structured selector's pagination; raw SQL remains available through `q=SELECT ...`

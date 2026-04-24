@@ -75,6 +75,11 @@ struct ResolvedEditTarget {
 	region: Option<ChunkRegion>,
 }
 
+enum RegionFallback {
+	Reject(String),
+	Warn(String),
+}
+
 const NORMALIZED_TAB_REPLACEMENT: &str = "    ";
 const PRESERVED_TAB_REPLACEMENT: &str = "\t";
 
@@ -606,6 +611,7 @@ fn resolve_edit_target(
 		warnings,
 	)?
 	.clone();
+	let requested_region = region;
 	let python_leaf_control_flow = state.language == "python"
 		&& chunk.leaf
 		&& matches!(
@@ -618,15 +624,80 @@ fn resolve_edit_target(
 				| ChunkKind::Elif
 				| ChunkKind::Except
 		);
-	if chunk.prologue_end_byte.is_none()
-		|| chunk.epilogue_start_byte.is_none()
-		|| python_leaf_control_flow
-		|| (chunk.kind == ChunkKind::Section && matches!(operation.op, ChunkEditOp::Put))
-	{
+	if let Some(action) = unsupported_region_action(state, &chunk, operation.op, requested_region) {
+		match action {
+			RegionFallback::Reject(reason) => return Err(reason),
+			RegionFallback::Warn(reason) => warnings.push(reason),
+		}
+		region = None;
+	} else if python_leaf_control_flow {
 		region = None;
 	}
 
 	Ok(ResolvedEditTarget { chunk, region })
+}
+
+const fn region_label(region: ChunkRegion) -> &'static str {
+	match region {
+		ChunkRegion::Head => "^",
+		ChunkRegion::Body => "~",
+	}
+}
+
+fn unsupported_region_action(
+	state: &ChunkStateInner,
+	chunk: &ChunkNode,
+	op: ChunkEditOp,
+	requested_region: Option<ChunkRegion>,
+) -> Option<RegionFallback> {
+	let region = requested_region?;
+	let label = region_label(region);
+	let chunk_label = chunk_path_opt(chunk);
+	let warn_on_region_fallback =
+		matches!(
+			state.language.as_str(),
+			"markdown"
+				| "md" | "handlebars"
+				| "hbs" | "yaml"
+				| "yml" | "json"
+				| "jsonc"
+				| "toml" | "text"
+				| "txt"
+		);
+
+	let detail = if state.language == "python"
+		&& chunk.leaf
+		&& matches!(
+			chunk.kind,
+			ChunkKind::If
+				| ChunkKind::Loop
+				| ChunkKind::Try
+				| ChunkKind::Block
+				| ChunkKind::Match
+				| ChunkKind::Elif
+				| ChunkKind::Except
+		) {
+		Some("Python compound-statement leaf chunks do not expose a safe body/head edit boundary")
+	} else if chunk.prologue_end_byte.is_none() || chunk.epilogue_start_byte.is_none() {
+		Some("this chunk has no body/head edit boundary")
+	} else if chunk.kind == ChunkKind::Section && matches!(op, ChunkEditOp::Put) {
+		Some("section writes do not expose a safe body/head edit boundary")
+	} else {
+		None
+	}?;
+
+	if warn_on_region_fallback {
+		return Some(RegionFallback::Warn(format!(
+			"Region suffix `{label}` on {chunk_label} fell back to whole-chunk editing because \
+			 {detail}. Include the complete chunk content, including headings, fences, list markers, \
+			 or table rows."
+		)));
+	}
+
+	Some(RegionFallback::Reject(format!(
+		"Region suffix `{label}` is not supported on {chunk_label}: {detail}. Use the unsuffixed \
+		 selector with complete replacement content, or edit a parent container's `~` body instead."
+	)))
 }
 
 fn find_current_batch_target_after_edit<'a>(
@@ -690,6 +761,10 @@ fn update_current_batch_target(
 /// indentation. Detects the base indent of the first line in `original` and
 /// applies it to `replacement`.
 fn reindent_replacement(original: &str, replacement: &str) -> String {
+	if replacement.contains('\n') {
+		return replacement.to_string();
+	}
+
 	let orig_indent = original
 		.lines()
 		.next()
@@ -718,6 +793,36 @@ fn reindent_replacement(original: &str, replacement: &str) -> String {
 		})
 		.collect::<Vec<_>>()
 		.join("\n")
+}
+
+fn expanded_match_start_for_multiline_replacement(
+	source: &str,
+	abs_start: usize,
+	replacement: &str,
+) -> Option<usize> {
+	if !replacement.contains('\n') {
+		return None;
+	}
+
+	let line_start = source[..abs_start].rfind('\n').map_or(0, |idx| idx + 1);
+	if line_start == abs_start {
+		return None;
+	}
+
+	let existing_prefix = &source[line_start..abs_start];
+	if existing_prefix.is_empty()
+		|| !existing_prefix
+			.bytes()
+			.all(|byte| matches!(byte, b' ' | b'\t'))
+	{
+		return None;
+	}
+
+	if replacement.starts_with(existing_prefix) {
+		Some(line_start)
+	} else {
+		None
+	}
 }
 
 /// Try to find `needle` in `haystack` by normalizing leading whitespace on each
@@ -822,8 +927,13 @@ fn apply_find_replace(
 	};
 
 	let raw_replacement = operation.content.as_deref().unwrap_or_default();
-	let abs_start = region_start + rel_offset;
+	let mut abs_start = region_start + rel_offset;
 	let abs_end = abs_start + match_len;
+	if let Some(expanded_start) =
+		expanded_match_start_for_multiline_replacement(&state.source, abs_start, raw_replacement)
+	{
+		abs_start = expanded_start;
+	}
 
 	// Re-indent replacement to match the matched source's indentation when
 	// indent normalization is active.
@@ -2125,8 +2235,13 @@ fn normalize_insertion_boundary_content(
 	} else {
 		usize::from(prev_char.is_some() && prev_char != Some('\n'))
 	};
+	let leading_newlines_after = count_leading_newlines_after_offset(&state.source, offset);
 	let suffix_newlines = if spacing.blank_line_after {
-		2usize.saturating_sub(count_leading_newlines_after_offset(&state.source, offset))
+		2usize.saturating_sub(leading_newlines_after)
+	} else if leading_newlines_after == 1 && content.ends_with('\n') {
+		// Preserve an existing blank-line separator when appending line-oriented
+		// content immediately before the separator's single newline.
+		1
 	} else {
 		usize::from(next_char.is_some() && next_char != Some('\n'))
 	};
@@ -3493,6 +3608,36 @@ function helper(): void {
 	}
 
 	#[test]
+	fn find_replace_preserves_multiline_replacement_indentation() {
+		let source = "enum Status {\n\tRunning,\n\tStopped,\n}\n";
+		let state = state_for(source, "rust");
+		let chunk = state.inner().chunk("en_Sta").expect("en_Sta");
+
+		let result = apply_edits(&state, &EditParams {
+			operations:       vec![EditOperation {
+				op:      ChunkEditOp::Replace,
+				sel:     Some("en_Sta".to_owned()),
+				crc:     Some(chunk.checksum.clone()),
+				region:  None,
+				content: Some("\tPaused,\n\tStopped,\n\tFailed,".to_owned()),
+				find:    Some("Stopped,".to_owned()),
+			}],
+			default_selector: None,
+			default_crc:      None,
+			anchor_style:     None,
+			cwd:              ".".to_owned(),
+			file_path:        "test.rs".to_owned(),
+			normalize_indent: None,
+		})
+		.expect("edit should apply");
+
+		assert_eq!(
+			result.diff_after,
+			"enum Status {\n\tRunning,\n\tPaused,\n\tStopped,\n\tFailed,\n}\n"
+		);
+	}
+
+	#[test]
 	fn focus_emits_only_changed_chain() {
 		let source = "const a = 1;\n\nconst b = 2;\n\nconst c = 3;\n\nconst d = 4;\n\nconst e = 5;\n";
 		let state = state_for(source, "typescript");
@@ -4248,6 +4393,108 @@ function helper(): void {
 	}
 
 	#[test]
+	fn markdown_body_write_region_fallback_warns_before_whole_chunk_replace() {
+		let source = "# Title\n\n## Alpha\n\nalpha body\n\n## Beta\n\nbeta body\n";
+		let state = state_for(source, "markdown");
+		let section = state
+			.inner()
+			.chunk("sct_Tit.sct_Alp")
+			.expect("alpha section");
+
+		let result = apply_single_edit(&state, "test.md", EditOperation {
+			op:      ChunkEditOp::Put,
+			sel:     Some(format!("{}#{}~", section.path, section.checksum)),
+			crc:     None,
+			region:  None,
+			content: Some("## Alpha\n\nnew body\n".to_owned()),
+			find:    None,
+		});
+
+		assert!(
+			result
+				.diff_after
+				.contains("## Alpha\n\nnew body\n\n## Beta"),
+			"whole-section replacement should preserve the next heading separator: {:?}",
+			result.diff_after
+		);
+		assert!(
+			result
+				.warnings
+				.iter()
+				.any(|warning| warning.contains("fell back to whole-chunk editing")),
+			"markdown region fallback should warn: {:?}",
+			result.warnings
+		);
+	}
+
+	#[test]
+	fn markdown_table_body_append_keeps_row_continuity() {
+		let source = "## Section\n\n| A |\n| --- |\n| one |\n\n## Next\n";
+		let state = state_for(source, "markdown");
+		let table = state
+			.inner()
+			.tree
+			.chunks
+			.iter()
+			.find(|chunk| chunk.start_line == 3 && chunk.end_line == 5)
+			.expect("table chunk");
+
+		let result = apply_single_edit(&state, "test.md", EditOperation {
+			op:      ChunkEditOp::Append,
+			sel:     Some(format!("{}#{}~", table.path, table.checksum)),
+			crc:     None,
+			region:  None,
+			content: Some("| two |\n".to_owned()),
+			find:    None,
+		});
+
+		assert!(
+			result.diff_after.contains("| one |\n| two |\n\n## Next"),
+			"appended table row should stay contiguous with the table and preserve next-section \
+			 spacing: {:?}",
+			result.diff_after
+		);
+		assert!(
+			result
+				.warnings
+				.iter()
+				.any(|warning| warning.contains("fell back to whole-chunk editing")),
+			"table body-region append fallback should warn: {:?}",
+			result.warnings
+		);
+	}
+
+	#[test]
+	fn markdown_fenced_python_body_write_preserves_code_indent() {
+		let source = "```python\ndef outer():\n    if cond:\n        return 1\n```\n";
+		let state = state_for(source, "markdown");
+		let function = state
+			.inner()
+			.tree
+			.chunks
+			.iter()
+			.find(|chunk| chunk.kind == ChunkKind::Function)
+			.expect("embedded python function chunk");
+
+		let result = apply_single_edit(&state, "test.md", EditOperation {
+			op:      ChunkEditOp::Put,
+			sel:     Some(format!("{}#{}~", function.path, function.checksum)),
+			crc:     None,
+			region:  None,
+			content: Some("if cond:\n\treturn 2\nreturn 3\n".to_owned()),
+			find:    None,
+		});
+
+		assert!(
+			result
+				.diff_after
+				.contains("def outer():\n    if cond:\n        return 2\n    return 3\n```"),
+			"embedded fenced Python body should keep 4-space code indentation: {:?}",
+			result.diff_after
+		);
+	}
+
+	#[test]
 	fn rust_trait_members_are_addressable() {
 		let source = "trait Handler {\n    fn handle(&self, req: &str) -> String;\n    fn \
 		              name(&self) -> &str;\n}\n";
@@ -4296,7 +4543,7 @@ function helper(): void {
 	}
 
 	#[test]
-	fn body_region_on_leaf_without_delimiters_falls_back_to_full_chunk() {
+	fn body_region_on_leaf_without_delimiters_is_rejected() {
 		let source = "enum LogLevel {\n    Debug,\n    Info,\n    Warn,\n    Fatal,\n}\n";
 		let state = state_for(source, "rust");
 		let chunk = state
@@ -4307,7 +4554,7 @@ function helper(): void {
 
 		for region_suffix in ["~", "^"] {
 			let sel = format!("en_Log.vr_Inf#{}{}", chunk.checksum, region_suffix);
-			let result = apply_edits(&state, &EditParams {
+			let err = apply_edits(&state, &EditParams {
 				operations:       vec![EditOperation {
 					op:      ChunkEditOp::Put,
 					sel:     Some(sel),
@@ -4323,12 +4570,16 @@ function helper(): void {
 				file_path:        "test.rs".to_owned(),
 				normalize_indent: None,
 			})
-			.expect("leaf region should fall back to full chunk");
+			.err()
+			.expect("leaf region should be rejected");
 
 			assert!(
-				result.diff_after.contains("Debug,\n    Error,\n    Warn,"),
-				"{region_suffix} should replace the full leaf chunk, got: {}",
-				result.diff_after
+				err.contains("Region suffix"),
+				"{region_suffix} should return a clear region error, got: {err}"
+			);
+			assert!(
+				err.contains("unsuffixed selector"),
+				"{region_suffix} error should mention the safe workaround, got: {err}"
 			);
 		}
 	}
@@ -5266,10 +5517,11 @@ function foo() {\n<<<<<<< HEAD\n\treturn bar();\n=======\n\treturn baz();\n>>>>>
 	}
 
 	#[test]
-	fn body_region_on_leaf_if_falls_back_to_whole_chunk_python() {
-		// Python `if` inside a function body is a leaf chunk with prologue/epilogue
-		// bytes set by the classifier. Using `~` on it should fall back to
-		// whole-chunk replacement instead of mangling the guard.
+	fn body_region_on_leaf_if_is_rejected_python() {
+		// Python `if` inside a function body is a leaf chunk. Using `~` on it
+		// used to fall back to a whole-chunk replacement and could corrupt
+		// indentation around the guard; it is now rejected with a clear
+		// workaround instead.
 		let source = "def handle(request):\n    x = 1\n    y = 2\n    if request.ok:\n        \
 		              return \"yes\"\n    z = 3\n    for item in items:\n        process(item)\n    \
 		              return \"no\"\n";
@@ -5287,7 +5539,7 @@ function foo() {\n<<<<<<< HEAD\n\treturn bar();\n=======\n\treturn baz();\n>>>>>
 			.expect("if chunk should exist");
 		assert!(if_chunk.leaf, "if chunk should be leaf");
 
-		let result = apply_edits(&state, &EditParams {
+		let err = apply_edits(&state, &EditParams {
 			operations:       vec![EditOperation {
 				op:      ChunkEditOp::Put,
 				sel:     Some(format!("{}~", if_chunk.path)),
@@ -5303,23 +5555,21 @@ function foo() {\n<<<<<<< HEAD\n\treturn bar();\n=======\n\treturn baz();\n>>>>>
 			file_path:        "test.py".to_owned(),
 			normalize_indent: None,
 		})
-		.expect("leaf ~ should fall back to whole-chunk, not produce a parse error");
+		.err()
+		.expect("leaf ~ should be rejected");
 
-		assert!(result.parse_valid, "edit should produce valid Python");
 		assert!(
-			result.diff_after.contains("return \"forced\""),
-			"replacement content should appear in output, got: {}",
-			result.diff_after
+			err.contains("Python compound-statement leaf chunks"),
+			"error should identify the unsafe leaf fallback, got: {err}"
 		);
 		assert!(
-			result.diff_after.contains("if request.ok:"),
-			"guard should be preserved (whole-chunk replacement), got: {}",
-			result.diff_after
+			err.contains("parent container's `~`"),
+			"error should mention the parent-body workaround, got: {err}"
 		);
 	}
 
 	#[test]
-	fn body_region_fallback_preserves_head_when_replacement_omits_it_python() {
+	fn body_region_fallback_that_omits_python_head_is_rejected() {
 		let source = "def handle(request):\n    x = 1\n    y = 2\n    if request.ok:\n        \
 		              return \"yes\"\n    z = 3\n    for item in items:\n        process(item)\n    \
 		              return \"no\"\n";
@@ -5332,7 +5582,7 @@ function foo() {\n<<<<<<< HEAD\n\treturn bar();\n=======\n\treturn baz();\n>>>>>
 			.find(|c| c.kind == ChunkKind::If)
 			.expect("if chunk should exist");
 
-		let result = apply_edits(&state, &EditParams {
+		let err = apply_edits(&state, &EditParams {
 			operations:       vec![EditOperation {
 				op:      ChunkEditOp::Put,
 				sel:     Some(format!("{}~", if_chunk.path)),
@@ -5348,23 +5598,12 @@ function foo() {\n<<<<<<< HEAD\n\treturn bar();\n=======\n\treturn baz();\n>>>>>
 			file_path:        "test.py".to_owned(),
 			normalize_indent: None,
 		})
-		.expect("fallback body edit should preserve head and stay parse-valid");
+		.err()
+		.expect("fallback body edit should be rejected");
 
-		assert!(result.parse_valid, "edit should remain parse-valid");
 		assert!(
-			result.diff_after.contains("if request.ok:"),
-			"if guard should be preserved, got: {}",
-			result.diff_after
-		);
-		assert!(
-			result.diff_after.contains("return \"forced\""),
-			"replacement body should appear, got: {}",
-			result.diff_after
-		);
-		assert!(
-			!result.diff_after.contains("return \"yes\""),
-			"old body should be replaced, got: {}",
-			result.diff_after
+			err.contains("Use the unsuffixed selector with complete replacement content"),
+			"error should tell the operator to include the complete leaf chunk, got: {err}"
 		);
 	}
 

@@ -36,6 +36,11 @@ Chunk reads normalize leading indentation so copied content round-trips cleanly 
 {{else}}
 Chunk reads preserve literal leading tabs/spaces from the file. When editing, keep the same whitespace characters you see here.
 {{/if}}
+`raw` shows the file's literal whitespace. Structured chunk views may normalize or display indentation for edit round-tripping, so use `raw` when exact tabs/spaces matter, especially inside markdown fenced code blocks.
+
+IDs change after every edit. Use the new IDs from the edit response or refresh with `sel="?"` before the next write.
+
+Parser boundaries vary by language: TypeScript/JavaScript decorators and JSDoc above decorated methods may appear as sibling `chunk#ID` entries, Python docstrings are body lines, and Python enum members or nested closures may remain opaque inside their parent chunk.
 
 Chunk trees: JS, TS, TSX, Python, Rust, Go. Others use blank-line fallback.
 # Inspection
