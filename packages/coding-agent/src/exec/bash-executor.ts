@@ -23,12 +23,12 @@ export interface BashExecutorOptions {
 	artifactPath?: string;
 	artifactId?: string;
 	/**
-		* Invoked when the native minimizer rewrote the command's output, giving
-		* the caller a chance to persist the lossless original capture (typically
-		* via the session's `ArtifactManager`). The returned id is spliced into
-		* the sink output as `artifact://<id>` so the agent can retrieve the raw
-		* bytes. Return `undefined` to skip the footer.
-		*/
+	 * Invoked when the native minimizer rewrote the command's output, giving
+	 * the caller a chance to persist the lossless original capture (typically
+	 * via the session's `ArtifactManager`). The returned id is spliced into
+	 * the sink output as `artifact://<id>` so the agent can retrieve the raw
+	 * bytes. Return `undefined` to skip the footer.
+	 */
 	onMinimizedSave?: (
 		originalText: string,
 		info: { filter: string; inputBytes: number; outputBytes: number },
@@ -245,7 +245,9 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 				outputBytes: minimized.outputBytes,
 			});
 			if (artifactId) {
-				sink.push(`\n… full output: artifact://${artifactId} (${minimized.inputBytes} → ${minimized.outputBytes} bytes)\n`);
+				sink.push(
+					`\n… full output: artifact://${artifactId} (${minimized.inputBytes} → ${minimized.outputBytes} bytes)\n`,
+				);
 			}
 		}
 
