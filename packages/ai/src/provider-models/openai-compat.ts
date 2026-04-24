@@ -275,11 +275,11 @@ const OLLAMA_DEFAULT_CONTEXT_WINDOW = 4096;
 const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 
 /**
-	* Query Ollama's `/api/show` endpoint for a single model and pull its native
-	* context length out of `model_info.<arch>.context_length`. Falls back to
-	* Ollama's default context window when the endpoint or field is unavailable
-	* so discovery still succeeds against older Ollama builds.
-	*/
+ * Query Ollama's `/api/show` endpoint for a single model and pull its native
+ * context length out of `model_info.<arch>.context_length`. Falls back to
+ * Ollama's default context window when the endpoint or field is unavailable
+ * so discovery still succeeds against older Ollama builds.
+ */
 async function fetchOllamaModelLimits(
 	nativeBaseUrl: string,
 	modelId: string,
