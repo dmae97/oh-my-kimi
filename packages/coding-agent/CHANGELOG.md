@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added full-output retrieval metadata to minimized shell command output by appending an `artifact://<id>` footer with byte counts, allowing users to open the original unminimized command output
@@ -16,6 +15,7 @@
 
 ### Fixed
 
+- Fixed shell execution output to replace raw streamed bash output with the minimizer’s rewritten text before final output while still preserving the full original output as artifact metadata
 - Fixed bash command minimization to save the full unminimized output as a `bash-original` artifact during AgentSession shell execution, enabling `artifact://` access to complete command output
 - Fixed minimized shell output for compound bash commands such as `cmd && next` and `cmd ; next`, preserving the original unminimized output through `artifact://<id>` without filtering piped command output
 - Fixed streaming chunk previews that could display an incomplete trailing edit as a deletion when partial JSON temporarily converted in-flight values to `null`

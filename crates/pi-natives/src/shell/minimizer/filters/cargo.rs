@@ -61,7 +61,7 @@ fn is_compiling_noise(line: &str) -> bool {
 
 fn failures_only(input: &str, exit_code: i32) -> String {
 	if exit_code == 0 {
-		return strip_passing_tests(input);
+		return summarize_successful_test_run(input);
 	}
 	let mut out = String::new();
 	let mut keep = false;
@@ -86,6 +86,119 @@ fn failures_only(input: &str, exit_code: i32) -> String {
 		condense_build(input)
 	} else {
 		out
+	}
+}
+
+#[derive(Default)]
+struct CargoTestTotals {
+	suites:   usize,
+	passed:   u64,
+	failed:   u64,
+	ignored:  u64,
+	measured: u64,
+	filtered: u64,
+	warnings: u64,
+	duration: Option<String>,
+}
+
+fn summarize_successful_test_run(input: &str) -> String {
+	let mut totals = CargoTestTotals::default();
+
+	for line in input.lines() {
+		let trimmed = line.trim();
+		if let Some(summary) = trimmed.strip_prefix("test result: ok.") {
+			totals.suites += 1;
+			collect_cargo_test_summary(summary, &mut totals);
+			continue;
+		}
+		if let Some(warnings) = parse_generated_warning_count(trimmed) {
+			totals.warnings += warnings;
+		}
+	}
+
+	if totals.suites == 0 {
+		return strip_passing_tests(input);
+	}
+
+	let mut out = String::from("cargo test:");
+	if totals.passed > 0 {
+		out.push(' ');
+		out.push_str(&totals.passed.to_string());
+		out.push_str(" passed");
+	} else {
+		out.push_str(" ok");
+	}
+
+	let mut details = Vec::new();
+	details.push(format_suite_count(totals.suites));
+	if totals.failed > 0 {
+		details.push(format!("{} failed", totals.failed));
+	}
+	if totals.ignored > 0 {
+		details.push(format!("{} ignored", totals.ignored));
+	}
+	if totals.measured > 0 {
+		details.push(format!("{} measured", totals.measured));
+	}
+	if totals.filtered > 0 {
+		details.push(format!("{} filtered", totals.filtered));
+	}
+	if totals.warnings > 0 {
+		details.push(format!("{} warnings", totals.warnings));
+	}
+	if let Some(duration) = totals.duration {
+		details.push(duration);
+	}
+	if !details.is_empty() {
+		out.push_str(" (");
+		out.push_str(&details.join(", "));
+		out.push(')');
+	}
+	out.push('\n');
+	out
+}
+
+fn collect_cargo_test_summary(summary: &str, totals: &mut CargoTestTotals) {
+	for part in summary.split(';') {
+		let trimmed = part.trim().trim_end_matches('.');
+		if let Some(value) = parse_count_prefix(trimmed, "passed") {
+			totals.passed += value;
+		} else if let Some(value) = parse_count_prefix(trimmed, "failed") {
+			totals.failed += value;
+		} else if let Some(value) = parse_count_prefix(trimmed, "ignored") {
+			totals.ignored += value;
+		} else if let Some(value) = parse_count_prefix(trimmed, "measured") {
+			totals.measured += value;
+		} else if let Some(value) = parse_count_prefix(trimmed, "filtered out") {
+			totals.filtered += value;
+		} else if let Some(duration) = trimmed.strip_prefix("finished in ") {
+			totals.duration = Some(duration.to_string());
+		}
+	}
+}
+
+fn parse_generated_warning_count(line: &str) -> Option<u64> {
+	if !line.contains(" generated ") || !line.ends_with(" warnings") {
+		return None;
+	}
+	let before = line.rsplit_once(" warnings")?.0;
+	let count_text = before.rsplit_once(' ')?.1;
+	count_text.parse().ok()
+}
+
+fn parse_count_prefix(text: &str, label: &str) -> Option<u64> {
+	let (count, rest) = text.split_once(' ')?;
+	if rest != label {
+		return None;
+	}
+	count.parse().ok()
+}
+
+fn format_suite_count(suites: usize) -> String {
+	if suites == 1 {
+		"1 suite".to_string()
+	} else {
+		format!("{suites} suites")
 	}
 }
 
@@ -201,6 +314,15 @@ mod tests {
 		let out =
 			strip_passing_tests("running 2 tests\ntest a ... ok\ntest b ... ok\ntest result: ok\n");
 		assert_eq!(out, "running 2 tests\ntest result: ok\n");
+	}
+
+	#[test]
+	fn summarizes_successful_cargo_test_run() {
+		let input = "warning: unused variable: `start`\nwarning: `rtk` (bin \"rtk\" test) generated \
+		             17 warnings\nrunning 262 tests\ntest a ... ok\ntest b ... ok\ntest result: ok. \
+		             262 passed; 0 failed; 0 ignored; 0 measured\n";
+		let out = summarize_successful_test_run(input);
+		assert_eq!(out, "cargo test: 262 passed (1 suite, 17 warnings)\n");
 	}
 
 	#[test]

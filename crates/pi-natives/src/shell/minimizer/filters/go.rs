@@ -123,6 +123,14 @@ fn should_keep_go_test_line(line: &str, exit_code: i32) -> bool {
 	let trimmed = line.trim();
 	let lower = trimmed.to_ascii_lowercase();
 
+	if exit_code == 0 {
+		return trimmed.starts_with("--- PASS")
+			|| trimmed.starts_with("--- SKIP")
+			|| lower.starts_with("ok\t")
+			|| lower.starts_with("ok  ")
+			|| lower.starts_with("?\t");
+	}
+
 	trimmed.starts_with("FAIL")
 		|| trimmed.starts_with("--- FAIL")
 		|| trimmed.starts_with("panic:")
@@ -137,6 +145,7 @@ fn should_keep_go_test_line(line: &str, exit_code: i32) -> bool {
 		|| lower.contains("assert")
 		|| lower.contains("killed with quit")
 		|| lower.starts_with("ok\t")
+		|| lower.starts_with("ok  ")
 		|| lower.starts_with("?\t")
 		|| exit_code != 0 && (lower.contains("timeout") || lower.contains("signal"))
 }
@@ -361,6 +370,27 @@ mod tests {
 		assert!(out.text.contains("app_test.go:42:"));
 		assert!(out.text.contains("important table diff without keywords"));
 		assert!(out.text.contains("Test killed with quit"));
+	}
+
+	#[test]
+	fn go_test_verbose_success_drops_run_and_ginkgo_success_noise() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "go",
+			subcommand: Some("test"),
+			command:    "go test ./... -v",
+			config:     &cfg,
+		};
+		let input = "=== RUN   TestControllers\nRunning Suite: Controller Suite\nSUCCESS! -- 1 \
+		             Passed | 0 Failed | 0 Pending\n--- PASS: TestControllers (6.04s)\nPASS\nok  \
+		             kubecraft.ai/.../controller  6.610s\n=== RUN   TestNewClient\n--- PASS: \
+		             TestNewClient (0.00s)\nPASS\nok  kubecraft.ai/.../llm  0.776s\n";
+		let out = filter(&ctx, input, 0);
+		assert!(out.text.contains("--- PASS: TestControllers (6.04s)"));
+		assert!(out.text.contains("ok  kubecraft.ai/.../controller  6.610s"));
+		assert!(out.text.contains("--- PASS: TestNewClient (0.00s)"));
+		assert!(!out.text.contains("=== RUN"));
+		assert!(!out.text.contains("SUCCESS!"));
 	}
 
 	#[test]

@@ -1,6 +1,6 @@
 //! Git output filters.
 
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::BTreeMap;
 
 use crate::shell::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
@@ -37,7 +37,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, _exit_code: i32) -> Minimizer
 	let cleaned = primitives::strip_ansi(input);
 	let text = match ctx.subcommand {
 		Some("status") => condense_status(&cleaned),
-		Some("diff") => cleaned,
+		Some("diff") => condense_diff(&cleaned),
 		Some("show") => primitives::head_tail_lines(&cleaned, 80, 40),
 		Some("log") => condense_log(&cleaned, 32, 16),
 		Some("branch" | "stash" | "tag") => primitives::compact_listing(&cleaned, 40),
@@ -53,17 +53,6 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, _exit_code: i32) -> Minimizer
 	} else {
 		MinimizerOutput::transformed(text, input.len())
 	}
-}
-
-#[derive(Default)]
-struct StatusTreeNode {
-	children: BTreeMap<String, Self>,
-	leaves:   Vec<StatusLeaf>,
-}
-
-struct StatusLeaf {
-	status: String,
-	name:   String,
 }
 
 struct StatusEntry {
@@ -125,24 +114,42 @@ fn condense_status(input: &str) -> String {
 	}
 
 	let mut counts = StatusCounts::default();
-	let mut tree = StatusTreeNode::default();
 	for entry in &entries {
 		count_status(&entry.status, &mut counts);
-		insert_status_path(&mut tree, &entry.status, &entry.path);
 	}
 
-	let mut out = String::from("git status summary");
+	let mut groups: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+	for entry in &entries {
+		groups
+			.entry(status_group_label(&entry.status))
+			.or_default()
+			.push(&entry.path);
+	}
+
+	let mut out = String::from("git status");
 	if let Some(branch) = branch {
-		out.push_str(" on ");
+		out.push_str(": ");
 		out.push_str(branch);
 	}
 	out.push('\n');
 	push_count(&mut out, "staged", counts.staged);
-	push_count(&mut out, "unstaged", counts.unstaged);
+	push_count(&mut out, "modified", counts.unstaged);
 	push_count(&mut out, "untracked", counts.untracked);
 	push_count(&mut out, "conflicts", counts.conflicts);
-	out.push_str("paths:\n");
-	render_status_tree(&tree, &mut out, 0);
+	for (label, paths) in groups {
+		out.push_str(label);
+		out.push_str(":\n");
+		for path in paths.iter().take(24) {
+			out.push_str("  ");
+			out.push_str(path);
+			out.push('\n');
+		}
+		if paths.len() > 24 {
+			out.push_str("  … ");
+			out.push_str(&(paths.len() - 24).to_string());
+			out.push_str(" more\n");
+		}
+	}
 	out
 }
 
@@ -208,49 +215,21 @@ fn count_status(status: &str, counts: &mut StatusCounts) {
 	}
 }
 
-fn insert_status_path(root: &mut StatusTreeNode, status: &str, path: &str) {
-	let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
-	insert_status_parts(root, status, &parts);
-}
-
-fn insert_status_parts(node: &mut StatusTreeNode, status: &str, parts: &[&str]) {
-	if parts.is_empty() {
-		return;
+fn status_group_label(status: &str) -> &'static str {
+	if status == "??" {
+		return "Untracked";
 	}
-	if parts.len() == 1 {
-		node
-			.leaves
-			.push(StatusLeaf { status: status.to_string(), name: parts[0].to_string() });
-		return;
+	if status.contains('U') {
+		return "Conflicts";
 	}
-	let child = match node.children.entry(parts[0].to_string()) {
-		Entry::Occupied(entry) => entry.into_mut(),
-		Entry::Vacant(entry) => entry.insert(StatusTreeNode::default()),
-	};
-	insert_status_parts(child, status, &parts[1..]);
-}
-
-fn render_status_tree(node: &StatusTreeNode, out: &mut String, depth: usize) {
-	for (name, child) in &node.children {
-		push_status_indent(out, depth);
-		out.push_str(name);
-		out.push_str("/\n");
-		render_status_tree(child, out, depth + 1);
+	let mut chars = status.chars();
+	if matches!(chars.next(), Some('M' | 'A' | 'D' | 'R' | 'C')) {
+		return "Staged";
 	}
-	for leaf in &node.leaves {
-		push_status_indent(out, depth);
-		out.push('[');
-		out.push_str(&leaf.status);
-		out.push_str("] ");
-		out.push_str(&leaf.name);
-		out.push('\n');
+	if matches!(chars.next(), Some('M' | 'D')) {
+		return "Modified";
 	}
-}
-
-fn push_status_indent(out: &mut String, depth: usize) {
-	for _ in 0..depth {
-		out.push_str("  ");
-	}
+	"Changed"
 }
 
 fn push_count(out: &mut String, label: &str, count: usize) {
@@ -299,6 +278,27 @@ fn has_token(command: &str, token: &str) -> bool {
 }
 
 fn condense_log(input: &str, head: usize, tail: usize) -> String {
+	let entries = parse_log_entries(input);
+	if !entries.is_empty() {
+		let mut out = String::new();
+		if entries.len() <= head + tail {
+			for entry in &entries {
+				push_log_entry(&mut out, entry);
+			}
+		} else {
+			for entry in entries.iter().take(head) {
+				push_log_entry(&mut out, entry);
+			}
+			out.push_str("… ");
+			out.push_str(&(entries.len() - head - tail).to_string());
+			out.push_str(" commits omitted …\n");
+			for entry in entries.iter().skip(entries.len() - tail) {
+				push_log_entry(&mut out, entry);
+			}
+		}
+		return out;
+	}
+
 	let mut out = String::new();
 	for line in input.lines() {
 		if let Some(commit) = line.strip_prefix("commit ") {
@@ -317,6 +317,240 @@ fn condense_log(input: &str, head: usize, tail: usize) -> String {
 		}
 	}
 	primitives::head_tail_lines(&out, head, tail)
+}
+
+struct LogEntry {
+	hash:    String,
+	subject: String,
+}
+
+fn push_log_entry(out: &mut String, entry: &LogEntry) {
+	out.push_str(&entry.hash);
+	if !entry.subject.is_empty() {
+		out.push(' ');
+		out.push_str(&entry.subject);
+	}
+	out.push('\n');
+}
+
+fn parse_log_entries(input: &str) -> Vec<LogEntry> {
+	let mut entries = Vec::new();
+	let mut current: Option<LogEntry> = None;
+
+	for line in input.lines() {
+		if let Some(rest) = line.strip_prefix("commit ") {
+			if let Some(entry) = current.take() {
+				entries.push(entry);
+			}
+			let trimmed = rest.trim();
+			let (hash, subject) = trimmed
+				.split_once(' ')
+				.map_or((trimmed, ""), |(hash, subject)| (hash, subject.trim()));
+			current = Some(LogEntry { hash: short_hash(hash), subject: subject.to_string() });
+			continue;
+		}
+
+		let Some(entry) = current.as_mut() else {
+			continue;
+		};
+		if !entry.subject.is_empty() {
+			continue;
+		}
+		let trimmed = line.trim();
+		if trimmed.is_empty()
+			|| trimmed.starts_with("Author:")
+			|| trimmed.starts_with("Date:")
+			|| trimmed.starts_with("Merge:")
+			|| trimmed.contains('|')
+			|| trimmed.contains("files changed")
+			|| trimmed.contains("file changed")
+		{
+			continue;
+		}
+		entry.subject = trimmed.to_string();
+	}
+
+	if let Some(entry) = current {
+		entries.push(entry);
+	}
+	entries
+}
+
+fn short_hash(hash: &str) -> String {
+	hash.chars().take(7).collect()
+}
+
+struct DiffFile {
+	path:    String,
+	added:   usize,
+	removed: usize,
+	hunks:   Vec<DiffHunk>,
+}
+
+struct DiffHunk {
+	header: String,
+	lines:  Vec<String>,
+}
+
+fn condense_diff(input: &str) -> String {
+	let files = parse_unified_diff(input);
+	if files.is_empty() {
+		return input.to_string();
+	}
+
+	let total_added: usize = files.iter().map(|file| file.added).sum();
+	let total_removed: usize = files.iter().map(|file| file.removed).sum();
+	if total_added == 0 && total_removed == 0 {
+		return input.to_string();
+	}
+
+	let mut out = String::new();
+	for file in files.iter().take(20) {
+		let changed = file.added + file.removed;
+		out.push_str(&file.path);
+		out.push_str(" | ");
+		out.push_str(&changed.to_string());
+		out.push(' ');
+		out.push_str(&diff_bar(file.added, file.removed));
+		out.push('\n');
+	}
+	if files.len() > 20 {
+		out.push_str("… ");
+		out.push_str(&(files.len() - 20).to_string());
+		out.push_str(" files omitted from stat\n");
+	}
+	out.push_str(&format_file_count(files.len()));
+	out.push_str(" changed, ");
+	out.push_str(&total_added.to_string());
+	out.push_str(" insertions(+), ");
+	out.push_str(&total_removed.to_string());
+	out.push_str(" deletions(-)\n\n--- Changes ---\n");
+
+	for file in files.iter().take(12) {
+		out.push('\n');
+		out.push_str("File: ");
+		out.push_str(&file.path);
+		out.push('\n');
+		for hunk in file.hunks.iter().take(8) {
+			out.push_str("  ");
+			out.push_str(&hunk.header);
+			out.push('\n');
+			for line in hunk.lines.iter().take(6) {
+				out.push_str("  ");
+				out.push_str(line);
+				out.push('\n');
+			}
+			if hunk.lines.len() > 6 {
+				out.push_str("  … ");
+				out.push_str(&(hunk.lines.len() - 6).to_string());
+				out.push_str(" changed lines omitted\n");
+			}
+		}
+		if file.hunks.len() > 8 {
+			out.push_str("  … ");
+			out.push_str(&(file.hunks.len() - 8).to_string());
+			out.push_str(" hunks omitted\n");
+		}
+	}
+	if files.len() > 12 {
+		out.push_str("\n… ");
+		out.push_str(&(files.len() - 12).to_string());
+		out.push_str(" files omitted from changes\n");
+	}
+	out
+}
+
+fn parse_unified_diff(input: &str) -> Vec<DiffFile> {
+	let mut files = Vec::new();
+	let mut current: Option<DiffFile> = None;
+	let mut current_hunk: Option<DiffHunk> = None;
+
+	for line in input.lines() {
+		if let Some(path) = parse_diff_git_path(line) {
+			flush_hunk(&mut current, &mut current_hunk);
+			if let Some(file) = current.take() {
+				files.push(file);
+			}
+			current = Some(DiffFile { path, added: 0, removed: 0, hunks: Vec::new() });
+			continue;
+		}
+		if let Some(path) = line.strip_prefix("+++ b/") {
+			if let Some(file) = current.as_mut() {
+				file.path = path.to_string();
+			}
+			continue;
+		}
+		if line.starts_with("@@") {
+			flush_hunk(&mut current, &mut current_hunk);
+			current_hunk = Some(DiffHunk { header: line.to_string(), lines: Vec::new() });
+			continue;
+		}
+		if line.starts_with("+++") || line.starts_with("---") {
+			continue;
+		}
+		let Some(file) = current.as_mut() else {
+			continue;
+		};
+		if line.starts_with('+') {
+			file.added += 1;
+			push_diff_line(&mut current_hunk, line);
+		} else if line.starts_with('-') {
+			file.removed += 1;
+			push_diff_line(&mut current_hunk, line);
+		}
+	}
+
+	flush_hunk(&mut current, &mut current_hunk);
+	if let Some(file) = current {
+		files.push(file);
+	}
+	files
+		.into_iter()
+		.filter(|file| file.added > 0 || file.removed > 0)
+		.collect()
+}
+
+fn parse_diff_git_path(line: &str) -> Option<String> {
+	let rest = line.strip_prefix("diff --git ")?;
+	let mut parts = rest.split_whitespace();
+	let _old = parts.next()?;
+	let new = parts.next()?;
+	Some(new.strip_prefix("b/").map_or(new, |path| path).to_string())
+}
+
+fn flush_hunk(file: &mut Option<DiffFile>, hunk: &mut Option<DiffHunk>) {
+	let Some(hunk) = hunk.take() else {
+		return;
+	};
+	if let Some(file) = file.as_mut() {
+		file.hunks.push(hunk);
+	}
+}
+
+fn push_diff_line(hunk: &mut Option<DiffHunk>, line: &str) {
+	let Some(hunk) = hunk.as_mut() else {
+		return;
+	};
+	hunk.lines.push(primitives::truncate_line(line, 160));
+}
+
+fn diff_bar(added: usize, removed: usize) -> String {
+	let total = added + removed;
+	if total == 0 {
+		return String::new();
+	}
+	let width = total.clamp(1, 24);
+	let plus = (added * width).div_ceil(total);
+	let minus = width.saturating_sub(plus);
+	format!("{}{}", "+".repeat(plus), "-".repeat(minus))
+}
+
+fn format_file_count(files: usize) -> String {
+	if files == 1 {
+		"1 file".to_string()
+	} else {
+		format!("{files} files")
+	}
 }
 
 fn condense_noisy_output(input: &str) -> String {
@@ -338,7 +572,7 @@ mod tests {
 	}
 
 	#[test]
-	fn status_compacts_paths_into_tree() {
+	fn status_compacts_paths_into_groups() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("status"), "git status --short", &cfg);
 		let input = "## main\n M packages/agent/lib/agent.ts\n M \
@@ -346,16 +580,21 @@ mod tests {
 		             crates/pi-natives/src/shell/minimizer/filters/git.rs\n";
 		let out = filter(&ctx, input, 0);
 		assert!(out.changed);
-		assert!(out.text.contains("git status summary on main"));
-		assert!(out.text.contains("unstaged: 2"));
+		assert!(out.text.contains("git status: main"));
+		assert!(out.text.contains("modified: 2"));
 		assert!(out.text.contains("untracked: 1"));
-		assert!(out.text.contains("packages/\n  agent/\n"));
-		assert!(out.text.contains("    lib/\n      [ M] agent.ts\n"));
 		assert!(
 			out.text
-				.contains("    tests/\n      [ M] session-restore.test.ts\n")
+				.contains("Modified:\n  packages/agent/lib/agent.ts")
 		);
-		assert!(out.text.contains("crates/\n  pi-natives/\n"));
+		assert!(
+			out.text
+				.contains("  packages/agent/tests/session-restore.test.ts")
+		);
+		assert!(
+			out.text
+				.contains("Untracked:\n  crates/pi-natives/src/shell/minimizer/filters/git.rs")
+		);
 	}
 
 	#[test]
@@ -419,7 +658,7 @@ mod tests {
 	}
 
 	#[test]
-	fn log_is_head_tail_truncated_after_metadata_removal() {
+	fn log_is_compacted_to_short_hashes_and_subjects() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("log"), "git log", &cfg);
 		let mut input = String::new();
@@ -433,10 +672,52 @@ mod tests {
 			input.push('\n');
 		}
 		let out = filter(&ctx, &input, 0);
-		assert!(out.text.contains("… "));
-		assert!(out.text.contains("message 0"));
-		assert!(out.text.contains("message 69"));
+		assert!(out.text.contains("… 22 commits omitted …"));
+		assert!(out.text.contains("abcdef1 message 0"));
+		assert!(!out.text.contains("message 47"));
+		assert!(out.text.contains("abcdef1 message 69"));
 		assert!(!out.text.contains("Author:"));
 		assert!(!out.text.contains("Date:"));
+	}
+
+	#[test]
+	fn log_supports_subject_on_commit_line() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("log"), "git log --stat -10", &cfg);
+		let input = "commit c84fa3c fix: add website URL (rtk-ai.app)\nAuthor: Somebody\nDate: \
+		             today\n\n README.md | 8 ++++++++\n 1 file changed, 8 insertions(+)\n";
+		let out = filter(&ctx, input, 0);
+		assert_eq!(out.text, "c84fa3c fix: add website URL (rtk-ai.app)\n");
+	}
+
+	#[test]
+	fn diff_condenses_unified_patch_to_stat_and_hunk_samples() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("diff"), "git diff HEAD~1", &cfg);
+		let input = "diff --git a/index.html b/index.html\nindex 1b7488b..0ebac4f 100644\n--- \
+		             a/index.html\n+++ b/index.html\n@@ -629,7 +629,7 @@\n       width: 100%;\n-      \
+		             min-width: 800px;\n+      min-width: 1050px;\n@@ -1051,6 +1051,4 @@\n+    /* \
+		             === Share My Gain === */\n+    .share-gain { background: var(--bg); \
+		             }\n-old\n+new\n";
+		let out = filter(&ctx, input, 0);
+		assert!(out.changed);
+		assert!(out.text.contains("index.html | 6 "), "{}", out.text);
+		assert!(
+			out.text
+				.contains("1 file changed, 4 insertions(+), 2 deletions(-)")
+		);
+		assert!(out.text.contains("--- Changes ---"));
+		assert!(out.text.contains("@@ -629,7 +629,7 @@"));
+		assert!(out.text.contains("-      min-width: 800px;"));
+		assert!(out.text.contains("+      min-width: 1050px;"));
+	}
+
+	#[test]
+	fn legacy_log_fallback_removes_metadata_when_no_commit_records_parse() {
+		let input = "commitish output\nAuthor: Somebody <s@example.com>\nDate: today\nmessage 0\n";
+		let out = condense_log(input, 32, 16);
+		assert!(out.contains("message 0"));
+		assert!(!out.contains("Author:"));
+		assert!(!out.contains("Date:"));
 	}
 }

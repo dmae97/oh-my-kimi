@@ -130,13 +130,18 @@ pub struct ShellRunOptions<'env> {
 ///
 /// Surfaced when the minimizer actually rewrote the command's output. The
 /// session layer is expected to persist `original_text` via its
-/// `ArtifactManager` and splice the resulting `artifact://<id>` reference
-/// into whatever is shown to the agent.
+/// `ArtifactManager`, splice the resulting `artifact://<id>` reference
+/// into `text`, and replace any previously streamed raw output with the
+/// minimized text.
 #[napi(object)]
 pub struct MinimizerResult {
 	/// Dispatch label produced by the minimizer (e.g. `"git"`,
 	/// `"pipeline:gradle"`, `"pipeline+builtin"`).
 	pub filter:        String,
+	/// The minimized replacement text. Callers that streamed raw chunks
+	/// during execution should clear and replace their accumulated output
+	/// with this text.
+	pub text:          String,
 	/// The full original capture, before minimization.
 	pub original_text: String,
 	/// Captured byte length before minimization.
@@ -669,18 +674,24 @@ async fn run_shell_command(
 
 	let reader_cancel = CancellationToken::new();
 	let (activity_tx, mut activity_rx) = mpsc::channel::<()>(1);
-	let (reader_callback, final_callback) = if should_minimize {
-		(None, on_chunk)
-	} else {
-		(on_chunk, None)
-	};
+	// Stream every raw chunk to the caller live, regardless of whether
+	// minimization is enabled. When minimization actually transforms the
+	// output, we propagate the replacement text via `MinimizerResult.text`
+	// so the caller can swap their accumulated buffer for the minimized
+	// version without losing intermediate progress updates.
+	let reader_callback = on_chunk;
 	let mut reader_handle = tokio::spawn({
 		let reader_cancel = reader_cancel.clone();
 		async move {
 			if should_minimize {
-				let output =
-					read_output_buffered(reader_file, reader_cancel, activity_tx, max_capture_bytes)
-						.await;
+				let output = read_output_buffered(
+					reader_file,
+					reader_callback,
+					reader_cancel,
+					activity_tx,
+					max_capture_bytes,
+				)
+				.await;
 				Result::<OutputRead>::Ok(OutputRead::Buffered(output))
 			} else {
 				Box::pin(read_output(reader_file, reader_callback, reader_cancel, activity_tx)).await;
@@ -770,12 +781,22 @@ async fn run_shell_command(
 		&& let Some(config) = options.minimizer.as_ref()
 	{
 		if output.exceeded {
-			let text = if let Some(marker_state) = marker_state.as_ref() {
-				minimizer::engine::strip_markers(&output.text, marker_state)
-			} else {
-				output.text
-			};
-			emit_chunk(&text, final_callback.as_ref());
+			// Exceeded captures still flow through the raw stream already. Only
+			// surface a replacement when we actually need to strip markers.
+			if let Some(marker_state) = marker_state.as_ref() {
+				let stripped = minimizer::engine::strip_markers(&output.text, marker_state);
+				if stripped != output.text {
+					let input_bytes = u32::try_from(output.text.len()).unwrap_or(u32::MAX);
+					let output_bytes = u32::try_from(stripped.len()).unwrap_or(u32::MAX);
+					minimized_out = Some(MinimizerResult {
+						filter: "marker-strip".to_string(),
+						text: stripped,
+						original_text: output.text,
+						input_bytes,
+						output_bytes,
+					});
+				}
+			}
 		} else {
 			let minimized = match (minimizer_mode, marker_state.as_ref()) {
 				(minimizer::engine::MinimizerMode::WholeCommand, _) => {
@@ -786,15 +807,16 @@ async fn run_shell_command(
 				},
 				_ => minimizer::MinimizerOutput::passthrough(&output.text),
 			};
-			emit_chunk(&minimized.text, final_callback.as_ref());
 			if minimized.changed
 				&& let Some(original) = minimized.original_text
 			{
+				let output_bytes = u32::try_from(minimized.text.len()).unwrap_or(u32::MAX);
 				minimized_out = Some(MinimizerResult {
-					filter:        minimized.filter.to_string(),
+					filter: minimized.filter.to_string(),
+					text: minimized.text,
 					original_text: original,
-					input_bytes:   u32::try_from(minimized.input_bytes).unwrap_or(u32::MAX),
-					output_bytes:  u32::try_from(minimized.text.len()).unwrap_or(u32::MAX),
+					input_bytes: u32::try_from(minimized.input_bytes).unwrap_or(u32::MAX),
+					output_bytes,
 				});
 			}
 		}
@@ -1060,14 +1082,20 @@ async fn read_output(
 
 async fn read_output_buffered(
 	reader: fs::File,
+	on_chunk: Option<ThreadsafeFunction<String>>,
 	cancel_token: CancellationToken,
 	activity: mpsc::Sender<()>,
 	max_capture_bytes: usize,
 ) -> BufferedOutput {
+	const REPLACEMENT: &str = "\u{FFFD}";
 	const BUF: usize = 65536;
 	let mut buf = vec![0u8; BUF];
 	let mut captured = Vec::new();
 	let mut exceeded = false;
+	// Pending bytes from a prior read that ended mid-UTF-8 sequence. We hold
+	// them back so we emit only valid UTF-8 to the streaming callback while
+	// still capturing every byte into `captured` for post-processing.
+	let mut pending = Vec::<u8>::new();
 
 	#[cfg(unix)]
 	let Ok(reader) = register_nonblocking_pipe(reader) else {
@@ -1116,6 +1144,50 @@ async fn read_output_buffered(
 			exceeded = true;
 		}
 		captured.extend_from_slice(&buf[..n]);
+
+		// Stream whatever is validly decodable *right now* to the callback,
+		// carrying incomplete trailing UTF-8 bytes over to the next iteration.
+		if let Some(cb) = on_chunk.as_ref() {
+			pending.extend_from_slice(&buf[..n]);
+			while !pending.is_empty() {
+				match str::from_utf8(&pending) {
+					Ok(text) => {
+						emit_chunk(text, Some(cb));
+						pending.clear();
+						break;
+					},
+					Err(err) => {
+						let p = err.valid_up_to();
+						if p > 0 {
+							// SAFETY: [..p] is valid UTF-8 per valid_up_to().
+							let text = unsafe { str::from_utf8_unchecked(&pending[..p]) };
+							emit_chunk(text, Some(cb));
+							pending.drain(..p);
+						}
+						match err.error_len() {
+							Some(skip) => {
+								emit_chunk(REPLACEMENT, Some(cb));
+								pending.drain(..skip);
+							},
+							None => break,
+						}
+					},
+				}
+			}
+		}
+	}
+
+	// Flush any trailing bytes the streaming decoder held back at EOF.
+	if let Some(cb) = on_chunk.as_ref() {
+		for chunk in pending.utf8_chunks() {
+			let valid = chunk.valid();
+			if !valid.is_empty() {
+				emit_chunk(valid, Some(cb));
+			}
+			if !chunk.invalid().is_empty() {
+				emit_chunk(REPLACEMENT, Some(cb));
+			}
+		}
 	}
 
 	BufferedOutput { text: String::from_utf8_lossy(&captured).into_owned(), exceeded }

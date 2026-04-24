@@ -414,7 +414,7 @@ mod tests {
 		assert!(should_minimize("git status", &cfg));
 		let out = apply("git status", "## main\n M file.rs\n", 0, &cfg);
 		assert!(out.changed);
-		assert!(out.text.contains("unstaged: 1"));
+		assert!(out.text.contains("modified: 1"));
 	}
 
 	#[test]
@@ -458,7 +458,7 @@ mod tests {
 		assert_eq!(out.filter, "compound");
 		assert_eq!(out.original_text.as_deref(), Some("before\n## main\n M file.rs\nafter\n"));
 		assert!(out.text.contains("before\n"));
-		assert!(out.text.contains("unstaged: 1"));
+		assert!(out.text.contains("modified: 1"));
 		assert!(out.text.contains("after\n"));
 	}
 

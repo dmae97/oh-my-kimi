@@ -680,6 +680,17 @@ export class OutputSink {
 		});
 	}
 
+	/**
+	 * Replace the in-memory buffer with the given text while preserving the
+	 * streaming counters (totalLines/totalBytes reflect the raw chunks that
+	 * already reached the sink). Used when an upstream minimizer rewrites the
+	 * captured output after the raw bytes have already been streamed.
+	 */
+	replace(text: string): void {
+		this.#buffer = text;
+		this.#bufferBytes = Buffer.byteLength(text, "utf-8");
+	}
+
 	async dump(notice?: string): Promise<OutputSummary> {
 		const noticeLine = notice ? `[${notice}]\n` : "";
 		const outputLines = this.#buffer.length > 0 ? countNewlines(this.#buffer) + 1 : 0;

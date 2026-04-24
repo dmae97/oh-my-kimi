@@ -242,8 +242,8 @@ mod tests {
 		let out = filter(&ctx, "## main\n M a.rs\n?? b.rs\n", 0);
 
 		assert!(out.changed);
-		assert!(out.text.contains("git status summary on main"));
-		assert!(out.text.contains("unstaged: 1"));
+		assert!(out.text.contains("git status: main"));
+		assert!(out.text.contains("modified: 1"));
 		assert!(out.text.contains("untracked: 1"));
 	}
 

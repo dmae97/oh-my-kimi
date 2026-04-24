@@ -171,6 +171,7 @@ fn is_pytest_section_delimiter(trimmed: &str) -> bool {
 
 fn is_pytest_pass_noise(trimmed: &str) -> bool {
 	trimmed.is_empty()
+		|| trimmed.contains("test session starts")
 		|| trimmed.starts_with("collecting ")
 		|| trimmed.starts_with("collected ")
 		|| trimmed.starts_with("rootdir:")
@@ -178,9 +179,18 @@ fn is_pytest_pass_noise(trimmed: &str) -> bool {
 		|| trimmed.starts_with("plugins:")
 		|| trimmed.starts_with("platform ")
 		|| trimmed.starts_with("cachedir:")
+		|| is_pytest_verbose_pass_line(trimmed)
 		|| trimmed
 			.chars()
 			.all(|ch| matches!(ch, '.' | 's' | 'S' | 'x' | 'X' | 'f' | 'F' | 'E'))
+}
+
+fn is_pytest_verbose_pass_line(trimmed: &str) -> bool {
+	if !trimmed.contains("::") {
+		return false;
+	}
+	let mut parts = trimmed.split_whitespace();
+	parts.any(|part| matches!(part, "PASSED" | "SKIPPED" | "XPASS" | "XFAIL"))
 }
 
 fn is_ruff_format(ctx: &MinimizerCtx<'_>) -> bool {
@@ -289,6 +299,17 @@ mod tests {
 
 		assert!(!out.contains("................................................................"));
 		assert!(out.contains("5 failed, 1698 passed, 2 skipped in 108.89s"));
+	}
+
+	#[test]
+	fn pytest_verbose_success_collapses_to_summary() {
+		let input = "===== test session starts ======\nplatform darwin -- Python 3.14.3, \
+		             pytest-9.0.2\ncachedir: .pytest_cache\nrootdir: /app\nplugins: \
+		             anyio-4.12.1\ncollected 33 items\n\ntest_utils.py::TestStringUtils::test_strip \
+		             PASSED    [  3%]\ntest_utils.py::TestListOps::test_flatten PASSED      \
+		             [100%]\n\n====== 33 passed in 0.05s ======\n";
+		let out = filter_pytest(input, 0);
+		assert_eq!(out, "====== 33 passed in 0.05s ======\n");
 	}
 
 	#[test]

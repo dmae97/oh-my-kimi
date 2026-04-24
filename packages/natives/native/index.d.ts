@@ -1037,11 +1037,13 @@ export interface MinimizerOptions {
 }
 
 /**
- * Telemetry for a single minimization, surfaced when the minimizer
- * actually rewrote the command's output. The session layer is expected to
- * persist `original_text` via its `ArtifactManager` and splice the
- * resulting `artifact://<id>` reference into whatever is shown to the
- * agent.
+ * Telemetry for a single minimization.
+ *
+ * Surfaced when the minimizer actually rewrote the command's output. The
+ * session layer is expected to persist `original_text` via its
+ * `ArtifactManager`, splice the resulting `artifact://<id>` reference
+ * into `text`, and replace any previously streamed raw output with the
+ * minimized text.
  */
 export interface MinimizerResult {
   /**
@@ -1049,6 +1051,12 @@ export interface MinimizerResult {
    * `"pipeline:gradle"`, `"pipeline+builtin"`).
    */
   filter: string
+  /**
+   * The minimized replacement text. Callers that streamed raw chunks
+   * during execution should clear and replace their accumulated output
+   * with this text.
+   */
+  text: string
   /** The full original capture, before minimization. */
   originalText: string
   /** Captured byte length before minimization. */
