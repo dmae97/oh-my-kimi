@@ -559,6 +559,22 @@ describe("chunk mode tools", () => {
 		expect(updatedSource).not.toContain("function main(): void");
 	});
 
+	it("treats a bare {path} edit as delete (null-stripped payload)", async () => {
+		const filePath = path.join(tmpDir, "server.ts");
+		const originalSource = buildLargeTypescriptFixture();
+		await Bun.write(filePath, originalSource);
+		const session = createSession(tmpDir);
+		const editTool = new EditTool(session);
+		const checksum = getChunkChecksum(originalSource, "typescript", "fn_main");
+
+		await editTool.execute("chunk-edit-bare-path-delete", {
+			edits: [{ path: `${filePath}:fn_main#${checksum}` }],
+		});
+
+		const updatedSource = await Bun.file(filePath).text();
+		expect(updatedSource).not.toContain("function main(): void");
+	});
+
 	it("returns structured status for missing chunk reads", async () => {
 		const filePath = path.join(tmpDir, "server.ts");
 		await Bun.write(filePath, buildLargeTypescriptFixture());
