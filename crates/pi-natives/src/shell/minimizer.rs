@@ -36,17 +36,17 @@ pub struct MinimizerCtx<'a> {
 #[derive(Debug, Clone)]
 pub struct MinimizerOutput {
 	/// Rewritten output.
-	pub text:         String,
+	pub text:          String,
 	/// Whether the filter modified the input at all.
-	pub changed:      bool,
+	pub changed:       bool,
 	/// Byte length of the captured buffer before minimization.
-	pub input_bytes:  usize,
+	pub input_bytes:   usize,
 	/// Byte length of `text` after minimization.
 	#[allow(dead_code, reason = "test-only API surface")]
-	pub output_bytes: usize,
+	pub output_bytes:  usize,
 	/// Name of the dispatch path that produced this output (e.g. `"git"`,
 	/// `"pipeline:gradle"`, or `"passthrough"`). Useful for telemetry.
-	pub filter:       &'static str,
+	pub filter:        &'static str,
 	/// Original (un-minimized) capture, surfaced only when the filter
 	/// actually rewrote the output. The caller (JS session layer) is expected
 	/// to persist this via its session-scoped `ArtifactManager` and splice an
@@ -73,16 +73,9 @@ impl MinimizerOutput {
 
 	/// Transformed output. Caller-supplied `input_bytes` lets the savings
 	/// metric compare pre- and post-filter sizes.
-	pub fn transformed(text: String, input_bytes: usize) -> Self {
+	pub const fn transformed(text: String, input_bytes: usize) -> Self {
 		let output_bytes = text.len();
-		Self {
-			text,
-			changed: true,
-			input_bytes,
-			output_bytes,
-			filter: "",
-			original_text: None,
-		}
+		Self { text, changed: true, input_bytes, output_bytes, filter: "", original_text: None }
 	}
 
 	/// Attach a `filter` label (e.g. `"git"`, `"pipeline:gradle"`) to an
@@ -123,4 +116,3 @@ pub fn apply(
 ) -> MinimizerOutput {
 	engine::apply(command, captured, exit_code, config)
 }
-

@@ -8,14 +8,14 @@
 //! ## Decisions encoded here
 //!
 //! - **Pipes are opaque.** Any `foo | bar` pipeline is marked as `Piped`
-//!   regardless of what `bar` is. A user piping through `awk`, `jq`, `rg`,
-//!   or any other consumer is almost certainly parsing the output; rewriting
-//!   it would be a correctness bug. The engine falls back to passthrough.
-//! - **Compound commands are opaque.** `a && b`, `a ; b`, `a || b`, and
-//!   `a & b` produce interleaved output and two distinct filter regimes;
-//!   we don't attempt to slice the capture buffer by segment, so we bail.
-//! - **Single simple commands** are the only shape where minimization is
-//!   safe; the engine dispatches them through `detect.rs` as before.
+//!   regardless of what `bar` is. A user piping through `awk`, `jq`, `rg`, or
+//!   any other consumer is almost certainly parsing the output; rewriting it
+//!   would be a correctness bug. The engine falls back to passthrough.
+//! - **Compound commands are opaque.** `a && b`, `a ; b`, `a || b`, and `a & b`
+//!   produce interleaved output and two distinct filter regimes; we don't
+//!   attempt to slice the capture buffer by segment, so we bail.
+//! - **Single simple commands** are the only shape where minimization is safe;
+//!   the engine dispatches them through `detect.rs` as before.
 //!
 //! When the command fails to parse (syntax error, unsupported construct),
 //! we return `Unsupported` and the engine passes through.
@@ -54,9 +54,8 @@ pub fn analyze(command: &str) -> CommandPlan {
 	let reader = std::io::Cursor::new(command.as_bytes().to_vec());
 	let mut parser = brush_parser::Parser::new(reader, &options, &source);
 
-	let program = match parser.parse_program() {
-		Ok(p) => p,
-		Err(_) => return CommandPlan::Unsupported,
+	let Ok(program) = parser.parse_program() else {
+		return CommandPlan::Unsupported;
 	};
 
 	classify(&program)
@@ -114,13 +113,13 @@ fn classify_pipeline(pipeline: &Pipeline) -> Option<CommandPlan> {
 		},
 		// Compound shell syntax (if / for / while / subshell / { ... }) is
 		// not something the minimizer should touch.
-		Command::Compound(_, _) | Command::Function(_) | Command::ExtendedTest(_) => {
+		Command::Compound(..) | Command::Function(_) | Command::ExtendedTest(_) => {
 			Some(CommandPlan::Compound)
 		},
 	}
 }
 
-fn classify_andorlist(_and_or: &AndOrList) -> CommandPlan {
+const fn classify_andorlist(_and_or: &AndOrList) -> CommandPlan {
 	CommandPlan::Unsupported
 }
 

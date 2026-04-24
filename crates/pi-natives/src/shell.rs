@@ -126,11 +126,12 @@ pub struct ShellRunOptions<'env> {
 	pub signal:     Option<Unknown<'env>>,
 }
 
-/// Telemetry for a single minimization, surfaced when the minimizer
-/// actually rewrote the command's output. The session layer is expected to
-/// persist `original_text` via its `ArtifactManager` and splice the
-/// resulting `artifact://<id>` reference into whatever is shown to the
-/// agent.
+/// Telemetry for a single minimization.
+///
+/// Surfaced when the minimizer actually rewrote the command's output. The
+/// session layer is expected to persist `original_text` via its
+/// `ArtifactManager` and splice the resulting `artifact://<id>` reference
+/// into whatever is shown to the agent.
 #[napi(object)]
 pub struct MinimizerResult {
 	/// Dispatch label produced by the minimizer (e.g. `"git"`,

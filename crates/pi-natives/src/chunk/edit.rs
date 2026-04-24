@@ -58,7 +58,7 @@ struct ResolvedEditTarget {
 const NORMALIZED_TAB_REPLACEMENT: &str = "    ";
 const PRESERVED_TAB_REPLACEMENT: &str = "\t";
 
-fn operation_requires_checksum(op: ChunkEditOp) -> bool {
+const fn operation_requires_checksum(op: ChunkEditOp) -> bool {
 	matches!(op, ChunkEditOp::Put | ChunkEditOp::Replace | ChunkEditOp::Delete)
 }
 
@@ -90,12 +90,13 @@ fn resolve_initial_edit_chunk<'a>(
 				warnings.extend(selector_warnings);
 				return Err(selector_error);
 			};
-			match resolve_chunk_with_crc(state, cleaned_selector, Some(cleaned_crc), warnings) {
-				Ok(resolved) => Ok((resolved.chunk, resolved.crc)),
-				Err(_) => {
-					warnings.extend(selector_warnings);
-					Err(selector_error)
-				},
+			if let Ok(resolved) =
+				resolve_chunk_with_crc(state, cleaned_selector, Some(cleaned_crc), warnings)
+			{
+				Ok((resolved.chunk, resolved.crc))
+			} else {
+				warnings.extend(selector_warnings);
+				Err(selector_error)
 			}
 		},
 	}

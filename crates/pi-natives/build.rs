@@ -1,6 +1,8 @@
 use std::{
 	collections::{BTreeMap, BTreeSet, HashMap},
-	env, fs,
+	env,
+	fmt::Write as _,
+	fs,
 	path::{Path, PathBuf},
 };
 
@@ -403,7 +405,7 @@ fn generate_minimizer_builtin_filters() {
 					.file_name()
 					.and_then(|n| n.to_str())
 					.unwrap_or("unknown");
-				concatenated.push_str(&format!("# --- {filename} ---\n"));
+				writeln!(concatenated, "# --- {filename} ---").expect("write to String");
 				for line in body.lines() {
 					let trimmed = line.trim_start();
 					if trimmed.starts_with("schema_version") {

@@ -9,8 +9,9 @@ use std::{
 };
 
 use crate::shell::minimizer::{
-	MinimizerConfig, MinimizerCtx, MinimizerOutput, detect, filters, plan,
+	MinimizerConfig, MinimizerCtx, MinimizerOutput, detect, filters,
 	pipeline::{self, CompiledPipeline, PipelineRegistry},
+	plan,
 };
 
 /// Return true when the command has an enabled built-in filter or a matching

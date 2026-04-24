@@ -326,9 +326,10 @@ impl CompiledPipeline {
 
 		// Stage 8: on_empty
 		if let Some(msg) = self.on_empty.as_deref()
-			&& stage7.trim().is_empty() {
-				return Cow::Owned(msg.to_string());
-			}
+			&& stage7.trim().is_empty()
+		{
+			return Cow::Owned(msg.to_string());
+		}
 
 		stage7
 	}
