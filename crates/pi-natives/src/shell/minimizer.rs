@@ -11,6 +11,8 @@ pub mod engine;
 pub mod filters;
 pub mod primitives;
 
+pub mod pipeline;
+
 use std::borrow::Cow;
 
 pub use config::{MinimizerConfig, MinimizerOptions};
@@ -32,20 +34,46 @@ pub struct MinimizerCtx<'a> {
 #[derive(Debug, Clone)]
 pub struct MinimizerOutput {
 	/// Rewritten output.
-	pub text:    String,
+	pub text:         String,
 	/// Whether the filter modified the input at all.
-	pub changed: bool,
+	pub changed:      bool,
+	/// Byte length of the captured buffer before minimization.
+	pub input_bytes:  usize,
+	/// Byte length of `text` after minimization.
+	#[allow(dead_code, reason = "test-only API surface")]
+	pub output_bytes: usize,
+	/// Name of the dispatch path that produced this output (e.g. `"git"`,
+	/// `"pipeline:gradle"`, or `"passthrough"`). Useful for telemetry.
+	pub filter:       &'static str,
 }
 
 impl MinimizerOutput {
 	/// Pass-through constructor — the filter emits the original text unchanged.
 	pub fn passthrough<'a>(text: impl Into<Cow<'a, str>>) -> Self {
-		Self { text: text.into().into_owned(), changed: false }
+		let text = text.into().into_owned();
+		let bytes = text.len();
+		Self { text, changed: false, input_bytes: bytes, output_bytes: bytes, filter: "passthrough" }
 	}
 
-	/// Transformed output.
-	pub const fn transformed(text: String) -> Self {
-		Self { text, changed: true }
+	/// Transformed output. Caller-supplied `input_bytes` lets the savings
+	/// metric compare pre- and post-filter sizes.
+	pub const fn transformed(text: String, input_bytes: usize) -> Self {
+		let output_bytes = text.len();
+		Self { text, changed: true, input_bytes, output_bytes, filter: "" }
+	}
+
+	/// Attach a `filter` label (e.g. `"git"`, `"pipeline:gradle"`) to an
+	/// output for telemetry. No-op on passthrough outputs.
+	#[must_use]
+	pub const fn labeled(mut self, filter: &'static str) -> Self {
+		self.filter = filter;
+		self
+	}
+
+	/// Byte count saved by this filter (0 for passthrough).
+	#[allow(dead_code, reason = "test-only API surface")]
+	pub const fn bytes_saved(&self) -> usize {
+		self.input_bytes.saturating_sub(self.output_bytes)
 	}
 }
 
@@ -61,3 +89,4 @@ pub fn apply(
 ) -> MinimizerOutput {
 	engine::apply(command, captured, exit_code, config)
 }
+

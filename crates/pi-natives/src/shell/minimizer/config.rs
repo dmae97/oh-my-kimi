@@ -9,10 +9,13 @@ use std::{
 	collections::{HashMap, HashSet},
 	fs,
 	path::{Path, PathBuf},
+	sync::Arc,
 };
 
 use napi_derive::napi;
 use serde::Deserialize;
+
+use crate::shell::minimizer::pipeline::{self, PipelineRegistry, SUPPORTED_SCHEMA_VERSION};
 
 const DEFAULT_MAX_CAPTURE_BYTES: u32 = 4 * 1024 * 1024;
 
@@ -25,6 +28,10 @@ pub struct MinimizerOptions {
 	/// Optional path to a TOML settings file whose values override
 	/// field-level defaults. `~` is expanded.
 	pub settings_path:     Option<String>,
+	/// Optional xxHash64 digest (hex) of the settings file contents. When
+	/// supplied, the engine refuses to honor a settings file whose hash does
+	/// not match — a lightweight trust gate for agent-controllable paths.
+	pub settings_hash:     Option<String>,
 	/// Opt-in allowlist of program names (e.g. `"git"`). When empty or
 	/// absent, all built-in filters are active.
 	pub only:              Option<Vec<String>>,
@@ -43,6 +50,9 @@ pub struct MinimizerConfig {
 	pub except:            HashSet<String>,
 	pub max_capture_bytes: u32,
 	pub per_command:       HashMap<String, toml::Value>,
+	/// Compiled user-defined pipelines parsed from `settings_path`. Searched
+	/// before the built-in pipelines so user filters win.
+	pub user_pipelines:    Option<Arc<PipelineRegistry>>,
 }
 
 impl Default for MinimizerConfig {
@@ -53,6 +63,7 @@ impl Default for MinimizerConfig {
 			except:            HashSet::new(),
 			max_capture_bytes: DEFAULT_MAX_CAPTURE_BYTES,
 			per_command:       HashMap::new(),
+			user_pipelines:    None,
 		}
 	}
 }
@@ -78,10 +89,36 @@ impl MinimizerConfig {
 			&& !path.is_empty()
 		{
 			let expanded = expand_tilde(path);
-			if let Ok(contents) = fs::read_to_string(&expanded)
-				&& let Ok(file) = toml::from_str::<SettingsFile>(&contents)
-			{
-				file.merge_into(&mut cfg);
+			if let Ok(contents) = fs::read_to_string(&expanded) {
+				if let Some(expected) = opts.settings_hash.as_deref()
+					&& !expected.is_empty()
+				{
+					let actual = xxhash_rust::xxh64::xxh64(contents.as_bytes(), 0);
+					let actual_hex = format!("{actual:016x}");
+					if !actual_hex.eq_ignore_ascii_case(expected) {
+						eprintln!(
+							"[pi-natives minimizer] settings_hash mismatch for {} (expected {}, got {}); \
+							 ignoring file",
+							expanded.display(),
+							expected,
+							actual_hex
+						);
+						return cfg;
+					}
+				}
+				if let Ok(file) = toml::from_str::<SettingsFile>(&contents) {
+					file.merge_into(&mut cfg);
+				}
+				match pipeline::parse_file(&contents, "user") {
+					Ok((pipelines, tests)) => {
+						if !pipelines.is_empty() {
+							cfg.user_pipelines = Some(Arc::new(PipelineRegistry { pipelines, tests }));
+						}
+					},
+					Err(err) => {
+						eprintln!("[pi-natives minimizer] user filters: {err}");
+					},
+				}
 			}
 		}
 		cfg
@@ -110,6 +147,8 @@ impl MinimizerConfig {
 
 #[derive(Debug, Default, Deserialize)]
 struct SettingsFile {
+	#[serde(default)]
+	schema_version:    Option<u32>,
 	enabled:           Option<bool>,
 	only:              Option<Vec<String>>,
 	except:            Option<Vec<String>>,
@@ -120,6 +159,15 @@ struct SettingsFile {
 
 impl SettingsFile {
 	fn merge_into(self, cfg: &mut MinimizerConfig) {
+		if let Some(v) = self.schema_version
+			&& v != SUPPORTED_SCHEMA_VERSION
+		{
+			eprintln!(
+				"[pi-natives minimizer] unsupported schema_version {v} in settings file (expected \
+				 {SUPPORTED_SCHEMA_VERSION})"
+			);
+			return;
+		}
 		if let Some(v) = self.enabled {
 			cfg.enabled = v;
 		}
@@ -133,7 +181,7 @@ impl SettingsFile {
 			cfg.max_capture_bytes = n.max(1024);
 		}
 		for (k, v) in self.tables {
-			if v.is_table() {
+			if v.is_table() && k != "filters" && k != "tests" {
 				cfg.per_command.insert(k.to_lowercase(), v);
 			}
 		}

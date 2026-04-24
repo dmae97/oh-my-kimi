@@ -12,7 +12,7 @@ pub fn filter(_ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> Minimizer
 	if text == input {
 		MinimizerOutput::passthrough(input)
 	} else {
-		MinimizerOutput::transformed(text)
+		MinimizerOutput::transformed(text, input.len())
 	}
 }
 

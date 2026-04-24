@@ -165,6 +165,106 @@ pub fn compact_listing(input: &str, max_lines: usize) -> String {
 	out
 }
 
+/// Truncate a single line to at most `max_chars` characters (Unicode scalars,
+/// not bytes). Appends a single `…` marker when truncation happens.
+pub fn truncate_line(line: &str, max_chars: usize) -> String {
+	if max_chars == 0 {
+		return String::new();
+	}
+	let mut chars = line.chars();
+	let mut out = String::new();
+	for _ in 0..max_chars {
+		match chars.next() {
+			Some(ch) => out.push(ch),
+			None => return out,
+		}
+	}
+	if chars.next().is_some() {
+		out.push('…');
+	}
+	out
+}
+
+/// Keep only the first `head` lines; append a summary marker when truncated.
+pub fn head_lines_only(input: &str, head: usize) -> String {
+	let lines: Vec<&str> = input.lines().collect();
+	if lines.len() <= head {
+		return input.to_string();
+	}
+	let omitted = lines.len() - head;
+	let mut out = String::new();
+	for line in lines.iter().take(head) {
+		out.push_str(line);
+		out.push('\n');
+	}
+	out.push_str("… ");
+	out.push_str(&omitted.to_string());
+	out.push_str(" lines omitted …\n");
+	out
+}
+
+/// Keep only the last `tail` lines; prepend a summary marker when truncated.
+pub fn tail_lines_only(input: &str, tail: usize) -> String {
+	let lines: Vec<&str> = input.lines().collect();
+	if lines.len() <= tail {
+		return input.to_string();
+	}
+	let omitted = lines.len() - tail;
+	let mut out = String::new();
+	out.push_str("… ");
+	out.push_str(&omitted.to_string());
+	out.push_str(" lines omitted …\n");
+	for line in lines.iter().skip(omitted) {
+		out.push_str(line);
+		out.push('\n');
+	}
+	out
+}
+
+/// Hard cap: keep at most `max` lines, append a truncation marker otherwise.
+pub fn max_lines(input: &str, max: usize) -> String {
+	let lines: Vec<&str> = input.lines().collect();
+	if lines.len() <= max {
+		return input.to_string();
+	}
+	let dropped = lines.len() - max;
+	let mut out = String::new();
+	for line in lines.iter().take(max) {
+		out.push_str(line);
+		out.push('\n');
+	}
+	out.push_str("… ");
+	out.push_str(&dropped.to_string());
+	out.push_str(" lines truncated …\n");
+	out
+}
+
+/// Drop every line matched by any regex in `set`.
+pub fn strip_lines_regex(input: &str, set: &regex::RegexSet) -> String {
+	let mut out = String::new();
+	for line in input.lines() {
+		if set.is_match(line) {
+			continue;
+		}
+		out.push_str(line);
+		out.push('\n');
+	}
+	out
+}
+
+/// Keep only lines matching any regex in `set`.
+pub fn keep_lines_regex(input: &str, set: &regex::RegexSet) -> String {
+	let mut out = String::new();
+	for line in input.lines() {
+		if !set.is_match(line) {
+			continue;
+		}
+		out.push_str(line);
+		out.push('\n');
+	}
+	out
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

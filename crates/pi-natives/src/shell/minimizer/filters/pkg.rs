@@ -48,7 +48,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	if text == input {
 		MinimizerOutput::passthrough(input)
 	} else {
-		MinimizerOutput::transformed(text)
+		MinimizerOutput::transformed(text, input.len())
 	}
 }
 

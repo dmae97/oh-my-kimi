@@ -102,7 +102,7 @@ fn filter_bun_build(input: &str, exit_code: i32) -> MinimizerOutput {
 	if text == input {
 		MinimizerOutput::passthrough(input)
 	} else {
-		MinimizerOutput::transformed(text)
+		MinimizerOutput::transformed(text, input.len())
 	}
 }
 
