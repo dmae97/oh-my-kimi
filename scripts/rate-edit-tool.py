@@ -5,7 +5,6 @@ import argparse
 import asyncio
 import json
 import os
-import random
 import shutil
 import sys
 import tempfile
@@ -146,10 +145,10 @@ ORACLE_REVIEW_PROMPT = textwrap.dedent(
 ).strip()
 
 TODOS = [
-    "Map the current read and edit surface area on main.ts, main.rs, main.py, and main.md.",
-    "Exercise supported read and edit paths with concrete before/after verification across code and prose fixtures.",
-    "Probe awkward selector, indentation, and boundary cases including decorators, docstrings, tables, and fenced blocks.",
-    "Summarize what was awkward, impossible, ambiguous, or under-documented with concrete examples.",
+    "Map the read and edit surface area across every fixture: main.ts, main.rs, main.go, main.py, main.md.",
+    "Exercise supported read and edit paths on each file with concrete before/after verification.",
+    "Probe awkward selector, indentation, and boundary cases: decorators, docstrings, enum variants, Go interfaces/generics, markdown tables, fenced blocks.",
+    "Summarize what was awkward, impossible, ambiguous, or under-documented with concrete examples spanning all fixtures.",
 ]
 
 TS_FIXTURE = textwrap.dedent(
@@ -483,6 +482,129 @@ RUST_FIXTURE = textwrap.dedent(
     """
 ).strip() + "\n"
 
+GO_FIXTURE = textwrap.dedent(
+    """\
+    package main
+
+    import (
+        "context"
+        "errors"
+        "fmt"
+        "strings"
+        "sync"
+    )
+
+    // LogLevel names the severity of a structured log entry.
+    type LogLevel int
+
+    const (
+        DebugLevel LogLevel = iota
+        InfoLevel
+        WarnLevel
+        ErrorLevel
+    )
+
+    // String returns the canonical upper-case name for a LogLevel.
+    func (l LogLevel) String() string {
+        switch l {
+        case DebugLevel:
+            return "DEBUG"
+        case InfoLevel:
+            return "INFO"
+        case WarnLevel:
+            return "WARN"
+        case ErrorLevel:
+            return "ERROR"
+        default:
+            return fmt.Sprintf("LogLevel(%d)", int(l))
+        }
+    }
+
+    // Entry is a single structured log line.
+    type Entry struct {
+        Level   LogLevel          `json:"level"`
+        Message string            `json:"message"`
+        Fields  map[string]string `json:"fields,omitempty"`
+    }
+
+    // Sink receives structured log entries.
+    type Sink interface {
+        Write(ctx context.Context, entry Entry) error
+    }
+
+    // MemorySink stores entries in memory, useful for tests.
+    type MemorySink struct {
+        mu      sync.Mutex
+        entries []Entry
+    }
+
+    // Write appends the entry to the in-memory buffer.
+    func (s *MemorySink) Write(_ context.Context, entry Entry) error {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        s.entries = append(s.entries, entry)
+        return nil
+    }
+
+    // Snapshot returns a copy of the buffered entries.
+    func (s *MemorySink) Snapshot() []Entry {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        out := make([]Entry, len(s.entries))
+        copy(out, s.entries)
+        return out
+    }
+
+    // Filter returns items for which keep returns true.
+    func Filter[T any](items []T, keep func(T) bool) []T {
+        out := make([]T, 0, len(items))
+        for _, item := range items {
+            if keep(item) {
+                out = append(out, item)
+            }
+        }
+        return out
+    }
+
+    // Router fans entries out to every configured sink.
+    type Router struct {
+        sinks []Sink
+    }
+
+    // NewRouter constructs a router with the given sinks.
+    func NewRouter(sinks ...Sink) *Router {
+        return &Router{sinks: sinks}
+    }
+
+    // Dispatch writes the entry to every sink, joining per-sink errors.
+    func (r *Router) Dispatch(ctx context.Context, entry Entry) error {
+        var errs []error
+        for _, sink := range r.sinks {
+            if err := sink.Write(ctx, entry); err != nil {
+                errs = append(errs, err)
+            }
+        }
+        if len(errs) == 0 {
+            return nil
+        }
+        messages := make([]string, 0, len(errs))
+        for _, err := range errs {
+            messages = append(messages, err.Error())
+        }
+        return errors.New(strings.Join(messages, "; "))
+    }
+
+    func main() {
+        sink := &MemorySink{}
+        router := NewRouter(sink)
+        _ = router.Dispatch(context.Background(), Entry{
+            Level:   InfoLevel,
+            Message: "router ready",
+        })
+        fmt.Println(sink.Snapshot())
+    }
+    """
+).strip() + "\n"
 
 
 
@@ -618,6 +740,7 @@ REFERENCE_FILES = {
     "PROMPT.md": PROMPT + "\n",
     "main.ts": TS_FIXTURE,
     "main.rs": RUST_FIXTURE,
+    "main.go": GO_FIXTURE,
     "main.py": PYTHON_FIXTURE,
     "main.md": MARKDOWN_FIXTURE,
 }
@@ -625,6 +748,7 @@ REFERENCE_FILES = {
 FIXTURES: tuple[tuple[str, str], ...] = (
     ("typescript", "main.ts"),
     ("rust", "main.rs"),
+    ("go", "main.go"),
     ("python", "main.py"),
     ("markdown", "main.md"),
 )
@@ -632,6 +756,7 @@ FIXTURES: tuple[tuple[str, str], ...] = (
 FIXTURE_DESCRIPTIONS: dict[str, str] = {
     "typescript": "TypeScript/AST",
     "rust": "Rust/AST",
+    "go": "Go/AST",
     "python": "indentation-sensitive",
     "markdown": "prose/non-AST",
 }
@@ -639,15 +764,19 @@ FIXTURE_DESCRIPTIONS: dict[str, str] = {
 WORKSPACE_FILES = {
     "main.ts": TS_FIXTURE,
     "main.rs": RUST_FIXTURE,
+    "main.go": GO_FIXTURE,
     "main.py": PYTHON_FIXTURE,
     "main.md": MARKDOWN_FIXTURE,
 }
 
 
-def build_fixture_prompt(fixture_language: str, fixture_file: str) -> str:
-    description = FIXTURE_DESCRIPTIONS.get(fixture_language, fixture_language)
-    surface = f"Test surface: `{fixture_file}` ({description})."
-    return PROMPT.format(FIXTURE_SURFACE=surface) + "\n\nKeep all operations and edits scoped to this fixture."
+def build_fixture_prompt() -> str:
+    lines = [
+        f"- `{fixture_file}` ({FIXTURE_DESCRIPTIONS.get(language, language)})"
+        for language, fixture_file in FIXTURES
+    ]
+    surface = "Test surface (exercise every file in this workspace):\n" + "\n".join(lines)
+    return PROMPT.format(FIXTURE_SURFACE=surface) + "\n\nExercise every fixture in one session; do not skip any file type."
 
 
 @dataclass
@@ -1126,12 +1255,7 @@ def slugify(value: str) -> str:
     return "".join(char if char.isalnum() or char in "._-" else "_" for char in value)
 
 
-def materialize_workspace(target_dir: Path, fixture_file: str | None = None) -> None:
-    if fixture_file is not None:
-        content = WORKSPACE_FILES[fixture_file]
-        (target_dir / fixture_file).write_text(content)
-        return
-
+def materialize_workspace(target_dir: Path) -> None:
     for name, content in WORKSPACE_FILES.items():
         (target_dir / name).write_text(content)
 
@@ -1349,8 +1473,6 @@ class ModelRunRecorder:
 def run_model_sync(
     *,
     model: str,
-    fixture_language: str,
-    fixture_file: str,
     omp_bin: str,
     results_dir: Path,
     workspace_root: Path,
@@ -1359,21 +1481,20 @@ def run_model_sync(
 ) -> ModelResult:
     started_at = time.time()
     model_slug = slugify(model)
-    fixture_slug = slugify(fixture_language)
-    run_id = f"{model}|{fixture_slug}"
-    workspace = workspace_root / model_slug / fixture_slug
+    run_id = model
+    workspace = workspace_root / model_slug
     workspace.mkdir(parents=True, exist_ok=True)
-    materialize_workspace(workspace, fixture_file=fixture_file)
+    materialize_workspace(workspace)
 
     review_slug = slugify(shorten_model_name(model))
-    review_path = results_dir / f"review_{review_slug}_{fixture_slug}.md"
-    jsonl_path = Path(tempfile.gettempdir()) / f"rate-edit-tool-{results_dir.name}-{model_slug}-{fixture_slug}.jsonl"
+    review_path = results_dir / f"review_{review_slug}.md"
+    jsonl_path = Path(tempfile.gettempdir()) / f"rate-edit-tool-{results_dir.name}-{model_slug}.jsonl"
     jsonl_path.unlink(missing_ok=True)
     jsonl_path.touch()
     recorder = ModelRunRecorder(
         run_id=run_id,
         model=model,
-        fixture=fixture_language,
+        fixture="all",
         printer=printer,
         jsonl_path=jsonl_path,
     )
@@ -1451,7 +1572,7 @@ def run_model_sync(
                             return
 
             printer.mark_prompt_submitted(run_id)
-            client.prompt(build_fixture_prompt(fixture_language, fixture_file))
+            client.prompt(build_fixture_prompt())
             wait_for_settle()
             review_markdown = recorder.build_review_markdown()
             if not review_markdown.strip():
@@ -1490,7 +1611,7 @@ def run_model_sync(
 
     return ModelResult(
         model=model,
-        fixture=fixture_language,
+        fixture="all",
         status=status,
         started_at=started_at,
         finished_at=finished_at,
@@ -1548,8 +1669,8 @@ def oracle_sources_from_dir(results_dir: Path) -> list[tuple[str, str, str]]:
     sources: list[tuple[str, str, str]] = []
     for path in sorted(results_dir.glob("review_*.md")):
         stem = path.stem.removeprefix("review_")
-        model = stem
-        fixture = "unknown"
+        fixture = "all"
+        model = stem.replace("_", "/", 1)
         for candidate in known_fixtures:
             if stem.endswith(f"_{candidate}"):
                 fixture = candidate
@@ -1651,12 +1772,7 @@ async def run_all(args: argparse.Namespace) -> int:
     workspace_root.mkdir(parents=True, exist_ok=True)
 
     selected_models = args.models or MODELS
-    model_fixtures = {model: random.sample(list(FIXTURES), min(2, len(FIXTURES))) for model in selected_models}
-    run_specs = [
-        (f"{model}|{fixture_language}", f"{shorten_model_name(model)}:{fixture_language}")
-        for model in selected_models
-        for fixture_language, _ in model_fixtures[model]
-    ]
+    run_specs = [(model, shorten_model_name(model)) for model in selected_models]
     printer = ProgressPrinter(run_specs)
     printer.configure(fixtures_dir=fixtures_dir, results_dir=results_dir)
 
@@ -1664,8 +1780,6 @@ async def run_all(args: argparse.Namespace) -> int:
         asyncio.to_thread(
             run_model_sync,
             model=model,
-            fixture_language=fixture_language,
-            fixture_file=fixture_file,
             omp_bin=omp_bin,
             results_dir=results_dir,
             workspace_root=workspace_root,
@@ -1673,7 +1787,6 @@ async def run_all(args: argparse.Namespace) -> int:
             printer=printer,
         )
         for model in selected_models
-        for fixture_language, fixture_file in model_fixtures[model]
     ]
     results = await asyncio.gather(*tasks)
 
