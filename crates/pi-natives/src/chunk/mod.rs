@@ -1264,10 +1264,7 @@ mod tests {
 			.expect("blk_if chunk should exist");
 		assert!(!block.leaf);
 		assert!(
-			block
-				.children
-				.iter()
-				.any(|child| child == "blk_if.tag_div"),
+			block.children.iter().any(|child| child == "blk_if.tag_div"),
 			"expected nested div tag, got {:?}",
 			block.children
 		);
@@ -1631,18 +1628,8 @@ describe(\"suite\", () => {
 			.find(|c| c.path == "cls_Tin")
 			.expect("cls_Tin");
 		assert!(!class_chunk.leaf);
-		assert!(
-			class_chunk
-				.children
-				.iter()
-				.any(|c| c == "cls_Tin.fn_foo")
-		);
-		assert!(
-			class_chunk
-				.children
-				.iter()
-				.any(|c| c == "cls_Tin.fn_bar")
-		);
+		assert!(class_chunk.children.iter().any(|c| c == "cls_Tin.fn_foo"));
+		assert!(class_chunk.children.iter().any(|c| c == "cls_Tin.fn_bar"));
 	}
 
 	#[test]
@@ -1726,11 +1713,7 @@ describe(\"suite\", () => {
 	method() { return 42; }
 }";
 		let tree = build_chunk_tree(source, "typescript").expect("tree should build");
-		let chunk = tree
-			.chunks
-			.iter()
-			.find(|c| c.path == "dex")
-			.expect("dex");
+		let chunk = tree.chunks.iter().find(|c| c.path == "dex").expect("dex");
 		assert_eq!(chunk.start_line, 1);
 		assert_eq!(chunk.end_line, 3);
 		assert!(
@@ -1869,20 +1852,8 @@ fn main() {
 			.find(|c| c.path == "ipl_Con")
 			.expect("ipl_Con");
 		assert!(!impl_chunk.leaf);
-		assert!(
-			impl_chunk
-				.children
-				.iter()
-				.any(|c| c == "ipl_Con.fn_new"),
-			"expected fn_new"
-		);
-		assert!(
-			impl_chunk
-				.children
-				.iter()
-				.any(|c| c == "ipl_Con.fn_nam"),
-			"expected fn_nam"
-		);
+		assert!(impl_chunk.children.iter().any(|c| c == "ipl_Con.fn_new"), "expected fn_new");
+		assert!(impl_chunk.children.iter().any(|c| c == "ipl_Con.fn_nam"), "expected fn_nam");
 	}
 
 	#[test]
@@ -1922,10 +1893,7 @@ impl Config {
 			.expect("stc_Ser should exist");
 		assert!(!server.leaf, "large struct should be a branch");
 		assert!(
-			server
-				.children
-				.iter()
-				.any(|c| c == "stc_Ser.fld_fie_1"),
+			server.children.iter().any(|c| c == "stc_Ser.fld_fie_1"),
 			"expected fld_fie_1 in children: {:?}",
 			server.children
 		);
@@ -1995,18 +1963,12 @@ impl Config {
 		assert!(!tree.fallback, "nix should use tree-sitter chunking");
 		assert!(!attrset.leaf, "top-level attrset should recurse into bindings");
 		assert!(
-			attrset
-				.children
-				.iter()
-				.any(|child| child == "ats.attr_hel"),
+			attrset.children.iter().any(|child| child == "ats.attr_hel"),
 			"expected attr_hel child, got {:?}",
 			attrset.children
 		);
 		assert!(
-			attrset
-				.children
-				.iter()
-				.any(|child| child == "ats.attr_nes"),
+			attrset.children.iter().any(|child| child == "ats.attr_nes"),
 			"expected attr_nes child, got {:?}",
 			attrset.children
 		);
@@ -2521,10 +2483,7 @@ struct Config {
 			enum_chunk.children
 		);
 		assert!(
-			tree
-				.chunks
-				.iter()
-				.any(|c| c.path == "en_Mes.vr_Err"),
+			tree.chunks.iter().any(|c| c.path == "en_Mes.vr_Err"),
 			"expected vr_Err, got children: {:?}",
 			enum_chunk.children
 		);
@@ -2568,10 +2527,7 @@ end
 			.expect("mod_Pay");
 		assert!(!module.leaf);
 		assert!(
-			module
-				.children
-				.iter()
-				.any(|c| c == "mod_Pay.cls_Mon"),
+			module.children.iter().any(|c| c == "mod_Pay.cls_Mon"),
 			"expected cls_Mon inside module, got {:?}",
 			module.children
 		);
@@ -2582,34 +2538,22 @@ end
 			.expect("cls_Mon");
 		assert!(!class.leaf);
 		assert!(
-			class
-				.children
-				.iter()
-				.any(|c| c == "mod_Pay.cls_Mon.ctor"),
+			class.children.iter().any(|c| c == "mod_Pay.cls_Mon.ctor"),
 			"expected constructor in class children: {:?}",
 			class.children
 		);
 		assert!(
-			class
-				.children
-				.iter()
-				.any(|c| c == "mod_Pay.cls_Mon.fn_zer"),
+			class.children.iter().any(|c| c == "mod_Pay.cls_Mon.fn_zer"),
 			"expected fn_zer in class children: {:?}",
 			class.children
 		);
 		assert!(
-			class
-				.children
-				.iter()
-				.any(|c| c == "mod_Pay.cls_Mon.fn_to"),
+			class.children.iter().any(|c| c == "mod_Pay.cls_Mon.fn_to"),
 			"expected fn_to in class children: {:?}",
 			class.children
 		);
 		assert!(
-			class
-				.children
-				.iter()
-				.any(|c| c == "mod_Pay.cls_Mon.fn_val"),
+			class.children.iter().any(|c| c == "mod_Pay.cls_Mon.fn_val"),
 			"expected fn_val in class children: {:?}",
 			class.children
 		);
@@ -2812,10 +2756,7 @@ end
 		);
 
 		// Verify the function actually recursed (has children)
-		assert!(
-			!fn_chunk.leaf,
-			"fn_add should recurse into children for this test to be meaningful"
-		);
+		assert!(!fn_chunk.leaf, "fn_add should recurse into children for this test to be meaningful");
 	}
 
 	#[test]
@@ -2964,18 +2905,12 @@ end
 			.expect("fn_sta");
 		let (fn_body_s, fn_body_e) = chunk_region_range(fn_start, ChunkRegion::Body);
 		let fn_body = &source[fn_body_s..fn_body_e];
-		assert!(
-			fn_body.contains("if self.running"),
-			"fn_sta ~ should contain body, got {fn_body:?}"
-		);
+		assert!(fn_body.contains("if self.running"), "fn_sta ~ should contain body, got {fn_body:?}");
 		assert!(
 			fn_body.contains("self.running = True"),
 			"fn_sta ~ should contain all lines, got {fn_body:?}"
 		);
-		assert!(
-			!fn_body.contains("def start"),
-			"fn_sta ~ should not include head, got {fn_body:?}"
-		);
+		assert!(!fn_body.contains("def start"), "fn_sta ~ should not include head, got {fn_body:?}");
 		assert!(
 			!fn_body.contains("@property"),
 			"fn_sta ~ should not leak into next method, got {fn_body:?}"
@@ -3014,18 +2949,12 @@ end
 			.expect("file_app chunk should exist");
 		assert!(!file_chunk.leaf, "file chunk with hunks should not be leaf");
 		assert!(
-			file_chunk
-				.children
-				.iter()
-				.any(|c| c == "file_app.hunk_1"),
+			file_chunk.children.iter().any(|c| c == "file_app.hunk_1"),
 			"expected hunk_1 child, got {:?}",
 			file_chunk.children
 		);
 		assert!(
-			file_chunk
-				.children
-				.iter()
-				.any(|c| c == "file_app.hunk_2"),
+			file_chunk.children.iter().any(|c| c == "file_app.hunk_2"),
 			"expected hunk_2 child, got {:?}",
 			file_chunk.children
 		);
@@ -3306,9 +3235,10 @@ end
 		assert!(!script.leaf, "script host should expose nested JS chunks");
 		assert!(!style.leaf, "style host should expose nested CSS chunks");
 		assert!(
-			tree.chunks.iter().any(
-				|chunk| chunk.path.starts_with("tag_div.scr.") && chunk.path != "tag_div.scr"
-			),
+			tree
+				.chunks
+				.iter()
+				.any(|chunk| chunk.path.starts_with("tag_div.scr.") && chunk.path != "tag_div.scr"),
 			"expected translated JS descendants, got {:?}",
 			tree
 				.chunks
@@ -3338,10 +3268,7 @@ end
 		let tree = build_chunk_tree(source, "html").expect("html tree");
 
 		assert!(
-			tree
-				.chunks
-				.iter()
-				.any(|chunk| chunk.path == "tag_div.scr"),
+			tree.chunks.iter().any(|chunk| chunk.path == "tag_div.scr"),
 			"script host should stay addressable inside a small wrapper, got {:?}",
 			tree
 				.chunks

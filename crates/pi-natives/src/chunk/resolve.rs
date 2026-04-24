@@ -933,24 +933,12 @@ mod tests {
 			chunks:            vec![
 				chunk("", "ROOT", None, vec!["fn_han"]),
 				chunk("fn_han", "HVJB", Some(""), vec!["fn_han.try"]),
-				chunk("fn_han.try", "RQPB", Some("fn_han"), vec![
-					"fn_han.try.if_2",
-				]),
-				chunk("fn_han.try.if_2", "PKPV", Some("fn_han.try"), vec![
-					"fn_han.try.if_2.loop",
-				]),
-				chunk(
-					"fn_han.try.if_2.loop",
-					"MZRS",
-					Some("fn_han.try.if_2"),
-					vec!["fn_han.try.if_2.loop.if_2"],
-				),
-				chunk(
+				chunk("fn_han.try", "RQPB", Some("fn_han"), vec!["fn_han.try.if_2"]),
+				chunk("fn_han.try.if_2", "PKPV", Some("fn_han.try"), vec!["fn_han.try.if_2.loop"]),
+				chunk("fn_han.try.if_2.loop", "MZRS", Some("fn_han.try.if_2"), vec![
 					"fn_han.try.if_2.loop.if_2",
-					"QKJY",
-					Some("fn_han.try.if_2.loop"),
-					vec![],
-				),
+				]),
+				chunk("fn_han.try.if_2.loop.if_2", "QKJY", Some("fn_han.try.if_2.loop"), vec![]),
 			],
 		})
 	}

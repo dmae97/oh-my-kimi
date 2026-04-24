@@ -2410,10 +2410,7 @@ mod tests {
 		              this.value += 1;\n    }\n\n    decrement(): void {\n        this.value -= \
 		              1;\n    }\n}\n";
 		let state = state_for(source, "typescript");
-		let chunk = state
-			.inner()
-			.chunk("cls_Foo.fn_inc")
-			.expect("fn_inc");
+		let chunk = state.inner().chunk("cls_Foo.fn_inc").expect("fn_inc");
 
 		let result = apply_edits(&state, &EditParams {
 			operations:       vec![EditOperation {
@@ -2512,8 +2509,11 @@ mod tests {
 			result.diff_after
 		);
 		assert!(
-			result.warnings.iter().any(|warning| warning
-				.contains("Auto-resolved chunk selector \"run\" to \"cls_Wor.fn_run#")),
+			result
+				.warnings
+				.iter()
+				.any(|warning| warning
+					.contains("Auto-resolved chunk selector \"run\" to \"cls_Wor.fn_run#")),
 			"expected auto-resolution warning, got {:?}",
 			result.warnings
 		);
@@ -2523,10 +2523,7 @@ mod tests {
 	fn edit_auto_resolves_prefixed_function_names() {
 		let source = "function fuzzyMatch(): void {\n\tconsole.log(\"old\");\n}\n";
 		let state = state_for(source, "typescript");
-		let chunk = state
-			.inner()
-			.chunk("fn_fuz")
-			.expect("fn_fuz should exist");
+		let chunk = state.inner().chunk("fn_fuz").expect("fn_fuz should exist");
 
 		let result = apply_edits(&state, &EditParams {
 			operations:       vec![EditOperation {
@@ -2558,10 +2555,7 @@ mod tests {
 	fn edit_accepts_file_prefixed_checksum_targets() {
 		let source = "function main(): void {\n\tconsole.log(\"old\");\n}\n";
 		let state = state_for(source, "typescript");
-		let chunk = state
-			.inner()
-			.chunk("fn_mai")
-			.expect("fn_mai should exist");
+		let chunk = state.inner().chunk("fn_mai").expect("fn_mai should exist");
 
 		let result = apply_edits(&state, &EditParams {
 			operations:       vec![EditOperation {
@@ -2656,10 +2650,7 @@ mod tests {
 	fn markdown_section_replace_preserves_next_sibling_heading() {
 		let source = "# Top\n\n## Building\n\nOld content.\n\n## Code Style\n\n- style one\n";
 		let state = state_for(source, "markdown");
-		let chunk = state
-			.inner()
-			.chunk("sct_Top.sct_Bui")
-			.expect("sct_Bui");
+		let chunk = state.inner().chunk("sct_Top.sct_Bui").expect("sct_Bui");
 
 		let result = apply_edits(&state, &EditParams {
 			operations:       vec![EditOperation {
@@ -2974,10 +2965,7 @@ mod tests {
 		// as groupable stmts rather than being promoted to named expr chunks.
 		let source = "import { foo } from \"bar\";\n\nconsole.log(\"a\");\nconsole.log(\"b\");\n";
 		let state = parsed_state_for(source, "typescript");
-		let stmts = state
-			.inner()
-			.chunk("st")
-			.expect("st chunk should exist");
+		let stmts = state.inner().chunk("st").expect("st chunk should exist");
 		assert!(stmts.group, "stmts chunk should be marked as group");
 
 		let result = apply_single_edit(&state, "test.ts", EditOperation {
@@ -3397,10 +3385,7 @@ mod tests {
 		// 4-space file: method body at 2 levels of indent.
 		let source = "class Server {\n    start() {\n        work();\n    }\n}\n";
 		let state = state_for(source, "typescript");
-		let chunk = state
-			.inner()
-			.chunk("cls_Ser.fn_sta")
-			.expect("fn_sta");
+		let chunk = state.inner().chunk("cls_Ser.fn_sta").expect("fn_sta");
 
 		let result = apply_single_edit(&state, "test.ts", EditOperation {
 			op:      ChunkEditOp::Put,
@@ -3422,10 +3407,7 @@ mod tests {
 		// 2-space file: method body at 2 levels of indent.
 		let source = "class Server {\n  start() {\n    work();\n  }\n}\n";
 		let state = state_for(source, "typescript");
-		let chunk = state
-			.inner()
-			.chunk("cls_Ser.fn_sta")
-			.expect("fn_sta");
+		let chunk = state.inner().chunk("cls_Ser.fn_sta").expect("fn_sta");
 
 		let result = apply_single_edit(&state, "test.ts", EditOperation {
 			op:      ChunkEditOp::Put,
@@ -3448,10 +3430,7 @@ mod tests {
 		// Correction mechanism should strip common indent and produce correct output.
 		let source = "class Server {\n  start() {\n    work();\n  }\n}\n";
 		let state = state_for(source, "typescript");
-		let chunk = state
-			.inner()
-			.chunk("cls_Ser.fn_sta")
-			.expect("fn_sta");
+		let chunk = state.inner().chunk("cls_Ser.fn_sta").expect("fn_sta");
 
 		let result = apply_single_edit(&state, "test.ts", EditOperation {
 			op:      ChunkEditOp::Put,
@@ -3879,10 +3858,7 @@ mod tests {
 	fn python_head_replace_does_not_orphan_body() {
 		let source = "class Server:\n    def start(self) -> None:\n        self.running = True\n";
 		let state = state_for(source, "python");
-		let chunk = state
-			.inner()
-			.chunk("cls_Ser.fn_sta")
-			.expect("fn_sta");
+		let chunk = state.inner().chunk("cls_Ser.fn_sta").expect("fn_sta");
 
 		let result = apply_single_edit(&state, "test.py", EditOperation {
 			op:      ChunkEditOp::Put,
@@ -4769,10 +4745,7 @@ function foo() {\n<<<<<<< HEAD\n\treturn bar();\n=======\n\treturn baz();\n>>>>>
 	fn delete_first_enum_variant_produces_diff() {
 		let source = "enum Level {\n    Debug,\n    Info,\n    Warn,\n}\n";
 		let state = state_for(source, "rust");
-		let debug = state
-			.inner()
-			.chunk("en_Lev.vr_Deb")
-			.expect("vr_Deb");
+		let debug = state.inner().chunk("en_Lev.vr_Deb").expect("vr_Deb");
 		let result = apply_single_edit(&state, "test.rs", EditOperation {
 			op:      ChunkEditOp::Put,
 			sel:     Some("en_Lev.vr_Deb".to_owned()),
