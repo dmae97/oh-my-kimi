@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added full-output retrieval metadata to minimized shell command output by appending an `artifact://<id>` footer with byte counts, allowing users to open the original unminimized command output
@@ -9,15 +10,17 @@
 
 ### Changed
 
+- Changed session list loading to use parallel workers and fixed-size prefix reads per session file, reducing latency when loading many or large sessions
 - Changed edit call rendering to use mode-aware streaming diff previews, including multi-file chunk edit previews grouped by file path while arguments are still streaming
 - Changed shell execution in both interactive and non-interactive modes to route command output through the configured shell output minimizer
 - Changed default behavior so shell output minimization can now be toggled from settings without code changes
+- Changed shell output minimization to leave compound and piped commands unchanged; only a single eligible whole command is captured and minimized after it exits
 
 ### Fixed
 
+- Fixed session list metadata extraction to better populate session titles and first-user summaries from partial session data when full JSONL parsing is unavailable
 - Fixed shell execution output to replace raw streamed bash output with the minimizer’s rewritten text before final output while still preserving the full original output as artifact metadata
 - Fixed bash command minimization to save the full unminimized output as a `bash-original` artifact during AgentSession shell execution, enabling `artifact://` access to complete command output
-- Fixed minimized shell output for compound bash commands such as `cmd && next` and `cmd ; next`, preserving the original unminimized output through `artifact://<id>` without filtering piped command output
 - Fixed streaming chunk previews that could display an incomplete trailing edit as a deletion when partial JSON temporarily converted in-flight values to `null`
 - Fixed edit streaming preview updates to cancel obsolete in-flight computations and avoid rendering stale previews as args change
 - Fixed Mermaid fenced markdown rendering in assistant messages on terminals without image protocol support ([#650](https://github.com/can1357/oh-my-pi/issues/650))
