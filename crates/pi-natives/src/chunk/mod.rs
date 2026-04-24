@@ -1011,18 +1011,30 @@ mod tests {
 	#[test]
 	fn builds_structural_tree_for_each_supported_language() {
 		let cases = [
-			("astro", "---\nconst title = \"Hello\";\n---\n<Layout><h1>{title}</h1><script>console.log(title)</script></Layout>\n"),
+			(
+				"astro",
+				"---\nconst title = \"Hello\";\n---\n<Layout><h1>{title}</h1><script>console.log(title)</script></Layout>\n",
+			),
 			("bash", "build() { echo ok; }\n"),
 			("c", "#include <stdio.h>\nint main(void) { return 0; }\n"),
-			("cmake", "cmake_minimum_required(VERSION 3.28)\nproject(App)\nfunction(run_it NAME)\n  message(STATUS ${NAME})\nendfunction()\n"),
+			(
+				"cmake",
+				"cmake_minimum_required(VERSION 3.28)\nproject(App)\nfunction(run_it NAME)\n  message(STATUS ${NAME})\nendfunction()\n",
+			),
 			("cpp", "#include <vector>\nclass App {};\nint main() { return 0; }\n"),
 			("csharp", "using System;\nclass App { void Run() {} }\n"),
 			("clojure", "(ns demo.core)\n(defn greet [x] x)\n"),
 			("css", "@import \"a.css\";\n.app { color: red; }\n"),
 			("diff", "@@ -1,1 +1,1 @@\n-a\n+b\n"),
-			("dockerfile", "FROM alpine AS base\nARG PORT=3000\nRUN echo hi\nCMD [\"sh\", \"-c\", \"echo ok\"]\n"),
+			(
+				"dockerfile",
+				"FROM alpine AS base\nARG PORT=3000\nRUN echo hi\nCMD [\"sh\", \"-c\", \"echo ok\"]\n",
+			),
 			("elixir", "defmodule App do\n  def run(x) do\n    x\n  end\nend\n"),
-			("erlang", "-module(app).\n-export([run/1]).\nrun(X) ->\n    case X of\n        ok -> ok;\n        _ -> error\n    end.\n"),
+			(
+				"erlang",
+				"-module(app).\n-export([run/1]).\nrun(X) ->\n    case X of\n        ok -> ok;\n        _ -> error\n    end.\n",
+			),
 			("go", "package main\nimport \"fmt\"\nfunc main() { fmt.Println(\"ok\") }\n"),
 			("graphql", "type Query { hello: String }\nquery AppQuery { hello }\n"),
 			("handlebars", "{{#if ready}}<div class=\"ok\">{{name}}</div>{{/if}}\n"),
@@ -1048,8 +1060,14 @@ mod tests {
 			("odin", "package main\nmain :: proc() {}\n"),
 			("perl", "package App;\nuse strict;\nsub run { return 1; }\n"),
 			("php", "<?php\nclass App { function run() {} }\n"),
-			("powershell", "param([string]$Name)\nfunction Invoke-App { Write-Host $Name }\nInvoke-App\n"),
-			("protobuf", "syntax = \"proto3\";\nmessage App { string name = 1; }\nservice Api { rpc Run (App) returns (App); }\n"),
+			(
+				"powershell",
+				"param([string]$Name)\nfunction Invoke-App { Write-Host $Name }\nInvoke-App\n",
+			),
+			(
+				"protobuf",
+				"syntax = \"proto3\";\nmessage App { string name = 1; }\nservice Api { rpc Run (App) returns (App); }\n",
+			),
 			("python", "class App:\n    def run(self):\n        return 1\n"),
 			("r", "run <- function(x) { x + 1 }\nvalue <- run(1)\n"),
 			("regex", "[a-z]+"),
@@ -1069,7 +1087,10 @@ mod tests {
 			("tsx", "export function App() { return <div />; }\n"),
 			("typescript", "export function run(): void {}\n"),
 			("verilog", "module app; endmodule\n"),
-			("vue", "<template><div>{{ msg }}</div></template>\n<script setup>const msg = 'hi'</script>\n"),
+			(
+				"vue",
+				"<template><div>{{ msg }}</div></template>\n<script setup>const msg = 'hi'</script>\n",
+			),
 			("xml", "<root><item /></root>\n"),
 			("yaml", "apiVersion: v1\nmetadata:\n  name: app\n"),
 			("zig", "const std = @import(\"std\");\npub fn main() void {}\n"),

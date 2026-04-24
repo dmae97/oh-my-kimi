@@ -115,7 +115,6 @@ smallvec = { version = "1.15.1", features = [
    "serde",
    "write",
    "union",
-   "specialization",
    "const_new",
 ] }
 memmap2 = "0.9"

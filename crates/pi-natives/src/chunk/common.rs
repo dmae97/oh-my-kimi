@@ -552,13 +552,19 @@ pub fn unquote_text(text: &str) -> String {
 }
 
 pub fn sanitize_node_kind(kind: &str) -> &str {
-	let kind_stripped = kind
-		.trim_suffix("_instruction")
-		.trim_suffix("_statement")
-		.trim_suffix("_declaration")
-		.trim_suffix("_definition")
-		.trim_suffix("_item")
-		.trim_suffix("ession"); // _expression -> _expr
+	let mut kind_stripped = kind;
+	for suffix in [
+		"_instruction",
+		"_statement",
+		"_declaration",
+		"_definition",
+		"_item",
+		"ession", // _expression -> _expr
+	] {
+		if let Some(stripped) = kind_stripped.strip_suffix(suffix) {
+			kind_stripped = stripped;
+		}
+	}
 	if kind_stripped.is_empty() {
 		kind
 	} else {
