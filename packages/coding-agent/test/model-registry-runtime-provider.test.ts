@@ -104,6 +104,20 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(model?.headers?.["X-Model"]).toBe("model-header");
 	});
 
+	test("registerProvider applies headers-only overrides to existing provider models", () => {
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const anthropicBefore = registry.getAll().filter(model => model.provider === "anthropic");
+
+		expect(anthropicBefore.length).toBeGreaterThan(1);
+		registry.registerProvider("anthropic", { headers: { "X-Provider": "runtime-header" } }, "ext://runtime");
+
+		const anthropicAfter = registry.getAll().filter(model => model.provider === "anthropic");
+		expect(anthropicAfter.length).toBe(anthropicBefore.length);
+		for (const model of anthropicAfter) {
+			expect(model.headers?.["X-Provider"]).toBe("runtime-header");
+		}
+	});
+
 	test("registerProvider preserves explicit thinking on runtime models", () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 		const config: ProviderConfigInput = {

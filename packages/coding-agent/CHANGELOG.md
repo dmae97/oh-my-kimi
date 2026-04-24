@@ -25,6 +25,7 @@
 - Fixed edit streaming preview updates to cancel obsolete in-flight computations and avoid rendering stale previews as args change
 - Fixed Mermaid fenced markdown rendering in assistant messages on terminals without image protocol support ([#650](https://github.com/can1357/oh-my-pi/issues/650))
 - Fixed SQLite `read` helper queries to reject `where=` clauses with SQL control syntax that could override the structured selector's pagination; raw SQL remains available through `q=SELECT ...`
+- Fixed `models` provider overrides so `headers`-only entries now apply to built-in providers without requiring `baseUrl`, including runtime `registerProvider()` header-only overrides
 
 ## [14.2.0] - 2026-04-23
 

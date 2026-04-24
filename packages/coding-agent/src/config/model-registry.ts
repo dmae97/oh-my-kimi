@@ -300,6 +300,7 @@ interface ProviderValidationModel {
 
 interface ProviderValidationConfig {
 	baseUrl?: string;
+	headers?: Record<string, string>;
 	apiKey?: string;
 	api?: Api;
 	auth?: ProviderAuthMode;
@@ -321,9 +322,9 @@ function validateProviderConfiguration(
 	if (models.length === 0) {
 		if (mode === "models-config") {
 			const hasModelOverrides = config.modelOverrides && Object.keys(config.modelOverrides).length > 0;
-			if (!config.baseUrl && !config.compat && !hasModelOverrides && !config.discovery) {
+			if (!config.baseUrl && !config.headers && !config.compat && !hasModelOverrides && !config.discovery) {
 				throw new Error(
-					`Provider ${providerName}: must specify "baseUrl", "compat", "modelOverrides", "discovery", or "models"`,
+					`Provider ${providerName}: must specify "baseUrl", "headers", "compat", "modelOverrides", "discovery", or "models"`,
 				);
 			}
 		}
@@ -378,6 +379,7 @@ export const ModelsConfigFile = new ConfigFile<ModelsConfig>("models", ModelsCon
 				providerName,
 				{
 					baseUrl: providerConfig.baseUrl,
+					headers: providerConfig.headers,
 					apiKey: providerConfig.apiKey,
 					api: providerConfig.api as Api | undefined,
 					auth: (providerConfig.auth ?? "apiKey") as ProviderAuthMode,
@@ -1970,6 +1972,7 @@ export class ModelRegistry {
 			providerName,
 			{
 				baseUrl: config.baseUrl,
+				headers: config.headers,
 				apiKey: config.apiKey,
 				api: config.api,
 				oauthConfigured: Boolean(config.oauth),
@@ -2057,7 +2060,7 @@ export class ModelRegistry {
 			return;
 		}
 
-		if (config.baseUrl) {
+		if (config.baseUrl || config.headers) {
 			this.#models = this.#models.map(m => {
 				if (m.provider !== providerName) return m;
 				return {
