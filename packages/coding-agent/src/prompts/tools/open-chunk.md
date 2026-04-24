@@ -1,7 +1,7 @@
 Reads files using syntax-aware chunks. Also inspects directories, archives, SQLite databases, images, documents (PDF/DOCX/PPTX/XLSX/RTF/EPUB/ipynb), **and URLs**.
 
 <instruction>
-The chunk-aware `open` variant returns AST-scoped chunks with stable IDs for structural editing, and otherwise behaves like `open` for non-code content.
+The chunk-aware `open` variant returns AST-scoped chunks with current checksum IDs for structural editing, and otherwise behaves like `open` for non-code content.
 
 - You **MUST** parallelize calls when exploring related files
 - For URLs, `open` fetches the page and returns clean extracted text/markdown by default (reader-mode). It handles HTML pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom, JSON endpoints, PDFs, etc. You **SHOULD** reach for `open` — not a browser/puppeteer tool — for fetching and inspecting web content.
@@ -28,7 +28,7 @@ Max {{DEFAULT_MAX_LINES}} lines per call.
 
 # Chunks
 Each anchor `@full.chunk.path#CCCC` (with `-` prefixes for nesting depth) in the output identifies a chunk. Use `full.chunk.path#CCCC` as-is to read truncated chunks.
-If you need a canonical target list, run `open(path="file", sel="?")`. That listing shows chunk paths with IDs.
+If you need a canonical target list, run `open(path="file", sel="?")`. That listing shows chunk paths with IDs and is the safest structural discovery mode. Summary lines in this listing are orientation hints; follow a selector with `open(path="file", sel="chunk#ID")` or use `raw` when you need exact source.
 Line numbers in the gutter are absolute file line numbers.
 
 {{#if chunkAutoIndent}}
@@ -38,9 +38,10 @@ Chunk reads preserve literal leading tabs/spaces from the file. When editing, ke
 {{/if}}
 `raw` shows the file's literal whitespace. Structured chunk views may normalize or display indentation for edit round-tripping, so use `raw` when exact tabs/spaces matter, especially inside markdown fenced code blocks.
 
-IDs change after every edit. Use the new IDs from the edit response or refresh with `sel="?"` before the next write.
+IDs change after every edit. Use the new IDs from the edit response or refresh with `sel="?"` before the next `write`/`delete`. `insert` selectors may omit IDs, but still prefer fresh paths after structural edits.
 
-Parser boundaries vary by language: TypeScript/JavaScript decorators and JSDoc above decorated methods may appear as sibling `chunk#ID` entries, Python docstrings are body lines, and Python enum members or nested closures may remain opaque inside their parent chunk.
+Parser boundaries vary by language: TypeScript/JavaScript decorators and JSDoc above decorated methods may appear as sibling `chunk#ID` entries, Python decorators are part of the function/class head, Python docstrings are body lines, and Python enum members or nested closures may remain opaque inside their parent chunk. Decorated Python `^` writes and Python `^` deletes are rejected for safety.
+Markdown sections, lists, and tables are structural chunks. Recognized pipe tables expose `row_N` children for row-level edits; list items and table cells are not independently addressable. Fenced code blocks with a declared language are parsed again when possible, so functions inside a markdown fence can appear as addressable nested chunks.
 
 Chunk trees: JS, TS, TSX, Python, Rust, Go. Others use blank-line fallback.
 # Inspection

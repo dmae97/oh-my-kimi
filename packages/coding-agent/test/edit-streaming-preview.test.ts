@@ -62,8 +62,8 @@ describe("chunk extractCompleteEdits", () => {
 			__partialJson: '{"edits":[{"path":"a.ts","write":"foo"},{"path":"b.ts","write":nu',
 		};
 		const out = strategy.extractCompleteEdits(args, args.__partialJson) as typeof args;
-		// Last entry should be dropped because its `}` hasn't arrived yet — so
-		// the "delete" rendering is suppressed while streaming.
+		// Last entry should be dropped because its `}` hasn't arrived yet, so
+		// incomplete null-write errors are suppressed while streaming.
 		expect(out.edits).toHaveLength(1);
 		expect(out.edits[0].path).toBe("a.ts");
 	});

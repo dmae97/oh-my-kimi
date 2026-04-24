@@ -64,7 +64,8 @@ export interface EditStreamingStrategy<Args = unknown> {
  *
  * This guards against `partial-json` silently coercing truncated tails like
  * `"write":nu` / `"write":nul` into `{ write: null }`, which would make the
- * last entry render as a spurious delete until the value finishes streaming.
+ * last entry render a spurious null-write error until the value finishes
+ * streaming.
  */
 export function dropIncompleteLastEdit<T>(edits: readonly T[], partialJson: string | undefined, listKey: string): T[] {
 	if (!Array.isArray(edits) || edits.length === 0) return [...(edits ?? [])];
@@ -228,9 +229,9 @@ const chunkStrategy: EditStreamingStrategy<ChunkArgs> = {
 		// `null` literals), `partial-json` may have already surfaced the last
 		// entry with `write === null`. When that entry's `}` hasn't closed
 		// yet, it has already been dropped above. But if dropping was not
-		// triggered (e.g. list still open and no new `{` after), also drop
-		// a trailing entry that is *only* `{ path }` because partial-json
-		// stripped the in-flight value entirely.
+		// triggered (e.g. list still open and no new `{` after), also drop the
+		// trailing null-write entry so the preview does not flicker with an
+		// error for an incomplete string/null literal.
 		if (partialJson && edits.length > 0) {
 			const last = edits[edits.length - 1] as Partial<ChunkToolEdit> | undefined;
 			const endsInPartialNull = /:\s*nu?l?\s*$/.test(partialJson.trimEnd());

@@ -843,7 +843,7 @@ fn build_not_found_error(tree: &ChunkTree, cleaned: &str) -> String {
 	} else {
 		let tree_lines = format_selector_tree(tree, &tree.root_children, false);
 		if tree_lines.is_empty() {
-			" Re-read the file to see available chunk paths.".to_owned()
+			" Use sel=\"?\" to see available chunk paths.".to_owned()
 		} else {
 			format!(" Available top-level chunks:\n{}", tree_lines.join("\n"))
 		}
@@ -851,13 +851,13 @@ fn build_not_found_error(tree: &ChunkTree, cleaned: &str) -> String {
 
 	if hint.contains('\n') {
 		format!(
-			"Chunk path not found: \"{cleaned}\".{hint}\nRe-read the file to see the full chunk tree \
-			 with paths and checksums."
+			"Chunk path not found: \"{cleaned}\".{hint}\nUse sel=\"?\" if you need the full chunk \
+			 tree with paths and checksums."
 		)
 	} else {
 		format!(
-			"Chunk path not found: \"{cleaned}\".{hint} Re-read the file to see the full chunk tree \
-			 with paths and checksums."
+			"Chunk path not found: \"{cleaned}\".{hint} Use sel=\"?\" if you need the full chunk \
+			 tree with paths and checksums."
 		)
 	}
 }

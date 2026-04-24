@@ -1939,6 +1939,7 @@ impl Config {
 	}"#;
 		let tree = build_chunk_tree(source, "go").expect("tree should build");
 		let names: Vec<&str> = tree.root_children.iter().map(String::as_str).collect();
+		assert!(names.contains(&"mod_mai"), "expected package module, got {names:?}");
 		assert!(names.contains(&"imp"), "expected imports, got {names:?}");
 		assert!(names.contains(&"ty_Con"), "expected ty_Con, got {names:?}");
 		assert!(names.contains(&"ty_Rea"), "expected ty_Rea, got {names:?}");
@@ -1964,6 +1965,26 @@ impl Config {
 			.expect("ty_Rea");
 		assert!(reader.leaf);
 		assert!(reader.children.is_empty(), "single-line interfaces should render inline");
+	}
+
+	#[test]
+	fn go_method_summary_omits_receiver_duplication() {
+		let source = r"package main
+
+type MemorySink struct{}
+
+func (s *MemorySink) Write(p []byte) (int, error) {
+    return len(p), nil
+}
+";
+		let tree = build_chunk_tree(source, "go").expect("tree should build");
+		let method = tree
+			.chunks
+			.iter()
+			.find(|chunk| chunk.path == "fn_Wri")
+			.expect("Write method");
+
+		assert_eq!(method.signature.as_deref(), Some("fn Write(p []byte) (int, error)"));
 	}
 
 	#[test]
@@ -2690,6 +2711,36 @@ end
 			c.start_line,
 			c.end_line,
 		);
+	}
+
+	#[test]
+	fn markdown_tables_expose_row_chunks() {
+		let source = "# Top\n\n## Data\n\n| Name | Status |\n| --- | --- |\n| Ada | Active |\n| Lin \
+		              | Idle |\n\n## Next\n";
+		let tree = build_chunk_tree(source, "markdown").expect("markdown tree");
+		let table = tree
+			.chunks
+			.iter()
+			.find(|chunk| chunk.start_line == 5 && chunk.end_line == 8)
+			.expect("table chunk");
+
+		assert!(!table.leaf, "recognized table should expose row children");
+		assert_eq!(table.children, vec![
+			format!("{}.row_1", table.path),
+			format!("{}.row_2", table.path),
+			format!("{}.row_3", table.path),
+			format!("{}.row_4", table.path),
+		]);
+
+		let data_row = tree
+			.chunks
+			.iter()
+			.find(|chunk| chunk.path == table.children[2])
+			.expect("third row chunk");
+		assert_eq!(data_row.kind, ChunkKind::Row);
+		assert_eq!(data_row.start_line, 7);
+		assert_eq!(data_row.end_line, 7);
+		assert_eq!(data_row.signature.as_deref(), Some("| Ada | Active |"));
 	}
 
 	#[test]

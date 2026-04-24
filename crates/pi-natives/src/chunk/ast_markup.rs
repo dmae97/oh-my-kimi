@@ -3,9 +3,11 @@
 use tree_sitter::Node;
 
 use super::{
+	chunk_checksum,
 	classify::{ClassifierTables, LangClassifier},
 	common::*,
 	kind::ChunkKind,
+	types::ChunkNode,
 };
 use crate::language::SupportLang;
 
@@ -93,6 +95,15 @@ impl LangClassifier for MarkupClassifier {
 			_ => None,
 		}
 	}
+
+	fn post_process(
+		&self,
+		chunks: &mut Vec<ChunkNode>,
+		_root_children: &mut Vec<String>,
+		source: &str,
+	) {
+		add_markdown_table_row_chunks(chunks, source);
+	}
 }
 
 const fn force_container(mut candidate: RawChunkCandidate<'_>) -> RawChunkCandidate<'_> {
@@ -119,6 +130,131 @@ fn classify_html_block<'t>(node: Node<'t>, source: &str) -> RawChunkCandidate<'t
 	let candidate =
 		with_region_node(make_kind_chunk(node, ChunkKind::Html, None, source, None), None);
 	with_injected_subtree(candidate, SupportLang::Html, node)
+}
+
+fn add_markdown_table_row_chunks(chunks: &mut Vec<ChunkNode>, source: &str) {
+	let original_len = chunks.len();
+	let mut additions = Vec::<(usize, Vec<ChunkNode>)>::new();
+	for (index, chunk) in chunks.iter().enumerate().take(original_len) {
+		if !chunk.children.is_empty() || matches!(chunk.kind, ChunkKind::Code | ChunkKind::Html) {
+			continue;
+		}
+		let rows = markdown_table_rows_for_chunk(source, chunk);
+		if rows.len() < 2
+			|| !rows
+				.iter()
+				.any(|row| markdown_table_separator_row(row.text))
+		{
+			continue;
+		}
+		let nodes = rows
+			.into_iter()
+			.enumerate()
+			.map(|(row_index, row)| {
+				let identifier = (row_index + 1).to_string();
+				let path = format!("{}.row_{}", chunk.path, identifier);
+				let (indent, indent_char) = detect_indent(source, row.start_byte);
+				let row_source = source.get(row.start_byte..row.end_byte).unwrap_or_default();
+				ChunkNode {
+					path,
+					identifier: Some(identifier),
+					kind: ChunkKind::Row,
+					leaf: true,
+					virtual_content: None,
+					parent_path: Some(chunk.path.clone()),
+					children: Vec::new(),
+					signature: Some(row.text.trim().to_owned()),
+					start_line: row.line,
+					end_line: row.line,
+					line_count: 1,
+					start_byte: row.start_byte as u32,
+					end_byte: row.end_byte as u32,
+					checksum_start_byte: row.start_byte as u32,
+					prologue_end_byte: None,
+					epilogue_start_byte: None,
+					checksum: chunk_checksum(row_source.as_bytes()),
+					error: false,
+					indent,
+					indent_char,
+					group: false,
+				}
+			})
+			.collect();
+		additions.push((index, nodes));
+	}
+
+	for (index, nodes) in additions {
+		let child_paths = nodes.iter().map(|node| node.path.clone()).collect();
+		chunks[index].leaf = false;
+		chunks[index].children = child_paths;
+		chunks.extend(nodes);
+	}
+}
+
+struct MarkdownTableRow<'a> {
+	line:       u32,
+	start_byte: usize,
+	end_byte:   usize,
+	text:       &'a str,
+}
+
+fn markdown_table_rows_for_chunk<'a>(
+	source: &'a str,
+	chunk: &ChunkNode,
+) -> Vec<MarkdownTableRow<'a>> {
+	let line_offsets = source_line_offsets(source);
+	let mut rows = Vec::new();
+	let mut saw_non_empty = false;
+	for line in chunk.start_line..=chunk.end_line {
+		let Some((start_byte, end_byte)) = line_bounds(source, &line_offsets, line) else {
+			continue;
+		};
+		let text = source
+			.get(start_byte..end_byte)
+			.unwrap_or_default()
+			.trim_end_matches('\n');
+		if text.trim().is_empty() {
+			continue;
+		}
+		saw_non_empty = true;
+		if !markdown_table_row(text) {
+			return Vec::new();
+		}
+		rows.push(MarkdownTableRow { line, start_byte, end_byte, text });
+	}
+	if saw_non_empty { rows } else { Vec::new() }
+}
+
+fn source_line_offsets(source: &str) -> Vec<usize> {
+	let mut offsets = vec![0usize];
+	for (index, ch) in source.char_indices() {
+		if ch == '\n' {
+			offsets.push(index + 1);
+		}
+	}
+	offsets
+}
+
+fn line_bounds(source: &str, offsets: &[usize], line: u32) -> Option<(usize, usize)> {
+	if line == 0 {
+		return None;
+	}
+	let start = *offsets.get((line - 1) as usize)?;
+	let end = offsets.get(line as usize).copied().unwrap_or(source.len());
+	Some((start, end))
+}
+
+fn markdown_table_row(line: &str) -> bool {
+	let trimmed = line.trim();
+	trimmed.starts_with('|') && trimmed.ends_with('|') && trimmed.matches('|').count() >= 2
+}
+
+fn markdown_table_separator_row(line: &str) -> bool {
+	let trimmed = line.trim();
+	trimmed.contains('-')
+		&& trimmed
+			.chars()
+			.all(|ch| matches!(ch, '|' | '-' | ':' | ' ' | '\t'))
 }
 
 /// Extract heading text from a Markdown `section` node's `atx_heading` or

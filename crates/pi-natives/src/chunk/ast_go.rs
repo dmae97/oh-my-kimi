@@ -14,14 +14,14 @@ pub struct GoClassifier;
 const ROOT_RULES: &[super::classify::SemanticRule] = &[
 	// ── Imports / package ──
 	semantic_rule(
-		"import_declaration",
-		ChunkKind::Imports,
-		RuleStyle::Group,
-		NamingMode::None,
+		"package_clause",
+		ChunkKind::Module,
+		RuleStyle::Named,
+		NamingMode::AutoIdentifier,
 		RecurseMode::None,
 	),
 	semantic_rule(
-		"package_clause",
+		"import_declaration",
 		ChunkKind::Imports,
 		RuleStyle::Group,
 		NamingMode::None,

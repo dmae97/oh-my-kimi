@@ -194,6 +194,67 @@ describe("computeChunkDiff", () => {
 		expect("error" in result).toBe(true);
 	});
 
+	test("returns an empty preview for read-only chunk reads", async () => {
+		const file = path.join(tmpDir, "read.ts");
+		await fs.writeFile(file, "export const x = 1;\n");
+		const result = await computeChunkDiff(
+			{
+				path: "read.ts",
+				edits: [{ path: "read.ts:?", read: true }],
+			},
+			tmpDir,
+		);
+		expect(result).toEqual({ diff: "", firstChangedLine: undefined });
+	});
+
+	test("rejects write:null instead of previewing a delete", async () => {
+		const file = path.join(tmpDir, "null-delete.ts");
+		await fs.writeFile(file, "export const x = 1;\n");
+		const result = await computeChunkDiff(
+			{
+				path: "null-delete.ts",
+				edits: [{ path: "null-delete.ts", write: null }],
+			},
+			tmpDir,
+		);
+		expect("error" in result).toBe(true);
+		if ("error" in result) {
+			expect(result.error).toContain("write:null no longer deletes chunks");
+		}
+	});
+
+	test("rejects bare chunk edit entries instead of treating them as deletes", async () => {
+		const file = path.join(tmpDir, "bare.ts");
+		await fs.writeFile(file, "export const x = 1;\n");
+		const result = await computeChunkDiff(
+			{
+				path: "bare.ts",
+				edits: [{ path: "bare.ts" }],
+			},
+			tmpDir,
+		);
+		expect("error" in result).toBe(true);
+		if ("error" in result) {
+			expect(result.error).toContain("no operation specified");
+		}
+	});
+
+	test("rejects write empty string instead of previewing a destructive empty replacement", async () => {
+		const file = path.join(tmpDir, "empty-write.ts");
+		await fs.writeFile(file, "export const x = 1;\n");
+		const result = await computeChunkDiff(
+			{
+				path: "empty-write.ts",
+				edits: [{ path: "empty-write.ts", write: "" }],
+			},
+			tmpDir,
+		);
+		expect("error" in result).toBe(true);
+		if ("error" in result) {
+			expect(result.error).toContain('write:"" is a destructive empty replacement');
+		}
+	});
+
 	test("aborts when signal fires before compute completes", async () => {
 		const controller = new AbortController();
 		controller.abort();

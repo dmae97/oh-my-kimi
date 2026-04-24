@@ -3,6 +3,8 @@
 ## [Unreleased]
 ### Added
 
+- Added a non-mutating chunk edit `read: true` operation for inspecting chunk content without relying on edit failures or delete previews.
+- Added Markdown pipe-table `row_N` chunk selectors for row-level table edits.
 - Added `resolveToolAlias` export so tool names in CLI and session setup are normalized to canonical names, including mapping legacy `read` references to `open`
 - Added new `open` and `open-chunk` tool prompt documentation pages to describe canonical `open` usage for local files/directories, chunk reads, and URLs
 - Added full-output retrieval metadata to minimized shell command output by appending an `artifact://<id>` footer with byte counts, allowing users to open the original unminimized command output
@@ -14,6 +16,11 @@
 - Changed the canonical file/URL reader tool from `read` to `open` across default tool lists and routing, including system prompts, plan mode, cursor handlers, and runtime tool registration
 - Changed runtime and UI handling to render and track `open` tool calls as first-class (with `read` accepted as legacy alias), including ACP mapping, session observers, and streaming message groups
 - Changed chunk edit guidance to document parser-specific region behavior, including TypeScript decorator/JSDoc sibling chunks, Python docstrings as body content, Python opaque nested chunks, Markdown whole-chunk fallbacks, ID volatility, and indentation display differences
+- Changed chunk edit guidance to point agents at `open` as the primary chunk read/discovery operation, with `read: true` documented as a convenience for known selectors.
+- Changed chunk deletion in chunk edit mode to require explicit `delete: true`; `write: null` and bare `{ path }` entries now fail with guidance instead of deleting content.
+- Changed chunk edit validation to reject entries with multiple operation fields instead of choosing one and ignoring the rest.
+- Changed chunk edit validation to reject `write: ""` as an accidental destructive empty replacement; use `read: true` for inspection or `delete: true` for deletion.
+- Changed chunk edit responses to warn when appending or prepending to a container without `~`, since that inserts outside the container rather than inside its body.
 - Changed fetch output logging so URL-fetch artifacts now use `.open.log` naming instead of `.read.log`
 - Changed Bash interception guidance and errors to recommend `open` in place of `read` for cat/head/tail-style commands
 - Changed exported SDK tool surface to expose `OpenTool` as canonical and keep `ReadTool` as a compatibility alias
@@ -23,6 +30,10 @@
 - Changed default behavior so shell output minimization can now be toggled from settings without code changes
 - Changed shell output minimization to leave compound and piped commands unchanged; only a single eligible whole command is captured and minimized after it exits
 
+### Removed
+
+- Removed the `replace: { old, new }` chunk edit operation. Use `write` or `insert` for chunk edits instead.
+
 ### Fixed
 
 - Fixed session list metadata extraction to better populate session titles and first-user summaries from partial session data when full JSONL parsing is unavailable
@@ -31,8 +42,16 @@
 - Fixed streaming chunk previews that could display an incomplete trailing edit as a deletion when partial JSON temporarily converted in-flight values to `null`
 - Fixed edit streaming preview updates to cancel obsolete in-flight computations and avoid rendering stale previews as args change
 - Fixed chunk edits to reject unsafe `^`/`~` writes on code leaf chunks instead of falling back to whole-chunk replacement and risking structural indentation corruption
-- Fixed chunk `replace` operations to preserve multiline replacement indentation literally instead of stripping leading whitespace from inserted lines
+- Fixed chunk `replace` operations to dedent multiline replacement snippets before reapplying the matched source indentation, preventing Python nested replacements from compounding indentation on repeated edits.
+- Fixed Go chunk trees to classify `package` clauses separately from imports and to avoid duplicating method receivers in method summaries.
+- Fixed chunk path-not-found guidance so it recommends `sel="?"` without claiming the already-shown listing must be re-read.
 - Fixed Markdown chunk appends to preserve blank-line separators after line-oriented inserts such as table rows
+- Fixed Markdown section region-fallback warnings to call out child chunks that will be replaced by whole-section edits.
+- Fixed rejected chunk-edit errors to distinguish current file content from hypothetical post-edit parse-error previews and to state when a same-file batch was rolled back.
+- Fixed unsafe Python head-region edits by rejecting decorated Python `^` writes and Python `^` deletes that can orphan indented bodies while still parsing.
+- Fixed Markdown table-row appends so row-shaped content lands inside the table block instead of after the trailing blank-line separator.
+- Fixed Markdown root writes to preserve fenced-code indentation verbatim.
+- Fixed Rust enum-variant replacement matching so trailing commas are included consistently with whole-variant writes.
 - Fixed streaming edit call headers to keep showing the target file path while the edit arguments are still arriving
 - Fixed Mermaid fenced markdown rendering in assistant messages on terminals without image protocol support ([#650](https://github.com/can1357/oh-my-pi/issues/650))
 - Fixed chunk edit path parsing so plan-mode edits to section-addressed `local://PLAN.md:<selector>` paths are classified as writes to the plan file

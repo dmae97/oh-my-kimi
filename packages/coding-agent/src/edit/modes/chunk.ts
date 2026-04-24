@@ -32,7 +32,6 @@ export type { ChunkReadTarget };
 
 export type ChunkEditOperation =
 	| { op: "put"; sel?: string; content: string }
-	| { op: "replace"; sel?: string; content: string; find: string }
 	| { op: "delete"; sel?: string }
 	| { op: "before"; sel?: string; content: string }
 	| { op: "after"; sel?: string; content: string }
@@ -120,6 +119,8 @@ type ChunkSourceContext = {
 	chunkLanguage: string | undefined;
 };
 
+type ChunkSourceIntent = "read" | "write";
+
 function normalizeLanguage(language: string | undefined): string {
 	return language?.trim().toLowerCase() || "";
 }
@@ -140,11 +141,17 @@ function fileLanguageTag(filePath: string, language?: string): string | undefine
 	return ext.length > 0 ? ext : undefined;
 }
 
-async function resolveChunkSourceContext(session: ToolSession, path: string): Promise<ChunkSourceContext> {
+async function resolveChunkSourceContext(
+	session: ToolSession,
+	path: string,
+	options?: { intent?: ChunkSourceIntent },
+): Promise<ChunkSourceContext> {
 	const resolvedPath = resolvePlanPath(session, path);
 	const sourceFile = Bun.file(resolvedPath);
 	const sourceExists = await sourceFile.exists();
-	enforcePlanModeWrite(session, path, { op: sourceExists ? "update" : "create" });
+	if ((options?.intent ?? "write") === "write") {
+		enforcePlanModeWrite(session, path, { op: sourceExists ? "update" : "create" });
+	}
 
 	let rawContent = "";
 	if (sourceExists) {
@@ -191,6 +198,12 @@ export async function computeChunkDiff(
 		options?.signal?.throwIfAborted?.();
 		const { filePath } = parseChunkEditPath(input.path);
 		if (!filePath) return { error: "chunk edit path is empty" };
+		if (input.edits.every(isChunkReadOperation)) {
+			return { diff: "", firstChangedLine: undefined };
+		}
+		if (input.edits.some(hasChunkReadFlag)) {
+			return { error: "`read: true` cannot be mixed with mutating chunk edit operations." };
+		}
 		const { resolvedPath, rawContent, language } = await loadChunkSource({ cwd, path: filePath });
 		options?.signal?.throwIfAborted?.();
 		const { operations } = normalizeChunkEditOperations(input.edits);
@@ -441,15 +454,6 @@ function toNativeEditOperation(
 				region: nativeRegion,
 				content: operation.content,
 			};
-		case "replace":
-			return {
-				op: ChunkEditOp.Replace,
-				sel: selector,
-				crc,
-				region: nativeRegion,
-				find: operation.find,
-				content: operation.content,
-			};
 		case "before":
 			return { op: ChunkEditOp.Before, sel: selector, crc, region: nativeRegion, content: operation.content };
 		case "after":
@@ -554,19 +558,22 @@ export const chunkToolEditSchema = Type.Object(
 		path: Type.String({
 			description: "File path with chunk selector. Examples: 'src/app.ts:fn_foo#ABCD~', 'src/app.ts:class_Bar'.",
 		}),
-		write: Type.Optional(
-			Type.Union([Type.String(), Type.Null()], {
-				description: "Write complete new content to the targeted region. Use null to delete the chunk.",
+		read: Type.Optional(
+			Type.Boolean({
+				description:
+					"Return a known chunk selector without modifying the file. Prefer the open tool for normal chunk reads and discovery.",
 			}),
 		),
-		replace: Type.Optional(
-			Type.Object(
-				{
-					old: Type.String({ description: "Literal substring to find. Must match exactly once." }),
-					new: Type.String({ description: "Replacement text." }),
-				},
-				{ description: "Find and replace a substring within the chunk." },
-			),
+		write: Type.Optional(
+			Type.Union([Type.String(), Type.Null()], {
+				description:
+					"Write complete new content to the targeted region. Null is rejected; use delete: true for deletion.",
+			}),
+		),
+		delete: Type.Optional(
+			Type.Boolean({
+				description: "Explicitly delete the targeted chunk. Must be true; include the current chunk ID.",
+			}),
 		),
 		insert: Type.Optional(
 			Type.Object(
@@ -614,11 +621,8 @@ export function isChunkParams(params: unknown): params is ChunkParams {
 		return false;
 	}
 	const first = params.edits[0];
-	// Accept a bare `{ path }` entry: it is interpreted downstream as a chunk
-	// delete. Some providers strip `null` values from tool-call JSON, so a
-	// documented `{ path, write: null }` delete can arrive here as just
-	// `{ path }`. Rejecting that surfaced as a misleading
-	// "Invalid edit parameters for chunk mode." error.
+	// Accept a bare `{ path }` entry so the executor can return a targeted
+	// "missing operation" error instead of the generic schema failure.
 	return typeof first === "object" && first !== null && "path" in first;
 }
 
@@ -670,6 +674,39 @@ function autoCorrectBodyIndent(content: string, index: number): { content: strin
 	return { content, warnings };
 }
 
+function chunkEditOperationFields(edit: ChunkToolEdit): string[] {
+	const fields: string[] = [];
+	if (edit.read === true) fields.push("read");
+	if (edit.write !== undefined) fields.push("write");
+	if (edit.insert != null) fields.push("insert");
+	if (edit.delete === true) fields.push("delete");
+	return fields;
+}
+
+function hasChunkReadFlag(edit: ChunkToolEdit): boolean {
+	return edit.read === true;
+}
+
+function isChunkReadOperation(edit: ChunkToolEdit): boolean {
+	const fields = chunkEditOperationFields(edit);
+	return fields.length === 1 && fields[0] === "read";
+}
+
+function assertSingleChunkOperation(edit: ChunkToolEdit, index: number): string {
+	const fields = chunkEditOperationFields(edit);
+	if (fields.length === 0) {
+		throw new Error(
+			`Edit ${index + 1}: no operation specified. Use open to inspect chunks, read:true only for a known selector, write:"..." to replace, insert:{loc,body}, or delete:true to delete.`,
+		);
+	}
+	if (fields.length > 1) {
+		throw new Error(
+			`Edit ${index + 1}: multiple operation fields set (${fields.join(", ")}). Each chunk edit entry must have exactly one operation.`,
+		);
+	}
+	return fields[0];
+}
+
 function normalizeChunkEditOperations(edits: ChunkToolEdit[]): {
 	operations: ChunkEditOperation[];
 	warnings: string[];
@@ -677,26 +714,20 @@ function normalizeChunkEditOperations(edits: ChunkToolEdit[]): {
 	const warnings: string[] = [];
 	const operations = edits.map((edit, index): ChunkEditOperation => {
 		const { selector } = parseChunkEditPath(edit.path);
-		// When multiple ops are present (model confusion), prefer write (total replacement) as the
-		// safest default, then replace (surgical), then insert (additive), then delete.
-		const hasInsert = edit.insert != null && typeof edit.insert.body === "string" && edit.insert.body.length > 0;
-		const hasReplace =
-			edit.replace != null &&
-			((typeof edit.replace.old === "string" && edit.replace.old.length > 0) ||
-				(typeof edit.replace.new === "string" && edit.replace.new.length > 0));
-		const hasWrite = typeof edit.write === "string" && edit.write.length > 0;
-		const opCount = [hasInsert, hasReplace, hasWrite].filter(Boolean).length;
-		if (opCount > 1) {
-			const chosen = hasWrite ? "write" : hasReplace ? "replace" : "insert";
-			const present = [hasWrite && "write", hasReplace && "replace", hasInsert && "insert"]
-				.filter(Boolean)
-				.join(", ");
-			warnings.push(
-				`Edit ${index + 1}: multiple operation fields set (${present}). Each edit entry must have exactly ONE of write/replace/insert — not multiple. Used "${chosen}", ignored the rest.`,
-			);
+		const operation = assertSingleChunkOperation(edit, index);
+		if (operation === "read") {
+			throw new Error("`read: true` is non-mutating and cannot be normalized as an edit operation.");
 		}
-		if (hasWrite) {
-			let writeContent = edit.write!;
+		if (operation === "write") {
+			if (edit.write === null) {
+				throw new Error(
+					`Edit ${index + 1}: write:null no longer deletes chunks. Use delete:true to delete, or open/read:true to inspect chunk content without modifying the file.`,
+				);
+			}
+			if (typeof edit.write !== "string") {
+				throw new Error(`Edit ${index + 1}: write must be a string.`);
+			}
+			let writeContent = edit.write;
 			if (selector?.endsWith("~")) {
 				const corrected = autoCorrectBodyIndent(writeContent, index);
 				writeContent = corrected.content;
@@ -704,15 +735,12 @@ function normalizeChunkEditOperations(edits: ChunkToolEdit[]): {
 			}
 			return { op: "put", sel: selector, content: writeContent };
 		}
-		if (typeof edit.write === "string" && !hasInsert && !hasReplace) {
-			return { op: "put", sel: selector, content: edit.write };
-		}
-		if (hasReplace) {
-			return { op: "replace", sel: selector, content: edit.replace!.new, find: edit.replace!.old };
-		}
-		if (hasInsert) {
-			const op = edit.insert!.loc === "prepend" ? "before" : "after";
-			let insertContent = edit.insert!.body;
+		if (operation === "insert") {
+			if (edit.insert == null || typeof edit.insert.body !== "string" || edit.insert.body.length === 0) {
+				throw new Error(`Edit ${index + 1}: insert.body must be a non-empty string.`);
+			}
+			const op = edit.insert.loc === "prepend" ? "before" : "after";
+			let insertContent = edit.insert.body;
 			if (selector?.endsWith("~")) {
 				const corrected = autoCorrectBodyIndent(insertContent, index);
 				insertContent = corrected.content;
@@ -720,7 +748,9 @@ function normalizeChunkEditOperations(edits: ChunkToolEdit[]): {
 			}
 			return { op, sel: selector, content: insertContent };
 		}
-		// write: null or no op specified → delete
+		if (operation !== "delete") {
+			throw new Error(`Edit ${index + 1}: unsupported chunk edit operation "${operation}".`);
+		}
 		return { op: "delete", sel: selector };
 	});
 	return { operations, warnings };
@@ -775,14 +805,58 @@ async function writeChunkResult(params: {
 	};
 }
 
+async function readChunkResult(params: {
+	session: ToolSession;
+	resolvedPath: string;
+	sourceExists: boolean;
+	chunkLanguage: string | undefined;
+	edits: ChunkToolEdit[];
+}): Promise<AgentToolResult<EditToolDetails, typeof chunkEditParamsSchema>> {
+	const { session, resolvedPath, sourceExists, chunkLanguage, edits } = params;
+	if (!sourceExists) {
+		throw new Error(`File does not exist: ${resolvedPath}. Cannot read chunk selectors on a non-existent file.`);
+	}
+
+	const texts: string[] = [];
+	for (const edit of edits) {
+		const { selector } = parseChunkEditPath(edit.path);
+		const readPath = selector ? `${resolvedPath}:${selector}` : resolvedPath;
+		const result = await formatChunkedRead({
+			filePath: resolvedPath,
+			readPath,
+			cwd: session.cwd,
+			language: chunkLanguage,
+			anchorStyle: resolveAnchorStyle(session.settings),
+		});
+		texts.push(result.text);
+	}
+
+	return {
+		content: [{ type: "text", text: texts.join("\n\n") }],
+		details: {
+			diff: "",
+			meta: outputMeta().get(),
+		},
+	};
+}
+
 export async function executeChunkSingle(
 	options: ExecuteChunkSingleOptions,
 ): Promise<AgentToolResult<EditToolDetails, typeof chunkEditParamsSchema>> {
 	const { session, path, edits, signal, batchRequest, writethrough, beginDeferredDiagnosticsForPath } = options;
+	const readOnly = edits.every(isChunkReadOperation);
+	if (edits.some(hasChunkReadFlag) && !readOnly) {
+		throw new Error("`read: true` cannot be mixed with mutating chunk edit operations.");
+	}
 	const { resolvedPath, sourceFile, sourceExists, rawContent, chunkLanguage } = await resolveChunkSourceContext(
 		session,
 		path,
+		{ intent: readOnly ? "read" : "write" },
 	);
+	if (readOnly) {
+		return readChunkResult({ session, resolvedPath, sourceExists, chunkLanguage, edits });
+	}
+
 	const parentDir = nodePath.dirname(resolvedPath);
 	if (parentDir && parentDir !== ".") {
 		await fs.mkdir(parentDir, { recursive: true });
