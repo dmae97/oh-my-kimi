@@ -539,6 +539,9 @@ export class ToolExecutionComponent extends Container {
 				this.#contentBox.setBgFn(renderer.inline ? undefined : bgFn);
 				this.#contentBox.clear();
 
+				const renderContext = this.#buildRenderContext();
+				this.#renderState.renderContext = renderContext;
+
 				const shouldRenderCall = !this.#result || !renderer.mergeCallAndResult;
 				if (shouldRenderCall) {
 					// Render call component
@@ -557,10 +560,6 @@ export class ToolExecutionComponent extends Container {
 				// Render result component if we have a result
 				if (this.#result) {
 					try {
-						// Build render context for tools that need extra state
-						const renderContext = this.#buildRenderContext();
-						this.#renderState.renderContext = renderContext;
-
 						const resultComponent = renderer.renderResult(
 							{
 								content: this.#result.content as any,

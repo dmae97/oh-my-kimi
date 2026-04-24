@@ -86,6 +86,7 @@ interface EditRenderArgs {
 	 * Computed preview diff (used when tool args don't include a diff, e.g. hashline mode).
 	 */
 	previewDiff?: string;
+	__partialJson?: string;
 	// Hashline / chunk mode fields
 	edits?: EditRenderEntry[];
 }
@@ -148,6 +149,48 @@ function filePathFromEditEntry(p: string | undefined): string | undefined {
 	if (!p) return undefined;
 	const ci = /^[a-zA-Z]:[/\\]/.test(p) ? p.indexOf(":", 2) : p.indexOf(":");
 	return ci === -1 ? p : p.slice(0, ci);
+}
+
+function decodePartialJsonStringFragment(fragment: string): string {
+	let text = fragment;
+	const trailingBackslashes = text.match(/\\+$/)?.[0].length ?? 0;
+	if (trailingBackslashes % 2 === 1) {
+		text = text.slice(0, -1);
+	}
+	try {
+		return JSON.parse(`"${text}"`) as string;
+	} catch {
+		return text
+			.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+			.replace(/\\(["\\/bfnrt])/g, (_, ch: string) => {
+				switch (ch) {
+					case "b":
+						return "\b";
+					case "f":
+						return "\f";
+					case "n":
+						return "\n";
+					case "r":
+						return "\r";
+					case "t":
+						return "\t";
+					default:
+						return ch;
+				}
+			});
+	}
+}
+
+function extractPartialJsonString(partialJson: string | undefined, key: string): string | undefined {
+	if (!partialJson) return undefined;
+	const pattern = new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)`, "u");
+	const match = pattern.exec(partialJson);
+	if (!match) return undefined;
+	return decodePartialJsonStringFragment(match[1]);
+}
+
+function getPartialJsonEditPath(args: EditRenderArgs): string | undefined {
+	return filePathFromEditEntry(extractPartialJsonString(args.__partialJson, "path"));
 }
 
 /** Count distinct file paths in an edits array. */
@@ -372,6 +415,7 @@ export const editToolRenderer = {
 			editArgs.file_path ||
 			editArgs.path ||
 			filePathFromEditEntry(firstEdit?.path) ||
+			getPartialJsonEditPath(editArgs) ||
 			firstApplyPatchEntry?.path ||
 			"";
 		const rename = editArgs.rename || firstEdit?.rename || firstEdit?.move || firstApplyPatchEntry?.rename;
