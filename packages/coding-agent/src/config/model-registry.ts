@@ -1666,8 +1666,8 @@ export class ModelRegistry {
 
 	#mergeProviderOverride(baseOverride: ProviderOverride | undefined, override: ProviderOverride): ProviderOverride {
 		return {
-			...baseOverride,
-			...override,
+			baseUrl: override.baseUrl ?? baseOverride?.baseUrl,
+			apiKey: override.apiKey ?? baseOverride?.apiKey,
 			headers: override.headers ? { ...(baseOverride?.headers ?? {}), ...override.headers } : baseOverride?.headers,
 			compat: override.compat ? mergeCompat(baseOverride?.compat, override.compat) : baseOverride?.compat,
 		};

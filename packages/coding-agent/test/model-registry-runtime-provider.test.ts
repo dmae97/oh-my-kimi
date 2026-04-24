@@ -304,6 +304,50 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(registry.find("runtime-provider", modelId)).toBeUndefined();
 	});
 
+	test("headers-only runtime override preserves existing baseUrl across refresh", async () => {
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const modelId = "runtime-headers-only-baseurl-survivor";
+		const overrideBaseUrl = "https://runtime-baseurl.example.com/v1";
+		const runtimeHeader = "X-Runtime-Headers-Only";
+
+		registry.registerProvider(
+			"runtime-provider",
+			{
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey: "RUNTIME_KEY",
+				api: "openai-completions",
+				models: [{ ...baseModel, id: modelId }],
+			},
+			"ext://runtime",
+		);
+		registry.registerProvider("runtime-provider", { baseUrl: overrideBaseUrl }, "ext://runtime");
+		registry.registerProvider(
+			"runtime-provider",
+			{ headers: { [runtimeHeader]: "runtime-header" } },
+			"ext://runtime",
+		);
+
+		const modelAfterHeadersOnly = registry.find("runtime-provider", modelId);
+		expect(modelAfterHeadersOnly).toBeDefined();
+		expect(modelAfterHeadersOnly?.baseUrl).toBe(overrideBaseUrl);
+		expect(modelAfterHeadersOnly?.headers?.[runtimeHeader]).toBe("runtime-header");
+
+		await registry.refresh("offline");
+		const modelAfterRefresh = registry.find("runtime-provider", modelId);
+		expect(modelAfterRefresh).toBeDefined();
+		expect(modelAfterRefresh?.baseUrl).toBe(overrideBaseUrl);
+		expect(modelAfterRefresh?.headers?.[runtimeHeader]).toBe("runtime-header");
+
+		await registry.refreshProvider("runtime-provider", "offline");
+		const modelAfterProviderRefresh = registry.find("runtime-provider", modelId);
+		expect(modelAfterProviderRefresh).toBeDefined();
+		expect(modelAfterProviderRefresh?.baseUrl).toBe(overrideBaseUrl);
+		expect(modelAfterProviderRefresh?.headers?.[runtimeHeader]).toBe("runtime-header");
+
+		registry.clearSourceRegistrations("ext://runtime");
+		expect(registry.find("runtime-provider", modelId)).toBeUndefined();
+	});
+
 	test("extension-registered API keys survive refresh cycle for auth resolution", async () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 
