@@ -106,6 +106,7 @@ function createFixtureDatabase(dbPath: string): void {
 
 		db.prepare("INSERT INTO notes (body) VALUES (?)").run("First note");
 		db.prepare("INSERT INTO notes (body) VALUES (?)").run("Second note");
+		db.prepare("INSERT INTO notes (body) VALUES (?)").run("Third; note");
 
 		db.prepare("INSERT INTO composite (team_id, user_id, value) VALUES (?, ?, ?)").run(1, 2, "pair");
 		db.prepare("INSERT INTO wide_rows (id, payload) VALUES (?, ?)").run(1, "x".repeat(320));
@@ -215,7 +216,7 @@ describe("SQLite tool support", () => {
 
 		expect(text).toContain("users (6 rows)");
 		expect(text).toContain("slugs (2 rows)");
-		expect(text).toContain("notes (2 rows)");
+		expect(text).toContain("notes (3 rows)");
 		expect(text).not.toContain("sqlite_sequence");
 	});
 
@@ -298,14 +299,23 @@ describe("SQLite tool support", () => {
 		);
 	});
 
-	it("executes raw read-only SQL queries", async () => {
-		const result = await readTool.execute("sqlite-raw-query", {
-			path: `${sqlitePath}?q=SELECT+name+FROM+users+ORDER+BY+id+LIMIT+2`,
+	it("allows semicolons inside quoted SQLite where string literals", async () => {
+		const result = await readTool.execute("sqlite-sel-semicolon-literal", {
+			path: sqlitePath,
+			sel: "notes?where=body LIKE '%;%'&limit=5",
 		});
 		const text = getText(result);
 
-		expect(text).toContain("Alice");
-		expect(text).toContain("Bob");
+		expect(text).toContain("Third; note");
+	});
+
+	it("rejects SQLite where clauses that try to override pagination control syntax", async () => {
+		await expect(
+			readTool.execute("sqlite-where-pagination-bypass", {
+				path: sqlitePath,
+				sel: "users?where=1=1 LIMIT 1000000 --&limit=2&offset=0",
+			}),
+		).rejects.toThrow(/comments or statement terminators/i);
 	});
 
 	it("rejects mutating raw queries on the readonly connection", async () => {
