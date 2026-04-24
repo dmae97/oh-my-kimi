@@ -1,63 +1,24 @@
-import { extractMermaidBlocks, logger, renderMermaidAsciiSafe } from "@oh-my-pi/pi-utils";
+import { renderMermaidAsciiSafe } from "@oh-my-pi/pi-utils";
 
-const cache = new Map<bigint | number, string | null>();
+const cache = new Map<string, string | null>();
 
-let onRenderNeeded: (() => void) | null = null;
-
-/**
- * Set callback to trigger TUI re-render when mermaid ASCII renders become available.
- */
-export function setMermaidRenderCallback(callback: (() => void) | null): void {
-	onRenderNeeded = callback;
+function normalizeMermaidSource(source: string): string {
+	return source.replace(/\r\n?/g, "\n").trim();
 }
 
 /**
- * Get a pre-rendered mermaid ASCII diagram by hash.
- * Returns null if not cached or rendering failed.
+ * Resolve mermaid ASCII from fenced block source text.
+ * Returns null when rendering fails, while memoizing failures to avoid repeated work.
  */
-export function getMermaidAscii(hash: bigint | number): string | null {
-	return cache.get(hash) ?? null;
-}
-
-/**
- * Render all mermaid blocks in markdown text.
- * Caches results and calls render callback when new diagrams are available.
- */
-export function prerenderMermaid(markdown: string): void {
-	const blocks = extractMermaidBlocks(markdown);
-	if (blocks.length === 0) return;
-
-	let hasNew = false;
-
-	for (const { source, hash } of blocks) {
-		if (cache.has(hash)) continue;
-
-		const ascii = renderMermaidAsciiSafe(source);
-		if (ascii) {
-			cache.set(hash, ascii);
-			hasNew = true;
-		} else {
-			cache.set(hash, null);
-		}
+export function resolveMermaidAscii(source: string): string | null {
+	const normalizedSource = normalizeMermaidSource(source);
+	if (cache.has(normalizedSource)) {
+		return cache.get(normalizedSource) ?? null;
 	}
 
-	if (hasNew && onRenderNeeded) {
-		try {
-			onRenderNeeded();
-		} catch (error) {
-			logger.warn("Mermaid render callback failed", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-	}
-}
-
-/**
- * Check if markdown contains mermaid blocks that aren't cached yet.
- */
-export function hasPendingMermaid(markdown: string): boolean {
-	const blocks = extractMermaidBlocks(markdown);
-	return blocks.some(({ hash }) => !cache.has(hash));
+	const ascii = normalizedSource ? renderMermaidAsciiSafe(normalizedSource) : null;
+	cache.set(normalizedSource, ascii);
+	return ascii;
 }
 
 /**

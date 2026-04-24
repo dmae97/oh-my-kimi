@@ -63,7 +63,6 @@ import { SelectorController } from "./controllers/selector-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { SessionObserverRegistry } from "./session-observer-registry";
-import { setMermaidRenderCallback } from "./theme/mermaid-cache";
 import type { Theme } from "./theme/theme";
 import {
 	getEditorTheme,
@@ -220,7 +219,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
 		this.ui.setClearOnShrink(settings.get("clearOnShrink"));
-		setMermaidRenderCallback(() => this.ui.requestRender());
 		this.chatContainer = new Container();
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();

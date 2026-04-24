@@ -18,7 +18,7 @@ import chalk from "chalk";
 import darkThemeJson from "./dark.json" with { type: "json" };
 import { defaultThemes } from "./defaults";
 import lightThemeJson from "./light.json" with { type: "json" };
-import { getMermaidAscii } from "./mermaid-cache";
+import { resolveMermaidAscii } from "./mermaid-cache";
 
 export { getLanguageFromPath } from "../../utils/lang-from-path";
 
@@ -2339,7 +2339,7 @@ export function getMarkdownTheme(): MarkdownTheme {
 		underline: (text: string) => theme.underline(text),
 		strikethrough: (text: string) => chalk.strikethrough(text),
 		symbols: getSymbolTheme(),
-		getMermaidAscii,
+		resolveMermaidAscii,
 		highlightCode: (code: string, lang?: string): string[] => {
 			const validLang = lang && nativeSupportsLanguage(lang) ? lang : undefined;
 			try {
