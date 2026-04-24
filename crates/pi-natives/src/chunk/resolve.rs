@@ -37,14 +37,14 @@ pub fn split_region_suffix(selector: &str) -> (&str, bool, Option<ChunkRegion>) 
 }
 
 pub struct ParsedSelector {
-	pub selector: Option<String>,
-	pub crc:      Option<String>,
-	pub region:   Option<ChunkRegion>,
+	pub selector:         Option<String>,
+	pub crc:              Option<String>,
+	pub region:           Option<ChunkRegion>,
 	/// All checksum tokens discovered in the selector (trailing and
 	/// per-segment), in the order they appeared. Used for lenient multi-CRC
 	/// matching where at least one CRC in the resolved ancestor chain must
 	/// match.
-	pub all_crcs: Vec<String>,
+	pub all_crcs:         Vec<String>,
 	/// `true` when the resolved primary CRC targets the trailing (leaf)
 	/// segment — either because the last path segment had `#XXXX` or the
 	/// caller passed `crc` explicitly. `false` when CRCs only appeared on
@@ -265,9 +265,14 @@ pub fn verify_any_ancestor_crc_match(
 		.collect::<Vec<_>>()
 		.join(", ");
 	Err(format!(
-		"None of the provided checksums [{}] match any ancestor of \"{}\". Fresh chain: {fresh}. Re-read the file to get current checksums.",
+		"None of the provided checksums [{}] match any ancestor of \"{}\". Fresh chain: {fresh}. \
+		 Re-read the file to get current checksums.",
 		provided_crcs.join(", "),
-		if chunk.path.is_empty() { "<root>" } else { chunk.path.as_str() },
+		if chunk.path.is_empty() {
+			"<root>"
+		} else {
+			chunk.path.as_str()
+		},
 	))
 }
 
@@ -1189,7 +1194,7 @@ mod tests {
 			split_selector_crc_and_region(Some("fn_han#HVJB.try#RQPB.if_2"), None, None).unwrap();
 		assert_eq!(parsed.selector.as_deref(), Some("fn_han.try.if_2"));
 		assert_eq!(parsed.all_crcs, vec!["HVJB".to_owned(), "RQPB".to_owned()]);
-		assert_eq!(parsed.has_trailing_crc, false);
+		assert!(!parsed.has_trailing_crc);
 		// No trailing CRC → primary crc field stays empty so legacy strict
 		// matching doesn't fire on an ancestor CRC.
 		assert!(parsed.crc.is_none());
@@ -1202,7 +1207,7 @@ mod tests {
 		assert_eq!(parsed.selector.as_deref(), Some("fn_han.try.if_2"));
 		assert_eq!(parsed.all_crcs, vec!["HVJB".to_owned(), "PKPV".to_owned()]);
 		assert_eq!(parsed.crc.as_deref(), Some("PKPV"));
-		assert_eq!(parsed.has_trailing_crc, true);
+		assert!(parsed.has_trailing_crc);
 	}
 
 	#[test]
@@ -1210,8 +1215,7 @@ mod tests {
 		let state = state_for_resolution();
 		let chunk = state.chunk("fn_han.try.if_2").unwrap();
 		let stale_and_fresh = vec!["WRONG".to_owned(), "HVJB".to_owned()];
-		let matched =
-			verify_any_ancestor_crc_match(&state, chunk, &stale_and_fresh).unwrap();
+		let matched = verify_any_ancestor_crc_match(&state, chunk, &stale_and_fresh).unwrap();
 		assert_eq!(matched.as_deref(), Some("HVJB"));
 	}
 
@@ -1220,8 +1224,7 @@ mod tests {
 		let state = state_for_resolution();
 		let chunk = state.chunk("fn_han.try.if_2").unwrap();
 		let all_stale = vec!["WRONG".to_owned(), "BADB".to_owned()];
-		let err =
-			verify_any_ancestor_crc_match(&state, chunk, &all_stale).unwrap_err();
+		let err = verify_any_ancestor_crc_match(&state, chunk, &all_stale).unwrap_err();
 		assert!(err.contains("None of the provided checksums"), "{err}");
 		assert!(err.contains("HVJB") || err.contains("RQPB") || err.contains("PKPV"), "{err}");
 	}

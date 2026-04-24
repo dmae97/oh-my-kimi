@@ -23,11 +23,12 @@ pub fn supports(subcommand: Option<&str>) -> bool {
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let text = match ctx.subcommand {
+		Some("metadata") => input.to_string(),
 		Some("test" | "bench") => failures_only(&cleaned, exit_code),
 		Some("nextest") => filter_nextest(&cleaned),
 		Some("build" | "check" | "clippy" | "doc" | "run") => condense_build(&cleaned),
 		Some("fmt") => condense_fmt(&cleaned),
-		Some("metadata" | "tree" | "update" | "install" | "publish") => compact_general(&cleaned),
+		Some("tree" | "update" | "install" | "publish") => compact_general(&cleaned),
 		_ => cleaned,
 	};
 	if text == input {
@@ -229,5 +230,20 @@ mod tests {
 		assert!(!out.contains("Downloading crate"));
 		assert!(out.contains("Installed package `tool v1.0.0`"));
 		assert!(out.contains("lines omitted"));
+	}
+
+	#[test]
+	fn metadata_is_passthrough() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "cargo",
+			subcommand: Some("metadata"),
+			command:    "cargo metadata --format-version 1",
+			config:     &cfg,
+		};
+		let input = r#"{"packages":[{"name":"app","targets":[{"kind":["bin"]}]}],"resolve":null}"#;
+		let out = filter(&ctx, input, 0);
+		assert_eq!(out.text, input);
+		assert!(!out.changed);
 	}
 }

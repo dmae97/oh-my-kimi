@@ -16,6 +16,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	let cleaned = primitives::strip_ansi(input);
 	let text = match tool {
 		Some("pytest") => filter_pytest(&cleaned, exit_code),
+		Some("ruff") if is_ruff_format(ctx) => filter_ruff_format(&cleaned),
 		Some("ruff") => lint::condense_lint_output("ruff", &cleaned, exit_code),
 		Some("mypy") => lint::condense_lint_output("mypy", &cleaned, exit_code),
 		_ => cleaned,
@@ -46,7 +47,6 @@ fn filter_pytest(input: &str, exit_code: i32) -> String {
 
 	let mut out = String::new();
 	let mut in_failure = false;
-	let mut saw_failure = false;
 
 	for line in input.lines() {
 		let trimmed = line.trim();
@@ -58,7 +58,6 @@ fn filter_pytest(input: &str, exit_code: i32) -> String {
 
 		if starts_pytest_failure(trimmed) {
 			in_failure = true;
-			saw_failure = true;
 			push_line(&mut out, line);
 			continue;
 		}
@@ -75,12 +74,11 @@ fn filter_pytest(input: &str, exit_code: i32) -> String {
 		}
 
 		if trimmed.starts_with("FAILED ") || trimmed.starts_with("ERROR ") {
-			saw_failure = true;
 			push_line(&mut out, line);
 		}
 	}
 
-	if saw_failure && has_content(&out) {
+	if has_content(&out) {
 		out
 	} else {
 		primitives::head_tail_lines(input, 80, 80)
@@ -125,13 +123,43 @@ fn is_pytest_summary_header(trimmed: &str) -> bool {
 }
 
 fn is_pytest_summary_line(trimmed: &str) -> bool {
-	trimmed.starts_with('=')
-		&& (trimmed.contains("passed")
-			|| trimmed.contains("failed")
-			|| trimmed.contains("error")
-			|| trimmed.contains("skipped")
-			|| trimmed.contains("warnings")
-			|| trimmed.contains("no tests ran"))
+	let has_status = trimmed.contains("passed")
+		|| trimmed.contains("failed")
+		|| trimmed.contains("error")
+		|| trimmed.contains("skipped")
+		|| trimmed.contains("warnings")
+		|| trimmed.contains("no tests ran");
+
+	if trimmed.starts_with('=') {
+		return has_status;
+	}
+
+	has_status
+		&& trimmed.contains(" in ")
+		&& trimmed
+			.split(',')
+			.all(|part| looks_like_pytest_summary_part(part.trim()))
+}
+
+fn looks_like_pytest_summary_part(part: &str) -> bool {
+	if part == "no tests ran" {
+		return true;
+	}
+
+	if let Some((count, rest)) = part.split_once(' ') {
+		return count.parse::<u64>().is_ok()
+			&& (rest.starts_with("passed")
+				|| rest.starts_with("failed")
+				|| rest.starts_with("errors")
+				|| rest.starts_with("error")
+				|| rest.starts_with("skipped")
+				|| rest.starts_with("warnings")
+				|| rest.starts_with("warning")
+				|| rest.starts_with("xfailed")
+				|| rest.starts_with("xpassed"));
+	}
+
+	false
 }
 
 fn is_pytest_section_delimiter(trimmed: &str) -> bool {
@@ -153,6 +181,44 @@ fn is_pytest_pass_noise(trimmed: &str) -> bool {
 		|| trimmed
 			.chars()
 			.all(|ch| matches!(ch, '.' | 's' | 'S' | 'x' | 'X' | 'f' | 'F' | 'E'))
+}
+
+fn is_ruff_format(ctx: &MinimizerCtx<'_>) -> bool {
+	ctx.subcommand == Some("format") || ctx.command.split_whitespace().any(|part| part == "format")
+}
+
+fn filter_ruff_format(input: &str) -> String {
+	let mut out = String::new();
+
+	for line in input.lines() {
+		let trimmed = line.trim();
+		if trimmed.is_empty() {
+			continue;
+		}
+		if is_ruff_format_line(trimmed) {
+			push_line(&mut out, line);
+		}
+	}
+
+	if has_content(&out) {
+		out
+	} else {
+		primitives::head_tail_lines(input, 80, 80)
+	}
+}
+
+fn is_ruff_format_line(trimmed: &str) -> bool {
+	trimmed.starts_with("Would reformat:")
+		|| trimmed.starts_with("Would format:")
+		|| trimmed.starts_with("Reformatted:")
+		|| trimmed.contains(" file would be reformatted")
+		|| trimmed.contains(" files would be reformatted")
+		|| trimmed.contains(" file reformatted")
+		|| trimmed.contains(" files reformatted")
+		|| trimmed.contains(" file left unchanged")
+		|| trimmed.contains(" files left unchanged")
+		|| trimmed.contains(" file already formatted")
+		|| trimmed.contains(" files already formatted")
 }
 
 fn push_line(out: &mut String, line: &str) {
@@ -197,7 +263,7 @@ mod tests {
 	}
 
 	#[test]
-	fn ruff_routes_to_lint_grouping() {
+	fn ruff_check_routes_to_lint_grouping() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let context = MinimizerCtx {
 			program:    "ruff",
@@ -213,5 +279,55 @@ mod tests {
 
 		assert!(out.text.contains("2 diagnostics in 1 files"));
 		assert!(out.text.contains("src/a.py (2 diagnostics)"));
+	}
+
+	#[test]
+	fn pytest_quiet_summary_survives_without_framing() {
+		let input = "................................................................\n5 failed, \
+		             1698 passed, 2 skipped in 108.89s\n";
+		let out = filter_pytest(input, 1);
+
+		assert!(!out.contains("................................................................"));
+		assert!(out.contains("5 failed, 1698 passed, 2 skipped in 108.89s"));
+	}
+
+	#[test]
+	fn ruff_format_preserves_changed_files_and_summaries() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = MinimizerCtx {
+			program:    "ruff",
+			subcommand: Some("format"),
+			command:    "ruff format --check .",
+			config:     &cfg,
+		};
+		let out = filter(
+			&context,
+			"Would reformat: src/a.py\nWould reformat: tests/test_a.py\n2 files would be \
+			 reformatted, 5 files left unchanged\n",
+			1,
+		);
+
+		assert!(out.text.contains("Would reformat: src/a.py"));
+		assert!(out.text.contains("Would reformat: tests/test_a.py"));
+		assert!(
+			out.text
+				.contains("2 files would be reformatted, 5 files left unchanged")
+		);
+		assert!(!out.text.contains("diagnostics"));
+	}
+
+	#[test]
+	fn ruff_format_preserves_all_formatted_summary() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = MinimizerCtx {
+			program:    "ruff",
+			subcommand: Some("format"),
+			command:    "ruff format .",
+			config:     &cfg,
+		};
+		let out = filter(&context, "3 files left unchanged\n", 0);
+
+		assert!(out.text.contains("3 files left unchanged"));
+		assert!(!out.text.contains("diagnostics"));
 	}
 }

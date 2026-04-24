@@ -2,15 +2,19 @@
 
 use crate::shell::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
-pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, _exit_code: i32) -> MinimizerOutput {
+pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
-	let text = match ctx.program {
-		"grep" | "rg" => primitives::group_by_file(&cleaned, 12),
-		"ls" | "tree" | "find" => compact_listing_output(&cleaned),
-		"cat" | "read" => compact_content_output(&cleaned),
-		"stat" | "du" | "df" | "wc" => compact_summary_output(&cleaned),
-		"jq" | "json" => compact_jsonish_output(&cleaned),
-		_ => cleaned,
+	let text = if exit_code != 0 {
+		cleaned
+	} else {
+		match ctx.program {
+			"grep" | "rg" => primitives::group_by_file(&cleaned, 12),
+			"ls" | "tree" | "find" => compact_listing_output(&cleaned),
+			"cat" | "read" => cleaned,
+			"stat" | "du" | "df" | "wc" => compact_summary_output(&cleaned),
+			"jq" | "json" => cleaned,
+			_ => cleaned,
+		}
 	};
 	if text == input {
 		MinimizerOutput::passthrough(input)
@@ -21,22 +25,6 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, _exit_code: i32) -> Minimizer
 
 fn compact_listing_output(input: &str) -> String {
 	primitives::compact_listing(input, 80)
-}
-
-fn compact_content_output(input: &str) -> String {
-	if input.lines().count() <= 120 {
-		input.to_string()
-	} else {
-		primitives::head_tail_lines(input, 60, 40)
-	}
-}
-
-fn compact_jsonish_output(input: &str) -> String {
-	if input.lines().count() <= 120 {
-		input.to_string()
-	} else {
-		primitives::head_tail_lines(input, 60, 40)
-	}
 }
 
 fn compact_summary_output(input: &str) -> String {
@@ -88,14 +76,12 @@ mod tests {
 	}
 
 	#[test]
-	fn compacts_long_cat_output() {
+	fn preserves_long_cat_output() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = ctx("cat", &cfg);
 		let input = numbered_lines(130);
 		let out = filter(&ctx, &input, 0);
-		assert!(out.text.contains("… 30 lines omitted …"));
-		assert!(out.text.contains("line 001"));
-		assert!(out.text.contains("line 130"));
+		assert_eq!(out.text, input);
 	}
 
 	#[test]
@@ -134,6 +120,25 @@ mod tests {
 		let ctx = ctx("jq", &cfg);
 		let out = filter(&ctx, "\u{1b}[32m{\"ok\":true}\u{1b}[0m\n", 0);
 		assert_eq!(out.text, "{\"ok\":true}\n");
+	}
+
+	#[test]
+	fn preserves_long_json_output() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("jq", &cfg);
+		let input = numbered_lines(150);
+		let out = filter(&ctx, &input, 0);
+		assert_eq!(out.text, input);
+	}
+
+	#[test]
+	fn preserves_command_error_output() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("find", &cfg);
+		let input = "find: /private/path: Permission \
+		             denied\nresource-with-a-very-long-name-that-must-not-be-truncated\n";
+		let out = filter(&ctx, input, 1);
+		assert_eq!(out.text, input);
 	}
 
 	fn numbered_lines(count: usize) -> String {

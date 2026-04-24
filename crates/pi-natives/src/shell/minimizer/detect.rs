@@ -194,7 +194,7 @@ fn detect_subcommand(program: &str, args: &[String]) -> Option<String> {
 		),
 		"cargo" => first_non_global_arg(
 			args,
-			&["--manifest-path", "--target-dir", "--config", "-Z", "--color", "--jobs", "-j"],
+			&["-C", "--manifest-path", "--target-dir", "--config", "-Z", "--color", "--jobs", "-j"],
 			&[
 				"--locked",
 				"--offline",
@@ -423,6 +423,18 @@ mod tests {
 			.expect("cargo command is detected");
 		assert_eq!(command.program, "cargo");
 		assert_eq!(command.subcommand.as_deref(), Some("clippy"));
+	}
+
+	#[test]
+	fn skips_cargo_cwd_and_toolchain_globals() {
+		let command = detect("cargo -C repo +nightly test");
+		assert_eq!(command.as_ref().map(|value| value.program.as_str()), Some("cargo"));
+		assert_eq!(
+			command
+				.as_ref()
+				.and_then(|value| value.subcommand.as_deref()),
+			Some("test")
+		);
 	}
 
 	#[test]

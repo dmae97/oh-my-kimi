@@ -1,19 +1,38 @@
 //! Graphite (`gt`) output filters.
 
+use super::git;
 use crate::shell::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
-const GT_SUBCOMMANDS: &[&str] = &["log", "submit", "sync", "restack", "create", "branch"];
+const GT_SUBCOMMANDS: &[&str] = &[
+	"log", "submit", "sync", "restack", "create", "branch", "status", "diff", "show", "add", "push",
+	"pull", "fetch", "stash", "worktree",
+];
 
 pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 	program == "gt" && subcommand.is_some_and(|subcommand| GT_SUBCOMMANDS.contains(&subcommand))
 }
 
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
+	if ctx.subcommand == Some("log") && is_log_short(ctx.command) {
+		return MinimizerOutput::passthrough(input);
+	}
+
 	let cleaned = primitives::strip_ansi(input);
 	let text = match ctx.subcommand {
 		Some("log") => compact_log(&cleaned),
 		Some("branch") => primitives::compact_listing(&cleaned, 40),
 		Some("submit" | "sync" | "restack" | "create") => compact_noisy_command(&cleaned, exit_code),
+		Some(
+			"status" | "diff" | "show" | "add" | "push" | "pull" | "fetch" | "stash" | "worktree",
+		) => {
+			let git_ctx = MinimizerCtx {
+				program:    "git",
+				subcommand: ctx.subcommand,
+				command:    ctx.command,
+				config:     ctx.config,
+			};
+			return git::filter(&git_ctx, input, exit_code);
+		},
 		_ => cleaned,
 	};
 
@@ -22,6 +41,23 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	} else {
 		MinimizerOutput::transformed(text)
 	}
+}
+
+fn is_log_short(command: &str) -> bool {
+	has_ordered_tokens(command, "log", "short")
+}
+
+fn has_ordered_tokens(command: &str, first: &str, second: &str) -> bool {
+	let mut saw_first = false;
+	for part in command.split_whitespace() {
+		if saw_first && part == second {
+			return true;
+		}
+		if part == first {
+			saw_first = true;
+		}
+	}
+	false
 }
 
 fn compact_log(input: &str) -> String {
@@ -146,14 +182,23 @@ mod tests {
 	use crate::shell::minimizer::MinimizerConfig;
 
 	fn test_ctx<'a>(subcommand: Option<&'a str>, config: &'a MinimizerConfig) -> MinimizerCtx<'a> {
-		MinimizerCtx { program: "gt", subcommand, command: "gt", config }
+		test_ctx_with_command(subcommand, "gt", config)
+	}
+
+	fn test_ctx_with_command<'a>(
+		subcommand: Option<&'a str>,
+		command: &'a str,
+		config: &'a MinimizerConfig,
+	) -> MinimizerCtx<'a> {
+		MinimizerCtx { program: "gt", subcommand, command, config }
 	}
 
 	#[test]
-	fn supports_only_known_gt_subcommands() {
+	fn supports_known_gt_and_git_passthrough_subcommands() {
 		assert!(supports("gt", Some("log")));
 		assert!(supports("gt", Some("submit")));
-		assert!(!supports("gt", Some("status")));
+		assert!(supports("gt", Some("status")));
+		assert!(supports("gt", Some("diff")));
 		assert!(!supports("git", Some("log")));
 	}
 
@@ -176,6 +221,30 @@ mod tests {
 		assert!(out.text.contains("abc1230"));
 		assert!(out.text.contains("entries omitted"));
 		assert!(!out.text.contains("user@example.com"));
+	}
+
+	#[test]
+	fn log_short_is_passthrough() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx_with_command(Some("log"), "gt log short", &cfg);
+		let input = "abc123 main user@example.com\n";
+
+		let out = filter(&ctx, input, 0);
+
+		assert!(!out.changed);
+		assert_eq!(out.text, input);
+	}
+
+	#[test]
+	fn status_uses_git_style_compaction() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx_with_command(Some("status"), "gt status", &cfg);
+		let out = filter(&ctx, "## main\n M a.rs\n?? b.rs\n", 0);
+
+		assert!(out.changed);
+		assert!(out.text.contains("git status summary on main"));
+		assert!(out.text.contains("unstaged: 1"));
+		assert!(out.text.contains("untracked: 1"));
 	}
 
 	#[test]

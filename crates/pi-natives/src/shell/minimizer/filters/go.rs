@@ -12,13 +12,14 @@ pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
-	let text = if ctx.program == "golangci-lint" || ctx.command.contains("golangci-lint") {
+	let text = if ctx.program == "golangci-lint" || is_go_tool_golangci_lint(ctx) {
 		filter_golangci_lint(&cleaned)
 	} else {
 		match ctx.subcommand {
 			Some("test") => filter_go_test(&cleaned, exit_code),
 			Some("build") => filter_go_build(&cleaned, exit_code),
 			Some("vet") => filter_go_vet(&cleaned),
+			Some("tool") => input.to_string(),
 			_ => compact_general(&cleaned),
 		}
 	};
@@ -30,9 +31,27 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	}
 }
 
+fn is_go_tool_golangci_lint(ctx: &MinimizerCtx<'_>) -> bool {
+	if ctx.program != "go" || ctx.subcommand != Some("tool") {
+		return false;
+	}
+
+	let mut saw_tool = false;
+	for token in ctx.command.split_whitespace() {
+		if saw_tool {
+			return token == "golangci-lint";
+		}
+		if token == "tool" {
+			saw_tool = true;
+		}
+	}
+	false
+}
+
 fn filter_go_test(input: &str, exit_code: i32) -> String {
 	let mut out = String::new();
 	let mut kept = 0usize;
+	let mut keep_next_after_location = false;
 
 	for line in input.lines() {
 		let trimmed = line.trim();
@@ -41,7 +60,10 @@ fn filter_go_test(input: &str, exit_code: i32) -> String {
 		}
 
 		if let Some(rendered) = render_go_test_json_line(trimmed) {
-			if should_keep_go_test_line(&rendered, exit_code) {
+			let rendered_trimmed = rendered.trim();
+			let keep_line = keep_next_after_location || should_keep_go_test_line(&rendered, exit_code);
+			keep_next_after_location = is_go_location_line(rendered_trimmed);
+			if keep_line {
 				out.push_str(&rendered);
 				out.push('\n');
 				kept += 1;
@@ -49,7 +71,9 @@ fn filter_go_test(input: &str, exit_code: i32) -> String {
 			continue;
 		}
 
-		if should_keep_go_test_line(trimmed, exit_code) {
+		let keep_line = keep_next_after_location || should_keep_go_test_line(trimmed, exit_code);
+		keep_next_after_location = is_go_location_line(trimmed);
+		if keep_line {
 			out.push_str(line.trim_end());
 			out.push('\n');
 			kept += 1;
@@ -111,6 +135,7 @@ fn should_keep_go_test_line(line: &str, exit_code: i32) -> bool {
 		|| lower.contains("actual")
 		|| lower.contains("got") && lower.contains("want")
 		|| lower.contains("assert")
+		|| lower.contains("killed with quit")
 		|| lower.starts_with("ok\t")
 		|| lower.starts_with("?\t")
 		|| exit_code != 0 && (lower.contains("timeout") || lower.contains("signal"))
@@ -318,10 +343,61 @@ mod tests {
 	}
 
 	#[test]
+	fn keeps_go_test_json_location_followup_context() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "go",
+			subcommand: Some("test"),
+			command:    "go test -json ./...",
+			config:     &cfg,
+		};
+		let input = r#"{"Action":"output","Package":"example.com/app","Test":"TestBad","Output":"    app_test.go:42:\n"}
+	{"Action":"output","Package":"example.com/app","Test":"TestBad","Output":"        important table diff without keywords\n"}
+	{"Action":"output","Package":"example.com/app","Output":"Test killed with quit: ran too long\n"}
+	{"Action":"fail","Package":"example.com/app","Test":"TestBad"}
+	"#;
+
+		let out = filter(&ctx, input, 1);
+		assert!(out.text.contains("app_test.go:42:"));
+		assert!(out.text.contains("important table diff without keywords"));
+		assert!(out.text.contains("Test killed with quit"));
+	}
+
+	#[test]
 	fn summarizes_golangci_json_issues() {
 		let input = r#"{"Issues":[{"FromLinter":"govet","Text":"unreachable code","Pos":{"Filename":"main.go","Line":7,"Column":2}}]}"#;
 		let out = filter_golangci_lint(input);
 		assert!(out.contains("golangci-lint: 1 issues"));
 		assert!(out.contains("main.go:7:2: unreachable code (govet)"));
+	}
+
+	#[test]
+	fn go_tool_golangci_lint_is_filtered() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "go",
+			subcommand: Some("tool"),
+			command:    "go tool golangci-lint run ./...",
+			config:     &cfg,
+		};
+		let input = r#"{"Issues":[{"FromLinter":"govet","Text":"bad","Pos":{"Filename":"main.go","Line":7,"Column":2}}]}"#;
+		let out = filter(&ctx, input, 1);
+		assert!(out.changed);
+		assert!(out.text.contains("main.go:7:2: bad (govet)"));
+	}
+
+	#[test]
+	fn unknown_go_tool_is_passthrough() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "go",
+			subcommand: Some("tool"),
+			command:    "go tool pprof profile.out",
+			config:     &cfg,
+		};
+		let input = "Type: cpu\nShowing nodes accounting for 10ms\ngo: downloading noise\n";
+		let out = filter(&ctx, input, 0);
+		assert_eq!(out.text, input);
+		assert!(!out.changed);
 	}
 }

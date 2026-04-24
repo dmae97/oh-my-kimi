@@ -14,7 +14,9 @@ pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
-	let text = match effective_tool(ctx.program, ctx.subcommand) {
+	let tool = effective_tool(ctx.program, ctx.subcommand)
+		.or_else(|| effective_tool_from_command(ctx.program, ctx.subcommand, ctx.command));
+	let text = match tool {
 		Some("next") => filter_next(&cleaned, exit_code),
 		Some("prettier") => filter_prettier(&cleaned, exit_code),
 		Some("prisma") => filter_prisma(&cleaned, exit_code),
@@ -33,6 +35,11 @@ pub fn effective_tool<'a>(program: &'a str, subcommand: Option<&'a str>) -> Opti
 	if SUPPORTED_TOOLS.contains(&program) {
 		return Some(program);
 	}
+	if matches!(program, "bun")
+		&& let Some(tool) = subcommand.filter(|tool| SUPPORTED_TOOLS.contains(tool))
+	{
+		return Some(tool);
+	}
 	if is_npx_like(program) {
 		let tool = subcommand?;
 		if NPX_ROUTABLE_TOOLS.contains(&tool) {
@@ -40,6 +47,19 @@ pub fn effective_tool<'a>(program: &'a str, subcommand: Option<&'a str>) -> Opti
 		}
 	}
 	None
+}
+
+fn effective_tool_from_command<'a>(
+	program: &str,
+	subcommand: Option<&str>,
+	command: &'a str,
+) -> Option<&'a str> {
+	if !matches!((program, subcommand), ("bun", Some("run" | "exec"))) {
+		return None;
+	}
+	command
+		.split(|ch: char| ch.is_whitespace() || matches!(ch, ';' | '|' | '&'))
+		.find(|token| SUPPORTED_TOOLS.contains(token))
 }
 
 fn is_npx_like(program: &str) -> bool {
@@ -382,17 +402,66 @@ fn push_line(out: &mut String, line: &str) {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::shell::minimizer::MinimizerConfig;
+
+	fn ctx<'a>(
+		program: &'a str,
+		subcommand: Option<&'a str>,
+		command: &'a str,
+		config: &'a MinimizerConfig,
+	) -> MinimizerCtx<'a> {
+		MinimizerCtx { program, subcommand, command, config }
+	}
 
 	#[test]
-	fn supports_direct_and_npx_routing_tools() {
+	fn supports_direct_bun_and_npx_routing_tools() {
 		assert!(supports("next", Some("build")));
 		assert!(supports("prettier", Some("--check")));
 		assert!(supports("prisma", Some("generate")));
+		assert!(supports("bun", Some("next")));
+		assert!(supports("bun", Some("prettier")));
+		assert!(supports("bun", Some("prisma")));
 		assert!(supports("npx", Some("prettier")));
 		assert!(supports("npx", Some("prisma")));
 		assert!(supports("npx", Some("tsc")));
 		assert!(supports("npx", Some("eslint")));
 		assert!(!supports("npx", Some("jest")));
+	}
+
+	#[test]
+	fn bun_invocations_use_specialized_tool_filters() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+
+		let prettier_ctx = ctx("bun", Some("prettier"), "bun prettier --check .", &cfg);
+		let prettier = filter(
+			&prettier_ctx,
+			"Checking formatting...\n[warn] src/app/page.tsx\nCode style issues found in 1 file. \
+			 Forgot to run Prettier?\n",
+			1,
+		);
+		assert!(prettier.text.contains("1 file(s) need formatting"));
+		assert!(prettier.text.contains("src/app/page.tsx"));
+		assert!(!prettier.text.contains("Checking formatting"));
+
+		let prisma_ctx = ctx("bun", Some("prisma"), "bun prisma generate", &cfg);
+		let prisma = filter(
+			&prisma_ctx,
+			"Prisma schema loaded from prisma/schema.prisma\n✔ Generated Prisma Client to \
+			 ./node_modules/@prisma/client in 234ms\nStart by importing your Prisma Client:\n",
+			0,
+		);
+		assert!(prisma.text.contains("Generated Prisma Client"));
+		assert!(!prisma.text.contains("Prisma schema loaded"));
+
+		let next_ctx = ctx("bun", Some("run"), "bun run next build", &cfg);
+		let next = filter(
+			&next_ctx,
+			"Creating an optimized production build ...\nRoute (app)                    Size     \
+			 First Load JS\n┌ ○ /                          1.2 kB        132 kB\n✓ Built in 34.2s\n",
+			0,
+		);
+		assert!(next.text.contains("Route (app)"));
+		assert!(!next.text.contains("Creating an optimized"));
 	}
 
 	#[test]

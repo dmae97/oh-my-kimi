@@ -19,6 +19,17 @@ pub fn supports(subcommand: Option<&str>) -> bool {
 				| "audit"
 				| "check"
 				| "show" | "info"
+				| "view" | "fund"
+				| "explain"
+				| "test" | "t"
+				| "start"
+				| "stop" | "restart"
+				| "config"
+				| "cache"
+				| "prune"
+				| "dedupe"
+				| "publish"
+				| "pack" | "link"
 				| "why"
 		)
 	)
@@ -28,7 +39,11 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	let cleaned = primitives::strip_ansi(input);
 	let stripped = strip_package_noise(ctx.program, &cleaned, exit_code);
 	let deduped = primitives::dedup_consecutive_lines(&stripped);
-	let text = primitives::head_tail_lines(&deduped, 120, 80);
+	let text = if contains_audit_or_security_summary(&deduped) {
+		deduped
+	} else {
+		primitives::head_tail_lines(&deduped, 120, 80)
+	};
 
 	if text == input {
 		MinimizerOutput::passthrough(input)
@@ -61,6 +76,9 @@ fn strip_package_noise(program: &str, input: &str, exit_code: i32) -> String {
 }
 
 fn is_noise_line(program: &str, line: &str, exit_code: i32) -> bool {
+	if is_audit_or_security_summary(line) {
+		return false;
+	}
 	if exit_code != 0 && is_error_or_summary(line) {
 		return false;
 	}
@@ -131,6 +149,19 @@ fn is_ruby_php_brew_noise(program: &str, _line: &str, lower: &str) -> bool {
 		|| lower.starts_with("generating autoload files")
 }
 
+fn contains_audit_or_security_summary(input: &str) -> bool {
+	input.lines().any(is_audit_or_security_summary)
+}
+
+fn is_audit_or_security_summary(line: &str) -> bool {
+	let lower = line.to_ascii_lowercase();
+	lower.contains("audit")
+		|| lower.contains("audited")
+		|| lower.contains("vulnerab")
+		|| lower.contains("security")
+		|| lower.contains("funding")
+}
+
 fn is_error_or_summary(line: &str) -> bool {
 	let lower = line.to_ascii_lowercase();
 	lower.contains("error")
@@ -159,8 +190,23 @@ mod tests {
 	}
 
 	#[test]
+	fn preserves_successful_install_audit_and_security_summaries() {
+		let input = "Resolving: total 10\nadded 3 packages, and audited 4 packages in 1s\n2 \
+		             packages are looking for funding\nfound 0 vulnerabilities\n";
+		let out = strip_package_noise("npm", input, 0);
+		assert!(!out.contains("Resolving:"));
+		assert!(out.contains("added 3 packages, and audited 4 packages in 1s"));
+		assert!(out.contains("2 packages are looking for funding"));
+		assert!(out.contains("found 0 vulnerabilities"));
+	}
+
+	#[test]
 	fn supports_common_package_subcommands_for_future_dispatch() {
-		for subcommand in ["ci", "add", "outdated", "sync", "audit", "why"] {
+		for subcommand in [
+			"ci", "add", "outdated", "sync", "audit", "why", "view", "fund", "explain", "test", "t",
+			"start", "stop", "restart", "config", "cache", "prune", "dedupe", "publish", "pack",
+			"link",
+		] {
 			assert!(supports(Some(subcommand)), "{subcommand} should be supported");
 		}
 	}

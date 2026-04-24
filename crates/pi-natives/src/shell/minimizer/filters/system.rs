@@ -30,9 +30,9 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		"log" => compact_log(&cleaned),
 		"deps" => compact_dependency_output(&cleaned),
 		"summary" => compact_summary_output(&cleaned, exit_code),
-		"err" => compact_error_output(&cleaned),
+		"err" => cleaned,
 		"test" => compact_test_output(&cleaned),
-		"diff" => compact_diff_output(&cleaned),
+		"diff" => cleaned,
 		"format" => compact_format_output(&cleaned),
 		"pipe" => compact_pipe_like_output(&cleaned, exit_code),
 		"ps" => compact_ps_output(&cleaned),
@@ -324,17 +324,6 @@ fn compact_summary_output(input: &str, exit_code: i32) -> String {
 	out
 }
 
-fn compact_error_output(input: &str) -> String {
-	let lines: Vec<&str> = input.lines().collect();
-	if lines.len() <= 80 {
-		return primitives::dedup_consecutive_lines(input);
-	}
-	let mut out = format!("error output: {} lines\n", lines.len());
-	push_important_lines(&mut out, input, 80);
-	out.push_str(&primitives::head_tail_lines(input, 30, 30));
-	out
-}
-
 fn compact_test_output(input: &str) -> String {
 	let lines: Vec<&str> = input.lines().collect();
 	if lines.len() <= 120 {
@@ -371,77 +360,6 @@ fn is_important_line(line: &str) -> bool {
 		|| lower.contains("warn")
 		|| lower.contains("passed")
 		|| lower.contains("summary")
-}
-
-fn compact_diff_output(input: &str) -> String {
-	let lines: Vec<&str> = input.lines().collect();
-	if lines.len() <= 120 {
-		return input.to_string();
-	}
-
-	let mut out = format!("diff output: {} lines\n", lines.len());
-	let mut hunk_body: Vec<&str> = Vec::new();
-	let mut saw_hunk = false;
-	for line in &lines {
-		if is_diff_file_header(line) {
-			flush_hunk_body(&mut out, &hunk_body);
-			hunk_body.clear();
-			out.push_str(line);
-			out.push('\n');
-		} else if line.starts_with("@@") {
-			flush_hunk_body(&mut out, &hunk_body);
-			hunk_body.clear();
-			saw_hunk = true;
-			out.push_str(line);
-			out.push('\n');
-		} else if saw_hunk {
-			hunk_body.push(line);
-		}
-	}
-	flush_hunk_body(&mut out, &hunk_body);
-
-	if saw_hunk {
-		out
-	} else {
-		primitives::head_tail_lines(input, 80, 40)
-	}
-}
-
-fn is_diff_file_header(line: &str) -> bool {
-	line.starts_with("diff --git ")
-		|| line.starts_with("--- ")
-		|| line.starts_with("+++ ")
-		|| line.starts_with("Index: ")
-}
-
-fn flush_hunk_body(out: &mut String, lines: &[&str]) {
-	if lines.is_empty() {
-		return;
-	}
-	let changed: Vec<&str> = lines
-		.iter()
-		.copied()
-		.filter(|line| line.starts_with('+') || line.starts_with('-'))
-		.collect();
-	let source = if changed.is_empty() { lines } else { &changed };
-	if source.len() <= 36 {
-		for line in source {
-			out.push_str(line);
-			out.push('\n');
-		}
-		return;
-	}
-	for line in source.iter().take(24) {
-		out.push_str(line);
-		out.push('\n');
-	}
-	out.push_str("… ");
-	out.push_str(&(source.len() - 36).to_string());
-	out.push_str(" changed lines omitted in hunk …\n");
-	for line in source.iter().skip(source.len() - 12) {
-		out.push_str(line);
-		out.push('\n');
-	}
 }
 
 fn compact_format_output(input: &str) -> String {
@@ -517,8 +435,8 @@ fn is_format_file_line(line: &str) -> bool {
 }
 
 fn compact_pipe_like_output(input: &str, exit_code: i32) -> String {
-	if looks_like_diff(input) {
-		return compact_diff_output(input);
+	if looks_like_diff(input) || looks_jsonish(input) || exit_code != 0 {
+		return input.to_string();
 	}
 	if looks_like_file_diagnostics(input) {
 		return primitives::group_by_file(input, 12);
@@ -526,8 +444,8 @@ fn compact_pipe_like_output(input: &str, exit_code: i32) -> String {
 	if looks_like_path_listing(input) {
 		return primitives::compact_listing(input, 80);
 	}
-	if exit_code != 0 || input.lines().any(is_important_line) {
-		return compact_error_output(input);
+	if input.lines().any(is_important_line) {
+		return input.to_string();
 	}
 	let deduped = primitives::dedup_consecutive_lines(input);
 	if deduped.lines().count() > 120 {
@@ -542,6 +460,17 @@ fn looks_like_diff(input: &str) -> bool {
 		.lines()
 		.take(20)
 		.any(|line| line.starts_with("@@") || line.starts_with("diff --git "))
+}
+
+fn looks_jsonish(input: &str) -> bool {
+	input.lines().find_map(|line| {
+		let trimmed = line.trim_start();
+		if trimmed.is_empty() {
+			None
+		} else {
+			Some(trimmed.starts_with('{') || trimmed.starts_with('['))
+		}
+	}) == Some(true)
 }
 
 fn looks_like_file_diagnostics(input: &str) -> bool {
@@ -696,7 +625,7 @@ mod tests {
 	}
 
 	#[test]
-	fn diff_compaction_preserves_hunk_headers() {
+	fn diff_output_passthrough_is_lossless() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = ctx("diff", &cfg);
 		let mut input =
@@ -709,9 +638,7 @@ mod tests {
 			input.push('\n');
 		}
 		let out = filter(&ctx, &input, 0);
-		assert!(out.text.contains("@@ -1,140 +1,140 @@"));
-		assert!(out.text.contains("changed lines omitted in hunk"));
-		assert!(out.text.contains("+new 139"));
+		assert_eq!(out.text, input);
 	}
 
 	#[test]
@@ -729,5 +656,24 @@ mod tests {
 		assert!(out.text.contains("failed to parse src/bad.py"));
 		assert!(out.text.contains("files:"));
 		assert!(out.text.contains("more files"));
+	}
+
+	#[test]
+	fn pipe_preserves_json_diff_and_errors() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("pipe", &cfg);
+		let mut json = String::new();
+		for idx in 0..150 {
+			json.push_str("{\"idx\":");
+			json.push_str(&idx.to_string());
+			json.push_str("}\n");
+		}
+		assert_eq!(filter(&ctx, &json, 0).text, json);
+
+		let diff = "diff --git a/a b/a\n@@ -1 +1 @@\n-old\n+new\n";
+		assert_eq!(filter(&ctx, diff, 0).text, diff);
+
+		let error = "error: resource-with-a-very-long-name failed validation\n";
+		assert_eq!(filter(&ctx, error, 1).text, error);
 	}
 }

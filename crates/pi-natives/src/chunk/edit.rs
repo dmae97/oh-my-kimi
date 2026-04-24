@@ -362,8 +362,7 @@ fn resolve_edit_target(
 	// resolved chunk or any of its ancestors. This avoids spurious stale
 	// errors when only one segment's CRC has drifted, and accepts CRCs that
 	// anchor ancestor segments rather than the leaf.
-	let lenient_multi_crc =
-		parsed_crcs.len() >= 2 || (!parsed_crcs.is_empty() && !has_trailing_crc);
+	let lenient_multi_crc = parsed_crcs.len() >= 2 || (!parsed_crcs.is_empty() && !has_trailing_crc);
 	let resolve_crc = if batch_auto_accepted || lenient_multi_crc {
 		None
 	} else {
@@ -2542,7 +2541,11 @@ mod tests {
 		let source = "class Worker {\n\trun(): void {\n\t\tconsole.log(this.name);\n\t}\n}\n";
 		let state = state_for(source, "typescript");
 		let class_chunk = state.inner().chunk("cls_Wor").expect("cls_Wor").clone();
-		let method_chunk = state.inner().chunk("cls_Wor.fn_run").expect("fn_run").clone();
+		let method_chunk = state
+			.inner()
+			.chunk("cls_Wor.fn_run")
+			.expect("fn_run")
+			.clone();
 
 		// Both CRCs present and valid – selector carries `#CRC` on every segment.
 		let sel = format!(
@@ -2579,17 +2582,14 @@ mod tests {
 		// Stale leaf CRC but fresh ancestor CRC. Under the new lenient rule,
 		// at least one provided CRC matches the ancestor chain, so the edit
 		// proceeds.
-		let sel =
-			format!("cls_Wor#{parent}.fn_run#ZZZZ", parent = class_chunk.checksum);
+		let sel = format!("cls_Wor#{parent}.fn_run#ZZZZ", parent = class_chunk.checksum);
 		let result = apply_edits(&state, &EditParams {
 			operations:       vec![EditOperation {
 				op:      ChunkEditOp::Put,
 				sel:     Some(sel),
 				crc:     None,
 				region:  None,
-				content: Some(
-					"run(): void {\n\tconsole.log(\"any-match\");\n}".to_owned(),
-				),
+				content: Some("run(): void {\n\tconsole.log(\"any-match\");\n}".to_owned()),
 				find:    None,
 			}],
 			default_selector: None,
@@ -2614,9 +2614,7 @@ mod tests {
 				sel:     Some("cls_Wor#XXXX.fn_run#ZZZZ".to_owned()),
 				crc:     None,
 				region:  None,
-				content: Some(
-					"run(): void {\n\tconsole.log(\"should-not-apply\");\n}".to_owned(),
-				),
+				content: Some("run(): void {\n\tconsole.log(\"should-not-apply\");\n}".to_owned()),
 				find:    None,
 			}],
 			default_selector: None,
@@ -2628,10 +2626,7 @@ mod tests {
 		})
 		.err()
 		.expect("all-stale multi-crc selector should fail");
-		assert!(
-			err.to_string().contains("None of the provided checksums"),
-			"{err}"
-		);
+		assert!(err.contains("None of the provided checksums"), "{err}");
 	}
 
 	#[test]

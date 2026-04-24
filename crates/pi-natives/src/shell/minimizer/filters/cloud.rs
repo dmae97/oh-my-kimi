@@ -2,8 +2,6 @@
 
 use crate::shell::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
-const MAX_AWS_LINES: usize = 120;
-const MAX_HTTP_LINES: usize = 100;
 const MAX_PSQL_ROWS: usize = 30;
 const MAX_LINE_CHARS: usize = 500;
 
@@ -27,29 +25,17 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	}
 }
 
-fn filter_aws(input: &str, exit_code: i32) -> String {
+fn filter_aws(input: &str, _exit_code: i32) -> String {
 	let without_progress = strip_transfer_progress(input);
-	let compacted = if looks_like_table(&without_progress) {
+	if looks_like_table(&without_progress) {
 		compact_delimited_table(&without_progress, 40)
 	} else {
-		compact_jsonish_or_text(&without_progress, MAX_AWS_LINES, 70, 50)
-	};
-
-	if exit_code == 0 {
-		compacted
-	} else {
-		preserve_important_lines(&without_progress, &compacted)
+		without_progress
 	}
 }
 
-fn filter_http_transfer(input: &str, exit_code: i32) -> String {
-	let without_progress = strip_transfer_progress(input);
-	let compacted = compact_jsonish_or_text(&without_progress, MAX_HTTP_LINES, 60, 40);
-	if exit_code == 0 {
-		compacted
-	} else {
-		preserve_important_lines(&without_progress, &compacted)
-	}
+fn filter_http_transfer(input: &str, _exit_code: i32) -> String {
+	strip_transfer_progress(input)
 }
 
 fn filter_psql(input: &str, exit_code: i32) -> String {
@@ -74,12 +60,21 @@ fn filter_psql(input: &str, exit_code: i32) -> String {
 
 fn strip_transfer_progress(input: &str) -> String {
 	let mut out = String::new();
-	for line in input.lines() {
+	for segment in input.split_inclusive('\n') {
+		let line = if let Some(line) = segment.strip_suffix('\n') {
+			line
+		} else {
+			segment
+		};
+		let line = if let Some(line) = line.strip_suffix('\r') {
+			line
+		} else {
+			line
+		};
 		if is_transfer_progress_line(line) {
 			continue;
 		}
-		out.push_str(line.trim_end());
-		out.push('\n');
+		out.push_str(segment);
 	}
 	out
 }
@@ -114,8 +109,33 @@ fn is_transfer_progress_line(line: &str) -> bool {
 	if trimmed.contains('%') && (trimmed.contains("K/s") || trimmed.contains("M/s")) {
 		return true;
 	}
-	let first_is_digit = trimmed.chars().next().is_some_and(|ch| ch.is_ascii_digit());
-	first_is_digit && trimmed.contains('%')
+	looks_like_wget_transfer_progress(trimmed)
+}
+
+fn looks_like_wget_transfer_progress(line: &str) -> bool {
+	let mut parts = line.split_whitespace();
+	let Some(offset) = parts.next() else {
+		return false;
+	};
+	let has_offset = offset
+		.strip_suffix('K')
+		.or_else(|| offset.strip_suffix('M'))
+		.is_some_and(|value| !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit()));
+	if !has_offset {
+		return false;
+	}
+	let mut saw_meter = false;
+	let mut saw_percent = false;
+	for part in parts {
+		if part.chars().all(|ch| ch == '.') {
+			saw_meter = true;
+		}
+		if part.ends_with('%') {
+			let number = part.trim_end_matches('%');
+			saw_percent = !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit());
+		}
+	}
+	saw_meter && saw_percent
 }
 
 fn compact_jsonish_or_text(input: &str, max_lines: usize, head: usize, tail: usize) -> String {
@@ -168,10 +188,19 @@ fn looks_like_psql_table(input: &str) -> bool {
 }
 
 fn looks_like_psql_expanded(input: &str) -> bool {
-	input.lines().any(|line| {
-		let trimmed = line.trim();
-		trimmed.starts_with("-[ RECORD ") && trimmed.ends_with(" ]-")
-	})
+	input
+		.lines()
+		.any(|line| is_psql_expanded_header(line.trim()))
+}
+
+fn is_psql_expanded_header(line: &str) -> bool {
+	if !line.starts_with("-[ RECORD ") {
+		return false;
+	}
+	let Some((_, suffix)) = line.split_once(" ]") else {
+		return false;
+	};
+	!suffix.is_empty() && suffix.chars().all(|ch| ch == '-')
 }
 
 fn compact_delimited_table(input: &str, max_rows: usize) -> String {
@@ -249,13 +278,18 @@ fn compact_psql_table(input: &str) -> String {
 fn compact_psql_expanded(input: &str) -> String {
 	let mut out = Vec::new();
 	let mut current = Vec::new();
+	let mut row_count_lines = Vec::new();
 	let mut records = 0usize;
 	for line in input.lines() {
 		let trimmed = line.trim();
-		if trimmed.is_empty() || is_psql_row_count(trimmed) {
+		if trimmed.is_empty() {
 			continue;
 		}
-		if trimmed.starts_with("-[ RECORD ") && trimmed.ends_with(" ]-") {
+		if is_psql_row_count(trimmed) {
+			row_count_lines.push(trimmed.to_string());
+			continue;
+		}
+		if is_psql_expanded_header(trimmed) {
 			flush_record(&mut out, &mut current, records);
 			records += 1;
 			current.push(trimmed.to_string());
@@ -275,6 +309,7 @@ fn compact_psql_expanded(input: &str) -> String {
 	if records > MAX_PSQL_ROWS {
 		out.push(format!("... +{} more records", records - MAX_PSQL_ROWS));
 	}
+	out.extend(row_count_lines);
 	join_lines(out)
 }
 
@@ -373,29 +408,38 @@ mod tests {
 	}
 
 	#[test]
-	fn strips_curl_progress_and_keeps_json_body() {
+	fn strips_curl_progress_and_preserves_long_multiline_body() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = ctx("curl", &cfg);
-		let input = "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  \
-		             Current\n100  1234  100  1234    0     0  9999      0 --:--:-- --:--:-- \
-		             --:--:-- 9999\n{\"ok\":true}\n";
-		let out = filter(&ctx, input, 0);
+		let long_line = format!("{{\"payload\":\"{}\"}}", "x".repeat(620));
+		let mut body = String::new();
+		for idx in 0..130 {
+			body.push_str("{\"idx\":");
+			body.push_str(&idx.to_string());
+			body.push_str(",\"ok\":true}\n");
+		}
+		body.push_str(&long_line);
+		body.push('\n');
+		let input = format!(
+			"  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n100  \
+			 1234  100  1234    0     0  9999      0 --:--:-- --:--:-- --:--:-- 9999\n{body}"
+		);
+		let out = filter(&ctx, &input, 0);
 		assert!(!out.text.contains("% Total"));
 		assert!(!out.text.contains("--:--:--"));
-		assert!(out.text.contains("{\"ok\":true}"));
+		assert_eq!(out.text, body);
 	}
 
 	#[test]
-	fn strips_wget_progress_and_keeps_body() {
+	fn strips_wget_progress_and_preserves_body_percent_line() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = ctx("wget", &cfg);
 		let input = "--2026-04-24--  https://example.test/data.json\nResolving example.test... \
 		             127.0.0.1\n     0K .......... .......... 50% 1.2M 0s\n    20K .......... \
-		             .......... 100% 2.0M=0.1s\n[{\"id\":1}]\n";
+		             .......... 100% 2.0M=0.1s\n100% real body\n[{\"id\":1}]\n";
+		let expected = "100% real body\n[{\"id\":1}]\n";
 		let out = filter(&ctx, input, 0);
-		assert!(!out.text.contains("Resolving example"));
-		assert!(!out.text.contains("........"));
-		assert!(out.text.contains("[{\"id\":1}]"));
+		assert_eq!(out.text, expected);
 	}
 
 	#[test]
@@ -415,7 +459,19 @@ mod tests {
 	}
 
 	#[test]
-	fn compacts_long_aws_output() {
+	fn compacts_psql_expanded_dashed_records_and_preserves_footer() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("psql", &cfg);
+		let input = "-[ RECORD 1 ]-----\nid | 1\nname | alice\n-[ RECORD 2 ]-----\nid | 2\nname | \
+		             bob\n(2 rows)\n";
+		let out = filter(&ctx, input, 0);
+		assert!(out.text.contains("-[ RECORD 1 ]----- id=1 name=alice"));
+		assert!(out.text.contains("-[ RECORD 2 ]----- id=2 name=bob"));
+		assert!(out.text.contains("(2 rows)"));
+	}
+
+	#[test]
+	fn preserves_long_aws_json_output() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = ctx("aws", &cfg);
 		let mut input = String::new();
@@ -429,8 +485,6 @@ mod tests {
 			input.push_str("\"}\n");
 		}
 		let out = filter(&ctx, &input, 0);
-		assert!(out.text.contains("… 40 lines omitted …"));
-		assert!(out.text.contains("i-0000"));
-		assert!(out.text.contains("i-0159"));
+		assert_eq!(out.text, input);
 	}
 }

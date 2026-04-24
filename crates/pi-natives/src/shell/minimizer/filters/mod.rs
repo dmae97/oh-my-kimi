@@ -54,8 +54,10 @@ pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 		"jest" | "vitest" | "playwright" => true,
 		"next" | "prettier" | "prisma" => js_tools::supports(program, subcommand),
 		"npx" => {
-			matches!(subcommand, Some("tsc" | "eslint")) || js_tools::supports(program, subcommand)
+			matches!(subcommand, Some("tsc" | "eslint" | "biome" | "jest" | "vitest" | "playwright"))
+				|| js_tools::supports(program, subcommand)
 		},
+		"pnpm" if matches!(subcommand, Some("dlx")) => true,
 		"npm" | "pnpm" | "yarn" | "pip" | "pip3" | "bundle" | "brew" | "composer" | "uv"
 		| "poetry" => pkg::supports(subcommand),
 		"env" | "log" | "deps" | "summary" | "err" | "test" | "diff" | "format" | "pipe" | "ps"
@@ -88,17 +90,76 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		| "oxlint" | "pyright" | "basedpyright" => lint::filter(ctx, input, exit_code),
 		"jest" | "vitest" | "playwright" => node_tests::filter(ctx, input, exit_code),
 		"next" | "prettier" | "prisma" => js_tools::filter(ctx, input, exit_code),
-		"npx" => {
-			if matches!(ctx.subcommand, Some("tsc" | "eslint")) {
-				lint::filter(ctx, input, exit_code)
-			} else {
-				js_tools::filter(ctx, input, exit_code)
-			}
-		},
+		"npx" => filter_js_wrapper(ctx, input, exit_code),
+		"pnpm" if matches!(ctx.subcommand, Some("dlx")) => filter_js_wrapper(ctx, input, exit_code),
 		"npm" | "pnpm" | "yarn" | "pip" | "pip3" | "bundle" | "brew" | "composer" | "uv"
 		| "poetry" => pkg::filter(ctx, input, exit_code),
 		"env" | "log" | "deps" | "summary" | "err" | "test" | "diff" | "format" | "pipe" | "ps"
 		| "ping" | "ssh" | "sops" => system::filter(ctx, input, exit_code),
 		_ => generic::filter(ctx, input, exit_code),
+	}
+}
+
+fn filter_js_wrapper(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
+	if wrapper_invokes(ctx, &["tsc", "eslint", "biome"]) {
+		lint::filter(ctx, input, exit_code)
+	} else if wrapper_invokes(ctx, &["jest", "vitest", "playwright"]) {
+		node_tests::filter(ctx, input, exit_code)
+	} else if js_tools::supports(ctx.program, ctx.subcommand) {
+		js_tools::filter(ctx, input, exit_code)
+	} else {
+		MinimizerOutput::passthrough(input)
+	}
+}
+
+fn wrapper_invokes(ctx: &MinimizerCtx<'_>, tools: &[&str]) -> bool {
+	ctx.subcommand
+		.is_some_and(|subcommand| tools.contains(&subcommand))
+		|| ctx
+			.command
+			.split(|ch: char| ch.is_whitespace() || matches!(ch, ';' | '|' | '&'))
+			.any(|token| tools.contains(&token))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::shell::minimizer::MinimizerConfig;
+
+	fn ctx<'a>(
+		program: &'a str,
+		subcommand: Option<&'a str>,
+		command: &'a str,
+		config: &'a MinimizerConfig,
+	) -> MinimizerCtx<'a> {
+		MinimizerCtx { program, subcommand, command, config }
+	}
+
+	#[test]
+	fn npx_test_tools_route_to_node_test_filter() {
+		let config = MinimizerConfig::default();
+		let context = ctx("npx", Some("vitest"), "npx vitest", &config);
+		let input = "✓ passes\nFAIL src/example.test.ts\nAssertionError: expected true\nTests: 1 \
+		             failed, 1 passed\n";
+		let out = filter(&context, input, 1).text;
+		assert!(!out.contains("✓ passes"));
+		assert!(out.contains("FAIL src/example.test.ts"));
+		assert!(out.contains("AssertionError"));
+	}
+
+	#[test]
+	fn pnpm_dlx_unknown_tool_is_passthrough() {
+		let config = MinimizerConfig::default();
+		let context = ctx("pnpm", Some("dlx"), "pnpm dlx unknown-tool", &config);
+		let input = "line 1\nline 2\n";
+		let out = filter(&context, input, 0);
+		assert_eq!(out.text, input);
+		assert!(!out.changed);
+	}
+
+	#[test]
+	fn pi_cli_names_are_not_supported() {
+		assert!(!supports("rtk", None));
+		assert!(!supports("pi", None));
 	}
 }

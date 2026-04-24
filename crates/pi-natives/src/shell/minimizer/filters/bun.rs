@@ -27,6 +27,10 @@ pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let subcommand = ctx.subcommand;
+	if matches!((ctx.program, subcommand), ("bun", Some(subcommand)) if is_non_exec_package_subcommand(subcommand))
+	{
+		return pkg::filter(ctx, input, exit_code);
+	}
 	if is_test_invocation(ctx.program, subcommand, ctx.command) {
 		return node_tests::filter(ctx, input, exit_code);
 	}
@@ -45,21 +49,32 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	}
 }
 
+fn is_non_exec_package_subcommand(subcommand: &str) -> bool {
+	BUN_PACKAGE_SUBCOMMANDS.contains(&subcommand) && !matches!(subcommand, "run" | "exec")
+}
+
 fn is_test_invocation(program: &str, subcommand: Option<&str>, command: &str) -> bool {
 	matches!(
 		(program, subcommand),
 		("bun", Some("test")) | ("bunx", Some("jest" | "vitest" | "playwright"))
-	) || command_contains_tool(command, &["jest", "vitest", "playwright"])
+	) || is_exec_package_subcommand(program, subcommand)
+		&& command_contains_tool(command, &["jest", "vitest", "playwright"])
+}
+
+fn is_exec_package_subcommand(program: &str, subcommand: Option<&str>) -> bool {
+	matches!((program, subcommand), ("bun", Some("run" | "exec")))
 }
 
 fn is_lint_invocation(program: &str, subcommand: Option<&str>, command: &str) -> bool {
 	matches!((program, subcommand), ("bun" | "bunx", Some("tsc" | "eslint" | "biome")))
-		|| command_contains_tool(command, &["tsc", "eslint", "biome"])
+		|| is_exec_package_subcommand(program, subcommand)
+			&& command_contains_tool(command, &["tsc", "eslint", "biome"])
 }
 
 fn is_js_tool_invocation(program: &str, subcommand: Option<&str>, command: &str) -> bool {
 	matches!((program, subcommand), ("bun" | "bunx", Some("next" | "prettier" | "prisma")))
-		|| command_contains_tool(command, &["next", "prettier", "prisma"])
+		|| is_exec_package_subcommand(program, subcommand)
+			&& command_contains_tool(command, &["next", "prettier", "prisma"])
 }
 
 fn command_contains_tool(command: &str, tools: &[&str]) -> bool {
@@ -142,6 +157,42 @@ mod tests {
 		let out = filter(&ctx, "Resolving dependencies\nDownloaded left-pad\nerror: failed\n", 1);
 		assert!(!out.text.contains("Resolving dependencies"));
 		assert!(out.text.contains("error: failed"));
+	}
+
+	#[test]
+	fn bun_add_known_tool_package_names_use_package_filter() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		for package in ["eslint", "prettier", "jest"] {
+			let command = format!("bun add {package}");
+			let ctx = ctx("bun", Some("add"), &command, &cfg);
+			let input = format!("Resolving dependencies\nDownloaded {package}\nerror: failed\n");
+			let out = filter(&ctx, &input, 1);
+			assert!(
+				!out.text.contains("Resolving dependencies"),
+				"{package} should use package filtering"
+			);
+			assert!(!out.text.contains("Downloaded"), "{package} should strip package download noise");
+			assert!(out.text.contains("error: failed"));
+		}
+	}
+
+	#[test]
+	fn bun_next_build_uses_next_route_filter() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		for (subcommand, command) in
+			[(Some("next"), "bun next build"), (Some("run"), "bun run next build")]
+		{
+			let ctx = ctx("bun", subcommand, command, &cfg);
+			let out = filter(
+				&ctx,
+				"   ▲ Next.js 15.2.0\nCreating an optimized production build ...\nRoute (app)                    Size     First Load JS\n┌ ○ /                          1.2 kB        132 kB\n✓ Built in 34.2s\n",
+				0,
+			);
+			assert!(out.text.contains("Route (app)"));
+			assert!(out.text.contains('/'));
+			assert!(out.text.contains("Built in 34.2s"));
+			assert!(!out.text.contains("Creating an optimized"));
+		}
 	}
 
 	#[test]

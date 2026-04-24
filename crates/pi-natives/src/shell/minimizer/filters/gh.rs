@@ -19,11 +19,14 @@ pub fn supports(subcommand: Option<&str>) -> bool {
 }
 
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
+	if preserves_raw_mode(ctx) {
+		return MinimizerOutput::passthrough(input);
+	}
+
 	let cleaned = primitives::strip_ansi(input);
 	let text = match ctx.subcommand {
 		Some("pr" | "issue") => filter_pr_issue(&cleaned, exit_code),
 		Some("run" | "workflow") => filter_run(&cleaned, exit_code),
-		Some("api") if exit_code == 0 => primitives::head_tail_lines(&cleaned, 80, 80),
 		_ => head_tail_dedup(&cleaned),
 	};
 
@@ -32,6 +35,49 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	} else {
 		MinimizerOutput::transformed(text)
 	}
+}
+
+fn preserves_raw_mode(ctx: &MinimizerCtx<'_>) -> bool {
+	match ctx.subcommand {
+		Some("api") => true,
+		Some("run") => {
+			command_has_ordered_tokens(ctx.command, "run", "view")
+				&& command_has_any_token(ctx.command, &["--log", "--log-failed", "--json"])
+		},
+		Some("pr") if command_has_ordered_tokens(ctx.command, "pr", "diff") => true,
+		Some("pr") if command_has_ordered_tokens(ctx.command, "pr", "status") => {
+			command_has_any_token(ctx.command, &["--web", "--jq", "--template"])
+		},
+		Some(subcommand @ ("pr" | "issue")) => {
+			command_has_ordered_tokens(ctx.command, subcommand, "view")
+				&& command_has_any_token(ctx.command, &["--json", "--jq", "--comments"])
+		},
+		_ => false,
+	}
+}
+
+fn command_has_ordered_tokens(command: &str, first: &str, second: &str) -> bool {
+	let mut saw_first = false;
+	for part in command.split_whitespace() {
+		if saw_first && part == second {
+			return true;
+		}
+		if part == first {
+			saw_first = true;
+		}
+	}
+	false
+}
+
+fn command_has_any_token(command: &str, tokens: &[&str]) -> bool {
+	command.split_whitespace().any(|part| {
+		tokens.iter().any(|token| {
+			part == *token
+				|| part
+					.strip_prefix(*token)
+					.is_some_and(|suffix| suffix.starts_with('='))
+		})
+	})
 }
 
 fn filter_pr_issue(input: &str, exit_code: i32) -> String {
@@ -111,6 +157,15 @@ fn head_tail_dedup(input: &str) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::shell::minimizer::MinimizerConfig;
+
+	fn test_ctx<'a>(
+		subcommand: Option<&'a str>,
+		command: &'a str,
+		config: &'a MinimizerConfig,
+	) -> MinimizerCtx<'a> {
+		MinimizerCtx { program: "gh", subcommand, command, config }
+	}
 
 	#[test]
 	fn pr_issue_filter_removes_markdown_template_noise() {
@@ -129,5 +184,29 @@ mod tests {
 		let out = filter_run(input, 1);
 		assert!(out.contains("step ok (×2)"));
 		assert!(out.contains("Error: failed job"));
+	}
+
+	#[test]
+	fn api_json_is_passthrough() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("api"), "gh api repos/owner/repo", &cfg);
+		let input = "{\n  \"full_name\": \"owner/repo\",\n  \"private\": false\n}\n";
+
+		let out = filter(&ctx, input, 0);
+
+		assert!(!out.changed);
+		assert_eq!(out.text, input);
+	}
+
+	#[test]
+	fn pr_diff_preserves_diff() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("pr"), "gh pr diff 123", &cfg);
+		let input = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+new\n";
+
+		let out = filter(&ctx, input, 0);
+
+		assert!(!out.changed);
+		assert_eq!(out.text, input);
 	}
 }

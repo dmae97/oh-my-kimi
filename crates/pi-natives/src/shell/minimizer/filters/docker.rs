@@ -42,32 +42,36 @@ fn filter_docker(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> String 
 	if is_log_command(ctx) {
 		return filter_logs(input);
 	}
+	if exit_code != 0 {
+		return input.to_string();
+	}
 	if is_table_command(ctx) {
 		return compact_table(input, 12);
-	}
-	if exit_code != 0 {
-		return head_tail_dedup(input);
 	}
 	compact_build_or_progress(input)
 }
 
 fn filter_kubectl(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> String {
+	if exit_code != 0 && ctx.subcommand != Some("logs") {
+		return input.to_string();
+	}
 	match ctx.subcommand {
 		Some("logs") => filter_logs(input),
 		Some("get") => compact_table(input, 20),
 		Some("describe") => {
 			primitives::head_tail_lines(&primitives::dedup_consecutive_lines(input), 120, 80)
 		},
-		_ if exit_code != 0 => head_tail_dedup(input),
 		_ => compact_build_or_progress(input),
 	}
 }
 
 fn filter_helm(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> String {
+	if exit_code != 0 {
+		return input.to_string();
+	}
 	match ctx.subcommand {
 		Some("list" | "ls" | "status") => compact_table(input, 20),
 		Some("install" | "upgrade" | "template" | "lint") => compact_build_or_progress(input),
-		_ if exit_code != 0 => head_tail_dedup(input),
 		_ => head_tail_dedup(input),
 	}
 }
@@ -164,6 +168,7 @@ fn head_tail_dedup(input: &str) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::shell::minimizer::MinimizerConfig;
 
 	#[test]
 	fn dedups_repeated_log_lines_before_truncation() {
@@ -183,5 +188,30 @@ mod tests {
 		let out = compact_table(&input, 10);
 		assert!(out.contains("25 rows"));
 		assert!(out.contains("… 15 more rows"));
+	}
+
+	fn ctx<'a>(
+		program: &'a str,
+		subcommand: Option<&'a str>,
+		cfg: &'a MinimizerConfig,
+	) -> MinimizerCtx<'a> {
+		MinimizerCtx { program, subcommand, command: program, config: cfg }
+	}
+
+	#[test]
+	fn failing_table_commands_preserve_full_diagnostics() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let docker_ctx = ctx("docker", Some("ps"), &cfg);
+		let kubectl_ctx = ctx("kubectl", Some("get"), &cfg);
+		let helm_ctx = ctx("helm", Some("list"), &cfg);
+		let mut input = String::from("NAME STATUS\n");
+		for idx in 0..30 {
+			input.push_str("resource-with-a-very-long-diagnostic-name-");
+			input.push_str(&idx.to_string());
+			input.push_str(" failed because the apiserver returned a detailed validation error\n");
+		}
+		assert_eq!(filter(&docker_ctx, &input, 1).text, input);
+		assert_eq!(filter(&kubectl_ctx, &input, 1).text, input);
+		assert_eq!(filter(&helm_ctx, &input, 1).text, input);
 	}
 }

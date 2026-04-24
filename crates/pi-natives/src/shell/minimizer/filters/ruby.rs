@@ -34,6 +34,10 @@ fn ruby_tool<'a>(program: &'a str, subcommand: Option<&'a str>) -> Option<&'a st
 }
 
 fn filter_rspec(input: &str, exit_code: i32) -> String {
+	if let Some(text) = compact_rspec_json(input) {
+		return text;
+	}
+
 	if exit_code == 0 {
 		return ruby_test_success(input);
 	}
@@ -79,6 +83,140 @@ fn filter_rspec(input: &str, exit_code: i32) -> String {
 	} else {
 		primitives::head_tail_lines(input, 80, 80)
 	}
+}
+
+fn compact_rspec_json(input: &str) -> Option<String> {
+	let value: serde_json::Value = serde_json::from_str(input).ok()?;
+	let map = value.as_object()?;
+	let mut out = String::new();
+
+	if let Some(summary_line) = first_json_string(map, &["summary_line"]) {
+		push_line(&mut out, summary_line);
+	} else if let Some(summary) = map.get("summary").and_then(|value| value.as_object()) {
+		push_line(&mut out, &rspec_summary_from_json(summary));
+	}
+
+	if let Some(examples) = map.get("examples").and_then(|value| value.as_array()) {
+		for example in examples {
+			let Some(example_map) = example.as_object() else {
+				continue;
+			};
+			let status = first_json_string(example_map, &["status"]);
+			if status == Some("failed") {
+				push_rspec_json_example(&mut out, "FAILED", example_map);
+			} else if status == Some("pending") {
+				push_rspec_json_example(&mut out, "PENDING", example_map);
+			}
+		}
+	}
+
+	if let Some(errors) = map
+		.get("errors_outside_of_examples")
+		.and_then(|value| value.as_array())
+	{
+		for error in errors {
+			if let Some(error_map) = error.as_object() {
+				push_rspec_json_error(&mut out, error_map);
+			}
+		}
+	}
+
+	if has_content(&out) { Some(out) } else { None }
+}
+
+fn rspec_summary_from_json(map: &serde_json::Map<String, serde_json::Value>) -> String {
+	let examples = first_json_u64(map, &["example_count"]);
+	let failures = first_json_u64(map, &["failure_count"]);
+	let pending = first_json_u64(map, &["pending_count"]);
+	let errors = first_json_u64(map, &["errors_outside_of_examples_count"]);
+
+	let mut parts = Vec::new();
+	if let Some(examples) = examples {
+		parts.push(format!("{examples} examples"));
+	}
+	if let Some(failures) = failures {
+		parts.push(format!("{failures} failures"));
+	}
+	if let Some(pending) = pending {
+		parts.push(format!("{pending} pending"));
+	}
+	if let Some(errors) = errors {
+		parts.push(format!("{errors} errors outside examples"));
+	}
+
+	if parts.is_empty() {
+		"RSpec JSON summary".to_string()
+	} else {
+		parts.join(", ")
+	}
+}
+
+fn push_rspec_json_example(
+	out: &mut String,
+	label: &str,
+	map: &serde_json::Map<String, serde_json::Value>,
+) {
+	let description = first_json_string(map, &["full_description", "description", "id"])
+		.unwrap_or("<unknown example>");
+	push_line(out, &format!("{label}: {description}"));
+	push_json_location(out, map);
+
+	if let Some(exception) = map.get("exception").and_then(|value| value.as_object()) {
+		push_json_exception(out, exception);
+	}
+	if let Some(message) = first_json_string(map, &["pending_message", "message"]) {
+		push_line(out, message);
+	}
+}
+
+fn push_rspec_json_error(out: &mut String, map: &serde_json::Map<String, serde_json::Value>) {
+	push_line(out, "ERROR outside examples");
+	push_json_exception(out, map);
+}
+
+fn push_json_location(out: &mut String, map: &serde_json::Map<String, serde_json::Value>) {
+	if let Some(path) = first_json_string(map, &["file_path", "file", "path"]) {
+		let mut location = path.to_string();
+		if let Some(line) = first_json_u64(map, &["line_number", "line"]) {
+			location.push(':');
+			location.push_str(&line.to_string());
+		}
+		push_line(out, &location);
+	}
+}
+
+fn push_json_exception(out: &mut String, map: &serde_json::Map<String, serde_json::Value>) {
+	if let Some(class_name) = first_json_string(map, &["class", "class_name", "type"]) {
+		push_line(out, class_name);
+	}
+	if let Some(message) = first_json_string(map, &["message", "description"]) {
+		push_line(out, message);
+	}
+	if let Some(backtrace) = map.get("backtrace").and_then(|value| value.as_array()) {
+		for frame in backtrace {
+			if let Some(frame) = frame.as_str()
+				&& !is_gem_backtrace(frame)
+			{
+				push_line(out, frame);
+				break;
+			}
+		}
+	}
+}
+
+fn first_json_string<'a>(
+	map: &'a serde_json::Map<String, serde_json::Value>,
+	keys: &[&str],
+) -> Option<&'a str> {
+	keys
+		.iter()
+		.find_map(|key| map.get(*key).and_then(|value| value.as_str()))
+}
+
+fn first_json_u64(map: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Option<u64> {
+	keys
+		.iter()
+		.find_map(|key| map.get(*key).and_then(|value| value.as_u64()))
 }
 
 fn filter_minitest(input: &str, exit_code: i32) -> String {
@@ -237,6 +375,76 @@ mod tests {
 		assert!(out.contains("1) Failure"));
 		assert!(out.contains("test/models/user_test.rb:8"));
 		assert!(out.contains("2 runs, 2 assertions, 1 failures"));
+	}
+
+	#[test]
+	fn rspec_json_all_pass_preserves_summary() {
+		let input = r#"{
+	  "examples": [
+		{"id":"./spec/user_spec.rb[1:1]","full_description":"User is valid","status":"passed","file_path":"./spec/user_spec.rb","line_number":3}
+	  ],
+	  "summary": {"example_count":1,"failure_count":0,"pending_count":0,"errors_outside_of_examples_count":0},
+	  "summary_line":"1 example, 0 failures"
+	}"#;
+		let out = filter_rspec(input, 0);
+
+		assert!(out.contains("1 example, 0 failures"));
+		assert!(!out.contains("User is valid"));
+	}
+
+	#[test]
+	fn rspec_json_failure_preserves_example_context() {
+		let input = r#"{
+	  "examples": [
+		{"id":"./spec/user_spec.rb[1:1]","full_description":"User validates name","status":"failed","file_path":"./spec/user_spec.rb","line_number":12,"exception":{"class":"RSpec::Expectations::ExpectationNotMetError","message":"expected valid? to return true, got false","backtrace":["./spec/user_spec.rb:12:in `block'","./vendor/bundle/ruby/3.3.0/gems/rspec-core/lib/rspec/core.rb:1"]}}
+	  ],
+	  "summary": {"example_count":1,"failure_count":1,"pending_count":0,"errors_outside_of_examples_count":0},
+	  "summary_line":"1 example, 1 failure"
+	}"#;
+		let out = filter_rspec(input, 1);
+
+		assert!(out.contains("1 example, 1 failure"));
+		assert!(out.contains("FAILED: User validates name"));
+		assert!(out.contains("./spec/user_spec.rb:12"));
+		assert!(out.contains("expected valid? to return true"));
+		assert!(!out.contains("vendor/bundle"));
+	}
+
+	#[test]
+	fn rspec_json_pending_preserves_pending_context() {
+		let input = r#"{
+	  "examples": [
+		{"id":"./spec/user_spec.rb[1:2]","full_description":"User syncs later","status":"pending","file_path":"./spec/user_spec.rb","line_number":20,"pending_message":"Temporarily skipped"}
+	  ],
+	  "summary": {"example_count":1,"failure_count":0,"pending_count":1,"errors_outside_of_examples_count":0},
+	  "summary_line":"1 example, 0 failures, 1 pending"
+	}"#;
+		let out = filter_rspec(input, 0);
+
+		assert!(out.contains("1 example, 0 failures, 1 pending"));
+		assert!(out.contains("PENDING: User syncs later"));
+		assert!(out.contains("./spec/user_spec.rb:20"));
+		assert!(out.contains("Temporarily skipped"));
+	}
+
+	#[test]
+	fn rspec_json_errors_outside_examples_preserves_error_context() {
+		let input = r#"{
+	  "examples": [],
+	  "errors_outside_of_examples": [
+		{"class":"LoadError","message":"cannot load such file -- missing_helper","backtrace":["./spec/spec_helper.rb:4:in `require'","./vendor/bundle/ruby/3.3.0/gems/rspec-core/lib/rspec/core.rb:1"]}
+	  ],
+	  "summary": {"example_count":0,"failure_count":0,"pending_count":0,"errors_outside_of_examples_count":1},
+	  "summary_line":"0 examples, 0 failures, 1 error occurred outside of examples"
+	}"#;
+		let out = filter_rspec(input, 1);
+
+		assert!(out.contains("0 examples, 0 failures, 1 error occurred outside of examples"));
+		assert!(out.contains("ERROR outside examples"));
+		assert!(out.contains("LoadError"));
+		assert!(out.contains("cannot load such file"));
+		assert!(out.contains("./spec/spec_helper.rb:4"));
+		assert!(!out.contains("vendor/bundle"));
 	}
 
 	#[test]
