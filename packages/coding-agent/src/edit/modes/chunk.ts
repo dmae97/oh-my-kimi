@@ -240,6 +240,20 @@ function chunkReadPathSeparatorIndex(readPath: string): number {
 	if (/^[a-zA-Z]:[/\\]/.test(readPath)) {
 		return readPath.indexOf(":", 2);
 	}
+	const urlMatch = readPath.match(/^([a-z][a-z0-9+.-]*):\/\//i);
+	if (urlMatch) {
+		const scheme = urlMatch[1].toLowerCase();
+		const urlPrefixEnd = urlMatch[0].length;
+		if (scheme === "local") {
+			const index = readPath.lastIndexOf(":");
+			return index >= urlPrefixEnd ? index : -1;
+		}
+
+		const pathStart = readPath.indexOf("/", urlPrefixEnd);
+		if (pathStart === -1) return -1;
+		const index = readPath.lastIndexOf(":");
+		return index >= pathStart ? index : -1;
+	}
 	return readPath.indexOf(":");
 }
 

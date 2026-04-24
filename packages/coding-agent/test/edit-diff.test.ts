@@ -10,6 +10,8 @@ import {
 	DEFAULT_FUZZY_THRESHOLD,
 	findMatch,
 	loadChunkSource,
+	parseChunkEditPath,
+	parseChunkReadPath,
 } from "@oh-my-pi/pi-coding-agent/edit";
 
 describe("findMatch", () => {
@@ -214,6 +216,23 @@ describe("computeChunkDiff", () => {
 		const loaded = await loadChunkSource({ cwd: tmpDir, path: "e.ts" });
 		expect(loaded.exists).toBe(true);
 		expect(loaded.rawContent).toContain("export const x");
+	});
+});
+
+describe("chunk path parsing", () => {
+	test("splits local plan URLs with chunk selectors after the URL path", () => {
+		expect(parseChunkEditPath("local://PLAN.md:sct_0_T#SRJJ")).toEqual({
+			filePath: "local://PLAN.md",
+			selector: "sct_0_T#SRJJ",
+		});
+		expect(parseChunkReadPath("local://PLAN.md:sct_6_R.sct_6_u#MZKS")).toEqual({
+			filePath: "local://PLAN.md",
+			selector: "sct_6_R.sct_6_u#MZKS",
+		});
+	});
+
+	test("does not treat the local URL scheme colon as a chunk selector separator", () => {
+		expect(parseChunkEditPath("local://PLAN.md")).toEqual({ filePath: "local://PLAN.md" });
 	});
 });
 
