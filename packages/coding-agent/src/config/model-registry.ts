@@ -772,6 +772,7 @@ export class ModelRegistry {
 	// models registered by extensions survive the model selector's offline reload.
 	#runtimeModelOverlays: CustomModelOverlay[] = [];
 	#runtimeProviderApiKeys: Map<string, string> = new Map();
+	#runtimeProviderOverrides: Map<string, ProviderOverride> = new Map();
 	#runtimeProvidersBySource: Map<string, Set<string>> = new Map();
 	#runtimeProviderSourceByName: Map<string, string> = new Map();
 
@@ -875,6 +876,10 @@ export class ModelRegistry {
 		this.#discoverableProviders = discoverableProviders;
 		this.#customModelOverlays = customModels;
 		this.#providerOverrides = overrides;
+		for (const [providerName, runtimeOverride] of this.#runtimeProviderOverrides) {
+			const merged = this.#mergeProviderOverride(this.#providerOverrides.get(providerName), runtimeOverride);
+			this.#providerOverrides.set(providerName, merged);
+		}
 		this.#modelOverrides = modelOverrides;
 		this.#equivalenceConfig = equivalence;
 
@@ -1659,6 +1664,14 @@ export class ModelRegistry {
 		});
 	}
 
+	#mergeProviderOverride(baseOverride: ProviderOverride | undefined, override: ProviderOverride): ProviderOverride {
+		return {
+			...baseOverride,
+			...override,
+			headers: override.headers ? { ...(baseOverride?.headers ?? {}), ...override.headers } : baseOverride?.headers,
+			compat: override.compat ? mergeCompat(baseOverride?.compat, override.compat) : baseOverride?.compat,
+		};
+	}
 	#applyModelOverrides(models: Model<Api>[], overrides: Map<string, Map<string, ModelOverride>>): Model<Api>[] {
 		if (overrides.size === 0) return models;
 		return models.map(model => {
@@ -1935,6 +1948,7 @@ export class ModelRegistry {
 			}
 			this.#runtimeProviderSourceByName.delete(providerName);
 			this.#runtimeProviderApiKeys.delete(providerName);
+			this.#runtimeProviderOverrides.delete(providerName);
 			this.#runtimeModelOverlays = this.#runtimeModelOverlays.filter(overlay => overlay.provider !== providerName);
 		}
 		this.#reloadStaticModels();
@@ -2061,6 +2075,11 @@ export class ModelRegistry {
 		}
 
 		if (config.baseUrl || config.headers) {
+			const nextRuntimeOverride = this.#mergeProviderOverride(this.#runtimeProviderOverrides.get(providerName), {
+				baseUrl: config.baseUrl,
+				headers: config.headers,
+			});
+			this.#runtimeProviderOverrides.set(providerName, nextRuntimeOverride);
 			this.#models = this.#models.map(m => {
 				if (m.provider !== providerName) return m;
 				return {
