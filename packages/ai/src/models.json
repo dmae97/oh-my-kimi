@@ -16931,7 +16931,7 @@
 			},
 			"contextWindow": 128000,
 			"maxTokens": 128000,
-			"contextPromotionTarget": "litellm/gpt-5.3-codex",
+			"contextPromotionTarget": "litellm/gpt-5.5",
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "low",
@@ -17011,7 +17011,8 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			}
+			},
+			"contextPromotionTarget": "litellm/gpt-5.4"
 		},
 		"gpt-image-2": {
 			"id": "gpt-image-2",
@@ -32938,7 +32939,7 @@
 				"maxLevel": "xhigh"
 			},
 			"applyPatchToolType": "freeform",
-			"contextPromotionTarget": "openai/gpt-5.3-codex"
+			"contextPromotionTarget": "openai/gpt-5.5"
 		},
 		"gpt-5.4": {
 			"id": "gpt-5.4",
@@ -33068,7 +33069,8 @@
 				"minLevel": "low",
 				"maxLevel": "xhigh"
 			},
-			"applyPatchToolType": "freeform"
+			"applyPatchToolType": "freeform",
+			"contextPromotionTarget": "openai/gpt-5.4"
 		},
 		"o1": {
 			"id": "o1",
@@ -33597,7 +33599,7 @@
 			},
 			"contextWindow": 128000,
 			"maxTokens": 128000,
-			"contextPromotionTarget": "openai-codex/gpt-5.3-codex",
+			"contextPromotionTarget": "openai-codex/gpt-5.5",
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "low",
@@ -33715,7 +33717,8 @@
 				"minLevel": "low",
 				"maxLevel": "xhigh"
 			},
-			"applyPatchToolType": "freeform"
+			"applyPatchToolType": "freeform",
+			"contextPromotionTarget": "openai-codex/gpt-5.4"
 		}
 	},
 	"opencode": {
@@ -33765,8 +33768,7 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			},
-			"contextPromotionTarget": "opencode/gpt-5.3-codex"
+			}
 		},
 		"gpt-5.4": {
 			"id": "gpt-5.4",
@@ -34828,8 +34830,7 @@
 				"mode": "effort",
 				"minLevel": "low",
 				"maxLevel": "xhigh"
-			},
-			"contextPromotionTarget": "opencode-zen/gpt-5.3-codex"
+			}
 		},
 		"gpt-5.4": {
 			"id": "gpt-5.4",
