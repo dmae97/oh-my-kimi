@@ -2771,7 +2771,7 @@ export class SessionManager {
 	static async listAll(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
 		const sessionsRoot = path.join(getDefaultAgentDir(), "sessions");
 		try {
-			const files = Array.from(new Bun.Glob("**/*.jsonl").scanSync(sessionsRoot)).map(name =>
+			const files = await Array.fromAsync(new Bun.Glob("*/*.jsonl").scan(sessionsRoot), name =>
 				path.join(sessionsRoot, name),
 			);
 			return await collectSessionsFromFiles(files, storage);
