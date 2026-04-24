@@ -1189,7 +1189,7 @@ async function materializeReadUrlCacheEntry(
 }
 
 async function persistReadUrlArtifact(session: ToolSession, output: string): Promise<string | undefined> {
-	const { path: artifactPath, id } = (await session.allocateOutputArtifact?.("open")) ?? {};
+	const { path: artifactPath, id } = (await session.allocateOutputArtifact?.("read")) ?? {};
 	if (!artifactPath) return undefined;
 	await Bun.write(artifactPath, output);
 	return id;

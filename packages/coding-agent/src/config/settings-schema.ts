@@ -155,8 +155,8 @@ const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
 export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 	{
 		pattern: "^\\s*(cat|head|tail|less|more)\\s+",
-		tool: "open",
-		message: "Use the `open` tool instead of cat/head/tail. It provides better context and handles binary files.",
+		tool: "read",
+		message: "Use the `read` tool instead of cat/head/tail. It provides better context and handles binary files.",
 	},
 	{
 		pattern: "^\\s*(grep|rg|ripgrep|ag|ack)\\s+",

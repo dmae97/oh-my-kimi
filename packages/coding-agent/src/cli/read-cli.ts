@@ -11,7 +11,7 @@ import { formatChunkedRead, resolveAnchorStyle } from "../edit/modes/chunk";
 import { getLanguageFromPath } from "../modes/theme/theme";
 import type { ToolSession } from "../tools";
 import { parseReadUrlTarget } from "../tools/fetch";
-import { OpenTool } from "../tools/open";
+import { ReadTool } from "../tools/read";
 
 export interface ReadCommandArgs {
 	path: string;
@@ -34,7 +34,7 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 	const parsedUrlTarget = parseReadUrlTarget(cmd.path, cmd.sel);
 	if (parsedUrlTarget) {
 		const settings = await Settings.init({ cwd });
-		const tool = new OpenTool(createCliReadSession(cwd, settings));
+		const tool = new ReadTool(createCliReadSession(cwd, settings));
 		const result = await tool.execute("cli-read", { path: cmd.path, sel: cmd.sel });
 		const text = result.content.find((content): content is { type: "text"; text: string } => content.type === "text");
 		console.log(text?.text ?? "");

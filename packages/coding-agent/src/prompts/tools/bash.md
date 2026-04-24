@@ -33,13 +33,13 @@ You **MUST NOT** use bash for file operations where specialized tools exist:
 
 |Instead of (WRONG)|Use (CORRECT)|
 |---|---|
-|`cat file`, `head -n N file`|`open(path="file", limit=N)`|
-|`cat -n file \|sed -n '50,150p'`|`open(path="file", offset=50, limit=100)`|
+|`cat file`, `head -n N file`|`read(path="file", limit=N)`|
+|`cat -n file \|sed -n '50,150p'`|`read(path="file", offset=50, limit=100)`|
 {{#if hasGrep}}|`grep -A 20 'pat' file`|`grep(pattern="pat", path="file", post=20)`|
 |`grep -rn 'pat' dir/`|`grep(pattern="pat", path="dir/")`|
 |`rg 'pattern' dir/`|`grep(pattern="pattern", path="dir/")`|{{/if}}
 {{#if hasFind}}|`find dir -name '*.ts'`|`find(pattern="dir/**/*.ts")`|{{/if}}
-|`ls dir/`|`open(path="dir/")`|
+|`ls dir/`|`read(path="dir/")`|
 |`cat <<'EOF' > file`|`write(path="file", content="…")`|
 |`sed -i 's/old/new/' file`|`edit(path="file", edits=[…])`|
 {{#if hasAstEdit}}|`sed -i 's/oldFn(/newFn(/' src/*.ts`|`ast_edit({ops:[{pat:"oldFn($$$A)", out:"newFn($$$A)"}], path:"src/"})`|{{/if}}

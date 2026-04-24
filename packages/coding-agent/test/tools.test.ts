@@ -14,9 +14,9 @@ import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { CancelJobTool } from "@oh-my-pi/pi-coding-agent/tools/cancel-job";
 import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
 import { GrepTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
-import { OpenTool } from "@oh-my-pi/pi-coding-agent/tools/open";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import { PollTool } from "@oh-my-pi/pi-coding-agent/tools/poll-tool";
+import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import * as markitUtils from "@oh-my-pi/pi-coding-agent/utils/markit";
 import { $which, Snowflake } from "@oh-my-pi/pi-utils";
@@ -216,7 +216,7 @@ function createTestToolContext(toolNames: string[]): AgentToolContext {
 describe("Coding Agent Tools", () => {
 	let testDir: string;
 	let session: ToolSession;
-	let readTool: OpenTool;
+	let readTool: ReadTool;
 	let writeTool: WriteTool;
 	let editTool: EditTool;
 	let bashTool: BashTool;
@@ -235,7 +235,7 @@ describe("Coding Agent Tools", () => {
 
 		// Create tools for this test directory
 		session = createTestToolSession(testDir);
-		readTool = wrapToolWithMetaNotice(new OpenTool(session));
+		readTool = wrapToolWithMetaNotice(new ReadTool(session));
 		writeTool = wrapToolWithMetaNotice(new WriteTool(session));
 		editTool = wrapToolWithMetaNotice(new EditTool(session));
 		bashTool = wrapToolWithMetaNotice(new BashTool(session));
@@ -519,7 +519,7 @@ describe("Coding Agent Tools", () => {
 			fs.writeFileSync(testFile, pngBuffer);
 
 			const legacyReadTool = wrapToolWithMetaNotice(
-				new OpenTool(createTestToolSession(testDir, Settings.isolated({ "inspect_image.enabled": false }))),
+				new ReadTool(createTestToolSession(testDir, Settings.isolated({ "inspect_image.enabled": false }))),
 			);
 			const result = await legacyReadTool.execute("test-call-img-1", { path: testFile });
 
@@ -543,7 +543,7 @@ describe("Coding Agent Tools", () => {
 			fs.writeFileSync(testFile, pngBuffer);
 
 			const inspectModeReadTool = wrapToolWithMetaNotice(
-				new OpenTool(createTestToolSession(testDir, Settings.isolated({ "inspect_image.enabled": true }))),
+				new ReadTool(createTestToolSession(testDir, Settings.isolated({ "inspect_image.enabled": true }))),
 			);
 			const result = await inspectModeReadTool.execute("test-call-img-guidance", { path: testFile });
 			const output = getTextOutput(result);
@@ -820,7 +820,7 @@ function b() {
 					undefined,
 					createTestToolContext(["read"]),
 				),
-			).rejects.toThrow(/Use the `open` tool instead of cat\/head\/tail/);
+			).rejects.toThrow(/Use the `read` tool instead of cat\/head\/tail/);
 		});
 
 		it("should allow an explicit empty interceptor pattern list", async () => {

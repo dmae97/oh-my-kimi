@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import "../../src/tools/renderers";
 import { Settings } from "../../src/config/settings";
-import { OpenTool } from "../../src/tools/open";
+import { ReadTool } from "../../src/tools/read";
 import { parseSqlitePathCandidates, parseSqliteSelector, renderTable } from "../../src/tools/sqlite-reader";
 import { WriteTool } from "../../src/tools/write";
 
@@ -13,7 +13,7 @@ type ToolTextResult = {
 	content: Array<{ type: string; text?: string }>;
 };
 
-type SessionLike = ConstructorParameters<typeof OpenTool>[0];
+type SessionLike = ConstructorParameters<typeof ReadTool>[0];
 
 function getText(result: ToolTextResult): string {
 	return result.content
@@ -150,7 +150,7 @@ describe("SQLite tool support", () => {
 	let sqlitePath: string;
 	let sqliteDbPath: string;
 	let invalidDbPath: string;
-	let readTool: OpenTool;
+	let readTool: ReadTool;
 	let writeTool: WriteTool;
 	let originalEditVariant: string | undefined;
 
@@ -167,7 +167,7 @@ describe("SQLite tool support", () => {
 		await Bun.write(invalidDbPath, "not sqlite\nstill text\n");
 
 		const session = createSession(tmpDir);
-		readTool = new OpenTool(session);
+		readTool = new ReadTool(session);
 		writeTool = new WriteTool(session);
 	});
 

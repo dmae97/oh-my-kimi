@@ -21,8 +21,8 @@ import { ghRunWatchToolRenderer } from "./gh-renderer";
 import { grepToolRenderer } from "./grep";
 import { inspectImageToolRenderer } from "./inspect-image-renderer";
 import { notebookToolRenderer } from "./notebook";
-import { openToolRenderer } from "./open";
 import { pythonToolRenderer } from "./python";
+import { readToolRenderer } from "./read";
 import { resolveToolRenderer } from "./resolve";
 import { searchToolBm25Renderer } from "./search-tool-bm25";
 import { sshToolRenderer } from "./ssh";
@@ -57,7 +57,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	lsp: lspToolRenderer as ToolRenderer,
 	notebook: notebookToolRenderer as ToolRenderer,
 	inspect_image: inspectImageToolRenderer as ToolRenderer,
-	read: openToolRenderer as ToolRenderer,
+	read: readToolRenderer as ToolRenderer,
 	resolve: resolveToolRenderer as ToolRenderer,
 	search_tool_bm25: searchToolBm25Renderer as ToolRenderer,
 	ssh: sshToolRenderer as ToolRenderer,

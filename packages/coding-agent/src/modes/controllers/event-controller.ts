@@ -212,7 +212,7 @@ export class EventController {
 
 			for (const content of this.ctx.streamingMessage.content) {
 				if (content.type !== "toolCall") continue;
-				if (content.name === "open" || content.name === "read") {
+				if (content.name === "read") {
 					this.#trackReadToolCall(content.id, content.arguments);
 					const component = this.ctx.pendingTools.get(content.id);
 					if (component) {
@@ -309,7 +309,7 @@ export class EventController {
 	async #handleToolExecutionStart(event: Extract<AgentSessionEvent, { type: "tool_execution_start" }>): Promise<void> {
 		this.#updateWorkingMessageFromIntent(event.intent);
 		if (!this.ctx.pendingTools.has(event.toolCallId)) {
-			if (event.toolName === "open" || event.toolName === "read") {
+			if (event.toolName === "read") {
 				this.#trackReadToolCall(event.toolCallId, event.args);
 				const component = this.ctx.pendingTools.get(event.toolCallId);
 				if (component) {
@@ -366,7 +366,7 @@ export class EventController {
 	}
 
 	async #handleToolExecutionEnd(event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>): Promise<void> {
-		if (event.toolName === "open" || event.toolName === "read") {
+		if (event.toolName === "read") {
 			if (this.#inlineReadToolImages(event.toolCallId, event.result)) {
 				const component = this.ctx.pendingTools.get(event.toolCallId);
 				if (component) {

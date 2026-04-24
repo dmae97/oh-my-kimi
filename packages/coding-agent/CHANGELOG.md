@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added a non-mutating chunk edit `read: true` operation for inspecting chunk content without relying on edit failures or delete previews.

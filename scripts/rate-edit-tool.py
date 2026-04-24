@@ -34,12 +34,12 @@ from omp_rpc import (  # noqa: E402
     MessageUpdateEvent,
     RpcClient,
     RpcError,
-    RpcProcessExitError,
     RpcNotification,
+    RpcProcessExitError,
     TodoAutoClearEvent,
     TodoItem,
-    TodoReminderEvent,
     TodoPhase,
+    TodoReminderEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
@@ -151,8 +151,9 @@ TODOS = [
     "Summarize what was awkward, impossible, ambiguous, or under-documented with concrete examples spanning all fixtures.",
 ]
 
-TS_FIXTURE = textwrap.dedent(
-    """\
+TS_FIXTURE = (
+    textwrap.dedent(
+        """\
     function sealed(_target: Function): void {}
 
     function trace(_label: string) {
@@ -302,10 +303,13 @@ TS_FIXTURE = textwrap.dedent(
       }
     }
     """
-).strip() + "\n"
+    ).strip()
+    + "\n"
+)
 
-RUST_FIXTURE = textwrap.dedent(
-    """\
+RUST_FIXTURE = (
+    textwrap.dedent(
+        """\
     use std::collections::HashMap;
     use std::fmt;
 
@@ -480,10 +484,13 @@ RUST_FIXTURE = textwrap.dedent(
         }
     }
     """
-).strip() + "\n"
+    ).strip()
+    + "\n"
+)
 
-GO_FIXTURE = textwrap.dedent(
-    """\
+GO_FIXTURE = (
+    textwrap.dedent(
+        """\
     package main
 
     import (
@@ -604,12 +611,14 @@ GO_FIXTURE = textwrap.dedent(
         fmt.Println(sink.Snapshot())
     }
     """
-).strip() + "\n"
+    ).strip()
+    + "\n"
+)
 
 
-
-PYTHON_FIXTURE = textwrap.dedent(
-    """\
+PYTHON_FIXTURE = (
+    textwrap.dedent(
+        """\
     from __future__ import annotations
 
     from dataclasses import dataclass, field
@@ -684,10 +693,13 @@ PYTHON_FIXTURE = textwrap.dedent(
     def write_report(lines: Iterable[str], target: Path) -> None:
         target.write_text("\n".join(lines) + "\n", encoding="utf-8")
     """
-).strip() + "\n"
+    ).strip()
+    + "\n"
+)
 
-MARKDOWN_FIXTURE = textwrap.dedent(
-    """\
+MARKDOWN_FIXTURE = (
+    textwrap.dedent(
+        """\
     ---
     title: Tooling Evaluation Notes
     owner: Fixtures Team
@@ -734,7 +746,9 @@ MARKDOWN_FIXTURE = textwrap.dedent(
     2. List insertions should not collapse into one paragraph.
     3. Deleting this section should not damage the fenced blocks above.
     """
-).strip() + "\n"
+    ).strip()
+    + "\n"
+)
 
 REFERENCE_FILES = {
     "PROMPT.md": PROMPT + "\n",
@@ -775,8 +789,13 @@ def build_fixture_prompt() -> str:
         f"- `{fixture_file}` ({FIXTURE_DESCRIPTIONS.get(language, language)})"
         for language, fixture_file in FIXTURES
     ]
-    surface = "Test surface (exercise every file in this workspace):\n" + "\n".join(lines)
-    return PROMPT.format(FIXTURE_SURFACE=surface) + "\n\nExercise every fixture in one session; do not skip any file type."
+    surface = "Test surface (exercise every file in this workspace):\n" + "\n".join(
+        lines
+    )
+    return (
+        PROMPT.format(FIXTURE_SURFACE=surface)
+        + "\n\nExercise every fixture in one session; do not skip any file type."
+    )
 
 
 @dataclass
@@ -827,7 +846,7 @@ class ModelProgress:
     todo_items: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
-TOOL_WHITELIST = ("open", "edit", "todo_write", "report_tool_issue")
+TOOL_WHITELIST = ("read", "edit", "todo_write", "report_tool_issue")
 MODEL_LABEL_WIDTH = 30
 STATUS_WIDTH = 7
 TOKENS_WIDTH = 9
@@ -868,14 +887,20 @@ def format_count(value: int | None) -> str:
     return str(value)
 
 
-def extract_usage_tokens(message: dict[str, Any]) -> tuple[int | None, int | None, int | None]:
+def extract_usage_tokens(
+    message: dict[str, Any],
+) -> tuple[int | None, int | None, int | None]:
     usage = message.get("usage")
     if not isinstance(usage, dict):
         return None, None, None
     token_input = usage.get("input")
     token_output = usage.get("output")
     token_total = usage.get("totalTokens")
-    if not isinstance(token_total, int) and isinstance(token_input, int) and isinstance(token_output, int):
+    if (
+        not isinstance(token_total, int)
+        and isinstance(token_input, int)
+        and isinstance(token_output, int)
+    ):
         token_total = token_input + token_output
     return (
         token_input if isinstance(token_input, int) else None,
@@ -884,7 +909,9 @@ def extract_usage_tokens(message: dict[str, Any]) -> tuple[int | None, int | Non
     )
 
 
-def build_todo_state_from_phases(phases: tuple[TodoPhase, ...]) -> tuple[list[str], dict[str, tuple[str, str]]]:
+def build_todo_state_from_phases(
+    phases: tuple[TodoPhase, ...],
+) -> tuple[list[str], dict[str, tuple[str, str]]]:
     order: list[str] = []
     items: dict[str, tuple[str, str]] = {}
     for phase in phases:
@@ -904,7 +931,9 @@ def seed_todo_state(todos: list[str]) -> tuple[list[str], dict[str, tuple[str, s
     return order, items
 
 
-def summarize_todo_state(order: list[str], items: dict[str, tuple[str, str]]) -> tuple[int, int, str | None]:
+def summarize_todo_state(
+    order: list[str], items: dict[str, tuple[str, str]]
+) -> tuple[int, int, str | None]:
     if not order:
         return 0, 0, None
     completed = 0
@@ -956,7 +985,15 @@ def apply_todo_ops(progress: ModelProgress, args: Any) -> None:
                         task_id = raw_task.get("id")
                         if not isinstance(task_id, str) or not task_id:
                             task_id = f"task-{task_index}"
-                        tasks.append(TodoItem(id=task_id, content=content, status=status, notes=None, details=None))
+                        tasks.append(
+                            TodoItem(
+                                id=task_id,
+                                content=content,
+                                status=status,
+                                notes=None,
+                                details=None,
+                            )
+                        )
                     phase_id = raw_phase.get("id")
                     name = raw_phase.get("name")
                     if not isinstance(name, str) or not name:
@@ -964,14 +1001,24 @@ def apply_todo_ops(progress: ModelProgress, args: Any) -> None:
                     if not isinstance(phase_id, str) or not phase_id:
                         phase_id = f"phase-{phase_index}"
                     phases.append(TodoPhase(id=phase_id, name=name, tasks=tuple(tasks)))
-                progress.todo_order, progress.todo_items = build_todo_state_from_phases(tuple(phases))
+                progress.todo_order, progress.todo_items = build_todo_state_from_phases(
+                    tuple(phases)
+                )
         elif op == "update":
             task_id = raw_op.get("id")
             if not isinstance(task_id, str) or task_id not in progress.todo_items:
                 continue
             content, status = progress.todo_items[task_id]
-            next_content = raw_op.get("content") if isinstance(raw_op.get("content"), str) else content
-            next_status = raw_op.get("status") if isinstance(raw_op.get("status"), str) else status
+            next_content = (
+                raw_op.get("content")
+                if isinstance(raw_op.get("content"), str)
+                else content
+            )
+            next_status = (
+                raw_op.get("status")
+                if isinstance(raw_op.get("status"), str)
+                else status
+            )
             progress.todo_items[task_id] = (next_content, next_status)
         elif op == "add_task":
             phase = raw_op.get("phase")
@@ -980,13 +1027,21 @@ def apply_todo_ops(progress: ModelProgress, args: Any) -> None:
                 continue
             task_id = task_payload.get("id")
             if not isinstance(task_id, str) or not task_id:
-                task_id = raw_op.get("id") if isinstance(raw_op.get("id"), str) else f"task-{len(progress.todo_order) + 1}"
+                task_id = (
+                    raw_op.get("id")
+                    if isinstance(raw_op.get("id"), str)
+                    else f"task-{len(progress.todo_order) + 1}"
+                )
             content = task_payload.get("content")
             status = task_payload.get("status")
             if not isinstance(content, str) or not isinstance(status, str):
                 continue
             if task_id not in progress.todo_items:
-                insert_after = raw_op.get("after") if isinstance(raw_op.get("after"), str) else None
+                insert_after = (
+                    raw_op.get("after")
+                    if isinstance(raw_op.get("after"), str)
+                    else None
+                )
                 if insert_after in progress.todo_order:
                     index = progress.todo_order.index(insert_after) + 1
                     progress.todo_order.insert(index, task_id)
@@ -998,7 +1053,9 @@ def apply_todo_ops(progress: ModelProgress, args: Any) -> None:
             if not isinstance(task_id, str):
                 continue
             progress.todo_items.pop(task_id, None)
-            progress.todo_order = [candidate for candidate in progress.todo_order if candidate != task_id]
+            progress.todo_order = [
+                candidate for candidate in progress.todo_order if candidate != task_id
+            ]
         elif op == "add_phase":
             raw_tasks = raw_op.get("tasks")
             if not isinstance(raw_tasks, list):
@@ -1016,21 +1073,30 @@ def apply_todo_ops(progress: ModelProgress, args: Any) -> None:
                 progress.todo_order.append(task_id)
                 progress.todo_items[task_id] = (content, status)
 
-    progress.todo_completed, progress.todo_total, progress.todo_current = summarize_todo_state(
-        progress.todo_order, progress.todo_items
+    progress.todo_completed, progress.todo_total, progress.todo_current = (
+        summarize_todo_state(progress.todo_order, progress.todo_items)
     )
 
 
 class ProgressPrinter:
-    def __init__(self, runs: list[tuple[str, str]], *, stream: TextIO | None = None, interactive: bool | None = None) -> None:
+    def __init__(
+        self,
+        runs: list[tuple[str, str]],
+        *,
+        stream: TextIO | None = None,
+        interactive: bool | None = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._stream = sys.stdout if stream is None else stream
-        self._interactive = self._stream.isatty() if interactive is None else interactive
-        self._console = Console(file=self._stream, force_terminal=self._interactive, soft_wrap=False)
+        self._interactive = (
+            self._stream.isatty() if interactive is None else interactive
+        )
+        self._console = Console(
+            file=self._stream, force_terminal=self._interactive, soft_wrap=False
+        )
         self._model_order = [run_id for run_id, _ in runs]
         self._states = {
-            run_id: ModelProgress(model=run_id, label=label)
-            for run_id, label in runs
+            run_id: ModelProgress(model=run_id, label=label) for run_id, label in runs
         }
         self._fixtures_dir: str | None = None
         self._results_dir: str | None = None
@@ -1062,8 +1128,8 @@ class ProgressPrinter:
         with self._lock:
             progress = self._states[model]
             progress.todo_order, progress.todo_items = seed_todo_state(todos)
-            progress.todo_completed, progress.todo_total, progress.todo_current = summarize_todo_state(
-                progress.todo_order, progress.todo_items
+            progress.todo_completed, progress.todo_total, progress.todo_current = (
+                summarize_todo_state(progress.todo_order, progress.todo_items)
             )
             progress.last_activity = f"seeded {progress.todo_total} todos"
             self._refresh_locked()
@@ -1077,7 +1143,9 @@ class ProgressPrinter:
     def mark_turn_end(self, model: str, turns: int) -> None:
         self._mutate_model(model, turns=turns)
 
-    def note_tool_start(self, model: str, tool_name: str, intent: str | None, tool_calls: int, args: Any) -> None:
+    def note_tool_start(
+        self, model: str, tool_name: str, intent: str | None, tool_calls: int, args: Any
+    ) -> None:
         with self._lock:
             progress = self._states[model]
             progress.status = "run"
@@ -1096,9 +1164,11 @@ class ProgressPrinter:
         with self._lock:
             progress = self._states[model]
             progress.todo_order = [task.id for task in todos]
-            progress.todo_items = {task.id: (task.content, task.status) for task in todos}
-            progress.todo_completed, progress.todo_total, progress.todo_current = summarize_todo_state(
-                progress.todo_order, progress.todo_items
+            progress.todo_items = {
+                task.id: (task.content, task.status) for task in todos
+            }
+            progress.todo_completed, progress.todo_total, progress.todo_current = (
+                summarize_todo_state(progress.todo_order, progress.todo_items)
             )
             self._refresh_locked()
 
@@ -1127,7 +1197,13 @@ class ProgressPrinter:
             progress.last_activity = progress.last_text or "drafting"
             self._refresh_locked()
 
-    def note_usage(self, model: str, token_input: int | None, token_output: int | None, token_total: int | None) -> None:
+    def note_usage(
+        self,
+        model: str,
+        token_input: int | None,
+        token_output: int | None,
+        token_total: int | None,
+    ) -> None:
         self._mutate_model(
             model,
             token_input=token_input,
@@ -1136,10 +1212,17 @@ class ProgressPrinter:
         )
 
     def mark_completed(self, model: str, duration_seconds: float) -> None:
-        self._mutate_model(model, status="done", duration_seconds=duration_seconds, last_activity="completed")
+        self._mutate_model(
+            model,
+            status="done",
+            duration_seconds=duration_seconds,
+            last_activity="completed",
+        )
 
     def mark_failed(self, model: str, error: str) -> None:
-        self._mutate_model(model, status="failed", error=error, last_activity=truncate_text(error, 72))
+        self._mutate_model(
+            model, status="failed", error=error, last_activity=truncate_text(error, 72)
+        )
 
     def finish(self, message: str) -> None:
         with self._lock:
@@ -1168,7 +1251,11 @@ class ProgressPrinter:
     def _build_renderable_locked(self) -> Group:
         done = sum(1 for state in self._states.values() if state.status == "done")
         failed = sum(1 for state in self._states.values() if state.status == "failed")
-        active = sum(1 for state in self._states.values() if state.status not in {"pending", "done", "failed"})
+        active = sum(
+            1
+            for state in self._states.values()
+            if state.status not in {"pending", "done", "failed"}
+        )
 
         summary = Text()
         summary.append(f"done {done}/{len(self._states)}", style="bold green")
@@ -1215,7 +1302,11 @@ class ProgressPrinter:
             )
 
         if self._final_message:
-            footer = Panel(self._final_message, border_style="green" if failed == 0 else "red", box=box.ROUNDED)
+            footer = Panel(
+                self._final_message,
+                border_style="green" if failed == 0 else "red",
+                box=box.ROUNDED,
+            )
             return Group(header, table, footer)
         return Group(header, table)
 
@@ -1244,7 +1335,11 @@ class ProgressPrinter:
     @staticmethod
     def _model_text(state: ModelProgress) -> Text:
         text = Text(truncate_text(state.label, 34), style="bold")
-        activity = state.error if state.status == "failed" and state.error else state.last_activity
+        activity = (
+            state.error
+            if state.status == "failed" and state.error
+            else state.last_activity
+        )
         if activity and activity not in {"waiting", "completed"}:
             text.append("\n")
             text.append(truncate_text(activity, 34), style="dim")
@@ -1294,7 +1389,14 @@ def serialize_notification(notification: Any) -> dict[str, Any]:
 
 
 class ModelRunRecorder:
-    def __init__(self, run_id: str, model: str, fixture: str, printer: ProgressPrinter, jsonl_path: Path) -> None:
+    def __init__(
+        self,
+        run_id: str,
+        model: str,
+        fixture: str,
+        printer: ProgressPrinter,
+        jsonl_path: Path,
+    ) -> None:
         self.run_id = run_id
         self.model = model
         self.fixture = fixture
@@ -1344,7 +1446,9 @@ class ModelRunRecorder:
     def record_tool_execution_start(self, event: ToolExecutionStartEvent) -> None:
         self._touch()
         self.tool_calls += 1
-        self.printer.note_tool_start(self.run_id, event.tool_name, event.intent, self.tool_calls, event.args)
+        self.printer.note_tool_start(
+            self.run_id, event.tool_name, event.intent, self.tool_calls, event.args
+        )
 
     def record_tool_execution_update(self, _event: ToolExecutionUpdateEvent) -> None:
         self._touch()
@@ -1376,7 +1480,9 @@ class ModelRunRecorder:
         self._consumed_assistant_messages += 1
 
         token_input, token_output, token_total = extract_usage_tokens(message)
-        if token_total is not None and (self.token_total is None or token_total >= self.token_total):
+        if token_total is not None and (
+            self.token_total is None or token_total >= self.token_total
+        ):
             self.token_input = token_input
             self.token_output = token_output
             self.token_total = token_total
@@ -1390,7 +1496,11 @@ class ModelRunRecorder:
             if not isinstance(message, dict) or message.get("role") != "assistant":
                 continue
             text = assistant_text(message)
-            if assistant_count >= self._consumed_assistant_messages and isinstance(text, str) and text.strip():
+            if (
+                assistant_count >= self._consumed_assistant_messages
+                and isinstance(text, str)
+                and text.strip()
+            ):
                 self.review_sections.append(text.strip())
             assistant_count += 1
 
@@ -1402,7 +1512,9 @@ class ModelRunRecorder:
                 self.token_input = token_input
                 self.token_output = token_output
                 self.token_total = token_total
-                self.printer.note_usage(self.run_id, token_input, token_output, token_total)
+                self.printer.note_usage(
+                    self.run_id, token_input, token_output, token_total
+                )
                 break
 
     def record_message_update(self, event: MessageUpdateEvent) -> None:
@@ -1411,11 +1523,15 @@ class ModelRunRecorder:
         partial = assistant_event.get("partial")
         if isinstance(partial, dict):
             token_input, token_output, token_total = extract_usage_tokens(partial)
-            if token_total is not None and (self.token_total is None or token_total >= self.token_total):
+            if token_total is not None and (
+                self.token_total is None or token_total >= self.token_total
+            ):
                 self.token_input = token_input
                 self.token_output = token_output
                 self.token_total = token_total
-                self.printer.note_usage(self.run_id, token_input, token_output, token_total)
+                self.printer.note_usage(
+                    self.run_id, token_input, token_output, token_total
+                )
 
         delta_type = assistant_event.get("type")
         delta = assistant_event.get("delta")
@@ -1430,10 +1546,16 @@ class ModelRunRecorder:
 
     def record_todo_reminder(self, event: TodoReminderEvent) -> None:
         self._touch()
-        self.todo_completed = sum(1 for task in event.todos if task.status == "completed")
+        self.todo_completed = sum(
+            1 for task in event.todos if task.status == "completed"
+        )
         self.todo_total = len(event.todos)
-        in_progress = next((task.content for task in event.todos if task.status == "in_progress"), None)
-        pending = next((task.content for task in event.todos if task.status == "pending"), None)
+        in_progress = next(
+            (task.content for task in event.todos if task.status == "in_progress"), None
+        )
+        pending = next(
+            (task.content for task in event.todos if task.status == "pending"), None
+        )
         self.todo_current = in_progress or pending
         self.printer.note_todo_reminder(self.run_id, event.todos)
 
@@ -1445,7 +1567,9 @@ class ModelRunRecorder:
 
     def sync_final_todos(self, phases: tuple[TodoPhase, ...]) -> None:
         order, items = build_todo_state_from_phases(phases)
-        self.todo_completed, self.todo_total, self.todo_current = summarize_todo_state(order, items)
+        self.todo_completed, self.todo_total, self.todo_current = summarize_todo_state(
+            order, items
+        )
         flattened = tuple(task for phase in phases for task in phase.tasks)
         self.printer.note_todo_reminder(self.run_id, flattened)
 
@@ -1469,7 +1593,6 @@ class ModelRunRecorder:
                 handle.write(json.dumps(payload) + "\n")
 
 
-
 def run_model_sync(
     *,
     model: str,
@@ -1488,7 +1611,10 @@ def run_model_sync(
 
     review_slug = slugify(shorten_model_name(model))
     review_path = results_dir / f"review_{review_slug}.md"
-    jsonl_path = Path(tempfile.gettempdir()) / f"rate-edit-tool-{results_dir.name}-{model_slug}.jsonl"
+    jsonl_path = (
+        Path(tempfile.gettempdir())
+        / f"rate-edit-tool-{results_dir.name}-{model_slug}.jsonl"
+    )
     jsonl_path.unlink(missing_ok=True)
     jsonl_path.touch()
     recorder = ModelRunRecorder(
@@ -1551,14 +1677,23 @@ def run_model_sync(
                     try:
                         client.wait_for_idle(timeout=min(remaining, 60.0))
                         if recorder.auto_retry_active:
-                            time.sleep(min(max(recorder.auto_retry_delay_ms / 1000.0, 0.2), 2.0))
+                            time.sleep(
+                                min(
+                                    max(recorder.auto_retry_delay_ms / 1000.0, 0.2), 2.0
+                                )
+                            )
                             continue
                         if recorder.agent_ended:
                             grace = min(0.5, max(deadline - time.monotonic(), 0.0))
                             if grace > 0:
                                 time.sleep(grace)
                             if recorder.auto_retry_active:
-                                time.sleep(min(max(recorder.auto_retry_delay_ms / 1000.0, 0.2), 2.0))
+                                time.sleep(
+                                    min(
+                                        max(recorder.auto_retry_delay_ms / 1000.0, 0.2),
+                                        2.0,
+                                    )
+                                )
                                 continue
                             return
                         if recorder.is_effectively_complete(quiet_seconds=2.0):
@@ -1586,11 +1721,18 @@ def run_model_sync(
             stats = client.get_session_stats()
             todo_phases = client.get_todos()
             recorder.sync_final_todos(todo_phases)
-            if (recorder.token_total is None or recorder.token_total <= 0) and stats.tokens.total > 0:
+            if (
+                recorder.token_total is None or recorder.token_total <= 0
+            ) and stats.tokens.total > 0:
                 recorder.token_input = stats.tokens.input
                 recorder.token_output = stats.tokens.output
                 recorder.token_total = stats.tokens.total
-                printer.note_usage(run_id, recorder.token_input, recorder.token_output, recorder.token_total)
+                printer.note_usage(
+                    run_id,
+                    recorder.token_input,
+                    recorder.token_output,
+                    recorder.token_total,
+                )
             review_path.write_text(review_markdown)
             provider, model_id = model.split("/", 1)
             session_state = {
@@ -1599,7 +1741,9 @@ def run_model_sync(
             }
             status = "ok"
     except Exception as error:  # noqa: BLE001
-        error_message = f"{type(error).__name__}: {error}" if str(error) else type(error).__name__
+        error_message = (
+            f"{type(error).__name__}: {error}" if str(error) else type(error).__name__
+        )
         printer.mark_failed(run_id, error_message)
         status = "failed"
 
@@ -1632,6 +1776,7 @@ def run_model_sync(
         session_state=session_state,
     )
 
+
 def build_oracle_review_prompt(sources: list[tuple[str, str, str]]) -> str:
     review_sections: list[str] = []
     for model, fixture, review_path in sorted(sources):
@@ -1659,8 +1804,9 @@ def build_oracle_review_prompt(sources: list[tuple[str, str, str]]) -> str:
     return ORACLE_REVIEW_PROMPT.replace("{{REVIEWS}}", review_payload)
 
 
-
-def oracle_sources_from_results(results: list[ModelResult]) -> list[tuple[str, str, str]]:
+def oracle_sources_from_results(
+    results: list[ModelResult],
+) -> list[tuple[str, str, str]]:
     return [(r.model, r.fixture, r.review_path) for r in results if r.review_path]
 
 
@@ -1678,6 +1824,7 @@ def oracle_sources_from_dir(results_dir: Path) -> list[tuple[str, str, str]]:
                 break
         sources.append((model, fixture, str(path)))
     return sources
+
 
 def run_oracle_review_sync(
     *,
@@ -1715,18 +1862,32 @@ def run_oracle_review_sync(
     (results_dir / "oracle_synthesis.md").write_text(synthesis + "\n", encoding="utf-8")
     return synthesis
 
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run OpenRouter fixture evaluations through omp RPC mode.")
+    parser = argparse.ArgumentParser(
+        description="Run OpenRouter fixture evaluations through omp RPC mode."
+    )
     parser.add_argument("--omp-bin", default=os.environ.get("OMP_BIN"))
     parser.add_argument("--fixtures-dir", default=os.path.expanduser("~/tmp/fixtures"))
     parser.add_argument("--results-dir")
-    parser.add_argument("--timeout", type=float, default=900.0, help="Per run timeout in seconds.")
-    parser.add_argument("--model", dest="models", action="append", help="Repeat to limit execution to specific models.")
-    parser.add_argument("--oracle-model", default=ORACLE_MODEL, help="Model used to synthesize findings across all reviews.")
     parser.add_argument(
-    	"--rerun-oracle",
-    	dest="rerun_oracle",
-    	help="Skip fixture runs and only synthesize against review_*.md files in this existing results dir.",
+        "--timeout", type=float, default=900.0, help="Per run timeout in seconds."
+    )
+    parser.add_argument(
+        "--model",
+        dest="models",
+        action="append",
+        help="Repeat to limit execution to specific models.",
+    )
+    parser.add_argument(
+        "--oracle-model",
+        default=ORACLE_MODEL,
+        help="Model used to synthesize findings across all reviews.",
+    )
+    parser.add_argument(
+        "--rerun-oracle",
+        dest="rerun_oracle",
+        help="Skip fixture runs and only synthesize against review_*.md files in this existing results dir.",
     )
     return parser.parse_args()
 
@@ -1766,7 +1927,11 @@ async def run_all(args: argparse.Namespace) -> int:
 
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     tmp_root = Path(tempfile.gettempdir())
-    results_dir = Path(args.results_dir) if args.results_dir else tmp_root / f"omp-fixture-runs-{timestamp}"
+    results_dir = (
+        Path(args.results_dir)
+        if args.results_dir
+        else tmp_root / f"omp-fixture-runs-{timestamp}"
+    )
     results_dir.mkdir(parents=True, exist_ok=True)
     workspace_root = tmp_root / f"rate-edit-tool-workspaces-{timestamp}"
     workspace_root.mkdir(parents=True, exist_ok=True)

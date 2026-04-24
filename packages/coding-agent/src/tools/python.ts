@@ -590,8 +590,7 @@ function formatStatusEvent(event: PythonStatusEvent, theme: Theme): string {
 
 	// Build description based on common fields
 	switch (op) {
-		case "read": // legacy alias
-		case "open":
+		case "read":
 			parts.push(`${data.chars} chars`);
 			if (data.path) parts.push(`from ${shortenPath(String(data.path))}`);
 			break;
@@ -795,8 +794,7 @@ function formatStatusEventExpanded(event: PythonStatusEvent, theme: Theme): stri
 		case "git_branch":
 			if (data.branches) addItems(data.branches as unknown[], b => String(b));
 			break;
-		case "read": // legacy alias
-		case "open":
+		case "read":
 		case "cat":
 		case "head":
 		case "tail":

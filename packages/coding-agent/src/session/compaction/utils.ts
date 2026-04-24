@@ -44,8 +44,7 @@ export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOp
 		if (!path) continue;
 
 		switch (block.name) {
-			case "read": // legacy alias
-			case "open":
+			case "read":
 				fileOps.read.add(path);
 				break;
 			case "write":

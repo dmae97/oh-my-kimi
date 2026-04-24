@@ -48,8 +48,8 @@ import type {
 	FindToolInput,
 	GrepToolDetails,
 	GrepToolInput,
-	OpenToolDetails,
-	OpenToolInput,
+	ReadToolDetails,
+	ReadToolInput,
 	WriteToolInput,
 } from "../../tools";
 import type { TodoItem } from "../../tools/todo-write";
@@ -668,9 +668,9 @@ export interface BashToolCallEvent extends ToolCallEventBase {
 	input: BashToolInput;
 }
 
-export interface OpenToolCallEvent extends ToolCallEventBase {
-	toolName: "open";
-	input: OpenToolInput;
+export interface ReadToolCallEvent extends ToolCallEventBase {
+	toolName: "read";
+	input: ReadToolInput;
 }
 
 export interface EditToolCallEvent extends ToolCallEventBase {
@@ -701,7 +701,7 @@ export interface CustomToolCallEvent extends ToolCallEventBase {
 /** Fired before a tool executes. Can block. */
 export type ToolCallEvent =
 	| BashToolCallEvent
-	| OpenToolCallEvent
+	| ReadToolCallEvent
 	| EditToolCallEvent
 	| WriteToolCallEvent
 	| GrepToolCallEvent
@@ -721,9 +721,9 @@ export interface BashToolResultEvent extends ToolResultEventBase {
 	details: BashToolDetails | undefined;
 }
 
-export interface OpenToolResultEvent extends ToolResultEventBase {
-	toolName: "open";
-	details: OpenToolDetails | undefined;
+export interface ReadToolResultEvent extends ToolResultEventBase {
+	toolName: "read";
+	details: ReadToolDetails | undefined;
 }
 
 export interface EditToolResultEvent extends ToolResultEventBase {
@@ -754,7 +754,7 @@ export interface CustomToolResultEvent extends ToolResultEventBase {
 /** Fired after a tool executes. Can modify result. */
 export type ToolResultEvent =
 	| BashToolResultEvent
-	| OpenToolResultEvent
+	| ReadToolResultEvent
 	| EditToolResultEvent
 	| WriteToolResultEvent
 	| GrepToolResultEvent
@@ -782,7 +782,7 @@ export type ToolResultEvent =
  * CustomToolCallEvent.toolName is `string` which overlaps with all literals.
  */
 export function isToolCallEventType(toolName: "bash", event: ToolCallEvent): event is BashToolCallEvent;
-export function isToolCallEventType(toolName: "open", event: ToolCallEvent): event is OpenToolCallEvent;
+export function isToolCallEventType(toolName: "read", event: ToolCallEvent): event is ReadToolCallEvent;
 export function isToolCallEventType(toolName: "edit", event: ToolCallEvent): event is EditToolCallEvent;
 export function isToolCallEventType(toolName: "write", event: ToolCallEvent): event is WriteToolCallEvent;
 export function isToolCallEventType(toolName: "grep", event: ToolCallEvent): event is GrepToolCallEvent;

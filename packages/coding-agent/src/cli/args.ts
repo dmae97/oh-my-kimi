@@ -5,7 +5,7 @@ import { type Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { APP_NAME, CONFIG_DIR_NAME, logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { parseEffort } from "../thinking";
-import { BUILTIN_TOOLS, resolveToolAlias } from "../tools";
+import { BUILTIN_TOOLS } from "../tools";
 
 export type Mode = "text" | "json" | "rpc" | "acp";
 
@@ -129,8 +129,7 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 				.map(s => s.trim().toLowerCase())
 				.filter(Boolean);
 			const validTools: string[] = [];
-			for (const rawName of toolNames) {
-				const name = resolveToolAlias(rawName);
+			for (const name of toolNames) {
 				if (name in BUILTIN_TOOLS) {
 					validTools.push(name);
 				} else {

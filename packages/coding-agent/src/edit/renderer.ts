@@ -31,6 +31,10 @@ import { expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./m
 import type { Operation, PatchEditEntry } from "./modes/patch";
 import type { PerFileDiffPreview } from "./streaming";
 
+// ═══════════════════════════════════════════════════════════════════════════
+// LSP Batching
+// ═══════════════════════════════════════════════════════════════════════════
+
 export { getLspBatchRequest, type LspBatchRequest };
 
 // ═══════════════════════════════════════════════════════════════════════════

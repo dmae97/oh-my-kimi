@@ -637,8 +637,7 @@ class TreeList implements Component {
 
 	#formatToolCall(name: string, args: Record<string, unknown>): string {
 		switch (name) {
-			case "read": // legacy alias
-			case "open": {
+			case "read": {
 				const path = shortenPath(String(args.path || args.file_path || ""));
 				const offset = args.offset as number | undefined;
 				const limit = args.limit as number | undefined;

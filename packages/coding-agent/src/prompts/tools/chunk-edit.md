@@ -1,5 +1,5 @@
-Edits files via syntax-aware chunks. Use `open(path="file.ts")` to read and discover chunks before editing.
-- `open` is the canonical read path for chunk source and `sel="?"` tree listings.
+Edits files via syntax-aware chunks. Use `read(path="file.ts")` to read and discover chunks before editing.
+- `read` is the canonical read path for chunk source and `sel="?"` tree listings.
 - `read:true` is a non-mutating convenience for an already-known selector.
 - `write` rewrites the entire targeted region — best for most edits.
 - `insert` adds content before/after a chunk.
@@ -8,10 +8,10 @@ Edits files via syntax-aware chunks. Use `open(path="file.ts")` to read and disc
 Call format: `{"edits": [{"path": "file:chunk#ID~", "write": "new body"}, …]}`
 
 <rules>
-- **MUST** inspect first with `open`. Never invent chunk paths or IDs. Copy them from the latest `open` output or edit response.
+- **MUST** inspect first with `read`. Never invent chunk paths or IDs. Copy them from the latest `read` output or edit response.
 - `path` format: `file:selector` — e.g. `src/app.ts:fn_foo#ABCD~`. Append `~` for body, `^` for head, or nothing for the whole chunk. Include `#ID` for `write`/`delete`.
-- To inspect a known chunk through this tool, use `{"path":"file:chunk#ID","read":true}`. `read:true` is non-mutating, cannot be mixed with write operations in the same entry, and is not a replacement for `open(path="file", sel="?")` when discovering targets.
-- If the exact chunk path is unclear, run `open(path="file", sel="?")` and copy a selector from that listing.
+- To inspect a known chunk through this tool, use `{"path":"file:chunk#ID","read":true}`. `read:true` is non-mutating, cannot be mixed with write operations in the same entry, and is not a replacement for `read(path="file", sel="?")` when discovering targets.
+- If the exact chunk path is unclear, run `read(path="file", sel="?")` and copy a selector from that listing.
 {{#if chunkAutoIndent}}
 - Use `\t` for indentation in `content`. Write content at indent-level 0 — the tool re-indents it to match the chunk's position in the file. For example, to replace `~` of a method, write the body starting at column 0:
   ```
@@ -38,7 +38,7 @@ Call format: `{"edits": [{"path": "file:chunk#ID~", "write": "new body"}, …]}`
 - Unsuffixed `write` on a leaf chunk uses your content verbatim after normal replacement; it is not a body-region rewrite. Include the exact indentation and punctuation the leaf needs in the file.
 - `^` head writes and `~` body writes use the same base-indent model: write content at column 0 relative to the target region, and the tool applies the chunk's file indentation.
 - `write` and `delete` require the current ID. `prepend`/`append` do not.
-- **IDs change after every edit.** The edit response always carries the new IDs — use those for the next call or run `open(path="file", sel="?")` to refresh. Never reuse an ID from before the latest edit.
+- **IDs change after every edit.** The edit response always carries the new IDs — use those for the next call or run `read(path="file", sel="?")` to refresh. Never reuse an ID from before the latest edit.
 - Same-file edit batches are transactional: if any operation in that file fails, no changes from that file's batch are saved. Multi-file edit calls run per file, so a later file error does not roll back earlier files that already succeeded.
 </rules>
 
@@ -47,17 +47,17 @@ You **MUST** use the narrowest region that covers your change. Putting without a
 
 **`put` is total, not surgical.** The `content` you supply becomes the *complete* new content for the targeted region. Everything in the original region that you omit from `content` is deleted. Before using `put` on any chunk's `~`, verify the chunk does not contain children you intend to keep. If a chunk spans hundreds of lines and your change touches only a few, target a specific child chunk — not the parent.
 
-**Group chunks (`stmts_*`, `imports_*`, `decls_*`) are containers.** They hold many sibling items (test functions, import statements, declarations). `put` on a group chunk's `~` overwrites **all** of its children. To edit one item inside a group, target that item's own chunk path. If no child chunk exists, use the specific child's chunk selector from `open` output — do not `put` the parent group.
+**Group chunks (`stmts_*`, `imports_*`, `decls_*`) are containers.** They hold many sibling items (test functions, import statements, declarations). `put` on a group chunk's `~` overwrites **all** of its children. To edit one item inside a group, target that item's own chunk path. If no child chunk exists, use the specific child's chunk selector from `read` output — do not `put` the parent group.
 </critical>
 
 <regions>
-In `open` or `read:true` output, lines marked `^` between the line number and `|` are **head** lines (doc comments, attributes/decorators, signature). Lines without `^` are **body** lines. Use this to decide which region to target:
+In `read` or `read:true` output, lines marked `^` between the line number and `|` are **head** lines (doc comments, attributes/decorators, signature). Lines without `^` are **body** lines. Use this to decide which region to target:
 - `fn_foo#ID~` — **body only (the default choice for most edits).** Head lines (`^`) are preserved automatically — doc comments, attributes, and signature stay untouched. On code leaf chunks, this is rejected because there is no safe body boundary.
 - `fn_foo#ID^` — head only (decorators, attributes, doc comments, signature, opening delimiter). Body stays untouched.
 - `fn_foo#ID` — entire chunk including leading trivia. **You must include doc comments and attributes in `content`; omitting them deletes them.**
 - `chunk~` + `append`/`prepend` inserts *inside* the container. `chunk` + `append`/`prepend` inserts *outside*. Appending to a container without `~` emits a warning because it lands after the closing delimiter, not before it.
 
-**Note on leading trivia:** whether a decorator/doc comment belongs to `^` depends on the parser. In Rust and Python, attributes and decorators are attached to the function chunk, so `^` covers them. In TypeScript/JavaScript, a `@decorator` + `/** jsdoc */` block immediately above a method often surfaces as a **separate sibling chunk** (shown as `chunk#ID` in the `?` listing) rather than as part of the function's `^`. JSDoc directly above a plain function is more likely to be absorbed into that function's `^`. If you need to rewrite a decorated member, run `open(path="file", sel="?")` and check for a sibling `chunk#ID` directly above your target.
+**Note on leading trivia:** whether a decorator/doc comment belongs to `^` depends on the parser. In Rust and Python, attributes and decorators are attached to the function chunk, so `^` covers them. In TypeScript/JavaScript, a `@decorator` + `/** jsdoc */` block immediately above a method often surfaces as a **separate sibling chunk** (shown as `chunk#ID` in the `?` listing) rather than as part of the function's `^`. JSDoc directly above a plain function is more likely to be absorbed into that function's `^`. If you need to rewrite a decorated member, run `read(path="file", sel="?")` and check for a sibling `chunk#ID` directly above your target.
 
 **Python notes:** Python docstrings are body lines, not head lines. A `~` body write on a function that has a docstring deletes the docstring unless you include the docstring in `content`. Python enum members and nested functions/closures are often opaque inside their parent chunk and may not appear as addressable child chunks; rewrite the parent container body. Python decorated class/function `^` writes and Python `^` deletes are rejected because indentation-sensitive bodies can become attached to the wrong block while still parsing.
 
@@ -76,7 +76,7 @@ Each edit entry has `path` (`file:selector`) plus **exactly one** operation fiel
 </ops>
 
 <examples>
-Given this `open` output for `counter.rs`:
+Given this `read` output for `counter.rs`:
 ```
    | counter.rs·62L·rust·#ZRPW
    |
@@ -158,7 +158,7 @@ Given this `open` output for `counter.rs`:
 61 |}
 ```
 
-**Understanding `^` markers in `open` output:** Lines marked with `^` between the line number and `|` (e.g. ` 3^|`) are **head** lines — doc comments, attributes, and the signature. Lines without `^` (e.g. ` 7 |`) are **body** lines. `~` replaces body lines only, keeping head lines intact.
+**Understanding `^` markers in `read` output:** Lines marked with `^` between the line number and `|` (e.g. ` 3^|`) are **head** lines — doc comments, attributes, and the signature. Lines without `^` (e.g. ` 7 |`) are **body** lines. `~` replaces body lines only, keeping head lines intact.
 
 **Put body** (`~` — the common case):
 ```

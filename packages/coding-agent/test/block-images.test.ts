@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { processFileArguments } from "@oh-my-pi/pi-coding-agent/cli/file-processor";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { OpenTool } from "@oh-my-pi/pi-coding-agent/tools/open";
+import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 
 // 1x1 red PNG image as base64 (smallest valid PNG)
 const TINY_PNG_BASE64 =
@@ -71,7 +71,7 @@ describe("blockImages setting", () => {
 			const imagePath = path.join(testDir, "test.png");
 			fs.writeFileSync(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
-			const tool = new OpenTool(
+			const tool = new ReadTool(
 				createTestToolSession(testDir, Settings.isolated({ "inspect_image.enabled": false })),
 			);
 			const result = await tool.execute("test-1", { path: imagePath });
@@ -87,7 +87,7 @@ describe("blockImages setting", () => {
 			const textPath = path.join(testDir, "test.txt");
 			fs.writeFileSync(textPath, "Hello, world!");
 
-			const tool = new OpenTool(createTestToolSession(testDir));
+			const tool = new ReadTool(createTestToolSession(testDir));
 			const result = await tool.execute("test-2", { path: textPath });
 
 			expect(result.content).toHaveLength(1);

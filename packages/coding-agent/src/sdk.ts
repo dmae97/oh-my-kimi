@@ -116,11 +116,10 @@ import {
 	isSearchProviderPreference,
 	type LspStartupServerInfo,
 	loadSshTool,
-	OpenTool,
 	PythonTool,
+	ReadTool,
 	ResolveTool,
 	renderSearchToolBm25Description,
-	resolveToolAlias,
 	setPreferredImageProvider,
 	setPreferredSearchProvider,
 	type Tool,
@@ -268,8 +267,8 @@ export {
 	GrepTool,
 	HIDDEN_TOOLS,
 	loadSshTool,
-	OpenTool as ReadTool,
 	PythonTool,
+	ReadTool,
 	ResolveTool,
 	type ToolSession,
 	WriteTool,
@@ -1354,9 +1353,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		const toolNamesFromRegistry = Array.from(toolRegistry.keys());
 		const requestedToolNames =
-			(options.toolNames
-				? [...new Set(options.toolNames.map(name => resolveToolAlias(name.toLowerCase())))]
-				: undefined) ?? toolNamesFromRegistry;
+			(options.toolNames ? [...new Set(options.toolNames.map(name => name.toLowerCase()))] : undefined) ??
+			toolNamesFromRegistry;
 		const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
 		const includeExitPlanMode = requestedToolNames.includes("exit_plan_mode");
 		const mcpDiscoveryEnabled = settings.get("mcp.discoveryMode") ?? false;

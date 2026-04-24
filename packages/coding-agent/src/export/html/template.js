@@ -394,8 +394,7 @@
 
       function formatToolCall(name, args) {
         switch (name) {
-          case 'read': // legacy alias
-          case 'open': {
+          case 'read': {
             const path = shortenPath(String(args.path || args.file_path || ''));
             const offset = args.offset;
             const limit = args.limit;
@@ -810,7 +809,7 @@
         const filePath = str(args.file_path == null ? args.path : args.file_path);
         let pathHtml = pathDisplay(filePath, args.offset, args.limit);
         if (args.sel) pathHtml += '<span class="line-numbers">:' + escapeHtml(String(args.sel)) + '</span>';
-        let html = toolHead('open', pathHtml);
+        let html = toolHead('read', pathHtml);
         if (result) {
           html += ctx.renderResultImages();
           const output = ctx.getResultText();

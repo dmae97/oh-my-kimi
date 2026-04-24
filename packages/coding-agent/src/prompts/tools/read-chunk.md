@@ -1,10 +1,10 @@
 Reads files using syntax-aware chunks. Also inspects directories, archives, SQLite databases, images, documents (PDF/DOCX/PPTX/XLSX/RTF/EPUB/ipynb), **and URLs**.
 
 <instruction>
-The chunk-aware `open` variant returns AST-scoped chunks with current checksum IDs for structural editing, and otherwise behaves like `open` for non-code content.
+The chunk-aware `read` variant returns AST-scoped chunks with current checksum IDs for structural editing, and otherwise behaves like `open` for non-code content.
 
 - You **MUST** parallelize calls when exploring related files
-- For URLs, `open` fetches the page and returns clean extracted text/markdown by default (reader-mode). It handles HTML pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom, JSON endpoints, PDFs, etc. You **SHOULD** reach for `open` — not a browser/puppeteer tool — for fetching and inspecting web content.
+- For URLs, `read` fetches the page and returns clean extracted text/markdown by default (reader-mode). It handles HTML pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom, JSON endpoints, PDFs, etc. You **SHOULD** reach for `read` — not a browser/puppeteer tool — for fetching and inspecting web content.
 
 ## Parameters
 - `path` — file path or URL; may include `:selector` suffix (required)
@@ -28,7 +28,7 @@ Max {{DEFAULT_MAX_LINES}} lines per call.
 
 # Chunks
 Each anchor `@full.chunk.path#CCCC` (with `-` prefixes for nesting depth) in the output identifies a chunk. Use `full.chunk.path#CCCC` as-is to read truncated chunks.
-If you need a canonical target list, run `open(path="file", sel="?")`. That listing shows chunk paths with IDs and is the safest structural discovery mode. Summary lines in this listing are orientation hints; follow a selector with `open(path="file", sel="chunk#ID")` or use `raw` when you need exact source.
+If you need a canonical target list, run `read(path="file", sel="?")`. That listing shows chunk paths with IDs and is the safest structural discovery mode. Summary lines in this listing are orientation hints; follow a selector with `read(path="file", sel="chunk#ID")` or use `raw` when you need exact source.
 Line numbers in the gutter are absolute file line numbers.
 
 {{#if chunkAutoIndent}}
@@ -60,15 +60,15 @@ When used against a SQLite database (`.sqlite`, `.sqlite3`, `.db`, `.db3`), retu
 - `file.db?q=SELECT …` — read-only SELECT query
 
 # URLs
-Extracts content from web pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom feeds, JSON endpoints, PDFs at URLs, and similar text-based resources. Returns clean reader-mode text/markdown — no browser required. Use `sel="raw"` for untouched HTML; `timeout` to override the default request timeout. You **SHOULD** prefer `open` over a browser/puppeteer tool for fetching URL content; only use a browser when the page requires JS execution, authentication, or interactive actions (clicks, forms, scrolling).
+Extracts content from web pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom feeds, JSON endpoints, PDFs at URLs, and similar text-based resources. Returns clean reader-mode text/markdown — no browser required. Use `sel="raw"` for untouched HTML; `timeout` to override the default request timeout. You **SHOULD** prefer `read` over a browser/puppeteer tool for fetching URL content; only use a browser when the page requires JS execution, authentication, or interactive actions (clicks, forms, scrolling).
 </instruction>
 
 <critical>
-- You **MUST** `open` before editing — never invent chunk names or IDs.
-    - Chunk names are truncated (e.g., `handleRequest` becomes `fn_handleRequ`). Always copy chunk paths from `open` or `?` output — never construct them from source identifiers.
-- You **MUST** use `open` (never bash `cat`/`head`/`tail`/`less`/`more`/`ls`/`tar`/`unzip`/`curl`/`wget`) for all file, directory, archive, and URL reads.
-- You **MUST NOT** reach for a browser/puppeteer tool to fetch static web content — `open` handles HTML, PDFs, JSON, feeds, and docs directly. Reserve browser tools for JS-heavy pages or interactive flows.
+- You **MUST** `read` before editing — never invent chunk names or IDs.
+    - Chunk names are truncated (e.g., `handleRequest` becomes `fn_handleRequ`). Always copy chunk paths from `read` or `?` output — never construct them from source identifiers.
+- You **MUST** use `read` (never bash `cat`/`head`/`tail`/`less`/`more`/`ls`/`tar`/`unzip`/`curl`/`wget`) for all file, directory, archive, and URL reads.
+- You **MUST NOT** reach for a browser/puppeteer tool to fetch static web content — `read` handles HTML, PDFs, JSON, feeds, and docs directly. Reserve browser tools for JS-heavy pages or interactive flows.
 - You **MUST** always include the `path` parameter; never call with `{}`.
-- For specific line ranges, use `sel`: `open(path="file", sel="L50-L150")` — not `cat -n file | sed`.
+- For specific line ranges, use `sel`: `read(path="file", sel="L50-L150")` — not `cat -n file | sed`.
 - You **MAY** use `sel` with URL reads; the tool paginates cached fetched output.
 </critical>

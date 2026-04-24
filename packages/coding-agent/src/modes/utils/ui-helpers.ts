@@ -254,7 +254,7 @@ export class UiHelpers {
 						continue;
 					}
 
-					if (content.name === "open" || content.name === "read") {
+					if (content.name === "read") {
 						if (hasErrorStop && errorMessage) {
 							if (!readGroup) {
 								readGroup = new ReadToolGroupComponent({
@@ -315,7 +315,7 @@ export class UiHelpers {
 					}
 				}
 			} else if (message.role === "toolResult") {
-				if (message.toolName === "open" || message.toolName === "read") {
+				if (message.toolName === "read") {
 					const assistantComponent = readToolCallAssistantComponents.get(message.toolCallId);
 					const images: ImageContent[] = message.content.filter(
 						(content): content is ImageContent => content.type === "image",
