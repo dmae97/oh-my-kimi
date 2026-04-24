@@ -2075,17 +2075,24 @@ export class ModelRegistry {
 			for (const overlay of newOverlays) {
 				nextModels.push(finalizeCustomModel(overlay, { useDefaults: true }));
 			}
+			const runtimeTransportOverride = this.#runtimeProviderOverrides.get(providerName);
+			const withRuntimeTransportOverride = runtimeTransportOverride
+				? nextModels.map(model => {
+						if (model.provider !== providerName) return model;
+						return this.#applyProviderTransportOverride(model, runtimeTransportOverride);
+					})
+				: nextModels;
 
 			if (config.oauth?.modifyModels) {
 				const credential = this.authStorage.getOAuthCredential(providerName);
 				if (credential) {
-					this.#models = config.oauth.modifyModels(nextModels, credential);
+					this.#models = config.oauth.modifyModels(withRuntimeTransportOverride, credential);
 					this.#rebuildCanonicalIndex();
 					return;
 				}
 			}
 
-			this.#models = nextModels;
+			this.#models = withRuntimeTransportOverride;
 			this.#rebuildCanonicalIndex();
 			return;
 		}

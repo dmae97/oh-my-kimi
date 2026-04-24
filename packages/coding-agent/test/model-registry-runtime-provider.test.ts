@@ -340,8 +340,10 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(getCustomApi("custom-runtime-api")).toBeDefined();
 	});
 
-	test("re-registering a provider replaces previous runtime overlays", async () => {
+	test("re-registering a provider replaces overlays and keeps transport overrides stable", async () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const runtimeHeader = "X-ReRegister-Provider-Header";
+		const overrideBaseUrl = "https://runtime-override.example.com/v1";
 		const config1: ProviderConfigInput = {
 			baseUrl: "https://runtime.example.com/v1",
 			apiKey: "RUNTIME_KEY",
@@ -356,16 +358,28 @@ describe("ModelRegistry runtime provider registration", () => {
 		};
 
 		registry.registerProvider("runtime-provider", config1, "ext://runtime");
-		expect(registry.find("runtime-provider", "model-v1")).toBeDefined();
-
+		registry.registerProvider(
+			"runtime-provider",
+			{ baseUrl: overrideBaseUrl, headers: { [runtimeHeader]: "runtime-header" } },
+			"ext://runtime",
+		);
 		registry.registerProvider("runtime-provider", config2, "ext://runtime");
-		expect(registry.find("runtime-provider", "model-v2")).toBeDefined();
-		expect(registry.find("runtime-provider", "model-v1")).toBeUndefined();
 
-		// After refresh, only v2 should exist
-		await registry.refresh("offline");
-		expect(registry.find("runtime-provider", "model-v2")).toBeDefined();
 		expect(registry.find("runtime-provider", "model-v1")).toBeUndefined();
+		const modelAfterReplace = registry.find("runtime-provider", "model-v2");
+		expect(modelAfterReplace).toBeDefined();
+		expect(modelAfterReplace?.baseUrl).toBe(overrideBaseUrl);
+		expect(modelAfterReplace?.headers?.[runtimeHeader]).toBe("runtime-header");
+
+		await registry.refresh("offline");
+		const modelAfterRefresh = registry.find("runtime-provider", "model-v2");
+		expect(modelAfterRefresh?.baseUrl).toBe(overrideBaseUrl);
+		expect(modelAfterRefresh?.headers?.[runtimeHeader]).toBe("runtime-header");
+
+		await registry.refreshProvider("runtime-provider", "offline");
+		const modelAfterProviderRefresh = registry.find("runtime-provider", "model-v2");
+		expect(modelAfterProviderRefresh?.baseUrl).toBe(overrideBaseUrl);
+		expect(modelAfterProviderRefresh?.headers?.[runtimeHeader]).toBe("runtime-header");
 	});
 
 	test("multiple extension providers survive refresh independently", async () => {
