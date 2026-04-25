@@ -141,6 +141,13 @@ function tryParseLeadingJsonContainer(value: string): unknown | undefined {
 					return JSON.parse(cleaned) as unknown;
 				} catch {}
 			}
+			// Try escaping raw control chars that appear inside string literals.
+			const escapedControls = escapeRawControlsInJsonStrings(prefix);
+			if (escapedControls !== prefix) {
+				try {
+					return JSON.parse(escapedControls) as unknown;
+				} catch {}
+			}
 			// Also try single-char healing on the extracted prefix.
 			return tryHealMalformedJson(prefix);
 		}
@@ -190,6 +197,72 @@ function cleanLiteralEscapes(value: string): string {
 		i += 1;
 	}
 	return result;
+}
+/**
+ * Escape raw control characters (0x00–0x1F) that appear *inside* JSON string
+ * literals. LLMs sometimes emit literal newlines/tabs/etc. inside string
+ * content instead of `\n` / `\t` escape sequences, which `JSON.parse` rejects
+ * even though the surrounding structure is valid.
+ *
+ * This function only rewrites characters while inside a string; structural
+ * whitespace outside of strings is preserved unchanged.
+ */
+function escapeRawControlsInJsonStrings(value: string): string {
+	let result = "";
+	let inString = false;
+	let escaped = false;
+	let changed = false;
+	for (let i = 0; i < value.length; i += 1) {
+		const ch = value[i];
+		if (inString) {
+			if (escaped) {
+				result += ch;
+				escaped = false;
+				continue;
+			}
+			if (ch === "\\") {
+				result += ch;
+				escaped = true;
+				continue;
+			}
+			if (ch === '"') {
+				result += ch;
+				inString = false;
+				continue;
+			}
+			const code = ch.charCodeAt(0);
+			if (code < 0x20) {
+				changed = true;
+				switch (ch) {
+					case "\n":
+						result += "\\n";
+						break;
+					case "\r":
+						result += "\\r";
+						break;
+					case "\t":
+						result += "\\t";
+						break;
+					case "\b":
+						result += "\\b";
+						break;
+					case "\f":
+						result += "\\f";
+						break;
+					default:
+						result += `\\u${code.toString(16).padStart(4, "0")}`;
+				}
+				continue;
+			}
+			result += ch;
+			continue;
+		}
+		if (ch === '"') {
+			inString = true;
+		}
+		result += ch;
+	}
+	return changed ? result : value;
 }
 
 /** Maximum single-character edits to attempt when healing malformed JSON. */
@@ -286,6 +359,17 @@ function tryParseJsonForTypes(value: string, expectedTypes: string[]): { value: 
 		}
 	} catch {
 		if (looksJsonObject || looksJsonArray) {
+			// Try escaping raw control chars inside string literals (LLMs sometimes
+			// emit literal newlines/tabs inside string content rather than `\n`/`\t`).
+			const escapedControls = escapeRawControlsInJsonStrings(trimmed);
+			if (escapedControls !== trimmed) {
+				try {
+					const parsed = JSON.parse(escapedControls) as unknown;
+					if (matchesExpectedType(parsed, expectedTypes)) {
+						return { value: parsed, changed: true };
+					}
+				} catch {}
+			}
 			// Try extracting a valid JSON prefix (handles trailing junk after balanced container)
 			const leading = tryParseLeadingJsonContainer(trimmed);
 			if (leading !== undefined && matchesExpectedType(leading, expectedTypes)) {

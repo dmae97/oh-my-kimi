@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed parsing of JSON tool arguments containing raw control characters inside string values (such as embedded newlines) by escaping them before JSON parsing
+- Fixed `validateToolArguments` to accept stringified objects and arrays that include literal control characters inside string fields
 
 ## [14.3.0] - 2026-04-25
 

@@ -608,4 +608,46 @@ describe("Tool argument coercion", () => {
 
 		expect(() => validateToolArguments(tool, toolCall)).toThrow("Validation failed");
 	});
+	it("parses JSON-stringified array containing raw newlines inside string values", () => {
+		const tool: Tool = {
+			name: "todo_write_like",
+			description: "",
+			parameters: Type.Object({
+				phases: Type.Array(
+					Type.Object({
+						name: Type.String(),
+						tasks: Type.Array(
+							Type.Object({
+								content: Type.String(),
+								details: Type.Optional(Type.String()),
+							}),
+						),
+					}),
+				),
+			}),
+		};
+
+		// Stringified phases array where one `details` value contains a raw newline,
+		// which `JSON.parse` rejects unless the control char is escaped.
+		const stringifiedPhases =
+			'[{"name":"Investigation","tasks":[{"content":"Locate code","details":"line one\nline two"}]}]';
+		expect(stringifiedPhases.includes("\n")).toBe(true);
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-rawnl",
+			name: "todo_write_like",
+			arguments: { phases: stringifiedPhases },
+		};
+
+		const result = validateToolArguments(tool, toolCall) as {
+			phases: Array<{ name: string; tasks: Array<{ content: string; details?: string }> }>;
+		};
+		expect(result.phases).toEqual([
+			{
+				name: "Investigation",
+				tasks: [{ content: "Locate code", details: "line one\nline two" }],
+			},
+		]);
+	});
 });
