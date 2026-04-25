@@ -1,4 +1,10 @@
 {
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true,
+		"defaultBranch": "main"
+	},
 	"linter": {
 		"enabled": true,
 		"rules": {

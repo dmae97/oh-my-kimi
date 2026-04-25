@@ -17,10 +17,6 @@ import sys
 
 from edit_benchmark_common import BenchmarkSpec, EDIT_DIFF, EXPECTED_CONTENT, run_benchmark_main
 
-# Variants recognised by packages/coding-agent/src/utils/edit-mode.ts.
-VALID_VARIANTS = ("replace", "patch", "hashline", "chunk", "vim", "apply_patch")
-
-
 def _extract_variant_arg() -> str | None:
 	"""Pop `--variant <value>` (or `--variant=<value>`) from sys.argv before argparse in common runs."""
 	argv = sys.argv
@@ -40,15 +36,7 @@ def _resolve_variant() -> str:
 	cli_variant = _extract_variant_arg()
 	variant = cli_variant or os.environ.get("PI_EDIT_VARIANT")
 	if not variant:
-		raise SystemExit(
-			"edit-benchmark: set PI_EDIT_VARIANT=<variant> or pass --variant <variant>.\n"
-			f"Valid variants: {', '.join(VALID_VARIANTS)}"
-		)
-	if variant not in VALID_VARIANTS:
-		raise SystemExit(
-			f"edit-benchmark: unknown variant '{variant}'.\n"
-			f"Valid variants: {', '.join(VALID_VARIANTS)}"
-		)
+		raise SystemExit("edit-benchmark: set PI_EDIT_VARIANT=<variant> or pass --variant <variant>.")
 	return variant
 
 

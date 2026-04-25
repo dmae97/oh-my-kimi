@@ -26,10 +26,7 @@ export interface FileDisplayModeSession {
  * and when the caller signals a `raw` read — raw output should be returned as-is
  * without injecting hashline anchors or line numbers.
  */
-export function resolveFileDisplayMode(
-	session: FileDisplayModeSession,
-	options?: { raw?: boolean },
-): FileDisplayMode {
+export function resolveFileDisplayMode(session: FileDisplayModeSession, options?: { raw?: boolean }): FileDisplayMode {
 	const { settings } = session;
 	const hasEditTool = session.hasEditTool ?? true;
 	const editMode = resolveEditMode(session);
