@@ -100,6 +100,7 @@ export type KnownProvider =
 	| "github-copilot"
 	| "gitlab-duo"
 	| "cursor"
+	| "deepseek"
 	| "xai"
 	| "groq"
 	| "cerebras"
