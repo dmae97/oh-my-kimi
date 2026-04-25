@@ -44,7 +44,7 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const writeSchema = Type.Object({
-	path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
+	path: Type.String({ description: "Path to the file to write" }),
 	content: Type.String({ description: "Content to write to the file" }),
 });
 

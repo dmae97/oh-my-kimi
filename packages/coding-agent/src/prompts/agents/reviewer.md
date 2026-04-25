@@ -44,7 +44,7 @@ output:
             type: number
           file_path:
             metadata:
-              description: Absolute path to affected file
+              description: Path to affected file
             type: string
           line_start:
             metadata:
@@ -108,7 +108,7 @@ Each `report_finding` requires:
 - `body`: One paragraph
 - `priority`: 0-3
 - `confidence`: 0.0-1.0
-- `file_path`: Absolute path
+- `file_path`: Path to affected file
 - `line_start`, `line_end`: Range ≤10 lines, must overlap diff
 
 Final `yield` call (payload under `result.data`):

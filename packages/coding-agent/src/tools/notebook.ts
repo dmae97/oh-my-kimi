@@ -15,7 +15,7 @@ const notebookSchema = Type.Object({
 	action: StringEnum(["edit", "insert", "delete"], {
 		description: "Action to perform on the notebook cell",
 	}),
-	notebook_path: Type.String({ description: "Path to the .ipynb file (relative or absolute)" }),
+	notebook_path: Type.String({ description: "Path to the .ipynb file" }),
 	cell_index: Type.Number({ description: "0-based index of the cell to operate on" }),
 	content: Type.Optional(Type.String({ description: "New cell content (required for edit/insert)" })),
 	cell_type: Type.Optional(
@@ -63,7 +63,7 @@ export class NotebookTool implements AgentTool<typeof notebookSchema, NotebookTo
 	readonly name = "notebook";
 	readonly label = "Notebook";
 	readonly description =
-		"Edit, insert, or delete cells in Jupyter notebooks (.ipynb). cell_index is 0-based. Paths must be absolute.";
+		"Edit, insert, or delete cells in Jupyter notebooks (.ipynb). cell_index is 0-based.";
 	readonly parameters = notebookSchema;
 	readonly strict = true;
 	readonly concurrency = "exclusive";
