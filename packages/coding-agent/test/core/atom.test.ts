@@ -305,10 +305,10 @@ describe("applyAtomEdits — between", () => {
 		expect(() => applyAtomEdits(content, edits)).toThrow(HashlineMismatchError);
 	});
 
-	it("resolveAtomToolEdit accepts the wire shape and parses both anchors", () => {
+	it("resolveAtomToolEdit accepts `set: [open, close]` tuple and parses both anchors", () => {
 		const toolEdit = {
 			path: "a.ts",
-			between: { after: "1#xx", before: "4#yy" },
+			set: ["1#xx", "4#yy"] as [string, string],
 			lines: ["X"],
 		};
 		const resolved = resolveAtomToolEdit(toolEdit) as AtomEdit;
@@ -317,5 +317,10 @@ describe("applyAtomEdits — between", () => {
 		expect(resolved.after.line).toBe(1);
 		expect(resolved.before.line).toBe(4);
 		expect(resolved.lines).toEqual(["X"]);
+	});
+
+	it("resolveAtomToolEdit rejects `set` arrays with non-string elements", () => {
+		const toolEdit = { path: "a.ts", set: [1, 2] as unknown as [string, string], lines: ["X"] };
+		expect(() => resolveAtomToolEdit(toolEdit)).toThrow(/2-tuple requires both elements to be anchor strings/);
 	});
 });

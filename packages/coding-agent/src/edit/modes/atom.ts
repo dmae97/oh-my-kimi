@@ -7,22 +7,23 @@
  * staleness scheme (`computeLineHash`) verbatim.
  *
  * Op shapes (one per entry):
- *   { path, set:     "5#th", lines: "..." | ["..."] }       // replace one line
- *   { path, before:  "5#th", lines: "..." | ["..."] }       // insert above anchor
- *   { path, after:   "5#th", lines: "..." | ["..."] }       // insert below anchor
- *   { path, del:     "5#th" }                               // delete one line
- *   { path, sub:     "5#th", find: "...", lines: "..." }    // substring rewrite on anchor line
- *   { path, ins:     "5#th", find: "...", lines: "..." }    // overwrite from substring to EOL
- *   { path, between: { after: "5#th", before: "9#xy" }, lines: [...] }
- *                                                           // replace lines strictly between two anchors
- *                                                           // (both anchors are preserved)
- *   { path, append:  "..." | ["..."] }                      // append to EOF
- *   { path, prepend: "..." | ["..."] }                      // prepend at BOF
+ *   { path, set:     "5#th", lines: "..." | ["..."] }                // replace one line
+ *   { path, set:     ["5#th", "9#xy"], lines: [...] }                // replace lines strictly between two anchors
+ *                                                                  // (both anchors kept; use for block-body replacement)
+ *   { path, before:  "5#th", lines: "..." | ["..."] }                // insert above anchor
+ *   { path, after:   "5#th", lines: "..." | ["..."] }                // insert below anchor
+ *   { path, del:     "5#th" }                                       // delete one line
+ *   { path, sub:     "5#th", find: "...", lines: "..." }             // substring rewrite on anchor line
+ *   { path, ins:     "5#th", find: "...", lines: "..." }             // overwrite from substring to EOL
+ *   { path, append:  "..." | ["..."] }                              // append to EOF
+ *   { path, prepend: "..." | ["..."] }                              // prepend at BOF
  *
- * Anchors mark *survivors*. Lines you reference are kept; lines you don't are
- * replaced or removed by the op. There are no inclusive ranges and no two-endpoint
- * spans whose endpoint is itself rewritten — this eliminates the most common
- * boundary-confusion failure mode (off-by-one on the closing brace).
+ * Anchors mark *survivors*. With single-anchor `set`, the named line is the
+ * target (consumed). With two-anchor `set: [open, close]`, both anchors are
+ * **kept** and only the lines strictly between them are replaced. There are no
+ * inclusive ranges and no two-endpoint spans whose endpoint is itself rewritten
+ * — this eliminates the most common boundary-confusion failure mode (off-by-one
+ * on the closing brace).
  *
  * For deleting or moving files, the agent should use bash.
  */
@@ -66,35 +67,30 @@ export const atomEditSchema = Type.Object(
 	{
 		path: Type.Optional(Type.String({ description: "file path override" })),
 		// Exactly one of the following op keys is required per entry:
-		set: Type.Optional(Type.String({ description: "line anchor to replace, 123#th" })),
-		before: Type.Optional(Type.String({ description: "line anchor to insert before, 123#th" })),
-		after: Type.Optional(Type.String({ description: "line anchor to insert after, 123#th" })),
-		del: Type.Optional(Type.String({ description: "line anchor to delete, 123#th" })),
-		sub: Type.Optional(Type.String({ description: "line anchor to rewrite, 123#th" })),
+		set: Type.Optional(
+			Type.Union([
+				Type.String({ description: "line anchor to replace", examples: ["5#aa"] }),
+				Type.Array(Type.String(), {
+					description: "two surviving anchors (open, close)",
+					examples: [["5#aa", "9#bb"]],
+				}),
+			]),
+		),
+		before: Type.Optional(Type.String({ description: "line anchor to insert before", examples: ["5#aa"] })),
+		after: Type.Optional(Type.String({ description: "line anchor to insert after", examples: ["5#aa"] })),
+		del: Type.Optional(Type.String({ description: "line anchor to delete", examples: ["5#aa"] })),
+		sub: Type.Optional(Type.String({ description: "line anchor to rewrite", examples: ["5#aa"] })),
 		ins: Type.Optional(
-			Type.String({ description: "line anchor to overwrite from a substring to end-of-line, 123#th" }),
+			Type.String({ description: "line anchor to overwrite from a substring to end-of-line", examples: ["5#aa"] }),
 		),
 		append: Type.Optional(linesSchema),
 		prepend: Type.Optional(linesSchema),
-		between: Type.Optional(
-			Type.Object(
-				{
-					after: Type.String({
-						description: "surviving anchor above the replacement region, e.g. opening brace, 123#th",
-					}),
-					before: Type.String({
-						description: "surviving anchor below the replacement region, e.g. closing brace, 130#xy",
-					}),
-				},
-				{ additionalProperties: false },
-			),
-		),
-		// Payload (used by set/before/after/sub/ins/between/append/prepend):
+		// Payload (used by set/before/after/sub/ins/append/prepend):
 		lines: Type.Optional(linesSchema),
 		find: Type.Optional(
 			Type.String({
-				description:
-					"sub/ins: substring on the anchored line that must occur exactly once. Use the shortest unique fragment.",
+				description: "shortest substring on the anchored line that must occur exactly once",
+				examples: ["if("],
 			}),
 		),
 	},
@@ -131,7 +127,7 @@ export type AtomEdit =
 // Param guards
 // ═══════════════════════════════════════════════════════════════════════════
 
-const ATOM_OP_KEYS = ["set", "before", "after", "del", "sub", "ins", "between", "append", "prepend"] as const;
+const ATOM_OP_KEYS = ["set", "before", "after", "del", "sub", "ins", "append", "prepend"] as const;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Resolution
@@ -195,8 +191,32 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit {
 			`Edit ${editIndex}: multiple op keys (${opKeysPresent.join(", ")}). Each entry is exactly one op — split into ${opKeysPresent.length} separate entries.`,
 		);
 	}
-	if ("set" in edit && typeof edit.set === "string") {
-		return { op: "set", pos: parseAnchor(edit.set, "set"), lines: hashlineParseText(edit.lines) };
+	if ("set" in edit && edit.set !== undefined) {
+		if (typeof edit.set === "string") {
+			return { op: "set", pos: parseAnchor(edit.set, "set"), lines: hashlineParseText(edit.lines) };
+		}
+		if (Array.isArray(edit.set)) {
+			if (edit.set.length === 2) {
+				const [openRaw, closeRaw] = edit.set;
+				if (typeof openRaw !== "string" || typeof closeRaw !== "string") {
+					throw new Error(
+						`Edit ${editIndex}: \`set\` 2-tuple requires both elements to be anchor strings, e.g. ["5#aa", "9#bb"].`,
+					);
+				}
+				return {
+					op: "between",
+					after: parseAnchor(openRaw, "set[0] (open anchor)"),
+					before: parseAnchor(closeRaw, "set[1] (close anchor)"),
+					lines: hashlineParseText(edit.lines),
+				};
+			} else if (edit.set.length === 1) {
+				return { op: "set", pos: parseAnchor(edit.set[0], "set"), lines: hashlineParseText(edit.lines) };
+			}
+		}
+
+		throw new Error(
+			`Edit ${editIndex}: \`set\` must be a "LINE#ID" string or a 2-tuple ["openAnchor", "closeAnchor"].`,
+		);
 	}
 	if ("before" in edit && typeof edit.before === "string") {
 		return { op: "before", pos: parseAnchor(edit.before, "before"), lines: hashlineParseText(edit.lines) };
@@ -220,17 +240,6 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit {
 		}
 		const to = subInsLinesToString(edit.lines, "ins");
 		return { op: "ins", pos: parseAnchor(edit.ins, "ins"), find: edit.find, to };
-	}
-	if ("between" in edit && edit.between && typeof edit.between === "object") {
-		const raw = edit.between as { after?: unknown; before?: unknown };
-		if (typeof raw.after !== "string" || typeof raw.before !== "string") {
-			throw new Error(
-				`Edit ${editIndex}: \`between\` requires { after: "LINE#ID", before: "LINE#ID" } with both anchors as strings.`,
-			);
-		}
-		const after = parseAnchor(raw.after, "between.after");
-		const before = parseAnchor(raw.before, "between.before");
-		return { op: "between", after, before, lines: hashlineParseText(edit.lines) };
 	}
 	if ("append" in edit) {
 		return { op: "append_file", lines: hashlineParseText(edit.append) };
