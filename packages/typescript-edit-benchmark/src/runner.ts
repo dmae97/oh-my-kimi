@@ -11,7 +11,7 @@ import type { AgentMessage, ResolvedThinkingLevel, ThinkingLevel } from "@oh-my-
 import type { Model } from "@oh-my-pi/pi-ai";
 
 import { computeLineHash, formatSessionDumpText, RpcClient } from "@oh-my-pi/pi-coding-agent";
-import { prompt, Snowflake } from "@oh-my-pi/pi-utils";
+import { prompt } from "@oh-my-pi/pi-utils";
 import { diffLines } from "diff";
 import { formatDirectory } from "./formatter";
 import { discoverSharedInfra, InProcessClient, type SharedInfra } from "./in-process-client";
@@ -21,7 +21,7 @@ import benchmarkTaskPrompt from "./prompts/benchmark-task.md" with { type: "text
 import type { EditTask } from "./tasks";
 import { verifyExpectedFileSubset, verifyExpectedFiles } from "./verify";
 
-const TMP = `/tmp/rb-${crypto.randomUUID()}`;
+const TMP = `/tmp/rb-${Math.random().toString(36).slice(2, 10)}`;
 const CLI_PATH = Bun.fileURLToPath(import.meta.resolve("@oh-my-pi/pi-coding-agent/cli"));
 
 /** Subset of session state used for markdown conversation dumps (parity with /dump). */
@@ -50,8 +50,9 @@ interface BenchmarkClient {
 
 fs.mkdirSync(TMP);
 
-function makeTempDir(pre?: string): string {
-	const dir = path.join(TMP, `${pre ?? ""}${Snowflake.next()}`);
+let n = 0;
+function subtmp(pre: string): string {
+	const dir = path.join(TMP, `${pre}-${n++}`);
 	fs.mkdirSync(dir);
 	return dir;
 }
@@ -1900,7 +1901,7 @@ async function runConcurrentBenchmarkRun(
 	onProgress?: (event: ProgressEvent) => void,
 	shared?: SharedInfra,
 ): Promise<{ task: EditTask; result: TaskRunResult }> {
-	const workDir = makeTempDir(item.task.id);
+	const workDir = subtmp(item.task.id);
 
 	try {
 		await copyFixtures(item.task, workDir);
@@ -1931,7 +1932,7 @@ export async function runTask(
 		: undefined;
 
 	const runPromises = Array.from({ length: config.runsPerTask }, async (_, index) => {
-		const tempDir = makeTempDir(task.id);
+		const tempDir = subtmp(task.id);
 		await copyFixtures(task, tempDir);
 		onProgress?.({ taskId: task.id, runIndex: index, status: "started" });
 		const result = await runSingleTask(task, index, config, tempDir, task.expectedDir, shared);
