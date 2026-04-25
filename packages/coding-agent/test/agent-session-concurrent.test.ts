@@ -696,7 +696,7 @@ describe("AgentSession TTSR resume gate", () => {
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 
 		const sparkModel = modelRegistry.find("openai-codex", "gpt-5.3-codex-spark");
-		const codexModel = modelRegistry.find("openai-codex", "gpt-5.3-codex");
+		const codexModel = modelRegistry.find("openai-codex", "gpt-5.5");
 		if (!sparkModel || !codexModel) {
 			throw new Error("Expected codex spark and codex models to exist");
 		}

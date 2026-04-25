@@ -702,6 +702,11 @@ function normalizeChunkEditOperations(edits: ChunkToolEdit[]): {
 			if (typeof edit.write !== "string") {
 				throw new Error(`Edit ${index + 1}: write must be a string.`);
 			}
+			if (edit.write.length === 0) {
+				throw new Error(
+					`Edit ${index + 1}: write:"" is a destructive empty replacement. Use delete:true to delete the chunk, or open the chunk to inspect its content without modifying the file.`,
+				);
+			}
 			let writeContent = edit.write;
 			if (selector?.endsWith("~")) {
 				const corrected = autoCorrectBodyIndent(writeContent, index);
