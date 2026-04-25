@@ -8,7 +8,8 @@ import type { ToolSession } from "./index";
 const pollSchema = Type.Object({
 	jobs: Type.Optional(
 		Type.Array(Type.String(), {
-			description: "Specific job IDs to wait for. If omitted, waits for any running job.",
+			description: "job ids to wait for",
+			examples: [["job-1234"]],
 		}),
 	),
 });

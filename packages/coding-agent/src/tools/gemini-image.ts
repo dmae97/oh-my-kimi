@@ -36,17 +36,19 @@ interface ImageApiKey {
 
 const responseModalitySchema = StringEnum(["IMAGE", "TEXT"]);
 const aspectRatioSchema = StringEnum(["1:1", "3:4", "4:3", "9:16", "16:9"], {
-	description: "Aspect ratio (1:1, 3:4, 4:3, 9:16, 16:9).",
+	description: "aspect ratio",
+	examples: ["1:1", "3:4", "16:9"],
 });
 const imageSizeSchema = StringEnum(["1024x1024", "1536x1024", "1024x1536"], {
-	description: "Image size, mainly for gemini-3-pro-image-preview.",
+	description: "image size",
+	examples: ["1024x1024", "1536x1024"],
 });
 
 const inputImageSchema = Type.Object(
 	{
-		path: Type.Optional(Type.String({ description: "Path to an input image file." })),
-		data: Type.Optional(Type.String({ description: "Base64 image data or a data: URL." })),
-		mime_type: Type.Optional(Type.String({ description: "Required for raw base64 data." })),
+		path: Type.Optional(Type.String({ description: "input image path" })),
+		data: Type.Optional(Type.String({ description: "base64 image data" })),
+		mime_type: Type.Optional(Type.String({ description: "mime type" })),
 	},
 	{ additionalProperties: false },
 );
@@ -54,55 +56,56 @@ const inputImageSchema = Type.Object(
 const baseImageSchema = Type.Object(
 	{
 		subject: Type.String({
-			description:
-				"Main subject with key descriptors (e.g., 'A stoic robot barista with glowing blue optics', 'A weathered lighthouse on a rocky cliff').",
+			description: "main subject",
+			examples: ["a stoic robot barista", "a weathered lighthouse"],
 		}),
 		action: Type.Optional(
 			Type.String({
-				description: "What the subject is doing (e.g., 'pouring latte art', 'standing against crashing waves').",
+				description: "what subject is doing",
+				examples: ["pouring latte art", "standing against waves"],
 			}),
 		),
 		scene: Type.Optional(
 			Type.String({
-				description:
-					"Location or environment (e.g., 'in a futuristic café on Mars', 'during a violent thunderstorm at dusk').",
+				description: "location or environment",
+				examples: ["futuristic café on mars", "thunderstorm at dusk"],
 			}),
 		),
 		composition: Type.Optional(
 			Type.String({
-				description:
-					"Camera angle, framing, depth of field (e.g., 'low-angle close-up, shallow depth of field', 'wide establishing shot').",
+				description: "camera angle and framing",
+				examples: ["low-angle close-up", "wide establishing shot"],
 			}),
 		),
 		lighting: Type.Optional(
 			Type.String({
-				description:
-					"Lighting setup and mood (e.g., 'warm rim lighting', 'golden hour backlight', 'hard noon shadows').",
+				description: "lighting setup",
+				examples: ["warm rim lighting", "golden hour backlight"],
 			}),
 		),
 		style: Type.Optional(
 			Type.String({
-				description:
-					"Artistic style, mood, color grading, camera (e.g., 'film noir mood, cinematic color grading', 'Studio Ghibli watercolor', 'photorealistic').",
+				description: "artistic style",
+				examples: ["film noir", "studio ghibli watercolor", "photorealistic"],
 			}),
 		),
 		text: Type.Optional(
 			Type.String({
-				description:
-					"Text to render in image with specs: exact wording in quotes, font style, color, placement (e.g., 'Headline \"URBAN EXPLORER\" in bold white sans-serif at top center').",
+				description: "text to render",
+				examples: ["headline 'urban explorer' top center"],
 			}),
 		),
 		changes: Type.Optional(
 			Type.Array(Type.String(), {
-				description:
-					"For edits: specific changes to make, as well as, what to keep unchanged (e.g., ['Change the tie to green', 'Remove the car in background']). Use with input_images.",
+				description: "edits to make",
+				examples: [["change tie to green", "remove car"]],
 			}),
 		),
 		aspect_ratio: Type.Optional(aspectRatioSchema),
 		image_size: Type.Optional(imageSizeSchema),
 		input: Type.Optional(
 			Type.Array(inputImageSchema, {
-				description: "Optional input images for edits or variations.",
+				description: "input images",
 			}),
 		),
 	},

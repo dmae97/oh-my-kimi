@@ -43,41 +43,41 @@ export interface TodoWriteToolDetails {
 // =============================================================================
 
 const InputTask = Type.Object({
-	content: Type.String({ description: "Task description" }),
+	content: Type.String({ description: "task description", examples: ["Add unit tests"] }),
 	status: Type.Optional(
 		StringEnum(["pending", "in_progress", "completed", "abandoned"] as const, {
-			description: "Task status",
+			description: "task status",
 		}),
 	),
 	details: Type.Optional(
-		Type.String({ description: "Implementation details, file paths, and specifics (shown only when active)" }),
+		Type.String({ description: "implementation details" }),
 	),
 });
 
 const InputPhase = Type.Object({
-	name: Type.String({ description: "Phase name" }),
+	name: Type.String({ description: "phase name", examples: ["Investigation", "Implementation"] }),
 	tasks: Type.Optional(Type.Array(InputTask)),
 });
 
 const AddNoteEntry = Type.Object({
-	id: Type.String({ description: "Task ID, e.g. task-3" }),
-	notes: Type.String({ description: "Notes to append" }),
+	id: Type.String({ description: "task id", examples: ["task-3"] }),
+	notes: Type.String({ description: "notes to append" }),
 });
 
 const AddTaskEntry = Type.Object({
-	phase: Type.String({ description: "Phase name or ID" }),
-	content: Type.String({ description: "Task description" }),
-	details: Type.Optional(Type.String({ description: "Implementation details, file paths, and specifics" })),
+	phase: Type.String({ description: "phase name or id", examples: ["Investigation", "phase-1"] }),
+	content: Type.String({ description: "task description", examples: ["Add unit tests"] }),
+	details: Type.Optional(Type.String({ description: "implementation details" })),
 });
 
 const todoWriteSchema = Type.Object({
-	phases: Type.Optional(Type.Array(InputPhase, { description: "Replace entire todo list with these phases" })),
-	start: Type.Optional(Type.String({ description: "Task ID to start, e.g. task-3" })),
-	complete: Type.Optional(Type.Array(Type.String(), { description: "Task IDs to mark completed" })),
-	abandon: Type.Optional(Type.Array(Type.String(), { description: "Task IDs to mark abandoned" })),
-	remove: Type.Optional(Type.Array(Type.String(), { description: "Task IDs to remove" })),
-	add_notes: Type.Optional(Type.Array(AddNoteEntry, { description: "Notes to append to tasks" })),
-	add_tasks: Type.Optional(Type.Array(AddTaskEntry, { description: "Tasks to add" })),
+	phases: Type.Optional(Type.Array(InputPhase, { description: "replace todo list" })),
+	start: Type.Optional(Type.String({ description: "task id to start", examples: ["task-3"] })),
+	complete: Type.Optional(Type.Array(Type.String(), { description: "task ids to complete" })),
+	abandon: Type.Optional(Type.Array(Type.String(), { description: "task ids to abandon" })),
+	remove: Type.Optional(Type.Array(Type.String(), { description: "task ids to remove" })),
+	add_notes: Type.Optional(Type.Array(AddNoteEntry, { description: "notes to append" })),
+	add_tasks: Type.Optional(Type.Array(AddTaskEntry, { description: "tasks to add" })),
 	add_phase: Type.Optional(InputPhase),
 });
 

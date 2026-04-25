@@ -14,8 +14,8 @@ import type { Settings } from "..";
 import type { ToolSession } from "./index";
 
 const ReportToolIssueParams = Type.Object({
-	tool: Type.String({ description: "Name of the tool that behaved unexpectedly" }),
-	report: Type.String({ description: "Description of what was unexpected about the tool's behavior" }),
+	tool: Type.String({ description: "tool name", examples: ["bash", "read"] }),
+	report: Type.String({ description: "unexpected behavior" }),
 });
 
 export function isAutoQaEnabled(settings?: Settings): boolean {

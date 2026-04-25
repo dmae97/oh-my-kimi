@@ -30,11 +30,11 @@ import { toolResult } from "./tool-result";
 
 const findSchema = Type.Object({
 	pattern: Type.String({
-		description:
-			"Glob pattern including the search path (no separate path param), e.g. 'src/**/*.ts', 'lib/*.json'. Supports comma-separated lists like 'apps/,packages/,phases/'. Simple patterns like '*.ts' recurse from cwd.",
+		description: "glob including search path",
+		examples: ["src/**/*.ts", "lib/*.json", "apps/,packages/", "*.ts"],
 	}),
-	hidden: Type.Optional(Type.Boolean({ description: "Include hidden files and directories", default: true })),
-	limit: Type.Optional(Type.Number({ description: "Max results", default: 1000 })),
+	hidden: Type.Optional(Type.Boolean({ description: "include hidden files", default: true })),
+	limit: Type.Optional(Type.Number({ description: "max results", default: 1000 })),
 });
 
 export type FindToolInput = Static<typeof findSchema>;

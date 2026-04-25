@@ -13,7 +13,7 @@ import { ToolError } from "./tool-errors";
 
 const resolveSchema = Type.Object({
 	action: Type.Union([Type.Literal("apply"), Type.Literal("discard")]),
-	reason: Type.String({ description: "Why you're applying or discarding" }),
+	reason: Type.String({ description: "reason for action", examples: ["approved by user"] }),
 });
 
 type ResolveParams = Static<typeof resolveSchema>;

@@ -53,7 +53,9 @@ import {
 // Schema
 // ═══════════════════════════════════════════════════════════════════════════
 
-const linesSchema = Type.Union([Type.Array(Type.String()), Type.String()]);
+const linesSchema = Type.Union([Type.Array(Type.String()), Type.String()], {
+	description: "replacement lines",
+});
 
 /**
  * Flat entry shape: every op key is optional, and the runtime validator
@@ -65,7 +67,7 @@ const linesSchema = Type.Union([Type.Array(Type.String()), Type.String()]);
  */
 export const atomEditSchema = Type.Object(
 	{
-		path: Type.Optional(Type.String({ description: "file path override" })),
+		path: Type.Optional(Type.String({ description: "file path override", examples: ["src/foo.ts"] })),
 		// Exactly one of the following op keys is required per entry:
 		set: Type.Optional(
 			Type.Union([
@@ -81,15 +83,23 @@ export const atomEditSchema = Type.Object(
 		del: Type.Optional(Type.String({ description: "line anchor to delete", examples: ["5#aa"] })),
 		sub: Type.Optional(Type.String({ description: "line anchor to rewrite", examples: ["5#aa"] })),
 		ins: Type.Optional(
-			Type.String({ description: "line anchor to overwrite from a substring to end-of-line", examples: ["5#aa"] }),
+			Type.String({ description: "line anchor to overwrite", examples: ["5#aa"] }),
 		),
-		append: Type.Optional(linesSchema),
-		prepend: Type.Optional(linesSchema),
+		append: Type.Optional(
+			Type.Union([Type.Array(Type.String()), Type.String()], { description: "lines to append at EOF" }),
+		),
+		prepend: Type.Optional(
+			Type.Union([Type.Array(Type.String()), Type.String()], { description: "lines to prepend at BOF" }),
+		),
 		// Payload (used by set/before/after/sub/ins/append/prepend):
-		lines: Type.Optional(linesSchema),
+		lines: Type.Optional(
+			Type.Union([Type.Array(Type.String()), Type.String()], {
+			description: "replacement payload",
+			}),
+		),
 		find: Type.Optional(
 			Type.String({
-				description: "shortest substring on the anchored line that must occur exactly once",
+			description: "unique substring on anchor line",
 				examples: ["if("],
 			}),
 		),
@@ -99,8 +109,8 @@ export const atomEditSchema = Type.Object(
 
 export const atomEditParamsSchema = Type.Object(
 	{
-		path: Type.Optional(Type.String({ description: "Default file path used when an edit omits its own `path`" })),
-		edits: Type.Array(atomEditSchema, { description: "edits" }),
+		path: Type.Optional(Type.String({ description: "default file path for edits" })),
+		edits: Type.Array(atomEditSchema, { description: "edit ops" }),
 	},
 	{ additionalProperties: false },
 );

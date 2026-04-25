@@ -36,20 +36,30 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const astEditOpSchema = Type.Object({
-	pat: Type.String({ description: "AST pattern to match" }),
-	out: Type.String({ description: "Replacement template" }),
+	pat: Type.String({ description: "ast pattern", examples: ["oldFn($$$ARGS)"] }),
+	out: Type.String({ description: "replacement template", examples: ["newFn($$$ARGS)"] }),
 });
 
 const astEditSchema = Type.Object({
 	ops: Type.Array(astEditOpSchema, {
 		minItems: 1,
-		description: "Rewrite ops as [{ pat, out }]",
+		description: "rewrite ops",
 	}),
-	lang: Type.Optional(Type.String({ description: "Language override" })),
-	path: Type.Optional(Type.String({ description: "File, directory, or glob pattern to rewrite (default: cwd)" })),
-	glob: Type.Optional(Type.String({ description: "Optional glob filter relative to path" })),
-	sel: Type.Optional(Type.String({ description: "Optional selector for contextual pattern mode" })),
-	limit: Type.Optional(Type.Number({ description: "Max total replacements" })),
+	lang: Type.Optional(Type.String({ description: "language override", examples: ["typescript", "python"] })),
+	path: Type.Optional(
+		Type.String({
+			description: "path or glob to rewrite",
+			examples: ["src/", "src/foo.ts"],
+		}),
+	),
+	glob: Type.Optional(Type.String({ description: "glob filter", examples: ["**/*.ts"] })),
+	sel: Type.Optional(
+		Type.String({
+			description: "contextual pattern selector",
+			examples: ["function_declaration", "call_expression", "identifier"],
+		}),
+	),
+	limit: Type.Optional(Type.Number({ description: "max replacements" })),
 });
 
 export interface AstEditToolDetails {

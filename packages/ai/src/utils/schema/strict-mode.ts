@@ -17,13 +17,14 @@ import { isJsonObject } from "./types";
  */
 export function StringEnum<const T extends readonly string[]>(
 	values: T,
-	options?: { description?: string; default?: T[number] },
+	options?: { description?: string; default?: T[number]; examples?: readonly T[number][] },
 ): TUnsafe<T[number]> {
 	return Type.Unsafe<T[number]>({
 		type: "string",
 		enum: values as unknown as string[],
 		...(options?.description && { description: options.description }),
 		...(options?.default && { default: options.default }),
+		...(options?.examples && { examples: options.examples }),
 	});
 }
 

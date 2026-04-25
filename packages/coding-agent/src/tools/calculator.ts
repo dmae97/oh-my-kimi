@@ -31,11 +31,11 @@ type Token =
 const calculatorSchema = Type.Object({
 	calculations: Type.Array(
 		Type.Object({
-			expression: Type.String({ description: "Math expression to evaluate" }),
-			prefix: Type.String({ description: "Text to prepend to the result" }),
-			suffix: Type.String({ description: "Text to append to the result" }),
+			expression: Type.String({ description: "math expression", examples: ["2 + 2", "sqrt(16)"] }),
+			prefix: Type.String({ description: "prefix text" }),
+			suffix: Type.String({ description: "suffix text" }),
 		}),
-		{ description: "List of calculations to evaluate" },
+		{ description: "calculations to evaluate" },
 	),
 });
 

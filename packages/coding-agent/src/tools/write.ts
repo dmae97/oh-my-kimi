@@ -44,8 +44,8 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const writeSchema = Type.Object({
-	path: Type.String({ description: "Path to the file to write" }),
-	content: Type.String({ description: "Content to write to the file" }),
+	path: Type.String({ description: "file path", examples: ["src/new.ts"] }),
+	content: Type.String({ description: "file content" }),
 });
 
 export type WriteToolInput = Static<typeof writeSchema>;

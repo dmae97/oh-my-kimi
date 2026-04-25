@@ -31,17 +31,17 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const grepSchema = Type.Object({
-	pattern: Type.String({ description: "Regex pattern to search for" }),
-	path: Type.Optional(Type.String({ description: "File or directory to search (default: cwd)" })),
-	glob: Type.Optional(Type.String({ description: "Filter files by glob pattern (e.g., '*.js')" })),
-	type: Type.Optional(Type.String({ description: "Filter by file type (e.g., js, py, rust)" })),
-	i: Type.Optional(Type.Boolean({ description: "Case-insensitive search", default: false })),
-	pre: Type.Optional(Type.Number({ description: "Lines of context before matches" })),
-	post: Type.Optional(Type.Number({ description: "Lines of context after matches" })),
-	multiline: Type.Optional(Type.Boolean({ description: "Enable multiline matching" })),
-	gitignore: Type.Optional(Type.Boolean({ description: "Respect .gitignore files during search", default: true })),
-	limit: Type.Optional(Type.Number({ description: "Limit output to first N matches", default: 20 })),
-	offset: Type.Optional(Type.Number({ description: "Skip first N entries before applying limit", default: 0 })),
+	pattern: Type.String({ description: "regex pattern", examples: ["function\\s+\\w+", "TODO"] }),
+	path: Type.Optional(Type.String({ description: "path to search", examples: ["src/", "src/foo.ts"] })),
+	glob: Type.Optional(Type.String({ description: "glob filter", examples: ["*.js"] })),
+	type: Type.Optional(Type.String({ description: "file type filter", examples: ["js", "py", "rust"] })),
+	i: Type.Optional(Type.Boolean({ description: "case-insensitive search", default: false })),
+	pre: Type.Optional(Type.Number({ description: "lines before matches" })),
+	post: Type.Optional(Type.Number({ description: "lines after matches" })),
+	multiline: Type.Optional(Type.Boolean({ description: "multiline matching" })),
+	gitignore: Type.Optional(Type.Boolean({ description: "respect gitignore", default: true })),
+	limit: Type.Optional(Type.Number({ description: "max matches", default: 20 })),
+	offset: Type.Optional(Type.Number({ description: "skip first n matches", default: 0 })),
 });
 
 export type GrepToolInput = Static<typeof grepSchema>;

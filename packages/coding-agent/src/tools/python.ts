@@ -47,14 +47,14 @@ function groupPreludeHelpers(helpers: PreludeHelper[]): PreludeCategory[] {
 export const pythonSchema = Type.Object({
 	cells: Type.Array(
 		Type.Object({
-			code: Type.String({ description: "Python code to execute" }),
-			title: Type.Optional(Type.String({ description: "Cell label, e.g. 'imports', 'helper'" })),
+			code: Type.String({ description: "python code", examples: ["print('hello')", "import json"] }),
+			title: Type.Optional(Type.String({ description: "cell label", examples: ["imports", "helper"] })),
 		}),
-		{ description: "Cells to execute sequentially in persistent kernel" },
+		{ description: "cells to execute" },
 	),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds", default: 30 })),
-	cwd: Type.Optional(Type.String({ description: "Working directory (default: cwd)" })),
-	reset: Type.Optional(Type.Boolean({ description: "Restart kernel before execution" })),
+	timeout: Type.Optional(Type.Number({ description: "timeout in seconds", default: 30 })),
+	cwd: Type.Optional(Type.String({ description: "working directory", examples: ["src/"] })),
+	reset: Type.Optional(Type.Boolean({ description: "restart kernel" })),
 });
 export type PythonToolParams = Static<typeof pythonSchema>;
 

@@ -28,7 +28,7 @@ function makeTag(line: number, content: string): Anchor {
 /** Returns a valid bigram that's guaranteed NOT to equal the real hash of `(line, content)`. */
 function staleBigramFor(line: number, content: string): string {
 	const real = computeLineHash(line, content);
-	const idx = HASHLINE_BIGRAMS.indexOf(real);
+	const idx = HASHLINE_BIGRAMS.indexOf(real as (typeof HASHLINE_BIGRAMS)[number]);
 	return HASHLINE_BIGRAMS[(idx + 1) % HASHLINE_BIGRAMS_COUNT];
 }
 

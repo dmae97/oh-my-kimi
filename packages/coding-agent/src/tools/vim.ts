@@ -38,28 +38,27 @@ const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 const vimStepSchema = Type.Object({
 	kbd: Type.Array(Type.String(), {
-		description: "Vim key sequences ONLY (e.g. ggdGi, 3Go, dd). NEVER put file content here — use insert for text.",
+		description: "vim key sequences",
+		examples: [["ggdGi"], ["3Go"], ["dd"]],
 	}),
 	insert: Type.Optional(
 		Type.String({
-			description:
-				"Raw text to type into the buffer. kbd must leave INSERT mode active first (e.g. via o, O, i, cc).",
+			description: "raw text to insert",
+			examples: ["hello world"],
 		}),
 	),
 });
 
 const vimSchema = Type.Object({
-	file: Type.String({ description: "File path to edit." }),
+	file: Type.String({ description: "file path", examples: ["src/foo.ts"] }),
 	steps: Type.Optional(
 		Type.Array(vimStepSchema, {
-			description:
-				"Ordered editing steps. Each step executes kbd sequences, then optionally inserts text. INSERT mode is auto-exited between steps.",
+			description: "editing steps",
 		}),
 	),
 	pause: Type.Optional(
 		Type.Boolean({
-			description:
-				"Advanced: skip auto-save after the last step. Rarely needed. Omit or set false for normal use — edits auto-save.",
+			description: "skip auto-save",
 		}),
 	),
 });

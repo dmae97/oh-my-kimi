@@ -138,70 +138,62 @@ const JOB_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "a
 const ghRepoViewSchema = Type.Object({
 	repo: Type.Optional(
 		Type.String({
-			description: "Repository in OWNER/REPO format. Defaults to the current GitHub repository context.",
+			description: "owner/repo",
+			examples: ["facebook/react"],
 		}),
 	),
-	branch: Type.Optional(Type.String({ description: "Branch name to inspect instead of the default branch." })),
+	branch: Type.Optional(Type.String({ description: "branch to inspect", examples: ["main", "develop"] })),
 });
 
 const ghIssueViewSchema = Type.Object({
-	issue: Type.String({ description: "Issue number or full GitHub issue URL." }),
+	issue: Type.String({ description: "issue number or url", examples: ["123", "https://github.com/owner/repo/issues/123"] }),
 	repo: Type.Optional(
-		Type.String({ description: "Repository in OWNER/REPO format. Omit when passing a full issue URL." }),
+		Type.String({ description: "owner/repo", examples: ["facebook/react"] }),
 	),
-	comments: Type.Optional(Type.Boolean({ description: "Include issue comments.", default: true })),
+	comments: Type.Optional(Type.Boolean({ description: "include issue comments", default: true })),
 });
 
 const ghPrViewSchema = Type.Object({
 	pr: Type.Optional(
-		Type.String({
-			description:
-				"Pull request number, full GitHub pull request URL, or branch name. Defaults to the current branch PR.",
-		}),
+		Type.String({ description: "pr number, url, or branch", examples: ["123", "feature-branch"] }),
 	),
 	repo: Type.Optional(
-		Type.String({ description: "Repository in OWNER/REPO format. Omit when passing a full pull request URL." }),
+		Type.String({ description: "owner/repo", examples: ["facebook/react"] }),
 	),
-	comments: Type.Optional(Type.Boolean({ description: "Include pull request comments.", default: true })),
+	comments: Type.Optional(Type.Boolean({ description: "include pr comments", default: true })),
 });
 
 const ghPrDiffSchema = Type.Object({
 	pr: Type.Optional(
-		Type.String({
-			description:
-				"Pull request number, full GitHub pull request URL, or branch name. Defaults to the current branch PR.",
-		}),
+		Type.String({ description: "pr number, url, or branch", examples: ["123", "feature-branch"] }),
 	),
 	repo: Type.Optional(
-		Type.String({ description: "Repository in OWNER/REPO format. Omit when passing a full pull request URL." }),
+		Type.String({ description: "owner/repo", examples: ["facebook/react"] }),
 	),
 	nameOnly: Type.Optional(
-		Type.Boolean({ description: "Return only changed file names instead of unified diff output." }),
+		Type.Boolean({ description: "return file names only" }),
 	),
 	exclude: Type.Optional(
-		Type.Array(Type.String({ description: "Glob pattern for files to exclude from the diff." }), {
-			description: "File globs to exclude from the diff output.",
+		Type.Array(Type.String({ description: "glob to exclude" }), {
+			description: "file globs to exclude",
 		}),
 	),
 });
 
 const ghPrCheckoutSchema = Type.Object({
 	pr: Type.Optional(
-		Type.String({
-			description:
-				"Pull request number, full GitHub pull request URL, or branch name. Defaults to the current branch PR.",
-		}),
+		Type.String({ description: "pr number, url, or branch", examples: ["123", "feature-branch"] }),
 	),
 	repo: Type.Optional(
-		Type.String({ description: "Repository in OWNER/REPO format. Omit when passing a full pull request URL." }),
+		Type.String({ description: "owner/repo", examples: ["facebook/react"] }),
 	),
-	branch: Type.Optional(Type.String({ description: "Local branch name to create or reuse (default: pr-<number>)." })),
+	branch: Type.Optional(Type.String({ description: "local branch name", examples: ["main", "develop"] })),
 	worktree: Type.Optional(
-		Type.String({ description: "Worktree path to create. Defaults to <repo>/.worktrees/<branch>." }),
+		Type.String({ description: "worktree path" }),
 	),
 	force: Type.Optional(
 		Type.Boolean({
-			description: "Reset an existing local branch to the PR head when it is not already checked out elsewhere.",
+			description: "reset existing local branch",
 		}),
 	),
 });
@@ -209,38 +201,37 @@ const ghPrCheckoutSchema = Type.Object({
 const ghPrPushSchema = Type.Object({
 	branch: Type.Optional(
 		Type.String({
-			description: "Local branch name to push. Defaults to the current checked-out git branch.",
+			description: "local branch name",
+			examples: ["main", "develop"],
 		}),
 	),
-	forceWithLease: Type.Optional(Type.Boolean({ description: "Use --force-with-lease when pushing the PR branch." })),
+	forceWithLease: Type.Optional(Type.Boolean({ description: "force-with-lease push" })),
 });
 
 const ghSearchIssuesSchema = Type.Object({
-	query: Type.String({ description: "GitHub issue search query. Supports GitHub search syntax." }),
-	repo: Type.Optional(Type.String({ description: "Repository in OWNER/REPO format to scope the search." })),
-	limit: Type.Optional(Type.Number({ description: "Maximum results to return (max: 50).", default: 10 })),
+	query: Type.String({ description: "issue search query", examples: ["is:open label:bug"] }),
+	repo: Type.Optional(Type.String({ description: "scope to owner/repo" })),
+	limit: Type.Optional(Type.Number({ description: "max results", default: 10 })),
 });
 
 const ghSearchPrsSchema = Type.Object({
-	query: Type.String({ description: "GitHub pull request search query. Supports GitHub search syntax." }),
-	repo: Type.Optional(Type.String({ description: "Repository in OWNER/REPO format to scope the search." })),
-	limit: Type.Optional(Type.Number({ description: "Maximum results to return (max: 50).", default: 10 })),
+	query: Type.String({ description: "pr search query", examples: ["is:open label:bug"] }),
+	repo: Type.Optional(Type.String({ description: "scope to owner/repo" })),
+	limit: Type.Optional(Type.Number({ description: "max results", default: 10 })),
 });
 
 const ghRunWatchSchema = Type.Object({
 	run: Type.Optional(
-		Type.String({
-			description:
-				"GitHub Actions run ID or full run URL. Omitting this watches the workflow runs for the current HEAD commit on the selected branch.",
-		}),
+		Type.String({ description: "actions run id or url", examples: ["123456"] }),
 	),
 	branch: Type.Optional(
 		Type.String({
-			description: "Branch to inspect when omitting `run`. Defaults to the current checked-out git branch.",
+			description: "branch to inspect",
+			examples: ["main", "develop"],
 		}),
 	),
 	tail: Type.Optional(
-		Type.Number({ description: "Number of log lines to include per failed job (max: 200).", default: 15 }),
+		Type.Number({ description: "log lines per failed job", default: 15 }),
 	),
 });
 

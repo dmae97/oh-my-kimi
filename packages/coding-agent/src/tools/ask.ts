@@ -32,19 +32,19 @@ import { ToolAbortError } from "./tool-errors";
 // =============================================================================
 
 const OptionItem = Type.Object({
-	label: Type.String({ description: "Display label" }),
+	label: Type.String({ description: "display label" }),
 });
 
 const QuestionItem = Type.Object({
-	id: Type.String({ description: "Question ID, e.g. 'auth', 'cache'" }),
-	question: Type.String({ description: "Question text" }),
-	options: Type.Array(OptionItem, { description: "Available options" }),
-	multi: Type.Optional(Type.Boolean({ description: "Allow multiple selections" })),
-	recommended: Type.Optional(Type.Number({ description: "Index of recommended option (0-indexed)" })),
+	id: Type.String({ description: "question id", examples: ["auth", "cache"] }),
+	question: Type.String({ description: "question text" }),
+	options: Type.Array(OptionItem, { description: "available options" }),
+	multi: Type.Optional(Type.Boolean({ description: "allow multiple selections" })),
+	recommended: Type.Optional(Type.Number({ description: "recommended option index" })),
 });
 
 const askSchema = Type.Object({
-	questions: Type.Array(QuestionItem, { description: "Questions to ask", minItems: 1 }),
+	questions: Type.Array(QuestionItem, { description: "questions to ask", minItems: 1 }),
 });
 
 export type AskToolInput = Static<typeof askSchema>;

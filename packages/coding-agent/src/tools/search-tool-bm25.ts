@@ -25,9 +25,9 @@ const MATCH_LABEL_LEN = 72;
 const MATCH_DESCRIPTION_LEN = 96;
 
 const searchToolBm25Schema = Type.Object({
-	query: Type.String({ description: "Search query for hidden MCP tool metadata" }),
+	query: Type.String({ description: "mcp search query", examples: ["kubernetes pod", "image processing"] }),
 	limit: Type.Optional(
-		Type.Integer({ description: "Max matching tools to activate and return (default 8)", minimum: 1 }),
+		Type.Integer({ description: "max matches", minimum: 1 }),
 	),
 });
 

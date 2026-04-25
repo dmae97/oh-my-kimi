@@ -6,7 +6,7 @@ import cancelJobDescription from "../prompts/tools/cancel-job.md" with { type: "
 import type { ToolSession } from "./index";
 
 const cancelJobSchema = Type.Object({
-	job_id: Type.String({ description: "Background job ID" }),
+	job_id: Type.String({ description: "background job id", examples: ["job-1234"] }),
 });
 
 type CancelJobParams = Static<typeof cancelJobSchema>;

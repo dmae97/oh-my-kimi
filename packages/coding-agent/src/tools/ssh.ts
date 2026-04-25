@@ -22,10 +22,10 @@ import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
 
 const sshSchema = Type.Object({
-	host: Type.String({ description: "Host name from managed SSH config or discovered ssh.json files" }),
-	command: Type.String({ description: "Command to execute on the remote host" }),
-	cwd: Type.Optional(Type.String({ description: "Remote working directory (optional)" })),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds", default: 60 })),
+	host: Type.String({ description: "ssh host", examples: ["my-server", "prod-1"] }),
+	command: Type.String({ description: "remote command", examples: ["ls -la", "uptime"] }),
+	cwd: Type.Optional(Type.String({ description: "remote working directory", examples: ["/var/log"] })),
+	timeout: Type.Optional(Type.Number({ description: "timeout in seconds", default: 60 })),
 });
 
 export interface SSHToolDetails {

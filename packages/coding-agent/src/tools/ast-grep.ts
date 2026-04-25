@@ -35,14 +35,28 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const astGrepSchema = Type.Object({
-	pat: Type.Array(Type.String(), { minItems: 1, description: "AST patterns to match" }),
-	lang: Type.Optional(Type.String({ description: "Language override" })),
-	path: Type.Optional(Type.String({ description: "File, directory, or glob pattern to search (default: cwd)" })),
-	glob: Type.Optional(Type.String({ description: "Optional glob filter relative to path" })),
-	sel: Type.Optional(Type.String({ description: "Optional selector for contextual pattern mode" })),
-	limit: Type.Optional(Type.Number({ description: "Max matches", default: 50 })),
-	offset: Type.Optional(Type.Number({ description: "Skip first N matches", default: 0 })),
-	context: Type.Optional(Type.Number({ description: "Context lines around each match" })),
+	pat: Type.Array(Type.String(), {
+		minItems: 1,
+		description: "ast patterns",
+		examples: [["console.log($$$)"]],
+	}),
+	lang: Type.Optional(Type.String({ description: "language override", examples: ["typescript", "python"] })),
+	path: Type.Optional(
+		Type.String({
+			description: "path or glob to search",
+			examples: ["src/", "src/foo.ts"],
+		}),
+	),
+	glob: Type.Optional(Type.String({ description: "glob filter", examples: ["**/*.ts"] })),
+	sel: Type.Optional(
+		Type.String({
+			description: "contextual pattern selector",
+			examples: ["function_declaration", "call_expression", "identifier"],
+		}),
+	),
+	limit: Type.Optional(Type.Number({ description: "max matches", default: 50 })),
+	offset: Type.Optional(Type.Number({ description: "skip first n matches", default: 0 })),
+	context: Type.Optional(Type.Number({ description: "context lines" })),
 });
 
 export interface AstGrepToolDetails {
