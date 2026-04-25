@@ -614,6 +614,16 @@ async function createClient(
 		copilotPremiumRequests = copilot.premiumRequests;
 		baseUrl = resolveGitHubCopilotBaseUrl(model.baseUrl, rawApiKey) ?? model.baseUrl;
 	}
+	// Azure OpenAI requires /deployments/{id}/chat/completions?api-version=YYYY-MM-DD.
+	// The generic openai-completions path adds neither, producing silent 404s.
+	let azureDefaultQuery: Record<string, string> | undefined;
+	if (baseUrl && baseUrl.includes(".openai.azure.com")) {
+		const apiVersion = $env.AZURE_OPENAI_API_VERSION || "2024-10-21";
+		if (!baseUrl.includes("/deployments/")) {
+			baseUrl = `${baseUrl}/deployments/${model.id}`;
+		}
+		azureDefaultQuery = { "api-version": apiVersion };
+	}
 	let capturedErrorResponse: CapturedHttpErrorResponse | undefined;
 	const wrappedFetch = Object.assign(
 		async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -649,6 +659,7 @@ async function createClient(
 			dangerouslyAllowBrowser: true,
 			maxRetries: 5,
 			defaultHeaders: headers,
+			defaultQuery: azureDefaultQuery,
 			fetch: wrappedFetch,
 		}),
 		copilotPremiumRequests,
