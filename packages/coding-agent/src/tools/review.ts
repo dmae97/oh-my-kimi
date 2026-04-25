@@ -68,7 +68,7 @@ const ReportFindingParams = Type.Object({
 		maximum: 1,
 		description: "Confidence score 0.0-1.0",
 	}),
-	file_path: Type.String({ description: "Absolute path to the file" }),
+	file_path: Type.String({ description: "Path to the file" }),
 	line_start: Type.Number({ description: "Start line of the issue" }),
 	line_end: Type.Number({ description: "End line of the issue" }),
 });

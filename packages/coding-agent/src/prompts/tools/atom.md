@@ -1,6 +1,6 @@
-Applies precise file edits using single-point `LINE#ID` anchors from `read` output.
+Applies precise file edits using `LINE#ID` anchors from `read` output.
 
-Each op references **exactly one** anchor — there are no ranges, no two-endpoint addresses. To replace many lines, issue many ops.
+Most ops reference **exactly one** anchor. The one exception is `between`, which takes two anchors that both **survive** the edit — use it for block-body replacement (e.g. "replace the body of this function, keep the braces").
 
 Read the file first. Copy anchors exactly from the latest `read` output. After any successful edit, re-read before editing that file again.
 
@@ -16,6 +16,7 @@ Read the file first. Copy anchors exactly from the latest `read` output. After a
 - `del: "55#th"` — delete one anchored line
 - `sub: "55#th", find: "…", lines: …` — replace a unique substring on the anchored line
 - `ins: "55#th", find: "…", lines: "…"` — overwrite from the start of `find` to **end-of-line** with `lines`. Everything on the anchored line after (and including) `find` is **discarded**. If you want to preserve trailing content, use `sub` instead.
+- `between: { after: "5#aa", before: "9#bb" }, lines: […]` — replace **only** the lines strictly between the two anchors. Both anchor lines are kept untouched. Use this for block bodies: `after` is the opening anchor (e.g. `function foo() {`), `before` is the closing anchor (e.g. `}`). The braces stay; only the body is rewritten. **Never include the anchor lines in `lines`.**
 - `append: […]` — append at end of file
 - `prepend: …` — prepend at start of file
 
@@ -60,8 +61,14 @@ Use `ins` when the change is “replace from this point onward.” Pick the shor
 Original line 3: `const tag = "DO NOT SHIP";`
 `{edits:[{path:"a.ts",ins:{{href 3 "const tag = \"DO NOT SHIP\";"}},find:"DO",lines:"OK\";"}]}`
 Result: `const tag = "OK";`. `find:"DO"` positions the cursor at `D`; everything from there to end-of-line is replaced by `lines`.
-# Replace a multi-line block (issue one op per line)
-Replace the catch body. One `set` per line — no range, no boundary confusion. Lift `path` to the top level when all entries target the same file:
+# Replace a block body, keep the surrounding braces (preferred multi-line edit)
+Anchors mark *survivors*. The opening line and closing line are kept; lines strictly between them are replaced by `lines`.
+Replace the body of `alpha` (lines 6) while keeping `function alpha() {` (5) and `}` (7):
+`{edits:[{path:"a.ts",between:{after:{{href 5 "function alpha() {"}},before:{{href 7 "}"}},lines:["\tvalidate();","\tlog();","\tcleanup();"]}]}`
+Replace just the catch body (lines 15–16), keeping `} catch (err) {` (14) and the closing `}` (17):
+`{edits:[{path:"a.ts",between:{after:{{href 14 "\t} catch (err) {"}},before:{{href 17 "\t}"}},lines:["\t\tif (isEnoent(err)) return null;","\t\tthrow err;"]}]}`
+# Replace a multi-line block with per-line `set` (when there is no convenient pair of surviving anchors)
+One `set` per line — use this when the lines are mid-block and you do not want to introduce surrounding anchors. Lift `path` to the top level when all entries target the same file:
 `{path:"a.ts",edits:[{set:{{href 15 "\t\tconsole.error(err);"}},lines:"\t\tif (isEnoent(err)) return null;"},{set:{{href 16 "\t\treturn null;"}},lines:"\t\tthrow err;"}]}`
 Or per-entry `path` (use when edits span multiple files):
 `{edits:[{path:"a.ts",set:{{href 15 "\t\tconsole.error(err);"}},lines:"\t\tif (isEnoent(err)) return null;"},{path:"b.ts",set:{{href 16 "\t\treturn null;"}},lines:"\t\tthrow err;"}]}`
@@ -83,6 +90,7 @@ Or per-entry `path` (use when edits span multiple files):
 - After **any** edit that changes line count (insert, multi-line `set`, `del`), all anchors below the change are stale. Re-read the file before issuing more edits to the same file. To reduce re-reads, batch edits in a single request and order them **bottom-up** so earlier edits don't shift later anchors.
 - For `sub`, the `find` substring must occur **exactly once** on the anchored line. If it could match more than once, use a longer substring or use `set` instead.
 - At most one of `set`/`del`/`sub` may target any single anchor line. `before`/`after` may coexist with them.
+- For `between`: `after.line < before.line`, the two anchors must be different lines, and **no other op in the same request may target a line strictly inside the region**. The two anchor lines themselves can still receive other ops (e.g. a `sub` on the closing-brace line is fine — it is preserved by `between`).
 - `lines` content must be literal file content with matching indentation. If the file uses tabs, use real tabs.
 - You **MUST NOT** use this tool to reformat or clean up unrelated code — use project-specific linters or code formatters instead.
 </critical>

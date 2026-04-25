@@ -7,14 +7,22 @@
  * staleness scheme (`computeLineHash`) verbatim.
  *
  * Op shapes (one per entry):
- *   { path, set:     "5#th", to:    "..." | ["..."] }   // replace one line
- *   { path, before:  "5#th", lines: "..." | ["..."] }   // insert above anchor
- *   { path, after:   "5#th", lines: "..." | ["..."] }   // insert below anchor
- *   { path, del:     "5#th" }                           // delete one line
- *   { path, sub:     "5#th", find: "...", to: "..." }   // substring rewrite on anchor line
- *   { path, ins:     "5#th", find: "...", to: "..." }   // overwrite from substring to EOL
- *   { path, append:  "..." | ["..."] }                  // append to EOF
- *   { path, prepend: "..." | ["..."] }                  // prepend at BOF
+ *   { path, set:     "5#th", lines: "..." | ["..."] }       // replace one line
+ *   { path, before:  "5#th", lines: "..." | ["..."] }       // insert above anchor
+ *   { path, after:   "5#th", lines: "..." | ["..."] }       // insert below anchor
+ *   { path, del:     "5#th" }                               // delete one line
+ *   { path, sub:     "5#th", find: "...", lines: "..." }    // substring rewrite on anchor line
+ *   { path, ins:     "5#th", find: "...", lines: "..." }    // overwrite from substring to EOL
+ *   { path, between: { after: "5#th", before: "9#xy" }, lines: [...] }
+ *                                                           // replace lines strictly between two anchors
+ *                                                           // (both anchors are preserved)
+ *   { path, append:  "..." | ["..."] }                      // append to EOF
+ *   { path, prepend: "..." | ["..."] }                      // prepend at BOF
+ *
+ * Anchors mark *survivors*. Lines you reference are kept; lines you don't are
+ * replaced or removed by the op. There are no inclusive ranges and no two-endpoint
+ * spans whose endpoint is itself rewritten — this eliminates the most common
+ * boundary-confusion failure mode (off-by-one on the closing brace).
  *
  * For deleting or moving files, the agent should use bash.
  */
@@ -68,7 +76,20 @@ export const atomEditSchema = Type.Object(
 		),
 		append: Type.Optional(linesSchema),
 		prepend: Type.Optional(linesSchema),
-		// Payload (used by set/before/after/sub/ins/append/prepend):
+		between: Type.Optional(
+			Type.Object(
+				{
+					after: Type.String({
+						description: "surviving anchor above the replacement region, e.g. opening brace, 123#th",
+					}),
+					before: Type.String({
+						description: "surviving anchor below the replacement region, e.g. closing brace, 130#xy",
+					}),
+				},
+				{ additionalProperties: false },
+			),
+		),
+		// Payload (used by set/before/after/sub/ins/between/append/prepend):
 		lines: Type.Optional(linesSchema),
 		find: Type.Optional(
 			Type.String({
@@ -102,6 +123,7 @@ export type AtomEdit =
 	| { op: "del"; pos: Anchor }
 	| { op: "sub"; pos: Anchor; find: string; to: string }
 	| { op: "ins"; pos: Anchor; find: string; to: string }
+	| { op: "between"; after: Anchor; before: Anchor; lines: string[] }
 	| { op: "append_file"; lines: string[] }
 	| { op: "prepend_file"; lines: string[] };
 
@@ -109,7 +131,7 @@ export type AtomEdit =
 // Param guards
 // ═══════════════════════════════════════════════════════════════════════════
 
-const ATOM_OP_KEYS = ["set", "before", "after", "del", "sub", "ins", "append", "prepend"] as const;
+const ATOM_OP_KEYS = ["set", "before", "after", "del", "sub", "ins", "between", "append", "prepend"] as const;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Resolution
@@ -199,6 +221,17 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit {
 		const to = subInsLinesToString(edit.lines, "ins");
 		return { op: "ins", pos: parseAnchor(edit.ins, "ins"), find: edit.find, to };
 	}
+	if ("between" in edit && edit.between && typeof edit.between === "object") {
+		const raw = edit.between as { after?: unknown; before?: unknown };
+		if (typeof raw.after !== "string" || typeof raw.before !== "string") {
+			throw new Error(
+				`Edit ${editIndex}: \`between\` requires { after: "LINE#ID", before: "LINE#ID" } with both anchors as strings.`,
+			);
+		}
+		const after = parseAnchor(raw.after, "between.after");
+		const before = parseAnchor(raw.before, "between.before");
+		return { op: "between", after, before, lines: hashlineParseText(edit.lines) };
+	}
 	if ("append" in edit) {
 		return { op: "append_file", lines: hashlineParseText(edit.append) };
 	}
@@ -212,7 +245,7 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit {
 // Validation
 // ═══════════════════════════════════════════════════════════════════════════
 
-function getAtomAnchor(edit: AtomEdit): Anchor | undefined {
+function* getAtomAnchors(edit: AtomEdit): Iterable<Anchor> {
 	switch (edit.op) {
 		case "set":
 		case "before":
@@ -220,23 +253,28 @@ function getAtomAnchor(edit: AtomEdit): Anchor | undefined {
 		case "del":
 		case "sub":
 		case "ins":
-			return edit.pos;
+			yield edit.pos;
+			return;
+		case "between":
+			yield edit.after;
+			yield edit.before;
+			return;
 		default:
-			return undefined;
+			return;
 	}
 }
 
 function validateAtomAnchors(edits: AtomEdit[], fileLines: string[]): HashMismatch[] {
 	const mismatches: HashMismatch[] = [];
 	for (const edit of edits) {
-		const anchor = getAtomAnchor(edit);
-		if (!anchor) continue;
-		if (anchor.line < 1 || anchor.line > fileLines.length) {
-			throw new Error(`Line ${anchor.line} does not exist (file has ${fileLines.length} lines)`);
-		}
-		const actualHash = computeLineHash(anchor.line, fileLines[anchor.line - 1]);
-		if (actualHash !== anchor.hash) {
-			mismatches.push({ line: anchor.line, expected: anchor.hash, actual: actualHash });
+		for (const anchor of getAtomAnchors(edit)) {
+			if (anchor.line < 1 || anchor.line > fileLines.length) {
+				throw new Error(`Line ${anchor.line} does not exist (file has ${fileLines.length} lines)`);
+			}
+			const actualHash = computeLineHash(anchor.line, fileLines[anchor.line - 1]);
+			if (actualHash !== anchor.hash) {
+				mismatches.push({ line: anchor.line, expected: anchor.hash, actual: actualHash });
+			}
 		}
 	}
 	return mismatches;
@@ -244,7 +282,7 @@ function validateAtomAnchors(edits: AtomEdit[], fileLines: string[]): HashMismat
 
 function validateNoConflictingAnchorOps(edits: AtomEdit[]): void {
 	// For each anchor line, at most one mutating op (set/del/sub/ins).
-	// before/after may coexist (they don't mutate the anchor line).
+	// `before`/`after` (insert ops) may coexist with them — they don't mutate the anchor line.
 	const mutatingPerLine = new Map<number, string>();
 	for (const edit of edits) {
 		if (edit.op === "set" || edit.op === "del" || edit.op === "sub" || edit.op === "ins") {
@@ -256,6 +294,55 @@ function validateNoConflictingAnchorOps(edits: AtomEdit[]): void {
 				);
 			}
 			mutatingPerLine.set(edit.pos.line, edit.op);
+		}
+	}
+
+	// `between` replaces lines strictly between two surviving anchors. Validate
+	// the bounds, ensure betweens don't overlap each other, and ensure no other
+	// op targets a line in the interior (the boundary lines themselves are fine).
+	const betweenIntervals: { after: number; before: number }[] = [];
+	for (const edit of edits) {
+		if (edit.op !== "between") continue;
+		if (edit.after.line >= edit.before.line) {
+			throw new Error(
+				`between requires after.line < before.line, got after=${edit.after.line} before=${edit.before.line}.`,
+			);
+		}
+		for (const prev of betweenIntervals) {
+			const overlaps = !(edit.before.line <= prev.after || edit.after.line >= prev.before);
+			if (overlaps) {
+				throw new Error(
+					`Overlapping \`between\` ops: ${prev.after}→${prev.before} and ${edit.after.line}→${edit.before.line}. ` +
+						`Each line may belong to at most one between region.`,
+				);
+			}
+		}
+		betweenIntervals.push({ after: edit.after.line, before: edit.before.line });
+	}
+
+	for (const edit of edits) {
+		if (edit.op === "between") continue;
+		let targetLine: number | undefined;
+		switch (edit.op) {
+			case "set":
+			case "del":
+			case "sub":
+			case "ins":
+			case "before":
+			case "after":
+				targetLine = edit.pos.line;
+				break;
+			default:
+				targetLine = undefined;
+		}
+		if (targetLine === undefined) continue;
+		for (const interval of betweenIntervals) {
+			if (targetLine > interval.after && targetLine < interval.before) {
+				throw new Error(
+					`Edit on line ${targetLine} (\`${edit.op}\`) falls inside a \`between\` region (${interval.after}→${interval.before}). ` +
+						`Move the op outside the region or fold its content into the between's \`lines\`.`,
+				);
+			}
 		}
 	}
 }
@@ -344,16 +431,19 @@ export function applyAtomEdits(
 		}
 	};
 
-	// Partition: anchor-scoped vs file-scoped. Preserve original order via the
+	// Partition: anchor-scoped vs between vs file-scoped. Preserve original order via the
 	// captured idx so multiple before/after/append/prepend on the same target
 	// are emitted in the order the model produced them.
 	type Indexed<T> = { edit: T; idx: number };
-	const anchorEdits: Indexed<Exclude<AtomEdit, { op: "append_file" } | { op: "prepend_file" }>>[] = [];
+	type AnchorEdit = Exclude<AtomEdit, { op: "append_file" } | { op: "prepend_file" } | { op: "between" }>;
+	const anchorEdits: Indexed<AnchorEdit>[] = [];
+	const betweenEdits: Indexed<Extract<AtomEdit, { op: "between" }>>[] = [];
 	const appendEdits: Indexed<Extract<AtomEdit, { op: "append_file" }>>[] = [];
 	const prependEdits: Indexed<Extract<AtomEdit, { op: "prepend_file" }>>[] = [];
 	edits.forEach((edit, idx) => {
 		if (edit.op === "append_file") appendEdits.push({ edit, idx });
 		else if (edit.op === "prepend_file") prependEdits.push({ edit, idx });
+		else if (edit.op === "between") betweenEdits.push({ edit, idx });
 		else anchorEdits.push({ edit, idx });
 	});
 
@@ -361,7 +451,7 @@ export function applyAtomEdits(
 	// single splice. This makes the per-anchor outcome independent of index
 	// shifts caused by sibling ops (e.g. `after` paired with `del` on the same
 	// anchor, or repeated `before`/`after` inserts that previously reversed).
-	const byLine = new Map<number, Indexed<(typeof anchorEdits)[number]["edit"]>[]>();
+	const byLine = new Map<number, Indexed<AnchorEdit>[]>();
 	for (const entry of anchorEdits) {
 		const line = entry.edit.pos.line;
 		let bucket = byLine.get(line);
@@ -372,10 +462,39 @@ export function applyAtomEdits(
 		bucket.push(entry);
 	}
 
-	// Process anchor groups bottom-up so earlier-line edits aren't perturbed.
-	const sortedLines = [...byLine.keys()].sort((a, b) => b - a);
-	for (const line of sortedLines) {
-		const bucket = byLine.get(line)!;
+	// Build a unified bottom-up event list. Sort key = highest 1-indexed line
+	// each event splices over: anchor group = its line; between = before.line - 1
+	// (the topmost line that's actually replaced; the closing-anchor line is
+	// preserved). Tie-breakers don't matter — conflicting overlaps are rejected
+	// in `validateNoConflictingAnchorOps`.
+	type Event =
+		| { kind: "anchor"; sortKey: number; line: number; bucket: Indexed<AnchorEdit>[] }
+		| { kind: "between"; sortKey: number; entry: Indexed<Extract<AtomEdit, { op: "between" }>> };
+	const events: Event[] = [];
+	for (const [line, bucket] of byLine) {
+		events.push({ kind: "anchor", sortKey: line, line, bucket });
+	}
+	for (const entry of betweenEdits) {
+		events.push({ kind: "between", sortKey: entry.edit.before.line - 1, entry });
+	}
+	events.sort((a, b) => b.sortKey - a.sortKey);
+
+	for (const event of events) {
+		if (event.kind === "between") {
+			const { edit } = event.entry;
+			const spliceStart = edit.after.line; // 0-indexed: line after.line+1
+			const spliceCount = edit.before.line - edit.after.line - 1;
+			const replacement = edit.lines;
+			const noOp = spliceCount === 0 && replacement.length === 0;
+			if (noOp) continue;
+			fileLines.splice(spliceStart, spliceCount, ...replacement);
+			if (spliceCount > 0 || replacement.length > 0) {
+				trackFirstChanged(edit.after.line + 1);
+			}
+			continue;
+		}
+
+		const { line, bucket } = event;
 		bucket.sort((a, b) => a.idx - b.idx);
 
 		const idx = line - 1;

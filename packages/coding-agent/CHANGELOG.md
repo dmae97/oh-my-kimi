@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Renamed the subagent completion contract from `submit_result` to `yield`, so subagent sessions must now finish with the `yield` tool and the `requireYieldTool` option; `submit_result`/`requireSubmitResultTool` and old completion calls are no longer recognized
@@ -8,6 +9,8 @@
 
 ### Added
 
+- Added `between` atom edit operation to replace only the lines between two surviving anchors while preserving the boundary anchors
+- Added conflict detection for `between` atom edits to require non-overlapping regions and forbid edits targeting lines strictly inside those regions
 - Added `atom` edit mode to `edit` with single-anchor operations (`set`, `before`, `after`, `del`, `sub`, `ins`) for hashline-anchored line edits
 - Added support for request-level `path` defaults in patch, replace, and chunk edits so shared file paths no longer need to be repeated in every entry
 
