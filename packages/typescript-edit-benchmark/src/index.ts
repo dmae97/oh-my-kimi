@@ -90,6 +90,7 @@ Options:
   --require-edit-tool-call  Require edit tool usage for success (default: false)
   --require-read-tool-call  Require read tool usage for success (default: false)
   --no-edit-required        Remove "must edit" prompt requirement (default: false)
+  --no-early-stop-on-match  Don't short-circuit the run when output matches expected (default: false)
   --list                    List available tasks and exit
   --help                    Show this help message
 
@@ -191,6 +192,7 @@ async function main(): Promise<void> {
 			"edit-fuzzy": { type: "string" },
 			"edit-fuzzy-threshold": { type: "string" },
 			"no-in-process": { type: "boolean", default: false },
+			"no-early-stop-on-match": { type: "boolean", default: false },
 			"max-tasks": { type: "string", default: "80" },
 			list: { type: "boolean", default: false },
 			help: { type: "boolean", default: false },
@@ -364,6 +366,7 @@ async function main(): Promise<void> {
 		mutationScopeWindow,
 		connectionTimeout,
 		inProcess: !values["no-in-process"],
+		earlyStopOnMatch: !values["no-early-stop-on-match"],
 	};
 	const outputPath = values.output ?? generateReportFilename(config, formatType);
 	config.conversationDumpDir = await resolveConversationDumpDir(outputPath);
