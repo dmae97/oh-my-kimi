@@ -131,6 +131,7 @@ export function dropIncompleteLastEdit<T>(edits: readonly T[], partialJson: stri
 // -----------------------------------------------------------------------------
 
 interface ReplaceArgs {
+	path?: string;
 	edits?: ReplaceEditEntry[];
 	__partialJson?: string;
 }
@@ -142,10 +143,12 @@ const replaceStrategy: EditStreamingStrategy<ReplaceArgs> = {
 	},
 	async computeDiffPreview(args, ctx) {
 		const first = args.edits?.[0];
-		if (!first?.path || first.old_text === undefined || first.new_text === undefined) return null;
+		if (!first) return null;
+		const path = first.path ?? args.path;
+		if (!path || first.old_text === undefined || first.new_text === undefined) return null;
 		ctx.signal.throwIfAborted();
 		const result = await computeEditDiff(
-			first.path,
+			path,
 			first.old_text,
 			first.new_text,
 			ctx.cwd,
@@ -154,7 +157,7 @@ const replaceStrategy: EditStreamingStrategy<ReplaceArgs> = {
 			ctx.fuzzyThreshold,
 		);
 		ctx.signal.throwIfAborted();
-		return [toPerFilePreview(first.path, result)];
+		return [toPerFilePreview(path, result)];
 	},
 	renderStreamingFallback() {
 		return "";
@@ -162,6 +165,7 @@ const replaceStrategy: EditStreamingStrategy<ReplaceArgs> = {
 };
 
 interface PatchArgs {
+	path?: string;
 	edits?: PatchEditEntry[];
 	__partialJson?: string;
 }
@@ -173,15 +177,16 @@ const patchStrategy: EditStreamingStrategy<PatchArgs> = {
 	},
 	async computeDiffPreview(args, ctx) {
 		const first = args.edits?.[0];
-		if (!first?.path) return null;
+		const path = first?.path ?? args.path;
+		if (!path) return null;
 		ctx.signal.throwIfAborted();
 		const result = await computePatchDiff(
-			{ path: first.path, op: first.op ?? "update", rename: first.rename, diff: first.diff },
+			{ path, op: first?.op ?? "update", rename: first?.rename, diff: first?.diff },
 			ctx.cwd,
 			{ fuzzyThreshold: ctx.fuzzyThreshold, allowFuzzy: ctx.allowFuzzy },
 		);
 		ctx.signal.throwIfAborted();
-		return [toPerFilePreview(first.path, result)];
+		return [toPerFilePreview(path, result)];
 	},
 	renderStreamingFallback() {
 		return "";
@@ -189,6 +194,7 @@ const patchStrategy: EditStreamingStrategy<PatchArgs> = {
 };
 
 interface HashlineArgs {
+	path?: string;
 	edits?: HashlineToolEdit[];
 	__partialJson?: string;
 }
@@ -200,11 +206,16 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 	},
 	async computeDiffPreview(args, ctx) {
 		const first = args.edits?.[0] as (HashlineToolEdit & { path?: string }) | undefined;
-		if (!first?.path) return null;
-		const path = first.path;
-		const fileEdits = (args.edits ?? []).filter((e): e is HashlineToolEdit & { path: string } => {
-			return !!e && typeof e === "object" && (e as { path?: string }).path === path;
-		});
+		const path = first?.path ?? args.path;
+		if (!path) return null;
+		const fileEdits = (args.edits ?? [])
+			.map(e => {
+				if (!e || typeof e !== "object") return undefined;
+				const entryPath = (e as { path?: string }).path ?? args.path;
+				if (!entryPath || entryPath !== path) return undefined;
+				return { ...(e as HashlineToolEdit), path } as HashlineToolEdit & { path: string };
+			})
+			.filter((e): e is HashlineToolEdit & { path: string } => e !== undefined);
 		ctx.signal.throwIfAborted();
 		const result = await computeHashlineDiff({ path, edits: fileEdits }, ctx.cwd);
 		ctx.signal.throwIfAborted();
@@ -216,6 +227,7 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 };
 
 interface ChunkArgs {
+	path?: string;
 	edits?: ChunkToolEdit[];
 	__partialJson?: string;
 }
@@ -247,8 +259,10 @@ const chunkStrategy: EditStreamingStrategy<ChunkArgs> = {
 		const groups = new Map<string, ChunkToolEdit[]>();
 		const fileOrder: string[] = [];
 		for (const edit of edits) {
-			if (!edit?.path) continue;
-			const { filePath } = parseChunkEditPath(edit.path);
+			if (!edit) continue;
+			const editPath = edit.path ?? args.path;
+			if (!editPath) continue;
+			const { filePath } = parseChunkEditPath(editPath);
 			if (!filePath) continue;
 			let bucket = groups.get(filePath);
 			if (!bucket) {
@@ -256,7 +270,7 @@ const chunkStrategy: EditStreamingStrategy<ChunkArgs> = {
 				groups.set(filePath, bucket);
 				fileOrder.push(filePath);
 			}
-			bucket.push(edit);
+			bucket.push({ ...edit, path: editPath });
 		}
 		if (fileOrder.length === 0) return null;
 

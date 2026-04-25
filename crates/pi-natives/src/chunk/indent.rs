@@ -432,15 +432,17 @@ fn hashline_prefix_len(line: &str) -> Option<usize> {
 	}
 
 	// Match exactly one BPE bigram (2 ASCII chars) from HASHLINE_BIGRAMS.
-	if remainder.len() < 2 {
+	// Use char-boundary-safe slicing to avoid panicking on multi-byte content.
+	let bigram_end = 2;
+	if remainder.len() < bigram_end || !remainder.is_char_boundary(bigram_end) {
 		return None;
 	}
-	let bigram = &remainder[..2];
+	let bigram = &remainder[..bigram_end];
 	if !bigram.is_ascii() || !HASHLINE_BIGRAMS.contains(&bigram) {
 		return None;
 	}
-	offset += 2;
-	remainder = &remainder[2..];
+	offset += bigram_end;
+	remainder = &remainder[bigram_end..];
 
 	remainder.strip_prefix(':').map(|_| offset + 1)
 }

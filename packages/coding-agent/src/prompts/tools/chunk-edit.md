@@ -140,17 +140,17 @@ Only body changes; doc comment, signature, and closing `}` are preserved.
 `{ "path": "counter.rs:impl_Counte.fn_increm#ouer", "write": "/// Increments by the given step, clamping at max.\npub fn increment(&mut self, step: i32) {\n\tself.value = (self.value + step).min(self.max);\n}\n" }`
 Everything is rewritten. Omitting the doc comment or signature deletes them.
 # Write head (`^` — attributes, doc comments, signature)
-`{ "path": "counter.rs:impl_Counte.fn_get#arco^", "write": "/// Returns the current counter value.\n#[inline]\npub fn get(&self) → i32 {\n" }`
+`{ "path": "counter.rs:impl_Counte.fn_get#arco^", "write": "/// Returns the current counter value.\n#[inline]\npub fn get(&self) -> i32 {\n" }`
 Head changes (all `^` lines + opening brace); body untouched.
 # Insert before a chunk (`prepend`)
 `{ "path": "counter.rs:impl_Counte.fn_get", "insert": { "loc": "prepend", "body": "/// Resets the counter to zero.\npub fn reset(&mut self) {\n\tself.value = 0;\n}\n\n" } }`
 # Insert after a chunk (`append`)
-`{ "path": "counter.rs:struct_Counte", "insert": { "loc": "append", "body": "\nimpl Default for Counter {\n\tfn default() → Self {\n\t\tSelf { value: 0, max: 100 }\n\t}\n}\n" } }`
+`{ "path": "counter.rs:struct_Counte", "insert": { "loc": "append", "body": "\nimpl Default for Counter {\n\tfn default() -> Self {\n\t\tSelf { value: 0, max: 100 }\n\t}\n}\n" } }`
 # Insert at start of container body (`~` + `prepend`)
-`{ "path": "counter.rs:impl_Counte~", "insert": { "loc": "prepend", "body": "/// Creates a counter starting at the given value.\npub fn with_value(value: i32, max: i32) → Self {\n\tSelf { value: value.min(max), max }\n}\n\n" } }`
+`{ "path": "counter.rs:impl_Counte~", "insert": { "loc": "prepend", "body": "/// Creates a counter starting at the given value.\npub fn with_value(value: i32, max: i32) -> Self {\n\tSelf { value: value.min(max), max }\n}\n\n" } }`
 Lands at the top of the impl body, before existing methods.
 # Insert at end of container body (`~` + `append`)
-`{ "path": "counter.rs:impl_Counte~", "insert": { "loc": "append", "body": "\n/// Returns true if the counter is at its maximum.\npub fn is_maxed(&self) → bool {\n\tself.value ≥ self.max\n}\n" } }`
+`{ "path": "counter.rs:impl_Counte~", "insert": { "loc": "append", "body": "\n/// Returns true if the counter is at its maximum.\npub fn is_maxed(&self) -> bool {\n\tself.value >= self.max\n}\n" } }`
 Lands at the end of the impl body, before the closing `}`.
 # Delete a chunk
 `{ "path": "counter.rs:impl_Counte.fn_decrem#arve", "delete": true }`

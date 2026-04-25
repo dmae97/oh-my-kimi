@@ -22,15 +22,6 @@ export const applyPatchSchema = Type.Object({
 
 export type ApplyPatchParams = Static<typeof applyPatchSchema>;
 
-export function isApplyPatchParams(params: unknown): params is ApplyPatchParams {
-	return (
-		typeof params === "object" &&
-		params !== null &&
-		"input" in params &&
-		typeof (params as { input: unknown }).input === "string"
-	);
-}
-
 /**
  * Parse the envelope and lower each hunk to a `PatchEditEntry` so it can
  * be routed through `executePatchSingle`.

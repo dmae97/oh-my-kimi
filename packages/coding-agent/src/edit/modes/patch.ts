@@ -1606,14 +1606,6 @@ export interface ExecutePatchSingleOptions {
 	beginDeferredDiagnosticsForPath: (path: string) => WritethroughDeferredHandle;
 }
 
-export function isPatchParams(params: unknown): params is PatchParams {
-	if (typeof params !== "object" || params === null) return false;
-	if (!("edits" in params) || !Array.isArray((params as any).edits)) return false;
-	const first = (params as any).edits[0];
-	if (!first || typeof first !== "object") return false;
-	return "path" in first && !("old_text" in first) && !("new_text" in first);
-}
-
 class LspFileSystem implements FileSystem {
 	#lastDiagnostics: FileDiagnosticsResult | undefined;
 	#fileCache: Record<string, Bun.BunFile> = {};

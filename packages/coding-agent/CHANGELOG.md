@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Changed the hashline and chunk anchor ID format from the prior hex-like tokens to two-letter BPE bigrams (for example `#th`), which invalidates previously captured `LINE#ID`/chunk selectors and requires re-reading to refresh anchors
@@ -18,6 +19,9 @@
 
 ### Fixed
 
+- Fixed `atom` mode to apply multiple edits on the same anchor line without index-shift artifacts, so mixed operations like `before`, `after`, `set`, `sub`, `ins`, and `del` now resolve consistently
+- Fixed `atom` mode `append_file` insertion to preserve a file’s trailing newline sentinel when appending content
+- Fixed `read` output for raw archive entries so hashline anchors, line numbers, and chunked formatting are not injected into raw content
 - Fixed hashline parsing so lines like `# Note:` or `# TODO:` are no longer misinterpreted and stripped as hashline prefixes
 - Adjusted patch and replace validation to report a clear missing-path error when neither an entry path nor a top-level path is provided
 

@@ -48,7 +48,7 @@ const linesSchema = Type.Union([Type.Array(Type.String()), Type.String()]);
 
 /**
  * Flat entry shape: every op key is optional, and the runtime validator
- * (`isAtomParams` + `resolveAtomToolEdit`) enforces that exactly one op key
+ * (`resolveAtomToolEdit`) enforces that exactly one op key
  * is present per entry. We use a flat schema instead of a 9-member discriminated
  * union to keep the tool definition compact (the schema is re-sent on every
  * turn, so duplicating `path` + descriptions across 9 union members 2×'s
@@ -110,15 +110,6 @@ export type AtomEdit =
 // ═══════════════════════════════════════════════════════════════════════════
 
 const ATOM_OP_KEYS = ["set", "before", "after", "del", "sub", "ins", "append", "prepend"] as const;
-
-export function isAtomParams(params: unknown): params is AtomParams {
-	// Minimal shape check. Per-entry validation (op key presence, exclusivity,
-	// payload sanity) all happens in `resolveAtomToolEdit` so the model gets a
-	// specific actionable error rather than a generic "invalid parameters" message.
-	if (typeof params !== "object" || params === null) return false;
-	if (!("edits" in params) || !Array.isArray(params.edits)) return false;
-	return true;
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Resolution
@@ -273,122 +264,30 @@ function validateNoConflictingAnchorOps(edits: AtomEdit[]): void {
 // Apply
 // ═══════════════════════════════════════════════════════════════════════════
 
-function getAtomEditSortKey(edit: AtomEdit, fileLineCount: number): { sortLine: number; precedence: number } {
-	switch (edit.op) {
-		case "sub":
-		case "ins":
-			return { sortLine: edit.pos.line, precedence: -1 };
-		case "set":
-		case "del":
-			return { sortLine: edit.pos.line, precedence: 0 };
-		case "after":
-			return { sortLine: edit.pos.line, precedence: 1 };
-		case "before":
-			return { sortLine: edit.pos.line, precedence: 2 };
-		case "append_file":
-			return { sortLine: fileLineCount + 1, precedence: 3 };
-		case "prepend_file":
-			return { sortLine: 0, precedence: 3 };
+function applySubInsToLine(
+	edit: { op: "sub" | "ins"; pos: Anchor; find: string; to: string },
+	current: string,
+): string {
+	const first = current.indexOf(edit.find);
+	if (first === -1) {
+		throw new Error(
+			`${edit.op}: substring \`${edit.find}\` not found on line ${edit.pos.line}. ` +
+				`Current line content: ${JSON.stringify(current)}`,
+		);
 	}
-}
-
-function applyAtomEditToLines(edit: AtomEdit, fileLines: string[], trackFirstChanged: (line: number) => void): void {
-	switch (edit.op) {
-		case "set": {
-			const lines = edit.lines.length === 0 ? [""] : edit.lines;
-			fileLines.splice(edit.pos.line - 1, 1, ...lines);
-			trackFirstChanged(edit.pos.line);
-			break;
-		}
-		case "del": {
-			fileLines.splice(edit.pos.line - 1, 1);
-			trackFirstChanged(edit.pos.line);
-			break;
-		}
-		case "before": {
-			if (edit.lines.length === 0) break;
-			fileLines.splice(edit.pos.line - 1, 0, ...edit.lines);
-			trackFirstChanged(edit.pos.line);
-			break;
-		}
-		case "after": {
-			if (edit.lines.length === 0) break;
-			fileLines.splice(edit.pos.line, 0, ...edit.lines);
-			trackFirstChanged(edit.pos.line + 1);
-			break;
-		}
-		case "sub": {
-			const idx = edit.pos.line - 1;
-			const current = fileLines[idx];
-			const first = current.indexOf(edit.find);
-			if (first === -1) {
-				throw new Error(
-					`sub: substring \`${edit.find}\` not found on line ${edit.pos.line}. ` +
-						`Current line content: ${JSON.stringify(current)}`,
-				);
-			}
-			const second = current.indexOf(edit.find, first + 1);
-			if (second !== -1) {
-				throw new Error(
-					`sub: substring \`${edit.find}\` occurs more than once on line ${edit.pos.line}; ` +
-						`use a longer substring that uniquely identifies the target. ` +
-						`Current line content: ${JSON.stringify(current)}`,
-				);
-			}
-			const next = current.slice(0, first) + edit.to + current.slice(first + edit.find.length);
-			// Allow `to` to introduce newlines, expanding into multiple lines.
-			const newLines = next.includes("\n") ? next.split("\n") : [next];
-			fileLines.splice(idx, 1, ...newLines);
-			trackFirstChanged(edit.pos.line);
-			break;
-		}
-		case "ins": {
-			const idx = edit.pos.line - 1;
-			const current = fileLines[idx];
-			const first = current.indexOf(edit.find);
-			if (first === -1) {
-				throw new Error(
-					`ins: substring \`${edit.find}\` not found on line ${edit.pos.line}. ` +
-						`Current line content: ${JSON.stringify(current)}`,
-				);
-			}
-			const second = current.indexOf(edit.find, first + 1);
-			if (second !== -1) {
-				throw new Error(
-					`ins: substring \`${edit.find}\` occurs more than once on line ${edit.pos.line}; ` +
-						`use a longer substring that uniquely identifies the position. ` +
-						`Current line content: ${JSON.stringify(current)}`,
-				);
-			}
-			// Replace from start of `find` to end-of-line with `to` (vim-insert style).
-			const next = current.slice(0, first) + edit.to;
-			const newLines = next.includes("\n") ? next.split("\n") : [next];
-			fileLines.splice(idx, 1, ...newLines);
-			trackFirstChanged(edit.pos.line);
-			break;
-		}
-		case "append_file": {
-			if (edit.lines.length === 0) break;
-			if (fileLines.length === 1 && fileLines[0] === "") {
-				fileLines.splice(0, 1, ...edit.lines);
-				trackFirstChanged(1);
-			} else {
-				fileLines.splice(fileLines.length, 0, ...edit.lines);
-				trackFirstChanged(fileLines.length - edit.lines.length + 1);
-			}
-			break;
-		}
-		case "prepend_file": {
-			if (edit.lines.length === 0) break;
-			if (fileLines.length === 1 && fileLines[0] === "") {
-				fileLines.splice(0, 1, ...edit.lines);
-			} else {
-				fileLines.splice(0, 0, ...edit.lines);
-			}
-			trackFirstChanged(1);
-			break;
-		}
+	const second = current.indexOf(edit.find, first + 1);
+	if (second !== -1) {
+		throw new Error(
+			`${edit.op}: substring \`${edit.find}\` occurs more than once on line ${edit.pos.line}; ` +
+				`use a longer substring that uniquely identifies the ${edit.op === "sub" ? "target" : "position"}. ` +
+				`Current line content: ${JSON.stringify(current)}`,
+		);
 	}
+	if (edit.op === "sub") {
+		return current.slice(0, first) + edit.to + current.slice(first + edit.find.length);
+	}
+	// `ins`: replace from start of `find` to end-of-line (vim-insert style).
+	return current.slice(0, first) + edit.to;
 }
 
 function maybeAutocorrectEscapedTabIndentation(edits: AtomEdit[], warnings: string[]): void {
@@ -439,21 +338,127 @@ export function applyAtomEdits(
 	validateNoConflictingAnchorOps(edits);
 	maybeAutocorrectEscapedTabIndentation(edits, warnings);
 
-	const annotated = edits
-		.map((edit, idx) => {
-			const { sortLine, precedence } = getAtomEditSortKey(edit, fileLines.length);
-			return { edit, idx, sortLine, precedence };
-		})
-		.sort((a, b) => b.sortLine - a.sortLine || a.precedence - b.precedence || a.idx - b.idx);
-
 	const trackFirstChanged = (line: number) => {
 		if (firstChangedLine === undefined || line < firstChangedLine) {
 			firstChangedLine = line;
 		}
 	};
 
-	for (const { edit } of annotated) {
-		applyAtomEditToLines(edit, fileLines, trackFirstChanged);
+	// Partition: anchor-scoped vs file-scoped. Preserve original order via the
+	// captured idx so multiple before/after/append/prepend on the same target
+	// are emitted in the order the model produced them.
+	type Indexed<T> = { edit: T; idx: number };
+	const anchorEdits: Indexed<Exclude<AtomEdit, { op: "append_file" } | { op: "prepend_file" }>>[] = [];
+	const appendEdits: Indexed<Extract<AtomEdit, { op: "append_file" }>>[] = [];
+	const prependEdits: Indexed<Extract<AtomEdit, { op: "prepend_file" }>>[] = [];
+	edits.forEach((edit, idx) => {
+		if (edit.op === "append_file") appendEdits.push({ edit, idx });
+		else if (edit.op === "prepend_file") prependEdits.push({ edit, idx });
+		else anchorEdits.push({ edit, idx });
+	});
+
+	// Group anchor edits by line so all ops on the same line are applied as a
+	// single splice. This makes the per-anchor outcome independent of index
+	// shifts caused by sibling ops (e.g. `after` paired with `del` on the same
+	// anchor, or repeated `before`/`after` inserts that previously reversed).
+	const byLine = new Map<number, Indexed<(typeof anchorEdits)[number]["edit"]>[]>();
+	for (const entry of anchorEdits) {
+		const line = entry.edit.pos.line;
+		let bucket = byLine.get(line);
+		if (!bucket) {
+			bucket = [];
+			byLine.set(line, bucket);
+		}
+		bucket.push(entry);
+	}
+
+	// Process anchor groups bottom-up so earlier-line edits aren't perturbed.
+	const sortedLines = [...byLine.keys()].sort((a, b) => b - a);
+	for (const line of sortedLines) {
+		const bucket = byLine.get(line)!;
+		bucket.sort((a, b) => a.idx - b.idx);
+
+		const idx = line - 1;
+		let currentLine = fileLines[idx];
+		let replacement: string[] = [currentLine];
+		let replacementSet = false;
+		let anchorMutated = false;
+		let anchorDeleted = false;
+		const beforeLines: string[] = [];
+		const afterLines: string[] = [];
+
+		for (const { edit } of bucket) {
+			switch (edit.op) {
+				case "before":
+					beforeLines.push(...edit.lines);
+					break;
+				case "after":
+					afterLines.push(...edit.lines);
+					break;
+				case "del":
+					replacement = [];
+					replacementSet = true;
+					anchorDeleted = true;
+					break;
+				case "set":
+					replacement = edit.lines.length === 0 ? [""] : [...edit.lines];
+					replacementSet = true;
+					anchorMutated = true;
+					break;
+				case "sub":
+				case "ins": {
+					currentLine = applySubInsToLine(edit, currentLine);
+					replacement = currentLine.includes("\n") ? currentLine.split("\n") : [currentLine];
+					replacementSet = true;
+					anchorMutated = true;
+					break;
+				}
+			}
+		}
+
+		const noOp = !replacementSet && beforeLines.length === 0 && afterLines.length === 0;
+		if (noOp) continue;
+
+		const combined = [...beforeLines, ...replacement, ...afterLines];
+		fileLines.splice(idx, 1, ...combined);
+
+		if (beforeLines.length > 0 || anchorMutated || anchorDeleted) {
+			trackFirstChanged(line);
+		} else if (afterLines.length > 0) {
+			trackFirstChanged(line + 1);
+		}
+	}
+
+	// Apply prepend_file ops in original order so the first one ends up at the
+	// very top of the file.
+	prependEdits.sort((a, b) => a.idx - b.idx);
+	for (const { edit } of prependEdits) {
+		if (edit.lines.length === 0) continue;
+		if (fileLines.length === 1 && fileLines[0] === "") {
+			fileLines.splice(0, 1, ...edit.lines);
+		} else {
+			// Insert in reverse cumulative order so later splices push earlier
+			// content further down, preserving the original op order.
+			fileLines.splice(0, 0, ...edit.lines);
+		}
+		trackFirstChanged(1);
+	}
+
+	// Apply append_file ops in original order. When the file ends with a
+	// trailing newline (last split element is the empty sentinel), insert
+	// before that sentinel so the trailing newline is preserved.
+	appendEdits.sort((a, b) => a.idx - b.idx);
+	for (const { edit } of appendEdits) {
+		if (edit.lines.length === 0) continue;
+		if (fileLines.length === 1 && fileLines[0] === "") {
+			fileLines.splice(0, 1, ...edit.lines);
+			trackFirstChanged(1);
+			continue;
+		}
+		const hasTrailingNewline = fileLines.length > 0 && fileLines[fileLines.length - 1] === "";
+		const insertIdx = hasTrailingNewline ? fileLines.length - 1 : fileLines.length;
+		fileLines.splice(insertIdx, 0, ...edit.lines);
+		trackFirstChanged(insertIdx + 1);
 	}
 
 	return {

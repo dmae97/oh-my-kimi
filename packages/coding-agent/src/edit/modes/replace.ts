@@ -1002,13 +1002,6 @@ export interface ExecuteReplaceSingleOptions {
 	beginDeferredDiagnosticsForPath: (path: string) => WritethroughDeferredHandle;
 }
 
-export function isReplaceParams(params: unknown): params is ReplaceParams {
-	if (typeof params !== "object" || params === null) return false;
-	if (!("edits" in params) || !Array.isArray((params as any).edits)) return false;
-	const first = (params as any).edits[0];
-	return first && typeof first === "object" && "old_text" in first && "new_text" in first;
-}
-
 export async function executeReplaceSingle(
 	options: ExecuteReplaceSingleOptions,
 ): Promise<AgentToolResult<EditToolDetails, typeof replaceEditEntrySchema>> {

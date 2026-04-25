@@ -191,11 +191,11 @@ const HASHLINE_SUBTYPES = ["set", "set_range", "insert"] as const;
 
 const CHUNK_OP_SUBTYPES = ["append", "prepend", "replace", "delete"] as const;
 
-const BENCHMARK_TOOL_NAMES = ["read", "edit", "vim", "write"] as const;
-const EDIT_TOOL_NAMES = ["edit", "vim"] as const;
+const BENCHMARK_TOOL_NAMES = ["read", "edit", "vim", "write", "apply_patch"] as const;
+const EDIT_TOOL_NAMES = ["edit", "vim", "apply_patch"] as const;
 
 function isEditTool(toolName: unknown): toolName is (typeof EDIT_TOOL_NAMES)[number] {
-	return toolName === "edit" || toolName === "vim";
+	return toolName === "edit" || toolName === "vim" || toolName === "apply_patch";
 }
 
 function isMutationTool(toolName: unknown): boolean {

@@ -43,12 +43,14 @@ export type HashlineEdit =
 	| { op: "append_file"; lines: string[] }
 	| { op: "prepend_file"; lines: string[] };
 
+// Tight prefix matchers. The bare `#BIGRAM:` form (no line number) intentionally
+// disallows whitespace between `#` and the bigram so real comments like `# th: ...`
+// or `# in: ...` (a `#`, a space, then a common English bigram) are not mistaken
+// for hashline anchors and stripped.
 const HASHLINE_PREFIX_RE = new RegExp(
-	`^\\s*(?:>>>|>>)?\\s*(?:\\+?\\s*(?:\\d+\\s*#\\s*|#\\s*)|\\+)\\s*${HASHLINE_BIGRAM_RE_SRC}:`,
+	`^\\s*(?:>>>|>>)?\\s*(?:\\+?\\s*\\d+\\s*#\\s*|\\+?#|\\+\\s*)${HASHLINE_BIGRAM_RE_SRC}:`,
 );
-const HASHLINE_PREFIX_PLUS_RE = new RegExp(
-	`^\\s*(?:>>>|>>)?\\s*\\+\\s*(?:\\d+\\s*#\\s*|#\\s*)?${HASHLINE_BIGRAM_RE_SRC}:`,
-);
+const HASHLINE_PREFIX_PLUS_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*\\+\\s*(?:\\d+\\s*#\\s*|#)?${HASHLINE_BIGRAM_RE_SRC}:`);
 const DIFF_PLUS_RE = /^[+](?![+])/;
 const READ_TRUNCATION_NOTICE_RE = /^\[(?:Showing lines \d+-\d+ of \d+|\d+ more lines? in (?:file|\S+))\b.*\bsel=L\d+/;
 
@@ -186,15 +188,6 @@ export function hashlineParseText(edit: string[] | string | null | undefined): s
 		edit = normalizedEdit.replaceAll("\r", "").split("\n");
 	}
 	return stripNewLinePrefixes(edit);
-}
-
-export function isHashlineParams(params: unknown): params is HashlineParams {
-	if (typeof params !== "object" || params === null || !("edits" in params) || !Array.isArray(params.edits))
-		return false;
-	if (params.edits.length === 0) return true;
-	const first = params.edits[0];
-	if (typeof first !== "object" || first === null) return false;
-	return "loc" in first;
 }
 
 function resolveEditAnchors(edits: HashlineToolEdit[]): HashlineEdit[] {

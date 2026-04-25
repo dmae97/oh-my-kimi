@@ -552,9 +552,11 @@ export function missingChunkReadTarget(selector: string): ChunkReadTarget {
 
 export const chunkToolEditSchema = Type.Object(
 	{
-		path: Type.String({
-			description: "File path with chunk selector. Examples: 'src/app.ts:fn_foo#thth~', 'src/app.ts:class_Bar'.",
-		}),
+		path: Type.Optional(
+			Type.String({
+				description: "File path with chunk selector. Examples: 'src/app.ts:fn_foo#thth~', 'src/app.ts:class_Bar'.",
+			}),
+		),
 		write: Type.Optional(
 			Type.Union([Type.String(), Type.Null()], {
 				description:
@@ -600,22 +602,6 @@ export interface ExecuteChunkSingleOptions {
 	batchRequest?: LspBatchRequest;
 	writethrough: WritethroughCallback;
 	beginDeferredDiagnosticsForPath: (path: string) => WritethroughDeferredHandle;
-}
-
-export function isChunkParams(params: unknown): params is ChunkParams {
-	if (
-		typeof params !== "object" ||
-		params === null ||
-		!("edits" in params) ||
-		!Array.isArray(params.edits) ||
-		params.edits.length === 0
-	) {
-		return false;
-	}
-	const first = params.edits[0];
-	// Accept a bare `{ path }` entry so the executor can return a targeted
-	// "missing operation" error instead of the generic schema failure.
-	return typeof first === "object" && first !== null && "path" in first;
 }
 
 /** Auto-correct indentation for content targeting a body region (`~`) when autoIndent is on.

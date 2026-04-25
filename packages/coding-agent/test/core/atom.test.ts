@@ -4,7 +4,6 @@ import {
 	applyAtomEdits,
 	computeLineHash,
 	HashlineMismatchError,
-	isAtomParams,
 	resolveAtomToolEdit,
 } from "@oh-my-pi/pi-coding-agent/edit";
 import type { Anchor } from "@oh-my-pi/pi-coding-agent/edit/modes/hashline";
@@ -12,36 +11,6 @@ import type { Anchor } from "@oh-my-pi/pi-coding-agent/edit/modes/hashline";
 function tag(line: number, content: string): Anchor {
 	return { line, hash: computeLineHash(line, content) };
 }
-
-describe("isAtomParams", () => {
-	it("accepts empty edits", () => {
-		expect(isAtomParams({ edits: [] })).toBe(true);
-	});
-
-	it("accepts a `set` op", () => {
-		expect(isAtomParams({ edits: [{ path: "a.ts", set: "1#aa", lines: "x" }] })).toBe(true);
-	});
-
-	it("accepts a `sub` op", () => {
-		expect(isAtomParams({ edits: [{ path: "a.ts", sub: "1#aa", find: "x", lines: "y" }] })).toBe(true);
-	});
-
-	it("accepts file-scoped append", () => {
-		expect(isAtomParams({ edits: [{ path: "a.ts", append: "z" }] })).toBe(true);
-	});
-
-	it("defers multi-op entries to the resolver for an actionable error", () => {
-		// Schema-level guard accepts; resolver throws with named keys.
-		expect(isAtomParams({ edits: [{ path: "a.ts", set: "1#aa", lines: "x", del: "1#aa" }] })).toBe(true);
-		expect(() => resolveAtomToolEdit({ path: "a.ts", set: "1#aa", lines: "x", del: "1#aa" } as never)).toThrow(
-			/multiple op keys.*set, del/,
-		);
-	});
-
-	it("accepts entries without path (resolved at dispatcher from top-level)", () => {
-		expect(isAtomParams({ path: "a.ts", edits: [{ set: "1#XQ", lines: "x" }] as unknown[] })).toBe(true);
-	});
-});
 
 describe("applyAtomEdits — set", () => {
 	it("replaces a single line", () => {

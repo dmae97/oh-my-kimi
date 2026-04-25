@@ -352,8 +352,8 @@ describe("search tool path lists", () => {
 		const text = getText(result);
 
 		expect(text).toContain("match lines use ':'; context lines use '-'");
-		expect(text).toMatch(/1(?:#[A-Z0-9]+)?-#if FLAG/);
-		expect(text).toMatch(/2(?:#[A-Z0-9]+)?:needle/);
-		expect(text).toMatch(/3(?:#[A-Z0-9]+)?-#endif/);
+		expect(text).toMatch(/1(?:#[A-Za-z0-9]+)?-#if FLAG/);
+		expect(text).toMatch(/2(?:#[A-Za-z0-9]+)?:needle/);
+		expect(text).toMatch(/3(?:#[A-Za-z0-9]+)?-#endif/);
 	});
 });

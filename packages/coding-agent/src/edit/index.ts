@@ -18,26 +18,14 @@ import type { ToolSession } from "../tools";
 import { VimTool, vimSchema } from "../tools/vim";
 import { type EditMode, normalizeEditMode, resolveEditMode } from "../utils/edit-mode";
 import type { VimToolDetails } from "../vim/types";
-import {
-	type ApplyPatchParams,
-	applyPatchSchema,
-	expandApplyPatchToEntries,
-	isApplyPatchParams,
-} from "./modes/apply-patch";
+import { type ApplyPatchParams, applyPatchSchema, expandApplyPatchToEntries } from "./modes/apply-patch";
 import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
-import {
-	type AtomParams,
-	type AtomToolEdit,
-	atomEditParamsSchema,
-	executeAtomSingle,
-	isAtomParams,
-} from "./modes/atom";
+import { type AtomParams, type AtomToolEdit, atomEditParamsSchema, executeAtomSingle } from "./modes/atom";
 import {
 	type ChunkParams,
 	type ChunkToolEdit,
 	chunkEditParamsSchema,
 	executeChunkSingle,
-	isChunkParams,
 	parseChunkEditPath,
 	resolveAnchorStyle,
 	resolveChunkAutoIndent,
@@ -47,22 +35,9 @@ import {
 	type HashlineParams,
 	type HashlineToolEdit,
 	hashlineEditParamsSchema,
-	isHashlineParams,
 } from "./modes/hashline";
-import {
-	executePatchSingle,
-	isPatchParams,
-	type PatchEditEntry,
-	type PatchParams,
-	patchEditSchema,
-} from "./modes/patch";
-import {
-	executeReplaceSingle,
-	isReplaceParams,
-	type ReplaceEditEntry,
-	type ReplaceParams,
-	replaceEditSchema,
-} from "./modes/replace";
+import { executePatchSingle, type PatchEditEntry, type PatchParams, patchEditSchema } from "./modes/patch";
+import { executeReplaceSingle, type ReplaceEditEntry, type ReplaceParams, replaceEditSchema } from "./modes/replace";
 import { type EditToolDetails, type EditToolPerFileResult, getLspBatchRequest, type LspBatchRequest } from "./renderer";
 
 export { DEFAULT_EDIT_MODE, type EditMode, normalizeEditMode } from "../utils/edit-mode";
@@ -102,8 +77,6 @@ type EditToolResultDetails = EditToolDetails | VimToolDetails;
 type EditModeDefinition = {
 	description: (session: ToolSession) => string;
 	parameters: TInput;
-	invalidParamsMessage: string;
-	validate: (params: EditParams) => boolean;
 	execute: (
 		tool: EditTool,
 		params: EditParams,
@@ -124,10 +97,6 @@ function resolveConfiguredEditMode(rawEditMode: string): EditMode | undefined {
 	}
 
 	return editMode;
-}
-
-function isVimParams(params: EditParams): params is VimParams {
-	return typeof params === "object" && params !== null && "file" in params && typeof params.file === "string";
 }
 
 function resolveAllowFuzzy(session: ToolSession, rawValue: string): boolean {
@@ -343,10 +312,6 @@ export class EditTool implements AgentTool<TInput> {
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<EditToolResultDetails, TInput>> {
 		const modeDefinition = this.#getModeDefinition();
-		if (!modeDefinition.validate(params)) {
-			throw new Error(modeDefinition.invalidParamsMessage);
-		}
-
 		return modeDefinition.execute(this, params, signal, getLspBatchRequest(context?.toolCall), onUpdate);
 	}
 
@@ -359,9 +324,6 @@ export class EditTool implements AgentTool<TInput> {
 						chunkAutoIndent: resolveChunkAutoIndent(),
 					}),
 				parameters: chunkEditParamsSchema,
-				invalidParamsMessage:
-					"Invalid edit parameters for chunk mode. Expected `{ edits: [{ path: 'file:selector', ...op }, ...] }` with at least one edit. Each edit needs a `path`; supply exactly one of `write: 'content'`, `insert: { loc, body }`, or `delete: true`.",
-				validate: isChunkParams,
 				execute: (
 					tool: EditTool,
 					params: EditParams,
@@ -391,8 +353,6 @@ export class EditTool implements AgentTool<TInput> {
 			patch: {
 				description: () => prompt.render(patchDescription),
 				parameters: patchEditSchema,
-				invalidParamsMessage: "Invalid edit parameters for patch mode.",
-				validate: isPatchParams,
 				execute: (
 					tool: EditTool,
 					params: EditParams,
@@ -422,8 +382,6 @@ export class EditTool implements AgentTool<TInput> {
 			apply_patch: {
 				description: () => prompt.render(applyPatchDescription),
 				parameters: applyPatchSchema,
-				invalidParamsMessage: "Invalid edit parameters for apply_patch mode.",
-				validate: isApplyPatchParams,
 				execute: (
 					tool: EditTool,
 					params: EditParams,
@@ -452,8 +410,6 @@ export class EditTool implements AgentTool<TInput> {
 			hashline: {
 				description: () => prompt.render(hashlineDescription),
 				parameters: hashlineEditParamsSchema,
-				invalidParamsMessage: "Invalid edit parameters for hashline mode.",
-				validate: isHashlineParams,
 				execute: (
 					tool: EditTool,
 					params: EditParams,
@@ -483,9 +439,6 @@ export class EditTool implements AgentTool<TInput> {
 			atom: {
 				description: () => prompt.render(atomDescription),
 				parameters: atomEditParamsSchema,
-				invalidParamsMessage:
-					"Edit tool requires `{ edits: [...] }` (an array of entries). Each entry needs exactly one op key (set, before, after, del, sub, ins, append, prepend) plus optional `path`.",
-				validate: isAtomParams,
 				execute: (
 					tool: EditTool,
 					params: EditParams,
@@ -515,8 +468,6 @@ export class EditTool implements AgentTool<TInput> {
 			replace: {
 				description: () => prompt.render(replaceDescription),
 				parameters: replaceEditSchema,
-				invalidParamsMessage: "Invalid edit parameters for replace mode.",
-				validate: isReplaceParams,
 				execute: (
 					tool: EditTool,
 					params: EditParams,
@@ -546,8 +497,6 @@ export class EditTool implements AgentTool<TInput> {
 			vim: {
 				description: () => this.#vimTool.description,
 				parameters: vimSchema,
-				invalidParamsMessage: "Invalid edit parameters for vim mode.",
-				validate: isVimParams,
 				execute: async (
 					tool: EditTool,
 					params: EditParams,
