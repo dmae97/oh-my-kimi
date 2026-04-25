@@ -2,18 +2,16 @@
  * Hashline edit mode — a line-addressable edit format using text hashes.
  *
  * Each line in a file is identified by its 1-indexed line number and a short
- * hexadecimal hash derived from the normalized line text (xxHash32, truncated to 2
- * hex chars).
+ * BPE-bigram hash derived from the normalized line text (xxHash32 mod 40,
+ * mapped through HASHLINE_BIGRAMS).
  * The combined `LINE#ID` reference acts as both an address and a staleness check:
  * if the file has changed since the caller last read it, hash mismatches are caught
  * before any mutation occurs.
  *
  * Displayed format: `LINENUM#HASH:TEXT`
- * Reference format: `"LINENUM#HASH"` (e.g. `"5#aa"`)
+ * Reference format: `"LINENUM#HASH"` (e.g. `"5#th"`)
  */
 
-import * as fs from "node:fs/promises";
-import * as nodePath from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
@@ -21,16 +19,12 @@ import type { BunFile } from "bun";
 import type { WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
 import type { ToolSession } from "../../tools";
 import { assertEditableFileContent } from "../../tools/auto-generated-guard";
-import {
-	invalidateFsScanAfterDelete,
-	invalidateFsScanAfterRename,
-	invalidateFsScanAfterWrite,
-} from "../../tools/fs-cache-invalidation";
+import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd } from "../../tools/path-utils";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
 import { generateDiffString } from "../diff";
-import { computeLineHash, formatLineHash } from "../line-hash";
+import { computeLineHash, formatLineHash, HASHLINE_BIGRAM_RE_SRC } from "../line-hash";
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "../normalize";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
 
@@ -49,8 +43,12 @@ export type HashlineEdit =
 	| { op: "append_file"; lines: string[] }
 	| { op: "prepend_file"; lines: string[] };
 
-const HASHLINE_PREFIX_RE = /^\s*(?:>>>|>>)?\s*(?:\+?\s*(?:\d+\s*#\s*|#\s*)|\+)\s*[ZPMQVRWSNKTXJBYH]{2}:/;
-const HASHLINE_PREFIX_PLUS_RE = /^\s*(?:>>>|>>)?\s*\+\s*(?:\d+\s*#\s*|#\s*)?[ZPMQVRWSNKTXJBYH]{2}:/;
+const HASHLINE_PREFIX_RE = new RegExp(
+	`^\\s*(?:>>>|>>)?\\s*(?:\\+?\\s*(?:\\d+\\s*#\\s*|#\\s*)|\\+)\\s*${HASHLINE_BIGRAM_RE_SRC}:`,
+);
+const HASHLINE_PREFIX_PLUS_RE = new RegExp(
+	`^\\s*(?:>>>|>>)?\\s*\\+\\s*(?:\\d+\\s*#\\s*|#\\s*)?${HASHLINE_BIGRAM_RE_SRC}:`,
+);
 const DIFF_PLUS_RE = /^[+](?![+])/;
 const READ_TRUNCATION_NOTICE_RE = /^\[(?:Showing lines \d+-\d+ of \d+|\d+ more lines? in (?:file|\S+))\b.*\bsel=L\d+/;
 
@@ -153,17 +151,16 @@ const locSchema = Type.Union(
 
 export const hashlineEditSchema = Type.Object(
 	{
-		path: Type.String({ description: "File path" }),
+		path: Type.Optional(Type.String({ description: "File path (omit to use top-level `path`)" })),
 		loc: Type.Optional(locSchema),
 		content: Type.Optional(linesSchema),
-		delete: Type.Optional(Type.Boolean({ description: "Delete the file" })),
-		move: Type.Optional(Type.String({ description: "Move/rename the file to this path" })),
 	},
 	{ additionalProperties: false },
 );
 
 export const hashlineEditParamsSchema = Type.Object(
 	{
+		path: Type.Optional(Type.String({ description: "Default file path used when an edit omits its own `path`" })),
 		edits: Type.Array(hashlineEditSchema, { description: "edits" }),
 	},
 	{ additionalProperties: false },
@@ -197,7 +194,7 @@ export function isHashlineParams(params: unknown): params is HashlineParams {
 	if (params.edits.length === 0) return true;
 	const first = params.edits[0];
 	if (typeof first !== "object" || first === null) return false;
-	return "loc" in first || "delete" in first || "move" in first;
+	return "loc" in first;
 }
 
 function resolveEditAnchors(edits: HashlineToolEdit[]): HashlineEdit[] {
@@ -484,20 +481,20 @@ export async function* streamHashLinesFromLines(
 }
 
 /**
- * Parse a line reference string like `"5#abcd"` into structured form.
+ * Parse a line reference string like `"5#th"` into structured form.
  *
- * @throws Error if the format is invalid (not `NUMBER#HEXHASH`)
+ * @throws Error if the format is invalid (not `NUMBER#BIGRAM`)
  */
 export function parseTag(ref: string): { line: number; hash: string } {
 	// This regex captures:
 	//  1. optional leading ">+" and whitespace
 	//  2. line number (1+ digits)
 	//  3. "#" with optional surrounding spaces
-	//  4. hash (2 hex chars)
+	//  4. hash (one BPE bigram from HASHLINE_BIGRAMS)
 	//  5. optional trailing display suffix (":..." or "  ...")
-	const match = ref.match(/^\s*[>+-]*\s*(\d+)\s*#\s*([ZPMQVRWSNKTXJBYH]{2})/);
+	const match = ref.match(new RegExp(`^\\s*[>+-]*\\s*(\\d+)\\s*#\\s*(${HASHLINE_BIGRAM_RE_SRC})`));
 	if (!match) {
-		throw new Error(`Invalid line reference "${ref}". Expected format "LINE#ID" (e.g. "5#aa").`);
+		throw new Error(`Invalid line reference "${ref}". Expected format "LINE#ID" (e.g. "5#th").`);
 	}
 	const line = Number.parseInt(match[1], 10);
 	if (line < 1) {
@@ -1170,7 +1167,7 @@ export function buildCompactHashlineDiffPreview(
 }
 
 export async function computeHashlineDiff(
-	input: { path: string; edits: HashlineEditInput[]; move?: string },
+	input: { path: string; edits: HashlineEditInput[] },
 	cwd: string,
 ): Promise<
 	| {
@@ -1181,28 +1178,19 @@ export async function computeHashlineDiff(
 			error: string;
 	  }
 > {
-	const { path, edits, move } = input;
+	const { path, edits } = input;
 
 	try {
 		const absolutePath = resolveToCwd(path, cwd);
-		const movePath = move ? resolveToCwd(move, cwd) : undefined;
-		const isMoveOnly = Boolean(movePath) && movePath !== absolutePath && edits.length === 0;
 		const resolvedEdits = resolveHashlineEditsForDiff(edits);
 		const file = Bun.file(absolutePath);
-
-		if (movePath === absolutePath) {
-			return { error: "move path is the same as source path" };
-		}
-		if (isMoveOnly) {
-			return { diff: "", firstChangedLine: undefined };
-		}
 
 		const rawContent = await readHashlineFileText(file, path);
 
 		const { text: content } = stripBom(rawContent);
 		const normalizedContent = normalizeToLF(content);
 		const result = applyHashlineEdits(normalizedContent, resolvedEdits);
-		if (normalizedContent === result.lines && !move) {
+		if (normalizedContent === result.lines) {
 			return { error: `No changes would be made to ${path}. The edits produce identical content.` };
 		}
 
@@ -1229,63 +1217,18 @@ export async function executeHashlineSingle(
 ): Promise<AgentToolResult<EditToolDetails, typeof hashlineEditParamsSchema>> {
 	const { session, path, edits, signal, batchRequest, writethrough, beginDeferredDiagnosticsForPath } = options;
 
-	// Extract file-level ops from edits
-	const deleteFile = edits.some(e => e.delete);
-	const move = edits.find(e => e.move)?.move;
-	// Filter to content edits only (those with loc)
 	const contentEdits = edits.filter(e => e.loc != null);
 
-	enforcePlanModeWrite(session, path, { op: deleteFile ? "delete" : "update", move });
+	enforcePlanModeWrite(session, path, { op: "update" });
 
 	if (path.endsWith(".ipynb") && contentEdits.length > 0) {
 		throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
 	}
 
 	const absolutePath = resolvePlanPath(session, path);
-	const resolvedMove = move ? resolvePlanPath(session, move) : undefined;
-	if (resolvedMove === absolutePath) {
-		throw new Error("move path is the same as source path");
-	}
 
 	const sourceFile = Bun.file(absolutePath);
 	const sourceExists = await sourceFile.exists();
-	const isMoveOnly = Boolean(resolvedMove) && contentEdits.length === 0;
-
-	if (deleteFile) {
-		if (sourceExists) {
-			await sourceFile.unlink();
-		}
-		invalidateFsScanAfterDelete(absolutePath);
-		return {
-			content: [{ type: "text", text: `Deleted ${path}` }],
-			details: {
-				diff: "",
-				op: "delete",
-				meta: outputMeta().get(),
-			},
-		};
-	}
-
-	if (isMoveOnly && resolvedMove) {
-		if (!sourceExists) {
-			throw new Error(`File not found: ${path}`);
-		}
-		const parentDir = nodePath.dirname(resolvedMove);
-		if (parentDir && parentDir !== ".") {
-			await fs.mkdir(parentDir, { recursive: true });
-		}
-		await fs.rename(absolutePath, resolvedMove);
-		invalidateFsScanAfterRename(absolutePath, resolvedMove);
-		return {
-			content: [{ type: "text", text: `Moved ${path} to ${move}` }],
-			details: {
-				diff: "",
-				op: "update",
-				move,
-				meta: outputMeta().get(),
-			},
-		};
-	}
 
 	if (!sourceExists) {
 		const lines: string[] = [];
@@ -1329,7 +1272,7 @@ export async function executeHashlineSingle(
 		warnings: anchorResult.warnings,
 		noopEdits: anchorResult.noopEdits,
 	};
-	if (originalNormalized === result.text && !move) {
+	if (originalNormalized === result.text) {
 		let diagnostic = `No changes made to ${path}. The edits produced identical content.`;
 		if (result.noopEdits && result.noopEdits.length > 0) {
 			const details = result.noopEdits
@@ -1349,24 +1292,23 @@ export async function executeHashlineSingle(
 		throw new Error(diagnostic);
 	}
 
-	const writePath = resolvedMove ?? absolutePath;
 	const finalContent = bom + restoreLineEndings(result.text, originalEnding);
-	const diagnostics = await writethrough(writePath, finalContent, signal, Bun.file(writePath), batchRequest, dst =>
-		dst === writePath ? beginDeferredDiagnosticsForPath(writePath) : undefined,
+	const diagnostics = await writethrough(
+		absolutePath,
+		finalContent,
+		signal,
+		Bun.file(absolutePath),
+		batchRequest,
+		dst => (dst === absolutePath ? beginDeferredDiagnosticsForPath(absolutePath) : undefined),
 	);
-	if (resolvedMove && resolvedMove !== absolutePath) {
-		await sourceFile.unlink();
-		invalidateFsScanAfterRename(absolutePath, resolvedMove);
-	} else {
-		invalidateFsScanAfterWrite(absolutePath);
-	}
+	invalidateFsScanAfterWrite(absolutePath);
 
 	const diffResult = generateDiffString(originalNormalized, result.text);
 	const meta = outputMeta()
 		.diagnostics(diagnostics?.summary ?? "", diagnostics?.messages ?? [])
 		.get();
 
-	const resultText = move ? `Moved ${path} to ${move}` : `Updated ${path}`;
+	const resultText = `Updated ${path}`;
 	const preview = buildCompactHashlineDiffPreview(diffResult.diff);
 	const summaryLine = `Changes: +${preview.addedLines} -${preview.removedLines}${preview.preview ? "" : " (no textual diff preview)"}`;
 	const warningsBlock = result.warnings?.length ? `\n\nWarnings:\n${result.warnings.join("\n")}` : "";
@@ -1384,7 +1326,6 @@ export async function executeHashlineSingle(
 			firstChangedLine: result.firstChangedLine ?? diffResult.firstChangedLine,
 			diagnostics,
 			op: "update",
-			move,
 			meta,
 		},
 	};

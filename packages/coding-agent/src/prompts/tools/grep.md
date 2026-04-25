@@ -9,14 +9,14 @@ Searches files using powerful regex matching.
 
 <output>
 {{#if IS_HASHLINE_MODE}}
-- Text output is CID prefixed: `LINE#ID:content`
+- Text output is anchor-prefixed: `123#th:content`
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
 - Text output is line-number-prefixed
 {{/if}}
 {{/if}}
 {{#if IS_CHUNK_MODE}}
-- Text output is chunk-path-prefixed: `path:selector>LINE|content`
+- Text output is chunk-path-prefixed: `path:sel>123#th|content`
 {{/if}}
 </output>
 

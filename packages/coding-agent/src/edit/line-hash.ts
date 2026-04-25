@@ -3,26 +3,74 @@
  * circular dependencies (prompt-templates → hashline → tools → edit).
  */
 
-/** 16-char nibble alphabet (no digits); shared with chunk checksum suffixes. */
-export const HASHLINE_NIBBLE_ALPHABET = "ZPMQVRWSNKTXJBYH";
+/**
+ * 40 common English BPE bigrams. Each entry tokenizes as a single token in
+ * modern BPE vocabularies (cl100k / o200k / Claude family), so a hashline anchor
+ * built from one bigram is exactly 1 token.
+ *
+ * Order is stable forever — changing it would invalidate every saved
+ * `LINE#ID` reference in transcripts and prompts.
+ */
+export const HASHLINE_BIGRAMS = [
+	"th",
+	"he",
+	"in",
+	"er",
+	"an",
+	"re",
+	"on",
+	"at",
+	"en",
+	"nd",
+	"ti",
+	"es",
+	"or",
+	"te",
+	"of",
+	"ed",
+	"is",
+	"it",
+	"al",
+	"ar",
+	"st",
+	"to",
+	"nt",
+	"ng",
+	"se",
+	"ha",
+	"as",
+	"ou",
+	"io",
+	"le",
+	"ve",
+	"co",
+	"me",
+	"de",
+	"hi",
+	"ri",
+	"ro",
+	"ic",
+	"ne",
+	"ea",
+] as const;
 
-const NIBBLE_STR = HASHLINE_NIBBLE_ALPHABET;
+export const HASHLINE_BIGRAMS_COUNT = HASHLINE_BIGRAMS.length;
 
-const DICT = Array.from({ length: 256 }, (_, i) => {
-	const h = i >>> 4;
-	const l = i & 0x0f;
-	return `${NIBBLE_STR[h]}${NIBBLE_STR[l]}`;
-});
+/**
+ * Regex source matching exactly one bigram from {@link HASHLINE_BIGRAMS}.
+ * Used by hashline parsers — keep in sync with the alphabet array above.
+ */
+export const HASHLINE_BIGRAM_RE_SRC = `(?:${HASHLINE_BIGRAMS.join("|")})`;
 
 const RE_SIGNIFICANT = /[\p{L}\p{N}]/u;
 
 /**
- * Compute a short hexadecimal hash of a single line.
+ * Compute a short BPE-bigram hash of a single line.
  *
- * Uses xxHash32 on a trailing-whitespace-trimmed, CR-stripped line, truncated to 2 chars from
- * {@link NIBBLE_STR}. For lines containing no alphanumeric characters (only
- * punctuation/symbols/whitespace), the line number is mixed in to reduce hash collisions.
- * The line input should not include a trailing newline.
+ * Uses xxHash32 on a trailing-whitespace-trimmed, CR-stripped line, mapped into
+ * {@link HASHLINE_BIGRAMS} via modulo. For lines containing no alphanumeric
+ * characters (only punctuation/symbols/whitespace), the line number is mixed in
+ * to reduce hash collisions. The line input should not include a trailing newline.
  */
 export function computeLineHash(idx: number, line: string): string {
 	line = line.replace(/\r/g, "").trimEnd();
@@ -31,7 +79,7 @@ export function computeLineHash(idx: number, line: string): string {
 	if (!RE_SIGNIFICANT.test(line)) {
 		seed = idx;
 	}
-	return DICT[Bun.hash.xxHash32(line, seed) & 0xff];
+	return HASHLINE_BIGRAMS[Bun.hash.xxHash32(line, seed) % HASHLINE_BIGRAMS_COUNT];
 }
 
 /**
@@ -53,7 +101,7 @@ export function formatLineHash(line: number, lines: string): string {
  * @example
  * ```
  * formatHashLines("function hi() {\n  return;\n}")
- * // "1#HH:function hi() {\n2#HH:  return;\n3#HH:}"
+ * // "1#th:function hi() {\n2#er:  return;\n3#in:}"
  * ```
  */
 export function formatHashLines(text: string, startLine = 1): string {

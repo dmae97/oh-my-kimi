@@ -18,13 +18,13 @@ The `read` tool is multi-purpose and more capable than it looks — inspects fil
 |`L50`|Read from line 50 onward (shorthand for L50 to EOF)|
 |`L50-L120`|Read lines 50 through 120|
 |`L20-L20`|Read exactly one line|
-|`raw`|Raw content without transformations (for URLs: untouched HTML)|
+|`raw`|Skip line-numbering / hashline / chunking; return file content as plain text. For URLs: untouched HTML.|
 
 Max {{DEFAULT_MAX_LINES}} lines per call.
 
 # Filesystem
 {{#if IS_HASHLINE_MODE}}
-- Reading from FS returns lines prefixed with anchors: `41#ZZ:def alpha():`
+- Reading from FS returns lines prefixed with anchors: `41#th:def alpha():`
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
 - Reading from FS returns lines prefixed with line numbers: `41:def alpha():`

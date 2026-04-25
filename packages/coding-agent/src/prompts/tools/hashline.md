@@ -1,22 +1,21 @@
-Applies precise file edits using `LINE#ID` anchors from `read` output.
+Applies precise file edits using anchor-prefixed line references (e.g. `123#th`) from `read` output.
 
 Read the file first. Copy anchors exactly from the latest `read` output. After any successful edit, re-read before editing that file again.
 
 <operations>
 **Top level**
 - `edits` — array of edit entries
+- `path` (optional) — default file path used when an entry omits its own `path`. Lets you share the path across many edits in one request.
 
-**Edit entry**: `{ path, loc, content }` or `{ path, delete: true }` or `{ path, move: "new/path" }`
-- `path` — file path
+**Edit entry**: `{ path?, loc, content }`
+- `path` — file path (omit to fall back to the request-level `path`)
 - `loc` — where to apply the edit (see below)
 - `content` — replacement/inserted lines (array of strings preferred, `null` to delete)
-- `delete` — delete the file
-- `move` — move/rename the file
 
 **`loc` values**
 - `"append"` / `"prepend"` — insert at end/start of file
-- `{ append: "N#ID" }` / `{ prepend: "N#ID" }` — insert after/before anchored line
-- `{ range: { pos: "N#ID", end: "N#ID" } }` — replace inclusive range `pos..end` with new content (set `pos == end` for single-line replace)
+- `{ append: "123#th" }` / `{ prepend: "123#th" }` — insert after/before anchored line
+- `{ range: { pos: "123#th", end: "123#th" } }` — replace inclusive range `pos..end` with new content (set `pos == end` for single-line replace)
 </operations>
 
 <examples>
@@ -43,87 +42,21 @@ All examples below reference the same file:
 {{hline 18 "}"}}
 ```
 
-<example name="replace a block body">
+# Replace a block body
 Replace only the catch body. Do not target the shared boundary line `} catch (err) {`.
-
-```
-{
-  edits: [{
-    path: "a.ts",
-    loc: { range: { pos: {{href 15 "\t\tconsole.error(err);"}}, end: {{href 16 "\t\treturn null;"}} } },
-    content: [
-      "\t\tif (isEnoent(err)) return null;",
-      "\t\tthrow err;"
-    ]
-  }]
-}
-```
-</example>
-
-<example name="replace whole block including closing brace">
-Replace the entire body of `alpha`, including its closing `}`. `end` **MUST** be {{href 7 "}"}} because `content` includes `}`.
-
-```
-{
-  edits: [{
-    path: "a.ts",
-    loc: { range: { pos: {{href 6 "\tlog();"}}, end: {{href 7 "}"}} } },
-    content: [
-      "\tvalidate();",
-      "\tlog();",
-      "}"
-    ]
-  }]
-}
-```
-
-**Wrong**: `end: {{href 6 "\tlog();"}}` with the same content — line 7 (`}`) survives AND content emits `}`, producing two closing braces.
-</example>
-
-<example name="replace one line">
+`{edits:[{path:"a.ts",loc:{range:{pos:{{href 15 "\t\tconsole.error(err);"}},end:{{href 16 "\t\treturn null;"}}}},content:["\t\tif (isEnoent(err)) return null;","\t\tthrow err;"]}]}`
+# Replace whole block including closing brace
+Replace `alpha`'s entire body including the closing `}`. `end` **MUST** be {{href 7 "}"}} because `content` includes `}`.
+`{edits:[{path:"a.ts",loc:{range:{pos:{{href 6 "\tlog();"}},end:{{href 7 "}"}}}},content:["\tvalidate();","\tlog();","}"]}]}`
+**Wrong**: `end: {{href 6 "\tlog();"}}` — line 7 (`}`) survives AND content emits `}`, producing two closing braces.
+# Replace one line
 Single-line replace uses `pos == end`.
-
-```
-{
-  edits: [{
-    path: "a.ts",
-    loc: { range: { pos: {{href 2 "const timeout = 5000;"}}, end: {{href 2 "const timeout = 5000;"}} } },
-    content: ["const timeout = 30_000;"]
-  }]
-}
-```
-</example>
-
-<example name="delete a range">
-```
-{
-  edits: [{
-    path: "a.ts",
-    loc: { range: { pos: {{href 10 "\t// TODO: remove after migration"}}, end: {{href 11 "\tlegacy();"}} } },
-    content: null
-  }]
-}
-```
-</example>
-
-<example name="insert before sibling">
+`{edits:[{path:"a.ts",loc:{range:{pos:{{href 2 "const timeout = 5000;"}},end:{{href 2 "const timeout = 5000;"}}}},content:["const timeout = 30_000;"]}]}`
+# Delete a range
+`{edits:[{path:"a.ts",loc:{range:{pos:{{href 10 "\t// TODO: remove after migration"}},end:{{href 11 "\tlegacy();"}}}},content:null}]}`
+# Insert before a sibling
 When adding a sibling declaration, prefer `prepend` on the next declaration.
-
-```
-{
-  edits: [{
-    path: "a.ts",
-    loc: { prepend: {{href 9 "function beta() {"}} },
-    content: [
-      "function gamma() {",
-      "\tvalidate();",
-      "}",
-      ""
-    ]
-  }]
-}
-```
-</example>
+`{edits:[{path:"a.ts",loc:{prepend:{{href 9 "function beta() {"}}},content:["function gamma() {","\tvalidate();","}",""]}]}`
 </examples>
 
 <critical>

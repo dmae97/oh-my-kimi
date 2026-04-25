@@ -2,7 +2,6 @@ Reads files using syntax-aware chunks. Also inspects directories, archives, SQLi
 
 <instruction>
 The chunk-aware `read` variant returns AST-scoped chunks with current checksum IDs for structural editing, and otherwise behaves like `open` for non-code content.
-
 - You **MUST** parallelize calls when exploring related files
 - For URLs, `read` fetches the page and returns clean extracted text/markdown by default (reader-mode). It handles HTML pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom, JSON endpoints, PDFs, etc. You **SHOULD** reach for `read` — not a browser/puppeteer tool — for fetching and inspecting web content.
 
@@ -17,7 +16,7 @@ The chunk-aware `read` variant returns AST-scoped chunks with current checksum I
 |---|---|
 |*(omitted)*|Read full file as chunks (up to {{DEFAULT_LIMIT}} lines)|
 |`class_Foo`|Read a specific chunk|
-|`class_Foo.fn_bar#ABCD~`|Read a chunk region (body `~` / head `^`) by ID|
+|`class_Foo.fn_bar#thth~`|Read a chunk region (body `~` / head `^`) by ID|
 |`?`|List all chunk paths with IDs|
 |`L50`|Read from line 50 onward (shorthand for L50 to EOF)|
 |`L50-L120`|Read lines 50 through 120|
@@ -27,7 +26,7 @@ The chunk-aware `read` variant returns AST-scoped chunks with current checksum I
 Max {{DEFAULT_MAX_LINES}} lines per call.
 
 # Chunks
-Each anchor `@full.chunk.path#CCCC` (with `-` prefixes for nesting depth) in the output identifies a chunk. Use `full.chunk.path#CCCC` as-is to read truncated chunks.
+Each anchor `@full.chunk.path#thth` (with `-` prefixes for nesting depth) in the output identifies a chunk. Use `full.chunk.path#thth` as-is to read truncated chunks.
 If you need a canonical target list, run `read(path="file", sel="?")`. That listing shows chunk paths with IDs and is the safest structural discovery mode. Summary lines in this listing are orientation hints; follow a selector with `read(path="file", sel="chunk#ID")` or use `raw` when you need exact source.
 Line numbers in the gutter are absolute file line numbers.
 

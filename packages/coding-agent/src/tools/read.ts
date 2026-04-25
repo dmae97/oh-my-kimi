@@ -370,7 +370,7 @@ function prependSuffixResolutionNotice(text: string, suffixResolution?: { from: 
 
 const readSchema = Type.Object({
 	path: Type.String({ description: "Path or URL to read" }),
-	sel: Type.Optional(Type.String({ description: "Selector: chunk path, L10-L50, or raw" })),
+	sel: Type.Optional(Type.String({ description: "Selector" })),
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds", default: 20 })),
 });
 
@@ -1247,8 +1247,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				firstLineExceedsLimit,
 			};
 
-			const shouldAddHashLines = displayMode.hashLines;
-			const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
+			const isRawMode = parsed.kind === "raw";
+			const shouldAddHashLines = !isRawMode && displayMode.hashLines;
+			const shouldAddLineNumbers = isRawMode ? false : shouldAddHashLines ? false : displayMode.lineNumbers;
 			const formatText = (text: string, startNum: number): string => {
 				return formatTextWithMode(text, startNum, shouldAddHashLines, shouldAddLineNumbers);
 			};

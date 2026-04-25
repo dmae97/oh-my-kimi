@@ -25,6 +25,7 @@ import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";
 import { outputMeta } from "../../tools/output-meta";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
 import { generateUnifiedDiffString } from "../diff";
+import { HASHLINE_BIGRAMS } from "../line-hash";
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "../normalize";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
 
@@ -372,11 +373,13 @@ export async function describeChunkedGrepMatch(params: {
 	};
 }
 
-const CHUNK_CHECKSUM_ALPHABET = "ZPMQVRWSNKTXJBYH";
+const CHUNK_CHECKSUM_BIGRAMS = new Set<string>(HASHLINE_BIGRAMS);
 type NativeChunkRegion = "head" | "body";
 
 function isChunkChecksumToken(value: string): boolean {
-	return value.length === 4 && Array.from(value).every(ch => CHUNK_CHECKSUM_ALPHABET.includes(ch.toUpperCase()));
+	if (value.length !== 4) return false;
+	const lower = value.toLowerCase();
+	return CHUNK_CHECKSUM_BIGRAMS.has(lower.slice(0, 2)) && CHUNK_CHECKSUM_BIGRAMS.has(lower.slice(2, 4));
 }
 
 function parseChunkEditSelector(selector: string | undefined): {
@@ -406,11 +409,11 @@ function parseChunkEditSelector(selector: string | undefined): {
 	if (hashIndex >= 0) {
 		const suffix = selectorPart.slice(hashIndex + 1).trim();
 		if (isChunkChecksumToken(suffix)) {
-			crc = suffix.toUpperCase();
+			crc = suffix.toLowerCase();
 			selectorPart = selectorPart.slice(0, hashIndex).trimEnd();
 		}
 	} else if (isChunkChecksumToken(selectorPart)) {
-		crc = selectorPart.toUpperCase();
+		crc = selectorPart.toLowerCase();
 		selectorPart = "";
 	}
 
@@ -550,7 +553,7 @@ export function missingChunkReadTarget(selector: string): ChunkReadTarget {
 export const chunkToolEditSchema = Type.Object(
 	{
 		path: Type.String({
-			description: "File path with chunk selector. Examples: 'src/app.ts:fn_foo#ABCD~', 'src/app.ts:class_Bar'.",
+			description: "File path with chunk selector. Examples: 'src/app.ts:fn_foo#thth~', 'src/app.ts:class_Bar'.",
 		}),
 		write: Type.Optional(
 			Type.Union([Type.String(), Type.Null()], {
@@ -577,6 +580,7 @@ export const chunkToolEditSchema = Type.Object(
 );
 export const chunkEditParamsSchema = Type.Object(
 	{
+		path: Type.Optional(Type.String({ description: "Default file path used when an edit omits its own `path`" })),
 		edits: Type.Array(chunkToolEditSchema, {
 			description: "Chunk edits",
 			minItems: 1,

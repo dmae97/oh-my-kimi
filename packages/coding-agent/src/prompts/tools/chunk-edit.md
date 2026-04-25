@@ -8,7 +8,7 @@ Call format: `{"edits": [{"path": "file:chunk#ID~", "write": "new body"}, …]}`
 
 <rules>
 - **MUST** inspect first with `read`. Never invent chunk paths or IDs. Copy them from the latest `read` output or edit response.
-- `path` format: `file:selector` — e.g. `src/app.ts:fn_foo#ABCD~`. Append `~` for body, `^` for head, or nothing for the whole chunk. Include `#ID` for `write`/`delete`.
+- `path` format: `file:selector` — e.g. `src/app.ts:fn_foo#thth~`. Append `~` for body, `^` for head, or nothing for the whole chunk. Include `#ID` for `write`/`delete`.
 - If the exact chunk path is unclear, run `read(path="file", sel="?")` and copy a selector from that listing.
 {{#if chunkAutoIndent}}
 - Use `\t` for indentation in `content`. Write content at indent-level 0 — the tool re-indents it to match the chunk's position in the file. For example, to replace `~` of a method, write the body starting at column 0:
@@ -75,32 +75,32 @@ Each edit entry has `path` (`file:selector`) plus **exactly one** operation fiel
 <examples>
 Given this `read` output for `counter.rs`:
 ```
-   | counter.rs·62L·rust·#ZRPW
+   | counter.rs·62L·rust·#anth
    |
-@imp#MNHH
+@imp#erhe
  1 |use std::fmt;
    |
-@struct_Counte#QTSX
+@struct_Counte#onat
  3^|/// A simple counter that tracks a value and its history.
  4^|#[derive(Debug, Clone)]
  5^|pub struct Counter {
--@struct_Counte.field_value#MQTW
+-@struct_Counte.field_value#enth
  6 |	/// The current value.
  7 |	value: i32,
--@struct_Counte.field_max#HJMQ
+-@struct_Counte.field_max#seti
  8 |	/// Maximum allowed value.
  9 |	max: i32,
 10 |}
    |
-@impl_Counte#VNPP
+@impl_Counte#reha
 12^|impl Counter {
--@impl_Counte.fn_new#RWZV
+-@impl_Counte.fn_new#ndas
 13^|	/// Creates a new counter starting at zero.
 14^|	pub fn new(max: i32) -> Self {
 15 |		Self { value: 0, max }
 16 |	}
 17 |
--@impl_Counte.fn_increm#MNHV
+-@impl_Counte.fn_increm#ouer
 18^|	/// Increments the counter by one, clamping at max.
 19^|	pub fn increment(&mut self) {
 20 |		if self.value < self.max {
@@ -108,7 +108,7 @@ Given this `read` output for `counter.rs`:
 22 |		}
 23 |	}
 24 |
--@impl_Counte.fn_decrem#TTWB
+-@impl_Counte.fn_decrem#arve
 25^|	/// Decrements the counter by one, clamping at zero.
 26^|	pub fn decrement(&mut self) {
 27 |		if self.value > 0 {
@@ -116,167 +116,43 @@ Given this `read` output for `counter.rs`:
 29 |		}
 30 |	}
 31 |
--@impl_Counte.fn_get#PTNT
+-@impl_Counte.fn_get#arco
 32^|	/// Returns the current value.
 33^|	pub fn get(&self) -> i32 {
 34 |		self.value
 35 |	}
 36 |}
    |
-@impl_Displa#BNJH
+@impl_Displa#meha
 38^|impl fmt::Display for Counter {
--@impl_Displa.fn_fmt#NKRN
+-@impl_Displa.fn_fmt#deri
 39^|	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 40 |		write!(f, "Counter({}/{})", self.value, self.max)
 41 |	}
 42 |}
-   |
-@mod_tests#YWXM
-44^|#[cfg(test)]
-45^|mod tests {
--@mod_tests.chunk#VSMY
-46 |	use super::*;
-47 |
--@mod_tests.fn_test_i#YXQZ
-48^|	#[test]
-49^|	fn test_increment() {
-50 |		let mut c = Counter::new(10);
-51 |		c.increment();
-52 |		assert_eq!(c.get(), 1);
-53 |	}
-54 |
--@mod_tests.fn_test_d#XPBQ
-55^|	#[test]
-56^|	fn test_decrement_at_zero() {
-57 |		let mut c = Counter::new(10);
-58 |		c.decrement();
-59 |		assert_eq!(c.get(), 0);
-60 |	}
-61 |}
 ```
+Lines marked `^` between the line number and `|` are **head** lines (doc comments, attributes, signature). Lines without `^` are **body** lines. `~` replaces body lines only; `^` replaces head lines only.
 
-**Understanding `^` markers in `read` output:** Lines marked with `^` between the line number and `|` (e.g. ` 3^|`) are **head** lines — doc comments, attributes, and the signature. Lines without `^` (e.g. ` 7 |`) are **body** lines. `~` replaces body lines only, keeping head lines intact.
-
-**Put body** (`~` — the common case):
-```
-{ "path": "counter.rs:impl_Counte.fn_increm#MNHV~", "write": "self.value = (self.value + 1).min(self.max);\n" }
-```
-Result — only the body (non-`^` lines) changes; the doc comment, signature, and closing `}` are all preserved:
-```
-    /// Increments the counter by one, clamping at max.
-    pub fn increment(&mut self) {
-        self.value = (self.value + 1).min(self.max);
-    }
-```
-
-**Write whole chunk** (rewrite signature + doc comment + body):
-```
-{ "path": "counter.rs:impl_Counte.fn_increm#MNHV", "write": "/// Increments by the given step, clamping at max.\npub fn increment(&mut self, step: i32) {\n\tself.value = (self.value + step).min(self.max);\n}\n" }
-```
-Result — **everything** including the doc comment and signature is rewritten. You must include them; omitting them deletes them:
-```
-    /// Increments by the given step, clamping at max.
-    pub fn increment(&mut self, step: i32) {
-        self.value = (self.value + step).min(self.max);
-    }
-```
-
-**Write head** (`^` — attributes, doc comments, signature):
-```
-{ "path": "counter.rs:impl_Counte.fn_get#PTNT^", "write": "/// Returns the current counter value.\n#[inline]\npub fn get(&self) -> i32 {\n" }
-```
-Result — the head (all `^` lines + opening brace) changes, body untouched:
-```
-    /// Returns the current counter value.
-    #[inline]
-    pub fn get(&self) -> i32 {
-        self.value
-    }
-```
-
-**Insert before a chunk** (`prepend`):
-```
-{ "path": "counter.rs:impl_Counte.fn_get", "insert": { "loc": "prepend", "body": "/// Resets the counter to zero.\npub fn reset(&mut self) {\n\tself.value = 0;\n}\n\n" } }
-```
-Result — a new method is inserted before `fn get`:
-```
-    /// Resets the counter to zero.
-    pub fn reset(&mut self) {
-        self.value = 0;
-    }
-
-    /// Returns the current value.
-    pub fn get(&self) -> i32 {
-```
-
-**Insert after a chunk** (`append`):
-```
-{ "path": "counter.rs:struct_Counte", "insert": { "loc": "append", "body": "\nimpl Default for Counter {\n\tfn default() -> Self {\n\t\tSelf { value: 0, max: 100 }\n\t}\n}\n" } }
-```
-Result — a new impl block appears after the struct:
-```
-}
-
-impl Default for Counter {
-    fn default() -> Self {
-        Self { value: 0, max: 100 }
-    }
-}
-
-impl Counter {
-```
-
-**Insert at start of container body** (`~` + `prepend`):
-```
-{ "path": "counter.rs:impl_Counte~", "insert": { "loc": "prepend", "body": "/// Creates a counter starting at the given value.\npub fn with_value(value: i32, max: i32) -> Self {\n\tSelf { value: value.min(max), max }\n}\n\n" } }
-```
-Result — a new method is added at the top of the impl body, before existing methods:
-```
-impl Counter {
-    /// Creates a counter starting at the given value.
-    pub fn with_value(value: i32, max: i32) -> Self {
-        Self { value: value.min(max), max }
-    }
-
-    /// Creates a new counter starting at zero.
-    pub fn new(max: i32) -> Self {
-```
-
-**Insert at end of container body** (`~` + `append`):
-```
-{ "path": "counter.rs:impl_Counte~", "insert": { "loc": "append", "body": "\n/// Returns true if the counter is at its maximum.\npub fn is_maxed(&self) -> bool {\n\tself.value >= self.max\n}\n" } }
-```
-Result — a new method is added at the end of the impl body, before the closing `}`:
-```
-    pub fn get(&self) -> i32 {
-        self.value
-    }
-
-    /// Returns true if the counter is at its maximum.
-    pub fn is_maxed(&self) -> bool {
-        self.value >= self.max
-    }
-}
-```
-
-**Delete a chunk**:
-```
-{ "path": "counter.rs:impl_Counte.fn_decrem#TTWB", "delete": true }
-```
-Result — the method (including its doc comment and signature) is removed.
-- Indentation rules (important):
-{{#if chunkAutoIndent}}
-  - Use `\t` for each indent level. The tool converts tabs to the file's actual style (2-space, 4-space, etc.).
-{{else}}
-  - Match the file's real indentation characters in your snippet. The tool preserves your literal tabs/spaces after adding the target region's base indent.
-{{/if}}
-  - Do NOT include the chunk's base indentation — only indent relative to the region's opening level.
-  - For `write`, the tool strips common leading whitespace shared by all non-empty lines, then adds the target region's base indent. If lines have mixed relative indentation, write them at column 0 so the common-margin cleanup cannot change the structure.
-  - For `~` of a function: write at column 0, and use `\t` for *relative* nesting. Flat body: `"return x;\n"`. Multiple sibling lines: `"print(a)\nprint(b)\nprint(c)\n"` — all at column 0, the tool adds the function's base indent. Nested body: `"if (cond) {\n\treturn x;\n}\n"` — the `if` is at column 0, the `return` is one tab in. Python example — to replace `~` of `def divide(a, b):`, write: `"if b == 0:\n\treturn None\nreturn a / b\n"` — the `if` and `return a / b` are at column 0, `return None` is one `\t` in.
-  - For `^`: write at column 0 relative to the head region, just like `~`. A class member's head uses `"/// doc\n#[attr]\npub fn start() {"` — do not include the class/member base indentation.
-{{#if chunkAutoIndent}}
-  - For a top-level item: start at zero indent. Write `"fn foo() {\n\treturn 1;\n}\n"`.
-{{else}}
-  - For a top-level item: start at zero indent. Write `"fn foo() {\n  return 1;\n}\n"`.
-{{/if}}
+# Put body (`~` — the common case)
+`{ "path": "counter.rs:impl_Counte.fn_increm#ouer~", "write": "self.value = (self.value + 1).min(self.max);\n" }`
+Only body changes; doc comment, signature, and closing `}` are preserved.
+# Write whole chunk (rewrite signature + doc + body)
+`{ "path": "counter.rs:impl_Counte.fn_increm#ouer", "write": "/// Increments by the given step, clamping at max.\npub fn increment(&mut self, step: i32) {\n\tself.value = (self.value + step).min(self.max);\n}\n" }`
+Everything is rewritten. Omitting the doc comment or signature deletes them.
+# Write head (`^` — attributes, doc comments, signature)
+`{ "path": "counter.rs:impl_Counte.fn_get#arco^", "write": "/// Returns the current counter value.\n#[inline]\npub fn get(&self) → i32 {\n" }`
+Head changes (all `^` lines + opening brace); body untouched.
+# Insert before a chunk (`prepend`)
+`{ "path": "counter.rs:impl_Counte.fn_get", "insert": { "loc": "prepend", "body": "/// Resets the counter to zero.\npub fn reset(&mut self) {\n\tself.value = 0;\n}\n\n" } }`
+# Insert after a chunk (`append`)
+`{ "path": "counter.rs:struct_Counte", "insert": { "loc": "append", "body": "\nimpl Default for Counter {\n\tfn default() → Self {\n\t\tSelf { value: 0, max: 100 }\n\t}\n}\n" } }`
+# Insert at start of container body (`~` + `prepend`)
+`{ "path": "counter.rs:impl_Counte~", "insert": { "loc": "prepend", "body": "/// Creates a counter starting at the given value.\npub fn with_value(value: i32, max: i32) → Self {\n\tSelf { value: value.min(max), max }\n}\n\n" } }`
+Lands at the top of the impl body, before existing methods.
+# Insert at end of container body (`~` + `append`)
+`{ "path": "counter.rs:impl_Counte~", "insert": { "loc": "append", "body": "\n/// Returns true if the counter is at its maximum.\npub fn is_maxed(&self) → bool {\n\tself.value ≥ self.max\n}\n" } }`
+Lands at the end of the impl body, before the closing `}`.
+# Delete a chunk
+`{ "path": "counter.rs:impl_Counte.fn_decrem#arve", "delete": true }`
+Removes the method including its doc comment and signature.
 </examples>
