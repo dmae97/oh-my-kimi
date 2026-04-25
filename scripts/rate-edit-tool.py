@@ -52,7 +52,6 @@ MODELS = [
     "openrouter/moonshotai/kimi-k2.5",
     "openrouter/anthropic/claude-haiku-4.5",
     "openrouter/anthropic/claude-sonnet-4.6",
-    "openrouter/google/gemini-3-flash-preview",
     "openrouter/z-ai/glm-5-turbo",
     "openrouter/minimax/minimax-m2.7",
 ]
@@ -61,21 +60,21 @@ ORACLE_MODEL = "openrouter/anthropic/claude-opus-4.6"
 
 PROMPT = textwrap.dedent(
     """\
-    You are evaluating the code-reading and code-editing tools on files in this directory.
+    You are evaluating the **edit** tool on files in this directory. The `read` tool is available so you can inspect file state before and after edits, but it is not under review — do not report on it.
 
     {FIXTURE_SURFACE}
 
     Work in this order:
 
-    1. Map the surface area. Identify operations, selectors, and addressing modes that actually work. Note differences across file types.
+    1. Map the edit surface. Inspect the edit tool schema. Identify every operation and addressing mode the active variant exposes (substring replace, line-anchored ops, structural selectors, append/prepend, etc.). Note any behavior differences you anticipate across file types.
 
-    2. Exercise the supported paths. Read: whole-file, structural chunks, nested members, line ranges, raw source. Edit: replace, insert into containers, insert before/after, delete. On `main.md`, check how addressing differs from code files.
+    2. Exercise every supported edit operation against each fixture. Perform the full range of supported mutations — replacing content, inserting above/below a target, deleting, substring rewrites, append/prepend — using only what the schema actually exposes.
 
-    3. Push into awkward cases. Test first/last-child edits, indentation preservation, decorators, docstrings, enum variants, markdown tables, and fenced code blocks. Note whether error messages were clear and actionable.
+    3. Push into awkward cases. Probe boundary conditions: first/last line of file, indentation-sensitive blocks (Python), nested members (decorators, methods, enum variants, Go interfaces/generics), markdown tables, fenced code blocks. Note whether error messages were clear and actionable when something went wrong.
 
-    4. Verify after edits. Re-read each file after meaningful edits and confirm no unintended changes.
+    4. Verify after edits. Re-read each file after meaningful edits and confirm only the intended lines changed.
 
-    Report concrete findings:
+    Report concrete findings about the edit tool only:
     - what required workarounds
     - what was impossible
     - which errors were clear vs unclear
@@ -145,9 +144,9 @@ ORACLE_REVIEW_PROMPT = textwrap.dedent(
 ).strip()
 
 TODOS = [
-    "Map the read and edit surface area across every fixture: main.ts, main.rs, main.go, main.py, main.md.",
-    "Exercise supported read and edit paths on each file with concrete before/after verification.",
-    "Probe awkward selector, indentation, and boundary cases: decorators, docstrings, enum variants, Go interfaces/generics, markdown tables, fenced blocks.",
+    "Map the edit tool surface area across every fixture: main.ts, main.rs, main.go, main.py, main.md.",
+    "Exercise every supported edit operation on each fixture with concrete before/after verification.",
+    "Probe awkward boundary cases: decorators, docstrings, enum variants, Go interfaces/generics, indentation-sensitive blocks, markdown tables, fenced code blocks.",
     "Summarize what was awkward, impossible, ambiguous, or under-documented with concrete examples spanning all fixtures.",
 ]
 

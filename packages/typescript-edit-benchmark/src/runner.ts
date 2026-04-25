@@ -40,7 +40,7 @@ interface BenchmarkClient {
 	onEvent(listener: (event: { type: string; [key: string]: unknown }) => void): () => void;
 	prompt(text: string): Promise<void>;
 	followUp(text: string): Promise<void>;
-	getSessionStats(): Promise<{ tokens: { input: number; output: number; total: number } }>;
+	getSessionStats(): Promise<{ tokens: { input: number; output: number; total: number }; assistantMessages: number }>;
 	getLastAssistantText(): Promise<string | null>;
 	getMessages(): Promise<AgentMessage[]>;
 	getState(): Promise<ConversationDumpSessionState>;
@@ -70,7 +70,7 @@ export interface BenchmarkConfig {
 	requireReadToolCall?: boolean;
 	noEditRequired?: boolean;
 	autoFormat?: boolean;
-	editVariant?: "replace" | "patch" | "hashline" | "chunk" | "vim" | "auto";
+	editVariant?: string;
 	editFuzzy?: boolean | "auto";
 	editFuzzyThreshold?: number | "auto";
 	guided?: boolean;
@@ -961,6 +961,9 @@ async function runSingleTask(
 				await client.setThinkingLevel(config.thinkingLevel);
 			}
 
+			const initialState = await client.getState();
+			const systemPromptTokens = estimateTokens(initialState.systemPrompt ?? "");
+
 			const maxAttempts = Math.max(1, Math.floor(config.maxAttempts ?? 1));
 			const maxTimeoutRetries = config.maxTimeoutRetries ?? 3;
 			const noOpRetryLimit = config.noOpRetryLimit ?? 2;
@@ -1014,7 +1017,7 @@ async function runSingleTask(
 					throw err;
 				}
 				const statsAfter = await client.getSessionStats();
-				const attemptTokens = diffTokenStats(statsBefore, statsAfter);
+				const attemptTokens = diffTokenStats(statsBefore, statsAfter, systemPromptTokens);
 				tokens = {
 					input: tokens.input + attemptTokens.input,
 					output: tokens.output + attemptTokens.output,
@@ -1345,7 +1348,7 @@ async function _runRpcBenchmarkRun(
 				throw err;
 			}
 			const statsAfter = await client.getSessionStats();
-			const attemptTokens = diffTokenStats(statsBefore, statsAfter);
+			const attemptTokens = diffTokenStats(statsBefore, statsAfter, 0);
 			tokens = {
 				input: tokens.input + attemptTokens.input,
 				output: tokens.output + attemptTokens.output,
@@ -1771,13 +1774,24 @@ async function collectPromptEvents(
 	return events;
 }
 
+/** Rough token estimate (4 chars per token). Used to subtract system prompt overhead. */
+function estimateTokens(text: string): number {
+	return Math.ceil(text.length / 4);
+}
+
 function diffTokenStats(
-	before: { tokens: { input: number; output: number; total: number } },
-	after: { tokens: { input: number; output: number; total: number } },
+	before: { tokens: { input: number; output: number; total: number }; assistantMessages: number },
+	after: { tokens: { input: number; output: number; total: number }; assistantMessages: number },
+	systemPromptTokens: number,
 ): TokenStats {
+	// The system prompt (and tool definitions) live in cacheRead/cacheWrite, not in `input`.
+	// `input` already excludes the cached system prompt; only `total` (which sums cache too)
+	// needs the overhead subtracted, once per LLM call.
+	const calls = Math.max(0, after.assistantMessages - before.assistantMessages);
+	const overhead = calls * systemPromptTokens;
 	const input = Math.max(0, after.tokens.input - before.tokens.input);
 	const output = Math.max(0, after.tokens.output - before.tokens.output);
-	const total = Math.max(0, after.tokens.total - before.tokens.total);
+	const total = Math.max(0, after.tokens.total - before.tokens.total - overhead);
 	return { input, output, total };
 }
 
