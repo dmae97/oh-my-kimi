@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.3.0] - 2026-04-25
+
 ### Added
 
 - Added Markdown pipe-table `row_N` chunk selectors for row-level table edits.

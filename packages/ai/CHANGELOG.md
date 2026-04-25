@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.3.0] - 2026-04-25
+
 ### Added
 
 - Added support for Claude Opus 4.7 (`claude-opus-4-7`) model ([#726](https://github.com/can1357/oh-my-pi/issues/726))

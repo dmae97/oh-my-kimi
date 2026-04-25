@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-utils",
-	"version": "14.2.1",
+	"version": "14.3.0",
 	"description": "Shared utilities for pi packages",
 	"homepage": "https://github.com/can1357/oh-my-pi",
 	"author": "Can Boluk",

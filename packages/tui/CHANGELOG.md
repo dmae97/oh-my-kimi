@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.3.0] - 2026-04-25
+
 ### Fixed
 
 - Fixed shared Markdown Mermaid fenced-block rendering to resolve diagrams from fenced source text instead of external prerender state

@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.3.0] - 2026-04-25
 ### Added
 
 - Added `text` to `MinimizerResult` so consumers can replace rewritten output with the minimized replacement text
