@@ -977,13 +977,14 @@ export function findContextLine(
 }
 
 export const replaceEditEntrySchema = Type.Object({
-	path: Type.String({ description: "File path (relative or absolute)" }),
+	path: Type.Optional(Type.String({ description: "File path (omit to use top-level `path`)" })),
 	old_text: Type.String({ description: "Text to find (fuzzy whitespace matching enabled)" }),
 	new_text: Type.String({ description: "Replacement text" }),
 	all: Type.Optional(Type.Boolean({ description: "Replace all occurrences (default: unique match required)" })),
 });
 
 export const replaceEditSchema = Type.Object({
+	path: Type.Optional(Type.String({ description: "Default file path used when an edit omits its own `path`" })),
 	edits: Type.Array(replaceEditEntrySchema, { description: "Replacements", minItems: 1 }),
 });
 
@@ -1022,6 +1023,9 @@ export async function executeReplaceSingle(
 		beginDeferredDiagnosticsForPath,
 	} = options;
 	const { path, old_text, new_text, all } = params;
+	if (typeof path !== "string" || path.length === 0) {
+		throw new Error("replace edit: missing `path`. Provide `path` on the edit or supply a top-level `path`.");
+	}
 
 	enforcePlanModeWrite(session, path);
 

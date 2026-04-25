@@ -27,7 +27,9 @@ export interface FileDisplayModeSession {
 export function resolveFileDisplayMode(session: FileDisplayModeSession): FileDisplayMode {
 	const { settings } = session;
 	const hasEditTool = session.hasEditTool ?? true;
-	const hashLines = hasEditTool && resolveEditMode(session) === "hashline" && settings.get("readHashLines") !== false;
+	const editMode = resolveEditMode(session);
+	const usesHashLineAnchors = editMode === "hashline" || editMode === "atom";
+	const hashLines = hasEditTool && usesHashLineAnchors && settings.get("readHashLines") !== false;
 	const chunked = hasEditTool && resolveEditMode(session) === "chunk";
 	return {
 		hashLines,

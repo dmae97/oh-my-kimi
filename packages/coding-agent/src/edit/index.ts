@@ -9,6 +9,7 @@ import {
 	writethroughNoop,
 } from "../lsp";
 import applyPatchDescription from "../prompts/tools/apply-patch.md" with { type: "text" };
+import atomDescription from "../prompts/tools/atom.md" with { type: "text" };
 import chunkEditDescription from "../prompts/tools/chunk-edit.md" with { type: "text" };
 import hashlineDescription from "../prompts/tools/hashline.md" with { type: "text" };
 import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
@@ -24,6 +25,13 @@ import {
 	isApplyPatchParams,
 } from "./modes/apply-patch";
 import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
+import {
+	type AtomParams,
+	type AtomToolEdit,
+	atomEditParamsSchema,
+	executeAtomSingle,
+	isAtomParams,
+} from "./modes/atom";
 import {
 	type ChunkParams,
 	type ChunkToolEdit,
@@ -62,6 +70,7 @@ export * from "./apply-patch";
 export * from "./diff";
 export * from "./line-hash";
 export * from "./modes/apply-patch";
+export * from "./modes/atom";
 export * from "./modes/chunk";
 export * from "./modes/hashline";
 export * from "./modes/patch";
@@ -74,12 +83,20 @@ type TInput =
 	| typeof replaceEditSchema
 	| typeof patchEditSchema
 	| typeof hashlineEditParamsSchema
+	| typeof atomEditParamsSchema
 	| typeof chunkEditParamsSchema
 	| typeof vimSchema
 	| typeof applyPatchSchema;
 
 type VimParams = Static<typeof vimSchema>;
-type EditParams = ReplaceParams | PatchParams | HashlineParams | ChunkParams | VimParams | ApplyPatchParams;
+type EditParams =
+	| ReplaceParams
+	| PatchParams
+	| HashlineParams
+	| AtomParams
+	| ChunkParams
+	| VimParams
+	| ApplyPatchParams;
 type EditToolResultDetails = EditToolDetails | VimToolDetails;
 
 type EditModeDefinition = {
@@ -146,6 +163,25 @@ function createEditWritethrough(session: ToolSession): WritethroughCallback {
 	const enableDiagnostics = enableLsp && session.settings.get("lsp.diagnosticsOnEdit");
 	const enableFormat = enableLsp && session.settings.get("lsp.formatOnWrite");
 	return enableLsp ? createLspWritethrough(session.cwd, { enableFormat, enableDiagnostics }) : writethroughNoop;
+}
+
+/**
+ * Resolve per-entry `path` against an optional top-level `path` default.
+ * If both are absent on an entry, throws a descriptive error.
+ */
+function resolveEntryPaths<T extends { path?: string }>(
+	edits: readonly T[],
+	topLevelPath: string | undefined,
+): (T & { path: string })[] {
+	return edits.map((edit, i) => {
+		const path = (edit && typeof edit.path === "string" && edit.path) || topLevelPath;
+		if (!path) {
+			throw new Error(
+				`Edit ${i}: missing \`path\`. Provide \`path\` on this edit or supply a top-level \`path\` for the request.`,
+			);
+		}
+		return { ...edit, path };
+	});
 }
 
 /** Group items by a key, preserving insertion order. */
@@ -333,8 +369,9 @@ export class EditTool implements AgentTool<TInput> {
 					batchRequest: LspBatchRequest | undefined,
 					onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
 				) => {
-					const { edits } = params as ChunkParams;
-					const byFile = groupBy(edits, (e: ChunkToolEdit) => parseChunkEditPath(e.path).filePath);
+					const { edits, path: topPath } = params as ChunkParams & { path?: string };
+					const resolved = resolveEntryPaths(edits as ChunkToolEdit[], topPath);
+					const byFile = groupBy(resolved, (e: ChunkToolEdit) => parseChunkEditPath(e.path).filePath);
 					const entries = [...byFile.entries()].map(([filePath, fileEdits]) => ({
 						path: filePath,
 						run: (br: LspBatchRequest | undefined) =>
@@ -363,8 +400,9 @@ export class EditTool implements AgentTool<TInput> {
 					batchRequest: LspBatchRequest | undefined,
 					onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
 				) => {
-					const { edits } = params as PatchParams;
-					const entries = edits.map((entry: PatchEditEntry) => ({
+					const { edits, path: topPath } = params as PatchParams & { path?: string };
+					const resolved = resolveEntryPaths(edits as PatchEditEntry[], topPath);
+					const entries = resolved.map(entry => ({
 						path: entry.path,
 						run: (br: LspBatchRequest | undefined) =>
 							executePatchSingle({
@@ -394,8 +432,8 @@ export class EditTool implements AgentTool<TInput> {
 					onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
 				) => {
 					const entries = expandApplyPatchToEntries(params as ApplyPatchParams);
-					const perFile = entries.map((entry: PatchEditEntry) => ({
-						path: entry.path,
+					const perFile = entries.map(entry => ({
+						path: entry.path!,
 						run: (br: LspBatchRequest | undefined) =>
 							executePatchSingle({
 								session: tool.session,
@@ -423,12 +461,45 @@ export class EditTool implements AgentTool<TInput> {
 					batchRequest: LspBatchRequest | undefined,
 					onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
 				) => {
-					const { edits } = params as HashlineParams;
-					const byFile = groupBy(edits, (e: HashlineToolEdit) => e.path);
+					const { edits, path: topPath } = params as HashlineParams & { path?: string };
+					const resolved = resolveEntryPaths(edits as HashlineToolEdit[], topPath);
+					const byFile = groupBy(resolved, e => e.path);
 					const entries = [...byFile.entries()].map(([path, fileEdits]) => ({
 						path,
 						run: (br: LspBatchRequest | undefined) =>
 							executeHashlineSingle({
+								session: tool.session,
+								path,
+								edits: fileEdits,
+								signal,
+								batchRequest: br,
+								writethrough: tool.#writethrough,
+								beginDeferredDiagnosticsForPath: p => tool.#beginDeferredDiagnosticsForPath(p),
+							}),
+					}));
+					return executePerFile(entries, batchRequest, onUpdate);
+				},
+			},
+			atom: {
+				description: () => prompt.render(atomDescription),
+				parameters: atomEditParamsSchema,
+				invalidParamsMessage:
+					"Edit tool requires `{ edits: [...] }` (an array of entries). Each entry needs exactly one op key (set, before, after, del, sub, ins, append, prepend) plus optional `path`.",
+				validate: isAtomParams,
+				execute: (
+					tool: EditTool,
+					params: EditParams,
+					signal: AbortSignal | undefined,
+					batchRequest: LspBatchRequest | undefined,
+					onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
+				) => {
+					const { edits, path: topPath } = params as AtomParams & { path?: string };
+					const resolved = resolveEntryPaths(edits as AtomToolEdit[], topPath);
+					const byFile = groupBy(resolved, e => e.path);
+					const entries = [...byFile.entries()].map(([path, fileEdits]) => ({
+						path,
+						run: (br: LspBatchRequest | undefined) =>
+							executeAtomSingle({
 								session: tool.session,
 								path,
 								edits: fileEdits,
@@ -453,8 +524,9 @@ export class EditTool implements AgentTool<TInput> {
 					batchRequest: LspBatchRequest | undefined,
 					onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
 				) => {
-					const { edits } = params as ReplaceParams;
-					const entries = edits.map((entry: ReplaceEditEntry) => ({
+					const { edits, path: topPath } = params as ReplaceParams & { path?: string };
+					const resolved = resolveEntryPaths(edits as ReplaceEditEntry[], topPath);
+					const entries = resolved.map(entry => ({
 						path: entry.path,
 						run: (br: LspBatchRequest | undefined) =>
 							executeReplaceSingle({

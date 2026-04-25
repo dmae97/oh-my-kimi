@@ -489,10 +489,9 @@ function renderSingleFileResult(
 	const rename = args?.rename || firstEdit?.rename || firstEdit?.move || details?.move;
 	const { language } = formatEditDescription(rawPath, uiTheme, { rename });
 
-	const metadataLine =
-		op !== "delete"
-			? `\n${formatMetadataLine(countLines(args?.newText ?? args?.oldText ?? args?.diff ?? args?.patch ?? ""), language, uiTheme)}`
-			: "";
+	const editTextSource = args?.newText ?? args?.oldText ?? args?.diff ?? args?.patch;
+	const metadataLineCount = editTextSource ? countLines(editTextSource) : null;
+	const metadataLine = op !== "delete" ? `\n${formatMetadataLine(metadataLineCount, language, uiTheme)}` : "";
 
 	const errorText = isError
 		? (details && "errorText" in details && details.errorText) ||

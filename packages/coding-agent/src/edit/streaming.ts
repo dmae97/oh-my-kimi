@@ -190,7 +190,6 @@ const patchStrategy: EditStreamingStrategy<PatchArgs> = {
 
 interface HashlineArgs {
 	edits?: HashlineToolEdit[];
-	move?: string;
 	__partialJson?: string;
 }
 
@@ -207,7 +206,7 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 			return !!e && typeof e === "object" && (e as { path?: string }).path === path;
 		});
 		ctx.signal.throwIfAborted();
-		const result = await computeHashlineDiff({ path, edits: fileEdits, move: args.move }, ctx.cwd);
+		const result = await computeHashlineDiff({ path, edits: fileEdits }, ctx.cwd);
 		ctx.signal.throwIfAborted();
 		return [toPerFilePreview(path, result)];
 	},
@@ -328,6 +327,26 @@ const vimStrategy: EditStreamingStrategy<unknown> = {
 	},
 };
 
+interface AtomArgs {
+	path?: string;
+	edits?: unknown[];
+}
+
+const atomStrategy: EditStreamingStrategy<AtomArgs> = {
+	extractCompleteEdits(args, partialJson) {
+		if (!args.edits) return args;
+		return { ...args, edits: dropIncompleteLastEdit(args.edits, partialJson, "edits") };
+	},
+	async computeDiffPreview() {
+		// Atom edits are line-anchored and validated against live file hashes; a
+		// streaming preview without that validation could mislead. Skip for now.
+		return null;
+	},
+	renderStreamingFallback() {
+		return "";
+	},
+};
+
 export const EDIT_MODE_STRATEGIES: Record<EditMode, EditStreamingStrategy<unknown>> = {
 	replace: replaceStrategy as EditStreamingStrategy<unknown>,
 	patch: patchStrategy as EditStreamingStrategy<unknown>,
@@ -335,6 +354,7 @@ export const EDIT_MODE_STRATEGIES: Record<EditMode, EditStreamingStrategy<unknow
 	chunk: chunkStrategy as EditStreamingStrategy<unknown>,
 	apply_patch: applyPatchStrategy as EditStreamingStrategy<unknown>,
 	vim: vimStrategy,
+	atom: atomStrategy as EditStreamingStrategy<unknown>,
 };
 
 export { resolveEditMode };
