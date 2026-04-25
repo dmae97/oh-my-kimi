@@ -239,7 +239,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		// artifact, and splice an `artifact://<id>` footer into the visible text so
 		// the agent can retrieve the raw bytes losslessly.
 		const minimized = winner.result.minimized;
-		if (minimized) {
+		if (minimized && minimized.text !== minimized.originalText) {
 			sink.replace(minimized.text);
 			if (options?.onMinimizedSave) {
 				const artifactId = await options.onMinimizedSave(minimized.originalText, {
@@ -248,9 +248,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 					outputBytes: minimized.outputBytes,
 				});
 				if (artifactId) {
-					sink.push(
-						`\n… full output: artifact://${artifactId} (${minimized.inputBytes} → ${minimized.outputBytes} bytes)\n`,
-					);
+					sink.push(`\n[full result: artifact://${artifactId}]\n`);
 				}
 			}
 		}
