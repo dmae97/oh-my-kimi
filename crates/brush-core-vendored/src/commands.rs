@@ -4,7 +4,7 @@ use std::{borrow::Cow, ffi::OsStr, fmt::Display, io, io::Write, sync::Arc};
 
 use brush_parser::ast;
 use itertools::Itertools;
-use sys::commands::{CommandExt, CommandFdInjectionExt, CommandFgControlExt};
+use sys::commands::{CommandExt, CommandFdInjectionExt, CommandFgControlExt, CommandSessionExt};
 
 use crate::{
 	ErrorKind, ExecutionControlFlow, ExecutionParameters, ExecutionResult, ExternalCommandInfo,
@@ -418,9 +418,17 @@ pub(crate) fn execute_external_command(
 
 	// If we're to lead our own process group and stdin is a terminal,
 	// then we need to arrange for the new process to move itself
-	// to the foreground.
-	if new_pg && child_stdin_is_terminal {
-		cmd.take_foreground();
+	// to the foreground. Otherwise (e.g. when brush is embedded as a library
+	// and stdin is not a terminal), detach the child from the controlling
+	// terminal entirely so it cannot steal foreground from the parent and
+	// so any `/dev/tty` access in the child fails fast instead of suspending
+	// it via SIGTTIN/SIGTTOU.
+	if new_pg {
+		if child_stdin_is_terminal {
+			cmd.take_foreground();
+		} else {
+			cmd.detach_session();
+		}
 	}
 
 	// When tracing is enabled, report.
