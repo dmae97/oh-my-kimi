@@ -3406,7 +3406,7 @@ function helper(): void {
 		// Stale leaf CRC but fresh ancestor CRC. Under the new lenient rule,
 		// at least one provided CRC matches the ancestor chain, so the edit
 		// proceeds.
-		let sel = format!("cls_Wor#{parent}.fn_run#ZZZZ", parent = class_chunk.checksum);
+		let sel = format!("cls_Wor#{parent}.fn_run#eaea", parent = class_chunk.checksum);
 		let result = apply_edits(&state, &EditParams {
 			operations:       vec![EditOperation {
 				op:      ChunkEditOp::Put,
@@ -3435,7 +3435,7 @@ function helper(): void {
 		let err = apply_edits(&state, &EditParams {
 			operations:       vec![EditOperation {
 				op:      ChunkEditOp::Put,
-				sel:     Some("cls_Wor#XXXX.fn_run#ZZZZ".to_owned()),
+				sel:     Some("cls_Wor#eaea.fn_run#nene".to_owned()),
 				crc:     None,
 				region:  None,
 				content: Some("run(): void {\n\tconsole.log(\"should-not-apply\");\n}".to_owned()),
@@ -4301,7 +4301,7 @@ function helper(): void {
 		let result = apply_edits(&state, &EditParams {
 			operations:       vec![EditOperation {
 				op:      ChunkEditOp::Put,
-				sel:     Some("cls_Foo.fn_bar#ZZZZ".to_owned()),
+				sel:     Some("cls_Foo.fn_bar#eaea".to_owned()),
 				crc:     None,
 				region:  None,
 				content: Some("baz() { return 2; }".to_owned()),

@@ -1,11 +1,10 @@
 use std::{cmp::Ordering, collections::BTreeSet};
 
 use crate::chunk::{
+	HASHLINE_BIGRAMS,
 	state::ChunkStateInner,
 	types::{ChunkNode, ChunkRegion, ChunkTree},
 };
-
-const CHECKSUM_ALPHABET: &str = "ZPMQVRWSNKTXJBYH";
 
 pub struct ResolvedChunk<'a> {
 	pub chunk: &'a ChunkNode,
@@ -187,7 +186,7 @@ pub fn sanitize_crc(crc: Option<&str>) -> Option<String> {
 	if matches!(value, "" | "null" | "undefined") {
 		None
 	} else {
-		Some(value.to_ascii_uppercase())
+		Some(value.to_ascii_lowercase())
 	}
 }
 
@@ -485,7 +484,7 @@ fn resolve_chunk_selector_impl<'a>(
 		}
 		return Err(format!(
 			"Line target \"{cleaned}\" does not fall inside any chunk. Use chunk paths like \
-			 fn_foo#ABCD instead, or run read(sel=\"?\") to list available chunks."
+			 fn_foo#thth instead, or run read(sel=\"?\") to list available chunks."
 		));
 	}
 
@@ -975,10 +974,11 @@ fn parse_line_number(selector: &str) -> Option<u32> {
 }
 
 fn is_checksum_token(value: &str) -> bool {
-	value.len() == 4
-		&& value
-			.chars()
-			.all(|ch| CHECKSUM_ALPHABET.contains(ch.to_ascii_uppercase()))
+	if value.len() != 4 || !value.is_ascii() {
+		return false;
+	}
+	let lower = value.to_ascii_lowercase();
+	HASHLINE_BIGRAMS.contains(&&lower[..2]) && HASHLINE_BIGRAMS.contains(&&lower[2..4])
 }
 
 fn find_chunk_by_path<'a>(tree: &'a ChunkTree, path: &str) -> Option<&'a ChunkNode> {
@@ -1059,13 +1059,13 @@ mod tests {
 			root_children:     vec!["fn_han".to_owned()],
 			chunks:            vec![
 				chunk("", "ROOT", None, vec!["fn_han"]),
-				chunk("fn_han", "HVJB", Some(""), vec!["fn_han.try"]),
-				chunk("fn_han.try", "RQPB", Some("fn_han"), vec!["fn_han.try.if_2"]),
-				chunk("fn_han.try.if_2", "PKPV", Some("fn_han.try"), vec!["fn_han.try.if_2.loop"]),
-				chunk("fn_han.try.if_2.loop", "MZRS", Some("fn_han.try.if_2"), vec![
+				chunk("fn_han", "seas", Some(""), vec!["fn_han.try"]),
+				chunk("fn_han.try", "tete", Some("fn_han"), vec!["fn_han.try.if_2"]),
+				chunk("fn_han.try.if_2", "roro", Some("fn_han.try"), vec!["fn_han.try.if_2.loop"]),
+				chunk("fn_han.try.if_2.loop", "coco", Some("fn_han.try.if_2"), vec![
 					"fn_han.try.if_2.loop.if_2",
 				]),
-				chunk("fn_han.try.if_2.loop.if_2", "QKJY", Some("fn_han.try.if_2.loop"), vec![]),
+				chunk("fn_han.try.if_2.loop.if_2", "nene", Some("fn_han.try.if_2.loop"), vec![]),
 			],
 		})
 	}
@@ -1074,13 +1074,13 @@ mod tests {
 	fn resolves_requested_chunk_selector_forms() {
 		let state = state_for_resolution();
 		let selectors = [
-			"fn_han.try.if_2#PKPV",
+			"fn_han.try.if_2#roro",
 			"fn_han.try.if_2",
 			"handleTerraform.try.if_2",
 			"if_2",
-			"if_2#PKPV",
-			"#PKPV",
-			"PKPV",
+			"if_2#roro",
+			"#roro",
+			"roro",
 		];
 
 		for selector in selectors {
@@ -1104,14 +1104,14 @@ mod tests {
 			root_children:     vec!["fn_run".to_owned()],
 			chunks:            vec![
 				chunk("", "ROOT", None, vec!["fn_run"]),
-				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_eff_1", "fn_run.var_eff_2"]),
-				chunk("fn_run.var_eff_1", "AAAA", Some("fn_run"), vec![]),
-				chunk("fn_run.var_eff_2", "BBBB", Some("fn_run"), vec![]),
+				chunk("fn_run", "riri", Some(""), vec!["fn_run.var_eff_1", "fn_run.var_eff_2"]),
+				chunk("fn_run.var_eff_1", "anan", Some("fn_run"), vec![]),
+				chunk("fn_run.var_eff_2", "enen", Some("fn_run"), vec![]),
 			],
 		});
 		let mut warnings = Vec::new();
 		let resolved =
-			resolve_chunk_with_crc(&state, Some("fn_run.var_eff"), Some("BBBB"), &mut warnings)
+			resolve_chunk_with_crc(&state, Some("fn_run.var_eff"), Some("enen"), &mut warnings)
 				.expect("stale selector should resolve to same-parent checksum match");
 		assert_eq!(resolved.chunk.path, "fn_run.var_eff_2");
 		assert!(
@@ -1134,14 +1134,14 @@ mod tests {
 			root_children:     vec!["fn_run".to_owned()],
 			chunks:            vec![
 				chunk("", "ROOT", None, vec!["fn_run"]),
-				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_oth", "fn_run.var_eff_1"]),
-				chunk("fn_run.var_oth", "BBBB", Some("fn_run"), vec![]),
-				chunk("fn_run.var_eff_1", "BBBB", Some("fn_run"), vec![]),
+				chunk("fn_run", "riri", Some(""), vec!["fn_run.var_oth", "fn_run.var_eff_1"]),
+				chunk("fn_run.var_oth", "enen", Some("fn_run"), vec![]),
+				chunk("fn_run.var_eff_1", "enen", Some("fn_run"), vec![]),
 			],
 		});
 		let mut warnings = Vec::new();
 		let resolved =
-			resolve_chunk_with_crc(&state, Some("fn_run.var_eff"), Some("BBBB"), &mut warnings)
+			resolve_chunk_with_crc(&state, Some("fn_run.var_eff"), Some("enen"), &mut warnings)
 				.expect("best name match should disambiguate same-parent checksum siblings");
 		assert_eq!(resolved.chunk.path, "fn_run.var_eff_1");
 	}
@@ -1159,14 +1159,14 @@ mod tests {
 			root_children:     vec!["fn_run".to_owned()],
 			chunks:            vec![
 				chunk("", "ROOT", None, vec!["fn_run"]),
-				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_eff_1", "fn_run.var_eff_2"]),
-				chunk("fn_run.var_eff_1", "BBBB", Some("fn_run"), vec![]),
-				chunk("fn_run.var_eff_2", "BBBB", Some("fn_run"), vec![]),
+				chunk("fn_run", "riri", Some(""), vec!["fn_run.var_eff_1", "fn_run.var_eff_2"]),
+				chunk("fn_run.var_eff_1", "enen", Some("fn_run"), vec![]),
+				chunk("fn_run.var_eff_2", "enen", Some("fn_run"), vec![]),
 			],
 		});
 		let mut warnings = Vec::new();
 		let Err(err) =
-			resolve_chunk_with_crc(&state, Some("fn_run.var_eff"), Some("BBBB"), &mut warnings)
+			resolve_chunk_with_crc(&state, Some("fn_run.var_eff"), Some("enen"), &mut warnings)
 		else {
 			panic!("ambiguous stale selector should fail closed");
 		};
@@ -1186,15 +1186,15 @@ mod tests {
 			root_children:     vec!["cls_Ser".to_owned()],
 			chunks:            vec![
 				chunk("", "ROOT", None, vec!["cls_Ser"]),
-				chunk("cls_Ser", "CLSS", Some(""), vec!["cls_Ser.fn_han"]),
-				chunk("cls_Ser.fn_han", "ABCD", Some("cls_Ser"), vec![]),
+				chunk("cls_Ser", "lele", Some(""), vec!["cls_Ser.fn_han"]),
+				chunk("cls_Ser.fn_han", "eaea", Some("cls_Ser"), vec![]),
 			],
 		});
 		let mut warnings = Vec::new();
 		let resolved = resolve_chunk_with_crc(
 			&state,
 			Some("cls_Server.fn_handleRequest"),
-			Some("ABCD"),
+			Some("eaea"),
 			&mut warnings,
 		)
 		.expect("full untruncated selector should resolve to truncated chunk path");
@@ -1209,9 +1209,9 @@ mod tests {
 	#[test]
 	fn split_selector_strips_inline_per_segment_crcs() {
 		let parsed =
-			split_selector_crc_and_region(Some("fn_han#HVJB.try#RQPB.if_2"), None, None).unwrap();
+			split_selector_crc_and_region(Some("fn_han#seas.try#tete.if_2"), None, None).unwrap();
 		assert_eq!(parsed.selector.as_deref(), Some("fn_han.try.if_2"));
-		assert_eq!(parsed.all_crcs, vec!["HVJB".to_owned(), "RQPB".to_owned()]);
+		assert_eq!(parsed.all_crcs, vec!["seas".to_owned(), "tete".to_owned()]);
 		assert!(!parsed.has_trailing_crc);
 		// No trailing CRC → primary crc field stays empty so legacy strict
 		// matching doesn't fire on an ancestor CRC.
@@ -1221,10 +1221,10 @@ mod tests {
 	#[test]
 	fn split_selector_retains_trailing_crc_as_primary() {
 		let parsed =
-			split_selector_crc_and_region(Some("fn_han#HVJB.try.if_2#PKPV"), None, None).unwrap();
+			split_selector_crc_and_region(Some("fn_han#seas.try.if_2#roro"), None, None).unwrap();
 		assert_eq!(parsed.selector.as_deref(), Some("fn_han.try.if_2"));
-		assert_eq!(parsed.all_crcs, vec!["HVJB".to_owned(), "PKPV".to_owned()]);
-		assert_eq!(parsed.crc.as_deref(), Some("PKPV"));
+		assert_eq!(parsed.all_crcs, vec!["seas".to_owned(), "roro".to_owned()]);
+		assert_eq!(parsed.crc.as_deref(), Some("roro"));
 		assert!(parsed.has_trailing_crc);
 	}
 
@@ -1232,9 +1232,9 @@ mod tests {
 	fn verify_any_ancestor_crc_match_accepts_single_fresh() {
 		let state = state_for_resolution();
 		let chunk = state.chunk("fn_han.try.if_2").unwrap();
-		let stale_and_fresh = vec!["WRONG".to_owned(), "HVJB".to_owned()];
+		let stale_and_fresh = vec!["WRONG".to_owned(), "seas".to_owned()];
 		let matched = verify_any_ancestor_crc_match(&state, chunk, &stale_and_fresh).unwrap();
-		assert_eq!(matched.as_deref(), Some("HVJB"));
+		assert_eq!(matched.as_deref(), Some("seas"));
 	}
 
 	#[test]
@@ -1244,7 +1244,7 @@ mod tests {
 		let all_stale = vec!["WRONG".to_owned(), "BADB".to_owned()];
 		let err = verify_any_ancestor_crc_match(&state, chunk, &all_stale).unwrap_err();
 		assert!(err.contains("None of the provided checksums"), "{err}");
-		assert!(err.contains("HVJB") || err.contains("RQPB") || err.contains("PKPV"), "{err}");
+		assert!(err.contains("seas") || err.contains("tete") || err.contains("roro"), "{err}");
 	}
 
 	#[test]

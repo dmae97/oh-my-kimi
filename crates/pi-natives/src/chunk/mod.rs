@@ -875,24 +875,28 @@ fn line_end_offset(source: &str, line_starts: &[usize], line_index: usize) -> us
 	}
 }
 
-/// Same 16-character nibble alphabet as
-/// `packages/coding-agent/src/patch/hashline.ts` (no digits).
-const HASHLINE_NIBBLE_ALPHABET: &[u8; 16] = b"ZPMQVRWSNKTXJBYH";
+/// 40 common English BPE bigrams (lowercase). Mirrors
+/// `packages/coding-agent/src/edit/line-hash.ts::HASHLINE_BIGRAMS`.
+/// Order is stable forever — changing it invalidates every existing
+/// `LINE#ID` reference in saved transcripts.
+pub(crate) const HASHLINE_BIGRAMS: [&str; 40] = [
+	"th", "he", "in", "er", "an", "re", "on", "at", "en", "nd", "ti", "es", "or", "te", "of", "ed",
+	"is", "it", "al", "ar", "st", "to", "nt", "ng", "se", "ha", "as", "ou", "io", "le", "ve", "co",
+	"me", "de", "hi", "ri", "ro", "ic", "ne", "ea",
+];
 
-/// Low 16 bits of XXH64, encoded as four letters (two bytes × two nibbles
-/// each).
+/// Encode a chunk checksum as 2 BPE bigrams (4 lowercase chars).
+///
+/// Maps `xxh64(bytes) % (40*40)` into `BIGRAMS[i0] + BIGRAMS[i1]` where
+/// `i0 = h % 40` and `i1 = (h / 40) % 40`. Total namespace: 1,600 codes.
 pub(crate) fn chunk_checksum(bytes: &[u8]) -> String {
 	let h = xxh64(bytes, 0);
-	let w = (h & 0xffff) as u16;
-	let b0 = (w >> 8) as u8;
-	let b1 = (w & 0xff) as u8;
+	let n = HASHLINE_BIGRAMS.len() as u64;
+	let i0 = (h % n) as usize;
+	let i1 = ((h / n) % n) as usize;
 	let mut out = String::with_capacity(4);
-	for byte in [b0, b1] {
-		let hi = usize::from(byte >> 4);
-		let lo = usize::from(byte & 0x0f);
-		out.push(char::from(HASHLINE_NIBBLE_ALPHABET[hi]));
-		out.push(char::from(HASHLINE_NIBBLE_ALPHABET[lo]));
-	}
+	out.push_str(HASHLINE_BIGRAMS[i0]);
+	out.push_str(HASHLINE_BIGRAMS[i1]);
 	out
 }
 

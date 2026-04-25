@@ -1,4 +1,4 @@
-use crate::chunk::types::ChunkTree;
+use crate::chunk::{HASHLINE_BIGRAMS, types::ChunkTree};
 
 const DEFAULT_SPACE_INDENT_STEP: usize = 4;
 const MAX_REASONABLE_INDENT_STEP: usize = 8;
@@ -386,8 +386,6 @@ fn strip_new_line_prefixes(lines: &[String]) -> Vec<String> {
 }
 
 fn hashline_prefix_len(line: &str) -> Option<usize> {
-	const HASHLINE_NIBBLES: &str = "ZPMQVRWSNKTXJBYH";
-
 	let mut offset = line.len() - line.trim_start_matches([' ', '\t']).len();
 	let mut remainder = &line[offset..];
 
@@ -433,14 +431,16 @@ fn hashline_prefix_len(line: &str) -> Option<usize> {
 		return None;
 	}
 
-	let mut chars = remainder.chars();
-	let first = chars.next()?;
-	let second = chars.next()?;
-	if !HASHLINE_NIBBLES.contains(first) || !HASHLINE_NIBBLES.contains(second) {
+	// Match exactly one BPE bigram (2 ASCII chars) from HASHLINE_BIGRAMS.
+	if remainder.len() < 2 {
 		return None;
 	}
-	offset += first.len_utf8() + second.len_utf8();
-	remainder = &remainder[first.len_utf8() + second.len_utf8()..];
+	let bigram = &remainder[..2];
+	if !bigram.is_ascii() || !HASHLINE_BIGRAMS.contains(&bigram) {
+		return None;
+	}
+	offset += 2;
+	remainder = &remainder[2..];
 
 	remainder.strip_prefix(':').map(|_| offset + 1)
 }
