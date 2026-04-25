@@ -275,13 +275,18 @@ async function getCachedGpu(): Promise<string | undefined> {
 }
 async function getEnvironmentInfo(): Promise<Array<{ label: string; value: string }>> {
 	const gpu = await getCachedGpu();
-	const cpus = os.cpus();
+	let cpuModel: string | undefined;
+	try {
+		cpuModel = os.cpus()[0]?.model;
+	} catch {
+		cpuModel = undefined;
+	}
 	const entries: Array<{ label: string; value: string | undefined }> = [
 		{ label: "OS", value: `${os.platform()} ${os.release()}` },
 		{ label: "Distro", value: os.type() },
 		{ label: "Kernel", value: os.version() },
 		{ label: "Arch", value: os.arch() },
-		{ label: "CPU", value: `${cpus[0]?.model}` },
+		{ label: "CPU", value: cpuModel },
 		{ label: "GPU", value: gpu },
 		{ label: "Terminal", value: getTerminalName() },
 	];

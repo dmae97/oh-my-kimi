@@ -10,6 +10,7 @@ import {
 	GhIssueViewTool,
 	GhPrCheckoutTool,
 	GhPrDiffTool,
+	GhPrPushTool,
 	GhPrViewTool,
 	GhRepoViewTool,
 	GhRunWatchTool,
@@ -397,6 +398,33 @@ describe("GitHub CLI tools", () => {
 			);
 			expect(runGit(fixture.repoRoot, ["worktree", "list", "--porcelain"])).toContain(`worktree ${worktreePath}`);
 			expect(runGit(worktreePath, ["branch", "--show-current"])).toBe("pr-123");
+		} finally {
+			await fs.rm(fixture.baseDir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects PR pushes from branches without checkout metadata", async () => {
+		const fixture = await createPrFixture();
+		try {
+			const originMainBefore = runGit(fixture.baseDir, [
+				"--git-dir",
+				fixture.originBare,
+				"rev-parse",
+				"refs/heads/main",
+			]);
+			runGit(fixture.repoRoot, ["checkout", "-b", "manual-branch", "origin/main"]);
+			await Bun.write(path.join(fixture.repoRoot, "README.md"), "base\nmanual\n");
+			runGit(fixture.repoRoot, ["add", "README.md"]);
+			runGit(fixture.repoRoot, ["commit", "-m", "manual branch commit"]);
+
+			const tool = new GhPrPushTool(createSession(fixture.repoRoot));
+
+			await expect(tool.execute("pr-push", {})).rejects.toThrow(
+				"branch manual-branch has no PR push metadata; check it out via gh_pr_checkout first",
+			);
+			expect(runGit(fixture.baseDir, ["--git-dir", fixture.originBare, "rev-parse", "refs/heads/main"])).toBe(
+				originMainBefore,
+			);
 		} finally {
 			await fs.rm(fixture.baseDir, { recursive: true, force: true });
 		}

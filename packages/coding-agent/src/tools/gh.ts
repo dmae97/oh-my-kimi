@@ -611,14 +611,6 @@ function toLocalBranchRef(value: string): string {
 	return `refs/heads/${value}`;
 }
 
-function stripHeadsRef(value: string | undefined): string | undefined {
-	if (!value) {
-		return undefined;
-	}
-
-	return value.startsWith("refs/heads/") ? value.slice("refs/heads/".length) : value;
-}
-
 async function requireGitRepoRoot(cwd: string, signal?: AbortSignal): Promise<string> {
 	const repoRoot = await git.repo.root(cwd, signal);
 	if (!repoRoot) {
@@ -763,10 +755,13 @@ async function resolvePrBranchPushTarget(
 	maintainerCanModify?: boolean;
 	isCrossRepository: boolean;
 }> {
+	const headRef = await git.config.getBranch(repoRoot, localBranch, "ompPrHeadRef", signal);
+	if (!headRef) {
+		throw new ToolError(`branch ${localBranch} has no PR push metadata; check it out via gh_pr_checkout first`);
+	}
+
 	const pushRemote = await git.config.getBranch(repoRoot, localBranch, "pushRemote", signal);
 	const remote = await git.config.getBranch(repoRoot, localBranch, "remote", signal);
-	const mergeRef = await git.config.getBranch(repoRoot, localBranch, "merge", signal);
-	const headRef = await git.config.getBranch(repoRoot, localBranch, "ompPrHeadRef", signal);
 	const prUrl = await git.config.getBranch(repoRoot, localBranch, "ompPrUrl", signal);
 	const maintainerCanModifyValue = await git.config.getBranch(
 		repoRoot,
@@ -781,14 +776,9 @@ async function resolvePrBranchPushTarget(
 		throw new ToolError(`branch ${localBranch} has no configured push remote`);
 	}
 
-	const remoteBranch = headRef ?? stripHeadsRef(mergeRef);
-	if (!remoteBranch) {
-		throw new ToolError(`branch ${localBranch} has no tracked PR head ref`);
-	}
-
 	return {
 		remoteName,
-		remoteBranch,
+		remoteBranch: headRef,
 		remoteUrl: await git.remote.url(repoRoot, remoteName, signal),
 		prUrl,
 		maintainerCanModify:

@@ -1348,7 +1348,8 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "tools",
 			label: "GitHub CLI",
-			description: "Enable read-only gh_* tools for GitHub repository, issue, pull request, diff, and search access",
+			description:
+				"Enable gh_* tools for GitHub repository, issue, pull request, diff, search, checkout, and PR push workflows",
 		},
 	},
 
