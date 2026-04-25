@@ -53,6 +53,54 @@ describe("ModelRegistry runtime provider registration", () => {
 	const streamSimple: NonNullable<ProviderConfigInput["streamSimple"]> = () =>
 		({}) as unknown as AssistantMessageEventStream;
 
+	function getProviderModels(registry: ModelRegistry, providerName: string) {
+		return registry.getAll().filter(model => model.provider === providerName);
+	}
+
+	function expectProviderHeader(
+		registry: ModelRegistry,
+		providerName: string,
+		headerName: string,
+		expectedValue: string | undefined,
+	): void {
+		for (const model of getProviderModels(registry, providerName)) {
+			expect(model.headers?.[headerName]).toBe(expectedValue);
+		}
+	}
+
+	async function expectProviderHeaderAcrossRefresh(
+		registry: ModelRegistry,
+		providerName: string,
+		headerName: string,
+		expectedValue: string | undefined,
+	): Promise<void> {
+		expectProviderHeader(registry, providerName, headerName, expectedValue);
+		await registry.refresh("offline");
+		expectProviderHeader(registry, providerName, headerName, expectedValue);
+		await registry.refreshProvider(providerName, "offline");
+		expectProviderHeader(registry, providerName, headerName, expectedValue);
+	}
+
+	async function expectModelTransportAcrossRefresh(
+		registry: ModelRegistry,
+		providerName: string,
+		modelId: string,
+		baseUrl: string,
+		headerName: string,
+		headerValue: string | undefined,
+	): Promise<void> {
+		const model = registry.find(providerName, modelId);
+		expect(model).toBeDefined();
+		expect(model?.baseUrl).toBe(baseUrl);
+		expect(model?.headers?.[headerName]).toBe(headerValue);
+		await registry.refresh("offline");
+		expect(registry.find(providerName, modelId)?.baseUrl).toBe(baseUrl);
+		expect(registry.find(providerName, modelId)?.headers?.[headerName]).toBe(headerValue);
+		await registry.refreshProvider(providerName, "offline");
+		expect(registry.find(providerName, modelId)?.baseUrl).toBe(baseUrl);
+		expect(registry.find(providerName, modelId)?.headers?.[headerName]).toBe(headerValue);
+	}
+
 	test("loads built-in GitLab Duo models and OAuth provider metadata", () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 		const model = registry.find("gitlab-duo", "claude-sonnet-4-5-20250929");
@@ -102,6 +150,19 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(model?.headers?.Authorization).toBe("Bearer RUNTIME_KEY");
 		expect(model?.headers?.["X-Provider"]).toBe("provider-header");
 		expect(model?.headers?.["X-Model"]).toBe("model-header");
+	});
+
+	test("registerProvider applies headers-only overrides to existing provider models across refresh", async () => {
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const providerName = "anthropic";
+		const runtimeHeader = "X-Runtime-Provider-Header";
+
+		expect(getProviderModels(registry, providerName).length).toBeGreaterThan(1);
+		registry.registerProvider(providerName, { headers: { [runtimeHeader]: "runtime-header" } }, "ext://runtime");
+		await expectProviderHeaderAcrossRefresh(registry, providerName, runtimeHeader, "runtime-header");
+
+		registry.clearSourceRegistrations("ext://runtime");
+		expectProviderHeader(registry, providerName, runtimeHeader, undefined);
 	});
 
 	test("registerProvider preserves explicit thinking on runtime models", () => {
@@ -173,6 +234,75 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(model?.api).toBe("openai-completions");
 	});
 
+
+	test("headers-only runtime override preserves existing baseUrl across refresh", async () => {
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const modelId = "runtime-headers-only-baseurl-survivor";
+		const overrideBaseUrl = "https://runtime-baseurl.example.com/v1";
+		const runtimeHeader = "X-Runtime-Headers-Only";
+
+		registry.registerProvider(
+			"runtime-provider",
+			{
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey: "RUNTIME_KEY",
+				api: "openai-completions",
+				models: [{ ...baseModel, id: modelId }],
+			},
+			"ext://runtime",
+		);
+		registry.registerProvider("runtime-provider", { baseUrl: overrideBaseUrl }, "ext://runtime");
+		registry.registerProvider(
+			"runtime-provider",
+			{ headers: { [runtimeHeader]: "runtime-header" } },
+			"ext://runtime",
+		);
+
+		await expectModelTransportAcrossRefresh(
+			registry,
+			"runtime-provider",
+			modelId,
+			overrideBaseUrl,
+			runtimeHeader,
+			"runtime-header",
+		);
+		registry.clearSourceRegistrations("ext://runtime");
+		expect(registry.find("runtime-provider", modelId)).toBeUndefined();
+	});
+
+	test("runtime headers override modelOverrides headers across refresh cycles", async () => {
+		const initialRegistry = new ModelRegistry(authStorage, modelsJsonPath);
+		const targetModel = initialRegistry.getAll().find(model => model.provider === "anthropic");
+		if (!targetModel) throw new Error("Expected bundled anthropic model");
+
+		const modelId = targetModel.id;
+		const sharedHeader = "X-Shared-Provider-Model-Header";
+		const configHeaderValue = "config-header";
+		const runtimeHeaderValue = "runtime-header";
+
+		fs.writeFileSync(
+			modelsJsonPath,
+			JSON.stringify({
+				providers: {
+					anthropic: { modelOverrides: { [modelId]: { headers: { [sharedHeader]: configHeaderValue } } } },
+				},
+			}),
+		);
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		expect(registry.find("anthropic", modelId)?.headers?.[sharedHeader]).toBe(configHeaderValue);
+
+		registry.registerProvider(
+			"anthropic",
+			{ headers: { [sharedHeader]: runtimeHeaderValue } },
+			"ext://runtime",
+		);
+		await expectProviderHeaderAcrossRefresh(registry, "anthropic", sharedHeader, runtimeHeaderValue);
+
+		registry.clearSourceRegistrations("ext://runtime");
+		expect(registry.find("anthropic", modelId)?.headers?.[sharedHeader]).toBe(configHeaderValue);
+	});
+
 	test("extension-registered API keys survive refresh cycle for auth resolution", async () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 
@@ -218,8 +348,10 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(getCustomApi("custom-runtime-api")).toBeDefined();
 	});
 
-	test("re-registering a provider replaces previous runtime overlays", async () => {
+	test("re-registering a provider replaces overlays and keeps transport overrides stable", async () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const runtimeHeader = "X-ReRegister-Provider-Header";
+		const overrideBaseUrl = "https://runtime-override.example.com/v1";
 		const config1: ProviderConfigInput = {
 			baseUrl: "https://runtime.example.com/v1",
 			apiKey: "RUNTIME_KEY",
@@ -234,16 +366,87 @@ describe("ModelRegistry runtime provider registration", () => {
 		};
 
 		registry.registerProvider("runtime-provider", config1, "ext://runtime");
-		expect(registry.find("runtime-provider", "model-v1")).toBeDefined();
-
+		registry.registerProvider(
+			"runtime-provider",
+			{ baseUrl: overrideBaseUrl, headers: { [runtimeHeader]: "runtime-header" } },
+			"ext://runtime",
+		);
 		registry.registerProvider("runtime-provider", config2, "ext://runtime");
-		expect(registry.find("runtime-provider", "model-v2")).toBeDefined();
-		expect(registry.find("runtime-provider", "model-v1")).toBeUndefined();
 
-		// After refresh, only v2 should exist
-		await registry.refresh("offline");
-		expect(registry.find("runtime-provider", "model-v2")).toBeDefined();
 		expect(registry.find("runtime-provider", "model-v1")).toBeUndefined();
+		await expectModelTransportAcrossRefresh(
+			registry,
+			"runtime-provider",
+			"model-v2",
+			overrideBaseUrl,
+			runtimeHeader,
+			"runtime-header",
+		);
+	});
+
+	test("provider source handoff does not retain previous source transport overrides", async () => {
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const providerName = "shared-runtime-provider";
+		const leakedHeader = "X-Old-Source-Header";
+		const sourceBBaseUrl = "https://source-b.example.com/v1";
+
+		registry.registerProvider(
+			providerName,
+			{
+				baseUrl: "https://source-a.example.com/v1",
+				apiKey: "KEY_A",
+				api: "openai-completions",
+				models: [{ ...baseModel, id: "model-a" }],
+			},
+			"ext://a",
+		);
+		registry.registerProvider(
+			providerName,
+			{ baseUrl: "https://override-a.example.com/v1", headers: { [leakedHeader]: "from-source-a" } },
+			"ext://a",
+		);
+		registry.registerProvider(
+			providerName,
+			{
+				baseUrl: sourceBBaseUrl,
+				apiKey: "KEY_B",
+				api: "openai-completions",
+				models: [{ ...baseModel, id: "model-b" }],
+			},
+			"ext://b",
+		);
+
+		expect(registry.find(providerName, "model-a")).toBeUndefined();
+		await expectModelTransportAcrossRefresh(
+			registry,
+			providerName,
+			"model-b",
+			sourceBBaseUrl,
+			leakedHeader,
+			undefined,
+		);
+	});
+
+	test("transport-only source handoff clears previous source headers immediately", async () => {
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const providerName = "anthropic";
+		const sourceAHeader = "X-Source-A-Header";
+		const sourceBHeader = "X-Source-B-Header";
+
+		registry.registerProvider(
+			providerName,
+			{ headers: { [sourceAHeader]: "from-source-a" } },
+			"ext://a",
+		);
+		expectProviderHeader(registry, providerName, sourceAHeader, "from-source-a");
+
+		registry.registerProvider(
+			providerName,
+			{ headers: { [sourceBHeader]: "from-source-b" } },
+			"ext://b",
+		);
+		await expectProviderHeaderAcrossRefresh(registry, providerName, sourceAHeader, undefined);
+		expectProviderHeader(registry, providerName, sourceBHeader, "from-source-b");
 	});
 
 	test("multiple extension providers survive refresh independently", async () => {

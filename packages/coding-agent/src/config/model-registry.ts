@@ -300,6 +300,7 @@ interface ProviderValidationModel {
 
 interface ProviderValidationConfig {
 	baseUrl?: string;
+	headers?: Record<string, string>;
 	apiKey?: string;
 	api?: Api;
 	auth?: ProviderAuthMode;
@@ -321,9 +322,9 @@ function validateProviderConfiguration(
 	if (models.length === 0) {
 		if (mode === "models-config") {
 			const hasModelOverrides = config.modelOverrides && Object.keys(config.modelOverrides).length > 0;
-			if (!config.baseUrl && !config.compat && !hasModelOverrides && !config.discovery) {
+			if (!config.baseUrl && !config.headers && !config.compat && !hasModelOverrides && !config.discovery) {
 				throw new Error(
-					`Provider ${providerName}: must specify "baseUrl", "compat", "modelOverrides", "discovery", or "models"`,
+					`Provider ${providerName}: must specify "baseUrl", "headers", "compat", "modelOverrides", "discovery", or "models"`,
 				);
 			}
 		}
@@ -378,6 +379,7 @@ export const ModelsConfigFile = new ConfigFile<ModelsConfig>("models", ModelsCon
 				providerName,
 				{
 					baseUrl: providerConfig.baseUrl,
+					headers: providerConfig.headers,
 					apiKey: providerConfig.apiKey,
 					api: providerConfig.api as Api | undefined,
 					auth: (providerConfig.auth ?? "apiKey") as ProviderAuthMode,
@@ -770,6 +772,7 @@ export class ModelRegistry {
 	// models registered by extensions survive the model selector's offline reload.
 	#runtimeModelOverlays: CustomModelOverlay[] = [];
 	#runtimeProviderApiKeys: Map<string, string> = new Map();
+	#runtimeProviderOverrides: Map<string, ProviderOverride> = new Map();
 	#runtimeProvidersBySource: Map<string, Set<string>> = new Map();
 	#runtimeProviderSourceByName: Map<string, string> = new Map();
 
@@ -883,8 +886,8 @@ export class ModelRegistry {
 		const withConfigModels = this.#mergeCustomModels(resolvedDefaults, this.#customModelOverlays);
 		// Merge runtime extension models so they survive refresh() cycles
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
-
-		this.#models = this.#applyModelOverrides(combined, this.#modelOverrides);
+		const withModelOverrides = this.#applyModelOverrides(combined, this.#modelOverrides);
+		this.#models = this.#applyRuntimeProviderOverrides(withModelOverrides);
 		this.#rebuildCanonicalIndex();
 	}
 
@@ -1175,7 +1178,8 @@ export class ModelRegistry {
 		const withConfigModels = this.#mergeCustomModels(resolved, this.#customModelOverlays);
 		// Merge runtime extension models so they survive online discovery completion
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
-		this.#models = this.#applyModelOverrides(combined, this.#modelOverrides);
+		const withModelOverrides = this.#applyModelOverrides(combined, this.#modelOverrides);
+		this.#models = this.#applyRuntimeProviderOverrides(withModelOverrides);
 		this.#rebuildCanonicalIndex();
 	}
 
@@ -1657,6 +1661,32 @@ export class ModelRegistry {
 		});
 	}
 
+	#mergeProviderOverride(baseOverride: ProviderOverride | undefined, override: ProviderOverride): ProviderOverride {
+		return {
+			baseUrl: override.baseUrl ?? baseOverride?.baseUrl,
+			apiKey: override.apiKey ?? baseOverride?.apiKey,
+			headers: override.headers ? { ...(baseOverride?.headers ?? {}), ...override.headers } : baseOverride?.headers,
+			compat: override.compat ? mergeCompat(baseOverride?.compat, override.compat) : baseOverride?.compat,
+		};
+	}
+	#applyProviderTransportOverride<T extends { baseUrl?: string; headers?: Record<string, string> }>(
+		entry: T,
+		override: Pick<ProviderOverride, "baseUrl" | "headers">,
+	): T {
+		return {
+			...entry,
+			baseUrl: override.baseUrl ?? entry.baseUrl,
+			headers: override.headers ? { ...entry.headers, ...override.headers } : entry.headers,
+		};
+	}
+	#applyRuntimeProviderOverrides(models: Model<Api>[]): Model<Api>[] {
+		if (this.#runtimeProviderOverrides.size === 0) return models;
+		return models.map(model => {
+			const override = this.#runtimeProviderOverrides.get(model.provider);
+			if (!override) return model;
+			return this.#applyProviderTransportOverride(model, override);
+		});
+	}
 	#applyModelOverrides(models: Model<Api>[], overrides: Map<string, Map<string, ModelOverride>>): Model<Api>[] {
 		if (overrides.size === 0) return models;
 		return models.map(model => {
@@ -1916,6 +1946,12 @@ export class ModelRegistry {
 		return this.authStorage.hasOAuth(model.provider);
 	}
 
+	#clearRuntimeProviderState(providerName: string): void {
+		this.#runtimeProviderApiKeys.delete(providerName);
+		this.#runtimeProviderOverrides.delete(providerName);
+		this.#runtimeModelOverlays = this.#runtimeModelOverlays.filter(overlay => overlay.provider !== providerName);
+	}
+
 	/**
 	 * Remove custom API/OAuth registrations for a specific extension source.
 	 */
@@ -1932,8 +1968,7 @@ export class ModelRegistry {
 				continue;
 			}
 			this.#runtimeProviderSourceByName.delete(providerName);
-			this.#runtimeProviderApiKeys.delete(providerName);
-			this.#runtimeModelOverlays = this.#runtimeModelOverlays.filter(overlay => overlay.provider !== providerName);
+			this.#clearRuntimeProviderState(providerName);
 		}
 		this.#reloadStaticModels();
 		this.#rebuildCanonicalIndex();
@@ -1970,6 +2005,7 @@ export class ModelRegistry {
 			providerName,
 			{
 				baseUrl: config.baseUrl,
+				headers: config.headers,
 				apiKey: config.apiKey,
 				api: config.api,
 				oauthConfigured: Boolean(config.oauth),
@@ -1993,6 +2029,7 @@ export class ModelRegistry {
 			});
 		}
 
+		let sourceHandoff = false;
 		if (sourceId) {
 			this.#registeredProviderSources.add(sourceId);
 			const previousSourceId = this.#runtimeProviderSourceByName.get(providerName);
@@ -2002,12 +2039,18 @@ export class ModelRegistry {
 				if (previousProviders && previousProviders.size === 0) {
 					this.#runtimeProvidersBySource.delete(previousSourceId);
 				}
+				this.#clearRuntimeProviderState(providerName);
+				sourceHandoff = true;
 			}
 			const sourceProviders = this.#runtimeProvidersBySource.get(sourceId) ?? new Set<string>();
 			sourceProviders.add(providerName);
 			this.#runtimeProvidersBySource.set(sourceId, sourceProviders);
 			this.#runtimeProviderSourceByName.set(providerName, sourceId);
 		}
+		if (sourceHandoff) {
+			this.#reloadStaticModels();
+		}
+
 		if (config.apiKey) {
 			this.#customProviderApiKeys.set(providerName, config.apiKey);
 			// Persist runtime API keys so they survive #reloadStaticModels() cycles
@@ -2042,29 +2085,38 @@ export class ModelRegistry {
 			for (const overlay of newOverlays) {
 				nextModels.push(finalizeCustomModel(overlay, { useDefaults: true }));
 			}
+			const runtimeTransportOverride = this.#runtimeProviderOverrides.get(providerName);
+			const withRuntimeTransportOverride = runtimeTransportOverride
+				? nextModels.map(model => {
+						if (model.provider !== providerName) return model;
+						return this.#applyProviderTransportOverride(model, runtimeTransportOverride);
+					})
+				: nextModels;
 
 			if (config.oauth?.modifyModels) {
 				const credential = this.authStorage.getOAuthCredential(providerName);
 				if (credential) {
-					this.#models = config.oauth.modifyModels(nextModels, credential);
+					this.#models = config.oauth.modifyModels(withRuntimeTransportOverride, credential);
 					this.#rebuildCanonicalIndex();
 					return;
 				}
 			}
 
-			this.#models = nextModels;
+			this.#models = withRuntimeTransportOverride;
 			this.#rebuildCanonicalIndex();
 			return;
 		}
 
-		if (config.baseUrl) {
+		if (config.baseUrl || config.headers) {
+			const transportOverride = { baseUrl: config.baseUrl, headers: config.headers };
+			const nextRuntimeOverride = this.#mergeProviderOverride(
+				this.#runtimeProviderOverrides.get(providerName),
+				transportOverride,
+			);
+			this.#runtimeProviderOverrides.set(providerName, nextRuntimeOverride);
 			this.#models = this.#models.map(m => {
 				if (m.provider !== providerName) return m;
-				return {
-					...m,
-					baseUrl: config.baseUrl ?? m.baseUrl,
-					headers: config.headers ? { ...m.headers, ...config.headers } : m.headers,
-				};
+				return this.#applyProviderTransportOverride(m, transportOverride);
 			});
 			this.#rebuildCanonicalIndex();
 		}
