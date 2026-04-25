@@ -12,7 +12,7 @@ import { subprocessToolRegistry } from "../task/subprocess-tool-registry";
 import type { ToolSession } from ".";
 import { jtdToJsonSchema, normalizeSchema } from "./jtd-to-json-schema";
 
-export interface SubmitResultDetails {
+export interface YieldDetails {
 	data: unknown;
 	status: "success" | "aborted";
 	error?: string;
@@ -40,8 +40,8 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): string {
 		.join("; ");
 }
 
-export class SubmitResultTool implements AgentTool<TSchema, SubmitResultDetails> {
-	readonly name = "submit_result";
+export class YieldTool implements AgentTool<TSchema, YieldDetails> {
+	readonly name = "yield";
 	readonly label = "Submit Result";
 	readonly description =
 		"Finish the task with structured JSON output. Call exactly once at the end of the task.\n\n" +
@@ -143,9 +143,9 @@ export class SubmitResultTool implements AgentTool<TSchema, SubmitResultDetails>
 		_toolCallId: string,
 		params: Static<TSchema>,
 		_signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<SubmitResultDetails>,
+		_onUpdate?: AgentToolUpdateCallback<YieldDetails>,
 		_context?: AgentToolContext,
-	): Promise<AgentToolResult<SubmitResultDetails>> {
+	): Promise<AgentToolResult<YieldDetails>> {
 		const raw = params as Record<string, unknown>;
 		const rawResult = raw.result;
 		if (!rawResult || typeof rawResult !== "object" || Array.isArray(rawResult)) {
@@ -169,7 +169,7 @@ export class SubmitResultTool implements AgentTool<TSchema, SubmitResultDetails>
 		let schemaValidationOverridden = false;
 		if (status === "success") {
 			if (data === undefined || data === null) {
-				throw new Error("data is required when submit_result indicates success");
+				throw new Error("data is required when yield indicates success");
 			}
 			if (this.#validate && !this.#validate(data)) {
 				this.#schemaValidationFailures++;
@@ -194,7 +194,7 @@ export class SubmitResultTool implements AgentTool<TSchema, SubmitResultDetails>
 }
 
 // Register subprocess tool handler for extraction + termination.
-subprocessToolRegistry.register<SubmitResultDetails>("submit_result", {
+subprocessToolRegistry.register<YieldDetails>("yield", {
 	extractData: event => {
 		const details = event.result?.details;
 		if (!details || typeof details !== "object") return undefined;

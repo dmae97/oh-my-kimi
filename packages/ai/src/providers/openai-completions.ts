@@ -617,7 +617,7 @@ async function createClient(
 	// Azure OpenAI requires /deployments/{id}/chat/completions?api-version=YYYY-MM-DD.
 	// The generic openai-completions path adds neither, producing silent 404s.
 	let azureDefaultQuery: Record<string, string> | undefined;
-	if (baseUrl && baseUrl.includes(".openai.azure.com")) {
+	if (baseUrl?.includes(".openai.azure.com")) {
 		const apiVersion = $env.AZURE_OPENAI_API_VERSION || "2024-10-21";
 		if (!baseUrl.includes("/deployments/")) {
 			baseUrl = `${baseUrl}/deployments/${model.id}`;

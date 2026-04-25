@@ -177,12 +177,12 @@ describe("createTools", () => {
 		expect(names).toEqual(["report_finding", "exit_plan_mode"]);
 	});
 
-	it("includes submit_result tool when required", async () => {
-		const session = createTestSession({ requireSubmitResultTool: true });
+	it("includes yield tool when required", async () => {
+		const session = createTestSession({ requireYieldTool: true });
 		const tools = await createTools(session);
 		const names = tools.map(t => t.name);
 
-		expect(names).toContain("submit_result");
+		expect(names).toContain("yield");
 	});
 
 	it("excludes ask tool when hasUI is false", async () => {
@@ -250,7 +250,7 @@ describe("createTools", () => {
 			"report_finding",
 			"report_tool_issue",
 			"resolve",
-			"submit_result",
+			"yield",
 		]);
 	});
 });

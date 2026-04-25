@@ -1,9 +1,9 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
+- Renamed the subagent completion contract from `submit_result` to `yield`, so subagent sessions must now finish with the `yield` tool and the `requireYieldTool` option; `submit_result`/`requireSubmitResultTool` and old completion calls are no longer recognized
 - Changed the hashline and chunk anchor ID format from the prior hex-like tokens to two-letter BPE bigrams (for example `#th`), which invalidates previously captured `LINE#ID`/chunk selectors and requires re-reading to refresh anchors
 
 ### Added
@@ -13,6 +13,7 @@
 
 ### Changed
 
+- Updated subagent reminders, prompts, and rendered subagent output to reference `yield` completion and report missing/final results from `yield` tool data
 - Updated the `edit` workflow to treat `atom` mode like hashline mode for read output, so hashline anchors are shown when `atom` is selected
 - Adjusted patch/replace/chunk tooling to accept optional entry paths and to apply a top-level path default
 - Updated hashline/chunk selector parsing to the new stable bigram token set used for checksums

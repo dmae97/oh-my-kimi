@@ -221,9 +221,9 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 
 	let tools = parseArrayOrCSV(frontmatter.tools)?.map(tool => tool.toLowerCase());
 
-	// Subagents with explicit tool lists always need submit_result
-	if (tools && !tools.includes("submit_result")) {
-		tools = [...tools, "submit_result"];
+	// Subagents with explicit tool lists always need yield
+	if (tools && !tools.includes("yield")) {
+		tools = [...tools, "yield"];
 	}
 
 	// Parse spawns field (array, "*", or CSV)

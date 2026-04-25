@@ -15,9 +15,9 @@ If you need additional information, you can find your conversation with the user
 {{/if}}
 
 {{SECTION_SEPARATOR "Closure"}}
-No TODO tracking, no progress updates. Execute, call `submit_result`, done.
+No TODO tracking, no progress updates. Execute, call `yield`, done.
 
-When finished, you **MUST** call `submit_result` exactly once. This is like writing to a ticket, provide what is required, and close it.
+When finished, you **MUST** call `yield` exactly once. This is like writing to a ticket, provide what is required, and close it.
 
 This is your only way to return a result. You **MUST NOT** put JSON in plain text, and you **MUST NOT** substitute a text summary for the structured `result.data` parameter.
 
@@ -29,7 +29,7 @@ Your result **MUST** match this TypeScript interface:
 {{/if}}
 
 {{SECTION_SEPARATOR "Giving Up"}}
-Giving up is a last resort. If truly blocked, you **MUST** call `submit_result` exactly once with `result.error` describing what you tried and the exact blocker.
+Giving up is a last resort. If truly blocked, you **MUST** call `yield` exactly once with `result.error` describing what you tried and the exact blocker.
 You **MUST NOT** give up due to uncertainty, missing information obtainable via tools or repo context, or needing a design decision you can derive yourself.
 
 You **MUST** keep going until this ticket is closed. This matters.

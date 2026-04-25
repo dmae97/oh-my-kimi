@@ -53,9 +53,9 @@ import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { loadSshTool } from "./ssh";
-import { SubmitResultTool } from "./submit-result";
 import { type TodoPhase, TodoWriteTool } from "./todo-write";
 import { WriteTool } from "./write";
+import { YieldTool } from "./yield";
 
 // Exa MCP tools (22 tools)
 
@@ -91,10 +91,10 @@ export * from "./resolve";
 export * from "./review";
 export * from "./search-tool-bm25";
 export * from "./ssh";
-export * from "./submit-result";
 export * from "./todo-write";
 export * from "./vim";
 export * from "./write";
+export * from "./yield";
 
 /** Tool type (AgentTool from pi-ai) */
 export type Tool = AgentTool<any, any, any>;
@@ -131,8 +131,8 @@ export interface ToolSession {
 	eventBus?: EventBus;
 	/** Output schema for structured completion (subagents) */
 	outputSchema?: unknown;
-	/** Whether to include the submit_result tool by default */
-	requireSubmitResultTool?: boolean;
+	/** Whether to include the yield tool by default */
+	requireYieldTool?: boolean;
 	/** Task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
 	/** Get session file */
@@ -245,7 +245,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 };
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
-	submit_result: s => new SubmitResultTool(s),
+	yield: s => new YieldTool(s),
 	report_finding: () => reportFindingTool,
 	report_tool_issue: s => createReportToolIssueTool(s),
 	exit_plan_mode: s => new ExitPlanModeTool(s),
@@ -288,7 +288,7 @@ function getPythonModeFromEnv(): PythonToolMode | null {
  * Create tools from BUILTIN_TOOLS registry.
  */
 export async function createTools(session: ToolSession, toolNames?: string[]): Promise<Tool[]> {
-	const includeSubmitResult = session.requireSubmitResultTool === true;
+	const includeYield = session.requireYieldTool === true;
 	const enableLsp = session.enableLsp ?? true;
 	const requestedTools =
 		toolNames && toolNames.length > 0 ? [...new Set(toolNames.map(name => name.toLowerCase()))] : undefined;
@@ -390,7 +390,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "bash") return allowBash;
 		if (name === "python") return allowPython;
 		if (name === "debug") return session.settings.get("debug.enabled");
-		if (name === "todo_write") return !includeSubmitResult && session.settings.get("todo.enabled");
+		if (name === "todo_write") return !includeYield && session.settings.get("todo.enabled");
 		if (name === "find") return session.settings.get("find.enabled");
 		if (name === "grep") return session.settings.get("grep.enabled");
 		if (name.startsWith("gh_")) return session.settings.get("github.enabled");
@@ -411,8 +411,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		}
 		return true;
 	};
-	if (includeSubmitResult && requestedTools && !requestedTools.includes("submit_result")) {
-		requestedTools.push("submit_result");
+	if (includeYield && requestedTools && !requestedTools.includes("yield")) {
+		requestedTools.push("yield");
 	}
 
 	const filteredRequestedTools = requestedTools?.filter(name => name in allTools && isToolAllowed(name));
@@ -421,7 +421,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			? filteredRequestedTools.filter(name => name !== "resolve").map(name => [name, allTools[name]] as const)
 			: [
 					...Object.entries(BUILTIN_TOOLS).filter(([name]) => isToolAllowed(name)),
-					...(includeSubmitResult ? ([["submit_result", HIDDEN_TOOLS.submit_result]] as const) : []),
+					...(includeYield ? ([["yield", HIDDEN_TOOLS.yield]] as const) : []),
 					...([["exit_plan_mode", HIDDEN_TOOLS.exit_plan_mode]] as const),
 				];
 

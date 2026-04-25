@@ -19,4 +19,4 @@ Return concise JSON object with:
 Consider how file's changes relate to above files.
 {{/if}}
 
-Call submit_result tool with JSON payload.
+Call yield tool with JSON payload.

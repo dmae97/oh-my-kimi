@@ -64,6 +64,6 @@ describe("parseAgentFields", () => {
 			tools: ["Read", "Grep"],
 		});
 
-		expect(fields?.tools).toEqual(["read", "grep", "submit_result"]);
+		expect(fields?.tools).toEqual(["read", "grep", "yield"]);
 	});
 });

@@ -209,8 +209,8 @@ export interface CreateAgentSessionOptions {
 
 	/** Output schema for structured completion (subagents) */
 	outputSchema?: unknown;
-	/** Whether to include the submit_result tool by default */
-	requireSubmitResultTool?: boolean;
+	/** Whether to include the yield tool by default */
+	requireYieldTool?: boolean;
 	/** Task recursion depth (for subagent sessions). Default: 0 */
 	taskDepth?: number;
 	/** Parent task ID prefix for nested artifact naming (e.g., "6-Extensions") */
@@ -916,7 +916,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			skills,
 			eventBus,
 			outputSchema: options.outputSchema,
-			requireSubmitResultTool: options.requireSubmitResultTool,
+			requireYieldTool: options.requireYieldTool,
 			taskDepth: options.taskDepth ?? 0,
 			getSessionFile: () => sessionManager.getSessionFile() ?? null,
 			getPythonKernelOwnerId: () => pythonKernelOwnerId,

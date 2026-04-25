@@ -1178,8 +1178,8 @@
         return html;
       }
 
-      function renderSubmitResult(name, args, result, ctx) {
-        let html = toolHead('submit_result');
+      function renderYield(name, args, result, ctx) {
+        let html = toolHead('yield');
         if (args.data !== undefined) {
           html += '<div class="tool-output"><pre>' + escapeHtml(JSON.stringify(args.data, null, 2)) + '</pre></div>';
         }
@@ -1287,7 +1287,7 @@
         gh_search_issues: renderGh,
         gh_search_prs: renderGh,
         render_mermaid: renderMermaid,
-        submit_result: renderSubmitResult,
+        yield: renderYield,
         report_finding: renderReportFinding,
         report_tool_issue: renderReportToolIssue,
         calc: renderCalc,

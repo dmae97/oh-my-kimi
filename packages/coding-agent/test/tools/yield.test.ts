@@ -4,7 +4,7 @@ import { enforceStrictSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { SubmitResultTool } from "@oh-my-pi/pi-coding-agent/tools/submit-result";
+import { YieldTool } from "@oh-my-pi/pi-coding-agent/tools/yield";
 
 function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -34,9 +34,9 @@ function getSuccessDataSchema(parameters: Record<string, unknown>): Record<strin
 	throw new Error("Missing success variant with data schema");
 }
 
-describe("SubmitResultTool", () => {
+describe("YieldTool", () => {
 	it("exposes top-level object parameters with required result union", () => {
-		const tool = new SubmitResultTool(createSession());
+		const tool = new YieldTool(createSession());
 		const schema = tool.parameters as {
 			type?: string;
 			properties?: Record<string, unknown>;
@@ -48,19 +48,19 @@ describe("SubmitResultTool", () => {
 	});
 
 	it("accepts success payload with data", async () => {
-		const tool = new SubmitResultTool(createSession());
+		const tool = new YieldTool(createSession());
 		const result = await tool.execute("call-1", { result: { data: { ok: true } } } as never);
 		expect(result.details).toEqual({ data: { ok: true }, status: "success", error: undefined });
 	});
 
 	it("accepts aborted payload with error only", async () => {
-		const tool = new SubmitResultTool(createSession());
+		const tool = new YieldTool(createSession());
 		const result = await tool.execute("call-2", { result: { error: "blocked" } } as never);
 		expect(result.details).toEqual({ data: undefined, status: "aborted", error: "blocked" });
 	});
 
 	it("accepts arbitrary data when outputSchema is null", async () => {
-		const tool = new SubmitResultTool(createSession({ outputSchema: null }));
+		const tool = new YieldTool(createSession({ outputSchema: null }));
 		const result = await tool.execute("call-null", { result: { data: { nested: { x: 1 }, ok: true } } } as never);
 		expect(result.details).toEqual({
 			data: { nested: { x: 1 }, ok: true },
@@ -70,7 +70,7 @@ describe("SubmitResultTool", () => {
 	});
 
 	it("treats outputSchema true as unconstrained and accepts primitive and array data", async () => {
-		const tool = new SubmitResultTool(createSession({ outputSchema: true }));
+		const tool = new YieldTool(createSession({ outputSchema: true }));
 		const dataSchema = getSuccessDataSchema(tool.parameters as unknown as Record<string, unknown>);
 
 		expect(dataSchema.type).toBeUndefined();
@@ -85,7 +85,7 @@ describe("SubmitResultTool", () => {
 		});
 	});
 	it("repairs strict schema generation for required-only object output schemas", () => {
-		const tool = new SubmitResultTool(
+		const tool = new YieldTool(
 			createSession({
 				outputSchema: {
 					type: "object",
@@ -103,7 +103,7 @@ describe("SubmitResultTool", () => {
 	});
 
 	it("normalizes object/null type arrays into strict-compatible data variants", () => {
-		const tool = new SubmitResultTool(
+		const tool = new YieldTool(
 			createSession({
 				outputSchema: {
 					type: ["object", "null"],
@@ -129,7 +129,7 @@ describe("SubmitResultTool", () => {
 	});
 
 	it("converts mixed JTD and JSON Schema output definitions into provider-valid schemas", async () => {
-		const tool = new SubmitResultTool(
+		const tool = new YieldTool(
 			createSession({
 				outputSchema: {
 					type: "object",
@@ -189,7 +189,7 @@ describe("SubmitResultTool", () => {
 				},
 			],
 		};
-		const tool = new SubmitResultTool(createSession({ outputSchema }));
+		const tool = new YieldTool(createSession({ outputSchema }));
 		const parametersRecord = tool.parameters as unknown as Record<string, unknown>;
 		// $defs should NOT be in parameters — refs are inlined
 		expect(parametersRecord.$defs).toBeUndefined();
@@ -232,7 +232,7 @@ describe("SubmitResultTool", () => {
 		]);
 	});
 	it("falls back to unconstrained object data when output schema is invalid", async () => {
-		const tool = new SubmitResultTool(
+		const tool = new YieldTool(
 			createSession({
 				outputSchema: {
 					type: "object",
@@ -263,7 +263,7 @@ describe("SubmitResultTool", () => {
 		const circularSchema: Record<string, unknown> = { type: "object" };
 		circularSchema.self = circularSchema;
 
-		const tool = new SubmitResultTool(createSession({ outputSchema: circularSchema }));
+		const tool = new YieldTool(createSession({ outputSchema: circularSchema }));
 		const dataSchema = getSuccessDataSchema(tool.parameters as unknown as Record<string, unknown>);
 
 		expect(tool.strict).toBe(false);
@@ -299,7 +299,7 @@ describe("SubmitResultTool", () => {
 			return root;
 		};
 
-		const tool = new SubmitResultTool(createSession({ outputSchema: buildDeepSchema(20_000) }));
+		const tool = new YieldTool(createSession({ outputSchema: buildDeepSchema(20_000) }));
 		const dataSchema = getSuccessDataSchema(tool.parameters as unknown as Record<string, unknown>);
 
 		expect(tool.strict).toBe(false);
@@ -311,7 +311,7 @@ describe("SubmitResultTool", () => {
 
 	it("handles non-object output schemas without blocking successful result submission", async () => {
 		for (const outputSchema of [[], 123, false]) {
-			const tool = new SubmitResultTool(createSession({ outputSchema }));
+			const tool = new YieldTool(createSession({ outputSchema }));
 			const result = await tool.execute("call-non-object-schema", {
 				result: { data: { value: outputSchema } },
 			} as never);
@@ -333,7 +333,7 @@ describe("SubmitResultTool", () => {
 			},
 			required: ["token"],
 		};
-		const tool = new SubmitResultTool(createSession({ outputSchema }));
+		const tool = new YieldTool(createSession({ outputSchema }));
 		const dataSchema = getSuccessDataSchema(tool.parameters as unknown as Record<string, unknown>);
 		const tokenSchema = toRecord(toRecord(dataSchema.properties).token);
 
@@ -357,7 +357,7 @@ describe("SubmitResultTool", () => {
 			},
 			required: ["token"],
 		};
-		const tool = new SubmitResultTool(createSession({ outputSchema }));
+		const tool = new YieldTool(createSession({ outputSchema }));
 
 		await expect(tool.execute("call-short-1", { result: { data: { token: "ab" } } } as never)).rejects.toThrow(
 			"Output does not match schema",
@@ -384,7 +384,7 @@ describe("SubmitResultTool", () => {
 			},
 			required: ["token"],
 		};
-		const tool = new SubmitResultTool(createSession({ outputSchema }));
+		const tool = new YieldTool(createSession({ outputSchema }));
 
 		const firstResult = await tool.execute("call-valid-1", { result: { data: { token: "abcd" } } } as never);
 		expect(firstResult.content).toEqual([{ type: "text", text: "Result submitted." }]);
@@ -408,7 +408,7 @@ describe("SubmitResultTool", () => {
 			},
 			required: ["token"],
 		};
-		const tool = new SubmitResultTool(createSession({ outputSchema }));
+		const tool = new YieldTool(createSession({ outputSchema }));
 
 		await expect(tool.execute("call-struct-1", { result: { data: { token: "ab" } } } as never)).rejects.toThrow(
 			"Output does not match schema",
@@ -422,13 +422,13 @@ describe("SubmitResultTool", () => {
 		);
 	});
 	it("rejects submissions without a result object", async () => {
-		const tool = new SubmitResultTool(createSession());
+		const tool = new YieldTool(createSession());
 		await expect(tool.execute("call-3", {} as never)).rejects.toThrow(
 			"result must be an object containing either data or error",
 		);
 	});
 	it("sets lenientArgValidation so agent-loop bypasses validation errors", () => {
-		const tool = new SubmitResultTool(createSession());
+		const tool = new YieldTool(createSession());
 		expect(tool.lenientArgValidation).toBe(true);
 	});
 });

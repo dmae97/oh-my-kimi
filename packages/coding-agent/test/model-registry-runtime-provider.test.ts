@@ -234,7 +234,6 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(model?.api).toBe("openai-completions");
 	});
 
-
 	test("headers-only runtime override preserves existing baseUrl across refresh", async () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 		const modelId = "runtime-headers-only-baseurl-survivor";
@@ -292,11 +291,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 		expect(registry.find("anthropic", modelId)?.headers?.[sharedHeader]).toBe(configHeaderValue);
 
-		registry.registerProvider(
-			"anthropic",
-			{ headers: { [sharedHeader]: runtimeHeaderValue } },
-			"ext://runtime",
-		);
+		registry.registerProvider("anthropic", { headers: { [sharedHeader]: runtimeHeaderValue } }, "ext://runtime");
 		await expectProviderHeaderAcrossRefresh(registry, "anthropic", sharedHeader, runtimeHeaderValue);
 
 		registry.clearSourceRegistrations("ext://runtime");
@@ -433,18 +428,10 @@ describe("ModelRegistry runtime provider registration", () => {
 		const sourceAHeader = "X-Source-A-Header";
 		const sourceBHeader = "X-Source-B-Header";
 
-		registry.registerProvider(
-			providerName,
-			{ headers: { [sourceAHeader]: "from-source-a" } },
-			"ext://a",
-		);
+		registry.registerProvider(providerName, { headers: { [sourceAHeader]: "from-source-a" } }, "ext://a");
 		expectProviderHeader(registry, providerName, sourceAHeader, "from-source-a");
 
-		registry.registerProvider(
-			providerName,
-			{ headers: { [sourceBHeader]: "from-source-b" } },
-			"ext://b",
-		);
+		registry.registerProvider(providerName, { headers: { [sourceBHeader]: "from-source-b" } }, "ext://b");
 		await expectProviderHeaderAcrossRefresh(registry, providerName, sourceAHeader, undefined);
 		expectProviderHeader(registry, providerName, sourceBHeader, "from-source-b");
 	});

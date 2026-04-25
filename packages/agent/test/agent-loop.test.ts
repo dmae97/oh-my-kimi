@@ -544,7 +544,7 @@ describe("agentLoop with AgentMessage", () => {
 			const stream = new MockAssistantStream();
 			queueMicrotask(() => {
 				const partial = createAssistantMessage(
-					[{ type: "toolCall", id: "tool-1", name: "submit_result", arguments: { data: { ok: true } } }],
+					[{ type: "toolCall", id: "tool-1", name: "yield", arguments: { data: { ok: true } } }],
 					"toolUse",
 				);
 				stream.push({ type: "start", partial });
