@@ -44,7 +44,8 @@ User sees output like Jupyter notebook; rich displays render fully:
 - You **MUST** use `run()` for shell commands; you **MUST NOT** use raw `subprocess`
 </critical>
 
-<example name="multiple small cells">
+<examples>
+# Multiple small cells
 ```python
 cells: [
     {"title": "imports", "code": "import json\nfrom pathlib import Path"},
@@ -53,4 +54,4 @@ cells: [
     {"title": "use helper", "code": "configs = [parse_config(p) for p in Path('.').glob('*.json')]"}
 ]
 ```
-</example>
+</examples>

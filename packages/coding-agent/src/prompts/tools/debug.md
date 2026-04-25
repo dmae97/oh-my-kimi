@@ -16,14 +16,13 @@ Provides debugger access through the Debug Adapter Protocol (DAP). Use this to l
 - Adapter availability depends on local binaries. Common built-ins: `gdb`, `lldb-dap`, `python -m debugpy.adapter`, `dlv dap`.
 </caution>
 
-<example name="launch and inspect hang">
+<examples>
+# Launch and inspect hang
 1. `debug(action: "launch", program: "./my_app")`
 2. `debug(action: "set_breakpoint", file: "src/main.c", line: 42)`
 3. `debug(action: "continue")`
 4. If the program appears hung: `debug(action: "pause")`
 5. Inspect state with `threads`, `stack_trace`, `scopes`, and `variables`
-</example>
-
-<example name="raw debugger command through repl">
+# Raw debugger command through repl
 `debug(action: "evaluate", expression: "info registers", context: "repl")`
-</example>
+</examples>

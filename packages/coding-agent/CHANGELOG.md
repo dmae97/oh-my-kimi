@@ -1,6 +1,25 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Changed the hashline and chunk anchor ID format from the prior hex-like tokens to two-letter BPE bigrams (for example `#th`), which invalidates previously captured `LINE#ID`/chunk selectors and requires re-reading to refresh anchors
+
+### Added
+
+- Added `atom` edit mode to `edit` with single-anchor operations (`set`, `before`, `after`, `del`, `sub`, `ins`) for hashline-anchored line edits
+- Added support for request-level `path` defaults in patch, replace, and chunk edits so shared file paths no longer need to be repeated in every entry
+
+### Changed
+
+- Updated the `edit` workflow to treat `atom` mode like hashline mode for read output, so hashline anchors are shown when `atom` is selected
+- Adjusted patch/replace/chunk tooling to accept optional entry paths and to apply a top-level path default
+- Updated hashline/chunk selector parsing to the new stable bigram token set used for checksums
+
+### Fixed
+
+- Fixed hashline parsing so lines like `# Note:` or `# TODO:` are no longer misinterpreted and stripped as hashline prefixes
+- Adjusted patch and replace validation to report a clear missing-path error when neither an entry path nor a top-level path is provided
 
 ## [14.3.0] - 2026-04-25
 

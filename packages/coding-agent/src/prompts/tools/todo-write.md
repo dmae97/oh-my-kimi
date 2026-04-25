@@ -33,32 +33,20 @@ Create a todo list when:
 4. New instructions arrive mid-task — capture before proceeding
 </conditions>
 
-<example name="initial-setup">
-{phases: [
-  {name: "Investigation", tasks: [{content: "Read source"}, {content: "Map callsites"}]},
-  {name: "Implementation", tasks: [{content: "Apply fix", details: "Update parser.ts to handle edge case in line 42"}, {content: "Run tests"}]}
-]}
-</example>
-
-<example name="complete">
-{complete: ["task-2", "task-3"]}
-</example>
-
-<example name="add-notes">
-{add_notes: [{id: "task-3", notes: "Found edge case in parser — needs null check"}]}
-</example>
-
-<example name="add-task">
-{add_tasks: [{phase: "Implementation", content: "Handle retries", details: "Cap exponential backoff in retry.ts"}]}
-</example>
-
-<example name="add-phase">
-{add_phase: {name: "Cleanup", tasks: [{content: "Remove dead code"}]}}
-</example>
-
-<example name="combined">
-{complete: ["task-2"], add_notes: [{id: "task-3", notes: "Needs extra validation"}]}
-</example>
+<examples>
+# Initial setup
+`{phases: [{name: "Investigation", tasks: [{content: "Read source"}, {content: "Map callsites"}]}, {name: "Implementation", tasks: [{content: "Apply fix", details: "Update parser.ts to handle edge case in line 42"}, {content: "Run tests"}]}]}`
+# Complete tasks
+`{complete: ["task-2", "task-3"]}`
+# Add notes
+`{add_notes: [{id: "task-3", notes: "Found edge case in parser — needs null check"}]}`
+# Add task
+`{add_tasks: [{phase: "Implementation", content: "Handle retries", details: "Cap exponential backoff in retry.ts"}]}`
+# Add phase
+`{add_phase: {name: "Cleanup", tasks: [{content: "Remove dead code"}]}}`
+# Combined
+`{complete: ["task-2"], add_notes: [{id: "task-3", notes: "Needs extra validation"}]}`
+</examples>
 
 <avoid>
 - Single-step tasks — act directly

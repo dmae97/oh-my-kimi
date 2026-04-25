@@ -22,22 +22,22 @@ Performs structural code search using AST matching via native ast-grep.
 </output>
 
 <examples>
-- Multi-pattern scoped search:
-  `{"pat":["console.log($$$)","console.error($$$)"],"lang":"typescript","path":"src/"}`
-- Named imports from a specific package (quoted string inside pattern):
-  `{"pat":["import { $$$IMPORTS } from \"react\""],"lang":"typescript","path":"src/"}`
-- Arrow functions assigned to a const (distinct AST from function declarations):
-  `{"pat":["const $NAME = ($$$ARGS) => $BODY"],"lang":"typescript","path":"src/utils/"}`
-- Method call on any object, ignoring method name with `$_`:
-  `{"pat":["logger.$_($$$ARGS)"],"lang":"typescript","path":"src/"}`
-- Contextual pattern with selector — match the identifier `foo`, not the whole call:
-  `{"pat":["foo()"],"sel":"identifier","lang":"typescript","path":"src/utils.ts"}`
-- Match a function declaration while tolerating any return type annotation (`sel` targets the inner node):
-  `{"pat":["async function processItems($$$ARGS): $_ { $$$BODY }"],"sel":"function_declaration","lang":"typescript","path":"src/worker.ts"}`
-- Match a method body fragment by wrapping in parseable context and selecting the method:
-  `{"pat":["class $_ { async execute($INPUT: $_) { $$$BEFORE; const $PARSED = $_.parse($INPUT); $$$AFTER } }"],"sel":"method_definition","lang":"typescript","path":"src/tools/todo.ts"}`
-- Loosest existence check for a symbol in one file:
-  `{"pat":["processItems"],"sel":"identifier","lang":"typescript","path":"src/worker.ts"}`
+# Multi-pattern scoped search
+`{"pat":["console.log($$$)","console.error($$$)"],"lang":"typescript","path":"src/"}`
+# Named imports from a specific package (quoted string inside pattern)
+`{"pat":["import { $$$IMPORTS } from \"react\""],"lang":"typescript","path":"src/"}`
+# Arrow functions assigned to a const (distinct AST from function declarations)
+`{"pat":["const $NAME = ($$$ARGS) => $BODY"],"lang":"typescript","path":"src/utils/"}`
+# Method call on any object, ignoring method name with `$_`
+`{"pat":["logger.$_($$$ARGS)"],"lang":"typescript","path":"src/"}`
+# Contextual pattern with selector — match the identifier `foo`, not the whole call
+`{"pat":["foo()"],"sel":"identifier","lang":"typescript","path":"src/utils.ts"}`
+# Match a function declaration while tolerating any return type annotation (sel targets the inner node)
+`{"pat":["async function processItems($$$ARGS): $_ { $$$BODY }"],"sel":"function_declaration","lang":"typescript","path":"src/worker.ts"}`
+# Match a method body fragment by wrapping in parseable context and selecting the method
+`{"pat":["class $_ { async execute($INPUT: $_) { $$$BEFORE; const $PARSED = $_.parse($INPUT); $$$AFTER } }"],"sel":"method_definition","lang":"typescript","path":"src/tools/todo.ts"}`
+# Loosest existence check for a symbol in one file
+`{"pat":["processItems"],"sel":"identifier","lang":"typescript","path":"src/worker.ts"}`
 </examples>
 
 <critical>

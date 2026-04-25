@@ -19,22 +19,22 @@ Performs structural AST-aware rewrites via native ast-grep.
 </output>
 
 <examples>
-- Rename a call site across a directory:
-  `{"ops":[{"pat":"oldApi($$$ARGS)","out":"newApi($$$ARGS)"}],"lang":"typescript","path":"src/"}`
-- Delete matching calls (empty `out` removes the node):
-  `{"ops":[{"pat":"console.log($$$ARGS)","out":""}],"lang":"typescript","path":"src/"}`
-- Rewrite import source path:
-  `{"ops":[{"pat":"import { $$$IMPORTS } from \"old-package\"","out":"import { $$$IMPORTS } from \"new-package\""}],"lang":"typescript","path":"src/"}`
-- Modernize to optional chaining (same metavariable enforces identity):
-  `{"ops":[{"pat":"$A && $A()","out":"$A?.()"}],"lang":"typescript","path":"src/"}`
-- Swap two arguments using captures:
-  `{"ops":[{"pat":"assertEqual($A, $B)","out":"assertEqual($B, $A)"}],"lang":"typescript","path":"tests/"}`
-- Rename a function declaration while tolerating any return type annotation:
-  `{"ops":[{"pat":"async function fetchData($$$ARGS): $_ { $$$BODY }","out":"async function loadData($$$ARGS): $_ { $$$BODY }"}],"sel":"function_declaration","lang":"typescript","path":"src/api.ts"}`
-- Rewrite a method body fragment by wrapping in parseable context and selecting the method:
-  `{"ops":[{"pat":"class $_ { async execute($INPUT: $_) { $$$BEFORE; const $PARSED = $_.parse($INPUT); $$$AFTER } }","out":"class $_ { async execute($INPUT: $_) { $$$BEFORE; const $PARSED = $SCHEMA.parse($INPUT); $$$AFTER } }"}],"sel":"method_definition","lang":"typescript","path":"src/tools/todo.ts"}`
-- Python — convert print calls to logging:
-  `{"ops":[{"pat":"print($$$ARGS)","out":"logger.info($$$ARGS)"}],"lang":"python","path":"src/"}`
+# Rename a call site across a directory
+`{"ops":[{"pat":"oldApi($$$ARGS)","out":"newApi($$$ARGS)"}],"lang":"typescript","path":"src/"}`
+# Delete matching calls (empty `out` removes the node)
+`{"ops":[{"pat":"console.log($$$ARGS)","out":""}],"lang":"typescript","path":"src/"}`
+# Rewrite import source path
+`{"ops":[{"pat":"import { $$$IMPORTS } from \"old-package\"","out":"import { $$$IMPORTS } from \"new-package\""}],"lang":"typescript","path":"src/"}`
+# Modernize to optional chaining (same metavariable enforces identity)
+`{"ops":[{"pat":"$A && $A()","out":"$A?.()"}],"lang":"typescript","path":"src/"}`
+# Swap two arguments using captures
+`{"ops":[{"pat":"assertEqual($A, $B)","out":"assertEqual($B, $A)"}],"lang":"typescript","path":"tests/"}`
+# Rename a function declaration while tolerating any return type annotation
+`{"ops":[{"pat":"async function fetchData($$$ARGS): $_ { $$$BODY }","out":"async function loadData($$$ARGS): $_ { $$$BODY }"}],"sel":"function_declaration","lang":"typescript","path":"src/api.ts"}`
+# Rewrite a method body fragment by wrapping in parseable context (sel targets the inner node)
+`{"ops":[{"pat":"class $_ { async execute($INPUT: $_) { $$$BEFORE; const $PARSED = $_.parse($INPUT); $$$AFTER } }","out":"class $_ { async execute($INPUT: $_) { $$$BEFORE; const $PARSED = $SCHEMA.parse($INPUT); $$$AFTER } }"}],"sel":"method_definition","lang":"typescript","path":"src/tools/todo.ts"}`
+# Python — convert print calls to logging
+`{"ops":[{"pat":"print($$$ARGS)","out":"logger.info($$$ARGS)"}],"lang":"python","path":"src/"}`
 </examples>
 
 <critical>
