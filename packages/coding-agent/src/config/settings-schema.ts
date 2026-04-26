@@ -1206,7 +1206,7 @@ export const SETTINGS_SCHEMA = {
 
 	"grep.contextBefore": {
 		type: "number",
-		default: 0,
+		default: 1,
 		ui: {
 			tab: "tools",
 			label: "Grep Context Before",
@@ -1217,7 +1217,7 @@ export const SETTINGS_SCHEMA = {
 
 	"grep.contextAfter": {
 		type: "number",
-		default: 0,
+		default: 3,
 		ui: {
 			tab: "tools",
 			label: "Grep Context After",

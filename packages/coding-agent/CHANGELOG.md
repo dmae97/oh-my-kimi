@@ -7,6 +7,10 @@
 - Removed the `read.prosechunks`, `read.explorechunks`, and `read.anchorstyle` settings
 - Removed the underlying `chunk` native module and AST-based chunk schema generation from `pi-natives`
 
+### Changed
+
+- Restored sensible defaults for `grep.contextBefore` (1) and `grep.contextAfter` (3) so grep matches show context lines by default after the `pre`/`post` parameters were folded into settings
+
 ### Fixed
 
 - Fixed `poll` wait duration parsing to fall back to `30s` when the provided value is an empty string
