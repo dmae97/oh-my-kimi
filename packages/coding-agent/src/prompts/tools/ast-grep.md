@@ -18,6 +18,7 @@ Performs structural code search using AST matching via native ast-grep.
 
 <output>
 - Grouped matches with file path, byte range, line/column ranges, metavariable captures
+- Match lines are anchor-prefixed: `LINE+ID>content` for the matched line and `LINE+ID:content` for surrounding context
 - Summary counts (`totalMatches`, `filesWithMatches`, `filesSearched`) and parse issues when present
 </output>
 

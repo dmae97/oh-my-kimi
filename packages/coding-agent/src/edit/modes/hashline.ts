@@ -8,7 +8,7 @@
  * if the file has changed since the caller last read it, hash mismatches are caught
  * before any mutation occurs.
  *
- * Displayed format: `LINE+ID:TEXT`
+ * Displayed format: `LINE+ID|TEXT`
  * Reference format: `"LINE+ID"` (e.g. `"1ab"`)
  *
  * In tool JSON, each edit's `content` is `string[]` (one string per logical line) or
@@ -28,7 +28,7 @@ import { resolveToCwd } from "../../tools/path-utils";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
 import { formatCodeFrameLine } from "../../tools/render-utils";
 import { generateDiffString } from "../diff";
-import { computeLineHash, formatLineHash, HASHLINE_BIGRAM_RE_SRC, HASHLINE_CONTENT_SEPARATOR } from "../line-hash";
+import { computeLineHash, formatHashLine, HASHLINE_BIGRAM_RE_SRC, HASHLINE_CONTENT_SEPARATOR } from "../line-hash";
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "../normalize";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
 
@@ -38,7 +38,7 @@ export interface HashMismatch {
 	actual: string;
 }
 
-export type Anchor = { line: number; hash: string };
+export type Anchor = { line: number; hash: string; contentHint?: string };
 export type HashlineEdit =
 	| { op: "replace_line"; pos: Anchor; lines: string[] }
 	| { op: "replace_range"; pos: Anchor; end: Anchor; lines: string[] }
@@ -47,10 +47,11 @@ export type HashlineEdit =
 	| { op: "append_file"; lines: string[] }
 	| { op: "prepend_file"; lines: string[] };
 
-// Tight prefix matchers for the new format `LINE+ID:content`. Hard
-// cutover — do not accept legacy `LINENUM#BIGRAM:content` or tab separators.
-// The terminator must be a literal colon; line-number digits are mandatory.
-const HASHLINE_CONTENT_SEPARATOR_RE = HASHLINE_CONTENT_SEPARATOR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Tight prefix matchers for the new format `LINE+ID|content`. The pipe is the
+// canonical separator; legacy reads using `:` are tolerated for back-compat.
+// Line-number digits are mandatory.
+// Accept both `|` (canonical) and `:` (legacy) so re-reads of older outputs still parse.
+const HASHLINE_CONTENT_SEPARATOR_RE = "[:|]";
 const HASHLINE_PREFIX_RE = new RegExp(
 	`^\\s*(?:>>>|>>)?\\s*(?:\\+\\s*)?\\d+${HASHLINE_BIGRAM_RE_SRC}${HASHLINE_CONTENT_SEPARATOR_RE}`,
 );
@@ -312,8 +313,6 @@ interface ResolvedHashlineStreamOptions {
 	maxChunkBytes: number;
 }
 
-type HashlineLineFormatter = (lineNumber: number, line: string) => string;
-
 interface HashlineChunkEmitter {
 	pushLine: (line: string) => string[];
 	flush: () => string | undefined;
@@ -329,7 +328,7 @@ function resolveHashlineStreamOptions(options: HashlineStreamOptions): ResolvedH
 
 function createHashlineChunkEmitter(
 	options: ResolvedHashlineStreamOptions,
-	formatLine: HashlineLineFormatter,
+	formatLine = formatHashLine,
 ): HashlineChunkEmitter {
 	let lineNumber = options.startLine;
 	let outLines: string[] = [];
@@ -373,10 +372,6 @@ function createHashlineChunkEmitter(
 	return { pushLine, flush };
 }
 
-function formatHashlineStreamLine(lineNumber: number, line: string): string {
-	return `${formatLineHash(lineNumber, line)}${HASHLINE_CONTENT_SEPARATOR}${line}`;
-}
-
 function isReadableStream(value: unknown): value is ReadableStream<Uint8Array> {
 	return (
 		typeof value === "object" &&
@@ -416,7 +411,7 @@ export async function* streamHashLinesFromUtf8(
 	let pending = "";
 	let sawAnyText = false;
 	let endedWithNewline = false;
-	const emitter = createHashlineChunkEmitter(resolvedOptions, formatHashlineStreamLine);
+	const emitter = createHashlineChunkEmitter(resolvedOptions);
 
 	const consumeText = (text: string): string[] => {
 		if (text.length === 0) return [];
@@ -469,7 +464,7 @@ export async function* streamHashLinesFromLines(
 	options: HashlineStreamOptions = {},
 ): AsyncGenerator<string> {
 	const resolvedOptions = resolveHashlineStreamOptions(options);
-	const emitter = createHashlineChunkEmitter(resolvedOptions, formatHashlineStreamLine);
+	const emitter = createHashlineChunkEmitter(resolvedOptions);
 	let sawAnyLine = false;
 
 	const asyncIterator = (lines as AsyncIterable<string>)[Symbol.asyncIterator];
@@ -530,7 +525,7 @@ const MISMATCH_CONTEXT = 2;
 /**
  * Error thrown when one or more hashline references have stale hashes.
  *
- * Displays grep-style output with `:` separator on mismatched lines and `-` on
+ * Displays grep-style output with `>` separator on mismatched lines and `:` on
  * surrounding context, showing the correct `LINE+ID` so the caller can fix all refs at once.
  */
 export class HashlineMismatchError extends Error {
@@ -552,7 +547,7 @@ export class HashlineMismatchError extends Error {
 	/**
 	 * User-visible variant of {@link formatMessage} — omits the bigram fingerprint
 	 * and uses a `│` gutter so TUI rendering is clean. The model still receives
-	 * the full `LINE+ID:content` form via {@link Error.message}.
+	 * the full `LINE+ID|content` form via {@link Error.message}.
 	 */
 	get displayMessage(): string {
 		return HashlineMismatchError.formatDisplayMessage(this.mismatches, this.fileLines);
@@ -609,7 +604,7 @@ export class HashlineMismatchError extends Error {
 
 		lines.push(
 			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read. The edit was NOT applied.`,
-			"Use the updated anchors shown below (`:` marks changed lines, `-` marks context) and retry the edit.",
+			"Use the updated anchors shown below (`>` marks changed lines, `:` marks context) and retry the edit.",
 		);
 		lines.push("");
 
@@ -626,9 +621,9 @@ export class HashlineMismatchError extends Error {
 			const prefix = `${lineNum}${hash}`;
 
 			if (mismatchSet.has(lineNum)) {
-				lines.push(`${prefix}:${text}`);
+				lines.push(`${prefix}>${text}`);
 			} else {
-				lines.push(`${prefix}-${text}`);
+				lines.push(`${prefix}:${text}`);
 			}
 		}
 		return lines.join("\n");
@@ -762,7 +757,7 @@ function collectBoundaryDuplicationWarning(edit: HashlineEdit, originalFileLines
 	const trimmedNext = nextSurvivingLine.trim();
 	const trimmedLast = lastInsertedLine.trim();
 	if (trimmedLast.length > 0 && trimmedLast === trimmedNext) {
-		const tag = formatLineHash(endLine + 1, nextSurvivingLine);
+		const tag = formatHashLine(endLine + 1, nextSurvivingLine);
 		warnings.push(
 			`Possible boundary duplication: your last replacement line \`${trimmedLast}\` is identical to the next surviving line ${tag}. ` +
 				`If you meant to replace the entire block, set \`end\` to ${tag} instead.`,

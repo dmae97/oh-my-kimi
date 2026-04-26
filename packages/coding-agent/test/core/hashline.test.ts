@@ -80,7 +80,7 @@ describe("formatHashLines", () => {
 	it("formats single line", () => {
 		const result = formatHashLines("hello");
 		const hash = computeLineHash(1, "hello");
-		expect(result).toBe(`1${hash}:hello`);
+		expect(result).toBe(`1${hash}|hello`);
 	});
 
 	it("formats multiple lines with 1-indexed numbers", () => {
@@ -103,7 +103,7 @@ describe("formatHashLines", () => {
 		const result = formatHashLines("foo\n\nbar");
 		const lines = result.split("\n");
 		expect(lines).toHaveLength(3);
-		expect(lines[1]).toMatch(new RegExp(`^2${HASHLINE_BIGRAM_RE_SRC}:$`));
+		expect(lines[1]).toMatch(new RegExp(`^2${HASHLINE_BIGRAM_RE_SRC}|$`));
 	});
 
 	it("round-trips with computeLineHash", () => {
@@ -112,7 +112,7 @@ describe("formatHashLines", () => {
 		const lines = formatted.split("\n");
 
 		for (let i = 0; i < lines.length; i++) {
-			const match = lines[i].match(new RegExp(`^(\\d+)(${HASHLINE_BIGRAM_RE_SRC}):(.*)$`));
+			const match = lines[i].match(new RegExp(`^(\\d+)(${HASHLINE_BIGRAM_RE_SRC})\\|(.*)$`));
 			expect(match).not.toBeNull();
 			const lineNum = Number.parseInt(match![1], 10);
 			const hash = match![2];
@@ -752,11 +752,11 @@ describe("applyHashlineEdits — errors", () => {
 		} catch (err) {
 			expect(err).toBeInstanceOf(HashlineMismatchError);
 			const msg = (err as HashlineMismatchError).message;
-			// Mismatched line uses `:` separator (grep-style)
+			// Mismatched line uses `>` separator (grep-style)
 			const correctHash = computeLineHash(2, "bbb");
-			expect(msg).toContain(`2${correctHash}:bbb`);
-			// Context lines use `-` separator
-			const contextLines = msg.split("\n").filter(l => /^\d+[a-z]{2}-/.test(l));
+			expect(msg).toContain(`2${correctHash}>bbb`);
+			// Context lines use `:` separator
+			const contextLines = msg.split("\n").filter(l => /^\d+[a-z]{2}:/.test(l));
 			expect(contextLines.length).toBeGreaterThan(0);
 		}
 	});
@@ -778,8 +778,8 @@ describe("applyHashlineEdits — errors", () => {
 			expect(e.mismatches).toHaveLength(2);
 			expect(e.mismatches[0].line).toBe(2);
 			expect(e.mismatches[1].line).toBe(4);
-			// Both mismatched lines use `:` separator (vs `-` for context)
-			const markerLines = e.message.split("\n").filter(l => /^\d+[a-z]{2}:/.test(l));
+			// Both mismatched lines use `>` separator (vs `:` for context)
+			const markerLines = e.message.split("\n").filter(l => /^\d+[a-z]{2}>/.test(l));
 			expect(markerLines).toHaveLength(2);
 		}
 	});
@@ -830,10 +830,10 @@ describe("buildCompactHashlineDiffPreview", () => {
 
 		expect(preview.preview).not.toContain("ctx-a");
 		expect(preview.preview).not.toContain("ctx-b");
-		expect(preview.preview).toContain(` 3${computeLineHash(3, "ctx-c")}:ctx-c`);
-		expect(preview.preview).toContain(` 4${computeLineHash(4, "ctx-d")}:ctx-d`);
+		expect(preview.preview).toContain(` 3${computeLineHash(3, "ctx-c")}|ctx-c`);
+		expect(preview.preview).toContain(` 4${computeLineHash(4, "ctx-d")}|ctx-d`);
 		expect(preview.preview).toContain(" ... 2 more unchanged lines");
-		expect(preview.preview).toContain(`+5${computeLineHash(5, "added")}:added`);
+		expect(preview.preview).toContain(`+5${computeLineHash(5, "added")}|added`);
 	});
 
 	it("collapses long addition runs and leaves removed lines unhashed", () => {
@@ -841,10 +841,10 @@ describe("buildCompactHashlineDiffPreview", () => {
 
 		const preview = buildCompactHashlineDiffPreview(diff);
 
-		expect(preview.preview).toContain(`+2${computeLineHash(2, "one")}:one`);
-		expect(preview.preview).toContain(`+3${computeLineHash(3, "two")}:two`);
+		expect(preview.preview).toContain(`+2${computeLineHash(2, "one")}|one`);
+		expect(preview.preview).toContain(`+3${computeLineHash(3, "two")}|two`);
 		expect(preview.preview).toContain(" ... 2 more added lines");
-		expect(preview.preview).toContain("-2   :old");
+		expect(preview.preview).toContain("-2   |old");
 		expect(preview.preview).not.toContain(`-2${computeLineHash(2, "old")}`);
 		expect(preview.addedLines).toBe(4);
 		expect(preview.removedLines).toBe(1);
@@ -855,9 +855,9 @@ describe("buildCompactHashlineDiffPreview", () => {
 
 		const preview = buildCompactHashlineDiffPreview(diff);
 
-		expect(preview.preview).toContain(`+10${computeLineHash(10, "new")}:new`);
-		expect(preview.preview).toContain(` 11${computeLineHash(11, "ctx-a")}:ctx-a`);
-		expect(preview.preview).toContain(` 12${computeLineHash(12, "ctx-b")}:ctx-b`);
+		expect(preview.preview).toContain(`+10${computeLineHash(10, "new")}|new`);
+		expect(preview.preview).toContain(` 11${computeLineHash(11, "ctx-a")}|ctx-a`);
+		expect(preview.preview).toContain(` 12${computeLineHash(12, "ctx-b")}|ctx-b`);
 		expect(preview.preview).not.toContain("ctx-c");
 		expect(preview.preview).not.toContain("ctx-d");
 		expect(preview.preview).toContain(" ... 2 more unchanged lines");
@@ -868,10 +868,10 @@ describe("buildCompactHashlineDiffPreview", () => {
 
 		const preview = buildCompactHashlineDiffPreview(diff);
 
-		expect(preview.preview).toContain(`+2${computeLineHash(2, "inserted")}:inserted`);
-		expect(preview.preview).toContain(` 3${computeLineHash(3, "bravo")}:bravo`);
-		expect(preview.preview).toContain(` 4${computeLineHash(4, "charlie")}:charlie`);
-		expect(preview.preview).not.toContain(` 2${computeLineHash(2, "bravo")}:bravo`);
+		expect(preview.preview).toContain(`+2${computeLineHash(2, "inserted")}|inserted`);
+		expect(preview.preview).toContain(` 3${computeLineHash(3, "bravo")}|bravo`);
+		expect(preview.preview).toContain(` 4${computeLineHash(4, "charlie")}|charlie`);
+		expect(preview.preview).not.toContain(` 2${computeLineHash(2, "bravo")}|bravo`);
 	});
 });
 
@@ -901,28 +901,28 @@ describe("stripNewLinePrefixes", () => {
 	});
 
 	it("strips hashline prefixes when all non-empty lines carry them", () => {
-		const lines = ["1th:foo", "2er:bar", "3in:baz"];
+		const lines = ["1th|foo", "2er|bar", "3in|baz"];
 		expect(stripNewLinePrefixes(lines)).toEqual(["foo", "bar", "baz"]);
 	});
 
 	it("strips diff `+` markers from anchored hashline output", () => {
 		const lines = [
-			`+1${computeLineHash(1, "foo")}:foo`,
-			`+2${computeLineHash(2, "bar")}:bar`,
-			`+3${computeLineHash(3, "baz")}:baz`,
+			`+1${computeLineHash(1, "foo")}|foo`,
+			`+2${computeLineHash(2, "bar")}|bar`,
+			`+3${computeLineHash(3, "baz")}|baz`,
 		];
 		expect(stripNewLinePrefixes(lines)).toEqual(["foo", "bar", "baz"]);
 	});
 
 	it("strips plus hashline prefixes in mixed +/ - change style", () => {
 		const body = "**Storage location TBD:**";
-		const lines = [`-${body}`, `+1${computeLineHash(1, body)}:${body}`];
+		const lines = [`-${body}`, `+1${computeLineHash(1, body)}|${body}`];
 		expect(stripNewLinePrefixes(lines)).toEqual([`-${body}`, body]);
 	});
 
 	it("does NOT strip hashline prefixes when any non-empty line is plain content", () => {
-		const lines = ["1th:foo", "bar", "3in:baz"];
-		expect(stripNewLinePrefixes(lines)).toEqual(["1th:foo", "bar", "3in:baz"]);
+		const lines = ["1th|foo", "bar", "3in|baz"];
+		expect(stripNewLinePrefixes(lines)).toEqual(["1th|foo", "bar", "3in|baz"]);
 	});
 
 	it("does NOT strip comment lines that look like hashline prefixes (# Word:)", () => {
@@ -943,9 +943,9 @@ describe("stripNewLinePrefixes", () => {
 
 	it("strips hashline prefixes when truncation marker is present (anchor corruption bug)", () => {
 		const lines = [
-			"1an:---",
-			"2re:title: example",
-			"3an:---",
+			"1an|---",
+			"2re|title: example",
+			"3an|---",
 			"",
 			"[Showing lines 1-300 of 332. Use sel=L301 to continue]",
 		];
@@ -956,14 +956,14 @@ describe("stripNewLinePrefixes", () => {
 	});
 
 	it("strips hashline prefixes when generic read truncation notice is present", () => {
-		const lines = ["1an:line one", "2re:line two", "", "[42 more lines in file. Use sel=L3 to continue]"];
+		const lines = ["1an|line one", "2re|line two", "", "[42 more lines in file. Use sel=L3 to continue]"];
 		const result = stripNewLinePrefixes(lines);
 		expect(result[0]).toBe("line one");
 		expect(result[1]).toBe("line two");
 	});
 
 	it("strips nested hashline prefixes (already-corrupted content re-read)", () => {
-		const lines = ["1at:1an:---", "2en:2re:title: example", "3nd:3an:---"];
+		const lines = ["1at|1an|---", "2en|2re|title: example", "3nd|3an|---"];
 		const result = stripNewLinePrefixes(lines);
 		expect(result[0]).toBe("---");
 		expect(result[1]).toBe("title: example");
@@ -977,7 +977,7 @@ describe("stripNewLinePrefixes", () => {
 
 describe("stripHashlinePrefixes", () => {
 	it("strips when all non-empty lines have hashline prefixes", () => {
-		const lines = ["1an:---", "2re:title", "", "4on:content"];
+		const lines = ["1an|---", "2re|title", "", "4on|content"];
 		expect(stripHashlinePrefixes(lines)).toEqual(["---", "title", "", "content"]);
 	});
 
@@ -988,9 +988,9 @@ describe("stripHashlinePrefixes", () => {
 
 	it("strips hashline prefixes even when truncation marker is present (anchor corruption bug)", () => {
 		const lines = [
-			"1an:---",
-			"2re:title: example",
-			"3an:---",
+			"1an|---",
+			"2re|title: example",
+			"3an|---",
 			"",
 			"[Showing lines 1-300 of 332. Use sel=L301 to continue]",
 		];
@@ -1001,7 +1001,7 @@ describe("stripHashlinePrefixes", () => {
 	});
 
 	it("strips nested hashline prefixes from already-corrupted content", () => {
-		const lines = ["1at:1an:---", "2en:2re:title"];
+		const lines = ["1at|1an|---", "2en|2re|title"];
 		const result = stripHashlinePrefixes(lines);
 		expect(result[0]).toBe("---");
 		expect(result[1]).toBe("title");
@@ -1023,7 +1023,7 @@ describe("hashlineParseContent", () => {
 	});
 
 	it("strips hashline prefixes from array input when all non-empty lines are prefixed", () => {
-		const input = ["259th:", "260er:{{/*", "261in:OC deployment container livenessProbe template"];
+		const input = ["259th|", "260er|{{/*", "261in|OC deployment container livenessProbe template"];
 		expect(hashlineParseText(input)).toEqual(["", "{{/*", "OC deployment container livenessProbe template"]);
 	});
 

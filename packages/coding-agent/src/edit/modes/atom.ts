@@ -29,7 +29,7 @@ import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";
 import { outputMeta } from "../../tools/output-meta";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
 import { generateDiffString } from "../diff";
-import { computeLineHash } from "../line-hash";
+import { computeLineHash, HASHLINE_BIGRAM_RE_SRC, HASHLINE_CONTENT_SEPARATOR } from "../line-hash";
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "../normalize";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
 import {
@@ -65,6 +65,12 @@ export const atomEditSchema = Type.Object(
 		set: Type.Optional(textSchema),
 		pre: Type.Optional(textSchema),
 		post: Type.Optional(textSchema),
+		sed: Type.Optional(
+			Type.String({
+				description: "sed-style substitution applied to the anchored line",
+				examples: ["s/foo/bar/", "s|api|API|g", "s/<pat>/<rep>/F"],
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
@@ -90,15 +96,39 @@ export type AtomEdit =
 	| { op: "post"; pos: Anchor; lines: string[] }
 	| { op: "del"; pos: Anchor }
 	| { op: "append_file"; lines: string[] }
-	| { op: "prepend_file"; lines: string[] };
+	| { op: "prepend_file"; lines: string[] }
+	| { op: "sed"; pos: Anchor; spec: SedSpec; expression: string };
+
+export interface SedSpec {
+	pattern: string;
+	replacement: string;
+	global: boolean;
+	ignoreCase: boolean;
+	literal: boolean;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Param guards
 // ═══════════════════════════════════════════════════════════════════════════
 
-const ATOM_VERB_KEYS = ["set", "pre", "post"] as const;
+const ATOM_VERB_KEYS = ["set", "pre", "post", "sed"] as const;
 type AtomOptionalKey = "path" | "loc" | (typeof ATOM_VERB_KEYS)[number];
 const ATOM_OPTIONAL_KEYS = ["path", "loc", ...ATOM_VERB_KEYS] as const satisfies readonly AtomOptionalKey[];
+
+// Matches just the LINE+BIGRAM prefix of an anchor reference. Used to detect
+// optional `|content` suffixes (e.g. `82zu|  for (...)`) so the suffix can be
+// captured as a content hint for anchor disambiguation.
+const ANCHOR_PREFIX_RE = new RegExp(`^\\s*[>+-]*\\s*\\d+${HASHLINE_BIGRAM_RE_SRC}`);
+
+// Splits `path:loc` references where the right side starts with a valid anchor
+// (single `\d+<bigram>` or `<anchor>-<anchor>` range, optionally followed by a
+// content suffix using `|` or `:`). The non-greedy `(.+?)` picks the leftmost
+// colon whose RHS is a real anchor, so colons inside the loc's content suffix
+// (TS type annotations, etc.) don't break the split. Drive-letter prefixes like
+// `C:\path\a.ts:160sr` still resolve correctly because the first colon's RHS
+// fails the anchor pattern.
+const ANCHOR_TAG_RE_SRC = `\\s*[>+-]*\\s*\\d+${HASHLINE_BIGRAM_RE_SRC}`;
+const PATH_LOC_SPLIT_RE = new RegExp(`^(.+?):(${ANCHOR_TAG_RE_SRC}(?:-${ANCHOR_TAG_RE_SRC})?(?:[|:].*)?)$`);
 
 function stripNullAtomFields(edit: AtomToolEdit): AtomToolEdit {
 	let next: Record<string, unknown> | undefined;
@@ -122,7 +152,7 @@ type ParsedAtomLoc = { kind: "anchor"; pos: Anchor } | { kind: "bof" } | { kind:
  *
  * Tolerant: on a malformed reference we still try to extract a 1-indexed line
  * number from the leading digits so the validator can surface the *correct*
- * `LINEHASH:content` for the user. The bogus hash is preserved in the returned
+ * `LINEHASH|content` for the user. The bogus hash is preserved in the returned
  * anchor so the validator emits a content-rich mismatch error.
  *
  * If we cannot recover even a line number, throw a usage-style error with the
@@ -158,16 +188,6 @@ function tryParseAtomTag(raw: string): Anchor | undefined {
 	}
 }
 
-function isLocSelector(raw: string): boolean {
-	if (raw === "^" || raw === "$") return true;
-	const dash = raw.indexOf("-");
-	if (dash === -1) return tryParseAtomTag(raw) !== undefined;
-	const left = raw.slice(0, dash);
-	const right = raw.slice(dash + 1);
-	if (left.length === 0 || right.length === 0) return false;
-	return tryParseAtomTag(left) !== undefined && tryParseAtomTag(right) !== undefined;
-}
-
 function resolveAtomEntryPath(
 	edit: AtomToolEdit,
 	topLevelPath: string | undefined,
@@ -177,13 +197,10 @@ function resolveAtomEntryPath(
 	let loc = entry.loc;
 	let pathOverride: string | undefined;
 	if (typeof loc === "string") {
-		const colon = loc.lastIndexOf(":");
-		if (colon > 0) {
-			const maybeSelector = loc.slice(colon + 1);
-			if (isLocSelector(maybeSelector)) {
-				pathOverride = loc.slice(0, colon);
-				loc = maybeSelector;
-			}
+		const split = loc.match(PATH_LOC_SPLIT_RE);
+		if (split) {
+			pathOverride = split[1];
+			loc = split[2]!;
 		}
 	}
 	const path = pathOverride || entry.path || topLevelPath;
@@ -205,12 +222,154 @@ export function resolveAtomEntryPaths(
 function parseLoc(raw: string, editIndex: number): ParsedAtomLoc {
 	if (raw === "^") return { kind: "bof" };
 	if (raw === "$") return { kind: "eof" };
-	if (raw.includes("-")) {
+	// Detect range syntax explicitly: "<anchor>-<anchor>". A bare `-` inside the
+	// loc (e.g. line content like `i--`) should not trigger the range error.
+	const dash = raw.indexOf("-");
+	if (dash > 0) {
+		const left = raw.slice(0, dash);
+		const right = raw.slice(dash + 1);
+		if (tryParseAtomTag(left) !== undefined && tryParseAtomTag(right) !== undefined) {
+			throw new Error(
+				`Edit ${editIndex}: atom loc does not support line ranges. Use a single anchor like "160sr", "^", or "$".`,
+			);
+		}
+	}
+	const pos = parseAnchor(raw, "loc");
+	// Capture an optional content suffix after the anchor: `82zu|  for (...)`.
+	// The suffix acts as a hint for anchor disambiguation when the model's hash
+	// is wrong but the content reveals the intended line.
+	const hint = extractAnchorContentHint(raw);
+	if (hint !== undefined) {
+		pos.contentHint = hint;
+	}
+	return { kind: "anchor", pos };
+}
+
+function extractAnchorContentHint(raw: string): string | undefined {
+	const match = raw.match(ANCHOR_PREFIX_RE);
+	if (!match) return undefined;
+	const rest = raw.slice(match[0].length);
+	// Accept either the canonical `|` (HASHLINE_CONTENT_SEPARATOR) or the legacy
+	// `:` separator. Models trained on older docs still emit `82zu:  for (...)`.
+	const sep = rest[0];
+	if (sep !== HASHLINE_CONTENT_SEPARATOR && sep !== ":") return undefined;
+	const hint = rest.slice(1);
+	if (hint.trim().length === 0) return undefined;
+	return hint;
+}
+
+function parseSedExpression(raw: string, editIndex: number): SedSpec {
+	if (typeof raw !== "string" || raw.length < 3) {
 		throw new Error(
-			`Edit ${editIndex}: atom loc does not support line ranges. Use a single anchor like "160sr", "^", or "$".`,
+			`Edit ${editIndex}: sed expression must start with "s" followed by a delimiter, e.g. "s/foo/bar/".`,
 		);
 	}
-	return { kind: "anchor", pos: parseAnchor(raw, "loc") };
+	// Tolerate a missing leading `s`: models occasionally emit `/foo/bar/` directly.
+	// As long as the first character is a valid delimiter, treat the expression as
+	// if `s` was prepended.
+	let bodyStart = 0;
+	if (raw[0] === "s") {
+		bodyStart = 1;
+	}
+	const delim = raw[bodyStart]!;
+	if (/[\sA-Za-z0-9\\]/.test(delim)) {
+		throw new Error(
+			`Edit ${editIndex}: sed delimiter must be a non-alphanumeric, non-whitespace, non-backslash character (got ${JSON.stringify(delim)}).`,
+		);
+	}
+	const parts: [string, string] = ["", ""];
+	let bucket: 0 | 1 = 0;
+	let i = bodyStart + 1;
+	while (i < raw.length) {
+		const c = raw[i]!;
+		if (c === "\\" && raw[i + 1] === delim) {
+			parts[bucket] += delim;
+			i += 2;
+			continue;
+		}
+		if (c === delim) {
+			if (bucket === 0) {
+				bucket = 1;
+				i += 1;
+				continue;
+			}
+			i += 1;
+			break;
+		}
+		parts[bucket] += c;
+		i += 1;
+	}
+	if (bucket !== 1) {
+		throw new Error(
+			`Edit ${editIndex}: malformed sed expression ${JSON.stringify(raw)}. Expected three ${JSON.stringify(delim)} separators.`,
+		);
+	}
+	const flagsStr = raw.slice(i);
+	let global = false;
+	let ignoreCase = false;
+	let literal = false;
+	for (const f of flagsStr) {
+		if (f === "g") global = true;
+		else if (f === "i") ignoreCase = true;
+		else if (f === "F") literal = true;
+		else {
+			throw new Error(
+				`Edit ${editIndex}: unknown sed flag ${JSON.stringify(f)}. Supported flags: g (all), i (case-insensitive), F (literal).`,
+			);
+		}
+	}
+	if (parts[0] === "") {
+		throw new Error(`Edit ${editIndex}: sed expression has empty pattern.`);
+	}
+	return { pattern: parts[0], replacement: parts[1], global, ignoreCase, literal };
+}
+
+function applyLiteralSed(currentLine: string, spec: SedSpec): { result: string; matched: boolean } {
+	const idx = currentLine.indexOf(spec.pattern);
+	if (idx === -1) return { result: currentLine, matched: false };
+	if (spec.global) {
+		return { result: currentLine.split(spec.pattern).join(spec.replacement), matched: true };
+	}
+	return {
+		result: currentLine.slice(0, idx) + spec.replacement + currentLine.slice(idx + spec.pattern.length),
+		matched: true,
+	};
+}
+
+function applySedToLine(
+	currentLine: string,
+	spec: SedSpec,
+): { result: string; matched: boolean; error?: string; literalFallback?: boolean } {
+	if (spec.literal) {
+		return applyLiteralSed(currentLine, spec);
+	}
+	let flags = "";
+	if (spec.global) flags += "g";
+	if (spec.ignoreCase) flags += "i";
+	let re: RegExp | undefined;
+	let compileError: string | undefined;
+	try {
+		re = new RegExp(spec.pattern, flags);
+	} catch (e) {
+		compileError = (e as Error).message;
+	}
+	if (re?.test(currentLine)) {
+		re.lastIndex = 0;
+		return { result: currentLine.replace(re, spec.replacement), matched: true };
+	}
+	// Fall back to literal substring match. Models frequently send sed patterns
+	// containing unescaped regex metacharacters (parentheses, `?`, `.`) that they
+	// intend as literal code. Trying a literal match before reporting failure
+	// recovers the obvious intent without changing semantics for patterns that
+	// already match as regex.
+	const literal = applyLiteralSed(currentLine, spec);
+	if (literal.matched) {
+		return { ...literal, literalFallback: true };
+	}
+	if (compileError !== undefined) {
+		return { result: currentLine, matched: false, error: compileError };
+	}
+	return { result: currentLine, matched: false };
 }
 
 function classifyAtomEdit(edit: AtomToolEdit): string {
@@ -235,7 +394,7 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
 	const resolved: AtomEdit[] = [];
 
 	if (loc.kind === "bof") {
-		if (entry.set !== undefined || entry.post !== undefined) {
+		if (entry.set !== undefined || entry.post !== undefined || entry.sed !== undefined) {
 			throw new Error(`Edit ${editIndex}: loc "^" only supports pre.`);
 		}
 		if (entry.pre !== undefined) {
@@ -245,7 +404,7 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
 	}
 
 	if (loc.kind === "eof") {
-		if (entry.set !== undefined || entry.pre !== undefined) {
+		if (entry.set !== undefined || entry.pre !== undefined || entry.sed !== undefined) {
 			throw new Error(`Edit ${editIndex}: loc "$" only supports post.`);
 		}
 		if (entry.post !== undefined) {
@@ -259,13 +418,29 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
 	}
 	if (entry.set !== undefined) {
 		if (Array.isArray(entry.set) && entry.set.length === 0) {
-			resolved.push({ op: "del", pos: loc.pos });
+			// Models often default `set: []` alongside other verbs (notably `sed`).
+			// Treating that combination as an explicit `del` produces a confusing
+			// `Conflicting ops` error. When another mutating verb is present, drop
+			// the empty `set` instead of treating it as a deletion.
+			if (entry.sed === undefined) {
+				resolved.push({ op: "del", pos: loc.pos });
+			}
 		} else {
 			resolved.push({ op: "set", pos: loc.pos, lines: hashlineParseText(entry.set) });
 		}
 	}
 	if (entry.post !== undefined) {
 		resolved.push({ op: "post", pos: loc.pos, lines: hashlineParseText(entry.post) });
+	}
+	if (entry.sed !== undefined) {
+		const setIsExplicitReplacement = Array.isArray(entry.set) && entry.set.length > 0;
+		// Models often duplicate intent by sending both an explicit `set` and a
+		// matching `sed`. The explicit replacement wins; the redundant `sed` would
+		// otherwise trigger a confusing `Conflicting ops` rejection.
+		if (!setIsExplicitReplacement) {
+			const spec = parseSedExpression(entry.sed, editIndex);
+			resolved.push({ op: "sed", pos: loc.pos, spec, expression: entry.sed });
+		}
 	}
 	return resolved;
 }
@@ -280,11 +455,35 @@ function* getAtomAnchors(edit: AtomEdit): Iterable<Anchor> {
 		case "pre":
 		case "post":
 		case "del":
+		case "sed":
 			yield edit.pos;
 			return;
 		default:
 			return;
 	}
+}
+
+/**
+ * Search for a line near `anchor.line` whose trimmed content equals the
+ * anchor's content hint. Returns the closest match (preferring lines below the
+ * requested anchor on ties) or `null` when no line matches. Strict equality on
+ * trimmed content keeps this conservative \u2014 we only retarget when there is no
+ * ambiguity about the model's intent.
+ */
+function findLineByContentHint(anchor: Anchor, fileLines: string[]): number | null {
+	const hint = anchor.contentHint?.trim();
+	if (!hint) return null;
+	const lo = Math.max(1, anchor.line - ANCHOR_REBASE_WINDOW);
+	const hi = Math.min(fileLines.length, anchor.line + ANCHOR_REBASE_WINDOW);
+	let best: { line: number; distance: number } | null = null;
+	for (let line = lo; line <= hi; line++) {
+		if (fileLines[line - 1].trim() !== hint) continue;
+		const distance = Math.abs(line - anchor.line);
+		if (best === null || distance < best.distance) {
+			best = { line, distance };
+		}
+	}
+	return best?.line ?? null;
 }
 
 function validateAtomAnchors(edits: AtomEdit[], fileLines: string[], warnings: string[]): HashMismatch[] {
@@ -296,6 +495,22 @@ function validateAtomAnchors(edits: AtomEdit[], fileLines: string[], warnings: s
 			}
 			const actualHash = computeLineHash(anchor.line, fileLines[anchor.line - 1]);
 			if (actualHash === anchor.hash) continue;
+			// When the model supplied a content hint after the anchor (e.g.
+			// `82zu|  for (...)`), prefer rebasing to the line that actually matches
+			// that content. This avoids false positives from hash-only rebasing where
+			// a coincidentally matching hash on a nearby line silently retargets the
+			// edit to the wrong line.
+			const hinted = findLineByContentHint(anchor, fileLines);
+			if (hinted !== null) {
+				const original = `${anchor.line}${anchor.hash}`;
+				const hintedHash = computeLineHash(hinted, fileLines[hinted - 1]);
+				anchor.line = hinted;
+				anchor.hash = hintedHash;
+				warnings.push(
+					`Auto-rebased anchor ${original} → ${hinted}${hintedHash} (matched the content hint provided after the anchor).`,
+				);
+				continue;
+			}
 			const rebased = tryRebaseAnchor(anchor, fileLines);
 			if (rebased !== null) {
 				const original = `${anchor.line}${anchor.hash}`;
@@ -316,12 +531,12 @@ function validateNoConflictingAnchorOps(edits: AtomEdit[]): void {
 	// `pre`/`post` (insert ops) may coexist with them — they don't mutate the anchor line.
 	const mutatingPerLine = new Map<number, string>();
 	for (const edit of edits) {
-		if (edit.op !== "set" && edit.op !== "del") continue;
+		if (edit.op !== "set" && edit.op !== "del" && edit.op !== "sed") continue;
 		const existing = mutatingPerLine.get(edit.pos.line);
 		if (existing) {
 			throw new Error(
 				`Conflicting ops on anchor line ${edit.pos.line}: \`${existing}\` and \`${edit.op}\`. ` +
-					`At most one of set/del is allowed per anchor.`,
+					`At most one of set/del/sed is allowed per anchor.`,
 			);
 		}
 		mutatingPerLine.set(edit.pos.line, edit.op);
@@ -457,6 +672,26 @@ export function applyAtomEdits(
 					replacementSet = true;
 					anchorMutated = true;
 					break;
+				case "sed": {
+					const { result, matched, error, literalFallback } = applySedToLine(currentLine, edit.spec);
+					if (error) {
+						throw new Error(`Edit sed expression ${JSON.stringify(edit.expression)} failed to compile: ${error}`);
+					}
+					if (!matched) {
+						throw new Error(
+							`Edit sed expression ${JSON.stringify(edit.expression)} did not match line ${edit.pos.line}: ${JSON.stringify(currentLine)}`,
+						);
+					}
+					if (literalFallback) {
+						warnings.push(
+							`sed expression ${JSON.stringify(edit.expression)} did not match as a regex on line ${edit.pos.line}; applied literal substring substitution instead. Use the \`F\` flag (e.g. \`s/.../.../F\`) for literal patterns or escape regex metacharacters.`,
+						);
+					}
+					replacement = [result];
+					replacementSet = true;
+					anchorMutated = true;
+					break;
+				}
 			}
 		}
 

@@ -14,7 +14,7 @@ Performs structural AST-aware rewrites via native ast-grep.
 </instruction>
 
 <output>
-- Replacement summary, per-file replacement counts, and change diffs
+- Replacement summary, per-file replacement counts, and change diffs as `-LINE+ID|before` / `+LINE+ID|after` lines
 - Parse issues when files cannot be processed
 </output>
 

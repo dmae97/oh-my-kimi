@@ -92,17 +92,13 @@ function prependLineNumbers(text: string, startNum: number): string {
 	return textLines.map((line, i) => `${startNum + i}|${line}`).join("\n");
 }
 
-function prependHashLines(text: string, startNum: number): string {
-	return formatHashLines(text, startNum);
-}
-
 function formatTextWithMode(
 	text: string,
 	startNum: number,
 	shouldAddHashLines: boolean,
 	shouldAddLineNumbers: boolean,
 ): string {
-	if (shouldAddHashLines) return prependHashLines(text, startNum);
+	if (shouldAddHashLines) return formatHashLines(text, startNum);
 	if (shouldAddLineNumbers) return prependLineNumbers(text, startNum);
 	return text;
 }

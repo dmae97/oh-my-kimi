@@ -64,7 +64,7 @@ export interface GrepToolDetails {
 	truncated?: boolean;
 	error?: string;
 	/** Pre-formatted text for the user-visible TUI render. Mirrors the model-facing
-	 * `result.text` lines but uses a `│` gutter and `*` to mark match lines (vs `-` for
+	 * `result.text` lines but uses a `│` gutter and `*` to mark match lines (vs space for
 	 * context). The TUI uses this directly so it never parses model-facing hashline anchors. */
 	displayContent?: string;
 }
@@ -502,7 +502,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				}
 			}
 			if (hasContextLines && outputLines.length > 0) {
-				outputLines.unshift("[grep] match lines use ':'; context lines use '-'.");
+				outputLines.unshift("[grep] match lines use '>'; context lines use ':'.");
 			}
 			if (matchLimitReached || result.limitReached) {
 				outputLines.push("", limitMessage);

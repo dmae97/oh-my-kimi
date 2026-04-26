@@ -1021,7 +1021,7 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "editing",
 			label: "Hash Lines",
-			description: "Include line hashes in read output for hashline edit mode (LINE+ID\\tcontent)",
+			description: "Include line hashes in read output for hashline edit mode (LINE+ID|content)",
 		},
 	},
 

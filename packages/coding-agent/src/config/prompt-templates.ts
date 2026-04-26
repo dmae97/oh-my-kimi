@@ -55,7 +55,7 @@ prompt.registerHelper("href", (lineNum: unknown, content: unknown): string => {
 
 /**
  * {{hline lineNum "content"}} — format a full read-style line with prefix.
- * Returns `"lineNumBIGRAM:content"` (colon between anchor and content).
+ * Returns `"lineNumBIGRAM|content"` (pipe between anchor and content).
  */
 prompt.registerHelper("hline", (lineNum: unknown, content: unknown): string => {
 	const { ref, text } = formatHashlineRef(lineNum, content);

@@ -81,9 +81,9 @@ describe("ast_edit tool schema", () => {
 
 			expect(removedLine).toBeDefined();
 			expect(addedLine).toBeDefined();
-			expect(removedLine).toMatch(/^-\d+[a-z]{2}:/);
-			expect(addedLine).toMatch(/^\+\d+[a-z]{2}:/);
-			expect(removedLine?.split(":", 1)[0].length).toBe(addedLine?.split(":", 1)[0].length);
+			expect(removedLine).toMatch(/^-\d+[a-z]{2}\|/);
+			expect(addedLine).toMatch(/^\+\d+[a-z]{2}\|/);
+			expect(removedLine?.split("|", 1)[0].length).toBe(addedLine?.split("|", 1)[0].length);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}

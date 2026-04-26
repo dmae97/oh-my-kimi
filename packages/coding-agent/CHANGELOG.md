@@ -1,18 +1,30 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Replaced the legacy `gh_repo_view`, `gh_issue_view`, `gh_pr_view`, `gh_pr_diff`, `gh_pr_checkout`, `gh_pr_push`, `gh_run_watch`, `gh_search_issues`, and `gh_search_prs` tool names with only `github`, which requires updating existing callers that invoked the old `gh_*` tools
 
 ### Added
 
+- Added a `sed` verb to the `atom` edit tool for line-local substitutions using sed-style syntax (`s/pattern/replacement/`) with `g`, `i`, and `F` flags and model-tolerant delimiter choices
+- 
 - Added the unified `github` tool with op-based dispatch for repository, issue, pull request, search, checkout, push, and Actions watch workflows
 - Added `op` routing so callers can select `repo_view`, `issue_view`, `pr_view`, `pr_diff`, `pr_checkout`, `pr_push`, `search_issues`, `search_prs`, or `run_watch` through a single tool entry point
 
 ### Changed
 
+- Changed hashline-based read and match output formatting to use `LINE+ID|content` as the anchor/content separator, and updated match/context markers to `>` for matches and `:` for context
+- 
 - Updated GitHub CLI render output to show `GitHub <op>` for tool calls dispatched through `github` operations
+
+### Fixed
+
+- Fixed `atom` `loc` parsing so path-qualified anchors like `path:263ti| ...` and single-anchor locs containing hyphens no longer mis-parse as ranges
+- Fixed hashline anchor handling in `atom` edits so a provided content hint after the anchor (`|` or `:` suffix) can rebond a stale hash to the intended line
+- Fixed `atom` `sed` execution to tolerate common model-emitted forms such as `/pat/rep/`, and to apply safe literal fallbacks for regex failures or metacharacter-heavy patterns while still erroring when no match is possible
+- 
 
 ## [14.4.0] - 2026-04-26
 

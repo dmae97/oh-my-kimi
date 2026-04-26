@@ -24,7 +24,7 @@ Max {{DEFAULT_MAX_LINES}} lines per call.
 
 # Filesystem
 {{#if IS_HASHLINE_MODE}}
-- Reading from FS returns lines prefixed with anchors: `41th:def alpha():` (line number, 2-letter ID, colon, then content)
+- Reading from FS returns lines prefixed with anchors: `41th|def alpha():` (line number, 2-letter ID, pipe, then content)
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
 - Reading from FS returns lines prefixed with line numbers: `41:def alpha():`
