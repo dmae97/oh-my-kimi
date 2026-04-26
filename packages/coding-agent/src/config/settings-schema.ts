@@ -955,7 +955,7 @@ export const SETTINGS_SCHEMA = {
 	// Edit tool
 	"edit.mode": {
 		type: "enum",
-		values: ["replace", "patch", "hashline", "chunk", "vim", "apply_patch"] as const,
+		values: ["replace", "patch", "hashline", "chunk", "vim", "apply_patch", "atom"] as const,
 		default: "hashline",
 		ui: {
 			tab: "editing",
