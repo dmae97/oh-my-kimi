@@ -14,8 +14,8 @@ import type { Settings } from "..";
 import type { ToolSession } from "./index";
 
 const ReportToolIssueParams = Type.Object({
-	tool: Type.String({ description: "Name of the tool that behaved unexpectedly" }),
-	report: Type.String({ description: "Description of what was unexpected about the tool's behavior" }),
+	tool: Type.String({ description: "tool name", examples: ["bash", "read"] }),
+	report: Type.String({ description: "unexpected behavior" }),
 });
 
 export function isAutoQaEnabled(settings?: Settings): boolean {
@@ -57,6 +57,7 @@ export function createReportToolIssueTool(session: ToolSession): AgentTool {
 	return {
 		name: "report_tool_issue",
 		label: "Report Tool Issue",
+		strict: false,
 		description: "Report unexpected tool behavior for automated QA tracking.",
 		parameters: ReportToolIssueParams,
 		async execute(_toolCallId, rawParams) {

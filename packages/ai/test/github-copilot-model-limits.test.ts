@@ -108,7 +108,7 @@ describe("github copilot model limits mapping", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("prefers explicit context_length/max_completion_tokens when present", async () => {
+	it("prefers explicit context_length/max_completion_tokens when max_prompt_tokens is absent", async () => {
 		const { models } = await discoverCopilotModels({
 			data: [
 				{
@@ -119,7 +119,6 @@ describe("github copilot model limits mapping", () => {
 					capabilities: {
 						limits: {
 							max_context_window_tokens: 400_000,
-							max_prompt_tokens: 272_000,
 							max_output_tokens: 128_000,
 						},
 					},
@@ -198,7 +197,9 @@ describe("github copilot model limits mapping", () => {
 		expect(model).toBeDefined();
 		expect(model?.api).toBe("openai-responses");
 		expect(model?.reasoning).toBe(true);
-		expect(model?.contextWindow).toBe(400_000);
+		// max_prompt_tokens is the true prompt budget; root-level context_length
+		// mirrors max_context_window_tokens (total window) and must not win.
+		expect(model?.contextWindow).toBe(272_000);
 		expect(model?.maxTokens).toBe(128_000);
 		expect(model?.premiumMultiplier).toBe(0.33);
 		expect(model?.thinking).toEqual({

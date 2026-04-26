@@ -9,6 +9,7 @@ import type {
 	GhRunWatchViewDetails,
 	GhToolDetails,
 } from "./gh";
+import { formatShortSha } from "./gh-format";
 import {
 	formatExpandHint,
 	formatStatusIcon,
@@ -18,7 +19,8 @@ import {
 	truncateToWidth as truncateVisualWidth,
 } from "./render-utils";
 
-type GhRunWatchRenderArgs = {
+type GithubToolRenderArgs = {
+	op?: string;
 	run?: string;
 	branch?: string;
 };
@@ -28,14 +30,6 @@ const FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "actio
 const RUNNING_STATUSES = new Set(["in_progress"]);
 const PENDING_STATUSES = new Set(["queued", "requested", "waiting", "pending"]);
 const FALLBACK_WIDTH = 80;
-
-function formatShortSha(value: string | undefined): string | undefined {
-	if (!value) {
-		return undefined;
-	}
-
-	return value.slice(0, 12);
-}
 
 function getWatchHeader(watch: GhRunWatchViewDetails): string {
 	if (watch.mode === "run" && watch.run) {
@@ -245,11 +239,11 @@ function renderFallbackText(
 	return new Text(header, 0, 0);
 }
 
-export const ghRunWatchToolRenderer = {
-	renderCall(args: GhRunWatchRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
+export const githubToolRenderer = {
+	renderCall(args: GithubToolRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const lines: string[] = [];
 
-		// Header with spinner: "⠋ GitHub Run Watch"
+		// Header with spinner reflecting the dispatched op
 		const icon =
 			options.spinnerFrame !== undefined
 				? formatStatusIcon("running", uiTheme, options.spinnerFrame)
@@ -258,6 +252,13 @@ export const ghRunWatchToolRenderer = {
 		// Build a target description that mirrors the result view style
 		const runId = typeof args.run === "string" && args.run.trim().length > 0 ? args.run.trim() : undefined;
 		const branch = typeof args.branch === "string" && args.branch.trim().length > 0 ? args.branch.trim() : undefined;
+
+		const op = typeof args.op === "string" && args.op.trim().length > 0 ? args.op.trim() : undefined;
+		if (op && op !== "run_watch") {
+			const title = uiTheme.fg("accent", `GitHub ${op}`);
+			lines.push(`${icon} ${title}`);
+			return new Text(lines.join("\n"), 0, 0);
+		}
 
 		if (runId) {
 			// "⠋ GitHub Run Watch  run #12345"

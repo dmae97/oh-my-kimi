@@ -16,6 +16,7 @@ import type {
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
 } from "../../extensibility/extensions";
+import { runExtensionCompact, runExtensionSetModel } from "../../extensibility/extensions/compact-handler";
 import { type Theme, theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
@@ -64,6 +65,18 @@ function normalizeHostToolDefinitions(tools: RpcHostToolDefinition[]): RpcHostTo
 			hidden: tool.hidden === true,
 		};
 	});
+}
+
+function parseValueDialogResponse(
+	response: RpcExtensionUIResponse,
+	dialogOptions: ExtensionUIDialogOptions | undefined,
+): string | undefined {
+	if ("cancelled" in response && response.cancelled) {
+		if (response.timedOut) dialogOptions?.onTimeout?.();
+		return undefined;
+	}
+	if ("value" in response) return response.value;
+	return undefined;
 }
 
 function shouldEmitRpcTitles(): boolean {
@@ -228,14 +241,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 				dialogOptions,
 				undefined,
 				{ method: "select", title, options, timeout: dialogOptions?.timeout },
-				response => {
-					if ("cancelled" in response && response.cancelled) {
-						if (response.timedOut) dialogOptions?.onTimeout?.();
-						return undefined;
-					}
-					if ("value" in response) return response.value;
-					return undefined;
-				},
+				response => parseValueDialogResponse(response, dialogOptions),
 			);
 		}
 
@@ -264,14 +270,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 				dialogOptions,
 				undefined,
 				{ method: "input", title, placeholder, timeout: dialogOptions?.timeout },
-				response => {
-					if ("cancelled" in response && response.cancelled) {
-						if (response.timedOut) dialogOptions?.onTimeout?.();
-						return undefined;
-					}
-					if ("value" in response) return response.value;
-					return undefined;
-				},
+				response => parseValueDialogResponse(response, dialogOptions),
 			);
 		}
 
@@ -432,12 +431,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 				getAllTools: () => session.getAllToolNames(),
 				setActiveTools: (toolNames: string[]) => session.setActiveToolsByName(toolNames),
 				getCommands: () => [],
-				setModel: async model => {
-					const key = await session.modelRegistry.getApiKey(model);
-					if (!key) return false;
-					await session.setModel(model);
-					return true;
-				},
+				setModel: model => runExtensionSetModel(session, model),
 				getThinkingLevel: () => session.thinkingLevel,
 				setThinkingLevel: level => session.setThinkingLevel(level),
 				getSessionName: () => session.sessionManager.getSessionName(),
@@ -456,14 +450,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 				},
 				getContextUsage: () => session.getContextUsage(),
 				getSystemPrompt: () => session.systemPrompt,
-				compact: async instructionsOrOptions => {
-					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-					const options =
-						instructionsOrOptions && typeof instructionsOrOptions === "object"
-							? instructionsOrOptions
-							: undefined;
-					await session.compact(instructions, options);
-				},
+				compact: instructionsOrOptions => runExtensionCompact(session, instructionsOrOptions),
 			},
 			// ExtensionCommandContextActions - commands invokable via prompt("/command")
 			{
@@ -492,14 +479,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 				reload: async () => {
 					await session.reload();
 				},
-				compact: async instructionsOrOptions => {
-					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-					const options =
-						instructionsOrOptions && typeof instructionsOrOptions === "object"
-							? instructionsOrOptions
-							: undefined;
-					await session.compact(instructions, options);
-				},
+				compact: instructionsOrOptions => runExtensionCompact(session, instructionsOrOptions),
 			},
 			new RpcExtensionUIContext(pendingExtensionRequests, output),
 		);

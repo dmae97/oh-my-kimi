@@ -40,7 +40,7 @@ Reviewer **MUST**:
 2. {{#if skipDiff}}**MUST** run `git diff`/`git show` for assigned files{{else}}**MUST** use diff hunks below (**MUST NOT** re-run git diff){{/if}}
 3. **MAY** read full file context as needed via `read`
 4. Call `report_finding` per issue
-5. Call `submit_result` with verdict when done
+5. Call `yield` with verdict when done
 
 {{#if skipDiff}}
 ### Diff Previews

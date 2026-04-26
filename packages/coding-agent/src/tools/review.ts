@@ -3,7 +3,7 @@
  *
  * Used by the reviewer agent to report findings in a structured way.
  * Hidden by default - only enabled when explicitly listed in agent's tools.
- * Reviewers finish via `submit_result` tool with SubmitReviewDetails schema.
+ * Reviewers finish via `yield` tool with SubmitReviewDetails schema.
  */
 // ─────────────────────────────────────────────────────────────────────────────
 // Subprocess tool handlers - registered for extraction/rendering in task tool
@@ -55,22 +55,24 @@ function getPriorityDisplay(
 // report_finding schema
 const ReportFindingParams = Type.Object({
 	title: Type.String({
-		description: "≤80 chars, imperative, prefixed with [P0-P3]. E.g., '[P1] Un-padding slices along wrong dimension'",
+		description: "prefixed imperative title",
+		examples: ["[P1] un-padding wrong dimension"],
 	}),
 	body: Type.String({
-		description: "Markdown explaining why this is a problem. One paragraph max.",
+		description: "problem explanation",
 	}),
 	priority: StringEnum(["P0", "P1", "P2", "P3"], {
-		description: "0=P0 (critical), 1=P1 (urgent), 2=P2 (normal), 3=P3 (low)",
+		description: "priority 0-3",
 	}),
 	confidence: Type.Number({
 		minimum: 0,
 		maximum: 1,
-		description: "Confidence score 0.0-1.0",
+		description: "confidence score",
+		examples: [0.0, 0.5, 1.0],
 	}),
-	file_path: Type.String({ description: "Absolute path to the file" }),
-	line_start: Type.Number({ description: "Start line of the issue" }),
-	line_end: Type.Number({ description: "End line of the issue" }),
+	file_path: Type.String({ description: "file path" }),
+	line_start: Type.Number({ description: "start line" }),
+	line_end: Type.Number({ description: "end line" }),
 });
 
 interface ReportFindingDetails {
@@ -131,7 +133,7 @@ export function parseReportFindingDetails(value: unknown): ReportFindingDetails 
 export const reportFindingTool: AgentTool<typeof ReportFindingParams, ReportFindingDetails, Theme> = {
 	name: "report_finding",
 	label: "Report Finding",
-	description: "Report a code review finding. Use this for each issue found. Call submit_result when done.",
+	description: "Report a code review finding. Use this for each issue found. Call yield when done.",
 	parameters: ReportFindingParams,
 	async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 		const { title, body, priority, confidence, file_path, line_start, line_end } = params;
@@ -186,7 +188,7 @@ export const reportFindingTool: AgentTool<typeof ReportFindingParams, ReportFind
 	},
 };
 
-/** SubmitReviewDetails - used for rendering review results from submit_result tool */
+/** SubmitReviewDetails - used for rendering review results from yield tool */
 export interface SubmitReviewDetails {
 	overall_correctness: "correct" | "incorrect";
 	explanation: string;

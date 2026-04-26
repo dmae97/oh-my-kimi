@@ -3,10 +3,10 @@
  *
  * Compares output files against expected fixtures with byte-for-byte equality.
  */
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { diffLines } from "diff";
 import { formatContent } from "./formatter";
+import { listFiles } from "./shared";
 
 export interface VerificationResult {
 	success: boolean;
@@ -21,22 +21,6 @@ export interface VerificationResult {
 export interface DiffStats {
 	linesChanged: number;
 	charsChanged: number;
-}
-
-async function listFiles(rootDir: string, subPath = ""): Promise<string[]> {
-	const entries = await fs.readdir(path.join(rootDir, subPath), { withFileTypes: true });
-	const files: string[] = [];
-
-	for (const entry of entries) {
-		const relativePath = path.join(subPath, entry.name);
-		if (entry.isDirectory()) {
-			files.push(...(await listFiles(rootDir, relativePath)));
-		} else if (entry.isFile()) {
-			files.push(relativePath);
-		}
-	}
-
-	return files.sort();
 }
 
 function formatFileList(files: string[]): string {

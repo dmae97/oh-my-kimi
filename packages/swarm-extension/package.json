@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/swarm-extension",
-	"version": "14.1.2",
+	"version": "14.5.1",
 	"description": "Swarm orchestration extension for omp",
 	"homepage": "https://github.com/can1357/oh-my-pi",
 	"author": "Derek Rynd",
@@ -34,7 +34,7 @@
 		"@oh-my-pi/pi-utils": "workspace:*"
 	},
 	"devDependencies": {
-		"@types/bun": "^1.3"
+		"@types/bun": "^1.3.13"
 	},
 	"peerDependencies": {
 		"@oh-my-pi/pi-coding-agent": "^13"

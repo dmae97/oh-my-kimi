@@ -29,7 +29,12 @@ describe("Anthropic thinking replay immutability", () => {
 				{ type: "thinking", thinking: `analysis ${malformed}`, thinkingSignature: "sig_thinking" },
 				{ type: "redactedThinking", data: "" },
 				{ type: "text", text: `text ${malformed}` },
-				{ type: "toolCall", id: "toolu_123", name: "read", arguments: { path: "README.md", _i: "Reading file" } },
+				{
+					type: "toolCall",
+					id: "toolu_123",
+					name: "read",
+					arguments: { path: "README.md" },
+				},
 			],
 			api: "anthropic-messages",
 			provider: "anthropic",
@@ -52,7 +57,7 @@ describe("Anthropic thinking replay immutability", () => {
 		expect(assistantParam?.content).toEqual([
 			{ type: "thinking", thinking: `analysis ${malformed}`, signature: "sig_thinking" },
 			{ type: "text", text: `text ${malformed.toWellFormed()}` },
-			{ type: "tool_use", id: "toolu_123", name: "read", input: { path: "README.md", _i: "Reading file" } },
+			{ type: "tool_use", id: "toolu_123", name: "read", input: { path: "README.md" } },
 		]);
 	});
 });

@@ -8,6 +8,7 @@ import { pathMatchesContractPath } from "./contract";
 import { createDashboardController } from "./dashboard";
 import { ensureAutoresearchBranch } from "./git";
 import {
+	collectLoggedRunNumbers,
 	formatNum,
 	isAutoresearchCommittableFile,
 	isAutoresearchLocalStatePath,
@@ -485,17 +486,6 @@ function findBestResult(runtime: AutoresearchRuntime): ExperimentResult | null {
 	}
 	return best;
 }
-
-function collectLoggedRunNumbers(results: ExperimentResult[]): Set<number> {
-	const runNumbers = new Set<number>();
-	for (const result of results) {
-		if (result.runNumber !== null) {
-			runNumbers.add(result.runNumber);
-		}
-	}
-	return runNumbers;
-}
-
 function summaryToChecks(summary: PendingRunSummary | null): ChecksResult | null {
 	if (!summary || summary.checksPass === null) {
 		return null;

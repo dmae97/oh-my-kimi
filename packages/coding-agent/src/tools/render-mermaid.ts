@@ -5,7 +5,7 @@ import renderMermaidDescription from "../prompts/tools/render-mermaid.md" with {
 import type { ToolSession } from "./index";
 
 const renderMermaidSchema = Type.Object({
-	mermaid: Type.String({ description: "Mermaid graph source text" }),
+	mermaid: Type.String({ description: "mermaid source", examples: ["graph TD; A-->B"] }),
 	config: Type.Optional(
 		Type.Object({
 			useAscii: Type.Optional(Type.Boolean()),

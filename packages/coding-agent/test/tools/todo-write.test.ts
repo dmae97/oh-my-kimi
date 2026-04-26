@@ -60,9 +60,7 @@ describe("TodoWriteTool auto-start behavior", () => {
 			],
 		});
 
-		const result = await tool.execute("call-2", {
-			ops: [{ op: "update", id: "task-1", status: "completed" }],
-		});
+		const result = await tool.execute("call-2", { ops: [{ op: "done", task: "task-1" }] });
 
 		const tasks = result.details?.phases[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["completed", "in_progress"]);
@@ -71,9 +69,7 @@ describe("TodoWriteTool auto-start behavior", () => {
 		expect(summary.text).toContain("Remaining items (1):");
 		expect(summary.text).toContain("task-2 diagnostics [in_progress] (Execution)");
 
-		const completedResult = await tool.execute("call-3", {
-			ops: [{ op: "update", id: "task-2", status: "completed" }],
-		});
+		const completedResult = await tool.execute("call-3", { ops: [{ op: "done", task: "task-2" }] });
 		const completedSummary = completedResult.content.find(part => part.type === "text");
 		if (!completedSummary || completedSummary.type !== "text") {
 			throw new Error("Expected text summary from todo_write");
@@ -105,83 +101,145 @@ describe("TodoWriteTool auto-start behavior", () => {
 	});
 });
 
-describe("TodoWriteTool details field", () => {
-	it("preserves details through replace op", async () => {
+describe("TodoWriteTool ops operations", () => {
+	it("jumps to a specific task out of order", async () => {
 		const tool = new TodoWriteTool(createSession());
-		const result = await tool.execute("call-1", {
+		await tool.execute("call-1", {
 			ops: [
 				{
 					op: "replace",
 					phases: [
 						{
-							name: "Work",
-							tasks: [
-								{ content: "Fix parser", details: "Update src/parser.ts line 42" },
-								{ content: "Add tests" },
-							],
+							name: "Phase A",
+							tasks: [{ content: "first" }, { content: "second" }, { content: "third" }],
 						},
 					],
 				},
 			],
 		});
 
+		const result = await tool.execute("call-2", { ops: [{ op: "start", task: "task-3" }] });
+
 		const tasks = result.details?.phases[0]?.tasks ?? [];
-		expect(tasks[0].details).toBe("Update src/parser.ts line 42");
-		expect(tasks[1].details).toBeUndefined();
+		expect(tasks.map(task => task.status)).toEqual(["pending", "pending", "in_progress"]);
 	});
 
-	it("preserves details through add_task op", async () => {
+	it("demotes the current in_progress task when starting another", async () => {
+		const tool = new TodoWriteTool(createSession());
+		await tool.execute("call-1", {
+			ops: [
+				{
+					op: "replace",
+					phases: [
+						{ name: "A", tasks: [{ content: "a1" }, { content: "a2" }] },
+						{ name: "B", tasks: [{ content: "b1" }] },
+					],
+				},
+			],
+		});
+
+		const result = await tool.execute("call-2", { ops: [{ op: "start", task: "task-3" }] });
+
+		const allTasks = result.details?.phases.flatMap(phase => phase.tasks) ?? [];
+		expect(allTasks.map(task => task.status)).toEqual(["pending", "pending", "in_progress"]);
+	});
+
+	it("appends items to an existing phase", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
 			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "First" }] }] }],
 		});
 
 		const result = await tool.execute("call-2", {
-			ops: [{ op: "add_task", phase: "phase-1", content: "Second", details: "Check edge cases" }],
+			ops: [
+				{
+					op: "append",
+					phase: "phase-1",
+					items: [{ id: "task-9", label: "Second" }],
+				},
+			],
 		});
 
 		const tasks = result.details?.phases[0]?.tasks ?? [];
-		expect(tasks[1].details).toBe("Check edge cases");
+		expect(tasks.map(task => ({ id: task.id, content: task.content, status: task.status }))).toEqual([
+			{ id: "task-1", content: "First", status: "in_progress" },
+			{ id: "task-9", content: "Second", status: "pending" },
+		]);
 	});
 
-	it("updates details via update op", async () => {
+	it("creates a phase when append targets a missing phase", async () => {
+		const tool = new TodoWriteTool(createSession());
+		await tool.execute("call-1", {
+			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "First" }] }] }],
+		});
+
+		const result = await tool.execute("call-2", {
+			ops: [
+				{
+					op: "append",
+					phase: "Cleanup",
+					items: [{ id: "task-10", label: "Remove dead code" }],
+				},
+			],
+		});
+
+		expect(result.details?.phases.map(phase => ({ id: phase.id, name: phase.name }))).toEqual([
+			{ id: "phase-1", name: "Work" },
+			{ id: "Cleanup", name: "Cleanup" },
+		]);
+		expect(result.details?.phases[1]?.tasks.map(task => task.id)).toEqual(["task-10"]);
+	});
+
+	it("marks all tasks in a phase done", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
 			ops: [
 				{
 					op: "replace",
-					phases: [{ name: "Work", tasks: [{ content: "Fix bug", details: "Old details" }] }],
-				},
-			],
-		});
-
-		const result = await tool.execute("call-2", {
-			ops: [{ op: "update", id: "task-1", details: "New details with\nlines" }],
-		});
-
-		const task = result.details?.phases[0]?.tasks[0];
-		expect(task?.details).toBe("New details with\nlines");
-	});
-
-	it("includes details in summary for in_progress tasks", async () => {
-		const tool = new TodoWriteTool(createSession());
-		const result = await tool.execute("call-1", {
-			ops: [
-				{
-					op: "replace",
 					phases: [
-						{
-							name: "Work",
-							tasks: [{ content: "Fix parser", details: "Edit src/parser.ts" }],
-						},
+						{ name: "Work", tasks: [{ content: "First" }, { content: "Second" }] },
+						{ name: "Later", tasks: [{ content: "Third" }] },
 					],
 				},
 			],
 		});
 
+		const result = await tool.execute("call-2", { ops: [{ op: "done", phase: "phase-1" }] });
+		const allTasks = result.details?.phases.flatMap(phase => phase.tasks) ?? [];
+		expect(allTasks.map(task => task.status)).toEqual(["completed", "completed", "in_progress"]);
+	});
+
+	it("removes all tasks when rm omits task and phase", async () => {
+		const tool = new TodoWriteTool(createSession());
+		await tool.execute("call-1", {
+			ops: [
+				{
+					op: "replace",
+					phases: [{ name: "Work", tasks: [{ content: "First" }, { content: "Second" }] }],
+				},
+			],
+		});
+
+		const result = await tool.execute("call-2", { ops: [{ op: "rm" }] });
+		expect(result.details?.phases[0]?.tasks).toEqual([]);
 		const summary = result.content.find(part => part.type === "text");
 		if (!summary || summary.type !== "text") throw new Error("Expected text summary");
-		// Task is auto-promoted to in_progress, so details should appear in summary
-		expect(summary.text).toContain("Edit src/parser.ts");
+		expect(summary.text).toContain("Todo list cleared.");
+	});
+
+	it("drops all tasks in a phase", async () => {
+		const tool = new TodoWriteTool(createSession());
+		await tool.execute("call-1", {
+			ops: [
+				{
+					op: "replace",
+					phases: [{ name: "Work", tasks: [{ content: "First" }, { content: "Second" }] }],
+				},
+			],
+		});
+
+		const result = await tool.execute("call-2", { ops: [{ op: "drop", phase: "phase-1" }] });
+		const tasks = result.details?.phases[0]?.tasks ?? [];
+		expect(tasks.map(task => task.status)).toEqual(["abandoned", "abandoned"]);
 	});
 });

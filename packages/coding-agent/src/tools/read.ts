@@ -8,21 +8,12 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { computeLineHash } from "../edit/line-hash";
-import {
-	type ChunkReadTarget,
-	formatChunkedRead,
-	parseChunkReadPath,
-	parseChunkSelector,
-	resolveAnchorStyle,
-	resolveChunkAutoIndent,
-} from "../edit/modes/chunk";
+import { formatHashLines } from "../edit/line-hash";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { parseInternalUrl } from "../internal-urls/parse";
 import type { InternalUrl } from "../internal-urls/types";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
 import readDescription from "../prompts/tools/read.md" with { type: "text" };
-import readChunkDescription from "../prompts/tools/read-chunk.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import {
 	DEFAULT_MAX_BYTES,
@@ -34,7 +25,6 @@ import {
 } from "../session/streaming-output";
 import { renderCodeCell, renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
-import { resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { ImageInputTooLargeError, loadImageInput, MAX_IMAGE_INPUT_BYTES } from "../utils/image-loading";
 import { convertFileWithMarkit } from "../utils/markit";
@@ -71,12 +61,6 @@ import {
 import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const PROSE_LANGUAGES = new Set(["markdown", "text", "log", "asciidoc", "restructuredtext"]);
-
-function isProseLanguage(language: string | undefined): boolean {
-	return language !== undefined && PROSE_LANGUAGES.has(language);
-}
-
 // Document types converted to markdown via markit.
 const CONVERTIBLE_EXTENSIONS = new Set([".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".rtf", ".epub"]);
 
@@ -89,19 +73,7 @@ function isRemoteMountPath(absolutePath: string): boolean {
 
 function prependLineNumbers(text: string, startNum: number): string {
 	const textLines = text.split("\n");
-	const lastLineNum = startNum + textLines.length - 1;
-	const padWidth = String(lastLineNum).length;
-	return textLines
-		.map((line, i) => {
-			const lineNum = String(startNum + i).padStart(padWidth, " ");
-			return `${lineNum}|${line}`;
-		})
-		.join("\n");
-}
-
-function prependHashLines(text: string, startNum: number): string {
-	const textLines = text.split("\n");
-	return textLines.map((line, i) => `${startNum + i}#${computeLineHash(startNum + i, line)}:${line}`).join("\n");
+	return textLines.map((line, i) => `${startNum + i}|${line}`).join("\n");
 }
 
 function formatTextWithMode(
@@ -110,7 +82,7 @@ function formatTextWithMode(
 	shouldAddHashLines: boolean,
 	shouldAddLineNumbers: boolean,
 ): string {
-	if (shouldAddHashLines) return prependHashLines(text, startNum);
+	if (shouldAddHashLines) return formatHashLines(text, startNum);
 	if (shouldAddLineNumbers) return prependLineNumbers(text, startNum);
 	return text;
 }
@@ -369,9 +341,9 @@ function prependSuffixResolutionNotice(text: string, suffixResolution?: { from: 
 }
 
 const readSchema = Type.Object({
-	path: Type.String({ description: "Path or URL to read" }),
-	sel: Type.Optional(Type.String({ description: "Selector: chunk path, L10-L50, or raw" })),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default: 20)" })),
+	path: Type.String({ description: "path or url", examples: ["src/foo.ts", "https://example.com"] }),
+	sel: Type.Optional(Type.String({ description: "line range or mode", examples: ["50", "50-200", "50+150", "raw"] })),
+	timeout: Type.Optional(Type.Number({ description: "timeout in seconds", default: 20 })),
 });
 
 export type ReadToolInput = Static<typeof readSchema>;
@@ -382,13 +354,16 @@ export interface ReadToolDetails {
 	isDirectory?: boolean;
 	resolvedPath?: string;
 	suffixResolution?: { from: string; to: string };
-	chunk?: ChunkReadTarget;
 	url?: string;
 	finalUrl?: string;
 	contentType?: string;
 	method?: string;
 	notes?: string[];
 	meta?: OutputMeta;
+	/** Raw text + start line for user-visible TUI rendering, set when content is text-like.
+	 * Mirrors the same lines the model receives but without hashline/line-number prefixes,
+	 * so the TUI can render the file content with its own gutter without re-parsing the formatted text. */
+	displayContent?: { text: string; startLine: number };
 }
 
 type ReadParams = ReadToolInput;
@@ -397,28 +372,37 @@ type ReadParams = ReadToolInput;
 type ParsedSelector =
 	| { kind: "none" }
 	| { kind: "raw" }
-	| { kind: "lines"; startLine: number; endLine: number | undefined }
-	| { kind: "chunk"; selector: string };
+	| { kind: "lines"; startLine: number; endLine: number | undefined };
 
-const LINE_RANGE_RE = /^L(\d+)(?:-L?(\d+))?$/i;
+const LINE_RANGE_RE = /^L?(\d+)(?:([-+])L?(\d+))?$/i;
 
 function parseSel(sel: string | undefined): ParsedSelector {
 	if (!sel || sel.length === 0) return { kind: "none" };
-	const normalizedSelector = parseChunkSelector(sel).selector ?? sel;
-	if (normalizedSelector === "raw") return { kind: "raw" };
-	const lineMatch = LINE_RANGE_RE.exec(normalizedSelector);
+	if (sel === "raw") return { kind: "raw" };
+	const lineMatch = LINE_RANGE_RE.exec(sel);
 	if (lineMatch) {
 		const rawStart = Number.parseInt(lineMatch[1]!, 10);
 		if (rawStart < 1) {
-			throw new ToolError("L0 is invalid; lines are 1-indexed. Use sel=L1.");
+			throw new ToolError("sel=0 is invalid; lines are 1-indexed. Use sel=1.");
 		}
-		const rawEnd = lineMatch[2] ? Number.parseInt(lineMatch[2], 10) : undefined;
-		if (rawEnd !== undefined && rawEnd < rawStart) {
-			throw new ToolError(`Invalid range L${rawStart}-L${rawEnd}: end must be >= start.`);
+		const sep = lineMatch[2];
+		const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
+		let rawEnd: number | undefined;
+		if (sep === "+") {
+			if (rhs === undefined || rhs < 1) {
+				throw new ToolError(`Invalid range ${rawStart}+${rhs ?? 0}: count must be >= 1.`);
+			}
+			rawEnd = rawStart + rhs - 1;
+		} else if (sep === "-") {
+			if (rhs === undefined || rhs < rawStart) {
+				throw new ToolError(`Invalid range ${rawStart}-${rhs ?? 0}: end must be >= start.`);
+			}
+			rawEnd = rhs;
 		}
 		return { kind: "lines", startLine: rawStart, endLine: rawEnd };
 	}
-	return { kind: "chunk", selector: normalizedSelector };
+	// Unrecognized selectors fall through; sqlite/archive/url readers consume `sel` themselves.
+	return { kind: "none" };
 }
 
 /** Convert a line-range selector to the offset/limit pair used by internal pagination. */
@@ -485,18 +469,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			Math.min(session.settings.get("read.defaultLimit") ?? DEFAULT_MAX_LINES, DEFAULT_MAX_LINES),
 		);
 		this.#inspectImageEnabled = session.settings.get("inspect_image.enabled");
-		this.description =
-			resolveEditMode(session) === "chunk"
-				? prompt.render(readChunkDescription, {
-						anchorStyle: resolveAnchorStyle(session.settings),
-						chunkAutoIndent: resolveChunkAutoIndent(),
-					})
-				: prompt.render(readDescription, {
-						DEFAULT_LIMIT: String(this.#defaultLimit),
-						DEFAULT_MAX_LINES: String(DEFAULT_MAX_LINES),
-						IS_HASHLINE_MODE: displayMode.hashLines,
-						IS_LINE_NUMBER_MODE: !displayMode.hashLines && displayMode.lineNumbers,
-					});
+		this.description = prompt.render(readDescription, {
+			DEFAULT_LIMIT: String(this.#defaultLimit),
+			DEFAULT_MAX_LINES: String(DEFAULT_MAX_LINES),
+			IS_HASHLINE_MODE: displayMode.hashLines,
+			IS_LINE_NUMBER_MODE: !displayMode.hashLines && displayMode.lineNumbers,
+		});
 	}
 
 	async #resolveArchiveReadPath(readPath: string, signal?: AbortSignal): Promise<ResolvedArchiveReadPath | null> {
@@ -599,9 +577,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			sourceInternal?: string;
 			entityLabel: string;
 			ignoreResultLimits?: boolean;
+			raw?: boolean;
 		},
 	): AgentToolResult<ReadToolDetails> {
-		const displayMode = resolveFileDisplayMode(this.session);
+		const displayMode = resolveFileDisplayMode(this.session, { raw: options.raw });
 		const details = options.details ?? {};
 		const allLines = text.split("\n");
 		const totalLines = allLines.length;
@@ -624,7 +603,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const suggestion =
 				allLines.length === 0
 					? `The ${options.entityLabel} is empty.`
-					: `Use sel=L1 to read from the start, or sel=L${allLines.length} to read the last line.`;
+					: `Use sel=1 to read from the start, or sel=${allLines.length} to read the last line.`;
 			return resultBuilder
 				.text(
 					`Line ${startLineDisplay} is beyond end of ${options.entityLabel} (${allLines.length} lines total). ${suggestion}`,
@@ -640,8 +619,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		const shouldAddHashLines = displayMode.hashLines;
 		const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
-		const formatText = (content: string, startNum: number): string =>
-			formatTextWithMode(content, startNum, shouldAddHashLines, shouldAddLineNumbers);
+		const formatText = (content: string, startNum: number): string => {
+			details.displayContent = { text: content, startLine: startNum };
+			return formatTextWithMode(content, startNum, shouldAddHashLines, shouldAddLineNumbers);
+		};
 
 		let outputText: string;
 		let truncationInfo:
@@ -684,7 +665,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const nextOffset = startLine + userLimitedLines + 1;
 
 			outputText = formatText(selectedContent, startLineDisplay);
-			outputText += `\n\n[${remaining} more lines in ${options.entityLabel}. Use sel=L${nextOffset} to continue]`;
+			outputText += `\n\n[${remaining} more lines in ${options.entityLabel}. Use sel=${nextOffset} to continue]`;
 		} else {
 			outputText = formatText(truncation.content, startLineDisplay);
 		}
@@ -743,6 +724,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		limit: number | undefined,
 		resolvedArchivePath: ResolvedArchiveReadPath,
 		signal?: AbortSignal,
+		options?: { raw?: boolean },
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		throwIfAborted(signal);
 		const archive = await openArchive(resolvedArchivePath.absolutePath);
@@ -787,6 +769,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			details,
 			sourcePath: resolvedArchivePath.absolutePath,
 			entityLabel: "archive entry",
+			raw: options?.raw,
 		});
 		const firstText = result.content.find((content): content is TextContent => content.type === "text");
 		if (firstText) {
@@ -933,7 +916,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			readPath = expandPath(readPath);
 		}
 		const displayMode = resolveFileDisplayMode(this.session);
-		const chunkMode = resolveEditMode(this.session) === "chunk";
 
 		// Handle internal URLs (agent://, artifact://, memory://, skill://, rule://, local://, mcp://)
 		const internalRouter = this.session.internalRouter;
@@ -967,18 +949,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			return executeReadUrl(this.session, { path: parsedUrlTarget.path, timeout, raw: parsedUrlTarget.raw }, signal);
 		}
 
-		const parsedReadPath = chunkMode ? parseChunkReadPath(readPath) : { filePath: readPath };
-		const localReadPath = parsedReadPath.filePath;
-		const pathSelectorParsed = chunkMode ? parseSel(parsedReadPath.selector) : { kind: "none" as const };
-		const pathChunkSelector = pathSelectorParsed.kind === "chunk" ? pathSelectorParsed.selector : undefined;
-		const selectorInput = sel ?? parsedReadPath.selector;
-		const rawSelectorInput = sel ?? parsedReadPath.selector;
-		const parsed = parseSel(selectorInput);
+		const localReadPath = readPath;
+		const parsed = parseSel(sel);
 
 		const archivePath = await this.#resolveArchiveReadPath(localReadPath, signal);
 		if (archivePath) {
 			const { offset, limit } = selToOffsetLimit(parsed);
-			return this.#readArchive(readPath, offset, limit, archivePath, signal);
+			return this.#readArchive(readPath, offset, limit, archivePath, signal, { raw: parsed.kind === "raw" });
 		}
 
 		const sqlitePath = await this.#resolveSqliteReadPath(readPath, signal);
@@ -1033,54 +1010,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const imageMetadata = await readImageMetadata(absolutePath);
 		const mimeType = imageMetadata?.mimeType;
 		const ext = path.extname(absolutePath).toLowerCase();
-		const hasEditTool = this.session.hasEditTool ?? true;
-		const language = getLanguageFromPath(absolutePath);
-		const skipChunksForExplore = !hasEditTool && !this.session.settings.get("read.explorechunks");
-		const skipChunksForProse = isProseLanguage(language) && !this.session.settings.get("read.prosechunks");
-		const shouldConvertWithMarkit =
-			CONVERTIBLE_EXTENSIONS.has(ext) || (ext === ".ipynb" && (parsed.kind === "raw" || !chunkMode));
-
-		if (chunkMode && parsed.kind !== "raw" && !skipChunksForExplore && !skipChunksForProse) {
-			const absoluteLineRange =
-				pathChunkSelector && parsed.kind === "lines"
-					? { startLine: parsed.startLine, endLine: parsed.endLine }
-					: undefined;
-			// sel= wins over path:chunk when both are provided (explicit param > embedded path).
-			const effectiveSelector = sel ? selectorInput : (pathChunkSelector ?? selectorInput);
-			const rawEffectiveSelector = sel ? selectorInput : (rawSelectorInput ?? effectiveSelector);
-			const chunkReadPath =
-				parsed.kind === "chunk" || (pathChunkSelector && !sel)
-					? rawEffectiveSelector
-						? `${localReadPath}:${rawEffectiveSelector}`
-						: localReadPath
-					: parsed.kind === "lines"
-						? parsed.endLine !== undefined
-							? `${localReadPath}:L${parsed.startLine}-L${parsed.endLine}`
-							: `${localReadPath}:L${parsed.startLine}`
-						: localReadPath;
-			const chunkResult = await formatChunkedRead({
-				filePath: absolutePath,
-				readPath: chunkReadPath,
-				cwd: this.session.cwd,
-				language,
-				omitChecksum: !hasEditTool,
-				anchorStyle: resolveAnchorStyle(this.session.settings),
-				absoluteLineRange,
-			});
-			let text = chunkResult.text;
-			if (suffixResolution) {
-				text = prependSuffixResolutionNotice(text, suffixResolution);
-			}
-			return toolResult<ReadToolDetails>({
-				resolvedPath: absolutePath,
-				suffixResolution,
-				chunk: chunkResult.chunk,
-			})
-				.text(text)
-				.sourcePath(absolutePath)
-				.done();
-		}
-
+		const _hasEditTool = this.session.hasEditTool ?? true;
+		const _language = getLanguageFromPath(absolutePath);
+		const shouldConvertWithMarkit = CONVERTIBLE_EXTENSIONS.has(ext) || (ext === ".ipynb" && parsed.kind === "raw");
 		// Read the file based on type
 		let content: Array<TextContent | ImageContent>;
 		let details: ReadToolDetails = {};
@@ -1163,31 +1095,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				content = [{ type: "text", text: `[Cannot read ${ext} file: conversion failed]` }];
 			}
 		} else {
-			// Chunk mode: dispatch to chunk tree unless raw or line range requested
-			if (chunkMode && parsed.kind !== "raw" && parsed.kind !== "lines") {
-				const chunkSel = parsed.kind === "chunk" ? parsed.selector : undefined;
-				const chunkResult = await formatChunkedRead({
-					filePath: absolutePath,
-					readPath: chunkSel ? `${localReadPath}:${chunkSel}` : localReadPath,
-					cwd: this.session.cwd,
-					language: getLanguageFromPath(absolutePath),
-					omitChecksum: !(this.session.hasEditTool ?? true),
-					anchorStyle: resolveAnchorStyle(this.session.settings),
-				});
-				let text = chunkResult.text;
-				if (suffixResolution) {
-					text = prependSuffixResolutionNotice(text, suffixResolution);
-				}
-				return toolResult<ReadToolDetails>({
-					resolvedPath: absolutePath,
-					suffixResolution,
-					chunk: chunkResult.chunk,
-				})
-					.text(text)
-					.sourcePath(absolutePath)
-					.done();
-			}
-
 			// Raw text or line-range mode
 			const { offset, limit } = selToOffsetLimit(parsed);
 			const startLine = offset ? Math.max(0, offset - 1) : 0;
@@ -1221,7 +1128,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				const suggestion =
 					totalFileLines === 0
 						? "The file is empty."
-						: `Use sel=L1 to read from the start, or sel=L${totalFileLines} to read the last line.`;
+						: `Use sel=1 to read from the start, or sel=${totalFileLines} to read the last line.`;
 				return toolResult<ReadToolDetails>({ resolvedPath: absolutePath, suffixResolution })
 					.text(`Line ${startLineDisplay} is beyond end of file (${totalFileLines} lines total). ${suggestion}`)
 					.done();
@@ -1247,9 +1154,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				firstLineExceedsLimit,
 			};
 
-			const shouldAddHashLines = displayMode.hashLines;
-			const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
+			const isRawMode = parsed.kind === "raw";
+			const shouldAddHashLines = !isRawMode && displayMode.hashLines;
+			const shouldAddLineNumbers = isRawMode ? false : shouldAddHashLines ? false : displayMode.lineNumbers;
+			let capturedDisplayContent: { text: string; startLine: number } | undefined;
 			const formatText = (text: string, startNum: number): string => {
+				capturedDisplayContent = { text, startLine: startNum };
 				return formatTextWithMode(text, startNum, shouldAddHashLines, shouldAddLineNumbers);
 			};
 
@@ -1290,7 +1200,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				const nextOffset = startLine + userLimitedLines + 1;
 
 				outputText = formatText(truncation.content, startLineDisplay);
-				outputText += `\n\n[${remaining} more lines in file. Use sel=L${nextOffset} to continue]`;
+				outputText += `\n\n[${remaining} more lines in file. Use sel=${nextOffset} to continue]`;
 				details = {};
 				sourcePath = absolutePath;
 			} else {
@@ -1298,6 +1208,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				outputText = formatText(truncation.content, startLineDisplay);
 				details = {};
 				sourcePath = absolutePath;
+			}
+
+			if (capturedDisplayContent) {
+				details.displayContent = capturedDisplayContent;
 			}
 
 			content = [{ type: "text", text: outputText }];
@@ -1494,7 +1408,10 @@ export const readToolRenderer = {
 		}
 
 		const details = result.details;
-		const contentText = result.content?.find(c => c.type === "text")?.text ?? "";
+		const rawText = result.content?.find(c => c.type === "text")?.text ?? "";
+		// Prefer structured `displayContent` from details when available so the TUI
+		// shows clean file content (no model-only hashline anchors) without parsing the formatted text.
+		const contentText = details?.displayContent?.text ?? rawText;
 		const imageContent = result.content?.find(c => c.type === "image");
 		const rawPath = args?.file_path || args?.path || "";
 		const filePath = shortenPath(rawPath);

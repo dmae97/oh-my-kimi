@@ -1,5 +1,5 @@
 import type { AssistantMessage, ToolCall } from "@oh-my-pi/pi-ai";
-import type { ChangelogCategory, ConventionalAnalysis } from "./types";
+import type { ChangelogCategory, ConventionalAnalysis, ConventionalDetail } from "./types";
 
 export function extractToolCall(message: AssistantMessage, name: string): ToolCall | undefined {
 	return message.content.find(content => content.type === "toolCall" && content.name === name) as ToolCall | undefined;
@@ -41,4 +41,18 @@ export function normalizeAnalysis(parsed: {
 		})),
 		issueRefs: parsed.issue_refs ?? [],
 	};
+}
+
+export function normalizeDetails(
+	details: Array<{
+		text: string;
+		changelog_category?: ConventionalDetail["changelogCategory"];
+		user_visible?: boolean;
+	}>,
+): ConventionalDetail[] {
+	return details.map(detail => ({
+		text: detail.text.trim(),
+		changelogCategory: detail.user_visible ? detail.changelog_category : undefined,
+		userVisible: detail.user_visible ?? false,
+	}));
 }

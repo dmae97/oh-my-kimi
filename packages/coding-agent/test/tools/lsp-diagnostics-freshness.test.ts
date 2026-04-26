@@ -38,6 +38,7 @@ function createClient(cwd: string, config: ServerConfig): LspClient {
 		messageBuffer: new Uint8Array(),
 		isReading: false,
 		lastActivity: Date.now(),
+		writeQueue: Promise.resolve(),
 		activeProgressTokens: new Set(),
 		projectLoaded: Promise.resolve(),
 		resolveProjectLoaded: () => {},

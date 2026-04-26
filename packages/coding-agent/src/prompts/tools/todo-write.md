@@ -1,13 +1,61 @@
-Manages a phased task list. Submit an `ops` array — each op mutates state incrementally.
-**Primary op: `update`.** Use it to mark tasks `in_progress` or `completed`. Only reach for other ops when the structure itself needs to change.
+Manages a phased task list through an `ops` array of flat operations.
+The next pending task is auto-promoted to `in_progress` after completing the current one.
 
-<critical>
-You **MUST** call this tool twice per task:
-1. Before beginning — `{op: "update", id: "task-N", status: "in_progress"}`
-2. Immediately after finishing — `{op: "update", id: "task-N", status: "completed"}`
+<protocol>
+## Shape
 
-You **MUST** keep exactly one task `in_progress` at all times. Mark `completed` immediately — no batching.
-</critical>
+Pass an object with an `ops` array:
+
+```ts
+{
+  ops: [
+    { op: "replace", phases: [...] },
+    { op: "start", task: "task-3" },
+    { op: "done", phase: "Implementation" },
+    { op: "rm" },
+    { op: "drop", task: "task-9" },
+    { op: "append", phase: "Implementation", items: [{ id: "task-10", label: "Run tests" }] },
+  ],
+}
+```
+
+## Operation fields
+
+|Field|Type|When to use|
+|---|---|---|
+|`op`|string|Required. One of `replace`, `start`, `done`, `rm`, `drop`, `append`, `note`|
+|`task`|string|Task id for `start`, or a task target for `done` / `rm` / `drop`|
+|`phase`|string|Phase target for `done` / `rm` / `drop`, or append destination for `append`|
+|`items`|{id, label}[]|Required for `append`. If the phase does not exist, it is created at the end|
+|`phases`|Phase[]|Only for `replace`. Keeps initial phased setup available for harness bootstrap and full restructures|
+|`text`|string|Required for `note`. The note text appended to `task.notes` (which is a list, joined with newlines on render)|
+
+## Semantics
+- `start`: requires `task`; sets that task to `in_progress`
+- `done`: marks one task, one phase, or all tasks completed
+- `rm`: removes one task, one phase's tasks, or all tasks
+- `drop`: marks one task, one phase, or all tasks abandoned
+- `append`: appends `items` to `phase`; creates the phase if missing
+- `replace`: replaces the full todo list
+- `note`: append `text` as a new note attached to `task`. Notes are append-only context the user added; they only render to you when the task is `in_progress`. Other tasks display only a `+N` marker. Use this when you want to leave a follow-up reminder for yourself when you reach a later task.
+
+If `done`, `rm`, or `drop` omits both `task` and `phase`, it applies to all tasks.
+
+## Task Anatomy
+- `label`: Short label (5-10 words). What is being done, not how.
+- `replace` task `content` should stay short and specific.
+
+## Phase Anatomy
+- `name`: Short, human-readable noun phrase (1-3 words). Capitalize naturally.
+- Always prefix with a roman-numeral ordinal (`I.`, `II.`, `III.`, `IV.`, …) to convey ordering — e.g. `I. Foundation`, `II. Auth`, `III. Routing`. Single-phase plans use `I.` too.
+- You **MUST NOT** use snake_case, `Phase1_*`, arabic numerals (`1.`), or letter prefixes (`A.`) — they render as ugly identifiers.
+
+## Rules
+- Mark tasks done immediately after finishing — never defer.
+- Complete phases in order — do not skip ahead while earlier ones are pending.
+- On blockers, append a new task to the active phase.
+- Keep ids stable once introduced.
+</protocol>
 
 <conditions>
 Create a todo list when:
@@ -17,73 +65,25 @@ Create a todo list when:
 4. New instructions arrive mid-task — capture before proceeding
 </conditions>
 
-<protocol>
-## Operations
-
-|op|When to use|
-|---|---|
-|`update`|Mark a task in_progress / completed / abandoned, or edit content/notes|
-|`replace`|Initial setup, or full restructure when the plan changes significantly|
-|`add_phase`|Add a new phase of work discovered mid-task|
-|`add_task`|Add a task to an existing phase|
-|`remove_task`|Remove a task that is no longer relevant|
-
-## Statuses
-
-|Status|Meaning|
-|---|---|
-|`pending`|Not started|
-|`in_progress`|Currently working — exactly one at a time|
-|`completed`|Fully done|
-|`abandoned`|Dropped intentionally|
-
-## Rules
-- You **MUST** mark `in_progress` **before** starting work, not after
-- You **MUST** mark `completed` **immediately** — never defer
-- You **MUST** keep exactly **one** task `in_progress`
-- You **MUST** complete phases in order — do not mark later tasks `completed` while earlier ones are `pending`
-- On blockers: keep `in_progress`, add a new task describing the blocker
-- Multiple ops can be batched in one call (e.g., complete current + start next)
-</protocol>
-
-## Task Anatomy
-- `content`: Short label (5-10 words). What is being done, not how.
-- `details`: File paths, implementation steps, edge cases. Shown only when task is active.
-- `notes`: Runtime observations added during execution.
+<examples>
+# Initial setup (multi-phase)
+`{"ops":[{"op":"replace","phases":[{"name":"I. Foundation","tasks":[{"content":"Scaffold crate"},{"content":"Wire workspace"}]},{"name":"II. Auth","tasks":[{"content":"Port credential store"},{"content":"Wire OAuth providers"}]},{"name":"III. Verification","tasks":[{"content":"Run cargo test"}]}]}]}`
+# Initial setup (single phase — still prefixed)
+`{"ops":[{"op":"replace","phases":[{"name":"I. Implementation","tasks":[{"content":"Apply fix"},{"content":"Run tests"}]}]}]}`
+# Complete one task
+`{"ops":[{"op":"done","task":"task-2"}]}`
+# Complete a whole phase
+`{"ops":[{"op":"done","phase":"II. Auth"}]}`
+# Remove all tasks
+`{"ops":[{"op":"rm"}]}`
+# Drop one task
+`{"ops":[{"op":"drop","task":"task-7"}]}`
+# Append tasks to a phase
+`{"ops":[{"op":"append","phase":"II. Auth","items":[{"id":"task-8","label":"Handle retries"},{"id":"task-9","label":"Run tests"}]}]}`
+</examples>
 
 <avoid>
 - Single-step tasks — act directly
 - Conversational or informational requests
 - Tasks completable in under 3 trivial steps
 </avoid>
-
-<example name="start-task">
-Mark task-2 in_progress before beginning work:
-ops: [{op: "update", id: "task-2", status: "in_progress"}]
-</example>
-
-<example name="complete-and-advance">
-Finish task-2 and start task-3 in one call:
-ops: [
-  {op: "update", id: "task-2", status: "completed"},
-  {op: "update", id: "task-3", status: "in_progress"}
-]
-</example>
-
-<example name="add_task">
-Add a follow-up task with implementation specifics in `details`:
-ops: [{op: "add_task", phase: "Implementation", after: "task-2", task: {content: "Handle retries", details: "Update retry.ts to cap exponential backoff and preserve AbortSignal handling", status: "pending"}}]
-</example>
-
-<example name="initial-setup">
-Replace is for setup only. Prefer add_phase / add_task for incremental additions.
-ops: [{op: "replace", phases: [
-  {name: "Investigation", tasks: [{content: "Read source"}, {content: "Map callsites"}]},
-  {name: "Implementation", tasks: [{content: "Apply fix", details: "Update parser.ts to handle edge case in line 42"}, {content: "Run tests"}]}
-]}]
-</example>
-
-<example name="skip">
-User: "What does this function do?" / "Add a comment" / "Run npm install"
-→ Do it directly. No list needed.
-</example>

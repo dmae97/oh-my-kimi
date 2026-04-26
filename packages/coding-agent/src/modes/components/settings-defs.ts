@@ -145,6 +145,24 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		},
 		{ value: "never", label: "Never", description: "Stay on the fallback model until manually changed" },
 	],
+	// Task input mode
+	"task.simple": [
+		{
+			value: "default",
+			label: "Default",
+			description: "Shared context and custom task schema are available",
+		},
+		{
+			value: "schema-free",
+			label: "Schema-free",
+			description: "Shared context stays available, but custom task schema is disabled",
+		},
+		{
+			value: "independent",
+			label: "Independent",
+			description: "No shared context or custom task schema; each task must stand alone",
+		},
+	],
 	// Task max concurrency
 	"task.maxConcurrency": [
 		{ value: "0", label: "Unlimited" },
@@ -280,11 +298,6 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		{ value: "1000", label: "1000 lines" },
 		{ value: "5000", label: "5000 lines" },
 	],
-	"read.anchorstyle": [
-		{ value: "full", label: "Full", description: "Show the kind prefix and identifier" },
-		{ value: "kind", label: "Kind", description: "Show only the kind prefix plus checksum" },
-		{ value: "bare", label: "Bare", description: "Show only the checksum" },
-	],
 	// Todo auto-clear delay
 	"tasks.todoClearDelay": [
 		{ value: "0", label: "Instant" },
@@ -335,9 +348,15 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		{ value: "kagi", label: "Kagi", description: "Requires KAGI_API_KEY and Kagi Search API beta access" },
 		{ value: "synthetic", label: "Synthetic", description: "Requires SYNTHETIC_API_KEY" },
 		{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
+		{ value: "searxng", label: "SearXNG", description: "Self-hosted metasearch; set searxng.endpoint" },
 	],
 	"providers.image": [
-		{ value: "auto", label: "Auto", description: "Priority: OpenRouter > Gemini" },
+		{
+			value: "auto",
+			label: "Auto",
+			description: "Priority: GPT model image tool > Antigravity > OpenRouter > Gemini",
+		},
+		{ value: "openai", label: "OpenAI", description: "Uses the active GPT Responses/Codex model" },
 		{ value: "gemini", label: "Gemini", description: "Requires GEMINI_API_KEY" },
 		{ value: "openrouter", label: "OpenRouter", description: "Requires OPENROUTER_API_KEY" },
 	],

@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import { buildSystemPrompt } from "@oh-my-pi/pi-coding-agent/system-prompt";
 import { prompt } from "@oh-my-pi/pi-utils";
 import Handlebars from "handlebars";
@@ -36,7 +37,7 @@ const baseRenderContext: prompt.TemplateContext = {
 	environment: [{ label: "OS", value: "Darwin" }],
 	finalPlanFilePath: "local://PLAN_FINAL.md",
 	git: baseGitContext,
-	intentField: "_i",
+	intentField: INTENT_FIELD,
 	intentTracing: true,
 	iterative: true,
 	maxRetries: 3,
@@ -87,6 +88,10 @@ async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
 }
 
 describe("system Handlebars prompt templates", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	test("parses and compiles every system template", async () => {
 		const templates = await loadSystemPromptTemplates();
 		expect(templates.size).toBeGreaterThan(0);
@@ -232,5 +237,23 @@ describe("system Handlebars prompt templates", () => {
 		expect(countOccurrences(prompt, "Keep functions small.")).toBe(1);
 		expect(countOccurrences(prompt, "Extract shared helpers on the second use.")).toBe(1);
 		expect(countOccurrences(prompt, distinctRule)).toBe(1);
+	});
+
+	test("buildSystemPrompt omits CPU info when os.cpus fails", async () => {
+		vi.spyOn(os, "cpus").mockImplementation(() => {
+			throw new Error("os.cpus() failed");
+		});
+
+		const systemPrompt = await buildSystemPrompt({
+			cwd: os.tmpdir(),
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: ["read"],
+		});
+
+		const workstation = /<workstation>\n(?<content>[\s\S]*?)\n<\/workstation>/u.exec(systemPrompt)?.groups?.content;
+		expect(workstation).toContain("OS:");
+		expect(workstation).not.toContain("CPU:");
 	});
 });

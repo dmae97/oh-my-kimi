@@ -309,6 +309,49 @@ describe("executeBash", () => {
 		expect(result.output.trim()).toBe("from_snapshot");
 	});
 
+	it("sources large bash functions without base64 eval wrappers", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+		const realBashPath = Bun.env.SHELL?.includes("bash") ? Bun.env.SHELL : "/bin/bash";
+		if (!fs.existsSync(realBashPath)) {
+			return;
+		}
+
+		const bashPath = path.join(tempDir, "test-bash");
+		fs.symlinkSync(realBashPath, bashPath);
+		const largeBody = Array.from({ length: 200 }, (_, index) => `    echo "snapshot ${index}"`).join("\n");
+		fs.writeFileSync(path.join(tempDir, ".bashrc"), `pi_snapshot_large_function ()\n{\n${largeBody}\n}\n`);
+
+		vi.spyOn(os, "homedir").mockReturnValue(tempDir);
+		vi.spyOn(Settings.prototype, "getShellConfig").mockReturnValue({
+			shell: bashPath,
+			args: ["-l", "-c"],
+			env: {
+				PATH: Bun.env.PATH ?? "",
+				HOME: tempDir,
+			},
+			prefix: undefined,
+		});
+
+		const snapshotPath = await shellSnapshot.getOrCreateSnapshot(bashPath, {
+			PATH: Bun.env.PATH ?? "",
+			HOME: tempDir,
+		});
+		expect(snapshotPath).not.toBeNull();
+		const snapshot = fs.readFileSync(snapshotPath!, "utf8");
+		expect(snapshot).toContain("pi_snapshot_large_function");
+		expect(snapshot).not.toContain("base64 -d");
+
+		const result = await executeBash("printf 'snapshot_ok\\n'", {
+			cwd: tempDir,
+			timeout: 5000,
+			sessionKey: "large-function-snapshot",
+		});
+		expect(result.cancelled).toBe(false);
+		expect(result.output.trim()).toBe("snapshot_ok");
+	});
+
 	it("does not allow exec to replace the host", async () => {
 		const result = await executeBash("exec echo hi", { cwd: tempDir, timeout: 5000 });
 		expect(result.cancelled).toBe(false);

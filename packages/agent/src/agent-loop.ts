@@ -170,11 +170,10 @@ function normalizeTools(tools: Context["tools"], injectIntent: boolean): Context
 }
 
 function extractIntent(args: Record<string, unknown>): { intent?: string; strippedArgs: Record<string, unknown> } {
-	const intent = args[INTENT_FIELD];
+	const { [INTENT_FIELD]: intent, ...strippedArgs } = args;
 	if (typeof intent !== "string") {
-		return { strippedArgs: args };
+		return { strippedArgs };
 	}
-	const { [INTENT_FIELD]: _ignored, ...strippedArgs } = args;
 	const trimmed = intent.trim();
 	return { intent: trimmed.length > 0 ? trimmed : undefined, strippedArgs };
 }
@@ -454,7 +453,13 @@ async function executeToolCalls(
 
 	const records = toolCalls.map(toolCall => ({
 		toolCall,
-		tool: tools?.find(t => t.name === toolCall.name),
+		// Tools emitted via OpenAI's custom-tool path (e.g. `apply_patch` on GPT-5)
+		// come back under their wire-level name, which may differ from the
+		// harness-internal `name`. Match on either, preferring `name` for
+		// determinism if both somehow collide.
+		tool:
+			tools?.find(t => t.name === toolCall.name) ??
+			tools?.find(t => t.customWireName !== undefined && t.customWireName === toolCall.name),
 		args: toolCall.arguments as Record<string, unknown>,
 		started: false,
 		result: undefined as AgentToolResult<any> | undefined,

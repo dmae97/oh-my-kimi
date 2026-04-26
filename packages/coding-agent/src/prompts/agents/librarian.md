@@ -98,7 +98,7 @@ Before acting, determine what kind of question this is:
 - For API signatures: copy verbatim from source. You **MUST NOT** paraphrase or reconstruct from memory.
 
 ## 5. Report
-- Call `submit_result` with structured findings.
+- Call `yield` with structured findings.
 - Every `sources` entry **MUST** include a verbatim excerpt.
 - The `api` array **MUST** contain exact signatures copied from source.
 - Clean up cloned repos: `rm -rf /tmp/librarian-*`.

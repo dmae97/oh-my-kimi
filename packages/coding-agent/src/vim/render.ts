@@ -1,5 +1,5 @@
 import { extractSegments } from "@oh-my-pi/pi-tui";
-import { truncateToWidth } from "../tools/render-utils";
+import { formatCodeFrameLine, truncateToWidth } from "../tools/render-utils";
 import type {
 	VimErrorLocation,
 	VimFocusLine,
@@ -207,7 +207,7 @@ export function renderVimDetails(details: VimToolDetails): string {
 	}
 
 	if (details.focus) {
-		const focusPrefix = `>${String(details.focus.line).padStart(String(details.viewport.end).length, " ")}│`;
+		const focusPrefix = formatCodeFrameLine(">", details.focus.line, "", String(details.viewport.end).length);
 		const caretPrefix = `${" ".repeat(focusPrefix.length)} `;
 		const caretPadding = " ".repeat(Math.max(0, details.focus.caretCol));
 		lines.push("Focus:");
@@ -219,8 +219,8 @@ export function renderVimDetails(details: VimToolDetails): string {
 		const padWidth = String(details.viewport.end).length;
 		lines.push("Viewport:");
 		for (const line of details.viewportLines) {
-			const prefix = line.isCursor ? ">" : line.isSelected ? "*" : " ";
-			lines.push(`${prefix}${String(line.line).padStart(padWidth, " ")}│${renderPlainViewportCursor(line)}`);
+			const marker = line.isCursor ? ">" : line.isSelected ? "*" : " ";
+			lines.push(formatCodeFrameLine(marker, line.line, renderPlainViewportCursor(line), padWidth));
 		}
 	}
 

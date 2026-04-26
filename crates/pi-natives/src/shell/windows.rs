@@ -10,8 +10,9 @@ use napi::{Error, Result};
 use winreg::{RegKey, enums::HKEY_LOCAL_MACHINE};
 
 pub fn configure_windows_path(shell: &mut BrushShell) -> Result<()> {
+	let install_roots = find_git_install_roots();
 	let git_paths = find_git_paths();
-	if git_paths.is_empty() {
+	if install_roots.is_empty() && git_paths.is_empty() {
 		return Ok(());
 	}
 
@@ -24,20 +25,40 @@ pub fn configure_windows_path(shell: &mut BrushShell) -> Result<()> {
 		})
 		.unwrap_or_default();
 
-	let mut updated_path = existing_path.clone();
-	for git_path in git_paths {
-		if !Path::new(&git_path).is_dir() {
+	// Translate MSYS2-style entries (e.g. /usr/bin, /mingw64/bin, /c/Users/...)
+	// into Windows-native paths so brush-core's std::path-based lookups can
+	// resolve executables shipped with Git Bash.
+	let mut segments: Vec<String> = Vec::new();
+	let mut seen_normalized: HashSet<String> = HashSet::new();
+	for raw in env::split_paths(&existing_path) {
+		let raw_str = raw.to_string_lossy().into_owned();
+		if raw_str.trim().is_empty() {
 			continue;
 		}
-		if path_contains_entry(&updated_path, &git_path) {
+		let translated = translate_msys_segment(&raw_str, &install_roots).unwrap_or(raw_str);
+		let normalized = normalize_path(Path::new(&translated));
+		if normalized.is_empty() {
+			segments.push(translated);
 			continue;
 		}
-		if !updated_path.is_empty() && !updated_path.ends_with(';') {
-			updated_path.push(';');
+		if !seen_normalized.insert(normalized) {
+			continue;
 		}
-		updated_path.push_str(&git_path);
+		segments.push(translated);
 	}
 
+	for git_path in &git_paths {
+		if !Path::new(git_path).is_dir() {
+			continue;
+		}
+		let normalized = normalize_path(Path::new(git_path));
+		if normalized.is_empty() || !seen_normalized.insert(normalized) {
+			continue;
+		}
+		segments.push(git_path.clone());
+	}
+
+	let updated_path = segments.join(";");
 	if updated_path == existing_path {
 		return Ok(());
 	}
@@ -50,18 +71,6 @@ pub fn configure_windows_path(shell: &mut BrushShell) -> Result<()> {
 		.map_err(|err| Error::from_reason(format!("Failed to set PATH: {err}")))?;
 
 	Ok(())
-}
-
-fn path_contains_entry(path_value: &str, entry: &str) -> bool {
-	let entry_normalized = normalize_path(Path::new(entry));
-	if entry_normalized.is_empty() {
-		return false;
-	}
-
-	env::split_paths(path_value).any(|segment| {
-		let segment_normalized = normalize_path(&segment);
-		!segment_normalized.is_empty() && segment_normalized.eq_ignore_ascii_case(&entry_normalized)
-	})
 }
 
 fn normalize_path(path: &Path) -> String {
@@ -195,4 +204,106 @@ fn has_git_command(dir: &Path) -> bool {
 	["git.exe", "git.cmd", "git.bat"]
 		.iter()
 		.any(|name| dir.join(name).is_file())
+}
+
+fn find_git_install_roots() -> Vec<PathBuf> {
+	let mut roots = Vec::new();
+	let mut seen = HashSet::new();
+	for install_path in [query_git_install_path_from_registry(), query_git_install_path_from_where()]
+		.into_iter()
+		.flatten()
+	{
+		let path = PathBuf::from(install_path);
+		let normalized = normalize_path(&path);
+		if normalized.is_empty() {
+			continue;
+		}
+		if seen.insert(normalized) {
+			roots.push(path);
+		}
+	}
+	roots
+}
+
+/// Translate an MSYS2/Git Bash style path entry (e.g. `/usr/bin`,
+/// `/mingw64/bin`, `/c/Users/foo`) into a Windows-native path so that
+/// `std::path` based executable lookups in brush-core can resolve binaries
+/// shipped with Git Bash. Returns `None` when the segment is already a
+/// Windows-style path or cannot be translated.
+fn translate_msys_segment(segment: &str, install_roots: &[PathBuf]) -> Option<String> {
+	let trimmed = segment.trim().trim_matches('"');
+	if trimmed.is_empty() || is_windows_style_path(trimmed) {
+		return None;
+	}
+
+	let forward = trimmed.replace('\\', "/");
+	if !forward.starts_with('/') {
+		return None;
+	}
+
+	// MSYS drive-letter mapping: /c -> C:\, /c/Users/foo -> C:\Users\foo.
+	let rest = &forward[1..];
+	if let Some((head, tail)) = rest.split_once('/') {
+		if is_drive_letter(head) {
+			let drive = head.to_ascii_uppercase();
+			let windows_tail = tail.replace('/', "\\");
+			return Some(format!("{drive}:\\{windows_tail}"));
+		}
+	} else if is_drive_letter(rest) {
+		return Some(format!("{}:\\", rest.to_ascii_uppercase()));
+	}
+
+	// Anchor the remainder against any known Git/MSYS install root.
+	let relative = rest.replace('/', "\\");
+	for root in install_roots {
+		let candidate = root.join(&relative);
+		if candidate.is_dir() {
+			return Some(candidate.to_string_lossy().into_owned());
+		}
+	}
+
+	None
+}
+
+fn is_drive_letter(value: &str) -> bool {
+	value.len() == 1
+		&& value
+			.chars()
+			.next()
+			.is_some_and(|c| c.is_ascii_alphabetic())
+}
+
+fn is_windows_style_path(value: &str) -> bool {
+	let bytes = value.as_bytes();
+	if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+		return true;
+	}
+	value.starts_with("\\\\")
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn drive_letter_segments_translate_to_windows_paths() {
+		assert_eq!(translate_msys_segment("/c/Users/foo", &[]).as_deref(), Some("C:\\Users\\foo"),);
+		assert_eq!(translate_msys_segment("/d", &[]).as_deref(), Some("D:\\"),);
+	}
+
+	#[test]
+	fn windows_style_segments_are_left_alone() {
+		assert_eq!(translate_msys_segment("C:\\Windows\\System32", &[]), None);
+		assert_eq!(translate_msys_segment("\\\\server\\share", &[]), None);
+		assert_eq!(translate_msys_segment("relative\\path", &[]), None);
+	}
+
+	#[test]
+	fn is_drive_letter_only_matches_single_alphabetic_chars() {
+		assert!(is_drive_letter("c"));
+		assert!(is_drive_letter("Z"));
+		assert!(!is_drive_letter(""));
+		assert!(!is_drive_letter("cc"));
+		assert!(!is_drive_letter("1"));
+	}
 }

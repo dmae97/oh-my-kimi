@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+## [14.4.2] - 2026-04-26
+
+### Removed
+
+- Removed the `chunk` napi module (`ChunkState`, chunk schema, chunk rendering, chunk edit) and dropped `generate_chunk_schema()` from the build script
+
+## [14.3.0] - 2026-04-25
+### Added
+
+- Added `text` to `MinimizerResult` so consumers can replace rewritten output with the minimized replacement text
+- Added `settingsHash` to `MinimizerOptions` to verify the minimizer `settingsPath` contents against a xxHash64 digest before applying them
+- Added `minimized` output telemetry via `MinimizerResult` on `ShellExecuteResult` and `ShellRunResult`, exposing the applied minimizer filter and original/minimized byte counts when output is rewritten
+- Added a new `minimizer` option to `ShellExecuteOptions` and `ShellOptions` to configure per-command output minimization
+- Added the `MinimizerOptions` API with controls for enabling minimization, overriding settings via `settingsPath`, allow/deny lists (`only`, `except`), and `maxCaptureBytes` capture limits
+
+### Changed
+
+- Changed the shell output minimizer to more aggressively compact successful test runs, git output, large listings, grep/find results, source reads, and dependency manifests
+- Changed compound and piped shell commands to bypass output minimization entirely, keeping minimization limited to eligible whole-command output after the command exits
+
+### Fixed
+
+- Fixed chunk edit batches so later operations can reuse an initially validated checksum after an earlier operation changes that same chunk
+
+### Removed
+
+- Removed `PI_DEV` loader diagnostic env var and associated console logging in the native addon loader
+
+### Security
+
+- Added trust-gated loading for minimizer settings by requiring a matching `settingsHash` before accepting a settings file
+
+## [14.2.0] - 2026-04-23
+
+### Added
+
+- Added Dart support to `astGrep` and `astEdit` through the native tree-sitter Dart grammar ([#748](https://github.com/can1357/oh-my-pi/pull/748) by [@0fflineuser](https://github.com/0fflineuser))
+
 ## [14.1.1] - 2026-04-14
 
 ### Added

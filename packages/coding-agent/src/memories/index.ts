@@ -48,6 +48,7 @@ interface MemoryRuntimeConfig {
 	phase2RetryDelaySeconds: number;
 	phase2HeartbeatSeconds: number;
 	rolloutPayloadPercent: number;
+	phase1InputTokenLimit: number;
 	fallbackTokenLimit: number;
 	summaryInjectionTokenLimit: number;
 }
@@ -66,6 +67,7 @@ const DEFAULTS: MemoryRuntimeConfig = {
 	phase2RetryDelaySeconds: 180,
 	phase2HeartbeatSeconds: 30,
 	rolloutPayloadPercent: 0.7,
+	phase1InputTokenLimit: 4_000,
 	fallbackTokenLimit: 16_000,
 	summaryInjectionTokenLimit: 5_000,
 };
@@ -582,7 +584,10 @@ async function runStage1Job(options: {
 		const rolloutRaw = await Bun.file(claim.rolloutPath).text();
 		const persisted = extractPersistableMessages(rolloutRaw);
 		const serializedItems = JSON.stringify(persisted);
-		const budgetTokens = Math.floor(modelMaxTokens * config.rolloutPayloadPercent);
+		const budgetTokens = Math.min(
+			config.phase1InputTokenLimit,
+			Math.floor(modelMaxTokens * config.rolloutPayloadPercent),
+		);
 		const truncatedItems = truncateByApproxTokens(serializedItems, budgetTokens);
 		const inputPrompt = prompt.render(stageOneInputTemplate, {
 			thread_id: claim.threadId,
@@ -1080,6 +1085,7 @@ function loadMemoryConfig(settings: Settings): MemoryRuntimeConfig {
 		phase2RetryDelaySeconds: settings.get("memories.phase2RetryDelaySeconds") ?? DEFAULTS.phase2RetryDelaySeconds,
 		phase2HeartbeatSeconds: settings.get("memories.phase2HeartbeatSeconds") ?? DEFAULTS.phase2HeartbeatSeconds,
 		rolloutPayloadPercent: settings.get("memories.rolloutPayloadPercent") ?? DEFAULTS.rolloutPayloadPercent,
+		phase1InputTokenLimit: settings.get("memories.phase1InputTokenLimit") ?? DEFAULTS.phase1InputTokenLimit,
 		fallbackTokenLimit: settings.get("memories.fallbackTokenLimit") ?? DEFAULTS.fallbackTokenLimit,
 		summaryInjectionTokenLimit:
 			settings.get("memories.summaryInjectionTokenLimit") ?? DEFAULTS.summaryInjectionTokenLimit,

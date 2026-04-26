@@ -11,7 +11,7 @@ import type { AgentMessage, ResolvedThinkingLevel, ThinkingLevel } from "@oh-my-
 import type { Model } from "@oh-my-pi/pi-ai";
 
 import { computeLineHash, formatSessionDumpText, RpcClient } from "@oh-my-pi/pi-coding-agent";
-import { prompt, Snowflake } from "@oh-my-pi/pi-utils";
+import { prompt } from "@oh-my-pi/pi-utils";
 import { diffLines } from "diff";
 import { formatDirectory } from "./formatter";
 import { discoverSharedInfra, InProcessClient, type SharedInfra } from "./in-process-client";
@@ -21,7 +21,7 @@ import benchmarkTaskPrompt from "./prompts/benchmark-task.md" with { type: "text
 import type { EditTask } from "./tasks";
 import { verifyExpectedFileSubset, verifyExpectedFiles } from "./verify";
 
-const TMP = `/tmp/rb-${crypto.randomUUID()}`;
+const TMP = `/tmp/rb-${Math.random().toString(36).slice(2, 10)}`;
 const CLI_PATH = Bun.fileURLToPath(import.meta.resolve("@oh-my-pi/pi-coding-agent/cli"));
 
 /** Subset of session state used for markdown conversation dumps (parity with /dump). */
@@ -40,7 +40,7 @@ interface BenchmarkClient {
 	onEvent(listener: (event: { type: string; [key: string]: unknown }) => void): () => void;
 	prompt(text: string): Promise<void>;
 	followUp(text: string): Promise<void>;
-	getSessionStats(): Promise<{ tokens: { input: number; output: number; total: number } }>;
+	getSessionStats(): Promise<{ tokens: { input: number; output: number; total: number }; assistantMessages: number }>;
 	getLastAssistantText(): Promise<string | null>;
 	getMessages(): Promise<AgentMessage[]>;
 	getState(): Promise<ConversationDumpSessionState>;
@@ -50,8 +50,9 @@ interface BenchmarkClient {
 
 fs.mkdirSync(TMP);
 
-function makeTempDir(pre?: string): string {
-	const dir = path.join(TMP, `${pre ?? ""}${Snowflake.next()}`);
+let n = 0;
+function subtmp(pre: string): string {
+	const dir = path.join(TMP, `${pre}-${n++}`);
 	fs.mkdirSync(dir);
 	return dir;
 }
@@ -70,7 +71,9 @@ export interface BenchmarkConfig {
 	requireReadToolCall?: boolean;
 	noEditRequired?: boolean;
 	autoFormat?: boolean;
-	editVariant?: "replace" | "patch" | "hashline" | "chunk" | "vim" | "auto";
+	/** If true, abort the agent loop as soon as the formatted file content matches the expected fixture. Default: true. */
+	earlyStopOnMatch?: boolean;
+	editVariant?: string;
 	editFuzzy?: boolean | "auto";
 	editFuzzyThreshold?: number | "auto";
 	guided?: boolean;
@@ -189,32 +192,15 @@ function getEditPathFromArgs(args: unknown): string | null {
 
 const HASHLINE_SUBTYPES = ["set", "set_range", "insert"] as const;
 
-const CHUNK_OP_SUBTYPES = ["append", "prepend", "replace", "delete"] as const;
-
-const BENCHMARK_TOOL_NAMES = ["read", "edit", "vim", "write"] as const;
-const EDIT_TOOL_NAMES = ["edit", "vim"] as const;
+const BENCHMARK_TOOL_NAMES = ["read", "edit", "vim", "write", "apply_patch"] as const;
+const EDIT_TOOL_NAMES = ["edit", "vim", "apply_patch"] as const;
 
 function isEditTool(toolName: unknown): toolName is (typeof EDIT_TOOL_NAMES)[number] {
-	return toolName === "edit" || toolName === "vim";
+	return toolName === "edit" || toolName === "vim" || toolName === "apply_patch";
 }
 
 function isMutationTool(toolName: unknown): boolean {
 	return isEditTool(toolName) || toolName === "write";
-}
-
-function countChunkEditSubtypes(args: unknown): Record<string, number> {
-	const counts: Record<string, number> = Object.fromEntries(CHUNK_OP_SUBTYPES.map(k => [k, 0]));
-	if (!args || typeof args !== "object") return counts;
-	const operations = (args as { operations?: unknown[] }).operations;
-	if (!Array.isArray(operations)) return counts;
-	for (const operation of operations) {
-		if (!operation || typeof operation !== "object") continue;
-		const op = (operation as { op?: string }).op;
-		if (typeof op === "string" && op in counts) {
-			counts[op]++;
-		}
-	}
-	return counts;
 }
 
 function countHashlineEditSubtypes(args: unknown): Record<string, number> {
@@ -768,11 +754,11 @@ export interface TaskRunResult {
 	editAutocorrectCount: number;
 	/** Hashline edit subtype counts (replaceLine, replaceLines, etc.) — only when editVariant is hashline */
 	hashlineEditSubtypes?: Record<string, number>;
-	/** Chunk edit subtype counts — only when editVariant is chunk */
-	chunkEditSubtypes?: Record<string, number>;
 	mutationIntentMatched?: boolean;
 	mutationIntentReason?: string;
 	timeoutTelemetry?: PromptAttemptTelemetry;
+	/** True when the run terminated early because the formatted file content matched the expected fixture. */
+	earlyStopped?: boolean;
 	/** Retry telemetry: how many retries of each type were used */
 	retryStats?: {
 		timeoutRetries: number;
@@ -828,11 +814,11 @@ export interface BenchmarkSummary {
 	totalProviderFailureRetries: number;
 	/** Runs where the 0/0/0 ghost signature was detected (0 tokens, 0 tool calls) */
 	ghostRuns: number;
+	/** Runs excluded because provider/transport stalls exhausted retries (subset of ghostRuns when error matches). */
+	transportFailureRuns: number;
 	mutationIntentMatchRate?: number;
 	/** Hashline edit subtype totals — only when editVariant is hashline */
 	hashlineEditSubtypes?: Record<string, number>;
-	/** Chunk edit subtype totals — only when editVariant is chunk */
-	chunkEditSubtypes?: Record<string, number>;
 }
 
 export interface BenchmarkResult {
@@ -860,6 +846,34 @@ async function copyFixtures(task: EditTask, destDir: string): Promise<void> {
 	);
 }
 
+interface EarlyStopOptions {
+	check: () => Promise<boolean>;
+	onMatch: () => void | Promise<void>;
+}
+
+function buildEarlyStop(params: {
+	config: BenchmarkConfig;
+	cwd: string;
+	expectedDir: string;
+	files: string[];
+	logEvent: (event: unknown) => Promise<void>;
+	attempt: number;
+	onMatched: () => void;
+}): EarlyStopOptions | undefined {
+	if (params.config.earlyStopOnMatch === false) return undefined;
+	if (params.files.length === 0) return undefined;
+	return {
+		check: async () => {
+			const verification = await verifyExpectedFileSubset(params.expectedDir, params.cwd, params.files);
+			return verification.success;
+		},
+		onMatch: async () => {
+			params.onMatched();
+			await params.logEvent({ type: "early_stop", attempt: params.attempt, reason: "formatted_match" });
+		},
+	};
+}
+
 async function runSingleTask(
 	task: EditTask,
 	runIndex: number,
@@ -883,6 +897,7 @@ async function runSingleTask(
 	let editAutocorrectCount = 0;
 	let timeoutTelemetry: PromptAttemptTelemetry | undefined;
 	let mutationIntentValidation: MutationIntentValidation | null = null;
+	let earlyStoppedByMatch = false;
 	let conversationSnapshot: ConversationDumpSnapshot | undefined;
 	const toolStats = {
 		read: 0,
@@ -895,7 +910,6 @@ async function runSingleTask(
 		totalInputChars: 0,
 	};
 	const hashlineSubtypes: Record<string, number> = Object.fromEntries(HASHLINE_SUBTYPES.map(k => [k, 0]));
-	const chunkSubtypes: Record<string, number> = Object.fromEntries(CHUNK_OP_SUBTYPES.map(k => [k, 0]));
 
 	const logFile = path.join(TMP, `run-${task.id}-${runIndex}.jsonl`);
 	const logEvent = async (event: unknown) => {
@@ -961,6 +975,9 @@ async function runSingleTask(
 				await client.setThinkingLevel(config.thinkingLevel);
 			}
 
+			const initialState = await client.getState();
+			const systemPromptTokens = estimateTokens(initialState.systemPrompt ?? "");
+
 			const maxAttempts = Math.max(1, Math.floor(config.maxAttempts ?? 1));
 			const maxTimeoutRetries = config.maxTimeoutRetries ?? 3;
 			const noOpRetryLimit = config.noOpRetryLimit ?? 2;
@@ -987,7 +1004,23 @@ async function runSingleTask(
 				const statsBefore = await client.getSessionStats();
 				let events: Array<{ type: string; [key: string]: unknown }>;
 				try {
-					events = await collectPromptEvents(client, delivery, config, logEvent);
+					events = await collectPromptEvents(
+						client,
+						delivery,
+						config,
+						logEvent,
+						buildEarlyStop({
+							config,
+							cwd,
+							expectedDir,
+							files: task.files,
+							logEvent,
+							attempt: attempt + 1,
+							onMatched: () => {
+								earlyStoppedByMatch = true;
+							},
+						}),
+					);
 				} catch (err) {
 					if (err instanceof PromptTurnLimitError) {
 						error = err.message;
@@ -1014,7 +1047,7 @@ async function runSingleTask(
 					throw err;
 				}
 				const statsAfter = await client.getSessionStats();
-				const attemptTokens = diffTokenStats(statsBefore, statsAfter);
+				const attemptTokens = diffTokenStats(statsBefore, statsAfter, systemPromptTokens);
 				tokens = {
 					input: tokens.input + attemptTokens.input,
 					output: tokens.output + attemptTokens.output,
@@ -1097,12 +1130,6 @@ async function runSingleTask(
 								const counts = countHashlineEditSubtypes(args);
 								for (const key of HASHLINE_SUBTYPES) {
 									hashlineSubtypes[key] += counts[key];
-								}
-							}
-							if (config.editVariant === "chunk" && args) {
-								const counts = countChunkEditSubtypes(args);
-								for (const key of CHUNK_OP_SUBTYPES) {
-									chunkSubtypes[key] += counts[key];
 								}
 							}
 							if (e.isError) {
@@ -1231,10 +1258,10 @@ async function runSingleTask(
 		editWarnings,
 		editAutocorrectCount,
 		hashlineEditSubtypes: config.editVariant === "hashline" ? hashlineSubtypes : undefined,
-		chunkEditSubtypes: config.editVariant === "chunk" ? chunkSubtypes : undefined,
 		mutationIntentMatched: mutationIntentValidation?.matched,
 		mutationIntentReason: mutationIntentValidation?.reason,
 		timeoutTelemetry,
+		earlyStopped: earlyStoppedByMatch || undefined,
 		retryStats: {
 			timeoutRetries: timeoutRetriesUsed,
 			zeroToolRetries,
@@ -1279,7 +1306,6 @@ async function _runRpcBenchmarkRun(
 		totalInputChars: 0,
 	};
 	const hashlineSubtypes: Record<string, number> = Object.fromEntries(HASHLINE_SUBTYPES.map(k => [k, 0]));
-	const chunkSubtypes: Record<string, number> = Object.fromEntries(CHUNK_OP_SUBTYPES.map(k => [k, 0]));
 
 	const logFile = path.join(sessionDir, `run-${task.id}-${runIndex}.jsonl`);
 	const logEvent = async (event: unknown) => {
@@ -1345,7 +1371,7 @@ async function _runRpcBenchmarkRun(
 				throw err;
 			}
 			const statsAfter = await client.getSessionStats();
-			const attemptTokens = diffTokenStats(statsBefore, statsAfter);
+			const attemptTokens = diffTokenStats(statsBefore, statsAfter, 0);
 			tokens = {
 				input: tokens.input + attemptTokens.input,
 				output: tokens.output + attemptTokens.output,
@@ -1425,12 +1451,6 @@ async function _runRpcBenchmarkRun(
 							const counts = countHashlineEditSubtypes(args);
 							for (const key of HASHLINE_SUBTYPES) {
 								hashlineSubtypes[key] += counts[key];
-							}
-						}
-						if (config.editVariant === "chunk" && args) {
-							const counts = countChunkEditSubtypes(args);
-							for (const key of CHUNK_OP_SUBTYPES) {
-								chunkSubtypes[key] += counts[key];
 							}
 						}
 						if (e.isError) {
@@ -1553,7 +1573,6 @@ async function _runRpcBenchmarkRun(
 		editWarnings,
 		editAutocorrectCount,
 		hashlineEditSubtypes: config.editVariant === "hashline" ? hashlineSubtypes : undefined,
-		chunkEditSubtypes: config.editVariant === "chunk" ? chunkSubtypes : undefined,
 		mutationIntentMatched: mutationIntentValidation?.matched,
 		mutationIntentReason: mutationIntentValidation?.reason,
 		timeoutTelemetry,
@@ -1620,6 +1639,10 @@ async function collectPromptEvents(
 	delivery: BenchmarkPromptDelivery,
 	config: BenchmarkConfig,
 	logEvent: (event: unknown) => Promise<void>,
+	earlyStop?: {
+		check: () => Promise<boolean>;
+		onMatch: () => void | Promise<void>;
+	},
 ): Promise<Array<{ type: string; [key: string]: unknown }>> {
 	const events: Array<{ type: string; [key: string]: unknown }> = [];
 	let unsubscribe: (() => void) | undefined;
@@ -1634,6 +1657,8 @@ async function collectPromptEvents(
 	let timer: NodeJS.Timeout | undefined;
 	let settled = false;
 	let receivedFirstEvent = false;
+	let earlyStopTriggered = false;
+	let earlyStopChain: Promise<void> = Promise.resolve();
 
 	const connectionTimeout = config.connectionTimeout ?? 30_000;
 
@@ -1678,6 +1703,30 @@ async function collectPromptEvents(
 			);
 		};
 
+		const triggerEarlyStop = () => {
+			if (!earlyStop || earlyStopTriggered || settled) return;
+			earlyStopChain = earlyStopChain
+				.then(async () => {
+					if (earlyStopTriggered || settled) return;
+					let matched = false;
+					try {
+						matched = await earlyStop.check();
+					} catch {
+						return;
+					}
+					if (!matched || earlyStopTriggered || settled) return;
+					earlyStopTriggered = true;
+					try {
+						await earlyStop.onMatch();
+					} catch {
+						// Swallow callback errors; we still want to short-circuit.
+					}
+					client.abort?.();
+					resolveWait();
+				})
+				.catch(() => {});
+		};
+
 		// Start with the shorter connection timeout; upgrade to full timeout on first event
 		timer = setTimeout(fireTimeout, connectionTimeout);
 
@@ -1707,6 +1756,13 @@ async function collectPromptEvents(
 			}
 			if (typedEvent.type === "tool_execution_end") {
 				toolExecutionEnds += 1;
+			}
+			if (
+				typedEvent.type === "tool_execution_end" &&
+				!(typedEvent as { isError?: boolean }).isError &&
+				isMutationTool((typedEvent as { toolName?: unknown }).toolName)
+			) {
+				triggerEarlyStop();
 			}
 			if (typedEvent.type === "message_end") {
 				messageEnds += 1;
@@ -1761,6 +1817,14 @@ async function collectPromptEvents(
 			await client.prompt(delivery.message);
 		}
 	} catch (err) {
+		if (earlyStopTriggered) {
+			// Abort raised inside prompt(); the run already short-circuited successfully.
+			if (timer) {
+				clearTimeout(timer);
+			}
+			unsubscribe?.();
+			return events;
+		}
 		if (timer) {
 			clearTimeout(timer);
 		}
@@ -1771,20 +1835,40 @@ async function collectPromptEvents(
 	return events;
 }
 
+/** Rough token estimate (4 chars per token). Used to subtract system prompt overhead. */
+function estimateTokens(text: string): number {
+	return Math.ceil(text.length / 4);
+}
+
 function diffTokenStats(
-	before: { tokens: { input: number; output: number; total: number } },
-	after: { tokens: { input: number; output: number; total: number } },
+	before: { tokens: { input: number; output: number; total: number }; assistantMessages: number },
+	after: { tokens: { input: number; output: number; total: number }; assistantMessages: number },
+	systemPromptTokens: number,
 ): TokenStats {
+	// The system prompt (and tool definitions) live in cacheRead/cacheWrite, not in `input`.
+	// `input` already excludes the cached system prompt; only `total` (which sums cache too)
+	// needs the overhead subtracted, once per LLM call.
+	const calls = Math.max(0, after.assistantMessages - before.assistantMessages);
+	const overhead = calls * systemPromptTokens;
 	const input = Math.max(0, after.tokens.input - before.tokens.input);
 	const output = Math.max(0, after.tokens.output - before.tokens.output);
-	const total = Math.max(0, after.tokens.total - before.tokens.total);
+	const total = Math.max(0, after.tokens.total - before.tokens.total - overhead);
 	return { input, output, total };
 }
 
+function isTransportFailure(r: TaskRunResult): boolean {
+	if (r.success) return false;
+	const err = r.error ?? "";
+	// Provider/transport stalls retried until the cap was hit. These don't reflect
+	// edit-tool quality, so we exclude them from the score denominator.
+	return err.includes("Timeout exhausted");
+}
+
 function isGhostRun(r: TaskRunResult): boolean {
-	return (
-		!r.success && r.tokens.total === 0 && r.toolCalls.read === 0 && r.toolCalls.edit === 0 && r.toolCalls.write === 0
-	);
+	if (r.success) return false;
+	const noProgress =
+		r.tokens.total === 0 && r.toolCalls.read === 0 && r.toolCalls.edit === 0 && r.toolCalls.write === 0;
+	return noProgress || isTransportFailure(r);
 }
 
 function summarizeTaskRuns(task: EditTask, runs: TaskRunResult[]): TaskResult {
@@ -1886,7 +1970,7 @@ async function runConcurrentBenchmarkRun(
 	onProgress?: (event: ProgressEvent) => void,
 	shared?: SharedInfra,
 ): Promise<{ task: EditTask; result: TaskRunResult }> {
-	const workDir = makeTempDir(item.task.id);
+	const workDir = subtmp(item.task.id);
 
 	try {
 		await copyFixtures(item.task, workDir);
@@ -1917,7 +2001,7 @@ export async function runTask(
 		: undefined;
 
 	const runPromises = Array.from({ length: config.runsPerTask }, async (_, index) => {
-		const tempDir = makeTempDir(task.id);
+		const tempDir = subtmp(task.id);
 		await copyFixtures(task, tempDir);
 		onProgress?.({ taskId: task.id, runIndex: index, status: "started" });
 		const result = await runSingleTask(task, index, config, tempDir, task.expectedDir, shared);
@@ -1979,6 +2063,7 @@ export async function runBenchmark(
 	const allRuns = taskResults.flatMap(t => t.runs);
 	const totalRuns = allRuns.length;
 	const ghostRuns = allRuns.filter(r => isGhostRun(r)).length;
+	const transportFailureRuns = allRuns.filter(r => isTransportFailure(r)).length;
 	const effectiveRuns = totalRuns - ghostRuns;
 	const nonGhostRuns = allRuns.filter(r => !isGhostRun(r));
 	const successfulRuns = allRuns.filter(r => r.success).length;
@@ -2039,16 +2124,6 @@ export async function runBenchmark(
 				)
 			: undefined;
 
-	const chunkEditSubtypes: Record<string, number> | undefined =
-		config.editVariant === "chunk"
-			? Object.fromEntries(
-					CHUNK_OP_SUBTYPES.map(key => [
-						key,
-						allRuns.reduce((sum, r) => sum + (r.chunkEditSubtypes?.[key] ?? 0), 0),
-					]),
-				)
-			: undefined;
-
 	const denom = effectiveRuns || 1;
 	const summary: BenchmarkSummary = {
 		totalTasks: tasks.length,
@@ -2087,9 +2162,9 @@ export async function runBenchmark(
 		totalZeroToolRetries,
 		totalProviderFailureRetries,
 		ghostRuns,
+		transportFailureRuns,
 		mutationIntentMatchRate,
 		hashlineEditSubtypes,
-		chunkEditSubtypes,
 	};
 
 	return {

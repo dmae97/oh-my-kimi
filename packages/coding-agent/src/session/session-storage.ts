@@ -32,6 +32,7 @@ export interface SessionStorage {
 	writeText(path: string, content: string): Promise<void>;
 	rename(path: string, nextPath: string): Promise<void>;
 	unlink(path: string): Promise<void>;
+	deleteSessionWithArtifacts(sessionPath: string): Promise<void>;
 	openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter;
 }
 
@@ -358,6 +359,9 @@ export class MemorySessionStorage implements SessionStorage {
 
 	unlink(path: string): Promise<void> {
 		this.#files.delete(path);
+		return Promise.resolve();
+	}
+	deleteSessionWithArtifacts(_sessionPath: string): Promise<void> {
 		return Promise.resolve();
 	}
 

@@ -85,6 +85,7 @@ const RPC_DEFAULTED_SETTING_PATHS: SettingPath[] = [
 	"task.isolation.merge",
 	"task.isolation.commits",
 	"task.eager",
+	"task.simple",
 	"task.maxConcurrency",
 	"task.maxRecursionDepth",
 	"task.disabledAgents",

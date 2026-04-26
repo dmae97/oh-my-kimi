@@ -1,54 +1,42 @@
 Performs structural code search using AST matching via native ast-grep.
 
 <instruction>
-- Use this when syntax shape matters more than raw text (calls, declarations, specific language constructs)
-- Prefer a precise `path` scope to keep results targeted and deterministic (`path` accepts files, directories, glob patterns, or comma-separated path lists; use `glob` for an additional filter relative to `path`)
-- Default to language-scoped search in mixed repositories: pair `path` + `glob` + explicit `lang` to avoid parse-noise from non-source files
-- `pat` is required and must include at least one non-empty AST pattern; `lang` is optional (`lang` is inferred per file extension when omitted)
-- Multiple patterns run in one native pass; results are merged and then `offset`/`limit` are applied to the combined match set
-- Use `sel` only for contextual pattern mode; otherwise provide direct patterns
-- In contextual pattern mode, results are returned for the selected node (`sel`), not the outer wrapper used to make the pattern parse
-- For variadic captures (arguments, fields, statement lists), use `$$$NAME` (not `$$NAME`)
-- Patterns must parse as a single valid AST node for the target language; if a bare pattern fails, wrap it in valid context or use `sel`
-- If ast-grep reports `Multiple AST nodes are detected`, your pattern is not a single parseable node; wrap method snippets in valid context (for example `class $_ { … }`) and use `sel` to target the inner node
-- Patterns match AST structure, not text — whitespace/formatting differences are ignored
-- When the same metavariable appears multiple times, all occurrences must match identical code
-- For TypeScript declarations and methods, prefer shapes that tolerate annotations you do not care about, e.g. `async function $NAME($$$ARGS): $_ { $$$BODY }` or `class $_ { method($ARG: $_): $_ { $$$BODY } }` instead of omitting annotations entirely
-- Metavariables must be the sole content of an AST node; partial-text metavariables like `prefix$VAR`, `"hello $NAME"`, or `a $OP b` do NOT work — match the whole node instead
-- `$$$` captures are lazy (non-greedy): they stop when the next element in the pattern can match; place the most specific node after `$$$` to control where capture ends
-- `$_` is a non-capturing wildcard (matches any single node without binding); use it when you need to tolerate a node but don't need its value
-- Search the right declaration form before concluding absence: top-level function, class method, and variable-assigned function are different AST shapes
-- If you only need to prove a symbol exists, prefer a looser contextual search such as `pat: ["executeBash"]` with `sel: "identifier"`
+- Use when syntax shape matters more than raw text (calls, declarations, specific language constructs)
+- `path` is required and accepts a file, directory, glob, comma-separated path list, or internal URL
+- Language is inferred from `path`; narrow `path` to one language when mixed-language trees could cause parse noise
+- `pat` is a single AST pattern. Run separate calls for distinct unrelated patterns
+- **Patterns match AST structure, not text** — whitespace/formatting is ignored
+- `$NAME` captures one node; `$_` matches one without binding; `$$$NAME` captures zero-or-more (lazy — stops at next matchable element); `$$$` matches zero-or-more without binding. Use `$$$NAME`, **NOT** `$$NAME` — the two-dollar form is invalid and produces a parse error
+- Metavariable names are UPPERCASE and must be the whole AST node — partial-text like `prefix$VAR`, `"hello $NAME"`, or `a $OP b` does NOT work; match the whole node instead
+- When the same metavariable appears twice, both occurrences **MUST** match identical code (`$A == $A` matches `x == x`, not `x == y`)
+- Patterns **MUST** parse as a single valid AST node for the inferred target language. For method fragments or body snippets that don't parse standalone, wrap in valid context (e.g. `class $_ { … }`)
+- C++ qualified calls used as expression statements need the statement semicolon in the pattern: use `ns::doThing($ARG);`, `$CALLEE($ARG);`, or wrap a statement snippet. Without `;`, tree-sitter-cpp may parse `ns::doThing($ARG)` as declaration-like syntax and return no matches
+- For TS declarations/methods, tolerate unknown annotations: `async function $NAME($$$ARGS): $_ { $$$BODY }` or `class $_ { method($ARG: $_): $_ { $$$BODY } }`
+- Declaration forms are structurally distinct — top-level `function foo`, class method `foo()`, and `const foo = () => {}` are different AST shapes; search the right form before concluding absence
+- Loosest existence check: `pat: "executeBash"` with a narrow `path`
 </instruction>
 
 <output>
-- Returns grouped matches with file path, byte range, line/column ranges, and metavariable captures
-- Includes summary counts (`totalMatches`, `filesWithMatches`, `filesSearched`) and parse issues when present
+- Grouped matches with file path, byte range, line/column ranges, metavariable captures
+- Match lines are anchor-prefixed: `*LINE+ID|content` for the matched line and ` LINE+ID|content` (leading space) for surrounding context
+- Summary counts (`totalMatches`, `filesWithMatches`, `filesSearched`) and parse issues when present
 </output>
 
 <examples>
-- Find all console logging calls in one pass (multi-pattern, scoped):
-  `{"pat":["console.log($$$)","console.error($$$)"],"lang":"typescript","path":"src/"}`
-- Find all named imports from a specific package:
-  `{"pat":["import { $$$IMPORTS } from \"react\""],"lang":"typescript","path":"src/"}`
-- Match arrow functions assigned to a const (different AST shape than function declarations):
-  `{"pat":["const $NAME = ($$$ARGS) => $BODY"],"lang":"typescript","path":"src/utils/"}`
-- Match any method call on an object using wildcard `$_` (ignores method name):
-  `{"pat":["logger.$_($$$ARGS)"],"lang":"typescript","path":"src/"}`
-- Contextual pattern with selector — match only the identifier `foo`, not the whole call:
-  `{"pat":["foo()"],"sel":"identifier","lang":"typescript","path":"src/utils.ts"}`
-- Match a TypeScript function declaration without caring about its exact return type:
-  `{"pat":["async function processItems($$$ARGS): $_ { $$$BODY }"],"sel":"function_declaration","lang":"typescript","path":"src/worker.ts"}`
-- Match a TypeScript method body fragment by wrapping it in parseable context and selecting the method node:
-  `{"pat":["class $_ { async execute($INPUT: $_) { $$$BEFORE; const $PARSED = $_.parse($INPUT); $$$AFTER } }"],"sel":"method_definition","lang":"typescript","path":"src/tools/todo.ts"}`
-- Loosest existence check for a symbol in one file:
-  `{"pat":["processItems"],"sel":"identifier","lang":"typescript","path":"src/worker.ts"}`
+# Search TypeScript files under src
+`{"pat":"console.log($$$)","path":"src/**/*.ts"}`
+# Named imports from a specific package
+`{"pat":"import { $$$IMPORTS } from \"react\"","path":"src/**/*.ts"}`
+# Arrow functions assigned to a const
+`{"pat":"const $NAME = ($$$ARGS) => $BODY","path":"src/utils/**/*.ts"}`
+# Method call on any object, ignoring method name with `$_`
+`{"pat":"logger.$_($$$ARGS)","path":"src/**/*.ts"}`
+# Loosest existence check for a symbol in one file
+`{"pat":"processItems","path":"src/worker.ts"}`
 </examples>
 
 <critical>
-- `pat` is required
-- Set `lang` explicitly to constrain matching when path pattern spans mixed-language trees
-- Avoid repo-root AST scans when the target is language-specific; narrow `path` first
-- Treat parse issues as query failure, not evidence of absence: repair the pattern or tighten `path`/`glob`/`lang` before concluding "no matches"
-- If exploration is broad/open-ended across subsystems, use Task tool with explore subagent first
+- Avoid repo-root scans — narrow `path` first
+- Parse issues are query failure, not evidence of absence: repair the pattern or tighten `path` before concluding "no matches"
+- For broad/open-ended exploration across subsystems, use Task tool with explore subagent first
 </critical>

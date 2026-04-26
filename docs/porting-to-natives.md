@@ -62,7 +62,6 @@ Avoid ports that depend on JS-only state or dynamic imports. N-API exports shoul
 5. **Build the native binary**
 
 - `bun --cwd=packages/natives run build`
-- Use `bun --cwd=packages/natives run build` and set `PI_DEV=1` if you want loader diagnostics while testing.
 
 6. **Run the benchmark**
 
@@ -77,7 +76,7 @@ Avoid ports that depend on JS-only state or dynamic imports. N-API exports shoul
 
 ### 1) Stale `pi_natives.node` prevents new exports
 
-The loader prefers the platform-tagged binary in `packages/natives/native` (`pi_natives.<platform>-<arch>.node`). `PI_DEV=1` now only enables loader diagnostics; it no longer switches to a separate dev addon filename. There is also a fallback `pi_natives.node`. Compiled binaries extract to `~/.omp/natives/<version>/pi_natives.<platform>-<arch>.node`. If any of these are stale, exports won’t update.
+The loader prefers the platform-tagged binary in `packages/natives/native` (`pi_natives.<platform>-<arch>.node`). There is also a fallback `pi_natives.node`. Compiled binaries extract to `~/.omp/natives/<version>/pi_natives.<platform>-<arch>.node`. If any of these are stale, exports won’t update.
 
 **Fix:** remove the stale file before rebuilding.
 

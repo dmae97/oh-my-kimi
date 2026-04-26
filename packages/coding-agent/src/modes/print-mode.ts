@@ -7,6 +7,7 @@
  */
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
+import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import type { AgentSession } from "../session/agent-session";
 
 /**
@@ -65,12 +66,7 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 				getAllTools: () => session.getAllToolNames(),
 				setActiveTools: (toolNames: string[]) => session.setActiveToolsByName(toolNames),
 				getCommands: () => [],
-				setModel: async model => {
-					const key = await session.modelRegistry.getApiKey(model);
-					if (!key) return false;
-					await session.setModel(model);
-					return true;
-				},
+				setModel: model => runExtensionSetModel(session, model),
 				getThinkingLevel: () => session.thinkingLevel,
 				setThinkingLevel: level => session.setThinkingLevel(level),
 				getSessionName: () => session.sessionManager.getSessionName(),
@@ -87,14 +83,7 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 				shutdown: () => {},
 				getContextUsage: () => session.getContextUsage(),
 				getSystemPrompt: () => session.systemPrompt,
-				compact: async instructionsOrOptions => {
-					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-					const options =
-						instructionsOrOptions && typeof instructionsOrOptions === "object"
-							? instructionsOrOptions
-							: undefined;
-					await session.compact(instructions, options);
-				},
+				compact: instructionsOrOptions => runExtensionCompact(session, instructionsOrOptions),
 			},
 			// ExtensionCommandContextActions - commands invokable via prompt("/command")
 			{
@@ -122,14 +111,7 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 				reload: async () => {
 					await session.reload();
 				},
-				compact: async instructionsOrOptions => {
-					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-					const options =
-						instructionsOrOptions && typeof instructionsOrOptions === "object"
-							? instructionsOrOptions
-							: undefined;
-					await session.compact(instructions, options);
-				},
+				compact: instructionsOrOptions => runExtensionCompact(session, instructionsOrOptions),
 			},
 			// No UI context
 		);
@@ -177,6 +159,14 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 				} else {
 					process.stderr.once("drain", () => process.exit(1));
 				}
+			}
+
+			if (
+				assistantMsg.errorMessage &&
+				assistantMsg.stopReason !== "error" &&
+				assistantMsg.stopReason !== "aborted"
+			) {
+				process.stderr.write(`${sanitizeText(assistantMsg.errorMessage)}\n`);
 			}
 
 			// Output text content

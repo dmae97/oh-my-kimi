@@ -93,7 +93,7 @@ describe("AgentSession context promotion", () => {
 
 	it("promotes to a larger-context model on overflow and clears codex websocket session state", async () => {
 		const sparkModel = modelRegistry.find("openai-codex", "gpt-5.3-codex-spark");
-		const codexModel = modelRegistry.find("openai-codex", "gpt-5.3-codex");
+		const codexModel = modelRegistry.find("openai-codex", "gpt-5.5");
 		if (!sparkModel || !codexModel) {
 			throw new Error("Expected codex spark and codex models to exist");
 		}
@@ -138,7 +138,7 @@ describe("AgentSession context promotion", () => {
 
 	it("promotes on 413 payload-too-large overflow errors", async () => {
 		const sparkModel = modelRegistry.find("openai-codex", "gpt-5.3-codex-spark");
-		const codexModel = modelRegistry.find("openai-codex", "gpt-5.3-codex");
+		const codexModel = modelRegistry.find("openai-codex", "gpt-5.5");
 		if (!sparkModel || !codexModel) {
 			throw new Error("Expected codex spark and codex models to exist");
 		}

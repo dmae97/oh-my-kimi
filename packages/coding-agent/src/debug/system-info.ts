@@ -40,8 +40,12 @@ function macosMarketingName(release: string): string | undefined {
 
 /** Collect system information */
 export async function collectSystemInfo(): Promise<SystemInfo> {
-	const cpus = os.cpus();
-	const cpuModel = cpus[0]?.model ?? "Unknown CPU";
+	let cpuModel = "Unknown CPU";
+	try {
+		cpuModel = os.cpus()[0]?.model ?? cpuModel;
+	} catch {
+		// Keep debug report collection best-effort when CPU probing fails.
+	}
 
 	// Try to get shell from environment
 	const shell = Bun.env.SHELL ?? Bun.env.ComSpec ?? "unknown";

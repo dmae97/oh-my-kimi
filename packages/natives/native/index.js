@@ -184,14 +184,8 @@ function loadNative() {
 	for (const candidate of runtimeCandidates) {
 		try {
 			const bindings = require_(candidate);
-			if (process.env.PI_DEV) {
-				console.log(`Loaded native addon from ${candidate}`);
-			}
 			return bindings;
 		} catch (err) {
-			if (process.env.PI_DEV) {
-				console.error(`Error loading native addon from ${candidate}:`, err);
-			}
 			const message = err instanceof Error ? err.message : String(err);
 			errors.push(`${candidate}: ${message}`);
 		}
@@ -238,37 +232,6 @@ module.exports.AstMatchStrictness = {
   Relaxed: 'relaxed',
   Signature: 'signature',
   Template: 'template',
-};
-module.exports.ChunkAnchorStyle = {
-  Full: 'full',
-  Kind: 'kind',
-  Bare: 'bare',
-  FullOmit: 'full-omit',
-  KindOmit: 'kind-omit',
-  None: 'none',
-};
-module.exports.ChunkEditOp = {
-  Put: 'put',
-  Replace: 'replace',
-  Delete: 'delete',
-  Before: 'before',
-  After: 'after',
-  Prepend: 'prepend',
-  Append: 'append',
-};
-module.exports.ChunkFocusMode = {
-  Expanded: 'expanded',
-  Collapsed: 'collapsed',
-  Container: 'container',
-};
-module.exports.ChunkReadStatus = {
-  Ok: 'ok',
-  NotFound: 'not_found',
-  UnsupportedRegion: 'unsupported_region',
-};
-module.exports.ChunkRegion = {
-  Head: '^',
-  Body: '~',
 };
 module.exports.Ellipsis = {
   Unicode: 0,

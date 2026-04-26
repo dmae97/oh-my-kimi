@@ -24,6 +24,7 @@ function makeSessionInfo(path: string): SessionInfo {
 		created: new Date("2025-01-01T00:00:00Z"),
 		modified: new Date("2025-01-01T00:00:00Z"),
 		messageCount: 1,
+		size: 0,
 		firstMessage: "hello",
 		allMessagesText: "hello",
 	};

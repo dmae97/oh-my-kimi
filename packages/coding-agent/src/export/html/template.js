@@ -1178,8 +1178,8 @@
         return html;
       }
 
-      function renderSubmitResult(name, args, result, ctx) {
-        let html = toolHead('submit_result');
+      function renderYield(name, args, result, ctx) {
+        let html = toolHead('yield');
         if (args.data !== undefined) {
           html += '<div class="tool-output"><pre>' + escapeHtml(JSON.stringify(args.data, null, 2)) + '</pre></div>';
         }
@@ -1218,11 +1218,13 @@
         return html;
       }
 
-      function renderPoll(name, args, result, ctx) {
+      function renderJob(name, args, result, ctx) {
         const badges = [];
-        const jobs = Array.isArray(args.jobs) ? args.jobs : Array.isArray(args.jobIds) ? args.jobIds : [];
-        if (jobs.length > 0) badges.push(jobs.length + ' job' + (jobs.length === 1 ? '' : 's'));
-        let html = toolHead('poll', '', badges);
+        const pollIds = Array.isArray(args.poll) ? args.poll : Array.isArray(args.jobs) ? args.jobs : Array.isArray(args.jobIds) ? args.jobIds : [];
+        const cancelIds = Array.isArray(args.cancel) ? args.cancel : args.jobId ? [String(args.jobId)] : [];
+        if (cancelIds.length > 0) badges.push('cancel ' + cancelIds.length);
+        if (pollIds.length > 0) badges.push('poll ' + pollIds.length);
+        let html = toolHead('job', '', badges);
         if (result) {
           const output = ctx.getResultText();
           if (output) html += formatExpandableOutput(output, 8);
@@ -1230,14 +1232,6 @@
         return html;
       }
 
-      function renderCancelJob(name, args, result, ctx) {
-        let html = toolHead('cancel_job', args.jobId ? escapeHtml(String(args.jobId)) : '');
-        if (result) {
-          const output = ctx.getResultText();
-          if (output) html += formatExpandableOutput(output, 4);
-        }
-        return html;
-      }
 
       function renderGenericTool(name, args, result, ctx) {
         let html = toolHead(name);
@@ -1277,24 +1271,17 @@
         ask: renderAsk,
         exit_plan_mode: renderExitPlanMode,
         resolve: renderResolve,
-        gh_repo_view: renderGh,
-        gh_issue_view: renderGh,
-        gh_pr_view: renderGh,
-        gh_pr_diff: renderGh,
-        gh_pr_checkout: renderGh,
-        gh_pr_push: renderGh,
-        gh_run_watch: renderGh,
-        gh_search_issues: renderGh,
-        gh_search_prs: renderGh,
+        github: renderGh,
         render_mermaid: renderMermaid,
-        submit_result: renderSubmitResult,
+        yield: renderYield,
         report_finding: renderReportFinding,
         report_tool_issue: renderReportToolIssue,
         calc: renderCalc,
         calculator: renderCalc,
-        await: renderPoll,
-        poll: renderPoll,
-        cancel_job: renderCancelJob,
+        await: renderJob,
+        poll: renderJob,
+        cancel_job: renderJob,
+        job: renderJob,
       };
 
       function renderToolCall(call) {

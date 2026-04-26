@@ -715,7 +715,7 @@ export class InputController {
 			return;
 		}
 
-		const currentText = this.ctx.editor.getText();
+		const currentText = this.ctx.editor.getExpandedText?.() ?? this.ctx.editor.getText();
 
 		let ttyHandle: fs.FileHandle | null = null;
 		try {

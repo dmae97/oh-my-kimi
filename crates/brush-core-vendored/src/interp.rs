@@ -2,6 +2,7 @@ use std::{
 	collections::VecDeque,
 	io::Write,
 	path::{Path, PathBuf},
+	sync::Arc,
 };
 
 use brush_parser::ast::{self, CommandPrefixOrSuffixItem};
@@ -62,6 +63,39 @@ struct PipelineExecutionContext<'a> {
 	process_group_id: Option<i32>,
 }
 
+/// Information about an expanded external command launch.
+pub struct ExternalCommandInfo<'a> {
+	/// Shell command name before path resolution.
+	pub command_name:    &'a str,
+	/// Resolved executable path used for the process launch.
+	pub executable_path: &'a str,
+	/// Expanded process arguments, excluding `argv[0]`.
+	pub args:            Vec<&'a str>,
+}
+
+/// Marker strings written around a launched command's output.
+#[derive(Clone)]
+pub struct ExternalCommandOutputMarkers {
+	/// Marker written immediately before the process is spawned.
+	pub start_marker:      String,
+	/// Prefix for the completion marker; the numeric exit code is inserted
+	/// between this prefix and [`Self::end_marker_suffix`].
+	pub end_marker_prefix: String,
+	/// Suffix for the completion marker.
+	pub end_marker_suffix: String,
+}
+
+/// Optional hook used by embedders that need to identify output boundaries
+/// for individual external command launches.
+pub trait ExternalCommandOutputMarker: Send + Sync {
+	/// Returns markers for this external command, or `None` to leave its
+	/// output unmarked.
+	fn markers_for_external_command(
+		&self,
+		info: ExternalCommandInfo<'_>,
+	) -> Option<ExternalCommandOutputMarkers>;
+}
+
 /// Parameters for execution.
 #[derive(Clone, Default)]
 pub struct ExecutionParameters {
@@ -71,9 +105,33 @@ pub struct ExecutionParameters {
 	pub process_group_policy: ProcessGroupPolicy,
 	/// Optional cancellation token shared with callers.
 	cancel_token:             Option<CancellationToken>,
+	/// Optional command-output marker hook.
+	command_output_marker:    Option<Arc<dyn ExternalCommandOutputMarker>>,
+	/// Whether command-output marking was disabled by shell syntax that can
+	/// consume or redirect command output.
+	command_output_disabled:  bool,
 }
 
 impl ExecutionParameters {
+	/// Assigns an external-command output marker hook for this execution.
+	pub fn set_command_output_marker(&mut self, marker: Arc<dyn ExternalCommandOutputMarker>) {
+		self.command_output_marker = Some(marker);
+		self.command_output_disabled = false;
+	}
+
+	/// Disables external-command output marking for this execution branch.
+	pub fn disable_command_output_marking(&mut self) {
+		self.command_output_disabled = true;
+	}
+
+	/// Returns the active output marker hook, if marking is still safe.
+	pub fn command_output_marker(&self) -> Option<&Arc<dyn ExternalCommandOutputMarker>> {
+		if self.command_output_disabled {
+			return None;
+		}
+		self.command_output_marker.as_ref()
+	}
+
 	/// Assigns a cancellation token for this execution.
 	pub fn set_cancel_token(&mut self, token: CancellationToken) {
 		self.cancel_token = Some(token);
@@ -270,7 +328,9 @@ impl Execute for ast::CompoundList {
 			let run_async = matches!(sep, ast::SeparatorOperator::Async);
 
 			if run_async {
-				let job = spawn_ao_list_as_job(ao_list, shell, params).await?;
+				let mut async_params = params.clone();
+				async_params.disable_command_output_marking();
+				let job = spawn_ao_list_as_job(ao_list, shell, &async_params).await?;
 				let job_formatted = job.to_pid_style_string();
 
 				if shell.options.interactive && !shell.is_subshell() {
@@ -639,6 +699,8 @@ impl ExecuteInPipeline for ast::Command {
 		match self {
 			Self::Simple(simple) => simple.execute_in_pipeline(pipeline_context, params).await,
 			Self::Compound(compound, redirects) => {
+				params.disable_command_output_marking();
+
 				// Set up pipelining.
 				setup_pipeline_redirection(&mut params.open_files, pipeline_context)?;
 
@@ -654,7 +716,10 @@ impl ExecuteInPipeline for ast::Command {
 					.await?
 					.into())
 			},
-			Self::Function(func) => Ok(func.execute(pipeline_context.shell, &params).await?.into()),
+			Self::Function(func) => {
+				params.disable_command_output_marking();
+				Ok(func.execute(pipeline_context.shell, &params).await?.into())
+			},
 			Self::ExtendedTest(e) => {
 				let result =
 					if extendedtests::eval_extended_test_expr(&e.expr, pipeline_context.shell, &params)
@@ -1036,6 +1101,9 @@ impl ExecuteInPipeline for ast::SimpleCommand {
 		mut params: ExecutionParameters,
 	) -> Result<ExecutionSpawnResult, error::Error> {
 		ensure_not_cancelled(&params)?;
+		if context.pipeline_len > 1 {
+			params.disable_command_output_marking();
+		}
 		let prefix_iter = self.prefix.as_ref().map(|s| s.0.iter()).unwrap_or_default();
 		let suffix_iter = self.suffix.as_ref().map(|s| s.0.iter()).unwrap_or_default();
 		let cmd_name_items = self
@@ -1060,6 +1128,7 @@ impl ExecuteInPipeline for ast::SimpleCommand {
 					}
 				},
 				CommandPrefixOrSuffixItem::ProcessSubstitution(kind, subshell_command) => {
+					params.disable_command_output_marking();
 					let (installed_fd_num, substitution_file) =
 						setup_process_substitution(context.shell, &params, kind, subshell_command)?;
 
@@ -1468,6 +1537,8 @@ pub(crate) async fn setup_redirect(
 	params: &'_ mut ExecutionParameters,
 	redirect: &ast::IoRedirect,
 ) -> Result<(), error::Error> {
+	params.disable_command_output_marking();
+
 	match redirect {
 		ast::IoRedirect::OutputAndError(f, append) => {
 			let mut expanded_fields = expansion::full_expand_and_split_word(shell, params, f).await?;

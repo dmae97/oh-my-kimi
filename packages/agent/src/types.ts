@@ -129,8 +129,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 
 	/**
 	 * Enable intent tracing for tool calls.
-	 * When enabled, the harness injects an `_i: string` field into tool schemas sent to the model,
-	 * then strips `_i` from arguments before executing tools.
+	 * When enabled, the harness injects a `string` field into tool schemas sent to the model,
+	 * then strips from arguments before executing tools.
 	 */
 	intentTracing?: boolean;
 

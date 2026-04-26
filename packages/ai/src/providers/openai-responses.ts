@@ -11,13 +11,13 @@ import {
 	type AssistantMessage,
 	type CacheRetention,
 	type Context,
-	isSpecialServiceTier,
 	type MessageAttribution,
 	type Model,
 	type ProviderSessionState,
 	type ServiceTier,
 	type StreamFunction,
 	type StreamOptions,
+	shouldSendServiceTier,
 	type Tool,
 	type ToolChoice,
 } from "../types";
@@ -30,17 +30,17 @@ import {
 } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotAuthError } from "../utils/http-inspector";
+import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
 import {
-	createFirstEventWatchdog,
+	createWatchdog,
 	getOpenAIStreamIdleTimeoutMs,
 	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
-	markFirstStreamEvent,
 } from "../utils/idle-iterator";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
+import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
-import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
+import { mapToOpenAIResponsesToolChoice, type OpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -48,6 +48,7 @@ import {
 } from "./github-copilot-headers";
 import {
 	appendResponsesToolResultMessages,
+	collectCustomCallIds,
 	collectKnownCallIds,
 	convertResponsesAssistantMessage,
 	convertResponsesInputContent,
@@ -170,7 +171,8 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 		const { requestAbortController, requestSignal } = abortTracker;
 
 		try {
-			// Create OpenAI client
+			// Keep request headers and prompt-cache routing on the same session-derived value.
+			const cacheSessionId = getOpenAIResponsesCacheSessionId(options);
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const { client, copilotPremiumRequests, baseUrl } = createClient(
 				model,
@@ -178,6 +180,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				apiKey,
 				options?.headers,
 				options?.initiatorOverride,
+				cacheSessionId,
 			);
 			const providerSessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
 			const { params } = buildParams(model, context, options, providerSessionState, baseUrl);
@@ -191,8 +194,11 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				url: `${baseUrl ?? "https://api.openai.com/v1"}/responses`,
 				body: params,
 			};
-			const openaiStream = await client.responses.create(params, { signal: requestSignal });
-			const firstEventWatchdog = createFirstEventWatchdog(
+			const openaiStream = await callWithCopilotModelRetry(
+				() => client.responses.create(params, { signal: requestSignal }),
+				{ provider: model.provider, signal: requestSignal },
+			);
+			const firstEventWatchdog = createWatchdog(
 				options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs),
 				() => abortTracker.abortLocally(firstEventTimeoutAbortError),
 			);
@@ -201,8 +207,9 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 
 			const nativeOutputItems: Array<Record<string, unknown>> = [];
 			await processResponsesStream(
-				iterateWithIdleTimeout(markFirstStreamEvent(openaiStream, firstEventWatchdog), {
+				iterateWithIdleTimeout(openaiStream, {
 					idleTimeoutMs,
+					watchdog: firstEventWatchdog,
 					errorMessage: "OpenAI responses stream stalled while waiting for the next event",
 					onIdle: () => requestAbortController.abort(),
 				}),
@@ -244,7 +251,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			output.stopReason = abortTracker.wasCallerAbort() ? "aborted" : "error";
 			output.errorMessage = firstEventTimeoutError?.message ?? (await finalizeErrorMessage(error, rawRequestDump));
-			output.errorMessage = rewriteCopilotAuthError(output.errorMessage, error, model.provider);
+			output.errorMessage = rewriteCopilotError(output.errorMessage, error, model.provider);
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -261,6 +268,7 @@ function createClient(
 	apiKey?: string,
 	extraHeaders?: Record<string, string>,
 	initiatorOverride?: MessageAttribution,
+	sessionId?: string,
 ): {
 	client: OpenAI;
 	copilotPremiumRequests: number | undefined;
@@ -294,6 +302,10 @@ function createClient(
 		copilotPremiumRequests = copilot.premiumRequests;
 		baseUrl = resolveGitHubCopilotBaseUrl(model.baseUrl, rawApiKey) ?? model.baseUrl;
 	}
+	if (sessionId && model.provider === "openai" && (baseUrl ?? "").toLowerCase().includes("api.openai.com")) {
+		headers.session_id ??= sessionId;
+		headers["x-client-request-id"] ??= sessionId;
+	}
 	return {
 		client: new OpenAI({
 			apiKey,
@@ -305,6 +317,12 @@ function createClient(
 		copilotPremiumRequests,
 		baseUrl,
 	};
+}
+
+function getOpenAIResponsesCacheSessionId(
+	options: Pick<OpenAIResponsesOptions, "cacheRetention" | "sessionId"> | undefined,
+): string | undefined {
+	return resolveCacheRetention(options?.cacheRetention) === "none" ? undefined : options?.sessionId;
 }
 
 function buildParams(
@@ -334,7 +352,7 @@ function buildParams(
 	}
 
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-	const promptCacheKey = cacheRetention === "none" ? undefined : options?.sessionId;
+	const promptCacheKey = getOpenAIResponsesCacheSessionId(options);
 	const params: OpenAIResponsesSamplingParams = {
 		model: model.id,
 		input: messages,
@@ -366,14 +384,23 @@ function buildParams(
 	if (options?.repetitionPenalty !== undefined) {
 		params.repetition_penalty = options.repetitionPenalty;
 	}
-	if (isSpecialServiceTier(options?.serviceTier)) {
+	if (shouldSendServiceTier(options?.serviceTier, model.provider)) {
 		params.service_tier = options.serviceTier;
 	}
 
 	if (context.tools) {
-		params.tools = convertTools(context.tools, supportsStrictMode(model));
+		params.tools = convertTools(context.tools, supportsStrictMode(model), model);
 		if (options?.toolChoice) {
-			params.tool_choice = mapToOpenAIResponsesToolChoice(options.toolChoice);
+			params.tool_choice = mapOpenAIResponsesToolChoiceForTools(options.toolChoice, context.tools, model);
+		}
+		// The apply_patch spec §1 marks only `apply_patch` itself as
+		// `supports_parallel_tool_calls = false`. OpenAI's Responses API
+		// exposes `parallel_tool_calls` as a request-scoped flag, not a
+		// per-tool one, so when a custom grammar tool is in the list we
+		// disable parallelism for the whole turn. Slightly coarser than
+		// the spec requires — but the platform API offers no finer knob.
+		if (params.tools.some(t => (t as { type?: string }).type === "custom")) {
+			params.parallel_tool_calls = false;
 		}
 	}
 
@@ -442,6 +469,7 @@ function convertConversationMessages(
 ): ResponseInput {
 	const messages: ResponseInput = [];
 	let knownCallIds = new Set<string>();
+	const customCallIds = new Set<string>();
 	const shouldReplayNativeHistory = canReplayOpenAIResponsesNativeHistory(providerSessionState);
 	const transformedMessages = transformMessages(context.messages, model, normalizeResponsesToolCallIdForTransform);
 
@@ -461,6 +489,7 @@ function convertConversationMessages(
 			if (historyItems && shouldReplayPayloadItems) {
 				messages.push(...sanitizeOpenAIResponsesHistoryItemsForReplay(historyItems));
 				knownCallIds = collectKnownCallIds(messages);
+				for (const id of collectCustomCallIds(messages)) customCallIds.add(id);
 				msgIndex++;
 				continue;
 			}
@@ -481,6 +510,7 @@ function convertConversationMessages(
 					messages.splice(0, messages.length, ...sanitizedHistoryItems);
 				}
 				knownCallIds = collectKnownCallIds(messages);
+				for (const id of collectCustomCallIds(messages)) customCallIds.add(id);
 				msgIndex++;
 				continue;
 			}
@@ -491,11 +521,12 @@ function convertConversationMessages(
 				msgIndex,
 				knownCallIds,
 				shouldReplayNativeHistory,
+				customCallIds,
 			);
 			if (outputItems.length === 0) continue;
 			messages.push(...outputItems);
 		} else if (msg.role === "toolResult") {
-			appendResponsesToolResultMessages(messages, msg, model, strictResponsesPairing, knownCallIds);
+			appendResponsesToolResultMessages(messages, msg, model, strictResponsesPairing, knownCallIds, customCallIds);
 		}
 		msgIndex++;
 	}
@@ -503,8 +534,53 @@ function convertConversationMessages(
 	return messages;
 }
 
-function convertTools(tools: Tool[], strictMode: boolean): OpenAITool[] {
+/**
+ * Whether this model should get the OpenAI custom-tool grammar variant
+ * for `apply_patch`. The generated model catalog sets
+ * `model.applyPatchToolType` for first-party GPT-5 Responses models; this
+ * runtime path only consumes that metadata.
+ * @internal Exported for tests.
+ */
+export function supportsFreeformApplyPatch(model: Model<"openai-responses">): boolean {
+	return model.applyPatchToolType === "freeform";
+}
+
+/** @internal Exported for tests. */
+export function mapOpenAIResponsesToolChoiceForTools(
+	choice: ToolChoice | undefined,
+	tools: Tool[],
+	model: Model<"openai-responses">,
+): OpenAIResponsesToolChoice {
+	const mapped = mapToOpenAIResponsesToolChoice(choice);
+	if (!mapped || typeof mapped === "string" || mapped.type !== "function" || !supportsFreeformApplyPatch(model)) {
+		return mapped;
+	}
+
+	const customTool = tools.find(
+		tool => tool.customFormat && (tool.name === mapped.name || tool.customWireName === mapped.name),
+	);
+	return customTool ? { type: "custom", name: customTool.customWireName ?? customTool.name } : mapped;
+}
+
+/** @internal Exported for tests. */
+export function convertTools(tools: Tool[], strictMode: boolean, model: Model<"openai-responses">): OpenAITool[] {
+	const allowFreeform = supportsFreeformApplyPatch(model);
 	return tools.map(tool => {
+		if (allowFreeform && tool.customFormat) {
+			return {
+				type: "custom",
+				// Tool advertises its wire-level name (e.g. `apply_patch`) — the
+				// agent-loop dispatcher will match incoming calls by either the
+				// internal `name` or `customWireName`.
+				name: tool.customWireName ?? tool.name,
+				description: tool.description || "",
+				format: {
+					type: "grammar",
+					syntax: tool.customFormat.syntax,
+					definition: tool.customFormat.definition,
+				},
+			} as unknown as OpenAITool;
+		}
 		const strict = !NO_STRICT && strictMode && tool.strict !== false;
 		const baseParameters = tool.parameters as unknown as Record<string, unknown>;
 		const { schema: parameters, strict: effectiveStrict } = adaptSchemaForStrict(baseParameters, strict);

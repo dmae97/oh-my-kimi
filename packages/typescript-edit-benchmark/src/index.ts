@@ -13,11 +13,35 @@ import * as path from "node:path";
 import { parseArgs } from "node:util";
 import { type ResolvedThinkingLevel, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
-import { padding } from "@oh-my-pi/pi-tui";
+import { padding, visibleWidth } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { generateJsonReport, generateReport } from "./report";
 import { type BenchmarkConfig, type ProgressEvent, runBenchmark } from "./runner";
 import { type EditTask, loadTasksFromDir, validateFixturesFromDir } from "./tasks";
+
+const COLOR_ENABLED = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+
+const ANSI = {
+	reset: "\x1b[0m",
+	bold: "\x1b[1m",
+	dim: "\x1b[2m",
+	red: "\x1b[31m",
+	green: "\x1b[32m",
+	yellow: "\x1b[33m",
+	blue: "\x1b[34m",
+	magenta: "\x1b[35m",
+	cyan: "\x1b[36m",
+} as const;
+
+function paint(code: string, text: string): string {
+	return COLOR_ENABLED ? `${code}${text}${ANSI.reset}` : text;
+}
+
+function rateColor(percent: number): string {
+	if (percent >= 80) return ANSI.green;
+	if (percent >= 50) return ANSI.yellow;
+	return ANSI.red;
+}
 
 function parseThinkingLevel(value: string | null | undefined): ResolvedThinkingLevel | undefined {
 	return value !== undefined &&
@@ -74,7 +98,7 @@ Options:
   --tasks <ids>             Comma-separated task IDs to run (default: all)
   --max-tasks <n>            Max tasks to sample (default: 80, 0 = all)
   --fixtures <path>         Fixtures directory or .tar.gz archive (default: built-in)
-  --edit-variant <v>        Edit variant: replace, patch, hashline, chunk, vim, auto (default: auto)
+  --edit-variant <v>        Edit variant: any string (e.g. replace, patch, hashline, vim, atom, apply_patch), or auto (default: auto)
   --edit-fuzzy <bool>       Fuzzy matching: true, false, auto (default: auto)
   --edit-fuzzy-threshold <n> Fuzzy threshold 0-1 or auto (default: auto)
   --auto-format             Auto-format output files after verify (debug only)
@@ -90,6 +114,7 @@ Options:
   --require-edit-tool-call  Require edit tool usage for success (default: false)
   --require-read-tool-call  Require read tool usage for success (default: false)
   --no-edit-required        Remove "must edit" prompt requirement (default: false)
+  --no-early-stop-on-match  Don't short-circuit the run when output matches expected (default: false)
   --list                    List available tasks and exit
   --help                    Show this help message
 
@@ -191,6 +216,7 @@ async function main(): Promise<void> {
 			"edit-fuzzy": { type: "string" },
 			"edit-fuzzy-threshold": { type: "string" },
 			"no-in-process": { type: "boolean", default: false },
+			"no-early-stop-on-match": { type: "boolean", default: false },
 			"max-tasks": { type: "string", default: "80" },
 			list: { type: "boolean", default: false },
 			help: { type: "boolean", default: false },
@@ -307,18 +333,8 @@ async function main(): Promise<void> {
 		tasksToRun = Array.from({ length: maxTasks }, (_, i) => sorted[Math.floor(i * step)]!);
 	}
 
-	const editVariant = values["edit-variant"] as
-		| "replace"
-		| "patch"
-		| "hashline"
-		| "chunk"
-		| "vim"
-		| "auto"
-		| undefined;
-	if (editVariant && !["replace", "patch", "hashline", "chunk", "vim", "auto"].includes(editVariant)) {
-		console.error(`Invalid edit-variant: ${editVariant}. Must be replace, patch, hashline, chunk, vim, or auto.`);
-		process.exit(1);
-	}
+	const rawEditVariant = values["edit-variant"] as string | undefined;
+	const editVariant = rawEditVariant === "" ? undefined : rawEditVariant;
 
 	let editFuzzy: boolean | "auto" | undefined;
 	if (values["edit-fuzzy"] !== undefined) {
@@ -374,6 +390,7 @@ async function main(): Promise<void> {
 		mutationScopeWindow,
 		connectionTimeout,
 		inProcess: !values["no-in-process"],
+		earlyStopOnMatch: !values["no-early-stop-on-match"],
 	};
 	const outputPath = values.output ?? generateReportFilename(config, formatType);
 	config.conversationDumpDir = await resolveConversationDumpDir(outputPath);
@@ -499,22 +516,43 @@ class LiveProgress {
 			}
 		}
 
-		if (event.result && !event.result.success && event.result.error) {
+		const result = event.result;
+		if (result && !result.success && result.error) {
 			this.#flushLine();
-			console.log(
-				`  [${event.taskId}] Run ${event.runIndex + 1}/${this.#runsPerTask} failed: ${event.result.error}`,
-			);
-			if (event.result.diff) {
-				const diffLines = event.result.diff.split("\n").slice(0, 30);
-				if (diffLines.length > 0) {
-					console.log("  Diff (first 30 lines):");
-					for (const line of diffLines) {
-						console.log(`    ${line}`);
-					}
-					if (event.result.diff.split("\n").length > 30) {
-						console.log("    ... (truncated)");
-					}
+			const header = paint(ANSI.red, `[${event.taskId}] Run ${event.runIndex + 1}/${this.#runsPerTask} failed:`);
+			console.log(`  ${header} ${result.error}`);
+			if (result.diff) {
+				const changeLines = result.diff
+					.split("\n")
+					.filter(line => /^[-+@]/.test(line) && !/^(---|\+\+\+)/.test(line));
+				const maxLines = 40;
+				const shown = changeLines.slice(0, maxLines);
+				for (const line of shown) {
+					let color: string | undefined;
+					if (line.startsWith("@@")) color = ANSI.cyan;
+					else if (line.startsWith("-")) color = ANSI.red;
+					else if (line.startsWith("+")) color = ANSI.green;
+					console.log(`    ${color ? paint(color, line) : line}`);
 				}
+				if (changeLines.length > maxLines) {
+					console.log(paint(ANSI.dim, `    ... (${changeLines.length - maxLines} more change lines)`));
+				}
+			}
+		}
+
+		if (result?.editFailures && result.editFailures.length > 0) {
+			this.#flushLine();
+			for (const [i, failure] of result.editFailures.entries()) {
+				const args = (failure.args ?? {}) as Record<string, unknown>;
+				const target =
+					typeof args.path === "string" ? args.path : typeof args.file === "string" ? args.file : undefined;
+				const op = typeof args.operation === "string" ? args.operation : undefined;
+				const oneLine = failure.error.replace(/\s+/g, " ").trim();
+				const clipped = oneLine.length > 240 ? `${oneLine.slice(0, 237)}...` : oneLine;
+				const tag = paint(ANSI.yellow, `[${event.taskId}] schema #${i + 1}`);
+				const metaParts = [op, target].filter((v): v is string => Boolean(v));
+				const meta = metaParts.length > 0 ? paint(ANSI.dim, metaParts.join(" ")) : "";
+				console.log(`  ${tag}${meta ? ` ${meta}` : ""} ${clipped}`);
 			}
 		}
 
@@ -541,10 +579,12 @@ class LiveProgress {
 			this.#indentScores.length > 0 ? this.#indentScores.reduce((a, b) => a + b, 0) / this.#indentScores.length : 0;
 
 		console.log("");
-		console.log("Runtime Stats:");
-		console.log(`  Task success:     ${successRate.toFixed(1)}% (${this.#success}/${n})`);
+		console.log(paint(ANSI.bold, "Runtime Stats:"));
 		console.log(
-			`  Edit success:     ${editSuccessRate.toFixed(1)}% (${this.#totalEditSuccesses}/${this.#totalEdits})`,
+			`  Task success:     ${paint(rateColor(successRate), `${successRate.toFixed(1)}% (${this.#success}/${n})`)}`,
+		);
+		console.log(
+			`  Edit success:     ${paint(rateColor(editSuccessRate), `${editSuccessRate.toFixed(1)}% (${this.#totalEditSuccesses}/${this.#totalEdits})`)}`,
 		);
 		console.log(`  Avg indent score: ${avgIndent.toFixed(2)}`);
 		console.log(`  Tool calls:       read=${this.#totalReads} edit=${this.#totalEdits} write=${this.#totalWrites}`);
@@ -566,7 +606,14 @@ class LiveProgress {
 		const avgDuration = this.#completed > 0 ? Math.round(this.#totalDuration / this.#completed) : 0;
 		const inFlight = this.#started - this.#completed;
 		const bar = this.#renderBar(this.#completed, this.#totalRuns, 20);
-		const line = `  ${bar} ${this.#completed}/${this.#totalRuns} task=${successRate.toFixed(0)}% edit=${editRate.toFixed(0)}% tok=${avgInput}/${avgOutput} ${avgDuration}ms r/e/w=${this.#totalReads}/${this.#totalEdits}/${this.#totalWrites} fly=${inFlight}`;
+		const progress = paint(ANSI.bold, `${this.#completed}/${this.#totalRuns}`);
+		const taskCol = `task=${paint(rateColor(successRate), `${successRate.toFixed(0)}%`)}`;
+		const editCol = `edit=${paint(rateColor(editRate), `${editRate.toFixed(0)}%`)}`;
+		const tokCol = paint(ANSI.dim, `tok=${avgInput}/${avgOutput}`);
+		const durCol = paint(ANSI.dim, `${avgDuration}ms`);
+		const rewCol = paint(ANSI.dim, `r/e/w=${this.#totalReads}/${this.#totalEdits}/${this.#totalWrites}`);
+		const flyCol = `fly=${paint(ANSI.cyan, String(inFlight))}`;
+		const line = `  ${bar} ${progress} ${taskCol} ${editCol} ${tokCol} ${durCol} ${rewCol} ${flyCol}`;
 		this.#writeLine(line);
 	}
 
@@ -574,13 +621,16 @@ class LiveProgress {
 		const ratio = total === 0 ? 0 : done / total;
 		const filled = Math.round(ratio * width);
 		const empty = Math.max(0, width - filled);
-		return `[${"#".repeat(filled)}${"-".repeat(empty)}]`;
+		const filledPart = paint(ANSI.green, "#".repeat(filled));
+		const emptyPart = paint(ANSI.dim, "-".repeat(empty));
+		return `[${filledPart}${emptyPart}]`;
 	}
 
 	#writeLine(line: string): void {
-		const pad = this.#lastLineLength > line.length ? padding(this.#lastLineLength - line.length) : "";
+		const lineWidth = visibleWidth(line);
+		const pad = this.#lastLineLength > lineWidth ? padding(this.#lastLineLength - lineWidth) : "";
 		process.stdout.write(`\r${line}${pad}`);
-		this.#lastLineLength = line.length;
+		this.#lastLineLength = lineWidth;
 	}
 
 	#flushLine(): void {

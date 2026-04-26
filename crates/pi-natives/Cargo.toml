@@ -20,6 +20,7 @@ napi = { version = "3", features = ["napi10", "tokio_rt", "tokio_time"] }
 napi-derive = "3"
 brush-core = { version = "0.4.0", path = "../brush-core-vendored" }
 brush-builtins = { version = "0.1.0", path = "../brush-builtins-vendored" }
+brush-parser = "0.3"
 parking_lot = "0.12.5"
 dashmap = "6.1"
 clap = { version = "4", features = ["derive"] }
@@ -42,6 +43,7 @@ tree-sitter-clojure = "0.1"
 tree-sitter-cmake = "0.7.1"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-cpp = "0.23"
+tree-sitter-dart = "0.1"
 tree-sitter-css = "0.25"
 tree-sitter-diff = "0.1"
 tree-sitter-dockerfile = { version = "0.2.0", package = "tree-sitter-dockerfile-updated" }
@@ -113,7 +115,6 @@ smallvec = { version = "1.15.1", features = [
    "serde",
    "write",
    "union",
-   "specialization",
    "const_new",
 ] }
 memmap2 = "0.9"
@@ -122,7 +123,8 @@ regex = "1"
 similar = "3.0.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
-
+anyhow = "1.0"
+toml = "0.8"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
@@ -137,6 +139,5 @@ windows-sys = { version = "0.61", features = [
 ] }
 [build-dependencies]
 napi-build = "2"
-cc = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

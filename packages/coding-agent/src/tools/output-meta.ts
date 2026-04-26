@@ -337,7 +337,7 @@ export function formatTruncationMetaNotice(truncation: TruncationMeta): string {
 	}
 
 	if (truncation.nextOffset != null) {
-		notice += `. Use sel=L${truncation.nextOffset} to continue`;
+		notice += `. Use sel=${truncation.nextOffset} to continue`;
 	}
 
 	if (truncation.artifactId != null) {

@@ -46,6 +46,22 @@ describe("tool path root alias", () => {
 		expect(resolveToCwd("///", tempDir)).toBe(tempDir);
 	});
 
+	it("rejects local:/ (single-slash) as an internal URL", () => {
+		expect(() => resolveToCwd("local:/PLAN.md", tempDir)).toThrow("internal scheme");
+	});
+
+	it("rejects local:// as an internal URL", () => {
+		expect(() => resolveToCwd("local://PLAN.md", tempDir)).toThrow("internal scheme");
+	});
+
+	it("rejects @local:/ (at-prefix single-slash) as an internal URL", () => {
+		expect(() => resolveToCwd("@local:/PLAN.md", tempDir)).toThrow("internal scheme");
+	});
+
+	it("rejects @local:// (at-prefix double-slash) as an internal URL", () => {
+		expect(() => resolveToCwd("@local://PLAN.md", tempDir)).toThrow("internal scheme");
+	});
+
 	it("greps from cwd when path is slash", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "grep");
@@ -100,11 +116,8 @@ describe("tool path root alias", () => {
 		if (!tool) throw new Error("Missing ast_grep tool");
 
 		const result = await tool.execute("ast-grep-root-alias", {
-			pat: ["rootAliasSymbol"],
-			sel: "identifier",
-			lang: "typescript",
-			path: "/",
-			glob: "**/*.ts",
+			pat: "rootAliasSymbol",
+			path: "/**/*.ts",
 		});
 		const details = result.details as { scopePath?: string } | undefined;
 
@@ -127,9 +140,7 @@ describe("tool path root alias", () => {
 
 		const preview = await tool.execute("ast-edit-root-alias", {
 			ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
-			lang: "typescript",
-			path: "/",
-			glob: "**/*.ts",
+			path: "/**/*.ts",
 		});
 		const details = preview.details as { scopePath?: string; totalReplacements?: number } | undefined;
 

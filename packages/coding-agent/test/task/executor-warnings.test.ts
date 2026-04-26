@@ -1,39 +1,39 @@
 import { describe, expect, it } from "bun:test";
 import {
 	finalizeSubprocessOutput,
-	SUBAGENT_WARNING_MISSING_SUBMIT_RESULT,
-	SUBAGENT_WARNING_NULL_SUBMIT_RESULT,
+	SUBAGENT_WARNING_MISSING_YIELD,
+	SUBAGENT_WARNING_NULL_YIELD,
 } from "../../src/task/executor";
 
 describe("subagent warning injection", () => {
-	it("injects null-data warning when submit_result is success without data", () => {
+	it("injects null-data warning when yield is success without data", () => {
 		const result = finalizeSubprocessOutput({
 			rawOutput: "partial output",
 			exitCode: 0,
 			stderr: "",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: [{ status: "success" }],
+			yieldItems: [{ status: "success" }],
 			outputSchema: undefined,
 		});
 
-		expect(result.rawOutput).toBe(`${SUBAGENT_WARNING_NULL_SUBMIT_RESULT}\n\npartial output`);
-		expect(result.hasSubmitResult).toBe(true);
+		expect(result.rawOutput).toBe(`${SUBAGENT_WARNING_NULL_YIELD}\n\npartial output`);
+		expect(result.hasYield).toBe(true);
 	});
 
-	it("injects missing-submit warning when subagent exits cleanly without submit_result", () => {
+	it("injects missing-submit warning when subagent exits cleanly without yield", () => {
 		const result = finalizeSubprocessOutput({
 			rawOutput: "",
 			exitCode: 0,
 			stderr: "",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: undefined,
+			yieldItems: undefined,
 			outputSchema: { properties: { ok: { type: "boolean" } } },
 		});
 
-		expect(result.rawOutput).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
-		expect(result.hasSubmitResult).toBe(false);
+		expect(result.rawOutput).toBe(SUBAGENT_WARNING_MISSING_YIELD);
+		expect(result.hasYield).toBe(false);
 	});
 
 	it("does not inject missing-submit warning when fallback completion is recoverable", () => {
@@ -43,7 +43,7 @@ describe("subagent warning injection", () => {
 			stderr: "",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: undefined,
+			yieldItems: undefined,
 			outputSchema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
 		});
 
@@ -58,13 +58,11 @@ describe("subagent warning injection", () => {
 			stderr: "",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: undefined,
+			yieldItems: undefined,
 			outputSchema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
 		});
 
-		expect(result.rawOutput).toBe(
-			`${SUBAGENT_WARNING_MISSING_SUBMIT_RESULT}\n\nagent stopped after writing analysis`,
-		);
+		expect(result.rawOutput).toBe(`${SUBAGENT_WARNING_MISSING_YIELD}\n\nagent stopped after writing analysis`);
 	});
 
 	it("does not inject missing-submit warning when execution exits non-zero", () => {
@@ -74,7 +72,7 @@ describe("subagent warning injection", () => {
 			stderr: "subagent terminated",
 			doneAborted: true,
 			signalAborted: false,
-			submitResultItems: undefined,
+			yieldItems: undefined,
 			outputSchema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
 		});
 
@@ -83,32 +81,32 @@ describe("subagent warning injection", () => {
 		expect(result.exitCode).toBe(1);
 	});
 
-	it("normalizes explicit aborted submit_result into aborted payload", () => {
+	it("normalizes explicit aborted yield into aborted payload", () => {
 		const result = finalizeSubprocessOutput({
 			rawOutput: "partial output",
 			exitCode: 1,
 			stderr: "old error",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: [{ status: "aborted", error: "blocked by permissions" }],
+			yieldItems: [{ status: "aborted", error: "blocked by permissions" }],
 			outputSchema: undefined,
 		});
 
-		expect(result.abortedViaSubmitResult).toBe(true);
+		expect(result.abortedViaYield).toBe(true);
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toBe("blocked by permissions");
 		expect(result.rawOutput).toContain('"aborted": true');
 		expect(result.rawOutput).toContain('"blocked by permissions"');
 	});
 
-	it("accepts successful submit_result data without warning", () => {
+	it("accepts successful yield data without warning", () => {
 		const result = finalizeSubprocessOutput({
 			rawOutput: "should be replaced",
 			exitCode: 1,
 			stderr: "should clear",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: [{ status: "success", data: { ok: true } }],
+			yieldItems: [{ status: "success", data: { ok: true } }],
 			outputSchema: undefined,
 		});
 
@@ -125,7 +123,7 @@ describe("subagent warning injection", () => {
 			stderr: "",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: undefined,
+			yieldItems: undefined,
 			outputSchema: undefined,
 		});
 

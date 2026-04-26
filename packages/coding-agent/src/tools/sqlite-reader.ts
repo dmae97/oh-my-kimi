@@ -252,6 +252,112 @@ function resolveOrderClause(order: string | undefined, columns: string[]): strin
 	return ` ORDER BY ${quoteSqliteIdentifier(column)} ${direction.toUpperCase()}`;
 }
 
+const FORBIDDEN_WHERE_KEYWORDS = new Set([
+	"limit",
+	"offset",
+	"union",
+	"intersect",
+	"except",
+	"attach",
+	"detach",
+	"pragma",
+]);
+
+const COMMENT_OR_TERMINATOR_ERROR =
+	"SQLite 'where' clause must not contain comments or statement terminators; use '?q=SELECT ...' for raw SQL";
+const FORBIDDEN_KEYWORD_ERROR =
+	"SQLite 'where' clause must not contain LIMIT/OFFSET/UNION/INTERSECT/EXCEPT/ATTACH/DETACH/PRAGMA; use '?q=SELECT ...' for raw SQL";
+
+/**
+ * Scans a `where=` clause character-by-character, tracking single- and double-quoted
+ * string literals, and rejects SQL control syntax that would otherwise let the
+ * structured helper path escape the bound `LIMIT ? OFFSET ?` pagination:
+ *
+ * - comments (`--`, `/* ... *\/`) and statement terminators (`;`) outside quotes
+ * - pagination / attach / pragma keywords outside quotes
+ *
+ * Raw SQL remains available through `?q=SELECT ...`.
+ */
+function findWhereClauseViolation(sql: string): string | null {
+	let inSingleQuote = false;
+	let inDoubleQuote = false;
+	let tokenStart = -1;
+	let keywordViolation: string | null = null;
+
+	const flushToken = (end: number): void => {
+		if (tokenStart < 0 || keywordViolation) {
+			tokenStart = -1;
+			return;
+		}
+		const token = sql.slice(tokenStart, end).toLowerCase();
+		tokenStart = -1;
+		if (FORBIDDEN_WHERE_KEYWORDS.has(token)) {
+			keywordViolation = FORBIDDEN_KEYWORD_ERROR;
+		}
+	};
+
+	for (let index = 0; index <= sql.length; index++) {
+		const char = index < sql.length ? sql[index] : undefined;
+		const next = index + 1 < sql.length ? sql[index + 1] : undefined;
+
+		if (inSingleQuote) {
+			if (char === "'" && next === "'") {
+				index += 1;
+				continue;
+			}
+			if (char === "'") {
+				inSingleQuote = false;
+			}
+			continue;
+		}
+		if (inDoubleQuote) {
+			if (char === '"' && next === '"') {
+				index += 1;
+				continue;
+			}
+			if (char === '"') {
+				inDoubleQuote = false;
+			}
+			continue;
+		}
+
+		const isIdent = char !== undefined && /[A-Za-z0-9_]/.test(char);
+		if (isIdent) {
+			if (tokenStart < 0) tokenStart = index;
+			continue;
+		}
+
+		flushToken(index);
+
+		if (char === undefined) break;
+		if (char === "'") {
+			inSingleQuote = true;
+			continue;
+		}
+		if (char === '"') {
+			inDoubleQuote = true;
+			continue;
+		}
+		if (char === ";") return COMMENT_OR_TERMINATOR_ERROR;
+		if ((char === "-" && next === "-") || (char === "/" && next === "*") || (char === "*" && next === "/")) {
+			return COMMENT_OR_TERMINATOR_ERROR;
+		}
+	}
+
+	return keywordViolation;
+}
+
+function validateWhereClause(where: string | undefined): string | undefined {
+	if (!where) return undefined;
+	const trimmed = where.trim();
+	if (!trimmed) return undefined;
+	const violation = findWhereClauseViolation(trimmed);
+	if (violation) {
+		throw new ToolError(violation);
+	}
+	return trimmed;
+}
+
 function normalizeWriteValue(value: unknown, column: string): SqliteBinding {
 	if (value === null) return null;
 	if (
@@ -360,7 +466,7 @@ export function parseSqliteSelector(subPath: string, queryString: string): Sqlit
 		return { kind: "row", table, key };
 	}
 
-	const where = params.get("where")?.trim() || undefined;
+	const where = validateWhereClause(params.get("where") ?? undefined);
 	const order = params.get("order")?.trim() || undefined;
 	const hasQueryParams = params.has("limit") || params.has("offset") || order !== undefined || where !== undefined;
 	if (hasQueryParams) {
@@ -448,12 +554,19 @@ export function queryRows(
 	opts: { limit: number; offset: number; order?: string; where?: string },
 ): { columns: string[]; rows: Record<string, unknown>[]; totalCount: number } {
 	const columns = getTableColumns(db, table);
-	const whereClause = opts.where?.trim() ? ` WHERE ${opts.where.trim()}` : "";
+	const validatedWhere = validateWhereClause(opts.where);
+	const whereClause = validatedWhere ? ` WHERE ${validatedWhere}` : "";
 	const orderClause = resolveOrderClause(opts.order, columns);
 	const countSql = `SELECT COUNT(*) AS count FROM ${quoteSqliteIdentifier(table)}${whereClause}`;
 	const selectSql = `SELECT * FROM ${quoteSqliteIdentifier(table)}${whereClause}${orderClause} LIMIT ? OFFSET ?`;
 	const totalCount = db.prepare<SqliteCountRow, []>(countSql).get()?.count ?? 0;
-	const rows = db.prepare<SqliteRow, SQLQueryBindings[]>(selectSql).all(opts.limit, opts.offset);
+	const statement = db.prepare<SqliteRow, SQLQueryBindings[]>(selectSql);
+	if (statement.paramsCount !== 2) {
+		throw new ToolError(
+			"SQLite where clause changed the expected pagination parameters; use q=SELECT ... for raw SQL",
+		);
+	}
+	const rows = statement.all(opts.limit, opts.offset);
 	return { columns, rows, totalCount };
 }
 

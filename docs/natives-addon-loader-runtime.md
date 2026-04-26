@@ -247,4 +247,3 @@ In normal package/runtime mode final diagnostics include:
 ## Runtime behavior
 
 - The loader always uses the release candidate chain.
-- Setting `PI_DEV` only enables per-candidate console diagnostics (`Loaded native addon...` and load errors).

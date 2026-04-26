@@ -44,4 +44,13 @@ describe("isProviderRetryableError", () => {
 		expect(isProviderRetryableError(new Error("Invalid tool schema"))).toBe(false);
 		expect(isProviderRetryableError(new Error("Bad request"))).toBe(false);
 	});
+
+	it("retries Copilot transient model_not_supported only for github-copilot provider", () => {
+		const err = new Error("400 The requested model is not supported.");
+		(err as unknown as { status: number; code: string }).status = 400;
+		(err as unknown as { status: number; code: string }).code = "model_not_supported";
+		expect(isProviderRetryableError(err, "github-copilot")).toBe(true);
+		expect(isProviderRetryableError(err, "anthropic")).toBe(false);
+		expect(isProviderRetryableError(err)).toBe(false);
+	});
 });

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ToolCall } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -132,6 +132,60 @@ describe("AgentSession handoff", () => {
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
 		expect(events.filter(event => event.type === "auto_compaction_end")).toHaveLength(0);
 		expect(sessionManager.getEntries().filter(entry => entry.type === "compaction")).toHaveLength(0);
+	});
+
+	it("does not run auto maintenance after final yield", async () => {
+		session.settings.set("compaction.strategy", "handoff");
+		session.settings.set("compaction.thresholdPercent", 1);
+		session.settings.set("contextPromotion.enabled", false);
+
+		const model = session.model;
+		if (!model) {
+			throw new Error("Expected model to be set");
+		}
+
+		const yieldCall: ToolCall = {
+			type: "toolCall",
+			id: "call_yield_done",
+			name: "yield",
+			arguments: { result: { data: { done: true } } },
+		};
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [yieldCall],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "toolUse",
+			usage: {
+				input: 10_000,
+				output: 1_000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 11_000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+
+		const handoffSpy = vi.spyOn(session, "handoff").mockResolvedValue({ document: "handoff document" });
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+		session.agent.emitExternalEvent({
+			type: "tool_execution_end",
+			toolCallId: yieldCall.id,
+			toolName: "yield",
+			result: {
+				content: [{ type: "text", text: "Result submitted." }],
+				details: { status: "success", data: { done: true } },
+			},
+			isError: false,
+		});
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+		await Bun.sleep(20);
+
+		expect(handoffSpy).not.toHaveBeenCalled();
+		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
+		expect(events.filter(event => event.type === "auto_compaction_end")).toHaveLength(0);
 	});
 
 	it("does not run auto maintenance when strategy is off", async () => {

@@ -127,6 +127,23 @@ export class UiHelpers {
 						this.ctx.chatContainer.addChild(component);
 						break;
 					}
+					if (message.customType === "irc:incoming" || message.customType === "irc:autoreply") {
+						const details = (
+							message as CustomMessage<{ from?: string; to?: string; message?: string; reply?: string }>
+						).details;
+						const isIncoming = message.customType === "irc:incoming";
+						const peer = isIncoming ? (details?.from ?? "?") : (details?.to ?? "?");
+						const body = isIncoming ? (details?.message ?? "") : (details?.reply ?? "");
+						const arrow = isIncoming ? `\u21e6 ${peer}` : `\u21e8 ${peer} (auto)`;
+						const header = `${theme.fg("accent", `[IRC] ${arrow}`)}`;
+						this.ctx.chatContainer.addChild(new Text(header, 1, 0));
+						if (body) {
+							for (const line of body.split("\n")) {
+								this.ctx.chatContainer.addChild(new Text(theme.fg("muted", `  ${line}`), 0, 0));
+							}
+						}
+						break;
+					}
 					const renderer = this.ctx.session.extensionRunner?.getMessageRenderer(message.customType);
 					// Both HookMessage and CustomMessage have the same structure, cast for compatibility
 					const component = new CustomMessageComponent(message as CustomMessage<unknown>, renderer);
@@ -257,7 +274,9 @@ export class UiHelpers {
 					if (content.name === "read") {
 						if (hasErrorStop && errorMessage) {
 							if (!readGroup) {
-								readGroup = new ReadToolGroupComponent();
+								readGroup = new ReadToolGroupComponent({
+									showContentPreview: this.ctx.settings.get("read.toolResultPreview"),
+								});
 								readGroup.setExpanded(this.ctx.toolOutputExpanded);
 								this.ctx.chatContainer.addChild(readGroup);
 							}
@@ -330,7 +349,9 @@ export class UiHelpers {
 					let component = this.ctx.pendingTools.get(message.toolCallId);
 					if (!component) {
 						if (!readGroup) {
-							readGroup = new ReadToolGroupComponent();
+							readGroup = new ReadToolGroupComponent({
+								showContentPreview: this.ctx.settings.get("read.toolResultPreview"),
+							});
 							readGroup.setExpanded(this.ctx.toolOutputExpanded);
 							this.ctx.chatContainer.addChild(readGroup);
 						}

@@ -176,6 +176,8 @@ export interface CustomTool<TParams extends TSchema = TSchema, TDetails = any> {
 	name: string;
 	/** Human-readable label for UI */
 	label: string;
+	/** If true, tool is strictly typed and validated against the parameters schema before execution */
+	strict?: boolean;
 	/** Description for LLM */
 	description: string;
 	/** Parameter schema (TypeBox) */

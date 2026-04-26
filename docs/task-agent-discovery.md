@@ -31,7 +31,7 @@ Task agents normalize into `AgentDefinition` (`src/task/types.ts`):
 Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.ts`):
 
 - missing `name` or `description` => invalid (`null`), caller treats as parse failure
-- `tools` accepts CSV or array; if provided, `submit_result` is auto-added
+- `tools` accepts CSV or array; if provided, `yield` is auto-added
 - `spawns` accepts `*`, CSV, or array
 - backward-compat behavior: if `spawns` missing but `tools` includes `task`, `spawns` becomes `*`
 - `output` is passed through as opaque schema data

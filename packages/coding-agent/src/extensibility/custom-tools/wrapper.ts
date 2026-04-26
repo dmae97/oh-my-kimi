@@ -14,13 +14,14 @@ export class CustomToolAdapter<TParams extends TSchema = TSchema, TDetails = any
 	declare label: string;
 	declare description: string;
 	declare parameters: TParams;
-	readonly strict = true;
+	readonly strict: boolean | undefined;
 
 	constructor(
 		private tool: CustomTool<TParams, TDetails>,
 		private getContext: () => CustomToolContext,
 	) {
 		applyToolProxy(tool, this);
+		this.strict = tool.strict;
 	}
 
 	execute(

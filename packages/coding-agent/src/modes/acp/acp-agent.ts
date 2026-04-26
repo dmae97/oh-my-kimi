@@ -39,10 +39,14 @@ import {
 } from "@agentclientprotocol/sdk";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { logger, VERSION } from "@oh-my-pi/pi-utils";
+import { disableProvider, enableProvider } from "../../capability";
+import { Settings } from "../../config/settings";
 import type { ExtensionUIContext } from "../../extensibility/extensions";
+import { runExtensionCompact } from "../../extensibility/extensions/compact-handler";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
 import { MCPManager } from "../../mcp/manager";
 import type { MCPServerConfig } from "../../mcp/types";
+import { loadAllExtensions } from "../../modes/components/extensions/state-manager";
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import {
@@ -378,8 +382,79 @@ export class AcpAgent implements Agent {
 		}
 	}
 
-	async extMethod(_method: string, _params: { [key: string]: unknown }): Promise<{ [key: string]: unknown }> {
-		throw new Error("ACP extension methods are not implemented");
+	async extMethod(method: string, params: { [key: string]: unknown }): Promise<{ [key: string]: unknown }> {
+		switch (method) {
+			case "omp/sessions/listAll": {
+				const limit = typeof params.limit === "number" ? Math.max(1, Math.min(5000, params.limit as number)) : 1000;
+				const sessions = await SessionManager.listAll();
+				const sorted = sessions.sort((l, r) => r.modified.getTime() - l.modified.getTime()).slice(0, limit);
+				return {
+					sessions: sorted.map(s => this.#toSessionInfo(s)),
+					total: sessions.length,
+				};
+			}
+			case "omp/projects/list": {
+				const sessions = await SessionManager.listAll();
+				const buckets = new Map<
+					string,
+					{ cwd: string; sessionCount: number; lastActivityAt: number; lastTitle: string }
+				>();
+				for (const s of sessions) {
+					if (!s.cwd) continue;
+					const ts = s.modified.getTime();
+					const existing = buckets.get(s.cwd);
+					if (existing) {
+						existing.sessionCount += 1;
+						if (ts > existing.lastActivityAt) {
+							existing.lastActivityAt = ts;
+							existing.lastTitle = s.title ?? "";
+						}
+					} else {
+						buckets.set(s.cwd, {
+							cwd: s.cwd,
+							sessionCount: 1,
+							lastActivityAt: ts,
+							lastTitle: s.title ?? "",
+						});
+					}
+				}
+				const projects = Array.from(buckets.values()).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+				return { projects, totalSessions: sessions.length };
+			}
+			case "omp/chats/byCwd": {
+				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
+				if (!cwd) throw new Error("cwd required");
+				const limit = typeof params.limit === "number" ? Math.max(1, Math.min(500, params.limit as number)) : 100;
+				const sessions = await SessionManager.list(cwd);
+				const sorted = sessions.sort((l, r) => r.modified.getTime() - l.modified.getTime()).slice(0, limit);
+				return { sessions: sorted.map(s => this.#toSessionInfo(s)) };
+			}
+			case "omp/usage": {
+				const [firstRecord] = this.#sessions.values();
+				const target = firstRecord?.session ?? this.#initialSession;
+				const reports = await target.fetchUsageReports();
+				return { reports: reports ?? [] };
+			}
+			case "omp/extensions": {
+				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
+				const sm = await Settings.init();
+				const disabledIds = (sm.get("disabledExtensions") as string[] | undefined) ?? [];
+				const extensions = await loadAllExtensions(cwd, disabledIds);
+				return { extensions: extensions as unknown as Array<{ [key: string]: unknown }> };
+			}
+			case "omp/extensions/toggle": {
+				const providerId = params.providerId;
+				if (typeof providerId !== "string") throw new Error("providerId required");
+				if (params.enabled === false) {
+					disableProvider(providerId);
+					return { enabled: false };
+				}
+				enableProvider(providerId);
+				return { enabled: true };
+			}
+			default:
+				throw new Error(`Unknown ACP ext method: ${method}`);
+		}
 	}
 
 	async extNotification(_method: string, _params: { [key: string]: unknown }): Promise<void> {}
@@ -1163,14 +1238,7 @@ export class AcpAgent implements Agent {
 				shutdown: () => {},
 				getContextUsage: () => record.session.getContextUsage(),
 				getSystemPrompt: () => record.session.systemPrompt,
-				compact: async instructionsOrOptions => {
-					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-					const options =
-						instructionsOrOptions && typeof instructionsOrOptions === "object"
-							? instructionsOrOptions
-							: undefined;
-					await record.session.compact(instructions, options);
-				},
+				compact: instructionsOrOptions => runExtensionCompact(record.session, instructionsOrOptions),
 			},
 			{
 				getContextUsage: () => record.session.getContextUsage(),
@@ -1197,14 +1265,7 @@ export class AcpAgent implements Agent {
 				reload: async () => {
 					await record.session.reload();
 				},
-				compact: async instructionsOrOptions => {
-					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-					const options =
-						instructionsOrOptions && typeof instructionsOrOptions === "object"
-							? instructionsOrOptions
-							: undefined;
-					await record.session.compact(instructions, options);
-				},
+				compact: instructionsOrOptions => runExtensionCompact(record.session, instructionsOrOptions),
 			},
 			acpExtensionUiContext,
 		);

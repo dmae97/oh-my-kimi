@@ -2047,6 +2047,12 @@ function createBlobId(data: Uint8Array): Uint8Array {
 	return new Uint8Array(createHash("sha256").update(data).digest());
 }
 
+function storeCursorBlob(blobStore: Map<string, Uint8Array>, data: Uint8Array): Uint8Array {
+	const blobId = createBlobId(data);
+	blobStore.set(Buffer.from(blobId).toString("hex"), data);
+	return blobId;
+}
+
 const CURSOR_NATIVE_TOOL_NAMES = new Set(["bash", "read", "write", "delete", "ls", "grep", "lsp", "todo_write"]);
 
 function buildMcpToolDefinitions(tools: Tool[] | undefined): McpToolDefinition[] {
@@ -2103,12 +2109,88 @@ function extractAssistantMessageText(msg: Message): string {
 }
 
 /**
- * Convert context.messages to Cursor's serialized ConversationTurn format.
+ * Derive a stable, UUID-formatted `message_id` from a content key.
+ * Ensures identical historical messages hash to the same blob IDs across
+ * requests, so `conversationBlobStores` does not grow unboundedly and
+ * unchanged history reuses existing blob IDs.
+ */
+function deterministicMessageId(key: string): string {
+	const hex = createHash("sha256").update(key).digest("hex");
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
+ * Index of the last user/developer message in `messages`, or -1 if none.
+ * Used to exclude the current user turn from history builders — it goes in
+ * `ConversationActionSchema.userMessageAction`, not in history structures.
+ */
+function findLastUserMessageIndex(messages: Message[]): number {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const role = messages[i].role;
+		if (role === "user" || role === "developer") {
+			return i;
+		}
+	}
+	return -1;
+}
+
+/**
+ * Build `ConversationStateStructure.rootPromptMessagesJson` blob IDs for the
+ * system prompt plus prior conversation history, as JSON blobs matching
+ * Cursor's internal Vercel-AI-SDK-shaped message format.
+ *
+ * Cursor's server uses `rootPromptMessagesJson` (not `turns[]`) to build the
+ * actual model prompt. `turns[]` is UI/display metadata. Without populating
+ * this field, multi-turn conversations lose prior context — the model sees
+ * only an empty placeholder where historical user turns should be.
+ * The last user message is excluded because it is sent in the action.
+ */
+function buildRootPromptMessagesJson(
+	messages: Message[],
+	systemPromptId: Uint8Array,
+	blobStore: Map<string, Uint8Array>,
+): Uint8Array[] {
+	const entries: Uint8Array[] = [systemPromptId];
+	const lastUserIdx = findLastUserMessageIndex(messages);
+
+	const pushJson = (obj: unknown) => {
+		const bytes = new TextEncoder().encode(JSON.stringify(obj));
+		entries.push(storeCursorBlob(blobStore, bytes));
+	};
+
+	for (let i = 0; i < messages.length; i++) {
+		if (i === lastUserIdx) break;
+		const msg = messages[i];
+		if (msg.role === "user" || msg.role === "developer") {
+			const text = extractUserMessageText(msg);
+			if (!text) continue;
+			pushJson({ role: "user", content: [{ type: "text", text }] });
+		} else if (msg.role === "assistant") {
+			const text = extractAssistantMessageText(msg);
+			if (!text) continue;
+			pushJson({ role: "assistant", content: [{ type: "text", text }] });
+		} else if (msg.role === "toolResult") {
+			const text = toolResultToText(msg);
+			if (!text) continue;
+			pushJson({
+				role: "user",
+				content: [{ type: "text", text: `[Tool Result]\n${text}` }],
+			});
+		}
+	}
+
+	return entries;
+}
+
+/**
+ * Convert context.messages to Cursor's ConversationTurnStructure blob IDs.
  * Groups messages into turns: each turn is a user message followed by the assistant's response.
  * Excludes the last user message (which goes in the action).
- * Returns serialized bytes for ConversationStateStructure.turns field.
+ *
+ * Each `AgentConversationTurnStructure.user_message`, `steps[]`, and the outer
+ * `ConversationStateStructure.turns[]` entry is a blob ID into `blobStore`.
  */
-function buildConversationTurns(messages: Message[]): Uint8Array[] {
+function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint8Array>): Uint8Array[] {
 	const turns: Uint8Array[] = [];
 
 	// Find turn boundaries - each turn starts with a user message
@@ -2143,12 +2225,13 @@ function buildConversationTurns(messages: Message[]): Uint8Array[] {
 
 		const userMessage = create(UserMessageSchema, {
 			text: userText,
-			messageId: crypto.randomUUID(),
+			messageId: deterministicMessageId(`u:${turns.length}:${userText}`),
 		});
 		const userMessageBytes = toBinary(UserMessageSchema, userMessage);
+		const userMessageBlobId = storeCursorBlob(blobStore, userMessageBytes);
 
 		// Collect and serialize steps until next user message
-		const stepBytes: Uint8Array[] = [];
+		const stepBlobIds: Uint8Array[] = [];
 		i++;
 
 		while (i < messages.length && messages[i].role !== "user" && messages[i].role !== "developer") {
@@ -2163,7 +2246,7 @@ function buildConversationTurns(messages: Message[]): Uint8Array[] {
 							value: create(AssistantMessageSchema, { text }),
 						},
 					});
-					stepBytes.push(toBinary(ConversationStepSchema, step));
+					stepBlobIds.push(storeCursorBlob(blobStore, toBinary(ConversationStepSchema, step)));
 				}
 			} else if (stepMsg.role === "toolResult") {
 				// Include tool results as assistant text for context
@@ -2175,17 +2258,18 @@ function buildConversationTurns(messages: Message[]): Uint8Array[] {
 							value: create(AssistantMessageSchema, { text: `[Tool Result]\n${text}` }),
 						},
 					});
-					stepBytes.push(toBinary(ConversationStepSchema, step));
+					stepBlobIds.push(storeCursorBlob(blobStore, toBinary(ConversationStepSchema, step)));
 				}
 			}
 
 			i++;
 		}
 
-		// Create the serialized turn using Structure types (bytes)
+		// Create the serialized turn using Structure types. The bytes fields
+		// (user_message, steps) are blob IDs resolved through the KV store.
 		const agentTurn = create(AgentConversationTurnStructureSchema, {
-			userMessage: userMessageBytes,
-			steps: stepBytes,
+			userMessage: userMessageBlobId,
+			steps: stepBlobIds,
 		});
 		const turn = create(ConversationTurnStructureSchema, {
 			turn: {
@@ -2193,7 +2277,7 @@ function buildConversationTurns(messages: Message[]): Uint8Array[] {
 				value: agentTurn,
 			},
 		});
-		turns.push(toBinary(ConversationTurnStructureSchema, turn));
+		turns.push(storeCursorBlob(blobStore, toBinary(ConversationTurnStructureSchema, turn)));
 	}
 
 	return turns;
@@ -2220,8 +2304,7 @@ function buildGrpcRequest(
 		content: context.systemPrompt || "You are a helpful assistant.",
 	});
 	const systemPromptBytes = new TextEncoder().encode(systemPromptJson);
-	const systemPromptId = createBlobId(systemPromptBytes);
-	blobStore.set(Buffer.from(systemPromptId).toString("hex"), systemPromptBytes);
+	const systemPromptId = storeCursorBlob(blobStore, systemPromptBytes);
 
 	const lastMessage = context.messages[context.messages.length - 1];
 	const userText =
@@ -2248,15 +2331,21 @@ function buildGrpcRequest(
 		},
 	});
 
-	// Build conversation turns from prior messages (excluding the last user message)
-	const turns = buildConversationTurns(context.messages);
+	// Build conversation turns from prior messages (excluding the last user message).
+	// This populates the UI-side history view (`turns[]`).
+	const turns = buildConversationTurns(context.messages, blobStore);
 
+	// Build `rootPromptMessagesJson` from prior messages. Cursor's server uses this
+	// field (not `turns[]`) to construct the actual model prompt; if we only send the
+	// system prompt here, multi-turn conversations lose prior context and the model
+	// sees only the current user message.
+	const rootPromptMessagesJson = buildRootPromptMessagesJson(context.messages, systemPromptId, blobStore);
+
+	// Preserve cached non-history state fields (todos, file states, summaries, etc.)
+	// when the system prompt is unchanged; otherwise start fresh.
 	const hasMatchingPrompt = state.conversationState?.rootPromptMessagesJson?.some(entry =>
 		Buffer.from(entry).equals(systemPromptId),
 	);
-
-	// Use cached state if available and system prompt matches, but always update turns
-	// from context.messages to ensure full conversation history is sent
 	const baseState =
 		state.conversationState && hasMatchingPrompt
 			? state.conversationState
@@ -2275,10 +2364,13 @@ function buildGrpcRequest(
 					readPaths: [],
 				});
 
-	// Always populate turns from context.messages to ensure Cursor sees full conversation
+	// Always override `rootPromptMessagesJson` and `turns` with content freshly built from
+	// `context.messages`. The server-echoed checkpoint replaces historical user entries
+	// with empty placeholders, so we cannot rely on the cached `rootPromptMessagesJson`.
 	const conversationState = create(ConversationStateStructureSchema, {
 		...baseState,
-		turns: turns.length > 0 ? turns : baseState.turns,
+		rootPromptMessagesJson,
+		turns,
 	});
 
 	const modelDetails = create(ModelDetailsSchema, {

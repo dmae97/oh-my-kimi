@@ -3,6 +3,7 @@ import { Container, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import { KeybindingsManager } from "../../config/keybindings";
 import type {
+	CompactOptions,
 	ExtensionActions,
 	ExtensionCommandContextActions,
 	ExtensionContextActions,
@@ -12,6 +13,7 @@ import type {
 	ExtensionUiComponent,
 	ExtensionWidgetContent,
 	ExtensionWidgetOptions,
+	SendUserMessageHandler,
 	TerminalInputHandler,
 } from "../../extensibility/extensions";
 import { HookEditorComponent } from "../../modes/components/hook-editor";
@@ -82,26 +84,14 @@ export class ExtensionUiController {
 				const wasStreaming = this.ctx.session.isStreaming;
 				this.ctx.session
 					.sendCustomMessage(message, options)
-					.then(() => {
-						// For non-streaming cases with display=true, update UI
-						// (streaming cases update via message_end event)
-						if (!this.ctx.isBackgrounded && !wasStreaming && message.display) {
-							this.ctx.rebuildChatFromMessages();
-						}
-					})
+					.then(() => this.#applyCustomMessageDisplay(wasStreaming, message.display))
 					.catch((err: unknown) => {
 						this.ctx.showError(
 							`Extension sendMessage failed: ${err instanceof Error ? err.message : String(err)}`,
 						);
 					});
 			},
-			sendUserMessage: (content, options) => {
-				this.ctx.session.sendUserMessage(content, options).catch((err: unknown) => {
-					this.ctx.showError(
-						`Extension sendUserMessage failed: ${err instanceof Error ? err.message : String(err)}`,
-					);
-				});
-			},
+			sendUserMessage: this.#sendExtensionUserMessage,
 			appendEntry: (customType, data) => {
 				this.ctx.sessionManager.appendCustomEntry(customType, data);
 			},
@@ -121,14 +111,7 @@ export class ExtensionUiController {
 			setThinkingLevel: level => this.ctx.session.setThinkingLevel(level),
 			getCommands: () => [],
 			getSessionName: () => this.ctx.sessionManager.getSessionName(),
-			setSessionName: async name => {
-				await this.ctx.sessionManager.setSessionName(name, "user");
-				setSessionTerminalTitle(
-					this.ctx.sessionManager.getSessionName(),
-					this.ctx.sessionManager.getCwd(),
-					this.ctx.sessionManager.titleSource,
-				);
-			},
+			setSessionName: name => this.#updateSessionName(name),
 		};
 		const contextActions: ExtensionContextActions = {
 			getModel: () => this.ctx.session.model,
@@ -139,12 +122,7 @@ export class ExtensionUiController {
 				// Signal shutdown request (will be handled by main loop)
 			},
 			getContextUsage: () => this.ctx.session.getContextUsage(),
-			compact: async instructionsOrOptions => {
-				const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-				const options =
-					instructionsOrOptions && typeof instructionsOrOptions === "object" ? instructionsOrOptions : undefined;
-				await this.ctx.session.compact(instructions, options);
-			},
+			compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
 			getSystemPrompt: () => this.ctx.session.systemPrompt,
 		};
 		const commandActions: ExtensionCommandContextActions = {
@@ -238,16 +216,7 @@ export class ExtensionUiController {
 
 				return { cancelled: false };
 			},
-			compact: async instructionsOrOptions => {
-				const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-				const options =
-					instructionsOrOptions && typeof instructionsOrOptions === "object" ? instructionsOrOptions : undefined;
-				if (this.ctx.isBackgrounded) {
-					await this.ctx.session.compact(instructions, options);
-					return;
-				}
-				await this.ctx.executeCompaction(instructionsOrOptions, false);
-			},
+			compact: async instructionsOrOptions => this.#handleInteractiveCompact(instructionsOrOptions),
 			switchSession: async sessionPath => {
 				this.clearHookWidgets();
 				const result = await this.ctx.session.switchSession(sessionPath);
@@ -357,13 +326,7 @@ export class ExtensionUiController {
 				const wasStreaming = this.ctx.session.isStreaming;
 				this.ctx.session
 					.sendCustomMessage(message, options)
-					.then(() => {
-						// For non-streaming cases with display=true, update UI
-						// (streaming cases update via message_end event)
-						if (!this.ctx.isBackgrounded && !wasStreaming && message.display) {
-							this.ctx.rebuildChatFromMessages();
-						}
-					})
+					.then(() => this.#applyCustomMessageDisplay(wasStreaming, message.display))
 					.catch((err: unknown) => {
 						const errorText = `Extension sendMessage failed: ${err instanceof Error ? err.message : String(err)}`;
 						if (this.ctx.isBackgrounded) {
@@ -373,13 +336,7 @@ export class ExtensionUiController {
 						this.ctx.showError(errorText);
 					});
 			},
-			sendUserMessage: (content, options) => {
-				this.ctx.session.sendUserMessage(content, options).catch((err: unknown) => {
-					this.ctx.showError(
-						`Extension sendUserMessage failed: ${err instanceof Error ? err.message : String(err)}`,
-					);
-				});
-			},
+			sendUserMessage: this.#sendExtensionUserMessage,
 			appendEntry: (customType, data) => {
 				this.ctx.sessionManager.appendCustomEntry(customType, data);
 			},
@@ -399,14 +356,7 @@ export class ExtensionUiController {
 			setThinkingLevel: (level, persist) => this.ctx.session.setThinkingLevel(level, persist),
 			getCommands: () => [],
 			getSessionName: () => this.ctx.sessionManager.getSessionName(),
-			setSessionName: async name => {
-				await this.ctx.sessionManager.setSessionName(name, "user");
-				setSessionTerminalTitle(
-					this.ctx.sessionManager.getSessionName(),
-					this.ctx.sessionManager.getCwd(),
-					this.ctx.sessionManager.titleSource,
-				);
-			},
+			setSessionName: name => this.#updateSessionName(name),
 		};
 		const contextActions: ExtensionContextActions = {
 			getModel: () => this.ctx.session.model,
@@ -417,12 +367,7 @@ export class ExtensionUiController {
 				// Signal shutdown request (will be handled by main loop)
 			},
 			getContextUsage: () => this.ctx.session.getContextUsage(),
-			compact: async instructionsOrOptions => {
-				const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-				const options =
-					instructionsOrOptions && typeof instructionsOrOptions === "object" ? instructionsOrOptions : undefined;
-				await this.ctx.session.compact(instructions, options);
-			},
+			compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
 			getSystemPrompt: () => this.ctx.session.systemPrompt,
 		};
 		const commandActions: ExtensionCommandContextActions = {
@@ -517,16 +462,7 @@ export class ExtensionUiController {
 
 				return { cancelled: false };
 			},
-			compact: async instructionsOrOptions => {
-				const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-				const options =
-					instructionsOrOptions && typeof instructionsOrOptions === "object" ? instructionsOrOptions : undefined;
-				if (this.ctx.isBackgrounded) {
-					await this.ctx.session.compact(instructions, options);
-					return;
-				}
-				await this.ctx.executeCompaction(instructionsOrOptions, false);
-			},
+			compact: async instructionsOrOptions => this.#handleInteractiveCompact(instructionsOrOptions),
 			switchSession: async sessionPath => {
 				if (this.ctx.isBackgrounded) {
 					return { cancelled: true };
@@ -594,14 +530,7 @@ export class ExtensionUiController {
 					await registeredTool.definition.onSession(event, {
 						ui: uiContext,
 						getContextUsage: () => this.ctx.session.getContextUsage(),
-						compact: async instructionsOrOptions => {
-							const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-							const options =
-								instructionsOrOptions && typeof instructionsOrOptions === "object"
-									? instructionsOrOptions
-									: undefined;
-							await this.ctx.session.compact(instructions, options);
-						},
+						compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
 						hasUI: !this.ctx.isBackgrounded,
 						cwd: this.ctx.sessionManager.getCwd(),
 						sessionManager: this.ctx.session.sessionManager,
@@ -657,21 +586,10 @@ export class ExtensionUiController {
 		options: string[],
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<string | undefined> {
-		const { promise, resolve } = Promise.withResolvers<string | undefined>();
-		let settled = false;
-		const onAbort = () => {
-			this.hideHookSelector();
-			if (!settled) {
-				settled = true;
-				resolve(undefined);
-			}
-		};
-		const finish = (value: string | undefined) => {
-			if (settled) return;
-			settled = true;
-			dialogOptions?.signal?.removeEventListener("abort", onAbort);
-			resolve(value);
-		};
+		const { promise, finish, attachAbort } = this.#createHookDialogState(
+			() => this.hideHookSelector(),
+			dialogOptions?.signal,
+		);
 		const maxVisible = Math.max(4, Math.min(15, this.ctx.ui.terminal.rows - 12));
 		this.ctx.hookSelector = new HookSelectorComponent(
 			title,
@@ -713,13 +631,7 @@ export class ExtensionUiController {
 		this.ctx.editorContainer.addChild(this.ctx.hookSelector);
 		this.ctx.ui.setFocus(this.ctx.hookSelector);
 		this.ctx.ui.requestRender();
-		if (dialogOptions?.signal) {
-			if (dialogOptions.signal.aborted) {
-				onAbort();
-			} else {
-				dialogOptions.signal.addEventListener("abort", onAbort, { once: true });
-			}
-		}
+		attachAbort();
 		return promise;
 	}
 	/**
@@ -750,21 +662,10 @@ export class ExtensionUiController {
 		placeholder?: string,
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<string | undefined> {
-		const { promise, resolve } = Promise.withResolvers<string | undefined>();
-		let settled = false;
-		const onAbort = () => {
-			this.hideHookInput();
-			if (!settled) {
-				settled = true;
-				resolve(undefined);
-			}
-		};
-		const finish = (value: string | undefined) => {
-			if (settled) return;
-			settled = true;
-			dialogOptions?.signal?.removeEventListener("abort", onAbort);
-			resolve(value);
-		};
+		const { promise, finish, attachAbort } = this.#createHookDialogState(
+			() => this.hideHookInput(),
+			dialogOptions?.signal,
+		);
 		this.ctx.hookInput = new HookInputComponent(
 			title,
 			placeholder,
@@ -786,13 +687,7 @@ export class ExtensionUiController {
 		this.ctx.editorContainer.addChild(this.ctx.hookInput);
 		this.ctx.ui.setFocus(this.ctx.hookInput);
 		this.ctx.ui.requestRender();
-		if (dialogOptions?.signal) {
-			if (dialogOptions.signal.aborted) {
-				onAbort();
-			} else {
-				dialogOptions.signal.addEventListener("abort", onAbort, { once: true });
-			}
-		}
+		attachAbort();
 		return promise;
 	}
 
@@ -817,21 +712,10 @@ export class ExtensionUiController {
 		dialogOptions?: ExtensionUIDialogOptions,
 		editorOptions?: { promptStyle?: boolean },
 	): Promise<string | undefined> {
-		const { promise, resolve } = Promise.withResolvers<string | undefined>();
-		let settled = false;
-		const onAbort = () => {
-			this.hideHookEditor();
-			if (!settled) {
-				settled = true;
-				resolve(undefined);
-			}
-		};
-		const finish = (value: string | undefined) => {
-			if (settled) return;
-			settled = true;
-			dialogOptions?.signal?.removeEventListener("abort", onAbort);
-			resolve(value);
-		};
+		const { promise, finish, attachAbort } = this.#createHookDialogState(
+			() => this.hideHookEditor(),
+			dialogOptions?.signal,
+		);
 		this.ctx.hookEditor = new HookEditorComponent(
 			this.ctx.ui,
 			title,
@@ -851,13 +735,7 @@ export class ExtensionUiController {
 		this.ctx.editorContainer.addChild(this.ctx.hookEditor);
 		this.ctx.ui.setFocus(this.ctx.hookEditor);
 		this.ctx.ui.requestRender();
-		if (dialogOptions?.signal) {
-			if (dialogOptions.signal.aborted) {
-				onAbort();
-			} else {
-				dialogOptions.signal.addEventListener("abort", onAbort, { once: true });
-			}
-		}
+		attachAbort();
 		return promise;
 	}
 
@@ -979,5 +857,76 @@ export class ExtensionUiController {
 		const errorText = new Text(theme.fg("error", `Extension "${extensionPath}" error: ${error}`), 1, 0);
 		this.ctx.chatContainer.addChild(errorText);
 		this.ctx.ui.requestRender();
+	}
+	async #handleInteractiveCompact(instructionsOrOptions: string | CompactOptions | undefined): Promise<void> {
+		if (this.ctx.isBackgrounded) {
+			await this.#compactSession(instructionsOrOptions);
+			return;
+		}
+		await this.ctx.executeCompaction(instructionsOrOptions, false);
+	}
+
+	async #compactSession(instructionsOrOptions: string | CompactOptions | undefined): Promise<void> {
+		const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
+		const options =
+			instructionsOrOptions && typeof instructionsOrOptions === "object" ? instructionsOrOptions : undefined;
+		await this.ctx.session.compact(instructions, options);
+	}
+
+	async #updateSessionName(name: string): Promise<void> {
+		await this.ctx.sessionManager.setSessionName(name, "user");
+		setSessionTerminalTitle(
+			this.ctx.sessionManager.getSessionName(),
+			this.ctx.sessionManager.getCwd(),
+			this.ctx.sessionManager.titleSource,
+		);
+	}
+
+	#sendExtensionUserMessage: SendUserMessageHandler = (content, options) => {
+		this.ctx.session.sendUserMessage(content, options).catch((err: unknown) => {
+			this.ctx.showError(`Extension sendUserMessage failed: ${err instanceof Error ? err.message : String(err)}`);
+		});
+	};
+
+	#applyCustomMessageDisplay(wasStreaming: boolean, shouldDisplay: boolean | undefined): void {
+		// For non-streaming cases with display=true, update UI
+		// (streaming cases update via message_end event)
+		if (!this.ctx.isBackgrounded && !wasStreaming && shouldDisplay) {
+			this.ctx.rebuildChatFromMessages();
+		}
+	}
+
+	#createHookDialogState(
+		hide: () => void,
+		signal: AbortSignal | undefined,
+	): {
+		promise: Promise<string | undefined>;
+		finish: (value: string | undefined) => void;
+		attachAbort: () => void;
+	} {
+		const { promise, resolve } = Promise.withResolvers<string | undefined>();
+		let settled = false;
+		const onAbort = () => {
+			hide();
+			if (!settled) {
+				settled = true;
+				resolve(undefined);
+			}
+		};
+		const finish = (value: string | undefined) => {
+			if (settled) return;
+			settled = true;
+			signal?.removeEventListener("abort", onAbort);
+			resolve(value);
+		};
+		const attachAbort = () => {
+			if (!signal) return;
+			if (signal.aborted) {
+				onAbort();
+			} else {
+				signal.addEventListener("abort", onAbort, { once: true });
+			}
+		};
+		return { promise, finish, attachAbort };
 	}
 }

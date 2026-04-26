@@ -73,6 +73,42 @@ function getLastAssistantMessage(session: AgentSession): AssistantMessage {
 	return lastMessage;
 }
 
+function createFallbackAgent(primaryModel: Model, requestedModels: string[]): Agent {
+	let primaryAttempts = 0;
+	return new Agent({
+		getApiKey: provider => `${provider}-test-key`,
+		initialState: {
+			model: primaryModel,
+			systemPrompt: "Test",
+			tools: [],
+			messages: [],
+		},
+		streamFn: model => {
+			requestedModels.push(`${model.provider}/${model.id}`);
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (model.provider === primaryModel.provider && model.id === primaryModel.id && primaryAttempts === 0) {
+					primaryAttempts += 1;
+					const message = createAssistantMessage(model, {
+						stopReason: "error",
+						errorMessage: "rate limit exceeded retry-after-ms=200",
+					});
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "error", reason: "error", error: message });
+					return;
+				}
+				const message = createAssistantMessage(model, {
+					text: `ok:${model.provider}/${model.id}`,
+					stopReason: "stop",
+				});
+				stream.push({ type: "start", partial: createAssistantMessage(model, { text: "", stopReason: "stop" }) });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		},
+	});
+}
+
 describe("AgentSession retry fallback", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
@@ -530,40 +566,7 @@ describe("AgentSession retry fallback", () => {
 		}
 
 		const requestedModels: string[] = [];
-		let primaryAttempts = 0;
-
-		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
-			initialState: {
-				model: primaryModel,
-				systemPrompt: "Test",
-				tools: [],
-				messages: [],
-			},
-			streamFn: model => {
-				requestedModels.push(`${model.provider}/${model.id}`);
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					if (model.provider === primaryModel.provider && model.id === primaryModel.id && primaryAttempts === 0) {
-						primaryAttempts += 1;
-						const message = createAssistantMessage(model, {
-							stopReason: "error",
-							errorMessage: "rate limit exceeded retry-after-ms=200",
-						});
-						stream.push({ type: "start", partial: message });
-						stream.push({ type: "error", reason: "error", error: message });
-						return;
-					}
-					const message = createAssistantMessage(model, {
-						text: `ok:${model.provider}/${model.id}`,
-						stopReason: "stop",
-					});
-					stream.push({ type: "start", partial: createAssistantMessage(model, { text: "", stopReason: "stop" }) });
-					stream.push({ type: "done", reason: "stop", message });
-				});
-				return stream;
-			},
-		});
+		const agent = createFallbackAgent(primaryModel, requestedModels);
 
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
@@ -622,40 +625,7 @@ describe("AgentSession retry fallback", () => {
 		}
 
 		const requestedModels: string[] = [];
-		let primaryAttempts = 0;
-
-		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
-			initialState: {
-				model: primaryModel,
-				systemPrompt: "Test",
-				tools: [],
-				messages: [],
-			},
-			streamFn: model => {
-				requestedModels.push(`${model.provider}/${model.id}`);
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					if (model.provider === primaryModel.provider && model.id === primaryModel.id && primaryAttempts === 0) {
-						primaryAttempts += 1;
-						const message = createAssistantMessage(model, {
-							stopReason: "error",
-							errorMessage: "rate limit exceeded retry-after-ms=200",
-						});
-						stream.push({ type: "start", partial: message });
-						stream.push({ type: "error", reason: "error", error: message });
-						return;
-					}
-					const message = createAssistantMessage(model, {
-						text: `ok:${model.provider}/${model.id}`,
-						stopReason: "stop",
-					});
-					stream.push({ type: "start", partial: createAssistantMessage(model, { text: "", stopReason: "stop" }) });
-					stream.push({ type: "done", reason: "stop", message });
-				});
-				return stream;
-			},
-		});
+		const agent = createFallbackAgent(primaryModel, requestedModels);
 
 		const settings = Settings.isolated({
 			"compaction.enabled": false,

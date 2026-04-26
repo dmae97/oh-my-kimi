@@ -1,4 +1,5 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
+import { TASK_SIMPLE_MODES } from "../task/simple-mode";
 
 /** Unified settings schema - single source of truth for all settings.
  * Unified settings schema - single source of truth for all settings.
@@ -885,6 +886,8 @@ export const SETTINGS_SCHEMA = {
 
 	"memories.rolloutPayloadPercent": { type: "number", default: 0.7 },
 
+	"memories.phase1InputTokenLimit": { type: "number", default: 4000 },
+
 	"memories.fallbackTokenLimit": { type: "number", default: 16000 },
 
 	"memories.summaryInjectionTokenLimit": { type: "number", default: 5000 },
@@ -952,12 +955,12 @@ export const SETTINGS_SCHEMA = {
 	// Edit tool
 	"edit.mode": {
 		type: "enum",
-		values: ["replace", "patch", "hashline", "chunk", "vim"] as const,
+		values: ["replace", "patch", "hashline", "vim", "apply_patch", "atom"] as const,
 		default: "hashline",
 		ui: {
 			tab: "editing",
 			label: "Edit Mode",
-			description: "Select the edit tool variant (replace, patch, hashline, chunk, or vim)",
+			description: "Select the edit tool variant (replace, patch, hashline, vim, or apply_patch)",
 		},
 	},
 
@@ -1018,7 +1021,7 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "editing",
 			label: "Hash Lines",
-			description: "Include line hashes in read output for hashline edit mode (LINE#ID:content)",
+			description: "Include line hashes in read output for hashline edit mode (LINE+ID|content)",
 		},
 	},
 
@@ -1033,35 +1036,13 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"read.prosechunks": {
+	"read.toolResultPreview": {
 		type: "boolean",
 		default: false,
 		ui: {
 			tab: "editing",
-			label: "Prose Chunks",
-			description: "Enable chunk rendering for prose files in chunk edit mode",
-		},
-	},
-
-	"read.explorechunks": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "editing",
-			label: "Explore Chunks",
-			description: "Show chunk tree without checksums for read-only agents like explore",
-		},
-	},
-
-	"read.anchorstyle": {
-		type: "enum",
-		values: ["full", "kind", "bare"],
-		default: "full",
-		ui: {
-			tab: "editing",
-			label: "Anchor Style",
-			description: "Render chunk anchors with full names, kind prefixes, or checksum-only tags",
-			submenu: true,
+			label: "Inline Read Previews",
+			description: "Render read tool results inline in the transcript instead of summary rows",
 		},
 	},
 
@@ -1109,6 +1090,39 @@ export const SETTINGS_SCHEMA = {
 		ui: { tab: "editing", label: "Bash Interceptor", description: "Block shell commands that have dedicated tools" },
 	},
 	"bashInterceptor.patterns": { type: "array", default: DEFAULT_BASH_INTERCEPTOR_RULES },
+
+	// Shell output minimizer
+	"shellMinimizer.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "editing",
+			label: "Shell Minimizer",
+			description: "Compress verbose shell output (git, npm, cargo, etc.) before returning it to the agent",
+		},
+	},
+	"shellMinimizer.settingsPath": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "editing",
+			label: "Minimizer Settings Path",
+			description: "Optional TOML file with per-command minimizer overrides",
+			submenu: true,
+		},
+	},
+	"shellMinimizer.only": { type: "array", default: EMPTY_STRING_ARRAY },
+	"shellMinimizer.except": { type: "array", default: EMPTY_STRING_ARRAY },
+	"shellMinimizer.maxCaptureBytes": {
+		type: "number",
+		default: 4 * 1024 * 1024,
+		ui: {
+			tab: "editing",
+			label: "Minimizer Capture Limit",
+			description: "Maximum captured output bytes before falling back to raw streaming",
+			submenu: true,
+		},
+	},
 
 	// Python
 	"python.toolMode": {
@@ -1192,7 +1206,7 @@ export const SETTINGS_SCHEMA = {
 
 	"grep.contextBefore": {
 		type: "number",
-		default: 0,
+		default: 1,
 		ui: {
 			tab: "tools",
 			label: "Grep Context Before",
@@ -1203,7 +1217,7 @@ export const SETTINGS_SCHEMA = {
 
 	"grep.contextAfter": {
 		type: "number",
-		default: 0,
+		default: 3,
 		ui: {
 			tab: "tools",
 			label: "Grep Context After",
@@ -1229,6 +1243,16 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "AST Edit",
 			description: "Enable the ast_edit tool for structural AST rewrites",
+		},
+	},
+
+	"irc.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			label: "IRC",
+			description: "Enable agent-to-agent IRC messaging via the irc tool",
 		},
 	},
 
@@ -1302,7 +1326,8 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "tools",
 			label: "GitHub CLI",
-			description: "Enable read-only gh_* tools for GitHub repository, issue, pull request, diff, and search access",
+			description:
+				"Enable the github tool (op-based dispatch for repository, issue, pull request, diff, search, checkout, push, and Actions watch workflows)",
 		},
 	},
 
@@ -1382,6 +1407,18 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "Max Async Jobs",
 			description: "Maximum concurrent background jobs (1-100)",
+			submenu: true,
+		},
+	},
+
+	"async.pollWaitDuration": {
+		type: "enum",
+		values: ["5s", "10s", "30s", "1m", "5m"] as const,
+		default: "30s",
+		ui: {
+			tab: "tools",
+			label: "Poll Wait Duration",
+			description: "How long the poll tool waits for background job updates before returning the current state",
 			submenu: true,
 		},
 	},
@@ -1506,6 +1543,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"task.simple": {
+		type: "enum",
+		values: TASK_SIMPLE_MODES,
+		default: "default",
+		ui: {
+			tab: "tasks",
+			label: "Task Input Mode",
+			description: "How much shared structure the task tool accepts (default, schema-free, or independent)",
+			submenu: true,
+		},
+	},
+
 	"task.maxConcurrency": {
 		type: "number",
 		default: 32,
@@ -1587,6 +1636,22 @@ export const SETTINGS_SCHEMA = {
 		ui: { tab: "tasks", label: "Claude Project Commands", description: "Load commands from .claude/commands/" },
 	},
 
+	"commands.enableOpencodeUser": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tasks",
+			label: "OpenCode User Commands",
+			description: "Load commands from ~/.config/opencode/commands/",
+		},
+	},
+
+	"commands.enableOpencodeProject": {
+		type: "boolean",
+		default: true,
+		ui: { tab: "tasks", label: "OpenCode Project Commands", description: "Load commands from .opencode/commands/" },
+	},
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Providers
 	// ────────────────────────────────────────────────────────────────────────
@@ -1616,6 +1681,7 @@ export const SETTINGS_SCHEMA = {
 			"kagi",
 			"synthetic",
 			"parallel",
+			"searxng",
 		] as const,
 		default: "auto",
 		ui: {
@@ -1627,7 +1693,7 @@ export const SETTINGS_SCHEMA = {
 	},
 	"providers.image": {
 		type: "enum",
-		values: ["auto", "gemini", "openrouter"] as const,
+		values: ["auto", "openai", "gemini", "openrouter"] as const,
 		default: "auto",
 		ui: {
 			tab: "providers",
@@ -1694,6 +1760,47 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: { tab: "providers", label: "Exa Websets", description: "Webset management and enrichment tools" },
+	},
+
+	// SearXNG
+	"searxng.endpoint": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "providers",
+			label: "SearXNG Endpoint",
+			description: "Base URL of the SearXNG instance (e.g. https://searx.example.org)",
+		},
+	},
+
+	"searxng.token": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "providers",
+			label: "SearXNG Token",
+			description: "Optional bearer token for SearXNG authentication",
+		},
+	},
+
+	"searxng.categories": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "providers",
+			label: "SearXNG Categories",
+			description: "Comma-separated categories filter (e.g. general,news,science)",
+		},
+	},
+
+	"searxng.language": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "providers",
+			label: "SearXNG Language",
+			description: "Language code for search results (e.g. en, zh-CN)",
+		},
 	},
 
 	"commit.mapReduceEnabled": { type: "boolean", default: true },
@@ -1931,6 +2038,14 @@ export interface BashInterceptorRule {
 	allowSubcommands?: string[];
 }
 
+export interface ShellMinimizerSettings {
+	enabled: boolean;
+	settingsPath: string | undefined;
+	only: string[];
+	except: string[];
+	maxCaptureBytes: number;
+}
+
 /** Map group prefix -> typed settings interface */
 export interface GroupTypeMap {
 	compaction: CompactionSettings;
@@ -1948,6 +2063,7 @@ export interface GroupTypeMap {
 	modelRoles: Record<string, string>;
 	modelTags: ModelTagsSettings;
 	cycleOrder: string[];
+	shellMinimizer: ShellMinimizerSettings;
 }
 
 export type GroupPrefix = keyof GroupTypeMap;

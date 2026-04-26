@@ -13,9 +13,8 @@
 		"noEmit": true,
 		"types": [
 			"bun",
-			"assets",
-			"react",
-			"react-dom"
+			"assets"
 		]
 	}
 }
+

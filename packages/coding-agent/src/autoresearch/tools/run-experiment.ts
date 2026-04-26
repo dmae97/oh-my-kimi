@@ -11,6 +11,7 @@ import { replaceTabs, shortenPath, truncateToWidth } from "../../tools/render-ut
 import * as git from "../../utils/git";
 import { parseWorkDirDirtyPaths } from "../git";
 import {
+	collectLoggedRunNumbers,
 	EXPERIMENT_MAX_BYTES,
 	EXPERIMENT_MAX_LINES,
 	formatElapsed,
@@ -665,14 +666,4 @@ function isRunDetails(value: unknown): value is RunDetails {
 function isProgressDetails(value: unknown): value is RunExperimentProgressDetails {
 	if (typeof value !== "object" || value === null) return false;
 	return "phase" in value && value.phase === "running";
-}
-
-function collectLoggedRunNumbers(results: Array<{ runNumber: number | null }>): Set<number> {
-	const runNumbers = new Set<number>();
-	for (const result of results) {
-		if (result.runNumber !== null) {
-			runNumbers.add(result.runNumber);
-		}
-	}
-	return runNumbers;
 }

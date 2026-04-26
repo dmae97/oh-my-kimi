@@ -17,9 +17,10 @@ import { bashToolRenderer } from "./bash";
 import { calculatorToolRenderer } from "./calculator";
 import { debugToolRenderer } from "./debug";
 import { findToolRenderer } from "./find";
-import { ghRunWatchToolRenderer } from "./gh-renderer";
+import { githubToolRenderer } from "./gh-renderer";
 import { grepToolRenderer } from "./grep";
 import { inspectImageToolRenderer } from "./inspect-image-renderer";
+import { jobToolRenderer } from "./job";
 import { notebookToolRenderer } from "./notebook";
 import { pythonToolRenderer } from "./python";
 import { readToolRenderer } from "./read";
@@ -51,18 +52,20 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	python: pythonToolRenderer as ToolRenderer,
 	calc: calculatorToolRenderer as ToolRenderer,
 	edit: editToolRenderer as ToolRenderer,
+	apply_patch: editToolRenderer as ToolRenderer,
 	find: findToolRenderer as ToolRenderer,
 	grep: grepToolRenderer as ToolRenderer,
 	lsp: lspToolRenderer as ToolRenderer,
 	notebook: notebookToolRenderer as ToolRenderer,
 	inspect_image: inspectImageToolRenderer as ToolRenderer,
 	read: readToolRenderer as ToolRenderer,
+	job: jobToolRenderer as ToolRenderer,
 	resolve: resolveToolRenderer as ToolRenderer,
 	search_tool_bm25: searchToolBm25Renderer as ToolRenderer,
 	ssh: sshToolRenderer as ToolRenderer,
 	task: taskToolRenderer as ToolRenderer,
 	todo_write: todoWriteToolRenderer as ToolRenderer,
-	gh_run_watch: ghRunWatchToolRenderer as ToolRenderer,
+	github: githubToolRenderer as ToolRenderer,
 	web_search: webSearchToolRenderer as ToolRenderer,
 	write: writeToolRenderer as ToolRenderer,
 };

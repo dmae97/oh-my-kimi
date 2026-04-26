@@ -5,16 +5,16 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { $envpos, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { computeLineHash } from "../edit/line-hash";
+import { computeLineHash, HASHLINE_CONTENT_SEPARATOR } from "../edit/line-hash";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import astEditDescription from "../prompts/tools/ast-edit.md" with { type: "text" };
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
+import { createFileRecorder, formatResultPath } from "./file-recorder";
 import type { OutputMeta } from "./output-meta";
 import {
-	combineSearchGlobs,
 	hasGlobPathChars,
 	normalizePathLikeInput,
 	parseSearchPath,
@@ -23,6 +23,7 @@ import {
 } from "./path-utils";
 import {
 	dedupeParseErrors,
+	formatCodeFrameLine,
 	formatCount,
 	formatEmptyMessage,
 	formatErrorMessage,
@@ -35,19 +36,19 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const astEditOpSchema = Type.Object({
-	pat: Type.String({ description: "AST pattern to match" }),
-	out: Type.String({ description: "Replacement template" }),
+	pat: Type.String({ description: "ast pattern", examples: ["oldFn($$$ARGS)"] }),
+	out: Type.String({ description: "replacement template", examples: ["newFn($$$ARGS)"] }),
 });
 
 const astEditSchema = Type.Object({
 	ops: Type.Array(astEditOpSchema, {
-		description: "Rewrite ops as [{ pat, out }]",
+		minItems: 1,
+		description: "rewrite ops",
 	}),
-	lang: Type.Optional(Type.String({ description: "Language override" })),
-	path: Type.Optional(Type.String({ description: "File, directory, or glob pattern to rewrite (default: cwd)" })),
-	glob: Type.Optional(Type.String({ description: "Optional glob filter relative to path" })),
-	sel: Type.Optional(Type.String({ description: "Optional selector for contextual pattern mode" })),
-	limit: Type.Optional(Type.Number({ description: "Max total replacements" })),
+	path: Type.String({
+		description: "file, directory, glob, or comma-separated paths to rewrite",
+		examples: ["src/", "src/foo.ts", "src/**/*.ts"],
+	}),
 });
 
 export interface AstEditToolDetails {
@@ -61,6 +62,9 @@ export interface AstEditToolDetails {
 	files?: string[];
 	fileReplacements?: Array<{ path: string; count: number }>;
 	meta?: OutputMeta;
+	/** Pre-formatted text for the user-visible TUI render. Mirrors `result.text` lines but uses
+	 * a `│` gutter (no model-only hashline anchors). The TUI uses this directly so it never parses model-facing text. */
+	displayContent?: string;
 }
 
 export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolDetails> {
@@ -99,10 +103,6 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				seenPatterns.add(pat);
 			}
 			const normalizedRewrites = Object.fromEntries(ops);
-			const maxReplacements = params.limit !== undefined ? Math.floor(params.limit) : undefined;
-			if (maxReplacements !== undefined && (!Number.isFinite(maxReplacements) || maxReplacements < 1)) {
-				throw new ToolError("limit must be a positive number");
-			}
 			const maxFiles = $envpos("PI_MAX_AST_FILES", 1000);
 
 			const formatScopePath = (targetPath: string): string => {
@@ -111,8 +111,11 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			};
 			let searchPath: string | undefined;
 			let scopePath: string | undefined;
-			let globFilter = params.glob ? normalizePathLikeInput(params.glob) || undefined : undefined;
-			const rawPath = params.path ? normalizePathLikeInput(params.path) || undefined : undefined;
+			let globFilter: string | undefined;
+			const rawPath = normalizePathLikeInput(params.path);
+			if (rawPath.length === 0) {
+				throw new ToolError("`path` must be a non-empty path or glob");
+			}
 			if (rawPath) {
 				const internalRouter = this.session.internalRouter;
 				if (internalRouter?.canHandle(rawPath)) {
@@ -134,7 +137,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					} else {
 						const parsedPath = parseSearchPath(rawPath);
 						searchPath = resolveToCwd(parsedPath.basePath, this.session.cwd);
-						globFilter = combineSearchGlobs(parsedPath.glob, globFilter);
+						globFilter = parsedPath.glob;
 						scopePath = formatScopePath(searchPath);
 					}
 				}
@@ -151,36 +154,20 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 
 			const result = await astEdit({
 				rewrites: normalizedRewrites,
-				lang: params.lang?.trim(),
 				path: resolvedSearchPath,
 				glob: globFilter,
-				selector: params.sel?.trim(),
 				dryRun: true,
-				maxReplacements,
 				maxFiles,
 				failOnParseError: false,
 				signal,
 			});
 
 			const dedupedParseErrors = dedupeParseErrors(result.parseErrors);
-			const formatPath = (filePath: string): string => {
-				const cleanPath = filePath.startsWith("/") ? filePath.slice(1) : filePath;
-				if (isDirectory) {
-					return cleanPath.replace(/\\/g, "/");
-				}
-				return path.basename(cleanPath);
-			};
+			const formatPath = (filePath: string): string => formatResultPath(filePath, isDirectory);
 
-			const files = new Set<string>();
-			const fileList: string[] = [];
+			const { record: recordFile, list: fileList } = createFileRecorder();
 			const fileReplacementCounts = new Map<string, number>();
 			const changesByFile = new Map<string, AstReplaceChange[]>();
-			const recordFile = (relativePath: string) => {
-				if (!files.has(relativePath)) {
-					files.add(relativePath);
-					fileList.push(relativePath);
-				}
-			};
 			for (const fileChange of result.fileChanges) {
 				const relativePath = formatPath(fileChange.path);
 				recordFile(relativePath);
@@ -216,24 +203,29 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 
 			const useHashLines = resolveFileDisplayMode(this.session).hashLines;
 			const outputLines: string[] = [];
+			const displayLines: string[] = [];
 			const renderChangesForFile = (relativePath: string) => {
 				const fileChanges = changesByFile.get(relativePath) ?? [];
-				const lineWidth =
-					fileChanges.length > 0 ? Math.max(...fileChanges.map(change => change.startLine.toString().length)) : 1;
+				const lineNumberWidth = fileChanges.reduce(
+					(width, change) => Math.max(width, String(change.startLine).length),
+					0,
+				);
 				for (const change of fileChanges) {
 					const beforeFirstLine = change.before.split("\n", 1)[0] ?? "";
 					const afterFirstLine = change.after.split("\n", 1)[0] ?? "";
 					const beforeLine = beforeFirstLine.slice(0, 120);
 					const afterLine = afterFirstLine.slice(0, 120);
 					const beforeRef = useHashLines
-						? `${change.startLine}#${computeLineHash(change.startLine, beforeFirstLine)}`
-						: `${change.startLine.toString().padStart(lineWidth, " ")}:${change.startColumn}`;
+						? `${change.startLine}${computeLineHash(change.startLine, beforeFirstLine)}`
+						: `${change.startLine}:${change.startColumn}`;
 					const afterRef = useHashLines
-						? `${change.startLine}#${computeLineHash(change.startLine, afterFirstLine)}`
-						: `${change.startLine.toString().padStart(lineWidth, " ")}:${change.startColumn}`;
-					const lineSeparator = useHashLines ? ":" : " ";
+						? `${change.startLine}${computeLineHash(change.startLine, afterFirstLine)}`
+						: `${change.startLine}:${change.startColumn}`;
+					const lineSeparator = useHashLines ? HASHLINE_CONTENT_SEPARATOR : " ";
 					outputLines.push(`-${beforeRef}${lineSeparator}${beforeLine}`);
 					outputLines.push(`+${afterRef}${lineSeparator}${afterLine}`);
+					displayLines.push(formatCodeFrameLine("-", change.startLine, beforeLine, lineNumberWidth));
+					displayLines.push(formatCodeFrameLine("+", change.startLine, afterLine, lineNumberWidth));
 				}
 			};
 
@@ -251,20 +243,28 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 						for (const relativePath of directoryFiles) {
 							if (outputLines.length > 0) {
 								outputLines.push("");
+								displayLines.push("");
 							}
 							const count = fileReplacementCounts.get(relativePath) ?? 0;
-							outputLines.push(`# ${path.basename(relativePath)} (${formatCount("replacement", count)})`);
+							const header = `# ${path.basename(relativePath)} (${formatCount("replacement", count)})`;
+							outputLines.push(header);
+							displayLines.push(header);
 							renderChangesForFile(relativePath);
 						}
 						continue;
 					}
 					if (outputLines.length > 0) {
 						outputLines.push("");
+						displayLines.push("");
 					}
-					outputLines.push(`# ${directory}`);
+					const dirHeader = `# ${directory}`;
+					outputLines.push(dirHeader);
+					displayLines.push(dirHeader);
 					for (const relativePath of directoryFiles) {
 						const count = fileReplacementCounts.get(relativePath) ?? 0;
-						outputLines.push(`## └─ ${path.basename(relativePath)} (${formatCount("replacement", count)})`);
+						const fileHeader = `## └─ ${path.basename(relativePath)} (${formatCount("replacement", count)})`;
+						outputLines.push(fileHeader);
+						displayLines.push(fileHeader);
 						renderChangesForFile(relativePath);
 					}
 				}
@@ -279,7 +279,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				count: fileReplacementCounts.get(filePath) ?? 0,
 			}));
 			if (result.limitReached) {
-				outputLines.push("", "Limit reached; narrow path or increase limit.");
+				outputLines.push("", "Limit reached; narrow path.");
 			}
 			if (dedupedParseErrors.length) {
 				outputLines.push("", ...formatParseErrors(dedupedParseErrors));
@@ -295,16 +295,30 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					apply: async (_reason: string) => {
 						const applyResult = await astEdit({
 							rewrites: normalizedRewrites,
-							lang: params.lang?.trim(),
 							path: resolvedSearchPath,
 							glob: globFilter,
-							selector: params.sel?.trim(),
 							dryRun: false,
-							maxReplacements,
 							maxFiles,
 							failOnParseError: false,
 						});
 						const dedupedApplyParseErrors = dedupeParseErrors(applyResult.parseErrors);
+						const { record: recordAppliedFile, list: appliedFileList } = createFileRecorder();
+						const appliedFileReplacementCounts = new Map<string, number>();
+						for (const fileChange of applyResult.fileChanges) {
+							const relativePath = formatPath(fileChange.path);
+							recordAppliedFile(relativePath);
+							appliedFileReplacementCounts.set(
+								relativePath,
+								(appliedFileReplacementCounts.get(relativePath) ?? 0) + fileChange.count,
+							);
+						}
+						for (const change of applyResult.changes) {
+							recordAppliedFile(formatPath(change.path));
+						}
+						const appliedFileReplacements = appliedFileList.map(filePath => ({
+							path: filePath,
+							count: appliedFileReplacementCounts.get(filePath) ?? 0,
+						}));
 						const appliedDetails: AstEditToolDetails = {
 							totalReplacements: applyResult.totalReplacements,
 							filesTouched: applyResult.filesTouched,
@@ -313,9 +327,27 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 							limitReached: applyResult.limitReached,
 							...(dedupedApplyParseErrors.length > 0 ? { parseErrors: dedupedApplyParseErrors } : {}),
 							scopePath,
-							files: fileList,
-							fileReplacements,
+							files: appliedFileList,
+							fileReplacements: appliedFileReplacements,
 						};
+						const stalePreview =
+							applyResult.totalReplacements !== result.totalReplacements ||
+							applyResult.filesTouched !== result.filesTouched ||
+							fileList.some(
+								filePath => appliedFileReplacementCounts.get(filePath) !== fileReplacementCounts.get(filePath),
+							) ||
+							appliedFileList.some(
+								filePath => fileReplacementCounts.get(filePath) !== appliedFileReplacementCounts.get(filePath),
+							);
+						if (stalePreview) {
+							const text =
+								applyResult.totalReplacements === 0
+									? `Preview is stale / no longer matches; no replacements were applied. Preview expected ${result.totalReplacements} replacement${previewReplacementPlural} in ${result.filesTouched} file${previewFilePlural}.`
+									: applyResult.totalReplacements < result.totalReplacements
+										? `Preview is stale / no longer matches; only ${applyResult.totalReplacements} of ${result.totalReplacements} replacements were applied in ${applyResult.filesTouched} of ${result.filesTouched} files.`
+										: `Preview is stale / no longer matches; applied ${applyResult.totalReplacements} replacements but preview expected ${result.totalReplacements}.`;
+							return { ...toolResult(appliedDetails).text(text).done(), isError: true };
+						}
 						const appliedReplacementPlural = applyResult.totalReplacements !== 1 ? "s" : "";
 						const appliedFilePlural = applyResult.filesTouched !== 1 ? "s" : "";
 						const text = `Applied ${applyResult.totalReplacements} replacement${appliedReplacementPlural} in ${applyResult.filesTouched} file${appliedFilePlural}.`;
@@ -327,6 +359,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			const details: AstEditToolDetails = {
 				...baseDetails,
 				fileReplacements,
+				displayContent: displayLines.join("\n"),
 			};
 			return toolResult(details).text(outputLines.join("\n")).done();
 		});
@@ -339,10 +372,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 
 interface AstEditRenderArgs {
 	ops?: Array<{ pat?: string; out?: string }>;
-	lang?: string;
 	path?: string;
-	sel?: string;
-	limit?: number;
 }
 
 const COLLAPSED_CHANGE_LIMIT = PREVIEW_LIMITS.COLLAPSED_LINES * 2;
@@ -351,9 +381,7 @@ export const astEditToolRenderer = {
 	inline: true,
 	renderCall(args: AstEditRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		const meta: string[] = [];
-		if (args.lang) meta.push(`lang:${args.lang}`);
 		if (args.path) meta.push(`in ${args.path}`);
-		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
 		const rewriteCount = args.ops?.length ?? 0;
 		if (rewriteCount > 1) meta.push(`${rewriteCount} rewrites`);
 
@@ -408,7 +436,7 @@ export const astEditToolRenderer = {
 		const rewriteCount = args?.ops?.length ?? 0;
 		const description = rewriteCount === 1 ? args?.ops?.[0]?.pat : undefined;
 
-		const textContent = result.content?.find(c => c.type === "text")?.text ?? "";
+		const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text ?? "";
 		const rawLines = textContent.split("\n");
 		const hasSeparators = rawLines.some(line => line.trim().length === 0);
 		const allGroups: string[][] = [];
@@ -443,7 +471,7 @@ export const astEditToolRenderer = {
 
 		const extraLines: string[] = [];
 		if (limitReached) {
-			extraLines.push(uiTheme.fg("warning", "limit reached; narrow path or increase limit"));
+			extraLines.push(uiTheme.fg("warning", "limit reached; narrow path"));
 		}
 		if (details?.parseErrors?.length) {
 			const total = details.parseErrors.length;

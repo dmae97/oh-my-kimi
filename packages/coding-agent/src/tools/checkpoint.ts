@@ -18,13 +18,13 @@ export interface CheckpointState {
 }
 
 const checkpointSchema = Type.Object({
-	goal: Type.String({ description: "What you are investigating and why" }),
+	goal: Type.String({ description: "investigation goal", examples: ["investigate retry logic"] }),
 });
 
 type CheckpointParams = Static<typeof checkpointSchema>;
 
 const rewindSchema = Type.Object({
-	report: Type.String({ description: "Concise investigation findings to retain after rewind" }),
+	report: Type.String({ description: "investigation findings" }),
 });
 
 type RewindParams = Static<typeof rewindSchema>;

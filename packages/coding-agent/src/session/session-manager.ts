@@ -66,6 +66,8 @@ export interface SessionHeader {
 
 export interface NewSessionOptions {
 	parentSession?: string;
+	/** Skip flushing the current session and delete it instead of saving. */
+	drop?: boolean;
 }
 
 export interface SessionEntryBase {
@@ -259,6 +261,8 @@ export interface SessionInfo {
 	created: Date;
 	modified: Date;
 	messageCount: number;
+	/** File size in bytes on disk; used for compact list rendering. */
+	size: number;
 	firstMessage: string;
 	allMessagesText: string;
 }
@@ -285,6 +289,10 @@ export type ReadonlySessionManager = Pick<
 	| "getUsageStatistics"
 	| "putBlob"
 >;
+
+function createSessionId(): string {
+	return Bun.randomUUIDv7();
+}
 
 /** Generate a unique short ID (8 hex chars, collision-checked) */
 function generateId(byId: { has(id: string): boolean }): string {
@@ -1260,74 +1268,246 @@ function extractTextFromContent(content: Message["content"]): string {
 		.join(" ");
 }
 
-async function collectSessionsFromFiles(files: string[], storage: SessionStorage): Promise<SessionInfo[]> {
-	const sessions: SessionInfo[] = [];
+const SESSION_LIST_PREFIX_BYTES = 4096;
+const SESSION_LIST_PARALLEL_THRESHOLD = 64;
+const SESSION_LIST_MAX_WORKERS = 16;
+const sessionListPrefixDecoder = new TextDecoder("utf-8", { fatal: false });
 
-	// Collect session info for all files in parallel
-	await Promise.all(
-		files.map(async file => {
-			try {
-				const content = await storage.readText(file);
-				const entries = parseJsonlLenient<Record<string, unknown>>(content);
-				if (entries.length === 0) return;
+async function readSessionListPrefix(file: string, storage: SessionStorage, buffer: Buffer): Promise<string> {
+	if (!(storage instanceof FileSessionStorage)) {
+		return storage.readTextPrefix(file, buffer.byteLength);
+	}
 
-				// Check first entry for valid session header
-				type SessionHeaderShape = {
-					type: string;
-					id: string;
-					cwd?: string;
-					title?: string;
-					titleSource?: "auto" | "user";
-					timestamp: string;
-				};
-				const header = entries[0] as SessionHeaderShape;
-				if (header.type !== "session" || !header.id) return;
+	const handle = await fs.promises.open(file, "r");
+	try {
+		const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, 0);
+		return sessionListPrefixDecoder.decode(buffer.subarray(0, bytesRead));
+	} finally {
+		await handle.close();
+	}
+}
 
-				let messageCount = 0;
-				let firstMessage = "";
-				const allMessages: string[] = [];
-				let shortSummary: string | undefined;
+function decodeJsonStringFragment(value: string): string {
+	const safeValue = value.endsWith("\\") ? value.slice(0, -1) : value;
+	try {
+		return JSON.parse(`"${safeValue}"`) as string;
+	} catch {
+		return safeValue
+			.replace(/\\n/g, "\n")
+			.replace(/\\r/g, "\r")
+			.replace(/\\t/g, "\t")
+			.replace(/\\"/g, '"')
+			.replace(/\\\\/g, "\\");
+	}
+}
 
-				for (let i = 1; i < entries.length; i++) {
-					const entry = entries[i] as { type?: string; message?: Message; shortSummary?: string };
+function extractStringProperty(source: string, name: string, startIndex = 0): string | undefined {
+	const propertyIndex = source.indexOf(`"${name}"`, startIndex);
+	if (propertyIndex === -1) return undefined;
 
-					if (entry.type === "compaction" && typeof entry.shortSummary === "string") {
-						shortSummary = entry.shortSummary;
-					}
+	const colonIndex = source.indexOf(":", propertyIndex + name.length + 2);
+	if (colonIndex === -1) return undefined;
 
-					if (entry.type === "message" && entry.message) {
-						messageCount++;
+	let valueIndex = colonIndex + 1;
+	while (valueIndex < source.length) {
+		const char = source.charCodeAt(valueIndex);
+		if (char !== 32 && char !== 9 && char !== 10 && char !== 13) break;
+		valueIndex++;
+	}
+	if (source.charCodeAt(valueIndex) !== 34) return undefined;
 
-						if (entry.message.role === "user" || entry.message.role === "assistant") {
-							const textContent = extractTextFromContent(entry.message.content);
+	const valueStart = valueIndex + 1;
+	let escaped = false;
+	for (let i = valueStart; i < source.length; i++) {
+		const char = source.charCodeAt(i);
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (char === 92) {
+			escaped = true;
+			continue;
+		}
+		if (char === 34) {
+			return decodeJsonStringFragment(source.slice(valueStart, i));
+		}
+	}
 
-							if (textContent) {
-								allMessages.push(textContent);
+	return decodeJsonStringFragment(source.slice(valueStart));
+}
 
-								if (!firstMessage && entry.message.role === "user") {
-									firstMessage = textContent;
-								}
-							}
+function countMessageMarkers(content: string): number {
+	let count = 0;
+	let index = 0;
+	while (index < content.length) {
+		const typeIndex = content.indexOf('"type"', index);
+		if (typeIndex === -1) break;
+		const colonIndex = content.indexOf(":", typeIndex + 6);
+		if (colonIndex === -1) break;
+		const type = extractStringProperty(content, "type", typeIndex);
+		if (type === "message") count++;
+		index = colonIndex + 1;
+	}
+	return count;
+}
+
+function extractFirstUserMessageFromPrefix(content: string): string | undefined {
+	const roleIndex = content.indexOf('"role"');
+	if (roleIndex === -1) return undefined;
+
+	let index = roleIndex;
+	while (index !== -1) {
+		const role = extractStringProperty(content, "role", index);
+		if (role === "user") {
+			return extractStringProperty(content, "content", index) ?? extractStringProperty(content, "text", index);
+		}
+		index = content.indexOf('"role"', index + 6);
+	}
+
+	return undefined;
+}
+
+interface SessionListHeader {
+	type: "session";
+	id: string;
+	cwd?: string;
+	title?: string;
+	parentSession?: string;
+	timestamp?: string;
+}
+
+function parseSessionListHeader(
+	content: string,
+	entries: Array<Record<string, unknown>>,
+): SessionListHeader | undefined {
+	const parsedHeader = entries[0];
+	if (parsedHeader?.type === "session" && typeof parsedHeader.id === "string") {
+		return {
+			type: "session",
+			id: parsedHeader.id,
+			cwd: typeof parsedHeader.cwd === "string" ? parsedHeader.cwd : undefined,
+			title: typeof parsedHeader.title === "string" ? parsedHeader.title : undefined,
+			parentSession: typeof parsedHeader.parentSession === "string" ? parsedHeader.parentSession : undefined,
+			timestamp: typeof parsedHeader.timestamp === "string" ? parsedHeader.timestamp : undefined,
+		};
+	}
+
+	const firstLineEnd = content.indexOf("\n");
+	const firstLine = firstLineEnd === -1 ? content : content.slice(0, firstLineEnd);
+	if (extractStringProperty(firstLine, "type") !== "session") return undefined;
+
+	const id = extractStringProperty(firstLine, "id");
+	if (!id) return undefined;
+
+	return {
+		type: "session",
+		id,
+		cwd: extractStringProperty(firstLine, "cwd"),
+		title: extractStringProperty(firstLine, "title"),
+		parentSession: extractStringProperty(firstLine, "parentSession"),
+		timestamp: extractStringProperty(firstLine, "timestamp"),
+	};
+}
+
+function getSessionListWorkerCount(fileCount: number): number {
+	if (fileCount <= SESSION_LIST_PARALLEL_THRESHOLD) return 1;
+	return Math.min(
+		SESSION_LIST_MAX_WORKERS,
+		os.availableParallelism(),
+		Math.ceil(fileCount / SESSION_LIST_PARALLEL_THRESHOLD),
+	);
+}
+
+async function collectSessionFromFile(
+	file: string,
+	storage: SessionStorage,
+	buffer: Buffer,
+): Promise<SessionInfo | undefined> {
+	try {
+		const content = await readSessionListPrefix(file, storage, buffer);
+		const entries = parseJsonlLenient<Record<string, unknown>>(content);
+		const header = parseSessionListHeader(content, entries);
+		if (!header) return undefined;
+
+		let parsedMessageCount = 0;
+		let firstMessage = "";
+		const allMessages: string[] = [];
+		let shortSummary: string | undefined;
+
+		for (let i = 1; i < entries.length; i++) {
+			const entry = entries[i] as { type?: string; message?: Message; shortSummary?: string };
+
+			if (entry.type === "compaction" && typeof entry.shortSummary === "string") {
+				shortSummary = entry.shortSummary;
+			}
+
+			if (entry.type === "message" && entry.message) {
+				parsedMessageCount++;
+
+				if (entry.message.role === "user" || entry.message.role === "assistant") {
+					const textContent = extractTextFromContent(entry.message.content);
+
+					if (textContent) {
+						allMessages.push(textContent);
+
+						if (!firstMessage && entry.message.role === "user") {
+							firstMessage = textContent;
 						}
 					}
 				}
+			}
+		}
 
-				const stats = storage.statSync(file);
-				sessions.push({
-					path: file,
-					id: header.id,
-					cwd: typeof header.cwd === "string" ? header.cwd : "",
-					title: header.title ?? shortSummary,
-					parentSessionPath: (header as SessionHeader).parentSession,
-					created: new Date(header.timestamp),
-					modified: stats.mtime,
-					messageCount,
-					firstMessage: firstMessage || "(no messages)",
-					allMessagesText: allMessages.join(" "),
-				});
-			} catch {}
-		}),
-	);
+		firstMessage ||= extractFirstUserMessageFromPrefix(content) ?? "";
+		const messageCount = Math.max(parsedMessageCount, countMessageMarkers(content));
+		const stats = storage.statSync(file);
+		return {
+			path: file,
+			id: header.id,
+			cwd: header.cwd ?? "",
+			title: header.title ?? shortSummary,
+			parentSessionPath: header.parentSession,
+			created: new Date(header.timestamp ?? ""),
+			modified: stats.mtime,
+			messageCount,
+			size: stats.size,
+			firstMessage: firstMessage || "(no messages)",
+			allMessagesText: allMessages.length > 0 ? allMessages.join(" ") : firstMessage,
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+async function collectSessionsFromFileStride(
+	files: string[],
+	storage: SessionStorage,
+	startIndex: number,
+	stride: number,
+): Promise<SessionInfo[]> {
+	const sessions: SessionInfo[] = [];
+	const buffer = Buffer.allocUnsafe(SESSION_LIST_PREFIX_BYTES);
+
+	for (let i = startIndex; i < files.length; i += stride) {
+		const session = await collectSessionFromFile(files[i], storage, buffer);
+		if (session) sessions.push(session);
+	}
+
+	return sessions;
+}
+
+async function collectSessionsFromFiles(files: string[], storage: SessionStorage): Promise<SessionInfo[]> {
+	const workerCount = getSessionListWorkerCount(files.length);
+	const sessions =
+		workerCount === 1
+			? await collectSessionsFromFileStride(files, storage, 0, 1)
+			: (
+					await Promise.all(
+						Array.from({ length: workerCount }, (_, workerIndex) =>
+							collectSessionsFromFileStride(files, storage, workerIndex, workerCount),
+						),
+					)
+				).flat();
 
 	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 	return sessions;
@@ -1500,7 +1680,7 @@ export class SessionManager {
 		this.#fileEntries = await loadEntriesFromFile(this.#sessionFile, this.storage);
 		if (this.#fileEntries.length > 0) {
 			const header = this.#fileEntries.find(e => e.type === "session") as SessionHeader | undefined;
-			this.#sessionId = header?.id ?? Snowflake.next();
+			this.#sessionId = header?.id ?? createSessionId();
 			this.#sessionName = header?.title;
 			this.#titleSource = header?.titleSource;
 
@@ -1529,6 +1709,17 @@ export class SessionManager {
 		return this.#newSessionSync(options);
 	}
 
+	/** Delete a session file and its artifacts. Drains the persist writer first to avoid EPERM on Windows. ENOENT is treated as success. */
+	async dropSession(sessionPath: string): Promise<void> {
+		await this.#closePersistWriter();
+		try {
+			await this.storage.deleteSessionWithArtifacts(sessionPath);
+		} catch (err) {
+			if (isEnoent(err)) return;
+			throw err;
+		}
+	}
+
 	/**
 	 * Fork the current session, creating a new session file with the same entries.
 	 * Returns both the old and new session file paths for artifact copying.
@@ -1549,7 +1740,7 @@ export class SessionManager {
 		this.#persistErrorReported = false;
 
 		// Create new session ID and header
-		this.#sessionId = Snowflake.next();
+		this.#sessionId = createSessionId();
 		const timestamp = new Date().toISOString();
 		const fileTimestamp = timestamp.replace(/[:.]/g, "-");
 		this.#sessionFile = path.join(this.getSessionDir(), `${fileTimestamp}_${this.#sessionId}.jsonl`);
@@ -1680,7 +1871,7 @@ export class SessionManager {
 		this.#persistChain = Promise.resolve();
 		this.#persistError = undefined;
 		this.#persistErrorReported = false;
-		this.#sessionId = Snowflake.next();
+		this.#sessionId = createSessionId();
 		this.#sessionName = undefined;
 		this.#titleSource = undefined;
 		const timestamp = new Date().toISOString();
@@ -2036,14 +2227,18 @@ export class SessionManager {
 		if (this.#needsFullRewriteOnNextPersist || !this.#flushed) {
 			// Full flush: rewrite the entire file atomically to avoid
 			// duplicating entries if the file already exists (e.g. from ensureOnDisk).
-			void this.#rewriteFile();
+			// Errors are already surfaced through #persistChain/#persistError; the
+			// caller intentionally fires-and-forgets, so swallow the awaited rejection
+			// here to avoid an unhandled rejection when the persist dir races with
+			// test-level tempDir cleanup.
+			this.#rewriteFile().catch(() => {});
 		} else {
-			void this.#queuePersistTask(async () => {
+			this.#queuePersistTask(async () => {
 				const writer = this.#ensurePersistWriter();
 				if (!writer) return;
 				const persistedEntry = await prepareEntryForPersistence(entry, this.#blobStore);
 				await writer.write(persistedEntry);
-			});
+			}).catch(() => {});
 		}
 	}
 
@@ -2554,7 +2749,7 @@ export class SessionManager {
 		// Filter out LabelEntry from path - we'll recreate them from the resolved map
 		const pathWithoutLabels = branchPath.filter(e => e.type !== "label");
 
-		const newSessionId = Snowflake.next();
+		const newSessionId = createSessionId();
 		const timestamp = new Date().toISOString();
 		const fileTimestamp = timestamp.replace(/[:.]/g, "-");
 		const newSessionFile = path.join(this.getSessionDir(), `${fileTimestamp}_${newSessionId}.jsonl`);
@@ -2763,7 +2958,7 @@ export class SessionManager {
 	static async listAll(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
 		const sessionsRoot = path.join(getDefaultAgentDir(), "sessions");
 		try {
-			const files = Array.from(new Bun.Glob("**/*.jsonl").scanSync(sessionsRoot)).map(name =>
+			const files = await Array.fromAsync(new Bun.Glob("*/*.jsonl").scan(sessionsRoot), name =>
 				path.join(sessionsRoot, name),
 			);
 			return await collectSessionsFromFiles(files, storage);

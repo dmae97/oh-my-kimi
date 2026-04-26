@@ -1,7 +1,8 @@
+import { sanitizeText } from "@oh-my-pi/pi-natives";
 import { getIndentation } from "@oh-my-pi/pi-utils";
 import * as Diff from "diff";
 import { theme } from "../../modes/theme/theme";
-import { replaceTabs } from "../../tools/render-utils";
+import { type CodeFrameMarker, formatCodeFrameLine, replaceTabs } from "../../tools/render-utils";
 
 /** SGR dim on / normal intensity — additive, preserves fg/bg colors. */
 const DIM = "\x1b[2m";
@@ -15,7 +16,7 @@ const DIM_OFF = "\x1b[22m";
  */
 function visualizeIndent(text: string, filePath?: string): string {
 	const match = text.match(/^([ \t]+)/);
-	if (!match) return replaceTabs(text);
+	if (!match) return replaceTabs(text, filePath);
 	const indent = match[1];
 	const rest = text.slice(indent.length);
 	const tabWidth = getIndentation(filePath);
@@ -30,21 +31,21 @@ function visualizeIndent(text: string, filePath?: string): string {
 			visible += `${DIM}·${DIM_OFF}`;
 		}
 	}
-	return `${visible}${replaceTabs(rest)}`;
+	return `${visible}${replaceTabs(rest, filePath)}`;
 }
 
 /**
  * Parse diff line to extract prefix, line number, and content.
  * Supported formats: "+123|content" (canonical) and "+123 content" (legacy).
  */
-function parseDiffLine(line: string): { prefix: string; lineNum: string; content: string } | null {
+function parseDiffLine(line: string): { prefix: CodeFrameMarker; lineNum: string; content: string } | null {
 	const canonical = line.match(/^([+-\s])(\s*\d+)\|(.*)$/);
 	if (canonical) {
-		return { prefix: canonical[1], lineNum: canonical[2], content: canonical[3] };
+		return { prefix: canonical[1] as CodeFrameMarker, lineNum: canonical[2] ?? "", content: canonical[3] ?? "" };
 	}
 	const legacy = line.match(/^([+-\s])(?:(\s*\d+)\s)?(.*)$/);
 	if (!legacy) return null;
-	return { prefix: legacy[1], lineNum: legacy[2] ?? "", content: legacy[3] };
+	return { prefix: legacy[1] as CodeFrameMarker, lineNum: legacy[2] ?? "", content: legacy[3] ?? "" };
 }
 
 /**
@@ -106,14 +107,29 @@ export interface RenderDiffOptions {
  * - Added lines: green, with inverse on changed tokens
  */
 export function renderDiff(diffText: string, options: RenderDiffOptions = {}): string {
-	const lines = diffText.split("\n");
+	const lines = sanitizeText(diffText).split("\n");
 	const result: string[] = [];
+	const parsedLines = lines.map(parseDiffLine);
+	const lineNumberWidth = parsedLines.reduce((width, parsed) => {
+		const lineNumber = parsed?.lineNum.trim() ?? "";
+		return Math.max(width, lineNumber.length);
+	}, 0);
 
-	const formatLine = (prefix: string, lineNum: string, content: string): string => {
+	// Track the line number rendered on the previous emitted line so we can
+	// blank out duplicate gutters. Two cases trigger this:
+	//  1. Single-line replacement (`-N` followed by `+N`) — the `+N` repeats `N`.
+	//  2. Insertion followed by context (`+N` then ` N` if producer used oldLine).
+	let prevLineNum = "";
+
+	const formatLine = (prefix: CodeFrameMarker, lineNum: string, content: string): string => {
 		if (lineNum.trim().length === 0) {
+			prevLineNum = "";
 			return `${prefix}${content}`;
 		}
-		return `${prefix}${lineNum}|${content}`;
+		const trimmed = lineNum.trim();
+		const displayNum = trimmed === prevLineNum ? "" : trimmed;
+		prevLineNum = trimmed;
+		return formatCodeFrameLine(prefix, displayNum, content, lineNumberWidth);
 	};
 
 	let i = 0;
@@ -122,13 +138,13 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 		const parsed = parseDiffLine(line);
 
 		if (!parsed) {
-			result.push(theme.fg("toolDiffContext", line));
+			prevLineNum = "";
+			result.push(theme.fg("toolDiffContext", replaceTabs(line, options.filePath)));
 			i++;
 			continue;
 		}
 
 		if (parsed.prefix === "-") {
-			// Collect consecutive removed lines
 			const removedLines: { lineNum: string; content: string }[] = [];
 			while (i < lines.length) {
 				const p = parseDiffLine(lines[i]);
@@ -137,7 +153,6 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 				i++;
 			}
 
-			// Collect consecutive added lines
 			const addedLines: { lineNum: string; content: string }[] = [];
 			while (i < lines.length) {
 				const p = parseDiffLine(lines[i]);
@@ -146,8 +161,6 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 				i++;
 			}
 
-			// Only do intra-line diffing when there's exactly one removed and one added line
-			// (indicating a single line modification). Otherwise, show lines as-is.
 			if (removedLines.length === 1 && addedLines.length === 1) {
 				const removed = removedLines[0];
 				const added = addedLines[0];
@@ -167,7 +180,6 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 					theme.fg("toolDiffAdded", formatLine("+", added.lineNum, visualizeIndent(addedLine, options.filePath))),
 				);
 			} else {
-				// Show all removed lines first, then all added lines
 				for (const removed of removedLines) {
 					result.push(
 						theme.fg(
@@ -186,7 +198,6 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 				}
 			}
 		} else if (parsed.prefix === "+") {
-			// Standalone added line
 			result.push(
 				theme.fg(
 					"toolDiffAdded",
@@ -195,7 +206,6 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 			);
 			i++;
 		} else {
-			// Context line
 			result.push(
 				theme.fg(
 					"toolDiffContext",

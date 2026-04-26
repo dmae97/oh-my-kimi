@@ -46,6 +46,7 @@ export type TodoItem = {
 	content: string;
 	status: TodoStatus;
 	details?: string;
+	notes?: string[];
 };
 
 export type TodoPhase = {
@@ -170,6 +171,7 @@ export interface InteractiveModeContext {
 	handleExportCommand(text: string): Promise<void>;
 	handleShareCommand(): Promise<void>;
 	handleCopyCommand(sub?: string): void;
+	handleTodoCommand(args: string): Promise<void>;
 	handleSessionCommand(): Promise<void>;
 	handleJobsCommand(): Promise<void>;
 	handleUsageCommand(reports?: UsageReport[] | null): Promise<void>;
@@ -179,6 +181,7 @@ export interface InteractiveModeContext {
 	handleDumpCommand(): void;
 	handleDebugTranscriptCommand(): Promise<void>;
 	handleClearCommand(): Promise<void>;
+	handleDropCommand(): Promise<void>;
 	handleForkCommand(): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;

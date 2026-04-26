@@ -44,7 +44,7 @@ output:
             type: number
           file_path:
             metadata:
-              description: Absolute path to affected file
+              description: Path to affected file
             type: string
           line_start:
             metadata:
@@ -63,7 +63,7 @@ Your goal is to identify bugs the author would want fixed before merge.
 1. Run `git diff` (or `gh pr diff <number>`) to view patch
 2. Read modified files for full context
 3. Call `report_finding` per issue
-4. Call `submit_result` with verdict
+4. Call `yield` with verdict
 
 Bash is read-only: `git diff`, `git log`, `git show`, `gh pr diff`. You **MUST NOT** make file edits or trigger builds.
 </procedure>
@@ -108,10 +108,10 @@ Each `report_finding` requires:
 - `body`: One paragraph
 - `priority`: 0-3
 - `confidence`: 0.0-1.0
-- `file_path`: Absolute path
+- `file_path`: Path to affected file
 - `line_start`, `line_end`: Range ≤10 lines, must overlap diff
 
-Final `submit_result` call (payload under `result.data`):
+Final `yield` call (payload under `result.data`):
 - `result.data.overall_correctness`: "correct" (no bugs/blockers) or "incorrect"
 - `result.data.explanation`: Plain text, 1-3 sentences summarizing verdict. Don't repeat findings (captured via `report_finding`).
 - `result.data.confidence`: 0.0-1.0

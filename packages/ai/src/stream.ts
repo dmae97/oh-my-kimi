@@ -35,6 +35,7 @@ import type {
 	ThinkingBudgets,
 	ToolChoice,
 } from "./types";
+import { isFoundryEnabled } from "./utils/foundry";
 
 let cachedVertexAdcCredentialsExists: boolean | null = null;
 
@@ -54,13 +55,6 @@ function hasVertexAdcCredentials(): boolean {
 
 type KeyResolver = string | (() => string | undefined);
 
-function isFoundryEnabled(): boolean {
-	const value = $env.CLAUDE_CODE_USE_FOUNDRY;
-	if (!value) return false;
-	const normalized = value.trim().toLowerCase();
-	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
 const serviceProviderMap: Record<string, KeyResolver> = {
 	"alibaba-coding-plan": "ALIBABA_CODING_PLAN_API_KEY",
 	openai: "OPENAI_API_KEY",
@@ -79,6 +73,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	"opencode-go": "OPENCODE_API_KEY",
 	"opencode-zen": "OPENCODE_API_KEY",
 	cursor: "CURSOR_ACCESS_TOKEN",
+	deepseek: "DEEPSEEK_API_KEY",
 	"openai-codex": "OPENAI_CODEX_OAUTH_TOKEN",
 	"azure-openai-responses": "AZURE_OPENAI_API_KEY",
 	exa: "EXA_API_KEY",

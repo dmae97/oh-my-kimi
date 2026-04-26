@@ -26,6 +26,8 @@ use std::{
 #[cfg(windows)]
 mod windows;
 
+mod minimizer;
+
 use brush_builtins::{BuiltinSet, default_builtins};
 use brush_core::{
 	CreateOptions, ExecutionContext, ExecutionControlFlow, ExecutionExitCode, ExecutionResult,
@@ -83,6 +85,7 @@ impl ShellAbortState {
 struct ShellConfig {
 	session_env:   Option<HashMap<String, String>>,
 	snapshot_path: Option<String>,
+	minimizer:     Option<minimizer::MinimizerConfig>,
 }
 
 /// Options for configuring a persistent shell session.
@@ -92,16 +95,20 @@ pub struct ShellOptions {
 	pub session_env:   Option<HashMap<String, String>>,
 	/// Optional snapshot file to source on session creation.
 	pub snapshot_path: Option<String>,
+	/// Optional per-command output minimizer configuration.
+	pub minimizer:     Option<minimizer::MinimizerOptions>,
 }
 
 /// Options for running a shell command (internal, lifetime-free).
 struct ShellRunConfig {
 	/// Command string to execute in the shell.
-	command: String,
+	command:   String,
 	/// Working directory for the command.
-	cwd:     Option<String>,
+	cwd:       Option<String>,
 	/// Environment variables to apply for this command only.
-	env:     Option<HashMap<String, String>>,
+	env:       Option<HashMap<String, String>>,
+	/// Resolved output minimizer config for this command.
+	minimizer: Option<minimizer::MinimizerConfig>,
 }
 
 /// Options for running a shell command.
@@ -119,6 +126,30 @@ pub struct ShellRunOptions<'env> {
 	pub signal:     Option<Unknown<'env>>,
 }
 
+/// Telemetry for a single minimization.
+///
+/// Surfaced when the minimizer actually rewrote the command's output. The
+/// session layer is expected to persist `original_text` via its
+/// `ArtifactManager`, splice the resulting `artifact://<id>` reference
+/// into `text`, and replace any previously streamed raw output with the
+/// minimized text.
+#[napi(object)]
+pub struct MinimizerResult {
+	/// Dispatch label produced by the minimizer (e.g. `"git"`,
+	/// `"pipeline:gradle"`, `"pipeline+builtin"`).
+	pub filter:        String,
+	/// The minimized replacement text. Callers that streamed raw chunks
+	/// during execution should clear and replace their accumulated output
+	/// with this text.
+	pub text:          String,
+	/// The full original capture, before minimization.
+	pub original_text: String,
+	/// Captured byte length before minimization.
+	pub input_bytes:   u32,
+	/// Byte length of the minimized text the consumer received.
+	pub output_bytes:  u32,
+}
+
 /// Result of running a shell command.
 #[napi(object)]
 pub struct ShellRunResult {
@@ -128,6 +159,11 @@ pub struct ShellRunResult {
 	pub cancelled: bool,
 	/// Whether the command timed out before completion.
 	pub timed_out: bool,
+	/// When the minimizer rewrote the captured output, this carries the
+	/// original buffer + telemetry so the session layer can persist it as
+	/// an artifact and splice an `artifact://<id>` reference into the
+	/// minimized text shown to the agent. `None` when nothing was rewritten.
+	pub minimized: Option<MinimizerResult>,
 }
 
 /// Persistent brush-core shell session.
@@ -145,10 +181,20 @@ impl Shell {
 	///
 	/// The options set session-scoped environment variables and a snapshot path.
 	pub fn new(options: Option<ShellOptions>) -> Self {
-		let config = options.map_or_else(
-			|| ShellConfig { session_env: None, snapshot_path: None },
-			|opt| ShellConfig { session_env: opt.session_env, snapshot_path: opt.snapshot_path },
-		);
+		let config = match options {
+			None => ShellConfig { session_env: None, snapshot_path: None, minimizer: None },
+			Some(opt) => {
+				let minimizer = opt
+					.minimizer
+					.as_ref()
+					.map(minimizer::MinimizerConfig::from_options);
+				ShellConfig {
+					session_env: opt.session_env,
+					snapshot_path: opt.snapshot_path,
+					minimizer,
+				}
+			},
+		};
 		Self {
 			session: Arc::new(TokioMutex::new(None)),
 			abort_state: ShellAbortState::default(),
@@ -174,8 +220,12 @@ impl Shell {
 		let abort_state = self.abort_state.clone();
 		let config = self.config.clone();
 
-		let run_config =
-			ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env };
+		let run_config = ShellRunConfig {
+			command:   options.command,
+			cwd:       options.cwd,
+			env:       options.env,
+			minimizer: config.minimizer.clone(),
+		};
 
 		task::future(env, "shell.run", async move {
 			run_shell_session(session, abort_state, config, run_config, on_chunk, ct).await
@@ -240,6 +290,7 @@ async fn run_shell_session(
 				exit_code: None,
 				cancelled: matches!(reason, task::AbortReason::Signal),
 				timed_out: matches!(reason, task::AbortReason::Timeout),
+				minimized: None,
 			});
 		}
 	};
@@ -247,11 +298,17 @@ async fn run_shell_session(
 		res.unwrap_or_else(|e| Err(Error::from_reason(format!("Shell execution task failed: {e}"))));
 	abort_state.clear().await;
 
-	let keepalive = res.as_ref().is_ok_and(session_keepalive);
+	let keepalive = res.as_ref().is_ok_and(|pair| session_keepalive(&pair.0));
 	if !keepalive {
 		*session.lock().await = None;
 	}
-	Ok(ShellRunResult { exit_code: Some(exit_code(&res?)), cancelled: false, timed_out: false })
+	let (exec, minimized) = res?;
+	Ok(ShellRunResult {
+		exit_code: Some(exit_code(&exec)),
+		cancelled: false,
+		timed_out: false,
+		minimized,
+	})
 }
 
 /// Options for executing a shell command via brush-core.
@@ -269,6 +326,8 @@ pub struct ShellExecuteOptions<'env> {
 	pub timeout_ms:    Option<u32>,
 	/// Optional snapshot file to source on session creation.
 	pub snapshot_path: Option<String>,
+	/// Optional per-command output minimizer configuration.
+	pub minimizer:     Option<minimizer::MinimizerOptions>,
 	/// Abort signal for cancelling the operation.
 	pub signal:        Option<Unknown<'env>>,
 }
@@ -282,6 +341,8 @@ pub struct ShellExecuteResult {
 	pub cancelled: bool,
 	/// Whether the command timed out before completion.
 	pub timed_out: bool,
+	/// See [`ShellRunResult::minimized`].
+	pub minimized: Option<MinimizerResult>,
 }
 
 /// Execute a brush shell command.
@@ -296,10 +357,17 @@ pub fn execute_shell<'env>(
 	#[napi(ts_arg_type = "((error: Error | null, chunk: string) => void) | undefined | null")]
 	on_chunk: Option<ThreadsafeFunction<String>>,
 ) -> Result<PromiseRaw<'env, ShellExecuteResult>> {
-	let config =
-		ShellConfig { session_env: options.session_env, snapshot_path: options.snapshot_path };
+	let minimizer = options
+		.minimizer
+		.as_ref()
+		.map(minimizer::MinimizerConfig::from_options);
+	let config = ShellConfig {
+		session_env:   options.session_env,
+		snapshot_path: options.snapshot_path,
+		minimizer:     minimizer.clone(),
+	};
 	let run_config =
-		ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env };
+		ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env, minimizer };
 
 	let ct = task::CancelToken::new(options.timeout_ms, options.signal);
 	task::future(env, "shell.execute", async move {
@@ -337,6 +405,7 @@ async fn run_shell_oneshot(
 				exit_code: None,
 				cancelled: matches!(reason, task::AbortReason::Signal),
 				timed_out: matches!(reason, task::AbortReason::Timeout),
+				minimized: None,
 			})
 		},
 	};
@@ -344,7 +413,13 @@ async fn run_shell_oneshot(
 	let res = run_result
 		.unwrap_or_else(|e| Err(Error::from_reason(format!("Shell execution task failed: {e}"))));
 
-	Ok(ShellExecuteResult { exit_code: Some(exit_code(&res?)), cancelled: false, timed_out: false })
+	let (exec, minimized) = res?;
+	Ok(ShellExecuteResult {
+		exit_code: Some(exit_code(&exec)),
+		cancelled: false,
+		timed_out: false,
+		minimized,
+	})
 }
 
 fn null_file() -> Result<OpenFile> {
@@ -529,7 +604,7 @@ async fn run_shell_command(
 	options: &ShellRunConfig,
 	on_chunk: Option<ThreadsafeFunction<String>>,
 	cancel_token: CancellationToken,
-) -> Result<ExecutionResult> {
+) -> Result<(ExecutionResult, Option<MinimizerResult>)> {
 	if let Some(cwd) = options.cwd.as_deref() {
 		session
 			.shell
@@ -575,13 +650,43 @@ async fn run_shell_command(
 		}
 	}
 
+	let minimizer_mode = if let Some(config) = options.minimizer.as_ref() {
+		minimizer::engine::mode_for(&options.command, config)
+	} else {
+		minimizer::engine::MinimizerMode::None
+	};
+	let should_minimize = !matches!(minimizer_mode, minimizer::engine::MinimizerMode::None);
+	let max_capture_bytes = if let Some(config) = options.minimizer.as_ref() {
+		config.max_capture_bytes as usize
+	} else {
+		0
+	};
+
 	let reader_cancel = CancellationToken::new();
 	let (activity_tx, mut activity_rx) = mpsc::channel::<()>(1);
+	// Stream every raw chunk to the caller live, regardless of whether
+	// minimization is enabled. When minimization actually transforms the
+	// output, we propagate the replacement text via `MinimizerResult.text`
+	// so the caller can swap their accumulated buffer for the minimized
+	// version without losing intermediate progress updates.
+	let reader_callback = on_chunk;
 	let mut reader_handle = tokio::spawn({
 		let reader_cancel = reader_cancel.clone();
 		async move {
-			Box::pin(read_output(reader_file, on_chunk, reader_cancel, activity_tx)).await;
-			Result::<()>::Ok(())
+			if should_minimize {
+				let output = read_output_buffered(
+					reader_file,
+					reader_callback,
+					reader_cancel,
+					activity_tx,
+					max_capture_bytes,
+				)
+				.await;
+				Result::<OutputRead>::Ok(OutputRead::Buffered(output))
+			} else {
+				Box::pin(read_output(reader_file, reader_callback, reader_cancel, activity_tx)).await;
+				Result::<OutputRead>::Ok(OutputRead::Streaming)
+			}
 		}
 	});
 	let cancel_bridge = tokio::spawn({
@@ -619,13 +724,16 @@ async fn run_shell_command(
 	const READER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
 
 	let mut reader_finished = false;
+	let mut reader_output = None;
 	let mut idle_timer = Box::pin(time::sleep(POST_EXIT_IDLE));
 	let mut max_timer = Box::pin(time::sleep(POST_EXIT_MAX));
 
 	loop {
 		tokio::select! {
 			res = &mut reader_handle => {
-				let _ = res;
+				if let Ok(Ok(output)) = res {
+					reader_output = Some(output);
+				}
 				reader_finished = true;
 				break;
 			}
@@ -643,7 +751,11 @@ async fn run_shell_command(
 	if !reader_finished {
 		reader_cancel.cancel();
 		if let Ok(res) = time::timeout(READER_SHUTDOWN_TIMEOUT, &mut reader_handle).await {
-			let _ = res;
+			if let Ok(output) = res
+				&& let Ok(output) = output
+			{
+				reader_output = Some(output);
+			}
 		} else {
 			reader_handle.abort();
 			let _ = reader_handle.await;
@@ -652,7 +764,35 @@ async fn run_shell_command(
 	cancel_bridge.abort();
 	let _ = cancel_bridge.await;
 
-	result.map_err(|err| Error::from_reason(format!("Shell execution failed: {err}")))
+	let result =
+		result.map_err(|err| Error::from_reason(format!("Shell execution failed: {err}")))?;
+	let mut minimized_out: Option<MinimizerResult> = None;
+	if let Some(OutputRead::Buffered(output)) = reader_output
+		&& let Some(config) = options.minimizer.as_ref()
+		&& !output.exceeded
+	{
+		let minimized = match minimizer_mode {
+			minimizer::engine::MinimizerMode::WholeCommand => {
+				minimizer::apply(&options.command, &output.text, exit_code(&result), config)
+			},
+			minimizer::engine::MinimizerMode::None => {
+				minimizer::MinimizerOutput::passthrough(&output.text)
+			},
+		};
+		if minimized.changed
+			&& let Some(original) = minimized.original_text
+		{
+			let output_bytes = u32::try_from(minimized.text.len()).unwrap_or(u32::MAX);
+			minimized_out = Some(MinimizerResult {
+				filter: minimized.filter.to_string(),
+				text: minimized.text,
+				original_text: original,
+				input_bytes: u32::try_from(minimized.input_bytes).unwrap_or(u32::MAX),
+				output_bytes,
+			});
+		}
+	}
+	Ok((result, minimized_out))
 }
 
 #[cfg(unix)]
@@ -793,6 +933,16 @@ const fn session_keepalive(result: &ExecutionResult) -> bool {
 	}
 }
 
+enum OutputRead {
+	Streaming,
+	Buffered(BufferedOutput),
+}
+
+struct BufferedOutput {
+	text:     String,
+	exceeded: bool,
+}
+
 async fn read_output(
 	reader: fs::File,
 	on_chunk: Option<ThreadsafeFunction<String>>,
@@ -899,6 +1049,126 @@ async fn read_output(
 			emit_chunk(REPLACEMENT, on_chunk.as_ref());
 		}
 	}
+}
+
+async fn read_output_buffered(
+	reader: fs::File,
+	on_chunk: Option<ThreadsafeFunction<String>>,
+	cancel_token: CancellationToken,
+	activity: mpsc::Sender<()>,
+	max_capture_bytes: usize,
+) -> BufferedOutput {
+	const REPLACEMENT: &str = "\u{FFFD}";
+	const BUF: usize = 65536;
+	let mut buf = vec![0u8; BUF];
+	let mut captured = Vec::new();
+	let mut exceeded = false;
+	// Pending bytes from a prior read that ended mid-UTF-8 sequence. We hold
+	// them back so we emit only valid UTF-8 to the streaming callback while
+	// still capturing every byte into `captured` for post-processing.
+	let mut pending = Vec::<u8>::new();
+
+	#[cfg(unix)]
+	let Ok(reader) = register_nonblocking_pipe(reader) else {
+		return BufferedOutput { text: String::new(), exceeded: true };
+	};
+	#[cfg(not(unix))]
+	let reader = tokio::fs::File::from_std(reader);
+	#[cfg(not(unix))]
+	tokio::pin!(reader);
+
+	loop {
+		#[cfg(unix)]
+		let n = {
+			let Ok(mut readiness) = (tokio::select! {
+				ready = reader.readable() => ready,
+				() = cancel_token.cancelled() => break,
+			}) else {
+				break;
+			};
+			match readiness.try_io(|inner| read_nonblocking(inner.get_ref(), &mut buf)) {
+				Ok(Ok(0)) => break,
+				Ok(Ok(n)) => n,
+				Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
+				Ok(Err(_)) => break,
+				Err(_would_block) => continue,
+			}
+		};
+		#[cfg(not(unix))]
+		let n = {
+			let read_future = reader.read(&mut buf);
+			tokio::pin!(read_future);
+			match tokio::select! {
+				res = &mut read_future => res,
+				() = cancel_token.cancelled() => break,
+			} {
+				Ok(0) => break,
+				Ok(n) => n,
+				Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+				Err(_) => break,
+			}
+		};
+		if n > 0 {
+			let _ = activity.try_send(());
+		}
+		// Once `exceeded`, the post-process minimizer is bypassed (see the
+		// `!output.exceeded` gate at the call site), so further appends just
+		// grow `captured` without serving any purpose. Stop accumulating to
+		// bound peak memory on commands that produce very large output.
+		if !exceeded {
+			if captured.len().saturating_add(n) > max_capture_bytes {
+				exceeded = true;
+			} else {
+				captured.extend_from_slice(&buf[..n]);
+			}
+		}
+
+		// Stream whatever is validly decodable *right now* to the callback,
+		// carrying incomplete trailing UTF-8 bytes over to the next iteration.
+		if let Some(cb) = on_chunk.as_ref() {
+			pending.extend_from_slice(&buf[..n]);
+			while !pending.is_empty() {
+				match str::from_utf8(&pending) {
+					Ok(text) => {
+						emit_chunk(text, Some(cb));
+						pending.clear();
+						break;
+					},
+					Err(err) => {
+						let p = err.valid_up_to();
+						if p > 0 {
+							// SAFETY: [..p] is valid UTF-8 per valid_up_to().
+							let text = unsafe { str::from_utf8_unchecked(&pending[..p]) };
+							emit_chunk(text, Some(cb));
+							pending.drain(..p);
+						}
+						match err.error_len() {
+							Some(skip) => {
+								emit_chunk(REPLACEMENT, Some(cb));
+								pending.drain(..skip);
+							},
+							None => break,
+						}
+					},
+				}
+			}
+		}
+	}
+
+	// Flush any trailing bytes the streaming decoder held back at EOF.
+	if let Some(cb) = on_chunk.as_ref() {
+		for chunk in pending.utf8_chunks() {
+			let valid = chunk.valid();
+			if !valid.is_empty() {
+				emit_chunk(valid, Some(cb));
+			}
+			if !chunk.invalid().is_empty() {
+				emit_chunk(REPLACEMENT, Some(cb));
+			}
+		}
+	}
+
+	BufferedOutput { text: String::from_utf8_lossy(&captured).into_owned(), exceeded }
 }
 
 #[cfg(unix)]

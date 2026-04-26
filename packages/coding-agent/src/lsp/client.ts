@@ -211,9 +211,17 @@ async function writeMessage(
 	message: LspJsonRpcRequest | LspJsonRpcNotification | LspJsonRpcResponse,
 ): Promise<void> {
 	const content = JSON.stringify(message);
-	sink.write(`Content-Length: ${Buffer.byteLength(content, "utf-8")}\r\n\r\n`);
-	sink.write(content);
+	sink.write(`Content-Length: ${Buffer.byteLength(content, "utf-8")}\r\n\r\n${content}`);
 	await sink.flush();
+}
+
+function queueWriteMessage(
+	client: LspClient,
+	message: LspJsonRpcRequest | LspJsonRpcNotification | LspJsonRpcResponse,
+): Promise<void> {
+	const write = client.writeQueue.catch(() => {}).then(() => writeMessage(client.proc.stdin, message));
+	client.writeQueue = write.catch(() => {});
+	return write;
 }
 
 // =============================================================================
@@ -382,7 +390,7 @@ async function sendResponse(
 	};
 
 	try {
-		await writeMessage(client.proc.stdin, response);
+		await queueWriteMessage(client, response);
 	} catch (err) {
 		logger.error("LSP failed to respond.", { method, error: String(err) });
 	}
@@ -461,6 +469,7 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 			messageBuffer: new Uint8Array(0),
 			isReading: false,
 			lastActivity: Date.now(),
+			writeQueue: Promise.resolve(),
 			activeProgressTokens: new Set(),
 			projectLoaded,
 			resolveProjectLoaded,
@@ -475,7 +484,14 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 
 			// Reject any pending requests — the server is gone, they will never complete.
 			if (client.pendingRequests.size > 0) {
-				const stderr = proc.peekStderr().trim();
+				// Strip informational log lines (e.g. marksman's [INF]/[DBG] prefix)
+				// — they are startup noise, not actionable errors.
+				const rawStderr = proc.peekStderr().trim();
+				const stderr = rawStderr
+					.split("\n")
+					.filter(line => !/^\[\d{2}:\d{2}:\d{2} (?:INF|DBG|VRB)\]/.test(line))
+					.join("\n")
+					.trim();
 				const code = proc.exitCode;
 				const err = new Error(
 					stderr ? `LSP server exited (code ${code}): ${stderr}` : `LSP server exited unexpectedly (code ${code})`,
@@ -848,7 +864,7 @@ export async function sendRequest(
 	});
 
 	// Write request
-	writeMessage(client.proc.stdin, request).catch(err => {
+	queueWriteMessage(client, request).catch(err => {
 		if (timeout) clearTimeout(timeout);
 		client.pendingRequests.delete(id);
 		cleanup();
@@ -868,7 +884,7 @@ export async function sendNotification(client: LspClient, method: string, params
 	};
 
 	client.lastActivity = Date.now();
-	await writeMessage(client.proc.stdin, notification);
+	await queueWriteMessage(client, notification);
 }
 
 /**

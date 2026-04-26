@@ -105,7 +105,14 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 					? "qwen"
 					: "openai",
 		reasoningContentField: "reasoning_content",
-		requiresReasoningContentForToolCalls: isKimiModel,
+		// Backends that 400 follow-up requests when prior assistant tool-call turns lack `reasoning_content`:
+		//   - Kimi: documented invariant on its native API and via OpenCode-Go.
+		//   - Any reasoning-capable model reached through OpenRouter: DeepSeek V4 Pro and similar enforce
+		//     this server-side whenever the request is in thinking mode. We can't translate Anthropic's
+		//     redacted/encrypted reasoning into DeepSeek's plaintext form, so cross-provider continuations
+		//     rely on a placeholder — see `convertMessages` for the placeholder injection.
+		requiresReasoningContentForToolCalls:
+			isKimiModel || ((provider === "openrouter" || baseUrl.includes("openrouter.ai")) && Boolean(model.reasoning)),
 		requiresAssistantContentForToolCalls: isKimiModel,
 		openRouterRouting: undefined,
 		vercelGatewayRouting: undefined,

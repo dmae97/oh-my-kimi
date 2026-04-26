@@ -368,3 +368,150 @@ describe("kimi model detection via detectCompat", () => {
 		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
 	});
 });
+
+describe("NVIDIA NIM DeepSeek special-token stripping", () => {
+	function nvidiaDeepseekModel(): Model<"openai-completions"> {
+		return {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "nvidia",
+			baseUrl: "https://integrate.api.nvidia.com/v1",
+			id: "deepseek-ai/deepseek-v4-flash",
+			reasoning: true,
+		};
+	}
+
+	it("strips leaked <\uff5cDSML\uff5c...\uff5c> markers from visible content", async () => {
+		const model = nvidiaDeepseekModel();
+		global.fetch = createMockFetch([
+			{
+				id: "chatcmpl-nim-1",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [
+					{
+						index: 0,
+						delta: { content: "Sure thing.<\uff5cDSML\uff5ctool_calls\uff5c>I'll help." },
+					},
+				],
+			},
+			{
+				id: "chatcmpl-nim-1",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			},
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const text = result.content
+			.filter(b => b.type === "text")
+			.map(b => (b as { text: string }).text)
+			.join("");
+		expect(text).toBe("Sure thing.I'll help.");
+		expect(text).not.toContain("DSML");
+		expect(text).not.toContain("\uff5c");
+	});
+
+	it("holds back partial token split across chunks", async () => {
+		const model = nvidiaDeepseekModel();
+		global.fetch = createMockFetch([
+			{
+				id: "chatcmpl-nim-2",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { content: "Hello <\uff5ctool_calls" } }],
+			},
+			{
+				id: "chatcmpl-nim-2",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { content: "_begin\uff5c>world" } }],
+			},
+			{
+				id: "chatcmpl-nim-2",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			},
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const text = result.content
+			.filter(b => b.type === "text")
+			.map(b => (b as { text: string }).text)
+			.join("");
+		expect(text).toBe("Hello world");
+	});
+
+	it("flushes a dangling partial open delimiter at end of stream", async () => {
+		const model = nvidiaDeepseekModel();
+		global.fetch = createMockFetch([
+			{
+				id: "chatcmpl-nim-3",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { content: "trailing <\uff5c" } }],
+			},
+			{
+				id: "chatcmpl-nim-3",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			},
+			"[DONE]",
+		]);
+
+		// At end-of-stream we have no way to know whether the partial is a real token,
+		// so we emit it verbatim rather than swallow legitimate text forever.
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const text = result.content
+			.filter(b => b.type === "text")
+			.map(b => (b as { text: string }).text)
+			.join("");
+		expect(text).toBe("trailing <\uff5c");
+	});
+
+	it("leaves visible content alone for non-deepseek nvidia models", async () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "nvidia",
+			baseUrl: "https://integrate.api.nvidia.com/v1",
+			id: "meta/llama-3.3-70b-instruct",
+		};
+		global.fetch = createMockFetch([
+			{
+				id: "chatcmpl-nim-4",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { content: "keep <\uff5cas-is\uff5c> please" } }],
+			},
+			{
+				id: "chatcmpl-nim-4",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			},
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const text = result.content
+			.filter(b => b.type === "text")
+			.map(b => (b as { text: string }).text)
+			.join("");
+		expect(text).toBe("keep <\uff5cas-is\uff5c> please");
+	});
+});

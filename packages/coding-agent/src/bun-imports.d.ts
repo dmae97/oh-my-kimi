@@ -20,3 +20,9 @@ declare module "*.py" {
 	const content: string;
 	export default content;
 }
+
+// Lark grammar files imported as text
+declare module "*.lark" {
+	const content: string;
+	export default content;
+}

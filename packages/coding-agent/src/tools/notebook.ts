@@ -13,14 +13,16 @@ import { formatCount, formatErrorMessage, PREVIEW_LIMITS } from "./render-utils"
 
 const notebookSchema = Type.Object({
 	action: StringEnum(["edit", "insert", "delete"], {
-		description: "Action to perform on the notebook cell",
+		description: "cell action",
+		examples: ["edit", "insert", "delete"],
 	}),
-	notebook_path: Type.String({ description: "Path to the .ipynb file (relative or absolute)" }),
-	cell_index: Type.Number({ description: "0-based index of the cell to operate on" }),
-	content: Type.Optional(Type.String({ description: "New cell content (required for edit/insert)" })),
+	notebook_path: Type.String({ description: "notebook path", examples: ["analysis.ipynb"] }),
+	cell_index: Type.Number({ description: "cell index", examples: [0, 1] }),
+	content: Type.Optional(Type.String({ description: "new cell content" })),
 	cell_type: Type.Optional(
 		StringEnum(["code", "markdown"], {
-			description: "Cell type for insert (default: code)",
+			description: "cell type",
+			examples: ["code", "markdown"],
 		}),
 	),
 });
@@ -62,8 +64,7 @@ type NotebookParams = Static<typeof notebookSchema>;
 export class NotebookTool implements AgentTool<typeof notebookSchema, NotebookToolDetails> {
 	readonly name = "notebook";
 	readonly label = "Notebook";
-	readonly description =
-		"Edit, insert, or delete cells in Jupyter notebooks (.ipynb). cell_index is 0-based. Paths must be absolute.";
+	readonly description = "Edit, insert, or delete cells in Jupyter notebooks (.ipynb). cell_index is 0-based.";
 	readonly parameters = notebookSchema;
 	readonly strict = true;
 	readonly concurrency = "exclusive";

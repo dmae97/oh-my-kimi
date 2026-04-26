@@ -382,6 +382,18 @@ handlebars.registerHelper("not", (value: unknown): boolean => !value);
 
 handlebars.registerHelper("jsonStringify", (value: unknown): string => JSON.stringify(value));
 
+/**
+ * {{SECTION_SEPARATOR "Name"}}
+ * Renders a visible section header separator used by system-prompt templates.
+ */
+export function sectionSeparator(name: string): string {
+	return `\n\n═══════════${name}═══════════\n`;
+}
+const sectionSeparatorHelper = (name: unknown): string => sectionSeparator(String(name));
+handlebars.registerHelper("SECTION_SEPARATOR", sectionSeparatorHelper);
+// Legacy misspelled alias retained for external templates copied from pre-rename versions.
+handlebars.registerHelper("SECTION_SEPERATOR", sectionSeparatorHelper);
+
 export function registerHelper(name: string, fn: HelperDelegate): void {
 	handlebars.registerHelper(name, fn);
 }
@@ -390,8 +402,24 @@ export function registerPartial(name: string, fn: Template): void {
 	handlebars.registerPartial(name, fn);
 }
 
+/**
+ * Handlebars' lexer greedily matches `}}}` as `CLOSE_UNESCAPED` (the close of a
+ * triple-stash `{{{ ... }}}`). When a regular helper close `}}` is immediately
+ * followed by a literal `}` (common in compact JSON examples like
+ * `{del:{{href ...}}}`), the lexer mistakes the trailing `}}}` for a triple-close
+ * and rejects the input.
+ *
+ * We never use triple-stash (it's redundant under `noEscape: true`), so any run
+ * of 3+ closing braces is unambiguously "helper close `}}`" + "literal `}`s".
+ * Inject a no-op comment between them so the lexer tokenizes the helper close
+ * cleanly and treats the rest as content.
+ */
+function disambiguateClosingBraces(template: string): string {
+	return template.replace(/\}\}(\}+)/g, "}}{{!---}}$1");
+}
+
 export function compile(template: string): (context: TemplateContext) => string {
-	return handlebars.compile(template, { noEscape: true, strict: false });
+	return handlebars.compile(disambiguateClosingBraces(template), { noEscape: true, strict: false });
 }
 
 export function render(template: string, context: TemplateContext = {}): string {

@@ -12,7 +12,13 @@ export type OpenAICompletionsToolChoice =
 	| undefined;
 
 /** OpenAI Responses API tool choice format (flat structure) */
-export type OpenAIResponsesToolChoice = "auto" | "none" | "required" | { type: "function"; name: string } | undefined;
+export type OpenAIResponsesToolChoice =
+	| "auto"
+	| "none"
+	| "required"
+	| { type: "function"; name: string }
+	| { type: "custom"; name: string }
+	| undefined;
 
 /** Anthropic-compatible tool choice format */
 export type AnthropicToolChoice = "auto" | "none" | "any" | { type: "tool"; name: string } | undefined;

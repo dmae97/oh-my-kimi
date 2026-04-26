@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as tls from "node:tls";
+import { Effort } from "@oh-my-pi/pi-ai";
 import {
 	applyClaudeToolPrefix,
 	buildAnthropicClientOptions,
@@ -19,7 +20,9 @@ import {
 	stripClaudeToolPrefix,
 } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
+import type { TSchema } from "@sinclair/typebox";
+import { withEnv } from "./helpers";
 
 const ANTHROPIC_MODEL: Model<"anthropic-messages"> = {
 	id: "claude-sonnet-4-5",
@@ -40,35 +43,20 @@ function createAbortedSignal(): AbortSignal {
 	return controller.signal;
 }
 
-async function withEnv(overrides: Record<string, string | undefined>, fn: () => void | Promise<void>): Promise<void> {
-	const previous = new Map<string, string | undefined>();
-	for (const key of Object.keys(overrides)) {
-		previous.set(key, Bun.env[key]);
-	}
-	try {
-		for (const [key, value] of Object.entries(overrides)) {
-			if (value === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = value;
-			}
-		}
-		await fn();
-	} finally {
-		for (const [key, value] of previous.entries()) {
-			if (value === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = value;
-			}
-		}
-	}
-}
+type CaptureAnthropicOptions = {
+	isOAuth?: boolean;
+	metadata?: { user_id?: string };
+	thinkingEnabled?: boolean;
+	reasoning?: Effort;
+	temperature?: number;
+	topP?: number;
+	topK?: number;
+};
 
 function captureAnthropicPayload(
 	model: Model<"anthropic-messages">,
 	context: Context,
-	options?: { isOAuth?: boolean; metadata?: { user_id?: string } },
+	options?: CaptureAnthropicOptions,
 ): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamAnthropic(model, context, {
@@ -76,6 +64,11 @@ function captureAnthropicPayload(
 		isOAuth: options?.isOAuth ?? true,
 		signal: createAbortedSignal(),
 		metadata: options?.metadata,
+		thinkingEnabled: options?.thinkingEnabled,
+		reasoning: options?.reasoning,
+		temperature: options?.temperature,
+		topP: options?.topP,
+		topK: options?.topK,
 		onPayload: payload => resolve(payload),
 	});
 	return promise;
@@ -287,6 +280,260 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.metadata?.user_id).not.toBe("invalid-user-id");
 		expect(isClaudeCloakingUserId(payload.metadata?.user_id ?? "")).toBe(true);
 	});
+	it("adds additionalProperties false to Anthropic tool object schemas", async () => {
+		const originalNestedSchema = {
+			type: "object",
+			properties: {
+				path: { type: "string" },
+			},
+			patternProperties: {
+				"^x-": { type: "string" },
+			},
+			required: ["path"],
+		};
+		const tools: Tool[] = [
+			{
+				name: "edit_file",
+				description: "edit files",
+				parameters: {
+					type: "object",
+					properties: {
+						target: originalNestedSchema,
+						operations: {
+							type: "array",
+							items: {
+								type: "object",
+								properties: { content: { type: "string" } },
+								required: ["content"],
+							},
+						},
+						env: {
+							type: "object",
+							patternProperties: {
+								"^[A-Za-z_][A-Za-z0-9_]*$": { type: "string" },
+							},
+						},
+					},
+					required: ["target"],
+				} as unknown as TSchema,
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+			systemPrompt: "Stay concise.",
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			tools,
+		})) as {
+			tools?: Array<{
+				input_schema?: {
+					additionalProperties?: boolean;
+					properties?: Record<string, unknown>;
+					required?: string[];
+				};
+			}>;
+		};
+
+		const inputSchema = payload.tools?.[0]?.input_schema;
+		const properties = inputSchema?.properties as Record<string, Record<string, unknown>>;
+		const target = properties.target as { additionalProperties?: boolean; patternProperties?: unknown };
+		const operations = properties.operations as {
+			type?: string;
+			items?: { additionalProperties?: boolean; required?: string[] };
+		};
+		const env = properties.env as { additionalProperties?: boolean; patternProperties?: unknown };
+
+		expect(inputSchema?.additionalProperties).toBe(false);
+		expect(inputSchema?.required).toEqual(["target"]);
+		expect(target.additionalProperties).toBe(false);
+		expect(operations.type).toBe("array");
+		expect(operations.items?.additionalProperties).toBe(false);
+		expect(operations.items?.required).toEqual(["content"]);
+		expect(target).not.toHaveProperty("patternProperties");
+		expect(env.additionalProperties).toBe(false);
+		expect(env).not.toHaveProperty("patternProperties");
+		expect(inputSchema?.properties).toHaveProperty("target");
+		expect(originalNestedSchema).not.toHaveProperty("additionalProperties");
+		expect(originalNestedSchema).toHaveProperty("patternProperties");
+	});
+
+	it("removes Anthropic-unsupported array item count constraints", async () => {
+		const tools: Tool[] = [
+			{
+				name: "edit_file",
+				description: "edit files",
+				parameters: {
+					type: "object",
+					properties: {
+						sub: {
+							type: "array",
+							items: { type: "string" },
+							minItems: 2,
+							maxItems: 2,
+						},
+						nonEmpty: {
+							type: "array",
+							items: { type: "string" },
+							minItems: 1,
+						},
+					},
+					required: ["sub"],
+				} as unknown as TSchema,
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+			systemPrompt: "Stay concise.",
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			tools,
+		})) as {
+			tools?: Array<{
+				input_schema?: {
+					properties?: Record<string, unknown>;
+				};
+			}>;
+		};
+
+		const properties = payload.tools?.[0]?.input_schema?.properties as Record<string, Record<string, unknown>>;
+
+		expect(properties.sub).not.toHaveProperty("minItems");
+		expect(properties.sub).not.toHaveProperty("maxItems");
+		expect(properties.nonEmpty.minItems).toBe(1);
+	});
+
+	it("strips minItems from object-typed property schemas (Anthropic rejects them)", async () => {
+		const tools: Tool[] = [
+			{
+				name: "weird",
+				description: "nested object with stray minItems",
+				parameters: {
+					type: "object",
+					properties: {
+						block: {
+							type: "object",
+							properties: { a: { type: "string" } },
+							required: ["a"],
+							minItems: 1,
+						},
+					},
+					required: ["block"],
+				} as unknown as TSchema,
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+			systemPrompt: "Stay concise.",
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			tools,
+		})) as {
+			tools?: Array<{
+				input_schema?: { properties?: Record<string, unknown> };
+			}>;
+		};
+
+		const block = payload.tools?.[0]?.input_schema?.properties?.block as Record<string, unknown> | undefined;
+		expect(block?.type).toBe("object");
+		expect(block).not.toHaveProperty("minItems");
+	});
+
+	it("marks only the Anthropic strict allowlist strict", async () => {
+		const tools: Tool[] = [
+			...(["bash", "python", "edit", "find"] as const).map(name => ({
+				name,
+				description: `${name} tool`,
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: { requiredValue: { type: "string" } },
+					required: ["requiredValue"],
+				} as unknown as TSchema,
+			})),
+			...(["write", "grep", "read", "task", "todo_write", "web_search", "ast_grep"] as const).map(name => ({
+				name,
+				description: `${name} tool`,
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: { requiredValue: { type: "string" } },
+					required: ["requiredValue"],
+				} as unknown as TSchema,
+			})),
+		];
+
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: "Stay concise.",
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				tools,
+			},
+			{ isOAuth: false },
+		)) as {
+			tools?: Array<{ name?: string; strict?: boolean; input_schema?: { required?: string[] } }>;
+		};
+
+		const strictNames = (payload.tools ?? []).filter(tool => tool.strict === true).map(tool => tool.name);
+
+		expect(strictNames).toEqual(["bash", "python", "edit", "find"]);
+		expect(payload.tools?.find(tool => tool.name === "bash")?.input_schema?.required).toEqual(["requiredValue"]);
+	});
+
+	it("honors strict=false and skips non-allowlisted Anthropic tools", async () => {
+		const tools: Tool[] = [
+			{
+				name: "bash",
+				description: "bash tool",
+				strict: false,
+				parameters: {
+					type: "object",
+					properties: { requiredValue: { type: "string" } },
+					required: ["requiredValue"],
+				} as unknown as TSchema,
+			},
+			{
+				name: "python",
+				description: "python tool",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: { requiredValue: { type: "string" } },
+					required: ["requiredValue"],
+				} as unknown as TSchema,
+			},
+			{
+				name: "write",
+				description: "write tool",
+				parameters: {
+					type: "object",
+					properties: { requiredValue: { type: "string" } },
+					required: ["requiredValue"],
+				} as unknown as TSchema,
+			},
+			{
+				name: "grep",
+				description: "grep tool",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: { requiredValue: { type: "string" } },
+					required: ["requiredValue"],
+				} as unknown as TSchema,
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: "Stay concise.",
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				tools,
+			},
+			{ isOAuth: false },
+		)) as { tools?: Array<{ name?: string; strict?: boolean }> };
+
+		const strictNames = (payload.tools ?? []).filter(tool => tool.strict === true).map(tool => tool.name);
+		expect(strictNames).toEqual(["python"]);
+	});
+
 	it("drops fine-grained tool-streaming beta from default Anthropic client options", () => {
 		const options = buildAnthropicClientOptions({
 			model: ANTHROPIC_MODEL,
@@ -446,6 +693,44 @@ describe("Anthropic request fingerprint alignment", () => {
 				expect(getEnvApiKey("anthropic")).toBe("foundry-env-token");
 			},
 		);
+	});
+
+	it("drops sampling params and requests summarized adaptive thinking for Opus 4.7", async () => {
+		const payload = (await captureAnthropicPayload(
+			{
+				...ANTHROPIC_MODEL,
+				id: "claude-opus-4-7",
+				name: "Claude Opus 4.7",
+				thinking: {
+					mode: "anthropic-adaptive",
+					minLevel: Effort.Minimal,
+					maxLevel: Effort.XHigh,
+				},
+			},
+			{
+				systemPrompt: "Stay concise.",
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				thinkingEnabled: true,
+				reasoning: Effort.High,
+				temperature: 0.2,
+				topP: 0.3,
+				topK: 4,
+			},
+		)) as {
+			temperature?: number;
+			top_p?: number;
+			top_k?: number;
+			thinking?: { type?: string; display?: string };
+			output_config?: { effort?: string };
+		};
+
+		expect(payload.temperature).toBeUndefined();
+		expect(payload.top_p).toBeUndefined();
+		expect(payload.top_k).toBeUndefined();
+		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(payload.output_config).toEqual({ effort: "high" });
 	});
 
 	it("treats tool prefix helpers as no-ops when prefix is empty", () => {

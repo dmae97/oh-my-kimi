@@ -12,6 +12,7 @@ import { applyAutoresearchContractToExperimentState } from "../apply-contract-to
 import { loadAutoresearchScriptSnapshot, pathMatchesContractPath, readAutoresearchContract } from "../contract";
 import { computeRunModifiedPaths, getCurrentAutoresearchBranch, parseWorkDirDirtyPathsWithStatus } from "../git";
 import {
+	collectLoggedRunNumbers,
 	formatNum,
 	inferMetricUnitFromName,
 	isAutoresearchCommittableFile,
@@ -472,17 +473,6 @@ function persistRun(workDir: string, experiment: ExperimentResult): void {
 	const jsonlPath = path.join(workDir, "autoresearch.jsonl");
 	fs.appendFileSync(jsonlPath, `${JSON.stringify(entry)}\n`);
 }
-
-function collectLoggedRunNumbers(results: ExperimentResult[]): Set<number> {
-	const runNumbers = new Set<number>();
-	for (const result of results) {
-		if (result.runNumber !== null) {
-			runNumbers.add(result.runNumber);
-		}
-	}
-	return runNumbers;
-}
-
 function validateObservedStatus(
 	status: ExperimentResult["status"],
 	pendingRun: { checksPass: boolean | null; passed: boolean },

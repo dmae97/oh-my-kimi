@@ -6,6 +6,8 @@
  * Returns synthesized answers with web search sources.
  */
 import * as os from "node:os";
+import { getBundledModels } from "@oh-my-pi/pi-ai";
+import { decodeJwt } from "@oh-my-pi/pi-ai/utils/oauth/openai-codex";
 import { $env, getAgentDbPath, readSseJson } from "@oh-my-pi/pi-utils";
 import packageJson from "../../../../package.json" with { type: "json" };
 import { AgentStorage } from "../../../session/agent-storage";
@@ -16,14 +18,29 @@ import { SearchProvider } from "./base";
 
 const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const CODEX_RESPONSES_PATH = "/codex/responses";
-const DEFAULT_MODEL = "gpt-5-codex-mini";
+const FALLBACK_MODEL = "gpt-5-codex-mini";
+const DEFAULT_MODEL_PREFERENCES = [
+	"gpt-5-codex-mini",
+	"gpt-5.4",
+	"gpt-5.3-codex",
+	"gpt-5.2-codex",
+	"gpt-5.1-codex",
+	"gpt-5-codex",
+];
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
 const DEFAULT_INSTRUCTIONS =
 	"You are a helpful assistant with web search capabilities. Search the web to answer the user's question accurately and cite your sources.";
 
 function getModel(): string {
 	const configuredModel = $env.PI_CODEX_WEB_SEARCH_MODEL?.trim();
-	return configuredModel ? configuredModel : DEFAULT_MODEL;
+	if (configuredModel) return configuredModel;
+
+	const bundledModels = getBundledModels("openai-codex");
+	const bundledIds = new Set(bundledModels.map(model => model.id));
+	const preferred = DEFAULT_MODEL_PREFERENCES.find(modelId => bundledIds.has(modelId));
+	if (preferred) return preferred;
+	const nonMini = bundledModels.find(model => !model.id.includes("mini") && !model.id.includes("spark"));
+	return nonMini?.id ?? bundledModels[0]?.id ?? FALLBACK_MODEL;
 }
 
 export interface CodexSearchParams {
@@ -43,11 +60,6 @@ interface CodexOAuthCredential {
 	expires: number;
 	accountId?: string;
 }
-
-/** JWT payload structure for extracting account ID */
-type JwtPayload = {
-	[key: string]: unknown;
-};
 
 /** Codex API response structure */
 interface CodexResponseItem {
@@ -94,21 +106,123 @@ function isImagePlaceholderAnswer(text: string): boolean {
 	return text.trim().toLowerCase() === "(see attached image)";
 }
 
+function addSource(sources: SearchSource[], source: SearchSource): void {
+	if (!sources.some(existing => existing.url === source.url)) {
+		sources.push(source);
+	}
+}
+
+function countCharacter(text: string, target: string): number {
+	let count = 0;
+	for (const char of text) {
+		if (char === target) {
+			count += 1;
+		}
+	}
+	return count;
+}
+
 /**
- * Decodes a JWT token and extracts the payload.
- * @param token - JWT token string
- * @returns Decoded payload, or null if parsing fails
+ * Strips prose punctuation and unmatched closing delimiters from extracted URLs.
+ * Codex often returns links in markdown or sentence text without structured annotations.
  */
-function decodeJwt(token: string): JwtPayload | null {
+function normalizeExtractedUrl(candidate: string): string | null {
+	let url = candidate.trim();
+
+	while (url.length > 0) {
+		const lastCharacter = url.at(-1);
+		if (!lastCharacter) break;
+		if (/[.,!?;:'"]/u.test(lastCharacter)) {
+			url = url.slice(0, -1);
+			continue;
+		}
+		if (lastCharacter === ")" && countCharacter(url, ")") > countCharacter(url, "(")) {
+			url = url.slice(0, -1);
+			continue;
+		}
+		if (lastCharacter === "]" && countCharacter(url, "]") > countCharacter(url, "[")) {
+			url = url.slice(0, -1);
+			continue;
+		}
+		if (lastCharacter === "}" && countCharacter(url, "}") > countCharacter(url, "{")) {
+			url = url.slice(0, -1);
+			continue;
+		}
+		break;
+	}
+
+	if (!/^https?:\/\//.test(url)) {
+		return null;
+	}
+
 	try {
-		const parts = token.split(".");
-		if (parts.length !== 3) return null;
-		const payload = parts[1] ?? "";
-		const decoded = Buffer.from(payload, "base64").toString("utf-8");
-		return JSON.parse(decoded) as JwtPayload;
+		return new URL(url).toString();
 	} catch {
 		return null;
 	}
+}
+
+function findMarkdownLinkUrlEnd(text: string, openParenIndex: number): number | null {
+	let depth = 0;
+
+	for (let index = openParenIndex; index < text.length; index += 1) {
+		const character = text[index];
+		if (!character || character === "\n") {
+			return null;
+		}
+		if (character === "(") {
+			depth += 1;
+			continue;
+		}
+		if (character !== ")") {
+			continue;
+		}
+		depth -= 1;
+		if (depth === 0) {
+			return index;
+		}
+		if (depth < 0) {
+			return null;
+		}
+	}
+
+	return null;
+}
+
+/**
+ * Extracts citation sources from markdown links and bare URLs in the answer text.
+ * Used as a fallback when the Codex response omits `url_citation` annotations.
+ */
+function extractTextSources(text: string): SearchSource[] {
+	const sources: SearchSource[] = [];
+
+	for (let index = 0; index < text.length; index += 1) {
+		if (text[index] !== "[") {
+			continue;
+		}
+		const titleEnd = text.indexOf("]", index + 1);
+		if (titleEnd === -1 || text[titleEnd + 1] !== "(") {
+			continue;
+		}
+		const urlEnd = findMarkdownLinkUrlEnd(text, titleEnd + 1);
+		if (urlEnd === null) {
+			continue;
+		}
+		const title = text.slice(index + 1, titleEnd).trim();
+		const url = normalizeExtractedUrl(text.slice(titleEnd + 2, urlEnd));
+		if (url) {
+			addSource(sources, { title: title || url, url });
+		}
+		index = urlEnd;
+	}
+
+	for (const match of text.matchAll(/https?:\/\/\S+/g)) {
+		const url = normalizeExtractedUrl(match[0] ?? "");
+		if (!url) continue;
+		addSource(sources, { title: url, url });
+	}
+
+	return sources;
 }
 
 /**
@@ -216,6 +330,7 @@ async function callCodexSearch(
 				search_context_size: options.searchContextSize ?? "high",
 			},
 		],
+		tool_choice: { type: "web_search" },
 		instructions: options.systemPrompt ?? DEFAULT_INSTRUCTIONS,
 	};
 
@@ -223,6 +338,7 @@ async function callCodexSearch(
 		method: "POST",
 		headers,
 		body: JSON.stringify(body),
+		signal: options.signal,
 	});
 
 	if (!response.ok) {
@@ -266,12 +382,7 @@ async function callCodexSearch(
 							for (const annotation of part.annotations) {
 								if (annotation.type === "url_citation" && annotation.url) {
 									// Deduplicate by URL
-									if (!sources.some(s => s.url === annotation.url)) {
-										sources.push({
-											title: annotation.title ?? annotation.url,
-											url: annotation.url,
-										});
-									}
+									addSource(sources, { title: annotation.title ?? annotation.url, url: annotation.url });
 								}
 							}
 						}
@@ -320,6 +431,14 @@ async function callCodexSearch(
 			: streamedAnswer.length > 0
 				? streamedAnswer
 				: finalAnswer;
+
+	// Fallback: when Codex omits url_citation annotations, scrape markdown links
+	// and bare URLs from the synthesized answer so callers still receive sources.
+	if (sources.length === 0 && answer.length > 0) {
+		for (const source of extractTextSources(answer)) {
+			addSource(sources, source);
+		}
+	}
 
 	return {
 		answer,

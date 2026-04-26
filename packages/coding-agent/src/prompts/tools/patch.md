@@ -50,25 +50,18 @@ Returns success/failure; on failure, error message indicates:
 - **NEVER** use edit to fix indentation, whitespace, or reformat code. Formatting is a single command run once at the end (`bun fmt`, `cargo fmt`, `prettier —write`, etc.)—not N individual edits. If you see inconsistent indentation after an edit, leave it; the formatter will fix all of it in one pass.
 </critical>
 
-<example name="create">
-edit {"edits":[{"path":"hello.txt","op":"create","diff":"Hello\n"}]}
-</example>
-
-<example name="update">
-edit {"edits":[{"path":"src/app.py","op":"update","diff":"@@ def greet():\n def greet():\n-print('Hi')\n+print('Hello')\n"}]}
-</example>
-
-<example name="rename">
-edit {"edits":[{"path":"src/app.py","op":"update","rename":"src/main.py","diff":"@@\n …\n"}]}
-</example>
-
-<example name="delete">
-edit {"edits":[{"path":"obsolete.txt","op":"delete"}]}
-</example>
-
-<example name="multi-file">
-edit {"edits":[{"path":"src/types.ts","op":"update","diff":"@@\n-old\n+new\n"},{"path":"src/index.ts","op":"update","diff":"@@\n-old\n+new\n"}]}
-</example>
+<examples>
+# Create
+`edit {"edits":[{"path":"hello.txt","op":"create","diff":"Hello\n"}]}`
+# Update
+`edit {"edits":[{"path":"src/app.py","op":"update","diff":"@@ def greet():\n def greet():\n-print('Hi')\n+print('Hello')\n"}]}`
+# Rename
+`edit {"edits":[{"path":"src/app.py","op":"update","rename":"src/main.py","diff":"@@\n …\n"}]}`
+# Delete
+`edit {"edits":[{"path":"obsolete.txt","op":"delete"}]}`
+# Multi-file
+`edit {"edits":[{"path":"src/types.ts","op":"update","diff":"@@\n-old\n+new\n"},{"path":"src/index.ts","op":"update","diff":"@@\n-old\n+new\n"}]}`
+</examples>
 
 <avoid>
 - Generic anchors: `import`, `export`, `describe`, `function`, `const`

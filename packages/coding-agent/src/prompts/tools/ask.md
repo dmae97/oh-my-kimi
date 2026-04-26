@@ -21,8 +21,9 @@ Asks user when you need clarification or input during task execution.
 - **Do NOT include "Other" option** — UI automatically adds "Other (type your own)" to every question.
 </critical>
 
-<example name="single">
+<examples>
+# Single question
 question: "Which authentication method should this API use?"
 options: [{"label": "JWT"}, {"label": "OAuth2"}, {"label": "Session cookies"}]
 recommended: 0
-</example>
+</examples>

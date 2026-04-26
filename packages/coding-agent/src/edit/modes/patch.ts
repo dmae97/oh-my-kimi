@@ -1577,7 +1577,7 @@ export async function computePatchDiff(
 }
 
 export const patchEditEntrySchema = Type.Object({
-	path: Type.String({ description: "File path" }),
+	path: Type.Optional(Type.String({ description: "File path (omit to use top-level `path`)" })),
 	op: Type.Optional(
 		StringEnum(["create", "delete", "update"], {
 			description: "Operation (default: update)",
@@ -1588,6 +1588,7 @@ export const patchEditEntrySchema = Type.Object({
 });
 
 export const patchEditSchema = Type.Object({
+	path: Type.Optional(Type.String({ description: "Default file path used when an edit omits its own `path`" })),
 	edits: Type.Array(patchEditEntrySchema, { description: "Patch operations", minItems: 1 }),
 });
 
@@ -1603,14 +1604,6 @@ export interface ExecutePatchSingleOptions {
 	fuzzyThreshold: number;
 	writethrough: WritethroughCallback;
 	beginDeferredDiagnosticsForPath: (path: string) => WritethroughDeferredHandle;
-}
-
-export function isPatchParams(params: unknown): params is PatchParams {
-	if (typeof params !== "object" || params === null) return false;
-	if (!("edits" in params) || !Array.isArray((params as any).edits)) return false;
-	const first = (params as any).edits[0];
-	if (!first || typeof first !== "object") return false;
-	return "path" in first && !("old_text" in first) && !("new_text" in first);
 }
 
 class LspFileSystem implements FileSystem {
@@ -1710,6 +1703,9 @@ export async function executePatchSingle(
 		beginDeferredDiagnosticsForPath,
 	} = options;
 	const { path, op: rawOp, rename, diff } = params;
+	if (typeof path !== "string" || path.length === 0) {
+		throw new Error("patch edit: missing `path`. Provide `path` on the edit or supply a top-level `path`.");
+	}
 
 	const op: Operation = rawOp === "create" || rawOp === "delete" ? rawOp : "update";
 

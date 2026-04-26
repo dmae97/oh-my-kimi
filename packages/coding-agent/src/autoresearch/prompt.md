@@ -1,4 +1,4 @@
-{{{base_system_prompt}}}
+{{base_system_prompt}}
 
 ## Autoresearch Mode
 

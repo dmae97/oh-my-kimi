@@ -1,0 +1,21 @@
+# ping: the per-packet lines are rarely useful once a run is over. Keep the
+# header, the "--- ... ping statistics ---" separator, the loss line, and the
+# rtt summary. Drop everything else.
+
+[filters.ping]
+description = "Keep only ping summary + loss line"
+match_command = "^ping6?$"
+strip_ansi = true
+keep_lines_matching = [
+	"^PING ",
+	"^--- .* ping statistics ---$",
+	"packet loss",
+	"^rtt min",
+	"^round-trip min",
+]
+on_empty = "ping: ok"
+
+[[tests.ping]]
+name = "keeps summary tail drops per-packet lines"
+input = "PING google.com (1.2.3.4) 56(84) bytes of data.\n64 bytes from a (1.2.3.4): icmp_seq=1 ttl=58 time=12.3 ms\n64 bytes from a (1.2.3.4): icmp_seq=2 ttl=58 time=12.5 ms\n\n--- google.com ping statistics ---\n2 packets transmitted, 2 received, 0% packet loss, time 1001ms\nrtt min/avg/max/mdev = 12.3/12.4/12.5/0.1 ms\n"
+expected = "PING google.com (1.2.3.4) 56(84) bytes of data.\n--- google.com ping statistics ---\n2 packets transmitted, 2 received, 0% packet loss, time 1001ms\nrtt min/avg/max/mdev = 12.3/12.4/12.5/0.1 ms\n"

@@ -6,7 +6,7 @@ import type { CreateAgentSessionResult } from "../../src/sdk";
 import * as sdkModule from "../../src/sdk";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "../../src/session/agent-session";
 import type { AuthStorage } from "../../src/session/auth-storage";
-import { runSubprocess, SUBAGENT_WARNING_MISSING_SUBMIT_RESULT } from "../../src/task/executor";
+import { runSubprocess, SUBAGENT_WARNING_MISSING_YIELD } from "../../src/task/executor";
 import type { AgentDefinition } from "../../src/task/types";
 import { EventBus } from "../../src/utils/event-bus";
 
@@ -55,7 +55,7 @@ function createMockSession(
 		sessionManager: {
 			appendSessionInit: () => {},
 		},
-		getActiveToolNames: () => ["read", "submit_result"],
+		getActiveToolNames: () => ["read", "yield"],
 		setActiveToolsByName: async (_toolNames: string[]) => {},
 		subscribe: (listener: (event: AgentSessionEvent) => void) => {
 			listeners.push(listener);
@@ -90,7 +90,7 @@ function mockCreateAgentSession(session: AgentSession) {
 	return vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
 }
 
-describe("runSubprocess submit_result reminders", () => {
+describe("runSubprocess yield reminders", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
@@ -114,7 +114,7 @@ describe("runSubprocess submit_result reminders", () => {
 		enableLsp: false,
 	};
 
-	it("sends reminder prompt when subagent stops without submit_result", async () => {
+	it("sends reminder prompt when subagent stops without yield", async () => {
 		const prompts: string[] = [];
 		const promptOptions: Array<PromptOptions | undefined> = [];
 		const session = createMockSession(({ text, options, promptIndex, emit, state }) => {
@@ -129,7 +129,7 @@ describe("runSubprocess submit_result reminders", () => {
 			emit({
 				type: "tool_execution_end",
 				toolCallId: "tool-1",
-				toolName: "submit_result",
+				toolName: "yield",
 				result: {
 					content: [{ type: "text", text: "Result submitted." }],
 					details: { status: "success", data: { done: true } },
@@ -145,12 +145,12 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(promptOptions).toHaveLength(2);
 		expect(promptOptions[0]?.attribution).toBe("agent");
 		expect(promptOptions[1]?.attribution).toBe("agent");
-		expect(prompts[1]).toContain("You stopped without calling submit_result");
+		expect(prompts[1]).toContain("You stopped without calling yield");
 		expect(result.output).toContain('"done": true');
 		expect(result.output.includes("SYSTEM WARNING")).toBe(false);
 	});
 
-	it("keeps null submit_result warning when subagent submits success without data", async () => {
+	it("keeps null yield warning when subagent submits success without data", async () => {
 		const session = createMockSession(({ promptIndex, emit, state }) => {
 			if (promptIndex === 1) {
 				const assistant = createAssistantStopMessage("partial output");
@@ -161,7 +161,7 @@ describe("runSubprocess submit_result reminders", () => {
 			emit({
 				type: "tool_execution_end",
 				toolCallId: "tool-2",
-				toolName: "submit_result",
+				toolName: "yield",
 				result: {
 					content: [{ type: "text", text: "Result submitted." }],
 					details: { status: "success" },
@@ -173,21 +173,21 @@ describe("runSubprocess submit_result reminders", () => {
 		mockCreateAgentSession(session);
 
 		const result = await runSubprocess({ ...baseOptions, id: "subagent-2" });
-		expect(result.output).toContain("SYSTEM WARNING: Subagent called submit_result with null data.");
+		expect(result.output).toContain("SYSTEM WARNING: Subagent called yield with null data.");
 	});
 
-	it("retries when submit_result tool returns an error before succeeding", async () => {
+	it("retries when yield tool returns an error before succeeding", async () => {
 		const prompts: string[] = [];
 		const session = createMockSession(({ text, promptIndex, emit, state }) => {
 			prompts.push(text);
 			if (promptIndex === 1) {
-				const assistant = createAssistantStopMessage("attempted submit_result");
+				const assistant = createAssistantStopMessage("attempted yield");
 				state.messages.push(assistant);
 				emit({ type: "message_end", message: assistant });
 				emit({
 					type: "tool_execution_end",
 					toolCallId: "tool-error",
-					toolName: "submit_result",
+					toolName: "yield",
 					result: {
 						content: [{ type: "text", text: "Output does not match schema" }],
 						details: { status: "error", error: "Output does not match schema" },
@@ -199,7 +199,7 @@ describe("runSubprocess submit_result reminders", () => {
 			emit({
 				type: "tool_execution_end",
 				toolCallId: "tool-success",
-				toolName: "submit_result",
+				toolName: "yield",
 				result: {
 					content: [{ type: "text", text: "Result submitted." }],
 					details: { status: "success", data: { ok: true } },
@@ -221,7 +221,7 @@ describe("runSubprocess submit_result reminders", () => {
 			emit({
 				type: "tool_execution_end",
 				toolCallId: "tool-thinking-fallback",
-				toolName: "submit_result",
+				toolName: "yield",
 				result: {
 					content: [{ type: "text", text: "Result submitted." }],
 					details: { status: "success", data: { ok: true } },
@@ -268,7 +268,7 @@ describe("runSubprocess submit_result reminders", () => {
 				emit({
 					type: "tool_execution_end",
 					toolCallId: `tool-thinking-override-${index}`,
-					toolName: "submit_result",
+					toolName: "yield",
 					result: {
 						content: [{ type: "text", text: "Result submitted." }],
 						details: { status: "success", data: { ok: true } },
@@ -292,11 +292,11 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(createAgentSessionSpy.mock.calls[0]?.[0]?.thinkingLevel).toBe(cases[0].expectedThinkingLevel);
 		expect(createAgentSessionSpy.mock.calls[1]?.[0]?.thinkingLevel).toBe(cases[1].expectedThinkingLevel);
 	});
-	it("aborts after 3 reminders when submit_result is never called", async () => {
+	it("fails after 3 reminders when yield is never called for a structured task", async () => {
 		const prompts: string[] = [];
 		const session = createMockSession(({ text, promptIndex, emit, state }) => {
 			prompts.push(text);
-			const assistant = createAssistantStopMessage(promptIndex === 1 ? "did work" : "still no submit_result");
+			const assistant = createAssistantStopMessage(promptIndex === 1 ? "did work" : "still no yield");
 			state.messages.push(assistant);
 			emit({ type: "message_end", message: assistant });
 		});
@@ -310,12 +310,12 @@ describe("runSubprocess submit_result reminders", () => {
 		});
 		expect(prompts).toHaveLength(4);
 		expect(result.exitCode).toBe(1);
-		expect(result.aborted).toBe(true);
-		expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
-		expect(result.abortReason).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+		expect(result.aborted).toBe(false);
+		expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_YIELD);
+		expect(result.abortReason).toBeUndefined();
 	});
 
-	it("surfaces abort reason when submit_result reports aborted status", async () => {
+	it("surfaces abort reason when yield reports aborted status", async () => {
 		const session = createMockSession(({ promptIndex, emit, state }) => {
 			if (promptIndex === 1) {
 				const assistant = createAssistantStopMessage("cannot proceed");
@@ -325,7 +325,7 @@ describe("runSubprocess submit_result reminders", () => {
 			emit({
 				type: "tool_execution_end",
 				toolCallId: "tool-abort",
-				toolName: "submit_result",
+				toolName: "yield",
 				result: {
 					content: [{ type: "text", text: "Task aborted: blocked by permissions" }],
 					details: { status: "aborted", error: "blocked by permissions" },
@@ -336,7 +336,7 @@ describe("runSubprocess submit_result reminders", () => {
 
 		mockCreateAgentSession(session);
 
-		const result = await runSubprocess({ ...baseOptions, id: "subagent-aborted-submit-result" });
+		const result = await runSubprocess({ ...baseOptions, id: "subagent-aborted-yield" });
 		expect(result.aborted).toBe(true);
 		expect(result.abortReason).toBe("blocked by permissions");
 	});

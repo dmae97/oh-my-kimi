@@ -4,8 +4,8 @@
  * Uses brush-core via native bindings for shell execution.
  */
 import * as fs from "node:fs/promises";
-import { executeShell, Shell } from "@oh-my-pi/pi-natives";
-import { Settings } from "../config/settings";
+import { executeShell, type MinimizerOptions, Shell } from "@oh-my-pi/pi-natives";
+import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
 import { getOrCreateSnapshot } from "../utils/shell-snapshot";
 import { NON_INTERACTIVE_ENV } from "./non-interactive-env";
@@ -22,6 +22,17 @@ export interface BashExecutorOptions {
 	/** Artifact path/id for full output storage */
 	artifactPath?: string;
 	artifactId?: string;
+	/**
+	 * Invoked when the native minimizer rewrote the command's output, giving
+	 * the caller a chance to persist the lossless original capture (typically
+	 * via the session's `ArtifactManager`). The returned id is spliced into
+	 * the sink output as `artifact://<id>` so the agent can retrieve the raw
+	 * bytes. Return `undefined` to skip the footer.
+	 */
+	onMinimizedSave?: (
+		originalText: string,
+		info: { filter: string; inputBytes: number; outputBytes: number },
+	) => Promise<string | undefined>;
 }
 
 export interface BashResult {
@@ -53,10 +64,24 @@ async function resolveShellCwd(cwd: string | undefined): Promise<string | undefi
 	}
 }
 
+function buildMinimizerOptions(group: ShellMinimizerSettings): MinimizerOptions | undefined {
+	if (!group.enabled) return undefined;
+	return {
+		enabled: true,
+		settingsPath: group.settingsPath || undefined,
+		only: group.only.length > 0 ? group.only : undefined,
+		except: group.except.length > 0 ? group.except : undefined,
+		maxCaptureBytes: group.maxCaptureBytes,
+	};
+}
+
 export async function executeBash(command: string, options?: BashExecutorOptions): Promise<BashResult> {
 	const settings = await Settings.init();
 	const { shell, env: shellEnv, prefix } = settings.getShellConfig();
 	const snapshotPath = shell.includes("bash") ? await getOrCreateSnapshot(shell, shellEnv) : null;
+
+	const minimizer = buildMinimizerOptions(settings.getGroup("shellMinimizer"));
+
 	const commandCwd = await resolveShellCwd(options?.cwd);
 	const commandEnv = options?.env ? { ...NON_INTERACTIVE_ENV, ...options.env } : NON_INTERACTIVE_ENV;
 
@@ -89,7 +114,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		};
 	}
 
-	const sessionKey = buildSessionKey(shell, prefix, snapshotPath, shellEnv, options?.sessionKey);
+	const sessionKey = buildSessionKey(shell, prefix, snapshotPath, shellEnv, options?.sessionKey, minimizer);
 	const persistentSessionBroken = brokenShellSessions.has(sessionKey);
 	if (persistentSessionBroken) {
 		shellSessions.delete(sessionKey);
@@ -97,7 +122,11 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 
 	let shellSession = persistentSessionBroken ? undefined : shellSessions.get(sessionKey);
 	if (!shellSession && !persistentSessionBroken) {
-		shellSession = new Shell({ sessionEnv: shellEnv, snapshotPath: snapshotPath ?? undefined });
+		shellSession = new Shell({
+			sessionEnv: shellEnv,
+			snapshotPath: snapshotPath ?? undefined,
+			minimizer,
+		});
 		shellSessions.set(sessionKey, shellSession);
 	}
 	const userSignal = options?.signal;
@@ -152,6 +181,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 						env: commandEnv,
 						sessionEnv: shellEnv,
 						snapshotPath: snapshotPath ?? undefined,
+						minimizer,
 						timeoutMs: options?.timeout,
 						signal: runAbortController.signal,
 					},
@@ -204,6 +234,25 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			};
 		}
 
+		// When the native minimizer rewrote the output, swap the sink's accumulated
+		// raw stream for the minimized text, persist the original as a session
+		// artifact, and splice an `artifact://<id>` footer into the visible text so
+		// the agent can retrieve the raw bytes losslessly.
+		const minimized = winner.result.minimized;
+		if (minimized && minimized.text !== minimized.originalText) {
+			sink.replace(minimized.text);
+			if (options?.onMinimizedSave) {
+				const artifactId = await options.onMinimizedSave(minimized.originalText, {
+					filter: minimized.filter,
+					inputBytes: minimized.inputBytes,
+					outputBytes: minimized.outputBytes,
+				});
+				if (artifactId) {
+					sink.push(`\n[raw output: artifact://${artifactId}]\n`);
+				}
+			}
+		}
+
 		// Normal completion
 		return {
 			exitCode: winner.result.exitCode,
@@ -232,9 +281,13 @@ function buildSessionKey(
 	snapshotPath: string | null,
 	env: Record<string, string>,
 	agentSessionKey?: string,
+	minimizer?: MinimizerOptions,
 ): string {
 	const entries = Object.entries(env);
 	entries.sort(([a], [b]) => a.localeCompare(b));
 	const envSerialized = entries.map(([key, value]) => `${key}=${value}`).join("\n");
-	return [agentSessionKey ?? "", shell, prefix ?? "", snapshotPath ?? "", envSerialized].join("\n");
+	const minimizerSerialized = minimizer ? JSON.stringify(minimizer) : "";
+	return [agentSessionKey ?? "", shell, prefix ?? "", snapshotPath ?? "", envSerialized, minimizerSerialized].join(
+		"\n",
+	);
 }

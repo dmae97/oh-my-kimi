@@ -6,9 +6,10 @@
 import type { SearchResponse } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { findKagiApiKey, KagiApiError, searchWithKagi } from "../../kagi";
-import { clampNumResults, dateToAgeSeconds } from "../utils";
+import { clampNumResults } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
+import { toSearchSources } from "./utils";
 
 const DEFAULT_NUM_RESULTS = 10;
 const MAX_NUM_RESULTS = 40;
@@ -29,13 +30,7 @@ export async function searchKagi(params: {
 
 		return {
 			provider: "kagi",
-			sources: result.sources.slice(0, numResults).map(source => ({
-				title: source.title,
-				url: source.url,
-				snippet: source.snippet,
-				publishedDate: source.publishedDate,
-				ageSeconds: dateToAgeSeconds(source.publishedDate),
-			})),
+			sources: toSearchSources(result.sources, numResults),
 			relatedQuestions: result.relatedQuestions.length > 0 ? result.relatedQuestions : undefined,
 			requestId: result.requestId,
 		};

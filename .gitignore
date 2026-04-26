@@ -57,7 +57,4 @@ pi-*.html
 # Generated files
 packages/coding-agent/src/internal-urls/docs-index.generated.ts
 packages/typescript-edit-benchmark/runs/
-
-# AgentOps session artifacts (auto-added)
-.agents/
-.serena
+python/omp-rpc/src/omp_rpc.egg-info/

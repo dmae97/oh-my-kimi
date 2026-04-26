@@ -125,6 +125,9 @@ export function generateReport(result: BenchmarkResult): string {
 	if (summary.ghostRuns > 0) {
 		lines.push(`| Ghost Runs (0/0/0) | ${summary.ghostRuns} |`);
 	}
+	if (summary.transportFailureRuns > 0) {
+		lines.push(`| Transport Failures (excluded) | ${summary.transportFailureRuns} |`);
+	}
 	if (summary.totalTimeoutRetries > 0 || summary.totalZeroToolRetries > 0 || summary.totalProviderFailureRetries > 0) {
 		lines.push(`| Timeout Retries | ${summary.totalTimeoutRetries} |`);
 		lines.push(`| Zero-Tool Retries | ${summary.totalZeroToolRetries} |`);
@@ -133,7 +136,7 @@ export function generateReport(result: BenchmarkResult): string {
 	if (typeof summary.mutationIntentMatchRate === "number") {
 		lines.push(`| Mutation Intent Match Rate | ${formatPercent(summary.mutationIntentMatchRate)} |`);
 	}
-	if (config.editVariant === "patch" || config.editVariant === "hashline" || config.editVariant === "chunk") {
+	if (config.editVariant === "patch" || config.editVariant === "hashline") {
 		lines.push(`| Patch Failure Rate | ${formatRate(totalEditFailures, totalEditAttempts)} |`);
 	}
 	lines.push(`| Tasks All Passing | ${summary.tasksWithAllPassing} |`);
@@ -177,24 +180,6 @@ export function generateReport(result: BenchmarkResult): string {
 			lines.push("|-----------|-------|---|");
 			for (const key of order) {
 				const count = summary.hashlineEditSubtypes[key] ?? 0;
-				const pct = formatPercent(count / total);
-				lines.push(`| ${key} | ${count} | ${pct} |`);
-			}
-			lines.push(`| **Total** | **${total}** | 100% |`);
-			lines.push("");
-		}
-	}
-
-	if (summary.chunkEditSubtypes) {
-		const order = ["append", "prepend", "replace", "delete"] as const;
-		const total = order.reduce((sum, key) => sum + (summary.chunkEditSubtypes?.[key] ?? 0), 0);
-		if (total > 0) {
-			lines.push("### Chunk Edit Subtypes");
-			lines.push("");
-			lines.push("| Operation | Count | % |");
-			lines.push("|-----------|-------|---|");
-			for (const key of order) {
-				const count = summary.chunkEditSubtypes[key] ?? 0;
 				const pct = formatPercent(count / total);
 				lines.push(`| ${key} | ${count} | ${pct} |`);
 			}

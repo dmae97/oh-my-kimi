@@ -395,7 +395,7 @@ A `ToolFactory` is `(session: ToolSession) => Tool | null | Promise<Tool | null>
 4. Computes effective gating (`isToolAllowed`) from settings and runtime state:
    - feature toggles (`find.enabled`, `grep.enabled`, etc.)
    - recursion guard for `task` (`task.maxRecursionDepth` vs `session.taskDepth`)
-   - submit-result mode (`requireSubmitResultTool`) and `todo_write` suppression
+   - yield mode (`requireYieldTool`) and `todo_write` suppression
 5. Instantiates selected tools in parallel with `Promise.all`, records slow factory timings when `PI_TIMING=1`, and wraps results with `wrapToolWithMetaNotice`.
 6. Includes `resolve` only when at least one instantiated tool has `deferrable: true` (deferred preview/apply workflows).
 
@@ -864,7 +864,7 @@ mapWithConcurrencyLimit(...)
       └── ...
       │
       ▼
-submit_result/fallback normalization
+yield/fallback normalization
       │
       ▼
 aggregated task results (+ optional worktree patches)
@@ -924,21 +924,21 @@ What _is_ isolated is execution context and artifacts, not process memory:
 - Adds `task` tool automatically when `agent.spawns` is set and recursion depth permits.
 - Removes `task` when max recursion depth is reached (`task.maxRecursionDepth`).
 - Expands legacy `exec` alias into `python` and/or `bash` based on `python.toolMode`.
-- Forces `requireSubmitResultTool: true` in `createAgentSession(...)`.
+- Forces `requireYieldTool: true` in `createAgentSession(...)`.
 - Filters parent-owned tools out of child tools (`todo_write` is removed).
 
 If parent MCP connections exist, executor creates in-process MCP proxy tools with `createMCPProxyTools(...)` so children reuse parent MCP connectivity rather than creating independent MCP sessions.
 
 ## Submit/Result Contract and Completion Semantics
 
-`executor.ts` enforces structured completion around `submit_result`:
+`executor.ts` enforces structured completion around `yield`:
 
 - Tracks tool events and extracted data through `subprocessToolRegistry` handlers.
-- Retries reminder prompts up to 3 times (`MAX_SUBMIT_RESULT_RETRIES`) using `subagent-submit-reminder.md` if `submit_result` was not called.
+- Retries reminder prompts up to 3 times (`MAX_YIELD_RETRIES`) using `subagent-yield-reminder.md` if `yield` was not called.
 - Final output normalization is centralized in `finalizeSubprocessOutput(...)`:
-  - If `submit_result.status === "aborted"`, task is converted to an aborted result payload.
-  - If missing `submit_result`, fallback attempts JSON parse/validation against output schema.
-  - Emits warnings when `submit_result` is missing/null and fallback cannot safely validate.
+  - If `yield.status === "aborted"`, task is converted to an aborted result payload.
+  - If missing `yield`, fallback attempts JSON parse/validation against output schema.
+  - Emits warnings when `yield` is missing/null and fallback cannot safely validate.
 
 This module also accumulates token/cost usage from assistant `message_end` events and truncates returned output with `truncateTail(...)` using `MAX_OUTPUT_BYTES` and `MAX_OUTPUT_LINES`.
 
@@ -1132,7 +1132,7 @@ Primary file: `packages/coding-agent/src/tools/index.ts`.
    - `export const BUILTIN_TOOLS: Record<string, ToolFactory> = { ... }`
    - Key is the external tool name (e.g. `"read"`, `"web_search"`).
 4. If it should be hidden/system-only, register under `HIDDEN_TOOLS` instead.
-   - Existing hidden names: `submit_result`, `report_finding`, `exit_plan_mode`, `resolve`.
+   - Existing hidden names: `yield`, `report_finding`, `exit_plan_mode`, `resolve`.
 5. Wire feature gates in `isToolAllowed(name)` when the tool needs runtime enable/disable behavior.
    - Existing gates use `session.settings.get("<tool>.enabled")` and recursion limits for `task`.
 6. If the tool should be selectable by type, update `ToolName = keyof typeof BUILTIN_TOOLS` consumers as needed.
@@ -1141,7 +1141,7 @@ Notes from current behavior:
 
 - `createTools()` always injects `exit_plan_mode` when `toolNames` are specified.
 - `resolve` is included only when at least one active tool is marked `deferrable: true` (built-in or extension/custom).
-- `submit_result` is force-added when `session.requireSubmitResultTool === true`.
+- `yield` is force-added when `session.requireYieldTool === true`.
 - Python/Bash availability is mode-driven (`PI_PY`, `python.toolMode`) and can auto-fallback to bash.
 
 ### Playbook: add an RPC command

@@ -558,6 +558,29 @@ function createAutoresearchLifecycleHarness(options: {
 	};
 }
 
+function createMainBranchHarness(dir: string): AutoresearchCommandHarness {
+	let currentBranch = "main";
+	const branches = new Set<string>();
+	return createAutoresearchCommandHarness(dir, [], async (command, args) => {
+		if (command !== "git") return { code: 1, stderr: "unexpected command", stdout: "" };
+		if (args[0] === "rev-parse") return { code: 0, stderr: "", stdout: `${dir}\n` };
+		if (args[0] === "branch" && args[1] === "--show-current") {
+			return { code: 0, stderr: "", stdout: `${currentBranch}\n` };
+		}
+		if (args[0] === "status") return { code: 0, stderr: "", stdout: "" };
+		if (args[0] === "show-ref") {
+			const branchName = args[args.length - 1]?.replace("refs/heads/", "") ?? "";
+			return { code: branches.has(branchName) ? 0 : 1, stderr: "", stdout: "" };
+		}
+		if (args[0] === "checkout" && args[1] === "-b") {
+			currentBranch = args[2] ?? currentBranch;
+			branches.add(currentBranch);
+			return { code: 0, stderr: "", stdout: "" };
+		}
+		return { code: 1, stderr: `unexpected git args: ${args.join(" ")}`, stdout: "" };
+	});
+}
+
 describe("autoresearch command startup", () => {
 	const tempDirs: string[] = [];
 
@@ -570,26 +593,7 @@ describe("autoresearch command startup", () => {
 	it("enables autoresearch with notify and no agent turn when no autoresearch.md and no slash args", async () => {
 		const dir = makeTempDir();
 		tempDirs.push(dir);
-		let currentBranch = "main";
-		const branches = new Set<string>();
-		const harness = createAutoresearchCommandHarness(dir, [], async (command, args) => {
-			if (command !== "git") return { code: 1, stderr: "unexpected command", stdout: "" };
-			if (args[0] === "rev-parse") return { code: 0, stderr: "", stdout: `${dir}\n` };
-			if (args[0] === "branch" && args[1] === "--show-current") {
-				return { code: 0, stderr: "", stdout: `${currentBranch}\n` };
-			}
-			if (args[0] === "status") return { code: 0, stderr: "", stdout: "" };
-			if (args[0] === "show-ref") {
-				const branchName = args[args.length - 1]?.replace("refs/heads/", "") ?? "";
-				return { code: branches.has(branchName) ? 0 : 1, stderr: "", stdout: "" };
-			}
-			if (args[0] === "checkout" && args[1] === "-b") {
-				currentBranch = args[2] ?? currentBranch;
-				branches.add(currentBranch);
-				return { code: 0, stderr: "", stdout: "" };
-			}
-			return { code: 1, stderr: `unexpected git args: ${args.join(" ")}`, stdout: "" };
-		});
+		const harness = createMainBranchHarness(dir);
 
 		await harness.command.handler("", harness.ctx);
 
@@ -608,26 +612,7 @@ describe("autoresearch command startup", () => {
 	it("toggles autoresearch off when bare command is sent while mode is already enabled", async () => {
 		const dir = makeTempDir();
 		tempDirs.push(dir);
-		let currentBranch = "main";
-		const branches = new Set<string>();
-		const harness = createAutoresearchCommandHarness(dir, [], async (command, args) => {
-			if (command !== "git") return { code: 1, stderr: "unexpected command", stdout: "" };
-			if (args[0] === "rev-parse") return { code: 0, stderr: "", stdout: `${dir}\n` };
-			if (args[0] === "branch" && args[1] === "--show-current") {
-				return { code: 0, stderr: "", stdout: `${currentBranch}\n` };
-			}
-			if (args[0] === "status") return { code: 0, stderr: "", stdout: "" };
-			if (args[0] === "show-ref") {
-				const branchName = args[args.length - 1]?.replace("refs/heads/", "") ?? "";
-				return { code: branches.has(branchName) ? 0 : 1, stderr: "", stdout: "" };
-			}
-			if (args[0] === "checkout" && args[1] === "-b") {
-				currentBranch = args[2] ?? currentBranch;
-				branches.add(currentBranch);
-				return { code: 0, stderr: "", stdout: "" };
-			}
-			return { code: 1, stderr: `unexpected git args: ${args.join(" ")}`, stdout: "" };
-		});
+		const harness = createMainBranchHarness(dir);
 
 		await harness.command.handler("", harness.ctx);
 		await harness.command.handler("", harness.ctx);
@@ -642,26 +627,7 @@ describe("autoresearch command startup", () => {
 	it("submits slash args as the raw user message when no autoresearch.md exists", async () => {
 		const dir = makeTempDir();
 		tempDirs.push(dir);
-		let currentBranch = "main";
-		const branches = new Set<string>();
-		const harness = createAutoresearchCommandHarness(dir, [], async (command, args) => {
-			if (command !== "git") return { code: 1, stderr: "unexpected command", stdout: "" };
-			if (args[0] === "rev-parse") return { code: 0, stderr: "", stdout: `${dir}\n` };
-			if (args[0] === "branch" && args[1] === "--show-current") {
-				return { code: 0, stderr: "", stdout: `${currentBranch}\n` };
-			}
-			if (args[0] === "status") return { code: 0, stderr: "", stdout: "" };
-			if (args[0] === "show-ref") {
-				const branchName = args[args.length - 1]?.replace("refs/heads/", "") ?? "";
-				return { code: branches.has(branchName) ? 0 : 1, stderr: "", stdout: "" };
-			}
-			if (args[0] === "checkout" && args[1] === "-b") {
-				currentBranch = args[2] ?? currentBranch;
-				branches.add(currentBranch);
-				return { code: 0, stderr: "", stdout: "" };
-			}
-			return { code: 1, stderr: `unexpected git args: ${args.join(" ")}`, stdout: "" };
-		});
+		const harness = createMainBranchHarness(dir);
 
 		await harness.command.handler("reduce edit benchmark runtime variance", harness.ctx);
 
@@ -731,26 +697,7 @@ describe("autoresearch command startup", () => {
 		const dir = makeTempDir();
 		tempDirs.push(dir);
 		fs.writeFileSync(path.join(dir, "autoresearch.md"), "# Autoresearch\n\nOld notes\n");
-		let currentBranch = "main";
-		const branches = new Set<string>();
-		const harness = createAutoresearchCommandHarness(dir, [], async (command, args) => {
-			if (command !== "git") return { code: 1, stderr: "unexpected command", stdout: "" };
-			if (args[0] === "rev-parse") return { code: 0, stderr: "", stdout: `${dir}\n` };
-			if (args[0] === "branch" && args[1] === "--show-current") {
-				return { code: 0, stderr: "", stdout: `${currentBranch}\n` };
-			}
-			if (args[0] === "status") return { code: 0, stderr: "", stdout: "" };
-			if (args[0] === "show-ref") {
-				const branchName = args[args.length - 1]?.replace("refs/heads/", "") ?? "";
-				return { code: branches.has(branchName) ? 0 : 1, stderr: "", stdout: "" };
-			}
-			if (args[0] === "checkout" && args[1] === "-b") {
-				currentBranch = args[2] ?? currentBranch;
-				branches.add(currentBranch);
-				return { code: 0, stderr: "", stdout: "" };
-			}
-			return { code: 1, stderr: `unexpected git args: ${args.join(" ")}`, stdout: "" };
-		});
+		const harness = createMainBranchHarness(dir);
 
 		await harness.command.handler("focus on memory regressions next", harness.ctx);
 
@@ -791,26 +738,7 @@ describe("autoresearch command startup", () => {
 	it("uses slash arguments as intent without validating benchmark command shape", async () => {
 		const dir = makeTempDir();
 		tempDirs.push(dir);
-		let currentBranch = "main";
-		const branches = new Set<string>();
-		const harness = createAutoresearchCommandHarness(dir, [], async (command, args) => {
-			if (command !== "git") return { code: 1, stderr: "unexpected command", stdout: "" };
-			if (args[0] === "rev-parse") return { code: 0, stderr: "", stdout: `${dir}\n` };
-			if (args[0] === "branch" && args[1] === "--show-current") {
-				return { code: 0, stderr: "", stdout: `${currentBranch}\n` };
-			}
-			if (args[0] === "status") return { code: 0, stderr: "", stdout: "" };
-			if (args[0] === "show-ref") {
-				const branchName = args[args.length - 1]?.replace("refs/heads/", "") ?? "";
-				return { code: branches.has(branchName) ? 0 : 1, stderr: "", stdout: "" };
-			}
-			if (args[0] === "checkout" && args[1] === "-b") {
-				currentBranch = args[2] ?? currentBranch;
-				branches.add(currentBranch);
-				return { code: 0, stderr: "", stdout: "" };
-			}
-			return { code: 1, stderr: `unexpected git args: ${args.join(" ")}`, stdout: "" };
-		});
+		const harness = createMainBranchHarness(dir);
 
 		await harness.command.handler("pnpm test", harness.ctx);
 

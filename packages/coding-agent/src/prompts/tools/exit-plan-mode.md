@@ -19,15 +19,14 @@ Use when:
 Presents plan to user for approval. If approved, plan mode exits with full tool access restored and the plan is renamed to `local://<title>.md`.
 </output>
 
-<example name="ready">
+<examples>
+# Ready
 Plan complete at local://PLAN.md, no open questions.
 → Call `exit_plan_mode` with `{ "title": "WP_MIGRATION_PLAN" }`
-</example>
-
-<example name="unclear">
+# Unclear
 Unsure about auth method (OAuth vs JWT).
 → Use `ask` first to clarify, then call `exit_plan_mode`
-</example>
+</examples>
 
 <avoid>
 - **MUST NOT** call before plan is written to file

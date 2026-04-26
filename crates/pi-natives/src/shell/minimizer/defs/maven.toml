@@ -1,0 +1,27 @@
+[filters.maven]
+description = "Compact Maven build output"
+match_command = "^(mvn|mvnw)$"
+strip_ansi = true
+strip_lines_matching = [
+	"^\\[INFO\\] Downloading ",
+	"^\\[INFO\\] Downloaded ",
+	"^\\[INFO\\] -+",
+	"^\\[INFO\\]\\s*$",
+	"^\\[INFO\\] Building ",
+	"^\\[INFO\\] Scanning for projects",
+	"^\\[INFO\\] --- ",
+	"^Progress ",
+]
+truncate_lines_at = 200
+max_lines = 80
+on_empty = "maven: ok"
+
+[[tests.maven]]
+name = "keeps build failure"
+input = "[INFO] Scanning for projects...\n[INFO] Downloading from central: https://repo.maven.apache.org/foo.jar\n[INFO] -----\n[ERROR] Failed to execute goal\n[INFO] BUILD FAILURE"
+expected = "[ERROR] Failed to execute goal\n[INFO] BUILD FAILURE\n"
+
+[[tests.maven]]
+name = "clean success"
+input = "[INFO] BUILD SUCCESS"
+expected = "[INFO] BUILD SUCCESS\n"

@@ -179,6 +179,38 @@ describe("Tool argument coercion", () => {
 		expect(result.edits).toEqual([{ target: "13#cf", new_content: "..." }]);
 	});
 
+	it("coerces quoted edit arrays before stripping optional null fields", () => {
+		const textSchema = Type.Union([Type.Array(Type.String()), Type.String()]);
+		const tool: Tool = {
+			name: "atom-like-edit",
+			description: "",
+			parameters: Type.Object({
+				path: Type.String(),
+				edits: Type.Array(
+					Type.Object({
+						loc: Type.String(),
+						set: Type.Optional(textSchema),
+						pre: Type.Optional(textSchema),
+						post: Type.Optional(textSchema),
+						sub: Type.Optional(Type.Tuple([Type.String(), Type.String()])),
+					}),
+				),
+			}),
+		};
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-atom-like-edit",
+			name: "atom-like-edit",
+			arguments: {
+				path: "orcid.ts",
+				edits: '[{"loc":"276ka-282vu","pre":null,"set":["line"],"post":null,"sub":null}]',
+			},
+		};
+
+		const result = validateToolArguments(tool, toolCall) as { edits: Array<Record<string, unknown>> };
+		expect(result.edits).toEqual([{ loc: "276ka-282vu", set: ["line"] }]);
+	});
+
 	it("coerces array strings with trailing wrapper braces from malformed nested JSON", () => {
 		const tool: Tool = {
 			name: "t16",
@@ -607,5 +639,47 @@ describe("Tool argument coercion", () => {
 		};
 
 		expect(() => validateToolArguments(tool, toolCall)).toThrow("Validation failed");
+	});
+	it("parses JSON-stringified array containing raw newlines inside string values", () => {
+		const tool: Tool = {
+			name: "todo_write_like",
+			description: "",
+			parameters: Type.Object({
+				phases: Type.Array(
+					Type.Object({
+						name: Type.String(),
+						tasks: Type.Array(
+							Type.Object({
+								content: Type.String(),
+								details: Type.Optional(Type.String()),
+							}),
+						),
+					}),
+				),
+			}),
+		};
+
+		// Stringified phases array where one `details` value contains a raw newline,
+		// which `JSON.parse` rejects unless the control char is escaped.
+		const stringifiedPhases =
+			'[{"name":"Investigation","tasks":[{"content":"Locate code","details":"line one\nline two"}]}]';
+		expect(stringifiedPhases.includes("\n")).toBe(true);
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-rawnl",
+			name: "todo_write_like",
+			arguments: { phases: stringifiedPhases },
+		};
+
+		const result = validateToolArguments(tool, toolCall) as {
+			phases: Array<{ name: string; tasks: Array<{ content: string; details?: string }> }>;
+		};
+		expect(result.phases).toEqual([
+			{
+				name: "Investigation",
+				tasks: [{ content: "Locate code", details: "line one\nline two" }],
+			},
+		]);
 	});
 });

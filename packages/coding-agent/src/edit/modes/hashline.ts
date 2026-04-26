@@ -2,18 +2,19 @@
  * Hashline edit mode — a line-addressable edit format using text hashes.
  *
  * Each line in a file is identified by its 1-indexed line number and a short
- * hexadecimal hash derived from the normalized line text (xxHash32, truncated to 2
- * hex chars).
- * The combined `LINE#ID` reference acts as both an address and a staleness check:
+ * BPE-bigram hash derived from the normalized line text (xxHash32 mod 647,
+ * mapped through HASHLINE_BIGRAMS).
+ * The combined `LINE+ID` reference acts as both an address and a staleness check:
  * if the file has changed since the caller last read it, hash mismatches are caught
  * before any mutation occurs.
  *
- * Displayed format: `LINENUM#HASH:TEXT`
- * Reference format: `"LINENUM#HASH"` (e.g. `"5#aa"`)
+ * Displayed format: `LINE+ID|TEXT`
+ * Reference format: `"LINE+ID"` (e.g. `"1ab"`)
+ *
+ * In tool JSON, each edit's `content` is `string[]` (one string per logical line) or
+ * `null` to delete the targeted range.
  */
 
-import * as fs from "node:fs/promises";
-import * as nodePath from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
@@ -21,16 +22,13 @@ import type { BunFile } from "bun";
 import type { WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
 import type { ToolSession } from "../../tools";
 import { assertEditableFileContent } from "../../tools/auto-generated-guard";
-import {
-	invalidateFsScanAfterDelete,
-	invalidateFsScanAfterRename,
-	invalidateFsScanAfterWrite,
-} from "../../tools/fs-cache-invalidation";
+import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd } from "../../tools/path-utils";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
+import { formatCodeFrameLine } from "../../tools/render-utils";
 import { generateDiffString } from "../diff";
-import { computeLineHash, formatLineHash } from "../line-hash";
+import { computeLineHash, formatHashLine, HASHLINE_BIGRAM_RE_SRC, HASHLINE_CONTENT_SEPARATOR } from "../line-hash";
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "../normalize";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
 
@@ -40,7 +38,7 @@ export interface HashMismatch {
 	actual: string;
 }
 
-export type Anchor = { line: number; hash: string };
+export type Anchor = { line: number; hash: string; contentHint?: string };
 export type HashlineEdit =
 	| { op: "replace_line"; pos: Anchor; lines: string[] }
 	| { op: "replace_range"; pos: Anchor; end: Anchor; lines: string[] }
@@ -49,15 +47,26 @@ export type HashlineEdit =
 	| { op: "append_file"; lines: string[] }
 	| { op: "prepend_file"; lines: string[] };
 
-const HASHLINE_PREFIX_RE = /^\s*(?:>>>|>>)?\s*(?:\+?\s*(?:\d+\s*#\s*|#\s*)|\+)\s*[ZPMQVRWSNKTXJBYH]{2}:/;
-const HASHLINE_PREFIX_PLUS_RE = /^\s*(?:>>>|>>)?\s*\+\s*(?:\d+\s*#\s*|#\s*)?[ZPMQVRWSNKTXJBYH]{2}:/;
+// Tight prefix matchers for the new format `LINE+ID|content`. The pipe is the
+// canonical separator; legacy reads using `:` are tolerated for back-compat.
+// Line-number digits are mandatory.
+// Accept both `|` (canonical) and `:` (legacy) so re-reads of older outputs still parse.
+const HASHLINE_CONTENT_SEPARATOR_RE = "[:|]";
+const HASHLINE_PREFIX_RE = new RegExp(
+	`^\\s*(?:>>>|>>)?\\s*(?:\\+\\s*)?\\d+${HASHLINE_BIGRAM_RE_SRC}${HASHLINE_CONTENT_SEPARATOR_RE}`,
+);
+const HASHLINE_PREFIX_PLUS_RE = new RegExp(
+	`^\\s*(?:>>>|>>)?\\s*\\+\\s*\\d+${HASHLINE_BIGRAM_RE_SRC}${HASHLINE_CONTENT_SEPARATOR_RE}`,
+);
 const DIFF_PLUS_RE = /^[+](?![+])/;
+const READ_TRUNCATION_NOTICE_RE = /^\[(?:Showing lines \d+-\d+ of \d+|\d+ more lines? in (?:file|\S+))\b.*\bsel=L?\d+/;
 
 type LinePrefixStats = {
 	nonEmpty: number;
 	hashPrefixCount: number;
 	diffPlusHashPrefixCount: number;
 	diffPlusCount: number;
+	truncationNoticeCount: number;
 };
 
 function collectLinePrefixStats(lines: string[]): LinePrefixStats {
@@ -66,10 +75,15 @@ function collectLinePrefixStats(lines: string[]): LinePrefixStats {
 		hashPrefixCount: 0,
 		diffPlusHashPrefixCount: 0,
 		diffPlusCount: 0,
+		truncationNoticeCount: 0,
 	};
 
 	for (const line of lines) {
 		if (line.length === 0) continue;
+		if (READ_TRUNCATION_NOTICE_RE.test(line)) {
+			stats.truncationNoticeCount++;
+			continue;
+		}
 		stats.nonEmpty++;
 		if (HASHLINE_PREFIX_RE.test(line)) stats.hashPrefixCount++;
 		if (HASHLINE_PREFIX_PLUS_RE.test(line)) stats.diffPlusHashPrefixCount++;
@@ -77,6 +91,20 @@ function collectLinePrefixStats(lines: string[]): LinePrefixStats {
 	}
 
 	return stats;
+}
+
+function stripLeadingHashlinePrefixes(line: string): string {
+	let result = line;
+	let prev: string;
+	do {
+		prev = result;
+		result = result.replace(HASHLINE_PREFIX_RE, "");
+	} while (result !== prev);
+	return result;
+}
+
+function _filterTruncationNotices(lines: string[]): string[] {
+	return lines.filter(line => !READ_TRUNCATION_NOTICE_RE.test(line));
 }
 
 export function stripNewLinePrefixes(lines: string[]): string[] {
@@ -88,27 +116,27 @@ export function stripNewLinePrefixes(lines: string[]): string[] {
 		!stripHash && diffPlusHashPrefixCount === 0 && diffPlusCount > 0 && diffPlusCount >= nonEmpty * 0.5;
 	if (!stripHash && !stripPlus && diffPlusHashPrefixCount === 0) return lines;
 
-	return lines.map(line => {
-		if (stripHash) return line.replace(HASHLINE_PREFIX_RE, "");
-		if (stripPlus) return line.replace(DIFF_PLUS_RE, "");
-		if (diffPlusHashPrefixCount > 0 && HASHLINE_PREFIX_PLUS_RE.test(line)) {
-			return line.replace(HASHLINE_PREFIX_RE, "");
-		}
-		return line;
-	});
+	const mapped = lines
+		.filter(line => !READ_TRUNCATION_NOTICE_RE.test(line))
+		.map(line => {
+			if (stripHash) return stripLeadingHashlinePrefixes(line);
+			if (stripPlus) return line.replace(DIFF_PLUS_RE, "");
+			if (diffPlusHashPrefixCount > 0 && HASHLINE_PREFIX_PLUS_RE.test(line)) {
+				return line.replace(HASHLINE_PREFIX_RE, "");
+			}
+			return line;
+		});
+	return mapped;
 }
 
 export function stripHashlinePrefixes(lines: string[]): string[] {
 	const { nonEmpty, hashPrefixCount } = collectLinePrefixStats(lines);
-	if (nonEmpty === 0 || hashPrefixCount !== nonEmpty) return lines;
-	return lines.map(line => line.replace(HASHLINE_PREFIX_RE, ""));
+	if (nonEmpty === 0) return lines;
+	if (hashPrefixCount !== nonEmpty) return lines;
+	return lines.filter(line => !READ_TRUNCATION_NOTICE_RE.test(line)).map(line => stripLeadingHashlinePrefixes(line));
 }
 
-const linesSchema = Type.Union([
-	Type.Array(Type.String(), { description: "content (preferred format)" }),
-	Type.String(),
-	Type.Null(),
-]);
+const linesSchema = Type.Union([Type.Array(Type.String()), Type.Null()]);
 
 const locSchema = Type.Union(
 	[
@@ -128,17 +156,16 @@ const locSchema = Type.Union(
 
 export const hashlineEditSchema = Type.Object(
 	{
-		path: Type.String({ description: "File path" }),
+		path: Type.Optional(Type.String({ description: "File path (omit to use top-level `path`)" })),
 		loc: Type.Optional(locSchema),
 		content: Type.Optional(linesSchema),
-		delete: Type.Optional(Type.Boolean({ description: "Delete the file" })),
-		move: Type.Optional(Type.String({ description: "Move/rename the file to this path" })),
 	},
 	{ additionalProperties: false },
 );
 
 export const hashlineEditParamsSchema = Type.Object(
 	{
+		path: Type.Optional(Type.String({ description: "Default file path used when an edit omits its own `path`" })),
 		edits: Type.Array(hashlineEditSchema, { description: "edits" }),
 	},
 	{ additionalProperties: false },
@@ -157,6 +184,11 @@ export interface ExecuteHashlineSingleOptions {
 	beginDeferredDiagnosticsForPath: (path: string) => WritethroughDeferredHandle;
 }
 
+/**
+ * Normalize line payloads for apply: strip read/grep line prefixes. The tool schema
+ * supplies `string[]` (one element per line). `null` / `undefined` yield `[]`.
+ * A single multiline `string` is still split on `\n` for the same normalization path.
+ */
 export function hashlineParseText(edit: string[] | string | null | undefined): string[] {
 	if (edit == null) return [];
 	if (typeof edit === "string") {
@@ -164,15 +196,6 @@ export function hashlineParseText(edit: string[] | string | null | undefined): s
 		edit = normalizedEdit.replaceAll("\r", "").split("\n");
 	}
 	return stripNewLinePrefixes(edit);
-}
-
-export function isHashlineParams(params: unknown): params is HashlineParams {
-	if (typeof params !== "object" || params === null || !("edits" in params) || !Array.isArray(params.edits))
-		return false;
-	if (params.edits.length === 0) return true;
-	const first = params.edits[0];
-	if (typeof first !== "object" || first === null) return false;
-	return "loc" in first || "delete" in first || "move" in first;
 }
 
 function resolveEditAnchors(edits: HashlineToolEdit[]): HashlineEdit[] {
@@ -199,6 +222,15 @@ function resolveHashlineEditsForDiff(edits: HashlineEditInput[]): HashlineEdit[]
 	});
 }
 
+export function formatFullAnchorRequirement(raw?: string): string {
+	const suffix = typeof raw === "string" ? raw.trim() : "";
+	const hashOnlyHint = /^[A-Za-z]{2}$/.test(suffix)
+		? ` It looks like you supplied only the 2-letter suffix (${JSON.stringify(suffix)}). Copy the full anchor exactly as shown (for example, "160${suffix}").`
+		: "";
+	const received = raw === undefined ? "" : ` Received ${JSON.stringify(raw)}.`;
+	return `the full anchor exactly as shown by read/grep (line number + 2-letter suffix, for example "160sr")${received}${hashOnlyHint}`;
+}
+
 function tryParseTag(raw: string): Anchor | undefined {
 	try {
 		return parseTag(raw);
@@ -209,14 +241,24 @@ function tryParseTag(raw: string): Anchor | undefined {
 
 function requireParsedAnchor(raw: string, op: "append" | "prepend"): Anchor {
 	const anchor = tryParseTag(raw);
-	if (!anchor) throw new Error(`${op} requires a valid anchor.`);
+	if (!anchor) throw new Error(`${op} requires ${formatFullAnchorRequirement(raw)}.`);
 	return anchor;
 }
 
 function requireParsedRange(range: { pos: string; end: string }): { pos: Anchor; end: Anchor } {
 	const pos = tryParseTag(range.pos);
 	const end = tryParseTag(range.end);
-	if (!pos || !end) throw new Error("range requires valid pos and end anchors.");
+	if (!pos || !end) {
+		const invalid = [
+			!pos ? `pos=${JSON.stringify(range.pos)}` : null,
+			!end ? `end=${JSON.stringify(range.end)}` : null,
+		]
+			.filter(Boolean)
+			.join(", ");
+		throw new Error(
+			`range requires valid pos and end anchors. Use ${formatFullAnchorRequirement()}. Invalid: ${invalid}.`,
+		);
+	}
 	return { pos, end };
 }
 
@@ -271,8 +313,6 @@ interface ResolvedHashlineStreamOptions {
 	maxChunkBytes: number;
 }
 
-type HashlineLineFormatter = (lineNumber: number, line: string) => string;
-
 interface HashlineChunkEmitter {
 	pushLine: (line: string) => string[];
 	flush: () => string | undefined;
@@ -288,7 +328,7 @@ function resolveHashlineStreamOptions(options: HashlineStreamOptions): ResolvedH
 
 function createHashlineChunkEmitter(
 	options: ResolvedHashlineStreamOptions,
-	formatLine: HashlineLineFormatter,
+	formatLine = formatHashLine,
 ): HashlineChunkEmitter {
 	let lineNumber = options.startLine;
 	let outLines: string[] = [];
@@ -332,10 +372,6 @@ function createHashlineChunkEmitter(
 	return { pushLine, flush };
 }
 
-function formatHashlineStreamLine(lineNumber: number, line: string): string {
-	return `${formatLineHash(lineNumber, line)}:${line}`;
-}
-
 function isReadableStream(value: unknown): value is ReadableStream<Uint8Array> {
 	return (
 		typeof value === "object" &&
@@ -375,7 +411,7 @@ export async function* streamHashLinesFromUtf8(
 	let pending = "";
 	let sawAnyText = false;
 	let endedWithNewline = false;
-	const emitter = createHashlineChunkEmitter(resolvedOptions, formatHashlineStreamLine);
+	const emitter = createHashlineChunkEmitter(resolvedOptions);
 
 	const consumeText = (text: string): string[] => {
 		if (text.length === 0) return [];
@@ -428,7 +464,7 @@ export async function* streamHashLinesFromLines(
 	options: HashlineStreamOptions = {},
 ): AsyncGenerator<string> {
 	const resolvedOptions = resolveHashlineStreamOptions(options);
-	const emitter = createHashlineChunkEmitter(resolvedOptions, formatHashlineStreamLine);
+	const emitter = createHashlineChunkEmitter(resolvedOptions);
 	let sawAnyLine = false;
 
 	const asyncIterator = (lines as AsyncIterable<string>)[Symbol.asyncIterator];
@@ -459,20 +495,18 @@ export async function* streamHashLinesFromLines(
 }
 
 /**
- * Parse a line reference string like `"5#abcd"` into structured form.
+ * Parse a line reference string like `"5th"` into structured form.
  *
- * @throws Error if the format is invalid (not `NUMBER#HEXHASH`)
+ * @throws Error if the format is invalid (not `NUMBERBIGRAM`)
  */
 export function parseTag(ref: string): { line: number; hash: string } {
-	// This regex captures:
-	//  1. optional leading ">+" and whitespace
+	// Captures:
+	//  1. optional leading ">+-" markers and whitespace
 	//  2. line number (1+ digits)
-	//  3. "#" with optional surrounding spaces
-	//  4. hash (2 hex chars)
-	//  5. optional trailing display suffix (":..." or "  ...")
-	const match = ref.match(/^\s*[>+-]*\s*(\d+)\s*#\s*([ZPMQVRWSNKTXJBYH]{2})/);
+	//  3. hash (one BPE bigram from HASHLINE_BIGRAMS) directly adjacent (no separator)
+	const match = ref.match(new RegExp(`^\\s*[>+-]*\\s*(\\d+)(${HASHLINE_BIGRAM_RE_SRC})`));
 	if (!match) {
-		throw new Error(`Invalid line reference "${ref}". Expected format "LINE#ID" (e.g. "5#aa").`);
+		throw new Error(`Invalid line reference. Expected ${formatFullAnchorRequirement(ref)}.`);
 	}
 	const line = Number.parseInt(match[1], 10);
 	if (line < 1) {
@@ -491,8 +525,8 @@ const MISMATCH_CONTEXT = 2;
 /**
  * Error thrown when one or more hashline references have stale hashes.
  *
- * Displays grep-style output with `>>>` markers on mismatched lines,
- * showing the correct `LINE#ID` so the caller can fix all refs at once.
+ * Displays grep-style output with `*` marker on mismatched lines and a leading space on
+ * surrounding context, showing the correct `LINE+ID` so the caller can fix all refs at once.
  */
 export class HashlineMismatchError extends Error {
 	readonly remaps: ReadonlyMap<string, string>;
@@ -505,9 +539,48 @@ export class HashlineMismatchError extends Error {
 		const remaps = new Map<string, string>();
 		for (const m of mismatches) {
 			const actual = computeLineHash(m.line, fileLines[m.line - 1]);
-			remaps.set(`${m.line}#${m.expected}`, `${m.line}#${actual}`);
+			remaps.set(`${m.line}${m.expected}`, `${m.line}${actual}`);
 		}
 		this.remaps = remaps;
+	}
+
+	/**
+	 * User-visible variant of {@link formatMessage} — omits the bigram fingerprint
+	 * and uses a `│` gutter so TUI rendering is clean. The model still receives
+	 * the full `LINE+ID|content` form via {@link Error.message}.
+	 */
+	get displayMessage(): string {
+		return HashlineMismatchError.formatDisplayMessage(this.mismatches, this.fileLines);
+	}
+
+	static formatDisplayMessage(mismatches: HashMismatch[], fileLines: string[]): string {
+		const mismatchSet = new Set<number>();
+		for (const m of mismatches) mismatchSet.add(m.line);
+
+		const displayLines = new Set<number>();
+		for (const m of mismatches) {
+			const lo = Math.max(1, m.line - MISMATCH_CONTEXT);
+			const hi = Math.min(fileLines.length, m.line + MISMATCH_CONTEXT);
+			for (let i = lo; i <= hi; i++) displayLines.add(i);
+		}
+
+		const sorted = [...displayLines].sort((a, b) => a - b);
+		const out: string[] = [
+			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read. The edit was NOT applied.`,
+			"Realign your edit to the file state shown below. Copy the full anchors exactly as shown (for example `160sr`, not just `sr`).",
+			"",
+		];
+
+		const lineNumberWidth = sorted.reduce((width, lineNum) => Math.max(width, String(lineNum).length), 0);
+		let prevLine = -1;
+		for (const lineNum of sorted) {
+			if (prevLine !== -1 && lineNum > prevLine + 1) out.push("...");
+			prevLine = lineNum;
+			const text = fileLines[lineNum - 1];
+			const marker = mismatchSet.has(lineNum) ? "*" : " ";
+			out.push(formatCodeFrameLine(marker, lineNum, text ?? "", lineNumberWidth));
+		}
+		return out.join("\n");
 	}
 
 	static formatMessage(mismatches: HashMismatch[], fileLines: string[]): string {
@@ -530,7 +603,8 @@ export class HashlineMismatchError extends Error {
 		const lines: string[] = [];
 
 		lines.push(
-			`${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since last read. Use the updated LINE#ID references shown below (>>> marks changed lines).`,
+			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read. The edit was NOT applied.`,
+			"Use the updated anchors shown below (`*` marks changed lines, leading space marks context) and retry the edit.",
 		);
 		lines.push("");
 
@@ -538,18 +612,18 @@ export class HashlineMismatchError extends Error {
 		for (const lineNum of sorted) {
 			// Gap separator between non-contiguous regions
 			if (prevLine !== -1 && lineNum > prevLine + 1) {
-				lines.push("    ...");
+				lines.push("...");
 			}
 			prevLine = lineNum;
 
 			const text = fileLines[lineNum - 1];
 			const hash = computeLineHash(lineNum, text);
-			const prefix = `${lineNum}#${hash}`;
+			const prefix = `${lineNum}${hash}`;
 
 			if (mismatchSet.has(lineNum)) {
-				lines.push(`>>> ${prefix}:${text}`);
+				lines.push(`*${prefix}|${text}`);
 			} else {
-				lines.push(`    ${prefix}:${text}`);
+				lines.push(` ${prefix}|${text}`);
 			}
 		}
 		return lines.join("\n");
@@ -574,53 +648,37 @@ export function validateLineRef(ref: { line: number; hash: string }, fileLines: 
 	}
 }
 
-function isEscapedTabAutocorrectEnabled(): boolean {
-	switch (Bun.env.PI_HASHLINE_AUTOCORRECT_ESCAPED_TABS) {
-		case "0":
-			return false;
-		case "1":
-			return true;
-		default:
-			return true;
-	}
-}
+/**
+ * Default search window for {@link tryRebaseAnchor} (lines on each side of the requested anchor).
+ */
+export const ANCHOR_REBASE_WINDOW = 2;
 
-function maybeAutocorrectEscapedTabIndentation(edits: HashlineEdit[], warnings: string[]): void {
-	if (!isEscapedTabAutocorrectEnabled()) return;
-	for (const edit of edits) {
-		if (edit.lines.length === 0) continue;
-		const hasEscapedTabs = edit.lines.some(line => line.includes("\\t"));
-		if (!hasEscapedTabs) continue;
-		const hasRealTabs = edit.lines.some(line => line.includes("\t"));
-		if (hasRealTabs) continue;
-		let correctedCount = 0;
-		const corrected = edit.lines.map(line =>
-			line.replace(/^((?:\\t)+)/, escaped => {
-				correctedCount += escaped.length / 2;
-				return "\t".repeat(escaped.length / 2);
-			}),
-		);
-		if (correctedCount === 0) continue;
-		edit.lines = corrected;
-		warnings.push(
-			`Auto-corrected escaped tab indentation in edit: converted leading \\t sequence(s) to real tab characters`,
-		);
+/**
+ * Look for the requested hash within ±`window` lines of `anchor.line`.
+ *
+ * Returns the new line number when exactly one nearby line matches the hash;
+ * otherwise `null` (genuine mismatch or ambiguous). The caller is expected to
+ * mutate `anchor.line` in place and surface a warning so the model knows the
+ * edit was retargeted.
+ *
+ * The exact-position match (anchor.line itself) is intentionally skipped: the
+ * caller has already determined the requested line's hash does not match.
+ */
+export function tryRebaseAnchor(
+	anchor: { line: number; hash: string },
+	fileLines: string[],
+	window: number = ANCHOR_REBASE_WINDOW,
+): number | null {
+	const lo = Math.max(1, anchor.line - window);
+	const hi = Math.min(fileLines.length, anchor.line + window);
+	let found: number | null = null;
+	for (let line = lo; line <= hi; line++) {
+		if (line === anchor.line) continue;
+		if (computeLineHash(line, fileLines[line - 1]) !== anchor.hash) continue;
+		if (found !== null) return null; // ambiguous: more than one match in window
+		found = line;
 	}
-}
-
-function maybeWarnSuspiciousUnicodeEscapePlaceholder(edits: HashlineEdit[], warnings: string[]): void {
-	for (const edit of edits) {
-		if (edit.lines.length === 0) continue;
-		if (!edit.lines.some(line => /\\uDDDD/i.test(line))) continue;
-		warnings.push(
-			`Detected literal \\uDDDD in edit content; no autocorrection applied. Verify whether this should be a real Unicode escape or plain text.`,
-		);
-	}
-}
-
-function runHashlinePreflightSanitizers(edits: HashlineEdit[], warnings: string[]): void {
-	maybeAutocorrectEscapedTabIndentation(edits, warnings);
-	maybeWarnSuspiciousUnicodeEscapePlaceholder(edits, warnings);
+	return found;
 }
 
 function ensureHashlineEditHasContent(edit: HashlineEdit): void {
@@ -650,7 +708,7 @@ function collectBoundaryDuplicationWarning(edit: HashlineEdit, originalFileLines
 	const trimmedNext = nextSurvivingLine.trim();
 	const trimmedLast = lastInsertedLine.trim();
 	if (trimmedLast.length > 0 && trimmedLast === trimmedNext) {
-		const tag = formatLineHash(endLine + 1, nextSurvivingLine);
+		const tag = formatHashLine(endLine + 1, nextSurvivingLine);
 		warnings.push(
 			`Possible boundary duplication: your last replacement line \`${trimmedLast}\` is identical to the next surviving line ${tag}. ` +
 				`If you meant to replace the entire block, set \`end\` to ${tag} instead.`,
@@ -729,7 +787,7 @@ function applyHashlineEditToLines(
 			if (origLines.length === newLines.length && origLines.every((line, i) => line === newLines[i])) {
 				noopEdits.push({
 					editIndex,
-					loc: `${edit.pos.line}#${edit.pos.hash}`,
+					loc: `${edit.pos.line}${edit.pos.hash}`,
 					current: origLines.join("\n"),
 				});
 				break;
@@ -740,6 +798,15 @@ function applyHashlineEditToLines(
 		}
 		case "replace_range": {
 			const count = edit.end.line - edit.pos.line + 1;
+			const origRange = originalFileLines.slice(edit.pos.line - 1, edit.pos.line - 1 + count);
+			if (count === edit.lines.length && origRange.every((line, i) => line === edit.lines[i])) {
+				noopEdits.push({
+					editIndex,
+					loc: `${edit.pos.line}${edit.pos.hash}-${edit.end.line}${edit.end.hash}`,
+					current: origRange.join("\n"),
+				});
+				break;
+			}
 			fileLines.splice(edit.pos.line - 1, count, ...edit.lines);
 			trackFirstChanged(edit.pos.line);
 			break;
@@ -749,7 +816,7 @@ function applyHashlineEditToLines(
 			if (inserted.length === 0) {
 				noopEdits.push({
 					editIndex,
-					loc: `${edit.pos.line}#${edit.pos.hash}`,
+					loc: `${edit.pos.line}${edit.pos.hash}`,
 					current: originalFileLines[edit.pos.line - 1],
 				});
 				break;
@@ -763,7 +830,7 @@ function applyHashlineEditToLines(
 			if (inserted.length === 0) {
 				noopEdits.push({
 					editIndex,
-					loc: `${edit.pos.line}#${edit.pos.hash}`,
+					loc: `${edit.pos.line}${edit.pos.hash}`,
 					current: originalFileLines[edit.pos.line - 1],
 				});
 				break;
@@ -824,7 +891,7 @@ function buildHashlineEditResult(params: {
 	};
 }
 
-function validateHashlineEditRefs(edits: HashlineEdit[], fileLines: string[]): HashMismatch[] {
+function validateHashlineEditRefs(edits: HashlineEdit[], fileLines: string[], warnings: string[]): HashMismatch[] {
 	const mismatches: HashMismatch[] = [];
 	for (const edit of edits) {
 		switch (edit.op) {
@@ -857,6 +924,15 @@ function validateHashlineEditRefs(edits: HashlineEdit[], fileLines: string[]): H
 		}
 		const actualHash = computeLineHash(ref.line, fileLines[ref.line - 1]);
 		if (actualHash === ref.hash) {
+			return;
+		}
+		const rebased = tryRebaseAnchor(ref, fileLines);
+		if (rebased !== null) {
+			const original = `${ref.line}${ref.hash}`;
+			ref.line = rebased;
+			warnings.push(
+				`Auto-rebased anchor ${original} → ${rebased}${ref.hash} (line shifted within ±${ANCHOR_REBASE_WINDOW}; hash matched).`,
+			);
 			return;
 		}
 		mismatches.push({ line: ref.line, expected: ref.hash, actual: actualHash });
@@ -897,11 +973,10 @@ export function applyHashlineEdits(
 	const noopEdits: Array<{ editIndex: number; loc: string; current: string }> = [];
 	const warnings: string[] = [];
 
-	const mismatches = validateHashlineEditRefs(edits, fileLines);
+	const mismatches = validateHashlineEditRefs(edits, fileLines, warnings);
 	if (mismatches.length > 0) {
 		throw new HashlineMismatchError(mismatches, fileLines);
 	}
-	runHashlinePreflightSanitizers(edits, warnings);
 	for (const edit of edits) {
 		collectBoundaryDuplicationWarning(edit, originalFileLines, warnings);
 	}
@@ -935,7 +1010,6 @@ export interface CompactHashlineDiffPreview {
 
 export interface CompactHashlineDiffOptions {
 	maxUnchangedRun?: number;
-	maxAdditionRun?: number;
 	maxDeletionRun?: number;
 	maxOutputLines?: number;
 }
@@ -997,14 +1071,12 @@ function syncNewLineCounters(counters: CompactPreviewCounters, lineNumber: numbe
 	counters.newLine = lineNumber;
 }
 
-function formatCompactHashlineLine(kind: " " | "+", lineNumber: number, width: number, content: string): string {
-	const padded = String(lineNumber).padStart(width, " ");
-	return `${kind}${padded}#${computeLineHash(lineNumber, content)}|${content}`;
+function formatCompactHashlineLine(kind: " " | "+", lineNumber: number, content: string): string {
+	return `${kind}${lineNumber}${computeLineHash(lineNumber, content)}${HASHLINE_CONTENT_SEPARATOR}${content}`;
 }
 
-function formatCompactRemovedLine(lineNumber: number, width: number, content: string): string {
-	const padded = String(lineNumber).padStart(width, " ");
-	return `-${padded}${HASHLINE_PREVIEW_PLACEHOLDER}|${content}`;
+function formatCompactRemovedLine(lineNumber: number, content: string): string {
+	return `-${lineNumber}${HASHLINE_PREVIEW_PLACEHOLDER}${HASHLINE_CONTENT_SEPARATOR}${content}`;
 }
 
 function formatCompactPreviewLine(line: string, counters: CompactPreviewCounters): { kind: DiffRunKind; text: string } {
@@ -1025,13 +1097,13 @@ function formatCompactPreviewLine(line: string, counters: CompactPreviewCounters
 			syncNewLineCounters(counters, parsed.lineNumber);
 			const newLine = counters.newLine;
 			if (newLine === undefined) return { kind: "+", text: parsed.raw };
-			const text = formatCompactHashlineLine("+", newLine, parsed.lineWidth, parsed.content);
+			const text = formatCompactHashlineLine("+", newLine, parsed.content);
 			counters.newLine = newLine + 1;
 			return { kind: "+", text };
 		}
 		case "-": {
 			syncOldLineCounters(counters, parsed.lineNumber);
-			const text = formatCompactRemovedLine(parsed.lineNumber, parsed.lineWidth, parsed.content);
+			const text = formatCompactRemovedLine(parsed.lineNumber, parsed.content);
 			counters.oldLine = parsed.lineNumber + 1;
 			return { kind: "-", text };
 		}
@@ -1039,7 +1111,7 @@ function formatCompactPreviewLine(line: string, counters: CompactPreviewCounters
 			syncOldLineCounters(counters, parsed.lineNumber);
 			const newLine = counters.newLine;
 			if (newLine === undefined) return { kind: " ", text: parsed.raw };
-			const text = formatCompactHashlineLine(" ", newLine, parsed.lineWidth, parsed.content);
+			const text = formatCompactHashlineLine(" ", newLine, parsed.content);
 			counters.oldLine = parsed.lineNumber + 1;
 			counters.newLine = newLine + 1;
 			return { kind: " ", text };
@@ -1093,7 +1165,6 @@ export function buildCompactHashlineDiffPreview(
 	options: CompactHashlineDiffOptions = {},
 ): CompactHashlineDiffPreview {
 	const maxUnchangedRun = options.maxUnchangedRun ?? 2;
-	const maxAdditionRun = options.maxAdditionRun ?? 2;
 	const maxDeletionRun = options.maxDeletionRun ?? 2;
 	const maxOutputLines = options.maxOutputLines ?? 16;
 
@@ -1112,7 +1183,7 @@ export function buildCompactHashlineDiffPreview(
 				break;
 			case "+":
 				addedLines += run.lines.length;
-				out.push(...collapseFromStart(run.lines, maxAdditionRun, "added"));
+				out.push(...run.lines);
 				break;
 			case "-":
 				removedLines += run.lines.length;
@@ -1145,7 +1216,7 @@ export function buildCompactHashlineDiffPreview(
 }
 
 export async function computeHashlineDiff(
-	input: { path: string; edits: HashlineEditInput[]; move?: string },
+	input: { path: string; edits: HashlineEditInput[] },
 	cwd: string,
 ): Promise<
 	| {
@@ -1156,28 +1227,19 @@ export async function computeHashlineDiff(
 			error: string;
 	  }
 > {
-	const { path, edits, move } = input;
-	const absolutePath = resolveToCwd(path, cwd);
-	const movePath = move ? resolveToCwd(move, cwd) : undefined;
-	const isMoveOnly = Boolean(movePath) && movePath !== absolutePath && edits.length === 0;
+	const { path, edits } = input;
 
 	try {
+		const absolutePath = resolveToCwd(path, cwd);
 		const resolvedEdits = resolveHashlineEditsForDiff(edits);
 		const file = Bun.file(absolutePath);
-
-		if (movePath === absolutePath) {
-			return { error: "move path is the same as source path" };
-		}
-		if (isMoveOnly) {
-			return { diff: "", firstChangedLine: undefined };
-		}
 
 		const rawContent = await readHashlineFileText(file, path);
 
 		const { text: content } = stripBom(rawContent);
 		const normalizedContent = normalizeToLF(content);
 		const result = applyHashlineEdits(normalizedContent, resolvedEdits);
-		if (normalizedContent === result.lines && !move) {
+		if (normalizedContent === result.lines) {
 			return { error: `No changes would be made to ${path}. The edits produce identical content.` };
 		}
 
@@ -1204,63 +1266,18 @@ export async function executeHashlineSingle(
 ): Promise<AgentToolResult<EditToolDetails, typeof hashlineEditParamsSchema>> {
 	const { session, path, edits, signal, batchRequest, writethrough, beginDeferredDiagnosticsForPath } = options;
 
-	// Extract file-level ops from edits
-	const deleteFile = edits.some(e => e.delete);
-	const move = edits.find(e => e.move)?.move;
-	// Filter to content edits only (those with loc)
 	const contentEdits = edits.filter(e => e.loc != null);
 
-	enforcePlanModeWrite(session, path, { op: deleteFile ? "delete" : "update", move });
+	enforcePlanModeWrite(session, path, { op: "update" });
 
 	if (path.endsWith(".ipynb") && contentEdits.length > 0) {
 		throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
 	}
 
 	const absolutePath = resolvePlanPath(session, path);
-	const resolvedMove = move ? resolvePlanPath(session, move) : undefined;
-	if (resolvedMove === absolutePath) {
-		throw new Error("move path is the same as source path");
-	}
 
 	const sourceFile = Bun.file(absolutePath);
 	const sourceExists = await sourceFile.exists();
-	const isMoveOnly = Boolean(resolvedMove) && contentEdits.length === 0;
-
-	if (deleteFile) {
-		if (sourceExists) {
-			await sourceFile.unlink();
-		}
-		invalidateFsScanAfterDelete(absolutePath);
-		return {
-			content: [{ type: "text", text: `Deleted ${path}` }],
-			details: {
-				diff: "",
-				op: "delete",
-				meta: outputMeta().get(),
-			},
-		};
-	}
-
-	if (isMoveOnly && resolvedMove) {
-		if (!sourceExists) {
-			throw new Error(`File not found: ${path}`);
-		}
-		const parentDir = nodePath.dirname(resolvedMove);
-		if (parentDir && parentDir !== ".") {
-			await fs.mkdir(parentDir, { recursive: true });
-		}
-		await fs.rename(absolutePath, resolvedMove);
-		invalidateFsScanAfterRename(absolutePath, resolvedMove);
-		return {
-			content: [{ type: "text", text: `Moved ${path} to ${move}` }],
-			details: {
-				diff: "",
-				op: "update",
-				move,
-				meta: outputMeta().get(),
-			},
-		};
-	}
 
 	if (!sourceExists) {
 		const lines: string[] = [];
@@ -1304,7 +1321,7 @@ export async function executeHashlineSingle(
 		warnings: anchorResult.warnings,
 		noopEdits: anchorResult.noopEdits,
 	};
-	if (originalNormalized === result.text && !move) {
+	if (originalNormalized === result.text) {
 		let diagnostic = `No changes made to ${path}. The edits produced identical content.`;
 		if (result.noopEdits && result.noopEdits.length > 0) {
 			const details = result.noopEdits
@@ -1320,28 +1337,32 @@ export async function executeHashlineSingle(
 					diagnostic += `\nThe file currently contains these lines:\n${preview}\nYour edits were normalized back to the original content (whitespace-only differences are preserved as-is). Ensure your replacement changes actual code, not just formatting.`;
 				}
 			}
+			if (result.noopEdits.some(e => e.loc.includes("-"))) {
+				diagnostic +=
+					"\nHint: a `range` loc replaces the entire span inclusive of both endpoints. " +
+					"If your replacement repeats the existing content, narrow the range or change the replacement.";
+			}
 		}
 		throw new Error(diagnostic);
 	}
 
-	const writePath = resolvedMove ?? absolutePath;
 	const finalContent = bom + restoreLineEndings(result.text, originalEnding);
-	const diagnostics = await writethrough(writePath, finalContent, signal, Bun.file(writePath), batchRequest, dst =>
-		dst === writePath ? beginDeferredDiagnosticsForPath(writePath) : undefined,
+	const diagnostics = await writethrough(
+		absolutePath,
+		finalContent,
+		signal,
+		Bun.file(absolutePath),
+		batchRequest,
+		dst => (dst === absolutePath ? beginDeferredDiagnosticsForPath(absolutePath) : undefined),
 	);
-	if (resolvedMove && resolvedMove !== absolutePath) {
-		await sourceFile.unlink();
-		invalidateFsScanAfterRename(absolutePath, resolvedMove);
-	} else {
-		invalidateFsScanAfterWrite(absolutePath);
-	}
+	invalidateFsScanAfterWrite(absolutePath);
 
 	const diffResult = generateDiffString(originalNormalized, result.text);
 	const meta = outputMeta()
 		.diagnostics(diagnostics?.summary ?? "", diagnostics?.messages ?? [])
 		.get();
 
-	const resultText = move ? `Moved ${path} to ${move}` : `Updated ${path}`;
+	const resultText = `Updated ${path}`;
 	const preview = buildCompactHashlineDiffPreview(diffResult.diff);
 	const summaryLine = `Changes: +${preview.addedLines} -${preview.removedLines}${preview.preview ? "" : " (no textual diff preview)"}`;
 	const warningsBlock = result.warnings?.length ? `\n\nWarnings:\n${result.warnings.join("\n")}` : "";
@@ -1359,7 +1380,6 @@ export async function executeHashlineSingle(
 			firstChangedLine: result.firstChangedLine ?? diffResult.firstChangedLine,
 			diagnostics,
 			op: "update",
-			move,
 			meta,
 		},
 	};

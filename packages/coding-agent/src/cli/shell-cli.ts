@@ -5,10 +5,10 @@
  */
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
-import { Shell } from "@oh-my-pi/pi-natives";
+import { type MinimizerOptions, Shell } from "@oh-my-pi/pi-natives";
 import { APP_NAME, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
-import { Settings } from "../config/settings";
+import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { getOrCreateSnapshot } from "../utils/shell-snapshot";
 
 export interface ShellCommandArgs {
@@ -41,6 +41,17 @@ export function parseShellArgs(args: string[]): ShellCommandArgs | undefined {
 	return result;
 }
 
+function buildMinimizerOptions(group: ShellMinimizerSettings): MinimizerOptions | undefined {
+	if (!group.enabled) return undefined;
+	return {
+		enabled: true,
+		settingsPath: group.settingsPath || undefined,
+		only: group.only.length > 0 ? group.only : undefined,
+		except: group.except.length > 0 ? group.except : undefined,
+		maxCaptureBytes: group.maxCaptureBytes,
+	};
+}
+
 export async function runShellCommand(cmd: ShellCommandArgs): Promise<void> {
 	if (!process.stdin.isTTY) {
 		process.stderr.write("Error: shell console requires an interactive TTY.\n");
@@ -51,7 +62,8 @@ export async function runShellCommand(cmd: ShellCommandArgs): Promise<void> {
 	const settings = await Settings.init({ cwd });
 	const { shell, env: shellEnv } = settings.getShellConfig();
 	const snapshotPath = cmd.noSnapshot || !shell.includes("bash") ? null : await getOrCreateSnapshot(shell, shellEnv);
-	const shellSession = new Shell({ sessionEnv: shellEnv, snapshotPath: snapshotPath ?? undefined });
+	const minimizer = buildMinimizerOptions(settings.getGroup("shellMinimizer"));
+	const shellSession = new Shell({ sessionEnv: shellEnv, snapshotPath: snapshotPath ?? undefined, minimizer });
 
 	let active = false;
 	let lastChar: string | null = null;

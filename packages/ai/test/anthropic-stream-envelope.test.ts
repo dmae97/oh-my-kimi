@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Messages } from "@anthropic-ai/sdk/resources/messages/messages";
+import { Type } from "@sinclair/typebox";
 import { streamAnthropic } from "../src/providers/anthropic";
-import type { AssistantMessageEvent, Context, Model } from "../src/types";
+import type { AssistantMessageEvent, Context, Model, ProviderSessionState } from "../src/types";
 
 const model: Model<"anthropic-messages"> = {
 	id: "claude-sonnet-4-5",
@@ -53,6 +54,35 @@ function createMockRequest(events: MockAnthropicEvent[]): MockAnthropicRequest {
 			};
 		},
 	};
+}
+
+function createRejectedMockRequest(error: Error): MockAnthropicRequest {
+	return {
+		async withResponse() {
+			throw error;
+		},
+	};
+}
+
+function createStrictGrammarTooLargeError(): Error {
+	const error = new Error(
+		'400 {"type":"error","error":{"type":"invalid_request_error","message":"The compiled grammar is too large, which would cause performance issues. Simplify your tool schemas or reduce the number of strict tools."},"request_id":"req_test"}',
+	);
+	(error as Error & { status: number }).status = 400;
+	return error;
+}
+
+function createOtherInvalidRequestError(): Error {
+	const error = new Error(
+		'400 {"type":"error","error":{"type":"invalid_request_error","message":"Some other validation error."},"request_id":"req_test"}',
+	);
+	(error as Error & { status: number }).status = 400;
+	return error;
+}
+
+function getStrictFlags(params: unknown): boolean[] {
+	const tools = (params as { tools?: Array<{ strict?: unknown }> }).tools ?? [];
+	return tools.map(tool => tool.strict === true);
 }
 
 function createTextSuccessEvents(text: string): MockAnthropicEvent[] {
@@ -228,6 +258,102 @@ describe("anthropic stream envelope handling", () => {
 		expect(countEvents(events, "done")).toBe(1);
 		expect(result.stopReason).toBe("stop");
 		expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
+	});
+
+	it("retries without strict tools after Anthropic compiled grammar errors and keeps strict disabled", async () => {
+		const toolContext: Context = {
+			...context,
+			tools: [
+				{
+					name: "edit",
+					description: "Edit a value",
+					strict: true,
+					parameters: Type.Object({ query: Type.String() }),
+				},
+			],
+		};
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const strictFlags: boolean[][] = [];
+		let attempt = 0;
+		vi.spyOn(Messages.prototype, "create").mockImplementation((params: unknown) => {
+			attempt += 1;
+			strictFlags.push(getStrictFlags(params));
+			if (attempt === 1) {
+				return createRejectedMockRequest(createStrictGrammarTooLargeError()) as never;
+			}
+			return createMockRequest(createTextSuccessEvents(attempt === 2 ? "recovered" : "later")) as never;
+		});
+
+		const stream = streamAnthropic(model, toolContext, { apiKey: "sk-ant-test", providerSessionState });
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toContain("compiled grammar is too large");
+		expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
+		expect(countEvents(events, "done")).toBe(1);
+		expect(countEvents(events, "error")).toBe(0);
+		expect(strictFlags).toEqual([[true], [false]]);
+		expect(
+			(providerSessionState.get("anthropic-messages") as { strictToolsDisabled?: boolean } | undefined)
+				?.strictToolsDisabled,
+		).toBe(true);
+
+		const nextStream = streamAnthropic(model, toolContext, { apiKey: "sk-ant-test", providerSessionState });
+		const nextEvents: AssistantMessageEvent[] = [];
+		for await (const event of nextStream) {
+			nextEvents.push(event);
+		}
+		const nextResult = await nextStream.result();
+
+		expect(nextResult.stopReason).toBe("stop");
+		expect(nextResult.content).toEqual([{ type: "text", text: "later" }]);
+		expect(countEvents(nextEvents, "done")).toBe(1);
+		expect(countEvents(nextEvents, "error")).toBe(0);
+		expect(strictFlags).toEqual([[true], [false], [false]]);
+	});
+
+	it("does not disable strict tools for unrelated Anthropic invalid request errors", async () => {
+		const toolContext: Context = {
+			...context,
+			tools: [
+				{
+					name: "edit",
+					description: "Edit a value",
+					strict: true,
+					parameters: Type.Object({ query: Type.String() }),
+				},
+			],
+		};
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const strictFlags: boolean[][] = [];
+		let attempt = 0;
+		vi.spyOn(Messages.prototype, "create").mockImplementation((params: unknown) => {
+			attempt += 1;
+			strictFlags.push(getStrictFlags(params));
+			return createRejectedMockRequest(createOtherInvalidRequestError()) as never;
+		});
+
+		const stream = streamAnthropic(model, toolContext, { apiKey: "sk-ant-test", providerSessionState });
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		expect(attempt).toBe(1);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("Some other validation error");
+		expect(countEvents(events, "error")).toBe(1);
+		expect(countEvents(events, "done")).toBe(0);
+		expect(strictFlags).toEqual([[true]]);
+		expect(
+			(providerSessionState.get("anthropic-messages") as { strictToolsDisabled?: boolean } | undefined)
+				?.strictToolsDisabled,
+		).toBe(false);
 	});
 
 	it("does not retry malformed envelopes after partial tool-call content starts streaming", async () => {

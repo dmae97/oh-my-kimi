@@ -2,10 +2,10 @@ import { describe, expect, it } from "bun:test";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
 import { getThemeByName } from "../../src/modes/theme/theme";
 import type { GhToolDetails } from "../../src/tools/gh";
-import { ghRunWatchToolRenderer } from "../../src/tools/gh-renderer";
+import { githubToolRenderer } from "../../src/tools/gh-renderer";
 import { toolRenderers } from "../../src/tools/renderers";
 
-describe("ghRunWatchToolRenderer", () => {
+describe("githubToolRenderer", () => {
 	it("renders a compact ghw-style run summary", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();
@@ -52,10 +52,10 @@ describe("ghRunWatchToolRenderer", () => {
 			},
 		};
 
-		const component = ghRunWatchToolRenderer.renderResult(result, { expanded: false, isPartial: true }, uiTheme);
+		const component = githubToolRenderer.renderResult(result, { expanded: false, isPartial: true }, uiTheme);
 		const rendered = sanitizeText(component.render(64).join("\n"));
 
-		expect(toolRenderers.gh_run_watch).toBeDefined();
+		expect(toolRenderers.github).toBeDefined();
 		expect(rendered).toContain("watching run #23856332053 on v12-security/v12x");
 		expect(rendered).toContain("CI  dev  #23856332053");
 		expect(rendered).toContain(`${uiTheme.status.success} Workflow Lint`);
@@ -111,7 +111,7 @@ describe("ghRunWatchToolRenderer", () => {
 			},
 		};
 
-		const component = ghRunWatchToolRenderer.renderResult(result, { expanded: false, isPartial: false }, uiTheme);
+		const component = githubToolRenderer.renderResult(result, { expanded: false, isPartial: false }, uiTheme);
 		const rendered = sanitizeText(component.render(72).join("\n"));
 
 		expect(rendered).toContain("failed logs");

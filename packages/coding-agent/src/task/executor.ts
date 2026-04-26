@@ -14,17 +14,19 @@ import type { PromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
 import type { CustomTool } from "../extensibility/custom-tools/types";
+import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import type { Skill } from "../extensibility/skills";
 import { callTool } from "../mcp/client";
 import type { MCPManager } from "../mcp/manager";
-import submitReminderTemplate from "../prompts/system/subagent-submit-reminder.md" with { type: "text" };
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
+import submitReminderTemplate from "../prompts/system/subagent-yield-reminder.md" with { type: "text" };
+import { AgentRegistry } from "../registry/agent-registry";
 import { createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { AuthStorage } from "../session/auth-storage";
 import { SessionManager } from "../session/session-manager";
 import { type ContextFileEntry, truncateTail } from "../tools";
-import { jtdToJsonSchema } from "../tools/jtd-to-json-schema";
+import { jtdToJsonSchema, normalizeSchema } from "../tools/jtd-to-json-schema";
 import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
@@ -70,6 +72,14 @@ function normalizeModelPatterns(value: string | string[] | undefined): string[] 
 		.split(",")
 		.map(entry => entry.trim())
 		.filter(Boolean);
+}
+
+function renderIrcPeerRoster(selfId: string): string {
+	const peers = AgentRegistry.global()
+		.list()
+		.filter(ref => ref.id !== selfId && (ref.status === "running" || ref.status === "idle"));
+	if (peers.length === 0) return "- (no other live agents)";
+	return peers.map(peer => `- \`${peer.id}\` — ${peer.displayName} (${peer.kind}, ${peer.status})`).join("\n");
 }
 
 function withAbortTimeout<T>(promise: Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
@@ -163,20 +173,8 @@ function parseStringifiedJson(value: unknown): unknown {
 	}
 }
 
-function normalizeOutputSchema(schema: unknown): { normalized?: unknown; error?: string } {
-	if (schema === undefined || schema === null) return {};
-	if (typeof schema === "string") {
-		try {
-			return { normalized: JSON.parse(schema) };
-		} catch (err) {
-			return { error: err instanceof Error ? err.message : String(err) };
-		}
-	}
-	return { normalized: schema };
-}
-
 function buildOutputValidator(schema: unknown): { validate?: ValidateFunction; error?: string } {
-	const { normalized, error } = normalizeOutputSchema(schema);
+	const { normalized, error } = normalizeSchema(schema);
 	if (error) return { error };
 	if (normalized === undefined) return {};
 	const jsonSchema = jtdToJsonSchema(normalized);
@@ -234,7 +232,7 @@ function resolveFallbackCompletion(rawOutput: string, outputSchema: unknown): { 
 	return { data: candidate };
 }
 
-export interface SubmitResultItem {
+export interface YieldItem {
 	data?: unknown;
 	status?: "success" | "aborted";
 	error?: string;
@@ -246,7 +244,7 @@ interface FinalizeSubprocessOutputArgs {
 	stderr: string;
 	doneAborted: boolean;
 	signalAborted: boolean;
-	submitResultItems?: SubmitResultItem[];
+	yieldItems?: YieldItem[];
 	reportFindings?: ReviewFinding[];
 	outputSchema: unknown;
 }
@@ -255,44 +253,42 @@ interface FinalizeSubprocessOutputResult {
 	rawOutput: string;
 	exitCode: number;
 	stderr: string;
-	abortedViaSubmitResult: boolean;
-	hasSubmitResult: boolean;
+	abortedViaYield: boolean;
+	hasYield: boolean;
 }
 
-export const SUBAGENT_WARNING_NULL_SUBMIT_RESULT = "SYSTEM WARNING: Subagent called submit_result with null data.";
-export const SUBAGENT_WARNING_MISSING_SUBMIT_RESULT =
-	"SYSTEM WARNING: Subagent exited without calling submit_result tool after 3 reminders.";
+export const SUBAGENT_WARNING_NULL_YIELD = "SYSTEM WARNING: Subagent called yield with null data.";
+export const SUBAGENT_WARNING_MISSING_YIELD =
+	"SYSTEM WARNING: Subagent exited without calling yield tool after 3 reminders.";
 
 export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): FinalizeSubprocessOutputResult {
 	let { rawOutput, exitCode, stderr } = args;
-	const { submitResultItems, reportFindings, doneAborted, signalAborted, outputSchema } = args;
-	let abortedViaSubmitResult = false;
-	const hasSubmitResult = Array.isArray(submitResultItems) && submitResultItems.length > 0;
+	const { yieldItems, reportFindings, doneAborted, signalAborted, outputSchema } = args;
+	let abortedViaYield = false;
+	const hasYield = Array.isArray(yieldItems) && yieldItems.length > 0;
 
-	if (hasSubmitResult) {
-		const lastSubmitResult = submitResultItems[submitResultItems.length - 1];
-		if (lastSubmitResult?.status === "aborted") {
-			abortedViaSubmitResult = true;
+	if (hasYield) {
+		const lastYield = yieldItems[yieldItems.length - 1];
+		if (lastYield?.status === "aborted") {
+			abortedViaYield = true;
 			exitCode = 0;
-			stderr = lastSubmitResult.error || "Subagent aborted task";
+			stderr = lastYield.error || "Subagent aborted task";
 			try {
-				rawOutput = JSON.stringify({ aborted: true, error: lastSubmitResult.error }, null, 2);
+				rawOutput = JSON.stringify({ aborted: true, error: lastYield.error }, null, 2);
 			} catch {
-				rawOutput = `{"aborted":true,"error":"${lastSubmitResult.error || "Unknown error"}"}`;
+				rawOutput = `{"aborted":true,"error":"${lastYield.error || "Unknown error"}"}`;
 			}
 		} else {
-			const submitData = lastSubmitResult?.data;
+			const submitData = lastYield?.data;
 			if (submitData === null || submitData === undefined) {
-				rawOutput = rawOutput
-					? `${SUBAGENT_WARNING_NULL_SUBMIT_RESULT}\n\n${rawOutput}`
-					: SUBAGENT_WARNING_NULL_SUBMIT_RESULT;
+				rawOutput = rawOutput ? `${SUBAGENT_WARNING_NULL_YIELD}\n\n${rawOutput}` : SUBAGENT_WARNING_NULL_YIELD;
 			} else {
 				const completeData = normalizeCompleteData(submitData, reportFindings);
 				try {
 					rawOutput = JSON.stringify(completeData, null, 2) ?? "null";
 				} catch (err) {
 					const errorMessage = err instanceof Error ? err.message : String(err);
-					rawOutput = `{"error":"Failed to serialize submit_result data: ${errorMessage}"}`;
+					rawOutput = `{"error":"Failed to serialize yield data: ${errorMessage}"}`;
 				}
 				exitCode = 0;
 				stderr = "";
@@ -300,7 +296,7 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		}
 	} else {
 		const allowFallback = exitCode === 0 && !doneAborted && !signalAborted;
-		const { normalized: normalizedSchema, error: schemaError } = normalizeOutputSchema(outputSchema);
+		const { normalized: normalizedSchema, error: schemaError } = normalizeSchema(outputSchema);
 		const hasOutputSchema = normalizedSchema !== undefined && !schemaError;
 		const fallback = allowFallback ? resolveFallbackCompletion(rawOutput, outputSchema) : null;
 		if (fallback) {
@@ -317,13 +313,16 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 			exitCode = 0;
 			stderr = "";
 		} else if (exitCode === 0) {
-			rawOutput = rawOutput
-				? `${SUBAGENT_WARNING_MISSING_SUBMIT_RESULT}\n\n${rawOutput}`
-				: SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
+			const hasRawOutput = rawOutput.trim().length > 0;
+			rawOutput = rawOutput ? `${SUBAGENT_WARNING_MISSING_YIELD}\n\n${rawOutput}` : SUBAGENT_WARNING_MISSING_YIELD;
+			if (hasOutputSchema || !hasRawOutput) {
+				exitCode = 1;
+				stderr = SUBAGENT_WARNING_MISSING_YIELD;
+			}
 		}
 	}
 
-	return { rawOutput, exitCode, stderr, abortedViaSubmitResult, hasSubmitResult };
+	return { rawOutput, exitCode, stderr, abortedViaYield, hasYield };
 }
 
 /**
@@ -553,6 +552,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				: agent.spawns.join(",");
 
 	const lspEnabled = enableLsp ?? true;
+	const ircEnabled = subagentSettings.get("irc.enabled") === true;
 	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("python");
 
 	const outputChunks: string[] = [];
@@ -570,7 +570,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const abortSignal = abortController.signal;
 	let activeSession: AgentSession | null = null;
 	let unsubscribe: (() => void) | null = null;
-	let submitResultCalled = false;
+	let yieldCalled = false;
 
 	// Accumulate usage incrementally from message_end events (no memory for streaming events)
 	const accumulatedUsage = {
@@ -795,8 +795,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 								existing.push(data);
 							}
 							progress.extractedToolData[event.toolName] = existing;
-							if (event.toolName === "submit_result") {
-								submitResultCalled = true;
+							if (event.toolName === "yield") {
+								yieldCalled = true;
 							}
 						}
 					}
@@ -950,7 +950,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
 			const enableMCP = !options.mcpManager;
 
-			const { normalized: normalizedOutputSchema } = normalizeOutputSchema(outputSchema);
+			const { normalized: normalizedOutputSchema } = normalizeSchema(outputSchema);
 
 			const { session } = await createAgentSession({
 				cwd: worktree ?? cwd,
@@ -961,7 +961,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				thinkingLevel: effectiveThinkingLevel,
 				toolNames,
 				outputSchema,
-				requireSubmitResultTool: true,
+				requireYieldTool: true,
 				contextFiles: options.contextFiles,
 				skills: options.skills,
 				promptTemplates: options.promptTemplates,
@@ -972,15 +972,20 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						worktree: worktree ?? "",
 						outputSchema: normalizedOutputSchema,
 						contextFile: options.contextFile,
+						ircPeers: ircEnabled ? renderIrcPeerRoster(id) : "",
+						ircSelfId: ircEnabled ? id : "",
 					}),
 				sessionManager,
 				hasUI: false,
 				spawns: spawnsEnv,
 				taskDepth: childDepth,
 				parentTaskPrefix: id,
+				agentId: id,
+				agentDisplayName: agent.name,
 				enableLsp: lspEnabled,
 				skipPythonPreflight,
 				enableMCP,
+				mcpManager: options.mcpManager,
 				customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
 			});
 
@@ -1050,12 +1055,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						setActiveTools: (toolNames: string[]) =>
 							session.setActiveToolsByName(toolNames.filter(name => !parentOwnedToolNames.has(name))),
 						getCommands: () => [],
-						setModel: async model => {
-							const key = await session.modelRegistry.getApiKey(model);
-							if (!key) return false;
-							await session.setModel(model);
-							return true;
-						},
+						setModel: model => runExtensionSetModel(session, model),
 						getThinkingLevel: () => session.thinkingLevel,
 						setThinkingLevel: level => session.setThinkingLevel(level),
 						getSessionName: () => session.sessionManager.getSessionName(),
@@ -1071,14 +1071,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						shutdown: () => {},
 						getContextUsage: () => session.getContextUsage(),
 						getSystemPrompt: () => session.systemPrompt,
-						compact: async instructionsOrOptions => {
-							const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-							const options =
-								instructionsOrOptions && typeof instructionsOrOptions === "object"
-									? instructionsOrOptions
-									: undefined;
-							await session.compact(instructions, options);
-						},
+						compact: instructionsOrOptions => runExtensionCompact(session, instructionsOrOptions),
 					},
 				);
 				extensionRunner.onError(err => {
@@ -1087,7 +1080,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				await extensionRunner.emit({ type: "session_start" });
 			}
 
-			const MAX_SUBMIT_RESULT_RETRIES = 3;
+			const MAX_YIELD_RETRIES = 3;
 			unsubscribe = session.subscribe(event => {
 				if (isAgentEvent(event)) {
 					try {
@@ -1104,15 +1097,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			await session.prompt(task, { attribution: "agent" });
 			await session.waitForIdle();
 
-			const reminderToolChoice = buildNamedToolChoice("submit_result", session.model);
+			const reminderToolChoice = buildNamedToolChoice("yield", session.model);
 
 			let retryCount = 0;
-			while (!submitResultCalled && retryCount < MAX_SUBMIT_RESULT_RETRIES && !abortSignal.aborted) {
+			while (!yieldCalled && retryCount < MAX_YIELD_RETRIES && !abortSignal.aborted) {
 				try {
 					retryCount++;
 					const reminder = prompt.render(submitReminderTemplate, {
 						retryCount,
-						maxRetries: MAX_SUBMIT_RESULT_RETRIES,
+						maxRetries: MAX_YIELD_RETRIES,
 					});
 
 					await session.prompt(reminder, {
@@ -1128,11 +1121,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			await session.waitForIdle();
-			if (!submitResultCalled && !abortSignal.aborted) {
-				aborted = true;
-				exitCode = 1;
-				abortReasonText ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
-				error ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
+			if (!yieldCalled && !abortSignal.aborted) {
+				exitCode = 0;
 			}
 
 			const lastAssistant = session.getLastAssistantMessage();
@@ -1206,7 +1196,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	// Use final output if available, otherwise accumulated output
 	let rawOutput = finalOutputChunks.length > 0 ? finalOutputChunks.join("") : outputChunks.join("");
-	const submitResultItems = progress.extractedToolData?.submit_result as SubmitResultItem[] | undefined;
+	const yieldItems = progress.extractedToolData?.yield as YieldItem[] | undefined;
 	const reportFindings = progress.extractedToolData?.report_finding as ReviewFinding[] | undefined;
 	const finalized = finalizeSubprocessOutput({
 		rawOutput,
@@ -1214,17 +1204,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		stderr,
 		doneAborted: Boolean(done.aborted),
 		signalAborted: Boolean(signal?.aborted),
-		submitResultItems,
+		yieldItems,
 		reportFindings,
 		outputSchema,
 	});
 	rawOutput = finalized.rawOutput;
 	exitCode = finalized.exitCode;
 	stderr = finalized.stderr;
-	const lastSubmitResult = submitResultItems?.[submitResultItems.length - 1];
-	const submitResultAbortReason =
-		lastSubmitResult?.status === "aborted" ? lastSubmitResult.error || "Subagent aborted task" : undefined;
-	const { abortedViaSubmitResult, hasSubmitResult } = finalized;
+	const lastYield = yieldItems?.[yieldItems.length - 1];
+	const yieldAbortReason = lastYield?.status === "aborted" ? lastYield.error || "Subagent aborted task" : undefined;
+	const { abortedViaYield, hasYield } = finalized;
 	const { content: truncatedOutput, truncated } = truncateTail(rawOutput, {
 		maxBytes: MAX_OUTPUT_BYTES,
 		maxLines: MAX_OUTPUT_LINES,
@@ -1248,16 +1237,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	}
 
 	// Update final progress
-	const wasAborted = abortedViaSubmitResult || (!hasSubmitResult && (done.aborted || signal?.aborted || false));
+	const wasAborted = abortedViaYield || (!hasYield && (done.aborted || signal?.aborted || false));
 	const finalAbortReason = wasAborted
-		? abortedViaSubmitResult
-			? submitResultAbortReason
+		? abortedViaYield
+			? yieldAbortReason
 			: (done.abortReason ?? (signal?.aborted ? resolveSignalAbortReason() : "Subagent aborted task"))
 		: undefined;
 	progress.status = wasAborted ? "aborted" : exitCode === 0 ? "completed" : "failed";
 	scheduleProgress(true);
 
-	// Emit lifecycle end event after finalization so submit_result status is reflected
+	// Emit lifecycle end event after finalization so yield status is reflected
 	if (options.eventBus) {
 		options.eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id,

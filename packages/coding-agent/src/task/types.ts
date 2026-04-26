@@ -1,7 +1,8 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import { type Static, type TSchema, Type } from "@sinclair/typebox";
+import { getTaskSimpleModeCapabilities, type TaskSimpleMode } from "./simple-mode";
 import type { NestedRepoPatch } from "./worktree";
 
 /** Source of an agent definition */
@@ -56,42 +57,58 @@ export interface SubagentLifecyclePayload {
 	index: number;
 }
 
-/** Single task item for parallel execution */
-export const taskItemSchema = Type.Object({
-	id: Type.String({
-		description: "CamelCase identifier, max 48 chars",
-		maxLength: 48,
-	}),
-	description: Type.String({
-		description: "Short one-liner for UI display only — not seen by the subagent",
-	}),
-	assignment: Type.String({
-		description:
-			"Complete per-task instructions the subagent executes. Must follow the Target/Change/Edge Cases/Acceptance structure. Only include per-task deltas — shared background belongs in `context`.",
-	}),
-});
+const assignmentDescriptionForContextEnabled =
+	"Complete per-task instructions the subagent executes. Must follow the Target/Change/Edge Cases/Acceptance structure. Only include per-task deltas — shared background belongs in `context`.";
+const assignmentDescriptionForContextDisabled =
+	"Complete per-task instructions the subagent executes. Must follow the Target/Change/Edge Cases/Acceptance structure, and include any background that would otherwise live in `context` since shared context is disabled in this mode.";
+
+const createTaskItemSchema = (contextEnabled: boolean) =>
+	Type.Object({
+		id: Type.String({
+			description: "CamelCase identifier, max 48 chars",
+			maxLength: 48,
+		}),
+		description: Type.String({
+			description: "Short one-liner for UI display only — not seen by the subagent",
+		}),
+		assignment: Type.String({
+			description: contextEnabled ? assignmentDescriptionForContextEnabled : assignmentDescriptionForContextDisabled,
+		}),
+	});
+
+/** Single task item for parallel execution (default shape with context enabled). */
+export const taskItemSchema = createTaskItemSchema(true);
 export type TaskItem = Static<typeof taskItemSchema>;
 
-const createTaskSchema = (options: { isolationEnabled: boolean }) => {
-	const properties = {
+const createTaskSchema = (options: { isolationEnabled: boolean; simpleMode: TaskSimpleMode }) => {
+	const { contextEnabled, customSchemaEnabled } = getTaskSimpleModeCapabilities(options.simpleMode);
+	const itemSchema = createTaskItemSchema(contextEnabled);
+	const properties: Record<string, TSchema> = {
 		agent: Type.String({ description: "Agent type for all tasks in this batch" }),
-		context: Type.Optional(
+		tasks: Type.Array(itemSchema, {
+			description: contextEnabled
+				? "Tasks to execute in parallel. Each must be small-scoped (3-5 files max) and self-contained given context + assignment."
+				: "Tasks to execute in parallel. Each must be small-scoped (3-5 files max) and fully self-contained inside assignment because shared context is disabled.",
+		}),
+	};
+
+	if (contextEnabled) {
+		properties.context = Type.Optional(
 			Type.String({
 				description:
 					"Shared background prepended to every task's assignment. Put goal, non-goals, constraints, conventions, reference paths, API contracts, and global acceptance commands here once — instead of duplicating across assignments.",
 			}),
-		),
-		schema: Type.Optional(
+		);
+	}
+
+	if (customSchemaEnabled) {
+		properties.schema = Type.Optional(
 			Type.String({
 				description:
 					"JSON-encoded JTD schema defining expected response structure. Output format belongs here — never in context or assignment.",
 			}),
-		),
-		tasks: Type.Array(taskItemSchema, {
-			description:
-				"Tasks to execute in parallel. Each must be small-scoped (3-5 files max) and self-contained given context + assignment.",
-		}),
-	};
+		);
+	}
 
 	if (options.isolationEnabled) {
 		return Type.Object({
@@ -107,12 +124,42 @@ const createTaskSchema = (options: { isolationEnabled: boolean }) => {
 	return Type.Object(properties);
 };
 
-export const taskSchema = createTaskSchema({ isolationEnabled: true });
-export const taskSchemaNoIsolation = createTaskSchema({ isolationEnabled: false });
+export const taskSchema = createTaskSchema({ isolationEnabled: true, simpleMode: "default" });
+export const taskSchemaNoIsolation = createTaskSchema({ isolationEnabled: false, simpleMode: "default" });
+const taskSchemaSchemaFree = createTaskSchema({ isolationEnabled: true, simpleMode: "schema-free" });
+const taskSchemaSchemaFreeNoIsolation = createTaskSchema({ isolationEnabled: false, simpleMode: "schema-free" });
+const taskSchemaIndependent = createTaskSchema({ isolationEnabled: true, simpleMode: "independent" });
+const taskSchemaIndependentNoIsolation = createTaskSchema({ isolationEnabled: false, simpleMode: "independent" });
+const ALL_TASK_SCHEMAS = [
+	taskSchema,
+	taskSchemaNoIsolation,
+	taskSchemaSchemaFree,
+	taskSchemaSchemaFreeNoIsolation,
+	taskSchemaIndependent,
+	taskSchemaIndependentNoIsolation,
+] as const;
 
-export type TaskSchema = typeof taskSchema | typeof taskSchemaNoIsolation;
+type DynamicTaskSchema = (typeof ALL_TASK_SCHEMAS)[number];
+export type TaskSchema = typeof taskSchema;
 
-export type TaskParams = Static<TaskSchema>;
+export function getTaskSchema(options: { isolationEnabled: boolean; simpleMode: TaskSimpleMode }): DynamicTaskSchema {
+	switch (options.simpleMode) {
+		case "schema-free":
+			return options.isolationEnabled ? taskSchemaSchemaFree : taskSchemaSchemaFreeNoIsolation;
+		case "independent":
+			return options.isolationEnabled ? taskSchemaIndependent : taskSchemaIndependentNoIsolation;
+		default:
+			return options.isolationEnabled ? taskSchema : taskSchemaNoIsolation;
+	}
+}
+
+export interface TaskParams {
+	agent: string;
+	context?: string;
+	schema?: string;
+	tasks: TaskItem[];
+	isolated?: boolean;
+}
 
 /** A code review finding reported by the reviewer agent */
 export interface ReviewFinding {

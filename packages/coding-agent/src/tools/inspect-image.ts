@@ -16,8 +16,8 @@ import { ToolError } from "./tool-errors";
 
 const inspectImageSchema = Type.Object(
 	{
-		path: Type.String({ description: "Filesystem path to an image" }),
-		question: Type.String({ description: "Question to ask about the image" }),
+		path: Type.String({ description: "image path", examples: ["image.png"] }),
+		question: Type.String({ description: "question about image", examples: ["What is in this image?"] }),
 	},
 	{ additionalProperties: false },
 );
@@ -43,7 +43,7 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 	readonly label = "InspectImage";
 	readonly description: string;
 	readonly parameters = inspectImageSchema;
-	readonly strict = true;
+	readonly strict = false;
 
 	constructor(
 		private readonly session: ToolSession,

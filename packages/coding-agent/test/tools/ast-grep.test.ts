@@ -17,7 +17,7 @@ function createTestSession(cwd = "/tmp/test", overrides: Partial<ToolSession> = 
 }
 
 describe("ast_grep parse errors", () => {
-	it("collapses per-pattern parse errors for the same file", async () => {
+	it("reports parse errors for the searched file", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-parse-"));
 		try {
 			const filePath = path.join(tempDir, "broken.ts");
@@ -28,8 +28,7 @@ describe("ast_grep parse errors", () => {
 			expect(tool).toBeDefined();
 
 			const result = await tool!.execute("ast-grep-parse", {
-				pat: ["someUnlikelyCall($A)", "anotherUnlikelyCall($A)"],
-				lang: "typescript",
+				pat: "someUnlikelyCall($A)",
 				path: filePath,
 			});
 
@@ -42,7 +41,6 @@ describe("ast_grep parse errors", () => {
 			expect(details?.parseErrors).toHaveLength(1);
 			expect(details?.parseErrors?.[0]).toContain("broken.ts: parse error (syntax tree contains error nodes)");
 			expect(details?.parseErrors?.[0]).not.toContain("someUnlikelyCall($A):");
-			expect(details?.parseErrors?.[0]).not.toContain("anotherUnlikelyCall($A):");
 			expect(text.match(/parse error \(syntax tree contains error nodes\)/g)?.length ?? 0).toBe(1);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
@@ -65,11 +63,8 @@ describe("ast_grep parse errors", () => {
 			expect(tool).toBeDefined();
 
 			const result = await tool!.execute("ast-grep-glob", {
-				pat: ["providerOptions"],
-				sel: "identifier",
-				lang: "typescript",
-				path: `${packagesDir}/pkg-*/src`,
-				glob: "**/*.ts",
+				pat: "providerOptions",
+				path: `${packagesDir}/pkg-*/src/**/*.ts`,
 			});
 
 			const text = result.content.find(content => content.type === "text")?.text ?? "";
@@ -100,9 +95,7 @@ describe("ast_grep parse errors", () => {
 			expect(tool).toBeDefined();
 
 			const result = await tool!.execute("ast-grep-tlaplus", {
-				pat: ["Inc"],
-				sel: "identifier",
-				lang: "pluscal",
+				pat: "Inc",
 				path: filePath,
 			});
 

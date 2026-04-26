@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import type { Context, Model, OpenAICompat, Tool } from "@oh-my-pi/pi-ai/types";
+import type { Context, Model, OpenAICompat, ProviderSessionState, Tool } from "@oh-my-pi/pi-ai/types";
 import { Type } from "@sinclair/typebox";
 
 const originalFetch = global.fetch;
@@ -230,6 +230,113 @@ describe("OpenAI tool strict mode", () => {
 		expect(result.stopReason).toBe("stop");
 		expect(result.content).toContainEqual({ type: "text", text: "Hello" });
 		expect(strictFlags).toEqual([[true], [false]]);
+	});
+
+	it("keeps OpenRouter Anthropic tools non-strict after compiled grammar errors", async () => {
+		const model = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const strictFlags: boolean[][] = [];
+		let attempt = 0;
+		global.fetch = Object.assign(
+			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+				attempt += 1;
+				const bodyText = typeof init?.body === "string" ? init.body : "";
+				const payload = JSON.parse(bodyText) as {
+					tools?: Array<{ function?: { strict?: boolean } }>;
+				};
+				strictFlags.push((payload.tools ?? []).map(tool => tool.function?.strict === true));
+				if (attempt === 1) {
+					return new Response(
+						JSON.stringify({
+							type: "error",
+							error: {
+								type: "invalid_request_error",
+								message:
+									"The compiled grammar is too large, which would cause performance issues. Simplify your tool schemas or reduce the number of strict tools.",
+							},
+							request_id: "req_test",
+						}),
+						{
+							status: 400,
+							headers: { "content-type": "application/json" },
+						},
+					);
+				}
+				return createSseResponse([
+					{
+						id: "chatcmpl-openrouter-retry",
+						object: "chat.completion.chunk",
+						created: 0,
+						model: model.id,
+						choices: [{ index: 0, delta: { content: attempt === 2 ? "Recovered" : "Later" } }],
+					},
+					{
+						id: "chatcmpl-openrouter-retry",
+						object: "chat.completion.chunk",
+						created: 0,
+						model: model.id,
+						choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+					},
+					"[DONE]",
+				]);
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+
+		const result = await streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			providerSessionState,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toContain("compiled grammar is too large");
+		expect(result.content).toContainEqual({ type: "text", text: "Recovered" });
+		expect(strictFlags).toEqual([[true], [false]]);
+
+		const nextResult = await streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			providerSessionState,
+		}).result();
+
+		expect(nextResult.stopReason).toBe("stop");
+		expect(nextResult.content).toContainEqual({ type: "text", text: "Later" });
+		expect(strictFlags).toEqual([[true], [false], [false]]);
+	});
+
+	it("does not disable OpenRouter Anthropic strict tools for unrelated invalid requests", async () => {
+		const model = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const strictFlags: boolean[][] = [];
+		global.fetch = Object.assign(
+			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+				const bodyText = typeof init?.body === "string" ? init.body : "";
+				const payload = JSON.parse(bodyText) as {
+					tools?: Array<{ function?: { strict?: boolean } }>;
+				};
+				strictFlags.push((payload.tools ?? []).map(tool => tool.function?.strict === true));
+				return new Response(
+					JSON.stringify({
+						type: "error",
+						error: { type: "invalid_request_error", message: "Some other validation error." },
+						request_id: "req_test",
+					}),
+					{
+						status: 400,
+						headers: { "content-type": "application/json" },
+					},
+				);
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+
+		const result = await streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			providerSessionState,
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("Some other validation error");
+		expect(strictFlags).toEqual([[true]]);
 	});
 
 	it("sends strict=true for openai-responses tool schemas on OpenAI", async () => {

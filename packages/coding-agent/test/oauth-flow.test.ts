@@ -9,6 +9,25 @@ afterEach(() => {
 	global.fetch = originalFetch;
 });
 
+function mockProviderTokenEndpoint(onBody: (body: string) => void) {
+	return hookFetch((input, init) => {
+		const url = String(input);
+		if (url === "https://provider.example/token") {
+			onBody(String(init?.body ?? ""));
+			return new Response(
+				JSON.stringify({
+					access_token: "access-token",
+					refresh_token: "refresh-token",
+					expires_in: 3600,
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+		}
+
+		throw new Error(`Unexpected fetch: ${url}`);
+	});
+}
+
 describe("mcp oauth flow", () => {
 	it("uses Codex client name for dynamic client registration", async () => {
 		let registrationPayload: Record<string, unknown> | null = null;
@@ -57,21 +76,8 @@ describe("mcp oauth flow", () => {
 		let observedRedirectUri = "";
 		let tokenRequestBody = "";
 
-		using _hook = hookFetch((input, init) => {
-			const url = String(input);
-			if (url === "https://provider.example/token") {
-				tokenRequestBody = String(init?.body ?? "");
-				return new Response(
-					JSON.stringify({
-						access_token: "access-token",
-						refresh_token: "refresh-token",
-						expires_in: 3600,
-					}),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
-				);
-			}
-
-			throw new Error(`Unexpected fetch: ${url}`);
+		using _hook = mockProviderTokenEndpoint(body => {
+			tokenRequestBody = body;
 		});
 
 		const flow = new MCPOAuthFlow(
@@ -111,21 +117,8 @@ describe("mcp oauth flow", () => {
 		let observedRedirectUri = "";
 		let tokenRequestBody = "";
 
-		using _hook = hookFetch((input, init) => {
-			const url = String(input);
-			if (url === "https://provider.example/token") {
-				tokenRequestBody = String(init?.body ?? "");
-				return new Response(
-					JSON.stringify({
-						access_token: "access-token",
-						refresh_token: "refresh-token",
-						expires_in: 3600,
-					}),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
-				);
-			}
-
-			throw new Error(`Unexpected fetch: ${url}`);
+		using _hook = mockProviderTokenEndpoint(body => {
+			tokenRequestBody = body;
 		});
 
 		const flow = new MCPOAuthFlow(
@@ -167,21 +160,8 @@ describe("mcp oauth flow", () => {
 		let observedRedirectUri = "";
 		let tokenRequestBody = "";
 
-		using _hook = hookFetch((input, init) => {
-			const url = String(input);
-			if (url === "https://provider.example/token") {
-				tokenRequestBody = String(init?.body ?? "");
-				return new Response(
-					JSON.stringify({
-						access_token: "access-token",
-						refresh_token: "refresh-token",
-						expires_in: 3600,
-					}),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
-				);
-			}
-
-			throw new Error(`Unexpected fetch: ${url}`);
+		using _hook = mockProviderTokenEndpoint(body => {
+			tokenRequestBody = body;
 		});
 
 		const flow = new MCPOAuthFlow(
@@ -220,21 +200,8 @@ describe("mcp oauth flow", () => {
 		let observedRedirectUri = "";
 		let tokenRequestBody = "";
 
-		using _hook = hookFetch((input, init) => {
-			const url = String(input);
-			if (url === "https://provider.example/token") {
-				tokenRequestBody = String(init?.body ?? "");
-				return new Response(
-					JSON.stringify({
-						access_token: "access-token",
-						refresh_token: "refresh-token",
-						expires_in: 3600,
-					}),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
-				);
-			}
-
-			throw new Error(`Unexpected fetch: ${url}`);
+		using _hook = mockProviderTokenEndpoint(body => {
+			tokenRequestBody = body;
 		});
 
 		const flow = new MCPOAuthFlow(

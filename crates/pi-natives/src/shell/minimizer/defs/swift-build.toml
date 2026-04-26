@@ -1,0 +1,33 @@
+# Swift Package Manager build/test output.
+
+[filters.swift-build]
+description = "Compact swift build/test output"
+match_command = "^swift$"
+match_subcommand = "^(build|test)$"
+strip_ansi = true
+strip_lines_matching = [
+	"^\\s*$",
+	"^Fetching ",
+	"^Cloning ",
+	"^Resolving ",
+	"^Computing version",
+	"^Resolved source packages",
+	"^Compiling \\S",
+	"^Building for ",
+	"^\\[\\d+/\\d+\\] Compiling ",
+	"^\\[\\d+/\\d+\\] Emitting ",
+	"^\\[\\d+/\\d+\\] Write ",
+]
+truncate_lines_at = 300
+max_lines = 80
+on_empty = "swift: ok"
+
+[[tests.swift-build]]
+name = "keeps build failure"
+input = "Fetching https://github.com/foo/bar\nCompiling Foo Bar.swift\nFoo.swift:3:5: error: cannot find 'baz' in scope\nBuild failed"
+expected = "Foo.swift:3:5: error: cannot find 'baz' in scope\nBuild failed\n"
+
+[[tests.swift-build]]
+name = "noise collapses to sentinel"
+input = "Fetching https://github.com/foo/bar\nResolving foo\nCompiling Foo Bar.swift"
+expected = "swift: ok"

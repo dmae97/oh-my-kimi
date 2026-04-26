@@ -8,7 +8,7 @@ import { resolvePlanPath } from "./plan-mode-guard";
 import { ToolError } from "./tool-errors";
 
 const exitPlanModeSchema = Type.Object({
-	title: Type.String({ description: "Final plan title, e.g. WP_MIGRATION_PLAN" }),
+	title: Type.String({ description: "final plan title", examples: ["WP_MIGRATION_PLAN"] }),
 });
 
 type ExitPlanModeParams = Static<typeof exitPlanModeSchema>;
