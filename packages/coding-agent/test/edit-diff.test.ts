@@ -158,7 +158,6 @@ describe("findMatch", () => {
 	});
 });
 
-
 describe("adjustIndentation", () => {
 	test("adds indentation when actualText is more indented than oldText", () => {
 		const oldText = "foo\nbar";

@@ -25,7 +25,6 @@ import {
 } from "../session/streaming-output";
 import { renderCodeCell, renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
-import { resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { ImageInputTooLargeError, loadImageInput, MAX_IMAGE_INPUT_BYTES } from "../utils/image-loading";
 import { convertFileWithMarkit } from "../utils/markit";
@@ -1001,10 +1000,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const imageMetadata = await readImageMetadata(absolutePath);
 		const mimeType = imageMetadata?.mimeType;
 		const ext = path.extname(absolutePath).toLowerCase();
-		const hasEditTool = this.session.hasEditTool ?? true;
-		const language = getLanguageFromPath(absolutePath);
-		const shouldConvertWithMarkit =
-			CONVERTIBLE_EXTENSIONS.has(ext) || (ext === ".ipynb" && parsed.kind === "raw");
+		const _hasEditTool = this.session.hasEditTool ?? true;
+		const _language = getLanguageFromPath(absolutePath);
+		const shouldConvertWithMarkit = CONVERTIBLE_EXTENSIONS.has(ext) || (ext === ".ipynb" && parsed.kind === "raw");
 		// Read the file based on type
 		let content: Array<TextContent | ImageContent>;
 		let details: ReadToolDetails = {};

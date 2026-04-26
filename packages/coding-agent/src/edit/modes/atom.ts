@@ -790,9 +790,7 @@ export function applyAtomEdits(
 					`Edit sed expression ${JSON.stringify(edit.expression)} failed to compile: ${lastCompileError}`,
 				);
 			}
-			throw new Error(
-				`Edit sed expression ${JSON.stringify(edit.expression)} did not match any line in the file.`,
-			);
+			throw new Error(`Edit sed expression ${JSON.stringify(edit.expression)} did not match any line in the file.`);
 		}
 	}
 

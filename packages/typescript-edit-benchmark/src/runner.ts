@@ -2124,7 +2124,6 @@ export async function runBenchmark(
 				)
 			: undefined;
 
-
 	const denom = effectiveRuns || 1;
 	const summary: BenchmarkSummary = {
 		totalTasks: tasks.length,

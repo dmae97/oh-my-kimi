@@ -59,13 +59,7 @@ type TInput =
 	| typeof applyPatchSchema;
 
 type VimParams = Static<typeof vimSchema>;
-type EditParams =
-	| ReplaceParams
-	| PatchParams
-	| HashlineParams
-	| AtomParams
-	| VimParams
-	| ApplyPatchParams;
+type EditParams = ReplaceParams | PatchParams | HashlineParams | AtomParams | VimParams | ApplyPatchParams;
 type EditToolResultDetails = EditToolDetails | VimToolDetails;
 
 type EditModeDefinition = {

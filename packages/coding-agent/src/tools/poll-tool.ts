@@ -1,13 +1,14 @@
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
-import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import type { Theme } from "../modes/theme/theme";
-import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { isBackgroundJobSupportEnabled } from "../async";
+import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import type { Theme } from "../modes/theme/theme";
 import pollDescription from "../prompts/tools/poll.md" with { type: "text" };
+import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
+import type { ToolSession } from "./index";
 import {
 	formatBadge,
 	formatDuration,
@@ -19,7 +20,6 @@ import {
 	type ToolUIColor,
 	type ToolUIStatus,
 } from "./render-utils";
-import type { ToolSession } from "./index";
 
 const pollSchema = Type.Object({
 	jobs: Type.Optional(
@@ -288,10 +288,7 @@ export const pollToolRenderer = {
 	inline: true,
 
 	renderCall(args: PollRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const text = renderStatusLine(
-			{ icon: "pending", title: "Poll", description: describeTarget(args) },
-			uiTheme,
-		);
+		const text = renderStatusLine({ icon: "pending", title: "Poll", description: describeTarget(args) }, uiTheme);
 		return new Text(text, 0, 0);
 	},
 
@@ -321,8 +318,7 @@ export const pollToolRenderer = {
 		if (counts.cancelled > 0) meta.push(uiTheme.fg("warning", `${counts.cancelled} cancelled`));
 		if (counts.running > 0) meta.push(uiTheme.fg("accent", `${counts.running} running`));
 
-		const headerIcon: ToolUIStatus =
-			counts.failed > 0 ? "warning" : counts.running > 0 ? "info" : "success";
+		const headerIcon: ToolUIStatus = counts.failed > 0 ? "warning" : counts.running > 0 ? "info" : "success";
 		const description =
 			counts.running > 0
 				? `waiting on ${counts.running} of ${jobs.length}`
@@ -375,7 +371,11 @@ export const pollToolRenderer = {
 							);
 							const typeBadge = formatBadge(job.type, statusToColor(job.status), uiTheme);
 							const idText = uiTheme.fg("muted", job.id);
-							const label = truncateToWidth(replaceTabs(job.label || "(no label)"), LABEL_MAX_WIDTH, Ellipsis.Unicode);
+							const label = truncateToWidth(
+								replaceTabs(job.label || "(no label)"),
+								LABEL_MAX_WIDTH,
+								Ellipsis.Unicode,
+							);
 							const labelText = uiTheme.fg("toolOutput", label);
 							const durationText = uiTheme.fg("dim", formatDuration(job.durationMs));
 							lines.push(`${icon} ${idText} ${typeBadge} ${labelText} ${durationText}`);

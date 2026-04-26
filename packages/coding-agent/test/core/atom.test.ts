@@ -237,15 +237,11 @@ describe("parseAnchor (atom tolerant) + applyAtomEdits", () => {
 });
 describe("atom range locators", () => {
 	it("resolveAtomToolEdit rejects range loc with set", () => {
-		expect(() => resolveAtomToolEdit({ loc: "1xx-4yy", set: ["X"] })).toThrow(
-			/does not support line ranges/,
-		);
+		expect(() => resolveAtomToolEdit({ loc: "1xx-4yy", set: ["X"] })).toThrow(/does not support line ranges/);
 	});
 
 	it("resolveAtomToolEdit rejects range loc even when the verb would otherwise be valid", () => {
-		expect(() => resolveAtomToolEdit({ loc: "1xx-4yy", pre: ["X"] })).toThrow(
-			/does not support line ranges/,
-		);
+		expect(() => resolveAtomToolEdit({ loc: "1xx-4yy", pre: ["X"] })).toThrow(/does not support line ranges/);
 	});
 
 	it("resolveAtomEntryPaths still peels off a path override before range validation", () => {
@@ -347,9 +343,7 @@ describe("applyAtomEdits — sed", () => {
 
 	it("rejects malformed sed expressions", () => {
 		const loc = "1ab";
-		expect(() => resolveAtomToolEdit({ loc, sed: "foo/bar/" })).toThrow(
-			/sed delimiter must be|must start with/,
-		);
+		expect(() => resolveAtomToolEdit({ loc, sed: "foo/bar/" })).toThrow(/sed delimiter must be|must start with/);
 		expect(() => resolveAtomToolEdit({ loc, sed: "s/foo" })).toThrow(/Expected three/);
 		expect(() => resolveAtomToolEdit({ loc, sed: "s/foo/bar/q" })).toThrow(/unknown sed flag/);
 	});
