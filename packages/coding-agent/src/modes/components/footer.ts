@@ -56,22 +56,27 @@ export class FooterComponent implements Component {
 			this.#gitWatcher = null;
 		}
 
-		git.head.resolve(getProjectDir()).then(head => {
-			if (!head) {
-				return;
-			}
+		void git.head
+			.resolve(getProjectDir())
+			.then(head => {
+				if (!head) {
+					return;
+				}
 
-			try {
-				this.#gitWatcher = fs.watch(head.headPath, () => {
-					this.#cachedBranch = undefined; // Invalidate cache
-					if (this.#onBranchChange) {
-						this.#onBranchChange();
-					}
-				});
-			} catch {
-				// Silently fail if we can't watch
-			}
-		});
+				try {
+					this.#gitWatcher = fs.watch(head.headPath, () => {
+						this.#cachedBranch = undefined; // Invalidate cache
+						if (this.#onBranchChange) {
+							this.#onBranchChange();
+						}
+					});
+				} catch {
+					// Silently fail if we can't watch
+				}
+			})
+			.catch(() => {
+				this.#cachedBranch = null;
+			});
 	}
 
 	/**
