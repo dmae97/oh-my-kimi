@@ -472,6 +472,9 @@ function inferFallbackEfforts<TApi extends Api>(model: ApiModel<TApi>): readonly
 	if (model.api === "anthropic-messages") {
 		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
 	}
+	if (model.name.includes("deepseek-v4")) {
+		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
+	}
 	if (model.api === "bedrock-converse-stream") {
 		return DEFAULT_REASONING_EFFORTS;
 	}
