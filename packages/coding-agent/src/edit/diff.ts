@@ -96,40 +96,57 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 			const nextPartIsChange = i < parts.length - 1 && (parts[i + 1].added || parts[i + 1].removed);
 
 			if (lastWasChange || nextPartIsChange) {
-				let linesToShow = raw;
-				let skipStart = 0;
-				let skipEnd = 0;
+				const contextLimit = Math.max(0, contextLines);
+				let leadingSkip = 0;
+				let middleSkip = 0;
+				let trailingSkip = 0;
+				let linesToShow: string[];
 
-				if (!lastWasChange) {
-					// Show only last N lines as leading context
-					skipStart = Math.max(0, raw.length - contextLines);
-					linesToShow = raw.slice(skipStart);
+				if (lastWasChange && nextPartIsChange) {
+					if (raw.length > contextLimit * 2) {
+						const leadingContext = raw.slice(0, contextLimit);
+						const trailingContext = raw.slice(raw.length - contextLimit);
+						middleSkip = raw.length - leadingContext.length - trailingContext.length;
+						linesToShow = [...leadingContext, ...trailingContext];
+					} else {
+						linesToShow = raw;
+					}
+				} else if (nextPartIsChange) {
+					leadingSkip = Math.max(0, raw.length - contextLimit);
+					linesToShow = raw.slice(leadingSkip);
+				} else {
+					trailingSkip = Math.max(0, raw.length - contextLimit);
+					linesToShow = raw.slice(0, contextLimit);
 				}
 
-				if (!nextPartIsChange && linesToShow.length > contextLines) {
-					// Show only first N lines as trailing context
-					skipEnd = linesToShow.length - contextLines;
-					linesToShow = linesToShow.slice(0, contextLines);
-				}
-
-				// Add ellipsis if we skipped lines at start
-				if (skipStart > 0) {
+				if (leadingSkip > 0) {
 					output.push(formatNumberedDiffLine(" ", oldLineNum, "..."));
-					oldLineNum += skipStart;
-					newLineNum += skipStart;
+					oldLineNum += leadingSkip;
+					newLineNum += leadingSkip;
 				}
 
-				for (const line of linesToShow) {
+				const firstChunkLength = middleSkip > 0 ? contextLimit : linesToShow.length;
+				for (const line of linesToShow.slice(0, firstChunkLength)) {
 					output.push(formatNumberedDiffLine(" ", oldLineNum, line));
 					oldLineNum++;
 					newLineNum++;
 				}
 
-				// Add ellipsis if we skipped lines at end
-				if (skipEnd > 0) {
+				if (middleSkip > 0) {
 					output.push(formatNumberedDiffLine(" ", oldLineNum, "..."));
-					oldLineNum += skipEnd;
-					newLineNum += skipEnd;
+					oldLineNum += middleSkip;
+					newLineNum += middleSkip;
+					for (const line of linesToShow.slice(firstChunkLength)) {
+						output.push(formatNumberedDiffLine(" ", oldLineNum, line));
+						oldLineNum++;
+						newLineNum++;
+					}
+				}
+
+				if (trailingSkip > 0) {
+					output.push(formatNumberedDiffLine(" ", oldLineNum, "..."));
+					oldLineNum += trailingSkip;
+					newLineNum += trailingSkip;
 				}
 			} else {
 				// Skip these context lines entirely
