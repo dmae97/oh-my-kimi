@@ -54,7 +54,7 @@ const InputTask = Type.Object({
 });
 
 const InputPhase = Type.Object({
-	name: Type.String({ description: "phase name", examples: ["Investigation", "Implementation"] }),
+	name: Type.String({ description: "phase name", examples: ["I. Foundation", "II. Auth", "III. Verification"] }),
 	tasks: Type.Optional(Type.Array(InputTask)),
 });
 

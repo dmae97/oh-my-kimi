@@ -43,6 +43,11 @@ If `done`, `rm`, or `drop` omits both `task` and `phase`, it applies to all task
 - `label`: Short label (5-10 words). What is being done, not how.
 - `replace` task `content` should stay short and specific.
 
+## Phase Anatomy
+- `name`: Short, human-readable noun phrase (1-3 words). Capitalize naturally.
+- Always prefix with a roman-numeral ordinal (`I.`, `II.`, `III.`, `IV.`, ...) to convey ordering — e.g. `I. Foundation`, `II. Auth`, `III. Routing`. Single-phase plans use `I.` too.
+- You **MUST NOT** use snake_case, `Phase1_*`, arabic numerals (`1.`), or letter prefixes (`A.`) — they render as ugly identifiers.
+
 ## Rules
 - Mark tasks done immediately after finishing — never defer.
 - Complete phases in order — do not skip ahead while earlier ones are pending.
@@ -59,18 +64,20 @@ Create a todo list when:
 </conditions>
 
 <examples>
-# Initial setup
-`{"ops":[{"op":"replace","phases":[{"name":"Investigation","tasks":[{"content":"Read source"},{"content":"Map callsites"}]},{"name":"Implementation","tasks":[{"content":"Apply fix"},{"content":"Run tests"}]}]}]}`
+# Initial setup (multi-phase)
+`{"ops":[{"op":"replace","phases":[{"name":"I. Foundation","tasks":[{"content":"Scaffold crate"},{"content":"Wire workspace"}]},{"name":"II. Auth","tasks":[{"content":"Port credential store"},{"content":"Wire OAuth providers"}]},{"name":"III. Verification","tasks":[{"content":"Run cargo test"}]}]}]}`
+# Initial setup (single phase " still prefixed)
+`{"ops":[{"op":"replace","phases":[{"name":"I. Implementation","tasks":[{"content":"Apply fix"},{"content":"Run tests"}]}]}]}`
 # Complete one task
 `{"ops":[{"op":"done","task":"task-2"}]}`
 # Complete a whole phase
-`{"ops":[{"op":"done","phase":"Implementation"}]}`
+`{"ops":[{"op":"done","phase":"II. Auth"}]}`
 # Remove all tasks
 `{"ops":[{"op":"rm"}]}`
 # Drop one task
 `{"ops":[{"op":"drop","task":"task-7"}]}`
 # Append tasks to a phase
-`{"ops":[{"op":"append","phase":"Implementation","items":[{"id":"task-8","label":"Handle retries"},{"id":"task-9","label":"Run tests"}]}]}`
+`{"ops":[{"op":"append","phase":"II. Auth","items":[{"id":"task-8","label":"Handle retries"},{"id":"task-9","label":"Run tests"}]}]}`
 </examples>
 
 <avoid>
