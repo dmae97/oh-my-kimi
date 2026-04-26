@@ -81,7 +81,7 @@ describe("python tool settings", () => {
 		const session = createSession(testDir, sessionFile, { "python.kernelMode": "per-call" }, kernelOwnerId);
 		const pythonTool = new PythonTool(session);
 
-		await pythonTool.execute("tool-call", { cells: [{ code: "print(1)" }] });
+		await pythonTool.execute("tool-call", { cells: [{ title: "print-single-cell", code: "print(1)" }] });
 
 		expect(warmupSpy).toHaveBeenCalledWith(
 			testDir,

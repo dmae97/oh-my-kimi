@@ -57,13 +57,7 @@ export function renderMCPResult(
 		lines.push(`${theme.fg("dim", "Args")}`);
 		const maxDepth = JSON_TREE_MAX_DEPTH_EXPANDED;
 		const maxLines = JSON_TREE_MAX_LINES_EXPANDED;
-		const tree = renderJsonTreeLines(
-			args,
-			theme,
-			maxDepth,
-			maxLines,
-			JSON_TREE_SCALAR_LEN_EXPANDED,
-		);
+		const tree = renderJsonTreeLines(args, theme, maxDepth, maxLines, JSON_TREE_SCALAR_LEN_EXPANDED);
 		for (const line of tree.lines) {
 			lines.push(line);
 		}

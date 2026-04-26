@@ -4,8 +4,8 @@ import * as path from "node:path";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import {
 	dedupeParseErrors,
-	formatDiagnostics,
 	formatCodeFrameLine,
+	formatDiagnostics,
 	formatParseErrors,
 	formatScreenshot,
 } from "@oh-my-pi/pi-coding-agent/tools/render-utils";

@@ -234,125 +234,23 @@ describe("parseAnchor (atom tolerant) + applyAtomEdits", () => {
 		expect(() => resolveAtomToolEdit(toolEdit)).toThrow(/Could not find a line number/);
 	});
 });
-
-describe("applyAtomEdits — between", () => {
-	it("replaces lines strictly between two surviving anchors (function body, keep braces)", () => {
-		const content = "function alpha() {\n\told();\n\tmore();\n}";
-		const edits: AtomEdit[] = [
-			{
-				op: "between",
-				after: tag(1, "function alpha() {"),
-				before: tag(4, "}"),
-				lines: ["\tvalidate();", "\tlog();", "\tcleanup();"],
-			},
-		];
-		const result = applyAtomEdits(content, edits);
-		expect(result.lines).toBe("function alpha() {\n\tvalidate();\n\tlog();\n\tcleanup();\n}");
-		expect(result.firstChangedLine).toBe(2);
+describe("atom range locators", () => {
+	it("resolveAtomToolEdit rejects range loc with set", () => {
+		expect(() => resolveAtomToolEdit({ path: "a.ts", loc: "1xx-4yy", set: ["X"] })).toThrow(
+			/does not support line ranges/,
+		);
 	});
 
-	it("deletes the body when lines is empty", () => {
-		const content = "function alpha() {\n\told();\n\tmore();\n}";
-		const edits: AtomEdit[] = [
-			{ op: "between", after: tag(1, "function alpha() {"), before: tag(4, "}"), lines: [] },
-		];
-		const result = applyAtomEdits(content, edits);
-		expect(result.lines).toBe("function alpha() {\n}");
+	it("resolveAtomToolEdit rejects range loc even when the verb would otherwise be valid", () => {
+		expect(() => resolveAtomToolEdit({ path: "a.ts", loc: "1xx-4yy", pre: ["X"] })).toThrow(
+			/does not support line ranges/,
+		);
 	});
 
-	it("is a pure insertion when after.line + 1 == before.line", () => {
-		const content = "top\nbottom";
-		const edits: AtomEdit[] = [{ op: "between", after: tag(1, "top"), before: tag(2, "bottom"), lines: ["middle"] }];
-		const result = applyAtomEdits(content, edits);
-		expect(result.lines).toBe("top\nmiddle\nbottom");
-	});
-
-	it("rejects when after.line >= before.line", () => {
-		const content = "a\nb\nc";
-		const edits: AtomEdit[] = [{ op: "between", after: tag(2, "b"), before: tag(2, "b"), lines: ["x"] }];
-		expect(() => applyAtomEdits(content, edits)).toThrow(/after\.line < before\.line/);
-	});
-
-	it("rejects when another op targets a line strictly inside the region", () => {
-		const content = "open\nbody1\nbody2\nclose";
-		const edits: AtomEdit[] = [
-			{ op: "between", after: tag(1, "open"), before: tag(4, "close"), lines: ["X"] },
-			{ op: "set", pos: tag(2, "body1"), lines: ["Y"] },
-		];
-		expect(() => applyAtomEdits(content, edits)).toThrow(/inside a `between` region/);
-	});
-
-	it("rejects overlapping between regions", () => {
-		const content = "a\nb\nc\nd\ne";
-		const edits: AtomEdit[] = [
-			{ op: "between", after: tag(1, "a"), before: tag(4, "d"), lines: ["X"] },
-			{ op: "between", after: tag(3, "c"), before: tag(5, "e"), lines: ["Y"] },
-		];
-		expect(() => applyAtomEdits(content, edits)).toThrow(/Overlapping `between` ops/);
-	});
-
-	it("coexists with set on the closing-anchor line (the anchor is preserved by between, then set rewrites it)", () => {
-		const content = "open\nbody\nclose";
-		const edits: AtomEdit[] = [
-			{ op: "between", after: tag(1, "open"), before: tag(3, "close"), lines: ["X", "Y"] },
-			{ op: "set", pos: tag(3, "close"), lines: ["END"] },
-		];
-		const result = applyAtomEdits(content, edits);
-		expect(result.lines).toBe("open\nX\nY\nEND");
-	});
-
-	it("coexists with set on the opening-anchor line", () => {
-		const content = "open\nbody\nclose";
-		const edits: AtomEdit[] = [
-			{ op: "between", after: tag(1, "open"), before: tag(3, "close"), lines: ["X", "Y"] },
-			{ op: "set", pos: tag(1, "open"), lines: ["BEGIN"] },
-		];
-		const result = applyAtomEdits(content, edits);
-		expect(result.lines).toBe("BEGIN\nX\nY\nclose");
-	});
-
-	it("rejects on stale hash for either anchor", () => {
-		const content = "open\nbody\nclose";
-		const edits: AtomEdit[] = [
-			{ op: "between", after: { line: 1, hash: "ZZ" }, before: tag(3, "close"), lines: ["X"] },
-		];
-		expect(() => applyAtomEdits(content, edits)).toThrow(HashlineMismatchError);
-	});
-
-	it("resolveAtomToolEdit accepts range loc and parses both anchors", () => {
-		const toolEdit = {
-			path: "a.ts",
-			loc: "1xx-4yy",
-			set: ["X"],
-		};
-		const resolved = resolveAtomToolEdit(toolEdit);
-		expect(resolved).toHaveLength(1);
-		const between = resolved[0];
-		expect(between?.op).toBe("between");
-		if (!between || between.op !== "between") throw new Error("unreachable");
-		expect(between.after.line).toBe(1);
-		expect(between.before.line).toBe(4);
-		expect(between.lines).toEqual(["X"]);
-	});
-
-	it("ignores null non-set verbs on range locators", () => {
-		const toolEdit = {
-			path: "a.ts",
-			loc: "1xx-4yy",
-			pre: null,
-			set: ["X"],
-			post: null,
-			sub: null,
-		} as unknown as AtomToolEdit;
-		const resolved = resolveAtomToolEdit(toolEdit);
-		expect(resolved).toHaveLength(1);
-		const between = resolved[0];
-		expect(between?.op).toBe("between");
-		if (!between || between.op !== "between") throw new Error("unreachable");
-		expect(between.lines).toEqual(["X"]);
-	});
-
-	it("resolveAtomToolEdit rejects range loc without set", () => {
-		expect(() => resolveAtomToolEdit({ path: "a.ts", loc: "1xx-4yy", pre: ["X"] })).toThrow(/range loc requires set/);
+	it("resolveAtomEntryPaths still peels off a path override before range validation", () => {
+		const [resolved] = resolveAtomEntryPaths([{ loc: "a.ts:1xx-4yy", set: ["X"] }], undefined);
+		expect(resolved?.path).toBe("a.ts");
+		expect(resolved?.loc).toBe("1xx-4yy");
+		expect(() => resolveAtomToolEdit(resolved!)).toThrow(/does not support line ranges/);
 	});
 });

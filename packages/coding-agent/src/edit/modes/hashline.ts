@@ -653,6 +653,39 @@ export function validateLineRef(ref: { line: number; hash: string }, fileLines: 
 	}
 }
 
+/**
+ * Default search window for {@link tryRebaseAnchor} (lines on each side of the requested anchor).
+ */
+export const ANCHOR_REBASE_WINDOW = 2;
+
+/**
+ * Look for the requested hash within ±`window` lines of `anchor.line`.
+ *
+ * Returns the new line number when exactly one nearby line matches the hash;
+ * otherwise `null` (genuine mismatch or ambiguous). The caller is expected to
+ * mutate `anchor.line` in place and surface a warning so the model knows the
+ * edit was retargeted.
+ *
+ * The exact-position match (anchor.line itself) is intentionally skipped: the
+ * caller has already determined the requested line's hash does not match.
+ */
+export function tryRebaseAnchor(
+	anchor: { line: number; hash: string },
+	fileLines: string[],
+	window: number = ANCHOR_REBASE_WINDOW,
+): number | null {
+	const lo = Math.max(1, anchor.line - window);
+	const hi = Math.min(fileLines.length, anchor.line + window);
+	let found: number | null = null;
+	for (let line = lo; line <= hi; line++) {
+		if (line === anchor.line) continue;
+		if (computeLineHash(line, fileLines[line - 1]) !== anchor.hash) continue;
+		if (found !== null) return null; // ambiguous: more than one match in window
+		found = line;
+	}
+	return found;
+}
+
 function isEscapedTabAutocorrectEnabled(): boolean {
 	switch (Bun.env.PI_HASHLINE_AUTOCORRECT_ESCAPED_TABS) {
 		case "0":
@@ -819,6 +852,15 @@ function applyHashlineEditToLines(
 		}
 		case "replace_range": {
 			const count = edit.end.line - edit.pos.line + 1;
+			const origRange = originalFileLines.slice(edit.pos.line - 1, edit.pos.line - 1 + count);
+			if (count === edit.lines.length && origRange.every((line, i) => line === edit.lines[i])) {
+				noopEdits.push({
+					editIndex,
+					loc: `${edit.pos.line}${edit.pos.hash}-${edit.end.line}${edit.end.hash}`,
+					current: origRange.join("\n"),
+				});
+				break;
+			}
 			fileLines.splice(edit.pos.line - 1, count, ...edit.lines);
 			trackFirstChanged(edit.pos.line);
 			break;
@@ -903,7 +945,7 @@ function buildHashlineEditResult(params: {
 	};
 }
 
-function validateHashlineEditRefs(edits: HashlineEdit[], fileLines: string[]): HashMismatch[] {
+function validateHashlineEditRefs(edits: HashlineEdit[], fileLines: string[], warnings: string[]): HashMismatch[] {
 	const mismatches: HashMismatch[] = [];
 	for (const edit of edits) {
 		switch (edit.op) {
@@ -936,6 +978,15 @@ function validateHashlineEditRefs(edits: HashlineEdit[], fileLines: string[]): H
 		}
 		const actualHash = computeLineHash(ref.line, fileLines[ref.line - 1]);
 		if (actualHash === ref.hash) {
+			return;
+		}
+		const rebased = tryRebaseAnchor(ref, fileLines);
+		if (rebased !== null) {
+			const original = `${ref.line}${ref.hash}`;
+			ref.line = rebased;
+			warnings.push(
+				`Auto-rebased anchor ${original} → ${rebased}${ref.hash} (line shifted within ±${ANCHOR_REBASE_WINDOW}; hash matched).`,
+			);
 			return;
 		}
 		mismatches.push({ line: ref.line, expected: ref.hash, actual: actualHash });
@@ -976,7 +1027,7 @@ export function applyHashlineEdits(
 	const noopEdits: Array<{ editIndex: number; loc: string; current: string }> = [];
 	const warnings: string[] = [];
 
-	const mismatches = validateHashlineEditRefs(edits, fileLines);
+	const mismatches = validateHashlineEditRefs(edits, fileLines, warnings);
 	if (mismatches.length > 0) {
 		throw new HashlineMismatchError(mismatches, fileLines);
 	}
@@ -1342,6 +1393,11 @@ export async function executeHashlineSingle(
 				if (preview.length > 0) {
 					diagnostic += `\nThe file currently contains these lines:\n${preview}\nYour edits were normalized back to the original content (whitespace-only differences are preserved as-is). Ensure your replacement changes actual code, not just formatting.`;
 				}
+			}
+			if (result.noopEdits.some(e => e.loc.includes("-"))) {
+				diagnostic +=
+					"\nHint: a `range` loc replaces the entire span inclusive of both endpoints. " +
+					"If your replacement repeats the existing content, narrow the range or change the replacement.";
 			}
 		}
 		throw new Error(diagnostic);

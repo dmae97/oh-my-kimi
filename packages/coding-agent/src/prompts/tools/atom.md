@@ -7,20 +7,18 @@ Read the file first. Copy the full anchors exactly as shown by `read`.
 
 Each entry has one shared locator plus one or more verbs:
 - `loc: "160sr"` — single anchored line
-- `loc: "160sr-170ab"` — range between two surviving anchors
 - `loc: "^"` — beginning of file (only valid with `pre`)
 - `loc: "$"` — end of file (only valid with `post`)
 - `loc: "a.ts:160sr"` — cross-file override inside the locator
 
 Verbs:
-- `set: ["…"]` — replace the anchor line, or replace the lines strictly between a range locator
+- `set: ["…"]` — replace the anchor line
 - `pre: ["…"]` — insert before the anchor line (or at BOF when `loc:"^"`)
 - `post: ["…"]` — insert after the anchor line (or at EOF when `loc:"$"`)
 - `sub: [find, replace]` — replace a unique substring on the anchored line; the line tail is preserved automatically
 
 Combination rules:
-- On a **single-anchor** `loc`, you may combine `pre`, **one of** `set` or `sub`, and `post` in the same entry.
-- On a **range** `loc`, only `set` is allowed.
+- On a single-anchor `loc`, you may combine `pre`, **one of** `set` or `sub`, and `post` in the same entry.
 - `set: []` on a single-anchor `loc` deletes that line.
 - `set:[""]` is **not** delete — it replaces the line with a blank line.
 
@@ -59,16 +57,17 @@ Original line 2: `const timeout = 5000;`
 Original line 10: `\tif (x) {`
 `{path:"a.ts",edits:[{loc:{{href 10 "\tif (x) {"}},sub:["(x)","(!x)"]}]}`
 
+# Off-by-one with `sub`
+For a single-digit/operator nudge, `sub` is the cheapest op. Do **not** rewrite the whole line with `set`.
+Original line 2: `const timeout = 5000;`
+`{path:"a.ts",edits:[{loc:{{href 2 "const timeout = 5000;"}},sub:["5000","5001"]}]}`
+
 # Combine `pre` + `set` + `post` in one entry
 `{path:"a.ts",edits:[{loc:{{href 6 "\tlog();"}},pre:["\tvalidate();"],set:["\tlog();"],post:["\tcleanup();"]}]}`
 
 # Replace one whole line with `set`
 Use `set` when you're rewriting most of the line, or when `sub` would need a long `find`.
 `{path:"a.ts",edits:[{loc:{{href 3 "const tag = \"DO NOT SHIP\";"}},set:["const tag = \"OK\";"]}]}`
-
-# Replace a block body with a range locator
-Range locators keep the boundary lines and replace only the lines strictly between them.
-`{path:"a.ts",edits:[{loc:"{{href 5 "function alpha() {"}}-{{href 7 "}"}}",set:["\tvalidate();","\tlog();","\tcleanup();"]}]}`
 
 # Replace multiple non-adjacent lines
 `{path:"a.ts",edits:[{loc:{{href 11 "\t\treturn parse(data);"}},set:["\t\treturn parse(data) ?? fallback;"]},{loc:{{href 13 "\treturn null;"}},set:["\treturn fallback;"]}]}`

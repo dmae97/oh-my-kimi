@@ -48,7 +48,7 @@ describe("python tool execution", () => {
 		const tool = new PythonTool(createSession(tempDir.path(), kernelOwnerId));
 		const result = await tool.execute(
 			"call-id",
-			{ cells: [{ code: "print('hi')" }], timeout: 5, cwd: tempDir.path(), reset: true },
+			{ cells: [{ title: "hello-world", code: "print('hi')" }], timeout: 5, reset: true },
 			undefined,
 			undefined,
 			undefined,

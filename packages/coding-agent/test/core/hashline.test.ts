@@ -784,20 +784,6 @@ describe("applyHashlineEdits — errors", () => {
 		}
 	});
 
-	it("does not relocate stale line refs even when hash uniquely matches another line", () => {
-		const content = "aaa\nbbb\nccc";
-		const staleButUnique = parseTag(`2${computeLineHash(1, "ccc")}`);
-		const edits: HashlineEdit[] = [{ op: "replace_line", pos: staleButUnique, lines: ["CCC"] }];
-		try {
-			applyHashlineEdits(content, edits);
-			expect.unreachable("should have thrown");
-		} catch (err) {
-			expect(err).toBeInstanceOf(HashlineMismatchError);
-			const e = err as HashlineMismatchError;
-			expect(e.mismatches[0].line).toBe(2);
-		}
-	});
-
 	it("does not relocate when expected hash is non-unique", () => {
 		const content = "dup\nmid\ndup";
 		const staleDuplicate = parseTag(`2${computeLineHash(1, "dup")}`);

@@ -215,7 +215,9 @@ function getAnthropicProviderSessionState(
 function isAnthropicStrictGrammarTooLargeError(error: unknown): boolean {
 	if (extractHttpStatusFromError(error) !== 400) return false;
 	const message = error instanceof Error ? error.message : String(error);
-	return /invalid_request_error/i.test(message) && /compiled grammar/i.test(message) && /too large/i.test(message);
+	const isStrictGrammarTooLarge = /compiled grammar/i.test(message) && /too large/i.test(message);
+	const isSchemaCompilationTooComplex = /schema/i.test(message) && /too complex/i.test(message) && /compil/i.test(message);
+	return /invalid_request_error/i.test(message) && (isStrictGrammarTooLarge || isSchemaCompilationTooComplex);
 }
 
 function hasStrictAnthropicTools(params: MessageCreateParamsStreaming): boolean {

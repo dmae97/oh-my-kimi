@@ -41,7 +41,7 @@ function getToolChoiceName(choice: unknown): string | undefined {
 	return undefined;
 }
 
-function createToolCallAssistantMessage(name: string, args: unknown): AssistantMessage {
+function createToolCallAssistantMessage(name: string, args: Record<string, unknown>): AssistantMessage {
 	const toolCall: ToolCall = {
 		type: "toolCall",
 		id: `call_${name}`,
