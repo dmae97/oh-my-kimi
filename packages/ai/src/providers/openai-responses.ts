@@ -404,7 +404,7 @@ function buildParams(
 		}
 	}
 
-	if (model.reasoning && model.provider !== "github-copilot") {
+	if (model.reasoning) {
 		// Always request encrypted reasoning content so reasoning items can be
 		// replayed in multi-turn conversations when store is false (items aren't
 		// persisted server-side, so we must include the full content).

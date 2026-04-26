@@ -1519,7 +1519,7 @@ function buildParams(
 		);
 	}
 
-	if (options?.thinkingEnabled && model.reasoning && model.provider !== "github-copilot") {
+	if (options?.thinkingEnabled && model.reasoning) {
 		const mode = model.thinking?.mode;
 		const requestedEffort = options.reasoning;
 		const effort =
@@ -1583,10 +1583,6 @@ function buildParams(
 		params.system = systemBlocks;
 	}
 	disableThinkingIfToolChoiceForced(params);
-	if (model.provider === "github-copilot") {
-		delete params.thinking;
-		delete params.output_config;
-	}
 	ensureMaxTokensForThinking(params, model);
 	applyPromptCaching(params, cacheControl);
 	enforceCacheControlLimit(params, 4);
