@@ -1,15 +1,23 @@
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+- Added a `/todo` slash command to view and modify todos with `edit`, `copy`, `start`, `done`, `drop`, `rm`, `append`, and `replace` operations
+- Added `/todo edit` to open the current todo list in `$EDITOR` as Markdown and sync the edited checklist back into the session
+- Added `/todo copy` to copy the rendered Markdown todo list to the clipboard
+
+### Changed
+
+- Changed todo list restoration to include user todo-edit custom session entries so slash-command and editor-based todo updates persist after reload
+- Restored sensible defaults for `grep.contextBefore` (1) and `grep.contextAfter` (3) so grep matches show context lines by default after the `pre`/`post` parameters were folded into settings
+
 ### Removed
 
 - Removed the `chunk` edit mode, chunk-aware `read` selectors, chunk-aware `grep` rendering, and the `omp read` chunk CLI subcommand
 - Removed the `read.prosechunks`, `read.explorechunks`, and `read.anchorstyle` settings
 - Removed the underlying `chunk` native module and AST-based chunk schema generation from `pi-natives`
-
-### Changed
-
-- Restored sensible defaults for `grep.contextBefore` (1) and `grep.contextAfter` (3) so grep matches show context lines by default after the `pre`/`post` parameters were folded into settings
 
 ### Fixed
 

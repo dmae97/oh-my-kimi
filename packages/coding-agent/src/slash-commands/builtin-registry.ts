@@ -260,6 +260,25 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "todo",
+		description: "View or modify the agent's todo list",
+		subcommands: [
+			{ name: "edit", description: "Open todos in $EDITOR (Markdown round-trip)" },
+			{ name: "copy", description: "Copy todos as Markdown to clipboard" },
+			{ name: "start", description: "Mark task in_progress", usage: "<task-id>" },
+			{ name: "done", description: "Mark task/phase/all completed", usage: "[task-id|phase]" },
+			{ name: "drop", description: "Mark task/phase/all abandoned", usage: "[task-id|phase]" },
+			{ name: "rm", description: "Remove task/phase/all", usage: "[task-id|phase]" },
+			{ name: "append", description: "Append items to a phase", usage: "{...json...}" },
+			{ name: "replace", description: "Replace entire todo list", usage: "{...json...}" },
+		],
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			await runtime.ctx.handleTodoCommand(command.args);
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "session",
 		description: "Session management commands",
 		subcommands: [

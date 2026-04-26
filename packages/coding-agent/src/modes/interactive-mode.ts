@@ -61,6 +61,7 @@ import { InputController } from "./controllers/input-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
 import { SelectorController } from "./controllers/selector-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
+import { TodoCommandController } from "./controllers/todo-command-controller";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { SessionObserverRegistry } from "./session-observer-registry";
 import type { Theme } from "./theme/theme";
@@ -173,6 +174,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	readonly #btwController: BtwController;
 	readonly #commandController: CommandController;
+	readonly #todoCommandController: TodoCommandController;
 	readonly #eventController: EventController;
 	readonly #extensionUiController: ExtensionUiController;
 	readonly #inputController: InputController;
@@ -287,6 +289,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#extensionUiController = new ExtensionUiController(this);
 		this.#eventController = new EventController(this);
 		this.#commandController = new CommandController(this);
+		this.#todoCommandController = new TodoCommandController(this);
 		this.#selectorController = new SelectorController(this);
 		this.#inputController = new InputController(this);
 		this.#observerRegistry = new SessionObserverRegistry();
@@ -1272,6 +1275,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleCopyCommand(sub?: string) {
 		return this.#commandController.handleCopyCommand(sub);
+	}
+
+	handleTodoCommand(args: string): Promise<void> {
+		return this.#todoCommandController.handleTodoCommand(args);
 	}
 
 	handleSessionCommand(): Promise<void> {

@@ -181,11 +181,19 @@ function normalizeInProgressTask(phases: TodoPhase[]): void {
 	if (firstPendingTask) firstPendingTask.status = "in_progress";
 }
 
+export const USER_TODO_EDIT_CUSTOM_TYPE = "user_todo_edit";
+
 export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPhase[] {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
+		if (entry.type === "custom" && entry.customType === USER_TODO_EDIT_CUSTOM_TYPE) {
+			const data = entry.data as { phases?: unknown } | undefined;
+			if (data && Array.isArray(data.phases)) {
+				return clonePhases(data.phases as TodoPhase[]);
+			}
+			continue;
+		}
 		if (entry.type !== "message") continue;
-
 		const message = entry.message as { role?: string; toolName?: string; details?: unknown; isError?: boolean };
 		if (message.role !== "toolResult" || message.toolName !== "todo_write" || message.isError) continue;
 
@@ -343,6 +351,103 @@ function applyParams(file: TodoFile, params: TodoWriteParams): { file: TodoFile;
 	normalizeInProgressTask(file.phases);
 	return { file, errors };
 }
+/** Apply an array of `todo_write`-style ops to existing phases. Used by /todo slash command. */
+export function applyOpsToPhases(
+	currentPhases: TodoPhase[],
+	ops: TodoWriteParams["ops"],
+): { phases: TodoPhase[]; errors: string[] } {
+	const startFile = fileFromPhases(currentPhases);
+	const { file, errors } = applyParams(startFile, { ops });
+	return { phases: file.phases, errors };
+}
+
+// =============================================================================
+// Markdown round-trip
+// =============================================================================
+
+const STATUS_TO_MARKER: Record<TodoStatus, string> = {
+	pending: " ",
+	in_progress: "/",
+	completed: "x",
+	abandoned: "-",
+};
+
+/** Render todo phases as a Markdown checklist suitable for editing/copying. */
+export function phasesToMarkdown(phases: TodoPhase[]): string {
+	if (phases.length === 0) return "# I. Todos\n";
+	const out: string[] = [];
+	for (let i = 0; i < phases.length; i++) {
+		if (i > 0) out.push("");
+		out.push(`# ${phases[i].name}`);
+		for (const task of phases[i].tasks) {
+			out.push(`- [${STATUS_TO_MARKER[task.status]}] ${task.content}`);
+		}
+	}
+	return `${out.join("\n")}\n`;
+}
+
+const MARKER_TO_STATUS: Record<string, TodoStatus> = {
+	" ": "pending",
+	"": "pending",
+	x: "completed",
+	X: "completed",
+	"/": "in_progress",
+	">": "in_progress",
+	"-": "abandoned",
+	"~": "abandoned",
+};
+
+/**
+ * Parse a Markdown checklist back into todo phases. Task and phase ids are
+ * regenerated; the agent observes the new ids in the system reminder.
+ */
+export function markdownToPhases(md: string): { phases: TodoPhase[]; errors: string[] } {
+	const errors: string[] = [];
+	const phases: TodoPhase[] = [];
+	let currentPhase: TodoPhase | undefined;
+	let nextPhaseId = 1;
+	let nextTaskId = 1;
+
+	const lines = md.split(/\r?\n/);
+	for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+		const raw = lines[lineNum];
+		const trimmed = raw.trim();
+		if (!trimmed) continue;
+
+		const headingMatch = /^#{1,6}\s+(.+?)\s*$/.exec(trimmed);
+		if (headingMatch) {
+			currentPhase = { id: `phase-${nextPhaseId++}`, name: headingMatch[1].trim(), tasks: [] };
+			phases.push(currentPhase);
+			continue;
+		}
+
+		const taskMatch = /^[-*+]\s*\[(.?)\]\s+(.+?)\s*$/.exec(trimmed);
+		if (taskMatch) {
+			if (!currentPhase) {
+				currentPhase = { id: `phase-${nextPhaseId++}`, name: "I. Todos", tasks: [] };
+				phases.push(currentPhase);
+			}
+			const marker = taskMatch[1];
+			const status = MARKER_TO_STATUS[marker];
+			if (!status) {
+				errors.push(`Line ${lineNum + 1}: unknown status marker "[${marker}]" (use [ ], [x], [/], [-])`);
+				continue;
+			}
+			currentPhase.tasks.push({
+				id: `task-${nextTaskId++}`,
+				content: taskMatch[2].trim(),
+				status,
+			});
+			continue;
+		}
+
+		errors.push(`Line ${lineNum + 1}: unrecognized syntax "${trimmed}"`);
+	}
+
+	normalizeInProgressTask(phases);
+	return { phases, errors };
+}
+
 
 function formatSummary(phases: TodoPhase[], errors: string[]): string {
 	const tasks = phases.flatMap(phase => phase.tasks);
