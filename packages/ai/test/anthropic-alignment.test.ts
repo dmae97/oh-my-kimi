@@ -356,6 +356,50 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(originalNestedSchema).toHaveProperty("patternProperties");
 	});
 
+	it("removes Anthropic-unsupported array item count constraints", async () => {
+		const tools: Tool[] = [
+			{
+				name: "edit_file",
+				description: "edit files",
+				parameters: {
+					type: "object",
+					properties: {
+						sub: {
+							type: "array",
+							items: { type: "string" },
+							minItems: 2,
+							maxItems: 2,
+						},
+						nonEmpty: {
+							type: "array",
+							items: { type: "string" },
+							minItems: 1,
+						},
+					},
+					required: ["sub"],
+				} as unknown as TSchema,
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+			systemPrompt: "Stay concise.",
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			tools,
+		})) as {
+			tools?: Array<{
+				input_schema?: {
+					properties?: Record<string, unknown>;
+				};
+			}>;
+		};
+
+		const properties = payload.tools?.[0]?.input_schema?.properties as Record<string, Record<string, unknown>>;
+
+		expect(properties.sub).not.toHaveProperty("minItems");
+		expect(properties.sub).not.toHaveProperty("maxItems");
+		expect(properties.nonEmpty.minItems).toBe(1);
+	});
+
 	it("marks at most twenty Anthropic tools strict", async () => {
 		const tools: Tool[] = Array.from({ length: 25 }, (_, index) => ({
 			name: `tool_${index}`,

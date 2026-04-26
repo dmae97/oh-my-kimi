@@ -1751,7 +1751,7 @@ export function convertAnthropicMessages(
 	return params;
 }
 
-const ANTHROPIC_UNSUPPORTED_TOOL_SCHEMA_FIELDS = new Set(["patternProperties"]);
+const ANTHROPIC_UNSUPPORTED_TOOL_SCHEMA_FIELDS = new Set(["maxItems", "patternProperties"]);
 const MAX_ANTHROPIC_STRICT_TOOLS = 20;
 const MAX_ANTHROPIC_STRICT_OPTIONAL_PARAMETERS = 24;
 const MAX_ANTHROPIC_STRICT_UNION_PARAMETERS = 16;
@@ -1769,6 +1769,10 @@ function normalizeAnthropicToolSchema(
 		Object.entries(schema).filter(([key]) => !ANTHROPIC_UNSUPPORTED_TOOL_SCHEMA_FIELDS.has(key)),
 	);
 	cache.set(schema, result);
+	const minItems = result.minItems;
+	if (typeof minItems === "number" && minItems !== 0 && minItems !== 1) {
+		delete result.minItems;
+	}
 
 	const type = result.type;
 	const canBeObject =
