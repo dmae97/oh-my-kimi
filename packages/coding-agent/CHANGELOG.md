@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Renamed atom edit operations from `before` and `after` to `pre` and `post`, so existing `atom` payloads using the old operation keys must be updated
@@ -11,6 +10,7 @@
 
 ### Added
 
+- Added inline file overrides in atom locators (`loc: "a.ts:160sr"`) so cross-file edits can be written without a separate per-entry `path` field
 - Added `openai` to the `providers.image` options, allowing image generation to be explicitly routed through the active GPT Responses/Codex model
 - Added `between` atom edit operation to replace only the lines between two surviving anchors while preserving the boundary anchors
 - Added conflict detection for `between` atom edits to require non-overlapping regions and forbid edits targeting lines strictly inside those regions
@@ -19,6 +19,8 @@
 
 ### Changed
 
+- Changed atom edit request format to use a shared `loc` selector, including range (`"160sr-9ab"`) and boundary (`"^"`, `"$"`) forms instead of per-operation anchor fields
+- Changed atom edit payload fields so `set`, `pre`, and `post` now require line-array values and `sub` now takes a `[find, replace]` tuple, with boundary deletion now expressed as `set: []`
 - Changed edit diff wrapping to preserve the active line-prefix separator (`|` or `│`) while keeping continuation lines aligned by line-number width
 - Changed Vim focus and viewport rendering to align cursor/selection markers and line numbers in a single gutter format
 - Changed auto image provider selection for `providers.image=auto` to try active GPT image generation before Antigravity, OpenRouter, and Gemini
@@ -31,8 +33,13 @@
 - Updated hashline/chunk selector parsing to the new stable bigram token set used for checksums
 - Renamed the image generation implementation module to `image-gen` and routed active GPT Responses/Codex models through OpenAI's hosted `image_generation` tool with WebP output
 
+### Removed
+
+- Removed the atom `del` verb and now require anchored-line deletion to be requested with `set: []`
+
 ### Fixed
 
+- Fixed atom input handling to ignore null optional verb fields so entries with `pre`, `set`, `post`, or `sub` set to `null` remain valid
 - Fixed status-line Git branch rendering to degrade gracefully when the process hits `ENFILE`/`EMFILE` while reading optional Git refs
 - Changed hashline mismatch failure output to show a clean numbered context block with numbered gutter and full-anchor alignment guidance when edits are rejected after the file changed
 - Fixed `atom` mode to apply multiple edits on the same anchor line without index-shift artifacts, so mixed operations like `before`, `after`, `set`, `sub`, `ins`, and `del` now resolve consistently

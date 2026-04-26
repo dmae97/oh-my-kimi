@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	type AtomEdit,
+	type AtomToolEdit,
 	applyAtomEdits,
 	computeLineHash,
 	HashlineMismatchError,
@@ -171,6 +172,17 @@ describe("resolveAtomToolEdit — loc syntax", () => {
 		expect(result.lines).toBe("aaa\n\nccc");
 	});
 
+	it("ignores null optional verb fields", () => {
+		const content = "aaa\nbbb\nccc";
+		const loc = `2${computeLineHash(2, "bbb")}`;
+		const toolEdit = { loc, pre: null, set: "BBB", post: null, sub: null } as unknown as AtomToolEdit;
+		const resolved = resolveAtomToolEdit(toolEdit);
+		expect(resolved).toEqual([{ op: "set", pos: tag(2, "bbb"), lines: ["BBB"] }]);
+
+		const result = applyAtomEdits(content, resolved);
+		expect(result.lines).toBe("aaa\nBBB\nccc");
+	});
+
 	it("supports path override inside loc", () => {
 		const resolved = resolveAtomEntryPaths([{ loc: "a.ts:1ab", set: "X" }], undefined);
 		expect(resolved[0]?.path).toBe("a.ts");
@@ -320,6 +332,23 @@ describe("applyAtomEdits — between", () => {
 		if (!between || between.op !== "between") throw new Error("unreachable");
 		expect(between.after.line).toBe(1);
 		expect(between.before.line).toBe(4);
+		expect(between.lines).toEqual(["X"]);
+	});
+
+	it("ignores null non-set verbs on range locators", () => {
+		const toolEdit = {
+			path: "a.ts",
+			loc: "1xx-4yy",
+			pre: null,
+			set: ["X"],
+			post: null,
+			sub: null,
+		} as unknown as AtomToolEdit;
+		const resolved = resolveAtomToolEdit(toolEdit);
+		expect(resolved).toHaveLength(1);
+		const between = resolved[0];
+		expect(between?.op).toBe("between");
+		if (!between || between.op !== "between") throw new Error("unreachable");
 		expect(between.lines).toEqual(["X"]);
 	});
 

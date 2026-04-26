@@ -1,26 +1,23 @@
 /**
- * Atom edit mode — single-point hashline-anchored edits.
  *
- * Each op references exactly **one** anchor (`LINEHASH`). Range endpoints,
- * vim-style motions, and column addressing are intentionally absent: to
- * replace many lines, the model issues many ops. Reuses hashline's anchor
- * staleness scheme (`computeLineHash`) verbatim.
+ * Flat locator + verb edit mode backed by hashline anchors. Each entry carries
+ * one shared `loc` selector plus one or more verbs (`pre`, `set`, `post`, `sub`).
+ * The runtime resolves those verbs into internal anchor-scoped edits and still
+ * reuses hashline's staleness scheme (`computeLineHash`) verbatim.
  *
- * Op shapes (one per entry):
- *   { path, set: "5th",          lines: "..." | ["..."] }       // replace one line
- *   { path, set: ["5th", "9xy"], lines: [...] }                 // replace lines strictly between two anchors
- *                                                                  // (both anchors kept; use for block-body replacement)
- *   { path, pre:  "5th" | "",    lines: "..." | ["..."] }       // insert lines above anchor; "" = BOF (prepend)
- *   { path, post: "5th" | "",    lines: "..." | ["..."] }       // insert lines below anchor; "" = EOF (append)
- *   { path, del:  "5th" }                                        // delete one line
- *   { path, sub:  "5th", find: "...", lines: "..." }             // replace a unique substring on the anchored line; tail preserved
+ * External shapes (one entry):
+ *   { path, loc: "5th",      set:  ["..."] }
+ *   { path, loc: "5th",      pre:  ["..."] }
+ *   { path, loc: "5th",      post: ["..."] }
+ *   { path, loc: "5th",      sub:  ["find", "replace"] }
+ *   { path, loc: "5th",      pre: [...], set: [...], post: [...] }
+ *   { path, loc: "5th-9xy",  set:  [...] }                            // replace strictly between two anchors
+ *   { path, loc: "^",        pre:  [...] }                            // prepend to BOF
+ *   { path, loc: "$",        post: [...] }                            // append to EOF
  *
- * Anchors mark *survivors*. With single-anchor `set`, the named line is the
- * target (consumed). With two-anchor `set: [open, close]`, both anchors are
- * **kept** and only the lines strictly between them are replaced. There are no
- * inclusive ranges and no two-endpoint spans whose endpoint is itself rewritten
- * — this eliminates the most common boundary-confusion failure mode (off-by-one
- * on the closing brace).
+ * `set: []` on a single-anchor locator deletes that line. `set:[""]` preserves
+ * a blank line. Range locators are set-only; `set` and `sub` cannot coexist in
+ * the same entry.
  *
  * For deleting or moving files, the agent should use bash.
  */
@@ -50,51 +47,34 @@ import {
 // ═══════════════════════════════════════════════════════════════════════════
 // Schema
 // ═══════════════════════════════════════════════════════════════════════════
-
-const linesSchema = Type.Union([Type.Array(Type.String()), Type.String()], {
-	description: "replacement lines",
-});
+const textSchema = Type.Array(Type.String());
 
 /**
- * Flat entry shape: every op key is optional, and the runtime validator
- * (`resolveAtomToolEdit`) enforces that exactly one op key is present per entry.
- * We use a flat schema instead of a discriminated union to keep the tool
- * definition compact (the schema is re-sent on every turn).
+ * Flat entry shape with shared locator fields and verb-specific payloads.
+ * The runtime validator (`resolveAtomToolEdit`) enforces legal locator/verb
+ * combinations. Keeping the schema flat reduces tool-definition size and gives
+ * weaker models fewer branching shapes to sample from.
  */
 export const atomEditSchema = Type.Object(
 	{
 		path: Type.Optional(Type.String({ description: "file path override", examples: ["src/foo.ts"] })),
-		// Exactly one of the following op keys is required per entry:
-		set: Type.Optional(
-			Type.Union([
-				Type.String({ description: "line anchor to replace", examples: ["1ab"] }),
-				Type.Array(Type.String(), {
-					description: "two surviving anchors (open, close)",
-					examples: [["1ab", "9bb"]],
-				}),
-			]),
-		),
-		pre: Type.Optional(
-			Type.String({ description: "line anchor to insert before or empty for BOF", examples: ["1ab", ""] }),
-		),
-		post: Type.Optional(
-			Type.String({ description: "line anchor to insert after or empty for EOF", examples: ["1ab", ""] }),
-		),
-		del: Type.Optional(Type.String({ description: "line anchor to delete", examples: ["1ab"] })),
+		loc: Type.String({
+			description: 'edit location: "1ab", "1ab-9bb", "^", "$", or path override like "a.ts:1ab"',
+			examples: ["1ab", "1ab-9bb", "^", "$", "src/foo.ts:1ab"],
+		}),
+		set: Type.Optional(textSchema),
+		pre: Type.Optional(textSchema),
+		post: Type.Optional(textSchema),
 		sub: Type.Optional(
-			Type.String({ description: "line anchor on which to replace a unique substring", examples: ["1ab"] }),
-		),
-		// Payload (used by set/pre/post/sub):
-		lines: Type.Optional(
-			Type.Union([Type.Array(Type.String()), Type.String()], {
-				description: "replacement payload",
-			}),
-		),
-		find: Type.Optional(
-			Type.String({
-				description:
-					"unique substring on the anchored line (sub only); use the shortest fragment — 1–4 chars usually suffices",
-				examples: ["||", "true", "i--"],
+			Type.Array(Type.String(), {
+				description: "substring search and replace as [find, replace]",
+				minItems: 2,
+				maxItems: 2,
+				examples: [
+					["||", "??"],
+					["true", "false"],
+					["i--", "i++"],
+				],
 			}),
 		),
 	},
@@ -130,7 +110,26 @@ export type AtomEdit =
 // Param guards
 // ═══════════════════════════════════════════════════════════════════════════
 
-const ATOM_OP_KEYS = ["set", "pre", "post", "del", "sub"] as const;
+const ATOM_VERB_KEYS = ["set", "pre", "post", "sub"] as const;
+type AtomOptionalKey = "path" | "loc" | (typeof ATOM_VERB_KEYS)[number];
+const ATOM_OPTIONAL_KEYS = ["path", "loc", ...ATOM_VERB_KEYS] as const satisfies readonly AtomOptionalKey[];
+
+function stripNullAtomFields(edit: AtomToolEdit): AtomToolEdit {
+	let next: Record<string, unknown> | undefined;
+	const fields = edit as Record<string, unknown>;
+	for (const key of ATOM_OPTIONAL_KEYS) {
+		if (fields[key] !== null) continue;
+		next ??= { ...fields };
+		delete next[key];
+	}
+	return (next ?? fields) as AtomToolEdit;
+}
+
+type ParsedAtomLoc =
+	| { kind: "anchor"; pos: Anchor }
+	| { kind: "range"; after: Anchor; before: Anchor }
+	| { kind: "bof" }
+	| { kind: "eof" };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Resolution
@@ -169,79 +168,163 @@ function parseAnchor(raw: string, opName: string): Anchor {
 	}
 }
 
-function subLinesToString(lines: unknown): string {
-	if (typeof lines === "string") return lines;
-	if (Array.isArray(lines)) return lines.join("\n");
-	throw new Error("sub requires a string or array `lines` value (the replacement text).");
+function tryParseAtomTag(raw: string): Anchor | undefined {
+	try {
+		return parseTag(raw);
+	} catch {
+		return undefined;
+	}
+}
+
+function isLocSelector(raw: string): boolean {
+	if (raw === "^" || raw === "$") return true;
+	const dash = raw.indexOf("-");
+	if (dash === -1) return tryParseAtomTag(raw) !== undefined;
+	const left = raw.slice(0, dash);
+	const right = raw.slice(dash + 1);
+	if (left.length === 0 || right.length === 0) return false;
+	return tryParseAtomTag(left) !== undefined && tryParseAtomTag(right) !== undefined;
+}
+
+function resolveAtomEntryPath(
+	edit: AtomToolEdit,
+	topLevelPath: string | undefined,
+	editIndex: number,
+): AtomToolEdit & { path: string } {
+	const entry = stripNullAtomFields(edit);
+	let loc = entry.loc;
+	let pathOverride: string | undefined;
+	if (typeof loc === "string") {
+		const colon = loc.lastIndexOf(":");
+		if (colon > 0) {
+			const maybeSelector = loc.slice(colon + 1);
+			if (isLocSelector(maybeSelector)) {
+				pathOverride = loc.slice(0, colon);
+				loc = maybeSelector;
+			}
+		}
+	}
+	const path = pathOverride || entry.path || topLevelPath;
+	if (!path) {
+		throw new Error(
+			`Edit ${editIndex}: missing path. Provide a top-level path, per-entry path, or prefix loc with a file path (for example "a.ts:160sr").`,
+		);
+	}
+	return { ...entry, path, ...(loc !== entry.loc ? { loc } : {}) };
+}
+
+export function resolveAtomEntryPaths(
+	edits: readonly AtomToolEdit[],
+	topLevelPath: string | undefined,
+): (AtomToolEdit & { path: string })[] {
+	return edits.map((edit, i) => resolveAtomEntryPath(edit, topLevelPath, i));
+}
+
+function parseLoc(raw: string, editIndex: number): ParsedAtomLoc {
+	if (raw === "^") return { kind: "bof" };
+	if (raw === "$") return { kind: "eof" };
+	const dash = raw.indexOf("-");
+	if (dash !== -1) {
+		const openRaw = raw.slice(0, dash);
+		const closeRaw = raw.slice(dash + 1);
+		if (openRaw.length === 0 || closeRaw.length === 0) {
+			throw new Error(`Edit ${editIndex}: loc range must be of the form "1ab-9bb".`);
+		}
+		return {
+			kind: "range",
+			after: parseAnchor(openRaw, "loc start"),
+			before: parseAnchor(closeRaw, "loc end"),
+		};
+	}
+	return { kind: "anchor", pos: parseAnchor(raw, "loc") };
+}
+
+function parseSubSpec(sub: AtomToolEdit["sub"], editIndex: number): { find: string; withText: string } {
+	if (!Array.isArray(sub) || sub.length !== 2) {
+		throw new Error(`Edit ${editIndex}: sub must be a 2-item tuple [find, replace].`);
+	}
+	const [find, withText] = sub;
+	if (typeof find !== "string" || find.length === 0) {
+		throw new Error("sub requires a non-empty `find` string (the unique substring on the anchored line).");
+	}
+	if (typeof withText !== "string") {
+		throw new Error("sub replacement must be a string.");
+	}
+	return { find, withText };
 }
 
 function classifyAtomEdit(edit: AtomToolEdit): string {
-	for (const k of ATOM_OP_KEYS) {
-		if (k in edit) return k;
-	}
-	return "unknown";
+	const entry = stripNullAtomFields(edit);
+	const verbs = ATOM_VERB_KEYS.filter(k => entry[k] !== undefined);
+	return verbs.length > 0 ? verbs.join("+") : "unknown";
 }
 
-function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit {
-	const opKeysPresent = ATOM_OP_KEYS.filter(k => k in edit);
-	if (opKeysPresent.length === 0) {
+function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
+	const entry = stripNullAtomFields(edit);
+	const verbKeysPresent = ATOM_VERB_KEYS.filter(k => entry[k] !== undefined);
+	if (verbKeysPresent.length === 0) {
 		throw new Error(
-			`Edit ${editIndex}: missing op key. Each entry must include exactly one of: ${ATOM_OP_KEYS.join(", ")}.`,
+			`Edit ${editIndex}: missing verb. Each entry must include at least one of: ${ATOM_VERB_KEYS.join(", ")}.`,
 		);
 	}
-	if (opKeysPresent.length > 1) {
-		throw new Error(
-			`Edit ${editIndex}: multiple op keys (${opKeysPresent.join(", ")}). Each entry is exactly one op — split into ${opKeysPresent.length} separate entries.`,
-		);
+	if (entry.set !== undefined && entry.sub !== undefined) {
+		throw new Error(`Edit ${editIndex}: set and sub cannot be used together in the same entry.`);
 	}
-	if ("set" in edit && edit.set !== undefined) {
-		if (typeof edit.set === "string") {
-			return { op: "set", pos: parseAnchor(edit.set, "set"), lines: hashlineParseText(edit.lines) };
-		}
-		if (Array.isArray(edit.set)) {
-			if (edit.set.length === 2) {
-				const [openRaw, closeRaw] = edit.set;
-				if (typeof openRaw !== "string" || typeof closeRaw !== "string") {
-					throw new Error(
-						`Edit ${editIndex}: \`set\` 2-tuple requires both elements to be anchor strings, e.g. ["1ab", "9bb"].`,
-					);
-				}
-				return {
-					op: "between",
-					after: parseAnchor(openRaw, "set[0] (open anchor)"),
-					before: parseAnchor(closeRaw, "set[1] (close anchor)"),
-					lines: hashlineParseText(edit.lines),
-				};
-			} else if (edit.set.length === 1) {
-				return { op: "set", pos: parseAnchor(edit.set[0], "set"), lines: hashlineParseText(edit.lines) };
-			}
-		}
+	if (typeof entry.loc !== "string") {
+		throw new Error(`Edit ${editIndex}: missing loc. Use a selector like "160sr", "160sr-170ab", "^", or "$".`);
+	}
 
-		throw new Error(`Edit ${editIndex}: \`set\` must be a string ("1ab") or a 2-tuple (["1ab", "9bb"]).`);
-	}
-	if ("pre" in edit && typeof edit.pre === "string") {
-		if (edit.pre === "") {
-			return { op: "prepend_file", lines: hashlineParseText(edit.lines) };
+	const loc = parseLoc(entry.loc, editIndex);
+	const resolved: AtomEdit[] = [];
+
+	if (loc.kind === "bof") {
+		if (entry.set !== undefined || entry.sub !== undefined || entry.post !== undefined) {
+			throw new Error(`Edit ${editIndex}: loc "^" only supports pre.`);
 		}
-		return { op: "pre", pos: parseAnchor(edit.pre, "pre"), lines: hashlineParseText(edit.lines) };
-	}
-	if ("post" in edit && typeof edit.post === "string") {
-		if (edit.post === "") {
-			return { op: "append_file", lines: hashlineParseText(edit.lines) };
+		if (entry.pre !== undefined) {
+			resolved.push({ op: "prepend_file", lines: hashlineParseText(entry.pre) });
 		}
-		return { op: "post", pos: parseAnchor(edit.post, "post"), lines: hashlineParseText(edit.lines) };
+		return resolved;
 	}
-	if ("del" in edit && typeof edit.del === "string") {
-		return { op: "del", pos: parseAnchor(edit.del, "del") };
-	}
-	if ("sub" in edit && typeof edit.sub === "string") {
-		if (typeof edit.find !== "string" || edit.find.length === 0) {
-			throw new Error("sub requires a non-empty `find` string (the unique substring on the anchored line).");
+
+	if (loc.kind === "eof") {
+		if (entry.set !== undefined || entry.sub !== undefined || entry.pre !== undefined) {
+			throw new Error(`Edit ${editIndex}: loc "$" only supports post.`);
 		}
-		const to = subLinesToString(edit.lines);
-		return { op: "sub", pos: parseAnchor(edit.sub, "sub"), find: edit.find, to };
+		if (entry.post !== undefined) {
+			resolved.push({ op: "append_file", lines: hashlineParseText(entry.post) });
+		}
+		return resolved;
 	}
-	throw new Error(`Unknown atom edit shape: ${JSON.stringify(edit)}`);
+
+	if (loc.kind === "range") {
+		if (entry.set === undefined) {
+			throw new Error(`Edit ${editIndex}: range loc requires set.`);
+		}
+		if (entry.pre !== undefined || entry.post !== undefined || entry.sub !== undefined) {
+			throw new Error(`Edit ${editIndex}: range loc only supports set.`);
+		}
+		return [{ op: "between", after: loc.after, before: loc.before, lines: hashlineParseText(entry.set) }];
+	}
+
+	if (entry.pre !== undefined) {
+		resolved.push({ op: "pre", pos: loc.pos, lines: hashlineParseText(entry.pre) });
+	}
+	if (entry.set !== undefined) {
+		if (Array.isArray(entry.set) && entry.set.length === 0) {
+			resolved.push({ op: "del", pos: loc.pos });
+		} else {
+			resolved.push({ op: "set", pos: loc.pos, lines: hashlineParseText(entry.set) });
+		}
+	}
+	if (entry.sub !== undefined) {
+		const { find, withText } = parseSubSpec(entry.sub, editIndex);
+		resolved.push({ op: "sub", pos: loc.pos, find, to: withText });
+	}
+	if (entry.post !== undefined) {
+		resolved.push({ op: "post", pos: loc.pos, lines: hashlineParseText(entry.post) });
+	}
+	return resolved;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -600,7 +683,7 @@ export async function executeAtomSingle(
 ): Promise<AgentToolResult<EditToolDetails, typeof atomEditParamsSchema>> {
 	const { session, path, edits, signal, batchRequest, writethrough, beginDeferredDiagnosticsForPath } = options;
 
-	const contentEdits = edits.map((edit, i) => resolveAtomToolEdit(edit, i));
+	const contentEdits = edits.flatMap((edit, i) => resolveAtomToolEdit(edit, i));
 
 	enforcePlanModeWrite(session, path, { op: "update" });
 

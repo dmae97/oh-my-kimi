@@ -10,7 +10,7 @@ Read the file first. Copy the full anchors exactly as shown by `read`.
 **Edit entry**: `{ path?, loc, content }`
 - `path` — file path (omit to fall back to the request-level `path`)
 - `loc` — where to apply the edit (see below)
-- `content` — replacement/inserted lines (array of strings preferred, `null` to delete)
+- `content` — replacement/inserted lines (`string[]`, one element per line; `null` to delete)
 
 **`loc` values**
 - `"append"` / `"prepend"` — insert at end/start of file

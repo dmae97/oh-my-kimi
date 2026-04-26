@@ -1,24 +1,30 @@
 Applies precise file edits using full anchors from `read` output (for example `160sr`).
 
-Most ops reference **exactly one** anchor. The exception is `set: [openAnchor, closeAnchor]` (a 2-tuple), which addresses the lines **strictly between** two anchors that both **survive** the edit — use it for block-body replacement (e.g. "replace the body of this function, keep the braces").
-
 Read the file first. Copy the full anchors exactly as shown by `read`.
 
 <operations>
-**Top level**: `{ path, edits: […] }` — `path` is shared by all entries. Per-entry `path` is also allowed and overrides the top-level value (use this for cross-file edits).
+**Top level**: `{ path, edits: […] }` — `path` is shared by all entries. You may still override the file inside `loc` with forms like `other.ts:160sr`.
 
-Each entry is exactly one op:
-- `set:  "5th", lines: …` — replace one anchored line
-- `set:  ["5aa", "9bb"], lines: …` — replace lines **strictly between** two anchors. Both anchor lines survive untouched. Use this for block bodies: first anchor is the opening line (e.g. `function foo() {`), second is the closing line (e.g. `}`). The braces stay; only the body is rewritten. **Never include the anchor lines in `lines`.**
-- `pre:  "5th", lines: …` — insert lines above the anchored line. `pre: ""` inserts at **beginning of file**.
-- `post: "5th", lines: …` — insert lines below the anchored line. `post: ""` inserts at **end of file**.
-- `del:  "5th"` — delete one anchored line
-- `sub:  "5th", find: "…", lines: "…"` — replace a unique substring on the anchored line. The line tail is **preserved** (trailing `;`, `,`, `) {`, etc. survive automatically). Use this for surgical edits like operator swaps, literal flips, identifier renames.
+Each entry has one shared locator plus one or more verbs:
+- `loc: "160sr"` — single anchored line
+- `loc: "160sr-170ab"` — range between two surviving anchors
+- `loc: "^"` — beginning of file (only valid with `pre`)
+- `loc: "$"` — end of file (only valid with `post`)
+- `loc: "a.ts:160sr"` — cross-file override inside the locator
 
-**`sub` rules of thumb**:
-- `find` matches inside a **single line**. It can never contain a newline; `\n` will not match anything.
-- Both `find` and `lines` should be the **smallest fragment that does the job** — ideally 1–4 chars (operator, literal, identifier). Long `find` is a code smell.
-- If `find` would be longer than ~half the line, or you are restating most of the line in `lines`, **switch to `set`** and rewrite the whole line. `set` is cheaper than a long `sub` and never has uniqueness issues.
+Verbs:
+- `set: ["…"]` — replace the anchor line, or replace the lines strictly between a range locator
+- `pre: ["…"]` — insert before the anchor line (or at BOF when `loc:"^"`)
+- `post: ["…"]` — insert after the anchor line (or at EOF when `loc:"$"`)
+- `sub: [find, replace]` — replace a unique substring on the anchored line; the line tail is preserved automatically
+
+Combination rules:
+- On a **single-anchor** `loc`, you may combine `pre`, **one of** `set` or `sub`, and `post` in the same entry.
+- On a **range** `loc`, only `set` is allowed.
+- `set: []` on a single-anchor `loc` deletes that line.
+- `set:[""]` is **not** delete — it replaces the line with a blank line.
+
+`sub` is the cheapest op when only part of a line changes. `find` and `replace` should both be the smallest fragment that does the job.
 </operations>
 
 <examples>
@@ -41,56 +47,64 @@ All examples below reference the same file:
 {{hline 14 "}"}}
 ```
 
-Hoist `path` to the top level whenever every entry targets the same file:
-
-# Swap an operator with `sub` (cheapest edit, tail preserved)
-Original line 4: `const fallback = group.targetFramework || 'All Frameworks';`. Change `||` to `??`. The trailing `'All Frameworks';` survives untouched:
-`{path:"a.ts",edits:[{sub:{{href 4 "const fallback = group.targetFramework || 'All Frameworks';"}},find:"||",lines:"??"}]}`
+# Swap an operator with `sub`
+Original line 4: `const fallback = group.targetFramework || 'All Frameworks';`
+`{path:"a.ts",edits:[{loc:{{href 4 "const fallback = group.targetFramework || 'All Frameworks';"}},sub:["||","??"]}]}`
 
 # Flip a literal with `sub`
-Original line 2: `const timeout = 5000;`. The trailing `;` survives:
-`{path:"a.ts",edits:[{sub:{{href 2 "const timeout = 5000;"}},find:"5000",lines:"30_000"}]}`
+Original line 2: `const timeout = 5000;`
+`{path:"a.ts",edits:[{loc:{{href 2 "const timeout = 5000;"}},sub:["5000","30_000"]}]}`
 
 # Negate a condition with `sub`
-Original line 10: `\tif (x) {`. Inject the `!`:
-`{path:"a.ts",edits:[{sub:{{href 10 "\tif (x) {"}},find:"(x)",lines:"(!x)"}]}`
+Original line 10: `\tif (x) {`
+`{path:"a.ts",edits:[{loc:{{href 10 "\tif (x) {"}},sub:["(x)","(!x)"]}]}`
+
+# Combine `pre` + `set` + `post` in one entry
+`{path:"a.ts",edits:[{loc:{{href 6 "\tlog();"}},pre:["\tvalidate();"],set:["\tlog();"],post:["\tcleanup();"]}]}`
 
 # Replace one whole line with `set`
-Use `set` when you're rewriting most of the line, or when `find` would not be unique. Restate the full line content:
-`{path:"a.ts",edits:[{set:{{href 3 "const tag = \"DO NOT SHIP\";"}},lines:"const tag = \"OK\";"}]}`
+Use `set` when you're rewriting most of the line, or when `sub` would need a long `find`.
+`{path:"a.ts",edits:[{loc:{{href 3 "const tag = \"DO NOT SHIP\";"}},set:["const tag = \"OK\";"]}]}`
 
-# Replace a block body, keep the surrounding braces (preferred multi-line edit)
-Anchors mark *survivors*. With `set: [open, close]` the two named lines are kept; lines strictly between them are replaced.
-Replace the body of `alpha` (line 6) while keeping `function alpha() {` (5) and `}` (7):
-`{path:"a.ts",edits:[{set:[{{href 5 "function alpha() {"}},{{href 7 "}"}}],lines:["\tvalidate();","\tlog();","\tcleanup();"]}]}`
+# Replace a block body with a range locator
+Range locators keep the boundary lines and replace only the lines strictly between them.
+`{path:"a.ts",edits:[{loc:"{{href 5 "function alpha() {"}}-{{href 7 "}"}}",set:["\tvalidate();","\tlog();","\tcleanup();"]}]}`
 
-# Replace multiple non-adjacent lines (one `set` per line)
-`{path:"a.ts",edits:[{set:{{href 11 "\t\treturn parse(data);"}},lines:"\t\treturn parse(data) ?? fallback;"},{set:{{href 13 "\treturn null;"}},lines:"\treturn fallback;"}]}`
+# Replace multiple non-adjacent lines
+`{path:"a.ts",edits:[{loc:{{href 11 "\t\treturn parse(data);"}},set:["\t\treturn parse(data) ?? fallback;"]},{loc:{{href 13 "\treturn null;"}},set:["\treturn fallback;"]}]}`
 
-# Delete adjacent lines (one `del` per line)
-`{path:"a.ts",edits:[{del:{{href 11 "\t\treturn parse(data);"}}},{del:{{href 12 "\t}"}}]}`
+# Delete a line with `set: []`
+`{path:"a.ts",edits:[{loc:{{href 11 "\t\treturn parse(data);"}},set:[]}]}`
+
+# Preserve a blank line with `set:[""]`
+`{path:"a.ts",edits:[{loc:{{href 8 ""}},set:[""]}]}`
 
 # Insert before / after a line
-`{path:"a.ts",edits:[{pre:{{href 9 "function beta(x) {"}},lines:["function gamma() {","\tvalidate();","}",""]}]}`
-`{path:"a.ts",edits:[{post:{{href 6 "\tlog();"}},lines:["\tvalidate();"]}]}`
+`{path:"a.ts",edits:[{loc:{{href 9 "function beta(x) {"}},pre:["function gamma() {","\tvalidate();","}",""]}]}`
+`{path:"a.ts",edits:[{loc:{{href 6 "\tlog();"}},post:["\tvalidate();"]}]}`
 
-# Append / prepend at file edges (`post: ""` / `pre: ""`)
-`{path:"a.ts",edits:[{post:"",lines:["","export const VERSION = \"1.0.0\";"]}]}`
-`{path:"a.ts",edits:[{pre:"",lines:["// Copyright (c) 2026",""]}]}`
+# Prepend / append at file edges
+`{path:"a.ts",edits:[{loc:"^",pre:["// Copyright (c) 2026",""]}]}`
+`{path:"a.ts",edits:[{loc:"$",post:["","export const VERSION = \"1.0.0\";"]}]}`
 
-# Cross-file edits (use per-entry `path` instead of hoisting)
-`{edits:[{path:"a.ts",sub:{{href 2 "const timeout = 5000;"}},find:"5000",lines:"30_000"},{path:"b.ts",pre:"",lines:["// generated"]}]}`
+# Cross-file override inside `loc`
+`{path:"a.ts",edits:[{loc:"b.ts:{{href 2 "const timeout = 5000;"}}",sub:["5000","30_000"]}]}`
 </examples>
 
 <critical>
 - Make the minimum exact edit.
-- Each entry in `edits` is exactly one op. Never combine multiple ops in a single entry.
 - Copy the full anchors exactly as shown by `read/grep` (for example `160sr`, not just `sr`).
-- Within a single request you may submit edits in any order — the runtime applies them bottom-up so they don't shift each other. After **any** request that mutates a file, anchors below the mutation are stale on disk; re-read before issuing more edits to that file.
-- For `sub`, `find` must occur **exactly once on the anchored line**. The runtime rejects the edit if `find` is missing or non-unique.
-- **Switch to `set` when `find` gets long.** If `find` would be more than ~half the line, or `lines` would restate most of the line, you are no longer making a surgical substring edit — use `set` to rewrite the whole line in one shot. This avoids both uniqueness ambiguity and wasted output tokens.
-- At most one of `set`/`del`/`sub` may target any single anchor line. `pre`/`post` may coexist with them.
-- For 2-tuple `set: [open, close]`: open's line < close's line, and **no other op in the same request may target a line strictly inside the region**. The two anchor lines themselves can still receive other ops (e.g. a `set` on the closing-brace line is fine — it is preserved by the tuple-form `set`).
-- `lines` content must be literal file content with matching indentation. If the file uses tabs, use real tabs.
-- You **MUST NOT** use this tool to reformat or clean up unrelated code — use project-specific linters or code formatters instead.
+- `loc` chooses the target. Verbs describe what to do there.
+- On a single-anchor `loc`, you may combine `pre`, **one of** `set` or `sub`, and `post`.
+- `set` and `sub` cannot appear together in the same entry.
+- On a range `loc`, only `set` is allowed.
+- `loc:"^"` only supports `pre`. `loc:"$"` only supports `post`.
+- For `sub`, the first tuple element (`find`) must occur **exactly once on the anchored line**. It never spans newlines.
+- Prefer the **smallest** `sub` fragments. On a single line of code, 1–4 chars is usually enough (`"||"`, `"true"`, `"i--"`).
+- **Switch to `set` when `sub` gets long.** If `find` would be more than ~half the line, or the replacement would restate most of the line, use `set` instead.
+- `set: []` deletes the anchored line. `set:[""]` preserves a blank line.
+- Within a single request you may submit edits in any order — the runtime applies them bottom-up so they don't shift each other. After any request that mutates a file, anchors below the mutation are stale on disk; re-read before issuing more edits to that file.
+- `set`/`sub`/delete target the current file content only. Do not try to reference old line text after the file has changed.
+- Text content must be literal file content with matching indentation. If the file uses tabs, use real tabs.
+- You **MUST NOT** use this tool to reformat or clean up unrelated code.
 </critical>

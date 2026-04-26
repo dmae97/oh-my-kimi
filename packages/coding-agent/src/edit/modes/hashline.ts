@@ -10,6 +10,9 @@
  *
  * Displayed format: `LINENUMBIGRAM\tTEXT`
  * Reference format: `"LINENUMBIGRAM"` (e.g. `"1ab"`)
+ *
+ * In tool JSON, each edit's `content` is `string[]` (one string per logical line) or
+ * `null` to delete the targeted range.
  */
 
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
@@ -127,11 +130,7 @@ export function stripHashlinePrefixes(lines: string[]): string[] {
 	return lines.filter(line => !READ_TRUNCATION_NOTICE_RE.test(line)).map(line => stripLeadingHashlinePrefixes(line));
 }
 
-const linesSchema = Type.Union([
-	Type.Array(Type.String(), { description: "content (preferred format)" }),
-	Type.String(),
-	Type.Null(),
-]);
+const linesSchema = Type.Union([Type.Array(Type.String()), Type.Null()]);
 
 const locSchema = Type.Union(
 	[
@@ -179,6 +178,11 @@ export interface ExecuteHashlineSingleOptions {
 	beginDeferredDiagnosticsForPath: (path: string) => WritethroughDeferredHandle;
 }
 
+/**
+ * Normalize line payloads for apply: strip read/grep line prefixes. The tool schema
+ * supplies `string[]` (one element per line). `null` / `undefined` yield `[]`.
+ * A single multiline `string` is still split on `\n` for the same normalization path.
+ */
 export function hashlineParseText(edit: string[] | string | null | undefined): string[] {
 	if (edit == null) return [];
 	if (typeof edit === "string") {
