@@ -34,7 +34,7 @@ describe("grepToolRenderer", () => {
 		const bodyLines = renderedLines.slice(1);
 
 		expect(bodyLines).toHaveLength(6);
-		expect(bodyLines.at(-1)).toContain("truncated: limit 6 matches");
+		expect(bodyLines.at(-1)).toContain("truncated: first 6 matches");
 		expect(bodyLines.some(line => line.includes("1 more match"))).toBe(true);
 		expect(bodyLines.some(line => line.includes("gamma:1"))).toBe(false);
 	});

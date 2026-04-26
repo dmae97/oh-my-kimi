@@ -15,7 +15,6 @@ import type { ToolSession } from ".";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
 import type { OutputMeta } from "./output-meta";
 import {
-	combineSearchGlobs,
 	hasGlobPathChars,
 	normalizePathLikeInput,
 	parseSearchPath,
@@ -46,21 +45,10 @@ const astEditSchema = Type.Object({
 		minItems: 1,
 		description: "rewrite ops",
 	}),
-	lang: Type.Optional(Type.String({ description: "language override", examples: ["typescript", "python"] })),
-	path: Type.Optional(
-		Type.String({
-			description: "path or glob to rewrite",
-			examples: ["src/", "src/foo.ts"],
-		}),
-	),
-	glob: Type.Optional(Type.String({ description: "glob filter", examples: ["**/*.ts"] })),
-	sel: Type.Optional(
-		Type.String({
-			description: "contextual pattern selector",
-			examples: ["function_declaration", "call_expression", "identifier"],
-		}),
-	),
-	limit: Type.Optional(Type.Number({ description: "max replacements" })),
+	path: Type.String({
+		description: "file, directory, glob, or comma-separated paths to rewrite",
+		examples: ["src/", "src/foo.ts", "src/**/*.ts"],
+	}),
 });
 
 export interface AstEditToolDetails {
@@ -115,10 +103,6 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				seenPatterns.add(pat);
 			}
 			const normalizedRewrites = Object.fromEntries(ops);
-			const maxReplacements = params.limit !== undefined ? Math.floor(params.limit) : undefined;
-			if (maxReplacements !== undefined && (!Number.isFinite(maxReplacements) || maxReplacements < 1)) {
-				throw new ToolError("limit must be a positive number");
-			}
 			const maxFiles = $envpos("PI_MAX_AST_FILES", 1000);
 
 			const formatScopePath = (targetPath: string): string => {
@@ -127,8 +111,11 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			};
 			let searchPath: string | undefined;
 			let scopePath: string | undefined;
-			let globFilter = params.glob ? normalizePathLikeInput(params.glob) || undefined : undefined;
-			const rawPath = params.path ? normalizePathLikeInput(params.path) || undefined : undefined;
+			let globFilter: string | undefined;
+			const rawPath = normalizePathLikeInput(params.path);
+			if (rawPath.length === 0) {
+				throw new ToolError("`path` must be a non-empty path or glob");
+			}
 			if (rawPath) {
 				const internalRouter = this.session.internalRouter;
 				if (internalRouter?.canHandle(rawPath)) {
@@ -150,7 +137,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					} else {
 						const parsedPath = parseSearchPath(rawPath);
 						searchPath = resolveToCwd(parsedPath.basePath, this.session.cwd);
-						globFilter = combineSearchGlobs(parsedPath.glob, globFilter);
+						globFilter = parsedPath.glob;
 						scopePath = formatScopePath(searchPath);
 					}
 				}
@@ -167,12 +154,9 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 
 			const result = await astEdit({
 				rewrites: normalizedRewrites,
-				lang: params.lang?.trim(),
 				path: resolvedSearchPath,
 				glob: globFilter,
-				selector: params.sel?.trim(),
 				dryRun: true,
-				maxReplacements,
 				maxFiles,
 				failOnParseError: false,
 				signal,
@@ -295,7 +279,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				count: fileReplacementCounts.get(filePath) ?? 0,
 			}));
 			if (result.limitReached) {
-				outputLines.push("", "Limit reached; narrow path or increase limit.");
+				outputLines.push("", "Limit reached; narrow path.");
 			}
 			if (dedupedParseErrors.length) {
 				outputLines.push("", ...formatParseErrors(dedupedParseErrors));
@@ -311,12 +295,9 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					apply: async (_reason: string) => {
 						const applyResult = await astEdit({
 							rewrites: normalizedRewrites,
-							lang: params.lang?.trim(),
 							path: resolvedSearchPath,
 							glob: globFilter,
-							selector: params.sel?.trim(),
 							dryRun: false,
-							maxReplacements,
 							maxFiles,
 							failOnParseError: false,
 						});
@@ -391,10 +372,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 
 interface AstEditRenderArgs {
 	ops?: Array<{ pat?: string; out?: string }>;
-	lang?: string;
 	path?: string;
-	sel?: string;
-	limit?: number;
 }
 
 const COLLAPSED_CHANGE_LIMIT = PREVIEW_LIMITS.COLLAPSED_LINES * 2;
@@ -403,9 +381,7 @@ export const astEditToolRenderer = {
 	inline: true,
 	renderCall(args: AstEditRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		const meta: string[] = [];
-		if (args.lang) meta.push(`lang:${args.lang}`);
 		if (args.path) meta.push(`in ${args.path}`);
-		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
 		const rewriteCount = args.ops?.length ?? 0;
 		if (rewriteCount > 1) meta.push(`${rewriteCount} rewrites`);
 
@@ -495,7 +471,7 @@ export const astEditToolRenderer = {
 
 		const extraLines: string[] = [];
 		if (limitReached) {
-			extraLines.push(uiTheme.fg("warning", "limit reached; narrow path or increase limit"));
+			extraLines.push(uiTheme.fg("warning", "limit reached; narrow path"));
 		}
 		if (details?.parseErrors?.length) {
 			const total = details.parseErrors.length;

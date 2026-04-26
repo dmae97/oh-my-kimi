@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { StringEnum } from "@oh-my-pi/pi-coding-agent";
+import { StringEnum } from "@oh-my-pi/pi-ai";
 import {
 	ChunkAnchorStyle,
 	ChunkEditOp,

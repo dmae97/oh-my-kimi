@@ -116,11 +116,8 @@ describe("tool path root alias", () => {
 		if (!tool) throw new Error("Missing ast_grep tool");
 
 		const result = await tool.execute("ast-grep-root-alias", {
-			pat: ["rootAliasSymbol"],
-			sel: "identifier",
-			lang: "typescript",
-			path: "/",
-			glob: "**/*.ts",
+			pat: "rootAliasSymbol",
+			path: "/**/*.ts",
 		});
 		const details = result.details as { scopePath?: string } | undefined;
 
@@ -143,9 +140,7 @@ describe("tool path root alias", () => {
 
 		const preview = await tool.execute("ast-edit-root-alias", {
 			ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
-			lang: "typescript",
-			path: "/",
-			glob: "**/*.ts",
+			path: "/**/*.ts",
 		});
 		const details = preview.details as { scopePath?: string; totalReplacements?: number } | undefined;
 

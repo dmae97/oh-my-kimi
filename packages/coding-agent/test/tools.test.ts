@@ -1195,7 +1195,7 @@ function b() {
 			expect(output).not.toContain("schema-other.test.ts");
 			expect(result.details?.fileCount).toBe(2);
 		});
-		it("should combine globbing from path and glob parameters", async () => {
+		it("should accept nested wildcard filters in the path parameter", async () => {
 			const packageDir = path.join(testDir, "node_modules", ".bun");
 			const aiDir = path.join(packageDir, "ai@6.0.119+build123", "node_modules", "ai");
 			const nestedDir = path.join(aiDir, "nested");
@@ -1207,8 +1207,7 @@ function b() {
 
 			const result = await grepTool.execute("test-call-11-path-and-glob", {
 				pattern: "providerOptions",
-				path: `${packageDir}/ai@6.0.119+*/node_modules/ai`,
-				glob: "**/*.{d.ts,ts}",
+				path: `${packageDir}/ai@6.0.119+*/node_modules/ai/**/*.{d.ts,ts}`,
 				gitignore: false,
 			});
 
@@ -1220,17 +1219,16 @@ function b() {
 			expect(result.details?.fileCount).toBe(2);
 		});
 
-		it("should respect global limit and include context lines", async () => {
+		it("should include configured context lines", async () => {
 			const testFile = path.join(testDir, "context.txt");
 			const content = ["before", "match one", "after", "middle", "match two", "after two"].join("\n");
 			fs.writeFileSync(testFile, content);
 
-			const result = await grepTool.execute("test-call-12", {
+			const contextSettings = Settings.isolated({ "grep.contextBefore": 1, "grep.contextAfter": 1 });
+			const contextGrepTool = wrapToolWithMetaNotice(new GrepTool(createTestToolSession(testDir, contextSettings)));
+			const result = await contextGrepTool.execute("test-call-12", {
 				pattern: "match",
 				path: testFile,
-				limit: 1,
-				pre: 1,
-				post: 1,
 			});
 
 			const output = getTextOutput(result);
@@ -1238,12 +1236,26 @@ function b() {
 			expect(output).toMatch(/\b1-before/);
 			expect(output).toMatch(/\b2:match one/);
 			expect(output).toMatch(/\b3-after/);
-			expect(output).toContain("[1 matches limit reached. Use limit=2 for more]");
-			// Ensure second match is not present
-			expect(output).not.toContain("match two");
+			expect(output).toMatch(/\b5:match two/);
 		});
 
-		it("should group multi-file matches and distribute limit with round-robin", async () => {
+		it("should skip matches with the skip parameter", async () => {
+			const testFile = path.join(testDir, "skip.txt");
+			fs.writeFileSync(testFile, ["needle one", "needle two", "needle three"].join("\n"));
+
+			const result = await grepTool.execute("test-call-12-skip", {
+				pattern: "needle",
+				path: testFile,
+				skip: 1,
+			});
+
+			const output = getTextOutput(result);
+			expect(output).not.toContain("needle one");
+			expect(output).toContain("needle two");
+			expect(output).toContain("needle three");
+		});
+
+		it("should group multi-file matches", async () => {
 			for (let i = 1; i <= 3; i++) {
 				fs.writeFileSync(path.join(testDir, `file-${i}.txt`), `needle in file ${i}\nextra needle ${i}`);
 			}
@@ -1252,7 +1264,6 @@ function b() {
 			const result = await grepTool.execute("test-call-13-round-robin", {
 				pattern: "needle",
 				path: testDir,
-				limit: 4,
 			});
 
 			const output = getTextOutput(result);
@@ -1261,19 +1272,18 @@ function b() {
 			expect(output).toContain("# file-3.txt");
 			expect(output).toContain("# dominant.txt");
 			expect(output).not.toContain("# .");
-			expect(output).toContain("[4 matches limit reached. Use limit=8 for more]");
+			expect(output).not.toContain("Result limit reached");
 			expect(result.details?.fileCount).toBe(4);
-			expect(result.details?.matchCount).toBe(4);
+			expect(result.details?.matchCount).toBe(10);
 		});
 
-		it("should not repeat file headings when round-robin selects multiple matches per file", async () => {
+		it("should not repeat file headings for multiple matches per file", async () => {
 			fs.writeFileSync(path.join(testDir, "alpha.txt"), "needle a1\nneedle a2\nneedle a3");
 			fs.writeFileSync(path.join(testDir, "beta.txt"), "needle b1\nneedle b2\nneedle b3");
 
 			const result = await grepTool.execute("test-call-14-grouped-headings", {
 				pattern: "needle",
 				path: testDir,
-				limit: 4,
 			});
 
 			const output = getTextOutput(result);
@@ -1283,8 +1293,8 @@ function b() {
 			expect(betaHeadings).toBe(1);
 			expect(result.details?.fileMatches).toEqual(
 				expect.arrayContaining([
-					expect.objectContaining({ path: "alpha.txt", count: 2 }),
-					expect.objectContaining({ path: "beta.txt", count: 2 }),
+					expect.objectContaining({ path: "alpha.txt", count: 3 }),
+					expect.objectContaining({ path: "beta.txt", count: 3 }),
 				]),
 			);
 		});
@@ -1368,7 +1378,7 @@ function b() {
 			expect(result.details?.fileCount).toBe(1);
 			expect(result.details?.matchCount).toBe(1);
 		});
-		it("should apply default limit of 20 when limit is not provided", async () => {
+		it("should apply the fixed default match cap", async () => {
 			const lines = Array.from({ length: 60 }, (_, i) => `needle ${i + 1}`);
 			fs.writeFileSync(path.join(testDir, "default-limit.txt"), lines.join("\n"));
 
@@ -1378,7 +1388,7 @@ function b() {
 			});
 
 			const output = getTextOutput(result);
-			expect(output).toContain("[20 matches limit reached. Use limit=40 for more]");
+			expect(output).toContain("Result limit reached; narrow path.");
 			expect(result.details?.matchCount).toBe(20);
 			expect(result.details?.matchLimitReached).toBe(20);
 		});

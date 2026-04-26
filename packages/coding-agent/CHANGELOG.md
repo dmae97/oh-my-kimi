@@ -1,8 +1,12 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
+- Removed multi-pattern array input from `ast_grep` by changing `pat` to a single pattern string, so call sites using `pat: [...]` must be updated to send one query per invocation
+- Removed `lang`, `glob`, and `sel` options from `ast_edit` and `ast_grep`, and moved those behaviors into the required `path` argument
+- Required `path` for `ast_edit` and `ast_grep`, so invocations that relied on implicit repo-root searching are no longer valid
 - Renamed atom edit operations from `before` and `after` to `pre` and `post`, so existing `atom` payloads using the old operation keys must be updated
 - Changed the hashline anchor format from `LINE#ID:content` to `LINEID\tcontent` (no `#`/`:` separators, tab between anchor and content, no padding on line numbers); expanded the bigram alphabet from 40 hand-picked English bigrams to the full 647 single-token 2-letter bigrams — invalidates every previously captured `LINE#ID` reference
 - Renamed the subagent completion contract from `submit_result` to `yield`, so subagent sessions must now finish with the `yield` tool and the `requireYieldTool` option; `submit_result`/`requireSubmitResultTool` and old completion calls are no longer recognized
@@ -19,6 +23,9 @@
 
 ### Changed
 
+- Updated `ast_edit` and `ast_grep` to pass file-selection intent through `path` (including inline globs and comma/space-separated path lists) instead of separate `glob` filters
+- Changed `ast_grep` pagination API from `offset` to `skip`
+- Changed `grep` truncation output to report `Result limit reached; narrow path.` and label match/result caps as `first N`
 - Changed JSON tree output to truncate inline argument pairs by available width and add an ellipsis when values no longer fit in the display
 - Changed JSON tree rendering to hide harness-internal `intent` and `__partialJson` fields from top-level tool output
 - Simplified the `grep` tool schema by requiring `path`, folding glob and type filtering into path globs, auto-detecting multiline patterns, removing model-controlled context and limit options, and renaming result skipping to `skip`.

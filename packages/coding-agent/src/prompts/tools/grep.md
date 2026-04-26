@@ -2,9 +2,8 @@ Searches files using powerful regex matching.
 
 <instruction>
 - Supports full regex syntax (e.g., `log.*Error`, `function\\s+\\w+`); literal braces need escaping (`interface\\{\\}` for `interface{}` in Go)
-- `path` also accepts comma-separated path lists; pair with `glob` when you need a relative file filter in addition to `type`
-- For cross-line patterns like `struct \\{[\\s\\S]*?field`, set `multiline: true`
-- If the pattern contains a literal `\n`, `multiline` defaults to true automatically
+- `path` is required and accepts a file, directory, glob, comma-separated path list, or internal URL
+- Cross-line patterns are detected from literal `\n` or escaped `\\n` in `pattern`
 </instruction>
 
 <output>
