@@ -342,7 +342,7 @@ function prependSuffixResolutionNotice(text: string, suffixResolution?: { from: 
 
 const readSchema = Type.Object({
 	path: Type.String({ description: "path or url", examples: ["src/foo.ts", "https://example.com"] }),
-	sel: Type.Optional(Type.String({ description: "line range or mode", examples: ["L50", "L50-L120", "raw"] })),
+	sel: Type.Optional(Type.String({ description: "line range or mode", examples: ["50", "50-200", "50+150", "raw"] })),
 	timeout: Type.Optional(Type.Number({ description: "timeout in seconds", default: 20 })),
 });
 
@@ -374,7 +374,7 @@ type ParsedSelector =
 	| { kind: "raw" }
 	| { kind: "lines"; startLine: number; endLine: number | undefined };
 
-const LINE_RANGE_RE = /^L(\d+)(?:-L?(\d+))?$/i;
+const LINE_RANGE_RE = /^L?(\d+)(?:([-+])L?(\d+))?$/i;
 
 function parseSel(sel: string | undefined): ParsedSelector {
 	if (!sel || sel.length === 0) return { kind: "none" };
@@ -383,11 +383,21 @@ function parseSel(sel: string | undefined): ParsedSelector {
 	if (lineMatch) {
 		const rawStart = Number.parseInt(lineMatch[1]!, 10);
 		if (rawStart < 1) {
-			throw new ToolError("L0 is invalid; lines are 1-indexed. Use sel=L1.");
+			throw new ToolError("sel=0 is invalid; lines are 1-indexed. Use sel=1.");
 		}
-		const rawEnd = lineMatch[2] ? Number.parseInt(lineMatch[2], 10) : undefined;
-		if (rawEnd !== undefined && rawEnd < rawStart) {
-			throw new ToolError(`Invalid range L${rawStart}-L${rawEnd}: end must be >= start.`);
+		const sep = lineMatch[2];
+		const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
+		let rawEnd: number | undefined;
+		if (sep === "+") {
+			if (rhs === undefined || rhs < 1) {
+				throw new ToolError(`Invalid range ${rawStart}+${rhs ?? 0}: count must be >= 1.`);
+			}
+			rawEnd = rawStart + rhs - 1;
+		} else if (sep === "-") {
+			if (rhs === undefined || rhs < rawStart) {
+				throw new ToolError(`Invalid range ${rawStart}-${rhs ?? 0}: end must be >= start.`);
+			}
+			rawEnd = rhs;
 		}
 		return { kind: "lines", startLine: rawStart, endLine: rawEnd };
 	}
@@ -593,7 +603,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const suggestion =
 				allLines.length === 0
 					? `The ${options.entityLabel} is empty.`
-					: `Use sel=L1 to read from the start, or sel=L${allLines.length} to read the last line.`;
+					: `Use sel=1 to read from the start, or sel=${allLines.length} to read the last line.`;
 			return resultBuilder
 				.text(
 					`Line ${startLineDisplay} is beyond end of ${options.entityLabel} (${allLines.length} lines total). ${suggestion}`,
@@ -655,7 +665,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const nextOffset = startLine + userLimitedLines + 1;
 
 			outputText = formatText(selectedContent, startLineDisplay);
-			outputText += `\n\n[${remaining} more lines in ${options.entityLabel}. Use sel=L${nextOffset} to continue]`;
+			outputText += `\n\n[${remaining} more lines in ${options.entityLabel}. Use sel=${nextOffset} to continue]`;
 		} else {
 			outputText = formatText(truncation.content, startLineDisplay);
 		}
@@ -1118,7 +1128,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				const suggestion =
 					totalFileLines === 0
 						? "The file is empty."
-						: `Use sel=L1 to read from the start, or sel=L${totalFileLines} to read the last line.`;
+						: `Use sel=1 to read from the start, or sel=${totalFileLines} to read the last line.`;
 				return toolResult<ReadToolDetails>({ resolvedPath: absolutePath, suffixResolution })
 					.text(`Line ${startLineDisplay} is beyond end of file (${totalFileLines} lines total). ${suggestion}`)
 					.done();
@@ -1190,7 +1200,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				const nextOffset = startLine + userLimitedLines + 1;
 
 				outputText = formatText(truncation.content, startLineDisplay);
-				outputText += `\n\n[${remaining} more lines in file. Use sel=L${nextOffset} to continue]`;
+				outputText += `\n\n[${remaining} more lines in file. Use sel=${nextOffset} to continue]`;
 				details = {};
 				sourcePath = absolutePath;
 			} else {

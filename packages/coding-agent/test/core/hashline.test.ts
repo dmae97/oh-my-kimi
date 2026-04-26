@@ -948,16 +948,16 @@ describe("stripNewLinePrefixes", () => {
 			"2re|title: example",
 			"3an|---",
 			"",
-			"[Showing lines 1-300 of 332. Use sel=L301 to continue]",
+			"[Showing lines 1-300 of 332. Use sel=301 to continue]",
 		];
 		const result = stripNewLinePrefixes(lines);
-		expect(result).not.toContain("[Showing lines 1-300 of 332. Use sel=L301 to continue]");
+		expect(result).not.toContain("[Showing lines 1-300 of 332. Use sel=301 to continue]");
 		expect(result[0]).toBe("---");
 		expect(result[1]).toBe("title: example");
 	});
 
 	it("strips hashline prefixes when generic read truncation notice is present", () => {
-		const lines = ["1an|line one", "2re|line two", "", "[42 more lines in file. Use sel=L3 to continue]"];
+		const lines = ["1an|line one", "2re|line two", "", "[42 more lines in file. Use sel=3 to continue]"];
 		const result = stripNewLinePrefixes(lines);
 		expect(result[0]).toBe("line one");
 		expect(result[1]).toBe("line two");
@@ -993,10 +993,10 @@ describe("stripHashlinePrefixes", () => {
 			"2re|title: example",
 			"3an|---",
 			"",
-			"[Showing lines 1-300 of 332. Use sel=L301 to continue]",
+			"[Showing lines 1-300 of 332. Use sel=301 to continue]",
 		];
 		const result = stripHashlinePrefixes(lines);
-		expect(result).not.toContain("[Showing lines 1-300 of 332. Use sel=L301 to continue]");
+		expect(result).not.toContain("[Showing lines 1-300 of 332. Use sel=301 to continue]");
 		expect(result[0]).toBe("---");
 		expect(result[1]).toBe("title: example");
 	});

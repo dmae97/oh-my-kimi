@@ -137,7 +137,9 @@ export function isReadableUrlPath(value: string): boolean {
 	return /^https?:\/\//i.test(value) || /^www\./i.test(value);
 }
 
-const URL_LINE_RANGE_RE = /^L(\d+)(?:-L?(\d+))?$/i;
+const URL_LINE_RANGE_RE = /^L?(\d+)(?:([-+])L?(\d+))?$/i;
+// Embedded URL selectors (after a `:` in the path) keep the explicit `L` prefix to avoid colliding with ports such as `https://example.com:50`.
+const URL_EMBEDDED_LINE_RANGE_RE = /^L\d+(?:[-+]L?\d+)?$/i;
 
 export interface ParsedReadUrlTarget {
 	path: string;
@@ -159,11 +161,21 @@ export function parseReadUrlTarget(readPath: string, sel?: string): ParsedReadUr
 	if (lineMatch) {
 		const startLine = Number.parseInt(lineMatch[1]!, 10);
 		if (startLine < 1) {
-			throw new ToolError("L0 is invalid; lines are 1-indexed. Use sel=L1.");
+			throw new ToolError("sel=0 is invalid; lines are 1-indexed. Use sel=1.");
 		}
-		const endLine = lineMatch[2] ? Number.parseInt(lineMatch[2], 10) : undefined;
-		if (endLine !== undefined && endLine < startLine) {
-			throw new ToolError(`Invalid range L${startLine}-L${endLine}: end must be >= start.`);
+		const sep = lineMatch[2];
+		const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
+		let endLine: number | undefined;
+		if (sep === "+") {
+			if (rhs === undefined || rhs < 1) {
+				throw new ToolError(`Invalid range ${startLine}+${rhs ?? 0}: count must be >= 1.`);
+			}
+			endLine = startLine + rhs - 1;
+		} else if (sep === "-") {
+			if (rhs === undefined || rhs < startLine) {
+				throw new ToolError(`Invalid range ${startLine}-${rhs ?? 0}: end must be >= start.`);
+			}
+			endLine = rhs;
 		}
 		return {
 			path: urlPath,
@@ -183,7 +195,7 @@ function tryExtractEmbeddedUrlSelector(readPath: string): { path: string; sel?: 
 	}
 
 	const candidateSelector = readPath.slice(lastColonIndex + 1);
-	const isEmbeddedSelector = candidateSelector === "raw" || URL_LINE_RANGE_RE.test(candidateSelector);
+	const isEmbeddedSelector = candidateSelector === "raw" || URL_EMBEDDED_LINE_RANGE_RE.test(candidateSelector);
 	if (!isEmbeddedSelector) {
 		return null;
 	}

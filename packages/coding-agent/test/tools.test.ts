@@ -331,9 +331,7 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Line 1");
 			expect(output).toContain(`Line ${defaultLimit}`);
 			expect(output).not.toContain(`Line ${defaultLimit + 1}`);
-			expect(output).toContain(
-				`[Showing lines 1-${defaultLimit} of 3500. Use sel=L${defaultLimit + 1} to continue]`,
-			);
+			expect(output).toContain(`[Showing lines 1-${defaultLimit} of 3500. Use sel=${defaultLimit + 1} to continue]`);
 		});
 
 		it("should truncate when byte limit exceeded", async () => {
@@ -347,9 +345,7 @@ describe("Coding Agent Tools", () => {
 
 			expect(output).toContain("Line 1:");
 			// Should show byte limit message
-			expect(output).toMatch(
-				/\[Showing lines 1-\d+ of 1000 \(\d+(\.\d+)?\s*KB limit\)\. Use sel=L\d+ to continue\]/,
-			);
+			expect(output).toMatch(/\[Showing lines 1-\d+ of 1000 \(\d+(\.\d+)?\s*KB limit\)\. Use sel=\d+ to continue\]/);
 		});
 
 		it("should handle offset parameter", async () => {
@@ -378,7 +374,7 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Line 1");
 			expect(output).toContain("Line 10");
 			expect(output).not.toContain("Line 11");
-			expect(output).toContain("[Showing lines 1-10 of 100. Use sel=L11 to continue]");
+			expect(output).toContain("[Showing lines 1-10 of 100. Use sel=11 to continue]");
 		});
 
 		it("should handle offset + limit together", async () => {
@@ -396,7 +392,7 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Line 41");
 			expect(output).toContain("Line 60");
 			expect(output).not.toContain("Line 61");
-			expect(output).toContain("[Showing lines 41-60 of 100. Use sel=L61 to continue]");
+			expect(output).toContain("[Showing lines 41-60 of 100. Use sel=61 to continue]");
 		});
 
 		it("should show error when offset is beyond file length", async () => {
@@ -407,7 +403,7 @@ describe("Coding Agent Tools", () => {
 			const output = getTextOutput(result);
 
 			expect(output).toContain("Line 100 is beyond end of file (3 lines total)");
-			expect(output).toContain("Use sel=L1 to read from the start, or sel=L3 to read the last line.");
+			expect(output).toContain("Use sel=1 to read from the start, or sel=3 to read the last line.");
 		});
 
 		it("should include truncation details when truncated", async () => {
@@ -505,7 +501,7 @@ describe("Coding Agent Tools", () => {
 				expect(output).toContain("# Archive README");
 				expect(output).toContain("Line 2");
 				expect(output).not.toContain("Line 3");
-				expect(output).toContain("Use sel=L3");
+				expect(output).toContain("Use sel=3");
 			});
 		}
 
