@@ -1,7 +1,7 @@
 import { getIndentation } from "@oh-my-pi/pi-utils";
 import * as Diff from "diff";
 import { theme } from "../../modes/theme/theme";
-import { replaceTabs } from "../../tools/render-utils";
+import { type CodeFrameMarker, formatCodeFrameLine, replaceTabs } from "../../tools/render-utils";
 
 /** SGR dim on / normal intensity — additive, preserves fg/bg colors. */
 const DIM = "\x1b[2m";
@@ -37,14 +37,14 @@ function visualizeIndent(text: string, filePath?: string): string {
  * Parse diff line to extract prefix, line number, and content.
  * Supported formats: "+123|content" (canonical) and "+123 content" (legacy).
  */
-function parseDiffLine(line: string): { prefix: string; lineNum: string; content: string } | null {
+function parseDiffLine(line: string): { prefix: CodeFrameMarker; lineNum: string; content: string } | null {
 	const canonical = line.match(/^([+-\s])(\s*\d+)\|(.*)$/);
 	if (canonical) {
-		return { prefix: canonical[1], lineNum: canonical[2], content: canonical[3] };
+		return { prefix: canonical[1] as CodeFrameMarker, lineNum: canonical[2] ?? "", content: canonical[3] ?? "" };
 	}
 	const legacy = line.match(/^([+-\s])(?:(\s*\d+)\s)?(.*)$/);
 	if (!legacy) return null;
-	return { prefix: legacy[1], lineNum: legacy[2] ?? "", content: legacy[3] };
+	return { prefix: legacy[1] as CodeFrameMarker, lineNum: legacy[2] ?? "", content: legacy[3] ?? "" };
 }
 
 /**
@@ -108,6 +108,11 @@ export interface RenderDiffOptions {
 export function renderDiff(diffText: string, options: RenderDiffOptions = {}): string {
 	const lines = diffText.split("\n");
 	const result: string[] = [];
+	const parsedLines = lines.map(parseDiffLine);
+	const lineNumberWidth = parsedLines.reduce((width, parsed) => {
+		const lineNumber = parsed?.lineNum.trim() ?? "";
+		return Math.max(width, lineNumber.length);
+	}, 0);
 
 	// Track the line number rendered on the previous emitted line so we can
 	// blank out duplicate gutters. Two cases trigger this:
@@ -115,16 +120,15 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 	//  2. Insertion followed by context (`+N` then ` N` if producer used oldLine).
 	let prevLineNum = "";
 
-	const formatLine = (prefix: string, lineNum: string, content: string): string => {
+	const formatLine = (prefix: CodeFrameMarker, lineNum: string, content: string): string => {
 		if (lineNum.trim().length === 0) {
 			prevLineNum = "";
 			return `${prefix}${content}`;
 		}
 		const trimmed = lineNum.trim();
-		const displayNum = trimmed === prevLineNum ? " ".repeat(lineNum.length) : lineNum;
+		const displayNum = trimmed === prevLineNum ? "" : trimmed;
 		prevLineNum = trimmed;
-		// Use box-drawing `│` instead of `|` so adjacent lines visually connect into a continuous gutter.
-		return `${prefix}${displayNum}│${content}`;
+		return formatCodeFrameLine(prefix, displayNum, content, lineNumberWidth);
 	};
 
 	let i = 0;

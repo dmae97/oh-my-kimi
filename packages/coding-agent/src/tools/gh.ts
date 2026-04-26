@@ -146,33 +146,24 @@ const ghRepoViewSchema = Type.Object({
 });
 
 const ghIssueViewSchema = Type.Object({
-	issue: Type.String({ description: "issue number or url", examples: ["123", "https://github.com/owner/repo/issues/123"] }),
-	repo: Type.Optional(
-		Type.String({ description: "owner/repo", examples: ["facebook/react"] }),
-	),
+	issue: Type.String({
+		description: "issue number or url",
+		examples: ["123", "https://github.com/owner/repo/issues/123"],
+	}),
+	repo: Type.Optional(Type.String({ description: "owner/repo", examples: ["facebook/react"] })),
 	comments: Type.Optional(Type.Boolean({ description: "include issue comments", default: true })),
 });
 
 const ghPrViewSchema = Type.Object({
-	pr: Type.Optional(
-		Type.String({ description: "pr number, url, or branch", examples: ["123", "feature-branch"] }),
-	),
-	repo: Type.Optional(
-		Type.String({ description: "owner/repo", examples: ["facebook/react"] }),
-	),
+	pr: Type.Optional(Type.String({ description: "pr number, url, or branch", examples: ["123", "feature-branch"] })),
+	repo: Type.Optional(Type.String({ description: "owner/repo", examples: ["facebook/react"] })),
 	comments: Type.Optional(Type.Boolean({ description: "include pr comments", default: true })),
 });
 
 const ghPrDiffSchema = Type.Object({
-	pr: Type.Optional(
-		Type.String({ description: "pr number, url, or branch", examples: ["123", "feature-branch"] }),
-	),
-	repo: Type.Optional(
-		Type.String({ description: "owner/repo", examples: ["facebook/react"] }),
-	),
-	nameOnly: Type.Optional(
-		Type.Boolean({ description: "return file names only" }),
-	),
+	pr: Type.Optional(Type.String({ description: "pr number, url, or branch", examples: ["123", "feature-branch"] })),
+	repo: Type.Optional(Type.String({ description: "owner/repo", examples: ["facebook/react"] })),
+	nameOnly: Type.Optional(Type.Boolean({ description: "return file names only" })),
 	exclude: Type.Optional(
 		Type.Array(Type.String({ description: "glob to exclude" }), {
 			description: "file globs to exclude",
@@ -181,16 +172,10 @@ const ghPrDiffSchema = Type.Object({
 });
 
 const ghPrCheckoutSchema = Type.Object({
-	pr: Type.Optional(
-		Type.String({ description: "pr number, url, or branch", examples: ["123", "feature-branch"] }),
-	),
-	repo: Type.Optional(
-		Type.String({ description: "owner/repo", examples: ["facebook/react"] }),
-	),
+	pr: Type.Optional(Type.String({ description: "pr number, url, or branch", examples: ["123", "feature-branch"] })),
+	repo: Type.Optional(Type.String({ description: "owner/repo", examples: ["facebook/react"] })),
 	branch: Type.Optional(Type.String({ description: "local branch name", examples: ["main", "develop"] })),
-	worktree: Type.Optional(
-		Type.String({ description: "worktree path" }),
-	),
+	worktree: Type.Optional(Type.String({ description: "worktree path" })),
 	force: Type.Optional(
 		Type.Boolean({
 			description: "reset existing local branch",
@@ -221,18 +206,14 @@ const ghSearchPrsSchema = Type.Object({
 });
 
 const ghRunWatchSchema = Type.Object({
-	run: Type.Optional(
-		Type.String({ description: "actions run id or url", examples: ["123456"] }),
-	),
+	run: Type.Optional(Type.String({ description: "actions run id or url", examples: ["123456"] })),
 	branch: Type.Optional(
 		Type.String({
 			description: "branch to inspect",
 			examples: ["main", "develop"],
 		}),
 	),
-	tail: Type.Optional(
-		Type.Number({ description: "log lines per failed job", default: 15 }),
-	),
+	tail: Type.Optional(Type.Number({ description: "log lines per failed job", default: 15 })),
 });
 
 type GhRepoViewInput = Static<typeof ghRepoViewSchema>;

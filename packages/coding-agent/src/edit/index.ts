@@ -20,7 +20,13 @@ import { type EditMode, normalizeEditMode, resolveEditMode } from "../utils/edit
 import type { VimToolDetails } from "../vim/types";
 import { type ApplyPatchParams, applyPatchSchema, expandApplyPatchToEntries } from "./modes/apply-patch";
 import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
-import { type AtomParams, type AtomToolEdit, atomEditParamsSchema, executeAtomSingle } from "./modes/atom";
+import {
+	type AtomParams,
+	type AtomToolEdit,
+	atomEditParamsSchema,
+	executeAtomSingle,
+	resolveAtomEntryPaths,
+} from "./modes/atom";
 import {
 	type ChunkParams,
 	type ChunkToolEdit,
@@ -449,7 +455,7 @@ export class EditTool implements AgentTool<TInput> {
 					onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
 				) => {
 					const { edits, path: topPath } = params as AtomParams & { path?: string };
-					const resolved = resolveEntryPaths(edits as AtomToolEdit[], topPath);
+					const resolved = resolveAtomEntryPaths(edits as AtomToolEdit[], topPath);
 					const byFile = groupBy(resolved, e => e.path);
 					const entries = [...byFile.entries()].map(([path, fileEdits]) => ({
 						path,

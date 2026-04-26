@@ -26,7 +26,13 @@ import {
 	resolveMultiSearchPath,
 	resolveToCwd,
 } from "./path-utils";
-import { formatCount, formatEmptyMessage, formatErrorMessage, PREVIEW_LIMITS } from "./render-utils";
+import {
+	formatCodeFrameLine,
+	formatCount,
+	formatEmptyMessage,
+	formatErrorMessage,
+	PREVIEW_LIMITS,
+} from "./render-utils";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
@@ -430,17 +436,24 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				return resultBuilder.done();
 			}
 			const displayLines: string[] = [];
-			const renderMatchesForFile = (
-				relativePath: string,
-			): { model: string[]; display: string[] } => {
+			const renderMatchesForFile = (relativePath: string): { model: string[]; display: string[] } => {
 				const modelOut: string[] = [];
 				const displayOut: string[] = [];
 				const fileMatches = matchesByFile.get(relativePath) ?? [];
+				const lineNumberWidth = fileMatches.reduce((width, match) => {
+					let nextWidth = Math.max(width, String(match.lineNumber).length);
+					for (const ctx of match.contextBefore ?? []) {
+						nextWidth = Math.max(nextWidth, String(ctx.lineNumber).length);
+					}
+					for (const ctx of match.contextAfter ?? []) {
+						nextWidth = Math.max(nextWidth, String(ctx.lineNumber).length);
+					}
+					return nextWidth;
+				}, 0);
 				for (const match of fileMatches) {
 					const pushLine = (lineNumber: number, line: string, isMatch: boolean) => {
 						modelOut.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
-						const marker = isMatch ? "*" : "";
-						displayOut.push(`${marker}${lineNumber}│${line}`);
+						displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
 					};
 					if (match.contextBefore) {
 						for (const ctx of match.contextBefore) {

@@ -24,6 +24,7 @@ import {
 } from "./path-utils";
 import {
 	dedupeParseErrors,
+	formatCodeFrameLine,
 	formatCount,
 	formatEmptyMessage,
 	formatErrorMessage,
@@ -221,6 +222,10 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			const displayLines: string[] = [];
 			const renderChangesForFile = (relativePath: string) => {
 				const fileChanges = changesByFile.get(relativePath) ?? [];
+				const lineNumberWidth = fileChanges.reduce(
+					(width, change) => Math.max(width, String(change.startLine).length),
+					0,
+				);
 				for (const change of fileChanges) {
 					const beforeFirstLine = change.before.split("\n", 1)[0] ?? "";
 					const afterFirstLine = change.after.split("\n", 1)[0] ?? "";
@@ -235,8 +240,8 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					const lineSeparator = useHashLines ? "\t" : " ";
 					outputLines.push(`-${beforeRef}${lineSeparator}${beforeLine}`);
 					outputLines.push(`+${afterRef}${lineSeparator}${afterLine}`);
-					displayLines.push(`-${change.startLine}│${beforeLine}`);
-					displayLines.push(`+${change.startLine}│${afterLine}`);
+					displayLines.push(formatCodeFrameLine("-", change.startLine, beforeLine, lineNumberWidth));
+					displayLines.push(formatCodeFrameLine("+", change.startLine, afterLine, lineNumberWidth));
 				}
 			};
 

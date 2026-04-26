@@ -26,9 +26,7 @@ const MATCH_DESCRIPTION_LEN = 96;
 
 const searchToolBm25Schema = Type.Object({
 	query: Type.String({ description: "mcp search query", examples: ["kubernetes pod", "image processing"] }),
-	limit: Type.Optional(
-		Type.Integer({ description: "max matches", minimum: 1 }),
-	),
+	limit: Type.Optional(Type.Integer({ description: "max matches", minimum: 1 })),
 });
 
 type SearchToolBm25Params = Static<typeof searchToolBm25Schema>;

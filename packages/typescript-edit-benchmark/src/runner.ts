@@ -1024,17 +1024,23 @@ async function runSingleTask(
 				const statsBefore = await client.getSessionStats();
 				let events: Array<{ type: string; [key: string]: unknown }>;
 				try {
-					events = await collectPromptEvents(client, delivery, config, logEvent, buildEarlyStop({
+					events = await collectPromptEvents(
+						client,
+						delivery,
 						config,
-						cwd,
-						expectedDir,
-						files: task.files,
 						logEvent,
-						attempt: attempt + 1,
-						onMatched: () => {
-							earlyStoppedByMatch = true;
-						},
-					}));
+						buildEarlyStop({
+							config,
+							cwd,
+							expectedDir,
+							files: task.files,
+							logEvent,
+							attempt: attempt + 1,
+							onMatched: () => {
+								earlyStoppedByMatch = true;
+							},
+						}),
+					);
 				} catch (err) {
 					if (err instanceof PromptTurnLimitError) {
 						error = err.message;

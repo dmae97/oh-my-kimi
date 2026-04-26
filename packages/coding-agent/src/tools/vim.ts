@@ -127,15 +127,15 @@ function renderViewportCursor(line: VimViewportLine, styledText: string, uiTheme
 }
 
 function renderViewportLine(line: VimViewportLine, styledText: string, padWidth: number, uiTheme: Theme): string {
-	const lineNoStr = String(line.line).padStart(padWidth, " ");
-	const lineNoStyled = line.isCursor
-		? uiTheme.fg("accent", lineNoStr)
+	const marker = line.isCursor ? ">" : line.isSelected ? "*" : "";
+	const gutterText = `${marker}${line.line}`.padStart(padWidth + 1, " ");
+	const gutterStyled = line.isCursor
+		? uiTheme.fg("accent", gutterText)
 		: line.isSelected
-			? uiTheme.fg("warning", lineNoStr)
-			: uiTheme.fg("dim", lineNoStr);
+			? uiTheme.fg("warning", gutterText)
+			: uiTheme.fg("dim", gutterText);
 	const separator = uiTheme.fg("dim", "│");
-	const prefix = line.isCursor ? uiTheme.fg("accent", ">") : line.isSelected ? uiTheme.fg("warning", "*") : " ";
-	return `${prefix}${lineNoStyled}${separator}${renderViewportCursor(line, styledText, uiTheme)}`;
+	return `${gutterStyled}${separator}${renderViewportCursor(line, styledText, uiTheme)}`;
 }
 
 function splitTokensBySequence(kbd: string[]): Array<{ sequence: string; tokens: VimKeyToken[] }> {

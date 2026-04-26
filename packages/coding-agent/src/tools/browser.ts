@@ -406,7 +406,9 @@ const browserSchema = Type.Object({
 	include_all: Type.Optional(Type.Boolean({ description: "include non-interactive nodes" })),
 	viewport_only: Type.Optional(Type.Boolean({ description: "limit to viewport" })),
 	args: Type.Optional(puppeteerGetArgsSchema),
-	script: Type.Optional(Type.String({ description: "javascript expression", examples: ["document.title", "window.location.href"] })),
+	script: Type.Optional(
+		Type.String({ description: "javascript expression", examples: ["document.title", "window.location.href"] }),
+	),
 	text: Type.Optional(Type.String({ description: "text to type", examples: ["hello world"] })),
 	value: Type.Optional(Type.String({ description: "value to set", examples: ["hello"] })),
 	attribute: Type.Optional(Type.String({ description: "attribute to read", examples: ["href", "data-id"] })),

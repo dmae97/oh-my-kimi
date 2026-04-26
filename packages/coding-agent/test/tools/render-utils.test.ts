@@ -5,6 +5,7 @@ import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import {
 	dedupeParseErrors,
 	formatDiagnostics,
+	formatCodeFrameLine,
 	formatParseErrors,
 	formatScreenshot,
 } from "@oh-my-pi/pi-coding-agent/tools/render-utils";
@@ -172,5 +173,14 @@ describe("formatDiagnostics", () => {
 		expect(formatted.replace(/\s+/g, " ")).toContain("too many arguments in call");
 		expect(formatted.replace(/\s+/g, " ")).toContain("unparsed diagnostic message");
 		expect(formatted.replace(/\s+/g, " ")).toContain("1 error(s)");
+	});
+});
+
+describe("formatCodeFrameLine", () => {
+	it("pads markers as part of the gutter", () => {
+		expect(formatCodeFrameLine(" ", 447, "context", 3)).toBe(" 447│context");
+		expect(formatCodeFrameLine("*", 448, "match", 3)).toBe("*448│match");
+		expect(formatCodeFrameLine("+", 11, "added", 3)).toBe(" +11│added");
+		expect(formatCodeFrameLine("+", 235, "added", 3)).toBe("+235│added");
 	});
 });

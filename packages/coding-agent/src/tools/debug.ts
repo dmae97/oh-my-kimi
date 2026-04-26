@@ -87,7 +87,9 @@ const debugSchema = Type.Object({
 	),
 	program: Type.Optional(Type.String({ description: "program path", examples: ["./my_app", "src/main.py"] })),
 	args: Type.Optional(Type.Array(Type.String(), { description: "program arguments", examples: [["--verbose"]] })),
-	adapter: Type.Optional(Type.String({ description: "debugger adapter", examples: ["gdb", "lldb-dap", "debugpy", "dlv"] })),
+	adapter: Type.Optional(
+		Type.String({ description: "debugger adapter", examples: ["gdb", "lldb-dap", "debugpy", "dlv"] }),
+	),
 	cwd: Type.Optional(Type.String({ description: "working directory", examples: ["src/"] })),
 	file: Type.Optional(Type.String({ description: "source file", examples: ["src/main.c"] })),
 	line: Type.Optional(Type.Number({ description: "source line", examples: [42] })),
@@ -96,7 +98,9 @@ const debugSchema = Type.Object({
 	condition: Type.Optional(Type.String({ description: "breakpoint condition", examples: ["i == 10", "x > 0"] })),
 	hit_condition: Type.Optional(Type.String({ description: "hit condition" })),
 	expression: Type.Optional(Type.String({ description: "expression to evaluate", examples: ["x + 1", "obj.field"] })),
-	context: Type.Optional(Type.String({ description: "evaluate context", examples: ["watch", "repl", "hover", "variables", "clipboard"] })),
+	context: Type.Optional(
+		Type.String({ description: "evaluate context", examples: ["watch", "repl", "hover", "variables", "clipboard"] }),
+	),
 	frame_id: Type.Optional(Type.Number({ description: "stack frame id" })),
 	scope_id: Type.Optional(Type.Number({ description: "scope variables reference" })),
 	variable_ref: Type.Optional(Type.Number({ description: "variable reference" })),
@@ -104,10 +108,10 @@ const debugSchema = Type.Object({
 	port: Type.Optional(Type.Number({ description: "remote attach port", examples: [4711] })),
 	host: Type.Optional(Type.String({ description: "remote attach host", examples: ["127.0.0.1"] })),
 	levels: Type.Optional(Type.Number({ description: "max stack frames" })),
-	memory_reference: Type.Optional(Type.String({ description: "memory reference or address", examples: ["0x7ffd1234"] })),
-	instruction_reference: Type.Optional(
-		Type.String({ description: "instruction address or reference" }),
+	memory_reference: Type.Optional(
+		Type.String({ description: "memory reference or address", examples: ["0x7ffd1234"] }),
 	),
+	instruction_reference: Type.Optional(Type.String({ description: "instruction address or reference" })),
 	instruction_count: Type.Optional(Type.Number({ description: "instructions to disassemble" })),
 	instruction_offset: Type.Optional(Type.Number({ description: "instruction offset" })),
 	count: Type.Optional(Type.Number({ description: "bytes to read" })),

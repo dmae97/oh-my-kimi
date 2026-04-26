@@ -4,6 +4,7 @@ import {
 	applyAtomEdits,
 	computeLineHash,
 	HashlineMismatchError,
+	resolveAtomEntryPaths,
 	resolveAtomToolEdit,
 } from "@oh-my-pi/pi-coding-agent/edit";
 import type { Anchor } from "@oh-my-pi/pi-coding-agent/edit/modes/hashline";
@@ -81,7 +82,6 @@ describe("applyAtomEdits — pre/post", () => {
 	});
 });
 
-
 describe("applyAtomEdits — sub", () => {
 	it("replaces a unique substring", () => {
 		const content = "const timeout = 5000;";
@@ -126,28 +126,55 @@ describe("applyAtomEdits — sub", () => {
 	});
 });
 
-describe("applyAtomEdits — file-scoped via pre:\"\" / post:\"\"", () => {
-	it("post:\"\" appends at EOF", () => {
+describe("resolveAtomToolEdit — loc syntax", () => {
+	it('loc:"$" appends at EOF', () => {
 		const content = "aaa\nbbb";
-		const resolved = resolveAtomToolEdit({ post: "", lines: ["ccc"] }) as AtomEdit;
-		expect(resolved.op).toBe("append_file");
-		const result = applyAtomEdits(content, [resolved]);
+		const resolved = resolveAtomToolEdit({ loc: "$", post: ["ccc"] });
+		expect(resolved).toHaveLength(1);
+		expect(resolved[0]?.op).toBe("append_file");
+		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("aaa\nbbb\nccc");
 	});
 
-	it("pre:\"\" prepends at BOF", () => {
+	it('loc:"^" prepends at BOF', () => {
 		const content = "aaa\nbbb";
-		const resolved = resolveAtomToolEdit({ pre: "", lines: ["ZZZ"] }) as AtomEdit;
-		expect(resolved.op).toBe("prepend_file");
-		const result = applyAtomEdits(content, [resolved]);
+		const resolved = resolveAtomToolEdit({ loc: "^", pre: ["ZZZ"] });
+		expect(resolved).toHaveLength(1);
+		expect(resolved[0]?.op).toBe("prepend_file");
+		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("ZZZ\naaa\nbbb");
 	});
 
-	it("post:\"\" on empty file replaces empty line", () => {
-		const content = "";
-		const resolved = resolveAtomToolEdit({ post: "", lines: ["aaa"] }) as AtomEdit;
-		const result = applyAtomEdits(content, [resolved]);
-		expect(result.lines).toBe("aaa");
+	it("expands pre + set + post from one entry", () => {
+		const content = "aaa\nbbb\nccc";
+		const loc = `2${computeLineHash(2, "bbb")}`;
+		const resolved = resolveAtomToolEdit({ loc, pre: ["B"], set: ["BBB"], post: ["A"] });
+		const result = applyAtomEdits(content, resolved);
+		expect(result.lines).toBe("aaa\nB\nBBB\nA\nccc");
+	});
+
+	it("set: [] deletes the anchor line", () => {
+		const content = "aaa\nbbb\nccc";
+		const loc = `2${computeLineHash(2, "bbb")}`;
+		const resolved = resolveAtomToolEdit({ loc, set: [] });
+		expect(resolved[0]?.op).toBe("del");
+		const result = applyAtomEdits(content, resolved);
+		expect(result.lines).toBe("aaa\nccc");
+	});
+
+	it('set:[""] preserves a blank line', () => {
+		const content = "aaa\nbbb\nccc";
+		const loc = `2${computeLineHash(2, "bbb")}`;
+		const resolved = resolveAtomToolEdit({ loc, set: [""] });
+		expect(resolved[0]?.op).toBe("set");
+		const result = applyAtomEdits(content, resolved);
+		expect(result.lines).toBe("aaa\n\nccc");
+	});
+
+	it("supports path override inside loc", () => {
+		const resolved = resolveAtomEntryPaths([{ loc: "a.ts:1ab", set: "X" }], undefined);
+		expect(resolved[0]?.path).toBe("a.ts");
+		expect(resolved[0]?.loc).toBe("1ab");
 	});
 });
 
@@ -163,11 +190,11 @@ describe("parseAnchor (atom tolerant) + applyAtomEdits", () => {
 	it("surfaces correct anchor + content when the model invents an out-of-alphabet hash", () => {
 		const content = "alpha\nbravo\ncharlie";
 		// `XG` is not in the alphabet; should be rejected with the actual anchor exposed.
-		const toolEdit = { path: "a.ts", set: "2XG", lines: "BRAVO" };
-		const resolved = resolveAtomToolEdit(toolEdit) as AtomEdit;
-		expect(() => applyAtomEdits(content, [resolved])).toThrow(HashlineMismatchError);
+		const toolEdit = { path: "a.ts", loc: "2XG", set: "BRAVO" };
+		const resolved = resolveAtomToolEdit(toolEdit);
+		expect(() => applyAtomEdits(content, resolved)).toThrow(HashlineMismatchError);
 		try {
-			applyAtomEdits(content, [resolved]);
+			applyAtomEdits(content, resolved);
 		} catch (err) {
 			const msg = (err as Error).message;
 			expect(msg).toMatch(/^\d+[a-z]{2}:/m);
@@ -178,24 +205,23 @@ describe("parseAnchor (atom tolerant) + applyAtomEdits", () => {
 
 	it("surfaces correct anchor + content when the model omits the hash entirely", () => {
 		const content = "alpha\nbravo\ncharlie";
-		const toolEdit = { path: "a.ts", set: "2", lines: "BRAVO" };
-		const resolved = resolveAtomToolEdit(toolEdit) as AtomEdit;
-		expect(() => applyAtomEdits(content, [resolved])).toThrow(HashlineMismatchError);
+		const toolEdit = { path: "a.ts", loc: "2", set: "BRAVO" };
+		const resolved = resolveAtomToolEdit(toolEdit);
+		expect(() => applyAtomEdits(content, resolved)).toThrow(HashlineMismatchError);
 	});
 
 	it("surfaces correct anchor when the model uses pipe-separator (LINE|content) form", () => {
 		const content = "alpha\nbravo\ncharlie";
-		const toolEdit = { path: "a.ts", set: "2|bravo", lines: "BRAVO" };
-		const resolved = resolveAtomToolEdit(toolEdit) as AtomEdit;
-		expect(() => applyAtomEdits(content, [resolved])).toThrow(HashlineMismatchError);
+		const toolEdit = { path: "a.ts", loc: "2|bravo", set: "BRAVO" };
+		const resolved = resolveAtomToolEdit(toolEdit);
+		expect(() => applyAtomEdits(content, resolved)).toThrow(HashlineMismatchError);
 	});
 
 	it("throws a usage-style error when no line number can be extracted", () => {
-		const toolEdit = { path: "a.ts", set: "  if (!x) return;", lines: "x" };
+		const toolEdit = { path: "a.ts", loc: "  if (!x) return;", set: "x" };
 		expect(() => resolveAtomToolEdit(toolEdit)).toThrow(/Could not find a line number/);
 	});
 });
-
 
 describe("applyAtomEdits — between", () => {
 	it("replaces lines strictly between two surviving anchors (function body, keep braces)", () => {
@@ -224,18 +250,14 @@ describe("applyAtomEdits — between", () => {
 
 	it("is a pure insertion when after.line + 1 == before.line", () => {
 		const content = "top\nbottom";
-		const edits: AtomEdit[] = [
-			{ op: "between", after: tag(1, "top"), before: tag(2, "bottom"), lines: ["middle"] },
-		];
+		const edits: AtomEdit[] = [{ op: "between", after: tag(1, "top"), before: tag(2, "bottom"), lines: ["middle"] }];
 		const result = applyAtomEdits(content, edits);
 		expect(result.lines).toBe("top\nmiddle\nbottom");
 	});
 
 	it("rejects when after.line >= before.line", () => {
 		const content = "a\nb\nc";
-		const edits: AtomEdit[] = [
-			{ op: "between", after: tag(2, "b"), before: tag(2, "b"), lines: ["x"] },
-		];
+		const edits: AtomEdit[] = [{ op: "between", after: tag(2, "b"), before: tag(2, "b"), lines: ["x"] }];
 		expect(() => applyAtomEdits(content, edits)).toThrow(/after\.line < before\.line/);
 	});
 
@@ -285,22 +307,23 @@ describe("applyAtomEdits — between", () => {
 		expect(() => applyAtomEdits(content, edits)).toThrow(HashlineMismatchError);
 	});
 
-	it("resolveAtomToolEdit accepts `set: [open, close]` tuple and parses both anchors", () => {
+	it("resolveAtomToolEdit accepts range loc and parses both anchors", () => {
 		const toolEdit = {
 			path: "a.ts",
-			set: ["1xx", "4yy"] as [string, string],
-			lines: ["X"],
+			loc: "1xx-4yy",
+			set: ["X"],
 		};
-		const resolved = resolveAtomToolEdit(toolEdit) as AtomEdit;
-		expect(resolved.op).toBe("between");
-		if (resolved.op !== "between") throw new Error("unreachable");
-		expect(resolved.after.line).toBe(1);
-		expect(resolved.before.line).toBe(4);
-		expect(resolved.lines).toEqual(["X"]);
+		const resolved = resolveAtomToolEdit(toolEdit);
+		expect(resolved).toHaveLength(1);
+		const between = resolved[0];
+		expect(between?.op).toBe("between");
+		if (!between || between.op !== "between") throw new Error("unreachable");
+		expect(between.after.line).toBe(1);
+		expect(between.before.line).toBe(4);
+		expect(between.lines).toEqual(["X"]);
 	});
 
-	it("resolveAtomToolEdit rejects `set` arrays with non-string elements", () => {
-		const toolEdit = { path: "a.ts", set: [1, 2] as unknown as [string, string], lines: ["X"] };
-		expect(() => resolveAtomToolEdit(toolEdit)).toThrow(/2-tuple requires both elements to be anchor strings/);
+	it("resolveAtomToolEdit rejects range loc without set", () => {
+		expect(() => resolveAtomToolEdit({ path: "a.ts", loc: "1xx-4yy", pre: ["X"] })).toThrow(/range loc requires set/);
 	});
 });

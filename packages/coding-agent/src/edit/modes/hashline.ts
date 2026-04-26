@@ -23,6 +23,7 @@ import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd } from "../../tools/path-utils";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
+import { formatCodeFrameLine } from "../../tools/render-utils";
 import { generateDiffString } from "../diff";
 import { computeLineHash, formatLineHash, HASHLINE_BIGRAM_RE_SRC } from "../line-hash";
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "../normalize";
@@ -214,10 +215,10 @@ function resolveHashlineEditsForDiff(edits: HashlineEditInput[]): HashlineEdit[]
 export function formatFullAnchorRequirement(raw?: string): string {
 	const suffix = typeof raw === "string" ? raw.trim() : "";
 	const hashOnlyHint = /^[A-Za-z]{2}$/.test(suffix)
-		? ` It looks like you supplied only the 2-letter suffix (${JSON.stringify(suffix)}). Copy the full anchor exactly as shown (for example, \"160${suffix}\").`
+		? ` It looks like you supplied only the 2-letter suffix (${JSON.stringify(suffix)}). Copy the full anchor exactly as shown (for example, "160${suffix}").`
 		: "";
 	const received = raw === undefined ? "" : ` Received ${JSON.stringify(raw)}.`;
-	return `the full anchor exactly as shown by read/grep (line number + 2-letter suffix, for example \"160sr\")${received}${hashOnlyHint}`;
+	return `the full anchor exactly as shown by read/grep (line number + 2-letter suffix, for example "160sr")${received}${hashOnlyHint}`;
 }
 
 function tryParseTag(raw: string): Anchor | undefined {
@@ -241,8 +242,12 @@ function requireParsedRange(range: { pos: string; end: string }): { pos: Anchor;
 		const invalid = [
 			!pos ? `pos=${JSON.stringify(range.pos)}` : null,
 			!end ? `end=${JSON.stringify(range.end)}` : null,
-		].filter(Boolean).join(", ");
-		throw new Error(`range requires valid pos and end anchors. Use ${formatFullAnchorRequirement()}. Invalid: ${invalid}.`);
+		]
+			.filter(Boolean)
+			.join(", ");
+		throw new Error(
+			`range requires valid pos and end anchors. Use ${formatFullAnchorRequirement()}. Invalid: ${invalid}.`,
+		);
 	}
 	return { pos, end };
 }
@@ -562,13 +567,14 @@ export class HashlineMismatchError extends Error {
 			"",
 		];
 
+		const lineNumberWidth = sorted.reduce((width, lineNum) => Math.max(width, String(lineNum).length), 0);
 		let prevLine = -1;
 		for (const lineNum of sorted) {
 			if (prevLine !== -1 && lineNum > prevLine + 1) out.push("...");
 			prevLine = lineNum;
 			const text = fileLines[lineNum - 1];
-			const marker = mismatchSet.has(lineNum) ? "*" : "";
-			out.push(`${marker}${lineNum}│${text}`);
+			const marker = mismatchSet.has(lineNum) ? "*" : " ";
+			out.push(formatCodeFrameLine(marker, lineNum, text ?? "", lineNumberWidth));
 		}
 		return out.join("\n");
 	}

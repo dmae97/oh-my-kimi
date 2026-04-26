@@ -127,4 +127,42 @@ describe("apply_patch rendering", () => {
 			await fs.rm(tmpDir, { recursive: true, force: true });
 		}
 	});
+
+	it("aligns rendered edit diff separators", async () => {
+		await getUiTheme();
+		const uiStub = { requestRender() {} } as unknown as TUI;
+		const component = new ToolExecutionComponent(
+			"edit",
+			{ path: "packages/coding-agent/src/tools/image-gen.ts" },
+			{},
+			undefined,
+			uiStub,
+		);
+
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "" }],
+				details: {
+					path: "packages/coding-agent/src/tools/image-gen.ts",
+					op: "update",
+					diff: [
+						" 10|}",
+						'+11|import { CODEX_INSTRUCTIONS } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";',
+						" 12|\t$env,",
+						" 228|\toutput_format: typeof OPENAI_IMAGE_OUTPUT_FORMAT;",
+						"+235|\tinstructions?: string;",
+						' 234|\tinput: Array<{ role: "user"; content: OpenAIInputContent[] }>;',
+					].join("\n"),
+				},
+			},
+			false,
+		);
+
+		const rendered = Bun.stripANSI(component.render(220).join("\n"));
+		expect(rendered).toContain("  10│}");
+		expect(rendered).toContain(" +11│import");
+		expect(rendered).toContain(" 228│");
+		expect(rendered).toContain("+235│");
+		expect(rendered).toContain(" 234│");
+	});
 });

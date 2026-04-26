@@ -49,9 +49,7 @@ const InputTask = Type.Object({
 			description: "task status",
 		}),
 	),
-	details: Type.Optional(
-		Type.String({ description: "implementation details" }),
-	),
+	details: Type.Optional(Type.String({ description: "implementation details" })),
 });
 
 const InputPhase = Type.Object({

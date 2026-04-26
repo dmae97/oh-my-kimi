@@ -50,7 +50,6 @@ export class ApplyPatchError extends Error {
 // Diff String Generation
 // ═══════════════════════════════════════════════════════════════════════════
 
-
 function formatNumberedDiffLine(prefix: "+" | "-" | " ", lineNum: number, content: string): string {
 	return `${prefix}${lineNum}|${content}`;
 }
@@ -62,7 +61,6 @@ function formatNumberedDiffLine(prefix: "+" | "-" | " ", lineNum: number, conten
 export function generateDiffString(oldContent: string, newContent: string, contextLines = 4): DiffResult {
 	const parts = Diff.diffLines(oldContent, newContent);
 	const output: string[] = [];
-
 
 	let oldLineNum = 1;
 	let newLineNum = 1;

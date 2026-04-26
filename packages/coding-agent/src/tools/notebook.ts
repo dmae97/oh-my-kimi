@@ -64,8 +64,7 @@ type NotebookParams = Static<typeof notebookSchema>;
 export class NotebookTool implements AgentTool<typeof notebookSchema, NotebookToolDetails> {
 	readonly name = "notebook";
 	readonly label = "Notebook";
-	readonly description =
-		"Edit, insert, or delete cells in Jupyter notebooks (.ipynb). cell_index is 0-based.";
+	readonly description = "Edit, insert, or delete cells in Jupyter notebooks (.ipynb). cell_index is 0-based.";
 	readonly parameters = notebookSchema;
 	readonly strict = true;
 	readonly concurrency = "exclusive";

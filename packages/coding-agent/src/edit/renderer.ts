@@ -380,18 +380,18 @@ function wrapEditRendererLine(line: string, width: number): string[] {
 	const startAnsi = line.match(/^((?:\x1b\[[0-9;]*m)*)/)?.[1] ?? "";
 	const bodyWithReset = line.slice(startAnsi.length);
 	const body = bodyWithReset.endsWith("\x1b[39m") ? bodyWithReset.slice(0, -"\x1b[39m".length) : bodyWithReset;
-	const diffMatch = /^([+\-\s])(\s*\d+)\|(.*)$/s.exec(body);
+	const diffMatch = /^([+\-\s])(\s*\d+)([|│])(.*)$/s.exec(body);
 
 	if (!diffMatch) {
 		return wrapTextWithAnsi(line, width);
 	}
 
-	const [, marker, lineNum, content] = diffMatch;
-	const prefix = `${marker}${lineNum}|`;
+	const [, marker, lineNum, separator, content] = diffMatch;
+	const prefix = `${marker}${lineNum}${separator}`;
 	const prefixWidth = visibleWidth(prefix);
 	const contentWidth = Math.max(1, width - prefixWidth);
-	const continuationPrefix = `${" ".repeat(Math.max(0, prefixWidth - 1))}|`;
-	const wrappedContent = wrapTextWithAnsi(content, contentWidth);
+	const continuationPrefix = `${" ".repeat(Math.max(0, prefixWidth - 1))}${separator}`;
+	const wrappedContent = wrapTextWithAnsi(content ?? "", contentWidth);
 
 	return wrappedContent.map(
 		(segment, index) => `${startAnsi}${index === 0 ? prefix : continuationPrefix}${segment}\x1b[39m`,
