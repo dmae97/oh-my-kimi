@@ -1711,6 +1711,11 @@ export class AuthStorage {
 			}),
 		);
 
+		// Skip the Pro-plan filter when no candidate is confirmed Pro, so users with only
+		// non-Pro accounts can still attempt Spark requests (e.g. trial/grandfathered access).
+		const enforceProRequirement =
+			requiresProModel && candidates.some(candidate => hasOpenAICodexProPlan(candidate.usage));
+
 		const fallback = candidates[0];
 
 		for (const candidate of candidates) {
@@ -1719,6 +1724,7 @@ export class AuthStorage {
 				allowBlocked: false,
 				prefetchedUsage: candidate.usage,
 				usagePrechecked: candidate.usageChecked,
+				enforceProRequirement,
 			});
 			if (apiKey) return apiKey;
 		}
@@ -1729,6 +1735,7 @@ export class AuthStorage {
 				allowBlocked: true,
 				prefetchedUsage: fallback.usage,
 				usagePrechecked: fallback.usageChecked,
+				enforceProRequirement,
 			});
 		}
 
@@ -1774,14 +1781,22 @@ export class AuthStorage {
 			allowBlocked: boolean;
 			prefetchedUsage?: UsageReport | null;
 			usagePrechecked?: boolean;
+			enforceProRequirement?: boolean;
 		},
 	): Promise<string | undefined> {
-		const { checkUsage, allowBlocked, prefetchedUsage = null, usagePrechecked = false } = usageOptions;
+		const {
+			checkUsage,
+			allowBlocked,
+			prefetchedUsage = null,
+			usagePrechecked = false,
+			enforceProRequirement,
+		} = usageOptions;
 		if (!allowBlocked && this.#isCredentialBlocked(providerKey, selection.index)) {
 			return undefined;
 		}
 
 		const requiresProModel = requiresOpenAICodexProModel(provider, options?.modelId);
+		const applyProFilter = enforceProRequirement ?? requiresProModel;
 		let usage: UsageReport | null = null;
 		let usageChecked = false;
 
@@ -1796,7 +1811,7 @@ export class AuthStorage {
 				});
 				usageChecked = true;
 			}
-			if (requiresProModel && !hasOpenAICodexProPlan(usage)) {
+			if (applyProFilter && !hasOpenAICodexProPlan(usage)) {
 				return undefined;
 			}
 			if (checkUsage && !allowBlocked && usage && this.#isUsageLimitReached(usage)) {
@@ -1846,7 +1861,7 @@ export class AuthStorage {
 					});
 					usageChecked = true;
 				}
-				if (requiresProModel && !hasOpenAICodexProPlan(usage)) {
+				if (applyProFilter && !hasOpenAICodexProPlan(usage)) {
 					return undefined;
 				}
 				if (checkUsage && !allowBlocked && usage && this.#isUsageLimitReached(usage)) {

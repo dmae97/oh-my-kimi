@@ -317,7 +317,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		expect(apiKey).toBe("api-acct-pro");
 	});
 
-	test("does not route codex spark models to a single Plus account", async () => {
+	test("routes codex spark to a single Plus account when no Pro is connected", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
 		await authStorage.set("openai-codex", [{ type: "oauth", ...createCredential("acct-plus", "plus@example.com") }]);
@@ -333,10 +333,10 @@ describe("AuthStorage codex oauth ranking", () => {
 		const apiKey = await authStorage.getApiKey("openai-codex", "session-spark-single-plus", {
 			modelId: "gpt-5.3-codex-spark",
 		});
-		expect(apiKey).toBeUndefined();
+		expect(apiKey).toBe("api-acct-plus");
 	});
 
-	test("does not fall back to Plus accounts for codex spark models", async () => {
+	test("falls back to Plus accounts for codex spark models when no Pro is connected", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
 		await authStorage.set("openai-codex", [
@@ -357,7 +357,8 @@ describe("AuthStorage codex oauth ranking", () => {
 		const apiKey = await authStorage.getApiKey("openai-codex", "session-spark-all-plus", {
 			modelId: "gpt-5.3-codex-spark",
 		});
-		expect(apiKey).toBeUndefined();
+		expect(apiKey).toBeDefined();
+		expect(apiKey?.startsWith("api-acct-plus-")).toBe(true);
 	});
 
 	test("times out slow usage ranking instead of blocking first account selection", async () => {
