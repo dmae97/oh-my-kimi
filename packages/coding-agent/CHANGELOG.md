@@ -1,9 +1,10 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
+- Renamed atom edit operations from `before` and `after` to `pre` and `post`, so existing `atom` payloads using the old operation keys must be updated
+- Changed the hashline anchor format from `LINE#ID:content` to `LINEID\tcontent` (no `#`/`:` separators, tab between anchor and content, no padding on line numbers); expanded the bigram alphabet from 40 hand-picked English bigrams to the full 647 single-token 2-letter bigrams — invalidates every previously captured `LINE#ID` reference
 - Renamed the subagent completion contract from `submit_result` to `yield`, so subagent sessions must now finish with the `yield` tool and the `requireYieldTool` option; `submit_result`/`requireSubmitResultTool` and old completion calls are no longer recognized
 - Changed the hashline and chunk anchor ID format from the prior hex-like tokens to two-letter BPE bigrams (for example `#th`), which invalidates previously captured `LINE#ID`/chunk selectors and requires re-reading to refresh anchors
 
@@ -16,6 +17,8 @@
 
 ### Changed
 
+- Changed read, grep, and ast-edit line-prefixed output to drop fixed-width line number padding, so anchors render in natural width without leading spaces
+- Updated terminal diff rendering to use a continuous `│` gutter and hide repeated line numbers on adjacent diff lines
 - Updated subagent reminders, prompts, and rendered subagent output to reference `yield` completion and report missing/final results from `yield` tool data
 - Updated the `edit` workflow to treat `atom` mode like hashline mode for read output, so hashline anchors are shown when `atom` is selected
 - Adjusted patch/replace/chunk tooling to accept optional entry paths and to apply a top-level path default

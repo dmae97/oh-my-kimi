@@ -50,17 +50,9 @@ export class ApplyPatchError extends Error {
 // Diff String Generation
 // ═══════════════════════════════════════════════════════════════════════════
 
-function countContentLines(content: string): number {
-	const lines = content.split("\n");
-	if (lines.length > 1 && lines[lines.length - 1] === "") {
-		lines.pop();
-	}
-	return Math.max(1, lines.length);
-}
 
-function formatNumberedDiffLine(prefix: "+" | "-" | " ", lineNum: number, width: number, content: string): string {
-	const padded = String(lineNum).padStart(width, " ");
-	return `${prefix}${padded}|${content}`;
+function formatNumberedDiffLine(prefix: "+" | "-" | " ", lineNum: number, content: string): string {
+	return `${prefix}${lineNum}|${content}`;
 }
 
 /**
@@ -71,8 +63,6 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 	const parts = Diff.diffLines(oldContent, newContent);
 	const output: string[] = [];
 
-	const maxLineNum = Math.max(countContentLines(oldContent), countContentLines(newContent));
-	const lineNumWidth = String(maxLineNum).length;
 
 	let oldLineNum = 1;
 	let newLineNum = 1;
@@ -95,10 +85,10 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 			// Show the change
 			for (const line of raw) {
 				if (part.added) {
-					output.push(formatNumberedDiffLine("+", newLineNum, lineNumWidth, line));
+					output.push(formatNumberedDiffLine("+", newLineNum, line));
 					newLineNum++;
 				} else {
-					output.push(formatNumberedDiffLine("-", oldLineNum, lineNumWidth, line));
+					output.push(formatNumberedDiffLine("-", oldLineNum, line));
 					oldLineNum++;
 				}
 			}
@@ -126,20 +116,20 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 
 				// Add ellipsis if we skipped lines at start
 				if (skipStart > 0) {
-					output.push(formatNumberedDiffLine(" ", oldLineNum, lineNumWidth, "..."));
+					output.push(formatNumberedDiffLine(" ", oldLineNum, "..."));
 					oldLineNum += skipStart;
 					newLineNum += skipStart;
 				}
 
 				for (const line of linesToShow) {
-					output.push(formatNumberedDiffLine(" ", oldLineNum, lineNumWidth, line));
+					output.push(formatNumberedDiffLine(" ", oldLineNum, line));
 					oldLineNum++;
 					newLineNum++;
 				}
 
 				// Add ellipsis if we skipped lines at end
 				if (skipEnd > 0) {
-					output.push(formatNumberedDiffLine(" ", oldLineNum, lineNumWidth, "..."));
+					output.push(formatNumberedDiffLine(" ", oldLineNum, "..."));
 					oldLineNum += skipEnd;
 					newLineNum += skipEnd;
 				}
@@ -184,8 +174,6 @@ export function generateUnifiedDiffString(oldContent: string, newContent: string
 	const patch = Diff.structuredPatch("", "", oldContent, newContent, "", "", { context: contextLines });
 	const output: string[] = [];
 	let firstChangedLine: number | undefined;
-	const maxLineNum = Math.max(countContentLines(oldContent), countContentLines(newContent));
-	const lineNumWidth = String(maxLineNum).length;
 	for (const hunk of patch.hunks) {
 		output.push(`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`);
 		let oldLine = hunk.oldStart;
@@ -193,18 +181,18 @@ export function generateUnifiedDiffString(oldContent: string, newContent: string
 		for (const line of hunk.lines) {
 			if (line.startsWith("-")) {
 				if (firstChangedLine === undefined) firstChangedLine = newLine;
-				output.push(formatNumberedDiffLine("-", oldLine, lineNumWidth, line.slice(1)));
+				output.push(formatNumberedDiffLine("-", oldLine, line.slice(1)));
 				oldLine++;
 				continue;
 			}
 			if (line.startsWith("+")) {
 				if (firstChangedLine === undefined) firstChangedLine = newLine;
-				output.push(formatNumberedDiffLine("+", newLine, lineNumWidth, line.slice(1)));
+				output.push(formatNumberedDiffLine("+", newLine, line.slice(1)));
 				newLine++;
 				continue;
 			}
 			if (line.startsWith(" ")) {
-				output.push(formatNumberedDiffLine(" ", oldLine, lineNumWidth, line.slice(1)));
+				output.push(formatNumberedDiffLine(" ", oldLine, line.slice(1)));
 				oldLine++;
 				newLine++;
 				continue;

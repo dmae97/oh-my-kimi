@@ -8,7 +8,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { computeLineHash } from "../edit/line-hash";
+import { computeLineHash, toDisplayLines } from "../edit/line-hash";
 import {
 	type ChunkReadTarget,
 	formatChunkedRead,
@@ -89,19 +89,12 @@ function isRemoteMountPath(absolutePath: string): boolean {
 
 function prependLineNumbers(text: string, startNum: number): string {
 	const textLines = text.split("\n");
-	const lastLineNum = startNum + textLines.length - 1;
-	const padWidth = String(lastLineNum).length;
-	return textLines
-		.map((line, i) => {
-			const lineNum = String(startNum + i).padStart(padWidth, " ");
-			return `${lineNum}|${line}`;
-		})
-		.join("\n");
+	return textLines.map((line, i) => `${startNum + i}|${line}`).join("\n");
 }
 
 function prependHashLines(text: string, startNum: number): string {
 	const textLines = text.split("\n");
-	return textLines.map((line, i) => `${startNum + i}#${computeLineHash(startNum + i, line)}:${line}`).join("\n");
+	return textLines.map((line, i) => `${startNum + i}${computeLineHash(startNum + i, line)}\t${line}`).join("\n");
 }
 
 function formatTextWithMode(
@@ -1498,7 +1491,8 @@ export const readToolRenderer = {
 		}
 
 		const details = result.details;
-		const contentText = result.content?.find(c => c.type === "text")?.text ?? "";
+		const rawText = result.content?.find(c => c.type === "text")?.text ?? "";
+		const contentText = toDisplayLines(rawText);
 		const imageContent = result.content?.find(c => c.type === "image");
 		const rawPath = args?.file_path || args?.path || "";
 		const filePath = shortenPath(rawPath);

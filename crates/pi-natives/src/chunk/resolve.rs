@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, collections::BTreeSet};
 
 use crate::chunk::{
-	HASHLINE_BIGRAMS,
+	CHUNK_BIGRAMS,
 	state::ChunkStateInner,
 	types::{ChunkNode, ChunkRegion, ChunkTree},
 };
@@ -978,7 +978,7 @@ fn is_checksum_token(value: &str) -> bool {
 		return false;
 	}
 	let lower = value.to_ascii_lowercase();
-	HASHLINE_BIGRAMS.contains(&&lower[..2]) && HASHLINE_BIGRAMS.contains(&&lower[2..4])
+	CHUNK_BIGRAMS.contains(&&lower[..2]) && CHUNK_BIGRAMS.contains(&&lower[2..4])
 }
 
 fn find_chunk_by_path<'a>(tree: &'a ChunkTree, path: &str) -> Option<&'a ChunkNode> {

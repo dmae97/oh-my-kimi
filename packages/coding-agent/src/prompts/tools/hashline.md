@@ -1,4 +1,4 @@
-Applies precise file edits using anchor-prefixed line references (e.g. `123#th`) from `read` output.
+Applies precise file edits using anchor-prefixed line references (e.g. `123th`) from `read` output.
 
 Read the file first. Copy anchors exactly from the latest `read` output. After any successful edit, re-read before editing that file again.
 
@@ -14,8 +14,8 @@ Read the file first. Copy anchors exactly from the latest `read` output. After a
 
 **`loc` values**
 - `"append"` / `"prepend"` — insert at end/start of file
-- `{ append: "123#th" }` / `{ prepend: "123#th" }` — insert after/before anchored line
-- `{ range: { pos: "123#th", end: "123#th" } }` — replace inclusive range `pos..end` with new content (set `pos == end` for single-line replace)
+- `{ append: "123th" }` / `{ prepend: "123th" }` — insert after/before anchored line
+- `{ range: { pos: "123th", end: "123th" } }` — replace inclusive range `pos..end` with new content (set `pos == end` for single-line replace)
 </operations>
 
 <examples>
@@ -60,8 +60,8 @@ When adding a sibling declaration, prefer `prepend` on the next declaration.
 </examples>
 
 <critical>
-- Make the minimum exact edit. Do not rewrite nearby code unless the range requires it.
-- Copy anchors exactly as `N#ID` from the latest `read` output.
+- Make the minimum exact edit.
+- Copy anchors exactly from `read/grep`.
 - `range` requires both `pos` and `end`.
 - **Closing-delimiter check**: when your replacement `content` ends with a closing delimiter (`}`, `*/`, `)`, `]`), compare it against the line immediately after `end` in the file. If they match, extend `end` to include that line — otherwise the original delimiter survives and `content` adds a second copy.
 - For a range, replace only the body or the whole range — don't split range boundaries.

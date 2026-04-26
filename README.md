@@ -478,7 +478,7 @@ return config
 **Option 1: Environment variables** (common examples)
 
 | Provider                                        | Environment Variable                         |
-|-------------------------------------------------| -------------------------------------------- |
+| ----------------------------------------------- | -------------------------------------------- |
 | Anthropic                                       | `ANTHROPIC_API_KEY`                          |
 | OpenAI                                          | `OPENAI_API_KEY`                             |
 | Google                                          | `GEMINI_API_KEY`                             |
@@ -946,7 +946,6 @@ compaction:
 skills:
   enabled: true
 
-
 terminal:
   showImages: true
 
@@ -1241,7 +1240,7 @@ Use `--tools <list>` to restrict available built-in tools.
 | `python`         | Execute Python code in IPython kernel                          |
 | `calc`           | Deterministic calculator/evaluator                             |
 | `ssh`            | Execute commands on configured SSH hosts                       |
-| `edit`           | In-place file editing with LINE#ID anchors                     |
+| `edit`           | In-place file editing with anchors                             |
 | `find`           | Find files by glob pattern                                     |
 | `grep`           | Search file content                                            |
 | `ast_grep`       | Structural code search using AST matching (ast-grep)           |

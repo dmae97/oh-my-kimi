@@ -40,13 +40,13 @@ function formatHashlineRef(lineNum: unknown, content: unknown): { num: number; t
 	const num = typeof lineNum === "number" ? lineNum : Number.parseInt(String(lineNum), 10);
 	const raw = typeof content === "string" ? content : String(content ?? "");
 	const text = raw.replace(/\\t/g, "\t").replace(/\\n/g, "\n").replace(/\\r/g, "\r");
-	const ref = `${num}#${computeLineHash(num, text)}`;
+	const ref = `${num}${computeLineHash(num, text)}`;
 	return { num, text, ref };
 }
 
 /**
  * {{href lineNum "content"}} — compute a real hashline ref for prompt examples.
- * Returns `"lineNum#hash"` using the actual hash algorithm.
+ * Returns `"lineNumBIGRAM"` (e.g., `"42nd"`) using the actual hash algorithm.
  */
 prompt.registerHelper("href", (lineNum: unknown, content: unknown): string => {
 	const { ref } = formatHashlineRef(lineNum, content);
@@ -55,11 +55,11 @@ prompt.registerHelper("href", (lineNum: unknown, content: unknown): string => {
 
 /**
  * {{hline lineNum "content"}} — format a full read-style line with prefix.
- * Returns `"lineNum#hash:content"`.
+ * Returns `"lineNumBIGRAM\tcontent"` (tab between anchor and content).
  */
 prompt.registerHelper("hline", (lineNum: unknown, content: unknown): string => {
 	const { ref, text } = formatHashlineRef(lineNum, content);
-	return `${ref}:${text}`;
+	return `${ref}\t${text}`;
 });
 
 /**

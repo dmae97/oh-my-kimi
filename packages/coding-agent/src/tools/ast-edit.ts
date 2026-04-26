@@ -5,7 +5,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { $envpos, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { computeLineHash } from "../edit/line-hash";
+import { computeLineHash, toDisplayLine } from "../edit/line-hash";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import astEditDescription from "../prompts/tools/ast-edit.md" with { type: "text" };
@@ -217,20 +217,18 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			const outputLines: string[] = [];
 			const renderChangesForFile = (relativePath: string) => {
 				const fileChanges = changesByFile.get(relativePath) ?? [];
-				const lineWidth =
-					fileChanges.length > 0 ? Math.max(...fileChanges.map(change => change.startLine.toString().length)) : 1;
 				for (const change of fileChanges) {
 					const beforeFirstLine = change.before.split("\n", 1)[0] ?? "";
 					const afterFirstLine = change.after.split("\n", 1)[0] ?? "";
 					const beforeLine = beforeFirstLine.slice(0, 120);
 					const afterLine = afterFirstLine.slice(0, 120);
 					const beforeRef = useHashLines
-						? `${change.startLine}#${computeLineHash(change.startLine, beforeFirstLine)}`
-						: `${change.startLine.toString().padStart(lineWidth, " ")}:${change.startColumn}`;
+						? `${change.startLine}${computeLineHash(change.startLine, beforeFirstLine)}`
+						: `${change.startLine}:${change.startColumn}`;
 					const afterRef = useHashLines
-						? `${change.startLine}#${computeLineHash(change.startLine, afterFirstLine)}`
-						: `${change.startLine.toString().padStart(lineWidth, " ")}:${change.startColumn}`;
-					const lineSeparator = useHashLines ? ":" : " ";
+						? `${change.startLine}${computeLineHash(change.startLine, afterFirstLine)}`
+						: `${change.startLine}:${change.startColumn}`;
+					const lineSeparator = useHashLines ? "\t" : " ";
 					outputLines.push(`-${beforeRef}${lineSeparator}${beforeLine}`);
 					outputLines.push(`+${afterRef}${lineSeparator}${afterLine}`);
 				}
@@ -504,8 +502,8 @@ export const astEditToolRenderer = {
 							group.map(line => {
 								if (line.startsWith("## ")) return uiTheme.fg("dim", line);
 								if (line.startsWith("# ")) return uiTheme.fg("accent", line);
-								if (line.startsWith("+")) return uiTheme.fg("toolDiffAdded", line);
-								if (line.startsWith("-")) return uiTheme.fg("toolDiffRemoved", line);
+								if (line.startsWith("+")) return uiTheme.fg("toolDiffAdded", toDisplayLine(line));
+								if (line.startsWith("-")) return uiTheme.fg("toolDiffRemoved", toDisplayLine(line));
 								return uiTheme.fg("toolOutput", line);
 							}),
 					},

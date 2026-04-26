@@ -9,14 +9,14 @@ Searches files using powerful regex matching.
 
 <output>
 {{#if IS_HASHLINE_MODE}}
-- Text output is anchor-prefixed: `123#th:content`
+- Text output is anchor-prefixed: `123th:content` (match) or `123th-content` (context). The 2-letter ID is a content fingerprint.
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
 - Text output is line-number-prefixed
 {{/if}}
 {{/if}}
 {{#if IS_CHUNK_MODE}}
-- Text output is chunk-path-prefixed: `path:sel>123#th|content`
+- Text output is chunk-path-prefixed: `path:sel>123th:content`
 {{/if}}
 </output>
 

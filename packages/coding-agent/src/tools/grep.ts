@@ -6,6 +6,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import { toDisplayLine } from "../edit/line-hash";
 import { type ChunkedGrepMatch, describeChunkedGrepMatch } from "../edit/modes/chunk";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
@@ -333,7 +334,6 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 					if (fileMatches.length === 0) {
 						return renderedLines;
 					}
-					const lineWidth = fileMatches[0]?.fileLineCount.toString().length ?? 1;
 					const matchesByChunk = new Map<string, ChunkedGrepMatch[]>();
 					for (const match of fileMatches) {
 						const chunkKey = match.chunkPath ?? "";
@@ -352,7 +352,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 							renderedLines.push(anchor);
 						}
 						for (const match of chunkMatches) {
-							renderedLines.push(`    ${match.lineNumber.toString().padStart(lineWidth, " ")} |${match.line}`);
+							renderedLines.push(`    ${match.lineNumber}|${match.line}`);
 							fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 						}
 					}
@@ -430,20 +430,8 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				const renderedLines: string[] = [];
 				const fileMatches = matchesByFile.get(relativePath) ?? [];
 				for (const match of fileMatches) {
-					const lineNumbers: number[] = [match.lineNumber];
-					if (match.contextBefore) {
-						for (const ctx of match.contextBefore) {
-							lineNumbers.push(ctx.lineNumber);
-						}
-					}
-					if (match.contextAfter) {
-						for (const ctx of match.contextAfter) {
-							lineNumbers.push(ctx.lineNumber);
-						}
-					}
-					const lineWidth = Math.max(...lineNumbers.map(value => value.toString().length));
 					const formatLine = (lineNumber: number, line: string, isMatch: boolean): string =>
-						formatMatchLine(lineNumber, line, isMatch, { useHashLines, lineWidth });
+						formatMatchLine(lineNumber, line, isMatch, { useHashLines });
 					if (match.contextBefore) {
 						for (const ctx of match.contextBefore) {
 							renderedLines.push(formatLine(ctx.lineNumber, ctx.line, false));
@@ -624,7 +612,7 @@ export const grepToolRenderer = {
 							maxCollapsed: COLLAPSED_TEXT_LIMIT,
 							maxCollapsedLines: COLLAPSED_TEXT_LIMIT,
 							itemType: "item",
-							renderItem: line => uiTheme.fg("toolOutput", line),
+							renderItem: line => uiTheme.fg("toolOutput", toDisplayLine(line, { markMatchLines: true })),
 						},
 						uiTheme,
 					);
@@ -716,7 +704,7 @@ export const grepToolRenderer = {
 							group.map(line => {
 								if (line.startsWith("## ")) return uiTheme.fg("dim", line);
 								if (line.startsWith("# ")) return uiTheme.fg("accent", line);
-								return uiTheme.fg("toolOutput", line);
+								return uiTheme.fg("toolOutput", toDisplayLine(line, { markMatchLines: true }));
 							}),
 					},
 					uiTheme,

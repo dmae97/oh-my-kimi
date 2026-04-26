@@ -27,6 +27,7 @@ import { Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../
 import type { EditMode } from "../utils/edit-mode";
 import type { VimToolDetails } from "../vim/types";
 import type { DiffError, DiffResult } from "./diff";
+import { toDisplayLine } from "./line-hash";
 import { expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
 import type { Operation, PatchEditEntry } from "./modes/patch";
 import type { PerFileDiffPreview } from "./streaming";
@@ -526,13 +527,13 @@ function renderSingleFileResult(
 
 			if (isError) {
 				if (errorText) {
-					text += `\n\n${uiTheme.fg("error", replaceTabs(errorText))}`;
+					text += `\n\n${uiTheme.fg("error", replaceTabs(toDisplayLine(errorText)))}`;
 				}
 			} else if (details?.diff) {
 				text += renderDiffSection(details.diff, rawPath, expanded, uiTheme, renderDiffFn);
 			} else if (editDiffPreview) {
 				if ("error" in editDiffPreview) {
-					text += `\n\n${uiTheme.fg("error", replaceTabs(editDiffPreview.error))}`;
+					text += `\n\n${uiTheme.fg("error", replaceTabs(toDisplayLine(editDiffPreview.error)))}`;
 				} else if (editDiffPreview.diff) {
 					text += renderDiffSection(editDiffPreview.diff, rawPath, expanded, uiTheme, renderDiffFn);
 				}

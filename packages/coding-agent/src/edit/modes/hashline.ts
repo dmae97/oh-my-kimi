@@ -2,14 +2,14 @@
  * Hashline edit mode — a line-addressable edit format using text hashes.
  *
  * Each line in a file is identified by its 1-indexed line number and a short
- * BPE-bigram hash derived from the normalized line text (xxHash32 mod 40,
+ * BPE-bigram hash derived from the normalized line text (xxHash32 mod 647,
  * mapped through HASHLINE_BIGRAMS).
- * The combined `LINE#ID` reference acts as both an address and a staleness check:
+ * The combined `LINE+ID` reference acts as both an address and a staleness check:
  * if the file has changed since the caller last read it, hash mismatches are caught
  * before any mutation occurs.
  *
- * Displayed format: `LINENUM#HASH:TEXT`
- * Reference format: `"LINENUM#HASH"` (e.g. `"5#th"`)
+ * Displayed format: `LINENUMBIGRAM\tTEXT`
+ * Reference format: `"LINENUMBIGRAM"` (e.g. `"1ab"`)
  */
 
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
@@ -43,14 +43,11 @@ export type HashlineEdit =
 	| { op: "append_file"; lines: string[] }
 	| { op: "prepend_file"; lines: string[] };
 
-// Tight prefix matchers. The bare `#BIGRAM:` form (no line number) intentionally
-// disallows whitespace between `#` and the bigram so real comments like `# th: ...`
-// or `# in: ...` (a `#`, a space, then a common English bigram) are not mistaken
-// for hashline anchors and stripped.
-const HASHLINE_PREFIX_RE = new RegExp(
-	`^\\s*(?:>>>|>>)?\\s*(?:\\+?\\s*\\d+\\s*#\\s*|\\+?#|\\+\\s*)${HASHLINE_BIGRAM_RE_SRC}:`,
-);
-const HASHLINE_PREFIX_PLUS_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*\\+\\s*(?:\\d+\\s*#\\s*|#)?${HASHLINE_BIGRAM_RE_SRC}:`);
+// Tight prefix matchers for the new format `LINENUMBIGRAM\tcontent`. Hard
+// cutover — do not accept legacy `LINENUM#BIGRAM:content`. The terminator
+// must be a literal tab character; line-number digits are mandatory.
+const HASHLINE_PREFIX_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*(?:\\+\\s*)?\\d+${HASHLINE_BIGRAM_RE_SRC}\t`);
+const HASHLINE_PREFIX_PLUS_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*\\+\\s*\\d+${HASHLINE_BIGRAM_RE_SRC}\t`);
 const DIFF_PLUS_RE = /^[+](?![+])/;
 const READ_TRUNCATION_NOTICE_RE = /^\[(?:Showing lines \d+-\d+ of \d+|\d+ more lines? in (?:file|\S+))\b.*\bsel=L\d+/;
 
@@ -348,7 +345,7 @@ function createHashlineChunkEmitter(
 }
 
 function formatHashlineStreamLine(lineNumber: number, line: string): string {
-	return `${formatLineHash(lineNumber, line)}:${line}`;
+	return `${formatLineHash(lineNumber, line)}\t${line}`;
 }
 
 function isReadableStream(value: unknown): value is ReadableStream<Uint8Array> {
@@ -474,20 +471,18 @@ export async function* streamHashLinesFromLines(
 }
 
 /**
- * Parse a line reference string like `"5#th"` into structured form.
+ * Parse a line reference string like `"5th"` into structured form.
  *
- * @throws Error if the format is invalid (not `NUMBER#BIGRAM`)
+ * @throws Error if the format is invalid (not `NUMBERBIGRAM`)
  */
 export function parseTag(ref: string): { line: number; hash: string } {
-	// This regex captures:
-	//  1. optional leading ">+" and whitespace
+	// Captures:
+	//  1. optional leading ">+-" markers and whitespace
 	//  2. line number (1+ digits)
-	//  3. "#" with optional surrounding spaces
-	//  4. hash (one BPE bigram from HASHLINE_BIGRAMS)
-	//  5. optional trailing display suffix (":..." or "  ...")
-	const match = ref.match(new RegExp(`^\\s*[>+-]*\\s*(\\d+)\\s*#\\s*(${HASHLINE_BIGRAM_RE_SRC})`));
+	//  3. hash (one BPE bigram from HASHLINE_BIGRAMS) directly adjacent (no separator)
+	const match = ref.match(new RegExp(`^\\s*[>+-]*\\s*(\\d+)(${HASHLINE_BIGRAM_RE_SRC})`));
 	if (!match) {
-		throw new Error(`Invalid line reference "${ref}". Expected format "LINE#ID" (e.g. "5#th").`);
+		throw new Error(`Invalid line reference "${ref}". Expected format "LINE+ID" (e.g. "5th").`);
 	}
 	const line = Number.parseInt(match[1], 10);
 	if (line < 1) {
@@ -506,8 +501,8 @@ const MISMATCH_CONTEXT = 2;
 /**
  * Error thrown when one or more hashline references have stale hashes.
  *
- * Displays grep-style output with `>>>` markers on mismatched lines,
- * showing the correct `LINE#ID` so the caller can fix all refs at once.
+ * Displays grep-style output with `:` separator on mismatched lines and `-` on
+ * surrounding context, showing the correct `LINE+ID` so the caller can fix all refs at once.
  */
 export class HashlineMismatchError extends Error {
 	readonly remaps: ReadonlyMap<string, string>;
@@ -520,7 +515,7 @@ export class HashlineMismatchError extends Error {
 		const remaps = new Map<string, string>();
 		for (const m of mismatches) {
 			const actual = computeLineHash(m.line, fileLines[m.line - 1]);
-			remaps.set(`${m.line}#${m.expected}`, `${m.line}#${actual}`);
+			remaps.set(`${m.line}${m.expected}`, `${m.line}${actual}`);
 		}
 		this.remaps = remaps;
 	}
@@ -545,7 +540,8 @@ export class HashlineMismatchError extends Error {
 		const lines: string[] = [];
 
 		lines.push(
-			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read. The edit was NOT applied. Use the updated LINE#ID references shown below (>>> marks changed lines) and retry the edit.`,
+			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read. The edit was NOT applied.`,
+			"Use the updated anchors shown below (`:` marks changed lines, `-` marks context) and retry the edit.",
 		);
 		lines.push("");
 
@@ -553,18 +549,18 @@ export class HashlineMismatchError extends Error {
 		for (const lineNum of sorted) {
 			// Gap separator between non-contiguous regions
 			if (prevLine !== -1 && lineNum > prevLine + 1) {
-				lines.push("    ...");
+				lines.push("...");
 			}
 			prevLine = lineNum;
 
 			const text = fileLines[lineNum - 1];
 			const hash = computeLineHash(lineNum, text);
-			const prefix = `${lineNum}#${hash}`;
+			const prefix = `${lineNum}${hash}`;
 
 			if (mismatchSet.has(lineNum)) {
-				lines.push(`>>> ${prefix}:${text}`);
+				lines.push(`${prefix}:${text}`);
 			} else {
-				lines.push(`    ${prefix}:${text}`);
+				lines.push(`${prefix}-${text}`);
 			}
 		}
 		return lines.join("\n");
@@ -744,7 +740,7 @@ function applyHashlineEditToLines(
 			if (origLines.length === newLines.length && origLines.every((line, i) => line === newLines[i])) {
 				noopEdits.push({
 					editIndex,
-					loc: `${edit.pos.line}#${edit.pos.hash}`,
+					loc: `${edit.pos.line}${edit.pos.hash}`,
 					current: origLines.join("\n"),
 				});
 				break;
@@ -764,7 +760,7 @@ function applyHashlineEditToLines(
 			if (inserted.length === 0) {
 				noopEdits.push({
 					editIndex,
-					loc: `${edit.pos.line}#${edit.pos.hash}`,
+					loc: `${edit.pos.line}${edit.pos.hash}`,
 					current: originalFileLines[edit.pos.line - 1],
 				});
 				break;
@@ -778,7 +774,7 @@ function applyHashlineEditToLines(
 			if (inserted.length === 0) {
 				noopEdits.push({
 					editIndex,
-					loc: `${edit.pos.line}#${edit.pos.hash}`,
+					loc: `${edit.pos.line}${edit.pos.hash}`,
 					current: originalFileLines[edit.pos.line - 1],
 				});
 				break;
@@ -1012,14 +1008,12 @@ function syncNewLineCounters(counters: CompactPreviewCounters, lineNumber: numbe
 	counters.newLine = lineNumber;
 }
 
-function formatCompactHashlineLine(kind: " " | "+", lineNumber: number, width: number, content: string): string {
-	const padded = String(lineNumber).padStart(width, " ");
-	return `${kind}${padded}#${computeLineHash(lineNumber, content)}|${content}`;
+function formatCompactHashlineLine(kind: " " | "+", lineNumber: number, content: string): string {
+	return `${kind}${lineNumber}${computeLineHash(lineNumber, content)}\t${content}`;
 }
 
-function formatCompactRemovedLine(lineNumber: number, width: number, content: string): string {
-	const padded = String(lineNumber).padStart(width, " ");
-	return `-${padded}${HASHLINE_PREVIEW_PLACEHOLDER}|${content}`;
+function formatCompactRemovedLine(lineNumber: number, content: string): string {
+	return `-${lineNumber}${HASHLINE_PREVIEW_PLACEHOLDER}\t${content}`;
 }
 
 function formatCompactPreviewLine(line: string, counters: CompactPreviewCounters): { kind: DiffRunKind; text: string } {
@@ -1040,13 +1034,13 @@ function formatCompactPreviewLine(line: string, counters: CompactPreviewCounters
 			syncNewLineCounters(counters, parsed.lineNumber);
 			const newLine = counters.newLine;
 			if (newLine === undefined) return { kind: "+", text: parsed.raw };
-			const text = formatCompactHashlineLine("+", newLine, parsed.lineWidth, parsed.content);
+			const text = formatCompactHashlineLine("+", newLine, parsed.content);
 			counters.newLine = newLine + 1;
 			return { kind: "+", text };
 		}
 		case "-": {
 			syncOldLineCounters(counters, parsed.lineNumber);
-			const text = formatCompactRemovedLine(parsed.lineNumber, parsed.lineWidth, parsed.content);
+			const text = formatCompactRemovedLine(parsed.lineNumber, parsed.content);
 			counters.oldLine = parsed.lineNumber + 1;
 			return { kind: "-", text };
 		}
@@ -1054,7 +1048,7 @@ function formatCompactPreviewLine(line: string, counters: CompactPreviewCounters
 			syncOldLineCounters(counters, parsed.lineNumber);
 			const newLine = counters.newLine;
 			if (newLine === undefined) return { kind: " ", text: parsed.raw };
-			const text = formatCompactHashlineLine(" ", newLine, parsed.lineWidth, parsed.content);
+			const text = formatCompactHashlineLine(" ", newLine, parsed.content);
 			counters.oldLine = parsed.lineNumber + 1;
 			counters.newLine = newLine + 1;
 			return { kind: " ", text };

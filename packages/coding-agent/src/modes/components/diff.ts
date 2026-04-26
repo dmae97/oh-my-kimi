@@ -109,11 +109,22 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 	const lines = diffText.split("\n");
 	const result: string[] = [];
 
+	// Track the line number rendered on the previous emitted line so we can
+	// blank out duplicate gutters. Two cases trigger this:
+	//  1. Single-line replacement (`-N` followed by `+N`) — the `+N` repeats `N`.
+	//  2. Insertion followed by context (`+N` then ` N` if producer used oldLine).
+	let prevLineNum = "";
+
 	const formatLine = (prefix: string, lineNum: string, content: string): string => {
 		if (lineNum.trim().length === 0) {
+			prevLineNum = "";
 			return `${prefix}${content}`;
 		}
-		return `${prefix}${lineNum}|${content}`;
+		const trimmed = lineNum.trim();
+		const displayNum = trimmed === prevLineNum ? " ".repeat(lineNum.length) : lineNum;
+		prevLineNum = trimmed;
+		// Use box-drawing `│` instead of `|` so adjacent lines visually connect into a continuous gutter.
+		return `${prefix}${displayNum}│${content}`;
 	};
 
 	let i = 0;
@@ -122,13 +133,13 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 		const parsed = parseDiffLine(line);
 
 		if (!parsed) {
+			prevLineNum = "";
 			result.push(theme.fg("toolDiffContext", line));
 			i++;
 			continue;
 		}
 
 		if (parsed.prefix === "-") {
-			// Collect consecutive removed lines
 			const removedLines: { lineNum: string; content: string }[] = [];
 			while (i < lines.length) {
 				const p = parseDiffLine(lines[i]);
@@ -137,7 +148,6 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 				i++;
 			}
 
-			// Collect consecutive added lines
 			const addedLines: { lineNum: string; content: string }[] = [];
 			while (i < lines.length) {
 				const p = parseDiffLine(lines[i]);
@@ -146,8 +156,6 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 				i++;
 			}
 
-			// Only do intra-line diffing when there's exactly one removed and one added line
-			// (indicating a single line modification). Otherwise, show lines as-is.
 			if (removedLines.length === 1 && addedLines.length === 1) {
 				const removed = removedLines[0];
 				const added = addedLines[0];
@@ -167,7 +175,6 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 					theme.fg("toolDiffAdded", formatLine("+", added.lineNum, visualizeIndent(addedLine, options.filePath))),
 				);
 			} else {
-				// Show all removed lines first, then all added lines
 				for (const removed of removedLines) {
 					result.push(
 						theme.fg(
@@ -186,7 +193,6 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 				}
 			}
 		} else if (parsed.prefix === "+") {
-			// Standalone added line
 			result.push(
 				theme.fg(
 					"toolDiffAdded",
@@ -195,7 +201,6 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 			);
 			i++;
 		} else {
-			// Context line
 			result.push(
 				theme.fg(
 					"toolDiffContext",

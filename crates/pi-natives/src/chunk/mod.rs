@@ -875,11 +875,59 @@ fn line_end_offset(source: &str, line_starts: &[usize], line_index: usize) -> us
 	}
 }
 
-/// 40 common English BPE bigrams (lowercase). Mirrors
+/// 647 single-token BPE bigrams (lowercase) for hashline anchors. Mirrors
 /// `packages/coding-agent/src/edit/line-hash.ts::HASHLINE_BIGRAMS`.
-/// Order is stable forever — changing it invalidates every existing
-/// `LINE#ID` reference in saved transcripts.
-pub(crate) const HASHLINE_BIGRAMS: [&str; 40] = [
+pub(crate) const HASHLINE_BIGRAMS: [&str; 647] = [
+	"aa", "ab", "ac", "ad", "ae", "af", "ag", "ah", "ai", "aj", "ak", "al", "am", "an", "ao", "ap",
+	"aq", "ar", "as", "at", "au", "av", "aw", "ax", "ay", "az", "ba", "bb", "bc", "bd", "be", "bf",
+	"bg", "bh", "bi", "bj", "bk", "bl", "bm", "bn", "bo", "bp", "br", "bs", "bt", "bu", "bv", "bw",
+	"bx", "by", "bz", "ca", "cb", "cc", "cd", "ce", "cf", "cg", "ch", "ci", "cj", "ck", "cl", "cm",
+	"cn", "co", "cp", "cq", "cr", "cs", "ct", "cu", "cv", "cw", "cx", "cy", "cz", "da", "db", "dc",
+	"dd", "de", "df", "dg", "dh", "di", "dj", "dk", "dl", "dm", "dn", "do", "dp", "dq", "dr", "ds",
+	"dt", "du", "dv", "dw", "dx", "dy", "dz", "ea", "eb", "ec", "ed", "ee", "ef", "eg", "eh", "ei",
+	"ej", "ek", "el", "em", "en", "eo", "ep", "eq", "er", "es", "et", "eu", "ev", "ew", "ex", "ey",
+	"ez", "fa", "fb", "fc", "fd", "fe", "ff", "fg", "fh", "fi", "fj", "fk", "fl", "fm", "fn", "fo",
+	"fp", "fq", "fr", "fs", "ft", "fu", "fv", "fw", "fx", "fy", "fz", "ga", "gb", "gc", "gd", "ge",
+	"gf", "gg", "gh", "gi", "gj", "gl", "gm", "gn", "go", "gp", "gr", "gs", "gt", "gu", "gv", "gw",
+	"gx", "gy", "gz", "ha", "hb", "hc", "hd", "he", "hf", "hg", "hh", "hi", "hj", "hk", "hl", "hm",
+	"hn", "ho", "hp", "hq", "hr", "hs", "ht", "hu", "hv", "hw", "hx", "hy", "hz", "ia", "ib", "ic",
+	"id", "ie", "if", "ig", "ih", "ii", "ij", "ik", "il", "im", "in", "io", "ip", "iq", "ir", "is",
+	"it", "iu", "iv", "iw", "ix", "iy", "iz", "ja", "jb", "jc", "jd", "je", "jf", "jg", "jh", "ji",
+	"jj", "jk", "jl", "jm", "jn", "jo", "jp", "jq", "jr", "js", "jt", "ju", "jw", "jx", "jy", "ka",
+	"kb", "kc", "kd", "ke", "kf", "kg", "kh", "ki", "kj", "kk", "kl", "km", "kn", "ko", "kp", "kr",
+	"ks", "kt", "ku", "kv", "kw", "kx", "ky", "la", "lb", "lc", "ld", "le", "lf", "lg", "lh", "li",
+	"lj", "lk", "ll", "lm", "ln", "lo", "lp", "lr", "ls", "lt", "lu", "lv", "lw", "lx", "ly", "lz",
+	"ma", "mb", "mc", "md", "me", "mf", "mg", "mh", "mi", "mj", "mk", "ml", "mm", "mn", "mo", "mp",
+	"mq", "mr", "ms", "mt", "mu", "mv", "mw", "mx", "my", "mz", "na", "nb", "nc", "nd", "ne", "nf",
+	"ng", "nh", "ni", "nj", "nk", "nl", "nm", "nn", "no", "np", "nr", "ns", "nt", "nu", "nv", "nw",
+	"nx", "ny", "nz", "oa", "ob", "oc", "od", "oe", "of", "og", "oh", "oi", "oj", "ok", "ol", "om",
+	"on", "oo", "op", "oq", "or", "os", "ot", "ou", "ov", "ow", "ox", "oy", "oz", "pa", "pb", "pc",
+	"pd", "pe", "pf", "pg", "ph", "pi", "pj", "pk", "pl", "pm", "pn", "po", "pp", "pq", "pr", "ps",
+	"pt", "pu", "pv", "pw", "px", "py", "pz", "qa", "qb", "qc", "qd", "qe", "qh", "qi", "ql", "qm",
+	"qn", "qo", "qp", "qq", "qr", "qs", "qt", "qu", "qw", "qx", "qy", "ra", "rb", "rc", "rd", "re",
+	"rf", "rg", "rh", "ri", "rk", "rl", "rm", "rn", "ro", "rp", "rq", "rr", "rs", "rt", "ru", "rv",
+	"rw", "rx", "ry", "rz", "sa", "sb", "sc", "sd", "se", "sf", "sg", "sh", "si", "sj", "sk", "sl",
+	"sm", "sn", "so", "sp", "sq", "sr", "ss", "st", "su", "sv", "sw", "sx", "sy", "sz", "ta", "tb",
+	"tc", "td", "te", "tf", "tg", "th", "ti", "tj", "tk", "tl", "tm", "tn", "to", "tp", "tr", "ts",
+	"tt", "tu", "tv", "tw", "tx", "ty", "tz", "ua", "ub", "uc", "ud", "ue", "uf", "ug", "uh", "ui",
+	"uj", "uk", "ul", "um", "un", "uo", "up", "uq", "ur", "us", "ut", "uu", "uv", "uw", "ux", "uy",
+	"uz", "va", "vb", "vc", "vd", "ve", "vf", "vg", "vh", "vi", "vj", "vk", "vl", "vm", "vn", "vo",
+	"vp", "vq", "vr", "vs", "vt", "vu", "vv", "vw", "vx", "vy", "vz", "wa", "wb", "wc", "wd", "we",
+	"wf", "wg", "wh", "wi", "wj", "wk", "wl", "wm", "wn", "wo", "wp", "wr", "ws", "wt", "wu", "wv",
+	"ww", "wx", "wy", "xa", "xb", "xc", "xd", "xe", "xf", "xh", "xi", "xl", "xm", "xn", "xo", "xp",
+	"xr", "xs", "xt", "xu", "xx", "xy", "xz", "ya", "yb", "yc", "yd", "ye", "yf", "yg", "yh", "yi",
+	"yj", "yk", "yl", "ym", "yn", "yo", "yp", "yr", "ys", "yt", "yu", "yv", "yw", "yx", "yy", "yz",
+	"za", "zb", "zc", "zd", "ze", "zf", "zg", "zh", "zi", "zk", "zl", "zm", "zn", "zo", "zp", "zr",
+	"zs", "zt", "zu", "zw", "zx", "zy", "zz",
+];
+
+/// 40 common English BPE bigrams (lowercase) for chunk checksums. Mirrors
+/// `packages/coding-agent/src/edit/line-hash.ts::CHUNK_BIGRAMS`.
+/// Independent of `HASHLINE_BIGRAMS` — chunk checksum format is
+/// `path#bigram1bigram2` (4 chars from a 1600-code namespace) and is unaffected
+/// by the line-anchor format. Order is stable forever — changing it invalidates
+/// every saved chunk path.
+pub(crate) const CHUNK_BIGRAMS: [&str; 40] = [
 	"th", "he", "in", "er", "an", "re", "on", "at", "en", "nd", "ti", "es", "or", "te", "of", "ed",
 	"is", "it", "al", "ar", "st", "to", "nt", "ng", "se", "ha", "as", "ou", "io", "le", "ve", "co",
 	"me", "de", "hi", "ri", "ro", "ic", "ne", "ea",
@@ -891,12 +939,12 @@ pub(crate) const HASHLINE_BIGRAMS: [&str; 40] = [
 /// `i0 = h % 40` and `i1 = (h / 40) % 40`. Total namespace: 1,600 codes.
 pub(crate) fn chunk_checksum(bytes: &[u8]) -> String {
 	let h = xxh64(bytes, 0);
-	let n = HASHLINE_BIGRAMS.len() as u64;
+	let n = CHUNK_BIGRAMS.len() as u64;
 	let i0 = (h % n) as usize;
 	let i1 = ((h / n) % n) as usize;
 	let mut out = String::with_capacity(4);
-	out.push_str(HASHLINE_BIGRAMS[i0]);
-	out.push_str(HASHLINE_BIGRAMS[i1]);
+	out.push_str(CHUNK_BIGRAMS[i0]);
+	out.push_str(CHUNK_BIGRAMS[i1]);
 	out
 }
 

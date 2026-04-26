@@ -1,22 +1,19 @@
 /**
  * Atom edit mode — single-point hashline-anchored edits.
  *
- * Each op references exactly **one** anchor (`LINE#HASH`). Range endpoints,
+ * Each op references exactly **one** anchor (`LINEHASH`). Range endpoints,
  * vim-style motions, and column addressing are intentionally absent: to
  * replace many lines, the model issues many ops. Reuses hashline's anchor
  * staleness scheme (`computeLineHash`) verbatim.
  *
  * Op shapes (one per entry):
- *   { path, set:     "5#th", lines: "..." | ["..."] }                // replace one line
- *   { path, set:     ["5#th", "9#xy"], lines: [...] }                // replace lines strictly between two anchors
+ *   { path, set: "5th",          lines: "..." | ["..."] }       // replace one line
+ *   { path, set: ["5th", "9xy"], lines: [...] }                 // replace lines strictly between two anchors
  *                                                                  // (both anchors kept; use for block-body replacement)
- *   { path, before:  "5#th", lines: "..." | ["..."] }                // insert above anchor
- *   { path, after:   "5#th", lines: "..." | ["..."] }                // insert below anchor
- *   { path, del:     "5#th" }                                       // delete one line
- *   { path, sub:     "5#th", find: "...", lines: "..." }             // substring rewrite on anchor line
- *   { path, ins:     "5#th", find: "...", lines: "..." }             // overwrite from substring to EOL
- *   { path, append:  "..." | ["..."] }                              // append to EOF
- *   { path, prepend: "..." | ["..."] }                              // prepend at BOF
+ *   { path, pre:  "5th" | "",    lines: "..." | ["..."] }       // insert lines above anchor; "" = BOF (prepend)
+ *   { path, post: "5th" | "",    lines: "..." | ["..."] }       // insert lines below anchor; "" = EOF (append)
+ *   { path, del:  "5th" }                                        // delete one line
+ *   { path, sub:  "5th", find: "...", lines: "..." }             // replace a unique substring on the anchored line; tail preserved
  *
  * Anchors mark *survivors*. With single-anchor `set`, the named line is the
  * target (consumed). With two-anchor `set: [open, close]`, both anchors are
@@ -59,11 +56,9 @@ const linesSchema = Type.Union([Type.Array(Type.String()), Type.String()], {
 
 /**
  * Flat entry shape: every op key is optional, and the runtime validator
- * (`resolveAtomToolEdit`) enforces that exactly one op key
- * is present per entry. We use a flat schema instead of a 9-member discriminated
- * union to keep the tool definition compact (the schema is re-sent on every
- * turn, so duplicating `path` + descriptions across 9 union members 2×'s
- * total token usage on long benchmarks).
+ * (`resolveAtomToolEdit`) enforces that exactly one op key is present per entry.
+ * We use a flat schema instead of a discriminated union to keep the tool
+ * definition compact (the schema is re-sent on every turn).
  */
 export const atomEditSchema = Type.Object(
 	{
@@ -71,36 +66,34 @@ export const atomEditSchema = Type.Object(
 		// Exactly one of the following op keys is required per entry:
 		set: Type.Optional(
 			Type.Union([
-				Type.String({ description: "line anchor to replace", examples: ["5#aa"] }),
+				Type.String({ description: "line anchor to replace", examples: ["1ab"] }),
 				Type.Array(Type.String(), {
 					description: "two surviving anchors (open, close)",
-					examples: [["5#aa", "9#bb"]],
+					examples: [["1ab", "9bb"]],
 				}),
 			]),
 		),
-		before: Type.Optional(Type.String({ description: "line anchor to insert before", examples: ["5#aa"] })),
-		after: Type.Optional(Type.String({ description: "line anchor to insert after", examples: ["5#aa"] })),
-		del: Type.Optional(Type.String({ description: "line anchor to delete", examples: ["5#aa"] })),
-		sub: Type.Optional(Type.String({ description: "line anchor to rewrite", examples: ["5#aa"] })),
-		ins: Type.Optional(
-			Type.String({ description: "line anchor to overwrite", examples: ["5#aa"] }),
+		pre: Type.Optional(
+			Type.String({ description: "line anchor to insert before or empty for BOF", examples: ["1ab", ""] }),
 		),
-		append: Type.Optional(
-			Type.Union([Type.Array(Type.String()), Type.String()], { description: "lines to append at EOF" }),
+		post: Type.Optional(
+			Type.String({ description: "line anchor to insert after or empty for EOF", examples: ["1ab", ""] }),
 		),
-		prepend: Type.Optional(
-			Type.Union([Type.Array(Type.String()), Type.String()], { description: "lines to prepend at BOF" }),
+		del: Type.Optional(Type.String({ description: "line anchor to delete", examples: ["1ab"] })),
+		sub: Type.Optional(
+			Type.String({ description: "line anchor on which to replace a unique substring", examples: ["1ab"] }),
 		),
-		// Payload (used by set/before/after/sub/ins/append/prepend):
+		// Payload (used by set/pre/post/sub):
 		lines: Type.Optional(
 			Type.Union([Type.Array(Type.String()), Type.String()], {
-			description: "replacement payload",
+				description: "replacement payload",
 			}),
 		),
 		find: Type.Optional(
 			Type.String({
-			description: "unique substring on anchor line",
-				examples: ["if("],
+				description:
+					"unique substring on the anchored line (sub only); use the shortest fragment — 1–4 chars usually suffices",
+				examples: ["||", "true", "i--"],
 			}),
 		),
 	},
@@ -124,11 +117,10 @@ export type AtomParams = Static<typeof atomEditParamsSchema>;
 
 export type AtomEdit =
 	| { op: "set"; pos: Anchor; lines: string[] }
-	| { op: "before"; pos: Anchor; lines: string[] }
-	| { op: "after"; pos: Anchor; lines: string[] }
+	| { op: "pre"; pos: Anchor; lines: string[] }
+	| { op: "post"; pos: Anchor; lines: string[] }
 	| { op: "del"; pos: Anchor }
 	| { op: "sub"; pos: Anchor; find: string; to: string }
-	| { op: "ins"; pos: Anchor; find: string; to: string }
 	| { op: "between"; after: Anchor; before: Anchor; lines: string[] }
 	| { op: "append_file"; lines: string[] }
 	| { op: "prepend_file"; lines: string[] };
@@ -137,18 +129,18 @@ export type AtomEdit =
 // Param guards
 // ═══════════════════════════════════════════════════════════════════════════
 
-const ATOM_OP_KEYS = ["set", "before", "after", "del", "sub", "ins", "append", "prepend"] as const;
+const ATOM_OP_KEYS = ["set", "pre", "post", "del", "sub"] as const;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Resolution
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Parse an anchor reference like `"5#th"`.
+ * Parse an anchor reference like `"5th"`.
  *
  * Tolerant: on a malformed reference we still try to extract a 1-indexed line
  * number from the leading digits so the validator can surface the *correct*
- * `LINE#HASH:content` for the user. The bogus hash is preserved in the returned
+ * `LINEHASH\tcontent` for the user. The bogus hash is preserved in the returned
  * anchor so the validator emits a content-rich mismatch error.
  *
  * If we cannot recover even a line number, throw a usage-style error with the
@@ -156,7 +148,7 @@ const ATOM_OP_KEYS = ["set", "before", "after", "del", "sub", "ins", "append", "
  */
 function parseAnchor(raw: string, opName: string): Anchor {
 	if (typeof raw !== "string" || raw.length === 0) {
-		throw new Error(`${opName} requires an anchor of the form "LINE#ID" (e.g. "5#th").`);
+		throw new Error(`${opName} requires an anchor of the form "LINE+ID" (e.g. "5th").`);
 	}
 	try {
 		return parseTag(raw);
@@ -171,15 +163,15 @@ function parseAnchor(raw: string, opName: string): Anchor {
 			}
 		}
 		throw new Error(
-			`${opName} requires an anchor of the form "LINE#ID" (e.g. "5#th"). Received ${JSON.stringify(raw)}; could not extract a line number.`,
+			`${opName} requires an anchor of the form "LINE+ID" (e.g. "5th"). Received ${JSON.stringify(raw)}; could not extract a line number.`,
 		);
 	}
 }
 
-function subInsLinesToString(lines: unknown, opName: string): string {
+function subLinesToString(lines: unknown): string {
 	if (typeof lines === "string") return lines;
 	if (Array.isArray(lines)) return lines.join("\n");
-	throw new Error(`${opName} requires a string or array \`lines\` value (the replacement text).`);
+	throw new Error("sub requires a string or array `lines` value (the replacement text).");
 }
 
 function classifyAtomEdit(edit: AtomToolEdit): string {
@@ -210,7 +202,7 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit {
 				const [openRaw, closeRaw] = edit.set;
 				if (typeof openRaw !== "string" || typeof closeRaw !== "string") {
 					throw new Error(
-						`Edit ${editIndex}: \`set\` 2-tuple requires both elements to be anchor strings, e.g. ["5#aa", "9#bb"].`,
+						`Edit ${editIndex}: \`set\` 2-tuple requires both elements to be anchor strings, e.g. ["1ab", "9bb"].`,
 					);
 				}
 				return {
@@ -224,38 +216,29 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit {
 			}
 		}
 
-		throw new Error(
-			`Edit ${editIndex}: \`set\` must be a "LINE#ID" string or a 2-tuple ["openAnchor", "closeAnchor"].`,
-		);
+		throw new Error(`Edit ${editIndex}: \`set\` must be a string ("1ab") or a 2-tuple (["1ab", "9bb"]).`);
 	}
-	if ("before" in edit && typeof edit.before === "string") {
-		return { op: "before", pos: parseAnchor(edit.before, "before"), lines: hashlineParseText(edit.lines) };
+	if ("pre" in edit && typeof edit.pre === "string") {
+		if (edit.pre === "") {
+			return { op: "prepend_file", lines: hashlineParseText(edit.lines) };
+		}
+		return { op: "pre", pos: parseAnchor(edit.pre, "pre"), lines: hashlineParseText(edit.lines) };
 	}
-	if ("after" in edit && typeof edit.after === "string") {
-		return { op: "after", pos: parseAnchor(edit.after, "after"), lines: hashlineParseText(edit.lines) };
+	if ("post" in edit && typeof edit.post === "string") {
+		if (edit.post === "") {
+			return { op: "append_file", lines: hashlineParseText(edit.lines) };
+		}
+		return { op: "post", pos: parseAnchor(edit.post, "post"), lines: hashlineParseText(edit.lines) };
 	}
 	if ("del" in edit && typeof edit.del === "string") {
 		return { op: "del", pos: parseAnchor(edit.del, "del") };
 	}
 	if ("sub" in edit && typeof edit.sub === "string") {
 		if (typeof edit.find !== "string" || edit.find.length === 0) {
-			throw new Error("sub requires a non-empty `find` string.");
+			throw new Error("sub requires a non-empty `find` string (the unique substring on the anchored line).");
 		}
-		const to = subInsLinesToString(edit.lines, "sub");
+		const to = subLinesToString(edit.lines);
 		return { op: "sub", pos: parseAnchor(edit.sub, "sub"), find: edit.find, to };
-	}
-	if ("ins" in edit && typeof edit.ins === "string") {
-		if (typeof edit.find !== "string" || edit.find.length === 0) {
-			throw new Error("ins requires a non-empty `find` string (the position-anchor on the line).");
-		}
-		const to = subInsLinesToString(edit.lines, "ins");
-		return { op: "ins", pos: parseAnchor(edit.ins, "ins"), find: edit.find, to };
-	}
-	if ("append" in edit) {
-		return { op: "append_file", lines: hashlineParseText(edit.append) };
-	}
-	if ("prepend" in edit) {
-		return { op: "prepend_file", lines: hashlineParseText(edit.prepend) };
 	}
 	throw new Error(`Unknown atom edit shape: ${JSON.stringify(edit)}`);
 }
@@ -267,11 +250,10 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit {
 function* getAtomAnchors(edit: AtomEdit): Iterable<Anchor> {
 	switch (edit.op) {
 		case "set":
-		case "before":
-		case "after":
+		case "pre":
+		case "post":
 		case "del":
 		case "sub":
-		case "ins":
 			yield edit.pos;
 			return;
 		case "between":
@@ -300,11 +282,11 @@ function validateAtomAnchors(edits: AtomEdit[], fileLines: string[]): HashMismat
 }
 
 function validateNoConflictingAnchorOps(edits: AtomEdit[]): void {
-	// For each anchor line, at most one mutating op (set/del/sub/ins).
-	// `before`/`after` (insert ops) may coexist with them — they don't mutate the anchor line.
+	// For each anchor line, at most one mutating op (set/del/sub).
+	// `pre`/`post` (insert ops) may coexist with them — they don't mutate the anchor line.
 	const mutatingPerLine = new Map<number, string>();
 	for (const edit of edits) {
-		if (edit.op === "set" || edit.op === "del" || edit.op === "sub" || edit.op === "ins") {
+		if (edit.op === "set" || edit.op === "del" || edit.op === "sub") {
 			const existing = mutatingPerLine.get(edit.pos.line);
 			if (existing) {
 				throw new Error(
@@ -346,9 +328,8 @@ function validateNoConflictingAnchorOps(edits: AtomEdit[]): void {
 			case "set":
 			case "del":
 			case "sub":
-			case "ins":
-			case "before":
-			case "after":
+			case "pre":
+			case "post":
 				targetLine = edit.pos.line;
 				break;
 			default:
@@ -370,37 +351,31 @@ function validateNoConflictingAnchorOps(edits: AtomEdit[]): void {
 // Apply
 // ═══════════════════════════════════════════════════════════════════════════
 
-function applySubInsToLine(
-	edit: { op: "sub" | "ins"; pos: Anchor; find: string; to: string },
-	current: string,
-): string {
+function applySubToLine(edit: { op: "sub"; pos: Anchor; find: string; to: string }, current: string): string {
 	const first = current.indexOf(edit.find);
 	if (first === -1) {
 		throw new Error(
-			`${edit.op}: substring \`${edit.find}\` not found on line ${edit.pos.line}. ` +
+			`sub: substring \`${edit.find}\` not found on line ${edit.pos.line}. ` +
 				`Current line content: ${JSON.stringify(current)}`,
 		);
 	}
 	const second = current.indexOf(edit.find, first + 1);
 	if (second !== -1) {
 		throw new Error(
-			`${edit.op}: substring \`${edit.find}\` occurs more than once on line ${edit.pos.line}; ` +
-				`use a longer substring that uniquely identifies the ${edit.op === "sub" ? "target" : "position"}. ` +
+			`sub: substring \`${edit.find}\` occurs more than once on line ${edit.pos.line}; ` +
+				`use a longer substring that uniquely identifies the target. ` +
 				`Current line content: ${JSON.stringify(current)}`,
 		);
 	}
-	if (edit.op === "sub") {
-		return current.slice(0, first) + edit.to + current.slice(first + edit.find.length);
-	}
-	// `ins`: replace from start of `find` to end-of-line (vim-insert style).
-	return current.slice(0, first) + edit.to;
+	// `sub`: replace only the matched span; tail preserved.
+	return current.slice(0, first) + edit.to + current.slice(first + edit.find.length);
 }
 
 function maybeAutocorrectEscapedTabIndentation(edits: AtomEdit[], warnings: string[]): void {
 	const enabled = Bun.env.PI_HASHLINE_AUTOCORRECT_ESCAPED_TABS !== "0";
 	if (!enabled) return;
 	for (const edit of edits) {
-		if (edit.op !== "set" && edit.op !== "before" && edit.op !== "after") continue;
+		if (edit.op !== "set" && edit.op !== "pre" && edit.op !== "post") continue;
 		if (edit.lines.length === 0) continue;
 		const hasEscapedTabs = edit.lines.some(line => line.includes("\\t"));
 		if (!hasEscapedTabs) continue;
@@ -451,8 +426,8 @@ export function applyAtomEdits(
 	};
 
 	// Partition: anchor-scoped vs between vs file-scoped. Preserve original order via the
-	// captured idx so multiple before/after/append/prepend on the same target
-	// are emitted in the order the model produced them.
+	// captured idx so multiple pre/post on the same target are emitted in the order
+	// the model produced them.
 	type Indexed<T> = { edit: T; idx: number };
 	type AnchorEdit = Exclude<AtomEdit, { op: "append_file" } | { op: "prepend_file" } | { op: "between" }>;
 	const anchorEdits: Indexed<AnchorEdit>[] = [];
@@ -468,8 +443,8 @@ export function applyAtomEdits(
 
 	// Group anchor edits by line so all ops on the same line are applied as a
 	// single splice. This makes the per-anchor outcome independent of index
-	// shifts caused by sibling ops (e.g. `after` paired with `del` on the same
-	// anchor, or repeated `before`/`after` inserts that previously reversed).
+	// shifts caused by sibling ops (e.g. `post` paired with `del` on the same
+	// anchor, or repeated `pre`/`post` inserts that previously reversed).
 	const byLine = new Map<number, Indexed<AnchorEdit>[]>();
 	for (const entry of anchorEdits) {
 		const line = entry.edit.pos.line;
@@ -527,10 +502,10 @@ export function applyAtomEdits(
 
 		for (const { edit } of bucket) {
 			switch (edit.op) {
-				case "before":
+				case "pre":
 					beforeLines.push(...edit.lines);
 					break;
-				case "after":
+				case "post":
 					afterLines.push(...edit.lines);
 					break;
 				case "del":
@@ -543,9 +518,8 @@ export function applyAtomEdits(
 					replacementSet = true;
 					anchorMutated = true;
 					break;
-				case "sub":
-				case "ins": {
-					currentLine = applySubInsToLine(edit, currentLine);
+				case "sub": {
+					currentLine = applySubToLine(edit, currentLine);
 					replacement = currentLine.includes("\n") ? currentLine.split("\n") : [currentLine];
 					replacementSet = true;
 					anchorMutated = true;

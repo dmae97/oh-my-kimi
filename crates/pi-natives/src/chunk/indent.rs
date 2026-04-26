@@ -409,29 +409,19 @@ fn hashline_prefix_len(line: &str) -> Option<usize> {
 		remainder = &remainder[inner_ws..];
 	}
 
+	// Line number digits are mandatory (no `#`-only form in the new format).
 	let digits = remainder
 		.chars()
 		.take_while(|ch| ch.is_ascii_digit())
 		.count();
-	if digits > 0 {
-		offset += digits;
-		remainder = &remainder[digits..];
-		let ws = remainder.len() - remainder.trim_start_matches([' ', '\t']).len();
-		offset += ws;
-		remainder = &remainder[ws..];
-	}
-
-	if let Some(stripped) = remainder.strip_prefix('#') {
-		offset += 1;
-		remainder = stripped;
-		let ws = remainder.len() - remainder.trim_start_matches([' ', '\t']).len();
-		offset += ws;
-		remainder = &remainder[ws..];
-	} else if digits == 0 {
+	if digits == 0 {
 		return None;
 	}
+	offset += digits;
+	remainder = &remainder[digits..];
 
-	// Match exactly one BPE bigram (2 ASCII chars) from HASHLINE_BIGRAMS.
+	// Match exactly one BPE bigram (2 ASCII chars) from HASHLINE_BIGRAMS,
+	// directly adjacent to the line-number digits (no `#` separator).
 	// Use char-boundary-safe slicing to avoid panicking on multi-byte content.
 	let bigram_end = 2;
 	if remainder.len() < bigram_end || !remainder.is_char_boundary(bigram_end) {
@@ -444,7 +434,8 @@ fn hashline_prefix_len(line: &str) -> Option<usize> {
 	offset += bigram_end;
 	remainder = &remainder[bigram_end..];
 
-	remainder.strip_prefix(':').map(|_| offset + 1)
+	// Anchor terminator is a single tab character.
+	remainder.strip_prefix('\t').map(|_| offset + 1)
 }
 
 #[cfg(test)]

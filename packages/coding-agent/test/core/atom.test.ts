@@ -54,32 +54,33 @@ describe("applyAtomEdits — del", () => {
 	});
 });
 
-describe("applyAtomEdits — before/after", () => {
-	it("before inserts above the anchor", () => {
+describe("applyAtomEdits — pre/post", () => {
+	it("pre inserts above the anchor", () => {
 		const content = "aaa\nbbb\nccc";
-		const edits: AtomEdit[] = [{ op: "before", pos: tag(2, "bbb"), lines: ["NEW"] }];
+		const edits: AtomEdit[] = [{ op: "pre", pos: tag(2, "bbb"), lines: ["NEW"] }];
 		const result = applyAtomEdits(content, edits);
 		expect(result.lines).toBe("aaa\nNEW\nbbb\nccc");
 	});
 
-	it("after inserts below the anchor", () => {
+	it("post inserts below the anchor", () => {
 		const content = "aaa\nbbb\nccc";
-		const edits: AtomEdit[] = [{ op: "after", pos: tag(2, "bbb"), lines: ["NEW"] }];
+		const edits: AtomEdit[] = [{ op: "post", pos: tag(2, "bbb"), lines: ["NEW"] }];
 		const result = applyAtomEdits(content, edits);
 		expect(result.lines).toBe("aaa\nbbb\nNEW\nccc");
 	});
 
-	it("before + after on same anchor coexist with set", () => {
+	it("pre + post on same anchor coexist with set", () => {
 		const content = "aaa\nbbb\nccc";
 		const edits: AtomEdit[] = [
-			{ op: "before", pos: tag(2, "bbb"), lines: ["B"] },
+			{ op: "pre", pos: tag(2, "bbb"), lines: ["B"] },
 			{ op: "set", pos: tag(2, "bbb"), lines: ["BBB"] },
-			{ op: "after", pos: tag(2, "bbb"), lines: ["A"] },
+			{ op: "post", pos: tag(2, "bbb"), lines: ["A"] },
 		];
 		const result = applyAtomEdits(content, edits);
 		expect(result.lines).toBe("aaa\nB\nBBB\nA\nccc");
 	});
 });
+
 
 describe("applyAtomEdits — sub", () => {
 	it("replaces a unique substring", () => {
@@ -89,8 +90,22 @@ describe("applyAtomEdits — sub", () => {
 		expect(result.lines).toBe("const timeout = 30_000;");
 	});
 
+	it("preserves the line tail (trailing semicolon, comma, brace)", () => {
+		const content = "      required: true,";
+		const edits: AtomEdit[] = [{ op: "sub", pos: tag(1, content), find: "true", to: "false" }];
+		const result = applyAtomEdits(content, edits);
+		expect(result.lines).toBe("      required: false,");
+	});
+
+	it("swaps an operator without restating the surrounding expression", () => {
+		const content = "\tfor (let i = 0; i < value.length; i--) {";
+		const edits: AtomEdit[] = [{ op: "sub", pos: tag(1, content), find: "i--", to: "i++" }];
+		const result = applyAtomEdits(content, edits);
+		expect(result.lines).toBe("\tfor (let i = 0; i < value.length; i++) {");
+	});
+
 	it("errors when find is absent", () => {
-		const content = "const timeout = 5000;";
+		const content = "abc def";
 		const edits: AtomEdit[] = [{ op: "sub", pos: tag(1, content), find: "missing", to: "x" }];
 		expect(() => applyAtomEdits(content, edits)).toThrow(/not found/);
 	});
@@ -111,62 +126,27 @@ describe("applyAtomEdits — sub", () => {
 	});
 });
 
-describe("applyAtomEdits — ins", () => {
-	it("replaces from anchor to end-of-line (vim-insert style)", () => {
-		const content = `const tag = "DO NOT SHIP";`;
-		const edits: AtomEdit[] = [{ op: "ins", pos: tag(1, content), find: "DO", to: 'OK";' }];
-		const result = applyAtomEdits(content, edits);
-		expect(result.lines).toBe('const tag = "OK";');
-	});
-
-	it("appends after find when find is at end-of-line", () => {
-		const content = "foo bar";
-		const edits: AtomEdit[] = [{ op: "ins", pos: tag(1, content), find: "bar", to: "BAZ" }];
-		const result = applyAtomEdits(content, edits);
-		expect(result.lines).toBe("foo BAZ");
-	});
-
-	it("errors when find is absent", () => {
-		const content = "abc def";
-		const edits: AtomEdit[] = [{ op: "ins", pos: tag(1, content), find: "missing", to: "x" }];
-		expect(() => applyAtomEdits(content, edits)).toThrow(/not found/);
-	});
-
-	it("errors when find is non-unique", () => {
-		const content = "abc abc";
-		const edits: AtomEdit[] = [{ op: "ins", pos: tag(1, content), find: "abc", to: "Z" }];
-		expect(() => applyAtomEdits(content, edits)).toThrow(/more than once/);
-	});
-
-	it("rejects conflict with sub on same anchor", () => {
-		const content = "abc def";
-		const edits: AtomEdit[] = [
-			{ op: "sub", pos: tag(1, content), find: "abc", to: "x" },
-			{ op: "ins", pos: tag(1, content), find: "def", to: "y" },
-		];
-		expect(() => applyAtomEdits(content, edits)).toThrow(/Conflicting ops/);
-	});
-});
-
-describe("applyAtomEdits — file-scoped", () => {
-	it("append_file appends at EOF", () => {
+describe("applyAtomEdits — file-scoped via pre:\"\" / post:\"\"", () => {
+	it("post:\"\" appends at EOF", () => {
 		const content = "aaa\nbbb";
-		const edits: AtomEdit[] = [{ op: "append_file", lines: ["ccc"] }];
-		const result = applyAtomEdits(content, edits);
+		const resolved = resolveAtomToolEdit({ post: "", lines: ["ccc"] }) as AtomEdit;
+		expect(resolved.op).toBe("append_file");
+		const result = applyAtomEdits(content, [resolved]);
 		expect(result.lines).toBe("aaa\nbbb\nccc");
 	});
 
-	it("prepend_file prepends at BOF", () => {
+	it("pre:\"\" prepends at BOF", () => {
 		const content = "aaa\nbbb";
-		const edits: AtomEdit[] = [{ op: "prepend_file", lines: ["ZZZ"] }];
-		const result = applyAtomEdits(content, edits);
+		const resolved = resolveAtomToolEdit({ pre: "", lines: ["ZZZ"] }) as AtomEdit;
+		expect(resolved.op).toBe("prepend_file");
+		const result = applyAtomEdits(content, [resolved]);
 		expect(result.lines).toBe("ZZZ\naaa\nbbb");
 	});
 
-	it("append to empty file replaces empty line", () => {
+	it("post:\"\" on empty file replaces empty line", () => {
 		const content = "";
-		const edits: AtomEdit[] = [{ op: "append_file", lines: ["aaa"] }];
-		const result = applyAtomEdits(content, edits);
+		const resolved = resolveAtomToolEdit({ post: "", lines: ["aaa"] }) as AtomEdit;
+		const result = applyAtomEdits(content, [resolved]);
 		expect(result.lines).toBe("aaa");
 	});
 });
@@ -183,16 +163,16 @@ describe("parseAnchor (atom tolerant) + applyAtomEdits", () => {
 	it("surfaces correct anchor + content when the model invents an out-of-alphabet hash", () => {
 		const content = "alpha\nbravo\ncharlie";
 		// `XG` is not in the alphabet; should be rejected with the actual anchor exposed.
-		const toolEdit = { path: "a.ts", set: "2#XG", lines: "BRAVO" };
+		const toolEdit = { path: "a.ts", set: "2XG", lines: "BRAVO" };
 		const resolved = resolveAtomToolEdit(toolEdit) as AtomEdit;
 		expect(() => applyAtomEdits(content, [resolved])).toThrow(HashlineMismatchError);
 		try {
 			applyAtomEdits(content, [resolved]);
 		} catch (err) {
 			const msg = (err as Error).message;
-			expect(msg).toContain(">>>");
+			expect(msg).toMatch(/^\d+[a-z]{2}:/m);
 			expect(msg).toContain("bravo");
-			expect(msg).toContain(`2#${computeLineHash(2, "bravo")}`);
+			expect(msg).toContain(`2${computeLineHash(2, "bravo")}`);
 		}
 	});
 
@@ -308,7 +288,7 @@ describe("applyAtomEdits — between", () => {
 	it("resolveAtomToolEdit accepts `set: [open, close]` tuple and parses both anchors", () => {
 		const toolEdit = {
 			path: "a.ts",
-			set: ["1#xx", "4#yy"] as [string, string],
+			set: ["1xx", "4yy"] as [string, string],
 			lines: ["X"],
 		};
 		const resolved = resolveAtomToolEdit(toolEdit) as AtomEdit;
