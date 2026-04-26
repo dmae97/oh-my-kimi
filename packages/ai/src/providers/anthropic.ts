@@ -216,7 +216,8 @@ function isAnthropicStrictGrammarTooLargeError(error: unknown): boolean {
 	if (extractHttpStatusFromError(error) !== 400) return false;
 	const message = error instanceof Error ? error.message : String(error);
 	const isStrictGrammarTooLarge = /compiled grammar/i.test(message) && /too large/i.test(message);
-	const isSchemaCompilationTooComplex = /schema/i.test(message) && /too complex/i.test(message) && /compil/i.test(message);
+	const isSchemaCompilationTooComplex =
+		/schema/i.test(message) && /too complex/i.test(message) && /compil/i.test(message);
 	return /invalid_request_error/i.test(message) && (isStrictGrammarTooLarge || isSchemaCompilationTooComplex);
 }
 
@@ -1754,7 +1755,7 @@ export function convertAnthropicMessages(
 }
 
 const ANTHROPIC_UNSUPPORTED_TOOL_SCHEMA_FIELDS = new Set(["maxItems", "patternProperties"]);
-const ANTHROPIC_STRICT_TOOL_ALLOWLIST = new Set(["bash", "python", "edit", "find", "write"]);
+const ANTHROPIC_STRICT_TOOL_ALLOWLIST = new Set(["bash", "python", "edit", "find"]);
 const MAX_ANTHROPIC_STRICT_TOOLS = 20;
 const MAX_ANTHROPIC_STRICT_OPTIONAL_PARAMETERS = 24;
 const MAX_ANTHROPIC_STRICT_UNION_PARAMETERS = 16;

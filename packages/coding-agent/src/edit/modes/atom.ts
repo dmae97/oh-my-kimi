@@ -1,7 +1,7 @@
 /**
  *
  * Flat locator + verb edit mode backed by hashline anchors. Each entry carries
- * one shared `loc` selector plus one or more verbs (`pre`, `set`, `post`, `sub`).
+ * one shared `loc` selector plus one or more verbs (`pre`, `set`, `post`).
  * The runtime resolves those verbs into internal anchor-scoped edits and still
  * reuses hashline's staleness scheme (`computeLineHash`) verbatim.
  *
@@ -9,13 +9,12 @@
  *   { path, loc: "5th",      set:  ["..."] }
  *   { path, loc: "5th",      pre:  ["..."] }
  *   { path, loc: "5th",      post: ["..."] }
- *   { path, loc: "5th",      sub:  ["find", "replace"] }
  *   { path, loc: "5th",      pre: [...], set: [...], post: [...] }
  *   { path, loc: "^",        pre:  [...] }                            // prepend to BOF
  *   { path, loc: "$",        post: [...] }                            // append to EOF
  *
  * `set: []` on a single-anchor locator deletes that line. `set:[""]` preserves
- * a blank line. Line ranges are not supported; `set` and `sub` cannot coexist
+ * a blank line. Line ranges are not supported.
  * in the same entry.
  *
  * For deleting or moving files, the agent should use bash.
@@ -66,18 +65,6 @@ export const atomEditSchema = Type.Object(
 		set: Type.Optional(textSchema),
 		pre: Type.Optional(textSchema),
 		post: Type.Optional(textSchema),
-		sub: Type.Optional(
-			Type.Array(Type.String(), {
-				description: "substring search and replace as [find, replace]",
-				minItems: 2,
-				maxItems: 2,
-				examples: [
-					["||", "??"],
-					["true", "false"],
-					["i--", "i++"],
-				],
-			}),
-		),
 	},
 	{ additionalProperties: false },
 );
@@ -102,7 +89,6 @@ export type AtomEdit =
 	| { op: "pre"; pos: Anchor; lines: string[] }
 	| { op: "post"; pos: Anchor; lines: string[] }
 	| { op: "del"; pos: Anchor }
-	| { op: "sub"; pos: Anchor; find: string; to: string }
 	| { op: "append_file"; lines: string[] }
 	| { op: "prepend_file"; lines: string[] };
 
@@ -110,7 +96,7 @@ export type AtomEdit =
 // Param guards
 // ═══════════════════════════════════════════════════════════════════════════
 
-const ATOM_VERB_KEYS = ["set", "pre", "post", "sub"] as const;
+const ATOM_VERB_KEYS = ["set", "pre", "post"] as const;
 type AtomOptionalKey = "path" | "loc" | (typeof ATOM_VERB_KEYS)[number];
 const ATOM_OPTIONAL_KEYS = ["path", "loc", ...ATOM_VERB_KEYS] as const satisfies readonly AtomOptionalKey[];
 
@@ -227,20 +213,6 @@ function parseLoc(raw: string, editIndex: number): ParsedAtomLoc {
 	return { kind: "anchor", pos: parseAnchor(raw, "loc") };
 }
 
-function parseSubSpec(sub: AtomToolEdit["sub"], editIndex: number): { find: string; withText: string } {
-	if (!Array.isArray(sub) || sub.length !== 2) {
-		throw new Error(`Edit ${editIndex}: sub must be a 2-item tuple [find, replace].`);
-	}
-	const [find, withText] = sub;
-	if (typeof find !== "string" || find.length === 0) {
-		throw new Error("sub requires a non-empty `find` string (the unique substring on the anchored line).");
-	}
-	if (typeof withText !== "string") {
-		throw new Error("sub replacement must be a string.");
-	}
-	return { find, withText };
-}
-
 function classifyAtomEdit(edit: AtomToolEdit): string {
 	const entry = stripNullAtomFields(edit);
 	const verbs = ATOM_VERB_KEYS.filter(k => entry[k] !== undefined);
@@ -255,9 +227,6 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
 			`Edit ${editIndex}: missing verb. Each entry must include at least one of: ${ATOM_VERB_KEYS.join(", ")}.`,
 		);
 	}
-	if (entry.set !== undefined && entry.sub !== undefined) {
-		throw new Error(`Edit ${editIndex}: set and sub cannot be used together in the same entry.`);
-	}
 	if (typeof entry.loc !== "string") {
 		throw new Error(`Edit ${editIndex}: missing loc. Use a selector like "160sr", "^", or "$".`);
 	}
@@ -266,7 +235,7 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
 	const resolved: AtomEdit[] = [];
 
 	if (loc.kind === "bof") {
-		if (entry.set !== undefined || entry.sub !== undefined || entry.post !== undefined) {
+		if (entry.set !== undefined || entry.post !== undefined) {
 			throw new Error(`Edit ${editIndex}: loc "^" only supports pre.`);
 		}
 		if (entry.pre !== undefined) {
@@ -276,7 +245,7 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
 	}
 
 	if (loc.kind === "eof") {
-		if (entry.set !== undefined || entry.sub !== undefined || entry.pre !== undefined) {
+		if (entry.set !== undefined || entry.pre !== undefined) {
 			throw new Error(`Edit ${editIndex}: loc "$" only supports post.`);
 		}
 		if (entry.post !== undefined) {
@@ -295,10 +264,6 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
 			resolved.push({ op: "set", pos: loc.pos, lines: hashlineParseText(entry.set) });
 		}
 	}
-	if (entry.sub !== undefined) {
-		const { find, withText } = parseSubSpec(entry.sub, editIndex);
-		resolved.push({ op: "sub", pos: loc.pos, find, to: withText });
-	}
 	if (entry.post !== undefined) {
 		resolved.push({ op: "post", pos: loc.pos, lines: hashlineParseText(entry.post) });
 	}
@@ -315,7 +280,6 @@ function* getAtomAnchors(edit: AtomEdit): Iterable<Anchor> {
 		case "pre":
 		case "post":
 		case "del":
-		case "sub":
 			yield edit.pos;
 			return;
 		default:
@@ -348,16 +312,16 @@ function validateAtomAnchors(edits: AtomEdit[], fileLines: string[], warnings: s
 }
 
 function validateNoConflictingAnchorOps(edits: AtomEdit[]): void {
-	// For each anchor line, at most one mutating op (set/del/sub).
+	// For each anchor line, at most one mutating op (set/del).
 	// `pre`/`post` (insert ops) may coexist with them — they don't mutate the anchor line.
 	const mutatingPerLine = new Map<number, string>();
 	for (const edit of edits) {
-		if (edit.op !== "set" && edit.op !== "del" && edit.op !== "sub") continue;
+		if (edit.op !== "set" && edit.op !== "del") continue;
 		const existing = mutatingPerLine.get(edit.pos.line);
 		if (existing) {
 			throw new Error(
 				`Conflicting ops on anchor line ${edit.pos.line}: \`${existing}\` and \`${edit.op}\`. ` +
-					`At most one of set/del/sub is allowed per anchor.`,
+					`At most one of set/del is allowed per anchor.`,
 			);
 		}
 		mutatingPerLine.set(edit.pos.line, edit.op);
@@ -367,26 +331,6 @@ function validateNoConflictingAnchorOps(edits: AtomEdit[]): void {
 // ═══════════════════════════════════════════════════════════════════════════
 // Apply
 // ═══════════════════════════════════════════════════════════════════════════
-
-function applySubToLine(edit: { op: "sub"; pos: Anchor; find: string; to: string }, current: string): string {
-	const first = current.indexOf(edit.find);
-	if (first === -1) {
-		throw new Error(
-			`sub: substring \`${edit.find}\` not found on line ${edit.pos.line}. ` +
-				`Current line content: ${JSON.stringify(current)}`,
-		);
-	}
-	const second = current.indexOf(edit.find, first + 1);
-	if (second !== -1) {
-		throw new Error(
-			`sub: substring \`${edit.find}\` occurs more than once on line ${edit.pos.line}; ` +
-				`use a longer substring that uniquely identifies the target. ` +
-				`Current line content: ${JSON.stringify(current)}`,
-		);
-	}
-	// `sub`: replace only the matched span; tail preserved.
-	return current.slice(0, first) + edit.to + current.slice(first + edit.find.length);
-}
 
 function maybeAutocorrectEscapedTabIndentation(edits: AtomEdit[], warnings: string[]): void {
 	const enabled = Bun.env.PI_HASHLINE_AUTOCORRECT_ESCAPED_TABS !== "0";
@@ -487,7 +431,7 @@ export function applyAtomEdits(
 		bucket.sort((a, b) => a.idx - b.idx);
 
 		const idx = line - 1;
-		let currentLine = fileLines[idx];
+		const currentLine = fileLines[idx];
 		let replacement: string[] = [currentLine];
 		let replacementSet = false;
 		let anchorMutated = false;
@@ -513,13 +457,6 @@ export function applyAtomEdits(
 					replacementSet = true;
 					anchorMutated = true;
 					break;
-				case "sub": {
-					currentLine = applySubToLine(edit, currentLine);
-					replacement = currentLine.includes("\n") ? currentLine.split("\n") : [currentLine];
-					replacementSet = true;
-					anchorMutated = true;
-					break;
-				}
 			}
 		}
 
@@ -535,9 +472,7 @@ export function applyAtomEdits(
 		if (replacementProducesNoChange) {
 			const firstEdit = bucket[0]?.edit;
 			const loc = firstEdit ? `${firstEdit.pos.line}${firstEdit.pos.hash}` : `${line}`;
-			const reason = bucket.some(b => b.edit.op === "sub")
-				? "sub produced no change (find/replace already applied or both substrings are equal)"
-				: "replacement is identical to the current line content";
+			const reason = "replacement is identical to the current line content";
 			noopEdits.push({
 				editIndex: bucket[0]?.idx ?? 0,
 				loc,

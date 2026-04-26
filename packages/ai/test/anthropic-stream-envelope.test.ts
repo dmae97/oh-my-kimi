@@ -265,8 +265,8 @@ describe("anthropic stream envelope handling", () => {
 			...context,
 			tools: [
 				{
-					name: "write",
-					description: "Write a value",
+					name: "edit",
+					description: "Edit a value",
 					strict: true,
 					parameters: Type.Object({ query: Type.String() }),
 				},
@@ -321,8 +321,8 @@ describe("anthropic stream envelope handling", () => {
 			...context,
 			tools: [
 				{
-					name: "write",
-					description: "Write a value",
+					name: "edit",
+					description: "Edit a value",
 					strict: true,
 					parameters: Type.Object({ query: Type.String() }),
 				},

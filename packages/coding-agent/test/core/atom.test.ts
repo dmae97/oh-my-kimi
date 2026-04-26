@@ -3,12 +3,14 @@ import {
 	type AtomEdit,
 	type AtomToolEdit,
 	applyAtomEdits,
+	atomEditSchema,
 	computeLineHash,
 	HashlineMismatchError,
 	resolveAtomEntryPaths,
 	resolveAtomToolEdit,
 } from "@oh-my-pi/pi-coding-agent/edit";
 import type { Anchor } from "@oh-my-pi/pi-coding-agent/edit/modes/hashline";
+import { Value } from "@sinclair/typebox/value";
 
 function tag(line: number, content: string): Anchor {
 	return { line, hash: computeLineHash(line, content) };
@@ -83,47 +85,9 @@ describe("applyAtomEdits — pre/post", () => {
 	});
 });
 
-describe("applyAtomEdits — sub", () => {
-	it("replaces a unique substring", () => {
-		const content = "const timeout = 5000;";
-		const edits: AtomEdit[] = [{ op: "sub", pos: tag(1, content), find: "5000", to: "30_000" }];
-		const result = applyAtomEdits(content, edits);
-		expect(result.lines).toBe("const timeout = 30_000;");
-	});
-
-	it("preserves the line tail (trailing semicolon, comma, brace)", () => {
-		const content = "      required: true,";
-		const edits: AtomEdit[] = [{ op: "sub", pos: tag(1, content), find: "true", to: "false" }];
-		const result = applyAtomEdits(content, edits);
-		expect(result.lines).toBe("      required: false,");
-	});
-
-	it("swaps an operator without restating the surrounding expression", () => {
-		const content = "\tfor (let i = 0; i < value.length; i--) {";
-		const edits: AtomEdit[] = [{ op: "sub", pos: tag(1, content), find: "i--", to: "i++" }];
-		const result = applyAtomEdits(content, edits);
-		expect(result.lines).toBe("\tfor (let i = 0; i < value.length; i++) {");
-	});
-
-	it("errors when find is absent", () => {
-		const content = "abc def";
-		const edits: AtomEdit[] = [{ op: "sub", pos: tag(1, content), find: "missing", to: "x" }];
-		expect(() => applyAtomEdits(content, edits)).toThrow(/not found/);
-	});
-
-	it("errors when find is non-unique", () => {
-		const content = "abc abc";
-		const edits: AtomEdit[] = [{ op: "sub", pos: tag(1, content), find: "abc", to: "Z" }];
-		expect(() => applyAtomEdits(content, edits)).toThrow(/more than once/);
-	});
-
-	it("rejects conflict with set on same anchor", () => {
-		const content = "abc";
-		const edits: AtomEdit[] = [
-			{ op: "sub", pos: tag(1, "abc"), find: "abc", to: "x" },
-			{ op: "set", pos: tag(1, "abc"), lines: ["y"] },
-		];
-		expect(() => applyAtomEdits(content, edits)).toThrow(/Conflicting ops/);
+describe("atom edit schema", () => {
+	it("rejects sub edits", () => {
+		expect(Value.Check(atomEditSchema, { loc: "1ab", sub: ["5000", "30_000"] })).toBe(false);
 	});
 });
 
@@ -175,7 +139,7 @@ describe("resolveAtomToolEdit — loc syntax", () => {
 	it("ignores null optional verb fields", () => {
 		const content = "aaa\nbbb\nccc";
 		const loc = `2${computeLineHash(2, "bbb")}`;
-		const toolEdit = { loc, pre: null, set: "BBB", post: null, sub: null } as unknown as AtomToolEdit;
+		const toolEdit = { loc, pre: null, set: "BBB", post: null } as unknown as AtomToolEdit;
 		const resolved = resolveAtomToolEdit(toolEdit);
 		expect(resolved).toEqual([{ op: "set", pos: tag(2, "bbb"), lines: ["BBB"] }]);
 

@@ -437,7 +437,7 @@ describe("Anthropic request fingerprint alignment", () => {
 
 	it("marks only the Anthropic strict allowlist strict", async () => {
 		const tools: Tool[] = [
-			...(["bash", "python", "edit", "find", "write"] as const).map(name => ({
+			...(["bash", "python", "edit", "find"] as const).map(name => ({
 				name,
 				description: `${name} tool`,
 				strict: true,
@@ -447,7 +447,7 @@ describe("Anthropic request fingerprint alignment", () => {
 					required: ["requiredValue"],
 				} as unknown as TSchema,
 			})),
-			...(["grep", "read", "task", "todo_write", "web_search", "ast_grep"] as const).map(name => ({
+			...(["write", "grep", "read", "task", "todo_write", "web_search", "ast_grep"] as const).map(name => ({
 				name,
 				description: `${name} tool`,
 				strict: true,
@@ -473,11 +473,11 @@ describe("Anthropic request fingerprint alignment", () => {
 
 		const strictNames = (payload.tools ?? []).filter(tool => tool.strict === true).map(tool => tool.name);
 
-		expect(strictNames).toEqual(["bash", "python", "edit", "find", "write"]);
+		expect(strictNames).toEqual(["bash", "python", "edit", "find"]);
 		expect(payload.tools?.find(tool => tool.name === "bash")?.input_schema?.required).toEqual(["requiredValue"]);
 	});
 
-	it("honors strict=false for allowlisted Anthropic tools", async () => {
+	it("honors strict=false and skips non-allowlisted Anthropic tools", async () => {
 		const tools: Tool[] = [
 			{
 				name: "bash",
@@ -531,7 +531,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		)) as { tools?: Array<{ name?: string; strict?: boolean }> };
 
 		const strictNames = (payload.tools ?? []).filter(tool => tool.strict === true).map(tool => tool.name);
-		expect(strictNames).toEqual(["python", "write"]);
+		expect(strictNames).toEqual(["python"]);
 	});
 
 	it("drops fine-grained tool-streaming beta from default Anthropic client options", () => {
