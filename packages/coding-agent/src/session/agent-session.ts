@@ -3241,7 +3241,6 @@ export class AgentSession {
 				id: task.id,
 				content: task.content,
 				status: task.status,
-				notes: task.notes,
 			})),
 		}));
 	}
