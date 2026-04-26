@@ -14,13 +14,11 @@ Verbs:
 - `splice: […]`: lines are spliced in at the anchor.
 - `pre: […]`: prepend before the anchor (or at BOF if `loc=$`)
 - `post: […]`: append after the anchor (or at EOF if `loc=$`)
-- `sed: { pat, rep, g?, F?, i?, m? }` — structured find/replace on the anchor line. **Prefer this over `splice` for token-level changes**
+- `sed: { pat, rep, g?, F? }` — structured find/replace on the anchor line. **Prefer this over `splice` for token-level changes**
   - `pat`: pattern to find (regex by default)
   - `rep`: replacement (regex back-refs like `$1`, `$&` available)
   - `g`: global — replace every occurrence (default `false`; pass `true` to replace all)
   - `F`: literal — treat `pat` as a literal substring (no regex). Use this whenever `pat` contains `||`, `.`, `(`, `?`, `\`, etc. you mean literally.
-  - `i`: ignore case
-  - `m`: multiline — `^` and `$` match line boundaries
 You **MUST** keep `pat` as short as possible.
 
 Combination rules:
