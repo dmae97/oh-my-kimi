@@ -1,7 +1,7 @@
 telemetry = false
 
 [install]
-linker = "isolated"
+linker = "hoisted"
 exact = true
 saveTextLockfile = true
 
