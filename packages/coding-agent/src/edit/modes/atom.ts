@@ -1,20 +1,20 @@
 /**
  *
  * Flat locator + verb edit mode backed by hashline anchors. Each entry carries
- * one shared `loc` selector plus one or more verbs (`pre`, `set`, `post`).
+ * one shared `loc` selector plus one or more verbs (`pre`, `splice`, `post`).
  * The runtime resolves those verbs into internal anchor-scoped edits and still
  * reuses hashline's staleness scheme (`computeLineHash`) verbatim.
  *
  * External shapes (one entry):
- *   { path, loc: "5th",      set:  ["..."] }
+ *   { path, loc: "5th",      splice:  ["..."] }
  *   { path, loc: "5th",      pre:  ["..."] }
  *   { path, loc: "5th",      post: ["..."] }
- *   { path, loc: "5th",      pre: [...], set: [...], post: [...] }
+ *   { path, loc: "5th",      pre: [...], splice: [...], post: [...] }
  *   { path, loc: "$",        pre:  [...] }                            // prepend to file
  *   { path, loc: "$",        post: [...] }                            // append to file
  *   { path, loc: "$",        sed:  "s/foo/bar/" }                    // sed on every line
  *
- * `set: []` on a single-anchor locator deletes that line. `set:[""]` preserves
+ * `splice: []` on a single-anchor locator deletes that line. `splice:[""]` preserves
  * a blank line. Line ranges are not supported.
  * in the same entry.
  *
@@ -62,7 +62,7 @@ export const atomEditSchema = Type.Object(
 			description: 'edit location: "1ab", "$", or path override like "a.ts:1ab"',
 			examples: ["1ab", "$", "src/foo.ts:1ab"],
 		}),
-		set: Type.Optional(textSchema),
+		splice: Type.Optional(textSchema),
 		pre: Type.Optional(textSchema),
 		post: Type.Optional(textSchema),
 		sed: Type.Optional(
@@ -91,7 +91,7 @@ export type AtomParams = Static<typeof atomEditParamsSchema>;
 // ═══════════════════════════════════════════════════════════════════════════
 
 export type AtomEdit =
-	| { op: "set"; pos: Anchor; lines: string[] }
+	| { op: "splice"; pos: Anchor; lines: string[] }
 	| { op: "pre"; pos: Anchor; lines: string[] }
 	| { op: "post"; pos: Anchor; lines: string[] }
 	| { op: "del"; pos: Anchor }
@@ -112,7 +112,7 @@ export interface SedSpec {
 // Param guards
 // ═══════════════════════════════════════════════════════════════════════════
 
-const ATOM_VERB_KEYS = ["set", "pre", "post", "sed"] as const;
+const ATOM_VERB_KEYS = ["splice", "pre", "post", "sed"] as const;
 type AtomOptionalKey = "loc" | (typeof ATOM_VERB_KEYS)[number];
 const ATOM_OPTIONAL_KEYS = ["loc", ...ATOM_VERB_KEYS] as const satisfies readonly AtomOptionalKey[];
 
@@ -394,8 +394,8 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
 	const resolved: AtomEdit[] = [];
 
 	if (loc.kind === "file") {
-		if (entry.set !== undefined) {
-			throw new Error(`Edit ${editIndex}: loc "$" supports pre, post, and sed (not set).`);
+		if (entry.splice !== undefined) {
+			throw new Error(`Edit ${editIndex}: loc "$" supports pre, post, and sed (not splice).`);
 		}
 		if (entry.pre !== undefined) {
 			resolved.push({ op: "prepend_file", lines: hashlineParseText(entry.pre) });
@@ -413,28 +413,28 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
 	if (entry.pre !== undefined) {
 		resolved.push({ op: "pre", pos: loc.pos, lines: hashlineParseText(entry.pre) });
 	}
-	if (entry.set !== undefined) {
-		if (Array.isArray(entry.set) && entry.set.length === 0) {
-			// Models often default `set: []` alongside other verbs (notably `sed`).
+	if (entry.splice !== undefined) {
+		if (Array.isArray(entry.splice) && entry.splice.length === 0) {
+			// Models often default `splice: []` alongside other verbs (notably `sed`).
 			// Treating that combination as an explicit `del` produces a confusing
 			// `Conflicting ops` error. When another mutating verb is present, drop
-			// the empty `set` instead of treating it as a deletion.
+			// the empty `splice` instead of treating it as a deletion.
 			if (entry.sed === undefined) {
 				resolved.push({ op: "del", pos: loc.pos });
 			}
 		} else {
-			resolved.push({ op: "set", pos: loc.pos, lines: hashlineParseText(entry.set) });
+			resolved.push({ op: "splice", pos: loc.pos, lines: hashlineParseText(entry.splice) });
 		}
 	}
 	if (entry.post !== undefined) {
 		resolved.push({ op: "post", pos: loc.pos, lines: hashlineParseText(entry.post) });
 	}
 	if (entry.sed !== undefined) {
-		const setIsExplicitReplacement = Array.isArray(entry.set) && entry.set.length > 0;
-		// Models often duplicate intent by sending both an explicit `set` and a
+		const spliceIsExplicitReplacement = Array.isArray(entry.splice) && entry.splice.length > 0;
+		// Models often duplicate intent by sending both an explicit `splice` and a
 		// matching `sed`. The explicit replacement wins; the redundant `sed` would
 		// otherwise trigger a confusing `Conflicting ops` rejection.
-		if (!setIsExplicitReplacement) {
+		if (!spliceIsExplicitReplacement) {
 			const spec = parseSedExpression(entry.sed, editIndex);
 			resolved.push({ op: "sed", pos: loc.pos, spec, expression: entry.sed });
 		}
@@ -448,7 +448,7 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
 
 function* getAtomAnchors(edit: AtomEdit): Iterable<Anchor> {
 	switch (edit.op) {
-		case "set":
+		case "splice":
 		case "pre":
 		case "post":
 		case "del":
@@ -524,16 +524,16 @@ function validateAtomAnchors(edits: AtomEdit[], fileLines: string[], warnings: s
 }
 
 function validateNoConflictingAnchorOps(edits: AtomEdit[]): void {
-	// For each anchor line, at most one mutating op (set/del).
+	// For each anchor line, at most one mutating op (splice/del).
 	// `pre`/`post` (insert ops) may coexist with them — they don't mutate the anchor line.
 	const mutatingPerLine = new Map<number, string>();
 	for (const edit of edits) {
-		if (edit.op !== "set" && edit.op !== "del" && edit.op !== "sed") continue;
+		if (edit.op !== "splice" && edit.op !== "del" && edit.op !== "sed") continue;
 		const existing = mutatingPerLine.get(edit.pos.line);
 		if (existing) {
 			throw new Error(
 				`Conflicting ops on anchor line ${edit.pos.line}: \`${existing}\` and \`${edit.op}\`. ` +
-					`At most one of set/del/sed is allowed per anchor.`,
+					`At most one of splice/del/sed is allowed per anchor.`,
 			);
 		}
 		mutatingPerLine.set(edit.pos.line, edit.op);
@@ -548,7 +548,7 @@ function maybeAutocorrectEscapedTabIndentation(edits: AtomEdit[], warnings: stri
 	const enabled = Bun.env.PI_HASHLINE_AUTOCORRECT_ESCAPED_TABS !== "0";
 	if (!enabled) return;
 	for (const edit of edits) {
-		if (edit.op !== "set" && edit.op !== "pre" && edit.op !== "post") continue;
+		if (edit.op !== "splice" && edit.op !== "pre" && edit.op !== "post") continue;
 		if (edit.lines.length === 0) continue;
 		const hasEscapedTabs = edit.lines.some(line => line.includes("\\t"));
 		if (!hasEscapedTabs) continue;
@@ -666,7 +666,7 @@ export function applyAtomEdits(
 					replacementSet = true;
 					anchorDeleted = true;
 					break;
-				case "set":
+				case "splice":
 					replacement = edit.lines.length === 0 ? [""] : [...edit.lines];
 					replacementSet = true;
 					anchorMutated = true;

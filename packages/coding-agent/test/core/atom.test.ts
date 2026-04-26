@@ -16,10 +16,10 @@ function tag(line: number, content: string): Anchor {
 	return { line, hash: computeLineHash(line, content) };
 }
 
-describe("applyAtomEdits — set", () => {
+describe("applyAtomEdits — splice", () => {
 	it("replaces a single line", () => {
 		const content = "aaa\nbbb\nccc";
-		const edits: AtomEdit[] = [{ op: "set", pos: tag(2, "bbb"), lines: ["BBB"] }];
+		const edits: AtomEdit[] = [{ op: "splice", pos: tag(2, "bbb"), lines: ["BBB"] }];
 		const result = applyAtomEdits(content, edits);
 		expect(result.lines).toBe("aaa\nBBB\nccc");
 		expect(result.firstChangedLine).toBe(2);
@@ -27,14 +27,14 @@ describe("applyAtomEdits — set", () => {
 
 	it("expands one line into many", () => {
 		const content = "aaa\nbbb\nccc";
-		const edits: AtomEdit[] = [{ op: "set", pos: tag(2, "bbb"), lines: ["X", "Y", "Z"] }];
+		const edits: AtomEdit[] = [{ op: "splice", pos: tag(2, "bbb"), lines: ["X", "Y", "Z"] }];
 		const result = applyAtomEdits(content, edits);
 		expect(result.lines).toBe("aaa\nX\nY\nZ\nccc");
 	});
 
 	it("rejects on stale hash", () => {
 		const content = "aaa\nbbb\nccc";
-		const edits: AtomEdit[] = [{ op: "set", pos: { line: 2, hash: "ZZ" }, lines: ["BBB"] }];
+		const edits: AtomEdit[] = [{ op: "splice", pos: { line: 2, hash: "ZZ" }, lines: ["BBB"] }];
 		expect(() => applyAtomEdits(content, edits)).toThrow(HashlineMismatchError);
 	});
 });
@@ -73,11 +73,11 @@ describe("applyAtomEdits — pre/post", () => {
 		expect(result.lines).toBe("aaa\nbbb\nNEW\nccc");
 	});
 
-	it("pre + post on same anchor coexist with set", () => {
+	it("pre + post on same anchor coexist with splice", () => {
 		const content = "aaa\nbbb\nccc";
 		const edits: AtomEdit[] = [
 			{ op: "pre", pos: tag(2, "bbb"), lines: ["B"] },
-			{ op: "set", pos: tag(2, "bbb"), lines: ["BBB"] },
+			{ op: "splice", pos: tag(2, "bbb"), lines: ["BBB"] },
 			{ op: "post", pos: tag(2, "bbb"), lines: ["A"] },
 		];
 		const result = applyAtomEdits(content, edits);
@@ -139,36 +139,36 @@ describe("resolveAtomToolEdit — loc syntax", () => {
 		expect(result.lines).toBe("PRE\naaa\nBBB\nPOST");
 	});
 
-	it('loc:"$" rejects set', () => {
-		expect(() => resolveAtomToolEdit({ loc: "$", set: ["X"] })).toThrow(/supports pre, post, and sed/);
+	it('loc:"$" rejects splice', () => {
+		expect(() => resolveAtomToolEdit({ loc: "$", splice: ["X"] })).toThrow(/supports pre, post, and sed/);
 	});
 
 	it('loc:"^" is no longer supported', () => {
 		expect(() => resolveAtomToolEdit({ loc: "^", pre: ["ZZZ"] })).toThrow();
 	});
 
-	it("expands pre + set + post from one entry", () => {
+	it("expands pre + splice + post from one entry", () => {
 		const content = "aaa\nbbb\nccc";
 		const loc = `2${computeLineHash(2, "bbb")}`;
-		const resolved = resolveAtomToolEdit({ loc, pre: ["B"], set: ["BBB"], post: ["A"] });
+		const resolved = resolveAtomToolEdit({ loc, pre: ["B"], splice: ["BBB"], post: ["A"] });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("aaa\nB\nBBB\nA\nccc");
 	});
 
-	it("set: [] deletes the anchor line", () => {
+	it("splice: [] deletes the anchor line", () => {
 		const content = "aaa\nbbb\nccc";
 		const loc = `2${computeLineHash(2, "bbb")}`;
-		const resolved = resolveAtomToolEdit({ loc, set: [] });
+		const resolved = resolveAtomToolEdit({ loc, splice: [] });
 		expect(resolved[0]?.op).toBe("del");
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("aaa\nccc");
 	});
 
-	it('set:[""] preserves a blank line', () => {
+	it('splice: [""] preserves a blank line', () => {
 		const content = "aaa\nbbb\nccc";
 		const loc = `2${computeLineHash(2, "bbb")}`;
-		const resolved = resolveAtomToolEdit({ loc, set: [""] });
-		expect(resolved[0]?.op).toBe("set");
+		const resolved = resolveAtomToolEdit({ loc, splice: [""] });
+		expect(resolved[0]?.op).toBe("splice");
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("aaa\n\nccc");
 	});
@@ -176,16 +176,16 @@ describe("resolveAtomToolEdit — loc syntax", () => {
 	it("ignores null optional verb fields", () => {
 		const content = "aaa\nbbb\nccc";
 		const loc = `2${computeLineHash(2, "bbb")}`;
-		const toolEdit = { loc, pre: null, set: "BBB", post: null } as unknown as AtomToolEdit;
+		const toolEdit = { loc, pre: null, splice: "BBB", post: null } as unknown as AtomToolEdit;
 		const resolved = resolveAtomToolEdit(toolEdit);
-		expect(resolved).toEqual([{ op: "set", pos: tag(2, "bbb"), lines: ["BBB"] }]);
+		expect(resolved).toEqual([{ op: "splice", pos: tag(2, "bbb"), lines: ["BBB"] }]);
 
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("aaa\nBBB\nccc");
 	});
 
 	it("supports path override inside loc", () => {
-		const resolved = resolveAtomEntryPaths([{ loc: "a.ts:1ab", set: ["X"] }], undefined);
+		const resolved = resolveAtomEntryPaths([{ loc: "a.ts:1ab", splice: ["X"] }], undefined);
 		expect(resolved[0]?.path).toBe("a.ts");
 		expect(resolved[0]?.loc).toBe("1ab");
 	});
@@ -194,7 +194,7 @@ describe("resolveAtomToolEdit — loc syntax", () => {
 describe("applyAtomEdits — out of range", () => {
 	it("rejects line beyond file length", () => {
 		const content = "aaa\nbbb";
-		const edits: AtomEdit[] = [{ op: "set", pos: { line: 99, hash: "ZZ" }, lines: ["x"] }];
+		const edits: AtomEdit[] = [{ op: "splice", pos: { line: 99, hash: "ZZ" }, lines: ["x"] }];
 		expect(() => applyAtomEdits(content, edits)).toThrow(/does not exist/);
 	});
 });
@@ -203,7 +203,7 @@ describe("parseAnchor (atom tolerant) + applyAtomEdits", () => {
 	it("surfaces correct anchor + content when the model invents an out-of-alphabet hash", () => {
 		const content = "alpha\nbravo\ncharlie";
 		// `XG` is not in the alphabet; should be rejected with the actual anchor exposed.
-		const toolEdit = { path: "a.ts", loc: "2XG", set: ["BRAVO"] };
+		const toolEdit = { path: "a.ts", loc: "2XG", splice: ["BRAVO"] };
 		const resolved = resolveAtomToolEdit(toolEdit);
 		expect(() => applyAtomEdits(content, resolved)).toThrow(HashlineMismatchError);
 		try {
@@ -218,26 +218,26 @@ describe("parseAnchor (atom tolerant) + applyAtomEdits", () => {
 
 	it("surfaces correct anchor + content when the model omits the hash entirely", () => {
 		const content = "alpha\nbravo\ncharlie";
-		const toolEdit = { path: "a.ts", loc: "2", set: ["BRAVO"] };
+		const toolEdit = { path: "a.ts", loc: "2", splice: ["BRAVO"] };
 		const resolved = resolveAtomToolEdit(toolEdit);
 		expect(() => applyAtomEdits(content, resolved)).toThrow(HashlineMismatchError);
 	});
 
 	it("surfaces correct anchor when the model uses pipe-separator (LINE|content) form", () => {
 		const content = "alpha\nbravo\ncharlie";
-		const toolEdit = { path: "a.ts", loc: "2|bravo", set: ["BRAVO"] };
+		const toolEdit = { path: "a.ts", loc: "2|bravo", splice: ["BRAVO"] };
 		const resolved = resolveAtomToolEdit(toolEdit);
 		expect(() => applyAtomEdits(content, resolved)).toThrow(HashlineMismatchError);
 	});
 
 	it("throws a usage-style error when no line number can be extracted", () => {
-		const toolEdit = { path: "a.ts", loc: "  if (!x) return;", set: ["x"] };
+		const toolEdit = { path: "a.ts", loc: "  if (!x) return;", splice: ["x"] };
 		expect(() => resolveAtomToolEdit(toolEdit)).toThrow(/Could not find a line number/);
 	});
 });
 describe("atom range locators", () => {
-	it("resolveAtomToolEdit rejects range loc with set", () => {
-		expect(() => resolveAtomToolEdit({ loc: "1xx-4yy", set: ["X"] })).toThrow(/does not support line ranges/);
+	it("resolveAtomToolEdit rejects range loc with splice", () => {
+		expect(() => resolveAtomToolEdit({ loc: "1xx-4yy", splice: ["X"] })).toThrow(/does not support line ranges/);
 	});
 
 	it("resolveAtomToolEdit rejects range loc even when the verb would otherwise be valid", () => {
@@ -245,7 +245,7 @@ describe("atom range locators", () => {
 	});
 
 	it("resolveAtomEntryPaths still peels off a path override before range validation", () => {
-		const [resolved] = resolveAtomEntryPaths([{ loc: "a.ts:1xx-4yy", set: ["X"] }], undefined);
+		const [resolved] = resolveAtomEntryPaths([{ loc: "a.ts:1xx-4yy", splice: ["X"] }], undefined);
 		expect(resolved?.path).toBe("a.ts");
 		expect(resolved?.loc).toBe("1xx-4yy");
 		expect(() => resolveAtomToolEdit(resolved!)).toThrow(/does not support line ranges/);
@@ -257,7 +257,7 @@ describe("atom range locators", () => {
 		// must not be mistaken for range syntax.
 		const content = "alpha\nbravo\ncharlie";
 		const loc = `2${computeLineHash(2, "bravo")}|  for (let i = 0; i--; ...) {`;
-		const resolved = resolveAtomToolEdit({ loc, set: ["BRAVO"] });
+		const resolved = resolveAtomToolEdit({ loc, splice: ["BRAVO"] });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("alpha\nBRAVO\ncharlie");
 	});
@@ -323,11 +323,11 @@ describe("applyAtomEdits — sed", () => {
 		expect(result.lines).toBe("aaa\nBEFORE\nFOO\nAFTER\nccc");
 	});
 
-	it("prefers set when sed is also present on the same anchor", () => {
+	it("prefers splice when sed is also present on the same anchor", () => {
 		const content = "aaa\nfoo\nccc";
 		const loc = `2${computeLineHash(2, "foo")}`;
-		const resolved = resolveAtomToolEdit({ loc, set: ["X"], sed: "s/foo/Y/" });
-		// Models sometimes duplicate intent on the same line; the explicit `set`
+		const resolved = resolveAtomToolEdit({ loc, splice: ["X"], sed: "s/foo/Y/" });
+		// Models sometimes duplicate intent on the same line; the explicit `splice`
 		// wins and the redundant `sed` is dropped silently.
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("aaa\nX\nccc");
@@ -376,10 +376,10 @@ describe("applyAtomEdits — sed", () => {
 		expect(() => applyAtomEdits(content, resolved)).toThrow(/failed to compile/);
 	});
 
-	it("treats empty `set: []` as no-op when paired with sed", () => {
+	it("treats empty `splice: []` as no-op when paired with sed", () => {
 		const content = "aaa\nfoo\nccc";
 		const loc = `2${computeLineHash(2, "foo")}`;
-		const resolved = resolveAtomToolEdit({ loc, set: [], sed: "s/foo/FOO/" });
+		const resolved = resolveAtomToolEdit({ loc, splice: [], sed: "s/foo/FOO/" });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("aaa\nFOO\nccc");
 	});
