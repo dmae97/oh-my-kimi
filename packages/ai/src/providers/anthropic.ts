@@ -31,7 +31,7 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "../types";
-import { isAnthropicOAuthToken, normalizeToolCallId, resolveCacheRetention } from "../utils";
+import { isAnthropicOAuthToken, isRecord, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { isFoundryEnabled } from "../utils/foundry";
@@ -40,6 +40,7 @@ import { createWatchdog, getStreamFirstEventTimeoutMs } from "../utils/idle-iter
 import { parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { isCopilotRetryableError } from "../utils/retry";
+import { NO_STRICT } from "../utils/schema";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -1671,16 +1672,22 @@ function convertTools(tools: Tool[], isOAuthToken: boolean): Anthropic.Messages.
 	if (!tools) return [];
 
 	return tools.map(tool => {
-		const jsonSchema = tool.parameters as any; // TypeBox already generates JSON Schema
+		const jsonSchema = tool.parameters as Record<string, unknown>;
+		const properties = isRecord(jsonSchema.properties) ? jsonSchema.properties : {};
+		const required = Array.isArray(jsonSchema.required)
+			? jsonSchema.required.filter((entry): entry is string => typeof entry === "string")
+			: [];
+		const strict = !NO_STRICT && tool.strict !== false;
 
 		return {
 			name: isOAuthToken ? applyClaudeToolPrefix(tool.name) : tool.name,
 			description: tool.description || "",
 			input_schema: {
 				type: "object" as const,
-				properties: jsonSchema.properties || {},
-				required: jsonSchema.required || [],
+				properties,
+				required,
 			},
+			...(strict ? { strict: true } : {}),
 		};
 	});
 }
