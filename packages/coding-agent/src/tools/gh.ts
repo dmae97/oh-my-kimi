@@ -1858,7 +1858,7 @@ export class GhRepoViewTool implements AgentTool<typeof ghRepoViewSchema, GhTool
 	readonly label = "GitHub Repo";
 	readonly description = prompt.render(ghRepoViewDescription);
 	readonly parameters = ghRepoViewSchema;
-	readonly strict = false;
+	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -1899,7 +1899,7 @@ export class GhIssueViewTool implements AgentTool<typeof ghIssueViewSchema, GhTo
 	readonly label = "GitHub Issue";
 	readonly description = prompt.render(ghIssueViewDescription);
 	readonly parameters = ghIssueViewSchema;
-	readonly strict = false;
+	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -1936,7 +1936,7 @@ export class GhPrViewTool implements AgentTool<typeof ghPrViewSchema, GhToolDeta
 	readonly label = "GitHub PR";
 	readonly description = prompt.render(ghPrViewDescription);
 	readonly parameters = ghPrViewSchema;
-	readonly strict = false;
+	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -1980,7 +1980,7 @@ export class GhPrDiffTool implements AgentTool<typeof ghPrDiffSchema, GhToolDeta
 	readonly label = "GitHub PR Diff";
 	readonly description = prompt.render(ghPrDiffDescription);
 	readonly parameters = ghPrDiffSchema;
-	readonly strict = false;
+	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -2029,7 +2029,7 @@ export class GhPrCheckoutTool implements AgentTool<typeof ghPrCheckoutSchema, Gh
 	readonly label = "GitHub PR Checkout";
 	readonly description = prompt.render(ghPrCheckoutDescription);
 	readonly parameters = ghPrCheckoutSchema;
-	readonly strict = false;
+	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -2160,7 +2160,7 @@ export class GhPrPushTool implements AgentTool<typeof ghPrPushSchema, GhToolDeta
 	readonly label = "GitHub PR Push";
 	readonly description = prompt.render(ghPrPushDescription);
 	readonly parameters = ghPrPushSchema;
-	readonly strict = false;
+	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -2221,7 +2221,7 @@ export class GhSearchIssuesTool implements AgentTool<typeof ghSearchIssuesSchema
 	readonly label = "GitHub Issue Search";
 	readonly description = prompt.render(ghSearchIssuesDescription);
 	readonly parameters = ghSearchIssuesSchema;
-	readonly strict = false;
+	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -2256,7 +2256,7 @@ export class GhSearchPrsTool implements AgentTool<typeof ghSearchPrsSchema, GhTo
 	readonly label = "GitHub PR Search";
 	readonly description = prompt.render(ghSearchPrsDescription);
 	readonly parameters = ghSearchPrsSchema;
-	readonly strict = false;
+	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -2291,7 +2291,7 @@ export class GhRunWatchTool implements AgentTool<typeof ghRunWatchSchema, GhTool
 	readonly label = "GitHub Run Watch";
 	readonly description = prompt.render(ghRunWatchDescription);
 	readonly parameters = ghRunWatchSchema;
-	readonly strict = false;
+	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {}
 

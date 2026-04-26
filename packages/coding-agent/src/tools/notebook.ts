@@ -66,7 +66,7 @@ export class NotebookTool implements AgentTool<typeof notebookSchema, NotebookTo
 	readonly label = "Notebook";
 	readonly description = "Edit, insert, or delete cells in Jupyter notebooks (.ipynb). cell_index is 0-based.";
 	readonly parameters = notebookSchema;
-	readonly strict = false;
+	readonly strict = true;
 	readonly concurrency = "exclusive";
 
 	constructor(private readonly session: ToolSession) {}

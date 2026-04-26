@@ -400,18 +400,25 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(properties.nonEmpty.minItems).toBe(1);
 	});
 
-	it("marks at most twenty Anthropic tools strict", async () => {
-		const tools: Tool[] = Array.from({ length: 25 }, (_, index) => ({
-			name: `tool_${index}`,
-			description: "test tool",
-			parameters: {
-				type: "object",
-				properties: {
-					requiredValue: { type: "string" },
-				},
-				required: ["requiredValue"],
-			} as unknown as TSchema,
-		}));
+	it("strips minItems from object-typed property schemas (Anthropic rejects them)", async () => {
+		const tools: Tool[] = [
+			{
+				name: "weird",
+				description: "nested object with stray minItems",
+				parameters: {
+					type: "object",
+					properties: {
+						block: {
+							type: "object",
+							properties: { a: { type: "string" } },
+							required: ["a"],
+							minItems: 1,
+						},
+					},
+					required: ["block"],
+				} as unknown as TSchema,
+			},
+		];
 
 		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
 			systemPrompt: "Stay concise.",
@@ -419,60 +426,112 @@ describe("Anthropic request fingerprint alignment", () => {
 			tools,
 		})) as {
 			tools?: Array<{
-				strict?: boolean;
-				input_schema?: { required?: string[]; properties?: Record<string, unknown> };
+				input_schema?: { properties?: Record<string, unknown> };
 			}>;
 		};
 
-		const emittedTools = payload.tools ?? [];
-		const strictTools = emittedTools.filter(tool => tool.strict === true);
-
-		expect(strictTools).toHaveLength(20);
-		expect(emittedTools.slice(0, 20).every(tool => tool.strict === true)).toBe(true);
-		expect(emittedTools.slice(20).every(tool => tool.strict !== true)).toBe(true);
-		expect(strictTools[0]?.input_schema?.required).toEqual(["requiredValue"]);
+		const block = payload.tools?.[0]?.input_schema?.properties?.block as Record<string, unknown> | undefined;
+		expect(block?.type).toBe("object");
+		expect(block).not.toHaveProperty("minItems");
 	});
 
-	it("converts excess Anthropic strict optionals to nullable within the union budget", async () => {
-		const tools: Tool[] = Array.from({ length: 10 }, (_, index) => ({
-			name: `nullable_tool_${index}`,
-			description: "test tool",
-			parameters: {
-				type: "object",
-				properties: {
-					requiredValue: { type: "string" },
-					optional0: { type: "number" },
-					optional1: { type: "number" },
-					optional2: { type: "number" },
-					optional3: { type: "number" },
-					optional4: { type: "number" },
-				},
-				required: ["requiredValue"],
-			} as unknown as TSchema,
-		}));
+	it("marks only the Anthropic strict allowlist strict", async () => {
+		const tools: Tool[] = [
+			...(["bash", "python", "edit", "find", "write"] as const).map(name => ({
+				name,
+				description: `${name} tool`,
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: { requiredValue: { type: "string" } },
+					required: ["requiredValue"],
+				} as unknown as TSchema,
+			})),
+			...(["grep", "read", "task", "todo_write", "web_search", "ast_grep"] as const).map(name => ({
+				name,
+				description: `${name} tool`,
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: { requiredValue: { type: "string" } },
+					required: ["requiredValue"],
+				} as unknown as TSchema,
+			})),
+		];
 
-		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
-			systemPrompt: "Stay concise.",
-			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
-			tools,
-		})) as {
-			tools?: Array<{
-				strict?: boolean;
-				input_schema?: { required?: string[]; properties?: Record<string, unknown> };
-			}>;
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: "Stay concise.",
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				tools,
+			},
+			{ isOAuth: false },
+		)) as {
+			tools?: Array<{ name?: string; strict?: boolean; input_schema?: { required?: string[] } }>;
 		};
 
-		const emittedTools = payload.tools ?? [];
-		const strictTools = emittedTools.filter(tool => tool.strict === true);
-		const fifthStrictProperties = strictTools[4]?.input_schema?.properties as Record<string, unknown>;
-		const convertedOptional = fifthStrictProperties.optional4 as { anyOf?: Array<Record<string, unknown>> };
+		const strictNames = (payload.tools ?? []).filter(tool => tool.strict === true).map(tool => tool.name);
 
-		expect(strictTools).toHaveLength(8);
-		expect(emittedTools.slice(0, 8).every(tool => tool.strict === true)).toBe(true);
-		expect(emittedTools.slice(8).every(tool => tool.strict !== true)).toBe(true);
-		expect(strictTools[0]?.input_schema?.required).toEqual(["requiredValue"]);
-		expect(strictTools[4]?.input_schema?.required).toEqual(["requiredValue", "optional4"]);
-		expect(convertedOptional.anyOf).toContainEqual({ type: "null" });
+		expect(strictNames).toEqual(["bash", "python", "edit", "find", "write"]);
+		expect(payload.tools?.find(tool => tool.name === "bash")?.input_schema?.required).toEqual(["requiredValue"]);
+	});
+
+	it("honors strict=false for allowlisted Anthropic tools", async () => {
+		const tools: Tool[] = [
+			{
+				name: "bash",
+				description: "bash tool",
+				strict: false,
+				parameters: {
+					type: "object",
+					properties: { requiredValue: { type: "string" } },
+					required: ["requiredValue"],
+				} as unknown as TSchema,
+			},
+			{
+				name: "python",
+				description: "python tool",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: { requiredValue: { type: "string" } },
+					required: ["requiredValue"],
+				} as unknown as TSchema,
+			},
+			{
+				name: "write",
+				description: "write tool",
+				parameters: {
+					type: "object",
+					properties: { requiredValue: { type: "string" } },
+					required: ["requiredValue"],
+				} as unknown as TSchema,
+			},
+			{
+				name: "grep",
+				description: "grep tool",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: { requiredValue: { type: "string" } },
+					required: ["requiredValue"],
+				} as unknown as TSchema,
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: "Stay concise.",
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				tools,
+			},
+			{ isOAuth: false },
+		)) as { tools?: Array<{ name?: string; strict?: boolean }> };
+
+		const strictNames = (payload.tools ?? []).filter(tool => tool.strict === true).map(tool => tool.name);
+		expect(strictNames).toEqual(["python", "write"]);
 	});
 
 	it("drops fine-grained tool-streaming beta from default Anthropic client options", () => {

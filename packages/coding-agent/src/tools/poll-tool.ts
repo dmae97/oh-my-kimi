@@ -35,7 +35,7 @@ export class PollTool implements AgentTool<typeof pollSchema, PollToolDetails> {
 	readonly label = "Poll";
 	readonly description: string;
 	readonly parameters = pollSchema;
-	readonly strict = false;
+	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(pollDescription);

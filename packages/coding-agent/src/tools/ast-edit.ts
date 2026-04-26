@@ -72,7 +72,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 	readonly label = "AST Edit";
 	readonly description: string;
 	readonly parameters = astEditSchema;
-	readonly strict = false;
+	readonly strict = true;
 	readonly deferrable = true;
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(astEditDescription);

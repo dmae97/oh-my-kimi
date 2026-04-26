@@ -51,7 +51,7 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 	readonly label = "Checkpoint";
 	readonly description: string;
 	readonly parameters = checkpointSchema;
-	readonly strict = false;
+	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(checkpointDescription);
@@ -93,7 +93,7 @@ export class RewindTool implements AgentTool<typeof rewindSchema, RewindToolDeta
 	readonly label = "Rewind";
 	readonly description: string;
 	readonly parameters = rewindSchema;
-	readonly strict = false;
+	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(rewindDescription);

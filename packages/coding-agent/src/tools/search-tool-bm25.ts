@@ -141,7 +141,7 @@ export class SearchToolBm25Tool implements AgentTool<typeof searchToolBm25Schema
 		return renderSearchToolBm25Description(getDiscoverableMCPToolsForDescription(this.session));
 	}
 	readonly parameters = searchToolBm25Schema;
-	readonly strict = false;
+	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {}
 

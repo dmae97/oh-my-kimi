@@ -43,7 +43,7 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 	readonly label = "InspectImage";
 	readonly description: string;
 	readonly parameters = inspectImageSchema;
-	readonly strict = false;
+	readonly strict = true;
 
 	constructor(
 		private readonly session: ToolSession,
