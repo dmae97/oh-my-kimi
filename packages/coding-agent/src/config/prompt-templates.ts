@@ -9,7 +9,7 @@ import {
 	parseFrontmatter,
 	prompt,
 } from "@oh-my-pi/pi-utils";
-import { computeLineHash } from "../edit/line-hash";
+import { computeLineHash, HASHLINE_CONTENT_SEPARATOR } from "../edit/line-hash";
 import { jtdToTypeScript } from "../tools/jtd-to-typescript";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
 
@@ -55,11 +55,11 @@ prompt.registerHelper("href", (lineNum: unknown, content: unknown): string => {
 
 /**
  * {{hline lineNum "content"}} — format a full read-style line with prefix.
- * Returns `"lineNumBIGRAM\tcontent"` (tab between anchor and content).
+ * Returns `"lineNumBIGRAM:content"` (colon between anchor and content).
  */
 prompt.registerHelper("hline", (lineNum: unknown, content: unknown): string => {
 	const { ref, text } = formatHashlineRef(lineNum, content);
-	return `${ref}\t${text}`;
+	return `${ref}${HASHLINE_CONTENT_SEPARATOR}${text}`;
 });
 
 /**

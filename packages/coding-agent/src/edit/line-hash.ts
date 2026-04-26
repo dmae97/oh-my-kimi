@@ -726,6 +726,8 @@ export const CHUNK_BIGRAMS_COUNT = CHUNK_BIGRAMS.length;
  */
 export const HASHLINE_BIGRAM_RE_SRC = `(?:${HASHLINE_BIGRAMS.join("|")})`;
 
+export const HASHLINE_CONTENT_SEPARATOR = ":";
+
 const RE_SIGNIFICANT = /[\p{L}\p{N}]/u;
 
 /**
@@ -748,7 +750,7 @@ export function computeLineHash(idx: number, line: string): string {
 
 /**
  * Formats an anchor reference given a line number and its text.
- * Returns `LINENUMBIGRAM` (e.g., `42nd`) — no separator between number and bigram.
+ * Returns `LINE+ID` (e.g., `42nd`) — no separator between number and bigram.
  */
 export function formatLineHash(line: number, lines: string): string {
 	return `${line}${computeLineHash(line, lines)}`;
@@ -757,8 +759,8 @@ export function formatLineHash(line: number, lines: string): string {
 /**
  * Format file text with hashline prefixes for display.
  *
- * Each line becomes `LINENUMBIGRAM\tTEXT` where LINENUM is 1-indexed.
- * No padding on line numbers; tab separator between anchor and content.
+ * Each line becomes `LINE+ID:TEXT` where LINENUM is 1-indexed.
+ * No padding on line numbers; colon separator between anchor and content.
  *
  * @param text - Raw file text string
  * @param startLine - First line number (1-indexed, defaults to 1)
@@ -767,7 +769,7 @@ export function formatLineHash(line: number, lines: string): string {
  * @example
  * ```
  * formatHashLines("function hi() {\n  return;\n}")
- * // "1th\tfunction hi() {\n2er\t  return;\n3in\t}"
+ * // "1th:function hi() {\n2er:  return;\n3in:}"
  * ```
  */
 export function formatHashLines(text: string, startLine = 1): string {
@@ -775,7 +777,7 @@ export function formatHashLines(text: string, startLine = 1): string {
 	return lines
 		.map((line, i) => {
 			const num = startLine + i;
-			return `${formatLineHash(num, line)}\t${line}`;
+			return `${formatLineHash(num, line)}${HASHLINE_CONTENT_SEPARATOR}${line}`;
 		})
 		.join("\n");
 }

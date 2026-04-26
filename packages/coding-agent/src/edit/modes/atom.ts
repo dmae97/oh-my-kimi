@@ -140,7 +140,7 @@ type ParsedAtomLoc =
  *
  * Tolerant: on a malformed reference we still try to extract a 1-indexed line
  * number from the leading digits so the validator can surface the *correct*
- * `LINEHASH\tcontent` for the user. The bogus hash is preserved in the returned
+ * `LINEHASH:content` for the user. The bogus hash is preserved in the returned
  * anchor so the validator emits a content-rich mismatch error.
  *
  * If we cannot recover even a line number, throw a usage-style error with the

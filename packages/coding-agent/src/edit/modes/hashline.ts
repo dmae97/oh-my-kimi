@@ -8,8 +8,8 @@
  * if the file has changed since the caller last read it, hash mismatches are caught
  * before any mutation occurs.
  *
- * Displayed format: `LINENUMBIGRAM\tTEXT`
- * Reference format: `"LINENUMBIGRAM"` (e.g. `"1ab"`)
+ * Displayed format: `LINE+ID:TEXT`
+ * Reference format: `"LINE+ID"` (e.g. `"1ab"`)
  *
  * In tool JSON, each edit's `content` is `string[]` (one string per logical line) or
  * `null` to delete the targeted range.
@@ -28,7 +28,7 @@ import { resolveToCwd } from "../../tools/path-utils";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
 import { formatCodeFrameLine } from "../../tools/render-utils";
 import { generateDiffString } from "../diff";
-import { computeLineHash, formatLineHash, HASHLINE_BIGRAM_RE_SRC } from "../line-hash";
+import { computeLineHash, formatLineHash, HASHLINE_BIGRAM_RE_SRC, HASHLINE_CONTENT_SEPARATOR } from "../line-hash";
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "../normalize";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
 
@@ -47,11 +47,16 @@ export type HashlineEdit =
 	| { op: "append_file"; lines: string[] }
 	| { op: "prepend_file"; lines: string[] };
 
-// Tight prefix matchers for the new format `LINENUMBIGRAM\tcontent`. Hard
-// cutover — do not accept legacy `LINENUM#BIGRAM:content`. The terminator
-// must be a literal tab character; line-number digits are mandatory.
-const HASHLINE_PREFIX_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*(?:\\+\\s*)?\\d+${HASHLINE_BIGRAM_RE_SRC}\t`);
-const HASHLINE_PREFIX_PLUS_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*\\+\\s*\\d+${HASHLINE_BIGRAM_RE_SRC}\t`);
+// Tight prefix matchers for the new format `LINE+ID:content`. Hard
+// cutover — do not accept legacy `LINENUM#BIGRAM:content` or tab separators.
+// The terminator must be a literal colon; line-number digits are mandatory.
+const HASHLINE_CONTENT_SEPARATOR_RE = HASHLINE_CONTENT_SEPARATOR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const HASHLINE_PREFIX_RE = new RegExp(
+	`^\\s*(?:>>>|>>)?\\s*(?:\\+\\s*)?\\d+${HASHLINE_BIGRAM_RE_SRC}${HASHLINE_CONTENT_SEPARATOR_RE}`,
+);
+const HASHLINE_PREFIX_PLUS_RE = new RegExp(
+	`^\\s*(?:>>>|>>)?\\s*\\+\\s*\\d+${HASHLINE_BIGRAM_RE_SRC}${HASHLINE_CONTENT_SEPARATOR_RE}`,
+);
 const DIFF_PLUS_RE = /^[+](?![+])/;
 const READ_TRUNCATION_NOTICE_RE = /^\[(?:Showing lines \d+-\d+ of \d+|\d+ more lines? in (?:file|\S+))\b.*\bsel=L\d+/;
 
@@ -369,7 +374,7 @@ function createHashlineChunkEmitter(
 }
 
 function formatHashlineStreamLine(lineNumber: number, line: string): string {
-	return `${formatLineHash(lineNumber, line)}\t${line}`;
+	return `${formatLineHash(lineNumber, line)}${HASHLINE_CONTENT_SEPARATOR}${line}`;
 }
 
 function isReadableStream(value: unknown): value is ReadableStream<Uint8Array> {
@@ -547,7 +552,7 @@ export class HashlineMismatchError extends Error {
 	/**
 	 * User-visible variant of {@link formatMessage} — omits the bigram fingerprint
 	 * and uses a `│` gutter so TUI rendering is clean. The model still receives
-	 * the full `LINENUMBIGRAM:content` form via {@link Error.message}.
+	 * the full `LINE+ID:content` form via {@link Error.message}.
 	 */
 	get displayMessage(): string {
 		return HashlineMismatchError.formatDisplayMessage(this.mismatches, this.fileLines);
@@ -1072,11 +1077,11 @@ function syncNewLineCounters(counters: CompactPreviewCounters, lineNumber: numbe
 }
 
 function formatCompactHashlineLine(kind: " " | "+", lineNumber: number, content: string): string {
-	return `${kind}${lineNumber}${computeLineHash(lineNumber, content)}\t${content}`;
+	return `${kind}${lineNumber}${computeLineHash(lineNumber, content)}${HASHLINE_CONTENT_SEPARATOR}${content}`;
 }
 
 function formatCompactRemovedLine(lineNumber: number, content: string): string {
-	return `-${lineNumber}${HASHLINE_PREVIEW_PLACEHOLDER}\t${content}`;
+	return `-${lineNumber}${HASHLINE_PREVIEW_PLACEHOLDER}${HASHLINE_CONTENT_SEPARATOR}${content}`;
 }
 
 function formatCompactPreviewLine(line: string, counters: CompactPreviewCounters): { kind: DiffRunKind; text: string } {

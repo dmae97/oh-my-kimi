@@ -8,7 +8,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { computeLineHash } from "../edit/line-hash";
+import { formatHashLines } from "../edit/line-hash";
 import {
 	type ChunkReadTarget,
 	formatChunkedRead,
@@ -93,8 +93,7 @@ function prependLineNumbers(text: string, startNum: number): string {
 }
 
 function prependHashLines(text: string, startNum: number): string {
-	const textLines = text.split("\n");
-	return textLines.map((line, i) => `${startNum + i}${computeLineHash(startNum + i, line)}\t${line}`).join("\n");
+	return formatHashLines(text, startNum);
 }
 
 function formatTextWithMode(

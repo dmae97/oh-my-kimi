@@ -59,7 +59,7 @@ export interface WriteToolDetails {
 /**
  * Strip hashline display prefixes from write content.
  *
- * Only active when hashline edit mode is enabled — the model sees `LINE+ID\t`
+ * Only active when hashline edit mode is enabled — the model sees `LINE+ID:`
  * prefixes in read output and sometimes copies them into write content.
  */
 function stripWriteContent(session: ToolSession, content: string): { text: string; stripped: boolean } {
@@ -418,7 +418,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		return untilAborted(signal, async () => {
-			// Strip hashline display prefixes (LINE+ID\t) if the model copied them from read output
+			// Strip hashline display prefixes (LINE+ID:) if the model copied them from read output
 			const { text: cleanContent, stripped } = stripWriteContent(this.session, content);
 			const resolvedArchivePath = await this.#resolveArchiveWritePath(path);
 			if (resolvedArchivePath) {

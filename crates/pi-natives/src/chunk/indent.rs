@@ -434,8 +434,8 @@ fn hashline_prefix_len(line: &str) -> Option<usize> {
 	offset += bigram_end;
 	remainder = &remainder[bigram_end..];
 
-	// Anchor terminator is a single tab character.
-	remainder.strip_prefix('\t').map(|_| offset + 1)
+	// Anchor terminator is a single colon character.
+	remainder.strip_prefix(':').map(|_| offset + 1)
 }
 
 #[cfg(test)]
@@ -535,6 +535,12 @@ mod tests {
 	fn strip_content_prefixes_removes_gutter_and_meta_rows() {
 		let input = "10 | fn main() {\n   │ <.fn_main#ABCD>\n11 |     println!(\"hi\");\n12 | }";
 		assert_eq!(strip_content_prefixes(input), "fn main() {\n\n    println!(\"hi\");\n}");
+	}
+
+	#[test]
+	fn strip_content_prefixes_removes_colon_hashline_prefixes() {
+		let input = "1th:fn main() {\n2er:\tprintln!(\"hi\");\n3in:}";
+		assert_eq!(strip_content_prefixes(input), "fn main() {\n\tprintln!(\"hi\");\n}");
 	}
 
 	#[test]
