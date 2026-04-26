@@ -112,7 +112,7 @@ describe("resolveAtomToolEdit — loc syntax", () => {
 
 	it('loc:"$" + sed substitutes across all lines', () => {
 		const content = "aaa\nfoo\nbar foo";
-		const resolved = resolveAtomToolEdit({ loc: "$", sed: "s/foo/FOO/" });
+		const resolved = resolveAtomToolEdit({ loc: "$", sed: { pat: "foo", rep: "FOO" } });
 		expect(resolved).toHaveLength(1);
 		expect(resolved[0]?.op).toBe("sed_file");
 		const result = applyAtomEdits(content, resolved);
@@ -121,20 +121,20 @@ describe("resolveAtomToolEdit — loc syntax", () => {
 
 	it('loc:"$" + sed preserves trailing newline', () => {
 		const content = "aaa\nbbb\n";
-		const resolved = resolveAtomToolEdit({ loc: "$", sed: "s/bbb/BBB/" });
+		const resolved = resolveAtomToolEdit({ loc: "$", sed: { pat: "bbb", rep: "BBB" } });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("aaa\nBBB\n");
 	});
 
 	it('loc:"$" + sed throws when no line matches', () => {
 		const content = "aaa\nbbb";
-		const resolved = resolveAtomToolEdit({ loc: "$", sed: "s/zzz/yyy/" });
+		const resolved = resolveAtomToolEdit({ loc: "$", sed: { pat: "zzz", rep: "yyy" } });
 		expect(() => applyAtomEdits(content, resolved)).toThrow(/did not match any line/);
 	});
 
 	it('loc:"$" + pre + post + sed combined', () => {
 		const content = "aaa\nbbb";
-		const resolved = resolveAtomToolEdit({ loc: "$", pre: ["PRE"], sed: "s/bbb/BBB/", post: ["POST"] });
+		const resolved = resolveAtomToolEdit({ loc: "$", pre: ["PRE"], sed: { pat: "bbb", rep: "BBB" }, post: ["POST"] });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("PRE\naaa\nBBB\nPOST");
 	});
@@ -266,7 +266,7 @@ describe("atom range locators", () => {
 		// Mimics a real failure: model wrote `image-input.ts:263ti| " const data: x"`.
 		// `lastIndexOf(":")` would have picked the colon inside `data:` and broken the split.
 		const [resolved] = resolveAtomEntryPaths(
-			[{ loc: 'image-input.ts:263ti| " const data: x"', sed: "s/x/y/" }],
+			[{ loc: 'image-input.ts:263ti| " const data: x"', sed: { pat: "x", rep: "y" } }],
 			undefined,
 		);
 		expect(resolved?.path).toBe("image-input.ts");
@@ -275,27 +275,28 @@ describe("atom range locators", () => {
 });
 
 describe("applyAtomEdits — sed", () => {
-	it("applies a regex substitution to the anchored line", () => {
+	it("applies a regex substitution to the anchored line (global by default)", () => {
 		const content = "aaa\nfoo bar foo\nccc";
 		const loc = `2${computeLineHash(2, "foo bar foo")}`;
-		const resolved = resolveAtomToolEdit({ loc, sed: "s/foo/baz/" });
+		const resolved = resolveAtomToolEdit({ loc, sed: { pat: "foo", rep: "baz" } });
 		expect(resolved[0]?.op).toBe("sed");
 		const result = applyAtomEdits(content, resolved);
-		expect(result.lines).toBe("aaa\nbaz bar foo\nccc");
+		expect(result.lines).toBe("aaa\nbaz bar baz\nccc");
 	});
 
-	it("applies the global flag", () => {
+	it("global is the default and `g: false` opts out", () => {
 		const content = "foo foo foo";
 		const loc = `1${computeLineHash(1, "foo foo foo")}`;
-		const resolved = resolveAtomToolEdit({ loc, sed: "s/foo/bar/g" });
-		const result = applyAtomEdits(content, resolved);
-		expect(result.lines).toBe("bar bar bar");
+		const all = resolveAtomToolEdit({ loc, sed: { pat: "foo", rep: "bar" } });
+		expect(applyAtomEdits(content, all).lines).toBe("bar bar bar");
+		const first = resolveAtomToolEdit({ loc, sed: { pat: "foo", rep: "bar", g: false } });
+		expect(applyAtomEdits(content, first).lines).toBe("bar foo foo");
 	});
 
-	it("supports alternative delimiters", () => {
+	it("replaces with regex-meta-free patterns", () => {
 		const content = "path = /usr/local/bin";
 		const loc = `1${computeLineHash(1, "path = /usr/local/bin")}`;
-		const resolved = resolveAtomToolEdit({ loc, sed: "s|/usr/local|/opt|" });
+		const resolved = resolveAtomToolEdit({ loc, sed: { pat: "/usr/local", rep: "/opt" } });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("path = /opt/bin");
 	});
@@ -303,7 +304,7 @@ describe("applyAtomEdits — sed", () => {
 	it("F flag treats pattern as a literal string", () => {
 		const content = "a.b.c";
 		const loc = `1${computeLineHash(1, "a.b.c")}`;
-		const resolved = resolveAtomToolEdit({ loc, sed: "s/./X/gF" });
+		const resolved = resolveAtomToolEdit({ loc, sed: { pat: ".", rep: "X", F: true } });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("aXbXc");
 	});
@@ -311,14 +312,14 @@ describe("applyAtomEdits — sed", () => {
 	it("throws when pattern does not match the anchor line", () => {
 		const content = "aaa\nbbb";
 		const loc = `2${computeLineHash(2, "bbb")}`;
-		const resolved = resolveAtomToolEdit({ loc, sed: "s/zzz/yyy/" });
+		const resolved = resolveAtomToolEdit({ loc, sed: { pat: "zzz", rep: "yyy" } });
 		expect(() => applyAtomEdits(content, resolved)).toThrow(/did not match line 2/);
 	});
 
 	it("combines with pre and post on the same anchor", () => {
 		const content = "aaa\nfoo\nccc";
 		const loc = `2${computeLineHash(2, "foo")}`;
-		const resolved = resolveAtomToolEdit({ loc, pre: ["BEFORE"], sed: "s/foo/FOO/", post: ["AFTER"] });
+		const resolved = resolveAtomToolEdit({ loc, pre: ["BEFORE"], sed: { pat: "foo", rep: "FOO" }, post: ["AFTER"] });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("aaa\nBEFORE\nFOO\nAFTER\nccc");
 	});
@@ -326,26 +327,11 @@ describe("applyAtomEdits — sed", () => {
 	it("prefers splice when sed is also present on the same anchor", () => {
 		const content = "aaa\nfoo\nccc";
 		const loc = `2${computeLineHash(2, "foo")}`;
-		const resolved = resolveAtomToolEdit({ loc, splice: ["X"], sed: "s/foo/Y/" });
+		const resolved = resolveAtomToolEdit({ loc, splice: ["X"], sed: { pat: "foo", rep: "Y" } });
 		// Models sometimes duplicate intent on the same line; the explicit `splice`
 		// wins and the redundant `sed` is dropped silently.
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("aaa\nX\nccc");
-	});
-
-	it("tolerates a missing leading `s` when the body starts with a valid delimiter", () => {
-		const content = "alpha\nfoo bar\nccc";
-		const loc = `2${computeLineHash(2, "foo bar")}`;
-		const resolved = resolveAtomToolEdit({ loc, sed: "/foo/baz/" });
-		const result = applyAtomEdits(content, resolved);
-		expect(result.lines).toBe("alpha\nbaz bar\nccc");
-	});
-
-	it("rejects malformed sed expressions", () => {
-		const loc = "1ab";
-		expect(() => resolveAtomToolEdit({ loc, sed: "foo/bar/" })).toThrow(/sed delimiter must be|must start with/);
-		expect(() => resolveAtomToolEdit({ loc, sed: "s/foo" })).toThrow(/Expected three/);
-		expect(() => resolveAtomToolEdit({ loc, sed: "s/foo/bar/q" })).toThrow(/unknown sed flag/);
 	});
 
 	it("falls back to literal substring when regex parens consume incorrectly", () => {
@@ -354,7 +340,7 @@ describe("applyAtomEdits — sed", () => {
 		// intent succeed.
 		const content = "return wrap(foo(a, b));";
 		const loc = `1${computeLineHash(1, content)}`;
-		const resolved = resolveAtomToolEdit({ loc, sed: "s/foo(a, b)/foo(b, a)/" });
+		const resolved = resolveAtomToolEdit({ loc, sed: { pat: "foo(a, b)", rep: "foo(b, a)" } });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("return wrap(foo(b, a));");
 		expect(result.warnings?.some(w => w.includes("literal substring substitution"))).toBe(true);
@@ -364,7 +350,7 @@ describe("applyAtomEdits — sed", () => {
 		// Unbalanced `)` is invalid regex; literal fallback recovers.
 		const content = "x = bar());";
 		const loc = `1${computeLineHash(1, content)}`;
-		const resolved = resolveAtomToolEdit({ loc, sed: "s/bar())/baz()/" });
+		const resolved = resolveAtomToolEdit({ loc, sed: { pat: "bar())", rep: "baz()" } });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("x = baz();");
 	});
@@ -372,24 +358,53 @@ describe("applyAtomEdits — sed", () => {
 	it("reports compile error when literal fallback also misses", () => {
 		const content = "hello world";
 		const loc = `1${computeLineHash(1, content)}`;
-		const resolved = resolveAtomToolEdit({ loc, sed: "s/zzz)/baz/" });
+		const resolved = resolveAtomToolEdit({ loc, sed: { pat: "zzz)", rep: "baz" } });
 		expect(() => applyAtomEdits(content, resolved)).toThrow(/rejected/);
 	});
 
 	it("treats empty `splice: []` as no-op when paired with sed", () => {
 		const content = "aaa\nfoo\nccc";
 		const loc = `2${computeLineHash(2, "foo")}`;
-		const resolved = resolveAtomToolEdit({ loc, splice: [], sed: "s/foo/FOO/" });
+		const resolved = resolveAtomToolEdit({ loc, splice: [], sed: { pat: "foo", rep: "FOO" } });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("aaa\nFOO\nccc");
 	});
 
-	it("rejects regex patterns that match empty strings (e.g. `()`)", () => {
-		// Without this guard, `"foo".replace(/()/, "X")` returns `"Xfoo"` and the
-		// replacement is silently prepended instead of substituted.
+	it("zero-length regex matches fall through to literal substring fallback", () => {
+		// `pat: "()"` matches an empty string as regex; instead of erroring we treat it
+		// as the model meaning the literal characters `()`. On a line without those
+		// characters that surfaces as a normal "did not match" error.
 		const content = "hello world";
 		const loc = `1${computeLineHash(1, content)}`;
-		const resolved = resolveAtomToolEdit({ loc, sed: "s/()/X/" });
-		expect(() => applyAtomEdits(content, resolved)).toThrow(/matches an empty string/);
+		const resolved = resolveAtomToolEdit({ loc, sed: { pat: "()", rep: "X" } });
+		expect(() => applyAtomEdits(content, resolved)).toThrow(/did not match line/);
+	});
+
+	it("zero-length regex falls through to literal substring fallback when the literal exists", () => {
+		const content = "call(); foo()";
+		const loc = `1${computeLineHash(1, content)}`;
+		const resolved = resolveAtomToolEdit({ loc, sed: { pat: "()", rep: "(arg)" } });
+		const result = applyAtomEdits(content, resolved);
+		expect(result.lines).toBe("call(arg); foo(arg)");
+	});
+
+	it("rejects sed.pat containing a newline with a splice hint", () => {
+		const loc = "1ab";
+		expect(() => resolveAtomToolEdit({ loc, sed: { pat: "a\nb", rep: "x" } })).toThrow(
+			/must be a single line.*splice/,
+		);
+	});
+
+	it("drops cross-entry `del` when another edit replaces the same anchor", () => {
+		// Models sometimes emit a `splice: []` cleanup alongside a `sed`/`splice` that
+		// already replaces the line. Prefer the replacement and silently drop the del.
+		const content = "aaa\nfoo\nccc";
+		const loc = `2${computeLineHash(2, "foo")}`;
+		const edits = [
+			...resolveAtomToolEdit({ loc, sed: { pat: "foo", rep: "FOO" } }),
+			...resolveAtomToolEdit({ loc, splice: [] }),
+		];
+		const result = applyAtomEdits(content, edits);
+		expect(result.lines).toBe("aaa\nFOO\nccc");
 	});
 });

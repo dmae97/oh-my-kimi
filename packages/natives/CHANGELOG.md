@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Changed local native build profile from `dev` to `local` for non-CI builds, updating the profile used by the build and local build output label
 
 ## [14.4.2] - 2026-04-26
 

@@ -1,6 +1,20 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Removed support for sed-style string expressions and required `sed` to be specified as an object with `pat` and `rep` (and optional `g`, `F`, `i` flags)
+
+### Changed
+
+- Changed atom `sed` replacements to be global by default and require `g:false` for first-match-only replacements
+- Changed anchor validation so multiple `sed` operations can target the same line and run sequentially
+- Changed cross-entry conflict resolution so `del` edits on an anchor are ignored when that line is also replaced by `sed` or `splice` in another edit entry
+
+### Fixed
+
+- Fixed zero-length regex `sed` patterns (for example `()`, `^`, `$`) to fall back to literal substring matching instead of producing insertion-like replacements
+- Fixed `sed` chaining so each edit on the same anchor applies to the latest line state from prior replacements
 
 ## [14.5.1] - 2026-04-26
 

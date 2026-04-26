@@ -12,7 +12,7 @@
  *   { path, loc: "5th",      pre: [...], splice: [...], post: [...] }
  *   { path, loc: "$",        pre:  [...] }                            // prepend to file
  *   { path, loc: "$",        post: [...] }                            // append to file
- *   { path, loc: "$",        sed:  "s/foo/bar/" }                    // sed on every line
+ *   { path, loc: "$",        sed:  { pat, rep, g?, F?, i? } }         // sed on every line
  *
  * `splice: []` on a single-anchor locator deletes that line. `splice:[""]` preserves
  * a blank line. Line ranges are not supported.
@@ -66,10 +66,18 @@ export const atomEditSchema = Type.Object(
 		pre: Type.Optional(textSchema),
 		post: Type.Optional(textSchema),
 		sed: Type.Optional(
-			Type.String({
-				description: "sed-style substitution applied to the anchored line",
-				examples: ["s/foo/bar/", "s|api|API|g", "s/<pat>/<rep>/F"],
-			}),
+			Type.Object(
+				{
+					pat: Type.String({ description: "pattern to find" }),
+					rep: Type.String({ description: "replacement text" }),
+					g: Type.Optional(Type.Boolean({ description: "global replace", default: true })),
+					F: Type.Optional(Type.Boolean({ description: "literal replace", default: false })),
+					i: Type.Optional(Type.Boolean({ description: "ignore case", default: false })),
+				},
+				{
+					additionalProperties: false,
+				},
+			),
 		),
 	},
 	{ additionalProperties: false },
@@ -258,70 +266,48 @@ function extractAnchorContentHint(raw: string): string | undefined {
 	return hint;
 }
 
-function parseSedExpression(raw: string, editIndex: number): SedSpec {
-	if (typeof raw !== "string" || raw.length < 3) {
+function parseSedSpec(input: unknown, editIndex: number): SedSpec {
+	if (input === null || typeof input !== "object" || Array.isArray(input)) {
+		throw new Error(`Edit ${editIndex}: sed must be an object with shape {pat, rep, g?, F?, i?}.`);
+	}
+	const obj = input as Record<string, unknown>;
+	const pat = obj.pat;
+	const rep = obj.rep;
+	if (typeof pat !== "string" || pat.length === 0) {
+		throw new Error(`Edit ${editIndex}: sed.pat must be a non-empty string.`);
+	}
+	if (pat.includes("\n")) {
 		throw new Error(
-			`Edit ${editIndex}: sed expression must start with "s" followed by a delimiter, e.g. "s/foo/bar/".`,
+			`Edit ${editIndex}: sed.pat must be a single line; contains a newline. Use \`splice\` to replace multiple lines, anchoring the first changed line and listing replacement lines in the array.`,
 		);
 	}
-	// Tolerate a missing leading `s`: models occasionally emit `/foo/bar/` directly.
-	// As long as the first character is a valid delimiter, treat the expression as
-	// if `s` was prepended.
-	let bodyStart = 0;
-	if (raw[0] === "s") {
-		bodyStart = 1;
+	if (typeof rep !== "string") {
+		throw new Error(`Edit ${editIndex}: sed.rep must be a string.`);
 	}
-	const delim = raw[bodyStart]!;
-	if (/[\sA-Za-z0-9\\]/.test(delim)) {
-		throw new Error(
-			`Edit ${editIndex}: sed delimiter must be a non-alphanumeric, non-whitespace, non-backslash character (got ${JSON.stringify(delim)}).`,
-		);
-	}
-	const parts: [string, string] = ["", ""];
-	let bucket: 0 | 1 = 0;
-	let i = bodyStart + 1;
-	while (i < raw.length) {
-		const c = raw[i]!;
-		if (c === "\\" && raw[i + 1] === delim) {
-			parts[bucket] += delim;
-			i += 2;
-			continue;
+	const readBool = (key: "g" | "F" | "i", defaultValue: boolean): boolean => {
+		const v = obj[key];
+		if (v === undefined) return defaultValue;
+		if (typeof v !== "boolean") {
+			throw new Error(`Edit ${editIndex}: sed.${key} must be a boolean when provided.`);
 		}
-		if (c === delim) {
-			if (bucket === 0) {
-				bucket = 1;
-				i += 1;
-				continue;
-			}
-			i += 1;
-			break;
-		}
-		parts[bucket] += c;
-		i += 1;
-	}
-	if (bucket !== 1) {
-		throw new Error(
-			`Edit ${editIndex}: malformed sed expression ${JSON.stringify(raw)}. Expected three ${JSON.stringify(delim)} separators.`,
-		);
-	}
-	const flagsStr = raw.slice(i);
-	let global = false;
-	let ignoreCase = false;
-	let literal = false;
-	for (const f of flagsStr) {
-		if (f === "g") global = true;
-		else if (f === "i") ignoreCase = true;
-		else if (f === "F") literal = true;
-		else {
-			throw new Error(
-				`Edit ${editIndex}: unknown sed flag ${JSON.stringify(f)}. Supported flags: g (all), i (case-insensitive), F (literal).`,
-			);
-		}
-	}
-	if (parts[0] === "") {
-		throw new Error(`Edit ${editIndex}: sed expression has empty pattern.`);
-	}
-	return { pattern: parts[0], replacement: parts[1], global, ignoreCase, literal };
+		return v;
+	};
+	const global = readBool("g", true);
+	const literal = readBool("F", false);
+	const ignoreCase = readBool("i", false);
+	return { pattern: pat, replacement: rep, global, literal, ignoreCase };
+}
+
+function formatSedExpression(spec: SedSpec): string {
+	const obj: { pat: string; rep: string; g?: boolean; F?: boolean; i?: boolean } = {
+		pat: spec.pattern,
+		rep: spec.replacement,
+	};
+	// Only emit non-default flags so error messages stay compact (g defaults true).
+	if (!spec.global) obj.g = false;
+	if (spec.literal) obj.F = true;
+	if (spec.ignoreCase) obj.i = true;
+	return JSON.stringify(obj);
 }
 
 function applyLiteralSed(currentLine: string, spec: SedSpec): { result: string; matched: boolean } {
@@ -357,18 +343,13 @@ function applySedToLine(
 		re.lastIndex = 0;
 		const probe = re.exec(currentLine);
 		re.lastIndex = 0;
-		if (probe && probe[0].length === 0) {
-			// Zero-length matches (e.g. `()`, `(?=…)`, `^`, `$`) cause `String.replace`
-			// to insert the replacement at the match position rather than substitute,
-			// which is almost never what models intend. Reject with a pointer to the
-			// dedicated insertion verbs.
-			return {
-				result: currentLine,
-				matched: false,
-				error: `pattern ${JSON.stringify(spec.pattern)} matches an empty string; use \`pre\`/\`post\`/\`splice\` to insert or replace whole lines, or use a non-empty pattern`,
-			};
+		// Zero-length matches (e.g. `()`, `(?=…)`, `^`, `$`) cause `String.replace` to
+		// insert the replacement at the match position rather than substitute. When that
+		// happens, fall through to the literal-substring fallback below — the model almost
+		// always meant the pattern literally (`()` is the parens, `^` is a caret, etc.).
+		if (!probe || probe[0].length > 0) {
+			return { result: currentLine.replace(re, spec.replacement), matched: true };
 		}
-		return { result: currentLine.replace(re, spec.replacement), matched: true };
 	}
 	// Fall back to literal substring match. Models frequently send sed patterns
 	// containing unescaped regex metacharacters (parentheses, `?`, `.`) that they
@@ -417,8 +398,8 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
 			resolved.push({ op: "append_file", lines: hashlineParseText(entry.post) });
 		}
 		if (entry.sed !== undefined) {
-			const spec = parseSedExpression(entry.sed, editIndex);
-			resolved.push({ op: "sed_file", spec, expression: entry.sed });
+			const spec = parseSedSpec(entry.sed, editIndex);
+			resolved.push({ op: "sed_file", spec, expression: formatSedExpression(spec) });
 		}
 		return resolved;
 	}
@@ -448,8 +429,8 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
 		// matching `sed`. The explicit replacement wins; the redundant `sed` would
 		// otherwise trigger a confusing `Conflicting ops` rejection.
 		if (!spliceIsExplicitReplacement) {
-			const spec = parseSedExpression(entry.sed, editIndex);
-			resolved.push({ op: "sed", pos: loc.pos, spec, expression: entry.sed });
+			const spec = parseSedSpec(entry.sed, editIndex);
+			resolved.push({ op: "sed", pos: loc.pos, spec, expression: formatSedExpression(spec) });
 		}
 	}
 	return resolved;
@@ -537,16 +518,18 @@ function validateAtomAnchors(edits: AtomEdit[], fileLines: string[], warnings: s
 }
 
 function validateNoConflictingAnchorOps(edits: AtomEdit[]): void {
-	// For each anchor line, at most one mutating op (splice/del).
-	// `pre`/`post` (insert ops) may coexist with them — they don't mutate the anchor line.
+	// For each anchor line, at most one mutating op (splice/del). Multiple `sed`
+	// ops on the same line are allowed and applied sequentially. `pre`/`post`
+	// (insert ops) may coexist with them — they don't mutate the anchor line.
 	const mutatingPerLine = new Map<number, string>();
 	for (const edit of edits) {
 		if (edit.op !== "splice" && edit.op !== "del" && edit.op !== "sed") continue;
 		const existing = mutatingPerLine.get(edit.pos.line);
 		if (existing) {
+			if (existing === "sed" && edit.op === "sed") continue;
 			throw new Error(
 				`Conflicting ops on anchor line ${edit.pos.line}: \`${existing}\` and \`${edit.op}\`. ` +
-					`At most one of splice/del/sed is allowed per anchor.`,
+					`At most one of splice/del is allowed per anchor.`,
 			);
 		}
 		mutatingPerLine.set(edit.pos.line, edit.op);
@@ -586,7 +569,19 @@ export function applyAtomEdits(
 	if (mismatches.length > 0) {
 		throw new HashlineMismatchError(mismatches, fileLines);
 	}
-	validateNoConflictingAnchorOps(edits);
+	// When a `del` and a `sed`/`splice` target the same anchor (across separate edit
+	// entries), the `del` is almost always a hallucinated cleanup the model added on top
+	// of the real replacement. Drop the `del` silently so the replacement wins, matching
+	// the in-entry handling for `splice: []` paired with `sed`.
+	const replacedLines = new Set<number>();
+	for (const e of edits) {
+		if (e.op === "splice" || e.op === "sed") replacedLines.add(e.pos.line);
+	}
+	let effective = edits;
+	if (replacedLines.size > 0) {
+		effective = edits.filter(e => !(e.op === "del" && replacedLines.has(e.pos.line)));
+	}
+	validateNoConflictingAnchorOps(effective);
 
 	const trackFirstChanged = (line: number) => {
 		if (firstChangedLine === undefined || line < firstChangedLine) {
@@ -603,7 +598,7 @@ export function applyAtomEdits(
 	const appendEdits: Indexed<Extract<AtomEdit, { op: "append_file" }>>[] = [];
 	const sedFileEdits: Indexed<Extract<AtomEdit, { op: "sed_file" }>>[] = [];
 	const prependEdits: Indexed<Extract<AtomEdit, { op: "prepend_file" }>>[] = [];
-	edits.forEach((edit, idx) => {
+	effective.forEach((edit, idx) => {
 		if (edit.op === "append_file") appendEdits.push({ edit, idx });
 		else if (edit.op === "prepend_file") prependEdits.push({ edit, idx });
 		else if (edit.op === "sed_file") sedFileEdits.push({ edit, idx });
@@ -659,13 +654,14 @@ export function applyAtomEdits(
 					anchorMutated = true;
 					break;
 				case "sed": {
-					const { result, matched, error, literalFallback } = applySedToLine(currentLine, edit.spec);
+					const input = replacementSet ? (replacement[0] ?? "") : currentLine;
+					const { result, matched, error, literalFallback } = applySedToLine(input, edit.spec);
 					if (error) {
 						throw new Error(`Edit sed expression ${JSON.stringify(edit.expression)} rejected: ${error}`);
 					}
 					if (!matched) {
 						throw new Error(
-							`Edit sed expression ${JSON.stringify(edit.expression)} did not match line ${edit.pos.line}: ${JSON.stringify(currentLine)}`,
+							`Edit sed expression ${JSON.stringify(edit.expression)} did not match line ${edit.pos.line}: ${JSON.stringify(input)}`,
 						);
 					}
 					if (literalFallback) {

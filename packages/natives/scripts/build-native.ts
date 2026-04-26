@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { $ } from "bun";
 import { detectHostAvx2Support } from "../../../scripts/host-detect";
+import { generateEnumExports } from "./gen-enums";
 
 const repoRoot = path.join(import.meta.dir, "../../..");
 const rustDir = path.join(repoRoot, "crates/pi-natives");
@@ -230,8 +231,8 @@ function resolveManagedCargoTargetDir(profileLabel: string): string | null {
 
 const isCI = Boolean(Bun.env.CI);
 const useLocalProfile = !isCI && !isCrossCompile;
-const profileLabel = useLocalProfile ? "dev" : "ci";
-const profileSuffix = useLocalProfile ? " (dev)" : " (ci)";
+const profileLabel = useLocalProfile ? "local" : "ci";
+const profileSuffix = useLocalProfile ? " (local)" : " (ci)";
 
 const buildOutputDirPrefix = resolveBuildOutputDirPrefix(profileLabel);
 
@@ -248,13 +249,9 @@ const napiArgs = [
 	"index.d.ts",
 	"-o",
 	"",
+	"--profile",
+	profileLabel,
 ];
-
-if (useLocalProfile) {
-	napiArgs.push("--profile", "dev");
-} else {
-	napiArgs.push("--profile", "ci");
-}
 
 if (crossTarget) napiArgs.push("--target", crossTarget);
 
@@ -310,8 +307,7 @@ try {
 
 	await installGeneratedBindings(buildOutputDir);
 
-	// Generate runtime enum exports from const enums in index.d.ts
-	await $`bun ${path.join(import.meta.dir, "gen-enums.ts")}`;
+	await generateEnumExports();
 	await patchGeneratedIndexLoader();
 
 	console.log("Build complete.");
