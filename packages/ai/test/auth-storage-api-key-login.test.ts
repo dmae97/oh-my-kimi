@@ -6,6 +6,7 @@ import * as path from "node:path";
 
 import { AuthCredentialStore, AuthStorage } from "../src/auth-storage";
 import * as kagiModule from "../src/utils/oauth/kagi";
+import * as ollamaCloudModule from "../src/utils/oauth/ollama-cloud";
 
 function countCredentialRows(dbPath: string, provider: string): number {
 	const db = new Database(dbPath, { readonly: true });
@@ -25,6 +26,7 @@ describe("AuthStorage api-key login replacement", () => {
 	let store: AuthCredentialStore | null = null;
 	let authStorage: AuthStorage | null = null;
 	let loginKagiSpy: Mock<typeof kagiModule.loginKagi>;
+	let loginOllamaCloudSpy: Mock<typeof ollamaCloudModule.loginOllamaCloud>;
 
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-auth-api-key-login-"));
@@ -32,6 +34,7 @@ describe("AuthStorage api-key login replacement", () => {
 		store = await AuthCredentialStore.open(dbPath);
 		authStorage = new AuthStorage(store);
 		loginKagiSpy = vi.spyOn(kagiModule, "loginKagi");
+		loginOllamaCloudSpy = vi.spyOn(ollamaCloudModule, "loginOllamaCloud");
 	});
 
 	afterEach(async () => {
@@ -70,5 +73,31 @@ describe("AuthStorage api-key login replacement", () => {
 		expect(stored.credential.key).toBe("same-kagi-key");
 		expect(store.getApiKey("kagi")).toBe("same-kagi-key");
 		expect(await authStorage.getApiKey("kagi", "session-kagi-relogin")).toBe("same-kagi-key");
+	});
+
+	it("reuses the stored api-key row when ollama-cloud re-login returns the same key", async () => {
+		if (!store || !authStorage || !dbPath) throw new Error("test setup failed");
+
+		loginOllamaCloudSpy.mockResolvedValueOnce("same-ollama-cloud-key").mockResolvedValueOnce("same-ollama-cloud-key");
+
+		const controller = {
+			onAuth: () => {},
+			onPrompt: async () => "",
+		};
+
+		await authStorage.login("ollama-cloud", controller);
+		await authStorage.login("ollama-cloud", controller);
+
+		expect(countCredentialRows(dbPath, "ollama-cloud")).toBe(1);
+		const credentials = store.listAuthCredentials("ollama-cloud");
+		expect(credentials).toHaveLength(1);
+		const [stored] = credentials;
+		expect(stored?.credential.type).toBe("api_key");
+		if (!stored || stored.credential.type !== "api_key") {
+			throw new Error("expected stored api-key credential");
+		}
+		expect(stored.credential.key).toBe("same-ollama-cloud-key");
+		expect(store.getApiKey("ollama-cloud")).toBe("same-ollama-cloud-key");
+		expect(await authStorage.getApiKey("ollama-cloud", "session-ollama-cloud-relogin")).toBe("same-ollama-cloud-key");
 	});
 });

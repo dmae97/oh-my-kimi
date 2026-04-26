@@ -23,6 +23,7 @@ import type {
 import type { GoogleOptions } from "./providers/google";
 import type { GoogleGeminiCliOptions } from "./providers/google-gemini-cli";
 import type { GoogleVertexOptions } from "./providers/google-vertex";
+import type { OllamaChatOptions } from "./providers/ollama";
 import type { OpenAICodexResponsesOptions } from "./providers/openai-codex-responses";
 import type { OpenAICompletionsOptions } from "./providers/openai-completions";
 import type { OpenAIResponsesOptions } from "./providers/openai-responses";
@@ -40,6 +41,7 @@ export type KnownApi =
 	| "google-generative-ai"
 	| "google-gemini-cli"
 	| "google-vertex"
+	| "ollama-chat"
 	| "cursor-agent";
 export type Api = KnownApi | (string & {});
 export interface ApiOptionsMap {
@@ -52,6 +54,7 @@ export interface ApiOptionsMap {
 	"google-generative-ai": GoogleOptions;
 	"google-gemini-cli": GoogleGeminiCliOptions;
 	"google-vertex": GoogleVertexOptions;
+	"ollama-chat": OllamaChatOptions;
 	"cursor-agent": CursorOptions;
 }
 // Compile-time exhaustiveness check - this will fail if ApiOptionsMap doesn't have all KnownApi keys
@@ -120,6 +123,7 @@ export type KnownProvider =
 	| "nvidia"
 	| "nanogpt"
 	| "ollama"
+	| "ollama-cloud"
 	| "qianfan"
 	| "qwen-portal"
 	| "together"

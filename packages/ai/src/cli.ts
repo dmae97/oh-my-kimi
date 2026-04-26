@@ -12,6 +12,7 @@ import { loginKilo } from "./utils/oauth/kilo";
 import { loginKimi } from "./utils/oauth/kimi";
 import { loginMiniMaxCode, loginMiniMaxCodeCn } from "./utils/oauth/minimax-code";
 import { loginNanoGPT } from "./utils/oauth/nanogpt";
+import { loginOllamaCloud } from "./utils/oauth/ollama-cloud";
 import { loginOpenAICodex } from "./utils/oauth/openai-codex";
 import { loginParallel } from "./utils/oauth/parallel";
 import { loginTavily } from "./utils/oauth/tavily";
@@ -271,6 +272,23 @@ async function login(provider: OAuthProvider): Promise<void> {
 				console.log(`\nAPI key saved to ~/.omp/agent/agent.db`);
 				return;
 			}
+			case "ollama-cloud": {
+				const apiKey = await loginOllamaCloud({
+					onAuth(info) {
+						const { url, instructions } = info;
+						console.log(`\nOpen this URL in your browser:\n${url}`);
+						if (instructions) console.log(instructions);
+						console.log();
+					},
+					onPrompt(p) {
+						return promptFn(`${p.message}${p.placeholder ? ` (${p.placeholder})` : ""}:`);
+					},
+				});
+				storage.saveApiKey(provider, apiKey);
+				console.log(`\nAPI key saved to ~/.omp/agent/agent.db`);
+				return;
+			}
+
 			case "minimax-code": {
 				const apiKey = await loginMiniMaxCode({
 					onAuth(info) {
@@ -347,6 +365,7 @@ Providers:
   minimax-code-cn   MiniMax Coding Plan (China)
   cursor            Cursor (Claude, GPT, etc.)
   zenmux            ZenMux
+  ollama-cloud      Ollama Cloud
 
 Examples:
   bunx @oh-my-pi/pi-ai login              # interactive provider selection

@@ -24,6 +24,7 @@ const BUILTIN_APIS = new Set<KnownApi>([
 	"google-generative-ai",
 	"google-gemini-cli",
 	"google-vertex",
+	"ollama-chat",
 	"cursor-agent",
 ]);
 

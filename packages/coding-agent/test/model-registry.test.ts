@@ -1417,6 +1417,68 @@ describe("ModelRegistry", () => {
 			expect(await registry.getApiKey(ollamaModels[0])).toBe(kNoAuth);
 		});
 
+		test("discovers ollama-cloud through built-in descriptor flow without regressing local implicit ollama", async () => {
+			authStorage.setRuntimeApiKey("ollama-cloud", "cloud-test-key");
+
+			using _hook = hookFetch((input, init) => {
+				const url = String(input);
+				if (url === "http://127.0.0.1:11434/api/tags") {
+					return new Response(JSON.stringify({ models: [{ name: "phi4-mini" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				if (url === "http://127.0.0.1:11434/api/show") {
+					return new Response(JSON.stringify({ capabilities: ["completion"] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				if (url === "https://ollama.com/api/tags") {
+					const headers = new Headers(init?.headers);
+					expect(headers.get("Authorization")).toBe("Bearer cloud-test-key");
+					return new Response(JSON.stringify({ models: [{ name: "gpt-oss:120b" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				if (url === "https://ollama.com/api/show") {
+					const headers = new Headers(init?.headers);
+					expect(headers.get("Authorization")).toBe("Bearer cloud-test-key");
+					const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
+					expect(body.model).toBe("gpt-oss:120b");
+					return new Response(
+						JSON.stringify({
+							capabilities: ["completion", "thinking"],
+							model_info: { "gpt-oss.context_length": 262144 },
+						}),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				throw new Error(`Unexpected URL: ${url}`);
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh();
+
+			const local = registry.find("ollama", "phi4-mini");
+			const cloud = registry.find("ollama-cloud", "gpt-oss:120b");
+
+			expect(local?.provider).toBe("ollama");
+			expect(local?.api).toBe("openai-responses");
+			expect(cloud?.provider).toBe("ollama-cloud");
+			expect(cloud?.api).toBe("ollama-chat");
+			expect(cloud?.baseUrl).toBe("https://ollama.com");
+			expect(cloud?.reasoning).toBe(true);
+			expect(cloud?.contextWindow).toBe(262144);
+			expect(await registry.getApiKey(cloud!)).toBe("cloud-test-key");
+			expect(registry.getAvailable().some(model => model.provider === "ollama" && model.id === "phi4-mini")).toBe(
+				true,
+			);
+			expect(
+				registry.getAvailable().some(model => model.provider === "ollama-cloud" && model.id === "gpt-oss:120b"),
+			).toBe(true);
+		});
 		test("discovers ollama models at runtime and treats auth:none providers as available", async () => {
 			writeRawModelsJson({
 				ollama: {

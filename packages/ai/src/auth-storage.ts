@@ -51,6 +51,7 @@ import { loginMoonshot } from "./utils/oauth/moonshot";
 import { loginNanoGPT } from "./utils/oauth/nanogpt";
 import { loginNvidia } from "./utils/oauth/nvidia";
 import { loginOllama } from "./utils/oauth/ollama";
+import { loginOllamaCloud } from "./utils/oauth/ollama-cloud";
 import { loginOpenAICodex } from "./utils/oauth/openai-codex";
 import { loginOpenCode } from "./utils/oauth/opencode";
 import { loginParallel } from "./utils/oauth/parallel";
@@ -835,6 +836,11 @@ export class AuthStorage {
 				if (!apiKey) {
 					return;
 				}
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "ollama-cloud": {
+				const apiKey = await loginOllamaCloud(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
