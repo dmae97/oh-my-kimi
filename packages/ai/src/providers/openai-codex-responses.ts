@@ -19,12 +19,12 @@ import {
 	type Api,
 	type AssistantMessage,
 	type Context,
-	isSpecialServiceTier,
 	type Model,
 	type ProviderSessionState,
 	type ServiceTier,
 	type StreamFunction,
 	type StreamOptions,
+	shouldSendServiceTier,
 	type TextContent,
 	type ThinkingContent,
 	type Tool,
@@ -493,7 +493,7 @@ async function buildTransformedCodexRequestBody(
 	if (options?.repetitionPenalty !== undefined) {
 		params.repetition_penalty = options.repetitionPenalty;
 	}
-	if (isSpecialServiceTier(options?.serviceTier)) {
+	if (shouldSendServiceTier(options?.serviceTier, model.provider)) {
 		params.service_tier = options.serviceTier;
 	}
 	if (context.tools && context.tools.length > 0) {

@@ -14,7 +14,6 @@ import { getEnvApiKey } from "../stream";
 import {
 	type AssistantMessage,
 	type Context,
-	isSpecialServiceTier,
 	type Message,
 	type MessageAttribution,
 	type Model,
@@ -23,6 +22,7 @@ import {
 	type StopReason,
 	type StreamFunction,
 	type StreamOptions,
+	shouldSendServiceTier,
 	type TextContent,
 	type ThinkingContent,
 	type Tool,
@@ -811,7 +811,7 @@ function buildParams(
 	if (options?.repetitionPenalty !== undefined) {
 		params.repetition_penalty = options.repetitionPenalty;
 	}
-	if (isSpecialServiceTier(options?.serviceTier)) {
+	if (shouldSendServiceTier(options?.serviceTier, model.provider)) {
 		params.service_tier = options.serviceTier;
 	}
 

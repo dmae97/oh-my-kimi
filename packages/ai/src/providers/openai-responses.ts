@@ -11,13 +11,13 @@ import {
 	type AssistantMessage,
 	type CacheRetention,
 	type Context,
-	isSpecialServiceTier,
 	type MessageAttribution,
 	type Model,
 	type ProviderSessionState,
 	type ServiceTier,
 	type StreamFunction,
 	type StreamOptions,
+	shouldSendServiceTier,
 	type Tool,
 	type ToolChoice,
 } from "../types";
@@ -384,7 +384,7 @@ function buildParams(
 	if (options?.repetitionPenalty !== undefined) {
 		params.repetition_penalty = options.repetitionPenalty;
 	}
-	if (isSpecialServiceTier(options?.serviceTier)) {
+	if (shouldSendServiceTier(options?.serviceTier, model.provider)) {
 		params.service_tier = options.serviceTier;
 	}
 

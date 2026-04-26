@@ -152,7 +152,13 @@ export type CacheRetention = "none" | "short" | "long";
 /** OpenAI service tier for processing priority. Only applies to OpenAI-compatible APIs. */
 export type ServiceTier = "auto" | "default" | "flex" | "scale" | "priority";
 
-export function isSpecialServiceTier(serviceTier?: ServiceTier | null): serviceTier is "flex" | "scale" | "priority" {
+export function shouldSendServiceTier(
+	serviceTier?: ServiceTier | null,
+	provider?: Provider,
+): serviceTier is "flex" | "scale" | "priority" {
+	if (provider !== "openai" && provider !== "openai-codex") {
+		return false;
+	}
 	return serviceTier === "flex" || serviceTier === "scale" || serviceTier === "priority";
 }
 
