@@ -585,6 +585,26 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 		nextValue[key] = normalized.value;
 	}
 
+	// Strip unknown keys with null/"null" values when the schema forbids extras.
+	// LLMs sometimes hallucinate verbs alongside valid ones (e.g. `split: null`,
+	// `original: null`). Rejecting the entire tool call wastes a turn; treating
+	// these the same as null on known optional fields is a safer fallback. Keys
+	// with non-null unknown values are left intact so genuine schema mistakes
+	// still surface as validation errors.
+	if (schemaObject.additionalProperties === false) {
+		const knownKeys = new Set(Object.keys(properties));
+		for (const key of Object.keys(nextValue)) {
+			if (knownKeys.has(key)) continue;
+			const v = nextValue[key];
+			if (v !== null && v !== "null") continue;
+			if (!changed) {
+				nextValue = { ...nextValue };
+				changed = true;
+			}
+			delete nextValue[key];
+		}
+	}
+
 	return { value: changed ? nextValue : value, changed };
 }
 
