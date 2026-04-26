@@ -1,20 +1,22 @@
-Manages a phased task list through an ordered list of flat operations.
+Manages a phased task list through an `ops` array of flat operations.
 The next pending task is auto-promoted to `in_progress` after completing the current one.
 
 <protocol>
 ## Shape
 
-Pass an array of operation objects:
+Pass an object with an `ops` array:
 
 ```ts
-[
-  { op: "replace", phases: [...] },
-  { op: "start", task: "task-3" },
-  { op: "done", phase: "Implementation" },
-  { op: "rm" },
-  { op: "drop", task: "task-9" },
-  { op: "append", phase: "Implementation", items: [{ id: "task-10", label: "Run tests" }] }
-]
+{
+  ops: [
+    { op: "replace", phases: [...] },
+    { op: "start", task: "task-3" },
+    { op: "done", phase: "Implementation" },
+    { op: "rm" },
+    { op: "drop", task: "task-9" },
+    { op: "append", phase: "Implementation", items: [{ id: "task-10", label: "Run tests" }] },
+  ],
+}
 ```
 
 ## Operation fields
@@ -58,17 +60,17 @@ Create a todo list when:
 
 <examples>
 # Initial setup
-`[{op: "replace", phases: [{name: "Investigation", tasks: [{content: "Read source"}, {content: "Map callsites"}]}, {name: "Implementation", tasks: [{content: "Apply fix"}, {content: "Run tests"}]}]}]`
+`{"ops":[{"op":"replace","phases":[{"name":"Investigation","tasks":[{"content":"Read source"},{"content":"Map callsites"}]},{"name":"Implementation","tasks":[{"content":"Apply fix"},{"content":"Run tests"}]}]}]}`
 # Complete one task
-`[{op: "done", task: "task-2"}]`
+`{"ops":[{"op":"done","task":"task-2"}]}`
 # Complete a whole phase
-`[{op: "done", phase: "Implementation"}]`
+`{"ops":[{"op":"done","phase":"Implementation"}]}`
 # Remove all tasks
-`[{op: "rm"}]`
+`{"ops":[{"op":"rm"}]}`
 # Drop one task
-`[{op: "drop", task: "task-7"}]`
+`{"ops":[{"op":"drop","task":"task-7"}]}`
 # Append tasks to a phase
-`[{op: "append", phase: "Implementation", items: [{id: "task-8", label: "Handle retries"}, {id: "task-9", label: "Run tests"}]}]`
+`{"ops":[{"op":"append","phase":"Implementation","items":[{"id":"task-8","label":"Handle retries"},{"id":"task-9","label":"Run tests"}]}]}`
 </examples>
 
 <avoid>

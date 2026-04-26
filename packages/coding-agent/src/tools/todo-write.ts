@@ -73,13 +73,18 @@ const TodoOpEntry = Type.Object({
 	items: Type.Optional(Type.Array(AppendItem, { minItems: 1, description: "items to append for op=append" })),
 });
 
-const todoWriteSchema = Type.Array(TodoOpEntry, {
-	minItems: 1,
-	description: "ordered todo operations",
-});
+const todoWriteSchema = Type.Object(
+	{
+		ops: Type.Array(TodoOpEntry, {
+			minItems: 1,
+			description: "ordered todo operations",
+		}),
+	},
+	{ description: "Apply ordered todo operations" },
+);
 
 type TodoWriteParams = Static<typeof todoWriteSchema>;
-type TodoOpEntryValue = TodoWriteParams[number];
+type TodoOpEntryValue = TodoWriteParams["ops"][number];
 
 // =============================================================================
 // File format
@@ -332,7 +337,7 @@ function applyEntry(file: TodoFile, entry: TodoOpEntryValue, errors: string[]): 
 
 function applyParams(file: TodoFile, params: TodoWriteParams): { file: TodoFile; errors: string[] } {
 	const errors: string[] = [];
-	for (const entry of params) {
+	for (const entry of params.ops) {
 		file = applyEntry(file, entry, errors);
 	}
 	normalizeInProgressTask(file.phases);
@@ -428,12 +433,14 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 // TUI Renderer
 // =============================================================================
 
-type TodoWriteRenderArgs = Array<{
-	op?: string;
-	task?: string;
-	phase?: string;
-	items?: Array<{ id?: string; label?: string }>;
-}>;
+type TodoWriteRenderArgs = {
+	ops?: Array<{
+		op?: string;
+		task?: string;
+		phase?: string;
+		items?: Array<{ id?: string; label?: string }>;
+	}>;
+};
 
 function formatTodoLine(item: TodoItem, uiTheme: Theme, prefix: string): string {
 	const checkbox = uiTheme.checkbox;
@@ -451,7 +458,7 @@ function formatTodoLine(item: TodoItem, uiTheme: Theme, prefix: string): string 
 
 export const todoWriteToolRenderer = {
 	renderCall(args: TodoWriteRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const ops = args?.map(entry => {
+		const ops = args?.ops?.map(entry => {
 			const parts = [entry.op ?? "update"];
 			if (entry.task) parts.push(entry.task);
 			if (entry.phase) parts.push(entry.phase);
