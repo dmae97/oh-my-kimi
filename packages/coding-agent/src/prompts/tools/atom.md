@@ -12,10 +12,10 @@ Each entry has one shared locator plus one or more verbs:
 
 Verbs:
 - `splice: […]`: lines are spliced in at the anchor.
-- `pre: […]`: prepend before the anchor line (or at BOF if `loc=$`)
-- `post: […]`: append after the anchor line (or at EOF if `loc=$`)
+- `pre: […]`: prepend before the anchor (or at BOF if `loc=$`)
+- `post: […]`: append after the anchor (or at EOF if `loc=$`)
 - `sed: "s/foo/bar/"` — sed-style substitution applied to the anchor line. **Prefer this over `splice` for token-level changes**
-Flags: `g` (all occurrences), `i` (case-insensitive), `F` (literal/fixed-string, no regex).
+Flags: `g` (all occurrences), `i` (case-insensitive), `F` (literal).
 Delimiter is whatever character follows `s`.
 You **MUST** keep the pattern as short as possible.
 
