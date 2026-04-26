@@ -228,6 +228,39 @@ function getTrailingPartialTag(text: string, tags: readonly string[]): string {
 	return text.slice(-maxLength);
 }
 
+// DeepSeek models leak chat-template special tokens (e.g. `<｜tool_calls_begin｜>`,
+// `<｜DSML｜tool_calls｜>`) into visible `content` deltas when hosted behind providers
+// (such as NVIDIA NIM) that don't strip them server-side. The structured `tool_calls`
+// payload is still emitted correctly — we only need to filter the leaked markers from
+// user-visible text. Tokens use either fullwidth pipes (｜, U+FF5C) or ASCII pipes.
+// Body is restricted to identifier-like chars (with the DeepSeek tokenizer's `▁`),
+// capped at a sane length to avoid swallowing legitimate angle-bracket text.
+const DEEPSEEK_SPECIAL_TOKEN_REGEX = /<(?:｜|\|)[A-Za-z0-9_.｜|▁]{1,64}(?:｜|\|)>/g;
+const DEEPSEEK_OPEN_DELIMS = ["<｜", "<|"] as const;
+
+function stripDeepseekSpecialTokens(text: string): string {
+	return text.replace(DEEPSEEK_SPECIAL_TOKEN_REGEX, "");
+}
+
+// Find any trailing partial `<｜...` (or `<|...`) that has not yet been closed by a
+// matching `｜>`/`|>`, so it can be held back until the next chunk arrives. A solo
+// trailing `<` is also held in case it is the start of a new token.
+function getTrailingPartialDeepseekToken(text: string): string {
+	let bestIdx = -1;
+	for (const delim of DEEPSEEK_OPEN_DELIMS) {
+		const idx = text.lastIndexOf(delim);
+		if (idx > bestIdx) bestIdx = idx;
+	}
+	if (bestIdx === -1) {
+		return text.endsWith("<") ? "<" : "";
+	}
+	const tail = text.slice(bestIdx);
+	if (tail.includes("｜>") || tail.includes("|>")) return "";
+	// Cap the held-back length so a stray `<｜` in normal prose can't grow unboundedly.
+	if (tail.length > 256) return "";
+	return tail;
+}
+
 const OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"OpenAI completions stream timed out while waiting for the first event";
 
@@ -343,6 +376,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			stream.push({ type: "start", partial: output });
 
 			const parseMiniMaxThinkTags = model.provider === "minimax-code";
+			// NVIDIA NIM and similar OpenAI-compatible hosts return DeepSeek's chat-template
+			// tool-call markers in `delta.content` even though tool calls are also surfaced
+			// structurally. Strip the leaked markers so users don't see raw `<｜...｜>` tokens.
+			const stripDeepseekChatTemplateTokens = model.provider === "nvidia" && /deepseek/i.test(model.id);
 			type OpenAIStreamBlock = TextContent | ThinkingContent | (ToolCall & { partialArgs: string });
 			let currentBlock: OpenAIStreamBlock | undefined;
 			const blockIndex = (block: OpenAIStreamBlock | undefined): number => {
@@ -463,6 +500,22 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				}
 			};
 
+			let deepseekStripBuffer = "";
+			const flushDeepseekStripBuffer = (final: boolean): void => {
+				if (deepseekStripBuffer.length === 0) return;
+				let flushable: string;
+				if (final) {
+					flushable = deepseekStripBuffer;
+					deepseekStripBuffer = "";
+				} else {
+					const trailing = getTrailingPartialDeepseekToken(deepseekStripBuffer);
+					flushable = deepseekStripBuffer.slice(0, deepseekStripBuffer.length - trailing.length);
+					deepseekStripBuffer = trailing;
+				}
+				const stripped = stripDeepseekSpecialTokens(flushable);
+				if (stripped) appendTextDelta(stripped);
+			};
+
 			for await (const chunk of iterateWithIdleTimeout(openaiStream, {
 				watchdog: firstEventWatchdog,
 				idleTimeoutMs,
@@ -507,6 +560,9 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 						if (parseMiniMaxThinkTags) {
 							taggedTextBuffer += choice.delta.content;
 							flushTaggedTextBuffer();
+						} else if (stripDeepseekChatTemplateTokens) {
+							deepseekStripBuffer += choice.delta.content;
+							flushDeepseekStripBuffer(false);
 						} else {
 							appendTextDelta(choice.delta.content);
 						}
@@ -601,6 +657,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					appendTextDelta(taggedTextBuffer);
 				}
 				taggedTextBuffer = "";
+			}
+
+			if (stripDeepseekChatTemplateTokens) {
+				flushDeepseekStripBuffer(true);
 			}
 
 			finishCurrentBlock(currentBlock);
