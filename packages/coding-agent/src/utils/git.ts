@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $which, isEnoent, Snowflake } from "@oh-my-pi/pi-utils";
+import { $which, hasFsCode, isEnoent, Snowflake } from "@oh-my-pi/pi-utils";
 import {
 	parseDiffHunks as parseCommitDiffHunks,
 	parseFileDiffs,
@@ -322,6 +322,10 @@ async function writeTempPatch(content: string): Promise<string> {
 
 type EntryType = "directory" | "file";
 
+function isOptionalGitMetadataUnavailable(err: unknown): boolean {
+	return isEnoent(err) || hasFsCode(err, "ENFILE") || hasFsCode(err, "EMFILE");
+}
+
 function getEntryTypeSync(gitEntryPath: string): EntryType | null {
 	try {
 		const stat = fs.statSync(gitEntryPath);
@@ -329,7 +333,7 @@ function getEntryTypeSync(gitEntryPath: string): EntryType | null {
 		if (stat.isFile()) return "file";
 		return null;
 	} catch (err) {
-		if (isEnoent(err)) return null;
+		if (isOptionalGitMetadataUnavailable(err)) return null;
 		throw err;
 	}
 }
@@ -341,7 +345,7 @@ async function getEntryType(gitEntryPath: string): Promise<EntryType | null> {
 		if (stat.isFile()) return "file";
 		return null;
 	} catch (err) {
-		if (isEnoent(err)) return null;
+		if (isOptionalGitMetadataUnavailable(err)) return null;
 		throw err;
 	}
 }
@@ -350,7 +354,7 @@ function readOptionalTextSync(filePath: string): string | null {
 	try {
 		return fs.readFileSync(filePath, "utf8");
 	} catch (err) {
-		if (isEnoent(err)) return null;
+		if (isOptionalGitMetadataUnavailable(err)) return null;
 		throw err;
 	}
 }
@@ -359,7 +363,7 @@ async function readOptionalText(filePath: string): Promise<string | null> {
 	try {
 		return await Bun.file(filePath).text();
 	} catch (err) {
-		if (isEnoent(err)) return null;
+		if (isOptionalGitMetadataUnavailable(err)) return null;
 		throw err;
 	}
 }
