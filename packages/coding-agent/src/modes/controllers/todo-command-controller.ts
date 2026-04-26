@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import {
+	getLatestTodoPhasesFromEntries,
 	applyOpsToPhases,
 	markdownToPhases,
 	phasesToMarkdown,
@@ -100,6 +101,17 @@ function buildSystemReminder(action: string, phases: TodoPhase[]): string {
 export class TodoCommandController {
 	constructor(private readonly ctx: InteractiveModeContext) {}
 
+	/**
+	 * True latest todo state for the user-facing /todo verbs. Reads from session
+	 * entries so that completed/abandoned tasks remain visible after resume
+	 * (where `session.getTodoPhases()` would have stripped them).
+	 */
+	#currentPhases(): TodoPhase[] {
+		const fromEntries = getLatestTodoPhasesFromEntries(this.ctx.sessionManager.getBranch());
+		if (fromEntries.length > 0) return fromEntries;
+		return this.ctx.session.getTodoPhases();
+	}
+
 	async handleTodoCommand(args: string): Promise<void> {
 		const trimmed = args.trim();
 		if (!trimmed) {
@@ -126,7 +138,7 @@ export class TodoCommandController {
 		const opInput = parseTodoArgs(trimmed, this.ctx);
 		if (!opInput) return;
 
-		const current = this.ctx.session.getTodoPhases();
+		const current = this.#currentPhases();
 		const { phases: nextPhases, errors } = applyOpsToPhases(current, [opInput as Parameters<typeof applyOpsToPhases>[1][number]]);
 
 		if (errors.length > 0) {
@@ -139,7 +151,7 @@ export class TodoCommandController {
 	}
 
 	#showCurrent(): void {
-		const phases = this.ctx.session.getTodoPhases();
+		const phases = this.#currentPhases();
 		if (phases.length === 0) {
 			this.ctx.showStatus("No todos. Use /todo replace {…} or call todo_write to create one.");
 			return;
@@ -148,7 +160,7 @@ export class TodoCommandController {
 	}
 
 	#copyMarkdown(): void {
-		const phases = this.ctx.session.getTodoPhases();
+		const phases = this.#currentPhases();
 		if (phases.length === 0) {
 			this.ctx.showWarning("No todos to copy.");
 			return;
@@ -168,7 +180,7 @@ export class TodoCommandController {
 			return;
 		}
 
-		const current = this.ctx.session.getTodoPhases();
+		const current = this.#currentPhases();
 		const initialMarkdown =
 			current.length > 0
 				? phasesToMarkdown(current)
