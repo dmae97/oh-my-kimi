@@ -1,9 +1,10 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added live poll progress updates so the UI now emits intermediate job state while waiting for jobs to finish
+- Added a dedicated TUI renderer for the `poll` tool that displays job status, counts, duration, and result/error previews
 - Added a `/todo` slash command to view and modify todos with `edit`, `copy`, `start`, `done`, `drop`, `rm`, `append`, and `replace` operations
 - Added `/todo edit` to open the current todo list in `$EDITOR` as Markdown and sync the edited checklist back into the session
 - Added `/todo copy` to copy the rendered Markdown todo list to the clipboard
@@ -21,6 +22,8 @@
 
 ### Fixed
 
+- Fixed poll final output to reflect live job data from the async job manager, improving status and result visibility
+- Fixed job duration and output reporting to use current job snapshots instead of initial poll input metadata
 - Fixed `poll` wait duration parsing to fall back to `30s` when the provided value is an empty string
 
 ## [14.4.1] - 2026-04-26
