@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Renamed atom edit operations from `before` and `after` to `pre` and `post`, so existing `atom` payloads using the old operation keys must be updated
@@ -20,6 +19,9 @@
 
 ### Changed
 
+- Changed JSON tree output to truncate inline argument pairs by available width and add an ellipsis when values no longer fit in the display
+- Changed JSON tree rendering to hide harness-internal `intent` and `__partialJson` fields from top-level tool output
+- Simplified the `grep` tool schema by requiring `path`, folding glob and type filtering into path globs, auto-detecting multiline patterns, removing model-controlled context and limit options, and renaming result skipping to `skip`.
 - Changed atom edit request format to use a shared `loc` selector, including range (`"160sr-9ab"`) and boundary (`"^"`, `"$"`) forms instead of per-operation anchor fields
 - Changed atom edit payload fields so `set`, `pre`, and `post` now require line-array values and `sub` now takes a `[find, replace]` tuple, with boundary deletion now expressed as `set: []`
 - Changed edit diff wrapping to preserve the active line-prefix separator (`|` or `│`) while keeping continuation lines aligned by line-number width
@@ -40,6 +42,7 @@
 
 ### Fixed
 
+- Fixed JSON tree rendering for tool arguments by excluding injected internal keys from displayed root records
 - Printed assistant `errorMessage` text in print mode output to stderr so message-level errors are visible during non-interactive runs
 - Displayed assistant `errorMessage` text in the assistant message component for completed tool responses with non-terminal stop reasons
 - Fixed atom input handling to ignore null optional verb fields so entries with `pre`, `set`, `post`, or `sub` set to `null` remain valid

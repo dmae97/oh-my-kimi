@@ -27,7 +27,6 @@ import {
 	JSON_TREE_SCALAR_LEN_COLLAPSED,
 	JSON_TREE_SCALAR_LEN_EXPANDED,
 	renderJsonTreeLines,
-	stripInternalArgs,
 } from "../../tools/json-tree";
 import { PYTHON_DEFAULT_PREVIEW_LINES } from "../../tools/python";
 import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
@@ -743,9 +742,7 @@ export class ToolExecutionComponent extends Container {
 			lines.push("");
 			lines.push(theme.fg("dim", "Args"));
 			const tree = renderJsonTreeLines(
-				this.#args && typeof this.#args === "object" && !Array.isArray(this.#args)
-					? stripInternalArgs(this.#args as Record<string, unknown>)
-					: this.#args,
+				this.#args,
 				theme,
 				JSON_TREE_MAX_DEPTH_EXPANDED,
 				JSON_TREE_MAX_LINES_EXPANDED,
