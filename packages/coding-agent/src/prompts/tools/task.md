@@ -2,7 +2,7 @@ Launches subagents to parallelize workflows.
 
 {{#if asyncEnabled}}
 - Use `read jobs://` to inspect state; `read jobs://<job_id>` for detail.
-- Use the `poll` tool to wait until completion. You **MUST NOT** poll `read jobs://` in a loop.
+- Use the `job` tool (with `poll`) to wait until completion. You **MUST NOT** poll `read jobs://` in a loop.
 {{/if}}
 
 {{#if defaultMode}}

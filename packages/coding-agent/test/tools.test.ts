@@ -11,11 +11,10 @@ import { EditTool } from "@oh-my-pi/pi-coding-agent/edit";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
-import { CancelJobTool } from "@oh-my-pi/pi-coding-agent/tools/cancel-job";
 import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
 import { GrepTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
-import { PollTool } from "@oh-my-pi/pi-coding-agent/tools/poll-tool";
+import { JobTool } from "@oh-my-pi/pi-coding-agent/tools/job";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import * as markitUtils from "@oh-my-pi/pi-coding-agent/utils/markit";
@@ -1131,12 +1130,11 @@ function b() {
 				Settings.isolated({ "bash.autoBackground.enabled": true }),
 			);
 
-			expect(PollTool.createIf(autoBackgroundSession)).not.toBeNull();
-			expect(CancelJobTool.createIf(autoBackgroundSession)).not.toBeNull();
+			expect(JobTool.createIf(autoBackgroundSession)).not.toBeNull();
 		});
 	});
 
-	describe("PollTool", () => {
+	describe("JobTool", () => {
 		it("should wait for jobs and acknowledge deliveries to prevent race conditions", async () => {
 			const manager = new AsyncJobManager({
 				onJobComplete: async () => {},
@@ -1144,12 +1142,12 @@ function b() {
 			const session = createTestToolSession(testDir, Settings.isolated({ "bash.autoBackground.enabled": true }), {
 				asyncJobManager: manager,
 			});
-			const pollTool = PollTool.createIf(session)!;
+			const jobTool = JobTool.createIf(session)!;
 
 			const jobId = manager.register("bash", "test job", async () => "success");
 
 			// Job is running, call poll
-			const resultPromise = pollTool.execute("test-call-poll-1", { jobs: [jobId] });
+			const resultPromise = jobTool.execute("test-call-poll-1", { poll: [jobId] });
 
 			// Ensure poll finished
 			const result = await resultPromise;

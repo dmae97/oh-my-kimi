@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Merged the `poll` and `cancel_job` tools into a single `job` tool that accepts `poll` and `cancel` arrays; the renamed tool reuses the richer poll renderer for both polling and cancellation calls
+
 ## [14.4.2] - 2026-04-26
 ### Breaking Changes
 

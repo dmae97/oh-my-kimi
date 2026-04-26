@@ -14,10 +14,10 @@ Executes bash command in shell session for terminal operations like git, bun, ca
 - Long-running non-PTY commands may auto-background after ~{{autoBackgroundThresholdSeconds}}s and continue as background jobs.
 {{/if}}
 {{#if asyncEnabled}}
-- Inspect background jobs with `read jobs://` (`read jobs://<job-id>` for detail). To wait for results, call `poll` — do NOT poll `read jobs://` in a loop or yield and hope for delivery.
+- Inspect background jobs with `read jobs://` (`read jobs://<job-id>` for detail). To wait for results, call `job` (with `poll`) — do NOT poll `read jobs://` in a loop or yield and hope for delivery.
 {{else}}
 {{#if autoBackgroundEnabled}}
-- For auto-backgrounded jobs, inspect with `read jobs://` and call `poll` to wait — do NOT poll in a loop.
+- For auto-backgrounded jobs, inspect with `read jobs://` and call `job` (with `poll`) to wait — do NOT poll in a loop.
 {{/if}}
 {{/if}}
 </instruction>

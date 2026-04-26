@@ -6,7 +6,7 @@ import { type Static, Type } from "@sinclair/typebox";
 import { isBackgroundJobSupportEnabled } from "../async";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
-import pollDescription from "../prompts/tools/poll.md" with { type: "text" };
+import jobDescription from "../prompts/tools/job.md" with { type: "text" };
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import type { ToolSession } from "./index";
 import {
@@ -21,16 +21,22 @@ import {
 	type ToolUIStatus,
 } from "./render-utils";
 
-const pollSchema = Type.Object({
-	jobs: Type.Optional(
+const jobSchema = Type.Object({
+	poll: Type.Optional(
 		Type.Array(Type.String(), {
-			description: "job ids to wait for",
+			description: "background job ids to wait for; omit (with no `cancel`) to wait on all running jobs",
+			examples: [["job-1234"]],
+		}),
+	),
+	cancel: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "background job ids to cancel",
 			examples: [["job-1234"]],
 		}),
 	),
 });
 
-type PollParams = Static<typeof pollSchema>;
+type JobParams = Static<typeof jobSchema>;
 
 const WAIT_DURATION_MS: Record<string, number> = {
 	"5s": 5_000,
@@ -44,7 +50,7 @@ function parseWaitDurationMs(value: string | undefined): number {
 	return (value ? WAIT_DURATION_MS[value] : undefined) ?? WAIT_DURATION_MS["30s"];
 }
 
-interface PollResult {
+interface JobSnapshot {
 	id: string;
 	type: "bash" | "task";
 	status: "running" | "completed" | "failed" | "cancelled";
@@ -54,51 +60,97 @@ interface PollResult {
 	errorText?: string;
 }
 
-export interface PollToolDetails {
-	jobs: PollResult[];
+type CancelStatus = "cancelled" | "not_found" | "already_completed";
+
+interface CancelOutcome {
+	id: string;
+	status: CancelStatus;
+	message: string;
 }
 
-export class PollTool implements AgentTool<typeof pollSchema, PollToolDetails> {
-	readonly name = "poll";
-	readonly label = "Poll";
+export interface JobToolDetails {
+	jobs: JobSnapshot[];
+	cancelled?: { id: string; status: CancelStatus }[];
+}
+
+export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
+	readonly name = "job";
+	readonly label = "Job";
 	readonly description: string;
-	readonly parameters = pollSchema;
+	readonly parameters = jobSchema;
 	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(pollDescription);
+		this.description = prompt.render(jobDescription);
 	}
 
-	static createIf(session: ToolSession): PollTool | null {
+	static createIf(session: ToolSession): JobTool | null {
 		if (!isBackgroundJobSupportEnabled(session.settings)) return null;
-		return new PollTool(session);
+		return new JobTool(session);
 	}
 
 	async execute(
 		_toolCallId: string,
-		params: PollParams,
+		params: JobParams,
 		signal?: AbortSignal,
-		onUpdate?: AgentToolUpdateCallback<PollToolDetails>,
+		onUpdate?: AgentToolUpdateCallback<JobToolDetails>,
 		_context?: AgentToolContext,
-	): Promise<AgentToolResult<PollToolDetails>> {
+	): Promise<AgentToolResult<JobToolDetails>> {
 		const manager = this.session.asyncJobManager;
 		if (!manager) {
 			return {
-				content: [{ type: "text", text: "Async execution is disabled; no background jobs to poll." }],
+				content: [{ type: "text", text: "Async execution is disabled; no background jobs are available." }],
 				details: { jobs: [] },
 			};
 		}
 
-		const requestedIds = params.jobs;
+		const cancelIds = params.cancel ?? [];
+		const cancelOutcomes: CancelOutcome[] = [];
+		for (const id of cancelIds) {
+			const existing = manager.getJob(id);
+			if (!existing) {
+				cancelOutcomes.push({ id, status: "not_found", message: `Background job not found: ${id}` });
+				continue;
+			}
+			if (existing.status !== "running") {
+				cancelOutcomes.push({
+					id,
+					status: "already_completed",
+					message: `Background job ${id} is already ${existing.status}.`,
+				});
+				continue;
+			}
+			const cancelled = manager.cancel(id);
+			cancelOutcomes.push(
+				cancelled
+					? { id, status: "cancelled", message: `Cancelled background job ${id}.` }
+					: { id, status: "already_completed", message: `Background job ${id} is already completed.` },
+			);
+		}
 
-		// Resolve which jobs to watch
-		const jobsToWatch = requestedIds?.length
-			? requestedIds.map(id => manager.getJob(id)).filter(j => j != null)
+		const requestedPollIds = params.poll;
+		// If only `cancel` was provided (no `poll`), don't wait — return immediately.
+		const shouldPoll = requestedPollIds !== undefined || cancelIds.length === 0;
+
+		if (!shouldPoll) {
+			const cancelledJobs = cancelIds.map(id => manager.getJob(id)).filter(j => j != null);
+			return this.#buildResult(manager, cancelledJobs, cancelOutcomes);
+		}
+
+		// Resolve which jobs to watch.
+		// - If `poll` was passed explicitly, watch exactly those (filtered to existing).
+		// - If `poll` was omitted (and so was `cancel`), default to all running jobs.
+		const jobsToWatch = requestedPollIds
+			? requestedPollIds.map(id => manager.getJob(id)).filter(j => j != null)
 			: manager.getRunningJobs();
 
 		if (jobsToWatch.length === 0) {
-			const message = requestedIds?.length
-				? `No matching jobs found for IDs: ${requestedIds.join(", ")}`
+			if (cancelOutcomes.length > 0) {
+				const cancelledJobs = cancelIds.map(id => manager.getJob(id)).filter(j => j != null);
+				return this.#buildResult(manager, cancelledJobs, cancelOutcomes);
+			}
+			const message = requestedPollIds?.length
+				? `No matching jobs found for IDs: ${requestedPollIds.join(", ")}`
 				: "No running background jobs to wait for.";
 			return {
 				content: [{ type: "text", text: message }],
@@ -106,10 +158,11 @@ export class PollTool implements AgentTool<typeof pollSchema, PollToolDetails> {
 			};
 		}
 
-		// If all watched jobs are already done, return immediately
+		// If all watched jobs are already done, build immediate result.
 		const runningJobs = jobsToWatch.filter(j => j.status === "running");
 		if (runningJobs.length === 0) {
-			return this.#buildResult(manager, jobsToWatch);
+			const cancelledJobs = cancelIds.map(id => manager.getJob(id)).filter(j => j != null);
+			return this.#buildResult(manager, [...cancelledJobs, ...jobsToWatch], cancelOutcomes);
 		}
 
 		// Wait until at least one running job finishes, the wait duration elapses, or the call is aborted.
@@ -122,13 +175,21 @@ export class PollTool implements AgentTool<typeof pollSchema, PollToolDetails> {
 		const watchedJobIds = runningJobs.map(job => job.id);
 		manager.watchJobs(watchedJobIds);
 
+		const cancelledJobs = cancelIds.map(id => manager.getJob(id)).filter(j => j != null);
+		const allTrackedJobs = [...cancelledJobs, ...jobsToWatch];
+
 		const PROGRESS_INTERVAL_MS = 500;
 		const emitProgress = () => {
 			if (!onUpdate) return;
-			const snapshot = this.#snapshotJobs(jobsToWatch);
+			const snapshot = this.#snapshotJobs(allTrackedJobs);
 			onUpdate({
 				content: [{ type: "text", text: "" }],
-				details: { jobs: snapshot },
+				details: {
+					jobs: snapshot,
+					...(cancelOutcomes.length
+						? { cancelled: cancelOutcomes.map(({ id, status }) => ({ id, status })) }
+						: {}),
+				},
 			});
 		};
 		const progressTimer = onUpdate ? setInterval(emitProgress, PROGRESS_INTERVAL_MS) : undefined;
@@ -154,11 +215,7 @@ export class PollTool implements AgentTool<typeof pollSchema, PollToolDetails> {
 			if (progressTimer) clearInterval(progressTimer);
 		}
 
-		if (signal?.aborted) {
-			return this.#buildResult(manager, jobsToWatch);
-		}
-
-		return this.#buildResult(manager, jobsToWatch);
+		return this.#buildResult(manager, allTrackedJobs, cancelOutcomes);
 	}
 
 	#snapshotJobs(
@@ -171,7 +228,7 @@ export class PollTool implements AgentTool<typeof pollSchema, PollToolDetails> {
 			resultText?: string;
 			errorText?: string;
 		}[],
-	): PollResult[] {
+	): JobSnapshot[] {
 		const now = Date.now();
 		return jobs.map(j => {
 			const current = this.session.asyncJobManager?.getJob(j.id);
@@ -179,7 +236,7 @@ export class PollTool implements AgentTool<typeof pollSchema, PollToolDetails> {
 			return {
 				id: latest.id,
 				type: latest.type,
-				status: latest.status as PollResult["status"],
+				status: latest.status as JobSnapshot["status"],
 				label: latest.label,
 				durationMs: Math.max(0, now - latest.startTime),
 				...(latest.resultText ? { resultText: latest.resultText } : {}),
@@ -199,8 +256,16 @@ export class PollTool implements AgentTool<typeof pollSchema, PollToolDetails> {
 			resultText?: string;
 			errorText?: string;
 		}[],
-	): AgentToolResult<PollToolDetails> {
-		const jobResults = this.#snapshotJobs(jobs);
+		cancelOutcomes: CancelOutcome[],
+	): AgentToolResult<JobToolDetails> {
+		// Deduplicate by id (cancelled jobs may also appear in the watched set).
+		const seen = new Set<string>();
+		const uniqueJobs = jobs.filter(j => {
+			if (seen.has(j.id)) return false;
+			seen.add(j.id);
+			return true;
+		});
+		const jobResults = this.#snapshotJobs(uniqueJobs);
 
 		manager.acknowledgeDeliveries(jobResults.filter(j => j.status !== "running").map(j => j.id));
 
@@ -208,6 +273,13 @@ export class PollTool implements AgentTool<typeof pollSchema, PollToolDetails> {
 		const running = jobResults.filter(j => j.status === "running");
 
 		const lines: string[] = [];
+
+		if (cancelOutcomes.length > 0) {
+			lines.push(`## Cancelled (${cancelOutcomes.length})\n`);
+			for (const o of cancelOutcomes) lines.push(`- ${o.message}`);
+			lines.push("");
+		}
+
 		if (completed.length > 0) {
 			lines.push(`## Completed (${completed.length})\n`);
 			for (const j of completed) {
@@ -231,8 +303,11 @@ export class PollTool implements AgentTool<typeof pollSchema, PollToolDetails> {
 		}
 
 		return {
-			content: [{ type: "text", text: lines.join("\n") }],
-			details: { jobs: jobResults },
+			content: [{ type: "text", text: lines.join("\n").trimEnd() }],
+			details: {
+				jobs: jobResults,
+				...(cancelOutcomes.length ? { cancelled: cancelOutcomes.map(({ id, status }) => ({ id, status })) } : {}),
+			},
 		};
 	}
 }
@@ -241,8 +316,9 @@ export class PollTool implements AgentTool<typeof pollSchema, PollToolDetails> {
 // TUI Renderer
 // =============================================================================
 
-interface PollRenderArgs {
-	jobs?: string[];
+interface JobRenderArgs {
+	poll?: string[];
+	cancel?: string[];
 }
 
 const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;
@@ -251,7 +327,7 @@ const PREVIEW_LINES_COLLAPSED = 1;
 const PREVIEW_LINES_EXPANDED = 4;
 const PREVIEW_LINE_WIDTH = 80;
 
-function statusToIcon(status: PollResult["status"]): ToolUIStatus {
+function statusToIcon(status: JobSnapshot["status"]): ToolUIStatus {
 	switch (status) {
 		case "completed":
 			return "success";
@@ -264,7 +340,7 @@ function statusToIcon(status: PollResult["status"]): ToolUIStatus {
 	}
 }
 
-function statusToColor(status: PollResult["status"]): ToolUIColor {
+function statusToColor(status: JobSnapshot["status"]): ToolUIColor {
 	switch (status) {
 		case "completed":
 			return "success";
@@ -277,35 +353,39 @@ function statusToColor(status: PollResult["status"]): ToolUIColor {
 	}
 }
 
-function describeTarget(args: PollRenderArgs | undefined): string {
-	const ids = args?.jobs ?? [];
-	if (ids.length === 0) return "all running jobs";
-	if (ids.length === 1) return ids[0]!;
-	return `${ids.length} jobs`;
+function describeTarget(args: JobRenderArgs | undefined): string {
+	const poll = args?.poll ?? [];
+	const cancel = args?.cancel ?? [];
+	const parts: string[] = [];
+	if (cancel.length > 0) {
+		parts.push(cancel.length === 1 ? `cancel ${cancel[0]}` : `cancel ${cancel.length} jobs`);
+	}
+	if (poll.length > 0) {
+		parts.push(poll.length === 1 ? `poll ${poll[0]}` : `poll ${poll.length} jobs`);
+	}
+	if (parts.length === 0) return "all running jobs";
+	return parts.join(", ");
 }
 
-export const pollToolRenderer = {
+export const jobToolRenderer = {
 	inline: true,
 
-	renderCall(args: PollRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const text = renderStatusLine({ icon: "pending", title: "Poll", description: describeTarget(args) }, uiTheme);
+	renderCall(args: JobRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+		const text = renderStatusLine({ icon: "pending", title: "Job", description: describeTarget(args) }, uiTheme);
 		return new Text(text, 0, 0);
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: PollToolDetails; isError?: boolean },
+		result: { content: Array<{ type: string; text?: string }>; details?: JobToolDetails; isError?: boolean },
 		options: RenderResultOptions,
 		uiTheme: Theme,
-		args?: PollRenderArgs,
+		args?: JobRenderArgs,
 	): Component {
 		const jobs = result.details?.jobs ?? [];
 
 		if (jobs.length === 0) {
-			const fallback = result.content?.find(c => c.type === "text")?.text || "No jobs to poll";
-			const header = renderStatusLine(
-				{ icon: "warning", title: "Poll", description: describeTarget(args) },
-				uiTheme,
-			);
+			const fallback = result.content?.find(c => c.type === "text")?.text || "No jobs to process";
+			const header = renderStatusLine({ icon: "warning", title: "Job", description: describeTarget(args) }, uiTheme);
 			return new Text([header, formatEmptyMessage(fallback, uiTheme)].join("\n"), 0, 0);
 		}
 
@@ -328,7 +408,7 @@ export const pollToolRenderer = {
 			{
 				icon: headerIcon,
 				spinnerFrame: counts.running > 0 ? options.spinnerFrame : undefined,
-				title: "Poll",
+				title: "Job",
 				description,
 				meta,
 			},
@@ -336,7 +416,7 @@ export const pollToolRenderer = {
 		);
 
 		// Sort: running first (so user sees what's still pending), then failed, then completed/cancelled.
-		const statusOrder: Record<PollResult["status"], number> = {
+		const statusOrder: Record<JobSnapshot["status"], number> = {
 			running: 0,
 			failed: 1,
 			cancelled: 2,
@@ -356,7 +436,7 @@ export const pollToolRenderer = {
 				const key = new Hasher().bool(expanded).u32(width).u32(spinnerFrame).digest();
 				if (cached?.key === key) return cached.lines;
 
-				const itemLines = renderTreeList<PollResult>(
+				const itemLines = renderTreeList<JobSnapshot>(
 					{
 						items: sortedJobs,
 						expanded,

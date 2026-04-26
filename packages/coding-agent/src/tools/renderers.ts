@@ -21,7 +21,7 @@ import { githubToolRenderer } from "./gh-renderer";
 import { grepToolRenderer } from "./grep";
 import { inspectImageToolRenderer } from "./inspect-image-renderer";
 import { notebookToolRenderer } from "./notebook";
-import { pollToolRenderer } from "./poll-tool";
+import { jobToolRenderer } from "./job";
 import { pythonToolRenderer } from "./python";
 import { readToolRenderer } from "./read";
 import { resolveToolRenderer } from "./resolve";
@@ -59,7 +59,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	notebook: notebookToolRenderer as ToolRenderer,
 	inspect_image: inspectImageToolRenderer as ToolRenderer,
 	read: readToolRenderer as ToolRenderer,
-	poll: pollToolRenderer as ToolRenderer,
+	job: jobToolRenderer as ToolRenderer,
 	resolve: resolveToolRenderer as ToolRenderer,
 	search_tool_bm25: searchToolBm25Renderer as ToolRenderer,
 	ssh: sshToolRenderer as ToolRenderer,

@@ -24,7 +24,6 @@ import { AstGrepTool } from "./ast-grep";
 import { BashTool } from "./bash";
 import { BrowserTool } from "./browser";
 import { CalculatorTool } from "./calculator";
-import { CancelJobTool } from "./cancel-job";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 import { DebugTool } from "./debug";
 import { ExitPlanModeTool } from "./exit-plan-mode";
@@ -32,9 +31,9 @@ import { FindTool } from "./find";
 import { GithubTool } from "./gh";
 import { GrepTool } from "./grep";
 import { InspectImageTool } from "./inspect-image";
+import { JobTool } from "./job";
 import { NotebookTool } from "./notebook";
 import { wrapToolWithMetaNotice } from "./output-meta";
-import { PollTool } from "./poll-tool";
 import { PythonTool } from "./python";
 import { ReadTool } from "./read";
 import { RenderMermaidTool } from "./render-mermaid";
@@ -62,7 +61,6 @@ export * from "./ast-grep";
 export * from "./bash";
 export * from "./browser";
 export * from "./calculator";
-export * from "./cancel-job";
 export * from "./checkpoint";
 export * from "./debug";
 export * from "./exit-plan-mode";
@@ -71,8 +69,8 @@ export * from "./gh";
 export * from "./grep";
 export * from "./image-gen";
 export * from "./inspect-image";
+export * from "./job";
 export * from "./notebook";
-export * from "./poll-tool";
 export * from "./python";
 export * from "./read";
 export * from "./render-mermaid";
@@ -218,8 +216,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
 	task: TaskTool.create,
-	cancel_job: CancelJobTool.createIf,
-	poll: PollTool.createIf,
+	job: JobTool.createIf,
 	todo_write: s => new TodoWriteTool(s),
 	web_search: s => new SearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,
