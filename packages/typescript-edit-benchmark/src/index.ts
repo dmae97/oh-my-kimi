@@ -98,7 +98,7 @@ Options:
   --tasks <ids>             Comma-separated task IDs to run (default: all)
   --max-tasks <n>            Max tasks to sample (default: 80, 0 = all)
   --fixtures <path>         Fixtures directory or .tar.gz archive (default: built-in)
-  --edit-variant <v>        Edit variant: any string (e.g. replace, patch, hashline, chunk, vim, atom, apply_patch), or auto (default: auto)
+  --edit-variant <v>        Edit variant: any string (e.g. replace, patch, hashline, vim, atom, apply_patch), or auto (default: auto)
   --edit-fuzzy <bool>       Fuzzy matching: true, false, auto (default: auto)
   --edit-fuzzy-threshold <n> Fuzzy threshold 0-1 or auto (default: auto)
   --auto-format             Auto-format output files after verify (debug only)

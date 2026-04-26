@@ -1,6 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+### Removed
+
+- Removed the `chunk` edit mode, chunk-aware `read` selectors, chunk-aware `grep` rendering, and the `omp read` chunk CLI subcommand
+- Removed the `read.prosechunks`, `read.explorechunks`, and `read.anchorstyle` settings
+- Removed the underlying `chunk` native module and AST-based chunk schema generation from `pi-natives`
+
+### Fixed
+
+- Fixed `poll` wait duration parsing to fall back to `30s` when the provided value is an empty string
 
 ## [14.4.1] - 2026-04-26
 ### Breaking Changes

@@ -6,9 +6,8 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { type ChunkedGrepMatch, describeChunkedGrepMatch } from "../edit/modes/chunk";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
+import { type Theme } from "../modes/theme/theme";
 import grepDescription from "../prompts/tools/grep.md" with { type: "text" };
 import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead } from "../session/streaming-output";
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
@@ -83,7 +82,6 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 		this.description = prompt.render(grepDescription, {
 			IS_HASHLINE_MODE: displayMode.hashLines,
 			IS_LINE_NUMBER_MODE: !displayMode.hashLines && displayMode.lineNumbers,
-			IS_CHUNK_MODE: displayMode.chunked,
 		});
 	}
 
@@ -98,7 +96,6 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 
 		return untilAborted(signal, async () => {
 			const normalizedPattern = pattern.trim();
-			const chunkMode = resolveEditMode(this.session) === "chunk";
 			if (!normalizedPattern) {
 				throw new ToolError("Pattern must not be empty");
 			}
@@ -296,124 +293,6 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 					matchesByFile.set(relativePath, []);
 				}
 				matchesByFile.get(relativePath)!.push(match);
-			}
-			if (chunkMode) {
-				const annotatedMatches = await Promise.all(
-					selectedMatches.map(match => {
-						const relativePath = match.path.startsWith("/") ? match.path.slice(1) : match.path;
-						const absoluteFilePath = isDirectory ? path.join(searchPath, relativePath) : searchPath;
-						return describeChunkedGrepMatch({
-							filePath: absoluteFilePath,
-							lineNumber: match.lineNumber,
-							line: match.line,
-							cwd: this.session.cwd,
-							language: getLanguageFromPath(absoluteFilePath),
-						});
-					}),
-				);
-				const chunkMatchesByFile = new Map<string, ChunkedGrepMatch[]>();
-				for (const match of annotatedMatches) {
-					recordFile(match.displayPath);
-					if (!chunkMatchesByFile.has(match.displayPath)) {
-						chunkMatchesByFile.set(match.displayPath, []);
-					}
-					chunkMatchesByFile.get(match.displayPath)!.push(match);
-				}
-				const renderChunkedMatchesForFile = (relativePath: string): string[] => {
-					const renderedLines: string[] = [];
-					const fileMatches = chunkMatchesByFile.get(relativePath) ?? [];
-					if (fileMatches.length === 0) {
-						return renderedLines;
-					}
-					const matchesByChunk = new Map<string, ChunkedGrepMatch[]>();
-					for (const match of fileMatches) {
-						const chunkKey = match.chunkPath ?? "";
-						if (!matchesByChunk.has(chunkKey)) {
-							matchesByChunk.set(chunkKey, []);
-						}
-						matchesByChunk.get(chunkKey)!.push(match);
-					}
-					for (const [chunkPath, chunkMatches] of matchesByChunk) {
-						if (chunkPath) {
-							const chunkChecksum = chunkMatches[0]?.chunkChecksum;
-							const dashes = "-".repeat(chunkPath.split(".").length - 1);
-							const anchor = chunkChecksum
-								? `${dashes}@${chunkPath}#${chunkChecksum}`
-								: `${dashes}@${chunkPath}`;
-							renderedLines.push(anchor);
-						}
-						for (const match of chunkMatches) {
-							renderedLines.push(`    ${match.lineNumber}|${match.line}`);
-							fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
-						}
-					}
-					return renderedLines;
-				};
-				if (isDirectory) {
-					const filesByDirectory = new Map<string, string[]>();
-					for (const relativePath of fileList) {
-						const directory = path.dirname(relativePath).replace(/\\/g, "/");
-						if (!filesByDirectory.has(directory)) {
-							filesByDirectory.set(directory, []);
-						}
-						filesByDirectory.get(directory)!.push(relativePath);
-					}
-					for (const [directory, directoryFiles] of filesByDirectory) {
-						if (directory === ".") {
-							for (const relativePath of directoryFiles) {
-								const renderedLines = renderChunkedMatchesForFile(relativePath);
-								if (renderedLines.length === 0) continue;
-								if (outputLines.length > 0) {
-									outputLines.push("");
-								}
-								outputLines.push(`# ${path.basename(relativePath)}`);
-								outputLines.push(...renderedLines);
-							}
-							continue;
-						}
-						const renderedFiles = directoryFiles
-							.map(relativePath => ({ relativePath, lines: renderChunkedMatchesForFile(relativePath) }))
-							.filter(file => file.lines.length > 0);
-						if (renderedFiles.length === 0) continue;
-						if (outputLines.length > 0) {
-							outputLines.push("");
-						}
-						outputLines.push(`# ${directory}`);
-						for (const { relativePath, lines } of renderedFiles) {
-							outputLines.push(`## └─ ${path.basename(relativePath)}`);
-							outputLines.push(...lines);
-						}
-					}
-				} else {
-					for (const relativePath of fileList) {
-						outputLines.push(...renderChunkedMatchesForFile(relativePath));
-					}
-				}
-				if (matchLimitReached || result.limitReached) {
-					outputLines.push("", limitMessage);
-				}
-				const rawOutput = outputLines.join("\n");
-				const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-				const truncated = Boolean(matchLimitReached || result.limitReached || truncation.truncated);
-				const details: GrepToolDetails = {
-					scopePath,
-					matchCount: selectedMatches.length,
-					fileCount: fileList.length,
-					files: fileList,
-					fileMatches: fileList.map(path => ({
-						path,
-						count: fileMatchCounts.get(path) ?? 0,
-					})),
-					truncated,
-					matchLimitReached: matchLimitReached ? effectiveLimit : undefined,
-					resultLimitReached: result.limitReached ? internalLimit : undefined,
-				};
-				if (truncation.truncated) details.truncation = truncation;
-				const resultBuilder = toolResult(details).text(truncation.content);
-				if (truncation.truncated) {
-					resultBuilder.truncation(truncation, { direction: "head" });
-				}
-				return resultBuilder.done();
 			}
 			const displayLines: string[] = [];
 			const renderMatchesForFile = (relativePath: string): { model: string[]; display: string[] } => {

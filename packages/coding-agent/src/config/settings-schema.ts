@@ -955,12 +955,12 @@ export const SETTINGS_SCHEMA = {
 	// Edit tool
 	"edit.mode": {
 		type: "enum",
-		values: ["replace", "patch", "hashline", "chunk", "vim", "apply_patch", "atom"] as const,
+		values: ["replace", "patch", "hashline", "vim", "apply_patch", "atom"] as const,
 		default: "hashline",
 		ui: {
 			tab: "editing",
 			label: "Edit Mode",
-			description: "Select the edit tool variant (replace, patch, hashline, chunk, vim, or apply_patch)",
+			description: "Select the edit tool variant (replace, patch, hashline, vim, or apply_patch)",
 		},
 	},
 
@@ -1043,38 +1043,6 @@ export const SETTINGS_SCHEMA = {
 			tab: "editing",
 			label: "Inline Read Previews",
 			description: "Render read tool results inline in the transcript instead of summary rows",
-		},
-	},
-
-	"read.prosechunks": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "editing",
-			label: "Prose Chunks",
-			description: "Enable chunk rendering for prose files in chunk edit mode",
-		},
-	},
-
-	"read.explorechunks": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "editing",
-			label: "Explore Chunks",
-			description: "Show chunk tree without checksums for read-only agents like explore",
-		},
-	},
-
-	"read.anchorstyle": {
-		type: "enum",
-		values: ["full", "kind", "bare"],
-		default: "full",
-		ui: {
-			tab: "editing",
-			label: "Anchor Style",
-			description: "Render chunk anchors with full names, kind prefixes, or checksum-only tags",
-			submenu: true,
 		},
 	},
 

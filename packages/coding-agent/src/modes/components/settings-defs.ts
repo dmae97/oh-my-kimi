@@ -298,11 +298,6 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		{ value: "1000", label: "1000 lines" },
 		{ value: "5000", label: "5000 lines" },
 	],
-	"read.anchorstyle": [
-		{ value: "full", label: "Full", description: "Show the kind prefix and identifier" },
-		{ value: "kind", label: "Kind", description: "Show only the kind prefix plus checksum" },
-		{ value: "bare", label: "Bare", description: "Show only the checksum" },
-	],
 	// Todo auto-clear delay
 	"tasks.todoClearDelay": [
 		{ value: "0", label: "Instant" },

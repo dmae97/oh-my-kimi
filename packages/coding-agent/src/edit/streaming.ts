@@ -16,7 +16,6 @@ import type { Theme } from "../modes/theme/theme";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { computeEditDiff, type DiffError, type DiffResult } from "./diff";
 import { expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
-import { type ChunkToolEdit, computeChunkDiff, parseChunkEditPath } from "./modes/chunk";
 import { computeHashlineDiff, type HashlineToolEdit } from "./modes/hashline";
 import { computePatchDiff, type PatchEditEntry } from "./modes/patch";
 import type { ReplaceEditEntry } from "./modes/replace";
@@ -226,70 +225,6 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 	},
 };
 
-interface ChunkArgs {
-	path?: string;
-	edits?: ChunkToolEdit[];
-	__partialJson?: string;
-}
-
-const chunkStrategy: EditStreamingStrategy<ChunkArgs> = {
-	extractCompleteEdits(args, partialJson) {
-		if (!args?.edits) return args;
-		let edits = dropIncompleteLastEdit(args.edits, partialJson, "edits");
-		// Extra guard: if partial JSON still contains `":nu` / `":nul` (partial
-		// `null` literals), `partial-json` may have already surfaced the last
-		// entry with `write === null`. When that entry's `}` hasn't closed
-		// yet, it has already been dropped above. But if dropping was not
-		// triggered (e.g. list still open and no new `{` after), also drop the
-		// trailing null-write entry so the preview does not flicker with an
-		// error for an incomplete string/null literal.
-		if (partialJson && edits.length > 0) {
-			const last = edits[edits.length - 1] as Partial<ChunkToolEdit> | undefined;
-			const endsInPartialNull = /:\s*nu?l?\s*$/.test(partialJson.trimEnd());
-			if (last && endsInPartialNull && last.write === null) {
-				edits = edits.slice(0, -1);
-			}
-		}
-		return { ...args, edits };
-	},
-	async computeDiffPreview(args, ctx) {
-		const edits = args.edits ?? [];
-		if (edits.length === 0) return null;
-		// Group edits by file path
-		const groups = new Map<string, ChunkToolEdit[]>();
-		const fileOrder: string[] = [];
-		for (const edit of edits) {
-			if (!edit) continue;
-			const editPath = edit.path ?? args.path;
-			if (!editPath) continue;
-			const { filePath } = parseChunkEditPath(editPath);
-			if (!filePath) continue;
-			let bucket = groups.get(filePath);
-			if (!bucket) {
-				bucket = [];
-				groups.set(filePath, bucket);
-				fileOrder.push(filePath);
-			}
-			bucket.push({ ...edit, path: editPath });
-		}
-		if (fileOrder.length === 0) return null;
-
-		const MAX_FILES = 5;
-		const selected = fileOrder.slice(0, MAX_FILES);
-		const previews: PerFileDiffPreview[] = [];
-		for (const filePath of selected) {
-			ctx.signal.throwIfAborted();
-			const fileEdits = groups.get(filePath) ?? [];
-			const result = await computeChunkDiff({ path: filePath, edits: fileEdits }, ctx.cwd, { signal: ctx.signal });
-			previews.push(toPerFilePreview(filePath, result));
-		}
-		return previews;
-	},
-	renderStreamingFallback() {
-		return "";
-	},
-};
-
 interface ApplyPatchArgs {
 	input?: string;
 }
@@ -365,7 +300,6 @@ export const EDIT_MODE_STRATEGIES: Record<EditMode, EditStreamingStrategy<unknow
 	replace: replaceStrategy as EditStreamingStrategy<unknown>,
 	patch: patchStrategy as EditStreamingStrategy<unknown>,
 	hashline: hashlineStrategy as EditStreamingStrategy<unknown>,
-	chunk: chunkStrategy as EditStreamingStrategy<unknown>,
 	apply_patch: applyPatchStrategy as EditStreamingStrategy<unknown>,
 	vim: vimStrategy,
 	atom: atomStrategy as EditStreamingStrategy<unknown>,

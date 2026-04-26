@@ -45,7 +45,7 @@ If `done`, `rm`, or `drop` omits both `task` and `phase`, it applies to all task
 
 ## Phase Anatomy
 - `name`: Short, human-readable noun phrase (1-3 words). Capitalize naturally.
-- Always prefix with a roman-numeral ordinal (`I.`, `II.`, `III.`, `IV.`, ...) to convey ordering — e.g. `I. Foundation`, `II. Auth`, `III. Routing`. Single-phase plans use `I.` too.
+- Always prefix with a roman-numeral ordinal (`I.`, `II.`, `III.`, `IV.`, …) to convey ordering — e.g. `I. Foundation`, `II. Auth`, `III. Routing`. Single-phase plans use `I.` too.
 - You **MUST NOT** use snake_case, `Phase1_*`, arabic numerals (`1.`), or letter prefixes (`A.`) — they render as ugly identifiers.
 
 ## Rules
@@ -66,7 +66,7 @@ Create a todo list when:
 <examples>
 # Initial setup (multi-phase)
 `{"ops":[{"op":"replace","phases":[{"name":"I. Foundation","tasks":[{"content":"Scaffold crate"},{"content":"Wire workspace"}]},{"name":"II. Auth","tasks":[{"content":"Port credential store"},{"content":"Wire OAuth providers"}]},{"name":"III. Verification","tasks":[{"content":"Run cargo test"}]}]}]}`
-# Initial setup (single phase " still prefixed)
+# Initial setup (single phase — still prefixed)
 `{"ops":[{"op":"replace","phases":[{"name":"I. Implementation","tasks":[{"content":"Apply fix"},{"content":"Run tests"}]}]}]}`
 # Complete one task
 `{"ops":[{"op":"done","task":"task-2"}]}`

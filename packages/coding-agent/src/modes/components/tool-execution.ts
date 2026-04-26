@@ -109,7 +109,7 @@ export class ToolExecutionComponent extends Container {
 		isError?: boolean;
 		details?: any;
 	};
-	// Edit preview state (single-file for legacy modes, multi-file for chunk)
+	// Edit preview state
 	#editMode?: EditMode;
 	#editDiffPreview?: PerFileDiffPreview[];
 	#editDiffScheduleTimer?: NodeJS.Timeout;
@@ -639,10 +639,7 @@ export class ToolExecutionComponent extends Container {
 			return this.#args;
 		}
 		// Single-file previews feed the existing `previewDiff` channel consumed
-		// by `formatStreamingDiff` in the renderer. Multi-file previews are
-		// piped via `renderContext.perFileDiffPreview`, so the args we hand to
-		// `renderCall` only need the first file's diff to preserve prior
-		// single-file behavior.
+		// by `formatStreamingDiff` in the renderer.
 		const first = previews[0];
 		if (!first?.diff) {
 			return this.#args;
@@ -686,9 +683,6 @@ export class ToolExecutionComponent extends Container {
 					context.editDiffPreview = first.error
 						? { error: first.error }
 						: { diff: first.diff ?? "", firstChangedLine: first.firstChangedLine };
-				}
-				if (previews.length > 1) {
-					context.perFileDiffPreview = previews;
 				}
 			}
 			context.renderDiff = renderDiff;

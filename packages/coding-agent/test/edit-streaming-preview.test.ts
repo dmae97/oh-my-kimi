@@ -30,45 +30,6 @@ describe("dropIncompleteLastEdit", () => {
 	});
 });
 
-describe("chunk extractCompleteEdits", () => {
-	const strategy = EDIT_MODE_STRATEGIES.chunk;
-
-	test("passes through a single complete entry", () => {
-		const args = {
-			edits: [{ path: "a.ts", write: "foo" }],
-			__partialJson: '{"edits":[{"path":"a.ts","write":"foo"}]}',
-		};
-		const out = strategy.extractCompleteEdits(args, args.__partialJson) as typeof args;
-		expect(out.edits).toHaveLength(1);
-	});
-
-	test("drops trailing entry when partial JSON has open-brace after last close", () => {
-		const args = {
-			edits: [{ path: "a.ts", write: "foo" }, { path: "b.ts" }],
-			__partialJson: '{"edits":[{"path":"a.ts","write":"foo"},{"path":"b.ts"',
-		};
-		const out = strategy.extractCompleteEdits(args, args.__partialJson) as typeof args;
-		expect(out.edits).toHaveLength(1);
-		expect(out.edits[0].path).toBe("a.ts");
-	});
-
-	test("drops trailing entry when partial JSON ends in ':nu' (write: null guard)", () => {
-		const args = {
-			edits: [
-				{ path: "a.ts", write: "foo" },
-				{ path: "b.ts", write: null },
-			],
-			// simulates partial-json coercing the in-flight `nu` to `null`
-			__partialJson: '{"edits":[{"path":"a.ts","write":"foo"},{"path":"b.ts","write":nu',
-		};
-		const out = strategy.extractCompleteEdits(args, args.__partialJson) as typeof args;
-		// Last entry should be dropped because its `}` hasn't arrived yet, so
-		// incomplete null-write errors are suppressed while streaming.
-		expect(out.edits).toHaveLength(1);
-		expect(out.edits[0].path).toBe("a.ts");
-	});
-});
-
 describe("apply_patch extractCompleteEdits", () => {
 	const strategy = EDIT_MODE_STRATEGIES.apply_patch;
 

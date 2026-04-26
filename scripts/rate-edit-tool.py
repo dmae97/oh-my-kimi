@@ -720,7 +720,7 @@ MARKDOWN_FIXTURE = (
 
     | Surface | Expected stress |
     | --- | --- |
-    | `main.ts` | Structural chunk addressing |
+    | `main.ts` | Type/interface and class member edits |
     | `main.rs` | Enum and impl member edits |
     | `main.py` | Indentation-sensitive blocks |
     | `main.md` | Prose and block-level text edits |

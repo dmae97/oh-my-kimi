@@ -233,37 +233,6 @@ module.exports.AstMatchStrictness = {
   Signature: 'signature',
   Template: 'template',
 };
-module.exports.ChunkAnchorStyle = {
-  Full: 'full',
-  Kind: 'kind',
-  Bare: 'bare',
-  FullOmit: 'full-omit',
-  KindOmit: 'kind-omit',
-  None: 'none',
-};
-module.exports.ChunkEditOp = {
-  Put: 'put',
-  Replace: 'replace',
-  Delete: 'delete',
-  Before: 'before',
-  After: 'after',
-  Prepend: 'prepend',
-  Append: 'append',
-};
-module.exports.ChunkFocusMode = {
-  Expanded: 'expanded',
-  Collapsed: 'collapsed',
-  Container: 'container',
-};
-module.exports.ChunkReadStatus = {
-  Ok: 'ok',
-  NotFound: 'not_found',
-  UnsupportedRegion: 'unsupported_region',
-};
-module.exports.ChunkRegion = {
-  Head: '^',
-  Body: '~',
-};
 module.exports.Ellipsis = {
   Unicode: 0,
   Ascii: 1,

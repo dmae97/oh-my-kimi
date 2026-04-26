@@ -668,59 +668,6 @@ export const HASHLINE_BIGRAMS = [
 export const HASHLINE_BIGRAMS_COUNT = HASHLINE_BIGRAMS.length;
 
 /**
- * 40 common English BPE bigrams used by chunk checksums (`path#checksum`).
- * Kept separate from {@link HASHLINE_BIGRAMS} because the chunk checksum
- * format is `path#bigram1bigram2` (4 chars from a 1600-code namespace) and
- * is independent of the line-anchor format.
- *
- * Order is stable forever — changing it invalidates every saved chunk path.
- */
-export const CHUNK_BIGRAMS = [
-	"th",
-	"he",
-	"in",
-	"er",
-	"an",
-	"re",
-	"on",
-	"at",
-	"en",
-	"nd",
-	"ti",
-	"es",
-	"or",
-	"te",
-	"of",
-	"ed",
-	"is",
-	"it",
-	"al",
-	"ar",
-	"st",
-	"to",
-	"nt",
-	"ng",
-	"se",
-	"ha",
-	"as",
-	"ou",
-	"io",
-	"le",
-	"ve",
-	"co",
-	"me",
-	"de",
-	"hi",
-	"ri",
-	"ro",
-	"ic",
-	"ne",
-	"ea",
-] as const;
-
-export const CHUNK_BIGRAMS_COUNT = CHUNK_BIGRAMS.length;
-
-/**
  * Regex source matching exactly one bigram from {@link HASHLINE_BIGRAMS}.
  * Used by hashline parsers — keep in sync with the alphabet array above.
  */

@@ -25,7 +25,7 @@ const WAIT_DURATION_MS: Record<string, number> = {
 };
 
 function parseWaitDurationMs(value: string | undefined): number {
-	return (value && WAIT_DURATION_MS[value]) ?? WAIT_DURATION_MS["30s"];
+	return (value ? WAIT_DURATION_MS[value] : undefined) ?? WAIT_DURATION_MS["30s"];
 }
 
 interface PollResult {

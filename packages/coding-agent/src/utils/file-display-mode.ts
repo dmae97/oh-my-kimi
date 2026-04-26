@@ -7,7 +7,6 @@ import { resolveEditMode } from "./edit-mode";
 export interface FileDisplayMode {
 	lineNumbers: boolean;
 	hashLines: boolean;
-	chunked: boolean;
 }
 
 /** Session-like object providing settings and tool availability for display mode resolution. */
@@ -33,10 +32,8 @@ export function resolveFileDisplayMode(session: FileDisplayModeSession, options?
 	const usesHashLineAnchors = editMode === "hashline" || editMode === "atom";
 	const raw = options?.raw === true;
 	const hashLines = !raw && hasEditTool && usesHashLineAnchors && settings.get("readHashLines") !== false;
-	const chunked = !raw && hasEditTool && editMode === "chunk";
 	return {
 		hashLines,
 		lineNumbers: !raw && (hashLines || settings.get("readLineNumbers") === true),
-		chunked,
 	};
 }

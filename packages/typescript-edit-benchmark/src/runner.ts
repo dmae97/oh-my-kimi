@@ -192,8 +192,6 @@ function getEditPathFromArgs(args: unknown): string | null {
 
 const HASHLINE_SUBTYPES = ["set", "set_range", "insert"] as const;
 
-const CHUNK_OP_SUBTYPES = ["append", "prepend", "replace", "delete"] as const;
-
 const BENCHMARK_TOOL_NAMES = ["read", "edit", "vim", "write", "apply_patch"] as const;
 const EDIT_TOOL_NAMES = ["edit", "vim", "apply_patch"] as const;
 
@@ -203,21 +201,6 @@ function isEditTool(toolName: unknown): toolName is (typeof EDIT_TOOL_NAMES)[num
 
 function isMutationTool(toolName: unknown): boolean {
 	return isEditTool(toolName) || toolName === "write";
-}
-
-function countChunkEditSubtypes(args: unknown): Record<string, number> {
-	const counts: Record<string, number> = Object.fromEntries(CHUNK_OP_SUBTYPES.map(k => [k, 0]));
-	if (!args || typeof args !== "object") return counts;
-	const operations = (args as { operations?: unknown[] }).operations;
-	if (!Array.isArray(operations)) return counts;
-	for (const operation of operations) {
-		if (!operation || typeof operation !== "object") continue;
-		const op = (operation as { op?: string }).op;
-		if (typeof op === "string" && op in counts) {
-			counts[op]++;
-		}
-	}
-	return counts;
 }
 
 function countHashlineEditSubtypes(args: unknown): Record<string, number> {
@@ -771,8 +754,6 @@ export interface TaskRunResult {
 	editAutocorrectCount: number;
 	/** Hashline edit subtype counts (replaceLine, replaceLines, etc.) — only when editVariant is hashline */
 	hashlineEditSubtypes?: Record<string, number>;
-	/** Chunk edit subtype counts — only when editVariant is chunk */
-	chunkEditSubtypes?: Record<string, number>;
 	mutationIntentMatched?: boolean;
 	mutationIntentReason?: string;
 	timeoutTelemetry?: PromptAttemptTelemetry;
@@ -838,8 +819,6 @@ export interface BenchmarkSummary {
 	mutationIntentMatchRate?: number;
 	/** Hashline edit subtype totals — only when editVariant is hashline */
 	hashlineEditSubtypes?: Record<string, number>;
-	/** Chunk edit subtype totals — only when editVariant is chunk */
-	chunkEditSubtypes?: Record<string, number>;
 }
 
 export interface BenchmarkResult {
@@ -931,7 +910,6 @@ async function runSingleTask(
 		totalInputChars: 0,
 	};
 	const hashlineSubtypes: Record<string, number> = Object.fromEntries(HASHLINE_SUBTYPES.map(k => [k, 0]));
-	const chunkSubtypes: Record<string, number> = Object.fromEntries(CHUNK_OP_SUBTYPES.map(k => [k, 0]));
 
 	const logFile = path.join(TMP, `run-${task.id}-${runIndex}.jsonl`);
 	const logEvent = async (event: unknown) => {
@@ -1154,12 +1132,6 @@ async function runSingleTask(
 									hashlineSubtypes[key] += counts[key];
 								}
 							}
-							if (config.editVariant === "chunk" && args) {
-								const counts = countChunkEditSubtypes(args);
-								for (const key of CHUNK_OP_SUBTYPES) {
-									chunkSubtypes[key] += counts[key];
-								}
-							}
 							if (e.isError) {
 								toolStats.editFailures++;
 								const error = await appendNoChangeMutationHint(
@@ -1286,7 +1258,6 @@ async function runSingleTask(
 		editWarnings,
 		editAutocorrectCount,
 		hashlineEditSubtypes: config.editVariant === "hashline" ? hashlineSubtypes : undefined,
-		chunkEditSubtypes: config.editVariant === "chunk" ? chunkSubtypes : undefined,
 		mutationIntentMatched: mutationIntentValidation?.matched,
 		mutationIntentReason: mutationIntentValidation?.reason,
 		timeoutTelemetry,
@@ -1335,7 +1306,6 @@ async function _runRpcBenchmarkRun(
 		totalInputChars: 0,
 	};
 	const hashlineSubtypes: Record<string, number> = Object.fromEntries(HASHLINE_SUBTYPES.map(k => [k, 0]));
-	const chunkSubtypes: Record<string, number> = Object.fromEntries(CHUNK_OP_SUBTYPES.map(k => [k, 0]));
 
 	const logFile = path.join(sessionDir, `run-${task.id}-${runIndex}.jsonl`);
 	const logEvent = async (event: unknown) => {
@@ -1483,12 +1453,6 @@ async function _runRpcBenchmarkRun(
 								hashlineSubtypes[key] += counts[key];
 							}
 						}
-						if (config.editVariant === "chunk" && args) {
-							const counts = countChunkEditSubtypes(args);
-							for (const key of CHUNK_OP_SUBTYPES) {
-								chunkSubtypes[key] += counts[key];
-							}
-						}
 						if (e.isError) {
 							toolStats.editFailures++;
 							const toolError = await appendNoChangeMutationHint(
@@ -1609,7 +1573,6 @@ async function _runRpcBenchmarkRun(
 		editWarnings,
 		editAutocorrectCount,
 		hashlineEditSubtypes: config.editVariant === "hashline" ? hashlineSubtypes : undefined,
-		chunkEditSubtypes: config.editVariant === "chunk" ? chunkSubtypes : undefined,
 		mutationIntentMatched: mutationIntentValidation?.matched,
 		mutationIntentReason: mutationIntentValidation?.reason,
 		timeoutTelemetry,
@@ -2161,15 +2124,6 @@ export async function runBenchmark(
 				)
 			: undefined;
 
-	const chunkEditSubtypes: Record<string, number> | undefined =
-		config.editVariant === "chunk"
-			? Object.fromEntries(
-					CHUNK_OP_SUBTYPES.map(key => [
-						key,
-						allRuns.reduce((sum, r) => sum + (r.chunkEditSubtypes?.[key] ?? 0), 0),
-					]),
-				)
-			: undefined;
 
 	const denom = effectiveRuns || 1;
 	const summary: BenchmarkSummary = {
@@ -2212,7 +2166,6 @@ export async function runBenchmark(
 		transportFailureRuns,
 		mutationIntentMatchRate,
 		hashlineEditSubtypes,
-		chunkEditSubtypes,
 	};
 
 	return {

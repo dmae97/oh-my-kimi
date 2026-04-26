@@ -10,7 +10,6 @@ import {
 } from "../lsp";
 import applyPatchDescription from "../prompts/tools/apply-patch.md" with { type: "text" };
 import atomDescription from "../prompts/tools/atom.md" with { type: "text" };
-import chunkEditDescription from "../prompts/tools/chunk-edit.md" with { type: "text" };
 import hashlineDescription from "../prompts/tools/hashline.md" with { type: "text" };
 import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
@@ -28,15 +27,6 @@ import {
 	resolveAtomEntryPaths,
 } from "./modes/atom";
 import {
-	type ChunkParams,
-	type ChunkToolEdit,
-	chunkEditParamsSchema,
-	executeChunkSingle,
-	parseChunkEditPath,
-	resolveAnchorStyle,
-	resolveChunkAutoIndent,
-} from "./modes/chunk";
-import {
 	executeHashlineSingle,
 	HashlineMismatchError,
 	type HashlineParams,
@@ -53,7 +43,6 @@ export * from "./diff";
 export * from "./line-hash";
 export * from "./modes/apply-patch";
 export * from "./modes/atom";
-export * from "./modes/chunk";
 export * from "./modes/hashline";
 export * from "./modes/patch";
 export * from "./modes/replace";
@@ -66,7 +55,6 @@ type TInput =
 	| typeof patchEditSchema
 	| typeof hashlineEditParamsSchema
 	| typeof atomEditParamsSchema
-	| typeof chunkEditParamsSchema
 	| typeof vimSchema
 	| typeof applyPatchSchema;
 
@@ -76,7 +64,6 @@ type EditParams =
 	| PatchParams
 	| HashlineParams
 	| AtomParams
-	| ChunkParams
 	| VimParams
 	| ApplyPatchParams;
 type EditToolResultDetails = EditToolDetails | VimToolDetails;
@@ -325,39 +312,6 @@ export class EditTool implements AgentTool<TInput> {
 
 	#getModeDefinition(): EditModeDefinition {
 		return {
-			chunk: {
-				description: (session: ToolSession) =>
-					prompt.render(chunkEditDescription, {
-						anchorStyle: resolveAnchorStyle(session.settings),
-						chunkAutoIndent: resolveChunkAutoIndent(),
-					}),
-				parameters: chunkEditParamsSchema,
-				execute: (
-					tool: EditTool,
-					params: EditParams,
-					signal: AbortSignal | undefined,
-					batchRequest: LspBatchRequest | undefined,
-					onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
-				) => {
-					const { edits, path: topPath } = params as ChunkParams & { path?: string };
-					const resolved = resolveEntryPaths(edits as ChunkToolEdit[], topPath);
-					const byFile = groupBy(resolved, (e: ChunkToolEdit) => parseChunkEditPath(e.path).filePath);
-					const entries = [...byFile.entries()].map(([filePath, fileEdits]) => ({
-						path: filePath,
-						run: (br: LspBatchRequest | undefined) =>
-							executeChunkSingle({
-								session: tool.session,
-								path: filePath,
-								edits: fileEdits,
-								signal,
-								batchRequest: br,
-								writethrough: tool.#writethrough,
-								beginDeferredDiagnosticsForPath: p => tool.#beginDeferredDiagnosticsForPath(p),
-							}),
-					}));
-					return executePerFile(entries, batchRequest, onUpdate);
-				},
-			},
 			patch: {
 				description: () => prompt.render(patchDescription),
 				parameters: patchEditSchema,
