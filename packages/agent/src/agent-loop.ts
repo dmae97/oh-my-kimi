@@ -124,7 +124,7 @@ function normalizeMessagesForProvider(
 	return changed ? normalized : messages;
 }
 
-export const INTENT_FIELD = "i";
+export const INTENT_FIELD = "_i";
 
 function injectIntentIntoSchema(schema: unknown): unknown {
 	if (!schema || typeof schema !== "object" || Array.isArray(schema)) return schema;
@@ -170,11 +170,10 @@ function normalizeTools(tools: Context["tools"], injectIntent: boolean): Context
 }
 
 function extractIntent(args: Record<string, unknown>): { intent?: string; strippedArgs: Record<string, unknown> } {
-	const intent = args[INTENT_FIELD];
+	const { [INTENT_FIELD]: intent, ...strippedArgs } = args;
 	if (typeof intent !== "string") {
-		return { strippedArgs: args };
+		return { strippedArgs };
 	}
-	const { [INTENT_FIELD]: _ignored, ...strippedArgs } = args;
 	const trimmed = intent.trim();
 	return { intent: trimmed.length > 0 ? trimmed : undefined, strippedArgs };
 }
