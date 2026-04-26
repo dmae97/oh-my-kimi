@@ -16,6 +16,18 @@ const pollSchema = Type.Object({
 
 type PollParams = Static<typeof pollSchema>;
 
+const WAIT_DURATION_MS: Record<string, number> = {
+	"5s": 5_000,
+	"10s": 10_000,
+	"30s": 30_000,
+	"1m": 60_000,
+	"5m": 5 * 60_000,
+};
+
+function parseWaitDurationMs(value: string | undefined): number {
+	return (value && WAIT_DURATION_MS[value]) ?? WAIT_DURATION_MS["30s"];
+}
+
 interface PollResult {
 	id: string;
 	type: "bash" | "task";
@@ -84,8 +96,13 @@ export class PollTool implements AgentTool<typeof pollSchema, PollToolDetails> {
 			return this.#buildResult(manager, jobsToWatch);
 		}
 
-		// Block until at least one running job finishes or the call is aborted
+		// Wait until at least one running job finishes, the wait duration elapses, or the call is aborted.
 		const racePromises: Promise<unknown>[] = runningJobs.map(j => j.promise);
+		const waitMs = parseWaitDurationMs(this.session.settings.get("async.pollWaitDuration"));
+		const { promise: timeoutPromise, resolve: timeoutResolve } = Promise.withResolvers<void>();
+		const timeoutHandle = setTimeout(() => timeoutResolve(), waitMs);
+		racePromises.push(timeoutPromise);
+
 		const watchedJobIds = runningJobs.map(job => job.id);
 		manager.watchJobs(watchedJobIds);
 
@@ -105,6 +122,7 @@ export class PollTool implements AgentTool<typeof pollSchema, PollToolDetails> {
 			}
 		} finally {
 			manager.unwatchJobs(watchedJobIds);
+			clearTimeout(timeoutHandle);
 		}
 
 		if (signal?.aborted) {
