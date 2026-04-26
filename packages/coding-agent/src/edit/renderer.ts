@@ -29,6 +29,7 @@ import type { VimToolDetails } from "../vim/types";
 import type { DiffError, DiffResult } from "./diff";
 import { expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
 import type { Operation, PatchEditEntry } from "./modes/patch";
+import type { PerFileDiffPreview } from "./streaming";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // LSP Batching
@@ -140,6 +141,8 @@ export interface EditRenderContext {
 	editMode?: EditMode;
 	/** Pre-computed diff preview (computed before tool executes) */
 	editDiffPreview?: DiffResult | DiffError;
+	/** Multi-file streaming diff preview (edits spanning several files) */
+	perFileDiffPreview?: PerFileDiffPreview[];
 	/** Function to render diff text with syntax highlighting */
 	renderDiff?: (diffText: string, options?: { filePath?: string }) => string;
 }
@@ -275,7 +278,32 @@ function formatMetadataLine(lineCount: number | null, language: string | undefin
 	return uiTheme.fg("dim", `${icon}`);
 }
 
-function getCallPreview(args: EditRenderArgs, rawPath: string, uiTheme: Theme): string {
+function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: Theme): string {
+	const parts: string[] = [];
+	for (const preview of previews) {
+		if (!preview.diff && !preview.error) continue;
+		const header = uiTheme.fg("dim", `\n\n\u2500\u2500 ${shortenPath(preview.path)} \u2500\u2500`);
+		if (preview.error) {
+			parts.push(`${header}\n${uiTheme.fg("error", replaceTabs(preview.error))}`);
+			continue;
+		}
+		if (preview.diff) {
+			parts.push(`${header}${formatStreamingDiff(preview.diff, preview.path, uiTheme, "preview")}`);
+		}
+	}
+	return parts.join("");
+}
+
+function getCallPreview(
+	args: EditRenderArgs,
+	rawPath: string,
+	uiTheme: Theme,
+	renderContext: EditRenderContext | undefined,
+): string {
+	const multi = renderContext?.perFileDiffPreview;
+	if (multi && multi.length > 1 && multi.some(p => p.diff || p.error)) {
+		return formatMultiFileStreamingDiff(multi, uiTheme);
+	}
 	if (args.previewDiff) {
 		return formatStreamingDiff(args.previewDiff, rawPath, uiTheme, "preview");
 	}
@@ -408,7 +436,7 @@ export const editToolRenderer = {
 		if (fileCount > 1) {
 			text += uiTheme.fg("dim", ` (+${fileCount - 1} more)`);
 		}
-		text += getCallPreview(editArgs, rawPath, uiTheme);
+		text += getCallPreview(editArgs, rawPath, uiTheme, renderContext);
 		if (applyPatchSummary?.error) {
 			text += `\n\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error), CALL_TEXT_PREVIEW_WIDTH))}`;
 		}

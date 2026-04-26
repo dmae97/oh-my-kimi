@@ -684,6 +684,9 @@ export class ToolExecutionComponent extends Container {
 						? { error: first.error }
 						: { diff: first.diff ?? "", firstChangedLine: first.firstChangedLine };
 				}
+				if (previews.length > 1) {
+					context.perFileDiffPreview = previews;
+				}
 			}
 			context.renderDiff = renderDiff;
 		}
