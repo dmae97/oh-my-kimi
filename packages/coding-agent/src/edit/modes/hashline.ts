@@ -1060,7 +1060,6 @@ export interface CompactHashlineDiffPreview {
 
 export interface CompactHashlineDiffOptions {
 	maxUnchangedRun?: number;
-	maxAdditionRun?: number;
 	maxDeletionRun?: number;
 	maxOutputLines?: number;
 }
@@ -1216,7 +1215,6 @@ export function buildCompactHashlineDiffPreview(
 	options: CompactHashlineDiffOptions = {},
 ): CompactHashlineDiffPreview {
 	const maxUnchangedRun = options.maxUnchangedRun ?? 2;
-	const maxAdditionRun = options.maxAdditionRun ?? 2;
 	const maxDeletionRun = options.maxDeletionRun ?? 2;
 	const maxOutputLines = options.maxOutputLines ?? 16;
 
@@ -1235,7 +1233,7 @@ export function buildCompactHashlineDiffPreview(
 				break;
 			case "+":
 				addedLines += run.lines.length;
-				out.push(...collapseFromStart(run.lines, maxAdditionRun, "added"));
+				out.push(...run.lines);
 				break;
 			case "-":
 				removedLines += run.lines.length;
