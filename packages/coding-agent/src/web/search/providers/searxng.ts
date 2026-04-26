@@ -20,9 +20,10 @@
  *
  * Reference: https://docs.searxng.org/dev/search_api.html
  */
+
+import { settings } from "../../../config/settings";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
-import { settings } from "../../../config/settings";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
@@ -122,7 +123,7 @@ function buildRequest(
 	};
 
 	if (token) {
-		headers["Authorization"] = `Bearer ${token}`;
+		headers.Authorization = `Bearer ${token}`;
 	}
 
 	return { url, headers };
@@ -149,25 +150,19 @@ async function callSearXNGSearch(
 
 	if (!response.ok) {
 		const errorText = await response.text();
-		throw new SearchProviderError(
-			"searxng",
-			`SearXNG API error (${response.status}): ${errorText}`,
-			response.status,
-		);
+		throw new SearchProviderError("searxng", `SearXNG API error (${response.status}): ${errorText}`, response.status);
 	}
 
 	return (await response.json()) as SearXNGResponse;
 }
 
 /** Execute SearXNG web search. */
-export async function searchSearXNG(
-	params: {
-		query: string;
-		num_results?: number;
-		recency?: "day" | "week" | "month" | "year";
-		signal?: AbortSignal;
-	},
-): Promise<SearchResponse> {
+export async function searchSearXNG(params: {
+	query: string;
+	num_results?: number;
+	recency?: "day" | "week" | "month" | "year";
+	signal?: AbortSignal;
+}): Promise<SearchResponse> {
 	const numResults = clampNumResults(params.num_results, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
 
 	const endpoint = findEndpoint();
