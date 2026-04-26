@@ -32,6 +32,7 @@
 - Fixed edit rendering so provided `input` text is shown in the export even without a file path
 - Fixed `args.paths` handling in `ast_edit` and `find` so multiple paths are shown as a comma-separated list
 - Fixed power assertion state handling so subsequent prompts are no longer blocked after an aborted or canceled prompt
+- Fixed IRC background exchange poll loop leaking after session disposal: `#scheduleBackgroundExchangeFlush` now stops immediately when `dispose()` is called, preventing stale `setTimeout` callbacks from firing against a torn-down agent
 
 ## [14.9.2] - 2026-05-10
 ### Added

@@ -570,6 +570,7 @@ export class AgentSession {
 	#agentId: string | undefined;
 	#agentRegistry: AgentRegistry | undefined;
 	#providerSessionId: string | undefined;
+	#isDisposed = false;
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
 	#turnIndex = 0;
@@ -2136,6 +2137,8 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	async dispose(): Promise<void> {
+		this.#isDisposed = true;
+		this.#pendingBackgroundExchanges = [];
 		this.#evalExecutionDisposing = true;
 		try {
 			if (this.#extensionRunner?.hasHandlers("session_shutdown")) {
@@ -6881,7 +6884,8 @@ export class AgentSession {
 		if (this.#scheduledBackgroundExchangeFlush) return;
 		this.#scheduledBackgroundExchangeFlush = true;
 		const attempt = (): void => {
-			if (this.#pendingBackgroundExchanges.length === 0) {
+			if (this.#pendingBackgroundExchanges.length === 0 || this.#isDisposed) {
+				this.#pendingBackgroundExchanges = [];
 				this.#scheduledBackgroundExchangeFlush = false;
 				return;
 			}
