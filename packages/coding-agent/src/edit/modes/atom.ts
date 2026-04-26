@@ -12,7 +12,7 @@
  *   { path, loc: "5th",      pre: [...], splice: [...], post: [...] }
  *   { path, loc: "$",        pre:  [...] }                            // prepend to file
  *   { path, loc: "$",        post: [...] }                            // append to file
- *   { path, loc: "$",        sed:  { pat, rep, g?, F?, i? } }         // sed on every line
+ *   { path, loc: "$",        sed:  { pat, rep, g?, F?, i?, m? } }         // sed on every line
  *
  * `splice: []` on a single-anchor locator deletes that line. `splice:[""]` preserves
  * a blank line. Line ranges are not supported.
@@ -70,9 +70,10 @@ export const atomEditSchema = Type.Object(
 				{
 					pat: Type.String({ description: "pattern to find" }),
 					rep: Type.String({ description: "replacement text" }),
-					g: Type.Optional(Type.Boolean({ description: "global replace", default: true })),
+					g: Type.Optional(Type.Boolean({ description: "global replace", default: false })),
 					F: Type.Optional(Type.Boolean({ description: "literal replace", default: false })),
 					i: Type.Optional(Type.Boolean({ description: "ignore case", default: false })),
+					m: Type.Optional(Type.Boolean({ description: "multiline mode (^ and $ match line boundaries)", default: false })),
 				},
 				{
 					additionalProperties: false,
@@ -109,6 +110,7 @@ export type AtomEdit =
 	| { op: "sed_file"; spec: SedSpec; expression: string };
 
 export interface SedSpec {
+	multiline: boolean;
 	pattern: string;
 	replacement: string;
 	global: boolean;
@@ -268,7 +270,7 @@ function extractAnchorContentHint(raw: string): string | undefined {
 
 function parseSedSpec(input: unknown, editIndex: number): SedSpec {
 	if (input === null || typeof input !== "object" || Array.isArray(input)) {
-		throw new Error(`Edit ${editIndex}: sed must be an object with shape {pat, rep, g?, F?, i?}.`);
+		throw new Error(`Edit ${editIndex}: sed must be an object with shape {pat, rep, g?, F?, i?, m?}.`);
 	}
 	const obj = input as Record<string, unknown>;
 	const pat = obj.pat;
@@ -284,7 +286,7 @@ function parseSedSpec(input: unknown, editIndex: number): SedSpec {
 	if (typeof rep !== "string") {
 		throw new Error(`Edit ${editIndex}: sed.rep must be a string.`);
 	}
-	const readBool = (key: "g" | "F" | "i", defaultValue: boolean): boolean => {
+	const readBool = (key: "g" | "F" | "i" | "m", defaultValue: boolean): boolean => {
 		const v = obj[key];
 		if (v === undefined) return defaultValue;
 		if (typeof v !== "boolean") {
@@ -292,21 +294,23 @@ function parseSedSpec(input: unknown, editIndex: number): SedSpec {
 		}
 		return v;
 	};
-	const global = readBool("g", true);
+	const global = readBool("g", false);
 	const literal = readBool("F", false);
 	const ignoreCase = readBool("i", false);
-	return { pattern: pat, replacement: rep, global, literal, ignoreCase };
+	const multiline = readBool("m", false);
+	return { pattern: pat, replacement: rep, global, literal, ignoreCase, multiline };
 }
 
 function formatSedExpression(spec: SedSpec): string {
-	const obj: { pat: string; rep: string; g?: boolean; F?: boolean; i?: boolean } = {
+	const obj: { pat: string; rep: string; g?: boolean; F?: boolean; i?: boolean; m?: boolean } = {
 		pat: spec.pattern,
 		rep: spec.replacement,
 	};
-	// Only emit non-default flags so error messages stay compact (g defaults true).
-	if (!spec.global) obj.g = false;
+	// Only emit non-default flags so error messages stay compact (g defaults false).
+	if (spec.global) obj.g = true;
 	if (spec.literal) obj.F = true;
 	if (spec.ignoreCase) obj.i = true;
+	if (spec.multiline) obj.m = true;
 	return JSON.stringify(obj);
 }
 
@@ -332,6 +336,7 @@ function applySedToLine(
 	let flags = "";
 	if (spec.global) flags += "g";
 	if (spec.ignoreCase) flags += "i";
+	if (spec.multiline) flags += "m";
 	let re: RegExp | undefined;
 	let compileError: string | undefined;
 	try {
