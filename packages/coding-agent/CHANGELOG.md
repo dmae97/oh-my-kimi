@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.5.1] - 2026-04-26
+
 ### Removed
 
 - Removed `\t` escaped-tab indentation autocorrect from hashline and atom edit modes (and the `PI_HASHLINE_AUTOCORRECT_ESCAPED_TABS` environment toggle); literal `\t` in edit content is now preserved verbatim

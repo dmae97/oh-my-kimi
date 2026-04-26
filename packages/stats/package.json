@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/omp-stats",
-	"version": "14.5.0",
+	"version": "14.5.1",
 	"description": "Local observability dashboard for pi AI usage statistics",
 	"homepage": "https://github.com/can1357/oh-my-pi",
 	"author": "Can Boluk",

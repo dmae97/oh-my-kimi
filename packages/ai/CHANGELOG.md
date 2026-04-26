@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.5.1] - 2026-04-26
+
 ### Fixed
 
 - Fixed NVIDIA NIM DeepSeek-V4 models leaking chat-template tool-call markers (e.g. `<｜DSML｜tool_calls｜>`) into visible response text by stripping the special tokens from streamed `delta.content` ([#798](https://github.com/can1357/oh-my-pi/issues/798))
