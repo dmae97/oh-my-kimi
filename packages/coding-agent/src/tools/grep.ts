@@ -380,7 +380,9 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				}
 			}
 			if (hasContextLines && outputLines.length > 0) {
-				outputLines.unshift("[grep] match lines use '>'; context lines use ':'.");
+				outputLines.unshift(
+					"[grep] '*' marks match lines; leading space marks context. Anchor and content are separated by '|'.",
+				);
 			}
 			if (matchLimitReached || result.limitReached) {
 				outputLines.push("", limitMessage);

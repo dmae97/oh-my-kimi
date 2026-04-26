@@ -35,7 +35,7 @@ const ircSchema = Type.Object({
 	),
 	to: Type.Optional(
 		Type.String({
-			description: "Recipient agent id (e.g. \"0-Main\", \"0-AuthLoader\") or \"all\" to broadcast",
+			description: 'Recipient agent id (e.g. "0-Main", "0-AuthLoader") or "all" to broadcast',
 			examples: ["0-Main", "all"],
 		}),
 	),
@@ -151,10 +151,10 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 		const to = params.to?.trim();
 		const message = params.message?.trim();
 		if (!to) {
-			return errorResult("`to` is required for op=\"send\".", { op: "send", from: senderId });
+			return errorResult('`to` is required for op="send".', { op: "send", from: senderId });
 		}
 		if (!message) {
-			return errorResult("`message` is required for op=\"send\".", { op: "send", from: senderId });
+			return errorResult('`message` is required for op="send".', { op: "send", from: senderId });
 		}
 
 		// Resolve target peers.

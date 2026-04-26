@@ -3,9 +3,10 @@ import { computeLineHash } from "../edit/line-hash";
 /**
  * Format a single line of match output for grep/ast-grep style results.
  *
- * Match lines use `>` as the anchor/content separator; context lines use `:`.
- * In hashline mode the anchor is `LINE+ID` (no `#`); in plain mode it is
- * just the line number. Line numbers are never padded.
+ * The anchor/content separator is always `|`. Matched lines are prefixed
+ * with `*`; context lines are prefixed with a single space so anchors
+ * align in column. In hashline mode the anchor is `LINE+ID` (no `#`); in
+ * plain mode it is just the line number. Line numbers are never padded.
  */
 export function formatMatchLine(
 	lineNumber: number,
@@ -13,9 +14,9 @@ export function formatMatchLine(
 	isMatch: boolean,
 	options: { useHashLines: boolean },
 ): string {
-	const separator = isMatch ? ">" : ":";
+	const marker = isMatch ? "*" : " ";
 	if (options.useHashLines) {
-		return `${lineNumber}${computeLineHash(lineNumber, line)}${separator}${line}`;
+		return `${marker}${lineNumber}${computeLineHash(lineNumber, line)}|${line}`;
 	}
-	return `${lineNumber}${separator}${line}`;
+	return `${marker}${lineNumber}|${line}`;
 }

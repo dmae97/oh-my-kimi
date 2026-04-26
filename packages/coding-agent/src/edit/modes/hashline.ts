@@ -525,7 +525,7 @@ const MISMATCH_CONTEXT = 2;
 /**
  * Error thrown when one or more hashline references have stale hashes.
  *
- * Displays grep-style output with `>` separator on mismatched lines and `:` on
+ * Displays grep-style output with `*` marker on mismatched lines and a leading space on
  * surrounding context, showing the correct `LINE+ID` so the caller can fix all refs at once.
  */
 export class HashlineMismatchError extends Error {
@@ -604,7 +604,7 @@ export class HashlineMismatchError extends Error {
 
 		lines.push(
 			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read. The edit was NOT applied.`,
-			"Use the updated anchors shown below (`>` marks changed lines, `:` marks context) and retry the edit.",
+			"Use the updated anchors shown below (`*` marks changed lines, leading space marks context) and retry the edit.",
 		);
 		lines.push("");
 
@@ -621,9 +621,9 @@ export class HashlineMismatchError extends Error {
 			const prefix = `${lineNum}${hash}`;
 
 			if (mismatchSet.has(lineNum)) {
-				lines.push(`${prefix}>${text}`);
+				lines.push(`*${prefix}|${text}`);
 			} else {
-				lines.push(`${prefix}:${text}`);
+				lines.push(` ${prefix}|${text}`);
 			}
 		}
 		return lines.join("\n");

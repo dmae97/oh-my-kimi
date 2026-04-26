@@ -83,6 +83,7 @@ import {
 } from "./mcp/discoverable-tool-metadata";
 import { buildMemoryToolDeveloperInstructions, getMemoryRoot, startMemoryStartupTask } from "./memories";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
+import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
 	collectEnvSecrets,
 	deobfuscateSessionContext,
@@ -90,7 +91,6 @@ import {
 	obfuscateMessages,
 	SecretObfuscator,
 } from "./secrets";
-import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import { AgentSession } from "./session/agent-session";
 import { AuthStorage } from "./session/auth-storage";
 import { convertToLlm } from "./session/messages";

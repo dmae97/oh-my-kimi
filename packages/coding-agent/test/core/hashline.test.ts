@@ -740,7 +740,7 @@ describe("applyHashlineEdits — errors", () => {
 		expect(() => applyHashlineEdits(content, edits)).toThrow(HashlineMismatchError);
 	});
 
-	it("stale hash error shows >>> markers with correct hashes", () => {
+	it("stale hash error shows * markers with correct hashes", () => {
 		const content = "aaa\nbbb\nccc\nddd\neee";
 		const edits: HashlineEdit[] = [
 			{ op: "replace_line", pos: parseTag(`2${staleBigramFor(2, "bbb")}`), lines: ["BBB"] },
@@ -752,11 +752,11 @@ describe("applyHashlineEdits — errors", () => {
 		} catch (err) {
 			expect(err).toBeInstanceOf(HashlineMismatchError);
 			const msg = (err as HashlineMismatchError).message;
-			// Mismatched line uses `>` separator (grep-style)
+			// Mismatched line uses leading `*` and `|` separator (grep-style)
 			const correctHash = computeLineHash(2, "bbb");
-			expect(msg).toContain(`2${correctHash}>bbb`);
-			// Context lines use `:` separator
-			const contextLines = msg.split("\n").filter(l => /^\d+[a-z]{2}:/.test(l));
+			expect(msg).toContain(`*2${correctHash}|bbb`);
+			// Context lines use leading space and `|` separator
+			const contextLines = msg.split("\n").filter(l => /^ \d+[a-z]{2}\|/.test(l));
 			expect(contextLines.length).toBeGreaterThan(0);
 		}
 	});
@@ -778,8 +778,8 @@ describe("applyHashlineEdits — errors", () => {
 			expect(e.mismatches).toHaveLength(2);
 			expect(e.mismatches[0].line).toBe(2);
 			expect(e.mismatches[1].line).toBe(4);
-			// Both mismatched lines use `>` separator (vs `:` for context)
-			const markerLines = e.message.split("\n").filter(l => /^\d+[a-z]{2}>/.test(l));
+			// Both mismatched lines use `*` prefix (vs leading space for context)
+			const markerLines = e.message.split("\n").filter(l => /^\*\d+[a-z]{2}\|/.test(l));
 			expect(markerLines).toHaveLength(2);
 		}
 	});

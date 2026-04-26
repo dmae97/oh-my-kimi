@@ -27,10 +27,10 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import type {
 	AssistantMessage,
+	Context,
 	Effort,
 	ImageContent,
 	Message,
-	Context,
 	MessageAttribution,
 	Model,
 	ProviderSessionState,
@@ -43,13 +43,13 @@ import type {
 	UsageReport,
 } from "@oh-my-pi/pi-ai";
 import {
-	streamSimple,
 	calculateRateLimitBackoffMs,
 	getSupportedEfforts,
 	isContextOverflow,
 	isUsageLimitError,
 	modelsAreEqual,
 	parseRateLimitReason,
+	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import { killTree, MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import {
@@ -123,13 +123,13 @@ import type { PlanModeState } from "../plan-mode/state";
 import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import handoffDocumentPrompt from "../prompts/system/handoff-document.md" with { type: "text" };
+import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with {
 	type: "text",
 };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
-import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
 import { deobfuscateSessionContext, type SecretObfuscator } from "../secrets/obfuscator";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import { assertEditableFile } from "../tools/auto-generated-guard";

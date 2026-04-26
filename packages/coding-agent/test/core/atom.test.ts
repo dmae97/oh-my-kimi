@@ -210,7 +210,7 @@ describe("parseAnchor (atom tolerant) + applyAtomEdits", () => {
 			applyAtomEdits(content, resolved);
 		} catch (err) {
 			const msg = (err as Error).message;
-			expect(msg).toMatch(/^\d+[a-z]{2}:/m);
+			expect(msg).toMatch(/^\*\d+[a-z]{2}\|/m);
 			expect(msg).toContain("bravo");
 			expect(msg).toContain(`2${computeLineHash(2, "bravo")}`);
 		}

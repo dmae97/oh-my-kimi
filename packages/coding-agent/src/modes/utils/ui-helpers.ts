@@ -128,7 +128,9 @@ export class UiHelpers {
 						break;
 					}
 					if (message.customType === "irc:incoming" || message.customType === "irc:autoreply") {
-						const details = (message as CustomMessage<{ from?: string; to?: string; message?: string; reply?: string }>).details;
+						const details = (
+							message as CustomMessage<{ from?: string; to?: string; message?: string; reply?: string }>
+						).details;
 						const isIncoming = message.customType === "irc:incoming";
 						const peer = isIncoming ? (details?.from ?? "?") : (details?.to ?? "?");
 						const body = isIncoming ? (details?.message ?? "") : (details?.reply ?? "");
