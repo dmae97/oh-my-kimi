@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.4.3] - 2026-04-26
 ### Added
 
 - Added `irc` tool for agent-to-agent messaging with `list` and `send` operations, including optional broadcast to `all` and optional suppression of reply waits
