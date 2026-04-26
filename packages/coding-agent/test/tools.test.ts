@@ -1388,7 +1388,7 @@ function b() {
 			});
 
 			const output = getTextOutput(result);
-			expect(output).toContain("Result limit reached; narrow path.");
+			expect(output).toContain("Result limit reached; narrow path or use skip=20.");
 			expect(result.details?.matchCount).toBe(20);
 			expect(result.details?.matchLimitReached).toBe(20);
 		});

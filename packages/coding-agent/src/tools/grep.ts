@@ -271,6 +271,8 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				? roundRobinSelect(result.matches, effectiveLimit)
 				: result.matches.slice(0, effectiveLimit);
 			const matchLimitReached = result.matches.length > effectiveLimit;
+			const nextSkip = normalizedSkip + selectedMatches.length;
+			const limitMessage = `Result limit reached; narrow path or use skip=${nextSkip}.`;
 			const { record: recordFile, list: fileList } = createFileRecorder();
 			const fileMatchCounts = new Map<string, number>();
 			if (selectedMatches.length === 0) {
@@ -388,7 +390,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 					}
 				}
 				if (matchLimitReached || result.limitReached) {
-					outputLines.push("", "Result limit reached; narrow path.");
+					outputLines.push("", limitMessage);
 				}
 				const rawOutput = outputLines.join("\n");
 				const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
@@ -503,7 +505,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				outputLines.unshift("[grep] match lines use ':'; context lines use '-'.");
 			}
 			if (matchLimitReached || result.limitReached) {
-				outputLines.push("", "Result limit reached; narrow path.");
+				outputLines.push("", limitMessage);
 			}
 			const rawOutput = outputLines.join("\n");
 			const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
