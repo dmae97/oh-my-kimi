@@ -125,6 +125,9 @@ export function generateReport(result: BenchmarkResult): string {
 	if (summary.ghostRuns > 0) {
 		lines.push(`| Ghost Runs (0/0/0) | ${summary.ghostRuns} |`);
 	}
+	if (summary.transportFailureRuns > 0) {
+		lines.push(`| Transport Failures (excluded) | ${summary.transportFailureRuns} |`);
+	}
 	if (summary.totalTimeoutRetries > 0 || summary.totalZeroToolRetries > 0 || summary.totalProviderFailureRetries > 0) {
 		lines.push(`| Timeout Retries | ${summary.totalTimeoutRetries} |`);
 		lines.push(`| Zero-Tool Retries | ${summary.totalZeroToolRetries} |`);
