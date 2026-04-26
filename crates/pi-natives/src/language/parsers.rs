@@ -47,9 +47,6 @@ pub fn language_go() -> TSLanguage {
 pub fn language_graphql() -> TSLanguage {
 	tree_sitter_graphql::LANGUAGE.into()
 }
-pub fn language_handlebars() -> TSLanguage {
-	tree_sitter_glimmer::language()
-}
 pub fn language_haskell() -> TSLanguage {
 	tree_sitter_haskell::LANGUAGE.into()
 }

@@ -2226,7 +2226,6 @@ dependencies = [
  "tree-sitter-dockerfile-updated",
  "tree-sitter-elixir",
  "tree-sitter-erlang",
- "tree-sitter-glimmer",
  "tree-sitter-go",
  "tree-sitter-graphql",
  "tree-sitter-haskell",
@@ -3308,15 +3307,6 @@ checksum = "f2091cce4eda19c03d77928c608ac6617445a6a25691dde1e93ac0102467a6be"
 dependencies = [
  "cc",
  "tree-sitter-language",
-]
-
-[[package]]
-name = "tree-sitter-glimmer"
-version = "0.0.1"
-source = "git+https://github.com/ember-tooling/tree-sitter-glimmer?tag=v1.6.0-tree-sitter-glimmer#88af85568bde3b91acb5d4c352ed094d0c1f9d84"
-dependencies = [
- "cc",
- "tree-sitter",
 ]
 
 [[package]]

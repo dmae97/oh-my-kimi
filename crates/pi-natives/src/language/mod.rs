@@ -114,7 +114,6 @@ impl_lang_expando!(Elixir, language_elixir, 'µ');
 impl_lang_expando!(Erlang, language_erlang, 'µ');
 impl_lang_expando!(Go, language_go, 'µ');
 impl_lang!(Graphql, language_graphql);
-impl_lang!(Handlebars, language_handlebars);
 impl_lang_expando!(Haskell, language_haskell, 'µ');
 impl_lang_expando!(Hcl, language_hcl, 'µ');
 impl_lang_expando!(Ini, language_ini, 'µ');
@@ -283,7 +282,6 @@ pub enum SupportLang {
 	Erlang,
 	Go,
 	Graphql,
-	Handlebars,
 	Haskell,
 	Hcl,
 	Html,
@@ -338,10 +336,10 @@ impl SupportLang {
 		use SupportLang::*;
 		&[
 			Astro, Bash, C, Cmake, Cpp, CSharp, Dart, Clojure, Css, Diff, Dockerfile, Elixir, Erlang,
-			Go, Graphql, Handlebars, Haskell, Hcl, Html, Ini, Java, JavaScript, Json, Just, Julia,
-			Kotlin, Lua, Make, Markdown, Nix, ObjC, Ocaml, Odin, Perl, Php, Powershell, Proto, Python,
-			R, Regex, Ruby, Rust, Scala, Solidity, Sql, Starlark, Svelte, Swift, Toml, Tlaplus, Tsx,
-			TypeScript, Verilog, Vue, Xml, Yaml, Zig,
+			Go, Graphql, Haskell, Hcl, Html, Ini, Java, JavaScript, Json, Just, Julia, Kotlin, Lua,
+			Make, Markdown, Nix, ObjC, Ocaml, Odin, Perl, Php, Powershell, Proto, Python, R, Regex,
+			Ruby, Rust, Scala, Solidity, Sql, Starlark, Svelte, Swift, Toml, Tlaplus, Tsx, TypeScript,
+			Verilog, Vue, Xml, Yaml, Zig,
 		]
 	}
 
@@ -364,7 +362,6 @@ impl SupportLang {
 			Self::Erlang => "erlang",
 			Self::Go => "go",
 			Self::Graphql => "graphql",
-			Self::Handlebars => "handlebars",
 			Self::Haskell => "haskell",
 			Self::Hcl => "hcl",
 			Self::Html => "html",
@@ -446,7 +443,6 @@ macro_rules! execute_lang_method {
 			S::Erlang => Erlang.$method($($pname,)*),
 			S::Go => Go.$method($($pname,)*),
 			S::Graphql => Graphql.$method($($pname,)*),
-			S::Handlebars => Handlebars.$method($($pname,)*),
 			S::Haskell => Haskell.$method($($pname,)*),
 			S::Hcl => Hcl.$method($($pname,)*),
 			S::Html => Html.$method($($pname,)*),
@@ -561,7 +557,6 @@ const fn extensions(lang: SupportLang) -> &'static [&'static str] {
 		Erlang => &["erl", "hrl"],
 		Go => &["go"],
 		Graphql => &["graphql", "gql"],
-		Handlebars => &["hbs", "hsb", "handlebars"],
 		Haskell => &["hs"],
 		Hcl => &["hcl", "tf", "tfvars"],
 		Html => &["html", "htm", "xhtml"],
@@ -679,10 +674,6 @@ static LANG_ALIASES: phf::Map<&'static str, SupportLang> = phf_map! {
 "golang"         => SupportLang::Go,
 "graphql"        => SupportLang::Graphql,
 "gql"            => SupportLang::Graphql,
-"handlebars"     => SupportLang::Handlebars,
-"hbs"            => SupportLang::Handlebars,
-"hsb"            => SupportLang::Handlebars,
-"glimmer"        => SupportLang::Handlebars,
 "haskell"        => SupportLang::Haskell,
 "hs"             => SupportLang::Haskell,
 "hcl"            => SupportLang::Hcl,
