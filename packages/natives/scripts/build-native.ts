@@ -219,6 +219,10 @@ function resolveManagedCargoTargetDir(profileLabel: string): string | null {
 		return null;
 	}
 
+	if (useLocalProfile) {
+		return null;
+	}
+
 	const buildTarget = crossTarget ?? `${targetPlatform}-${targetArch}`;
 	const variantLabel = effectiveVariant ?? "default";
 	return path.join(repoRoot, "target", "napi-build", `${buildTarget}-${variantLabel}-${profileLabel}`);
@@ -226,8 +230,8 @@ function resolveManagedCargoTargetDir(profileLabel: string): string | null {
 
 const isCI = Boolean(Bun.env.CI);
 const useLocalProfile = !isCI && !isCrossCompile;
-const profileLabel = useLocalProfile ? "local" : "release";
-const profileSuffix = useLocalProfile ? " (local)" : "";
+const profileLabel = useLocalProfile ? "dev" : "ci";
+const profileSuffix = useLocalProfile ? " (dev)" : " (ci)";
 
 const buildOutputDirPrefix = resolveBuildOutputDirPrefix(profileLabel);
 
@@ -247,9 +251,9 @@ const napiArgs = [
 ];
 
 if (useLocalProfile) {
-	napiArgs.push("--profile", "local");
+	napiArgs.push("--profile", "dev");
 } else {
-	napiArgs.push("--release");
+	napiArgs.push("--profile", "ci");
 }
 
 if (crossTarget) napiArgs.push("--target", crossTarget);

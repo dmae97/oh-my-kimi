@@ -22,12 +22,20 @@ codegen-units = 1
 strip = true
 panic = "abort"
 
+[profile.ci]
+inherits = "release"
+
 [profile.local]
 inherits = "release"
 lto = "thin"
 codegen-units = 16
 incremental = true
 strip = false
+
+[profile.dev]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
 
 [workspace.lints.clippy]
 # Base Lint Levels
