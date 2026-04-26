@@ -1062,9 +1062,7 @@ export async function executeReplaceSingle(
 	}
 
 	if (normalizedContent === result.content) {
-		throw new Error(
-			`No changes made to ${path}. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.`,
-		);
+		throw new Error(`Edits to ${path} resulted in no changes being made.`);
 	}
 
 	const finalContent = bom + restoreLineEndings(result.content, originalEnding);

@@ -525,6 +525,7 @@ export class AgentSession {
 	#obfuscator: SecretObfuscator | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
+	#lastSuccessfulYieldToolCallId: string | undefined = undefined;
 	#promptGeneration = 0;
 	#providerSessionState = new Map<string, ProviderSessionState>();
 
@@ -789,6 +790,9 @@ export class AgentSession {
 				this.#toolChoiceQueue.resolve();
 			}
 		}
+		if (event.type === "tool_execution_end" && event.toolName === "yield" && !event.isError) {
+			this.#lastSuccessfulYieldToolCallId = event.toolCallId;
+		}
 		if (event.type === "turn_end" && this.#pendingRewindReport) {
 			const report = this.#pendingRewindReport;
 			this.#pendingRewindReport = undefined;
@@ -1026,7 +1030,10 @@ export class AgentSession {
 				.find((message): message is AssistantMessage => message.role === "assistant");
 			const msg = this.#lastAssistantMessage ?? fallbackAssistant;
 			this.#lastAssistantMessage = undefined;
-			if (!msg) return;
+			if (!msg) {
+				this.#lastSuccessfulYieldToolCallId = undefined;
+				return;
+			}
 
 			// Invalidate GitHub Copilot credentials on auth failure so stale tokens
 			// aren't reused on the next request
@@ -1040,8 +1047,15 @@ export class AgentSession {
 
 			if (this.#skipPostTurnMaintenanceAssistantTimestamp === msg.timestamp) {
 				this.#skipPostTurnMaintenanceAssistantTimestamp = undefined;
+				this.#lastSuccessfulYieldToolCallId = undefined;
 				return;
 			}
+
+			if (this.#assistantEndedWithSuccessfulYield(msg)) {
+				this.#lastSuccessfulYieldToolCallId = undefined;
+				return;
+			}
+			this.#lastSuccessfulYieldToolCallId = undefined;
 
 			// Check for retryable errors first (overloaded, rate limit, server errors)
 			if (this.#isRetryableError(msg)) {
@@ -4230,6 +4244,16 @@ export class AgentSession {
 			}
 		}
 	}
+	#assistantEndedWithSuccessfulYield(assistantMessage: AssistantMessage): boolean {
+		const toolCallId = this.#lastSuccessfulYieldToolCallId;
+		if (!toolCallId) return false;
+		const lastToolCall = assistantMessage.content
+			.slice()
+			.reverse()
+			.find((content): content is ToolCall => content.type === "toolCall");
+		return lastToolCall?.name === "yield" && lastToolCall.id === toolCallId;
+	}
+
 	#enforceRewindBeforeYield(): boolean {
 		if (!this.#checkpointState || this.#pendingRewindReport) {
 			return false;

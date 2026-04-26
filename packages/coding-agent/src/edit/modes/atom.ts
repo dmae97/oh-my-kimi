@@ -646,7 +646,7 @@ export async function executeAtomSingle(
 
 	const result = applyAtomEdits(originalNormalized, contentEdits);
 	if (originalNormalized === result.lines) {
-		throw new Error(`No changes made to ${path}. The edits produced identical content.`);
+		throw new Error(`Edits to ${path} resulted in no changes being made.`);
 	}
 
 	const finalContent = bom + restoreLineEndings(result.lines, originalEnding);
