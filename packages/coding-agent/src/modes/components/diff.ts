@@ -1,3 +1,4 @@
+import { sanitizeText } from "@oh-my-pi/pi-natives";
 import { getIndentation } from "@oh-my-pi/pi-utils";
 import * as Diff from "diff";
 import { theme } from "../../modes/theme/theme";
@@ -15,7 +16,7 @@ const DIM_OFF = "\x1b[22m";
  */
 function visualizeIndent(text: string, filePath?: string): string {
 	const match = text.match(/^([ \t]+)/);
-	if (!match) return replaceTabs(text);
+	if (!match) return replaceTabs(text, filePath);
 	const indent = match[1];
 	const rest = text.slice(indent.length);
 	const tabWidth = getIndentation(filePath);
@@ -30,7 +31,7 @@ function visualizeIndent(text: string, filePath?: string): string {
 			visible += `${DIM}·${DIM_OFF}`;
 		}
 	}
-	return `${visible}${replaceTabs(rest)}`;
+	return `${visible}${replaceTabs(rest, filePath)}`;
 }
 
 /**
@@ -106,7 +107,7 @@ export interface RenderDiffOptions {
  * - Added lines: green, with inverse on changed tokens
  */
 export function renderDiff(diffText: string, options: RenderDiffOptions = {}): string {
-	const lines = diffText.split("\n");
+	const lines = sanitizeText(diffText).split("\n");
 	const result: string[] = [];
 	const parsedLines = lines.map(parseDiffLine);
 	const lineNumberWidth = parsedLines.reduce((width, parsed) => {
@@ -138,7 +139,7 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 
 		if (!parsed) {
 			prevLineNum = "";
-			result.push(theme.fg("toolDiffContext", line));
+			result.push(theme.fg("toolDiffContext", replaceTabs(line, options.filePath)));
 			i++;
 			continue;
 		}

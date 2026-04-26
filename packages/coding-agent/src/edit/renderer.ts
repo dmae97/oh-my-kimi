@@ -1,6 +1,7 @@
 /**
  * Edit tool renderer and LSP batching helpers.
  */
+import { sanitizeText } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -243,11 +244,11 @@ function formatEditDescription(
 	};
 }
 
-function renderPlainTextPreview(text: string, uiTheme: Theme): string {
-	const previewLines = text.split("\n");
+function renderPlainTextPreview(text: string, uiTheme: Theme, filePath?: string): string {
+	const previewLines = sanitizeText(text).split("\n");
 	let preview = "\n\n";
 	for (const line of previewLines.slice(0, CALL_TEXT_PREVIEW_LINES)) {
-		preview += `${uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(line), CALL_TEXT_PREVIEW_WIDTH))}\n`;
+		preview += `${uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(line, filePath), CALL_TEXT_PREVIEW_WIDTH))}\n`;
 	}
 	if (previewLines.length > CALL_TEXT_PREVIEW_LINES) {
 		preview += uiTheme.fg("dim", `… ${previewLines.length - CALL_TEXT_PREVIEW_LINES} more lines`);
@@ -284,7 +285,7 @@ function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: T
 		if (!preview.diff && !preview.error) continue;
 		const header = uiTheme.fg("dim", `\n\n\u2500\u2500 ${shortenPath(preview.path)} \u2500\u2500`);
 		if (preview.error) {
-			parts.push(`${header}\n${uiTheme.fg("error", replaceTabs(preview.error))}`);
+			parts.push(`${header}\n${uiTheme.fg("error", replaceTabs(preview.error, preview.path))}`);
 			continue;
 		}
 		if (preview.diff) {
@@ -311,10 +312,10 @@ function getCallPreview(
 		return formatStreamingDiff(args.diff, rawPath, uiTheme);
 	}
 	if (args.diff) {
-		return renderPlainTextPreview(args.diff, uiTheme);
+		return renderPlainTextPreview(args.diff, uiTheme, rawPath);
 	}
 	if (args.newText || args.patch) {
-		return renderPlainTextPreview(args.newText ?? args.patch ?? "", uiTheme);
+		return renderPlainTextPreview(args.newText ?? args.patch ?? "", uiTheme, rawPath);
 	}
 	return "";
 }
@@ -438,7 +439,7 @@ export const editToolRenderer = {
 		}
 		text += getCallPreview(editArgs, rawPath, uiTheme, renderContext);
 		if (applyPatchSummary?.error) {
-			text += `\n\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error), CALL_TEXT_PREVIEW_WIDTH))}`;
+			text += `\n\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error, rawPath), CALL_TEXT_PREVIEW_WIDTH))}`;
 		}
 
 		return new Text(text, 0, 0);
@@ -529,13 +530,13 @@ function renderSingleFileResult(
 
 			if (isError) {
 				if (errorText) {
-					text += `\n\n${uiTheme.fg("error", replaceTabs(errorText))}`;
+					text += `\n\n${uiTheme.fg("error", replaceTabs(errorText, rawPath))}`;
 				}
 			} else if (details?.diff) {
 				text += renderDiffSection(details.diff, rawPath, expanded, uiTheme, renderDiffFn);
 			} else if (editDiffPreview) {
 				if ("error" in editDiffPreview) {
-					text += `\n\n${uiTheme.fg("error", replaceTabs(editDiffPreview.error))}`;
+					text += `\n\n${uiTheme.fg("error", replaceTabs(editDiffPreview.error, rawPath))}`;
 				} else if (editDiffPreview.diff) {
 					text += renderDiffSection(editDiffPreview.diff, rawPath, expanded, uiTheme, renderDiffFn);
 				}
