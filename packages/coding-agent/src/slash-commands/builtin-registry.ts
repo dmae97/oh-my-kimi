@@ -513,6 +513,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "drop",
+		description: "Delete the current session and start a new one",
+		handle: async (_command, runtime) => {
+			runtime.ctx.editor.setText("");
+			await runtime.ctx.handleDropCommand();
+		},
+	},
+	{
 		name: "compact",
 		description: "Manually compact the session context",
 		inlineHint: "[focus instructions]",

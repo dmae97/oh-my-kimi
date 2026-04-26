@@ -1324,11 +1324,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#commandController.handleToolsCommand();
 	}
 
-	handleClearCommand(): Promise<void> {
+	#prepareSessionSwitch(): void {
 		this.#btwController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
 		this.#planReviewContainer = undefined;
+	}
+
+	handleClearCommand(): Promise<void> {
+		this.#prepareSessionSwitch();
 		return this.#commandController.handleClearCommand();
+	}
+
+	handleDropCommand(): Promise<void> {
+		this.#prepareSessionSwitch();
+		return this.#commandController.handleDropCommand();
 	}
 
 	handleForkCommand(): Promise<void> {
