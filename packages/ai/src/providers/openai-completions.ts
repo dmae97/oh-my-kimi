@@ -1106,6 +1106,10 @@ export function convertMessages(
 					(assistantMsg as any).reasoning_details = reasoningDetails;
 				}
 			}
+			// DeepSeek requires non-null content when reasoning_content is present
+			if (assistantMsg.content === null && hasReasoningField) {
+				assistantMsg.content = "";
+			}
 			// Skip assistant messages that have no content, no tool calls, and no reasoning payload.
 			// Some OpenAI-compatible backends require replaying reasoning-only assistant turns
 			// so follow-up requests preserve the provider-specific reasoning field name.
