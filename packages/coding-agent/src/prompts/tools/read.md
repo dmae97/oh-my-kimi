@@ -23,7 +23,7 @@ The `read` tool is multi-purpose and more capable than it looks — inspects fil
 # Filesystem
 - Reading a directory path returns a list of dirents.
 {{#if IS_HASHLINE_MODE}}
-- Reading a file returns lines prefixed with anchors (line # .. hash .. | .. line content): `41th|def alpha():`
+- Reading a file returns lines prefixed with anchors (line+hash): `41th|def alpha():`
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
 - Reading a file returns lines prefixed with line numbers: `41|def alpha():`

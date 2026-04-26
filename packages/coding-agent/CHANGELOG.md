@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added bracketed `loc` forms `(anchor)`, `[anchor]`, `[anchor`, `(anchor`, `anchor]`, and `anchor)` to `atom` `splice` editing so a single anchor can target a block body, whole node, or partial node region
@@ -14,6 +15,10 @@
 - Changed `applyAtomEdits` to forbid mixing `splice_block` with other anchor-scoped edit verbs in one call
 - Changed `splice_block` resolution behavior to include selected block range and enclosing-count context in warning output
 - Changed balanced-block parsing to support `kind` selection (`{`, `(`, `[`), nesting depth, and safer same-line enclosing selection
+
+### Removed
+
+- Removed the `sed` `F` option for literal matching; `sed` now accepts only `pat`, `rep`, and optional `g`, with `F`-style literal matching no longer supported
 
 ### Fixed
 

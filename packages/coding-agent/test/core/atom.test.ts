@@ -301,14 +301,6 @@ describe("applyAtomEdits — sed", () => {
 		expect(result.lines).toBe("path = /opt/bin");
 	});
 
-	it("F flag treats pattern as a literal string", () => {
-		const content = "a.b.c";
-		const loc = `1${computeLineHash(1, "a.b.c")}`;
-		const resolved = resolveAtomToolEdit({ loc, sed: { pat: ".", rep: "X", F: true, g: true } });
-		const result = applyAtomEdits(content, resolved);
-		expect(result.lines).toBe("aXbXc");
-	});
-
 	it("throws when pattern does not match the anchor line", () => {
 		const content = "aaa\nbbb";
 		const loc = `2${computeLineHash(2, "bbb")}`;

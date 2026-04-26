@@ -63,7 +63,7 @@ const textSchema = Type.Array(Type.String());
 export const atomEditSchema = Type.Object(
 	{
 		loc: Type.String({
-			description: 'edit location: "1ab", "$", or path override like "a.ts:1ab"',
+			description: "edit location",
 			examples: ["1ab", "$", "src/foo.ts:1ab"],
 		}),
 		splice: Type.Optional(textSchema),
@@ -72,10 +72,9 @@ export const atomEditSchema = Type.Object(
 		sed: Type.Optional(
 			Type.Object(
 				{
-					pat: Type.String({ description: "pattern to find" }),
-					rep: Type.String({ description: "replacement text" }),
-					g: Type.Optional(Type.Boolean({ description: "global replace", default: false })),
-					F: Type.Optional(Type.Boolean({ description: "literal replace", default: false })),
+					pat: Type.String({ description: "regex" }),
+					rep: Type.String({ description: "expression to replace with" }),
+					g: Type.Optional(Type.Boolean({ description: "global flag", default: false })),
 				},
 				{
 					additionalProperties: false,
@@ -116,7 +115,6 @@ export interface SedSpec {
 	pattern: string;
 	replacement: string;
 	global: boolean;
-	literal: boolean;
 }
 
 export interface SpliceBlockSpec {
@@ -325,7 +323,7 @@ function extractAnchorContentHint(raw: string): string | undefined {
 
 function parseSedSpec(input: unknown, editIndex: number): SedSpec {
 	if (input === null || typeof input !== "object" || Array.isArray(input)) {
-		throw new Error(`Edit ${editIndex}: sed must be an object with shape {pat, rep, g?, F?}.`);
+		throw new Error(`Edit ${editIndex}: sed must be an object with shape {pat, rep, g?}.`);
 	}
 	const obj = input as Record<string, unknown>;
 	const pat = obj.pat;
@@ -341,27 +339,24 @@ function parseSedSpec(input: unknown, editIndex: number): SedSpec {
 	if (typeof rep !== "string") {
 		throw new Error(`Edit ${editIndex}: sed.rep must be a string.`);
 	}
-	const readBool = (key: "g" | "F", defaultValue: boolean): boolean => {
-		const v = obj[key];
-		if (v === undefined) return defaultValue;
-		if (typeof v !== "boolean") {
-			throw new Error(`Edit ${editIndex}: sed.${key} must be a boolean when provided.`);
+	const rawGlobal = obj.g;
+	let global = false;
+	if (rawGlobal !== undefined) {
+		if (typeof rawGlobal !== "boolean") {
+			throw new Error(`Edit ${editIndex}: sed.g must be a boolean when provided.`);
 		}
-		return v;
-	};
-	const global = readBool("g", false);
-	const literal = readBool("F", false);
-	return { pattern: pat, replacement: rep, global, literal };
+		global = rawGlobal;
+	}
+	return { pattern: pat, replacement: rep, global };
 }
 
 function formatSedExpression(spec: SedSpec): string {
-	const obj: { pat: string; rep: string; g?: boolean; F?: boolean } = {
+	const obj: { pat: string; rep: string; g?: boolean } = {
 		pat: spec.pattern,
 		rep: spec.replacement,
 	};
 	// Only emit non-default flags so error messages stay compact (g defaults false).
 	if (spec.global) obj.g = true;
-	if (spec.literal) obj.F = true;
 	return JSON.stringify(obj);
 }
 
@@ -381,9 +376,6 @@ function applySedToLine(
 	currentLine: string,
 	spec: SedSpec,
 ): { result: string; matched: boolean; error?: string; literalFallback?: boolean } {
-	if (spec.literal) {
-		return applyLiteralSed(currentLine, spec);
-	}
 	let flags = "";
 	if (spec.global) flags += "g";
 	let re: RegExp | undefined;
@@ -684,16 +676,16 @@ function applySpliceBlockEdits(
 		const kind: DelimiterKind = edit.spec.kind;
 		const found = findEnclosingBlock(text, edit.pos.line, { kind, depth: 0 });
 		if ("message" in found) {
-			throw new Error(`splice_block at anchor ${edit.pos.line}: ${found.message}`);
+			throw new Error(`splice at anchor ${edit.pos.line}: ${found.message}`);
 		}
 		const replacedLineCount = found.closeLine - found.openLine + 1;
 		warnings.push(
-			`splice_block locator ${spliceBlockLocatorLabel(edit.bracket)} replaced \`${kind}\` block at lines ${found.openLine}-${found.closeLine} ` +
+			`splice locator ${spliceBlockLocatorLabel(edit.bracket)} replaced \`${kind}\` block at lines ${found.openLine}-${found.closeLine} ` +
 				`(${replacedLineCount} lines, 1 of ${found.enclosingCount} enclosing \`${kind}\` blocks).`,
 		);
 		const balanceErr = checkBodyBraceBalance(edit.spec.body.join("\n"), kind);
 		if (balanceErr) {
-			throw new Error(`splice_block at anchor ${edit.pos.line}: ${balanceErr}`);
+			throw new Error(`splice at anchor ${edit.pos.line}: ${balanceErr}`);
 		}
 
 		const stripped = stripCommonIndent(edit.spec.body);
@@ -810,14 +802,6 @@ export function applyAtomEdits(
 		(e): e is Extract<AtomEdit, { op: "splice_block" }> => e.op === "splice_block",
 	);
 	if (spliceBlockEdits.length > 0) {
-		const otherAnchorOp = effective.find(
-			e => e.op !== "splice_block" && e.op !== "append_file" && e.op !== "prepend_file" && e.op !== "sed_file",
-		);
-		if (otherAnchorOp) {
-			throw new Error(
-				`\`splice_block\` cannot be combined with other anchor edits in the same call. Split into separate edit calls.`,
-			);
-		}
 		const result = applySpliceBlockEdits(text, spliceBlockEdits, warnings);
 		if (result.firstChangedLine !== undefined) {
 			if (firstChangedLine === undefined || result.firstChangedLine < firstChangedLine) {
@@ -913,7 +897,7 @@ export function applyAtomEdits(
 					}
 					if (literalFallback) {
 						warnings.push(
-							`sed expression ${JSON.stringify(edit.expression)} did not match as a regex on line ${edit.pos.line}; applied literal substring substitution instead. Use the \`F\` flag (e.g. \`s/.../.../F\`) for literal patterns or escape regex metacharacters.`,
+							`sed expression ${JSON.stringify(edit.expression)} did not match as a regex on line ${edit.pos.line}; applied literal substring substitution instead. Escape regex metacharacters in the pattern to match as a regex.`,
 						);
 					}
 					replacement = [result];
@@ -1005,7 +989,7 @@ export function applyAtomEdits(
 			anyMatched = true;
 			if (r.literalFallback && !warnedLiteralFallback) {
 				warnings.push(
-					`sed expression ${JSON.stringify(edit.expression)} did not match as a regex; applied literal substring substitution. Use the \`F\` flag (e.g. \`s/.../.../F\`) for literal patterns or escape regex metacharacters.`,
+					`sed expression ${JSON.stringify(edit.expression)} did not match as a regex; applied literal substring substitution. Escape regex metacharacters in the pattern to match as a regex.`,
 				);
 				warnedLiteralFallback = true;
 			}
