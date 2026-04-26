@@ -1,8 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+
+### Breaking Changes
+
+- Changed `/todo append` from JSON payload input to `/todo append [<phase>] <task...>` with optional quoted tokens and automatic phase creation
+
 ### Added
 
+- Added `/todo export <path>` to write the current todo list as Markdown to a file, defaulting to `TODO.md` when no path is provided
+- Added `/todo import <path>` to replace the current todo list from a Markdown file, defaulting to `TODO.md` when no path is provided
 - Added live poll progress updates so the UI now emits intermediate job state while waiting for jobs to finish
 - Added a dedicated TUI renderer for the `poll` tool that displays job status, counts, duration, and result/error previews
 - Added a `/todo` slash command to view and modify todos with `edit`, `copy`, `start`, `done`, `drop`, `rm`, `append`, and `replace` operations
@@ -11,6 +18,8 @@
 
 ### Changed
 
+- Changed `/todo start`, `/todo done`, `/todo drop`, and `/todo rm` to resolve task/phase targets by fuzzy id/name matching instead of strict identifiers
+- Removed `/todo replace` from supported slash commands
 - Changed todo list restoration to include user todo-edit custom session entries so slash-command and editor-based todo updates persist after reload
 - Restored sensible defaults for `grep.contextBefore` (1) and `grep.contextAfter` (3) so grep matches show context lines by default after the `pre`/`post` parameters were folded into settings
 
