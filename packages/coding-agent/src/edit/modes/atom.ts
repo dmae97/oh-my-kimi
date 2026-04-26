@@ -10,8 +10,9 @@
  *   { path, loc: "5th",      pre:  ["..."] }
  *   { path, loc: "5th",      post: ["..."] }
  *   { path, loc: "5th",      pre: [...], set: [...], post: [...] }
- *   { path, loc: "^",        pre:  [...] }                            // prepend to BOF
- *   { path, loc: "$",        post: [...] }                            // append to EOF
+ *   { path, loc: "$",        pre:  [...] }                            // prepend to file
+ *   { path, loc: "$",        post: [...] }                            // append to file
+ *   { path, loc: "$",        sed:  "s/foo/bar/" }                    // sed on every line
  *
  * `set: []` on a single-anchor locator deletes that line. `set:[""]` preserves
  * a blank line. Line ranges are not supported.
@@ -57,10 +58,9 @@ const textSchema = Type.Array(Type.String());
  */
 export const atomEditSchema = Type.Object(
 	{
-		path: Type.Optional(Type.String({ description: "file path override", examples: ["src/foo.ts"] })),
 		loc: Type.String({
-			description: 'edit location: "1ab", "^", "$", or path override like "a.ts:1ab"',
-			examples: ["1ab", "^", "$", "src/foo.ts:1ab"],
+			description: 'edit location: "1ab", "$", or path override like "a.ts:1ab"',
+			examples: ["1ab", "$", "src/foo.ts:1ab"],
 		}),
 		set: Type.Optional(textSchema),
 		pre: Type.Optional(textSchema),
@@ -97,7 +97,8 @@ export type AtomEdit =
 	| { op: "del"; pos: Anchor }
 	| { op: "append_file"; lines: string[] }
 	| { op: "prepend_file"; lines: string[] }
-	| { op: "sed"; pos: Anchor; spec: SedSpec; expression: string };
+	| { op: "sed"; pos: Anchor; spec: SedSpec; expression: string }
+	| { op: "sed_file"; spec: SedSpec; expression: string };
 
 export interface SedSpec {
 	pattern: string;
@@ -112,8 +113,8 @@ export interface SedSpec {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const ATOM_VERB_KEYS = ["set", "pre", "post", "sed"] as const;
-type AtomOptionalKey = "path" | "loc" | (typeof ATOM_VERB_KEYS)[number];
-const ATOM_OPTIONAL_KEYS = ["path", "loc", ...ATOM_VERB_KEYS] as const satisfies readonly AtomOptionalKey[];
+type AtomOptionalKey = "loc" | (typeof ATOM_VERB_KEYS)[number];
+const ATOM_OPTIONAL_KEYS = ["loc", ...ATOM_VERB_KEYS] as const satisfies readonly AtomOptionalKey[];
 
 // Matches just the LINE+BIGRAM prefix of an anchor reference. Used to detect
 // optional `|content` suffixes (e.g. `82zu|  for (...)`) so the suffix can be
@@ -141,7 +142,7 @@ function stripNullAtomFields(edit: AtomToolEdit): AtomToolEdit {
 	return (next ?? fields) as AtomToolEdit;
 }
 
-type ParsedAtomLoc = { kind: "anchor"; pos: Anchor } | { kind: "bof" } | { kind: "eof" };
+type ParsedAtomLoc = { kind: "anchor"; pos: Anchor } | { kind: "file" };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Resolution
@@ -203,10 +204,10 @@ function resolveAtomEntryPath(
 			loc = split[2]!;
 		}
 	}
-	const path = pathOverride || entry.path || topLevelPath;
+	const path = pathOverride || topLevelPath;
 	if (!path) {
 		throw new Error(
-			`Edit ${editIndex}: missing path. Provide a top-level path, per-entry path, or prefix loc with a file path (for example "a.ts:160sr").`,
+			`Edit ${editIndex}: missing path. Provide a top-level path or prefix loc with a file path (for example "a.ts:160sr").`,
 		);
 	}
 	return { ...entry, path, ...(loc !== entry.loc ? { loc } : {}) };
@@ -220,8 +221,7 @@ export function resolveAtomEntryPaths(
 }
 
 function parseLoc(raw: string, editIndex: number): ParsedAtomLoc {
-	if (raw === "^") return { kind: "bof" };
-	if (raw === "$") return { kind: "eof" };
+	if (raw === "$") return { kind: "file" };
 	// Detect range syntax explicitly: "<anchor>-<anchor>". A bare `-` inside the
 	// loc (e.g. line content like `i--`) should not trigger the range error.
 	const dash = raw.indexOf("-");
@@ -230,7 +230,7 @@ function parseLoc(raw: string, editIndex: number): ParsedAtomLoc {
 		const right = raw.slice(dash + 1);
 		if (tryParseAtomTag(left) !== undefined && tryParseAtomTag(right) !== undefined) {
 			throw new Error(
-				`Edit ${editIndex}: atom loc does not support line ranges. Use a single anchor like "160sr", "^", or "$".`,
+				`Edit ${editIndex}: atom loc does not support line ranges. Use a single anchor like "160sr" or "$".`,
 			);
 		}
 	}
@@ -387,28 +387,25 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
 		);
 	}
 	if (typeof entry.loc !== "string") {
-		throw new Error(`Edit ${editIndex}: missing loc. Use a selector like "160sr", "^", or "$".`);
+		throw new Error(`Edit ${editIndex}: missing loc. Use a selector like "160sr" or "$".`);
 	}
 
 	const loc = parseLoc(entry.loc, editIndex);
 	const resolved: AtomEdit[] = [];
 
-	if (loc.kind === "bof") {
-		if (entry.set !== undefined || entry.post !== undefined || entry.sed !== undefined) {
-			throw new Error(`Edit ${editIndex}: loc "^" only supports pre.`);
+	if (loc.kind === "file") {
+		if (entry.set !== undefined) {
+			throw new Error(`Edit ${editIndex}: loc "$" supports pre, post, and sed (not set).`);
 		}
 		if (entry.pre !== undefined) {
 			resolved.push({ op: "prepend_file", lines: hashlineParseText(entry.pre) });
 		}
-		return resolved;
-	}
-
-	if (loc.kind === "eof") {
-		if (entry.set !== undefined || entry.pre !== undefined || entry.sed !== undefined) {
-			throw new Error(`Edit ${editIndex}: loc "$" only supports post.`);
-		}
 		if (entry.post !== undefined) {
 			resolved.push({ op: "append_file", lines: hashlineParseText(entry.post) });
+		}
+		if (entry.sed !== undefined) {
+			const spec = parseSedExpression(entry.sed, editIndex);
+			resolved.push({ op: "sed_file", spec, expression: entry.sed });
 		}
 		return resolved;
 	}
@@ -614,13 +611,15 @@ export function applyAtomEdits(
 	// captured idx so multiple pre/post on the same target are emitted in the order
 	// the model produced them.
 	type Indexed<T> = { edit: T; idx: number };
-	type AnchorEdit = Exclude<AtomEdit, { op: "append_file" } | { op: "prepend_file" }>;
+	type AnchorEdit = Exclude<AtomEdit, { op: "append_file" } | { op: "prepend_file" } | { op: "sed_file" }>;
 	const anchorEdits: Indexed<AnchorEdit>[] = [];
 	const appendEdits: Indexed<Extract<AtomEdit, { op: "append_file" }>>[] = [];
+	const sedFileEdits: Indexed<Extract<AtomEdit, { op: "sed_file" }>>[] = [];
 	const prependEdits: Indexed<Extract<AtomEdit, { op: "prepend_file" }>>[] = [];
 	edits.forEach((edit, idx) => {
 		if (edit.op === "append_file") appendEdits.push({ edit, idx });
 		else if (edit.op === "prepend_file") prependEdits.push({ edit, idx });
+		else if (edit.op === "sed_file") sedFileEdits.push({ edit, idx });
 		else anchorEdits.push({ edit, idx });
 	});
 
@@ -757,6 +756,44 @@ export function applyAtomEdits(
 		const insertIdx = hasTrailingNewline ? fileLines.length - 1 : fileLines.length;
 		fileLines.splice(insertIdx, 0, ...edit.lines);
 		trackFirstChanged(insertIdx + 1);
+	}
+
+	// Apply sed_file ops last so they observe the post-anchor / post-prepend /
+	// post-append state of the file. Each op runs across every content line and
+	let warnedLiteralFallback = false;
+	sedFileEdits.sort((a, b) => a.idx - b.idx);
+	for (const { edit } of sedFileEdits) {
+		const hasTrailingNewline = fileLines.length > 1 && fileLines[fileLines.length - 1] === "";
+		const upper = hasTrailingNewline ? fileLines.length - 1 : fileLines.length;
+		let anyMatched = false;
+		let lastCompileError: string | undefined;
+		for (let i = 0; i < upper; i++) {
+			const line = fileLines[i] ?? "";
+			const r = applySedToLine(line, edit.spec);
+			if (r.error) lastCompileError = r.error;
+			if (!r.matched) continue;
+			anyMatched = true;
+			if (r.literalFallback && !warnedLiteralFallback) {
+				warnings.push(
+					`sed expression ${JSON.stringify(edit.expression)} did not match as a regex; applied literal substring substitution. Use the \`F\` flag (e.g. \`s/.../.../F\`) for literal patterns or escape regex metacharacters.`,
+				);
+				warnedLiteralFallback = true;
+			}
+			if (r.result !== line) {
+				fileLines[i] = r.result;
+				trackFirstChanged(i + 1);
+			}
+		}
+		if (!anyMatched) {
+			if (lastCompileError !== undefined) {
+				throw new Error(
+					`Edit sed expression ${JSON.stringify(edit.expression)} failed to compile: ${lastCompileError}`,
+				);
+			}
+			throw new Error(
+				`Edit sed expression ${JSON.stringify(edit.expression)} did not match any line in the file.`,
+			);
+		}
 	}
 
 	return {

@@ -392,7 +392,8 @@ function parseSel(sel: string | undefined): ParsedSelector {
 		}
 		return { kind: "lines", startLine: rawStart, endLine: rawEnd };
 	}
-	throw new ToolError(`Invalid sel '${sel}'. Use 'raw' or a line range like 'L50' or 'L50-L120'.`);
+	// Unrecognized selectors fall through; sqlite/archive/url readers consume `sel` themselves.
+	return { kind: "none" };
 }
 
 /** Convert a line-range selector to the offset/limit pair used by internal pagination. */

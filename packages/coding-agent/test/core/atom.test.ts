@@ -101,13 +101,50 @@ describe("resolveAtomToolEdit — loc syntax", () => {
 		expect(result.lines).toBe("aaa\nbbb\nccc");
 	});
 
-	it('loc:"^" prepends at BOF', () => {
+	it('loc:"$" + pre prepends to the file', () => {
 		const content = "aaa\nbbb";
-		const resolved = resolveAtomToolEdit({ loc: "^", pre: ["ZZZ"] });
+		const resolved = resolveAtomToolEdit({ loc: "$", pre: ["ZZZ"] });
 		expect(resolved).toHaveLength(1);
 		expect(resolved[0]?.op).toBe("prepend_file");
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("ZZZ\naaa\nbbb");
+	});
+
+	it('loc:"$" + sed substitutes across all lines', () => {
+		const content = "aaa\nfoo\nbar foo";
+		const resolved = resolveAtomToolEdit({ loc: "$", sed: "s/foo/FOO/" });
+		expect(resolved).toHaveLength(1);
+		expect(resolved[0]?.op).toBe("sed_file");
+		const result = applyAtomEdits(content, resolved);
+		expect(result.lines).toBe("aaa\nFOO\nbar FOO");
+	});
+
+	it('loc:"$" + sed preserves trailing newline', () => {
+		const content = "aaa\nbbb\n";
+		const resolved = resolveAtomToolEdit({ loc: "$", sed: "s/bbb/BBB/" });
+		const result = applyAtomEdits(content, resolved);
+		expect(result.lines).toBe("aaa\nBBB\n");
+	});
+
+	it('loc:"$" + sed throws when no line matches', () => {
+		const content = "aaa\nbbb";
+		const resolved = resolveAtomToolEdit({ loc: "$", sed: "s/zzz/yyy/" });
+		expect(() => applyAtomEdits(content, resolved)).toThrow(/did not match any line/);
+	});
+
+	it('loc:"$" + pre + post + sed combined', () => {
+		const content = "aaa\nbbb";
+		const resolved = resolveAtomToolEdit({ loc: "$", pre: ["PRE"], sed: "s/bbb/BBB/", post: ["POST"] });
+		const result = applyAtomEdits(content, resolved);
+		expect(result.lines).toBe("PRE\naaa\nBBB\nPOST");
+	});
+
+	it('loc:"$" rejects set', () => {
+		expect(() => resolveAtomToolEdit({ loc: "$", set: ["X"] })).toThrow(/supports pre, post, and sed/);
+	});
+
+	it('loc:"^" is no longer supported', () => {
+		expect(() => resolveAtomToolEdit({ loc: "^", pre: ["ZZZ"] })).toThrow();
 	});
 
 	it("expands pre + set + post from one entry", () => {
@@ -200,13 +237,13 @@ describe("parseAnchor (atom tolerant) + applyAtomEdits", () => {
 });
 describe("atom range locators", () => {
 	it("resolveAtomToolEdit rejects range loc with set", () => {
-		expect(() => resolveAtomToolEdit({ path: "a.ts", loc: "1xx-4yy", set: ["X"] })).toThrow(
+		expect(() => resolveAtomToolEdit({ loc: "1xx-4yy", set: ["X"] })).toThrow(
 			/does not support line ranges/,
 		);
 	});
 
 	it("resolveAtomToolEdit rejects range loc even when the verb would otherwise be valid", () => {
-		expect(() => resolveAtomToolEdit({ path: "a.ts", loc: "1xx-4yy", pre: ["X"] })).toThrow(
+		expect(() => resolveAtomToolEdit({ loc: "1xx-4yy", pre: ["X"] })).toThrow(
 			/does not support line ranges/,
 		);
 	});
@@ -224,7 +261,7 @@ describe("atom range locators", () => {
 		// must not be mistaken for range syntax.
 		const content = "alpha\nbravo\ncharlie";
 		const loc = `2${computeLineHash(2, "bravo")}|  for (let i = 0; i--; ...) {`;
-		const resolved = resolveAtomToolEdit({ path: "a.ts", loc, set: ["BRAVO"] });
+		const resolved = resolveAtomToolEdit({ loc, set: ["BRAVO"] });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("alpha\nBRAVO\ncharlie");
 	});
@@ -300,11 +337,6 @@ describe("applyAtomEdits — sed", () => {
 		expect(result.lines).toBe("aaa\nX\nccc");
 	});
 
-	it("rejects sed at BOF/EOF", () => {
-		expect(() => resolveAtomToolEdit({ path: "a.ts", loc: "^", sed: "s/x/y/" })).toThrow(/only supports pre/);
-		expect(() => resolveAtomToolEdit({ path: "a.ts", loc: "$", sed: "s/x/y/" })).toThrow(/only supports post/);
-	});
-
 	it("tolerates a missing leading `s` when the body starts with a valid delimiter", () => {
 		const content = "alpha\nfoo bar\nccc";
 		const loc = `2${computeLineHash(2, "foo bar")}`;
@@ -315,11 +347,11 @@ describe("applyAtomEdits — sed", () => {
 
 	it("rejects malformed sed expressions", () => {
 		const loc = "1ab";
-		expect(() => resolveAtomToolEdit({ path: "a.ts", loc, sed: "foo/bar/" })).toThrow(
+		expect(() => resolveAtomToolEdit({ loc, sed: "foo/bar/" })).toThrow(
 			/sed delimiter must be|must start with/,
 		);
-		expect(() => resolveAtomToolEdit({ path: "a.ts", loc, sed: "s/foo" })).toThrow(/Expected three/);
-		expect(() => resolveAtomToolEdit({ path: "a.ts", loc, sed: "s/foo/bar/q" })).toThrow(/unknown sed flag/);
+		expect(() => resolveAtomToolEdit({ loc, sed: "s/foo" })).toThrow(/Expected three/);
+		expect(() => resolveAtomToolEdit({ loc, sed: "s/foo/bar/q" })).toThrow(/unknown sed flag/);
 	});
 
 	it("falls back to literal substring when regex parens consume incorrectly", () => {

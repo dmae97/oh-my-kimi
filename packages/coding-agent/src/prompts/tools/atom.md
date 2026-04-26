@@ -7,8 +7,7 @@ Read the file first. Copy the full anchors exactly as shown by `read`.
 
 Each entry has one shared locator plus one or more verbs:
 - `loc: "160sr"` — single anchored line
-- `loc: "^"` — beginning of file (only valid with `pre`)
-- `loc: "$"` — end of file (only valid with `post`)
+- `loc: "$"` — whole file: `pre` prepends, `post` appends, `sed` substitutes across every line
 - `loc: "a.ts:160sr"` — cross-file override inside the locator
 
 Verbs:
@@ -64,7 +63,7 @@ Use the `F` flag to disable regex; the delimiter can be any non-alphanumeric cha
 `{path:"a.ts",edits:[{loc:{{href 5 "\t\treturn parse(data) || fallback;"}},sed:"s|data|input|gF"}]}`
 
 # Prepend / append at file edges
-`{path:"a.ts",edits:[{loc:"^",pre:["// Copyright (c) 2026",""]}]}`
+`{path:"a.ts",edits:[{loc:"$",pre:["// Copyright (c) 2026",""]}]}`
 `{path:"a.ts",edits:[{loc:"$",post:["","export const VERSION = \"1.0.0\";"]}]}`
 
 # Cross-file override inside `loc`
@@ -76,7 +75,7 @@ Use the `F` flag to disable regex; the delimiter can be any non-alphanumeric cha
 - Copy the full anchors exactly as shown by `read/grep` (for example `160sr`, not just `sr`).
 - `loc` chooses the target. Verbs describe what to do there.
 - On a single-anchor `loc`, you may combine `pre`, `set`, and `post`.
-- `loc:"^"` only supports `pre`. `loc:"$"` only supports `post`.
+- `loc:"$"` operates on the whole file: `pre` prepends, `post` appends, `sed` runs across every line.
 - `set: []` deletes the anchored line. `set:[""]` preserves a blank line.
 - Within a single request you may submit edits in any order — the runtime applies them bottom-up so they don't shift each other. After any request that mutates a file, anchors below the mutation are stale on disk; re-read before issuing more edits to that file.
 - `set` operations target the current file content only. Do not try to reference old line text after the file has changed.
