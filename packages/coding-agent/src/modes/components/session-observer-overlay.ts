@@ -125,20 +125,19 @@ export class SessionObserverOverlayComponent extends Container {
 		this.#expandedEntries.clear();
 		this.#wasAtBottom = true;
 		this.#rebuildViewerContent();
-		// Auto-select first non-user entry (skip prompt) and scroll to latest for active sessions
-		const firstNonUser = this.#viewerEntries.findIndex(e => e.kind !== "user");
-		if (firstNonUser >= 0) {
-			this.#selectedEntryIndex = firstNonUser;
+		// Auto-scroll to bottom and select last entry on init
+		if (this.#viewerEntries.length > 0) {
+			this.#selectedEntryIndex = this.#viewerEntries.length - 1;
+			this.#wasAtBottom = true;
 			this.#rebuildViewerContent();
-			this.#scrollToSelectedEntry();
 		}
 	}
 
 	/** Rebuild content from live registry data */
 	refreshFromRegistry(): void {
 		if (this.#selectedSessionId) {
-			const totalLines = this.#renderedLines.length;
-			this.#wasAtBottom = this.#scrollOffset >= totalLines - this.#viewportHeight;
+			// Keep auto-scrolling to bottom unless the user navigated away from the last entry
+			this.#wasAtBottom = this.#selectedEntryIndex >= this.#viewerEntries.length - 1;
 			this.#rebuildViewerContent();
 		}
 	}
@@ -193,7 +192,7 @@ export class SessionObserverOverlayComponent extends Container {
 		const statsLine = this.#buildStatsLine(session);
 		if (statsLine) this.#viewerFooterLines.push(statsLine);
 		this.#viewerFooterLines.push(
-			theme.fg("dim", "j/k:scroll  Enter:expand  [/]:cycle agents  Esc/Ctrl+S:close  g/G:top/bottom"),
+			theme.fg("dim", "j/k:scroll  Enter:expand  [/]/\u2190\u2192:cycle agents  Esc/Ctrl+S:close  g/G:top/bottom"),
 		);
 
 		// Auto-scroll to bottom if we were at bottom
@@ -719,14 +718,14 @@ export class SessionObserverOverlayComponent extends Container {
 			return;
 		}
 
-		// ] or Tab — next sub-agent session
-		if (keyData === "]" || matchesKey(keyData, "tab")) {
+		// ] / → / Tab — next sub-agent session
+		if (keyData === "]" || matchesKey(keyData, "tab") || matchesKey(keyData, "right")) {
 			this.#cycleSession(1);
 			return;
 		}
 
-		// [ or Shift+Tab — previous sub-agent session
-		if (keyData === "[" || matchesKey(keyData, "shift+tab")) {
+		// [ / ← / Shift+Tab — previous sub-agent session
+		if (keyData === "[" || matchesKey(keyData, "shift+tab") || matchesKey(keyData, "left")) {
 			this.#cycleSession(-1);
 			return;
 		}
@@ -754,18 +753,18 @@ export class SessionObserverOverlayComponent extends Container {
 		this.#expandedEntries.clear();
 		this.#wasAtBottom = true;
 		this.#rebuildViewerContent();
-		// Auto-skip to first non-user entry
-		const firstNonUser = this.#viewerEntries.findIndex(e => e.kind !== "user");
-		if (firstNonUser >= 0) {
-			this.#selectedEntryIndex = firstNonUser;
+		// Auto-scroll to bottom: select last entry
+		if (this.#viewerEntries.length > 0) {
+			this.#selectedEntryIndex = this.#viewerEntries.length - 1;
+			this.#wasAtBottom = true;
 			this.#rebuildViewerContent();
-			this.#scrollToSelectedEntry();
 		}
 	}
 
 	/** Rebuild transcript lines (which depend on selectedEntryIndex/expandedEntries) and scroll to selection */
 	#rebuildAndScroll(): void {
-		this.#wasAtBottom = false;
+		// Resume auto-scrolling once selection returns to the last entry
+		this.#wasAtBottom = this.#selectedEntryIndex >= this.#viewerEntries.length - 1;
 		this.#rebuildViewerContent();
 		this.#scrollToSelectedEntry();
 	}
