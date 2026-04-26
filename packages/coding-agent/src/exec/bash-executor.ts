@@ -248,7 +248,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 					outputBytes: minimized.outputBytes,
 				});
 				if (artifactId) {
-					sink.push(`\n[full result: artifact://${artifactId}]\n`);
+					sink.push(`\n[raw output: artifact://${artifactId}]\n`);
 				}
 			}
 		}

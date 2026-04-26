@@ -41,7 +41,7 @@ function getToolChoiceName(choice: unknown): string | undefined {
 	return undefined;
 }
 
-function createToolCallAssistantMessage(name: string, args: Record<string, unknown>): AssistantMessage {
+function createToolCallAssistantMessage(name: string, args: unknown): AssistantMessage {
 	const toolCall: ToolCall = {
 		type: "toolCall",
 		id: `call_${name}`,
@@ -208,14 +208,17 @@ describe("AgentSession eager todo enforcement", () => {
 
 	it("initializes todos once, then continues within the same user turn", async () => {
 		scriptedResponses = [
-			createToolCallAssistantMessage("todo_write", {
-				phases: [
-					{
-						name: "List worktrees",
-						tasks: [{ content: "List all git worktrees in the current repository", status: "in_progress" }],
-					},
-				],
-			}),
+			createToolCallAssistantMessage("todo_write", [
+				{
+					op: "replace",
+					phases: [
+						{
+							name: "List worktrees",
+							tasks: [{ content: "List all git worktrees in the current repository", status: "in_progress" }],
+						},
+					],
+				},
+			]),
 			createAssistantMessage("real user turn handled"),
 		];
 

@@ -1,14 +1,14 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Removed multi-pattern array input from `ast_grep` by changing `pat` to a single pattern string, so call sites using `pat: [...]` must be updated to send one query per invocation
 - Removed `lang`, `glob`, and `sel` options from `ast_edit` and `ast_grep`, and moved those behaviors into the required `path` argument
 - Required `path` for `ast_edit` and `ast_grep`, so invocations that relied on implicit repo-root searching are no longer valid
+- Changed `todo_write` from multi-field verb payloads to an ordered array of flat operations, while retaining `replace` for harness bootstrap compatibility
 - Renamed atom edit operations from `before` and `after` to `pre` and `post`, so existing `atom` payloads using the old operation keys must be updated
-- Changed the hashline anchor format from `LINE#ID:content` to `LINEID\tcontent` (no `#`/`:` separators, tab between anchor and content, no padding on line numbers); expanded the bigram alphabet from 40 hand-picked English bigrams to the full 647 single-token 2-letter bigrams — invalidates every previously captured `LINE#ID` reference
+- Changed the hashline anchor format from `LINE#ID:content` to `LINEID:content` (no `#` separator, colon between anchor and content, no padding on line numbers); expanded the bigram alphabet from 40 hand-picked English bigrams to the full 647 single-token 2-letter bigrams — invalidates every previously captured `LINE#ID` reference
 - Renamed the subagent completion contract from `submit_result` to `yield`, so subagent sessions must now finish with the `yield` tool and the `requireYieldTool` option; `submit_result`/`requireSubmitResultTool` and old completion calls are no longer recognized
 - Changed the hashline and chunk anchor ID format from the prior hex-like tokens to two-letter BPE bigrams (for example `#th`), which invalidates previously captured `LINE#ID`/chunk selectors and requires re-reading to refresh anchors
 
@@ -23,8 +23,11 @@
 
 ### Changed
 
+- Changed bash command output labels from `[full result: artifact://…]` to `[raw output: artifact://…]` for artifact references produced from large command output
+- Changed `todo_write` `done`, `rm`, and `drop` operations to target all tasks when neither `task` nor `phase` is provided, and made `append` create the target phase automatically when missing
 - Updated `ast_edit` and `ast_grep` to pass file-selection intent through `path` (including inline globs and comma/space-separated path lists) instead of separate `glob` filters
 - Changed `ast_grep` pagination API from `offset` to `skip`
+- Flattened `todo_write` operation arguments to `{ op, task?, phase?, items? }[]` and removed task details from the persisted todo shape
 - Changed `grep` truncation output to report `Result limit reached; narrow path.` and label match/result caps as `first N`
 - Changed JSON tree output to truncate inline argument pairs by available width and add an ellipsis when values no longer fit in the display
 - Changed JSON tree rendering to hide harness-internal `intent` and `__partialJson` fields from top-level tool output
@@ -46,6 +49,7 @@
 ### Removed
 
 - Removed the atom `del` verb and now require anchored-line deletion to be requested with `set: []`
+- Removed `todo_write` task details and the `add_notes` operation
 
 ### Fixed
 

@@ -1,28 +1,51 @@
-Manages a phased task list. Each field is a verb — set the ones you need in a single call.
+Manages a phased task list through an ordered list of flat operations.
 The next pending task is auto-promoted to `in_progress` after completing the current one.
 
 <protocol>
-## Fields
+## Shape
+
+Pass an array of operation objects:
+
+```ts
+[
+  { op: "replace", phases: [...] },
+  { op: "start", task: "task-3" },
+  { op: "done", phase: "Implementation" },
+  { op: "rm" },
+  { op: "drop", task: "task-9" },
+  { op: "append", phase: "Implementation", items: [{ id: "task-10", label: "Run tests" }] }
+]
+```
+
+## Operation fields
 
 |Field|Type|When to use|
 |---|---|---|
-|`phases`|Phase[]|Initial setup, or full restructure when the plan changes significantly|
-|`complete`|string[]|Mark tasks done|
-|`start`|string|Jump to a specific task out of order|
-|`abandon`|string[]|Drop tasks intentionally|
-|`remove`|string[]|Remove tasks that are no longer relevant|
-|`add_notes`|{id, notes}[]|Append runtime observations to tasks|
-|`add_tasks`|{phase, content, details?}[]|Add tasks to a phase (by name or ID)|
-|`add_phase`|{name, tasks?}|Add a new phase of work discovered mid-task|
+|`op`|string|Required. One of `replace`, `start`, `done`, `rm`, `drop`, `append`|
+|`task`|string|Task id for `start`, or a task target for `done` / `rm` / `drop`|
+|`phase`|string|Phase target for `done` / `rm` / `drop`, or append destination for `append`|
+|`items`|{id, label}[]|Required for `append`. If the phase does not exist, it is created at the end|
+|`phases`|Phase[]|Only for `replace`. Keeps initial phased setup available for harness bootstrap and full restructures|
+
+## Semantics
+- `start`: requires `task`; sets that task to `in_progress`
+- `done`: marks one task, one phase, or all tasks completed
+- `rm`: removes one task, one phase's tasks, or all tasks
+- `drop`: marks one task, one phase, or all tasks abandoned
+- `append`: appends `items` to `phase`; creates the phase if missing
+- `replace`: replaces the full todo list
+
+If `done`, `rm`, or `drop` omits both `task` and `phase`, it applies to all tasks.
 
 ## Task Anatomy
-- `content`: Short label (5-10 words). What is being done, not how.
-- `details`: File paths, implementation steps, edge cases. Shown only when the task is active.
+- `label`: Short label (5-10 words). What is being done, not how.
+- `replace` task `content` should stay short and specific.
 
 ## Rules
-- Mark tasks completed immediately after finishing — never defer
-- Complete phases in order — do not skip ahead while earlier ones are pending
-- On blockers: add a new task describing the blocker
+- Mark tasks done immediately after finishing — never defer.
+- Complete phases in order — do not skip ahead while earlier ones are pending.
+- On blockers, append a new task to the active phase.
+- Keep ids stable once introduced.
 </protocol>
 
 <conditions>
@@ -35,17 +58,17 @@ Create a todo list when:
 
 <examples>
 # Initial setup
-`{phases: [{name: "Investigation", tasks: [{content: "Read source"}, {content: "Map callsites"}]}, {name: "Implementation", tasks: [{content: "Apply fix", details: "Update parser.ts to handle edge case in line 42"}, {content: "Run tests"}]}]}`
-# Complete tasks
-`{complete: ["task-2", "task-3"]}`
-# Add notes
-`{add_notes: [{id: "task-3", notes: "Found edge case in parser — needs null check"}]}`
-# Add task
-`{add_tasks: [{phase: "Implementation", content: "Handle retries", details: "Cap exponential backoff in retry.ts"}]}`
-# Add phase
-`{add_phase: {name: "Cleanup", tasks: [{content: "Remove dead code"}]}}`
-# Combined
-`{complete: ["task-2"], add_notes: [{id: "task-3", notes: "Needs extra validation"}]}`
+`[{op: "replace", phases: [{name: "Investigation", tasks: [{content: "Read source"}, {content: "Map callsites"}]}, {name: "Implementation", tasks: [{content: "Apply fix"}, {content: "Run tests"}]}]}]`
+# Complete one task
+`[{op: "done", task: "task-2"}]`
+# Complete a whole phase
+`[{op: "done", phase: "Implementation"}]`
+# Remove all tasks
+`[{op: "rm"}]`
+# Drop one task
+`[{op: "drop", task: "task-7"}]`
+# Append tasks to a phase
+`[{op: "append", phase: "Implementation", items: [{id: "task-8", label: "Handle retries"}, {id: "task-9", label: "Run tests"}]}]`
 </examples>
 
 <avoid>
