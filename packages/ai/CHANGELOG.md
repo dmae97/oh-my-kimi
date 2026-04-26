@@ -1,13 +1,18 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added an `examples` option to `StringEnum` to include example values in the generated schema
 
+### Changed
+
+- Changed Anthropic tool schema generation to strip unsupported schema fields (including `patternProperties`), add `additionalProperties: false` for object types, and apply Anthropic strict-mode limits when marking tools as strict
+- Changed Anthropic strict tool planning to cap strict `tools` at twenty entries and convert excess optional/union parameters to nullable schemas to stay within provider constraints
+
 ### Fixed
 
+- Fixed Anthropic and OpenRouter Anthropic tool calls that previously failed with `compiled grammar is too large` by retrying automatically without strict tool schemas and reusing non-strict mode for subsequent requests in the same provider session
 - Fixed parsing of JSON tool arguments containing raw control characters inside string values (such as embedded newlines) by escaping them before JSON parsing
 - Fixed `validateToolArguments` to accept stringified objects and arrays that include literal control characters inside string fields
 

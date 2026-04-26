@@ -20,7 +20,8 @@ import {
 	stripClaudeToolPrefix,
 } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
+import type { TSchema } from "@sinclair/typebox";
 import { withEnv } from "./helpers";
 
 const ANTHROPIC_MODEL: Model<"anthropic-messages"> = {
@@ -279,6 +280,157 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.metadata?.user_id).not.toBe("invalid-user-id");
 		expect(isClaudeCloakingUserId(payload.metadata?.user_id ?? "")).toBe(true);
 	});
+	it("adds additionalProperties false to Anthropic tool object schemas", async () => {
+		const originalNestedSchema = {
+			type: "object",
+			properties: {
+				path: { type: "string" },
+			},
+			patternProperties: {
+				"^x-": { type: "string" },
+			},
+			required: ["path"],
+		};
+		const tools: Tool[] = [
+			{
+				name: "edit_file",
+				description: "edit files",
+				parameters: {
+					type: "object",
+					properties: {
+						target: originalNestedSchema,
+						operations: {
+							type: "array",
+							items: {
+								type: "object",
+								properties: { content: { type: "string" } },
+								required: ["content"],
+							},
+						},
+						env: {
+							type: "object",
+							patternProperties: {
+								"^[A-Za-z_][A-Za-z0-9_]*$": { type: "string" },
+							},
+						},
+					},
+					required: ["target"],
+				} as unknown as TSchema,
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+			systemPrompt: "Stay concise.",
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			tools,
+		})) as {
+			tools?: Array<{
+				input_schema?: {
+					additionalProperties?: boolean;
+					properties?: Record<string, unknown>;
+					required?: string[];
+				};
+			}>;
+		};
+
+		const inputSchema = payload.tools?.[0]?.input_schema;
+		const properties = inputSchema?.properties as Record<string, Record<string, unknown>>;
+		const target = properties.target as { additionalProperties?: boolean; patternProperties?: unknown };
+		const operations = properties.operations as {
+			type?: string;
+			items?: { additionalProperties?: boolean; required?: string[] };
+		};
+		const env = properties.env as { additionalProperties?: boolean; patternProperties?: unknown };
+
+		expect(inputSchema?.additionalProperties).toBe(false);
+		expect(inputSchema?.required).toEqual(["target"]);
+		expect(target.additionalProperties).toBe(false);
+		expect(operations.type).toBe("array");
+		expect(operations.items?.additionalProperties).toBe(false);
+		expect(operations.items?.required).toEqual(["content"]);
+		expect(target).not.toHaveProperty("patternProperties");
+		expect(env.additionalProperties).toBe(false);
+		expect(env).not.toHaveProperty("patternProperties");
+		expect(inputSchema?.properties).toHaveProperty("target");
+		expect(originalNestedSchema).not.toHaveProperty("additionalProperties");
+		expect(originalNestedSchema).toHaveProperty("patternProperties");
+	});
+
+	it("marks at most twenty Anthropic tools strict", async () => {
+		const tools: Tool[] = Array.from({ length: 25 }, (_, index) => ({
+			name: `tool_${index}`,
+			description: "test tool",
+			parameters: {
+				type: "object",
+				properties: {
+					requiredValue: { type: "string" },
+				},
+				required: ["requiredValue"],
+			} as unknown as TSchema,
+		}));
+
+		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+			systemPrompt: "Stay concise.",
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			tools,
+		})) as {
+			tools?: Array<{
+				strict?: boolean;
+				input_schema?: { required?: string[]; properties?: Record<string, unknown> };
+			}>;
+		};
+
+		const emittedTools = payload.tools ?? [];
+		const strictTools = emittedTools.filter(tool => tool.strict === true);
+
+		expect(strictTools).toHaveLength(20);
+		expect(emittedTools.slice(0, 20).every(tool => tool.strict === true)).toBe(true);
+		expect(emittedTools.slice(20).every(tool => tool.strict !== true)).toBe(true);
+		expect(strictTools[0]?.input_schema?.required).toEqual(["requiredValue"]);
+	});
+
+	it("converts excess Anthropic strict optionals to nullable within the union budget", async () => {
+		const tools: Tool[] = Array.from({ length: 10 }, (_, index) => ({
+			name: `nullable_tool_${index}`,
+			description: "test tool",
+			parameters: {
+				type: "object",
+				properties: {
+					requiredValue: { type: "string" },
+					optional0: { type: "number" },
+					optional1: { type: "number" },
+					optional2: { type: "number" },
+					optional3: { type: "number" },
+					optional4: { type: "number" },
+				},
+				required: ["requiredValue"],
+			} as unknown as TSchema,
+		}));
+
+		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+			systemPrompt: "Stay concise.",
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			tools,
+		})) as {
+			tools?: Array<{
+				strict?: boolean;
+				input_schema?: { required?: string[]; properties?: Record<string, unknown> };
+			}>;
+		};
+
+		const emittedTools = payload.tools ?? [];
+		const strictTools = emittedTools.filter(tool => tool.strict === true);
+		const fifthStrictProperties = strictTools[4]?.input_schema?.properties as Record<string, unknown>;
+		const convertedOptional = fifthStrictProperties.optional4 as { anyOf?: Array<Record<string, unknown>> };
+
+		expect(strictTools).toHaveLength(8);
+		expect(emittedTools.slice(0, 8).every(tool => tool.strict === true)).toBe(true);
+		expect(emittedTools.slice(8).every(tool => tool.strict !== true)).toBe(true);
+		expect(strictTools[0]?.input_schema?.required).toEqual(["requiredValue"]);
+		expect(strictTools[4]?.input_schema?.required).toEqual(["requiredValue", "optional4"]);
+		expect(convertedOptional.anyOf).toContainEqual({ type: "null" });
+	});
+
 	it("drops fine-grained tool-streaming beta from default Anthropic client options", () => {
 		const options = buildAnthropicClientOptions({
 			model: ANTHROPIC_MODEL,

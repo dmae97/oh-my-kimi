@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Renamed atom edit operations from `before` and `after` to `pre` and `post`, so existing `atom` payloads using the old operation keys must be updated
@@ -39,6 +40,8 @@
 
 ### Fixed
 
+- Printed assistant `errorMessage` text in print mode output to stderr so message-level errors are visible during non-interactive runs
+- Displayed assistant `errorMessage` text in the assistant message component for completed tool responses with non-terminal stop reasons
 - Fixed atom input handling to ignore null optional verb fields so entries with `pre`, `set`, `post`, or `sub` set to `null` remain valid
 - Fixed status-line Git branch rendering to degrade gracefully when the process hits `ENFILE`/`EMFILE` while reading optional Git refs
 - Changed hashline mismatch failure output to show a clean numbered context block with numbered gutter and full-anchor alignment guidance when edits are rejected after the file changed

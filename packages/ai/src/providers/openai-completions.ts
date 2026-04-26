@@ -18,6 +18,7 @@ import {
 	type Message,
 	type MessageAttribution,
 	type Model,
+	type ProviderSessionState,
 	type ServiceTier,
 	type StopReason,
 	type StreamFunction,
@@ -139,6 +140,56 @@ type BuiltOpenAICompletionTools = {
 	toolStrictMode: AppliedToolStrictMode;
 };
 
+const OPENAI_COMPLETIONS_PROVIDER_SESSION_STATE_PREFIX = "openai-completions:";
+
+type OpenAICompletionsProviderSessionState = ProviderSessionState & {
+	strictToolsDisabled: boolean;
+};
+
+function createOpenAICompletionsProviderSessionState(): OpenAICompletionsProviderSessionState {
+	const state: OpenAICompletionsProviderSessionState = {
+		strictToolsDisabled: false,
+		close: () => {
+			state.strictToolsDisabled = false;
+		},
+	};
+	return state;
+}
+
+function getOpenAICompletionsProviderSessionState(
+	model: Model<"openai-completions">,
+	baseUrl: string | undefined,
+	providerSessionState: Map<string, ProviderSessionState> | undefined,
+): OpenAICompletionsProviderSessionState | undefined {
+	if (!providerSessionState) return undefined;
+	const key = `${OPENAI_COMPLETIONS_PROVIDER_SESSION_STATE_PREFIX}${model.provider}:${baseUrl ?? ""}:${model.id}`;
+	const existing = providerSessionState.get(key) as OpenAICompletionsProviderSessionState | undefined;
+	if (existing) return existing;
+	const created = createOpenAICompletionsProviderSessionState();
+	providerSessionState.set(key, created);
+	return created;
+}
+
+function isOpenRouterAnthropicModel(model: Model<"openai-completions">): boolean {
+	return model.provider === "openrouter" && model.id.toLowerCase().startsWith("anthropic/");
+}
+
+function isCompiledGrammarTooLargeStrictError(
+	error: unknown,
+	capturedErrorResponse: CapturedHttpErrorResponse | undefined,
+): boolean {
+	const status = extractHttpStatusFromError(error) ?? capturedErrorResponse?.status;
+	if (status !== 400) return false;
+	const messageParts = [error instanceof Error ? error.message : undefined, capturedErrorResponse?.bodyText]
+		.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+		.join("\n");
+	return (
+		/invalid_request_error/i.test(messageParts) &&
+		/compiled grammar/i.test(messageParts) &&
+		/too large/i.test(messageParts)
+	);
+}
+
 // LIMITATION: The think tag parser uses naive string matching for <think>/<thinking> tags.
 // If MiniMax models output these literal strings in code blocks, XML examples, or explanations,
 // they will be incorrectly consumed as thinking delimiters, truncating visible output.
@@ -227,9 +278,23 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			} = await createClient(model, context, apiKey, options?.headers, options?.initiatorOverride);
 			getCapturedErrorResponse = captureErrorResponse;
 			let appliedToolStrictMode: AppliedToolStrictMode = "mixed";
+			const providerSessionState = getOpenAICompletionsProviderSessionState(
+				model,
+				baseUrl,
+				options?.providerSessionState,
+			);
+			let disableStrictTools = providerSessionState?.strictToolsDisabled ?? false;
+			let strictFallbackErrorMessage: string | undefined;
 			const createCompletionsStream = async (toolStrictModeOverride?: ToolStrictModeOverride) => {
 				clearCapturedErrorResponse();
-				const { params, toolStrictMode } = buildParams(model, context, options, baseUrl, toolStrictModeOverride);
+				const effectiveToolStrictModeOverride = disableStrictTools ? "none" : toolStrictModeOverride;
+				const { params, toolStrictMode } = buildParams(
+					model,
+					context,
+					options,
+					baseUrl,
+					effectiveToolStrictModeOverride,
+				);
 				appliedToolStrictMode = toolStrictMode;
 				options?.onPayload?.(params);
 				rawRequestDump = {
@@ -251,10 +316,24 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				});
 			} catch (error) {
 				const capturedErrorResponse = getCapturedErrorResponse();
-				if (!shouldRetryWithoutStrictTools(error, capturedErrorResponse, appliedToolStrictMode, context.tools)) {
-					throw error;
+				if (
+					isOpenRouterAnthropicModel(model) &&
+					!disableStrictTools &&
+					isCompiledGrammarTooLargeStrictError(error, capturedErrorResponse)
+				) {
+					strictFallbackErrorMessage = await finalizeErrorMessage(error, rawRequestDump, capturedErrorResponse);
+					output.errorMessage = strictFallbackErrorMessage;
+					if (providerSessionState) {
+						providerSessionState.strictToolsDisabled = true;
+					}
+					disableStrictTools = true;
+					openaiStream = await createCompletionsStream("none");
+				} else {
+					if (!shouldRetryWithoutStrictTools(error, capturedErrorResponse, appliedToolStrictMode, context.tools)) {
+						throw error;
+					}
+					openaiStream = await createCompletionsStream("none");
 				}
-				openaiStream = await createCompletionsStream("none");
 			}
 			const firstEventWatchdog = createWatchdog(
 				options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs),
@@ -541,6 +620,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				throw new Error(output.errorMessage || "Provider returned an error stop reason");
 			}
 
+			output.errorMessage = strictFallbackErrorMessage;
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "done", reason: output.stopReason, message: output });

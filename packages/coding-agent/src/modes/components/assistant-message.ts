@@ -155,6 +155,10 @@ export class AssistantMessageComponent extends Container {
 				this.#contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), 1, 0));
 			}
 		}
+		if (message.errorMessage && message.stopReason !== "aborted" && message.stopReason !== "error") {
+			this.#contentContainer.addChild(new Spacer(1));
+			this.#contentContainer.addChild(new Text(theme.fg("error", `Error: ${message.errorMessage}`), 1, 0));
+		}
 
 		// Token usage metadata
 		if (settings.get("display.showTokenUsage") && this.#usageInfo) {
