@@ -373,7 +373,7 @@ describe("applyAtomEdits — sed", () => {
 		const content = "hello world";
 		const loc = `1${computeLineHash(1, content)}`;
 		const resolved = resolveAtomToolEdit({ loc, sed: "s/zzz)/baz/" });
-		expect(() => applyAtomEdits(content, resolved)).toThrow(/failed to compile/);
+		expect(() => applyAtomEdits(content, resolved)).toThrow(/rejected/);
 	});
 
 	it("treats empty `splice: []` as no-op when paired with sed", () => {
@@ -382,5 +382,14 @@ describe("applyAtomEdits — sed", () => {
 		const resolved = resolveAtomToolEdit({ loc, splice: [], sed: "s/foo/FOO/" });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("aaa\nFOO\nccc");
+	});
+
+	it("rejects regex patterns that match empty strings (e.g. `()`)", () => {
+		// Without this guard, `"foo".replace(/()/, "X")` returns `"Xfoo"` and the
+		// replacement is silently prepended instead of substituted.
+		const content = "hello world";
+		const loc = `1${computeLineHash(1, content)}`;
+		const resolved = resolveAtomToolEdit({ loc, sed: "s/()/X/" });
+		expect(() => applyAtomEdits(content, resolved)).toThrow(/matches an empty string/);
 	});
 });

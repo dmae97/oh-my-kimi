@@ -355,6 +355,19 @@ function applySedToLine(
 	}
 	if (re?.test(currentLine)) {
 		re.lastIndex = 0;
+		const probe = re.exec(currentLine);
+		re.lastIndex = 0;
+		if (probe && probe[0].length === 0) {
+			// Zero-length matches (e.g. `()`, `(?=…)`, `^`, `$`) cause `String.replace`
+			// to insert the replacement at the match position rather than substitute,
+			// which is almost never what models intend. Reject with a pointer to the
+			// dedicated insertion verbs.
+			return {
+				result: currentLine,
+				matched: false,
+				error: `pattern ${JSON.stringify(spec.pattern)} matches an empty string; use \`pre\`/\`post\`/\`splice\` to insert or replace whole lines, or use a non-empty pattern`,
+			};
+		}
 		return { result: currentLine.replace(re, spec.replacement), matched: true };
 	}
 	// Fall back to literal substring match. Models frequently send sed patterns
@@ -674,7 +687,7 @@ export function applyAtomEdits(
 				case "sed": {
 					const { result, matched, error, literalFallback } = applySedToLine(currentLine, edit.spec);
 					if (error) {
-						throw new Error(`Edit sed expression ${JSON.stringify(edit.expression)} failed to compile: ${error}`);
+						throw new Error(`Edit sed expression ${JSON.stringify(edit.expression)} rejected: ${error}`);
 					}
 					if (!matched) {
 						throw new Error(
@@ -786,9 +799,7 @@ export function applyAtomEdits(
 		}
 		if (!anyMatched) {
 			if (lastCompileError !== undefined) {
-				throw new Error(
-					`Edit sed expression ${JSON.stringify(edit.expression)} failed to compile: ${lastCompileError}`,
-				);
+				throw new Error(`Edit sed expression ${JSON.stringify(edit.expression)} rejected: ${lastCompileError}`);
 			}
 			throw new Error(`Edit sed expression ${JSON.stringify(edit.expression)} did not match any line in the file.`);
 		}
