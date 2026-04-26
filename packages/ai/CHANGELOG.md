@@ -1,6 +1,21 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `fireworks` as a supported provider with API key login flow and credential storage
+- Added Fireworks model catalog support with `fireworks`-scoped openai-completions models `glm-5`, `glm-5.1`, `kimi-k2.5`, `kimi-k2.6`, and `minimax-m2.7`
+- Added built-in discovery wiring so providers with base URL `api.fireworks.ai` are recognized as OpenAI-compatible and can use streaming token control
+
+### Changed
+
+- Updated the built-in model catalog to use corrected `contextWindow` and `maxTokens` values for many existing models instead of placeholder limits
+- Updated several model cost entries, including cache-read pricing, to corrected values
+
+### Fixed
+
+- Fixed Fireworks request formatting by translating between public model IDs and API wire IDs when sending OpenAI-completions requests
+- Fixed OpenAI-compatible model parameter handling for Fireworks by allowing `max_tokens` to be sent during requests
 
 ## [14.5.1] - 2026-04-26
 

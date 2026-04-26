@@ -26,7 +26,12 @@ import {
 	isCatalogDescriptor,
 	PROVIDER_DESCRIPTORS,
 } from "../src/provider-models/descriptors";
-import { MODELS_DEV_PROVIDER_DESCRIPTORS, mapModelsDevToModels } from "../src/provider-models/openai-compat";
+import {
+	MODELS_DEV_PROVIDER_DESCRIPTORS,
+	mapModelsDevToModels,
+	UNK_CONTEXT_WINDOW,
+	UNK_MAX_TOKENS,
+} from "../src/provider-models/openai-compat";
 import { getGitLabDuoModels } from "../src/providers/gitlab-duo";
 import { JWT_CLAIM_PATH } from "../src/providers/openai-codex/constants";
 import type { Model } from "../src/types";
@@ -131,6 +136,10 @@ function createGlobalModelsDevReferenceMap(modelsDevModels: readonly Model[]): M
 	return references;
 }
 
+function inheritModelsDevLimit(value: number, referenceValue: number, unspecifiedValue: number): number {
+	return value === unspecifiedValue ? referenceValue : value;
+}
+
 function applyGlobalModelsDevFallback(models: readonly Model[], modelsDevModels: readonly Model[]): Model[] {
 	const providerScopedKeys = new Set(modelsDevModels.map(model => `${model.provider}/${model.id}`));
 	const globalReferences = createGlobalModelsDevReferenceMap(modelsDevModels);
@@ -147,10 +156,10 @@ function applyGlobalModelsDevFallback(models: readonly Model[], modelsDevModels:
 			name: reference.name,
 			reasoning: reference.reasoning,
 			input: reference.input,
-			// contextWindow and maxTokens intentionally NOT overwritten.
-			// Limits are provider-specific (e.g. Copilot imposes its own limits
-			// that are lower than native provider limits). Cross-provider models.dev
-			// references would inflate them.
+			// Fill unknown endpoint limits from same-id models.dev references, but keep
+			// provider-specific values when discovery returned them explicitly.
+			contextWindow: inheritModelsDevLimit(model.contextWindow, reference.contextWindow, UNK_CONTEXT_WINDOW),
+			maxTokens: inheritModelsDevLimit(model.maxTokens, reference.maxTokens, UNK_MAX_TOKENS),
 		};
 	});
 }

@@ -32,6 +32,7 @@ import {
 } from "../types";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
+import { toFireworksWireModelId } from "../utils/fireworks-model-id";
 import {
 	type CapturedHttpErrorResponse,
 	finalizeErrorMessage,
@@ -830,8 +831,9 @@ function buildParams(
 	const isKimi = model.id.includes("moonshotai/kimi");
 	const effectiveMaxTokens = options?.maxTokens ?? (isKimi ? model.maxTokens : undefined);
 
+	const requestModelId = model.provider === "fireworks" ? toFireworksWireModelId(model.id) : model.id;
 	const params: OpenAICompletionsSamplingParams = {
-		model: model.id,
+		model: requestModelId,
 		messages,
 		stream: true,
 	};

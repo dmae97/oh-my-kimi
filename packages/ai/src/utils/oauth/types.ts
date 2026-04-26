@@ -14,6 +14,7 @@ export type OAuthProvider =
 	| "cerebras"
 	| "cloudflare-ai-gateway"
 	| "cursor"
+	| "fireworks"
 	| "github-copilot"
 	| "google-gemini-cli"
 	| "google-antigravity"

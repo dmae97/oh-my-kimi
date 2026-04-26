@@ -717,7 +717,6 @@ export const todoWriteToolRenderer = {
 		const lines: string[] = [header];
 		for (let p = 0; p < phases.length; p++) {
 			const phase = phases[p];
-			if (p > 0) lines.push("");
 			if (phases.length > 1) {
 				lines.push(uiTheme.fg("accent", chalk.bold(`  ${phase.name}`)));
 			}

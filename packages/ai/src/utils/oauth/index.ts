@@ -30,6 +30,7 @@ import type {
  * - Kilo Gateway
  * - Kagi
  * - Cerebras
+ * - Fireworks
  * - Hugging Face Inference
  * - Synthetic
  * - Perplexity (Pro/Max — desktop app extraction or manual cookie)
@@ -56,6 +57,8 @@ export {
 	pollCursorAuth,
 	refreshCursorToken,
 } from "./cursor";
+// Fireworks (API key)
+export { loginFireworks } from "./fireworks";
 // GitHub Copilot
 export {
 	getGitHubCopilotBaseUrl,
@@ -164,6 +167,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "cerebras",
 		name: "Cerebras",
+		available: true,
+	},
+	{
+		id: "fireworks",
+		name: "Fireworks",
 		available: true,
 	},
 	{
@@ -397,6 +405,7 @@ export async function refreshOAuthToken(
 		case "opencode-zen":
 		case "opencode-go":
 		case "cerebras":
+		case "fireworks":
 		case "nvidia":
 		case "nanogpt":
 		case "synthetic":

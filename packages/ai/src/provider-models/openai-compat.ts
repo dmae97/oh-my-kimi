@@ -1,12 +1,13 @@
 import type { ModelManagerOptions } from "../model-manager";
 import { getBundledModels } from "../models";
 import type { Api, Model } from "../types";
-import { isAnthropicOAuthToken, isRecord, toNumber, toPositiveNumber } from "../utils";
+import { isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
 import {
 	fetchOpenAICompatibleModels,
 	type OpenAICompatibleModelMapperContext,
 	type OpenAICompatibleModelRecord,
 } from "../utils/discovery/openai-compatible";
+import { toFireworksPublicModelId } from "../utils/fireworks-model-id";
 import { getGitHubCopilotBaseUrl, OPENCODE_HEADERS, parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { createBundledReferenceMap, createReferenceResolver } from "./bundled-references";
 
@@ -488,6 +489,97 @@ export interface XaiModelManagerConfig {
 
 export function xaiModelManagerOptions(config?: XaiModelManagerConfig): ModelManagerOptions<"openai-completions"> {
 	return createSimpleOpenAICompletionsOptions("xai", "https://api.x.ai/v1", config);
+}
+// ---------------------------------------------------------------------------
+// 7.5 Fireworks
+// ---------------------------------------------------------------------------
+
+export interface FireworksModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+function toFireworksModelName(entry: OpenAICompatibleModelRecord, fallback: string): string {
+	const name = toModelName(entry.name, "");
+	if (name) return name;
+	const id = typeof entry.id === "string" ? entry.id : fallback;
+	const shortName = id.split("/").at(-1) ?? fallback;
+	if (fallback !== id && fallback !== shortName) return fallback;
+	return shortName
+		.split("-")
+		.filter(Boolean)
+		.map(part => part.charAt(0).toUpperCase() + part.slice(1))
+		.join(" ");
+}
+
+function createModelsDevReferenceMap<TApi extends Api>(models: readonly Model<Api>[]): Map<string, Model<TApi>> {
+	const references = new Map<string, Model<TApi>>();
+	for (const model of models) {
+		const candidate = model as Model<TApi>;
+		const existing = references.get(candidate.id);
+		if (!existing) {
+			references.set(candidate.id, candidate);
+			continue;
+		}
+		if (candidate.contextWindow > existing.contextWindow) {
+			references.set(candidate.id, candidate);
+			continue;
+		}
+		if (candidate.contextWindow === existing.contextWindow && candidate.maxTokens > existing.maxTokens) {
+			references.set(candidate.id, candidate);
+		}
+	}
+	return references;
+}
+
+async function loadModelsDevReferences<TApi extends Api>(): Promise<Map<string, Model<TApi>>> {
+	try {
+		const payload = await fetchModelsDevPayload();
+		return createModelsDevReferenceMap<TApi>(
+			mapModelsDevToModels(payload as Record<string, unknown>, MODELS_DEV_PROVIDER_DESCRIPTORS),
+		);
+	} catch {
+		return new Map<string, Model<TApi>>();
+	}
+}
+export function fireworksModelManagerOptions(
+	config?: FireworksModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://api.fireworks.ai/inference/v1";
+	const bundledReferences = createReferenceResolver(createBundledReferenceMap<"openai-completions">("fireworks"));
+	return {
+		providerId: "fireworks",
+		...(apiKey && {
+			fetchDynamicModels: async () => {
+				const modelsDevReferences = await loadModelsDevReferences<"openai-completions">();
+				return fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "fireworks",
+					baseUrl,
+					apiKey,
+					filterModel: entry =>
+						toBoolean(entry.supports_chat) === true && toBoolean(entry.supports_tools) === true,
+					mapModel: (entry, defaults) => {
+						const publicModelId = toFireworksPublicModelId(defaults.id);
+						const reference = modelsDevReferences.get(publicModelId) ?? bundledReferences(publicModelId);
+						const model = mapWithBundledReference(entry, defaults, reference);
+						return {
+							...model,
+							id: publicModelId,
+							api: "openai-completions",
+							provider: "fireworks",
+							baseUrl,
+							name: toFireworksModelName(entry, model.name),
+							input: toBoolean(entry.supports_image_input) === true ? ["text", "image"] : ["text"],
+							contextWindow: toPositiveNumber(entry.context_length, model.contextWindow),
+							maxTokens: toPositiveNumber(entry.max_completion_tokens, model.maxTokens),
+						};
+					},
+				});
+			},
+		}),
+	};
 }
 
 // ---------------------------------------------------------------------------
