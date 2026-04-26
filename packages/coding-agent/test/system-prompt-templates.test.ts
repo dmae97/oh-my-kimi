@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import { buildSystemPrompt } from "@oh-my-pi/pi-coding-agent/system-prompt";
 import { prompt } from "@oh-my-pi/pi-utils";
 import Handlebars from "handlebars";
@@ -36,7 +37,7 @@ const baseRenderContext: prompt.TemplateContext = {
 	environment: [{ label: "OS", value: "Darwin" }],
 	finalPlanFilePath: "local://PLAN_FINAL.md",
 	git: baseGitContext,
-	intentField: "_i",
+	intentField: INTENT_FIELD,
 	intentTracing: true,
 	iterative: true,
 	maxRetries: 3,
