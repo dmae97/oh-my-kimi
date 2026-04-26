@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.4.1] - 2026-04-26
 ### Breaking Changes
 
 - Replaced the legacy `gh_repo_view`, `gh_issue_view`, `gh_pr_view`, `gh_pr_diff`, `gh_pr_checkout`, `gh_pr_push`, `gh_run_watch`, `gh_search_issues`, and `gh_search_prs` tool names with only `github`, which requires updating existing callers that invoked the old `gh_*` tools

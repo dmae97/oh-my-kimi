@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-ai",
-	"version": "14.4.0",
+	"version": "14.4.1",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"homepage": "https://github.com/can1357/oh-my-pi",
 	"author": "Can Boluk",
