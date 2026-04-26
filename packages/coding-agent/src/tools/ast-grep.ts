@@ -12,6 +12,7 @@ import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, t
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
+import { formatGroupedFiles } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
 import type { OutputMeta } from "./output-meta";
 import {
@@ -184,7 +185,9 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 			const useHashLines = resolveFileDisplayMode(this.session).hashLines;
 			const outputLines: string[] = [];
 			const displayLines: string[] = [];
-			const renderMatchesForFile = (relativePath: string) => {
+			const renderMatchesForFile = (relativePath: string): { model: string[]; display: string[] } => {
+				const modelOut: string[] = [];
+				const displayOut: string[] = [];
 				const fileMatches = matchesByFile.get(relativePath) ?? [];
 				const lineNumberWidth = fileMatches.reduce((width, match) => {
 					const lineCount = match.text.split("\n").length;
@@ -197,61 +200,34 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 						const lineNumber = match.startLine + index;
 						const isMatch = index === 0;
 						const line = matchLines[index] ?? "";
-						outputLines.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
-						displayLines.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
+						modelOut.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
+						displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
 					}
 					if (match.metaVariables && Object.keys(match.metaVariables).length > 0) {
 						const serializedMeta = Object.entries(match.metaVariables)
 							.sort(([left], [right]) => left.localeCompare(right))
 							.map(([key, value]) => `${key}=${value}`)
 							.join(", ");
-						outputLines.push(`  meta: ${serializedMeta}`);
-						displayLines.push(`  meta: ${serializedMeta}`);
+						modelOut.push(`  meta: ${serializedMeta}`);
+						displayOut.push(`  meta: ${serializedMeta}`);
 					}
 					fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 				}
+				return { model: modelOut, display: displayOut };
 			};
 
 			if (isDirectory) {
-				const filesByDirectory = new Map<string, string[]>();
-				for (const relativePath of fileList) {
-					const directory = path.dirname(relativePath).replace(/\\/g, "/");
-					if (!filesByDirectory.has(directory)) {
-						filesByDirectory.set(directory, []);
-					}
-					filesByDirectory.get(directory)!.push(relativePath);
-				}
-				for (const [directory, directoryFiles] of filesByDirectory) {
-					if (directory === ".") {
-						for (const relativePath of directoryFiles) {
-							if (outputLines.length > 0) {
-								outputLines.push("");
-								displayLines.push("");
-							}
-							const header = `# ${path.basename(relativePath)}`;
-							outputLines.push(header);
-							displayLines.push(header);
-							renderMatchesForFile(relativePath);
-						}
-						continue;
-					}
-					if (outputLines.length > 0) {
-						outputLines.push("");
-						displayLines.push("");
-					}
-					const dirHeader = `# ${directory}`;
-					outputLines.push(dirHeader);
-					displayLines.push(dirHeader);
-					for (const relativePath of directoryFiles) {
-						const fileHeader = `## └─ ${path.basename(relativePath)}`;
-						outputLines.push(fileHeader);
-						displayLines.push(fileHeader);
-						renderMatchesForFile(relativePath);
-					}
-				}
+				const grouped = formatGroupedFiles(fileList, relativePath => {
+					const rendered = renderMatchesForFile(relativePath);
+					return { modelLines: rendered.model, displayLines: rendered.display };
+				});
+				outputLines.push(...grouped.model);
+				displayLines.push(...grouped.display);
 			} else {
 				for (const relativePath of fileList) {
-					renderMatchesForFile(relativePath);
+					const rendered = renderMatchesForFile(relativePath);
+					outputLines.push(...rendered.model);
+					displayLines.push(...rendered.display);
 				}
 			}
 

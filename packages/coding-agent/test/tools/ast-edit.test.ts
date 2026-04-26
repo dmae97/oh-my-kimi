@@ -211,8 +211,8 @@ describe("ast_edit tool schema", () => {
 				| { totalReplacements?: number; fileReplacements?: Array<{ path: string; count: number }> }
 				| undefined;
 
-			expect(text).toContain("## └─ root.ts (1 replacement)");
-			expect(text).toContain("## └─ child.ts (1 replacement)");
+			expect(text).toContain("## root.ts (1 replacement)");
+			expect(text).toContain("## child.ts (1 replacement)");
 			expect(text).not.toContain("ignore.js");
 			expect(text).not.toContain("outside.ts");
 			expect(details?.totalReplacements).toBe(2);

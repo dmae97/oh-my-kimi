@@ -14,6 +14,7 @@ import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, t
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import { createFileRecorder } from "./file-recorder";
+import { formatGroupedFiles } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import {
@@ -283,7 +284,6 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 			}
 			const outputLines: string[] = [];
 			let linesTruncated = false;
-			const hasContextLines = normalizedContextBefore > 0 || normalizedContextAfter > 0;
 			const matchesByFile = new Map<string, GrepMatch[]>();
 			for (const match of selectedMatches) {
 				const relativePath = formatPath(match.path);
@@ -332,57 +332,22 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				return { model: modelOut, display: displayOut };
 			};
 			if (isDirectory) {
-				const filesByDirectory = new Map<string, string[]>();
-				for (const relativePath of fileList) {
-					const directory = path.dirname(relativePath).replace(/\\/g, "/");
-					if (!filesByDirectory.has(directory)) {
-						filesByDirectory.set(directory, []);
-					}
-					filesByDirectory.get(directory)!.push(relativePath);
-				}
-				for (const [directory, directoryFiles] of filesByDirectory) {
-					if (directory === ".") {
-						for (const relativePath of directoryFiles) {
-							const rendered = renderMatchesForFile(relativePath);
-							if (rendered.model.length === 0) continue;
-							if (outputLines.length > 0) {
-								outputLines.push("");
-								displayLines.push("");
-							}
-							const header = `# ${path.basename(relativePath)}`;
-							outputLines.push(header, ...rendered.model);
-							displayLines.push(header, ...rendered.display);
-						}
-						continue;
-					}
-					const renderedFiles = directoryFiles
-						.map(relativePath => ({ relativePath, rendered: renderMatchesForFile(relativePath) }))
-						.filter(file => file.rendered.model.length > 0);
-					if (renderedFiles.length === 0) continue;
-					if (outputLines.length > 0) {
-						outputLines.push("");
-						displayLines.push("");
-					}
-					const dirHeader = `# ${directory}`;
-					outputLines.push(dirHeader);
-					displayLines.push(dirHeader);
-					for (const { relativePath, rendered } of renderedFiles) {
-						const fileHeader = `## └─ ${path.basename(relativePath)}`;
-						outputLines.push(fileHeader, ...rendered.model);
-						displayLines.push(fileHeader, ...rendered.display);
-					}
-				}
+				const grouped = formatGroupedFiles(fileList, relativePath => {
+					const rendered = renderMatchesForFile(relativePath);
+					return {
+						modelLines: rendered.model,
+						displayLines: rendered.display,
+						skip: rendered.model.length === 0,
+					};
+				});
+				outputLines.push(...grouped.model);
+				displayLines.push(...grouped.display);
 			} else {
 				for (const relativePath of fileList) {
 					const rendered = renderMatchesForFile(relativePath);
 					outputLines.push(...rendered.model);
 					displayLines.push(...rendered.display);
 				}
-			}
-			if (hasContextLines && outputLines.length > 0) {
-				outputLines.unshift(
-					"[grep] '*' marks match lines; leading space marks context. Anchor and content are separated by '|'.",
-				);
 			}
 			if (matchLimitReached || result.limitReached) {
 				outputLines.push("", limitMessage);

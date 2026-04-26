@@ -70,8 +70,8 @@ describe("ast_grep parse errors", () => {
 			const text = result.content.find(content => content.type === "text")?.text ?? "";
 			const details = result.details as { matchCount?: number; fileCount?: number } | undefined;
 
-			expect(text).toContain("## └─ root.ts");
-			expect(text).toContain("## └─ child.ts");
+			expect(text).toContain("## root.ts");
+			expect(text).toContain("## child.ts");
 			expect(text).not.toContain("ignore.js");
 			expect(text).not.toContain("outside.ts");
 			expect(details?.matchCount).toBe(2);

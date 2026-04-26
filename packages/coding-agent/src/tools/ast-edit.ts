@@ -13,6 +13,7 @@ import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, t
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
+import { formatGroupedFiles } from "./grouped-file-output";
 import type { OutputMeta } from "./output-meta";
 import {
 	hasGlobPathChars,
@@ -204,7 +205,9 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			const useHashLines = resolveFileDisplayMode(this.session).hashLines;
 			const outputLines: string[] = [];
 			const displayLines: string[] = [];
-			const renderChangesForFile = (relativePath: string) => {
+			const renderChangesForFile = (relativePath: string): { model: string[]; display: string[] } => {
+				const modelOut: string[] = [];
+				const displayOut: string[] = [];
 				const fileChanges = changesByFile.get(relativePath) ?? [];
 				const lineNumberWidth = fileChanges.reduce(
 					(width, change) => Math.max(width, String(change.startLine).length),
@@ -222,55 +225,31 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 						? `${change.startLine}${computeLineHash(change.startLine, afterFirstLine)}`
 						: `${change.startLine}:${change.startColumn}`;
 					const lineSeparator = useHashLines ? HASHLINE_CONTENT_SEPARATOR : " ";
-					outputLines.push(`-${beforeRef}${lineSeparator}${beforeLine}`);
-					outputLines.push(`+${afterRef}${lineSeparator}${afterLine}`);
-					displayLines.push(formatCodeFrameLine("-", change.startLine, beforeLine, lineNumberWidth));
-					displayLines.push(formatCodeFrameLine("+", change.startLine, afterLine, lineNumberWidth));
+					modelOut.push(`-${beforeRef}${lineSeparator}${beforeLine}`);
+					modelOut.push(`+${afterRef}${lineSeparator}${afterLine}`);
+					displayOut.push(formatCodeFrameLine("-", change.startLine, beforeLine, lineNumberWidth));
+					displayOut.push(formatCodeFrameLine("+", change.startLine, afterLine, lineNumberWidth));
 				}
+				return { model: modelOut, display: displayOut };
 			};
 
 			if (isDirectory) {
-				const filesByDirectory = new Map<string, string[]>();
-				for (const relativePath of fileList) {
-					const directory = path.dirname(relativePath).replace(/\\/g, "/");
-					if (!filesByDirectory.has(directory)) {
-						filesByDirectory.set(directory, []);
-					}
-					filesByDirectory.get(directory)!.push(relativePath);
-				}
-				for (const [directory, directoryFiles] of filesByDirectory) {
-					if (directory === ".") {
-						for (const relativePath of directoryFiles) {
-							if (outputLines.length > 0) {
-								outputLines.push("");
-								displayLines.push("");
-							}
-							const count = fileReplacementCounts.get(relativePath) ?? 0;
-							const header = `# ${path.basename(relativePath)} (${formatCount("replacement", count)})`;
-							outputLines.push(header);
-							displayLines.push(header);
-							renderChangesForFile(relativePath);
-						}
-						continue;
-					}
-					if (outputLines.length > 0) {
-						outputLines.push("");
-						displayLines.push("");
-					}
-					const dirHeader = `# ${directory}`;
-					outputLines.push(dirHeader);
-					displayLines.push(dirHeader);
-					for (const relativePath of directoryFiles) {
-						const count = fileReplacementCounts.get(relativePath) ?? 0;
-						const fileHeader = `## └─ ${path.basename(relativePath)} (${formatCount("replacement", count)})`;
-						outputLines.push(fileHeader);
-						displayLines.push(fileHeader);
-						renderChangesForFile(relativePath);
-					}
-				}
+				const grouped = formatGroupedFiles(fileList, relativePath => {
+					const rendered = renderChangesForFile(relativePath);
+					const count = fileReplacementCounts.get(relativePath) ?? 0;
+					return {
+						headerSuffix: ` (${formatCount("replacement", count)})`,
+						modelLines: rendered.model,
+						displayLines: rendered.display,
+					};
+				});
+				outputLines.push(...grouped.model);
+				displayLines.push(...grouped.display);
 			} else {
 				for (const relativePath of fileList) {
-					renderChangesForFile(relativePath);
+					const rendered = renderChangesForFile(relativePath);
+					outputLines.push(...rendered.model);
+					displayLines.push(...rendered.display);
 				}
 			}
 

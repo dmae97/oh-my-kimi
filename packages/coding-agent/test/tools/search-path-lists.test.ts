@@ -84,7 +84,7 @@ describe("search tool path lists", () => {
 		expect(text).toContain("# apps");
 		expect(text).toContain("# packages");
 		expect(text).toContain("# phases");
-		expect(text).toContain("## └─ grep.txt");
+		expect(text).toContain("## grep.txt");
 		expect(text).not.toContain("# other");
 		expect(details?.fileCount).toBe(3);
 		expect(details?.scopePath).toBe("apps/, packages/, phases/");
@@ -162,7 +162,7 @@ describe("search tool path lists", () => {
 		expect(text).toContain("# apps");
 		expect(text).toContain("# packages");
 		expect(text).toContain("# phases");
-		expect(text).toContain("## └─ ast.ts");
+		expect(text).toContain("## ast.ts");
 		expect(text).not.toContain("# other");
 		expect(details?.fileCount).toBe(3);
 		expect(details?.scopePath).toBe("apps/**/*.ts, packages/**/*.ts, phases/**/*.ts");
@@ -191,7 +191,7 @@ describe("search tool path lists", () => {
 		expect(text).toContain("# apps");
 		expect(text).toContain("# packages");
 		expect(text).toContain("# phases");
-		expect(text).toContain("## └─ ast.ts (1 replacement)");
+		expect(text).toContain("## ast.ts (1 replacement)");
 		expect(text).not.toContain("# other");
 		expect(details?.totalReplacements).toBe(3);
 		expect(details?.scopePath).toBe("apps/**/*.ts, packages/**/*.ts, phases/**/*.ts");
@@ -344,7 +344,6 @@ describe("search tool path lists", () => {
 		});
 		const text = getText(result);
 
-		expect(text).toContain("'*' marks match lines");
 		expect(text).toMatch(/ 1(?:[a-z]{2})?\|#if FLAG/);
 		expect(text).toMatch(/\*2(?:[a-z]{2})?\|needle/);
 		expect(text).toMatch(/ 3(?:[a-z]{2})?\|#endif/);

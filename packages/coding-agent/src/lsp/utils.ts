@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type Theme, theme } from "../modes/theme/theme";
+import { formatGroupedFiles } from "../tools/grouped-file-output";
 import { resolveToCwd } from "../tools/path-utils";
 import type {
 	CodeAction,
@@ -154,7 +155,7 @@ const DIAG_PATH_RE = /^(.+?):(\d+:\d+\s+.*)$/;
 /**
  * Reformat pre-formatted diagnostic messages into grep-style directory/file groups.
  * Input:  ["path:line:col [sev] msg", ...]
- * Output: "# dir\n## └─ file.ts\n  line:col [sev] msg"
+ * Output: "# dir/\n## file.ts\n  line:col [sev] msg"
  *
  * Messages that don't match the expected format are appended ungrouped at the end.
  */
@@ -183,41 +184,10 @@ export function formatGroupedDiagnosticMessages(messages: string[]): string {
 		return ungrouped.join("\n");
 	}
 
-	const filesByDirectory = new Map<string, string[]>();
-	for (const filePath of fileOrder) {
-		const directory = path.dirname(filePath).replace(/\\/g, "/");
-		if (!filesByDirectory.has(directory)) {
-			filesByDirectory.set(directory, []);
-		}
-		filesByDirectory.get(directory)?.push(filePath);
-	}
-
-	const lines: string[] = [];
-	for (const [directory, directoryFiles] of filesByDirectory) {
-		if (directory === ".") {
-			for (const filePath of directoryFiles) {
-				if (lines.length > 0) {
-					lines.push("");
-				}
-				lines.push(`# ${path.basename(filePath)}`);
-				for (const diagnostic of diagnosticsByFile.get(filePath) ?? []) {
-					lines.push(`  ${diagnostic}`);
-				}
-			}
-			continue;
-		}
-
-		if (lines.length > 0) {
-			lines.push("");
-		}
-		lines.push(`# ${directory}`);
-		for (const filePath of directoryFiles) {
-			lines.push(`## └─ ${path.basename(filePath)}`);
-			for (const diagnostic of diagnosticsByFile.get(filePath) ?? []) {
-				lines.push(`  ${diagnostic}`);
-			}
-		}
-	}
+	const grouped = formatGroupedFiles(fileOrder, filePath => ({
+		modelLines: (diagnosticsByFile.get(filePath) ?? []).map(diagnostic => `  ${diagnostic}`),
+	}));
+	const lines: string[] = grouped.model;
 
 	if (ungrouped.length > 0) {
 		lines.push("");

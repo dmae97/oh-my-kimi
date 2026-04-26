@@ -1206,8 +1206,8 @@ function b() {
 			});
 
 			const output = getTextOutput(result);
-			expect(output).toContain("## └─ root.ts");
-			expect(output).toContain("## └─ child.d.ts");
+			expect(output).toContain("## root.ts");
+			expect(output).toContain("## child.d.ts");
 			expect(output).not.toContain("ignore.js");
 			expect(output).not.toContain("outside.ts");
 			expect(result.details?.fileCount).toBe(2);
@@ -1306,8 +1306,8 @@ function b() {
 
 			const output = getTextOutput(result);
 			expect(output).toContain("# packages/ai");
-			expect(output).toContain("## └─ CHANGELOG.md");
-			expect(output).toContain("## └─ models.json");
+			expect(output).toContain("## CHANGELOG.md");
+			expect(output).toContain("## models.json");
 			expect(result.details?.fileCount).toBeGreaterThanOrEqual(2);
 		});
 
@@ -1368,7 +1368,7 @@ function b() {
 			expect(output).toContain("match.txt");
 			expect(output).toContain("needle kept");
 			expect(output).not.toContain("blocked.fifo");
-			expect(output).not.toContain("## └─ blocked.fifo");
+			expect(output).not.toContain("## blocked.fifo");
 			expect(result.details?.fileCount).toBe(1);
 			expect(result.details?.matchCount).toBe(1);
 		});
