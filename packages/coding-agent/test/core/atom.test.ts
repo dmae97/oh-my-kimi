@@ -184,7 +184,7 @@ describe("resolveAtomToolEdit — loc syntax", () => {
 	});
 
 	it("supports path override inside loc", () => {
-		const resolved = resolveAtomEntryPaths([{ loc: "a.ts:1ab", set: "X" }], undefined);
+		const resolved = resolveAtomEntryPaths([{ loc: "a.ts:1ab", set: ["X"] }], undefined);
 		expect(resolved[0]?.path).toBe("a.ts");
 		expect(resolved[0]?.loc).toBe("1ab");
 	});
@@ -202,7 +202,7 @@ describe("parseAnchor (atom tolerant) + applyAtomEdits", () => {
 	it("surfaces correct anchor + content when the model invents an out-of-alphabet hash", () => {
 		const content = "alpha\nbravo\ncharlie";
 		// `XG` is not in the alphabet; should be rejected with the actual anchor exposed.
-		const toolEdit = { path: "a.ts", loc: "2XG", set: "BRAVO" };
+		const toolEdit = { path: "a.ts", loc: "2XG", set: ["BRAVO"] };
 		const resolved = resolveAtomToolEdit(toolEdit);
 		expect(() => applyAtomEdits(content, resolved)).toThrow(HashlineMismatchError);
 		try {
@@ -217,20 +217,20 @@ describe("parseAnchor (atom tolerant) + applyAtomEdits", () => {
 
 	it("surfaces correct anchor + content when the model omits the hash entirely", () => {
 		const content = "alpha\nbravo\ncharlie";
-		const toolEdit = { path: "a.ts", loc: "2", set: "BRAVO" };
+		const toolEdit = { path: "a.ts", loc: "2", set: ["BRAVO"] };
 		const resolved = resolveAtomToolEdit(toolEdit);
 		expect(() => applyAtomEdits(content, resolved)).toThrow(HashlineMismatchError);
 	});
 
 	it("surfaces correct anchor when the model uses pipe-separator (LINE|content) form", () => {
 		const content = "alpha\nbravo\ncharlie";
-		const toolEdit = { path: "a.ts", loc: "2|bravo", set: "BRAVO" };
+		const toolEdit = { path: "a.ts", loc: "2|bravo", set: ["BRAVO"] };
 		const resolved = resolveAtomToolEdit(toolEdit);
 		expect(() => applyAtomEdits(content, resolved)).toThrow(HashlineMismatchError);
 	});
 
 	it("throws a usage-style error when no line number can be extracted", () => {
-		const toolEdit = { path: "a.ts", loc: "  if (!x) return;", set: "x" };
+		const toolEdit = { path: "a.ts", loc: "  if (!x) return;", set: ["x"] };
 		expect(() => resolveAtomToolEdit(toolEdit)).toThrow(/Could not find a line number/);
 	});
 });

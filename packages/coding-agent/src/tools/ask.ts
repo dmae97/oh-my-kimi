@@ -381,7 +381,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	readonly label = "Ask";
 	readonly description: string;
 	readonly parameters = askSchema;
-	readonly strict = true;
+	readonly strict = false;
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(askDescription);

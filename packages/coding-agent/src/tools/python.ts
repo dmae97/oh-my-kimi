@@ -1,4 +1,3 @@
-import type * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
@@ -16,7 +15,6 @@ import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from ".
 import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
 import type { ToolSession } from ".";
 import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
-import { resolveToCwd } from "./path-utils";
 import { formatTitle, replaceTabs, shortenPath, truncateToWidth, wrapBrackets } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -48,12 +46,11 @@ export const pythonSchema = Type.Object({
 	cells: Type.Array(
 		Type.Object({
 			code: Type.String({ description: "python code", examples: ["print('hello')", "import json"] }),
-			title: Type.Optional(Type.String({ description: "cell label", examples: ["imports", "helper"] })),
+			title: Type.String({ description: "cell label", examples: ["imports", "helper"] }),
 		}),
 		{ description: "cells to execute" },
 	),
 	timeout: Type.Optional(Type.Number({ description: "timeout in seconds", default: 30 })),
-	cwd: Type.Optional(Type.String({ description: "working directory", examples: ["src/"] })),
 	reset: Type.Optional(Type.Boolean({ description: "restart kernel" })),
 });
 export type PythonToolParams = Static<typeof pythonSchema>;
@@ -177,7 +174,7 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 		}
 		const session = this.session;
 
-		const { cells, timeout: rawTimeout = 30, cwd, reset } = params;
+		const { cells, timeout: rawTimeout = 30, reset } = params;
 		// Clamp to reasonable range: 1s - 600s (10 min)
 		const timeoutSec = clampTimeout("python", rawTimeout);
 		const timeoutMs = timeoutSec * 1000;
@@ -203,17 +200,6 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 					throw new ToolAbortError();
 				}
 				session.assertPythonExecutionAllowed?.();
-
-				const commandCwd = cwd ? resolveToCwd(cwd, session.cwd) : session.cwd;
-				let cwdStat: fs.Stats;
-				try {
-					cwdStat = await Bun.file(commandCwd).stat();
-				} catch {
-					throw new ToolError(`Working directory does not exist: ${commandCwd}`);
-				}
-				if (!cwdStat.isDirectory()) {
-					throw new ToolError(`Working directory is not a directory: ${commandCwd}`);
-				}
 
 				const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES * 2);
 				const jsonOutputs: unknown[] = [];
@@ -273,11 +259,11 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 						pushUpdate();
 					},
 				});
-				const sessionId = sessionFile ? `session:${sessionFile}:cwd:${commandCwd}` : `cwd:${commandCwd}`;
+				const sessionId = sessionFile ? `session:${sessionFile}:cwd:${session.cwd}` : `cwd:${session.cwd}`;
 
 				if (getPreludeDocs().length === 0) {
 					const warmup = await warmPythonEnvironment(
-						commandCwd,
+						session.cwd,
 						sessionId,
 						session.settings.get("python.sharedGateway"),
 						sessionFile ?? undefined,
@@ -292,7 +278,7 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 				}
 
 				const baseExecutorOptions = {
-					cwd: commandCwd,
+					cwd: session.cwd,
 					deadlineMs,
 					signal: combinedSignal,
 					sessionId,
