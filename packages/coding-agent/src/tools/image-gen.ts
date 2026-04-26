@@ -8,7 +8,6 @@ import {
 	OPENAI_HEADERS,
 	URL_PATHS,
 } from "@oh-my-pi/pi-ai/providers/openai-codex/constants";
-import { CODEX_INSTRUCTIONS } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import {
 	$env,
 	isEnoent,
@@ -692,7 +691,12 @@ function buildOpenAIHostedImageRequest(
 		tools: [tool],
 		tool_choice: { type: "image_generation" },
 		store: false,
-		...(stream ? { instructions: CODEX_INSTRUCTIONS } : {}),
+		...(stream
+			? {
+					instructions:
+						"You are an AI image generator. Generate images based on user descriptions. Focus on creating high-quality, visually appealing images that match the user's request.",
+				}
+			: {}),
 		...(stream ? { stream: true } : {}),
 	};
 }

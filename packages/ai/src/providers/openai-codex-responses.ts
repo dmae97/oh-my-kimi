@@ -75,27 +75,6 @@ export interface OpenAICodexResponsesOptions extends StreamOptions {
 	serviceTier?: ServiceTier;
 }
 
-export const CODEX_INSTRUCTIONS = `You are an expert coding assistant operating inside pi, a coding agent harness.`;
-
-export interface CodexSystemPrompt {
-	instructions: string;
-	developerMessages: string[];
-}
-
-export function buildCodexSystemPrompt(args: { userSystemPrompt?: string }): CodexSystemPrompt {
-	const { userSystemPrompt } = args;
-	const developerMessages: string[] = [];
-
-	if (userSystemPrompt && userSystemPrompt.trim().length > 0) {
-		developerMessages.push(userSystemPrompt.trim());
-	}
-
-	return {
-		instructions: CODEX_INSTRUCTIONS,
-		developerMessages,
-	};
-}
-
 const CODEX_DEBUG = $flag("PI_CODEX_DEBUG");
 const CODEX_MAX_RETRIES = 5;
 const CODEX_RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
@@ -537,8 +516,7 @@ async function buildTransformedCodexRequestBody(
 		}
 	}
 
-	const systemPrompt = buildCodexSystemPrompt({ userSystemPrompt: context.systemPrompt });
-	params.instructions = systemPrompt.instructions;
+	params.instructions = context.systemPrompt;
 
 	const codexOptions: CodexRequestOptions = {
 		reasoningEffort: options?.reasoning,
@@ -547,7 +525,7 @@ async function buildTransformedCodexRequestBody(
 		include: options?.include,
 	};
 
-	return transformRequestBody(params, model, codexOptions, systemPrompt);
+	return transformRequestBody(params, model, codexOptions);
 }
 
 async function openInitialCodexEventStream(
