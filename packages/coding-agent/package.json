@@ -52,6 +52,7 @@
 		"@oh-my-pi/pi-natives": "catalog:",
 		"@oh-my-pi/pi-tui": "catalog:",
 		"@oh-my-pi/pi-utils": "catalog:",
+		"@puppeteer/browsers": "catalog:",
 		"@sinclair/typebox": "catalog:",
 		"@xterm/headless": "catalog:",
 		"ajv": "catalog:",
@@ -62,7 +63,7 @@
 		"linkedom": "catalog:",
 		"lru-cache": "catalog:",
 		"markit-ai": "catalog:",
-		"puppeteer": "catalog:",
+		"puppeteer-core": "catalog:",
 		"turndown": "catalog:",
 		"turndown-plugin-gfm": "catalog:",
 		"zod": "catalog:"

@@ -15,7 +15,7 @@ import type {
 	Page,
 	default as Puppeteer,
 	SerializedAXNode,
-} from "puppeteer";
+} from "puppeteer-core";
 import browserDescription from "../prompts/tools/browser.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import { resizeImage } from "../utils/image-resize";
@@ -53,7 +53,7 @@ async function loadPuppeteer(): Promise<typeof Puppeteer> {
 	await Bun.write(path.join(safeDir, "package.json"), "{}");
 	try {
 		process.chdir(safeDir);
-		puppeteerModule = (await import("puppeteer")).default;
+		puppeteerModule = (await import("puppeteer-core")).default;
 		return puppeteerModule;
 	} finally {
 		process.chdir(prev);
@@ -61,50 +61,172 @@ async function loadPuppeteer(): Promise<typeof Puppeteer> {
 }
 
 /**
- * On NixOS, Puppeteer's bundled Chromium is a dynamically-linked FHS binary and
- * cannot run as-is. Detect the platform and resolve a system-installed Chromium
- * so `puppeteer.launch()` can use it instead of the bundled one.
- *
- * Detection order:
- *   1. `chromium` on PATH
- *   2. `chromium-browser` on PATH
- *   3. ~/.nix-profile/bin/chromium  (user profile)
- *   4. /run/current-system/sw/bin/chromium  (system profile)
- *
- * Returns `undefined` on non-NixOS systems or when no binary is found, which
- * causes Puppeteer to fall back to its default resolution.
+ * Lazily download Chromium on first browser launch via @puppeteer/browsers.
+ * Skipped when a system Chromium (NixOS) or PUPPETEER_EXECUTABLE_PATH is set.
+ * The browser is cached under ~/.omp/puppeteer (getPuppeteerDir).
  */
-let _resolvedChromium: string | null | undefined; // undefined = unchecked; null = not found
-function resolveSystemChromium(): string | undefined {
-	if (_resolvedChromium !== undefined) return _resolvedChromium ?? undefined;
-	try {
-		if (!fs.existsSync("/etc/NIXOS")) {
-			_resolvedChromium = null;
+let chromiumExecutablePromise: Promise<string | undefined> | undefined;
+async function ensureChromiumExecutable(): Promise<string | undefined> {
+	const sysChrome = resolveSystemChromium();
+	if (sysChrome) return sysChrome;
+	const envPath = process.env.PUPPETEER_EXECUTABLE_PATH;
+	if (envPath) return envPath;
+	if (chromiumExecutablePromise) return chromiumExecutablePromise;
+
+	chromiumExecutablePromise = (async () => {
+		const [browsers, revisions] = await Promise.all([
+			import("@puppeteer/browsers"),
+			import("puppeteer-core/internal/revisions.js"),
+		]);
+		const platform = browsers.detectBrowserPlatform();
+		if (!platform) {
+			logger.warn("Could not detect browser platform; relying on puppeteer default resolution");
 			return undefined;
 		}
-	} catch {
-		_resolvedChromium = null;
-		return undefined;
-	}
-	const candidates = [
-		$which("chromium"),
-		$which("chromium-browser"),
-		path.join(os.homedir(), ".nix-profile/bin/chromium"),
-		"/run/current-system/sw/bin/chromium",
-	];
-	for (const candidate of candidates) {
-		if (candidate) {
-			try {
-				if (fs.existsSync(candidate)) {
-					_resolvedChromium = candidate;
-					logger.debug("NixOS: using system Chromium", { path: candidate });
-					return candidate;
+		const cacheDir = getPuppeteerDir();
+		const buildId = await browsers.resolveBuildId(
+			browsers.Browser.CHROME,
+			platform,
+			revisions.PUPPETEER_REVISIONS.chrome,
+		);
+		const executablePath = browsers.computeExecutablePath({
+			browser: browsers.Browser.CHROME,
+			buildId,
+			cacheDir,
+			platform,
+		});
+		if (fs.existsSync(executablePath)) return executablePath;
+
+		logger.warn("Downloading Chromium for puppeteer (first browser use)", {
+			buildId,
+			platform,
+			cacheDir,
+		});
+		let lastReportedPercent = -1;
+		await browsers.install({
+			browser: browsers.Browser.CHROME,
+			buildId,
+			cacheDir,
+			platform,
+			downloadProgressCallback: (downloaded, total) => {
+				if (total <= 0) return;
+				const pct = Math.floor((downloaded / total) * 100);
+				if (pct >= lastReportedPercent + 10 || downloaded === total) {
+					lastReportedPercent = pct;
+					logger.debug(
+						`Chromium download: ${pct}% (${Math.round(downloaded / 1_000_000)} / ${Math.round(total / 1_000_000)} MB)`,
+					);
 				}
+			},
+		});
+		return executablePath;
+	})().catch(err => {
+		chromiumExecutablePromise = undefined;
+		throw new ToolError(
+			`Failed to install Chromium for puppeteer: ${(err as Error).message}. ` +
+				"Set PUPPETEER_EXECUTABLE_PATH to use an existing Chrome/Chromium binary, or install one manually.",
+		);
+	});
+	return chromiumExecutablePromise;
+}
+
+/**
+ * Resolve a system-installed Chrome/Chromium so `puppeteer.launch()` can reuse
+ * it instead of forcing a Chromium download. Returns `undefined` when no binary
+ * is found, which lets the caller fall back to a managed download.
+ *
+ * Detection order (per platform):
+ *   - macOS:   Google Chrome → Chromium → Microsoft Edge (system + user Applications)
+ *   - Linux:   PATH lookups (google-chrome, chromium, etc.) → common /usr/bin paths,
+ *              with NixOS-specific profile paths added when /etc/NIXOS exists
+ *   - Windows: Program Files / LocalAppData install paths for Chrome and Edge
+ *
+ * Honored regardless of platform: PUPPETEER_EXECUTABLE_PATH callers should bypass
+ * this entirely (handled in ensureChromiumExecutable).
+ */
+let _resolvedChromium: string | null | undefined; // undefined = unchecked; null = not found
+function isExecutableFile(p: string): boolean {
+	try {
+		const st = fs.statSync(p);
+		return st.isFile();
+	} catch {
+		return false;
+	}
+}
+
+function systemChromiumCandidates(): string[] {
+	const home = os.homedir();
+	const candidates: string[] = [];
+	switch (process.platform) {
+		case "darwin": {
+			for (const root of ["/Applications", path.join(home, "Applications")]) {
+				candidates.push(
+					path.join(root, "Google Chrome.app/Contents/MacOS/Google Chrome"),
+					path.join(root, "Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta"),
+					path.join(root, "Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev"),
+					path.join(root, "Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"),
+					path.join(root, "Chromium.app/Contents/MacOS/Chromium"),
+					path.join(root, "Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+				);
+			}
+			break;
+		}
+		case "linux": {
+			const names = ["google-chrome-stable", "google-chrome", "chromium", "chromium-browser", "chrome"];
+			for (const name of names) {
+				const found = $which(name);
+				if (found) candidates.push(found);
+			}
+			candidates.push(
+				"/usr/bin/google-chrome-stable",
+				"/usr/bin/google-chrome",
+				"/usr/bin/chromium",
+				"/usr/bin/chromium-browser",
+				"/snap/bin/chromium",
+				"/var/lib/flatpak/exports/bin/com.google.Chrome",
+				"/var/lib/flatpak/exports/bin/org.chromium.Chromium",
+			);
+			let onNixos = false;
+			try {
+				onNixos = fs.existsSync("/etc/NIXOS");
 			} catch {}
+			if (onNixos) {
+				candidates.push(path.join(home, ".nix-profile/bin/chromium"), "/run/current-system/sw/bin/chromium");
+			}
+			break;
+		}
+		case "win32": {
+			const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+			const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+			const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData\\Local");
+			candidates.push(
+				path.join(programFiles, "Google\\Chrome\\Application\\chrome.exe"),
+				path.join(programFilesX86, "Google\\Chrome\\Application\\chrome.exe"),
+				path.join(localAppData, "Google\\Chrome\\Application\\chrome.exe"),
+				path.join(programFiles, "Chromium\\Application\\chrome.exe"),
+				path.join(localAppData, "Chromium\\Application\\chrome.exe"),
+				path.join(programFiles, "Microsoft\\Edge\\Application\\msedge.exe"),
+				path.join(programFilesX86, "Microsoft\\Edge\\Application\\msedge.exe"),
+			);
+			break;
+		}
+	}
+	return candidates;
+}
+
+function resolveSystemChromium(): string | undefined {
+	if (_resolvedChromium !== undefined) return _resolvedChromium ?? undefined;
+	const seen = new Set<string>();
+	for (const candidate of systemChromiumCandidates()) {
+		if (!candidate || seen.has(candidate)) continue;
+		seen.add(candidate);
+		if (isExecutableFile(candidate)) {
+			_resolvedChromium = candidate;
+			logger.debug("Using system Chrome/Chromium", { path: candidate });
+			return candidate;
 		}
 	}
 	_resolvedChromium = null;
-	logger.debug("NixOS detected but no Chromium binary found; Puppeteer may fail to launch");
 	return undefined;
 }
 
@@ -674,7 +796,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 		this.#browser = await puppeteer.launch({
 			headless: this.#currentHeadless,
 			defaultViewport: this.#currentHeadless ? initialViewport : null,
-			executablePath: resolveSystemChromium(),
+			executablePath: await ensureChromiumExecutable(),
 			args: launchArgs,
 			ignoreDefaultArgs: [...STEALTH_IGNORE_DEFAULT_ARGS],
 		});
