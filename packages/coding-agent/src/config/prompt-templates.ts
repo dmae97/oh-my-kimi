@@ -45,11 +45,14 @@ function formatHashlineRef(lineNum: unknown, content: unknown): { num: number; t
 
 /**
  * {{href lineNum "content"}} — compute a real hashline ref for prompt examples.
- * Returns `"lineNumBIGRAM"` (e.g., `"42nd"`) using the actual hash algorithm.
+ * {{href lineNum "content" "[" "]"}} — wrap the ref with pre/post chars (still quoted).
+ * Returns `"lineNumBIGRAM"` (e.g., `"42nd"`), or `"[42nd]"` when pre/post are supplied.
  */
-prompt.registerHelper("href", (lineNum: unknown, content: unknown): string => {
+prompt.registerHelper("href", (lineNum: unknown, content: unknown, pre?: unknown, post?: unknown): string => {
 	const { ref } = formatHashlineRef(lineNum, content);
-	return JSON.stringify(ref);
+	const preStr = typeof pre === "string" ? pre : "";
+	const postStr = typeof post === "string" ? post : "";
+	return JSON.stringify(`${preStr}${ref}${postStr}`);
 });
 
 /**

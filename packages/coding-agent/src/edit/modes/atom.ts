@@ -1,22 +1,24 @@
 /**
  *
  * Flat locator + verb edit mode backed by hashline anchors. Each entry carries
- * one shared `loc` selector plus one or more verbs (`pre`, `splice`, `post`).
+ * one shared `loc` selector plus one or more verbs (`pre`, `splice`, `post`, `sed`).
  * The runtime resolves those verbs into internal anchor-scoped edits and still
  * reuses hashline's staleness scheme (`computeLineHash`) verbatim.
  *
  * External shapes (one entry):
- *   { path, loc: "5th",      splice:  ["..."] }
- *   { path, loc: "5th",      pre:  ["..."] }
- *   { path, loc: "5th",      post: ["..."] }
- *   { path, loc: "5th",      pre: [...], splice: [...], post: [...] }
- *   { path, loc: "$",        pre:  [...] }                            // prepend to file
- *   { path, loc: "$",        post: [...] }                            // append to file
- *   { path, loc: "$",        sed:  { pat, rep, g?, F? } }                 // sed on every line
+ *   { path, loc: "5th",      splice:  ["..."] }                          // line replace
+ *   { path, loc: "(5th)",    splice:  ["..."] }                          // block body replace
+ *   { path, loc: "[5th]",    splice:  ["..."] }                          // whole node replace
+ *   { path, loc: "[5th",     splice:  ["..."] }                          // anchor (incl) → closer-1
+ *   { path, loc: "5th]",     splice:  ["..."] }                          // opener+1 → anchor (incl)
+ *   { path, loc: "5th",      pre: [...], splice: [...], post: [...] }    // line verbs combinable
+ *   { path, loc: "$",        pre: [...] | post: [...] | sed: {...} }    // file-scoped
  *
- * `splice: []` on a single-anchor locator deletes that line. `splice:[""]` preserves
- * a blank line. Line ranges are not supported.
- * in the same entry.
+ * `splice: []` deletes; `splice: [""]` replaces with a single blank line. These
+ * apply uniformly to single-line and bracketed (region) locators.
+ *
+ * Bracket forms in `loc` are reserved for `splice` (region replacement). `pre`,
+ * `post`, and `sed` reject bracketed locators — they are line-only.
  *
  * For deleting or moving files, the agent should use bash.
  */
@@ -29,7 +31,9 @@ import { assertEditableFileContent } from "../../tools/auto-generated-guard";
 import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";
 import { outputMeta } from "../../tools/output-meta";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
+import { checkBodyBraceBalance, type DelimiterKind, findEnclosingBlock } from "../block";
 import { generateDiffString } from "../diff";
+import { applyIndent, detectIndentStyle, stripCommonIndent } from "../indent";
 import { computeLineHash, HASHLINE_BIGRAM_RE_SRC, HASHLINE_CONTENT_SEPARATOR } from "../line-hash";
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "../normalize";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
@@ -105,13 +109,42 @@ export type AtomEdit =
 	| { op: "append_file"; lines: string[] }
 	| { op: "prepend_file"; lines: string[] }
 	| { op: "sed"; pos: Anchor; spec: SedSpec; expression: string }
-	| { op: "sed_file"; spec: SedSpec; expression: string };
+	| { op: "sed_file"; spec: SedSpec; expression: string }
+	| { op: "splice_block"; pos: Anchor; spec: SpliceBlockSpec; bracket: BracketShape };
 
 export interface SedSpec {
 	pattern: string;
 	replacement: string;
 	global: boolean;
 	literal: boolean;
+}
+
+export interface SpliceBlockSpec {
+	body: string[];
+	kind: DelimiterKind;
+}
+
+type BracketShape = "none" | "body" | "node" | "left_incl" | "left_excl" | "right_incl" | "right_excl";
+
+// File-extension lookup for the block delimiter family used when `loc`
+// has bracket forms. Most languages are brace-family; lisp-family uses `(`.
+// Anything not listed defaults to `{` (covers the long tail of brace-style
+// languages without enumerating every extension).
+const LISP_EXTENSIONS = new Set(["clj", "cljs", "cljc", "edn", "lisp", "lsp", "el", "scm", "ss", "rkt", "fnl"]);
+
+function fileExtension(path: string | undefined): string | undefined {
+	if (!path) return undefined;
+	const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+	const base = slash >= 0 ? path.slice(slash + 1) : path;
+	const dot = base.lastIndexOf(".");
+	if (dot <= 0) return undefined;
+	return base.slice(dot + 1).toLowerCase();
+}
+
+function resolveBlockDelimiterForPath(path: string | undefined): DelimiterKind {
+	const ext = fileExtension(path);
+	if (ext && LISP_EXTENSIONS.has(ext)) return "(";
+	return "{";
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -135,7 +168,9 @@ const ANCHOR_PREFIX_RE = new RegExp(`^\\s*[>+-]*\\s*\\d+${HASHLINE_BIGRAM_RE_SRC
 // `C:\path\a.ts:160sr` still resolve correctly because the first colon's RHS
 // fails the anchor pattern.
 const ANCHOR_TAG_RE_SRC = `\\s*[>+-]*\\s*\\d+${HASHLINE_BIGRAM_RE_SRC}`;
-const PATH_LOC_SPLIT_RE = new RegExp(`^(.+?):(${ANCHOR_TAG_RE_SRC}(?:-${ANCHOR_TAG_RE_SRC})?(?:[|:].*)?)$`);
+const PATH_LOC_SPLIT_RE = new RegExp(
+	`^(.+?):([\\[(]?${ANCHOR_TAG_RE_SRC}(?:-${ANCHOR_TAG_RE_SRC})?(?:[|:].*)?[\\])]?)$`,
+);
 
 function stripNullAtomFields(edit: AtomToolEdit): AtomToolEdit {
 	let next: Record<string, unknown> | undefined;
@@ -148,7 +183,7 @@ function stripNullAtomFields(edit: AtomToolEdit): AtomToolEdit {
 	return (next ?? fields) as AtomToolEdit;
 }
 
-type ParsedAtomLoc = { kind: "anchor"; pos: Anchor } | { kind: "file" };
+type ParsedAtomLoc = { kind: "anchor"; pos: Anchor; bracket: BracketShape } | { kind: "file" };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Resolution
@@ -227,28 +262,52 @@ export function resolveAtomEntryPaths(
 }
 
 function parseLoc(raw: string, editIndex: number): ParsedAtomLoc {
-	if (raw === "$") return { kind: "file" };
+	const trimmed = raw.trim();
+	if (trimmed === "$") return { kind: "file" };
+
+	const leading = trimmed[0];
+	const trailing = trimmed[trimmed.length - 1];
+	const hasLeading = leading === "[" || leading === "(";
+	const hasTrailing = trailing === "]" || trailing === ")";
+	if ((leading === "(" && trailing === "]") || (leading === "[" && trailing === ")")) {
+		throw new Error(
+			`Edit ${editIndex}: mixed bracket inclusivity in loc is ambiguous; use [anchor, (anchor, anchor], anchor), [anchor], or a bare anchor.`,
+		);
+	}
+
+	let inner = trimmed;
+	if (hasLeading) inner = inner.slice(1);
+	if (hasTrailing) inner = inner.slice(0, -1);
+
 	// Detect range syntax explicitly: "<anchor>-<anchor>". A bare `-` inside the
 	// loc (e.g. line content like `i--`) should not trigger the range error.
-	const dash = raw.indexOf("-");
+	const dash = inner.indexOf("-");
 	if (dash > 0) {
-		const left = raw.slice(0, dash);
-		const right = raw.slice(dash + 1);
+		const left = inner.slice(0, dash);
+		const right = inner.slice(dash + 1);
 		if (tryParseAtomTag(left) !== undefined && tryParseAtomTag(right) !== undefined) {
 			throw new Error(
 				`Edit ${editIndex}: atom loc does not support line ranges. Use a single anchor like "160sr" or "$".`,
 			);
 		}
 	}
-	const pos = parseAnchor(raw, "loc");
+	const pos = parseAnchor(inner, "loc");
 	// Capture an optional content suffix after the anchor: `82zu|  for (...)`.
 	// The suffix acts as a hint for anchor disambiguation when the model's hash
 	// is wrong but the content reveals the intended line.
-	const hint = extractAnchorContentHint(raw);
+	const hint = extractAnchorContentHint(inner);
 	if (hint !== undefined) {
 		pos.contentHint = hint;
 	}
-	return { kind: "anchor", pos };
+
+	let bracket: BracketShape = "none";
+	if (leading === "[" && trailing === "]") bracket = "node";
+	else if (leading === "[") bracket = "left_incl";
+	else if (leading === "(" && trailing === ")") bracket = "body";
+	else if (leading === "(") bracket = "left_excl";
+	else if (trailing === "]") bracket = "right_incl";
+	else if (trailing === ")") bracket = "right_excl";
+	return { kind: "anchor", pos, bracket };
 }
 
 function extractAnchorContentHint(raw: string): string | undefined {
@@ -367,7 +426,7 @@ function classifyAtomEdit(edit: AtomToolEdit): string {
 	return verbs.length > 0 ? verbs.join("+") : "unknown";
 }
 
-function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
+function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0, path?: string): AtomEdit[] {
 	const entry = stripNullAtomFields(edit);
 	const verbKeysPresent = ATOM_VERB_KEYS.filter(k => entry[k] !== undefined);
 	if (verbKeysPresent.length === 0) {
@@ -396,6 +455,25 @@ function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0): AtomEdit[] {
 			const spec = parseSedSpec(entry.sed, editIndex);
 			resolved.push({ op: "sed_file", spec, expression: formatSedExpression(spec) });
 		}
+		return resolved;
+	}
+
+	if (loc.bracket !== "none") {
+		// Bracketed locator: only `splice` is meaningful (region replacement).
+		const hasInvalidVerb = entry.pre !== undefined || entry.post !== undefined || entry.sed !== undefined;
+		if (hasInvalidVerb) {
+			throw new Error(
+				`Edit ${editIndex}: bracket forms in loc are splice-only; remove pre/post/sed or use a bare anchor.`,
+			);
+		}
+		if (entry.splice === undefined) {
+			throw new Error(
+				`Edit ${editIndex}: bracket loc requires \`splice\`. Bare anchors are line-only; brackets address a region.`,
+			);
+		}
+		const kind = resolveBlockDelimiterForPath(path);
+		const body = hashlineParseText(entry.splice);
+		resolved.push({ op: "splice_block", pos: loc.pos, spec: { body, kind }, bracket: loc.bracket });
 		return resolved;
 	}
 
@@ -442,6 +520,7 @@ function* getAtomAnchors(edit: AtomEdit): Iterable<Anchor> {
 		case "post":
 		case "del":
 		case "sed":
+		case "splice_block":
 			yield edit.pos;
 			return;
 		default:
@@ -542,6 +621,151 @@ export interface AtomNoopEdit {
 	current: string;
 }
 
+interface SpliceBlockApplyResult {
+	text: string;
+	firstChangedLine: number | undefined;
+}
+
+type SpliceBlockEdit = Extract<AtomEdit, { op: "splice_block" }>;
+
+function lineStartOffset(text: string, line: number): number {
+	let currentLine = 1;
+	let offset = 0;
+	while (offset < text.length && currentLine < line) {
+		if (text[offset] === "\n") currentLine++;
+		offset++;
+	}
+	return offset;
+}
+
+function lineEndOffset(text: string, line: number): number {
+	let offset = lineStartOffset(text, line);
+	while (offset < text.length && text[offset] !== "\n") offset++;
+	return offset;
+}
+
+function lineEndIncludingNewlineOffset(text: string, line: number): number {
+	const offset = lineEndOffset(text, line);
+	return text[offset] === "\n" ? offset + 1 : offset;
+}
+
+function spliceBlockLocatorLabel(bracket: BracketShape): string {
+	switch (bracket) {
+		case "none":
+		case "body":
+			return "(anchor)";
+		case "node":
+			return "[anchor]";
+		case "left_incl":
+			return "[anchor";
+		case "left_excl":
+			return "(anchor";
+		case "right_incl":
+			return "anchor]";
+		case "right_excl":
+			return "anchor)";
+	}
+}
+
+function applySpliceBlockEdits(
+	originalText: string,
+	edits: SpliceBlockEdit[],
+	warnings: string[],
+): SpliceBlockApplyResult {
+	// Sort by anchor line descending so applying earlier ops doesn't shift
+	// later anchors. (Multiple splice_block ops within one call are assumed
+	// non-overlapping; overlapping ranges are not supported.)
+	const sorted = [...edits].sort((a, b) => b.pos.line - a.pos.line);
+	const destStyle = detectIndentStyle(originalText);
+	let text = originalText;
+	let firstChangedLine: number | undefined;
+
+	for (const edit of sorted) {
+		const kind: DelimiterKind = edit.spec.kind;
+		const found = findEnclosingBlock(text, edit.pos.line, { kind, depth: 0 });
+		if ("message" in found) {
+			throw new Error(`splice_block at anchor ${edit.pos.line}: ${found.message}`);
+		}
+		const replacedLineCount = found.closeLine - found.openLine + 1;
+		warnings.push(
+			`splice_block locator ${spliceBlockLocatorLabel(edit.bracket)} replaced \`${kind}\` block at lines ${found.openLine}-${found.closeLine} ` +
+				`(${replacedLineCount} lines, 1 of ${found.enclosingCount} enclosing \`${kind}\` blocks).`,
+		);
+		const balanceErr = checkBodyBraceBalance(edit.spec.body.join("\n"), kind);
+		if (balanceErr) {
+			throw new Error(`splice_block at anchor ${edit.pos.line}: ${balanceErr}`);
+		}
+
+		const stripped = stripCommonIndent(edit.spec.body);
+		const bodyPrefix = found.bodyLineIndent ?? `${found.openerLineIndent}${defaultIndentUnit(destStyle)}`;
+
+		let replacementText: string;
+		let replaceStart: number;
+		let replaceEnd: number;
+
+		switch (edit.bracket) {
+			case "node": {
+				const indented = applyIndent(stripped, found.openerLineIndent, destStyle);
+				replacementText = indented.join("\n");
+				replaceStart = found.openLineStart;
+				replaceEnd = found.closeOffsetExclusive;
+				break;
+			}
+			case "left_incl":
+			case "left_excl": {
+				const indented = applyIndent(stripped, bodyPrefix, destStyle);
+				replacementText = `${indented.join("\n")}\n${found.openerLineIndent}`;
+				replaceStart =
+					edit.bracket === "left_incl"
+						? lineStartOffset(text, edit.pos.line)
+						: lineEndIncludingNewlineOffset(text, edit.pos.line);
+				replaceEnd = found.bodyEnd;
+				break;
+			}
+			case "right_incl":
+			case "right_excl": {
+				const indented = applyIndent(stripped, bodyPrefix, destStyle);
+				replacementText = `\n${indented.join("\n")}\n`;
+				replaceStart = found.bodyStart;
+				replaceEnd =
+					edit.bracket === "right_incl"
+						? lineEndIncludingNewlineOffset(text, edit.pos.line)
+						: lineStartOffset(text, edit.pos.line);
+				break;
+			}
+			case "none":
+			case "body": {
+				const goInline = found.sameLine && stripped.length === 1;
+				if (goInline) {
+					const single = stripped.length === 0 ? "" : stripped[0]!.trim();
+					const pad = kind === "{" ? " " : "";
+					replacementText = single.length > 0 ? `${pad}${single}${pad}` : pad;
+				} else {
+					const indented = applyIndent(stripped, bodyPrefix, destStyle);
+					replacementText = `\n${indented.join("\n")}\n${found.openerLineIndent}`;
+				}
+				replaceStart = found.bodyStart;
+				replaceEnd = found.bodyEnd;
+				break;
+			}
+		}
+
+		const before = text.slice(0, replaceStart);
+		const after = text.slice(replaceEnd);
+		const newText = before + replacementText + after;
+
+		text = newText;
+		if (firstChangedLine === undefined || found.openLine < firstChangedLine) {
+			firstChangedLine = found.openLine;
+		}
+	}
+	return { text, firstChangedLine };
+}
+
+function defaultIndentUnit(style: { kind: "tab" | "space"; width: number }): string {
+	return style.kind === "tab" ? "\t" : " ".repeat(Math.max(1, style.width));
+}
+
 export function applyAtomEdits(
 	text: string,
 	edits: AtomEdit[],
@@ -577,6 +801,34 @@ export function applyAtomEdits(
 		effective = edits.filter(e => !(e.op === "del" && replacedLines.has(e.pos.line)));
 	}
 	validateNoConflictingAnchorOps(effective);
+
+	// splice_block ops own their entire block range. To keep line numbers sane,
+	// they cannot mix with other anchor-scoped ops in the same call. They may
+	// coexist with each other (sorted by openLine descending so earlier ops
+	// don't shift later anchors).
+	const spliceBlockEdits = effective.filter(
+		(e): e is Extract<AtomEdit, { op: "splice_block" }> => e.op === "splice_block",
+	);
+	if (spliceBlockEdits.length > 0) {
+		const otherAnchorOp = effective.find(
+			e => e.op !== "splice_block" && e.op !== "append_file" && e.op !== "prepend_file" && e.op !== "sed_file",
+		);
+		if (otherAnchorOp) {
+			throw new Error(
+				`\`splice_block\` cannot be combined with other anchor edits in the same call. Split into separate edit calls.`,
+			);
+		}
+		const result = applySpliceBlockEdits(text, spliceBlockEdits, warnings);
+		if (result.firstChangedLine !== undefined) {
+			if (firstChangedLine === undefined || result.firstChangedLine < firstChangedLine) {
+				firstChangedLine = result.firstChangedLine;
+			}
+		}
+		// Continue pipeline against the post-splice_block text.
+		fileLines.length = 0;
+		for (const line of result.text.split("\n")) fileLines.push(line);
+		effective = effective.filter(e => e.op !== "splice_block");
+	}
 
 	const trackFirstChanged = (line: number) => {
 		if (firstChangedLine === undefined || line < firstChangedLine) {
@@ -797,7 +1049,7 @@ export async function executeAtomSingle(
 ): Promise<AgentToolResult<EditToolDetails, typeof atomEditParamsSchema>> {
 	const { session, path, edits, signal, batchRequest, writethrough, beginDeferredDiagnosticsForPath } = options;
 
-	const contentEdits = edits.flatMap((edit, i) => resolveAtomToolEdit(edit, i));
+	const contentEdits = edits.flatMap((edit, i) => resolveAtomToolEdit(edit, i, path));
 
 	enforcePlanModeWrite(session, path, { op: "update" });
 

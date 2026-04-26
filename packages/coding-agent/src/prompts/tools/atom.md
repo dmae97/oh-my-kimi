@@ -10,10 +10,24 @@ Each entry has one shared locator plus one or more verbs:
 - `loc: "$"` — whole file: `pre` prepends, `post` appends, `sed` substitutes across every line
 - `loc: "a.ts:160sr"` — cross-file override inside the locator
 
+Locator brackets (extend `splice` to a region instead of one line):
+
+|`loc`|Replaces|
+|---|---|
+|`"5fy"`|line 5 only (verb runs on that line)|
+|`"(5fy)"`|the enclosing block's body (between delimiters)|
+|`"[5fy]"`|the enclosing block's whole node (delimiters included)|
+|`"[5fy"`|from the anchor (incl.) through the closer-1|
+|`"(5fy"`|from after the anchor through the closer-1|
+|`"5fy]"`|from opener+1 through the anchor (incl.)|
+|`"5fy)"`|from opener+1 through line before the anchor|
+
+Bracket forms are **`splice` only**. `pre`, `post`, and `sed` are line-only and reject bracketed locators. The block delimiter (`{`, `(`, `[`) is auto-detected from the file extension.
+
 Verbs:
-- `splice: […]`: lines are spliced in at the anchor.
-- `pre: […]`: prepend before the anchor (or at BOF if `loc=$`)
-- `post: […]`: append after the anchor (or at EOF if `loc=$`)
+- `splice: […]` — with a bare anchor: replace that line. With a bracketed locator: replace the addressed region. **Region body lines: write at column 0; the tool re-indents to match the destination.**
+- `pre: […]` — prepend before the anchor (or at BOF if `loc="$"`). Line-only — reject on bracketed `loc`.
+- `post: […]` — append after the anchor (or at EOF if `loc="$"`). Line-only — reject on bracketed `loc`.
 - `sed: { pat, rep, g?, F? }` — structured find/replace on the anchor line. **Prefer this over `splice` for token-level changes**
   - `pat`: pattern to find (regex by default)
   - `rep`: replacement (regex back-refs like `$1`, `$&` available)
@@ -82,12 +96,30 @@ The 2nd array element matches existing line 5, which is **not** overwritten, it 
 - `{path:"a.ts",edits:[{loc:{{href 4 "\tif (x) {"}},sed:{pat:"x",rep:"x && ready",g:false}},{loc:{{href 5 "\t\treturn parse(data) ?? fallback;"}},post:["\t\t//unreachable"]}]}`
 OR
 - `{path:"a.ts",edits:[{loc:{{href 4 "\tif (x) {"}},splice:["\tif (x && ready) {"]},{loc:{{href 5 "\t\treturn parse(data) ?? fallback;"}},splice:["\t\treturn parse(data) ?? fallback;","\t\t//unreachable"]}]}`
+
+# Replace the body of the enclosing block (anchor on a body line)
+`{path:"a.ts",edits:[{loc:{{href 5 "\t\treturn parse(data) || fallback;" "(" ")"}},splice:["return parse(data) ?? fallback;"]}]}`
+
+# Replace the whole block including its signature
+`{path:"a.ts",edits:[{loc:{{href 3 "function beta(x) {" "[" "]"}},splice:["function beta(x) {","\treturn x;","}"]}]}`
+
+# Replace the tail of a body (from anchor through closer)
+`{path:"a.ts",edits:[{loc:{{href 5 "\t\treturn parse(data) || fallback;" "[" ""}},splice:["return fallback;"]}]}`
+
+# Replace the head of a body (from opener through anchor)
+`{path:"a.ts",edits:[{loc:{{href 5 "\t\treturn parse(data) || fallback;" "" "]"}},splice:["validate();","prepare();"]}]}`
 </examples>
+
+# Counter-example: this is the failure a bracketed locator prevents
+An agent uses `splice` to overwrite a region:
+`{path:"a.ts",edits:[{loc:{{href 4 "\tif (x) {"}},splice:["\tif (!ready(x)) {","\t\treturn null;","\t}","\treturn parse(data) ?? fallback;","}"]}]}`
+The trailing `}` in the array becomes a duplicate of the original line 8 closer, leaving a stray `}}` mid-function. Use a bracketed locator instead so the tool owns the exact block region: `loc:{{href 4 "\tif (x) {" "(" ")"}}` (body) or `loc:{{href 4 "\tif (x) {" "[" "]"}}` (whole block).
 
 <critical>
 - Make the minimum exact edit.
 - Copy the full anchors exactly as shown by `read/grep` (for example `160sr`, not just `sr`).
 - `loc` chooses the target. Verbs describe what to do there.
+- Brackets in `loc` are **`splice` only** — they extend the verb to a region. `"(A)"` = body, `"[A]"` = whole node, `"[A"` / `"A]"` / `"(A"` / `"A)"` = half-region with anchor inclusivity per the bracket. `pre`/`post`/`sed` reject bracketed locators.
 - On a single-anchor `loc`, you may combine `pre`, `splice`, and `post`.
 - `loc:"$"` operates on the whole file: `pre` prepends, `post` appends, `sed` runs across every line.
 - `splice: []` deletes the anchored line. `splice:[""]` preserves a blank line.
@@ -96,6 +128,7 @@ OR
 - For **small** in-line edits (renaming a token, flipping an operator, tweaking a literal), prefer `sed` over `splice`. The `loc` anchor already pins the line — repeating the entire line in a `splice` array invites hallucinated content. Use the smallest `pat` that uniquely identifies the change on that line; do not pad it with surrounding text just to feel safe. When `pat` contains regex metacharacters you mean literally (e.g. `||`, `.`, `(`, `?`, `\`), set `F:true` to disable regex. `g` is `false` by default — pass `g:true` to replace every occurrence. For multi-line restructuring (wrapping logic, adding new branches, inserting blocks), use `splice`/`pre`/`post` — do **not** stretch `sed` into a rewrite tool.
 - When you do use `splice`, re-read the anchored line first and copy it verbatim, changing only the required token(s). Anchor identity does not verify line content, so a hallucinated replacement will silently corrupt the file.
 - Anchors are pin points, not region markers. One anchor pins exactly one line. If your change touches N distinct source lines, that is N edits with N anchors — not one big `splice` array intended to cover the whole region. `splice` cannot "replace lines 4 through 7"; it can only splice content in at one anchor.
+- For replacing an entire balanced block (e.g. an `if`/`for`/function body), prefer a bracketed `splice` locator (`"(A)"` body, `"[A]"` whole node) over a multi-line `splice` on a bare anchor. The bracketed form owns the exact region so you cannot accidentally duplicate the closing brace, and you write the body at column 0 (the tool re-indents to match the destination).
 - You **MUST NOT** include lines in `splice`/`pre`/`post` that already exist immediately adjacent to the anchor in the current file. `splice` does not overwrite the lines below — they shift down — so any neighbor you re-type in your array becomes a duplicate. If your intended replacement contains content that is already on neighboring source lines, split into multiple edits at each real change site instead of one fat `splice`.
 - Before issuing a multi-line `splice`, mentally diff each array element against the current file lines at and just below the anchor. Any element that matches a line within ~5 lines of the anchor will become a duplicate after the splice. If you find a match, drop that element and use a separate edit (or `pre`/`post`) at the real change point.
 - Text content must be literal file content with matching indentation. If the file uses tabs, use real tabs.

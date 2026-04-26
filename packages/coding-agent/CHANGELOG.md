@@ -1,6 +1,25 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added bracketed `loc` forms `(anchor)`, `[anchor]`, `[anchor`, `(anchor`, `anchor]`, and `anchor)` to `atom` `splice` editing so a single anchor can target a block body, whole node, or partial node region
+- Added automatic block-delimiter inference for block splices using file extension, defaulting to `{` and using `(` for Lisp-family files
+- Added optional `pre`/`post` arguments to the `href` prompt helper so hashline references can be wrapped as bracketed or parenthesized anchors
+- Added destination-aware indent handling for block replacements by detecting file indent style and reapplying tabs/spaces to spliced body text
+
+### Changed
+
+- Changed bracketed atom locators to be `splice`-only and reject `pre`, `post`, or `sed` on region locators
+- Changed `applyAtomEdits` to forbid mixing `splice_block` with other anchor-scoped edit verbs in one call
+- Changed `splice_block` resolution behavior to include selected block range and enclosing-count context in warning output
+- Changed balanced-block parsing to support `kind` selection (`{`, `(`, `[`), nesting depth, and safer same-line enclosing selection
+
+### Fixed
+
+- Fixed `splice_block` multi-line replacements to replace the exact target region and avoid duplicate braces or duplicated signature lines from bare-anchor `splice` attempts
+- Fixed false-positive “unbalanced” replacement-body warnings caused by braces in regex/string/comment text by skipping those constructs during block scanning
+- Fixed `splice_block` for same-line `(` bodies so inline call sites like `int(port)` can be replaced correctly
 
 ## [14.5.2] - 2026-04-26
 ### Breaking Changes
