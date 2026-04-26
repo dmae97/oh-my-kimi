@@ -49,6 +49,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 		"The `data`/`error` wrapper is required — do not put your output directly in `result`.";
 	readonly parameters: TSchema;
 	strict = true;
+	readonly nointent = true;
 	lenientArgValidation = true;
 
 	readonly #validate?: ValidateFunction;

@@ -161,12 +161,14 @@ function injectIntentIntoSchema(schema: unknown): unknown {
 	};
 }
 
-function normalizeTools(tools: Context["tools"], injectIntent: boolean): Context["tools"] {
-	return tools?.map(tool => ({
-		...tool,
-		description: tool.description || "",
-		...(injectIntent && { parameters: injectIntentIntoSchema(tool.parameters) as typeof tool.parameters }),
-	}));
+function normalizeTools(tools: AgentContext["tools"], injectIntent: boolean): Context["tools"] {
+	injectIntent = injectIntent && Bun.env.PI_NO_INTENT !== "1";
+	return tools.map(t => {
+		const parameters =
+			injectIntent && !t.nointent ? (injectIntentIntoSchema(t.parameters) as typeof t.parameters) : t.parameters;
+		const description = t.description ?? "";
+		return { ...t, parameters, description };
+	});
 }
 
 function extractIntent(args: Record<string, unknown>): { intent?: string; strippedArgs: Record<string, unknown> } {
@@ -542,6 +544,15 @@ async function executeToolCalls(
 			argsForExecution = strippedArgs;
 			if (intent) {
 				toolCall.intent = intent;
+			} else if (tool?.deriveIntent) {
+				try {
+					const derived = tool.deriveIntent(strippedArgs as never)?.trim();
+					if (derived) {
+						toolCall.intent = derived;
+					}
+				} catch {
+					// deriveIntent must never break tool execution
+				}
 			}
 		}
 		record.args = argsForExecution;

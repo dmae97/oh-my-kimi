@@ -269,8 +269,21 @@ export class EventController {
 			for (const content of this.ctx.streamingMessage.content) {
 				if (content.type !== "toolCall") continue;
 				const args = content.arguments;
-				if (!args || typeof args !== "object" || !(INTENT_FIELD in args)) continue;
-				this.#updateWorkingMessageFromIntent(args[INTENT_FIELD] as string | undefined);
+				if (!args || typeof args !== "object") continue;
+				if (INTENT_FIELD in args) {
+					this.#updateWorkingMessageFromIntent(args[INTENT_FIELD] as string | undefined);
+					continue;
+				}
+				const tool = this.ctx.session.getToolByName(content.name);
+				if (!tool?.deriveIntent) continue;
+				try {
+					const derived = tool.deriveIntent(args as never)?.trim();
+					if (derived) {
+						this.#updateWorkingMessageFromIntent(derived);
+					}
+				} catch {
+					// deriveIntent must never break the UI
+				}
 			}
 
 			this.ctx.ui.requestRender();

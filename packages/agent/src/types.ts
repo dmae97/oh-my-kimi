@@ -250,6 +250,19 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	concurrency?: "shared" | "exclusive";
 	/** If true, argument validation errors are non-fatal: raw args are passed to execute() instead of returning an error to the LLM. */
 	lenientArgValidation?: boolean;
+	/**
+	 * If true, the INTENT_FIELD (`_i`) is NOT injected into this tool's parameter schema.
+	 * Use for tools where intent is obvious from the call itself (yield, resolve, todo_write, …).
+	 * Pair with `deriveIntent` if the UI should still surface a working-message intent.
+	 */
+	nointent?: boolean;
+	/**
+	 * Optional callback that derives a short intent string from (potentially partial / streaming) args.
+	 * Used as a fallback when no `_i` field is present on the tool call (typically because `nointent` is set).
+	 */
+	deriveIntent?: (args: Partial<Static<TParameters>>) => string | undefined;
+
+	/** The main execution callback for this tool. */
 	execute: AgentToolExecFn<TParameters, TDetails, TTheme>;
 
 	/** Optional custom rendering for tool call display (returns UI component) */

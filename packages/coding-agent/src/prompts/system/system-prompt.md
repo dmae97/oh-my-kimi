@@ -168,7 +168,7 @@ Tools:
 
 {{#if intentTracing}}
 <intent-field>
-Every tool has a `{{intentField}}` parameter. Fill it with a concise intent in present participle form, 2-6 words, no period.
+Most tools have a `{{intentField}}` parameter. Fill it with a concise intent in present participle form, 2-6 words, no period.
 </intent-field>
 {{/if}}
 
