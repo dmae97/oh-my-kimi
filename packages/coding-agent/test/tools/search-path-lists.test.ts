@@ -326,7 +326,7 @@ describe("search tool path lists", () => {
 		}
 	});
 
-	it("grep explains context-line gutters without changing match and context separators", async () => {
+	it("grep explains match and context gutters with new format", async () => {
 		await Bun.write(path.join(tempDir, "context.txt"), "#if FLAG\nneedle\n#endif\n");
 
 		const tools = await createTools(
@@ -344,9 +344,9 @@ describe("search tool path lists", () => {
 		});
 		const text = getText(result);
 
-		expect(text).toContain("match lines use '>'; context lines use ':'");
-		expect(text).toMatch(/1(?:[a-z]{2})?:#if FLAG/);
-		expect(text).toMatch(/2(?:[a-z]{2})?>needle/);
-		expect(text).toMatch(/3(?:[a-z]{2})?:#endif/);
+		expect(text).toContain("'*' marks match lines");
+		expect(text).toMatch(/ 1(?:[a-z]{2})?\|#if FLAG/);
+		expect(text).toMatch(/\*2(?:[a-z]{2})?\|needle/);
+		expect(text).toMatch(/ 3(?:[a-z]{2})?\|#endif/);
 	});
 });

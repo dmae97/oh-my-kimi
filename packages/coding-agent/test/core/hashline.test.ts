@@ -836,14 +836,15 @@ describe("buildCompactHashlineDiffPreview", () => {
 		expect(preview.preview).toContain(`+5${computeLineHash(5, "added")}|added`);
 	});
 
-	it("collapses long addition runs and leaves removed lines unhashed", () => {
+	it("preserves all added lines and leaves removed lines unhashed", () => {
 		const diff = ["  1|head", "+ 2|one", "+ 3|two", "+ 4|three", "+ 5|four", "- 2|old"].join("\n");
 
 		const preview = buildCompactHashlineDiffPreview(diff);
 
 		expect(preview.preview).toContain(`+2${computeLineHash(2, "one")}|one`);
 		expect(preview.preview).toContain(`+3${computeLineHash(3, "two")}|two`);
-		expect(preview.preview).toContain(" ... 2 more added lines");
+		expect(preview.preview).toContain(`+4${computeLineHash(4, "three")}|three`);
+		expect(preview.preview).toContain(`+5${computeLineHash(5, "four")}|four`);
 		expect(preview.preview).toContain("-2   |old");
 		expect(preview.preview).not.toContain(`-2${computeLineHash(2, "old")}`);
 		expect(preview.addedLines).toBe(4);

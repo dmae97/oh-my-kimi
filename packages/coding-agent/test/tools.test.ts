@@ -1174,7 +1174,7 @@ function b() {
 			const output = getTextOutput(result);
 			expect(output).not.toContain("# example.txt");
 			// PI_EDIT_VARIANT=replace in beforeEach disables hashlines; expect line-number mode
-			expect(output).toMatch(/\b2>match line/);
+			expect(output).toMatch(/\*2\|match line/);
 		});
 
 		it("should accept wildcard patterns in the path parameter", async () => {
@@ -1231,10 +1231,10 @@ function b() {
 
 			const output = getTextOutput(result);
 			expect(output).not.toContain("# context.txt");
-			expect(output).toMatch(/\b1:before/);
-			expect(output).toMatch(/\b2>match one/);
-			expect(output).toMatch(/\b3:after/);
-			expect(output).toMatch(/\b5>match two/);
+			expect(output).toMatch(/ 1\|before/);
+			expect(output).toMatch(/\*2\|match one/);
+			expect(output).toMatch(/ 3\|after/);
+			expect(output).toMatch(/\*5\|match two/);
 		});
 
 		it("should skip matches with the skip parameter", async () => {
