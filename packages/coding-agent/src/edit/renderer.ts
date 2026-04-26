@@ -158,32 +158,16 @@ function filePathFromEditEntry(p: string | undefined): string | undefined {
 }
 
 function decodePartialJsonStringFragment(fragment: string): string {
-	let text = fragment;
+	// Trim a trailing partial escape so JSON.parse sees a well-formed string.
+	let text = fragment.replace(/\\u[0-9a-fA-F]{0,3}$/, "");
 	const trailingBackslashes = text.match(/\\+$/)?.[0].length ?? 0;
-	if (trailingBackslashes % 2 === 1) {
-		text = text.slice(0, -1);
-	}
+	if (trailingBackslashes % 2 === 1) text = text.slice(0, -1);
 	try {
 		return JSON.parse(`"${text}"`) as string;
 	} catch {
-		return text
-			.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
-			.replace(/\\(["\\/bfnrt])/g, (_, ch: string) => {
-				switch (ch) {
-					case "b":
-						return "\b";
-					case "f":
-						return "\f";
-					case "n":
-						return "\n";
-					case "r":
-						return "\r";
-					case "t":
-						return "\t";
-					default:
-						return ch;
-				}
-			});
+		// Streaming fragment isn't a valid JSON string yet; surface it raw rather
+		// than ad-hoc unescaping that mishandles surrogates and partial escapes.
+		return text;
 	}
 }
 

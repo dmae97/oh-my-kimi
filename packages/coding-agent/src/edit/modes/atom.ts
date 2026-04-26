@@ -557,31 +557,6 @@ function validateNoConflictingAnchorOps(edits: AtomEdit[]): void {
 // Apply
 // ═══════════════════════════════════════════════════════════════════════════
 
-function maybeAutocorrectEscapedTabIndentation(edits: AtomEdit[], warnings: string[]): void {
-	const enabled = Bun.env.PI_HASHLINE_AUTOCORRECT_ESCAPED_TABS !== "0";
-	if (!enabled) return;
-	for (const edit of edits) {
-		if (edit.op !== "splice" && edit.op !== "pre" && edit.op !== "post") continue;
-		if (edit.lines.length === 0) continue;
-		const hasEscapedTabs = edit.lines.some(line => line.includes("\\t"));
-		if (!hasEscapedTabs) continue;
-		const hasRealTabs = edit.lines.some(line => line.includes("\t"));
-		if (hasRealTabs) continue;
-		let correctedCount = 0;
-		const corrected = edit.lines.map(line =>
-			line.replace(/^((?:\\t)+)/, escaped => {
-				correctedCount += escaped.length / 2;
-				return "\t".repeat(escaped.length / 2);
-			}),
-		);
-		if (correctedCount === 0) continue;
-		edit.lines = corrected;
-		warnings.push(
-			`Auto-corrected escaped tab indentation in edit: converted leading \\t sequence(s) to real tab characters`,
-		);
-	}
-}
-
 export interface AtomNoopEdit {
 	editIndex: number;
 	loc: string;
@@ -612,7 +587,6 @@ export function applyAtomEdits(
 		throw new HashlineMismatchError(mismatches, fileLines);
 	}
 	validateNoConflictingAnchorOps(edits);
-	maybeAutocorrectEscapedTabIndentation(edits, warnings);
 
 	const trackFirstChanged = (line: number) => {
 		if (firstChangedLine === undefined || line < firstChangedLine) {

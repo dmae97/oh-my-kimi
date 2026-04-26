@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed `\t` escaped-tab indentation autocorrect from hashline and atom edit modes (and the `PI_HASHLINE_AUTOCORRECT_ESCAPED_TABS` environment toggle); literal `\t` in edit content is now preserved verbatim
+- Removed the suspicious-`\uDDDD` warning preflight from hashline edits
+- Removed the hand-rolled JSON unescape fallback in the streaming edit-arg renderer; partial fragments that fail `JSON.parse` are now surfaced raw rather than partially decoded with a non-spec-compliant unescaper that mishandled lone surrogates
+
 ## [14.4.3] - 2026-04-26
 ### Added
 
