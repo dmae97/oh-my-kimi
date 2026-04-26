@@ -259,6 +259,8 @@ export interface SessionInfo {
 	created: Date;
 	modified: Date;
 	messageCount: number;
+	/** File size in bytes on disk; used for compact list rendering. */
+	size: number;
 	firstMessage: string;
 	allMessagesText: string;
 }
@@ -1264,7 +1266,7 @@ function extractTextFromContent(content: Message["content"]): string {
 		.join(" ");
 }
 
-const SESSION_LIST_PREFIX_BYTES = 1024;
+const SESSION_LIST_PREFIX_BYTES = 4096;
 const SESSION_LIST_PARALLEL_THRESHOLD = 64;
 const SESSION_LIST_MAX_WORKERS = 16;
 const sessionListPrefixDecoder = new TextDecoder("utf-8", { fatal: false });
@@ -1466,6 +1468,7 @@ async function collectSessionFromFile(
 			created: new Date(header.timestamp ?? ""),
 			modified: stats.mtime,
 			messageCount,
+			size: stats.size,
 			firstMessage: firstMessage || "(no messages)",
 			allMessagesText: allMessages.length > 0 ? allMessages.join(" ") : firstMessage,
 		};
