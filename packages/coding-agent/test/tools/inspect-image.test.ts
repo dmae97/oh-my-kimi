@@ -199,7 +199,7 @@ describe("InspectImageTool", () => {
 
 	it("schema rejects unknown parameters", () => {
 		const tool = new InspectImageTool(createSession(testDir, visionModel));
-		expect(tool.strict).toBe(true);
+		expect(tool.strict).toBe(false);
 		expect(Value.Check(tool.parameters, { path: "img.png", question: "What is visible?" })).toBe(true);
 		expect(Value.Check(tool.parameters, { path: "img.png", question: "What is visible?", extra: "nope" })).toBe(
 			false,

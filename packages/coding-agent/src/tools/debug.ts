@@ -612,7 +612,7 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails
 	readonly label = "Debug";
 	readonly description: string;
 	readonly parameters = debugSchema;
-	readonly strict = true;
+	readonly strict = false;
 	readonly concurrency = "exclusive";
 
 	constructor(private readonly session: ToolSession) {

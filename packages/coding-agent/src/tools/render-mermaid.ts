@@ -37,7 +37,7 @@ export class RenderMermaidTool implements AgentTool<typeof renderMermaidSchema, 
 	readonly label = "RenderMermaid";
 	readonly description: string;
 	readonly parameters = renderMermaidSchema;
-	readonly strict = true;
+	readonly strict = false;
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(renderMermaidDescription);

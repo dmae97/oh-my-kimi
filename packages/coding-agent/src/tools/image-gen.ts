@@ -913,8 +913,6 @@ interface AntigravitySseResult {
 	usage?: GeminiUsageMetadata;
 }
 
-const _prefix = Buffer.from("data: ", "utf-8");
-
 async function parseAntigravitySseForImage(response: Response, signal?: AbortSignal): Promise<AntigravitySseResult> {
 	if (!response.body) {
 		throw new Error("No response body");
@@ -952,6 +950,7 @@ async function parseAntigravitySseForImage(response: Response, signal?: AbortSig
 export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails> = {
 	name: "generate_image",
 	label: "GenerateImage",
+	strict: false,
 	description: prompt.render(imageGenDescription),
 	parameters: imageGenSchema,
 	async execute(_toolCallId, params, _onUpdate, ctx, signal) {
