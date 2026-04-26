@@ -32,6 +32,7 @@ import {
 } from "./modes/chunk";
 import {
 	executeHashlineSingle,
+	HashlineMismatchError,
 	type HashlineParams,
 	type HashlineToolEdit,
 	hashlineEditParamsSchema,
@@ -208,7 +209,8 @@ async function executePerFile(
 			if (text) contentTexts.push(text);
 		} catch (err) {
 			const errorText = err instanceof Error ? err.message : String(err);
-			perFileResults.push({ path, diff: "", isError: true, errorText });
+			const displayErrorText = err instanceof HashlineMismatchError ? err.displayMessage : undefined;
+			perFileResults.push({ path, diff: "", isError: true, errorText, displayErrorText });
 			contentTexts.push(`Error editing ${path}: ${errorText}`);
 		}
 

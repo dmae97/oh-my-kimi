@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Renamed atom edit operations from `before` and `after` to `pre` and `post`, so existing `atom` payloads using the old operation keys must be updated
@@ -17,6 +18,7 @@
 
 ### Changed
 
+- Updated atom and hashline anchor validation to require the full `line+suffix` anchor format and report missing-line-number errors more clearly, including guidance when only a 2-letter suffix is provided
 - Changed read, grep, and ast-edit line-prefixed output to drop fixed-width line number padding, so anchors render in natural width without leading spaces
 - Updated terminal diff rendering to use a continuous `│` gutter and hide repeated line numbers on adjacent diff lines
 - Updated subagent reminders, prompts, and rendered subagent output to reference `yield` completion and report missing/final results from `yield` tool data
@@ -26,6 +28,7 @@
 
 ### Fixed
 
+- Changed hashline mismatch failure output to show a clean numbered context block with numbered gutter and full-anchor alignment guidance when edits are rejected after the file changed
 - Fixed `atom` mode to apply multiple edits on the same anchor line without index-shift artifacts, so mixed operations like `before`, `after`, `set`, `sub`, `ins`, and `del` now resolve consistently
 - Fixed `atom` mode `append_file` insertion to preserve a file’s trailing newline sentinel when appending content
 - Fixed `read` output for raw archive entries so hashline anchors, line numbers, and chunked formatting are not injected into raw content

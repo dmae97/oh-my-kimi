@@ -40,6 +40,7 @@ import type { EditToolDetails, LspBatchRequest } from "../renderer";
 import {
 	type Anchor,
 	buildCompactHashlineDiffPreview,
+	formatFullAnchorRequirement,
 	HashlineMismatchError,
 	type HashMismatch,
 	hashlineParseText,
@@ -148,7 +149,7 @@ const ATOM_OP_KEYS = ["set", "pre", "post", "del", "sub"] as const;
  */
 function parseAnchor(raw: string, opName: string): Anchor {
 	if (typeof raw !== "string" || raw.length === 0) {
-		throw new Error(`${opName} requires an anchor of the form "LINE+ID" (e.g. "5th").`);
+		throw new Error(`${opName} requires ${formatFullAnchorRequirement()}.`);
 	}
 	try {
 		return parseTag(raw);
@@ -163,7 +164,7 @@ function parseAnchor(raw: string, opName: string): Anchor {
 			}
 		}
 		throw new Error(
-			`${opName} requires an anchor of the form "LINE+ID" (e.g. "5th"). Received ${JSON.stringify(raw)}; could not extract a line number.`,
+			`${opName} requires ${formatFullAnchorRequirement(raw)} Could not find a line number in the anchor.`,
 		);
 	}
 }

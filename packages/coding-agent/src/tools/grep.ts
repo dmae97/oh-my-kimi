@@ -6,7 +6,6 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { toDisplayLine } from "../edit/line-hash";
 import { type ChunkedGrepMatch, describeChunkedGrepMatch } from "../edit/modes/chunk";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
@@ -62,6 +61,10 @@ export interface GrepToolDetails {
 	fileMatches?: Array<{ path: string; count: number }>;
 	truncated?: boolean;
 	error?: string;
+	/** Pre-formatted text for the user-visible TUI render. Mirrors the model-facing
+	 * `result.text` lines but uses a `│` gutter and `*` to mark match lines (vs `-` for
+	 * context). The TUI uses this directly so it never parses model-facing hashline anchors. */
+	displayContent?: string;
 }
 
 type GrepParams = Static<typeof grepSchema>;
@@ -426,29 +429,36 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				}
 				return resultBuilder.done();
 			}
-			const renderMatchesForFile = (relativePath: string): string[] => {
-				const renderedLines: string[] = [];
+			const displayLines: string[] = [];
+			const renderMatchesForFile = (
+				relativePath: string,
+			): { model: string[]; display: string[] } => {
+				const modelOut: string[] = [];
+				const displayOut: string[] = [];
 				const fileMatches = matchesByFile.get(relativePath) ?? [];
 				for (const match of fileMatches) {
-					const formatLine = (lineNumber: number, line: string, isMatch: boolean): string =>
-						formatMatchLine(lineNumber, line, isMatch, { useHashLines });
+					const pushLine = (lineNumber: number, line: string, isMatch: boolean) => {
+						modelOut.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
+						const marker = isMatch ? "*" : "";
+						displayOut.push(`${marker}${lineNumber}│${line}`);
+					};
 					if (match.contextBefore) {
 						for (const ctx of match.contextBefore) {
-							renderedLines.push(formatLine(ctx.lineNumber, ctx.line, false));
+							pushLine(ctx.lineNumber, ctx.line, false);
 						}
 					}
-					renderedLines.push(formatLine(match.lineNumber, match.line, true));
+					pushLine(match.lineNumber, match.line, true);
 					if (match.truncated) {
 						linesTruncated = true;
 					}
 					if (match.contextAfter) {
 						for (const ctx of match.contextAfter) {
-							renderedLines.push(formatLine(ctx.lineNumber, ctx.line, false));
+							pushLine(ctx.lineNumber, ctx.line, false);
 						}
 					}
 					fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 				}
-				return renderedLines;
+				return { model: modelOut, display: displayOut };
 			};
 			if (isDirectory) {
 				const filesByDirectory = new Map<string, string[]>();
@@ -462,32 +472,40 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				for (const [directory, directoryFiles] of filesByDirectory) {
 					if (directory === ".") {
 						for (const relativePath of directoryFiles) {
-							const renderedLines = renderMatchesForFile(relativePath);
-							if (renderedLines.length === 0) continue;
+							const rendered = renderMatchesForFile(relativePath);
+							if (rendered.model.length === 0) continue;
 							if (outputLines.length > 0) {
 								outputLines.push("");
+								displayLines.push("");
 							}
-							outputLines.push(`# ${path.basename(relativePath)}`);
-							outputLines.push(...renderedLines);
+							const header = `# ${path.basename(relativePath)}`;
+							outputLines.push(header, ...rendered.model);
+							displayLines.push(header, ...rendered.display);
 						}
 						continue;
 					}
 					const renderedFiles = directoryFiles
-						.map(relativePath => ({ relativePath, lines: renderMatchesForFile(relativePath) }))
-						.filter(file => file.lines.length > 0);
+						.map(relativePath => ({ relativePath, rendered: renderMatchesForFile(relativePath) }))
+						.filter(file => file.rendered.model.length > 0);
 					if (renderedFiles.length === 0) continue;
 					if (outputLines.length > 0) {
 						outputLines.push("");
+						displayLines.push("");
 					}
-					outputLines.push(`# ${directory}`);
-					for (const { relativePath, lines } of renderedFiles) {
-						outputLines.push(`## └─ ${path.basename(relativePath)}`);
-						outputLines.push(...lines);
+					const dirHeader = `# ${directory}`;
+					outputLines.push(dirHeader);
+					displayLines.push(dirHeader);
+					for (const { relativePath, rendered } of renderedFiles) {
+						const fileHeader = `## └─ ${path.basename(relativePath)}`;
+						outputLines.push(fileHeader, ...rendered.model);
+						displayLines.push(fileHeader, ...rendered.display);
 					}
 				}
 			} else {
 				for (const relativePath of fileList) {
-					outputLines.push(...renderMatchesForFile(relativePath));
+					const rendered = renderMatchesForFile(relativePath);
+					outputLines.push(...rendered.model);
+					displayLines.push(...rendered.display);
 				}
 			}
 			if (hasContextLines && outputLines.length > 0) {
@@ -509,6 +527,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				truncated,
 				matchLimitReached: matchLimitReached ? effectiveLimit : undefined,
 				resultLimitReached: result.limitReached ? internalLimit : undefined,
+				displayContent: displayLines.join("\n"),
 			};
 			if (truncation.truncated) details.truncation = truncation;
 			if (linesTruncated) details.linesTruncated = true;
@@ -589,7 +608,7 @@ export const grepToolRenderer = {
 		const hasDetailedData = details?.matchCount !== undefined || details?.fileCount !== undefined;
 
 		if (!hasDetailedData) {
-			const textContent = result.content?.find(c => c.type === "text")?.text;
+			const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text;
 			if (!textContent || textContent === "No matches found") {
 				return new Text(formatEmptyMessage("No matches found", uiTheme), 0, 0);
 			}
@@ -612,7 +631,7 @@ export const grepToolRenderer = {
 							maxCollapsed: COLLAPSED_TEXT_LIMIT,
 							maxCollapsedLines: COLLAPSED_TEXT_LIMIT,
 							itemType: "item",
-							renderItem: line => uiTheme.fg("toolOutput", toDisplayLine(line, { markMatchLines: true })),
+							renderItem: line => uiTheme.fg("toolOutput", line),
 						},
 						uiTheme,
 					);
@@ -652,7 +671,7 @@ export const grepToolRenderer = {
 			uiTheme,
 		);
 
-		const textContent = result.content?.find(c => c.type === "text")?.text ?? "";
+		const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text ?? "";
 		const rawLines = textContent.split("\n");
 		const hasSeparators = rawLines.some(line => line.trim().length === 0);
 		const matchGroups: string[][] = [];
@@ -704,7 +723,7 @@ export const grepToolRenderer = {
 							group.map(line => {
 								if (line.startsWith("## ")) return uiTheme.fg("dim", line);
 								if (line.startsWith("# ")) return uiTheme.fg("accent", line);
-								return uiTheme.fg("toolOutput", toDisplayLine(line, { markMatchLines: true }));
+								return uiTheme.fg("toolOutput", line);
 							}),
 					},
 					uiTheme,

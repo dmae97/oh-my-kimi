@@ -27,7 +27,6 @@ import { Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../
 import type { EditMode } from "../utils/edit-mode";
 import type { VimToolDetails } from "../vim/types";
 import type { DiffError, DiffResult } from "./diff";
-import { toDisplayLine } from "./line-hash";
 import { expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
 import type { Operation, PatchEditEntry } from "./modes/patch";
 import type { PerFileDiffPreview } from "./streaming";
@@ -51,6 +50,9 @@ export interface EditToolPerFileResult {
 	move?: string;
 	isError?: boolean;
 	errorText?: string;
+	/** TUI-friendly error text. When present, rendered to the user instead of `errorText`.
+	 * Set when the underlying error carries a `displayMessage` (e.g. {@link HashlineMismatchError}). */
+	displayErrorText?: string;
 	meta?: OutputMeta;
 }
 
@@ -494,8 +496,10 @@ function renderSingleFileResult(
 	const metadataLineCount = editTextSource ? countLines(editTextSource) : null;
 	const metadataLine = op !== "delete" ? `\n${formatMetadataLine(metadataLineCount, language, uiTheme)}` : "";
 
+	const displayErrorText = isError && details && "displayErrorText" in details ? details.displayErrorText : undefined;
 	const errorText = isError
-		? (details && "errorText" in details && details.errorText) ||
+		? displayErrorText ||
+			(details && "errorText" in details && details.errorText) ||
 			(result.content?.find(c => c.type === "text")?.text ?? "")
 		: "";
 
@@ -527,13 +531,13 @@ function renderSingleFileResult(
 
 			if (isError) {
 				if (errorText) {
-					text += `\n\n${uiTheme.fg("error", replaceTabs(toDisplayLine(errorText)))}`;
+					text += `\n\n${uiTheme.fg("error", replaceTabs(errorText))}`;
 				}
 			} else if (details?.diff) {
 				text += renderDiffSection(details.diff, rawPath, expanded, uiTheme, renderDiffFn);
 			} else if (editDiffPreview) {
 				if ("error" in editDiffPreview) {
-					text += `\n\n${uiTheme.fg("error", replaceTabs(toDisplayLine(editDiffPreview.error)))}`;
+					text += `\n\n${uiTheme.fg("error", replaceTabs(editDiffPreview.error))}`;
 				} else if (editDiffPreview.diff) {
 					text += renderDiffSection(editDiffPreview.diff, rawPath, expanded, uiTheme, renderDiffFn);
 				}

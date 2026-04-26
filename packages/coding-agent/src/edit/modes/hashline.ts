@@ -211,6 +211,15 @@ function resolveHashlineEditsForDiff(edits: HashlineEditInput[]): HashlineEdit[]
 	});
 }
 
+export function formatFullAnchorRequirement(raw?: string): string {
+	const suffix = typeof raw === "string" ? raw.trim() : "";
+	const hashOnlyHint = /^[A-Za-z]{2}$/.test(suffix)
+		? ` It looks like you supplied only the 2-letter suffix (${JSON.stringify(suffix)}). Copy the full anchor exactly as shown (for example, \"160${suffix}\").`
+		: "";
+	const received = raw === undefined ? "" : ` Received ${JSON.stringify(raw)}.`;
+	return `the full anchor exactly as shown by read/grep (line number + 2-letter suffix, for example \"160sr\")${received}${hashOnlyHint}`;
+}
+
 function tryParseTag(raw: string): Anchor | undefined {
 	try {
 		return parseTag(raw);
@@ -221,14 +230,20 @@ function tryParseTag(raw: string): Anchor | undefined {
 
 function requireParsedAnchor(raw: string, op: "append" | "prepend"): Anchor {
 	const anchor = tryParseTag(raw);
-	if (!anchor) throw new Error(`${op} requires a valid anchor.`);
+	if (!anchor) throw new Error(`${op} requires ${formatFullAnchorRequirement(raw)}.`);
 	return anchor;
 }
 
 function requireParsedRange(range: { pos: string; end: string }): { pos: Anchor; end: Anchor } {
 	const pos = tryParseTag(range.pos);
 	const end = tryParseTag(range.end);
-	if (!pos || !end) throw new Error("range requires valid pos and end anchors.");
+	if (!pos || !end) {
+		const invalid = [
+			!pos ? `pos=${JSON.stringify(range.pos)}` : null,
+			!end ? `end=${JSON.stringify(range.end)}` : null,
+		].filter(Boolean).join(", ");
+		throw new Error(`range requires valid pos and end anchors. Use ${formatFullAnchorRequirement()}. Invalid: ${invalid}.`);
+	}
 	return { pos, end };
 }
 
@@ -482,7 +497,7 @@ export function parseTag(ref: string): { line: number; hash: string } {
 	//  3. hash (one BPE bigram from HASHLINE_BIGRAMS) directly adjacent (no separator)
 	const match = ref.match(new RegExp(`^\\s*[>+-]*\\s*(\\d+)(${HASHLINE_BIGRAM_RE_SRC})`));
 	if (!match) {
-		throw new Error(`Invalid line reference "${ref}". Expected format "LINE+ID" (e.g. "5th").`);
+		throw new Error(`Invalid line reference. Expected ${formatFullAnchorRequirement(ref)}.`);
 	}
 	const line = Number.parseInt(match[1], 10);
 	if (line < 1) {
@@ -518,6 +533,44 @@ export class HashlineMismatchError extends Error {
 			remaps.set(`${m.line}${m.expected}`, `${m.line}${actual}`);
 		}
 		this.remaps = remaps;
+	}
+
+	/**
+	 * User-visible variant of {@link formatMessage} — omits the bigram fingerprint
+	 * and uses a `│` gutter so TUI rendering is clean. The model still receives
+	 * the full `LINENUMBIGRAM:content` form via {@link Error.message}.
+	 */
+	get displayMessage(): string {
+		return HashlineMismatchError.formatDisplayMessage(this.mismatches, this.fileLines);
+	}
+
+	static formatDisplayMessage(mismatches: HashMismatch[], fileLines: string[]): string {
+		const mismatchSet = new Set<number>();
+		for (const m of mismatches) mismatchSet.add(m.line);
+
+		const displayLines = new Set<number>();
+		for (const m of mismatches) {
+			const lo = Math.max(1, m.line - MISMATCH_CONTEXT);
+			const hi = Math.min(fileLines.length, m.line + MISMATCH_CONTEXT);
+			for (let i = lo; i <= hi; i++) displayLines.add(i);
+		}
+
+		const sorted = [...displayLines].sort((a, b) => a - b);
+		const out: string[] = [
+			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read. The edit was NOT applied.`,
+			"Realign your edit to the file state shown below. Copy the full anchors exactly as shown (for example `160sr`, not just `sr`).",
+			"",
+		];
+
+		let prevLine = -1;
+		for (const lineNum of sorted) {
+			if (prevLine !== -1 && lineNum > prevLine + 1) out.push("...");
+			prevLine = lineNum;
+			const text = fileLines[lineNum - 1];
+			const marker = mismatchSet.has(lineNum) ? "*" : "";
+			out.push(`${marker}${lineNum}│${text}`);
+		}
+		return out.join("\n");
 	}
 
 	static formatMessage(mismatches: HashMismatch[], fileLines: string[]): string {

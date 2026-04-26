@@ -1,8 +1,8 @@
-Applies precise file edits using `LINEID` anchors from `read` output.
+Applies precise file edits using full anchors from `read` output (for example `160sr`).
 
 Most ops reference **exactly one** anchor. The exception is `set: [openAnchor, closeAnchor]` (a 2-tuple), which addresses the lines **strictly between** two anchors that both **survive** the edit — use it for block-body replacement (e.g. "replace the body of this function, keep the braces").
 
-Read the file first. Copy anchors exactly from the latest `read` output. After any successful edit, re-read before editing that file again.
+Read the file first. Copy the full anchors exactly as shown by `read`.
 
 <operations>
 **Top level**: `{ path, edits: […] }` — `path` is shared by all entries. Per-entry `path` is also allowed and overrides the top-level value (use this for cross-file edits).
@@ -85,7 +85,7 @@ Replace the body of `alpha` (line 6) while keeping `function alpha() {` (5) and 
 <critical>
 - Make the minimum exact edit.
 - Each entry in `edits` is exactly one op. Never combine multiple ops in a single entry.
-- Copy anchors exactly from `read/grep`.
+- Copy the full anchors exactly as shown by `read/grep` (for example `160sr`, not just `sr`).
 - Within a single request you may submit edits in any order — the runtime applies them bottom-up so they don't shift each other. After **any** request that mutates a file, anchors below the mutation are stale on disk; re-read before issuing more edits to that file.
 - For `sub`, `find` must occur **exactly once on the anchored line**. The runtime rejects the edit if `find` is missing or non-unique.
 - **Switch to `set` when `find` gets long.** If `find` would be more than ~half the line, or `lines` would restate most of the line, you are no longer making a surgical substring edit — use `set` to rewrite the whole line in one shot. This avoids both uniqueness ambiguity and wasted output tokens.

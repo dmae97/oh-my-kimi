@@ -5,7 +5,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { $envpos, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { computeLineHash, toDisplayLine } from "../edit/line-hash";
+import { computeLineHash } from "../edit/line-hash";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import astEditDescription from "../prompts/tools/ast-edit.md" with { type: "text" };
@@ -73,6 +73,9 @@ export interface AstEditToolDetails {
 	files?: string[];
 	fileReplacements?: Array<{ path: string; count: number }>;
 	meta?: OutputMeta;
+	/** Pre-formatted text for the user-visible TUI render. Mirrors `result.text` lines but uses
+	 * a `│` gutter (no model-only hashline anchors). The TUI uses this directly so it never parses model-facing text. */
+	displayContent?: string;
 }
 
 export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolDetails> {
@@ -215,6 +218,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 
 			const useHashLines = resolveFileDisplayMode(this.session).hashLines;
 			const outputLines: string[] = [];
+			const displayLines: string[] = [];
 			const renderChangesForFile = (relativePath: string) => {
 				const fileChanges = changesByFile.get(relativePath) ?? [];
 				for (const change of fileChanges) {
@@ -231,6 +235,8 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					const lineSeparator = useHashLines ? "\t" : " ";
 					outputLines.push(`-${beforeRef}${lineSeparator}${beforeLine}`);
 					outputLines.push(`+${afterRef}${lineSeparator}${afterLine}`);
+					displayLines.push(`-${change.startLine}│${beforeLine}`);
+					displayLines.push(`+${change.startLine}│${afterLine}`);
 				}
 			};
 
@@ -248,20 +254,28 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 						for (const relativePath of directoryFiles) {
 							if (outputLines.length > 0) {
 								outputLines.push("");
+								displayLines.push("");
 							}
 							const count = fileReplacementCounts.get(relativePath) ?? 0;
-							outputLines.push(`# ${path.basename(relativePath)} (${formatCount("replacement", count)})`);
+							const header = `# ${path.basename(relativePath)} (${formatCount("replacement", count)})`;
+							outputLines.push(header);
+							displayLines.push(header);
 							renderChangesForFile(relativePath);
 						}
 						continue;
 					}
 					if (outputLines.length > 0) {
 						outputLines.push("");
+						displayLines.push("");
 					}
-					outputLines.push(`# ${directory}`);
+					const dirHeader = `# ${directory}`;
+					outputLines.push(dirHeader);
+					displayLines.push(dirHeader);
 					for (const relativePath of directoryFiles) {
 						const count = fileReplacementCounts.get(relativePath) ?? 0;
-						outputLines.push(`## └─ ${path.basename(relativePath)} (${formatCount("replacement", count)})`);
+						const fileHeader = `## └─ ${path.basename(relativePath)} (${formatCount("replacement", count)})`;
+						outputLines.push(fileHeader);
+						displayLines.push(fileHeader);
 						renderChangesForFile(relativePath);
 					}
 				}
@@ -359,6 +373,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			const details: AstEditToolDetails = {
 				...baseDetails,
 				fileReplacements,
+				displayContent: displayLines.join("\n"),
 			};
 			return toolResult(details).text(outputLines.join("\n")).done();
 		});
@@ -440,7 +455,7 @@ export const astEditToolRenderer = {
 		const rewriteCount = args?.ops?.length ?? 0;
 		const description = rewriteCount === 1 ? args?.ops?.[0]?.pat : undefined;
 
-		const textContent = result.content?.find(c => c.type === "text")?.text ?? "";
+		const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text ?? "";
 		const rawLines = textContent.split("\n");
 		const hasSeparators = rawLines.some(line => line.trim().length === 0);
 		const allGroups: string[][] = [];
@@ -502,8 +517,8 @@ export const astEditToolRenderer = {
 							group.map(line => {
 								if (line.startsWith("## ")) return uiTheme.fg("dim", line);
 								if (line.startsWith("# ")) return uiTheme.fg("accent", line);
-								if (line.startsWith("+")) return uiTheme.fg("toolDiffAdded", toDisplayLine(line));
-								if (line.startsWith("-")) return uiTheme.fg("toolDiffRemoved", toDisplayLine(line));
+								if (line.startsWith("+")) return uiTheme.fg("toolDiffAdded", line);
+								if (line.startsWith("-")) return uiTheme.fg("toolDiffRemoved", line);
 								return uiTheme.fg("toolOutput", line);
 							}),
 					},

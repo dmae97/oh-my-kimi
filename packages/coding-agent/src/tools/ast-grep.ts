@@ -69,6 +69,9 @@ export interface AstGrepToolDetails {
 	files?: string[];
 	fileMatches?: Array<{ path: string; count: number }>;
 	meta?: OutputMeta;
+	/** Pre-formatted text for the user-visible TUI render. Mirrors `result.text` lines but uses
+	 * a `│` gutter and `*` to mark match lines. The TUI uses this directly so it never parses model-facing text. */
+	displayContent?: string;
 }
 
 export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolDetails> {
@@ -207,16 +210,18 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 
 			const useHashLines = resolveFileDisplayMode(this.session).hashLines;
 			const outputLines: string[] = [];
+			const displayLines: string[] = [];
 			const renderMatchesForFile = (relativePath: string) => {
 				const fileMatches = matchesByFile.get(relativePath) ?? [];
 				for (const match of fileMatches) {
 					const matchLines = match.text.split("\n");
-					const lineNumbers = matchLines.map((_, index) => match.startLine + index);
-					const lineWidth = Math.max(...lineNumbers.map(value => value.toString().length));
-					const formatLine = (lineNumber: number, line: string, isMatch: boolean): string =>
-						formatMatchLine(lineNumber, line, isMatch, { useHashLines, lineWidth });
 					for (let index = 0; index < matchLines.length; index++) {
-						outputLines.push(formatLine(match.startLine + index, matchLines[index], index === 0));
+						const lineNumber = match.startLine + index;
+						const isMatch = index === 0;
+						const line = matchLines[index];
+						outputLines.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
+						const marker = isMatch ? "*" : "";
+						displayLines.push(`${marker}${lineNumber}│${line}`);
 					}
 					if (match.metaVariables && Object.keys(match.metaVariables).length > 0) {
 						const serializedMeta = Object.entries(match.metaVariables)
@@ -224,6 +229,7 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 							.map(([key, value]) => `${key}=${value}`)
 							.join(", ");
 						outputLines.push(`  meta: ${serializedMeta}`);
+						displayLines.push(`  meta: ${serializedMeta}`);
 					}
 					fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 				}
@@ -243,18 +249,26 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 						for (const relativePath of directoryFiles) {
 							if (outputLines.length > 0) {
 								outputLines.push("");
+								displayLines.push("");
 							}
-							outputLines.push(`# ${path.basename(relativePath)}`);
+							const header = `# ${path.basename(relativePath)}`;
+							outputLines.push(header);
+							displayLines.push(header);
 							renderMatchesForFile(relativePath);
 						}
 						continue;
 					}
 					if (outputLines.length > 0) {
 						outputLines.push("");
+						displayLines.push("");
 					}
-					outputLines.push(`# ${directory}`);
+					const dirHeader = `# ${directory}`;
+					outputLines.push(dirHeader);
+					displayLines.push(dirHeader);
 					for (const relativePath of directoryFiles) {
-						outputLines.push(`## └─ ${path.basename(relativePath)}`);
+						const fileHeader = `## └─ ${path.basename(relativePath)}`;
+						outputLines.push(fileHeader);
+						displayLines.push(fileHeader);
 						renderMatchesForFile(relativePath);
 					}
 				}
@@ -270,6 +284,7 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 					path: filePath,
 					count: fileMatchCounts.get(filePath) ?? 0,
 				})),
+				displayContent: displayLines.join("\n"),
 			};
 			if (result.limitReached) {
 				outputLines.push("", "Result limit reached; narrow path pattern or increase limit.");
@@ -370,7 +385,7 @@ export const astGrepToolRenderer = {
 			uiTheme,
 		);
 
-		const textContent = result.content?.find(c => c.type === "text")?.text ?? "";
+		const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text ?? "";
 		const rawLines = textContent.split("\n");
 		const hasSeparators = rawLines.some(line => line.trim().length === 0);
 		const allGroups: string[][] = [];

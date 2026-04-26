@@ -192,7 +192,7 @@ describe("parseAnchor (atom tolerant) + applyAtomEdits", () => {
 
 	it("throws a usage-style error when no line number can be extracted", () => {
 		const toolEdit = { path: "a.ts", set: "  if (!x) return;", lines: "x" };
-		expect(() => resolveAtomToolEdit(toolEdit)).toThrow(/could not extract a line number/);
+		expect(() => resolveAtomToolEdit(toolEdit)).toThrow(/Could not find a line number/);
 	});
 });
 

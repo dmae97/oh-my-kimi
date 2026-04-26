@@ -1,6 +1,6 @@
-Applies precise file edits using anchor-prefixed line references (e.g. `123th`) from `read` output.
+Applies precise file edits using full anchors from `read` output (for example `160sr`).
 
-Read the file first. Copy anchors exactly from the latest `read` output. After any successful edit, re-read before editing that file again.
+Read the file first. Copy the full anchors exactly as shown by `read`.
 
 <operations>
 **Top level**
@@ -61,7 +61,7 @@ When adding a sibling declaration, prefer `prepend` on the next declaration.
 
 <critical>
 - Make the minimum exact edit.
-- Copy anchors exactly from `read/grep`.
+- Copy the full anchors exactly as shown by `read/grep` (for example `160sr`, not just `sr`).
 - `range` requires both `pos` and `end`.
 - **Closing-delimiter check**: when your replacement `content` ends with a closing delimiter (`}`, `*/`, `)`, `]`), compare it against the line immediately after `end` in the file. If they match, extend `end` to include that line — otherwise the original delimiter survives and `content` adds a second copy.
 - For a range, replace only the body or the whole range — don't split range boundaries.
