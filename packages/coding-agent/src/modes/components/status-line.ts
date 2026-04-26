@@ -388,10 +388,12 @@ export class StatusLineComponent implements Component {
 
 		// Collect visible segment contents
 		const leftParts: string[] = [];
+		const leftSegIds: StatusLineSegmentId[] = [];
 		for (const segId of effectiveSettings.leftSegments) {
 			const rendered = renderSegment(segId, ctx);
 			if (rendered.visible && rendered.content) {
 				leftParts.push(rendered.content);
+				leftSegIds.push(segId);
 			}
 		}
 
@@ -434,8 +436,42 @@ export class StatusLineComponent implements Component {
 				right.pop();
 				rightWidth = groupWidth(right, rightCapWidth, rightSepWidth);
 			}
+			// Shrink path before dropping left segments — path is the only elastic segment
+			const pathIdx = leftSegIds.indexOf("path");
+			if (pathIdx >= 0 && totalWidth() > topFillWidth) {
+				const overflow = totalWidth() - topFillWidth;
+				const currentPathVW = visibleWidth(left[pathIdx]);
+				const minPathVW = 8; // icon + ellipsis + a few chars
+				const shrinkable = currentPathVW - minPathVW;
+				if (shrinkable > 0) {
+					const shrinkBy = Math.min(shrinkable, overflow);
+					const currentMaxLen = ctx.options.path?.maxLength ?? 40;
+					let newMaxLen = Math.max(4, Math.min(currentMaxLen, currentPathVW) - shrinkBy);
+					const pathCtx = (maxLen: number): SegmentContext => ({
+						...ctx,
+						options: { ...ctx.options, path: { ...ctx.options.path, maxLength: maxLen } },
+					});
+					let reRendered = renderSegment("path", pathCtx(newMaxLen));
+					if (reRendered.visible && reRendered.content) {
+						// maxLength governs path text, not icon prefix; iterate to compensate
+						for (let i = 0; i < 8; i++) {
+							const saved = currentPathVW - visibleWidth(reRendered.content);
+							if (saved >= shrinkBy) break;
+							const nextMaxLen = Math.max(4, newMaxLen - (shrinkBy - saved));
+							if (nextMaxLen >= newMaxLen) break; // no progress or hit floor
+							newMaxLen = nextMaxLen;
+							const adjusted = renderSegment("path", pathCtx(newMaxLen));
+							if (!adjusted.visible || !adjusted.content) break;
+							reRendered = adjusted;
+						}
+						left[pathIdx] = reRendered.content;
+						leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
+					}
+				}
+			}
 			while (totalWidth() > topFillWidth && left.length > 0) {
 				left.pop();
+				leftSegIds.pop();
 				leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
 			}
 		}
