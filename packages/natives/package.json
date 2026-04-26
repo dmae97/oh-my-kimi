@@ -32,7 +32,7 @@
 		"check": "biome check . && bun run check:types",
 		"check:types": "tsgo -p tsconfig.json --noEmit",
 		"lint": "biome lint .",
-		"test": "bun run build && bun test",
+		"test": "bun test",
 		"fix": "biome check --write --unsafe .",
 		"fmt": "biome format --write .",
 		"embed:native": "bun scripts/embed-native.ts",
