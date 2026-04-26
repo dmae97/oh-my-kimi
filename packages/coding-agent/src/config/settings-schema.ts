@@ -1246,6 +1246,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"irc.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			label: "IRC",
+			description: "Enable agent-to-agent IRC messaging via the irc tool",
+		},
+	},
+
 	// Optional tools
 	"notebook.enabled": {
 		type: "boolean",

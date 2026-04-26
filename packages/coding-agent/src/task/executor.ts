@@ -19,6 +19,7 @@ import type { Skill } from "../extensibility/skills";
 import { callTool } from "../mcp/client";
 import type { MCPManager } from "../mcp/manager";
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
+import { AgentRegistry } from "../registry/agent-registry";
 import submitReminderTemplate from "../prompts/system/subagent-yield-reminder.md" with { type: "text" };
 import { createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
@@ -71,6 +72,14 @@ function normalizeModelPatterns(value: string | string[] | undefined): string[] 
 		.split(",")
 		.map(entry => entry.trim())
 		.filter(Boolean);
+}
+
+function renderIrcPeerRoster(selfId: string): string {
+	const peers = AgentRegistry.global()
+		.list()
+		.filter(ref => ref.id !== selfId && (ref.status === "running" || ref.status === "idle"));
+	if (peers.length === 0) return "- (no other live agents)";
+	return peers.map(peer => `- \`${peer.id}\` — ${peer.displayName} (${peer.kind}, ${peer.status})`).join("\n");
 }
 
 function withAbortTimeout<T>(promise: Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
@@ -543,6 +552,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				: agent.spawns.join(",");
 
 	const lspEnabled = enableLsp ?? true;
+	const ircEnabled = subagentSettings.get("irc.enabled") === true;
 	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("python");
 
 	const outputChunks: string[] = [];
@@ -962,12 +972,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						worktree: worktree ?? "",
 						outputSchema: normalizedOutputSchema,
 						contextFile: options.contextFile,
+						ircPeers: ircEnabled ? renderIrcPeerRoster(id) : "",
+						ircSelfId: ircEnabled ? id : "",
 					}),
 				sessionManager,
 				hasUI: false,
 				spawns: spawnsEnv,
 				taskDepth: childDepth,
 				parentTaskPrefix: id,
+				agentId: id,
+				agentDisplayName: agent.name,
 				enableLsp: lspEnabled,
 				skipPythonPreflight,
 				enableMCP,

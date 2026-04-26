@@ -90,6 +90,7 @@ import {
 	obfuscateMessages,
 	SecretObfuscator,
 } from "./secrets";
+import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import { AgentSession } from "./session/agent-session";
 import { AuthStorage } from "./session/auth-storage";
 import { convertToLlm } from "./session/messages";
@@ -213,6 +214,12 @@ export interface CreateAgentSessionOptions {
 	requireYieldTool?: boolean;
 	/** Task recursion depth (for subagent sessions). Default: 0 */
 	taskDepth?: number;
+	/** Pre-allocated agent identity for IRC routing. Default: "0-Main" for top-level, parentTaskPrefix-derived for sub. */
+	agentId?: string;
+	/** Display name for the agent in IRC. Default: "main" or "sub". */
+	agentDisplayName?: string;
+	/** Optional shared agent registry for IRC routing. Default: AgentRegistry.global(). */
+	agentRegistry?: AgentRegistry;
 	/** Parent task ID prefix for nested artifact naming (e.g., "6-Extensions") */
 	parentTaskPrefix?: string;
 
@@ -896,6 +903,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			})
 		: undefined;
 
+	const agentRegistry = options.agentRegistry ?? AgentRegistry.global();
+	const resolvedAgentId = options.agentId ?? options.parentTaskPrefix ?? MAIN_AGENT_ID;
+	const resolvedAgentDisplayName =
+		options.agentDisplayName ?? ((options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? "sub" : "main");
 	const pythonKernelOwnerId = `agent-session:${Snowflake.next()}`;
 
 	try {
@@ -929,6 +940,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			trackPythonExecution: (execution, abortController) =>
 				session ? session.trackPythonExecution(execution, abortController) : execution,
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
+			getAgentId: () => resolvedAgentId,
+			agentRegistry,
 			getSessionSpawns: () => options.spawns ?? "*",
 			getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
 			getActiveModelString,
@@ -1590,6 +1603,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			asyncJobManager,
 		});
 		hasSession = true;
+
+		// Register this session in the global agent registry so other agents can
+		// address it via the irc tool. Wrap dispose to unregister on teardown.
+		agentRegistry.register({
+			id: resolvedAgentId,
+			displayName: resolvedAgentDisplayName,
+			kind: (options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? "sub" : "main",
+			parentId: options.parentTaskPrefix,
+			session,
+			sessionFile: sessionManager.getSessionFile() ?? null,
+			status: "running",
+		});
+		{
+			const originalDispose = session.dispose.bind(session);
+			session.dispose = async () => {
+				try {
+					await originalDispose();
+				} finally {
+					agentRegistry.unregister(resolvedAgentId);
+				}
+			};
+		}
 
 		if (model?.api === "openai-codex-responses") {
 			const codexModel = model;

@@ -12,6 +12,7 @@ import { checkPythonKernelAvailability } from "../ipy/kernel";
 import { LspTool } from "../lsp";
 import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 import type { PlanModeState } from "../plan-mode/state";
+import type { AgentRegistry } from "../registry/agent-registry";
 import type { CustomMessage } from "../session/messages";
 import type { ToolChoiceQueue } from "../session/tool-choice-queue";
 import { TaskTool } from "../task";
@@ -32,6 +33,7 @@ import { GithubTool } from "./gh";
 import { GrepTool } from "./grep";
 import { InspectImageTool } from "./inspect-image";
 import { JobTool } from "./job";
+import { IrcTool } from "./irc";
 import { NotebookTool } from "./notebook";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { PythonTool } from "./python";
@@ -70,6 +72,7 @@ export * from "./grep";
 export * from "./image-gen";
 export * from "./inspect-image";
 export * from "./job";
+export * from "./irc";
 export * from "./notebook";
 export * from "./python";
 export * from "./read";
@@ -133,6 +136,10 @@ export interface ToolSession {
 	trackPythonExecution?<T>(execution: Promise<T>, abortController: AbortController): Promise<T>;
 	/** Get session ID */
 	getSessionId?: () => string | null;
+	/** Agent identity used for IRC routing. Returns the registry id (e.g. "0-Main", "0-AuthLoader"). */
+	getAgentId?: () => string | null;
+	/** Agent registry for IRC routing across live sessions. */
+	agentRegistry?: AgentRegistry;
 	/** Get artifacts directory for artifact:// URLs */
 	getArtifactsDir?: () => string | null;
 	/** Allocate a new artifact path and ID for session-scoped truncated output. */
@@ -217,6 +224,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	rewind: RewindTool.createIf,
 	task: TaskTool.create,
 	job: JobTool.createIf,
+	irc: IrcTool.createIf,
 	todo_write: s => new TodoWriteTool(s),
 	web_search: s => new SearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,
@@ -383,6 +391,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "calc") return session.settings.get("calc.enabled");
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
+		if (name === "irc") return session.settings.get("irc.enabled");
 		if (name === "task") {
 			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 2;
 			const currentDepth = session.taskDepth ?? 0;

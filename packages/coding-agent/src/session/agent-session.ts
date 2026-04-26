@@ -30,6 +30,7 @@ import type {
 	Effort,
 	ImageContent,
 	Message,
+	Context,
 	MessageAttribution,
 	Model,
 	ProviderSessionState,
@@ -42,6 +43,7 @@ import type {
 	UsageReport,
 } from "@oh-my-pi/pi-ai";
 import {
+	streamSimple,
 	calculateRateLimitBackoffMs,
 	getSupportedEfforts,
 	isContextOverflow,
@@ -127,6 +129,7 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 	type: "text",
 };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
+import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
 import { deobfuscateSessionContext, type SecretObfuscator } from "../secrets/obfuscator";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import { assertEditableFile } from "../tools/auto-generated-guard";
@@ -469,6 +472,11 @@ export class AgentSession {
 	#pendingPythonMessages: PythonExecutionMessage[] = [];
 	#activePythonExecutions = new Set<Promise<unknown>>();
 	#pythonExecutionDisposing = false;
+
+	// Background-channel IRC exchanges queued while the recipient was streaming.
+	// Drained into history (via emitExternalEvent) once the recipient becomes idle.
+	#pendingBackgroundExchanges: CustomMessage[][] = [];
+	#scheduledBackgroundExchangeFlush = false;
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
 	#turnIndex = 0;
@@ -2653,6 +2661,7 @@ export class AgentSession {
 			// Flush any pending bash messages before the new prompt
 			this.#flushPendingBashMessages();
 			this.#flushPendingPythonMessages();
+			this.#flushPendingBackgroundExchanges();
 
 			// Reset todo reminder count on new user prompt
 			this.#todoReminderCount = 0;
@@ -5922,6 +5931,209 @@ export class AgentSession {
 		}
 
 		this.#pendingPythonMessages = [];
+	}
+
+	// =========================================================================
+	// Background-Channel IRC Exchanges
+	// =========================================================================
+
+	/**
+	 * Generate an ephemeral reply to a background message (e.g. an IRC ping from
+	 * another agent) using this session's current model + system prompt + history.
+	 *
+	 * The reply is computed via a side-channel `streamSimple` call (analogous to
+	 * `/btw`) so it never blocks on the recipient's in-flight tool calls.  After
+	 * the reply is generated, both the incoming question and the auto-reply are
+	 * queued for injection into the recipient's persisted history so the model
+	 * sees the exchange on its next turn.  Injection happens immediately when the
+	 * session is idle, otherwise it is deferred until streaming ends.
+	 */
+	async respondAsBackground(args: {
+		from: string;
+		message: string;
+		awaitReply?: boolean;
+		signal?: AbortSignal;
+	}): Promise<{ replyText: string | null }> {
+		const awaitReply = args.awaitReply !== false;
+		const incomingTimestamp = Date.now();
+		const incomingRecord: CustomMessage = {
+			role: "custom",
+			customType: "irc:incoming",
+			content: `[IRC \`${args.from}\` \u2192 you]\n\n${args.message}`,
+			display: true,
+			details: { from: args.from, message: args.message },
+			attribution: "agent",
+			timestamp: incomingTimestamp,
+		};
+
+		if (!awaitReply) {
+			this.#queueBackgroundExchangeInjection([incomingRecord]);
+			return { replyText: null };
+		}
+
+		const incomingPrompt = prompt.render(ircIncomingTemplate, {
+			from: args.from,
+			message: args.message,
+		});
+		const { replyText } = await this.runEphemeralTurn({
+			promptText: incomingPrompt,
+			signal: args.signal,
+		});
+
+		const replyRecord: CustomMessage = {
+			role: "custom",
+			customType: "irc:autoreply",
+			content: `[IRC you \u2192 \`${args.from}\` (auto)]\n\n${replyText}`,
+			display: true,
+			details: { to: args.from, reply: replyText },
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+		this.#queueBackgroundExchangeInjection([incomingRecord, replyRecord]);
+
+		return { replyText };
+	}
+
+	/**
+	 * Run a single ephemeral side-channel turn against this session's current
+	 * model + system prompt + history.  No tools are used; the side request
+	 * does not block on, or interfere with, any in-flight main turn.  The
+	 * session's history and persisted state are NOT modified by this call.
+	 *
+	 * Used by `respondAsBackground` (IRC) and `BtwController` (`/btw`) to share
+	 * the snapshot + stream pipeline.  The snapshot includes any in-flight
+	 * streaming assistant text so the model sees the half-finished response
+	 * rather than missing context.
+	 */
+	async runEphemeralTurn(args: {
+		promptText: string;
+		onTextDelta?: (delta: string) => void;
+		signal?: AbortSignal;
+	}): Promise<{ replyText: string; assistantMessage: AssistantMessage }> {
+		const model = this.model;
+		if (!model) {
+			throw new Error("No active model on session");
+		}
+		const apiKey = await this.#modelRegistry.getApiKey(model, this.sessionId);
+		if (!apiKey) {
+			throw new Error(`No API key for ${model.provider}/${model.id}`);
+		}
+
+		const snapshot = this.#buildEphemeralSnapshot(args.promptText);
+		const llmMessages = await this.convertMessagesToLlm(snapshot, args.signal);
+		const context: Context = {
+			systemPrompt: this.systemPrompt,
+			messages: llmMessages,
+		};
+		const options = this.prepareSimpleStreamOptions({
+			apiKey,
+			sessionId: this.sessionId,
+			reasoning: toReasoningEffort(this.thinkingLevel),
+			serviceTier: this.serviceTier,
+			signal: args.signal,
+			toolChoice: "none",
+		});
+
+		let replyText = "";
+		let assistantMessage: AssistantMessage | undefined;
+		const stream = streamSimple(model, context, options);
+		for await (const event of stream) {
+			if (event.type === "text_delta") {
+				replyText += event.delta;
+				if (args.onTextDelta) args.onTextDelta(event.delta);
+				continue;
+			}
+			if (event.type === "done") {
+				assistantMessage = event.message;
+				break;
+			}
+			if (event.type === "error") {
+				throw new Error(event.error.errorMessage || "Ephemeral turn failed");
+			}
+		}
+
+		if (!assistantMessage) {
+			throw new Error("Ephemeral turn ended without a final message");
+		}
+		return { replyText: replyText.trim(), assistantMessage };
+	}
+
+	/**
+	 * Build a message snapshot for an ephemeral side-channel turn.  Includes
+	 * the in-flight streaming assistant message (if any) so the model sees
+	 * the partial response in context, then appends the prompt as a virtual
+	 * user message.
+	 */
+	#buildEphemeralSnapshot(promptText: string): AgentMessage[] {
+		const messages = [...this.messages];
+		const streaming = this.agent.state.streamMessage;
+		if (streaming && streaming.role === "assistant") {
+			const streamingText = streaming.content
+				.filter((c): c is TextContent => c.type === "text")
+				.map(c => c.text)
+				.join("");
+			if (streamingText) {
+				const normalized: AssistantMessage = {
+					...streaming,
+					content: [{ type: "text", text: streamingText }],
+				};
+				const lastMessage = messages.at(-1);
+				if (lastMessage?.role === "assistant") {
+					messages[messages.length - 1] = normalized;
+				} else {
+					messages.push(normalized);
+				}
+			}
+		}
+		messages.push({
+			role: "user",
+			content: [{ type: "text", text: promptText }],
+			attribution: "agent",
+			timestamp: Date.now(),
+		});
+		return messages;
+	}
+
+	#queueBackgroundExchangeInjection(messages: CustomMessage[]): void {
+		this.#pendingBackgroundExchanges.push(messages);
+		if (!this.isStreaming) {
+			this.#flushPendingBackgroundExchanges();
+			return;
+		}
+		this.#scheduleBackgroundExchangeFlush();
+	}
+
+	#scheduleBackgroundExchangeFlush(): void {
+		if (this.#scheduledBackgroundExchangeFlush) return;
+		this.#scheduledBackgroundExchangeFlush = true;
+		const attempt = (): void => {
+			if (this.#pendingBackgroundExchanges.length === 0) {
+				this.#scheduledBackgroundExchangeFlush = false;
+				return;
+			}
+			if (this.isStreaming) {
+				setTimeout(attempt, 50);
+				return;
+			}
+			this.#scheduledBackgroundExchangeFlush = false;
+			this.#flushPendingBackgroundExchanges();
+		};
+		setTimeout(attempt, 0);
+	}
+
+	#flushPendingBackgroundExchanges(): void {
+		if (this.#pendingBackgroundExchanges.length === 0) return;
+		const batches = this.#pendingBackgroundExchanges;
+		this.#pendingBackgroundExchanges = [];
+		for (const batch of batches) {
+			for (const msg of batch) {
+				// emitExternalEvent on message_end appends to agent state and dispatches
+				// to all session listeners, which in turn handle TUI rendering and
+				// sessionManager persistence via #handleAgentEvent.
+				this.agent.emitExternalEvent({ type: "message_start", message: msg });
+				this.agent.emitExternalEvent({ type: "message_end", message: msg });
+			}
+		}
 	}
 
 	// =========================================================================

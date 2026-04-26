@@ -1,8 +1,5 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { type AssistantMessage, type Context, streamSimple } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import btwUserPrompt from "../../prompts/system/btw-user.md" with { type: "text" };
-import { toReasoningEffort } from "../../thinking";
 import { BtwPanelComponent } from "../components/btw-panel";
 import type { InteractiveModeContext } from "../types";
 
@@ -14,14 +11,8 @@ interface BtwRequest {
 
 export class BtwController {
 	#activeRequest: BtwRequest | undefined;
-	readonly #streamFn: typeof streamSimple;
 
-	constructor(
-		private readonly ctx: InteractiveModeContext,
-		options?: { streamFn?: typeof streamSimple },
-	) {
-		this.#streamFn = options?.streamFn ?? streamSimple;
-	}
+	constructor(private readonly ctx: InteractiveModeContext) {}
 
 	hasActiveRequest(): boolean {
 		return this.#activeRequest !== undefined;
@@ -61,64 +52,29 @@ export class BtwController {
 		this.ctx.btwContainer.addChild(request.component);
 		this.ctx.ui.requestRender();
 		this.#activeRequest = request;
-		void this.#runRequest(request, model);
+		void this.#runRequest(request);
 	}
 
-	async #runRequest(
-		request: BtwRequest,
-		model: NonNullable<InteractiveModeContext["session"]["model"]>,
-	): Promise<void> {
+	async #runRequest(request: BtwRequest): Promise<void> {
 		try {
-			const apiKey = await this.ctx.session.modelRegistry.getApiKey(model, this.ctx.session.sessionId);
-			if (!apiKey) {
-				throw new Error(`No API key for provider: ${model.provider}`);
-			}
-
-			const llmMessages = await this.ctx.session.convertMessagesToLlm(
-				[...this.#buildMessageSnapshot(), this.#buildQuestionMessage(request.question)],
-				request.abortController.signal,
-			);
-			const context: Context = {
-				systemPrompt: this.ctx.session.systemPrompt,
-				messages: llmMessages,
-			};
-			const options = this.ctx.session.prepareSimpleStreamOptions({
-				apiKey,
-				sessionId: this.ctx.session.sessionId,
-				reasoning: toReasoningEffort(this.ctx.session.thinkingLevel),
-				serviceTier: this.ctx.session.serviceTier,
+			const promptText = prompt.render(btwUserPrompt, { question: request.question });
+			const { replyText } = await this.ctx.session.runEphemeralTurn({
+				promptText,
+				onTextDelta: delta => {
+					if (this.#isActiveRequest(request)) {
+						request.component.appendText(delta);
+					}
+				},
 				signal: request.abortController.signal,
-				toolChoice: "none",
 			});
-			const stream = this.#streamFn(model, context, options);
 
-			for await (const event of stream) {
-				if (!this.#isActiveRequest(request)) {
-					return;
-				}
-				if (event.type === "text_delta") {
-					request.component.appendText(event.delta);
-					continue;
-				}
-				if (event.type === "done") {
-					const finalText = this.#assistantText(event.message);
-					if (finalText) {
-						request.component.setAnswer(finalText);
-					}
-					request.component.markComplete();
-					return;
-				}
-				if (event.type === "error") {
-					if (event.reason === "aborted" || request.abortController.signal.aborted) {
-						request.component.markAborted();
-					} else {
-						request.component.markError(
-							this.#assistantText(event.error) || event.error.errorMessage || "BTW request failed.",
-						);
-					}
-					return;
-				}
+			if (!this.#isActiveRequest(request)) {
+				return;
 			}
+			if (replyText) {
+				request.component.setAnswer(replyText);
+			}
+			request.component.markComplete();
 		} catch (error) {
 			if (!this.#isActiveRequest(request)) {
 				return;
@@ -129,50 +85,6 @@ export class BtwController {
 			}
 			request.component.markError(error instanceof Error ? error.message : String(error));
 		}
-	}
-
-	#buildQuestionMessage(question: string): AgentMessage {
-		return {
-			role: "user",
-			content: [
-				{
-					type: "text",
-					text: prompt.render(btwUserPrompt, { question }),
-				},
-			],
-			attribution: "user",
-			timestamp: Date.now(),
-		};
-	}
-
-	#buildMessageSnapshot(): AgentMessage[] {
-		const messages = this.ctx.session.messages.slice();
-		if (!this.ctx.session.isStreaming || !this.ctx.streamingMessage) {
-			return messages;
-		}
-		const streamingText = this.ctx.extractAssistantText(this.ctx.streamingMessage);
-		const lastMessage = messages.at(-1);
-		if (!streamingText) {
-			return lastMessage?.role === "assistant" ? messages.slice(0, -1) : messages;
-		}
-		const normalizedStreamingMessage: AssistantMessage = {
-			...this.ctx.streamingMessage,
-			content: [{ type: "text", text: streamingText }],
-		};
-		if (lastMessage?.role === "assistant") {
-			return [...messages.slice(0, -1), normalizedStreamingMessage];
-		}
-		return [...messages, normalizedStreamingMessage];
-	}
-
-	#assistantText(message: AssistantMessage): string {
-		let text = "";
-		for (const content of message.content) {
-			if (content.type === "text") {
-				text += content.text;
-			}
-		}
-		return text.trim();
 	}
 
 	#closeActiveRequest(options: { abort: boolean }): void {

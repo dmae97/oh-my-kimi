@@ -1,10 +1,23 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `irc` tool for agent-to-agent messaging with `list` and `send` operations, including optional broadcast to `all` and optional suppression of reply waits
+- Added `irc.enabled` tool setting (default `true`) to toggle agent-to-agent messaging
+- Added live in-chat rendering of IRC incoming and auto-reply messages so peer messages now appear in the session transcript
 
 ### Changed
 
+- Changed peer-aware prompts for subagents to include currently live agent peers and IRC usage guidance when available
+- Changed the `/btw` helper to use a session-side ephemeral turn path that preserves streaming-context handling and updates the existing request handling behavior
 - Merged the `poll` and `cancel_job` tools into a single `job` tool that accepts `poll` and `cancel` arrays; the renamed tool reuses the richer poll renderer for both polling and cancellation calls
+
+### Fixed
+
+- Fixed IRC messaging to use a background ephemeral turn path so a recipient can reply even while its main loop is busy
+- Fixed `/btw` handling of empty prompts and missing model configuration by rejecting invalid requests before starting a stream
+- Fixed `/btw` request replacement so issuing a new query cleanly aborts the previous active request
 
 ## [14.4.2] - 2026-04-26
 ### Breaking Changes

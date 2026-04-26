@@ -14,6 +14,14 @@ You **MUST NOT** modify files outside this tree or in the original repository.
 If you need additional information, you can find your conversation with the user in {{contextFile}} (`tail` or `grep` relevant terms).
 {{/if}}
 
+{{#if ircPeers}}
+{{SECTION_SEPARATOR "IRC Peers"}}
+You can reach other live agents via the `irc` tool. Your id is `{{ircSelfId}}`. Currently visible peers:
+{{ircPeers}}
+
+Use `irc` only when you need a quick answer from a peer; do not use it for long-form content. Address peers by id or use `"all"` to broadcast.
+{{/if}}
+
 {{SECTION_SEPARATOR "Closure"}}
 No TODO tracking, no progress updates. Execute, call `yield`, done.
 
