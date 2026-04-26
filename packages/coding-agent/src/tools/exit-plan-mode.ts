@@ -46,8 +46,7 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 	readonly parameters = exitPlanModeSchema;
 	readonly strict = true;
 	readonly concurrency = "exclusive";
-	readonly nointent = true;
-	readonly deriveIntent = (): string => "Exiting plan mode";
+	readonly intent = (): string => "Exiting plan mode";
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(exitPlanModeDescription);

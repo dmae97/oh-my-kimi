@@ -275,22 +275,22 @@ describe("atom range locators", () => {
 });
 
 describe("applyAtomEdits — sed", () => {
-	it("applies a regex substitution to the anchored line (global by default)", () => {
-		const content = "aaa\nfoo bar foo\nccc";
-		const loc = `2${computeLineHash(2, "foo bar foo")}`;
+	it("applies a regex substitution to the anchored line (non-global by default)", () => {
+		const content = "aaa\nfoo bar\nccc";
+		const loc = `2${computeLineHash(2, "foo bar")}`;
 		const resolved = resolveAtomToolEdit({ loc, sed: { pat: "foo", rep: "baz" } });
 		expect(resolved[0]?.op).toBe("sed");
 		const result = applyAtomEdits(content, resolved);
-		expect(result.lines).toBe("aaa\nbaz bar baz\nccc");
+		expect(result.lines).toBe("aaa\nbaz bar\nccc");
 	});
 
-	it("global is the default and `g: false` opts out", () => {
+	it("non-global is the default and `g: true` enables global replacement", () => {
 		const content = "foo foo foo";
 		const loc = `1${computeLineHash(1, "foo foo foo")}`;
-		const all = resolveAtomToolEdit({ loc, sed: { pat: "foo", rep: "bar" } });
-		expect(applyAtomEdits(content, all).lines).toBe("bar bar bar");
-		const first = resolveAtomToolEdit({ loc, sed: { pat: "foo", rep: "bar", g: false } });
+		const first = resolveAtomToolEdit({ loc, sed: { pat: "foo", rep: "bar" } });
 		expect(applyAtomEdits(content, first).lines).toBe("bar foo foo");
+		const all = resolveAtomToolEdit({ loc, sed: { pat: "foo", rep: "bar", g: true } });
+		expect(applyAtomEdits(content, all).lines).toBe("bar bar bar");
 	});
 
 	it("replaces with regex-meta-free patterns", () => {
@@ -304,7 +304,7 @@ describe("applyAtomEdits — sed", () => {
 	it("F flag treats pattern as a literal string", () => {
 		const content = "a.b.c";
 		const loc = `1${computeLineHash(1, "a.b.c")}`;
-		const resolved = resolveAtomToolEdit({ loc, sed: { pat: ".", rep: "X", F: true } });
+		const resolved = resolveAtomToolEdit({ loc, sed: { pat: ".", rep: "X", F: true, g: true } });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("aXbXc");
 	});
@@ -383,7 +383,7 @@ describe("applyAtomEdits — sed", () => {
 	it("zero-length regex falls through to literal substring fallback when the literal exists", () => {
 		const content = "call(); foo()";
 		const loc = `1${computeLineHash(1, content)}`;
-		const resolved = resolveAtomToolEdit({ loc, sed: { pat: "()", rep: "(arg)" } });
+		const resolved = resolveAtomToolEdit({ loc, sed: { pat: "()", rep: "(arg)", g: true } });
 		const result = applyAtomEdits(content, resolved);
 		expect(result.lines).toBe("call(arg); foo(arg)");
 	});

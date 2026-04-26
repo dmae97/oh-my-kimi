@@ -135,7 +135,7 @@ export const reportFindingTool: AgentTool<typeof ReportFindingParams, ReportFind
 	label: "Report Finding",
 	description: "Report a code review finding. Use this for each issue found. Call yield when done.",
 	parameters: ReportFindingParams,
-	nointent: true,
+	intent: "omit",
 	async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 		const { title, body, priority, confidence, file_path, line_start, line_end } = params;
 		const location = `${file_path}:${line_start}${line_end !== line_start ? `-${line_end}` : ""}`;

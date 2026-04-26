@@ -60,7 +60,7 @@ export function createReportToolIssueTool(session: ToolSession): AgentTool {
 		strict: false,
 		description: "Report unexpected tool behavior for automated QA tracking.",
 		parameters: ReportToolIssueParams,
-		nointent: true,
+		intent: "omit",
 		async execute(_toolCallId, rawParams) {
 			try {
 				const params = rawParams as { tool: string; report: string };

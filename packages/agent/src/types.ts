@@ -251,16 +251,13 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	/** If true, argument validation errors are non-fatal: raw args are passed to execute() instead of returning an error to the LLM. */
 	lenientArgValidation?: boolean;
 	/**
-	 * If true, the INTENT_FIELD (`_i`) is NOT injected into this tool's parameter schema.
-	 * Use for tools where intent is obvious from the call itself (yield, resolve, todo_write, …).
-	 * Pair with `deriveIntent` if the UI should still surface a working-message intent.
+	 * Controls how the INTENT_FIELD (`_i`) is handled for this tool.
+	 * - `"require"` (default): `_i` is injected and required in the parameter schema.
+	 * - `"optional"`: `_i` is injected as an optional/nullable field.
+	 * - `"omit"`: `_i` is NOT injected. Use for tools where intent is obvious (yield, resolve, todo_write, …).
+	 * - function: `_i` is NOT injected; intent is derived dynamically from (potentially partial / streaming) args.
 	 */
-	nointent?: boolean;
-	/**
-	 * Optional callback that derives a short intent string from (potentially partial / streaming) args.
-	 * Used as a fallback when no `_i` field is present on the tool call (typically because `nointent` is set).
-	 */
-	deriveIntent?: (args: Partial<Static<TParameters>>) => string | undefined;
+	intent?: "omit" | "optional" | "require" | ((args: Partial<Static<TParameters>>) => string | undefined);
 
 	/** The main execution callback for this tool. */
 	execute: AgentToolExecFn<TParameters, TDetails, TTheme>;

@@ -275,14 +275,14 @@ export class EventController {
 					continue;
 				}
 				const tool = this.ctx.session.getToolByName(content.name);
-				if (!tool?.deriveIntent) continue;
+				if (typeof tool?.intent !== "function") continue;
 				try {
-					const derived = tool.deriveIntent(args as never)?.trim();
+					const derived = tool.intent(args as never)?.trim();
 					if (derived) {
 						this.#updateWorkingMessageFromIntent(derived);
 					}
 				} catch {
-					// deriveIntent must never break the UI
+					// intent function must never break the UI
 				}
 			}
 
