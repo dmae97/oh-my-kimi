@@ -23,6 +23,13 @@ export interface TodoItem {
 	id: string;
 	content: string;
 	status: TodoStatus;
+	/**
+	 * Append-only list of freeform notes attached by `op: "note"`.
+	 * Each element is one note and may itself be multi-line.
+	 * Rendered as text only when the task is in_progress; otherwise shown as a
+	 * dim marker indicating the task has notes.
+	 */
+	notes?: string[];
 }
 
 export interface TodoPhase {
@@ -40,7 +47,7 @@ export interface TodoWriteToolDetails {
 // Schema
 // =============================================================================
 
-const TodoOp = StringEnum(["replace", "start", "done", "rm", "drop", "append"] as const, {
+const TodoOp = StringEnum(["replace", "start", "done", "rm", "drop", "append", "note"] as const, {
 	description: "operation to apply",
 });
 
@@ -71,6 +78,7 @@ const TodoOpEntry = Type.Object({
 		Type.String({ description: "phase id for done/rm/drop/append", examples: ["Implementation", "phase-1"] }),
 	),
 	items: Type.Optional(Type.Array(AppendItem, { minItems: 1, description: "items to append for op=append" })),
+	text: Type.Optional(Type.String({ description: "note text for op=note (appended with newline)" })),
 });
 
 const todoWriteSchema = Type.Object(
@@ -160,8 +168,14 @@ function fileFromPhases(phases: TodoPhase[]): TodoFile {
 	return { phases, nextTaskId, nextPhaseId };
 }
 
+function cloneTask(task: TodoItem): TodoItem {
+	const out: TodoItem = { id: task.id, content: task.content, status: task.status };
+	if (task.notes && task.notes.length > 0) out.notes = [...task.notes];
+	return out;
+}
+
 function clonePhases(phases: TodoPhase[]): TodoPhase[] {
-	return phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task })) }));
+	return phases.map(phase => ({ ...phase, tasks: phase.tasks.map(cloneTask) }));
 }
 
 function normalizeInProgressTask(phases: TodoPhase[]): void {
@@ -336,6 +350,17 @@ function applyEntry(file: TodoFile, entry: TodoOpEntryValue, errors: string[]): 
 			removeTasks(file, entry, errors);
 			return file;
 		}
+		case "note": {
+			const task = resolveTaskOrError(file.phases, entry.task, errors);
+			if (!task) return file;
+			const text = (entry.text ?? "").replace(/\s+$/u, "");
+			if (!text) {
+				errors.push("Missing text for note operation");
+				return file;
+			}
+			task.notes = task.notes ? [...task.notes, text] : [text];
+			return file;
+		}
 		case "append": {
 			appendItems(file, entry, errors);
 			return file;
@@ -381,6 +406,14 @@ export function phasesToMarkdown(phases: TodoPhase[]): string {
 		out.push(`# ${phases[i].name}`);
 		for (const task of phases[i].tasks) {
 			out.push(`- [${STATUS_TO_MARKER[task.status]}] ${task.content}`);
+			if (task.notes && task.notes.length > 0) {
+				for (let j = 0; j < task.notes.length; j++) {
+					if (j > 0) out.push("  >");
+					for (const noteLine of task.notes[j].split("\n")) {
+						out.push(noteLine === "" ? "  >" : `  > ${noteLine}`);
+					}
+				}
+			}
 		}
 	}
 	return `${out.join("\n")}\n`;
@@ -405,17 +438,47 @@ export function markdownToPhases(md: string): { phases: TodoPhase[]; errors: str
 	const errors: string[] = [];
 	const phases: TodoPhase[] = [];
 	let currentPhase: TodoPhase | undefined;
+	let currentTask: TodoItem | undefined;
+	let noteBuf: string[] = [];
 	let nextPhaseId = 1;
 	let nextTaskId = 1;
+
+	const flushNote = () => {
+		if (!currentTask || noteBuf.length === 0) {
+			noteBuf = [];
+			return;
+		}
+		while (noteBuf.length > 0 && noteBuf[noteBuf.length - 1] === "") noteBuf.pop();
+		if (noteBuf.length === 0) return;
+		const joined = noteBuf.join("\n");
+		currentTask.notes = currentTask.notes ? [...currentTask.notes, joined] : [joined];
+		noteBuf = [];
+	};
 
 	const lines = md.split(/\r?\n/);
 	for (let lineNum = 0; lineNum < lines.length; lineNum++) {
 		const raw = lines[lineNum];
+
+		// Blockquote line attached to the current task: `  > text` or `  >`
+		const noteMatch = /^\s*>\s?(.*)$/.exec(raw);
+		if (noteMatch && currentTask) {
+			const noteLine = noteMatch[1];
+			if (noteLine === "") {
+				// Blank `>` separates two distinct notes
+				flushNote();
+			} else {
+				noteBuf.push(noteLine);
+			}
+			continue;
+		}
+
 		const trimmed = raw.trim();
 		if (!trimmed) continue;
 
 		const headingMatch = /^#{1,6}\s+(.+?)\s*$/.exec(trimmed);
 		if (headingMatch) {
+			flushNote();
+			currentTask = undefined;
 			currentPhase = { id: `phase-${nextPhaseId++}`, name: headingMatch[1].trim(), tasks: [] };
 			phases.push(currentPhase);
 			continue;
@@ -423,6 +486,7 @@ export function markdownToPhases(md: string): { phases: TodoPhase[]; errors: str
 
 		const taskMatch = /^[-*+]\s*\[(.?)\]\s+(.+?)\s*$/.exec(trimmed);
 		if (taskMatch) {
+			flushNote();
 			if (!currentPhase) {
 				currentPhase = { id: `phase-${nextPhaseId++}`, name: "I. Todos", tasks: [] };
 				phases.push(currentPhase);
@@ -431,23 +495,23 @@ export function markdownToPhases(md: string): { phases: TodoPhase[]; errors: str
 			const status = MARKER_TO_STATUS[marker];
 			if (!status) {
 				errors.push(`Line ${lineNum + 1}: unknown status marker "[${marker}]" (use [ ], [x], [/], [-])`);
+				currentTask = undefined;
 				continue;
 			}
-			currentPhase.tasks.push({
-				id: `task-${nextTaskId++}`,
-				content: taskMatch[2].trim(),
-				status,
-			});
+			currentTask = { id: `task-${nextTaskId++}`, content: taskMatch[2].trim(), status };
+			currentPhase.tasks.push(currentTask);
 			continue;
 		}
 
+		flushNote();
+		currentTask = undefined;
 		errors.push(`Line ${lineNum + 1}: unrecognized syntax "${trimmed}"`);
 	}
+	flushNote();
 
 	normalizeInProgressTask(phases);
 	return { phases, errors };
 }
-
 
 function formatSummary(phases: TodoPhase[], errors: string[]): string {
 	const tasks = phases.flatMap(phase => phase.tasks);
@@ -492,7 +556,17 @@ function formatSummary(phases: TodoPhase[], errors: string[]): string {
 						: task.status === "abandoned"
 							? "✗"
 							: "○";
-			lines.push(`    ${sym} ${task.id} ${task.content}`);
+			const noteCount = task.notes?.length ?? 0;
+			const noteMarker = noteCount > 0 ? ` (+${noteCount} note${noteCount === 1 ? "" : "s"})` : "";
+			lines.push(`    ${sym} ${task.id} ${task.content}${noteMarker}`);
+			if (task.status === "in_progress" && task.notes && task.notes.length > 0) {
+				for (let j = 0; j < task.notes.length; j++) {
+					if (j > 0) lines.push("        ---");
+					for (const noteLine of task.notes[j].split("\n")) {
+						lines.push(`        ${noteLine}`);
+					}
+				}
+			}
 		}
 	}
 	return lines.join("\n");
@@ -547,18 +621,65 @@ type TodoWriteRenderArgs = {
 	}>;
 };
 
+const SUP_DIGITS: Record<string, string> = {
+	"0": "\u2070",
+	"1": "\u00b9",
+	"2": "\u00b2",
+	"3": "\u00b3",
+	"4": "\u2074",
+	"5": "\u2075",
+	"6": "\u2076",
+	"7": "\u2077",
+	"8": "\u2078",
+	"9": "\u2079",
+};
+
+function toSuperscript(n: number): string {
+	return n
+		.toString()
+		.split("")
+		.map(d => SUP_DIGITS[d] ?? d)
+		.join("");
+}
+
+function noteMarker(count: number, uiTheme: Theme): string {
+	if (count <= 0) return "";
+	return uiTheme.fg("dim", chalk.italic(` \u207a${toSuperscript(count)}`));
+}
+
 function formatTodoLine(item: TodoItem, uiTheme: Theme, prefix: string): string {
 	const checkbox = uiTheme.checkbox;
+	const marker = noteMarker(item.notes?.length ?? 0, uiTheme);
 	switch (item.status) {
 		case "completed":
-			return uiTheme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(item.content)}`);
+			return uiTheme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(item.content)}`) + marker;
 		case "in_progress":
-			return uiTheme.fg("accent", `${prefix}${checkbox.unchecked} ${item.content}`);
+			return uiTheme.fg("accent", `${prefix}${checkbox.unchecked} ${item.content}`) + marker;
 		case "abandoned":
-			return uiTheme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(item.content)}`);
+			return uiTheme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(item.content)}`) + marker;
 		default:
-			return uiTheme.fg("dim", `${prefix}${checkbox.unchecked} ${item.content}`);
+			return uiTheme.fg("dim", `${prefix}${checkbox.unchecked} ${item.content}`) + marker;
 	}
+}
+
+function renderNoteAttachments(phases: TodoPhase[], uiTheme: Theme): string[] {
+	const lines: string[] = [];
+	for (const phase of phases) {
+		for (const task of phase.tasks) {
+			if (task.status !== "in_progress" || !task.notes || task.notes.length === 0) continue;
+			const bar = uiTheme.fg("dim", uiTheme.tree.vertical);
+			const title = uiTheme.fg("dim", chalk.italic(`\u00a7 notes \u2014 ${task.content}`));
+			lines.push("");
+			lines.push(`  ${title}`);
+			for (let j = 0; j < task.notes.length; j++) {
+				if (j > 0) lines.push(`  ${bar}`);
+				for (const noteLine of task.notes[j].split("\n")) {
+					lines.push(`  ${bar} ${uiTheme.fg("dim", noteLine)}`);
+				}
+			}
+		}
+	}
+	return lines;
 }
 
 export const todoWriteToolRenderer = {
@@ -593,9 +714,11 @@ export const todoWriteToolRenderer = {
 
 		const { expanded } = options;
 		const lines: string[] = [header];
-		for (const phase of phases) {
+		for (let p = 0; p < phases.length; p++) {
+			const phase = phases[p];
+			if (p > 0) lines.push("");
 			if (phases.length > 1) {
-				lines.push(uiTheme.fg("accent", `  ${uiTheme.tree.hook} ${phase.name}`));
+				lines.push(uiTheme.fg("accent", chalk.bold(`  ${phase.name}`)));
 			}
 			const treeLines = renderTreeList(
 				{
@@ -607,8 +730,11 @@ export const todoWriteToolRenderer = {
 				},
 				uiTheme,
 			);
-			lines.push(...treeLines);
+			for (const line of treeLines) {
+				lines.push(`  ${line}`);
+			}
 		}
+		lines.push(...renderNoteAttachments(phases, uiTheme));
 		return new Text(lines.join("\n"), 0, 0);
 	},
 	mergeCallAndResult: true,

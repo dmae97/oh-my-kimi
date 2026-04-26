@@ -1,13 +1,14 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Changed `/todo append` from JSON payload input to `/todo append [<phase>] <task...>` with optional quoted tokens and automatic phase creation
 
 ### Added
 
+- Added `note` to todo-write operations so you can append follow-up text notes to a task via `op: "note"` and `text`
+- Added markdown note-block support to `/todo export` and `/todo import` so task notes are written as blockquote lines and reloaded with the todo list
 - Added `/todo export <path>` to write the current todo list as Markdown to a file, defaulting to `TODO.md` when no path is provided
 - Added `/todo import <path>` to replace the current todo list from a Markdown file, defaulting to `TODO.md` when no path is provided
 - Added live poll progress updates so the UI now emits intermediate job state while waiting for jobs to finish
@@ -18,6 +19,7 @@
 
 ### Changed
 
+- Changed todo list rendering and summaries to show a `+N` note marker on task lines and display attached notes for tasks in progress
 - Changed `/todo start`, `/todo done`, `/todo drop`, and `/todo rm` to resolve task/phase targets by fuzzy id/name matching instead of strict identifiers
 - Removed `/todo replace` from supported slash commands
 - Changed todo list restoration to include user todo-edit custom session entries so slash-command and editor-based todo updates persist after reload

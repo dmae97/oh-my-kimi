@@ -3237,11 +3237,11 @@ export class AgentSession {
 		return phases.map(phase => ({
 			id: phase.id,
 			name: phase.name,
-			tasks: phase.tasks.map(task => ({
-				id: task.id,
-				content: task.content,
-				status: task.status,
-			})),
+			tasks: phase.tasks.map(task => {
+				const out: TodoItem = { id: task.id, content: task.content, status: task.status };
+				if (task.notes && task.notes.length > 0) out.notes = [...task.notes];
+				return out;
+			}),
 		}));
 	}
 

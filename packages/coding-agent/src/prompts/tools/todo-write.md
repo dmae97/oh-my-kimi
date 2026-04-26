@@ -23,11 +23,12 @@ Pass an object with an `ops` array:
 
 |Field|Type|When to use|
 |---|---|---|
-|`op`|string|Required. One of `replace`, `start`, `done`, `rm`, `drop`, `append`|
+|`op`|string|Required. One of `replace`, `start`, `done`, `rm`, `drop`, `append`, `note`|
 |`task`|string|Task id for `start`, or a task target for `done` / `rm` / `drop`|
 |`phase`|string|Phase target for `done` / `rm` / `drop`, or append destination for `append`|
 |`items`|{id, label}[]|Required for `append`. If the phase does not exist, it is created at the end|
 |`phases`|Phase[]|Only for `replace`. Keeps initial phased setup available for harness bootstrap and full restructures|
+|`text`|string|Required for `note`. The note text appended to `task.notes` (which is a list, joined with newlines on render)|
 
 ## Semantics
 - `start`: requires `task`; sets that task to `in_progress`
@@ -36,6 +37,7 @@ Pass an object with an `ops` array:
 - `drop`: marks one task, one phase, or all tasks abandoned
 - `append`: appends `items` to `phase`; creates the phase if missing
 - `replace`: replaces the full todo list
+- `note`: append `text` as a new note attached to `task`. Notes are append-only context the user added; they only render to you when the task is `in_progress`. Other tasks display only a `+N` marker. Use this when you want to leave a follow-up reminder for yourself when you reach a later task.
 
 If `done`, `rm`, or `drop` omits both `task` and `phase`, it applies to all tasks.
 

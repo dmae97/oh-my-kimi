@@ -46,6 +46,7 @@ export type TodoItem = {
 	content: string;
 	status: TodoStatus;
 	details?: string;
+	notes?: string[];
 };
 
 export type TodoPhase = {

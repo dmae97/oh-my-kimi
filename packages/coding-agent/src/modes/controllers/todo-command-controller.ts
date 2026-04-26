@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { resolveToCwd } from "../../tools/path-utils";
 import {
 	applyOpsToPhases,
 	getLatestTodoPhasesFromEntries,
@@ -8,7 +9,6 @@ import {
 	type TodoPhase,
 	USER_TODO_EDIT_CUSTOM_TYPE,
 } from "../../tools/todo-write";
-import { resolveToCwd } from "../../tools/path-utils";
 import { copyToClipboard } from "../../utils/clipboard";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import type { InteractiveModeContext } from "../types";
@@ -137,10 +137,7 @@ function findPhaseFuzzy(phases: TodoPhase[], query: string): TodoPhase | undefin
 	return undefined;
 }
 
-function findTaskFuzzy(
-	phases: TodoPhase[],
-	query: string,
-): { task: TodoItem; phase: TodoPhase } | undefined {
+function findTaskFuzzy(phases: TodoPhase[], query: string): { task: TodoItem; phase: TodoPhase } | undefined {
 	const q = query.trim().toLowerCase();
 	if (!q) return undefined;
 	for (const phase of phases) {
@@ -158,9 +155,7 @@ function findTaskFuzzy(
 	}
 	if (matches.length === 1) return matches[0];
 	// Prefer single in_progress/pending hit when ambiguous
-	const active = matches.filter(
-		m => m.task.status === "in_progress" || m.task.status === "pending",
-	);
+	const active = matches.filter(m => m.task.status === "in_progress" || m.task.status === "pending");
 	if (active.length === 1) return active[0];
 	return undefined;
 }
@@ -465,9 +460,7 @@ export class TodoCommandController {
 
 		const current = this.#currentPhases();
 		const initialMarkdown =
-			current.length > 0
-				? phasesToMarkdown(current)
-				: "# I. Todos\n- [ ] (replace this with your tasks)\n";
+			current.length > 0 ? phasesToMarkdown(current) : "# I. Todos\n- [ ] (replace this with your tasks)\n";
 
 		const fileHandle = await this.#openTtyHandle();
 		this.ctx.ui.stop();

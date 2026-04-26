@@ -267,7 +267,11 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 			{ name: "copy", description: "Copy todos as Markdown to clipboard" },
 			{ name: "export", description: "Write todos as Markdown to a file (default: TODO.md)", usage: "[<path>]" },
 			{ name: "import", description: "Replace todos from a Markdown file (default: TODO.md)", usage: "[<path>]" },
-			{ name: "append", description: "Append a task; phase fuzzy-matched or auto-created", usage: "[<phase>] <task...>" },
+			{
+				name: "append",
+				description: "Append a task; phase fuzzy-matched or auto-created",
+				usage: "[<phase>] <task...>",
+			},
 			{ name: "start", description: "Mark task in_progress (fuzzy-matched)", usage: "<task>" },
 			{ name: "done", description: "Mark task/phase/all completed (fuzzy-matched)", usage: "[<task|phase>]" },
 			{ name: "drop", description: "Mark task/phase/all abandoned (fuzzy-matched)", usage: "[<task|phase>]" },
