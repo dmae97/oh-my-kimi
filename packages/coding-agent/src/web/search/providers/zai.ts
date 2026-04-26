@@ -14,7 +14,7 @@ import { SearchProvider } from "./base";
 import { findCredential, isApiKeyAvailable } from "./utils";
 
 const ZAI_MCP_URL = "https://api.z.ai/api/mcp/web_search_prime/mcp";
-const ZAI_TOOL_NAME = "webSearchPrime";
+const ZAI_TOOL_NAME = "web_search_prime";
 const DEFAULT_NUM_RESULTS = 10;
 
 export interface ZaiSearchParams {
