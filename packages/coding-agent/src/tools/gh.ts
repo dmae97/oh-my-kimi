@@ -1,17 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import { StringEnum } from "@oh-my-pi/pi-ai";
 import { abortableSleep, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import ghIssueViewDescription from "../prompts/tools/gh-issue-view.md" with { type: "text" };
-import ghPrCheckoutDescription from "../prompts/tools/gh-pr-checkout.md" with { type: "text" };
-import ghPrDiffDescription from "../prompts/tools/gh-pr-diff.md" with { type: "text" };
-import ghPrPushDescription from "../prompts/tools/gh-pr-push.md" with { type: "text" };
-import ghPrViewDescription from "../prompts/tools/gh-pr-view.md" with { type: "text" };
-import ghRepoViewDescription from "../prompts/tools/gh-repo-view.md" with { type: "text" };
-import ghRunWatchDescription from "../prompts/tools/gh-run-watch.md" with { type: "text" };
-import ghSearchIssuesDescription from "../prompts/tools/gh-search-issues.md" with { type: "text" };
-import ghSearchPrsDescription from "../prompts/tools/gh-search-prs.md" with { type: "text" };
+import githubDescription from "../prompts/tools/github.md" with { type: "text" };
 import * as git from "../utils/git";
 import type { ToolSession } from ".";
 import { formatShortSha } from "./gh-format";
@@ -135,96 +128,67 @@ const RUN_SUCCESS_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 const RUN_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
 const JOB_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required"]);
 
-const ghRepoViewSchema = Type.Object({
+const githubSchema = Type.Object({
+	op: StringEnum(
+		[
+			"repo_view",
+			"issue_view",
+			"pr_view",
+			"pr_diff",
+			"pr_checkout",
+			"pr_push",
+			"search_issues",
+			"search_prs",
+			"run_watch",
+		],
+		{ description: "github operation" },
+	),
 	repo: Type.Optional(
 		Type.String({
-			description: "owner/repo",
+			description: "owner/repo (any op)",
 			examples: ["facebook/react"],
 		}),
 	),
-	branch: Type.Optional(Type.String({ description: "branch to inspect", examples: ["main", "develop"] })),
-});
-
-const ghIssueViewSchema = Type.Object({
-	issue: Type.String({
-		description: "issue number or url",
-		examples: ["123", "https://github.com/owner/repo/issues/123"],
-	}),
-	repo: Type.Optional(Type.String({ description: "owner/repo", examples: ["facebook/react"] })),
-	comments: Type.Optional(Type.Boolean({ description: "include issue comments", default: true })),
-});
-
-const ghPrViewSchema = Type.Object({
-	pr: Type.Optional(Type.String({ description: "pr number, url, or branch", examples: ["123", "feature-branch"] })),
-	repo: Type.Optional(Type.String({ description: "owner/repo", examples: ["facebook/react"] })),
-	comments: Type.Optional(Type.Boolean({ description: "include pr comments", default: true })),
-});
-
-const ghPrDiffSchema = Type.Object({
-	pr: Type.Optional(Type.String({ description: "pr number, url, or branch", examples: ["123", "feature-branch"] })),
-	repo: Type.Optional(Type.String({ description: "owner/repo", examples: ["facebook/react"] })),
-	nameOnly: Type.Optional(Type.Boolean({ description: "return file names only" })),
+	branch: Type.Optional(
+		Type.String({
+			description: "branch (repo_view, pr_checkout local branch, pr_push local branch, run_watch)",
+			examples: ["main", "develop"],
+		}),
+	),
+	issue: Type.Optional(
+		Type.String({
+			description: "issue number or url (issue_view)",
+			examples: ["123", "https://github.com/owner/repo/issues/123"],
+		}),
+	),
+	pr: Type.Optional(
+		Type.String({
+			description: "pr number, url, or branch (pr_view, pr_diff, pr_checkout)",
+			examples: ["123", "feature-branch"],
+		}),
+	),
+	comments: Type.Optional(Type.Boolean({ description: "include comments (issue_view, pr_view)", default: true })),
+	nameOnly: Type.Optional(Type.Boolean({ description: "return file names only (pr_diff)" })),
 	exclude: Type.Optional(
 		Type.Array(Type.String({ description: "glob to exclude" }), {
-			description: "file globs to exclude",
+			description: "file globs to exclude (pr_diff)",
 		}),
 	),
-});
-
-const ghPrCheckoutSchema = Type.Object({
-	pr: Type.Optional(Type.String({ description: "pr number, url, or branch", examples: ["123", "feature-branch"] })),
-	repo: Type.Optional(Type.String({ description: "owner/repo", examples: ["facebook/react"] })),
-	branch: Type.Optional(Type.String({ description: "local branch name", examples: ["main", "develop"] })),
-	worktree: Type.Optional(Type.String({ description: "worktree path" })),
-	force: Type.Optional(
-		Type.Boolean({
-			description: "reset existing local branch",
-		}),
-	),
-});
-
-const ghPrPushSchema = Type.Object({
-	branch: Type.Optional(
+	worktree: Type.Optional(Type.String({ description: "worktree path (pr_checkout)" })),
+	force: Type.Optional(Type.Boolean({ description: "reset existing local branch (pr_checkout)" })),
+	forceWithLease: Type.Optional(Type.Boolean({ description: "force-with-lease push (pr_push)" })),
+	query: Type.Optional(
 		Type.String({
-			description: "local branch name",
-			examples: ["main", "develop"],
+			description: "search query (search_issues, search_prs)",
+			examples: ["is:open label:bug"],
 		}),
 	),
-	forceWithLease: Type.Optional(Type.Boolean({ description: "force-with-lease push" })),
+	limit: Type.Optional(Type.Number({ description: "max results (search_issues, search_prs)", default: 10 })),
+	run: Type.Optional(Type.String({ description: "actions run id or url (run_watch)", examples: ["123456"] })),
+	tail: Type.Optional(Type.Number({ description: "log lines per failed job (run_watch)", default: 15 })),
 });
 
-const ghSearchIssuesSchema = Type.Object({
-	query: Type.String({ description: "issue search query", examples: ["is:open label:bug"] }),
-	repo: Type.Optional(Type.String({ description: "scope to owner/repo" })),
-	limit: Type.Optional(Type.Number({ description: "max results", default: 10 })),
-});
-
-const ghSearchPrsSchema = Type.Object({
-	query: Type.String({ description: "pr search query", examples: ["is:open label:bug"] }),
-	repo: Type.Optional(Type.String({ description: "scope to owner/repo" })),
-	limit: Type.Optional(Type.Number({ description: "max results", default: 10 })),
-});
-
-const ghRunWatchSchema = Type.Object({
-	run: Type.Optional(Type.String({ description: "actions run id or url", examples: ["123456"] })),
-	branch: Type.Optional(
-		Type.String({
-			description: "branch to inspect",
-			examples: ["main", "develop"],
-		}),
-	),
-	tail: Type.Optional(Type.Number({ description: "log lines per failed job", default: 15 })),
-});
-
-type GhRepoViewInput = Static<typeof ghRepoViewSchema>;
-type GhIssueViewInput = Static<typeof ghIssueViewSchema>;
-type GhPrViewInput = Static<typeof ghPrViewSchema>;
-type GhPrDiffInput = Static<typeof ghPrDiffSchema>;
-type GhPrCheckoutInput = Static<typeof ghPrCheckoutSchema>;
-type GhPrPushInput = Static<typeof ghPrPushSchema>;
-type GhSearchIssuesInput = Static<typeof ghSearchIssuesSchema>;
-type GhSearchPrsInput = Static<typeof ghSearchPrsSchema>;
-type GhRunWatchInput = Static<typeof ghRunWatchSchema>;
+type GithubInput = Static<typeof githubSchema>;
 
 export interface GhToolDetails {
 	meta?: OutputMeta;
@@ -729,7 +693,7 @@ async function resolvePrBranchPushTarget(
 }> {
 	const headRef = await git.config.getBranch(repoRoot, localBranch, "ompPrHeadRef", signal);
 	if (!headRef) {
-		throw new ToolError(`branch ${localBranch} has no PR push metadata; check it out via gh_pr_checkout first`);
+		throw new ToolError(`branch ${localBranch} has no PR push metadata; check it out via op: pr_checkout first`);
 	}
 
 	const pushRemote = await git.config.getBranch(repoRoot, localBranch, "pushRemote", signal);
@@ -1610,7 +1574,7 @@ function formatReviewCommentsSection(comments: GhPrReviewComment[] | undefined):
 	return lines;
 }
 
-function formatRepoView(data: GhRepoViewData, input: GhRepoViewInput): string {
+function formatRepoView(data: GhRepoViewData, input: { repo?: string; branch?: string }): string {
 	const lines: string[] = [];
 	const name = data.nameWithOwner ?? input.repo ?? "GitHub Repository";
 	lines.push(`# ${name}`);
@@ -1637,7 +1601,7 @@ function formatRepoView(data: GhRepoViewData, input: GhRepoViewInput): string {
 	return lines.join("\n").trim();
 }
 
-function formatIssueView(data: GhIssueViewData, input: GhIssueViewInput): string {
+function formatIssueView(data: GhIssueViewData, input: { issue: string; repo?: string; comments?: boolean }): string {
 	const lines: string[] = [];
 	const issueNumber = data.number ?? input.issue;
 	lines.push(`# Issue #${issueNumber}: ${data.title ?? "Untitled"}`);
@@ -1683,7 +1647,7 @@ function formatPrFiles(files: GhPrFile[] | undefined): string[] {
 	return lines;
 }
 
-function formatPrView(data: GhPrViewData, input: GhPrViewInput): string {
+function formatPrView(data: GhPrViewData, input: { pr?: string; repo?: string; comments?: boolean }): string {
 	const lines: string[] = [];
 	const prIdentifier = data.number ?? input.pr ?? "current";
 	lines.push(`# Pull Request #${prIdentifier}: ${data.title ?? "Untitled"}`);
@@ -1853,644 +1817,520 @@ function buildTextResult(
 	return builder.done();
 }
 
-export class GhRepoViewTool implements AgentTool<typeof ghRepoViewSchema, GhToolDetails> {
-	readonly name = "gh_repo_view";
-	readonly label = "GitHub Repo";
-	readonly description = prompt.render(ghRepoViewDescription);
-	readonly parameters = ghRepoViewSchema;
+export class GithubTool implements AgentTool<typeof githubSchema, GhToolDetails> {
+	readonly name = "github";
+	readonly label = "GitHub";
+	readonly description = prompt.render(githubDescription);
+	readonly parameters = githubSchema;
 	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {}
 
-	static createIf(session: ToolSession): GhRepoViewTool | null {
+	static createIf(session: ToolSession): GithubTool | null {
 		if (!git.github.available()) return null;
-		return new GhRepoViewTool(session);
+		return new GithubTool(session);
 	}
 
 	async execute(
 		_toolCallId: string,
-		params: GhRepoViewInput,
-		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<GhToolDetails>,
-		_context?: AgentToolContext,
-	): Promise<AgentToolResult<GhToolDetails>> {
-		return untilAborted(signal, async () => {
-			const repo = normalizeOptionalString(params.repo);
-			const branch = normalizeOptionalString(params.branch);
-			const args = ["repo", "view"];
-			if (repo) {
-				args.push(repo);
-			}
-			if (branch) {
-				args.push("--branch", branch);
-			}
-			args.push("--json", GH_REPO_FIELDS.join(","));
-
-			const data = await git.github.json<GhRepoViewData>(this.session.cwd, args, signal, {
-				repoProvided: Boolean(repo),
-			});
-			return buildTextResult(formatRepoView(data, { repo, branch }), data.url);
-		});
-	}
-}
-
-export class GhIssueViewTool implements AgentTool<typeof ghIssueViewSchema, GhToolDetails> {
-	readonly name = "gh_issue_view";
-	readonly label = "GitHub Issue";
-	readonly description = prompt.render(ghIssueViewDescription);
-	readonly parameters = ghIssueViewSchema;
-	readonly strict = true;
-
-	constructor(private readonly session: ToolSession) {}
-
-	static createIf(session: ToolSession): GhIssueViewTool | null {
-		if (!git.github.available()) return null;
-		return new GhIssueViewTool(session);
-	}
-
-	async execute(
-		_toolCallId: string,
-		params: GhIssueViewInput,
-		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<GhToolDetails>,
-		_context?: AgentToolContext,
-	): Promise<AgentToolResult<GhToolDetails>> {
-		return untilAborted(signal, async () => {
-			const issue = requireNonEmpty(params.issue, "issue");
-			const repo = normalizeOptionalString(params.repo);
-			const includeComments = params.comments ?? true;
-			const args = ["issue", "view", issue];
-			appendRepoFlag(args, repo, issue);
-			args.push("--json", (includeComments ? GH_ISSUE_FIELDS : GH_ISSUE_FIELDS_NO_COMMENTS).join(","));
-
-			const data = await git.github.json<GhIssueViewData>(this.session.cwd, args, signal, {
-				repoProvided: Boolean(repo),
-			});
-			return buildTextResult(formatIssueView(data, { issue, repo, comments: includeComments }), data.url);
-		});
-	}
-}
-
-export class GhPrViewTool implements AgentTool<typeof ghPrViewSchema, GhToolDetails> {
-	readonly name = "gh_pr_view";
-	readonly label = "GitHub PR";
-	readonly description = prompt.render(ghPrViewDescription);
-	readonly parameters = ghPrViewSchema;
-	readonly strict = true;
-
-	constructor(private readonly session: ToolSession) {}
-
-	static createIf(session: ToolSession): GhPrViewTool | null {
-		if (!git.github.available()) return null;
-		return new GhPrViewTool(session);
-	}
-
-	async execute(
-		_toolCallId: string,
-		params: GhPrViewInput,
-		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<GhToolDetails>,
-		_context?: AgentToolContext,
-	): Promise<AgentToolResult<GhToolDetails>> {
-		return untilAborted(signal, async () => {
-			const pr = normalizeOptionalString(params.pr);
-			const repo = normalizeOptionalString(params.repo);
-			const includeComments = params.comments ?? true;
-			const args = ["pr", "view"];
-			if (pr) {
-				args.push(pr);
-			}
-			appendRepoFlag(args, repo, pr);
-			args.push("--json", (includeComments ? GH_PR_FIELDS : GH_PR_FIELDS_NO_COMMENTS).join(","));
-
-			const data = await git.github.json<GhPrViewData>(this.session.cwd, args, signal, {
-				repoProvided: Boolean(repo),
-			});
-			const resolvedRepo = repo ?? parsePullRequestUrl(data.url).repo;
-			if (includeComments && resolvedRepo && typeof data.number === "number") {
-				data.reviewComments = await fetchPrReviewComments(this.session.cwd, resolvedRepo, data.number, signal);
-			}
-			return buildTextResult(formatPrView(data, { pr, repo, comments: includeComments }), data.url);
-		});
-	}
-}
-
-export class GhPrDiffTool implements AgentTool<typeof ghPrDiffSchema, GhToolDetails> {
-	readonly name = "gh_pr_diff";
-	readonly label = "GitHub PR Diff";
-	readonly description = prompt.render(ghPrDiffDescription);
-	readonly parameters = ghPrDiffSchema;
-	readonly strict = true;
-
-	constructor(private readonly session: ToolSession) {}
-
-	static createIf(session: ToolSession): GhPrDiffTool | null {
-		if (!git.github.available()) return null;
-		return new GhPrDiffTool(session);
-	}
-
-	async execute(
-		_toolCallId: string,
-		params: GhPrDiffInput,
-		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<GhToolDetails>,
-		_context?: AgentToolContext,
-	): Promise<AgentToolResult<GhToolDetails>> {
-		return untilAborted(signal, async () => {
-			const pr = normalizeOptionalString(params.pr);
-			const repo = normalizeOptionalString(params.repo);
-			const args = ["pr", "diff"];
-			if (pr) {
-				args.push(pr);
-			}
-			appendRepoFlag(args, repo, pr);
-			args.push("--color", "never");
-			if (params.nameOnly) {
-				args.push("--name-only");
-			}
-			for (const pattern of params.exclude ?? []) {
-				const normalizedPattern = requireNonEmpty(pattern, "exclude pattern");
-				args.push("--exclude", normalizedPattern);
-			}
-
-			const output = await git.github.text(this.session.cwd, args, signal, {
-				repoProvided: Boolean(repo),
-				trimOutput: false,
-			});
-			const title = params.nameOnly ? "# Pull Request Files" : "# Pull Request Diff";
-			const body = output.length > 0 ? output : params.nameOnly ? "No changed files." : "No diff output.";
-			return buildTextResult(`${title}\n\n${body}`);
-		});
-	}
-}
-
-export class GhPrCheckoutTool implements AgentTool<typeof ghPrCheckoutSchema, GhToolDetails> {
-	readonly name = "gh_pr_checkout";
-	readonly label = "GitHub PR Checkout";
-	readonly description = prompt.render(ghPrCheckoutDescription);
-	readonly parameters = ghPrCheckoutSchema;
-	readonly strict = true;
-
-	constructor(private readonly session: ToolSession) {}
-
-	static createIf(session: ToolSession): GhPrCheckoutTool | null {
-		if (!git.github.available()) return null;
-		return new GhPrCheckoutTool(session);
-	}
-
-	async execute(
-		_toolCallId: string,
-		params: GhPrCheckoutInput,
-		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<GhToolDetails>,
-		_context?: AgentToolContext,
-	): Promise<AgentToolResult<GhToolDetails>> {
-		return untilAborted(signal, async () => {
-			const pr = normalizeOptionalString(params.pr);
-			const repo = normalizeOptionalString(params.repo);
-			const requestedBranch = normalizeOptionalString(params.branch);
-			const requestedWorktree = normalizeOptionalString(params.worktree);
-			const force = params.force ?? false;
-			const args = ["pr", "view"];
-			if (pr) {
-				args.push(pr);
-			}
-			appendRepoFlag(args, repo, pr);
-			args.push("--json", GH_PR_CHECKOUT_FIELDS.join(","));
-
-			const data = await git.github.json<GhPrViewData>(this.session.cwd, args, signal, {
-				repoProvided: Boolean(repo),
-			});
-			const prNumber = data.number;
-			if (typeof prNumber !== "number") {
-				throw new ToolError("GitHub CLI did not return a pull request number.");
-			}
-
-			const headRefName = requireNonEmpty(data.headRefName, "head branch");
-			const headRefOid = requireNonEmpty(data.headRefOid, "head commit");
-			const repoRoot = await requireGitRepoRoot(this.session.cwd, signal);
-			const primaryRepoRoot = await requirePrimaryGitRepoRoot(repoRoot, signal);
-			const localBranch = requestedBranch ?? `pr-${prNumber}`;
-			const worktreePath = requestedWorktree
-				? path.resolve(this.session.cwd, requestedWorktree)
-				: path.join(primaryRepoRoot, ".worktrees", localBranch);
-			const existingWorktrees = await git.worktree.list(repoRoot, signal);
-			const existingWorktree = existingWorktrees.find(entry => entry.branch === toLocalBranchRef(localBranch));
-
-			const remote = await ensurePrRemote(repoRoot, data, signal);
-			await git.fetch(
-				repoRoot,
-				remote.name,
-				`refs/heads/${headRefName}`,
-				`refs/remotes/${remote.name}/${headRefName}`,
-				signal,
-			);
-
-			if (!existingWorktree) {
-				const localBranchRef = toLocalBranchRef(localBranch);
-				const localBranchExists = await git.ref.exists(repoRoot, localBranchRef, signal);
-				if (localBranchExists) {
-					const existingOid = await git.ref.resolve(repoRoot, localBranchRef, signal);
-					if (existingOid !== headRefOid) {
-						if (!force) {
-							throw new ToolError(
-								`local branch ${localBranch} already exists at ${formatShortSha(existingOid ?? undefined) ?? existingOid ?? "unknown commit"}; pass force=true to reset it`,
-							);
-						}
-
-						await git.branch.force(repoRoot, localBranch, `refs/remotes/${remote.name}/${headRefName}`, signal);
-					}
-				} else {
-					await git.branch.create(repoRoot, localBranch, `refs/remotes/${remote.name}/${headRefName}`, signal);
-				}
-			}
-
-			await git.config.setBranch(repoRoot, localBranch, "remote", remote.name, signal);
-			await git.config.setBranch(repoRoot, localBranch, "merge", `refs/heads/${headRefName}`, signal);
-			await git.config.setBranch(repoRoot, localBranch, "pushRemote", remote.name, signal);
-			await git.config.setBranch(repoRoot, localBranch, "ompPrHeadRef", headRefName, signal);
-			await git.config.setBranch(repoRoot, localBranch, "ompPrUrl", data.url ?? "", signal);
-			await git.config.setBranch(
-				repoRoot,
-				localBranch,
-				"ompPrIsCrossRepository",
-				String(Boolean(data.isCrossRepository)),
-				signal,
-			);
-			await git.config.setBranch(
-				repoRoot,
-				localBranch,
-				"ompPrMaintainerCanModify",
-				String(Boolean(data.maintainerCanModify)),
-				signal,
-			);
-
-			const finalWorktreePath = existingWorktree?.path ?? worktreePath;
-			if (!existingWorktree) {
-				await ensureGitWorktreePathAvailable(finalWorktreePath, existingWorktrees);
-				await fs.mkdir(path.dirname(finalWorktreePath), { recursive: true });
-				await git.worktree.add(repoRoot, finalWorktreePath, localBranch, { signal });
-			}
-			const resolvedWorktreePath = await fs.realpath(finalWorktreePath);
-
-			return buildTextResult(
-				formatPrCheckoutResult({
-					data,
-					localBranch,
-					worktreePath: resolvedWorktreePath,
-					remoteName: remote.name,
-					remoteUrl: remote.url,
-					reused: Boolean(existingWorktree),
-				}),
-				data.url,
-				{
-					repo: repo ?? data.headRepository?.nameWithOwner,
-					branch: localBranch,
-					worktreePath: resolvedWorktreePath,
-					remote: remote.name,
-					remoteBranch: headRefName,
-				},
-			);
-		});
-	}
-}
-
-export class GhPrPushTool implements AgentTool<typeof ghPrPushSchema, GhToolDetails> {
-	readonly name = "gh_pr_push";
-	readonly label = "GitHub PR Push";
-	readonly description = prompt.render(ghPrPushDescription);
-	readonly parameters = ghPrPushSchema;
-	readonly strict = true;
-
-	constructor(private readonly session: ToolSession) {}
-
-	static createIf(session: ToolSession): GhPrPushTool | null {
-		if (!git.github.available()) return null;
-		return new GhPrPushTool(session);
-	}
-
-	async execute(
-		_toolCallId: string,
-		params: GhPrPushInput,
-		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<GhToolDetails>,
-		_context?: AgentToolContext,
-	): Promise<AgentToolResult<GhToolDetails>> {
-		return untilAborted(signal, async () => {
-			const repoRoot = await requireGitRepoRoot(this.session.cwd, signal);
-			const localBranch =
-				normalizeOptionalString(params.branch) ?? (await requireCurrentGitBranch(repoRoot, signal));
-			const refExists = await git.ref.exists(repoRoot, toLocalBranchRef(localBranch), signal);
-			if (!refExists) {
-				throw new ToolError(`local branch ${localBranch} does not exist`);
-			}
-
-			const target = await resolvePrBranchPushTarget(repoRoot, localBranch, signal);
-			const currentBranch = await git.branch.current(repoRoot, signal);
-			const sourceRef = currentBranch === localBranch ? "HEAD" : toLocalBranchRef(localBranch);
-			const refspec = `${sourceRef}:refs/heads/${target.remoteBranch}`;
-			await git.push(repoRoot, {
-				forceWithLease: params.forceWithLease,
-				refspec,
-				remote: target.remoteName,
-				signal,
-			});
-
-			return buildTextResult(
-				formatPrPushResult({
-					localBranch,
-					remoteName: target.remoteName,
-					remoteBranch: target.remoteBranch,
-					remoteUrl: target.remoteUrl,
-					prUrl: target.prUrl,
-					forceWithLease: params.forceWithLease ?? false,
-				}),
-				target.prUrl,
-				{
-					branch: localBranch,
-					remote: target.remoteName,
-					remoteBranch: target.remoteBranch,
-				},
-			);
-		});
-	}
-}
-
-export class GhSearchIssuesTool implements AgentTool<typeof ghSearchIssuesSchema, GhToolDetails> {
-	readonly name = "gh_search_issues";
-	readonly label = "GitHub Issue Search";
-	readonly description = prompt.render(ghSearchIssuesDescription);
-	readonly parameters = ghSearchIssuesSchema;
-	readonly strict = true;
-
-	constructor(private readonly session: ToolSession) {}
-
-	static createIf(session: ToolSession): GhSearchIssuesTool | null {
-		if (!git.github.available()) return null;
-		return new GhSearchIssuesTool(session);
-	}
-
-	async execute(
-		_toolCallId: string,
-		params: GhSearchIssuesInput,
-		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<GhToolDetails>,
-		_context?: AgentToolContext,
-	): Promise<AgentToolResult<GhToolDetails>> {
-		return untilAborted(signal, async () => {
-			const query = requireNonEmpty(params.query, "query");
-			const repo = normalizeOptionalString(params.repo);
-			const limit = resolveSearchLimit(params.limit);
-			const args = buildGhSearchArgs("issues", query, limit, repo);
-
-			const items = await git.github.json<GhSearchResult[]>(this.session.cwd, args, signal, {
-				repoProvided: Boolean(repo),
-			});
-			return buildTextResult(formatSearchResults("issues", query, repo, items));
-		});
-	}
-}
-
-export class GhSearchPrsTool implements AgentTool<typeof ghSearchPrsSchema, GhToolDetails> {
-	readonly name = "gh_search_prs";
-	readonly label = "GitHub PR Search";
-	readonly description = prompt.render(ghSearchPrsDescription);
-	readonly parameters = ghSearchPrsSchema;
-	readonly strict = true;
-
-	constructor(private readonly session: ToolSession) {}
-
-	static createIf(session: ToolSession): GhSearchPrsTool | null {
-		if (!git.github.available()) return null;
-		return new GhSearchPrsTool(session);
-	}
-
-	async execute(
-		_toolCallId: string,
-		params: GhSearchPrsInput,
-		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<GhToolDetails>,
-		_context?: AgentToolContext,
-	): Promise<AgentToolResult<GhToolDetails>> {
-		return untilAborted(signal, async () => {
-			const query = requireNonEmpty(params.query, "query");
-			const repo = normalizeOptionalString(params.repo);
-			const limit = resolveSearchLimit(params.limit);
-			const args = buildGhSearchArgs("prs", query, limit, repo);
-
-			const items = await git.github.json<GhSearchResult[]>(this.session.cwd, args, signal, {
-				repoProvided: Boolean(repo),
-			});
-			return buildTextResult(formatSearchResults("pull requests", query, repo, items));
-		});
-	}
-}
-
-export class GhRunWatchTool implements AgentTool<typeof ghRunWatchSchema, GhToolDetails> {
-	readonly name = "gh_run_watch";
-	readonly label = "GitHub Run Watch";
-	readonly description = prompt.render(ghRunWatchDescription);
-	readonly parameters = ghRunWatchSchema;
-	readonly strict = true;
-
-	constructor(private readonly session: ToolSession) {}
-
-	static createIf(session: ToolSession): GhRunWatchTool | null {
-		if (!git.github.available()) return null;
-		return new GhRunWatchTool(session);
-	}
-
-	async execute(
-		_toolCallId: string,
-		params: GhRunWatchInput,
+		params: GithubInput,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<GhToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<GhToolDetails>> {
 		return untilAborted(signal, async () => {
-			const branchInput = normalizeOptionalString(params.branch);
-			const runReference = parseRunReference(params.run);
-			const repo = await resolveGitHubRepo(this.session.cwd, undefined, runReference.repo, signal);
-			const intervalSeconds = RUN_WATCH_INTERVAL_DEFAULT;
-			const graceSeconds = RUN_WATCH_GRACE_DEFAULT;
-			const tail = resolveTailLimit(params.tail);
-			if (runReference.runId !== undefined) {
-				const runId = runReference.runId;
-				let pollCount = 0;
-
-				while (true) {
-					throwIfAborted(signal);
-					pollCount += 1;
-
-					let run = await fetchRunSnapshot(this.session.cwd, repo, runId, signal);
-					const details = buildRunWatchDetails(repo, run, {
-						state: "watching",
-						pollCount,
-					});
-					onUpdate?.({
-						content: [{ type: "text", text: formatRunWatchSnapshot(repo, run, pollCount) }],
-						details,
-					});
-
-					const failedJobs = run.jobs.filter(isFailedJob);
-					const runCompleted = run.status === "completed";
-
-					if (failedJobs.length > 0) {
-						if (!runCompleted && graceSeconds > 0) {
-							const note = `Failure detected. Waiting ${graceSeconds}s to capture concurrent failures before fetching logs.`;
-							onUpdate?.({
-								content: [
-									{
-										type: "text",
-										text: formatRunWatchSnapshot(repo, run, pollCount, note),
-									},
-								],
-								details: buildRunWatchDetails(repo, run, {
-									state: "watching",
-									pollCount,
-									note,
-								}),
-							});
-							await abortableSleep(graceSeconds * 1000, signal);
-							run = await fetchRunSnapshot(this.session.cwd, repo, runId, signal);
-						}
-
-						const failedJobLogs = await fetchFailedJobLogs(
-							this.session.cwd,
-							repo,
-							run.jobs.filter(isFailedJob).map(job => ({ run, job })),
-							tail,
-							signal,
-						);
-						const finalDetails = buildRunWatchDetails(repo, run, {
-							state: "completed",
-							failedJobLogs,
-						});
-						const artifactId = await saveArtifactText(
-							this.session,
-							this.name,
-							formatRunWatchResult(repo, run, failedJobLogs, tail, { mode: "full" }),
-						);
-						return buildTextResult(
-							formatRunWatchResult(repo, run, failedJobLogs, tail),
-							run.url,
-							{ ...finalDetails, artifactId },
-							{ artifactId, artifactLabel: "Full failed-job logs" },
-						);
-					}
-
-					if (runCompleted) {
-						const finalDetails = buildRunWatchDetails(repo, run, {
-							state: "completed",
-						});
-						return buildTextResult(formatRunWatchResult(repo, run, [], tail), run.url, finalDetails);
-					}
-
-					await abortableSleep(intervalSeconds * 1000, signal);
-				}
+			switch (params.op) {
+				case "repo_view":
+					return executeRepoView(this.session, params, signal);
+				case "issue_view":
+					return executeIssueView(this.session, params, signal);
+				case "pr_view":
+					return executePrView(this.session, params, signal);
+				case "pr_diff":
+					return executePrDiff(this.session, params, signal);
+				case "pr_checkout":
+					return executePrCheckout(this.session, params, signal);
+				case "pr_push":
+					return executePrPush(this.session, params, signal);
+				case "search_issues":
+					return executeSearchIssues(this.session, params, signal);
+				case "search_prs":
+					return executeSearchPrs(this.session, params, signal);
+				case "run_watch":
+					return executeRunWatch(this.session, this.name, params, signal, onUpdate);
 			}
+		});
+	}
+}
 
-			const branch = branchInput ?? (await requireCurrentGitBranch(this.session.cwd, signal));
-			const headSha = branchInput
-				? await resolveGitHubBranchHead(this.session.cwd, repo, branch, signal)
-				: await requireCurrentGitHead(this.session.cwd, signal);
-			let pollCount = 0;
-			let settledSuccessSignature: string | undefined;
+async function executeRepoView(
+	session: ToolSession,
+	params: GithubInput,
+	signal: AbortSignal | undefined,
+): Promise<AgentToolResult<GhToolDetails>> {
+	const repo = normalizeOptionalString(params.repo);
+	const branch = normalizeOptionalString(params.branch);
+	const args = ["repo", "view"];
+	if (repo) {
+		args.push(repo);
+	}
+	if (branch) {
+		args.push("--branch", branch);
+	}
+	args.push("--json", GH_REPO_FIELDS.join(","));
 
-			while (true) {
-				throwIfAborted(signal);
-				pollCount += 1;
+	const data = await git.github.json<GhRepoViewData>(session.cwd, args, signal, {
+		repoProvided: Boolean(repo),
+	});
+	return buildTextResult(formatRepoView(data, { repo, branch }), data.url);
+}
 
-				let runs = await fetchRunsForCommit(this.session.cwd, repo, headSha, branch, signal);
-				const details = buildCommitRunWatchDetails(repo, headSha, branch, runs, {
-					state: "watching",
-					pollCount,
-				});
-				onUpdate?.({
-					content: [{ type: "text", text: formatCommitRunWatchSnapshot(repo, headSha, branch, runs, pollCount) }],
-					details,
-				});
+async function executeIssueView(
+	session: ToolSession,
+	params: GithubInput,
+	signal: AbortSignal | undefined,
+): Promise<AgentToolResult<GhToolDetails>> {
+	const issue = requireNonEmpty(params.issue, "issue");
+	const repo = normalizeOptionalString(params.repo);
+	const includeComments = params.comments ?? true;
+	const args = ["issue", "view", issue];
+	appendRepoFlag(args, repo, issue);
+	args.push("--json", (includeComments ? GH_ISSUE_FIELDS : GH_ISSUE_FIELDS_NO_COMMENTS).join(","));
 
-				const outcome = getRunCollectionOutcome(runs);
-				if (outcome === "failure") {
-					if (graceSeconds > 0) {
-						const note = `Failure detected. Waiting ${graceSeconds}s to capture concurrent failures before fetching logs.`;
-						onUpdate?.({
-							content: [
-								{
-									type: "text",
-									text: formatCommitRunWatchSnapshot(repo, headSha, branch, runs, pollCount, note),
-								},
-							],
-							details: buildCommitRunWatchDetails(repo, headSha, branch, runs, {
-								state: "watching",
-								pollCount,
-								note,
-							}),
-						});
-						await abortableSleep(graceSeconds * 1000, signal);
-						runs = await fetchRunsForCommit(this.session.cwd, repo, headSha, branch, signal);
-					}
+	const data = await git.github.json<GhIssueViewData>(session.cwd, args, signal, {
+		repoProvided: Boolean(repo),
+	});
+	return buildTextResult(formatIssueView(data, { issue, repo, comments: includeComments }), data.url);
+}
 
-					const failedJobLogs = await fetchFailedJobLogs(
-						this.session.cwd,
-						repo,
-						runs.flatMap(run => run.jobs.filter(isFailedJob).map(job => ({ run, job }))),
-						tail,
-						signal,
-					);
-					const finalDetails = buildCommitRunWatchDetails(repo, headSha, branch, runs, {
-						state: "completed",
-						failedJobLogs,
-					});
-					const artifactId = await saveArtifactText(
-						this.session,
-						this.name,
-						formatCommitRunWatchResult(repo, headSha, branch, runs, failedJobLogs, tail, { mode: "full" }),
-					);
-					return buildTextResult(
-						formatCommitRunWatchResult(repo, headSha, branch, runs, failedJobLogs, tail),
-						undefined,
-						{ ...finalDetails, artifactId },
-						{ artifactId, artifactLabel: "Full failed-job logs" },
+async function executePrView(
+	session: ToolSession,
+	params: GithubInput,
+	signal: AbortSignal | undefined,
+): Promise<AgentToolResult<GhToolDetails>> {
+	const pr = normalizeOptionalString(params.pr);
+	const repo = normalizeOptionalString(params.repo);
+	const includeComments = params.comments ?? true;
+	const args = ["pr", "view"];
+	if (pr) {
+		args.push(pr);
+	}
+	appendRepoFlag(args, repo, pr);
+	args.push("--json", (includeComments ? GH_PR_FIELDS : GH_PR_FIELDS_NO_COMMENTS).join(","));
+
+	const data = await git.github.json<GhPrViewData>(session.cwd, args, signal, {
+		repoProvided: Boolean(repo),
+	});
+	const resolvedRepo = repo ?? parsePullRequestUrl(data.url).repo;
+	if (includeComments && resolvedRepo && typeof data.number === "number") {
+		data.reviewComments = await fetchPrReviewComments(session.cwd, resolvedRepo, data.number, signal);
+	}
+	return buildTextResult(formatPrView(data, { pr, repo, comments: includeComments }), data.url);
+}
+
+async function executePrDiff(
+	session: ToolSession,
+	params: GithubInput,
+	signal: AbortSignal | undefined,
+): Promise<AgentToolResult<GhToolDetails>> {
+	const pr = normalizeOptionalString(params.pr);
+	const repo = normalizeOptionalString(params.repo);
+	const args = ["pr", "diff"];
+	if (pr) {
+		args.push(pr);
+	}
+	appendRepoFlag(args, repo, pr);
+	args.push("--color", "never");
+	if (params.nameOnly) {
+		args.push("--name-only");
+	}
+	for (const pattern of params.exclude ?? []) {
+		const normalizedPattern = requireNonEmpty(pattern, "exclude pattern");
+		args.push("--exclude", normalizedPattern);
+	}
+
+	const output = await git.github.text(session.cwd, args, signal, {
+		repoProvided: Boolean(repo),
+		trimOutput: false,
+	});
+	const title = params.nameOnly ? "# Pull Request Files" : "# Pull Request Diff";
+	const body = output.length > 0 ? output : params.nameOnly ? "No changed files." : "No diff output.";
+	return buildTextResult(`${title}\n\n${body}`);
+}
+
+async function executePrCheckout(
+	session: ToolSession,
+	params: GithubInput,
+	signal: AbortSignal | undefined,
+): Promise<AgentToolResult<GhToolDetails>> {
+	const pr = normalizeOptionalString(params.pr);
+	const repo = normalizeOptionalString(params.repo);
+	const requestedBranch = normalizeOptionalString(params.branch);
+	const requestedWorktree = normalizeOptionalString(params.worktree);
+	const force = params.force ?? false;
+	const args = ["pr", "view"];
+	if (pr) {
+		args.push(pr);
+	}
+	appendRepoFlag(args, repo, pr);
+	args.push("--json", GH_PR_CHECKOUT_FIELDS.join(","));
+
+	const data = await git.github.json<GhPrViewData>(session.cwd, args, signal, {
+		repoProvided: Boolean(repo),
+	});
+	const prNumber = data.number;
+	if (typeof prNumber !== "number") {
+		throw new ToolError("GitHub CLI did not return a pull request number.");
+	}
+
+	const headRefName = requireNonEmpty(data.headRefName, "head branch");
+	const headRefOid = requireNonEmpty(data.headRefOid, "head commit");
+	const repoRoot = await requireGitRepoRoot(session.cwd, signal);
+	const primaryRepoRoot = await requirePrimaryGitRepoRoot(repoRoot, signal);
+	const localBranch = requestedBranch ?? `pr-${prNumber}`;
+	const worktreePath = requestedWorktree
+		? path.resolve(session.cwd, requestedWorktree)
+		: path.join(primaryRepoRoot, ".worktrees", localBranch);
+	const existingWorktrees = await git.worktree.list(repoRoot, signal);
+	const existingWorktree = existingWorktrees.find(entry => entry.branch === toLocalBranchRef(localBranch));
+
+	const remote = await ensurePrRemote(repoRoot, data, signal);
+	await git.fetch(
+		repoRoot,
+		remote.name,
+		`refs/heads/${headRefName}`,
+		`refs/remotes/${remote.name}/${headRefName}`,
+		signal,
+	);
+
+	if (!existingWorktree) {
+		const localBranchRef = toLocalBranchRef(localBranch);
+		const localBranchExists = await git.ref.exists(repoRoot, localBranchRef, signal);
+		if (localBranchExists) {
+			const existingOid = await git.ref.resolve(repoRoot, localBranchRef, signal);
+			if (existingOid !== headRefOid) {
+				if (!force) {
+					throw new ToolError(
+						`local branch ${localBranch} already exists at ${formatShortSha(existingOid ?? undefined) ?? existingOid ?? "unknown commit"}; pass force=true to reset it`,
 					);
 				}
 
-				if (outcome === "success") {
-					const signature = getRunCollectionSignature(runs);
-					if (signature === settledSuccessSignature) {
-						const finalDetails = buildCommitRunWatchDetails(repo, headSha, branch, runs, {
-							state: "completed",
-						});
-						return buildTextResult(
-							formatCommitRunWatchResult(repo, headSha, branch, runs, [], tail),
-							undefined,
-							finalDetails,
-						);
-					}
+				await git.branch.force(repoRoot, localBranch, `refs/remotes/${remote.name}/${headRefName}`, signal);
+			}
+		} else {
+			await git.branch.create(repoRoot, localBranch, `refs/remotes/${remote.name}/${headRefName}`, signal);
+		}
+	}
 
-					settledSuccessSignature = signature;
-					const note = `All known workflow runs completed successfully. Waiting ${intervalSeconds}s to ensure no additional runs appear for this commit.`;
+	await git.config.setBranch(repoRoot, localBranch, "remote", remote.name, signal);
+	await git.config.setBranch(repoRoot, localBranch, "merge", `refs/heads/${headRefName}`, signal);
+	await git.config.setBranch(repoRoot, localBranch, "pushRemote", remote.name, signal);
+	await git.config.setBranch(repoRoot, localBranch, "ompPrHeadRef", headRefName, signal);
+	await git.config.setBranch(repoRoot, localBranch, "ompPrUrl", data.url ?? "", signal);
+	await git.config.setBranch(
+		repoRoot,
+		localBranch,
+		"ompPrIsCrossRepository",
+		String(Boolean(data.isCrossRepository)),
+		signal,
+	);
+	await git.config.setBranch(
+		repoRoot,
+		localBranch,
+		"ompPrMaintainerCanModify",
+		String(Boolean(data.maintainerCanModify)),
+		signal,
+	);
+
+	const finalWorktreePath = existingWorktree?.path ?? worktreePath;
+	if (!existingWorktree) {
+		await ensureGitWorktreePathAvailable(finalWorktreePath, existingWorktrees);
+		await fs.mkdir(path.dirname(finalWorktreePath), { recursive: true });
+		await git.worktree.add(repoRoot, finalWorktreePath, localBranch, { signal });
+	}
+	const resolvedWorktreePath = await fs.realpath(finalWorktreePath);
+
+	return buildTextResult(
+		formatPrCheckoutResult({
+			data,
+			localBranch,
+			worktreePath: resolvedWorktreePath,
+			remoteName: remote.name,
+			remoteUrl: remote.url,
+			reused: Boolean(existingWorktree),
+		}),
+		data.url,
+		{
+			repo: repo ?? data.headRepository?.nameWithOwner,
+			branch: localBranch,
+			worktreePath: resolvedWorktreePath,
+			remote: remote.name,
+			remoteBranch: headRefName,
+		},
+	);
+}
+
+async function executePrPush(
+	session: ToolSession,
+	params: GithubInput,
+	signal: AbortSignal | undefined,
+): Promise<AgentToolResult<GhToolDetails>> {
+	const repoRoot = await requireGitRepoRoot(session.cwd, signal);
+	const localBranch = normalizeOptionalString(params.branch) ?? (await requireCurrentGitBranch(repoRoot, signal));
+	const refExists = await git.ref.exists(repoRoot, toLocalBranchRef(localBranch), signal);
+	if (!refExists) {
+		throw new ToolError(`local branch ${localBranch} does not exist`);
+	}
+
+	const target = await resolvePrBranchPushTarget(repoRoot, localBranch, signal);
+	const currentBranch = await git.branch.current(repoRoot, signal);
+	const sourceRef = currentBranch === localBranch ? "HEAD" : toLocalBranchRef(localBranch);
+	const refspec = `${sourceRef}:refs/heads/${target.remoteBranch}`;
+	await git.push(repoRoot, {
+		forceWithLease: params.forceWithLease,
+		refspec,
+		remote: target.remoteName,
+		signal,
+	});
+
+	return buildTextResult(
+		formatPrPushResult({
+			localBranch,
+			remoteName: target.remoteName,
+			remoteBranch: target.remoteBranch,
+			remoteUrl: target.remoteUrl,
+			prUrl: target.prUrl,
+			forceWithLease: params.forceWithLease ?? false,
+		}),
+		target.prUrl,
+		{
+			branch: localBranch,
+			remote: target.remoteName,
+			remoteBranch: target.remoteBranch,
+		},
+	);
+}
+
+async function executeSearchIssues(
+	session: ToolSession,
+	params: GithubInput,
+	signal: AbortSignal | undefined,
+): Promise<AgentToolResult<GhToolDetails>> {
+	const query = requireNonEmpty(params.query, "query");
+	const repo = normalizeOptionalString(params.repo);
+	const limit = resolveSearchLimit(params.limit);
+	const args = buildGhSearchArgs("issues", query, limit, repo);
+
+	const items = await git.github.json<GhSearchResult[]>(session.cwd, args, signal, {
+		repoProvided: Boolean(repo),
+	});
+	return buildTextResult(formatSearchResults("issues", query, repo, items));
+}
+
+async function executeSearchPrs(
+	session: ToolSession,
+	params: GithubInput,
+	signal: AbortSignal | undefined,
+): Promise<AgentToolResult<GhToolDetails>> {
+	const query = requireNonEmpty(params.query, "query");
+	const repo = normalizeOptionalString(params.repo);
+	const limit = resolveSearchLimit(params.limit);
+	const args = buildGhSearchArgs("prs", query, limit, repo);
+
+	const items = await git.github.json<GhSearchResult[]>(session.cwd, args, signal, {
+		repoProvided: Boolean(repo),
+	});
+	return buildTextResult(formatSearchResults("pull requests", query, repo, items));
+}
+
+async function executeRunWatch(
+	session: ToolSession,
+	toolName: string,
+	params: GithubInput,
+	signal: AbortSignal | undefined,
+	onUpdate: AgentToolUpdateCallback<GhToolDetails> | undefined,
+): Promise<AgentToolResult<GhToolDetails>> {
+	const branchInput = normalizeOptionalString(params.branch);
+	const runReference = parseRunReference(params.run);
+	const repo = await resolveGitHubRepo(session.cwd, undefined, runReference.repo, signal);
+	const intervalSeconds = RUN_WATCH_INTERVAL_DEFAULT;
+	const graceSeconds = RUN_WATCH_GRACE_DEFAULT;
+	const tail = resolveTailLimit(params.tail);
+	if (runReference.runId !== undefined) {
+		const runId = runReference.runId;
+		let pollCount = 0;
+
+		while (true) {
+			throwIfAborted(signal);
+			pollCount += 1;
+
+			let run = await fetchRunSnapshot(session.cwd, repo, runId, signal);
+			const details = buildRunWatchDetails(repo, run, {
+				state: "watching",
+				pollCount,
+			});
+			onUpdate?.({
+				content: [{ type: "text", text: formatRunWatchSnapshot(repo, run, pollCount) }],
+				details,
+			});
+
+			const failedJobs = run.jobs.filter(isFailedJob);
+			const runCompleted = run.status === "completed";
+
+			if (failedJobs.length > 0) {
+				if (!runCompleted && graceSeconds > 0) {
+					const note = `Failure detected. Waiting ${graceSeconds}s to capture concurrent failures before fetching logs.`;
 					onUpdate?.({
 						content: [
 							{
 								type: "text",
-								text: formatCommitRunWatchSnapshot(repo, headSha, branch, runs, pollCount, note),
+								text: formatRunWatchSnapshot(repo, run, pollCount, note),
 							},
 						],
-						details: buildCommitRunWatchDetails(repo, headSha, branch, runs, {
+						details: buildRunWatchDetails(repo, run, {
 							state: "watching",
 							pollCount,
 							note,
 						}),
 					});
-					await abortableSleep(intervalSeconds * 1000, signal);
-					continue;
+					await abortableSleep(graceSeconds * 1000, signal);
+					run = await fetchRunSnapshot(session.cwd, repo, runId, signal);
 				}
 
-				settledSuccessSignature = undefined;
-				await abortableSleep(intervalSeconds * 1000, signal);
+				const failedJobLogs = await fetchFailedJobLogs(
+					session.cwd,
+					repo,
+					run.jobs.filter(isFailedJob).map(job => ({ run, job })),
+					tail,
+					signal,
+				);
+				const finalDetails = buildRunWatchDetails(repo, run, {
+					state: "completed",
+					failedJobLogs,
+				});
+				const artifactId = await saveArtifactText(
+					session,
+					toolName,
+					formatRunWatchResult(repo, run, failedJobLogs, tail, { mode: "full" }),
+				);
+				return buildTextResult(
+					formatRunWatchResult(repo, run, failedJobLogs, tail),
+					run.url,
+					{ ...finalDetails, artifactId },
+					{ artifactId, artifactLabel: "Full failed-job logs" },
+				);
 			}
+
+			if (runCompleted) {
+				const finalDetails = buildRunWatchDetails(repo, run, {
+					state: "completed",
+				});
+				return buildTextResult(formatRunWatchResult(repo, run, [], tail), run.url, finalDetails);
+			}
+
+			await abortableSleep(intervalSeconds * 1000, signal);
+		}
+	}
+
+	const branch = branchInput ?? (await requireCurrentGitBranch(session.cwd, signal));
+	const headSha = branchInput
+		? await resolveGitHubBranchHead(session.cwd, repo, branch, signal)
+		: await requireCurrentGitHead(session.cwd, signal);
+	let pollCount = 0;
+	let settledSuccessSignature: string | undefined;
+
+	while (true) {
+		throwIfAborted(signal);
+		pollCount += 1;
+
+		let runs = await fetchRunsForCommit(session.cwd, repo, headSha, branch, signal);
+		const details = buildCommitRunWatchDetails(repo, headSha, branch, runs, {
+			state: "watching",
+			pollCount,
 		});
+		onUpdate?.({
+			content: [{ type: "text", text: formatCommitRunWatchSnapshot(repo, headSha, branch, runs, pollCount) }],
+			details,
+		});
+
+		const outcome = getRunCollectionOutcome(runs);
+		if (outcome === "failure") {
+			if (graceSeconds > 0) {
+				const note = `Failure detected. Waiting ${graceSeconds}s to capture concurrent failures before fetching logs.`;
+				onUpdate?.({
+					content: [
+						{
+							type: "text",
+							text: formatCommitRunWatchSnapshot(repo, headSha, branch, runs, pollCount, note),
+						},
+					],
+					details: buildCommitRunWatchDetails(repo, headSha, branch, runs, {
+						state: "watching",
+						pollCount,
+						note,
+					}),
+				});
+				await abortableSleep(graceSeconds * 1000, signal);
+				runs = await fetchRunsForCommit(session.cwd, repo, headSha, branch, signal);
+			}
+
+			const failedJobLogs = await fetchFailedJobLogs(
+				session.cwd,
+				repo,
+				runs.flatMap(run => run.jobs.filter(isFailedJob).map(job => ({ run, job }))),
+				tail,
+				signal,
+			);
+			const finalDetails = buildCommitRunWatchDetails(repo, headSha, branch, runs, {
+				state: "completed",
+				failedJobLogs,
+			});
+			const artifactId = await saveArtifactText(
+				session,
+				toolName,
+				formatCommitRunWatchResult(repo, headSha, branch, runs, failedJobLogs, tail, { mode: "full" }),
+			);
+			return buildTextResult(
+				formatCommitRunWatchResult(repo, headSha, branch, runs, failedJobLogs, tail),
+				undefined,
+				{ ...finalDetails, artifactId },
+				{ artifactId, artifactLabel: "Full failed-job logs" },
+			);
+		}
+
+		if (outcome === "success") {
+			const signature = getRunCollectionSignature(runs);
+			if (signature === settledSuccessSignature) {
+				const finalDetails = buildCommitRunWatchDetails(repo, headSha, branch, runs, {
+					state: "completed",
+				});
+				return buildTextResult(
+					formatCommitRunWatchResult(repo, headSha, branch, runs, [], tail),
+					undefined,
+					finalDetails,
+				);
+			}
+
+			settledSuccessSignature = signature;
+			const note = `All known workflow runs completed successfully. Waiting ${intervalSeconds}s to ensure no additional runs appear for this commit.`;
+			onUpdate?.({
+				content: [
+					{
+						type: "text",
+						text: formatCommitRunWatchSnapshot(repo, headSha, branch, runs, pollCount, note),
+					},
+				],
+				details: buildCommitRunWatchDetails(repo, headSha, branch, runs, {
+					state: "watching",
+					pollCount,
+					note,
+				}),
+			});
+			await abortableSleep(intervalSeconds * 1000, signal);
+			continue;
+		}
+
+		settledSuccessSignature = undefined;
+		await abortableSleep(intervalSeconds * 1000, signal);
 	}
 }

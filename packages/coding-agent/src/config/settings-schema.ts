@@ -1349,7 +1349,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "GitHub CLI",
 			description:
-				"Enable gh_* tools for GitHub repository, issue, pull request, diff, search, checkout, and PR push workflows",
+				"Enable the github tool (op-based dispatch for repository, issue, pull request, diff, search, checkout, push, and Actions watch workflows)",
 		},
 	},
 

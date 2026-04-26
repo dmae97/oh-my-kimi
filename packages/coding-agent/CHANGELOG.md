@@ -1,6 +1,18 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Replaced the legacy `gh_repo_view`, `gh_issue_view`, `gh_pr_view`, `gh_pr_diff`, `gh_pr_checkout`, `gh_pr_push`, `gh_run_watch`, `gh_search_issues`, and `gh_search_prs` tool names with only `github`, which requires updating existing callers that invoked the old `gh_*` tools
+
+### Added
+
+- Added the unified `github` tool with op-based dispatch for repository, issue, pull request, search, checkout, push, and Actions watch workflows
+- Added `op` routing so callers can select `repo_view`, `issue_view`, `pr_view`, `pr_diff`, `pr_checkout`, `pr_push`, `search_issues`, `search_prs`, or `run_watch` through a single tool entry point
+
+### Changed
+
+- Updated GitHub CLI render output to show `GitHub <op>` for tool calls dispatched through `github` operations
 
 ## [14.4.0] - 2026-04-26
 

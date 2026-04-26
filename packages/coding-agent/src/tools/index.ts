@@ -29,17 +29,7 @@ import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 import { DebugTool } from "./debug";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FindTool } from "./find";
-import {
-	GhIssueViewTool,
-	GhPrCheckoutTool,
-	GhPrDiffTool,
-	GhPrPushTool,
-	GhPrViewTool,
-	GhRepoViewTool,
-	GhRunWatchTool,
-	GhSearchIssuesTool,
-	GhSearchPrsTool,
-} from "./gh";
+import { GithubTool } from "./gh";
 import { GrepTool } from "./grep";
 import { InspectImageTool } from "./inspect-image";
 import { NotebookTool } from "./notebook";
@@ -217,15 +207,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	calc: s => new CalculatorTool(s),
 	ssh: loadSshTool,
 	edit: s => new EditTool(s),
-	gh_repo_view: GhRepoViewTool.createIf,
-	gh_issue_view: GhIssueViewTool.createIf,
-	gh_pr_view: GhPrViewTool.createIf,
-	gh_pr_diff: GhPrDiffTool.createIf,
-	gh_pr_checkout: GhPrCheckoutTool.createIf,
-	gh_pr_push: GhPrPushTool.createIf,
-	gh_run_watch: GhRunWatchTool.createIf,
-	gh_search_issues: GhSearchIssuesTool.createIf,
-	gh_search_prs: GhSearchPrsTool.createIf,
+	github: GithubTool.createIf,
 	find: s => new FindTool(s),
 	grep: s => new GrepTool(s),
 	lsp: LspTool.createIf,
@@ -393,7 +375,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "todo_write") return !includeYield && session.settings.get("todo.enabled");
 		if (name === "find") return session.settings.get("find.enabled");
 		if (name === "grep") return session.settings.get("grep.enabled");
-		if (name.startsWith("gh_")) return session.settings.get("github.enabled");
+		if (name === "github") return session.settings.get("github.enabled");
 		if (name === "ast_grep") return session.settings.get("astGrep.enabled");
 		if (name === "ast_edit") return session.settings.get("astEdit.enabled");
 		if (name === "render_mermaid") return session.settings.get("renderMermaid.enabled");

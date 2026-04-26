@@ -6,17 +6,7 @@ import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import {
-	GhIssueViewTool,
-	GhPrCheckoutTool,
-	GhPrDiffTool,
-	GhPrPushTool,
-	GhPrViewTool,
-	GhRepoViewTool,
-	GhRunWatchTool,
-	GhSearchIssuesTool,
-	GhSearchPrsTool,
-} from "@oh-my-pi/pi-coding-agent/tools/gh";
+import { GithubTool } from "@oh-my-pi/pi-coding-agent/tools/gh";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 
@@ -125,7 +115,7 @@ async function createPrFixture(): Promise<{
 	};
 }
 
-describe("GitHub CLI tools", () => {
+describe("github tool", () => {
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
@@ -149,8 +139,8 @@ describe("GitHub CLI tools", () => {
 			visibility: "PUBLIC",
 		});
 
-		const tool = new GhRepoViewTool(createSession());
-		const result = await tool.execute("repo-view", { repo: "cli/cli" });
+		const tool = new GithubTool(createSession());
+		const result = await tool.execute("repo-view", { op: "repo_view", repo: "cli/cli" });
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
 		expect(text).toContain("# cli/cli");
@@ -191,8 +181,13 @@ describe("GitHub CLI tools", () => {
 			],
 		});
 
-		const tool = new GhIssueViewTool(createSession());
-		const result = await tool.execute("issue-view", { issue: "42", repo: "cli/cli", comments: true });
+		const tool = new GithubTool(createSession());
+		const result = await tool.execute("issue-view", {
+			op: "issue_view",
+			issue: "42",
+			repo: "cli/cli",
+			comments: true,
+		});
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
 		expect(text).toContain("# Issue #42: Example issue");
@@ -249,8 +244,13 @@ describe("GitHub CLI tools", () => {
 			} as never;
 		});
 
-		const tool = new GhPrViewTool(createSession());
-		const result = await tool.execute("pr-view", { pr: "12", repo: "cli/cli", comments: true });
+		const tool = new GithubTool(createSession());
+		const result = await tool.execute("pr-view", {
+			op: "pr_view",
+			pr: "12",
+			repo: "cli/cli",
+			comments: true,
+		});
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
 		expect(text).toContain("## Reviews (1)");
@@ -289,8 +289,13 @@ describe("GitHub CLI tools", () => {
 			},
 		]);
 
-		const tool = new GhSearchPrsTool(createSession());
-		const result = await tool.execute("search-prs", { query: "feature", repo: "owner/repo", limit: 2 });
+		const tool = new GithubTool(createSession());
+		const result = await tool.execute("search-prs", {
+			op: "search_prs",
+			query: "feature",
+			repo: "owner/repo",
+			limit: 2,
+		});
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
 		expect(text).toContain("# GitHub pull requests search");
@@ -304,11 +309,19 @@ describe("GitHub CLI tools", () => {
 	it("passes leading-dash search queries after -- so gh does not parse them as flags", async () => {
 		const runGhJsonSpy = vi.spyOn(git.github, "json").mockResolvedValue([]);
 
-		const issuesTool = new GhSearchIssuesTool(createSession());
-		await issuesTool.execute("search-issues", { query: "-label:bug", repo: "owner/repo", limit: 1 });
-
-		const prsTool = new GhSearchPrsTool(createSession());
-		await prsTool.execute("search-prs", { query: "-label:bug", repo: "owner/repo", limit: 1 });
+		const tool = new GithubTool(createSession());
+		await tool.execute("search-issues", {
+			op: "search_issues",
+			query: "-label:bug",
+			repo: "owner/repo",
+			limit: 1,
+		});
+		await tool.execute("search-prs", {
+			op: "search_prs",
+			query: "-label:bug",
+			repo: "owner/repo",
+			limit: 1,
+		});
 
 		const issueArgs = runGhJsonSpy.mock.calls[0]?.[1];
 		const prArgs = runGhJsonSpy.mock.calls[1]?.[1];
@@ -326,8 +339,8 @@ describe("GitHub CLI tools", () => {
 	it("returns diff output under a stable heading without rewriting patch content", async () => {
 		vi.spyOn(git.github, "text").mockResolvedValue("diff --git a/Makefile b/Makefile\n+\tgo test ./... \n");
 
-		const tool = new GhPrDiffTool(createSession());
-		const result = await tool.execute("pr-diff", { pr: "7", repo: "owner/repo" });
+		const tool = new GithubTool(createSession());
+		const result = await tool.execute("pr-diff", { op: "pr_diff", pr: "7", repo: "owner/repo" });
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
 		expect(text).toContain("# Pull Request Diff");
@@ -346,10 +359,10 @@ describe("GitHub CLI tools", () => {
 			"tools.artifactTailBytes": 1,
 			"tools.artifactTailLines": 20,
 		});
-		const tool = wrapToolWithMetaNotice(new GhPrDiffTool(createSession("/tmp/test", settings)));
+		const tool = wrapToolWithMetaNotice(new GithubTool(createSession("/tmp/test", settings)));
 		const result = await tool.execute(
 			"pr-diff",
-			{ pr: "7", repo: "owner/repo" },
+			{ op: "pr_diff", pr: "7", repo: "owner/repo" },
 			undefined,
 			undefined,
 			createToolContext(settings),
@@ -385,8 +398,8 @@ describe("GitHub CLI tools", () => {
 					url: fixture.forkBare,
 				});
 
-			const tool = new GhPrCheckoutTool(createSession(fixture.repoRoot));
-			const result = await tool.execute("pr-checkout", { pr: "123" });
+			const tool = new GithubTool(createSession(fixture.repoRoot));
+			const result = await tool.execute("pr-checkout", { op: "pr_checkout", pr: "123" });
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 			const worktreePath = await fs.realpath(path.join(fixture.repoRoot, ".worktrees", "pr-123"));
 
@@ -417,10 +430,10 @@ describe("GitHub CLI tools", () => {
 			runGit(fixture.repoRoot, ["add", "README.md"]);
 			runGit(fixture.repoRoot, ["commit", "-m", "manual branch commit"]);
 
-			const tool = new GhPrPushTool(createSession(fixture.repoRoot));
+			const tool = new GithubTool(createSession(fixture.repoRoot));
 
-			await expect(tool.execute("pr-push", {})).rejects.toThrow(
-				"branch manual-branch has no PR push metadata; check it out via gh_pr_checkout first",
+			await expect(tool.execute("pr-push", { op: "pr_push" })).rejects.toThrow(
+				"branch manual-branch has no PR push metadata; check it out via op: pr_checkout first",
 			);
 			expect(runGit(fixture.baseDir, ["--git-dir", fixture.originBare, "rev-parse", "refs/heads/main"])).toBe(
 				originMainBefore,
@@ -430,10 +443,10 @@ describe("GitHub CLI tools", () => {
 		}
 	});
 
-	it("removes repo, interval, and grace from the gh_run_watch schema", () => {
-		const tool = new GhRunWatchTool(createSession());
+	it("exposes a flat op-based schema without legacy run_watch parameters", () => {
+		const tool = new GithubTool(createSession());
 		const properties = tool.parameters.properties as Record<string, unknown>;
-		expect(properties.repo).toBeUndefined();
+		expect(properties.op).toBeDefined();
 		expect(properties.interval).toBeUndefined();
 		expect(properties.grace).toBeUndefined();
 	});
@@ -482,10 +495,11 @@ describe("GitHub CLI tools", () => {
 		});
 
 		try {
-			const tool = new GhRunWatchTool(
+			const tool = new GithubTool(
 				createSession("/tmp/test", Settings.isolated({ "github.enabled": true }), artifactsDir),
 			);
 			const result = await tool.execute("run-watch", {
+				op: "run_watch",
 				run: "https://github.com/owner/repo/actions/runs/77",
 				tail: 3,
 			});
@@ -506,7 +520,7 @@ describe("GitHub CLI tools", () => {
 			expect(result.details?.watch?.failedLogs?.[0]?.jobName).toBe("test");
 			expect(result.details?.watch?.failedLogs?.[0]?.tail).toContain("zeta");
 
-			const artifactText = await Bun.file(path.join(artifactsDir, "0-gh_run_watch.md")).text();
+			const artifactText = await Bun.file(path.join(artifactsDir, "0-github.md")).text();
 			expect(artifactText).toContain("# GitHub Actions Run #77");
 			expect(artifactText).toContain("Full log:");
 			expect(artifactText).toContain("alpha");
