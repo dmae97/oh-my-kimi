@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.4.2] - 2026-04-26
+
 ### Removed
 
 - Removed the `chunk` napi module (`ChunkState`, chunk schema, chunk rendering, chunk edit) and dropped `generate_chunk_schema()` from the build script

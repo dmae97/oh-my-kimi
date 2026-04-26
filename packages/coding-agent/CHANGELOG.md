@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.4.2] - 2026-04-26
 ### Breaking Changes
 
 - Changed `/todo append` from JSON payload input to `/todo append [<phase>] <task...>` with optional quoted tokens and automatic phase creation
