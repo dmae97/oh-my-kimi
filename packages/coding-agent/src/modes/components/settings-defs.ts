@@ -355,7 +355,12 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
 	],
 	"providers.image": [
-		{ value: "auto", label: "Auto", description: "Priority: OpenRouter > Gemini" },
+		{
+			value: "auto",
+			label: "Auto",
+			description: "Priority: GPT model image tool > Antigravity > OpenRouter > Gemini",
+		},
+		{ value: "openai", label: "OpenAI", description: "Uses the active GPT Responses/Codex model" },
 		{ value: "gemini", label: "Gemini", description: "Requires GEMINI_API_KEY" },
 		{ value: "openrouter", label: "OpenRouter", description: "Requires OPENROUTER_API_KEY" },
 	],

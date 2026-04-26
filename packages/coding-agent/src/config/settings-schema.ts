@@ -1702,7 +1702,7 @@ export const SETTINGS_SCHEMA = {
 	},
 	"providers.image": {
 		type: "enum",
-		values: ["auto", "gemini", "openrouter"] as const,
+		values: ["auto", "openai", "gemini", "openrouter"] as const,
 		default: "auto",
 		ui: {
 			tab: "providers",

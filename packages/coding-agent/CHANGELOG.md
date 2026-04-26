@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Renamed atom edit operations from `before` and `after` to `pre` and `post`, so existing `atom` payloads using the old operation keys must be updated
@@ -11,6 +10,7 @@
 
 ### Added
 
+- Added `openai` to the `providers.image` options, allowing image generation to be explicitly routed through the active GPT Responses/Codex model
 - Added `between` atom edit operation to replace only the lines between two surviving anchors while preserving the boundary anchors
 - Added conflict detection for `between` atom edits to require non-overlapping regions and forbid edits targeting lines strictly inside those regions
 - Added `atom` edit mode to `edit` with single-anchor operations (`set`, `before`, `after`, `del`, `sub`, `ins`) for hashline-anchored line edits
@@ -18,6 +18,7 @@
 
 ### Changed
 
+- Changed auto image provider selection for `providers.image=auto` to try active GPT image generation before Antigravity, OpenRouter, and Gemini
 - Updated atom and hashline anchor validation to require the full `line+suffix` anchor format and report missing-line-number errors more clearly, including guidance when only a 2-letter suffix is provided
 - Changed read, grep, and ast-edit line-prefixed output to drop fixed-width line number padding, so anchors render in natural width without leading spaces
 - Updated terminal diff rendering to use a continuous `│` gutter and hide repeated line numbers on adjacent diff lines
@@ -25,6 +26,7 @@
 - Updated the `edit` workflow to treat `atom` mode like hashline mode for read output, so hashline anchors are shown when `atom` is selected
 - Adjusted patch/replace/chunk tooling to accept optional entry paths and to apply a top-level path default
 - Updated hashline/chunk selector parsing to the new stable bigram token set used for checksums
+- Renamed the image generation implementation module to `image-gen` and routed active GPT Responses/Codex models through OpenAI's hosted `image_generation` tool with WebP output
 
 ### Fixed
 

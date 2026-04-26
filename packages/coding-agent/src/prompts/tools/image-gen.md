@@ -1,4 +1,4 @@
-Generates or edits images using Gemini image models.
+Generates or edits images using the configured image provider.
 
 <instructions>
 - You **MUST** provide a single detailed `subject` prompt for image generation or editing.

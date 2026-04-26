@@ -128,7 +128,7 @@ import {
 	warmupLspServers,
 } from "./tools";
 import { ToolContextStore } from "./tools/context";
-import { getGeminiImageTools } from "./tools/gemini-image";
+import { getImageGenTools } from "./tools/image-gen";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { queueResolveHandler } from "./tools/resolve";
 import { EventBus } from "./utils/event-bus";
@@ -673,7 +673,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	const imageProvider = settings.get("providers.image");
-	if (imageProvider === "auto" || imageProvider === "gemini" || imageProvider === "openrouter") {
+	if (
+		imageProvider === "auto" ||
+		imageProvider === "openai" ||
+		imageProvider === "gemini" ||
+		imageProvider === "openrouter"
+	) {
 		setPreferredImageProvider(imageProvider);
 	}
 
@@ -1047,10 +1052,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 		toolSession.mcpManager = mcpManager;
 
-		// Add Gemini image tools if GEMINI_API_KEY (or GOOGLE_API_KEY) is available
-		const geminiImageTools = await logger.time("getGeminiImageTools", getGeminiImageTools);
-		if (geminiImageTools.length > 0) {
-			customTools.push(...(geminiImageTools as unknown as CustomTool[]));
+		// Add image tools when the active model or configured image providers can generate images.
+		const imageGenTools = await logger.time("getImageGenTools", () => getImageGenTools(modelRegistry, model));
+		if (imageGenTools.length > 0) {
+			customTools.push(...(imageGenTools as unknown as CustomTool[]));
 		}
 
 		// Add web search tools

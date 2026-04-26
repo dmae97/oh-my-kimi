@@ -1,6 +1,14 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAntigravityHeaders, getEnvApiKey, StringEnum } from "@oh-my-pi/pi-ai";
+import { getAntigravityHeaders, getEnvApiKey, type Model, StringEnum } from "@oh-my-pi/pi-ai";
+import {
+	CODEX_BASE_URL,
+	getCodexAccountId,
+	OPENAI_HEADER_VALUES,
+	OPENAI_HEADERS,
+	URL_PATHS,
+} from "@oh-my-pi/pi-ai/providers/openai-codex/constants";
+import { CODEX_INSTRUCTIONS } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import {
 	$env,
 	isEnoent,
@@ -12,9 +20,10 @@ import {
 	untilAborted,
 } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import type { ModelRegistry } from "../config/model-registry";
+import packageJson from "../../package.json" with { type: "json" };
+import { isAuthenticated, type ModelRegistry } from "../config/model-registry";
 import type { CustomTool } from "../extensibility/custom-tools/types";
-import geminiImageDescription from "../prompts/tools/gemini-image.md" with { type: "text" };
+import imageGenDescription from "../prompts/tools/image-gen.md" with { type: "text" };
 import { resolveReadPath } from "./path-utils";
 
 const DEFAULT_MODEL = "gemini-3-pro-image-preview";
@@ -22,16 +31,20 @@ const DEFAULT_OPENROUTER_MODEL = "google/gemini-3-pro-image-preview";
 const DEFAULT_ANTIGRAVITY_MODEL = "gemini-3-pro-image";
 const IMAGE_TIMEOUT = 3 * 60 * 1000; // 3 minutes
 const MAX_IMAGE_SIZE = 35 * 1024 * 1024;
+const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+const OPENAI_IMAGE_OUTPUT_FORMAT = "webp";
+const OPENAI_IMAGE_MIME_TYPE = "image/webp";
 
 const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 const IMAGE_SYSTEM_INSTRUCTION =
 	"You are an AI image generator. Generate images based on user descriptions. Focus on creating high-quality, visually appealing images that match the user's request.";
 
-type ImageProvider = "antigravity" | "gemini" | "openrouter";
+type ImageProvider = "antigravity" | "gemini" | "openai" | "openai-codex" | "openrouter";
 interface ImageApiKey {
 	provider: ImageProvider;
 	apiKey: string;
 	projectId?: string;
+	model?: Model;
 }
 
 const responseModalitySchema = StringEnum(["IMAGE", "TEXT"]);
@@ -112,8 +125,8 @@ const baseImageSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
-export const geminiImageSchema = baseImageSchema;
-export type GeminiImageParams = Static<typeof geminiImageSchema>;
+export const imageGenSchema = baseImageSchema;
+export type ImageGenParams = Static<typeof imageGenSchema>;
 export type GeminiResponseModality = Static<typeof responseModalitySchema>;
 
 /**
@@ -121,7 +134,7 @@ export type GeminiResponseModality = Static<typeof responseModalitySchema>;
  * For generation: builds "subject, action, scene. composition. lighting. camera. style."
  * For edits: appends change instructions and preserve directives.
  */
-function assemblePrompt(params: GeminiImageParams): string {
+function assemblePrompt(params: ImageGenParams): string {
 	const parts: string[] = [];
 
 	// Core subject line: subject + action + scene
@@ -187,6 +200,90 @@ interface GeminiGenerateContentResponse {
 	usageMetadata?: GeminiUsageMetadata;
 }
 
+interface OpenAIResponsesUsage {
+	input_tokens?: number;
+	output_tokens?: number;
+	total_tokens?: number;
+}
+
+type ImageUsageMetadata = GeminiUsageMetadata | OpenAIResponsesUsage;
+
+type OpenAIImageAction = "edit" | "generate";
+
+interface OpenAIInputTextContent {
+	type: "input_text";
+	text: string;
+}
+
+interface OpenAIInputImageContent {
+	type: "input_image";
+	detail: "auto";
+	image_url: string;
+}
+
+type OpenAIInputContent = OpenAIInputTextContent | OpenAIInputImageContent;
+
+interface OpenAIImageGenerationTool {
+	type: "image_generation";
+	action: OpenAIImageAction;
+	output_format: typeof OPENAI_IMAGE_OUTPUT_FORMAT;
+	size?: string;
+}
+
+interface OpenAIHostedImageRequest {
+	model: string;
+	instructions?: string;
+	input: Array<{ role: "user"; content: OpenAIInputContent[] }>;
+	tools: OpenAIImageGenerationTool[];
+	tool_choice: { type: "image_generation" };
+	store: false;
+	stream?: boolean;
+}
+
+interface OpenAIImageGenerationCall {
+	id?: string;
+	type: "image_generation_call";
+	result?: string;
+	revised_prompt?: string;
+	status?: string;
+}
+
+interface OpenAIOutputText {
+	type: "output_text" | "refusal";
+	text?: string;
+	refusal?: string;
+}
+
+interface OpenAIOutputMessage {
+	id?: string;
+	type: "message";
+	content?: OpenAIOutputText[];
+}
+
+type OpenAIResponseOutput = OpenAIImageGenerationCall | OpenAIOutputMessage;
+
+interface OpenAIHostedImageResponse {
+	output?: OpenAIResponseOutput[];
+	usage?: OpenAIResponsesUsage;
+	error?: { code?: string; message?: string };
+}
+
+interface OpenAISseEvent {
+	type?: string;
+	item?: OpenAIResponseOutput;
+	response?: OpenAIHostedImageResponse;
+	code?: string;
+	message?: string;
+	error?: { code?: string; message?: string };
+}
+
+interface OpenAIHostedImageResult {
+	images: InlineImageData[];
+	responseText?: string;
+	revisedPrompt?: string;
+	usage?: OpenAIResponsesUsage;
+}
+
 interface OpenRouterImageUrl {
 	url: string;
 }
@@ -243,7 +340,7 @@ interface AntigravityResponseChunk {
 	};
 }
 
-interface GeminiImageToolDetails {
+interface ImageGenToolDetails {
 	provider: ImageProvider;
 	model: string;
 	imageCount: number;
@@ -251,7 +348,8 @@ interface GeminiImageToolDetails {
 	images: InlineImageData[];
 	responseText?: string;
 	promptFeedback?: GeminiPromptFeedback;
-	usage?: GeminiUsageMetadata;
+	revisedPrompt?: string;
+	usage?: ImageUsageMetadata;
 }
 
 interface ImageInput {
@@ -382,26 +480,51 @@ async function findAntigravityCredentials(modelRegistry: ModelRegistry): Promise
 	};
 }
 
-async function findImageApiKey(modelRegistry?: ModelRegistry): Promise<ImageApiKey | null> {
-	// If a specific provider is preferred, try it first
-	if (preferredImageProvider === "antigravity" && modelRegistry) {
+async function findOpenAIHostedImageCredentials(
+	modelRegistry: ModelRegistry | undefined,
+	activeModel: Model | undefined,
+	sessionId?: string,
+): Promise<ImageApiKey | null> {
+	if (!modelRegistry || !isOpenAIHostedImageModel(activeModel)) return null;
+	const apiKey = await modelRegistry.getApiKey(activeModel, sessionId);
+	if (!isAuthenticated(apiKey)) return null;
+	return {
+		provider: getOpenAIHostedImageProvider(activeModel),
+		apiKey,
+		model: activeModel,
+	};
+}
+
+async function findImageApiKey(
+	modelRegistry?: ModelRegistry,
+	activeModel?: Model,
+	sessionId?: string,
+): Promise<ImageApiKey | null> {
+	// If a specific provider is preferred, try it first.
+	if (preferredImageProvider === "openai") {
+		const openAI = await findOpenAIHostedImageCredentials(modelRegistry, activeModel, sessionId);
+		if (openAI) return openAI;
+		// Fall through to auto-detect if preferred provider key not found.
+	} else if (preferredImageProvider === "antigravity" && modelRegistry) {
 		const antigravity = await findAntigravityCredentials(modelRegistry);
 		if (antigravity) return antigravity;
-		// Fall through to auto-detect if preferred provider key not found
-	}
-	if (preferredImageProvider === "gemini") {
+		// Fall through to auto-detect if preferred provider key not found.
+	} else if (preferredImageProvider === "gemini") {
 		const geminiKey = getEnvApiKey("google");
 		if (geminiKey) return { provider: "gemini", apiKey: geminiKey };
 		const googleKey = $env.GOOGLE_API_KEY;
 		if (googleKey) return { provider: "gemini", apiKey: googleKey };
-		// Fall through to auto-detect if preferred provider key not found
+		// Fall through to auto-detect if preferred provider key not found.
 	} else if (preferredImageProvider === "openrouter") {
 		const openRouterKey = getEnvApiKey("openrouter");
 		if (openRouterKey) return { provider: "openrouter", apiKey: openRouterKey };
-		// Fall through to auto-detect if preferred provider key not found
+		// Fall through to auto-detect if preferred provider key not found.
 	}
 
-	// Auto-detect: Antigravity takes priority, then OpenRouter, then Gemini
+	// Auto-detect: GPT hosted image generation, then Antigravity, OpenRouter, Gemini.
+	const openAI = await findOpenAIHostedImageCredentials(modelRegistry, activeModel, sessionId);
+	if (openAI) return openAI;
+
 	if (modelRegistry) {
 		const antigravity = await findAntigravityCredentials(modelRegistry);
 		if (antigravity) return antigravity;
@@ -515,6 +638,221 @@ function collectInlineImages(parts: GeminiPart[]): InlineImageData[] {
 	return images;
 }
 
+function isOpenAIHostedImageModel(model: Model | undefined): model is Model {
+	if (!model) return false;
+	if (model.provider !== "openai" && model.provider !== "openai-codex") return false;
+	if (model.api !== "openai-responses" && model.api !== "openai-codex-responses") return false;
+	const modelId = model.id.toLowerCase();
+	return modelId.startsWith("gpt-") || modelId === "o3" || modelId.startsWith("o3-");
+}
+
+function getOpenAIHostedImageProvider(model: Model): ImageProvider {
+	return model.api === "openai-codex-responses" || model.provider === "openai-codex" ? "openai-codex" : "openai";
+}
+
+function resolveOpenAIImageSize(aspectRatio: string | undefined, imageSize: string | undefined): string | undefined {
+	if (imageSize) return imageSize;
+	switch (aspectRatio) {
+		case "1:1":
+			return "1024x1024";
+		case "3:4":
+		case "9:16":
+			return "1024x1536";
+		case "4:3":
+		case "16:9":
+			return "1536x1024";
+		default:
+			return undefined;
+	}
+}
+
+function buildOpenAIHostedImageRequest(
+	model: Model,
+	promptText: string,
+	params: ImageGenParams,
+	inputImages: InlineImageData[],
+	stream: boolean,
+): OpenAIHostedImageRequest {
+	const content: OpenAIInputContent[] = [{ type: "input_text", text: promptText }];
+	for (const image of inputImages) {
+		content.push({ type: "input_image", detail: "auto", image_url: toDataUrl(image) });
+	}
+
+	const size = resolveOpenAIImageSize(params.aspect_ratio, params.image_size);
+	const tool: OpenAIImageGenerationTool = {
+		type: "image_generation",
+		action: inputImages.length > 0 ? "edit" : "generate",
+		output_format: OPENAI_IMAGE_OUTPUT_FORMAT,
+		...(size ? { size } : {}),
+	};
+
+	return {
+		model: model.id,
+		input: [{ role: "user", content }],
+		tools: [tool],
+		tool_choice: { type: "image_generation" },
+		store: false,
+		...(stream ? { instructions: CODEX_INSTRUCTIONS } : {}),
+		...(stream ? { stream: true } : {}),
+	};
+}
+
+function createOpenAIInlineImage(data: string): InlineImageData {
+	const bytes = Buffer.from(data, "base64");
+	const mimeType = parseImageMetadata(bytes)?.mimeType ?? OPENAI_IMAGE_MIME_TYPE;
+	return { data, mimeType };
+}
+
+function collectOpenAIHostedImageResult(response: OpenAIHostedImageResponse): OpenAIHostedImageResult {
+	const images: InlineImageData[] = [];
+	const textParts: string[] = [];
+	let revisedPrompt: string | undefined;
+
+	for (const output of response.output ?? []) {
+		if (output.type === "image_generation_call") {
+			if (output.result) {
+				images.push(createOpenAIInlineImage(output.result));
+			}
+			if (output.revised_prompt) {
+				revisedPrompt = output.revised_prompt;
+			}
+			continue;
+		}
+
+		for (const part of output.content ?? []) {
+			if (part.type === "output_text" && part.text) {
+				textParts.push(part.text);
+			} else if (part.type === "refusal" && part.refusal) {
+				textParts.push(part.refusal);
+			}
+		}
+	}
+
+	const responseText = textParts.join("\n").trim();
+	return {
+		images,
+		revisedPrompt,
+		responseText: responseText.length > 0 ? responseText : undefined,
+		usage: response.usage,
+	};
+}
+
+function getOpenAIResponseErrorMessage(rawText: string): string {
+	try {
+		const parsed = JSON.parse(rawText) as { error?: { message?: string } };
+		return parsed.error?.message ?? rawText;
+	} catch {
+		return rawText;
+	}
+}
+
+function getOpenAIBaseUrl(model: Model): string {
+	const fallback =
+		model.api === "openai-codex-responses" || model.provider === "openai-codex"
+			? CODEX_BASE_URL
+			: DEFAULT_OPENAI_BASE_URL;
+	return (model.baseUrl || fallback).replace(/\/+$/, "");
+}
+
+function getOpenAIResponsesUrl(model: Model): string {
+	const baseUrl = getOpenAIBaseUrl(model);
+	if (model.api !== "openai-codex-responses" && model.provider !== "openai-codex") {
+		return `${baseUrl}/responses`;
+	}
+	const baseWithSlash = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+	return new URL(URL_PATHS.RESPONSES.slice(1), baseWithSlash)
+		.toString()
+		.replace(URL_PATHS.RESPONSES, URL_PATHS.CODEX_RESPONSES);
+}
+
+function buildOpenAIImageHeaders(model: Model, apiKey: string, sessionId: string | undefined): Headers {
+	const headers = new Headers(model.headers ?? {});
+	headers.set("Content-Type", "application/json");
+	headers.set("Authorization", `Bearer ${apiKey}`);
+
+	if (model.api === "openai-codex-responses" || model.provider === "openai-codex") {
+		const accountId = getCodexAccountId(apiKey);
+		if (!accountId) {
+			throw new Error("Failed to extract accountId from OpenAI Codex token");
+		}
+		headers.delete("x-api-key");
+		headers.set(OPENAI_HEADERS.ACCOUNT_ID, accountId);
+		headers.set(OPENAI_HEADERS.BETA, OPENAI_HEADER_VALUES.BETA_RESPONSES);
+		headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
+		headers.set("User-Agent", `pi/${packageJson.version} (${os.platform()} ${os.release()}; ${os.arch()})`);
+		if (sessionId) {
+			headers.set(OPENAI_HEADERS.CONVERSATION_ID, sessionId);
+			headers.set(OPENAI_HEADERS.SESSION_ID, sessionId);
+		}
+	}
+
+	return headers;
+}
+
+async function parseOpenAIHostedImageSse(response: Response, signal?: AbortSignal): Promise<OpenAIHostedImageResult> {
+	if (!response.body) {
+		throw new Error("No response body");
+	}
+
+	const fallbackOutput: OpenAIResponseOutput[] = [];
+	let completedResponse: OpenAIHostedImageResponse | undefined;
+
+	for await (const event of readSseJson<OpenAISseEvent>(response.body, signal)) {
+		if (event.type === "error") {
+			const message = event.error?.message ?? event.message ?? "OpenAI image request failed";
+			throw new Error(message);
+		}
+		if (event.type === "response.failed") {
+			const message = event.response?.error?.message ?? "OpenAI image request failed";
+			throw new Error(message);
+		}
+		if (event.type === "response.output_item.done" && event.item) {
+			fallbackOutput.push(event.item);
+		}
+		if ((event.type === "response.completed" || event.type === "response.done") && event.response) {
+			completedResponse = event.response;
+		}
+	}
+
+	return collectOpenAIHostedImageResult(
+		completedResponse?.output?.length
+			? completedResponse
+			: { output: fallbackOutput, usage: completedResponse?.usage },
+	);
+}
+
+async function generateOpenAIHostedImage(
+	apiKey: string,
+	model: Model,
+	params: ImageGenParams,
+	inputImages: InlineImageData[],
+	signal: AbortSignal | undefined,
+	sessionId: string | undefined,
+): Promise<OpenAIHostedImageResult> {
+	const promptText = assemblePrompt(params);
+	const stream = model.api === "openai-codex-responses" || model.provider === "openai-codex";
+	const requestBody = buildOpenAIHostedImageRequest(model, promptText, params, inputImages, stream);
+	const response = await fetch(getOpenAIResponsesUrl(model), {
+		method: "POST",
+		headers: buildOpenAIImageHeaders(model, apiKey, sessionId),
+		body: JSON.stringify(requestBody),
+		signal,
+	});
+
+	if (!response.ok) {
+		const errorText = await response.text();
+		throw new Error(`OpenAI image request failed (${response.status}): ${getOpenAIResponseErrorMessage(errorText)}`);
+	}
+
+	const contentType = response.headers.get("content-type") ?? "";
+	if (stream || contentType.includes("text/event-stream")) {
+		return parseOpenAIHostedImageSse(response, signal);
+	}
+
+	const data = (await response.json()) as OpenAIHostedImageResponse;
+	return collectOpenAIHostedImageResult(data);
+}
+
 function combineParts(response: GeminiGenerateContentResponse): GeminiPart[] {
 	const parts: GeminiPart[] = [];
 	for (const candidate of response.candidates ?? []) {
@@ -607,27 +945,30 @@ async function parseAntigravitySseForImage(response: Response, signal?: AbortSig
 	return { images, text: textParts, usage };
 }
 
-export const geminiImageTool: CustomTool<typeof geminiImageSchema, GeminiImageToolDetails> = {
+export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails> = {
 	name: "generate_image",
 	label: "GenerateImage",
-	description: prompt.render(geminiImageDescription),
-	parameters: geminiImageSchema,
+	description: prompt.render(imageGenDescription),
+	parameters: imageGenSchema,
 	async execute(_toolCallId, params, _onUpdate, ctx, signal) {
 		return untilAborted(signal, async () => {
-			const apiKey = await findImageApiKey(ctx.modelRegistry);
+			const sessionId = ctx.sessionManager.getSessionId();
+			const apiKey = await findImageApiKey(ctx.modelRegistry, ctx.model, sessionId);
 			if (!apiKey) {
 				throw new Error(
-					"No image API credentials found. Login with google-antigravity, or set OPENROUTER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY.",
+					"No image API credentials found. Use a GPT Responses/Codex model with OpenAI credentials, login with google-antigravity, or set OPENROUTER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY.",
 				);
 			}
 
 			const provider = apiKey.provider;
 			const model =
-				provider === "antigravity"
-					? DEFAULT_ANTIGRAVITY_MODEL
-					: provider === "openrouter"
-						? DEFAULT_OPENROUTER_MODEL
-						: DEFAULT_MODEL;
+				provider === "openai" || provider === "openai-codex"
+					? (apiKey.model?.id ?? "gpt")
+					: provider === "antigravity"
+						? DEFAULT_ANTIGRAVITY_MODEL
+						: provider === "openrouter"
+							? DEFAULT_OPENROUTER_MODEL
+							: DEFAULT_MODEL;
 			const resolvedModel = provider === "openrouter" ? resolveOpenRouterModel(model) : model;
 			const cwd = ctx.sessionManager.getCwd();
 
@@ -639,6 +980,56 @@ export const geminiImageTool: CustomTool<typeof geminiImageSchema, GeminiImageTo
 			}
 
 			const requestSignal = ptree.combineSignals(signal, IMAGE_TIMEOUT);
+
+			if (provider === "openai" || provider === "openai-codex") {
+				if (!apiKey.model) {
+					throw new Error("Missing active GPT model for OpenAI image generation");
+				}
+
+				const parsed = await generateOpenAIHostedImage(
+					apiKey.apiKey,
+					apiKey.model,
+					params,
+					resolvedImages,
+					requestSignal,
+					sessionId,
+				);
+
+				if (parsed.images.length === 0) {
+					const messageText = parsed.responseText ? `\n\n${parsed.responseText}` : "";
+					return {
+						content: [{ type: "text", text: `No image data returned.${messageText}` }],
+						details: {
+							provider,
+							model,
+							imageCount: 0,
+							imagePaths: [],
+							images: [],
+							responseText: parsed.responseText,
+							revisedPrompt: parsed.revisedPrompt,
+							usage: parsed.usage,
+						},
+					};
+				}
+
+				const imagePaths = await saveImagesToTemp(parsed.images);
+
+				return {
+					content: [
+						{ type: "text", text: buildResponseSummary(provider, model, imagePaths, parsed.responseText) },
+					],
+					details: {
+						provider,
+						model,
+						imageCount: parsed.images.length,
+						imagePaths,
+						images: parsed.images,
+						responseText: parsed.responseText,
+						revisedPrompt: parsed.revisedPrompt,
+						usage: parsed.usage,
+					},
+				};
+			}
 
 			if (provider === "antigravity") {
 				if (!apiKey.projectId) {
@@ -883,18 +1274,20 @@ export const geminiImageTool: CustomTool<typeof geminiImageSchema, GeminiImageTo
 	},
 };
 
-export async function getGeminiImageTools(): Promise<
-	Array<CustomTool<typeof geminiImageSchema, GeminiImageToolDetails>>
-> {
-	const apiKey = await findImageApiKey();
+export async function getImageGenTools(
+	modelRegistry?: ModelRegistry,
+	activeModel?: Model,
+): Promise<Array<CustomTool<typeof imageGenSchema, ImageGenToolDetails>>> {
+	const apiKey = await findImageApiKey(modelRegistry, activeModel);
 	if (!apiKey) return [];
-	return [geminiImageTool];
+	return [imageGenTool];
 }
 
-export async function getGeminiImageToolsWithRegistry(
+export async function getImageGenToolsWithRegistry(
 	modelRegistry: ModelRegistry,
-): Promise<Array<CustomTool<typeof geminiImageSchema, GeminiImageToolDetails>>> {
-	const apiKey = await findImageApiKey(modelRegistry);
+	activeModel?: Model,
+): Promise<Array<CustomTool<typeof imageGenSchema, ImageGenToolDetails>>> {
+	const apiKey = await findImageApiKey(modelRegistry, activeModel);
 	if (!apiKey) return [];
-	return [geminiImageTool];
+	return [imageGenTool];
 }
