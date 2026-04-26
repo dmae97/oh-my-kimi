@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.4.0] - 2026-04-26
+
 ### Added
 
 - Added an `examples` option to `StringEnum` to include example values in the generated schema

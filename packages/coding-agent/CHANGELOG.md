@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.4.0] - 2026-04-26
+
 ### Breaking Changes
 
 - Removed multi-pattern array input from `ast_grep` by changing `pat` to a single pattern string, so call sites using `pat: [...]` must be updated to send one query per invocation
