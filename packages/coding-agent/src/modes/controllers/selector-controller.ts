@@ -1,6 +1,6 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getOAuthProviders, type OAuthProvider } from "@oh-my-pi/pi-ai";
-import type { Component } from "@oh-my-pi/pi-tui";
+import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import { getRoleInfo } from "../../config/model-registry";
@@ -969,25 +969,29 @@ export class SelectorController {
 
 	showSessionObserver(registry: SessionObserverRegistry): void {
 		const observeKeys = this.ctx.keybindings.getKeys("app.session.observe");
+		let cleanup: (() => void) | undefined;
+		let overlayHandle: OverlayHandle | undefined;
 
-		this.showSelector(done => {
-			let cleanup: (() => void) | undefined;
+		const done = () => {
+			cleanup?.();
+			overlayHandle?.hide();
+			this.ctx.ui.requestRender();
+		};
 
-			const selector = new SessionObserverOverlayComponent(
-				registry,
-				() => {
-					cleanup?.();
-					done();
-				},
-				observeKeys,
-			);
+		const selector = new SessionObserverOverlayComponent(registry, done, observeKeys);
 
-			cleanup = registry.onChange(() => {
-				selector.refreshFromRegistry();
-				this.ctx.ui.requestRender();
-			});
-
-			return { component: selector, focus: selector };
+		cleanup = registry.onChange(() => {
+			selector.refreshFromRegistry();
+			this.ctx.ui.requestRender();
 		});
+
+		overlayHandle = this.ctx.ui.showOverlay(selector, {
+			anchor: "bottom-center",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+		});
+		this.ctx.ui.setFocus(selector);
+		this.ctx.ui.requestRender();
 	}
 }
