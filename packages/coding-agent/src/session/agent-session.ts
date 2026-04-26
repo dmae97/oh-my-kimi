@@ -3373,7 +3373,15 @@ export class AgentSession {
 		this.#asyncJobManager?.cancelAll();
 		this.#closeAllProviderSessions("new session");
 		this.agent.reset();
-		await this.sessionManager.flush();
+		if (options?.drop && previousSessionFile) {
+			try {
+				await this.sessionManager.dropSession(previousSessionFile);
+			} catch (err) {
+				logger.error("Failed to delete session during /drop", { err });
+			}
+		} else {
+			await this.sessionManager.flush();
+		}
 		await this.sessionManager.newSession(options);
 		this.setTodoPhases([]);
 		this.agent.sessionId = this.sessionManager.getSessionId();

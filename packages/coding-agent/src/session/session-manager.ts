@@ -66,6 +66,8 @@ export interface SessionHeader {
 
 export interface NewSessionOptions {
 	parentSession?: string;
+	/** Skip flushing the current session and delete it instead of saving. */
+	drop?: boolean;
 }
 
 export interface SessionEntryBase {
@@ -1705,6 +1707,17 @@ export class SessionManager {
 	async newSession(options?: NewSessionOptions): Promise<string | undefined> {
 		await this.#closePersistWriter();
 		return this.#newSessionSync(options);
+	}
+
+	/** Delete a session file and its artifacts. Drains the persist writer first to avoid EPERM on Windows. ENOENT is treated as success. */
+	async dropSession(sessionPath: string): Promise<void> {
+		await this.#closePersistWriter();
+		try {
+			await this.storage.deleteSessionWithArtifacts(sessionPath);
+		} catch (err) {
+			if (isEnoent(err)) return;
+			throw err;
+		}
 	}
 
 	/**
