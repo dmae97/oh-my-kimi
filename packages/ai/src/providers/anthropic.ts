@@ -84,7 +84,6 @@ export function buildBetaHeader(baseBetas: string[], extraBetas: string[]): stri
 const claudeCodeBetaDefaults = [
 	"claude-code-20250219",
 	"oauth-2025-04-20",
-	"interleaved-thinking-2025-05-14",
 	"context-management-2025-06-27",
 	"prompt-caching-scope-2026-01-05",
 ];
@@ -1160,6 +1159,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		dynamicHeaders,
 		isOAuth,
 	} = args;
+	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinkingDisplay(model.id);
 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
 	const baseUrl = resolveAnthropicBaseUrl(model, apiKey);
 	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model);
@@ -1193,7 +1193,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	}
 
 	const betaFeatures = [...extraBetas];
-	if (interleavedThinking) {
+	if (needsInterleavedBeta) {
 		betaFeatures.push("interleaved-thinking-2025-05-14");
 	}
 
@@ -1498,9 +1498,6 @@ function buildParams(
 		stream: true,
 	};
 
-	if (options?.temperature !== undefined) {
-		params.temperature = options.temperature;
-	}
 	if (options?.topP !== undefined) {
 		params.top_p = options.topP;
 	}
@@ -1510,13 +1507,16 @@ function buildParams(
 
 	// Opus 4.7+ rejects non-default sampling parameters with 400 error.
 	if (hasOpus47ApiRestrictions(model.id)) {
-		delete params.temperature;
-		delete (params as AnthropicSamplingParams).top_p;
-		delete (params as AnthropicSamplingParams).top_k;
+		delete params.top_p;
+		delete params.top_k;
 	}
 
 	if (context.tools) {
-		params.tools = convertTools(context.tools, isOAuthToken, disableStrictTools);
+		params.tools = convertTools(
+			context.tools,
+			isOAuthToken,
+			disableStrictTools || model.provider === "github-copilot",
+		);
 	}
 
 	if (options?.thinkingEnabled && model.reasoning && model.provider !== "github-copilot") {
