@@ -1709,8 +1709,9 @@ export class SessionManager {
 		return this.#newSessionSync(options);
 	}
 
-	/** Delete a session file and its artifacts. ENOENT is treated as success. */
+	/** Delete a session file and its artifacts. Drains the persist writer first to avoid EPERM on Windows. ENOENT is treated as success. */
 	async dropSession(sessionPath: string): Promise<void> {
+		await this.#closePersistWriter();
 		try {
 			await this.storage.deleteSessionWithArtifacts(sessionPath);
 		} catch (err) {

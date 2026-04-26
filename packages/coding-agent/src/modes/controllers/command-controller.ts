@@ -587,7 +587,7 @@ export class CommandController {
 				await Bun.sleep(10);
 			}
 		}
-		await this.ctx.session.newSession(options);
+		if (!(await this.ctx.session.newSession(options))) return;
 		this.ctx.resetObserverRegistry();
 		setSessionTerminalTitle(
 			this.ctx.sessionManager.getSessionName(),
