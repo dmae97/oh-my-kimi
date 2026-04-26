@@ -1111,10 +1111,17 @@ async fn read_output_buffered(
 		if n > 0 {
 			let _ = activity.try_send(());
 		}
-		if captured.len().saturating_add(n) > max_capture_bytes {
-			exceeded = true;
+		// Once `exceeded`, the post-process minimizer is bypassed (see the
+		// `!output.exceeded` gate at the call site), so further appends just
+		// grow `captured` without serving any purpose. Stop accumulating to
+		// bound peak memory on commands that produce very large output.
+		if !exceeded {
+			if captured.len().saturating_add(n) > max_capture_bytes {
+				exceeded = true;
+			} else {
+				captured.extend_from_slice(&buf[..n]);
+			}
 		}
-		captured.extend_from_slice(&buf[..n]);
 
 		// Stream whatever is validly decodable *right now* to the callback,
 		// carrying incomplete trailing UTF-8 bytes over to the next iteration.
