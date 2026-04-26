@@ -74,7 +74,6 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 		let validate: ValidateFunction | undefined;
 		let dataSchema: TSchema;
 		let parameters: TSchema;
-		let strict = true;
 
 		try {
 			const schemaResult = normalizeSchema(session.outputSchema);
@@ -131,12 +130,11 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 			});
 			parameters = createParameters(dataSchema);
 			validate = undefined;
-			strict = false;
+			this.strict = false;
 		}
 
 		this.#validate = validate;
 		this.parameters = parameters;
-		this.strict = strict;
 	}
 
 	async execute(

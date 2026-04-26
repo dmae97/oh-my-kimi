@@ -109,7 +109,7 @@ export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveToolD
 	readonly hidden = true;
 	readonly description: string;
 	readonly parameters = resolveSchema;
-	readonly strict = true;
+	readonly strict = false;
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(resolveDescription);
