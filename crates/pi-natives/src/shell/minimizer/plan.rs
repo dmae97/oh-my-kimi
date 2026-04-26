@@ -53,7 +53,7 @@ pub fn analyze(command: &str) -> CommandPlan {
 
 	let options = ParserOptions::default();
 	let source = SourceInfo::default();
-	let reader = std::io::Cursor::new(command.as_bytes().to_vec());
+	let reader = std::io::Cursor::new(command.as_bytes());
 	let mut parser = brush_parser::Parser::new(reader, &options, &source);
 
 	let Ok(program) = parser.parse_program() else {

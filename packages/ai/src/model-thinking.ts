@@ -158,7 +158,7 @@ export function applyGeneratedModelPolicies(models: ApiModel<Api>[]): void {
  *
  * When a model's context is exhausted, the agent can promote to a sibling
  * model with a larger context window on the same provider:
- * - `-spark` variants promote to `gpt-5.5`.
+ * - `codex-spark` variants promote to `gpt-5.5`.
  * - `gpt-5.5` (270K input) promotes to `gpt-5.4` (1M input).
  */
 export function linkOpenAIPromotionTargets(models: ApiModel<Api>[]): void {
