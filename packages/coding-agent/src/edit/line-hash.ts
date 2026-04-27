@@ -676,17 +676,43 @@ export const HASHLINE_BIGRAM_RE_SRC = `(?:${HASHLINE_BIGRAMS.join("|")})`;
 export const HASHLINE_CONTENT_SEPARATOR = "|";
 
 const RE_SIGNIFICANT = /[\p{L}\p{N}]/u;
+const RE_STRUCTURAL_STRIP = /[\s{}]/g;
+
+/**
+ * Bigram returned for lines that contain only whitespace and `{`/`}`.
+ * Picks the English ordinal suffix for the line number (`1` → `st`,
+ * `2` → `nd`, `3` → `rd`, `11`/`12`/`13` → `th`, else `th`) so the
+ * line digits + bigram BPE-merge into a single ordinal token (`1st`, `42nd`,
+ * `100th`, …). Brace-only lines therefore cost one token for the whole
+ * `LINE+ID` anchor instead of two.
+ */
+function structuralBigram(line: number): string {
+	const mod100 = line % 100;
+	if (mod100 >= 11 && mod100 <= 13) return "th";
+	switch (line % 10) {
+		case 1: return "st";
+		case 2: return "nd";
+		case 3: return "rd";
+		default: return "th";
+	}
+}
 
 /**
  * Compute a short BPE-bigram hash of a single line.
  *
  * Uses xxHash32 on a trailing-whitespace-trimmed, CR-stripped line, mapped into
- * {@link HASHLINE_BIGRAMS} via modulo. For lines containing no alphanumeric
- * characters (only punctuation/symbols/whitespace), the line number is mixed in
- * to reduce hash collisions. The line input should not include a trailing newline.
+ * {@link HASHLINE_BIGRAMS} via modulo. Lines that contain only whitespace and
+ * `{`/`}` collapse to an ordinal-suffix bigram (see {@link structuralBigram})
+ * so brace-only structure shares one merged ordinal token. For other lines
+ * containing no alphanumeric characters, the line number is mixed in to reduce hash collisions.
+ * The line input should not include a trailing newline.
  */
 export function computeLineHash(idx: number, line: string): string {
 	line = line.replace(/\r/g, "").trimEnd();
+
+	if (line.replace(RE_STRUCTURAL_STRIP, "").length === 0) {
+		return structuralBigram(idx);
+	}
 
 	let seed = 0;
 	if (!RE_SIGNIFICANT.test(line)) {
