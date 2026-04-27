@@ -647,17 +647,31 @@ async function reopenCodexWebSocketRuntimeStream(
 	runtime: CodexStreamRuntime,
 	state: CodexWebSocketSessionState,
 ): Promise<void> {
-	const next = await openCodexWebSocketTransport(
-		context.requestContext,
-		context.requestSetup,
-		context.options,
-		state,
-		runtime.websocketStreamRetries,
-	);
-	runtime.eventStream = next.eventStream;
-	runtime.requestBodyForState = next.requestBodyForState;
-	runtime.transport = next.transport;
-	state.lastTransport = next.transport;
+	try {
+		const next = await openCodexWebSocketTransport(
+			context.requestContext,
+			context.requestSetup,
+			context.options,
+			state,
+			runtime.websocketStreamRetries,
+		);
+		runtime.eventStream = next.eventStream;
+		runtime.requestBodyForState = next.requestBodyForState;
+		runtime.transport = next.transport;
+		state.lastTransport = next.transport;
+	} catch (error) {
+		const wsError = error instanceof Error ? error : new Error(String(error));
+		if (!isCodexWebSocketTransportError(wsError)) throw error;
+		// Reopen failed at the websocket layer (handshake refused, connect timeout, etc.).
+		// Activate fallback so subsequent turns use SSE, and replay this turn over SSE
+		// instead of surfacing a raw transport error to the caller.
+		recordCodexWebSocketFailure(state, true);
+		logCodexDebug("codex websocket reopen failed, falling back to SSE", {
+			error: wsError.message,
+			retry: runtime.websocketStreamRetries,
+		});
+		await reopenCodexSseRuntimeStream(context, runtime, state);
+	}
 }
 
 async function reopenCodexSseRuntimeStream(
