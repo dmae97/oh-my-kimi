@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.5.3] - 2026-04-27
 ### Added
 
 - Added `fireworks` as a supported provider with API key login flow and credential storage

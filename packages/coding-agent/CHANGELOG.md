@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.5.3] - 2026-04-27
+
 ### Added
 
 - Added bracketed `loc` forms `(anchor)`, `[anchor]`, `[anchor`, `(anchor`, `anchor]`, and `anchor)` to `atom` `splice` editing so a single anchor can target a block body, whole node, or partial node region
