@@ -196,7 +196,8 @@ export type AgentSessionEvent =
 	| { type: "retry_fallback_succeeded"; model: string; role: string }
 	| { type: "ttsr_triggered"; rules: Rule[] }
 	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
-	| { type: "todo_auto_clear" };
+	| { type: "todo_auto_clear" }
+	| { type: "irc_message"; message: CustomMessage };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -5997,6 +5998,7 @@ export class AgentSession {
 			attribution: "agent",
 			timestamp: incomingTimestamp,
 		};
+		void this.#emitSessionEvent({ type: "irc_message", message: incomingRecord });
 
 		if (!awaitReply) {
 			this.#queueBackgroundExchangeInjection([incomingRecord]);
@@ -6021,6 +6023,7 @@ export class AgentSession {
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
+		void this.#emitSessionEvent({ type: "irc_message", message: replyRecord });
 		this.#queueBackgroundExchangeInjection([incomingRecord, replyRecord]);
 
 		return { replyText };

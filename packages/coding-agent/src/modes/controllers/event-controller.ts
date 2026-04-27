@@ -52,6 +52,7 @@ export class EventController {
 			ttsr_triggered: e => this.#handleTtsrTriggered(e),
 			todo_reminder: e => this.#handleTodoReminder(e),
 			todo_auto_clear: e => this.#handleTodoAutoClear(e),
+			irc_message: e => this.#handleIrcMessage(e),
 		} satisfies AgentSessionEventHandlers;
 	}
 
@@ -201,6 +202,17 @@ export class EventController {
 			this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
 			this.ctx.ui.requestRender();
 		}
+	}
+
+	async #handleIrcMessage(event: Extract<AgentSessionEvent, { type: "irc_message" }>): Promise<void> {
+		const signature = `${event.message.role}:${event.message.customType}:${event.message.timestamp}`;
+		if (this.#renderedCustomMessages.has(signature)) {
+			return;
+		}
+		this.#renderedCustomMessages.add(signature);
+		this.#resetReadGroup();
+		this.ctx.addMessageToChat(event.message);
+		this.ctx.ui.requestRender();
 	}
 
 	async #handleMessageUpdate(event: Extract<AgentSessionEvent, { type: "message_update" }>): Promise<void> {
