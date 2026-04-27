@@ -102,7 +102,6 @@ describe("splice_block — validation", () => {
 		];
 		expect(() => applyAtomEdits(content, edits)).toThrow(/unbalanced/);
 	});
-
 });
 
 describe("splice_block — locator forms", () => {
