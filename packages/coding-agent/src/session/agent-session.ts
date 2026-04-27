@@ -135,7 +135,7 @@ import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import { assertEditableFile } from "../tools/auto-generated-guard";
 import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
-import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
+import { isInternalUrlPath, normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
 import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo-write";
 import { ToolError } from "../tools/tool-errors";
@@ -1512,6 +1512,11 @@ export class AgentSession {
 
 		const path = typeof args.path === "string" ? args.path : undefined;
 		if (!path) return undefined;
+		// Internal-scheme URLs (e.g. local://PLAN.md for plan-mode) don't have a
+		// stable filesystem path; the on-disk pre-cache cannot apply. The Edit
+		// tool itself dispatches these via the protocol-handler, so the actual
+		// edit still works — we just skip the streaming pre-cache machinery.
+		if (isInternalUrlPath(path)) return undefined;
 
 		return {
 			toolCall,
@@ -1591,6 +1596,10 @@ export class AgentSession {
 
 	/** Invalidate cache for a file after an edit completes to prevent stale data */
 	#invalidateFileCacheForPath(path: string): void {
+		// Internal-scheme URLs are never pre-cached (see #getStreamingEditToolCall),
+		// so there is nothing to invalidate. Skip before resolveToCwd, which would
+		// throw via assertNotInternalUrl.
+		if (isInternalUrlPath(path)) return;
 		const resolvedPath = resolveToCwd(path, this.sessionManager.getCwd());
 		this.#streamingEditFileCache.delete(resolvedPath);
 	}
