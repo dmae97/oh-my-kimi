@@ -6,6 +6,10 @@
 
 - Added IRC relay observation in the main agent UI so every IRC exchange between agents is rendered in the main transcript, even when the main agent is not a direct participant
 
+### Changed
+
+- Bumped default `read.defaultLimit` from 300 to 500 lines, and scaled the read tool's byte budget with the line limit (`max(50KB, lines * 512)`) so the configured line count is no longer truncated by the shared 50KB cap
+
 ## [14.5.3] - 2026-04-27
 
 ### Added
