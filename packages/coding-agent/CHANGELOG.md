@@ -1,8 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
+- Renamed MCP tool identifiers from the `mcp_<server>_<tool>` format to `mcp__<server>_<tool>` so custom tool names, active tool lists, and persisted MCP selections must be updated to the new prefix
 - Renamed the built-in content-search tool from `grep` to `search`, including SDK/tool event names and settings keys (`search.enabled`, `search.contextBefore`, `search.contextAfter`), so integrations using `grep` and `grep.*` references must be updated
 
 ### Added
