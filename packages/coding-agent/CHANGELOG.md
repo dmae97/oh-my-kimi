@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed hook editors to recognize Ctrl+Enter when terminals include NumLock or keypad Enter metadata.
+
 ## [14.5.3] - 2026-04-27
 
 ### Added
