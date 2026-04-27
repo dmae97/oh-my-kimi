@@ -1259,8 +1259,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#uiHelpers.renderSessionContext(sessionContext, options);
 	}
 
-	renderInitialMessages(): void {
-		this.#uiHelpers.renderInitialMessages();
+	renderInitialMessages(prebuiltContext?: SessionContext): void {
+		this.#uiHelpers.renderInitialMessages(prebuiltContext);
 	}
 
 	getUserMessageText(message: Message): string {

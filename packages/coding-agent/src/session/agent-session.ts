@@ -6453,6 +6453,8 @@ export class AgentSession {
 		cancelled: boolean;
 		aborted?: boolean;
 		summaryEntry?: BranchSummaryEntry;
+		/** Raw session context built during navigation — pass to renderInitialMessages to skip a second O(N) walk. */
+		sessionContext?: SessionContext;
 	}> {
 		const oldLeafId = this.sessionManager.getLeafId();
 
@@ -6582,10 +6584,12 @@ export class AgentSession {
 			this.sessionManager.branch(newLeafId);
 		}
 
-		// Update agent state
-		const sessionContext = this.buildDisplaySessionContext();
-		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
-		this.agent.replaceMessages(sessionContext.messages);
+		// Update agent state — build raw context once and derive the display (deobfuscated) context
+		// from it, so callers can reuse rawContext for UI rendering without a second O(N) walk.
+		const rawContext = this.sessionManager.buildSessionContext();
+		const displayContext = deobfuscateSessionContext(rawContext, this.#obfuscator);
+		await this.#restoreMCPSelectionsForSessionContext(displayContext);
+		this.agent.replaceMessages(displayContext.messages);
 		this.#syncTodoPhasesFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 
@@ -6601,7 +6605,7 @@ export class AgentSession {
 		}
 
 		this.#branchSummaryAbortController = undefined;
-		return { editorText, cancelled: false, summaryEntry };
+		return { editorText, cancelled: false, summaryEntry, sessionContext: rawContext };
 	}
 
 	/**

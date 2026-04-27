@@ -390,7 +390,7 @@ export class UiHelpers {
 		this.ctx.ui.requestRender();
 	}
 
-	renderInitialMessages(): void {
+	renderInitialMessages(prebuiltContext?: SessionContext): void {
 		// This path is used to rebuild the visible chat transcript (e.g. after custom/debug UI).
 		// Clear existing rendered chat first to avoid duplicating the full session in the container.
 		this.ctx.chatContainer.clear();
@@ -398,8 +398,8 @@ export class UiHelpers {
 		this.ctx.pendingBashComponents = [];
 		this.ctx.pendingPythonComponents = [];
 
-		// Get aligned messages and entries from session context
-		const context = this.ctx.sessionManager.buildSessionContext();
+		// Reuse a pre-built context when available (e.g. from navigateTree) to avoid a second O(N) walk.
+		const context = prebuiltContext ?? this.ctx.sessionManager.buildSessionContext();
 		this.ctx.renderSessionContext(context, {
 			updateFooter: true,
 			populateHistory: true,
