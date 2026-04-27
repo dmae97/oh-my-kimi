@@ -244,6 +244,8 @@ export interface AgentSessionConfig {
 	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	/** Provider payload hook used by the active session request path */
 	onPayload?: SimpleStreamOptions["onPayload"];
+	/** Provider response hook used by the active session request path */
+	onResponse?: SimpleStreamOptions["onResponse"];
 	/** Current session message-to-LLM conversion pipeline */
 	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	/** System prompt builder that can consider tool availability */
@@ -507,6 +509,7 @@ export class AgentSession {
 	#toolRegistry: Map<string, AgentTool>;
 	#transformContext: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	#onPayload: SimpleStreamOptions["onPayload"] | undefined;
+	#onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#rebuildSystemPrompt: ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<string>) | undefined;
 	#baseSystemPrompt: string;
@@ -593,6 +596,7 @@ export class AgentSession {
 		this.#toolRegistry = config.toolRegistry ?? new Map();
 		this.#transformContext = config.transformContext ?? (messages => messages);
 		this.#onPayload = config.onPayload;
+		this.#onResponse = config.onResponse;
 		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
 		this.#rebuildSystemPrompt = config.rebuildSystemPrompt;
 		this.#baseSystemPrompt = this.agent.state.systemPrompt;
@@ -2327,21 +2331,39 @@ export class AgentSession {
 
 	/** Apply session-level stream hooks to a direct side request. */
 	prepareSimpleStreamOptions(options: SimpleStreamOptions): SimpleStreamOptions {
-		if (!this.#onPayload) return options;
-		if (!options.onPayload) {
-			return { ...options, onPayload: this.#onPayload };
-		}
 		const sessionOnPayload = this.#onPayload;
-		const requestOnPayload = options.onPayload;
-		return {
-			...options,
-			onPayload: async (payload, model) => {
-				const sessionPayload = await sessionOnPayload(payload, model);
-				const sessionResolvedPayload = sessionPayload ?? payload;
-				const requestPayload = await requestOnPayload(sessionResolvedPayload, model);
-				return requestPayload ?? sessionResolvedPayload;
-			},
-		};
+		const sessionOnResponse = this.#onResponse;
+		if (!sessionOnPayload && !sessionOnResponse) return options;
+
+		const preparedOptions: SimpleStreamOptions = { ...options };
+
+		if (sessionOnPayload) {
+			if (!options.onPayload) {
+				preparedOptions.onPayload = sessionOnPayload;
+			} else {
+				const requestOnPayload = options.onPayload;
+				preparedOptions.onPayload = async (payload, model) => {
+					const sessionPayload = await sessionOnPayload(payload, model);
+					const sessionResolvedPayload = sessionPayload ?? payload;
+					const requestPayload = await requestOnPayload(sessionResolvedPayload, model);
+					return requestPayload ?? sessionResolvedPayload;
+				};
+			}
+		}
+
+		if (sessionOnResponse) {
+			if (!options.onResponse) {
+				preparedOptions.onResponse = sessionOnResponse;
+			} else {
+				const requestOnResponse = options.onResponse;
+				preparedOptions.onResponse = async (response, model) => {
+					await sessionOnResponse(response, model);
+					await requestOnResponse(response, model);
+				};
+			}
+		}
+
+		return preparedOptions;
 	}
 
 	/** Current steering mode */

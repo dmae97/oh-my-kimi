@@ -82,6 +82,7 @@
 
 ### Added
 
+- Added the `after_provider_response` extension event for observing provider response status, headers, and request IDs.
 - Added internal URL support to the `search` tool, allowing `artifact://`-style paths that resolve to local files to be searched directly
 - Added IRC relay observation in the main agent UI so every IRC exchange between agents is rendered in the main transcript, even when the main agent is not a direct participant
 - Added stateful `href`/`hrefr` prompt helpers that can reuse anchors remembered from prior `hline` helper calls

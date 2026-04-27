@@ -421,6 +421,79 @@ describe("ExtensionRunner", () => {
 		});
 	});
 
+	describe("after_provider_response", () => {
+		it("calls handlers with response metadata and reports handler errors without throwing", async () => {
+			const eventsPath = path.join(tempDir.path(), "after-provider-response-events.jsonl");
+			const extCode = `
+			import * as fs from "node:fs";
+
+			export default function(pi) {
+				pi.on("after_provider_response", async (event) => {
+					fs.appendFileSync(
+						${JSON.stringify(eventsPath)},
+						JSON.stringify({
+							status: event.status,
+							headers: event.headers,
+							requestId: event.requestId,
+							metadata: event.metadata,
+						}) + "\\n",
+					);
+				});
+
+				pi.on("after_provider_response", async () => {
+					throw new Error("response failed");
+				});
+
+				pi.on("after_provider_response", async (event) => {
+					fs.appendFileSync(
+						${JSON.stringify(eventsPath)},
+						JSON.stringify({ afterError: event.status }) + "\\n",
+					);
+				});
+			}
+		`;
+			fs.writeFileSync(path.join(extensionsDir, "after-provider-response.ts"), extCode);
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const errors: Array<{ extensionPath: string; event: string; error: string }> = [];
+			runner.onError(err => {
+				errors.push(err);
+			});
+
+			await runner.emitAfterProviderResponse({
+				status: 202,
+				headers: { "x-request-id": "req_123", "content-type": "text/event-stream" },
+				requestId: "req_123",
+				metadata: { provider: "test" },
+			});
+
+			const events = fs
+				.readFileSync(eventsPath, "utf8")
+				.trim()
+				.split("\n")
+				.map(line => JSON.parse(line));
+			expect(events).toEqual([
+				{
+					status: 202,
+					headers: { "x-request-id": "req_123", "content-type": "text/event-stream" },
+					requestId: "req_123",
+					metadata: { provider: "test" },
+				},
+				{ afterError: 202 },
+			]);
+			expect(errors).toHaveLength(1);
+			expect(errors[0]?.event).toBe("after_provider_response");
+			expect(errors[0]?.error).toContain("response failed");
+		});
+	});
+
 	describe("tool_result chaining", () => {
 		it("chains content modifications across handlers", async () => {
 			const extCode1 = `
