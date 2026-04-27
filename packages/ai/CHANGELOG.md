@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+<<<<<<< HEAD
 ## [14.5.9] - 2026-04-30
 ### Added
 
@@ -23,6 +24,13 @@
 
 - Fixed OpenAI Codex GPT model pricing by inheriting matching OpenAI catalog rates for zero-priced discovered Codex entries.
 
+||||||| parent of 57b1918ba (feat(ai): expose provider response metadata)
+=======
+### Added
+
+- Added provider response metadata callbacks for Anthropic and OpenAI streaming requests.
+
+>>>>>>> 57b1918ba (feat(ai): expose provider response metadata)
 ## [14.5.3] - 2026-04-27
 ### Added
 

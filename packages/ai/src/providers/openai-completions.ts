@@ -48,6 +48,7 @@ import {
 import { parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { getKimiCommonHeaders } from "../utils/oauth/kimi";
+import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry, extractHttpStatusFromError } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
 import { mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
@@ -340,7 +341,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					headers: requestHeaders,
 					body: params,
 				};
-				return client.chat.completions.create(params, { signal: requestSignal });
+				const { data, response, request_id } = await client.chat.completions
+					.create(params, { signal: requestSignal })
+					.withResponse();
+				await notifyProviderResponse(options, response, model, request_id);
+				return data;
 			};
 			let openaiStream: AsyncIterable<ChatCompletionChunk>;
 			try {

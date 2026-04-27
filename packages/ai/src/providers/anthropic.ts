@@ -40,6 +40,7 @@ import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } fr
 import { createWatchdog, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
+import { notifyProviderResponse } from "../utils/provider-response";
 import { extractHttpStatusFromError, isCopilotRetryableError } from "../utils/retry";
 import { COMBINATOR_KEYS, NO_STRICT } from "../utils/schema";
 import {
@@ -841,7 +842,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				let streamedReplayUnsafeContent = false;
 
 				try {
-					const { data: anthropicStream } = await anthropicRequest.withResponse();
+					const { data: anthropicStream, response, request_id } = await anthropicRequest.withResponse();
+					await notifyProviderResponse(options, response, model, request_id);
 					const firstEventWatchdog = createWatchdog(firstEventTimeoutMs, () =>
 						activeAbortTracker.abortLocally(firstEventTimeoutAbortError),
 					);

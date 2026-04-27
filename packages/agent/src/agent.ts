@@ -132,6 +132,10 @@ export interface AgentOptions {
 	 */
 	onPayload?: SimpleStreamOptions["onPayload"];
 	/**
+	 * Inspect provider response metadata after headers arrive and before streaming body consumption.
+	 */
+	onResponse?: SimpleStreamOptions["onResponse"];
+	/**
 	 * Inspect assistant streaming events before they are emitted to subscribers.
 	 * Use this when abort decisions must happen before buffered events continue flowing.
 	 */
@@ -244,6 +248,7 @@ export class Agent {
 	#intentTracing: boolean;
 	#getToolChoice?: () => ToolChoice | undefined;
 	#onPayload?: SimpleStreamOptions["onPayload"];
+	#onResponse?: SimpleStreamOptions["onResponse"];
 	#onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
 
 	/** Buffered Cursor tool results with text length at time of call (for correct ordering) */
@@ -273,6 +278,7 @@ export class Agent {
 		this.#maxRetryDelayMs = opts.maxRetryDelayMs;
 		this.getApiKey = opts.getApiKey;
 		this.#onPayload = opts.onPayload;
+		this.#onResponse = opts.onResponse;
 		this.#getToolContext = opts.getToolContext;
 		this.#cursorExecHandlers = opts.cursorExecHandlers;
 		this.#cursorOnToolResult = opts.cursorOnToolResult;
@@ -762,6 +768,7 @@ export class Agent {
 			convertToLlm: this.#convertToLlm,
 			transformContext: this.#transformContext,
 			onPayload: this.#onPayload,
+			onResponse: this.#onResponse,
 			getApiKey: this.getApiKey,
 			getToolContext: this.#getToolContext,
 			syncContextBeforeModelCall: async context => {
