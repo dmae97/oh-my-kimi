@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added IRC relay observation in the main agent UI so every IRC exchange between agents is rendered in the main transcript, even when the main agent is not a direct participant
+
 ## [14.5.3] - 2026-04-27
 
 ### Added

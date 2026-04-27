@@ -127,14 +127,38 @@ export class UiHelpers {
 						this.ctx.chatContainer.addChild(component);
 						break;
 					}
-					if (message.customType === "irc:incoming" || message.customType === "irc:autoreply") {
+					if (
+						message.customType === "irc:incoming" ||
+						message.customType === "irc:autoreply" ||
+						message.customType === "irc:relay"
+					) {
 						const details = (
-							message as CustomMessage<{ from?: string; to?: string; message?: string; reply?: string }>
+							message as CustomMessage<{
+								from?: string;
+								to?: string;
+								message?: string;
+								reply?: string;
+								body?: string;
+								kind?: "message" | "reply";
+							}>
 						).details;
-						const isIncoming = message.customType === "irc:incoming";
-						const peer = isIncoming ? (details?.from ?? "?") : (details?.to ?? "?");
-						const body = isIncoming ? (details?.message ?? "") : (details?.reply ?? "");
-						const arrow = isIncoming ? `\u21e6 ${peer}` : `\u21e8 ${peer} (auto)`;
+						let arrow: string;
+						let body: string;
+						if (message.customType === "irc:incoming") {
+							const peer = details?.from ?? "?";
+							body = details?.message ?? "";
+							arrow = `\u21e6 ${peer}`;
+						} else if (message.customType === "irc:autoreply") {
+							const peer = details?.to ?? "?";
+							body = details?.reply ?? "";
+							arrow = `\u21e8 ${peer} (auto)`;
+						} else {
+							const from = details?.from ?? "?";
+							const to = details?.to ?? "?";
+							body = details?.body ?? "";
+							const suffix = details?.kind === "reply" ? " (auto)" : "";
+							arrow = `${from} \u21e8 ${to}${suffix}`;
+						}
 						const header = `${theme.fg("accent", `[IRC] ${arrow}`)}`;
 						this.ctx.chatContainer.addChild(new Text(header, 1, 0));
 						if (body) {

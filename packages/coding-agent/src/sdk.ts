@@ -1601,6 +1601,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			ttsrManager,
 			obfuscator,
 			asyncJobManager,
+			agentId: resolvedAgentId,
+			agentRegistry,
 		});
 		hasSession = true;
 
