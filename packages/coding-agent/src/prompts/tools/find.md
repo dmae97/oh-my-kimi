@@ -14,7 +14,7 @@ Matching file paths sorted by modification time (most recent first). Truncated a
 </examples>
 
 <avoid>
-For open-ended searches requiring multiple rounds of globbing and grepping, you **MUST** use Task tool instead.
+For open-ended searches requiring multiple rounds of globbing and searching, you **MUST** use Task tool instead.
 </avoid>
 
 <critical>

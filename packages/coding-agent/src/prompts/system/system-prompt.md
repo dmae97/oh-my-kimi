@@ -180,16 +180,16 @@ If the task may involve external systems, SaaS APIs, chat, tickets, databases, d
 
 {{#ifAny (includes tools "python") (includes tools "bash")}}
 ### Tool priority
-1. Use specialized tools first{{#ifAny (includes tools "read") (includes tools "grep") (includes tools "find") (includes tools "edit") (includes tools "lsp")}}: {{#has tools "read"}}`read`, {{/has}}{{#has tools "grep"}}`grep`, {{/has}}{{#has tools "find"}}`find`, {{/has}}{{#has tools "edit"}}`edit`, {{/has}}{{#has tools "lsp"}}`lsp`{{/has}}{{/ifAny}}
+1. Use specialized tools first{{#ifAny (includes tools "read") (includes tools "search") (includes tools "find") (includes tools "edit") (includes tools "lsp")}}: {{#has tools "read"}}`read`, {{/has}}{{#has tools "search"}}`search`, {{/has}}{{#has tools "find"}}`find`, {{/has}}{{#has tools "edit"}}`edit`, {{/has}}{{#has tools "lsp"}}`lsp`{{/has}}{{/ifAny}}
 2. Python: logic, loops, processing, display
 3. Bash: simple one-liners only
 You **MUST NOT** use Python or Bash when a specialized tool exists.
 {{/ifAny}}
 
-{{#ifAny (includes tools "read") (includes tools "write") (includes tools "grep") (includes tools "find") (includes tools "edit")}}
+{{#ifAny (includes tools "read") (includes tools "write") (includes tools "search") (includes tools "find") (includes tools "edit")}}
 {{#has tools "read"}}- Use `read`, not `cat`.{{/has}}
 {{#has tools "write"}}- Use `write`, not shell redirection.{{/has}}
-{{#has tools "grep"}}- Use `grep`, not shell regex search.{{/has}}
+{{#has tools "search"}}- Use `search`, not shell regex search.{{/has}}
 {{#has tools "find"}}- Use `find`, not shell file globbing.{{/has}}
 {{#has tools "edit"}}- Use `edit` for surgical text changes, not `sed`.{{/has}}
 {{/ifAny}}

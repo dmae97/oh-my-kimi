@@ -8,7 +8,7 @@ import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
-import grepDescription from "../prompts/tools/grep.md" with { type: "text" };
+import searchDescription from "../prompts/tools/search.md" with { type: "text" };
 import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead } from "../session/streaming-output";
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
@@ -34,7 +34,7 @@ import {
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const grepSchema = Type.Object({
+const searchSchema = Type.Object({
 	pattern: Type.String({ description: "regex pattern", examples: ["function\\s+\\w+", "TODO"] }),
 	path: Type.String({
 		description: "file, directory, glob, comma-separated paths, or internal URL to search",
@@ -45,11 +45,11 @@ const grepSchema = Type.Object({
 	skip: Type.Optional(Type.Number({ description: "matches to skip", default: 0 })),
 });
 
-export type GrepToolInput = Static<typeof grepSchema>;
+export type SearchToolInput = Static<typeof searchSchema>;
 
 const DEFAULT_MATCH_LIMIT = 20;
 
-export interface GrepToolDetails {
+export interface SearchToolDetails {
 	truncation?: TruncationResult;
 	matchLimitReached?: number;
 	resultLimitReached?: number;
@@ -68,18 +68,18 @@ export interface GrepToolDetails {
 	displayContent?: string;
 }
 
-type GrepParams = Static<typeof grepSchema>;
+type SearchParams = Static<typeof searchSchema>;
 
-export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
-	readonly name = "grep";
-	readonly label = "Grep";
+export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDetails> {
+	readonly name = "search";
+	readonly label = "Search";
 	readonly description: string;
-	readonly parameters = grepSchema;
+	readonly parameters = searchSchema;
 	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {
 		const displayMode = resolveFileDisplayMode(session);
-		this.description = prompt.render(grepDescription, {
+		this.description = prompt.render(searchDescription, {
 			IS_HASHLINE_MODE: displayMode.hashLines,
 			IS_LINE_NUMBER_MODE: !displayMode.hashLines && displayMode.lineNumbers,
 		});
@@ -87,11 +87,11 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 
 	async execute(
 		_toolCallId: string,
-		params: GrepParams,
+		params: SearchParams,
 		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<GrepToolDetails>,
+		_onUpdate?: AgentToolUpdateCallback<SearchToolDetails>,
 		_toolContext?: AgentToolContext,
-	): Promise<AgentToolResult<GrepToolDetails>> {
+	): Promise<AgentToolResult<SearchToolDetails>> {
 		const { pattern, path: searchDir, i, gitignore, skip } = params;
 
 		return untilAborted(signal, async () => {
@@ -104,8 +104,8 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 			if (normalizedSkip < 0 || !Number.isFinite(normalizedSkip)) {
 				throw new ToolError("Skip must be a non-negative number");
 			}
-			const normalizedContextBefore = this.session.settings.get("grep.contextBefore");
-			const normalizedContextAfter = this.session.settings.get("grep.contextAfter");
+			const normalizedContextBefore = this.session.settings.get("search.contextBefore");
+			const normalizedContextAfter = this.session.settings.get("search.contextAfter");
 			const ignoreCase = i ?? false;
 			const useGitignore = gitignore ?? true;
 			const patternHasNewline = normalizedPattern.includes("\n") || normalizedPattern.includes("\\n");
@@ -131,7 +131,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				}
 				const resource = await internalRouter.resolve(rawPath);
 				if (!resource.sourcePath) {
-					throw new ToolError(`Cannot grep internal URL without a backing file: ${rawPath}`);
+					throw new ToolError(`Cannot search internal URL without a backing file: ${rawPath}`);
 				}
 				searchPath = resource.sourcePath;
 				scopePath = formatScopePath(searchPath);
@@ -273,7 +273,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 			const { record: recordFile, list: fileList } = createFileRecorder();
 			const fileMatchCounts = new Map<string, number>();
 			if (selectedMatches.length === 0) {
-				const details: GrepToolDetails = {
+				const details: SearchToolDetails = {
 					scopePath,
 					matchCount: 0,
 					fileCount: 0,
@@ -356,7 +356,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 			const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 			const output = truncation.content;
 			const truncated = Boolean(matchLimitReached || result.limitReached || truncation.truncated || linesTruncated);
-			const details: GrepToolDetails = {
+			const details: SearchToolDetails = {
 				scopePath,
 				matchCount: selectedMatches.length,
 				fileCount: fileList.length,
@@ -387,7 +387,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 // TUI Renderer
 // =============================================================================
 
-interface GrepRenderArgs {
+interface SearchRenderArgs {
 	pattern: string;
 	path?: string;
 	i?: boolean;
@@ -397,9 +397,9 @@ interface GrepRenderArgs {
 
 const COLLAPSED_TEXT_LIMIT = PREVIEW_LIMITS.COLLAPSED_LINES * 2;
 
-export const grepToolRenderer = {
+export const searchToolRenderer = {
 	inline: true,
-	renderCall(args: GrepRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+	renderCall(args: SearchRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		const meta: string[] = [];
 		if (args.path) meta.push(`in ${args.path}`);
 		if (args.i) meta.push("case:insensitive");
@@ -407,17 +407,17 @@ export const grepToolRenderer = {
 		if (args.skip !== undefined && args.skip > 0) meta.push(`skip:${args.skip}`);
 
 		const text = renderStatusLine(
-			{ icon: "pending", title: "Grep", description: args.pattern || "?", meta },
+			{ icon: "pending", title: "Search", description: args.pattern || "?", meta },
 			uiTheme,
 		);
 		return new Text(text, 0, 0);
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: GrepToolDetails; isError?: boolean },
+		result: { content: Array<{ type: string; text?: string }>; details?: SearchToolDetails; isError?: boolean },
 		options: RenderResultOptions,
 		uiTheme: Theme,
-		args?: GrepRenderArgs,
+		args?: SearchRenderArgs,
 	): Component {
 		const details = result.details;
 
@@ -436,7 +436,7 @@ export const grepToolRenderer = {
 			const lines = textContent.split("\n").filter(line => line.trim() !== "");
 			const description = args?.pattern ?? undefined;
 			const header = renderStatusLine(
-				{ icon: "success", title: "Grep", description, meta: [formatCount("item", lines.length)] },
+				{ icon: "success", title: "Search", description, meta: [formatCount("item", lines.length)] },
 				uiTheme,
 			);
 			let cached: RenderCache | undefined;
@@ -476,7 +476,7 @@ export const grepToolRenderer = {
 
 		if (matchCount === 0) {
 			const header = renderStatusLine(
-				{ icon: "warning", title: "Grep", description: args?.pattern, meta: ["0 matches"] },
+				{ icon: "warning", title: "Search", description: args?.pattern, meta: ["0 matches"] },
 				uiTheme,
 			);
 			return new Text([header, formatEmptyMessage("No matches found", uiTheme)].join("\n"), 0, 0);
@@ -488,7 +488,7 @@ export const grepToolRenderer = {
 		if (truncated) meta.push(uiTheme.fg("warning", "truncated"));
 		const description = args?.pattern ?? undefined;
 		const header = renderStatusLine(
-			{ icon: truncated ? "warning" : "success", title: "Grep", description, meta },
+			{ icon: truncated ? "warning" : "success", title: "Search", description, meta },
 			uiTheme,
 		);
 
