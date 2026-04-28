@@ -364,9 +364,12 @@ describe("applyAtomEdits — replace", () => {
 		);
 	});
 
-	it("rejects replace.with containing a newline", () => {
-		const loc = "1ab";
-		expect(() => resolveAtomToolEdit({ loc, replace: { find: "a", with: "x\ny" } })).toThrow(/must be a single line/);
+	it("supports replace.with containing a newline", () => {
+		const content = "aaa\nfoo\nccc";
+		const loc = `2${computeLineHash(2, "foo")}`;
+		const resolved = resolveAtomToolEdit({ loc, replace: { find: "foo", with: "x\ny" } });
+		const result = applyAtomEdits(content, resolved);
+		expect(result.lines).toBe("aaa\nx\ny\nccc");
 	});
 
 	it("drops cross-entry `del` when another edit replaces the same anchor", () => {

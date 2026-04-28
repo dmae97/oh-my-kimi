@@ -222,11 +222,6 @@ function parseReplaceSpec(input: unknown, editIndex: number): ReplaceSpec {
 	if (typeof withVal !== "string") {
 		throw new Error(`Edit ${editIndex}: replace.with must be a string.`);
 	}
-	if (withVal.includes("\n")) {
-		throw new Error(
-			`Edit ${editIndex}: replace.with must be a single line; contains a newline. Use \`splice\` for multi-line replacements.`,
-		);
-	}
 	const rawAll = obj.all;
 	let all = false;
 	if (rawAll !== undefined) {

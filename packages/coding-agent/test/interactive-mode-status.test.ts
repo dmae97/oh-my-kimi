@@ -61,7 +61,7 @@ describe("InteractiveMode.showStatus", () => {
 		expect(renderLastLine(ctx.chatContainer)).toContain("STATUS_TWO");
 	});
 
-	test("clears stale optimistic user signatures when rebuilding transcript state", () => {
+	test("preserves optimistic user signatures when rebuilding transcript state", () => {
 		const ctx = {
 			chatContainer: new Container(),
 			pendingTools: new Map(),
@@ -72,6 +72,9 @@ describe("InteractiveMode.showStatus", () => {
 
 		helpers.renderSessionContext(buildSessionContext([]));
 
-		expect(ctx.optimisticUserMessageSignature).toBeUndefined();
+		// renderSessionContext must not clear the signature — the message_start
+		// handler owns this lifecycle and uses it to guard against clearing the
+		// user's in-progress editor draft during an optimistic send (#783).
+		expect(ctx.optimisticUserMessageSignature).toBe("hello\u00001");
 	});
 });

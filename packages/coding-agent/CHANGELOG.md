@@ -20,7 +20,7 @@
 - Updated `edit` streaming diff previews for `patch`, `replace`, and `hashline` to produce a single request-level preview for the new single-file `path` mode
 - Changed atom inline and file-wide replacements to perform literal substring substitution, with `all: true` replacing all matches on the line
 - Changed `loc` parsing so path-qualified atom edits correctly split `path:loc` when the locator suffix contains colons
-- Changed `replace` to reject multiline `find`/`with` values and require single-line operands
+- Changed `replace.find` to remain single-line; `replace.with` now allows multiline replacements
 - Bumped default `read.defaultLimit` from 300 to 500 lines, and scaled the read tool's byte budget with the line limit (`max(50KB, lines * 512)`) so the configured line count is no longer truncated by the shared 50KB cap
 
 ### Fixed

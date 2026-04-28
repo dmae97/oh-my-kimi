@@ -250,7 +250,7 @@ export class UiHelpers {
 		sessionContext: SessionContext,
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
-		this.ctx.optimisticUserMessageSignature = undefined;
+		// Preserved: message_start handler owns this lifecycle (see #783)
 		this.ctx.pendingTools.clear();
 
 		if (options.updateFooter) {
