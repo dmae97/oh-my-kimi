@@ -31,11 +31,21 @@ function escapeMarkdown(text: string): string {
 	return text.replace(/\|/g, "\\|").replace(/\n/g, " ");
 }
 
+function getStringField(value: unknown, field: string): string | null {
+	if (!value || typeof value !== "object") return null;
+	const fieldValue = (value as Record<string, unknown>)[field];
+	return typeof fieldValue === "string" ? fieldValue : null;
+}
+
 function formatEditArgsBlock(args: unknown): string {
 	if (!args || typeof args !== "object") return "—";
-	const diff = (args as { diff?: unknown }).diff;
-	if (typeof diff === "string") {
+	const diff = getStringField(args, "diff");
+	if (diff !== null) {
 		return diff;
+	}
+	const input = getStringField(args, "input");
+	if (input !== null) {
+		return input;
 	}
 	try {
 		return JSON.stringify(args, null, 2);

@@ -19,7 +19,8 @@ import { type EditMode, normalizeEditMode, resolveEditMode } from "../utils/edit
 import type { VimToolDetails } from "../vim/types";
 import { type ApplyPatchParams, applyPatchSchema, expandApplyPatchToEntries } from "./modes/apply-patch";
 import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
-import { type AtomParams, type AtomToolEdit, atomEditParamsSchema, executeAtomSingle } from "./modes/atom";
+import { type AtomParams, atomEditParamsSchema, executeAtomSingle } from "./modes/atom";
+import atomGrammar from "./modes/atom.lark" with { type: "text" };
 import {
 	executeHashlineSingle,
 	HashlineMismatchError,
@@ -290,8 +291,9 @@ export class EditTool implements AgentTool<TInput> {
 	 * and fall back to emitting a JSON function tool from `parameters`.
 	 */
 	get customFormat(): { syntax: "lark"; definition: string } | undefined {
-		if (this.mode !== "apply_patch") return undefined;
-		return { syntax: "lark", definition: applyPatchGrammar };
+		if (this.mode === "apply_patch") return { syntax: "lark", definition: applyPatchGrammar };
+		if (this.mode === "atom") return { syntax: "lark", definition: atomGrammar };
+		return undefined;
 	}
 
 	/**
@@ -410,11 +412,11 @@ export class EditTool implements AgentTool<TInput> {
 					batchRequest: LspBatchRequest | undefined,
 					_onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
 				) => {
-					const { edits, path } = params as AtomParams;
+					const { input, path } = params as AtomParams & { path?: string };
 					return executeAtomSingle({
 						session: tool.session,
+						input,
 						path,
-						edits: edits as AtomToolEdit[],
 						signal,
 						batchRequest,
 						writethrough: tool.#writethrough,

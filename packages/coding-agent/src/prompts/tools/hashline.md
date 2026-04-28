@@ -43,19 +43,19 @@ All examples below reference the same file:
 
 # Replace a block body
 Replace only the catch body. Do not target the shared boundary line `} catch (err) {`.
-`{path:"a.ts",edits:[{loc:{range:{pos:{{href 15 "\t\tconsole.error(err);"}},end:{{href 16 "\t\treturn null;"}}}},content:["\t\tif (isEnoent(err)) return null;","\t\tthrow err;"]}]}`
+`{path:"a.ts",edits:[{loc:{range:{pos:{{href 15}},end:{{href 16}}}},content:["\t\tif (isEnoent(err)) return null;","\t\tthrow err;"]}]}`
 # Replace whole block including closing brace
-Replace `alpha`'s entire body including the closing `}`. `end` **MUST** be {{href 7 "}"}} because `content` includes `}`.
-`{path:"a.ts",edits:[{loc:{range:{pos:{{href 6 "\tlog();"}},end:{{href 7 "}"}}}},content:["\tvalidate();","\tlog();","}"]}]}`
-**Wrong**: `end: {{href 6 "\tlog();"}}` — line 7 (`}`) survives AND content emits `}`, producing two closing braces.
+Replace `alpha`'s entire body including the closing `}`. `end` **MUST** be {{href 7}} because `content` includes `}`.
+`{path:"a.ts",edits:[{loc:{range:{pos:{{href 6}},end:{{href 7}}}},content:["\tvalidate();","\tlog();","}"]}]}`
+**Wrong**: `end: {{href 6}}` — line 7 (`}`) survives AND content emits `}`, producing two closing braces.
 # Replace one line
 Single-line replace uses `pos == end`.
-`{path:"a.ts",edits:[{loc:{range:{pos:{{href 2 "const timeout = 5000;"}},end:{{href 2 "const timeout = 5000;"}}}},content:["const timeout = 30_000;"]}]}`
+`{path:"a.ts",edits:[{loc:{range:{pos:{{href 2}},end:{{href 2}}}},content:["const timeout = 30_000;"]}]}`
 # Delete a range
-`{path:"a.ts",edits:[{loc:{range:{pos:{{href 10 "\t// TODO: remove after migration"}},end:{{href 11 "\tlegacy();"}}}},content:null}]}`
+`{path:"a.ts",edits:[{loc:{range:{pos:{{href 10}},end:{{href 11}}}},content:null}]}`
 # Insert before a sibling
 When adding a sibling declaration, prefer `prepend` on the next declaration.
-`{path:"a.ts",edits:[{loc:{prepend:{{href 9 "function beta() {"}}},content:["function gamma() {","\tvalidate();","}",""]}]}`
+`{path:"a.ts",edits:[{loc:{prepend:{{href 9}}},content:["function gamma() {","\tvalidate();","}",""]}]}`
 </examples>
 
 <critical>

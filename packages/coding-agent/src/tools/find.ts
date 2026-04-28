@@ -23,7 +23,13 @@ import {
 import type { ToolSession } from ".";
 import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
-import { normalizePathLikeInput, parseFindPattern, resolveMultiFindPattern, resolveToCwd } from "./path-utils";
+import {
+	formatPathRelativeToCwd,
+	normalizePathLikeInput,
+	parseFindPattern,
+	resolveMultiFindPattern,
+	resolveToCwd,
+} from "./path-utils";
 import { formatCount, formatEmptyMessage, formatErrorMessage, PREVIEW_LIMITS } from "./render-utils";
 import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -101,10 +107,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 		const { pattern, limit, hidden } = params;
 
 		return untilAborted(signal, async () => {
-			const formatScopePath = (targetPath: string): string => {
-				const relative = path.relative(this.session.cwd, targetPath).replace(/\\/g, "/");
-				return relative.length === 0 ? "." : relative;
-			};
+			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
 			const normalizedPattern = normalizePathLikeInput(pattern).replace(/\\/g, "/");
 			if (!normalizedPattern) {
 				throw new ToolError("Pattern must not be empty");
@@ -132,14 +135,9 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			const formatMatchPath = (matchPath: string, fileType?: natives.FileType): string => {
 				const hadTrailingSlash = matchPath.endsWith("/") || matchPath.endsWith("\\");
 				const absolutePath = path.isAbsolute(matchPath) ? matchPath : path.resolve(searchPath, matchPath);
-				let relativePath = path.relative(this.session.cwd, absolutePath).replace(/\\/g, "/");
-				if (relativePath.length === 0) {
-					relativePath = ".";
-				}
-				if ((fileType === natives.FileType.Dir || hadTrailingSlash) && !relativePath.endsWith("/")) {
-					relativePath += "/";
-				}
-				return relativePath;
+				return formatPathRelativeToCwd(absolutePath, this.session.cwd, {
+					trailingSlash: fileType === natives.FileType.Dir || hadTrailingSlash,
+				});
 			};
 
 			const buildResult = (files: string[]): AgentToolResult<FindToolDetails> => {

@@ -13,11 +13,12 @@ import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead } from "../sess
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
-import { createFileRecorder } from "./file-recorder";
+import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { formatGroupedFiles } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import {
+	formatPathRelativeToCwd,
 	hasGlobPathChars,
 	normalizePathLikeInput,
 	parseSearchPath,
@@ -112,10 +113,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			const effectiveMultiline = patternHasNewline;
 
 			const useHashLines = resolveFileDisplayMode(this.session).hashLines;
-			const formatScopePath = (targetPath: string): string => {
-				const relative = path.relative(this.session.cwd, targetPath).replace(/\\/g, "/");
-				return relative.length === 0 ? "." : relative;
-			};
+			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
 			let searchPath: string;
 			let scopePath: string;
 			let exactFilePaths: string[] | undefined;
@@ -225,14 +223,8 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				throw err;
 			}
 
-			const formatPath = (filePath: string): string => {
-				// returns paths starting with / (the virtual root)
-				const cleanPath = filePath.startsWith("/") ? filePath.slice(1) : filePath;
-				if (isDirectory) {
-					return cleanPath.replace(/\\/g, "/");
-				}
-				return path.basename(cleanPath);
-			};
+			const formatPath = (filePath: string): string =>
+				formatResultPath(filePath, isDirectory, searchPath, this.session.cwd);
 
 			// Build output
 			const roundRobinSelect = (matches: GrepMatch[], limit: number): GrepMatch[] => {

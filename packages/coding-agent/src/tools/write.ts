@@ -19,6 +19,7 @@ import { parseArchivePathCandidates } from "./archive-reader";
 import { assertEditableFile } from "./auto-generated-guard";
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import { type OutputMeta, outputMeta } from "./output-meta";
+import { formatPathRelativeToCwd } from "./path-utils";
 import { enforcePlanModeWrite, resolvePlanPath } from "./plan-mode-guard";
 import {
 	formatDiagnostics,
@@ -212,7 +213,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	}
 
 	async #writeArchiveEntry(
-		displayPath: string,
 		content: string,
 		resolvedArchivePath: ResolvedArchiveWritePath,
 	): Promise<AgentToolResult<WriteToolDetails>> {
@@ -278,8 +278,11 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		}
 
 		invalidateFsScanAfterWrite(resolvedArchivePath.absolutePath);
+		const outputPath = `${formatPathRelativeToCwd(resolvedArchivePath.absolutePath, this.session.cwd)}:${
+			resolvedArchivePath.archiveSubPath
+		}`;
 		return {
-			content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${displayPath}` }],
+			content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${outputPath}` }],
 			details: {},
 		};
 	}
@@ -426,7 +429,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					op: resolvedArchivePath.exists ? "update" : "create",
 				});
 
-				const archiveResult = await this.#writeArchiveEntry(path, cleanContent, resolvedArchivePath);
+				const archiveResult = await this.#writeArchiveEntry(cleanContent, resolvedArchivePath);
 				if (stripped) {
 					const firstText = archiveResult.content.find(
 						(block): block is { type: "text"; text: string } =>
@@ -468,7 +471,8 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			const diagnostics = await this.#writethrough(absolutePath, cleanContent, signal, undefined, batchRequest);
 			invalidateFsScanAfterWrite(absolutePath);
 
-			let resultText = `Successfully wrote ${cleanContent.length} bytes to ${path}`;
+			const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
+			let resultText = `Successfully wrote ${cleanContent.length} bytes to ${displayPath}`;
 			if (stripped) {
 				resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
 			}

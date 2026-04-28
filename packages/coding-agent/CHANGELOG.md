@@ -1,12 +1,9 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
-- Required top-level `path` for `edit` tool `atom`, `hashline`, `patch`, and `replace` calls and removed per-entry `path` overrides, so edits to different files now require separate calls
-- Replaced the atom edit `sed` verb with `replace`, requiring `{ find, with, all? }` instead of `{ pat, rep, g? }`
-- Removed bracketed atom locators like `(anchor)` and `[anchor]`, so region block rewrites via `splice` are no longer supported and bare anchor `loc` values now target exactly one line
+- Changed the `atom` edit mode from JSON `{ path, edits }` calls to the compact file-oriented `input` patch language that was previously exposed as `atomd`; `atomd` is no longer a separate edit variant
 - Renamed MCP tool identifiers from the `mcp_<server>_<tool>` format to `mcp__<server>_<tool>` so custom tool names, active tool lists, and persisted MCP selections must be updated to the new prefix
 - Renamed the built-in content-search tool from `grep` to `search`, including SDK/tool event names and settings keys (`search.enabled`, `search.contextBefore`, `search.contextAfter`), so integrations using `grep` and `grep.*` references must be updated
 
@@ -14,17 +11,18 @@
 
 - Added internal URL support to the `search` tool, allowing `artifact://`-style paths that resolve to local files to be searched directly
 - Added IRC relay observation in the main agent UI so every IRC exchange between agents is rendered in the main transcript, even when the main agent is not a direct participant
+- Added stateful `href`/`hrefr` prompt helpers that can reuse anchors remembered from prior `hline` helper calls
 
 ### Changed
 
+- Changed file-path rendering across search, find, AST, LSP, and related edit outputs to display targets as cwd-relative paths when they resolve inside the working directory and keep absolute paths for files outside the cwd
+- Changed system prompt guidance so in-cwd tool paths must be passed as cwd-relative paths and absolute paths only for out-of-cwd targets or `~` expansion
 - Updated `edit` streaming diff previews for `patch`, `replace`, and `hashline` to produce a single request-level preview for the new single-file `path` mode
-- Changed atom inline and file-wide replacements to perform literal substring substitution, with `all: true` replacing all matches on the line
-- Changed `loc` parsing so path-qualified atom edits correctly split `path:loc` when the locator suffix contains colons
-- Changed `replace.find` to remain single-line; `replace.with` now allows multiline replacements
 - Bumped default `read.defaultLimit` from 300 to 500 lines, and scaled the read tool's byte budget with the line limit (`max(50KB, lines * 512)`) so the configured line count is no longer truncated by the shared 50KB cap
 
 ### Fixed
 
+- Fixed atom edit streaming previews to use atom headers for file names instead of apply_patch parsing errors.
 - Fixed collapsed search result rendering so summary and truncation rows stay within the collapsed output budget
 - Updated search path handling to support path lists and internal file paths while preserving previous search behavior
 

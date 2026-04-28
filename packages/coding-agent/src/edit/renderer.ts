@@ -106,6 +106,10 @@ type EditRenderEntry = {
 	op?: Operation;
 };
 
+interface AtomRenderSummary {
+	entries: Array<{ path: string }>;
+}
+
 interface ApplyPatchRenderSummary {
 	entries: ApplyPatchEntry[];
 	error?: string;
@@ -305,8 +309,54 @@ function getCallPreview(
 }
 
 const MISSING_APPLY_PATCH_END_ERROR = "The last line of the patch must be '*** End Patch'";
+const ATOM_HEADER_PREFIX = "---";
 
-function getApplyPatchRenderSummary(args: EditRenderArgs, isPartial: boolean): ApplyPatchRenderSummary | undefined {
+function normalizeAtomPreviewPath(rawPath: string): string {
+	const trimmed = rawPath.trim();
+	if (trimmed.length < 2) return trimmed;
+	const first = trimmed[0];
+	const last = trimmed[trimmed.length - 1];
+	if ((first === '"' || first === "'") && first === last) {
+		return trimmed.slice(1, -1);
+	}
+	return trimmed;
+}
+
+function parseAtomPreviewHeader(line: string): string | null {
+	if (!line.startsWith(ATOM_HEADER_PREFIX)) return null;
+	let body = line.slice(ATOM_HEADER_PREFIX.length);
+	if (body.startsWith(" ")) body = body.slice(1);
+	const previewPath = normalizeAtomPreviewPath(body);
+	return previewPath.length > 0 ? previewPath : null;
+}
+
+function getAtomInputPaths(input: string): string[] {
+	const stripped = input.startsWith("\uFEFF") ? input.slice(1) : input;
+	const paths: string[] = [];
+	for (const rawLine of stripped.split("\n")) {
+		const line = rawLine.replace(/\r$/, "");
+		const path = parseAtomPreviewHeader(line);
+		if (path) paths.push(path);
+	}
+	return paths;
+}
+
+function getAtomRenderSummary(args: EditRenderArgs, editMode: EditMode | undefined): AtomRenderSummary | undefined {
+	if (editMode !== "atom" || typeof args.input !== "string") {
+		return undefined;
+	}
+	return { entries: getAtomInputPaths(args.input).map(path => ({ path })) };
+}
+
+function getApplyPatchRenderSummary(
+	args: EditRenderArgs,
+	isPartial: boolean,
+	editMode: EditMode | undefined,
+): ApplyPatchRenderSummary | undefined {
+	if (editMode !== undefined && editMode !== "apply_patch") {
+		return undefined;
+	}
+
 	if (typeof args.input !== "string") {
 		return undefined;
 	}
@@ -397,8 +447,10 @@ export const editToolRenderer = {
 		}
 
 		const editArgs = args as EditRenderArgs;
-		const applyPatchSummary = getApplyPatchRenderSummary(editArgs, options.isPartial);
+		const atomSummary = getAtomRenderSummary(editArgs, renderContext?.editMode);
+		const applyPatchSummary = getApplyPatchRenderSummary(editArgs, options.isPartial, renderContext?.editMode);
 		const firstApplyPatchEntry = applyPatchSummary?.entries[0];
+		const firstAtomEntry = atomSummary?.entries[0];
 		// Extract path from first edit entry when top-level path is absent (new schema)
 		const firstEdit = Array.isArray(editArgs.edits) && editArgs.edits.length > 0 ? editArgs.edits[0] : undefined;
 		const rawPath =
@@ -406,6 +458,7 @@ export const editToolRenderer = {
 			editArgs.path ||
 			filePathFromEditEntry(firstEdit?.path) ||
 			getPartialJsonEditPath(editArgs) ||
+			firstAtomEntry?.path ||
 			firstApplyPatchEntry?.path ||
 			"";
 		const rename = editArgs.rename || firstEdit?.rename || firstEdit?.move || firstApplyPatchEntry?.rename;
@@ -415,9 +468,10 @@ export const editToolRenderer = {
 			options?.spinnerFrame !== undefined ? formatStatusIcon("running", uiTheme, options.spinnerFrame) : "";
 		let text = `${formatTitle(getOperationTitle(op), uiTheme)} ${spinner ? `${spinner} ` : ""}${description}`;
 		// Show file count hint for multi-file edits
-		const fileCount = Array.isArray(editArgs.edits)
-			? countEditFiles(editArgs.edits)
-			: (applyPatchSummary?.entries.length ?? 0);
+		let fileCount = atomSummary?.entries.length ?? applyPatchSummary?.entries.length ?? 0;
+		if (Array.isArray(editArgs.edits)) {
+			fileCount = countEditFiles(editArgs.edits);
+		}
 		if (fileCount > 1) {
 			text += uiTheme.fg("dim", ` (+${fileCount - 1} more)`);
 		}
@@ -465,11 +519,14 @@ function renderSingleFileResult(
 	const details = result.details;
 	const isError = result.isError ?? (details && "isError" in details ? details.isError : false);
 	const firstEdit = args?.edits?.[0];
+	const atomSummary = getAtomRenderSummary(args ?? {}, options.renderContext?.editMode);
+	const firstAtomEntry = atomSummary?.entries[0];
 	const rawPath =
 		args?.file_path ||
 		args?.path ||
 		filePathFromEditEntry(firstEdit?.path) ||
 		(details && "path" in details ? details.path : "") ||
+		firstAtomEntry?.path ||
 		"";
 	const op = args?.op || firstEdit?.op || details?.op;
 	const rename = args?.rename || firstEdit?.rename || firstEdit?.move || details?.move;

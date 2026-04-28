@@ -40,7 +40,7 @@ import {
 } from "./fetch";
 import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
-import { expandPath, resolveReadPath } from "./path-utils";
+import { expandPath, formatPathRelativeToCwd, resolveReadPath } from "./path-utils";
 import { formatAge, formatBytes, shortenPath, wrapBrackets } from "./render-utils";
 import {
 	executeReadQuery,
@@ -1046,7 +1046,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							? "- Alpha: no"
 							: "- Alpha: unknown",
 					"",
-					`If you want to analyze the image, call inspect_image with path="${readPath}" and a question describing what to inspect and the desired output format.`,
+					`If you want to analyze the image, call inspect_image with path="${formatPathRelativeToCwd(
+						absolutePath,
+						this.session.cwd,
+					)}" and a question describing what to inspect and the desired output format.`,
 				];
 				content = [{ type: "text", text: metadataLines.join("\n") }];
 				details = {};

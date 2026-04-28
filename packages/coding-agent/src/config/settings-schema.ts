@@ -1,5 +1,6 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { TASK_SIMPLE_MODES } from "../task/simple-mode";
+import { EDIT_MODES } from "../utils/edit-mode";
 
 /** Unified settings schema - single source of truth for all settings.
  * Unified settings schema - single source of truth for all settings.
@@ -955,12 +956,12 @@ export const SETTINGS_SCHEMA = {
 	// Edit tool
 	"edit.mode": {
 		type: "enum",
-		values: ["replace", "patch", "hashline", "vim", "apply_patch", "atom"] as const,
+		values: EDIT_MODES,
 		default: "hashline",
 		ui: {
 			tab: "editing",
 			label: "Edit Mode",
-			description: "Select the edit tool variant (replace, patch, hashline, vim, or apply_patch)",
+			description: "Select the edit tool variant (replace, patch, hashline, atom, vim, or apply_patch)",
 		},
 	},
 

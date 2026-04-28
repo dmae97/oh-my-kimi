@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type AstFindMatch, astGrep } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -16,6 +15,7 @@ import { formatGroupedFiles } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
 import type { OutputMeta } from "./output-meta";
 import {
+	formatPathRelativeToCwd,
 	hasGlobPathChars,
 	normalizePathLikeInput,
 	parseSearchPath,
@@ -87,10 +87,7 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 			if (!Number.isFinite(skip) || skip < 0) {
 				throw new ToolError("skip must be a non-negative number");
 			}
-			const formatScopePath = (targetPath: string): string => {
-				const relative = path.relative(this.session.cwd, targetPath).replace(/\\/g, "/");
-				return relative.length === 0 ? "." : relative;
-			};
+			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
 			let searchPath: string | undefined;
 			let scopePath: string | undefined;
 			let globFilter: string | undefined;
@@ -147,7 +144,8 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 				return parseError?.[1] ?? error;
 			});
 			const dedupedParseErrors = dedupeParseErrors(normalizedParseErrors);
-			const formatPath = (filePath: string): string => formatResultPath(filePath, isDirectory);
+			const formatPath = (filePath: string): string =>
+				formatResultPath(filePath, isDirectory, resolvedSearchPath, this.session.cwd);
 
 			const { record: recordFile, list: fileList } = createFileRecorder();
 			const fileMatchCounts = new Map<string, number>();

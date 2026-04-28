@@ -6,7 +6,7 @@ import type { BunFile } from "bun";
 import { type Theme, theme } from "../modes/theme/theme";
 import lspDescription from "../prompts/tools/lsp.md" with { type: "text" };
 import type { ToolSession } from "../tools";
-import { resolveToCwd } from "../tools/path-utils";
+import { formatPathRelativeToCwd, resolveToCwd } from "../tools/path-utils";
 import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
 import { clampTimeout } from "../tools/tool-timeouts";
 import {
@@ -562,7 +562,7 @@ async function getDiagnosticsForFile(
 	}
 
 	const uri = fileToUri(absolutePath);
-	const relPath = path.relative(cwd, absolutePath);
+	const relPath = formatPathRelativeToCwd(absolutePath, cwd);
 	const allDiagnostics: Diagnostic[] = [];
 	const serverNames: string[] = [];
 
@@ -1229,7 +1229,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 				}
 
 				const uri = fileToUri(resolved);
-				const relPath = path.relative(this.session.cwd, resolved);
+				const relPath = formatPathRelativeToCwd(resolved, this.session.cwd);
 				const allDiagnostics: Diagnostic[] = [];
 
 				// Query all applicable servers for this file
@@ -1707,7 +1707,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 					if (!result || result.length === 0) {
 						output = "No symbols found";
 					} else {
-						const relPath = path.relative(this.session.cwd, targetFile);
+						const relPath = formatPathRelativeToCwd(targetFile, this.session.cwd);
 						if ("selectionRange" in result[0]) {
 							const lines = (result as DocumentSymbol[]).flatMap(s => formatDocumentSymbol(s));
 							output = `Symbols in ${relPath}:\n${lines.join("\n")}`;

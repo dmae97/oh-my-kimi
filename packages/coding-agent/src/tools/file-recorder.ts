@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { formatPathRelativeToCwd } from "./path-utils";
 
 /**
  * Creates a deduplicating recorder for relative file paths.
@@ -22,14 +23,13 @@ export function createFileRecorder(): {
 }
 
 /**
- * Strip a leading slash and, when the search scope is a directory, normalize
- * Windows-style separators. For single-file scopes, fall back to the basename
- * so tool output does not leak absolute paths.
+ * Strip native virtual-root prefixes and format file paths relative to cwd when
+ * they are inside cwd. Paths outside cwd remain absolute.
  */
-export function formatResultPath(filePath: string, isDirectory: boolean): string {
+export function formatResultPath(filePath: string, isDirectory: boolean, basePath: string, cwd: string): string {
 	const cleanPath = filePath.startsWith("/") ? filePath.slice(1) : filePath;
 	if (isDirectory) {
-		return cleanPath.replace(/\\/g, "/");
+		return formatPathRelativeToCwd(path.resolve(basePath, cleanPath), cwd);
 	}
-	return path.basename(cleanPath);
+	return formatPathRelativeToCwd(basePath, cwd);
 }

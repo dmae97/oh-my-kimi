@@ -198,7 +198,8 @@ You **MUST NOT** use Python or Bash when a specialized tool exists.
 {{/ifAny}}
 
 ### Paths
-- For tools that take a `path` (or path-like field), prefer cwd-relative paths for files inside the cwd. Use absolute paths only when targeting files outside the cwd or when expanding `~`.
+- For tools that take a `path` or path-like field, you **MUST** use cwd-relative paths for files inside the current working directory.
+- You **MUST** use absolute paths only when targeting files outside the current working directory or when expanding `~`.
 
 {{#has tools "lsp"}}
 ### LSP guidance
@@ -334,7 +335,7 @@ Some values in tool output are intentionally redacted as `#XXXX#` tokens. Treat 
 
 {{SECTION_SEPARATOR "Now"}}
 
-The current working directory is '{{cwd}}'.
+The current working directory is '{{cwd}}'. Paths inside this directory **MUST** be passed to tools as relative paths.
 Today is '{{date}}'. Begin now.
 
 <critical>

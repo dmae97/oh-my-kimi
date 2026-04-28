@@ -42,6 +42,7 @@ import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-ins
 import { getOpenAIStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
+import { compactGrammarDefinition } from "./grammar";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
@@ -2393,7 +2394,7 @@ export function convertTools(tools: Tool[], model: Model<"openai-codex-responses
 				format: {
 					type: "grammar",
 					syntax: tool.customFormat.syntax,
-					definition: tool.customFormat.definition,
+					definition: compactGrammarDefinition(tool.customFormat.syntax, tool.customFormat.definition),
 				},
 			};
 		}

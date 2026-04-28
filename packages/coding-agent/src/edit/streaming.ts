@@ -290,18 +290,17 @@ const vimStrategy: EditStreamingStrategy<unknown> = {
 };
 
 interface AtomArgs {
-	path?: string;
-	edits?: unknown[];
+	input?: string;
+	__partialJson?: string;
 }
 
 const atomStrategy: EditStreamingStrategy<AtomArgs> = {
-	extractCompleteEdits(args, partialJson) {
-		if (!args.edits) return args;
-		return { ...args, edits: dropIncompleteLastEdit(args.edits, partialJson, "edits") };
+	extractCompleteEdits(args) {
+		return args;
 	},
 	async computeDiffPreview() {
-		// Atom edits are line-anchored and validated against live file hashes; a
-		// streaming preview without that validation could mislead. Skip for now.
+		// Atom edits can target file headers plus compact diff statements.
+		// We intentionally avoid speculative parsing while args are partial.
 		return null;
 	},
 	renderStreamingFallback() {

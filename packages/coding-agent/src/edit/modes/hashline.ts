@@ -565,8 +565,8 @@ export class HashlineMismatchError extends Error {
 
 		const sorted = [...displayLines].sort((a, b) => a - b);
 		const out: string[] = [
-			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read. The edit was NOT applied.`,
-			"Realign your edit to the file state shown below. Copy the full anchors exactly as shown (for example `160sr`, not just `sr`).",
+			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read (marked *).`,
+			"The edit was NOT applied, please use the updated file content shown below, and issue another edit tool-call.",
 			"",
 		];
 
@@ -602,8 +602,8 @@ export class HashlineMismatchError extends Error {
 		const lines: string[] = [];
 
 		lines.push(
-			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read. The edit was NOT applied.`,
-			"Use the updated anchors shown below (`*` marks changed lines, leading space marks context) and retry the edit.",
+			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read (marked *).`,
+			"The edit was NOT applied, please use the updated file content shown below, and issue another edit tool-call.",
 		);
 		lines.push("");
 

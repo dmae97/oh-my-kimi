@@ -326,7 +326,7 @@ export class Settings {
 
 	/**
 	 * Get the edit variant for a specific model.
-	 * Returns "patch", "replace", "hashline", "vim", "apply_patch", or null (use global default).
+	 * Returns "patch", "replace", "hashline", "atom", "vim", "apply_patch", or null (use global default).
 	 */
 	getEditVariantForModel(model: string | undefined): EditMode | null {
 		if (!model) return null;
