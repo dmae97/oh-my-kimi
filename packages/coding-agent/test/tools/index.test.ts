@@ -58,7 +58,7 @@ describe("createTools", () => {
 		expect(names).toContain("read");
 		expect(names).toContain("edit");
 		expect(names).toContain("write");
-		expect(names).toContain("grep");
+		expect(names).toContain("search");
 		expect(names).toContain("find");
 		expect(names).toContain("lsp");
 		expect(names).toContain("notebook");
@@ -205,7 +205,7 @@ describe("createTools", () => {
 		const session = createTestSession({
 			settings: createSettingsWithOverrides({
 				"find.enabled": false,
-				"grep.enabled": false,
+				"search.enabled": false,
 				"astGrep.enabled": false,
 				"astEdit.enabled": false,
 				"renderMermaid.enabled": false,
@@ -220,7 +220,7 @@ describe("createTools", () => {
 		const names = tools.map(t => t.name);
 
 		expect(names).not.toContain("find");
-		expect(names).not.toContain("grep");
+		expect(names).not.toContain("search");
 		expect(names).not.toContain("ast_grep");
 		expect(names).not.toContain("ast_edit");
 		expect(names).not.toContain("render_mermaid");

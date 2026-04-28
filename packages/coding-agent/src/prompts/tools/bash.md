@@ -29,22 +29,26 @@ Returns output and exit code.
 </output>
 
 <critical>
-You **MUST NOT** use bash for file operations where specialized tools exist:
+You **MUST** use specialized tools instead of bash for any file, directory, or text-search operation. Do **NOT** use Bash to run commands when a relevant dedicated tool is provided — dedicated tools are faster, render diffs, respect `.gitignore`, and let the user review your work. Bash commands matching the patterns below are intercepted and blocked at runtime.
 
 |Instead of (WRONG)|Use (CORRECT)|
 |---|---|
 |`cat file`, `head -n N file`|`read(path="file", limit=N)`|
 |`cat -n file \|sed -n '50,150p'`|`read(path="file", offset=50, limit=100)`|
-{{#if hasGrep}}|`grep -A 20 'pat' file`|`grep(pattern="pat", path="file", post=20)`|
-|`grep -rn 'pat' dir/`|`grep(pattern="pat", path="dir/")`|
-|`rg 'pattern' dir/`|`grep(pattern="pattern", path="dir/")`|{{/if}}
+{{#if hasSearch}}|`grep -A 20 'pat' file`|`search(pattern="pat", path="file", post=20)`|
+|`grep -rn 'pat' dir/`|`search(pattern="pat", path="dir/")`|
+|`rg 'pattern' dir/`|`search(pattern="pattern", path="dir/")`|{{/if}}
 {{#if hasFind}}|`find dir -name '*.ts'`|`find(pattern="dir/**/*.ts")`|{{/if}}
 |`ls dir/`|`read(path="dir/")`|
 |`cat <<'EOF' > file`|`write(path="file", content="…")`|
 |`sed -i 's/old/new/' file`|`edit(path="file", edits=[…])`|
 {{#if hasAstEdit}}|`sed -i 's/oldFn(/newFn(/' src/*.ts`|`ast_edit({ops:[{pat:"oldFn($$$A)", out:"newFn($$$A)"}], path:"src/"})`|{{/if}}
+
+- You **MUST NOT** create files with `cat <<EOF`, `echo > file`, or `printf > file`. Use `write` — heredoc content cannot be cached for permission reuse, every revision triggers a fresh review, and there is no diff. This is the most-violated rule.
+- You **MUST NOT** read line ranges with `sed -n 'A,Bp'`, `awk 'NR>=A && NR<=B'`, or `head | tail` pipelines. Use `read` with `offset`/`limit` (or `sel` if available).
 {{#if hasAstGrep}}- You **MUST** use `ast_grep` for structural code search instead of bash `grep`/`awk`/`perl` pipelines{{/if}}
 {{#if hasAstEdit}}- You **MUST** use `ast_edit` for structural rewrites instead of bash `sed`/`awk`/`perl` pipelines{{/if}}
 - You **MUST NOT** use `2>&1` or `2>/dev/null` — stdout and stderr are already merged
 - You **MUST NOT** use `| head -n 50` or `| tail -n 100` — use `head`/`tail` parameters instead
+- If you catch yourself typing `cat`, `head`, `tail`, `less`, `more`, `ls`, `grep`, `rg`, `find`, `fd`, `sed -i`, `awk -i`, or a heredoc redirect inside a Bash call, stop and switch to the dedicated tool. There is no scenario where bash is preferable for these operations.
 </critical>

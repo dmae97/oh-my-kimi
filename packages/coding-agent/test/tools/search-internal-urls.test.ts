@@ -6,7 +6,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ArtifactProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/artifact-protocol";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { GrepTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
+import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
 
 function getResultText(result: { content: Array<{ type: string; text?: string }> }): string {
 	return result.content
@@ -15,7 +15,7 @@ function getResultText(result: { content: Array<{ type: string; text?: string }>
 		.join("\n");
 }
 
-describe("GrepTool internal URL resolution", () => {
+describe("SearchTool internal URL resolution", () => {
 	let tmpDir: string;
 	let artifactsDir: string;
 
@@ -35,7 +35,7 @@ describe("GrepTool internal URL resolution", () => {
 			hasUI: false,
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
-			settings: Settings.isolated({ "grep.contextBefore": 0, "grep.contextAfter": 0 }),
+			settings: Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 }),
 			...overrides,
 		};
 	}
@@ -52,7 +52,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const router = createRouterWithArtifacts();
 		const session = createSession({ internalRouter: router });
-		const tool = new GrepTool(session);
+		const tool = new SearchTool(session);
 
 		const result = await tool.execute("test-call", {
 			pattern: "needle",
@@ -69,7 +69,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const router = createRouterWithArtifacts();
 		const session = createSession({ internalRouter: router });
-		const tool = new GrepTool(session);
+		const tool = new SearchTool(session);
 
 		const result = await tool.execute("test-call", {
 			pattern: "ERROR.*",
@@ -97,10 +97,10 @@ describe("GrepTool internal URL resolution", () => {
 		});
 
 		const session = createSession({ internalRouter: router });
-		const tool = new GrepTool(session);
+		const tool = new SearchTool(session);
 
 		expect(tool.execute("test-call", { pattern: "foo", path: "agent://0" })).rejects.toThrow(
-			"Cannot grep internal URL without a backing file",
+			"Cannot search internal URL without a backing file",
 		);
 	});
 
@@ -108,7 +108,7 @@ describe("GrepTool internal URL resolution", () => {
 		await Bun.write(path.join(tmpDir, "test.txt"), "hello world\n");
 
 		const session = createSession(); // no internalRouter
-		const tool = new GrepTool(session);
+		const tool = new SearchTool(session);
 
 		const result = await tool.execute("test-call", {
 			pattern: "hello",
@@ -124,7 +124,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const router = createRouterWithArtifacts();
 		const session = createSession({ internalRouter: router });
-		const tool = new GrepTool(session);
+		const tool = new SearchTool(session);
 
 		const result = await tool.execute("test-call", {
 			pattern: "data",
@@ -138,7 +138,7 @@ describe("GrepTool internal URL resolution", () => {
 	it("throws on nonexistent artifact ID", async () => {
 		const router = createRouterWithArtifacts();
 		const session = createSession({ internalRouter: router });
-		const tool = new GrepTool(session);
+		const tool = new SearchTool(session);
 
 		expect(tool.execute("test-call", { pattern: "foo", path: "artifact://999" })).rejects.toThrow(
 			"Artifact 999 not found",

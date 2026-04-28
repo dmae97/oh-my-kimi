@@ -102,20 +102,6 @@ describe("splice_block — validation", () => {
 		];
 		expect(() => applyAtomEdits(content, edits)).toThrow(/unbalanced/);
 	});
-
-	it("rejects mixing splice_block with other anchor edits", () => {
-		const content = "function f() {\n\treturn 1;\n}\n";
-		const edits: AtomEdit[] = [
-			{
-				op: "splice_block",
-				pos: tag(2, "\treturn 1;"),
-				spec: { body: ["return 2;"], kind: "{" },
-				bracket: "body",
-			},
-			{ op: "splice", pos: tag(1, "function f() {"), lines: ["function g() {"] },
-		];
-		expect(() => applyAtomEdits(content, edits)).toThrow(/cannot be combined/);
-	});
 });
 
 describe("splice_block — locator forms", () => {

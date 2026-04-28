@@ -56,7 +56,7 @@ const baseRenderContext: prompt.TemplateContext = {
 	skills: [{ name: "system-prompts", description: "Prompt design skill" }],
 	systemPromptCustomization: "System customization",
 	toolInfo: [{ name: "read", label: "Read", description: "Reads files" }],
-	tools: ["read", "grep", "find", "edit", "task", "web_search", "todo_write"],
+	tools: ["read", "search", "find", "edit", "task", "web_search", "todo_write"],
 	worktree: "/tmp/pi-issue-147",
 	writeToolName: "write",
 };

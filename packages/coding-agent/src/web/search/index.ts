@@ -205,7 +205,7 @@ export async function runSearchQuery(
  * Supports Anthropic, Perplexity, Exa, Brave, Jina, Kimi, Gemini, Codex, Z.AI, SearXNG, and Synthetic providers with automatic fallback.
  * Session is accepted for interface consistency but not used.
  */
-export class SearchTool implements AgentTool<typeof webSearchSchema, SearchRenderDetails> {
+export class WebSearchTool implements AgentTool<typeof webSearchSchema, SearchRenderDetails> {
 	readonly name = "web_search";
 	readonly label = "Web Search";
 	readonly description: string;

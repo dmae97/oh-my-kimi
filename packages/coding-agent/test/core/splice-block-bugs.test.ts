@@ -73,7 +73,7 @@ describe("BUG 3 — splice_block must surface the chosen block range", () => {
 			},
 		];
 		const result = applyAtomEdits(content, edits);
-		const hint = (result.warnings ?? []).find(w => /splice_block.*replaced.*lines? \d+/i.test(w));
+		const hint = (result.warnings ?? []).find(w => /splice locator.*replaced.*lines? \d+/i.test(w));
 		expect(hint).toBeDefined();
 	});
 });
