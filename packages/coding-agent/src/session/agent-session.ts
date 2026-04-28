@@ -6649,10 +6649,9 @@ export class AgentSession {
 			this.sessionManager.branch(newLeafId);
 		}
 
-		// Update agent state — build raw context once and derive the display (deobfuscated) context
-		// from it, so callers can reuse rawContext for UI rendering without a second O(N) walk.
-		const rawContext = this.sessionManager.buildSessionContext();
-		const displayContext = deobfuscateSessionContext(rawContext, this.#obfuscator);
+		// Update agent state — build display context to populate agent messages.
+		const stateContext = this.sessionManager.buildSessionContext();
+		const displayContext = deobfuscateSessionContext(stateContext, this.#obfuscator);
 		await this.#restoreMCPSelectionsForSessionContext(displayContext);
 		this.agent.replaceMessages(displayContext.messages);
 		this.#syncTodoPhasesFromBranch();
@@ -6669,6 +6668,9 @@ export class AgentSession {
 			});
 		}
 
+		// Rebuild after hooks so the returned context captures any hook-driven mutations
+		// (e.g. extension appendEntry/setLabel calls during session_tree handling).
+		const rawContext = this.sessionManager.buildSessionContext();
 		this.#branchSummaryAbortController = undefined;
 		return { editorText, cancelled: false, summaryEntry, sessionContext: rawContext };
 	}
