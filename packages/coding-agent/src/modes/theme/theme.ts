@@ -2323,11 +2323,10 @@ export function getSymbolTheme(): SymbolTheme {
 }
 
 let _markdownTheme: MarkdownTheme | undefined;
-let _markdownThemeKey: string | undefined;
+let _markdownThemeRef: Theme | undefined;
 
 export function getMarkdownTheme(): MarkdownTheme {
-	const key = `${currentThemeName ?? ""}\x00${currentColorBlindMode ? 1 : 0}\x00${currentSymbolPresetOverride ?? ""}`;
-	if (_markdownTheme !== undefined && _markdownThemeKey === key) {
+	if (_markdownTheme !== undefined && _markdownThemeRef === theme) {
 		return _markdownTheme;
 	}
 	const markdownTheme: MarkdownTheme = {
@@ -2357,7 +2356,7 @@ export function getMarkdownTheme(): MarkdownTheme {
 		},
 	};
 	_markdownTheme = markdownTheme;
-	_markdownThemeKey = key;
+	_markdownThemeRef = theme;
 	return markdownTheme;
 }
 
