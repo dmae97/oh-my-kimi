@@ -2322,8 +2322,15 @@ export function getSymbolTheme(): SymbolTheme {
 	};
 }
 
+let _markdownTheme: MarkdownTheme | undefined;
+let _markdownThemeKey: string | undefined;
+
 export function getMarkdownTheme(): MarkdownTheme {
-	return {
+	const key = `${currentThemeName ?? ""}\x00${currentColorBlindMode ? 1 : 0}\x00${currentSymbolPresetOverride ?? ""}`;
+	if (_markdownTheme !== undefined && _markdownThemeKey === key) {
+		return _markdownTheme;
+	}
+	const markdownTheme: MarkdownTheme = {
 		heading: (text: string) => theme.fg("mdHeading", text),
 		link: (text: string) => theme.fg("mdLink", text),
 		linkUrl: (text: string) => theme.fg("mdLinkUrl", text),
@@ -2349,6 +2356,9 @@ export function getMarkdownTheme(): MarkdownTheme {
 			}
 		},
 	};
+	_markdownTheme = markdownTheme;
+	_markdownThemeKey = key;
+	return markdownTheme;
 }
 
 export function getSelectListTheme(): SelectListTheme {
