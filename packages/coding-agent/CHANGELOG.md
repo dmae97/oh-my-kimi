@@ -1,9 +1,10 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
+- Replaced the atom edit `sed` verb with `replace`, requiring `{ find, with, all? }` instead of `{ pat, rep, g? }`
+- Removed bracketed atom locators like `(anchor)` and `[anchor]`, so region block rewrites via `splice` are no longer supported and bare anchor `loc` values now target exactly one line
 - Renamed MCP tool identifiers from the `mcp_<server>_<tool>` format to `mcp__<server>_<tool>` so custom tool names, active tool lists, and persisted MCP selections must be updated to the new prefix
 - Renamed the built-in content-search tool from `grep` to `search`, including SDK/tool event names and settings keys (`search.enabled`, `search.contextBefore`, `search.contextAfter`), so integrations using `grep` and `grep.*` references must be updated
 
@@ -14,6 +15,9 @@
 
 ### Changed
 
+- Changed atom inline and file-wide replacements to perform literal substring substitution, with `all: true` replacing all matches on the line
+- Changed `loc` parsing so path-qualified atom edits correctly split `path:loc` when the locator suffix contains colons
+- Changed `replace` to reject multiline `find`/`with` values and require single-line operands
 - Bumped default `read.defaultLimit` from 300 to 500 lines, and scaled the read tool's byte budget with the line limit (`max(50KB, lines * 512)`) so the configured line count is no longer truncated by the shared 50KB cap
 
 ### Fixed
