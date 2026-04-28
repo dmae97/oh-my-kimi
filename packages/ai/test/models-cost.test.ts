@@ -70,4 +70,23 @@ describe("calculateCost", () => {
 		expect(usage.cost.cacheWrite).toBeCloseTo(0.08, 8);
 		expect(usage.cost.total).toBeCloseTo(2.18, 8);
 	});
+
+	it("prices OpenAI Codex GPT models from the matching OpenAI catalog entry", () => {
+		const openAIModel = getBundledModel("openai", "gpt-5.4");
+		const codexModel = getBundledModel("openai-codex", "gpt-5.4");
+		const usage: Usage = {
+			input: 1000,
+			output: 500,
+			cacheRead: 200,
+			cacheWrite: 0,
+			totalTokens: 1700,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+
+		expect(codexModel.cost).toEqual(openAIModel.cost);
+
+		calculateCost(codexModel, usage);
+
+		expect(usage.cost.total).toBeCloseTo(0.01005, 8);
+	});
 });
