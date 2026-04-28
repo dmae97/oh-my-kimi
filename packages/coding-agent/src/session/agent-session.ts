@@ -6657,8 +6657,12 @@ export class AgentSession {
 		this.#syncTodoPhasesFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 
-		// Emit session_tree event
-		if (this.#extensionRunner) {
+		this.#branchSummaryAbortController = undefined;
+
+		// Emit session_tree event; only handlers can mutate session entries, so skip
+		// the emit and the context rebuild when no handlers are registered (mirrors
+		// the session_before_tree guard above).
+		if (this.#extensionRunner?.hasHandlers("session_tree")) {
 			await this.#extensionRunner.emit({
 				type: "session_tree",
 				newLeafId: this.sessionManager.getLeafId(),
@@ -6666,13 +6670,10 @@ export class AgentSession {
 				summaryEntry,
 				fromExtension: summaryText ? fromExtension : undefined,
 			});
+			const rawContext = this.sessionManager.buildSessionContext();
+			return { editorText, cancelled: false, summaryEntry, sessionContext: rawContext };
 		}
-
-		// Rebuild after hooks so the returned context captures any hook-driven mutations
-		// (e.g. extension appendEntry/setLabel calls during session_tree handling).
-		const rawContext = this.sessionManager.buildSessionContext();
-		this.#branchSummaryAbortController = undefined;
-		return { editorText, cancelled: false, summaryEntry, sessionContext: rawContext };
+		return { editorText, cancelled: false, summaryEntry, sessionContext: stateContext };
 	}
 
 	/**
