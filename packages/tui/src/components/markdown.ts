@@ -41,6 +41,11 @@ function renderCacheSet(key: string, value: string[]): void {
 	_renderCache.set(key, value);
 }
 
+/** Drop all L2 cache entries. Call on theme change to prevent stale styled output. */
+export function clearRenderCache(): void {
+	_renderCache.clear();
+}
+
 // Stable numeric IDs for structural theme/style objects (no ID field on type).
 // WeakMap so GC can collect orphaned themes/styles without a leak.
 const _objectIds = new WeakMap<object, number>();
