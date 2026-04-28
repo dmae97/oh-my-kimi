@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.5.4] - 2026-04-28
 ### Changed
 
 - Changed OpenAI custom Lark grammar payloads to strip comments and blank lines before sending provider requests.
