@@ -55,7 +55,7 @@ export const atomEditSchema = Type.Object(
 	{
 		loc: Type.String({
 			description: "edit location",
-			examples: ["1ab", "$", "src/foo.ts:1ab"],
+			examples: ["1ab", "$"],
 		}),
 		splice: Type.Optional(textSchema),
 		pre: Type.Optional(textSchema),
@@ -65,7 +65,9 @@ export const atomEditSchema = Type.Object(
 				{
 					find: Type.String({ description: "literal substring to find" }),
 					with: Type.String({ description: "literal substring to substitute" }),
-					all: Type.Optional(Type.Boolean({ description: "replace every occurrence (default: first only)", default: false })),
+					all: Type.Optional(
+						Type.Boolean({ description: "replace every occurrence (default: first only)", default: false }),
+					),
 				},
 				{
 					additionalProperties: false,
@@ -78,7 +80,7 @@ export const atomEditSchema = Type.Object(
 
 export const atomEditParamsSchema = Type.Object(
 	{
-		path: Type.Optional(Type.String({ description: "default file path for edits" })),
+		path: Type.String({ description: "file path for edits" }),
 		edits: Type.Array(atomEditSchema, { description: "edit ops" }),
 	},
 	{ additionalProperties: false },
@@ -119,15 +121,6 @@ const ATOM_OPTIONAL_KEYS = ["loc", ...ATOM_VERB_KEYS] as const satisfies readonl
 // optional `|content` suffixes (e.g. `82zu|  for (...)`) so the suffix can be
 // captured as a content hint for anchor disambiguation.
 const ANCHOR_PREFIX_RE = new RegExp(`^\\s*[>+-]*\\s*\\d+${HASHLINE_BIGRAM_RE_SRC}`);
-
-// Splits `path:loc` references where the right side starts with a valid anchor
-// (single `\d+<bigram>`, optionally followed by a content suffix using `|` or
-// `:`). The non-greedy `(.+?)` picks the leftmost colon whose RHS is a real
-// anchor, so colons inside the loc's content suffix (TS type annotations, etc.)
-// don't break the split. Drive-letter prefixes like `C:\path\a.ts:160sr` still
-// resolve correctly because the first colon's RHS fails the anchor pattern.
-const ANCHOR_TAG_RE_SRC = `\\s*[>+-]*\\s*\\d+${HASHLINE_BIGRAM_RE_SRC}`;
-const PATH_LOC_SPLIT_RE = new RegExp(`^(.+?):(${ANCHOR_TAG_RE_SRC}(?:[|:].*)?)$`);
 
 function stripNullAtomFields(edit: AtomToolEdit): AtomToolEdit {
 	let next: Record<string, unknown> | undefined;
@@ -177,37 +170,6 @@ function parseAnchor(raw: string, opName: string): Anchor {
 			`${opName} requires ${formatFullAnchorRequirement(raw)} Could not find a line number in the anchor.`,
 		);
 	}
-}
-
-function resolveAtomEntryPath(
-	edit: AtomToolEdit,
-	topLevelPath: string | undefined,
-	editIndex: number,
-): AtomToolEdit & { path: string } {
-	const entry = stripNullAtomFields(edit);
-	let loc = entry.loc;
-	let pathOverride: string | undefined;
-	if (typeof loc === "string") {
-		const split = loc.match(PATH_LOC_SPLIT_RE);
-		if (split) {
-			pathOverride = split[1];
-			loc = split[2]!;
-		}
-	}
-	const path = pathOverride || topLevelPath;
-	if (!path) {
-		throw new Error(
-			`Edit ${editIndex}: missing path. Provide a top-level path or prefix loc with a file path (for example "a.ts:160sr").`,
-		);
-	}
-	return { ...entry, path, ...(loc !== entry.loc ? { loc } : {}) };
-}
-
-export function resolveAtomEntryPaths(
-	edits: readonly AtomToolEdit[],
-	topLevelPath: string | undefined,
-): (AtomToolEdit & { path: string })[] {
-	return edits.map((edit, i) => resolveAtomEntryPath(edit, topLevelPath, i));
 }
 
 function parseLoc(raw: string, editIndex: number): ParsedAtomLoc {
@@ -681,7 +643,9 @@ export function applyAtomEdits(
 			}
 		}
 		if (!anyMatched) {
-			throw new Error(`Edit replace expression ${JSON.stringify(edit.expression)} did not match any line in the file.`);
+			throw new Error(
+				`Edit replace expression ${JSON.stringify(edit.expression)} did not match any line in the file.`,
+			);
 		}
 	}
 

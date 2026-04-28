@@ -976,23 +976,29 @@ export function findContextLine(
 	return { index: undefined, confidence: bestScore };
 }
 
-export const replaceEditEntrySchema = Type.Object({
-	path: Type.Optional(Type.String({ description: "File path (omit to use top-level `path`)" })),
-	old_text: Type.String({ description: "Text to find (fuzzy whitespace matching enabled)" }),
-	new_text: Type.String({ description: "Replacement text" }),
-	all: Type.Optional(Type.Boolean({ description: "Replace all occurrences (default: unique match required)" })),
-});
+export const replaceEditEntrySchema = Type.Object(
+	{
+		old_text: Type.String({ description: "Text to find (fuzzy whitespace matching enabled)" }),
+		new_text: Type.String({ description: "Replacement text" }),
+		all: Type.Optional(Type.Boolean({ description: "Replace all occurrences (default: unique match required)" })),
+	},
+	{ additionalProperties: false },
+);
 
-export const replaceEditSchema = Type.Object({
-	path: Type.Optional(Type.String({ description: "Default file path used when an edit omits its own `path`" })),
-	edits: Type.Array(replaceEditEntrySchema, { description: "Replacements", minItems: 1 }),
-});
+export const replaceEditSchema = Type.Object(
+	{
+		path: Type.String({ description: "file path for edits" }),
+		edits: Type.Array(replaceEditEntrySchema, { description: "Replacements", minItems: 1 }),
+	},
+	{ additionalProperties: false },
+);
 
 export type ReplaceEditEntry = Static<typeof replaceEditEntrySchema>;
 export type ReplaceParams = Static<typeof replaceEditSchema>;
 
 export interface ExecuteReplaceSingleOptions {
 	session: ToolSession;
+	path: string;
 	params: ReplaceEditEntry;
 	signal?: AbortSignal;
 	batchRequest?: LspBatchRequest;
@@ -1007,6 +1013,7 @@ export async function executeReplaceSingle(
 ): Promise<AgentToolResult<EditToolDetails, typeof replaceEditEntrySchema>> {
 	const {
 		session,
+		path,
 		params,
 		signal,
 		batchRequest,
@@ -1015,10 +1022,7 @@ export async function executeReplaceSingle(
 		writethrough,
 		beginDeferredDiagnosticsForPath,
 	} = options;
-	const { path, old_text, new_text, all } = params;
-	if (typeof path !== "string" || path.length === 0) {
-		throw new Error("replace edit: missing `path`. Provide `path` on the edit or supply a top-level `path`.");
-	}
+	const { old_text, new_text, all } = params;
 
 	enforcePlanModeWrite(session, path);
 

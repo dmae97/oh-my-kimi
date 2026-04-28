@@ -1,13 +1,12 @@
 Applies precise file edits using anchors (line+hash).
 
 <ops>
-Each call **MUST** have shape `{path:"a.ts",edits:[…]}`. `path` is the default file; you **MAY** override it per edit with `loc:"b.ts:160sr"`.
+Each call **MUST** have shape `{path:"a.ts",edits:[…]}`. `path` is required and applies to every edit in the call; `loc` is anchor-only and **MUST NOT** include a file prefix.
 Each edit **MUST** have exactly one `loc` and **MUST** include one or more verbs.
 
 # Locators
 - `"A"` targets one anchored line (line number + 2-letter suffix, e.g. `160sr`).
 - `"$"` targets the whole file: `pre` = BOF, `post` = EOF, `replace` = every line.
--
 # Verbs
 - `splice:[…]` replaces the anchored line. `[]` deletes; `[""]` makes a blank line. To replace N lines, anchor the first line and list all replacement lines.
 - `pre:[…]` inserts before the anchor, or BOF with `loc:"$"`.
@@ -44,8 +43,6 @@ Use for tiny inline edits: names, operators, literals.
 # File edges:
 `{path:"a.ts",edits:[{loc:"$",pre:["// Copyright (c) 2026",""]}]}`
 `{path:"a.ts",edits:[{loc:"$",post:["","export { FALLBACK };"]}]}`
-# Cross-file override:
-`{path:"a.ts",edits:[{loc:{{href 1 "const FALLBACK = \"guest\";" "config.ts:" ""}},splice:["const FALLBACK = \"anonymous\";"]}]}`
 # Replace several consecutive lines: anchor the first line and list all replacement lines in `splice`.
 `{path:"a.ts",edits:[{loc:{{href 4 "\tconst clean = name || FALLBACK;"}},splice:["\tconst clean = String(name ?? FALLBACK).trim();","\treturn clean.toLowerCase();","}"]}]}`
 This anchors line 4 and replaces lines 4-6 of the original function body in one splice. The anchor's hash protects against the file having shifted under you.

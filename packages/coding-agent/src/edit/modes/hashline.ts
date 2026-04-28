@@ -156,7 +156,6 @@ const locSchema = Type.Union(
 
 export const hashlineEditSchema = Type.Object(
 	{
-		path: Type.Optional(Type.String({ description: "File path (omit to use top-level `path`)" })),
 		loc: Type.Optional(locSchema),
 		content: Type.Optional(linesSchema),
 	},
@@ -165,7 +164,7 @@ export const hashlineEditSchema = Type.Object(
 
 export const hashlineEditParamsSchema = Type.Object(
 	{
-		path: Type.Optional(Type.String({ description: "Default file path used when an edit omits its own `path`" })),
+		path: Type.String({ description: "file path for edits" }),
 		edits: Type.Array(hashlineEditSchema, { description: "edits" }),
 	},
 	{ additionalProperties: false },

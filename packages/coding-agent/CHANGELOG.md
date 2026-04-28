@@ -1,8 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
+- Required top-level `path` for `edit` tool `atom`, `hashline`, `patch`, and `replace` calls and removed per-entry `path` overrides, so edits to different files now require separate calls
 - Replaced the atom edit `sed` verb with `replace`, requiring `{ find, with, all? }` instead of `{ pat, rep, g? }`
 - Removed bracketed atom locators like `(anchor)` and `[anchor]`, so region block rewrites via `splice` are no longer supported and bare anchor `loc` values now target exactly one line
 - Renamed MCP tool identifiers from the `mcp_<server>_<tool>` format to `mcp__<server>_<tool>` so custom tool names, active tool lists, and persisted MCP selections must be updated to the new prefix
@@ -15,6 +17,7 @@
 
 ### Changed
 
+- Updated `edit` streaming diff previews for `patch`, `replace`, and `hashline` to produce a single request-level preview for the new single-file `path` mode
 - Changed atom inline and file-wide replacements to perform literal substring substitution, with `all: true` replacing all matches on the line
 - Changed `loc` parsing so path-qualified atom edits correctly split `path:loc` when the locator suffix contains colons
 - Changed `replace` to reject multiline `find`/`with` values and require single-line operands

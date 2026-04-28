@@ -12,10 +12,10 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
-import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
 import { JobTool } from "@oh-my-pi/pi-coding-agent/tools/job";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
+import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import * as markitUtils from "@oh-my-pi/pi-coding-agent/utils/markit";
 import { $which, Snowflake } from "@oh-my-pi/pi-utils";
@@ -662,7 +662,8 @@ describe("Coding Agent Tools", () => {
 			fs.writeFileSync(testFile, originalContent);
 
 			const result = await editTool.execute("test-call-5", {
-				edits: [{ path: testFile, old_text: "world", new_text: "testing" }],
+				path: testFile,
+				edits: [{ old_text: "world", new_text: "testing" }],
 			});
 			const details = result.details as { diff?: string } | undefined;
 
@@ -680,7 +681,8 @@ describe("Coding Agent Tools", () => {
 
 			await expect(
 				editTool.execute("test-call-6", {
-					edits: [{ path: testFile, old_text: "nonexistent", new_text: "testing" }],
+					path: testFile,
+					edits: [{ old_text: "nonexistent", new_text: "testing" }],
 				}),
 			).rejects.toThrow(/Could not find/);
 		});
@@ -692,7 +694,8 @@ describe("Coding Agent Tools", () => {
 
 			await expect(
 				editTool.execute("test-call-7", {
-					edits: [{ path: testFile, old_text: "foo", new_text: "bar" }],
+					path: testFile,
+					edits: [{ old_text: "foo", new_text: "bar" }],
 				}),
 			).rejects.toThrow(/Found 3 occurrences/);
 		});
@@ -702,7 +705,8 @@ describe("Coding Agent Tools", () => {
 			fs.writeFileSync(testFile, "foo bar foo baz foo");
 
 			const result = await editTool.execute("test-all-1", {
-				edits: [{ path: testFile, old_text: "foo", new_text: "qux", all: true }],
+				path: testFile,
+				edits: [{ old_text: "foo", new_text: "qux", all: true }],
 			});
 
 			expect(getTextOutput(result)).toContain("Successfully replaced 3 occurrences");
@@ -731,9 +735,9 @@ function b() {
 			// With multiple fuzzy matches, the tool rejects for safety to avoid ambiguous replacements
 			await expect(
 				editTool.execute("test-all-fuzzy", {
+					path: testFile,
 					edits: [
 						{
-							path: testFile,
 							old_text: "if (x) {\n  doThing();\n}",
 							new_text: "if (y) {\n  doOther();\n}",
 							all: true,
@@ -749,7 +753,8 @@ function b() {
 
 			await expect(
 				editTool.execute("test-all-nomatch", {
-					edits: [{ path: testFile, old_text: "nonexistent", new_text: "bar", all: true }],
+					path: testFile,
+					edits: [{ old_text: "nonexistent", new_text: "bar", all: true }],
 				}),
 			).rejects.toThrow(/Could not find/);
 		});
@@ -759,7 +764,8 @@ function b() {
 			fs.writeFileSync(testFile, "start\nfoo\nbar\nend\nstart\nfoo\nbar\nend");
 
 			const result = await editTool.execute("test-all-multiline", {
-				edits: [{ path: testFile, old_text: "foo\nbar", new_text: "replaced", all: true }],
+				path: testFile,
+				edits: [{ old_text: "foo\nbar", new_text: "replaced", all: true }],
 			});
 
 			expect(getTextOutput(result)).toContain("Successfully replaced 2 occurrences");
@@ -772,7 +778,8 @@ function b() {
 			fs.writeFileSync(testFile, "hello world");
 
 			const result = await editTool.execute("test-all-single", {
-				edits: [{ path: testFile, old_text: "world", new_text: "universe", all: true }],
+				path: testFile,
+				edits: [{ old_text: "world", new_text: "universe", all: true }],
 			});
 
 			expect(getTextOutput(result)).toContain("Successfully replaced text");
@@ -1219,7 +1226,9 @@ function b() {
 			fs.writeFileSync(testFile, content);
 
 			const contextSettings = Settings.isolated({ "search.contextBefore": 1, "search.contextAfter": 1 });
-			const contextSearchTool = wrapToolWithMetaNotice(new SearchTool(createTestToolSession(testDir, contextSettings)));
+			const contextSearchTool = wrapToolWithMetaNotice(
+				new SearchTool(createTestToolSession(testDir, contextSettings)),
+			);
 			const result = await contextSearchTool.execute("test-call-12", {
 				pattern: "match",
 				path: testFile,
@@ -1560,7 +1569,8 @@ describe("edit tool CRLF handling", () => {
 		fs.writeFileSync(testFile, "line one\r\nline two\r\nline three\r\n");
 
 		const result = await editTool.execute("test-crlf-1", {
-			edits: [{ path: testFile, old_text: "line two\n", new_text: "replaced line\n" }],
+			path: testFile,
+			edits: [{ old_text: "line two\n", new_text: "replaced line\n" }],
 		});
 
 		expect(getTextOutput(result)).toContain("Successfully replaced");
@@ -1571,7 +1581,8 @@ describe("edit tool CRLF handling", () => {
 		fs.writeFileSync(testFile, "first\r\nsecond\r\nthird\r\n");
 
 		await editTool.execute("test-crlf-2", {
-			edits: [{ path: testFile, old_text: "second\n", new_text: "REPLACED\n" }],
+			path: testFile,
+			edits: [{ old_text: "second\n", new_text: "REPLACED\n" }],
 		});
 
 		const content = await Bun.file(testFile).text();
@@ -1583,7 +1594,8 @@ describe("edit tool CRLF handling", () => {
 		fs.writeFileSync(testFile, "first\nsecond\nthird\n");
 
 		await editTool.execute("test-lf-1", {
-			edits: [{ path: testFile, old_text: "second\n", new_text: "REPLACED\n" }],
+			path: testFile,
+			edits: [{ old_text: "second\n", new_text: "REPLACED\n" }],
 		});
 
 		const content = await Bun.file(testFile).text();
@@ -1597,7 +1609,8 @@ describe("edit tool CRLF handling", () => {
 
 		await expect(
 			editTool.execute("test-crlf-dup", {
-				edits: [{ path: testFile, old_text: "hello\nworld\n", new_text: "replaced\n" }],
+				path: testFile,
+				edits: [{ old_text: "hello\nworld\n", new_text: "replaced\n" }],
 			}),
 		).rejects.toThrow(/Found 2 occurrences/);
 	});
@@ -1608,7 +1621,8 @@ describe("edit tool CRLF handling", () => {
 		fs.writeFileSync(testFile, "\uFEFFfirst\r\nsecond\r\nthird\r\n");
 
 		await editTool.execute("test-bom", {
-			edits: [{ path: testFile, old_text: "second\n", new_text: "REPLACED\n" }],
+			path: testFile,
+			edits: [{ old_text: "second\n", new_text: "REPLACED\n" }],
 		});
 
 		const content = await Bun.file(testFile).text();

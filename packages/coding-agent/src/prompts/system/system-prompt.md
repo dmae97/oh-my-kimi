@@ -301,7 +301,6 @@ These are inviolable.
 {{#has tools "task"}}- Use tasks or subagents when independent investigations or edits can be split safely.{{/has}}
 - If you cannot explain why one piece depends on another, they are probably independent.
 {{#has tools "task"}}- When a plan feels too large for a single turn, parallelize aggressively — do **NOT** abandon phases, silently drop them, or narrate scope cuts. Scope pressure is a signal to delegate, not to shrink the work.{{/has}}
-
 ## 4. Task tracking
 - Update todos as you progress.
 - Skip task tracking only for trivial requests.

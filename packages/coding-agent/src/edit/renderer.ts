@@ -28,8 +28,8 @@ import { Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../
 import type { EditMode } from "../utils/edit-mode";
 import type { VimToolDetails } from "../vim/types";
 import type { DiffError, DiffResult } from "./diff";
-import { expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
-import type { Operation, PatchEditEntry } from "./modes/patch";
+import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
+import type { Operation } from "./modes/patch";
 import type { PerFileDiffPreview } from "./streaming";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -107,7 +107,7 @@ type EditRenderEntry = {
 };
 
 interface ApplyPatchRenderSummary {
-	entries: PatchEditEntry[];
+	entries: ApplyPatchEntry[];
 	error?: string;
 }
 

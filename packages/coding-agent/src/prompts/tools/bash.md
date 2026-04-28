@@ -43,9 +43,8 @@ You **MUST** use specialized tools instead of bash for any file, directory, or t
 |`cat <<'EOF' > file`|`write(path="file", content="…")`|
 |`sed -i 's/old/new/' file`|`edit(path="file", edits=[…])`|
 {{#if hasAstEdit}}|`sed -i 's/oldFn(/newFn(/' src/*.ts`|`ast_edit({ops:[{pat:"oldFn($$$A)", out:"newFn($$$A)"}], path:"src/"})`|{{/if}}
-
 - You **MUST NOT** create files with `cat <<EOF`, `echo > file`, or `printf > file`. Use `write` — heredoc content cannot be cached for permission reuse, every revision triggers a fresh review, and there is no diff. This is the most-violated rule.
-- You **MUST NOT** read line ranges with `sed -n 'A,Bp'`, `awk 'NR>=A && NR<=B'`, or `head | tail` pipelines. Use `read` with `offset`/`limit` (or `sel` if available).
+- You **MUST NOT** read line ranges with `sed -n 'A,Bp'`, `awk 'NR≥A && NR≤B'`, or `head | tail` pipelines. Use `read` with `offset`/`limit` (or `sel` if available).
 {{#if hasAstGrep}}- You **MUST** use `ast_grep` for structural code search instead of bash `grep`/`awk`/`perl` pipelines{{/if}}
 {{#if hasAstEdit}}- You **MUST** use `ast_edit` for structural rewrites instead of bash `sed`/`awk`/`perl` pipelines{{/if}}
 - You **MUST NOT** use `2>&1` or `2>/dev/null` — stdout and stderr are already merged

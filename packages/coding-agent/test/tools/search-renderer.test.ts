@@ -27,9 +27,14 @@ describe("searchToolRenderer", () => {
 			},
 		};
 
-		const collapsed = searchToolRenderer.renderResult(result as never, { expanded: false, isPartial: false }, uiTheme, {
-			pattern: "needle",
-		});
+		const collapsed = searchToolRenderer.renderResult(
+			result as never,
+			{ expanded: false, isPartial: false },
+			uiTheme,
+			{
+				pattern: "needle",
+			},
+		);
 		const renderedLines = sanitizeText(collapsed.render(200).join("\n")).split("\n");
 		const bodyLines = renderedLines.slice(1);
 
