@@ -18,7 +18,7 @@ import { calculatorToolRenderer } from "./calculator";
 import { debugToolRenderer } from "./debug";
 import { findToolRenderer } from "./find";
 import { githubToolRenderer } from "./gh-renderer";
-import { grepToolRenderer } from "./grep";
+import { searchToolRenderer } from "./search";
 import { inspectImageToolRenderer } from "./inspect-image-renderer";
 import { jobToolRenderer } from "./job";
 import { notebookToolRenderer } from "./notebook";
@@ -54,7 +54,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	edit: editToolRenderer as ToolRenderer,
 	apply_patch: editToolRenderer as ToolRenderer,
 	find: findToolRenderer as ToolRenderer,
-	grep: grepToolRenderer as ToolRenderer,
+	search: searchToolRenderer as ToolRenderer,
 	lsp: lspToolRenderer as ToolRenderer,
 	notebook: notebookToolRenderer as ToolRenderer,
 	inspect_image: inspectImageToolRenderer as ToolRenderer,

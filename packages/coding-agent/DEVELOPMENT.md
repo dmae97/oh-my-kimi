@@ -672,7 +672,7 @@ internal URL input (rule://, docs://, ...)
   - convert to agent tools using `MCPTool.fromTools(connection, serverTools)`
 - Startup is bounded by `STARTUP_TIMEOUT_MS` (250ms). If tool loads are still pending, cached definitions may be used from `MCPToolCache` and exposed as deferred wrappers via `DeferredMCPTool.fromTools(...)`.
 - Lifecycle operations:
-  - `disconnectServer(name)` and `disconnectAll()` tear down connections via `disconnectServer(connection)` and remove associated `mcp_<server>_` tools.
+  - `disconnectServer(name)` and `disconnectAll()` tear down connections via `disconnectServer(connection)` and remove associated `mcp__<server>_` tools.
   - `refreshServerTools(name)` / `refreshAllTools()` re-run `listTools()` and replace server tool registrations.
 
 `discoverAndLoadMCPTools()` in `src/mcp/loader.ts` is the adapter from manager internals to extensibility-facing output:
