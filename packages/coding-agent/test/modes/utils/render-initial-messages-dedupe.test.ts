@@ -16,7 +16,7 @@
  *     the TypeScript return type and the agent-session unit tests.
  */
 
-import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
@@ -44,8 +44,8 @@ function makeEmptyContext(): SessionContext {
 /** Build a minimal InteractiveModeContext mock, returning spies for assertions. */
 function makeCtx(sessionManager?: Pick<SessionManager, "buildSessionContext" | "getEntries" | "getCwd">): {
 	ctx: InteractiveModeContext;
-	buildSessionContextSpy: ReturnType<typeof vi.fn>;
-	renderSessionContextSpy: ReturnType<typeof vi.fn>;
+	buildSessionContextSpy: Mock<() => SessionContext>;
+	renderSessionContextSpy: Mock<(...args: unknown[]) => void>;
 } {
 	const buildSessionContextSpy = vi.fn(() => makeEmptyContext());
 	const renderSessionContextSpy = vi.fn();
@@ -98,7 +98,7 @@ describe("UiHelpers.renderInitialMessages — isolated", () => {
 	it("uses the fallback context from sessionManager when no prebuilt is provided", () => {
 		const fallback = makeEmptyContext();
 		const { ctx, renderSessionContextSpy } = makeCtx();
-		(ctx.sessionManager.buildSessionContext as ReturnType<typeof vi.fn>).mockReturnValue(fallback);
+		(ctx.sessionManager.buildSessionContext as Mock<() => SessionContext>).mockReturnValue(fallback);
 		new UiHelpers(ctx).renderInitialMessages();
 		expect(renderSessionContextSpy).toHaveBeenCalledWith(fallback, {
 			updateFooter: true,
