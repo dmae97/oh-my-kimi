@@ -1120,18 +1120,15 @@ async function executeAtomSection(
 		.diagnostics(diagnostics?.summary ?? "", diagnostics?.messages ?? [])
 		.get();
 	const preview = buildCompactHashlineDiffPreview(diffResult.diff);
-	const summaryLine = `Changes: +${preview.addedLines} -${preview.removedLines}${
-		preview.preview ? "" : " (no textual diff preview)"
-	}`;
 	const warningsBlock = result.warnings?.length ? `\n\nWarnings:\n${result.warnings.join("\n")}` : "";
-	const previewBlock = preview.preview ? `\n\nDiff preview:\n${preview.preview}` : "";
-	const resultText = source.exists ? `Updated ${path}` : `Created ${path}`;
+	const previewBlock = preview.preview ? `\n${preview.preview}` : "";
+	const resultText = preview.preview ? `${path}:` : source.exists ? `Updated ${path}` : `Created ${path}`;
 
 	return {
 		content: [
 			{
 				type: "text",
-				text: `${resultText}\n${summaryLine}${previewBlock}${warningsBlock}`,
+				text: `${resultText}${previewBlock}${warningsBlock}`,
 			},
 		],
 		details: {

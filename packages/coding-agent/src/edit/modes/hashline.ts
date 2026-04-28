@@ -1014,7 +1014,7 @@ export interface CompactHashlineDiffOptions {
 }
 
 const NUMBERED_DIFF_LINE_RE = /^([ +-])(\s*\d+)\|(.*)$/;
-const HASHLINE_PREVIEW_PLACEHOLDER = "   ";
+const HASHLINE_PREVIEW_PLACEHOLDER = "  ";
 
 type DiffRunKind = " " | "+" | "-" | "meta";
 type DiffRun = { kind: DiffRunKind; lines: string[] };
@@ -1141,7 +1141,7 @@ function collapseFromStart(lines: string[], maxLines: number, label: string): st
 	return [...lines.slice(0, maxLines), ` ... ${hidden} more ${label} lines`];
 }
 
-function collapseFromEnd(lines: string[], maxLines: number, label: string): string[] {
+function _collapseFromEnd(lines: string[], maxLines: number, label: string): string[] {
 	if (lines.length <= maxLines) return lines;
 	const hidden = lines.length - maxLines;
 	return [` ... ${hidden} more ${label} lines`, ...lines.slice(-maxLines)];
@@ -1190,11 +1190,11 @@ export function buildCompactHashlineDiffPreview(
 				break;
 			case " ":
 				if (runIndex === 0) {
-					out.push(...collapseFromEnd(run.lines, maxUnchangedRun, "unchanged"));
+					out.push(...run.lines.slice(-maxUnchangedRun));
 					break;
 				}
 				if (runIndex === runs.length - 1) {
-					out.push(...collapseFromStart(run.lines, maxUnchangedRun, "unchanged"));
+					out.push(...run.lines.slice(0, maxUnchangedRun));
 					break;
 				}
 				out.push(...collapseFromMiddle(run.lines, maxUnchangedRun, "unchanged"));

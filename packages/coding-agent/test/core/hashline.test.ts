@@ -767,7 +767,7 @@ describe("buildCompactHashlineDiffPreview", () => {
 		expect(preview.preview).not.toContain("ctx-b");
 		expect(preview.preview).toContain(` 3${computeLineHash(3, "ctx-c")}|ctx-c`);
 		expect(preview.preview).toContain(` 4${computeLineHash(4, "ctx-d")}|ctx-d`);
-		expect(preview.preview).toContain(" ... 2 more unchanged lines");
+		expect(preview.preview).not.toContain("more unchanged lines");
 		expect(preview.preview).toContain(`+5${computeLineHash(5, "added")}|added`);
 	});
 
@@ -780,7 +780,7 @@ describe("buildCompactHashlineDiffPreview", () => {
 		expect(preview.preview).toContain(`+3${computeLineHash(3, "two")}|two`);
 		expect(preview.preview).toContain(`+4${computeLineHash(4, "three")}|three`);
 		expect(preview.preview).toContain(`+5${computeLineHash(5, "four")}|four`);
-		expect(preview.preview).toContain("-2   |old");
+		expect(preview.preview).toContain("-2  |old");
 		expect(preview.preview).not.toContain(`-2${computeLineHash(2, "old")}`);
 		expect(preview.addedLines).toBe(4);
 		expect(preview.removedLines).toBe(1);
@@ -796,7 +796,7 @@ describe("buildCompactHashlineDiffPreview", () => {
 		expect(preview.preview).toContain(` 12${computeLineHash(12, "ctx-b")}|ctx-b`);
 		expect(preview.preview).not.toContain("ctx-c");
 		expect(preview.preview).not.toContain("ctx-d");
-		expect(preview.preview).toContain(" ... 2 more unchanged lines");
+		expect(preview.preview).not.toContain("more unchanged lines");
 	});
 
 	it("uses new-file line numbers for unchanged lines after insertions", () => {
