@@ -12,7 +12,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
-import { GrepTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
+import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
 import { JobTool } from "@oh-my-pi/pi-coding-agent/tools/job";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
@@ -219,7 +219,7 @@ describe("Coding Agent Tools", () => {
 	let writeTool: WriteTool;
 	let editTool: EditTool;
 	let bashTool: BashTool;
-	let grepTool: GrepTool;
+	let searchTool: SearchTool;
 	let findTool: FindTool;
 	let originalEditVariant: string | undefined;
 
@@ -238,7 +238,7 @@ describe("Coding Agent Tools", () => {
 		writeTool = wrapToolWithMetaNotice(new WriteTool(session));
 		editTool = wrapToolWithMetaNotice(new EditTool(session));
 		bashTool = wrapToolWithMetaNotice(new BashTool(session));
-		grepTool = wrapToolWithMetaNotice(new GrepTool(session));
+		searchTool = wrapToolWithMetaNotice(new SearchTool(session));
 		findTool = wrapToolWithMetaNotice(new FindTool(session));
 	});
 
@@ -1157,12 +1157,12 @@ function b() {
 		});
 	});
 
-	describe("grep tool", () => {
+	describe("search tool", () => {
 		it("should include filename when searching a single file", async () => {
 			const testFile = path.join(testDir, "example.txt");
 			fs.writeFileSync(testFile, "first line\nmatch line\nlast line");
 
-			const result = await grepTool.execute("test-call-11", {
+			const result = await searchTool.execute("test-call-11", {
 				pattern: "match",
 				path: testFile,
 			});
@@ -1178,7 +1178,7 @@ function b() {
 			fs.writeFileSync(path.join(testDir, "schema-review-beta.test.ts"), "review target\n");
 			fs.writeFileSync(path.join(testDir, "schema-other.test.ts"), "review target\n");
 
-			const result = await grepTool.execute("test-call-11-path-glob", {
+			const result = await searchTool.execute("test-call-11-path-glob", {
 				pattern: "review target",
 				path: `${testDir}/schema-review-*.test.ts`,
 			});
@@ -1199,7 +1199,7 @@ function b() {
 			fs.writeFileSync(path.join(aiDir, "ignore.js"), "providerOptions\n");
 			fs.writeFileSync(path.join(testDir, "outside.ts"), "providerOptions\n");
 
-			const result = await grepTool.execute("test-call-11-path-and-glob", {
+			const result = await searchTool.execute("test-call-11-path-and-glob", {
 				pattern: "providerOptions",
 				path: `${packageDir}/ai@6.0.119+*/node_modules/ai/**/*.{d.ts,ts}`,
 				gitignore: false,
@@ -1218,9 +1218,9 @@ function b() {
 			const content = ["before", "match one", "after", "middle", "match two", "after two"].join("\n");
 			fs.writeFileSync(testFile, content);
 
-			const contextSettings = Settings.isolated({ "grep.contextBefore": 1, "grep.contextAfter": 1 });
-			const contextGrepTool = wrapToolWithMetaNotice(new GrepTool(createTestToolSession(testDir, contextSettings)));
-			const result = await contextGrepTool.execute("test-call-12", {
+			const contextSettings = Settings.isolated({ "search.contextBefore": 1, "search.contextAfter": 1 });
+			const contextSearchTool = wrapToolWithMetaNotice(new SearchTool(createTestToolSession(testDir, contextSettings)));
+			const result = await contextSearchTool.execute("test-call-12", {
 				pattern: "match",
 				path: testFile,
 			});
@@ -1237,7 +1237,7 @@ function b() {
 			const testFile = path.join(testDir, "skip.txt");
 			fs.writeFileSync(testFile, ["needle one", "needle two", "needle three"].join("\n"));
 
-			const result = await grepTool.execute("test-call-12-skip", {
+			const result = await searchTool.execute("test-call-12-skip", {
 				pattern: "needle",
 				path: testFile,
 				skip: 1,
@@ -1255,7 +1255,7 @@ function b() {
 			}
 			fs.writeFileSync(path.join(testDir, "dominant.txt"), "needle a\nneedle b\nneedle c\nneedle d");
 
-			const result = await grepTool.execute("test-call-13-round-robin", {
+			const result = await searchTool.execute("test-call-13-round-robin", {
 				pattern: "needle",
 				path: testDir,
 			});
@@ -1275,7 +1275,7 @@ function b() {
 			fs.writeFileSync(path.join(testDir, "alpha.txt"), "needle a1\nneedle a2\nneedle a3");
 			fs.writeFileSync(path.join(testDir, "beta.txt"), "needle b1\nneedle b2\nneedle b3");
 
-			const result = await grepTool.execute("test-call-14-grouped-headings", {
+			const result = await searchTool.execute("test-call-14-grouped-headings", {
 				pattern: "needle",
 				path: testDir,
 			});
@@ -1299,7 +1299,7 @@ function b() {
 			fs.writeFileSync(path.join(nestedDir, "CHANGELOG.md"), "Claude Opus\n");
 			fs.writeFileSync(path.join(nestedDir, "models.json"), '{ "name": "Claude Opus" }\n');
 
-			const result = await grepTool.execute("test-call-15-directory-headings", {
+			const result = await searchTool.execute("test-call-15-directory-headings", {
 				pattern: "Claude Opus",
 				path: testDir,
 			});
@@ -1318,7 +1318,7 @@ function b() {
 			fs.writeFileSync(path.join(scenarioDir, "ignored.txt"), "needle ignored\n");
 			fs.writeFileSync(path.join(scenarioDir, "kept.txt"), "needle kept\n");
 
-			const result = await grepTool.execute("test-call-15-gitignore-default", {
+			const result = await searchTool.execute("test-call-15-gitignore-default", {
 				pattern: "needle",
 				path: scenarioDir,
 			});
@@ -1336,7 +1336,7 @@ function b() {
 			fs.writeFileSync(path.join(scenarioDir, ".gitignore"), "ignored.txt\n");
 			fs.writeFileSync(path.join(scenarioDir, "ignored.txt"), "needle ignored\n");
 
-			const result = await grepTool.execute("test-call-16-gitignore-off", {
+			const result = await searchTool.execute("test-call-16-gitignore-off", {
 				pattern: "needle",
 				path: scenarioDir,
 				gitignore: false,
@@ -1358,7 +1358,7 @@ function b() {
 				return;
 			}
 
-			const result = await grepTool.execute("test-call-16-fifo-dir", {
+			const result = await searchTool.execute("test-call-16-fifo-dir", {
 				pattern: "needle",
 				path: scenarioDir,
 				gitignore: false,
@@ -1376,7 +1376,7 @@ function b() {
 			const lines = Array.from({ length: 60 }, (_, i) => `needle ${i + 1}`);
 			fs.writeFileSync(path.join(testDir, "default-limit.txt"), lines.join("\n"));
 
-			const result = await grepTool.execute("test-call-14-default-limit", {
+			const result = await searchTool.execute("test-call-14-default-limit", {
 				pattern: "needle",
 				path: testDir,
 			});

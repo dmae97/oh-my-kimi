@@ -130,6 +130,7 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 	type: "text",
 };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
+import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { deobfuscateSessionContext, type SecretObfuscator } from "../secrets/obfuscator";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import { assertEditableFile } from "../tools/auto-generated-guard";
@@ -263,6 +264,10 @@ export interface AgentSessionConfig {
 	obfuscator?: SecretObfuscator;
 	/** Logical owner for retained Python kernels created by this session. */
 	pythonKernelOwnerId?: string;
+	/** Agent identity (registry id like "0-Main" or "3-Alice") used for IRC routing. */
+	agentId?: string;
+	/** Shared agent registry (for forwarding IRC observations to the main session UI). */
+	agentRegistry?: AgentRegistry;
 }
 
 /** Options for AgentSession.prompt() */
@@ -478,6 +483,9 @@ export class AgentSession {
 	// Drained into history (via emitExternalEvent) once the recipient becomes idle.
 	#pendingBackgroundExchanges: CustomMessage[][] = [];
 	#scheduledBackgroundExchangeFlush = false;
+	// Agent identity + registry for IRC relay forwarding to the main session UI.
+	#agentId: string | undefined;
+	#agentRegistry: AgentRegistry | undefined;
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
 	#turnIndex = 0;
@@ -611,6 +619,8 @@ export class AgentSession {
 		);
 		this.#ttsrManager = config.ttsrManager;
 		this.#obfuscator = config.obfuscator;
+		this.#agentId = config.agentId;
+		this.#agentRegistry = config.agentRegistry;
 		this.agent.setAssistantMessageEventInterceptor((message, assistantMessageEvent) => {
 			const event: AgentEvent = {
 				type: "message_update",
@@ -6008,6 +6018,13 @@ export class AgentSession {
 			timestamp: incomingTimestamp,
 		};
 		void this.#emitSessionEvent({ type: "irc_message", message: incomingRecord });
+		this.#forwardIrcRelayToMain({
+			from: args.from,
+			to: this.#agentId ?? "?",
+			body: args.message,
+			kind: "message",
+			timestamp: incomingTimestamp,
+		});
 
 		if (!awaitReply) {
 			this.#queueBackgroundExchangeInjection([incomingRecord]);
@@ -6033,9 +6050,57 @@ export class AgentSession {
 			timestamp: Date.now(),
 		};
 		void this.#emitSessionEvent({ type: "irc_message", message: replyRecord });
+		this.#forwardIrcRelayToMain({
+			from: this.#agentId ?? "?",
+			to: args.from,
+			body: replyText,
+			kind: "reply",
+			timestamp: replyRecord.timestamp,
+		});
 		this.#queueBackgroundExchangeInjection([incomingRecord, replyRecord]);
 
 		return { replyText };
+	}
+
+	/**
+	 * Forward an IRC exchange observation to the main agent's session UI so the
+	 * user can see every IRC conversation in the main transcript, even when the
+	 * main agent is not a direct participant. The relay record is display-only:
+	 * it is NOT injected into the main agent's persisted history.
+	 */
+	#forwardIrcRelayToMain(args: {
+		from: string;
+		to: string;
+		body: string;
+		kind: "message" | "reply";
+		timestamp: number;
+	}): void {
+		const registry = this.#agentRegistry;
+		if (!registry) return;
+		// If this session is the main agent, the local emit already reached the main UI.
+		if (this.#agentId === MAIN_AGENT_ID) return;
+		const mainRef = registry.get(MAIN_AGENT_ID);
+		const mainSession = mainRef?.session;
+		if (!mainSession || mainSession === this) return;
+		const arrow = args.kind === "reply" ? "\u2192 (auto)" : "\u2192";
+		const relayRecord: CustomMessage = {
+			role: "custom",
+			customType: "irc:relay",
+			content: `[IRC \`${args.from}\` ${arrow} \`${args.to}\`]\n\n${args.body}`,
+			display: true,
+			details: { from: args.from, to: args.to, body: args.body, kind: args.kind },
+			attribution: "agent",
+			timestamp: args.timestamp,
+		};
+		mainSession.emitIrcRelayObservation(relayRecord);
+	}
+
+	/**
+	 * Emit an IRC relay observation event on this session for UI rendering only.
+	 * Does not persist the record to history. Public so other sessions can forward.
+	 */
+	emitIrcRelayObservation(record: CustomMessage): void {
+		void this.#emitSessionEvent({ type: "irc_message", message: record });
 	}
 
 	/**

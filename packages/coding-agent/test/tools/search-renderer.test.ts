@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
 import { getThemeByName } from "../../src/modes/theme/theme";
-import { grepToolRenderer } from "../../src/tools/grep";
+import { searchToolRenderer } from "../../src/tools/search";
 
-describe("grepToolRenderer", () => {
+describe("searchToolRenderer", () => {
 	it("keeps summary and truncation rows inside the collapsed line budget", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();
@@ -27,7 +27,7 @@ describe("grepToolRenderer", () => {
 			},
 		};
 
-		const collapsed = grepToolRenderer.renderResult(result as never, { expanded: false, isPartial: false }, uiTheme, {
+		const collapsed = searchToolRenderer.renderResult(result as never, { expanded: false, isPartial: false }, uiTheme, {
 			pattern: "needle",
 		});
 		const renderedLines = sanitizeText(collapsed.render(200).join("\n")).split("\n");

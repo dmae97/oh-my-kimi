@@ -62,13 +62,13 @@ describe("tool path root alias", () => {
 		expect(() => resolveToCwd("@local://PLAN.md", tempDir)).toThrow("internal scheme");
 	});
 
-	it("greps from cwd when path is slash", async () => {
+	it("searches from cwd when path is slash", async () => {
 		const tools = await createTools(createTestSession(tempDir));
-		const tool = tools.find(entry => entry.name === "grep");
+		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
-		if (!tool) throw new Error("Missing grep tool");
+		if (!tool) throw new Error("Missing search tool");
 
-		const result = await tool.execute("grep-root-alias", {
+		const result = await tool.execute("search-root-alias", {
 			pattern: "root-alias-needle",
 			path: "/",
 		});

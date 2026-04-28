@@ -42,7 +42,7 @@ Plan execution runs in fresh context (session cleared). You **MUST** make the pl
 
 <procedure>
 ### 1. Explore
-You **MUST** use `find`, `grep`, `read`, `ls` to understand the codebase.
+You **MUST** use `find`, `search`, `read` to understand the codebase.
 ### 2. Interview
 You **MUST** use `{{askToolName}}` to clarify:
 - Ambiguous requirements

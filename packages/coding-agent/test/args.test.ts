@@ -219,8 +219,8 @@ describe("parseArgs", () => {
 		});
 
 		test("lowercases tool names passed to --tools", () => {
-			const result = parseArgs(["--tools", "Read,Grep"]);
-			expect(result.tools).toEqual(["read", "grep"]);
+			const result = parseArgs(["--tools", "Read,Search"]);
+			expect(result.tools).toEqual(["read", "search"]);
 		});
 
 		test("parses --tools=value with equals syntax", () => {

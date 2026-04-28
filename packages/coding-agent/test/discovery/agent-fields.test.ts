@@ -61,9 +61,9 @@ describe("parseAgentFields", () => {
 		const fields = parseAgentFields({
 			name: "reviewer",
 			description: "desc",
-			tools: ["Read", "Grep"],
+			tools: ["Read", "Search"],
 		});
 
-		expect(fields?.tools).toEqual(["read", "grep", "yield"]);
+		expect(fields?.tools).toEqual(["read", "search", "yield"]);
 	});
 });

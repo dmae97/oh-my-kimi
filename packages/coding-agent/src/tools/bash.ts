@@ -269,7 +269,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			autoBackgroundThresholdSeconds: Math.max(0, Math.floor(this.#autoBackgroundThresholdMs / 1000)),
 			hasAstGrep: this.session.settings.get("astGrep.enabled"),
 			hasAstEdit: this.session.settings.get("astEdit.enabled"),
-			hasGrep: this.session.settings.get("grep.enabled"),
+			hasSearch: this.session.settings.get("search.enabled"),
 			hasFind: this.session.settings.get("find.enabled"),
 		});
 	}

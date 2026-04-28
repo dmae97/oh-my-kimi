@@ -61,7 +61,7 @@ When adding a sibling declaration, prefer `prepend` on the next declaration.
 
 <critical>
 - Make the minimum exact edit.
-- Copy the full anchors exactly as shown by `read/grep` (for example `160sr`, not just `sr`).
+- Copy the full anchors exactly as shown by `read/search` (for example `160sr`, not just `sr`).
 - `range` requires both `pos` and `end`.
 - **Closing-delimiter check**: when your replacement `content` ends with a closing delimiter (`}`, `*/`, `)`, `]`), compare it against the line immediately after `end` in the file. If they match, extend `end` to include that line — otherwise the original delimiter survives and `content` adds a second copy.
 - For a range, replace only the body or the whole range — don't split range boundaries.
