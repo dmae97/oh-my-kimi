@@ -225,9 +225,7 @@ function parseDiffLine(raw: string, lineNum: number): ParsedStmt[] {
 		if (body.length > 1 && (body[0] === "@" || body[0] === "-")) {
 			try {
 				const opStmts = parseDiffLine(body, lineNum);
-				const allOps =
-					opStmts.length > 0 &&
-					opStmts.every(s => s.kind !== "insert" && s.kind !== "diffish_add");
+				const allOps = opStmts.length > 0 && opStmts.every(s => s.kind !== "insert" && s.kind !== "diffish_add");
 				if (allOps) {
 					return [...opStmts, { kind: "insert", text: "", lineNum }];
 				}
