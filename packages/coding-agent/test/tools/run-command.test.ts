@@ -152,7 +152,7 @@ describe("run_command", () => {
 		expect(text).toContain("ok");
 	});
 
-	it("detects workspace package scripts as package-name/script tasks", async () => {
+	it("keeps root package scripts bare and exposes workspace package scripts as package-name/script tasks", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-run-command-workspace-"));
 		tempDirs.push(dir);
 		await Bun.write(
@@ -168,8 +168,12 @@ describe("run_command", () => {
 
 		const tool = await RunCommandTool.createIf(createTestSession(dir));
 		expect(tool).not.toBeNull();
-		expect(tool!.description).toContain("root-app/root");
+		expect(tool!.description).toContain("root");
+		expect(tool!.description).not.toContain("root-app/root");
 		expect(tool!.description).toContain("pkg-a/say-ok");
+		const rootResult = await tool!.execute("tool-call", { op: "root" });
+		const rootText = rootResult.content.find(block => block.type === "text")?.text ?? "";
+		expect(rootText).toContain("root");
 		const result = await tool!.execute("tool-call", { op: "pkg-a/say-ok" });
 		const text = result.content.find(block => block.type === "text")?.text ?? "";
 		expect(text).toContain("workspace-ok");

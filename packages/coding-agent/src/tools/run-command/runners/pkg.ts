@@ -148,7 +148,6 @@ async function readPackageTasks(cwd: string, commandInfo: PackageCommandInfo): P
 	const rootPkg = await readPackageJson(path.join(cwd, "package.json"));
 	if (!rootPkg) return null;
 	const workspacePackageJsons = await findWorkspacePackageJsons(cwd, rootPkg.workspaces);
-	const isMonorepo = workspacePackageJsons.length > 0;
 	const tasks: RunnerTask[] = [];
 
 	if (rootPkg.scripts.length > 0) {
@@ -157,7 +156,7 @@ async function readPackageTasks(cwd: string, commandInfo: PackageCommandInfo): P
 				pkg: rootPkg,
 				packageDir: ".",
 				commandPrefix: commandInfo.rootCommandPrefix,
-				namespaced: isMonorepo,
+				namespaced: false,
 			}),
 		);
 	}
