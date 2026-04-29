@@ -1,4 +1,6 @@
-//! CMake, Ninja, CTest, and GoogleTest output filters.
+//! `CMake`, `Ninja`, `CTest`, and `GoogleTest` output filters.
+
+use std::path::Path;
 
 use crate::shell::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
@@ -24,7 +26,9 @@ pub fn is_gtest_binary_name(program: &str) -> bool {
 		|| program.ends_with("_tests")
 		|| program.ends_with("-test")
 		|| program.ends_with("-tests")
-		|| program.ends_with(".test")
+		|| Path::new(program)
+			.extension()
+			.is_some_and(|ext| ext.eq_ignore_ascii_case("test"))
 }
 
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
@@ -97,9 +101,9 @@ fn is_cmake_noise(line: &str, exit_code: i32) -> bool {
 		|| line.starts_with("-- Generating done")
 		|| line.starts_with("-- Build files have been written to:")
 		|| line.starts_with("[  ") && line.contains("%] Built target ")
-		|| line.starts_with("[") && line.contains("%] Building ")
-		|| line.starts_with("[") && line.contains("%] Linking ")
-		|| line.starts_with("[") && line.contains("%] Generating ")
+		|| line.starts_with('[') && line.contains("%] Building ")
+		|| line.starts_with('[') && line.contains("%] Linking ")
+		|| line.starts_with('[') && line.contains("%] Generating ")
 }
 
 fn filter_ctest(input: &str, exit_code: i32) -> String {
@@ -178,9 +182,7 @@ fn filter_gtest(input: &str, exit_code: i32) -> String {
 			push_line(&mut out, line.trim_end());
 			continue;
 		}
-		if keeping_failure {
-			push_line(&mut out, line.trim_end());
-		} else if exit_code != 0 && looks_like_source_location(trimmed) {
+		if keeping_failure || (exit_code != 0 && looks_like_source_location(trimmed)) {
 			push_line(&mut out, line.trim_end());
 		}
 	}
