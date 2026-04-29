@@ -196,6 +196,67 @@ function getEditPathFromArgs(args: unknown): string | null {
 	return typeof pathValue === "string" && pathValue.length > 0 ? pathValue : null;
 }
 
+function getEditPayloadFromArgs(args: unknown): string {
+	if (!args || typeof args !== "object") return "";
+	const input = (args as { input?: unknown }).input;
+	if (typeof input === "string") return input;
+	const diff = (args as { diff?: unknown }).diff;
+	if (typeof diff === "string") return diff;
+	try {
+		return JSON.stringify(args);
+	} catch {
+		return "";
+	}
+}
+
+export const EDIT_FAILURE_CATEGORIES = [
+	"range-continuation",
+	"unified-diff",
+	"no-change",
+	"hash-mismatch",
+	"other",
+] as const;
+
+export type EditFailureCategory = (typeof EDIT_FAILURE_CATEGORIES)[number];
+
+function categorizeEditFailure(error: string, args: unknown): EditFailureCategory {
+	const payload = getEditPayloadFromArgs(args);
+	const hasRangeReplacePayload = /^[1-9]\d*[a-z]{2}\.\.[1-9]\d*[a-z]{2}[ \t]*=/m.test(payload);
+	if (/\\TEXT continuation|range[- ]replacement continuation|LidA\.\.LidB=FIRST_LINE/i.test(error)) {
+		return "range-continuation";
+	}
+	if (/unified-diff syntax|\+Lid[=|]|\+[1-9]\d*[a-z]{2}[=|]/i.test(error)) {
+		return "unified-diff";
+	}
+	if (/No changes made|no changes being made|replacement is identical/i.test(error)) {
+		return "no-change";
+	}
+	if (/hash mismatch|expected hash|stale/i.test(error)) {
+		return "hash-mismatch";
+	}
+	if (hasRangeReplacePayload && /unrecognized op|cannot parse|Lines must start/i.test(error)) {
+		return "range-continuation";
+	}
+	return "other";
+}
+
+function emptyEditFailureCategoryCounts(): Record<EditFailureCategory, number> {
+	return Object.fromEntries(EDIT_FAILURE_CATEGORIES.map(category => [category, 0])) as Record<
+		EditFailureCategory,
+		number
+	>;
+}
+
+function countEditFailureCategories(runs: TaskRunResult[]): Record<EditFailureCategory, number> {
+	const counts = emptyEditFailureCategoryCounts();
+	for (const run of runs) {
+		for (const failure of run.editFailures) {
+			counts[failure.category ?? "other"] += 1;
+		}
+	}
+	return counts;
+}
+
 const HASHLINE_SUBTYPES = ["set", "set_range", "insert"] as const;
 const BENCHMARK_TOOL_NAMES = ["read", "edit", "write", "apply_patch"] as const;
 const EDIT_TOOL_NAMES = ["edit", "apply_patch"] as const;
@@ -734,6 +795,7 @@ export interface EditFailure {
 	toolCallId: string;
 	args: unknown;
 	error: string;
+	category?: EditFailureCategory;
 }
 
 export interface TaskRunResult {
@@ -822,6 +884,7 @@ export interface BenchmarkSummary {
 	/** Runs excluded because provider/transport stalls exhausted retries (subset of ghostRuns when error matches). */
 	transportFailureRuns: number;
 	mutationIntentMatchRate?: number;
+	editFailureCategories: Record<EditFailureCategory, number>;
 	/** Hashline edit subtype totals — only when editVariant is hashline */
 	hashlineEditSubtypes?: Record<string, number>;
 }
@@ -1145,7 +1208,12 @@ async function runSingleTask(
 									cwd,
 									originalFiles,
 								);
-								editFailures.push({ toolCallId: e.toolCallId, args, error });
+								editFailures.push({
+									toolCallId: e.toolCallId,
+									args,
+									error,
+									category: categorizeEditFailure(error, args),
+								});
 							} else {
 								toolStats.editSuccesses++;
 								if (e.toolName === "edit") {
@@ -1466,7 +1534,12 @@ async function _runRpcBenchmarkRun(
 								cwd,
 								originalFiles,
 							);
-							editFailures.push({ toolCallId: e.toolCallId, args, error: toolError });
+							editFailures.push({
+								toolCallId: e.toolCallId,
+								args,
+								error: toolError,
+								category: categorizeEditFailure(toolError, args),
+							});
 						} else {
 							toolStats.editSuccesses++;
 							if (e.toolName === "edit") {
@@ -2082,6 +2155,7 @@ export function buildBenchmarkResult(params: {
 		runsWithMutationIntent.length > 0
 			? runsWithMutationIntent.filter(r => r.mutationIntentMatched).length / runsWithMutationIntent.length
 			: undefined;
+	const editFailureCategories = countEditFailureCategories(nonGhostRuns);
 
 	const hashlineEditSubtypes: Record<string, number> | undefined =
 		params.config.editVariant === "hashline"
@@ -2133,6 +2207,7 @@ export function buildBenchmarkResult(params: {
 		ghostRuns,
 		transportFailureRuns,
 		mutationIntentMatchRate,
+		editFailureCategories,
 		hashlineEditSubtypes,
 	};
 

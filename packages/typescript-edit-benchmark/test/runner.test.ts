@@ -142,6 +142,41 @@ describe("buildBenchmarkResult", () => {
 		expect(report).toContain(`\`\`\`diff\n${input}\n\`\`\``);
 		expect(report).not.toContain('"input":');
 	});
+
+	it("summarizes edit failure categories including range-continuation", () => {
+		const task = createTask("range");
+		const input = "1aa..3cc=first\nsecond";
+		const failedRun: TaskRunResult = {
+			...createRun(0, false),
+			editFailures: [
+				{
+					toolCallId: "edit-1",
+					args: { input },
+					error: "Diff line 2: unrecognized op.",
+					category: "range-continuation",
+				},
+			],
+		};
+		const result = buildBenchmarkResult({
+			tasks: [task],
+			config: {
+				provider: "anthropic",
+				model: "claude",
+				runsPerTask: 1,
+				timeout: 1000,
+				taskConcurrency: 1,
+				editVariant: "atom",
+			},
+			resultsByTask: new Map([[task.id, [failedRun]]]),
+			startTime: "2026-04-28T00:00:00.000Z",
+			endTime: "2026-04-28T00:00:01.000Z",
+		});
+
+		expect(result.summary.editFailureCategories["range-continuation"]).toBe(1);
+		const report = generateReport(result);
+		expect(report).toContain("| range-continuation | 1 | 100.0% |");
+		expect(report).toContain("- Category: range-continuation");
+	});
 });
 
 describe("writeConversationDump", () => {

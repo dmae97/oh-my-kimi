@@ -696,6 +696,23 @@ describe("applyHashlineEdits — errors", () => {
 		}
 	});
 
+	it("stale hash error suggests new Lid when content moved", () => {
+		// Original line: "moved" was at line 2. Now it's at line 8 (way beyond ±5 rebase).
+		// Caller still references it via the old `2<hash>` lid.
+		const content = "aaa\nbbb\nccc\nddd\neee\nfff\nggg\nmoved\niii";
+		const movedHash = computeLineHash(8, "moved"); // hash is content-based
+		const edits: HashlineEdit[] = [{ op: "replace_line", pos: parseTag(`2${movedHash}`), lines: ["MOVED"] }];
+		try {
+			applyHashlineEdits(content, edits);
+			expect.unreachable("should have thrown");
+		} catch (err) {
+			expect(err).toBeInstanceOf(HashlineMismatchError);
+			const msg = (err as HashlineMismatchError).message;
+			expect(msg).toContain("Likely shifted");
+			expect(msg).toContain(`2${movedHash} → 8${movedHash}`);
+		}
+	});
+
 	it("stale hash error collects all mismatches", () => {
 		const content = "aaa\nbbb\nccc\nddd\neee";
 		// Use hashes that don't match any line (avoid 00 — ccc hashes to 00)

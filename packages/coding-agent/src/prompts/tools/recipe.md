@@ -10,7 +10,7 @@ Run a recipe / script / target from the project's task runners.
 {{#each runners}}
 <runner id="{{id}}" label="{{label}}" command="{{commandPrefix}}">
 {{#each tasks}}
-- `{{name}}{{#if paramSig}} {{paramSig}}{{/if}}`{{#if doc}} — {{doc}}{{/if}}{{#if command}} (`{{command}}`){{/if}}
+- `{{name}}{{#if paramSig}} {{paramSig}}{{/if}}`{{#if doc}} — {{doc}}{{/if}}{{#if command}} (`{{command}}`{{#if cwd}} in `{{cwd}}`{{/if}}){{/if}}
 {{/each}}
 </runner>
 {{/each}}

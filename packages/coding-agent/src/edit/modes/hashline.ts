@@ -605,6 +605,26 @@ export class HashlineMismatchError extends Error {
 			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read (marked *).`,
 			"The edit was NOT applied, please use the updated file content shown below, and issue another edit tool-call.",
 		);
+
+		// Content-based recovery hint: if the original hash uniquely matches a
+		// line elsewhere in the file (outside the auto-rebase window), suggest
+		// the new Lid so the model can retry without a full re-read.
+		const hints: string[] = [];
+		for (const m of mismatches) {
+			const matches: number[] = [];
+			for (let line = 1; line <= fileLines.length; line++) {
+				if (computeLineHash(line, fileLines[line - 1]) === m.expected) matches.push(line);
+				if (matches.length > 1) break;
+			}
+			if (matches.length === 1 && matches[0] !== m.line) {
+				hints.push(`  ${m.line}${m.expected} → ${matches[0]}${m.expected}`);
+			}
+		}
+		if (hints.length > 0) {
+			lines.push("Likely shifted (hash matched a unique line elsewhere):");
+			lines.push(...hints);
+		}
+
 		lines.push("");
 
 		let prevLine = -1;
@@ -650,7 +670,7 @@ export function validateLineRef(ref: { line: number; hash: string }, fileLines: 
 /**
  * Default search window for {@link tryRebaseAnchor} (lines on each side of the requested anchor).
  */
-export const ANCHOR_REBASE_WINDOW = 2;
+export const ANCHOR_REBASE_WINDOW = 5;
 
 /**
  * Look for the requested hash within ±`window` lines of `anchor.line`.

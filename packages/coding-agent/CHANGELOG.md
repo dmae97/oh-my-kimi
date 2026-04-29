@@ -1,6 +1,23 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `-LidA..LidB` syntax to delete inclusive line ranges in a single atom operation
+- Added `LidA..LidB=TEXT` range-replace syntax with `\TEXT` and `\` continuation lines for multi-line replacement blocks
+- Added shorthand cursor+insert operations in atom edits, including `^Lid` (insert before anchor), `^+TEXT`, `$+TEXT`, and `Lid+TEXT`/`@Lid+TEXT`
+- Added standalone file-op fallback so `!rm` and `!mv DEST` inputs can be normalized into sections when using split input parsing
+
+### Changed
+
+- Changed hashline anchor auto-rebase tolerance from ±2 lines to ±5 lines for stale Lid recovery
+- Changed atom input handling so `#`-prefixed lines are treated as comments and ignored
+- Changed execution when all edits are no-op `Lid=TEXT` replacements to return success with a no-change explanation instead of throwing
+
+### Fixed
+
+- Fixed malformed range and unified-diff-like atom syntax by rejecting reversed ranges, mismatched range endpoint hashes, and forms like `+Lid|TEXT`, `+Lid=TEXT`, and `-LidA..LidB|TEXT` with explicit actionable errors
+- Fixed hash mismatch errors to include likely-shifted anchor hints when a unique matching line is found elsewhere in the file
 
 ## [14.5.8] - 2026-04-29
 ### Breaking Changes

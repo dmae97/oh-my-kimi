@@ -11,6 +11,7 @@ import {
 	executeAtomSingle,
 	HashlineMismatchError,
 	parseAtom,
+	parseAtomWithWarnings,
 	splitAtomInput,
 	splitAtomInputs,
 } from "@oh-my-pi/pi-coding-agent/edit";
@@ -24,6 +25,14 @@ beforeAll(async () => {
 
 function tag(line: number, content: string): string {
 	return `${line}${computeLineHash(line, content)}`;
+}
+
+function differentHash(hash: string): string {
+	return hash === "zz" ? "yy" : "zz";
+}
+
+function mistag(line: number, content: string): string {
+	return `${line}${differentHash(computeLineHash(line, content))}`;
 }
 
 // Convenience: parse a diff against a content snapshot and return the resulting text.
@@ -89,6 +98,201 @@ describe("atom parser — basic forms", () => {
 	it("+ lines with no cursor move append to the file", () => {
 		const diff = `+DDD\n+EEE`;
 		expect(applyDiff(content, diff)).toBe("aaa\nbbb\nccc\nDDD\nEEE");
+	});
+
+	it("`-LidA..LidB` deletes the inclusive line range", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		const diff = `-${tag(2, "bbb")}..${tag(4, "ddd")}`;
+		expect(applyDiff(longer, diff)).toBe("aaa\neee");
+	});
+
+	it("`-LidA..LidB` followed by `+TEXT` replaces the block", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		const diff = `-${tag(2, "bbb")}..${tag(4, "ddd")}\n+REPLACED`;
+		expect(applyDiff(longer, diff)).toBe("aaa\nREPLACED\neee");
+	});
+
+	it("`-LidA..LidB` rejects a reversed range", () => {
+		const longer = "aaa\nbbb\nccc\nddd";
+		const diff = `-${tag(3, "ccc")}..${tag(2, "bbb")}`;
+		expect(() => applyDiff(longer, diff)).toThrow(/ends before it starts/);
+	});
+
+	it("`LidA..LidB=TEXT` replaces the inclusive range with one line", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		const diff = `${tag(2, "bbb")}..${tag(4, "ddd")}=REPLACED`;
+		expect(applyDiff(longer, diff)).toBe("aaa\nREPLACED\neee");
+	});
+
+	it("`LidA..LidB=TEXT` followed by `+TEXT` lines replaces with multiple lines", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		const diff = `${tag(2, "bbb")}..${tag(4, "ddd")}=ONE\n+TWO\n+THREE`;
+		expect(applyDiff(longer, diff)).toBe("aaa\nONE\nTWO\nTHREE\neee");
+	});
+
+	it("`LidA..LidB=` (empty TEXT) replaces the range with one blank line", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		const diff = `${tag(2, "bbb")}..${tag(4, "ddd")}=`;
+		expect(applyDiff(longer, diff)).toBe("aaa\n\neee");
+	});
+
+	it("`LidA..LidB=TEXT` rejects a reversed range", () => {
+		const longer = "aaa\nbbb\nccc\nddd";
+		const diff = `${tag(3, "ccc")}..${tag(2, "bbb")}=NOPE`;
+		expect(() => applyDiff(longer, diff)).toThrow(/ends before it starts/);
+	});
+
+	it("`LidA..LidB=TEXT` validates start and end hashes", () => {
+		const longer = "aaa\nbbb\nccc\nddd";
+		const diff = `${tag(2, "bbb")}..3xx=NOPE`;
+		expect(() => applyDiff(longer, diff)).toThrow();
+	});
+
+	it("`LidA..LidA=TEXT` rejects mismatched endpoint hashes", () => {
+		const longer = "aaa\nbbb\nccc";
+		const diff = `${tag(2, "bbb")}..${mistag(2, "bbb")}=NOPE`;
+		expect(() => applyDiff(longer, diff)).toThrow(/two different hashes for the same line/);
+	});
+
+	it("`-LidA..LidA` rejects mismatched endpoint hashes", () => {
+		const longer = "aaa\nbbb\nccc";
+		const diff = `-${tag(2, "bbb")}..${mistag(2, "bbb")}`;
+		expect(() => applyDiff(longer, diff)).toThrow(/two different hashes for the same line/);
+	});
+
+	it("`-LidA..LidB|TEXT` errors and suggests `LidA..LidB=TEXT`", () => {
+		const longer = "aaa\nbbb\nccc\nddd";
+		const diff = `-${tag(2, "bbb")}..${tag(3, "ccc")}|REPLACED`;
+		expect(() => applyDiff(longer, diff)).toThrow(/use `2.{2}\.\.3.{2}=REPLACED`/);
+	});
+
+	it("`-LidA..LidB=TEXT` errors and suggests `LidA..LidB=TEXT`", () => {
+		const longer = "aaa\nbbb\nccc\nddd";
+		const diff = `-${tag(2, "bbb")}..${tag(3, "ccc")}=REPLACED`;
+		expect(() => applyDiff(longer, diff)).toThrow(/use `2.{2}\.\.3.{2}=REPLACED`/);
+	});
+
+	it("`LidA..LidB=FIRST` accepts backslash continuation lines", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=export function label() {`, "\\    return 1;", "\\}"].join(
+			"\n",
+		);
+		expect(applyDiff(longer, diff)).toBe("aaa\nexport function label() {\n    return 1;\n}\neee");
+	});
+
+	it("bare backslash continuation inserts a blank replacement line", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=ONE`, "\\", "\\THREE"].join("\n");
+		expect(applyDiff(longer, diff)).toBe("aaa\nONE\n\nTHREE\neee");
+	});
+
+	it("backslash continuation preserves atom-shaped literal content", () => {
+		const longer = "aaa\nbbb\nccc\nddd";
+		const literalLines = [
+			"#include <x>",
+			"# Heading",
+			"+literal",
+			"-literal",
+			"@decorator",
+			"$literal",
+			"^literal",
+			"!literal",
+			"12ab=literal",
+			"\\literal",
+		];
+		const diff = [`${tag(2, "bbb")}..${tag(3, "ccc")}=first`, ...literalLines.map(line => `\\${line}`)].join("\n");
+		expect(applyDiff(longer, diff)).toBe(["aaa", "first", ...literalLines, "ddd"].join("\n"));
+	});
+
+	it("backslash continuation is rejected outside a range replacement", () => {
+		expect(() => parseAtom("\\orphan")).toThrow(/\\TEXT continuation is only valid/);
+	});
+
+	it("backslash continuation stops before the next atom op line", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=ONE`, "\\TWO", `@${tag(1, "aaa")}`, "+BELOW"].join("\n");
+		expect(applyDiff(longer, diff)).toBe("aaa\nBELOW\nONE\nTWO\neee");
+	});
+
+	it("range replacement accepts optional whitespace before `=` with continuation", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")} =ONE`, "\\TWO"].join("\n");
+		expect(applyDiff(longer, diff)).toBe("aaa\nONE\nTWO\neee");
+	});
+
+	it("range replacement preserves whitespace after `=` as literal text", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		const diff = `${tag(2, "bbb")}..${tag(4, "ddd")} = TEXT`;
+		expect(applyDiff(longer, diff)).toBe("aaa\n TEXT\neee");
+	});
+
+	it("raw unprefixed range continuation remains accepted as recovery", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		const diff = `${tag(2, "bbb")}..${tag(4, "ddd")}=ONE\nTWO\n# Heading`;
+		expect(applyDiff(longer, diff)).toBe("aaa\nONE\nTWO\n# Heading\neee");
+	});
+
+	it("`^Lid` moves the cursor BEFORE the anchored line", () => {
+		const diff = `^${tag(2, "bbb")}\n+INSERTED`;
+		expect(applyDiff(content, diff)).toBe("aaa\nINSERTED\nbbb\nccc");
+	});
+
+	it("`^Lid` followed by multiple `+TEXT` inserts in order before the line", () => {
+		const diff = `^${tag(3, "ccc")}\n+X\n+Y`;
+		expect(applyDiff(content, diff)).toBe("aaa\nbbb\nX\nY\nccc");
+	});
+
+	it("`^Lid` on the first line inserts above it", () => {
+		const diff = `^${tag(1, "aaa")}\n+TOP`;
+		expect(applyDiff(content, diff)).toBe("TOP\naaa\nbbb\nccc");
+	});
+
+	it("`# comment` lines are silently ignored", () => {
+		const diff = `# This is a section header\n${tag(2, "bbb")}=BBB\n# trailing note`;
+		expect(applyDiff(content, diff)).toBe("aaa\nBBB\nccc");
+	});
+
+	it("`^+TEXT` shorthand: BOF cursor + insert TEXT on one line", () => {
+		const diff = `^+TOP`;
+		expect(applyDiff(content, diff)).toBe("TOP\naaa\nbbb\nccc");
+	});
+
+	it("`^+` shorthand followed by additional inserts stacks correctly", () => {
+		const diff = `^+ONE\n+TWO`;
+		expect(applyDiff(content, diff)).toBe("ONE\nTWO\naaa\nbbb\nccc");
+	});
+
+	it("`$+TEXT` shorthand: EOF cursor + insert TEXT on one line", () => {
+		const diff = `$+TAIL`;
+		expect(applyDiff(content, diff)).toBe("aaa\nbbb\nccc\nTAIL");
+	});
+
+	it("`^Lid+TEXT` shorthand: cursor-before-Lid + insert TEXT", () => {
+		const diff = `^${tag(2, "bbb")}+ABOVE`;
+		expect(applyDiff(content, diff)).toBe("aaa\nABOVE\nbbb\nccc");
+	});
+
+	it("`Lid+TEXT` shorthand: cursor-after-Lid + insert TEXT", () => {
+		const diff = `${tag(2, "bbb")}+BELOW`;
+		expect(applyDiff(content, diff)).toBe("aaa\nbbb\nBELOW\nccc");
+	});
+
+	it("`@Lid+TEXT` shorthand: cursor-after-Lid + insert TEXT", () => {
+		const diff = `@${tag(2, "bbb")}+BELOW`;
+		expect(applyDiff(content, diff)).toBe("aaa\nbbb\nBELOW\nccc");
+	});
+
+	it("`$=TEXT` rejects with a clear diagnostic about the cursor-only `$`", () => {
+		expect(() => applyDiff(content, `$=TAIL`)).toThrow(/`\$` only moves the cursor/);
+	});
+
+	it("`^=TEXT` rejects with a clear diagnostic about the cursor-only `^`", () => {
+		expect(() => applyDiff(content, `^=TOP`)).toThrow(/`\^` only moves the cursor/);
+	});
+
+	it("`^Lid=TEXT` rejects as ambiguous (cursor-before vs replace)", () => {
+		const diff = `^${tag(2, "bbb")}=BBB`;
+		expect(() => applyDiff(content, diff)).toThrow(/mixes `\^Lid` \(cursor before line\)/);
 	});
 });
 
@@ -314,24 +518,29 @@ describe("atom parser — edge cases", () => {
 		expect(applyDiff(content, diff)).toBe("aaa\nREPLACED\nccc");
 	});
 
-	it("standalone `+Lid|TEXT` is rejected with a diff-ish replacement diagnostic", () => {
+	it("standalone `+Lid|TEXT` rejects as malformed unified-diff syntax", () => {
 		const t = tag(2, "bbb");
-		expect(() => parseAtom(`+${t}|REPLACED`)).toThrow(
-			new RegExp(`\`\\+${t}\\|\\.\\.\\.\` looks like a unified-diff replacement marker. Use \`${t}=TEXT\``),
-		);
+		expect(() => parseAtomWithWarnings(`+${t}|REPLACED`)).toThrow(/unified-diff syntax/);
 	});
 
-	it("standalone `+Lid=TEXT` is rejected with a diff-ish replacement diagnostic", () => {
+	it("standalone `+Lid=TEXT` rejects as malformed unified-diff syntax", () => {
 		const t = tag(2, "bbb");
-		expect(() => parseAtom(`+${t}=REPLACED`)).toThrow(/looks like a unified-diff replacement marker/);
+		expect(() => parseAtomWithWarnings(`+${t}=REPLACED`)).toThrow(/unified-diff syntax/);
 	});
 
-	it("`-Lid` followed by `+OtherLid|TEXT` (mismatched) is rejected", () => {
+	it("`-Lid` followed by `+OtherLid|TEXT` rejects instead of salvaging a mismatched add", () => {
 		const t1 = tag(1, "aaa");
 		const t2 = tag(2, "bbb");
-		expect(() => parseAtom(`-${t1}\n+${t2}|REPLACED`)).toThrow(
-			/references a Lid that was not deleted in the preceding run/,
-		);
+		expect(() => parseAtomWithWarnings(`-${t1}\n+${t2}|REPLACED`)).toThrow(/not in the preceding delete run/);
+	});
+
+	it("unified-diff-shaped blocks with fabricated Lids on inserts reject clearly", () => {
+		const ctx = tag(1, "head");
+		const fake1 = "2aa";
+		const fake2 = "3bb";
+		const realDel = tag(2, "body");
+		const diff = `${ctx}|head\n+${fake1}|new1\n+${fake2}|new2\n-${realDel}\n+replaced`;
+		expect(() => parseAtomWithWarnings(diff)).toThrow(/unified-diff syntax/);
 	});
 
 	it("plain `+TEXT` insertion is unaffected by diff-ish detection", () => {
@@ -376,13 +585,11 @@ describe("atom parser — edge cases", () => {
 		expect(applyDiff(c, diff)).toBe("aaa\nX1\nX2\nX3");
 	});
 
-	it("multi-line hunk: `+Lid|TEXT` referencing a Lid not in the delete run is rejected", () => {
+	it("multi-line hunk: `+Lid|TEXT` referencing a Lid not in the delete run rejects", () => {
 		const t1 = tag(1, "aaa");
 		const t2 = tag(2, "bbb");
 		const t3 = tag(3, "ccc");
-		expect(() => parseAtom(`-${t1}\n-${t2}\n+${t3}|X`)).toThrow(
-			/references a Lid that was not deleted in the preceding run/,
-		);
+		expect(() => parseAtomWithWarnings(`-${t1}\n-${t2}\n+${t3}|X`)).toThrow(/not in the preceding delete run/);
 	});
 
 	it("`-Lid|OLD` deletes when OLD matches the current line", () => {
@@ -490,9 +697,9 @@ describe("atom — hash mismatch", () => {
 
 		expect(result.lines).toBe("aaa\nINSERTED\nBBB\nCCC\nDDD");
 		expect(result.warnings).toEqual([
-			`Auto-rebased anchor ${t2} → 3${computeLineHash(3, "bbb")} (line shifted within ±2; hash matched).`,
-			`Auto-rebased anchor ${t3} → 4${computeLineHash(4, "ccc")} (line shifted within ±2; hash matched).`,
-			`Auto-rebased anchor ${t4} → 5${computeLineHash(5, "ddd")} (line shifted within ±2; hash matched).`,
+			`Auto-rebased anchor ${t2} → 3${computeLineHash(3, "bbb")} (line shifted within ±5; hash matched).`,
+			`Auto-rebased anchor ${t3} → 4${computeLineHash(4, "ccc")} (line shifted within ±5; hash matched).`,
+			`Auto-rebased anchor ${t4} → 5${computeLineHash(5, "ddd")} (line shifted within ±5; hash matched).`,
 		]);
 	});
 
@@ -506,9 +713,9 @@ describe("atom — hash mismatch", () => {
 
 		expect(result.lines).toBe("aaa\nINSERTED");
 		expect(result.warnings).toEqual([
-			`Auto-rebased anchor ${t2} → 3${computeLineHash(3, "bbb")} (line shifted within ±2; hash matched).`,
-			`Auto-rebased anchor ${t3} → 4${computeLineHash(4, "ccc")} (line shifted within ±2; hash matched).`,
-			`Auto-rebased anchor ${t4} → 5${computeLineHash(5, "ddd")} (line shifted within ±2; hash matched).`,
+			`Auto-rebased anchor ${t2} → 3${computeLineHash(3, "bbb")} (line shifted within ±5; hash matched).`,
+			`Auto-rebased anchor ${t3} → 4${computeLineHash(4, "ccc")} (line shifted within ±5; hash matched).`,
+			`Auto-rebased anchor ${t4} → 5${computeLineHash(5, "ddd")} (line shifted within ±5; hash matched).`,
 		]);
 	});
 });
@@ -597,6 +804,23 @@ describe("splitAtomInput — wire-format header", () => {
 		});
 		expect(() => splitAtomInput("plain text", { path: "a.ts" })).toThrow(/must begin with/);
 		expect(() => splitAtomInput("---\n+x", { path: "a.ts" })).toThrow(/empty/);
+	});
+
+	it("fallback path mode recognizes atom shorthand and range forms", () => {
+		const forms = [
+			`^${tag(1, "aaa")}`,
+			`^${tag(1, "aaa")}+TEXT`,
+			"$+TEXT",
+			`${tag(1, "aaa")}+TEXT`,
+			`@${tag(1, "aaa")}+TEXT`,
+			`-${tag(1, "aaa")}..${tag(2, "bbb")}`,
+			`${tag(1, "aaa")}..${tag(2, "bbb")}=TEXT`,
+			`${tag(1, "aaa")}..${tag(2, "bbb")} =TEXT`,
+		];
+
+		for (const form of forms) {
+			expect(splitAtomInput(form, { path: "a.ts" })).toEqual({ path: "a.ts", diff: form });
+		}
 	});
 
 	it("throws if header is missing", () => {
@@ -689,6 +913,29 @@ describe("atom executor — whole-file operations", () => {
 			await expect(executeAtomSingle(atomExecuteOptions(tempDir, "---file.ts\n!mv\n"))).rejects.toThrow(
 				/!mv requires exactly one non-empty destination path/,
 			);
+		});
+	});
+
+	it("rejects `^Lid` anchored inserts on missing files", async () => {
+		await withTempDir(async tempDir => {
+			await expect(executeAtomSingle(atomExecuteOptions(tempDir, "---missing.ts\n^1aa\n+top\n"))).rejects.toThrow(
+				/File not found: missing\.ts/,
+			);
+		});
+	});
+
+	it("returns success (not throw) when every edit is a no-op echo of current content", async () => {
+		await withTempDir(async tempDir => {
+			const content = "aaa\nbbb\nccc\n";
+			await Bun.write(path.join(tempDir, "file.ts"), content);
+			const t1 = tag(1, "aaa");
+			const t2 = tag(2, "bbb");
+			const result = await executeAtomSingle(atomExecuteOptions(tempDir, `---file.ts\n${t1}=aaa\n${t2}=bbb\n`));
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			expect(text).toContain("no changes being made");
+			expect(text).toContain("replacement is identical");
+			// File untouched
+			expect(await Bun.file(path.join(tempDir, "file.ts")).text()).toBe(content);
 		});
 	});
 });

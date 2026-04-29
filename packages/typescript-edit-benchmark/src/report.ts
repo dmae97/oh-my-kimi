@@ -3,7 +3,7 @@
  */
 
 import { formatDuration, formatPercent, truncate } from "@oh-my-pi/pi-utils";
-import type { BenchmarkResult, TaskResult } from "./runner";
+import { EDIT_FAILURE_CATEGORIES, type BenchmarkResult, type TaskResult } from "./runner";
 
 function getStatusEmoji(successRate: number, runsPerTask: number): string {
 	const passing = Math.round(successRate * runsPerTask);
@@ -198,6 +198,24 @@ export function generateReport(result: BenchmarkResult): string {
 		}
 	}
 
+	const totalCategorizedEditFailures = EDIT_FAILURE_CATEGORIES.reduce(
+		(sum, category) => sum + (summary.editFailureCategories[category] ?? 0),
+		0,
+	);
+	if (totalCategorizedEditFailures > 0) {
+		lines.push("### Edit Failure Categories");
+		lines.push("");
+		lines.push("| Category | Count | % |");
+		lines.push("|----------|-------|---|");
+		for (const category of EDIT_FAILURE_CATEGORIES) {
+			const count = summary.editFailureCategories[category] ?? 0;
+			if (count === 0) continue;
+			lines.push(`| ${category} | ${count} | ${formatPercent(count / totalCategorizedEditFailures)} |`);
+		}
+		lines.push(`| **Total** | **${totalCategorizedEditFailures}** | 100% |`);
+		lines.push("");
+	}
+
 	lines.push("## Task Results");
 	lines.push("");
 	lines.push("| Task | File | Success | Edit Hit | R/E/W | Tokens (In/Out) | Time | Indent |");
@@ -241,6 +259,7 @@ export function generateReport(result: BenchmarkResult): string {
 					lines.push("");
 					lines.push(`- Path: ${escapeMarkdown(path)}`);
 					lines.push(`- Operation: ${escapeMarkdown(operation)}`);
+					lines.push(`- Category: ${escapeMarkdown(failure.category ?? "other")}`);
 					lines.push("");
 					lines.push("**Tool error**");
 					lines.push("");
