@@ -123,11 +123,9 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 	},
 	{
 		name: "loop",
-		description: "Loop the agent: re-submit the same prompt every time it yields (Esc to stop)",
-		inlineHint: "<prompt>",
-		allowArgs: true,
-		handle: async (command, runtime) => {
-			await runtime.ctx.handleLoopCommand(command.args || undefined);
+		description: "Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Esc cancels the current iteration; /loop again to disable.",
+		handle: async (_command, runtime) => {
+			await runtime.ctx.handleLoopCommand();
 			runtime.ctx.editor.setText("");
 		},
 	},

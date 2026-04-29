@@ -492,10 +492,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#scheduleLoopAutoSubmit(): void {
-		if (this.#loopAutoSubmitTimer) {
-			clearTimeout(this.#loopAutoSubmitTimer);
-			this.#loopAutoSubmitTimer = undefined;
-		}
+		this.#cancelLoopAutoSubmit();
 		if (!this.loopModeEnabled || !this.loopPrompt) return;
 		const prompt = this.loopPrompt;
 		const loopAction = settings.get("loop.mode");
@@ -505,6 +502,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (!this.loopModeEnabled || !this.onInputCallback) return;
 			void this.#runLoopIteration(loopAction, prompt);
 		}, 800);
+	}
+
+	#cancelLoopAutoSubmit(): void {
+		if (this.#loopAutoSubmitTimer) {
+			clearTimeout(this.#loopAutoSubmitTimer);
+			this.#loopAutoSubmitTimer = undefined;
+		}
 	}
 
 	async #runLoopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
@@ -517,43 +521,42 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.onInputCallback(this.startPendingSubmission({ text: prompt }));
 	}
 
-	disableLoopMode(options?: { silent?: boolean }): void {
+	disableLoopMode(): void {
 		const wasEnabled = this.loopModeEnabled;
 		this.loopModeEnabled = false;
 		this.loopPrompt = undefined;
-		if (this.#loopAutoSubmitTimer) {
-			clearTimeout(this.#loopAutoSubmitTimer);
-			this.#loopAutoSubmitTimer = undefined;
-		}
+		this.#cancelLoopAutoSubmit();
 		this.statusLine.setLoopModeStatus(undefined);
 		this.updateEditorTopBorder();
 		this.ui.requestRender();
-		if (wasEnabled && !options?.silent) {
+		if (wasEnabled) {
 			this.showStatus("Loop mode disabled.");
 		}
 	}
 
-	async handleLoopCommand(prompt?: string): Promise<void> {
+	/**
+	 * Pause the loop without exiting it: drops the captured prompt and any
+	 * pending auto-resubmit. Loop mode stays enabled — the next prompt the
+	 * user submits becomes the new loop prompt and resumes iteration.
+	 */
+	pauseLoop(): void {
+		this.loopPrompt = undefined;
+		this.#cancelLoopAutoSubmit();
+	}
+
+	async handleLoopCommand(): Promise<void> {
 		if (this.loopModeEnabled) {
 			this.disableLoopMode();
 			return;
 		}
-		const trimmed = prompt?.trim();
-		if (!trimmed) {
-			this.showError("Usage: /loop <prompt>");
-			return;
-		}
 		this.loopModeEnabled = true;
-		this.loopPrompt = trimmed;
+		this.loopPrompt = undefined;
 		this.statusLine.setLoopModeStatus({ enabled: true });
 		this.updateEditorTopBorder();
 		this.ui.requestRender();
-		this.showStatus("Loop mode enabled. Esc to stop.");
-
-		// Submit the first iteration immediately so the loop kicks off.
-		if (this.onInputCallback) {
-			this.onInputCallback(this.startPendingSubmission({ text: trimmed }));
-		}
+		this.showStatus(
+			"Loop mode enabled. Your next prompt will repeat after each turn. Esc cancels the current iteration; /loop again to disable.",
+		);
 	}
 
 	startPendingSubmission(input: { text: string; images?: ImageContent[] }): SubmittedUserInput {

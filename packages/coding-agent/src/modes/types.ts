@@ -236,8 +236,9 @@ export interface InteractiveModeContext {
 	openExternalEditor(): void;
 	registerExtensionShortcuts(): void;
 	handlePlanModeCommand(initialPrompt?: string): Promise<void>;
-	handleLoopCommand(prompt?: string): Promise<void>;
-	disableLoopMode(options?: { silent?: boolean }): void;
+	handleLoopCommand(): Promise<void>;
+	disableLoopMode(): void;
+	pauseLoop(): void;
 	handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void>;
 
 	// Hook UI methods
