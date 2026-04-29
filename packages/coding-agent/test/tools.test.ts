@@ -592,7 +592,9 @@ describe("Coding Agent Tools", () => {
 
 			const result = await writeTool.execute("test-call-4-local", { path: localPath, content });
 
-			expect(getTextOutput(result)).toContain(`Successfully wrote ${content.length} bytes to session/local/handoffs/new-output.json`);
+			expect(getTextOutput(result)).toContain(
+				`Successfully wrote ${content.length} bytes to session/local/handoffs/new-output.json`,
+			);
 			expect(fs.existsSync(expectedPath)).toBe(true);
 			expect(fs.readFileSync(expectedPath, "utf-8")).toBe(content);
 		});
@@ -650,7 +652,9 @@ describe("Coding Agent Tools", () => {
 				content,
 			});
 
-			expect(getTextOutput(result)).toContain(`Successfully wrote ${content.length} bytes to ${path.basename(archivePath)}`);
+			expect(getTextOutput(result)).toContain(
+				`Successfully wrote ${content.length} bytes to ${path.basename(archivePath)}`,
+			);
 			expect(fs.readFileSync(archivePath, "utf-8")).toBe(content);
 		});
 	});
