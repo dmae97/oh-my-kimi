@@ -821,11 +821,9 @@ export function applyAtomEdits(text: string, edits: AtomEdit[]): AtomApplyResult
 					anchorMutated = true;
 					break;
 				case "delete":
-					if (edit.oldAssertion !== undefined && edit.oldAssertion !== currentLine) {
-						throw new Error(
-							`Diff line ${edit.lineNum}: \`-${edit.anchor.line}${edit.anchor.hash}\` asserts the deleted line is ${JSON.stringify(edit.oldAssertion)}, but the file has ${JSON.stringify(currentLine)}. Re-anchor and retry.`,
-						);
-					}
+					// `-Lid|OLD` / `-Lid=OLD`: the OLD payload is informational only.
+					// The Lid hash already validates the line content (and auto-rebases
+					// when lines have shifted), so we ignore any OLD mismatch here.
 					replacement = [];
 					replacementSet = true;
 					anchorMutated = true;

@@ -397,24 +397,23 @@ describe("atom parser — edge cases", () => {
 		expect(applyDiff(content, diff)).toBe("aaa\nccc");
 	});
 
-	it("`-Lid|OLD` is rejected when OLD does not match the current line", () => {
+	it("`-Lid|OLD` ignores OLD payload (hash already validates)", () => {
 		const t = tag(2, "bbb");
+		// Mismatched OLD is tolerated — the Lid hash is the real anchor check.
 		const diff = `-${t}|XXX`;
-		expect(() => applyAtomEdits(content, parseAtom(diff))).toThrow(
-			/asserts the deleted line is "XXX", but the file has "bbb"/,
-		);
+		expect(applyDiff(content, diff)).toBe("aaa\nccc");
 	});
 
-	it("hunk with `-Lid|OLD` validates each OLD against current line", () => {
+	it("hunk with `-Lid|OLD` ignores OLD payload on each delete", () => {
 		const c = "aaa\nbbb\nccc\nddd";
 		const t2 = tag(2, "bbb");
 		const t3 = tag(3, "ccc");
-		// Both OLDs match → accepted.
+		// Matching OLD: accepted.
 		const ok = `-${t2}|bbb\n-${t3}|ccc\n+X1\n+X2`;
 		expect(applyDiff(c, ok)).toBe("aaa\nX1\nX2\nddd");
-		// Second OLD wrong → rejected.
+		// Mismatched OLD: still accepted — hash is the source of truth.
 		const bad = `-${t2}|bbb\n-${t3}|wrong\n+X1\n+X2`;
-		expect(() => applyAtomEdits(c, parseAtom(bad))).toThrow(/asserts the deleted line is "wrong"/);
+		expect(applyDiff(c, bad)).toBe("aaa\nX1\nX2\nddd");
 	});
 
 	it("set with current content reports identical replacement as a no-op", () => {
