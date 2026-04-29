@@ -497,12 +497,23 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (!this.loopModeEnabled || !this.loopPrompt) return;
 		const prompt = this.loopPrompt;
+		const loopAction = settings.get("loop.mode");
 		// Brief delay so the user has a chance to press Esc between iterations.
 		this.#loopAutoSubmitTimer = setTimeout(() => {
 			this.#loopAutoSubmitTimer = undefined;
 			if (!this.loopModeEnabled || !this.onInputCallback) return;
-			this.onInputCallback(this.startPendingSubmission({ text: prompt }));
+			void this.#runLoopIteration(loopAction, prompt);
 		}, 800);
+	}
+
+	async #runLoopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
+		if (action === "compact") {
+			await this.handleCompactCommand();
+		} else if (action === "reset") {
+			await this.handleClearCommand();
+		}
+		if (!this.loopModeEnabled || !this.onInputCallback) return;
+		this.onInputCallback(this.startPendingSubmission({ text: prompt }));
 	}
 
 	disableLoopMode(options?: { silent?: boolean }): void {

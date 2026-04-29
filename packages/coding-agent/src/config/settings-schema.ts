@@ -608,6 +608,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"loop.mode": {
+		type: "enum",
+		values: ["prompt", "compact", "reset"] as const,
+		default: "prompt",
+		ui: {
+			tab: "interaction",
+			label: "Loop Mode",
+			description: "What happens between /loop iterations before re-submitting the prompt",
+			submenu: true,
+		},
+	},
+
 	// Input and startup
 	doubleEscapeAction: {
 		type: "enum",
@@ -1291,6 +1303,16 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "Calculator",
 			description: "Enable the calculator tool for basic calculations",
+		},
+	},
+
+	"just.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			label: "Just",
+			description: "Enable the `just` tool when a justfile is present in the working directory",
 		},
 	},
 

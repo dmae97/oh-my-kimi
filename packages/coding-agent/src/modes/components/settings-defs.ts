@@ -450,6 +450,16 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		{ value: "none", label: "None", description: "Space only" },
 		{ value: "ascii", label: "ASCII", description: "Greater-than signs" },
 	],
+	// Loop mode
+	"loop.mode": [
+		{
+			value: "prompt",
+			label: "Prompt",
+			description: "Re-submit the prompt as a follow-up message (current behavior)",
+		},
+		{ value: "compact", label: "Compact", description: "Compact the session context, then re-submit the prompt" },
+		{ value: "reset", label: "Reset", description: "Start a new session, then re-submit the prompt" },
+	],
 };
 
 function createSubmenuSettingDef(base: Omit<SettingDef, "type" | "options">, provider: OptionProvider): SettingDef {
