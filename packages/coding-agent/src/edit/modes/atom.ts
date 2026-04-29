@@ -214,6 +214,27 @@ function parseDiffLine(raw: string, lineNum: number): ParsedStmt[] {
 				return [{ kind: "diffish_add", anchor: { line: ln, hash: m[2] }, text, lineNum }];
 			}
 		}
+
+		// Auto-fix: `+@Lid` and `+-Lid` are almost always typos where the agent
+		// prefixed a cursor-move or delete op with `+`. Insert content matching
+		// these op shapes is essentially never legitimate in source code, and
+		// silently emitting them as literal text corrupts the file (e.g. a stray
+		// `@12ly` line in a C++ source). Split into the op + a blank `+` insert
+		// so the line count of the edit script is preserved for any downstream
+		// offset-sensitive logic.
+		if (body.length > 1 && (body[0] === "@" || body[0] === "-")) {
+			try {
+				const opStmts = parseDiffLine(body, lineNum);
+				const allOps =
+					opStmts.length > 0 &&
+					opStmts.every(s => s.kind !== "insert" && s.kind !== "diffish_add");
+				if (allOps) {
+					return [...opStmts, { kind: "insert", text: "", lineNum }];
+				}
+			} catch {
+				// Body looked op-shaped but failed to parse; fall through to literal insert.
+			}
+		}
 		return [{ kind: "insert", text: body, lineNum }];
 	}
 
@@ -353,9 +374,22 @@ function normalizeHunks(stmts: ParsedStmt[]): ParsedStmt[] {
 				);
 			}
 		}
-		// Single-line case: 1 delete (with or without OLD) + 1 diffish_add same Lid → fuse to set.
-		if (deletes.length === 1 && adds.length === 1 && adds[0].kind === "diffish_add") {
-			const dAnchor = (deletes[0] as { anchor: ParsedAnchor }).anchor;
+		// Split the delete run into file-contiguous sub-runs. The block
+		// reorder (inserts land at the FIRST delete's slot) is meaningful only
+		// when the deletes describe a single contiguous file range. When the
+		// agent stacks deletes that target far-apart lines (e.g. `-186 -197
+		// -198 -199` to remove a debug line at 186 AND replace 197-199), each
+		// far-apart delete moves the cursor on its own; only the LAST
+		// contiguous group should attract the inserts.
+		const subruns = splitContiguousDeletes(deletes);
+		for (let r = 0; r < subruns.length - 1; r++) {
+			for (const d of subruns[r]) out.push(d);
+		}
+		const lastDeletes = subruns[subruns.length - 1];
+
+		// Single-line case: 1 delete in the last sub-run + 1 diffish_add same Lid → fuse to set.
+		if (lastDeletes.length === 1 && adds.length === 1 && adds[0].kind === "diffish_add") {
+			const dAnchor = (lastDeletes[0] as { anchor: ParsedAnchor }).anchor;
 			const a = adds[0];
 			if (a.anchor.line === dAnchor.line && a.anchor.hash === dAnchor.hash) {
 				out.push({
@@ -367,16 +401,16 @@ function normalizeHunks(stmts: ParsedStmt[]): ParsedStmt[] {
 				continue;
 			}
 		}
-		// Block: emit delete[0], then all inserts (which land at delete[0]'s slot
-		// because the cursor binds to delete[0] before the inserts), then the
-		// remaining deletes.
-		out.push(deletes[0]);
+		// Block: emit lastDeletes[0], then all inserts (which land at lastDeletes[0]'s slot
+		// because the cursor binds to lastDeletes[0] before the inserts), then the
+		// remaining lastDeletes.
+		out.push(lastDeletes[0]);
 		for (const add of adds) {
 			const text = add.kind === "insert" ? add.text : (add as DiffishAddStmt).text;
 			out.push({ kind: "insert", text, lineNum: add.lineNum });
 		}
-		for (let j = 1; j < deletes.length; j++) {
-			out.push(deletes[j]);
+		for (let j = 1; j < lastDeletes.length; j++) {
+			out.push(lastDeletes[j]);
 		}
 	}
 	return out;
@@ -384,6 +418,27 @@ function normalizeHunks(stmts: ParsedStmt[]): ParsedStmt[] {
 
 function makeAnchor(anchor: ParsedAnchor): Anchor {
 	return { line: anchor.line, hash: anchor.hash };
+}
+
+function splitContiguousDeletes(deletes: ParsedStmt[]): ParsedStmt[][] {
+	if (deletes.length === 0) return [];
+	const getLine = (s: ParsedStmt): number => {
+		if (s.kind === "anchor_op") return s.anchor.line;
+		if (s.kind === "delete_with_old") return s.anchor.line;
+		throw new Error("internal: splitContiguousDeletes received non-delete stmt");
+	};
+	const subruns: ParsedStmt[][] = [];
+	let current: ParsedStmt[] = [deletes[0]];
+	for (let i = 1; i < deletes.length; i++) {
+		if (getLine(deletes[i]) === getLine(deletes[i - 1]) + 1) {
+			current.push(deletes[i]);
+		} else {
+			subruns.push(current);
+			current = [deletes[i]];
+		}
+	}
+	subruns.push(current);
+	return subruns;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

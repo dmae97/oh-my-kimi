@@ -740,6 +740,61 @@ describe("applyAtomEdits — adjacent duplicate detection", () => {
 			expect.arrayContaining([expect.stringMatching(/Suspicious duplicate/)]),
 		);
 	});
+
+	it("auto-splits `+@Lid` (op prefixed with `+`) into cursor move + blank insert", () => {
+		// Original failure: agent wrote `+@13du` meaning to move cursor and chain
+		// inserts; parser would otherwise insert the literal text `@13du`.
+		const content = "alpha\nbeta\ngamma";
+		const t1 = tag(1, "alpha");
+		const t2 = tag(2, "beta");
+		const diff = `@${t1}\n+inserted\n+@${t2}\n+after`;
+		const result = applyAtomEdits(content, parseAtom(diff));
+		// `+@${t2}` auto-splits to: cursor move to after beta, then blank insert.
+		expect(result.lines).toBe("alpha\ninserted\nbeta\n\nafter\ngamma");
+	});
+
+	it("auto-splits `+-Lid` (delete prefixed with `+`) into delete + blank insert", () => {
+		const content = "alpha\nbeta\ngamma";
+		const t2 = tag(2, "beta");
+		const result = applyAtomEdits(content, parseAtom(`+-${t2}`));
+		// `+-${t2}` auto-splits to: delete beta, then blank insert at the deletion slot.
+		expect(result.lines).toBe("alpha\n\ngamma");
+	});
+
+	it("does not auto-split `+@plain text` that isn't a valid op", () => {
+		// `@plain text` doesn't match any op shape; body is inserted as literal text.
+		const content = "x";
+		const result = applyAtomEdits(content, parseAtom(`+@plain text`));
+		expect(result.lines).toBe("x\n@plain text");
+	});
+
+	it("non-contiguous deletes followed by an insert: insert lands at the last contiguous sub-run, not the first delete", () => {
+		// Regression: agent emitted `-186 -197 -198 -199 +TEXT` intending to drop
+		// a debug line at 186 AND replace lines 197-199 with TEXT. normalizeHunks
+		// used to fuse all four deletes into one block and place the insert at
+		// line 186, breaking the function. Now sub-runs are split and the insert
+		// attaches to [197,198,199].
+		const content = "A\nB\nC\nD\nE\nF\nG\nH\nI\nJ";
+		const t1 = tag(1, "A");
+		const t5 = tag(5, "E");
+		const t6 = tag(6, "F");
+		const t7 = tag(7, "G");
+		const diff = `-${t1}\n-${t5}\n-${t6}\n-${t7}\n+REPLACED`;
+		const result = applyAtomEdits(content, parseAtom(diff));
+		expect(result.lines).toBe("B\nC\nD\nREPLACED\nH\nI\nJ");
+	});
+
+	it("multiple far-apart non-contiguous deletes still attach inserts to only the last sub-run", () => {
+		const content = "A\nB\nC\nD\nE\nF\nG";
+		const t1 = tag(1, "A");
+		const t3 = tag(3, "C");
+		const t6 = tag(6, "F");
+		const t7 = tag(7, "G");
+		const diff = `-${t1}\n-${t3}\n-${t6}\n-${t7}\n+REPLACED`;
+		const result = applyAtomEdits(content, parseAtom(diff));
+		// Sub-runs: [1], [3], [6,7]. Insert attaches to [6,7] → at line 6 slot.
+		expect(result.lines).toBe("B\nD\nE\nREPLACED");
+	});
 });
 
 // ───────────────────────────────────────────────────────────────────────────
