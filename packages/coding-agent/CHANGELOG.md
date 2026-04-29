@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.5.5] - 2026-04-29
 ### Breaking Changes
 
 - Rejected atom diffs with unrecognized operations (including lone '-' lines) by throwing parse errors instead of treating them as inserts
