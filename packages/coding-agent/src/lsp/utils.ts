@@ -596,38 +596,42 @@ function findSymbolMatchIndexes(lineText: string, symbol: string, caseInsensitiv
 	return indexes;
 }
 
-function normalizeOccurrence(occurrence?: number): number {
-	if (occurrence === undefined || !Number.isFinite(occurrence)) return 1;
-	return Math.max(1, Math.trunc(occurrence));
+/**
+ * Parses a symbol spec of the form `name` or `name#N` where N is the 1-indexed
+ * occurrence on the target line. Returns `name` and `occurrence` (default 1).
+ *
+ * Greedy match on `.+` so `#name#2` parses as symbol=`#name` (TS private field)
+ * with occurrence 2. Specs without a trailing `#\d+` are treated as literal.
+ */
+function parseSymbolSpec(spec: string): { symbol: string; occurrence: number } {
+	const match = spec.match(/^(.+)#(\d+)$/);
+	if (!match) return { symbol: spec, occurrence: 1 };
+	const occurrence = Math.max(1, Number.parseInt(match[2], 10));
+	return { symbol: match[1], occurrence };
 }
 
-export async function resolveSymbolColumn(
-	filePath: string,
-	line: number,
-	symbol?: string,
-	occurrence?: number,
-): Promise<number> {
+export async function resolveSymbolColumn(filePath: string, line: number, symbolSpec?: string): Promise<number> {
 	const lineNumber = Math.max(1, line);
-	const matchOccurrence = normalizeOccurrence(occurrence);
 	try {
 		const fileText = await Bun.file(filePath).text();
 		const lines = fileText.split("\n");
 		const targetLine = lines[lineNumber - 1] ?? "";
-		if (!symbol) {
+		if (!symbolSpec) {
 			return firstNonWhitespaceColumn(targetLine);
 		}
 
+		const { symbol, occurrence } = parseSymbolSpec(symbolSpec);
 		const exactIndexes = findSymbolMatchIndexes(targetLine, symbol);
 		const fallbackIndexes = exactIndexes.length > 0 ? exactIndexes : findSymbolMatchIndexes(targetLine, symbol, true);
 		if (fallbackIndexes.length === 0) {
 			throw new Error(`Symbol "${symbol}" not found on line ${lineNumber}`);
 		}
-		if (matchOccurrence > fallbackIndexes.length) {
+		if (occurrence > fallbackIndexes.length) {
 			throw new Error(
-				`Symbol "${symbol}" occurrence ${matchOccurrence} is out of bounds on line ${lineNumber} (found ${fallbackIndexes.length})`,
+				`Symbol "${symbol}" occurrence ${occurrence} is out of bounds on line ${lineNumber} (found ${fallbackIndexes.length})`,
 			);
 		}
-		return fallbackIndexes[matchOccurrence - 1];
+		return fallbackIndexes[occurrence - 1];
 	} catch (error) {
 		if (isEnoent(error)) {
 			throw new Error(`File not found: ${filePath}`);

@@ -131,9 +131,6 @@ export function renderResult(
 	}
 	if (request?.symbol) {
 		requestLines.push(theme.fg("dim", `symbol: ${sanitizeInlineText(request.symbol)}`));
-		if (request.occurrence !== undefined) {
-			requestLines.push(theme.fg("dim", `occurrence: ${request.occurrence}`));
-		}
 	}
 	if (request?.query) requestLines.push(theme.fg("dim", `query: ${request.query}`));
 	if (request?.new_name) requestLines.push(theme.fg("dim", `new name: ${request.new_name}`));

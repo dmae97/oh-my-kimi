@@ -17,8 +17,7 @@ Interacts with Language Server Protocol servers for code intelligence.
 <parameters>
 - `file`: File path, glob pattern (e.g. `src/**/*.ts`), or `"*"` for workspace scope. Globs are expanded locally before dispatch. `"*"` routes `diagnostics`/`symbols`/`reload` to their workspace-wide form.
 - `line`: 1-indexed line number for position-based actions
-- `symbol`: Substring on the target line used to resolve column automatically
-- `occurrence`: 1-indexed match index when `symbol` appears multiple times on the same line
+- `symbol`: Substring on the target line used to resolve column automatically. Append `#N` to pick the Nth occurrence on that line (1-indexed; default 1) — e.g. `foo#2` selects the second `foo`.
 - `query`: Symbol search query, code-action kind filter (list mode), or code-action selector (apply mode)
 - `new_name`: Required for rename
 - `apply`: Apply edits for rename/code_actions (default true for rename, list mode for code_actions unless explicitly true)
@@ -29,7 +28,7 @@ Interacts with Language Server Protocol servers for code intelligence.
 - Requires running LSP server for target language
 - Some operations require file to be saved to disk
 - Glob expansion samples up to 20 files per request; use `file: "*"` for broader coverage
-- When `symbol` is provided for position-based actions, missing symbols or out-of-bounds `occurrence` values return an explicit error instead of silently falling back
+- When `symbol` is provided for position-based actions, missing symbols or out-of-bounds `#N` occurrence selectors return an explicit error instead of silently falling back
 </caution>
 
 <critical>

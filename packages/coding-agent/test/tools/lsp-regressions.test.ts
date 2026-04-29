@@ -89,7 +89,7 @@ describe("lsp regressions", () => {
 			await Bun.write(filePath, "foo(bar(foo));\n");
 
 			expect(await resolveSymbolColumn(filePath, 1, "foo")).toBe(0);
-			expect(await resolveSymbolColumn(filePath, 1, "foo", 2)).toBe(8);
+			expect(await resolveSymbolColumn(filePath, 1, "foo#2")).toBe(8);
 		} finally {
 			tempDir.removeSync();
 		}
@@ -115,7 +115,7 @@ describe("lsp regressions", () => {
 			const filePath = `${tempDir.path()}/symbol.ts`;
 			await Bun.write(filePath, "foo();\n");
 
-			await expect(resolveSymbolColumn(filePath, 1, "foo", 2)).rejects.toThrow(
+			await expect(resolveSymbolColumn(filePath, 1, "foo#2")).rejects.toThrow(
 				'Symbol "foo" occurrence 2 is out of bounds on line 1 (found 1)',
 			);
 		} finally {
@@ -249,7 +249,6 @@ describe("lsp regressions", () => {
 						file: "src/example.ts",
 						line: 10,
 						symbol: "foo\tbar\nbaz",
-						occurrence: 2,
 					},
 				},
 			},
@@ -259,7 +258,6 @@ describe("lsp regressions", () => {
 		const resultText = sanitizeText(result.render(120).join("\n"));
 		const normalizedResultText = resultText.replace(/\s+/g, " ");
 		expect(normalizedResultText).toContain("symbol: foo bar baz");
-		expect(normalizedResultText).toContain("occurrence: 2");
 		expect(resultText).not.toContain("\t");
 	});
 

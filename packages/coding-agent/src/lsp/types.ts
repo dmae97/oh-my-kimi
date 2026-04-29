@@ -25,10 +25,7 @@ export const lspSchema = Type.Object({
 	),
 	file: Type.Optional(Type.String({ description: "File path" })),
 	line: Type.Optional(Type.Number({ description: "Line number (1-indexed)" })),
-	symbol: Type.Optional(
-		Type.String({ description: "Symbol/substring to locate on the line (used to compute column)" }),
-	),
-	occurrence: Type.Optional(Type.Number({ description: "Symbol occurrence on line (1-indexed, default: 1)" })),
+	symbol: Type.Optional(Type.String({ description: "Symbol/substring to locate on the line" })),
 	query: Type.Optional(Type.String({ description: "Search query or SSR pattern" })),
 	new_name: Type.Optional(Type.String({ description: "New name for rename" })),
 	apply: Type.Optional(Type.Boolean({ description: "Apply edits (default: true)" })),

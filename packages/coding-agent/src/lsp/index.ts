@@ -1136,7 +1136,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 		_onUpdate?: AgentToolUpdateCallback<LspToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<LspToolDetails>> {
-		const { action, file, line, symbol, occurrence, query, new_name, apply, timeout } = params;
+		const { action, file, line, symbol, query, new_name, apply, timeout } = params;
 		const timeoutSec = clampTimeout("lsp", timeout);
 		const timeoutSignal = AbortSignal.timeout(timeoutSec * 1000);
 		signal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
@@ -1449,9 +1449,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 			const uri = targetFile ? fileToUri(targetFile) : "";
 			const resolvedLine = line ?? 1;
-			const resolvedCharacter = targetFile
-				? await resolveSymbolColumn(targetFile, resolvedLine, symbol, occurrence)
-				: 0;
+			const resolvedCharacter = targetFile ? await resolveSymbolColumn(targetFile, resolvedLine, symbol) : 0;
 			const position = { line: resolvedLine - 1, character: resolvedCharacter };
 
 			let output: string;
