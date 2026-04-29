@@ -28,6 +28,7 @@ import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: 
 import { formatBytes, formatDuration } from "../tools/render-utils";
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
+import type { LocalProtocolOptions } from "../internal-urls";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import * as git from "../utils/git";
 import { discoverAgents, getAgent } from "./discovery";
@@ -715,6 +716,12 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 		const tempArtifactsDir = artifactsDir ? null : path.join(os.tmpdir(), `omp-task-${Snowflake.next()}`);
 		const effectiveArtifactsDir = artifactsDir || tempArtifactsDir!;
 
+		// Share the parent session's local:// root with subagents so they read/write the same scratch space
+		const localProtocolOptions: LocalProtocolOptions = {
+			getArtifactsDir: this.session.getArtifactsDir ?? (() => null),
+			getSessionId: this.session.getSessionId ?? (() => null),
+		};
+
 		// Initialize progress tracking
 		const progressMap = new Map<number, AgentProgress>();
 
@@ -856,6 +863,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						contextFiles,
 						skills: availableSkills,
 						promptTemplates,
+						localProtocolOptions,
 					});
 				}
 
@@ -909,6 +917,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						contextFiles,
 						skills: availableSkills,
 						promptTemplates,
+						localProtocolOptions,
 					});
 					if (mergeMode === "branch" && result.exitCode === 0) {
 						try {

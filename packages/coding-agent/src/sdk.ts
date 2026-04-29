@@ -66,6 +66,7 @@ import {
 	InternalUrlRouter,
 	JobsProtocolHandler,
 	LocalProtocolHandler,
+	type LocalProtocolOptions,
 	McpProtocolHandler,
 	MemoryProtocolHandler,
 	PiProtocolHandler,
@@ -226,6 +227,9 @@ export interface CreateAgentSessionOptions {
 
 	/** Session manager. Default: session stored under the configured agentDir sessions root */
 	sessionManager?: SessionManager;
+
+	/** Override local:// protocol options for subagent local:// sharing. Default: uses the session's own artifacts dir and session ID. */
+	localProtocolOptions?: LocalProtocolOptions;
 
 	/** Settings instance. Default: Settings.init({ cwd, agentDir }) */
 	settings?: Settings;
@@ -998,10 +1002,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}),
 		);
 		internalRouter.register(
-			new LocalProtocolHandler({
-				getArtifactsDir,
-				getSessionId: () => sessionManager.getSessionId(),
-			}),
+			new LocalProtocolHandler(
+				options.localProtocolOptions ?? {
+					getArtifactsDir,
+					getSessionId: () => sessionManager.getSessionId(),
+				},
+			),
 		);
 		internalRouter.register(
 			new SkillProtocolHandler({

@@ -3,6 +3,7 @@
  *
  * Runs each subagent on the main thread and forwards AgentEvents for progress tracking.
  */
+
 import path from "node:path";
 import type { AgentEvent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
@@ -16,6 +17,7 @@ import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import type { Skill } from "../extensibility/skills";
+import type { LocalProtocolOptions } from "../internal-urls";
 import { callTool } from "../mcp/client";
 import type { MCPManager } from "../mcp/manager";
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
@@ -159,6 +161,8 @@ export interface ExecutorOptions {
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
+	/** Override local:// protocol options so subagent shares parent's local:// root */
+	localProtocolOptions?: LocalProtocolOptions;
 }
 
 function parseStringifiedJson(value: unknown): unknown {
@@ -987,6 +991,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				enableMCP,
 				mcpManager: options.mcpManager,
 				customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
+				localProtocolOptions: options.localProtocolOptions,
 			});
 
 			activeSession = session;
