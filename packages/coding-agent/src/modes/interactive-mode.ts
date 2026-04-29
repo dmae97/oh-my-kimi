@@ -145,6 +145,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	planModeEnabled = false;
 	planModePaused = false;
 	planModePlanFilePath: string | undefined = undefined;
+	loopModeEnabled = false;
+	loopPrompt: string | undefined = undefined;
+	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
 	pendingImages: ImageContent[] = [];
@@ -483,7 +486,62 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.onInputCallback = undefined;
 			resolve(input);
 		};
+		this.#scheduleLoopAutoSubmit();
 		return promise;
+	}
+
+	#scheduleLoopAutoSubmit(): void {
+		if (this.#loopAutoSubmitTimer) {
+			clearTimeout(this.#loopAutoSubmitTimer);
+			this.#loopAutoSubmitTimer = undefined;
+		}
+		if (!this.loopModeEnabled || !this.loopPrompt) return;
+		const prompt = this.loopPrompt;
+		// Brief delay so the user has a chance to press Esc between iterations.
+		this.#loopAutoSubmitTimer = setTimeout(() => {
+			this.#loopAutoSubmitTimer = undefined;
+			if (!this.loopModeEnabled || !this.onInputCallback) return;
+			this.onInputCallback(this.startPendingSubmission({ text: prompt }));
+		}, 800);
+	}
+
+	disableLoopMode(options?: { silent?: boolean }): void {
+		const wasEnabled = this.loopModeEnabled;
+		this.loopModeEnabled = false;
+		this.loopPrompt = undefined;
+		if (this.#loopAutoSubmitTimer) {
+			clearTimeout(this.#loopAutoSubmitTimer);
+			this.#loopAutoSubmitTimer = undefined;
+		}
+		this.statusLine.setLoopModeStatus(undefined);
+		this.updateEditorTopBorder();
+		this.ui.requestRender();
+		if (wasEnabled && !options?.silent) {
+			this.showStatus("Loop mode disabled.");
+		}
+	}
+
+	async handleLoopCommand(prompt?: string): Promise<void> {
+		if (this.loopModeEnabled) {
+			this.disableLoopMode();
+			return;
+		}
+		const trimmed = prompt?.trim();
+		if (!trimmed) {
+			this.showError("Usage: /loop <prompt>");
+			return;
+		}
+		this.loopModeEnabled = true;
+		this.loopPrompt = trimmed;
+		this.statusLine.setLoopModeStatus({ enabled: true });
+		this.updateEditorTopBorder();
+		this.ui.requestRender();
+		this.showStatus("Loop mode enabled. Esc to stop.");
+
+		// Submit the first iteration immediately so the loop kicks off.
+		if (this.onInputCallback) {
+			this.onInputCallback(this.startPendingSubmission({ text: trimmed }));
+		}
 	}
 
 	startPendingSubmission(input: { text: string; images?: ImageContent[] }): SubmittedUserInput {

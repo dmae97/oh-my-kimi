@@ -122,6 +122,16 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "loop",
+		description: "Loop the agent: re-submit the same prompt every time it yields (Esc to stop)",
+		inlineHint: "<prompt>",
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			await runtime.ctx.handleLoopCommand(command.args || undefined);
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "model",
 		aliases: ["models"],
 		description: "Select model (opens selector UI)",

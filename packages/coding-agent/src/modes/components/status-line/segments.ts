@@ -76,18 +76,24 @@ const modelSegment: StatusLineSegment = {
 	},
 };
 
-const planModeSegment: StatusLineSegment = {
-	id: "plan_mode",
+const modeSegment: StatusLineSegment = {
+	id: "mode",
 	render(ctx) {
-		const status = ctx.planMode;
-		if (!status || (!status.enabled && !status.paused)) {
-			return { content: "", visible: false };
+		const plan = ctx.planMode;
+		if (plan && (plan.enabled || plan.paused)) {
+			const label = plan.paused ? "Plan ⏸" : "Plan";
+			const content = withIcon(theme.icon.plan, label);
+			const color = plan.paused ? "warning" : "accent";
+			return { content: theme.fg(color, content), visible: true };
 		}
 
-		const label = status.paused ? "Plan ⏸" : "Plan";
-		const content = withIcon(theme.icon.plan, label);
-		const color = status.paused ? "warning" : "accent";
-		return { content: theme.fg(color, content), visible: true };
+		const loop = ctx.loopMode;
+		if (loop?.enabled) {
+			const content = withIcon(theme.icon.loop, "Loop");
+			return { content: theme.fg("customMessageLabel", content), visible: true };
+		}
+
+		return { content: "", visible: false };
 	},
 };
 
@@ -375,7 +381,7 @@ const sessionNameSegment: StatusLineSegment = {
 export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	pi: piSegment,
 	model: modelSegment,
-	plan_mode: planModeSegment,
+	mode: modeSegment,
 	path: pathSegment,
 	git: gitSegment,
 	pr: prSegment,

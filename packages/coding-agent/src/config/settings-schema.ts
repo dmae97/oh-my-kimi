@@ -59,7 +59,7 @@ export const TAB_METADATA: Record<SettingTab, { label: string; icon: `tab.${stri
 export type StatusLineSegmentId =
 	| "pi"
 	| "model"
-	| "plan_mode"
+	| "mode"
 	| "path"
 	| "git"
 	| "pr"

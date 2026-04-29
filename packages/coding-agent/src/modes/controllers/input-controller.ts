@@ -44,6 +44,15 @@ export class InputController {
 					this.ctx.retryEscapeHandler,
 			);
 		this.ctx.editor.onEscape = () => {
+			if (this.ctx.loopModeEnabled) {
+				this.ctx.disableLoopMode();
+				if (this.ctx.session.isStreaming) {
+					void this.ctx.session.abort();
+				} else {
+					this.ctx.cancelPendingSubmission();
+				}
+				return;
+			}
 			if (this.ctx.hasActiveBtw() && this.ctx.handleBtwEscape()) {
 				return;
 			}

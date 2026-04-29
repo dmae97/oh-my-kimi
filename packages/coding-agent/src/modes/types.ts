@@ -86,6 +86,8 @@ export interface InteractiveModeContext {
 	toolOutputExpanded: boolean;
 	todoExpanded: boolean;
 	planModeEnabled: boolean;
+	loopModeEnabled: boolean;
+	loopPrompt?: string;
 	planModePlanFilePath?: string;
 	hideThinkingBlock: boolean;
 	pendingImages: ImageContent[];
@@ -233,6 +235,8 @@ export interface InteractiveModeContext {
 	openExternalEditor(): void;
 	registerExtensionShortcuts(): void;
 	handlePlanModeCommand(initialPrompt?: string): Promise<void>;
+	handleLoopCommand(prompt?: string): Promise<void>;
+	disableLoopMode(options?: { silent?: boolean }): void;
 	handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void>;
 
 	// Hook UI methods
