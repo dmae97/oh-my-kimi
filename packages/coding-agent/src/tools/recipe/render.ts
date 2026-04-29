@@ -2,17 +2,17 @@ import { createShellRenderer } from "../bash";
 import type { DetectedRunner } from "./runner";
 import { commandFromOp, titleFromOp } from "./runner";
 
-export interface RunCommandRenderArgs {
+export interface RecipeRenderArgs {
 	op?: string;
 	__partialJson?: string;
 	[key: string]: unknown;
 }
 
-export function createRunCommandToolRenderer(runners: DetectedRunner[]) {
-	return createShellRenderer<RunCommandRenderArgs>({
+export function createRecipeToolRenderer(runners: DetectedRunner[]) {
+	return createShellRenderer<RecipeRenderArgs>({
 		resolveTitle: args => titleFromOp(args?.op, runners),
 		resolveCommand: args => commandFromOp(args?.op, runners),
 	});
 }
 
-export const runCommandToolRenderer = createRunCommandToolRenderer([]);
+export const recipeToolRenderer = createRecipeToolRenderer([]);

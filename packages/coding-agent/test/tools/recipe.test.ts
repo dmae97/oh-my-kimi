@@ -8,7 +8,7 @@ import {
 	commandFromOp,
 	createTools,
 	type DetectedRunner,
-	RunCommandTool,
+	RecipeTool,
 	resolveCommand,
 	type ToolSession,
 	tasksFromCargoMetadata,
@@ -61,7 +61,7 @@ function createTestSession(cwd: string, settings = Settings.isolated()): ToolSes
 	};
 }
 
-describe("run_command", () => {
+describe("recipe", () => {
 	afterEach(async () => {
 		await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 	});
@@ -140,12 +140,12 @@ describe("run_command", () => {
 	});
 
 	it("detects package scripts and forwards execution through bash", async () => {
-		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-run-command-"));
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-recipe-"));
 		tempDirs.push(dir);
 		await Bun.write(path.join(dir, "package.json"), JSON.stringify({ scripts: { "say-ok": "echo ok" } }, null, 2));
 		await Bun.write(path.join(dir, "bun.lock"), "");
 
-		const tool = await RunCommandTool.createIf(createTestSession(dir));
+		const tool = await RecipeTool.createIf(createTestSession(dir));
 		expect(tool).not.toBeNull();
 		const result = await tool!.execute("tool-call", { op: "say-ok" });
 		const text = result.content.find(block => block.type === "text")?.text ?? "";
@@ -153,7 +153,7 @@ describe("run_command", () => {
 	});
 
 	it("keeps root package scripts bare and exposes workspace package scripts as package-name/script tasks", async () => {
-		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-run-command-workspace-"));
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-recipe-workspace-"));
 		tempDirs.push(dir);
 		await Bun.write(
 			path.join(dir, "package.json"),
@@ -166,7 +166,7 @@ describe("run_command", () => {
 			JSON.stringify({ name: "pkg-a", scripts: { "say-ok": "echo workspace-ok" } }, null, 2),
 		);
 
-		const tool = await RunCommandTool.createIf(createTestSession(dir));
+		const tool = await RecipeTool.createIf(createTestSession(dir));
 		expect(tool).not.toBeNull();
 		expect(tool!.description).toContain("root");
 		expect(tool!.description).not.toContain("root-app/root");
@@ -179,8 +179,8 @@ describe("run_command", () => {
 		expect(text).toContain("workspace-ok");
 	});
 
-	it("auto-includes run_command when bash is requested and a runner is detected", async () => {
-		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-run-command-auto-"));
+	it("auto-includes recipe when bash is requested and a runner is detected", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-recipe-auto-"));
 		tempDirs.push(dir);
 		await Bun.write(path.join(dir, "package.json"), JSON.stringify({ scripts: { test: "echo t" } }, null, 2));
 		await Bun.write(path.join(dir, "bun.lock"), "");
@@ -188,15 +188,15 @@ describe("run_command", () => {
 		const tools = await createTools(createTestSession(dir), ["bash"]);
 		const names = tools.map(tool => tool.name);
 		expect(names).toContain("bash");
-		expect(names).toContain("run_command");
+		expect(names).toContain("recipe");
 	});
 
 	it("is absent when disabled even if a package manifest is present", async () => {
-		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-run-command-disabled-"));
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-recipe-disabled-"));
 		tempDirs.push(dir);
 		await Bun.write(path.join(dir, "package.json"), JSON.stringify({ scripts: { test: "echo t" } }, null, 2));
-		const settings = Settings.isolated({ "runCommand.enabled": false });
+		const settings = Settings.isolated({ "recipe.enabled": false });
 
-		expect(await RunCommandTool.createIf(createTestSession(dir, settings))).toBeNull();
+		expect(await RecipeTool.createIf(createTestSession(dir, settings))).toBeNull();
 	});
 });

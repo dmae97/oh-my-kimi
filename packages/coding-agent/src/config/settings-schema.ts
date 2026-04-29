@@ -1306,14 +1306,14 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"runCommand.enabled": {
+	"recipe.enabled": {
 		type: "boolean",
 		default: true,
 		ui: {
 			tab: "tools",
-			label: "Run command",
+			label: "Recipe",
 			description:
-				"Enable the run_command tool when a justfile / package.json / Cargo.toml / Makefile / Taskfile is present",
+				"Enable the recipe tool when a justfile / package.json / Cargo.toml / Makefile / Taskfile is present",
 		},
 	},
 

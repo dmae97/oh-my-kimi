@@ -4,43 +4,43 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { Theme } from "../../modes/theme/theme";
-import runCommandDescription from "../../prompts/tools/run-command.md" with { type: "text" };
+import recipeDescription from "../../prompts/tools/recipe.md" with { type: "text" };
 import type { ToolSession } from "..";
 import { type BashRenderContext, BashTool, type BashToolDetails } from "../bash";
-import { createRunCommandToolRenderer, type RunCommandRenderArgs } from "./render";
+import { createRecipeToolRenderer, type RecipeRenderArgs } from "./render";
 import { buildPromptModel, type DetectedRunner, resolveCommand } from "./runner";
 import { RUNNERS } from "./runners";
 
-const runCommandSchema = Type.Object({
+const recipeSchema = Type.Object({
 	op: Type.String({
 		description: 'task name and args, e.g. "test" or "build --release"',
 		examples: ["test", "build --release", "pkg:test --watch"],
 	}),
 });
 
-type RunCommandParams = Static<typeof runCommandSchema>;
+type RecipeParams = Static<typeof recipeSchema>;
 
-type RunCommandRenderResult = {
+type RecipeRenderResult = {
 	content: Array<{ type: string; text?: string }>;
 	details?: BashToolDetails;
 	isError?: boolean;
 };
 
-export class RunCommandTool implements AgentTool<typeof runCommandSchema, BashToolDetails, Theme> {
-	readonly name = "run_command";
+export class RecipeTool implements AgentTool<typeof recipeSchema, BashToolDetails, Theme> {
+	readonly name = "recipe";
 	readonly label = "Run";
 	readonly description: string;
-	readonly parameters = runCommandSchema;
+	readonly parameters = recipeSchema;
 	readonly strict = true;
 	readonly concurrency = "exclusive";
 	readonly mergeCallAndResult = true;
 	readonly inline = true;
-	readonly renderCall: (args: RunCommandRenderArgs, options: RenderResultOptions, uiTheme: Theme) => Component;
+	readonly renderCall: (args: RecipeRenderArgs, options: RenderResultOptions, uiTheme: Theme) => Component;
 	readonly renderResult: (
-		result: RunCommandRenderResult,
+		result: RecipeRenderResult,
 		options: RenderResultOptions & { renderContext?: BashRenderContext },
 		uiTheme: Theme,
-		args?: RunCommandRenderArgs,
+		args?: RecipeRenderArgs,
 	) => Component;
 
 	readonly #bash: BashTool;
@@ -49,24 +49,24 @@ export class RunCommandTool implements AgentTool<typeof runCommandSchema, BashTo
 	constructor(session: ToolSession, runners: DetectedRunner[]) {
 		this.#runners = runners;
 		this.#bash = new BashTool(session);
-		this.description = prompt.render(runCommandDescription, buildPromptModel(runners));
-		const renderer = createRunCommandToolRenderer(runners);
+		this.description = prompt.render(recipeDescription, buildPromptModel(runners));
+		const renderer = createRecipeToolRenderer(runners);
 		this.renderCall = renderer.renderCall;
 		this.renderResult = renderer.renderResult;
 	}
 
-	static async createIf(session: ToolSession): Promise<RunCommandTool | null> {
-		if (!session.settings.get("runCommand.enabled")) return null;
+	static async createIf(session: ToolSession): Promise<RecipeTool | null> {
+		if (!session.settings.get("recipe.enabled")) return null;
 		const detected = (await Promise.all(RUNNERS.map(runner => runner.detect(session.cwd)))).filter(
 			(runner): runner is DetectedRunner => runner !== null && runner.tasks.length > 0,
 		);
 		if (detected.length === 0) return null;
-		return new RunCommandTool(session, detected);
+		return new RecipeTool(session, detected);
 	}
 
 	async execute(
 		toolCallId: string,
-		{ op }: RunCommandParams,
+		{ op }: RecipeParams,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<BashToolDetails>,
 		ctx?: AgentToolContext,

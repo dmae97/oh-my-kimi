@@ -37,11 +37,11 @@ import { NotebookTool } from "./notebook";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { PythonTool } from "./python";
 import { ReadTool } from "./read";
+import { RecipeTool } from "./recipe";
 import { RenderMermaidTool } from "./render-mermaid";
 import { createReportToolIssueTool, isAutoQaEnabled } from "./report-tool-issue";
 import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
-import { RunCommandTool } from "./run-command";
 import { SearchTool } from "./search";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { loadSshTool } from "./ssh";
@@ -76,11 +76,11 @@ export * from "./job";
 export * from "./notebook";
 export * from "./python";
 export * from "./read";
+export * from "./recipe";
 export * from "./render-mermaid";
 export * from "./report-tool-issue";
 export * from "./resolve";
 export * from "./review";
-export * from "./run-command";
 export * from "./search";
 export * from "./search-tool-bm25";
 export * from "./ssh";
@@ -226,7 +226,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	rewind: RewindTool.createIf,
 	task: TaskTool.create,
 	job: JobTool.createIf,
-	run_command: RunCommandTool.createIf,
+	recipe: RecipeTool.createIf,
 	irc: IrcTool.createIf,
 	todo_write: s => new TodoWriteTool(s),
 	web_search: s => new WebSearchTool(s),
@@ -375,10 +375,10 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		}
 		if (
 			requestedTools.includes("bash") &&
-			!requestedTools.includes("run_command") &&
-			session.settings.get("runCommand.enabled")
+			!requestedTools.includes("recipe") &&
+			session.settings.get("recipe.enabled")
 		) {
-			requestedTools.push("run_command");
+			requestedTools.push("recipe");
 		}
 	}
 	const allTools: Record<string, ToolFactory> = { ...BUILTIN_TOOLS, ...HIDDEN_TOOLS };
@@ -402,7 +402,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
 		if (name === "irc") return session.settings.get("irc.enabled");
-		if (name === "run_command") return session.settings.get("runCommand.enabled");
+		if (name === "recipe") return session.settings.get("recipe.enabled");
 		if (name === "task") {
 			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 2;
 			const currentDepth = session.taskDepth ?? 0;

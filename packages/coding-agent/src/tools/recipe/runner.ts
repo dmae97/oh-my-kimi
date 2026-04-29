@@ -48,7 +48,7 @@ interface PromptRunnerModel {
 	tasks: PromptTaskModel[];
 }
 
-export interface RunCommandPromptModel {
+export interface RecipePromptModel {
 	[key: string]: unknown;
 	hasMultipleRunners: boolean;
 	ambiguityExampleRunner?: string;
@@ -101,7 +101,7 @@ function resolveRunnerAndTask(
 ): { runner: DetectedRunner; task: RunnerTask; tail: string } {
 	const { head, tail } = parseOp(op);
 	if (!head) {
-		throw new ToolError(`run_command op is empty. Available tasks:\n${formatAvailableTasks(runners)}`);
+		throw new ToolError(`recipe op is empty. Available tasks:\n${formatAvailableTasks(runners)}`);
 	}
 
 	const colonIndex = head.indexOf(":");
@@ -177,7 +177,7 @@ function findAmbiguityExample(runners: DetectedRunner[]): { runner: string; task
 	return firstRunner && firstTask ? { runner: firstRunner.id, task: firstTask.name } : undefined;
 }
 
-export function buildPromptModel(runners: DetectedRunner[]): RunCommandPromptModel {
+export function buildPromptModel(runners: DetectedRunner[]): RecipePromptModel {
 	const ambiguityExample = findAmbiguityExample(runners);
 	return {
 		hasMultipleRunners: runners.length > 1,
