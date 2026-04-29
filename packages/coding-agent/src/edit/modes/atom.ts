@@ -148,39 +148,46 @@ function parseLidStmt(body: string, lineNum: number): ParsedStmt[] | null {
 
 	// Range replace: `LidA..LidB=TEXT` deletes the inclusive range LidA..LidB
 	// and inserts TEXT in its place. Following insert statements append more
-	// replacement lines through the normal hunk reorder path.
+	// replacement lines through the normal hunk reorder path. Legacy `|` is
+	// accepted as a set separator for parity with single-line `Lid|TEXT`.
+	// Bare `LidA..LidB` recovers the common missing-`-` typo for range delete.
 	if (rest.startsWith("..")) {
 		const m2 = LID_RE.exec(rest.slice(2));
 		if (m2) {
 			const endLn = Number.parseInt(m2[1], 10);
 			const endHash = m2[2];
 			const after = rest.slice(2 + m2[0].length);
-			const eq = /^[ \t]*=(.*)$/.exec(after);
-			if (eq) {
-				if (endLn < ln) {
-					throw new Error(
-						`Diff line ${lineNum}: range \`${ln}${hash}..${endLn}${endHash}\` ends before it starts. Use \`LidA..LidB=TEXT\` with LidA's line number ≤ LidB's.`,
-					);
-				}
-				if (endLn === ln && endHash !== hash) {
-					throw new Error(
-						`Diff line ${lineNum}: range \`${ln}${hash}..${endLn}${endHash}\` uses two different hashes for the same line. Copy the same Lid at both endpoints or use \`${ln}${hash}=TEXT\` for a single-line replacement.`,
-					);
-				}
-				if (eq[1].includes("\r")) {
+			const range = `${ln}${hash}..${endLn}${endHash}`;
+			if (endLn < ln) {
+				throw new Error(
+					`Diff line ${lineNum}: range \`${range}\` ends before it starts. Use \`LidA..LidB=TEXT\` with LidA's line number ≤ LidB's.`,
+				);
+			}
+			if (endLn === ln && endHash !== hash) {
+				throw new Error(
+					`Diff line ${lineNum}: range \`${range}\` uses two different hashes for the same line. Copy the same Lid at both endpoints or use \`${ln}${hash}=TEXT\` for a single-line replacement.`,
+				);
+			}
+
+			const stmts: ParsedStmt[] = [];
+			for (let l = ln; l <= endLn; l++) {
+				const h = l === ln ? hash : l === endLn ? endHash : RANGE_INTERIOR_HASH;
+				stmts.push({
+					kind: "anchor_op",
+					anchor: { line: l, hash: h },
+					op: { op: "delete" },
+					lineNum,
+				});
+			}
+
+			if (after.trim().length === 0) return stmts;
+
+			const replacement = /^[ \t]*([=|])(.*)$/.exec(after);
+			if (replacement) {
+				if (replacement[2].includes("\r")) {
 					throw new Error(`Diff line ${lineNum}: set value contains a carriage return; use a single-line value.`);
 				}
-				const stmts: ParsedStmt[] = [];
-				for (let l = ln; l <= endLn; l++) {
-					const h = l === ln ? hash : l === endLn ? endHash : RANGE_INTERIOR_HASH;
-					stmts.push({
-						kind: "anchor_op",
-						anchor: { line: l, hash: h },
-						op: { op: "delete" },
-						lineNum,
-					});
-				}
-				stmts.push({ kind: "insert", text: eq[1], lineNum });
+				stmts.push({ kind: "insert", text: replacement[2], lineNum });
 				return stmts;
 			}
 		}
@@ -289,6 +296,17 @@ function parseDeleteStmt(body: string, lineNum: number): ParsedStmt[] | null {
 	return null;
 }
 
+function parseIndentedHashlineStmt(line: string, lineNum: number): ParsedStmt[] | null {
+	const trimmed = line.trimStart();
+	if (trimmed === line) return null;
+	const stmts = parseLidStmt(trimmed, lineNum);
+	if (!stmts) return null;
+	const safeHashlineEcho = stmts.every(
+		stmt => stmt.kind === "bare_anchor" || (stmt.kind === "anchor_op" && stmt.op.op === "set"),
+	);
+	return safeHashlineEcho ? stmts : null;
+}
+
 function throwMalformedLidDiagnostic(line: string, lineNum: number, raw: string): never {
 	const text = line.trimStart();
 	const withoutLegacyMove = text.startsWith("@@ ") ? text.slice(3).trimStart() : text;
@@ -322,6 +340,9 @@ function parseDiffLine(raw: string, lineNum: number): ParsedStmt[] {
 	// or annotations like `# Test 1: replace enum`; treating these as literal
 	// inserts corrupts files, and the canonical syntax has no comment op.
 	if (line[0] === "#") return [];
+
+	const indentedHashline = parseIndentedHashlineStmt(line, lineNum);
+	if (indentedHashline) return indentedHashline;
 
 	// `+TEXT` inserts at the cursor. Everything after `+` is content. A
 	// `+Lid|TEXT` or `+Lid=TEXT` line is a diff-ish add (unified-diff trap):
@@ -476,13 +497,13 @@ function parseDiffLine(raw: string, lineNum: number): ParsedStmt[] {
 }
 
 // Lines that look like recognized atom ops. Used to delimit range-replace
-// recovery continuation: after `LidA..LidB=TEXT`, an unprefixed non-op line
+// recovery continuation: after `LidA..LidB=TEXT` (or legacy `|` separator),
 // is treated as literal replacement text for backward compatibility.
 const OP_LINE_HEAD_RE = /^([+\-@$^!]|[1-9]\d*[a-z]{2}|[ \t]*$)/;
 const RANGE_CONTINUATION_SENTINEL = "\u0000";
 
 function isRangeReplaceStart(line: string): boolean {
-	return /^[1-9]\d*[a-z]{2}\.\.[1-9]\d*[a-z]{2}[ \t]*=/.test(line);
+	return /^[1-9]\d*[a-z]{2}\.\.[1-9]\d*[a-z]{2}[ \t]*[=|]/.test(line);
 }
 
 // A single-line `Lid=TEXT` (or legacy `Lid|TEXT`, with optional leading `@`)
@@ -1534,6 +1555,60 @@ async function executeAtomWholeFileOperation(
 	};
 }
 
+async function preflightAtomSection(options: ExecuteAtomSingleOptions & AtomInputSection): Promise<void> {
+	const { session, path: sectionPath, diff } = options;
+	if (options.wholeFileOperation) {
+		const { wholeFileOperation } = options;
+		const absolutePath = resolvePlanPath(session, sectionPath);
+		if (sectionPath.endsWith(".ipynb")) {
+			throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
+		}
+		if (wholeFileOperation.kind === "delete") {
+			enforcePlanModeWrite(session, sectionPath, { op: "delete" });
+			await assertEditableFile(absolutePath, sectionPath);
+			return;
+		}
+
+		const destinationPath = wholeFileOperation.destination;
+		if (destinationPath.endsWith(".ipynb")) {
+			throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
+		}
+		enforcePlanModeWrite(session, sectionPath, { op: "update", move: destinationPath });
+		const absoluteDestinationPath = resolvePlanPath(session, destinationPath);
+		if (absoluteDestinationPath === absolutePath) {
+			throw new Error("rename path is the same as source path");
+		}
+		await assertEditableFile(absolutePath, sectionPath);
+		return;
+	}
+
+	const { edits } = parseAtomWithWarnings(diff);
+	if (edits.length === 0 && diff.trim().length > 0) {
+		throw new Error(formatNoAtomEditDiagnostic(sectionPath, diff));
+	}
+
+	enforcePlanModeWrite(session, sectionPath, { op: "update" });
+	if (sectionPath.endsWith(".ipynb") && edits.length > 0) {
+		throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
+	}
+
+	const absolutePath = resolvePlanPath(session, sectionPath);
+	const source = await readAtomFile(absolutePath);
+	if (!source.exists && hasAnchorScopedEdit(edits)) {
+		throw new Error(`File not found: ${sectionPath}`);
+	}
+	if (source.exists) {
+		assertEditableFileContent(source.rawContent, sectionPath);
+	}
+
+	const { text } = stripBom(source.rawContent);
+	const originalNormalized = normalizeToLF(text);
+	const result = applyAtomEdits(originalNormalized, edits);
+	if (originalNormalized === result.lines && (result.noopEdits?.length ?? 0) === 0) {
+		throw new Error(formatNoChangeDiagnostic(sectionPath, result));
+	}
+}
+
 async function executeAtomSection(
 	options: ExecuteAtomSingleOptions & AtomInputSection,
 ): Promise<AgentToolResult<EditToolDetails, typeof atomEditParamsSchema>> {
@@ -1627,6 +1702,10 @@ export async function executeAtomSingle(
 	if (sections.length === 1) {
 		const [section] = sections;
 		return executeAtomSection({ ...options, ...section });
+	}
+
+	for (const section of sections) {
+		await preflightAtomSection({ ...options, ...section });
 	}
 
 	const results = [];

@@ -696,7 +696,7 @@ describe("applyHashlineEdits — errors", () => {
 		}
 	});
 
-	it("stale hash error suggests new Lid when content moved", () => {
+	it("stale hash error suggests a hash-only candidate when content moved", () => {
 		// Original line: "moved" was at line 2. Now it's at line 8 (way beyond ±5 rebase).
 		// Caller still references it via the old `2<hash>` lid.
 		const content = "aaa\nbbb\nccc\nddd\neee\nfff\nggg\nmoved\niii";
@@ -708,7 +708,7 @@ describe("applyHashlineEdits — errors", () => {
 		} catch (err) {
 			expect(err).toBeInstanceOf(HashlineMismatchError);
 			const msg = (err as HashlineMismatchError).message;
-			expect(msg).toContain("Likely shifted");
+			expect(msg).toContain("Hash-only shifted candidate");
 			expect(msg).toContain(`2${movedHash} → 8${movedHash}`);
 		}
 	});

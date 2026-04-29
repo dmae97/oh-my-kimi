@@ -606,9 +606,9 @@ export class HashlineMismatchError extends Error {
 			"The edit was NOT applied, please use the updated file content shown below, and issue another edit tool-call.",
 		);
 
-		// Content-based recovery hint: if the original hash uniquely matches a
-		// line elsewhere in the file (outside the auto-rebase window), suggest
-		// the new Lid so the model can retry without a full re-read.
+		// Content-based recovery hint: the two-letter hash is weak, so a
+		// unique match elsewhere is only a candidate. Keep this advisory; never
+		// silently retarget stale edits based on a whole-file hash-only match.
 		const hints: string[] = [];
 		for (const m of mismatches) {
 			const matches: number[] = [];
@@ -621,7 +621,7 @@ export class HashlineMismatchError extends Error {
 			}
 		}
 		if (hints.length > 0) {
-			lines.push("Likely shifted (hash matched a unique line elsewhere):");
+			lines.push("Hash-only shifted candidate; verify content/context before using:");
 			lines.push(...hints);
 		}
 

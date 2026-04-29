@@ -112,6 +112,12 @@ describe("atom parser — basic forms", () => {
 		expect(applyDiff(longer, diff)).toBe("aaa\nREPLACED\neee");
 	});
 
+	it("bare `LidA..LidB` recovers a missing `-` range delete typo", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		const diff = `${tag(2, "bbb")}..${tag(4, "ddd")}`;
+		expect(applyDiff(longer, diff)).toBe("aaa\neee");
+	});
+
 	it("`-LidA..LidB` rejects a reversed range", () => {
 		const longer = "aaa\nbbb\nccc\nddd";
 		const diff = `-${tag(3, "ccc")}..${tag(2, "bbb")}`;
@@ -178,6 +184,12 @@ describe("atom parser — basic forms", () => {
 			"\n",
 		);
 		expect(applyDiff(longer, diff)).toBe("aaa\nexport function label() {\n    return 1;\n}\neee");
+	});
+
+	it("`LidA..LidB|FIRST` accepts legacy pipe as range replacement separator", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}|ONE`, "\\TWO"].join("\n");
+		expect(applyDiff(longer, diff)).toBe("aaa\nONE\nTWO\neee");
 	});
 
 	it("bare backslash continuation inserts a blank replacement line", () => {
@@ -519,6 +531,15 @@ describe("atom parser — edge cases", () => {
 		const t = tag(2, "bbb");
 		const diff = `${t}|bbb|BBB`;
 		expect(applyDiff(content, diff)).toBe("aaa\nBBB\nccc");
+	});
+
+	it("repairs indented read-output lines as hashline replacements", () => {
+		const content = '{\n  "mode": "demo",\n  "strict": true';
+		const t1 = tag(1, "{");
+		const t2 = tag(2, '  "mode": "demo",');
+		const t3 = tag(3, '  "strict": true');
+		const diff = `${t1}|{\n  ${t2}|  "mode": "demo2",\n  ${t3}|  "strict": true`;
+		expect(applyDiff(content, diff)).toBe('{\n  "mode": "demo2",\n  "strict": true');
 	});
 
 	it("same-line OLD|NEW repair works through `@` prefix slip", () => {
@@ -963,6 +984,22 @@ describe("atom executor — whole-file operations", () => {
 			expect(text).toContain("replacement is identical");
 			// File untouched
 			expect(await Bun.file(path.join(tempDir, "file.ts")).text()).toBe(content);
+		});
+	});
+
+	it("preflights all sections before writing a multi-file edit", async () => {
+		await withTempDir(async tempDir => {
+			const aPath = path.join(tempDir, "a.ts");
+			const bPath = path.join(tempDir, "b.ts");
+			await Bun.write(aPath, "aaa\n");
+			await Bun.write(bPath, "bbb\n");
+
+			const input = [`---a.ts`, `${tag(1, "aaa")}=AAA`, `---b.ts`, `${mistag(1, "bbb")}=BBB`].join("\n");
+			await expect(executeAtomSingle(atomExecuteOptions(tempDir, input))).rejects.toThrow(
+				/changed since the last read/,
+			);
+			expect(await Bun.file(aPath).text()).toBe("aaa\n");
+			expect(await Bun.file(bPath).text()).toBe("bbb\n");
 		});
 	});
 });

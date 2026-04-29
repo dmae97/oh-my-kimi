@@ -3,7 +3,7 @@
  */
 
 import { formatDuration, formatPercent, truncate } from "@oh-my-pi/pi-utils";
-import { EDIT_FAILURE_CATEGORIES, type BenchmarkResult, type TaskResult } from "./runner";
+import { type BenchmarkResult, EDIT_FAILURE_CATEGORIES, type TaskResult } from "./runner";
 
 function getStatusEmoji(successRate: number, runsPerTask: number): string {
 	const passing = Math.round(successRate * runsPerTask);
