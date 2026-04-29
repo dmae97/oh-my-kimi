@@ -179,6 +179,37 @@ function applyPremiumMultiplierOverrides(models: readonly Model[]): Model[] {
 		};
 	});
 }
+function hasBillableCost(cost: Model["cost"]): boolean {
+	return cost.input !== 0 || cost.output !== 0 || cost.cacheRead !== 0 || cost.cacheWrite !== 0;
+}
+
+function applyCodexPricingFallback(models: readonly Model[]): Model[] {
+	const openAIModels = new Map(
+		models
+			.filter(model => model.provider === "openai" && hasBillableCost(model.cost))
+			.map(model => [model.id, model.cost]),
+	);
+
+	return models.map(model => {
+		if (model.provider !== "openai-codex" || model.api !== "openai-codex-responses") {
+			return model;
+		}
+		if (hasBillableCost(model.cost)) {
+			return model;
+		}
+
+		const openAICost = openAIModels.get(model.id);
+		if (!openAICost) {
+			return model;
+		}
+
+		return {
+			...model,
+			cost: { ...openAICost },
+		};
+	});
+}
+
 const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 
 async function getOAuthCredentialsFromStorage(provider: OAuthProvider): Promise<OAuthCredentials | null> {
@@ -334,6 +365,7 @@ async function generateModels() {
 
 	allModels = applyGlobalModelsDevFallback(allModels, modelsDevModels);
 	allModels = applyPremiumMultiplierOverrides(allModels);
+	allModels = applyCodexPricingFallback(allModels);
 	applyGeneratedModelPolicies(allModels);
 	linkOpenAIPromotionTargets(allModels);
 

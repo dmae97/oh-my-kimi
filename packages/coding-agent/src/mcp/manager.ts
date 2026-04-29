@@ -472,7 +472,7 @@ export class MCPManager {
 	}
 
 	#replaceServerTools(name: string, tools: CustomTool<TSchema, MCPToolDetails>[]): void {
-		this.#tools = this.#tools.filter(t => !t.name.startsWith(`mcp_${name}_`));
+		this.#tools = this.#tools.filter(t => !t.name.startsWith(`mcp__${name}_`));
 		this.#tools.push(...tools);
 	}
 
@@ -644,8 +644,8 @@ export class MCPManager {
 		}
 
 		// Remove tools from this server and notify consumers
-		const hadTools = this.#tools.some(t => t.name.startsWith(`mcp_${name}_`));
-		this.#tools = this.#tools.filter(t => !t.name.startsWith(`mcp_${name}_`));
+		const hadTools = this.#tools.some(t => t.name.startsWith(`mcp__${name}_`));
+		this.#tools = this.#tools.filter(t => !t.name.startsWith(`mcp__${name}_`));
 		if (hadTools) this.#onToolsChanged?.(this.#tools);
 
 		// Notify prompt consumers so stale commands are cleared

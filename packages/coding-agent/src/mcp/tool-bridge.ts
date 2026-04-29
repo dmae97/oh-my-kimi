@@ -159,7 +159,7 @@ async function reconnectWithAbort(reconnect: MCPReconnect, signal?: AbortSignal)
  * Prefixes with server name to avoid conflicts. If the tool name already
  * starts with the server name (e.g., server "puppeteer" with tool
  * "puppeteer_screenshot"), strips the redundant prefix to produce
- * "mcp_puppeteer_screenshot" instead of "mcp_puppeteer_puppeteer_screenshot".
+ * "mcp__puppeteer_screenshot" instead of "mcp__puppeteer_puppeteer_screenshot".
  */
 function sanitizeMCPToolNamePart(value: string, fallback: string): string {
 	const sanitized = value
@@ -183,7 +183,7 @@ export function createMCPToolName(serverName: string, toolName: string): string 
 		normalizedToolName = sanitizedToolName.slice(prefixWithUnderscore.length);
 	}
 
-	return `mcp_${sanitizedServerName}_${normalizedToolName}`;
+	return `mcp__${sanitizedServerName}_${normalizedToolName}`;
 }
 
 /**
@@ -193,9 +193,9 @@ export function createMCPToolName(serverName: string, toolName: string): string 
  * The original MCP tool name may have had the server name as a prefix.
  */
 export function parseMCPToolName(name: string): { serverName: string; toolName: string } | null {
-	if (!name.startsWith("mcp_")) return null;
+	if (!name.startsWith("mcp__")) return null;
 
-	const rest = name.slice(4);
+	const rest = name.slice(5);
 	const underscoreIdx = rest.indexOf("_");
 	if (underscoreIdx === -1) return null;
 

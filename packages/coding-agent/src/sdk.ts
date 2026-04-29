@@ -66,6 +66,7 @@ import {
 	InternalUrlRouter,
 	JobsProtocolHandler,
 	LocalProtocolHandler,
+	type LocalProtocolOptions,
 	McpProtocolHandler,
 	MemoryProtocolHandler,
 	PiProtocolHandler,
@@ -111,7 +112,6 @@ import {
 	discoverStartupLspServers,
 	EditTool,
 	FindTool,
-	GrepTool,
 	getSearchTools,
 	HIDDEN_TOOLS,
 	isSearchProviderPreference,
@@ -121,10 +121,12 @@ import {
 	ReadTool,
 	ResolveTool,
 	renderSearchToolBm25Description,
+	SearchTool,
 	setPreferredImageProvider,
 	setPreferredSearchProvider,
 	type Tool,
 	type ToolSession,
+	WebSearchTool,
 	WriteTool,
 	warmupLspServers,
 } from "./tools";
@@ -226,6 +228,9 @@ export interface CreateAgentSessionOptions {
 	/** Session manager. Default: session stored under the configured agentDir sessions root */
 	sessionManager?: SessionManager;
 
+	/** Override local:// protocol options for subagent local:// sharing. Default: uses the session's own artifacts dir and session ID. */
+	localProtocolOptions?: LocalProtocolOptions;
+
 	/** Settings instance. Default: Settings.init({ cwd, agentDir }) */
 	settings?: Settings;
 
@@ -271,13 +276,14 @@ export {
 	createTools,
 	EditTool,
 	FindTool,
-	GrepTool,
 	HIDDEN_TOOLS,
 	loadSshTool,
 	PythonTool,
 	ReadTool,
 	ResolveTool,
+	SearchTool,
 	type ToolSession,
+	WebSearchTool,
 	WriteTool,
 };
 
@@ -996,10 +1002,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}),
 		);
 		internalRouter.register(
-			new LocalProtocolHandler({
-				getArtifactsDir,
-				getSessionId: () => sessionManager.getSessionId(),
-			}),
+			new LocalProtocolHandler(
+				options.localProtocolOptions ?? {
+					getArtifactsDir,
+					getSessionId: () => sessionManager.getSessionId(),
+				},
+			),
 		);
 		internalRouter.register(
 			new SkillProtocolHandler({
@@ -1386,7 +1394,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));
 		const explicitlyRequestedMCPToolNames = options.toolNames
-			? requestedActiveToolNames.filter(name => name.startsWith("mcp_"))
+			? requestedActiveToolNames.filter(name => name.startsWith("mcp__"))
 			: [];
 		const discoveryDefaultServers = new Set(
 			(settings.get("mcp.discoveryDefaultServers") ?? []).map(serverName => serverName.trim()).filter(Boolean),
@@ -1412,7 +1420,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				: [...new Set([...restoredSelectedMCPToolNames, ...defaultSelectedMCPToolNames])];
 			initialToolNames = [
 				...new Set([
-					...initialRequestedActiveToolNames.filter(name => !name.startsWith("mcp_")),
+					...initialRequestedActiveToolNames.filter(name => !name.startsWith("mcp__")),
 					...initialSelectedMCPToolNames,
 				]),
 			];
@@ -1424,7 +1432,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			...registeredTools.filter(t => !t.definition.defaultInactive).map(t => t.definition.name),
 		];
 		for (const name of alwaysInclude) {
-			if (mcpDiscoveryEnabled && name.startsWith("mcp_")) {
+			if (mcpDiscoveryEnabled && name.startsWith("mcp__")) {
 				continue;
 			}
 			if (toolRegistry.has(name) && !initialToolNames.includes(name)) {
@@ -1601,6 +1609,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			ttsrManager,
 			obfuscator,
 			asyncJobManager,
+			agentId: resolvedAgentId,
+			agentRegistry,
 		});
 		hasSession = true;
 

@@ -9,7 +9,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage, ResolvedThinkingLevel, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
-
 import { computeLineHash, formatSessionDumpText, RpcClient } from "@oh-my-pi/pi-coding-agent";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { diffLines } from "diff";
@@ -21,8 +20,15 @@ import benchmarkTaskPrompt from "./prompts/benchmark-task.md" with { type: "text
 import type { EditTask } from "./tasks";
 import { verifyExpectedFileSubset, verifyExpectedFiles } from "./verify";
 
-const TMP = `/tmp/rb-${Math.random().toString(36).slice(2, 10)}`;
+const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
+const RUNS_DIR = path.join(REPO_ROOT, "runs");
+const TMP = path.join(RUNS_DIR, `rb-${Math.random().toString(36).slice(2, 10)}`);
 const CLI_PATH = Bun.fileURLToPath(import.meta.resolve("@oh-my-pi/pi-coding-agent/cli"));
+
+function formatLogPath(logFile: string): string {
+	const relativePath = path.relative(REPO_ROOT, logFile);
+	return relativePath === "" ? "." : relativePath;
+}
 
 /** Subset of session state used for markdown conversation dumps (parity with /dump). */
 type ConversationDumpSessionState = {
@@ -48,7 +54,7 @@ interface BenchmarkClient {
 	dispose(): Promise<void>;
 }
 
-fs.mkdirSync(TMP);
+fs.mkdirSync(TMP, { recursive: true });
 
 let n = 0;
 function subtmp(pre: string): string {
@@ -191,9 +197,8 @@ function getEditPathFromArgs(args: unknown): string | null {
 }
 
 const HASHLINE_SUBTYPES = ["set", "set_range", "insert"] as const;
-
-const BENCHMARK_TOOL_NAMES = ["read", "edit", "vim", "write", "apply_patch"] as const;
-const EDIT_TOOL_NAMES = ["edit", "vim", "apply_patch"] as const;
+const BENCHMARK_TOOL_NAMES = ["read", "edit", "write", "apply_patch"] as const;
+const EDIT_TOOL_NAMES = ["edit", "apply_patch"] as const;
 
 function isEditTool(toolName: unknown): toolName is (typeof EDIT_TOOL_NAMES)[number] {
 	return toolName === "edit" || toolName === "vim" || toolName === "apply_patch";
@@ -1196,7 +1201,7 @@ async function runSingleTask(
 					? `Verification failed: ${error}${diff ? `\n\nDiff (expected vs actual):\n\n\`\`\`diff\n${diff}\n\`\`\`` : ""}${mutationIntentSuffix}`
 					: `Previous attempt failed.${mutationIntentSuffix}`;
 			}
-			if (!useInProcess) {
+			if (config.conversationDumpDir) {
 				conversationSnapshot = await snapshotConversationDump(client);
 			}
 		} finally {
@@ -1225,7 +1230,7 @@ async function runSingleTask(
 		timeoutTelemetry,
 		mutationIntentValidation,
 	});
-	console.log(`  Log: ${logFile}`);
+	console.log(`  Log: ${formatLogPath(logFile)}`);
 
 	if (config.conversationDumpDir && conversationSnapshot) {
 		await writeConversationDump({
@@ -1542,7 +1547,7 @@ async function _runRpcBenchmarkRun(
 		timeoutTelemetry,
 		mutationIntentValidation,
 	});
-	console.log(`  Log: ${logFile}`);
+	console.log(`  Log: ${formatLogPath(logFile)}`);
 
 	await persistConversationDump({
 		client,
@@ -2013,52 +2018,16 @@ export async function runTask(
 	return summarizeTaskRuns(task, runs);
 }
 
-export async function runBenchmark(
-	tasks: EditTask[],
-	config: BenchmarkConfig,
-	onProgress?: (event: ProgressEvent) => void,
-): Promise<BenchmarkResult> {
-	const startTime = new Date().toISOString();
+export function buildBenchmarkResult(params: {
+	tasks: EditTask[];
+	config: BenchmarkConfig;
+	resultsByTask: Map<string, TaskRunResult[]>;
+	startTime: string;
+	endTime?: string;
+}): BenchmarkResult {
+	const taskResults = params.tasks.map(task => summarizeTaskRuns(task, params.resultsByTask.get(task.id) ?? []));
 
-	// Discover shared infrastructure once for in-process mode
-	const useInProcess = config.inProcess !== false;
-	const shared = useInProcess
-		? await discoverSharedInfra({
-				editVariant: config.editVariant,
-				editFuzzy: config.editFuzzy,
-				editFuzzyThreshold: config.editFuzzyThreshold,
-			})
-		: undefined;
-
-	const runItems: TaskRunItem[] = tasks.flatMap(task =>
-		Array.from({ length: config.runsPerTask }, (_, runIndex) => ({ task, runIndex })),
-	);
-
-	const pending = shuffle(runItems);
-	const resultsByTask = new Map<string, TaskRunResult[]>();
-	const concurrency = Math.max(1, Math.floor(config.taskConcurrency));
-	const running: Promise<void>[] = [];
-
-	const runNext = async (): Promise<void> => {
-		const nextItem = pending.shift();
-		if (!nextItem) return;
-		const { task, result } = await runConcurrentBenchmarkRun(nextItem, config, onProgress, shared);
-		const list = resultsByTask.get(task.id) ?? [];
-		list.push(result);
-		resultsByTask.set(task.id, list);
-		await runNext();
-	};
-
-	const slots = Math.min(concurrency, pending.length);
-	for (let i = 0; i < slots; i++) {
-		running.push(runNext());
-	}
-
-	await Promise.all(running);
-
-	const taskResults = tasks.map(task => summarizeTaskRuns(task, resultsByTask.get(task.id) ?? []));
-
-	const endTime = new Date().toISOString();
+	const endTime = params.endTime ?? new Date().toISOString();
 
 	const allRuns = taskResults.flatMap(t => t.runs);
 	const totalRuns = allRuns.length;
@@ -2115,7 +2084,7 @@ export async function runBenchmark(
 			: undefined;
 
 	const hashlineEditSubtypes: Record<string, number> | undefined =
-		config.editVariant === "hashline"
+		params.config.editVariant === "hashline"
 			? Object.fromEntries(
 					HASHLINE_SUBTYPES.map(key => [
 						key,
@@ -2126,7 +2095,7 @@ export async function runBenchmark(
 
 	const denom = effectiveRuns || 1;
 	const summary: BenchmarkSummary = {
-		totalTasks: tasks.length,
+		totalTasks: params.tasks.length,
 		totalRuns: effectiveRuns,
 		successfulRuns,
 		overallSuccessRate: successfulRuns / denom,
@@ -2168,10 +2137,58 @@ export async function runBenchmark(
 	};
 
 	return {
-		config,
+		config: params.config,
 		tasks: taskResults,
 		summary,
-		startTime,
+		startTime: params.startTime,
 		endTime,
 	};
+}
+
+export async function runBenchmark(
+	tasks: EditTask[],
+	config: BenchmarkConfig,
+	onProgress?: (event: ProgressEvent) => void,
+	onResultSnapshot?: (result: BenchmarkResult) => void,
+): Promise<BenchmarkResult> {
+	const startTime = new Date().toISOString();
+
+	// Discover shared infrastructure once for in-process mode
+	const useInProcess = config.inProcess !== false;
+	const shared = useInProcess
+		? await discoverSharedInfra({
+				editVariant: config.editVariant,
+				editFuzzy: config.editFuzzy,
+				editFuzzyThreshold: config.editFuzzyThreshold,
+			})
+		: undefined;
+
+	const runItems: TaskRunItem[] = tasks.flatMap(task =>
+		Array.from({ length: config.runsPerTask }, (_, runIndex) => ({ task, runIndex })),
+	);
+
+	const pending = shuffle(runItems);
+	const resultsByTask = new Map<string, TaskRunResult[]>();
+	const concurrency = Math.max(1, Math.floor(config.taskConcurrency));
+	const running: Promise<void>[] = [];
+
+	const runNext = async (): Promise<void> => {
+		const nextItem = pending.shift();
+		if (!nextItem) return;
+		const { task, result } = await runConcurrentBenchmarkRun(nextItem, config, onProgress, shared);
+		const list = resultsByTask.get(task.id) ?? [];
+		list.push(result);
+		resultsByTask.set(task.id, list);
+		onResultSnapshot?.(buildBenchmarkResult({ tasks, config, resultsByTask, startTime }));
+		await runNext();
+	};
+
+	const slots = Math.min(concurrency, pending.length);
+	for (let i = 0; i < slots; i++) {
+		running.push(runNext());
+	}
+
+	await Promise.all(running);
+
+	return buildBenchmarkResult({ tasks, config, resultsByTask, startTime });
 }

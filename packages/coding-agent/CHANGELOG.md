@@ -5,6 +5,54 @@
 ### Fixed
 
 - Fixed hook editors to recognize Ctrl+Enter when terminals include NumLock or keypad Enter metadata.
+## [14.5.6] - 2026-04-29
+### Changed
+
+- Removed the atom edit mode's multi-anchor auto-rebase rejection so stale-but-uniquely-rebasable block edits apply with warnings instead of failing.
+
+## [14.5.5] - 2026-04-29
+### Breaking Changes
+
+- Rejected atom diffs with unrecognized operations (including lone '-' lines) by throwing parse errors instead of treating them as inserts
+
+### Added
+
+- Added duplicate-line post-edit detection that warns on newly introduced adjacent identical lines and auto-removes one duplicate when bracket-balance is restored
+- Added a warning when suspicious adjacent duplicates are introduced after edits so users can review potential stale-line issues
+
+### Changed
+
+- Changed anchor rebase handling to fail when multiple mutating anchors would need auto-rebase, preventing silent misapplied contiguous block rewrites
+
+### Fixed
+
+- Fixed bracket-corruption caused by botched block rewrites by automatically removing a newly introduced duplicate adjacent line when removing it restores the original `{}`, `()`, and `[]` balance and by warning when automatic removal is unsafe
+
+## [14.5.4] - 2026-04-28
+### Breaking Changes
+
+- Changed the `atom` edit mode from JSON `{ path, edits }` calls to the compact file-oriented `input` patch language that was previously exposed as `atomd`; `atomd` is no longer a separate edit variant
+- Renamed MCP tool identifiers from the `mcp_<server>_<tool>` format to `mcp__<server>_<tool>` so custom tool names, active tool lists, and persisted MCP selections must be updated to the new prefix
+- Renamed the built-in content-search tool from `grep` to `search`, including SDK/tool event names and settings keys (`search.enabled`, `search.contextBefore`, `search.contextAfter`), so integrations using `grep` and `grep.*` references must be updated
+
+### Added
+
+- Added internal URL support to the `search` tool, allowing `artifact://`-style paths that resolve to local files to be searched directly
+- Added IRC relay observation in the main agent UI so every IRC exchange between agents is rendered in the main transcript, even when the main agent is not a direct participant
+- Added stateful `href`/`hrefr` prompt helpers that can reuse anchors remembered from prior `hline` helper calls
+
+### Changed
+
+- Changed file-path rendering across search, find, AST, LSP, and related edit outputs to display targets as cwd-relative paths when they resolve inside the working directory and keep absolute paths for files outside the cwd
+- Changed system prompt guidance so in-cwd tool paths must be passed as cwd-relative paths and absolute paths only for out-of-cwd targets or `~` expansion
+- Updated `edit` streaming diff previews for `patch`, `replace`, and `hashline` to produce a single request-level preview for the new single-file `path` mode
+- Bumped default `read.defaultLimit` from 300 to 500 lines, and scaled the read tool's byte budget with the line limit (`max(50KB, lines * 512)`) so the configured line count is no longer truncated by the shared 50KB cap
+
+### Fixed
+
+- Fixed atom edit streaming previews to use atom headers for file names instead of apply_patch parsing errors.
+- Fixed collapsed search result rendering so summary and truncation rows stay within the collapsed output budget
+- Updated search path handling to support path lists and internal file paths while preserving previous search behavior
 
 ## [14.5.3] - 2026-04-27
 

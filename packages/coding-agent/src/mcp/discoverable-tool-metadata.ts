@@ -53,7 +53,7 @@ const FIELD_WEIGHTS = {
 } as const;
 
 export function isMCPToolName(name: string): boolean {
-	return name.startsWith("mcp_");
+	return name.startsWith("mcp__");
 }
 
 function getSchemaPropertyKeys(parameters: unknown): string[] {

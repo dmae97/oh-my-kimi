@@ -1576,27 +1576,33 @@ export async function computePatchDiff(
 	}
 }
 
-export const patchEditEntrySchema = Type.Object({
-	path: Type.Optional(Type.String({ description: "File path (omit to use top-level `path`)" })),
-	op: Type.Optional(
-		StringEnum(["create", "delete", "update"], {
-			description: "Operation (default: update)",
-		}),
-	),
-	rename: Type.Optional(Type.String({ description: "New path for move" })),
-	diff: Type.Optional(Type.String({ description: "Diff hunks (update) or full content (create)" })),
-});
+export const patchEditEntrySchema = Type.Object(
+	{
+		op: Type.Optional(
+			StringEnum(["create", "delete", "update"], {
+				description: "Operation (default: update)",
+			}),
+		),
+		rename: Type.Optional(Type.String({ description: "New path for move" })),
+		diff: Type.Optional(Type.String({ description: "Diff hunks (update) or full content (create)" })),
+	},
+	{ additionalProperties: false },
+);
 
-export const patchEditSchema = Type.Object({
-	path: Type.Optional(Type.String({ description: "Default file path used when an edit omits its own `path`" })),
-	edits: Type.Array(patchEditEntrySchema, { description: "Patch operations", minItems: 1 }),
-});
+export const patchEditSchema = Type.Object(
+	{
+		path: Type.String({ description: "file path for edits" }),
+		edits: Type.Array(patchEditEntrySchema, { description: "Patch operations", minItems: 1 }),
+	},
+	{ additionalProperties: false },
+);
 
 export type PatchEditEntry = Static<typeof patchEditEntrySchema>;
 export type PatchParams = Static<typeof patchEditSchema>;
 
 export interface ExecutePatchSingleOptions {
 	session: ToolSession;
+	path: string;
 	params: PatchEditEntry;
 	signal?: AbortSignal;
 	batchRequest?: LspBatchRequest;
@@ -1694,6 +1700,7 @@ export async function executePatchSingle(
 ): Promise<AgentToolResult<EditToolDetails, typeof patchEditEntrySchema>> {
 	const {
 		session,
+		path,
 		params,
 		signal,
 		batchRequest,
@@ -1702,10 +1709,7 @@ export async function executePatchSingle(
 		writethrough,
 		beginDeferredDiagnosticsForPath,
 	} = options;
-	const { path, op: rawOp, rename, diff } = params;
-	if (typeof path !== "string" || path.length === 0) {
-		throw new Error("patch edit: missing `path`. Provide `path` on the edit or supply a top-level `path`.");
-	}
+	const { op: rawOp, rename, diff } = params;
 
 	const op: Operation = rawOp === "create" || rawOp === "delete" ? rawOp : "update";
 

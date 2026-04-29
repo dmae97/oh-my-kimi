@@ -60,7 +60,7 @@ function createSession(
 describe("SearchToolBm25Tool", () => {
 	const discoverableTools: TestDiscoverableMCPTool[] = [
 		{
-			name: "mcp_github_create_issue",
+			name: "mcp__github_create_issue",
 			label: "github/create_issue",
 			description: "Create a GitHub issue in the selected repository",
 			serverName: "github",
@@ -68,7 +68,7 @@ describe("SearchToolBm25Tool", () => {
 			schemaKeys: ["owner", "repo", "title", "body"],
 		},
 		{
-			name: "mcp_github_list_pull_requests",
+			name: "mcp__github_list_pull_requests",
 			label: "github/list_pull_requests",
 			description: "List pull requests for a repository",
 			serverName: "github",
@@ -76,7 +76,7 @@ describe("SearchToolBm25Tool", () => {
 			schemaKeys: ["owner", "repo", "state"],
 		},
 		{
-			name: "mcp_slack_post_message",
+			name: "mcp__slack_post_message",
 			label: "slack/post_message",
 			description: "Post a message to a Slack channel",
 			serverName: "slack",
@@ -121,15 +121,15 @@ describe("SearchToolBm25Tool", () => {
 		expect(searchIndexCalls).toBe(1);
 		expect(rawToolsCalls).toBe(0);
 		expect(result.details?.tools.map(match => match.name)).toEqual([
-			"mcp_github_create_issue",
-			"mcp_github_list_pull_requests",
+			"mcp__github_create_issue",
+			"mcp__github_list_pull_requests",
 		]);
 		expect(result.content).toEqual([
 			{
 				type: "text",
 				text: JSON.stringify({
 					query: "github",
-					activated_tools: ["mcp_github_create_issue", "mcp_github_list_pull_requests"],
+					activated_tools: ["mcp__github_create_issue", "mcp__github_list_pull_requests"],
 					match_count: 2,
 					total_tools: 3,
 				}),
@@ -156,11 +156,11 @@ describe("SearchToolBm25Tool", () => {
 					query: "github issue",
 					limit: 2,
 					total_tools: 3,
-					activated_tools: ["mcp_github_create_issue"],
-					active_selected_tools: ["mcp_github_create_issue"],
+					activated_tools: ["mcp__github_create_issue"],
+					active_selected_tools: ["mcp__github_create_issue"],
 					tools: [
 						{
-							name: "mcp_github_create_issue",
+							name: "mcp__github_create_issue",
 							label: "github/create_issue",
 							description: "Create a GitHub issue in the selected repository",
 							server_name: "github",
@@ -224,11 +224,11 @@ describe("SearchToolBm25Tool", () => {
 					query: "github\tissue",
 					limit: 2,
 					total_tools: 1,
-					activated_tools: ["mcp_github_create_issue"],
-					active_selected_tools: ["mcp_github_create_issue"],
+					activated_tools: ["mcp__github_create_issue"],
+					active_selected_tools: ["mcp__github_create_issue"],
 					tools: [
 						{
-							name: "mcp_github_create_issue",
+							name: "mcp__github_create_issue",
 							label: "github\t/create_issue",
 							description: "Create\ta GitHub issue",
 							server_name: "git\thub",
@@ -254,7 +254,7 @@ describe("SearchToolBm25Tool", () => {
 		expect(theme).toBeDefined();
 		const uiTheme = theme!;
 		const tools = Array.from({ length: 6 }, (_, index) => ({
-			name: `mcp_github_tool_${index + 1}`,
+			name: `mcp__github_tool_${index + 1}`,
 			label: `github/tool_${index + 1}`,
 			description: `GitHub tool ${index + 1}`,
 			server_name: "github",
@@ -285,7 +285,7 @@ describe("SearchToolBm25Tool", () => {
 
 	it("defaults to 8 results and lets callers override the limit", async () => {
 		const manyTools: TestDiscoverableMCPTool[] = Array.from({ length: 10 }, (_, index) => ({
-			name: `mcp_github_tool_${index + 1}`,
+			name: `mcp__github_tool_${index + 1}`,
 			label: `github/tool_${index + 1}`,
 			description: `GitHub tool ${index + 1} for repository workflows`,
 			serverName: "github",
@@ -323,15 +323,15 @@ describe("SearchToolBm25Tool", () => {
 
 		const firstResult = await tool.execute("call-1", { query: "github issue", limit: 1 });
 		const firstDetails = firstResult.details;
-		expect(firstDetails?.tools.map(match => match.name)).toEqual(["mcp_github_create_issue"]);
-		expect(firstDetails?.active_selected_tools).toEqual(["mcp_github_create_issue"]);
-		expect(session.getSelected()).toEqual(["mcp_github_create_issue"]);
+		expect(firstDetails?.tools.map(match => match.name)).toEqual(["mcp__github_create_issue"]);
+		expect(firstDetails?.active_selected_tools).toEqual(["mcp__github_create_issue"]);
+		expect(session.getSelected()).toEqual(["mcp__github_create_issue"]);
 
 		const secondResult = await tool.execute("call-2", { query: "slack message", limit: 1 });
 		const secondDetails = secondResult.details;
-		expect(secondDetails?.tools.map(match => match.name)).toEqual(["mcp_slack_post_message"]);
-		expect(secondDetails?.active_selected_tools).toEqual(["mcp_github_create_issue", "mcp_slack_post_message"]);
-		expect(session.getSelected()).toEqual(["mcp_github_create_issue", "mcp_slack_post_message"]);
+		expect(secondDetails?.tools.map(match => match.name)).toEqual(["mcp__slack_post_message"]);
+		expect(secondDetails?.active_selected_tools).toEqual(["mcp__github_create_issue", "mcp__slack_post_message"]);
+		expect(session.getSelected()).toEqual(["mcp__github_create_issue", "mcp__slack_post_message"]);
 	});
 
 	it("skips already-selected matches before applying limit", async () => {
@@ -339,23 +339,23 @@ describe("SearchToolBm25Tool", () => {
 		const tool = new SearchToolBm25Tool(session);
 
 		const firstResult = await tool.execute("call-github-1", { query: "github", limit: 1 });
-		expect(firstResult.details?.tools.map(match => match.name)).toEqual(["mcp_github_create_issue"]);
-		expect(firstResult.details?.activated_tools).toEqual(["mcp_github_create_issue"]);
+		expect(firstResult.details?.tools.map(match => match.name)).toEqual(["mcp__github_create_issue"]);
+		expect(firstResult.details?.activated_tools).toEqual(["mcp__github_create_issue"]);
 
 		const secondResult = await tool.execute("call-github-2", { query: "github", limit: 1 });
-		expect(secondResult.details?.tools.map(match => match.name)).toEqual(["mcp_github_list_pull_requests"]);
-		expect(secondResult.details?.activated_tools).toEqual(["mcp_github_list_pull_requests"]);
+		expect(secondResult.details?.tools.map(match => match.name)).toEqual(["mcp__github_list_pull_requests"]);
+		expect(secondResult.details?.activated_tools).toEqual(["mcp__github_list_pull_requests"]);
 		expect(secondResult.details?.active_selected_tools).toEqual([
-			"mcp_github_create_issue",
-			"mcp_github_list_pull_requests",
+			"mcp__github_create_issue",
+			"mcp__github_list_pull_requests",
 		]);
 
 		const exhaustedResult = await tool.execute("call-github-3", { query: "github", limit: 1 });
 		expect(exhaustedResult.details?.tools).toEqual([]);
 		expect(exhaustedResult.details?.activated_tools).toEqual([]);
 		expect(exhaustedResult.details?.active_selected_tools).toEqual([
-			"mcp_github_create_issue",
-			"mcp_github_list_pull_requests",
+			"mcp__github_create_issue",
+			"mcp__github_list_pull_requests",
 		]);
 	});
 

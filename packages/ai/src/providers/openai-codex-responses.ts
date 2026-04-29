@@ -42,6 +42,7 @@ import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-ins
 import { getOpenAIStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
+import { compactGrammarDefinition } from "./grammar";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
@@ -647,17 +648,31 @@ async function reopenCodexWebSocketRuntimeStream(
 	runtime: CodexStreamRuntime,
 	state: CodexWebSocketSessionState,
 ): Promise<void> {
-	const next = await openCodexWebSocketTransport(
-		context.requestContext,
-		context.requestSetup,
-		context.options,
-		state,
-		runtime.websocketStreamRetries,
-	);
-	runtime.eventStream = next.eventStream;
-	runtime.requestBodyForState = next.requestBodyForState;
-	runtime.transport = next.transport;
-	state.lastTransport = next.transport;
+	try {
+		const next = await openCodexWebSocketTransport(
+			context.requestContext,
+			context.requestSetup,
+			context.options,
+			state,
+			runtime.websocketStreamRetries,
+		);
+		runtime.eventStream = next.eventStream;
+		runtime.requestBodyForState = next.requestBodyForState;
+		runtime.transport = next.transport;
+		state.lastTransport = next.transport;
+	} catch (error) {
+		const wsError = error instanceof Error ? error : new Error(String(error));
+		if (!isCodexWebSocketTransportError(wsError)) throw error;
+		// Reopen failed at the websocket layer (handshake refused, connect timeout, etc.).
+		// Activate fallback so subsequent turns use SSE, and replay this turn over SSE
+		// instead of surfacing a raw transport error to the caller.
+		recordCodexWebSocketFailure(state, true);
+		logCodexDebug("codex websocket reopen failed, falling back to SSE", {
+			error: wsError.message,
+			retry: runtime.websocketStreamRetries,
+		});
+		await reopenCodexSseRuntimeStream(context, runtime, state);
+	}
 }
 
 async function reopenCodexSseRuntimeStream(
@@ -2379,7 +2394,7 @@ export function convertTools(tools: Tool[], model: Model<"openai-codex-responses
 				format: {
 					type: "grammar",
 					syntax: tool.customFormat.syntax,
-					definition: tool.customFormat.definition,
+					definition: compactGrammarDefinition(tool.customFormat.syntax, tool.customFormat.definition),
 				},
 			};
 		}

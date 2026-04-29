@@ -40,7 +40,7 @@ import {
 } from "./fetch";
 import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
-import { expandPath, resolveReadPath } from "./path-utils";
+import { expandPath, formatPathRelativeToCwd, resolveReadPath } from "./path-utils";
 import { formatAge, formatBytes, shortenPath, wrapBrackets } from "./render-utils";
 import {
 	executeReadQuery,
@@ -1046,7 +1046,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							? "- Alpha: no"
 							: "- Alpha: unknown",
 					"",
-					`If you want to analyze the image, call inspect_image with path="${readPath}" and a question describing what to inspect and the desired output format.`,
+					`If you want to analyze the image, call inspect_image with path="${formatPathRelativeToCwd(
+						absolutePath,
+						this.session.cwd,
+					)}" and a question describing what to inspect and the desired output format.`,
 				];
 				content = [{ type: "text", text: metadataLines.join("\n") }];
 				details = {};
@@ -1110,12 +1113,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const effectiveLimit = limit ?? DEFAULT_LIMIT;
 			const maxLinesToCollect = Math.min(effectiveLimit, DEFAULT_MAX_LINES);
 			const selectedLineLimit = effectiveLimit;
+			// Scale byte budget with line limit so the configured line count actually fits.
+			// Assume ~512 bytes/line average; never go below the shared default.
+			const maxBytesForRead = Math.max(DEFAULT_MAX_BYTES, maxLinesToCollect * 512);
 
 			const streamResult = await streamLinesFromFile(
 				absolutePath,
 				startLine,
 				maxLinesToCollect,
-				DEFAULT_MAX_BYTES,
+				maxBytesForRead,
 				selectedLineLimit,
 				signal,
 			);
@@ -1146,7 +1152,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const totalSelectedLines = totalFileLines - startLine;
 			const totalSelectedBytes = collectedBytes;
 			const wasTruncated = collectedLines.length < totalSelectedLines || stoppedByByteLimit;
-			const firstLineExceedsLimit = firstLineByteLength !== undefined && firstLineByteLength > DEFAULT_MAX_BYTES;
+			const firstLineExceedsLimit = firstLineByteLength !== undefined && firstLineByteLength > maxBytesForRead;
 
 			const truncation: TruncationResult = {
 				content: selectedContent,
@@ -1178,14 +1184,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				if (shouldAddHashLines) {
 					outputText = `[Line ${startLineDisplay} is ${formatBytes(
 						firstLineBytes,
-					)}, exceeds ${formatBytes(DEFAULT_MAX_BYTES)} limit. Hashline output requires full lines; cannot compute hashes for a truncated preview.]`;
+					)}, exceeds ${formatBytes(maxBytesForRead)} limit. Hashline output requires full lines; cannot compute hashes for a truncated preview.]`;
 				} else {
 					outputText = formatText(snippet.text, startLineDisplay);
 				}
 				if (snippet.text.length === 0) {
 					outputText = `[Line ${startLineDisplay} is ${formatBytes(
 						firstLineBytes,
-					)}, exceeds ${formatBytes(DEFAULT_MAX_BYTES)} limit. Unable to display a valid UTF-8 snippet.]`;
+					)}, exceeds ${formatBytes(maxBytesForRead)} limit. Unable to display a valid UTF-8 snippet.]`;
 				}
 				details = { truncation };
 				sourcePath = absolutePath;

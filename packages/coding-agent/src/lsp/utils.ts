@@ -5,7 +5,7 @@ import path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type Theme, theme } from "../modes/theme/theme";
 import { formatGroupedFiles } from "../tools/grouped-file-output";
-import { resolveToCwd } from "../tools/path-utils";
+import { formatPathRelativeToCwd, resolveToCwd } from "../tools/path-utils";
 import type {
 	CodeAction,
 	Command,
@@ -229,7 +229,7 @@ export function formatDiagnosticsSummary(diagnostics: Diagnostic[]): string {
  * Format a location as file:line:col relative to cwd.
  */
 export function formatLocation(location: Location, cwd: string): string {
-	const file = path.relative(cwd, uriToFile(location.uri));
+	const file = formatPathRelativeToCwd(uriToFile(location.uri), cwd);
 	const line = location.range.start.line + 1;
 	const col = location.range.start.character + 1;
 	return `${file}:${line}:${col}`;
@@ -255,7 +255,7 @@ export function formatWorkspaceEdit(edit: WorkspaceEdit, cwd: string): string[] 
 	// Handle changes map (legacy format)
 	if (edit.changes) {
 		for (const [uri, textEdits] of Object.entries(edit.changes)) {
-			const file = path.relative(cwd, uriToFile(uri));
+			const file = formatPathRelativeToCwd(uriToFile(uri), cwd);
 			results.push(`${file}: ${textEdits.length} edit${textEdits.length > 1 ? "s" : ""}`);
 		}
 	}
@@ -264,20 +264,20 @@ export function formatWorkspaceEdit(edit: WorkspaceEdit, cwd: string): string[] 
 	if (edit.documentChanges) {
 		for (const change of edit.documentChanges) {
 			if ("edits" in change && change.textDocument) {
-				const file = path.relative(cwd, uriToFile(change.textDocument.uri));
+				const file = formatPathRelativeToCwd(uriToFile(change.textDocument.uri), cwd);
 				results.push(`${file}: ${change.edits.length} edit${change.edits.length > 1 ? "s" : ""}`);
 			} else if ("kind" in change) {
 				switch (change.kind) {
 					case "create":
-						results.push(`CREATE: ${path.relative(cwd, uriToFile(change.uri))}`);
+						results.push(`CREATE: ${formatPathRelativeToCwd(uriToFile(change.uri), cwd)}`);
 						break;
 					case "rename":
 						results.push(
-							`RENAME: ${path.relative(cwd, uriToFile(change.oldUri))} ${theme.nav.cursor} ${path.relative(cwd, uriToFile(change.newUri))}`,
+							`RENAME: ${formatPathRelativeToCwd(uriToFile(change.oldUri), cwd)} ${theme.nav.cursor} ${formatPathRelativeToCwd(uriToFile(change.newUri), cwd)}`,
 						);
 						break;
 					case "delete":
-						results.push(`DELETE: ${path.relative(cwd, uriToFile(change.uri))}`);
+						results.push(`DELETE: ${formatPathRelativeToCwd(uriToFile(change.uri), cwd)}`);
 						break;
 				}
 			}

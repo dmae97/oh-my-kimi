@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
+import { type GeneratedProvider, getBundledModel, type Usage } from "@oh-my-pi/pi-ai";
 import { getConfigRootDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
 import type {
 	AggregatedStats,
@@ -12,7 +13,19 @@ import type {
 	TimeSeriesPoint,
 } from "./types";
 
-const DB_PATH = getStatsDbPath();
+type ModelCost = { input: number; output: number; cacheRead: number; cacheWrite: number };
+type UsageCost = Usage["cost"];
+type CostTokens = Pick<Usage, "input" | "output" | "cacheRead" | "cacheWrite">;
+
+interface CostBackfillRow {
+	id: number;
+	provider: string;
+	model: string;
+	input_tokens: number;
+	output_tokens: number;
+	cache_read_tokens: number;
+	cache_write_tokens: number;
+}
 
 let db: Database | null = null;
 
@@ -25,7 +38,7 @@ export async function initDb(): Promise<Database> {
 	// Ensure directory exists
 	await fs.mkdir(getConfigRootDir(), { recursive: true });
 
-	db = new Database(DB_PATH);
+	db = new Database(getStatsDbPath());
 	db.exec("PRAGMA journal_mode = WAL");
 
 	// Create tables
@@ -74,7 +87,94 @@ export async function initDb(): Promise<Database> {
 		db.exec("ALTER TABLE messages ADD COLUMN premium_requests REAL NOT NULL DEFAULT 0");
 	}
 	db.exec("UPDATE messages SET premium_requests = 0 WHERE premium_requests IS NULL");
+	backfillMissingCatalogCosts(db);
 	return db;
+}
+
+function hasBillableCost(cost: ModelCost): boolean {
+	return cost.input !== 0 || cost.output !== 0 || cost.cacheRead !== 0 || cost.cacheWrite !== 0;
+}
+
+function getBundledModelCost(provider: string, modelId: string): ModelCost | null {
+	const model = getBundledModel(provider as GeneratedProvider, modelId);
+	return model?.cost ?? null;
+}
+
+function getCatalogCost(provider: string, modelId: string): ModelCost | null {
+	const primaryCost = getBundledModelCost(provider, modelId);
+	if (primaryCost && hasBillableCost(primaryCost)) {
+		return primaryCost;
+	}
+
+	if (provider === "openai-codex") {
+		const openAICost = getBundledModelCost("openai", modelId);
+		if (openAICost && hasBillableCost(openAICost)) {
+			return openAICost;
+		}
+	}
+
+	return null;
+}
+
+function calculateCatalogCost(provider: string, modelId: string, tokens: CostTokens): UsageCost | null {
+	const cost = getCatalogCost(provider, modelId);
+	if (!cost) return null;
+
+	const input = (cost.input / 1_000_000) * tokens.input;
+	const output = (cost.output / 1_000_000) * tokens.output;
+	const cacheRead = (cost.cacheRead / 1_000_000) * tokens.cacheRead;
+	const cacheWrite = (cost.cacheWrite / 1_000_000) * tokens.cacheWrite;
+
+	return {
+		input,
+		output,
+		cacheRead,
+		cacheWrite,
+		total: input + output + cacheRead + cacheWrite,
+	};
+}
+
+function resolveStoredCost(stats: MessageStats): UsageCost {
+	if (stats.usage.cost.total !== 0) {
+		return stats.usage.cost;
+	}
+
+	return calculateCatalogCost(stats.provider, stats.model, stats.usage) ?? stats.usage.cost;
+}
+
+function backfillMissingCatalogCosts(database: Database): void {
+	const rows = database
+		.prepare(`
+			SELECT id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
+			FROM messages
+			WHERE cost_total = 0 AND total_tokens > 0
+		`)
+		.all() as CostBackfillRow[];
+
+	if (rows.length === 0) return;
+
+	const update = database.prepare(`
+		UPDATE messages
+		SET cost_input = ?, cost_output = ?, cost_cache_read = ?, cost_cache_write = ?, cost_total = ?
+		WHERE id = ?
+	`);
+
+	const applyBackfill = database.transaction(() => {
+		for (const row of rows) {
+			const cost = calculateCatalogCost(row.provider, row.model, {
+				input: row.input_tokens,
+				output: row.output_tokens,
+				cacheRead: row.cache_read_tokens,
+				cacheWrite: row.cache_write_tokens,
+			});
+
+			if (!cost || cost.total === 0) continue;
+
+			update.run(cost.input, cost.output, cost.cacheRead, cost.cacheWrite, cost.total, row.id);
+		}
+	});
+
+	applyBackfill();
 }
 
 /**
@@ -120,6 +220,7 @@ export function insertMessageStats(stats: MessageStats[]): number {
 	let inserted = 0;
 	const insert = db.transaction(() => {
 		for (const s of stats) {
+			const cost = resolveStoredCost(s);
 			const result = stmt.run(
 				s.sessionFile,
 				s.entryId,
@@ -138,11 +239,11 @@ export function insertMessageStats(stats: MessageStats[]): number {
 				s.usage.cacheWrite,
 				s.usage.totalTokens,
 				s.usage.premiumRequests ?? 0,
-				s.usage.cost.input,
-				s.usage.cost.output,
-				s.usage.cost.cacheRead,
-				s.usage.cost.cacheWrite,
-				s.usage.cost.total,
+				cost.input,
+				cost.output,
+				cost.cacheRead,
+				cost.cacheWrite,
+				cost.total,
 			);
 			if (result.changes > 0) inserted++;
 		}

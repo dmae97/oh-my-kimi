@@ -69,7 +69,7 @@ const { session } = await createAgentSession({
 });
 
 // Read-only tools
-const { session } = await createAgentSession({ toolNames: ["read", "grep", "find", "ls"], authStorage, modelRegistry });
+const { session } = await createAgentSession({ toolNames: ["read", "search", "find"], authStorage, modelRegistry });
 
 // In-memory
 const { session } = await createAgentSession({

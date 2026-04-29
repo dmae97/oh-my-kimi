@@ -46,6 +46,7 @@ import {
 	hasCopilotVisionInput,
 	resolveGitHubCopilotBaseUrl,
 } from "./github-copilot-headers";
+import { compactGrammarDefinition } from "./grammar";
 import {
 	appendResponsesToolResultMessages,
 	collectCustomCallIds,
@@ -577,7 +578,7 @@ export function convertTools(tools: Tool[], strictMode: boolean, model: Model<"o
 				format: {
 					type: "grammar",
 					syntax: tool.customFormat.syntax,
-					definition: tool.customFormat.definition,
+					definition: compactGrammarDefinition(tool.customFormat.syntax, tool.customFormat.definition),
 				},
 			} as unknown as OpenAITool;
 		}

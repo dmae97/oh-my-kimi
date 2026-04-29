@@ -157,6 +157,27 @@ export function resolveToCwd(filePath: string, cwd: string): string {
 	return path.resolve(cwd, expanded);
 }
 
+export function formatPathRelativeToCwd(
+	filePath: string,
+	cwd: string,
+	options: { trailingSlash?: boolean } = {},
+): string {
+	const resolvedCwd = path.resolve(cwd);
+	const normalized = normalizeLocalScheme(filePath);
+	if (isInternalUrlPath(normalized)) {
+		return normalized;
+	}
+	const expanded = expandPath(normalized);
+	const resolvedPath = path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(cwd, expanded);
+	const relative = path.relative(resolvedCwd, resolvedPath);
+	const isWithinCwd = relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+	let displayPath = normalizePosixPath(isWithinCwd ? relative || "." : resolvedPath);
+	if (options.trailingSlash && displayPath !== "." && !displayPath.endsWith("/")) {
+		displayPath += "/";
+	}
+	return displayPath;
+}
+
 /**
  * Strip matching surrounding double quotes from a path string.
  * Common when users paste quoted paths from Windows Explorer or shell copy-paste.
@@ -381,8 +402,14 @@ function findCommonBasePath(paths: string[]): string {
 	return joined || path.parse(path.resolve(paths[0])).root;
 }
 
-function toScopeDisplay(items: string[]): string {
-	return items.map(item => normalizePosixPath(item)).join(", ");
+function toScopeDisplay(items: string[], cwd: string): string {
+	return items
+		.map(item =>
+			formatPathRelativeToCwd(item, cwd, {
+				trailingSlash: item.endsWith("/") || item.endsWith("\\"),
+			}),
+		)
+		.join(", ");
 }
 
 function looksLikeDelimitedPathToken(token: string): boolean {
@@ -533,7 +560,7 @@ export async function resolveMultiSearchPath(
 	return {
 		basePath: commonBasePath,
 		glob: buildBraceUnion(combinedPatterns),
-		scopePath: toScopeDisplay(pathItems),
+		scopePath: toScopeDisplay(pathItems, cwd),
 		exactFilePaths: allExactFiles ? parsedItems.map(item => item.absoluteBasePath) : undefined,
 	};
 }
@@ -571,7 +598,7 @@ export async function resolveMultiFindPattern(
 	return {
 		basePath: commonBasePath,
 		globPattern: buildBraceUnion(combinedPatterns) ?? "**/*",
-		scopePath: toScopeDisplay(patternItems),
+		scopePath: toScopeDisplay(patternItems, cwd),
 	};
 }
 

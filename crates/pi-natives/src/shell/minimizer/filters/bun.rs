@@ -1,6 +1,6 @@
 //! Bun package-manager, test-runner, and tool output filters.
 
-use super::{generic, js_tools, lint, node_tests, pkg};
+use super::{cpp, generic, js_tools, lint, node_tests, pkg};
 use crate::shell::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
 const BUN_PACKAGE_SUBCOMMANDS: &[&str] = &[
@@ -11,6 +11,7 @@ const BUN_TEST_SUBCOMMANDS: &[&str] = &["test"];
 const BUN_BUILD_SUBCOMMANDS: &[&str] = &["build"];
 const BUN_TOOL_SUBCOMMANDS: &[&str] =
 	&["tsc", "eslint", "biome", "next", "prettier", "prisma", "jest", "vitest", "playwright"];
+const BUN_CPP_TOOL_SUBCOMMANDS: &[&str] = &["cmake", "ctest", "ninja", "gtest", "gtest-parallel"];
 
 pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 	match program {
@@ -19,8 +20,12 @@ pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 				|| BUN_TEST_SUBCOMMANDS.contains(&subcommand)
 				|| BUN_BUILD_SUBCOMMANDS.contains(&subcommand)
 				|| BUN_TOOL_SUBCOMMANDS.contains(&subcommand)
+				|| BUN_CPP_TOOL_SUBCOMMANDS.contains(&subcommand)
 		}),
-		"bunx" => subcommand.is_some_and(|subcommand| BUN_TOOL_SUBCOMMANDS.contains(&subcommand)),
+		"bunx" => subcommand.is_some_and(|subcommand| {
+			BUN_TOOL_SUBCOMMANDS.contains(&subcommand)
+				|| BUN_CPP_TOOL_SUBCOMMANDS.contains(&subcommand)
+		}),
 		_ => false,
 	}
 }
@@ -36,6 +41,9 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	}
 	if is_lint_invocation(ctx.program, subcommand, ctx.command) {
 		return lint::filter(ctx, input, exit_code);
+	}
+	if is_cpp_invocation(ctx.program, subcommand, ctx.command) {
+		return cpp::filter(ctx, input, exit_code);
 	}
 	if is_js_tool_invocation(ctx.program, subcommand, ctx.command) {
 		return js_tools::filter(ctx, input, exit_code);
@@ -75,6 +83,10 @@ fn is_js_tool_invocation(program: &str, subcommand: Option<&str>, command: &str)
 	matches!((program, subcommand), ("bun" | "bunx", Some("next" | "prettier" | "prisma")))
 		|| is_exec_package_subcommand(program, subcommand)
 			&& command_contains_tool(command, &["next", "prettier", "prisma"])
+}
+fn is_cpp_invocation(program: &str, subcommand: Option<&str>, command: &str) -> bool {
+	matches!((program, subcommand), ("bunx", Some(subcommand)) if BUN_CPP_TOOL_SUBCOMMANDS.contains(&subcommand))
+		|| is_exec_package_subcommand(program, subcommand) && cpp::supports_invocation(command)
 }
 
 fn command_contains_tool(command: &str, tools: &[&str]) -> bool {
@@ -143,10 +155,11 @@ mod tests {
 
 	#[test]
 	fn supports_bun_package_test_and_tool_subcommands() {
-		for subcommand in ["install", "add", "run", "test", "build", "tsc", "next"] {
+		for subcommand in ["install", "add", "run", "test", "build", "tsc", "next", "ctest"] {
 			assert!(supports("bun", Some(subcommand)), "{subcommand} should be supported");
 		}
 		assert!(supports("bunx", Some("vitest")));
+		assert!(supports("bunx", Some("cmake")));
 		assert!(!supports("bun", Some("unknown")));
 	}
 
@@ -203,6 +216,22 @@ mod tests {
 		assert!(!out.text.contains("✓ ok"));
 		assert!(out.text.contains("FAIL app.test.ts"));
 		assert!(out.text.contains("Tests 1 failed"));
+	}
+
+	#[test]
+	fn bun_run_cpp_tool_uses_cpp_filter() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("bun", Some("run"), "bun run ctest --output-on-failure", &cfg);
+		let out = filter(
+			&ctx,
+			"Test project /tmp/build\n    Start 1: ok\n1/2 Test #1: ok ........   Passed    0.01 \
+			 sec\n2/2 Test #2: bad .......***Failed    0.02 sec\nThe following tests FAILED:\n\t  2 \
+			 - bad (Failed)\n",
+			8,
+		);
+		assert!(!out.text.contains("Test #1"));
+		assert!(out.text.contains("Test #2: bad"));
+		assert!(out.text.contains("The following tests FAILED"));
 	}
 
 	#[test]

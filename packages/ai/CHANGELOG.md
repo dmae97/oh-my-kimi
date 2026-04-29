@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [14.5.4] - 2026-04-28
+### Changed
+
+- Changed OpenAI custom Lark grammar payloads to strip comments and blank lines before sending provider requests.
+
+### Fixed
+
+- Fixed OpenAI Codex GPT model pricing by inheriting matching OpenAI catalog rates for zero-priced discovered Codex entries.
+
 ## [14.5.3] - 2026-04-27
 ### Added
 

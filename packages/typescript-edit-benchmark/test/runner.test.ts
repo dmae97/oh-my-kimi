@@ -4,7 +4,9 @@ import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { formatSessionDumpText, SessionManager } from "@oh-my-pi/pi-coding-agent";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { writeConversationDump } from "../src/runner";
+import { generateReport } from "../src/report";
+import { buildBenchmarkResult, type TaskRunResult, writeConversationDump } from "../src/runner";
+import type { EditTask } from "../src/tasks";
 
 const tempDirs: TempDir[] = [];
 
@@ -20,6 +22,126 @@ afterEach(async () => {
 			await dir.remove();
 		}),
 	);
+});
+
+function createTask(id: string): EditTask {
+	return {
+		id,
+		name: id,
+		prompt: `Fix ${id}`,
+		files: [`${id}.ts`],
+		inputDir: "/tmp/input",
+		expectedDir: "/tmp/expected",
+	};
+}
+
+function createRun(runIndex: number, success: boolean): TaskRunResult {
+	return {
+		runIndex,
+		success,
+		patchApplied: success,
+		verificationPassed: success,
+		tokens: { input: 12, output: 8, total: 20 },
+		duration: 100,
+		toolCalls: {
+			read: 1,
+			edit: 1,
+			write: 0,
+			editSuccesses: success ? 1 : 0,
+			editFailures: success ? 0 : 1,
+			editWarnings: 0,
+			editAutocorrects: 0,
+			totalInputChars: 50,
+		},
+		editFailures: [],
+		editWarnings: [],
+		editAutocorrectCount: 0,
+	};
+}
+
+describe("buildBenchmarkResult", () => {
+	it("summarizes completed runs without requiring every scheduled run to finish", () => {
+		const completedTask = createTask("completed");
+		const pendingTask = createTask("pending");
+		const resultsByTask = new Map([[completedTask.id, [createRun(0, true)]]]);
+
+		const result = buildBenchmarkResult({
+			tasks: [completedTask, pendingTask],
+			config: {
+				provider: "anthropic",
+				model: "claude",
+				runsPerTask: 2,
+				timeout: 1000,
+				taskConcurrency: 1,
+			},
+			resultsByTask,
+			startTime: "2026-04-28T00:00:00.000Z",
+			endTime: "2026-04-28T00:00:01.000Z",
+		});
+
+		expect(result.summary.totalTasks).toBe(2);
+		expect(result.summary.totalRuns).toBe(1);
+		expect(result.summary.successfulRuns).toBe(1);
+		expect(result.tasks.find(task => task.id === "pending")?.runs).toEqual([]);
+		expect(result.startTime).toBe("2026-04-28T00:00:00.000Z");
+		expect(result.endTime).toBe("2026-04-28T00:00:01.000Z");
+	});
+
+	it("can generate a report before any run completes", () => {
+		const result = buildBenchmarkResult({
+			tasks: [createTask("pending")],
+			config: {
+				provider: "anthropic",
+				model: "claude",
+				runsPerTask: 2,
+				timeout: 1000,
+				taskConcurrency: 1,
+			},
+			resultsByTask: new Map(),
+			startTime: "2026-04-28T00:00:00.000Z",
+			endTime: "2026-04-28T00:00:01.000Z",
+		});
+
+		expect(result.summary.totalRuns).toBe(0);
+		expect(generateReport(result)).toContain("| Total Runs | 0 |");
+	});
+
+	it("renders atom input args directly in edit error patch blocks", () => {
+		const task = createTask("atom");
+		const titleExpression = "$" + "{title}";
+		const input = [
+			"---orcid.ts",
+			"276ka=    if (works.length > 0) {",
+			"277fo=      for (const title of works) {",
+			`278hu=        md += \`- ${titleExpression}\\n\`;`,
+			"279he=      }",
+			"280nd=    } else {",
+			"281he=      md += 'No works available.\\n';",
+			"282rd=    }",
+		].join("\n");
+		const failedRun: TaskRunResult = {
+			...createRun(0, false),
+			editFailures: [{ toolCallId: "edit-1", args: { input }, error: "No changes made" }],
+		};
+		const result = buildBenchmarkResult({
+			tasks: [task],
+			config: {
+				provider: "anthropic",
+				model: "claude",
+				runsPerTask: 1,
+				timeout: 1000,
+				taskConcurrency: 1,
+				editVariant: "atom",
+			},
+			resultsByTask: new Map([[task.id, [failedRun]]]),
+			startTime: "2026-04-28T00:00:00.000Z",
+			endTime: "2026-04-28T00:00:01.000Z",
+		});
+
+		const report = generateReport(result);
+		expect(report).toContain(`\`\`\`diff\n${input}\n\`\`\``);
+		expect(report).not.toContain('"input":');
+	});
 });
 
 describe("writeConversationDump", () => {

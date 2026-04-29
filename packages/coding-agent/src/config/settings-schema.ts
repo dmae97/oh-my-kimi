@@ -1,5 +1,6 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { TASK_SIMPLE_MODES } from "../task/simple-mode";
+import { EDIT_MODES } from "../utils/edit-mode";
 
 /** Unified settings schema - single source of truth for all settings.
  * Unified settings schema - single source of truth for all settings.
@@ -160,8 +161,8 @@ export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 	},
 	{
 		pattern: "^\\s*(grep|rg|ripgrep|ag|ack)\\s+",
-		tool: "grep",
-		message: "Use the `grep` tool instead of grep/rg. It respects .gitignore and provides structured output.",
+		tool: "search",
+		message: "Use the `search` tool instead of grep/rg. It respects .gitignore and provides structured output.",
 	},
 	{
 		pattern: "^\\s*(find|fd|locate)\\s+.*(-name|-iname|-type|--type|-glob)",
@@ -955,12 +956,12 @@ export const SETTINGS_SCHEMA = {
 	// Edit tool
 	"edit.mode": {
 		type: "enum",
-		values: ["replace", "patch", "hashline", "vim", "apply_patch", "atom"] as const,
+		values: EDIT_MODES,
 		default: "hashline",
 		ui: {
 			tab: "editing",
 			label: "Edit Mode",
-			description: "Select the edit tool variant (replace, patch, hashline, vim, or apply_patch)",
+			description: "Select the edit tool variant (replace, patch, hashline, atom, vim, or apply_patch)",
 		},
 	},
 
@@ -1027,7 +1028,7 @@ export const SETTINGS_SCHEMA = {
 
 	"read.defaultLimit": {
 		type: "number",
-		default: 300,
+		default: 500,
 		ui: {
 			tab: "editing",
 			label: "Default Read Limit",
@@ -1198,30 +1199,30 @@ export const SETTINGS_SCHEMA = {
 		ui: { tab: "tools", label: "Find", description: "Enable the find tool for file searching" },
 	},
 
-	"grep.enabled": {
+	"search.enabled": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "tools", label: "Grep", description: "Enable the grep tool for content searching" },
+		ui: { tab: "tools", label: "Search", description: "Enable the search tool for content searching" },
 	},
 
-	"grep.contextBefore": {
+	"search.contextBefore": {
 		type: "number",
 		default: 1,
 		ui: {
 			tab: "tools",
-			label: "Grep Context Before",
-			description: "Lines of context before each grep match",
+			label: "Search Context Before",
+			description: "Lines of context before each search match",
 			submenu: true,
 		},
 	},
 
-	"grep.contextAfter": {
+	"search.contextAfter": {
 		type: "number",
 		default: 3,
 		ui: {
 			tab: "tools",
-			label: "Grep Context After",
-			description: "Lines of context after each grep match",
+			label: "Search Context After",
+			description: "Lines of context after each search match",
 			submenu: true,
 		},
 	},

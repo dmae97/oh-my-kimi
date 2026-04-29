@@ -50,9 +50,9 @@ Extracts content from web pages, GitHub issues/PRs, Stack Overflow, Wikipedia, R
 </instruction>
 
 <critical>
-- You **MUST** use `read` for all file, directory, archive, and URL reads; never cat/head/ls/tar/unzip/curl, etc.
-You **MUST** prefer `read` over a browser/puppeteer tool for fetching URL content; only use a browser if this method fails to deliver reasonable content.
-- You **MUST** always include the `path` parameter.
-- For specific line ranges, use `sel`.
+- You **MUST** use `read` for every file, directory, archive, and URL read. `cat`, `head`, `tail`, `less`, `more`, `ls`, `tar`, `unzip`, `curl`, and `wget` are **FORBIDDEN** for inspection — any such Bash call is a bug, regardless of how short or convenient it looks.
+- You **MUST** prefer `read` over a browser/puppeteer tool for fetching URL content; only use a browser if `read` fails to deliver reasonable content.
+- You **MUST** always include the `path` parameter — never call `read` with an empty argument object `{}`.
+- For specific line ranges, use `sel` (e.g. `sel="50-200"`, `sel="50+150"`) — do **NOT** reach for `sed -n`, `awk NR`, or `head`/`tail` pipelines.
 - You **MAY** use `sel` with URL reads; the tool paginates cached fetched output.
 </critical>

@@ -22,17 +22,19 @@ export const applyPatchSchema = Type.Object({
 
 export type ApplyPatchParams = Static<typeof applyPatchSchema>;
 
+export type ApplyPatchEntry = PatchEditEntry & { path: string };
+
 /**
  * Parse the envelope and lower each hunk to a `PatchEditEntry` so it can
  * be routed through `executePatchSingle`.
  */
-export function expandApplyPatchToEntries(params: ApplyPatchParams): PatchEditEntry[] {
+export function expandApplyPatchToEntries(params: ApplyPatchParams): ApplyPatchEntry[] {
 	const hunks = parseApplyPatch(params.input);
 	if (hunks.length === 0) {
 		throw new ApplyPatchError("No files were modified.");
 	}
 	return hunks.map(
-		(h): PatchEditEntry => ({
+		(h): ApplyPatchEntry => ({
 			path: h.path,
 			op: h.op,
 			rename: h.rename,
@@ -41,10 +43,10 @@ export function expandApplyPatchToEntries(params: ApplyPatchParams): PatchEditEn
 	);
 }
 
-export function expandApplyPatchToPreviewEntries(params: ApplyPatchParams): PatchEditEntry[] {
+export function expandApplyPatchToPreviewEntries(params: ApplyPatchParams): ApplyPatchEntry[] {
 	const hunks = parseApplyPatchStreaming(params.input);
 	return hunks.map(
-		(h): PatchEditEntry => ({
+		(h): ApplyPatchEntry => ({
 			path: h.path,
 			op: h.op,
 			rename: h.rename,

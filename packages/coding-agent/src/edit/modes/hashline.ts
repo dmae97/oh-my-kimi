@@ -156,7 +156,6 @@ const locSchema = Type.Union(
 
 export const hashlineEditSchema = Type.Object(
 	{
-		path: Type.Optional(Type.String({ description: "File path (omit to use top-level `path`)" })),
 		loc: Type.Optional(locSchema),
 		content: Type.Optional(linesSchema),
 	},
@@ -165,7 +164,7 @@ export const hashlineEditSchema = Type.Object(
 
 export const hashlineEditParamsSchema = Type.Object(
 	{
-		path: Type.Optional(Type.String({ description: "Default file path used when an edit omits its own `path`" })),
+		path: Type.String({ description: "file path for edits" }),
 		edits: Type.Array(hashlineEditSchema, { description: "edits" }),
 	},
 	{ additionalProperties: false },
@@ -566,8 +565,8 @@ export class HashlineMismatchError extends Error {
 
 		const sorted = [...displayLines].sort((a, b) => a - b);
 		const out: string[] = [
-			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read. The edit was NOT applied.`,
-			"Realign your edit to the file state shown below. Copy the full anchors exactly as shown (for example `160sr`, not just `sr`).",
+			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read (marked *).`,
+			"The edit was NOT applied, please use the updated file content shown below, and issue another edit tool-call.",
 			"",
 		];
 
@@ -603,8 +602,8 @@ export class HashlineMismatchError extends Error {
 		const lines: string[] = [];
 
 		lines.push(
-			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read. The edit was NOT applied.`,
-			"Use the updated anchors shown below (`*` marks changed lines, leading space marks context) and retry the edit.",
+			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read (marked *).`,
+			"The edit was NOT applied, please use the updated file content shown below, and issue another edit tool-call.",
 		);
 		lines.push("");
 
@@ -1015,7 +1014,7 @@ export interface CompactHashlineDiffOptions {
 }
 
 const NUMBERED_DIFF_LINE_RE = /^([ +-])(\s*\d+)\|(.*)$/;
-const HASHLINE_PREVIEW_PLACEHOLDER = "   ";
+const HASHLINE_PREVIEW_PLACEHOLDER = "  ";
 
 type DiffRunKind = " " | "+" | "-" | "meta";
 type DiffRun = { kind: DiffRunKind; lines: string[] };
@@ -1142,7 +1141,7 @@ function collapseFromStart(lines: string[], maxLines: number, label: string): st
 	return [...lines.slice(0, maxLines), ` ... ${hidden} more ${label} lines`];
 }
 
-function collapseFromEnd(lines: string[], maxLines: number, label: string): string[] {
+function _collapseFromEnd(lines: string[], maxLines: number, label: string): string[] {
 	if (lines.length <= maxLines) return lines;
 	const hidden = lines.length - maxLines;
 	return [` ... ${hidden} more ${label} lines`, ...lines.slice(-maxLines)];
@@ -1191,11 +1190,11 @@ export function buildCompactHashlineDiffPreview(
 				break;
 			case " ":
 				if (runIndex === 0) {
-					out.push(...collapseFromEnd(run.lines, maxUnchangedRun, "unchanged"));
+					out.push(...run.lines.slice(-maxUnchangedRun));
 					break;
 				}
 				if (runIndex === runs.length - 1) {
-					out.push(...collapseFromStart(run.lines, maxUnchangedRun, "unchanged"));
+					out.push(...run.lines.slice(0, maxUnchangedRun));
 					break;
 				}
 				out.push(...collapseFromMiddle(run.lines, maxUnchangedRun, "unchanged"));

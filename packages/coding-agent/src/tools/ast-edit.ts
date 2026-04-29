@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type AstReplaceChange, astEdit } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -16,6 +15,7 @@ import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { formatGroupedFiles } from "./grouped-file-output";
 import type { OutputMeta } from "./output-meta";
 import {
+	formatPathRelativeToCwd,
 	hasGlobPathChars,
 	normalizePathLikeInput,
 	parseSearchPath,
@@ -106,10 +106,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			const normalizedRewrites = Object.fromEntries(ops);
 			const maxFiles = $envpos("PI_MAX_AST_FILES", 1000);
 
-			const formatScopePath = (targetPath: string): string => {
-				const relative = path.relative(this.session.cwd, targetPath).replace(/\\/g, "/");
-				return relative.length === 0 ? "." : relative;
-			};
+			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
 			let searchPath: string | undefined;
 			let scopePath: string | undefined;
 			let globFilter: string | undefined;
@@ -164,7 +161,8 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			});
 
 			const dedupedParseErrors = dedupeParseErrors(result.parseErrors);
-			const formatPath = (filePath: string): string => formatResultPath(filePath, isDirectory);
+			const formatPath = (filePath: string): string =>
+				formatResultPath(filePath, isDirectory, resolvedSearchPath, this.session.cwd);
 
 			const { record: recordFile, list: fileList } = createFileRecorder();
 			const fileReplacementCounts = new Map<string, number>();

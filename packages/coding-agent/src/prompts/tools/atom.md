@@ -1,76 +1,94 @@
-Applies precise file edits using anchors (line+hash).
+Your patch language is a compact, file-oriented edit format.
+
+When emitting a patch, the first non-blank line **MUST** be `---PATH`.
+A Lid is the anchor emitted in read/grep etc. (line number + id, e.g. `5th`).
 
 <ops>
-Each call **MUST** have shape `{path:"a.ts",edits:[…]}`. `path` is the default file; you **MAY** override it per edit with `loc:"b.ts:160sr"`.
-Each edit **MUST** have exactly one `loc` and **MUST** include one or more verbs.
-
-# Locators
-- `"A"` targets one anchored line. `"$"` targets the whole file: `pre` = BOF, `post` = EOF, `sed` = every line.
-- Bracketed locators are **`splice` only** and select a balanced region around anchor `A`.
-- `"(A)"` = block body. `"[A]"` = whole block/node.
-- `"[A"` / `"(A"` = tail after/including anchor, closer excluded.
-- `"A]"` / `"A)"` = head through/before anchor, opener excluded.
-- Anchor bracketed forms on a body line of the intended block, not the opener line.
-- Do not use bracketed locators on files that do not currently parse.
-
-# Verbs
-- `splice:[…]` replaces the anchored line, or the bracketed region. `[]` deletes; `[""]` makes a blank line.
-- `pre:[…]` inserts before the anchor, or BOF with `loc:"$"`.
-- `post:[…]` inserts after the anchor, or EOF with `loc:"$"`.
+---PATH  start editing PATH with cursor at EOF
+!rm      delete PATH
+!mv X    move file to X
+$        move cursor to BOF
+^        move cursor to EOF
+@Lid     move cursor after Lid
++X       insert X at the cursor; `+` alone inserts a blank line
+Lid=X    replace whole line with X; `Lid=` blanks it out
+-Lid     delete line (repeat for multi)
 </ops>
 
-<splice>
-Replaces the anchored line, or the bracketed region.
-- `[]` deletes. `[""]` leaves a blank line.
-- For bracketed `splice`, write body at column 0, it will be re-indented.
-- Do not use bracketed `splice` on broken files, or for single line edits.
-</splice>
+<rules>
+- You may have multiple `---PATH` sections to edit multiple files at once.
+- Ops starting with `$` / `^` / `@Lid` do not alter lines; you must still issue an op like `+` afterwards.
+- Consecutive `+X` ops insert consecutive lines.
+- `Lid=X` replaces the whole line. X must be the complete new line, not a fragment.
+- To rewrite multiple adjacent lines, delete each with `-Lid` then emit the new content as `+TEXT` lines. Do not stack `Lid=X` over a contiguous range — it requires the new block to match the old line count and silently corrupts the file when they differ.
+</rules>
 
-<sed>
-Use for tiny inline edits: names, operators, literals.
-- Keep `pat` as short as possible, it does not have to be unique.
-- `g:false` by default; set to replace all instead of first.
-</sed>
-
-<examples>
-```ts title="a.ts"
-{{hline 1 "const FALLBACK = \"guest\";"}}
+<case file="a.ts">
+{{hline 1 "const DEF = \"guest\";"}}
 {{hline 2 ""}}
 {{hline 3 "export function label(name) {"}}
-{{hline 4 "\tconst clean = name || FALLBACK;"}}
-{{hline 5 "\treturn clean.trim().toLowerCase();"}}
+{{hline 4 "\tconst clean = name || DEF;"}}
+{{hline 5 "\treturn clean.trim();"}}
 {{hline 6 "}"}}
-```
+</case>
 
-# Single-line replacement:
-`{path:"a.ts",edits:[{loc:{{href 1 "const FALLBACK = \"guest\";"}},splice:["const FALLBACK = \"anonymous\";"]}]}`
-# Small token edit: prefer `sed`:
-`{path:"a.ts",edits:[{loc:{{href 5 "\treturn clean.trim().toLowerCase();"}},sed:{pat:"toLowerCase",rep:"toUpperCase"}}]}`
-# Insert before / after an anchor:
-`{path:"a.ts",edits:[{loc:{{href 5 "\treturn clean.trim().toLowerCase();"}},pre:["\tif (!clean) return FALLBACK;"],post:["\t// normalized label"]}]}`
-# Delete a line vs make it blank:
-`{path:"a.ts",edits:[{loc:{{href 2 ""}},splice:[]}]}`
-`{path:"a.ts",edits:[{loc:{{href 2 ""}},splice:[""]}]}`
-# File edges:
-`{path:"a.ts",edits:[{loc:"$",pre:["// Copyright (c) 2026",""]}]}`
-`{path:"a.ts",edits:[{loc:"$",post:["","export { FALLBACK };"]}]}`
-# Cross-file override:
-`{path:"a.ts",edits:[{loc:{{href 1 "const FALLBACK = \"guest\";" "config.ts:" ""}},splice:["const FALLBACK = \"anonymous\";"]}]}`
-# Body replacement: use bracketed `splice`, write body at column 0:
-`{path:"a.ts",edits:[{loc:{{href 4 "\tconst clean = name || FALLBACK;" "(" ")"}},splice:["if (name == null) return FALLBACK;","const clean = String(name).trim();","return clean || FALLBACK;"]}]}`
-# Whole function replacement: anchor on a body line:
-`{path:"a.ts",edits:[{loc:{{href 5 "\treturn clean.trim().toLowerCase();" "[" "]"}},splice:["export function label(name) {","\treturn String(name ?? FALLBACK).trim().toLowerCase();","}"]}]}`
-# WRONG: bare-anchor `splice` does not own neighboring lines:
-`{path:"a.ts",edits:[{loc:{{href 4 "\tconst clean = name || FALLBACK;"}},splice:["\tconst clean = String(name ?? FALLBACK).trim();","\treturn clean.toLowerCase();"]}]}`
-This replaces only line 4. Original line 5 still shifts down, so the function now has two returns.
-# RIGHT: use a body edit for that rewrite:
-`{path:"a.ts",edits:[{loc:{{href 4 "\tconst clean = name || FALLBACK;" "(" ")"}},splice:["const clean = String(name ?? FALLBACK).trim();","return clean.toLowerCase();"]}]}`
+<examples>
+# Replace line
+---a.ts
+{{hrefr 5}}=	return clean.trim().toUpperCase();
+
+# Rewrite multiple adjacent lines (delete the old, insert the new)
+---a.ts
+-{{hrefr 3}}
+-{{hrefr 4}}
+-{{hrefr 5}}
+-{{hrefr 6}}
++export function label(name: string): string {
++	return (name || DEF).trim().toUpperCase();
++}
+
+# Append after
+---a.ts
+@{{hrefr 4}}
++	const suffix = "";
+
+# Delete a line
+---a.ts
+-{{hrefr 2}}
+
+# Prepend and append
+---a.ts
+$
++// Copyright (c) 2026
++
+^
++export { DEF };
+
+# File ops
+---a.ts
+!rm
+---b.ts
+!mv a.ts
+
+# Wrong: `@Lid=TEXT` is not replacement syntax
+---a.ts
+@{{hrefr 5}}=	return clean.trim().toUpperCase();
+
+# Wrong: do not split `Lid=TEXT` across lines
+---a.ts
+{{hrefr 5}}=
+	return clean.trim().toUpperCase();
+
+# Wrong: do not replace by deleting then adding
+---a.ts
+-{{hrefr 5}}
++{{hrefr 5}}=	return clean.trim().toUpperCase();
 </examples>
 
 <critical>
-- You **MUST** copy full anchors exactly from a read op (e.g. `160sr`); you **MUST NOT** send only the 2-letter suffix.
-- You **MUST** make the minimum exact edit; you **MUST NOT** reformat unrelated code.
-- A bare anchor **MUST** target one line only; you **MUST** use bracketed `splice` for balanced block rewrites.
-- You **MUST NOT** include unchanged adjacent lines in `splice`/`pre`/`post`; they shift and duplicate.
-- For bracketed `splice`, replacement braces **MUST** be balanced for the selected region.
+- Copy Lids **EXACTLY** from prior tool output. Never guess, shorten, or omit the letters.
+- Only emit lines that change. Never repeat unchanged context — anchors imply it.
+- This is **NOT** unified diff. Never send `@@`, `-OLD` / `+NEW` pairs, or unchanged context.
+- Never split `Lid=TEXT` across two physical lines.
+- Never stack `Lid=X` over a contiguous range. Use `-Lid`+`+TEXT` for block rewrites.
 </critical>

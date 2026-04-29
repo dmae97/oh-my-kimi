@@ -2,9 +2,10 @@ import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
-import { buildSystemPrompt } from "@oh-my-pi/pi-coding-agent/system-prompt";
+import { type AgentTool, INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
+import { buildSystemPrompt, buildSystemPromptToolMetadata } from "@oh-my-pi/pi-coding-agent/system-prompt";
 import { prompt } from "@oh-my-pi/pi-utils";
+import { Type } from "@sinclair/typebox";
 import Handlebars from "handlebars";
 
 const baseGitContext = {
@@ -56,7 +57,23 @@ const baseRenderContext: prompt.TemplateContext = {
 	skills: [{ name: "system-prompts", description: "Prompt design skill" }],
 	systemPromptCustomization: "System customization",
 	toolInfo: [{ name: "read", label: "Read", description: "Reads files" }],
-	tools: ["read", "grep", "find", "edit", "task", "web_search", "todo_write"],
+	toolRefs: {
+		read: "read",
+		search: "search",
+		find: "find",
+		edit: "edit",
+		task: "task",
+		web_search: "web_search",
+		todo_write: "todo_write",
+		inspect_image: "inspect_image",
+		search_tool_bm25: "search_tool_bm25",
+		lsp: "lsp",
+		ast_grep: "ast_grep",
+		ast_edit: "ast_edit",
+		grep: "grep",
+		write: "write",
+	},
+	tools: ["read", "search", "find", "edit", "task", "web_search", "todo_write"],
 	worktree: "/tmp/pi-issue-147",
 	writeToolName: "write",
 };
@@ -237,6 +254,45 @@ describe("system Handlebars prompt templates", () => {
 		expect(countOccurrences(prompt, "Keep functions small.")).toBe(1);
 		expect(countOccurrences(prompt, "Extract shared helpers on the second use.")).toBe(1);
 		expect(countOccurrences(prompt, distinctRule)).toBe(1);
+	});
+
+	test("buildSystemPromptToolMetadata captures custom wire names", () => {
+		const editTool = {
+			name: "edit",
+			label: "Edit",
+			description: "Edits files",
+			parameters: Type.Object({}),
+			customWireName: "apply_patch",
+			execute: async () => ({ content: [] }),
+		} satisfies AgentTool;
+
+		const metadata = buildSystemPromptToolMetadata(new Map([["edit", editTool]]));
+
+		expect(metadata.get("edit")?.wireName).toBe("apply_patch");
+	});
+
+	test("buildSystemPrompt references overridden tool wire names", async () => {
+		const systemPrompt = await buildSystemPrompt({
+			cwd: os.tmpdir(),
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: ["read", "search", "find", "edit", "lsp", "bash", "python"],
+			tools: new Map([
+				["read", { label: "Read", description: "Reads files" }],
+				["search", { label: "Search", description: "Searches files" }],
+				["find", { label: "Find", description: "Finds files" }],
+				["edit", { label: "Edit", description: "Edits files", wireName: "apply_patch" }],
+				["lsp", { label: "LSP", description: "Queries language servers" }],
+				["bash", { label: "Bash", description: "Runs shell commands" }],
+				["python", { label: "Python", description: "Runs Python cells" }],
+			]),
+		});
+
+		expect(systemPrompt).toContain("Edit: `apply_patch`");
+		expect(systemPrompt).toContain("`read`, `search`, `find`, `apply_patch`, `lsp`");
+		expect(systemPrompt).toContain("Use `apply_patch` for surgical text changes");
+		expect(systemPrompt).not.toContain("Edit: `edit`");
 	});
 
 	test("buildSystemPrompt omits CPU info when os.cpus fails", async () => {

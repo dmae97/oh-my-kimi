@@ -5,10 +5,9 @@ Read the file first. Copy the full anchors exactly as shown by `read`.
 <operations>
 **Top level**
 - `edits` — array of edit entries
-- `path` (optional) — default file path used when an entry omits its own `path`. Lets you share the path across many edits in one request.
+- `path` (required) — file path for all edits in this request
 
-**Edit entry**: `{ path?, loc, content }`
-- `path` — file path (omit to fall back to the request-level `path`)
+**Edit entry**: `{ loc, content }`
 - `loc` — where to apply the edit (see below)
 - `content` — replacement/inserted lines (`string[]`, one element per line; `null` to delete)
 
@@ -44,24 +43,24 @@ All examples below reference the same file:
 
 # Replace a block body
 Replace only the catch body. Do not target the shared boundary line `} catch (err) {`.
-`{edits:[{path:"a.ts",loc:{range:{pos:{{href 15 "\t\tconsole.error(err);"}},end:{{href 16 "\t\treturn null;"}}}},content:["\t\tif (isEnoent(err)) return null;","\t\tthrow err;"]}]}`
+`{path:"a.ts",edits:[{loc:{range:{pos:{{href 15}},end:{{href 16}}}},content:["\t\tif (isEnoent(err)) return null;","\t\tthrow err;"]}]}`
 # Replace whole block including closing brace
-Replace `alpha`'s entire body including the closing `}`. `end` **MUST** be {{href 7 "}"}} because `content` includes `}`.
-`{edits:[{path:"a.ts",loc:{range:{pos:{{href 6 "\tlog();"}},end:{{href 7 "}"}}}},content:["\tvalidate();","\tlog();","}"]}]}`
-**Wrong**: `end: {{href 6 "\tlog();"}}` — line 7 (`}`) survives AND content emits `}`, producing two closing braces.
+Replace `alpha`'s entire body including the closing `}`. `end` **MUST** be {{href 7}} because `content` includes `}`.
+`{path:"a.ts",edits:[{loc:{range:{pos:{{href 6}},end:{{href 7}}}},content:["\tvalidate();","\tlog();","}"]}]}`
+**Wrong**: `end: {{href 6}}` — line 7 (`}`) survives AND content emits `}`, producing two closing braces.
 # Replace one line
 Single-line replace uses `pos == end`.
-`{edits:[{path:"a.ts",loc:{range:{pos:{{href 2 "const timeout = 5000;"}},end:{{href 2 "const timeout = 5000;"}}}},content:["const timeout = 30_000;"]}]}`
+`{path:"a.ts",edits:[{loc:{range:{pos:{{href 2}},end:{{href 2}}}},content:["const timeout = 30_000;"]}]}`
 # Delete a range
-`{edits:[{path:"a.ts",loc:{range:{pos:{{href 10 "\t// TODO: remove after migration"}},end:{{href 11 "\tlegacy();"}}}},content:null}]}`
+`{path:"a.ts",edits:[{loc:{range:{pos:{{href 10}},end:{{href 11}}}},content:null}]}`
 # Insert before a sibling
 When adding a sibling declaration, prefer `prepend` on the next declaration.
-`{edits:[{path:"a.ts",loc:{prepend:{{href 9 "function beta() {"}}},content:["function gamma() {","\tvalidate();","}",""]}]}`
+`{path:"a.ts",edits:[{loc:{prepend:{{href 9}}},content:["function gamma() {","\tvalidate();","}",""]}]}`
 </examples>
 
 <critical>
 - Make the minimum exact edit.
-- Copy the full anchors exactly as shown by `read/grep` (for example `160sr`, not just `sr`).
+- Copy the full anchors exactly as shown by `read/search` (for example `160sr`, not just `sr`).
 - `range` requires both `pos` and `end`.
 - **Closing-delimiter check**: when your replacement `content` ends with a closing delimiter (`}`, `*/`, `)`, `]`), compare it against the line immediately after `end` in the file. If they match, extend `end` to include that line — otherwise the original delimiter survives and `content` adds a second copy.
 - For a range, replace only the body or the whole range — don't split range boundaries.

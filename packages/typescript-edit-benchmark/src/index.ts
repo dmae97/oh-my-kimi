@@ -14,9 +14,15 @@ import { parseArgs } from "node:util";
 import { type ResolvedThinkingLevel, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { padding, visibleWidth } from "@oh-my-pi/pi-tui";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { postmortem, TempDir } from "@oh-my-pi/pi-utils";
 import { generateJsonReport, generateReport } from "./report";
-import { type BenchmarkConfig, type ProgressEvent, runBenchmark } from "./runner";
+import {
+	type BenchmarkConfig,
+	type BenchmarkResult,
+	buildBenchmarkResult,
+	type ProgressEvent,
+	runBenchmark,
+} from "./runner";
 import { type EditTask, loadTasksFromDir, validateFixturesFromDir } from "./tasks";
 
 const COLOR_ENABLED = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
@@ -32,6 +38,10 @@ const ANSI = {
 	magenta: "\x1b[35m",
 	cyan: "\x1b[36m",
 } as const;
+
+const RUNS_DIR = path.resolve(import.meta.dir, "..", "..", "..", "runs");
+
+fs.mkdirSync(RUNS_DIR, { recursive: true });
 
 function paint(code: string, text: string): string {
 	return COLOR_ENABLED ? `${code}${text}${ANSI.reset}` : text;
@@ -59,7 +69,7 @@ function generateReportFilename(config: BenchmarkConfig, format: "markdown" | "j
 	const variant = config.editVariant ?? "replace";
 	const timestamp = new Date().toISOString().replace(/:/g, "-").replace(/\..+$/, "").replace(/Z$/, "Z");
 	const ext = format === "json" ? "json" : "md";
-	return `runs/${modelName}_${variant}_${timestamp}.${ext}`;
+	return path.join(RUNS_DIR, `${modelName}_${variant}_${timestamp}.${ext}`);
 }
 
 async function resolveConversationDumpDir(outputPath: string): Promise<string> {
@@ -75,6 +85,21 @@ async function resolveConversationDumpDir(outputPath: string): Promise<string> {
 	}
 	const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 	return path.join(parsed.dir, `${parsed.name}.${timestamp}.dump`);
+}
+
+async function conversationDumpStatus(dumpDir: string): Promise<string> {
+	try {
+		const stat = await fs.promises.stat(dumpDir);
+		if (stat.isDirectory()) {
+			return `Conversation dumps written to: ${dumpDir}`;
+		}
+		return `Conversation dump path is not a directory: ${dumpDir}`;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			return `No conversation dumps written: ${dumpDir}`;
+		}
+		throw error;
+	}
 }
 
 function printUsage(tasks?: EditTask[]): void {
@@ -436,10 +461,55 @@ async function main(): Promise<void> {
 	console.log("");
 
 	const progress = new LiveProgress(tasksToRun.length * config.runsPerTask, config.runsPerTask);
-	const result = await runBenchmark(tasksToRun, config, event => {
-		progress.handleEvent(event);
+	let latestResult = buildBenchmarkResult({
+		tasks: tasksToRun,
+		config,
+		resultsByTask: new Map(),
+		startTime: new Date().toISOString(),
 	});
-	progress.finish();
+	let progressFinished = false;
+	let reportWritePromise: Promise<void> | undefined;
+	const finishProgress = () => {
+		if (progressFinished) return;
+		progress.finish();
+		progressFinished = true;
+	};
+	const writeReport = async (result: BenchmarkResult, interrupted: boolean) => {
+		if (reportWritePromise) return reportWritePromise;
+		reportWritePromise = (async () => {
+			if (interrupted) {
+				console.log("");
+				console.log("Benchmark interrupted; writing partial report...");
+			}
+			const report = formatType === "json" ? generateJsonReport(result) : generateReport(result);
+			await Bun.write(outputPath, report);
+			console.log(`Report written to: ${outputPath}`);
+			if (config.conversationDumpDir) {
+				console.log(await conversationDumpStatus(config.conversationDumpDir));
+			}
+		})();
+		return reportWritePromise;
+	};
+	const unregisterReportCleanup = postmortem.register("typescript-edit-benchmark-report", async reason => {
+		if (reason === postmortem.Reason.EXIT) return;
+		finishProgress();
+		await writeReport(latestResult, true);
+		if (cleanup) {
+			await cleanup();
+		}
+	});
+	const result = await runBenchmark(
+		tasksToRun,
+		config,
+		event => {
+			progress.handleEvent(event);
+		},
+		snapshot => {
+			latestResult = snapshot;
+		},
+	);
+	latestResult = result;
+	finishProgress();
 
 	console.log("");
 	console.log("Benchmark complete!");
@@ -453,11 +523,8 @@ async function main(): Promise<void> {
 	}
 	console.log("");
 
-	const report = formatType === "json" ? generateJsonReport(result) : generateReport(result);
-
-	await Bun.write(outputPath, report);
-	console.log(`Report written to: ${outputPath}`);
-	console.log(`Conversation dumps written to: ${config.conversationDumpDir}`);
+	await writeReport(result, false);
+	unregisterReportCleanup();
 
 	if (cleanup) {
 		await cleanup();
@@ -571,9 +638,9 @@ class LiveProgress {
 
 	#printSummary(): void {
 		const n = this.#completed;
-		if (n === 0) return;
+		const denom = n || 1;
 
-		const successRate = (this.#success / n) * 100;
+		const successRate = (this.#success / denom) * 100;
 		const editSuccessRate = this.#totalEdits > 0 ? (this.#totalEditSuccesses / this.#totalEdits) * 100 : 100;
 		const avgIndent =
 			this.#indentScores.length > 0 ? this.#indentScores.reduce((a, b) => a + b, 0) / this.#indentScores.length : 0;
@@ -590,9 +657,9 @@ class LiveProgress {
 		console.log(`  Tool calls:       read=${this.#totalReads} edit=${this.#totalEdits} write=${this.#totalWrites}`);
 		console.log(`  Tool input chars: ${this.#totalToolInputChars.toLocaleString()}`);
 		console.log(
-			`  Avg tokens/task:  ${Math.round(this.#totalInput / n)} in / ${Math.round(this.#totalOutput / n)} out`,
+			`  Avg tokens/task:  ${Math.round(this.#totalInput / denom)} in / ${Math.round(this.#totalOutput / denom)} out`,
 		);
-		console.log(`  Avg time/task:    ${Math.round(this.#totalDuration / n)}ms`);
+		console.log(`  Avg time/task:    ${Math.round(this.#totalDuration / denom)}ms`);
 	}
 
 	#renderLine(): void {

@@ -518,7 +518,7 @@ export class SessionObserverOverlayComponent extends Container {
 			case "write":
 			case "edit":
 				return args.path ? `path: ${args.path}` : "";
-			case "grep":
+			case "search":
 				return [args.pattern ? `pattern: ${args.pattern}` : "", args.path ? `path: ${args.path}` : ""]
 					.filter(Boolean)
 					.join(", ");

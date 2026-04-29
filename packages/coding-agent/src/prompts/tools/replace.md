@@ -1,9 +1,9 @@
 Performs string replacements in files with fuzzy whitespace matching.
 
 <instruction>
-- You **MUST** use the smallest edit that uniquely identifies the change
-- If `old_text` not unique, you **MUST** expand to include more context or use `all: true` to replace all occurrences
-- Fuzzy matching handles minor whitespace/indentation differences automatically
+- Params **MUST** be `{ path, edits }`; `path` is required at the top level and applies to every replacement
+- You **MUST** use the smallest `old_text` that uniquely identifies the change
+- If `old_text` is not unique, you **MUST** expand it with more context or use `all: true` to replace all occurrences
 - You **SHOULD** prefer editing existing files over creating new ones
 </instruction>
 
