@@ -530,7 +530,6 @@ function getAtomEditAnchors(edit: AtomEdit): Anchor[] {
 function validateAtomAnchors(edits: AtomEdit[], fileLines: string[], warnings: string[]): HashMismatch[] {
 	const mismatches: HashMismatch[] = [];
 	const rebasedAnchors = new Map<Anchor, HashMismatch>();
-	const rebasedMutatingAnchors: { original: string; rebased: number; hash: string }[] = [];
 	for (const edit of edits) {
 		for (const anchor of getAtomEditAnchors(edit)) {
 			if (anchor.line < 1 || anchor.line > fileLines.length) {
@@ -544,9 +543,6 @@ function validateAtomAnchors(edits: AtomEdit[], fileLines: string[], warnings: s
 				const original = `${anchor.line}${anchor.hash}`;
 				rebasedAnchors.set(anchor, { line: anchor.line, expected: anchor.hash, actual: actualHash });
 				anchor.line = rebased;
-				if (edit.kind === "set" || edit.kind === "delete") {
-					rebasedMutatingAnchors.push({ original, rebased, hash: anchor.hash });
-				}
 				warnings.push(
 					`Auto-rebased anchor ${original} → ${rebased}${anchor.hash} (line shifted within ±${ANCHOR_REBASE_WINDOW}; hash matched).`,
 				);
@@ -554,20 +550,6 @@ function validateAtomAnchors(edits: AtomEdit[], fileLines: string[], warnings: s
 			}
 			mismatches.push({ line: anchor.line, expected: anchor.hash, actual: actualHash });
 		}
-	}
-
-	// Rebase cap: a single stale anchor (e.g. unrelated upstream edit) is fine,
-	// but multiple mutating anchors all rebasing is the signature of a miscounted
-	// block edit (agent stacked `Lid=X` ops over a contiguous range whose new
-	// length differs from the old). Refuse so the agent retries with the
-	// `-Lid`+`+TEXT` block-rewrite recipe instead of silently corrupting the file.
-	if (rebasedMutatingAnchors.length > 1) {
-		const detail = rebasedMutatingAnchors.map(r => `${r.original} → ${r.rebased}${r.hash}`).join(", ");
-		throw new Error(
-			`Refusing edit: ${rebasedMutatingAnchors.length} mutating anchors needed auto-rebase (${detail}). ` +
-				"This usually means a `Lid=X` chain was used to rewrite a contiguous block whose new length differs from the old. " +
-				"Rewrite the block by deleting each original line with `-Lid` (one per line) and emitting the new content as `+TEXT` lines.",
-		);
 	}
 
 	// Detect post-rebase conflicts. If any conflicting anchor was rebased, surface

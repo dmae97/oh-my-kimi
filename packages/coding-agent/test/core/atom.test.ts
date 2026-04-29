@@ -481,17 +481,36 @@ describe("atom — hash mismatch", () => {
 		expect(result.lines).toBe("aaa\nINSERTED\nBBB\nccc");
 	});
 
-	it("multiple mutating anchors all rebasing is rejected as a miscounted block edit", () => {
-		// Simulate the failure mode: agent stacked `Lid=X` over a contiguous range
-		// whose actual position drifted (insertion shifted everything by 1). All
-		// three mutating anchors need rebasing — this is the signature of a block
-		// edit done with the wrong recipe.
+	it("multiple mutating anchors can rebase together", () => {
 		const content = "aaa\nINSERTED\nbbb\nccc\nddd";
 		const t2 = tag(2, "bbb"); // bbb is actually at line 3
 		const t3 = tag(3, "ccc"); // ccc is actually at line 4
 		const t4 = tag(4, "ddd"); // ddd is actually at line 5
 		const diff = `${t2}=BBB\n${t3}=CCC\n${t4}=DDD`;
-		expect(() => applyAtomEdits(content, parseAtom(diff))).toThrow(/auto-rebase/);
+		const result = applyAtomEdits(content, parseAtom(diff));
+
+		expect(result.lines).toBe("aaa\nINSERTED\nBBB\nCCC\nDDD");
+		expect(result.warnings).toEqual([
+			`Auto-rebased anchor ${t2} → 3${computeLineHash(3, "bbb")} (line shifted within ±2; hash matched).`,
+			`Auto-rebased anchor ${t3} → 4${computeLineHash(4, "ccc")} (line shifted within ±2; hash matched).`,
+			`Auto-rebased anchor ${t4} → 5${computeLineHash(5, "ddd")} (line shifted within ±2; hash matched).`,
+		]);
+	});
+
+	it("multiple delete anchors can rebase together", () => {
+		const content = "aaa\nINSERTED\nbbb\nccc\nddd";
+		const t2 = tag(2, "bbb"); // bbb is actually at line 3
+		const t3 = tag(3, "ccc"); // ccc is actually at line 4
+		const t4 = tag(4, "ddd"); // ddd is actually at line 5
+		const diff = `-${t2}\n-${t3}\n-${t4}`;
+		const result = applyAtomEdits(content, parseAtom(diff));
+
+		expect(result.lines).toBe("aaa\nINSERTED");
+		expect(result.warnings).toEqual([
+			`Auto-rebased anchor ${t2} → 3${computeLineHash(3, "bbb")} (line shifted within ±2; hash matched).`,
+			`Auto-rebased anchor ${t3} → 4${computeLineHash(4, "ccc")} (line shifted within ±2; hash matched).`,
+			`Auto-rebased anchor ${t4} → 5${computeLineHash(5, "ddd")} (line shifted within ±2; hash matched).`,
+		]);
 	});
 });
 
