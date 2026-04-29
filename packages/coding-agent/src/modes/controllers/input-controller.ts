@@ -334,6 +334,11 @@ export class InputController {
 				this.ctx.editor.setText("");
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
 				this.ctx.pendingImages = [];
+				// Record the signature so the queued message's eventual delivery
+				// (a user-role `message_start` event) leaves any draft the user has
+				// typed since queuing intact. Same protection as #783, applied to
+				// the streaming/queue path.
+				this.ctx.locallySubmittedUserSignatures.add(`${text}\u0000${images?.length ?? 0}`);
 				await this.ctx.session.prompt(text, { streamingBehavior: "steer", images });
 				this.ctx.updatePendingMessagesDisplay();
 				this.ctx.ui.requestRender();
@@ -443,6 +448,7 @@ export class InputController {
 	}
 
 	restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
+		this.ctx.locallySubmittedUserSignatures.clear();
 		const { steering, followUp } = this.ctx.session.clearQueue();
 		const allQueued = [...steering, ...followUp];
 		if (allQueued.length === 0) {

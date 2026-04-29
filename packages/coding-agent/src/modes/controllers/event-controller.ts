@@ -174,18 +174,23 @@ export class EventController {
 
 			this.#resetReadGroup();
 			const wasOptimistic = this.ctx.optimisticUserMessageSignature === signature;
+			const wasLocallySubmitted = this.ctx.locallySubmittedUserSignatures.delete(signature) || wasOptimistic;
 			if (!wasOptimistic) {
 				this.ctx.addMessageToChat(event.message);
 			}
-			this.ctx.optimisticUserMessageSignature = undefined;
+			if (wasOptimistic) {
+				this.ctx.optimisticUserMessageSignature = undefined;
+			}
 
-			// Clear the editor only when the submission did not originate from this
-			// session's optimistic flow (which already cleared the editor at submit
-			// time). Clearing here on the optimistic path would race with the user
-			// typing the next prompt while the previous large redraw lands and erase
-			// their in-progress draft (#783).
-			if (!event.message.synthetic && !wasOptimistic) {
-				this.ctx.editor.setText("");
+			// Clear the editor only when the submission did not originate from a
+			// local submission (optimistic or queued-while-streaming). Both local
+			// paths already cleared the editor at submit time; clearing again here
+			// would race with the user typing the next prompt while the previous
+			// large redraw lands and erase their in-progress draft (#783).
+			if (!event.message.synthetic) {
+				if (!wasLocallySubmitted) {
+					this.ctx.editor.setText("");
+				}
 				this.ctx.updatePendingMessagesDisplay();
 			}
 			this.ctx.ui.requestRender();

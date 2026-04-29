@@ -131,6 +131,7 @@ function createContext(): {
 		isBashMode: false,
 		isPythonMode: false,
 		optimisticUserMessageSignature: undefined,
+		locallySubmittedUserSignatures: new Set<string>(),
 		onInputCallback,
 		addMessageToChat,
 		cancelPendingSubmission,

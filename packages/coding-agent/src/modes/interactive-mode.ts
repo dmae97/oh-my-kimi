@@ -170,6 +170,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	unsubscribe?: () => void;
 	onInputCallback?: (input: SubmittedUserInput) => void;
 	optimisticUserMessageSignature: string | undefined = undefined;
+	locallySubmittedUserSignatures: Set<string> = new Set();
 	#pendingSubmittedInput: SubmittedUserInput | undefined;
 	lastSigintTime = 0;
 	lastEscapeTime = 0;
@@ -564,6 +565,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		};
 		this.#pendingSubmittedInput = submission;
 		this.optimisticUserMessageSignature = `${submission.text}\u0000${submission.images?.length ?? 0}`;
+		this.locallySubmittedUserSignatures.add(this.optimisticUserMessageSignature);
 		this.addMessageToChat({
 			role: "user",
 			content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
@@ -585,6 +587,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		submission.cancelled = true;
 		this.#pendingSubmittedInput = undefined;
 		this.optimisticUserMessageSignature = undefined;
+		this.locallySubmittedUserSignatures.delete(`${submission.text}\u0000${submission.images?.length ?? 0}`);
 		this.#pendingWorkingMessage = undefined;
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
