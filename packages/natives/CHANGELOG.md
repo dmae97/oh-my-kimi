@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed shell minimizer output so successful commands whose noise is fully stripped still return `OK` instead of an artifact-only result
 
 ## [14.5.6] - 2026-04-29
 

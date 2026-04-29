@@ -97,6 +97,15 @@ impl MinimizerOutput {
 		self
 	}
 
+	/// Replace the transformed text while keeping minimization telemetry
+	/// coherent.
+	#[must_use]
+	pub fn with_text(mut self, text: String) -> Self {
+		self.output_bytes = text.len();
+		self.text = text;
+		self
+	}
+
 	/// Byte count saved by this filter (0 for passthrough).
 	#[allow(dead_code, reason = "test-only API surface")]
 	pub const fn bytes_saved(&self) -> usize {

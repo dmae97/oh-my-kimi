@@ -127,7 +127,7 @@ fn apply_identity(
 			};
 		let label = program_label(&identity.program);
 		let overlaid = apply_pipeline_overlay(config, &identity.program, rust_output, label);
-		return overlaid.with_original(captured);
+		return ensure_success_visible(overlaid, exit_code).with_original(captured);
 	}
 
 	if let Some(pipeline) = resolve_pipeline(config, &identity.program, subcommand) {
@@ -139,13 +139,23 @@ fn apply_identity(
 		if text == captured {
 			return MinimizerOutput::passthrough(captured).labeled("pipeline-noop");
 		}
-		return MinimizerOutput::transformed(text, captured.len())
-			.labeled("pipeline")
-			.with_original(captured);
+		return ensure_success_visible(
+			MinimizerOutput::transformed(text, captured.len()).labeled("pipeline"),
+			exit_code,
+		)
+		.with_original(captured);
 	}
 
 	record_unknown_command(command);
 	MinimizerOutput::passthrough(captured).labeled("unsupported")
+}
+
+fn ensure_success_visible(output: MinimizerOutput, exit_code: i32) -> MinimizerOutput {
+	if exit_code == 0 && output.changed && output.text.trim().is_empty() {
+		output.with_text("OK\n".to_string())
+	} else {
+		output
+	}
 }
 
 /// Per-program label for telemetry. Returns one of a fixed static set so the
@@ -319,6 +329,33 @@ mod tests {
 		let out = apply("git status", "## main\n M file.rs\n", 0, &cfg);
 		assert!(out.changed);
 		assert!(out.text.contains("modified: 1"));
+	}
+
+	#[test]
+	fn successful_minimization_keeps_visible_ok_when_filter_removes_all_lines() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let out = apply(
+			"cargo build",
+			"   Compiling app v0.1.0\n    Finished `dev` profile [unoptimized + debuginfo] target(s) \
+			 in 1.23s\n",
+			0,
+			&cfg,
+		);
+
+		assert!(out.changed);
+		assert_eq!(out.text, "OK\n");
+		assert_eq!(out.output_bytes, out.text.len());
+		assert!(out.original_text.is_some());
+	}
+
+	#[test]
+	fn failed_minimization_does_not_invent_ok_for_empty_output() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let out = apply("cargo build", "   Compiling app v0.1.0\n", 1, &cfg);
+
+		assert!(out.changed);
+		assert_eq!(out.text, "");
+		assert!(out.original_text.is_some());
 	}
 
 	#[test]

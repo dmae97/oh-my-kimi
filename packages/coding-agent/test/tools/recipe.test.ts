@@ -152,9 +152,7 @@ describe("recipe", () => {
 			"crate-b/bin/worker",
 		]);
 		expect(
-			resolveCommand("cargo:crate-a/example/demo", [
-				{ id: "cargo", label: "Cargo", commandPrefix: "cargo", tasks },
-			]),
+			resolveCommand("cargo:crate-a/example/demo", [{ id: "cargo", label: "Cargo", commandPrefix: "cargo", tasks }]),
 		).toEqual({ command: "cargo run --package 'crate-a' --example 'demo'" });
 	});
 

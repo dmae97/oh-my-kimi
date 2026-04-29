@@ -106,11 +106,7 @@ function packageTaskName(packageName: string | undefined, packageDir: string, sc
 	return `${packageName ?? packageDir}/${scriptName}`;
 }
 
-function tasksForPackage(options: {
-	pkg: PackageJsonInfo;
-	packageDir: string;
-	namespaced: boolean;
-}): RunnerTask[] {
+function tasksForPackage(options: { pkg: PackageJsonInfo; packageDir: string; namespaced: boolean }): RunnerTask[] {
 	return options.pkg.scripts.map(scriptName => ({
 		name: options.namespaced ? packageTaskName(options.pkg.name, options.packageDir, scriptName) : scriptName,
 		doc: options.namespaced ? options.packageDir : undefined,
