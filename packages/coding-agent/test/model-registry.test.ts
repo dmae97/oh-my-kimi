@@ -1871,4 +1871,124 @@ describe("ModelRegistry", () => {
 			).toBe(true);
 		});
 	});
+
+	describe("provider auth: oauth", () => {
+		test("models from a provider with auth: oauth are marked isOAuth=true", async () => {
+			writeRawModelsJson({
+				"p-anthropic": {
+					baseUrl: "https://proxy.example.com",
+					apiKey: "literal-key",
+					api: "anthropic-messages",
+					auth: "oauth",
+					models: [
+						{
+							id: "claude-sonnet-4-5",
+							name: "Claude Sonnet 4.5",
+							reasoning: true,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 200000,
+							maxTokens: 8000,
+						},
+					],
+				},
+			});
+			await authStorage.setRuntimeApiKey("p-anthropic", "literal-key");
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh("offline");
+
+			const model = registry.find("p-anthropic", "claude-sonnet-4-5");
+			expect(model).toBeDefined();
+			expect(model?.isOAuth).toBe(true);
+		});
+
+		test("anthropic-messages providers default to isOAuth=true even without explicit auth", async () => {
+			writeRawModelsJson({
+				"p-anthropic": {
+					baseUrl: "https://proxy.example.com",
+					apiKey: "literal-key",
+					api: "anthropic-messages",
+					models: [
+						{
+							id: "claude-sonnet-4-5",
+							name: "Claude Sonnet 4.5",
+							reasoning: true,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 200000,
+							maxTokens: 8000,
+						},
+					],
+				},
+			});
+			await authStorage.setRuntimeApiKey("p-anthropic", "literal-key");
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh("offline");
+
+			const model = registry.find("p-anthropic", "claude-sonnet-4-5");
+			expect(model).toBeDefined();
+			expect(model?.isOAuth).toBe(true);
+		});
+
+		test("auth: apiKey opts out of the anthropic-messages default", async () => {
+			writeRawModelsJson({
+				"p-anthropic": {
+					baseUrl: "https://proxy.example.com",
+					apiKey: "literal-key",
+					api: "anthropic-messages",
+					auth: "apiKey",
+					models: [
+						{
+							id: "claude-sonnet-4-5",
+							name: "Claude Sonnet 4.5",
+							reasoning: true,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 200000,
+							maxTokens: 8000,
+						},
+					],
+				},
+			});
+			await authStorage.setRuntimeApiKey("p-anthropic", "literal-key");
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh("offline");
+
+			const model = registry.find("p-anthropic", "claude-sonnet-4-5");
+			expect(model).toBeDefined();
+			expect(model?.isOAuth).toBeUndefined();
+		});
+
+		test("non-anthropic apis do not get the OAuth default", async () => {
+			writeRawModelsJson({
+				"p-openai": {
+					baseUrl: "https://proxy.example.com/v1",
+					apiKey: "literal-key",
+					api: "openai-completions",
+					models: [
+						{
+							id: "gpt-5",
+							name: "GPT-5",
+							reasoning: true,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 200000,
+							maxTokens: 8000,
+						},
+					],
+				},
+			});
+			await authStorage.setRuntimeApiKey("p-openai", "literal-key");
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh("offline");
+
+			const model = registry.find("p-openai", "gpt-5");
+			expect(model).toBeDefined();
+			expect(model?.isOAuth).toBeUndefined();
+		});
+	});
 });

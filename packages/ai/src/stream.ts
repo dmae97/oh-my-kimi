@@ -196,8 +196,13 @@ export function stream<TApi extends Api>(
 
 	const api: Api = model.api;
 	switch (api) {
-		case "anthropic-messages":
-			return streamAnthropic(model as Model<"anthropic-messages">, context, providerOptions);
+		case "anthropic-messages": {
+			const anthropicOptions = providerOptions as AnthropicOptions;
+			return streamAnthropic(model as Model<"anthropic-messages">, context, {
+				...anthropicOptions,
+				isOAuth: anthropicOptions.isOAuth ?? model.isOAuth,
+			});
+		}
 
 		case "openai-completions":
 			return streamOpenAICompletions(model as Model<"openai-completions">, context, providerOptions as any);

@@ -587,4 +587,11 @@ export interface Model<TApi extends Api = any> {
 	 * - `"function"` or undefined: JSON function-tool with `{input: string}` (spec §1.2).
 	 */
 	applyPatchToolType?: "freeform" | "function";
+	/**
+	 * Force OAuth-style request shaping for providers whose API key prefix doesn't
+	 * match an OAuth token (e.g. routing Anthropic traffic through a proxy that
+	 * expects Claude Code framing). When true, the streaming layer sets
+	 * `options.isOAuth = true` for the underlying provider call.
+	 */
+	isOAuth?: boolean;
 }
