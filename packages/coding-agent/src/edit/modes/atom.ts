@@ -8,7 +8,7 @@
  *   Lid=TEXT                set the anchored line to TEXT and move cursor after it
  *   -Lid                    delete the anchored line and move cursor to its slot
  *   LidA..LidB=TEXT         replace a range; following \TEXT lines continue it
- *   \TEXT                   append TEXT to the active range replacement
+ *   \TEXT                   append TEXT to the active replacement (set or range)
  *   +TEXT                   insert TEXT at the cursor
  *   ^                       move cursor to beginning of file
  *   $                       move cursor to end of file
@@ -485,22 +485,35 @@ function isRangeReplaceStart(line: string): boolean {
 	return /^[1-9]\d*[a-z]{2}\.\.[1-9]\d*[a-z]{2}[ \t]*=/.test(line);
 }
 
-// Explicit range continuation uses `\TEXT` after `LidA..LidB=FIRST`.
-// The leading backslash is the continuation marker; the rest of the line is
-// inserted literally, so `\\TEXT` inserts a line starting with `\TEXT`.
-// Raw unprefixed continuation remains an undocumented best-effort recovery
-// for old transcripts, but canonical patches should use backslash lines.
+// A single-line `Lid=TEXT` (or legacy `Lid|TEXT`, with optional leading `@`)
+// also opens a replacement that `\TEXT` continuation lines may extend. The
+// continuation lines become inserts at the cursor (which sits on the just-set
+// line), turning `Lid=A` + `\B` + `\C` into "set the line to A, then insert B
+// and C below it" — i.e. a multi-line rewrite of one anchor without forcing
+// the user to switch to the `LidA..LidB=` range form.
+function isReplaceStart(line: string): boolean {
+	if (isRangeReplaceStart(line)) return true;
+	const stripped = line.startsWith("@") ? line.slice(1) : line;
+	return /^[1-9]\d*[a-z]{2}[ \t]*[=|]/.test(stripped);
+}
+
+// Explicit continuation uses `\TEXT` after a replacement op (`Lid=FIRST` or
+// `LidA..LidB=FIRST`). The leading backslash is the continuation marker; the
+// rest of the line is inserted literally, so `\\TEXT` inserts a line starting
+// with `\TEXT`. Raw unprefixed continuation remains an undocumented
+// best-effort recovery for range replacements only, kept for old transcripts.
 function preprocessRangeReplaceContinuation(diff: string): string {
 	const lines = diff.split("\n");
 	let inRangeReplace = false;
+	let inReplace = false;
 	for (let i = 0; i < lines.length; i++) {
 		const rawLine = lines[i];
 		const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
 
 		if (line.startsWith("\\")) {
-			if (!inRangeReplace) {
+			if (!inReplace) {
 				throw new Error(
-					`Diff line ${i + 1}: \\TEXT continuation is only valid immediately after a LidA..LidB=FIRST_LINE range replacement.`,
+					`Diff line ${i + 1}: \\TEXT continuation is only valid immediately after a Lid=TEXT or LidA..LidB=FIRST_LINE replacement.`,
 				);
 			}
 			lines[i] = `+${RANGE_CONTINUATION_SENTINEL}${rawLine.slice(1)}`;
@@ -510,6 +523,7 @@ function preprocessRangeReplaceContinuation(diff: string): string {
 		if (inRangeReplace) {
 			if (line.length === 0 || OP_LINE_HEAD_RE.test(line)) {
 				inRangeReplace = isRangeReplaceStart(line);
+				inReplace = isReplaceStart(line);
 				continue;
 			}
 
@@ -518,6 +532,7 @@ function preprocessRangeReplaceContinuation(diff: string): string {
 		}
 
 		inRangeReplace = isRangeReplaceStart(line);
+		inReplace = isReplaceStart(line);
 	}
 	return lines.join("\n");
 }

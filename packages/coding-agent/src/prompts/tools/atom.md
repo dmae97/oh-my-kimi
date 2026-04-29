@@ -15,8 +15,8 @@ $          move cursor to EOF (after the last line)
 +          insert one blank line at the cursor
 Lid=TEXT   replace the anchored line with TEXT
 LidA..LidB=TEXT replace the range with one line; following `\TEXT` lines append literal lines to the replacement
-\TEXT      append literal TEXT to the active range replacement
-\          append a blank line to the active range replacement
+\TEXT      append literal TEXT to the active replacement (after `Lid=…` or `LidA..LidB=…`)
+\          append a blank line to the active replacement
 Lid=       blank the anchored line's content but KEEP the line (results in an empty line, NOT a removed line; use `-Lid` to remove)
 -Lid       delete the anchored line (repeat for multi-line delete)
 -LidA..LidB delete the contiguous line range LidA..LidB (inclusive)
@@ -29,8 +29,8 @@ Lid=       blank the anchored line's content but KEEP the line (results in an em
 - TEXT in `+TEXT`, `Lid=TEXT`, and `\TEXT` is literal line content, INCLUDING leading whitespace. You **MUST NOT** trim or re-indent it.
 - Consecutive `+TEXT` ops produce consecutive lines in the order written. You **MUST NOT** separate them with a stray `+` unless you intend to insert a blank line.
 - `Lid=TEXT` rewrites ONE line. To rewrite K adjacent lines, you **MUST** use `LidA..LidB=FIRST_LINE` followed immediately by `\NEXT_LINE` continuation lines. You **MUST** use bare `\` for blank replacement lines.
-- You **MUST** prefix every range-replacement continuation line with `\`, especially when the replacement line starts with edit syntax characters such as `#`, `+`, `-`, `@`, `$`, `^`, `!`, or a Lid-shaped token.
-- `\TEXT` **MUST** appear only immediately after an active range replacement block. It **MUST NOT** be used as a general insert operator.
+- You **MUST** prefix every replacement continuation line with `\`, especially when the replacement line starts with edit syntax characters such as `#`, `+`, `-`, `@`, `$`, `^`, `!`, or a Lid-shaped token.
+- `\TEXT` **MUST** appear only immediately after an active `Lid=…` or `LidA..LidB=…` replacement. It **MUST NOT** be used as a general insert operator.
 - The legacy `-LidA..LidB` + `+TEXT…` block-rewrite form also works.
 - To insert ABOVE a line, you **MUST** use `^Lid` then `+TEXT`. To insert above line 1, you **MUST** use `^` (BOF) then `+TEXT`. To insert below a line, you **MUST** use `@Lid` then `+TEXT`.
 - Multiple `---PATH` sections **MAY** appear in one input; each section is applied in order.
@@ -131,6 +131,6 @@ $
 - TEXT after `=`, `+`, or `\` includes leading whitespace verbatim. You **MUST NOT** trim or re-indent it.
 - This is NOT unified diff. You **MUST NOT** write `@@` headers, `-OLD`/`+NEW` pairs, context lines, or `+Lid|…` (bad: `+5th|new text`; good: `5th=new text`).
 - You **MUST NOT** split `Lid=TEXT` across two physical lines.
-- For a contiguous range replacement, you **MUST** use `LidA..LidB=FIRST_LINE` followed by `\NEXT_LINE` continuation lines, or use `-LidA..LidB` + `+TEXT…` (delete + insert).
+- For a contiguous range replacement, you **MAY** use either `Lid=FIRST_LINE` + `\NEXT_LINE…` (extends one anchor) or `LidA..LidB=FIRST_LINE` + `\NEXT_LINE…` (collapses an existing range), or fall back to `-LidA..LidB` + `+TEXT…` (delete + insert).
 - The tool is syntax-blind. Indentation, brackets, fences, table widths — you remain responsible.
 </critical>

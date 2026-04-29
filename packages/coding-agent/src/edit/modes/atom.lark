@@ -8,8 +8,8 @@ file_header: "---" filename LF
 filename: /(.+)/
 
 line_change: line* mutation_line line*
-line: insert_line | delete_line | set_line | continuation_line | move_line | blank
-mutation_line: insert_line | delete_line | set_line
+line: insert_line | delete_line | set_block | move_line | blank
+mutation_line: insert_line | delete_line | set_block
 
 whole_file_change: blank* whole_file_line blank*
 whole_file_line: remove_file | move_file
@@ -20,6 +20,7 @@ destination: /(?:[^ \t\r\n]+|"[^"\r\n]+"|'[^'\r\n]+')/
 insert_line: "+" /(.*)/ LF
 delete_line: "-" (LID ".." LID | LID) LF
 set_line: (LID ".." LID | LID) WS? "=" /(.*)/ LF
+set_block: set_line continuation_line*
 continuation_line: "\\" /(.*)/ LF
 move_line: ("@" LID | "^" LID | "^" | "$") LF
 

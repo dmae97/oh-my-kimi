@@ -204,8 +204,35 @@ describe("atom parser — basic forms", () => {
 		expect(applyDiff(longer, diff)).toBe(["aaa", "first", ...literalLines, "ddd"].join("\n"));
 	});
 
-	it("backslash continuation is rejected outside a range replacement", () => {
+	it("backslash continuation is rejected outside a replacement op", () => {
 		expect(() => parseAtom("\\orphan")).toThrow(/\\TEXT continuation is only valid/);
+	});
+
+	it("`Lid=FIRST` accepts backslash continuation lines (single-line set extends to multi-line)", () => {
+		const content = "aaa\nbbb\nccc";
+		const diff = [`${tag(2, "bbb")}=export function label() {`, "\\    return 1;", "\\}"].join("\n");
+		expect(applyDiff(content, diff)).toBe("aaa\nexport function label() {\n    return 1;\n}\nccc");
+	});
+
+	it("`@Lid=FIRST` accepts backslash continuation lines (legacy `@`-prefixed form)", () => {
+		const content = "aaa\nbbb\nccc";
+		const diff = [`@${tag(2, "bbb")}=ONE`, "\\TWO"].join("\n");
+		expect(applyDiff(content, diff)).toBe("aaa\nONE\nTWO\nccc");
+	});
+
+	it("`Lid|FIRST` (legacy set syntax) accepts backslash continuation lines", () => {
+		const content = "aaa\nbbb\nccc";
+		const diff = [`${tag(2, "bbb")}|ONE`, "\\TWO"].join("\n");
+		expect(applyDiff(content, diff)).toBe("aaa\nONE\nTWO\nccc");
+	});
+
+	it("backslash continuation after `Lid=FIRST` rejects unprefixed recovery (range-only fallback)", () => {
+		const content = "aaa\nbbb\nccc";
+		// Only range replacements get the legacy "raw unprefixed continuation" recovery;
+		// after a single-line set, an unprefixed line below should parse as its own op
+		// (or error), not silently fold into the replacement.
+		const diff = [`${tag(2, "bbb")}=ONE`, "rawline"].join("\n");
+		expect(() => applyDiff(content, diff)).toThrow();
 	});
 
 	it("backslash continuation stops before the next atom op line", () => {
