@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added shell minimizer support for CMake, CTest, Ninja, GoogleTest binaries, and Bun/Bunx wrappers that run those tools
+
 ## [14.5.2] - 2026-04-26
 ### Changed
 

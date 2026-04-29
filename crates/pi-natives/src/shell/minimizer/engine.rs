@@ -159,6 +159,12 @@ fn program_label(program: &str) -> &'static str {
 		"bunx" => "bunx",
 		"cargo" => "cargo",
 		"go" => "go",
+		"cmake" => "cmake",
+		"ctest" => "ctest",
+		"ninja" => "ninja",
+		"gtest" => "gtest",
+		"gtest-parallel" => "gtest",
+		program if filters::cpp::is_gtest_binary_name(program) => "gtest",
 		"golangci-lint" => "golangci-lint",
 		"dotnet" => "dotnet",
 		"docker" => "docker",
@@ -330,6 +336,37 @@ mod tests {
 		assert_eq!(mode_for("echo start ; git status", &cfg), MinimizerMode::None);
 		assert_eq!(mode_for("false && git status", &cfg), MinimizerMode::None);
 		assert_eq!(mode_for("git status | cat", &cfg), MinimizerMode::None);
+	}
+
+	#[test]
+	fn cpp_tools_minimize_through_dispatch() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		assert!(should_minimize("ctest --output-on-failure", &cfg));
+		assert!(should_minimize("./build/foo_test --gtest_filter=Foo.*", &cfg));
+
+		let ctest = apply(
+			"ctest --output-on-failure",
+			"Test project /tmp/build\n1/2 Test #1: ok ........   Passed    0.01 sec\n2/2 Test #2: \
+			 bad .......***Failed    0.02 sec\nThe following tests FAILED:\n",
+			8,
+			&cfg,
+		);
+		assert!(ctest.changed);
+		assert_eq!(ctest.filter, "ctest");
+		assert!(!ctest.text.contains("Test #1"));
+		assert!(ctest.text.contains("Test #2: bad"));
+
+		let gtest = apply(
+			"./build/foo_test",
+			"[ RUN      ] Foo.Pass\n[       OK ] Foo.Pass (0 ms)\nfoo_test.cc:42: Failure\nExpected: \
+			 1\n[  FAILED  ] Foo.Fails\n",
+			1,
+			&cfg,
+		);
+		assert!(gtest.changed);
+		assert_eq!(gtest.filter, "gtest");
+		assert!(!gtest.text.contains("Foo.Pass"));
+		assert!(gtest.text.contains("foo_test.cc:42: Failure"));
 	}
 }
 

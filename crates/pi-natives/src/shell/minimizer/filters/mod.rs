@@ -3,6 +3,7 @@
 use crate::shell::minimizer::{MinimizerCtx, MinimizerOutput};
 
 pub mod cloud;
+pub mod cpp;
 
 pub mod bun;
 
@@ -37,6 +38,10 @@ pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 		"bun" | "bunx" => bun::supports(program, subcommand),
 		"cargo" => cargo::supports(subcommand),
 		"go" | "golangci-lint" => go::supports(program, subcommand),
+		"cmake" | "ctest" | "ninja" | "gtest" | "gtest-parallel" => {
+			cpp::supports(program, subcommand)
+		},
+		program if cpp::is_gtest_binary_name(program) => cpp::supports(program, subcommand),
 		"dotnet" => dotnet::supports(program, subcommand),
 		"ls" | "tree" | "find" | "grep" | "rg" | "wc" | "cat" | "read" | "stat" | "du" | "df"
 		| "jq" | "json" => true,
@@ -77,6 +82,10 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		"cargo" => cargo::filter(ctx, input, exit_code),
 		"go" | "golangci-lint" => go::filter(ctx, input, exit_code),
 		"dotnet" => dotnet::filter(ctx, input, exit_code),
+		"cmake" | "ctest" | "ninja" | "gtest" | "gtest-parallel" => {
+			cpp::filter(ctx, input, exit_code)
+		},
+		program if cpp::is_gtest_binary_name(program) => cpp::filter(ctx, input, exit_code),
 		"ls" | "tree" | "find" | "grep" | "rg" | "wc" | "cat" | "read" | "stat" | "du" | "df"
 		| "jq" | "json" => listing::filter(ctx, input, exit_code),
 		"aws" | "curl" | "wget" | "psql" => cloud::filter(ctx, input, exit_code),
