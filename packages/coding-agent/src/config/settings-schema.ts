@@ -1306,13 +1306,14 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"just.enabled": {
+	"runCommand.enabled": {
 		type: "boolean",
 		default: true,
 		ui: {
 			tab: "tools",
-			label: "Just",
-			description: "Enable the `just` tool when a justfile is present in the working directory",
+			label: "Run command",
+			description:
+				"Enable the run_command tool when a justfile / package.json / Cargo.toml / Makefile / Taskfile is present",
 		},
 	},
 

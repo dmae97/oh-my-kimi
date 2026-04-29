@@ -1,6 +1,25 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Changed the task runner toggle from `just.enabled` to `runCommand.enabled`, so existing configurations using `just.enabled` must be migrated
+- Removed the legacy `just` tool and replaced it with `run_command`
+- Renamed the built-in tool API from `just` to `run_command`, so clients requesting/handling the old tool name must update
+
+### Added
+
+- Added a new `run_command` tool that runs project tasks via a single `op` argument, auto-detecting and supporting recipes from justfiles, `package.json` scripts (including workspace packages), Cargo bin/example/test targets, Makefiles, and Taskfiles
+- Added support for explicit runner-qualified tasks via `run_command` with `runnerId:task` syntax in the prompt guidance
+
+### Changed
+
+- Changed automatic tool availability so requesting `bash` can now auto-include `run_command` when a supported task runner manifest is detected in the working directory
+- Changed task resolution to disambiguate identical task names across multiple runners and show runner-aware command execution errors
+
+### Fixed
+
+- Fixed editor draft being erased when a user message queued during streaming was eventually submitted; the queue/steer path now preserves any new prompt the user has typed since queuing, matching the existing optimistic-send protection.
 
 ## [14.5.7] - 2026-04-29
 
