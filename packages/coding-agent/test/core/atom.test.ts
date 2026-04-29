@@ -272,11 +272,10 @@ describe("atom parser — edge cases", () => {
 		expect(parseAtom(`@${tag(2, "bbb")}`)).toEqual([]);
 	});
 
-	it("anchor with non-pipe trailing characters is leniently treated as an insert", () => {
-		const content = "aaa\nbbb\nccc";
-		// `1aa/foo/bar/` doesn't match `Lid=...`, so it falls through to a
-		// best-effort insert at EOF rather than throwing.
-		expect(applyDiff(content, `${tag(1, "aaa")}/foo/bar/`)).toBe(`aaa\nbbb\nccc\n${tag(1, "aaa")}/foo/bar/`);
+	it("anchor with non-pipe trailing characters is rejected", () => {
+		// `1aa/foo/bar/` doesn't match any recognized op; the parser must
+		// reject it rather than silently treating it as an insert.
+		expect(() => parseAtom(`${tag(1, "aaa")}/foo/bar/`)).toThrow(/unrecognized op/);
 	});
 
 	it("duplicate sets on the same anchor: last set wins", () => {
@@ -472,6 +471,28 @@ describe("atom — hash mismatch", () => {
 		const stale = tag(2, "bbb");
 		expect(() => applyAtomEdits(content, parseAtom(`${stale}=NEW`))).toThrow(HashlineMismatchError);
 	});
+
+	it("single rebase is permitted (one stale anchor recovers silently)", () => {
+		// Insert an unrelated line at the top, shifting line 2 to line 3.
+		// A `Lid=` op that targeted the original line 2 must auto-rebase to line 3.
+		const content = "aaa\nINSERTED\nbbb\nccc";
+		const stale = tag(2, "bbb"); // hash for "bbb" computed at line 2
+		const result = applyAtomEdits(content, parseAtom(`${stale}=BBB`));
+		expect(result.lines).toBe("aaa\nINSERTED\nBBB\nccc");
+	});
+
+	it("multiple mutating anchors all rebasing is rejected as a miscounted block edit", () => {
+		// Simulate the failure mode: agent stacked `Lid=X` over a contiguous range
+		// whose actual position drifted (insertion shifted everything by 1). All
+		// three mutating anchors need rebasing — this is the signature of a block
+		// edit done with the wrong recipe.
+		const content = "aaa\nINSERTED\nbbb\nccc\nddd";
+		const t2 = tag(2, "bbb"); // bbb is actually at line 3
+		const t3 = tag(3, "ccc"); // ccc is actually at line 4
+		const t4 = tag(4, "ddd"); // ddd is actually at line 5
+		const diff = `${t2}=BBB\n${t3}=CCC\n${t4}=DDD`;
+		expect(() => applyAtomEdits(content, parseAtom(diff))).toThrow(/auto-rebase/);
+	});
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -651,6 +672,73 @@ describe("atom executor — whole-file operations", () => {
 				/!mv requires exactly one non-empty destination path/,
 			);
 		});
+	});
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Heuristic: post-edit duplicate-line detection
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("applyAtomEdits — adjacent duplicate detection", () => {
+	it("auto-fixes a duplicate line when removing it restores bracket balance", () => {
+		// Original: function on lines 3-5, single `}` at line 5.
+		const content = "const X = 1;\n\nexport function f() {\n\treturn X;\n}";
+		// Botched block rewrite: delete only the declaration + body, not the closing
+		// brace. Insert a replacement that includes its own `}`. Without auto-fix
+		// the result would have `}\n}` and brace balance off by one.
+		const t3 = tag(3, "export function f() {");
+		const t4 = tag(4, "\treturn X;");
+		const diff = `-${t3}\n-${t4}\n+export function f(): number {\n+\treturn X * 2;\n+}`;
+		const result = applyAtomEdits(content, parseAtom(diff));
+		expect(result.lines).toBe("const X = 1;\n\nexport function f(): number {\n\treturn X * 2;\n}");
+		expect(result.warnings ?? []).toEqual(
+			expect.arrayContaining([expect.stringMatching(/Auto-fixed: removed duplicate line/)]),
+		);
+	});
+
+	it("auto-fixes a duplicated function signature (missed leading delete)", () => {
+		// Original: function on lines 2-4. Block rewrite forgets to delete the
+		// original signature on line 2 and inserts a new one, producing two
+		// adjacent identical `export function f() {` lines and an extra `{`.
+		const content = "alpha\nexport function f() {\n\treturn 1;\n}\nbeta";
+		const t3 = tag(3, "\treturn 1;");
+		const t4 = tag(4, "}");
+		const diff = `-${t3}\n-${t4}\n+export function f() {\n+\treturn 2;\n+}`;
+		const result = applyAtomEdits(content, parseAtom(diff));
+		expect(result.lines).toBe("alpha\nexport function f() {\n\treturn 2;\n}\nbeta");
+		expect(result.warnings ?? []).toEqual(
+			expect.arrayContaining([expect.stringMatching(/Auto-fixed: removed duplicate line/)]),
+		);
+	});
+
+	it("warns but does not auto-fix when bracket balance is unchanged", () => {
+		// Insert a duplicate non-bracket line — balance is unaffected so we cannot
+		// safely decide which copy to remove. Should warn only.
+		const content = "alpha\nbeta\ngamma";
+		const t1 = tag(1, "alpha");
+		const result = applyAtomEdits(content, parseAtom(`@${t1}\n+alpha`));
+		expect(result.lines).toBe("alpha\nalpha\nbeta\ngamma");
+		expect(result.warnings ?? []).toEqual(expect.arrayContaining([expect.stringMatching(/Suspicious duplicate/)]));
+	});
+
+	it("does not warn when the original already had adjacent duplicates", () => {
+		// Original has `\t}\n\t}` (nested closing braces). Edit doesn't add new pairs.
+		const content = "fn outer() {\n\tfn inner() {\n\t\treturn 1;\n\t}\n}";
+		const t3 = tag(3, "\t\treturn 1;");
+		const result = applyAtomEdits(content, parseAtom(`${t3}=\t\treturn 2;`));
+		expect(result.warnings ?? []).not.toEqual(
+			expect.arrayContaining([expect.stringMatching(/Suspicious duplicate/)]),
+		);
+	});
+
+	it("does not warn on adjacent blank lines", () => {
+		const content = "a\nb\nc";
+		// Insert two blank lines after line 1 — adjacent blanks should be ignored.
+		const t1 = tag(1, "a");
+		const result = applyAtomEdits(content, parseAtom(`@${t1}\n+\n+`));
+		expect(result.warnings ?? []).not.toEqual(
+			expect.arrayContaining([expect.stringMatching(/Suspicious duplicate/)]),
+		);
 	});
 });
 

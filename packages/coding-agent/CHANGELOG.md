@@ -1,6 +1,22 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Rejected atom diffs with unrecognized operations (including lone '-' lines) by throwing parse errors instead of treating them as inserts
+
+### Added
+
+- Added duplicate-line post-edit detection that warns on newly introduced adjacent identical lines and auto-removes one duplicate when bracket-balance is restored
+- Added a warning when suspicious adjacent duplicates are introduced after edits so users can review potential stale-line issues
+
+### Changed
+
+- Changed anchor rebase handling to fail when multiple mutating anchors would need auto-rebase, preventing silent misapplied contiguous block rewrites
+
+### Fixed
+
+- Fixed bracket-corruption caused by botched block rewrites by automatically removing a newly introduced duplicate adjacent line when removing it restores the original `{}`, `()`, and `[]` balance and by warning when automatic removal is unsafe
 
 ## [14.5.4] - 2026-04-28
 ### Breaking Changes

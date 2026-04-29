@@ -226,9 +226,7 @@ function parseDiffLine(raw: string, lineNum: number): ParsedStmt[] {
 	if (line[0] === "-") {
 		const parsed = parseDeleteStmt(line.slice(1), lineNum);
 		if (parsed) return parsed;
-		// Lenient: a stray `-` line with no Lid becomes a `+` insert that
-		// preserves the leading dash so we don't lose data.
-		return [{ kind: "insert", text: line, lineNum }];
+		throw new Error(`Diff line ${lineNum}: \`-\` must be followed by a Lid (e.g. \`-5xx\`). Got "${raw}".`);
 	}
 
 	// Legacy move prefix. Runtime accepts old locators and common slipped edit
@@ -267,9 +265,13 @@ function parseDiffLine(raw: string, lineNum: number): ParsedStmt[] {
 		throwMalformedLidDiagnostic(line, lineNum, raw);
 	}
 
-	// Lenient catch-all: lines that don't match any recognized prefix become
-	// inserts at the cursor.
-	return [{ kind: "insert", text: line, lineNum }];
+	// Reject any line that doesn't match a recognized op. Common case: a model
+	// emitted multi-line content after a `Lid=` or similar without `+` prefixes,
+	// or pasted raw context. Silently treating these as inserts corrupts files.
+	const preview = line.length > 80 ? `${line.slice(0, 80)}…` : line;
+	throw new Error(
+		`Diff line ${lineNum}: unrecognized op. Lines must start with \`+\`, \`-\`, \`@\`, \`$\`, \`^\`, or a Lid (\`Lid=TEXT\`). To insert literal text use \`+TEXT\`. Got "${preview}".`,
+	);
 }
 
 function tokenizeDiff(diff: string): ParsedStmt[] {
@@ -475,6 +477,7 @@ function getAtomEditAnchors(edit: AtomEdit): Anchor[] {
 function validateAtomAnchors(edits: AtomEdit[], fileLines: string[], warnings: string[]): HashMismatch[] {
 	const mismatches: HashMismatch[] = [];
 	const rebasedAnchors = new Map<Anchor, HashMismatch>();
+	const rebasedMutatingAnchors: { original: string; rebased: number; hash: string }[] = [];
 	for (const edit of edits) {
 		for (const anchor of getAtomEditAnchors(edit)) {
 			if (anchor.line < 1 || anchor.line > fileLines.length) {
@@ -488,6 +491,9 @@ function validateAtomAnchors(edits: AtomEdit[], fileLines: string[], warnings: s
 				const original = `${anchor.line}${anchor.hash}`;
 				rebasedAnchors.set(anchor, { line: anchor.line, expected: anchor.hash, actual: actualHash });
 				anchor.line = rebased;
+				if (edit.kind === "set" || edit.kind === "delete") {
+					rebasedMutatingAnchors.push({ original, rebased, hash: anchor.hash });
+				}
 				warnings.push(
 					`Auto-rebased anchor ${original} → ${rebased}${anchor.hash} (line shifted within ±${ANCHOR_REBASE_WINDOW}; hash matched).`,
 				);
@@ -495,6 +501,20 @@ function validateAtomAnchors(edits: AtomEdit[], fileLines: string[], warnings: s
 			}
 			mismatches.push({ line: anchor.line, expected: anchor.hash, actual: actualHash });
 		}
+	}
+
+	// Rebase cap: a single stale anchor (e.g. unrelated upstream edit) is fine,
+	// but multiple mutating anchors all rebasing is the signature of a miscounted
+	// block edit (agent stacked `Lid=X` ops over a contiguous range whose new
+	// length differs from the old). Refuse so the agent retries with the
+	// `-Lid`+`+TEXT` block-rewrite recipe instead of silently corrupting the file.
+	if (rebasedMutatingAnchors.length > 1) {
+		const detail = rebasedMutatingAnchors.map(r => `${r.original} → ${r.rebased}${r.hash}`).join(", ");
+		throw new Error(
+			`Refusing edit: ${rebasedMutatingAnchors.length} mutating anchors needed auto-rebase (${detail}). ` +
+				"This usually means a `Lid=X` chain was used to rewrite a contiguous block whose new length differs from the old. " +
+				"Rewrite the block by deleting each original line with `-Lid` (one per line) and emitting the new content as `+TEXT` lines.",
+		);
 	}
 
 	// Detect post-rebase conflicts. If any conflicting anchor was rebased, surface
@@ -609,12 +629,104 @@ function getAnchorForAnchorEdit(edit: IndexedAnchorEdit["edit"]): Anchor {
 	return edit.cursor.anchor;
 }
 
+// Heuristic: detect (and when safe, auto-fix) lines that became adjacent
+// duplicates of themselves after the edit, when they were not adjacent
+// duplicates before. This is the signature of a botched block rewrite that
+// missed one delete on the front or back of the deletion range, leaving a
+// stale copy of a line the agent already re-emitted (e.g. inserting a new
+// closing `}` while the original `}` was never deleted, producing `}\n}`).
+//
+// Auto-fix is gated on bracket balance: we only remove the duplicate line if
+// its removal restores the original file's `{}`/`()`/`[]` delta. That makes
+// the fix safe in the common case (a stray closing brace shifts balance by
+// one) and conservative when the duplicate is intentional (balance unchanged
+// → warning only). When two adjacent lines are textually identical, removing
+// either yields the same content, so we don't have to decide which is "the
+// stale copy" — we just remove one and verify balance restores.
+function detectAndAutoFixDuplicates(
+	originalLines: string[],
+	finalLines: string[],
+): { fixed: string[] | null; warnings: string[] } {
+	const countAdjacent = (lines: string[]): Map<string, number> => {
+		const counts = new Map<string, number>();
+		for (let i = 0; i + 1 < lines.length; i++) {
+			if (lines[i] !== lines[i + 1]) continue;
+			if (lines[i].trim().length === 0) continue;
+			counts.set(lines[i], (counts.get(lines[i]) ?? 0) + 1);
+		}
+		return counts;
+	};
+
+	const computeBalance = (lines: string[]): { brace: number; paren: number; bracket: number } => {
+		let brace = 0;
+		let paren = 0;
+		let bracket = 0;
+		for (const line of lines) {
+			for (const ch of line) {
+				if (ch === "{") brace++;
+				else if (ch === "}") brace--;
+				else if (ch === "(") paren++;
+				else if (ch === ")") paren--;
+				else if (ch === "[") bracket++;
+				else if (ch === "]") bracket--;
+			}
+		}
+		return { brace, paren, bracket };
+	};
+
+	const balancesEqual = (
+		a: { brace: number; paren: number; bracket: number },
+		b: { brace: number; paren: number; bracket: number },
+	): boolean => a.brace === b.brace && a.paren === b.paren && a.bracket === b.bracket;
+
+	const orig = countAdjacent(originalLines);
+	const fin = countAdjacent(finalLines);
+	const newDupPositions: number[] = [];
+	for (let i = 0; i + 1 < finalLines.length; i++) {
+		if (finalLines[i] !== finalLines[i + 1]) continue;
+		if (finalLines[i].trim().length === 0) continue;
+		const text = finalLines[i];
+		if ((fin.get(text) ?? 0) <= (orig.get(text) ?? 0)) continue;
+		newDupPositions.push(i);
+	}
+
+	if (newDupPositions.length === 0) return { fixed: null, warnings: [] };
+
+	const formatPreview = (text: string): string => JSON.stringify(text.length > 60 ? `${text.slice(0, 60)}…` : text);
+
+	// Auto-fix only when there is exactly one new adjacent duplicate AND the
+	// edit shifted bracket balance. Removing one of the two identical lines
+	// must restore the original delta exactly.
+	if (newDupPositions.length === 1) {
+		const pos = newDupPositions[0];
+		const origBalance = computeBalance(originalLines);
+		const finalBalance = computeBalance(finalLines);
+		if (!balancesEqual(origBalance, finalBalance)) {
+			const trial = finalLines.slice(0, pos).concat(finalLines.slice(pos + 1));
+			if (balancesEqual(computeBalance(trial), origBalance)) {
+				return {
+					fixed: trial,
+					warnings: [
+						`Auto-fixed: removed duplicate line ${pos + 1} (${formatPreview(finalLines[pos])}); the edit left two adjacent identical lines and bracket balance was off. Verify the result.`,
+					],
+				};
+			}
+		}
+	}
+
+	const warnings = newDupPositions.slice(0, 3).map(pos => {
+		return `Suspicious duplicate: lines ${pos + 1} and ${pos + 2} are both ${formatPreview(finalLines[pos])}. The edit may have left a stale copy of a line you meant to replace — verify the result.`;
+	});
+	return { fixed: null, warnings };
+}
+
 export function applyAtomEdits(text: string, edits: AtomEdit[]): AtomApplyResult {
 	if (edits.length === 0) {
 		return { lines: text, firstChangedLine: undefined };
 	}
 
 	const fileLines = text.split("\n");
+	const originalLines = fileLines.slice();
 	const warnings: string[] = [];
 	let firstChangedLine: number | undefined;
 	const noopEdits: AtomNoopEdit[] = [];
@@ -715,6 +827,13 @@ export function applyAtomEdits(text: string, edits: AtomEdit[]): AtomApplyResult
 
 	const fileFirstChangedLine = applyFileCursorInserts(fileLines, fileInserts);
 	if (fileFirstChangedLine !== undefined) trackFirstChanged(fileFirstChangedLine);
+
+	const dupCheck = detectAndAutoFixDuplicates(originalLines, fileLines);
+	if (dupCheck.fixed !== null) {
+		fileLines.length = 0;
+		fileLines.push(...dupCheck.fixed);
+	}
+	for (const w of dupCheck.warnings) warnings.push(w);
 
 	return {
 		lines: fileLines.join("\n"),

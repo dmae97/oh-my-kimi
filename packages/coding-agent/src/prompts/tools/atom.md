@@ -20,6 +20,7 @@ Lid=X    replace whole line with X; `Lid=` blanks it out
 - Ops starting with `$` / `^` / `@Lid` do not alter lines; you must still issue an op like `+` afterwards.
 - Consecutive `+X` ops insert consecutive lines.
 - `Lid=X` replaces the whole line. X must be the complete new line, not a fragment.
+- To rewrite multiple adjacent lines, delete each with `-Lid` then emit the new content as `+TEXT` lines. Do not stack `Lid=X` over a contiguous range — it requires the new block to match the old line count and silently corrupts the file when they differ.
 </rules>
 
 <case file="a.ts">
@@ -35,6 +36,16 @@ Lid=X    replace whole line with X; `Lid=` blanks it out
 # Replace line
 ---a.ts
 {{hrefr 5}}=	return clean.trim().toUpperCase();
+
+# Rewrite multiple adjacent lines (delete the old, insert the new)
+---a.ts
+-{{hrefr 3}}
+-{{hrefr 4}}
+-{{hrefr 5}}
+-{{hrefr 6}}
++export function label(name: string): string {
++	return (name || DEF).trim().toUpperCase();
++}
 
 # Append after
 ---a.ts
@@ -79,4 +90,5 @@ $
 - Only emit lines that change. Never repeat unchanged context — anchors imply it.
 - This is **NOT** unified diff. Never send `@@`, `-OLD` / `+NEW` pairs, or unchanged context.
 - Never split `Lid=TEXT` across two physical lines.
+- Never stack `Lid=X` over a contiguous range. Use `-Lid`+`+TEXT` for block rewrites.
 </critical>
