@@ -67,7 +67,9 @@ describe("recipe", () => {
 	});
 
 	it("resolves bare unique tasks and preserves forwarded args", () => {
-		expect(resolveCommand("build   --release --flag", detectedRunners)).toBe("just build --release --flag");
+		expect(resolveCommand("build   --release --flag", detectedRunners)).toEqual({
+			command: "just build --release --flag",
+		});
 	});
 
 	it("requires runner id when a bare task is ambiguous", () => {
@@ -76,19 +78,34 @@ describe("recipe", () => {
 	});
 
 	it("allows colon-containing task names when the prefix is not a runner id", () => {
-		expect(resolveCommand("test:unit --watch", detectedRunners)).toBe("bun run test:unit --watch");
+		expect(resolveCommand("test:unit --watch", detectedRunners)).toEqual({ command: "bun run test:unit --watch" });
 	});
 
 	it("routes explicit runner-prefixed tasks", () => {
-		expect(resolveCommand("pkg:test --watch", detectedRunners)).toBe("bun run test --watch");
+		expect(resolveCommand("pkg:test --watch", detectedRunners)).toEqual({ command: "bun run test --watch" });
 		expect(titleFromOp("pkg:test", detectedRunners)).toBe("Pkg");
 	});
 
 	it("routes namespaced tasks through task-specific command prefixes", () => {
-		expect(resolveCommand("pkg:test --watch", detectedRunners)).toBe("bun run test --watch");
-		expect(resolveCommand("cargo:server/bin/serve -- --port 0", detectedRunners)).toBe(
-			"cargo run --package 'server' --bin 'serve' -- --port 0",
-		);
+		expect(resolveCommand("pkg:test --watch", detectedRunners)).toEqual({ command: "bun run test --watch" });
+		expect(resolveCommand("cargo:server/bin/serve -- --port 0", detectedRunners)).toEqual({
+			command: "cargo run --package 'server' --bin 'serve' -- --port 0",
+		});
+	});
+
+	it("propagates per-task cwd through resolveCommand", () => {
+		const runners: DetectedRunner[] = [
+			{
+				id: "pkg",
+				label: "Pkg",
+				commandPrefix: "bun run",
+				tasks: [{ name: "pkg-a/test", parameters: [], cwd: "packages/pkg-a", commandName: "'test'" }],
+			},
+		];
+		expect(resolveCommand("pkg-a/test --watch", runners)).toEqual({
+			command: "bun run 'test' --watch",
+			cwd: "packages/pkg-a",
+		});
 	});
 
 	it("returns renderer fallbacks for unresolved or streaming ops", () => {
@@ -135,8 +152,10 @@ describe("recipe", () => {
 			"crate-b/bin/worker",
 		]);
 		expect(
-			resolveCommand("cargo:crate-a/example/demo", [{ id: "cargo", label: "Cargo", commandPrefix: "cargo", tasks }]),
-		).toBe("cargo run --package 'crate-a' --example 'demo'");
+			resolveCommand("cargo:crate-a/example/demo", [
+				{ id: "cargo", label: "Cargo", commandPrefix: "cargo", tasks },
+			]),
+		).toEqual({ command: "cargo run --package 'crate-a' --example 'demo'" });
 	});
 
 	it("detects package scripts and forwards execution through bash", async () => {

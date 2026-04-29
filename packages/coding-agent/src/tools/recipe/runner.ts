@@ -9,6 +9,8 @@ export interface RunnerTask {
 	commandPrefix?: string;
 	/** Token passed to the runner command; defaults to `name`. Used when display names are namespaced. */
 	commandName?: string;
+	/** Working directory for the task, relative to the session cwd; absent means the runner's root cwd. */
+	cwd?: string;
 }
 
 export interface DetectedRunner {
@@ -39,6 +41,7 @@ interface PromptTaskModel {
 	paramSig?: string;
 	command?: string;
 	doc?: string;
+	cwd?: string;
 }
 
 interface PromptRunnerModel {
@@ -136,18 +139,32 @@ function resolveRunnerAndTask(
 	);
 }
 
-export function resolveCommand(op: string, runners: DetectedRunner[]): string {
-	const { runner, task, tail } = resolveRunnerAndTask(op, runners);
-	return buildCommand(task.commandPrefix ?? runner.commandPrefix, task.commandName ?? task.name, tail);
+export interface ResolvedTask {
+	command: string;
+	cwd?: string;
 }
 
-export function commandFromOp(op: string | undefined, runners: DetectedRunner[]): string | undefined {
+export function resolveCommand(op: string, runners: DetectedRunner[]): ResolvedTask {
+	const { runner, task, tail } = resolveRunnerAndTask(op, runners);
+	const command = buildCommand(task.commandPrefix ?? runner.commandPrefix, task.commandName ?? task.name, tail);
+	return task.cwd ? { command, cwd: task.cwd } : { command };
+}
+
+export function resolveTaskFromOp(op: string | undefined, runners: DetectedRunner[]): ResolvedTask | undefined {
 	if (!op) return undefined;
 	try {
 		return resolveCommand(op, runners);
 	} catch {
 		return undefined;
 	}
+}
+
+export function commandFromOp(op: string | undefined, runners: DetectedRunner[]): string | undefined {
+	return resolveTaskFromOp(op, runners)?.command;
+}
+
+export function cwdFromOp(op: string | undefined, runners: DetectedRunner[]): string | undefined {
+	return resolveTaskFromOp(op, runners)?.cwd;
 }
 
 export function titleFromOp(op: string | undefined, runners: DetectedRunner[]): string {
@@ -192,6 +209,7 @@ export function buildPromptModel(runners: DetectedRunner[]): RecipePromptModel {
 				paramSig: task.parameters.length > 0 ? task.parameters.join(" ") : undefined,
 				command: buildCommand(task.commandPrefix ?? runner.commandPrefix, task.commandName ?? task.name, ""),
 				doc: task.doc,
+				cwd: task.cwd,
 			})),
 		})),
 	};

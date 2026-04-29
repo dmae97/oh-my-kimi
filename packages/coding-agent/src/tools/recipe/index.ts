@@ -71,8 +71,8 @@ export class RecipeTool implements AgentTool<typeof recipeSchema, BashToolDetail
 		onUpdate?: AgentToolUpdateCallback<BashToolDetails>,
 		ctx?: AgentToolContext,
 	): Promise<AgentToolResult<BashToolDetails>> {
-		const command = resolveCommand(op, this.#runners);
-		return await this.#bash.execute(toolCallId, { command }, signal, onUpdate, ctx);
+		const { command, cwd } = resolveCommand(op, this.#runners);
+		return await this.#bash.execute(toolCallId, { command, cwd }, signal, onUpdate, ctx);
 	}
 }
 

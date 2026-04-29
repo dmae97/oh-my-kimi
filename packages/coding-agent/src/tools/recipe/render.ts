@@ -1,6 +1,6 @@
 import { createShellRenderer } from "../bash";
 import type { DetectedRunner } from "./runner";
-import { commandFromOp, titleFromOp } from "./runner";
+import { commandFromOp, cwdFromOp, titleFromOp } from "./runner";
 
 export interface RecipeRenderArgs {
 	op?: string;
@@ -12,6 +12,7 @@ export function createRecipeToolRenderer(runners: DetectedRunner[]) {
 	return createShellRenderer<RecipeRenderArgs>({
 		resolveTitle: args => titleFromOp(args?.op, runners),
 		resolveCommand: args => commandFromOp(args?.op, runners),
+		resolveCwd: args => cwdFromOp(args?.op, runners),
 	});
 }
 

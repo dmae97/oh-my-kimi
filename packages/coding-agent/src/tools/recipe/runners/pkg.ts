@@ -9,9 +9,23 @@ interface PackageJsonInfo {
 	workspaces: string[];
 }
 
-interface PackageCommandInfo {
-	rootCommandPrefix: string;
-	workspaceCommandPrefix: (relativeDir: string) => string;
+async function resolvePackageRunner(cwd: string): Promise<string> {
+	if ((await isFile(path.join(cwd, "bun.lock"))) || (await isFile(path.join(cwd, "bun.lockb")))) {
+		return "bun run";
+	}
+	if (await isFile(path.join(cwd, "pnpm-lock.yaml"))) {
+		return "pnpm run";
+	}
+	if (await isFile(path.join(cwd, "yarn.lock"))) {
+		return "yarn";
+	}
+	if ((await isFile(path.join(cwd, "package-lock.json"))) || (await isFile(path.join(cwd, "npm-shrinkwrap.json")))) {
+		return "npm run";
+	}
+	if ($which("bun")) {
+		return "bun run";
+	}
+	return "npm run";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -30,43 +44,6 @@ async function isFile(filePath: string): Promise<boolean> {
 		if (isEnoent(err)) return false;
 		throw err;
 	}
-}
-
-async function resolvePackageRunner(cwd: string): Promise<PackageCommandInfo> {
-	if ((await isFile(path.join(cwd, "bun.lock"))) || (await isFile(path.join(cwd, "bun.lockb")))) {
-		return {
-			rootCommandPrefix: "bun run",
-			workspaceCommandPrefix: relativeDir => `bun --cwd ${shellQuote(relativeDir)} run`,
-		};
-	}
-	if (await isFile(path.join(cwd, "pnpm-lock.yaml"))) {
-		return {
-			rootCommandPrefix: "pnpm run",
-			workspaceCommandPrefix: relativeDir => `pnpm --dir ${shellQuote(relativeDir)} run`,
-		};
-	}
-	if (await isFile(path.join(cwd, "yarn.lock"))) {
-		return {
-			rootCommandPrefix: "yarn",
-			workspaceCommandPrefix: relativeDir => `yarn --cwd ${shellQuote(relativeDir)}`,
-		};
-	}
-	if ((await isFile(path.join(cwd, "package-lock.json"))) || (await isFile(path.join(cwd, "npm-shrinkwrap.json")))) {
-		return {
-			rootCommandPrefix: "npm run",
-			workspaceCommandPrefix: relativeDir => `npm --prefix ${shellQuote(relativeDir)} run`,
-		};
-	}
-	if ($which("bun")) {
-		return {
-			rootCommandPrefix: "bun run",
-			workspaceCommandPrefix: relativeDir => `bun --cwd ${shellQuote(relativeDir)} run`,
-		};
-	}
-	return {
-		rootCommandPrefix: "npm run",
-		workspaceCommandPrefix: relativeDir => `npm --prefix ${shellQuote(relativeDir)} run`,
-	};
 }
 
 function parseWorkspacePatterns(pkg: Record<string, unknown>): string[] {
@@ -132,19 +109,18 @@ function packageTaskName(packageName: string | undefined, packageDir: string, sc
 function tasksForPackage(options: {
 	pkg: PackageJsonInfo;
 	packageDir: string;
-	commandPrefix: string;
 	namespaced: boolean;
 }): RunnerTask[] {
 	return options.pkg.scripts.map(scriptName => ({
 		name: options.namespaced ? packageTaskName(options.pkg.name, options.packageDir, scriptName) : scriptName,
 		doc: options.namespaced ? options.packageDir : undefined,
 		parameters: [],
-		commandPrefix: options.commandPrefix,
+		cwd: options.namespaced ? options.packageDir : undefined,
 		commandName: shellQuote(scriptName),
 	}));
 }
 
-async function readPackageTasks(cwd: string, commandInfo: PackageCommandInfo): Promise<RunnerTask[] | null> {
+async function readPackageTasks(cwd: string): Promise<RunnerTask[] | null> {
 	const rootPkg = await readPackageJson(path.join(cwd, "package.json"));
 	if (!rootPkg) return null;
 	const workspacePackageJsons = await findWorkspacePackageJsons(cwd, rootPkg.workspaces);
@@ -155,7 +131,6 @@ async function readPackageTasks(cwd: string, commandInfo: PackageCommandInfo): P
 			...tasksForPackage({
 				pkg: rootPkg,
 				packageDir: ".",
-				commandPrefix: commandInfo.rootCommandPrefix,
 				namespaced: false,
 			}),
 		);
@@ -169,7 +144,6 @@ async function readPackageTasks(cwd: string, commandInfo: PackageCommandInfo): P
 			...tasksForPackage({
 				pkg,
 				packageDir,
-				commandPrefix: commandInfo.workspaceCommandPrefix(packageDir),
 				namespaced: true,
 			}),
 		);
@@ -183,10 +157,10 @@ export const pkgRunner: TaskRunner = {
 	label: "Pkg",
 	async detect(cwd: string): Promise<DetectedRunner | null> {
 		try {
-			const commandInfo = await resolvePackageRunner(cwd);
-			const tasks = await readPackageTasks(cwd, commandInfo);
+			const commandPrefix = await resolvePackageRunner(cwd);
+			const tasks = await readPackageTasks(cwd);
 			if (!tasks || tasks.length === 0) return null;
-			return { id: "pkg", label: "Pkg", commandPrefix: commandInfo.rootCommandPrefix, tasks };
+			return { id: "pkg", label: "Pkg", commandPrefix, tasks };
 		} catch (err) {
 			logger.debug("package runner probe failed", { error: err instanceof Error ? err.message : String(err) });
 			return null;
