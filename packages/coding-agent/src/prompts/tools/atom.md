@@ -7,8 +7,8 @@ A Lid is the anchor emitted in read/grep etc. (line number + id, e.g. `5th`).
 ---PATH  start editing PATH with cursor at EOF
 !rm      delete PATH
 !mv X    move file to X
-$        move cursor to BOF
-^        move cursor to EOF
+^        move cursor to BOF
+$        move cursor to EOF
 @Lid     move cursor after Lid
 +X       insert X at the cursor; `+` alone inserts a blank line
 Lid=X    replace whole line with X; `Lid=` blanks it out
@@ -58,10 +58,10 @@ Lid=X    replace whole line with X; `Lid=` blanks it out
 
 # Prepend and append
 ---a.ts
-$
+^
 +// Copyright (c) 2026
 +
-^
+$
 +export { DEF };
 
 # File ops

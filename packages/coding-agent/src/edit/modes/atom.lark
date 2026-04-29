@@ -20,7 +20,7 @@ destination: /(?:[^ \t\r\n]+|"[^"\r\n]+"|'[^'\r\n]+')/
 insert_line: "+" /(.*)/ LF
 delete_line: "-" LID LF
 set_line: LID "=" /(.*)/ LF
-move_line: ("@" LID | "$" | "^") LF
+move_line: ("@" LID | "^" | "$") LF
 
 LID: /[1-9][0-9]*[a-z]{2}/
 WS: /[ \t]+/

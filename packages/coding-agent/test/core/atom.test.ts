@@ -76,13 +76,13 @@ describe("atom parser — basic forms", () => {
 		expect(applyDiff(content, diff)).toBe("aaa\nbbb\nINSERTED\nccc");
 	});
 
-	it("$ + + lines prepend to the file", () => {
-		const diff = `$\n+ZZZ\n+YYY`;
+	it("^ + + lines prepend to the file", () => {
+		const diff = `^\n+ZZZ\n+YYY`;
 		expect(applyDiff(content, diff)).toBe("ZZZ\nYYY\naaa\nbbb\nccc");
 	});
 
-	it("^ + + lines append to the file", () => {
-		const diff = `^\n+DDD\n+EEE`;
+	it("$ + + lines append to the file", () => {
+		const diff = `$\n+DDD\n+EEE`;
 		expect(applyDiff(content, diff)).toBe("aaa\nbbb\nccc\nDDD\nEEE");
 	});
 
@@ -525,9 +525,9 @@ describe("parseAtom — emits internal AtomEdit shapes", () => {
 		expect(edits[0]).toMatchObject({ kind: "delete", anchor: { line: 2 } });
 	});
 
-	it("emits EOF cursor insert for ^ + +", () => {
+	it("emits BOF cursor insert for ^ + +", () => {
 		const edits = parseAtom(`^\n+x`);
-		expect(edits).toMatchObject([{ kind: "insert", cursor: { kind: "eof" }, text: "x" }]);
+		expect(edits).toMatchObject([{ kind: "insert", cursor: { kind: "bof" }, text: "x" }]);
 	});
 
 	it("emits EOF cursor insert for bare + +", () => {
@@ -535,9 +535,9 @@ describe("parseAtom — emits internal AtomEdit shapes", () => {
 		expect(edits).toMatchObject([{ kind: "insert", cursor: { kind: "eof" }, text: "x" }]);
 	});
 
-	it("emits BOF cursor insert for $ + +", () => {
+	it("emits EOF cursor insert for $ + +", () => {
 		const edits = parseAtom(`$\n+x`);
-		expect(edits).toMatchObject([{ kind: "insert", cursor: { kind: "bof" }, text: "x" }]);
+		expect(edits).toMatchObject([{ kind: "insert", cursor: { kind: "eof" }, text: "x" }]);
 	});
 
 	it("delete + set on same anchor is rejected by validateNoConflictingAnchorOps", () => {

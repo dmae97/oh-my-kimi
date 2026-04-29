@@ -8,8 +8,8 @@
  *   Lid=TEXT                set the anchored line to TEXT and move cursor after it
  *   -Lid                    delete the anchored line and move cursor to its slot
  *   +TEXT                   insert TEXT at the cursor
- *   $                       move cursor to beginning of file
- *   ^                       move cursor to end of file
+ *   ^                       move cursor to beginning of file
+ *   $                       move cursor to end of file
  */
 
 import * as fs from "node:fs/promises";
@@ -237,8 +237,8 @@ function parseDiffLine(raw: string, lineNum: number): ParsedStmt[] {
 	}
 
 	// Canonical file-scope locators.
-	if (line === "$") return [{ kind: "bof", lineNum }];
-	if (line === "^") return [{ kind: "eof", lineNum }];
+	if (line === "^") return [{ kind: "bof", lineNum }];
+	if (line === "$") return [{ kind: "eof", lineNum }];
 
 	// `-Lid` deletes the anchored line. Leniently accept `- Lid` and the
 	// historical `-Lid TEXT` delete-then-insert recovery.
@@ -268,8 +268,8 @@ function parseDiffLine(raw: string, lineNum: number): ParsedStmt[] {
 	// `@Lid|TEXT`, `@$`, and `@^`.
 	if (line[0] === "@") {
 		const body = line.slice(1);
-		if (body === "$") return [{ kind: "bof", lineNum }];
-		if (body === "^") return [{ kind: "eof", lineNum }];
+		if (body === "^") return [{ kind: "bof", lineNum }];
+		if (body === "$") return [{ kind: "eof", lineNum }];
 		const lidStmt = parseLidStmt(body, lineNum);
 		if (lidStmt) return [lidStmt];
 		throwMalformedLidDiagnostic(line, lineNum, raw);
