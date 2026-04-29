@@ -110,6 +110,22 @@ describe("HookEditorComponent default (hook) mode", () => {
 		expect(onCancel).not.toHaveBeenCalled();
 	});
 
+	it("submits Ctrl+Enter variants with NumLock or keypad Enter metadata", () => {
+		const variants = ["\x1b[13;133u", "\x1b[57414;5u", "\x1b[57414;133u"];
+
+		for (const variant of variants) {
+			const onSubmit = vi.fn();
+			const onCancel = vi.fn();
+			const component = new HookEditorComponent(createTui(), "Prompt", "draft", onSubmit, onCancel);
+
+			component.handleInput(variant);
+
+			expect(onSubmit).toHaveBeenCalledTimes(1);
+			expect(onSubmit).toHaveBeenCalledWith("draft");
+			expect(onCancel).not.toHaveBeenCalled();
+		}
+	});
+
 	it("cancels on Escape", () => {
 		const onSubmit = vi.fn();
 		const onCancel = vi.fn();

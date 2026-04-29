@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed editor Ctrl+Enter handling to recognize NumLock and keypad Enter variants.
+
 ## [14.3.0] - 2026-04-25
 
 ### Fixed

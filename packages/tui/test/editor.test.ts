@@ -414,6 +414,20 @@ describe("Editor component", () => {
 			expect(editor.getText()).toBe("a1");
 		});
 
+		it("inserts a newline for Ctrl+Enter variants with NumLock or keypad Enter metadata", () => {
+			const variants = ["\x1b[13;133u", "\x1b[57414;5u", "\x1b[57414;133u"];
+
+			for (const variant of variants) {
+				const editor = new Editor(defaultEditorTheme);
+
+				editor.handleInput("a");
+				editor.handleInput(variant);
+				editor.handleInput("b");
+
+				expect(editor.getText()).toBe("a\nb");
+			}
+		});
+
 		it("deletes single-code-unit unicode characters (umlauts) with Backspace", () => {
 			const editor = new Editor(defaultEditorTheme);
 
