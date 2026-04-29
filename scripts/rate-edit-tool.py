@@ -51,9 +51,8 @@ from omp_rpc import (  # noqa: E402
 MODELS = [
     "openrouter/moonshotai/kimi-k2.5",
     "openrouter/anthropic/claude-haiku-4.5",
-    "openrouter/anthropic/claude-sonnet-4.6",
-    "openrouter/z-ai/glm-5-turbo",
-    "openrouter/minimax/minimax-m2.7",
+    "openrouter/z-ai/glm-4.7",
+    "openai-codex/gpt-5.4"
 ]
 
 ORACLE_MODEL = "openrouter/anthropic/claude-opus-4.6"
@@ -1825,6 +1824,18 @@ def oracle_sources_from_dir(results_dir: Path) -> list[tuple[str, str, str]]:
     return sources
 
 
+def format_combined_reviews(sources: list[tuple[str, str, str]]) -> str:
+    sections: list[str] = []
+    for model, _fixture, review_path in sorted(sources):
+        review_text = Path(review_path).read_text(encoding="utf-8").strip()
+        if not review_text:
+            continue
+        bar = "=" * 13
+        header = f"{bar} {model} {bar}"
+        sections.append(f"{header}\n\n{review_text}")
+    return "\n\n".join(sections)
+
+
 def run_oracle_review_sync(
     *,
     model: str,
@@ -1884,9 +1895,19 @@ def parse_args() -> argparse.Namespace:
         help="Model used to synthesize findings across all reviews.",
     )
     parser.add_argument(
+        "--oracle",
+        action="store_true",
+        help="Synthesize findings across reviews using --oracle-model (default: skip synthesis and emit combined reviews).",
+    )
+    parser.add_argument(
         "--rerun-oracle",
         dest="rerun_oracle",
         help="Skip fixture runs and only synthesize against review_*.md files in this existing results dir.",
+    )
+    parser.add_argument(
+        "--rerun",
+        dest="rerun",
+        help="Skip fixture runs and emit combined reviews from review_*.md files in this existing results dir.",
     )
     return parser.parse_args()
 
@@ -1894,8 +1915,9 @@ def parse_args() -> argparse.Namespace:
 async def run_all(args: argparse.Namespace) -> int:
     omp_bin = resolve_omp_bin(args.omp_bin)
 
-    if args.rerun_oracle:
-        results_dir = Path(args.rerun_oracle).expanduser()
+    if args.rerun or args.rerun_oracle:
+        rerun_path = args.rerun_oracle or args.rerun
+        results_dir = Path(rerun_path).expanduser()
         if not results_dir.is_dir():
             print(f"Results dir not found: {results_dir}", file=sys.stderr)
             return 1
@@ -1903,22 +1925,27 @@ async def run_all(args: argparse.Namespace) -> int:
         if not sources:
             print(f"No review_*.md files found in {results_dir}", file=sys.stderr)
             return 1
-        try:
-            synthesis = await asyncio.to_thread(
-                run_oracle_review_sync,
-                model=args.oracle_model,
-                omp_bin=omp_bin,
-                sources=sources,
-                results_dir=results_dir,
-                timeout=args.timeout,
-            )
-        except (RpcError, RpcProcessExitError) as exc:
-            err = f"{type(exc).__name__}: {exc}"
-            (results_dir / "oracle_error.txt").write_text(err + "\n", encoding="utf-8")
-            print(f"Oracle synthesis FAILED: {err}", file=sys.stderr)
-            print(f"Saved error to {results_dir}/oracle_error.txt", file=sys.stderr)
-            return 2
-        print(synthesis)
+        if args.rerun_oracle:
+            try:
+                synthesis = await asyncio.to_thread(
+                    run_oracle_review_sync,
+                    model=args.oracle_model,
+                    omp_bin=omp_bin,
+                    sources=sources,
+                    results_dir=results_dir,
+                    timeout=args.timeout,
+                )
+            except (RpcError, RpcProcessExitError) as exc:
+                err = f"{type(exc).__name__}: {exc}"
+                (results_dir / "oracle_error.txt").write_text(err + "\n", encoding="utf-8")
+                print(f"Oracle synthesis FAILED: {err}", file=sys.stderr)
+                print(f"Saved error to {results_dir}/oracle_error.txt", file=sys.stderr)
+                return 2
+            print(synthesis)
+            return 0
+        combined = format_combined_reviews(sources)
+        (results_dir / "combined_reviews.md").write_text(combined + "\n", encoding="utf-8")
+        print(combined)
         return 0
 
     fixtures_dir = Path(args.fixtures_dir).expanduser()
@@ -1959,12 +1986,24 @@ async def run_all(args: argparse.Namespace) -> int:
         printer.finish(f"{failures}/{len(results)} run(s) failed")
         return 1
 
+    sources = oracle_sources_from_results(results)
+    combined = format_combined_reviews(sources)
+    (results_dir / "combined_reviews.md").write_text(combined + "\n", encoding="utf-8")
+
+    if not args.oracle:
+        printer.finish(
+            f"{len(results)} review file(s) saved to {results_dir}.\n"
+            f"Combined reviews saved to {results_dir}/combined_reviews.md."
+        )
+        print(combined)
+        return 0
+
     try:
         oracle_synthesis = await asyncio.to_thread(
             run_oracle_review_sync,
             model=args.oracle_model,
             omp_bin=omp_bin,
-            sources=oracle_sources_from_results(results),
+            sources=sources,
             results_dir=results_dir,
             timeout=args.timeout,
         )

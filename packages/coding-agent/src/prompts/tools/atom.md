@@ -91,4 +91,7 @@ $
 - This is **NOT** unified diff. Never send `@@`, `-OLD` / `+NEW` pairs, or unchanged context.
 - Never split `Lid=TEXT` across two physical lines.
 - Never stack `Lid=X` over a contiguous range. Use `-Lid`+`+TEXT` for block rewrites.
+- `@Lid` only positions the insert cursor for subsequent `+TEXT` ops. It does **NOT** scope, contextualize, or make later `-` / `Lid=` ops relative.
+- There are no counts, ranges, or relative offsets. Every `-` and `Lid=` op carries its own absolute Lid that **MUST** appear verbatim in the most recent read of that exact file. Tokens like `-1`, `-1xx`, or fabricated 2-letter hashes are invalid.
+- To replace a single line, use `Lid=NEWTEXT`. Do **NOT** emit a diff-shaped `@Lid` / `-TOKEN` / `+TEXT` triple — that pattern is unified-diff, not this language.
 </critical>

@@ -114,6 +114,7 @@ export function formatSessionDumpText(options: FormatSessionDumpTextOptions): st
 				if (c.type === "text") {
 					lines.push(c.text);
 				} else if (c.type === "thinking") {
+					if (c.thinking.trim().length === 0) continue;
 					lines.push("<thinking>");
 					lines.push(c.thinking);
 					lines.push("</thinking>\n");
