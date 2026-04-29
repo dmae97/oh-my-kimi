@@ -218,8 +218,8 @@ describe("ast_edit tool schema", () => {
 			expect(details?.totalReplacements).toBe(2);
 			expect(details?.fileReplacements).toEqual(
 				expect.arrayContaining([
-					expect.objectContaining({ path: "pkg-123/src/root.ts", count: 1 }),
-					expect.objectContaining({ path: "pkg-123/src/nested/child.ts", count: 1 }),
+					expect.objectContaining({ path: "packages/pkg-123/src/root.ts", count: 1 }),
+					expect.objectContaining({ path: "packages/pkg-123/src/nested/child.ts", count: 1 }),
 				]),
 			);
 

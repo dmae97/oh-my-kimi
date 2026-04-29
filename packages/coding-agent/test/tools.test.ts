@@ -548,7 +548,7 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Bytes:");
 			expect(output).toContain("Dimensions:");
 			expect(output).toContain("inspect_image");
-			expect(output).toContain(`path="${testFile}"`);
+			expect(output).toContain(`path="${path.basename(testFile)}"`);
 			expect(output).toContain("question");
 			expect(output).not.toContain("optional context");
 			expect(result.content.some(c => c.type === "image")).toBe(false);
@@ -574,7 +574,7 @@ describe("Coding Agent Tools", () => {
 			const result = await writeTool.execute("test-call-3", { path: testFile, content });
 
 			expect(getTextOutput(result)).toContain("Successfully wrote");
-			expect(getTextOutput(result)).toContain(testFile);
+			expect(getTextOutput(result)).toContain(path.basename(testFile));
 		});
 
 		it("should create parent directories", async () => {
@@ -592,7 +592,7 @@ describe("Coding Agent Tools", () => {
 
 			const result = await writeTool.execute("test-call-4-local", { path: localPath, content });
 
-			expect(getTextOutput(result)).toContain(`Successfully wrote ${content.length} bytes to ${localPath}`);
+			expect(getTextOutput(result)).toContain(`Successfully wrote ${content.length} bytes to session/local/handoffs/new-output.json`);
 			expect(fs.existsSync(expectedPath)).toBe(true);
 			expect(fs.readFileSync(expectedPath, "utf-8")).toBe(content);
 		});
@@ -614,7 +614,7 @@ describe("Coding Agent Tools", () => {
 			});
 
 			expect(getTextOutput(result)).toContain(
-				`Successfully wrote ${content.length} bytes to ${archivePath}:pkg/README.md`,
+				`Successfully wrote ${content.length} bytes to ${path.basename(archivePath)}:pkg/README.md`,
 			);
 
 			const unzipped = unzipSync(new Uint8Array(fs.readFileSync(archivePath)));
@@ -632,7 +632,7 @@ describe("Coding Agent Tools", () => {
 			});
 
 			expect(getTextOutput(result)).toContain(
-				`Successfully wrote ${content.length} bytes to ${archivePath}:pkg/new.txt`,
+				`Successfully wrote ${content.length} bytes to nested/${path.basename(archivePath)}:pkg/new.txt`,
 			);
 			expect(fs.existsSync(archivePath)).toBe(true);
 
@@ -650,7 +650,7 @@ describe("Coding Agent Tools", () => {
 				content,
 			});
 
-			expect(getTextOutput(result)).toContain(`Successfully wrote ${content.length} bytes to ${archivePath}`);
+			expect(getTextOutput(result)).toContain(`Successfully wrote ${content.length} bytes to ${path.basename(archivePath)}`);
 			expect(fs.readFileSync(archivePath, "utf-8")).toBe(content);
 		});
 	});
