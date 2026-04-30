@@ -46,7 +46,10 @@ interface BenchmarkClient {
 	onEvent(listener: (event: { type: string; [key: string]: unknown }) => void): () => void;
 	prompt(text: string): Promise<void>;
 	followUp(text: string): Promise<void>;
-	getSessionStats(): Promise<{ tokens: { input: number; output: number; total: number }; assistantMessages: number }>;
+	getSessionStats(): Promise<{
+		tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+		assistantMessages: number;
+	}>;
 	getLastAssistantText(): Promise<string | null>;
 	getMessages(): Promise<AgentMessage[]>;
 	getState(): Promise<ConversationDumpSessionState>;
@@ -1918,21 +1921,31 @@ function estimateTokens(text: string): number {
 	return Math.ceil(text.length / 4);
 }
 
-function diffTokenStats(
-	before: { tokens: { input: number; output: number; total: number }; assistantMessages: number },
-	after: { tokens: { input: number; output: number; total: number }; assistantMessages: number },
-	systemPromptTokens: number,
-): TokenStats {
-	// The system prompt (and tool definitions) live in cacheRead/cacheWrite, not in `input`.
-	// `input` already excludes the cached system prompt; only `total` (which sums cache too)
-	// needs the overhead subtracted, once per LLM call.
+function diffTokenStats(before: SessionTokenStats, after: SessionTokenStats, systemPromptTokens: number): TokenStats {
+	// `input` here is the total prompt tokens delivered to the model on the wire,
+	// summed across all four buckets the providers expose: non-cached input,
+	// cacheRead, cacheWrite. Summing makes the metric comparable across providers
+	// with different caching behavior — Anthropic with a hot cache reports its
+	// prompt entirely under cacheRead/cacheWrite while non-caching providers put
+	// the same content under `input`.
+	//
+	// The system prompt and tool definitions are constant per-call overhead. We
+	// subtract `calls * systemPromptTokens` once per assistant turn so the
+	// reported figure reflects task-driven prompt cost rather than fixed boilerplate.
 	const calls = Math.max(0, after.assistantMessages - before.assistantMessages);
 	const overhead = calls * systemPromptTokens;
-	const input = Math.max(0, after.tokens.input - before.tokens.input);
+	const beforePrompt = before.tokens.input + before.tokens.cacheRead + before.tokens.cacheWrite;
+	const afterPrompt = after.tokens.input + after.tokens.cacheRead + after.tokens.cacheWrite;
+	const input = Math.max(0, afterPrompt - beforePrompt - overhead);
 	const output = Math.max(0, after.tokens.output - before.tokens.output);
-	const total = Math.max(0, after.tokens.total - before.tokens.total - overhead);
+	const total = input + output;
 	return { input, output, total };
 }
+
+type SessionTokenStats = {
+	tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
+	assistantMessages: number;
+};
 
 function isTransportFailure(r: TaskRunResult): boolean {
 	if (r.success) return false;

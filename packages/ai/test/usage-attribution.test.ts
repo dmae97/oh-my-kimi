@@ -55,6 +55,44 @@ describe("openai-completions parseChunkUsage", () => {
 		expect(usage.reasoningTokens).toBeUndefined();
 		expect(usage.output).toBe(25);
 	});
+
+	it("attributes OpenRouter cache_write_tokens to cacheWrite, not input", () => {
+		// OpenRouter (https://openrouter.ai/docs/guides/best-practices/prompt-caching)
+		// reports cache writes via prompt_tokens_details.cache_write_tokens and
+		// INCLUDES them in prompt_tokens. Naively subtracting only cached_tokens
+		// leaves cache-write tokens stuck in `input`.
+		const usage = parseChunkUsage(
+			{
+				prompt_tokens: 6_000,
+				completion_tokens: 250,
+				prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 5_500 },
+			},
+			OPENAI_MODEL,
+			undefined,
+		);
+
+		expect(usage.input).toBe(500);
+		expect(usage.cacheWrite).toBe(5_500);
+		expect(usage.cacheRead).toBe(0);
+		expect(usage.totalTokens).toBe(6_250);
+	});
+
+	it("attributes OpenRouter cache_read_tokens correctly when cache is warm", () => {
+		const usage = parseChunkUsage(
+			{
+				prompt_tokens: 6_000,
+				completion_tokens: 250,
+				prompt_tokens_details: { cached_tokens: 5_800, cache_write_tokens: 0 },
+			},
+			OPENAI_MODEL,
+			undefined,
+		);
+
+		expect(usage.input).toBe(200);
+		expect(usage.cacheRead).toBe(5_800);
+		expect(usage.cacheWrite).toBe(0);
+		expect(usage.totalTokens).toBe(6_250);
+	});
 });
 
 describe("anthropic applyAnthropicUsageExtras", () => {
