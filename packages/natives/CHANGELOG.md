@@ -7,6 +7,11 @@
 - Simplified native build profile suffix formatting without changing `local` and `ci` values
 - Changed the native build output behavior to avoid setting an isolated Cargo target directory automatically
 
+### Removed
+
+- Removed the host Zig CPU contract wrapper (`zig-safe-wrapper.ts`) and its `ZIG`/`PI_NATIVE_REAL_ZIG`/`PI_NATIVE_ZIG_TARGET`/`PI_NATIVE_ZIG_CPU` env handling, since the `zlob` Rust dependency that required Zig is gone
+- Removed the `ci-release-verify-natives` script and its AVX-512 marker scan from the release pipeline
+
 ## [14.5.12] - 2026-04-30
 ### Breaking Changes
 

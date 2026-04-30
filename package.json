@@ -111,7 +111,6 @@
 		"ci:test:full": "bun run test",
 		"ci:test:smoke": "bun packages/coding-agent/src/cli.ts --version && bun packages/coding-agent/src/cli.ts --help && bun packages/coding-agent/src/cli.ts stats --help",
 		"ci:test:install-methods": "bash scripts/install-tests/run-ci.sh",
-		"ci:release:verify-natives": "bun scripts/ci-release-verify-natives.ts",
 		"ci:release:build-binaries": "bun scripts/ci-release-build-binaries.ts",
 		"ci:release:build-archives": "bun scripts/ci-release-build-archives.ts",
 		"ci:release:publish": "bun scripts/ci-release-publish.ts",

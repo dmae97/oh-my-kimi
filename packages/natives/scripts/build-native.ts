@@ -17,13 +17,6 @@ const isCrossCompile = Boolean(crossTarget) || targetPlatform !== process.platfo
 
 type X64Variant = "modern" | "baseline";
 
-interface SafeHostZigBuildConfig {
-	wrapperPath: string;
-	realZigPath: string;
-	target: string;
-	cpu: string;
-}
-
 let configuredVariant: X64Variant | undefined;
 if (configuredVariantRaw) {
 	if (targetArch !== "x64") {
@@ -46,36 +39,8 @@ function resolveEffectiveVariant(): X64Variant | null {
 const effectiveVariant = resolveEffectiveVariant();
 const variantSuffix = effectiveVariant ? `-${effectiveVariant}` : "";
 
-function resolveLinuxHostZigTarget(): "x86_64-linux-gnu" | "x86_64-linux-musl" {
-	const report = process.report?.getReport?.() as { header?: { glibcVersionRuntime?: string } } | undefined;
-	return report?.header?.glibcVersionRuntime ? "x86_64-linux-gnu" : "x86_64-linux-musl";
-}
-
-function resolveSafeHostZigBuildConfig(): SafeHostZigBuildConfig | null {
-	if (isCrossCompile || targetArch !== "x64" || !effectiveVariant) {
-		return null;
-	}
-
-	if (targetPlatform !== "linux" && targetPlatform !== "darwin") {
-		return null;
-	}
-
-	const realZigPath = Bun.env.ZIG ?? Bun.which("zig");
-	if (!realZigPath) {
-		return null;
-	}
-
-	return {
-		wrapperPath: path.join(import.meta.dir, "zig-safe-wrapper.ts"),
-		realZigPath,
-		target: targetPlatform === "linux" ? resolveLinuxHostZigTarget() : "x86_64-macos",
-		cpu: effectiveVariant === "modern" ? "x86_64_v3" : "x86_64_v2",
-	};
-}
-
-// Keep host-built Zig dependencies on the same ISA floor as the Rust addon.
-// zlob's build.rs defaults host builds to `native`, which can leak newer CPU
-// instructions into release artifacts even when Rust itself targets x86-64-v2/v3.
+// Pin Rust target-cpu so x64 baseline/modern variants get a reproducible ISA floor
+// instead of inheriting the host CPU when RUSTFLAGS is unset.
 if (!isCrossCompile && !Bun.env.RUSTFLAGS) {
 	if (effectiveVariant === "modern") {
 		Bun.env.RUSTFLAGS = "-C target-cpu=x86-64-v3";
@@ -233,17 +198,6 @@ const napiBin = Bun.which("napi", {
 });
 if (!napiBin) {
 	throw new Error("Could not locate @napi-rs/cli `napi` binary in node_modules/.bin");
-}
-
-const safeHostZigBuildConfig = resolveSafeHostZigBuildConfig();
-if (safeHostZigBuildConfig) {
-	Bun.env.ZIG = safeHostZigBuildConfig.wrapperPath;
-	Bun.env.PI_NATIVE_REAL_ZIG = safeHostZigBuildConfig.realZigPath;
-	Bun.env.PI_NATIVE_ZIG_TARGET = safeHostZigBuildConfig.target;
-	Bun.env.PI_NATIVE_ZIG_CPU = safeHostZigBuildConfig.cpu;
-	console.log(
-		`Pinning host Zig CPU contract: ${safeHostZigBuildConfig.target} ${safeHostZigBuildConfig.cpu} (${effectiveVariant})`,
-	);
 }
 
 try {
