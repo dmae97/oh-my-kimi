@@ -70,8 +70,9 @@ mod platform {
 	/// Stable Linux process reference backed by a pidfd.
 	#[derive(Clone)]
 	pub struct Process {
-		pid:   i32,
-		pidfd: Arc<OwnedFd>,
+		pid:        i32,
+		pidfd:      Arc<OwnedFd>,
+		start_time: u64,
 	}
 
 	impl Process {
@@ -79,7 +80,9 @@ mod platform {
 			if pid <= 0 {
 				return None;
 			}
-			Some(Self { pid, pidfd: open_pidfd(pid)? })
+			let pidfd = open_pidfd(pid)?;
+			let start_time = read_start_time(pid)?;
+			Some(Self { pid, pidfd, start_time })
 		}
 
 		pub const fn pid(&self) -> i32 {
@@ -87,24 +90,50 @@ mod platform {
 		}
 
 		pub fn children(&self) -> Vec<Self> {
-			if self.status() != ProcessStatus::Running {
+			if !self.live_identity() {
 				return Vec::new();
 			}
 
-			let children_path = format!("/proc/{}/task/{}/children", self.pid, self.pid);
-			let Ok(content) = fs::read_to_string(&children_path) else {
+			// `/proc/{pid}/task/{tid}/children` is per-task: a child fork()ed from a
+			// worker thread appears under that thread's `tid`, not the tgid. Walk
+			// every task subdir and union the lists, then re-validate parentage.
+			let task_dir = format!("/proc/{}/task", self.pid);
+			let Ok(entries) = fs::read_dir(&task_dir) else {
 				return Vec::new();
 			};
 
-			content
-				.split_whitespace()
-				.filter_map(|part| part.parse::<i32>().ok())
-				.filter_map(Self::from_pid)
-				.filter(|child| {
-					child.status() == ProcessStatus::Running
+			let mut seen: HashSet<i32> = HashSet::new();
+			let mut out = Vec::new();
+			for entry in entries.flatten() {
+				let name = entry.file_name();
+				let Some(tid_str) = name.to_str() else {
+					continue;
+				};
+				if tid_str.parse::<i32>().is_err() {
+					continue;
+				}
+				let children_path = format!("/proc/{}/task/{}/children", self.pid, tid_str);
+				let Ok(content) = fs::read_to_string(&children_path) else {
+					continue;
+				};
+				for part in content.split_whitespace() {
+					let Ok(child_pid) = part.parse::<i32>() else {
+						continue;
+					};
+					if !seen.insert(child_pid) {
+						continue;
+					}
+					let Some(child) = Self::from_pid(child_pid) else {
+						continue;
+					};
+					if child.status() == ProcessStatus::Running
 						&& current_parent_pid(child.pid) == Some(self.pid)
-				})
-				.collect()
+					{
+						out.push(child);
+					}
+				}
+			}
+			out
 		}
 
 		pub fn parent_pid(&self) -> Option<i32> {
@@ -116,7 +145,7 @@ mod platform {
 		}
 
 		pub fn args(&self) -> Vec<String> {
-			if self.status() != ProcessStatus::Running {
+			if !self.live_identity() {
 				return Vec::new();
 			}
 
@@ -124,6 +153,11 @@ mod platform {
 			let Ok(content) = fs::read(cmdline_path) else {
 				return Vec::new();
 			};
+			// Re-validate after the read: PID reuse between identity check and read
+			// would otherwise leak an impostor's command line to callers.
+			if !self.live_identity() {
+				return Vec::new();
+			}
 			split_nul_arguments(&content)
 		}
 
@@ -154,7 +188,7 @@ mod platform {
 			// unless it exits concurrently. If it exits, `getpgid` reports failure rather
 			// than dereferencing caller-owned memory.
 			let pgid = unsafe { libc::getpgid(self.pid) };
-			if pgid < 0 { None } else { Some(pgid) }
+			if pgid > 0 { Some(pgid) } else { None }
 		}
 
 		pub fn status(&self) -> ProcessStatus {
@@ -205,6 +239,11 @@ mod platform {
 				}
 			}
 		}
+
+		fn live_identity(&self) -> bool {
+			self.status() == ProcessStatus::Running
+				&& read_start_time(self.pid) == Some(self.start_time)
+		}
 	}
 
 	fn split_nul_arguments(content: &[u8]) -> Vec<String> {
@@ -223,6 +262,17 @@ mod platform {
 				.strip_prefix("PPid:")
 				.and_then(|ppid| ppid.trim().parse::<i32>().ok())
 		})
+	}
+
+	fn read_start_time(pid: i32) -> Option<u64> {
+		// `/proc/[pid]/stat` field 22 is the process start time in clock ticks since
+		// boot. The comm field (between parens) may itself contain spaces and parens,
+		// so locate the *last* `)` and split the trailing whitespace-separated fields.
+		let stat_path = format!("/proc/{pid}/stat");
+		let content = fs::read_to_string(stat_path).ok()?;
+		let last_paren = content.rfind(')')?;
+		let rest = &content[last_paren + 1..];
+		rest.split_whitespace().nth(19)?.parse().ok()
 	}
 
 	fn open_pidfd(pid: i32) -> Option<Arc<OwnedFd>> {
@@ -359,6 +409,9 @@ mod platform {
 		}
 
 		pub fn args(&self) -> Vec<String> {
+			if self.live_bsdinfo().is_none() {
+				return Vec::new();
+			}
 			process_args(self.pid)
 		}
 
@@ -1322,6 +1375,14 @@ impl Process {
 	fn signal_tree(&self, signal: i32) -> u32 {
 		let descendants = self.live_descendants();
 		let mut signaled = 0u32;
+		// If self leads its own process group, also signal the group — this catches
+		// grandchildren reparented to init when their immediate parent died inside
+		// the descendant walk.
+		if let Some(pgid) = self.inner.group_id()
+			&& pgid == self.inner.pid()
+		{
+			let _ = kill_process_group(pgid, signal);
+		}
 		for child in &descendants {
 			if child.inner.kill(signal) {
 				signaled += 1;
@@ -1461,7 +1522,7 @@ impl TerminationTargets {
 
 	/// Record a process group id. Duplicates are ignored.
 	pub fn add_pgid(&mut self, pgid: i32) {
-		if !self.pgids.contains(&pgid) {
+		if pgid > 0 && !self.pgids.contains(&pgid) {
 			self.pgids.push(pgid);
 		}
 	}
