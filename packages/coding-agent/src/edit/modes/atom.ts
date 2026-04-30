@@ -949,6 +949,9 @@ function getAnchorForAnchorEdit(edit: IndexedAnchorEdit["edit"]): Anchor {
 // missed one delete on the front or back of the deletion range, leaving a
 // stale copy of a line the agent already re-emitted (e.g. inserting a new
 // closing `}` while the original `}` was never deleted, producing `}\n}`).
+// A single edit may damage multiple unrelated segments (e.g. two block
+// rewrites that each missed their trailing `}`), so detection and auto-fix
+// operate on every new adjacent duplicate at once.
 //
 // Auto-fix is gated on bracket balance: we only remove the duplicate line if
 // its removal restores the original file's `{}`/`()`/`[]` delta. That makes
@@ -1008,23 +1011,30 @@ function detectAndAutoFixDuplicates(
 
 	const formatPreview = (text: string): string => JSON.stringify(text.length > 60 ? `${text.slice(0, 60)}…` : text);
 
-	// Auto-fix only when there is exactly one new adjacent duplicate AND the
-	// edit shifted bracket balance. Removing one of the two identical lines
-	// must restore the original delta exactly.
-	if (newDupPositions.length === 1) {
-		const pos = newDupPositions[0];
-		const origBalance = computeBalance(originalLines);
-		const finalBalance = computeBalance(finalLines);
-		if (!balancesEqual(origBalance, finalBalance)) {
-			const trial = finalLines.slice(0, pos).concat(finalLines.slice(pos + 1));
-			if (balancesEqual(computeBalance(trial), origBalance)) {
-				return {
-					fixed: trial,
-					warnings: [
-						`Auto-fixed: removed duplicate line ${pos + 1} (${formatPreview(finalLines[pos])}); the edit left two adjacent identical lines and bracket balance was off. Verify the result.`,
-					],
-				};
-			}
+	// Auto-fix when removing one line from each new adjacent duplicate pair
+	// collectively restores the original bracket balance. The balance check is
+	// the safety gate: if we over- or under-correct (e.g. when 3+ adjacent
+	// identical lines confuse the per-pair scan), the trial balance will not
+	// match and we fall through to warnings.
+	const origBalance = computeBalance(originalLines);
+	const finalBalance = computeBalance(finalLines);
+	if (!balancesEqual(origBalance, finalBalance)) {
+		const trial = finalLines.slice();
+		// Remove in reverse so earlier indices remain valid.
+		for (let i = newDupPositions.length - 1; i >= 0; i--) {
+			trial.splice(newDupPositions[i], 1);
+		}
+		if (balancesEqual(computeBalance(trial), origBalance)) {
+			const previews = newDupPositions
+				.map(pos => `${pos + 1} (${formatPreview(finalLines[pos])})`)
+				.join(", ");
+			const noun = newDupPositions.length === 1 ? "duplicate line" : "duplicate lines";
+			return {
+				fixed: trial,
+				warnings: [
+					`Auto-fixed: removed ${noun} ${previews}; the edit left adjacent identical lines and bracket balance was off. Verify the result.`,
+				],
+			};
 		}
 	}
 

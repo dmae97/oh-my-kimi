@@ -1040,6 +1040,25 @@ describe("applyAtomEdits — adjacent duplicate detection", () => {
 		);
 	});
 
+	it("auto-fixes duplicates introduced in multiple unrelated segments by one edit", () => {
+		// Two block rewrites in one diff — each renames a function and re-emits its
+		// body, but neither deletes the original closing `}`. Result: two `}\n}`
+		// pairs at unrelated positions and brace balance off by two.
+		const content = "fn a() {\n\n}\nfn b() {\n\n}";
+		const t1 = tag(1, "fn a() {");
+		const t2 = tag(2, "");
+		const t4 = tag(4, "fn b() {");
+		const t5 = tag(5, "");
+		const diff = [`-${t1}`, `-${t2}`, `+fn sayA() {`, `+`, `+}`, `-${t4}`, `-${t5}`, `+fn sayB() {`, `+`, `+}`].join(
+			"\n",
+		);
+		const result = applyAtomEdits(content, parseAtom(diff));
+		expect(result.lines).toBe("fn sayA() {\n\n}\nfn sayB() {\n\n}");
+		expect(result.warnings ?? []).toEqual(
+			expect.arrayContaining([expect.stringMatching(/Auto-fixed: removed duplicate lines/)]),
+		);
+	});
+
 	it("warns but does not auto-fix when bracket balance is unchanged", () => {
 		// Insert a duplicate non-bracket line — balance is unaffected so we cannot
 		// safely decide which copy to remove. Should warn only.
