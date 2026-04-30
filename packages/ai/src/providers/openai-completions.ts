@@ -1225,10 +1225,6 @@ export function convertMessages(
 			}
 
 			const toolCalls = msg.content.filter(b => b.type === "toolCall") as ToolCall[];
-			const hasReasoningField =
-				(assistantMsg as any).reasoning_content !== undefined ||
-				(assistantMsg as any).reasoning !== undefined ||
-				(assistantMsg as any).reasoning_text !== undefined;
 			// Inject a `reasoning_content` placeholder on assistant tool-call turns when the backend
 			// rejects history without it. The compat flag captures the rule:
 			//   - Kimi (native or via OpenCode-Go): chat completion endpoint demands the field.
@@ -1243,9 +1239,14 @@ export function convertMessages(
 			const stubsReasoningContent =
 				compat.requiresReasoningContentForToolCalls &&
 				(compat.thinkingFormat === "openai" || compat.thinkingFormat === "openrouter");
+			let hasReasoningField =
+				(assistantMsg as any).reasoning_content !== undefined ||
+				(assistantMsg as any).reasoning !== undefined ||
+				(assistantMsg as any).reasoning_text !== undefined;
 			if (toolCalls.length > 0 && stubsReasoningContent && !hasReasoningField) {
 				const reasoningField = compat.reasoningContentField ?? "reasoning_content";
 				(assistantMsg as any)[reasoningField] = ".";
+				hasReasoningField = true;
 			}
 			if (toolCalls.length > 0) {
 				assistantMsg.tool_calls = toolCalls.map((tc, toolCallIndex) => {

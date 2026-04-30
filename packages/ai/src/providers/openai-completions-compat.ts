@@ -55,6 +55,19 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 	const isKimiModel = model.id.includes("moonshotai/kimi") || /^kimi[-.]/i.test(model.id);
 	const isAlibaba = provider === "alibaba-coding-plan" || baseUrl.includes("dashscope");
 	const isQwen = model.id.toLowerCase().includes("qwen");
+	// DeepSeek V4 (and other reasoning-capable DeepSeek models) reject follow-up requests in
+	// thinking mode unless prior assistant tool-call turns include `reasoning_content`. The
+	// upstream model is reachable through many OpenAI-compat hosts (api.deepseek.com, Deepinfra,
+	// Kilo, NVIDIA NIM, Zenmux, OpenRouter, …), so we match by model id/name as well as by
+	// provider/baseUrl. The flag is gated by `model.reasoning` because the invariant only
+	// applies when thinking mode is actually engaged.
+	const lowerId = model.id.toLowerCase();
+	const lowerName = (model.name ?? "").toLowerCase();
+	const isDeepseekFamily =
+		provider === "deepseek" ||
+		baseUrl.includes("deepseek.com") ||
+		lowerId.includes("deepseek") ||
+		lowerName.includes("deepseek");
 
 	const isNonStandard =
 		isCerebras ||
@@ -119,7 +132,9 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		//     redacted/encrypted reasoning into DeepSeek's plaintext form, so cross-provider continuations
 		//     rely on a placeholder — see `convertMessages` for the placeholder injection.
 		requiresReasoningContentForToolCalls:
-			isKimiModel || ((provider === "openrouter" || baseUrl.includes("openrouter.ai")) && Boolean(model.reasoning)),
+			isKimiModel ||
+			(isDeepseekFamily && Boolean(model.reasoning)) ||
+			((provider === "openrouter" || baseUrl.includes("openrouter.ai")) && Boolean(model.reasoning)),
 		requiresAssistantContentForToolCalls: isKimiModel,
 		openRouterRouting: undefined,
 		vercelGatewayRouting: undefined,
