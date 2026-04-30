@@ -8,7 +8,7 @@ import { BranchSummaryMessageComponent } from "../../modes/components/branch-sum
 import { CompactionSummaryMessageComponent } from "../../modes/components/compaction-summary-message";
 import { CustomMessageComponent } from "../../modes/components/custom-message";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
-import { PythonExecutionComponent } from "../../modes/components/python-execution";
+import { EvalExecutionComponent } from "../../modes/components/eval-execution";
 import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
 import { SkillMessageComponent } from "../../modes/components/skill-message";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
@@ -84,7 +84,7 @@ export class UiHelpers {
 				break;
 			}
 			case "pythonExecution": {
-				const component = new PythonExecutionComponent(message.code, this.ctx.ui, message.excludeFromContext);
+				const component = new EvalExecutionComponent(message.code, this.ctx.ui, message.excludeFromContext);
 				if (message.output) {
 					component.appendOutput(message.output);
 				}

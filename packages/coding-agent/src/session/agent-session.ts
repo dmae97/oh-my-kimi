@@ -68,6 +68,11 @@ import {
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
+import {
+	disposeKernelSessionsByOwner,
+	executePython as executePythonCommand,
+	type PythonResult,
+} from "../eval/py/executor";
 import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
 import { exportSessionToHtml } from "../export/html";
 import type { TtsrManager, TtsrMatchContext } from "../export/ttsr";
@@ -98,11 +103,6 @@ import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
-import {
-	disposeKernelSessionsByOwner,
-	executePython as executePythonCommand,
-	type PythonResult,
-} from "../ipy/executor";
 import {
 	buildDiscoverableMCPSearchIndex,
 	collectDiscoverableMCPTools,
@@ -259,7 +259,7 @@ export interface AgentSessionConfig {
 	/** Secret obfuscator for deobfuscating streaming edit content */
 	obfuscator?: SecretObfuscator;
 	/** Logical owner for retained Python kernels created by this session. */
-	pythonKernelOwnerId?: string;
+	evalKernelOwnerId?: string;
 	/** Agent identity (registry id like "0-Main" or "3-Alice") used for IRC routing. */
 	agentId?: string;
 	/** Shared agent registry (for forwarding IRC observations to the main session UI). */
@@ -474,11 +474,11 @@ export class AgentSession {
 	#pendingBashMessages: BashExecutionMessage[] = [];
 
 	// Python execution state
-	#pythonAbortControllers = new Set<AbortController>();
-	#pythonKernelOwnerId: string;
+	#evalAbortControllers = new Set<AbortController>();
+	#evalKernelOwnerId: string;
 	#pendingPythonMessages: PythonExecutionMessage[] = [];
-	#activePythonExecutions = new Set<Promise<unknown>>();
-	#pythonExecutionDisposing = false;
+	#activeEvalExecutions = new Set<Promise<unknown>>();
+	#evalExecutionDisposing = false;
 
 	// Background-channel IRC exchanges queued while the recipient was streaming.
 	// Drained into history (via emitExternalEvent) once the recipient becomes idle.
@@ -577,7 +577,7 @@ export class AgentSession {
 		this.settings = config.settings;
 		this.#startPowerAssertion();
 		this.#asyncJobManager = config.asyncJobManager;
-		this.#pythonKernelOwnerId = config.pythonKernelOwnerId ?? `agent-session:${Snowflake.next()}`;
+		this.#evalKernelOwnerId = config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`;
 		this.#scopedModels = config.scopedModels ?? [];
 		this.#thinkingLevel = config.thinkingLevel;
 		this.#promptTemplates = config.promptTemplates ?? [];
@@ -1938,7 +1938,7 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	async dispose(): Promise<void> {
-		this.#pythonExecutionDisposing = true;
+		this.#evalExecutionDisposing = true;
 		try {
 			if (this.#extensionRunner?.hasHandlers("session_shutdown")) {
 				await this.#extensionRunner.emit({ type: "session_shutdown" });
@@ -1953,13 +1953,13 @@ export class AgentSession {
 		if (drained === false && deliveryState) {
 			logger.warn("Async job completion deliveries still pending during dispose", { ...deliveryState });
 		}
-		const pythonExecutionsSettled = await this.#preparePythonExecutionsForDispose();
+		const pythonExecutionsSettled = await this.#prepareEvalExecutionsForDispose();
 		if (!pythonExecutionsSettled) {
 			logger.warn(
 				"Detaching retained Python kernel ownership during dispose while Python execution is still active",
 			);
 		}
-		await disposeKernelSessionsByOwner(this.#pythonKernelOwnerId);
+		await disposeKernelSessionsByOwner(this.#evalKernelOwnerId);
 		this.#stopPowerAssertion();
 		await this.sessionManager.close();
 		this.#closeAllProviderSessions("dispose");
@@ -3423,7 +3423,7 @@ export class AgentSession {
 		this.abortCompaction();
 		this.abortHandoff();
 		this.abortBash();
-		this.abortPython();
+		this.abortEval();
 		const postPromptDrain = this.#cancelPostPromptTasks();
 		this.agent.abort();
 		await postPromptDrain;
@@ -5895,7 +5895,7 @@ export class AgentSession {
 
 	/**
 	 * Execute Python code in the shared kernel.
-	 * Uses the same kernel session as the agent's Python tool, allowing collaborative editing.
+	 * Uses the same kernel session as eval's Python backend, allowing collaborative editing.
 	 * @param code The Python code to execute
 	 * @param onChunk Optional streaming callback for output
 	 * @param options.excludeFromContext If true, execution won't be sent to LLM ($$ prefix)
@@ -5907,7 +5907,7 @@ export class AgentSession {
 	): Promise<PythonResult> {
 		const excludeFromContext = options?.excludeFromContext === true;
 		const cwd = this.sessionManager.getCwd();
-		this.assertPythonExecutionAllowed();
+		this.assertEvalExecutionAllowed();
 
 		const abortController = new AbortController();
 		const execution = (async (): Promise<PythonResult> => {
@@ -5918,20 +5918,20 @@ export class AgentSession {
 					excludeFromContext,
 					cwd,
 				});
-				this.assertPythonExecutionAllowed();
+				this.assertEvalExecutionAllowed();
 				if (hookResult?.result) {
 					this.recordPythonResult(code, hookResult.result, options);
 					return hookResult.result;
 				}
 			}
 
-			// Use the same session ID as the Python tool for kernel sharing
+			// Use the same session ID as eval's Python backend for kernel sharing
 			const sessionFile = this.sessionManager.getSessionFile();
 			const sessionId = sessionFile ? `session:${sessionFile}:cwd:${cwd}` : `cwd:${cwd}`;
 			const result = await executePythonCommand(code, {
 				cwd,
 				sessionId,
-				kernelOwnerId: this.#pythonKernelOwnerId,
+				kernelOwnerId: this.#evalKernelOwnerId,
 				kernelMode: this.settings.get("python.kernelMode"),
 				useSharedGateway: this.settings.get("python.sharedGateway"),
 				onChunk,
@@ -5940,11 +5940,11 @@ export class AgentSession {
 			this.recordPythonResult(code, result, options);
 			return result;
 		})();
-		return await this.trackPythonExecution(execution, abortController);
+		return await this.trackEvalExecution(execution, abortController);
 	}
 
-	assertPythonExecutionAllowed(): void {
-		if (this.#pythonExecutionDisposing) {
+	assertEvalExecutionAllowed(): void {
+		if (this.#evalExecutionDisposing) {
 			throw new Error("Python execution is unavailable while session disposal is in progress");
 		}
 	}
@@ -5952,17 +5952,17 @@ export class AgentSession {
 	/**
 	 * Track Python work started outside AgentSession.executePython so dispose can await and abort it too.
 	 */
-	trackPythonExecution<T>(execution: Promise<T>, abortController: AbortController): Promise<T> {
-		this.#pythonAbortControllers.add(abortController);
-		this.#activePythonExecutions.add(execution);
+	trackEvalExecution<T>(execution: Promise<T>, abortController: AbortController): Promise<T> {
+		this.#evalAbortControllers.add(abortController);
+		this.#activeEvalExecutions.add(execution);
 		void execution.then(
 			() => {
-				this.#pythonAbortControllers.delete(abortController);
-				this.#activePythonExecutions.delete(execution);
+				this.#evalAbortControllers.delete(abortController);
+				this.#activeEvalExecutions.delete(execution);
 			},
 			() => {
-				this.#pythonAbortControllers.delete(abortController);
-				this.#activePythonExecutions.delete(execution);
+				this.#evalAbortControllers.delete(abortController);
+				this.#activeEvalExecutions.delete(execution);
 			},
 		);
 		return execution;
@@ -5997,35 +5997,35 @@ export class AgentSession {
 	/**
 	 * Cancel running Python execution.
 	 */
-	abortPython(): void {
-		for (const abortController of this.#pythonAbortControllers) {
+	abortEval(): void {
+		for (const abortController of this.#evalAbortControllers) {
 			abortController.abort();
 		}
 	}
 
-	async #waitForPythonExecutionsToSettle(timeoutMs: number): Promise<boolean> {
+	async #waitForEvalExecutionsToSettle(timeoutMs: number): Promise<boolean> {
 		const deadline = Date.now() + timeoutMs;
-		while (this.#activePythonExecutions.size > 0) {
+		while (this.#activeEvalExecutions.size > 0) {
 			const remainingMs = deadline - Date.now();
 			if (remainingMs <= 0) {
 				return false;
 			}
 			const settled = await Promise.race([
-				Promise.allSettled(Array.from(this.#activePythonExecutions)).then(() => true),
+				Promise.allSettled(Array.from(this.#activeEvalExecutions)).then(() => true),
 				Bun.sleep(remainingMs).then(() => false),
 			]);
-			if (!settled && this.#activePythonExecutions.size > 0) {
+			if (!settled && this.#activeEvalExecutions.size > 0) {
 				return false;
 			}
 		}
 		return true;
 	}
 
-	async #preparePythonExecutionsForDispose(): Promise<boolean> {
-		if (!(await this.#waitForPythonExecutionsToSettle(3_000))) {
+	async #prepareEvalExecutionsForDispose(): Promise<boolean> {
+		if (!(await this.#waitForEvalExecutionsToSettle(3_000))) {
 			logger.warn("Aborting active Python execution during dispose before retained kernel cleanup");
-			this.abortPython();
-			if (!(await this.#waitForPythonExecutionsToSettle(1_000))) {
+			this.abortEval();
+			if (!(await this.#waitForEvalExecutionsToSettle(1_000))) {
 				logger.warn(
 					"Python execution is still active after dispose aborted all active runs; retained kernel ownership will still be detached",
 				);
@@ -6036,8 +6036,8 @@ export class AgentSession {
 	}
 
 	/** Whether a Python execution is currently running */
-	get isPythonRunning(): boolean {
-		return this.#pythonAbortControllers.size > 0;
+	get isEvalRunning(): boolean {
+		return this.#evalAbortControllers.size > 0;
 	}
 
 	/** Whether there are pending Python messages waiting to be flushed */

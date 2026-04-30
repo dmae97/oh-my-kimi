@@ -7,10 +7,10 @@ The critical distinction: **`notebook` is a JSON notebook editor, not a notebook
 ## Implementation files
 
 - [`src/tools/notebook.ts`](../packages/coding-agent/src/tools/notebook.ts)
-- [`src/ipy/executor.ts`](../packages/coding-agent/src/ipy/executor.ts)
-- [`src/ipy/kernel.ts`](../packages/coding-agent/src/ipy/kernel.ts)
+- [`src/eval/py/executor.ts`](../packages/coding-agent/src/eval/py/executor.ts)
+- [`src/eval/py/kernel.ts`](../packages/coding-agent/src/eval/py/kernel.ts)
 - [`src/session/streaming-output.ts`](../packages/coding-agent/src/session/streaming-output.ts)
-- [`src/tools/python.ts`](../packages/coding-agent/src/tools/python.ts)
+- [`src/tools/eval.ts`](../packages/coding-agent/src/tools/eval.ts)
 
 ## 1) Runtime boundary: editing vs executing
 
@@ -30,9 +30,9 @@ No kernel lifecycle exists in this tool:
 - no stream chunks from kernel channels
 - no rich display capture (`image/png`, JSON display, status MIME)
 
-## Notebook-like execution path (`src/tools/python.ts` + `src/ipy/*`)
+## Notebook-like execution path (`src/tools/eval.ts` + `src/eval/py/*`)
 
-When the agent needs to run cell-style Python code (sequential cells, persistent state, rich displays), that goes through the **`python` tool**, not `notebook`.
+When the agent needs to run cell-style Python code (sequential cells, persistent state, rich displays), that goes through the **`eval` tool** with `language: "python"`, not `notebook`.
 
 That path is where kernel modes, restart/cancel behavior, chunk streaming, and output artifact truncation live.
 
@@ -75,7 +75,7 @@ These become `Error:` tool responses upstream; renderer uses notebook path + for
 
 ## 3) Kernel session semantics (where they actually exist)
 
-Kernel semantics are implemented in `executePython` / `PythonKernel` and apply to the `python` tool.
+Kernel semantics are implemented in `executePython` / `PythonKernel` and apply to the Python backend of the `eval` tool.
 
 ## Modes
 
@@ -93,7 +93,7 @@ Kernel semantics are implemented in `executePython` / `PythonKernel` and apply t
 
 ## Reset behavior
 
-`python` tool passes `reset` only for the first cell in a multi-cell call; later cells always run with `reset: false`.
+`eval` passes `reset` only for the first cell in a multi-cell Python call; later cells always run with `reset: false`.
 
 ## Kernel death / restart / retry
 
@@ -170,7 +170,7 @@ Cancellation/timeout:
 - truncation flag + counts
 - artifact ID (for `artifact://<id>` references)
 
-`python` tool converts this metadata into result truncation notices and TUI warnings.
+`eval` converts this metadata into result truncation notices and TUI warnings.
 
 `notebook` tool does **not** use `OutputSink`; it has no stream/artifact truncation pipeline because it does not execute code.
 
@@ -202,16 +202,16 @@ Kernel-backed execution rendering expects:
 
 This renderer behavior is unrelated to `notebook` JSON editing results except that both reuse shared TUI primitives.
 
-## 8) Divergence from plain Python tool behavior
+## 8) Divergence from eval Python backend behavior
 
-If "plain Python tool" means `python` execution path:
+If "plain Python execution" means the `eval` tool with `language: "python"`:
 
-- `python` executes code in a kernel, persists state by mode, streams chunks, captures rich displays, handles interrupts/timeouts, and supports output truncation/artifacts.
+- `eval` executes code in a kernel, persists state by mode, streams chunks, captures rich displays, handles interrupts/timeouts, and supports output truncation/artifacts.
 - `notebook` performs deterministic notebook JSON mutations only; no execution, no kernel state, no chunk stream, no display outputs, no artifact pipeline.
 
 If a workflow needs both:
 
 1. edit notebook source with `notebook`
-2. execute code cells via `python` (manually passing code), not through `notebook`
+2. execute code cells via `eval` with `language: "python"` (manually passing code), not through `notebook`
 
 Current implementation does not provide a single tool that both mutates `.ipynb` and executes notebook cells through kernel context.

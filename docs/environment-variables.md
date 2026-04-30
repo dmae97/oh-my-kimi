@@ -248,7 +248,7 @@ Related vars:
 
 | Variable                  | Default / behavior                                                                                                  |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `PI_PY`                   | Python tool mode override: `0`/`bash`=`bash-only`, `1`/`py`=`ipy-only`, `mix`/`both`=`both`; invalid values ignored |
+| `PI_PY`                   | Eval backend override: `0`/`bash`=JavaScript only, `1`/`py`=Python only, `mix`/`both`=both; invalid values ignored |
 | `PI_PYTHON_SKIP_CHECK`    | If `1`, skips Python kernel availability checks/warm checks                                                         |
 | `PI_PYTHON_GATEWAY_URL`   | If set, uses external kernel gateway instead of local shared gateway                                                |
 | `PI_PYTHON_GATEWAY_TOKEN` | Optional auth token for external gateway (`Authorization: token <value>`)                                           |
@@ -378,4 +378,4 @@ Treat these as secrets; do not log or commit them:
 - Search/provider auth vars (`EXA_API_KEY`, `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, Anthropic search keys)
 - Foundry mTLS material (`CLAUDE_CODE_CLIENT_CERT`, `CLAUDE_CODE_CLIENT_KEY`, `NODE_EXTRA_CA_CERTS` when it points to private CA bundles)
 
-Python runtime also explicitly strips many common key vars before spawning kernel subprocesses (`packages/coding-agent/src/ipy/runtime.ts`).
+Python runtime also explicitly strips many common key vars before spawning kernel subprocesses (`packages/coding-agent/src/eval/py/runtime.ts`).

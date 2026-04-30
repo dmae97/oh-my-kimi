@@ -3,18 +3,16 @@ import {
 	disposeAllKernelSessions,
 	disposeKernelSessionsByOwner,
 	executePython,
-	resetPreludeDocsCache,
 	warmPythonEnvironment,
-} from "@oh-my-pi/pi-coding-agent/ipy/executor";
-import * as gatewayCoordinator from "@oh-my-pi/pi-coding-agent/ipy/gateway-coordinator";
+} from "@oh-my-pi/pi-coding-agent/eval/py/executor";
+import * as gatewayCoordinator from "@oh-my-pi/pi-coding-agent/eval/py/gateway-coordinator";
 import type {
 	KernelExecuteResult,
 	KernelShutdownResult,
-	PreludeHelper,
 	PythonKernel as PythonKernelInstance,
-} from "@oh-my-pi/pi-coding-agent/ipy/kernel";
-import * as pythonKernel from "@oh-my-pi/pi-coding-agent/ipy/kernel";
-import { PythonKernel } from "@oh-my-pi/pi-coding-agent/ipy/kernel";
+} from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
+import * as pythonKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
+import { PythonKernel } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const OK_RESULT: KernelExecuteResult = {
@@ -47,7 +45,6 @@ async function flushMicrotasks(turns = 6): Promise<void> {
 
 afterEach(async () => {
 	await disposeAllKernelSessions();
-	resetPreludeDocsCache();
 	vi.restoreAllMocks();
 });
 
@@ -781,16 +778,7 @@ describe("python executor owner cleanup", () => {
 
 	it("attaches cached warmup sessions to newly provided owners", async () => {
 		using tempDir = TempDir.createSync("@python-owner-warmup-");
-		const docs: PreludeHelper[] = [
-			{
-				name: "read",
-				signature: "(path)",
-				docstring: "Read file contents.",
-				category: "File I/O",
-			},
-		];
 		const kernel = {
-			introspectPrelude: vi.fn().mockResolvedValue(docs),
 			execute: vi.fn(async () => OK_RESULT),
 			ping: vi.fn(async () => true),
 			isAlive: () => true,
@@ -801,11 +789,9 @@ describe("python executor owner cleanup", () => {
 
 		const firstWarmup = await warmPythonEnvironment(tempDir.path(), "warm-session", true, undefined, "owner-a");
 		expect(firstWarmup.ok).toBe(true);
-		expect(kernel.introspectPrelude).toHaveBeenCalledTimes(1);
 
 		const cachedWarmup = await warmPythonEnvironment(tempDir.path(), "warm-session", true, undefined, "owner-b");
 		expect(cachedWarmup.ok).toBe(true);
-		expect(kernel.introspectPrelude).toHaveBeenCalledTimes(1);
 		expect(startSpy).toHaveBeenCalledTimes(1);
 
 		await disposeKernelSessionsByOwner("owner-a");
@@ -827,16 +813,7 @@ describe("python executor owner cleanup", () => {
 
 	it("keeps cache-hit ownerless warmups provisional until an explicit owner takes over", async () => {
 		using tempDir = TempDir.createSync("@python-owner-fallback-");
-		const docs: PreludeHelper[] = [
-			{
-				name: "read",
-				signature: "(path)",
-				docstring: "Read file contents.",
-				category: "File I/O",
-			},
-		];
 		const kernel = {
-			introspectPrelude: vi.fn().mockResolvedValue(docs),
 			execute: vi.fn(async () => OK_RESULT),
 			ping: vi.fn(async () => true),
 			isAlive: () => true,
@@ -847,11 +824,9 @@ describe("python executor owner cleanup", () => {
 
 		const firstWarmup = await warmPythonEnvironment(tempDir.path(), "warm-fallback-session", true);
 		expect(firstWarmup.ok).toBe(true);
-		expect(kernel.introspectPrelude).toHaveBeenCalledTimes(1);
 
 		const cachedWarmup = await warmPythonEnvironment(tempDir.path(), "warm-fallback-session", true);
 		expect(cachedWarmup.ok).toBe(true);
-		expect(kernel.introspectPrelude).toHaveBeenCalledTimes(1);
 		expect(startSpy).toHaveBeenCalledTimes(1);
 
 		await executePython("1 + 1", {
@@ -865,7 +840,6 @@ describe("python executor owner cleanup", () => {
 
 		const postTakeoverWarmup = await warmPythonEnvironment(tempDir.path(), "warm-fallback-session", true);
 		expect(postTakeoverWarmup.ok).toBe(true);
-		expect(kernel.introspectPrelude).toHaveBeenCalledTimes(1);
 		expect(startSpy).toHaveBeenCalledTimes(1);
 
 		await disposeKernelSessionsByOwner("owner-a");

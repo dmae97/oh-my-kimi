@@ -104,7 +104,7 @@ export function mapToolKind(toolName: string): ToolKind {
 		case "move":
 			return "move";
 		case "bash":
-		case "python":
+		case "eval":
 			return "execute";
 		case "search":
 		case "find":

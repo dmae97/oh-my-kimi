@@ -1,2 +1,0 @@
-def gamma():
-	return "gamma"

@@ -14,14 +14,14 @@ import { formatDuration, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { reset as resetCapabilities } from "../../capability";
 import { clearClaudePluginRootsCache } from "../../discovery/helpers";
+import { getGatewayStatus } from "../../eval/py/gateway-coordinator";
 import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
-import { getGatewayStatus } from "../../ipy/gateway-coordinator";
 import { buildMemoryToolDeveloperInstructions, clearMemoryData, enqueueMemoryConsolidation } from "../../memories";
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BorderedLoader } from "../../modes/components/bordered-loader";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
-import { PythonExecutionComponent } from "../../modes/components/python-execution";
+import { EvalExecutionComponent } from "../../modes/components/eval-execution";
 import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import { computeContextBreakdown, renderContextUsage } from "../../modes/utils/context-usage";
@@ -285,9 +285,26 @@ export class CommandController {
 		this.#doCopy(combined, `Copied ${matches.length} code block${matches.length > 1 ? "s" : ""} to clipboard`);
 	}
 
+	#extractEvalCode(args: unknown): string | undefined {
+		if (!args || typeof args !== "object") return undefined;
+		const cells = (args as { cells?: unknown }).cells;
+		if (!Array.isArray(cells)) return undefined;
+
+		const codeBlocks: string[] = [];
+		for (const cell of cells) {
+			if (!cell || typeof cell !== "object") continue;
+			const code = (cell as { code?: unknown }).code;
+			if (typeof code === "string" && code.length > 0) {
+				codeBlocks.push(code);
+			}
+		}
+
+		return codeBlocks.length > 0 ? codeBlocks.join("\n\n") : undefined;
+	}
+
 	#copyLastCommand() {
 		const messages = this.ctx.session.messages;
-		// Walk backwards to find the last bash/python tool call
+		// Walk backwards to find the last bash/eval tool call
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const msg = messages[i];
 			if (msg.role !== "assistant") continue;
@@ -298,13 +315,16 @@ export class CommandController {
 					this.#doCopy(tc.arguments.command, "Copied last bash command to clipboard");
 					return;
 				}
-				if (tc.name === "python" && typeof tc.arguments.code === "string") {
-					this.#doCopy(tc.arguments.code, "Copied last python code to clipboard");
-					return;
+				if (tc.name === "eval") {
+					const code = this.#extractEvalCode(tc.arguments);
+					if (code) {
+						this.#doCopy(code, "Copied last eval code to clipboard");
+						return;
+					}
 				}
 			}
 		}
-		this.ctx.showWarning("No bash or python command found in the conversation.");
+		this.ctx.showWarning("No bash or eval command found in the conversation.");
 	}
 
 	#doCopy(content: string, label: string) {
@@ -779,7 +799,7 @@ export class CommandController {
 
 	async handlePythonCommand(code: string, excludeFromContext = false): Promise<void> {
 		const isDeferred = this.ctx.session.isStreaming;
-		this.ctx.pythonComponent = new PythonExecutionComponent(code, this.ctx.ui, excludeFromContext);
+		this.ctx.pythonComponent = new EvalExecutionComponent(code, this.ctx.ui, excludeFromContext);
 
 		if (isDeferred) {
 			this.ctx.pendingMessagesContainer.addChild(this.ctx.pythonComponent);

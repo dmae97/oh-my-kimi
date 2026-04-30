@@ -63,6 +63,19 @@ export async function loadPuppeteer(): Promise<typeof Puppeteer> {
 	}
 }
 
+let puppeteerModuleWorker: typeof Puppeteer | undefined;
+export async function loadPuppeteerInWorker(safeDir: string): Promise<typeof Puppeteer> {
+	if (puppeteerModuleWorker) return puppeteerModuleWorker;
+	const orig = process.cwd;
+	Object.defineProperty(process, "cwd", { value: () => safeDir, configurable: true });
+	try {
+		puppeteerModuleWorker = (await import("puppeteer-core")).default;
+		return puppeteerModuleWorker;
+	} finally {
+		Object.defineProperty(process, "cwd", { value: orig, configurable: true });
+	}
+}
+
 /**
  * Lazily download Chromium on first browser launch via @puppeteer/browsers.
  * Skipped when a system Chromium (NixOS) or PUPPETEER_EXECUTABLE_PATH is set.

@@ -4,8 +4,8 @@ import * as path from "node:path";
 import { Process } from "@oh-my-pi/pi-natives";
 import { getAgentDir, isEnoent, logger, procmgr } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
-import { Settings } from "../config/settings";
-import { getOrCreateSnapshot } from "../utils/shell-snapshot";
+import { Settings } from "../../config/settings";
+import { getOrCreateSnapshot } from "../../utils/shell-snapshot";
 import { filterEnv, resolvePythonRuntime } from "./runtime";
 
 const GATEWAY_DIR_NAME = "python-gateway";

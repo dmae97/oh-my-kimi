@@ -578,7 +578,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			toolNames = Array.from(tools.keys());
 		} else {
 			// Use defaults
-			toolNames = ["read", "bash", "python", "edit", "write"]; // TODO: Why?
+			toolNames = ["read", "bash", "eval", "edit", "write"]; // TODO: Why?
 		}
 	}
 

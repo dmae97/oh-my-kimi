@@ -532,16 +532,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (atMaxDepth && toolNames?.includes("task")) {
 		toolNames = toolNames.filter(name => name !== "task");
 	}
-	const pythonToolMode = settings.get("python.toolMode") ?? "both";
 	if (toolNames?.includes("exec")) {
+		const allowEvalPy = settings.get("eval.py") ?? true;
+		const allowEvalJs = settings.get("eval.js") ?? true;
 		const expanded = toolNames.filter(name => name !== "exec");
-		if (pythonToolMode === "bash-only") {
-			expanded.push("bash");
-		} else if (pythonToolMode === "ipy-only") {
-			expanded.push("python");
-		} else {
-			expanded.push("python", "bash");
-		}
+		if (allowEvalPy || allowEvalJs) expanded.push("eval");
+		expanded.push("bash");
 		toolNames = Array.from(new Set(expanded));
 	}
 
@@ -557,7 +553,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	const lspEnabled = enableLsp ?? true;
 	const ircEnabled = subagentSettings.get("irc.enabled") === true;
-	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("python");
+	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("eval");
 
 	const outputChunks: string[] = [];
 	const finalOutputChunks: string[] = [];

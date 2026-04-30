@@ -49,7 +49,7 @@ function createContext(): {
 	spies: {
 		abort: ReturnType<typeof vi.fn>;
 		abortBash: ReturnType<typeof vi.fn>;
-		abortPython: ReturnType<typeof vi.fn>;
+		abortEval: ReturnType<typeof vi.fn>;
 		addMessageToChat: ReturnType<typeof vi.fn>;
 		cancelPendingSubmission: ReturnType<typeof vi.fn>;
 		clearQueue: ReturnType<typeof vi.fn>;
@@ -66,7 +66,7 @@ function createContext(): {
 	let editorText = "";
 	const abort = vi.fn();
 	const abortBash = vi.fn();
-	const abortPython = vi.fn();
+	const abortEval = vi.fn();
 	const addMessageToChat = vi.fn();
 	const cancelPendingSubmission = vi.fn(() => false);
 	const clearQueue = vi.fn(() => ({ steering: [], followUp: [] }));
@@ -111,13 +111,13 @@ function createContext(): {
 			isCompacting: false,
 			isGeneratingHandoff: false,
 			isBashRunning: false,
-			isPythonRunning: false,
+			isEvalRunning: false,
 			queuedMessageCount: 0,
 			messages: [],
 			extensionRunner: undefined,
 			abort,
 			abortBash,
-			abortPython,
+			abortEval,
 			clearQueue,
 			prompt,
 		} as unknown as InteractiveModeContext["session"],
@@ -160,7 +160,7 @@ function createContext(): {
 		spies: {
 			abort,
 			abortBash,
-			abortPython,
+			abortEval,
 			addMessageToChat,
 			cancelPendingSubmission,
 			clearQueue,
@@ -242,14 +242,14 @@ describe("InputController escape behavior", () => {
 
 	it("prefers aborting python before aborting an overlapping stream", () => {
 		const { ctx, editor, spies } = createContext();
-		(ctx.session as { isStreaming: boolean; isPythonRunning: boolean }).isStreaming = true;
-		(ctx.session as { isStreaming: boolean; isPythonRunning: boolean }).isPythonRunning = true;
+		(ctx.session as { isStreaming: boolean; isEvalRunning: boolean }).isStreaming = true;
+		(ctx.session as { isStreaming: boolean; isEvalRunning: boolean }).isEvalRunning = true;
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
 		editor.onEscape?.();
 
-		expect(spies.abortPython).toHaveBeenCalledTimes(1);
+		expect(spies.abortEval).toHaveBeenCalledTimes(1);
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 

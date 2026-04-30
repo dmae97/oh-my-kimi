@@ -319,9 +319,17 @@
 			"types": "./src/internal-urls/*.ts",
 			"import": "./src/internal-urls/*.ts"
 		},
-		"./ipy/*": {
-			"types": "./src/ipy/*.ts",
-			"import": "./src/ipy/*.ts"
+		"./eval": {
+			"types": "./src/eval/index.ts",
+			"import": "./src/eval/index.ts"
+		},
+		"./eval/js/*": {
+			"types": "./src/eval/js/*.ts",
+			"import": "./src/eval/js/*.ts"
+		},
+		"./eval/py/*": {
+			"types": "./src/eval/py/*.ts",
+			"import": "./src/eval/py/*.ts"
 		},
 		"./lsp": {
 			"types": "./src/lsp/index.ts",

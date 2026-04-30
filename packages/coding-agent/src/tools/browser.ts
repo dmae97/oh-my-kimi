@@ -4,18 +4,9 @@ import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import browserDescription from "../prompts/tools/browser.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
-import {
-	acquireBrowser,
-	acquireTab,
-	type BrowserHandle,
-	type BrowserKind,
-	type BrowserKindTag,
-	dropHeadlessBrowsers,
-	getTab,
-	releaseAllTabs,
-	releaseTab,
-} from "./browser/registry";
-import { collectObservation, formatObservation, type Observation, runInTab, type ScreenshotResult } from "./browser/vm";
+import { acquireBrowser, type BrowserHandle, type BrowserKind, type BrowserKindTag } from "./browser/registry";
+import type { Observation, ScreenshotResult } from "./browser/tab-protocol";
+import { acquireTab, dropHeadlessTabs, getTab, releaseAllTabs, releaseTab, runInTab } from "./browser/tab-supervisor";
 import type { OutputMeta } from "./output-meta";
 import { resolveToCwd } from "./path-utils";
 import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
@@ -23,7 +14,7 @@ import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
 
 export { extractReadableFromHtml, type ReadableFormat, type ReadableResult } from "./browser/readable";
-export type { Observation, ObservationEntry } from "./browser/vm";
+export type { Observation, ObservationEntry } from "./browser/tab-protocol";
 
 const DEFAULT_TAB_NAME = "main";
 
@@ -129,7 +120,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 
 	/** Restart browser to apply mode changes (e.g. headless toggle). Drops only headless browsers. */
 	async restartForModeChange(): Promise<void> {
-		await dropHeadlessBrowsers();
+		await dropHeadlessTabs();
 	}
 
 	async execute(
@@ -216,10 +207,10 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 			}),
 		);
 		const tab = result.tab;
-		const url = tab.page.url();
-		const title = (await untilAborted(signal, () => tab.page.title())) as string;
+		const url = tab.info.url;
+		const title = tab.info.title ?? "";
 		details.url = url;
-		details.viewport = tab.page.viewport() ?? undefined;
+		details.viewport = tab.info.viewport;
 		const verb = result.created ? "Opened" : "Reused";
 		const lines = [
 			`${verb} tab ${JSON.stringify(name)} on ${describeBrowser(browser)}`,
@@ -258,16 +249,12 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 			throw new ToolError("Missing required parameter 'code' for action 'run'.");
 		}
 		const tab = getTab(name);
-		if (!tab) {
-			throw new ToolError(
-				`No tab named ${JSON.stringify(name)}. Call open first (e.g. action: 'open', name: '${name}').`,
-			);
+		if (tab) {
+			details.browser = tab.browser.kind.kind;
+			details.url = tab.info.url;
 		}
-		details.browser = tab.browser.kind.kind;
-		details.url = tab.page.url();
 
-		const { displays, returnValue, screenshots } = await runInTab({
-			tab,
+		const { displays, returnValue, screenshots } = await runInTab(name, {
 			code: params.code,
 			timeoutMs,
 			signal,
@@ -330,7 +317,3 @@ function stringifyReturnValue(value: unknown): string {
 		return String(value);
 	}
 }
-
-// Re-export collectObservation so external callers (e.g. tests) can use it without
-// reaching into the browser/ subdirectory.
-export { collectObservation, formatObservation };

@@ -1,17 +1,16 @@
 import { $env, $flag, isBunTestRuntime, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
-import { Settings } from "../config/settings";
-import { htmlToBasicMarkdown } from "../web/scrapers/types";
+import { Settings } from "../../config/settings";
+import { htmlToBasicMarkdown } from "../../web/scrapers/types";
 import { createCancellationError, getAbortReason, getExecutionCancellationError } from "./cancellation";
 import { acquireSharedGateway, releaseSharedGateway, shutdownSharedGateway } from "./gateway-coordinator";
-import { loadPythonModules } from "./modules";
+
 import { PYTHON_PRELUDE } from "./prelude";
 import { filterEnv, resolvePythonRuntime } from "./runtime";
 
 const TEXT_ENCODER = new TextEncoder();
 const TEXT_DECODER = new TextDecoder();
 const TRACE_IPC = $flag("PI_PYTHON_IPC_TRACE");
-const PRELUDE_INTROSPECTION_SNIPPET = "import json\nprint(json.dumps(__omp_prelude_docs__()))";
 
 class SharedGatewayCreateError extends Error {
 	constructor(
@@ -177,13 +176,6 @@ export interface KernelExecuteResult {
 	cancelled: boolean;
 	timedOut: boolean;
 	stdinRequested: boolean;
-}
-
-export interface PreludeHelper {
-	name: string;
-	signature: string;
-	docstring: string;
-	category: string;
 }
 
 interface KernelStartOptions extends KernelLifecycleOptions {
@@ -536,7 +528,7 @@ export class PythonKernel {
 				preludeOptions.signal,
 				"Failed to initialize Python kernel prelude",
 			);
-			await loadPythonModules(kernel, { cwd, signal: startup.signal, deadlineMs: startup.deadlineMs });
+
 			return kernel;
 		} catch (err: unknown) {
 			await kernel.shutdown({ timeoutMs: getStartupCleanupTimeoutMs(startup.deadlineMs) });
@@ -607,11 +599,7 @@ export class PythonKernel {
 				preludeOptions.signal,
 				"Failed to initialize Python kernel prelude",
 			);
-			await logger.time("startWithSharedGateway:loadModules", loadPythonModules, kernel, {
-				cwd,
-				signal: startup.signal,
-				deadlineMs: startup.deadlineMs,
-			});
+
 			return kernel;
 		} catch (err: unknown) {
 			await kernel.shutdown({ timeoutMs: getStartupCleanupTimeoutMs(startup.deadlineMs) });
@@ -951,30 +939,6 @@ export class PythonKernel {
 			finalize();
 		}
 		return promise;
-	}
-
-	async introspectPrelude(options: Pick<KernelExecuteOptions, "signal" | "timeoutMs"> = {}): Promise<PreludeHelper[]> {
-		let output = "";
-		const result = await this.execute(PRELUDE_INTROSPECTION_SNIPPET, {
-			silent: false,
-			storeHistory: false,
-			signal: options.signal,
-			timeoutMs: options.timeoutMs,
-			onChunk: text => {
-				output += text;
-			},
-		});
-		if (result.cancelled || result.status === "error") {
-			throw new Error("Failed to introspect Python prelude");
-		}
-		const trimmed = output.trim();
-		if (!trimmed) return [];
-		try {
-			return JSON.parse(trimmed) as PreludeHelper[];
-		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : String(err);
-			throw new Error(`Failed to parse Python prelude docs: ${message}`);
-		}
 	}
 
 	async interrupt(): Promise<void> {

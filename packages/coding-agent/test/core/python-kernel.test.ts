@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { type KernelDisplayOutput, PythonKernel } from "@oh-my-pi/pi-coding-agent/ipy/kernel";
-import { PYTHON_PRELUDE } from "@oh-my-pi/pi-coding-agent/ipy/prelude";
+import { type KernelDisplayOutput, PythonKernel } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
+import { PYTHON_PRELUDE } from "@oh-my-pi/pi-coding-agent/eval/py/prelude";
 import { hookFetch } from "@oh-my-pi/pi-utils";
 
 type JupyterMessage = {
@@ -370,105 +370,6 @@ describe("PythonKernel (external gateway)", () => {
 
 		const kernel = await kernelPromise;
 		expect(kernel.isAlive()).toBe(true);
-		await kernel.shutdown();
-	});
-
-	it("introspects prelude helpers", async () => {
-		const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-			if (url.endsWith("/api/kernels") && init?.method === "POST") {
-				return new Response(JSON.stringify({ id: "kernel-4" }), { status: 201 });
-			}
-			return new Response("", { status: 200 });
-		});
-		using _hook = hookFetch((input, init) => fetchMock(String(input), init));
-
-		const docs = [
-			{
-				name: "read",
-				signature: "(path, limit=None)",
-				docstring: "Read file contents.",
-				category: "File I/O",
-			},
-		];
-		const payload = JSON.stringify(docs);
-
-		let initSeen = false;
-		let preludeSeen = false;
-
-		const kernelPromise = PythonKernel.start({ cwd: "/" });
-		await Bun.sleep(10);
-		const ws = FakeWebSocket.lastInstance;
-		if (!ws) throw new Error("WebSocket not initialized");
-		ws.setSendHandler(data => {
-			const msg = typeof data === "string" ? (JSON.parse(data) as JupyterMessage) : decodeMessage(data);
-			const code = String(msg.content.code ?? "");
-			if (!initSeen) {
-				initSeen = true;
-				sendOkExecution(ws, msg.header.msg_id);
-				return;
-			}
-			if (!preludeSeen) {
-				expect(code).toBe(PYTHON_PRELUDE);
-				preludeSeen = true;
-				sendOkExecution(ws, msg.header.msg_id);
-				return;
-			}
-
-			if (code.includes("__omp_prelude_docs__")) {
-				const stream: JupyterMessage = {
-					channel: "iopub",
-					header: {
-						msg_id: "stream-docs",
-						session: "session",
-						username: "omp",
-						date: new Date().toISOString(),
-						msg_type: "stream",
-						version: "5.5",
-					},
-					parent_header: { msg_id: msg.header.msg_id },
-					metadata: {},
-					content: { text: `${payload}\n` },
-				};
-				const reply: JupyterMessage = {
-					channel: "shell",
-					header: {
-						msg_id: "reply-docs",
-						session: "session",
-						username: "omp",
-						date: new Date().toISOString(),
-						msg_type: "execute_reply",
-						version: "5.5",
-					},
-					parent_header: { msg_id: msg.header.msg_id },
-					metadata: {},
-					content: { status: "ok", execution_count: 2 },
-				};
-				const status: JupyterMessage = {
-					channel: "iopub",
-					header: {
-						msg_id: "status-docs",
-						session: "session",
-						username: "omp",
-						date: new Date().toISOString(),
-						msg_type: "status",
-						version: "5.5",
-					},
-					parent_header: { msg_id: msg.header.msg_id },
-					metadata: {},
-					content: { execution_state: "idle" },
-				};
-				ws.onmessage?.({ data: encodeMessage(stream) });
-				ws.onmessage?.({ data: encodeMessage(reply) });
-				ws.onmessage?.({ data: encodeMessage(status) });
-				return;
-			}
-
-			sendOkExecution(ws, msg.header.msg_id);
-		});
-
-		const kernel = await kernelPromise;
-		const result = await kernel.introspectPrelude();
-		expect(result).toEqual(docs);
 		await kernel.shutdown();
 	});
 });

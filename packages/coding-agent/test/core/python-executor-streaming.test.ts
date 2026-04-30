@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { executePythonWithKernel } from "@oh-my-pi/pi-coding-agent/ipy/executor";
+import { executePythonWithKernel } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
 import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
 import { FakeKernel } from "./helpers";
 

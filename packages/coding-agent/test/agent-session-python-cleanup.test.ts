@@ -4,9 +4,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import * as pythonExecutor from "@oh-my-pi/pi-coding-agent/ipy/executor";
-import type { PreludeHelper, PythonKernel as PythonKernelInstance } from "@oh-my-pi/pi-coding-agent/ipy/kernel";
-import * as pythonKernel from "@oh-my-pi/pi-coding-agent/ipy/kernel";
+import * as pythonExecutor from "@oh-my-pi/pi-coding-agent/eval/py/executor";
+import type { PythonKernel as PythonKernelInstance } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
+import * as pythonKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 import * as memories from "@oh-my-pi/pi-coding-agent/memories";
 import { createAgentSession, type ExtensionFactory } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -96,17 +96,15 @@ const createSession = async (
 			enableMCP: false,
 			enableLsp: false,
 			forcePythonWarmup: true,
-			toolNames: ["python"],
+			toolNames: ["eval"],
 		})
 	).session;
 
-const stubPythonWarmup = () =>
-	vi.spyOn(pythonExecutor, "warmPythonEnvironment").mockResolvedValue({ ok: true, docs: [] });
+const stubPythonWarmup = () => vi.spyOn(pythonExecutor, "warmPythonEnvironment").mockResolvedValue({ ok: true });
 
-const createWarmupKernel = (docs: PreludeHelper[] = []) => {
+const createWarmupKernel = () => {
 	let alive = true;
 	return {
-		introspectPrelude: vi.fn().mockResolvedValue(docs),
 		execute: vi.fn(async () => {
 			if (!alive) throw new Error("Expected warmup kernel to be restarted after shutdown");
 			return OK_EXECUTION;
@@ -124,7 +122,6 @@ describe("AgentSession python cleanup", () => {
 	const tempDirs: string[] = [];
 
 	afterEach(async () => {
-		pythonExecutor.resetPreludeDocsCache();
 		vi.restoreAllMocks();
 		await pythonExecutor.disposeAllKernelSessions();
 		for (const tempDir of tempDirs.splice(0)) {
@@ -132,15 +129,10 @@ describe("AgentSession python cleanup", () => {
 		}
 	});
 
-	it("cleans up warmed Python owners when createAgentSession fails before session construction", async () => {
+	it("does not dispose unrelated Python owners when createAgentSession fails before session construction", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		pythonExecutor.resetPreludeDocsCache();
-
 		const unrelatedKernel = createWarmupKernel();
-		const warmedKernel = createWarmupKernel([
-			{ name: "helper", signature: "helper()", docstring: "doc", category: "general" },
-		]);
 		const unrelatedCwd = path.join(tempDir, "unrelated-before");
 		const throwingExtension: ExtensionFactory = () => {
 			throw new Error("Extension init failed");
@@ -148,8 +140,7 @@ describe("AgentSession python cleanup", () => {
 		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
 		const startSpy = vi
 			.spyOn(pythonKernel.PythonKernel, "start")
-			.mockResolvedValueOnce(unrelatedKernel as unknown as PythonKernelInstance)
-			.mockResolvedValueOnce(warmedKernel as unknown as PythonKernelInstance);
+			.mockResolvedValueOnce(unrelatedKernel as unknown as PythonKernelInstance);
 
 		await pythonExecutor.executePython("print('unrelated before')", {
 			cwd: unrelatedCwd,
@@ -174,13 +165,11 @@ describe("AgentSession python cleanup", () => {
 				enableMCP: false,
 				enableLsp: false,
 				forcePythonWarmup: true,
-				toolNames: ["python"],
+				toolNames: ["eval"],
 			}),
 		).rejects.toThrow("Extension init failed");
 
-		expect(startSpy).toHaveBeenCalledTimes(2);
-		expect(warmedKernel.introspectPrelude).toHaveBeenCalledTimes(1);
-		expect(warmedKernel.shutdown).toHaveBeenCalledTimes(1);
+		expect(startSpy).toHaveBeenCalledTimes(1);
 		expect(unrelatedKernel.shutdown).not.toHaveBeenCalled();
 
 		const replacementKernel = createWarmupKernel();
@@ -191,10 +180,9 @@ describe("AgentSession python cleanup", () => {
 			kernelMode: "session",
 			kernelOwnerId: "fresh-owner-before",
 		});
-		expect(startSpy).toHaveBeenCalledTimes(3);
+		expect(startSpy).toHaveBeenCalledTimes(2);
 		expect(replacementKernel.execute).toHaveBeenCalledTimes(1);
-		expect(warmedKernel.shutdown).toHaveBeenCalledTimes(1);
-		expect(warmedKernel.execute).not.toHaveBeenCalled();
+		expect(replacementKernel.execute).toHaveBeenCalledTimes(1);
 
 		await pythonExecutor.executePython("print('still alive before')", {
 			cwd: unrelatedCwd,
@@ -203,25 +191,19 @@ describe("AgentSession python cleanup", () => {
 			kernelOwnerId: "other-owner",
 		});
 
-		expect(startSpy).toHaveBeenCalledTimes(3);
+		expect(startSpy).toHaveBeenCalledTimes(2);
 		expect(unrelatedKernel.execute).toHaveBeenCalledTimes(2);
 	});
 
-	it("cleans up warmed Python owners when createAgentSession fails after session construction", async () => {
+	it("does not dispose unrelated Python owners when createAgentSession fails after session construction", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		pythonExecutor.resetPreludeDocsCache();
-
 		const unrelatedKernel = createWarmupKernel();
-		const warmedKernel = createWarmupKernel([
-			{ name: "helper", signature: "helper()", docstring: "doc", category: "general" },
-		]);
 		const unrelatedCwd = path.join(tempDir, "unrelated-after");
 		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
 		const startSpy = vi
 			.spyOn(pythonKernel.PythonKernel, "start")
-			.mockResolvedValueOnce(unrelatedKernel as unknown as PythonKernelInstance)
-			.mockResolvedValueOnce(warmedKernel as unknown as PythonKernelInstance);
+			.mockResolvedValueOnce(unrelatedKernel as unknown as PythonKernelInstance);
 		vi.spyOn(memories, "startMemoryStartupTask").mockImplementation(() => {
 			throw new Error("Memory startup failed");
 		});
@@ -248,13 +230,11 @@ describe("AgentSession python cleanup", () => {
 				enableMCP: false,
 				enableLsp: false,
 				forcePythonWarmup: true,
-				toolNames: ["python"],
+				toolNames: ["eval"],
 			}),
 		).rejects.toThrow("Memory startup failed");
 
-		expect(startSpy).toHaveBeenCalledTimes(2);
-		expect(warmedKernel.introspectPrelude).toHaveBeenCalledTimes(1);
-		expect(warmedKernel.shutdown).toHaveBeenCalledTimes(1);
+		expect(startSpy).toHaveBeenCalledTimes(1);
 		expect(unrelatedKernel.shutdown).not.toHaveBeenCalled();
 
 		const replacementKernel = createWarmupKernel();
@@ -265,10 +245,9 @@ describe("AgentSession python cleanup", () => {
 			kernelMode: "session",
 			kernelOwnerId: "fresh-owner-after",
 		});
-		expect(startSpy).toHaveBeenCalledTimes(3);
+		expect(startSpy).toHaveBeenCalledTimes(2);
 		expect(replacementKernel.execute).toHaveBeenCalledTimes(1);
-		expect(warmedKernel.shutdown).toHaveBeenCalledTimes(1);
-		expect(warmedKernel.execute).not.toHaveBeenCalled();
+		expect(replacementKernel.execute).toHaveBeenCalledTimes(1);
 
 		await pythonExecutor.executePython("print('still alive after')", {
 			cwd: unrelatedCwd,
@@ -277,14 +256,13 @@ describe("AgentSession python cleanup", () => {
 			kernelOwnerId: "other-owner",
 		});
 
-		expect(startSpy).toHaveBeenCalledTimes(3);
+		expect(startSpy).toHaveBeenCalledTimes(2);
 		expect(unrelatedKernel.execute).toHaveBeenCalledTimes(2);
 	});
 
 	it("waits for active SDK session Python work before releasing a shared retained kernel", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		pythonExecutor.resetPreludeDocsCache();
 		stubPythonWarmup();
 
 		const kernel = new FakeKernel();
@@ -359,11 +337,9 @@ describe("AgentSession python cleanup", () => {
 		expect(kernel.shutdownCalls).toBe(1);
 	});
 
-	it("aborts tracked Python tool warmup during session dispose before executePython starts", async () => {
+	it("aborts tracked eval warmup during session dispose before executePython starts", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		pythonExecutor.resetPreludeDocsCache();
-
 		const blockedWarmupStarted = Promise.withResolvers<void>();
 		const executeSpy = vi.spyOn(pythonExecutor, "executePython").mockResolvedValue({
 			output: "tool ok",
@@ -383,11 +359,11 @@ describe("AgentSession python cleanup", () => {
 			.mockImplementation(async (_cwd, _sessionId, _useSharedGateway, _sessionFile, _kernelOwnerId, signal) => {
 				warmupCallCount += 1;
 				if (warmupCallCount === 1) {
-					return { ok: true, docs: [] };
+					return { ok: true };
 				}
 				blockedWarmupStarted.resolve();
-				return await new Promise<{ ok: boolean; reason?: string; docs: [] }>(resolve => {
-					const onAbort = () => resolve({ ok: false, reason: "Warmup aborted", docs: [] });
+				return await new Promise<{ ok: boolean; reason?: string }>(resolve => {
+					const onAbort = () => resolve({ ok: false, reason: "Warmup aborted" });
 					if (signal?.aborted) {
 						onAbort();
 						return;
@@ -398,11 +374,11 @@ describe("AgentSession python cleanup", () => {
 		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
 
 		const session = await createSession(tempDir, cwd);
-		const pythonTool = session.getToolByName("python");
-		expect(pythonTool).toBeDefined();
+		const EvalTool = session.getToolByName("eval");
+		expect(EvalTool).toBeDefined();
 		let toolExecutionSettled = false;
-		const toolExecution = pythonTool!
-			.execute("call-id", { cells: [{ code: "print('tool')" }] }, undefined, undefined, undefined)
+		const toolExecution = EvalTool!
+			.execute("call-id", { input: "=== CELL ===\n```py\nprint('tool')\n```" }, undefined, undefined, undefined)
 			.finally(() => {
 				toolExecutionSettled = true;
 			});
@@ -427,11 +403,9 @@ describe("AgentSession python cleanup", () => {
 		expect(executeSpy).not.toHaveBeenCalled();
 	});
 
-	it("rejects Python tool starts when warmup finishes after dispose begins", async () => {
+	it("rejects eval starts when warmup finishes after dispose begins", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		pythonExecutor.resetPreludeDocsCache();
-
 		const blockedWarmupStarted = Promise.withResolvers<void>();
 		const releaseWarmup = Promise.withResolvers<void>();
 		const executeSpy = vi.spyOn(pythonExecutor, "executePython").mockResolvedValue({
@@ -450,20 +424,20 @@ describe("AgentSession python cleanup", () => {
 		const warmupSpy = vi.spyOn(pythonExecutor, "warmPythonEnvironment").mockImplementation(async () => {
 			warmupCallCount += 1;
 			if (warmupCallCount === 1) {
-				return { ok: true, docs: [] };
+				return { ok: true };
 			}
 			blockedWarmupStarted.resolve();
 			await releaseWarmup.promise;
-			return { ok: true, docs: [] };
+			return { ok: true };
 		});
 		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
 
 		const session = await createSession(tempDir, cwd);
-		const pythonTool = session.getToolByName("python");
-		expect(pythonTool).toBeDefined();
-		const toolExecution = pythonTool!.execute(
+		const EvalTool = session.getToolByName("eval");
+		expect(EvalTool).toBeDefined();
+		const toolExecution = EvalTool!.execute(
 			"call-id",
-			{ cells: [{ code: "print('tool after warmup')" }] },
+			{ input: "=== CELL ===\n```py\nprint('tool after warmup')\n```" },
 			undefined,
 			undefined,
 			undefined,
@@ -478,22 +452,11 @@ describe("AgentSession python cleanup", () => {
 		expect(warmupSpy).toHaveBeenCalledTimes(2);
 		expect(executeSpy).not.toHaveBeenCalled();
 	});
-	it("aborts tracked Python tool execution during session dispose after warmup completes", async () => {
+	it("aborts tracked eval execution during session dispose after warmup completes", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		pythonExecutor.resetPreludeDocsCache();
-
-		const helper: PreludeHelper = {
-			name: "helper",
-			signature: "helper()",
-			docstring: "doc",
-			category: "general",
-		};
-		let preludeDocs: PreludeHelper[] = [];
-		vi.spyOn(pythonExecutor, "getPreludeDocs").mockImplementation(() => preludeDocs);
 		const warmupSpy = vi.spyOn(pythonExecutor, "warmPythonEnvironment").mockImplementation(async () => {
-			preludeDocs = [helper];
-			return { ok: true, docs: preludeDocs };
+			return { ok: true };
 		});
 		const blockedExecuteStarted = Promise.withResolvers<void>();
 		const executeSpy = vi.spyOn(pythonExecutor, "executePython").mockImplementation(async (_code, options) => {
@@ -526,11 +489,11 @@ describe("AgentSession python cleanup", () => {
 		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
 
 		const session = await createSession(tempDir, cwd);
-		const pythonTool = session.getToolByName("python");
-		expect(pythonTool).toBeDefined();
+		const EvalTool = session.getToolByName("eval");
+		expect(EvalTool).toBeDefined();
 		let toolExecutionSettled = false;
-		const toolExecution = pythonTool!
-			.execute("call-id", { cells: [{ code: "print('tool')" }] }, undefined, undefined, undefined)
+		const toolExecution = EvalTool!
+			.execute("call-id", { input: "=== CELL ===\n```py\nprint('tool')\n```" }, undefined, undefined, undefined)
 			.finally(() => {
 				toolExecutionSettled = true;
 			});
@@ -562,7 +525,6 @@ describe("AgentSession python cleanup", () => {
 	it("detaches retained kernel ownership even when dispose times out waiting for Python work", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		pythonExecutor.resetPreludeDocsCache();
 		stubPythonWarmup();
 
 		const kernel = new FakeKernel();
@@ -621,7 +583,6 @@ describe("AgentSession python cleanup", () => {
 	it("rejects direct session Python starts once dispose begins", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		pythonExecutor.resetPreludeDocsCache();
 		stubPythonWarmup();
 		const executeSpy = vi.spyOn(pythonExecutor, "executePython").mockResolvedValue({
 			output: "late",
@@ -648,7 +609,6 @@ describe("AgentSession python cleanup", () => {
 	it("rejects direct session Python starts after an async user_python hook yields during dispose", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		pythonExecutor.resetPreludeDocsCache();
 		const hookStarted = Promise.withResolvers<void>();
 		const releaseHook = Promise.withResolvers<void>();
 		const hookExtension: ExtensionFactory = api => {
@@ -690,7 +650,6 @@ describe("AgentSession python cleanup", () => {
 	it("rejects async user_python hook results after dispose begins", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		pythonExecutor.resetPreludeDocsCache();
 		const hookStarted = Promise.withResolvers<void>();
 		const releaseHook = Promise.withResolvers<void>();
 		const hookExtension: ExtensionFactory = api => {
@@ -743,10 +702,9 @@ describe("AgentSession python cleanup", () => {
 		expect(session.messages.some(message => message.role === "pythonExecution")).toBe(false);
 	}, 10000);
 
-	it("rejects Python tool starts once dispose begins", async () => {
+	it("rejects eval starts once dispose begins", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		pythonExecutor.resetPreludeDocsCache();
 		const warmupSpy = stubPythonWarmup();
 		const executeSpy = vi.spyOn(pythonExecutor, "executePython").mockResolvedValue({
 			output: "late",
@@ -762,21 +720,26 @@ describe("AgentSession python cleanup", () => {
 		});
 
 		const session = await createSession(tempDir, cwd);
-		const pythonTool = session.getToolByName("python");
-		expect(pythonTool).toBeDefined();
+		const EvalTool = session.getToolByName("eval");
+		expect(EvalTool).toBeDefined();
 		const disposeSession = session.dispose();
 		await expect(
-			pythonTool!.execute("call-id", { cells: [{ code: "print('late')" }] }, undefined, undefined, undefined),
+			EvalTool!.execute(
+				"call-id",
+				{ input: "=== CELL ===\n```py\nprint('late')\n```" },
+				undefined,
+				undefined,
+				undefined,
+			),
 		).rejects.toThrow("Python execution is unavailable while session disposal is in progress");
 		await disposeSession;
 		expect(warmupSpy).toHaveBeenCalledTimes(1);
 		expect(executeSpy).not.toHaveBeenCalled();
 	});
 
-	it("rejects Python tool starts that reach async preflight after dispose begins", async () => {
+	it("rejects eval starts that reach async preflight after dispose begins", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		pythonExecutor.resetPreludeDocsCache();
 		const warmupSpy = stubPythonWarmup();
 		const executeSpy = vi.spyOn(pythonExecutor, "executePython").mockResolvedValue({
 			output: "late",
@@ -800,11 +763,11 @@ describe("AgentSession python cleanup", () => {
 		});
 
 		const session = await createSession(tempDir, cwd, { sessionManager });
-		const pythonTool = session.getToolByName("python");
-		expect(pythonTool).toBeDefined();
-		const execution = pythonTool!.execute(
+		const EvalTool = session.getToolByName("eval");
+		expect(EvalTool).toBeDefined();
+		const execution = EvalTool!.execute(
 			"call-id",
-			{ cells: [{ code: "print('late after artifact')" }] },
+			{ input: "=== CELL ===\n```py\nprint('late after artifact')\n```" },
 			undefined,
 			undefined,
 			undefined,
@@ -821,7 +784,6 @@ describe("AgentSession python cleanup", () => {
 	it("aborts every active Python execution owned by the session during dispose", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		pythonExecutor.resetPreludeDocsCache();
 		stubPythonWarmup();
 
 		const kernel = new FakeKernel();

@@ -9,8 +9,11 @@ Interacts with Language Server Protocol servers for code intelligence.
 - `hover`: Get type info and documentation → type signature + docs
 - `symbols`: List symbols in a file, or search workspace with `file: "*"` and a `query`
 - `rename`: Rename symbol across codebase → preview or apply edits
+- `rename_file`: Rename or move a file/directory; sends `workspace/willRenameFiles` so LSP servers update import paths and other references → preview or apply edits + filesystem rename
 - `code_actions`: List available quick-fixes/refactors/import actions; apply one when `apply: true` and `query` matches title or index
 - `status`: Show active language servers
+- `capabilities`: Dump per-server capabilities (standard + experimental + executeCommand list) for discovery — file scopes to one server, omitted/`"*"` lists every active server
+- `request`: Send a raw LSP request to a server — `query` is the method name (e.g., `rust-analyzer/expandMacro`, `typescript/goToSourceDefinition`, `workspace/executeCommand`); use `payload` for arbitrary JSON params or let the tool auto-build them from `file`/`line`/`symbol`
 - `reload`: Restart a specific server (via `file`) or all servers with `file: "*"`
 </operations>
 
@@ -18,9 +21,10 @@ Interacts with Language Server Protocol servers for code intelligence.
 - `file`: File path, glob pattern (e.g. `src/**/*.ts`), or `"*"` for workspace scope. Globs are expanded locally before dispatch. `"*"` routes `diagnostics`/`symbols`/`reload` to their workspace-wide form.
 - `line`: 1-indexed line number for position-based actions
 - `symbol`: Substring on the target line used to resolve column automatically. Append `#N` to pick the Nth occurrence on that line (1-indexed; default 1) — e.g. `foo#2` selects the second `foo`.
-- `query`: Symbol search query, code-action kind filter (list mode), or code-action selector (apply mode)
-- `new_name`: Required for rename
-- `apply`: Apply edits for rename/code_actions (default true for rename, list mode for code_actions unless explicitly true)
+- `query`: Symbol search query, code-action kind filter / selector (list/apply mode), or LSP method name when `action: request`
+- `new_name`: Required for `rename` (new symbol identifier) and `rename_file` (destination path)
+- `apply`: Apply edits for rename/rename_file/code_actions (default true for rename and rename_file; list mode for code_actions unless explicitly true)
+- `payload`: JSON-encoded params for `action: request`. Overrides the auto-built `{ textDocument, position }` shape when present.
 - `timeout`: Request timeout in seconds (clamped to 5-60, default 20)
 </parameters>
 

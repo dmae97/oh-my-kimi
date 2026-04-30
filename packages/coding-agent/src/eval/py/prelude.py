@@ -3,22 +3,39 @@ from __future__ import annotations
 if "__omp_prelude_loaded__" not in globals():
     __omp_prelude_loaded__ = True
     from pathlib import Path
-    import os, re, json, shutil, subprocess, inspect
+    import os, re, json, shutil, subprocess
     from datetime import datetime
-    from IPython.display import display
+    from IPython.display import display as _ipy_display, JSON
+
+    _PRESENTABLE_REPRS = (
+        "_repr_mimebundle_",
+        "_repr_html_",
+        "_repr_json_",
+        "_repr_markdown_",
+        "_repr_png_",
+        "_repr_jpeg_",
+        "_repr_svg_",
+        "_repr_latex_",
+    )
+
+    def display(value):
+        """Render a value. Wraps plain dict/list values as interactive JSON."""
+        if any(hasattr(value, attr) for attr in _PRESENTABLE_REPRS):
+            _ipy_display(value)
+            return
+        if isinstance(value, (dict, list, tuple)):
+            try:
+                _ipy_display(JSON(value))
+                return
+            except Exception:
+                pass
+        _ipy_display(value)
 
     def _emit_status(op: str, **data):
         """Emit structured status event for TUI rendering."""
-        display({"application/x-omp-status": {"op": op, **data}}, raw=True)
+        _ipy_display({"application/x-omp-status": {"op": op, **data}}, raw=True)
 
-    def _category(cat: str):
-        """Decorator to tag a prelude function with its category."""
-        def decorator(fn):
-            fn._omp_category = cat
-            return fn
-        return decorator
 
-    @_category("Shell")
     def env(key: str | None = None, value: str | None = None):
         """Get/set environment variables."""
         if key is None:
@@ -33,7 +50,6 @@ if "__omp_prelude_loaded__" not in globals():
         _emit_status("env", key=key, value=val, action="get")
         return val
 
-    @_category("File I/O")
     def read(path: str | Path, *, offset: int = 1, limit: int | None = None) -> str:
         """Read file contents. offset/limit are 1-indexed line numbers."""
         p = Path(path)
@@ -48,7 +64,6 @@ if "__omp_prelude_loaded__" not in globals():
         _emit_status("read", path=str(p), chars=len(data), preview=preview)
         return data
 
-    @_category("File I/O")
     def write(path: str | Path, content: str) -> Path:
         """Write file contents (create parents)."""
         p = Path(path)
@@ -57,7 +72,6 @@ if "__omp_prelude_loaded__" not in globals():
         _emit_status("write", path=str(p), chars=len(content))
         return p
 
-    @_category("File I/O")
     def append(path: str | Path, content: str) -> Path:
         """Append to file."""
         p = Path(path)
@@ -66,47 +80,6 @@ if "__omp_prelude_loaded__" not in globals():
             f.write(content)
         _emit_status("append", path=str(p), chars=len(content))
         return p
-
-    @_category("File ops")
-    def rm(path: str | Path, *, recursive: bool = False) -> None:
-        """Delete file or directory (recursive optional)."""
-        p = Path(path)
-        if p.is_dir():
-            if recursive:
-                shutil.rmtree(p)
-                _emit_status("rm", path=str(p), recursive=True)
-                return
-            _emit_status("rm", path=str(p), error="directory, use recursive=True")
-            return
-        if p.exists():
-            p.unlink()
-            _emit_status("rm", path=str(p))
-        else:
-            _emit_status("rm", path=str(p), error="missing")
-
-    @_category("File ops")
-    def mv(src: str | Path, dst: str | Path) -> Path:
-        """Move or rename a file/directory."""
-        src_p = Path(src)
-        dst_p = Path(dst)
-        dst_p.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src_p), str(dst_p))
-        _emit_status("mv", src=str(src_p), dst=str(dst_p))
-        return dst_p
-
-    @_category("File ops")
-    def cp(src: str | Path, dst: str | Path) -> Path:
-        """Copy a file or directory."""
-        src_p = Path(src)
-        dst_p = Path(dst)
-        dst_p.parent.mkdir(parents=True, exist_ok=True)
-        if src_p.is_dir():
-            shutil.copytree(src_p, dst_p, dirs_exist_ok=True)
-        else:
-            shutil.copy2(src_p, dst_p)
-        _emit_status("cp", src=str(src_p), dst=str(dst_p))
-        return dst_p
-
     def _load_gitignore_patterns(base: Path) -> list[str]:
         """Load .gitignore patterns from base directory and parents."""
         patterns: list[str] = []
@@ -152,7 +125,6 @@ if "__omp_prelude_loaded__" not in globals():
                 return True
         return False
 
-    @_category("Search")
     def find(
         pattern: str,
         path: str | Path = ".",
@@ -200,7 +172,6 @@ if "__omp_prelude_loaded__" not in globals():
         _emit_status("find", pattern=pattern, path=str(p), count=len(matches), matches=[str(m) for m in matches[:20]])
         return matches
 
-    @_category("Search")
     def grep(
         pattern: str,
         path: str | Path,
@@ -208,8 +179,8 @@ if "__omp_prelude_loaded__" not in globals():
         ignore_case: bool = False,
         literal: bool = False,
         context: int = 0,
-    ) -> list[tuple[int, str]]:
-        """Grep a single file. Returns (line_number, text) tuples."""
+    ) -> list[dict]:
+        """Grep a single file. Returns dicts with line/text fields."""
         p = Path(path)
         lines = p.read_text(encoding="utf-8").splitlines()
         if literal:
@@ -237,11 +208,10 @@ if "__omp_prelude_loaded__" not in globals():
         else:
             output_lines = sorted(match_lines)
         
-        hits = [(ln, lines[ln - 1]) for ln in output_lines]
-        _emit_status("grep", pattern=pattern, path=str(p), count=len(match_lines), hits=[{"line": h[0], "text": h[1][:100]} for h in hits[:10]])
+        hits = [{"line": ln, "text": lines[ln - 1]} for ln in output_lines]
+        _emit_status("grep", pattern=pattern, path=str(p), count=len(match_lines), hits=hits[:10])
         return hits
 
-    @_category("Search")
     def rgrep(
         pattern: str,
         path: str | Path = ".",
@@ -251,8 +221,8 @@ if "__omp_prelude_loaded__" not in globals():
         literal: bool = False,
         limit: int = 100,
         hidden: bool = False,
-    ) -> list[tuple[Path, int, str]]:
-        """Recursive grep across files matching glob_pattern. Respects .gitignore."""
+    ) -> list[dict]:
+        """Recursive grep across files matching glob_pattern. Returns dicts with file/line/text fields. Respects .gitignore."""
         if literal:
             if ignore_case:
                 match_fn = lambda line: pattern.lower() in line.lower()
@@ -265,7 +235,7 @@ if "__omp_prelude_loaded__" not in globals():
         
         base = Path(path)
         ignore_patterns = _load_gitignore_patterns(base)
-        hits: list[tuple[Path, int, str]] = []
+        hits: list[dict] = []
         for file_path in base.rglob(glob_pattern):
             if len(hits) >= limit:
                 break
@@ -285,24 +255,9 @@ if "__omp_prelude_loaded__" not in globals():
                 if len(hits) >= limit:
                     break
                 if match_fn(line):
-                    hits.append((file_path, i, line))
-        _emit_status("rgrep", pattern=pattern, path=str(base), count=len(hits), hits=[{"file": str(h[0]), "line": h[1], "text": h[2][:80]} for h in hits[:10]])
+                    hits.append({"file": str(file_path), "line": i, "text": line})
+        _emit_status("rgrep", pattern=pattern, path=str(base), count=len(hits), hits=hits[:10])
         return hits
-
-    @_category("Find/Replace")
-    def replace(path: str | Path, pattern: str, repl: str, *, regex: bool = False) -> int:
-        """Replace text in a file (regex optional)."""
-        p = Path(path)
-        data = p.read_text(encoding="utf-8")
-        if regex:
-            new, count = re.subn(pattern, repl, data)
-        else:
-            new = data.replace(pattern, repl)
-            count = data.count(pattern)
-        p.write_text(new, encoding="utf-8")
-        _emit_status("replace", path=str(p), count=count)
-        return count
-
     class ShellResult:
         """Result from shell command execution."""
         __slots__ = ("args", "stdout", "stderr", "returncode")
@@ -371,25 +326,22 @@ if "__omp_prelude_loaded__" not in globals():
         result = subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
         return _make_shell_result(result, cmd)
 
-    @_category("Shell")
     def run(cmd: str, *, cwd: str | Path | None = None, timeout: int | None = None) -> ShellResult:
         """Run a shell command. Returns ShellResult with stdout/stderr and returncode/exit_code fields."""
         shell_path = shutil.which("bash") or shutil.which("sh") or "/bin/sh"
         args = [shell_path, "-c", cmd]
         return _run_with_interrupt(args, str(cwd) if cwd else None, timeout, cmd)
 
-    @_category("Text")
-    def sort_lines(text: str, *, reverse: bool = False, unique: bool = False) -> str:
+    def sort(text: str, *, reverse: bool = False, unique: bool = False) -> str:
         """Sort lines of text."""
         lines = text.splitlines()
         if unique:
             lines = list(dict.fromkeys(lines))
         lines = sorted(lines, reverse=reverse)
         out = "\n".join(lines)
-        _emit_status("sort_lines", lines=len(lines), unique=unique, reverse=reverse)
+        _emit_status("sort", lines=len(lines), unique=unique, reverse=reverse)
         return out
 
-    @_category("Text")
     def uniq(text: str, *, count: bool = False) -> str | list[tuple[int, str]]:
         """Remove duplicate adjacent lines (like uniq)."""
         lines = text.splitlines()
@@ -412,7 +364,6 @@ if "__omp_prelude_loaded__" not in globals():
             return groups
         return "\n".join(line for _, line in groups)
 
-    @_category("Text")
     def counter(
         items: str | list,
         *,
@@ -435,20 +386,6 @@ if "__omp_prelude_loaded__" not in globals():
         result = [(count, item) for item, count in sorted_items]
         _emit_status("counter", unique=len(counts), total=sum(counts.values()), top=result[:10])
         return result
-
-    @_category("Text")
-    def cols(text: str, *indices: int, sep: str | None = None) -> str:
-        """Extract columns from text (0-indexed). Like cut."""
-        result_lines = []
-        for line in text.splitlines():
-            parts = line.split(sep) if sep else line.split()
-            selected = [parts[i] for i in indices if i < len(parts)]
-            result_lines.append(" ".join(selected))
-        out = "\n".join(result_lines)
-        _emit_status("cols", lines=len(result_lines), columns=list(indices))
-        return out
-
-    @_category("Navigation")
     def tree(path: str | Path = ".", *, max_depth: int = 3, show_hidden: bool = False) -> str:
         """Return directory tree."""
         base = Path(path)
@@ -472,7 +409,6 @@ if "__omp_prelude_loaded__" not in globals():
         _emit_status("tree", path=str(base), entries=len(lines) - 1, preview=out[:1000])
         return out
 
-    @_category("Navigation")
     def stat(path: str | Path) -> dict:
         """Get file/directory info."""
         p = Path(path)
@@ -483,12 +419,10 @@ if "__omp_prelude_loaded__" not in globals():
             "is_file": p.is_file(),
             "is_dir": p.is_dir(),
             "mtime": datetime.fromtimestamp(s.st_mtime).isoformat(),
-            "mode": oct(s.st_mode),
         }
         _emit_status("stat", path=str(p), size=s.st_size, is_dir=p.is_dir(), mtime=info["mtime"])
         return info
 
-    @_category("Batch")
     def diff(a: str | Path, b: str | Path) -> str:
         """Compare two files, return unified diff."""
         import difflib
@@ -500,8 +434,7 @@ if "__omp_prelude_loaded__" not in globals():
         _emit_status("diff", file_a=str(path_a), file_b=str(path_b), identical=not out, preview=out[:500])
         return out
 
-    @_category("Search")
-    def glob_files(pattern: str, path: str | Path = ".", *, hidden: bool = False) -> list[Path]:
+    def glob(pattern: str, path: str | Path = ".", *, hidden: bool = False) -> list[str]:
         """Non-recursive glob (use find() for recursive). Respects .gitignore."""
         p = Path(path)
         ignore_patterns = _load_gitignore_patterns(p)
@@ -518,7 +451,6 @@ if "__omp_prelude_loaded__" not in globals():
         _emit_status("glob", pattern=pattern, path=str(p), count=len(matches), matches=[str(m) for m in matches[:20]])
         return matches
 
-    @_category("Find/Replace")
     def sed(path: str | Path, pattern: str, repl: str, *, flags: int = 0) -> int:
         """Regex replace in file (like sed -i). Returns count."""
         p = Path(path)
@@ -527,110 +459,6 @@ if "__omp_prelude_loaded__" not in globals():
         p.write_text(new, encoding="utf-8")
         _emit_status("sed", path=str(p), count=count)
         return count
-
-    @_category("Find/Replace")
-    def rsed(
-        pattern: str,
-        repl: str,
-        path: str | Path = ".",
-        *,
-        glob_pattern: str = "*",
-        flags: int = 0,
-        hidden: bool = False,
-    ) -> int:
-        """Recursive sed across files matching glob_pattern. Respects .gitignore."""
-        base = Path(path)
-        ignore_patterns = _load_gitignore_patterns(base)
-        total = 0
-        files_changed = 0
-        changed_files = []
-        for file_path in base.rglob(glob_pattern):
-            if file_path.is_dir():
-                continue
-            # Skip hidden files unless requested
-            if not hidden and any(part.startswith(".") for part in file_path.parts):
-                continue
-            # Skip gitignored paths
-            if _match_gitignore(file_path, ignore_patterns, base):
-                continue
-            try:
-                data = file_path.read_text(encoding="utf-8")
-                new, count = re.subn(pattern, repl, data, flags=flags)
-                if count > 0:
-                    file_path.write_text(new, encoding="utf-8")
-                    total += count
-                    files_changed += 1
-                    if len(changed_files) < 10:
-                        changed_files.append({"file": str(file_path), "count": count})
-            except Exception:
-                continue
-        _emit_status("rsed", path=str(base), count=total, files=files_changed, changed=changed_files)
-        return total
-
-    @_category("Line ops")
-    def lines(path: str | Path, start: int = 1, end: int | None = None) -> str:
-        """Extract line range from file (1-indexed, inclusive). Like sed -n 'N,Mp'."""
-        p = Path(path)
-        all_lines = p.read_text(encoding="utf-8").splitlines()
-        if end is None:
-            end = len(all_lines)
-        start = max(1, start)
-        end = min(len(all_lines), end)
-        selected = all_lines[start - 1 : end]
-        out = "\n".join(selected)
-        _emit_status("lines", path=str(p), start=start, end=end, count=len(selected), preview=out[:500])
-        return out
-
-    @_category("Line ops")
-    def delete_lines(path: str | Path, start: int, end: int | None = None) -> int:
-        """Delete line range from file (1-indexed, inclusive). Like sed -i 'N,Md'."""
-        p = Path(path)
-        all_lines = p.read_text(encoding="utf-8").splitlines()
-        if end is None:
-            end = start
-        start = max(1, start)
-        end = min(len(all_lines), end)
-        count = end - start + 1
-        new_lines = all_lines[: start - 1] + all_lines[end:]
-        p.write_text("\n".join(new_lines) + ("\n" if all_lines else ""), encoding="utf-8")
-        _emit_status("delete_lines", path=str(p), start=start, end=end, count=count)
-        return count
-
-    @_category("Line ops")
-    def delete_matching(path: str | Path, pattern: str, *, regex: bool = True) -> int:
-        """Delete lines matching pattern. Like sed -i '/pattern/d'."""
-        p = Path(path)
-        all_lines = p.read_text(encoding="utf-8").splitlines()
-        if regex:
-            rx = re.compile(pattern)
-            new_lines = [l for l in all_lines if not rx.search(l)]
-        else:
-            new_lines = [l for l in all_lines if pattern not in l]
-        count = len(all_lines) - len(new_lines)
-        p.write_text("\n".join(new_lines) + ("\n" if all_lines else ""), encoding="utf-8")
-        _emit_status("delete_matching", path=str(p), pattern=pattern, count=count)
-        return count
-
-    @_category("Line ops")
-    def insert_at(path: str | Path, line_num: int, text: str, *, after: bool = True) -> Path:
-        """Insert text at line. after=True (sed 'Na\\'), after=False (sed 'Ni\\')."""
-        p = Path(path)
-        all_lines = p.read_text(encoding="utf-8").splitlines()
-        new_lines = text.splitlines()
-        line_num = max(1, min(len(all_lines) + 1, line_num))
-        if after:
-            idx = min(line_num, len(all_lines))
-            all_lines = all_lines[:idx] + new_lines + all_lines[idx:]
-            pos = "after"
-        else:
-            idx = line_num - 1
-            all_lines = all_lines[:idx] + new_lines + all_lines[idx:]
-            pos = "before"
-        p.write_text("\n".join(all_lines) + "\n", encoding="utf-8")
-        _emit_status("insert_at", path=str(p), line=line_num, lines_inserted=len(new_lines), position=pos)
-        return p
-
-    @_category("Agent")
     def output(
         *ids: str,
         format: str = "raw",
@@ -831,19 +659,3 @@ if "__omp_prelude_loaded__" not in globals():
         
         return current
 
-    def __omp_prelude_docs__() -> list[dict[str, str]]:
-        """Return prelude helper docs for templating. Discovers functions by _omp_category attribute."""
-        helpers: list[dict[str, str]] = []
-        for name, obj in globals().items():
-            if not callable(obj) or not hasattr(obj, "_omp_category"):
-                continue
-            signature = str(inspect.signature(obj))
-            doc = inspect.getdoc(obj) or ""
-            docline = doc.splitlines()[0] if doc else ""
-            helpers.append({
-                "name": name,
-                "signature": signature,
-                "docstring": docline,
-                "category": obj._omp_category,
-            })
-        return sorted(helpers, key=lambda h: (h["category"], h["name"]))

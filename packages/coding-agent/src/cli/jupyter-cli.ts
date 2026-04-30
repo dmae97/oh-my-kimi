@@ -6,7 +6,7 @@
 
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
-import { getGatewayStatus, shutdownSharedGateway } from "../ipy/gateway-coordinator";
+import { getGatewayStatus, shutdownSharedGateway } from "../eval/py/gateway-coordinator";
 
 export type JupyterAction = "kill" | "status";
 

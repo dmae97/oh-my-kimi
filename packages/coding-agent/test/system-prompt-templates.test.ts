@@ -277,7 +277,7 @@ describe("system Handlebars prompt templates", () => {
 			contextFiles: [],
 			skills: [],
 			rules: [],
-			toolNames: ["read", "search", "find", "edit", "lsp", "bash", "python"],
+			toolNames: ["read", "search", "find", "edit", "lsp", "bash", "eval"],
 			tools: new Map([
 				["read", { label: "Read", description: "Reads files" }],
 				["search", { label: "Search", description: "Searches files" }],
@@ -285,7 +285,7 @@ describe("system Handlebars prompt templates", () => {
 				["edit", { label: "Edit", description: "Edits files", wireName: "apply_patch" }],
 				["lsp", { label: "LSP", description: "Queries language servers" }],
 				["bash", { label: "Bash", description: "Runs shell commands" }],
-				["python", { label: "Python", description: "Runs Python cells" }],
+				["eval", { label: "Eval", description: "Runs eval cells" }],
 			]),
 		});
 

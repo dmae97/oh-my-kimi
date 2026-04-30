@@ -1,13 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import {
-	disposeAllKernelSessions,
-	executePythonWithKernel,
-	getPreludeDocs,
-	resetPreludeDocsCache,
-	warmPythonEnvironment,
-} from "@oh-my-pi/pi-coding-agent/ipy/executor";
-import { type KernelShutdownResult, type PreludeHelper, PythonKernel } from "@oh-my-pi/pi-coding-agent/ipy/kernel";
+import { disposeAllKernelSessions, executePythonWithKernel } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
 import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { FakeKernel } from "./helpers";
@@ -134,43 +127,5 @@ describe("executePythonWithKernel", () => {
 
 afterEach(async () => {
 	await disposeAllKernelSessions();
-	resetPreludeDocsCache();
 	vi.restoreAllMocks();
-});
-
-describe("warmPythonEnvironment", () => {
-	it("caches prelude docs on warmup", async () => {
-		const previousSkip = Bun.env.PI_PYTHON_SKIP_CHECK;
-		Bun.env.PI_PYTHON_SKIP_CHECK = "1";
-		using tempDir = TempDir.createSync("@python-executor-");
-		const docs: PreludeHelper[] = [
-			{
-				name: "read",
-				signature: "(path)",
-				docstring: "Read file contents.",
-				category: "File I/O",
-			},
-		];
-		const kernel = {
-			introspectPrelude: vi.fn().mockResolvedValue(docs),
-			ping: vi.fn().mockResolvedValue(true),
-			isAlive: () => true,
-			shutdown: vi.fn(async (): Promise<KernelShutdownResult> => ({ confirmed: true })),
-		};
-		const startSpy = vi.spyOn(PythonKernel, "start").mockResolvedValue(kernel as unknown as PythonKernel);
-
-		const result = await warmPythonEnvironment(tempDir.path(), "session-1");
-
-		expect(result.ok).toBe(true);
-		expect(result.docs).toEqual(docs);
-		expect(getPreludeDocs()).toEqual(docs);
-		expect(kernel.introspectPrelude).toHaveBeenCalledTimes(1);
-
-		startSpy.mockRestore();
-		if (previousSkip === undefined) {
-			delete Bun.env.PI_PYTHON_SKIP_CHECK;
-		} else {
-			Bun.env.PI_PYTHON_SKIP_CHECK = previousSkip;
-		}
-	});
 });

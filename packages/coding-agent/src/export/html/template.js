@@ -779,23 +779,21 @@
       }
 
       function renderJsLike(name, args, result, ctx) {
-        const lang = name === 'python' ? 'python' : 'javascript';
-        const badges = [];
-        if (args.cwd) badges.push('cwd=' + shortenPath(String(args.cwd)));
-        if (args.timeout) badges.push('timeout=' + args.timeout + 's');
-        if (args.reset) badges.push('reset');
-        let html = toolHead(name, '', badges);
-        const cells = Array.isArray(args.cells) ? args.cells : null;
-        if (!cells) {
-          html += '<div class="tool-error">[missing cells]</div>';
-        } else {
+        let html = toolHead(name, '');
+        const cells = result && result.details && Array.isArray(result.details.cells) ? result.details.cells : null;
+        if (cells) {
           for (const cell of cells) {
             html += '<div class="tool-cell">';
             if (cell && cell.title) html += '<div class="tool-cell-title">' + escapeHtml(String(cell.title)) + '</div>';
             const code = cell && typeof cell.code === 'string' ? cell.code : '';
+            const lang = cell && cell.language === 'js' ? 'javascript' : 'python';
             html += codeBlock(code, lang);
             html += '</div>';
           }
+        } else if (typeof args.input === 'string') {
+          html += codeBlock(args.input, null);
+        } else {
+          html += '<div class="tool-error">[missing input]</div>';
         }
         if (result) {
           html += ctx.renderResultImages();

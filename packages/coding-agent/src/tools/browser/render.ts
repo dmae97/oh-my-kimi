@@ -1,7 +1,7 @@
 /**
  * TUI renderer for the browser tool.
  *
- * Mirrors the `python` tool look: each `run` invocation is shown as a JS code
+ * Mirrors the `eval` tool look: each `run` invocation is shown as a JS code
  * cell with status icon, optional output, and expand/collapse handling. `open`
  * and `close` actions render as compact status lines.
  */

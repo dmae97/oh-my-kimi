@@ -1,89 +1,42 @@
-import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Markdown, Text } from "@oh-my-pi/pi-tui";
-import { getProjectDir, prompt } from "@oh-my-pi/pi-utils";
+import { prompt } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import { jsBackend, parseEvalInput, pythonBackend } from "../eval";
+import type { ExecutorBackend } from "../eval/backend";
+import evalGrammar from "../eval/eval.lark" with { type: "text" };
+import type { ParsedEvalCell } from "../eval/parse";
+import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { executePython, getPreludeDocs, type PythonExecutorOptions, warmPythonEnvironment } from "../ipy/executor";
-import type { PreludeHelper, PythonStatusEvent } from "../ipy/kernel";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
-import pythonDescription from "../prompts/tools/python.md" with { type: "text" };
+import evalDescription from "../prompts/tools/eval.md" with { type: "text" };
 import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../session/streaming-output";
 import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
-import type { ToolSession } from ".";
-import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
+import { resolveEvalBackends, type ToolSession } from ".";
+import { formatStyledTruncationWarning } from "./output-meta";
 import { formatTitle, replaceTabs, shortenPath, truncateToWidth, wrapBrackets } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
 
-export const PYTHON_DEFAULT_PREVIEW_LINES = 10;
+export const EVAL_DEFAULT_PREVIEW_LINES = 10;
 
-type PreludeCategory = {
-	name: string;
-	functions: PreludeHelper[];
-};
-
-function groupPreludeHelpers(helpers: PreludeHelper[]): PreludeCategory[] {
-	const categories: PreludeCategory[] = [];
-	const byName = new Map<string, PreludeHelper[]>();
-	for (const helper of helpers) {
-		let bucket = byName.get(helper.category);
-		if (!bucket) {
-			bucket = [];
-			byName.set(helper.category, bucket);
-			categories.push({ name: helper.category, functions: bucket });
-		}
-		bucket.push(helper);
-	}
-	return categories;
-}
-
-export const pythonSchema = Type.Object({
-	cells: Type.Array(
-		Type.Object({
-			code: Type.String({ description: "python code", examples: ["print('hello')", "import json"] }),
-			title: Type.String({ description: "cell label", examples: ["imports", "helper"] }),
-		}),
-		{ description: "cells to execute" },
-	),
-	timeout: Type.Optional(Type.Number({ description: "timeout in seconds", default: 30 })),
-	reset: Type.Optional(Type.Boolean({ description: "restart kernel" })),
+export const evalSchema = Type.Object({
+	input: Type.String({
+		description: "atom-style eval input containing CELL sections, fenced code, and optional RESET directive",
+	}),
 });
-export type PythonToolParams = Static<typeof pythonSchema>;
+export type EvalToolParams = Static<typeof evalSchema>;
 
-export type PythonToolResult = {
+export type EvalToolResult = {
 	content: Array<{ type: "text"; text: string }>;
-	details: PythonToolDetails | undefined;
+	details: EvalToolDetails | undefined;
 };
 
-export type PythonProxyExecutor = (params: PythonToolParams, signal?: AbortSignal) => Promise<PythonToolResult>;
-
-export interface PythonCellResult {
-	index: number;
-	title?: string;
-	code: string;
-	output: string;
-	status: "pending" | "running" | "complete" | "error";
-	durationMs?: number;
-	exitCode?: number;
-	statusEvents?: PythonStatusEvent[];
-	hasMarkdown?: boolean;
-}
-
-export interface PythonToolDetails {
-	cells?: PythonCellResult[];
-	jsonOutputs?: unknown[];
-	images?: ImageContent[];
-	/** Structured status events from prelude helpers */
-	statusEvents?: PythonStatusEvent[];
-	isError?: boolean;
-	/** Structured output metadata for notices */
-	meta?: OutputMeta;
-}
+export type EvalProxyExecutor = (params: EvalToolParams, signal?: AbortSignal) => Promise<EvalToolResult>;
 
 function formatJsonScalar(value: unknown): string {
 	if (value === null) return "null";
@@ -129,61 +82,189 @@ function renderJsonTree(value: unknown, theme: Theme, expanded: boolean, maxDept
 	return renderNode(value, "", 0, true);
 }
 
-export function getPythonToolDescription(): string {
-	const helpers = getPreludeDocs();
-	const categories = groupPreludeHelpers(helpers);
-	return prompt.render(pythonDescription, { categories });
+export interface EvalToolDescriptionOptions {
+	py?: boolean;
+	js?: boolean;
 }
 
-export interface PythonToolOptions {
-	proxyExecutor?: PythonProxyExecutor;
+export function getEvalToolDescription(options: EvalToolDescriptionOptions = {}): string {
+	const py = options.py ?? true;
+	const js = options.js ?? true;
+	return prompt.render(evalDescription, { py, js });
 }
 
-export class PythonTool implements AgentTool<typeof pythonSchema> {
-	readonly name = "python";
-	readonly label = "Python";
-	get description(): string {
-		return getPythonToolDescription();
+export interface EvalToolOptions {
+	proxyExecutor?: EvalProxyExecutor;
+}
+
+interface ResolvedBackend {
+	backend: ExecutorBackend;
+	fallback: boolean;
+	notice?: string;
+}
+
+interface ResolvedEvalCell {
+	index: number;
+	title?: string;
+	code: string;
+	timeoutMs: number;
+	reset: boolean;
+	resolved: ResolvedBackend;
+}
+
+function uniqueEvalLanguages(cells: ResolvedEvalCell[]): EvalLanguage[] {
+	return [...new Set(cells.map(cell => cell.resolved.backend.id))];
+}
+
+function detailsNotice(cells: ResolvedEvalCell[]): string | undefined {
+	const notices = [
+		...new Set(cells.map(cell => cell.resolved.notice).filter((notice): notice is string => Boolean(notice))),
+	];
+	return notices.length > 0 ? notices.join(" ") : undefined;
+}
+
+function languageForHighlighter(language: EvalLanguage | undefined): "python" | "javascript" {
+	return language === "js" ? "javascript" : "python";
+}
+
+function timeoutSecondsFromMs(timeoutMs: number): number {
+	return clampTimeout("eval", timeoutMs / 1000);
+}
+
+/**
+ * Best-effort language sniff for cells with no explicit `language`.
+ *
+ * Order:
+ * 1. Shebang on first line (`#!/usr/bin/env python`, `#!/usr/bin/env node`, etc.)
+ * 2. Strong syntactic markers unique to one language. We bias false negatives over
+ *    false positives — anything ambiguous returns `undefined` and the caller falls
+ *    back to the default-backend rules.
+ */
+function sniffLanguage(code: string): EvalLanguage | undefined {
+	const stripped = code.replace(/^\s+/, "");
+	if (stripped.startsWith("#!")) {
+		const firstLine = stripped.split("\n", 1)[0]!.toLowerCase();
+		if (/(\bpython\d?\b|\bipython\b)/.test(firstLine)) return "python";
+		if (/(\bnode\b|\bbun\b|\bdeno\b|\bjavascript\b|\bjs\b)/.test(firstLine)) return "js";
 	}
-	readonly parameters = pythonSchema;
+	const jsMarkers =
+		/(^|\n)\s*(const|let|var|async\s+function|function\s*\*?\s*[\w$]*\s*\(|import\s+[^\n]+\sfrom\s|export\s+(default|const|let|function|class|async)|require\s*\(|console\.\w+\s*\(|=>|;\s*$)/m;
+	const pyMarkers =
+		/(^|\n)\s*(def\s+\w+\s*\(|from\s+[\w.]+\s+import|import\s+\w+(\s+as\s+\w+)?\s*$|class\s+\w+\s*[(:]|print\s*\(|elif\s+[^\n]*:|with\s+[^\n]+:\s*$|@[\w.]+\s*$)/m;
+	const hasJs = jsMarkers.test(code);
+	const hasPy = pyMarkers.test(code);
+	if (hasJs && !hasPy) return "js";
+	if (hasPy && !hasJs) return "python";
+	return undefined;
+}
+
+async function resolveBackend(
+	session: ToolSession,
+	requested: EvalLanguage | undefined,
+	code: string,
+): Promise<ResolvedBackend> {
+	const allowPy = (session.settings.get("eval.py") as boolean | undefined) ?? true;
+	const allowJs = (session.settings.get("eval.js") as boolean | undefined) ?? true;
+
+	if (requested === "python") {
+		if (!allowPy) throw new ToolError("Python backend is disabled (eval.py = false).");
+		if (!(await pythonBackend.isAvailable(session))) {
+			throw new ToolError(
+				'Python backend is unavailable in this session. Pass language: "js" or install the python kernel.',
+			);
+		}
+		return { backend: pythonBackend, fallback: false };
+	}
+	if (requested === "js") {
+		if (!allowJs) throw new ToolError("JavaScript backend is disabled (eval.js = false).");
+		return { backend: jsBackend, fallback: false };
+	}
+	// Auto-detect.
+	const sniffed = sniffLanguage(code);
+	if (sniffed === "python" && allowPy && (await pythonBackend.isAvailable(session))) {
+		return { backend: pythonBackend, fallback: false };
+	}
+	if (sniffed === "js" && allowJs) {
+		return { backend: jsBackend, fallback: false };
+	}
+
+	// Sniffer returned undefined or the preferred backend was disabled. Prefer
+	// python when its kernel is up, else fall back to js.
+	if (allowPy && (await pythonBackend.isAvailable(session))) {
+		const notice =
+			sniffed === "js" ? "JavaScript markers detected but eval.js is disabled; using Python." : undefined;
+		return { backend: pythonBackend, fallback: false, notice };
+	}
+	if (allowJs) {
+		const notice =
+			sniffed === "python"
+				? "Python markers detected but the python kernel is unavailable; using JavaScript."
+				: undefined;
+		return { backend: jsBackend, fallback: true, notice };
+	}
+	throw new ToolError("No eval backend is available; enable eval.py or eval.js.");
+}
+
+export class EvalTool implements AgentTool<typeof evalSchema> {
+	readonly name = "eval";
+	readonly label = "Eval";
+	get description(): string {
+		if (!this.session) return getEvalToolDescription();
+		const backends = resolveEvalBackends(this.session);
+		return getEvalToolDescription({ py: backends.python, js: backends.js });
+	}
+	readonly parameters = evalSchema;
 	readonly concurrency = "exclusive";
 	readonly strict = true;
 
-	readonly #proxyExecutor?: PythonProxyExecutor;
+	get customFormat(): { syntax: "lark"; definition: string } {
+		return { syntax: "lark", definition: evalGrammar };
+	}
+
+	readonly #proxyExecutor?: EvalProxyExecutor;
 
 	constructor(
 		private readonly session: ToolSession | null,
-		options?: PythonToolOptions,
+		options?: EvalToolOptions,
 	) {
 		this.#proxyExecutor = options?.proxyExecutor;
 	}
 
 	async execute(
 		_toolCallId: string,
-		params: Static<typeof pythonSchema>,
+		params: Static<typeof evalSchema>,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback,
 		_ctx?: AgentToolContext,
-	): Promise<AgentToolResult<PythonToolDetails | undefined>> {
+	): Promise<AgentToolResult<EvalToolDetails | undefined>> {
 		if (this.#proxyExecutor) {
 			return this.#proxyExecutor(params, signal);
 		}
 
 		if (!this.session) {
-			throw new ToolError("Python tool requires a session when not using proxy executor");
+			throw new ToolError("Eval tool requires a session when not using proxy executor");
 		}
 		const session = this.session;
 
-		const { cells, timeout: rawTimeout = 30, reset } = params;
-		// Clamp to reasonable range: 1s - 600s (10 min)
-		const timeoutSec = clampTimeout("python", rawTimeout);
-		const timeoutMs = timeoutSec * 1000;
-		const deadlineMs = Date.now() + timeoutMs;
-		const timeoutSignal = AbortSignal.timeout(Math.max(0, deadlineMs - Date.now()));
+		const parsedInput = parseEvalInput(params.input);
+		let previousRuntimeLanguage: EvalLanguage | undefined;
+		const cells: ResolvedEvalCell[] = [];
+		for (const cell of parsedInput.cells) {
+			const requested = cell.languageOrigin === "fence" ? cell.language : (previousRuntimeLanguage ?? undefined);
+			const resolved = await resolveBackend(session, requested, cell.code);
+			previousRuntimeLanguage = resolved.backend.id;
+			cells.push({
+				index: cell.index,
+				title: cell.title,
+				code: cell.code,
+				timeoutMs: cell.timeoutMs,
+				reset: cell.reset,
+				resolved,
+			});
+		}
+		const languages = uniqueEvalLanguages(cells);
+		const notice = detailsNotice(cells);
 		const sessionAbortController = new AbortController();
-		const combinedSignal = signal
-			? AbortSignal.any([signal, timeoutSignal, sessionAbortController.signal])
-			: AbortSignal.any([timeoutSignal, sessionAbortController.signal]);
 		let outputSink: OutputSink | undefined;
 		let outputSummary: OutputSummary | undefined;
 		let outputDumped = false;
@@ -194,22 +275,23 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 			return outputSummary;
 		};
 
-		const execution = (async (): Promise<AgentToolResult<PythonToolDetails | undefined>> => {
+		const execution = (async (): Promise<AgentToolResult<EvalToolDetails | undefined>> => {
 			try {
 				if (signal?.aborted) {
 					throw new ToolAbortError();
 				}
-				session.assertPythonExecutionAllowed?.();
+				session.assertEvalExecutionAllowed?.();
 
 				const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES * 2);
 				const jsonOutputs: unknown[] = [];
 				const images: ImageContent[] = [];
-				const statusEvents: PythonStatusEvent[] = [];
+				const statusEvents: EvalStatusEvent[] = [];
 
-				const cellResults: PythonCellResult[] = cells.map((cell, index) => ({
-					index,
+				const cellResults: EvalCellResult[] = cells.map(cell => ({
+					index: cell.index,
 					title: cell.title,
 					code: cell.code,
+					language: cell.resolved.backend.id,
 					output: "",
 					status: "pending",
 				}));
@@ -219,8 +301,10 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 					tailBuffer.append(text);
 				};
 
-				const buildUpdateDetails = (): PythonToolDetails => {
-					const details: PythonToolDetails = {
+				const buildUpdateDetails = (): EvalToolDetails => {
+					const details: EvalToolDetails = {
+						language: languages[0],
+						languages,
 						cells: cellResults.map(cell => ({
 							...cell,
 							statusEvents: cell.statusEvents ? [...cell.statusEvents] : undefined,
@@ -235,6 +319,9 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 					if (statusEvents.length > 0) {
 						details.statusEvents = statusEvents;
 					}
+					if (notice) {
+						details.notice = notice;
+					}
 					return details;
 				};
 
@@ -248,9 +335,9 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 				};
 
 				const sessionFile = session.getSessionFile?.() ?? undefined;
-				const kernelOwnerId = session.getPythonKernelOwnerId?.() ?? undefined;
-				const { path: artifactPath, id: artifactId } = (await session.allocateOutputArtifact?.("python")) ?? {};
-				session.assertPythonExecutionAllowed?.();
+				const kernelOwnerId = session.getEvalKernelOwnerId?.() ?? undefined;
+				const { path: artifactPath, id: artifactId } = (await session.allocateOutputArtifact?.("eval")) ?? {};
+				session.assertEvalExecutionAllowed?.();
 				outputSink = new OutputSink({
 					artifactPath,
 					artifactId,
@@ -261,36 +348,35 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 				});
 				const sessionId = sessionFile ? `session:${sessionFile}:cwd:${session.cwd}` : `cwd:${session.cwd}`;
 
-				if (getPreludeDocs().length === 0) {
-					const warmup = await warmPythonEnvironment(
-						session.cwd,
-						sessionId,
-						session.settings.get("python.sharedGateway"),
-						sessionFile ?? undefined,
-						kernelOwnerId,
-						combinedSignal,
-					);
-					if (!warmup.ok) {
-						if (combinedSignal.aborted) throw new ToolAbortError();
-						throw new ToolError(warmup.reason ?? "Python prelude helpers unavailable");
-					}
-					session.assertPythonExecutionAllowed?.();
-				}
-
-				const baseExecutorOptions = {
-					cwd: session.cwd,
-					deadlineMs,
-					signal: combinedSignal,
-					sessionId,
-					kernelMode: session.settings.get("python.kernelMode"),
-					useSharedGateway: session.settings.get("python.sharedGateway"),
-					sessionFile: sessionFile ?? undefined,
-					kernelOwnerId,
-				};
+				const warmedBackends = new Set<EvalLanguage>();
 
 				for (let i = 0; i < cells.length; i++) {
 					const cell = cells[i];
-					const isFirstCell = i === 0;
+					const backend = cell.resolved.backend;
+					const timeoutSec = timeoutSecondsFromMs(cell.timeoutMs);
+					const deadlineMs = Date.now() + timeoutSec * 1000;
+					const timeoutSignal = AbortSignal.timeout(Math.max(0, deadlineMs - Date.now()));
+					const combinedSignal = signal
+						? AbortSignal.any([signal, timeoutSignal, sessionAbortController.signal])
+						: AbortSignal.any([timeoutSignal, sessionAbortController.signal]);
+
+					if (!warmedBackends.has(backend.id) && backend.warm) {
+						const warmup = await backend.warm({
+							cwd: session.cwd,
+							sessionId,
+							sessionFile: sessionFile ?? undefined,
+							kernelOwnerId,
+							signal: combinedSignal,
+							session,
+						});
+						if (!warmup.ok) {
+							if (combinedSignal.aborted) throw new ToolAbortError();
+							throw new ToolError(warmup.reason ?? `${backend.label} prelude helpers unavailable`);
+						}
+						session.assertEvalExecutionAllowed?.();
+					}
+					warmedBackends.add(backend.id);
+
 					const cellResult = cellResults[i];
 					cellResult.status = "running";
 					cellResult.output = "";
@@ -299,19 +385,25 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 					cellResult.durationMs = undefined;
 					pushUpdate();
 
-					const executorOptions: PythonExecutorOptions = {
-						...baseExecutorOptions,
-						reset: isFirstCell ? reset : false,
+					const startTime = Date.now();
+					const result = await backend.execute(cell.code, {
+						cwd: session.cwd,
+						sessionId,
+						sessionFile: sessionFile ?? undefined,
+						kernelOwnerId,
+						signal: combinedSignal,
+						session,
+						deadlineMs,
+						reset: cell.reset,
+						artifactPath,
+						artifactId,
 						onChunk: chunk => {
 							outputSink!.push(chunk);
 						},
-					};
-
-					const startTime = Date.now();
-					const result = await executePython(cell.code, executorOptions);
+					});
 					const durationMs = Date.now() - startTime;
 
-					const cellStatusEvents: PythonStatusEvent[] = [];
+					const cellStatusEvents: EvalStatusEvent[] = [];
 					let cellHasMarkdown = false;
 					for (const output of result.displayOutputs) {
 						if (output.type === "json") {
@@ -366,35 +458,17 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 								? `${combinedOutput}\n\nCell ${i + 1} aborted: ${errorMsg}`
 								: combinedOutput || errorMsg;
 
-						const rawSummary = (await finalizeOutput()) ?? {
-							output: "",
-							truncated: false,
-							totalLines: 0,
-							totalBytes: 0,
-							outputLines: 0,
-							outputBytes: 0,
-						};
-						const outputLines = combinedOutput.length > 0 ? combinedOutput.split("\n").length : 0;
-						const outputBytes = Buffer.byteLength(combinedOutput, "utf-8");
-						const missingLines = Math.max(0, rawSummary.totalLines - rawSummary.outputLines);
-						const missingBytes = Math.max(0, rawSummary.totalBytes - rawSummary.outputBytes);
-						const summaryForMeta: OutputSummary = {
-							output: combinedOutput,
-							truncated: rawSummary.truncated,
-							totalLines: outputLines + missingLines,
-							totalBytes: outputBytes + missingBytes,
-							outputLines,
-							outputBytes,
-							artifactId: rawSummary.artifactId,
-						};
-
-						const details: PythonToolDetails = {
+						const summaryForMeta = await summarizeFinal(combinedOutput, finalizeOutput);
+						const details: EvalToolDetails = {
+							language: languages[0],
+							languages,
 							cells: cellResults,
 							jsonOutputs: jsonOutputs.length > 0 ? jsonOutputs : undefined,
 							images: images.length > 0 ? images : undefined,
 							statusEvents: statusEvents.length > 0 ? statusEvents : undefined,
 							isError: true,
 						};
+						if (notice) details.notice = notice;
 
 						return toolResult(details)
 							.text(outputText)
@@ -413,35 +487,17 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 									? `${combinedOutput}\n\nCommand exited with code ${result.exitCode}`
 									: `Command exited with code ${result.exitCode}`;
 
-						const rawSummary = (await finalizeOutput()) ?? {
-							output: "",
-							truncated: false,
-							totalLines: 0,
-							totalBytes: 0,
-							outputLines: 0,
-							outputBytes: 0,
-						};
-						const outputLines = combinedOutput.length > 0 ? combinedOutput.split("\n").length : 0;
-						const outputBytes = Buffer.byteLength(combinedOutput, "utf-8");
-						const missingLines = Math.max(0, rawSummary.totalLines - rawSummary.outputLines);
-						const missingBytes = Math.max(0, rawSummary.totalBytes - rawSummary.outputBytes);
-						const summaryForMeta: OutputSummary = {
-							output: combinedOutput,
-							truncated: rawSummary.truncated,
-							totalLines: outputLines + missingLines,
-							totalBytes: outputBytes + missingBytes,
-							outputLines,
-							outputBytes,
-							artifactId: rawSummary.artifactId,
-						};
-
-						const details: PythonToolDetails = {
+						const summaryForMeta = await summarizeFinal(combinedOutput, finalizeOutput);
+						const details: EvalToolDetails = {
+							language: languages[0],
+							languages,
 							cells: cellResults,
 							jsonOutputs: jsonOutputs.length > 0 ? jsonOutputs : undefined,
 							images: images.length > 0 ? images : undefined,
 							statusEvents: statusEvents.length > 0 ? statusEvents : undefined,
 							isError: true,
 						};
+						if (notice) details.notice = notice;
 
 						return toolResult(details)
 							.text(outputText)
@@ -456,40 +512,22 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 				const combinedOutput = cellOutputs.join("\n\n");
 				const outputText =
 					combinedOutput || (jsonOutputs.length > 0 || images.length > 0 ? "(no text output)" : "(no output)");
-				const rawSummary = (await finalizeOutput()) ?? {
-					output: "",
-					truncated: false,
-					totalLines: 0,
-					totalBytes: 0,
-					outputLines: 0,
-					outputBytes: 0,
-				};
-				const outputLines = combinedOutput.length > 0 ? combinedOutput.split("\n").length : 0;
-				const outputBytes = Buffer.byteLength(combinedOutput, "utf-8");
-				const missingLines = Math.max(0, rawSummary.totalLines - rawSummary.outputLines);
-				const missingBytes = Math.max(0, rawSummary.totalBytes - rawSummary.outputBytes);
-				const summaryForMeta: OutputSummary = {
-					output: combinedOutput,
-					truncated: rawSummary.truncated,
-					totalLines: outputLines + missingLines,
-					totalBytes: outputBytes + missingBytes,
-					outputLines,
-					outputBytes,
-					artifactId: rawSummary.artifactId,
-				};
+				const summaryForMeta = await summarizeFinal(combinedOutput, finalizeOutput);
 
-				const details: PythonToolDetails = {
+				const details: EvalToolDetails = {
+					language: languages[0],
+					languages,
 					cells: cellResults,
 					jsonOutputs: jsonOutputs.length > 0 ? jsonOutputs : undefined,
 					images: images.length > 0 ? images : undefined,
 					statusEvents: statusEvents.length > 0 ? statusEvents : undefined,
 				};
+				if (notice) details.notice = notice;
 
-				const resultBuilder = toolResult(details)
+				return toolResult(details)
 					.text(outputText)
-					.truncationFromSummary(summaryForMeta, { direction: "tail" });
-
-				return resultBuilder.done();
+					.truncationFromSummary(summaryForMeta, { direction: "tail" })
+					.done();
 			} finally {
 				if (!outputDumped) {
 					try {
@@ -498,57 +536,95 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 				}
 			}
 		})();
-		return await (session.trackPythonExecution?.(execution, sessionAbortController) ?? execution);
+
+		return await (session.trackEvalExecution?.(execution, sessionAbortController) ?? execution);
 	}
 }
 
-interface PythonRenderArgs {
-	cells?: Array<{ code: string; title?: string }>;
-	timeout?: number;
-	cwd?: string;
+async function summarizeFinal(
+	combinedOutput: string,
+	finalizeOutput: () => Promise<OutputSummary | undefined>,
+): Promise<OutputSummary> {
+	const rawSummary = (await finalizeOutput()) ?? {
+		output: "",
+		truncated: false,
+		totalLines: 0,
+		totalBytes: 0,
+		outputLines: 0,
+		outputBytes: 0,
+	};
+	const outputLines = combinedOutput.length > 0 ? combinedOutput.split("\n").length : 0;
+	const outputBytes = Buffer.byteLength(combinedOutput, "utf-8");
+	const missingLines = Math.max(0, rawSummary.totalLines - rawSummary.outputLines);
+	const missingBytes = Math.max(0, rawSummary.totalBytes - rawSummary.outputBytes);
+	return {
+		output: combinedOutput,
+		truncated: rawSummary.truncated,
+		totalLines: outputLines + missingLines,
+		totalBytes: outputBytes + missingBytes,
+		outputLines,
+		outputBytes,
+		artifactId: rawSummary.artifactId,
+	};
 }
 
-interface PythonRenderContext {
+interface EvalRenderArgs {
+	input?: string;
+	__partialJson?: string;
+}
+
+interface EvalRenderContext {
 	output?: string;
 	expanded?: boolean;
 	previewLines?: number;
 	timeout?: number;
 }
 
+function decodePartialJsonStringFragment(fragment: string): string {
+	let text = fragment.replace(/\\u[0-9a-fA-F]{0,3}$/, "");
+	const trailingBackslashes = text.match(/\\+$/)?.[0].length ?? 0;
+	if (trailingBackslashes % 2 === 1) text = text.slice(0, -1);
+	try {
+		return JSON.parse(`"${text}"`) as string;
+	} catch {
+		return text;
+	}
+}
+
+function extractPartialJsonString(partialJson: string | undefined, key: string): string | undefined {
+	if (!partialJson) return undefined;
+	const pattern = new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)`, "u");
+	const match = pattern.exec(partialJson);
+	if (!match) return undefined;
+	return decodePartialJsonStringFragment(match[1]);
+}
+
+function getRenderInput(args: EvalRenderArgs | undefined): string | undefined {
+	return args?.input ?? extractPartialJsonString(args?.__partialJson, "input");
+}
+
 /** Format a status event as a single line for display. */
-function formatStatusEvent(event: PythonStatusEvent, theme: Theme): string {
+function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 	const { op, ...data } = event;
 
-	// Map operations to available theme icons
 	type AvailableIcon = "icon.file" | "icon.folder" | "icon.git" | "icon.package";
 	const opIcons: Record<string, AvailableIcon> = {
-		// File I/O
 		read: "icon.file",
 		write: "icon.file",
 		append: "icon.file",
 		cat: "icon.file",
 		touch: "icon.file",
-		lines: "icon.file",
-		// Navigation/Directory
 		ls: "icon.folder",
 		cd: "icon.folder",
 		pwd: "icon.folder",
 		mkdir: "icon.folder",
 		tree: "icon.folder",
 		stat: "icon.folder",
-		// Search (use file icon since no search icon)
 		find: "icon.file",
 		grep: "icon.file",
 		rgrep: "icon.file",
 		glob: "icon.file",
-		// Edit operations (use file icon)
-		replace: "icon.file",
 		sed: "icon.file",
-		rsed: "icon.file",
-		delete_lines: "icon.file",
-		delete_matching: "icon.file",
-		insert_at: "icon.file",
-		// Git
 		git_status: "icon.git",
 		git_diff: "icon.git",
 		git_log: "icon.git",
@@ -556,7 +632,6 @@ function formatStatusEvent(event: PythonStatusEvent, theme: Theme): string {
 		git_branch: "icon.git",
 		git_file_at: "icon.git",
 		git_has_changes: "icon.git",
-		// Shell/batch (use package icon)
 		run: "icon.package",
 		sh: "icon.package",
 		env: "icon.package",
@@ -566,23 +641,20 @@ function formatStatusEvent(event: PythonStatusEvent, theme: Theme): string {
 	const iconKey = opIcons[op] ?? "icon.file";
 	const icon = theme.styledSymbol(iconKey, "muted");
 
-	// Format the status message based on operation type
 	const parts: string[] = [];
 
-	// Error handling
 	if (data.error) {
 		return `${icon} ${theme.fg("warning", op)}: ${theme.fg("dim", String(data.error))}`;
 	}
 
-	// Build description based on common fields
 	switch (op) {
 		case "read":
-			parts.push(`${data.chars} chars`);
+			parts.push(`${data.chars ?? data.bytes ?? 0} chars`);
 			if (data.path) parts.push(`from ${shortenPath(String(data.path))}`);
 			break;
 		case "write":
 		case "append":
-			parts.push(`${data.chars} chars`);
+			parts.push(`${data.chars ?? data.bytes ?? 0} chars`);
 			if (data.path) parts.push(`to ${shortenPath(String(data.path))}`);
 			break;
 		case "cat":
@@ -622,14 +694,9 @@ function formatStatusEvent(event: PythonStatusEvent, theme: Theme): string {
 			}
 			if (data.path) parts.push(shortenPath(String(data.path)));
 			break;
-		case "replace":
 		case "sed":
 			parts.push(`${data.count} replacement${(data.count as number) !== 1 ? "s" : ""}`);
 			if (data.path) parts.push(`in ${shortenPath(String(data.path))}`);
-			break;
-		case "rsed":
-			parts.push(`${data.count} replacement${(data.count as number) !== 1 ? "s" : ""}`);
-			if (data.files) parts.push(`in ${data.files} file${(data.files as number) !== 1 ? "s" : ""}`);
 			break;
 		case "git_status":
 			if (data.clean) {
@@ -663,31 +730,13 @@ function formatStatusEvent(event: PythonStatusEvent, theme: Theme): string {
 		case "wc":
 			parts.push(`${data.lines}L ${data.words}W ${data.chars}C`);
 			break;
-		case "lines":
-			parts.push(`${data.count} line${(data.count as number) !== 1 ? "s" : ""}`);
-			if (data.start && data.end) parts.push(`(${data.start}-${data.end})`);
-			break;
-		case "delete_lines":
-		case "delete_matching":
-			parts.push(`${data.count} line${(data.count as number) !== 1 ? "s" : ""} deleted`);
-			break;
-		case "insert_at":
-			parts.push(`${data.lines_inserted} line${(data.lines_inserted as number) !== 1 ? "s" : ""} inserted`);
-			break;
 		case "cd":
 		case "pwd":
 		case "mkdir":
 		case "touch":
 			if (data.path) parts.push(shortenPath(String(data.path)));
 			break;
-		case "rm":
-		case "mv":
-		case "cp":
-			if (data.src) parts.push(`${shortenPath(String(data.src))} → ${shortenPath(String(data.dst))}`);
-			else if (data.path) parts.push(shortenPath(String(data.path)));
-			break;
 		default:
-			// Generic formatting for other operations
 			if (data.count !== undefined) {
 				parts.push(String(data.count));
 			}
@@ -701,14 +750,12 @@ function formatStatusEvent(event: PythonStatusEvent, theme: Theme): string {
 }
 
 /** Format status event with expanded detail lines. */
-function formatStatusEventExpanded(event: PythonStatusEvent, theme: Theme): string[] {
+function formatStatusEventExpanded(event: EvalStatusEvent, theme: Theme): string[] {
 	const lines: string[] = [];
 	const { op, ...data } = event;
 
-	// Main status line
 	lines.push(formatStatusEvent(event, theme));
 
-	// Add detail lines for operations with list data
 	const addItems = (items: unknown[], formatter: (item: unknown) => string, max = 5) => {
 		const arr = Array.isArray(items) ? items : [];
 		for (let i = 0; i < Math.min(arr.length, max); i++) {
@@ -719,7 +766,6 @@ function formatStatusEventExpanded(event: PythonStatusEvent, theme: Theme): stri
 		}
 	};
 
-	// Add preview lines (truncated content)
 	const addPreview = (preview: string, maxLines = 3) => {
 		const previewLines = String(preview).split("\n").slice(0, maxLines);
 		for (const line of previewLines) {
@@ -755,14 +801,6 @@ function formatStatusEventExpanded(event: PythonStatusEvent, theme: Theme): stri
 				});
 			}
 			break;
-		case "rsed":
-			if (data.changed) {
-				addItems(data.changed as unknown[], c => {
-					const change = c as { file: string; count: number };
-					return `${shortenPath(change.file)}: ${change.count} replacement${change.count !== 1 ? "s" : ""}`;
-				});
-			}
-			break;
 		case "env":
 			if (data.keys) addItems(data.keys as unknown[], k => String(k), 10);
 			break;
@@ -786,7 +824,6 @@ function formatStatusEventExpanded(event: PythonStatusEvent, theme: Theme): stri
 		case "tail":
 		case "tree":
 		case "diff":
-		case "lines":
 		case "git_diff":
 		case "sh":
 			if (data.preview) addPreview(String(data.preview));
@@ -797,7 +834,7 @@ function formatStatusEventExpanded(event: PythonStatusEvent, theme: Theme): stri
 }
 
 /** Render status events as tree lines. */
-function renderStatusEvents(events: PythonStatusEvent[], theme: Theme, expanded: boolean): string[] {
+function renderStatusEvents(events: EvalStatusEvent[], theme: Theme, expanded: boolean): string[] {
 	if (events.length === 0) return [];
 
 	const maxCollapsed = 3;
@@ -810,7 +847,6 @@ function renderStatusEvents(events: PythonStatusEvent[], theme: Theme, expanded:
 		const branch = isLast ? theme.tree.last : theme.tree.branch;
 
 		if (expanded) {
-			// Show expanded details for each event
 			const eventLines = formatStatusEventExpanded(events[i], theme);
 			lines.push(`${theme.fg("dim", branch)} ${eventLines[0]}`);
 			const continueBranch = isLast ? "   " : `${theme.tree.vertical}  `;
@@ -832,7 +868,7 @@ function renderStatusEvents(events: PythonStatusEvent[], theme: Theme, expanded:
 }
 
 function formatCellOutputLines(
-	cell: PythonCellResult,
+	cell: EvalCellResult,
 	expanded: boolean,
 	previewLines: number,
 	theme: Theme,
@@ -861,60 +897,46 @@ function formatCellOutputLines(
 	return { lines: outputLines, hiddenCount };
 }
 
-export const pythonToolRenderer = {
-	renderCall(args: PythonRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const cells = args.cells ?? [];
-		const cwd = getProjectDir();
-		let displayWorkdir = args.cwd;
-
-		if (displayWorkdir) {
-			const resolvedCwd = path.resolve(cwd);
-			const resolvedWorkdir = path.resolve(displayWorkdir);
-			if (resolvedWorkdir === resolvedCwd) {
-				displayWorkdir = undefined;
-			} else {
-				const relativePath = path.relative(resolvedCwd, resolvedWorkdir);
-				const isWithinCwd =
-					relativePath && !relativePath.startsWith("..") && !relativePath.startsWith(`..${path.sep}`);
-				if (isWithinCwd) {
-					displayWorkdir = relativePath;
-				}
+export const evalToolRenderer = {
+	renderCall(args: EvalRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+		const input = getRenderInput(args);
+		let cells: ParsedEvalCell[] = [];
+		if (input) {
+			try {
+				cells = parseEvalInput(input).cells;
+			} catch {
+				cells = [];
 			}
 		}
 
-		const workdirLabel = displayWorkdir ? `cd ${displayWorkdir}` : undefined;
 		if (cells.length === 0) {
-			const prompt = uiTheme.fg("accent", ">>>");
-			const prefix = workdirLabel ? `${uiTheme.fg("dim", `${workdirLabel} && `)}` : "";
-			const text = formatTitle(`${prompt} ${prefix}…`, uiTheme);
+			const promptSym = uiTheme.fg("accent", ">>>");
+			const text = formatTitle(`${promptSym} …`, uiTheme);
 			return new Text(text, 0, 0);
 		}
 
-		// Cache state - cells don't change, only width varies
-		let cached: { width: number; result: string[] } | undefined;
+		let cached: { key: string; width: number; result: string[] } | undefined;
 
 		return {
 			render: (width: number): string[] => {
-				if (cached && cached.width === width) {
+				const key = `${input?.length ?? 0}`;
+				if (cached && cached.key === key && cached.width === width) {
 					return cached.result;
 				}
 
 				const lines: string[] = [];
 				for (let i = 0; i < cells.length; i++) {
 					const cell = cells[i];
-					const cellTitle = cell.title;
-					const combinedTitle =
-						cellTitle && workdirLabel ? `${workdirLabel} · ${cellTitle}` : (cellTitle ?? workdirLabel);
 					const cellLines = renderCodeCell(
 						{
 							code: cell.code,
-							language: "python",
+							language: languageForHighlighter(cell.language),
 							index: i,
 							total: cells.length,
-							title: combinedTitle,
+							title: cell.title,
 							status: "pending",
 							width,
-							codeMaxLines: PYTHON_DEFAULT_PREVIEW_LINES,
+							codeMaxLines: EVAL_DEFAULT_PREVIEW_LINES,
 							expanded: true,
 						},
 						uiTheme,
@@ -924,7 +946,7 @@ export const pythonToolRenderer = {
 						lines.push("");
 					}
 				}
-				cached = { width, result: lines };
+				cached = { key, width, result: lines };
 				return lines;
 			},
 			invalidate: () => {
@@ -934,9 +956,10 @@ export const pythonToolRenderer = {
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: PythonToolDetails },
-		options: RenderResultOptions & { renderContext?: PythonRenderContext },
+		result: { content: Array<{ type: string; text?: string }>; details?: EvalToolDetails },
+		options: RenderResultOptions & { renderContext?: EvalRenderContext },
 		uiTheme: Theme,
+		_args?: EvalRenderArgs,
 	): Component {
 		const details = result.details;
 
@@ -959,17 +982,16 @@ export const pythonToolRenderer = {
 		if (details?.meta?.truncation) {
 			warningLine = formatStyledTruncationWarning(details.meta, uiTheme) ?? undefined;
 		}
+		const noticeLine = details?.notice ? uiTheme.fg("dim", wrapBrackets(details.notice, uiTheme)) : undefined;
 
 		const cellResults = details?.cells;
 		if (cellResults && cellResults.length > 0) {
-			// Cache state following Box pattern
 			let cached: { key: string; width: number; result: string[] } | undefined;
 
 			return {
 				render: (width: number): string[] => {
-					// Read mutable state at render time
 					const expanded = options.renderContext?.expanded ?? options.expanded;
-					const previewLines = options.renderContext?.previewLines ?? PYTHON_DEFAULT_PREVIEW_LINES;
+					const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
 					const key = `${expanded}|${previewLines}|${options.spinnerFrame}`;
 					if (cached && cached.key === key && cached.width === width) {
 						return cached.result;
@@ -995,7 +1017,7 @@ export const pythonToolRenderer = {
 						const cellLines = renderCodeCell(
 							{
 								code: cell.code,
-								language: "python",
+								language: languageForHighlighter(cell.language ?? details?.language),
 								index: i,
 								total: cellResults.length,
 								title: cell.title,
@@ -1004,7 +1026,7 @@ export const pythonToolRenderer = {
 								duration: cell.durationMs,
 								output: outputLines.length > 0 ? outputLines.join("\n") : undefined,
 								outputMaxLines: outputLines.length,
-								codeMaxLines: expanded ? Number.POSITIVE_INFINITY : PYTHON_DEFAULT_PREVIEW_LINES,
+								codeMaxLines: expanded ? Number.POSITIVE_INFINITY : EVAL_DEFAULT_PREVIEW_LINES,
 								expanded,
 								width,
 							},
@@ -1023,6 +1045,9 @@ export const pythonToolRenderer = {
 					}
 					if (timeoutLine) {
 						lines.push(timeoutLine);
+					}
+					if (noticeLine) {
+						lines.push(noticeLine);
 					}
 					if (warningLine) {
 						lines.push(warningLine);
@@ -1047,12 +1072,12 @@ export const pythonToolRenderer = {
 		);
 
 		if (!combinedOutput && statusLines.length === 0) {
-			const lines = [timeoutLine, warningLine].filter(Boolean) as string[];
+			const lines = [timeoutLine, noticeLine, warningLine].filter(Boolean) as string[];
 			return new Text(lines.join("\n"), 0, 0);
 		}
 
 		if (!combinedOutput && statusLines.length > 0) {
-			const lines = [uiTheme.fg("dim", "Status"), ...statusLines, timeoutLine, warningLine].filter(
+			const lines = [uiTheme.fg("dim", "Status"), ...statusLines, timeoutLine, noticeLine, warningLine].filter(
 				Boolean,
 			) as string[];
 			return new Text(lines.join("\n"), 0, 0);
@@ -1067,6 +1092,7 @@ export const pythonToolRenderer = {
 				styledOutput,
 				...(statusLines.length > 0 ? [uiTheme.fg("dim", "Status"), ...statusLines] : []),
 				timeoutLine,
+				noticeLine,
 				warningLine,
 			].filter(Boolean) as string[];
 			return new Text(lines.join("\n"), 0, 0);
@@ -1085,8 +1111,7 @@ export const pythonToolRenderer = {
 
 		return {
 			render: (width: number): string[] => {
-				// Read mutable state at render time
-				const previewLines = options.renderContext?.previewLines ?? PYTHON_DEFAULT_PREVIEW_LINES;
+				const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
 				if (cachedLines === undefined || cachedWidth !== width || cachedPreviewLines !== previewLines) {
 					const result = truncateToVisualLines(textContent, previewLines, width);
 					cachedLines = result.visualLines;
@@ -1112,6 +1137,9 @@ export const pythonToolRenderer = {
 				}
 				if (timeoutLine) {
 					outputLines.push(truncateToWidth(timeoutLine, width));
+				}
+				if (noticeLine) {
+					outputLines.push(truncateToWidth(noticeLine, width));
 				}
 				if (warningLine) {
 					outputLines.push(truncateToWidth(warningLine, width));

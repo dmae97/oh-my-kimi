@@ -17,7 +17,7 @@ src/
 ├── mcp/                 # MCP transport/manager/loader/tool bridge
 ├── lsp/                 # language server client/runtime integration
 ├── internal-urls/       # protocol router + handlers (agent://, docs://, rule://, ...)
-├── exec/ ipy/ ssh/      # execution backends (shell, python, ssh)
+├── exec/ eval/ ssh/     # execution backends (shell, eval runtimes, ssh)
 ├── web/                 # search providers + domain scrapers
 ├── patch/               # edit/patch parser + applicator + diff utilities
 └── config/ utils/ tui/  # settings, helpers, low-level TUI primitives
@@ -99,7 +99,7 @@ createAgentSession(...)
 
 - **Core runtime/session APIs**: `createAgentSession`, `AgentSession`, `SessionManager`, prompt/compaction/session types.
 - **Mode APIs**: `InteractiveMode`, `runPrintMode`, `runRpcMode`, `RpcClient` and RPC event/types.
-- **Discovery + tool constructors**: `discoverAuthStorage`, `discoverExtensions`, `discoverMCPServers`, `createTools`, built-in tool classes (`ReadTool`, `WriteTool`, `BashTool`, `PythonTool`, `FindTool`, `GrepTool`, `EditTool`).
+- **Discovery + tool constructors**: `discoverAuthStorage`, `discoverExtensions`, `discoverMCPServers`, `createTools`, built-in tool classes (`ReadTool`, `WriteTool`, `BashTool`, `EvalTool`, `FindTool`, `GrepTool`, `EditTool`).
 - **Extensibility interfaces**: extension/custom-command/custom-tool/skill/slash-command types and loaders.
 - **UI/theming helpers**: TUI components plus `initTheme`, `Theme`, and code-highlighting/theme utilities.
 - **CLI callable export**: `main` is re-exported for embedding/integration contexts that invoke root behavior explicitly.
@@ -390,7 +390,7 @@ A `ToolFactory` is `(session: ToolSession) => Tool | null | Promise<Tool | null>
 `createTools(session, toolNames?)` is the entry point. It:
 
 1. Normalizes requested tool names (`toolNames`) and always injects `exit_plan_mode`.
-2. Resolves Python mode via `PI_PY` override (`getPythonModeFromEnv()`) or `session.settings.get("python.toolMode")`.
+2. Resolves eval backend allowance via `PI_PY` override (`getEvalBackendsFromEnv()`) or `eval.py` / `eval.js` settings.
 3. Performs Python kernel preflight/warmup when applicable (`checkPythonKernelAvailability`, `warmPythonEnvironment`).
 4. Computes effective gating (`isToolAllowed`) from settings and runtime state:
    - feature toggles (`find.enabled`, `grep.enabled`, etc.)
@@ -741,10 +741,10 @@ This keeps URL protocol resolution centralized and pluggable while keeping proto
 ### ASCII overview
 
 ```text
-Tool adapters (tools/bash.ts, tools/python.ts, tools/ssh.ts)
+Tool adapters (tools/bash.ts, tools/eval.ts, tools/ssh.ts)
                 │ schema + validation + onUpdate + error policy
                 ▼
-Executors (exec/bash-executor.ts, ipy/executor.ts, ssh/ssh-executor.ts)
+Executors (exec/bash-executor.ts, eval/py/executor.ts, ssh/ssh-executor.ts)
                 │ process/kernel/session lifecycle
                 ▼
             OutputSink
@@ -755,8 +755,8 @@ Executors (exec/bash-executor.ts, ipy/executor.ts, ssh/ssh-executor.ts)
 
 This subsystem is split into two layers:
 
-- **Core executors** (`src/exec/bash-executor.ts`, `src/ipy/executor.ts`, `src/ssh/ssh-executor.ts`) own process/kernel lifecycle and raw output capture.
-- **Tool adapters** (`src/tools/bash.ts`, `src/tools/python.ts`) own tool schemas, argument normalization, UX-facing updates, and error policy for agent tool calls.
+- **Core executors** (`src/exec/bash-executor.ts`, `src/eval/py/executor.ts`, `src/ssh/ssh-executor.ts`) own process/kernel lifecycle and raw output capture.
+- **Tool adapters** (`src/tools/bash.ts`, `src/tools/eval.ts`) own tool schemas, argument normalization, UX-facing updates, and error policy for agent tool calls.
 
 ### Core executor responsibilities
 
@@ -772,7 +772,7 @@ This subsystem is split into two layers:
   - `output`, `truncated`, `totalLines/totalBytes`, `outputLines/outputBytes`, optional `artifactId`
   - `exitCode` / `cancelled` states for normal completion, timeout, and abort.
 
-#### Python executor (`src/ipy/executor.ts`)
+#### Python executor (`src/eval/py/executor.ts`)
 
 - Entry points:
   - `executePython(code, options)`
@@ -819,11 +819,11 @@ This subsystem is split into two layers:
   - converts backend cancellation/timeout/exit status into `ToolAbortError` / `ToolError`
   - returns `toolResult(...).text(...).truncationFromSummary(...)`.
 
-#### Python tool (`src/tools/python.ts`)
+#### Eval tool (`src/tools/eval.ts`)
 
-- Adapter class: `PythonTool implements AgentTool<typeof pythonSchema>`.
-- Defines schema (`cells[]`, `timeout`, `cwd`, `reset`) and dynamic description from prelude docs (`getPythonToolDescription`, `getPreludeDocs`).
-- Supports proxy mode via `PythonProxyExecutor`; otherwise executes locally.
+- Adapter class: `EvalTool implements AgentTool<typeof evalSchema>`.
+- Defines schema (`cells[]`, `language`, `timeout`, `reset`) and a static description from `prompts/tools/eval.md` (`getEvalToolDescription`).
+- Supports proxy mode via `EvalProxyExecutor`; otherwise executes locally.
 - Per-call adaptation:
   - validates and resolves working dir
   - clamps timeout and combines abort signals (`AbortSignal.any`)
@@ -923,7 +923,7 @@ What _is_ isolated is execution context and artifacts, not process memory:
 
 - Adds `task` tool automatically when `agent.spawns` is set and recursion depth permits.
 - Removes `task` when max recursion depth is reached (`task.maxRecursionDepth`).
-- Expands legacy `exec` alias into `python` and/or `bash` based on `python.toolMode`.
+- Expands legacy `exec` alias into `eval` when any eval backend is enabled, and always includes `bash`.
 - Forces `requireYieldTool: true` in `createAgentSession(...)`.
 - Filters parent-owned tools out of child tools (`todo_write` is removed).
 
@@ -1142,7 +1142,7 @@ Notes from current behavior:
 - `createTools()` always injects `exit_plan_mode` when `toolNames` are specified.
 - `resolve` is included only when at least one active tool is marked `deferrable: true` (built-in or extension/custom).
 - `yield` is force-added when `session.requireYieldTool === true`.
-- Python/Bash availability is mode-driven (`PI_PY`, `python.toolMode`) and can auto-fallback to bash.
+- Eval availability is mode-driven (`PI_PY`, `eval.py`, `eval.js`); eval falls back to JavaScript when Python is unavailable and JavaScript is enabled. The standalone `bash` tool is always available.
 
 ### Playbook: add an RPC command
 

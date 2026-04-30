@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { filterEnv } from "@oh-my-pi/pi-coding-agent/ipy/runtime";
+import { filterEnv } from "@oh-my-pi/pi-coding-agent/eval/py/runtime";
 
 describe("Python gateway environment filtering", () => {
 	it("filters sensitive and unknown variables from shell env", () => {

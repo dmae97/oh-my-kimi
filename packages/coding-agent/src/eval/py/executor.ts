@@ -1,17 +1,13 @@
-import * as path from "node:path";
-import { getAgentDir, getProjectDir, isBunTestRuntime, isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { OutputSink } from "../session/streaming-output";
+import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
+import { OutputSink } from "../../session/streaming-output";
 import { shutdownSharedGateway } from "./gateway-coordinator";
 import {
 	checkPythonKernelAvailability,
 	type KernelDisplayOutput,
 	type KernelExecuteOptions,
 	type KernelExecuteResult,
-	type PreludeHelper,
 	PythonKernel,
 } from "./kernel";
-import { discoverPythonModules } from "./modules";
-import { PYTHON_PRELUDE } from "./prelude";
 
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_KERNEL_SESSIONS = 4;
@@ -101,7 +97,6 @@ interface KernelSession {
 
 const kernelSessions = new Map<string, KernelSession>();
 const disposingKernelSessions = new Set<KernelSession>();
-let cachedPreludeDocs: PreludeHelper[] | null = null;
 let cleanupTimer: NodeJS.Timeout | null = null;
 
 interface KernelSessionExecutionOptions {
@@ -254,110 +249,6 @@ function buildKernelStartOptions(
 		signal: options.signal,
 		deadlineMs: options.deadlineMs,
 	};
-}
-
-interface PreludeCacheSource {
-	path: string;
-	hash: string;
-}
-
-interface PreludeCachePayload {
-	helpers: PreludeHelper[];
-	sources: PreludeCacheSource[];
-}
-
-interface PreludeCacheState {
-	cacheKey: string;
-	cachePath: string;
-	sources: PreludeCacheSource[];
-}
-
-const PRELUDE_CACHE_DIR = "pycache";
-
-function hashPreludeContent(content: string): string {
-	return Bun.hash(content).toString(16);
-}
-
-async function buildPreludeCacheState(cwd: string): Promise<PreludeCacheState> {
-	const modules = await discoverPythonModules({ cwd });
-	const moduleSources = modules
-		.map(module => ({ path: module.path, hash: hashPreludeContent(module.content) }))
-		.sort((a, b) => a.path.localeCompare(b.path));
-	const sources: PreludeCacheSource[] = [
-		{ path: "omp:prelude", hash: hashPreludeContent(PYTHON_PRELUDE) },
-		...moduleSources,
-	];
-	const composite = sources.map(source => `${source.path}:${source.hash}`).join("|");
-	const cacheKey = Bun.hash(composite).toString(16);
-	const cachePath = path.join(getAgentDir(), PRELUDE_CACHE_DIR, `${cacheKey}.json`);
-	return { cacheKey, cachePath, sources };
-}
-
-async function readPreludeCache(state: PreludeCacheState): Promise<PreludeHelper[] | null> {
-	let raw: string;
-	try {
-		raw = await Bun.file(state.cachePath).text();
-	} catch (err) {
-		if (isEnoent(err)) return null;
-		logger.warn("Failed to read Python prelude cache", { path: state.cachePath, error: String(err) });
-		return null;
-	}
-	try {
-		const parsed = JSON.parse(raw) as PreludeCachePayload | PreludeHelper[];
-		const helpers = Array.isArray(parsed) ? parsed : parsed.helpers;
-		if (!Array.isArray(helpers) || helpers.length === 0) return null;
-		return helpers;
-	} catch (err) {
-		logger.warn("Failed to parse Python prelude cache", { path: state.cachePath, error: String(err) });
-		return null;
-	}
-}
-
-async function writePreludeCache(state: PreludeCacheState, helpers: PreludeHelper[]): Promise<void> {
-	const payload: PreludeCachePayload = { helpers, sources: state.sources };
-	try {
-		await Bun.write(state.cachePath, JSON.stringify(payload));
-	} catch (err) {
-		logger.warn("Failed to write Python prelude cache", { path: state.cachePath, error: String(err) });
-	}
-}
-
-function getPreludeIntrospectionOptions(
-	options: KernelSessionExecutionOptions = {},
-): Pick<KernelExecuteOptions, "signal" | "timeoutMs"> {
-	return {
-		signal: options.signal,
-		timeoutMs: requireRemainingTimeoutMs(options.deadlineMs),
-	};
-}
-
-async function cachePreludeDocs(
-	cwd: string,
-	docs: PreludeHelper[],
-	cacheState?: PreludeCacheState | null,
-): Promise<PreludeHelper[]> {
-	cachedPreludeDocs = docs;
-	if (!isBunTestRuntime() && docs.length > 0) {
-		const state = cacheState ?? (await buildPreludeCacheState(cwd));
-		await writePreludeCache(state, docs);
-	}
-	return docs;
-}
-
-async function ensurePreludeDocsLoaded(
-	kernel: PythonKernel,
-	cwd: string,
-	options: KernelSessionExecutionOptions = {},
-	cacheState?: PreludeCacheState | null,
-): Promise<PreludeHelper[]> {
-	if (cachedPreludeDocs && cachedPreludeDocs.length > 0) {
-		return cachedPreludeDocs;
-	}
-	const docs = await kernel.introspectPrelude(getPreludeIntrospectionOptions(options));
-	if (docs.length === 0) {
-		throw new Error("Python prelude helpers unavailable");
-	}
-	return cachePreludeDocs(cwd, docs, cacheState);
 }
 
 function startCleanupTimer(): void {
@@ -565,70 +456,20 @@ async function ensureKernelAvailable(
 export async function warmPythonEnvironment(
 	cwd: string,
 	sessionId?: string,
-	useSharedGateway?: boolean,
-	sessionFile?: string,
+	_useSharedGateway?: boolean,
+	_sessionFile?: string,
 	kernelOwnerId?: string,
 	signal?: AbortSignal,
-): Promise<{ ok: boolean; reason?: string; docs: PreludeHelper[] }> {
-	let cacheState: PreludeCacheState | null = null;
+): Promise<{ ok: boolean; reason?: string }> {
 	const resolvedSessionId = sessionId ?? `session:${cwd}`;
 	try {
 		await logger.time("warmPython:ensureKernelAvailable", ensureKernelAvailable, cwd, { signal });
 	} catch (err: unknown) {
 		const reason = err instanceof Error ? err.message : String(err);
-		cachedPreludeDocs = [];
-		return { ok: false, reason, docs: [] };
+		return { ok: false, reason };
 	}
-	if (!isBunTestRuntime()) {
-		try {
-			cacheState = await buildPreludeCacheState(cwd);
-			const cached = await readPreludeCache(cacheState);
-			if (cached) {
-				cachedPreludeDocs = cached;
-				attachKernelOwner(resolvedSessionId, kernelOwnerId);
-				return { ok: true, docs: cached };
-			}
-		} catch (err) {
-			logger.warn("Failed to resolve Python prelude cache", { error: String(err) });
-			cacheState = null;
-		}
-	}
-	if (cachedPreludeDocs && cachedPreludeDocs.length > 0) {
-		attachKernelOwner(resolvedSessionId, kernelOwnerId);
-		return { ok: true, docs: cachedPreludeDocs };
-	}
-	try {
-		const docs = await logger.time(
-			"warmPython:withKernelSession",
-			withKernelSession,
-			resolvedSessionId,
-			cwd,
-			kernel => ensurePreludeDocsLoaded(kernel, cwd, { useSharedGateway, sessionFile, signal }, cacheState),
-			{
-				useSharedGateway,
-				sessionFile,
-				kernelOwnerId,
-				signal,
-			},
-		);
-		return { ok: true, docs };
-	} catch (err: unknown) {
-		const reason = err instanceof Error ? err.message : String(err);
-		cachedPreludeDocs = [];
-		return { ok: false, reason, docs: [] };
-	}
-}
-
-export function getPreludeDocs(): PreludeHelper[] {
-	return cachedPreludeDocs ?? [];
-}
-
-export function setPreludeDocsCache(docs: PreludeHelper[]): void {
-	cachedPreludeDocs = docs;
-}
-
-export function resetPreludeDocsCache(): void {
-	cachedPreludeDocs = null;
+	attachKernelOwner(resolvedSessionId, kernelOwnerId);
+	return { ok: true };
 }
 
 function isResourceExhaustionError(error: unknown): boolean {

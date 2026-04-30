@@ -59,7 +59,7 @@ export interface BashExecutionMessage {
 
 /**
  * Message type for user-initiated Python executions via the $ command.
- * Shares the same kernel session as the agent's Python tool.
+ * Shares the same kernel session as eval's Python backend.
  */
 export interface PythonExecutionMessage {
 	role: "pythonExecution";

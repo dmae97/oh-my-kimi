@@ -1,2 +1,0 @@
-def beta():
-	return "beta"

@@ -544,7 +544,7 @@ function shouldPersistResponseItemForMemories(message: AgentMessage): boolean {
 	}
 	if (role !== "toolResult") return false;
 	const toolName = (message as { toolName?: string }).toolName;
-	if (toolName === "bash" || toolName === "python" || toolName === "read" || toolName === "search") {
+	if (toolName === "bash" || toolName === "eval" || toolName === "read" || toolName === "search") {
 		const text = extractMessageText(message);
 		return text.length > 0 && text.length <= 32_000;
 	}

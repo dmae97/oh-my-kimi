@@ -36,6 +36,7 @@ import { CursorExecHandlers } from "./cursor";
 import "./discovery";
 import { resolveConfigValue } from "./config/resolve-config-value";
 import { initializeWithSettings } from "./discovery";
+import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./eval/py/executor";
 import { TtsrManager } from "./export/ttsr";
 import {
 	type CustomCommandsLoadResult,
@@ -73,7 +74,6 @@ import {
 	RuleProtocolHandler,
 	SkillProtocolHandler,
 } from "./internal-urls";
-import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./ipy/executor";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
 import { discoverAndLoadMCPTools, type MCPManager, type MCPToolsLoadResult } from "./mcp";
 import {
@@ -113,13 +113,13 @@ import {
 	createTools,
 	discoverStartupLspServers,
 	EditTool,
+	EvalTool,
 	FindTool,
 	getSearchTools,
 	HIDDEN_TOOLS,
 	isSearchProviderPreference,
 	type LspStartupServerInfo,
 	loadSshTool,
-	PythonTool,
 	ReadTool,
 	ResolveTool,
 	renderSearchToolBm25Description,
@@ -277,10 +277,10 @@ export {
 	BUILTIN_TOOLS,
 	createTools,
 	EditTool,
+	EvalTool,
 	FindTool,
 	HIDDEN_TOOLS,
 	loadSshTool,
-	PythonTool,
 	ReadTool,
 	ResolveTool,
 	SearchTool,
@@ -936,7 +936,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const resolvedAgentId = options.agentId ?? options.parentTaskPrefix ?? MAIN_AGENT_ID;
 	const resolvedAgentDisplayName =
 		options.agentDisplayName ?? ((options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? "sub" : "main");
-	const pythonKernelOwnerId = `agent-session:${Snowflake.next()}`;
+	const evalKernelOwnerId = `agent-session:${Snowflake.next()}`;
 
 	try {
 		const getActiveModelString = (): string | undefined => {
@@ -964,12 +964,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			requireYieldTool: options.requireYieldTool,
 			taskDepth: options.taskDepth ?? 0,
 			getSessionFile: () => sessionManager.getSessionFile() ?? null,
-			getPythonKernelOwnerId: () => pythonKernelOwnerId,
-			assertPythonExecutionAllowed: () => session?.assertPythonExecutionAllowed(),
-			trackPythonExecution: (execution, abortController) =>
-				session ? session.trackPythonExecution(execution, abortController) : execution,
+			getEvalKernelOwnerId: () => evalKernelOwnerId,
+			assertEvalExecutionAllowed: () => session?.assertEvalExecutionAllowed(),
+			trackEvalExecution: (execution, abortController) =>
+				session ? session.trackEvalExecution(execution, abortController) : execution,
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
 			getAgentId: () => resolvedAgentId,
+			getToolByName: name => session?.getToolByName(name),
 			agentRegistry,
 			getSessionSpawns: () => options.spawns ?? "*",
 			getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
@@ -1614,7 +1615,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			thinkingLevel,
 			sessionManager,
 			settings,
-			pythonKernelOwnerId,
+			evalKernelOwnerId,
 			scopedModels: options.scopedModels,
 			promptTemplates,
 			slashCommands,
@@ -1797,7 +1798,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (hasSession) {
 				await session.dispose();
 			} else {
-				await disposeKernelSessionsByOwner(pythonKernelOwnerId);
+				await disposeKernelSessionsByOwner(evalKernelOwnerId);
 			}
 		} catch (cleanupError) {
 			logger.warn("Failed to clean up createAgentSession resources after startup error", {

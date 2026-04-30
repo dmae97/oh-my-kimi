@@ -5,10 +5,10 @@ import type { AsyncJobManager } from "../async";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import { EditTool } from "../edit";
+import { warmPythonEnvironment } from "../eval/py/executor";
+import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import type { Skill } from "../extensibility/skills";
 import type { InternalUrlRouter } from "../internal-urls";
-import { getPreludeDocs, resetPreludeDocsCache, warmPythonEnvironment } from "../ipy/executor";
-import { checkPythonKernelAvailability } from "../ipy/kernel";
 import { LspTool } from "../lsp";
 import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 import type { PlanModeState } from "../plan-mode/state";
@@ -27,6 +27,7 @@ import { BrowserTool } from "./browser";
 import { CalculatorTool } from "./calculator";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 import { DebugTool } from "./debug";
+import { EvalTool } from "./eval";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FindTool } from "./find";
 import { GithubTool } from "./gh";
@@ -35,7 +36,6 @@ import { IrcTool } from "./irc";
 import { JobTool } from "./job";
 import { NotebookTool } from "./notebook";
 import { wrapToolWithMetaNotice } from "./output-meta";
-import { PythonTool } from "./python";
 import { ReadTool } from "./read";
 import { RecipeTool } from "./recipe";
 import { RenderMermaidTool } from "./render-mermaid";
@@ -66,6 +66,7 @@ export * from "./browser";
 export * from "./calculator";
 export * from "./checkpoint";
 export * from "./debug";
+export * from "./eval";
 export * from "./exit-plan-mode";
 export * from "./find";
 export * from "./gh";
@@ -74,7 +75,6 @@ export * from "./inspect-image";
 export * from "./irc";
 export * from "./job";
 export * from "./notebook";
-export * from "./python";
 export * from "./read";
 export * from "./recipe";
 export * from "./render-mermaid";
@@ -130,16 +130,18 @@ export interface ToolSession {
 	taskDepth?: number;
 	/** Get session file */
 	getSessionFile: () => string | null;
-	/** Get Python kernel owner ID for session-scoped retained-kernel cleanup */
-	getPythonKernelOwnerId?: () => string | null;
-	/** Reject new Python work once session disposal has started. */
-	assertPythonExecutionAllowed?: () => void;
-	/** Track tool-owned Python work so session disposal can await/abort it like direct session Python runs. */
-	trackPythonExecution?<T>(execution: Promise<T>, abortController: AbortController): Promise<T>;
+	/** Get eval kernel owner ID for session-scoped retained-kernel cleanup. */
+	getEvalKernelOwnerId?: () => string | null;
+	/** Reject new eval (python or js) work once session disposal has started. */
+	assertEvalExecutionAllowed?: () => void;
+	/** Track tool-owned eval work so session disposal can await/abort it like direct session eval runs. */
+	trackEvalExecution?<T>(execution: Promise<T>, abortController: AbortController): Promise<T>;
 	/** Get session ID */
 	getSessionId?: () => string | null;
 	/** Agent identity used for IRC routing. Returns the registry id (e.g. "0-Main", "0-AuthLoader"). */
 	getAgentId?: () => string | null;
+	/** Look up a registered tool by name (used by the eval js backend's tool bridge). */
+	getToolByName?: (name: string) => AgentTool | undefined;
 	/** Agent registry for IRC routing across live sessions. */
 	agentRegistry?: AgentRegistry;
 	/** Get artifacts directory for artifact:// URLs */
@@ -210,7 +212,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	ask: AskTool.createIf,
 	bash: s => new BashTool(s),
 	debug: DebugTool.createIf,
-	python: s => new PythonTool(s),
+	eval: s => new EvalTool(s),
 	calc: s => new CalculatorTool(s),
 	ssh: loadSshTool,
 	edit: s => new EditTool(s),
@@ -244,34 +246,40 @@ export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 
 export type ToolName = keyof typeof BUILTIN_TOOLS;
 
-export type PythonToolMode = "ipy-only" | "bash-only" | "both";
+export interface EvalBackendsAllowance {
+	python: boolean;
+	js: boolean;
+}
 
 /**
- * Parse PI_PY environment variable to determine Python tool mode.
- * Returns null if not set or invalid.
- *
- * Values:
- * - "0" or "bash" → bash-only
- * - "1" or "py" → ipy-only
- * - "mix" or "both" → both
+ * Parse PI_PY / PI_JS environment variables. Each is a boolean flag; unset
+ * means "not specified, defer to settings". Returns null when neither is set
+ * so the caller can fall through to `readEvalBackendsAllowance` per key.
  */
-function getPythonModeFromEnv(): PythonToolMode | null {
-	const value = $env.PI_PY?.toLowerCase();
-	if (!value) return null;
+function getEvalBackendsFromEnv(): EvalBackendsAllowance | null {
+	const pyEnv = $env.PI_PY;
+	const jsEnv = $env.PI_JS;
+	if (pyEnv === undefined && jsEnv === undefined) return null;
+	return {
+		python: pyEnv === undefined ? true : $flag("PI_PY"),
+		js: jsEnv === undefined ? true : $flag("PI_JS"),
+	};
+}
 
-	switch (value) {
-		case "0":
-		case "bash":
-			return "bash-only";
-		case "1":
-		case "py":
-			return "ipy-only";
-		case "mix":
-		case "both":
-			return "both";
-		default:
-			return null;
-	}
+/** Read per-backend allowance from settings (defaults true). */
+export function readEvalBackendsAllowance(session: ToolSession): EvalBackendsAllowance {
+	return {
+		python: session.settings.get("eval.py") ?? true,
+		js: session.settings.get("eval.js") ?? true,
+	};
+}
+
+/**
+ * Materialize the active eval backend allowance: PI_PY / PI_JS env flags
+ * override the per-key settings; otherwise settings (defaults true) win.
+ */
+export function resolveEvalBackends(session: ToolSession): EvalBackendsAllowance {
+	return getEvalBackendsFromEnv() ?? readEvalBackendsAllowance(session);
 }
 
 /**
@@ -285,36 +293,32 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	if (requestedTools && !requestedTools.includes("exit_plan_mode")) {
 		requestedTools.push("exit_plan_mode");
 	}
-	const pythonMode = getPythonModeFromEnv() ?? session.settings.get("python.toolMode");
+	const backends = resolveEvalBackends(session);
+	const allowPython = backends.python;
+	const allowJs = backends.js;
 	const skipPythonPreflight = session.skipPythonPreflight === true;
 	let pythonAvailable = true;
 	const shouldCheckPython =
-		!skipPythonPreflight &&
-		pythonMode !== "bash-only" &&
-		(requestedTools === undefined || requestedTools.includes("python"));
+		!skipPythonPreflight && allowPython && (requestedTools === undefined || requestedTools.includes("eval"));
 	const isTestEnv = isBunTestRuntime();
 	const forcePythonWarmup = session.forcePythonWarmup === true;
 	const skipPythonWarm = (isTestEnv && !forcePythonWarmup) || $flag("PI_PYTHON_SKIP_CHECK");
-	const cachedPreludeDocs = getPreludeDocs();
-	const shouldWarmPython = !skipPythonWarm && (forcePythonWarmup || cachedPreludeDocs.length === 0);
 	if (shouldCheckPython) {
 		const availability = await logger.time("createTools:pythonCheck", checkPythonKernelAvailability, session.cwd);
 		pythonAvailable = availability.ok;
 		if (!availability.ok) {
-			logger.warn("Python kernel unavailable, falling back to bash", {
+			logger.warn("Python kernel unavailable; eval will dispatch to JavaScript backend", {
 				reason: availability.reason,
 			});
-		} else if (shouldWarmPython) {
+		} else if (!skipPythonWarm) {
 			const sessionFile = session.getSessionFile?.() ?? undefined;
-			const kernelOwnerId = session.getPythonKernelOwnerId?.() ?? undefined;
+			const kernelOwnerId = session.getEvalKernelOwnerId?.() ?? undefined;
 			const warmSessionId = sessionFile ? `session:${sessionFile}:cwd:${session.cwd}` : `cwd:${session.cwd}`;
 			const warmupAbortController = new AbortController();
 			try {
-				session.assertPythonExecutionAllowed?.();
-				if (forcePythonWarmup && cachedPreludeDocs.length > 0) {
-					resetPreludeDocsCache();
-				}
-				const warmupExecution = session.trackPythonExecution
+				session.assertEvalExecutionAllowed?.();
+
+				const warmupExecution = session.trackEvalExecution
 					? logger.time(
 							"createTools:warmPython",
 							warmPythonEnvironment,
@@ -334,8 +338,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 							sessionFile,
 							kernelOwnerId,
 						);
-				await (session.trackPythonExecution?.(warmupExecution, warmupAbortController) ?? warmupExecution);
-				session.assertPythonExecutionAllowed?.();
+				await (session.trackEvalExecution?.(warmupExecution, warmupAbortController) ?? warmupExecution);
+				session.assertEvalExecutionAllowed?.();
 			} catch (err) {
 				logger.warn("Failed to warm Python environment", {
 					error: err instanceof Error ? err.message : String(err),
@@ -344,18 +348,10 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		}
 	}
 
-	const effectiveMode = pythonAvailable ? pythonMode : "bash-only";
-	const allowBash = effectiveMode !== "ipy-only";
-	const allowPython = effectiveMode !== "bash-only";
-	if (
-		requestedTools &&
-		allowBash &&
-		!allowPython &&
-		requestedTools.includes("python") &&
-		!requestedTools.includes("bash")
-	) {
-		requestedTools.push("bash");
-	}
+	const effectivePythonAllowed = allowPython && pythonAvailable;
+	// Eval is exposed whenever any backend is reachable. The python backend may
+	// be unreachable, in which case eval dispatches exclusively to js.
+	const allowEval = effectivePythonAllowed || allowJs;
 
 	// Auto-include AST counterparts when their text-based sibling is present
 	if (requestedTools) {
@@ -384,8 +380,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const allTools: Record<string, ToolFactory> = { ...BUILTIN_TOOLS, ...HIDDEN_TOOLS };
 	const isToolAllowed = (name: string) => {
 		if (name === "lsp") return enableLsp && session.settings.get("lsp.enabled");
-		if (name === "bash") return allowBash;
-		if (name === "python") return allowPython;
+		if (name === "bash") return true;
+		if (name === "eval") return allowEval;
 		if (name === "debug") return session.settings.get("debug.enabled");
 		if (name === "todo_write") return !includeYield && session.settings.get("todo.enabled");
 		if (name === "find") return session.settings.get("find.enabled");

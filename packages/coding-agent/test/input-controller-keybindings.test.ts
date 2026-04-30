@@ -63,7 +63,7 @@ async function createContext() {
 			isCompacting: false,
 			isGeneratingHandoff: false,
 			isBashRunning: false,
-			isPythonRunning: false,
+			isEvalRunning: false,
 			extensionRunner: undefined,
 		} as InteractiveModeContext["session"],
 		keybindings: {

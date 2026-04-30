@@ -1,6 +1,6 @@
 /**
- * Component for displaying user-initiated Python execution with streaming output.
- * Shares the same kernel session as the agent's Python tool.
+ * Component for displaying user-initiated eval execution with streaming output.
+ * Shares the same kernel session as the agent's eval tool.
  */
 
 import { sanitizeText } from "@oh-my-pi/pi-natives";
@@ -13,7 +13,9 @@ import { truncateToVisualLines } from "./visual-truncate";
 const PREVIEW_LINES = 20;
 const MAX_DISPLAY_LINE_CHARS = 4000;
 
-export class PythonExecutionComponent extends Container {
+export type EvalExecutionLanguage = "python" | "js";
+
+export class EvalExecutionComponent extends Container {
 	#outputLines: string[] = [];
 	#status: "running" | "complete" | "cancelled" | "error" = "running";
 	#exitCode: number | undefined = undefined;
@@ -22,10 +24,14 @@ export class PythonExecutionComponent extends Container {
 	#expanded = false;
 	#contentContainer: Container;
 
+	#highlightLang(): "python" | "javascript" {
+		return this.language === "js" ? "javascript" : "python";
+	}
+
 	#formatHeader(colorKey: "dim" | "pythonMode"): Text {
 		const prompt = theme.fg(colorKey, theme.bold(">>>"));
 		const continuation = theme.fg(colorKey, "    ");
-		const codeLines = highlightCode(this.code, "python");
+		const codeLines = highlightCode(this.code, this.#highlightLang());
 		const headerLines = codeLines.map((line, index) =>
 			index === 0 ? `${prompt} ${line}` : `${continuation}${line}`,
 		);
@@ -36,6 +42,7 @@ export class PythonExecutionComponent extends Container {
 		private readonly code: string,
 		ui: TUI,
 		private readonly excludeFromContext = false,
+		private readonly language: EvalExecutionLanguage = "python",
 	) {
 		super();
 

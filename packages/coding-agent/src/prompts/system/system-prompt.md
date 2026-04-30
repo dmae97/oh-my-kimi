@@ -216,12 +216,12 @@ Most tools have a `{{intentField}}` parameter. Fill it with a concise intent in 
 If the task may involve external systems, SaaS APIs, chat, tickets, databases, deployments, or other non-local integrations, you **SHOULD** call `{{toolRefs.search_tool_bm25}}` before concluding no such tool exists.
 {{/if}}
 
-{{#ifAny (includes tools "python") (includes tools "bash")}}
+{{#ifAny (includes tools "eval") (includes tools "bash")}}
 ### Tool priority
 1. Use specialized tools first{{#ifAny (includes tools "read") (includes tools "search") (includes tools "find") (includes tools "edit") (includes tools "lsp")}}: {{#has tools "read"}}`{{toolRefs.read}}`, {{/has}}{{#has tools "search"}}`{{toolRefs.search}}`, {{/has}}{{#has tools "find"}}`{{toolRefs.find}}`, {{/has}}{{#has tools "edit"}}`{{toolRefs.edit}}`, {{/has}}{{#has tools "lsp"}}`{{toolRefs.lsp}}`{{/has}}{{/ifAny}}
-2. Python: logic, loops, processing, display
+2. Eval: logic, loops, processing, display (default python; pass `language: "js"` for in-process JavaScript)
 3. Bash: simple one-liners only
-You **MUST NOT** use Python or Bash when a specialized tool exists.
+You **MUST NOT** use Eval or Bash when a specialized tool exists.
 {{/ifAny}}
 
 {{#ifAny (includes tools "read") (includes tools "write") (includes tools "search") (includes tools "find") (includes tools "edit")}}

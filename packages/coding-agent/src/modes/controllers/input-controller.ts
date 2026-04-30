@@ -37,7 +37,7 @@ export class InputController {
 					this.ctx.session.isCompacting ||
 					this.ctx.session.isGeneratingHandoff ||
 					this.ctx.session.isBashRunning ||
-					this.ctx.session.isPythonRunning ||
+					this.ctx.session.isEvalRunning ||
 					this.ctx.autoCompactionLoader ||
 					this.ctx.retryLoader ||
 					this.ctx.autoCompactionEscapeHandler ||
@@ -67,8 +67,8 @@ export class InputController {
 				this.ctx.editor.setText("");
 				this.ctx.isBashMode = false;
 				this.ctx.updateEditorBorderColor();
-			} else if (this.ctx.session.isPythonRunning) {
-				this.ctx.session.abortPython();
+			} else if (this.ctx.session.isEvalRunning) {
+				this.ctx.session.abortEval();
 			} else if (this.ctx.isPythonMode) {
 				this.ctx.editor.setText("");
 				this.ctx.isPythonMode = false;
@@ -304,7 +304,7 @@ export class InputController {
 				const isExcluded = text.startsWith("$$");
 				const code = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
 				if (code) {
-					if (this.ctx.session.isPythonRunning) {
+					if (this.ctx.session.isEvalRunning) {
 						this.ctx.showWarning("A Python execution is already running. Press Esc to cancel it first.");
 						this.ctx.editor.setText(text);
 						return;

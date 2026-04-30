@@ -1,0 +1,43 @@
+%import common.LF
+%import common.WS_INLINE
+
+// Strict canonical surface for the eval tool. Callers MUST emit exactly this
+// form. The runtime parser accepts additional lenient shapes (positional
+// title/duration, alias keys, long-form lang tokens, mixed casing, fence
+// runs of any length ≥ 3, etc.) but those are fallback only and MUST NOT
+// be relied on.
+//
+// Each cell is a fenced code block opened and closed by exactly three
+// (or exactly five) backticks or tildes — five lets callers nest a 3-char
+// fence inside a cell verbatim. The opening fence carries an optional info
+// string with up to four parts, IN THIS ORDER:
+//
+//   lang?  id_attr?  t_attr?  rst_attr?
+//
+// where:
+//   lang    = "py" | "js" | "ts"
+//   id_attr = id="..."        (double-quoted cell id)
+//   t_attr  = t=<duration>    (bare integer with optional ms/s/m unit)
+//   rst_attr= rst=0|1         (per-language kernel reset for this cell)
+
+start: cell+
+
+cell: backtick_cell | tilde_cell
+
+backtick_cell: BACKTICKS info? LF code_line* BACKTICKS LF
+tilde_cell:    TILDES   info? LF code_line* TILDES   LF
+
+info: lang (WS_INLINE id_attr)? (WS_INLINE t_attr)? (WS_INLINE rst_attr)?
+    | id_attr (WS_INLINE t_attr)? (WS_INLINE rst_attr)?
+    | t_attr (WS_INLINE rst_attr)?
+    | rst_attr
+
+lang:     "py" | "js" | "ts"
+id_attr:  "id="  /"[^"\r\n]*"/
+t_attr:   "t="   /\d+(ms|s|m)?/
+rst_attr: "rst=" /[01]/
+
+code_line: /[^\r\n]*/ LF
+
+BACKTICKS: "```"   | "`````"
+TILDES:    "~~~"   | "~~~~~"

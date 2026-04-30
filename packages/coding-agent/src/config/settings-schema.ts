@@ -1137,14 +1137,28 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	// Python
-	"python.toolMode": {
-		type: "enum",
-		values: ["ipy-only", "bash-only", "both"] as const,
-		default: "both",
-		ui: { tab: "editing", label: "Python Tool Mode", description: "How Python code is executed" },
+	// Eval (per-backend toggles; add more as new backends ship, e.g. eval.ts)
+	"eval.py": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "editing",
+			label: "Eval: Python backend",
+			description: "Allow the eval tool to dispatch to the IPython kernel",
+		},
 	},
 
+	"eval.js": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "editing",
+			label: "Eval: JavaScript backend",
+			description: "Allow the eval tool to dispatch to the in-process JavaScript runtime",
+		},
+	},
+
+	// Python kernel knobs (consumed by the eval py backend and the /python slash command)
 	"python.kernelMode": {
 		type: "enum",
 		values: ["session", "per-call"] as const,
