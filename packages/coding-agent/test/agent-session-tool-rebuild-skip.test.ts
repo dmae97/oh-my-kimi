@@ -420,4 +420,44 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 			setSystemTime(); // restore real time
 		}
 	});
+	it("does not rebuild when MCP server instructions change only beyond the 4000-char truncation boundary", async () => {
+		// `rebuildSystemPrompt` (sdk.ts) truncates each server instruction to 4000 chars
+		// before embedding it. The `getMcpServerInstructions` callback must therefore
+		// return pre-truncated strings so the signature hashes exactly what the prompt
+		// builder uses. Changes beyond char 4000 cannot affect rendered prompt bytes
+		// and must NOT trigger a rebuild.
+		const prefix = "A".repeat(4000);
+		const instructions = new Map<string, string>([["nucleus", `${prefix}_tail_v1`]]);
+		let rebuildCount = 0;
+		const { session } = newSession(
+			async toolNames => {
+				rebuildCount++;
+				return `tools:${toolNames.join(",")}`;
+			},
+			{
+				getMcpServerInstructions: () => {
+					// Mirror what sdk.ts does: truncate to 4000 chars before returning.
+					const out = new Map<string, string>();
+					for (const [name, text] of instructions) {
+						out.set(name, text.length > 4000 ? text.slice(0, 4000) : text);
+					}
+					return out;
+				},
+			},
+		);
+		const tool = createMcpCustomTool("mcp__nucleus_search", "nucleus", "search", "Search");
+
+		await session.refreshMCPTools([tool]);
+		expect(rebuildCount).toBe(1);
+
+		// Mutate only the text beyond char 4000: truncated string is identical → skip.
+		instructions.set("nucleus", `${prefix}_tail_v2`);
+		await session.refreshMCPTools([tool]);
+		expect(rebuildCount).toBe(1);
+
+		// Mutate within the first 4000 chars: truncated string differs → rebuild.
+		instructions.set("nucleus", `${"B".repeat(4000)}_tail_v2`);
+		await session.refreshMCPTools([tool]);
+		expect(rebuildCount).toBe(2);
+	});
 });
