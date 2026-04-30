@@ -244,6 +244,13 @@ export interface AgentSessionConfig {
 	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	/** System prompt builder that can consider tool availability */
 	rebuildSystemPrompt?: (toolNames: string[], tools: Map<string, AgentTool>) => Promise<string>;
+	/**
+	 * Optional accessor for live MCP server instructions. Read by the session's
+	 * `rebuildSystemPrompt`-skip optimization to detect server-side instruction
+	 * changes (e.g. an MCP server upgrade) that would otherwise pass the tool-set
+	 * signature comparison and silently keep a stale prompt cached.
+	 */
+	getMcpServerInstructions?: () => Map<string, string> | undefined;
 	/** Enable hidden-by-default MCP tool discovery for this session. */
 	mcpDiscoveryEnabled?: boolean;
 	/** MCP tool names to activate for the current session when discovery mode is enabled. */
@@ -511,7 +518,15 @@ export class AgentSession {
 	#onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#rebuildSystemPrompt: ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<string>) | undefined;
+	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
 	#baseSystemPrompt: string;
+	/**
+	 * Signature of the (toolNames, tool descriptions) tuple passed to the most
+	 * recent successful `rebuildSystemPrompt` call. Used to skip redundant rebuilds
+	 * when MCP servers reconnect without changing their tool definitions, which is
+	 * the dominant cause of prompt-cache invalidation in long sessions.
+	 */
+	#lastAppliedToolSignature: string | undefined;
 	#mcpDiscoveryEnabled = false;
 	#discoverableMCPTools = new Map<string, DiscoverableMCPTool>();
 	#discoverableMCPSearchIndex: DiscoverableMCPSearchIndex | null = null;
@@ -595,6 +610,7 @@ export class AgentSession {
 		this.#onResponse = config.onResponse;
 		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
 		this.#rebuildSystemPrompt = config.rebuildSystemPrompt;
+		this.#getMcpServerInstructions = config.getMcpServerInstructions;
 		this.#baseSystemPrompt = this.agent.state.systemPrompt;
 		this.#mcpDiscoveryEnabled = config.mcpDiscoveryEnabled ?? false;
 		this.#setDiscoverableMCPTools(this.#collectDiscoverableMCPToolsFromRegistry());
@@ -2211,10 +2227,18 @@ export class AgentSession {
 		}
 		this.agent.setTools(tools);
 
-		// Rebuild base system prompt with new tool set
+		// Rebuild base system prompt with new tool set, but only when the tool set
+		// actually changed. MCP servers can reconnect at arbitrary times and call
+		// `refreshMCPTools` -> `#applyActiveToolsByName` even though the resulting
+		// tool list is byte-identical. Skipping the rebuild keeps the system prompt
+		// stable, which is required for Anthropic prompt caching to keep hitting.
 		if (this.#rebuildSystemPrompt) {
-			this.#baseSystemPrompt = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
-			this.agent.setSystemPrompt(this.#baseSystemPrompt);
+			const signature = this.#computeAppliedToolSignature(validToolNames, tools);
+			if (signature !== this.#lastAppliedToolSignature) {
+				this.#baseSystemPrompt = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
+				this.agent.setSystemPrompt(this.#baseSystemPrompt);
+				this.#lastAppliedToolSignature = signature;
+			}
 		}
 		if (options?.persistMCPSelection !== false) {
 			this.#persistSelectedMCPToolNamesIfChanged(previousSelectedMCPToolNames);
@@ -2256,6 +2280,65 @@ export class AgentSession {
 		const activeToolNames = this.getActiveToolNames();
 		this.#baseSystemPrompt = await this.#rebuildSystemPrompt(activeToolNames, this.#toolRegistry);
 		this.agent.setSystemPrompt(this.#baseSystemPrompt);
+		// Refresh the cached signature so a subsequent `#applyActiveToolsByName` with
+		// the same tool set does not re-rebuild on top of the explicit refresh we
+		// just performed (and conversely, a different set forces a fresh rebuild).
+		const activeTools = activeToolNames
+			.map(name => this.#toolRegistry.get(name))
+			.filter((tool): tool is AgentTool => tool != null);
+		this.#lastAppliedToolSignature = this.#computeAppliedToolSignature(activeToolNames, activeTools);
+	}
+
+	/**
+	 * Compose a stable signature for the inputs that `rebuildSystemPrompt` reads.
+	 * Two calls producing identical signatures are guaranteed to produce identical
+	 * system prompt bytes, so the rebuild can be skipped.
+	 *
+	 * The signature covers:
+	 *   1. Active tool names in order (the prompt renders them in this order).
+	 *   2. Active tool labels and descriptions (both are echoed in the prompt body;
+	 *      see `system-prompt.md` `{{label}}: \`{{name}}\`` rendering).
+	 *   3. When MCP discovery is on, every registry tool's name+label+description,
+	 *      since `rebuildSystemPrompt` summarizes discoverable MCP tools that are
+	 *      not in the active set.
+	 *   4. MCP server instructions text (per server), since `rebuildSystemPrompt`
+	 *      embeds these in the appended prompt under "## MCP Server Instructions".
+	 *      A server upgrade can change instructions while keeping tools identical.
+	 *
+	 * Inputs NOT covered: tool input schemas, memory instructions read from disk,
+	 * and any other ambient state the rebuild closure reads. Callers must explicitly
+	 * call `refreshBaseSystemPrompt()` after such side-effecting changes; see e.g.
+	 * the memory hooks and `#syncEditToolModeAfterModelChange`.
+	 */
+	#computeAppliedToolSignature(toolNames: string[], tools: AgentTool[]): string {
+		// Order-preserving join: any reorder must produce a different signature so
+		// the rebuild fires and the new tool list reaches the API.
+		const nameSegment = toolNames.join("\u0001");
+		const describeTool = (tool: AgentTool): string => `${tool.name}=${tool.label ?? ""}|${tool.description ?? ""}`;
+		const descriptionSegment = tools.map(describeTool).join("\u0002");
+		let registrySegment = "";
+		if (this.#mcpDiscoveryEnabled) {
+			// Registry iteration order is not load-bearing for the prompt content, so we
+			// sort to keep the signature insensitive to incidental insertion order.
+			const entries: string[] = [];
+			for (const tool of this.#toolRegistry.values()) {
+				entries.push(describeTool(tool));
+			}
+			entries.sort();
+			registrySegment = entries.join("\u0004");
+		}
+		let instructionsSegment = "";
+		const serverInstructions = this.#getMcpServerInstructions?.();
+		if (serverInstructions && serverInstructions.size > 0) {
+			// Sort by server name so transport flap order does not perturb the signature.
+			const entries: string[] = [];
+			for (const [server, instructions] of serverInstructions) {
+				entries.push(`${server}=${instructions}`);
+			}
+			entries.sort();
+			instructionsSegment = entries.join("\u0006");
+		}
+		return `${nameSegment}\u0003${descriptionSegment}\u0005${registrySegment}\u0007${instructionsSegment}`;
 	}
 
 	/**

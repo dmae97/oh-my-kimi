@@ -1612,6 +1612,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			onResponse,
 			convertToLlm: convertToLlmFinal,
 			rebuildSystemPrompt,
+			getMcpServerInstructions: mcpManager ? () => mcpManager.getServerInstructions() : undefined,
 			mcpDiscoveryEnabled,
 			initialSelectedMCPToolNames,
 			defaultSelectedMCPToolNames,
