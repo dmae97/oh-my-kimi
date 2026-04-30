@@ -55,6 +55,7 @@ providers:
       X-Team: platform
     authHeader: true
     auth: apiKey
+    disableStrictTools: false  # set true for Anthropic-compatible endpoints that reject the strict field
     discovery:
       type: ollama
     modelOverrides:
@@ -121,6 +122,7 @@ Must define at least one of:
 - `baseUrl`
 - `headers`
 - `compat`
+- `disableStrictTools`
 - `modelOverrides`
 - `discovery`
 
@@ -139,7 +141,7 @@ ModelRegistry pipeline (on refresh):
 
 1. Load built-in providers/models from `@oh-my-pi/pi-ai`.
 2. Load `models.yml` custom config.
-3. Apply provider overrides (`baseUrl`, `headers`) to built-in models.
+3. Apply provider overrides (`baseUrl`, `headers`, `disableStrictTools`) to built-in models.
 4. Apply `modelOverrides` (per provider + model id).
 5. Merge custom `models`:
    - same `provider + id` replaces existing
@@ -452,6 +454,33 @@ The built-in model generator also assigns this automatically for `*-spark` model
 
 These are consumed by the OpenAI-completions transport logic and combined with URL-based auto-detection.
 
+### Strict tool schemas (`disableStrictTools`)
+
+Anthropic's API supports a `strict` field on tool definitions that forces the model to always follow the provided schema exactly. This is enabled by default for all `anthropic-messages` providers because it guarantees schema conformance in agentic systems.
+
+Third-party providers that front the Anthropic API (AWS Bedrock, Azure, self-hosted proxies) do not always implement this field and will reject requests that include it. Set `disableStrictTools: true` at the provider level to opt out:
+
+```yaml
+providers:
+  bedrock-anthropic:
+    baseUrl: https://bedrock-runtime.us-east-1.amazonaws.com/anthropic
+    apiKey: AWS_BEARER_TOKEN
+    api: anthropic-messages
+    disableStrictTools: true
+    models:
+      - id: claude-sonnet-4-20250514
+        name: Claude Sonnet 4 (Bedrock)
+        input: [text, image]
+        contextWindow: 200000
+        maxTokens: 16384
+        cost:
+          input: 3.00
+          output: 15.00
+          cacheRead: 0.30
+          cacheWrite: 3.75
+```
+
+`disableStrictTools` is a provider-level flag that applies to all models in the provider.
 ## Practical examples
 
 ### Local OpenAI-compatible endpoint (no auth)
@@ -476,6 +505,7 @@ providers:
     apiKey: ANTHROPIC_PROXY_API_KEY
     api: anthropic-messages
     authHeader: true
+    disableStrictTools: true  # if the proxy doesn't support strict tool schemas
     models:
       - id: claude-sonnet-4-20250514
         name: Claude Sonnet 4 (Proxy)

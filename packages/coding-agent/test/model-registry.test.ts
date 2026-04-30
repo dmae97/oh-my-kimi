@@ -1881,6 +1881,85 @@ describe("ModelRegistry", () => {
 			).toBe(true);
 		});
 	});
+	describe("disableStrictTools", () => {
+		test("custom provider with models gets disableStrictTools merged into compat", () => {
+			writeRawModelsJson({
+				"bedrock-anthropic": {
+					baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com/anthropic",
+					apiKey: "TEST_KEY",
+					api: "anthropic-messages",
+					disableStrictTools: true,
+					models: [
+						{
+							id: "claude-sonnet-4-20250514",
+							name: "Claude Sonnet 4",
+							reasoning: false,
+							input: ["text", "image"],
+							cost: { input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 3.75 },
+							contextWindow: 200000,
+							maxTokens: 16384,
+						},
+					],
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const model = registry.find("bedrock-anthropic", "claude-sonnet-4-20250514");
+
+			expect(model).toBeDefined();
+			expect((model?.compat as { disableStrictTools?: boolean } | undefined)?.disableStrictTools).toBe(true);
+		});
+
+		test("disableStrictTools on override-only provider applies to built-in models", () => {
+			writeRawModelsJson({ anthropic: { disableStrictTools: true } });
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const models = getModelsForProvider(registry, "anthropic");
+
+			expect(models.length).toBeGreaterThan(0);
+			for (const model of models) {
+				expect((model.compat as { disableStrictTools?: boolean } | undefined)?.disableStrictTools).toBe(true);
+			}
+		});
+
+		test("disableStrictTools is absent on built-in models without override", () => {
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const models = getModelsForProvider(registry, "anthropic");
+
+			expect(models.length).toBeGreaterThan(0);
+			for (const model of models) {
+				expect((model.compat as { disableStrictTools?: boolean } | undefined)?.disableStrictTools).toBeUndefined();
+			}
+		});
+
+		test("disableStrictTools is merged with explicit compat on custom provider", () => {
+			writeRawModelsJson({
+				"my-proxy": {
+					baseUrl: "https://proxy.example.com/anthropic",
+					apiKey: "TEST_KEY",
+					api: "anthropic-messages",
+					disableStrictTools: true,
+					models: [
+						{
+							id: "claude-sonnet-4",
+							name: "Sonnet",
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 200000,
+							maxTokens: 16384,
+						},
+					],
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const model = registry.find("my-proxy", "claude-sonnet-4");
+
+			expect(model).toBeDefined();
+			expect((model?.compat as { disableStrictTools?: boolean } | undefined)?.disableStrictTools).toBe(true);
+		});
+	});
 
 	describe("provider auth: oauth", () => {
 		test("models from a provider with auth: oauth are marked isOAuth=true", async () => {
