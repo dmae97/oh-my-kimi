@@ -255,6 +255,35 @@ static CTRL_ALT_LETTERS: [&str; 26] = [
 	"ctrl+alt+z",
 ];
 
+static ALT_SHIFT_LETTERS: [&str; 26] = [
+	"alt+shift+a",
+	"alt+shift+b",
+	"alt+shift+c",
+	"alt+shift+d",
+	"alt+shift+e",
+	"alt+shift+f",
+	"alt+shift+g",
+	"alt+shift+h",
+	"alt+shift+i",
+	"alt+shift+j",
+	"alt+shift+k",
+	"alt+shift+l",
+	"alt+shift+m",
+	"alt+shift+n",
+	"alt+shift+o",
+	"alt+shift+p",
+	"alt+shift+q",
+	"alt+shift+r",
+	"alt+shift+s",
+	"alt+shift+t",
+	"alt+shift+u",
+	"alt+shift+v",
+	"alt+shift+w",
+	"alt+shift+x",
+	"alt+shift+y",
+	"alt+shift+z",
+];
+
 static LETTERS: [&str; 26] = [
 	"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s",
 	"t", "u", "v", "w", "x", "y", "z",
@@ -822,6 +851,11 @@ fn matches_key_inner(bytes: &[u8], key_id: &str, kitty_protocol_active: bool) ->
 			return bytes.len() == 2 && bytes[0] == 0x1b && bytes[1] == ch;
 		}
 
+		// alt+shift+letter in legacy mode (ESC + UPPERCASE letter)
+		if modifier == (MOD_ALT | MOD_SHIFT) && !kitty_protocol_active && is_letter {
+			return bytes.len() == 2 && bytes[0] == 0x1b && bytes[1] == ch.to_ascii_uppercase();
+		}
+
 		// ctrl+key
 		if modifier == MOD_CTRL {
 			if is_letter {
@@ -1012,6 +1046,7 @@ fn parse_esc_pair(code: u8, kitty_protocol_active: bool) -> Option<Cow<'static, 
 			b'F' => return Some(Cow::Borrowed("alt+right")),
 			1..=26 => return Some(Cow::Borrowed(CTRL_ALT_LETTERS[(code - 1) as usize])),
 			b'a'..=b'z' => return Some(Cow::Borrowed(ALT_LETTERS[(code - b'a') as usize])),
+			b'A'..=b'Z' => return Some(Cow::Borrowed(ALT_SHIFT_LETTERS[(code - b'A') as usize])),
 			_ => {},
 		}
 	}
