@@ -44,11 +44,15 @@ interface PromptTaskModel {
 	cwd?: string;
 }
 
+const PROMPT_TASK_LIMIT = 20;
+
+
 interface PromptRunnerModel {
 	id: string;
 	label: string;
 	commandPrefix: string;
 	tasks: PromptTaskModel[];
+	hiddenTaskCount?: number;
 }
 
 export interface RecipePromptModel {
@@ -204,7 +208,7 @@ export function buildPromptModel(runners: DetectedRunner[]): RecipePromptModel {
 			id: runner.id,
 			label: runner.label,
 			commandPrefix: runner.commandPrefix,
-			tasks: runner.tasks.map(task => ({
+			tasks: runner.tasks.slice(0, PROMPT_TASK_LIMIT).map(task => ({
 				name: task.name,
 				paramSig: task.parameters.length > 0 ? task.parameters.join(" ") : undefined,
 				command: buildCommand(task.commandPrefix ?? runner.commandPrefix, task.commandName ?? task.name, ""),
