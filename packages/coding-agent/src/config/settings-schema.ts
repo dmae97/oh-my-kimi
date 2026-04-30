@@ -1793,38 +1793,33 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "providers",
 			label: "SearXNG Endpoint",
-			description: "Base URL of the SearXNG instance (e.g. https://searx.example.org)",
+			description: "Self-hosted search base URL",
 		},
 	},
 
 	"searxng.token": {
 		type: "string",
 		default: undefined,
-		ui: {
-			tab: "providers",
-			label: "SearXNG Token",
-			description: "Optional bearer token for SearXNG authentication",
-		},
+	},
+
+	"searxng.basicUsername": {
+		type: "string",
+		default: undefined,
+	},
+
+	"searxng.basicPassword": {
+		type: "string",
+		default: undefined,
 	},
 
 	"searxng.categories": {
 		type: "string",
 		default: undefined,
-		ui: {
-			tab: "providers",
-			label: "SearXNG Categories",
-			description: "Comma-separated categories filter (e.g. general,news,science)",
-		},
 	},
 
 	"searxng.language": {
 		type: "string",
 		default: undefined,
-		ui: {
-			tab: "providers",
-			label: "SearXNG Language",
-			description: "Language code for search results (e.g. en, zh-CN)",
-		},
 	},
 
 	"commit.mapReduceEnabled": { type: "boolean", default: true },

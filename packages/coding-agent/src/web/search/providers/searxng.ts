@@ -9,14 +9,18 @@
  * and various authentication methods (bearer token, basic auth, or none).
  *
  * Configuration via settings:
- *   searxng.endpoint  - Base URL of the SearXNG instance (e.g. https://searx.example.org)
- *   searxng.token     - Optional bearer token for authentication
- *   searxng.categories - Optional comma-separated categories filter
- *   searxng.language  - Optional language code (e.g. en, zh-CN)
+ *   searxng.endpoint      - Base URL of the SearXNG instance (e.g. https://searx.example.org)
+ *   searxng.token         - Optional bearer token for authentication
+ *   searxng.basicUsername - Optional RFC 7617 Basic auth username
+ *   searxng.basicPassword - Optional RFC 7617 Basic auth password
+ *   searxng.categories    - Optional comma-separated categories filter
+ *   searxng.language      - Optional language code (e.g. en, zh-CN)
  *
  * Environment variable fallbacks:
- *   SEARXNG_ENDPOINT  - Base URL of the SearXNG instance
- *   SEARXNG_TOKEN     - Optional bearer token
+ *   SEARXNG_ENDPOINT       - Base URL of the SearXNG instance
+ *   SEARXNG_TOKEN          - Optional bearer token
+ *   SEARXNG_BASIC_USERNAME - Optional RFC 7617 Basic auth username
+ *   SEARXNG_BASIC_PASSWORD - Optional RFC 7617 Basic auth password
  *
  * Reference: https://docs.searxng.org/dev/search_api.html
  */
@@ -61,6 +65,11 @@ interface SearXNGResponse {
 	unresponsive_engines?: Array<[string, string]>;
 }
 
+interface SearXNGAuth {
+	type: "basic" | "bearer";
+	value: string;
+}
+
 /** Find SearXNG endpoint from settings or environment. */
 function findEndpoint(): string | null {
 	try {
@@ -83,6 +92,53 @@ function findToken(): string | null {
 	return process.env.SEARXNG_TOKEN ?? null;
 }
 
+/** Find SearXNG Basic auth username from settings or environment. */
+function findBasicUsername(): string | null {
+	try {
+		const username = settings.get("searxng.basicUsername");
+		if (username !== undefined) return username;
+	} catch {
+		// Settings not initialized yet
+	}
+	return process.env.SEARXNG_BASIC_USERNAME ?? null;
+}
+
+/** Find SearXNG Basic auth password from settings or environment. */
+function findBasicPassword(): string | null {
+	try {
+		const password = settings.get("searxng.basicPassword");
+		if (password !== undefined) return password;
+	} catch {
+		// Settings not initialized yet
+	}
+	return process.env.SEARXNG_BASIC_PASSWORD ?? null;
+}
+
+/** Build the RFC 7617 Basic auth credential using UTF-8 bytes. */
+function buildBasicAuthValue(username: string, password: string): string {
+	return Buffer.from(`${username}:${password}`, "utf-8").toString("base64");
+}
+
+/** Find SearXNG authentication from settings or environment. Basic auth takes precedence over bearer tokens. */
+function findAuth(): SearXNGAuth | null {
+	const basicUsername = findBasicUsername();
+	const basicPassword = findBasicPassword();
+	if (basicUsername !== null || basicPassword !== null) {
+		if (basicUsername === null || basicPassword === null) {
+			throw new Error(
+				"SearXNG Basic auth requires both searxng.basicUsername and searxng.basicPassword, or SEARXNG_BASIC_USERNAME and SEARXNG_BASIC_PASSWORD.",
+			);
+		}
+		if (basicUsername.includes(":")) {
+			throw new Error("SearXNG Basic auth username cannot contain ':' because RFC 7617 uses it as the separator.");
+		}
+		return { type: "basic", value: buildBasicAuthValue(basicUsername, basicPassword) };
+	}
+
+	const token = findToken();
+	return token ? { type: "bearer", value: token } : null;
+}
+
 /** Build the search URL and headers for a SearXNG request */
 function buildRequest(
 	endpoint: string,
@@ -94,7 +150,7 @@ function buildRequest(
 		language?: string;
 		signal?: AbortSignal;
 	},
-	token: string | null,
+	auth: SearXNGAuth | null,
 ): { url: URL; headers: Record<string, string> } {
 	const base = endpoint.replace(/\/+$/, "");
 	const url = new URL(`${base}/search`);
@@ -122,8 +178,10 @@ function buildRequest(
 		Accept: "application/json",
 	};
 
-	if (token) {
-		headers.Authorization = `Bearer ${token}`;
+	if (auth?.type === "basic") {
+		headers.Authorization = `Basic ${auth.value}`;
+	} else if (auth?.type === "bearer") {
+		headers.Authorization = `Bearer ${auth.value}`;
 	}
 
 	return { url, headers };
@@ -139,9 +197,9 @@ async function callSearXNGSearch(
 		language?: string;
 		signal?: AbortSignal;
 	},
-	token: string | null,
+	auth: SearXNGAuth | null,
 ): Promise<SearXNGResponse> {
-	const { url, headers } = buildRequest(endpoint, params, token);
+	const { url, headers } = buildRequest(endpoint, params, auth);
 
 	const response = await fetch(url, {
 		headers,
@@ -172,7 +230,7 @@ export async function searchSearXNG(params: {
 		);
 	}
 
-	const token = findToken();
+	const auth = findAuth();
 
 	let categories: string | undefined;
 	let language: string | undefined;
@@ -190,7 +248,7 @@ export async function searchSearXNG(params: {
 			categories,
 			language,
 		},
-		token,
+		auth,
 	);
 
 	const sources: SearchSource[] = [];
