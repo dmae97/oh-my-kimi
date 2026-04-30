@@ -37,12 +37,16 @@ export interface BrowserHandle {
 	stealth: { browserSession: CDPSession | null; override: UserAgentOverride | null };
 }
 
+export type DialogPolicy = "accept" | "dismiss";
+
 export interface TabHandle {
 	name: string;
 	browser: BrowserHandle;
 	page: Page;
 	elementCache: Map<number, ElementHandle>;
 	elementCounter: number;
+	dialogPolicy?: DialogPolicy;
+	dialogHandler?: (dialog: { accept: () => Promise<void>; dismiss: () => Promise<void> }) => void;
 }
 
 const browsers = new Map<string, BrowserHandle>();
@@ -191,6 +195,7 @@ export interface AcquireTabOptions {
 	target?: string;
 	signal?: AbortSignal;
 	timeoutMs: number;
+	dialogs?: DialogPolicy;
 }
 
 export interface AcquireTabResult {
@@ -211,6 +216,7 @@ export async function acquireTab(
 			);
 		}
 		if (!existing.page.isClosed()) {
+			if (opts.dialogs !== undefined) applyDialogPolicy(existing, opts.dialogs);
 			if (opts.url) {
 				clearElementCache(existing);
 				await existing.page.goto(opts.url, {
@@ -246,6 +252,7 @@ export async function acquireTab(
 	};
 	tabs.set(name, tab);
 	browser.refCount++;
+	if (opts.dialogs !== undefined) applyDialogPolicy(tab, opts.dialogs);
 
 	if (opts.url) {
 		await page.goto(opts.url, {
@@ -301,8 +308,33 @@ export async function dropHeadlessBrowsers(): Promise<void> {
 	}
 }
 
+function applyDialogPolicy(tab: TabHandle, policy: DialogPolicy): void {
+	if (tab.dialogPolicy === policy && tab.dialogHandler) return;
+	if (tab.dialogHandler) {
+		try {
+			tab.page.off("dialog", tab.dialogHandler);
+		} catch {}
+	}
+	const handler = (dialog: { accept: () => Promise<void>; dismiss: () => Promise<void> }): void => {
+		const action = policy === "accept" ? dialog.accept() : dialog.dismiss();
+		void action.catch(err => {
+			logger.debug("Dialog auto-handler failed", { policy, error: (err as Error).message });
+		});
+	};
+	tab.page.on("dialog", handler);
+	tab.dialogPolicy = policy;
+	tab.dialogHandler = handler;
+}
+
 async function disposeTab(tab: TabHandle): Promise<void> {
 	clearElementCache(tab);
+	if (tab.dialogHandler && !tab.page.isClosed()) {
+		try {
+			tab.page.off("dialog", tab.dialogHandler);
+		} catch {}
+		tab.dialogHandler = undefined;
+		tab.dialogPolicy = undefined;
+	}
 	if (tab.browser.kind.kind === "headless") {
 		// Owned tab — close it.
 		if (!tab.page.isClosed()) {

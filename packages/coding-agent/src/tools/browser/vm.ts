@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
 import type { HTMLElement } from "linkedom";
-import type { ElementHandle, KeyInput, Page, SerializedAXNode } from "puppeteer-core";
+import type { ElementHandle, HTTPResponse, KeyInput, Page, SerializedAXNode } from "puppeteer-core";
 import type { ToolSession } from "../../sdk";
 import { resizeImage } from "../../utils/image-resize";
 import { expandPath, resolveToCwd } from "../path-utils";
@@ -415,6 +415,18 @@ export interface TabApi {
 	scroll(deltaX: number, deltaY: number): Promise<void>;
 	drag(from: DragTarget, to: DragTarget): Promise<void>;
 	waitFor(selector: string): Promise<ElementHandle>;
+	evaluate<TResult, TArgs extends unknown[]>(
+		fn: string | ((...args: TArgs) => TResult | Promise<TResult>),
+		...args: TArgs
+	): Promise<TResult>;
+	scrollIntoView(selector: string): Promise<void>;
+	select(selector: string, ...values: string[]): Promise<string[]>;
+	uploadFile(selector: string, ...filePaths: string[]): Promise<void>;
+	waitForUrl(pattern: string | RegExp, opts?: { timeout?: number }): Promise<string>;
+	waitForResponse(
+		pattern: string | RegExp | ((response: HTTPResponse) => boolean | Promise<boolean>),
+		opts?: { timeout?: number },
+	): Promise<HTTPResponse>;
 	id(n: number): Promise<ElementHandle>;
 }
 
@@ -580,6 +592,121 @@ export async function runInTab(opts: RunInTabOptions): Promise<RunInTabResult> {
 			const resolved = normalizeSelector(selector);
 			const locator = tab.page.locator(resolved).setTimeout(timeoutMs);
 			return (await untilAborted(signal, () => locator.waitHandle())) as ElementHandle;
+		},
+		evaluate: async (fn, ...args) => {
+			return (await untilAborted(signal, () =>
+				typeof fn === "string"
+					? tab.page.evaluate(fn)
+					: tab.page.evaluate(fn as (...a: unknown[]) => unknown, ...args),
+			)) as never;
+		},
+		scrollIntoView: async selector => {
+			const resolved = normalizeSelector(selector);
+			const locator = tab.page.locator(resolved).setTimeout(timeoutMs);
+			const handle = (await untilAborted(signal, () => locator.waitHandle())) as ElementHandle;
+			try {
+				await untilAborted(signal, () =>
+					handle.evaluate(el => {
+						const target = el as unknown as {
+							scrollIntoView: (opts: { behavior: string; block: string; inline: string }) => void;
+						};
+						target.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
+					}),
+				);
+			} finally {
+				await handle.dispose().catch(() => undefined);
+			}
+		},
+		select: async (selector, ...values) => {
+			const resolved = normalizeSelector(selector);
+			const locator = tab.page.locator(resolved).setTimeout(timeoutMs);
+			const handle = (await untilAborted(signal, () => locator.waitHandle())) as ElementHandle;
+			try {
+				return (await untilAborted(signal, () =>
+					handle.evaluate((el, vals) => {
+						interface SelectOption {
+							value: string;
+							selected: boolean;
+						}
+						interface SelectLike {
+							tagName: string;
+							options: ArrayLike<SelectOption>;
+							dispatchEvent: (event: unknown) => boolean;
+						}
+						const select = el as unknown as SelectLike;
+						if (!select || select.tagName !== "SELECT") {
+							throw new Error("tab.select() requires a <select> element");
+						}
+						const EventCtor = (
+							globalThis as unknown as { Event: new (type: string, init?: { bubbles: boolean }) => unknown }
+						).Event;
+						const wanted = new Set(vals as string[]);
+						const selected: string[] = [];
+						for (let i = 0; i < select.options.length; i++) {
+							const opt = select.options[i] as SelectOption;
+							opt.selected = wanted.has(opt.value);
+							if (opt.selected) selected.push(opt.value);
+						}
+						select.dispatchEvent(new EventCtor("input", { bubbles: true }));
+						select.dispatchEvent(new EventCtor("change", { bubbles: true }));
+						return selected;
+					}, values),
+				)) as string[];
+			} finally {
+				await handle.dispose().catch(() => undefined);
+			}
+		},
+		uploadFile: async (selector, ...filePaths) => {
+			if (!filePaths.length) {
+				throw new ToolError("tab.uploadFile() requires at least one file path");
+			}
+			const resolved = normalizeSelector(selector);
+			const locator = tab.page.locator(resolved).setTimeout(timeoutMs);
+			const handle = (await untilAborted(signal, () => locator.waitHandle())) as ElementHandle;
+			try {
+				const absolute = filePaths.map(p => resolveToCwd(p, session.cwd));
+				const upload = handle as unknown as { uploadFile: (...paths: string[]) => Promise<void> };
+				const tagName = (await untilAborted(signal, () =>
+					handle.evaluate(el => (el as unknown as { tagName: string }).tagName),
+				)) as string;
+				if (tagName !== "INPUT") {
+					throw new ToolError(
+						`tab.uploadFile() requires an <input type="file"> element (got <${tagName.toLowerCase()}>)`,
+					);
+				}
+				await untilAborted(signal, () => upload.uploadFile(...absolute));
+			} finally {
+				await handle.dispose().catch(() => undefined);
+			}
+		},
+		waitForUrl: async (pattern, wOpts) => {
+			const timeout = wOpts?.timeout ?? timeoutMs;
+			const isRegex = pattern instanceof RegExp;
+			const matcher = isRegex ? pattern.source : pattern;
+			const flags = isRegex ? pattern.flags : "";
+			await untilAborted(signal, () =>
+				tab.page.waitForFunction(
+					(m: string, isRe: boolean, fl: string) => {
+						const url = (globalThis as unknown as { location: { href: string } }).location.href;
+						return isRe ? new RegExp(m, fl).test(url) : url.includes(m);
+					},
+					{ timeout, polling: 200 },
+					matcher,
+					isRegex,
+					flags,
+				),
+			);
+			return tab.page.url();
+		},
+		waitForResponse: async (pattern, wOpts) => {
+			const timeout = wOpts?.timeout ?? timeoutMs;
+			const predicate: (response: HTTPResponse) => boolean | Promise<boolean> =
+				typeof pattern === "function"
+					? pattern
+					: pattern instanceof RegExp
+						? response => pattern.test(response.url())
+						: response => response.url().includes(pattern);
+			return (await untilAborted(signal, () => tab.page.waitForResponse(predicate, { timeout }))) as HTTPResponse;
 		},
 		id: async n => resolveCachedHandle(tab, n),
 	};

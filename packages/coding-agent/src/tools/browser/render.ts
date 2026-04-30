@@ -24,7 +24,7 @@ interface BrowserRenderArgs {
 	all?: boolean;
 	kill?: boolean;
 	app?: { path?: string; cdp_url?: string; target?: string };
-	viewport?: { width: number; height: number; device_scale_factor?: number };
+	viewport?: { width: number; height: number; scale?: number };
 	timeout?: number;
 }
 

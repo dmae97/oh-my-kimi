@@ -57,12 +57,17 @@ const browserSchema = Type.Object({
 		Type.Object({
 			width: Type.Number(),
 			height: Type.Number(),
-			device_scale_factor: Type.Optional(Type.Number()),
+			scale: Type.Optional(Type.Number()),
 		}),
 	),
 	wait_until: Type.Optional(
 		StringEnum(["load", "domcontentloaded", "networkidle0", "networkidle2"], {
 			description: "navigation wait condition for url",
+		}),
+	),
+	dialogs: Type.Optional(
+		StringEnum(["accept", "dismiss"], {
+			description: "open: auto-handle alert/confirm/beforeunload dialogs (default: leave for caller to handle)",
 		}),
 	),
 	code: Type.Optional(
@@ -185,7 +190,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 					? {
 							width: params.viewport.width,
 							height: params.viewport.height,
-							deviceScaleFactor: params.viewport.device_scale_factor,
+							deviceScaleFactor: params.viewport.scale,
 						}
 					: undefined,
 				appArgs: params.app?.args,
@@ -201,11 +206,12 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 					? {
 							width: params.viewport.width,
 							height: params.viewport.height,
-							deviceScaleFactor: params.viewport.device_scale_factor,
+							deviceScaleFactor: params.viewport.scale,
 						}
 					: undefined,
 				target: params.app?.target,
 				timeoutMs,
+				dialogs: params.dialogs,
 				signal,
 			}),
 		);
