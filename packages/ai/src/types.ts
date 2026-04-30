@@ -306,12 +306,43 @@ export interface ToolCall {
 }
 
 export interface Usage {
+	/** Non-cached input tokens (matches the bucket the provider bills as new input). */
 	input: number;
+	/** Total output tokens for the turn, including thinking, assistant text, and tool-call argument tokens. */
 	output: number;
+	/** Tokens read from the prompt cache. */
 	cacheRead: number;
+	/** Tokens written to the prompt cache (cache creation). */
 	cacheWrite: number;
+	/** Sum of input + output + cacheRead + cacheWrite. */
 	totalTokens: number;
+	/** Copilot premium-request counter, when applicable. */
 	premiumRequests?: number;
+	/**
+	 * Reasoning/thinking tokens included in `output`, when the provider reports them
+	 * (OpenAI `output_tokens_details.reasoning_tokens`, Google `thoughtsTokenCount`).
+	 * Always a subset of `output` — non-reasoning output is `output - reasoningTokens`.
+	 *
+	 * Providers that don't expose this leave it undefined rather than guessing;
+	 * `undefined` means unknown, NOT zero.
+	 */
+	reasoningTokens?: number;
+	/**
+	 * Cache-write TTL breakdown (Anthropic only). When set, the components sum to
+	 * `cacheWrite`. Absent providers do not populate this.
+	 */
+	cttl?: {
+		ephemeral5m?: number;
+		ephemeral1h?: number;
+	};
+	/**
+	 * Server-side tool invocations made during this turn (Anthropic web_search /
+	 * web_fetch, OpenAI built-in tools when reported). Counts requests, not tokens.
+	 */
+	server?: {
+		webSearch?: number;
+		webFetch?: number;
+	};
 	cost: {
 		input: number;
 		output: number;

@@ -959,7 +959,7 @@ function getChoiceUsage(choice: ChatCompletionChunk.Choice): object | undefined 
 	return getOptionalObjectProperty(choice, "usage");
 }
 
-function parseChunkUsage(
+export function parseChunkUsage(
 	rawUsage: object,
 	model: Model<"openai-completions">,
 	copilotPremiumRequests: number | undefined,
@@ -973,13 +973,17 @@ function parseChunkUsage(
 	const reasoningTokens =
 		(completionTokenDetails ? getOptionalNumberProperty(completionTokenDetails, "reasoning_tokens") : undefined) ?? 0;
 	const input = (getOptionalNumberProperty(rawUsage, "prompt_tokens") ?? 0) - cachedTokens;
-	const outputTokens = (getOptionalNumberProperty(rawUsage, "completion_tokens") ?? 0) + reasoningTokens;
+	// Per OpenAI's CompletionUsage spec, `reasoning_tokens` is a subset of
+	// `completion_tokens` (which is the total billed output). Adding them would
+	// double-count.
+	const outputTokens = getOptionalNumberProperty(rawUsage, "completion_tokens") ?? 0;
 	const usage: AssistantMessage["usage"] = {
 		input,
 		output: outputTokens,
 		cacheRead: cachedTokens,
 		cacheWrite: 0,
 		totalTokens: input + outputTokens + cachedTokens,
+		...(reasoningTokens > 0 ? { reasoningTokens } : {}),
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		...(copilotPremiumRequests !== undefined ? { premiumRequests: copilotPremiumRequests } : {}),
 	};

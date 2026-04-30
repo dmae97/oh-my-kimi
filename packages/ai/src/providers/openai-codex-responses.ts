@@ -1119,6 +1119,7 @@ function handleResponseCompleted(
 					output_tokens?: number;
 					total_tokens?: number;
 					input_tokens_details?: { cached_tokens?: number };
+					output_tokens_details?: { reasoning_tokens?: number };
 				};
 				status?: string;
 			};
@@ -1127,12 +1128,14 @@ function handleResponseCompleted(
 
 	if (response?.usage) {
 		const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
+		const reasoningTokens = response.usage.output_tokens_details?.reasoning_tokens || 0;
 		output.usage = {
 			input: (response.usage.input_tokens || 0) - cachedTokens,
 			output: response.usage.output_tokens || 0,
 			cacheRead: cachedTokens,
 			cacheWrite: 0,
 			totalTokens: response.usage.total_tokens || 0,
+			...(reasoningTokens > 0 ? { reasoningTokens } : {}),
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		};
 	}

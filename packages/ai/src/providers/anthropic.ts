@@ -698,6 +698,42 @@ function createEmptyUsage(premiumRequests?: number): Usage {
 	};
 }
 
+export type AnthropicUsageLike = {
+	cache_creation?: { ephemeral_5m_input_tokens?: number | null; ephemeral_1h_input_tokens?: number | null } | null;
+	server_tool_use?: { web_search_requests?: number | null; web_fetch_requests?: number | null } | null;
+};
+
+/**
+ * Capture Anthropic's optional cache-creation TTL breakdown and server-tool-use
+ * counters into the harness Usage shape. Only sets fields that were reported, so
+ * a `message_delta` that omits `cache_creation` does not clobber the breakdown
+ * established at `message_start`.
+ */
+export function applyAnthropicUsageExtras(usage: Usage, source: AnthropicUsageLike): void {
+	const cacheCreation = source.cache_creation;
+	if (cacheCreation) {
+		const fiveMinute = cacheCreation.ephemeral_5m_input_tokens ?? 0;
+		const oneHour = cacheCreation.ephemeral_1h_input_tokens ?? 0;
+		if (fiveMinute > 0 || oneHour > 0) {
+			usage.cttl = {
+				...(fiveMinute > 0 ? { ephemeral5m: fiveMinute } : {}),
+				...(oneHour > 0 ? { ephemeral1h: oneHour } : {}),
+			};
+		}
+	}
+	const serverToolUse = source.server_tool_use;
+	if (serverToolUse) {
+		const webSearch = serverToolUse.web_search_requests ?? 0;
+		const webFetch = serverToolUse.web_fetch_requests ?? 0;
+		if (webSearch > 0 || webFetch > 0) {
+			usage.server = {
+				...(webSearch > 0 ? { webSearch } : {}),
+				...(webFetch > 0 ? { webFetch } : {}),
+			};
+		}
+	}
+}
+
 export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 	model: Model<"anthropic-messages">,
 	context: Context,
@@ -824,6 +860,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								continue;
 							}
 							sawMessageStart = true;
+							applyAnthropicUsageExtras(output.usage, event.message.usage);
 							output.responseId = event.message.id;
 							output.usage.input = event.message.usage.input_tokens || 0;
 							output.usage.output = event.message.usage.output_tokens || 0;
@@ -989,6 +1026,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 							if (event.usage.cache_creation_input_tokens != null) {
 								output.usage.cacheWrite = event.usage.cache_creation_input_tokens;
 							}
+							applyAnthropicUsageExtras(output.usage, event.usage);
 							output.usage.totalTokens =
 								output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 							calculateCost(model, output.usage);
