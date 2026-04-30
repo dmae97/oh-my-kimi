@@ -25,7 +25,7 @@ export interface SSHHostInfo {
 }
 
 const CONTROL_DIR = getSshControlDir();
-const CONTROL_PATH = path.join(CONTROL_DIR, "%h.sock");
+const CONTROL_PATH = path.join(CONTROL_DIR, "%C.sock");
 const HOST_INFO_DIR = getRemoteHostDir();
 const HOST_INFO_VERSION = 2;
 
