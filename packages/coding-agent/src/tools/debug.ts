@@ -93,7 +93,9 @@ const debugSchema = Type.Object({
 	condition: Type.Optional(Type.String({ description: "breakpoint condition" })),
 	hit_condition: Type.Optional(Type.String()),
 	expression: Type.Optional(Type.String({ description: "expression to evaluate" })),
-	context: Type.Optional(Type.String({ description: "evaluate context: watch | repl | hover | variables | clipboard" })),
+	context: Type.Optional(
+		Type.String({ description: "evaluate context: watch | repl | hover | variables | clipboard" }),
+	),
 	frame_id: Type.Optional(Type.Number()),
 	scope_id: Type.Optional(Type.Number({ description: "scope variables reference" })),
 	variable_ref: Type.Optional(Type.Number({ description: "variable reference" })),

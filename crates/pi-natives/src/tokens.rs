@@ -2,7 +2,7 @@
 //!
 //! Two encodings are exposed:
 //!
-//!   - `O200kBase` — GPT-4o / o1 / GPT-5 (the modern OpenAI default).
+//!   - `O200kBase` — GPT-4o / o1 / GPT-5 (the modern `OpenAI` default).
 //!   - `Cl100kBase` — GPT-3.5 / GPT-4 / older models.
 //!
 //! `o200k_base` is the default. Anthropic doesn't publish their tokenizer, so
@@ -51,7 +51,7 @@ fn encoder(encoding: Option<Encoding>) -> &'static CoreBPE {
 ///
 /// Uses ordinary encoding (no special-token handling), which is the right
 /// choice for measuring user/model content rather than wire-protocol tokens.
-/// Defaults to `o200k_base`; pass `Cl100kBase` for older OpenAI models.
+/// Defaults to `o200k_base`; pass `Cl100kBase` for older `OpenAI` models.
 #[napi]
 pub fn count_tokens(input: Either<String, Vec<String>>, encoding: Option<Encoding>) -> u32 {
 	let bpe = encoder(encoding);

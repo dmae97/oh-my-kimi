@@ -46,7 +46,6 @@ interface PromptTaskModel {
 
 const PROMPT_TASK_LIMIT = 20;
 
-
 interface PromptRunnerModel {
 	id: string;
 	label: string;

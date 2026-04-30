@@ -28,9 +28,10 @@ Lid=       blank the anchored line's content but KEEP the line (results in an em
 - Cursor-only ops (`^`, `$`, `@Lid`, `^Lid`) reposition without modifying. To insert anything you **MUST** follow them with `+TEXT` (or `+` for a blank).
 - TEXT in `+TEXT`, `Lid=TEXT`, and `\TEXT` is literal line content, INCLUDING leading whitespace. You **MUST NOT** trim or re-indent it.
 - Consecutive `+TEXT` ops produce consecutive lines in the order written. You **MUST NOT** separate them with a stray `+` unless you intend to insert a blank line.
-- `Lid=TEXT` rewrites ONE line. To rewrite K adjacent lines, you **MUST** use `LidA..LidB=FIRST_LINE` followed immediately by `\NEXT_LINE` continuation lines. You **MUST** use bare `\` for blank replacement lines.
+- `Lid=TEXT` rewrites ONE line. To rewrite K adjacent lines, you **MUST** use `LidA..LidB=FIRST_LINE` followed immediately by `\NEXT_LINE` continuation lines (canonical form for any block replacement). You **MUST** use bare `\` for blank replacement lines.
 - You **MUST** prefix every replacement continuation line with `\`, especially when the replacement line starts with edit syntax characters such as `#`, `+`, `-`, `@`, `$`, `^`, `!`, or a Lid-shaped token.
 - `\TEXT` **MUST** appear only immediately after an active `Lid=…` or `LidA..LidB=…` replacement. It **MUST NOT** be used as a general insert operator.
+- A `\TEXT` line **MUST** be the immediate continuation of a `Lid=…` or `LidA..LidB=…` op on the line above (or another `\` line rooted in one). If the line above is `+TEXT`, a bare Lid, a cursor op, or whitespace, the `\` is invalid and the tool will not interpret it as part of a replacement.
 - The legacy `-LidA..LidB` + `+TEXT…` block-rewrite form also works.
 - To insert ABOVE a line, you **MUST** use `^Lid` then `+TEXT`. To insert above line 1, you **MUST** use `^` (BOF) then `+TEXT`. To insert below a line, you **MUST** use `@Lid` then `+TEXT`.
 - Multiple `---PATH` sections **MAY** appear in one input; each section is applied in order.
@@ -82,6 +83,16 @@ Lid=       blank the anchored line's content but KEEP the line (results in an em
 \	return (name || DEF).trim().toUpperCase();
 \}
 
+# Replace a block with a longer multi-line block, including blank lines (canonical form for refactors)
+---a.ts
+{{hrefr 3}}..{{hrefr 6}}=/** Format a display label, falling back to DEF when empty. */
+\export function label(name: string): string {
+\	const clean = (name || DEF).trim();
+\
+\	if (clean.length === 0) return DEF;
+\	return clean.toUpperCase();
+\}
+
 # Insert ABOVE a line
 ---a.ts
 ^{{hrefr 5}}
@@ -128,6 +139,8 @@ $
 - Current/added preview lines include fresh `LINE+hash|content` anchors. Removed preview lines show deleted content and **MUST NOT** be reused as anchors.
 - You **MUST** emit only lines that change. You **MUST NOT** echo unchanged context; the anchor implies position.
 - You **MUST NOT** write `Lid=<sameTextThatIsAlreadyOnThatLine>`; the tool reports a no-op (no change applied). Emit `Lid=TEXT` only when TEXT differs.
+- A line of the form `Lid|content` (a Lid, then `|`, then text, with NO leading `+`/`-`/`^`/`@`/`\`/`=`/`..`) is **FORBIDDEN**. That shape only appears in `read`/`grep` output as an anchor for *you*; it is never an edit op. If you copy a `Lid|content` line verbatim from a read into a patch, you have made an error — every edit op must start with `+`, `-`, `^`, `@`, `\`, `$`, `!`, or a Lid immediately followed by `=` or `..`.
+- To replace a contiguous block with new content, the canonical form is `LidA..LidB=FIRST_LINE` + `\NEXT_LINE…`. You **MUST NOT** write the old block and then the new block — that is unified-diff thinking and the tool does not understand it. If you find yourself emitting pre-image lines (with or without operators) before your new content, STOP and rewrite the section as a single range-replace.
 - TEXT after `=`, `+`, or `\` includes leading whitespace verbatim. You **MUST NOT** trim or re-indent it.
 - This is NOT unified diff. You **MUST NOT** write `@@` headers, `-OLD`/`+NEW` pairs, context lines, or `+Lid|…` (bad: `+5th|new text`; good: `5th=new text`).
 - You **MUST NOT** split `Lid=TEXT` across two physical lines.
