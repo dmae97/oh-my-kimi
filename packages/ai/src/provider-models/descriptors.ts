@@ -13,6 +13,7 @@ import {
 	anthropicModelManagerOptions,
 	cerebrasModelManagerOptions,
 	cloudflareAiGatewayModelManagerOptions,
+	deepseekModelManagerOptions,
 	fireworksModelManagerOptions,
 	githubCopilotModelManagerOptions,
 	groqModelManagerOptions,
@@ -152,6 +153,12 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 		catalog("Fireworks", ["FIREWORKS_API_KEY"]),
 	),
 	descriptor("xai", "grok-4-fast-non-reasoning", config => xaiModelManagerOptions(config)),
+	catalogDescriptor(
+		"deepseek",
+		"deepseek-v4-pro",
+		config => deepseekModelManagerOptions(config),
+		catalog("DeepSeek", ["DEEPSEEK_API_KEY"]),
+	),
 	descriptor("mistral", "devstral-medium-latest", config => mistralModelManagerOptions(config)),
 	catalogDescriptor(
 		"nvidia",

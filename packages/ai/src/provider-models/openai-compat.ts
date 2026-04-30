@@ -524,6 +524,21 @@ export interface XaiModelManagerConfig {
 export function xaiModelManagerOptions(config?: XaiModelManagerConfig): ModelManagerOptions<"openai-completions"> {
 	return createSimpleOpenAICompletionsOptions("xai", "https://api.x.ai/v1", config);
 }
+
+// ---------------------------------------------------------------------------
+// 6.5 DeepSeek
+// ---------------------------------------------------------------------------
+
+export interface DeepSeekModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function deepseekModelManagerOptions(
+	config?: DeepSeekModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createSimpleOpenAICompletionsOptions("deepseek", "https://api.deepseek.com", config);
+}
 // ---------------------------------------------------------------------------
 // 7.5 Fireworks
 // ---------------------------------------------------------------------------
@@ -1977,6 +1992,26 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 	}),
 	// --- xAI ---
 	openAiCompletionsDescriptor("xai", "xai", "https://api.x.ai/v1"),
+	// --- DeepSeek ---
+	openAiCompletionsDescriptor("deepseek", "deepseek", "https://api.deepseek.com", {
+		// Only ship the v4 family as built-ins; older deepseek-chat / deepseek-reasoner
+		// ids are kept off the catalog until the issue thread asks for them.
+		filterModel: (id, m) => m.tool_call === true && id.startsWith("deepseek-v4"),
+		compat: {
+			// xhigh maps to DeepSeek's `max` reasoning_effort (#830 thread).
+			supportsReasoningEffort: true,
+			reasoningEffortMap: { xhigh: "max" },
+			// `tool_choice` returns 400 against DeepSeek when reasoning_effort is set
+			// (per the issue thread). Tool calls still work without the parameter.
+			supportsToolChoice: false,
+			// DeepSeek emits chain-of-thought via `reasoning_content` and requires it
+			// to round-trip on assistant tool-call messages so the model can resume
+			// from prior thinking (interleaved.field=reasoning_content on models.dev,
+			// matches the kimi/openrouter handling already in detectCompat).
+			reasoningContentField: "reasoning_content",
+			requiresReasoningContentForToolCalls: true,
+		},
+	}),
 ];
 
 const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDescriptor[] = [
