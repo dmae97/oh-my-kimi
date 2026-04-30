@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.5.12] - 2026-04-30
 ### Breaking Changes
 
 - Changed `waitForExit` to accept a single options object instead of a numeric timeout argument

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.5.12] - 2026-04-30
+
 ### Breaking Changes
 
 - Removed the legacy browser action verbs (`goto`, `observe`, `click`, `type`, `fill`, `press`, `scroll`, `drag`, `wait_for_selector`, `extract_readable`, and `screenshot`) in favor of invoking those workflows through `run`
