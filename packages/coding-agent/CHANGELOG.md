@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Removed the legacy browser action verbs (`goto`, `observe`, `click`, `type`, `fill`, `press`, `scroll`, `drag`, `wait_for_selector`, `extract_readable`, and `screenshot`) in favor of invoking those workflows through `run`
@@ -13,6 +14,7 @@
 
 ### Changed
 
+- Changed browser tool output rendering to display `run` calls as JavaScript code cells with status and output previews while showing `open`/`close` as compact status lines
 - Changed `open` to open or reuse named tabs and `close` to support `all: true` and `kill`-based process termination behavior
 - Changed app attachment behavior to reuse an existing CDP endpoint when available and avoid unnecessary respawn of matching app processes
 - Changed tab closing so closing a tab no longer implicitly affects unnamed sessions when multiple tabs are used
