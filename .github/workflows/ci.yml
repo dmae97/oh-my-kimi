@@ -1,380 +1,408 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-  pull_request:
-    branches: [main]
-  workflow_dispatch:
-    inputs:
-      skip_npm:
-        description: "Skip npm publish"
-        type: boolean
-        default: false
+   push:
+      branches: [main]
+      tags: ["v*"]
+   pull_request:
+      branches: [main]
+   workflow_dispatch:
+      inputs:
+         skip_npm:
+            description: "Skip npm publish"
+            type: boolean
+            default: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+   group: ${{ github.workflow }}-${{ github.ref }}
+   cancel-in-progress: true
 
 jobs:
-  # Compute a stable hash of every input that affects the native cdylib output,
-  # then look for a prior successful main build that already produced artifacts
-  # with this hash. If found, downstream consumers reuse those artifacts and
-  # the native job is skipped entirely.
-  rust-hash:
-    runs-on: ubuntu-22.04
-    outputs:
-      hash: ${{ steps.compute.outputs.hash }}
-      run-id: ${{ steps.find.outputs.run-id }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Compute rust source hash
-        id: compute
-        shell: bash
-        run: |
-          hash=$(find crates Cargo.toml Cargo.lock rust-toolchain.toml \
-                  packages/natives/scripts packages/natives/package.json \
-                  scripts/ci-build-native.ts scripts/host-detect.ts \
-                  -type f -print0 \
-                | sort -z \
-                | xargs -0 sha256sum \
-                | sha256sum \
-                | cut -c1-16)
-          echo "hash=$hash" >> "$GITHUB_OUTPUT"
-          echo "Rust source hash: $hash"
-      - name: Find prior main build with matching hash
-        id: find
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          hash="${{ steps.compute.outputs.hash }}"
-          # Canary artifact: main always builds linux-x64-modern, so its presence
-          # implies the run has the full multi-platform set we need.
-          canary="pi-natives-linux-x64-modern-h${hash}"
-          run_id=""
-          for candidate in $(gh run list \
-              --workflow=ci.yml --branch=main --status=success --event=push \
-              --limit=20 --json databaseId --jq='.[].databaseId'); do
-            if gh api "/repos/${{ github.repository }}/actions/runs/$candidate/artifacts?per_page=100" \
-                --jq ".artifacts[] | select(.name == \"$canary\") | select(.expired == false) | .id" \
-                | grep -q .; then
-              run_id="$candidate"
-              break
-            fi
-          done
-          if [ -n "$run_id" ]; then
-            echo "Reusing native artifacts from run $run_id"
-          else
-            echo "No cached native artifacts for hash $hash; native job will rebuild."
-          fi
-          echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+   # Compute a stable hash of every input that affects the native cdylib output,
+   # then look for a prior successful main build that already produced artifacts
+   # with this hash. If found, downstream consumers reuse those artifacts and
+   # the native job is skipped entirely.
+   rust-hash:
+      runs-on: ubuntu-22.04
+      outputs:
+         hash: ${{ steps.compute.outputs.hash }}
+         run-id: ${{ steps.find.outputs.run-id }}
+      steps:
+         - uses: actions/checkout@v4
+         - name: Compute rust source hash
+           id: compute
+           shell: bash
+           run: |
+              hash=$(find crates Cargo.toml Cargo.lock rust-toolchain.toml \
+                      packages/natives/scripts packages/natives/package.json \
+                      scripts/ci-build-native.ts scripts/host-detect.ts \
+                      -type f -print0 \
+                    | sort -z \
+                    | xargs -0 sha256sum \
+                    | sha256sum \
+                    | cut -c1-16)
+              echo "hash=$hash" >> "$GITHUB_OUTPUT"
+              echo "Rust source hash: $hash"
+         - name: Find prior main build with matching hash
+           id: find
+           env:
+              GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+           shell: bash
+           run: |
+              hash="${{ steps.compute.outputs.hash }}"
+              # Canary artifact: main always builds linux-x64-modern, so its presence
+              # implies the run has the full multi-platform set we need.
+              canary="pi-natives-linux-x64-modern-h${hash}"
+              run_id=""
+              for candidate in $(gh run list \
+                  --workflow=ci.yml --branch=main --status=success --event=push \
+                  --limit=20 --json databaseId --jq='.[].databaseId'); do
+                if gh api "/repos/${{ github.repository }}/actions/runs/$candidate/artifacts?per_page=100" \
+                    --jq ".artifacts[] | select(.name == \"$canary\") | select(.expired == false) | .id" \
+                    | grep -q .; then
+                  run_id="$candidate"
+                  break
+                fi
+              done
+              if [ -n "$run_id" ]; then
+                echo "Reusing native artifacts from run $run_id"
+              else
+                echo "No cached native artifacts for hash $hash; native job will rebuild."
+              fi
+              echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
 
-  # Fast lint + type check (no Rust, no native build needed)
-  check:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3"
-      - name: Cache bun dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun install --frozen-lockfile
-      - name: Type check workspace
-        run: bun run ci:check:full
+   # Fast lint + type check (no Rust, no native build needed)
+   check:
+      runs-on: ubuntu-22.04
+      steps:
+         - uses: actions/checkout@v4
+         - uses: oven-sh/setup-bun@v2
+           with:
+              bun-version: "1.3"
+         - name: Cache bun dependencies
+           uses: actions/cache@v4
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+         - run: bun install --frozen-lockfile
+         - name: Type check workspace
+           run: bun run ci:check:full
 
-  native:
-    needs: [rust-hash]
-    if: ${{ needs.rust-hash.outputs.run-id == '' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # Tag and main pushes build the full multi-platform set (so the cache
-        # has every artifact a future tag could need). PRs only build linux-x64.
-        include: ${{ (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main') && fromJSON('[
-          {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"baseline","rust_checks":true},
-          {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"modern"},
-          {"os":"ubuntu-22.04","platform":"linux","arch":"arm64","target":"aarch64-unknown-linux-gnu"},
-          {"os":"macos-15-intel","platform":"darwin","arch":"x64","variant":"baseline"},
-          {"os":"macos-15-intel","platform":"darwin","arch":"x64","variant":"modern"},
-          {"os":"macos-14","platform":"darwin","arch":"arm64"},
-          {"os":"windows-latest","platform":"win32","arch":"x64","variant":"baseline"},
-          {"os":"windows-latest","platform":"win32","arch":"x64","variant":"modern"}
-          ]') || fromJSON('[
-          {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"baseline","rust_checks":true},
-          {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"modern"}
-          ]') }}
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          toolchain: nightly-2026-04-29
-          components: ${{ matrix.rust_checks && 'clippy, rustfmt' || '' }}
-          targets: ${{ matrix.target }}
-      - name: Ensure cross-compilation target is installed
-        if: matrix.target
-        run: rustup target add ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: native-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.variant || 'default' }}
-          cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
-          cache-workspace-crates: true
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3"
-      - run: bun install --frozen-lockfile
-      - name: Install cross-compilation toolchain
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-      - name: Rust checks
-        if: matrix.rust_checks
-        run: bun run check:rs
-      - name: Build native addon(s)
-        env:
-          CROSS_TARGET: ${{ matrix.target }}
-          TARGET_PLATFORM: ${{ matrix.platform }}
-          TARGET_ARCH: ${{ matrix.arch }}
-          TARGET_VARIANTS: ${{ matrix.variant }}
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        shell: bash
-        run: |
-          bun run ci:build:native
-      - name: Upload native addon(s)
-        uses: actions/upload-artifact@v4
-        with:
-          name: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.variant && format('-{0}', matrix.variant) || '' }}-h${{ needs.rust-hash.outputs.hash }}
-          path: packages/natives/native/pi_natives.${{ matrix.platform }}-${{ matrix.arch }}*.node
-          if-no-files-found: error
+   native:
+      needs: [rust-hash]
+      if: ${{ needs.rust-hash.outputs.run-id == '' }}
+      strategy:
+         fail-fast: false
+         matrix:
+            # Tag and main pushes build the full multi-platform set (so the cache
+            # has every artifact a future tag could need). PRs only build linux-x64.
+            include: ${{ (startsWith(github.ref, 'refs/tags/v') || github.ref ==
+               'refs/heads/main') && fromJSON('[
+               {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"baseline","rust_checks":true},
+               {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"modern"},
+               {"os":"ubuntu-22.04","platform":"linux","arch":"arm64","target":"aarch64-unknown-linux-gnu"},
+               {"os":"macos-15-intel","platform":"darwin","arch":"x64","variant":"baseline"},
+               {"os":"macos-14","platform":"darwin","arch":"arm64"},
+               {"os":"windows-latest","platform":"win32","arch":"x64","variant":"baseline"}
+               ]') || fromJSON('[
+               {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"baseline","rust_checks":true},
+               {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"modern"}
+               ]') }}
+      runs-on: ${{ matrix.os }}
+      steps:
+         - uses: actions/checkout@v4
+         - uses: dtolnay/rust-toolchain@nightly
+           with:
+              toolchain: nightly-2026-04-29
+              components: ${{ matrix.rust_checks && 'clippy, rustfmt' || '' }}
+              targets: ${{ matrix.target }}
+         - name: Ensure cross-compilation target is installed
+           if: matrix.target
+           run: rustup target add ${{ matrix.target }}
+         - uses: Swatinem/rust-cache@v2
+           with:
+              shared-key: native-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.variant
+                 || 'default' }}
+              cache-on-failure: true
+              save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' ||
+                 startsWith(github.ref, 'refs/tags/v')) }}
+              cache-workspace-crates: true
+         - uses: taiki-e/install-action@v2
+           if: ${{ !matrix.target }}
+           with:
+              tool: nextest
+         - uses: oven-sh/setup-bun@v2
+           with:
+              bun-version: "1.3"
+         - run: bun install --frozen-lockfile
+         - name: Install cross-compilation toolchain
+           if: matrix.target == 'aarch64-unknown-linux-gnu'
+           run: |
+              sudo apt-get update
+              sudo apt-get install -y gcc-aarch64-linux-gnu
+         - name: Rust checks
+           if: matrix.rust_checks
+           run: bun run check:rs
+         - name: Test workspace (Rust)
+           if: ${{ !matrix.target }}
+           run: bun run test:rs
+         - name: Build native addon(s)
+           env:
+              CROSS_TARGET: ${{ matrix.target }}
+              TARGET_PLATFORM: ${{ matrix.platform }}
+              TARGET_ARCH: ${{ matrix.arch }}
+              TARGET_VARIANTS: ${{ matrix.variant }}
+              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+           shell: bash
+           run: |
+              bun run ci:build:native
+         - name: Upload native addon(s)
+           uses: actions/upload-artifact@v4
+           with:
+              name: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.variant &&
+                 format('-{0}', matrix.variant) || '' }}-h${{
+                 needs.rust-hash.outputs.hash }}
+              path: packages/natives/native/pi_natives.${{ matrix.platform }}-${{ matrix.arch
+                 }}*.node
+              if-no-files-found: error
 
-  test:
-    runs-on: ubuntu-22.04
-    needs: [native, rust-hash]
-    if: ${{ !cancelled() && needs.native.result != 'failure' }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3"
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          toolchain: nightly-2026-04-29
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: test-linux-x64
-          cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
-          cache-workspace-crates: true
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest
-      - name: Cache bun dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - name: Install system deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep imagemagick
-          sudo ln -s $(which fdfind) /usr/local/bin/fd
-          sudo ln -sf /usr/bin/convert /usr/local/bin/magick
-      - run: bun install --frozen-lockfile
-      - name: Resolve native source run
-        id: source
-        shell: bash
-        run: |
-          if [ "${{ needs.native.result }}" = "success" ]; then
-            echo "run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "run-id=${{ needs.rust-hash.outputs.run-id }}" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Download native addons
-        uses: actions/download-artifact@v4
-        with:
-          pattern: pi-natives-linux-x64-*-h${{ needs.rust-hash.outputs.hash }}
-          path: packages/natives/native
-          merge-multiple: true
-          run-id: ${{ steps.source.outputs.run-id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Test workspace (TS)
-        run: bun run test:ts
-      - name: Test workspace (Rust)
-        if: ${{ needs.native.result == 'success' }}
-        run: bun run test:rs
-      - name: CLI smoke test
-        run: bun run ci:test:smoke
+   test:
+      runs-on: ubuntu-22.04
+      needs: [native, rust-hash]
+      if: ${{ !cancelled() && needs.native.result != 'failure' }}
+      timeout-minutes: 30
+      steps:
+         - uses: actions/checkout@v4
+         - uses: oven-sh/setup-bun@v2
+           with:
+              bun-version: "1.3"
+         - name: Cache bun dependencies
+           uses: actions/cache@v4
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+         - name: Install system deps
+           run: |
+              sudo apt-get update
+              sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep imagemagick
+              sudo ln -s $(which fdfind) /usr/local/bin/fd
+              sudo ln -sf /usr/bin/convert /usr/local/bin/magick
+         - run: bun install --frozen-lockfile
+         - name: Resolve native source run
+           id: source
+           shell: bash
+           run: |
+              if [ "${{ needs.native.result }}" = "success" ]; then
+                echo "run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+              else
+                echo "run-id=${{ needs.rust-hash.outputs.run-id }}" >> "$GITHUB_OUTPUT"
+              fi
+         - name: Download native addons
+           uses: actions/download-artifact@v4
+           with:
+              pattern: pi-natives-linux-x64-*-h${{ needs.rust-hash.outputs.hash }}
+              path: packages/natives/native
+              merge-multiple: true
+              run-id: ${{ steps.source.outputs.run-id }}
+              github-token: ${{ secrets.GITHUB_TOKEN }}
+         - name: Test workspace (TS)
+           run: bun run test:ts
+         - name: CLI smoke test
+           run: bun run ci:test:smoke
 
-  install_methods:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3"
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          toolchain: nightly-2026-04-29
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: install-methods-linux-x64
-          cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
-          cache-workspace-crates: true
-      - name: Cache bun dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - name: Install system deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep imagemagick
-          sudo ln -s $(which fdfind) /usr/local/bin/fd
-          sudo ln -sf /usr/bin/convert /usr/local/bin/magick
-      - run: bun install --frozen-lockfile
-      - name: Install method smoke tests
-        run: bun run ci:test:install-methods
+   install_methods:
+      runs-on: ubuntu-22.04
+      steps:
+         - uses: actions/checkout@v4
+         - uses: oven-sh/setup-bun@v2
+           with:
+              bun-version: "1.3"
+         - uses: dtolnay/rust-toolchain@nightly
+           with:
+              toolchain: nightly-2026-04-29
+         - uses: Swatinem/rust-cache@v2
+           with:
+              shared-key: install-methods-linux-x64
+              cache-on-failure: true
+              save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' ||
+                 startsWith(github.ref, 'refs/tags/v')) }}
+              cache-workspace-crates: true
+         - name: Cache bun dependencies
+           uses: actions/cache@v4
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+         - name: Install system deps
+           run: |
+              sudo apt-get update
+              sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep imagemagick
+              sudo ln -s $(which fdfind) /usr/local/bin/fd
+              sudo ln -sf /usr/bin/convert /usr/local/bin/magick
+         - run: bun install --frozen-lockfile
+         - name: Install method smoke tests
+           run: bun run ci:test:install-methods
 
-  release_binary:
-    if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.native.result != 'failure' && needs.test.result == 'success' && needs.check.result == 'success' && needs.install_methods.result == 'success' }}
-    needs: [check, native, test, install_methods, rust-hash]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {os: ubuntu-22.04, platform: linux, arch: x64, target_id: linux-x64, binary_path: packages/coding-agent/binaries/omp-linux-x64}
-          - {os: ubuntu-24.04-arm, platform: linux, arch: arm64, target_id: linux-arm64, binary_path: packages/coding-agent/binaries/omp-linux-arm64}
-          - {os: macos-15-intel, platform: darwin, arch: x64, target_id: darwin-x64, binary_path: packages/coding-agent/binaries/omp-darwin-x64}
-          - {os: macos-14, platform: darwin, arch: arm64, target_id: darwin-arm64, binary_path: packages/coding-agent/binaries/omp-darwin-arm64}
-          - {os: windows-latest, platform: win32, arch: x64, target_id: win32-x64, binary_path: packages/coding-agent/binaries/omp-windows-x64.exe}
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3"
-      - name: Cache bun dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun install --frozen-lockfile
-      - name: Resolve native source run
-        id: source
-        shell: bash
-        run: |
-          if [ "${{ needs.native.result }}" = "success" ]; then
-            echo "run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "run-id=${{ needs.rust-hash.outputs.run-id }}" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Download native addon(s)
-        uses: actions/download-artifact@v4
-        with:
-          pattern: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}*-h${{ needs.rust-hash.outputs.hash }}
-          path: packages/natives/native
-          merge-multiple: true
-          run-id: ${{ steps.source.outputs.run-id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build release binary
-        env:
-          RELEASE_TARGETS: ${{ matrix.target_id }}
-        run: bun run ci:release:build-binaries
-      - name: Smoke release binary
-        if: runner.os != 'Windows'
-        run: |
-          runtime_dir="$(mktemp -d)"
-          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --version
-      - name: Smoke release binary (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $runtimeDir = Join-Path $env:TEMP ("omp-runtime-" + [System.Guid]::NewGuid().ToString("N"))
-          New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
-          $env:HOME = Join-Path $runtimeDir "home"
-          $env:XDG_DATA_HOME = Join-Path $runtimeDir "xdg"
-          & "${{ matrix.binary_path }}" --version
-      - name: Upload release binary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: omp-binary-${{ matrix.target_id }}
-          path: ${{ matrix.binary_path }}
+   release_binary:
+      if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
+         needs.native.result != 'failure' && needs.test.result == 'success' &&
+         needs.check.result == 'success' && needs.install_methods.result ==
+         'success' }}
+      needs: [check, native, test, install_methods, rust-hash]
+      strategy:
+         fail-fast: false
+         matrix:
+            include:
+               - {
+                    os: ubuntu-22.04,
+                    platform: linux,
+                    arch: x64,
+                    target_id: linux-x64,
+                    binary_path: packages/coding-agent/binaries/omp-linux-x64,
+                 }
+               - {
+                    os: ubuntu-24.04-arm,
+                    platform: linux,
+                    arch: arm64,
+                    target_id: linux-arm64,
+                    binary_path: packages/coding-agent/binaries/omp-linux-arm64,
+                 }
+               - {
+                    os: macos-15-intel,
+                    platform: darwin,
+                    arch: x64,
+                    target_id: darwin-x64,
+                    binary_path: packages/coding-agent/binaries/omp-darwin-x64,
+                 }
+               - {
+                    os: macos-14,
+                    platform: darwin,
+                    arch: arm64,
+                    target_id: darwin-arm64,
+                    binary_path: packages/coding-agent/binaries/omp-darwin-arm64,
+                 }
+               - {
+                    os: windows-latest,
+                    platform: win32,
+                    arch: x64,
+                    target_id: win32-x64,
+                    binary_path: packages/coding-agent/binaries/omp-windows-x64.exe,
+                 }
+      runs-on: ${{ matrix.os }}
+      permissions:
+         contents: read
+      steps:
+         - uses: actions/checkout@v4
+         - uses: oven-sh/setup-bun@v2
+           with:
+              bun-version: "1.3"
+         - name: Cache bun dependencies
+           uses: actions/cache@v4
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+         - run: bun install --frozen-lockfile
+         - name: Resolve native source run
+           id: source
+           shell: bash
+           run: |
+              if [ "${{ needs.native.result }}" = "success" ]; then
+                echo "run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+              else
+                echo "run-id=${{ needs.rust-hash.outputs.run-id }}" >> "$GITHUB_OUTPUT"
+              fi
+         - name: Download native addon(s)
+           uses: actions/download-artifact@v4
+           with:
+              pattern: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}*-h${{
+                 needs.rust-hash.outputs.hash }}
+              path: packages/natives/native
+              merge-multiple: true
+              run-id: ${{ steps.source.outputs.run-id }}
+              github-token: ${{ secrets.GITHUB_TOKEN }}
+         - name: Build release binary
+           env:
+              RELEASE_TARGETS: ${{ matrix.target_id }}
+           run: bun run ci:release:build-binaries
+         - name: Smoke release binary
+           if: runner.os != 'Windows'
+           run: |
+              runtime_dir="$(mktemp -d)"
+              HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --version
+         - name: Smoke release binary (Windows)
+           if: runner.os == 'Windows'
+           shell: pwsh
+           run: |
+              $runtimeDir = Join-Path $env:TEMP ("omp-runtime-" + [System.Guid]::NewGuid().ToString("N"))
+              New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+              $env:HOME = Join-Path $runtimeDir "home"
+              $env:XDG_DATA_HOME = Join-Path $runtimeDir "xdg"
+              & "${{ matrix.binary_path }}" --version
+         - name: Upload release binary artifact
+           uses: actions/upload-artifact@v4
+           with:
+              name: omp-binary-${{ matrix.target_id }}
+              path: ${{ matrix.binary_path }}
 
-  release:
-    if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.release_binary.result == 'success' }}
-    needs: [release_binary, native, rust-hash]
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          registry-url: "https://registry.npmjs.org"
-      - name: Cache bun dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun install --frozen-lockfile
-      - name: Download release binaries
-        uses: actions/download-artifact@v4
-        with:
-          pattern: omp-binary-*
-          path: packages/coding-agent/binaries
-          merge-multiple: true
-      - name: Resolve native source run
-        id: source
-        shell: bash
-        run: |
-          if [ "${{ needs.native.result }}" = "success" ]; then
-            echo "run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "run-id=${{ needs.rust-hash.outputs.run-id }}" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Download native addons
-        uses: actions/download-artifact@v4
-        with:
-          pattern: pi-natives-*-h${{ needs.rust-hash.outputs.hash }}
-          path: packages/natives/native
-          merge-multiple: true
-          run-id: ${{ steps.source.outputs.run-id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Stage native addons for release
-        run: cp packages/natives/native/*.node packages/coding-agent/binaries/
-      - name: Build release archives
-        run: bun run ci:release:build-archives
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: packages/coding-agent/binaries/*
-          generate_release_notes: true
-      - name: Publish to npm
-        if: ${{ !inputs.skip_npm }}
-        env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: bun run ci:release:publish
+   release-github:
+      if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
+         needs.release_binary.result == 'success' }}
+      needs: [release_binary]
+      runs-on: ubuntu-22.04
+      permissions:
+         contents: write
+      steps:
+         - uses: actions/checkout@v4
+         - name: Download release binaries
+           uses: actions/download-artifact@v4
+           with:
+              pattern: omp-binary-*
+              path: packages/coding-agent/binaries
+              merge-multiple: true
+         - name: Create GitHub Release
+           uses: softprops/action-gh-release@v2
+           with:
+              files: |
+                 packages/coding-agent/binaries/omp-*
+              generate_release_notes: true
+
+   release-npm:
+      if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
+         needs.release_binary.result == 'success' && !inputs.skip_npm }}
+      needs: [release_binary, native, rust-hash]
+      runs-on: ubuntu-22.04
+      steps:
+         - uses: actions/checkout@v4
+         - uses: oven-sh/setup-bun@v2
+           with:
+              bun-version: "1.3"
+         - uses: actions/setup-node@v4
+           with:
+              node-version: "24"
+              registry-url: "https://registry.npmjs.org"
+         - name: Cache bun dependencies
+           uses: actions/cache@v4
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+         - run: bun install --frozen-lockfile
+         - name: Resolve native source run
+           id: source
+           shell: bash
+           run: |
+              if [ "${{ needs.native.result }}" = "success" ]; then
+                echo "run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+              else
+                echo "run-id=${{ needs.rust-hash.outputs.run-id }}" >> "$GITHUB_OUTPUT"
+              fi
+         - name: Download native addons
+           uses: actions/download-artifact@v4
+           with:
+              pattern: pi-natives-*-h${{ needs.rust-hash.outputs.hash }}
+              path: packages/natives/native
+              merge-multiple: true
+              run-id: ${{ steps.source.outputs.run-id }}
+              github-token: ${{ secrets.GITHUB_TOKEN }}
+         - name: Publish to npm
+           env:
+              NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+           run: bun run ci:release:publish
