@@ -1,9 +1,27 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Removed the legacy browser action verbs (`goto`, `observe`, `click`, `type`, `fill`, `press`, `scroll`, `drag`, `wait_for_selector`, `extract_readable`, and `screenshot`) in favor of invoking those workflows through `run`
+
+### Added
+
+- Added a `browser` tool `open`/`run`/`close` flow with a `run` action that executes async JavaScript and provides `page`, `browser`, `tab`, `display`, `assert`, and `wait` in scope
+- Added named tabs on `open` with default name `main` so browser state can be reused across `run` calls and subagents
+- Added support for `app.path` and `app.cdp_url` on `open` to launch/connect to CDP-capable desktop apps
+
+### Changed
+
+- Changed `open` to open or reuse named tabs and `close` to support `all: true` and `kill`-based process termination behavior
+- Changed app attachment behavior to reuse an existing CDP endpoint when available and avoid unnecessary respawn of matching app processes
+- Changed tab closing so closing a tab no longer implicitly affects unnamed sessions when multiple tabs are used
+- Changed browser export rendering to label outputs under the `browser` tool and include app metadata badges
 
 ### Fixed
 
+- Fixed Electron/CDP attachment target selection to skip helper windows and pick the most likely user-visible page target
+- Fixed connection startup by waiting for the CDP endpoint and surfacing a timeout error when it does not become available
 - Fixed plan mode to auto-redirect `write` and `edit` calls targeting a bare `PLAN.md` (or any same-basename cwd-relative path) to the canonical `local://PLAN.md` plan artifact instead of rejecting them
 
 ## [14.5.11] - 2026-04-30

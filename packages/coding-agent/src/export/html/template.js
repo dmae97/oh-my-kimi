@@ -1078,17 +1078,24 @@
         return html;
       }
 
-      function renderPuppeteer(name, args, result, ctx) {
+      function renderBrowser(name, args, result, ctx) {
         const action = str(args.action) || '?';
+        const tabName = str(args.name);
         const badges = [];
+        if (tabName) badges.push('name=' + tabName);
         if (args.url) badges.push(String(args.url));
-        if (args.selector) badges.push('selector=' + args.selector);
-        if (args.element_id != null) badges.push('id=' + args.element_id);
-        let head = '<span class="tool-name">puppeteer</span> <span class="tool-badge">' + escapeHtml(action) + '</span>';
+        if (args.app && typeof args.app === 'object') {
+          if (args.app.path) badges.push('app=' + shortenPath(String(args.app.path)));
+          else if (args.app.cdp_url) badges.push('cdp=' + String(args.app.cdp_url));
+        }
+        if (args.all) badges.push('all');
+        if (args.kill) badges.push('kill');
+        let head = '<span class="tool-name">browser</span> <span class="tool-badge">' + escapeHtml(action) + '</span>';
         for (const b of badges) head += ' <span class="tool-badge">' + escapeHtml(String(b)) + '</span>';
         let html = '<div class="tool-header">' + head + '</div>';
-        if (args.script) html += codeBlock(String(args.script), 'javascript');
-        if (args.text) html += '<div class="tool-output"><div>' + escapeHtml(String(args.text)) + '</div></div>';
+        if (action === 'run' && args.code) {
+          html += codeBlock(String(args.code), 'javascript');
+        }
         if (result) {
           html += ctx.renderResultImages();
           const output = ctx.getResultText();
@@ -1277,7 +1284,8 @@
         web_search: renderWebSearch,
         fetch: renderFetch,
         debug: renderDebug,
-        puppeteer: renderPuppeteer,
+        puppeteer: renderBrowser,
+        browser: renderBrowser,
         inspect_image: renderInspectImage,
         generate_image: renderGenerateImage,
         ask: renderAsk,
