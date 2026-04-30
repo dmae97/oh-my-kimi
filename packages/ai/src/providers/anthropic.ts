@@ -1631,6 +1631,39 @@ function buildParams(
 	return params;
 }
 
+/**
+ * Z.AI's Anthropic-compatible proxy at `api.z.ai/api/anthropic` deserializes
+ * tool_result blocks into a Python class that accesses `.id`, even though
+ * Anthropic's standard tool_result schema only carries `tool_use_id`. Detect
+ * that endpoint so we can emit the non-standard alias for it without
+ * polluting requests to api.anthropic.com or other compatible proxies.
+ * See: https://github.com/can1357/oh-my-pi/issues/814
+ */
+function isZaiAnthropicEndpoint(model: Model<"anthropic-messages">): boolean {
+	if (model.provider === "zai") return true;
+	const baseUrl = model.baseUrl;
+	if (!baseUrl) return false;
+	try {
+		return new URL(baseUrl).hostname.toLowerCase() === "api.z.ai";
+	} catch {
+		return false;
+	}
+}
+
+function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResultMessage): ContentBlockParam {
+	const block: ContentBlockParam = {
+		type: "tool_result",
+		tool_use_id: msg.toolCallId,
+		content: convertContentBlocks(msg.content),
+		is_error: msg.isError,
+	};
+	if (isZaiAnthropicEndpoint(model)) {
+		// Z.AI workaround (issue #814): include `id` aliased to `tool_use_id`.
+		(block as Record<string, unknown>).id = msg.toolCallId;
+	}
+	return block;
+}
+
 export function convertAnthropicMessages(
 	messages: Message[],
 	model: Model<"anthropic-messages">,
@@ -1752,23 +1785,13 @@ export function convertAnthropicMessages(
 			const toolResults: ContentBlockParam[] = [];
 
 			// Add the current tool result
-			toolResults.push({
-				type: "tool_result",
-				tool_use_id: msg.toolCallId,
-				content: convertContentBlocks(msg.content),
-				is_error: msg.isError,
-			});
+			toolResults.push(buildToolResultBlock(model, msg));
 
 			// Look ahead for consecutive toolResult messages
 			let j = i + 1;
 			while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
 				const nextMsg = transformedMessages[j] as ToolResultMessage; // We know it's a toolResult
-				toolResults.push({
-					type: "tool_result",
-					tool_use_id: nextMsg.toolCallId,
-					content: convertContentBlocks(nextMsg.content),
-					is_error: nextMsg.isError,
-				});
+				toolResults.push(buildToolResultBlock(model, nextMsg));
 				j++;
 			}
 
