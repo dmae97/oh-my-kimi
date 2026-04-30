@@ -2323,6 +2323,11 @@ export class AgentSession {
 	 * For everything else, callers must explicitly call `refreshBaseSystemPrompt()`
 	 * after side-effecting changes; see e.g. the memory hooks and
 	 * `#syncEditToolModeAfterModelChange`.
+	 *
+	 * The current calendar date IS covered (appended as a segment) because
+	 * `buildSystemPrompt` injects it into the prompt body (`Today is '{{date}}'`).
+	 * Without this, a session spanning midnight with only tool-stable MCP
+	 * reconnects would keep yesterday's date indefinitely.
 	 */
 	#computeAppliedToolSignature(toolNames: string[], tools: AgentTool[]): string {
 		// Order-preserving join: any reorder must produce a different signature so
@@ -2353,7 +2358,8 @@ export class AgentSession {
 			entries.sort();
 			instructionsSegment = entries.join("\u0006");
 		}
-		return `${nameSegment}\u0003${descriptionSegment}\u0005${registrySegment}\u0007${instructionsSegment}`;
+		const date = new Date().toISOString().slice(0, 10);
+		return `${nameSegment}\u0003${descriptionSegment}\u0005${registrySegment}\u0007${instructionsSegment}|${date}`;
 	}
 
 	/**
