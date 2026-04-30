@@ -277,6 +277,11 @@ async function runPhase1(options: {
 			});
 
 			if (result.kind === "failed") {
+				logger.error("Memory phase1 stage1 job failed", {
+					threadId: claim.threadId,
+					rolloutPath: claim.rolloutPath,
+					reason: result.reason,
+				});
 				markStage1Failed(db, {
 					threadId: claim.threadId,
 					ownershipToken: claim.ownershipToken,
