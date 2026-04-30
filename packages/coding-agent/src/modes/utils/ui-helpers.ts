@@ -610,9 +610,22 @@ export class UiHelpers {
 				await this.ctx.session.prompt(message.text);
 			}
 
-			const promptPromise = this.ctx.session.prompt(firstPrompt.text).catch((error: unknown) => {
-				restoreQueue(error);
-			});
+			// Pass streamingBehavior so that if the session is still streaming when
+			// compaction-end fires (race window between isStreaming flipping false and
+			// the event landing here), prompt() routes the message into the steer/
+			// follow-up queue instead of throwing AgentBusyError. When the session is
+			// genuinely idle, streamingBehavior is ignored and a fresh prompt runs as
+			// before. This keeps the steer preview honest: if delivery has to be
+			// deferred, the message lands in the same queue every other consumer
+			// (Alt+Up dequeue, post-stream drain) already drains, instead of being
+			// stranded in compactionQueuedMessages with no drainer.
+			const promptPromise = this.ctx.session
+				.prompt(firstPrompt.text, {
+					streamingBehavior: firstPrompt.mode === "followUp" ? "followUp" : "steer",
+				})
+				.catch((error: unknown) => {
+					restoreQueue(error);
+				});
 
 			for (const message of rest) {
 				if (this.ctx.isKnownSlashCommand(message.text)) {
