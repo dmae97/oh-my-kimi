@@ -238,6 +238,10 @@ module.exports.Ellipsis = {
   Ascii: 1,
   Omit: 2,
 };
+module.exports.Encoding = {
+  O200kBase: 'O200kBase',
+  Cl100kBase: 'Cl100kBase',
+};
 module.exports.FileType = {
   File: 1,
   Dir: 2,
