@@ -2296,11 +2296,15 @@ export class AgentSession {
 	 *
 	 * The signature covers:
 	 *   1. Active tool names in order (the prompt renders them in this order).
-	 *   2. Active tool labels and descriptions (both are echoed in the prompt body;
-	 *      see `system-prompt.md` `{{label}}: \`{{name}}\`` rendering).
-	 *   3. When MCP discovery is on, every registry tool's name+label+description,
-	 *      since `rebuildSystemPrompt` summarizes discoverable MCP tools that are
-	 *      not in the active set.
+	 *   2. Active tool labels, descriptions, and wire-visible names — all are
+	 *      rendered into the prompt body (see `system-prompt.md` `{{label}}: \`{{name}}\``
+	 *      and `toolPromptNames` in `buildSystemPrompt`). The wire name comes from
+	 *      `tool.customWireName` and overrides the internal name on the model wire
+	 *      (e.g. `edit` exposes itself as `apply_patch` to GPT-5 in apply_patch mode);
+	 *      a stale wire name would desync prompt guidance from actual tool routing.
+	 *   3. When MCP discovery is on, every registry tool's name+label+description+
+	 *      customWireName, since `rebuildSystemPrompt` summarizes discoverable MCP
+	 *      tools that are not in the active set.
 	 *   4. MCP server instructions text (per server), since `rebuildSystemPrompt`
 	 *      embeds these in the appended prompt under "## MCP Server Instructions".
 	 *      A server upgrade can change instructions while keeping tools identical.
@@ -2314,7 +2318,8 @@ export class AgentSession {
 		// Order-preserving join: any reorder must produce a different signature so
 		// the rebuild fires and the new tool list reaches the API.
 		const nameSegment = toolNames.join("\u0001");
-		const describeTool = (tool: AgentTool): string => `${tool.name}=${tool.label ?? ""}|${tool.description ?? ""}`;
+		const describeTool = (tool: AgentTool): string =>
+			`${tool.name}=${tool.label ?? ""}|${tool.description ?? ""}|${tool.customWireName ?? ""}`;
 		const descriptionSegment = tools.map(describeTool).join("\u0002");
 		let registrySegment = "";
 		if (this.#mcpDiscoveryEnabled) {

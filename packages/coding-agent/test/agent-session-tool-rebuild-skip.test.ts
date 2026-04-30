@@ -300,4 +300,38 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		await session.refreshMCPTools([active, discoverableV2]);
 		expect(rebuildCount).toBe(baseline + 1);
 	});
+	it("rebuilds when an MCP tool's customWireName changes", async () => {
+		// `customWireName` overrides the model-facing tool name (e.g. `edit` exposes
+		// itself as `apply_patch` to GPT-5). The wire name is rendered into the prompt
+		// body via `toolPromptNames`, so a wire-name flip with the rest of the metadata
+		// constant would otherwise leave a stale system prompt that advertises the wrong
+		// callable name to the model. The signature must catch this.
+		let rebuildCount = 0;
+		const { session } = newSession(async toolNames => {
+			rebuildCount++;
+			return `tools:${toolNames.join(",")}`;
+		});
+
+		// Attach a custom wire name to the MCP tool. `applyToolProxy` forwards arbitrary
+		// properties from the underlying CustomTool to the wrapper, so the AgentTool the
+		// signature inspects exposes `customWireName` as if it were declared on the type.
+		const v1 = createMcpCustomTool("mcp__nucleus_search", "nucleus", "search", "Search");
+		const v1WithWire = { ...v1, customWireName: "wire_v1" } as typeof v1 & { customWireName: string };
+		await session.refreshMCPTools([v1WithWire]);
+		expect(rebuildCount).toBe(1);
+
+		// Same wire name: skip.
+		await session.refreshMCPTools([v1WithWire]);
+		expect(rebuildCount).toBe(1);
+
+		// Wire name changes while name/label/description stay constant: must rebuild.
+		const v2WithWire = { ...v1, customWireName: "wire_v2" } as typeof v1 & { customWireName: string };
+		await session.refreshMCPTools([v2WithWire]);
+		expect(rebuildCount).toBe(2);
+
+		// Drop wire name entirely: must rebuild (signature must differ from `wire_v2`).
+		await session.refreshMCPTools([v1]);
+		expect(rebuildCount).toBe(3);
+	});
+
 });
