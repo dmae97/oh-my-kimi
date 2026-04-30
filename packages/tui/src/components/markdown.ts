@@ -4,6 +4,61 @@ import { TERMINAL } from "../terminal-capabilities";
 import type { Component } from "../tui";
 import { applyBackgroundToLine, padding, replaceTabs, visibleWidth, wrapTextWithAnsi } from "../utils";
 
+// ---------------------------------------------------------------------------
+// Module-level LRU render cache
+// ---------------------------------------------------------------------------
+// Each session-tree navigation discards and recreates Markdown component
+// instances, so the per-instance #cachedLines field is always cold on first
+// render of a fresh component. This module-level cache survives across
+// component lifetimes and eliminates redundant marked.lexer + highlightCode
+// (Rust FFI) work for content/layout combinations already seen this session.
+//
+// Implementation: a plain Map used as an ordered LRU. JavaScript Maps iterate
+// in insertion order; we delete-then-reinsert on access to move an entry to
+// the "most recent" end, and evict the first (oldest) entry on overflow.
+// This avoids the lru-cache package dep (not yet in tui/package.json) while
+// keeping the diff contained to this file.
+
+const RENDER_CACHE_MAX = 256; // sane cap: ~256 distinct message × width combos
+const _renderCache = new Map<string, string[]>();
+
+function renderCacheGet(key: string): string[] | undefined {
+	const v = _renderCache.get(key);
+	if (v === undefined) return undefined;
+	// Move to MRU position.
+	_renderCache.delete(key);
+	_renderCache.set(key, v);
+	return v;
+}
+
+function renderCacheSet(key: string, value: string[]): void {
+	if (_renderCache.has(key)) {
+		_renderCache.delete(key);
+	} else if (_renderCache.size >= RENDER_CACHE_MAX) {
+		// Evict LRU (first inserted = Map iterator's first entry).
+		_renderCache.delete(_renderCache.keys().next().value!);
+	}
+	_renderCache.set(key, value);
+}
+
+/** Drop all L2 cache entries. Call on theme change to prevent stale styled output. */
+export function clearRenderCache(): void {
+	_renderCache.clear();
+}
+
+// Stable numeric IDs for structural theme/style objects (no ID field on type).
+// WeakMap so GC can collect orphaned themes/styles without a leak.
+const _objectIds = new WeakMap<object, number>();
+let _nextObjectId = 0;
+function objectId(o: object): number {
+	let id = _objectIds.get(o);
+	if (id === undefined) {
+		id = _nextObjectId++;
+		_objectIds.set(o, id);
+	}
+	return id;
+}
+
 /**
  * Default text styling for markdown content.
  * Applied to all text unless overridden by markdown formatting.
@@ -116,7 +171,8 @@ export class Markdown implements Component {
 	}
 
 	render(width: number): string[] {
-		// Check cache
+		// L1: per-instance cache — fastest path for repeated renders of the same
+		// instance at the same width (e.g. resize debounce, repeated redraws).
 		if (this.#cachedLines && this.#cachedText === this.#text && this.#cachedWidth === width) {
 			return this.#cachedLines;
 		}
@@ -127,7 +183,7 @@ export class Markdown implements Component {
 		// Don't render anything if there's no actual text
 		if (!this.#text || this.#text.trim() === "") {
 			const result: string[] = [];
-			// Update cache
+			// Update per-instance cache
 			this.#cachedText = this.#text;
 			this.#cachedWidth = width;
 			this.#cachedLines = result;
@@ -136,6 +192,19 @@ export class Markdown implements Component {
 
 		// Replace tabs with 3 spaces for consistent rendering
 		const normalizedText = replaceTabs(this.#text);
+
+		// L2: module-level LRU — survives component disposal/recreation across
+		// session-tree navigations. Key encodes every dimension that affects the
+		// render output so different configurations never collide.
+		const cacheKey = `${normalizedText}\x00${width}\x00${this.#paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}`;
+		const cached = renderCacheGet(cacheKey);
+		if (cached !== undefined) {
+			// Populate L1 so subsequent calls from this instance are O(1) map lookup.
+			this.#cachedText = this.#text;
+			this.#cachedWidth = width;
+			this.#cachedLines = cached;
+			return cached;
+		}
 
 		// Parse markdown to HTML-like tokens
 		const tokens = marked.lexer(normalizedText);
@@ -195,14 +264,19 @@ export class Markdown implements Component {
 		}
 
 		// Combine top padding, content, and bottom padding
-		const result = [...emptyLines, ...contentLines, ...emptyLines];
+		const rawResult = [...emptyLines, ...contentLines, ...emptyLines];
+		const result = rawResult.length > 0 ? rawResult : [""];
 
-		// Update cache
+		// Update L1 per-instance cache
 		this.#cachedText = this.#text;
 		this.#cachedWidth = width;
 		this.#cachedLines = result;
 
-		return result.length > 0 ? result : [""];
+		// Update L2 module-level LRU so future instances with the same key skip
+		// the marked.lexer + highlightCode (Rust FFI) work entirely.
+		renderCacheSet(cacheKey, result);
+
+		return result;
 	}
 
 	/**

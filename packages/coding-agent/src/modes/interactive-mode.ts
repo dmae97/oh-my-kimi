@@ -14,7 +14,7 @@ import {
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
 import type { Component, SlashCommand } from "@oh-my-pi/pi-tui";
-import { Container, Loader, Markdown, ProcessTerminal, Spacer, Text, TUI, visibleWidth } from "@oh-my-pi/pi-tui";
+import { clearRenderCache, Container, Loader, Markdown, ProcessTerminal, Spacer, Text, TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 import { APP_NAME, getProjectDir, hsvToRgb, isEnoent, logger, postmortem, prompt } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { KeybindingsManager } from "../config/keybindings";
@@ -442,6 +442,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Set up theme file watcher
 		onThemeChange(() => {
+			clearRenderCache();
 			this.ui.invalidate();
 			this.updateEditorBorderColor();
 			this.ui.requestRender();
