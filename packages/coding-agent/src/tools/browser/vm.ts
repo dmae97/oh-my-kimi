@@ -9,7 +9,7 @@ import type { ToolSession } from "../../sdk";
 import { resizeImage } from "../../utils/image-resize";
 import { expandPath, resolveToCwd } from "../path-utils";
 import { formatScreenshot } from "../render-utils";
-import { ToolError, throwIfAborted } from "../tool-errors";
+import { ToolAbortError, ToolError, throwIfAborted } from "../tool-errors";
 import { DEFAULT_VIEWPORT } from "./launch";
 import { extractReadableFromHtml, type ReadableFormat, type ReadableResult } from "./readable";
 import { clearElementCache, resolveCachedHandle, type TabHandle } from "./registry";
@@ -449,7 +449,14 @@ const AsyncFunctionCtor = Object.getPrototypeOf(async () => {}).constructor as n
 ) => (...args: unknown[]) => Promise<unknown>;
 
 export async function runInTab(opts: RunInTabOptions): Promise<RunInTabResult> {
-	const { tab, code, timeoutMs, signal, session } = opts;
+	const { tab, code, timeoutMs, signal: outerSignal, session } = opts;
+	// Compose a combined signal that aborts when either the caller cancels OR the
+	// per-execution wall-clock timeout fires. This guards against user code that
+	// awaits a never-resolving promise; synchronous infinite loops still block the
+	// event loop until they yield.
+	const timeoutSignal = AbortSignal.timeout(timeoutMs);
+	const signal = outerSignal ? AbortSignal.any([outerSignal, timeoutSignal]) : timeoutSignal;
+	throwIfAborted(outerSignal);
 	const displays: Array<TextContent | ImageContent> = [];
 	const screenshots: ScreenshotResult[] = [];
 
@@ -712,8 +719,35 @@ export async function runInTab(opts: RunInTabOptions): Promise<RunInTabResult> {
 	};
 
 	const fn = new AsyncFunctionCtor("page", "browser", "tab", "display", "assert", "wait", code);
-	const returnValue = await fn(tab.page, tab.browser.browser, tabApi, display, assertFn, wait);
-	return { displays, returnValue, screenshots };
+
+	// Race the user's async function against the combined signal so cancellation
+	// (caller abort or wall-clock timeout) escapes promptly even when `code` is
+	// blocked in a raw puppeteer call (e.g. `handle.click()`) that does not
+	// consult the signal. The orphaned `fn()` may keep running until its CDP
+	// request settles; we accept that to avoid closing the user's tab on every
+	// cancellation.
+	const { promise: cancelRejection, reject: rejectCancel } = Promise.withResolvers<never>();
+	const onCancel = (): void => {
+		if (timeoutSignal.aborted) {
+			rejectCancel(new ToolError(`Browser code execution timed out after ${timeoutMs}ms`));
+		} else {
+			rejectCancel(new ToolAbortError());
+		}
+	};
+	if (signal.aborted) {
+		onCancel();
+	} else {
+		signal.addEventListener("abort", onCancel, { once: true });
+	}
+	try {
+		const returnValue = await Promise.race([
+			fn(tab.page, tab.browser.browser, tabApi, display, assertFn, wait),
+			cancelRejection,
+		]);
+		return { displays, returnValue, screenshots };
+	} finally {
+		signal.removeEventListener("abort", onCancel);
+	}
 }
 
 async function captureScreenshot(

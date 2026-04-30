@@ -14,6 +14,7 @@ import {
 import {
 	applyStealthPatches,
 	applyViewport,
+	BROWSER_PROTOCOL_TIMEOUT_MS,
 	launchHeadlessBrowser,
 	loadPuppeteer,
 	type UserAgentOverride,
@@ -113,7 +114,11 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 		const cdpUrl = kind.cdpUrl.replace(/\/+$/, "");
 		await waitForCdp(cdpUrl, 5_000, opts.signal);
 		const puppeteer = await loadPuppeteer();
-		const browser = await puppeteer.connect({ browserURL: cdpUrl, defaultViewport: null });
+		const browser = await puppeteer.connect({
+			browserURL: cdpUrl,
+			defaultViewport: null,
+			protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
+		});
 		return {
 			key: browserKey(kind),
 			kind,
@@ -171,7 +176,11 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 	const puppeteer = await loadPuppeteer();
 	let browser: Browser;
 	try {
-		browser = await puppeteer.connect({ browserURL: cdpUrl, defaultViewport: null });
+		browser = await puppeteer.connect({
+			browserURL: cdpUrl,
+			defaultViewport: null,
+			protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
+		});
 	} catch (err) {
 		if (subprocess) await gracefulKillTreeOnce(subprocess.pid);
 		throw new ToolError(`Connected to ${cdpUrl} but puppeteer.connect failed: ${(err as Error).message}`);
