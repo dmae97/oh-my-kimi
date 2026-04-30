@@ -190,7 +190,10 @@ function toOllamaNativeBaseUrl(baseUrl: string): string {
 	return baseUrl.endsWith("/v1") ? baseUrl.slice(0, -3) : baseUrl;
 }
 
-async function fetchOllamaNativeModels(baseUrl: string): Promise<Model<"openai-responses">[] | null> {
+async function fetchOllamaNativeModels(
+	baseUrl: string,
+	resolveLimits: (modelId: string) => Promise<OllamaModelLimits>,
+): Promise<Model<"openai-responses">[] | null> {
 	const nativeBaseUrl = toOllamaNativeBaseUrl(baseUrl);
 	let response: Response;
 	try {
@@ -210,7 +213,7 @@ async function fetchOllamaNativeModels(baseUrl: string): Promise<Model<"openai-r
 		entries.map(async (entry): Promise<Model<"openai-responses"> | null> => {
 			const id = entry.model ?? entry.name;
 			if (!id) return null;
-			const { contextWindow, maxTokens } = await fetchOllamaModelLimits(nativeBaseUrl, id);
+			const { contextWindow, maxTokens } = await resolveLimits(id);
 			return {
 				id,
 				name: entry.name ?? id,
@@ -229,21 +232,27 @@ async function fetchOllamaNativeModels(baseUrl: string): Promise<Model<"openai-r
 	return models.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-/** Ollama's default `num_ctx` when the runtime request does not override it. */
-const OLLAMA_DEFAULT_CONTEXT_WINDOW = 4096;
+/**
+ * Fallback context window for Ollama models when `/api/show` is unavailable
+ * or omits a `model_info.<arch>.context_length` field. Matches the size
+ * Ollama's cloud catalog reports for stock models.
+ */
+const OLLAMA_FALLBACK_CONTEXT_WINDOW = 128_000;
 /** Cap max output tokens at a value that matches OMP's other openai-responses defaults. */
 const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 
+interface OllamaModelLimits {
+	contextWindow: number;
+	maxTokens: number;
+}
+
 /**
  * Query Ollama's `/api/show` endpoint for a single model and pull its native
- * context length out of `model_info.<arch>.context_length`. Falls back to
- * Ollama's default context window when the endpoint or field is unavailable
- * so discovery still succeeds against older Ollama builds.
+ * context length out of `model_info.<arch>.context_length`. Returns the
+ * discovered limits, or `undefined` when the endpoint or field is
+ * unavailable so callers can layer their own fallback.
  */
-async function fetchOllamaModelLimits(
-	nativeBaseUrl: string,
-	modelId: string,
-): Promise<{ contextWindow: number; maxTokens: number }> {
+async function fetchOllamaShowLimits(nativeBaseUrl: string, modelId: string): Promise<OllamaModelLimits | undefined> {
 	try {
 		const response = await fetch(`${nativeBaseUrl}/api/show`, {
 			method: "POST",
@@ -251,7 +260,7 @@ async function fetchOllamaModelLimits(
 			body: JSON.stringify({ model: modelId }),
 		});
 		if (!response.ok) {
-			return { contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW, maxTokens: OLLAMA_DEFAULT_MAX_TOKENS };
+			return undefined;
 		}
 		const payload = (await response.json()) as { model_info?: Record<string, unknown> };
 		const info = payload.model_info ?? {};
@@ -261,9 +270,34 @@ async function fetchOllamaModelLimits(
 			}
 		}
 	} catch {
-		// fall through to default
+		// fall through; caller decides on the fallback
 	}
-	return { contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW, maxTokens: OLLAMA_DEFAULT_MAX_TOKENS };
+	return undefined;
+}
+
+/**
+ * Build a resolver that fetches `/api/show` limits per model id and caches the
+ * result in-memory for the lifetime of the manager. Successful lookups are
+ * cached so repeated `fetchDynamicModels` calls do not refetch; failed
+ * lookups stay uncached so a later refresh can recover.
+ */
+function createOllamaLimitsResolver(nativeBaseUrl: string): (modelId: string) => Promise<OllamaModelLimits> {
+	const cache = new Map<string, Promise<OllamaModelLimits>>();
+	return modelId => {
+		const cached = cache.get(modelId);
+		if (cached) return cached;
+		const pending = (async () => {
+			const limits = await fetchOllamaShowLimits(nativeBaseUrl, modelId);
+			if (!limits) {
+				cache.delete(modelId);
+				return { contextWindow: OLLAMA_FALLBACK_CONTEXT_WINDOW, maxTokens: OLLAMA_DEFAULT_MAX_TOKENS };
+			}
+			return limits;
+		})();
+		cache.set(modelId, pending);
+		void pending.catch(() => cache.delete(modelId));
+		return pending;
+	};
 }
 
 const OPENAI_NON_RESPONSES_PREFIXES = [
@@ -651,7 +685,9 @@ export interface OllamaModelManagerConfig {
 export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): ModelManagerOptions<"openai-responses"> {
 	const apiKey = config?.apiKey;
 	const baseUrl = normalizeOllamaBaseUrl(config?.baseUrl);
+	const nativeBaseUrl = toOllamaNativeBaseUrl(baseUrl);
 	const references = createBundledReferenceMap<"openai-responses">("ollama" as Parameters<typeof getBundledModels>[0]);
+	const resolveLimits = createOllamaLimitsResolver(nativeBaseUrl);
 	return {
 		providerId: "ollama",
 		fetchDynamicModels: async () => {
@@ -666,17 +702,23 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 						return {
 							...defaults,
 							name: toModelName(entry.name, defaults.name),
-							contextWindow: 128000,
-							maxTokens: 8192,
+							contextWindow: OLLAMA_FALLBACK_CONTEXT_WINDOW,
+							maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
 						};
 					}
 					return mapWithBundledReference(entry, defaults, reference);
 				},
 			});
 			if (openAiCompatible && openAiCompatible.length > 0) {
+				await Promise.all(
+					openAiCompatible.map(async model => {
+						const limits = await resolveLimits(model.id);
+						model.contextWindow = limits.contextWindow;
+					}),
+				);
 				return openAiCompatible;
 			}
-			const nativeFallback = await fetchOllamaNativeModels(baseUrl);
+			const nativeFallback = await fetchOllamaNativeModels(baseUrl, resolveLimits);
 			if (nativeFallback && nativeFallback.length > 0) {
 				return nativeFallback;
 			}
