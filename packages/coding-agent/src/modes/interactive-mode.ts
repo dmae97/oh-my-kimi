@@ -878,6 +878,19 @@ export class InteractiveMode implements InteractiveModeContext {
 			} else {
 				await this.session.setModelTemporary(prev.model, prev.thinkingLevel);
 			}
+			// If #applyPlanModeModel queued a deferred switch to the plan-role model
+			// (because the session was streaming on entry), drop it now: we are
+			// leaving plan mode, so flushing it on the next agent_end would land the
+			// session on the plan-role model after the user has exited plan mode
+			// (issue #816). Only clear when the pending target matches the plan-role
+			// model — leave any unrelated user-queued switch intact.
+			const pending = this.#pendingModelSwitch;
+			if (pending) {
+				const planResolution = this.session.resolveRoleModelWithThinking("plan");
+				if (planResolution.model && modelsAreEqual(pending.model, planResolution.model)) {
+					this.#pendingModelSwitch = undefined;
+				}
+			}
 		}
 		this.session.setPlanModeState(undefined);
 		this.planModeEnabled = false;
