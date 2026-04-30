@@ -42,8 +42,7 @@ export function streamKimi(
 	// Async IIFE to handle header fetching and stream piping
 	(async () => {
 		try {
-			const kimiHeaders = await getKimiCommonHeaders();
-			const mergedHeaders = { ...kimiHeaders, ...options?.headers };
+			const mergedHeaders = { ...getKimiCommonHeaders(), ...options?.headers };
 
 			if (format === "anthropic") {
 				// Create a synthetic Anthropic model pointing to Kimi's endpoint

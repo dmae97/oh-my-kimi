@@ -238,7 +238,7 @@ export const kimiUsageProvider: UsageProvider = {
 		try {
 			const response = await ctx.fetch(url, {
 				headers: {
-					...(await getKimiCommonHeaders()),
+					...getKimiCommonHeaders(),
 					Authorization: `Bearer ${accessToken}`,
 				},
 				signal: params.signal,

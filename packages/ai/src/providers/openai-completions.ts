@@ -741,7 +741,7 @@ async function createClient(
 		headers["X-Title"] = "Oh-My-Pi";
 	}
 	if (model.provider === "kimi-code") {
-		headers = { ...(await getKimiCommonHeaders()), ...headers };
+		headers = { ...getKimiCommonHeaders(), ...headers };
 	}
 	let copilotPremiumRequests: number | undefined;
 
