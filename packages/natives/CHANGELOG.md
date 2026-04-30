@@ -1,6 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Changed `waitForExit` to accept a single options object instead of a numeric timeout argument
+
+### Added
+
+- Added a `signal` option to `terminate` for cancelling termination while waiting for process shutdown
+- Added abort `signal` support to `waitForExit` via `ProcessWaitOptions`
+- Added a `ProcessWaitOptions` type and updated `waitForExit` to accept an options object
 
 ## [14.5.9] - 2026-04-30
 ### Fixed

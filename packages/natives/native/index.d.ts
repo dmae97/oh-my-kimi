@@ -75,17 +75,25 @@ export declare class Process {
   /**
    * Send `signal` to this process and its descendants, children first.
    *
-   * Defaults to the platform hard-kill signal.
+   * On Linux and macOS the signal is forwarded as-is. On Windows there is no
+   * signal abstraction, so the `signal` argument is ignored and the entire
+   * tree is hard-killed via `TerminateProcess`. Defaults to the POSIX
+   * hard-kill signal.
    */
   killTree(signal?: number | undefined | null): number
-  /** Gracefully terminate this process and its descendants. */
+  /**
+   * Gracefully terminate this process and its descendants.
+   *
+   * By default this waits 1000ms after polite termination before
+   * hard-killing. Pass `graceful_ms < 0` to skip the graceful phase.
+   */
   terminate(options?: ProcessTerminateOptions | undefined | null): Promise<boolean>
   /**
    * Wait until this process exits.
    *
-   * When `timeout_ms` is omitted, waits until the process exits.
+   * When `options.timeout_ms` is omitted, waits until the process exits.
    */
-  waitForExit(timeoutMs?: number | undefined | null): Promise<boolean>
+  waitForExit(options?: ProcessWaitOptions | undefined | null): Promise<boolean>
   /** Process group id for this process, when supported by the platform. */
   groupId(): number | null
   /** Direct children of this process as stable process references. */
@@ -904,14 +912,27 @@ export declare enum ProcessStatus {
   Exited = 'exited'
 }
 
-/** Options for graceful process-tree termination. */
 export interface ProcessTerminateOptions {
   /** Also signal the process group when supported by the platform. */
   group?: boolean
-  /** Milliseconds to wait after polite termination before hard-killing. */
+  /**
+   * Milliseconds to wait after polite termination before hard-killing.
+   * Omit to use the default grace period. Pass a negative value to skip the
+   * graceful phase and hard-kill immediately.
+   */
   gracefulMs?: number
   /** Milliseconds to wait after hard-kill for the process tree to exit. */
   timeoutMs?: number
+  /** Abort signal for cancelling termination while waiting. */
+  signal?: unknown
+}
+
+/** Options for waiting on a process exit. */
+export interface ProcessWaitOptions {
+  /** Milliseconds to wait before returning false. Omit to wait indefinitely. */
+  timeoutMs?: number
+  /** Abort signal for cancelling the wait. */
+  signal?: unknown
 }
 
 /** Probe whether `ProjFS` overlay virtualization can be started on this system. */

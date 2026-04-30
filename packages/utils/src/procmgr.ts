@@ -14,9 +14,6 @@ export interface ShellConfig {
 
 let cachedShellConfig: ShellConfig | null = null;
 
-const IS_WINDOWS = process.platform === "win32";
-const TERM_SIGNAL = IS_WINDOWS ? undefined : "SIGTERM";
-
 /**
  * Check if a shell binary is executable.
  */
@@ -195,5 +192,5 @@ export async function onProcessExit(proc: Subprocess | number, abortSignal?: Abo
 		);
 	}
 
-	return await Process.fromPid(proc)?.waitForExit({ signal: abortSignal }) ?? true;
+	return (await Process.fromPid(proc)?.waitForExit({ signal: abortSignal })) ?? true;
 }
