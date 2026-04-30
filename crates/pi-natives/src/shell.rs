@@ -1352,6 +1352,211 @@ fn quote_arg(arg: &str) -> String {
 mod tests {
 	use super::*;
 
+	/// Truth-table coverage for `brush_core::commands::child_session_action`.
+	///
+	/// Lives in `pi-natives` because the brush-core crate is excluded from the
+	/// workspace (vendored upstream) and cannot be tested standalone — its tokio
+	/// dependency only resolves the `net` feature via feature-unification with
+	/// other workspace members.
+	mod child_session_action {
+		use brush_core::commands::{ChildSessionAction, child_session_action};
+
+		/// Interactive brush, leading its own pgroup, terminal stdin: foreground.
+		#[test]
+		fn interactive_with_terminal_stdin_takes_foreground() {
+			assert_eq!(
+				child_session_action(true, true, false),
+				ChildSessionAction::TakeForeground,
+			);
+			// `in_pipeline_group` is meaningless when `new_pg` is true; result MUST
+			// not depend on it.
+			assert_eq!(
+				child_session_action(true, true, true),
+				ChildSessionAction::TakeForeground,
+			);
+		}
+
+		/// Interactive brush leading its own pgroup but with non-terminal stdin
+		/// (e.g. redirected): detach so SIGTTIN/SIGTTOU on the inherited tty
+		/// cannot stop the parent.
+		#[test]
+		fn interactive_with_non_terminal_stdin_detaches() {
+			assert_eq!(
+				child_session_action(true, false, false),
+				ChildSessionAction::DetachSession,
+			);
+			assert_eq!(
+				child_session_action(true, false, true),
+				ChildSessionAction::DetachSession,
+			);
+		}
+
+		/// Non-interactive brush, terminal stdin, no pipeline: nothing to do.
+		#[test]
+		fn non_interactive_with_terminal_stdin_does_nothing() {
+			assert_eq!(
+				child_session_action(false, true, false),
+				ChildSessionAction::None,
+			);
+		}
+
+		/// Non-interactive brush, terminal stdin, joining a pipeline pgroup:
+		/// nothing to do (parent already wired pgroup membership).
+		#[test]
+		fn non_interactive_terminal_stdin_in_pipeline_does_nothing() {
+			assert_eq!(
+				child_session_action(false, true, true),
+				ChildSessionAction::None,
+			);
+		}
+
+		/// **Embedded host bug fix.** Non-interactive brush, non-terminal stdin,
+		/// no pipeline pgroup: detach so the child cannot SIGTTIN/SIGTTOU the
+		/// host. This is the case that regressed before this fix and is the
+		/// motivating bug for PR #895.
+		#[test]
+		fn embedded_host_with_non_terminal_stdin_detaches() {
+			assert_eq!(
+				child_session_action(false, false, false),
+				ChildSessionAction::DetachSession,
+			);
+		}
+
+		/// **Pipeline carve-out.** Non-interactive brush, non-terminal stdin
+		/// (pipe), joining an established pipeline pgroup: MUST NOT detach.
+		/// `setsid()` would either fail with EPERM or move the child into a new
+		/// session, breaking the pipeline's shared process group and its
+		/// job-control signal propagation. This is the regression Codex flagged
+		/// in PR #895.
+		#[test]
+		fn pipeline_stage_does_not_detach() {
+			assert_eq!(
+				child_session_action(false, false, true),
+				ChildSessionAction::None,
+			);
+		}
+	}
+
+	/// End-to-end verification that brush, when embedded as a non-interactive
+	/// library (`interactive: false`, exactly what `create_session` produces),
+	/// spawns external commands in a **separate session** from the host.
+	///
+	/// The truth-table tests in `child_session_action` cover the decision in
+	/// isolation. This test covers the wiring: it boots a real `BrushShell`,
+	/// runs a child that prints its PID then sleeps, and asks the kernel for
+	/// that PID's session via `getsid(2)` while the child is still alive.
+	/// Pre-fix (`new_pg=false` skipped `detach_session`), the child inherited
+	/// the host's session, so `getsid(child_pid) == getsid(0)`. Post-fix,
+	/// `setsid` ran and the child is its own session leader
+	/// (`getsid(child_pid) == child_pid`).
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn embedded_external_command_runs_in_its_own_session() {
+		use std::io::Read as _;
+
+		let host_sid = unsafe { libc::getsid(0) };
+		assert!(
+			host_sid > 0,
+			"getsid(0) failed: {}",
+			std::io::Error::last_os_error(),
+		);
+
+		// Build the same kind of session pi-natives uses in production.
+		let config = ShellConfig {
+			session_env:   None,
+			snapshot_path: None,
+			minimizer:     None,
+		};
+		let mut session = create_session(&config).await.expect("create_session");
+
+		// Output pipe shared between the brush child and a concurrent reader. The
+		// reader runs on a blocking thread because `os_pipe` reads are blocking.
+		let (mut reader, writer) = pipe_to_files("e2e").expect("pipe");
+		let stdout_file = OpenFile::from(writer.try_clone().expect("clone"));
+		let stderr_file = OpenFile::from(writer);
+
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null stdin"));
+		params.set_fd(OpenFiles::STDOUT_FD, stdout_file);
+		params.set_fd(OpenFiles::STDERR_FD, stderr_file);
+
+		// (pid_tx, pid_rx) — reader task signals the test as soon as it has the PID.
+		let (pid_tx, pid_rx) = tokio::sync::oneshot::channel::<i32>();
+		let reader_handle = tokio::task::spawn_blocking(move || {
+			let mut buf = Vec::new();
+			// Read just enough to capture the PID line. The child sleeps after
+			// printing so the pipe will not back-pressure.
+			let mut chunk = [0u8; 64];
+			let mut pid_tx = Some(pid_tx);
+			while let Ok(n) = reader.read(&mut chunk)
+				&& n > 0
+			{
+				buf.extend_from_slice(&chunk[..n]);
+				if let Some(tx) = pid_tx.take()
+					&& let Ok(s) = std::str::from_utf8(&buf)
+					&& let Some(line) = s.lines().next()
+					&& let Ok(pid) = line.trim().parse::<i32>()
+				{
+					let _ = tx.send(pid);
+				} else if pid_tx.is_some() {
+					// keep the sender for the next iteration
+				}
+			}
+			buf
+		});
+
+		// Run brush in the background so we can call `getsid(child_pid)` while
+		// the child is still alive.
+		let shell_handle = tokio::spawn(async move {
+			// `printf '%d\n' "$$"` then `sleep 0.5`. Long enough for our `getsid`.
+			let exec = session
+				.shell
+				.run_string("/bin/sh -c 'printf %d \"$$\"; sleep 0.5'", &params)
+				.await
+				.expect("run_string");
+			drop(params);
+			(session, exec)
+		});
+
+		let child_pid = time::timeout(Duration::from_secs(5), pid_rx)
+			.await
+			.expect("timed out waiting for child PID")
+			.expect("reader closed pid channel without sending");
+		assert!(child_pid > 0, "got non-positive child pid: {child_pid}");
+
+		// Snapshot the child's session ID immediately, while the child is still
+		// in `sleep`. POSIX guarantees `getsid` against a live PID returns the
+		// session of that process.
+		let child_sid = unsafe { libc::getsid(child_pid) };
+		assert!(
+			child_sid > 0,
+			"getsid({child_pid}) failed: {} (child may have already exited)",
+			std::io::Error::last_os_error(),
+		);
+
+		// Drain the brush task and the pipe reader.
+		let (_session, exec) = time::timeout(Duration::from_secs(5), shell_handle)
+			.await
+			.expect("shell timed out")
+			.expect("shell task panicked");
+		assert!(
+			matches!(exec.exit_code, ExecutionExitCode::Success),
+			"unexpected exit: {}",
+			exit_code(&exec),
+		);
+		let _ = time::timeout(Duration::from_secs(2), reader_handle).await;
+
+		assert_ne!(
+			child_sid, host_sid,
+			"child PID {child_pid} inherited host session {host_sid}; \
+			 setsid() did not run — the embedded-host bug is back",
+		);
+		assert_eq!(
+			child_sid, child_pid,
+			"child PID {child_pid} should be its own session leader after setsid",
+		);
+	}
+
 	#[tokio::test]
 	async fn abort_state_signals_cancel_token() {
 		let abort_state = ShellAbortState::default();
