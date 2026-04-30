@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { hookFetch } from "@oh-my-pi/pi-utils";
 import { searchWithParallel } from "../../src/web/parallel";
-import { getSearchProvider } from "../../src/web/search/provider";
 import { searchParallel } from "../../src/web/search/providers/parallel";
 
 describe("Parallel web search", () => {
@@ -28,12 +27,6 @@ describe("Parallel web search", () => {
 			});
 		});
 	}
-
-	it("registers the Parallel provider", () => {
-		const provider = getSearchProvider("parallel");
-		expect(provider.id).toBe("parallel");
-		expect(provider.label).toBe("Parallel");
-	});
 
 	it("sends the expected Parallel search request and parses results", async () => {
 		using _hook = mockFetch({

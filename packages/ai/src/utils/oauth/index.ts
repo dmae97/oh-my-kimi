@@ -1,14 +1,6 @@
 // ============================================================================
 // High-level API
 // ============================================================================
-import { refreshAnthropicToken } from "./anthropic";
-import { refreshCursorToken } from "./cursor";
-import { refreshGitHubCopilotToken } from "./github-copilot";
-import { refreshGitLabDuoToken } from "./gitlab-duo";
-import { refreshAntigravityToken } from "./google-antigravity";
-import { refreshGoogleCloudToken } from "./google-gemini-cli";
-import { refreshKimiToken } from "./kimi";
-import { refreshOpenAICodexToken } from "./openai-codex";
 import type {
 	OAuthCredentials,
 	OAuthProvider,
@@ -16,117 +8,6 @@ import type {
 	OAuthProviderInfo,
 	OAuthProviderInterface,
 } from "./types";
-
-/**
- * OAuth credential management for AI providers.
- *
- * This module handles login, token refresh, and credential storage
- * for OAuth-based providers:
- * - Anthropic (Claude Pro/Max)
- * - GitHub Copilot
- * - Google Cloud Code Assist (Gemini CLI)
- * - Antigravity (Gemini 3, Claude, GPT-OSS via Google Cloud)
- * - Kimi Code
- * - Kilo Gateway
- * - Kagi
- * - Cerebras
- * - Fireworks
- * - Hugging Face Inference
- * - Synthetic
- * - Perplexity (Pro/Max — desktop app extraction or manual cookie)
- * - NVIDIA
- * - NanoGPT
- * - Venice
- * - vLLM
- * - ZenMux
- * - Alibaba Coding Plan
- */
-// Alibaba Coding Plan
-export { loginAlibabaCodingPlan } from "./alibaba-coding-plan";
-// Anthropic
-export { loginAnthropic, refreshAnthropicToken } from "./anthropic";
-// Cerebras (API key)
-export { loginCerebras } from "./cerebras";
-// Cloudflare AI Gateway (API key)
-export { loginCloudflareAiGateway } from "./cloudflare-ai-gateway";
-// Cursor
-export {
-	generateCursorAuthParams,
-	isCursorTokenExpiringSoon,
-	loginCursor,
-	pollCursorAuth,
-	refreshCursorToken,
-} from "./cursor";
-// Fireworks (API key)
-export { loginFireworks } from "./fireworks";
-// GitHub Copilot
-export {
-	getGitHubCopilotBaseUrl,
-	loginGitHubCopilot,
-	normalizeDomain,
-	refreshGitHubCopilotToken,
-} from "./github-copilot";
-// GitLab Duo
-export { loginGitLabDuo, refreshGitLabDuoToken } from "./gitlab-duo";
-// Google Antigravity
-export { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
-// Google Gemini CLI
-export { loginGeminiCli, refreshGoogleCloudToken } from "./google-gemini-cli";
-// Hugging Face Inference (API key)
-export { loginHuggingface } from "./huggingface";
-// Kagi (API key)
-export { loginKagi } from "./kagi";
-// Kilo Gateway
-export { loginKilo } from "./kilo";
-// Kimi Code
-export { loginKimi, refreshKimiToken } from "./kimi";
-// LiteLLM (API key)
-export { loginLiteLLM } from "./litellm";
-// LM Studio (optional API key)
-export { DEFAULT_LOCAL_TOKEN, loginLmStudio } from "./lm-studio";
-// MiniMax Coding Plan (API key)
-export { loginMiniMaxCode, loginMiniMaxCodeCn } from "./minimax-code";
-// Moonshot (API key)
-export { loginMoonshot } from "./moonshot";
-// NanoGPT (API key)
-export { loginNanoGPT } from "./nanogpt";
-// NVIDIA (API key)
-export { loginNvidia } from "./nvidia";
-// Ollama (optional API key)
-export { loginOllama } from "./ollama";
-export { loginOllamaCloud } from "./ollama-cloud";
-export type { OpenAICodexLoginOptions } from "./openai-codex";
-// OpenAI Codex (ChatGPT OAuth)
-export { loginOpenAICodex, refreshOpenAICodexToken } from "./openai-codex";
-// OpenCode Zen / OpenCode Go (API key)
-export { loginOpenCode } from "./opencode";
-// Parallel (API key)
-export { loginParallel } from "./parallel";
-// Perplexity
-export { loginPerplexity } from "./perplexity";
-// Qianfan (API key)
-export { loginQianfan } from "./qianfan";
-// Qwen Portal (OAuth token/API key)
-export { loginQwenPortal } from "./qwen-portal";
-// Synthetic (API key)
-export { loginSynthetic } from "./synthetic";
-// Tavily (API key)
-export { loginTavily } from "./tavily";
-// Together (API key)
-export { loginTogether } from "./together";
-export * from "./types";
-// Venice (API key)
-export { loginVenice } from "./venice";
-// Vercel AI Gateway (API key)
-export { loginVercelAiGateway } from "./vercel-ai-gateway";
-// vLLM (API key)
-export { loginVllm } from "./vllm";
-// Xiaomi MiMo (API key)
-export { loginXiaomi } from "./xiaomi";
-// Z.AI (API key)
-export { loginZai } from "./zai";
-// ZenMux (API key)
-export { loginZenMux } from "./zenmux";
 
 const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
@@ -367,39 +248,53 @@ export async function refreshOAuthToken(
 
 	let newCredentials: OAuthCredentials;
 	switch (provider) {
-		case "anthropic":
+		case "anthropic": {
+			const { refreshAnthropicToken } = await import("./anthropic");
 			newCredentials = await refreshAnthropicToken(credentials.refresh);
 			break;
-		case "github-copilot":
+		}
+		case "github-copilot": {
+			const { refreshGitHubCopilotToken } = await import("./github-copilot");
 			newCredentials = await refreshGitHubCopilotToken(credentials.refresh, credentials.enterpriseUrl);
 			break;
-		case "google-gemini-cli":
+		}
+		case "google-gemini-cli": {
+			const { refreshGoogleCloudToken } = await import("./google-gemini-cli");
 			if (!credentials.projectId) {
 				throw new Error("Google Cloud credentials missing projectId");
 			}
 			newCredentials = await refreshGoogleCloudToken(credentials.refresh, credentials.projectId);
 			break;
-		case "google-antigravity":
+		}
+		case "google-antigravity": {
+			const { refreshAntigravityToken } = await import("./google-antigravity");
 			if (!credentials.projectId) {
 				throw new Error("Antigravity credentials missing projectId");
 			}
 			newCredentials = await refreshAntigravityToken(credentials.refresh, credentials.projectId);
 			break;
-		case "openai-codex":
+		}
+		case "openai-codex": {
+			const { refreshOpenAICodexToken } = await import("./openai-codex");
 			newCredentials = await refreshOpenAICodexToken(credentials.refresh);
 			break;
-		case "kimi-code":
+		}
+		case "kimi-code": {
+			const { refreshKimiToken } = await import("./kimi");
 			newCredentials = await refreshKimiToken(credentials.refresh);
 			break;
-		case "kilo":
-			newCredentials = credentials;
-			break;
-		case "gitlab-duo":
+		}
+		case "gitlab-duo": {
+			const { refreshGitLabDuoToken } = await import("./gitlab-duo");
 			newCredentials = await refreshGitLabDuoToken(credentials);
 			break;
-		case "cursor":
+		}
+		case "cursor": {
+			const { refreshCursorToken } = await import("./cursor");
 			newCredentials = await refreshCursorToken(credentials.refresh);
 			break;
+		}
+		case "kilo":
 		case "perplexity":
 		case "huggingface":
 		case "opencode-zen":

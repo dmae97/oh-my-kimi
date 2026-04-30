@@ -1,4 +1,4 @@
-import { getOAuthProviders } from "@oh-my-pi/pi-ai";
+import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import { Container, getKeybindings, Input, Spacer, Text, type TUI } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import { openPath } from "../../utils/open";

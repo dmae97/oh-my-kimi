@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { OAuthCredentials, UsageProvider } from "@oh-my-pi/pi-ai";
-import * as ai from "@oh-my-pi/pi-ai";
+import type { UsageProvider } from "@oh-my-pi/pi-ai";
+import * as oauth from "@oh-my-pi/pi-ai/utils/oauth";
+import type { OAuthCredentials } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
@@ -41,7 +42,7 @@ describe("AuthStorage account rotation", () => {
 			usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
 		});
 
-		vi.spyOn(ai, "getOAuthApiKey").mockImplementation(async (_provider, credentials) => {
+		vi.spyOn(oauth, "getOAuthApiKey").mockImplementation(async (_provider, credentials) => {
 			const credential = credentials["openai-codex"] as OAuthCredentials | undefined;
 			if (!credential) return null;
 			return {

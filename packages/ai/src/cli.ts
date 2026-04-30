@@ -2,23 +2,7 @@
 import * as readline from "node:readline";
 import { AuthCredentialStore } from "./auth-storage";
 import { getOAuthProviders } from "./utils/oauth";
-import { loginAnthropic } from "./utils/oauth/anthropic";
-import { loginCursor } from "./utils/oauth/cursor";
-import { loginGitHubCopilot } from "./utils/oauth/github-copilot";
-import { loginAntigravity } from "./utils/oauth/google-antigravity";
-import { loginGeminiCli } from "./utils/oauth/google-gemini-cli";
-import { loginKagi } from "./utils/oauth/kagi";
-import { loginKilo } from "./utils/oauth/kilo";
-import { loginKimi } from "./utils/oauth/kimi";
-import { loginMiniMaxCode, loginMiniMaxCodeCn } from "./utils/oauth/minimax-code";
-import { loginNanoGPT } from "./utils/oauth/nanogpt";
-import { loginOllamaCloud } from "./utils/oauth/ollama-cloud";
-import { loginOpenAICodex } from "./utils/oauth/openai-codex";
-import { loginParallel } from "./utils/oauth/parallel";
-import { loginTavily } from "./utils/oauth/tavily";
 import type { OAuthCredentials, OAuthProvider } from "./utils/oauth/types";
-import { loginZai } from "./utils/oauth/zai";
-import { loginZenMux } from "./utils/oauth/zenmux";
 
 const PROVIDERS = getOAuthProviders();
 
@@ -82,7 +66,8 @@ async function login(provider: OAuthProvider): Promise<void> {
 		let credentials: OAuthCredentials;
 
 		switch (provider) {
-			case "anthropic":
+			case "anthropic": {
+				const { loginAnthropic } = await import("./utils/oauth/anthropic");
 				credentials = await loginAnthropic({
 					onAuth(info) {
 						const { url } = info;
@@ -93,8 +78,10 @@ async function login(provider: OAuthProvider): Promise<void> {
 					},
 				});
 				break;
+			}
 
-			case "github-copilot":
+			case "github-copilot": {
+				const { loginGitHubCopilot } = await import("./utils/oauth/github-copilot");
 				credentials = await loginGitHubCopilot({
 					onAuth(url, instructions) {
 						console.log(`\nOpen this URL in your browser:\n${url}`);
@@ -106,8 +93,10 @@ async function login(provider: OAuthProvider): Promise<void> {
 					},
 				});
 				break;
+			}
 
-			case "google-gemini-cli":
+			case "google-gemini-cli": {
+				const { loginGeminiCli } = await import("./utils/oauth/google-gemini-cli");
 				credentials = await loginGeminiCli({
 					onAuth(info) {
 						const { url, instructions } = info;
@@ -117,8 +106,10 @@ async function login(provider: OAuthProvider): Promise<void> {
 					},
 				});
 				break;
+			}
 
-			case "google-antigravity":
+			case "google-antigravity": {
+				const { loginAntigravity } = await import("./utils/oauth/google-antigravity");
 				credentials = await loginAntigravity({
 					onAuth(info) {
 						const { url, instructions } = info;
@@ -128,7 +119,9 @@ async function login(provider: OAuthProvider): Promise<void> {
 					},
 				});
 				break;
-			case "openai-codex":
+			}
+			case "openai-codex": {
+				const { loginOpenAICodex } = await import("./utils/oauth/openai-codex");
 				credentials = await loginOpenAICodex({
 					onAuth(info) {
 						const { url, instructions } = info;
@@ -141,8 +134,10 @@ async function login(provider: OAuthProvider): Promise<void> {
 					},
 				});
 				break;
+			}
 
-			case "kimi-code":
+			case "kimi-code": {
+				const { loginKimi } = await import("./utils/oauth/kimi");
 				credentials = await loginKimi({
 					onAuth(info) {
 						const { url, instructions } = info;
@@ -152,7 +147,9 @@ async function login(provider: OAuthProvider): Promise<void> {
 					},
 				});
 				break;
-			case "kilo":
+			}
+			case "kilo": {
+				const { loginKilo } = await import("./utils/oauth/kilo");
 				credentials = await loginKilo({
 					onAuth(info) {
 						const { url, instructions } = info;
@@ -162,7 +159,9 @@ async function login(provider: OAuthProvider): Promise<void> {
 					},
 				});
 				break;
+			}
 			case "kagi": {
+				const { loginKagi } = await import("./utils/oauth/kagi");
 				const apiKey = await loginKagi({
 					onAuth(info) {
 						const { url, instructions } = info;
@@ -179,6 +178,7 @@ async function login(provider: OAuthProvider): Promise<void> {
 				return;
 			}
 			case "tavily": {
+				const { loginTavily } = await import("./utils/oauth/tavily");
 				const apiKey = await loginTavily({
 					onAuth(info) {
 						const { url, instructions } = info;
@@ -195,6 +195,7 @@ async function login(provider: OAuthProvider): Promise<void> {
 				return;
 			}
 			case "parallel": {
+				const { loginParallel } = await import("./utils/oauth/parallel");
 				const apiKey = await loginParallel({
 					onAuth(info) {
 						const { url, instructions } = info;
@@ -211,7 +212,8 @@ async function login(provider: OAuthProvider): Promise<void> {
 				return;
 			}
 
-			case "cursor":
+			case "cursor": {
+				const { loginCursor } = await import("./utils/oauth/cursor");
 				credentials = await loginCursor(
 					url => {
 						console.log(`\nOpen this URL in your browser:\n${url}\n`);
@@ -221,8 +223,10 @@ async function login(provider: OAuthProvider): Promise<void> {
 					},
 				);
 				break;
+			}
 
 			case "zai": {
+				const { loginZai } = await import("./utils/oauth/zai");
 				const apiKey = await loginZai({
 					onAuth(info) {
 						const { url, instructions } = info;
@@ -240,6 +244,7 @@ async function login(provider: OAuthProvider): Promise<void> {
 			}
 
 			case "nanogpt": {
+				const { loginNanoGPT } = await import("./utils/oauth/nanogpt");
 				const apiKey = await loginNanoGPT({
 					onAuth(info) {
 						const { url, instructions } = info;
@@ -257,6 +262,7 @@ async function login(provider: OAuthProvider): Promise<void> {
 			}
 
 			case "zenmux": {
+				const { loginZenMux } = await import("./utils/oauth/zenmux");
 				const apiKey = await loginZenMux({
 					onAuth(info) {
 						const { url, instructions } = info;
@@ -273,6 +279,7 @@ async function login(provider: OAuthProvider): Promise<void> {
 				return;
 			}
 			case "ollama-cloud": {
+				const { loginOllamaCloud } = await import("./utils/oauth/ollama-cloud");
 				const apiKey = await loginOllamaCloud({
 					onAuth(info) {
 						const { url, instructions } = info;
@@ -290,6 +297,7 @@ async function login(provider: OAuthProvider): Promise<void> {
 			}
 
 			case "minimax-code": {
+				const { loginMiniMaxCode } = await import("./utils/oauth/minimax-code");
 				const apiKey = await loginMiniMaxCode({
 					onAuth(info) {
 						const { url, instructions } = info;
@@ -307,6 +315,7 @@ async function login(provider: OAuthProvider): Promise<void> {
 			}
 
 			case "minimax-code-cn": {
+				const { loginMiniMaxCodeCn } = await import("./utils/oauth/minimax-code");
 				const apiKey = await loginMiniMaxCodeCn({
 					onAuth(info) {
 						const { url, instructions } = info;

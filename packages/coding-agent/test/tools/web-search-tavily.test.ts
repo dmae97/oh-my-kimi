@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { hookFetch } from "@oh-my-pi/pi-utils";
 import { AgentStorage } from "../../src/session/agent-storage";
-import { getSearchProvider, resolveProviderChain, SEARCH_PROVIDER_ORDER } from "../../src/web/search/provider";
+import { getSearchProviderLabel, resolveProviderChain, SEARCH_PROVIDER_ORDER } from "../../src/web/search/provider";
 import { searchTavily } from "../../src/web/search/providers/tavily";
 import type { SearchProviderError } from "../../src/web/search/types";
 
@@ -17,7 +17,7 @@ describe("Tavily web search provider", () => {
 
 	it("registers tavily in the provider registry and fallback order", async () => {
 		expect(SEARCH_PROVIDER_ORDER).toContain("tavily");
-		expect(getSearchProvider("tavily").label).toBe("Tavily");
+		expect(getSearchProviderLabel("tavily")).toBe("Tavily");
 		const providers = await resolveProviderChain("tavily");
 		expect(providers[0]?.id).toBe("tavily");
 	});

@@ -1,7 +1,3 @@
-// Side-effect import: installs the Bun module-load timer plugin when PI_TIMING is set.
-// MUST be first so subsequent imports route through the hook.
-import "./module-timer";
-
 export { abortableSleep, createAbortableStream, once, untilAborted } from "./abortable";
 export * from "./async";
 export * from "./color";

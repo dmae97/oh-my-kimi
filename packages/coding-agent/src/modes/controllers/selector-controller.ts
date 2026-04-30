@@ -1,7 +1,8 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { getOAuthProviders, type OAuthProvider } from "@oh-my-pi/pi-ai";
+import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
+import type { OAuthProvider } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getAgentDbPath, getConfigDirName, getProjectDir } from "@oh-my-pi/pi-utils";

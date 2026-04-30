@@ -4,7 +4,6 @@ import {
 	type AssistantMessageEventStream,
 	type Context,
 	createModelManager,
-	DEFAULT_LOCAL_TOKEN,
 	enrichModelThinking,
 	getBundledModels,
 	getBundledProviders,
@@ -13,18 +12,21 @@ import {
 	type Model,
 	type ModelManagerOptions,
 	type ModelRefreshStrategy,
-	type OAuthCredentials,
-	type OAuthLoginCallbacks,
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
 	readModelCache,
 	registerCustomApi,
-	registerOAuthProvider,
 	type SimpleStreamOptions,
 	type ThinkingConfig,
 	unregisterCustomApis,
-	unregisterOAuthProviders,
 } from "@oh-my-pi/pi-ai";
+
+// Sentinel for local-only OAuth token (LM Studio, vLLM) — declared inline to avoid loading
+// any provider module at startup. Must match `DEFAULT_LOCAL_TOKEN` in oauth/lm-studio.ts.
+const DEFAULT_LOCAL_TOKEN = "lm-studio-local";
+
+import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { type ConfigError, ConfigFile } from "../config";

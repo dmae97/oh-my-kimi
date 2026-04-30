@@ -15,7 +15,7 @@ import webSearchSystemPrompt from "../../prompts/system/web-search.md" with { ty
 import webSearchDescription from "../../prompts/tools/web-search.md" with { type: "text" };
 import type { ToolSession } from "../../tools";
 import { formatAge } from "../../tools/render-utils";
-import { getSearchProvider, resolveProviderChain, type SearchProvider } from "./provider";
+import { getSearchProvider, getSearchProviderLabel, resolveProviderChain, type SearchProvider } from "./provider";
 import { renderSearchCall, renderSearchResult, type SearchRenderDetails } from "./render";
 import type { SearchProviderId, SearchResponse } from "./types";
 import { SearchProviderError } from "./types";
@@ -63,7 +63,7 @@ function formatProviderError(error: unknown, provider: SearchProvider): string {
 			if (error.provider === "zai") {
 				return error.message;
 			}
-			return `${getSearchProvider(error.provider).label} authorization failed (${error.status}). Check API key or base URL.`;
+			return `${getSearchProviderLabel(error.provider)} authorization failed (${error.status}). Check API key or base URL.`;
 		}
 		return error.message;
 	}
@@ -139,9 +139,9 @@ async function executeSearch(
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchRenderDetails }> {
 	const providers =
 		params.provider && params.provider !== "auto"
-			? (await getSearchProvider(params.provider).isAvailable())
-				? [getSearchProvider(params.provider)]
-				: await resolveProviderChain("auto")
+			? await getSearchProvider(params.provider).then(provider =>
+					provider.isAvailable() ? [provider] : resolveProviderChain("auto"),
+				)
 			: await resolveProviderChain();
 	if (providers.length === 0) {
 		const message = "No web search provider configured.";

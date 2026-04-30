@@ -10,9 +10,9 @@ import {
 	extractRetryDelay,
 	getAntigravityHeaders,
 	getGeminiCliHeaders,
-	refreshAntigravityToken,
-	refreshGoogleCloudToken,
 } from "@oh-my-pi/pi-ai";
+import { refreshAntigravityToken } from "@oh-my-pi/pi-ai/utils/oauth/google-antigravity";
+import { refreshGoogleCloudToken } from "@oh-my-pi/pi-ai/utils/oauth/google-gemini-cli";
 import { getAgentDbPath } from "@oh-my-pi/pi-utils";
 import { AgentStorage } from "../../../session/agent-storage";
 import type { SearchCitation, SearchResponse, SearchSource } from "../../../web/search/types";

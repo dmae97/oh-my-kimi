@@ -15,13 +15,12 @@ import type {
 	Context,
 	ImageContent,
 	Model,
-	OAuthCredentials,
-	OAuthLoginCallbacks,
 	ProviderResponseMetadata,
 	SimpleStreamOptions,
 	TextContent,
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import type * as piCodingAgent from "@oh-my-pi/pi-coding-agent";
 import type { AutocompleteItem, Component, EditorComponent, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
 import type { Static, TSchema } from "@sinclair/typebox";

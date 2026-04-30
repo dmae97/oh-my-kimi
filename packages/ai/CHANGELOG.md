@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Removed `utils/oauth` re-exports from the package entrypoint, so OAuth helper imports from the root module must be updated
 
 ## [14.5.10] - 2026-04-30
 

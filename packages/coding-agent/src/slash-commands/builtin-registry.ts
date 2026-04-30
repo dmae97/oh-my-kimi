@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { getOAuthProviders } from "@oh-my-pi/pi-ai";
+import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import { getConfigDirName } from "@oh-my-pi/pi-utils";
 import { invalidate as invalidateFsCache } from "../capability/fs";
 import type { SettingPath, SettingValue } from "../config/settings";
