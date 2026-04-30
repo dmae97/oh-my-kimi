@@ -16,6 +16,8 @@
 
 ### Changed
 
+- Changed the diff preview shown after edits so changed lines are never collapsed: removed runs and the global preview budget no longer truncate, only unchanged context still collapses
+- Changed adjacent `-`/`+` pairs in edit previews to fold into a single `*<line><hash>|<new-content>` modification line so 1:1 line replacements stay compact
 - Changed `git.remote.add` to be idempotent when the remote already exists with the same URL (instead of failing with `remote ... already exists`), and to surface a clear error when the existing URL differs
 - Changed `pr_checkout` to run `gh pr view` calls in parallel for batch invocations while serializing the in-repo git mutations to keep the operation race-free
 - Changed `pr_checkout` to auto-derive the worktree location and local branch name (see Breaking Changes), removing the per-call overrides that previously let callers pin a worktree path or local branch
@@ -23,6 +25,7 @@
 ### Removed
 
 - Removed the `./hooks` and `./hooks/*` package export entries
+- Removed the `Suspicious duplicate` warning emitted after edits — it produced too many false positives (e.g. legitimate adjacent `\t});\n\t});`); the auto-fix path that uses bracket balance to safely de-duplicate is unchanged
 
 ### Fixed
 

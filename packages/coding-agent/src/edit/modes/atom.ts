@@ -1025,9 +1025,7 @@ function detectAndAutoFixDuplicates(
 			trial.splice(newDupPositions[i], 1);
 		}
 		if (balancesEqual(computeBalance(trial), origBalance)) {
-			const previews = newDupPositions
-				.map(pos => `${pos + 1} (${formatPreview(finalLines[pos])})`)
-				.join(", ");
+			const previews = newDupPositions.map(pos => `${pos + 1} (${formatPreview(finalLines[pos])})`).join(", ");
 			const noun = newDupPositions.length === 1 ? "duplicate line" : "duplicate lines";
 			return {
 				fixed: trial,

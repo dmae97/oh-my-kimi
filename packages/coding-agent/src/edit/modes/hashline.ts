@@ -53,7 +53,7 @@ export type HashlineEdit =
 // Accept both `|` (canonical) and `:` (legacy) so re-reads of older outputs still parse.
 const HASHLINE_CONTENT_SEPARATOR_RE = "[:|]";
 const HASHLINE_PREFIX_RE = new RegExp(
-	`^\\s*(?:>>>|>>)?\\s*(?:\\+\\s*)?\\d+${HASHLINE_BIGRAM_RE_SRC}${HASHLINE_CONTENT_SEPARATOR_RE}`,
+	`^\\s*(?:>>>|>>)?\\s*(?:[+*]\\s*)?\\d+${HASHLINE_BIGRAM_RE_SRC}${HASHLINE_CONTENT_SEPARATOR_RE}`,
 );
 const HASHLINE_PREFIX_PLUS_RE = new RegExp(
 	`^\\s*(?:>>>|>>)?\\s*\\+\\s*\\d+${HASHLINE_BIGRAM_RE_SRC}${HASHLINE_CONTENT_SEPARATOR_RE}`,
@@ -503,7 +503,7 @@ export function parseTag(ref: string): { line: number; hash: string } {
 	//  1. optional leading ">+-" markers and whitespace
 	//  2. line number (1+ digits)
 	//  3. hash (one BPE bigram from HASHLINE_BIGRAMS) directly adjacent (no separator)
-	const match = ref.match(new RegExp(`^\\s*[>+-]*\\s*(\\d+)(${HASHLINE_BIGRAM_RE_SRC})`));
+	const match = ref.match(new RegExp(`^\\s*[>+\\-*]*\\s*(\\d+)(${HASHLINE_BIGRAM_RE_SRC})`));
 	if (!match) {
 		throw new Error(`Invalid line reference. Expected ${formatFullAnchorRequirement(ref)}.`);
 	}
@@ -605,27 +605,6 @@ export class HashlineMismatchError extends Error {
 			`Edit rejected: ${mismatches.length} line${mismatches.length > 1 ? "s have" : " has"} changed since the last read (marked *).`,
 			"The edit was NOT applied, please use the updated file content shown below, and issue another edit tool-call.",
 		);
-
-		// Content-based recovery hint: the two-letter hash is weak, so a
-		// unique match elsewhere is only a candidate. Keep this advisory; never
-		// silently retarget stale edits based on a whole-file hash-only match.
-		const hints: string[] = [];
-		for (const m of mismatches) {
-			const matches: number[] = [];
-			for (let line = 1; line <= fileLines.length; line++) {
-				if (computeLineHash(line, fileLines[line - 1]) === m.expected) matches.push(line);
-				if (matches.length > 1) break;
-			}
-			if (matches.length === 1 && matches[0] !== m.line) {
-				hints.push(`  ${m.line}${m.expected} → ${matches[0]}${m.expected}`);
-			}
-		}
-		if (hints.length > 0) {
-			lines.push("Hash-only shifted candidate; verify content/context before using:");
-			lines.push(...hints);
-		}
-
-		lines.push("");
 
 		let prevLine = -1;
 		for (const lineNum of sorted) {
@@ -1028,23 +1007,40 @@ export interface CompactHashlineDiffPreview {
 }
 
 export interface CompactHashlineDiffOptions {
+	/** Maximum entries kept on each side of an unchanged-context truncation (default: 2). */
 	maxUnchangedRun?: number;
-	maxDeletionRun?: number;
-	maxOutputLines?: number;
 }
 
 const NUMBERED_DIFF_LINE_RE = /^([ +-])(\s*\d+)\|(.*)$/;
 const HASHLINE_PREVIEW_PLACEHOLDER = "  ";
+const ELLIPSIS = "...";
 
-type DiffRunKind = " " | "+" | "-" | "meta";
-type DiffRun = { kind: DiffRunKind; lines: string[] };
+type DiffEntryKind = " " | "+" | "-" | "*";
+type RunKind = DiffEntryKind | "meta";
+
+interface DiffEntry {
+	kind: DiffEntryKind;
+	oldLine: number;
+	newLine: number;
+	content: string;
+}
+
+interface MetaEntry {
+	kind: "meta";
+	raw: string;
+}
+
+type Entry = DiffEntry | MetaEntry;
+
+interface Run {
+	kind: RunKind;
+	entries: Entry[];
+}
 
 interface ParsedNumberedDiffLine {
 	kind: " " | "+" | "-";
 	lineNumber: number;
-	lineWidth: number;
 	content: string;
-	raw: string;
 }
 
 interface CompactPreviewCounters {
@@ -1059,11 +1055,10 @@ function parseNumberedDiffLine(line: string): ParsedNumberedDiffLine | undefined
 	const kind = match[1];
 	if (kind !== " " && kind !== "+" && kind !== "-") return undefined;
 
-	const lineField = match[2];
-	const lineNumber = Number(lineField.trim());
+	const lineNumber = Number(match[2].trim());
 	if (!Number.isInteger(lineNumber)) return undefined;
 
-	return { kind, lineNumber, lineWidth: lineField.length, content: match[3], raw: line };
+	return { kind, lineNumber, content: match[3] };
 }
 
 function syncOldLineCounters(counters: CompactPreviewCounters, lineNumber: number): void {
@@ -1090,105 +1085,169 @@ function syncNewLineCounters(counters: CompactPreviewCounters, lineNumber: numbe
 	counters.newLine = lineNumber;
 }
 
-function formatCompactHashlineLine(kind: " " | "+", lineNumber: number, content: string): string {
-	return `${kind}${lineNumber}${computeLineHash(lineNumber, content)}${HASHLINE_CONTENT_SEPARATOR}${content}`;
-}
-
-function formatCompactRemovedLine(lineNumber: number, content: string): string {
-	return `-${lineNumber}${HASHLINE_PREVIEW_PLACEHOLDER}${HASHLINE_CONTENT_SEPARATOR}${content}`;
-}
-
-function formatCompactPreviewLine(line: string, counters: CompactPreviewCounters): { kind: DiffRunKind; text: string } {
-	const parsed = parseNumberedDiffLine(line);
-	if (!parsed) return { kind: "meta", text: line };
-
-	if (parsed.content === "...") {
-		if (parsed.kind === "+") {
-			syncNewLineCounters(counters, parsed.lineNumber);
-		} else {
-			syncOldLineCounters(counters, parsed.lineNumber);
-		}
-		return { kind: parsed.kind, text: parsed.raw };
-	}
-
-	switch (parsed.kind) {
-		case "+": {
-			syncNewLineCounters(counters, parsed.lineNumber);
-			const newLine = counters.newLine;
-			if (newLine === undefined) return { kind: "+", text: parsed.raw };
-			const text = formatCompactHashlineLine("+", newLine, parsed.content);
-			counters.newLine = newLine + 1;
-			return { kind: "+", text };
-		}
-		case "-": {
-			syncOldLineCounters(counters, parsed.lineNumber);
-			const text = formatCompactRemovedLine(parsed.lineNumber, parsed.content);
-			counters.oldLine = parsed.lineNumber + 1;
-			return { kind: "-", text };
-		}
-		case " ": {
-			syncOldLineCounters(counters, parsed.lineNumber);
-			const newLine = counters.newLine;
-			if (newLine === undefined) return { kind: " ", text: parsed.raw };
-			const text = formatCompactHashlineLine(" ", newLine, parsed.content);
-			counters.oldLine = parsed.lineNumber + 1;
-			counters.newLine = newLine + 1;
-			return { kind: " ", text };
-		}
-	}
-}
-
-function splitDiffRuns(lines: string[]): DiffRun[] {
-	const runs: DiffRun[] = [];
+/**
+ * Parse a unified-diff-with-line-numbers blob into structured entries while
+ * tracking both old- and new-file line numbers. `...` markers (emitted by
+ * {@link generateDiffString} for collapsed context) sync counters but are
+ * preserved as passthrough entries so the original ellipsis remains visible.
+ */
+function parseDiffEntries(lines: string[]): Entry[] {
+	const entries: Entry[] = [];
 	const counters: CompactPreviewCounters = {};
 
 	for (const line of lines) {
-		const formatted = formatCompactPreviewLine(line, counters);
-		const prev = runs[runs.length - 1];
-		if (prev && prev.kind === formatted.kind) {
-			prev.lines.push(formatted.text);
+		const parsed = parseNumberedDiffLine(line);
+		if (!parsed) {
+			entries.push({ kind: "meta", raw: line });
 			continue;
 		}
-		runs.push({ kind: formatted.kind, lines: [formatted.text] });
+
+		const isEllipsis = parsed.content === ELLIPSIS;
+
+		if (parsed.kind === "+") {
+			syncNewLineCounters(counters, parsed.lineNumber);
+			const newLine = counters.newLine ?? parsed.lineNumber;
+			const oldLine = counters.oldLine ?? parsed.lineNumber;
+			entries.push({ kind: "+", oldLine, newLine, content: parsed.content });
+			if (!isEllipsis) counters.newLine = newLine + 1;
+			continue;
+		}
+
+		if (parsed.kind === "-") {
+			syncOldLineCounters(counters, parsed.lineNumber);
+			const oldLine = parsed.lineNumber;
+			const newLine = counters.newLine ?? parsed.lineNumber;
+			entries.push({ kind: "-", oldLine, newLine, content: parsed.content });
+			if (!isEllipsis) counters.oldLine = oldLine + 1;
+			continue;
+		}
+
+		// Context line.
+		syncOldLineCounters(counters, parsed.lineNumber);
+		const oldLine = parsed.lineNumber;
+		const newLine = counters.newLine ?? parsed.lineNumber;
+		entries.push({ kind: " ", oldLine, newLine, content: parsed.content });
+		if (!isEllipsis) {
+			counters.oldLine = oldLine + 1;
+			counters.newLine = newLine + 1;
+		}
 	}
 
+	return entries;
+}
+
+function groupRuns(entries: Entry[]): Run[] {
+	const runs: Run[] = [];
+	for (const entry of entries) {
+		const prev = runs[runs.length - 1];
+		if (prev && prev.kind === entry.kind) {
+			prev.entries.push(entry);
+			continue;
+		}
+		runs.push({ kind: entry.kind, entries: [entry] });
+	}
 	return runs;
 }
 
-function collapseFromStart(lines: string[], maxLines: number, label: string): string[] {
-	if (lines.length <= maxLines) return lines;
-	const hidden = lines.length - maxLines;
-	return [...lines.slice(0, maxLines), ` ... ${hidden} more ${label} lines`];
+/**
+ * Collapse adjacent `(-, +)` runs into a single `*` run for paired
+ * modifications. The i-th removed line pairs with the i-th added line — in
+ * unified-diff convention they replaced each other in place — and is shown as
+ * `*<newLine><hash>|<newContent>` instead of two lines `-<old>` + `+<new>`.
+ * Surplus removals or additions remain as their own runs after the paired
+ * block, preserving the unified-diff `del-then-add` ordering.
+ */
+function pairModifications(runs: Run[]): Run[] {
+	const isPairable = (entry: Entry): entry is DiffEntry => entry.kind !== "meta" && entry.content !== ELLIPSIS;
+
+	const out: Run[] = [];
+	for (let i = 0; i < runs.length; i++) {
+		const run = runs[i];
+		const next = runs[i + 1];
+		if (run.kind !== "-" || !next || next.kind !== "+") {
+			out.push(run);
+			continue;
+		}
+
+		const dels = run.entries.filter(isPairable);
+		const adds = next.entries.filter(isPairable);
+		const pairCount = Math.min(dels.length, adds.length);
+		if (pairCount === 0) {
+			out.push(run);
+			continue;
+		}
+
+		const mods: Entry[] = [];
+		for (let p = 0; p < pairCount; p++) {
+			mods.push({
+				kind: "*",
+				oldLine: dels[p].oldLine,
+				newLine: adds[p].newLine,
+				content: adds[p].content,
+			});
+		}
+		out.push({ kind: "*", entries: mods });
+
+		if (dels.length > pairCount) {
+			out.push({ kind: "-", entries: dels.slice(pairCount) });
+		}
+		if (adds.length > pairCount) {
+			out.push({ kind: "+", entries: adds.slice(pairCount) });
+		}
+
+		i++; // consume the `+` run
+	}
+	return out;
 }
 
-function _collapseFromEnd(lines: string[], maxLines: number, label: string): string[] {
-	if (lines.length <= maxLines) return lines;
-	const hidden = lines.length - maxLines;
-	return [` ... ${hidden} more ${label} lines`, ...lines.slice(-maxLines)];
+function formatEntry(entry: Entry): string {
+	if (entry.kind === "meta") return entry.raw;
+
+	if (entry.content === ELLIPSIS) {
+		// Preserve the `... <line>|...` ellipsis marker emitted by generateDiffString.
+		const lineNum = entry.kind === "+" || entry.kind === "*" ? entry.newLine : entry.oldLine;
+		const prefix = entry.kind === "*" ? "+" : entry.kind;
+		return `${prefix}${lineNum}${HASHLINE_PREVIEW_PLACEHOLDER}${HASHLINE_CONTENT_SEPARATOR}${ELLIPSIS}`;
+	}
+
+	switch (entry.kind) {
+		case "+":
+			return `+${entry.newLine}${computeLineHash(entry.newLine, entry.content)}${HASHLINE_CONTENT_SEPARATOR}${entry.content}`;
+		case "-":
+			return `-${entry.oldLine}${HASHLINE_PREVIEW_PLACEHOLDER}${HASHLINE_CONTENT_SEPARATOR}${entry.content}`;
+		case " ":
+			return ` ${entry.newLine}${computeLineHash(entry.newLine, entry.content)}${HASHLINE_CONTENT_SEPARATOR}${entry.content}`;
+		case "*":
+			return `*${entry.newLine}${computeLineHash(entry.newLine, entry.content)}${HASHLINE_CONTENT_SEPARATOR}${entry.content}`;
+	}
 }
 
-function collapseFromMiddle(lines: string[], maxLines: number, label: string): string[] {
-	if (lines.length <= maxLines * 2) return lines;
-	const hidden = lines.length - maxLines * 2;
-	return [...lines.slice(0, maxLines), ` ... ${hidden} more ${label} lines`, ...lines.slice(-maxLines)];
+function collapseUnchangedMiddle(entries: Entry[], maxRun: number): string[] {
+	if (entries.length <= maxRun * 2) return entries.map(formatEntry);
+	const hidden = entries.length - maxRun * 2;
+	return [
+		...entries.slice(0, maxRun).map(formatEntry),
+		` ... ${hidden} more unchanged lines`,
+		...entries.slice(-maxRun).map(formatEntry),
+	];
 }
 
 /**
  * Build a compact diff preview suitable for model-visible tool responses.
  *
- * Collapses long unchanged runs and long consecutive additions/removals so the
- * model sees the shape of edits without replaying full file content.
+ * Every changed line — added, removed, or modified — is shown in full. Only
+ * unchanged context blocks between or around changes get truncated. Adjacent
+ * `-`/`+` pairs are folded into single `*` modification lines so the common
+ * 1:1 line-replacement case stays compact.
  */
 export function buildCompactHashlineDiffPreview(
 	diff: string,
 	options: CompactHashlineDiffOptions = {},
 ): CompactHashlineDiffPreview {
 	const maxUnchangedRun = options.maxUnchangedRun ?? 2;
-	const maxDeletionRun = options.maxDeletionRun ?? 2;
-	const maxOutputLines = options.maxOutputLines ?? 16;
 
 	const inputLines = diff.length === 0 ? [] : diff.split("\n");
-	const runs = splitDiffRuns(inputLines);
+	const runs = pairModifications(groupRuns(parseDiffEntries(inputLines)));
 
 	const out: string[] = [];
 	let addedLines = 0;
@@ -1198,37 +1257,39 @@ export function buildCompactHashlineDiffPreview(
 		const run = runs[runIndex];
 		switch (run.kind) {
 			case "meta":
-				out.push(...run.lines);
+				for (const entry of run.entries) out.push(formatEntry(entry));
 				break;
 			case "+":
-				addedLines += run.lines.length;
-				out.push(...run.lines);
+				for (const entry of run.entries) {
+					if (entry.kind !== "meta" && entry.content !== ELLIPSIS) addedLines++;
+					out.push(formatEntry(entry));
+				}
 				break;
 			case "-":
-				removedLines += run.lines.length;
-				out.push(...collapseFromStart(run.lines, maxDeletionRun, "removed"));
+				for (const entry of run.entries) {
+					if (entry.kind !== "meta" && entry.content !== ELLIPSIS) removedLines++;
+					out.push(formatEntry(entry));
+				}
+				break;
+			case "*":
+				for (const entry of run.entries) {
+					addedLines++;
+					removedLines++;
+					out.push(formatEntry(entry));
+				}
 				break;
 			case " ":
 				if (runIndex === 0) {
-					out.push(...run.lines.slice(-maxUnchangedRun));
+					out.push(...run.entries.slice(-maxUnchangedRun).map(formatEntry));
 					break;
 				}
 				if (runIndex === runs.length - 1) {
-					out.push(...run.lines.slice(0, maxUnchangedRun));
+					out.push(...run.entries.slice(0, maxUnchangedRun).map(formatEntry));
 					break;
 				}
-				out.push(...collapseFromMiddle(run.lines, maxUnchangedRun, "unchanged"));
+				out.push(...collapseUnchangedMiddle(run.entries, maxUnchangedRun));
 				break;
 		}
-	}
-
-	if (out.length > maxOutputLines) {
-		const hidden = out.length - maxOutputLines;
-		return {
-			preview: [...out.slice(0, maxOutputLines), ` ... ${hidden} more preview lines`].join("\n"),
-			addedLines,
-			removedLines,
-		};
 	}
 
 	return { preview: out.join("\n"), addedLines, removedLines };
