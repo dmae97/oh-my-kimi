@@ -15,8 +15,8 @@ import {
 } from "@oh-my-pi/pi-ai";
 import type { Component, SlashCommand } from "@oh-my-pi/pi-tui";
 import {
-	clearRenderCache,
 	Container,
+	clearRenderCache,
 	Loader,
 	Markdown,
 	ProcessTerminal,

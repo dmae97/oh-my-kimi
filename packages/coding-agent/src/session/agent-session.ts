@@ -104,7 +104,7 @@ import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
-import { resolveLocalUrlToPath } from "../internal-urls";
+import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
 import {
 	disposeKernelSessionsByOwner,
 	executePython as executePythonCommand,
@@ -136,7 +136,7 @@ import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import { assertEditableFile } from "../tools/auto-generated-guard";
 import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
-import { isInternalUrlPath, normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
+import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
 import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo-write";
 import { ToolError } from "../tools/tool-errors";
@@ -1522,16 +1522,20 @@ export class AgentSession {
 
 		const path = typeof args.path === "string" ? args.path : undefined;
 		if (!path) return undefined;
-		// Internal-scheme URLs (e.g. local://PLAN.md for plan-mode) don't have a
-		// stable filesystem path; the on-disk pre-cache cannot apply. The Edit
-		// tool itself dispatches these via the protocol-handler, so the actual
-		// edit still works — we just skip the streaming pre-cache machinery.
-		if (isInternalUrlPath(path)) return undefined;
+
+		// `local://` URLs (e.g. local://PLAN.md for plan-mode) resolve to a real
+		// on-disk artifacts path; pre-caching works as long as we ask the
+		// local-protocol handler. Other internal-scheme URLs (agent://, skill://,
+		// rule://, mcp://, artifact://) have no stable filesystem representation;
+		// skip pre-cache entirely for those — the edit tool itself will reject
+		// them through its normal dispatch path.
+		const resolvedPath = this.#resolveSessionFsPath(path);
+		if (resolvedPath === undefined) return undefined;
 
 		return {
 			toolCall,
 			path,
-			resolvedPath: resolveToCwd(path, this.sessionManager.getCwd()),
+			resolvedPath,
 			diff: typeof args.diff === "string" ? args.diff : undefined,
 			op: typeof args.op === "string" ? args.op : undefined,
 			rename: typeof args.rename === "string" ? args.rename : undefined,
@@ -1605,13 +1609,45 @@ export class AgentSession {
 	}
 
 	/** Invalidate cache for a file after an edit completes to prevent stale data */
-	#invalidateFileCacheForPath(path: string): void {
-		// Internal-scheme URLs are never pre-cached (see #getStreamingEditToolCall),
-		// so there is nothing to invalidate. Skip before resolveToCwd, which would
-		// throw via assertNotInternalUrl.
-		if (isInternalUrlPath(path)) return;
-		const resolvedPath = resolveToCwd(path, this.sessionManager.getCwd());
+	#invalidateFileCacheForPath(filePath: string): void {
+		const resolvedPath = this.#resolveSessionFsPath(filePath);
+		if (resolvedPath === undefined) return;
 		this.#streamingEditFileCache.delete(resolvedPath);
+	}
+
+	/**
+	 * Resolve a path supplied to a tool to a real filesystem path.
+	 *
+	 * - `local://` URLs route through the local-protocol handler so they map
+	 *   onto the session's on-disk artifacts directory; pre-caching, ENOENT
+	 *   handling, and post-edit invalidation all work normally.
+	 * - Other internal-scheme URLs (agent://, skill://, rule://, mcp://,
+	 *   artifact://) have no stable filesystem path; this returns `undefined`
+	 *   so callers skip filesystem-only operations.
+	 * - Cwd-relative and absolute paths resolve via `resolveToCwd`.
+	 */
+	#resolveSessionFsPath(filePath: string): string | undefined {
+		const normalized = normalizeLocalScheme(filePath);
+		if (normalized.startsWith("local:")) {
+			return resolveLocalUrlToPath(normalized, this.#localProtocolOptions());
+		}
+		if (
+			normalized.startsWith("agent://") ||
+			normalized.startsWith("skill://") ||
+			normalized.startsWith("rule://") ||
+			normalized.startsWith("mcp://") ||
+			normalized.startsWith("artifact://")
+		) {
+			return undefined;
+		}
+		return resolveToCwd(normalized, this.sessionManager.getCwd());
+	}
+
+	#localProtocolOptions(): LocalProtocolOptions {
+		return {
+			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
+			getSessionId: () => this.sessionManager.getSessionId(),
+		};
 	}
 
 	#maybeAbortStreamingEdit(event: AgentEvent): void {
@@ -2475,10 +2511,7 @@ export class AgentSession {
 		if (this.#planReferenceSent) return null;
 
 		const planFilePath = this.#planReferencePath;
-		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
-			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-			getSessionId: () => this.sessionManager.getSessionId(),
-		});
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, this.#localProtocolOptions());
 		let planContent: string;
 		try {
 			planContent = await Bun.file(resolvedPlanPath).text();
@@ -2511,15 +2544,9 @@ export class AgentSession {
 		if (!state?.enabled) return null;
 		const sessionPlanUrl = "local://PLAN.md";
 		const resolvedPlanPath = state.planFilePath.startsWith("local:")
-			? resolveLocalUrlToPath(normalizeLocalScheme(state.planFilePath), {
-					getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-					getSessionId: () => this.sessionManager.getSessionId(),
-				})
+			? resolveLocalUrlToPath(normalizeLocalScheme(state.planFilePath), this.#localProtocolOptions())
 			: resolveToCwd(state.planFilePath, this.sessionManager.getCwd());
-		const resolvedSessionPlan = resolveLocalUrlToPath(sessionPlanUrl, {
-			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-			getSessionId: () => this.sessionManager.getSessionId(),
-		});
+		const resolvedSessionPlan = resolveLocalUrlToPath(sessionPlanUrl, this.#localProtocolOptions());
 		const displayPlanPath =
 			state.planFilePath.startsWith("local:") || resolvedPlanPath !== resolvedSessionPlan
 				? state.planFilePath
