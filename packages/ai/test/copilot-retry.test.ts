@@ -149,7 +149,6 @@ describe("isRetryableError transport failures", () => {
 	});
 });
 
-
 describe("isRetryableError does not treat 4xx as retryable", () => {
 	// Regression guard: the new Copilot carveout must not leak into the generic predicate.
 	it("returns false for Copilot transient model errors", () => {
