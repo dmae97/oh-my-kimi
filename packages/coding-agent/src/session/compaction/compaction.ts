@@ -26,8 +26,8 @@ import {
 	getOpenAIResponsesHistoryPayload,
 	normalizeResponsesToolCallId,
 } from "@oh-my-pi/pi-ai/utils";
-import { logger } from "@oh-my-pi/pi-utils";
-import { renderPromptTemplate } from "../../config/prompt-templates";
+import { countTokens } from "@oh-my-pi/pi-natives";
+import { logger, prompt } from "@oh-my-pi/pi-utils";
 import compactionShortSummaryPrompt from "../../prompts/compaction/compaction-short-summary.md" with { type: "text" };
 import compactionSummaryPrompt from "../../prompts/compaction/compaction-summary.md" with { type: "text" };
 import compactionTurnPrefixPrompt from "../../prompts/compaction/compaction-turn-prefix.md" with { type: "text" };
@@ -219,7 +219,7 @@ export function shouldCompact(contextTokens: number, contextWindow: number, sett
 	return contextTokens > thresholdTokens;
 }
 
-function resolveThresholdTokens(contextWindow: number, settings: CompactionSettings): number {
+export function resolveThresholdTokens(contextWindow: number, settings: CompactionSettings): number {
 	// Fixed token limit takes priority over percentage
 	const thresholdTokens = settings.thresholdTokens;
 	if (typeof thresholdTokens === "number" && Number.isFinite(thresholdTokens) && thresholdTokens > 0) {
@@ -241,67 +241,79 @@ function resolveThresholdTokens(contextWindow: number, settings: CompactionSetti
 // ============================================================================
 
 /**
- * Estimate token count for a message using chars/4 heuristic.
- * This is conservative (overestimates tokens).
+ * Image content has no tokenizer representation; charge a fixed estimate
+ * matching what providers typically bill for inline images.
+ */
+const IMAGE_TOKEN_ESTIMATE = 1200;
+
+/**
+ * Estimate token count for a message using cl100k_base via the native
+ * tokenizer. This is not Claude's first-party tokenizer (Anthropic doesn't
+ * publish one) but is within ~5–10% across English/code text.
  */
 export function estimateTokens(message: AgentMessage): number {
-	let chars = 0;
+	const fragments: string[] = [];
+	let extra = 0;
 
 	switch (message.role) {
 		case "user": {
 			const content = (message as { content: string | Array<{ type: string; text?: string }> }).content;
 			if (typeof content === "string") {
-				chars = content.length;
+				fragments.push(content);
 			} else if (Array.isArray(content)) {
 				for (const block of content) {
 					if (block.type === "text" && block.text) {
-						chars += block.text.length;
+						fragments.push(block.text);
 					}
 				}
 			}
-			return Math.ceil(chars / 4);
+			break;
 		}
 		case "assistant": {
 			const assistant = message as AssistantMessage;
 			for (const block of assistant.content) {
 				if (block.type === "text") {
-					chars += block.text.length;
+					fragments.push(block.text);
 				} else if (block.type === "thinking") {
-					chars += block.thinking.length;
+					fragments.push(block.thinking);
 				} else if (block.type === "toolCall") {
-					chars += block.name.length + JSON.stringify(block.arguments).length;
+					fragments.push(block.name);
+					fragments.push(JSON.stringify(block.arguments));
 				}
 			}
-			return Math.ceil(chars / 4);
+			break;
 		}
 		case "hookMessage":
 		case "toolResult": {
 			if (typeof message.content === "string") {
-				chars = message.content.length;
+				fragments.push(message.content);
 			} else {
 				for (const block of message.content) {
 					if (block.type === "text" && block.text) {
-						chars += block.text.length;
-					}
-					if (block.type === "image") {
-						chars += 4800; // Estimate images as 4000 chars, or 1200 tokens
+						fragments.push(block.text);
+					} else if (block.type === "image") {
+						extra += IMAGE_TOKEN_ESTIMATE;
 					}
 				}
 			}
-			return Math.ceil(chars / 4);
+			break;
 		}
 		case "bashExecution": {
-			chars = message.command.length + message.output.length;
-			return Math.ceil(chars / 4);
+			fragments.push(message.command);
+			fragments.push(message.output);
+			break;
 		}
 		case "branchSummary":
 		case "compactionSummary": {
-			chars = message.summary.length;
-			return Math.ceil(chars / 4);
+			fragments.push(message.summary);
+			break;
 		}
+		default:
+			return 0;
 	}
 
-	return 0;
+	if (fragments.length === 0) return extra;
+	return extra + countTokens(fragments);
 }
 
 function estimateEntriesTokens(entries: SessionEntry[], startIndex: number, endIndex: number): number {
@@ -474,11 +486,11 @@ export function findCutPoint(
 // Summarization
 // ============================================================================
 
-const SUMMARIZATION_PROMPT = renderPromptTemplate(compactionSummaryPrompt);
+const SUMMARIZATION_PROMPT = prompt.render(compactionSummaryPrompt);
 
-const UPDATE_SUMMARIZATION_PROMPT = renderPromptTemplate(compactionUpdateSummaryPrompt);
+const UPDATE_SUMMARIZATION_PROMPT = prompt.render(compactionUpdateSummaryPrompt);
 
-const SHORT_SUMMARY_PROMPT = renderPromptTemplate(compactionShortSummaryPrompt);
+const SHORT_SUMMARY_PROMPT = prompt.render(compactionShortSummaryPrompt);
 
 function formatAdditionalContext(context: string[] | undefined): string {
 	if (!context || context.length === 0) return "";
@@ -762,7 +774,7 @@ function buildOpenAiNativeHistory(
 					if (!msgId) {
 						msgId = `msg_${msgIndex}`;
 					} else if (msgId.length > 64) {
-						msgId = `msg_${Bun.hash.xxHash64(msgId).toString(36)}`;
+						msgId = `msg_${Bun.hash(msgId).toString(36)}`;
 					}
 					input.push({
 						type: "message",
@@ -1201,7 +1213,7 @@ export function prepareCompaction(
 // Main compaction function
 // ============================================================================
 
-const TURN_PREFIX_SUMMARIZATION_PROMPT = renderPromptTemplate(compactionTurnPrefixPrompt);
+const TURN_PREFIX_SUMMARIZATION_PROMPT = prompt.render(compactionTurnPrefixPrompt);
 
 /**
  * Generate summaries for compaction using prepared data.

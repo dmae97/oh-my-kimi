@@ -8,14 +8,16 @@ import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
 import * as git from "../../utils/git";
-import { getAutoresearchFingerprintMismatchError, pathMatchesContractPath } from "../contract";
-import { getCurrentAutoresearchBranch, parseWorkDirDirtyPaths } from "../git";
+import { applyAutoresearchContractToExperimentState } from "../apply-contract-to-state";
+import { loadAutoresearchScriptSnapshot, pathMatchesContractPath, readAutoresearchContract } from "../contract";
+import { computeRunModifiedPaths, getCurrentAutoresearchBranch, parseWorkDirDirtyPathsWithStatus } from "../git";
 import {
-	AUTORESEARCH_COMMITTABLE_FILES,
+	collectLoggedRunNumbers,
 	formatNum,
 	inferMetricUnitFromName,
 	isAutoresearchCommittableFile,
 	isAutoresearchLocalStatePath,
+	isAutoresearchShCommand,
 	isBetter,
 	mergeAsi,
 	readPendingRunSummary,
@@ -61,7 +63,14 @@ const logExperimentSchema = Type.Object({
 	),
 	force: Type.Optional(
 		Type.Boolean({
-			description: "Allow introducing new secondary metrics.",
+			description:
+				"When true: skip ASI field requirements and allow keeping a run whose primary metric regressed versus the best kept run.",
+		}),
+	),
+	skip_restore: Type.Optional(
+		Type.Boolean({
+			description:
+				"When true and status is discard/crash/checks_failed: skip reverting the working tree to HEAD. Useful when the experiment did not modify tracked files or you want to preserve the current state.",
 		}),
 	),
 	asi: Type.Optional(
@@ -70,11 +79,6 @@ const logExperimentSchema = Type.Object({
 		}),
 	),
 });
-
-interface PreservedFile {
-	content: Buffer;
-	path: string;
-}
 
 interface KeepCommitResult {
 	error?: string;
@@ -102,10 +106,26 @@ export function createLogExperimentTool(
 			const runtime = options.getRuntime(ctx);
 			const state = runtime.state;
 			const workDir = resolveWorkDir(ctx.cwd);
-			const fingerprintError = getAutoresearchFingerprintMismatchError(state.segmentFingerprint, workDir);
-			if (fingerprintError) {
+
+			const contractResult = readAutoresearchContract(workDir);
+			const scriptSnapshot = loadAutoresearchScriptSnapshot(workDir);
+			const contractErrors = [...contractResult.errors, ...scriptSnapshot.errors];
+			if (contractErrors.length > 0) {
 				return {
-					content: [{ type: "text", text: `Error: ${fingerprintError}` }],
+					content: [{ type: "text", text: `Error: ${contractErrors.join(" ")}` }],
+				};
+			}
+			const benchmarkForSync = contractResult.contract.benchmark;
+			if (benchmarkForSync.command && !isAutoresearchShCommand(benchmarkForSync.command)) {
+				return {
+					content: [
+						{
+							type: "text",
+							text:
+								"Error: Benchmark.command in autoresearch.md must invoke `autoresearch.sh` directly before logging. " +
+								"Fix autoresearch.md or move the workload into autoresearch.sh.",
+						},
+					],
 				};
 			}
 
@@ -116,6 +136,10 @@ export function createLogExperimentTool(
 					content: [{ type: "text", text: "Error: no unlogged run is available. Run run_experiment first." }],
 				};
 			}
+
+			applyAutoresearchContractToExperimentState(contractResult.contract, state);
+			const logPreamble =
+				"Refreshed session fields from autoresearch.md before logging (benchmark, scope, constraints).\n\n";
 			runtime.lastRunSummary = pendingRun;
 			runtime.lastRunAsi = pendingRun.parsedAsi;
 			runtime.lastRunChecks =
@@ -170,22 +194,20 @@ export function createLogExperimentTool(
 				};
 			}
 
+			const forceLoose = params.force === true;
 			const secondaryMetrics = buildSecondaryMetrics(params.metrics, pendingRun.parsedMetrics, state.metricName);
-			const validationError = validateSecondaryMetrics(state, secondaryMetrics, params.force ?? false);
-			if (validationError) {
-				return {
-					content: [{ type: "text", text: `Error: ${validationError}` }],
-				};
-			}
 
 			const mergedAsi = mergeAsi(runtime.lastRunAsi, sanitizeAsi(params.asi));
-			const asiValidationError = validateAsiRequirements(mergedAsi, params.status);
-			if (asiValidationError) {
-				return {
-					content: [{ type: "text", text: `Error: ${asiValidationError}` }],
-				};
+			if (!forceLoose) {
+				const asiValidationError = validateAsiRequirements(mergedAsi, params.status);
+				if (asiValidationError) {
+					return {
+						content: [{ type: "text", text: `Error: ${asiValidationError}` }],
+					};
+				}
 			}
 
+			const preRunDirtyPaths = pendingRun.preRunDirtyPaths;
 			let keepScopeValidation: { committablePaths: string[] } | undefined;
 			if (params.status === "keep") {
 				const scopeValidation = await validateKeepPaths(options, workDir, state);
@@ -196,6 +218,7 @@ export function createLogExperimentTool(
 				}
 				const currentBestMetric = findBestKeptMetric(state.results, state.currentSegment, state.bestDirection);
 				if (
+					!forceLoose &&
 					currentBestMetric !== null &&
 					params.metric !== currentBestMetric &&
 					!isBetter(params.metric, currentBestMetric, state.bestDirection)
@@ -250,8 +273,8 @@ export function createLogExperimentTool(
 					};
 				}
 				gitNote = commitResult.note ?? null;
-			} else {
-				const revertResult = await revertFailedExperiment(options, workDir);
+			} else if (!params.skip_restore) {
+				const revertResult = await revertFailedExperiment(options, workDir, preRunDirtyPaths);
 				if (revertResult.error) {
 					return {
 						content: [{ type: "text", text: `Error: ${revertResult.error}` }],
@@ -309,7 +332,7 @@ export function createLogExperimentTool(
 			runtime.lastAutoResumePendingRunNumber = null;
 
 			const currentSegmentRuns = currentResults(state.results, state.currentSegment).length;
-			const text = buildLogText(state, experiment, currentSegmentRuns, wallClockSeconds, gitNote);
+			const text = logPreamble + buildLogText(state, experiment, currentSegmentRuns, wallClockSeconds, gitNote);
 			if (state.maxExperiments !== null && currentSegmentRuns >= state.maxExperiments) {
 				runtime.autoresearchMode = false;
 				options.pi.appendEntry(
@@ -432,23 +455,6 @@ export function validateAsiRequirements(asi: ASIData | undefined, status: Experi
 	return null;
 }
 
-function validateSecondaryMetrics(state: ExperimentState, metrics: NumericMetricMap, force: boolean): string | null {
-	if (state.secondaryMetrics.length === 0) return null;
-	const knownNames = new Set(state.secondaryMetrics.map(metric => metric.name));
-	const providedNames = new Set(Object.keys(metrics));
-
-	const missing = [...knownNames].filter(name => !providedNames.has(name));
-	if (missing.length > 0) {
-		return `missing secondary metrics: ${missing.join(", ")}`;
-	}
-
-	const newMetrics = [...providedNames].filter(name => !knownNames.has(name));
-	if (newMetrics.length > 0 && !force) {
-		return `new secondary metrics require force=true: ${newMetrics.join(", ")}`;
-	}
-	return null;
-}
-
 function registerSecondaryMetrics(state: ExperimentState, metrics: NumericMetricMap): void {
 	for (const name of Object.keys(metrics)) {
 		if (state.secondaryMetrics.some(metric => metric.name === name)) continue;
@@ -467,17 +473,6 @@ function persistRun(workDir: string, experiment: ExperimentResult): void {
 	const jsonlPath = path.join(workDir, "autoresearch.jsonl");
 	fs.appendFileSync(jsonlPath, `${JSON.stringify(entry)}\n`);
 }
-
-function collectLoggedRunNumbers(results: ExperimentResult[]): Set<number> {
-	const runNumbers = new Set<number>();
-	for (const result of results) {
-		if (result.runNumber !== null) {
-			runNumbers.add(result.runNumber);
-		}
-	}
-	return runNumbers;
-}
-
 function validateObservedStatus(
 	status: ExperimentResult["status"],
 	pendingRun: { checksPass: boolean | null; passed: boolean },
@@ -547,36 +542,11 @@ async function commitKeptExperiment(
 async function revertFailedExperiment(
 	options: AutoresearchToolFactoryOptions,
 	workDir: string,
+	preRunDirtyPaths: string[],
 ): Promise<KeepCommitResult> {
-	const preservedFiles = preserveAutoresearchFiles(workDir);
+	let statusText: string;
 	try {
-		await git.restore(workDir, { files: ["."], source: "HEAD", staged: true, worktree: true });
-	} catch (err) {
-		restoreAutoresearchFiles(preservedFiles);
-		return {
-			error: `git restore failed: ${err instanceof Error ? err.message : String(err)}`,
-		};
-	}
-	try {
-		await git.clean(workDir, { paths: ["."] });
-	} catch (err) {
-		restoreAutoresearchFiles(preservedFiles);
-		return {
-			error: `git clean failed: ${err instanceof Error ? err.message : String(err)}`,
-		};
-	}
-	try {
-		await git.clean(workDir, { ignoredOnly: true, paths: ["."] });
-	} catch (err) {
-		restoreAutoresearchFiles(preservedFiles);
-		return {
-			error: `git clean -X failed: ${err instanceof Error ? err.message : String(err)}`,
-		};
-	}
-	restoreAutoresearchFiles(preservedFiles);
-	let dirtyStatus = "";
-	try {
-		dirtyStatus = await git.status(workDir, {
+		statusText = await git.status(workDir, {
 			pathspecs: ["."],
 			porcelainV1: true,
 			untrackedFiles: "all",
@@ -584,45 +554,37 @@ async function revertFailedExperiment(
 		});
 	} catch (err) {
 		return {
-			error: `git status failed after cleanup: ${err instanceof Error ? err.message : String(err)}`,
+			error: `git status failed: ${err instanceof Error ? err.message : String(err)}`,
 		};
 	}
+
 	const workDirPrefix = await readGitWorkDirPrefix(options, workDir);
-	const remainingDirtyPaths = parseWorkDirDirtyPaths(dirtyStatus, workDirPrefix).filter(
-		relativePath => !isAutoresearchLocalStatePath(relativePath),
-	);
-	if (remainingDirtyPaths.length > 0) {
-		return {
-			error:
-				"Autoresearch cleanup left the worktree dirty. Resolve these paths before continuing: " +
-				remainingDirtyPaths.join(", "),
-		};
+	const { tracked, untracked } = computeRunModifiedPaths(preRunDirtyPaths, statusText, workDirPrefix);
+	const totalReverted = tracked.length + untracked.length;
+	if (totalReverted === 0) {
+		return { note: "nothing to revert" };
 	}
-	return { note: "reverted changes" };
-}
 
-function preserveAutoresearchFiles(workDir: string): PreservedFile[] {
-	const files: PreservedFile[] = [];
-	for (const relativePath of [...AUTORESEARCH_COMMITTABLE_FILES, "autoresearch.jsonl"]) {
-		const absolutePath = path.join(workDir, relativePath);
-		if (!fs.existsSync(absolutePath)) continue;
-		files.push({
-			content: fs.readFileSync(absolutePath),
-			path: absolutePath,
-		});
+	if (tracked.length > 0) {
+		try {
+			await git.restore(workDir, { files: tracked, source: "HEAD", staged: true, worktree: true });
+		} catch (err) {
+			return {
+				error: `git restore failed: ${err instanceof Error ? err.message : String(err)}`,
+			};
+		}
 	}
-	const localStateDir = path.join(workDir, ".autoresearch");
-	if (fs.existsSync(localStateDir)) {
-		collectDirectoryFiles(localStateDir, files);
-	}
-	return files;
-}
 
-function restoreAutoresearchFiles(files: PreservedFile[]): void {
-	for (const file of files) {
-		fs.mkdirSync(path.dirname(file.path), { recursive: true });
-		fs.writeFileSync(file.path, file.content);
+	for (const filePath of untracked) {
+		const absolutePath = path.join(workDir, filePath);
+		try {
+			fs.rmSync(absolutePath, { force: true, recursive: true });
+		} catch {
+			// Best-effort removal of untracked files
+		}
 	}
+
+	return { note: `reverted ${totalReverted} file${totalReverted === 1 ? "" : "s"}` };
 }
 
 function mergeStdoutStderr(result: { stderr: string; stdout: string }): string {
@@ -652,38 +614,24 @@ async function validateKeepPaths(
 
 	const workDirPrefix = await readGitWorkDirPrefix(options, workDir);
 	const committablePaths: string[] = [];
-	for (const normalizedPath of parseWorkDirDirtyPaths(statusText, workDirPrefix)) {
-		if (isAutoresearchLocalStatePath(normalizedPath)) {
+	for (const entry of parseWorkDirDirtyPathsWithStatus(statusText, workDirPrefix)) {
+		if (isAutoresearchLocalStatePath(entry.path)) {
 			continue;
 		}
-		if (isAutoresearchCommittableFile(normalizedPath)) {
-			committablePaths.push(normalizedPath);
+		if (isAutoresearchCommittableFile(entry.path)) {
+			committablePaths.push(entry.path);
 			continue;
 		}
-		if (state.offLimits.some(spec => pathMatchesContractPath(normalizedPath, spec))) {
-			return `cannot keep this run because ${normalizedPath} is listed under Off Limits in autoresearch.md`;
+		if (state.offLimits.some(spec => pathMatchesContractPath(entry.path, spec))) {
+			return `cannot keep this run because ${entry.path} is listed under Off Limits in autoresearch.md`;
 		}
-		if (!state.scopePaths.some(spec => pathMatchesContractPath(normalizedPath, spec))) {
-			return `cannot keep this run because ${normalizedPath} is outside Files in Scope`;
+		if (!state.scopePaths.some(spec => pathMatchesContractPath(entry.path, spec))) {
+			return `cannot keep this run because ${entry.path} is outside Files in Scope`;
 		}
-		committablePaths.push(normalizedPath);
+		committablePaths.push(entry.path);
 	}
 
 	return { committablePaths };
-}
-
-function collectDirectoryFiles(directory: string, files: PreservedFile[]): void {
-	for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-		const absolutePath = path.join(directory, entry.name);
-		if (entry.isDirectory()) {
-			collectDirectoryFiles(absolutePath, files);
-			continue;
-		}
-		files.push({
-			content: fs.readFileSync(absolutePath),
-			path: absolutePath,
-		});
-	}
 }
 
 async function updateRunMetadata(

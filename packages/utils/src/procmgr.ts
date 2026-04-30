@@ -3,6 +3,7 @@ import path from "node:path";
 import * as timers from "node:timers";
 import type { Subprocess } from "bun";
 import { $env } from "./env";
+import { $which } from "./which";
 
 export interface ShellConfig {
 	shell: string;
@@ -61,18 +62,6 @@ function getShellPrefix(): string | undefined {
 }
 
 /**
- * Find bash executable on PATH (Windows)
- */
-function findBashOnPath(): string | null {
-	try {
-		return Bun.which("bash.exe");
-	} catch {
-		// Ignore errors
-	}
-	return null;
-}
-
-/**
  * Build full shell config from a shell path.
  */
 function buildConfig(shell: string): ShellConfig {
@@ -89,7 +78,7 @@ function buildConfig(shell: string): ShellConfig {
  */
 export function resolveBasicShell(): string | undefined {
 	for (const name of ["bash", "bash.exe", "sh", "sh.exe"]) {
-		const resolved = Bun.which(name);
+		const resolved = $which(name);
 		if (resolved) return resolved;
 	}
 
@@ -152,7 +141,7 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 		}
 
 		// 3. Fallback: search bash.exe on PATH (Cygwin, MSYS2, WSL, etc.)
-		const bashOnPath = findBashOnPath();
+		const bashOnPath = $which("bash.exe");
 		if (bashOnPath) {
 			cachedShellConfig = buildConfig(bashOnPath);
 			return cachedShellConfig;

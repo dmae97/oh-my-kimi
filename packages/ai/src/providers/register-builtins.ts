@@ -27,6 +27,7 @@ import type { CursorOptions } from "./cursor";
 import type { GoogleOptions } from "./google";
 import type { GoogleGeminiCliOptions } from "./google-gemini-cli";
 import type { GoogleVertexOptions } from "./google-vertex";
+import type { OllamaChatOptions } from "./ollama";
 import type { OpenAICodexResponsesOptions } from "./openai-codex-responses";
 import type { OpenAICompletionsOptions } from "./openai-completions";
 import type { OpenAIResponsesOptions } from "./openai-responses";
@@ -103,6 +104,14 @@ interface OpenAIResponsesProviderModule {
 	) => AssistantMessageEventStream;
 }
 
+interface OllamaProviderModule {
+	streamOllama: (
+		model: Model<"ollama-chat">,
+		context: Context,
+		options: OllamaChatOptions,
+	) => AssistantMessageEventStream;
+}
+
 interface CursorProviderModule {
 	streamCursor: (
 		model: Model<"cursor-agent">,
@@ -133,6 +142,7 @@ let googleVertexProviderModulePromise: Promise<LazyProviderModule<"google-vertex
 let openAICodexResponsesProviderModulePromise: Promise<LazyProviderModule<"openai-codex-responses">> | undefined;
 let openAICompletionsProviderModulePromise: Promise<LazyProviderModule<"openai-completions">> | undefined;
 let openAIResponsesProviderModulePromise: Promise<LazyProviderModule<"openai-responses">> | undefined;
+let ollamaProviderModulePromise: Promise<LazyProviderModule<"ollama-chat">> | undefined;
 let cursorProviderModulePromise: Promise<LazyProviderModule<"cursor-agent">> | undefined;
 let bedrockProviderModuleOverride: LazyProviderModule<"bedrock-converse-stream"> | undefined;
 let bedrockProviderModulePromise: Promise<LazyProviderModule<"bedrock-converse-stream">> | undefined;
@@ -290,6 +300,14 @@ function loadOpenAIResponsesProviderModule(): Promise<LazyProviderModule<"openai
 	return openAIResponsesProviderModulePromise;
 }
 
+function loadOllamaProviderModule(): Promise<LazyProviderModule<"ollama-chat">> {
+	ollamaProviderModulePromise ||= import("./ollama").then(module => {
+		const provider = module as OllamaProviderModule;
+		return { stream: provider.streamOllama };
+	});
+	return ollamaProviderModulePromise;
+}
+
 function loadCursorProviderModule(): Promise<LazyProviderModule<"cursor-agent">> {
 	cursorProviderModulePromise ||= import("./cursor").then(module => {
 		const provider = module as CursorProviderModule;
@@ -326,4 +344,6 @@ export const streamOpenAICodexResponses = createLazyStream(loadOpenAICodexRespon
 export const streamOpenAICompletions = createLazyStream(loadOpenAICompletionsProviderModule);
 export const streamOpenAIResponses = createLazyStream(loadOpenAIResponsesProviderModule);
 export const streamCursor = createLazyStream(loadCursorProviderModule);
+export const streamOllama = createLazyStream(loadOllamaProviderModule);
+
 export const streamBedrock = createLazyStream(loadBedrockProviderModule);

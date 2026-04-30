@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { $which, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 
 export interface RecordingHandle {
@@ -15,9 +15,9 @@ const isWindows = process.platform === "win32";
  */
 export function detectRecordingTools(): string[] {
 	const tools: string[] = [];
-	if (Bun.which("sox")) tools.push("sox");
-	if (Bun.which("ffmpeg")) tools.push("ffmpeg");
-	if (!isWindows && Bun.which("arecord")) tools.push("arecord");
+	if ($which("sox")) tools.push("sox");
+	if ($which("ffmpeg")) tools.push("ffmpeg");
+	if (!isWindows && $which("arecord")) tools.push("arecord");
 	if (isWindows) tools.push("powershell");
 	return tools;
 }

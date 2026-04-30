@@ -160,7 +160,7 @@ The Extensions dashboard also loads `slash-commands` capability and displays act
    If text still starts with `/`, attempt markdown command expansion.
 4. **Prompt templates** (`expandPromptTemplate`)  
    Applied after slash/custom processing.
-5. **Delivery**  
+5. **Delivery**
    - idle: prompt is sent immediately to agent
    - streaming: prompt is queued as steer/follow-up depending on `streamingBehavior`
 
@@ -177,7 +177,7 @@ This is why slash command expansion sits before prompt-template expansion, and w
 - if matched, applies:
   - positional replacement: `$1`, `$2`, ...
   - aggregate replacement: `$ARGUMENTS` and `$@`
-  - then template rendering via `renderPromptTemplate` with `{ args, ARGUMENTS, arguments }`
+  - then template rendering via `prompt.render` with `{ args, ARGUMENTS, arguments }`
 - if no match, returns original text unchanged
 
 ### `parseCommandArgs` caveats

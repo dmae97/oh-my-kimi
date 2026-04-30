@@ -1,0 +1,39 @@
+# Gradle + ./gradlew build output.
+# Strip daemon chatter and UP-TO-DATE/NO-SOURCE/FROM-CACHE tasks, keep real
+# tasks and errors.
+
+[filters.gradle]
+description = "Compact gradle / gradlew build output"
+match_command = "^(gradle|gradlew)$"
+strip_ansi = true
+strip_lines_matching = [
+	"^\\s*$",
+	"^> Configuring project",
+	"^> Resolving dependencies",
+	"^> Transform ",
+	"^Download(ing)?\\s+http",
+	"^\\s*<-+>\\s*$",
+	"^> Task :.*UP-TO-DATE$",
+	"^> Task :.*NO-SOURCE$",
+	"^> Task :.*FROM-CACHE$",
+	"^Starting a Gradle Daemon",
+	"^Daemon will be stopped",
+]
+truncate_lines_at = 200
+max_lines = 80
+on_empty = "gradle: ok"
+
+[[tests.gradle]]
+name = "strips UP-TO-DATE and keeps result"
+input = "> Configuring project :app\n> Task :app:compileJava UP-TO-DATE\n> Task :app:compileKotlin UP-TO-DATE\n> Task :app:test\n3 tests completed, 1 failed\nBUILD FAILED in 12s"
+expected = "> Task :app:test\n3 tests completed, 1 failed\nBUILD FAILED in 12s\n"
+
+[[tests.gradle]]
+name = "clean build untouched"
+input = "BUILD SUCCESSFUL in 8s\n7 actionable tasks: 7 executed"
+expected = "BUILD SUCCESSFUL in 8s\n7 actionable tasks: 7 executed\n"
+
+[[tests.gradle]]
+name = "empty after stripping"
+input = "> Configuring project :app\n"
+expected = "gradle: ok"

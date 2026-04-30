@@ -122,6 +122,9 @@ export function transformMessages<TApi extends Api>(
 		}
 		return msg;
 	});
+	const realToolResultIds = new Set(
+		transformed.filter((msg): msg is ToolResultMessage => msg.role === "toolResult").map(msg => msg.toolCallId),
+	);
 
 	// Second pass: insert synthetic empty tool results for orphaned tool calls
 	// and preserve aborted/errored tool results when they were already persisted.
@@ -135,7 +138,7 @@ export function transformMessages<TApi extends Api>(
 	const flushPendingToolCalls = (timestamp: number): void => {
 		if (pendingToolCalls.length === 0) return;
 		for (const tc of pendingToolCalls) {
-			if (!toolCallStatus.has(tc.id)) {
+			if (!toolCallStatus.has(tc.id) && !realToolResultIds.has(tc.id)) {
 				result.push({
 					role: "toolResult",
 					toolCallId: tc.id,

@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { SearchDb } from "@oh-my-pi/pi-natives";
 import { fuzzyFind } from "@oh-my-pi/pi-natives";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 
@@ -204,17 +203,11 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 	// per-directory readdir fast-path for prefix completions. Global fuzzy
 	// discovery continues to use native fuzzyFind + shared scan cache.
 	#dirCache: Map<string, { entries: fs.Dirent[]; timestamp: number }> = new Map();
-	#searchDb?: SearchDb;
 	readonly #DIR_CACHE_TTL = 2000; // 2 seconds
 
-	constructor(
-		commands: (SlashCommand | AutocompleteItem)[] = [],
-		basePath: string = getProjectDir(),
-		searchDb?: SearchDb,
-	) {
+	constructor(commands: (SlashCommand | AutocompleteItem)[] = [], basePath: string = getProjectDir()) {
 		this.#commands = commands;
 		this.#basePath = basePath;
-		this.#searchDb = searchDb;
 	}
 
 	async getSuggestions(
@@ -682,7 +675,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			const scopedQuery = await this.#resolveScopedFuzzyQuery(query);
 			const searchPath = scopedQuery?.baseDir ?? this.#basePath;
 			const fuzzyQuery = scopedQuery?.query ?? query;
-			const result = await fuzzyFind(buildAutocompleteFuzzyDiscoveryProfile(fuzzyQuery, searchPath), this.#searchDb);
+			const result = await fuzzyFind(buildAutocompleteFuzzyDiscoveryProfile(fuzzyQuery, searchPath));
 			const lowerQuery = fuzzyQuery.toLowerCase();
 			const filteredMatches = result.matches.filter(entry => {
 				const p = entry.path.endsWith("/") ? entry.path.slice(0, -1) : entry.path;

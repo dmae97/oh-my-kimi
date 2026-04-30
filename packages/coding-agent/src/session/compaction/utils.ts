@@ -3,7 +3,7 @@
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Message } from "@oh-my-pi/pi-ai";
-import { renderPromptTemplate } from "../../config/prompt-templates";
+import { prompt } from "@oh-my-pi/pi-utils";
 import fileOperationsTemplate from "../../prompts/system/file-operations.md" with { type: "text" };
 import summarizationSystemPrompt from "../../prompts/system/summarization-system.md" with { type: "text" };
 
@@ -86,7 +86,7 @@ function stripFileOperationTags(summary: string): string {
 }
 export function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
 	if (readFiles.length === 0 && modifiedFiles.length === 0) return "";
-	return renderPromptTemplate(fileOperationsTemplate, {
+	return prompt.render(fileOperationsTemplate, {
 		readFiles: truncateFileList(readFiles),
 		modifiedFiles: truncateFileList(modifiedFiles),
 	});
@@ -181,4 +181,4 @@ export function serializeConversation(messages: Message[]): string {
 // Summarization System Prompt
 // ============================================================================
 
-export const SUMMARIZATION_SYSTEM_PROMPT = renderPromptTemplate(summarizationSystemPrompt);
+export const SUMMARIZATION_SYSTEM_PROMPT = prompt.render(summarizationSystemPrompt);

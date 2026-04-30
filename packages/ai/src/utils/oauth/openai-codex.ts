@@ -25,20 +25,20 @@ type JwtPayload = {
 	[key: string]: unknown;
 };
 
-function decodeJwt(token: string): JwtPayload | null {
+export function decodeJwt<T = Record<string, unknown>>(token: string): T | null {
 	try {
 		const parts = token.split(".");
 		if (parts.length !== 3) return null;
 		const payload = parts[1] ?? "";
 		const decoded = Buffer.from(payload, "base64").toString("utf-8");
-		return JSON.parse(decoded) as JwtPayload;
+		return JSON.parse(decoded) as T;
 	} catch {
 		return null;
 	}
 }
 
 function getTokenProfile(accessToken: string): { accountId?: string; email?: string } {
-	const payload = decodeJwt(accessToken);
+	const payload = decodeJwt<JwtPayload>(accessToken);
 	const auth = payload?.[JWT_CLAIM_PATH];
 	const accountId = auth?.chatgpt_account_id;
 	const email = payload?.[JWT_PROFILE_CLAIM]?.email?.trim().toLowerCase();

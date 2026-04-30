@@ -104,8 +104,8 @@ export class HookEditorComponent extends Container {
 
 	/** Hook-style: Enter=newline, Ctrl+Enter=submit (original behavior) */
 	#handleHookStyleInput(keyData: string): void {
-		// Ctrl+Enter to submit
-		if (keyData === "\x1b[13;5u" || keyData === "\x1b[27;5;13~") {
+		// Ctrl+Enter to submit. Use key matching so lock-key and keypad Enter variants work.
+		if (matchesKey(keyData, "ctrl+enter")) {
 			this.#onSubmitCallback(this.#editor.getText());
 			return;
 		}
@@ -136,7 +136,7 @@ export class HookEditorComponent extends Container {
 		const editorCmd = getEditorCommand();
 		if (!editorCmd) return;
 
-		const currentText = this.#editor.getText();
+		const currentText = this.#editor.getExpandedText();
 		try {
 			this.#tui.stop();
 			const result = await openInEditor(editorCmd, currentText);

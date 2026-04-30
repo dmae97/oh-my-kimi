@@ -3,6 +3,7 @@
  */
 import {
 	type AssistantMessage,
+	type AssistantMessageEvent,
 	type CursorExecHandlers,
 	type CursorToolResultHandler,
 	type Effort,
@@ -130,7 +131,11 @@ export interface AgentOptions {
 	 * Inspect or replace provider payloads before they are sent.
 	 */
 	onPayload?: SimpleStreamOptions["onPayload"];
-
+	/**
+	 * Inspect assistant streaming events before they are emitted to subscribers.
+	 * Use this when abort decisions must happen before buffered events continue flowing.
+	 */
+	onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
 	/**
 	 * Custom token budgets for thinking levels (token-based providers only).
 	 */
@@ -239,6 +244,7 @@ export class Agent {
 	#intentTracing: boolean;
 	#getToolChoice?: () => ToolChoice | undefined;
 	#onPayload?: SimpleStreamOptions["onPayload"];
+	#onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
 
 	/** Buffered Cursor tool results with text length at time of call (for correct ordering) */
 	#cursorToolResultBuffer: CursorToolResultEntry[] = [];
@@ -275,6 +281,7 @@ export class Agent {
 		this.#transformToolCallArguments = opts.transformToolCallArguments;
 		this.#intentTracing = opts.intentTracing === true;
 		this.#getToolChoice = opts.getToolChoice;
+		this.#onAssistantMessageEvent = opts.onAssistantMessageEvent;
 	}
 
 	/**
@@ -404,6 +411,12 @@ export class Agent {
 	subscribe(fn: (e: AgentEvent) => void): () => void {
 		this.#listeners.add(fn);
 		return () => this.#listeners.delete(fn);
+	}
+
+	setAssistantMessageEventInterceptor(
+		fn: ((message: AssistantMessage, event: AssistantMessageEvent) => void) | undefined,
+	): void {
+		this.#onAssistantMessageEvent = fn;
 	}
 
 	emitExternalEvent(event: AgentEvent) {
@@ -762,6 +775,7 @@ export class Agent {
 			cursorOnToolResult,
 			transformToolCallArguments: this.#transformToolCallArguments,
 			intentTracing: this.#intentTracing,
+			onAssistantMessageEvent: this.#onAssistantMessageEvent,
 			getToolChoice,
 			getSteeringMessages: async () => {
 				if (skipInitialSteeringPoll) {

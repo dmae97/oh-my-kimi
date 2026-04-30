@@ -10,14 +10,26 @@ use std::{io::Cursor, sync::Arc};
 
 use icy_sixel::{EncodeOptions, sixel_encode};
 use image::{
-	DynamicImage, ImageFormat, ImageReader,
-	codecs::{jpeg::JpegEncoder, webp::WebPEncoder},
+	DynamicImage, ImageFormat as StdImageFormat, ImageReader, codecs::jpeg::JpegEncoder,
 	imageops::FilterType,
 };
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 use crate::task;
+
+/// Output format for [`PhotonImage::encode`].
+#[napi]
+pub enum ImageFormat {
+	/// PNG encoded bytes.
+	PNG  = 0,
+	/// JPEG encoded bytes.
+	JPEG = 1,
+	/// WebP encoded bytes.
+	WEBP = 2,
+	/// GIF encoded bytes.
+	GIF  = 3,
+}
 
 /// Sampling filter for resize operations.
 #[napi]
@@ -53,7 +65,7 @@ pub struct PhotonImage {
 	img: Arc<DynamicImage>,
 }
 
-type ImageTask = task::Async<PhotonImage>;
+type ImageTask = task::Promise<PhotonImage>;
 
 #[napi]
 impl PhotonImage {
@@ -62,7 +74,7 @@ impl PhotonImage {
 	///
 	/// # Errors
 	/// Returns an error if the image format cannot be detected or decoded.
-	#[napi(js_name = "parse")]
+	#[napi]
 	pub fn parse(bytes: Uint8Array) -> ImageTask {
 		let bytes = bytes.as_ref().to_vec();
 		task::blocking("image.decode", (), move |_| -> Result<Self> {
@@ -72,36 +84,30 @@ impl PhotonImage {
 	}
 
 	/// Get the image width in pixels.
-	#[napi(getter, js_name = "width")]
+	#[napi(getter)]
 	pub fn get_width(&self) -> u32 {
 		self.img.width()
 	}
 
 	/// Get the image height in pixels.
-	#[napi(getter, js_name = "height")]
+	#[napi(getter)]
 	pub fn get_height(&self) -> u32 {
 		self.img.height()
 	}
 
 	/// Encode the image to bytes in the specified format.
 	///
-	/// Format values (matching `ImageFormat` enum in TS):
-	/// - 0: PNG (quality ignored)
-	/// - 1: JPEG (quality 0-100)
-	/// - 2: WebP (lossless, quality ignored)
-	/// - 3: GIF (quality ignored)
-	///
 	/// # Errors
 	/// Returns an error if encoding fails or format is invalid.
-	#[napi(js_name = "encode")]
-	pub fn encode(&self, format: u8, quality: u8) -> task::Async<Vec<u8>> {
+	#[napi]
+	pub fn encode(&self, format: ImageFormat, quality: u8) -> task::Promise<Vec<u8>> {
 		let img = Arc::clone(&self.img);
 		task::blocking("image.encode", (), move |_| encode_image(&img, format, quality))
 	}
 
 	/// Resize the image to the specified pixel dimensions using the filter.
 	/// Returns a new `PhotonImage` containing the resized image.
-	#[napi(js_name = "resize")]
+	#[napi]
 	pub fn resize(&self, width: u32, height: u32, filter: SamplingFilter) -> ImageTask {
 		let img = Arc::clone(&self.img);
 		task::blocking("image.resize", (), move |_| {
@@ -117,7 +123,7 @@ impl PhotonImage {
 ///
 /// # Errors
 /// Returns an error if decoding, resizing, or SIXEL encoding fails.
-#[napi(js_name = "encodeSixel")]
+#[napi]
 pub fn encode_sixel(
 	bytes: Uint8Array,
 	target_width_px: u32,
@@ -148,36 +154,37 @@ fn decode_image_from_bytes(bytes: &[u8]) -> Result<DynamicImage> {
 		.decode()
 		.map_err(|e| Error::from_reason(format!("Failed to decode image: {e}")))
 }
-fn encode_image(img: &DynamicImage, format: u8, quality: u8) -> Result<Vec<u8>> {
+fn encode_image(img: &DynamicImage, format: ImageFormat, quality: u8) -> Result<Vec<u8>> {
 	let (w, h) = (img.width(), img.height());
 
 	match format {
-		0 => {
+		ImageFormat::PNG => {
 			let mut buffer = Vec::with_capacity((w * h * 4) as usize);
-			img.write_to(&mut Cursor::new(&mut buffer), ImageFormat::Png)
+			img.write_to(&mut Cursor::new(&mut buffer), StdImageFormat::Png)
 				.map_err(|e| Error::from_reason(format!("Failed to encode PNG: {e}")))?;
 			Ok(buffer)
 		},
-		1 => {
+		ImageFormat::JPEG => {
 			let mut buffer = Vec::with_capacity((w * h * 3) as usize);
 			let encoder = JpegEncoder::new_with_quality(&mut buffer, quality);
 			img.write_with_encoder(encoder)
 				.map_err(|e| Error::from_reason(format!("Failed to encode JPEG: {e}")))?;
 			Ok(buffer)
 		},
-		2 => {
-			let mut buffer = Vec::with_capacity((w * h * 4) as usize);
-			let encoder = WebPEncoder::new_lossless(&mut buffer);
-			img.write_with_encoder(encoder)
-				.map_err(|e| Error::from_reason(format!("Failed to encode WebP: {e}")))?;
-			Ok(buffer)
+		ImageFormat::WEBP => {
+			// Lossy WebP via libwebp (the `image` crate's bundled WebP encoder is
+			// lossless-only). quality is 0..=100; libwebp accepts an f32 in the same
+			// range.
+			let encoder = webp::Encoder::from_image(img)
+				.map_err(|e| Error::from_reason(format!("Failed to prepare WebP encoder: {e}")))?;
+			let memory = encoder.encode(quality as f32);
+			Ok(memory.to_vec())
 		},
-		3 => {
+		ImageFormat::GIF => {
 			let mut buffer = Vec::with_capacity((w * h) as usize);
-			img.write_to(&mut Cursor::new(&mut buffer), ImageFormat::Gif)
+			img.write_to(&mut Cursor::new(&mut buffer), StdImageFormat::Gif)
 				.map_err(|e| Error::from_reason(format!("Failed to encode GIF: {e}")))?;
 			Ok(buffer)
 		},
-		_ => Err(Error::from_reason(format!("Invalid image format: {format}"))),
 	}
 }

@@ -18,6 +18,7 @@ import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { complete } from "@oh-my-pi/pi-ai/stream";
 import type { AssistantMessage, Context, Model, Usage } from "@oh-my-pi/pi-ai/types";
 import { isContextOverflow } from "@oh-my-pi/pi-ai/utils/overflow";
+import { $which } from "@oh-my-pi/pi-utils";
 import { e2eApiKey, resolveApiKey } from "./oauth";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
@@ -445,7 +446,7 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 
 	// Ollama tests require PI_LOCAL_LLM=1 and ollama installed
-	const ollamaInstalled = !!Bun.env.PI_LOCAL_LLM && !!Bun.which("ollama");
+	const ollamaInstalled = !!Bun.env.PI_LOCAL_LLM && !!$which("ollama");
 
 	describe.skipIf(!ollamaInstalled)("Ollama (local)", () => {
 		let ollamaProcess: ChildProcess | null = null;

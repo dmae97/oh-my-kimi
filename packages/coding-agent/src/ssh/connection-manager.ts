@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getRemoteHostDir, getSshControlDir, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
+import { $which, getRemoteHostDir, getSshControlDir, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { buildSshTarget, sanitizeHostName } from "./utils";
 
@@ -106,7 +106,7 @@ async function runSshCaptureSync(args: string[]): Promise<{ exitCode: number | n
 }
 
 function ensureSshBinary(): void {
-	if (!Bun.which("ssh")) {
+	if (!$which("ssh")) {
 		throw new Error("ssh binary not found on PATH");
 	}
 }

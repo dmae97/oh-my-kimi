@@ -7,7 +7,7 @@
  * User directory: ~/.codex
  */
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { registerProvider } from "../capability";
 import type { ContextFile } from "../capability/context-file";
 import { contextFileCapability } from "../capability/context-file";
@@ -28,11 +28,11 @@ import { slashCommandCapability } from "../capability/slash-command";
 import type { CustomTool } from "../capability/tool";
 import { toolCapability } from "../capability/tool";
 import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
-import { parseFrontmatter } from "../utils/frontmatter";
+
 import {
+	buildExtensionModuleItems,
 	createSourceMeta,
 	discoverExtensionModulePaths,
-	getExtensionNameFromPath,
 	loadFilesFromDir,
 	SOURCE_PATHS,
 	scanSkillsFromDir,
@@ -251,20 +251,7 @@ async function loadExtensionModules(ctx: LoadContext): Promise<LoadResult<Extens
 		discoverExtensionModulePaths(ctx, projectExtensionsDir),
 	]);
 
-	const items: ExtensionModule[] = [
-		...userPaths.map(extPath => ({
-			name: getExtensionNameFromPath(extPath),
-			path: extPath,
-			level: "user" as const,
-			_source: createSourceMeta(PROVIDER_ID, extPath, "user"),
-		})),
-		...projectPaths.map(extPath => ({
-			name: getExtensionNameFromPath(extPath),
-			path: extPath,
-			level: "project" as const,
-			_source: createSourceMeta(PROVIDER_ID, extPath, "project"),
-		})),
-	];
+	const items = buildExtensionModuleItems(PROVIDER_ID, userPaths, projectPaths);
 
 	return { items, warnings };
 }

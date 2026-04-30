@@ -31,7 +31,6 @@ pub struct PtyStartOptions<'env> {
 	/// Environment variables for this command.
 	pub env:        Option<HashMap<String, String>>,
 	/// Timeout in milliseconds before cancelling.
-	#[napi(js_name = "timeoutMs")]
 	pub timeout_ms: Option<u32>,
 	/// Abort signal for cancelling the operation.
 	pub signal:     Option<Unknown<'env>>,
@@ -109,9 +108,8 @@ impl PtySession {
 		&self,
 		env: &'env Env,
 		options: PtyStartOptions<'env>,
-		#[napi(ts_arg_type = "((chunk: string) => void) | undefined | null")] on_chunk: Option<
-			ThreadsafeFunction<String>,
-		>,
+		#[napi(ts_arg_type = "((error: Error | null, chunk: string) => void) | undefined | null")]
+		on_chunk: Option<ThreadsafeFunction<String>>,
 	) -> Result<PromiseRaw<'env, PtyRunResult>> {
 		let run_config = PtyRunConfig {
 			command: options.command,

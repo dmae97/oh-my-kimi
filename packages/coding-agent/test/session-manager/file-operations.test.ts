@@ -443,4 +443,25 @@ describe("SessionManager legacy session migration persistence", () => {
 		expect(persistedEntries[1].id).toBeDefined();
 		expect(persistedEntries[1].parentId).toBeNull();
 	});
+	it("keeps the last non-empty session resumable after starting a fresh session", async () => {
+		const session = SessionManager.create(tempDir, tempDir);
+		session.appendMessage({ role: "user", content: "hello", timestamp: Date.now() - 1 });
+		session.appendMessage(makeAssistantMessage());
+		await session.flush();
+
+		const previousSessionFile = session.getSessionFile();
+		if (!previousSessionFile) throw new Error("Expected persisted session file");
+
+		const freshSessionFile = await session.newSession();
+		expect(freshSessionFile).toBeDefined();
+		expect(fs.existsSync(freshSessionFile!)).toBe(false);
+
+		const resumed = await SessionManager.continueRecent(tempDir, tempDir);
+		try {
+			expect(resumed.getSessionFile()).toBe(previousSessionFile);
+		} finally {
+			await resumed.close();
+			await session.close();
+		}
+	});
 });

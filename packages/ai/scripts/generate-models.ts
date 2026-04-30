@@ -16,7 +16,7 @@ import { createModelManager } from "../src/model-manager";
 import {
 	applyGeneratedModelPolicies,
 	CLOUDFLARE_FALLBACK_MODEL,
-	linkSparkPromotionTargets,
+	linkOpenAIPromotionTargets,
 } from "../src/model-thinking";
 import prevModelsJson from "../src/models.json" with { type: "json" };
 import {
@@ -26,7 +26,12 @@ import {
 	isCatalogDescriptor,
 	PROVIDER_DESCRIPTORS,
 } from "../src/provider-models/descriptors";
-import { MODELS_DEV_PROVIDER_DESCRIPTORS, mapModelsDevToModels } from "../src/provider-models/openai-compat";
+import {
+	MODELS_DEV_PROVIDER_DESCRIPTORS,
+	mapModelsDevToModels,
+	UNK_CONTEXT_WINDOW,
+	UNK_MAX_TOKENS,
+} from "../src/provider-models/openai-compat";
 import { getGitLabDuoModels } from "../src/providers/gitlab-duo";
 import { JWT_CLAIM_PATH } from "../src/providers/openai-codex/constants";
 import type { Model } from "../src/types";
@@ -131,6 +136,10 @@ function createGlobalModelsDevReferenceMap(modelsDevModels: readonly Model[]): M
 	return references;
 }
 
+function inheritModelsDevLimit(value: number, referenceValue: number, unspecifiedValue: number): number {
+	return value === unspecifiedValue ? referenceValue : value;
+}
+
 function applyGlobalModelsDevFallback(models: readonly Model[], modelsDevModels: readonly Model[]): Model[] {
 	const providerScopedKeys = new Set(modelsDevModels.map(model => `${model.provider}/${model.id}`));
 	const globalReferences = createGlobalModelsDevReferenceMap(modelsDevModels);
@@ -147,8 +156,10 @@ function applyGlobalModelsDevFallback(models: readonly Model[], modelsDevModels:
 			name: reference.name,
 			reasoning: reference.reasoning,
 			input: reference.input,
-			contextWindow: reference.contextWindow,
-			maxTokens: reference.maxTokens,
+			// Fill unknown endpoint limits from same-id models.dev references, but keep
+			// provider-specific values when discovery returned them explicitly.
+			contextWindow: inheritModelsDevLimit(model.contextWindow, reference.contextWindow, UNK_CONTEXT_WINDOW),
+			maxTokens: inheritModelsDevLimit(model.maxTokens, reference.maxTokens, UNK_MAX_TOKENS),
 		};
 	});
 }
@@ -168,6 +179,37 @@ function applyPremiumMultiplierOverrides(models: readonly Model[]): Model[] {
 		};
 	});
 }
+function hasBillableCost(cost: Model["cost"]): boolean {
+	return cost.input !== 0 || cost.output !== 0 || cost.cacheRead !== 0 || cost.cacheWrite !== 0;
+}
+
+function applyCodexPricingFallback(models: readonly Model[]): Model[] {
+	const openAIModels = new Map(
+		models
+			.filter(model => model.provider === "openai" && hasBillableCost(model.cost))
+			.map(model => [model.id, model.cost]),
+	);
+
+	return models.map(model => {
+		if (model.provider !== "openai-codex" || model.api !== "openai-codex-responses") {
+			return model;
+		}
+		if (hasBillableCost(model.cost)) {
+			return model;
+		}
+
+		const openAICost = openAIModels.get(model.id);
+		if (!openAICost) {
+			return model;
+		}
+
+		return {
+			...model,
+			cost: { ...openAICost },
+		};
+	});
+}
+
 const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 
 async function getOAuthCredentialsFromStorage(provider: OAuthProvider): Promise<OAuthCredentials | null> {
@@ -323,8 +365,9 @@ async function generateModels() {
 
 	allModels = applyGlobalModelsDevFallback(allModels, modelsDevModels);
 	allModels = applyPremiumMultiplierOverrides(allModels);
+	allModels = applyCodexPricingFallback(allModels);
 	applyGeneratedModelPolicies(allModels);
-	linkSparkPromotionTargets(allModels);
+	linkOpenAIPromotionTargets(allModels);
 
 	// Group by provider and sort each provider's models
 	const providers: Record<string, Record<string, Model>> = {};

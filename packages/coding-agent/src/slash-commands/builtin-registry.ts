@@ -8,6 +8,7 @@ import type { SettingPath, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
 import {
 	clearClaudePluginRootsCache,
+	clearPluginRootsAndCaches,
 	resolveActiveProjectRegistryPath,
 	resolveOrDefaultProjectRegistryPath,
 } from "../discovery/helpers.js";
@@ -55,7 +56,15 @@ interface ParsedBuiltinSlashCommand {
 interface BuiltinSlashCommandSpec extends BuiltinSlashCommand {
 	aliases?: string[];
 	allowArgs?: boolean;
-	handle: (command: ParsedBuiltinSlashCommand, runtime: BuiltinSlashCommandRuntime) => Promise<void> | void;
+	/**
+	 * Handle the command. Return a string to pass remaining text through as prompt input.
+	 * Return void/undefined to consume the input entirely.
+	 */
+	handle: (
+		command: ParsedBuiltinSlashCommand,
+		runtime: BuiltinSlashCommandRuntime,
+		// biome-ignore lint/suspicious/noConfusingVoidType: void needed so handlers returning nothing are assignable
+	) => Promise<string | undefined> | string | void;
 }
 
 export interface BuiltinSlashCommandRuntime {
@@ -69,7 +78,11 @@ function parseBuiltinSlashCommand(text: string): ParsedBuiltinSlashCommand | nul
 	if (!body) return null;
 
 	const firstWhitespace = body.search(/\s/);
-	if (firstWhitespace === -1) {
+	const firstColon = body.indexOf(":");
+	const firstSeparator =
+		firstWhitespace === -1 ? firstColon : firstColon === -1 ? firstWhitespace : Math.min(firstWhitespace, firstColon);
+
+	if (firstSeparator === -1) {
 		return {
 			name: body,
 			args: "",
@@ -78,8 +91,8 @@ function parseBuiltinSlashCommand(text: string): ParsedBuiltinSlashCommand | nul
 	}
 
 	return {
-		name: body.slice(0, firstWhitespace),
-		args: body.slice(firstWhitespace).trim(),
+		name: body.slice(0, firstSeparator),
+		args: body.slice(firstSeparator + 1).trim(),
 		text,
 	};
 }
@@ -105,6 +118,15 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			await runtime.ctx.handlePlanModeCommand(command.args || undefined);
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "loop",
+		description:
+			"Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Esc cancels the current iteration; /loop again to disable.",
+		handle: async (_command, runtime) => {
+			await runtime.ctx.handleLoopCommand();
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -247,6 +269,30 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "todo",
+		description: "View or modify the agent's todo list",
+		subcommands: [
+			{ name: "edit", description: "Open todos in $EDITOR (Markdown round-trip)" },
+			{ name: "copy", description: "Copy todos as Markdown to clipboard" },
+			{ name: "export", description: "Write todos as Markdown to a file (default: TODO.md)", usage: "[<path>]" },
+			{ name: "import", description: "Replace todos from a Markdown file (default: TODO.md)", usage: "[<path>]" },
+			{
+				name: "append",
+				description: "Append a task; phase fuzzy-matched or auto-created",
+				usage: "[<phase>] <task...>",
+			},
+			{ name: "start", description: "Mark task in_progress (fuzzy-matched)", usage: "<task>" },
+			{ name: "done", description: "Mark task/phase/all completed (fuzzy-matched)", usage: "[<task|phase>]" },
+			{ name: "drop", description: "Mark task/phase/all abandoned (fuzzy-matched)", usage: "[<task|phase>]" },
+			{ name: "rm", description: "Remove task/phase/all (fuzzy-matched)", usage: "[<task|phase>]" },
+		],
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			await runtime.ctx.handleTodoCommand(command.args);
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "session",
 		description: "Session management commands",
 		subcommands: [
@@ -306,6 +352,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		description: "Show tools currently visible to the agent",
 		handle: (_command, runtime) => {
 			runtime.ctx.handleToolsCommand();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "context",
+		description: "Show estimated context usage breakdown",
+		handle: (_command, runtime) => {
+			runtime.ctx.handleContextCommand();
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -476,6 +530,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "drop",
+		description: "Delete the current session and start a new one",
+		handle: async (_command, runtime) => {
+			runtime.ctx.editor.setText("");
+			await runtime.ctx.handleDropCommand();
+		},
+	},
+	{
 		name: "compact",
 		description: "Manually compact the session context",
 		inlineHint: "[focus instructions]",
@@ -550,6 +612,23 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "rename",
+		description: "Rename the current session",
+		inlineHint: "<title>",
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const title = command.args.trim();
+			if (!title) {
+				runtime.ctx.showError("Usage: /rename <title>");
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			runtime.ctx.editor.setText("");
+			await runtime.ctx.handleRenameCommand(title);
+		},
+	},
+
+	{
 		name: "move",
 		description: "Move session to a different working directory",
 		inlineHint: "<path>",
@@ -614,13 +693,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 				),
 				marketplacesCacheDir: getMarketplacesCacheDir(),
 				pluginsCacheDir: getPluginsCacheDir(),
-				clearPluginRootsCache: (extraPaths?: readonly string[]) => {
-					const home = os.homedir();
-					invalidateFsCache(path.join(home, ".claude", "plugins", "installed_plugins.json"));
-					invalidateFsCache(path.join(home, getConfigDirName(), "plugins", "installed_plugins.json"));
-					for (const p of extraPaths ?? []) invalidateFsCache(p);
-					clearClaudePluginRootsCache();
-				},
+				clearPluginRootsCache: clearPluginRootsAndCaches,
 			});
 
 			try {
@@ -808,13 +881,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 					),
 					marketplacesCacheDir: getMarketplacesCacheDir(),
 					pluginsCacheDir: getPluginsCacheDir(),
-					clearPluginRootsCache: (extraPaths?: readonly string[]) => {
-						const home = os.homedir();
-						invalidateFsCache(path.join(home, ".claude", "plugins", "installed_plugins.json"));
-						invalidateFsCache(path.join(home, getConfigDirName(), "plugins", "installed_plugins.json"));
-						for (const p of extraPaths ?? []) invalidateFsCache(p);
-						clearClaudePluginRootsCache();
-					},
+					clearPluginRootsCache: clearPluginRootsAndCaches,
 				});
 
 				switch (sub) {
@@ -889,6 +956,37 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "force",
+		description: "Force next turn to use a specific tool",
+		inlineHint: "<tool-name> [prompt]",
+		allowArgs: true,
+		handle: (command, runtime) => {
+			const spaceIdx = command.args.indexOf(" ");
+			const toolName = spaceIdx === -1 ? command.args : command.args.slice(0, spaceIdx);
+			const prompt = spaceIdx === -1 ? "" : command.args.slice(spaceIdx + 1).trim();
+
+			if (!toolName) {
+				runtime.ctx.showError("Usage: /force:<tool-name> [prompt]");
+				runtime.ctx.editor.setText("");
+				return;
+			}
+
+			try {
+				runtime.ctx.session.setForcedToolChoice(toolName);
+				runtime.ctx.showStatus(`Next turn forced to use ${toolName}.`);
+			} catch (error) {
+				runtime.ctx.showError(error instanceof Error ? error.message : String(error));
+				runtime.ctx.editor.setText("");
+				return;
+			}
+
+			runtime.ctx.editor.setText("");
+
+			// If a prompt was provided, pass it through as input
+			if (prompt) return prompt;
+		},
+	},
+	{
 		name: "quit",
 		description: "Quit the application",
 		handle: shutdownHandler,
@@ -916,9 +1014,14 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 /**
  * Execute a builtin slash command when it matches known command syntax.
  *
- * Returns true when a builtin command consumed the input; false otherwise.
+ * Returns `false` when no builtin matched. Returns `true` when a command consumed
+ * the input entirely. Returns a `string` when the command was handled but remaining
+ * text should be sent as a prompt.
  */
-export async function executeBuiltinSlashCommand(text: string, runtime: BuiltinSlashCommandRuntime): Promise<boolean> {
+export async function executeBuiltinSlashCommand(
+	text: string,
+	runtime: BuiltinSlashCommandRuntime,
+): Promise<string | boolean> {
 	const parsed = parseBuiltinSlashCommand(text);
 	if (!parsed) return false;
 
@@ -928,6 +1031,6 @@ export async function executeBuiltinSlashCommand(text: string, runtime: BuiltinS
 		return false;
 	}
 
-	await command.handle(parsed, runtime);
-	return true;
+	const remaining = await command.handle(parsed, runtime);
+	return remaining ?? true;
 }

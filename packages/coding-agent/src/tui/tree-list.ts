@@ -1,8 +1,10 @@
 /**
  * Hierarchical tree list rendering helper.
  */
+
+import { replaceTabs } from "@oh-my-pi/pi-tui";
 import type { Theme } from "../modes/theme/theme";
-import { formatMoreItems, replaceTabs } from "../tools/render-utils";
+import { formatMoreItems } from "../tools/render-utils";
 import type { TreeContext } from "./types";
 import { getTreeBranch, getTreeContinuePrefix } from "./utils";
 

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent, Snowflake } from "@oh-my-pi/pi-utils";
+import { $which, hasFsCode, isEnoent, Snowflake } from "@oh-my-pi/pi-utils";
 import {
 	parseDiffHunks as parseCommitDiffHunks,
 	parseFileDiffs,
@@ -146,6 +146,10 @@ const NO_OPTIONAL_LOCKS = "--no-optional-locks";
 const HEAD_REF_PREFIX = "ref:";
 const LOCAL_BRANCH_PREFIX = "refs/heads/";
 const DEFAULT_BRANCH_REFS = ["refs/remotes/origin/HEAD", "refs/remotes/upstream/HEAD"] as const;
+const SHORT_LIVED_GIT_CONFIG: readonly (readonly [key: string, value: string])[] = [
+	["core.fsmonitor", "false"],
+	["core.untrackedCache", "false"],
+];
 
 interface CommandOptions {
 	readonly env?: Record<string, string | undefined>;
@@ -162,7 +166,7 @@ function normalizeStdin(input: CommandOptions["stdin"]): "ignore" | Uint8Array {
 }
 
 function ensureAvailable(): void {
-	if (!Bun.which("git")) {
+	if (!$which("git")) {
 		throw new Error("git is not installed.");
 	}
 }
@@ -183,10 +187,10 @@ async function runCommand(
 	args: readonly string[],
 	options: CommandOptions = {},
 ): Promise<GitCommandResult> {
-	const commandArgs = options.readOnly ? withNoOptionalLocks(args) : [...args];
+	const commandArgs = withShortLivedGitConfig(options.readOnly ? withNoOptionalLocks(args) : [...args]);
 	const child = Bun.spawn(["git", ...commandArgs], {
 		cwd,
-		env: options.env ? { ...process.env, ...options.env } : undefined,
+		env: options.env ? { ...process.env, GIT_OPTIONAL_LOCKS: "0", ...options.env } : undefined,
 		signal: options.signal,
 		stdin: normalizeStdin(options.stdin),
 		stdout: "pipe",
@@ -210,6 +214,25 @@ async function runCommand(
 function withNoOptionalLocks(args: readonly string[]): string[] {
 	if (args.includes(NO_OPTIONAL_LOCKS)) return [...args];
 	return [NO_OPTIONAL_LOCKS, ...args];
+}
+
+function withShortLivedGitConfig(args: readonly string[]): string[] {
+	const prefix: string[] = [];
+	for (const [key, value] of SHORT_LIVED_GIT_CONFIG) {
+		if (hasGitConfig(args, key, value)) continue;
+		prefix.push("-c", `${key}=${value}`);
+	}
+	return [...prefix, ...args];
+}
+
+function hasGitConfig(args: readonly string[], key: string, value: string): boolean {
+	const expected = `${key}=${value}`;
+	for (let index = 0; index < args.length - 1; index += 1) {
+		if (args[index] === "-c" && args[index + 1] === expected) {
+			return true;
+		}
+	}
+	return false;
 }
 
 async function runChecked(
@@ -299,6 +322,10 @@ async function writeTempPatch(content: string): Promise<string> {
 
 type EntryType = "directory" | "file";
 
+function isOptionalGitMetadataUnavailable(err: unknown): boolean {
+	return isEnoent(err) || hasFsCode(err, "ENFILE") || hasFsCode(err, "EMFILE");
+}
+
 function getEntryTypeSync(gitEntryPath: string): EntryType | null {
 	try {
 		const stat = fs.statSync(gitEntryPath);
@@ -306,7 +333,7 @@ function getEntryTypeSync(gitEntryPath: string): EntryType | null {
 		if (stat.isFile()) return "file";
 		return null;
 	} catch (err) {
-		if (isEnoent(err)) return null;
+		if (isOptionalGitMetadataUnavailable(err)) return null;
 		throw err;
 	}
 }
@@ -318,7 +345,7 @@ async function getEntryType(gitEntryPath: string): Promise<EntryType | null> {
 		if (stat.isFile()) return "file";
 		return null;
 	} catch (err) {
-		if (isEnoent(err)) return null;
+		if (isOptionalGitMetadataUnavailable(err)) return null;
 		throw err;
 	}
 }
@@ -327,7 +354,7 @@ function readOptionalTextSync(filePath: string): string | null {
 	try {
 		return fs.readFileSync(filePath, "utf8");
 	} catch (err) {
-		if (isEnoent(err)) return null;
+		if (isOptionalGitMetadataUnavailable(err)) return null;
 		throw err;
 	}
 }
@@ -336,7 +363,7 @@ async function readOptionalText(filePath: string): Promise<string | null> {
 	try {
 		return await Bun.file(filePath).text();
 	} catch (err) {
-		if (isEnoent(err)) return null;
+		if (isOptionalGitMetadataUnavailable(err)) return null;
 		throw err;
 	}
 }
@@ -1111,6 +1138,29 @@ export const cherryPick = Object.assign(
 );
 
 // ════════════════════════════════════════════════════════════════════════════
+// API: stash
+// ════════════════════════════════════════════════════════════════════════════
+
+export const stash = {
+	/** Stash working tree + index changes. Returns true when git created a new stash entry. */
+	async push(cwd: string, message?: string): Promise<boolean> {
+		ensureAvailable();
+		const previousStash = await ref.resolve(cwd, "refs/stash");
+		const args = ["stash", "push", "--include-untracked"];
+		if (message) args.push("-m", message);
+		await runEffect(cwd, args);
+		const nextStash = await ref.resolve(cwd, "refs/stash");
+		return nextStash !== null && nextStash !== previousStash;
+	},
+	/** Pop the most recent stash entry, optionally restoring its staged state. */
+	async pop(cwd: string, options?: { index?: boolean }): Promise<void> {
+		const args = ["stash", "pop"];
+		if (options?.index) args.push("--index");
+		await runEffect(cwd, args);
+	},
+};
+
+// ════════════════════════════════════════════════════════════════════════════
 // API: clone, restore, clean
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -1311,13 +1361,13 @@ function formatGhFailure(args: readonly string[], stdout: string, stderr: string
 export const github = {
 	/** Check if `gh` CLI is installed. */
 	available(): boolean {
-		return Boolean(Bun.which("gh"));
+		return Boolean($which("gh"));
 	},
 
 	/** Run a raw `gh` CLI command. Does not throw on non-zero exit. */
 	async run(cwd: string, args: string[], signal?: AbortSignal, options?: GhCommandOptions): Promise<GhCommandResult> {
 		throwIfAborted(signal);
-		if (!Bun.which("gh")) {
+		if (!$which("gh")) {
 			throw new ToolError("GitHub CLI (gh) is not installed. Install it from https://cli.github.com/.");
 		}
 		try {

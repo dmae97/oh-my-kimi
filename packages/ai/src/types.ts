@@ -23,6 +23,7 @@ import type {
 import type { GoogleOptions } from "./providers/google";
 import type { GoogleGeminiCliOptions } from "./providers/google-gemini-cli";
 import type { GoogleVertexOptions } from "./providers/google-vertex";
+import type { OllamaChatOptions } from "./providers/ollama";
 import type { OpenAICodexResponsesOptions } from "./providers/openai-codex-responses";
 import type { OpenAICompletionsOptions } from "./providers/openai-completions";
 import type { OpenAIResponsesOptions } from "./providers/openai-responses";
@@ -40,6 +41,7 @@ export type KnownApi =
 	| "google-generative-ai"
 	| "google-gemini-cli"
 	| "google-vertex"
+	| "ollama-chat"
 	| "cursor-agent";
 export type Api = KnownApi | (string & {});
 export interface ApiOptionsMap {
@@ -52,6 +54,7 @@ export interface ApiOptionsMap {
 	"google-generative-ai": GoogleOptions;
 	"google-gemini-cli": GoogleGeminiCliOptions;
 	"google-vertex": GoogleVertexOptions;
+	"ollama-chat": OllamaChatOptions;
 	"cursor-agent": CursorOptions;
 }
 // Compile-time exhaustiveness check - this will fail if ApiOptionsMap doesn't have all KnownApi keys
@@ -98,8 +101,10 @@ export type KnownProvider =
 	| "minimax-code"
 	| "minimax-code-cn"
 	| "github-copilot"
+	| "fireworks"
 	| "gitlab-duo"
 	| "cursor"
+	| "deepseek"
 	| "xai"
 	| "groq"
 	| "cerebras"
@@ -119,6 +124,7 @@ export type KnownProvider =
 	| "nvidia"
 	| "nanogpt"
 	| "ollama"
+	| "ollama-cloud"
 	| "qianfan"
 	| "qwen-portal"
 	| "together"
@@ -151,7 +157,13 @@ export type CacheRetention = "none" | "short" | "long";
 /** OpenAI service tier for processing priority. Only applies to OpenAI-compatible APIs. */
 export type ServiceTier = "auto" | "default" | "flex" | "scale" | "priority";
 
-export function isSpecialServiceTier(serviceTier?: ServiceTier | null): serviceTier is "flex" | "scale" | "priority" {
+export function shouldSendServiceTier(
+	serviceTier?: ServiceTier | null,
+	provider?: Provider,
+): serviceTier is "flex" | "scale" | "priority" {
+	if (provider !== "openai" && provider !== "openai-codex") {
+		return false;
+	}
 	return serviceTier === "flex" || serviceTier === "scale" || serviceTier === "priority";
 }
 
@@ -169,10 +181,6 @@ export interface StreamOptions {
 	maxTokens?: number;
 	signal?: AbortSignal;
 	apiKey?: string;
-	/**
-	 * Prompt cache retention preference. Providers map this to their supported values.
-	 * Default: "short".
-	 */
 	cacheRetention?: CacheRetention;
 	/**
 	 * Additional headers to include in provider requests.
@@ -213,6 +221,11 @@ export interface StreamOptions {
 	 * Return undefined to keep the payload unchanged.
 	 */
 	onPayload?: (payload: unknown, model?: Model<Api>) => unknown | undefined | Promise<unknown | undefined>;
+	/**
+	 * Optional override for the first streamed event watchdog in milliseconds.
+	 * Set to 0 to disable the first-event watchdog for this request.
+	 */
+	streamFirstEventTimeoutMs?: number;
 	/** Cursor exec/MCP tool handlers (cursor-agent only). */
 	execHandlers?: CursorExecHandlers;
 }
@@ -261,6 +274,7 @@ export interface ThinkingContent {
 	type: "thinking";
 	thinking: string;
 	thinkingSignature?: string; // e.g., for OpenAI responses, the reasoning item ID
+	itemId?: string; // item.id from output_item.added, used to match output_item.done
 }
 
 export interface RedactedThinkingContent {
@@ -281,15 +295,54 @@ export interface ToolCall {
 	arguments: Record<string, any>;
 	thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
 	intent?: string; // Harness-level intent metadata extracted from traced tool arguments
+	/**
+	 * Original wire-level name when the tool was invoked via OpenAI's custom-tool
+	 * mechanism (e.g., `apply_patch`). Set by `openai-responses` on receive so
+	 * the history-replay path can re-emit the call as `custom_tool_call` with
+	 * its paired tool-result as `custom_tool_call_output`. Absent for regular
+	 * JSON function tools.
+	 */
+	customWireName?: string;
 }
 
 export interface Usage {
+	/** Non-cached input tokens (matches the bucket the provider bills as new input). */
 	input: number;
+	/** Total output tokens for the turn, including thinking, assistant text, and tool-call argument tokens. */
 	output: number;
+	/** Tokens read from the prompt cache. */
 	cacheRead: number;
+	/** Tokens written to the prompt cache (cache creation). */
 	cacheWrite: number;
+	/** Sum of input + output + cacheRead + cacheWrite. */
 	totalTokens: number;
+	/** Copilot premium-request counter, when applicable. */
 	premiumRequests?: number;
+	/**
+	 * Reasoning/thinking tokens included in `output`, when the provider reports them
+	 * (OpenAI `output_tokens_details.reasoning_tokens`, Google `thoughtsTokenCount`).
+	 * Always a subset of `output` — non-reasoning output is `output - reasoningTokens`.
+	 *
+	 * Providers that don't expose this leave it undefined rather than guessing;
+	 * `undefined` means unknown, NOT zero.
+	 */
+	reasoningTokens?: number;
+	/**
+	 * Cache-write TTL breakdown (Anthropic only). When set, the components sum to
+	 * `cacheWrite`. Absent providers do not populate this.
+	 */
+	cttl?: {
+		ephemeral5m?: number;
+		ephemeral1h?: number;
+	};
+	/**
+	 * Server-side tool invocations made during this turn (Anthropic web_search /
+	 * web_fetch, OpenAI built-in tools when reported). Counts requests, not tokens.
+	 */
+	server?: {
+		webSearch?: number;
+		webFetch?: number;
+	};
 	cost: {
 		input: number;
 		output: number;
@@ -407,6 +460,23 @@ export interface Tool<TParameters extends TSchema = TSchema> {
 	parameters: TParameters;
 	/** If true, tool is strictly typed and validated against the parameters schema before execution */
 	strict?: boolean;
+	/**
+	 * Optional grammar constraint for OpenAI custom-tool emission.
+	 * When set, providers that support grammar-constrained tools (currently only
+	 * `openai-responses` against models with the right capability flag) may emit
+	 * this tool as `{type: "custom", format: {type: "grammar", …}}` instead of a
+	 * JSON function tool. Other providers ignore the field.
+	 */
+	customFormat?: { syntax: "lark" | "regex"; definition: string };
+	/**
+	 * Optional wire-level name used when this tool is emitted as a custom tool
+	 * (e.g. OpenAI's `{type: "custom"}` shape). Models trained on specific tool
+	 * names — like GPT-5 on `apply_patch` — need to see that exact name on the
+	 * wire, but it may differ from the harness-internal `name`. The agent-loop
+	 * dispatcher matches both `name` and `customWireName` so returned tool
+	 * calls route correctly. Absent for regular JSON function tools.
+	 */
+	customWireName?: string;
 }
 
 export interface Context {
@@ -416,7 +486,7 @@ export interface Context {
 }
 
 export type AssistantMessageEvent =
-	| { type: "start"; partial: AssistantMessage }
+	| { type: "start"; contentIndex?: undefined; partial: AssistantMessage }
 	| { type: "text_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "text_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "text_end"; contentIndex: number; content: string; partial: AssistantMessage }
@@ -426,8 +496,18 @@ export type AssistantMessageEvent =
 	| { type: "toolcall_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }
-	| { type: "done"; reason: Extract<StopReason, "stop" | "length" | "toolUse">; message: AssistantMessage }
-	| { type: "error"; reason: Extract<StopReason, "aborted" | "error">; error: AssistantMessage };
+	| {
+			type: "done";
+			contentIndex?: undefined;
+			reason: Extract<StopReason, "stop" | "length" | "toolUse">;
+			message: AssistantMessage;
+	  }
+	| {
+			type: "error";
+			contentIndex?: undefined;
+			reason: Extract<StopReason, "aborted" | "error">;
+			error: AssistantMessage;
+	  };
 
 /**
  * Compatibility settings for openai-completions API.
@@ -472,6 +552,8 @@ export interface OpenAICompat {
 	extraBody?: Record<string, unknown>;
 	/** Whether the provider supports the `strict` field in tool definitions. Default: auto-detected per provider/baseUrl (conservative for unknown providers). */
 	supportsStrictMode?: boolean;
+	/** Whether tool schemas must be sent either all strict or all non-strict. Undefined keeps the existing per-tool mixed behavior. */
+	toolStrictMode?: "all_strict" | "none";
 }
 
 /**
@@ -528,4 +610,19 @@ export interface Model<TApi extends Api = any> {
 	thinking?: ThinkingConfig;
 	/** Compatibility overrides for openai-completions API. If not set, auto-detected from baseUrl. */
 	compat?: TApi extends "openai-completions" ? OpenAICompat : never;
+	/**
+	 * Which shape to use when exposing the Codex `apply_patch` tool to this model.
+	 * Generated catalog policy sets `"freeform"` for first-party GPT-5 Responses
+	 * models that support OpenAI custom tools with a Lark grammar. The freeform
+	 * variant sends a raw patch string with no JSON envelope.
+	 * - `"function"` or undefined: JSON function-tool with `{input: string}` (spec §1.2).
+	 */
+	applyPatchToolType?: "freeform" | "function";
+	/**
+	 * Force OAuth-style request shaping for providers whose API key prefix doesn't
+	 * match an OAuth token (e.g. routing Anthropic traffic through a proxy that
+	 * expects Claude Code framing). When true, the streaming layer sets
+	 * `options.isOAuth = true` for the underlying provider call.
+	 */
+	isOAuth?: boolean;
 }

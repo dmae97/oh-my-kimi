@@ -1,9 +1,8 @@
 import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
-import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
+import { getProjectDir, logger, prompt } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../config/model-registry";
-import { renderPromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import { discoverAuthStorage } from "../sdk";
 import { loadProjectContextFiles } from "../system-prompt";
@@ -26,7 +25,7 @@ import type { CommitCommandArgs, ConventionalAnalysis } from "./types";
 
 const SUMMARY_MAX_CHARS = 72;
 const RECENT_COMMITS_COUNT = 8;
-const TYPES_DESCRIPTION = renderPromptTemplate(typesDescriptionPrompt);
+const TYPES_DESCRIPTION = prompt.render(typesDescriptionPrompt);
 
 /**
  * Execute the omp commit pipeline for staged changes.
@@ -236,7 +235,7 @@ async function generateSummaryWithRetry(input: {
 }
 
 function buildRetryContext(base: string | undefined, errors: string[]): string {
-	return renderPromptTemplate(summaryRetryPrompt, {
+	return prompt.render(summaryRetryPrompt, {
 		base_context: base,
 		errors: errors.join("; "),
 	});

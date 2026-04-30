@@ -292,7 +292,7 @@
             parts.push(msg.role);
             if (msg.content) parts.push(extractContent(msg.content));
             if (msg.role === 'bashExecution' && msg.command) parts.push(msg.command);
-            if (msg.role === 'pythonExecution' && msg.code) parts.push(msg.code);
+            if (msg.role === 'jsExecution' && msg.code) parts.push(msg.code);
             break;
           }
           case 'custom_message':
@@ -480,9 +480,9 @@
               const cmd = truncate(normalize(msg.command || ''));
               return labelHtml + `<span class="tree-role-tool">[bash]:</span> ${escapeHtml(cmd)}`;
             }
-            if (msg.role === 'pythonExecution') {
+            if (msg.role === 'jsExecution') {
               const code = truncate(normalize(msg.code || ''));
-              return labelHtml + `<span class="tree-role-tool">[python]:</span> ${escapeHtml(code)}`;
+              return labelHtml + `<span class="tree-role-tool">[js]:</span> ${escapeHtml(code)}`;
             }
             return labelHtml + `<span class="tree-muted">[${msg.role}]</span>`;
           }
@@ -702,122 +702,626 @@
         return out;
       }
 
+      // ============================================================
+      // TOOL CALL RENDERING
+      // ============================================================
+
+      // Shared helpers for per-tool renderers.
+      function toolHead(label, pathHtml, badges) {
+        let html = '<div class="tool-header"><span class="tool-name">' + escapeHtml(label) + '</span>';
+        if (pathHtml) html += ' <span class="tool-path">' + pathHtml + '</span>';
+        if (badges) {
+          for (const badge of badges) {
+            if (badge != null && badge !== '') {
+              html += ' <span class="tool-badge">' + escapeHtml(String(badge)) + '</span>';
+            }
+          }
+        }
+        html += '</div>';
+        return html;
+      }
+
+      function invalidArgHtml() {
+        return '<span class="tool-error">[invalid arg]</span>';
+      }
+
+      function pathDisplay(filePath, offset, limit) {
+        if (filePath == null) return invalidArgHtml();
+        let html = escapeHtml(shortenPath(filePath || ''));
+        if (offset !== undefined || limit !== undefined) {
+          const start = offset == null ? 1 : offset;
+          const end = limit !== undefined ? start + limit - 1 : '';
+          html += '<span class="line-numbers">:' + start + (end ? '-' + end : '') + '</span>';
+        }
+        return html;
+      }
+
+      function codeBlock(code, lang) {
+        if (code == null || code === '') return '';
+        const text = String(code);
+        let highlighted;
+        try {
+          highlighted = lang ? hljs.highlight(text, { language: lang }).value : escapeHtml(text);
+        } catch {
+          highlighted = escapeHtml(text);
+        }
+        return '<div class="tool-output"><pre><code class="hljs">' + highlighted + '</code></pre></div>';
+      }
+
+      // Per-tool renderers. Each accepts (name, args, result, ctx) and returns the inner HTML.
+      function renderBash(name, args, result, ctx) {
+        const command = str(args.command);
+        const cwd = str(args.cwd);
+        const env = args.env && typeof args.env === 'object' ? args.env : null;
+        const cmdDisplay = command === null ? invalidArgHtml() : escapeHtml(command || '...');
+        let prefix = '';
+        if (env) {
+          for (const [k, v] of Object.entries(env)) {
+            prefix += escapeHtml(k) + '=' + escapeHtml(String(v)) + ' ';
+          }
+        }
+        let html = '<div class="tool-command">$ ' + prefix + cmdDisplay + '</div>';
+        const badges = [];
+        if (cwd) badges.push('cwd=' + shortenPath(cwd));
+        if (args.timeout) badges.push('timeout=' + args.timeout + 's');
+        if (args.pty) badges.push('pty');
+        if (args.head) badges.push('head=' + args.head);
+        if (args.tail) badges.push('tail=' + args.tail);
+        if (badges.length) {
+          html += '<div class="tool-meta">' + badges.map(b => '<span class="tool-badge">' + escapeHtml(b) + '</span>').join(' ') + '</div>';
+        }
+        if (result) {
+          html += ctx.renderResultImages();
+          const output = ctx.getResultText().trim();
+          if (output) html += formatExpandableOutput(output, 5);
+        }
+        return html;
+      }
+
+      function renderJsLike(name, args, result, ctx) {
+        const lang = name === 'python' ? 'python' : 'javascript';
+        const badges = [];
+        if (args.cwd) badges.push('cwd=' + shortenPath(String(args.cwd)));
+        if (args.timeout) badges.push('timeout=' + args.timeout + 's');
+        if (args.reset) badges.push('reset');
+        let html = toolHead(name, '', badges);
+        const cells = Array.isArray(args.cells) ? args.cells : null;
+        if (!cells) {
+          html += '<div class="tool-error">[missing cells]</div>';
+        } else {
+          for (const cell of cells) {
+            html += '<div class="tool-cell">';
+            if (cell && cell.title) html += '<div class="tool-cell-title">' + escapeHtml(String(cell.title)) + '</div>';
+            const code = cell && typeof cell.code === 'string' ? cell.code : '';
+            html += codeBlock(code, lang);
+            html += '</div>';
+          }
+        }
+        if (result) {
+          html += ctx.renderResultImages();
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 10);
+        }
+        return html;
+      }
+
+      function renderRead(name, args, result, ctx) {
+        const filePath = str(args.file_path == null ? args.path : args.file_path);
+        let pathHtml = pathDisplay(filePath, args.offset, args.limit);
+        if (args.sel) pathHtml += '<span class="line-numbers">:' + escapeHtml(String(args.sel)) + '</span>';
+        let html = toolHead('read', pathHtml);
+        if (result) {
+          html += ctx.renderResultImages();
+          const output = ctx.getResultText();
+          const lang = filePath ? getLanguageFromPath(filePath) : null;
+          if (output) html += formatExpandableOutput(output, 10, lang);
+        }
+        return html;
+      }
+
+      function renderWrite(name, args, result, ctx) {
+        const filePath = str(args.file_path == null ? args.path : args.file_path);
+        const content = str(args.content);
+        const pathHtml = filePath === null ? invalidArgHtml() : escapeHtml(shortenPath(filePath || ''));
+        const lineCount = (content != null && content !== '') ? content.split('\n').length : 0;
+        const badges = lineCount > 10 ? ['(' + lineCount + ' lines)'] : null;
+        let html = toolHead('write', pathHtml, badges);
+        if (content === null) {
+          html += '<div class="tool-error">[invalid content arg - expected string]</div>';
+        } else if (content) {
+          const lang = filePath ? getLanguageFromPath(filePath) : null;
+          html += formatExpandableOutput(content, 10, lang);
+        }
+        if (result) {
+          const output = ctx.getResultText().trim();
+          if (output) html += '<div class="tool-output"><div>' + escapeHtml(output) + '</div></div>';
+        }
+        return html;
+      }
+
+      function renderEdit(name, args, result, ctx) {
+        const filePath = str(args.file_path == null ? args.path : args.file_path);
+        const pathHtml = filePath === null ? invalidArgHtml() : escapeHtml(shortenPath(filePath || ''));
+        let html = toolHead('edit', pathHtml);
+        if (Array.isArray(args.edits)) {
+          html += '<div class="tool-args">';
+          for (const e of args.edits) {
+            const op = e && typeof e.op === 'string' ? e.op : '?';
+            const sel = e && typeof e.sel === 'string' ? e.sel : '?';
+            html += '<div class="tool-arg"><span class="tool-arg-key">' + escapeHtml(op) + '</span> <span class="tool-arg-val">' + escapeHtml(sel) + '</span></div>';
+          }
+          html += '</div>';
+        }
+        if (result?.details?.diff) {
+          const diffLines = String(result.details.diff).split('\n');
+          html += '<div class="tool-diff">';
+          for (const line of diffLines) {
+            const cls = line.match(/^\+/) ? 'diff-added' : line.match(/^-/) ? 'diff-removed' : 'diff-context';
+            html += '<div class="' + cls + '">' + escapeHtml(replaceTabs(line)) + '</div>';
+          }
+          html += '</div>';
+        } else if (result) {
+          const output = ctx.getResultText().trim();
+          if (output) html += '<div class="tool-output"><pre>' + escapeHtml(output) + '</pre></div>';
+        }
+        return html;
+      }
+
+      function renderAstEdit(name, args, result, ctx) {
+        const lang = args.lang || null;
+        const pathHtml = args.path ? escapeHtml(shortenPath(String(args.path))) : '';
+        const badges = [];
+        if (lang) badges.push(lang);
+        if (args.glob) badges.push('glob=' + args.glob);
+        if (args.sel) badges.push('sel=' + args.sel);
+        let html = toolHead('ast_edit', pathHtml, badges);
+        if (Array.isArray(args.ops)) {
+          for (const op of args.ops) {
+            html += '<div class="tool-cell">';
+            html += '<div class="tool-cell-title">pattern</div>';
+            html += codeBlock(String(op?.pat == null ? '' : op.pat), lang);
+            html += '<div class="tool-cell-title">replacement</div>';
+            html += codeBlock(String(op?.out == null ? '' : op.out), lang);
+            html += '</div>';
+          }
+        }
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 10);
+        }
+        return html;
+      }
+
+      function renderAstGrep(name, args, result, ctx) {
+        const lang = args.lang || null;
+        const pathHtml = args.path ? escapeHtml(shortenPath(String(args.path))) : '';
+        const badges = [];
+        if (lang) badges.push(lang);
+        if (args.glob) badges.push('glob=' + args.glob);
+        if (args.sel) badges.push('sel=' + args.sel);
+        let html = toolHead('ast_grep', pathHtml, badges);
+        if (Array.isArray(args.pat)) {
+          for (const pat of args.pat) {
+            html += '<div class="tool-cell">' + codeBlock(String(pat == null ? '' : pat), lang) + '</div>';
+          }
+        }
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 10);
+        }
+        return html;
+      }
+
+      function renderGrep(name, args, result, ctx) {
+        const pattern = str(args.pattern);
+        const pathHtml = args.path ? escapeHtml(shortenPath(String(args.path))) : escapeHtml('.');
+        const patHtml = pattern === null ? invalidArgHtml() : escapeHtml(pattern);
+        let head = '<span class="tool-name">grep</span> <span class="tool-pattern">/' + patHtml + '/</span>';
+        head += ' <span class="tool-arg-key">in</span> <span class="tool-path">' + pathHtml + '</span>';
+        const badges = [];
+        if (args.glob) badges.push('glob=' + args.glob);
+        if (args.type) badges.push('type=' + args.type);
+        if (args.i) badges.push('i');
+        if (args.multiline) badges.push('multiline');
+        for (const b of badges) head += ' <span class="tool-badge">' + escapeHtml(b) + '</span>';
+        let html = '<div class="tool-header">' + head + '</div>';
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 10);
+        }
+        return html;
+      }
+
+      function renderFind(name, args, result, ctx) {
+        const pattern = str(args.pattern);
+        const patHtml = pattern === null ? invalidArgHtml() : escapeHtml(pattern);
+        const badges = args.limit ? ['limit=' + args.limit] : null;
+        let html = toolHead('find', '<span class="tool-pattern">' + patHtml + '</span>', badges);
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 10);
+        }
+        return html;
+      }
+
+      function renderLsp(name, args, result, ctx) {
+        const action = str(args.action) || '?';
+        let head = '<span class="tool-name">lsp</span> <span class="tool-badge">' + escapeHtml(action) + '</span>';
+        if (args.file && args.file !== '*') {
+          head += ' <span class="tool-path">' + escapeHtml(shortenPath(String(args.file))) + '</span>';
+        } else if (args.file === '*') {
+          head += ' <span class="tool-badge">workspace</span>';
+        }
+        if (args.line) head += '<span class="line-numbers">:' + args.line + '</span>';
+        if (args.symbol) head += ' <span class="tool-arg-val">' + escapeHtml(String(args.symbol)) + '</span>';
+        if (args.query) head += ' <span class="tool-arg-key">query=</span><span class="tool-arg-val">' + escapeHtml(String(args.query)) + '</span>';
+        if (args.new_name) head += ' <span class="tool-arg-key">→</span> <span class="tool-arg-val">' + escapeHtml(String(args.new_name)) + '</span>';
+        let html = '<div class="tool-header">' + head + '</div>';
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 12);
+        }
+        return html;
+      }
+
+      function renderTodoWrite(name, args, result, ctx) {
+        let html = toolHead('todo_write');
+        const ops = Array.isArray(args.ops) ? args.ops : null;
+        if (ops) {
+          html += '<div class="tool-args">';
+          for (const op of ops) {
+            const t = op && op.op ? op.op : '?';
+            let line = '<span class="tool-arg-key">' + escapeHtml(t) + '</span>';
+            if (op?.id) line += ' <span class="tool-arg-val">' + escapeHtml(String(op.id)) + '</span>';
+            if (op?.status) line += ' <span class="tool-badge">' + escapeHtml(String(op.status)) + '</span>';
+            if (op?.content) line += ' ' + escapeHtml(truncate(String(op.content), 80));
+            if (op?.task && typeof op.task === 'object' && op.task.content) line += ' ' + escapeHtml(truncate(String(op.task.content), 80));
+            html += '<div class="tool-arg">' + line + '</div>';
+          }
+          html += '</div>';
+        }
+        const phases = result?.details?.phases;
+        if (Array.isArray(phases)) {
+          html += '<div class="todo-tree">';
+          for (const phase of phases) {
+            html += '<div class="todo-phase">' + escapeHtml(String(phase.name || '')) + '</div>';
+            if (Array.isArray(phase.tasks)) {
+              for (const task of phase.tasks) {
+                const status = task.status || 'pending';
+                const icon = status === 'completed' ? '✓' : status === 'in_progress' ? '→' : status === 'abandoned' ? '✕' : '○';
+                html += '<div class="todo-task todo-' + status + '"><span class="todo-icon">' + icon + '</span> ' + escapeHtml(String(task.content || '')) + '</div>';
+              }
+            }
+          }
+          html += '</div>';
+        } else if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 8);
+        }
+        return html;
+      }
+
+      function renderTask(name, args, result, ctx) {
+        const agent = str(args.agent) || '?';
+        const tasks = Array.isArray(args.tasks) ? args.tasks : [];
+        const badges = ['agent=' + agent, tasks.length + ' subtask' + (tasks.length === 1 ? '' : 's')];
+        if (args.isolated) badges.push('isolated');
+        let html = toolHead('task', '', badges);
+        if (tasks.length) {
+          html += '<div class="tool-args">';
+          for (const t of tasks) {
+            const id = t?.id ? escapeHtml(String(t.id)) : '?';
+            const desc = t?.description ? escapeHtml(String(t.description)) : '';
+            html += '<div class="tool-arg"><span class="tool-arg-key">' + id + '</span> ' + desc + '</div>';
+          }
+          html += '</div>';
+        }
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 12);
+        }
+        return html;
+      }
+
+      function renderWebSearch(name, args, result, ctx) {
+        const query = str(args.query);
+        const queryHtml = query === null ? invalidArgHtml() : escapeHtml(query);
+        const badges = [];
+        if (args.recency) badges.push('recency=' + args.recency);
+        if (args.limit) badges.push('limit=' + args.limit);
+        let html = toolHead('web_search', '<span class="tool-pattern">' + queryHtml + '</span>', badges);
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 12, 'markdown');
+        }
+        return html;
+      }
+
+      function renderFetch(name, args, result, ctx) {
+        const url = str(args.url) || '';
+        const badges = args.method ? [String(args.method)] : null;
+        let html = toolHead('fetch', '<span class="tool-path">' + escapeHtml(url) + '</span>', badges);
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 10);
+        }
+        return html;
+      }
+
+      function renderDebug(name, args, result, ctx) {
+        const action = str(args.action) || '?';
+        const badges = [];
+        if (args.adapter) badges.push(args.adapter);
+        if (args.program) badges.push('program=' + shortenPath(String(args.program)));
+        if (args.file) badges.push('file=' + shortenPath(String(args.file)));
+        if (args.line) badges.push('line=' + args.line);
+        let head = '<span class="tool-name">debug</span> <span class="tool-badge">' + escapeHtml(action) + '</span>';
+        for (const b of badges) head += ' <span class="tool-badge">' + escapeHtml(String(b)) + '</span>';
+        let html = '<div class="tool-header">' + head + '</div>';
+        if (args.expression) html += codeBlock(String(args.expression));
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 10);
+        }
+        return html;
+      }
+
+      function renderPuppeteer(name, args, result, ctx) {
+        const action = str(args.action) || '?';
+        const badges = [];
+        if (args.url) badges.push(String(args.url));
+        if (args.selector) badges.push('selector=' + args.selector);
+        if (args.element_id != null) badges.push('id=' + args.element_id);
+        let head = '<span class="tool-name">puppeteer</span> <span class="tool-badge">' + escapeHtml(action) + '</span>';
+        for (const b of badges) head += ' <span class="tool-badge">' + escapeHtml(String(b)) + '</span>';
+        let html = '<div class="tool-header">' + head + '</div>';
+        if (args.script) html += codeBlock(String(args.script), 'javascript');
+        if (args.text) html += '<div class="tool-output"><div>' + escapeHtml(String(args.text)) + '</div></div>';
+        if (result) {
+          html += ctx.renderResultImages();
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 10);
+        }
+        return html;
+      }
+
+      function renderInspectImage(name, args, result, ctx) {
+        const p = str(args.path == null ? args.url : args.path) || '';
+        let html = toolHead('inspect_image', escapeHtml(shortenPath(p)));
+        if (result) {
+          html += ctx.renderResultImages();
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 8);
+        }
+        return html;
+      }
+
+      function renderGenerateImage(name, args, result, ctx) {
+        const subject = str(args.subject) || '';
+        const badges = args.aspect_ratio ? [String(args.aspect_ratio)] : null;
+        let html = toolHead('generate_image', '', badges);
+        if (subject) html += '<div class="tool-output"><div>' + escapeHtml(subject) + '</div></div>';
+        if (result) {
+          html += ctx.renderResultImages();
+        }
+        return html;
+      }
+
+      function renderAsk(name, args, result, ctx) {
+        let html = toolHead('ask');
+        const questions = Array.isArray(args.questions) ? args.questions : null;
+        if (questions) {
+          html += '<div class="tool-args">';
+          for (const q of questions) {
+            html += '<div class="tool-arg"><span class="tool-arg-key">Q:</span> ' + escapeHtml(String(q?.question || '')) + '</div>';
+            if (Array.isArray(q?.options)) {
+              for (const opt of q.options) {
+                html += '<div class="tool-arg"><span class="tool-arg-key">  -</span> ' + escapeHtml(String(opt?.label || '')) + '</div>';
+              }
+            }
+          }
+          html += '</div>';
+        }
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 8);
+        }
+        return html;
+      }
+
+      function renderExitPlanMode(name, args, result, ctx) {
+        const badges = args.title ? [String(args.title)] : null;
+        let html = toolHead('exit_plan_mode', '', badges);
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 8);
+        }
+        return html;
+      }
+
+      function renderResolve(name, args, result, ctx) {
+        const action = str(args.action) || '?';
+        let html = toolHead('resolve', '', [action]);
+        if (args.reason) html += '<div class="tool-output"><div>' + escapeHtml(String(args.reason)) + '</div></div>';
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 6);
+        }
+        return html;
+      }
+
+      function renderGh(name, args, result, ctx) {
+        const badges = [];
+        if (args.repo) badges.push(String(args.repo));
+        if (args.issue) badges.push('#' + args.issue);
+        if (args.pr) badges.push('PR ' + args.pr);
+        if (args.branch) badges.push('branch=' + args.branch);
+        if (args.query) badges.push('query=' + args.query);
+        if (args.run) badges.push('run=' + args.run);
+        let html = toolHead(name, '', badges);
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 12, 'markdown');
+        }
+        return html;
+      }
+
+      function renderMermaid(name, args, result, ctx) {
+        let html = toolHead('render_mermaid');
+        const code = args.code || args.source;
+        if (code) html += codeBlock(String(code), 'mermaid');
+        if (result) {
+          html += ctx.renderResultImages();
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 6);
+        }
+        return html;
+      }
+
+      function renderYield(name, args, result, ctx) {
+        let html = toolHead('yield');
+        if (args.data !== undefined) {
+          html += '<div class="tool-output"><pre>' + escapeHtml(JSON.stringify(args.data, null, 2)) + '</pre></div>';
+        }
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 6);
+        }
+        return html;
+      }
+
+      function renderReportFinding(name, args, result, ctx) {
+        const badges = [];
+        if (args.priority) badges.push('priority=' + args.priority);
+        if (args.confidence != null) badges.push('confidence=' + args.confidence);
+        if (args.file_path) badges.push(shortenPath(String(args.file_path)));
+        let html = toolHead('report_finding', args.title ? escapeHtml(String(args.title)) : '', badges);
+        if (args.body) html += '<div class="tool-output"><div>' + escapeHtml(String(args.body)) + '</div></div>';
+        return html;
+      }
+
+      function renderReportToolIssue(name, args, result, ctx) {
+        const pathHtml = args.tool ? '<span class="tool-badge">' + escapeHtml(String(args.tool)) + '</span>' : '';
+        let html = toolHead('report_tool_issue', pathHtml);
+        if (args.report) html += '<div class="tool-output"><div>' + escapeHtml(String(args.report)) + '</div></div>';
+        return html;
+      }
+
+      function renderCalc(name, args, result, ctx) {
+        let html = toolHead('calc');
+        const exprs = args.expressions || (args.expression ? [args.expression] : []);
+        for (const e of exprs) html += codeBlock(String(e), 'plaintext');
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 6);
+        }
+        return html;
+      }
+
+      function renderJob(name, args, result, ctx) {
+        const badges = [];
+        const pollIds = Array.isArray(args.poll) ? args.poll : Array.isArray(args.jobs) ? args.jobs : Array.isArray(args.jobIds) ? args.jobIds : [];
+        const cancelIds = Array.isArray(args.cancel) ? args.cancel : args.jobId ? [String(args.jobId)] : [];
+        if (cancelIds.length > 0) badges.push('cancel ' + cancelIds.length);
+        if (pollIds.length > 0) badges.push('poll ' + pollIds.length);
+        let html = toolHead('job', '', badges);
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 8);
+        }
+        return html;
+      }
+
+
+      function renderGenericTool(name, args, result, ctx) {
+        let html = toolHead(name);
+        const argText = JSON.stringify(args, null, 2);
+        if (argText && argText !== '{}') {
+          html += '<div class="tool-output"><pre>' + escapeHtml(argText) + '</pre></div>';
+        }
+        if (result) {
+          html += ctx.renderResultImages();
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 10);
+        }
+        return html;
+      }
+
+      const TOOL_RENDERERS = {
+        bash: renderBash,
+        js: renderJsLike,
+        python: renderJsLike,
+        notebook: renderJsLike,
+        read: renderRead,
+        write: renderWrite,
+        edit: renderEdit,
+        ast_edit: renderAstEdit,
+        ast_grep: renderAstGrep,
+        grep: renderGrep,
+        find: renderFind,
+        lsp: renderLsp,
+        todo_write: renderTodoWrite,
+        task: renderTask,
+        web_search: renderWebSearch,
+        fetch: renderFetch,
+        debug: renderDebug,
+        puppeteer: renderPuppeteer,
+        inspect_image: renderInspectImage,
+        generate_image: renderGenerateImage,
+        ask: renderAsk,
+        exit_plan_mode: renderExitPlanMode,
+        resolve: renderResolve,
+        github: renderGh,
+        render_mermaid: renderMermaid,
+        yield: renderYield,
+        report_finding: renderReportFinding,
+        report_tool_issue: renderReportToolIssue,
+        calc: renderCalc,
+        calculator: renderCalc,
+        await: renderJob,
+        poll: renderJob,
+        cancel_job: renderJob,
+        job: renderJob,
+      };
+
       function renderToolCall(call) {
         const result = findToolResult(call.id);
         const isError = result?.isError || false;
         const statusClass = result ? (isError ? 'error' : 'success') : 'pending';
-
-        const getResultText = () => {
-          if (!result) return '';
-          const textBlocks = result.content.filter(c => c.type === 'text');
-          return textBlocks.map(c => c.text).join('\n');
-        };
-
-        const getResultImages = () => {
-          if (!result) return [];
-          return result.content.filter(c => c.type === 'image');
-        };
-
-        const renderResultImages = () => {
-          const images = getResultImages();
-          if (images.length === 0) return '';
-          return '<div class="tool-images">' + 
-            images.map(img => `<img src="data:${img.mimeType};base64,${img.data}" class="tool-image" />`).join('') + 
-            '</div>';
-        };
-
-        let html = `<div class="tool-execution ${statusClass}">`;
         const args = call.arguments || {};
         const name = call.name;
 
-        const invalidArg = '<span class="tool-error">[invalid arg]</span>';
+        const ctx = {
+          getResultText: () => {
+            if (!result) return '';
+            const textBlocks = result.content.filter(c => c.type === 'text');
+            return textBlocks.map(c => c.text).join('\n');
+          },
+          getResultImages: () => {
+            if (!result) return [];
+            return result.content.filter(c => c.type === 'image');
+          },
+          renderResultImages: () => {
+            if (!result) return '';
+            const images = result.content.filter(c => c.type === 'image');
+            if (images.length === 0) return '';
+            return '<div class="tool-images">' +
+              images.map(img => '<img src="data:' + img.mimeType + ';base64,' + img.data + '" class="tool-image" />').join('') +
+              '</div>';
+          },
+        };
 
-        switch (name) {
-          case 'bash': {
-            const command = str(args.command);
-            const cmdDisplay = command === null ? invalidArg : escapeHtml(command || '...');
-            html += `<div class="tool-command">$ ${cmdDisplay}</div>`;
-            if (result) {
-              const output = getResultText().trim();
-              if (output) html += formatExpandableOutput(output, 5);
-            }
-            break;
-          }
-          case 'read': {
-            const filePath = str(args.file_path ?? args.path);
-            const offset = args.offset;
-            const limit = args.limit;
-
-            let pathHtml = filePath === null ? invalidArg : escapeHtml(shortenPath(filePath || ''));
-            if (filePath !== null && (offset !== undefined || limit !== undefined)) {
-              const startLine = offset ?? 1;
-              const endLine = limit !== undefined ? startLine + limit - 1 : '';
-              pathHtml += `<span class="line-numbers">:${startLine}${endLine ? '-' + endLine : ''}</span>`;
-            }
-
-            html += `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;
-            if (result) {
-              html += renderResultImages();
-              const output = getResultText();
-              const lang = filePath ? getLanguageFromPath(filePath) : null;
-              if (output) html += formatExpandableOutput(output, 10, lang);
-            }
-            break;
-          }
-          case 'write': {
-            const filePath = str(args.file_path ?? args.path);
-            const content = str(args.content);
-
-            html += `<div class="tool-header"><span class="tool-name">write</span> <span class="tool-path">${filePath === null ? invalidArg : escapeHtml(shortenPath(filePath || ''))}</span>`;
-            if (content !== null && content) {
-              const lines = content.split('\n');
-              if (lines.length > 10) html += ` <span class="line-count">(${lines.length} lines)</span>`;
-            }
-            html += '</div>';
-
-            if (content === null) {
-              html += `<div class="tool-error">[invalid content arg - expected string]</div>`;
-            } else if (content) {
-              const lang = filePath ? getLanguageFromPath(filePath) : null;
-              html += formatExpandableOutput(content, 10, lang);
-            }
-            if (result) {
-              const output = getResultText().trim();
-              if (output) html += `<div class="tool-output"><div>${escapeHtml(output)}</div></div>`;
-            }
-            break;
-          }
-          case 'edit': {
-            const filePath = str(args.file_path ?? args.path);
-            html += `<div class="tool-header"><span class="tool-name">edit</span> <span class="tool-path">${filePath === null ? invalidArg : escapeHtml(shortenPath(filePath || ''))}</span></div>`;
-
-            if (result?.details?.diff) {
-              const diffLines = result.details.diff.split('\n');
-              html += '<div class="tool-diff">';
-              for (const line of diffLines) {
-                const cls = line.match(/^\+/) ? 'diff-added' : line.match(/^-/) ? 'diff-removed' : 'diff-context';
-                html += `<div class="${cls}">${escapeHtml(replaceTabs(line))}</div>`;
-              }
-              html += '</div>';
-            } else if (result) {
-              const output = getResultText().trim();
-              if (output) html += `<div class="tool-output"><pre>${escapeHtml(output)}</pre></div>`;
-            }
-            break;
-          }
-          default: {
-            html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
-            html += `<div class="tool-output"><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></div>`;
-            if (result) {
-              const output = getResultText();
-              if (output) html += formatExpandableOutput(output, 10);
-            }
-          }
+        const renderer = TOOL_RENDERERS[name] || renderGenericTool;
+        let html = '<div class="tool-execution ' + statusClass + '">';
+        try {
+          html += renderer(name, args, result, ctx);
+        } catch (err) {
+          html += renderGenericTool(name, args, result, ctx);
         }
-
         html += '</div>';
         return html;
       }
+
 
       /**
        * Build a shareable URL for a specific message.
@@ -977,7 +1481,7 @@
             return html;
           }
 
-          if (msg.role === 'pythonExecution') {
+          if (msg.role === 'jsExecution') {
             const isError = msg.cancelled || (msg.exitCode !== 0 && msg.exitCode !== null);
             let html = `<div class="tool-execution ${isError ? 'error' : 'success'}" id="${entryId}">${tsHtml}`;
             html += `<div class="tool-command">$ ${escapeHtml(msg.code)}</div>`;

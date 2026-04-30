@@ -8,7 +8,7 @@ import type {
 	MessageParam,
 } from "@anthropic-ai/sdk/resources/messages";
 import { $env, abortableSleep, isEnoent } from "@oh-my-pi/pi-utils";
-import { mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
+import { hasOpus47ApiRestrictions, mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
 import { calculateCost } from "../models";
 import { getEnvApiKey, OUTPUT_FALLBACK_BUFFER } from "../stream";
 import type {
@@ -19,6 +19,7 @@ import type {
 	ImageContent,
 	Message,
 	Model,
+	ProviderSessionState,
 	RedactedThinkingContent,
 	SimpleStreamOptions,
 	StopReason,
@@ -31,12 +32,16 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "../types";
-import { isAnthropicOAuthToken, normalizeToolCallId, resolveCacheRetention } from "../utils";
+import { isAnthropicOAuthToken, isRecord, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
-import { createFirstEventWatchdog, getStreamFirstEventTimeoutMs, markFirstStreamEvent } from "../utils/idle-iterator";
+import { isFoundryEnabled } from "../utils/foundry";
+import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
+import { createWatchdog, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
+import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
+import { extractHttpStatusFromError, isCopilotRetryableError } from "../utils/retry";
+import { COMBINATOR_KEYS, NO_STRICT } from "../utils/schema";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -79,7 +84,6 @@ export function buildBetaHeader(baseBetas: string[], extraBetas: string[]): stri
 const claudeCodeBetaDefaults = [
 	"claude-code-20250219",
 	"oauth-2025-04-20",
-	"interleaved-thinking-2025-05-14",
 	"context-management-2025-06-27",
 	"prompt-caching-scope-2026-01-05",
 ];
@@ -165,6 +169,70 @@ type AnthropicSamplingParams = MessageCreateParamsStreaming & {
 	top_p?: number;
 	top_k?: number;
 };
+
+/**
+ * Adaptive thinking `display` is supported starting with Claude Opus 4.7.
+ * Older adaptive-thinking models (Opus 4.6, Sonnet 4.6+) reject the field.
+ */
+function supportsAdaptiveThinkingDisplay(modelId: string): boolean {
+	const match = /claude-opus-(\d+)-(\d+)/.exec(modelId);
+	if (!match) return false;
+	const major = Number(match[1]);
+	const minor = Number(match[2]);
+	return major > 4 || (major === 4 && minor >= 7);
+}
+
+const ANTHROPIC_PROVIDER_SESSION_STATE_KEY = "anthropic-messages";
+
+type AnthropicProviderSessionState = ProviderSessionState & {
+	strictToolsDisabled: boolean;
+};
+
+function createAnthropicProviderSessionState(): AnthropicProviderSessionState {
+	const state: AnthropicProviderSessionState = {
+		strictToolsDisabled: false,
+		close: () => {
+			state.strictToolsDisabled = false;
+		},
+	};
+	return state;
+}
+
+function getAnthropicProviderSessionState(
+	providerSessionState: Map<string, ProviderSessionState> | undefined,
+): AnthropicProviderSessionState | undefined {
+	if (!providerSessionState) return undefined;
+	const existing = providerSessionState.get(ANTHROPIC_PROVIDER_SESSION_STATE_KEY) as
+		| AnthropicProviderSessionState
+		| undefined;
+	if (existing) return existing;
+	const created = createAnthropicProviderSessionState();
+	providerSessionState.set(ANTHROPIC_PROVIDER_SESSION_STATE_KEY, created);
+	return created;
+}
+
+function isAnthropicStrictGrammarTooLargeError(error: unknown): boolean {
+	if (extractHttpStatusFromError(error) !== 400) return false;
+	const message = error instanceof Error ? error.message : String(error);
+	const isStrictGrammarTooLarge = /compiled grammar/i.test(message) && /too large/i.test(message);
+	const isSchemaCompilationTooComplex =
+		/schema/i.test(message) && /too complex/i.test(message) && /compil/i.test(message);
+	return /invalid_request_error/i.test(message) && (isStrictGrammarTooLarge || isSchemaCompilationTooComplex);
+}
+
+function hasStrictAnthropicTools(params: MessageCreateParamsStreaming): boolean {
+	const tools = params.tools as Array<{ strict?: unknown }> | undefined;
+	return tools?.some(tool => tool.strict === true) ?? false;
+}
+
+function dropAnthropicStrictTools(params: MessageCreateParamsStreaming): void {
+	const tools = params.tools as Array<{ strict?: unknown }> | undefined;
+	if (!tools) return;
+	for (const tool of tools) {
+		delete tool.strict;
+	}
+}
+
 function getCacheControl(
 	baseUrl: string,
 	cacheRetention?: CacheRetention,
@@ -354,7 +422,7 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 	return blocks;
 }
 
-export type AnthropicEffort = "low" | "medium" | "high" | "max";
+export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface AnthropicOptions extends StreamOptions {
 	/**
@@ -415,6 +483,7 @@ export type AnthropicClientOptionsResult = {
 	maxRetries: number;
 	dangerouslyAllowBrowser: boolean;
 	defaultHeaders: Record<string, string>;
+	logLevel: AnthropicSdkClientOptions["logLevel"];
 	fetchOptions?: AnthropicSdkClientOptions["fetchOptions"];
 };
 
@@ -425,13 +494,6 @@ type FoundryTlsOptions = {
 	cert?: string;
 	key?: string;
 };
-
-function isFoundryEnabled(): boolean {
-	const value = $env.CLAUDE_CODE_USE_FOUNDRY;
-	if (!value) return false;
-	const normalized = value.trim().toLowerCase();
-	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
 
 function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: string): string | undefined {
 	if (model.provider === "github-copilot") {
@@ -557,6 +619,10 @@ function mergeHeaders(...headerSources: (Record<string, string> | undefined)[]):
 	return merged;
 }
 
+// The Anthropic SDK logs malformed SSE frames directly before rethrowing them.
+// We surface the resulting provider error ourselves, so keep the SDK quiet.
+const ANTHROPIC_SDK_LOG_LEVEL = "off" as const;
+
 const PROVIDER_MAX_RETRIES = 3;
 const PROVIDER_BASE_DELAY_MS = 2000;
 
@@ -573,13 +639,50 @@ function isTransientStreamParseError(error: unknown): boolean {
 	return /json parse error|unterminated string|unexpected end of json input/i.test(error.message);
 }
 
-export function isProviderRetryableError(error: unknown): boolean {
+const ANTHROPIC_STREAM_ENVELOPE_ERROR_PREFIX = "Anthropic stream envelope error:";
+
+function createAnthropicStreamEnvelopeError(message: string): Error {
+	return new Error(`${ANTHROPIC_STREAM_ENVELOPE_ERROR_PREFIX} ${message}`);
+}
+
+const ANTHROPIC_PRE_MESSAGE_START_EVENT_TYPES = new Set([
+	"content_block_start",
+	"content_block_delta",
+	"content_block_stop",
+	"message_delta",
+	"message_stop",
+	"message_start",
+]);
+
+function shouldIgnoreAnthropicPreambleEvent(eventType: unknown): boolean {
+	if (typeof eventType !== "string") return false;
+	if (eventType === "ping") return true;
+	return !ANTHROPIC_PRE_MESSAGE_START_EVENT_TYPES.has(eventType);
+}
+
+function isTransientStreamEnvelopeError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
+	return (
+		error.message.includes(ANTHROPIC_STREAM_ENVELOPE_ERROR_PREFIX) ||
+		/stream event order|before message_start|before terminal stop signal/i.test(error.message)
+	);
+}
+
+function isProviderRetryableStreamEnvelopeError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	return /stream event order|before message_start/i.test(error.message);
+}
+
+export function isProviderRetryableError(error: unknown, provider?: string): boolean {
+	if (!(error instanceof Error)) return false;
+	if (provider === "github-copilot" && isCopilotRetryableError(error)) return true;
 	const msg = error.message.toLowerCase();
 	return (
 		/rate.?limit|too many requests|overloaded|service.?unavailable|internal_error|stream error.*received from peer|1302|timed?\s*out while waiting for the first event|timeout waiting for first/i.test(
 			msg,
-		) || isTransientStreamParseError(error)
+		) ||
+		isTransientStreamParseError(error) ||
+		isProviderRetryableStreamEnvelopeError(error)
 	);
 }
 
@@ -593,6 +696,42 @@ function createEmptyUsage(premiumRequests?: number): Usage {
 		...(premiumRequests === undefined ? {} : { premiumRequests }),
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
+}
+
+export type AnthropicUsageLike = {
+	cache_creation?: { ephemeral_5m_input_tokens?: number | null; ephemeral_1h_input_tokens?: number | null } | null;
+	server_tool_use?: { web_search_requests?: number | null; web_fetch_requests?: number | null } | null;
+};
+
+/**
+ * Capture Anthropic's optional cache-creation TTL breakdown and server-tool-use
+ * counters into the harness Usage shape. Only sets fields that were reported, so
+ * a `message_delta` that omits `cache_creation` does not clobber the breakdown
+ * established at `message_start`.
+ */
+export function applyAnthropicUsageExtras(usage: Usage, source: AnthropicUsageLike): void {
+	const cacheCreation = source.cache_creation;
+	if (cacheCreation) {
+		const fiveMinute = cacheCreation.ephemeral_5m_input_tokens ?? 0;
+		const oneHour = cacheCreation.ephemeral_1h_input_tokens ?? 0;
+		if (fiveMinute > 0 || oneHour > 0) {
+			usage.cttl = {
+				...(fiveMinute > 0 ? { ephemeral5m: fiveMinute } : {}),
+				...(oneHour > 0 ? { ephemeral1h: oneHour } : {}),
+			};
+		}
+	}
+	const serverToolUse = source.server_tool_use;
+	if (serverToolUse) {
+		const webSearch = serverToolUse.web_search_requests ?? 0;
+		const webFetch = serverToolUse.web_fetch_requests ?? 0;
+		if (webSearch > 0 || webFetch > 0) {
+			usage.server = {
+				...(webSearch > 0 ? { webSearch } : {}),
+				...(webFetch > 0 ? { webFetch } : {}),
+			};
+		}
+	}
 }
 
 export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
@@ -655,19 +794,29 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			const baseUrl =
 				resolveAnthropicBaseUrl(model, options?.apiKey ?? getEnvApiKey(model.provider) ?? "") ??
 				"https://api.anthropic.com";
-			let params = buildParams(model, baseUrl, context, isOAuthToken, options);
-			const replacementPayload = await options?.onPayload?.(params, model);
-			if (replacementPayload !== undefined) {
-				params = replacementPayload as typeof params;
-			}
-			rawRequestDump = {
-				provider: model.provider,
-				api: output.api,
-				model: model.id,
-				method: "POST",
-				url: `${baseUrl}/v1/messages`,
-				body: params,
+			const providerSessionState = getAnthropicProviderSessionState(options?.providerSessionState);
+			let disableStrictTools = providerSessionState?.strictToolsDisabled ?? false;
+			let strictFallbackErrorMessage: string | undefined;
+			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
+				let nextParams = buildParams(model, baseUrl, context, isOAuthToken, options, disableStrictTools);
+				const replacementPayload = await options?.onPayload?.(nextParams, model);
+				if (replacementPayload !== undefined) {
+					nextParams = replacementPayload as typeof nextParams;
+				}
+				if (disableStrictTools) {
+					dropAnthropicStrictTools(nextParams);
+				}
+				rawRequestDump = {
+					provider: model.provider,
+					api: output.api,
+					model: model.id,
+					method: "POST",
+					url: `${baseUrl}/v1/messages`,
+					body: nextParams,
+				};
+				return nextParams;
 			};
+			let params = await prepareParams();
 
 			type Block = (
 				| ThinkingContent
@@ -676,43 +825,64 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				| (ToolCall & { partialJson: string })
 			) & { index: number };
 			const blocks = output.content as Block[];
+			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs();
 			stream.push({ type: "start", partial: output });
 			// Retry loop for transient errors from the stream.
-			// Rate-limit/overload: only before content starts (safe to restart).
-			// Truncated JSON: also after content starts (partial response is unusable).
+			// Provider-level transport/rate-limit failures: only before any streamed content starts.
+			// Malformed envelopes/JSON: only before replay-unsafe text/tool events are visible on this stream.
 			let providerRetryAttempt = 0;
-			let started = false;
-			do {
+			while (true) {
 				activeAbortTracker = createAbortSourceTracker(options?.signal);
 				const firstEventTimeoutAbortError = new Error(
 					"Anthropic stream timed out while waiting for the first event",
 				);
 				const { requestSignal } = activeAbortTracker;
-				const anthropicStream = client.messages.stream({ ...params, stream: true }, { signal: requestSignal });
+				const anthropicRequest = client.messages.create({ ...params, stream: true }, { signal: requestSignal });
+				let streamedReplayUnsafeContent = false;
 
 				try {
-					await anthropicStream.withResponse();
-					const firstEventWatchdog = createFirstEventWatchdog(getStreamFirstEventTimeoutMs(), () =>
+					const { data: anthropicStream } = await anthropicRequest.withResponse();
+					const firstEventWatchdog = createWatchdog(firstEventTimeoutMs, () =>
 						activeAbortTracker.abortLocally(firstEventTimeoutAbortError),
 					);
+					let sawEvent = false;
+					let sawMessageStart = false;
+					let sawTerminalEnvelope = false;
 
-					for await (const event of markFirstStreamEvent(anthropicStream, firstEventWatchdog)) {
-						started = true;
+					for await (const event of anthropicStream) {
+						if (!sawEvent) {
+							clearTimeout(firstEventWatchdog);
+						}
+						sawEvent = true;
+
 						if (event.type === "message_start") {
+							if (sawMessageStart) {
+								continue;
+							}
+							sawMessageStart = true;
+							applyAnthropicUsageExtras(output.usage, event.message.usage);
 							output.responseId = event.message.id;
-							// Capture initial token usage from message_start event
-							// This ensures we have input token counts even if the stream is aborted early
 							output.usage.input = event.message.usage.input_tokens || 0;
 							output.usage.output = event.message.usage.output_tokens || 0;
 							output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
 							output.usage.cacheWrite = event.message.usage.cache_creation_input_tokens || 0;
-							// Anthropic doesn't provide total_tokens, compute from components
 							output.usage.totalTokens =
 								output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 							calculateCost(model, output.usage);
-						} else if (event.type === "content_block_start") {
+							continue;
+						}
+
+						if (!sawMessageStart) {
+							if (shouldIgnoreAnthropicPreambleEvent(event.type)) {
+								continue;
+							}
+							throw createAnthropicStreamEnvelopeError(`received ${event.type} before message_start`);
+						}
+
+						if (event.type === "content_block_start") {
 							if (!firstTokenTime) firstTokenTime = Date.now();
 							if (event.content_block.type === "text") {
+								streamedReplayUnsafeContent = true;
 								const block: Block = {
 									type: "text",
 									text: "",
@@ -745,6 +915,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								};
 								output.content.push(block);
 							} else if (event.content_block.type === "tool_use") {
+								streamedReplayUnsafeContent = true;
 								const block: Block = {
 									type: "toolCall",
 									id: event.content_block.id,
@@ -841,9 +1012,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						} else if (event.type === "message_delta") {
 							if (event.delta.stop_reason) {
 								output.stopReason = mapStopReason(event.delta.stop_reason);
+								sawTerminalEnvelope = true;
 							}
-							// Only update usage fields if present (not null).
-							// Preserves input_tokens from message_start when proxies omit it in message_delta.
 							if (event.usage.input_tokens != null) {
 								output.usage.input = event.usage.input_tokens;
 							}
@@ -856,10 +1026,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 							if (event.usage.cache_creation_input_tokens != null) {
 								output.usage.cacheWrite = event.usage.cache_creation_input_tokens;
 							}
-							// Anthropic doesn't provide total_tokens, compute from components
+							applyAnthropicUsageExtras(output.usage, event.usage);
 							output.usage.totalTokens =
 								output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 							calculateCost(model, output.usage);
+						} else if (event.type === "message_stop") {
+							sawTerminalEnvelope = true;
 						}
 					}
 
@@ -870,49 +1042,79 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					if (activeAbortTracker.wasCallerAbort()) {
 						throw new Error("Request was aborted");
 					}
+					if (!sawEvent || !sawMessageStart) {
+						throw createAnthropicStreamEnvelopeError("stream ended before message_start");
+					}
+					if (!sawTerminalEnvelope) {
+						throw createAnthropicStreamEnvelopeError("stream ended before terminal stop signal");
+					}
 
 					if (output.stopReason === "aborted" || output.stopReason === "error") {
 						throw new Error("An unknown error occurred");
 					}
-					break; // Stream completed successfully
+					break;
 				} catch (streamError) {
 					const streamFailure = activeAbortTracker.getLocalAbortReason() ?? streamError;
-					// Transient stream parse errors (truncated JSON) are retryable even after content
-					// has started streaming, since the partial response is unusable anyway.
-					// Rate-limit/overload errors are only retried before content starts.
-					const isTransient = isTransientStreamParseError(streamFailure);
+					if (
+						!disableStrictTools &&
+						firstTokenTime === undefined &&
+						hasStrictAnthropicTools(params) &&
+						isAnthropicStrictGrammarTooLargeError(streamFailure)
+					) {
+						strictFallbackErrorMessage = await finalizeErrorMessage(streamFailure, rawRequestDump);
+						output.errorMessage = strictFallbackErrorMessage;
+						if (providerSessionState) {
+							providerSessionState.strictToolsDisabled = true;
+						}
+						disableStrictTools = true;
+						params = await prepareParams();
+						providerRetryAttempt = 0;
+						output.content.length = 0;
+						output.responseId = undefined;
+						output.providerPayload = undefined;
+						output.usage = createEmptyUsage(copilotDynamicHeaders?.premiumRequests);
+						output.stopReason = "stop";
+						firstTokenTime = undefined;
+						continue;
+					}
+					const isTransientEnvelopeFailure =
+						isTransientStreamParseError(streamFailure) || isTransientStreamEnvelopeError(streamFailure);
+					const canRetryTransientEnvelopeFailure = isTransientEnvelopeFailure && !streamedReplayUnsafeContent;
+					const canRetryProviderFailure =
+						firstTokenTime === undefined && isProviderRetryableError(streamFailure, model.provider);
 					if (
 						activeAbortTracker.wasCallerAbort() ||
 						providerRetryAttempt >= PROVIDER_MAX_RETRIES ||
-						(!isTransient && firstTokenTime !== undefined) ||
-						(!isTransient && !isProviderRetryableError(streamFailure))
+						(!canRetryTransientEnvelopeFailure && !canRetryProviderFailure)
 					) {
 						throw streamFailure;
 					}
 					providerRetryAttempt++;
 					const delayMs = PROVIDER_BASE_DELAY_MS * 2 ** (providerRetryAttempt - 1);
 					await abortableSleep(delayMs, options?.signal);
-					// Reset output state for clean retry
 					output.content.length = 0;
 					output.responseId = undefined;
-					output.errorMessage = undefined;
+					output.errorMessage = strictFallbackErrorMessage;
 					output.providerPayload = undefined;
 					output.usage = createEmptyUsage(copilotDynamicHeaders?.premiumRequests);
 					output.stopReason = "stop";
 					firstTokenTime = undefined;
-					started = false;
 				}
-			} while (!started);
+			}
 
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) delete (block as { index?: number }).index;
+			for (const block of output.content) {
+				delete (block as { index?: number }).index;
+				delete (block as { partialJson?: string }).partialJson;
+			}
 			const firstEventTimeoutError = activeAbortTracker.getLocalAbortReason();
 			output.stopReason = activeAbortTracker.wasCallerAbort() ? "aborted" : "error";
 			output.errorMessage = firstEventTimeoutError?.message ?? (await finalizeErrorMessage(error, rawRequestDump));
+			output.errorMessage = rewriteCopilotError(output.errorMessage, error, model.provider);
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -995,20 +1197,19 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		dynamicHeaders,
 		isOAuth,
 	} = args;
+	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinkingDisplay(model.id);
 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
 	const baseUrl = resolveAnthropicBaseUrl(model, apiKey);
 	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model);
 	const tlsFetchOptions = buildClaudeCodeTlsFetchOptions(model, baseUrl);
 	if (model.provider === "github-copilot") {
+		const copilotApiKey = parseGitHubCopilotApiKey(apiKey).accessToken;
 		const betaFeatures = [...extraBetas];
-		if (interleavedThinking) {
-			betaFeatures.push("interleaved-thinking-2025-05-14");
-		}
 		const defaultHeaders = mergeHeaders(
 			{
 				Accept: stream ? "text/event-stream" : "application/json",
 				"Anthropic-Dangerous-Direct-Browser-Access": "true",
-				Authorization: `Bearer ${apiKey}`,
+				Authorization: `Bearer ${copilotApiKey}`,
 				...(betaFeatures.length > 0 ? { "anthropic-beta": buildBetaHeader([], betaFeatures) } : {}),
 			},
 			model.headers,
@@ -1019,17 +1220,18 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		return {
 			isOAuthToken: false,
 			apiKey: null,
-			authToken: apiKey,
+			authToken: copilotApiKey,
 			baseURL: baseUrl,
 			maxRetries: 5,
 			dangerouslyAllowBrowser: true,
 			defaultHeaders,
+			logLevel: ANTHROPIC_SDK_LOG_LEVEL,
 			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
 		};
 	}
 
 	const betaFeatures = [...extraBetas];
-	if (interleavedThinking) {
+	if (needsInterleavedBeta) {
 		betaFeatures.push("interleaved-thinking-2025-05-14");
 	}
 
@@ -1050,6 +1252,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		maxRetries: 5,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders,
+		logLevel: ANTHROPIC_SDK_LOG_LEVEL,
 		...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
 	};
 }
@@ -1323,6 +1526,7 @@ function buildParams(
 	context: Context,
 	isOAuthToken: boolean,
 	options?: AnthropicOptions,
+	disableStrictTools = false,
 ): MessageCreateParamsStreaming {
 	const { cacheControl } = getCacheControl(baseUrl, options?.cacheRetention);
 	const params: AnthropicSamplingParams = {
@@ -1332,9 +1536,6 @@ function buildParams(
 		stream: true,
 	};
 
-	if (options?.temperature !== undefined) {
-		params.temperature = options.temperature;
-	}
 	if (options?.topP !== undefined) {
 		params.top_p = options.topP;
 	}
@@ -1342,8 +1543,18 @@ function buildParams(
 		params.top_k = options.topK;
 	}
 
+	// Opus 4.7+ rejects non-default sampling parameters with 400 error.
+	if (hasOpus47ApiRestrictions(model.id)) {
+		delete params.top_p;
+		delete params.top_k;
+	}
+
 	if (context.tools) {
-		params.tools = convertTools(context.tools, isOAuthToken);
+		params.tools = convertTools(
+			context.tools,
+			isOAuthToken,
+			disableStrictTools || model.provider === "github-copilot",
+		);
 	}
 
 	if (options?.thinkingEnabled && model.reasoning) {
@@ -1353,9 +1564,18 @@ function buildParams(
 			options.effort ?? (requestedEffort ? mapEffortToAnthropicAdaptiveEffort(model, requestedEffort) : undefined);
 
 		if (mode === "anthropic-adaptive") {
-			params.thinking = { type: "adaptive" };
+			// Starting with Claude Opus 4.7, adaptive thinking content is omitted from the
+			// response by default. Opt into summarized reasoning so thinking deltas keep
+			// streaming with human-readable content for callers that rely on it.
+			const adaptive: { type: "adaptive"; display?: "summarized" | "omitted" } = { type: "adaptive" };
+			if (supportsAdaptiveThinkingDisplay(model.id)) {
+				adaptive.display = "summarized";
+			}
+			params.thinking = adaptive as typeof params.thinking;
 			if (effort) {
-				params.output_config = { effort };
+				// SDK's OutputConfig.effort type is not yet widened to include the new "xhigh"
+				// level introduced with Claude Opus 4.7. Cast until the SDK catches up.
+				params.output_config = { effort } as typeof params.output_config;
 			}
 		} else {
 			params.thinking = {
@@ -1363,7 +1583,7 @@ function buildParams(
 				budget_tokens: options.thinkingBudgetTokens || 1024,
 			};
 			if (mode === "anthropic-budget-effort" && effort) {
-				params.output_config = { effort };
+				params.output_config = { effort } as typeof params.output_config;
 			}
 		}
 	}
@@ -1568,20 +1788,309 @@ export function convertAnthropicMessages(
 	return params;
 }
 
-function convertTools(tools: Tool[], isOAuthToken: boolean): Anthropic.Messages.Tool[] {
+const ANTHROPIC_UNSUPPORTED_TOOL_SCHEMA_FIELDS = new Set(["maxItems", "patternProperties"]);
+const ANTHROPIC_STRICT_TOOL_ALLOWLIST = new Set(["bash", "python", "edit", "find"]);
+const MAX_ANTHROPIC_STRICT_TOOLS = 20;
+const MAX_ANTHROPIC_STRICT_OPTIONAL_PARAMETERS = 24;
+const MAX_ANTHROPIC_STRICT_UNION_PARAMETERS = 16;
+
+/** `minItems` / `maxItems` apply to arrays; Anthropic rejects them on `type: "object"` (including `minItems: 0`/`1`). */
+function isJsonSchemaArrayNode(schema: Record<string, unknown>): boolean {
+	const t = schema.type;
+	if (t === "array") return true;
+	if (Array.isArray(t) && t.includes("array") && !t.includes("object")) return true;
+	return false;
+}
+
+function isJsonSchemaObjectNode(schema: Record<string, unknown>): boolean {
+	if (isJsonSchemaArrayNode(schema)) return false;
+	if (schema.type === "object") return true;
+	if (Array.isArray(schema.type) && schema.type.includes("object")) return true;
+	if (isRecord(schema.properties)) return true;
+	return false;
+}
+
+function normalizeAnthropicToolSchema(
+	schema: unknown,
+	cache: WeakMap<Record<string, unknown>, Record<string, unknown>> = new WeakMap(),
+): unknown {
+	if (!isRecord(schema)) return schema;
+
+	const cached = cache.get(schema);
+	if (cached) return cached;
+
+	const result = Object.fromEntries(
+		Object.entries(schema).filter(([key]) => !ANTHROPIC_UNSUPPORTED_TOOL_SCHEMA_FIELDS.has(key)),
+	);
+	cache.set(schema, result);
+	if (isJsonSchemaObjectNode(result)) {
+		delete result.minItems;
+	} else {
+		const minItems = result.minItems;
+		if (typeof minItems === "number" && minItems !== 0 && minItems !== 1) {
+			delete result.minItems;
+		}
+	}
+
+	const type = result.type;
+	const canBeObject =
+		type === "object" || (Array.isArray(type) && type.includes("object")) || isRecord(result.properties);
+	if (canBeObject) {
+		result.additionalProperties = false;
+	}
+
+	if (isRecord(result.properties)) {
+		result.properties = Object.fromEntries(
+			Object.entries(result.properties).map(([propertyName, propertySchema]) => [
+				propertyName,
+				normalizeAnthropicToolSchema(propertySchema, cache),
+			]),
+		);
+	}
+
+	if (Array.isArray(result.items)) {
+		result.items = result.items.map(item => normalizeAnthropicToolSchema(item, cache));
+	} else if (isRecord(result.items)) {
+		result.items = normalizeAnthropicToolSchema(result.items, cache);
+	}
+
+	for (const key of COMBINATOR_KEYS) {
+		const variants = result[key];
+		if (Array.isArray(variants)) {
+			result[key] = variants.map(variant => normalizeAnthropicToolSchema(variant, cache));
+		}
+	}
+
+	for (const defsKey of ["$defs", "definitions"] as const) {
+		const definitions = result[defsKey];
+		if (!isRecord(definitions)) continue;
+		result[defsKey] = Object.fromEntries(
+			Object.entries(definitions).map(([definitionName, definitionSchema]) => [
+				definitionName,
+				normalizeAnthropicToolSchema(definitionSchema, cache),
+			]),
+		);
+	}
+
+	return result;
+}
+
+type AnthropicToolInputSchema = Anthropic.Messages.Tool["input_schema"];
+
+type AnthropicToolSchemaPlan = {
+	inputSchema: AnthropicToolInputSchema;
+	strict: boolean;
+};
+
+type AnthropicStrictBudget = {
+	optionalRemaining: number;
+	unionRemaining: number;
+	optionalCount: number;
+	unionCount: number;
+};
+
+function hasAnthropicUnionType(schema: Record<string, unknown>): boolean {
+	return Array.isArray(schema.type) || Array.isArray(schema.anyOf);
+}
+
+function hasNullVariant(schema: Record<string, unknown>): boolean {
+	if (Array.isArray(schema.type) && schema.type.includes("null")) return true;
+	return Array.isArray(schema.anyOf) && schema.anyOf.some(variant => isRecord(variant) && variant.type === "null");
+}
+
+function makeAnthropicNullableSchema(schema: unknown, budget: AnthropicStrictBudget): unknown | undefined {
+	if (isRecord(schema)) {
+		if (hasNullVariant(schema)) return schema;
+		if (Array.isArray(schema.anyOf)) {
+			return { ...schema, anyOf: [...schema.anyOf, { type: "null" }] };
+		}
+		if (Array.isArray(schema.type)) {
+			return { ...schema, type: [...schema.type, "null"] };
+		}
+	}
+
+	if (budget.unionRemaining <= 0) return undefined;
+	budget.unionRemaining--;
+	budget.unionCount++;
+	return { anyOf: [schema, { type: "null" }] };
+}
+
+function normalizeAnthropicStrictSchemaNode(
+	schema: unknown,
+	budget: AnthropicStrictBudget,
+	cache: WeakMap<Record<string, unknown>, Record<string, unknown>>,
+): unknown | undefined {
+	if (Array.isArray(schema)) {
+		const result: unknown[] = [];
+		for (const entry of schema) {
+			const normalized = normalizeAnthropicStrictSchemaNode(entry, budget, cache);
+			if (normalized === undefined) return undefined;
+			result.push(normalized);
+		}
+		return result;
+	}
+
+	if (!isRecord(schema)) return schema;
+
+	const cached = cache.get(schema);
+	if (cached) return cached;
+
+	const result: Record<string, unknown> = { ...schema };
+	cache.set(schema, result);
+
+	if (hasAnthropicUnionType(result)) {
+		if (budget.unionRemaining <= 0) return undefined;
+		budget.unionRemaining--;
+		budget.unionCount++;
+	}
+
+	if (isRecord(result.properties)) {
+		const originalRequired = new Set(
+			Array.isArray(result.required)
+				? result.required.filter((entry): entry is string => typeof entry === "string")
+				: [],
+		);
+		const properties: Record<string, unknown> = {};
+		const required: string[] = [];
+
+		for (const [propertyName, propertySchema] of Object.entries(result.properties)) {
+			const normalizedProperty = normalizeAnthropicStrictSchemaNode(propertySchema, budget, cache);
+			if (normalizedProperty === undefined) return undefined;
+
+			if (originalRequired.has(propertyName)) {
+				properties[propertyName] = normalizedProperty;
+				required.push(propertyName);
+				continue;
+			}
+
+			if (budget.optionalRemaining > 0) {
+				budget.optionalRemaining--;
+				budget.optionalCount++;
+				properties[propertyName] = normalizedProperty;
+				continue;
+			}
+
+			const nullableProperty = makeAnthropicNullableSchema(normalizedProperty, budget);
+			if (nullableProperty === undefined) return undefined;
+			properties[propertyName] = nullableProperty;
+			required.push(propertyName);
+		}
+
+		result.properties = properties;
+		result.required = required;
+	}
+
+	if (Array.isArray(result.items)) {
+		const items = normalizeAnthropicStrictSchemaNode(result.items, budget, cache);
+		if (items === undefined) return undefined;
+		result.items = items;
+	} else if (isRecord(result.items)) {
+		const items = normalizeAnthropicStrictSchemaNode(result.items, budget, cache);
+		if (items === undefined) return undefined;
+		result.items = items;
+	}
+
+	for (const key of COMBINATOR_KEYS) {
+		const variants = result[key];
+		if (!Array.isArray(variants)) continue;
+		const normalizedVariants = normalizeAnthropicStrictSchemaNode(variants, budget, cache);
+		if (normalizedVariants === undefined) return undefined;
+		result[key] = normalizedVariants;
+	}
+
+	for (const defsKey of ["$defs", "definitions"] as const) {
+		const definitions = result[defsKey];
+		if (!isRecord(definitions)) continue;
+		const normalizedDefinitions: Record<string, unknown> = {};
+		for (const [definitionName, definitionSchema] of Object.entries(definitions)) {
+			const normalizedDefinition = normalizeAnthropicStrictSchemaNode(definitionSchema, budget, cache);
+			if (normalizedDefinition === undefined) return undefined;
+			normalizedDefinitions[definitionName] = normalizedDefinition;
+		}
+		result[defsKey] = normalizedDefinitions;
+	}
+
+	return result;
+}
+
+function normalizeAnthropicStrictSchema(
+	schema: Record<string, unknown>,
+	optionalRemaining: number,
+	unionRemaining: number,
+): { schema: Record<string, unknown>; optionalCount: number; unionCount: number } | undefined {
+	const budget: AnthropicStrictBudget = {
+		optionalRemaining,
+		unionRemaining,
+		optionalCount: 0,
+		unionCount: 0,
+	};
+	const normalized = normalizeAnthropicStrictSchemaNode(schema, budget, new WeakMap());
+	if (!isRecord(normalized)) return undefined;
+	return { schema: normalized, optionalCount: budget.optionalCount, unionCount: budget.unionCount };
+}
+
+function buildAnthropicBaseToolInputSchema(tool: Tool): Record<string, unknown> {
+	const jsonSchema = tool.parameters as Record<string, unknown>;
+	return normalizeAnthropicToolSchema({
+		...jsonSchema,
+		type: "object",
+		properties: isRecord(jsonSchema.properties) ? jsonSchema.properties : {},
+		required: Array.isArray(jsonSchema.required)
+			? jsonSchema.required.filter((entry): entry is string => typeof entry === "string")
+			: [],
+	}) as Record<string, unknown>;
+}
+
+function buildAnthropicToolSchemaPlans(tools: Tool[], disableStrictTools = false): AnthropicToolSchemaPlan[] {
+	const plans = tools.map(
+		(tool): AnthropicToolSchemaPlan => ({
+			inputSchema: buildAnthropicBaseToolInputSchema(tool) as AnthropicToolInputSchema,
+			strict: false,
+		}),
+	);
+	if (NO_STRICT || disableStrictTools) return plans;
+
+	const candidateIndexes = tools.flatMap((tool, index) => {
+		if (!ANTHROPIC_STRICT_TOOL_ALLOWLIST.has(tool.name)) return [];
+		return tool.strict === false ? [] : [index];
+	});
+
+	let strictToolCount = 0;
+	let strictOptionalParameterCount = 0;
+	let strictUnionParameterCount = 0;
+	for (const index of candidateIndexes) {
+		if (strictToolCount >= MAX_ANTHROPIC_STRICT_TOOLS) break;
+
+		const strictResult = normalizeAnthropicStrictSchema(
+			plans[index].inputSchema as Record<string, unknown>,
+			MAX_ANTHROPIC_STRICT_OPTIONAL_PARAMETERS - strictOptionalParameterCount,
+			MAX_ANTHROPIC_STRICT_UNION_PARAMETERS - strictUnionParameterCount,
+		);
+		if (!strictResult) continue;
+
+		plans[index] = {
+			inputSchema: strictResult.schema as AnthropicToolInputSchema,
+			strict: true,
+		};
+		strictToolCount++;
+		strictOptionalParameterCount += strictResult.optionalCount;
+		strictUnionParameterCount += strictResult.unionCount;
+	}
+
+	return plans;
+}
+
+function convertTools(tools: Tool[], isOAuthToken: boolean, disableStrictTools = false): Anthropic.Messages.Tool[] {
 	if (!tools) return [];
+	const schemaPlans = buildAnthropicToolSchemaPlans(tools, disableStrictTools);
 
-	return tools.map(tool => {
-		const jsonSchema = tool.parameters as any; // TypeBox already generates JSON Schema
-
+	return tools.map((tool, index) => {
+		const plan = schemaPlans[index];
 		return {
 			name: isOAuthToken ? applyClaudeToolPrefix(tool.name) : tool.name,
 			description: tool.description || "",
-			input_schema: {
-				type: "object" as const,
-				properties: jsonSchema.properties || {},
-				required: jsonSchema.required || [],
-			},
+			input_schema: plan.inputSchema,
+			...(plan.strict ? { strict: true } : {}),
 		};
 	});
 }

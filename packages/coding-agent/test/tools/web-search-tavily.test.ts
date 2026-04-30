@@ -49,14 +49,15 @@ describe("Tavily web search provider", () => {
 		});
 
 		const response = await searchTavily({ query: "latest ai news", num_results: 2, recency: "week" });
+		// Recency must not couple to topic — topic should be absent (Tavily defaults to general)
 		expect(requestBody).toMatchObject({
 			query: "latest ai news",
 			max_results: 2,
 			time_range: "week",
-			topic: "news",
 			include_answer: "advanced",
 			include_raw_content: false,
 		});
+		expect(requestBody).not.toHaveProperty("topic");
 		expect(response).toMatchObject({
 			provider: "tavily",
 			answer: "Synthesized Tavily answer",

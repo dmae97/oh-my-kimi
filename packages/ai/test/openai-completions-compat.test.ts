@@ -86,6 +86,7 @@ describe("openai-completions compatibility", () => {
 			vercelGatewayRouting: {},
 			extraBody: {},
 			supportsStrictMode: true,
+			toolStrictMode: "none",
 		} satisfies Required<OpenAICompat>;
 		const assistantMessage: AssistantMessage = {
 			role: "assistant",
@@ -278,5 +279,239 @@ describe("openai-completions compatibility", () => {
 		expect(assistantObject).toBeDefined();
 		expect(assistantObject ? Reflect.get(assistantObject, "reasoning_text") : undefined).toBe("inspect tool output");
 		expect(assistantObject ? Reflect.get(assistantObject, "reasoning_content") : undefined).toBeUndefined();
+	});
+});
+
+describe("kimi model detection via detectCompat", () => {
+	function kimiOpenCodeModel(id: string): Model<"openai-completions"> {
+		return {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+			id,
+			reasoning: true,
+		};
+	}
+
+	it("requires reasoning_content for tool calls on kimi-k2.5 (opencode-go)", () => {
+		const compat = detectCompat(kimiOpenCodeModel("kimi-k2.5"));
+		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
+		expect(compat.requiresAssistantContentForToolCalls).toBe(true);
+	});
+
+	it("injects reasoning_content placeholder when assistant with tool calls has no reasoning field", () => {
+		const model = kimiOpenCodeModel("kimi-k2.5");
+		const compat = detectCompat(model);
+		const toolCallMessage: AssistantMessage = {
+			role: "assistant",
+			content: [
+				// Thinking returned as plain text (as kimi-k2.5 on opencode-go does)
+				{ type: "text", text: "Let me research this." },
+				{
+					type: "toolCall",
+					id: "call_abc123",
+					name: "web_search",
+					arguments: { query: "beads gastownhall" },
+				},
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+		const messages = convertMessages(model, { messages: [toolCallMessage] }, compat);
+		const assistant = messages.find(m => m.role === "assistant");
+		expect(assistant).toBeDefined();
+		const reasoningContent = Reflect.get(assistant as object, "reasoning_content");
+		expect(reasoningContent).toBeDefined();
+		expect(typeof reasoningContent).toBe("string");
+		expect((reasoningContent as string).length).toBeGreaterThan(0);
+	});
+
+	it("does not inject reasoning_content when model is not kimi", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+			id: "some-other-model",
+		};
+		const compat = detectCompat(model);
+		expect(compat.requiresReasoningContentForToolCalls).toBe(false);
+	});
+
+	it.each(["kimi-k2.5", "kimi-k1.5", "kimi-k2-5"])("matches kimi model id: %s", id => {
+		const compat = detectCompat(kimiOpenCodeModel(id));
+		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
+	});
+
+	it("still matches moonshotai/kimi via openrouter", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			id: "moonshotai/kimi-k2-5",
+			reasoning: true,
+		};
+		const compat = detectCompat(model);
+		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
+	});
+});
+
+describe("NVIDIA NIM DeepSeek special-token stripping", () => {
+	function nvidiaDeepseekModel(): Model<"openai-completions"> {
+		return {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "nvidia",
+			baseUrl: "https://integrate.api.nvidia.com/v1",
+			id: "deepseek-ai/deepseek-v4-flash",
+			reasoning: true,
+		};
+	}
+
+	it("strips leaked <\uff5cDSML\uff5c...\uff5c> markers from visible content", async () => {
+		const model = nvidiaDeepseekModel();
+		global.fetch = createMockFetch([
+			{
+				id: "chatcmpl-nim-1",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [
+					{
+						index: 0,
+						delta: { content: "Sure thing.<\uff5cDSML\uff5ctool_calls\uff5c>I'll help." },
+					},
+				],
+			},
+			{
+				id: "chatcmpl-nim-1",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			},
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const text = result.content
+			.filter(b => b.type === "text")
+			.map(b => (b as { text: string }).text)
+			.join("");
+		expect(text).toBe("Sure thing.I'll help.");
+		expect(text).not.toContain("DSML");
+		expect(text).not.toContain("\uff5c");
+	});
+
+	it("holds back partial token split across chunks", async () => {
+		const model = nvidiaDeepseekModel();
+		global.fetch = createMockFetch([
+			{
+				id: "chatcmpl-nim-2",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { content: "Hello <\uff5ctool_calls" } }],
+			},
+			{
+				id: "chatcmpl-nim-2",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { content: "_begin\uff5c>world" } }],
+			},
+			{
+				id: "chatcmpl-nim-2",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			},
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const text = result.content
+			.filter(b => b.type === "text")
+			.map(b => (b as { text: string }).text)
+			.join("");
+		expect(text).toBe("Hello world");
+	});
+
+	it("flushes a dangling partial open delimiter at end of stream", async () => {
+		const model = nvidiaDeepseekModel();
+		global.fetch = createMockFetch([
+			{
+				id: "chatcmpl-nim-3",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { content: "trailing <\uff5c" } }],
+			},
+			{
+				id: "chatcmpl-nim-3",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			},
+			"[DONE]",
+		]);
+
+		// At end-of-stream we have no way to know whether the partial is a real token,
+		// so we emit it verbatim rather than swallow legitimate text forever.
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const text = result.content
+			.filter(b => b.type === "text")
+			.map(b => (b as { text: string }).text)
+			.join("");
+		expect(text).toBe("trailing <\uff5c");
+	});
+
+	it("leaves visible content alone for non-deepseek nvidia models", async () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "nvidia",
+			baseUrl: "https://integrate.api.nvidia.com/v1",
+			id: "meta/llama-3.3-70b-instruct",
+		};
+		global.fetch = createMockFetch([
+			{
+				id: "chatcmpl-nim-4",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { content: "keep <\uff5cas-is\uff5c> please" } }],
+			},
+			{
+				id: "chatcmpl-nim-4",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			},
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const text = result.content
+			.filter(b => b.type === "text")
+			.map(b => (b as { text: string }).text)
+			.join("");
+		expect(text).toBe("keep <\uff5cas-is\uff5c> please");
 	});
 });

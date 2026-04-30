@@ -73,6 +73,42 @@ function getLastAssistantMessage(session: AgentSession): AssistantMessage {
 	return lastMessage;
 }
 
+function createFallbackAgent(primaryModel: Model, requestedModels: string[]): Agent {
+	let primaryAttempts = 0;
+	return new Agent({
+		getApiKey: provider => `${provider}-test-key`,
+		initialState: {
+			model: primaryModel,
+			systemPrompt: "Test",
+			tools: [],
+			messages: [],
+		},
+		streamFn: model => {
+			requestedModels.push(`${model.provider}/${model.id}`);
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (model.provider === primaryModel.provider && model.id === primaryModel.id && primaryAttempts === 0) {
+					primaryAttempts += 1;
+					const message = createAssistantMessage(model, {
+						stopReason: "error",
+						errorMessage: "rate limit exceeded retry-after-ms=200",
+					});
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "error", reason: "error", error: message });
+					return;
+				}
+				const message = createAssistantMessage(model, {
+					text: `ok:${model.provider}/${model.id}`,
+					stopReason: "stop",
+				});
+				stream.push({ type: "start", partial: createAssistantMessage(model, { text: "", stopReason: "stop" }) });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		},
+	});
+}
+
 describe("AgentSession retry fallback", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
@@ -310,6 +346,162 @@ describe("AgentSession retry fallback", () => {
 		expect(lastAssistant.content).toContainEqual({ type: "text", text: "Recovered after OpenAI timeout" });
 	});
 
+	it("auto-retries Anthropic stream-envelope failures before message_start", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) {
+			throw new Error("Expected bundled Anthropic test model to exist");
+		}
+
+		const envelopeError = "Anthropic stream envelope error: received content_block_start before message_start";
+		const requestedModels: string[] = [];
+		let attemptCount = 0;
+
+		const agent = new Agent({
+			getApiKey: provider => `${provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: "Test",
+				tools: [],
+				messages: [],
+			},
+			streamFn: requestedModel => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					attemptCount += 1;
+					if (attemptCount === 1) {
+						const message = createAssistantMessage(requestedModel, {
+							stopReason: "error",
+							errorMessage: envelopeError,
+						});
+						stream.push({ type: "start", partial: message });
+						stream.push({ type: "error", reason: "error", error: message });
+						return;
+					}
+					if (attemptCount === 2) {
+						const message = createAssistantMessage(requestedModel, {
+							text: "Recovered after Anthropic envelope retry",
+							stopReason: "stop",
+						});
+						stream.push({
+							type: "start",
+							partial: createAssistantMessage(requestedModel, { text: "", stopReason: "stop" }),
+						});
+						stream.push({ type: "done", reason: "stop", message });
+						return;
+					}
+					throw new Error(`Unexpected retry attempt in Anthropic envelope test: ${attemptCount}`);
+				});
+				return stream;
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+
+		await session.prompt("Retry Anthropic envelope failure before message_start");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([`${model.provider}/${model.id}`, `${model.provider}/${model.id}`]);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryStartEvents[0]).toMatchObject({
+			attempt: 1,
+			maxAttempts: 1,
+			errorMessage: envelopeError,
+		});
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({ success: true, attempt: 1 });
+		const lastAssistant = getLastAssistantMessage(session);
+		expect(lastAssistant.stopReason).toBe("stop");
+		expect(lastAssistant.content).toContainEqual({ type: "text", text: "Recovered after Anthropic envelope retry" });
+	});
+
+	it("does not auto-retry Anthropic stream-envelope failures before terminal stop signal", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!primaryModel || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const envelopeError = "Anthropic stream envelope error: received content_block_delta before terminal stop signal";
+		const requestedModels: string[] = [];
+		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+		const fallbackSucceededEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_succeeded" }>> = [];
+
+		const agent = new Agent({
+			getApiKey: provider => `${provider}-test-key`,
+			initialState: {
+				model: primaryModel,
+				systemPrompt: "Test",
+				tools: [],
+				messages: [],
+			},
+			streamFn: requestedModel => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					const message = createAssistantMessage(requestedModel, {
+						stopReason: "error",
+						errorMessage: envelopeError,
+					});
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "error", reason: "error", error: message });
+				});
+				return stream;
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+			"retry.fallbackChains": {
+				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
+		});
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") {
+				fallbackAppliedEvents.push(event);
+			}
+			if (event.type === "retry_fallback_succeeded") {
+				fallbackSucceededEvents.push(event);
+			}
+		});
+
+		await session.prompt("Do not retry Anthropic envelope failure before terminal stop signal");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([`${primaryModel.provider}/${primaryModel.id}`]);
+		expect(retryStartEvents).toHaveLength(0);
+		expect(retryEndEvents).toHaveLength(0);
+		expect(fallbackAppliedEvents).toHaveLength(0);
+		expect(fallbackSucceededEvents).toHaveLength(0);
+		const lastAssistant = getLastAssistantMessage(session);
+		expect(lastAssistant.stopReason).toBe("error");
+		expect(lastAssistant.errorMessage).toBe(envelopeError);
+	});
+
 	it("does not auto-retry generic Request was aborted. errors", async () => {
 		const model = getBundledModel("openai", "gpt-4o-mini");
 		if (!model) {
@@ -374,40 +566,7 @@ describe("AgentSession retry fallback", () => {
 		}
 
 		const requestedModels: string[] = [];
-		let primaryAttempts = 0;
-
-		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
-			initialState: {
-				model: primaryModel,
-				systemPrompt: "Test",
-				tools: [],
-				messages: [],
-			},
-			streamFn: model => {
-				requestedModels.push(`${model.provider}/${model.id}`);
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					if (model.provider === primaryModel.provider && model.id === primaryModel.id && primaryAttempts === 0) {
-						primaryAttempts += 1;
-						const message = createAssistantMessage(model, {
-							stopReason: "error",
-							errorMessage: "rate limit exceeded retry-after-ms=200",
-						});
-						stream.push({ type: "start", partial: message });
-						stream.push({ type: "error", reason: "error", error: message });
-						return;
-					}
-					const message = createAssistantMessage(model, {
-						text: `ok:${model.provider}/${model.id}`,
-						stopReason: "stop",
-					});
-					stream.push({ type: "start", partial: createAssistantMessage(model, { text: "", stopReason: "stop" }) });
-					stream.push({ type: "done", reason: "stop", message });
-				});
-				return stream;
-			},
-		});
+		const agent = createFallbackAgent(primaryModel, requestedModels);
 
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
@@ -466,40 +625,7 @@ describe("AgentSession retry fallback", () => {
 		}
 
 		const requestedModels: string[] = [];
-		let primaryAttempts = 0;
-
-		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
-			initialState: {
-				model: primaryModel,
-				systemPrompt: "Test",
-				tools: [],
-				messages: [],
-			},
-			streamFn: model => {
-				requestedModels.push(`${model.provider}/${model.id}`);
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					if (model.provider === primaryModel.provider && model.id === primaryModel.id && primaryAttempts === 0) {
-						primaryAttempts += 1;
-						const message = createAssistantMessage(model, {
-							stopReason: "error",
-							errorMessage: "rate limit exceeded retry-after-ms=200",
-						});
-						stream.push({ type: "start", partial: message });
-						stream.push({ type: "error", reason: "error", error: message });
-						return;
-					}
-					const message = createAssistantMessage(model, {
-						text: `ok:${model.provider}/${model.id}`,
-						stopReason: "stop",
-					});
-					stream.push({ type: "start", partial: createAssistantMessage(model, { text: "", stopReason: "stop" }) });
-					stream.push({ type: "done", reason: "stop", message });
-				});
-				return stream;
-			},
-		});
+		const agent = createFallbackAgent(primaryModel, requestedModels);
 
 		const settings = Settings.isolated({
 			"compaction.enabled": false,

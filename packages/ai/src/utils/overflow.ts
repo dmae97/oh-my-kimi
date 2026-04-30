@@ -21,6 +21,7 @@ import type { AssistantMessage } from "../types";
  * - Kimi For Coding: "Your request exceeded model token limit: X (requested: Y)"
  * - Anthropic 413: "request_too_large" / "Request exceeds the maximum size" (payload too large)
  * - HTTP 413 variants: "Payload Too Large" / "Request Entity Too Large"
+ * - z.ai / GLM: Returns finish_reason: "model_context_window_exceeded" mapped to error message
  * - z.ai: Does NOT error, accepts overflow silently - handled via usage.input > contextWindow
  * - Ollama: Silently truncates input - not detectable via error message
  */
@@ -49,6 +50,7 @@ const OVERFLOW_PATTERNS = [
 	/payload too large/i, // Generic HTTP 413 variant
 	/entity too large/i, // Generic HTTP 413 variant
 	/\b413\b.*\b(request|payload|entity)\b.*\btoo large\b/i, // "413 Request Entity Too Large" variants
+	/model_context_window_exceeded/i, // z.ai non-standard finish_reason surfaced as error text
 ];
 /**
  * Check if an assistant message represents a context overflow error.

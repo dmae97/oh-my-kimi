@@ -14,6 +14,12 @@
 			"relatedTests": true
 		}
 	},
+	"tlaplus": {
+		"command": "tlapm_lsp",
+		"args": ["--stdio"],
+		"fileTypes": [".tla", ".tlaplus"],
+		"rootMarkers": ["*.tla"]
+	},
 	"clangd": {
 		"command": "clangd",
 		"args": ["--background-index", "--clang-tidy", "--header-insertion=iwyu"],
@@ -33,7 +39,10 @@
 		"rootMarkers": ["go.mod", "go.work", "go.sum"],
 		"settings": {
 			"gopls": {
-				"analyses": { "unusedparams": true, "shadow": true },
+				"analyses": {
+					"unusedparams": true,
+					"shadow": true
+				},
 				"staticcheck": true,
 				"gofumpt": true
 			}
@@ -301,10 +310,18 @@
 		"rootMarkers": [".luarc.json", ".luarc.jsonc", ".luacheckrc", ".stylua.toml", "stylua.toml"],
 		"settings": {
 			"Lua": {
-				"runtime": { "version": "LuaJIT" },
-				"diagnostics": { "globals": ["vim"] },
-				"workspace": { "checkThirdParty": false },
-				"telemetry": { "enable": false }
+				"runtime": {
+					"version": "LuaJIT"
+				},
+				"diagnostics": {
+					"globals": ["vim"]
+				},
+				"workspace": {
+					"checkThirdParty": false
+				},
+				"telemetry": {
+					"enable": false
+				}
 			}
 		}
 	},
@@ -326,8 +343,12 @@
 		"fileTypes": [".cs", ".csx"],
 		"rootMarkers": ["*.sln", "*.csproj", "omnisharp.json", ".git"],
 		"settings": {
-			"FormattingOptions": { "EnableEditorConfigSupport": true },
-			"RoslynExtensionsOptions": { "EnableAnalyzersSupport": true }
+			"FormattingOptions": {
+				"EnableEditorConfigSupport": true
+			},
+			"RoslynExtensionsOptions": {
+				"EnableAnalyzersSupport": true
+			}
 		}
 	},
 	"yamlls": {
@@ -338,18 +359,18 @@
 		"settings": {
 			"yaml": {
 				"validate": true,
-				"format": { "enable": true },
+				"format": {
+					"enable": true
+				},
 				"hover": true,
 				"completion": true
 			},
-			"redhat": { "telemetry": { "enabled": false } }
+			"redhat": {
+				"telemetry": {
+					"enabled": false
+				}
+			}
 		}
-	},
-	"taplo": {
-		"command": "taplo",
-		"args": ["lsp", "stdio"],
-		"fileTypes": [".toml"],
-		"rootMarkers": [".taplo.toml", "taplo.toml", ".git"]
 	},
 	"terraformls": {
 		"command": "terraform-ls",
@@ -402,7 +423,8 @@
 		"command": "marksman",
 		"args": ["server"],
 		"fileTypes": [".md", ".markdown"],
-		"rootMarkers": [".marksman.toml", ".git"]
+		"rootMarkers": [".marksman.toml", ".git"],
+		"warmupTimeoutMs": 15000
 	},
 	"texlab": {
 		"command": "texlab",
@@ -415,7 +437,9 @@
 					"executable": "latexmk",
 					"args": ["-pdf", "-interaction=nonstopmode", "-synctex=1", "%f"]
 				},
-				"chktex": { "onOpenAndSave": true }
+				"chktex": {
+					"onOpenAndSave": true
+				}
 			}
 		}
 	},
@@ -438,7 +462,9 @@
 		"rootMarkers": [".git"],
 		"initOptions": {
 			"isNeovim": true,
-			"diagnostic": { "enable": true }
+			"diagnostic": {
+				"enable": true
+			}
 		}
 	},
 	"emmet-language-server": {
@@ -446,8 +472,7 @@
 		"args": ["--stdio"],
 		"fileTypes": [".html", ".css", ".scss", ".less", ".jsx", ".tsx", ".vue", ".svelte"],
 		"rootMarkers": [".git"]
-	}
-	,
+	},
 	"sourcekit-lsp": {
 		"command": "sourcekit-lsp",
 		"args": [],

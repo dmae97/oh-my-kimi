@@ -27,6 +27,7 @@ function createSession(id: string, title: string): SessionInfo {
 		created: new Date("2024-01-01T00:00:00Z"),
 		modified: new Date("2024-01-02T00:00:00Z"),
 		messageCount: 1,
+		size: 0,
 		firstMessage: `${title} first message`,
 		allMessagesText: `${title} first message`,
 	};
@@ -77,6 +78,8 @@ describe("component escape bindings", () => {
 		const modelRegistry = {
 			getAll: () => [model],
 			getDiscoverableProviders: () => [],
+			getCanonicalModels: () => [],
+			resolveCanonicalModel: () => undefined,
 		} as unknown as ModelRegistry;
 		const ui = {
 			requestRender: vi.fn(),

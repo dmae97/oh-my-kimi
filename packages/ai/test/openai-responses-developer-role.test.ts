@@ -61,8 +61,8 @@ describe("supportsDeveloperRole", () => {
 		expect(supportsDeveloperRole(model)).toBe(true);
 	});
 
-	it("returns true for github-copilot provider with api.individual.githubcopilot.com", () => {
-		const model = { provider: "github-copilot", baseUrl: "https://api.individual.githubcopilot.com" } as Model;
+	it("returns true for github-copilot provider with api.githubcopilot.com", () => {
+		const model = { provider: "github-copilot", baseUrl: "https://api.githubcopilot.com" } as Model;
 		expect(supportsDeveloperRole(model)).toBe(true);
 	});
 

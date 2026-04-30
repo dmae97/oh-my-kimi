@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import { prompt } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { renderPromptTemplate } from "../config/prompt-templates";
 import checkpointDescription from "../prompts/tools/checkpoint.md" with { type: "text" };
 import rewindDescription from "../prompts/tools/rewind.md" with { type: "text" };
 import type { ToolSession } from ".";
@@ -18,13 +18,13 @@ export interface CheckpointState {
 }
 
 const checkpointSchema = Type.Object({
-	goal: Type.String({ description: "What you are investigating and why" }),
+	goal: Type.String({ description: "investigation goal", examples: ["investigate retry logic"] }),
 });
 
 type CheckpointParams = Static<typeof checkpointSchema>;
 
 const rewindSchema = Type.Object({
-	report: Type.String({ description: "Concise investigation findings to retain after rewind" }),
+	report: Type.String({ description: "investigation findings" }),
 });
 
 type RewindParams = Static<typeof rewindSchema>;
@@ -52,9 +52,10 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 	readonly description: string;
 	readonly parameters = checkpointSchema;
 	readonly strict = true;
+	readonly intent = (args: Partial<CheckpointParams>) => args.goal;
 
 	constructor(private readonly session: ToolSession) {
-		this.description = renderPromptTemplate(checkpointDescription);
+		this.description = prompt.render(checkpointDescription);
 	}
 
 	static createIf(session: ToolSession): CheckpointTool | null {
@@ -94,9 +95,10 @@ export class RewindTool implements AgentTool<typeof rewindSchema, RewindToolDeta
 	readonly description: string;
 	readonly parameters = rewindSchema;
 	readonly strict = true;
+	readonly intent = (): string => "Rewinding to checkpoint";
 
 	constructor(private readonly session: ToolSession) {
-		this.description = renderPromptTemplate(rewindDescription);
+		this.description = prompt.render(rewindDescription);
 	}
 
 	static createIf(session: ToolSession): RewindTool | null {

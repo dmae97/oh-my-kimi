@@ -22,6 +22,8 @@ omp --mode rpc [regular CLI options]
 Behavior notes:
 
 - `@file` CLI arguments are rejected in RPC mode.
+- RPC mode disables automatic session title generation by default to avoid an extra model call.
+- RPC mode resets workflow-altering `todo.*`, `task.*`, and `async.*` settings to their built-in defaults instead of inheriting user overrides.
 - The process reads stdin as JSONL (`readJsonl(Bun.stdin.stream())`).
 - When stdin closes, the process exits with code `0`.
 - Responses/events are written as one JSON object per line.
@@ -73,6 +75,8 @@ Important edge behavior from runtime:
 ### State
 
 - `{ id?, type: "get_state" }`
+- `{ id?, type: "set_todos", phases: TodoPhase[] }`
+- `{ id?, type: "set_host_tools", tools: RpcHostToolDefinition[] }`
 
 ### Model
 
@@ -145,9 +149,91 @@ Data payloads are command-specific and defined in `rpc-types.ts`.
   "sessionName": "...",
   "autoCompactionEnabled": true,
   "messageCount": 0,
-  "queuedMessageCount": 0
+  "queuedMessageCount": 0,
+  "todoPhases": [
+    {
+      "id": "phase-1",
+      "name": "Todos",
+      "tasks": [
+        {
+          "id": "task-1",
+          "content": "Map the tool surface",
+          "status": "in_progress"
+        }
+      ]
+    }
+  ]
 }
 ```
+
+### `set_todos` payload
+
+Replaces the in-memory todo state for the current session and returns the normalized phase list:
+
+```json
+{
+  "id": "req_2",
+  "type": "set_todos",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Evaluation",
+      "tasks": [
+        {
+          "id": "task-1",
+          "content": "Map the read tool surface",
+          "status": "in_progress"
+        },
+        {
+          "id": "task-2",
+          "content": "Exercise edit operations",
+          "status": "pending"
+        }
+      ]
+    }
+  ]
+}
+```
+
+This is useful for hosts that want to pre-seed a plan before the first prompt.
+
+### `set_host_tools` payload
+
+Replaces the current set of host-owned tools that the RPC server may call back
+into over stdio:
+
+```json
+{
+  "id": "req_3",
+  "type": "set_host_tools",
+  "tools": [
+    {
+      "name": "echo_host",
+      "label": "Echo Host",
+      "description": "Echo a value from the embedding host",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" }
+        },
+        "required": ["message"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}
+```
+
+The response payload is:
+
+```json
+{
+  "toolNames": ["echo_host"]
+}
+```
+
+These tools are added to the active session tool registry before the next model
+call. Re-sending `set_host_tools` replaces the previous host-owned set.
 
 ## Event Stream Schema
 
@@ -163,6 +249,7 @@ Common event types:
 - `auto_retry_start`, `auto_retry_end`
 - `ttsr_triggered`
 - `todo_reminder`
+- `todo_auto_clear`
 
 Extension runner errors are emitted separately as:
 
@@ -226,6 +313,13 @@ Extensions in RPC mode use request/response UI frames.
 - `select`, `confirm`, `input`, `editor`
 - `notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`
 
+Runtime note:
+
+- Automatic session title generation is disabled in RPC mode, and `setTitle` UI
+  requests are also suppressed by default because most hosts do not have a
+  meaningful terminal-title surface. Set `PI_RPC_EMIT_TITLE=1` to opt back in to
+  the UI event only.
+
 Example:
 
 ```json
@@ -241,6 +335,64 @@ Example:
 - `{ type: "extension_ui_response", id: string, cancelled: true }`
 
 If a dialog has a timeout, RPC mode resolves to a default value when timeout/abort fires.
+
+## Host Tool Sub-Protocol
+
+RPC hosts can expose custom tools to the agent by sending `set_host_tools`, then
+serving execution requests over the same transport.
+
+### Outbound request
+
+When the agent wants the host to execute one of those tools, RPC mode emits:
+
+```json
+{
+  "type": "host_tool_call",
+  "id": "host_1",
+  "toolCallId": "toolu_123",
+  "toolName": "echo_host",
+  "arguments": { "message": "hello" }
+}
+```
+
+If the tool execution is later aborted, RPC mode emits:
+
+```json
+{
+  "type": "host_tool_cancel",
+  "id": "host_cancel_1",
+  "targetId": "host_1"
+}
+```
+
+### Inbound updates and completion
+
+Hosts can optionally stream progress:
+
+```json
+{
+  "type": "host_tool_update",
+  "id": "host_1",
+  "partialResult": {
+    "content": [{ "type": "text", "text": "working" }]
+  }
+}
+```
+
+Completion uses:
+
+```json
+{
+  "type": "host_tool_result",
+  "id": "host_1",
+  "result": {
+    "content": [{ "type": "text", "text": "done" }]
+  }
+}
+```
+
+Set `isError: true` on `host_tool_result` to surface the returned content as a
+tool error.
 
 ## Error Model and Recoverability
 
@@ -320,6 +472,7 @@ Current helper characteristics:
 - Spawns `bun <cliPath> --mode rpc`
 - Correlates responses by generated `req_<n>` ids
 - Dispatches only recognized `AgentEvent` types to listeners
+- Supports host-owned custom tools via `setCustomTools()` and automatic handling of `host_tool_call` / `host_tool_cancel`
 - Does **not** expose helper methods for every protocol command (for example, `set_interrupt_mode` and `set_session_name` are in protocol types but not wrapped as dedicated methods)
 
 Use raw protocol frames if you need complete surface coverage.

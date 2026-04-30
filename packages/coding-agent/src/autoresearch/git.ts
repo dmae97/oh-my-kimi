@@ -236,3 +236,94 @@ function collectUnsafeDirtyPaths(statusOutput: string, workDirPrefix: string): s
 	}
 	return unsafeDirtyPaths;
 }
+
+export interface DirtyPathEntry {
+	path: string;
+	untracked: boolean;
+}
+
+export function parseDirtyPathsWithStatus(statusOutput: string): DirtyPathEntry[] {
+	if (statusOutput.includes("\0")) {
+		return parseDirtyPathsNulWithStatus(statusOutput);
+	}
+	return parseDirtyPathsLinesWithStatus(statusOutput);
+}
+
+function parseDirtyPathsNulWithStatus(statusOutput: string): DirtyPathEntry[] {
+	const seen = new Set<string>();
+	const results: DirtyPathEntry[] = [];
+	let index = 0;
+	while (index + 3 <= statusOutput.length) {
+		const statusToken = statusOutput.slice(index, index + 3);
+		index += 3;
+		const pathEnd = statusOutput.indexOf("\0", index);
+		if (pathEnd < 0) break;
+		const firstPath = statusOutput.slice(index, pathEnd);
+		index = pathEnd + 1;
+		const untracked = statusToken.trim().startsWith("??");
+		addDirtyPathEntry(seen, results, firstPath, untracked);
+		if (isRenameOrCopy(statusToken)) {
+			const secondPathEnd = statusOutput.indexOf("\0", index);
+			if (secondPathEnd < 0) break;
+			const secondPath = statusOutput.slice(index, secondPathEnd);
+			index = secondPathEnd + 1;
+			addDirtyPathEntry(seen, results, secondPath, false);
+		}
+	}
+	return results;
+}
+
+function parseDirtyPathsLinesWithStatus(statusOutput: string): DirtyPathEntry[] {
+	const seen = new Set<string>();
+	const results: DirtyPathEntry[] = [];
+	for (const line of statusOutput.split("\n")) {
+		const trimmedLine = line.trimEnd();
+		if (trimmedLine.length < 4) continue;
+		const statusToken = trimmedLine.slice(0, 3);
+		const rawPath = trimmedLine.slice(3).trim();
+		if (rawPath.length === 0) continue;
+		const untracked = statusToken.trim().startsWith("??");
+		const renameParts = rawPath.split(" -> ");
+		for (const renamePart of renameParts) {
+			addDirtyPathEntry(seen, results, renamePart, untracked);
+		}
+	}
+	return results;
+}
+
+function addDirtyPathEntry(seen: Set<string>, results: DirtyPathEntry[], rawPath: string, untracked: boolean): void {
+	const normalizedPath = normalizeStatusPath(rawPath);
+	if (normalizedPath.length === 0 || seen.has(normalizedPath)) return;
+	seen.add(normalizedPath);
+	results.push({ path: normalizedPath, untracked });
+}
+
+export function parseWorkDirDirtyPathsWithStatus(statusOutput: string, workDirPrefix: string): DirtyPathEntry[] {
+	const results: DirtyPathEntry[] = [];
+	for (const entry of parseDirtyPathsWithStatus(statusOutput)) {
+		const relativePath = relativizeGitPathToWorkDir(entry.path, workDirPrefix);
+		if (relativePath === null) continue;
+		results.push({ path: relativePath, untracked: entry.untracked });
+	}
+	return results;
+}
+
+export function computeRunModifiedPaths(
+	preRunDirtyPaths: string[],
+	currentStatusOutput: string,
+	workDirPrefix: string,
+): { tracked: string[]; untracked: string[] } {
+	const preRunSet = new Set(preRunDirtyPaths);
+	const tracked: string[] = [];
+	const untracked: string[] = [];
+	for (const entry of parseWorkDirDirtyPathsWithStatus(currentStatusOutput, workDirPrefix)) {
+		if (preRunSet.has(entry.path)) continue;
+		if (isAutoresearchLocalStatePath(entry.path)) continue;
+		if (entry.untracked) {
+			untracked.push(entry.path);
+		} else {
+			tracked.push(entry.path);
+		}
+	}
+	return { tracked, untracked };
+}

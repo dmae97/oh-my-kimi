@@ -1,26 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { enrichModelThinking } from "@oh-my-pi/pi-ai/model-thinking";
 import { type RequestBody, transformRequestBody } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
 import { parseCodexError } from "@oh-my-pi/pi-ai/providers/openai-codex/response-handler";
-import type { Model } from "@oh-my-pi/pi-ai/types";
+import { createCodexModel } from "./helpers";
 
 const DEFAULT_PROMPT_PREFIX =
 	"You are an expert coding assistant. You help users with coding tasks by reading files, executing commands";
-
-function createCodexModel(id: string): Model<"openai-codex-responses"> {
-	return enrichModelThinking({
-		id,
-		name: id,
-		api: "openai-codex-responses",
-		provider: "openai-codex",
-		baseUrl: "https://api.openai.com/v1",
-		reasoning: true,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 272000,
-		maxTokens: 128000,
-	});
-}
 
 describe("openai-codex request transformer", () => {
 	it("filters item_reference and strips ids", async () => {

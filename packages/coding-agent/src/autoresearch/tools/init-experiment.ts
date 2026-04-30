@@ -6,15 +6,16 @@ import { Type } from "@sinclair/typebox";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
+import { applyAutoresearchContractToExperimentState } from "../apply-contract-to-state";
 import {
-	buildAutoresearchSegmentFingerprint,
 	contractListsEqual,
 	contractPathListsEqual,
 	loadAutoresearchScriptSnapshot,
 	readAutoresearchContract,
 } from "../contract";
 import {
-	inferMetricUnitFromName,
+	abandonUnloggedAutoresearchRuns,
+	collectLoggedRunNumbers,
 	isAutoresearchShCommand,
 	readMaxExperiments,
 	readPendingRunSummary,
@@ -28,9 +29,29 @@ const initExperimentSchema = Type.Object({
 	name: Type.String({
 		description: "Human-readable experiment name.",
 	}),
-	metric_name: Type.String({
-		description: "Primary metric name shown in the dashboard.",
-	}),
+	from_autoresearch_md: Type.Optional(
+		Type.Boolean({
+			description:
+				"When true, load benchmark command, metrics, scope, off-limits, and constraints from autoresearch.md instead of passing mirrored fields below.",
+		}),
+	),
+	abandon_unlogged_runs: Type.Optional(
+		Type.Boolean({
+			description:
+				"When true, mark all completed but unlogged run artifacts as abandoned so initialization can proceed without logging them first.",
+		}),
+	),
+	new_segment: Type.Optional(
+		Type.Boolean({
+			description:
+				"When true, force a new segment even when the contract fields have not changed. Without this, re-initialization with matching contract is a no-op.",
+		}),
+	),
+	metric_name: Type.Optional(
+		Type.String({
+			description: "Primary metric name shown in the dashboard. Required when from_autoresearch_md is false.",
+		}),
+	),
 	metric_unit: Type.Optional(
 		Type.String({
 			description: "Unit for the primary metric, for example µs, ms, s, kb, or empty.",
@@ -41,13 +62,17 @@ const initExperimentSchema = Type.Object({
 			description: "Whether lower or higher values are better. Defaults to lower.",
 		}),
 	),
-	benchmark_command: Type.String({
-		description: "Benchmark command recorded in autoresearch.md.",
-	}),
-	scope_paths: Type.Array(Type.String(), {
-		description: "Files in Scope from autoresearch.md. Must be non-empty.",
-		minItems: 1,
-	}),
+	benchmark_command: Type.Optional(
+		Type.String({
+			description: "Benchmark command recorded in autoresearch.md. Required when from_autoresearch_md is false.",
+		}),
+	),
+	scope_paths: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "Files in Scope from autoresearch.md. Required when from_autoresearch_md is false.",
+			minItems: 1,
+		}),
+	),
 	off_limits: Type.Optional(
 		Type.Array(Type.String(), {
 			description: "Off Limits paths from autoresearch.md.",
@@ -86,25 +111,43 @@ export function createInitExperimentTool(
 			const state = runtime.state;
 			const isReinitializing = state.results.length > 0;
 			const workDir = resolveWorkDir(ctx.cwd);
-			const pendingRun = await readPendingRunSummary(workDir, collectLoggedRunNumbers(state.results));
+			const loggedRunNumbers = collectLoggedRunNumbers(state.results);
+
+			let abandonSummary = "";
+			if (params.abandon_unlogged_runs === true) {
+				const abandoned = await abandonUnloggedAutoresearchRuns(workDir, loggedRunNumbers);
+				if (abandoned > 0) {
+					abandonSummary =
+						abandoned === 1
+							? "Abandoned 1 unlogged run artifact.\n"
+							: `Abandoned ${abandoned} unlogged run artifacts.\n`;
+				}
+			}
+
+			const pendingRun = await readPendingRunSummary(workDir, loggedRunNumbers);
 			if (pendingRun) {
+				const metricInfo = pendingRun.parsedPrimary !== null ? `, metric=${pendingRun.parsedPrimary}` : "";
+				const passedInfo = pendingRun.passed ? "passed" : "failed";
 				return {
 					content: [
 						{
 							type: "text",
 							text:
-								`Error: run #${pendingRun.runNumber} has not been logged yet. ` +
-								"Call log_experiment before re-initializing the current segment.",
+								abandonSummary +
+								`Error: run #${pendingRun.runNumber} has not been logged yet.\n` +
+								`Pending: command="${pendingRun.command}"${metricInfo}, ${passedInfo}\n` +
+								"Call log_experiment before re-initializing, or pass abandon_unlogged_runs=true.",
 						},
 					],
 				};
 			}
+
 			const contractResult = readAutoresearchContract(workDir);
 			const scriptSnapshot = loadAutoresearchScriptSnapshot(workDir);
 			const errors = [...contractResult.errors, ...scriptSnapshot.errors];
 			if (errors.length > 0) {
 				return {
-					content: [{ type: "text", text: `Error: ${errors.join(" ")}` }],
+					content: [{ type: "text", text: `${abandonSummary}Error: ${errors.join(" ")}` }],
 				};
 			}
 
@@ -117,118 +160,161 @@ export function createInitExperimentTool(
 						{
 							type: "text",
 							text:
+								abandonSummary +
 								"Error: Benchmark.command in autoresearch.md must invoke `autoresearch.sh` directly. " +
 								"Move the real workload into `autoresearch.sh` and re-run init_experiment.",
 						},
 					],
 				};
 			}
-			if (benchmarkContract.command !== params.benchmark_command.trim()) {
-				return {
-					content: [
-						{
-							type: "text",
-							text:
-								"Error: benchmark_command does not match autoresearch.md. " +
-								`Expected: ${benchmarkContract.command ?? "(missing)"}\nReceived: ${params.benchmark_command}`,
-						},
-					],
-				};
-			}
-			if (benchmarkContract.primaryMetric !== params.metric_name.trim()) {
-				return {
-					content: [
-						{
-							type: "text",
-							text:
-								"Error: metric_name does not match autoresearch.md. " +
-								`Expected: ${benchmarkContract.primaryMetric ?? "(missing)"}\nReceived: ${params.metric_name}`,
-						},
-					],
-				};
-			}
-			if ((params.metric_unit ?? "") !== expectedMetricUnit) {
-				return {
-					content: [
-						{
-							type: "text",
-							text:
-								"Error: metric_unit does not match autoresearch.md. " +
-								`Expected: ${expectedMetricUnit || "(empty)"}\nReceived: ${params.metric_unit ?? "(empty)"}`,
-						},
-					],
-				};
-			}
-			if ((params.direction ?? "lower") !== expectedDirection) {
-				return {
-					content: [
-						{
-							type: "text",
-							text:
-								"Error: direction does not match autoresearch.md. " +
-								`Expected: ${expectedDirection}\nReceived: ${params.direction ?? "lower"}`,
-						},
-					],
-				};
-			}
-			if (!contractPathListsEqual(params.scope_paths, contractResult.contract.scopePaths)) {
-				return {
-					content: [
-						{
-							type: "text",
-							text:
-								"Error: scope_paths do not match autoresearch.md. " +
-								`Expected: ${contractResult.contract.scopePaths.join(", ")}`,
-						},
-					],
-				};
-			}
-			if (!contractPathListsEqual(params.off_limits ?? [], contractResult.contract.offLimits)) {
-				return {
-					content: [
-						{
-							type: "text",
-							text:
-								"Error: off_limits do not match autoresearch.md. " +
-								`Expected: ${contractResult.contract.offLimits.join(", ") || "(empty)"}`,
-						},
-					],
-				};
-			}
-			if (!contractListsEqual(params.constraints ?? [], contractResult.contract.constraints)) {
-				return {
-					content: [
-						{
-							type: "text",
-							text:
-								"Error: constraints do not match autoresearch.md. " +
-								`Expected: ${contractResult.contract.constraints.join(", ") || "(empty)"}`,
-						},
-					],
-				};
+
+			const fromMd = params.from_autoresearch_md === true;
+			if (!fromMd) {
+				const metricName = params.metric_name?.trim();
+				const benchmarkCommand = params.benchmark_command?.trim();
+				const scopePaths = params.scope_paths;
+				if (!metricName || !benchmarkCommand || !scopePaths || scopePaths.length === 0) {
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									abandonSummary +
+									"Error: when from_autoresearch_md is false or omitted, metric_name, benchmark_command, and scope_paths are required and must match autoresearch.md. " +
+									"Alternatively pass from_autoresearch_md=true with only name (plus optional flags).",
+							},
+						],
+					};
+				}
+				if (benchmarkContract.command !== benchmarkCommand) {
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									abandonSummary +
+									"Error: benchmark_command does not match autoresearch.md. " +
+									`Expected: ${benchmarkContract.command ?? "(missing)"}\nReceived: ${params.benchmark_command}`,
+							},
+						],
+					};
+				}
+				if (benchmarkContract.primaryMetric !== metricName) {
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									abandonSummary +
+									"Error: metric_name does not match autoresearch.md. " +
+									`Expected: ${benchmarkContract.primaryMetric ?? "(missing)"}\nReceived: ${params.metric_name}`,
+							},
+						],
+					};
+				}
+				if ((params.metric_unit ?? "") !== expectedMetricUnit) {
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									abandonSummary +
+									"Error: metric_unit does not match autoresearch.md. " +
+									`Expected: ${expectedMetricUnit || "(empty)"}\nReceived: ${params.metric_unit ?? "(empty)"}`,
+							},
+						],
+					};
+				}
+				if ((params.direction ?? "lower") !== expectedDirection) {
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									abandonSummary +
+									"Error: direction does not match autoresearch.md. " +
+									`Expected: ${expectedDirection}\nReceived: ${params.direction ?? "lower"}`,
+							},
+						],
+					};
+				}
+				if (!contractPathListsEqual(scopePaths, contractResult.contract.scopePaths)) {
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									abandonSummary +
+									"Error: scope_paths do not match autoresearch.md. " +
+									`Expected: ${contractResult.contract.scopePaths.join(", ")}`,
+							},
+						],
+					};
+				}
+				if (!contractPathListsEqual(params.off_limits ?? [], contractResult.contract.offLimits)) {
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									abandonSummary +
+									"Error: off_limits do not match autoresearch.md. " +
+									`Expected: ${contractResult.contract.offLimits.join(", ") || "(empty)"}`,
+							},
+						],
+					};
+				}
+				if (!contractListsEqual(params.constraints ?? [], contractResult.contract.constraints)) {
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									abandonSummary +
+									"Error: constraints do not match autoresearch.md. " +
+									`Expected: ${contractResult.contract.constraints.join(", ") || "(empty)"}`,
+							},
+						],
+					};
+				}
 			}
 
-			const segmentFingerprint = buildAutoresearchSegmentFingerprint(contractResult.contract, {
-				benchmarkScript: scriptSnapshot.benchmarkScript,
-				checksScript: scriptSnapshot.checksScript,
-			});
+			// Check if contract matches current state — if so, re-init is a no-op
+			if (isReinitializing && params.new_segment !== true) {
+				const contract = contractResult.contract;
+				const bm = contract.benchmark;
+				const contractMatches =
+					(bm.primaryMetric ?? "metric") === state.metricName &&
+					bm.metricUnit === state.metricUnit &&
+					(bm.direction ?? "lower") === state.bestDirection &&
+					(bm.command ?? null) === state.benchmarkCommand &&
+					contractPathListsEqual(contract.scopePaths, state.scopePaths) &&
+					contractPathListsEqual(contract.offLimits, state.offLimits) &&
+					contractListsEqual(contract.constraints, state.constraints);
+				if (contractMatches) {
+					runtime.autoresearchMode = true;
+					runtime.autoResumeArmed = true;
+					options.dashboard.updateWidget(ctx, runtime);
+					options.dashboard.requestRender();
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									abandonSummary +
+									`Experiment session already initialized with matching contract. Continuing segment ${state.currentSegment}.`,
+							},
+						],
+						details: { state: cloneExperimentState(state) },
+					};
+				}
+			}
 
+			applyAutoresearchContractToExperimentState(contractResult.contract, state);
 			state.name = params.name;
-			state.metricName = params.metric_name;
-			state.metricUnit = params.metric_unit ?? "";
-			state.bestDirection = params.direction ?? "lower";
 			state.maxExperiments = readMaxExperiments(ctx.cwd);
 			state.bestMetric = null;
 			state.confidence = null;
-			state.secondaryMetrics = benchmarkContract.secondaryMetrics.map(name => ({
-				name,
-				unit: inferMetricUnitFromName(name),
-			}));
-			state.benchmarkCommand = params.benchmark_command.trim();
-			state.scopePaths = [...contractResult.contract.scopePaths];
-			state.offLimits = [...contractResult.contract.offLimits];
-			state.constraints = [...contractResult.contract.constraints];
-			state.segmentFingerprint = segmentFingerprint;
 			if (isReinitializing) {
 				state.currentSegment += 1;
 			}
@@ -245,7 +331,6 @@ export function createInitExperimentTool(
 				scopePaths: state.scopePaths,
 				offLimits: state.offLimits,
 				constraints: state.constraints,
-				segmentFingerprint,
 			});
 
 			if (isReinitializing) {
@@ -267,6 +352,7 @@ export function createInitExperimentTool(
 			options.dashboard.requestRender();
 
 			const lines = [
+				abandonSummary.trimEnd(),
 				`Experiment initialized: ${state.name}`,
 				`Metric: ${state.metricName} (${state.metricUnit || "unitless"}, ${state.bestDirection} is better)`,
 				`Benchmark command: ${state.benchmarkCommand}`,
@@ -275,7 +361,7 @@ export function createInitExperimentTool(
 				isReinitializing
 					? "Previous results remain in history. This starts a new segment and requires a fresh baseline."
 					: "Now run the baseline experiment and log it.",
-			];
+			].filter(line => line.length > 0);
 			if (state.maxExperiments !== null) {
 				lines.push(`Max iterations: ${state.maxExperiments}`);
 			}
@@ -297,14 +383,4 @@ export function createInitExperimentTool(
 
 function renderInitCall(name: string, theme: Theme): string {
 	return `${theme.fg("toolTitle", theme.bold("init_experiment"))} ${theme.fg("accent", truncateToWidth(replaceTabs(name), 100))}`;
-}
-
-function collectLoggedRunNumbers(results: ExperimentState["results"]): Set<number> {
-	const runNumbers = new Set<number>();
-	for (const result of results) {
-		if (result.runNumber !== null) {
-			runNumbers.add(result.runNumber);
-		}
-	}
-	return runNumbers;
 }

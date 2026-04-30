@@ -10,13 +10,13 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { getOAuthApiKey } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthCredentials, OAuthProvider } from "@oh-my-pi/pi-ai/utils/oauth/types";
-import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { $flag, getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
 
 /**
  * E2E tests require explicit opt-in via E2E=1 environment variable.
  * This prevents accidental API calls when keys happen to be in the environment.
  */
-export const E2E_ENABLED = Bun.env.E2E === "1" || Bun.env.E2E === "true";
+export const E2E_ENABLED = $flag("E2E");
 
 /**
  * Get an API key from environment, but only if E2E tests are enabled.

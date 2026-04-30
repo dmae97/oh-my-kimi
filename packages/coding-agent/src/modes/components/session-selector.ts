@@ -10,6 +10,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
+import { formatBytes } from "@oh-my-pi/pi-utils";
 import { theme } from "../../modes/theme/theme";
 import { matchesAppInterrupt } from "../../modes/utils/keybinding-matchers";
 import type { SessionInfo } from "../../session/session-manager";
@@ -157,10 +158,9 @@ class SessionList implements Component {
 				lines.push(messageLine);
 			}
 
-			// Metadata line: date + message count
+			// Metadata line: date + file size
 			const modified = formatDate(session.modified);
-			const msgCount = `${session.messageCount} message${session.messageCount !== 1 ? "s" : ""}`;
-			const metadata = `  ${modified} ${theme.sep.dot} ${msgCount}`;
+			const metadata = `  ${modified} ${theme.sep.dot} ${formatBytes(session.size)}`;
 			const metadataLine = theme.fg("dim", truncateToWidth(metadata, width));
 
 			lines.push(metadataLine);

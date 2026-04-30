@@ -1,11 +1,11 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, Message, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
+import { prompt } from "@oh-my-pi/pi-utils";
 import fileObserverSystemPrompt from "../../commit/prompts/file-observer-system.md" with { type: "text" };
 import fileObserverUserPrompt from "../../commit/prompts/file-observer-user.md" with { type: "text" };
 import type { FileDiff, FileObservation } from "../../commit/types";
 import { isExcludedFile } from "../../commit/utils/exclusions";
-import { renderPromptTemplate } from "../../config/prompt-templates";
 import { toReasoningEffort } from "../../thinking";
 import { truncateToTokenLimit } from "./utils";
 
@@ -38,7 +38,7 @@ export async function runMapPhase({
 	config,
 }: MapPhaseInput): Promise<FileObservation[]> {
 	const filtered = files.filter(file => !isExcludedFile(file.filename));
-	const systemPrompt = renderPromptTemplate(fileObserverSystemPrompt);
+	const systemPrompt = prompt.render(fileObserverSystemPrompt);
 	const maxFileTokens = config?.maxFileTokens ?? MAX_FILE_TOKENS;
 	const maxConcurrency = config?.maxConcurrency ?? MAX_CONCURRENCY;
 	const timeoutMs = config?.timeoutMs ?? MAP_PHASE_TIMEOUT_MS;
@@ -56,14 +56,14 @@ export async function runMapPhase({
 
 		const contextHeader = generateContextHeader(filtered, file.filename);
 		const truncated = truncateToTokenLimit(file.content, maxFileTokens);
-		const prompt = renderPromptTemplate(fileObserverUserPrompt, {
+		const userContent = prompt.render(fileObserverUserPrompt, {
 			filename: file.filename,
 			diff: truncated,
 			context_header: contextHeader,
 		});
 		const request = {
 			systemPrompt,
-			messages: [{ role: "user", content: prompt, timestamp: Date.now() }] as Message[],
+			messages: [{ role: "user", content: userContent, timestamp: Date.now() }] as Message[],
 		};
 
 		const response = await withRetry(

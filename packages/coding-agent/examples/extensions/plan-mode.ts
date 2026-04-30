@@ -22,7 +22,7 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { Key } from "@oh-my-pi/pi-tui";
 
 // Read-only tools for plan mode
-const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls"];
+const PLAN_MODE_TOOLS = ["read", "bash", "search", "find"];
 
 // Full set of tools for normal mode
 const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write"];

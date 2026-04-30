@@ -13,6 +13,19 @@
 
 use napi_derive::napi;
 
+/// System UI appearance reported by native macOS APIs (`detectMacOSAppearance`
+/// and observer).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[napi(string_enum)]
+pub enum MacOSAppearance {
+	/// Dark color scheme.
+	#[napi(value = "dark")]
+	Dark,
+	/// Light color scheme.
+	#[napi(value = "light")]
+	Light,
+}
+
 // ---------------------------------------------------------------------------
 // macOS implementation
 // ---------------------------------------------------------------------------
@@ -28,6 +41,8 @@ mod platform {
 
 	use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 	use parking_lot::Mutex;
+
+	use super::MacOSAppearance;
 
 	// -- CoreFoundation FFI types -------------------------------------------
 
@@ -149,15 +164,14 @@ mod platform {
 	// -- Sync detection -----------------------------------------------------
 
 	/// Read `AppleInterfaceStyle` via CoreFoundation preferences.
-	/// Returns `"dark"` or `"light"`.
-	pub fn detect_appearance() -> String {
+	pub fn detect_appearance() -> MacOSAppearance {
 		// SAFETY: CoreFoundation pointers are null-checked, type-checked where needed,
 		// and every object created or copied here is released exactly once before
 		// return.
 		unsafe {
 			let key = create_cf_string("AppleInterfaceStyle");
 			if key.is_null() {
-				return "light".into();
+				return MacOSAppearance::Light;
 			}
 
 			let value = CFPreferencesCopyAppValue(key, kCFPreferencesAnyApplication);
@@ -165,20 +179,20 @@ mod platform {
 
 			if value.is_null() {
 				// Key absent = light mode (no dark mode override set).
-				return "light".into();
+				return MacOSAppearance::Light;
 			}
 
 			if CFGetTypeID(value) != CFStringGetTypeID() {
 				CFRelease(value);
-				return "light".into();
+				return MacOSAppearance::Light;
 			}
 
 			let result = cf_string_to_string(value);
 			CFRelease(value);
 			if result == "Dark" {
-				"dark".into()
+				MacOSAppearance::Dark
 			} else {
-				"light".into()
+				MacOSAppearance::Light
 			}
 		}
 	}
@@ -196,10 +210,10 @@ mod platform {
 
 	/// Shared context for the notification callback and the poll timer.
 	struct CallbackCtx {
-		tsfn: ThreadsafeFunction<String>,
+		tsfn: ThreadsafeFunction<MacOSAppearance>,
 		/// Last reported appearance — used for dedup so we never fire twice
 		/// for the same value (notification + timer can race).
-		last: Mutex<String>,
+		last: Mutex<Option<MacOSAppearance>>,
 	}
 
 	impl CallbackCtx {
@@ -207,8 +221,8 @@ mod platform {
 		fn report_if_changed(&self) {
 			let appearance = detect_appearance();
 			let mut last = self.last.lock();
-			if *last != appearance {
-				(*last).clone_from(&appearance);
+			if last.as_ref() != Some(&appearance) {
+				*last = Some(appearance);
 				self
 					.tsfn
 					.call(Ok(appearance), ThreadsafeFunctionCallMode::NonBlocking);
@@ -266,7 +280,7 @@ mod platform {
 	}
 
 	impl ObserverInner {
-		pub fn start(tsfn: ThreadsafeFunction<String>) -> Self {
+		pub fn start(tsfn: ThreadsafeFunction<MacOSAppearance>) -> Self {
 			let run_loop: Arc<Mutex<Option<SendableRunLoop>>> = Arc::new(Mutex::new(None));
 			let rl_clone = run_loop.clone();
 
@@ -283,7 +297,7 @@ mod platform {
 					*rl_clone.lock() = Some(SendableRunLoop(rl));
 					let _ = tx.send(());
 
-					let ctx = Box::new(CallbackCtx { tsfn, last: Mutex::new(String::new()) });
+					let ctx = Box::new(CallbackCtx { tsfn, last: Mutex::new(None) });
 					let ctx_ptr = Box::into_raw(ctx);
 
 					// -- Register for distributed notification ---------------
@@ -381,7 +395,7 @@ mod platform {
 /// Returns `"dark"` or `"light"` on macOS, `null` on other platforms.
 #[napi(js_name = "detectMacOSAppearance")]
 #[allow(clippy::missing_const_for_fn, reason = "napi macro is incompatible with const fn")]
-pub fn detect_macos_appearance() -> Option<String> {
+pub fn detect_macos_appearance() -> Option<MacOSAppearance> {
 	#[cfg(target_os = "macos")]
 	{
 		Some(platform::detect_appearance())
@@ -413,8 +427,8 @@ pub struct MacAppearanceObserver {
 impl MacAppearanceObserver {
 	#[napi(factory)]
 	pub fn start(
-		#[napi(ts_arg_type = "(err: null | Error, appearance: string) => void")]
-		callback: napi::threadsafe_function::ThreadsafeFunction<String>,
+		#[napi(ts_arg_type = "(err: null | Error, appearance: MacOSAppearance) => void")]
+		callback: napi::threadsafe_function::ThreadsafeFunction<MacOSAppearance>,
 	) -> napi::Result<Self> {
 		#[cfg(target_os = "macos")]
 		{

@@ -6,6 +6,45 @@ import { formatNumber } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { fuzzyFilter } from "../utils/fuzzy";
 
+interface ProviderRow {
+	provider: string;
+	model: string;
+	context: string;
+	maxOut: string;
+	thinking: string;
+	images: string;
+}
+
+interface CanonicalRow {
+	canonical: string;
+	selected: string;
+	variants: string;
+	context: string;
+	maxOut: string;
+}
+
+function writeLine(line = ""): void {
+	process.stdout.write(`${line}\n`);
+}
+
+function renderTable<T extends Record<string, string>>(rows: T[], headers: T): void {
+	const widths = Object.fromEntries(
+		Object.keys(headers).map(key => [key, Math.max(headers[key]!.length, ...rows.map(row => row[key]!.length))]),
+	) as Record<keyof T, number>;
+
+	const headerLine = Object.keys(headers)
+		.map(key => headers[key as keyof T]!.padEnd(widths[key as keyof T]))
+		.join("  ");
+	writeLine(headerLine);
+
+	for (const row of rows) {
+		const line = Object.keys(headers)
+			.map(key => row[key as keyof T]!.padEnd(widths[key as keyof T]))
+			.join("  ");
+		writeLine(line);
+	}
+}
+
 /**
  * List available models, optionally filtered by search pattern
  */
@@ -13,77 +52,77 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 	const models = modelRegistry.getAvailable();
 
 	if (models.length === 0) {
-		console.log("No models available. Set API keys in environment variables.");
+		writeLine("No models available. Set API keys in environment variables.");
 		return;
 	}
 
-	// Apply fuzzy filter if search pattern provided
 	let filteredModels: Model<Api>[] = models;
 	if (searchPattern) {
-		filteredModels = fuzzyFilter(models, searchPattern, m => `${m.provider} ${m.id}`);
+		filteredModels = fuzzyFilter(models, searchPattern, model => `${model.provider} ${model.id}`);
 	}
 
-	if (filteredModels.length === 0) {
-		console.log(`No models matching "${searchPattern}"`);
+	const filteredCanonical = modelRegistry
+		.getCanonicalModels({ availableOnly: true, candidates: filteredModels })
+		.map(record => {
+			const selected = modelRegistry.resolveCanonicalModel(record.id, {
+				availableOnly: true,
+				candidates: filteredModels,
+			});
+			if (!selected) return undefined;
+			return {
+				canonical: record.id,
+				selected: `${selected.provider}/${selected.id}`,
+				variants: String(record.variants.length),
+				context: formatNumber(selected.contextWindow),
+				maxOut: formatNumber(selected.maxTokens),
+			} satisfies CanonicalRow;
+		})
+		.filter((row): row is CanonicalRow => row !== undefined)
+		.sort((left, right) => left.canonical.localeCompare(right.canonical));
+
+	if (filteredModels.length === 0 && filteredCanonical.length === 0) {
+		writeLine(`No models matching "${searchPattern}"`);
 		return;
 	}
 
-	// Sort by provider, then by model id
-	filteredModels.sort((a, b) => {
-		const providerCmp = a.provider.localeCompare(b.provider);
+	filteredModels.sort((left, right) => {
+		const providerCmp = left.provider.localeCompare(right.provider);
 		if (providerCmp !== 0) return providerCmp;
-		return a.id.localeCompare(b.id);
+		return left.id.localeCompare(right.id);
 	});
 
-	// Calculate column widths
-	const rows = filteredModels.map(m => ({
-		provider: m.provider,
-		model: m.id,
-		context: formatNumber(m.contextWindow),
-		maxOut: formatNumber(m.maxTokens),
-		thinking: m.thinking ? getSupportedEfforts(m).join(",") : m.reasoning ? "yes" : "-",
-		images: m.input.includes("image") ? "yes" : "no",
-	}));
+	const providerRows = filteredModels.map(model => ({
+		provider: model.provider,
+		model: model.id,
+		context: formatNumber(model.contextWindow),
+		maxOut: formatNumber(model.maxTokens),
+		thinking: model.thinking ? getSupportedEfforts(model).join(",") : model.reasoning ? "yes" : "-",
+		images: model.input.includes("image") ? "yes" : "no",
+	})) satisfies ProviderRow[];
 
-	const headers = {
-		provider: "provider",
-		model: "model",
-		context: "context",
-		maxOut: "max-out",
-		thinking: "thinking",
-		images: "images",
-	};
+	if (filteredCanonical.length > 0) {
+		writeLine("Canonical models");
+		renderTable(filteredCanonical, {
+			canonical: "canonical",
+			selected: "selected",
+			variants: "variants",
+			context: "context",
+			maxOut: "max-out",
+		});
+		if (providerRows.length > 0) {
+			writeLine();
+		}
+	}
 
-	const widths = {
-		provider: Math.max(headers.provider.length, ...rows.map(r => r.provider.length)),
-		model: Math.max(headers.model.length, ...rows.map(r => r.model.length)),
-		context: Math.max(headers.context.length, ...rows.map(r => r.context.length)),
-		maxOut: Math.max(headers.maxOut.length, ...rows.map(r => r.maxOut.length)),
-		thinking: Math.max(headers.thinking.length, ...rows.map(r => r.thinking.length)),
-		images: Math.max(headers.images.length, ...rows.map(r => r.images.length)),
-	};
-
-	// Print header
-	const headerLine = [
-		headers.provider.padEnd(widths.provider),
-		headers.model.padEnd(widths.model),
-		headers.context.padEnd(widths.context),
-		headers.maxOut.padEnd(widths.maxOut),
-		headers.thinking.padEnd(widths.thinking),
-		headers.images.padEnd(widths.images),
-	].join("  ");
-	console.log(headerLine);
-
-	// Print rows
-	for (const row of rows) {
-		const line = [
-			row.provider.padEnd(widths.provider),
-			row.model.padEnd(widths.model),
-			row.context.padEnd(widths.context),
-			row.maxOut.padEnd(widths.maxOut),
-			row.thinking.padEnd(widths.thinking),
-			row.images.padEnd(widths.images),
-		].join("  ");
-		console.log(line);
+	if (providerRows.length > 0) {
+		writeLine("Provider models");
+		renderTable(providerRows, {
+			provider: "provider",
+			model: "model",
+			context: "context",
+			maxOut: "max-out",
+			thinking: "thinking",
+			images: "images",
+		});
 	}
 }

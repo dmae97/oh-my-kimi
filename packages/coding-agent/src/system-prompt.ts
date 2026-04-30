@@ -6,17 +6,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import { $env, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { $env, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
-import { renderPromptTemplate } from "./config/prompt-templates";
 import type { SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
 import { loadSkills, type Skill } from "./extensibility/skills";
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
-import { formatPromptContent } from "./utils/prompt-format";
 
 interface AlwaysApplyRule {
 	name: string;
@@ -25,7 +23,7 @@ interface AlwaysApplyRule {
 }
 
 function normalizePromptBlock(content: string): string {
-	return formatPromptContent(content, { renderPhase: "post-render" }).trim();
+	return prompt.format(content, { renderPhase: "post-render" }).trim();
 }
 
 function splitComparablePromptBlocks(content: string | null | undefined): string[] {
@@ -267,21 +265,28 @@ async function saveGpuCache(info: GpuCache): Promise<void> {
 }
 
 async function getCachedGpu(): Promise<string | undefined> {
-	const cached = await logger.timeAsync("getCachedGpu:loadGpuCache", loadGpuCache);
+	const cached = await logger.time("getCachedGpu:loadGpuCache", loadGpuCache);
 	if (cached) return cached.gpu;
-	const gpu = await logger.timeAsync("getCachedGpu:getGpuModel", getGpuModel);
-	if (gpu) await logger.timeAsync("getCachedGpu:saveGpuCache", saveGpuCache, { gpu });
+	const gpu = await logger.time("getCachedGpu:getGpuModel", getGpuModel);
+	if (gpu) {
+		await logger.time("getCachedGpu:saveGpuCache", saveGpuCache, { gpu });
+	}
 	return gpu ?? undefined;
 }
 async function getEnvironmentInfo(): Promise<Array<{ label: string; value: string }>> {
-	const gpu = await logger.timeAsync("getEnvironmentInfo:getCachedGpu", getCachedGpu);
-	const cpus = os.cpus();
+	const gpu = await getCachedGpu();
+	let cpuModel: string | undefined;
+	try {
+		cpuModel = os.cpus()[0]?.model;
+	} catch {
+		cpuModel = undefined;
+	}
 	const entries: Array<{ label: string; value: string | undefined }> = [
 		{ label: "OS", value: `${os.platform()} ${os.release()}` },
 		{ label: "Distro", value: os.type() },
 		{ label: "Kernel", value: os.version() },
 		{ label: "Arch", value: os.arch() },
-		{ label: "CPU", value: `${cpus[0]?.model}` },
+		{ label: "CPU", value: cpuModel },
 		{ label: "GPU", value: gpu },
 		{ label: "Terminal", value: getTerminalName() },
 	];
@@ -379,6 +384,8 @@ export async function loadSystemPromptFiles(options: LoadContextFilesOptions = {
 export interface SystemPromptToolMetadata {
 	label: string;
 	description: string;
+	/** Tool name the model sees on the provider wire. Defaults to the internal tool name. */
+	wireName?: string;
 }
 
 export function buildSystemPromptToolMetadata(
@@ -389,12 +396,16 @@ export function buildSystemPromptToolMetadata(
 		Array.from(tools.entries(), ([name, tool]) => {
 			const toolRecord = tool as AgentTool & { label?: string; description?: string };
 			const override = overrides[name];
+			const wireName =
+				override?.wireName ??
+				(typeof toolRecord.customWireName === "string" ? toolRecord.customWireName : undefined);
 			return [
 				name,
 				{
 					label: override?.label ?? (typeof toolRecord.label === "string" ? toolRecord.label : ""),
 					description:
 						override?.description ?? (typeof toolRecord.description === "string" ? toolRecord.description : ""),
+					wireName,
 				},
 			] as const;
 		}),
@@ -432,6 +443,8 @@ export interface BuildSystemPromptOptions {
 	eagerTasks?: boolean;
 	/** Rules with alwaysApply=true — their full content is injected into the prompt. */
 	alwaysApplyRules?: AlwaysApplyRule[];
+	/** Whether secret obfuscation is active. When true, explains the redaction format in the prompt. */
+	secretsEnabled?: boolean;
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -456,17 +469,18 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		mcpDiscoveryMode = false,
 		mcpDiscoveryServerSummaries = [],
 		eagerTasks = false,
+		secretsEnabled = false,
 	} = options;
 	const resolvedCwd = cwd ?? getProjectDir();
 
 	const prepPromise = (() => {
-		const systemPromptCustomizationPromise = logger.timeAsync("loadSystemPromptFiles", loadSystemPromptFiles, {
+		const systemPromptCustomizationPromise = logger.time("loadSystemPromptFiles", loadSystemPromptFiles, {
 			cwd: resolvedCwd,
 		});
 		const contextFilesPromise = providedContextFiles
 			? Promise.resolve(providedContextFiles)
-			: logger.timeAsync("loadProjectContextFiles", loadProjectContextFiles, { cwd: resolvedCwd });
-		const agentsMdSearchPromise = logger.timeAsync("buildAgentsMdSearch", buildAgentsMdSearch, resolvedCwd);
+			: logger.time("loadProjectContextFiles", loadProjectContextFiles, { cwd: resolvedCwd });
+		const agentsMdSearchPromise = logger.time("buildAgentsMdSearch", buildAgentsMdSearch, resolvedCwd);
 		const skillsPromise: Promise<Skill[]> =
 			providedSkills !== undefined
 				? Promise.resolve(providedSkills)
@@ -562,14 +576,17 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		}
 	}
 
-	// Build tool descriptions for system prompt rendering
+	// Build tool descriptions for system prompt rendering.
+	const toolPromptNames = new Map<string, string>(toolNames.map(name => [name, tools?.get(name)?.wireName ?? name]));
+	const toolRefs = Object.fromEntries(toolPromptNames.entries());
 	const toolInfo = toolNames.map(name => ({
-		name,
+		name: toolPromptNames.get(name) ?? name,
+		internalName: name,
 		label: tools?.get(name)?.label ?? "",
 		description: tools?.get(name)?.description ?? "",
 	}));
 
-	// Filter skills to only include those with read tool
+	// Filter skills to only include those with read tool.
 	const hasRead = tools?.has("read");
 	const filteredSkills = hasRead ? skills : [];
 
@@ -580,7 +597,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const promptSources = [effectiveSystemPromptCustomization, resolvedCustomPrompt, resolvedAppendPrompt];
 	const injectedAlwaysApplyRules = dedupeAlwaysApplyRules(alwaysApplyRules, promptSources);
 
-	const environment = await logger.timeAsync("getEnvironmentInfo", getEnvironmentInfo);
+	const environment = await logger.time("getEnvironmentInfo", getEnvironmentInfo);
+	const reportToolIssueToolName = toolPromptNames.get("report_tool_issue") ?? "report_tool_issue";
 	const data = {
 		systemPromptCustomization: effectiveSystemPromptCustomization,
 		customPrompt: resolvedCustomPrompt,
@@ -588,6 +606,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		tools: toolNames,
 		toolInfo,
 		repeatToolDescriptions,
+		toolRefs,
 		environment,
 		contextFiles,
 		agentsMdSearch,
@@ -603,6 +622,14 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		hasMCPDiscoveryServers: mcpDiscoveryServerSummaries.length > 0,
 		mcpDiscoveryServerSummaries,
 		eagerTasks,
+		secretsEnabled,
 	};
-	return renderPromptTemplate(resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate, data);
+	let rendered = prompt.render(resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate, data);
+
+	// When autoqa is active the report_tool_issue tool is in the tool set — nudge the agent.
+	if (toolNames.includes("report_tool_issue")) {
+		rendered += `\n\n<critical>\nThe \`${reportToolIssueToolName}\` tool is available for automated QA. If ANY tool you call returns output that is unexpected, incorrect, malformed, or otherwise inconsistent with what you anticipated given the tool's described behavior and your parameters, call \`${reportToolIssueToolName}\` with the tool name and a concise description of the discrepancy. Do not hesitate to report — false positives are acceptable.\n</critical>`;
+	}
+
+	return rendered;
 }

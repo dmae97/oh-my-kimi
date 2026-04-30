@@ -7,9 +7,25 @@ describe("isProviderRetryableError", () => {
 		expect(isProviderRetryableError(new Error("error 1302 from upstream"))).toBe(true);
 	});
 
-	it("retries transient stream envelope parse errors", () => {
+	it("retries transient stream parse errors and pre-content envelope failures", () => {
 		expect(isProviderRetryableError(new Error("JSON Parse error: Unterminated string"))).toBe(true);
 		expect(isProviderRetryableError(new Error("Unexpected end of JSON input"))).toBe(true);
+		expect(
+			isProviderRetryableError(
+				new Error("Anthropic stream envelope error: received content_block_start before message_start"),
+			),
+		).toBe(true);
+		expect(
+			isProviderRetryableError(new Error("Anthropic stream envelope error: stream ended before message_start")),
+		).toBe(true);
+	});
+
+	it("does not classify post-content envelope failures as provider-retryable", () => {
+		expect(
+			isProviderRetryableError(
+				new Error("Anthropic stream envelope error: stream ended before terminal stop signal"),
+			),
+		).toBe(false);
 	});
 
 	it("retries HTTP/2 stream errors (INTERNAL_ERROR)", () => {
@@ -27,5 +43,14 @@ describe("isProviderRetryableError", () => {
 	it("does not retry non-transient validation errors", () => {
 		expect(isProviderRetryableError(new Error("Invalid tool schema"))).toBe(false);
 		expect(isProviderRetryableError(new Error("Bad request"))).toBe(false);
+	});
+
+	it("retries Copilot transient model_not_supported only for github-copilot provider", () => {
+		const err = new Error("400 The requested model is not supported.");
+		(err as unknown as { status: number; code: string }).status = 400;
+		(err as unknown as { status: number; code: string }).code = "model_not_supported";
+		expect(isProviderRetryableError(err, "github-copilot")).toBe(true);
+		expect(isProviderRetryableError(err, "anthropic")).toBe(false);
+		expect(isProviderRetryableError(err)).toBe(false);
 	});
 });

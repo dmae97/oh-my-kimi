@@ -4,7 +4,7 @@
  * Handles `omp grep` subcommand for testing grep tool on Windows.
  */
 import * as path from "node:path";
-import { grep } from "@oh-my-pi/pi-natives";
+import { GrepOutputMode, grep } from "@oh-my-pi/pi-natives";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 
@@ -14,7 +14,7 @@ export interface GrepCommandArgs {
 	glob?: string;
 	limit: number;
 	context: number;
-	mode: "content" | "filesWithMatches" | "count";
+	mode: GrepOutputMode;
 	gitignore: boolean;
 }
 
@@ -32,7 +32,7 @@ export function parseGrepArgs(args: string[]): GrepCommandArgs | undefined {
 		path: ".",
 		limit: 20,
 		context: 2,
-		mode: "content",
+		mode: GrepOutputMode.Content,
 		gitignore: true,
 	};
 
@@ -47,9 +47,9 @@ export function parseGrepArgs(args: string[]): GrepCommandArgs | undefined {
 		} else if (arg === "--context" || arg === "-C") {
 			result.context = parseInt(args[++i], 10);
 		} else if (arg === "--files" || arg === "-f") {
-			result.mode = "filesWithMatches";
+			result.mode = GrepOutputMode.FilesWithMatches;
 		} else if (arg === "--count" || arg === "-c") {
-			result.mode = "count";
+			result.mode = GrepOutputMode.Count;
 		} else if (arg === "--no-gitignore") {
 			result.gitignore = false;
 		} else if (!arg.startsWith("-")) {
@@ -89,7 +89,7 @@ export async function runGrepCommand(cmd: GrepCommandArgs): Promise<void> {
 			glob: cmd.glob,
 			mode: cmd.mode,
 			maxCount: cmd.limit,
-			context: cmd.mode === "content" ? cmd.context : undefined,
+			context: cmd.mode === GrepOutputMode.Content ? cmd.context : undefined,
 			hidden: true,
 			gitignore: cmd.gitignore,
 		});
@@ -105,7 +105,7 @@ export async function runGrepCommand(cmd: GrepCommandArgs): Promise<void> {
 		for (const match of result.matches) {
 			const displayPath = match.path.replace(/\\/g, "/");
 
-			if (cmd.mode === "content") {
+			if (cmd.mode === GrepOutputMode.Content) {
 				if (match.contextBefore) {
 					for (const ctx of match.contextBefore) {
 						console.log(chalk.dim(`${displayPath}-${ctx.lineNumber}- ${ctx.line}`));
@@ -118,7 +118,7 @@ export async function runGrepCommand(cmd: GrepCommandArgs): Promise<void> {
 					}
 				}
 				console.log("");
-			} else if (cmd.mode === "count") {
+			} else if (cmd.mode === GrepOutputMode.Count) {
 				console.log(`${chalk.cyan(displayPath)}: ${match.matchCount ?? 0} matches`);
 			} else {
 				console.log(chalk.cyan(displayPath));

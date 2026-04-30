@@ -90,15 +90,6 @@ The `addonLabel` used in final error messages is either `<tag>` or `<tag> (<vari
 
 `native.ts` builds candidate pools before any `require(...)` call.
 
-### Debug/dev candidates (only when `PI_DEV` is set)
-
-Prepended first:
-
-1. `<nativeDir>/pi_natives.dev.node`
-2. `<execDir>/pi_natives.dev.node`
-
-This path is explicit debug intent and always outranks release candidates.
-
 ### Release candidates
 
 Built from variant-resolved filename list and searched in this order:
@@ -250,19 +241,9 @@ In compiled mode final diagnostics include:
 In normal package/runtime mode final diagnostics include:
 
 - reinstall hint (`bun install @oh-my-pi/pi-natives`),
-- local rebuild command (`bun --cwd=packages/natives run build:native`),
+- local rebuild command (`bun --cwd=packages/natives run build`),
 - optional x64 variant build hint (`TARGET_VARIANT=baseline|modern ...`).
 
-## Dev/debug versus release behavior
+## Runtime behavior
 
-When `PI_DEV` is set:
-
-- `pi_natives.dev.node` candidates are prepended ahead of all release candidates.
-- Loader emits per-candidate console diagnostics (`Loaded native addon...` and load errors).
-
-Without `PI_DEV`:
-
-- Only release candidate chain is used.
-- No dev console diagnostics are emitted.
-
-Operationally, this means debug sessions can validate an ad-hoc dev addon first, while production/release runs remain on deterministic release artifact probing.
+- The loader always uses the release candidate chain.

@@ -3,11 +3,11 @@ import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
 import { applyWorkspaceEdit } from "./edits";
 import { getLspmuxCommand, isLspmuxSupported } from "./lspmux";
 import type {
-	Diagnostic,
 	LspClient,
 	LspJsonRpcNotification,
 	LspJsonRpcRequest,
 	LspJsonRpcResponse,
+	PublishDiagnosticsParams,
 	ServerConfig,
 	WorkspaceEdit,
 } from "./types";
@@ -23,7 +23,7 @@ const fileOperationLocks = new Map<string, Promise<void>>();
 
 // Idle timeout configuration (disabled by default)
 let idleTimeoutMs: number | null = null;
-let idleCheckInterval: Timer | null = null;
+let idleCheckInterval: NodeJS.Timeout | null = null;
 const IDLE_CHECK_INTERVAL_MS = 60 * 1000;
 
 /**
@@ -130,11 +130,14 @@ const CLIENT_CAPABILITIES = {
 		},
 		publishDiagnostics: {
 			relatedInformation: true,
-			versionSupport: false,
+			versionSupport: true,
 			tagSupport: { valueSet: [1, 2] },
 			codeDescriptionSupport: true,
 			dataSupport: true,
 		},
+	},
+	window: {
+		workDoneProgress: true,
 	},
 	workspace: {
 		applyEdit: true,
@@ -208,9 +211,17 @@ async function writeMessage(
 	message: LspJsonRpcRequest | LspJsonRpcNotification | LspJsonRpcResponse,
 ): Promise<void> {
 	const content = JSON.stringify(message);
-	sink.write(`Content-Length: ${Buffer.byteLength(content, "utf-8")}\r\n\r\n`);
-	sink.write(content);
+	sink.write(`Content-Length: ${Buffer.byteLength(content, "utf-8")}\r\n\r\n${content}`);
 	await sink.flush();
+}
+
+function queueWriteMessage(
+	client: LspClient,
+	message: LspJsonRpcRequest | LspJsonRpcNotification | LspJsonRpcResponse,
+): Promise<void> {
+	const write = client.writeQueue.catch(() => {}).then(() => writeMessage(client.proc.stdin, message));
+	client.writeQueue = write.catch(() => {});
+	return write;
 }
 
 // =============================================================================
@@ -261,9 +272,22 @@ async function startMessageReader(client: LspClient): Promise<void> {
 				} else if ("method" in message) {
 					// Server notification
 					if (message.method === "textDocument/publishDiagnostics" && message.params) {
-						const params = message.params as { uri: string; diagnostics: Diagnostic[] };
-						client.diagnostics.set(params.uri, params.diagnostics);
+						const params = message.params as PublishDiagnosticsParams;
+						client.diagnostics.set(params.uri, {
+							diagnostics: params.diagnostics,
+							version: params.version ?? null,
+						});
 						client.diagnosticsVersion += 1;
+					} else if (message.method === "$/progress" && message.params) {
+						const params = message.params as { token: string | number; value?: { kind?: string } };
+						if (params.value?.kind === "begin") {
+							client.activeProgressTokens.add(params.token);
+						} else if (params.value?.kind === "end") {
+							client.activeProgressTokens.delete(params.token);
+							if (client.activeProgressTokens.size === 0) {
+								client.resolveProjectLoaded();
+							}
+						}
 					}
 				}
 
@@ -335,6 +359,13 @@ async function handleServerRequest(client: LspClient, message: LspJsonRpcRequest
 		await handleApplyEditRequest(client, message);
 		return;
 	}
+	if (message.method === "window/workDoneProgress/create") {
+		// Accept progress token registration from the server
+		if (typeof message.id === "number") {
+			await sendResponse(client, message.id, null, message.method);
+		}
+		return;
+	}
 	if (typeof message.id !== "number") return;
 	await sendResponse(client, message.id, null, message.method, {
 		code: -32601,
@@ -359,7 +390,7 @@ async function sendResponse(
 	};
 
 	try {
-		await writeMessage(client.proc.stdin, response);
+		await queueWriteMessage(client, response);
 	} catch (err) {
 		logger.error("LSP failed to respond.", { method, error: String(err) });
 	}
@@ -371,6 +402,9 @@ async function sendResponse(
 
 /** Timeout for warmup initialize requests (5 seconds) */
 export const WARMUP_TIMEOUT_MS = 5000;
+
+/** Max time to wait for the server to report project loading completion via $/progress */
+const PROJECT_LOAD_TIMEOUT_MS = 15_000;
 
 /**
  * Get or create an LSP client for the given server configuration and working directory.
@@ -410,6 +444,18 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 			env: env ? { ...Bun.env, ...env } : undefined,
 		});
 
+		let resolveProjectLoaded!: () => void;
+		const projectLoaded = new Promise<void>(resolve => {
+			resolveProjectLoaded = resolve;
+		});
+		// Auto-resolve after timeout in case server doesn't use progress tokens
+		const projectLoadTimeout = setTimeout(resolveProjectLoaded, PROJECT_LOAD_TIMEOUT_MS);
+		const originalResolve = resolveProjectLoaded;
+		resolveProjectLoaded = () => {
+			clearTimeout(projectLoadTimeout);
+			originalResolve();
+		};
+
 		const client: LspClient = {
 			name: key,
 			cwd,
@@ -423,6 +469,10 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 			messageBuffer: new Uint8Array(0),
 			isReading: false,
 			lastActivity: Date.now(),
+			writeQueue: Promise.resolve(),
+			activeProgressTokens: new Set(),
+			projectLoaded,
+			resolveProjectLoaded,
 		};
 		clients.set(key, client);
 
@@ -430,10 +480,18 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 		proc.exited.then(() => {
 			clients.delete(key);
 			clientLocks.delete(key);
+			client.resolveProjectLoaded();
 
 			// Reject any pending requests — the server is gone, they will never complete.
 			if (client.pendingRequests.size > 0) {
-				const stderr = proc.peekStderr().trim();
+				// Strip informational log lines (e.g. marksman's [INF]/[DBG] prefix)
+				// — they are startup noise, not actionable errors.
+				const rawStderr = proc.peekStderr().trim();
+				const stderr = rawStderr
+					.split("\n")
+					.filter(line => !/^\[\d{2}:\d{2}:\d{2} (?:INF|DBG|VRB)\]/.test(line))
+					.join("\n")
+					.trim();
 				const code = proc.exitCode;
 				const err = new Error(
 					stderr ? `LSP server exited (code ${code}): ${stderr}` : `LSP server exited unexpectedly (code ${code})`,
@@ -552,6 +610,21 @@ export async function ensureFileOpen(client: LspClient, filePath: string, signal
 }
 
 /**
+ * Wait for the server's initial project loading to complete.
+ * Races the server's $/progress tracking against the abort signal.
+ * Returns immediately if loading already completed or timed out.
+ */
+export async function waitForProjectLoaded(client: LspClient, signal?: AbortSignal): Promise<void> {
+	if (signal?.aborted) return;
+	await Promise.race([
+		client.projectLoaded,
+		...(signal
+			? [new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }))]
+			: []),
+	]);
+}
+
+/**
  * Sync in-memory content to the LSP client without reading from disk.
  * Use this to provide instant feedback during edits before the file is saved.
  */
@@ -635,15 +708,17 @@ export async function refreshFile(client: LspClient, filePath: string, signal?: 
 	const uri = fileToUri(filePath);
 	const lockKey = `${client.name}:${uri}`;
 
-	// Check if another operation is in progress
 	const existingLock = fileOperationLocks.get(lockKey);
 	if (existingLock) {
 		await untilAborted(signal, () => existingLock);
 	}
 
-	// Lock and refresh file
 	const refreshPromise = (async () => {
 		throwIfAborted(signal);
+		// Drop cached diagnostics for this URI before asking the server to recompute.
+		// Otherwise an unrelated publishDiagnostics notification can advance the global
+		// diagnostics version and cause waiters to accept stale unversioned diagnostics.
+		client.diagnostics.delete(uri);
 		const info = client.openFiles.get(uri);
 
 		if (!info) {
@@ -789,7 +864,7 @@ export async function sendRequest(
 	});
 
 	// Write request
-	writeMessage(client.proc.stdin, request).catch(err => {
+	queueWriteMessage(client, request).catch(err => {
 		if (timeout) clearTimeout(timeout);
 		client.pendingRequests.delete(id);
 		cleanup();
@@ -809,7 +884,7 @@ export async function sendNotification(client: LspClient, method: string, params
 	};
 
 	client.lastActivity = Date.now();
-	await writeMessage(client.proc.stdin, notification);
+	await queueWriteMessage(client, notification);
 }
 
 /**

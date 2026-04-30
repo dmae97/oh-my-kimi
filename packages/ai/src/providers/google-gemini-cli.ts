@@ -804,14 +804,14 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 						// promptTokenCount includes cachedContentTokenCount, so subtract to get fresh input
 						const promptTokens = responseData.usageMetadata.promptTokenCount || 0;
 						const cacheReadTokens = responseData.usageMetadata.cachedContentTokenCount || 0;
+						const thinkingTokens = responseData.usageMetadata.thoughtsTokenCount || 0;
 						output.usage = {
 							input: promptTokens - cacheReadTokens,
-							output:
-								(responseData.usageMetadata.candidatesTokenCount || 0) +
-								(responseData.usageMetadata.thoughtsTokenCount || 0),
+							output: (responseData.usageMetadata.candidatesTokenCount || 0) + thinkingTokens,
 							cacheRead: cacheReadTokens,
 							cacheWrite: 0,
 							totalTokens: responseData.usageMetadata.totalTokenCount || 0,
+							...(thinkingTokens > 0 ? { reasoningTokens: thinkingTokens } : {}),
 							cost: {
 								input: 0,
 								output: 0,

@@ -1,8 +1,7 @@
 ---
 name: designer
 description: UI/UX specialist for design implementation, review, visual refinement
-spawns: explore
-model: google-gemini-cli/gemini-3.1-pro, google-gemini-cli/gemini-3-pro, gemini-3.1-pro, gemini-3-1-pro, gemini-3-pro, gemini-3, pi/default
+model: pi/designer
 ---
 
 You are an expert UI/UX designer implementing and reviewing UI designs.

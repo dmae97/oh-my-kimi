@@ -1,4 +1,4 @@
-import { $env, logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { $env, $flag, isBunTestRuntime, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { Settings } from "../config/settings";
 import { htmlToBasicMarkdown } from "../web/scrapers/types";
@@ -10,7 +10,7 @@ import { filterEnv, resolvePythonRuntime } from "./runtime";
 
 const TEXT_ENCODER = new TextEncoder();
 const TEXT_DECODER = new TextDecoder();
-const TRACE_IPC = $env.PI_PYTHON_IPC_TRACE === "1";
+const TRACE_IPC = $flag("PI_PYTHON_IPC_TRACE");
 const PRELUDE_INTROSPECTION_SNIPPET = "import json\nprint(json.dumps(__omp_prelude_docs__()))";
 
 class SharedGatewayCreateError extends Error {
@@ -47,6 +47,10 @@ interface KernelLifecycleOptions {
 interface KernelShutdownOptions {
 	signal?: AbortSignal;
 	timeoutMs?: number;
+}
+
+export interface KernelShutdownResult {
+	confirmed: boolean;
 }
 
 function getRemainingTimeMs(deadlineMs?: number): number | undefined {
@@ -195,7 +199,7 @@ export interface PythonKernelAvailability {
 }
 
 export async function checkPythonKernelAvailability(cwd: string): Promise<PythonKernelAvailability> {
-	if (Bun.env.BUN_ENV === "test" || Bun.env.NODE_ENV === "test" || $env.PI_PYTHON_SKIP_CHECK === "1") {
+	if (isBunTestRuntime() || $flag("PI_PYTHON_SKIP_CHECK")) {
 		return { ok: true };
 	}
 
@@ -399,10 +403,11 @@ export class PythonKernel {
 	#ws: WebSocket | null = null;
 	#disposed = false;
 	#alive = true;
+	#shutdownStarted = false;
+	#shutdownConfirmed = false;
 	#messageHandlers = new Map<string, (msg: JupyterMessage) => void>();
 	#channelHandlers = new Map<string, Set<(msg: JupyterMessage) => void>>();
 	#pendingExecutions = new Map<string, (reason: string) => void>();
-
 	private constructor(
 		readonly id: string,
 		readonly kernelId: string,
@@ -421,8 +426,10 @@ export class PythonKernel {
 	}
 
 	static async start(options: KernelStartOptions): Promise<PythonKernel> {
-		const availability = await logger.timeAsync("PythonKernel.start:availabilityCheck", () =>
-			checkPythonKernelAvailability(options.cwd),
+		const availability = await logger.time(
+			"PythonKernel.start:availabilityCheck",
+			checkPythonKernelAvailability,
+			options.cwd,
 		);
 		if (!availability.ok) {
 			throw new Error(availability.reason ?? "Python kernel unavailable");
@@ -443,14 +450,21 @@ export class PythonKernel {
 		for (let attempt = 0; attempt < 2; attempt += 1) {
 			throwIfAborted(startupSignal, "Python kernel startup aborted");
 			try {
-				const sharedResult = await logger.timeAsync("PythonKernel.start:acquireSharedGateway", () =>
-					acquireSharedGateway(options.cwd),
+				const sharedResult = await logger.time(
+					"PythonKernel.start:acquireSharedGateway",
+					acquireSharedGateway,
+					options.cwd,
 				);
 				if (!sharedResult) {
 					throw new Error("Shared Python gateway unavailable");
 				}
-				const kernel = await logger.timeAsync("PythonKernel.start:startWithSharedGateway", () =>
-					PythonKernel.#startWithSharedGateway(sharedResult.url, options.cwd, options.env, startup),
+				const kernel = await logger.time(
+					"PythonKernel.start:startWithSharedGateway",
+					PythonKernel.#startWithSharedGateway,
+					sharedResult.url,
+					options.cwd,
+					options.env,
+					startup,
 				);
 				return kernel;
 			} catch (err) {
@@ -538,13 +552,16 @@ export class PythonKernel {
 	): Promise<PythonKernel> {
 		const startupSignal = combineAbortSignal(startup, undefined, "Python kernel startup aborted");
 		throwIfAborted(startupSignal, "Python kernel startup aborted");
-		const createResponse = await logger.timeAsync("startWithSharedGateway:createKernel", () =>
-			fetch(`${gatewayUrl}/api/kernels`, {
+		const createResponse = await logger.time(
+			"startWithSharedGateway:createKernel",
+			fetch,
+			`${gatewayUrl}/api/kernels`,
+			{
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ name: "python3" }),
 				signal: startupSignal,
-			}),
+			},
 		);
 
 		if (!createResponse.ok) {
@@ -557,35 +574,44 @@ export class PythonKernel {
 			);
 		}
 
-		const kernelInfo = await logger.timeAsync(
+		const kernelInfo = (await logger.time(
 			"startWithSharedGateway:parseJson",
-			() => createResponse.json() as Promise<{ id: string }>,
-		);
+			createResponse.json.bind(createResponse),
+		)) as { id: string };
 		const kernelId = kernelInfo.id;
 
 		const kernel = new PythonKernel(Snowflake.next(), kernelId, gatewayUrl, Snowflake.next(), "omp", true);
 
 		try {
-			await logger.timeAsync("startWithSharedGateway:connectWS", () => kernel.#connectWebSocket(startup));
-			await logger.timeAsync("startWithSharedGateway:initEnv", () =>
-				kernel.#initializeKernelEnvironment(cwd, env, startup),
+			await logger.time("startWithSharedGateway:connectWS", kernel.#connectWebSocket.bind(kernel), startup);
+			await logger.time(
+				"startWithSharedGateway:initEnv",
+				kernel.#initializeKernelEnvironment.bind(kernel),
+				cwd,
+				env,
+				startup,
 			);
 			const preludeOptions = getStartupExecuteOptions(startup);
-			const preludeResult = await logger.timeAsync("startWithSharedGateway:prelude", () =>
-				kernel.execute(PYTHON_PRELUDE, {
+			const preludeResult = await logger.time(
+				"startWithSharedGateway:prelude",
+				kernel.execute.bind(kernel),
+				PYTHON_PRELUDE,
+				{
 					...preludeOptions,
 					silent: true,
 					storeHistory: false,
-				}),
+				},
 			);
 			throwIfStartupExecutionFailed(
 				preludeResult,
 				preludeOptions.signal,
 				"Failed to initialize Python kernel prelude",
 			);
-			await logger.timeAsync("startWithSharedGateway:loadModules", () =>
-				loadPythonModules(kernel, { cwd, signal: startup.signal, deadlineMs: startup.deadlineMs }),
-			);
+			await logger.time("startWithSharedGateway:loadModules", loadPythonModules, kernel, {
+				cwd,
+				signal: startup.signal,
+				deadlineMs: startup.deadlineMs,
+			});
 			return kernel;
 		} catch (err: unknown) {
 			await kernel.shutdown({ timeoutMs: getStartupCleanupTimeoutMs(startup.deadlineMs) });
@@ -927,11 +953,13 @@ export class PythonKernel {
 		return promise;
 	}
 
-	async introspectPrelude(): Promise<PreludeHelper[]> {
+	async introspectPrelude(options: Pick<KernelExecuteOptions, "signal" | "timeoutMs"> = {}): Promise<PreludeHelper[]> {
 		let output = "";
 		const result = await this.execute(PRELUDE_INTROSPECTION_SNIPPET, {
 			silent: false,
 			storeHistory: false,
+			signal: options.signal,
+			timeoutMs: options.timeoutMs,
 			onChunk: text => {
 				output += text;
 			},
@@ -981,11 +1009,18 @@ export class PythonKernel {
 		}
 	}
 
-	async shutdown(options?: KernelShutdownOptions): Promise<void> {
-		if (this.#disposed) return;
-		this.#disposed = true;
-		this.#alive = false;
-		this.#abortPendingExecutions("Kernel shutdown");
+	async shutdown(options?: KernelShutdownOptions): Promise<KernelShutdownResult> {
+		if (this.#shutdownConfirmed) return { confirmed: true };
+		if (!this.#shutdownStarted) {
+			this.#shutdownStarted = true;
+			this.#alive = false;
+			this.#abortPendingExecutions("Kernel shutdown");
+
+			if (this.#ws) {
+				this.#ws.close();
+				this.#ws = null;
+			}
+		}
 
 		const shutdownSignal = combineAbortSignal(
 			{ signal: options?.signal },
@@ -993,24 +1028,38 @@ export class PythonKernel {
 			"Python kernel shutdown timed out",
 		);
 
+		let confirmed = false;
 		try {
-			await fetch(`${this.gatewayUrl}/api/kernels/${this.kernelId}`, {
+			const response = await fetch(`${this.gatewayUrl}/api/kernels/${this.kernelId}`, {
 				method: "DELETE",
 				headers: this.#authHeaders(),
 				signal: shutdownSignal,
 			});
+			const deleteConfirmed = response.status === 404 || response.status === 410;
+			confirmed = response.ok || deleteConfirmed;
+			if (!confirmed) {
+				logger.warn("Kernel delete request was not confirmed", {
+					status: response.status,
+					statusText: response.statusText,
+				});
+			}
 		} catch (err: unknown) {
 			logger.warn("Failed to delete kernel via API", { error: err instanceof Error ? err.message : String(err) });
 		}
-
-		if (this.#ws) {
-			this.#ws.close();
-			this.#ws = null;
-		}
+		this.#shutdownConfirmed = confirmed;
+		this.#disposed = confirmed;
 
 		if (this.isSharedGateway) {
-			await releaseSharedGateway();
+			try {
+				await releaseSharedGateway();
+			} catch (err: unknown) {
+				logger.warn("Failed to release shared gateway after kernel shutdown", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
 		}
+
+		return { confirmed };
 	}
 
 	#sendMessage(msg: JupyterMessage): void {

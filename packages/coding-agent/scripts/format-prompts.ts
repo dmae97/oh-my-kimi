@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { prompt } from "@oh-my-pi/pi-utils";
 /**
  * Format prompt files (mixed XML + Markdown + Handlebars).
  *
@@ -14,7 +15,6 @@
  * 9. Bold RFC 2119 keywords (MUST, SHOULD, MAY, etc.) in prompt content
  */
 import { Glob } from "bun";
-import { formatPromptContent } from "../src/utils/prompt-format";
 
 const PROMPTS_DIR = new URL("../src/prompts/", import.meta.url).pathname;
 const COMMIT_PROMPTS_DIR = new URL("../src/commit/prompts/", import.meta.url).pathname;
@@ -42,7 +42,7 @@ async function main() {
 
 	for (const fullPath of files) {
 		const original = await Bun.file(fullPath).text();
-		const formatted = formatPromptContent(original, PROMPT_FORMAT_OPTIONS);
+		const formatted = prompt.format(original, PROMPT_FORMAT_OPTIONS);
 
 		if (original !== `${formatted}\n`) {
 			if (check) {

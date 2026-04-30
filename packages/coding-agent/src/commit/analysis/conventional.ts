@@ -1,11 +1,11 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple, validateToolCall } from "@oh-my-pi/pi-ai";
+import { prompt } from "@oh-my-pi/pi-utils";
 import { Type } from "@sinclair/typebox";
 import analysisSystemPrompt from "../../commit/prompts/analysis-system.md" with { type: "text" };
 import analysisUserPrompt from "../../commit/prompts/analysis-user.md" with { type: "text" };
 import type { ChangelogCategory, ConventionalAnalysis } from "../../commit/types";
-import { renderPromptTemplate } from "../../config/prompt-templates";
 import { toReasoningEffort } from "../../thinking";
 import { extractTextContent, extractToolCall, normalizeAnalysis, parseJsonPayload } from "../utils";
 
@@ -76,7 +76,7 @@ export async function generateConventionalAnalysis({
 	stat,
 	diff,
 }: ConventionalAnalysisInput): Promise<ConventionalAnalysis> {
-	const prompt = renderPromptTemplate(analysisUserPrompt, {
+	const userContent = prompt.render(analysisUserPrompt, {
 		context_files: contextFiles && contextFiles.length > 0 ? contextFiles : undefined,
 		user_context: userContext,
 		types_description: typesDescription,
@@ -89,8 +89,8 @@ export async function generateConventionalAnalysis({
 	const response = await completeSimple(
 		model,
 		{
-			systemPrompt: renderPromptTemplate(analysisSystemPrompt),
-			messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+			systemPrompt: prompt.render(analysisSystemPrompt),
+			messages: [{ role: "user", content: userContent, timestamp: Date.now() }],
 			tools: [ConventionalAnalysisTool],
 		},
 		{ apiKey, maxTokens: 2400, reasoning: toReasoningEffort(thinkingLevel) },

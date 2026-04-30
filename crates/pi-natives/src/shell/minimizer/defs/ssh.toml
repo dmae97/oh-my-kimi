@@ -1,0 +1,29 @@
+# ssh: mostly passthrough. Trim login banners / motd noise; leave the remote
+# command output untouched.
+
+[filters.ssh]
+description = "Strip ssh login banner and motd"
+match_command = "^ssh$"
+strip_ansi = true
+strip_lines_matching = [
+	"^Welcome to ",
+	"^Last login:",
+	"^Last failed login:",
+	"^ \\* Documentation:",
+	"^ \\* Management:",
+	"^ \\* Support:",
+	"^The programs included with ",
+	"^Ubuntu comes with ABSOLUTELY NO WARRANTY",
+	"^This system has been minimized",
+]
+max_lines = 200
+
+[[tests.ssh]]
+name = "strips banner keeps command output"
+input = "Welcome to Ubuntu 22.04.3 LTS (GNU/Linux 5.15.0-84-generic x86_64)\n * Documentation:  https://help.ubuntu.com\nLast login: Mon Nov 13 09:00:00 2023 from 10.0.0.1\nhello from remote\n"
+expected = "hello from remote\n"
+
+[[tests.ssh]]
+name = "pure command output passthrough"
+input = "hello from remote\n"
+expected = "hello from remote\n"

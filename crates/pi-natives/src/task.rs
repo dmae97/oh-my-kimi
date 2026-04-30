@@ -270,7 +270,7 @@ where
 	}
 }
 
-pub type Async<T> = AsyncTask<Blocking<T>>;
+pub type Promise<T> = AsyncTask<Blocking<T>>;
 
 /// Create an `AsyncTask` that runs blocking work on libuv's thread pool.
 ///

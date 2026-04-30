@@ -21,7 +21,7 @@ pub enum EscapeExpansionMode {
 ///
 /// * `s` - The string to expand.
 /// * `mode` - The mode to use for expansion.
-#[expect(clippy::too_many_lines)]
+
 pub fn expand_backslash_escapes(
     s: &str,
     mode: EscapeExpansionMode,

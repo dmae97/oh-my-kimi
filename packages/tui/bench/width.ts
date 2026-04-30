@@ -4,6 +4,7 @@
  * Run: bun packages/tui/bench/visible-width.ts
  */
 import { visibleWidth as nativeVisibleWidth } from "@oh-my-pi/pi-natives";
+import { getDefaultTabWidth } from "@oh-my-pi/pi-utils";
 import { visibleWidthRaw as hybridVisibleWidth, replaceTabs } from "../src/utils";
 
 const ITERATIONS = 10_000;
@@ -99,9 +100,10 @@ for (const [sampleName, sample] of Object.entries(samples)) {
 
 	const results: BenchResult[] = [];
 
+	const tabW = getDefaultTabWidth();
 	results.push(
 		bench("native", () => {
-			nativeVisibleWidth(sample);
+			nativeVisibleWidth(sample, tabW);
 		}),
 	);
 
@@ -126,7 +128,7 @@ for (const [sampleName, sample] of Object.entries(samples)) {
 	}
 
 	// Verify correctness
-	const nativeResult = nativeVisibleWidth(sample);
+	const nativeResult = nativeVisibleWidth(sample, tabW);
 	const bunResult = bunStringWidth(sample);
 	const hybridResult = hybridVisibleWidth(sample);
 
@@ -153,13 +155,15 @@ const categories = {
 	mixed: ["mixed_short", "mixed_medium", "mixed_long"],
 };
 
+const benchTabW = getDefaultTabWidth();
+
 for (const [category, sampleNames] of Object.entries(categories)) {
 	const categoryResults = { native: 0, bun: 0, hybrid: 0 };
 
 	for (const name of sampleNames) {
 		const sample = samples[name as keyof typeof samples];
 
-		const nativeTime = bench("", () => nativeVisibleWidth(sample)).perOpUs;
+		const nativeTime = bench("", () => nativeVisibleWidth(sample, benchTabW)).perOpUs;
 		const bunTime = bench("", () => bunStringWidth(sample)).perOpUs;
 		const hybridTime = bench("", () => hybridVisibleWidth(sample)).perOpUs;
 

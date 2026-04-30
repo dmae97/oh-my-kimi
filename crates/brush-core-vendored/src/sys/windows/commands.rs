@@ -96,3 +96,18 @@ impl CommandFgControlExt for std::process::Command {
 		self.creation_flags(CREATE_NEW_PROCESS_GROUP);
 	}
 }
+
+/// Extension trait for detaching a command from the parent's controlling terminal.
+pub trait CommandSessionExt {
+	/// Arranges for the command to run in a new POSIX session with no
+	/// controlling terminal. On Windows this is a no-op; foreground/process-group
+	/// behavior is handled by `CommandFgControlExt::take_foreground` via
+	/// `CREATE_NEW_PROCESS_GROUP`.
+	fn detach_session(&mut self);
+}
+
+impl CommandSessionExt for std::process::Command {
+	fn detach_session(&mut self) {
+		// NOTE: Windows has no setsid; intentionally a no-op.
+	}
+}

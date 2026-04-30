@@ -62,7 +62,7 @@ The dedicated fallback provider in `src/discovery/mcp-json.ts` reads project-roo
 
 In practice MCP servers also come from higher-priority providers (for example native `.omp/...` and tool-specific config dirs). Authoring guidance:
 
-- Prefer `.omp/mcp.json` (project) or `~/.omp/mcp.json` (user) for explicit control.
+- Prefer `.omp/mcp.json` (project) or `~/.omp/agent/mcp.json` (user) for explicit control.
 - Use root `mcp.json` / `.mcp.json` when you need fallback compatibility.
 - Reusing the same server name in multiple sources causes precedence shadowing, not merge.
 

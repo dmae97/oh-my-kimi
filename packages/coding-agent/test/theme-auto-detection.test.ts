@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import * as nativesModule from "@oh-my-pi/pi-natives";
+import { MacOSAppearance } from "@oh-my-pi/pi-natives";
 
 const originalPlatform = process.platform;
 const originalColorfgbg = Bun.env.COLORFGBG;
@@ -60,7 +61,7 @@ describe("theme auto-detection", () => {
 
 	it("prefers COLORFGBG before macOS fallback inside Zellij", async () => {
 		using _globals = withThemeTestGlobals({ zellij: "1", colorfgbg: "15;0" });
-		const detectSpy = vi.spyOn(nativesModule, "detectMacOSAppearance").mockReturnValue("light");
+		const detectSpy = vi.spyOn(nativesModule, "detectMacOSAppearance").mockReturnValue(MacOSAppearance.Light);
 
 		await themeModule.initTheme(false, undefined, undefined, "dark", "light");
 
@@ -70,8 +71,8 @@ describe("theme auto-detection", () => {
 
 	it("keeps honoring terminal-reported appearance outside fallback mode", async () => {
 		using _globals = withThemeTestGlobals();
-		const detectSpy = vi.spyOn(nativesModule, "detectMacOSAppearance").mockReturnValue("light");
-		const observerSpy = vi.spyOn(nativesModule, "startMacAppearanceObserver");
+		const detectSpy = vi.spyOn(nativesModule, "detectMacOSAppearance").mockReturnValue(MacOSAppearance.Light);
+		const observerSpy = vi.spyOn(nativesModule.MacAppearanceObserver, "start");
 
 		themeModule.onTerminalAppearanceChange("dark");
 		await themeModule.initTheme(true, undefined, undefined, "dark", "light");
@@ -85,11 +86,13 @@ describe("theme auto-detection", () => {
 		using _globals = withThemeTestGlobals({ zellij: "1" });
 		const stop = vi.fn();
 		let onAppearanceChange: ((appearance: "dark" | "light") => void) | undefined;
-		vi.spyOn(nativesModule, "detectMacOSAppearance").mockReturnValue("light");
-		const observerSpy = vi.spyOn(nativesModule, "startMacAppearanceObserver").mockImplementation(callback => {
-			onAppearanceChange = callback;
+		vi.spyOn(nativesModule, "detectMacOSAppearance").mockReturnValue(MacOSAppearance.Light);
+		const observerSpy = vi.spyOn(nativesModule.MacAppearanceObserver, "start").mockImplementation(((
+			callback: (err: null | Error, appearance: "dark" | "light") => void,
+		) => {
+			onAppearanceChange = (appearance: "dark" | "light") => callback(null, appearance);
 			return { stop };
-		});
+		}) as any);
 
 		await themeModule.initTheme(true, undefined, undefined, "dark", "light");
 
@@ -106,7 +109,7 @@ describe("theme auto-detection", () => {
 	});
 	it("Zellij fallback stays macOS-only (Linux + Zellij = honor terminal)", async () => {
 		using _globals = withThemeTestGlobals({ platform: "linux", zellij: "1" });
-		const detectSpy = vi.spyOn(nativesModule, "detectMacOSAppearance").mockReturnValue("light");
+		const detectSpy = vi.spyOn(nativesModule, "detectMacOSAppearance").mockReturnValue(MacOSAppearance.Light);
 
 		themeModule.onTerminalAppearanceChange("dark");
 		await themeModule.initTheme(false, undefined, undefined, "dark", "light");
@@ -117,7 +120,7 @@ describe("theme auto-detection", () => {
 
 	it("terminal-reported appearance wins over conflicting COLORFGBG", async () => {
 		using _globals = withThemeTestGlobals({ colorfgbg: "15;0" });
-		const detectSpy = vi.spyOn(nativesModule, "detectMacOSAppearance").mockReturnValue("light");
+		const detectSpy = vi.spyOn(nativesModule, "detectMacOSAppearance").mockReturnValue(MacOSAppearance.Light);
 
 		themeModule.onTerminalAppearanceChange("light");
 		await themeModule.initTheme(false, undefined, undefined, "dark", "light");

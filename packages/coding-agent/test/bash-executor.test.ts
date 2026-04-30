@@ -100,6 +100,22 @@ describe("executeBash", () => {
 		expect(Date.now() - start).toBeLessThan(3000);
 	});
 
+	it("returns a real PID for background external commands", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+
+		const result = await executeBash('python3 -c "import time; time.sleep(10)" & echo $!', {
+			cwd: tempDir,
+			timeout: 5000,
+		});
+		const pid = Number.parseInt(result.output.trim(), 10);
+		expect(Number.isInteger(pid)).toBe(true);
+		expect(pid).toBeGreaterThan(0);
+		expect(() => process.kill(pid, 0)).not.toThrow();
+		expect(() => process.kill(pid, "SIGKILL")).not.toThrow();
+	});
+
 	it("times out commands", async () => {
 		if (process.platform === "win32") {
 			return;
@@ -291,6 +307,49 @@ describe("executeBash", () => {
 		await executeBash("true", { cwd: tempDir, timeout: 5000, sessionKey });
 		const result = await executeBash("echo $PI_SNAPSHOT_TEST", { cwd: tempDir, timeout: 5000, sessionKey });
 		expect(result.output.trim()).toBe("from_snapshot");
+	});
+
+	it("sources large bash functions without base64 eval wrappers", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+		const realBashPath = Bun.env.SHELL?.includes("bash") ? Bun.env.SHELL : "/bin/bash";
+		if (!fs.existsSync(realBashPath)) {
+			return;
+		}
+
+		const bashPath = path.join(tempDir, "test-bash");
+		fs.symlinkSync(realBashPath, bashPath);
+		const largeBody = Array.from({ length: 200 }, (_, index) => `    echo "snapshot ${index}"`).join("\n");
+		fs.writeFileSync(path.join(tempDir, ".bashrc"), `pi_snapshot_large_function ()\n{\n${largeBody}\n}\n`);
+
+		vi.spyOn(os, "homedir").mockReturnValue(tempDir);
+		vi.spyOn(Settings.prototype, "getShellConfig").mockReturnValue({
+			shell: bashPath,
+			args: ["-l", "-c"],
+			env: {
+				PATH: Bun.env.PATH ?? "",
+				HOME: tempDir,
+			},
+			prefix: undefined,
+		});
+
+		const snapshotPath = await shellSnapshot.getOrCreateSnapshot(bashPath, {
+			PATH: Bun.env.PATH ?? "",
+			HOME: tempDir,
+		});
+		expect(snapshotPath).not.toBeNull();
+		const snapshot = fs.readFileSync(snapshotPath!, "utf8");
+		expect(snapshot).toContain("pi_snapshot_large_function");
+		expect(snapshot).not.toContain("base64 -d");
+
+		const result = await executeBash("printf 'snapshot_ok\\n'", {
+			cwd: tempDir,
+			timeout: 5000,
+			sessionKey: "large-function-snapshot",
+		});
+		expect(result.cancelled).toBe(false);
+		expect(result.output.trim()).toBe("snapshot_ok");
 	});
 
 	it("does not allow exec to replace the host", async () => {

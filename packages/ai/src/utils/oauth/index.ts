@@ -30,6 +30,7 @@ import type {
  * - Kilo Gateway
  * - Kagi
  * - Cerebras
+ * - Fireworks
  * - Hugging Face Inference
  * - Synthetic
  * - Perplexity (Pro/Max — desktop app extraction or manual cookie)
@@ -56,6 +57,8 @@ export {
 	pollCursorAuth,
 	refreshCursorToken,
 } from "./cursor";
+// Fireworks (API key)
+export { loginFireworks } from "./fireworks";
 // GitHub Copilot
 export {
 	getGitHubCopilotBaseUrl,
@@ -91,6 +94,7 @@ export { loginNanoGPT } from "./nanogpt";
 export { loginNvidia } from "./nvidia";
 // Ollama (optional API key)
 export { loginOllama } from "./ollama";
+export { loginOllamaCloud } from "./ollama-cloud";
 export type { OpenAICodexLoginOptions } from "./openai-codex";
 // OpenAI Codex (ChatGPT OAuth)
 export { loginOpenAICodex, refreshOpenAICodexToken } from "./openai-codex";
@@ -166,6 +170,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "fireworks",
+		name: "Fireworks",
+		available: true,
+	},
+	{
 		id: "github-copilot",
 		name: "GitHub Copilot",
 		available: true,
@@ -198,6 +207,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "ollama",
 		name: "Ollama (Local OpenAI-compatible)",
+		available: true,
+	},
+	{
+		id: "ollama-cloud",
+		name: "Ollama Cloud",
 		available: true,
 	},
 	{
@@ -391,6 +405,7 @@ export async function refreshOAuthToken(
 		case "opencode-zen":
 		case "opencode-go":
 		case "cerebras":
+		case "fireworks":
 		case "nvidia":
 		case "nanogpt":
 		case "synthetic":
@@ -398,6 +413,7 @@ export async function refreshOAuthToken(
 		case "litellm":
 		case "lm-studio":
 		case "ollama":
+		case "ollama-cloud":
 		case "xiaomi":
 		case "zai":
 		case "qianfan":
@@ -437,7 +453,7 @@ function getPerplexityJwtExpiryMs(token: string): number | undefined {
  * Get API key for a provider from OAuth credentials.
  * Automatically refreshes expired tokens.
  *
- * For google-gemini-cli and antigravity, returns JSON-encoded credentials including token/projectId
+ * For providers that need credential metadata at request time, returns JSON-encoded credentials
  * plus refresh/expiry metadata for proactive refresh support.
  * @returns API key string, or null if no credentials
  * @throws Error if refresh fails
@@ -476,11 +492,13 @@ export async function getOAuthApiKey(
 			throw new Error(`Failed to refresh OAuth token for ${provider}: ${reason}`);
 		}
 	}
-	// For providers that need projectId, return JSON
-	const needsProjectId = provider === "google-gemini-cli" || provider === "google-antigravity";
-	const apiKey = needsProjectId
+	// For providers that need request-time credential metadata, return JSON.
+	const needsStructuredApiKey =
+		provider === "github-copilot" || provider === "google-gemini-cli" || provider === "google-antigravity";
+	const apiKey = needsStructuredApiKey
 		? JSON.stringify({
 				token: creds.access,
+				enterpriseUrl: creds.enterpriseUrl,
 				projectId: creds.projectId,
 				refreshToken: creds.refresh,
 				expiresAt: creds.expires,

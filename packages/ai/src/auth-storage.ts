@@ -36,6 +36,7 @@ import { loginAnthropic } from "./utils/oauth/anthropic";
 import { loginCerebras } from "./utils/oauth/cerebras";
 import { loginCloudflareAiGateway } from "./utils/oauth/cloudflare-ai-gateway";
 import { loginCursor } from "./utils/oauth/cursor";
+import { loginFireworks } from "./utils/oauth/fireworks";
 import { loginGitHubCopilot } from "./utils/oauth/github-copilot";
 import { loginGitLabDuo } from "./utils/oauth/gitlab-duo";
 import { loginAntigravity } from "./utils/oauth/google-antigravity";
@@ -51,6 +52,7 @@ import { loginMoonshot } from "./utils/oauth/moonshot";
 import { loginNanoGPT } from "./utils/oauth/nanogpt";
 import { loginNvidia } from "./utils/oauth/nvidia";
 import { loginOllama } from "./utils/oauth/ollama";
+import { loginOllamaCloud } from "./utils/oauth/ollama-cloud";
 import { loginOpenAICodex } from "./utils/oauth/openai-codex";
 import { loginOpenCode } from "./utils/oauth/opencode";
 import { loginParallel } from "./utils/oauth/parallel";
@@ -206,6 +208,10 @@ function getOpenAICodexPlanPriority(report: UsageReport | null): number {
 	const planType = getUsagePlanType(report);
 	if (!planType) return 1;
 	return planType.includes("pro") ? 0 : 2;
+}
+
+function hasOpenAICodexProPlan(report: UsageReport | null): boolean {
+	return getUsagePlanType(report)?.includes("pro") === true;
 }
 
 function resolveDefaultUsageProvider(provider: Provider): UsageProvider | undefined {
@@ -834,8 +840,18 @@ export class AuthStorage {
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
+			case "ollama-cloud": {
+				const apiKey = await loginOllamaCloud(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
 			case "cerebras": {
 				const apiKey = await loginCerebras(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "fireworks": {
+				const apiKey = await loginFireworks(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
@@ -1656,14 +1672,14 @@ export class AuthStorage {
 		const providerKey = this.#getProviderTypeKey(provider, "oauth");
 		const order = this.#getCredentialOrder(providerKey, sessionId, credentials.length);
 		const strategy = this.#rankingStrategyResolver?.(provider);
-		const checkUsage = strategy !== undefined && credentials.length > 1;
+		const requiresProModel = requiresOpenAICodexProModel(provider, options?.modelId);
+		const checkUsage = strategy !== undefined && (credentials.length > 1 || requiresProModel);
 		const sessionCredential = this.#getSessionCredential(provider, sessionId);
 		const sessionPreferredIndex = sessionCredential?.type === "oauth" ? sessionCredential.index : undefined;
 		// Skip ranking only when the session already has a working preferred credential — re-ranking
 		// mid-session causes account switches that cold-start the server-side prompt cache. New sessions
 		// (no preference) and sessions whose preferred is blocked still rank, so we pick the account
 		// with the most headroom proactively and fall back intelligently when rate-limited.
-		const requiresProModel = requiresOpenAICodexProModel(provider, options?.modelId);
 		const sessionPreferredIsAvailable =
 			sessionPreferredIndex !== undefined && !this.#isCredentialBlocked(providerKey, sessionPreferredIndex);
 		const shouldRank = checkUsage && (!sessionPreferredIsAvailable || requiresProModel);
@@ -1707,6 +1723,11 @@ export class AuthStorage {
 			}),
 		);
 
+		// Skip the Pro-plan filter when no candidate is confirmed Pro, so users with only
+		// non-Pro accounts can still attempt Spark requests (e.g. trial/grandfathered access).
+		const enforceProRequirement =
+			requiresProModel && candidates.some(candidate => hasOpenAICodexProPlan(candidate.usage));
+
 		const fallback = candidates[0];
 
 		for (const candidate of candidates) {
@@ -1715,6 +1736,7 @@ export class AuthStorage {
 				allowBlocked: false,
 				prefetchedUsage: candidate.usage,
 				usagePrechecked: candidate.usageChecked,
+				enforceProRequirement,
 			});
 			if (apiKey) return apiKey;
 		}
@@ -1725,6 +1747,7 @@ export class AuthStorage {
 				allowBlocked: true,
 				prefetchedUsage: fallback.usage,
 				usagePrechecked: fallback.usageChecked,
+				enforceProRequirement,
 			});
 		}
 
@@ -1770,17 +1793,26 @@ export class AuthStorage {
 			allowBlocked: boolean;
 			prefetchedUsage?: UsageReport | null;
 			usagePrechecked?: boolean;
+			enforceProRequirement?: boolean;
 		},
 	): Promise<string | undefined> {
-		const { checkUsage, allowBlocked, prefetchedUsage = null, usagePrechecked = false } = usageOptions;
+		const {
+			checkUsage,
+			allowBlocked,
+			prefetchedUsage = null,
+			usagePrechecked = false,
+			enforceProRequirement,
+		} = usageOptions;
 		if (!allowBlocked && this.#isCredentialBlocked(providerKey, selection.index)) {
 			return undefined;
 		}
 
+		const requiresProModel = requiresOpenAICodexProModel(provider, options?.modelId);
+		const applyProFilter = enforceProRequirement ?? requiresProModel;
 		let usage: UsageReport | null = null;
 		let usageChecked = false;
 
-		if (checkUsage && !allowBlocked) {
+		if ((checkUsage && !allowBlocked) || requiresProModel) {
 			if (usagePrechecked) {
 				usage = prefetchedUsage;
 				usageChecked = true;
@@ -1791,7 +1823,10 @@ export class AuthStorage {
 				});
 				usageChecked = true;
 			}
-			if (usage && this.#isUsageLimitReached(usage)) {
+			if (applyProFilter && !hasOpenAICodexProPlan(usage)) {
+				return undefined;
+			}
+			if (checkUsage && !allowBlocked && usage && this.#isUsageLimitReached(usage)) {
 				const resetAtMs = this.#getUsageResetAtMs(usage, Date.now());
 				this.#markCredentialBlocked(
 					providerKey,
@@ -1829,15 +1864,19 @@ export class AuthStorage {
 				enterpriseUrl: result.newCredentials.enterpriseUrl ?? selection.credential.enterpriseUrl,
 			};
 			this.#replaceCredentialAt(provider, selection.index, updated);
-			if (checkUsage && !allowBlocked) {
+			if ((checkUsage && !allowBlocked) || requiresProModel) {
 				const sameAccount = selection.credential.accountId === updated.accountId;
 				if (!usageChecked || !sameAccount) {
 					usage = await this.#getUsageReport(provider, updated, {
 						...options,
 						timeoutMs: this.#usageRequestTimeoutMs,
 					});
+					usageChecked = true;
 				}
-				if (usage && this.#isUsageLimitReached(usage)) {
+				if (applyProFilter && !hasOpenAICodexProPlan(usage)) {
+					return undefined;
+				}
+				if (checkUsage && !allowBlocked && usage && this.#isUsageLimitReached(usage)) {
 					const resetAtMs = this.#getUsageResetAtMs(usage, Date.now());
 					this.#markCredentialBlocked(
 						providerKey,
@@ -1882,8 +1921,8 @@ export class AuthStorage {
 	/**
 	 * Peek at API key for a provider without refreshing OAuth tokens.
 	 * Used for model discovery where we only need to know if credentials exist
-	 * and get a best-effort token. The actual refresh happens lazily when the
-	 * provider is used for an API call.
+	 * and get a best-effort token. For GitHub Copilot we preserve enterprise
+	 * routing metadata so discovery can hit the correct host.
 	 */
 	async peekApiKey(provider: string): Promise<string | undefined> {
 		const runtimeKey = this.#runtimeOverrides.get(provider);
@@ -1901,6 +1940,12 @@ export class AuthStorage {
 		if (oauthSelection) {
 			const expiresAt = oauthSelection.credential.expires;
 			if (Number.isFinite(expiresAt) && expiresAt > Date.now()) {
+				if (provider === "github-copilot") {
+					return JSON.stringify({
+						token: oauthSelection.credential.access,
+						enterpriseUrl: oauthSelection.credential.enterpriseUrl,
+					});
+				}
 				return oauthSelection.credential.access;
 			}
 		}
@@ -2205,7 +2250,7 @@ export class AuthCredentialStore {
 	}
 
 	#initializeSchema(): void {
-		this.#db.exec(`
+		this.#db.run(`
 			PRAGMA journal_mode=WAL;
 			PRAGMA synchronous=NORMAL;
 			PRAGMA busy_timeout=5000;
@@ -2276,7 +2321,7 @@ export class AuthCredentialStore {
 	}
 
 	#createAuthCredentialsTable(): void {
-		this.#db.exec(`
+		this.#db.run(`
 			CREATE TABLE IF NOT EXISTS auth_credentials (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				provider TEXT NOT NULL,
@@ -2292,7 +2337,7 @@ export class AuthCredentialStore {
 	}
 
 	#createAuthCredentialIndexes(): void {
-		this.#db.exec(`
+		this.#db.run(`
 			CREATE INDEX IF NOT EXISTS idx_auth_provider ON auth_credentials(provider);
 			CREATE INDEX IF NOT EXISTS idx_auth_provider_identity ON auth_credentials(provider, identity_key) WHERE identity_key IS NOT NULL;
 		`);
@@ -2315,8 +2360,8 @@ export class AuthCredentialStore {
 			const v0Cols = this.#db.prepare("PRAGMA table_info(auth_credentials)").all() as Array<{ name?: string }>;
 			const hasDisabled = v0Cols.some(col => col.name === "disabled");
 
-			this.#db.exec("ALTER TABLE auth_credentials RENAME TO auth_credentials_v0");
-			this.#db.exec(`
+			this.#db.run("ALTER TABLE auth_credentials RENAME TO auth_credentials_v0");
+			this.#db.run(`
 				CREATE TABLE auth_credentials (
 					id INTEGER PRIMARY KEY AUTOINCREMENT,
 					provider TEXT NOT NULL,
@@ -2327,7 +2372,7 @@ export class AuthCredentialStore {
 					updated_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH})
 				);
 			`);
-			this.#db.exec(`
+			this.#db.run(`
 				INSERT INTO auth_credentials (id, provider, credential_type, data, disabled_cause, created_at, updated_at)
 				SELECT
 					id,
@@ -2339,16 +2384,16 @@ export class AuthCredentialStore {
 					updated_at
 				FROM auth_credentials_v0
 			`);
-			this.#db.exec("DROP TABLE auth_credentials_v0");
+			this.#db.run("DROP TABLE auth_credentials_v0");
 		});
 		migrate();
 	}
 
 	#migrateAuthSchemaV1OrV2ToV3(): void {
 		const migrate = this.#db.transaction(() => {
-			this.#db.exec("ALTER TABLE auth_credentials RENAME TO auth_credentials_legacy");
+			this.#db.run("ALTER TABLE auth_credentials RENAME TO auth_credentials_legacy");
 			this.#createAuthCredentialsTable();
-			this.#db.exec(`
+			this.#db.run(`
 				INSERT INTO auth_credentials (id, provider, credential_type, data, disabled_cause, identity_key, created_at, updated_at)
 				SELECT
 					id,
@@ -2361,16 +2406,16 @@ export class AuthCredentialStore {
 					updated_at
 				FROM auth_credentials_legacy
 			`);
-			this.#db.exec("DROP TABLE auth_credentials_legacy");
+			this.#db.run("DROP TABLE auth_credentials_legacy");
 		});
 		migrate();
 	}
 
 	#migrateAuthSchemaV3ToV4(): void {
 		const migrate = this.#db.transaction(() => {
-			this.#db.exec("ALTER TABLE auth_credentials RENAME TO auth_credentials_v3");
+			this.#db.run("ALTER TABLE auth_credentials RENAME TO auth_credentials_v3");
 			this.#createAuthCredentialsTable();
-			this.#db.exec(`
+			this.#db.run(`
 				INSERT INTO auth_credentials (id, provider, credential_type, data, disabled_cause, identity_key, created_at, updated_at)
 				SELECT
 					id,
@@ -2383,7 +2428,7 @@ export class AuthCredentialStore {
 					updated_at
 				FROM auth_credentials_v3
 			`);
-			this.#db.exec("DROP TABLE auth_credentials_v3");
+			this.#db.run("DROP TABLE auth_credentials_v3");
 		});
 		migrate();
 	}

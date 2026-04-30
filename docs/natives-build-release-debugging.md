@@ -21,16 +21,14 @@ It follows the architecture terms from `docs/natives-architecture.md`:
 
 `packages/natives/package.json` scripts:
 
-- `bun scripts/build-native.ts` (`build:native`) → release build
-- `bun scripts/build-native.ts --dev` (`dev:native`) → debug/dev build
+- `bun scripts/build-native.ts` (`build`) → release build
 - `bun scripts/embed-native.ts` (`embed:native`) → generate `src/embedded-addon.ts` from built files
 
 ### 2) Rust artifact build
 
 `build-native.ts` runs Cargo in `crates/pi-natives`:
 
-- base command: `cargo build`
-- release mode adds `--release` unless `--dev` is passed
+- base command: `cargo build --release`
 - cross target adds `--target <CROSS_TARGET>`
 
 `crates/pi-natives/Cargo.toml` declares `crate-type = ["cdylib"]`, so Cargo emits a shared library (`.so`/`.dylib`/`.dll`) that is then copied/renamed to a `.node` addon filename.
@@ -77,25 +75,19 @@ Release builds:
 - x64: `pi_natives.<platform>-<arch>-modern.node` or `...-baseline.node`
 - non-x64: `pi_natives.<platform>-<arch>.node`
 
-Dev build (`--dev`):
-- `pi_natives.dev.node`
-
 Runtime loader candidate order in `native.ts`:
-- if `PI_DEV` is set: try `pi_natives.dev.node` first
-- then release candidates
+- release candidates
 - compiled mode prepends extracted/cache candidates before package-local files
 
 ## Environment flags and build options
 
 ## Runtime flags
 
-- `PI_DEV` (loader behavior): prefer dev addon candidates first
 - `PI_NATIVE_VARIANT` (loader behavior, x64 only): force `modern` or `baseline` selection at runtime
 - `PI_COMPILED` (loader behavior): enable compiled-binary candidate/extraction behavior
 
 ## Build-time flags/options
 
-- `--dev` (script arg): build debug profile and emit `pi_natives.dev.node`
 - `CROSS_TARGET`: passed to Cargo `--target`
 - `TARGET_PLATFORM`: override output platform tag naming
 - `TARGET_ARCH`: override output arch naming
@@ -112,7 +104,7 @@ Runtime loader candidate order in `native.ts`:
 
 ### Build lifecycle (`build-native.ts`)
 
-1. **Init**: parse args/env (`--dev`, target overrides, cross flags)
+1. **Init**: parse args/env (target overrides, cross flags)
 2. **Variant resolve**:
    - non-x64 → no variant
    - x64 + `TARGET_VARIANT` → explicit variant
@@ -143,12 +135,9 @@ Failure exits happen at any stage with explicit error text (invalid variant, fai
 
 Typical local loop:
 
-1. Build addon:
-   - release: `bun --cwd=packages/natives run build:native`
-   - debug: `bun --cwd=packages/natives run dev:native`
-2. Set `PI_DEV=1` when testing debug addon loading
-3. Loader in `native.ts` resolves package-local `native/` (and executable-dir fallback) candidates
-4. `validateNative` enforces export compatibility before wrappers use the binding
+1. Build addon: `bun --cwd=packages/natives run build`
+2. Loader in `native.ts` resolves package-local `native/` (and executable-dir fallback) candidates
+3. `validateNative` enforces export compatibility before wrappers use the binding
 
 ## Shipped/compiled binary workflow
 
@@ -170,13 +159,13 @@ This is why packaging + runtime loader expectations must align: filenames, platf
 
 | JS name required by `validateNative` | Rust export declaration | Rust source file |
 | --- | --- | --- |
-| `glob` | `#[napi(js_name = "glob")] pub fn glob(...)` | `crates/pi-natives/src/glob.rs` |
-| `grep` | `#[napi(js_name = "grep")] pub fn grep(...)` | `crates/pi-natives/src/grep.rs` |
-| `search` | `#[napi(js_name = "search")] pub fn search(...)` | `crates/pi-natives/src/grep.rs` |
-| `highlightCode` | `#[napi(js_name = "highlightCode")] pub fn highlight_code(...)` | `crates/pi-natives/src/highlight.rs` |
-| `getSystemInfo` | `#[napi(js_name = "getSystemInfo")] pub fn get_system_info(...)` | `crates/pi-natives/src/system_info.rs` |
+| `glob` | `#[napi] pub fn glob(...)` | `crates/pi-natives/src/glob.rs` |
+| `grep` | `#[napi] pub fn grep(...)` | `crates/pi-natives/src/grep.rs` |
+| `search` | `#[napi] pub fn search(...)` | `crates/pi-natives/src/grep.rs` |
+| `highlightCode` | `#[napi] pub fn highlight_code(...)` | `crates/pi-natives/src/highlight.rs` |
+| `getSystemInfo` | `#[napi] pub fn get_system_info(...)` | `crates/pi-natives/src/system_info.rs` |
 | `getWorkProfile` | `#[napi] pub fn get_work_profile(...)` (camel-cased export) | `crates/pi-natives/src/prof.rs` |
-| `invalidateFsScanCache` | `#[napi(js_name = "invalidateFsScanCache")] pub fn invalidate_fs_scan_cache(...)` | `crates/pi-natives/src/fs_cache.rs` |
+| `invalidateFsScanCache` | `#[napi] pub fn invalidate_fs_scan_cache(...)` | `crates/pi-natives/src/fs_cache.rs` |
 
 If any required symbol is missing, loader fails fast with a rebuild hint.
 
@@ -209,8 +198,8 @@ If any required symbol is missing, loader fails fast with a rebuild hint.
 
 | Symptom | Likely cause | Verify | Fix |
 | --- | --- | --- | --- |
-| `Native addon missing exports ... Missing: <name>` | Stale `.node` binary, Rust export name mismatch, or wrong binary loaded | Run with `PI_DEV=1` to see loaded path; inspect export list for that file | Rebuild `build:native`; ensure Rust `#[napi(js_name=...)]` matches JS name; remove stale cached/versioned files |
-| x64 machine loads baseline when modern expected | `PI_NATIVE_VARIANT=baseline`, no AVX2 detected, or only baseline file present | Check `PI_NATIVE_VARIANT`; inspect `native/` for `-modern` file | Build modern variant (`TARGET_VARIANT=modern ... build:native`) and ensure file is shipped |
+| `Native addon missing exports ... Missing: <name>` | Stale `.node` binary, Rust export name mismatch, or wrong binary loaded | Inspect export list for the binary | Rebuild `build`; ensure Rust `#[napi]` export name (or explicit alias when needed) matches JS key; remove stale cached/versioned files |
+| x64 machine loads baseline when modern expected | `PI_NATIVE_VARIANT=baseline`, no AVX2 detected, or only baseline file present | Check `PI_NATIVE_VARIANT`; inspect `native/` for `-modern` file | Build modern variant (`TARGET_VARIANT=modern ... build`) and ensure file is shipped |
 | Cross-build produces unusable/wrong-labeled binary | Mismatch between `CROSS_TARGET` and `TARGET_PLATFORM`/`TARGET_ARCH`, or missing `TARGET_VARIANT` for x64 | Confirm env tuple and output filename | Re-run with consistent env values and explicit x64 `TARGET_VARIANT` |
 | Compiled binary fails after upgrade | Stale extracted cache (`~/.omp/natives/<old-or-mismatched-version>`) or embedded manifest mismatch | Inspect versioned natives dir and loader error list | Delete versioned natives cache for the package version and rerun; regenerate embedded manifest during packaging |
 | Loader probes many paths and none work | Platform mismatch or missing release artifact in package `native/` | Check `platformTag` vs actual filename(s) | Ensure built filename exactly matches `pi_natives.<platform>-<arch>(-variant).node` convention and package includes `native/` |
@@ -220,14 +209,11 @@ If any required symbol is missing, loader fails fast with a rebuild hint.
 
 ```bash
 # Release artifact for current host
-bun --cwd=packages/natives run build:native
-
-# Debug artifact (load first when PI_DEV=1)
-bun --cwd=packages/natives run dev:native
+bun --cwd=packages/natives run build
 
 # Build explicit x64 variants
-TARGET_VARIANT=modern bun --cwd=packages/natives run build:native
-TARGET_VARIANT=baseline bun --cwd=packages/natives run build:native
+TARGET_VARIANT=modern bun --cwd=packages/natives run build
+TARGET_VARIANT=baseline bun --cwd=packages/natives run build
 
 # Generate embedded addon manifest from built native files
 bun --cwd=packages/natives run embed:native

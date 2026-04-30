@@ -73,7 +73,7 @@ export class AgentStorage {
 	 * AuthCredentialStore handles auth_credentials and cache tables.
 	 */
 	#initializeSchema(): void {
-		this.#db.exec(`
+		this.#db.run(`
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 PRAGMA busy_timeout=5000;
@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
 		const hasValue = settingsInfo.some(column => column.name === "value");
 
 		if (!hasSettingsTable) {
-			this.#db.exec(`
+			this.#db.run(`
 CREATE TABLE settings (
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL,
@@ -117,8 +117,8 @@ CREATE TABLE settings (
 			}
 
 			const migrate = this.#db.transaction((settings: Record<string, unknown> | null) => {
-				this.#db.exec("DROP TABLE settings");
-				this.#db.exec(`
+				this.#db.run("DROP TABLE settings");
+				this.#db.run(`
 CREATE TABLE settings (
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL,
@@ -169,34 +169,34 @@ CREATE TABLE settings (
 
 	#migrateSchemaV4ToV5(): void {
 		const migrate = this.#db.transaction(() => {
-			this.#db.exec("ALTER TABLE settings RENAME TO settings_legacy");
-			this.#db.exec(`
+			this.#db.run("ALTER TABLE settings RENAME TO settings_legacy");
+			this.#db.run(`
 CREATE TABLE settings (
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL,
 	updated_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH})
 );
 `);
-			this.#db.exec(`
+			this.#db.run(`
 INSERT INTO settings (key, value, updated_at)
 SELECT key, value, updated_at
 FROM settings_legacy
 `);
-			this.#db.exec("DROP TABLE settings_legacy");
+			this.#db.run("DROP TABLE settings_legacy");
 
-			this.#db.exec("ALTER TABLE model_usage RENAME TO model_usage_legacy");
-			this.#db.exec(`
+			this.#db.run("ALTER TABLE model_usage RENAME TO model_usage_legacy");
+			this.#db.run(`
 CREATE TABLE model_usage (
 	model_key TEXT PRIMARY KEY,
 	last_used_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH})
 );
 `);
-			this.#db.exec(`
+			this.#db.run(`
 INSERT INTO model_usage (model_key, last_used_at)
 SELECT model_key, last_used_at
 FROM model_usage_legacy
 `);
-			this.#db.exec("DROP TABLE model_usage_legacy");
+			this.#db.run("DROP TABLE model_usage_legacy");
 		});
 		migrate();
 	}

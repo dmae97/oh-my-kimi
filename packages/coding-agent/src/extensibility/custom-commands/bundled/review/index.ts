@@ -11,7 +11,7 @@
  * rich context for the orchestrating agent to distribute work across
  * multiple reviewer agents based on diff weight and locality.
  */
-import { renderPromptTemplate } from "../../../../config/prompt-templates";
+import { prompt } from "@oh-my-pi/pi-utils";
 import type { CustomCommand, CustomCommandAPI } from "../../../../extensibility/custom-commands/types";
 import type { HookCommandContext } from "../../../../extensibility/hooks/types";
 import reviewRequestTemplate from "../../../../prompts/review-request.md" with { type: "text" };
@@ -197,7 +197,7 @@ const MAX_FILES_FOR_INLINE_DIFF = 20; // Don't include diff if more files than t
 /**
  * Build the full review prompt with diff stats and distribution guidance.
  */
-function buildReviewPrompt(mode: string, stats: DiffStats, rawDiff: string): string {
+function buildReviewPrompt(mode: string, stats: DiffStats, rawDiff: string, additionalInstructions?: string): string {
 	const agentCount = getRecommendedAgentCount(stats);
 	const skipDiff = rawDiff.length > MAX_DIFF_CHARS || stats.files.length > MAX_FILES_FOR_INLINE_DIFF;
 	const totalLines = stats.totalAdded + stats.totalRemoved;
@@ -209,7 +209,7 @@ function buildReviewPrompt(mode: string, stats: DiffStats, rawDiff: string): str
 		hunksPreview: skipDiff ? getDiffPreview(f.hunks, linesPerFile) : "",
 	}));
 
-	return renderPromptTemplate(reviewRequestTemplate, {
+	return prompt.render(reviewRequestTemplate, {
 		mode,
 		files: filesWithExt,
 		excluded: stats.excluded,
@@ -221,6 +221,7 @@ function buildReviewPrompt(mode: string, stats: DiffStats, rawDiff: string): str
 		skipDiff,
 		rawDiff: rawDiff.trim(),
 		linesPerFile,
+		additionalInstructions,
 	});
 }
 
@@ -230,17 +231,30 @@ export class ReviewCommand implements CustomCommand {
 
 	constructor(private api: CustomCommandAPI) {}
 
-	async execute(_args: string[], ctx: HookCommandContext): Promise<string | undefined> {
+	async execute(args: string[], ctx: HookCommandContext): Promise<string | undefined> {
 		if (!ctx.hasUI) {
-			return "Use the Task tool to run the 'reviewer' agent to review recent code changes.";
+			const base = "Use the Task tool to run the 'reviewer' agent to review recent code changes.";
+			return args.length > 0 ? `${base} Focus: ${args.join(" ")}` : base;
 		}
 
-		const mode = await ctx.ui.select("Review Mode", [
-			"1. Review against a base branch (PR Style)",
-			"2. Review uncommitted changes",
-			"3. Review a specific commit",
-			"4. Custom review instructions",
-		]);
+		// Inline args act as additional instructions appended to the generated prompt.
+		// When present, skip option 4 (editor) — the args already provide the instructions.
+		const extraInstructions = args.length > 0 ? args.join(" ") : undefined;
+
+		const menuItems = extraInstructions
+			? [
+					"1. Review against a base branch (PR Style)",
+					"2. Review uncommitted changes",
+					"3. Review a specific commit",
+				]
+			: [
+					"1. Review against a base branch (PR Style)",
+					"2. Review uncommitted changes",
+					"3. Review a specific commit",
+					"4. Custom review instructions",
+				];
+
+		const mode = await ctx.ui.select("Review Mode", menuItems);
 
 		if (!mode) return undefined;
 
@@ -282,6 +296,7 @@ export class ReviewCommand implements CustomCommand {
 					`Reviewing changes between \`${baseBranch}\` and \`${currentBranch}\` (PR-style)`,
 					stats,
 					diffText,
+					extraInstructions,
 				);
 			}
 
@@ -318,7 +333,12 @@ export class ReviewCommand implements CustomCommand {
 					return undefined;
 				}
 
-				return buildReviewPrompt("Reviewing uncommitted changes (staged + unstaged)", stats, combinedDiff);
+				return buildReviewPrompt(
+					"Reviewing uncommitted changes (staged + unstaged)",
+					stats,
+					combinedDiff,
+					extraInstructions,
+				);
 			}
 
 			case 3: {
@@ -354,7 +374,7 @@ export class ReviewCommand implements CustomCommand {
 					return undefined;
 				}
 
-				return buildReviewPrompt(`Reviewing commit \`${hash}\``, stats, diffText);
+				return buildReviewPrompt(`Reviewing commit \`${hash}\``, stats, diffText, extraInstructions);
 			}
 
 			case 4: {
@@ -374,11 +394,12 @@ export class ReviewCommand implements CustomCommand {
 				if (reviewDiff) {
 					const stats = parseDiff(reviewDiff);
 					// Even if all files filtered, include the custom instructions
-					return `${buildReviewPrompt(
+					return buildReviewPrompt(
 						`Custom review: ${instructions.split("\n")[0].slice(0, 60)}…`,
 						stats,
 						reviewDiff,
-					)}\n\n### Additional Instructions\n\n${instructions}`;
+						instructions,
+					);
 				}
 
 				// No diff available, just pass instructions

@@ -26,7 +26,7 @@ COPY . .
 
 # Build the project
 RUN bun install --frozen-lockfile
-RUN bun --cwd=packages/natives run build:native
+RUN bun --cwd=packages/natives run build
 
 # Create verdaccio config (allow anonymous publish)
 RUN mkdir -p /root/.config/verdaccio && cat > /root/.config/verdaccio/config.yaml <<'EOF'

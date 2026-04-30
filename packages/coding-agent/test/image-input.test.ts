@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { readImageMetadata } from "@oh-my-pi/pi-coding-agent/utils/image-input";
+import { readImageMetadata } from "@oh-my-pi/pi-utils";
 
 describe("readImageMetadata", () => {
 	let testDir: string;
@@ -23,10 +23,9 @@ describe("readImageMetadata", () => {
 		const imagePath = path.join(testDir, "header-only.png");
 		fs.writeFileSync(imagePath, pngHeader);
 
-		const metadata = await readImageMetadata({ path: imagePath, cwd: testDir });
+		const metadata = await readImageMetadata(imagePath);
 		expect(metadata).not.toBeNull();
 		expect(metadata?.mimeType).toBe("image/png");
-		expect(metadata?.bytes).toBe(pngHeader.byteLength);
 		expect(metadata?.width).toBe(4);
 		expect(metadata?.height).toBe(3);
 		expect(metadata?.channels).toBe(4);
@@ -41,10 +40,9 @@ describe("readImageMetadata", () => {
 		const imagePath = path.join(testDir, "header-only.jpg");
 		fs.writeFileSync(imagePath, jpegHeader);
 
-		const metadata = await readImageMetadata({ path: imagePath, cwd: testDir });
+		const metadata = await readImageMetadata(imagePath);
 		expect(metadata).not.toBeNull();
 		expect(metadata?.mimeType).toBe("image/jpeg");
-		expect(metadata?.bytes).toBe(jpegHeader.byteLength);
 		expect(metadata?.width).toBe(3);
 		expect(metadata?.height).toBe(2);
 		expect(metadata?.channels).toBe(3);
@@ -55,7 +53,7 @@ describe("readImageMetadata", () => {
 		const textPath = path.join(testDir, "not-image.bin");
 		fs.writeFileSync(textPath, "plain text");
 
-		const metadata = await readImageMetadata({ path: textPath, cwd: testDir });
+		const metadata = await readImageMetadata(textPath);
 		expect(metadata).toBeNull();
 	});
 });

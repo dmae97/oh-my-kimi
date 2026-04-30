@@ -24,6 +24,7 @@ function makeSessionInfo(path: string): SessionInfo {
 		created: new Date("2025-01-01T00:00:00Z"),
 		modified: new Date("2025-01-01T00:00:00Z"),
 		messageCount: 1,
+		size: 0,
 		firstMessage: "hello",
 		allMessagesText: "hello",
 	};
@@ -108,6 +109,9 @@ function createContext(currentSessionFile: string): {
 		updateEditorTopBorder: vi.fn(() => {
 			calls.push("updateEditorTopBorder");
 		}),
+		updateEditorBorderColor: vi.fn(() => {
+			calls.push("updateEditorBorderColor");
+		}),
 		renderInitialMessages: vi.fn(() => {
 			calls.push("renderInitialMessages");
 		}),
@@ -187,6 +191,7 @@ describe("SelectorController session deletion", () => {
 			"statusLine.invalidate",
 			"statusLine.setSessionStartTime",
 			"updateEditorTopBorder",
+			"updateEditorBorderColor",
 			"renderInitialMessages",
 			"reloadTodos",
 			"ui.requestRender",
@@ -255,6 +260,7 @@ describe("SelectorController session deletion", () => {
 			"statusLine.invalidate",
 			"statusLine.setSessionStartTime",
 			"updateEditorTopBorder",
+			"updateEditorBorderColor",
 			"renderInitialMessages",
 			"reloadTodos",
 			"ui.requestRender",

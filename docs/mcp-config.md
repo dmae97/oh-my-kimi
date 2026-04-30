@@ -15,14 +15,14 @@ Source of truth in code:
 OMP can discover MCP servers from multiple tools (`.claude/`, `.cursor/`, `.vscode/`, `opencode.json`, and more), but for OMP-native configuration you should usually use one of these files:
 
 - Project: `.omp/mcp.json`
-- User: `~/.omp/mcp.json`
+- User: `~/.omp/agent/mcp.json`
 
 OMP also accepts fallback standalone files in the project root:
 
 - `mcp.json`
 - `.mcp.json`
 
-Use `.omp/mcp.json` when you want OMP to own the configuration. Use root `mcp.json` / `.mcp.json` only when you want a portable fallback file that other MCP clients may also read.
+Use `.omp/mcp.json` or `~/.omp/agent/mcp.json` when you want OMP to own the configuration. Use root `mcp.json` / `.mcp.json` only when you want a portable fallback file that other MCP clients may also read.
 
 ## Add a schema reference
 
@@ -315,7 +315,7 @@ This matches GitHub's official local Docker image `ghcr.io/github/github-mcp-ser
 
 This is the part that usually trips people up.
 
-### In `.omp/mcp.json` and `~/.omp/mcp.json`
+### In `.omp/mcp.json` and `~/.omp/agent/mcp.json`
 
 Before OMP launches a server or makes an HTTP request, it resolves `env` and `headers` values like this:
 
@@ -362,11 +362,11 @@ Example:
 }
 ```
 
-If you want the least surprising OMP behavior, prefer `.omp/mcp.json` and use explicit env/header values.
+If you want the least surprising OMP behavior, prefer `.omp/mcp.json` or `~/.omp/agent/mcp.json` and use explicit env/header values.
 
 ## `disabledServers`
 
-`disabledServers` is mainly useful in the user config file (`~/.omp/mcp.json`) when a server is discovered from some other source and you want OMP to ignore it without editing that other tool's config.
+`disabledServers` is mainly useful in the user config file (`~/.omp/agent/mcp.json`) when a server is discovered from some other source and you want OMP to ignore it without editing that other tool's config.
 
 Example:
 
@@ -414,7 +414,7 @@ OMP does not merge duplicate server definitions across files. Discovery provider
 
 In practice:
 
-- prefer `.omp/mcp.json` or `~/.omp/mcp.json` when you want an OMP-specific override
+- prefer `.omp/mcp.json` or `~/.omp/agent/mcp.json` when you want an OMP-specific override
 - keep server names unique across tools when possible
 - use `disabledServers` in the user config when a third-party config keeps reintroducing a server you do not want
 

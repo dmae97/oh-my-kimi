@@ -92,6 +92,18 @@ export interface ModelPerformancePoint {
 	avgTokensPerSecond: number | null;
 }
 
+export interface CostTimeSeriesPoint {
+	timestamp: number;
+	model: string;
+	provider: string;
+	cost: number;
+	costInput: number;
+	costOutput: number;
+	costCacheRead: number;
+	costCacheWrite: number;
+	requests: number;
+}
+
 export interface DashboardStats {
 	overall: AggregatedStats;
 	byModel: ModelStats[];
@@ -99,4 +111,5 @@ export interface DashboardStats {
 	timeSeries: TimeSeriesPoint[];
 	modelSeries: ModelTimeSeriesPoint[];
 	modelPerformanceSeries: ModelPerformancePoint[];
+	costSeries: CostTimeSeriesPoint[];
 }

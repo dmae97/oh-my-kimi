@@ -188,7 +188,7 @@ export function renderSearchResult(
 								: typeof src.url === "string" && src.url.trim()
 									? src.url
 									: "Untitled";
-						const title = truncateToWidth(titleText, 70);
+						const title = truncateToWidth(titleText, MAX_SNIPPET_LINE_LEN);
 						const url = typeof src.url === "string" ? src.url : "";
 						const domain = url ? getDomain(url) : "";
 						const age =
@@ -196,11 +196,13 @@ export function renderSearchResult(
 						const metaParts: string[] = [];
 						if (domain) metaParts.push(theme.fg("dim", `(${domain})`));
 						if (typeof src.author === "string" && src.author.trim())
-							metaParts.push(theme.fg("muted", src.author));
+							metaParts.push(theme.fg("muted", truncateToWidth(src.author.trim(), 40)));
 						if (age) metaParts.push(theme.fg("muted", age));
 						const metaSep = theme.fg("dim", theme.sep.dot);
 						const metaSuffix = metaParts.length > 0 ? ` ${metaParts.join(metaSep)}` : "";
-						const srcLines: string[] = [`${theme.fg("accent", title)}${metaSuffix}`];
+						const srcLines: string[] = [
+							truncateToWidth(`${theme.fg("accent", title)}${metaSuffix}`, MAX_SNIPPET_LINE_LEN),
+						];
 						const snippetText = typeof src.snippet === "string" ? src.snippet : "";
 						if (snippetText.trim()) {
 							const snippetLines = getPreviewLines(snippetText, MAX_SNIPPET_LINES, MAX_SNIPPET_LINE_LEN);
@@ -208,7 +210,7 @@ export function renderSearchResult(
 								srcLines.push(theme.fg("muted", `${theme.format.dash} ${snippetLine}`));
 							}
 						}
-						if (url) srcLines.push(theme.fg("mdLinkUrl", url));
+						if (url) srcLines.push(theme.fg("mdLinkUrl", truncateToWidth(url, MAX_SNIPPET_LINE_LEN)));
 						return srcLines;
 					},
 				},

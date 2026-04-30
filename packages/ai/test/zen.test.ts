@@ -14,7 +14,7 @@ describe.skipIf(!e2eApiKey("OPENCODE_API_KEY"))("OpenCode Models Smoke Test", ()
 		const providerModels = Object.values(MODELS[key]);
 		providerModels.forEach(model => {
 			it(`${label}: ${model.id}`, async () => {
-				const response = await complete(model as Model, {
+				const response = await complete(model as unknown as Model, {
 					messages: [{ role: "user", content: "Say hello.", timestamp: Date.now() }],
 				});
 

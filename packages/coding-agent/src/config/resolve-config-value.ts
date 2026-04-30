@@ -55,8 +55,10 @@ async function executeCommand(commandConfig: string): Promise<string | undefined
 async function runShellCommand(command: string, timeoutMs: number): Promise<string | undefined> {
 	try {
 		let output = "";
-		const result = await executeShell({ command, timeoutMs }, chunk => {
-			output += chunk;
+		const result = await executeShell({ command, timeoutMs }, (err, chunk) => {
+			if (!err) {
+				output += chunk;
+			}
 		});
 		if (result.timedOut || result.exitCode !== 0) {
 			return undefined;

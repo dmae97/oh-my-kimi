@@ -223,13 +223,14 @@ export const streamGoogle: StreamFunction<"google-generative-ai"> = (
 					// input + cacheRead = total prompt tokens (no double-counting).
 					// Ref: https://ai.google.dev/api/generate-content#v1beta.GenerateContentResponse.UsageMetadata
 					const cachedTokens = chunk.usageMetadata.cachedContentTokenCount || 0;
+					const thinkingTokens = chunk.usageMetadata.thoughtsTokenCount || 0;
 					output.usage = {
 						input: (chunk.usageMetadata.promptTokenCount || 0) - cachedTokens,
-						output:
-							(chunk.usageMetadata.candidatesTokenCount || 0) + (chunk.usageMetadata.thoughtsTokenCount || 0),
+						output: (chunk.usageMetadata.candidatesTokenCount || 0) + thinkingTokens,
 						cacheRead: cachedTokens,
 						cacheWrite: 0,
 						totalTokens: chunk.usageMetadata.totalTokenCount || 0,
+						...(thinkingTokens > 0 ? { reasoningTokens: thinkingTokens } : {}),
 						cost: {
 							input: 0,
 							output: 0,

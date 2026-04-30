@@ -2,7 +2,7 @@ import type { Component } from "../tui";
 import { applyBackgroundToLine, padding, visibleWidth } from "../utils";
 
 type Cache = {
-	key: bigint;
+	key: bigint | number;
 	result: string[];
 };
 
@@ -52,20 +52,20 @@ export class Box implements Component {
 	}
 
 	static #tmp = new Uint32Array(2);
-	#computeCacheKey(width: number, childLines: string[], bgSample: string | undefined): bigint {
+	#computeCacheKey(width: number, childLines: string[], bgSample: string | undefined): bigint | number {
 		Box.#tmp[0] = width;
 		Box.#tmp[1] = childLines.length;
-		let h = Bun.hash.xxHash64(Box.#tmp);
+		let h = Bun.hash(Box.#tmp);
 		for (const line of childLines) {
-			Box.#tmp[0] = line.length;
-			h = Bun.hash.xxHash64(Box.#tmp, h);
-			h = Bun.hash.xxHash64(line, h);
+			h = Bun.hash(line, h);
 		}
-		h = Bun.hash.xxHash64(bgSample ?? "", h);
+		if (bgSample) {
+			h = Bun.hash(bgSample, h);
+		}
 		return h;
 	}
 
-	#matchCache(cacheKey: bigint): boolean {
+	#matchCache(cacheKey: bigint | number): boolean {
 		return this.#cached?.key === cacheKey;
 	}
 

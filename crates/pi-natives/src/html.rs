@@ -11,10 +11,8 @@ use crate::task;
 #[derive(Debug, Default)]
 pub struct HtmlToMarkdownOptions {
 	/// Remove navigation elements, forms, headers, footers.
-	#[napi(js_name = "cleanContent")]
 	pub clean_content: Option<bool>,
 	/// Skip images during conversion.
-	#[napi(js_name = "skipImages")]
 	pub skip_images:   Option<bool>,
 }
 
@@ -22,11 +20,11 @@ pub struct HtmlToMarkdownOptions {
 ///
 /// # Errors
 /// Returns an error if the conversion fails or the worker task aborts.
-#[napi(js_name = "htmlToMarkdown")]
+#[napi]
 pub fn html_to_markdown(
 	html: String,
 	options: Option<HtmlToMarkdownOptions>,
-) -> task::Async<String> {
+) -> task::Promise<String> {
 	let options = options.unwrap_or_default();
 	let clean_content = options.clean_content.unwrap_or(false);
 	let skip_images = options.skip_images.unwrap_or(false);

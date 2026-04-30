@@ -1,0 +1,28 @@
+# ollama output. Drop pull/download progress spinners and verifying/writing
+# chatter, keep the final lines.
+
+[filters.ollama]
+description = "Compact ollama output"
+match_command = "^ollama$"
+strip_ansi = true
+strip_lines_matching = [
+	"^\\s*$",
+	"^pulling\\s+[0-9a-f]+",
+	"^pulling manifest",
+	"^verifying sha256",
+	"^writing manifest",
+	"^downloading",
+]
+truncate_lines_at = 200
+max_lines = 60
+on_empty = "ollama: ok"
+
+[[tests.ollama]]
+name = "strips pull progress keeps success"
+input = "pulling manifest\npulling abc123 100%\nverifying sha256 digest\nwriting manifest\nsuccess\n"
+expected = "success\n"
+
+[[tests.ollama]]
+name = "empty becomes sentinel"
+input = "pulling manifest\n"
+expected = "ollama: ok"

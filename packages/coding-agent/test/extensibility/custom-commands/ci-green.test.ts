@@ -1,15 +1,20 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as typebox from "@sinclair/typebox";
 import { GreenCommand } from "../../../src/extensibility/custom-commands/bundled/ci-green";
 import type { CustomCommandAPI } from "../../../src/extensibility/custom-commands/types";
 import type { HookCommandContext } from "../../../src/extensibility/hooks/types";
 import * as piCodingAgent from "../../../src/index";
+import * as git from "../../../src/utils/git";
 
-function createApi(stdout: string): CustomCommandAPI {
+afterEach(() => {
+	vi.restoreAllMocks();
+});
+
+function createApi(): CustomCommandAPI {
 	return {
 		cwd: "/tmp/test",
 		exec: async () => ({
-			stdout,
+			stdout: "",
 			stderr: "",
 			code: 0,
 			killed: false,
@@ -21,18 +26,21 @@ function createApi(stdout: string): CustomCommandAPI {
 
 describe("GreenCommand", () => {
 	it("exposes the /green command name", () => {
-		const command = new GreenCommand(createApi(""));
+		const command = new GreenCommand(createApi());
 
 		expect(command.name).toBe("green");
 	});
 
 	it("includes tag instructions when HEAD has a tag", async () => {
-		const command = new GreenCommand(createApi("v0.1.0-alpha2\n"));
+		vi.spyOn(git.ref, "tags").mockResolvedValue(["v0.1.0-alpha2"]);
+		const command = new GreenCommand(createApi());
 
 		const result = await command.execute([], {} as HookCommandContext);
 
 		expect(result).toContain("Keep going until the current branch CI is green.");
-		expect(result).toContain("Prefer `gh_run_watch` with no arguments if that tool is available.");
+		expect(result).toContain(
+			"Prefer the `github` tool with `op: run_watch` and no other arguments if that tool is available.",
+		);
 		expect(result).toContain(
 			"Use the workflow runs for the current HEAD commit as the source of truth after each push.",
 		);
@@ -41,7 +49,8 @@ describe("GreenCommand", () => {
 	});
 
 	it("omits tag instructions when HEAD is not tagged", async () => {
-		const command = new GreenCommand(createApi(""));
+		vi.spyOn(git.ref, "tags").mockResolvedValue([]);
+		const command = new GreenCommand(createApi());
 
 		const result = await command.execute([], {} as HookCommandContext);
 

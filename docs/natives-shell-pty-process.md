@@ -258,7 +258,7 @@ Layout behavior:
 | `matchesKittySequence(data, cp, mod)` | `matchesKittySequence` (`matches_kitty_sequence`) | Kitty codepoint+modifier match |
 | `parseKey(data, kittyProtocolActive)` | `parseKey` (`parse_key`) | Normalized key-id parser |
 | `matchesLegacySequence(data, keyName)` | `matchesLegacySequence` (`matches_legacy_sequence`) | Exact legacy sequence map check |
-| `parseKittySequence(data)` | `parseKittySequence` (`parse_kitty_sequence_napi`) | Structured Kitty parse result |
+| `parseKittySequence(data)` | `parseKittySequence` (`parse_kitty_sequence`) | Structured Kitty parse result |
 | `matchesKey(data, keyId, kittyProtocolActive)` | `matchesKey` (`matches_key`) | High-level key matcher |
 
 ## Abandoned session cleanup and finalization notes

@@ -9,6 +9,7 @@ import { theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
 import { calculatePromptTokens } from "../../session/compaction/compaction";
 import * as git from "../../utils/git";
+import { getSessionAccentAnsi, getSessionAccentHexForTitle } from "../../utils/session-color";
 import { sanitizeStatusText } from "../shared";
 import {
 	canReuseCachedPr,
@@ -56,6 +57,7 @@ export class StatusLineComponent implements Component {
 	#subagentCount: number = 0;
 	#sessionStartTime: number = Date.now();
 	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
+	#loopModeStatus: { enabled: boolean } | null = null;
 
 	// Git status caching (1s TTL)
 	#cachedGitStatus: { staged: number; unstaged: number; untracked: number } | null = null;
@@ -99,6 +101,10 @@ export class StatusLineComponent implements Component {
 
 	setPlanModeStatus(status: { enabled: boolean; paused: boolean } | undefined): void {
 		this.#planModeStatus = status ?? null;
+	}
+
+	setLoopModeStatus(status: { enabled: boolean } | undefined): void {
+		this.#loopModeStatus = status ?? null;
 	}
 
 	setHookStatus(key: string, text: string | undefined): void {
@@ -325,6 +331,7 @@ export class StatusLineComponent implements Component {
 			width,
 			options: this.#resolveSettings().segmentOptions ?? {},
 			planMode: this.#planModeStatus,
+			loopMode: this.#loopModeStatus,
 			usageStats,
 			contextPercent,
 			contextWindow,
@@ -387,10 +394,12 @@ export class StatusLineComponent implements Component {
 
 		// Collect visible segment contents
 		const leftParts: string[] = [];
+		const leftSegIds: StatusLineSegmentId[] = [];
 		for (const segId of effectiveSettings.leftSegments) {
 			const rendered = renderSegment(segId, ctx);
 			if (rendered.visible && rendered.content) {
 				leftParts.push(rendered.content);
+				leftSegIds.push(segId);
 			}
 		}
 
@@ -433,8 +442,42 @@ export class StatusLineComponent implements Component {
 				right.pop();
 				rightWidth = groupWidth(right, rightCapWidth, rightSepWidth);
 			}
+			// Shrink path before dropping left segments — path is the only elastic segment
+			const pathIdx = leftSegIds.indexOf("path");
+			if (pathIdx >= 0 && totalWidth() > topFillWidth) {
+				const overflow = totalWidth() - topFillWidth;
+				const currentPathVW = visibleWidth(left[pathIdx]);
+				const minPathVW = 8; // icon + ellipsis + a few chars
+				const shrinkable = currentPathVW - minPathVW;
+				if (shrinkable > 0) {
+					const shrinkBy = Math.min(shrinkable, overflow);
+					const currentMaxLen = ctx.options.path?.maxLength ?? 40;
+					let newMaxLen = Math.max(4, Math.min(currentMaxLen, currentPathVW) - shrinkBy);
+					const pathCtx = (maxLen: number): SegmentContext => ({
+						...ctx,
+						options: { ...ctx.options, path: { ...ctx.options.path, maxLength: maxLen } },
+					});
+					let reRendered = renderSegment("path", pathCtx(newMaxLen));
+					if (reRendered.visible && reRendered.content) {
+						// maxLength governs path text, not icon prefix; iterate to compensate
+						for (let i = 0; i < 8; i++) {
+							const saved = currentPathVW - visibleWidth(reRendered.content);
+							if (saved >= shrinkBy) break;
+							const nextMaxLen = Math.max(4, newMaxLen - (shrinkBy - saved));
+							if (nextMaxLen >= newMaxLen) break; // no progress or hit floor
+							newMaxLen = nextMaxLen;
+							const adjusted = renderSegment("path", pathCtx(newMaxLen));
+							if (!adjusted.visible || !adjusted.content) break;
+							reRendered = adjusted;
+						}
+						left[pathIdx] = reRendered.content;
+						leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
+					}
+				}
+			}
 			while (totalWidth() > topFillWidth && left.length > 0) {
 				left.pop();
+				leftSegIds.pop();
 				leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
 			}
 		}
@@ -471,7 +514,12 @@ export class StatusLineComponent implements Component {
 		leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
 		rightWidth = groupWidth(right, rightCapWidth, rightSepWidth);
 		const gapWidth = Math.max(1, topFillWidth - leftWidth - rightWidth);
-		const gapFill = theme.fg("border", theme.boxRound.horizontal.repeat(gapWidth));
+		const accentHex = getSessionAccentHexForTitle(
+			this.session.sessionManager?.getSessionName(),
+			this.session.sessionManager?.titleSource,
+		);
+		const gapColor = getSessionAccentAnsi(accentHex) ?? theme.getFgAnsi("border");
+		const gapFill = `${gapColor}${theme.boxRound.horizontal.repeat(gapWidth)}\x1b[39m`;
 		return leftGroup + gapFill + rightGroup;
 	}
 

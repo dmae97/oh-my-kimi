@@ -38,7 +38,7 @@ export function normalizeResponsesToolCallId(id: string): { callId: string; item
 		const normalizedItemId = normalizeResponsesItemId(itemId);
 		return { callId: normalizedCallId, itemId: normalizedItemId };
 	}
-	const hash = Bun.hash.xxHash64(id).toString(36);
+	const hash = Bun.hash(id).toString(36);
 	const normalizedCallId = id.startsWith("call_") ? truncateResponseItemId(id, "call") : `call_${hash}`;
 	return { callId: normalizedCallId, itemId: `fc_${hash}` };
 }
@@ -51,7 +51,7 @@ function getIdPrefix(id: string, fallback: string): string {
 function normalizeResponsesItemId(itemId: string): string {
 	const prefix = getIdPrefix(itemId, "fc");
 	if (prefix !== "fc" && prefix !== "fcr") {
-		return `fc_${Bun.hash.xxHash64(itemId).toString(36)}`;
+		return `fc_${Bun.hash(itemId).toString(36)}`;
 	}
 	return truncateResponseItemId(itemId, prefix);
 }
@@ -62,7 +62,7 @@ function normalizeResponsesItemId(itemId: string): string {
  */
 export function truncateResponseItemId(id: string, prefix: string): string {
 	if (id.length <= 64) return id;
-	return `${prefix}_${Bun.hash.xxHash64(id).toString(36)}`;
+	return `${prefix}_${Bun.hash(id).toString(36)}`;
 }
 
 export function sanitizeOpenAIResponsesHistoryItemsForReplay(items: Array<Record<string, unknown>>): ResponseInput {

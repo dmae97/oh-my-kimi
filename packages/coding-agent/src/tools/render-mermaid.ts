@@ -1,12 +1,11 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { type MermaidAsciiRenderOptions, renderMermaidAscii } from "@oh-my-pi/pi-utils";
+import { type MermaidAsciiRenderOptions, prompt, renderMermaidAscii } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { renderPromptTemplate } from "../config/prompt-templates";
 import renderMermaidDescription from "../prompts/tools/render-mermaid.md" with { type: "text" };
 import type { ToolSession } from "./index";
 
 const renderMermaidSchema = Type.Object({
-	mermaid: Type.String({ description: "Mermaid graph source text" }),
+	mermaid: Type.String({ description: "mermaid source", examples: ["graph TD; A-->B"] }),
 	config: Type.Optional(
 		Type.Object({
 			useAscii: Type.Optional(Type.Boolean()),
@@ -41,7 +40,7 @@ export class RenderMermaidTool implements AgentTool<typeof renderMermaidSchema, 
 	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {
-		this.description = renderPromptTemplate(renderMermaidDescription);
+		this.description = prompt.render(renderMermaidDescription);
 	}
 
 	async execute(

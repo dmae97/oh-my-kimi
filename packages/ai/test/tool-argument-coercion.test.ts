@@ -179,6 +179,38 @@ describe("Tool argument coercion", () => {
 		expect(result.edits).toEqual([{ target: "13#cf", new_content: "..." }]);
 	});
 
+	it("coerces quoted edit arrays before stripping optional null fields", () => {
+		const textSchema = Type.Union([Type.Array(Type.String()), Type.String()]);
+		const tool: Tool = {
+			name: "atom-like-edit",
+			description: "",
+			parameters: Type.Object({
+				path: Type.String(),
+				edits: Type.Array(
+					Type.Object({
+						loc: Type.String(),
+						set: Type.Optional(textSchema),
+						pre: Type.Optional(textSchema),
+						post: Type.Optional(textSchema),
+						sub: Type.Optional(Type.Tuple([Type.String(), Type.String()])),
+					}),
+				),
+			}),
+		};
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-atom-like-edit",
+			name: "atom-like-edit",
+			arguments: {
+				path: "orcid.ts",
+				edits: '[{"loc":"276ka-282vu","pre":null,"set":["line"],"post":null,"sub":null}]',
+			},
+		};
+
+		const result = validateToolArguments(tool, toolCall) as { edits: Array<Record<string, unknown>> };
+		expect(result.edits).toEqual([{ loc: "276ka-282vu", set: ["line"] }]);
+	});
+
 	it("coerces array strings with trailing wrapper braces from malformed nested JSON", () => {
 		const tool: Tool = {
 			name: "t16",
@@ -479,5 +511,175 @@ describe("Tool argument coercion", () => {
 
 		const result = validateToolArguments(tool, toolCall);
 		expect(result).toEqual({ required: "value" });
+	});
+
+	it("heals stringified array with extra bracket at end", () => {
+		const tool: Tool = {
+			name: "heal-1",
+			description: "",
+			parameters: Type.Object({
+				path: Type.String(),
+				edits: Type.Array(
+					Type.Object({
+						target: Type.String(),
+						content: Type.String(),
+					}),
+				),
+			}),
+		};
+
+		// Model wrote "]}]" at the end instead of "}]" -- extra ] between " and }
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-heal-1",
+			name: "heal-1",
+			arguments: {
+				path: "foo.ts",
+				edits: '[{"target": "fn_foo#ABCD", "content": "code}"}]}]',
+			},
+		};
+
+		const result = validateToolArguments(tool, toolCall);
+		expect(result.edits).toEqual([{ target: "fn_foo#ABCD", content: "code}" }]);
+	});
+
+	it("heals stringified array with wrong bracket type at end", () => {
+		const tool: Tool = {
+			name: "heal-2",
+			description: "",
+			parameters: Type.Object({
+				path: Type.String(),
+				edits: Type.Array(
+					Type.Object({
+						target: Type.String(),
+						content: Type.String(),
+					}),
+				),
+			}),
+		};
+
+		// Model wrote "}}" at the end instead of "}]" -- wrong bracket type
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-heal-2",
+			name: "heal-2",
+			arguments: {
+				path: "bar.ts",
+				edits: '[{"target": "fn_bar#1234", "content": "return 1}"}}',
+			},
+		};
+
+		const result = validateToolArguments(tool, toolCall);
+		expect(result.edits).toEqual([{ target: "fn_bar#1234", content: "return 1}" }]);
+	});
+
+	it("heals stringified array with literal backslash-n between tokens", () => {
+		const tool: Tool = {
+			name: "heal-esc-1",
+			description: "",
+			parameters: Type.Object({
+				edits: Type.Array(Type.Object({ target: Type.String(), content: Type.String() })),
+			}),
+		};
+
+		// LLM emits literal \n between the closing } and ]
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-heal-esc-1",
+			name: "heal-esc-1",
+			arguments: {
+				edits: '[{"target": "fn_foo#ABCD~", "content": "return 1;\\n"}\\n]',
+			},
+		};
+
+		const result = validateToolArguments(tool, toolCall);
+		expect(result.edits).toEqual([{ target: "fn_foo#ABCD~", content: "return 1;\n" }]);
+	});
+
+	it("heals stringified array with trailing junk after balanced container", () => {
+		const tool: Tool = {
+			name: "heal-trail-1",
+			description: "",
+			parameters: Type.Object({
+				edits: Type.Array(Type.Object({ target: Type.String(), op: Type.String() })),
+			}),
+		};
+
+		// LLM appends \n</invoke> after the valid JSON
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-heal-trail-1",
+			name: "heal-trail-1",
+			arguments: {
+				edits: '[{"target": "fn_foo", "op": "replace"}]\n</invoke>',
+			},
+		};
+
+		const result = validateToolArguments(tool, toolCall);
+		expect(result.edits).toEqual([{ target: "fn_foo", op: "replace" }]);
+	});
+
+	it("does not heal deeply broken JSON strings", () => {
+		const tool: Tool = {
+			name: "heal-3",
+			description: "",
+			parameters: Type.Object({
+				edits: Type.Array(Type.Object({ target: Type.String() })),
+			}),
+		};
+
+		// Structural error deep in the middle -- should NOT be healed
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-heal-3",
+			name: "heal-3",
+			arguments: {
+				edits: '[{"target": invalid json here}]',
+			},
+		};
+
+		expect(() => validateToolArguments(tool, toolCall)).toThrow("Validation failed");
+	});
+	it("parses JSON-stringified array containing raw newlines inside string values", () => {
+		const tool: Tool = {
+			name: "todo_write_like",
+			description: "",
+			parameters: Type.Object({
+				phases: Type.Array(
+					Type.Object({
+						name: Type.String(),
+						tasks: Type.Array(
+							Type.Object({
+								content: Type.String(),
+								details: Type.Optional(Type.String()),
+							}),
+						),
+					}),
+				),
+			}),
+		};
+
+		// Stringified phases array where one `details` value contains a raw newline,
+		// which `JSON.parse` rejects unless the control char is escaped.
+		const stringifiedPhases =
+			'[{"name":"Investigation","tasks":[{"content":"Locate code","details":"line one\nline two"}]}]';
+		expect(stringifiedPhases.includes("\n")).toBe(true);
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-rawnl",
+			name: "todo_write_like",
+			arguments: { phases: stringifiedPhases },
+		};
+
+		const result = validateToolArguments(tool, toolCall) as {
+			phases: Array<{ name: string; tasks: Array<{ content: string; details?: string }> }>;
+		};
+		expect(result.phases).toEqual([
+			{
+				name: "Investigation",
+				tasks: [{ content: "Locate code", details: "line one\nline two" }],
+			},
+		]);
 	});
 });

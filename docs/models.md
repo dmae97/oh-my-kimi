@@ -29,9 +29,19 @@ Legacy behavior still present:
 providers:
   <provider-id>:
     # provider-level config
+equivalence:
+  overrides:
+    <provider-id>/<model-id>: <canonical-model-id>
+  exclude:
+    - <provider-id>/<model-id>
 ```
 
 `provider-id` is the canonical provider key used across selection and auth lookup.
+
+`equivalence` is optional and configures canonical model grouping on top of concrete provider models:
+
+- `overrides` maps an exact concrete selector (`provider/modelId`) to an official upstream canonical id
+- `exclude` opts a concrete selector out of canonical grouping
 
 ## Provider-level fields
 
@@ -133,6 +143,71 @@ ModelRegistry pipeline (on refresh):
    - same `provider + id` replaces existing
    - otherwise append
 6. Apply runtime-discovered models (currently Ollama and LM Studio), then re-apply model overrides.
+
+## Canonical model equivalence and coalescing
+
+The registry keeps every concrete provider model and then builds a canonical layer above them.
+
+Canonical ids are official upstream ids only, for example:
+
+- `claude-opus-4-6`
+- `claude-haiku-4-5`
+- `gpt-5.3-codex`
+### `models.yml` equivalence config
+
+Example:
+
+```yaml
+providers:
+  zenmux:
+    baseUrl: https://api.zenmux.example/v1
+    apiKey: ZENMUX_API_KEY
+    api: openai-codex-responses
+    models:
+      - id: codex
+        name: Zenmux Codex
+        reasoning: true
+        input: [text]
+        cost:
+          input: 0
+          output: 0
+          cacheRead: 0
+          cacheWrite: 0
+        contextWindow: 200000
+        maxTokens: 32768
+
+equivalence:
+  overrides:
+    zenmux/codex: gpt-5.3-codex
+    p-codex/codex: gpt-5.3-codex
+  exclude:
+    - demo/codex-preview
+```
+
+Build order for canonical grouping:
+
+1. exact user override from `equivalence.overrides`
+2. bundled official-id matches from built-in model metadata
+3. conservative heuristic normalization for gateway/provider variants
+4. fallback to the concrete model's own id
+
+Current heuristics are intentionally narrow:
+
+- embedded upstream prefixes can be stripped when present, for example `anthropic/...` or `openai/...`
+- dotted and dashed version variants can normalize only when they map to an existing official id, for example `4.6 -> 4-6`
+- ambiguous families or versions are not merged without a bundled match or explicit override
+
+### Canonical resolution behavior
+
+When multiple concrete variants share a canonical id, resolution uses:
+
+1. availability and auth
+2. `config.yml` `modelProviderOrder`
+3. existing registry/provider order if `modelProviderOrder` is unset
+
+Disabled or unauthenticated providers are skipped.
+
+Session state and transcripts continue to record the concrete provider/model that actually executed the turn.
 
 Provider defaults vs per-model overrides:
 
@@ -244,12 +319,20 @@ So a model can exist in registry but not be selectable until auth is available.
 `model-resolver.ts` supports:
 
 - exact `provider/modelId`
+- exact canonical model id
 - exact model id (provider inferred)
 - fuzzy/substring matching
 - glob scope patterns in `--models` (e.g. `openai/*`, `*sonnet*`)
 - optional `:thinkingLevel` suffix (`off|minimal|low|medium|high|xhigh`)
 
 `--provider` is legacy; `--model` is preferred.
+
+Resolution precedence for exact selectors:
+
+1. exact `provider/modelId` bypasses coalescing
+2. exact canonical id resolves through the canonical index
+3. exact bare concrete id still works
+4. fuzzy and glob matching run after the exact paths
 
 ### Initial model selection priority
 
@@ -275,8 +358,31 @@ Related settings:
 
 - `modelRoles` (record)
 - `enabledModels` (scoped pattern list)
+- `modelProviderOrder` (global canonical-provider precedence)
 - `providers.kimiApiFormat` (`openai` or `anthropic` request format)
 - `providers.openaiWebsockets` (`auto|off|on` websocket preference for OpenAI Codex transport)
+
+`modelRoles` may store either:
+
+- `provider/modelId` to pin a concrete provider variant
+- a canonical id such as `gpt-5.3-codex` to allow provider coalescing
+
+For `enabledModels` and CLI `--models`:
+
+- exact canonical ids expand to all concrete variants in that canonical group
+- explicit `provider/modelId` entries stay exact
+- globs and fuzzy matches still operate on concrete models
+
+## `/model` and `--list-models`
+
+Both surfaces keep provider-prefixed models visible and selectable.
+
+They now also expose canonical/coalesced models:
+
+- `/model` includes a canonical view alongside provider tabs
+- `--list-models` prints a canonical section plus the concrete provider rows
+
+Selecting a canonical entry stores the canonical selector. Selecting a provider row stores the explicit `provider/modelId`.
 
 ## Context promotion (model-level fallback chains)
 

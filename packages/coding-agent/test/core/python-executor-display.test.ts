@@ -1,25 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { executePythonWithKernel, type PythonKernelExecutor } from "@oh-my-pi/pi-coding-agent/ipy/executor";
-import type {
-	KernelDisplayOutput,
-	KernelExecuteOptions,
-	KernelExecuteResult,
-} from "@oh-my-pi/pi-coding-agent/ipy/kernel";
-
-class FakeKernel implements PythonKernelExecutor {
-	private result: KernelExecuteResult;
-	private onExecute: (options?: KernelExecuteOptions) => Promise<void> | void;
-
-	constructor(result: KernelExecuteResult, onExecute: (options?: KernelExecuteOptions) => Promise<void> | void) {
-		this.result = result;
-		this.onExecute = onExecute;
-	}
-
-	async execute(_code: string, options?: KernelExecuteOptions): Promise<KernelExecuteResult> {
-		await this.onExecute(options);
-		return this.result;
-	}
-}
+import { executePythonWithKernel } from "@oh-my-pi/pi-coding-agent/ipy/executor";
+import type { KernelDisplayOutput } from "@oh-my-pi/pi-coding-agent/ipy/kernel";
+import { FakeKernel } from "./helpers";
 
 describe("executePythonWithKernel display outputs", () => {
 	it("aggregates display outputs in order", async () => {

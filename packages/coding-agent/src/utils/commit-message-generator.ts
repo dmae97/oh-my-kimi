@@ -5,16 +5,15 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveModelRoleValue } from "../config/model-resolver";
-import { renderPromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import commitSystemPrompt from "../prompts/system/commit-message-system.md" with { type: "text" };
 import { toReasoningEffort } from "../thinking";
 
-const COMMIT_SYSTEM_PROMPT = renderPromptTemplate(commitSystemPrompt);
+const COMMIT_SYSTEM_PROMPT = prompt.render(commitSystemPrompt);
 const MAX_DIFF_CHARS = 4000;
 
 /** File patterns that should be excluded from commit message generation diffs. */
@@ -53,6 +52,7 @@ function getSmolModelCandidates(
 	const configuredSmol = resolveModelRoleValue(settings.getModelRole("smol"), availableModels, {
 		settings,
 		matchPreferences,
+		modelRegistry: registry,
 	});
 	addCandidate(configuredSmol.model, configuredSmol.thinkingLevel);
 

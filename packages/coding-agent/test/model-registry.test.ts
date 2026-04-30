@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effort, type OpenAICompat, type ThinkingConfig } from "@oh-my-pi/pi-ai";
+import { Effort, type Model, type OpenAICompat, type ThinkingConfig, writeModelCache } from "@oh-my-pi/pi-ai";
 import { kNoAuth, MODEL_ROLES, ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -11,6 +11,7 @@ import { hookFetch, Snowflake } from "@oh-my-pi/pi-utils";
 describe("ModelRegistry", () => {
 	let tempDir: string;
 	let modelsJsonPath: string;
+	let cacheDbPath: string;
 	let authStorage: AuthStorage;
 
 	test("commit role includes a visible badge tag", () => {
@@ -23,6 +24,7 @@ describe("ModelRegistry", () => {
 		tempDir = path.join(os.tmpdir(), `pi-test-model-registry-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
 		modelsJsonPath = path.join(tempDir, "models.json");
+		cacheDbPath = path.join(tempDir, "models.db");
 		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 	});
 
@@ -83,6 +85,10 @@ describe("ModelRegistry", () => {
 		fs.writeFileSync(modelsJsonPath, JSON.stringify({ providers }));
 	}
 
+	function writeCachedOllamaModels(models: Model<"openai-completions">[]) {
+		writeModelCache("ollama", Date.now(), models, true, cacheDbPath);
+	}
+
 	function getModelsForProvider(registry: ModelRegistry, provider: string) {
 		return registry.getAll().filter(m => m.provider === provider);
 	}
@@ -97,6 +103,10 @@ describe("ModelRegistry", () => {
 		fs.writeFileSync(modelsJsonPath, JSON.stringify({ providers }));
 	}
 
+	function writeRawModelsConfig(config: Record<string, unknown>) {
+		fs.writeFileSync(modelsJsonPath, JSON.stringify(config));
+	}
+
 	function mockOpenAiCompatibleModels(url: string, modelIds: string[]) {
 		return hookFetch(input => {
 			const requestUrl = String(input);
@@ -109,6 +119,267 @@ describe("ModelRegistry", () => {
 			throw new Error(`Unexpected URL: ${requestUrl}`);
 		});
 	}
+
+	function mockOllamaDiscovery(modelNames: string[]) {
+		return hookFetch(input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:11434/api/tags") {
+				return new Response(JSON.stringify({ models: modelNames.map(name => ({ name })) }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			if (url === "http://127.0.0.1:11434/api/show") {
+				return new Response(JSON.stringify({ capabilities: ["completion"] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		});
+	}
+
+	describe("canonical equivalence", () => {
+		test("groups dotted provider variants under the bundled canonical id", () => {
+			writeRawModelsJson({
+				demo: providerConfig("https://demo.example.com/v1", [{ id: "anthropic/claude-sonnet-4.5" }]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const variants = registry.getCanonicalVariants("claude-sonnet-4-5");
+
+			expect(variants.some(variant => variant.selector === "anthropic/claude-sonnet-4-5")).toBe(true);
+			expect(variants.some(variant => variant.selector === "demo/anthropic/claude-sonnet-4.5")).toBe(true);
+		});
+
+		test("collapses wrapped, dated, and tuned anthropic variants under the base canonical id", () => {
+			writeRawModelsJson({
+				demo: providerConfig("https://demo.example.com/v1", [
+					{ id: "anthropic/claude-opus-4.5" },
+					{ id: "claude-opus-4-5-20251101" },
+					{ id: "claude-4.5-opus-high-thinking" },
+				]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const variants = registry.getCanonicalVariants("claude-opus-4-5");
+
+			expect(variants.some(variant => variant.selector === "demo/anthropic/claude-opus-4.5")).toBe(true);
+			expect(variants.some(variant => variant.selector === "demo/claude-opus-4-5-20251101")).toBe(true);
+			expect(variants.some(variant => variant.selector === "demo/claude-4.5-opus-high-thinking")).toBe(true);
+		});
+
+		test("collapses gitlab duo chat wrapper ids into the upstream canonical id", () => {
+			writeRawModelsJson({
+				"gitlab-duo": providerConfig("https://demo.example.com/v1", [{ id: "duo-chat-opus-4-6" }]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const variants = registry.getCanonicalVariants("claude-opus-4-6");
+
+			expect(variants.some(variant => variant.selector === "gitlab-duo/duo-chat-opus-4-6")).toBe(true);
+		});
+
+		test("collapses synthetic and vendor-prefixed glm wrappers into the upstream canonical id", () => {
+			writeRawModelsJson({
+				demo: providerConfig("https://demo.example.com/v1", [{ id: "hf:zai-org/GLM-4.7" }, { id: "zai-glm-4.7" }]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const variants = registry.getCanonicalVariants("glm-4.7");
+
+			expect(variants.some(variant => variant.selector === "demo/hf:zai-org/GLM-4.7")).toBe(true);
+			expect(variants.some(variant => variant.selector === "demo/zai-glm-4.7")).toBe(true);
+		});
+
+		test("collapses compact and reordered claude aliases into the upstream canonical id", () => {
+			writeRawModelsJson({
+				demo: providerConfig("https://demo.example.com/v1", [
+					{ id: "claude-opus-45" },
+					{ id: "claude-4.5-sonnet" },
+				]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const opusVariants = registry.getCanonicalVariants("claude-opus-4-5");
+			const sonnetVariants = registry.getCanonicalVariants("claude-sonnet-4-5");
+
+			expect(opusVariants.some(variant => variant.selector === "demo/claude-opus-45")).toBe(true);
+			expect(sonnetVariants.some(variant => variant.selector === "demo/claude-4.5-sonnet")).toBe(true);
+		});
+
+		test("collapses nitro-suffixed OpenRouter variants under the upstream canonical id", () => {
+			writeRawModelsJson({
+				openrouter: providerConfig("https://openrouter.ai/api/v1", [{ id: "z-ai/glm-4.7-20251222:nitro" }]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const variants = registry.getCanonicalVariants("glm-4.7");
+
+			expect(variants.some(variant => variant.selector === "openrouter/z-ai/glm-4.7-20251222:nitro")).toBe(true);
+		});
+
+		test("collapses anthropic latest aliases into the best upstream claude family id", () => {
+			writeRawModelsJson({
+				demo: providerConfig("https://demo.example.com/v1", [
+					{ id: "anthropic/claude-opus-latest" },
+					{ id: "anthropic/claude-haiku-latest" },
+				]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const opusVariants = registry.getCanonicalVariants("claude-opus-4-7");
+			const haikuVariants = registry.getCanonicalVariants("claude-haiku-4-5");
+
+			expect(opusVariants.some(variant => variant.selector === "demo/anthropic/claude-opus-latest")).toBe(true);
+			expect(haikuVariants.some(variant => variant.selector === "demo/anthropic/claude-haiku-latest")).toBe(true);
+			expect(
+				registry
+					.getCanonicalVariants("claude-haiku-4-5-20251001-thinking")
+					.some(variant => variant.selector === "demo/anthropic/claude-haiku-latest"),
+			).toBe(false);
+		});
+
+		test("collapses wrapped gemini tool and tuning variants under the base preview id", () => {
+			writeRawModelsJson({
+				demo: providerConfig("https://demo.example.com/v1", [
+					{ id: "google/gemini-3.1-pro-preview" },
+					{ id: "google/gemini-3.1-pro-preview-customtools" },
+					{ id: "google/gemini-3.1-pro-preview-high" },
+				]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const variants = registry.getCanonicalVariants("gemini-3.1-pro-preview");
+
+			expect(variants.some(variant => variant.selector === "demo/google/gemini-3.1-pro-preview")).toBe(true);
+			expect(variants.some(variant => variant.selector === "demo/google/gemini-3.1-pro-preview-customtools")).toBe(
+				true,
+			);
+			expect(variants.some(variant => variant.selector === "demo/google/gemini-3.1-pro-preview-high")).toBe(true);
+		});
+
+		test("collapses compact version aliases and hardware suffixes into clean canonical ids", () => {
+			writeRawModelsJson({
+				demo: providerConfig("https://demo.example.com/v1", [
+					{ id: "hf:nvidia/Kimi-K2.5-NVFP4" },
+					{ id: "kimi-k2-5" },
+					{ id: "z-ai/glm4.7" },
+					{ id: "z-ai/glm5" },
+				]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const kimiVariants = registry.getCanonicalVariants("kimi-k2.5");
+			const glm47Variants = registry.getCanonicalVariants("glm-4.7");
+			const glm5Variants = registry.getCanonicalVariants("glm-5");
+
+			expect(kimiVariants.some(variant => variant.selector === "demo/hf:nvidia/Kimi-K2.5-NVFP4")).toBe(true);
+			expect(kimiVariants.some(variant => variant.selector === "demo/kimi-k2-5")).toBe(true);
+			expect(glm47Variants.some(variant => variant.selector === "demo/z-ai/glm4.7")).toBe(true);
+			expect(glm5Variants.some(variant => variant.selector === "demo/z-ai/glm5")).toBe(true);
+		});
+
+		test("prefers clean canonical ids over bundled wrapper ids when available", () => {
+			writeRawModelsJson({
+				demo: providerConfig("https://demo.example.com/v1", [
+					{ id: "zai/glm-4.6v-flash" },
+					{ id: "hf:deepseek-ai/DeepSeek-V3" },
+					{ id: "google/gemini-pro-latest" },
+				]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+
+			expect(
+				registry
+					.getCanonicalVariants("glm-4.6v-flash")
+					.some(variant => variant.selector === "demo/zai/glm-4.6v-flash"),
+			).toBe(true);
+			expect(
+				registry
+					.getCanonicalVariants("deepseek-v3")
+					.some(variant => variant.selector === "demo/hf:deepseek-ai/DeepSeek-V3"),
+			).toBe(true);
+			expect(
+				registry
+					.getCanonicalVariants("gemini-pro")
+					.some(variant => variant.selector === "demo/google/gemini-pro-latest"),
+			).toBe(true);
+		});
+
+		test("applies explicit equivalence overrides from config", () => {
+			writeRawModelsConfig({
+				providers: {
+					"p-anthropic": providerConfig("https://demo.example.com/v1", [{ id: "corp-sonnet" }]),
+				},
+				equivalence: {
+					overrides: {
+						"p-anthropic/corp-sonnet": "claude-sonnet-4-5",
+					},
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const variants = registry.getCanonicalVariants("claude-sonnet-4-5");
+
+			expect(variants.some(variant => variant.selector === "p-anthropic/corp-sonnet")).toBe(true);
+		});
+
+		test("exclusions keep variants out of canonical grouping", () => {
+			writeRawModelsConfig({
+				providers: {
+					demo: providerConfig("https://demo.example.com/v1", [{ id: "anthropic/claude-sonnet-4.5" }]),
+				},
+				equivalence: {
+					exclude: ["demo/anthropic/claude-sonnet-4.5"],
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const grouped = registry.getCanonicalVariants("claude-sonnet-4-5");
+			const fallback = registry.getCanonicalVariants("anthropic/claude-sonnet-4.5");
+
+			expect(grouped.some(variant => variant.selector === "demo/anthropic/claude-sonnet-4.5")).toBe(false);
+			expect(fallback.some(variant => variant.selector === "demo/anthropic/claude-sonnet-4.5")).toBe(true);
+		});
+
+		test("resolves canonical models using configured provider order", async () => {
+			await Settings.init({
+				inMemory: true,
+				overrides: {
+					modelProviderOrder: ["demo", "anthropic"],
+				},
+			});
+			writeRawModelsJson({
+				demo: providerConfig("https://demo.example.com/v1", [{ id: "anthropic/claude-sonnet-4.5" }]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const resolved = registry.resolveCanonicalModel("claude-sonnet-4-5", {
+				availableOnly: false,
+				candidates: registry.getAll(),
+			});
+
+			expect(resolved?.provider).toBe("demo");
+			expect(resolved?.id).toBe("anthropic/claude-sonnet-4.5");
+		});
+	});
+
+	describe("OpenRouter routed suffix fallback", () => {
+		test("find synthesizes a routed model id from the base OpenRouter metadata", () => {
+			writeRawModelsJson({
+				openrouter: providerConfig("https://openrouter.ai/api/v1", [{ id: "z-ai/glm-4.7" }]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const model = registry.find("openrouter", "z-ai/glm-4.7-20251222:nitro");
+
+			expect(model?.provider).toBe("openrouter");
+			expect(model?.id).toBe("z-ai/glm-4.7-20251222:nitro");
+			expect(model?.name).toBe("z-ai/glm-4.7-20251222:nitro");
+		});
+	});
 
 	describe("baseUrl override (no custom models)", () => {
 		test("overriding baseUrl keeps all built-in models", () => {
@@ -150,6 +421,22 @@ describe("ModelRegistry", () => {
 
 			for (const model of anthropicModels) {
 				expect(model.headers?.["X-Custom-Header"]).toBe("custom-value");
+			}
+		});
+
+		test("headers-only override applies to built-in models", () => {
+			writeRawModelsJson({
+				anthropic: {
+					headers: { "X-Custom-Header": "custom-only" },
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const anthropicModels = getModelsForProvider(registry, "anthropic");
+
+			expect(anthropicModels.length).toBeGreaterThan(1);
+			for (const model of anthropicModels) {
+				expect(model.headers?.["X-Custom-Header"]).toBe("custom-only");
 			}
 		});
 
@@ -1012,15 +1299,16 @@ describe("ModelRegistry", () => {
 			await authStorage.set("github-copilot", [
 				{
 					type: "oauth",
-					access: "tid=1;proxy-ep=proxy.individual.githubcopilot.com;exp=9999999999",
-					refresh: "refresh-individual",
+					access: "ghu_individual_token_123",
+					refresh: "ghu_individual_token_123",
 					expires: Date.now() + 60_000,
 				},
 				{
 					type: "oauth",
-					access: "tid=2;proxy-ep=proxy.enterprise.githubcopilot.com;exp=9999999999",
-					refresh: "refresh-enterprise",
+					access: "ghu_enterprise_token_456",
+					refresh: "ghu_enterprise_token_456",
 					expires: Date.now() + 60_000,
+					enterpriseUrl: "ghe.example.com",
 				},
 			]);
 
@@ -1031,10 +1319,58 @@ describe("ModelRegistry", () => {
 
 			const initialBaseUrl = model.baseUrl;
 			const firstApiKey = await registry.getApiKey(model);
-			expect(firstApiKey).toContain("proxy.individual.githubcopilot.com");
+			expect(firstApiKey).toBeDefined();
+			const firstParsed = JSON.parse(firstApiKey!) as { token?: string; enterpriseUrl?: string };
+			expect(firstParsed.token).toBe("ghu_individual_token_123");
+			expect(firstParsed.enterpriseUrl).toBeUndefined();
 			const secondApiKey = await registry.getApiKey(model);
-			expect(secondApiKey).toContain("proxy.enterprise.githubcopilot.com");
+			expect(secondApiKey).toBeDefined();
+			const secondParsed = JSON.parse(secondApiKey!) as { token?: string; enterpriseUrl?: string };
+			expect(secondParsed.token).toBe("ghu_enterprise_token_456");
+			expect(secondParsed.enterpriseUrl).toBe("ghe.example.com");
 			expect(model.baseUrl).toBe(initialBaseUrl);
+		});
+
+		test("refreshProvider uses enterprise Copilot discovery host for peeked credentials", async () => {
+			await authStorage.set("github-copilot", [
+				{
+					type: "oauth",
+					access: "ghu_enterprise_token_456",
+					refresh: "ghu_enterprise_token_456",
+					expires: Date.now() + 60_000,
+					enterpriseUrl: "ghe.example.com",
+				},
+			]);
+
+			const requestedUrls: string[] = [];
+			using _hook = hookFetch((input: string | URL | Request, init?: RequestInit) => {
+				const url = input instanceof Request ? input.url : String(input);
+				requestedUrls.push(url);
+				if (url === "https://copilot-api.ghe.example.com/models") {
+					const authHeader =
+						input instanceof Request
+							? input.headers.get("Authorization")
+							: new Headers(init?.headers).get("Authorization");
+					expect(authHeader).toBe("Bearer ghu_enterprise_token_456");
+					return new Response(
+						JSON.stringify({
+							data: [
+								{
+									id: "gpt-5-mini",
+									name: "GPT-5 mini",
+								},
+							],
+						}),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				throw new Error(`Unexpected URL: ${url}`);
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refreshProvider("github-copilot", "online");
+			expect(requestedUrls).toContain("https://copilot-api.ghe.example.com/models");
+			expect(requestedUrls).not.toContain("https://api.githubcopilot.com/models");
 		});
 	});
 
@@ -1051,8 +1387,8 @@ describe("ModelRegistry", () => {
 			await authStorage.set("github-copilot", [
 				{
 					type: "oauth",
-					access: "tid=1;proxy-ep=proxy.individual.githubcopilot.com;exp=9999999999",
-					refresh: "refresh-individual",
+					access: "ghu_test_token_for_disabled",
+					refresh: "ghu_test_token_for_disabled",
 					expires: Date.now() + 60_000,
 				},
 			]);
@@ -1071,7 +1407,20 @@ describe("ModelRegistry", () => {
 	});
 	describe("runtime discovery", () => {
 		test("auto-discovers ollama models without provider config", async () => {
-			using _hook = hookFetch(input => {
+			using _hook = mockOllamaDiscovery(["phi4-mini"]);
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh();
+			const ollamaModels = getModelsForProvider(registry, "ollama");
+			expect(ollamaModels.some(m => m.id === "phi4-mini")).toBe(true);
+			expect(registry.getAvailable().some(m => m.provider === "ollama" && m.id === "phi4-mini")).toBe(true);
+			expect(await registry.getApiKey(ollamaModels[0])).toBe(kNoAuth);
+		});
+
+		test("discovers ollama-cloud through built-in descriptor flow without regressing local implicit ollama", async () => {
+			authStorage.setRuntimeApiKey("ollama-cloud", "cloud-test-key");
+
+			using _hook = hookFetch((input, init) => {
 				const url = String(input);
 				if (url === "http://127.0.0.1:11434/api/tags") {
 					return new Response(JSON.stringify({ models: [{ name: "phi4-mini" }] }), {
@@ -1085,17 +1434,51 @@ describe("ModelRegistry", () => {
 						headers: { "Content-Type": "application/json" },
 					});
 				}
+				if (url === "https://ollama.com/api/tags") {
+					const headers = new Headers(init?.headers);
+					expect(headers.get("Authorization")).toBe("Bearer cloud-test-key");
+					return new Response(JSON.stringify({ models: [{ name: "gpt-oss:120b" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				if (url === "https://ollama.com/api/show") {
+					const headers = new Headers(init?.headers);
+					expect(headers.get("Authorization")).toBe("Bearer cloud-test-key");
+					const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
+					expect(body.model).toBe("gpt-oss:120b");
+					return new Response(
+						JSON.stringify({
+							capabilities: ["completion", "thinking"],
+							model_info: { "gpt-oss.context_length": 262144 },
+						}),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
 				throw new Error(`Unexpected URL: ${url}`);
 			});
 
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
 			await registry.refresh();
-			const ollamaModels = getModelsForProvider(registry, "ollama");
-			expect(ollamaModels.some(m => m.id === "phi4-mini")).toBe(true);
-			expect(registry.getAvailable().some(m => m.provider === "ollama" && m.id === "phi4-mini")).toBe(true);
-			expect(await registry.getApiKey(ollamaModels[0])).toBe(kNoAuth);
-		});
 
+			const local = registry.find("ollama", "phi4-mini");
+			const cloud = registry.find("ollama-cloud", "gpt-oss:120b");
+
+			expect(local?.provider).toBe("ollama");
+			expect(local?.api).toBe("openai-responses");
+			expect(cloud?.provider).toBe("ollama-cloud");
+			expect(cloud?.api).toBe("ollama-chat");
+			expect(cloud?.baseUrl).toBe("https://ollama.com");
+			expect(cloud?.reasoning).toBe(true);
+			expect(cloud?.contextWindow).toBe(262144);
+			expect(await registry.getApiKey(cloud!)).toBe("cloud-test-key");
+			expect(registry.getAvailable().some(model => model.provider === "ollama" && model.id === "phi4-mini")).toBe(
+				true,
+			);
+			expect(
+				registry.getAvailable().some(model => model.provider === "ollama-cloud" && model.id === "gpt-oss:120b"),
+			).toBe(true);
+		});
 		test("discovers ollama models at runtime and treats auth:none providers as available", async () => {
 			writeRawModelsJson({
 				ollama: {
@@ -1135,6 +1518,38 @@ describe("ModelRegistry", () => {
 			const available = registry.getAvailable().filter(m => m.provider === "ollama");
 			expect(available.length).toBe(2);
 			expect(await registry.getApiKey(available[0])).toBe(kNoAuth);
+		});
+
+		test("normalizes cached ollama completions rows to responses on load", () => {
+			writeRawModelsJson({
+				ollama: {
+					baseUrl: "http://127.0.0.1:11434/v1",
+					api: "openai-responses",
+					auth: "none",
+					discovery: { type: "ollama" },
+				},
+			});
+			writeCachedOllamaModels([
+				{
+					id: "phi4-mini",
+					name: "phi4-mini",
+					api: "openai-completions",
+					provider: "ollama",
+					baseUrl: "http://127.0.0.1:11434/v1",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128000,
+					maxTokens: 8192,
+				},
+			]);
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const ollama = registry.find("ollama", "phi4-mini");
+
+			expect(ollama?.api).toBe("openai-responses");
+			expect(ollama?.baseUrl).toBe("http://127.0.0.1:11434/v1");
+			expect(registry.getProviderDiscoveryState("ollama")?.status).toBe("cached");
 		});
 
 		test("discovers ollama thinking capabilities from show metadata", async () => {
@@ -1258,22 +1673,7 @@ describe("ModelRegistry", () => {
 			});
 
 			{
-				using _hook = hookFetch(input => {
-					const url = String(input);
-					if (url === "http://127.0.0.1:11434/api/tags") {
-						return new Response(JSON.stringify({ models: [{ name: "phi4-mini" }] }), {
-							status: 200,
-							headers: { "Content-Type": "application/json" },
-						});
-					}
-					if (url === "http://127.0.0.1:11434/api/show") {
-						return new Response(JSON.stringify({ capabilities: ["completion"] }), {
-							status: 200,
-							headers: { "Content-Type": "application/json" },
-						});
-					}
-					throw new Error(`Unexpected URL: ${url}`);
-				});
+				using _hook = mockOllamaDiscovery(["phi4-mini"]);
 				const primedRegistry = new ModelRegistry(authStorage, modelsJsonPath);
 				await primedRegistry.refresh();
 			}
@@ -1457,6 +1857,138 @@ describe("ModelRegistry", () => {
 			expect(llama?.contextWindow).toBe(262144);
 			expect(llama?.maxTokens).toBe(8192);
 			expect(llama?.input).toEqual(["text", "image"]);
+		});
+	});
+	describe("bundled Anthropic catalog availability", () => {
+		test("includes native Opus 4.7 in available models when Anthropic auth exists", async () => {
+			await authStorage.set("anthropic", [{ type: "api_key", key: "sk-ant-api-test" }]);
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh("offline");
+
+			expect(
+				registry.getAvailable().some(model => model.provider === "anthropic" && model.id === "claude-opus-4-7"),
+			).toBe(true);
+		});
+	});
+
+	describe("provider auth: oauth", () => {
+		test("models from a provider with auth: oauth are marked isOAuth=true", async () => {
+			writeRawModelsJson({
+				"p-anthropic": {
+					baseUrl: "https://proxy.example.com",
+					apiKey: "literal-key",
+					api: "anthropic-messages",
+					auth: "oauth",
+					models: [
+						{
+							id: "claude-sonnet-4-5",
+							name: "Claude Sonnet 4.5",
+							reasoning: true,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 200000,
+							maxTokens: 8000,
+						},
+					],
+				},
+			});
+			await authStorage.setRuntimeApiKey("p-anthropic", "literal-key");
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh("offline");
+
+			const model = registry.find("p-anthropic", "claude-sonnet-4-5");
+			expect(model).toBeDefined();
+			expect(model?.isOAuth).toBe(true);
+		});
+
+		test("anthropic-messages providers default to isOAuth=true even without explicit auth", async () => {
+			writeRawModelsJson({
+				"p-anthropic": {
+					baseUrl: "https://proxy.example.com",
+					apiKey: "literal-key",
+					api: "anthropic-messages",
+					models: [
+						{
+							id: "claude-sonnet-4-5",
+							name: "Claude Sonnet 4.5",
+							reasoning: true,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 200000,
+							maxTokens: 8000,
+						},
+					],
+				},
+			});
+			await authStorage.setRuntimeApiKey("p-anthropic", "literal-key");
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh("offline");
+
+			const model = registry.find("p-anthropic", "claude-sonnet-4-5");
+			expect(model).toBeDefined();
+			expect(model?.isOAuth).toBe(true);
+		});
+
+		test("auth: apiKey opts out of the anthropic-messages default", async () => {
+			writeRawModelsJson({
+				"p-anthropic": {
+					baseUrl: "https://proxy.example.com",
+					apiKey: "literal-key",
+					api: "anthropic-messages",
+					auth: "apiKey",
+					models: [
+						{
+							id: "claude-sonnet-4-5",
+							name: "Claude Sonnet 4.5",
+							reasoning: true,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 200000,
+							maxTokens: 8000,
+						},
+					],
+				},
+			});
+			await authStorage.setRuntimeApiKey("p-anthropic", "literal-key");
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh("offline");
+
+			const model = registry.find("p-anthropic", "claude-sonnet-4-5");
+			expect(model).toBeDefined();
+			expect(model?.isOAuth).toBeUndefined();
+		});
+
+		test("non-anthropic apis do not get the OAuth default", async () => {
+			writeRawModelsJson({
+				"p-openai": {
+					baseUrl: "https://proxy.example.com/v1",
+					apiKey: "literal-key",
+					api: "openai-completions",
+					models: [
+						{
+							id: "gpt-5",
+							name: "GPT-5",
+							reasoning: true,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 200000,
+							maxTokens: 8000,
+						},
+					],
+				},
+			});
+			await authStorage.setRuntimeApiKey("p-openai", "literal-key");
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh("offline");
+
+			const model = registry.find("p-openai", "gpt-5");
+			expect(model).toBeDefined();
+			expect(model?.isOAuth).toBeUndefined();
 		});
 	});
 });

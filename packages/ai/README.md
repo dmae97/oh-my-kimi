@@ -72,6 +72,7 @@ Unified LLM API with automatic model discovery, provider configuration, token an
 - **Qwen Portal** (supports `QWEN_OAUTH_TOKEN` or `QWEN_PORTAL_API_KEY`)
 - **Cloudflare AI Gateway** (requires `CLOUDFLARE_AI_GATEWAY_API_KEY` and provider-specific gateway base URL)
 - **Ollama** (local OpenAI-compatible runtime; optional `OLLAMA_API_KEY`)
+- **Ollama Cloud** (hosted native Ollama API; requires `OLLAMA_CLOUD_API_KEY`)
 - **llama.cpp** (local OpenAI and Anthropic compatible inference server)
 - **vLLM** (OpenAI-compatible server; `VLLM_API_KEY` for secured deployments)
 - **GitHub Copilot** (requires OAuth, see below)
@@ -690,13 +691,14 @@ console.log(`Using ${model.name} via ${model.api} API`);
 
 ### Custom Models
 
-You can create custom models for local inference servers or custom endpoints:
-For Ollama, `OLLAMA_API_KEY` is optional and mainly needed for authenticated/self-hosted gateways.
+You can create custom models for local inference servers or custom endpoints.
+
+For local Ollama, `OLLAMA_API_KEY` is optional and mainly needed for authenticated/self-hosted gateways. `ollama` remains the local OpenAI-compatible runtime integration.
 
 ```typescript
 import { Model, stream } from "@oh-my-pi/pi-ai";
 
-// Example: Ollama using OpenAI-compatible API
+// Example: local Ollama using the OpenAI-compatible API
 const ollamaModel: Model<"openai-completions"> = {
 	id: "llama-3.1-8b",
 	name: "Llama 3.1 8B (Ollama)",
@@ -709,6 +711,28 @@ const ollamaModel: Model<"openai-completions"> = {
 	contextWindow: 128000,
 	maxTokens: 32000,
 };
+
+const localResponse = await stream(ollamaModel, context, {
+	apiKey: process.env.OLLAMA_API_KEY, // Optional; local Ollama usually runs without auth
+});
+
+// Example: Ollama Cloud using the native /api/chat transport
+const ollamaCloudModel: Model<"ollama-chat"> = {
+	id: "gpt-oss:120b",
+	name: "GPT OSS 120B (Ollama Cloud)",
+	api: "ollama-chat",
+	provider: "ollama-cloud",
+	baseUrl: "https://ollama.com",
+	reasoning: true,
+	input: ["text", "image"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 262144,
+	maxTokens: 8192,
+};
+
+const cloudResponse = await stream(ollamaCloudModel, context, {
+	apiKey: process.env.OLLAMA_CLOUD_API_KEY,
+});
 
 // Example: LiteLLM proxy with explicit compat settings
 const litellmModel: Model<"openai-completions"> = {
@@ -744,11 +768,6 @@ const proxyModel: Model<"anthropic-messages"> = {
 		"X-Custom-Auth": "bearer-token-here",
 	},
 };
-
-// Use the custom model
-const response = await stream(ollamaModel, context, {
-	apiKey: process.env.OLLAMA_API_KEY, // Optional; local Ollama usually runs without auth
-});
 ```
 
 ### OpenAI Compatibility Settings
@@ -928,6 +947,7 @@ In Node.js environments, you can set environment variables to avoid passing API 
 | OpenRouter     | `OPENROUTER_API_KEY`                                                         |
 | LiteLLM        | `LITELLM_API_KEY`                                                            |
 | Ollama         | `OLLAMA_API_KEY` (optional for local deployments)                            |
+| Ollama Cloud   | `OLLAMA_CLOUD_API_KEY`                                                     |
 | Qwen Portal    | `QWEN_OAUTH_TOKEN` or `QWEN_PORTAL_API_KEY`                                  |
 | zAI            | `ZAI_API_KEY`                                                                |
 | MiniMax Code   | `MINIMAX_CODE_API_KEY` (international) or `MINIMAX_CODE_CN_API_KEY` (China) |
@@ -957,7 +977,8 @@ Provider endpoint defaults for the current OpenAI-compatible integrations:
 - ZenMux (OpenAI): `https://zenmux.ai/api/v1`
 - ZenMux (Anthropic models): `https://zenmux.ai/api/anthropic`
 - vLLM: `http://127.0.0.1:8000/v1`
-- Ollama: local OpenAI-compatible runtime
+- Ollama: local OpenAI-compatible runtime (`http://127.0.0.1:11434/v1`)
+- Ollama Cloud: native Ollama API host (`https://ollama.com/api`, configured here as base URL `https://ollama.com`)
 - LiteLLM: `http://localhost:4000/v1`
 - Cloudflare AI Gateway: `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic`
 - Qwen Portal: `https://portal.qwen.ai/v1`
@@ -1049,7 +1070,7 @@ Credentials are saved to `agent.db` in the agent directory. `/login qianfan` ope
 
 `login` supports OAuth providers (Anthropic, OpenAI Codex, GitHub Copilot, Gemini CLI, Antigravity) and API-key onboarding flows.
 
-For the current OpenAI-compatible integrations, API-key onboarding covers Together, Moonshot, Qianfan, NVIDIA, NanoGPT, Hugging Face, Venice, Xiaomi, vLLM, LiteLLM, Cloudflare AI Gateway, and Qwen Portal. Ollama is typically local and unauthenticated; set `OLLAMA_API_KEY` only when your Ollama deployment enforces bearer auth.
+For the current API-key onboarding flows, the library covers Together, Moonshot, Qianfan, NVIDIA, NanoGPT, Hugging Face, Venice, Xiaomi, vLLM, LiteLLM, Cloudflare AI Gateway, Qwen Portal, and Ollama Cloud. Ollama remains the local runtime integration; set `OLLAMA_API_KEY` only when your local or self-hosted deployment enforces bearer auth.
 
 ### Programmatic OAuth
 

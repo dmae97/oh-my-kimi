@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isRecord, logger } from "@oh-my-pi/pi-utils";
+import { $which, isRecord, logger } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { getConfigDirPaths } from "../config";
 import { getPreloadedPluginRoots } from "../discovery/helpers";
@@ -197,6 +197,21 @@ const LOCAL_BIN_PATHS: Array<{ markers: string[]; binDir: string }> = [
 	{ markers: ["go.mod", "go.sum"], binDir: "bin" },
 ];
 
+const WINDOWS_LOCAL_EXECUTABLE_EXTENSIONS = [".exe", ".cmd", ".bat"] as const;
+
+function resolveLocalCommand(basePath: string): string | null {
+	if (fs.existsSync(basePath)) return basePath;
+	if (process.platform !== "win32") return null;
+
+	// Package managers write Windows launchers with executable suffixes in node_modules/.bin.
+	for (const extension of WINDOWS_LOCAL_EXECUTABLE_EXTENSIONS) {
+		const candidate = `${basePath}${extension}`;
+		if (fs.existsSync(candidate)) return candidate;
+	}
+
+	return null;
+}
+
 /**
  * Resolve a command to an executable path.
  * Checks project-local bin directories first, then falls back to $PATH.
@@ -210,14 +225,15 @@ export function resolveCommand(command: string, cwd: string): string | null {
 	for (const { markers, binDir } of LOCAL_BIN_PATHS) {
 		if (hasRootMarkers(cwd, markers)) {
 			const localPath = path.join(cwd, binDir, command);
-			if (fs.existsSync(localPath)) {
-				return localPath;
+			const resolvedLocalPath = resolveLocalCommand(localPath);
+			if (resolvedLocalPath) {
+				return resolvedLocalPath;
 			}
 		}
 	}
 
 	// Fall back to $PATH
-	return Bun.which(command);
+	return $which(command);
 }
 
 /**

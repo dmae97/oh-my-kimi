@@ -1,0 +1,1102 @@
+/**
+ * Fuzzy matching utilities for the edit tool.
+ *
+ * Provides both character-level and line-level fuzzy matching with progressive
+ * fallback strategies for finding text in files.
+ */
+import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { type Static, Type } from "@sinclair/typebox";
+import type { WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
+import type { ToolSession } from "../../tools";
+import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";
+import { outputMeta } from "../../tools/output-meta";
+import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
+import { generateDiffString, replaceText } from "../diff";
+import {
+	countLeadingWhitespace,
+	detectLineEnding,
+	normalizeForFuzzy,
+	normalizeToLF,
+	normalizeUnicode,
+	restoreLineEndings,
+	stripBom,
+} from "../normalize";
+import { readEditFileText } from "../read-file";
+import type { EditToolDetails, LspBatchRequest } from "../renderer";
+
+export interface FuzzyMatch {
+	actualText: string;
+	startIndex: number;
+	startLine: number;
+	confidence: number;
+}
+
+export interface MatchOutcome {
+	match?: FuzzyMatch;
+	closest?: FuzzyMatch;
+	occurrences?: number;
+	occurrenceLines?: number[];
+	occurrencePreviews?: string[];
+	fuzzyMatches?: number;
+	dominantFuzzy?: boolean;
+}
+
+export type SequenceMatchStrategy =
+	| "exact"
+	| "trim-trailing"
+	| "trim"
+	| "comment-prefix"
+	| "unicode"
+	| "prefix"
+	| "substring"
+	| "fuzzy"
+	| "fuzzy-dominant"
+	| "character";
+
+export interface SequenceSearchResult {
+	index: number | undefined;
+	confidence: number;
+	matchCount?: number;
+	matchIndices?: number[];
+	strategy?: SequenceMatchStrategy;
+}
+
+export type ContextMatchStrategy = "exact" | "trim" | "unicode" | "prefix" | "substring" | "fuzzy";
+
+export interface ContextLineResult {
+	index: number | undefined;
+	confidence: number;
+	matchCount?: number;
+	matchIndices?: number[];
+	strategy?: ContextMatchStrategy;
+}
+
+export class EditMatchError extends Error {
+	constructor(
+		readonly path: string,
+		readonly searchText: string,
+		readonly closest: FuzzyMatch | undefined,
+		readonly options: { allowFuzzy: boolean; threshold: number; fuzzyMatches?: number },
+	) {
+		super(EditMatchError.formatMessage(path, searchText, closest, options));
+		this.name = "EditMatchError";
+	}
+
+	static formatMessage(
+		path: string,
+		searchText: string,
+		closest: FuzzyMatch | undefined,
+		options: { allowFuzzy: boolean; threshold: number; fuzzyMatches?: number },
+	): string {
+		if (!closest) {
+			return options.allowFuzzy
+				? `Could not find a close enough match in ${path}.`
+				: `Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`;
+		}
+
+		const similarity = Math.round(closest.confidence * 100);
+		const searchLines = searchText.split("\n");
+		const actualLines = closest.actualText.split("\n");
+		const { oldLine, newLine } = findFirstDifferentLine(searchLines, actualLines);
+		const thresholdPercent = Math.round(options.threshold * 100);
+
+		const hint = options.allowFuzzy
+			? options.fuzzyMatches && options.fuzzyMatches > 1
+				? `Found ${options.fuzzyMatches} high-confidence matches. Provide more context to make it unique.`
+				: `Closest match was below the ${thresholdPercent}% similarity threshold.`
+			: "Fuzzy matching is disabled. Enable 'Edit fuzzy match' in settings to accept high-confidence matches.";
+
+		return [
+			options.allowFuzzy
+				? `Could not find a close enough match in ${path}.`
+				: `Could not find the exact text in ${path}.`,
+			``,
+			`Closest match (${similarity}% similar) at line ${closest.startLine}:`,
+			`  - ${oldLine}`,
+			`  + ${newLine}`,
+			hint,
+		].join("\n");
+	}
+}
+
+function findFirstDifferentLine(oldLines: string[], newLines: string[]): { oldLine: string; newLine: string } {
+	const max = Math.max(oldLines.length, newLines.length);
+	for (let i = 0; i < max; i++) {
+		const oldLine = oldLines[i] ?? "";
+		const newLine = newLines[i] ?? "";
+		if (oldLine !== newLine) {
+			return { oldLine, newLine };
+		}
+	}
+	return { oldLine: oldLines[0] ?? "", newLine: newLines[0] ?? "" };
+}
+
+function formatOccurrenceError(path: string, matchOutcome: MatchOutcome): string {
+	const previews = matchOutcome.occurrencePreviews?.join("\n\n") ?? "";
+	const moreMsg =
+		matchOutcome.occurrences && matchOutcome.occurrences > MAX_RECORDED_MATCHES
+			? ` (showing first ${MAX_RECORDED_MATCHES} of ${matchOutcome.occurrences})`
+			: "";
+	return `Found ${matchOutcome.occurrences} occurrences in ${path}${moreMsg}:\n\n${previews}\n\nAdd more context lines to disambiguate.`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Default similarity threshold for fuzzy matching */
+export const DEFAULT_FUZZY_THRESHOLD = 0.95;
+
+/** Threshold for sequence-based fuzzy matching */
+const SEQUENCE_FUZZY_THRESHOLD = 0.92;
+
+/** Fallback threshold for line-based matching */
+const FALLBACK_THRESHOLD = 0.8;
+
+/** Threshold for context line matching */
+const CONTEXT_FUZZY_THRESHOLD = 0.8;
+
+/** Minimum length for partial/substring matching */
+const PARTIAL_MATCH_MIN_LENGTH = 6;
+
+/** Minimum ratio of pattern to line length for substring match */
+const PARTIAL_MATCH_MIN_RATIO = 0.3;
+
+/** Context lines to show before/after an ambiguous match preview */
+const OCCURRENCE_PREVIEW_CONTEXT = 5;
+
+/** Maximum line length for ambiguous match previews */
+const OCCURRENCE_PREVIEW_MAX_LEN = 80;
+
+/** Maximum number of match indices or previews to retain for diagnostics */
+const MAX_RECORDED_MATCHES = 5;
+
+/** Minimum confidence for a dominant fuzzy match to be auto-selected */
+const DOMINANT_FUZZY_MIN_CONFIDENCE = 0.97;
+
+/** Minimum score gap between the best and second-best fuzzy matches */
+const DOMINANT_FUZZY_DELTA = 0.08;
+
+interface IndexedMatches {
+	firstMatch: number | undefined;
+	matchCount: number;
+	matchIndices: number[];
+}
+
+interface PreviewWindowOptions {
+	context: number;
+	maxLen: number;
+}
+
+function collectIndexedMatches(
+	start: number,
+	endInclusive: number,
+	predicate: (index: number) => boolean,
+): IndexedMatches {
+	let firstMatch: number | undefined;
+	let matchCount = 0;
+	const matchIndices: number[] = [];
+
+	for (let index = start; index <= endInclusive; index++) {
+		if (!predicate(index)) continue;
+		if (firstMatch === undefined) {
+			firstMatch = index;
+		}
+		matchCount++;
+		if (matchIndices.length < MAX_RECORDED_MATCHES) {
+			matchIndices.push(index);
+		}
+	}
+
+	return { firstMatch, matchCount, matchIndices };
+}
+
+function toSingleMatchResult<TStrategy extends SequenceMatchStrategy | ContextMatchStrategy>(
+	matches: IndexedMatches,
+	confidence: number,
+	strategy: TStrategy,
+): { index: number; confidence: number; strategy: TStrategy } | undefined {
+	if (matches.firstMatch === undefined) {
+		return undefined;
+	}
+	return {
+		index: matches.firstMatch,
+		confidence,
+		strategy,
+	};
+}
+
+function toAmbiguousMatchResult<TStrategy extends SequenceMatchStrategy | ContextMatchStrategy>(
+	matches: IndexedMatches,
+	confidence: number,
+	strategy: TStrategy,
+): { index: number; confidence: number; matchCount: number; matchIndices: number[]; strategy: TStrategy } | undefined {
+	if (matches.firstMatch === undefined) {
+		return undefined;
+	}
+	return {
+		index: matches.firstMatch,
+		confidence,
+		matchCount: matches.matchCount,
+		matchIndices: matches.matchIndices,
+		strategy,
+	};
+}
+
+function formatPreviewWindow(lines: string[], centerIndex: number, options: PreviewWindowOptions): string {
+	const start = Math.max(0, centerIndex - options.context);
+	const end = Math.min(lines.length, centerIndex + options.context + 1);
+	return lines
+		.slice(start, end)
+		.map((line, index) => {
+			const num = start + index + 1;
+			const truncated = line.length > options.maxLen ? `${line.slice(0, options.maxLen - 1)}…` : line;
+			return `  ${num} | ${truncated}`;
+		})
+		.join("\n");
+}
+
+function findExactMatchOutcome(content: string, target: string): MatchOutcome | undefined {
+	const exactIndex = content.indexOf(target);
+	if (exactIndex === -1) {
+		return undefined;
+	}
+
+	const occurrences = content.split(target).length - 1;
+	if (occurrences > 1) {
+		const contentLines = content.split("\n");
+		const occurrenceLines: number[] = [];
+		const occurrencePreviews: string[] = [];
+		let searchStart = 0;
+
+		for (let i = 0; i < MAX_RECORDED_MATCHES; i++) {
+			const idx = content.indexOf(target, searchStart);
+			if (idx === -1) break;
+			const lineNumber = content.slice(0, idx).split("\n").length;
+			occurrenceLines.push(lineNumber);
+			occurrencePreviews.push(
+				formatPreviewWindow(contentLines, lineNumber - 1, {
+					context: OCCURRENCE_PREVIEW_CONTEXT,
+					maxLen: OCCURRENCE_PREVIEW_MAX_LEN,
+				}),
+			);
+			searchStart = idx + 1;
+		}
+
+		return { occurrences, occurrenceLines, occurrencePreviews };
+	}
+
+	const startLine = content.slice(0, exactIndex).split("\n").length;
+	return {
+		match: {
+			actualText: target,
+			startIndex: exactIndex,
+			startLine,
+			confidence: 1,
+		},
+	};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Core Algorithms
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Compute Levenshtein distance between two strings */
+export function levenshteinDistance(a: string, b: string): number {
+	if (a === b) return 0;
+	const aLen = a.length;
+	const bLen = b.length;
+	if (aLen === 0) return bLen;
+	if (bLen === 0) return aLen;
+
+	let prev = new Array<number>(bLen + 1);
+	let curr = new Array<number>(bLen + 1);
+	for (let j = 0; j <= bLen; j++) {
+		prev[j] = j;
+	}
+
+	for (let i = 1; i <= aLen; i++) {
+		curr[0] = i;
+		const aCode = a.charCodeAt(i - 1);
+		for (let j = 1; j <= bLen; j++) {
+			const cost = aCode === b.charCodeAt(j - 1) ? 0 : 1;
+			const deletion = prev[j] + 1;
+			const insertion = curr[j - 1] + 1;
+			const substitution = prev[j - 1] + cost;
+			curr[j] = Math.min(deletion, insertion, substitution);
+		}
+		const tmp = prev;
+		prev = curr;
+		curr = tmp;
+	}
+
+	return prev[bLen];
+}
+
+/** Compute similarity score between two strings (0 to 1) */
+export function similarity(a: string, b: string): number {
+	if (a.length === 0 && b.length === 0) return 1;
+	const maxLen = Math.max(a.length, b.length);
+	if (maxLen === 0) return 1;
+	const distance = levenshteinDistance(a, b);
+	return 1 - distance / maxLen;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Line-Based Utilities
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Compute relative indent depths for lines */
+function computeRelativeIndentDepths(lines: string[]): number[] {
+	const indents = lines.map(countLeadingWhitespace);
+	const nonEmptyIndents: number[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		if (lines[i].trim().length > 0) {
+			nonEmptyIndents.push(indents[i]);
+		}
+	}
+	const minIndent = nonEmptyIndents.length > 0 ? Math.min(...nonEmptyIndents) : 0;
+	const indentSteps = nonEmptyIndents.map(indent => indent - minIndent).filter(step => step > 0);
+	const indentUnit = indentSteps.length > 0 ? Math.min(...indentSteps) : 1;
+
+	return lines.map((line, index) => {
+		if (line.trim().length === 0) return 0;
+		if (indentUnit <= 0) return 0;
+		const relativeIndent = indents[index] - minIndent;
+		return Math.round(relativeIndent / indentUnit);
+	});
+}
+
+/** Normalize lines for matching, optionally including indent depth */
+function normalizeLines(lines: string[], includeDepth = true): string[] {
+	const indentDepths = includeDepth ? computeRelativeIndentDepths(lines) : null;
+	return lines.map((line, index) => {
+		const trimmed = line.trim();
+		const prefix = indentDepths ? `${indentDepths[index]}|` : "|";
+		if (trimmed.length === 0) return prefix;
+		return `${prefix}${normalizeForFuzzy(trimmed)}`;
+	});
+}
+
+/** Compute character offsets for each line in content */
+function computeLineOffsets(lines: string[]): number[] {
+	const offsets: number[] = [];
+	let offset = 0;
+	for (let i = 0; i < lines.length; i++) {
+		offsets.push(offset);
+		offset += lines[i].length;
+		if (i < lines.length - 1) offset += 1; // newline
+	}
+	return offsets;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Character-Level Fuzzy Match (for replace mode)
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface BestFuzzyMatchResult {
+	best?: FuzzyMatch;
+	aboveThresholdCount: number;
+	secondBestScore: number;
+}
+
+function findBestFuzzyMatchCore(
+	contentLines: string[],
+	targetLines: string[],
+	offsets: number[],
+	threshold: number,
+	includeDepth: boolean,
+): BestFuzzyMatchResult {
+	const targetNormalized = normalizeLines(targetLines, includeDepth);
+
+	let best: FuzzyMatch | undefined;
+	let bestScore = -1;
+	let secondBestScore = -1;
+	let aboveThresholdCount = 0;
+
+	for (let start = 0; start <= contentLines.length - targetLines.length; start++) {
+		const windowLines = contentLines.slice(start, start + targetLines.length);
+		const windowNormalized = normalizeLines(windowLines, includeDepth);
+		let score = 0;
+		for (let i = 0; i < targetLines.length; i++) {
+			score += similarity(targetNormalized[i], windowNormalized[i]);
+		}
+		score = score / targetLines.length;
+
+		if (score >= threshold) {
+			aboveThresholdCount++;
+		}
+
+		if (score > bestScore) {
+			secondBestScore = bestScore;
+			bestScore = score;
+			best = {
+				actualText: windowLines.join("\n"),
+				startIndex: offsets[start],
+				startLine: start + 1,
+				confidence: score,
+			};
+		} else if (score > secondBestScore) {
+			secondBestScore = score;
+		}
+	}
+
+	return { best, aboveThresholdCount, secondBestScore };
+}
+
+function findBestFuzzyMatch(content: string, target: string, threshold: number): BestFuzzyMatchResult {
+	const contentLines = content.split("\n");
+	const targetLines = target.split("\n");
+
+	if (targetLines.length === 0 || target.length === 0) {
+		return { aboveThresholdCount: 0, secondBestScore: 0 };
+	}
+	if (targetLines.length > contentLines.length) {
+		return { aboveThresholdCount: 0, secondBestScore: 0 };
+	}
+
+	const offsets = computeLineOffsets(contentLines);
+	let result = findBestFuzzyMatchCore(contentLines, targetLines, offsets, threshold, true);
+
+	// Retry without indent depth if match is close but below threshold
+	if (result.best && result.best.confidence < threshold && result.best.confidence >= FALLBACK_THRESHOLD) {
+		const noDepthResult = findBestFuzzyMatchCore(contentLines, targetLines, offsets, threshold, false);
+		if (noDepthResult.best && noDepthResult.best.confidence > result.best.confidence) {
+			result = noDepthResult;
+		}
+	}
+
+	return result;
+}
+
+/**
+ * Find a match for target text within content.
+ * Used primarily for replace-mode edits.
+ */
+export function findMatch(
+	content: string,
+	target: string,
+	options: { allowFuzzy: boolean; threshold?: number },
+): MatchOutcome {
+	if (target.length === 0) {
+		return {};
+	}
+
+	const exactMatch = findExactMatchOutcome(content, target);
+	if (exactMatch) {
+		return exactMatch;
+	}
+
+	// Try fuzzy match
+	const threshold = options.threshold ?? DEFAULT_FUZZY_THRESHOLD;
+	const { best, aboveThresholdCount, secondBestScore } = findBestFuzzyMatch(content, target, threshold);
+
+	if (!best) {
+		return {};
+	}
+
+	if (options.allowFuzzy && best.confidence >= threshold) {
+		if (aboveThresholdCount === 1) {
+			return { match: best, closest: best };
+		}
+		if (
+			aboveThresholdCount > 1 &&
+			best.confidence >= DOMINANT_FUZZY_MIN_CONFIDENCE &&
+			best.confidence - secondBestScore >= DOMINANT_FUZZY_DELTA
+		) {
+			return { match: best, closest: best, fuzzyMatches: aboveThresholdCount, dominantFuzzy: true };
+		}
+	}
+
+	return { closest: best, fuzzyMatches: aboveThresholdCount };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Line-Based Sequence Match (for patch mode)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Check if pattern matches lines starting at index using comparison function */
+function matchesAt(lines: string[], pattern: string[], i: number, compare: (a: string, b: string) => boolean): boolean {
+	for (let j = 0; j < pattern.length; j++) {
+		if (!compare(lines[i + j], pattern[j])) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/** Compute average similarity score for pattern at position */
+function fuzzyScoreAt(lines: string[], pattern: string[], i: number): number {
+	let totalScore = 0;
+	for (let j = 0; j < pattern.length; j++) {
+		const lineNorm = normalizeForFuzzy(lines[i + j]);
+		const patternNorm = normalizeForFuzzy(pattern[j]);
+		totalScore += similarity(lineNorm, patternNorm);
+	}
+	return totalScore / pattern.length;
+}
+
+/** Check if line starts with pattern (normalized) */
+function lineStartsWithPattern(line: string, pattern: string): boolean {
+	const lineNorm = normalizeForFuzzy(line);
+	const patternNorm = normalizeForFuzzy(pattern);
+	if (patternNorm.length === 0) return lineNorm.length === 0;
+	return lineNorm.startsWith(patternNorm);
+}
+
+/** Check if line contains pattern as significant substring */
+function lineIncludesPattern(line: string, pattern: string): boolean {
+	const lineNorm = normalizeForFuzzy(line);
+	const patternNorm = normalizeForFuzzy(pattern);
+	if (patternNorm.length === 0) return lineNorm.length === 0;
+	if (patternNorm.length < PARTIAL_MATCH_MIN_LENGTH) return false;
+	if (!lineNorm.includes(patternNorm)) return false;
+	return patternNorm.length / Math.max(1, lineNorm.length) >= PARTIAL_MATCH_MIN_RATIO;
+}
+
+function stripCommentPrefix(line: string): string {
+	let trimmed = line.trimStart();
+	if (trimmed.startsWith("/*")) {
+		trimmed = trimmed.slice(2);
+	} else if (trimmed.startsWith("*/")) {
+		trimmed = trimmed.slice(2);
+	} else if (trimmed.startsWith("//")) {
+		trimmed = trimmed.slice(2);
+	} else if (trimmed.startsWith("*")) {
+		trimmed = trimmed.slice(1);
+	} else if (trimmed.startsWith("#")) {
+		trimmed = trimmed.slice(1);
+	} else if (trimmed.startsWith(";")) {
+		trimmed = trimmed.slice(1);
+	} else if (trimmed.startsWith("/") && trimmed[1] === " ") {
+		trimmed = trimmed.slice(1);
+	}
+	return trimmed.trimStart();
+}
+
+/**
+ * Find a sequence of pattern lines within content lines.
+ *
+ * Attempts matches with decreasing strictness:
+ * 1. Exact match
+ * 2. Trailing whitespace ignored
+ * 3. All whitespace trimmed
+ * 4. Unicode punctuation normalized
+ * 5. Prefix match (pattern is prefix of line)
+ * 6. Substring match (pattern is substring of line)
+ * 7. Fuzzy similarity match
+ *
+ * @param lines - The lines of the file content
+ * @param pattern - The lines to search for
+ * @param start - Starting index for the search
+ * @param eof - If true, prefer matching at end of file first
+ */
+export function seekSequence(
+	lines: string[],
+	pattern: string[],
+	start: number,
+	eof: boolean,
+	options?: { allowFuzzy?: boolean },
+): SequenceSearchResult {
+	const allowFuzzy = options?.allowFuzzy ?? true;
+	// Empty pattern matches immediately
+	if (pattern.length === 0) {
+		return { index: start, confidence: 1.0, strategy: "exact" };
+	}
+
+	// Pattern longer than available content cannot match
+	if (pattern.length > lines.length) {
+		return { index: undefined, confidence: 0 };
+	}
+
+	// Determine search start position
+	const searchStart = eof && lines.length >= pattern.length ? lines.length - pattern.length : start;
+	const maxStart = lines.length - pattern.length;
+
+	const runExactPasses = (from: number, to: number): SequenceSearchResult | undefined => {
+		const comparisonPasses: Array<{
+			compare: (a: string, b: string) => boolean;
+			confidence: number;
+			strategy: SequenceMatchStrategy;
+		}> = [
+			{ compare: (a, b) => a === b, confidence: 1.0, strategy: "exact" },
+			{ compare: (a, b) => a.trimEnd() === b.trimEnd(), confidence: 0.99, strategy: "trim-trailing" },
+			{ compare: (a, b) => a.trim() === b.trim(), confidence: 0.98, strategy: "trim" },
+			{
+				compare: (a, b) => stripCommentPrefix(a) === stripCommentPrefix(b),
+				confidence: 0.975,
+				strategy: "comment-prefix",
+			},
+			{
+				compare: (a, b) => normalizeUnicode(a) === normalizeUnicode(b),
+				confidence: 0.97,
+				strategy: "unicode",
+			},
+		];
+
+		for (const pass of comparisonPasses) {
+			const matches = collectIndexedMatches(from, to, i => matchesAt(lines, pattern, i, pass.compare));
+			const result = toSingleMatchResult(matches, pass.confidence, pass.strategy);
+			if (result) {
+				return result;
+			}
+		}
+
+		if (!allowFuzzy) {
+			return undefined;
+		}
+
+		const partialPasses: Array<{
+			compare: (line: string, patternLine: string) => boolean;
+			confidence: number;
+			strategy: SequenceMatchStrategy;
+		}> = [
+			{ compare: lineStartsWithPattern, confidence: 0.965, strategy: "prefix" },
+			{ compare: lineIncludesPattern, confidence: 0.94, strategy: "substring" },
+		];
+
+		for (const pass of partialPasses) {
+			const matches = collectIndexedMatches(from, to, i => matchesAt(lines, pattern, i, pass.compare));
+			const result = toAmbiguousMatchResult(matches, pass.confidence, pass.strategy);
+			if (result) {
+				return result;
+			}
+		}
+
+		return undefined;
+	};
+
+	const primaryPassResult = runExactPasses(searchStart, maxStart);
+	if (primaryPassResult) {
+		return primaryPassResult;
+	}
+
+	if (eof && searchStart > start) {
+		const fromStartResult = runExactPasses(start, maxStart);
+		if (fromStartResult) {
+			return fromStartResult;
+		}
+	}
+
+	if (!allowFuzzy) {
+		return { index: undefined, confidence: 0 };
+	}
+
+	// Pass 7: Fuzzy matching - find best match above threshold
+	let bestScore = 0;
+	let secondBestScore = 0;
+	let bestIndex: number | undefined;
+	const fuzzyMatches: IndexedMatches = {
+		firstMatch: undefined,
+		matchCount: 0,
+		matchIndices: [],
+	};
+
+	const scoreFuzzyRange = (from: number, to: number): void => {
+		for (let i = from; i <= to; i++) {
+			const score = fuzzyScoreAt(lines, pattern, i);
+			if (score >= SEQUENCE_FUZZY_THRESHOLD) {
+				if (fuzzyMatches.firstMatch === undefined) {
+					fuzzyMatches.firstMatch = i;
+				}
+				fuzzyMatches.matchCount++;
+				if (fuzzyMatches.matchIndices.length < MAX_RECORDED_MATCHES) {
+					fuzzyMatches.matchIndices.push(i);
+				}
+			}
+			if (score > bestScore) {
+				secondBestScore = bestScore;
+				bestScore = score;
+				bestIndex = i;
+			} else if (score > secondBestScore) {
+				secondBestScore = score;
+			}
+		}
+	};
+
+	scoreFuzzyRange(searchStart, maxStart);
+
+	// Also search from start if eof mode started from end
+	if (eof && searchStart > start) {
+		scoreFuzzyRange(start, searchStart - 1);
+	}
+
+	if (bestIndex !== undefined && bestScore >= SEQUENCE_FUZZY_THRESHOLD) {
+		if (
+			fuzzyMatches.matchCount > 1 &&
+			bestScore >= DOMINANT_FUZZY_MIN_CONFIDENCE &&
+			bestScore - secondBestScore >= DOMINANT_FUZZY_DELTA
+		) {
+			return {
+				index: bestIndex,
+				confidence: bestScore,
+				matchCount: 1,
+				matchIndices: fuzzyMatches.matchIndices,
+				strategy: "fuzzy-dominant",
+			};
+		}
+		return {
+			index: bestIndex,
+			confidence: bestScore,
+			matchCount: fuzzyMatches.matchCount,
+			matchIndices: fuzzyMatches.matchIndices,
+			strategy: "fuzzy",
+		};
+	}
+
+	// Pass 8: Character-based fuzzy matching via findMatch
+	// This is the final fallback for when line-based matching fails
+	const CHARACTER_MATCH_THRESHOLD = 0.92;
+	const patternText = pattern.join("\n");
+	const contentText = lines.slice(start).join("\n");
+	const matchOutcome = findMatch(contentText, patternText, {
+		allowFuzzy: true,
+		threshold: CHARACTER_MATCH_THRESHOLD,
+	});
+
+	if (matchOutcome.match) {
+		// Convert character index back to line index
+		const matchedContent = contentText.substring(0, matchOutcome.match.startIndex);
+		const lineIndex = start + matchedContent.split("\n").length - 1;
+		const fallbackMatchCount = matchOutcome.occurrences ?? matchOutcome.fuzzyMatches ?? 1;
+		return {
+			index: lineIndex,
+			confidence: matchOutcome.match.confidence,
+			matchCount: fallbackMatchCount,
+			strategy: "character",
+		};
+	}
+
+	const fallbackMatchCount = matchOutcome.occurrences ?? matchOutcome.fuzzyMatches;
+	return { index: undefined, confidence: bestScore, matchCount: fallbackMatchCount };
+}
+
+export function findClosestSequenceMatch(
+	lines: string[],
+	pattern: string[],
+	options?: { start?: number; eof?: boolean },
+): { index: number | undefined; confidence: number; strategy: SequenceMatchStrategy } {
+	if (pattern.length === 0) {
+		return { index: options?.start ?? 0, confidence: 1, strategy: "exact" };
+	}
+	if (pattern.length > lines.length) {
+		return { index: undefined, confidence: 0, strategy: "fuzzy" };
+	}
+
+	const start = options?.start ?? 0;
+	const eof = options?.eof ?? false;
+	const maxStart = lines.length - pattern.length;
+	const searchStart = eof && lines.length >= pattern.length ? maxStart : start;
+
+	let bestIndex: number | undefined;
+	let bestScore = 0;
+
+	for (let i = searchStart; i <= maxStart; i++) {
+		const score = fuzzyScoreAt(lines, pattern, i);
+		if (score > bestScore) {
+			bestScore = score;
+			bestIndex = i;
+		}
+	}
+
+	if (eof && searchStart > start) {
+		for (let i = start; i < searchStart; i++) {
+			const score = fuzzyScoreAt(lines, pattern, i);
+			if (score > bestScore) {
+				bestScore = score;
+				bestIndex = i;
+			}
+		}
+	}
+
+	return { index: bestIndex, confidence: bestScore, strategy: "fuzzy" };
+}
+
+/**
+ * Find a context line in the file using progressive matching strategies.
+ *
+ * @param lines - The lines of the file content
+ * @param context - The context line to search for
+ * @param startFrom - Starting index for the search
+ */
+export function findContextLine(
+	lines: string[],
+	context: string,
+	startFrom: number,
+	options?: { allowFuzzy?: boolean; skipFunctionFallback?: boolean },
+): ContextLineResult {
+	const allowFuzzy = options?.allowFuzzy ?? true;
+	const trimmedContext = context.trim();
+
+	const endIndex = lines.length - 1;
+	const exactPasses: Array<{
+		confidence: number;
+		strategy: ContextMatchStrategy;
+		predicate: (index: number) => boolean;
+	}> = [
+		{ confidence: 1.0, strategy: "exact", predicate: i => lines[i] === context },
+		{ confidence: 0.99, strategy: "trim", predicate: i => lines[i].trim() === trimmedContext },
+	];
+
+	for (const pass of exactPasses) {
+		const matches = collectIndexedMatches(startFrom, endIndex, pass.predicate);
+		const result = toAmbiguousMatchResult(matches, pass.confidence, pass.strategy);
+		if (result) {
+			return result;
+		}
+	}
+
+	// Pass 3: Unicode normalization match
+	const normalizedContext = normalizeUnicode(context);
+	const unicodeMatches = collectIndexedMatches(
+		startFrom,
+		endIndex,
+		i => normalizeUnicode(lines[i]) === normalizedContext,
+	);
+	const unicodeResult = toAmbiguousMatchResult(unicodeMatches, 0.98, "unicode");
+	if (unicodeResult) {
+		return unicodeResult;
+	}
+
+	if (!allowFuzzy) {
+		return { index: undefined, confidence: 0 };
+	}
+
+	// Pass 4: Prefix match (file line starts with context)
+	const contextNorm = normalizeForFuzzy(context);
+	if (contextNorm.length > 0) {
+		const prefixMatches = collectIndexedMatches(startFrom, endIndex, i =>
+			normalizeForFuzzy(lines[i]).startsWith(contextNorm),
+		);
+		const prefixResult = toAmbiguousMatchResult(prefixMatches, 0.96, "prefix");
+		if (prefixResult) {
+			return prefixResult;
+		}
+	}
+
+	// Pass 5: Substring match (file line contains context)
+	// First pass: find all substring matches (ignoring ratio)
+	// If exactly one match exists, accept it (uniqueness is sufficient)
+	// If multiple matches, apply ratio filter to disambiguate
+	if (contextNorm.length >= PARTIAL_MATCH_MIN_LENGTH) {
+		const allSubstringMatches: Array<{ index: number; ratio: number }> = [];
+		for (let i = startFrom; i < lines.length; i++) {
+			const lineNorm = normalizeForFuzzy(lines[i]);
+			if (lineNorm.includes(contextNorm)) {
+				const ratio = contextNorm.length / Math.max(1, lineNorm.length);
+				allSubstringMatches.push({ index: i, ratio });
+			}
+		}
+		const matchIndices = allSubstringMatches.slice(0, 5).map(match => match.index);
+
+		// If exactly one substring match, accept it regardless of ratio
+		if (allSubstringMatches.length === 1) {
+			return {
+				index: allSubstringMatches[0].index,
+				confidence: 0.94,
+				matchCount: 1,
+				matchIndices,
+				strategy: "substring",
+			};
+		}
+
+		// Multiple matches: filter by ratio to disambiguate
+		let firstMatch: number | undefined;
+		let matchCount = 0;
+		for (const match of allSubstringMatches) {
+			if (match.ratio >= PARTIAL_MATCH_MIN_RATIO) {
+				if (firstMatch === undefined) firstMatch = match.index;
+				matchCount++;
+			}
+		}
+		if (matchCount > 0) {
+			return { index: firstMatch, confidence: 0.94, matchCount, matchIndices, strategy: "substring" };
+		}
+
+		// If we had substring matches but none passed ratio filter,
+		// return ambiguous result so caller knows matches exist
+		if (allSubstringMatches.length > 1) {
+			return {
+				index: allSubstringMatches[0].index,
+				confidence: 0.94,
+				matchCount: allSubstringMatches.length,
+				matchIndices,
+				strategy: "substring",
+			};
+		}
+	}
+
+	// Pass 6: Fuzzy match using similarity
+	let bestIndex: number | undefined;
+	let bestScore = 0;
+	const fuzzyMatches: IndexedMatches = {
+		firstMatch: undefined,
+		matchCount: 0,
+		matchIndices: [],
+	};
+
+	for (let i = startFrom; i < lines.length; i++) {
+		const lineNorm = normalizeForFuzzy(lines[i]);
+		const score = similarity(lineNorm, contextNorm);
+		if (score >= CONTEXT_FUZZY_THRESHOLD) {
+			if (fuzzyMatches.firstMatch === undefined) {
+				fuzzyMatches.firstMatch = i;
+			}
+			fuzzyMatches.matchCount++;
+			if (fuzzyMatches.matchIndices.length < MAX_RECORDED_MATCHES) {
+				fuzzyMatches.matchIndices.push(i);
+			}
+		}
+		if (score > bestScore) {
+			bestScore = score;
+			bestIndex = i;
+		}
+	}
+
+	if (bestIndex !== undefined && bestScore >= CONTEXT_FUZZY_THRESHOLD) {
+		return {
+			index: bestIndex,
+			confidence: bestScore,
+			matchCount: fuzzyMatches.matchCount,
+			matchIndices: fuzzyMatches.matchIndices,
+			strategy: "fuzzy",
+		};
+	}
+
+	if (!options?.skipFunctionFallback && trimmedContext.endsWith("()")) {
+		const withParen = trimmedContext.replace(/\(\)\s*$/u, "(");
+		const withoutParen = trimmedContext.replace(/\(\)\s*$/u, "");
+		const parenResult = findContextLine(lines, withParen, startFrom, { allowFuzzy, skipFunctionFallback: true });
+		if (parenResult.index !== undefined || (parenResult.matchCount ?? 0) > 0) {
+			return parenResult;
+		}
+		return findContextLine(lines, withoutParen, startFrom, { allowFuzzy, skipFunctionFallback: true });
+	}
+
+	return { index: undefined, confidence: bestScore };
+}
+
+export const replaceEditEntrySchema = Type.Object(
+	{
+		old_text: Type.String({ description: "Text to find (fuzzy whitespace matching enabled)" }),
+		new_text: Type.String({ description: "Replacement text" }),
+		all: Type.Optional(Type.Boolean({ description: "Replace all occurrences (default: unique match required)" })),
+	},
+	{ additionalProperties: false },
+);
+
+export const replaceEditSchema = Type.Object(
+	{
+		path: Type.String({ description: "file path for edits" }),
+		edits: Type.Array(replaceEditEntrySchema, { description: "Replacements", minItems: 1 }),
+	},
+	{ additionalProperties: false },
+);
+
+export type ReplaceEditEntry = Static<typeof replaceEditEntrySchema>;
+export type ReplaceParams = Static<typeof replaceEditSchema>;
+
+export interface ExecuteReplaceSingleOptions {
+	session: ToolSession;
+	path: string;
+	params: ReplaceEditEntry;
+	signal?: AbortSignal;
+	batchRequest?: LspBatchRequest;
+	allowFuzzy: boolean;
+	fuzzyThreshold: number;
+	writethrough: WritethroughCallback;
+	beginDeferredDiagnosticsForPath: (path: string) => WritethroughDeferredHandle;
+}
+
+export async function executeReplaceSingle(
+	options: ExecuteReplaceSingleOptions,
+): Promise<AgentToolResult<EditToolDetails, typeof replaceEditEntrySchema>> {
+	const {
+		session,
+		path,
+		params,
+		signal,
+		batchRequest,
+		allowFuzzy,
+		fuzzyThreshold,
+		writethrough,
+		beginDeferredDiagnosticsForPath,
+	} = options;
+	const { old_text, new_text, all } = params;
+
+	enforcePlanModeWrite(session, path);
+
+	if (path.endsWith(".ipynb")) {
+		throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
+	}
+
+	if (old_text.length === 0) {
+		throw new Error("old_text must not be empty.");
+	}
+
+	const absolutePath = resolvePlanPath(session, path);
+	const rawContent = await readEditFileText(absolutePath, path);
+	const { bom, text: content } = stripBom(rawContent);
+	const originalEnding = detectLineEnding(content);
+	const normalizedContent = normalizeToLF(content);
+	const normalizedOldText = normalizeToLF(old_text);
+	const normalizedNewText = normalizeToLF(new_text);
+
+	const result = replaceText(normalizedContent, normalizedOldText, normalizedNewText, {
+		fuzzy: allowFuzzy,
+		all: all ?? false,
+		threshold: fuzzyThreshold,
+	});
+
+	if (result.count === 0) {
+		const matchOutcome = findMatch(normalizedContent, normalizedOldText, {
+			allowFuzzy,
+			threshold: fuzzyThreshold,
+		});
+
+		if (matchOutcome.occurrences && matchOutcome.occurrences > 1) {
+			throw new Error(formatOccurrenceError(path, matchOutcome));
+		}
+
+		throw new EditMatchError(path, normalizedOldText, matchOutcome.closest, {
+			allowFuzzy,
+			threshold: fuzzyThreshold,
+			fuzzyMatches: matchOutcome.fuzzyMatches,
+		});
+	}
+
+	if (normalizedContent === result.content) {
+		throw new Error(`Edits to ${path} resulted in no changes being made.`);
+	}
+
+	const finalContent = bom + restoreLineEndings(result.content, originalEnding);
+	const diagnostics = await writethrough(
+		absolutePath,
+		finalContent,
+		signal,
+		Bun.file(absolutePath),
+		batchRequest,
+		dst => (dst === absolutePath ? beginDeferredDiagnosticsForPath(absolutePath) : undefined),
+	);
+	invalidateFsScanAfterWrite(absolutePath);
+
+	const diffResult = generateDiffString(normalizedContent, result.content);
+	const resultText =
+		result.count > 1
+			? `Successfully replaced ${result.count} occurrences in ${path}.`
+			: `Successfully replaced text in ${path}.`;
+
+	const meta = outputMeta()
+		.diagnostics(diagnostics?.summary ?? "", diagnostics?.messages ?? [])
+		.get();
+
+	return {
+		content: [{ type: "text", text: resultText }],
+		details: {
+			diff: diffResult.diff,
+			firstChangedLine: diffResult.firstChangedLine,
+			diagnostics,
+			meta,
+		},
+	};
+}

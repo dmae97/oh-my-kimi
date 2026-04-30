@@ -23,6 +23,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3"
@@ -32,7 +34,8 @@ jobs:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile
-      - run: bun run check:ts
+      - name: Type check workspace
+        run: bun run ci:check:full
 
   native:
     strategy:
@@ -70,6 +73,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
+      - run: bun install --frozen-lockfile
       - name: Install cross-compilation toolchain
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
@@ -77,30 +81,17 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Rust checks
         if: matrix.rust_checks
-        run: |
-          cargo fmt --all -- --check
-          cargo clippy --workspace -- -D warnings
+        run: bun run check:rs
       - name: Build native addon(s)
         env:
           CROSS_TARGET: ${{ matrix.target }}
           TARGET_PLATFORM: ${{ matrix.platform }}
           TARGET_ARCH: ${{ matrix.arch }}
+          TARGET_VARIANTS: ${{ matrix.variants }}
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         shell: bash
         run: |
-          VARIANTS="${{ matrix.variants }}"
-          if [ -z "$VARIANTS" ]; then
-            bun --cwd=packages/natives run build:native
-          else
-            for variant in $VARIANTS; do
-              case "$variant" in
-                baseline) export RUSTFLAGS="-C target-cpu=x86-64-v2" ;;
-                modern)   export RUSTFLAGS="-C target-cpu=x86-64-v3" ;;
-              esac
-              export TARGET_VARIANT="$variant"
-              bun --cwd=packages/natives run build:native
-            done
-          fi
+          bun run ci:build:native
       - name: Upload native addon(s)
         uses: actions/upload-artifact@v4
         with:
@@ -114,6 +105,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           lfs: true
       - uses: oven-sh/setup-bun@v2
         with:
@@ -124,6 +116,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-workspace-crates: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
@@ -139,13 +134,11 @@ jobs:
           sudo ln -s $(which fdfind) /usr/local/bin/fd
           sudo ln -sf /usr/bin/convert /usr/local/bin/magick
       - run: bun install --frozen-lockfile
-      - run: bun --cwd=packages/natives run build:native
-      - run: bun run test
+      - run: bun run build:native
+      - name: Test workspace
+        run: bun run ci:test:full
       - name: CLI smoke test
-        run: |
-          bun packages/coding-agent/src/cli.ts --version
-          bun packages/coding-agent/src/cli.ts --help
-          bun packages/coding-agent/src/cli.ts stats --help
+        run: bun run ci:test:smoke
 
   install_methods:
     runs-on: ubuntu-22.04
@@ -178,11 +171,83 @@ jobs:
           sudo ln -sf /usr/bin/convert /usr/local/bin/magick
       - run: bun install --frozen-lockfile
       - name: Install method smoke tests
-        run: bash scripts/install-tests/run-ci.sh
+        run: bun run ci:test:install-methods
+
+  release_binary:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check, native, test, install_methods]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target_id: linux-x64
+            native_artifact: pi-natives-linux-x64
+            binary_path: packages/coding-agent/binaries/omp-linux-x64
+          - os: ubuntu-24.04-arm
+            target_id: linux-arm64
+            native_artifact: pi-natives-linux-arm64
+            binary_path: packages/coding-agent/binaries/omp-linux-arm64
+          - os: macos-15-intel
+            target_id: darwin-x64
+            native_artifact: pi-natives-darwin-x64
+            binary_path: packages/coding-agent/binaries/omp-darwin-x64
+          - os: macos-14
+            target_id: darwin-arm64
+            native_artifact: pi-natives-darwin-arm64
+            binary_path: packages/coding-agent/binaries/omp-darwin-arm64
+          - os: windows-latest
+            target_id: win32-x64
+            native_artifact: pi-natives-win32-x64
+            binary_path: packages/coding-agent/binaries/omp-windows-x64.exe
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - name: Cache bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - run: bun install --frozen-lockfile
+      - name: Download native addon(s)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.native_artifact }}
+          path: packages/natives/native
+      - name: Build release binary
+        env:
+          RELEASE_TARGETS: ${{ matrix.target_id }}
+        run: bun run ci:release:build-binaries
+      - name: Smoke release binary
+        if: runner.os != 'Windows'
+        run: |
+          runtime_dir="$(mktemp -d)"
+          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --version
+      - name: Smoke release binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $runtimeDir = Join-Path $env:TEMP ("omp-runtime-" + [System.Guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+          $env:HOME = Join-Path $runtimeDir "home"
+          $env:XDG_DATA_HOME = Join-Path $runtimeDir "xdg"
+          & "${{ matrix.binary_path }}" --version
+      - name: Upload release binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: omp-binary-${{ matrix.target_id }}
+          path: ${{ matrix.binary_path }}
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [check, native, test, install_methods]
+    needs: [release_binary]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -204,6 +269,12 @@ jobs:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile
+      - name: Download release binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: omp-binary-*
+          path: packages/coding-agent/binaries
+          merge-multiple: true
       - name: Download native addons
         uses: actions/download-artifact@v4
         with:
@@ -211,43 +282,11 @@ jobs:
           path: packages/natives/native
           merge-multiple: true
       - name: Verify native addons
-        run: |
-          echo "Native addons downloaded:"
-          ls -la packages/natives/native/
-          echo ""
-          echo "Expected addons: linux-x64-modern, linux-x64-baseline, linux-arm64, darwin-x64-modern, darwin-x64-baseline, darwin-arm64, win32-x64-modern, win32-x64-baseline"
-          for plat in linux-x64-modern linux-x64-baseline linux-arm64 darwin-x64-modern darwin-x64-baseline darwin-arm64 win32-x64-modern win32-x64-baseline; do
-            if [ -f "packages/natives/native/pi_natives.${plat}.node" ]; then
-              echo "✓ pi_natives.${plat}.node"
-            else
-              echo "✗ pi_natives.${plat}.node MISSING"
-              exit 1
-            fi
-          done
-
-      - name: Build binaries
-        run: |
-          bun --cwd=packages/stats scripts/generate-client-bundle.ts
-          mkdir -p packages/coding-agent/binaries
-          ENTRYPOINT="./packages/coding-agent/src/cli.ts"
-          DEFINES="--define PI_COMPILED=true --root ."
-          build_binary() {
-            PLATFORM="$1"
-            ARCH="$2"
-            TARGET="$3"
-            OUTFILE="$4"
-            TARGET_PLATFORM="$PLATFORM" TARGET_ARCH="$ARCH" bun --cwd=packages/natives run embed:native
-            bun build --compile $DEFINES --external mupdf --target="$TARGET" "$ENTRYPOINT" --outfile "$OUTFILE"
-          }
-          build_binary darwin arm64 bun-darwin-arm64 packages/coding-agent/binaries/omp-darwin-arm64
-          build_binary darwin x64 bun-darwin-x64 packages/coding-agent/binaries/omp-darwin-x64
-          build_binary linux x64 bun-linux-x64-modern packages/coding-agent/binaries/omp-linux-x64
-          build_binary linux arm64 bun-linux-arm64 packages/coding-agent/binaries/omp-linux-arm64
-          build_binary win32 x64 bun-windows-x64-modern packages/coding-agent/binaries/omp-windows-x64.exe
-          bun --cwd=packages/natives run embed:native --reset
-          bun --cwd=packages/stats scripts/generate-client-bundle.ts --reset
+        run: bun run ci:release:verify-natives
       - name: Stage native addons for release
         run: cp packages/natives/native/*.node packages/coding-agent/binaries/
+      - name: Build release archives
+        run: bun run ci:release:build-archives
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -257,21 +296,4 @@ jobs:
         if: ${{ !inputs.skip_npm }}
         env:
           NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          for pkg in packages/utils packages/ai packages/natives packages/tui packages/stats packages/agent packages/coding-agent; do
-            pkg_name=$(basename "$pkg")
-            # Skip private packages
-            if jq -e '.private == true' "$pkg/package.json" > /dev/null 2>&1; then
-              echo "Skipping $pkg_name (private)"
-              continue
-            fi
-            echo "Publishing $pkg_name..."
-            output=$(cd "$pkg" && bun publish --access public 2>&1) && echo "$output" && continue
-            echo "$output"
-            if echo "$output" | grep -q "previously published\|cannot publish over\|You cannot publish over"; then
-              echo "Already published, skipping"
-            else
-              echo "Failed to publish $pkg_name"
-              exit 1
-            fi
-          done
+        run: bun run ci:release:publish

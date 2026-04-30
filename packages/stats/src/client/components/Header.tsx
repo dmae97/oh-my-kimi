@@ -1,6 +1,6 @@
 import { Activity, RefreshCw } from "lucide-react";
 
-type Tab = "overview" | "requests" | "errors" | "models";
+type Tab = "overview" | "requests" | "errors" | "models" | "costs";
 
 interface HeaderProps {
 	activeTab: Tab;
@@ -9,7 +9,7 @@ interface HeaderProps {
 	syncing: boolean;
 }
 
-const tabs: Tab[] = ["overview", "requests", "errors", "models"];
+const tabs: Tab[] = ["overview", "requests", "errors", "models", "costs"];
 
 export function Header({ activeTab, onTabChange, onSync, syncing }: HeaderProps) {
 	return (

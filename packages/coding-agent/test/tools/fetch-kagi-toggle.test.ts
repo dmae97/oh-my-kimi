@@ -21,6 +21,97 @@ const withMissingSystemPython = () => {
 	};
 };
 
+describe("read tool URL selector shorthands", () => {
+	let testDir: string;
+
+	beforeEach(() => {
+		testDir = path.join(os.tmpdir(), `fetch-kagi-toggle-shorthand-${Snowflake.next()}`);
+		fs.mkdirSync(testDir, { recursive: true });
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		fs.rmSync(testDir, { recursive: true, force: true });
+	});
+
+	const createSession = (): ToolSession => {
+		const sessionFile = path.join(testDir, "session.jsonl");
+		const artifactsDir = sessionFile.slice(0, -6);
+		let nextArtifactId = 0;
+		return {
+			cwd: testDir,
+			hasUI: false,
+			getSessionFile: () => sessionFile,
+			getArtifactsDir: () => artifactsDir,
+			getSessionSpawns: () => null,
+			allocateOutputArtifact: async toolType => {
+				const id = String(nextArtifactId++);
+				return {
+					id,
+					path: path.join(artifactsDir, `${id}.${toolType}.log`),
+				};
+			},
+			settings: Settings.isolated({
+				"fetch.enabled": true,
+			}),
+		};
+	};
+
+	it("supports embedded raw selectors in URL paths", async () => {
+		const session = createSession();
+		const tool = new ReadTool(session);
+		const pageUrl = "https://example.com/embedded-raw";
+		const loadPageSpy = vi.spyOn(scrapers, "loadPage").mockImplementation(async requestedUrl => {
+			if (requestedUrl !== pageUrl) {
+				throw new Error(`Unexpected URL: ${requestedUrl}`);
+			}
+			return {
+				ok: true,
+				status: 200,
+				contentType: "text/html",
+				finalUrl: pageUrl,
+				content: "<html><body><main><h1>Embedded raw page</h1></main></body></html>",
+			};
+		});
+
+		const result = await tool.execute("fetch-embedded-raw", { path: `${pageUrl}:raw` });
+		const textBlock = result.content.find(content => content.type === "text");
+
+		expect(result.details?.method).toBe("raw");
+		expect(textBlock?.type).toBe("text");
+		expect(textBlock?.text).toContain("<html><body><main><h1>Embedded raw page</h1></main></body></html>");
+		expect(loadPageSpy).toHaveBeenCalledWith(pageUrl, expect.anything());
+	});
+
+	it("supports embedded line selectors in URL paths", async () => {
+		const session = createSession();
+		const tool = new ReadTool(session);
+		const pageUrl = "https://example.com/embedded-lines";
+		const loadPageSpy = vi.spyOn(scrapers, "loadPage").mockImplementation(async requestedUrl => {
+			if (requestedUrl !== pageUrl) {
+				throw new Error(`Unexpected URL: ${requestedUrl}`);
+			}
+			return {
+				ok: true,
+				status: 200,
+				contentType: "text/plain",
+				finalUrl: pageUrl,
+				content: "Line 1\nLine 2\nLine 3",
+			};
+		});
+
+		const result = await tool.execute("fetch-embedded-lines", { path: `${pageUrl}:L7-L8` });
+		const textBlock = result.content.find(content => content.type === "text");
+
+		expect(textBlock?.type).toBe("text");
+		expect(textBlock?.text).toContain("Line 1");
+		expect(textBlock?.text).toContain("Line 2");
+		expect(textBlock?.text).not.toContain("Line 3");
+		expect(loadPageSpy).toHaveBeenCalledTimes(1);
+		expect(loadPageSpy).toHaveBeenCalledWith(pageUrl, expect.anything());
+	});
+});
+
 describe("read tool URL handling", () => {
 	let testDir: string;
 
@@ -261,7 +352,7 @@ describe("read tool URL handling", () => {
 			content: "<html><body>not really an image</body></html>",
 		});
 
-		const result = await tool.execute("fetch-html-png-path", { path: "https://example.com/foo.png", raw: true });
+		const result = await tool.execute("fetch-html-png-path", { path: "https://example.com/foo.png", sel: "raw" });
 		const imageBlock = result.content.find(content => content.type === "image");
 		const textBlock = result.content.find(content => content.type === "text");
 
@@ -603,8 +694,7 @@ describe("read tool URL handling", () => {
 
 		const pagedResult = await tool.execute("fetch-offset-page", {
 			path: pageUrl,
-			offset: 7,
-			limit: 2,
+			sel: "L7-L8",
 		});
 		const pagedText = pagedResult.content.find(content => content.type === "text");
 		expect(pagedText?.type).toBe("text");

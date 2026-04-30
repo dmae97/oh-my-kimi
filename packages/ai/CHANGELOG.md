@@ -2,9 +2,202 @@
 
 ## [Unreleased]
 
+## [14.5.9] - 2026-04-30
+### Added
+
+- Added `usage.reasoningTokens` to OpenAI and Google usage output when providers report reasoning/thinking tokens
+- Added `usage.cttl.ephemeral5m` and `usage.cttl.ephemeral1h` to report Anthropic cache-write TTL token buckets
+- Added `usage.server.webSearch` and `usage.server.webFetch` to report Anthropic server tool-call request counts
+
 ### Fixed
 
-- Fixed OpenAI-compatible providers (Kilo AI gateway, etc.) rejecting `developer` role in messages. Now correctly maps `developer` → `user` for providers that don't support the `developer` role ([#843](https://github.com/can1357/oh-my-pi/issues/843))
+- Fixed OpenAI usage attribution to avoid double-counting `reasoning_tokens` in output totals
+- Fixed Anthropic streaming usage handling so a previously populated cache TTL breakdown is preserved when later events omit `cache_creation`
+
+## [14.5.4] - 2026-04-28
+### Changed
+
+- Changed OpenAI custom Lark grammar payloads to strip comments and blank lines before sending provider requests.
+
+### Fixed
+
+- Fixed OpenAI Codex GPT model pricing by inheriting matching OpenAI catalog rates for zero-priced discovered Codex entries.
+
+## [14.5.3] - 2026-04-27
+### Added
+
+- Added `fireworks` as a supported provider with API key login flow and credential storage
+- Added Fireworks model catalog support with `fireworks`-scoped openai-completions models `glm-5`, `glm-5.1`, `kimi-k2.5`, `kimi-k2.6`, and `minimax-m2.7`
+- Added built-in discovery wiring so providers with base URL `api.fireworks.ai` are recognized as OpenAI-compatible and can use streaming token control
+
+### Changed
+
+- Updated the built-in model catalog to use corrected `contextWindow` and `maxTokens` values for many existing models instead of placeholder limits
+- Updated several model cost entries, including cache-read pricing, to corrected values
+
+### Fixed
+
+- Fixed Fireworks request formatting by translating between public model IDs and API wire IDs when sending OpenAI-completions requests
+- Fixed OpenAI-compatible model parameter handling for Fireworks by allowing `max_tokens` to be sent during requests
+
+## [14.5.1] - 2026-04-26
+
+### Fixed
+
+- Fixed NVIDIA NIM DeepSeek-V4 models leaking chat-template tool-call markers (e.g. `<｜DSML｜tool_calls｜>`) into visible response text by stripping the special tokens from streamed `delta.content` ([#798](https://github.com/can1357/oh-my-pi/issues/798))
+
+## [14.4.0] - 2026-04-26
+
+### Added
+
+- Added an `examples` option to `StringEnum` to include example values in the generated schema
+
+### Changed
+
+- Changed Anthropic tool schema generation to strip unsupported schema fields (including `patternProperties`), add `additionalProperties: false` for object types, and apply Anthropic strict-mode limits when marking tools as strict
+- Changed Anthropic strict tool planning to cap strict `tools` at twenty entries and convert excess optional/union parameters to nullable schemas to stay within provider constraints
+
+### Fixed
+
+- Fixed Anthropic tool schema compilation failures by keeping the `write` tool out of the strict-tool allowlist when the full coding-agent tool set is active
+- Fixed Anthropic 400 `tools.*.custom: For 'object' type, property 'minItems' is not supported` by stripping `minItems` from object-shaped JSON schema nodes (array nodes still keep supported `minItems` values)
+- Fixed Anthropic tool schemas that used tuple-style arrays by stripping unsupported `maxItems` and only preserving provider-supported `minItems` values
+- Fixed Anthropic and OpenRouter Anthropic tool calls that previously failed with `compiled grammar is too large` by retrying automatically without strict tool schemas and reusing non-strict mode for subsequent requests in the same provider session
+- Fixed parsing of JSON tool arguments containing raw control characters inside string values (such as embedded newlines) by escaping them before JSON parsing
+- Fixed `validateToolArguments` to accept stringified objects and arrays that include literal control characters inside string fields
+- Fixed OpenAI Codex Spark OAuth selection to fall back to non-Pro accounts when no ChatGPT Pro account is connected, so users without a Pro account can still attempt Spark requests in case the server permits access.
+
+## [14.3.0] - 2026-04-25
+
+### Added
+
+- Added support for Claude Opus 4.7 (`claude-opus-4-7`) model ([#726](https://github.com/can1357/oh-my-pi/issues/726))
+  - Suppresses sampling parameters (temperature/top_p/top_k) that Opus 4.7 rejects
+  - Enables `display: "summarized"` for adaptive thinking to restore visible thinking content
+
+### Fixed
+
+- Fixed Cursor provider losing conversation history on follow-up turns (model responding "this appears to be the start of our session") by populating `ConversationStateStructure.rootPromptMessagesJson` with JSON blob IDs for the system prompt plus prior user/assistant/tool-result messages. Cursor's server builds the model prompt from `rootPromptMessagesJson`, not from the protobuf `turns[]` tree, so sending only the system prompt there caused prior turns to be dropped
+- Fixed Cursor provider multi-turn conversations failing with `Connect error internal: Blob not found` on the second message by storing `ConversationStateStructure.turns`, `AgentConversationTurnStructure.user_message`, and `AgentConversationTurnStructure.steps` as content-addressed blob IDs in the KV store (matching the existing handling for `rootPromptMessagesJson`) rather than sending the raw serialized bytes inline ([#678](https://github.com/can1357/oh-my-pi/issues/678))
+
+## [14.2.1] - 2026-04-24
+
+### Fixed
+
+- Fixed OpenAI Codex Spark OAuth selection to require a verified ChatGPT Pro account instead of falling back to Plus or unknown-plan accounts.
+
+## [14.2.0] - 2026-04-23
+
+### Added
+
+- Added `gpt-5.5` to the built-in model catalog for both OpenAI Responses (`openai`) and local `litellm` (`openai-completions`) providers
+- Added `gpt-image-2` to the `litellm` built-in model catalog
+- Added `isCopilotTransientModelError()` and `callWithCopilotModelRetry()` helpers in `utils/retry` that detect GitHub Copilot's intermittent `HTTP 400 model_not_supported` responses for preview models (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, ...) and retry the request up to three times with backoff. OpenAI Responses, OpenAI Completions, and Anthropic provider paths now participate in this retry when the model is served through Copilot.
+- Added OpenAI Responses custom-tool grammar support for Codex-style `apply_patch` calls, including freeform streaming, history replay, and forced tool-choice mapping to the custom wire name.
+
+### Changed
+
+- Updated built-in model metadata with revised `contextWindow`, `maxTokens`, and pricing values for existing entries
+- Changed generated model policies to assign `applyPatchToolType: "freeform"` for first-party GPT-5 OpenAI Responses and Codex models, so regenerated `models.json` preserves the `apply_patch` custom-tool metadata.
+- Renamed `rewriteCopilotAuthError` to `rewriteCopilotError` and extended it to rewrite `HTTP 400 model_not_supported` after retries are exhausted with guidance about Copilot's OAuth-client-specific rollout gap (see opencode#13313).
+
+### Fixed
+
+- Fixed Amazon Bedrock proxy handling to honor lowercase `http_proxy`, `https_proxy`, and `all_proxy` environment variables when using HTTP/1 fallback
+- Fixed Amazon Bedrock streaming behind corporate HTTP proxies by using a proxy-aware HTTP/1 transport when `HTTPS_PROXY`, `HTTP_PROXY`, or `ALL_PROXY` is configured, including AWS SSO credential calls.
+- Fixed Amazon Bedrock requests to retry once with HTTP/1 when the AWS SDK's default HTTP/2 transport fails before streaming begins.
+- Fixed OpenAI Responses streaming to display thinking tokens from local providers (llama.cpp, etc.) that send raw `reasoning_text.delta` events and empty `summary` arrays in `output_item.done`. Previously, thinking content was silently dropped during streaming while non-streaming mode worked correctly.
+- Synced the bundled OpenCode Go catalog with the current docs so `kimi-k2.6`, `mimo-v2.5`, and `mimo-v2.5-pro` appear in offline/default model lists.
+
+## [14.1.3] - 2026-04-17
+
+### Fixed
+
+- Preserved user-provided `session_id` and `x-client-request-id` headers in OpenAI Responses requests instead of overriding them with automatic session-derived values
+- Stopped sending `session_id` and `x-client-request-id` headers for OpenAI Responses requests when `cacheRetention` is set to `none`
+- Fixed direct OpenAI Responses requests to send `session_id` and `x-client-request-id` from the same session-derived value as `prompt_cache_key`, improving prompt cache affinity for append-only sessions
+## [14.1.1] - 2026-04-14
+
+### Added
+
+- Added `toolStrictMode` compatibility option (`"all_strict"` or `"none"`) to OpenAI-compatible model config to force tool schemas to be sent uniformly strict, uniformly non-strict, or keep mixed per-tool behavior
+
+### Changed
+
+- Changed Cerebras OpenAI-compatible providers to default `toolStrictMode` to `"all_strict"` unless explicitly overridden
+
+### Fixed
+
+- Fixed OpenAI Completions handling for providers that reject mixed `strict` flags by automatically retrying with non-strict tool schemas when an initial all-strict tool request fails with strict-format 400/422 errors
+- Fixed OpenAI-completions error reporting by including captured JSON error body details such as type, param, and code when a request fails without a body in the thrown SDK error
+- Fixed shell execution failure responses to preserve all result fields when sanitizing, preventing truncated metadata in stream results
+- Fixed context overflow detection to recognize `model_context_window_exceeded` from z.ai / GLM providers, preventing infinite retry loops when context window is exceeded ([#638](https://github.com/can1357/oh-my-pi/issues/638))
+- Fixed strict tool schema enforcement to preserve `additionalProperties: false` and required keys for reused nested object schemas, preventing invalid `todo_write` function schemas in Codex/OpenAI requests
+- Fixed GitHub Copilot reasoning regressions by preserving GPT-5.x / Claude 4.x reasoning controls instead of stripping them from requests ([#773](https://github.com/can1357/oh-my-pi/issues/773))
+
+## [14.1.0] - 2026-04-11
+
+### Added
+
+- Added `accountId` to usage report metadata
+
+### Changed
+
+- Changed usage parsing to emit a usage report with available fields when parsing fails, rather than returning null
+
+### Fixed
+
+- Fixed `planType` resolution to fall back to the raw payload `plan_type` when parsed value is absent
+- Fixed usage metadata `raw` fallback to preserve the original payload when parsed raw output is missing
+
+## [14.0.5] - 2026-04-11
+
+### Changed
+
+- Replaced GitHub Copilot authentication from VSCode extension impersonation to the opencode OAuth flow, eliminating TOS concerns. Existing users will need to re-authenticate once with `/login github-copilot`.
+- Simplified Copilot token handling: GitHub OAuth token is used directly for all API requests (no JWT exchange or refresh cycle).
+- Changed GitHub Copilot API base URL from `api.individual.githubcopilot.com` to `api.githubcopilot.com`.
+- Updated default OpenAI stream idle timeout to 120,000 milliseconds to keep stream generation alive longer
+
+### Fixed
+
+- Fixed duplicate synthetic tool results being generated when a real tool result appears later in message history
+- Fixed GitHub Copilot `/models` discovery to unwrap structured OAuth credentials before sending the bearer token, preserving dynamic catalog refresh for OAuth-backed callers.
+
+### Removed
+
+- Removed Copilot JWT proxy-ep base URL resolution (no longer needed with opencode auth).
+
+## [14.0.3] - 2026-04-09
+
+### Fixed
+
+- Fixed Ollama discovery cache normalization so cached models upgrade to the OpenAI Responses transport after the provider change
+
+## [14.0.0] - 2026-04-08
+
+### Breaking Changes
+
+- Removed `coerceNullStrings` function and its automatic null-string coercion behavior from JSON parsing
+
+### Added
+
+- Added support for OpenRouter provider with strict mode detection
+- Added automatic cleaning of literal escape sequences (`\n`, `\t`, `\r`) in JSON parsing to handle LLM encoding confusion
+- Added support for healing JSON with trailing junk after balanced containers (e.g., `]\n</invoke>`)
+- Added `CODEX_STARTUP_EVENT_CHANNEL` constant and `CodexStartupEvent` type for monitoring Codex provider initialization status
+- Added automatic healing of malformed JSON with single-character bracket errors at the end of strings, improving LLM tool argument parsing robustness
+
+## [13.19.0] - 2026-04-05
+
+### Fixed
+
+- Fixed GitHub Copilot model context window detection by correcting fallback priority for maxContextWindowTokens and maxPromptTokens
+- Fixed Gemini 2.5 Pro context window detection in GitHub Copilot model limits test
+- Fixed Claude Opus 4.6 context window detection in GitHub Copilot model limits test
+- Fixed Anthropic streaming to suppress transient SDK console errors for malformed SSE keep-alive frames so the TUI only shows surfaced provider errors
+
+- Added environment-based credential fallback for the OpenAI Codex provider.
 
 ## [13.17.6] - 2026-04-01
 
@@ -13,6 +206,7 @@
 - Fixed Anthropic first-event timeouts to exclude stream connection setup from the watchdog, preserve timeout-specific retry classification after local aborts, and reset retry state cleanly between attempts
 
 ## [13.17.5] - 2026-04-01
+
 ### Changed
 
 - Increased default first-event timeout from 15s to 45s to better accommodate longer request setup times
@@ -51,6 +245,7 @@
 - Added Vercel AI Gateway to `/login` providers for interactive API key setup
 
 ### Fixed
+
 - Fixed `omp commit` failing with HTTP 400 errors when using reasoning-enabled models on OpenAI-compatible endpoints that don't support the `developer` role (e.g., GitHub Copilot, custom proxies). Now falls back to `system` role when `developer` is unsupported.
 
 ## [13.17.0] - 2026-03-30
@@ -75,6 +270,7 @@
 - Fixed normalizeAnthropicBaseUrl returning empty string instead of undefined when baseUrl is empty
 
 ## [13.16.4] - 2026-03-28
+
 ### Added
 
 - Added support for Groq Compound and Compound Mini models with extended context window (131K tokens) and configurable thinking levels
@@ -95,6 +291,7 @@
 - Updated OpenRouter Claude 3.5 Sonnet pricing: input from 0.45 to 0.42, cache read from 0.225 to 0.21
 
 ## [13.16.3] - 2026-03-28
+
 ### Changed
 
 - Modified OAuth credential saving to preserve unrelated identities instead of replacing all credentials for a provider
@@ -120,6 +317,7 @@
 - Fixed `parseRateLimitReason` not recognizing "usage limit" in Codex error messages, causing incorrect fallback to `UNKNOWN` classification instead of `QUOTA_EXHAUSTED`
 
 ## [13.14.2] - 2026-03-21
+
 ### Changed
 
 - Updated thinking configuration format from `levels` array to `minLevel` and `maxLevel` properties for improved clarity
@@ -142,13 +340,14 @@
 - Added bundled GPT-5.4 mini model metadata for OpenAI, OpenAI Codex, and GitHub Copilot, including low-to-xhigh thinking support and GitHub Copilot premium multiplier metadata
 - Added bundled GPT-5.4 nano model metadata for OpenAI and OpenAI Codex, including low-to-xhigh thinking support
 
-
 ## [13.13.2] - 2026-03-18
+
 ### Changed
 
 - Modified tool result handling for aborted assistant messages to preserve existing tool results when already recorded, instead of always replacing them with synthetic 'aborted' results
 
 ## [13.13.0] - 2026-03-18
+
 ### Changed
 
 - Changed tool argument validation to always normalize optional null values before type coercion, ensuring consistent handling of LLM-generated 'null' strings
@@ -159,6 +358,7 @@
 - Improved type safety of `validateToolCall` and `validateToolArguments` functions by returning properly typed `ToolCall["arguments"]` instead of `any`
 
 ## [13.12.9] - 2026-03-17
+
 ### Changed
 
 - Extracted OpenAI compatibility detection and resolution logic into dedicated `openai-completions-compat` module for improved maintainability and reusability
@@ -208,6 +408,7 @@
 - Fixed auth schema V0-to-V1 migration crash when the V0 table lacks a `disabled` column
 
 ## [13.11.0] - 2026-03-12
+
 ### Added
 
 - Added support for Parallel AI provider with API key authentication
@@ -223,6 +424,7 @@
 - Improved retry logic to handle HTTP/2 stream errors and internal_error responses from Anthropic API
 
 ## [13.9.16] - 2026-03-10
+
 ### Added
 
 - Support for `onPayload` callback to replace provider request payloads before sending, enabling request interception and modification
@@ -245,11 +447,13 @@
 - Fixed handling of malformed JSON messages in websocket streams to trigger immediate fallback to SSE without retry attempts
 
 ## [13.9.13] - 2026-03-10
+
 ### Added
 
 - Added `isSpecialServiceTier` utility function to validate OpenAI service tier values
 
 ## [13.9.12] - 2026-03-09
+
 ### Added
 
 - Added Tavily web search provider support with API key authentication
@@ -282,11 +486,13 @@
 - Fixed auth storage to preserve newer recorded schema versions when opened by older binaries
 
 ## [13.9.8] - 2026-03-08
+
 ### Fixed
 
 - Fixed WebSocket stream fallback logic to safely replay buffered output over SSE when WebSocket fails after partial content has been streamed
 
 ## [13.9.4] - 2026-03-07
+
 ### Changed
 
 - Simplified API key credential storage to always replace existing credentials on re-login instead of accumulating multiple keys
@@ -299,6 +505,7 @@
 - Fixed Cerebras model compatibility by preventing `stream_options` usage requests in chat completions
 
 ## [13.9.3] - 2026-03-07
+
 ### Breaking Changes
 
 - Changed `reasoning` parameter from `ThinkingLevel | undefined` to `Effort | undefined` in `SimpleStreamOptions`; 'off' is no longer valid (omit the field instead)

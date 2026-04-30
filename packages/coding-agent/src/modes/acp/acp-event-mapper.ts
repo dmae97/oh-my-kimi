@@ -8,6 +8,10 @@ import type {
 import type { AgentSessionEvent } from "../../session/agent-session";
 import type { TodoStatus } from "../../tools/todo-write";
 
+interface AcpEventMapperOptions {
+	getMessageId?: (message: unknown) => string | undefined;
+}
+
 interface ContentArrayContainer {
 	content?: unknown;
 }
@@ -102,7 +106,7 @@ export function mapToolKind(toolName: string): ToolKind {
 		case "bash":
 		case "python":
 			return "execute";
-		case "grep":
+		case "search":
 		case "find":
 		case "ast_grep":
 			return "search";
@@ -118,10 +122,11 @@ export function mapToolKind(toolName: string): ToolKind {
 export function mapAgentSessionEventToAcpSessionUpdates(
 	event: AgentSessionEvent,
 	sessionId: string,
+	options: AcpEventMapperOptions = {},
 ): SessionNotification[] {
 	switch (event.type) {
 		case "message_update":
-			return mapAssistantMessageUpdate(event, sessionId);
+			return mapAssistantMessageUpdate(event, sessionId, options);
 		case "tool_execution_start": {
 			const update: SessionUpdate = {
 				sessionUpdate: "tool_call",
@@ -181,6 +186,7 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 function mapAssistantMessageUpdate(
 	event: Extract<AgentSessionEvent, { type: "message_update" }>,
 	sessionId: string,
+	options: AcpEventMapperOptions,
 ): SessionNotification[] {
 	if (!isAssistantMessage(event.message)) {
 		return [];
@@ -208,10 +214,12 @@ function mapAssistantMessageUpdate(
 		return [];
 	}
 
+	const messageId = options.getMessageId?.(event.message);
 	return [
 		toSessionNotification(sessionId, {
 			sessionUpdate,
 			content: { type: "text", text },
+			messageId,
 		}),
 	];
 }

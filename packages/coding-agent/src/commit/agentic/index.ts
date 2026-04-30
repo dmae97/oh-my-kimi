@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
-import { $env, getProjectDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { $env, getProjectDir, isEnoent, prompt } from "@oh-my-pi/pi-utils";
 import { applyChangelogProposals } from "../../commit/changelog";
 import { detectChangelogBoundaries } from "../../commit/changelog/detect";
 import { parseUnreleasedSection } from "../../commit/changelog/parse";
@@ -8,7 +8,6 @@ import { formatCommitMessage } from "../../commit/message";
 import { resolvePrimaryModel, resolveSmolModel } from "../../commit/model-selection";
 import type { CommitCommandArgs, ConventionalAnalysis } from "../../commit/types";
 import { ModelRegistry } from "../../config/model-registry";
-import { renderPromptTemplate } from "../../config/prompt-templates";
 import { Settings } from "../../config/settings";
 import { discoverAuthStorage, discoverContextFiles } from "../../sdk";
 import * as git from "../../utils/git";
@@ -305,8 +304,8 @@ async function confirmSplitCommitPlan(plan: SplitCommitPlan): Promise<boolean> {
 	}
 	const rl = createInterface({ input: process.stdin, output: process.stdout });
 	try {
-		const prompt = renderPromptTemplate(splitConfirmPrompt, { count: plan.commits.length });
-		const answer = await rl.question(prompt);
+		const splitConfirmQuestion = prompt.render(splitConfirmPrompt, { count: plan.commits.length });
+		const answer = await rl.question(splitConfirmQuestion);
 		return ["y", "yes"].includes(answer.trim().toLowerCase());
 	} finally {
 		rl.close();

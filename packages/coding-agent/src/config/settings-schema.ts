@@ -1,4 +1,6 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
+import { TASK_SIMPLE_MODES } from "../task/simple-mode";
+import { EDIT_MODES } from "../utils/edit-mode";
 
 /** Unified settings schema - single source of truth for all settings.
  * Unified settings schema - single source of truth for all settings.
@@ -57,7 +59,7 @@ export const TAB_METADATA: Record<SettingTab, { label: string; icon: `tab.${stri
 export type StatusLineSegmentId =
 	| "pi"
 	| "model"
-	| "plan_mode"
+	| "mode"
 	| "path"
 	| "git"
 	| "pr"
@@ -74,7 +76,8 @@ export type StatusLineSegmentId =
 	| "session"
 	| "hostname"
 	| "cache_read"
-	| "cache_write";
+	| "cache_write"
+	| "session_name";
 
 interface UiMetadata {
 	tab: SettingTab;
@@ -158,8 +161,8 @@ export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 	},
 	{
 		pattern: "^\\s*(grep|rg|ripgrep|ag|ack)\\s+",
-		tool: "grep",
-		message: "Use the `grep` tool instead of grep/rg. It respects .gitignore and provides structured output.",
+		tool: "search",
+		message: "Use the `search` tool instead of grep/rg. It respects .gitignore and provides structured output.",
 	},
 	{
 		pattern: "^\\s*(find|fd|locate)\\s+.*(-name|-iname|-type|--type|-glob)",
@@ -194,6 +197,15 @@ export const SETTINGS_SCHEMA = {
 	// ────────────────────────────────────────────────────────────────────────
 	lastChangelogVersion: { type: "string", default: undefined },
 
+	autoResume: {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			label: "Auto Resume",
+			description: "Automatically resume the most recent session in the current directory",
+		},
+	},
 	shellPath: { type: "string", default: undefined },
 
 	extensions: { type: "array", default: EMPTY_STRING_ARRAY },
@@ -219,6 +231,8 @@ export const SETTINGS_SCHEMA = {
 	modelRoles: { type: "record", default: EMPTY_STRING_RECORD },
 
 	modelTags: { type: "record", default: EMPTY_MODEL_TAGS_RECORD },
+
+	modelProviderOrder: { type: "array", default: EMPTY_STRING_ARRAY },
 
 	cycleOrder: { type: "array", default: DEFAULT_CYCLE_ORDER },
 
@@ -594,6 +608,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"loop.mode": {
+		type: "enum",
+		values: ["prompt", "compact", "reset"] as const,
+		default: "prompt",
+		ui: {
+			tab: "interaction",
+			label: "Loop Mode",
+			description: "What happens between /loop iterations before re-submitting the prompt",
+			submenu: true,
+		},
+	},
+
 	// Input and startup
 	doubleEscapeAction: {
 		type: "enum",
@@ -797,6 +823,38 @@ export const SETTINGS_SCHEMA = {
 
 	"compaction.remoteEndpoint": { type: "string", default: undefined },
 
+	// Idle compaction
+	"compaction.idleEnabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "context",
+			label: "Idle Compaction",
+			description: "Compact context while idle when token count exceeds threshold",
+		},
+	},
+
+	"compaction.idleThresholdTokens": {
+		type: "number",
+		default: 200000,
+		ui: {
+			tab: "context",
+			label: "Idle Compaction Threshold",
+			description: "Token count above which idle compaction triggers",
+			submenu: true,
+		},
+	},
+
+	"compaction.idleTimeoutSeconds": {
+		type: "number",
+		default: 300,
+		ui: {
+			tab: "context",
+			label: "Idle Compaction Delay",
+			description: "Seconds to wait while idle before compacting",
+			submenu: true,
+		},
+	},
 	// Branch summaries
 	"branchSummary.enabled": {
 		type: "boolean",
@@ -840,6 +898,8 @@ export const SETTINGS_SCHEMA = {
 	"memories.phase2HeartbeatSeconds": { type: "number", default: 30 },
 
 	"memories.rolloutPayloadPercent": { type: "number", default: 0.7 },
+
+	"memories.phase1InputTokenLimit": { type: "number", default: 4000 },
 
 	"memories.fallbackTokenLimit": { type: "number", default: 16000 },
 
@@ -908,12 +968,12 @@ export const SETTINGS_SCHEMA = {
 	// Edit tool
 	"edit.mode": {
 		type: "enum",
-		values: ["replace", "patch", "hashline"] as const,
+		values: EDIT_MODES,
 		default: "hashline",
 		ui: {
 			tab: "editing",
 			label: "Edit Mode",
-			description: "Select the edit tool variant (replace, patch, or hashline)",
+			description: "Select the edit tool variant (replace, patch, hashline, atom, vim, or apply_patch)",
 		},
 	},
 
@@ -958,16 +1018,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"edit.manageImports": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "editing",
-			label: "Manage Imports After Edit",
-			description: "Expose post-edit import/include management for the edit tool",
-		},
-	},
-
 	readLineNumbers: {
 		type: "boolean",
 		default: false,
@@ -984,18 +1034,28 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "editing",
 			label: "Hash Lines",
-			description: "Include line hashes in read output for hashline edit mode (LINE#ID:content)",
+			description: "Include line hashes in read output for hashline edit mode (LINE+ID|content)",
 		},
 	},
 
 	"read.defaultLimit": {
 		type: "number",
-		default: 300,
+		default: 500,
 		ui: {
 			tab: "editing",
 			label: "Default Read Limit",
 			description: "Default number of lines returned when agent calls read without a limit",
 			submenu: true,
+		},
+	},
+
+	"read.toolResultPreview": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "editing",
+			label: "Inline Read Previews",
+			description: "Render read tool results inline in the transcript instead of summary rows",
 		},
 	},
 
@@ -1043,6 +1103,39 @@ export const SETTINGS_SCHEMA = {
 		ui: { tab: "editing", label: "Bash Interceptor", description: "Block shell commands that have dedicated tools" },
 	},
 	"bashInterceptor.patterns": { type: "array", default: DEFAULT_BASH_INTERCEPTOR_RULES },
+
+	// Shell output minimizer
+	"shellMinimizer.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "editing",
+			label: "Shell Minimizer",
+			description: "Compress verbose shell output (git, npm, cargo, etc.) before returning it to the agent",
+		},
+	},
+	"shellMinimizer.settingsPath": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "editing",
+			label: "Minimizer Settings Path",
+			description: "Optional TOML file with per-command minimizer overrides",
+			submenu: true,
+		},
+	},
+	"shellMinimizer.only": { type: "array", default: EMPTY_STRING_ARRAY },
+	"shellMinimizer.except": { type: "array", default: EMPTY_STRING_ARRAY },
+	"shellMinimizer.maxCaptureBytes": {
+		type: "number",
+		default: 4 * 1024 * 1024,
+		ui: {
+			tab: "editing",
+			label: "Minimizer Capture Limit",
+			description: "Maximum captured output bytes before falling back to raw streaming",
+			submenu: true,
+		},
+	},
 
 	// Python
 	"python.toolMode": {
@@ -1118,30 +1211,30 @@ export const SETTINGS_SCHEMA = {
 		ui: { tab: "tools", label: "Find", description: "Enable the find tool for file searching" },
 	},
 
-	"grep.enabled": {
+	"search.enabled": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "tools", label: "Grep", description: "Enable the grep tool for content searching" },
+		ui: { tab: "tools", label: "Search", description: "Enable the search tool for content searching" },
 	},
 
-	"grep.contextBefore": {
+	"search.contextBefore": {
 		type: "number",
-		default: 0,
+		default: 1,
 		ui: {
 			tab: "tools",
-			label: "Grep Context Before",
-			description: "Lines of context before each grep match",
+			label: "Search Context Before",
+			description: "Lines of context before each search match",
 			submenu: true,
 		},
 	},
 
-	"grep.contextAfter": {
+	"search.contextAfter": {
 		type: "number",
-		default: 0,
+		default: 3,
 		ui: {
 			tab: "tools",
-			label: "Grep Context After",
-			description: "Lines of context after each grep match",
+			label: "Search Context After",
+			description: "Lines of context after each search match",
 			submenu: true,
 		},
 	},
@@ -1166,6 +1259,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"irc.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			label: "IRC",
+			description: "Enable agent-to-agent IRC messaging via the irc tool",
+		},
+	},
+
 	// Optional tools
 	"notebook.enabled": {
 		type: "boolean",
@@ -1183,6 +1286,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"debug.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			label: "Debug",
+			description: "Enable the debug tool for DAP-based debugging",
+		},
+	},
+
 	"calc.enabled": {
 		type: "boolean",
 		default: false,
@@ -1190,6 +1303,17 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "Calculator",
 			description: "Enable the calculator tool for basic calculations",
+		},
+	},
+
+	"recipe.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			label: "Recipe",
+			description:
+				"Enable the recipe tool when a justfile / package.json / Cargo.toml / Makefile / Taskfile is present",
 		},
 	},
 
@@ -1226,7 +1350,8 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "tools",
 			label: "GitHub CLI",
-			description: "Enable read-only gh_* tools for GitHub repository, issue, pull request, diff, and search access",
+			description:
+				"Enable the github tool (op-based dispatch for repository, issue, pull request, diff, search, checkout, push, and Actions watch workflows)",
 		},
 	},
 
@@ -1306,6 +1431,39 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "Max Async Jobs",
 			description: "Maximum concurrent background jobs (1-100)",
+			submenu: true,
+		},
+	},
+
+	"async.pollWaitDuration": {
+		type: "enum",
+		values: ["5s", "10s", "30s", "1m", "5m"] as const,
+		default: "30s",
+		ui: {
+			tab: "tools",
+			label: "Poll Wait Duration",
+			description: "How long the poll tool waits for background job updates before returning the current state",
+			submenu: true,
+		},
+	},
+
+	"bash.autoBackground.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			label: "Bash Auto-Background",
+			description: "Automatically background long-running bash commands and deliver the result later",
+		},
+	},
+
+	"bash.autoBackground.thresholdMs": {
+		type: "number",
+		default: 60_000,
+		ui: {
+			tab: "tools",
+			label: "Bash Auto-Background Delay",
+			description: "Milliseconds to wait before a bash command is moved to the background (0 = immediately)",
 			submenu: true,
 		},
 	},
@@ -1409,6 +1567,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"task.simple": {
+		type: "enum",
+		values: TASK_SIMPLE_MODES,
+		default: "default",
+		ui: {
+			tab: "tasks",
+			label: "Task Input Mode",
+			description: "How much shared structure the task tool accepts (default, schema-free, or independent)",
+			submenu: true,
+		},
+	},
+
 	"task.maxConcurrency": {
 		type: "number",
 		default: 32,
@@ -1490,6 +1660,22 @@ export const SETTINGS_SCHEMA = {
 		ui: { tab: "tasks", label: "Claude Project Commands", description: "Load commands from .claude/commands/" },
 	},
 
+	"commands.enableOpencodeUser": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tasks",
+			label: "OpenCode User Commands",
+			description: "Load commands from ~/.config/opencode/commands/",
+		},
+	},
+
+	"commands.enableOpencodeProject": {
+		type: "boolean",
+		default: true,
+		ui: { tab: "tasks", label: "OpenCode Project Commands", description: "Load commands from .opencode/commands/" },
+	},
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Providers
 	// ────────────────────────────────────────────────────────────────────────
@@ -1519,6 +1705,7 @@ export const SETTINGS_SCHEMA = {
 			"kagi",
 			"synthetic",
 			"parallel",
+			"searxng",
 		] as const,
 		default: "auto",
 		ui: {
@@ -1530,7 +1717,7 @@ export const SETTINGS_SCHEMA = {
 	},
 	"providers.image": {
 		type: "enum",
-		values: ["auto", "gemini", "openrouter"] as const,
+		values: ["auto", "openai", "gemini", "openrouter"] as const,
 		default: "auto",
 		ui: {
 			tab: "providers",
@@ -1599,6 +1786,42 @@ export const SETTINGS_SCHEMA = {
 		ui: { tab: "providers", label: "Exa Websets", description: "Webset management and enrichment tools" },
 	},
 
+	// SearXNG
+	"searxng.endpoint": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "providers",
+			label: "SearXNG Endpoint",
+			description: "Self-hosted search base URL",
+		},
+	},
+
+	"searxng.token": {
+		type: "string",
+		default: undefined,
+	},
+
+	"searxng.basicUsername": {
+		type: "string",
+		default: undefined,
+	},
+
+	"searxng.basicPassword": {
+		type: "string",
+		default: undefined,
+	},
+
+	"searxng.categories": {
+		type: "string",
+		default: undefined,
+	},
+
+	"searxng.language": {
+		type: "string",
+		default: undefined,
+	},
+
 	"commit.mapReduceEnabled": { type: "boolean", default: true },
 
 	"commit.mapReduceMinFiles": { type: "number", default: 4 },
@@ -1610,6 +1833,16 @@ export const SETTINGS_SCHEMA = {
 	"commit.mapReduceMaxConcurrency": { type: "number", default: 5 },
 
 	"commit.changelogMaxDiffChars": { type: "number", default: 120000 },
+
+	"dev.autoqa": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			label: "Auto QA",
+			description: "Enable automated tool issue reporting (report_tool_issue) for all agents",
+		},
+	},
 
 	"thinkingBudgets.minimal": { type: "number", default: 1024 },
 
@@ -1711,6 +1944,9 @@ export interface CompactionSettings {
 	autoContinue: boolean;
 	remoteEnabled: boolean;
 	remoteEndpoint: string | undefined;
+	idleEnabled: boolean;
+	idleThresholdTokens: number;
+	idleTimeoutSeconds: number;
 }
 
 export interface ContextPromotionSettings {
@@ -1821,6 +2057,14 @@ export interface BashInterceptorRule {
 	allowSubcommands?: string[];
 }
 
+export interface ShellMinimizerSettings {
+	enabled: boolean;
+	settingsPath: string | undefined;
+	only: string[];
+	except: string[];
+	maxCaptureBytes: number;
+}
+
 /** Map group prefix -> typed settings interface */
 export interface GroupTypeMap {
 	compaction: CompactionSettings;
@@ -1838,6 +2082,7 @@ export interface GroupTypeMap {
 	modelRoles: Record<string, string>;
 	modelTags: ModelTagsSettings;
 	cycleOrder: string[];
+	shellMinimizer: ShellMinimizerSettings;
 }
 
 export type GroupPrefix = keyof GroupTypeMap;

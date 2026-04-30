@@ -14,7 +14,7 @@ import type { MCPManager } from "../mcp";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
-import type { ExitPlanModeDetails } from "../tools";
+import type { ExitPlanModeDetails, LspStartupServerInfo } from "../tools";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import type { CustomEditor } from "./components/custom-editor";
@@ -46,6 +46,7 @@ export type TodoItem = {
 	content: string;
 	status: TodoStatus;
 	details?: string;
+	notes?: string[];
 };
 
 export type TodoPhase = {
@@ -76,7 +77,7 @@ export interface InteractiveModeContext {
 	agent: AgentSession["agent"];
 	historyStorage?: HistoryStorage;
 	mcpManager?: MCPManager;
-	lspServers?: Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>;
+	lspServers?: LspStartupServerInfo[];
 
 	// State
 	isInitialized: boolean;
@@ -85,6 +86,8 @@ export interface InteractiveModeContext {
 	toolOutputExpanded: boolean;
 	todoExpanded: boolean;
 	planModeEnabled: boolean;
+	loopModeEnabled: boolean;
+	loopPrompt?: string;
 	planModePlanFilePath?: string;
 	hideThinkingBlock: boolean;
 	pendingImages: ImageContent[];
@@ -105,6 +108,7 @@ export interface InteractiveModeContext {
 	unsubscribe?: () => void;
 	onInputCallback?: (input: SubmittedUserInput) => void;
 	optimisticUserMessageSignature: string | undefined;
+	locallySubmittedUserSignatures: Set<string>;
 	lastSigintTime: number;
 	lastEscapeTime: number;
 	shutdownRequested: boolean;
@@ -170,15 +174,18 @@ export interface InteractiveModeContext {
 	handleExportCommand(text: string): Promise<void>;
 	handleShareCommand(): Promise<void>;
 	handleCopyCommand(sub?: string): void;
+	handleTodoCommand(args: string): Promise<void>;
 	handleSessionCommand(): Promise<void>;
 	handleJobsCommand(): Promise<void>;
 	handleUsageCommand(reports?: UsageReport[] | null): Promise<void>;
 	handleChangelogCommand(showFull?: boolean): Promise<void>;
 	handleHotkeysCommand(): void;
 	handleToolsCommand(): void;
+	handleContextCommand(): void;
 	handleDumpCommand(): void;
 	handleDebugTranscriptCommand(): Promise<void>;
 	handleClearCommand(): Promise<void>;
+	handleDropCommand(): Promise<void>;
 	handleForkCommand(): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
@@ -187,6 +194,7 @@ export interface InteractiveModeContext {
 	handleCompactCommand(customInstructions?: string): Promise<void>;
 	handleHandoffCommand(customInstructions?: string): Promise<void>;
 	handleMoveCommand(targetPath: string): Promise<void>;
+	handleRenameCommand(title: string): Promise<void>;
 	handleMemoryCommand(text: string): Promise<void>;
 	handleSTTToggle(): Promise<void>;
 	executeCompaction(customInstructionsOrOptions?: string | CompactOptions, isAuto?: boolean): Promise<void>;
@@ -208,6 +216,8 @@ export interface InteractiveModeContext {
 	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void>;
 	showHookConfirm(title: string, message: string): Promise<boolean>;
 	showDebugSelector(): void;
+	showSessionObserver(): void;
+	resetObserverRegistry(): void;
 
 	// Input handling
 	handleCtrlC(): void;
@@ -227,6 +237,9 @@ export interface InteractiveModeContext {
 	openExternalEditor(): void;
 	registerExtensionShortcuts(): void;
 	handlePlanModeCommand(initialPrompt?: string): Promise<void>;
+	handleLoopCommand(): Promise<void>;
+	disableLoopMode(): void;
+	pauseLoop(): void;
 	handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void>;
 
 	// Hook UI methods

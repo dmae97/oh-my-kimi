@@ -43,23 +43,24 @@ export function createAbortableStream<T>(stream: ReadableStream<T>, signal?: Abo
  * @param pr - Function returning a promise to run
  * @returns Promise resolving as `pr` would, or rejecting on abort
  */
-export function untilAborted<T>(signal: AbortSignal | undefined | null, pr: () => Promise<T>): Promise<T> {
-	if (!signal) return pr();
+export function untilAborted<T>(
+	signal: AbortSignal | undefined | null,
+	pr: Promise<T> | (() => Promise<T>),
+): Promise<T> {
+	if (!signal) return typeof pr === "function" ? pr() : pr;
 	if (signal.aborted) return Promise.reject(new AbortError(signal));
 
 	const { promise, resolve, reject } = Promise.withResolvers<T>();
 	const onAbort = () => reject(new AbortError(signal));
 	signal.addEventListener("abort", onAbort, { once: true });
-	const cleanup = () => signal.removeEventListener("abort", onAbort);
 
 	void (async () => {
 		try {
-			const out = await pr();
-			resolve(out);
+			resolve(await (typeof pr === "function" ? pr() : pr));
 		} catch (err) {
 			reject(err);
 		} finally {
-			cleanup();
+			signal.removeEventListener("abort", onAbort);
 		}
 	})();
 

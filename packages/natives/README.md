@@ -38,7 +38,7 @@ const pngBytes = await resized.encode(ImageFormat.PNG, 100);
 
 ```bash
 # Build native addon from workspace root (requires Rust)
-bun run build:native
+bun run build
 
 # Type check
 bun run check

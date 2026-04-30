@@ -4,7 +4,7 @@ import { YAML } from "bun";
 import type { SecretEntry } from "./obfuscator";
 import { compileSecretRegex } from "./regex";
 
-export { obfuscateMessages, type SecretEntry, SecretObfuscator } from "./obfuscator";
+export { deobfuscateSessionContext, obfuscateMessages, type SecretEntry, SecretObfuscator } from "./obfuscator";
 
 /**
  * Load secrets from project-local and global secrets.yml files.

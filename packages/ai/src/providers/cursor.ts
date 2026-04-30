@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import http2 from "node:http2";
 import { create, fromBinary, fromJson, type JsonValue, toBinary, toJson } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
+import { sanitizeText } from "@oh-my-pi/pi-natives";
 import { $env } from "@oh-my-pi/pi-utils";
 import { calculateCost } from "../models";
 import type {
@@ -105,6 +106,7 @@ import {
 	type ShellArgs,
 	ShellFailureSchema,
 	ShellRejectedSchema,
+	type ShellResult,
 	ShellResultSchema,
 	type ShellStream,
 	ShellStreamExitSchema,
@@ -674,6 +676,31 @@ function sendShellStreamEvent(
 	sendExecClientMessage(h2Request, execMsg, "shellStream", create(ShellStreamSchema, { event }));
 }
 
+function sanitizeShellExecResult(execResult: ShellResult): ShellResult {
+	const result = execResult.result;
+	if (!result) return execResult;
+
+	switch (result.case) {
+		case "success":
+		case "failure": {
+			const value = result.value;
+			return {
+				...execResult,
+				result: {
+					case: result.case,
+					value: {
+						...value,
+						stdout: value.stdout ? sanitizeText(value.stdout) : value.stdout,
+						stderr: value.stderr ? sanitizeText(value.stderr) : value.stderr,
+					},
+				},
+			} as ShellResult;
+		}
+		default:
+			return execResult;
+	}
+}
+
 async function handleShellStreamArgs(
 	args: ShellArgs,
 	execMsg: ExecServerMessage,
@@ -695,18 +722,95 @@ async function handleShellStreamArgs(
 
 	sendShellStreamEvent(h2Request, execMsg, { case: "start", value: create(ShellStreamStartSchema, {}) });
 
+	// Buffer for incomplete ANSI sequences across chunks
+	let stdoutBuffer = "";
+	let stderrBuffer = "";
+
+	const incompleteEscapeRegex = /\x1b(|\[|\[\d*|\[\?|\[\?\d*|\]\d*;?)$/;
+
+	const flushStdout = () => {
+		if (stdoutBuffer) {
+			let safeEnd = stdoutBuffer.length;
+			const match = stdoutBuffer.match(incompleteEscapeRegex);
+			if (match && match[0].length > 0) {
+				safeEnd = stdoutBuffer.length - match[0].length;
+			}
+			const toSend = stdoutBuffer.slice(0, safeEnd);
+			const remaining = stdoutBuffer.slice(safeEnd);
+			if (toSend) {
+				sendShellStreamEvent(h2Request, execMsg, {
+					case: "stdout",
+					value: create(ShellStreamStdoutSchema, { data: sanitizeText(toSend) }),
+				});
+			}
+			stdoutBuffer = remaining;
+		}
+	};
+
+	const flushStderr = () => {
+		if (stderrBuffer) {
+			let safeEnd = stderrBuffer.length;
+			const match = stderrBuffer.match(incompleteEscapeRegex);
+			if (match && match[0].length > 0) {
+				safeEnd = stderrBuffer.length - match[0].length;
+			}
+			const toSend = stderrBuffer.slice(0, safeEnd);
+			const remaining = stderrBuffer.slice(safeEnd);
+			if (toSend) {
+				sendShellStreamEvent(h2Request, execMsg, {
+					case: "stderr",
+					value: create(ShellStreamStderrSchema, { data: sanitizeText(toSend) }),
+				});
+			}
+			stderrBuffer = remaining;
+		}
+	};
+
+	let stdoutFlushTimer: NodeJS.Timeout | null = null;
+	let stderrFlushTimer: NodeJS.Timeout | null = null;
+
+	const scheduleStdoutFlush = () => {
+		if (!stdoutFlushTimer) {
+			stdoutFlushTimer = setTimeout(() => {
+				stdoutFlushTimer = null;
+				flushStdout();
+			}, 100);
+		}
+	};
+
+	const scheduleStderrFlush = () => {
+		if (!stderrFlushTimer) {
+			stderrFlushTimer = setTimeout(() => {
+				stderrFlushTimer = null;
+				flushStderr();
+			}, 100);
+		}
+	};
+
 	const streamCallbacks: CursorShellStreamCallbacks = {
 		onStdout(data: string) {
-			sendShellStreamEvent(h2Request, execMsg, {
-				case: "stdout",
-				value: create(ShellStreamStdoutSchema, { data }),
-			});
+			stdoutBuffer += data;
+			if (stdoutBuffer.includes("\n") || stdoutBuffer.length > 4096) {
+				if (stdoutFlushTimer) {
+					clearTimeout(stdoutFlushTimer);
+					stdoutFlushTimer = null;
+				}
+				flushStdout();
+			} else {
+				scheduleStdoutFlush();
+			}
 		},
 		onStderr(data: string) {
-			sendShellStreamEvent(h2Request, execMsg, {
-				case: "stderr",
-				value: create(ShellStreamStderrSchema, { data }),
-			});
+			stderrBuffer += data;
+			if (stderrBuffer.includes("\n") || stderrBuffer.length > 4096) {
+				if (stderrFlushTimer) {
+					clearTimeout(stderrFlushTimer);
+					stderrFlushTimer = null;
+				}
+				flushStderr();
+			} else {
+				scheduleStderrFlush();
+			}
 		},
 	};
 
@@ -730,10 +834,18 @@ async function handleShellStreamArgs(
 	// When using the batch handler (no shellStream), send buffered stdout/stderr
 	// after execution completes. With shellStream these were already sent in real time.
 	const sendBufferedOutput = !streamHandler;
-	sendShellStreamExitFromResult(h2Request, execMsg, execResult, sendBufferedOutput);
+	const sanitizedExecResult = sanitizeShellExecResult(execResult);
+
+	// Flush any remaining buffered output before sending results
+	if (stdoutFlushTimer) clearTimeout(stdoutFlushTimer);
+	if (stderrFlushTimer) clearTimeout(stderrFlushTimer);
+	flushStdout();
+	flushStderr();
+
+	sendShellStreamExitFromResult(h2Request, execMsg, sanitizedExecResult, sendBufferedOutput);
 	// Cursor can keep the turn pending when it receives only stream deltas.
 	// Send the final structured shellResult as completion acknowledgement.
-	sendExecClientMessage(h2Request, execMsg, "shellResult", execResult);
+	sendExecClientMessage(h2Request, execMsg, "shellResult", sanitizedExecResult);
 	sendExecClientStreamClose(h2Request, execMsg);
 
 	log("shellStream", "done", { elapsed: Date.now() - startTs });
@@ -742,7 +854,7 @@ async function handleShellStreamArgs(
 function sendShellStreamExitFromResult(
 	h2Request: http2.ClientHttp2Stream,
 	execMsg: ExecServerMessage,
-	execResult: { result: { case?: string; value?: any } },
+	execResult: ShellResult,
 	sendBufferedOutput: boolean,
 ): void {
 	const result = execResult.result;
@@ -753,13 +865,13 @@ function sendShellStreamExitFromResult(
 				if (value.stdout) {
 					sendShellStreamEvent(h2Request, execMsg, {
 						case: "stdout",
-						value: create(ShellStreamStdoutSchema, { data: value.stdout }),
+						value: create(ShellStreamStdoutSchema, { data: sanitizeText(value.stdout) }),
 					});
 				}
 				if (value.stderr) {
 					sendShellStreamEvent(h2Request, execMsg, {
 						case: "stderr",
-						value: create(ShellStreamStderrSchema, { data: value.stderr }),
+						value: create(ShellStreamStderrSchema, { data: sanitizeText(value.stderr) }),
 					});
 				}
 			}
@@ -779,13 +891,13 @@ function sendShellStreamExitFromResult(
 				if (value.stdout) {
 					sendShellStreamEvent(h2Request, execMsg, {
 						case: "stdout",
-						value: create(ShellStreamStdoutSchema, { data: value.stdout }),
+						value: create(ShellStreamStdoutSchema, { data: sanitizeText(value.stdout) }),
 					});
 				}
 				if (value.stderr) {
 					sendShellStreamEvent(h2Request, execMsg, {
 						case: "stderr",
-						value: create(ShellStreamStderrSchema, { data: value.stderr }),
+						value: create(ShellStreamStderrSchema, { data: sanitizeText(value.stderr) }),
 					});
 				}
 			}
@@ -970,7 +1082,8 @@ async function handleExecServerMessage(
 				reason => buildShellRejectedResult(normalizedArgs.command, normalizedArgs.workingDirectory, reason),
 				error => buildShellFailureResult(normalizedArgs.command, normalizedArgs.workingDirectory, error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "shellResult", execResult);
+			const sanitizedExecResult = sanitizeShellExecResult(execResult);
+			sendExecClientMessage(h2Request, execMsg, "shellResult", sanitizedExecResult);
 			return;
 		}
 		case "shellStreamArgs": {
@@ -1934,6 +2047,12 @@ function createBlobId(data: Uint8Array): Uint8Array {
 	return new Uint8Array(createHash("sha256").update(data).digest());
 }
 
+function storeCursorBlob(blobStore: Map<string, Uint8Array>, data: Uint8Array): Uint8Array {
+	const blobId = createBlobId(data);
+	blobStore.set(Buffer.from(blobId).toString("hex"), data);
+	return blobId;
+}
+
 const CURSOR_NATIVE_TOOL_NAMES = new Set(["bash", "read", "write", "delete", "ls", "grep", "lsp", "todo_write"]);
 
 function buildMcpToolDefinitions(tools: Tool[] | undefined): McpToolDefinition[] {
@@ -1990,12 +2109,88 @@ function extractAssistantMessageText(msg: Message): string {
 }
 
 /**
- * Convert context.messages to Cursor's serialized ConversationTurn format.
+ * Derive a stable, UUID-formatted `message_id` from a content key.
+ * Ensures identical historical messages hash to the same blob IDs across
+ * requests, so `conversationBlobStores` does not grow unboundedly and
+ * unchanged history reuses existing blob IDs.
+ */
+function deterministicMessageId(key: string): string {
+	const hex = createHash("sha256").update(key).digest("hex");
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
+ * Index of the last user/developer message in `messages`, or -1 if none.
+ * Used to exclude the current user turn from history builders — it goes in
+ * `ConversationActionSchema.userMessageAction`, not in history structures.
+ */
+function findLastUserMessageIndex(messages: Message[]): number {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const role = messages[i].role;
+		if (role === "user" || role === "developer") {
+			return i;
+		}
+	}
+	return -1;
+}
+
+/**
+ * Build `ConversationStateStructure.rootPromptMessagesJson` blob IDs for the
+ * system prompt plus prior conversation history, as JSON blobs matching
+ * Cursor's internal Vercel-AI-SDK-shaped message format.
+ *
+ * Cursor's server uses `rootPromptMessagesJson` (not `turns[]`) to build the
+ * actual model prompt. `turns[]` is UI/display metadata. Without populating
+ * this field, multi-turn conversations lose prior context — the model sees
+ * only an empty placeholder where historical user turns should be.
+ * The last user message is excluded because it is sent in the action.
+ */
+function buildRootPromptMessagesJson(
+	messages: Message[],
+	systemPromptId: Uint8Array,
+	blobStore: Map<string, Uint8Array>,
+): Uint8Array[] {
+	const entries: Uint8Array[] = [systemPromptId];
+	const lastUserIdx = findLastUserMessageIndex(messages);
+
+	const pushJson = (obj: unknown) => {
+		const bytes = new TextEncoder().encode(JSON.stringify(obj));
+		entries.push(storeCursorBlob(blobStore, bytes));
+	};
+
+	for (let i = 0; i < messages.length; i++) {
+		if (i === lastUserIdx) break;
+		const msg = messages[i];
+		if (msg.role === "user" || msg.role === "developer") {
+			const text = extractUserMessageText(msg);
+			if (!text) continue;
+			pushJson({ role: "user", content: [{ type: "text", text }] });
+		} else if (msg.role === "assistant") {
+			const text = extractAssistantMessageText(msg);
+			if (!text) continue;
+			pushJson({ role: "assistant", content: [{ type: "text", text }] });
+		} else if (msg.role === "toolResult") {
+			const text = toolResultToText(msg);
+			if (!text) continue;
+			pushJson({
+				role: "user",
+				content: [{ type: "text", text: `[Tool Result]\n${text}` }],
+			});
+		}
+	}
+
+	return entries;
+}
+
+/**
+ * Convert context.messages to Cursor's ConversationTurnStructure blob IDs.
  * Groups messages into turns: each turn is a user message followed by the assistant's response.
  * Excludes the last user message (which goes in the action).
- * Returns serialized bytes for ConversationStateStructure.turns field.
+ *
+ * Each `AgentConversationTurnStructure.user_message`, `steps[]`, and the outer
+ * `ConversationStateStructure.turns[]` entry is a blob ID into `blobStore`.
  */
-function buildConversationTurns(messages: Message[]): Uint8Array[] {
+function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint8Array>): Uint8Array[] {
 	const turns: Uint8Array[] = [];
 
 	// Find turn boundaries - each turn starts with a user message
@@ -2030,12 +2225,13 @@ function buildConversationTurns(messages: Message[]): Uint8Array[] {
 
 		const userMessage = create(UserMessageSchema, {
 			text: userText,
-			messageId: crypto.randomUUID(),
+			messageId: deterministicMessageId(`u:${turns.length}:${userText}`),
 		});
 		const userMessageBytes = toBinary(UserMessageSchema, userMessage);
+		const userMessageBlobId = storeCursorBlob(blobStore, userMessageBytes);
 
 		// Collect and serialize steps until next user message
-		const stepBytes: Uint8Array[] = [];
+		const stepBlobIds: Uint8Array[] = [];
 		i++;
 
 		while (i < messages.length && messages[i].role !== "user" && messages[i].role !== "developer") {
@@ -2050,7 +2246,7 @@ function buildConversationTurns(messages: Message[]): Uint8Array[] {
 							value: create(AssistantMessageSchema, { text }),
 						},
 					});
-					stepBytes.push(toBinary(ConversationStepSchema, step));
+					stepBlobIds.push(storeCursorBlob(blobStore, toBinary(ConversationStepSchema, step)));
 				}
 			} else if (stepMsg.role === "toolResult") {
 				// Include tool results as assistant text for context
@@ -2062,17 +2258,18 @@ function buildConversationTurns(messages: Message[]): Uint8Array[] {
 							value: create(AssistantMessageSchema, { text: `[Tool Result]\n${text}` }),
 						},
 					});
-					stepBytes.push(toBinary(ConversationStepSchema, step));
+					stepBlobIds.push(storeCursorBlob(blobStore, toBinary(ConversationStepSchema, step)));
 				}
 			}
 
 			i++;
 		}
 
-		// Create the serialized turn using Structure types (bytes)
+		// Create the serialized turn using Structure types. The bytes fields
+		// (user_message, steps) are blob IDs resolved through the KV store.
 		const agentTurn = create(AgentConversationTurnStructureSchema, {
-			userMessage: userMessageBytes,
-			steps: stepBytes,
+			userMessage: userMessageBlobId,
+			steps: stepBlobIds,
 		});
 		const turn = create(ConversationTurnStructureSchema, {
 			turn: {
@@ -2080,7 +2277,7 @@ function buildConversationTurns(messages: Message[]): Uint8Array[] {
 				value: agentTurn,
 			},
 		});
-		turns.push(toBinary(ConversationTurnStructureSchema, turn));
+		turns.push(storeCursorBlob(blobStore, toBinary(ConversationTurnStructureSchema, turn)));
 	}
 
 	return turns;
@@ -2107,8 +2304,7 @@ function buildGrpcRequest(
 		content: context.systemPrompt || "You are a helpful assistant.",
 	});
 	const systemPromptBytes = new TextEncoder().encode(systemPromptJson);
-	const systemPromptId = createBlobId(systemPromptBytes);
-	blobStore.set(Buffer.from(systemPromptId).toString("hex"), systemPromptBytes);
+	const systemPromptId = storeCursorBlob(blobStore, systemPromptBytes);
 
 	const lastMessage = context.messages[context.messages.length - 1];
 	const userText =
@@ -2135,15 +2331,21 @@ function buildGrpcRequest(
 		},
 	});
 
-	// Build conversation turns from prior messages (excluding the last user message)
-	const turns = buildConversationTurns(context.messages);
+	// Build conversation turns from prior messages (excluding the last user message).
+	// This populates the UI-side history view (`turns[]`).
+	const turns = buildConversationTurns(context.messages, blobStore);
 
+	// Build `rootPromptMessagesJson` from prior messages. Cursor's server uses this
+	// field (not `turns[]`) to construct the actual model prompt; if we only send the
+	// system prompt here, multi-turn conversations lose prior context and the model
+	// sees only the current user message.
+	const rootPromptMessagesJson = buildRootPromptMessagesJson(context.messages, systemPromptId, blobStore);
+
+	// Preserve cached non-history state fields (todos, file states, summaries, etc.)
+	// when the system prompt is unchanged; otherwise start fresh.
 	const hasMatchingPrompt = state.conversationState?.rootPromptMessagesJson?.some(entry =>
 		Buffer.from(entry).equals(systemPromptId),
 	);
-
-	// Use cached state if available and system prompt matches, but always update turns
-	// from context.messages to ensure full conversation history is sent
 	const baseState =
 		state.conversationState && hasMatchingPrompt
 			? state.conversationState
@@ -2162,10 +2364,13 @@ function buildGrpcRequest(
 					readPaths: [],
 				});
 
-	// Always populate turns from context.messages to ensure Cursor sees full conversation
+	// Always override `rootPromptMessagesJson` and `turns` with content freshly built from
+	// `context.messages`. The server-echoed checkpoint replaces historical user entries
+	// with empty placeholders, so we cannot rely on the cached `rootPromptMessagesJson`.
 	const conversationState = create(ConversationStateStructureSchema, {
 		...baseState,
-		turns: turns.length > 0 ? turns : baseState.turns,
+		rootPromptMessagesJson,
+		turns,
 	});
 
 	const modelDetails = create(ModelDetailsSchema, {

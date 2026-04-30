@@ -77,6 +77,19 @@ function formatCompatibilityIssues(
 }
 
 describe("builtin tool schemas provider compatibility", () => {
+	it("keeps task and todo_write strict-compatible for OpenAI-style providers", async () => {
+		const toolSchemas = await collectToolSchemas();
+		for (const toolName of ["task", "todo_write"]) {
+			const entry = toolSchemas.find(tool => tool.name === toolName);
+			expect(entry).toBeDefined();
+			if (!entry) {
+				continue;
+			}
+			const strictResult = adaptSchemaForStrict(entry.schema, true);
+			expect(strictResult.strict).toBe(true);
+		}
+	});
+
 	it("keeps all builtin and hidden tool schemas valid after provider enforcement", async () => {
 		const toolSchemas = await collectToolSchemas();
 		const failures: string[] = [];

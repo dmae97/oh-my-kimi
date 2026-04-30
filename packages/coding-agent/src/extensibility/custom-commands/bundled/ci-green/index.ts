@@ -1,4 +1,4 @@
-import { renderPromptTemplate } from "../../../../config/prompt-templates";
+import { prompt } from "@oh-my-pi/pi-utils";
 import type { CustomCommand, CustomCommandAPI } from "../../../../extensibility/custom-commands/types";
 import type { HookCommandContext } from "../../../../extensibility/hooks/types";
 import ciGreenRequestTemplate from "../../../../prompts/ci-green-request.md" with { type: "text" };
@@ -20,6 +20,6 @@ export class GreenCommand implements CustomCommand {
 
 	async execute(_args: string[], _ctx: HookCommandContext): Promise<string> {
 		const headTag = await getHeadTag(this.api);
-		return renderPromptTemplate(ciGreenRequestTemplate, { headTag });
+		return prompt.render(ciGreenRequestTemplate, { headTag });
 	}
 }

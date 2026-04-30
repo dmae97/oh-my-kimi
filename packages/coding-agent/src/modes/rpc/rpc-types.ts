@@ -4,11 +4,12 @@
  * Commands are sent as JSON lines on stdin.
  * Responses and events are emitted as JSON lines on stdout.
  */
-import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage, AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Effort, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import type { BashResult } from "../../exec/bash-executor";
 import type { SessionStats } from "../../session/agent-session";
 import type { CompactionResult } from "../../session/compaction";
+import type { TodoPhase } from "../../tools/todo-write";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -25,6 +26,8 @@ export type RpcCommand =
 
 	// State
 	| { id?: string; type: "get_state" }
+	| { id?: string; type: "set_todos"; phases: TodoPhase[] }
+	| { id?: string; type: "set_host_tools"; tools: RpcHostToolDefinition[] }
 
 	// Model
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
@@ -82,6 +85,10 @@ export interface RpcSessionState {
 	autoCompactionEnabled: boolean;
 	messageCount: number;
 	queuedMessageCount: number;
+	todoPhases: TodoPhase[];
+	/** For session dump / export (plain-text parity with /dump). */
+	systemPrompt?: string;
+	dumpTools?: Array<{ name: string; description: string; parameters: unknown }>;
 }
 
 // ============================================================================
@@ -100,6 +107,8 @@ export type RpcResponse =
 
 	// State
 	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }
+	| { id?: string; type: "response"; command: "set_todos"; success: true; data: { todoPhases: TodoPhase[] } }
+	| { id?: string; type: "response"; command: "set_host_tools"; success: true; data: { toolNames: string[] } }
 
 	// Model
 	| {
@@ -227,6 +236,49 @@ export type RpcExtensionUIRequest =
 	  }
 	| { type: "extension_ui_request"; id: string; method: "setTitle"; title: string }
 	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string };
+
+// ============================================================================
+// Host Tool Frames (bidirectional)
+// ============================================================================
+
+export interface RpcHostToolDefinition {
+	name: string;
+	label?: string;
+	description: string;
+	parameters: Record<string, unknown>;
+	hidden?: boolean;
+}
+
+/** Emitted by the RPC server when it needs the host to execute a registered tool. */
+export interface RpcHostToolCallRequest {
+	type: "host_tool_call";
+	id: string;
+	toolCallId: string;
+	toolName: string;
+	arguments: Record<string, unknown>;
+}
+
+/** Emitted by the RPC server when a pending host tool call should be aborted. */
+export interface RpcHostToolCancelRequest {
+	type: "host_tool_cancel";
+	id: string;
+	targetId: string;
+}
+
+/** Sent by the host to stream partial tool updates back to the RPC server. */
+export interface RpcHostToolUpdate {
+	type: "host_tool_update";
+	id: string;
+	partialResult: AgentToolResult<unknown>;
+}
+
+/** Sent by the host to complete a pending tool call. */
+export interface RpcHostToolResult {
+	type: "host_tool_result";
+	id: string;
+	result: AgentToolResult<unknown>;
+	isError?: boolean;
+}
 
 // ============================================================================
 // Extension UI Commands (stdin)

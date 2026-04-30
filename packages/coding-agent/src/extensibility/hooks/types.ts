@@ -9,9 +9,9 @@ import type { ImageContent, Message, Model, TextContent, ToolResultMessage } fro
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
 import type { Rule } from "../../capability/rule";
 import type { ModelRegistry } from "../../config/model-registry";
+import type { EditToolDetails } from "../../edit";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
 import type { Theme } from "../../modes/theme/theme";
-import type { EditToolDetails } from "../../patch";
 import type { CompactionPreparation, CompactionResult } from "../../session/compaction";
 import type { HookMessage } from "../../session/messages";
 import type {
@@ -21,7 +21,7 @@ import type {
 	SessionEntry,
 	SessionManager,
 } from "../../session/session-manager";
-import type { BashToolDetails, FindToolDetails, GrepToolDetails, ReadToolDetails } from "../../tools";
+import type { BashToolDetails, FindToolDetails, ReadToolDetails, SearchToolDetails } from "../../tools";
 import type { TodoItem } from "../../tools/todo-write";
 
 // Re-export for backward compatibility
@@ -394,7 +394,7 @@ export interface TurnEndEvent {
 /** Event data for auto_compaction_start event. */
 export interface AutoCompactionStartEvent {
 	type: "auto_compaction_start";
-	reason: "threshold" | "overflow";
+	reason: "threshold" | "overflow" | "idle";
 	action: "context-full" | "handoff";
 }
 
@@ -494,10 +494,10 @@ export interface WriteToolResultEvent extends ToolResultEventBase {
 	details: undefined;
 }
 
-/** Tool result event for grep tool */
-export interface GrepToolResultEvent extends ToolResultEventBase {
-	toolName: "grep";
-	details: GrepToolDetails | undefined;
+/** Tool result event for search tool */
+export interface SearchToolResultEvent extends ToolResultEventBase {
+	toolName: "search";
+	details: SearchToolDetails | undefined;
 }
 
 /** Tool result event for find tool */
@@ -522,7 +522,7 @@ export type ToolResultEvent =
 	| ReadToolResultEvent
 	| EditToolResultEvent
 	| WriteToolResultEvent
-	| GrepToolResultEvent
+	| SearchToolResultEvent
 	| FindToolResultEvent
 	| CustomToolResultEvent;
 

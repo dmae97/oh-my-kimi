@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "bun:test";
+import { InputController } from "../src/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "../src/modes/types";
 
 type FakeEditor = {
@@ -30,7 +31,6 @@ type FakeEditor = {
 };
 
 async function createContext() {
-	const { InputController } = await import("../src/modes/controllers/input-controller");
 	let editorText = "";
 	const keyMap: Record<string, string[]> = {
 		"app.model.selectTemporary": ["ctrl+y"],

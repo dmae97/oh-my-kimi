@@ -4,7 +4,7 @@
  * Handles `omp setup <component>` to install dependencies for optional features.
  */
 import * as path from "node:path";
-import { APP_NAME, getPythonEnvDir } from "@oh-my-pi/pi-utils";
+import { $which, APP_NAME, getPythonEnvDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import chalk from "chalk";
 import { theme } from "../modes/theme/theme";
@@ -90,12 +90,12 @@ async function checkPythonSetup(): Promise<PythonCheckResult> {
 		managedEnvPath: MANAGED_PYTHON_ENV,
 	};
 
-	const systemPythonPath = Bun.which("python") ?? Bun.which("python3");
+	const systemPythonPath = $which("python") ?? $which("python3");
 	const managedPath = managedPythonPath();
 	const hasManagedEnv = await Bun.file(managedPath).exists();
 
-	result.uvPath = Bun.which("uv") ?? undefined;
-	result.pipPath = Bun.which("pip3") ?? Bun.which("pip") ?? undefined;
+	result.uvPath = $which("uv") ?? undefined;
+	result.pipPath = $which("pip3") ?? $which("pip") ?? undefined;
 
 	const candidates = [systemPythonPath, hasManagedEnv ? managedPath : undefined].filter(
 		(candidate): candidate is string => !!candidate,

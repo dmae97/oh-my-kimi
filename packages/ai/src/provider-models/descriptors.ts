@@ -7,11 +7,13 @@ import type { ModelManagerOptions } from "../model-manager";
 import type { Api, KnownProvider } from "../types";
 import type { OAuthProvider } from "../utils/oauth/types";
 import { googleModelManagerOptions } from "./google";
+import { ollamaCloudModelManagerOptions } from "./ollama";
 import {
 	alibabaCodingPlanModelManagerOptions,
 	anthropicModelManagerOptions,
 	cerebrasModelManagerOptions,
 	cloudflareAiGatewayModelManagerOptions,
+	fireworksModelManagerOptions,
 	githubCopilotModelManagerOptions,
 	groqModelManagerOptions,
 	huggingfaceModelManagerOptions,
@@ -143,6 +145,12 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 		config => cerebrasModelManagerOptions(config),
 		catalog("Cerebras", ["CEREBRAS_API_KEY"]),
 	),
+	catalogDescriptor(
+		"fireworks",
+		"kimi-k2.6",
+		config => fireworksModelManagerOptions(config),
+		catalog("Fireworks", ["FIREWORKS_API_KEY"]),
+	),
 	descriptor("xai", "grok-4-fast-non-reasoning", config => xaiModelManagerOptions(config)),
 	descriptor("mistral", "devstral-medium-latest", config => mistralModelManagerOptions(config)),
 	catalogDescriptor(
@@ -183,6 +191,12 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 		config => ollamaModelManagerOptions(config),
 		catalog("Ollama", ["OLLAMA_API_KEY"]),
 		{ allowUnauthenticated: true },
+	),
+	catalogDescriptor(
+		"ollama-cloud",
+		"gpt-oss:120b",
+		config => ollamaCloudModelManagerOptions(config),
+		catalog("Ollama Cloud", ["OLLAMA_CLOUD_API_KEY"], { oauthProvider: "ollama-cloud" }),
 	),
 	catalogDescriptor(
 		"cloudflare-ai-gateway",

@@ -10,6 +10,7 @@ import {
 	type ToolResultMessage,
 	validateToolArguments,
 } from "@oh-my-pi/pi-ai";
+import { sanitizeText } from "@oh-my-pi/pi-natives";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -125,7 +126,7 @@ function normalizeMessagesForProvider(
 
 export const INTENT_FIELD = "_i";
 
-function injectIntentIntoSchema(schema: unknown): unknown {
+function injectIntentIntoSchema(schema: unknown, mode: "require" | "optional" = "require"): unknown {
 	if (!schema || typeof schema !== "object" || Array.isArray(schema)) return schema;
 	const schemaRecord = schema as Record<string, unknown>;
 	const propertiesValue = schemaRecord.properties;
@@ -140,7 +141,7 @@ function injectIntentIntoSchema(schema: unknown): unknown {
 	if (INTENT_FIELD in properties) {
 		const { [INTENT_FIELD]: intentProp, ...rest } = properties;
 		const needsReorder = Object.keys(properties)[0] !== INTENT_FIELD;
-		const needsRequired = !required.includes(INTENT_FIELD);
+		const needsRequired = mode === "require" && !required.includes(INTENT_FIELD);
 		if (!needsReorder && !needsRequired) return schema;
 		return {
 			...schemaRecord,
@@ -156,24 +157,34 @@ function injectIntentIntoSchema(schema: unknown): unknown {
 			},
 			...properties,
 		},
-		required: [...required, INTENT_FIELD],
+		...(mode === "require" ? { required: [...required, INTENT_FIELD] } : {}),
 	};
 }
 
-function normalizeTools(tools: Context["tools"], injectIntent: boolean): Context["tools"] {
-	return tools?.map(tool => ({
-		...tool,
-		description: tool.description || "",
-		...(injectIntent && { parameters: injectIntentIntoSchema(tool.parameters) as typeof tool.parameters }),
-	}));
+function normalizeTools(tools: AgentContext["tools"], injectIntent: boolean): Context["tools"] {
+	injectIntent = injectIntent && Bun.env.PI_NO_INTENT !== "1";
+	return tools?.map(t => {
+		const intentMode = resolveIntentMode(t.intent);
+		const parameters =
+			injectIntent && intentMode !== "omit"
+				? (injectIntentIntoSchema(t.parameters, intentMode) as typeof t.parameters)
+				: t.parameters;
+		const description = t.description ?? "";
+		return { ...t, parameters, description };
+	});
+}
+
+function resolveIntentMode(intent: AgentTool["intent"]): "require" | "optional" | "omit" {
+	if (typeof intent === "function") return "omit";
+	if (intent === "optional" || intent === "omit") return intent;
+	return "require";
 }
 
 function extractIntent(args: Record<string, unknown>): { intent?: string; strippedArgs: Record<string, unknown> } {
-	const intent = args[INTENT_FIELD];
+	const { [INTENT_FIELD]: intent, ...strippedArgs } = args;
 	if (typeof intent !== "string") {
-		return { strippedArgs: args };
+		return { strippedArgs };
 	}
-	const { [INTENT_FIELD]: _ignored, ...strippedArgs } = args;
 	const trimmed = intent.trim();
 	return { intent: trimmed.length > 0 ? trimmed : undefined, strippedArgs };
 }
@@ -391,6 +402,10 @@ async function streamAssistantResponse(
 				if (partialMessage) {
 					partialMessage = event.partial;
 					context.messages[context.messages.length - 1] = partialMessage;
+					config.onAssistantMessageEvent?.(partialMessage, event);
+					if (signal?.aborted) {
+						continue;
+					}
 					stream.push({
 						type: "message_update",
 						assistantMessageEvent: event,
@@ -449,7 +464,13 @@ async function executeToolCalls(
 
 	const records = toolCalls.map(toolCall => ({
 		toolCall,
-		tool: tools?.find(t => t.name === toolCall.name),
+		// Tools emitted via OpenAI's custom-tool path (e.g. `apply_patch` on GPT-5)
+		// come back under their wire-level name, which may differ from the
+		// harness-internal `name`. Match on either, preferring `name` for
+		// determinism if both somehow collide.
+		tool:
+			tools?.find(t => t.name === toolCall.name) ??
+			tools?.find(t => t.customWireName !== undefined && t.customWireName === toolCall.name),
 		args: toolCall.arguments as Record<string, unknown>,
 		started: false,
 		result: undefined as AgentToolResult<any> | undefined,
@@ -532,6 +553,15 @@ async function executeToolCalls(
 			argsForExecution = strippedArgs;
 			if (intent) {
 				toolCall.intent = intent;
+			} else if (typeof tool?.intent === "function") {
+				try {
+					const derived = tool.intent(strippedArgs as never)?.trim();
+					if (derived) {
+						toolCall.intent = derived;
+					}
+				} catch {
+					// intent function must never break tool execution
+				}
 			}
 		}
 		record.args = argsForExecution;
@@ -578,7 +608,12 @@ async function executeToolCalls(
 						toolCallId: toolCall.id,
 						toolName: toolCall.name,
 						args: argsForExecution,
-						partialResult,
+						partialResult: {
+							...partialResult,
+							content: partialResult.content.map(c =>
+								c.type === "text" ? { ...c, text: sanitizeText(c.text) } : c,
+							),
+						},
 					});
 				},
 				toolContext,

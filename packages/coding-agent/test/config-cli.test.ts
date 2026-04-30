@@ -109,4 +109,36 @@ describe("config CLI schema coverage", () => {
 		expect(parsed.type).toBe("array");
 		expect(parsed.value).toEqual(["claude-opus-4-6", "gpt-5.3-codex"]);
 	});
+	it("sets numeric idle compaction settings from CLI values", async () => {
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		await runConfigCommand({
+			action: "set",
+			key: "compaction.idleThresholdTokens",
+			value: "300000",
+			flags: { json: true },
+		});
+		await runConfigCommand({
+			action: "set",
+			key: "compaction.idleTimeoutSeconds",
+			value: "600",
+			flags: { json: true },
+		});
+		await runConfigCommand({ action: "get", key: "compaction.idleThresholdTokens", flags: { json: true } });
+		await runConfigCommand({ action: "get", key: "compaction.idleTimeoutSeconds", flags: { json: true } });
+
+		const thresholdPayload = logSpy.mock.calls.at(-2)?.[0];
+		const timeoutPayload = logSpy.mock.calls.at(-1)?.[0];
+		expect(typeof thresholdPayload).toBe("string");
+		expect(typeof timeoutPayload).toBe("string");
+		expect(JSON.parse(String(thresholdPayload))).toMatchObject({
+			key: "compaction.idleThresholdTokens",
+			type: "number",
+			value: 300000,
+		});
+		expect(JSON.parse(String(timeoutPayload))).toMatchObject({
+			key: "compaction.idleTimeoutSeconds",
+			type: "number",
+			value: 600,
+		});
+	});
 });

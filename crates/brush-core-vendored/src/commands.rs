@@ -1,14 +1,14 @@
 //! Command execution
 
-use std::{borrow::Cow, ffi::OsStr, fmt::Display, io, sync::Arc};
+use std::{borrow::Cow, ffi::OsStr, fmt::Display, io, io::Write, sync::Arc};
 
 use brush_parser::ast;
 use itertools::Itertools;
-use sys::commands::{CommandExt, CommandFdInjectionExt, CommandFgControlExt};
+use sys::commands::{CommandExt, CommandFdInjectionExt, CommandFgControlExt, CommandSessionExt};
 
 use crate::{
-	ErrorKind, ExecutionControlFlow, ExecutionParameters, ExecutionResult, Shell, ShellFd, builtins,
-	env, error, escape,
+	ErrorKind, ExecutionControlFlow, ExecutionParameters, ExecutionResult, ExternalCommandInfo,
+	ExternalCommandOutputMarkers, Shell, ShellFd, builtins, env, error, escape,
 	interp::{self, Execute, ProcessGroupPolicy},
 	openfiles::{self, OpenFiles},
 	pathsearch, processes,
@@ -296,7 +296,7 @@ async fn invoke_debug_trap_handler_if_registered(
 /// * `path_dirs` - If provided, these directories will be searched for external
 ///   commands; if not provided, the default search logic will be used.
 pub async fn execute(
-	cmd_context: ExecutionContext<'_>,
+	mut cmd_context: ExecutionContext<'_>,
 	process_group_id: &mut Option<i32>,
 	args: Vec<CommandArg>,
 	use_functions: bool,
@@ -325,6 +325,7 @@ pub async fn execute(
 			.funcs()
 			.get(cmd_context.command_name.as_str())
 		{
+			cmd_context.params.disable_command_output_marking();
 			// Strip the function name off args.
 			return invoke_shell_function(func_reg.definition.clone(), cmd_context, &args[1..]).await;
 		}
@@ -391,6 +392,8 @@ pub(crate) fn execute_external_command(
 
 	// Figure out if we should be setting up a new process group.
 	let new_pg = context.should_cmd_lead_own_process_group();
+	let mut marker_output =
+		prepare_output_markers(&context, executable_path, cmd_args.as_slice());
 
 	// Compose the std::process::Command that encapsulates what we want to launch.
 	#[allow(unused_mut, reason = "only mutated on unix platforms")]
@@ -415,9 +418,17 @@ pub(crate) fn execute_external_command(
 
 	// If we're to lead our own process group and stdin is a terminal,
 	// then we need to arrange for the new process to move itself
-	// to the foreground.
-	if new_pg && child_stdin_is_terminal {
-		cmd.take_foreground();
+	// to the foreground. Otherwise (e.g. when brush is embedded as a library
+	// and stdin is not a terminal), detach the child from the controlling
+	// terminal entirely so it cannot steal foreground from the parent and
+	// so any `/dev/tty` access in the child fails fast instead of suspending
+	// it via SIGTTIN/SIGTTOU.
+	if new_pg {
+		if child_stdin_is_terminal {
+			cmd.take_foreground();
+		} else {
+			cmd.detach_session();
+		}
 	}
 
 	// When tracing is enabled, report.
@@ -443,9 +454,21 @@ pub(crate) fn execute_external_command(
 				tracing::warn!("could not retrieve pid for child process");
 			}
 
-			Ok(ExecutionSpawnResult::StartedProcess(processes::ChildProcess::new(pid, child)))
+			let mut child_process = processes::ChildProcess::new(pid, child);
+			if let Some((output, markers)) = marker_output.take() {
+				child_process.set_completion_marker(
+					output,
+					markers.end_marker_prefix,
+					markers.end_marker_suffix,
+				);
+			}
+			Ok(ExecutionSpawnResult::StartedProcess(child_process))
 		},
 		Err(spawn_err) => {
+			if let Some((mut output, markers)) = marker_output.take() {
+				let _ = write_completion_marker(&mut output, &markers, 127);
+			}
+
 			if context.shell.options.interactive {
 				sys::terminal::move_self_to_foreground()?;
 			}
@@ -464,6 +487,36 @@ pub(crate) fn execute_external_command(
 			}
 		},
 	}
+}
+
+fn prepare_output_markers(
+	context: &ExecutionContext<'_>,
+	executable_path: &str,
+	args: &[&String],
+) -> Option<(openfiles::OpenFile, ExternalCommandOutputMarkers)> {
+	let marker = context.params.command_output_marker()?;
+	let markers = marker.markers_for_external_command(ExternalCommandInfo {
+		command_name:    context.command_name.as_str(),
+		executable_path,
+		args:            args.iter().map(|arg| arg.as_str()).collect(),
+	})?;
+	let mut output = context.params.try_stdout(context.shell)?;
+	if output.write_all(markers.start_marker.as_bytes()).is_err() {
+		return None;
+	}
+	if output.flush().is_err() {
+		return None;
+	}
+	Some((output, markers))
+}
+
+fn write_completion_marker(
+	output: &mut openfiles::OpenFile,
+	markers: &ExternalCommandOutputMarkers,
+	exit_code: i32,
+) -> io::Result<()> {
+	write!(output, "{}{}{}", markers.end_marker_prefix, exit_code, markers.end_marker_suffix)?;
+	output.flush()
 }
 
 async fn execute_builtin_command(
@@ -543,6 +596,7 @@ pub(crate) async fn invoke_command_in_subshell_and_get_output(
 	// Get our own set of parameters we can customize and use.
 	let mut params = params.clone();
 	params.process_group_policy = ProcessGroupPolicy::SameProcessGroup;
+	params.disable_command_output_marking();
 
 	// Set up pipe so we can read the output.
 	let (reader, writer) = io::pipe()?;

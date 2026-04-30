@@ -705,6 +705,88 @@
       color: var(--error);
     }
 
+    /* Tool renderer extras */
+    .tool-meta {
+      margin-top: 4px;
+    }
+
+    .tool-badge {
+      display: inline-block;
+      padding: 0 6px;
+      margin-right: 4px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--dim);
+      font-size: 11px;
+      font-weight: normal;
+      vertical-align: baseline;
+    }
+
+    .tool-pattern {
+      color: var(--warning);
+    }
+
+    .tool-args {
+      margin-top: 4px;
+      color: var(--toolOutput);
+    }
+
+    .tool-arg {
+      display: block;
+      line-height: var(--line-height);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .tool-arg-key {
+      color: var(--dim);
+    }
+
+    .tool-arg-val {
+      color: var(--text);
+    }
+
+    .tool-cell {
+      margin-top: var(--line-height);
+    }
+
+    .tool-cell-title {
+      color: var(--dim);
+      font-size: 11px;
+      margin-bottom: 2px;
+    }
+
+    /* Todo write tree */
+    .todo-tree {
+      margin-top: var(--line-height);
+    }
+
+    .todo-phase {
+      margin-top: 6px;
+      color: var(--accent);
+      font-weight: bold;
+    }
+
+    .todo-task {
+      padding-left: 12px;
+      line-height: var(--line-height);
+    }
+
+    .todo-icon {
+      display: inline-block;
+      width: 14px;
+      text-align: center;
+      color: var(--dim);
+    }
+
+    .todo-completed { color: var(--toolDiffAdded); }
+    .todo-completed .todo-icon { color: var(--toolDiffAdded); }
+    .todo-in_progress { color: var(--warning); }
+    .todo-in_progress .todo-icon { color: var(--warning); }
+    .todo-abandoned { color: var(--toolDiffRemoved); }
+    .todo-abandoned .todo-icon { color: var(--toolDiffRemoved); }
+    .todo-pending { color: var(--toolOutput); }
+
     /* Images */
     .message-images {
       margin-bottom: 12px;

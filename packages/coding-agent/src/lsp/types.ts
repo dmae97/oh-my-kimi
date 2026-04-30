@@ -25,10 +25,7 @@ export const lspSchema = Type.Object({
 	),
 	file: Type.Optional(Type.String({ description: "File path" })),
 	line: Type.Optional(Type.Number({ description: "Line number (1-indexed)" })),
-	symbol: Type.Optional(
-		Type.String({ description: "Symbol/substring to locate on the line (used to compute column)" }),
-	),
-	occurrence: Type.Optional(Type.Number({ description: "Symbol occurrence on line (1-indexed, default: 1)" })),
+	symbol: Type.Optional(Type.String({ description: "Symbol/substring to locate on the line" })),
 	query: Type.Optional(Type.String({ description: "Search query or SSR pattern" })),
 	new_name: Type.Optional(Type.String({ description: "New name for rename" })),
 	apply: Type.Optional(Type.Boolean({ description: "Apply edits (default: true)" })),
@@ -91,6 +88,17 @@ export interface Diagnostic {
 	tags?: number[];
 	relatedInformation?: DiagnosticRelatedInformation[];
 	data?: unknown;
+}
+
+export interface PublishedDiagnostics {
+	diagnostics: Diagnostic[];
+	version: number | null;
+}
+
+export interface PublishDiagnosticsParams {
+	uri: string;
+	diagnostics: Diagnostic[];
+	version?: number | null;
 }
 
 // =============================================================================
@@ -392,7 +400,7 @@ export interface LspClient {
 	config: ServerConfig;
 	proc: ptree.ChildProcess<"pipe">;
 	requestId: number;
-	diagnostics: Map<string, Diagnostic[]>;
+	diagnostics: Map<string, PublishedDiagnostics>;
 	diagnosticsVersion: number;
 	openFiles: Map<string, OpenFile>;
 	pendingRequests: Map<number, PendingRequest>;
@@ -400,6 +408,14 @@ export interface LspClient {
 	isReading: boolean;
 	serverCapabilities?: LspServerCapabilities;
 	lastActivity: number;
+	/** Serializes outbound JSON-RPC writes to the server process. */
+	writeQueue: Promise<void>;
+	/** Tracks active work-done progress tokens from the server */
+	activeProgressTokens: Set<string | number>;
+	/** Resolves when the server's initial project loading completes (or after timeout) */
+	projectLoaded: Promise<void>;
+	/** Call to signal that project loading has completed */
+	resolveProjectLoaded: () => void;
 }
 
 // =============================================================================

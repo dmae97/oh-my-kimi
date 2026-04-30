@@ -27,7 +27,7 @@ Terminology follows `docs/natives-architecture.md`:
 
 ## JS API ↔ Rust export mapping
 
-| JS wrapper API | Rust export (`#[napi(js_name = ...)]`) | Rust module |
+| JS wrapper API | Rust export (`#[napi]`, snake_case -> camelCase) | Rust module |
 | --- | --- | --- |
 | `grep(options, onMatch?)` | `grep` | `grep.rs` |
 | `searchContent(content, options)` | `search` | `grep.rs` |
@@ -85,7 +85,7 @@ Terminology follows `docs/natives-architecture.md`:
 
 ### Result shaping back to JS
 
-- Rust `SearchResult`/`GrepResult` fields map to TS types via `#[napi(js_name = ...)]`.
+- Rust `SearchResult`/`GrepResult` fields map to TS types via N-API object field conversion.
 - Counters are clamped to `u32` before crossing N-API.
 - Optional booleans are omitted unless true in some paths (`limitReached`).
 - Streaming callback receives each shaped `GrepMatch` (content or count entry).

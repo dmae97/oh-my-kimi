@@ -8,7 +8,11 @@ use napi::bindgen_prelude::*;
 /// for recursive matching, and close any unclosed `{` alternation groups.
 pub fn build_glob_pattern(glob: &str, recursive: bool) -> String {
 	let normalized = glob.replace('\\', "/");
-	let pattern = if !recursive || normalized.contains('/') || normalized.starts_with("**") {
+	let pattern = if !recursive
+		|| normalized.contains('/')
+		|| normalized.starts_with("**")
+		|| is_exact_brace_union(&normalized)
+	{
 		normalized
 	} else {
 		format!("**/{normalized}")
@@ -58,6 +62,17 @@ fn fix_unclosed_braces(pattern: String) -> String {
 	} else {
 		pattern
 	}
+}
+
+fn is_exact_brace_union(pattern: &str) -> bool {
+	if !(pattern.starts_with('{') && pattern.ends_with('}')) {
+		return false;
+	}
+	let inner = &pattern[1..pattern.len() - 1];
+	!inner.is_empty()
+		&& !inner
+			.chars()
+			.any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}'))
 }
 
 #[cfg(test)]
@@ -112,5 +127,15 @@ mod tests {
 	#[test]
 	fn compile_glob_fixes_unclosed_brace() {
 		assert!(compile_glob("*.{ts,tsx,js", true).is_ok());
+	}
+
+	#[test]
+	fn exact_brace_union_stays_non_recursive() {
+		assert_eq!(build_glob_pattern("{alpha.txt,beta.txt}", true), "{alpha.txt,beta.txt}");
+	}
+
+	#[test]
+	fn glob_brace_union_still_gets_recursive_prefix() {
+		assert_eq!(build_glob_pattern("{*.ts,*.tsx}", true), "**/{*.ts,*.tsx}");
 	}
 }

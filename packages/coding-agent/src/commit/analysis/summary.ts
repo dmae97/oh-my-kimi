@@ -1,11 +1,11 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple, validateToolCall } from "@oh-my-pi/pi-ai";
+import { prompt } from "@oh-my-pi/pi-utils";
 import { Type } from "@sinclair/typebox";
 import summarySystemPrompt from "../../commit/prompts/summary-system.md" with { type: "text" };
 import summaryUserPrompt from "../../commit/prompts/summary-user.md" with { type: "text" };
 import type { CommitSummary } from "../../commit/types";
-import { renderPromptTemplate } from "../../config/prompt-templates";
 import { toReasoningEffort } from "../../thinking";
 import { extractTextContent, extractToolCall } from "../utils";
 
@@ -44,7 +44,7 @@ export async function generateSummary({
 	userContext,
 }: SummaryInput): Promise<CommitSummary> {
 	const systemPrompt = renderSummaryPrompt({ commitType, scope, maxChars });
-	const userPrompt = renderPromptTemplate(summaryUserPrompt, {
+	const userPrompt = prompt.render(summaryUserPrompt, {
 		user_context: userContext,
 		details: details.join("\n"),
 		stat,
@@ -73,7 +73,7 @@ function renderSummaryPrompt({
 	maxChars: number;
 }): string {
 	const scopePrefix = scope ? `(${scope})` : "";
-	return renderPromptTemplate(summarySystemPrompt, {
+	return prompt.render(summarySystemPrompt, {
 		commit_type: commitType,
 		scope_prefix: scopePrefix,
 		chars: String(maxChars),

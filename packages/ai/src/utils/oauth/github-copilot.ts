@@ -1,18 +1,16 @@
 /**
- * GitHub Copilot OAuth flow
+ * GitHub Copilot OAuth flow (opencode OAuth app)
  */
 import { abortableSleep } from "@oh-my-pi/pi-utils";
 import { getBundledModels } from "../../models";
 import type { OAuthCredentials } from "./types";
 
-const decode = (s: string) => atob(s);
-const CLIENT_ID = decode("SXYxLmI1MDdhMDhjODdlY2ZlOTg=");
+const CLIENT_ID = "Ov23li8tweQw6odWQebz";
 
-const COPILOT_HEADERS = {
-	"User-Agent": "GitHubCopilotChat/0.35.0",
-	"Editor-Version": "vscode/1.107.0",
-	"Editor-Plugin-Version": "copilot-chat/0.35.0",
-	"Copilot-Integration-Id": "vscode-chat",
+export const COPILOT_USER_AGENT = "opencode/1.3.15" as const;
+
+export const OPENCODE_HEADERS = {
+	"User-Agent": COPILOT_USER_AGENT,
 } as const;
 
 const INITIAL_POLL_INTERVAL_MULTIPLIER = 1.2;
@@ -37,6 +35,47 @@ type DeviceTokenErrorResponse = {
 	interval?: number;
 };
 
+type GitHubCopilotApiKeyPayload = {
+	token?: unknown;
+	enterpriseUrl?: unknown;
+};
+
+export type ParsedGitHubCopilotApiKey = {
+	accessToken: string;
+	enterpriseUrl?: string;
+};
+
+const PUBLIC_GITHUB_HOSTS = new Set(["api.github.com", "github.com", "www.github.com"]);
+
+function isPublicGitHubHost(host: string): boolean {
+	return PUBLIC_GITHUB_HOSTS.has(host.trim().toLowerCase());
+}
+
+export function normalizeGitHubCopilotEnterpriseDomain(input: string | undefined): string | undefined {
+	const trimmed = input?.trim();
+	if (!trimmed) return undefined;
+	const normalized = normalizeDomain(trimmed) ?? trimmed.toLowerCase();
+	if (!normalized || isPublicGitHubHost(normalized)) return undefined;
+	return normalized;
+}
+
+export function parseGitHubCopilotApiKey(apiKeyRaw: string): ParsedGitHubCopilotApiKey {
+	try {
+		const parsed = JSON.parse(apiKeyRaw) as GitHubCopilotApiKeyPayload;
+		if (typeof parsed.token === "string") {
+			return {
+				accessToken: parsed.token,
+				enterpriseUrl:
+					typeof parsed.enterpriseUrl === "string"
+						? normalizeGitHubCopilotEnterpriseDomain(parsed.enterpriseUrl)
+						: undefined,
+			};
+		}
+	} catch {}
+
+	return { accessToken: apiKeyRaw };
+}
+
 export function normalizeDomain(input: string): string | null {
 	const trimmed = input.trim();
 	if (!trimmed) return null;
@@ -51,38 +90,20 @@ export function normalizeDomain(input: string): string | null {
 function getUrls(domain: string): {
 	deviceCodeUrl: string;
 	accessTokenUrl: string;
-	copilotTokenUrl: string;
 } {
 	return {
 		deviceCodeUrl: `https://${domain}/login/device/code`,
 		accessTokenUrl: `https://${domain}/login/oauth/access_token`,
-		copilotTokenUrl: `https://api.${domain}/copilot_internal/v2/token`,
 	};
 }
 
-/**
- * Parse the proxy-ep from a Copilot token and convert to API base URL.
- * Token format: tid=...;exp=...;proxy-ep=proxy.individual.githubcopilot.com;...
- * Returns API URL like https://api.individual.githubcopilot.com
- */
-function getBaseUrlFromToken(token: string): string | null {
-	const match = token.match(/proxy-ep=([^;]+)/);
-	if (!match) return null;
-	const proxyHost = match[1];
-	// Convert proxy.xxx to api.xxx
-	const apiHost = proxyHost.replace(/^proxy\./, "api.");
-	return `https://${apiHost}`;
-}
-
-export function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: string): string {
-	// If we have a token, extract the base URL from proxy-ep
-	if (token) {
-		const urlFromToken = getBaseUrlFromToken(token);
-		if (urlFromToken) return urlFromToken;
-	}
-	// Fallback for enterprise or if token parsing fails
-	if (enterpriseDomain) return `https://copilot-api.${enterpriseDomain}`;
-	return "https://api.individual.githubcopilot.com";
+export function getGitHubCopilotBaseUrl(enterpriseDomain?: string): string {
+	const normalizedEnterpriseDomain = normalizeGitHubCopilotEnterpriseDomain(enterpriseDomain);
+	if (!normalizedEnterpriseDomain) return "https://api.githubcopilot.com";
+	const host = normalizedEnterpriseDomain.startsWith("copilot-api.")
+		? normalizedEnterpriseDomain
+		: `copilot-api.${normalizedEnterpriseDomain}`;
+	return `https://${host}`;
 }
 
 async function fetchJson(url: string, init: RequestInit): Promise<unknown> {
@@ -100,10 +121,10 @@ async function startDeviceFlow(domain: string): Promise<DeviceCodeResponse> {
 		method: "POST",
 		headers: {
 			Accept: "application/json",
-			"Content-Type": "application/x-www-form-urlencoded",
-			"User-Agent": "GitHubCopilotChat/0.35.0",
+			"Content-Type": "application/json",
+			...OPENCODE_HEADERS,
 		},
-		body: new URLSearchParams({
+		body: JSON.stringify({
 			client_id: CLIENT_ID,
 			scope: "read:user",
 		}),
@@ -172,10 +193,10 @@ async function pollForGitHubAccessToken(
 			method: "POST",
 			headers: {
 				Accept: "application/json",
-				"Content-Type": "application/x-www-form-urlencoded",
-				"User-Agent": "GitHubCopilotChat/0.35.0",
+				"Content-Type": "application/json",
+				...OPENCODE_HEADERS,
 			},
-			body: new URLSearchParams({
+			body: JSON.stringify({
 				client_id: CLIENT_ID,
 				device_code: deviceCode,
 				grant_type: "urn:ietf:params:oauth:grant-type:device_code",
@@ -214,39 +235,18 @@ async function pollForGitHubAccessToken(
 	throw new Error("Device flow timed out");
 }
 
+/** Far-future expiry (10 years). GitHub OAuth tokens are long-lived; no JWT exchange needed. */
+const FAR_FUTURE_MS = Date.now() + 10 * 365.25 * 24 * 60 * 60 * 1000;
+
 /**
- * Refresh GitHub Copilot token
+ * Refresh GitHub Copilot token.
+ * With the opencode OAuth flow, the GitHub token is used directly — no JWT exchange needed.
  */
-export async function refreshGitHubCopilotToken(
-	refreshToken: string,
-	enterpriseDomain?: string,
-): Promise<OAuthCredentials> {
-	const domain = enterpriseDomain || "github.com";
-	const urls = getUrls(domain);
-
-	const raw = await fetchJson(urls.copilotTokenUrl, {
-		headers: {
-			Accept: "application/json",
-			Authorization: `Bearer ${refreshToken}`,
-			...COPILOT_HEADERS,
-		},
-	});
-
-	if (!raw || typeof raw !== "object") {
-		throw new Error("Invalid Copilot token response");
-	}
-
-	const token = (raw as Record<string, unknown>).token;
-	const expiresAt = (raw as Record<string, unknown>).expires_at;
-
-	if (typeof token !== "string" || typeof expiresAt !== "number") {
-		throw new Error("Invalid Copilot token response fields");
-	}
-
+export function refreshGitHubCopilotToken(refreshToken: string, enterpriseDomain?: string): OAuthCredentials {
 	return {
 		refresh: refreshToken,
-		access: token,
-		expires: expiresAt * 1000 - 5 * 60 * 1000,
+		access: refreshToken,
+		expires: FAR_FUTURE_MS,
 		enterpriseUrl: enterpriseDomain,
 	};
 }
@@ -256,7 +256,7 @@ export async function refreshGitHubCopilotToken(
  * This is required for some models (like Claude, Grok) before they can be used.
  */
 async function enableGitHubCopilotModel(token: string, modelId: string, enterpriseDomain?: string): Promise<boolean> {
-	const baseUrl = getGitHubCopilotBaseUrl(token, enterpriseDomain);
+	const baseUrl = getGitHubCopilotBaseUrl(enterpriseDomain);
 	const url = `${baseUrl}/models/${modelId}/policy`;
 
 	try {
@@ -265,7 +265,7 @@ async function enableGitHubCopilotModel(token: string, modelId: string, enterpri
 			headers: {
 				"Content-Type": "application/json",
 				Authorization: `Bearer ${token}`,
-				...COPILOT_HEADERS,
+				...OPENCODE_HEADERS,
 				"openai-intent": "chat-policy",
 				"x-interaction-type": "chat-policy",
 			},
@@ -287,12 +287,16 @@ async function enableAllGitHubCopilotModels(
 	onProgress?: (model: string, success: boolean) => void,
 ): Promise<void> {
 	const models = getBundledModels("github-copilot");
-	await Promise.all(
-		models.map(async model => {
-			const success = await enableGitHubCopilotModel(token, model.id, enterpriseDomain);
-			onProgress?.(model.id, success);
-		}),
-	);
+	const BATCH_SIZE = 5;
+	for (let i = 0; i < models.length; i += BATCH_SIZE) {
+		const batch = models.slice(i, i + BATCH_SIZE);
+		await Promise.all(
+			batch.map(async model => {
+				const success = await enableGitHubCopilotModel(token, model.id, enterpriseDomain);
+				onProgress?.(model.id, success);
+			}),
+		);
+	}
 }
 
 /**
@@ -320,11 +324,13 @@ export async function loginGitHubCopilot(options: {
 	}
 
 	const trimmed = input.trim();
-	const enterpriseDomain = normalizeDomain(input);
-	if (trimmed && !enterpriseDomain) {
+	const normalizedDomain = normalizeDomain(input);
+	if (trimmed && !normalizedDomain) {
 		throw new Error("Invalid GitHub Enterprise URL/domain");
 	}
-	const domain = enterpriseDomain || "github.com";
+	const enterpriseDomain = normalizeGitHubCopilotEnterpriseDomain(normalizedDomain ?? undefined);
+	const domain =
+		normalizedDomain && isPublicGitHubHost(normalizedDomain) ? "github.com" : (normalizedDomain ?? "github.com");
 
 	const device = await startDeviceFlow(domain);
 	options.onAuth(device.verification_uri, `Enter code: ${device.user_code}`);
@@ -336,10 +342,17 @@ export async function loginGitHubCopilot(options: {
 		device.expires_in,
 		options.signal,
 	);
-	const credentials = await refreshGitHubCopilotToken(githubAccessToken, enterpriseDomain ?? undefined);
+
+	// With opencode OAuth, the GitHub token is used directly for all API requests
+	const credentials: OAuthCredentials = {
+		refresh: githubAccessToken,
+		access: githubAccessToken,
+		expires: FAR_FUTURE_MS,
+		enterpriseUrl: enterpriseDomain ?? undefined,
+	};
 
 	// Enable all models after successful login
 	options.onProgress?.("Enabling models...");
-	await enableAllGitHubCopilotModels(credentials.access, enterpriseDomain ?? undefined);
+	await enableAllGitHubCopilotModels(githubAccessToken, enterpriseDomain ?? undefined);
 	return credentials;
 }

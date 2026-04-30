@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+## [14.5.7] - 2026-04-29
+
+### Fixed
+
+- Fixed editor Ctrl+Enter handling to recognize NumLock and keypad Enter variants.
+
+## [14.3.0] - 2026-04-25
+
+### Fixed
+
+- Fixed shared Markdown Mermaid fenced-block rendering to resolve diagrams from fenced source text instead of external prerender state
+
+## [14.1.1] - 2026-04-14
+
+### Breaking Changes
+
+- Removed the `searchDb` constructor argument from `CombinedAutocompleteProvider`, requiring callers to use the built-in search behavior
+
+### Changed
+
+- Changed truncation debug logging to run only when `debugRedraw` is enabled
+
+### Fixed
+
+- Fixed viewport jumping during streaming and session swap by tracking actual content height instead of high-water mark
+
+## [14.0.5] - 2026-04-11
+
+### Changed
+
+- Updated hash computation to use `Bun.hash()` instead of `Bun.hash.xxHash64()`, which may return `number` in addition to `bigint`
+- Simplified cache key computation in Box component by removing intermediate hash updates and consolidating hash operations
+- Wrapped native text utility functions (`sliceWithWidth`, `truncateToWidth`, `wrapTextWithAnsi`, `extractSegments`) to automatically pass the current default tab width, simplifying the API for consumers
+- Added `getIndentationNoescape` wrapper that uses `process.cwd()` as the project root for relative file paths
+- Re-export `getDefaultTabWidth`, `getIndentation`, and `setDefaultTabWidth` from `@oh-my-pi/pi-utils`; native text helpers still receive tab width via wrappers that read the JS default
+
 ## [13.16.1] - 2026-03-27
 
 ### Added

@@ -1,18 +1,17 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
-import { renderPromptTemplate } from "../config/prompt-templates";
+import { prompt } from "@oh-my-pi/pi-utils";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
-import commandInitializeTemplate from "./command-initialize.md" with { type: "text" };
 import commandResumeTemplate from "./command-resume.md" with { type: "text" };
 import { pathMatchesContractPath } from "./contract";
 import { createDashboardController } from "./dashboard";
 import { ensureAutoresearchBranch } from "./git";
 import {
+	collectLoggedRunNumbers,
 	formatNum,
 	isAutoresearchCommittableFile,
 	isAutoresearchLocalStatePath,
-	isAutoresearchShCommand,
 	normalizeAutoresearchPath,
 	readMaxExperiments,
 	readPendingRunSummary,
@@ -36,18 +35,6 @@ import { createRunExperimentTool } from "./tools/run-experiment";
 import type { AutoresearchRuntime, ChecksResult, ExperimentResult, PendingRunSummary } from "./types";
 
 const EXPERIMENT_TOOL_NAMES = ["init_experiment", "run_experiment", "log_experiment"];
-
-interface AutoresearchSetupInput {
-	intent: string;
-	benchmarkCommand: string;
-	metricName: string;
-	metricUnit: string;
-	direction: "lower" | "higher";
-	secondaryMetrics: string[];
-	scopePaths: string[];
-	offLimits: string[];
-	constraints: string[];
-}
 
 export const createAutoresearchExtension: ExtensionFactory = api => {
 	const runtimeStore = createRuntimeStore();
@@ -109,17 +96,6 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 	api.on("tool_call", (event, ctx) => {
 		const runtime = getRuntime(ctx);
 		if (!runtime.autoresearchMode) return;
-		if (event.toolName === "bash") {
-			const command = typeof event.input.command === "string" ? event.input.command : "";
-			const validationError = validateAutoresearchBashCommand(command);
-			if (validationError) {
-				return {
-					block: true,
-					reason: validationError,
-				};
-			}
-			return;
-		}
 		if (event.toolName !== "write" && event.toolName !== "edit" && event.toolName !== "ast_edit") return;
 
 		const rawPaths = getGuardedToolPaths(event.toolName, event.input);
@@ -151,14 +127,17 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 	});
 
 	api.registerCommand("autoresearch", {
-		description: "Start, stop, or clear builtin autoresearch mode.",
+		description: "Toggle builtin autoresearch mode, or pass off / clear, or a goal message.",
 		getArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
 			if (argumentPrefix.includes(" ")) return null;
+			const normalized = argumentPrefix.trim().toLowerCase();
+			// No suggestions for an empty argument prefix so Tab after "/autoresearch " does not
+			// force-complete into off/clear; bare command submit toggles like /plan.
+			if (normalized.length === 0) return null;
 			const completions: AutocompleteItem[] = [
 				{ label: "off", value: "off", description: "Leave autoresearch mode" },
 				{ label: "clear", value: "clear", description: "Delete autoresearch.jsonl and leave autoresearch mode" },
 			];
-			const normalized = argumentPrefix.trim().toLowerCase();
 			const filtered = completions.filter(item => item.label.startsWith(normalized));
 			return filtered.length > 0 ? filtered : null;
 		},
@@ -168,6 +147,15 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 			const workDirError = validateWorkDir(ctx.cwd);
 			if (workDirError) {
 				ctx.ui.notify(workDirError, "error");
+				return;
+			}
+
+			if (trimmed === "" && runtime.autoresearchMode) {
+				setMode(ctx, false, runtime.goal, "off");
+				dashboard.updateWidget(ctx, runtime);
+				const experimentTools = new Set(EXPERIMENT_TOOL_NAMES);
+				await api.setActiveTools(api.getActiveTools().filter(name => !experimentTools.has(name)));
+				ctx.ui.notify("Autoresearch mode disabled", "info");
 				return;
 			}
 
@@ -227,7 +215,7 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 				dashboard.updateWidget(ctx, runtime);
 				await api.setActiveTools([...new Set([...api.getActiveTools(), ...EXPERIMENT_TOOL_NAMES])]);
 				api.sendUserMessage(
-					renderPromptTemplate(commandResumeTemplate, {
+					prompt.render(commandResumeTemplate, {
 						autoresearch_md_path: autoresearchMdPath,
 						branch_status_line: branchResult.created
 							? `Created and checked out dedicated git branch \`${branchResult.branchName}\` before resuming.`
@@ -239,57 +227,21 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 				return;
 			}
 
-			const setup = await promptForAutoresearchSetup(
-				ctx,
-				trimmed || runtime.goal || "what should autoresearch improve?",
-			);
-			if (!setup) return;
-
-			const branchResult = await ensureAutoresearchBranch(api, workDir, setup.intent);
+			const branchGoal = trimmed.length > 0 ? trimmed : null;
+			const branchResult = await ensureAutoresearchBranch(api, workDir, branchGoal);
 			if (!branchResult.ok) {
 				ctx.ui.notify(branchResult.error, "error");
 				return;
 			}
 
-			setMode(ctx, true, setup.intent, "on");
-			runtime.state.name = setup.intent;
-			runtime.state.metricName = setup.metricName;
-			runtime.state.metricUnit = setup.metricUnit;
-			runtime.state.bestDirection = setup.direction;
-			runtime.state.secondaryMetrics = setup.secondaryMetrics.map(name => ({ name, unit: "" }));
-			runtime.state.benchmarkCommand = setup.benchmarkCommand;
-			runtime.state.scopePaths = [...setup.scopePaths];
-			runtime.state.offLimits = [...setup.offLimits];
-			runtime.state.constraints = [...setup.constraints];
+			setMode(ctx, true, branchGoal, "on");
 			dashboard.updateWidget(ctx, runtime);
 			await api.setActiveTools([...new Set([...api.getActiveTools(), ...EXPERIMENT_TOOL_NAMES])]);
-			api.sendUserMessage(
-				renderPromptTemplate(commandInitializeTemplate, {
-					branch_status_line: branchResult.created
-						? `Created and checked out dedicated git branch \`${branchResult.branchName}\`.`
-						: `Using dedicated git branch \`${branchResult.branchName}\`.`,
-					intent: setup.intent,
-					benchmark_command: setup.benchmarkCommand,
-					metric_name: setup.metricName,
-					metric_unit: setup.metricUnit,
-					direction: setup.direction,
-					has_secondary_metrics: setup.secondaryMetrics.length > 0,
-					secondary_metrics: setup.secondaryMetrics,
-					secondary_metrics_block: formatBulletBlock(
-						setup.secondaryMetrics,
-						value => `  - \`${value}\``,
-						"  - `(none)`",
-					),
-					scope_paths: setup.scopePaths,
-					scope_paths_block: formatBulletBlock(setup.scopePaths, value => `  - \`${value}\``),
-					has_off_limits: setup.offLimits.length > 0,
-					off_limits: setup.offLimits,
-					off_limits_block: formatBulletBlock(setup.offLimits, value => `  - \`${value}\``, "  - `(none)`"),
-					has_constraints: setup.constraints.length > 0,
-					constraints: setup.constraints,
-					constraints_block: formatBulletBlock(setup.constraints, value => `  - ${value}`, "  - `(none)`"),
-				}),
-			);
+			if (trimmed.length > 0) {
+				api.sendUserMessage(trimmed);
+			} else {
+				ctx.ui.notify("Autoresearch enabled—describe what to optimize in your next message.", "info");
+			}
 		},
 	});
 
@@ -352,7 +304,7 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 		api.sendMessage(
 			{
 				customType: "autoresearch-resume",
-				content: renderPromptTemplate(resumeMessageTemplate, {
+				content: prompt.render(resumeMessageTemplate, {
 					autoresearch_md_path: autoresearchMdPath,
 					has_ideas: fs.existsSync(ideasPath),
 					has_pending_run: Boolean(pendingRun),
@@ -394,15 +346,16 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 				status: result.status,
 			};
 		});
+		const hasAutoresearchMd = fs.existsSync(autoresearchMdPath);
 		return {
-			systemPrompt: renderPromptTemplate(promptTemplate, {
+			systemPrompt: prompt.render(promptTemplate, {
 				base_system_prompt: event.systemPrompt,
 				has_goal: goal.trim().length > 0,
 				goal,
+				has_autoresearch_md: hasAutoresearchMd,
 				working_dir: workDir,
 				default_metric_name: runtime.state.metricName,
 				metric_name: runtime.state.metricName,
-				has_autoresearch_md: fs.existsSync(autoresearchMdPath),
 				autoresearch_md_path: autoresearchMdPath,
 				has_checks: fs.existsSync(checksPath),
 				checks_path: checksPath,
@@ -437,93 +390,6 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 		};
 	});
 };
-
-async function promptForAutoresearchSetup(
-	ctx: ExtensionContext,
-	defaultIntent: string,
-): Promise<AutoresearchSetupInput | undefined> {
-	const intentInput = await ctx.ui.input("Autoresearch Intent", defaultIntent);
-	if (intentInput === undefined) return undefined;
-	const intent = intentInput.trim();
-	if (intent.length === 0) {
-		ctx.ui.notify("Autoresearch intent is required", "info");
-		return undefined;
-	}
-
-	const benchmarkCommandInput = await ctx.ui.input("Benchmark Command", "bash autoresearch.sh");
-	if (benchmarkCommandInput === undefined) return undefined;
-	const benchmarkCommand = benchmarkCommandInput.trim();
-	if (benchmarkCommand.length === 0) {
-		ctx.ui.notify("Benchmark command is required", "info");
-		return undefined;
-	}
-	if (!isAutoresearchShCommand(benchmarkCommand)) {
-		ctx.ui.notify("Benchmark command must invoke `autoresearch.sh` directly", "info");
-		return undefined;
-	}
-
-	const metricNameInput = await ctx.ui.input("Primary Metric Name", "runtime_ms");
-	if (metricNameInput === undefined) return undefined;
-	const metricName = metricNameInput.trim();
-	if (metricName.length === 0) {
-		ctx.ui.notify("Primary metric name is required", "info");
-		return undefined;
-	}
-
-	const metricUnitInput = await ctx.ui.input("Metric Unit", "ms");
-	if (metricUnitInput === undefined) return undefined;
-	const metricUnit = metricUnitInput.trim();
-
-	const directionInput = await ctx.ui.input("Metric Direction", "lower");
-	if (directionInput === undefined) return undefined;
-	const normalizedDirection = directionInput.trim().toLowerCase();
-	if (normalizedDirection !== "lower" && normalizedDirection !== "higher") {
-		ctx.ui.notify("Metric direction must be `lower` or `higher`", "info");
-		return undefined;
-	}
-
-	const secondaryMetricsInput = await ctx.ui.input("Tradeoff Metrics", "");
-	if (secondaryMetricsInput === undefined) return undefined;
-
-	const scopePathsInput = await ctx.ui.input("Files in Scope", "packages/coding-agent/src/autoresearch");
-	if (scopePathsInput === undefined) return undefined;
-	const scopePaths = splitSetupList(scopePathsInput);
-	if (scopePaths.length === 0) {
-		ctx.ui.notify("Files in Scope must include at least one path", "info");
-		return undefined;
-	}
-
-	const offLimitsInput = await ctx.ui.input("Off Limits", "");
-	if (offLimitsInput === undefined) return undefined;
-	const constraintsInput = await ctx.ui.input("Constraints", "");
-	if (constraintsInput === undefined) return undefined;
-
-	return {
-		intent,
-		benchmarkCommand,
-		metricName,
-		metricUnit,
-		direction: normalizedDirection,
-		secondaryMetrics: splitSetupList(secondaryMetricsInput),
-		scopePaths,
-		offLimits: splitSetupList(offLimitsInput),
-		constraints: splitSetupList(constraintsInput),
-	};
-}
-
-function splitSetupList(value: string): string[] {
-	return value
-		.split(/\r?\n|,/)
-		.map(entry => entry.trim())
-		.filter((entry, index, values) => entry.length > 0 && values.indexOf(entry) === index);
-}
-
-function formatBulletBlock(values: string[], renderValue: (value: string) => string, emptyValue = ""): string {
-	if (values.length === 0) {
-		return emptyValue;
-	}
-	return values.map(renderValue).join("\n");
-}
 
 function hasLocalAutoresearchState(workDir: string): boolean {
 	return fs.existsSync(path.join(workDir, "autoresearch.jsonl")) || fs.existsSync(path.join(workDir, ".autoresearch"));
@@ -620,17 +486,6 @@ function findBestResult(runtime: AutoresearchRuntime): ExperimentResult | null {
 	}
 	return best;
 }
-
-function collectLoggedRunNumbers(results: ExperimentResult[]): Set<number> {
-	const runNumbers = new Set<number>();
-	for (const result of results) {
-		if (result.runNumber !== null) {
-			runNumbers.add(result.runNumber);
-		}
-	}
-	return runNumbers;
-}
-
 function summaryToChecks(summary: PendingRunSummary | null): ChecksResult | null {
 	if (!summary || summary.checksPass === null) {
 		return null;
@@ -666,28 +521,4 @@ function canonicalizeTargetPath(targetPath: string): string {
 		currentPath = parentPath;
 	}
 	return path.resolve(canonicalizeExistingPath(currentPath), ...pendingSegments);
-}
-
-function validateAutoresearchBashCommand(command: string): string | null {
-	const trimmed = command.trim();
-	if (trimmed.length === 0) {
-		return null;
-	}
-	const mutationPatterns = [
-		/(^|[;&|()]\s*)(?:bash|sh)\b/,
-		/(^|[;&|()]\s*)(?:python|python3|node|perl|ruby|php)\b/,
-		/(^|[;&|()]\s*)(?:mv|cp|rm|mkdir|touch|chmod|chown|ln|install|patch)\b/,
-		/(^|[;&|()]\s*)sed\s+-i\b/,
-		/(^|[;&|()]\s*)git\s+(?:add|apply|checkout|clean|commit|merge|rebase|reset|restore|revert|stash|switch|worktree)\b/,
-		/(^|[^<])>>?/,
-		/\|\s*tee\b/,
-		/<<<?/,
-	];
-	if (mutationPatterns.some(pattern => pattern.test(trimmed))) {
-		return (
-			"Autoresearch only allows read-only shell inspection. " +
-			"Use write/edit/ast_edit for file changes and run_experiment for benchmark execution."
-		);
-	}
-	return null;
 }

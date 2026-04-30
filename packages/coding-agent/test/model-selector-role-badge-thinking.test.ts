@@ -3,7 +3,7 @@ import { getBundledModel, type Model } from "@oh-my-pi/pi-ai";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ModelSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/model-selector";
-import { setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
 function normalizeRenderedText(text: string): string {
@@ -21,6 +21,8 @@ function createSelector(model: Model, settings: Settings): ModelSelectorComponen
 	const modelRegistry = {
 		getAll: () => [model],
 		getDiscoverableProviders: () => [],
+		getCanonicalModels: () => [],
+		resolveCanonicalModel: () => undefined,
 	} as unknown as ModelRegistry;
 	const ui = {
 		requestRender: vi.fn(),
@@ -37,19 +39,25 @@ function createSelector(model: Model, settings: Settings): ModelSelectorComponen
 	);
 }
 
+let testTheme = await getThemeByName("dark");
+
+function installTestTheme(): void {
+	if (!testTheme) {
+		throw new Error("Failed to load dark theme for ModelSelector tests");
+	}
+	setThemeInstance(testTheme);
+}
+
 describe("ModelSelector role badge thinking display", () => {
-	beforeAll(() => {
-		setThemeInstance({
-			fg: (_color: string, text: string) => text,
-			bg: (_color: string, text: string) => text,
-			bold: (text: string) => text,
-			getFgAnsi: () => "\x1b[38;5;1m",
-			nav: { cursor: ">" },
-			boxSharp: { horizontal: "-" },
-		} as never);
+	beforeAll(async () => {
+		testTheme = await getThemeByName("dark");
+		if (!testTheme) {
+			throw new Error("Failed to load dark theme for ModelSelector tests");
+		}
 	});
 
 	test("renders per-role thinking labels with inherit mode to avoid badge ambiguity", async () => {
+		installTestTheme();
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected bundled model anthropic/claude-sonnet-4-5");
 
@@ -66,6 +74,7 @@ describe("ModelSelector role badge thinking display", () => {
 		const selector = createSelector(model, settings);
 
 		await Bun.sleep(0);
+		installTestTheme();
 
 		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(rendered).toContain("DEFAULT (inherit)");
@@ -76,6 +85,7 @@ describe("ModelSelector role badge thinking display", () => {
 		expect(rendered).not.toContain("Role Thinking:");
 
 		selector.handleInput("\n");
+		installTestTheme();
 		const menuRendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(menuRendered).toContain("Set as DEFAULT (Default)");
 		expect(menuRendered).toContain("Set as SMOL (Fast)");
@@ -85,6 +95,7 @@ describe("ModelSelector role badge thinking display", () => {
 	});
 
 	test("shows custom roles from cycleOrder/modelRoles and honors built-in metadata overrides", async () => {
+		installTestTheme();
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected bundled model anthropic/claude-sonnet-4-5");
 
@@ -102,12 +113,14 @@ describe("ModelSelector role badge thinking display", () => {
 
 		const selector = createSelector(model, settings);
 		await Bun.sleep(0);
+		installTestTheme();
 
 		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(rendered).toContain("custom-fast (low)");
 		expect(rendered).toContain("SMOL (inherit)");
 
 		selector.handleInput("\n");
+		installTestTheme();
 		const menuRendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(menuRendered).toContain("Set as custom-fast");
 		expect(menuRendered).toContain("Set as SMOL (Quick)");

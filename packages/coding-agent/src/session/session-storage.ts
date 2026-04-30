@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, toError } from "@oh-my-pi/pi-utils";
+import { isEnoent, peekFile, toError } from "@oh-my-pi/pi-utils";
+
+const utf8Decoder = new TextDecoder("utf-8");
 
 export interface SessionStorageStat {
 	size: number;
@@ -30,6 +32,7 @@ export interface SessionStorage {
 	writeText(path: string, content: string): Promise<void>;
 	rename(path: string, nextPath: string): Promise<void>;
 	unlink(path: string): Promise<void>;
+	deleteSessionWithArtifacts(sessionPath: string): Promise<void>;
 	openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter;
 }
 
@@ -163,7 +166,7 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	async readTextPrefix(path: string, maxBytes: number): Promise<string> {
-		return Bun.file(path).slice(0, maxBytes).text();
+		return peekFile(path, maxBytes, header => utf8Decoder.decode(header));
 	}
 
 	async writeText(path: string, content: string): Promise<void> {
@@ -356,6 +359,9 @@ export class MemorySessionStorage implements SessionStorage {
 
 	unlink(path: string): Promise<void> {
 		this.#files.delete(path);
+		return Promise.resolve();
+	}
+	deleteSessionWithArtifacts(_sessionPath: string): Promise<void> {
 		return Promise.resolve();
 	}
 

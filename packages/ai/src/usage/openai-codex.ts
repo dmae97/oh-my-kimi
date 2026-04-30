@@ -11,6 +11,7 @@ import type {
 	UsageWindow,
 } from "../usage";
 import { isRecord } from "../utils";
+import { toNumber } from "./shared";
 
 const CODEX_USAGE_PATH = "wham/usage";
 const JWT_AUTH_CLAIM = "https://api.openai.com/auth";
@@ -59,17 +60,6 @@ interface JwtPayload {
 		email?: string;
 	};
 }
-
-const toNumber = (value: unknown): number | undefined => {
-	if (typeof value === "number" && Number.isFinite(value)) return value;
-	if (typeof value === "string") {
-		const trimmed = value.trim();
-		if (!trimmed) return undefined;
-		const parsed = Number(trimmed);
-		if (Number.isFinite(parsed)) return parsed;
-	}
-	return undefined;
-};
 
 const toBoolean = (value: unknown): boolean | undefined => {
 	if (typeof value === "boolean") return value;
@@ -308,31 +298,30 @@ export const openaiCodexUsageProvider: UsageProvider = {
 		}
 
 		const parsed = parseUsagePayload(payload);
-		if (!parsed) {
-			ctx.logger?.warn("Codex usage response invalid", { provider: params.provider });
-			return null;
-		}
+		const planType =
+			parsed?.planType ??
+			(isRecord(payload) && typeof payload.plan_type === "string" ? payload.plan_type : undefined);
 
 		const limits: UsageLimit[] = [];
-		if (parsed.primary) {
+		if (parsed?.primary) {
 			limits.push(
 				buildUsageLimit({
 					key: "primary",
 					window: parsed.primary,
 					accountId,
-					planType: parsed.planType,
+					planType,
 					limitReached: parsed.limitReached,
 					nowMs,
 				}),
 			);
 		}
-		if (parsed.secondary) {
+		if (parsed?.secondary) {
 			limits.push(
 				buildUsageLimit({
 					key: "secondary",
 					window: parsed.secondary,
 					accountId,
-					planType: parsed.planType,
+					planType,
 					limitReached: parsed.limitReached,
 					nowMs,
 				}),
@@ -344,12 +333,13 @@ export const openaiCodexUsageProvider: UsageProvider = {
 			fetchedAt: nowMs,
 			limits,
 			metadata: {
-				planType: parsed.planType,
-				allowed: parsed.allowed,
-				limitReached: parsed.limitReached,
+				planType,
+				allowed: parsed?.allowed,
+				limitReached: parsed?.limitReached,
 				email,
+				accountId,
 			},
-			raw: parsed.raw,
+			raw: parsed?.raw ?? payload,
 		};
 
 		return report;

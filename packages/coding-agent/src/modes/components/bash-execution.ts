@@ -3,7 +3,18 @@
  */
 
 import { sanitizeText } from "@oh-my-pi/pi-natives";
-import { Container, ImageProtocol, Loader, Spacer, TERMINAL, Text, type TUI } from "@oh-my-pi/pi-tui";
+import {
+	Container,
+	Ellipsis,
+	ImageProtocol,
+	Loader,
+	Spacer,
+	TERMINAL,
+	Text,
+	type TUI,
+	truncateToWidth,
+	visibleWidth,
+} from "@oh-my-pi/pi-tui";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import { formatTruncationMetaNotice, type TruncationMeta } from "../../tools/output-meta";
 import { getSixelLineMask, isSixelPassthroughEnabled, sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
@@ -210,11 +221,12 @@ export class BashExecutionComponent extends Container {
 	}
 
 	#clampDisplayLine(line: string): string {
-		if (line.length <= MAX_DISPLAY_LINE_CHARS) {
+		const visible = visibleWidth(line);
+		if (visible <= MAX_DISPLAY_LINE_CHARS) {
 			return line;
 		}
-		const omitted = line.length - MAX_DISPLAY_LINE_CHARS;
-		return `${line.slice(0, MAX_DISPLAY_LINE_CHARS)}… [${omitted} chars omitted]`;
+		const omitted = visible - MAX_DISPLAY_LINE_CHARS;
+		return `${truncateToWidth(line, MAX_DISPLAY_LINE_CHARS, Ellipsis.Omit)}… [${omitted} visible columns omitted]`;
 	}
 
 	#clampLinesPreservingSixel(lines: string[]): string[] {

@@ -1,14 +1,15 @@
-import { copyToClipboard, sanitizeText } from "@oh-my-pi/pi-natives";
+import { sanitizeText } from "@oh-my-pi/pi-natives";
 import {
 	type Component,
 	extractPrintableText,
 	matchesKey,
 	padding,
+	replaceTabs,
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
 import { theme } from "../modes/theme/theme";
-import { replaceTabs } from "../tools/render-utils";
+import { copyToClipboard } from "../utils/clipboard";
 import {
 	formatDebugLogExpandedLines,
 	formatDebugLogLine,

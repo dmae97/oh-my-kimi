@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseFrontmatter } from "@oh-my-pi/pi-coding-agent/utils/frontmatter";
+import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 
 describe("parseFrontmatter", () => {
 	const parse = (content: string) => parseFrontmatter(content, { source: "tests:frontmatter", level: "off" });

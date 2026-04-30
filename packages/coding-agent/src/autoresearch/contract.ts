@@ -1,4 +1,3 @@
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AutoresearchBenchmarkContract, AutoresearchContract, MetricDirection } from "./types";
@@ -74,49 +73,6 @@ export function validateAutoresearchContract(contract: AutoresearchContract): st
 		}
 	}
 	return errors;
-}
-
-export function buildAutoresearchSegmentFingerprint(
-	contract: AutoresearchContract,
-	scripts: {
-		benchmarkScript: string;
-		checksScript: string | null;
-	},
-): string {
-	const payload = {
-		benchmark: contract.benchmark,
-		scopePaths: contract.scopePaths,
-		offLimits: contract.offLimits,
-		constraints: contract.constraints,
-		scripts,
-	};
-	return crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
-}
-
-export function getAutoresearchFingerprintMismatchError(
-	stateFingerprint: string | null,
-	workDir: string,
-): string | null {
-	if (!stateFingerprint) {
-		return "The current segment has no fingerprint metadata. Re-run init_experiment before continuing.";
-	}
-
-	const contractResult = readAutoresearchContract(workDir);
-	const scriptSnapshot = loadAutoresearchScriptSnapshot(workDir);
-	const errors = [...contractResult.errors, ...scriptSnapshot.errors];
-	if (errors.length > 0) {
-		return `${errors.join(" ")} Re-run init_experiment after fixing the workspace contract.`;
-	}
-
-	const currentFingerprint = buildAutoresearchSegmentFingerprint(contractResult.contract, {
-		benchmarkScript: scriptSnapshot.benchmarkScript,
-		checksScript: scriptSnapshot.checksScript,
-	});
-	if (currentFingerprint === stateFingerprint) {
-		return null;
-	}
-
-	return "autoresearch.md, autoresearch.sh, or autoresearch.checks.sh changed since the current segment was initialized. Re-run init_experiment before continuing.";
 }
 
 export function loadAutoresearchScriptSnapshot(workDir: string): AutoresearchScriptSnapshot {

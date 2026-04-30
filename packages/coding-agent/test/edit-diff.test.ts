@@ -4,10 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	adjustIndentation,
+	computeEditDiff,
 	computeHashlineDiff,
 	DEFAULT_FUZZY_THRESHOLD,
 	findMatch,
-} from "@oh-my-pi/pi-coding-agent/patch";
+} from "@oh-my-pi/pi-coding-agent/edit";
 
 describe("findMatch", () => {
 	describe("exact matching", () => {
@@ -240,19 +241,48 @@ describe("computeHashlineDiff", () => {
 		}
 	});
 
-	test("allows move-only operation when content is unchanged", async () => {
+	test("accepts hashline tool edits without resolved op/lines", async () => {
 		const sourcePath = path.join(tempDir, "source.txt");
-		await Bun.write(sourcePath, "unchanged content\n");
+		await Bun.write(sourcePath, "first\n");
 
 		const result = await computeHashlineDiff(
-			{ path: sourcePath, edits: [], move: path.join(tempDir, "moved", "target.txt") },
+			{ path: sourcePath, edits: [{ loc: "append", content: ["second"] }] },
 			tempDir,
 		);
-
-		expect("error" in result).toBe(false);
+		expect("diff" in result).toBe(true);
 		if ("diff" in result) {
-			expect(result.diff).toBe("");
-			expect(result.firstChangedLine).toBeUndefined();
+			expect(result.diff).toContain("second");
+		}
+	});
+	test("returns a handled error when the source path is a local URL", async () => {
+		const result = await computeHashlineDiff({ path: "local://PLAN.md", edits: [] }, tempDir);
+
+		expect("error" in result).toBe(true);
+		if ("error" in result) {
+			expect(result.error).toContain('internal scheme "local://"');
+		}
+	});
+});
+
+describe("computeEditDiff", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "edit-diff-edit-"));
+	});
+
+	afterEach(async () => {
+		if (tempDir) {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("returns a handled error when the source path is a local URL", async () => {
+		const result = await computeEditDiff("local:/PLAN.md", "old", "new", tempDir);
+
+		expect("error" in result).toBe(true);
+		if ("error" in result) {
+			expect(result.error).toContain('internal scheme "local://"');
 		}
 	});
 });

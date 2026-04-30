@@ -5,6 +5,10 @@ import {
 	type AuthenticateRequest,
 	type AuthenticateResponse,
 	type AvailableCommand,
+	type CloseSessionRequest,
+	type CloseSessionResponse,
+	type ForkSessionRequest,
+	type ForkSessionResponse,
 	type InitializeRequest,
 	type InitializeResponse,
 	type ListSessionsRequest,
@@ -17,25 +21,39 @@ import {
 	PROTOCOL_VERSION,
 	type PromptRequest,
 	type PromptResponse,
+	type ResumeSessionRequest,
+	type ResumeSessionResponse,
 	type SessionConfigOption,
 	type SessionInfo,
+	type SessionModelState,
 	type SessionModeState,
 	type SessionNotification,
 	type SessionUpdate,
 	type SetSessionConfigOptionRequest,
 	type SetSessionConfigOptionResponse,
+	type SetSessionModelRequest,
+	type SetSessionModelResponse,
 	type SetSessionModeRequest,
 	type SetSessionModeResponse,
+	type Usage,
 } from "@agentclientprotocol/sdk";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { logger, VERSION } from "@oh-my-pi/pi-utils";
+import { disableProvider, enableProvider } from "../../capability";
+import { Settings } from "../../config/settings";
 import type { ExtensionUIContext } from "../../extensibility/extensions";
+import { runExtensionCompact } from "../../extensibility/extensions/compact-handler";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
 import { MCPManager } from "../../mcp/manager";
 import type { MCPServerConfig } from "../../mcp/types";
+import { loadAllExtensions } from "../../modes/components/extensions/state-manager";
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
-import { SessionManager, type SessionInfo as StoredSessionInfo } from "../../session/session-manager";
+import {
+	SessionManager,
+	type SessionInfo as StoredSessionInfo,
+	type UsageStatistics,
+} from "../../session/session-manager";
 import { parseThinkingLevel } from "../../thinking";
 import { mapAgentSessionEventToAcpSessionUpdates, mapToolKind } from "./acp-event-mapper";
 
@@ -53,12 +71,21 @@ type AgentImageContent = {
 };
 
 type PromptTurnState = {
-	messageId: string | null;
+	userMessageId: string;
 	cancelRequested: boolean;
 	settled: boolean;
+	usageBaseline: UsageStatistics;
 	unsubscribe: (() => void) | undefined;
 	resolve: (value: PromptResponse) => void;
 	reject: (reason?: unknown) => void;
+};
+
+type ManagedSessionRecord = {
+	session: AgentSession;
+	mcpManager: MCPManager | undefined;
+	promptTurn: PromptTurnState | undefined;
+	liveMessageIds: WeakMap<object, string>;
+	extensionsConfigured: boolean;
 };
 
 type ReplayableMessage = {
@@ -85,6 +112,8 @@ type MCPSource = {
 type MCPSourceMap = {
 	[name: string]: MCPSource;
 };
+
+type CreateAcpSession = (cwd: string) => Promise<AgentSession>;
 
 const acpExtensionUiContext: ExtensionUIContext = {
 	select: async () => undefined,
@@ -118,17 +147,20 @@ const acpExtensionUiContext: ExtensionUIContext = {
 
 export class AcpAgent implements Agent {
 	#connection: AgentSideConnection;
-	#session: AgentSession;
-	#mcpManager: MCPManager | undefined;
-	#promptTurn: PromptTurnState | undefined;
-	#hasOpenedSession = false;
+	#initialSession: AgentSession | undefined;
+	#createSession: CreateAcpSession;
+	#sessions = new Map<string, ManagedSessionRecord>();
+	#disposePromise: Promise<void> | undefined;
+	#cleanupRegistered = false;
 
-	constructor(connection: AgentSideConnection, session: AgentSession) {
+	constructor(connection: AgentSideConnection, initialSession: AgentSession, createSession: CreateAcpSession) {
 		this.#connection = connection;
-		this.#session = session;
+		this.#initialSession = initialSession;
+		this.#createSession = createSession;
 	}
 
 	async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
+		this.#registerConnectionCleanup();
 		return {
 			protocolVersion: PROTOCOL_VERSION,
 			agentInfo: {
@@ -155,6 +187,9 @@ export class AcpAgent implements Agent {
 				},
 				sessionCapabilities: {
 					list: {},
+					fork: {},
+					resume: {},
+					close: {},
 				},
 			},
 		};
@@ -166,50 +201,27 @@ export class AcpAgent implements Agent {
 
 	async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
 		this.#assertAbsoluteCwd(params.cwd);
-		await this.#session.sessionManager.flush();
-		await this.#session.sessionManager.moveTo(params.cwd);
-		if (this.#hasOpenedSession) {
-			const success = await this.#session.newSession();
-			if (!success) {
-				throw new Error("ACP session creation was cancelled");
-			}
-		}
-		this.#hasOpenedSession = true;
-		await this.#session.sessionManager.ensureOnDisk();
-		await this.#configureExtensions();
-		await this.#configureMcpServers(params.mcpServers);
+		const record = await this.#createNewSessionRecord(params.cwd, params.mcpServers);
 		const response: NewSessionResponse = {
-			sessionId: this.#sessionId,
-			configOptions: this.#buildConfigOptions(),
+			sessionId: record.session.sessionId,
+			configOptions: this.#buildConfigOptions(record.session),
+			models: this.#buildModelState(record.session),
 			modes: this.#buildModeState(),
 		};
-		this.#scheduleBootstrapUpdates(this.#sessionId);
+		this.#scheduleBootstrapUpdates(record.session.sessionId);
 		return response;
 	}
 
 	async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
 		this.#assertAbsoluteCwd(params.cwd);
-		await this.#session.sessionManager.flush();
-		const storedSession = await this.#findStoredSession(params.sessionId, params.cwd);
-		if (!storedSession) {
-			throw new Error(`ACP session not found: ${params.sessionId}`);
-		}
-		const currentSessionFile = this.#session.sessionManager.getSessionFile();
-		if (currentSessionFile !== storedSession.path) {
-			const success = await this.#session.switchSession(storedSession.path);
-			if (!success) {
-				throw new Error(`ACP session load was cancelled: ${params.sessionId}`);
-			}
-		}
-		this.#hasOpenedSession = true;
-		await this.#configureExtensions();
-		await this.#configureMcpServers(params.mcpServers);
-		await this.#replaySessionHistory();
+		const record = await this.#loadManagedSession(params.sessionId, params.cwd, params.mcpServers);
+		await this.#replaySessionHistory(record);
 		const response: LoadSessionResponse = {
-			configOptions: this.#buildConfigOptions(),
+			configOptions: this.#buildConfigOptions(record.session),
+			models: this.#buildModelState(record.session),
 			modes: this.#buildModeState(),
 		};
-		this.#scheduleBootstrapUpdates(this.#sessionId);
+		this.#scheduleBootstrapUpdates(record.session.sessionId);
 		return response;
 	}
 
@@ -217,7 +229,9 @@ export class AcpAgent implements Agent {
 		if (params.cwd) {
 			this.#assertAbsoluteCwd(params.cwd);
 		}
-		await this.#session.sessionManager.flush();
+		for (const record of this.#sessions.values()) {
+			await record.session.sessionManager.flush();
+		}
 		const sessions = await this.#listStoredSessions(params.cwd ?? undefined);
 		const offset = this.#parseCursor(params.cursor ?? undefined);
 		const paged = sessions.slice(offset, offset + SESSION_PAGE_SIZE);
@@ -228,20 +242,54 @@ export class AcpAgent implements Agent {
 		};
 	}
 
+	async unstable_resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+		this.#assertAbsoluteCwd(params.cwd);
+		const record = await this.#resumeManagedSession(params.sessionId, params.cwd, params.mcpServers ?? []);
+		const response: ResumeSessionResponse = {
+			configOptions: this.#buildConfigOptions(record.session),
+			models: this.#buildModelState(record.session),
+			modes: this.#buildModeState(),
+		};
+		this.#scheduleBootstrapUpdates(record.session.sessionId);
+		return response;
+	}
+
+	async unstable_forkSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
+		this.#assertAbsoluteCwd(params.cwd);
+		const record = await this.#forkManagedSession(params);
+		const response: ForkSessionResponse = {
+			sessionId: record.session.sessionId,
+			configOptions: this.#buildConfigOptions(record.session),
+			models: this.#buildModelState(record.session),
+			modes: this.#buildModeState(),
+		};
+		this.#scheduleBootstrapUpdates(record.session.sessionId);
+		return response;
+	}
+
+	async unstable_closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
+		const record = this.#sessions.get(params.sessionId);
+		if (!record) {
+			return {};
+		}
+		await this.#closeManagedSession(params.sessionId, record);
+		return {};
+	}
+
 	async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
-		this.#assertSameSession(params.sessionId);
+		const record = this.#getSessionRecord(params.sessionId);
 		if (params.modeId !== ACP_MODE_ID) {
 			throw new Error(`Unsupported ACP mode: ${params.modeId}`);
 		}
 		await this.#connection.sessionUpdate({
-			sessionId: this.#sessionId,
+			sessionId: record.session.sessionId,
 			update: this.#buildCurrentModeUpdate(),
 		});
 		return {};
 	}
 
 	async setSessionConfigOption(params: SetSessionConfigOptionRequest): Promise<SetSessionConfigOptionResponse> {
-		this.#assertSameSession(params.sessionId);
+		const record = this.#getSessionRecord(params.sessionId);
 		if (typeof params.value === "boolean") {
 			throw new Error(`Unsupported boolean ACP config option: ${params.configId}`);
 		}
@@ -253,18 +301,18 @@ export class AcpAgent implements Agent {
 				}
 				break;
 			case MODEL_CONFIG_ID:
-				await this.#setModelById(params.value);
+				await this.#setModelById(record.session, params.value);
 				break;
 			case THINKING_CONFIG_ID:
-				this.#setThinkingLevelById(params.value);
+				this.#setThinkingLevelById(record.session, params.value);
 				break;
 			default:
 				throw new Error(`Unknown ACP config option: ${params.configId}`);
 		}
 
-		const configOptions = this.#buildConfigOptions();
+		const configOptions = this.#buildConfigOptions(record.session);
 		await this.#connection.sessionUpdate({
-			sessionId: this.#sessionId,
+			sessionId: record.session.sessionId,
 			update: {
 				sessionUpdate: "config_option_update",
 				configOptions,
@@ -273,54 +321,140 @@ export class AcpAgent implements Agent {
 		return { configOptions };
 	}
 
+	async unstable_setSessionModel(params: SetSessionModelRequest): Promise<SetSessionModelResponse> {
+		const record = this.#getSessionRecord(params.sessionId);
+		await this.#setModelById(record.session, params.modelId);
+		await this.#connection.sessionUpdate({
+			sessionId: record.session.sessionId,
+			update: {
+				sessionUpdate: "config_option_update",
+				configOptions: this.#buildConfigOptions(record.session),
+			},
+		});
+		return {};
+	}
+
 	async prompt(params: PromptRequest): Promise<PromptResponse> {
-		this.#assertSameSession(params.sessionId);
-		if (this.#promptTurn && !this.#promptTurn.settled) {
+		const record = this.#getSessionRecord(params.sessionId);
+		if (record.promptTurn && !record.promptTurn.settled) {
 			throw new Error("ACP prompt already in progress for this session");
 		}
 
 		const converted = this.#convertPromptBlocks(params.prompt);
 		const pendingPrompt = Promise.withResolvers<PromptResponse>();
-		this.#promptTurn = {
-			messageId: params.messageId ?? null,
+		record.promptTurn = {
+			userMessageId: params.messageId ?? crypto.randomUUID(),
 			cancelRequested: false,
 			settled: false,
+			usageBaseline: this.#cloneUsageStatistics(record.session.sessionManager.getUsageStatistics()),
 			unsubscribe: undefined,
 			resolve: pendingPrompt.resolve,
 			reject: pendingPrompt.reject,
 		};
 
-		this.#promptTurn.unsubscribe = this.#session.subscribe(event => {
-			void this.#handlePromptEvent(event);
+		record.promptTurn.unsubscribe = record.session.subscribe(event => {
+			void this.#handlePromptEvent(record, event);
 		});
 
-		this.#session.prompt(converted.text, { images: converted.images }).catch((error: unknown) => {
-			this.#finishPrompt(undefined, error);
+		record.session.prompt(converted.text, { images: converted.images }).catch((error: unknown) => {
+			this.#finishPrompt(record, undefined, error);
 		});
 
 		return await pendingPrompt.promise;
 	}
 
 	async cancel(params: { sessionId: string }): Promise<void> {
-		this.#assertSameSession(params.sessionId);
-		const promptTurn = this.#promptTurn;
+		const record = this.#getSessionRecord(params.sessionId);
+		const promptTurn = record.promptTurn;
 		if (!promptTurn || promptTurn.settled) {
 			return;
 		}
 		promptTurn.cancelRequested = true;
 		try {
-			await this.#session.abort();
-			this.#finishPrompt({
+			await record.session.abort();
+			this.#finishPrompt(record, {
 				stopReason: "cancelled",
-				userMessageId: promptTurn.messageId,
+				usage: this.#buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),
+				userMessageId: promptTurn.userMessageId,
 			});
 		} catch (error: unknown) {
-			this.#finishPrompt(undefined, error);
+			this.#finishPrompt(record, undefined, error);
 		}
 	}
 
-	async extMethod(_method: string, _params: { [key: string]: unknown }): Promise<{ [key: string]: unknown }> {
-		throw new Error("ACP extension methods are not implemented");
+	async extMethod(method: string, params: { [key: string]: unknown }): Promise<{ [key: string]: unknown }> {
+		switch (method) {
+			case "omp/sessions/listAll": {
+				const limit = typeof params.limit === "number" ? Math.max(1, Math.min(5000, params.limit as number)) : 1000;
+				const sessions = await SessionManager.listAll();
+				const sorted = sessions.sort((l, r) => r.modified.getTime() - l.modified.getTime()).slice(0, limit);
+				return {
+					sessions: sorted.map(s => this.#toSessionInfo(s)),
+					total: sessions.length,
+				};
+			}
+			case "omp/projects/list": {
+				const sessions = await SessionManager.listAll();
+				const buckets = new Map<
+					string,
+					{ cwd: string; sessionCount: number; lastActivityAt: number; lastTitle: string }
+				>();
+				for (const s of sessions) {
+					if (!s.cwd) continue;
+					const ts = s.modified.getTime();
+					const existing = buckets.get(s.cwd);
+					if (existing) {
+						existing.sessionCount += 1;
+						if (ts > existing.lastActivityAt) {
+							existing.lastActivityAt = ts;
+							existing.lastTitle = s.title ?? "";
+						}
+					} else {
+						buckets.set(s.cwd, {
+							cwd: s.cwd,
+							sessionCount: 1,
+							lastActivityAt: ts,
+							lastTitle: s.title ?? "",
+						});
+					}
+				}
+				const projects = Array.from(buckets.values()).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+				return { projects, totalSessions: sessions.length };
+			}
+			case "omp/chats/byCwd": {
+				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
+				if (!cwd) throw new Error("cwd required");
+				const limit = typeof params.limit === "number" ? Math.max(1, Math.min(500, params.limit as number)) : 100;
+				const sessions = await SessionManager.list(cwd);
+				const sorted = sessions.sort((l, r) => r.modified.getTime() - l.modified.getTime()).slice(0, limit);
+				return { sessions: sorted.map(s => this.#toSessionInfo(s)) };
+			}
+			case "omp/usage": {
+				const [firstRecord] = this.#sessions.values();
+				const target = firstRecord?.session ?? this.#initialSession;
+				const reports = await target.fetchUsageReports();
+				return { reports: reports ?? [] };
+			}
+			case "omp/extensions": {
+				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
+				const sm = await Settings.init();
+				const disabledIds = (sm.get("disabledExtensions") as string[] | undefined) ?? [];
+				const extensions = await loadAllExtensions(cwd, disabledIds);
+				return { extensions: extensions as unknown as Array<{ [key: string]: unknown }> };
+			}
+			case "omp/extensions/toggle": {
+				const providerId = params.providerId;
+				if (typeof providerId !== "string") throw new Error("providerId required");
+				if (params.enabled === false) {
+					disableProvider(providerId);
+					return { enabled: false };
+				}
+				enableProvider(providerId);
+				return { enabled: true };
+			}
+			default:
+				throw new Error(`Unknown ACP ext method: ${method}`);
+		}
 	}
 
 	async extNotification(_method: string, _params: { [key: string]: unknown }): Promise<void> {}
@@ -333,48 +467,208 @@ export class AcpAgent implements Agent {
 		return this.#connection.closed;
 	}
 
-	get #sessionId(): string {
-		return this.#session.sessionId;
+	#registerConnectionCleanup(): void {
+		if (this.#cleanupRegistered) {
+			return;
+		}
+		this.#cleanupRegistered = true;
+		this.#connection.signal.addEventListener(
+			"abort",
+			() => {
+				void this.#disposeAllSessions();
+			},
+			{ once: true },
+		);
 	}
 
-	async #handlePromptEvent(event: AgentSessionEvent): Promise<void> {
-		const promptTurn = this.#promptTurn;
+	async #createNewSessionRecord(cwd: string, mcpServers: McpServer[]): Promise<ManagedSessionRecord> {
+		const session = await this.#createSession(path.resolve(cwd));
+		try {
+			await session.sessionManager.ensureOnDisk();
+		} catch (error) {
+			await this.#disposeStandaloneSession(session);
+			throw error;
+		}
+		return await this.#registerPreparedSession(session, mcpServers);
+	}
+
+	async #loadManagedSession(sessionId: string, cwd: string, mcpServers: McpServer[]): Promise<ManagedSessionRecord> {
+		const existing = this.#sessions.get(sessionId);
+		if (existing) {
+			this.#assertMatchingCwd(existing.session, cwd);
+			await this.#configureMcpServers(existing, mcpServers);
+			return existing;
+		}
+
+		const storedSession = await this.#findStoredSession(sessionId, cwd);
+		if (!storedSession) {
+			throw new Error(`ACP session not found: ${sessionId}`);
+		}
+		return await this.#openStoredSession(storedSession.path, cwd, mcpServers, sessionId);
+	}
+
+	async #resumeManagedSession(sessionId: string, cwd: string, mcpServers: McpServer[]): Promise<ManagedSessionRecord> {
+		const existing = this.#sessions.get(sessionId);
+		if (existing) {
+			this.#assertMatchingCwd(existing.session, cwd);
+			await this.#configureMcpServers(existing, mcpServers);
+			return existing;
+		}
+
+		const storedSession = await this.#findStoredSession(sessionId, cwd);
+		if (!storedSession) {
+			throw new Error(`ACP session not found: ${sessionId}`);
+		}
+		return await this.#openStoredSession(storedSession.path, cwd, mcpServers, sessionId);
+	}
+
+	async #forkManagedSession(params: ForkSessionRequest): Promise<ManagedSessionRecord> {
+		const sourcePath = await this.#resolveForkSourceSessionPath(params.sessionId);
+		const session = await this.#createSession(path.resolve(params.cwd));
+		try {
+			const success = await session.switchSession(sourcePath);
+			if (!success) {
+				throw new Error(`ACP session fork was cancelled: ${params.sessionId}`);
+			}
+			const forked = await session.fork();
+			if (!forked) {
+				throw new Error(`ACP session fork failed: ${params.sessionId}`);
+			}
+		} catch (error) {
+			await this.#disposeStandaloneSession(session);
+			throw error;
+		}
+		return await this.#registerPreparedSession(session, params.mcpServers ?? []);
+	}
+
+	async #openStoredSession(
+		sessionPath: string,
+		cwd: string,
+		mcpServers: McpServer[],
+		sessionId: string,
+	): Promise<ManagedSessionRecord> {
+		const session = await this.#createSession(path.resolve(cwd));
+		try {
+			const success = await session.switchSession(sessionPath);
+			if (!success) {
+				throw new Error(`ACP session load was cancelled: ${sessionId}`);
+			}
+		} catch (error) {
+			await this.#disposeStandaloneSession(session);
+			throw error;
+		}
+		return await this.#registerPreparedSession(session, mcpServers);
+	}
+
+	async #registerPreparedSession(session: AgentSession, mcpServers: McpServer[]): Promise<ManagedSessionRecord> {
+		const record = this.#createManagedSessionRecord(session);
+		try {
+			await this.#configureExtensions(record);
+			await this.#configureMcpServers(record, mcpServers);
+			this.#sessions.set(session.sessionId, record);
+			return record;
+		} catch (error) {
+			await this.#disposeSessionRecord(record);
+			throw error;
+		}
+	}
+
+	#createManagedSessionRecord(session: AgentSession): ManagedSessionRecord {
+		return {
+			session,
+			mcpManager: undefined,
+			promptTurn: undefined,
+			liveMessageIds: new WeakMap<object, string>(),
+			extensionsConfigured: false,
+		};
+	}
+
+	#getSessionRecord(sessionId: string): ManagedSessionRecord {
+		const record = this.#sessions.get(sessionId);
+		if (!record) {
+			throw new Error(`Unsupported ACP session: ${sessionId}`);
+		}
+		return record;
+	}
+
+	#assertMatchingCwd(session: AgentSession, cwd: string): void {
+		const expected = path.resolve(cwd);
+		const actual = path.resolve(session.sessionManager.getCwd());
+		if (actual !== expected) {
+			throw new Error(`ACP session ${session.sessionId} is already loaded for ${actual}, not ${expected}`);
+		}
+	}
+
+	async #resolveForkSourceSessionPath(sessionId: string): Promise<string> {
+		const loaded = this.#sessions.get(sessionId);
+		if (loaded) {
+			const promptTurn = loaded.promptTurn;
+			if (promptTurn && !promptTurn.settled) {
+				throw new Error(`ACP session fork is unavailable while a prompt is in progress: ${sessionId}`);
+			}
+			await loaded.session.sessionManager.flush();
+			const sessionPath = loaded.session.sessionManager.getSessionFile();
+			if (!sessionPath) {
+				throw new Error(`ACP session cannot be forked before it is persisted: ${sessionId}`);
+			}
+			return sessionPath;
+		}
+
+		const storedSession = await this.#findStoredSessionById(sessionId);
+		if (!storedSession) {
+			throw new Error(`ACP session not found: ${sessionId}`);
+		}
+		return storedSession.path;
+	}
+
+	async #handlePromptEvent(record: ManagedSessionRecord, event: AgentSessionEvent): Promise<void> {
+		const promptTurn = record.promptTurn;
 		if (!promptTurn || promptTurn.settled) {
 			return;
 		}
 
-		for (const notification of mapAgentSessionEventToAcpSessionUpdates(event, this.#sessionId)) {
+		for (const notification of mapAgentSessionEventToAcpSessionUpdates(event, record.session.sessionId, {
+			getMessageId: message => this.#getLiveMessageId(record, message),
+		})) {
 			await this.#connection.sessionUpdate(notification);
 		}
 
 		if (event.type === "agent_end") {
-			await this.#emitEndOfTurnUpdates();
-			this.#finishPrompt({
+			await this.#emitEndOfTurnUpdates(record);
+			this.#finishPrompt(record, {
 				stopReason: promptTurn.cancelRequested ? "cancelled" : "end_turn",
-				userMessageId: promptTurn.messageId,
+				usage: this.#buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),
+				userMessageId: promptTurn.userMessageId,
 			});
 		}
 	}
 
-	#finishPrompt(response?: PromptResponse, error?: unknown): void {
-		const promptTurn = this.#promptTurn;
+	#getLiveMessageId(record: ManagedSessionRecord, message: unknown): string | undefined {
+		if (typeof message !== "object" || message === null) {
+			return undefined;
+		}
+		const existing = record.liveMessageIds.get(message);
+		if (existing) {
+			return existing;
+		}
+		const nextMessageId = crypto.randomUUID();
+		record.liveMessageIds.set(message, nextMessageId);
+		return nextMessageId;
+	}
+
+	#finishPrompt(record: ManagedSessionRecord, response?: PromptResponse, error?: unknown): void {
+		const promptTurn = record.promptTurn;
 		if (!promptTurn || promptTurn.settled) {
 			return;
 		}
 		promptTurn.settled = true;
 		promptTurn.unsubscribe?.();
-		this.#promptTurn = undefined;
+		record.promptTurn = undefined;
 		if (error !== undefined) {
 			promptTurn.reject(error);
 			return;
 		}
 		promptTurn.resolve(response ?? { stopReason: "end_turn" });
-	}
-
-	#assertSameSession(sessionId: string): void {
-		if (sessionId !== this.#sessionId) {
-			throw new Error(`Unsupported ACP session: ${sessionId}`);
-		}
 	}
 
 	#assertAbsoluteCwd(cwd: string): void {
@@ -415,7 +709,7 @@ export class AcpAgent implements Agent {
 		};
 	}
 
-	#buildConfigOptions(): SessionConfigOption[] {
+	#buildConfigOptions(session: AgentSession): SessionConfigOption[] {
 		const configOptions: SessionConfigOption[] = [
 			{
 				id: MODE_CONFIG_ID,
@@ -427,8 +721,8 @@ export class AcpAgent implements Agent {
 			},
 		];
 
-		const models = this.#session.getAvailableModels();
-		const currentModel = this.#session.model;
+		const models = session.getAvailableModels();
+		const currentModel = session.model;
 		if (models.length > 0) {
 			configOptions.push({
 				id: MODEL_CONFIG_ID,
@@ -449,16 +743,38 @@ export class AcpAgent implements Agent {
 			name: "Thinking",
 			category: "thought_level",
 			type: "select",
-			currentValue: this.#toThinkingConfigValue(this.#session.thinkingLevel),
-			options: this.#buildThinkingOptions(),
+			currentValue: this.#toThinkingConfigValue(session.thinkingLevel),
+			options: this.#buildThinkingOptions(session),
 		});
 		return configOptions;
 	}
 
-	#buildThinkingOptions(): Array<{ value: string; name: string; description?: string }> {
+	#buildModelState(session: AgentSession): SessionModelState | undefined {
+		const models = session.getAvailableModels();
+		if (models.length === 0) {
+			return undefined;
+		}
+
+		const availableModels = models.map(model => ({
+			modelId: this.#toModelId(model),
+			name: model.name,
+			description: `${model.provider}/${model.id}`,
+		}));
+		const currentModelId = session.model ? this.#toModelId(session.model) : availableModels[0]?.modelId;
+		if (!currentModelId) {
+			return undefined;
+		}
+
+		return {
+			availableModels,
+			currentModelId,
+		};
+	}
+
+	#buildThinkingOptions(session: AgentSession): Array<{ value: string; name: string; description?: string }> {
 		return [
 			{ value: THINKING_OFF, name: "Off" },
-			...this.#session.getAvailableThinkingLevels().map(level => ({
+			...session.getAvailableThinkingLevels().map(level => ({
 				value: level,
 				name: level,
 			})),
@@ -469,20 +785,20 @@ export class AcpAgent implements Agent {
 		return value && value !== "inherit" ? value : THINKING_OFF;
 	}
 
-	async #setModelById(modelId: string): Promise<void> {
-		const model = this.#session.getAvailableModels().find(candidate => this.#toModelId(candidate) === modelId);
+	async #setModelById(session: AgentSession, modelId: string): Promise<void> {
+		const model = session.getAvailableModels().find(candidate => this.#toModelId(candidate) === modelId);
 		if (!model) {
 			throw new Error(`Unknown ACP model: ${modelId}`);
 		}
-		await this.#session.setModel(model);
+		await session.setModel(model);
 	}
 
-	#setThinkingLevelById(value: string): void {
+	#setThinkingLevelById(session: AgentSession, value: string): void {
 		const thinkingLevel = parseThinkingLevel(value);
 		if (!thinkingLevel) {
 			throw new Error(`Unknown ACP thinking level: ${value}`);
 		}
-		this.#session.setThinkingLevel(thinkingLevel);
+		session.setThinkingLevel(thinkingLevel);
 	}
 
 	#toModelId(model: Model): string {
@@ -503,7 +819,7 @@ export class AcpAgent implements Agent {
 		};
 	}
 
-	async #buildAvailableCommands(): Promise<AvailableCommand[]> {
+	async #buildAvailableCommands(session: AgentSession): Promise<AvailableCommand[]> {
 		const commands: AvailableCommand[] = [];
 		const seenNames = new Set<string>();
 		const appendCommand = (command: AvailableCommand): void => {
@@ -514,7 +830,7 @@ export class AcpAgent implements Agent {
 			commands.push(command);
 		};
 
-		for (const command of this.#session.customCommands) {
+		for (const command of session.customCommands) {
 			appendCommand({
 				name: command.command.name,
 				description: command.command.description,
@@ -522,7 +838,7 @@ export class AcpAgent implements Agent {
 			});
 		}
 
-		for (const command of await loadSlashCommands({ cwd: this.#session.sessionManager.getCwd() })) {
+		for (const command of await loadSlashCommands({ cwd: session.sessionManager.getCwd() })) {
 			appendCommand({
 				name: command.name,
 				description: command.description,
@@ -543,41 +859,44 @@ export class AcpAgent implements Agent {
 
 	#scheduleBootstrapUpdates(sessionId: string): void {
 		setTimeout(() => {
-			if (sessionId !== this.#sessionId || this.#connection.signal.aborted) {
+			if (this.#connection.signal.aborted) {
 				return;
 			}
-			void this.#emitBootstrapUpdates(sessionId);
+			const record = this.#sessions.get(sessionId);
+			if (!record) {
+				return;
+			}
+			void this.#emitBootstrapUpdates(sessionId, record);
 		}, 0);
 	}
 
-	async #emitBootstrapUpdates(sessionId: string): Promise<void> {
-		if (sessionId !== this.#sessionId) {
+	async #emitBootstrapUpdates(sessionId: string, record: ManagedSessionRecord): Promise<void> {
+		if (this.#sessions.get(sessionId) !== record) {
 			return;
 		}
 		await this.#connection.sessionUpdate({
 			sessionId,
 			update: {
 				sessionUpdate: "available_commands_update",
-				availableCommands: await this.#buildAvailableCommands(),
+				availableCommands: await this.#buildAvailableCommands(record.session),
 			},
 		});
 		await this.#connection.sessionUpdate({
 			sessionId,
 			update: {
 				sessionUpdate: "session_info_update",
-				title: this.#session.sessionName,
-				updatedAt: this.#session.sessionManager.getHeader()?.timestamp,
+				title: record.session.sessionName,
+				updatedAt: record.session.sessionManager.getHeader()?.timestamp,
 			},
 		});
 	}
 
-	async #emitEndOfTurnUpdates(): Promise<void> {
-		const sessionId = this.#sessionId;
+	async #emitEndOfTurnUpdates(record: ManagedSessionRecord): Promise<void> {
+		const sessionId = record.session.sessionId;
 
-		// Emit usage update with context token counts
-		const contextUsage = this.#session.getContextUsage();
+		const contextUsage = record.session.getContextUsage();
 		if (contextUsage) {
-			const usageStats = this.#session.sessionManager.getUsageStatistics();
+			const usageStats = record.session.sessionManager.getUsageStatistics();
 			await this.#connection.sessionUpdate({
 				sessionId,
 				update: {
@@ -589,15 +908,50 @@ export class AcpAgent implements Agent {
 			});
 		}
 
-		// Push latest session title
 		await this.#connection.sessionUpdate({
 			sessionId,
 			update: {
 				sessionUpdate: "session_info_update",
-				title: this.#session.sessionName,
+				title: record.session.sessionName,
 				updatedAt: new Date().toISOString(),
 			},
 		});
+	}
+
+	#cloneUsageStatistics(usage: UsageStatistics): UsageStatistics {
+		return {
+			input: usage.input,
+			output: usage.output,
+			cacheRead: usage.cacheRead,
+			cacheWrite: usage.cacheWrite,
+			premiumRequests: usage.premiumRequests,
+			cost: usage.cost,
+		};
+	}
+
+	#buildTurnUsage(previous: UsageStatistics, current: UsageStatistics): Usage | undefined {
+		const inputTokens = Math.max(0, current.input - previous.input);
+		const outputTokens = Math.max(0, current.output - previous.output);
+		const cachedReadTokens = Math.max(0, current.cacheRead - previous.cacheRead);
+		const cachedWriteTokens = Math.max(0, current.cacheWrite - previous.cacheWrite);
+		const totalTokens = inputTokens + outputTokens + cachedReadTokens + cachedWriteTokens;
+
+		if (totalTokens === 0) {
+			return undefined;
+		}
+
+		const usage: Usage = {
+			inputTokens,
+			outputTokens,
+			totalTokens,
+		};
+		if (cachedReadTokens > 0) {
+			usage.cachedReadTokens = cachedReadTokens;
+		}
+		if (cachedWriteTokens > 0) {
+			usage.cachedWriteTokens = cachedWriteTokens;
+		}
+		return usage;
 	}
 
 	async #listStoredSessions(cwd?: string): Promise<StoredSessionInfo[]> {
@@ -607,6 +961,11 @@ export class AcpAgent implements Agent {
 
 	async #findStoredSession(sessionId: string, cwd: string): Promise<StoredSessionInfo | undefined> {
 		const sessions = await this.#listStoredSessions(cwd);
+		return sessions.find(session => session.id === sessionId);
+	}
+
+	async #findStoredSessionById(sessionId: string): Promise<StoredSessionInfo | undefined> {
+		const sessions = await this.#listStoredSessions();
 		return sessions.find(session => session.id === sessionId);
 	}
 
@@ -621,17 +980,17 @@ export class AcpAgent implements Agent {
 		return parsed;
 	}
 
-	async #replaySessionHistory(): Promise<void> {
-		for (const message of this.#session.sessionManager.buildSessionContext().messages as ReplayableMessage[]) {
-			for (const notification of this.#messageToReplayNotifications(message)) {
+	async #replaySessionHistory(record: ManagedSessionRecord): Promise<void> {
+		for (const message of record.session.sessionManager.buildSessionContext().messages as ReplayableMessage[]) {
+			for (const notification of this.#messageToReplayNotifications(record.session.sessionId, message)) {
 				await this.#connection.sessionUpdate(notification);
 			}
 		}
 	}
 
-	#messageToReplayNotifications(message: ReplayableMessage): SessionNotification[] {
+	#messageToReplayNotifications(sessionId: string, message: ReplayableMessage): SessionNotification[] {
 		if (message.role === "assistant") {
-			return this.#replayAssistantMessage(message);
+			return this.#replayAssistantMessage(sessionId, message);
 		}
 		if (
 			message.role === "user" ||
@@ -639,28 +998,42 @@ export class AcpAgent implements Agent {
 			message.role === "custom" ||
 			message.role === "hookMessage"
 		) {
-			return this.#wrapReplayContent(this.#extractReplayContent(message.content, undefined), "user_message_chunk");
+			return this.#wrapReplayContent(
+				sessionId,
+				this.#extractReplayContent(message.content, undefined),
+				"user_message_chunk",
+				crypto.randomUUID(),
+			);
 		}
 		if (
 			message.role === "toolResult" &&
 			typeof message.toolCallId === "string" &&
 			typeof message.toolName === "string"
 		) {
-			return this.#replayToolResult({ ...message, toolCallId: message.toolCallId, toolName: message.toolName });
+			return this.#replayToolResult(sessionId, {
+				...message,
+				toolCallId: message.toolCallId,
+				toolName: message.toolName,
+			});
 		}
 		if (
 			message.role === "bashExecution" ||
 			message.role === "pythonExecution" ||
 			message.role === "compactionSummary"
 		) {
-			return this.#wrapReplayContent(this.#extractReplayContent(message.content, undefined), "user_message_chunk");
+			return this.#wrapReplayContent(
+				sessionId,
+				this.#extractReplayContent(message.content, undefined),
+				"user_message_chunk",
+				crypto.randomUUID(),
+			);
 		}
 		return [];
 	}
 
-	#replayAssistantMessage(message: ReplayableMessage): SessionNotification[] {
+	#replayAssistantMessage(sessionId: string, message: ReplayableMessage): SessionNotification[] {
 		const notifications: SessionNotification[] = [];
-		const sessionId = this.#sessionId;
+		const messageId = crypto.randomUUID();
 		if (Array.isArray(message.content)) {
 			for (const item of message.content) {
 				if (typeof item !== "object" || item === null || !("type" in item)) {
@@ -669,7 +1042,11 @@ export class AcpAgent implements Agent {
 				if (item.type === "text" && "text" in item && typeof item.text === "string" && item.text.length > 0) {
 					notifications.push({
 						sessionId,
-						update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: item.text } },
+						update: {
+							sessionUpdate: "agent_message_chunk",
+							content: { type: "text", text: item.text },
+							messageId,
+						},
 					});
 					continue;
 				}
@@ -681,7 +1058,11 @@ export class AcpAgent implements Agent {
 				) {
 					notifications.push({
 						sessionId,
-						update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: item.thinking } },
+						update: {
+							sessionUpdate: "agent_thought_chunk",
+							content: { type: "text", text: item.thinking },
+							messageId,
+						},
 					});
 					continue;
 				}
@@ -709,13 +1090,18 @@ export class AcpAgent implements Agent {
 		if (notifications.length === 0 && message.errorMessage) {
 			notifications.push({
 				sessionId,
-				update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: message.errorMessage } },
+				update: {
+					sessionUpdate: "agent_message_chunk",
+					content: { type: "text", text: message.errorMessage },
+					messageId,
+				},
 			});
 		}
 		return notifications;
 	}
 
 	#replayToolResult(
+		sessionId: string,
 		message: Required<Pick<ReplayableMessage, "toolCallId" | "toolName">> & ReplayableMessage,
 	): SessionNotification[] {
 		const args = this.#buildReplayToolArgs(message.details);
@@ -737,8 +1123,8 @@ export class AcpAgent implements Agent {
 			},
 		};
 		return [
-			...mapAgentSessionEventToAcpSessionUpdates(startEvent, this.#sessionId),
-			...mapAgentSessionEventToAcpSessionUpdates(endEvent, this.#sessionId),
+			...mapAgentSessionEventToAcpSessionUpdates(startEvent, sessionId),
+			...mapAgentSessionEventToAcpSessionUpdates(endEvent, sessionId),
 		];
 	}
 
@@ -751,14 +1137,17 @@ export class AcpAgent implements Agent {
 	}
 
 	#wrapReplayContent(
+		sessionId: string,
 		content: PromptRequest["prompt"],
 		kind: "agent_message_chunk" | "user_message_chunk",
+		messageId: string,
 	): SessionNotification[] {
 		return content.map(block => ({
-			sessionId: this.#sessionId,
+			sessionId,
 			update: {
 				sessionUpdate: kind,
 				content: block,
+				messageId,
 			},
 		}));
 	}
@@ -791,115 +1180,110 @@ export class AcpAgent implements Agent {
 		return replay;
 	}
 
-	async #configureExtensions(): Promise<void> {
-		const extensionRunner = this.#session.extensionRunner;
+	async #configureExtensions(record: ManagedSessionRecord): Promise<void> {
+		if (record.extensionsConfigured) {
+			return;
+		}
+
+		const extensionRunner = record.session.extensionRunner;
 		if (!extensionRunner) {
+			record.extensionsConfigured = true;
 			return;
 		}
 
 		extensionRunner.initialize(
 			{
 				sendMessage: (message, options) => {
-					this.#session.sendCustomMessage(message, options).catch((error: unknown) => {
+					record.session.sendCustomMessage(message, options).catch((error: unknown) => {
 						logger.warn("ACP extension sendMessage failed", { error });
 					});
 				},
 				sendUserMessage: (content, options) => {
-					this.#session.sendUserMessage(content, options).catch((error: unknown) => {
+					record.session.sendUserMessage(content, options).catch((error: unknown) => {
 						logger.warn("ACP extension sendUserMessage failed", { error });
 					});
 				},
 				appendEntry: (customType, data) => {
-					this.#session.sessionManager.appendCustomEntry(customType, data);
+					record.session.sessionManager.appendCustomEntry(customType, data);
 				},
 				setLabel: (targetId, label) => {
-					this.#session.sessionManager.appendLabelChange(targetId, label);
+					record.session.sessionManager.appendLabelChange(targetId, label);
 				},
-				getActiveTools: () => this.#session.getActiveToolNames(),
-				getAllTools: () => this.#session.getAllToolNames(),
-				setActiveTools: toolNames => this.#session.setActiveToolsByName(toolNames),
+				getActiveTools: () => record.session.getActiveToolNames(),
+				getAllTools: () => record.session.getAllToolNames(),
+				setActiveTools: toolNames => record.session.setActiveToolsByName(toolNames),
 				getCommands: () => [],
 				setModel: async model => {
-					const apiKey = await this.#session.modelRegistry.getApiKey(model);
+					const apiKey = await record.session.modelRegistry.getApiKey(model);
 					if (!apiKey) {
 						return false;
 					}
-					await this.#session.setModel(model);
+					await record.session.setModel(model);
 					return true;
 				},
-				getThinkingLevel: () => this.#session.thinkingLevel,
-				setThinkingLevel: level => this.#session.setThinkingLevel(level),
+				getThinkingLevel: () => record.session.thinkingLevel,
+				setThinkingLevel: level => record.session.setThinkingLevel(level),
+				getSessionName: () => record.session.sessionManager.getSessionName(),
+				setSessionName: async name => {
+					await record.session.sessionManager.setSessionName(name, "user");
+				},
 			},
 			{
-				getModel: () => this.#session.model,
-				getSearchDb: () => this.#session.searchDb,
-				isIdle: () => !this.#session.isStreaming,
+				getModel: () => record.session.model,
+				isIdle: () => !record.session.isStreaming,
 				abort: () => {
-					void this.#session.abort();
+					void record.session.abort();
 				},
-				hasPendingMessages: () => this.#session.queuedMessageCount > 0,
+				hasPendingMessages: () => record.session.queuedMessageCount > 0,
 				shutdown: () => {},
-				getContextUsage: () => this.#session.getContextUsage(),
-				getSystemPrompt: () => this.#session.systemPrompt,
-				compact: async instructionsOrOptions => {
-					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-					const options =
-						instructionsOrOptions && typeof instructionsOrOptions === "object"
-							? instructionsOrOptions
-							: undefined;
-					await this.#session.compact(instructions, options);
-				},
+				getContextUsage: () => record.session.getContextUsage(),
+				getSystemPrompt: () => record.session.systemPrompt,
+				compact: instructionsOrOptions => runExtensionCompact(record.session, instructionsOrOptions),
 			},
 			{
-				getContextUsage: () => this.#session.getContextUsage(),
-				waitForIdle: () => this.#session.agent.waitForIdle(),
+				getContextUsage: () => record.session.getContextUsage(),
+				waitForIdle: () => record.session.agent.waitForIdle(),
 				newSession: async options => {
-					const success = await this.#session.newSession({ parentSession: options?.parentSession });
+					const success = await record.session.newSession({ parentSession: options?.parentSession });
 					if (success && options?.setup) {
-						await options.setup(this.#session.sessionManager);
+						await options.setup(record.session.sessionManager);
 					}
 					return { cancelled: !success };
 				},
 				branch: async entryId => {
-					const result = await this.#session.branch(entryId);
+					const result = await record.session.branch(entryId);
 					return { cancelled: result.cancelled };
 				},
 				navigateTree: async (targetId, options) => {
-					const result = await this.#session.navigateTree(targetId, { summarize: options?.summarize });
+					const result = await record.session.navigateTree(targetId, { summarize: options?.summarize });
 					return { cancelled: result.cancelled };
 				},
 				switchSession: async sessionPath => {
-					const success = await this.#session.switchSession(sessionPath);
+					const success = await record.session.switchSession(sessionPath);
 					return { cancelled: !success };
 				},
 				reload: async () => {
-					await this.#session.reload();
+					await record.session.reload();
 				},
-				compact: async instructionsOrOptions => {
-					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-					const options =
-						instructionsOrOptions && typeof instructionsOrOptions === "object"
-							? instructionsOrOptions
-							: undefined;
-					await this.#session.compact(instructions, options);
-				},
+				compact: instructionsOrOptions => runExtensionCompact(record.session, instructionsOrOptions),
 			},
 			acpExtensionUiContext,
 		);
 		await extensionRunner.emit({ type: "session_start" });
+		record.extensionsConfigured = true;
 	}
 
-	async #configureMcpServers(servers: McpServer[]): Promise<void> {
-		if (this.#mcpManager) {
-			await this.#mcpManager.disconnectAll();
+	async #configureMcpServers(record: ManagedSessionRecord, servers: McpServer[]): Promise<void> {
+		if (record.mcpManager) {
+			await record.mcpManager.disconnectAll();
 		}
 		if (servers.length === 0) {
-			this.#mcpManager = undefined;
-			await this.#session.refreshMCPTools([]);
+			record.mcpManager = undefined;
+			await record.session.refreshMCPTools([]);
 			return;
 		}
 
-		const manager = new MCPManager(this.#session.sessionManager.getCwd());
+		const manager = new MCPManager(record.session.sessionManager.getCwd());
 		const configs: MCPConfigMap = {};
 		const sources: MCPSourceMap = {};
 		for (const server of servers) {
@@ -921,8 +1305,8 @@ export class AcpAgent implements Agent {
 			);
 		}
 
-		this.#mcpManager = manager;
-		await this.#session.refreshMCPTools(result.tools);
+		record.mcpManager = manager;
+		await record.session.refreshMCPTools(result.tools);
 	}
 
 	#toMcpConfig(server: McpServer): MCPServerConfig {
@@ -954,5 +1338,85 @@ export class AcpAgent implements Agent {
 			mapped[value.name] = value.value;
 		}
 		return mapped;
+	}
+
+	async #closeManagedSession(sessionId: string, record: ManagedSessionRecord): Promise<void> {
+		this.#sessions.delete(sessionId);
+		await this.#cancelPromptForClose(record);
+		await this.#disposeSessionRecord(record);
+	}
+
+	async #cancelPromptForClose(record: ManagedSessionRecord): Promise<void> {
+		const promptTurn = record.promptTurn;
+		if (!promptTurn || promptTurn.settled) {
+			return;
+		}
+
+		promptTurn.cancelRequested = true;
+		promptTurn.unsubscribe?.();
+		try {
+			await record.session.abort();
+		} catch (error) {
+			logger.warn("Failed to abort ACP prompt during session close", { error });
+		}
+		this.#finishPrompt(record, {
+			stopReason: "cancelled",
+			usage: this.#buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),
+			userMessageId: promptTurn.userMessageId,
+		});
+	}
+
+	async #disposeSessionRecord(record: ManagedSessionRecord): Promise<void> {
+		if (record.mcpManager) {
+			try {
+				await record.mcpManager.disconnectAll();
+			} catch (error) {
+				logger.warn("Failed to disconnect ACP MCP servers", { error });
+			}
+			record.mcpManager = undefined;
+		}
+		try {
+			await record.session.dispose();
+		} catch (error) {
+			logger.warn("Failed to dispose ACP session", { error });
+		}
+	}
+
+	async #disposeStandaloneSession(session: AgentSession): Promise<void> {
+		try {
+			await session.dispose();
+		} catch (error) {
+			logger.warn("Failed to dispose ACP session", { error });
+		}
+	}
+
+	async #disposeAllSessions(): Promise<void> {
+		if (this.#disposePromise) {
+			await this.#disposePromise;
+			return;
+		}
+
+		this.#disposePromise = (async () => {
+			const records = Array.from(this.#sessions.entries());
+			this.#sessions.clear();
+			await Promise.all(
+				records.map(async ([sessionId, record]) => {
+					try {
+						await this.#cancelPromptForClose(record);
+						await this.#disposeSessionRecord(record);
+					} catch (error) {
+						logger.warn("Failed to clean up ACP session", { sessionId, error });
+					}
+				}),
+			);
+
+			const initialSession = this.#initialSession;
+			this.#initialSession = undefined;
+			if (initialSession) {
+				await this.#disposeStandaloneSession(initialSession);
+			}
+		})();
+
+		await this.#disposePromise;
 	}
 }

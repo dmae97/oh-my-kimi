@@ -1,4 +1,5 @@
 import type { Message, TextContent } from "@oh-my-pi/pi-ai";
+import type { SessionContext } from "../session/session-manager";
 import { compileSecretRegex } from "./regex";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -38,24 +39,22 @@ function generateDeterministicReplacement(secret: string): string {
 // Placeholder format
 // ═══════════════════════════════════════════════════════════════════════════
 
-const PLACEHOLDER_PREFIX = "<<$env:S";
-const PLACEHOLDER_SUFFIX = ">>";
+const HASH_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+const HASH_LEN = 4;
 
-/** Build an obfuscation placeholder for secret index N, padded to match the secret length. */
-function buildPlaceholder(index: number, secretLength: number): string {
-	// Minimum: <<$env:SN>> = 11 chars for single-digit index
-	const bare = `${PLACEHOLDER_PREFIX}${index}${PLACEHOLDER_SUFFIX}`;
-	if (secretLength <= bare.length) {
-		return bare;
+/** Build an obfuscation placeholder for secret index N. Deterministic `#HASH#` token. */
+function buildPlaceholder(index: number): string {
+	let v = Bun.hash.xxHash32(String(index), 0x5345_4352);
+	let tag = "#";
+	for (let i = 0; i < HASH_LEN; i++) {
+		tag += HASH_CHARS[v % HASH_CHARS.length];
+		v = Math.floor(v / HASH_CHARS.length);
 	}
-	// Pad with '.' between index and >>
-	const paddingNeeded = secretLength - bare.length;
-	const padding = ".".repeat(paddingNeeded);
-	return `${PLACEHOLDER_PREFIX}${index}=${padding}${PLACEHOLDER_SUFFIX}`;
+	return `${tag}#`;
 }
 
-/** Regex to match obfuscation placeholders: <<$env:S<N>=?<padding>?>> */
-const PLACEHOLDER_RE = /<<\$env:S(\d+)(?:=[.]*)?>>(?!>)/g;
+/** Regex to match obfuscation placeholders: #HASH# */
+const PLACEHOLDER_RE = /#[A-Z0-9]{4}#/g;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SecretObfuscator
@@ -90,7 +89,7 @@ export class SecretObfuscator {
 
 			if (entry.type === "plain") {
 				if (mode === "obfuscate") {
-					const placeholder = buildPlaceholder(index, entry.content.length);
+					const placeholder = buildPlaceholder(index);
 					this.#plainMappings.set(entry.content, index);
 					this.#obfuscateMappings.set(index, { secret: entry.content, placeholder });
 					this.#deobfuscateMap.set(placeholder, entry.content);
@@ -158,7 +157,7 @@ export class SecretObfuscator {
 					let index = this.#findObfuscateIndex(matchValue);
 					if (index === undefined) {
 						index = this.#nextIndex++;
-						const placeholder = buildPlaceholder(index, matchValue.length);
+						const placeholder = buildPlaceholder(index);
 						this.#obfuscateMappings.set(index, { secret: matchValue, placeholder });
 						this.#deobfuscateMap.set(placeholder, matchValue);
 					}
@@ -173,7 +172,7 @@ export class SecretObfuscator {
 
 	/** Deobfuscate obfuscate-mode placeholders back to original secrets. Replace-mode is NOT reversed. */
 	deobfuscate(text: string): string {
-		if (!this.#hasAny) return text;
+		if (!this.#hasAny || !text.includes("#")) return text;
 		return text.replace(PLACEHOLDER_RE, match => {
 			return this.#deobfuscateMap.get(match) ?? match;
 		});
@@ -197,6 +196,15 @@ export class SecretObfuscator {
 		}
 		return undefined;
 	}
+}
+
+export function deobfuscateSessionContext(
+	sessionContext: SessionContext,
+	obfuscator: SecretObfuscator | undefined,
+): SessionContext {
+	if (!obfuscator?.hasSecrets()) return sessionContext;
+	const messages = obfuscator.deobfuscateObject(sessionContext.messages);
+	return messages === sessionContext.messages ? sessionContext : { ...sessionContext, messages };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

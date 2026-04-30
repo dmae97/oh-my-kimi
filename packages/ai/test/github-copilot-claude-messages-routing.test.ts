@@ -34,8 +34,7 @@ describe("Copilot Claude model routing", () => {
 	it("preserves static Copilot headers on Claude models", () => {
 		const model = getBundledModel("github-copilot", "claude-sonnet-4");
 		expect(model.headers).toBeDefined();
-		expect(model.headers?.["User-Agent"]).toContain("GitHubCopilotChat");
-		expect(model.headers?.["Copilot-Integration-Id"]).toBe("vscode-chat");
+		expect(model.headers?.["User-Agent"]).toContain("opencode");
 	});
 
 	it("keeps non-Claude Copilot models on their existing APIs", () => {

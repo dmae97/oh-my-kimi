@@ -9,7 +9,6 @@ import {
 	type UsageLimit,
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
-import { copyToClipboard } from "@oh-my-pi/pi-natives";
 import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatDuration, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
@@ -25,14 +24,17 @@ import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { PythonExecutionComponent } from "../../modes/components/python-execution";
 import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
+import { computeContextBreakdown, renderContextUsage } from "../../modes/utils/context-usage";
 import { buildHotkeysMarkdown } from "../../modes/utils/hotkeys-markdown";
 import { buildToolsMarkdown } from "../../modes/utils/tools-markdown";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
 import type { AuthStorage } from "../../session/auth-storage";
+import type { NewSessionOptions } from "../../session/session-manager";
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd, stripOuterDoubleQuotes } from "../../tools/path-utils";
 import { replaceTabs } from "../../tools/render-utils";
 import { getChangelogPath, parseChangelog } from "../../utils/changelog";
+import { copyToClipboard } from "../../utils/clipboard";
 import { openPath } from "../../utils/open";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 
@@ -396,7 +398,8 @@ export class CommandController {
 		if (this.ctx.lspServers && this.ctx.lspServers.length > 0) {
 			info += `\n${theme.bold("LSP Servers")}\n`;
 			for (const server of this.ctx.lspServers) {
-				const statusColor = server.status === "ready" ? "success" : "error";
+				const statusColor =
+					server.status === "ready" ? "success" : server.status === "connecting" ? "warning" : "error";
 				const statusText =
 					server.status === "error" && server.error ? `${server.status}: ${server.error}` : server.status;
 				info += `${theme.fg("dim", `${server.name}:`)} ${theme.fg(statusColor, statusText)} ${theme.fg("dim", `(${server.fileTypes.join(", ")})`)}\n`;
@@ -527,6 +530,22 @@ export class CommandController {
 		showMarkdownPanel(this.ctx, "Available Tools", tools);
 	}
 
+	handleContextCommand(): void {
+		const breakdown = computeContextBreakdown(this.ctx.session);
+		if (breakdown.contextWindow <= 0) {
+			this.ctx.showWarning("Context usage is unavailable: no model is selected for this session.");
+			return;
+		}
+		const output = renderContextUsage(breakdown, theme);
+		this.ctx.chatContainer.addChild(new Spacer(1));
+		this.ctx.chatContainer.addChild(new DynamicBorder());
+		this.ctx.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Context Usage")), 1, 0));
+		this.ctx.chatContainer.addChild(new Spacer(1));
+		this.ctx.chatContainer.addChild(new Text(output, 1, 0));
+		this.ctx.chatContainer.addChild(new DynamicBorder());
+		this.ctx.ui.requestRender();
+	}
+
 	async handleMemoryCommand(text: string): Promise<void> {
 		const argumentText = text.slice(7).trim();
 		const action = argumentText.split(/\s+/, 1)[0]?.toLowerCase() || "view";
@@ -572,7 +591,7 @@ export class CommandController {
 		this.ctx.showError("Usage: /memory <view|clear|reset|enqueue|rebuild>");
 	}
 
-	async handleClearCommand(): Promise<void> {
+	async #runNewSessionFlow(options?: NewSessionOptions, label: string = "New session started"): Promise<void> {
 		if (this.ctx.loadingAnimation) {
 			this.ctx.loadingAnimation.stop();
 			this.ctx.loadingAnimation = undefined;
@@ -585,12 +604,18 @@ export class CommandController {
 				await Bun.sleep(10);
 			}
 		}
-		await this.ctx.session.newSession();
-		setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
+		if (!(await this.ctx.session.newSession(options))) return;
+		this.ctx.resetObserverRegistry();
+		setSessionTerminalTitle(
+			this.ctx.sessionManager.getSessionName(),
+			this.ctx.sessionManager.getCwd(),
+			this.ctx.sessionManager.titleSource,
+		);
 
 		this.ctx.statusLine.invalidate();
 		this.ctx.statusLine.setSessionStartTime(Date.now());
 		this.ctx.updateEditorTopBorder();
+		this.ctx.updateEditorBorderColor();
 		this.ctx.ui.requestRender();
 
 		this.ctx.chatContainer.clear();
@@ -601,11 +626,21 @@ export class CommandController {
 		this.ctx.pendingTools.clear();
 
 		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(
-			new Text(`${theme.fg("accent", `${theme.status.success} New session started`)}`, 1, 1),
-		);
+		this.ctx.chatContainer.addChild(new Text(`${theme.fg("accent", `${theme.status.success} ${label}`)}`, 1, 1));
 		await this.ctx.reloadTodos();
 		this.ctx.ui.requestRender();
+	}
+
+	async handleClearCommand(): Promise<void> {
+		await this.#runNewSessionFlow();
+	}
+
+	async handleDropCommand(): Promise<void> {
+		if (!this.ctx.sessionManager.getSessionFile()) {
+			this.ctx.showError("Nothing to drop (in-memory session)");
+			return;
+		}
+		await this.#runNewSessionFlow({ drop: true }, "Session dropped");
 	}
 
 	async handleForkCommand(): Promise<void> {
@@ -681,6 +716,23 @@ export class CommandController {
 			this.ctx.ui.requestRender();
 		} catch (err) {
 			this.ctx.showError(`Move failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	async handleRenameCommand(title: string): Promise<void> {
+		try {
+			const stored = await this.ctx.sessionManager.setSessionName(title, "user");
+			if (!stored) {
+				this.ctx.showError("Session name cannot be empty.");
+				return;
+			}
+			const name = this.ctx.sessionManager.getSessionName()!;
+			setSessionTerminalTitle(name, this.ctx.sessionManager.getCwd(), this.ctx.sessionManager.titleSource);
+			this.ctx.statusLine.invalidate();
+			this.ctx.updateEditorBorderColor();
+			this.ctx.showStatus(`Session renamed to "${name}".`);
+		} catch (err) {
+			this.ctx.showError(`Rename failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
@@ -867,6 +919,7 @@ export class CommandController {
 
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorTopBorder();
+			this.ctx.updateEditorBorderColor();
 			await this.ctx.reloadTodos();
 
 			this.ctx.chatContainer.addChild(new Spacer(1));
@@ -996,6 +1049,14 @@ function formatAccountLabel(limit: UsageLimit, report: UsageReport, index: numbe
 	const email = (report.metadata?.email as string | undefined) ?? limit.scope.accountId;
 	if (email) return email;
 	const accountId = (report.metadata?.accountId as string | undefined) ?? limit.scope.accountId;
+	if (accountId) return accountId;
+	return `account ${index + 1}`;
+}
+
+function formatUnlimitedReportLabel(report: UsageReport, index: number): string {
+	const email = report.metadata?.email as string | undefined;
+	if (email) return email;
+	const accountId = report.metadata?.accountId as string | undefined;
 	if (accountId) return accountId;
 	return `account ${index + 1}`;
 }
@@ -1186,6 +1247,16 @@ function renderUsageReports(reports: UsageReport[], uiTheme: typeof theme, nowMs
 			}
 		}
 
+		// Render accounts with no rate limits (e.g. business/enterprise plans).
+		const unlimitedReports = providerReports.filter(report => report.limits.length === 0);
+		for (const report of unlimitedReports) {
+			const label = formatUnlimitedReportLabel(report, 0);
+			const tier = report.metadata?.planType as string | undefined;
+			const tierSuffix = tier ? ` ${uiTheme.fg("dim", `(${tier})`)}` : "";
+			lines.push(
+				`${uiTheme.fg("success", uiTheme.status.success)} ${label}${tierSuffix} ${uiTheme.fg("dim", "-- no limits")}`,
+			);
+		}
 		// No per-provider footer; global header shows last check.
 	}
 

@@ -1,15 +1,14 @@
 import * as fs from "node:fs/promises";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { renderPromptTemplate } from "../config/prompt-templates";
 import exitPlanModeDescription from "../prompts/tools/exit-plan-mode.md" with { type: "text" };
 import type { ToolSession } from ".";
 import { resolvePlanPath } from "./plan-mode-guard";
 import { ToolError } from "./tool-errors";
 
 const exitPlanModeSchema = Type.Object({
-	title: Type.String({ description: "Final plan title, e.g. WP_MIGRATION_PLAN" }),
+	title: Type.String({ description: "final plan title", examples: ["WP_MIGRATION_PLAN"] }),
 });
 
 type ExitPlanModeParams = Static<typeof exitPlanModeSchema>;
@@ -46,9 +45,11 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 	readonly description: string;
 	readonly parameters = exitPlanModeSchema;
 	readonly strict = true;
+	readonly concurrency = "exclusive";
+	readonly intent = (): string => "Exiting plan mode";
 
 	constructor(private readonly session: ToolSession) {
-		this.description = renderPromptTemplate(exitPlanModeDescription);
+		this.description = prompt.render(exitPlanModeDescription);
 	}
 
 	async execute(

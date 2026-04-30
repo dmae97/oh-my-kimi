@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { $which, logger } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { resolvePython } from "./transcriber";
 
@@ -15,9 +15,9 @@ export interface EnsureOptions {
 // ── Recording tool ─────────────────────────────────────────────────
 
 async function ensureRecordingTool(options?: EnsureOptions): Promise<void> {
-	if (Bun.which("sox")) return;
-	if (Bun.which("ffmpeg")) return;
-	if (process.platform === "linux" && Bun.which("arecord")) return;
+	if ($which("sox")) return;
+	if ($which("ffmpeg")) return;
+	if (process.platform === "linux" && $which("arecord")) return;
 
 	// Windows: PowerShell mciSendString is always available as fallback
 	if (process.platform === "win32") {

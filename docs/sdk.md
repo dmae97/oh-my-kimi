@@ -228,12 +228,12 @@ Related APIs:
 - Built-ins come from `createTools(...)` and `BUILTIN_TOOLS`.
 - `toolNames` acts as an allowlist for built-ins.
 - `customTools` and extension-registered tools are still included.
-- Hidden tools (for example `submit_result`) are opt-in unless required by options.
+- Hidden tools (for example `yield`) are opt-in unless required by options.
 
 ```ts
 const { session } = await createAgentSession({
 	toolNames: ["read", "grep", "find", "write"],
-	requireSubmitResultTool: true,
+	requireYieldTool: true,
 });
 ```
 
@@ -274,7 +274,7 @@ Use these when you want partial control without recreating internal discovery lo
 For SDK consumers building orchestrators (similar to task executor flow):
 
 - `outputSchema`: passes structured output expectation into tool context
-- `requireSubmitResultTool`: forces `submit_result` tool inclusion
+- `requireYieldTool`: forces `yield` tool inclusion
 - `taskDepth`: recursion-depth context for nested task sessions
 - `parentTaskPrefix`: artifact naming prefix for nested task outputs
 

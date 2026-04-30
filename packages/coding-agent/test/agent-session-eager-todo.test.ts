@@ -13,6 +13,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Type } from "@sinclair/typebox";
+import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 class MockAssistantStream extends AssistantMessageEventStream {}
 
@@ -38,26 +39,6 @@ function getToolChoiceName(choice: unknown): string | undefined {
 	if (toolChoice.type === "tool") return toolChoice.name;
 	if (toolChoice.type === "function") return toolChoice.name ?? toolChoice.function?.name;
 	return undefined;
-}
-
-function createAssistantMessage(text: string): AssistantMessage {
-	return {
-		role: "assistant",
-		content: [{ type: "text", text }],
-		api: "anthropic-messages",
-		provider: "anthropic",
-		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
-		timestamp: Date.now(),
-	};
 }
 
 function createToolCallAssistantMessage(name: string, args: Record<string, unknown>): AssistantMessage {
@@ -155,7 +136,7 @@ describe("AgentSession eager todo enforcement", () => {
 				messages: [],
 			},
 			convertToLlm,
-			getToolChoice: () => session?.consumeNextToolChoiceOverride(),
+			getToolChoice: () => session?.nextToolChoice(),
 			streamFn: (_model, context, options) => {
 				streamCallCount++;
 				const lastMessage = context.messages.at(-1);
@@ -263,5 +244,53 @@ describe("AgentSession eager todo enforcement", () => {
 		expect(observedCalls[1]?.messageRoles.slice(-2)).toEqual(["assistant", "toolResult"]);
 		expect(session.getTodoPhases()).toHaveLength(1);
 		expect(session.getTodoPhases()[0]?.tasks[0]?.content).toBe("List all git worktrees in the current repository");
+	});
+
+	it("skips eager todo enforcement for prompts ending with a question mark", async () => {
+		await session.prompt("list all work trees?");
+
+		expect(observedCalls).toHaveLength(1);
+		expect(observedCalls[0]).toEqual({
+			toolChoice: undefined,
+			toolNames: ["todo_write", "bash"],
+			messageRoles: ["user"],
+			messageTexts: ["list all work trees?"],
+			lastMessageRole: "user",
+			lastMessageText: "list all work trees?",
+		});
+	});
+
+	it("skips eager todo enforcement for prompts ending with an exclamation mark", async () => {
+		await session.prompt("list all work trees!");
+
+		expect(observedCalls).toHaveLength(1);
+		expect(observedCalls[0]).toEqual({
+			toolChoice: undefined,
+			toolNames: ["todo_write", "bash"],
+			messageRoles: ["user"],
+			messageTexts: ["list all work trees!"],
+			lastMessageRole: "user",
+			lastMessageText: "list all work trees!",
+		});
+	});
+
+	it("skips eager todo enforcement for subsequent user messages", async () => {
+		// First prompt: eager todo fires
+		await session.prompt("refactor the parser module");
+		expect(observedCalls).toHaveLength(1);
+		expect(observedCalls[0]?.toolChoice).toBe("todo_write");
+
+		// Second prompt: eager todo must NOT fire
+		observedCalls.length = 0;
+		await session.prompt("actually skip that, just fix the typo");
+		expect(observedCalls).toHaveLength(1);
+		expect(observedCalls[0]).toEqual({
+			toolChoice: undefined,
+			toolNames: ["todo_write", "bash"],
+			messageRoles: expect.arrayContaining(["user"]),
+			messageTexts: expect.arrayContaining(["actually skip that, just fix the typo"]),
+			lastMessageRole: "user",
+			lastMessageText: "actually skip that, just fix the typo",
+		});
 	});
 });

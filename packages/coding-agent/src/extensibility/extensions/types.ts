@@ -22,17 +22,16 @@ import type {
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
 import type * as piCodingAgent from "@oh-my-pi/pi-coding-agent";
-import type { SearchDb } from "@oh-my-pi/pi-natives";
 import type { AutocompleteItem, Component, EditorComponent, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
 import type { Static, TSchema } from "@sinclair/typebox";
 import type { Rule } from "../../capability/rule";
 import type { KeybindingsManager } from "../../config/keybindings";
 import type { ModelRegistry } from "../../config/model-registry";
+import type { EditToolDetails } from "../../edit";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
 import type { PythonResult } from "../../ipy/executor";
 import type { Theme } from "../../modes/theme/theme";
-import type { EditToolDetails } from "../../patch";
 import type { CompactionPreparation, CompactionResult } from "../../session/compaction";
 import type { CustomMessage } from "../../session/messages";
 import type {
@@ -47,10 +46,10 @@ import type {
 	BashToolInput,
 	FindToolDetails,
 	FindToolInput,
-	GrepToolDetails,
-	GrepToolInput,
 	ReadToolDetails,
 	ReadToolInput,
+	SearchToolDetails,
+	SearchToolInput,
 	WriteToolInput,
 } from "../../tools";
 import type { TodoItem } from "../../tools/todo-write";
@@ -232,8 +231,6 @@ export interface ExtensionContext {
 	modelRegistry: ModelRegistry;
 	/** Current model (may be undefined) */
 	model: Model | undefined;
-	/** Shared native search DB for grep/glob/fuzzyFind-backed workflows. */
-	searchDb?: SearchDb;
 	/** Whether the agent is idle (not streaming) */
 	isIdle(): boolean;
 	/** Abort the current agent operation */
@@ -568,7 +565,7 @@ export interface ToolExecutionEndEvent {
 /** Fired when auto-compaction starts */
 export interface AutoCompactionStartEvent {
 	type: "auto_compaction_start";
-	reason: "threshold" | "overflow";
+	reason: "threshold" | "overflow" | "idle";
 	action: "context-full" | "handoff";
 }
 
@@ -686,9 +683,9 @@ export interface WriteToolCallEvent extends ToolCallEventBase {
 	input: WriteToolInput;
 }
 
-export interface GrepToolCallEvent extends ToolCallEventBase {
-	toolName: "grep";
-	input: GrepToolInput;
+export interface SearchToolCallEvent extends ToolCallEventBase {
+	toolName: "search";
+	input: SearchToolInput;
 }
 
 export interface FindToolCallEvent extends ToolCallEventBase {
@@ -707,7 +704,7 @@ export type ToolCallEvent =
 	| ReadToolCallEvent
 	| EditToolCallEvent
 	| WriteToolCallEvent
-	| GrepToolCallEvent
+	| SearchToolCallEvent
 	| FindToolCallEvent
 	| CustomToolCallEvent;
 
@@ -739,9 +736,9 @@ export interface WriteToolResultEvent extends ToolResultEventBase {
 	details: undefined;
 }
 
-export interface GrepToolResultEvent extends ToolResultEventBase {
-	toolName: "grep";
-	details: GrepToolDetails | undefined;
+export interface SearchToolResultEvent extends ToolResultEventBase {
+	toolName: "search";
+	details: SearchToolDetails | undefined;
 }
 
 export interface FindToolResultEvent extends ToolResultEventBase {
@@ -760,7 +757,7 @@ export type ToolResultEvent =
 	| ReadToolResultEvent
 	| EditToolResultEvent
 	| WriteToolResultEvent
-	| GrepToolResultEvent
+	| SearchToolResultEvent
 	| FindToolResultEvent
 	| CustomToolResultEvent;
 
@@ -788,7 +785,7 @@ export function isToolCallEventType(toolName: "bash", event: ToolCallEvent): eve
 export function isToolCallEventType(toolName: "read", event: ToolCallEvent): event is ReadToolCallEvent;
 export function isToolCallEventType(toolName: "edit", event: ToolCallEvent): event is EditToolCallEvent;
 export function isToolCallEventType(toolName: "write", event: ToolCallEvent): event is WriteToolCallEvent;
-export function isToolCallEventType(toolName: "grep", event: ToolCallEvent): event is GrepToolCallEvent;
+export function isToolCallEventType(toolName: "search", event: ToolCallEvent): event is SearchToolCallEvent;
 export function isToolCallEventType(toolName: "find", event: ToolCallEvent): event is FindToolCallEvent;
 export function isToolCallEventType<TName extends string, TInput extends Record<string, unknown>>(
 	toolName: TName,
@@ -1109,6 +1106,12 @@ export interface ExtensionAPI {
 	/** Set thinking level for the current session. */
 	setThinkingLevel(level: ThinkingLevel): void;
 
+	/** Get the current session name. */
+	getSessionName(): string | undefined;
+
+	/** Set the session name. Persists to the session file. */
+	setSessionName(name: string): Promise<void>;
+
 	// =========================================================================
 	// Provider Registration
 	// =========================================================================
@@ -1295,12 +1298,13 @@ export interface ExtensionActions {
 	setModel: SetModelHandler;
 	getThinkingLevel: GetThinkingLevelHandler;
 	setThinkingLevel: SetThinkingLevelHandler;
+	getSessionName: () => string | undefined;
+	setSessionName: (name: string) => Promise<void>;
 }
 
 /** Actions for ExtensionContext (ctx.* in event handlers). */
 export interface ExtensionContextActions {
 	getModel: () => Model | undefined;
-	getSearchDb?: () => SearchDb | undefined;
 	isIdle: () => boolean;
 	abort: () => void;
 	hasPendingMessages: () => boolean;

@@ -1,10 +1,10 @@
 import { INTENT_FIELD, type ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { Markdown } from "@oh-my-pi/pi-tui";
+import { prompt } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import typesDescriptionPrompt from "../../commit/prompts/types-description.md" with { type: "text" };
 import type { ModelRegistry } from "../../config/model-registry";
-import { renderPromptTemplate } from "../../config/prompt-templates";
 import type { Settings } from "../../config/settings";
 import { getMarkdownTheme } from "../../modes/theme/theme";
 import { createAgentSession } from "../../sdk";
@@ -36,8 +36,8 @@ export interface ExistingChangelogEntries {
 }
 
 export async function runCommitAgentSession(input: CommitAgentInput): Promise<CommitAgentState> {
-	const typesDescription = renderPromptTemplate(typesDescriptionPrompt);
-	const systemPrompt = renderPromptTemplate(agentSystemPrompt, {
+	const typesDescription = prompt.render(typesDescriptionPrompt);
+	const systemPrompt = prompt.render(agentSystemPrompt, {
 		types_description: typesDescription,
 	});
 	const state: CommitAgentState = { diffText: input.diffText };
@@ -149,7 +149,7 @@ export async function runCommitAgentSession(input: CommitAgentInput): Promise<Co
 	});
 
 	try {
-		const prompt = renderPromptTemplate(agentUserPrompt, {
+		const agentUserMessage = prompt.render(agentUserPrompt, {
 			user_context: input.userContext,
 			changelog_targets: input.changelogTargets.length > 0 ? input.changelogTargets.join("\n") : undefined,
 			existing_changelog_entries: input.existingChangelogEntries,
@@ -158,7 +158,7 @@ export async function runCommitAgentSession(input: CommitAgentInput): Promise<Co
 		let retryCount = 0;
 		const needsChangelog = input.requireChangelog && input.changelogTargets.length > 0;
 
-		await session.prompt(prompt, {
+		await session.prompt(agentUserMessage, {
 			attribution: "agent",
 			expandPromptTemplates: false,
 		});

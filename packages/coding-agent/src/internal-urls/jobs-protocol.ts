@@ -30,7 +30,8 @@ export class JobsProtocolHandler implements ProtocolHandler {
 	async resolve(url: InternalUrl): Promise<InternalResource> {
 		const manager = this.options.getAsyncJobManager();
 		if (!manager) {
-			const content = "# Jobs\n\nAsync execution is disabled. Enable `async.enabled` to use jobs://.";
+			const content =
+				"# Jobs\n\nBackground job support is disabled. Enable `async.enabled` or `bash.autoBackground.enabled` to use jobs://.";
 			return {
 				url: url.href,
 				content,

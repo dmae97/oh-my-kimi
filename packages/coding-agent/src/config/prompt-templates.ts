@@ -1,12 +1,16 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getProjectDir, getProjectPromptsDir, getPromptsDir, logger } from "@oh-my-pi/pi-utils";
-import Handlebars from "handlebars";
-import { computeLineHash } from "../patch/hashline";
+import {
+	getProjectDir,
+	getProjectPromptsDir,
+	getPromptsDir,
+	logger,
+	parseFrontmatter,
+	prompt,
+} from "@oh-my-pi/pi-utils";
+import { computeLineHash, HASHLINE_CONTENT_SEPARATOR } from "../edit/line-hash";
 import { jtdToTypeScript } from "../tools/jtd-to-typescript";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
-import { parseFrontmatter } from "../utils/frontmatter";
-import { formatPromptContent } from "../utils/prompt-format";
 
 /**
  * Represents a prompt template loaded from a markdown file
@@ -18,215 +22,7 @@ export interface PromptTemplate {
 	source: string; // e.g., "(user)", "(project)", "(project:frontend)"
 }
 
-export interface TemplateContext extends Record<string, unknown> {
-	args?: string[];
-	ARGUMENTS?: string;
-	arguments?: string;
-}
-
-const handlebars = Handlebars.create();
-
-handlebars.registerHelper("arg", function (this: TemplateContext, index: number | string): string {
-	const args = this.args ?? [];
-	const parsedIndex = typeof index === "number" ? index : Number.parseInt(index, 10);
-	if (!Number.isFinite(parsedIndex)) return "";
-	const zeroBased = parsedIndex - 1;
-	if (zeroBased < 0) return "";
-	return args[zeroBased] ?? "";
-});
-
-/**
- * {{#list items prefix="- " suffix="" join="\n"}}{{this}}{{/list}}
- * Renders an array with customizable prefix, suffix, and join separator.
- * Note: Use \n in join for newlines (will be unescaped automatically).
- */
-handlebars.registerHelper(
-	"list",
-	function (this: unknown, context: unknown[], options: Handlebars.HelperOptions): string {
-		if (!Array.isArray(context) || context.length === 0) return "";
-		const prefix = (options.hash.prefix as string) ?? "";
-		const suffix = (options.hash.suffix as string) ?? "";
-		const rawSeparator = (options.hash.join as string) ?? "\n";
-		const separator = rawSeparator.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
-		return context.map(item => `${prefix}${options.fn(item)}${suffix}`).join(separator);
-	},
-);
-
-/**
- * {{join array ", "}}
- * Joins an array with a separator (default: ", ").
- */
-handlebars.registerHelper("join", (context: unknown[], separator?: unknown): string => {
-	if (!Array.isArray(context)) return "";
-	const sep = typeof separator === "string" ? separator : ", ";
-	return context.join(sep);
-});
-
-/**
- * {{default value "fallback"}}
- * Returns the value if truthy, otherwise returns the fallback.
- */
-handlebars.registerHelper("default", (value: unknown, defaultValue: unknown): unknown => value || defaultValue);
-
-/**
- * {{pluralize count "item" "items"}}
- * Returns "1 item" or "5 items" based on count.
- */
-handlebars.registerHelper(
-	"pluralize",
-	(count: number, singular: string, plural: string): string => `${count} ${count === 1 ? singular : plural}`,
-);
-
-/**
- * {{#when value "==" compare}}...{{else}}...{{/when}}
- * Conditional block with comparison operators: ==, ===, !=, !==, >, <, >=, <=
- */
-handlebars.registerHelper(
-	"when",
-	function (this: unknown, lhs: unknown, operator: string, rhs: unknown, options: Handlebars.HelperOptions): string {
-		const ops: Record<string, (a: unknown, b: unknown) => boolean> = {
-			"==": (a, b) => a === b,
-			"===": (a, b) => a === b,
-			"!=": (a, b) => a !== b,
-			"!==": (a, b) => a !== b,
-			">": (a, b) => (a as number) > (b as number),
-			"<": (a, b) => (a as number) < (b as number),
-			">=": (a, b) => (a as number) >= (b as number),
-			"<=": (a, b) => (a as number) <= (b as number),
-		};
-		const fn = ops[operator];
-		if (!fn) return options.inverse(this);
-		return fn(lhs, rhs) ? options.fn(this) : options.inverse(this);
-	},
-);
-
-/**
- * {{#ifAny a b c}}...{{else}}...{{/ifAny}}
- * True if any argument is truthy.
- */
-handlebars.registerHelper("ifAny", function (this: unknown, ...args: unknown[]): string {
-	const options = args.pop() as Handlebars.HelperOptions;
-	return args.some(Boolean) ? options.fn(this) : options.inverse(this);
-});
-
-/**
- * {{#ifAll a b c}}...{{else}}...{{/ifAll}}
- * True if all arguments are truthy.
- */
-handlebars.registerHelper("ifAll", function (this: unknown, ...args: unknown[]): string {
-	const options = args.pop() as Handlebars.HelperOptions;
-	return args.every(Boolean) ? options.fn(this) : options.inverse(this);
-});
-
-/**
- * {{#table rows headers="Col1|Col2"}}{{col1}}|{{col2}}{{/table}}
- * Generates a markdown table from an array of objects.
- */
-handlebars.registerHelper(
-	"table",
-	function (this: unknown, context: unknown[], options: Handlebars.HelperOptions): string {
-		if (!Array.isArray(context) || context.length === 0) return "";
-		const headersStr = options.hash.headers as string | undefined;
-		const headers = headersStr?.split("|") ?? [];
-		const separator = headers.map(() => "---").join(" | ");
-		const headerRow = headers.length > 0 ? `| ${headers.join(" | ")} |\n| ${separator} |\n` : "";
-		const rows = context.map(item => `| ${options.fn(item).trim()} |`).join("\n");
-		return headerRow + rows;
-	},
-);
-
-/**
- * {{#codeblock lang="diff"}}...{{/codeblock}}
- * Wraps content in a fenced code block.
- */
-handlebars.registerHelper("codeblock", function (this: unknown, options: Handlebars.HelperOptions): string {
-	const lang = (options.hash.lang as string) ?? "";
-	const content = options.fn(this).trim();
-	return `\`\`\`${lang}\n${content}\n\`\`\``;
-});
-
-/**
- * {{#xml "tag"}}content{{/xml}}
- * Wraps content in XML-style tags. Returns empty string if content is empty.
- */
-handlebars.registerHelper("xml", function (this: unknown, tag: string, options: Handlebars.HelperOptions): string {
-	const content = options.fn(this).trim();
-	if (!content) return "";
-	return `<${tag}>\n${content}\n</${tag}>`;
-});
-
-/**
- * {{escapeXml value}}
- * Escapes XML special characters: & < > "
- */
-handlebars.registerHelper("escapeXml", (value: unknown): string => {
-	if (value == null) return "";
-	return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-});
-
-/**
- * {{len array}}
- * Returns the length of an array or string.
- */
-handlebars.registerHelper("len", (value: unknown): number => {
-	if (Array.isArray(value)) return value.length;
-	if (typeof value === "string") return value.length;
-	return 0;
-});
-
-/**
- * {{add a b}}
- * Adds two numbers.
- */
-handlebars.registerHelper("add", (a: number, b: number): number => (a ?? 0) + (b ?? 0));
-
-/**
- * {{sub a b}}
- * Subtracts b from a.
- */
-handlebars.registerHelper("sub", (a: number, b: number): number => (a ?? 0) - (b ?? 0));
-
-/**
- * {{#has collection item}}...{{else}}...{{/has}}
- * Checks if an array includes an item or if a Set/Map has a key.
- */
-handlebars.registerHelper(
-	"has",
-	function (this: unknown, collection: unknown, item: unknown, options: Handlebars.HelperOptions): string {
-		let found = false;
-		if (Array.isArray(collection)) {
-			found = collection.includes(item);
-		} else if (collection instanceof Set) {
-			found = collection.has(item);
-		} else if (collection instanceof Map) {
-			found = collection.has(item);
-		} else if (collection && typeof collection === "object") {
-			if (typeof item === "string" || typeof item === "number" || typeof item === "symbol") {
-				found = item in collection;
-			}
-		}
-		return found ? options.fn(this) : options.inverse(this);
-	},
-);
-
-/**
- * {{includes array item}}
- * Returns true if array includes item. For use in other helpers.
- */
-handlebars.registerHelper("includes", (collection: unknown, item: unknown): boolean => {
-	if (Array.isArray(collection)) return collection.includes(item);
-	if (collection instanceof Set) return collection.has(item);
-	if (collection instanceof Map) return collection.has(item);
-	return false;
-});
-
-/**
- * {{not value}}
- * Returns logical NOT of value. For use in subexpressions.
- */
-handlebars.registerHelper("not", (value: unknown): boolean => !value);
-
-handlebars.registerHelper("jtdToTypeScript", (schema: unknown): string => {
+prompt.registerHelper("jtdToTypeScript", (schema: unknown): string => {
 	try {
 		return jtdToTypeScript(schema);
 	} catch {
@@ -234,45 +30,133 @@ handlebars.registerHelper("jtdToTypeScript", (schema: unknown): string => {
 	}
 });
 
-handlebars.registerHelper("jsonStringify", (value: unknown): string => JSON.stringify(value));
-
-/**
- * Renders a section separator:
- *
- * ═══════════════════════════════
- *  Name
- * ═══════════════════════════════
- */
-export function sectionSeparator(name: string): string {
-	return `\n\n═══════════${name}═══════════\n`;
-}
-
-handlebars.registerHelper("SECTION_SEPERATOR", (name: unknown): string => sectionSeparator(String(name)));
+// `sectionSeparator` + SECTION_SEPARATOR helper live in pi-utils/prompt so every
+// template consumer gets them registered without a coupling back to this module.
+// Re-exported here for call sites that already reference the coding-agent path.
+export { sectionSeparator } from "@oh-my-pi/pi-utils/prompt";
 
 function formatHashlineRef(lineNum: unknown, content: unknown): { num: number; text: string; ref: string } {
 	const num = typeof lineNum === "number" ? lineNum : Number.parseInt(String(lineNum), 10);
 	const raw = typeof content === "string" ? content : String(content ?? "");
 	const text = raw.replace(/\\t/g, "\t").replace(/\\n/g, "\n").replace(/\\r/g, "\r");
-	const ref = `${num}#${computeLineHash(num, text)}`;
+	const ref = `${num}${computeLineHash(num, text)}`;
 	return { num, text, ref };
+}
+
+interface HashlineHelperRef {
+	line: number;
+	ref: string;
+}
+
+interface HashlineHelperState {
+	last?: HashlineHelperRef;
+	byLine: Map<number, HashlineHelperRef>;
+}
+
+const HASHLINE_HELPER_STATE = Symbol("hashlineHelperState");
+
+interface HashlineHelperStateHolder {
+	[HASHLINE_HELPER_STATE]?: HashlineHelperState;
+}
+
+function isHelperOptions(value: unknown): value is prompt.HelperOptions {
+	return typeof value === "object" && value !== null && "hash" in value;
+}
+
+function splitHelperArgs(args: unknown[]): { positional: unknown[]; options?: prompt.HelperOptions } {
+	const maybeOptions = args.at(-1);
+	if (!isHelperOptions(maybeOptions)) return { positional: args };
+	return { positional: args.slice(0, -1), options: maybeOptions };
+}
+
+function getHashlineHelperState(context: unknown, options: prompt.HelperOptions | undefined): HashlineHelperState {
+	const data = options?.data;
+	const root = data?.root;
+	const holderTarget = data && typeof data === "object" ? data : root && typeof root === "object" ? root : context;
+	if (!holderTarget || typeof holderTarget !== "object") {
+		throw new Error("hashline prompt helpers require an object render context");
+	}
+
+	const holder = holderTarget as HashlineHelperStateHolder;
+	if (!holder[HASHLINE_HELPER_STATE]) {
+		holder[HASHLINE_HELPER_STATE] = { byLine: new Map() };
+	}
+	return holder[HASHLINE_HELPER_STATE];
+}
+
+function isLineNumberArg(value: unknown): boolean {
+	const num = typeof value === "number" ? value : Number.parseInt(String(value), 10);
+	return Number.isFinite(num);
+}
+
+function rememberHashlineRef(state: HashlineHelperState, line: number, ref: string): void {
+	const entry = { line, ref };
+	state.last = entry;
+	state.byLine.set(line, entry);
+}
+
+function requireStoredHashlineRef(state: HashlineHelperState, lineArg?: unknown): string {
+	if (lineArg === undefined) {
+		if (!state.last) {
+			throw new Error("{{href}} requires a previous {{hline}} call in the same prompt render");
+		}
+		return state.last.ref;
+	}
+
+	const line = typeof lineArg === "number" ? lineArg : Number.parseInt(String(lineArg), 10);
+	const entry = state.byLine.get(line);
+	if (!entry) {
+		throw new Error(`{{href ${line}}} requires a previous {{hline ${line} ...}} call in the same prompt render`);
+	}
+	return entry.ref;
+}
+
+function wrapHashlineRef(ref: string, args: unknown[]): string {
+	const preStr = typeof args[0] === "string" ? args[0] : "";
+	const postStr = typeof args[1] === "string" ? args[1] : "";
+	return `${preStr}${ref}${postStr}`;
+}
+
+function resolveHashlineRef(state: HashlineHelperState, args: unknown[]): string {
+	if (args.length === 0) return requireStoredHashlineRef(state);
+	const [first, second, ...rest] = args;
+	if (isLineNumberArg(first)) {
+		if (second === undefined) return requireStoredHashlineRef(state, first);
+		const { ref } = formatHashlineRef(first, second);
+		return wrapHashlineRef(ref, rest);
+	}
+	return wrapHashlineRef(requireStoredHashlineRef(state), args);
 }
 
 /**
  * {{href lineNum "content"}} — compute a real hashline ref for prompt examples.
- * Returns `"lineNum#hash"` using the actual hash algorithm.
+ * {{href lineNum}} — quote the ref remembered by the earlier {{hline lineNum "..."}}
+ * {{href}} — quote the ref from the previous {{hline}} call.
+ * {{href "[" "]"}} — wrap the previous {{hline}} ref with pre/post chars.
+ * Returns `"lineNumBIGRAM"` (e.g., `"42nd"`), or `"[42nd]"` when pre/post are supplied.
  */
-handlebars.registerHelper("href", (lineNum: unknown, content: unknown): string => {
-	const { ref } = formatHashlineRef(lineNum, content);
-	return JSON.stringify(ref);
+prompt.registerHelper("href", function (this: unknown, ...args: unknown[]): string {
+	const { positional, options } = splitHelperArgs(args);
+	const state = getHashlineHelperState(this, options);
+	return JSON.stringify(resolveHashlineRef(state, positional));
+});
+prompt.registerHelper("hrefr", function (this: unknown, ...args: unknown[]): string {
+	const { positional, options } = splitHelperArgs(args);
+	const state = getHashlineHelperState(this, options);
+	return resolveHashlineRef(state, positional);
 });
 
 /**
  * {{hline lineNum "content"}} — format a full read-style line with prefix.
- * Returns `"lineNum#hash:content"`.
+ * Returns `"lineNumBIGRAM|content"` (pipe between anchor and content).
  */
-handlebars.registerHelper("hline", (lineNum: unknown, content: unknown): string => {
-	const { ref, text } = formatHashlineRef(lineNum, content);
-	return `${ref}:${text}`;
+prompt.registerHelper("hline", function (this: unknown, ...args: unknown[]): string {
+	const { positional, options } = splitHelperArgs(args);
+	const [lineNum, content] = positional;
+	const { num, ref, text } = formatHashlineRef(lineNum, content);
+	const state = getHashlineHelperState(this, options);
+	rememberHashlineRef(state, num, ref);
+	return `${ref}${HASHLINE_CONTENT_SEPARATOR}${text}`;
 });
 
 const INLINE_ARG_SHELL_PATTERN = /\$(?:ARGUMENTS|@(?:\[\d+(?::\d*)?\])?|\d+)/;
@@ -295,12 +179,6 @@ export function appendInlineArgsFallback(
 	if (rendered.length === 0) return argsText;
 
 	return `${rendered}\n\n${argsText}`;
-}
-
-export function renderPromptTemplate(template: string, context: TemplateContext = {}): string {
-	const compiled = handlebars.compile(template, { noEscape: true, strict: false });
-	const rendered = compiled(context ?? {});
-	return formatPromptContent(rendered, { renderPhase: "post-render" });
 }
 
 /**
@@ -429,7 +307,7 @@ export function expandPromptTemplate(text: string, templates: PromptTemplate[]):
 		const argsText = args.join(" ");
 		const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(template.content);
 		const substituted = substituteArgs(template.content, args);
-		const rendered = renderPromptTemplate(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
+		const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
 		return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
 	}
 

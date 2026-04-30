@@ -5,7 +5,6 @@
  * Each log entry includes process.pid for traceability.
  */
 import * as fs from "node:fs";
-import { RingBuffer } from "@oh-my-pi/pi-utils/ring";
 import winston from "winston";
 import DailyRotateFile from "winston-daily-rotate-file";
 import { getLogsDir } from "./dirs";
@@ -59,29 +58,6 @@ const winstonLogger = winston.createLogger({
 });
 
 /**
- * Centralized logger for omp.
- *
- * Logs to ~/.omp/logs/omp.YYYY-MM-DD.log with size-based rotation.
- * Safe for concurrent access from multiple omp instances.
- *
- * @example
- * ```typescript
- * import { logger } from "@oh-my-pi/pi-utils";
- *
- * logger.error("MCP request failed", { url, method });
- * logger.warn("Theme file invalid, using fallback", { path });
- * logger.debug("LSP fallback triggered", { reason });
- * ```
- */
-export interface Logger {
-	error(message: string, context?: Record<string, unknown>): void;
-	warn(message: string, context?: Record<string, unknown>): void;
-	debug(message: string, context?: Record<string, unknown>): void;
-	time<T>(op: string, fn: () => T): T;
-	timeAsync<T>(op: string, fn: () => PromiseLike<T>): Promise<T>;
-}
-
-/**
  * Log an error message.
  * @param message - The message to log.
  * @param context - The context to log.
@@ -122,85 +98,107 @@ export function debug(message: string, context?: Record<string, unknown>): void 
 
 const LOGGED_TIMING_THRESHOLD_MS = 5;
 
-const longOpBuffer = new RingBuffer<[op: string, duration: number]>(1000);
-let longOpRecord = false;
+/** Sequential wall-clock markers (next marker closes the previous segment). */
+let gTimings: [op: string, ts: number][] = [];
 
-function logTiming(op: string, duration: number): void {
-	duration = Math.round(duration * 100) / 100;
-	if (duration > LOGGED_TIMING_THRESHOLD_MS) {
-		warn(`${op} done`, { duration, op });
-		if (longOpRecord) {
-			longOpBuffer.push([op, duration]);
-		}
-	} else {
-		debug(`${op} done`, { duration, op });
-	}
-}
+/** Await-accurate durations (safe for parallel work; sums can overlap). */
+let gAsyncSpans: [op: string, durationMs: number][] = [];
+
+/** Whether to record timings. */
+let gRecordTimings = false;
 
 /**
- * Print all collected long operation timings to stderr.
- * To be called at the end of a startup or timing window.
+ * Print collected timings to stderr.
+ * Wall segments are gaps between consecutive {@link time} markers only; they are wrong when
+ * concurrent code also calls {@link time} (e.g. parallel capability loads). Use {@link timeAsync}
+ * for those awaits instead.
  */
 export function printTimings(): void {
-	// Use stderr for timings output, do not use logger (see AGENTS.md).
-	console.error("\n--- Startup Timings ---");
-	let totalDuration = 0;
-	for (const [op, duration] of longOpBuffer) {
-		console.error(`  ${op}: ${duration}ms`);
-		totalDuration += duration;
+	if (!gRecordTimings || gTimings.length === 0) {
+		console.error("\n--- Startup Timings ---\n(no markers)\n");
+		return;
 	}
-	console.error(`  TOTAL: ${totalDuration}ms`);
+
+	const endTs = performance.now();
+	gTimings.push(["(end)", endTs]);
+
+	console.error("\n--- Startup timings (wall segments between time() markers) ---");
+	const firstTs = gTimings[0][1];
+	for (let i = 0; i < gTimings.length - 1; i++) {
+		const [op, ts] = gTimings[i];
+		const [, nextTs] = gTimings[i + 1];
+		const dur = nextTs - ts;
+		if (dur > LOGGED_TIMING_THRESHOLD_MS) {
+			console.error(`  ${op}: ${dur}ms`);
+		}
+	}
+	console.error(`  span (first marker → end): ${endTs - firstTs}ms`);
+
+	if (gAsyncSpans.length > 0) {
+		console.error("\n--- Async (await-accurate; parallel spans may overlap) ---");
+		for (const [op, dur] of gAsyncSpans) {
+			if (dur > LOGGED_TIMING_THRESHOLD_MS) {
+				console.error(`  ${op}: ${dur}ms`);
+			}
+		}
+	}
+
 	console.error("------------------------\n");
+
+	gTimings.pop();
 }
 
 /**
- * Begin recording long operation timings.
- * Typically called at the beginning of startup.
+ * Begin recording startup timings. Seeds the timeline so the first segment is meaningful.
  */
 export function startTiming(): void {
-	longOpBuffer.clear();
-	longOpRecord = true;
+	gTimings = [["(startup)", performance.now()]];
+	gAsyncSpans = [];
+	gRecordTimings = true;
 }
 
 /**
- * End timing window and print all timings.
- * Disables further buffering until next startTiming().
+ * End timing window and clear buffers.
  */
 export function endTiming(): void {
-	longOpBuffer.clear();
-	longOpRecord = false;
+	gTimings = [];
+	gAsyncSpans = [];
+	gRecordTimings = false;
 }
 
-/**
- * Time a synchronous operation and log the duration.
- * @param op - The operation name.
- * @param fn - The function to time.
- * @returns The result of the function.
- */
-export function time<T, A extends unknown[]>(op: string, fn: (...args: A) => T, ...args: A): T {
-	const start = performance.now();
-	try {
-		return fn(...args);
-	} finally {
-		logTiming(op, performance.now() - start);
+function recordAsyncSpan(op: string, start: number): void {
+	const dur = performance.now() - start;
+	if (dur > LOGGED_TIMING_THRESHOLD_MS) {
+		gAsyncSpans.push([op, dur]);
 	}
 }
 
 /**
- * Time an asynchronous operation and log the duration.
- * @param op - The operation name.
- * @param fn - The function to time.
- * @returns The result of the function.
+ * Wall-clock segment boundary: duration for this label runs until the next {@link time} call.
+ * Do not use across `await` when other tasks may call {@link time}; use {@link timeAsync} for the awaited work.
  */
-export async function timeAsync<R, A extends unknown[]>(
-	op: string,
-	fn: (...args: A) => R,
-	...args: A
-): Promise<Awaited<R>> {
-	const start = performance.now();
-	try {
-		return await fn(...args);
-	} finally {
-		logTiming(op, performance.now() - start);
+export function time(op: string): void;
+export function time<T, A extends unknown[]>(op: string, fn: (...args: A) => T, ...args: A): T;
+export function time<T, A extends unknown[]>(op: string, fn?: (...args: A) => T, ...args: A): T | undefined {
+	if (fn === undefined) {
+		if (gRecordTimings) {
+			gTimings.push([op, performance.now()]);
+		}
+		return undefined as T;
+	} else if (gRecordTimings) {
+		const start = performance.now();
+		try {
+			const result = fn(...args);
+			if (result instanceof Promise) {
+				return result.finally(recordAsyncSpan.bind(null, op, start)) as T;
+			}
+			recordAsyncSpan(op, start);
+			return result;
+		} catch (error) {
+			recordAsyncSpan(op, start);
+			throw error;
+		}
+	} else {
+		return fn(...args);
 	}
 }

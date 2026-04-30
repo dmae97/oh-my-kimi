@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resetPreludeDocsCache, warmPythonEnvironment } from "@oh-my-pi/pi-coding-agent/ipy/executor";
 import { getPythonToolDescription, PythonTool } from "@oh-my-pi/pi-coding-agent/tools/python";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { $which, getProjectDir } from "@oh-my-pi/pi-utils";
 
 const resolvePythonPath = (): string | null => {
 	const venvPath = Bun.env.VIRTUAL_ENV;
@@ -19,7 +19,7 @@ const resolvePythonPath = (): string | null => {
 			return pythonCandidate;
 		}
 	}
-	return Bun.which("python") ?? Bun.which("python3");
+	return $which("python") ?? $which("python3");
 };
 
 const pythonPath = resolvePythonPath();
@@ -55,6 +55,7 @@ describe.skipIf(!shouldRun)("PYTHON_PRELUDE integration", () => {
 			}),
 		};
 
+		resetPreludeDocsCache();
 		const tool = new PythonTool(session);
 		const code = `
 	helpers = ${JSON.stringify(helpers)}
@@ -65,13 +66,15 @@ describe.skipIf(!shouldRun)("PYTHON_PRELUDE integration", () => {
 	print("HELPERS_OK=" + ("1" if not missing else "0"))
 	print("DOCS_OK=" + ("1" if "read" in doc_names and "File I/O" in doc_categories else "0"))
 	if missing:
-	    print("MISSING=" + ",".join(missing))
+		print("MISSING=" + ",".join(missing))
 	`;
 
-		const result = await tool.execute("tool-call-1", { cells: [{ code }] });
+		const result = await tool.execute("tool-call-1", { cells: [{ title: "prelude helpers", code }] });
 		const output = result.content.find(item => item.type === "text")?.text ?? "";
 		expect(output).toContain("HELPERS_OK=1");
 		expect(output).toContain("DOCS_OK=1");
+		expect(tool.description).toContain("read");
+		expect(tool.description).not.toContain("Documentation unavailable");
 	});
 
 	it("exposes prelude docs via warmup", async () => {

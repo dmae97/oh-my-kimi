@@ -32,7 +32,7 @@ const versionMap: Record<string, string> = {};
 for (const dir of packageDirs) {
 	const pkgPath = join(packagesDir, dir, "package.json");
 	try {
-		const pkg = await Bun.file(pkgPath).json<PackageJson>();
+		const pkg = (await Bun.file(pkgPath).json()) as PackageJson;
 		packages[dir] = { path: pkgPath, data: pkg };
 		versionMap[pkg.name] = pkg.version;
 	} catch (e) {

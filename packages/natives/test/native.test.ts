@@ -7,16 +7,18 @@ import {
 	FileType,
 	fuzzyFind,
 	type GlobMatch,
+	GrepOutputMode,
 	glob,
 	grep,
 	htmlToMarkdown,
 	invalidateFsScanCache,
+	MacOSPowerAssertion,
 	PtySession,
 	sanitizeText,
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
-} from "../src/index";
+} from "../native/index";
 
 let testDir: string;
 
@@ -119,7 +121,7 @@ describe("pi-natives", () => {
 			const result = await grep({
 				pattern: "return",
 				path: testDir,
-				mode: "filesWithMatches",
+				mode: GrepOutputMode.FilesWithMatches,
 			});
 
 			expect(result.filesWithMatches).toBeGreaterThan(0);
@@ -336,7 +338,7 @@ describe("pi-natives", () => {
 
 	describe("text tab width", () => {
 		it("uses default tab width and supports explicit overrides", () => {
-			expect(visibleWidth("a\tb")).toBe(5);
+			expect(visibleWidth("a\tb", 3)).toBe(5);
 			expect(visibleWidth("a\tb", 4)).toBe(6);
 			expect(visibleWidth("a\tb", 2)).toBe(4);
 		});
@@ -474,6 +476,13 @@ describe("pi-natives", () => {
 		it("should strip OSC sequences", () => {
 			const input = "\x1b]0;title\x07hello";
 			expect(sanitizeText(input)).toBe("hello");
+		});
+		describe("MacOSPowerAssertion", () => {
+			it("should create a stoppable power assertion handle", () => {
+				const assertion = MacOSPowerAssertion.start({ reason: "pi-natives test" });
+				assertion.stop();
+				assertion.stop();
+			});
 		});
 	});
 });

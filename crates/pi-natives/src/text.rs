@@ -16,24 +16,25 @@ use smallvec::{SmallVec, smallvec};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-const DEFAULT_TAB_WIDTH: usize = 3;
-const MIN_TAB_WIDTH: usize = 1;
-const MAX_TAB_WIDTH: usize = 16;
+const MIN_TAB_WIDTH: u32 = 1;
+const MAX_TAB_WIDTH: u32 = 16;
+pub const DEFAULT_TAB_WIDTH: usize = 3;
 const ESC: u16 = 0x1b;
 
 #[inline]
-const fn clamp_tab_width(tab_width: Option<u32>) -> usize {
-	let width = match tab_width {
-		Some(tab_width) => tab_width as usize,
-		None => DEFAULT_TAB_WIDTH,
-	};
-	if width < MIN_TAB_WIDTH {
-		MIN_TAB_WIDTH
-	} else if width > MAX_TAB_WIDTH {
-		MAX_TAB_WIDTH
-	} else {
-		width
-	}
+fn clamp_tab_width_for_ops(width: u32) -> usize {
+	width.clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH) as usize
+}
+
+/// Ellipsis strategy for [`truncate_to_width`].
+#[napi]
+pub enum Ellipsis {
+	/// Use a single Unicode ellipsis character ("…").
+	Unicode = 0,
+	/// Use three ASCII dots ("...").
+	Ascii   = 1,
+	/// Omit ellipsis entirely.
+	Omit    = 2,
 }
 
 fn build_utf16_string(mut data: Vec<u16>) -> Utf16String {
@@ -48,6 +49,8 @@ fn build_utf16_string(mut data: Vec<u16>) -> Utf16String {
 // Results
 // ============================================================================
 
+/// Visible slice of a line after ANSI-aware column selection
+/// (`sliceWithWidth`).
 #[napi(object)]
 pub struct SliceResult {
 	/// UTF-16 slice containing the selected text.
@@ -56,16 +59,15 @@ pub struct SliceResult {
 	pub width: u32,
 }
 
+/// Before/after UTF-16 segments around an overlay region, with measured widths.
 #[napi(object)]
 pub struct ExtractSegmentsResult {
 	/// UTF-16 content before the overlay region.
 	pub before:       Utf16String,
-	#[napi(js_name = "beforeWidth")]
 	/// Visible width of the `before` segment.
 	pub before_width: u32,
 	/// UTF-16 content after the overlay region.
 	pub after:        Utf16String,
-	#[napi(js_name = "afterWidth")]
 	/// Visible width of the `after` segment.
 	pub after_width:  u32,
 }
@@ -787,14 +789,10 @@ fn wrap_text_with_ansi_impl(
 /// breaks.
 ///
 /// Returns UTF-16 lines with active SGR codes carried across line boundaries.
-#[napi(js_name = "wrapTextWithAnsi")]
-pub fn wrap_text_with_ansi(
-	text: JsString,
-	width: u32,
-	tab_width: Option<u32>,
-) -> Result<Vec<Utf16String>> {
+#[napi]
+pub fn wrap_text_with_ansi(text: JsString, width: u32, tab_width: u32) -> Result<Vec<Utf16String>> {
 	let text_u16 = text.into_utf16()?;
-	let tab_width = clamp_tab_width(tab_width);
+	let tab_width = clamp_tab_width_for_ops(tab_width);
 	let lines = wrap_text_with_ansi_impl(text_u16.as_slice(), width as usize, tab_width);
 	Ok(lines.into_iter().map(build_utf16_string).collect())
 }
@@ -805,18 +803,19 @@ pub fn wrap_text_with_ansi(
 
 /// Truncate text to a visible width, preserving ANSI codes.
 ///
-/// `ellipsis_kind`: 0 = "…", 1 = "...", 2 = "" (omit); pads with spaces when
-/// requested.
-#[napi(js_name = "truncateToWidth")]
+/// Pads with spaces when requested.
+#[napi]
 pub fn truncate_to_width(
 	text: JsString<'_>,
 	max_width: u32,
-	ellipsis_kind: u8,
-	pad: bool,
-	tab_width: Option<u32>,
+	ellipsis_kind: Option<Ellipsis>,
+	pad: Option<bool>,
+	tab_width: u32,
 ) -> Result<Either<JsString<'_>, Utf16String>> {
 	let max_width = max_width as usize;
-	let tab_width = clamp_tab_width(tab_width);
+	let ellipsis_kind = ellipsis_kind.unwrap_or(Ellipsis::Unicode);
+	let pad = pad.unwrap_or(false);
+	let tab_width = clamp_tab_width_for_ops(tab_width);
 
 	// Keep original handle so we can return it without allocating.
 	let original = text;
@@ -849,10 +848,9 @@ pub fn truncate_to_width(
 	const ELLIPSIS_OMIT: &[u16] = &[];
 
 	let (ellipsis, ellipsis_w): (&[u16], usize) = match ellipsis_kind {
-		0 => (ELLIPSIS_UNICODE, 1),
-		1 => (ELLIPSIS_ASCII, 3),
-		2 => (ELLIPSIS_OMIT, 0),
-		_ => (ELLIPSIS_UNICODE, 1), // Default to Unicode for invalid values
+		Ellipsis::Unicode => (ELLIPSIS_UNICODE, 1),
+		Ellipsis::Ascii => (ELLIPSIS_ASCII, 3),
+		Ellipsis::Omit => (ELLIPSIS_OMIT, 0),
 	};
 
 	let target_w = max_width.saturating_sub(ellipsis_w);
@@ -1070,18 +1068,23 @@ fn slice_with_width_impl(
 ///
 /// Counts terminal cells, skipping ANSI escapes, and optionally enforces strict
 /// width.
-#[napi(js_name = "sliceWithWidth")]
+#[napi]
 pub fn slice_with_width(
 	line: JsString,
 	start_col: u32,
 	length: u32,
-	strict: bool,
-	tab_width: Option<u32>,
+	strict: Option<bool>,
+	tab_width: u32,
 ) -> Result<SliceResult> {
 	let line_u16 = line.into_utf16()?;
 	let line = line_u16.as_slice();
+	let strict = strict.unwrap_or(false);
 
-	let tab_width = clamp_tab_width(tab_width);
+	if length == 0 {
+		return Ok(SliceResult { text: build_utf16_string(vec![]), width: 0 });
+	}
+
+	let tab_width = clamp_tab_width_for_ops(tab_width);
 	let (out, w) =
 		slice_with_width_impl(line, start_col as usize, length as usize, strict, tab_width);
 
@@ -1230,19 +1233,19 @@ fn extract_segments_impl(
 ///
 /// Preserves ANSI state so the `after` segment renders correctly after
 /// truncation.
-#[napi(js_name = "extractSegments")]
+#[napi]
 pub fn extract_segments(
 	line: JsString,
 	before_end: u32,
 	after_start: u32,
 	after_len: u32,
 	strict_after: bool,
-	tab_width: Option<u32>,
+	tab_width: u32,
 ) -> Result<ExtractSegmentsResult> {
 	let line_u16 = line.into_utf16()?;
 	let line = line_u16.as_slice();
 
-	let tab_width = clamp_tab_width(tab_width);
+	let tab_width = clamp_tab_width_for_ops(tab_width);
 	let (before, bw, after, aw) = extract_segments_impl(
 		line,
 		before_end as usize,
@@ -1266,7 +1269,7 @@ pub fn extract_segments(
 
 /// Strip ANSI escape sequences, remove control characters / lone surrogates,
 /// and normalize line endings.
-#[napi(js_name = "sanitizeText")]
+#[napi]
 pub fn sanitize_text(text: JsString<'_>) -> Result<Either<JsString<'_>, Utf16String>> {
 	let original = text;
 	let text_u16 = text.into_utf16()?;
@@ -1350,10 +1353,10 @@ pub fn sanitize_text(text: JsString<'_>) -> Result<Either<JsString<'_>, Utf16Str
 /// Calculate visible width of text, excluding ANSI escape sequences.
 ///
 /// Tabs count as a fixed-width cell.
-#[napi(js_name = "visibleWidth")]
-pub fn visible_width_napi(text: JsString, tab_width: Option<u32>) -> Result<u32> {
+#[napi]
+pub fn visible_width(text: JsString, tab_width: u32) -> Result<u32> {
 	let text_u16 = text.into_utf16()?;
-	let tab_width = clamp_tab_width(tab_width);
+	let tab_width = clamp_tab_width_for_ops(tab_width);
 	Ok(crate::utils::clamp_u32(visible_width_u16(text_u16.as_slice(), tab_width) as u64))
 }
 

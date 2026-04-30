@@ -1,7 +1,7 @@
 import { stripTypePrefix } from "../../commit/analysis/summary";
 import { validateSummary } from "../../commit/analysis/validation";
 import type { CommitType, ConventionalDetail } from "../../commit/types";
-import { normalizeUnicode } from "../../patch/normalize";
+import { normalizeUnicode } from "../../edit/normalize";
 
 export const SUMMARY_MAX_CHARS = 72;
 export const MAX_DETAIL_ITEMS = 6;

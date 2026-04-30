@@ -74,6 +74,7 @@ import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { complete } from "@oh-my-pi/pi-ai/stream";
 import type { Api, Context, ImageContent, Model, OptionsForApi, UserMessage } from "@oh-my-pi/pi-ai/types";
+import { $which } from "@oh-my-pi/pi-utils";
 import { e2eApiKey } from "./oauth";
 
 const TEMP_DIR = path.join(import.meta.dir, ".temp-images");
@@ -162,41 +163,9 @@ async function testImageCount<TApi extends Api>(
 }
 
 /**
- * Test sending an image of a specific size
+ * Test sending a single image (used for both size and dimension tests)
  */
-async function testImageSize<TApi extends Api>(
-	model: Model<TApi>,
-	imageBase64: string,
-	options?: OptionsForApi<TApi>,
-): Promise<{ success: boolean; error?: string }> {
-	const context: Context = {
-		messages: [
-			{
-				role: "user",
-				content: [
-					{ type: "text", text: "I am sending you an image. Just reply with 'received'." },
-					{ type: "image", data: imageBase64, mimeType: "image/png" },
-				],
-				timestamp: Date.now(),
-			},
-		],
-	};
-
-	try {
-		const response = await complete(model, context, options);
-		if (response.stopReason === "error") {
-			return { success: false, error: response.errorMessage };
-		}
-		return { success: true };
-	} catch (e) {
-		return { success: false, error: e instanceof Error ? e.message : String(e) };
-	}
-}
-
-/**
- * Test sending an image with specific dimensions
- */
-async function testImageDimensions<TApi extends Api>(
+async function testSingleImage<TApi extends Api>(
 	model: Model<TApi>,
 	imageBase64: string,
 	options?: OptionsForApi<TApi>,
@@ -261,7 +230,7 @@ describe("Image Limits E2E Tests", () => {
 	let smallImage: string; // 100x100 for count tests
 
 	beforeAll(async () => {
-		if (!Bun.which("magick")) return;
+		if (!$which("magick")) return;
 		// Create temp directory
 		fs.mkdirSync(TEMP_DIR, { recursive: true });
 
@@ -316,7 +285,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const sizeMB of sizes) {
 					console.log(`  Testing size: ${sizeMB}MB...`);
 					const imageBase64 = await generateImageWithSize(sizeMB * MB, `size-${sizeMB}mb.png`);
-					const result = await testImageSize(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = sizeMB;
 						console.log(`    SUCCESS`);
@@ -345,7 +314,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const dim of dimensions) {
 					console.log(`  Testing dimension: ${dim}x${dim}...`);
 					const imageBase64 = await generateImage(dim, dim, `dim-${dim}.png`);
-					const result = await testImageDimensions(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = dim;
 						console.log(`    SUCCESS`);
@@ -409,7 +378,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const sizeMB of sizes) {
 					console.log(`  Testing size: ${sizeMB}MB...`);
 					const imageBase64 = await generateImageWithSize(sizeMB * MB, `size-${sizeMB}mb.png`);
-					const result = await testImageSize(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = sizeMB;
 						console.log(`    SUCCESS`);
@@ -437,7 +406,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const dim of dimensions) {
 					console.log(`  Testing dimension: ${dim}x${dim}...`);
 					const imageBase64 = await generateImage(dim, dim, `dim-${dim}.png`);
-					const result = await testImageDimensions(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = dim;
 						console.log(`    SUCCESS`);
@@ -496,7 +465,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const sizeMB of sizes) {
 					console.log(`  Testing size: ${sizeMB}MB...`);
 					const imageBase64 = await generateImageWithSize(sizeMB * MB, `size-${sizeMB}mb.png`);
-					const result = await testImageSize(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = sizeMB;
 						console.log(`    SUCCESS`);
@@ -524,7 +493,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const dim of dimensions) {
 					console.log(`  Testing dimension: ${dim}x${dim}...`);
 					const imageBase64 = await generateImage(dim, dim, `dim-${dim}.png`);
-					const result = await testImageDimensions(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = dim;
 						console.log(`    SUCCESS`);
@@ -577,7 +546,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const sizeMB of sizes) {
 					console.log(`  Testing size: ${sizeMB}MB...`);
 					const imageBase64 = await generateImageWithSize(sizeMB * MB, `size-${sizeMB}mb.png`);
-					const result = await testImageSize(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = sizeMB;
 						console.log(`    SUCCESS`);
@@ -605,7 +574,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const dim of dimensions) {
 					console.log(`  Testing dimension: ${dim}x${dim}...`);
 					const imageBase64 = await generateImage(dim, dim, `dim-${dim}.png`);
-					const result = await testImageDimensions(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = dim;
 						console.log(`    SUCCESS`);
@@ -658,7 +627,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const sizeMB of sizes) {
 					console.log(`  Testing size: ${sizeMB}MB...`);
 					const imageBase64 = await generateImageWithSize(sizeMB * MB, `size-${sizeMB}mb.png`);
-					const result = await testImageSize(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = sizeMB;
 						console.log(`    SUCCESS`);
@@ -686,7 +655,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const dim of dimensions) {
 					console.log(`  Testing dimension: ${dim}x${dim}...`);
 					const imageBase64 = await generateImage(dim, dim, `dim-${dim}.png`);
-					const result = await testImageDimensions(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = dim;
 						console.log(`    SUCCESS`);
@@ -742,7 +711,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const sizeMB of sizes) {
 					console.log(`  Testing size: ${sizeMB}MB...`);
 					const imageBase64 = await generateImageWithSize(sizeMB * MB, `size-${sizeMB}mb.png`);
-					const result = await testImageSize(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = sizeMB;
 						console.log(`    SUCCESS`);
@@ -770,7 +739,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const dim of dimensions) {
 					console.log(`  Testing dimension: ${dim}x${dim}...`);
 					const imageBase64 = await generateImage(dim, dim, `dim-${dim}.png`);
-					const result = await testImageDimensions(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = dim;
 						console.log(`    SUCCESS`);
@@ -821,7 +790,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const sizeMB of sizes) {
 					console.log(`  Testing size: ${sizeMB}MB...`);
 					const imageBase64 = await generateImageWithSize(sizeMB * MB, `size-${sizeMB}mb.png`);
-					const result = await testImageSize(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = sizeMB;
 						console.log(`    SUCCESS`);
@@ -849,7 +818,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const dim of dimensions) {
 					console.log(`  Testing dimension: ${dim}x${dim}...`);
 					const imageBase64 = await generateImage(dim, dim, `dim-${dim}.png`);
-					const result = await testImageDimensions(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = dim;
 						console.log(`    SUCCESS`);
@@ -905,7 +874,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const sizeMB of sizes) {
 					console.log(`  Testing size: ${sizeMB}MB...`);
 					const imageBase64 = await generateImageWithSize(sizeMB * MB, `size-${sizeMB}mb.png`);
-					const result = await testImageSize(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = sizeMB;
 						console.log(`    SUCCESS`);
@@ -933,7 +902,7 @@ describe("Image Limits E2E Tests", () => {
 				for (const dim of dimensions) {
 					console.log(`  Testing dimension: ${dim}x${dim}...`);
 					const imageBase64 = await generateImage(dim, dim, `dim-${dim}.png`);
-					const result = await testImageDimensions(model, imageBase64);
+					const result = await testSingleImage(model, imageBase64);
 					if (result.success) {
 						lastSuccess = dim;
 						console.log(`    SUCCESS`);

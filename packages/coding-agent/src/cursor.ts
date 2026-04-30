@@ -13,6 +13,7 @@ import type {
 	CursorExecHandlers as ICursorExecHandlers,
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
+import { sanitizeText } from "@oh-my-pi/pi-natives";
 import { resolveToCwd } from "./tools/path-utils";
 
 interface CursorExecBridgeOptions {
@@ -65,12 +66,16 @@ async function executeTool(
 
 	const onUpdate: AgentToolUpdateCallback<unknown> | undefined = options.emitEvent
 		? partialResult => {
+				const sanitizedResult: AgentToolResult<unknown> = {
+					content: partialResult.content.map(c => (c.type === "text" ? { ...c, text: sanitizeText(c.text) } : c)),
+					details: partialResult.details,
+				};
 				options.emitEvent?.({
 					type: "tool_execution_update",
 					toolCallId,
 					toolName,
 					args,
-					partialResult,
+					partialResult: sanitizedResult,
 				});
 			}
 		: undefined;
@@ -89,7 +94,11 @@ async function executeTool(
 		isError = true;
 	}
 
-	options.emitEvent?.({ type: "tool_execution_end", toolCallId, toolName, result, isError });
+	const sanitizedFinalResult: AgentToolResult<unknown> = {
+		content: result.content.map(c => (c.type === "text" ? { ...c, text: sanitizeText(c.text) } : c)),
+		details: result.details,
+	};
+	options.emitEvent?.({ type: "tool_execution_end", toolCallId, toolName, result: sanitizedFinalResult, isError });
 
 	return createToolResultMessage(toolCallId, toolName, result, isError);
 }
@@ -168,16 +177,11 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 
 	async grep(args: Parameters<NonNullable<ICursorExecHandlers["grep"]>>[0]) {
 		const toolCallId = decodeToolCallId(args.toolCallId);
-		const toolResultMessage = await executeTool(this.options, "grep", toolCallId, {
+		const searchPath = args.glob ? `${args.path || "."}/${args.glob}` : args.path || ".";
+		const toolResultMessage = await executeTool(this.options, "search", toolCallId, {
 			pattern: args.pattern,
-			path: args.path || undefined,
-			glob: args.glob || undefined,
-			mode: args.outputMode || undefined,
-			context: args.context ?? args.contextBefore ?? args.contextAfter ?? undefined,
-			ignore_case: args.caseInsensitive || undefined,
-			type: args.type || undefined,
-			limit: args.headLimit ?? undefined,
-			multiline: args.multiline || undefined,
+			path: searchPath,
+			i: args.caseInsensitive || undefined,
 		});
 		return toolResultMessage;
 	}
@@ -233,21 +237,43 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		let result: AgentToolResult<unknown>;
 		let isError = false;
 
-		// Track previously streamed text so we only forward deltas.
-		let streamedLen = 0;
+		let rawText = "";
+		let sanitizedRawText = "";
+		let streamedSanitizedText = "";
+		let canStreamSanitizedDelta = true;
 		const onUpdate: AgentToolUpdateCallback<unknown> = partialResult => {
+			const newRawText = partialResult.content.map(c => (c.type === "text" ? c.text : "")).join("");
+			if (newRawText === rawText) {
+				return;
+			}
+			rawText = newRawText;
+			sanitizedRawText = sanitizeText(newRawText);
+			const sanitizedPartialResult: AgentToolResult<unknown> = {
+				content: [{ type: "text" as const, text: sanitizedRawText }],
+				details: partialResult.details,
+			};
 			this.options.emitEvent?.({
 				type: "tool_execution_update",
 				toolCallId,
 				toolName,
 				args: toolArgs,
-				partialResult,
+				partialResult: sanitizedPartialResult,
 			});
-			const text = partialResult.content.map(c => (c.type === "text" ? c.text : "")).join("");
-			if (text.length > streamedLen) {
-				callbacks.onStdout(text.slice(streamedLen));
-				streamedLen = text.length;
+			if (!canStreamSanitizedDelta) {
+				return;
 			}
+			if (sanitizedRawText.startsWith(streamedSanitizedText)) {
+				const sanitizedDelta = sanitizedRawText.slice(streamedSanitizedText.length);
+				streamedSanitizedText = sanitizedRawText;
+				if (sanitizedDelta) {
+					callbacks.onStdout(sanitizedDelta);
+				}
+				return;
+			}
+			// Cursor's shell-stream callback is append-only. Once the sanitized snapshot
+			// stops being a prefix extension, we can no longer repair the stream safely.
+			// Keep emitting full snapshots via tool_execution_update, but stop stdout deltas.
+			canStreamSanitizedDelta = false;
 		};
 
 		try {
@@ -260,12 +286,30 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 
 		// onUpdate may not fire for every chunk — flush any remaining output
 		// from the final result that wasn't already streamed.
-		const finalText = result.content.map(c => (c.type === "text" ? c.text : "")).join("");
-		if (finalText.length > streamedLen) {
-			callbacks.onStdout(finalText.slice(streamedLen));
+		const finalRawText = result.content.map(c => (c.type === "text" ? c.text : "")).join("");
+		if (finalRawText !== rawText) {
+			rawText = finalRawText;
+			sanitizedRawText = sanitizeText(finalRawText);
+		}
+		if (canStreamSanitizedDelta && sanitizedRawText.startsWith(streamedSanitizedText)) {
+			const finalDelta = sanitizedRawText.slice(streamedSanitizedText.length);
+			streamedSanitizedText = sanitizedRawText;
+			if (finalDelta) {
+				callbacks.onStdout(finalDelta);
+			}
 		}
 
-		this.options.emitEvent?.({ type: "tool_execution_end", toolCallId, toolName, result, isError });
+		const sanitizedFinalResult: AgentToolResult<unknown> = {
+			content: result.content.map(c => (c.type === "text" ? { ...c, text: sanitizeText(c.text) } : c)),
+			details: result.details,
+		};
+		this.options.emitEvent?.({
+			type: "tool_execution_end",
+			toolCallId,
+			toolName,
+			result: sanitizedFinalResult,
+			isError,
+		});
 		return createToolResultMessage(toolCallId, toolName, result, isError);
 	}
 
@@ -283,18 +327,10 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		const toolCallId = decodeToolCallId(call.toolCallId);
 		const tool = this.options.tools.get(toolName);
 		if (!tool) {
-			const availableTools = Array.from(this.options.tools.keys()).filter(name => name.startsWith("mcp_"));
+			const availableTools = Array.from(this.options.tools.keys()).filter(name => name.startsWith("mcp__"));
 			const message = formatMcpToolErrorMessage(toolName, availableTools);
-			const toolResult: ToolResultMessage = {
-				role: "toolResult",
-				toolCallId,
-				toolName,
-				content: [{ type: "text", text: message }],
-				details: {},
-				isError: true,
-				timestamp: Date.now(),
-			};
-			return toolResult;
+			const result = buildToolErrorResult(message);
+			return createToolResultMessage(toolCallId, toolName, result, true);
 		}
 
 		const args = Object.keys(call.args ?? {}).length > 0 ? call.args : decodeMcpArgs(call.rawArgs ?? {});

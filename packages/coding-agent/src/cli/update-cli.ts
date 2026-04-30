@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { APP_NAME, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
+import { $which, APP_NAME, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import chalk from "chalk";
 import { theme } from "../modes/theme/theme";
@@ -36,7 +36,7 @@ export function parseUpdateArgs(args: string[]): { force: boolean; check: boolea
 }
 
 async function getBunGlobalBinDir(): Promise<string | undefined> {
-	if (!Bun.which("bun")) return undefined;
+	if (!$which("bun")) return undefined;
 	try {
 		const result = await $`bun pm bin -g`.quiet().nothrow();
 		if (result.exitCode !== 0) return undefined;
@@ -167,7 +167,7 @@ function getBinaryName(): string {
  * Resolve the path that `omp` maps to in the user's PATH.
  */
 function resolveOmpPath(): string | undefined {
-	return Bun.which(APP_NAME) ?? undefined;
+	return $which(APP_NAME) ?? undefined;
 }
 
 /**

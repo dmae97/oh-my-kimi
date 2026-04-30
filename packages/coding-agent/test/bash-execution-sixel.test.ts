@@ -47,7 +47,7 @@ describe("BashExecutionComponent SIXEL sanitization", () => {
 		const output = component.getOutput();
 		expect(output).toContain("\x1bPq");
 		expect(output).toContain("\x1b\\");
-		expect(output).not.toContain("chars omitted");
+		expect(output).not.toContain("visible columns omitted");
 	});
 
 	it("still truncates long non-SIXEL lines", () => {
@@ -60,7 +60,7 @@ describe("BashExecutionComponent SIXEL sanitization", () => {
 		component.setComplete(0, false);
 
 		const output = component.getOutput();
-		expect(output).toContain("chars omitted");
+		expect(output).toContain("visible columns omitted");
 		expect(output).not.toContain("\x1bPq");
 	});
 

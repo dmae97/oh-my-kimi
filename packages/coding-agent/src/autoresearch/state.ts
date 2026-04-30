@@ -34,7 +34,6 @@ export function createExperimentState(): ExperimentState {
 		scopePaths: [],
 		offLimits: [],
 		constraints: [],
-		segmentFingerprint: null,
 	};
 }
 
@@ -203,8 +202,6 @@ export function reconstructStateFromJsonl(workDir: string): ReconstructedExperim
 			state.scopePaths = cloneStringArray(configEntry.scopePaths);
 			state.offLimits = cloneStringArray(configEntry.offLimits);
 			state.constraints = cloneStringArray(configEntry.constraints);
-			state.segmentFingerprint =
-				typeof configEntry.segmentFingerprint === "string" ? configEntry.segmentFingerprint : null;
 			state.secondaryMetrics = hydrateMetricDefs(configEntry.secondaryMetrics);
 			continue;
 		}
@@ -321,9 +318,6 @@ function parseConfigEntry(value: unknown): AutoresearchJsonConfigEntry | null {
 		config.constraints = normalizeAutoresearchList(
 			candidate.constraints.filter((item): item is string => typeof item === "string"),
 		);
-	}
-	if (typeof candidate.segmentFingerprint === "string" && candidate.segmentFingerprint.trim().length > 0) {
-		config.segmentFingerprint = candidate.segmentFingerprint;
 	}
 	return config;
 }

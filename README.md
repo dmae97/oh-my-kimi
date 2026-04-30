@@ -154,7 +154,7 @@ Parallel execution framework with specialized agents and real-time streaming:
 - **Real-time artifact streaming**: Task outputs stream as they're created, not just at completion
 - **Full output access**: Read complete subagent output via `agent://<id>` resources when previews truncate
 - **Isolation backends**: `isolated: true` runs tasks in git worktrees, Unix fuse-overlay filesystems, or Windows ProjFS (`fuse-projfs`), with patch or branch merge strategies
-- **Async background jobs**: Background execution with configurable concurrency (up to 100 jobs) and `await` tool for blocking on results
+- **Async background jobs**: Background execution with configurable concurrency (up to 100 jobs) and `poll` tool for blocking on results
 - **Agent Control Center**: `/agents` dashboard for managing and creating custom agents
 - **AI-powered agent creation**: Generate custom agent definitions with the architect model
 - **Per-agent model overrides**: Assign specific models to individual agents via swarm extension
@@ -478,7 +478,7 @@ return config
 **Option 1: Environment variables** (common examples)
 
 | Provider                                        | Environment Variable                         |
-|-------------------------------------------------| -------------------------------------------- |
+| ----------------------------------------------- | -------------------------------------------- |
 | Anthropic                                       | `ANTHROPIC_API_KEY`                          |
 | OpenAI                                          | `OPENAI_API_KEY`                             |
 | Google                                          | `GEMINI_API_KEY`                             |
@@ -868,9 +868,18 @@ providers:
     auth: none
     discovery:
       type: llama.cpp
+
+equivalence:
+  overrides:
+    zenmux/codex: gpt-5.3-codex
+    p-codex/codex: gpt-5.3-codex
+  exclude:
+    - demo/codex-preview
 ```
 
 **Supported APIs:** `openai-completions`, `openai-responses`, `openai-codex-responses`, `azure-openai-responses`, `anthropic-messages`, `google-generative-ai`, `google-vertex`
+
+Canonical ids are official upstream model ids such as `claude-sonnet-4-6` or `gpt-5.3-codex`. Use `equivalence.overrides` to map custom provider variants into those canonical groups while keeping explicit `provider/model` selection available.
 
 ### Settings File
 
@@ -889,13 +898,17 @@ theme:
 
 enabledModels:
   - "anthropic/*"
-  - "*gpt*"
+  - "gpt-5.3-codex"
   - "gemini-2.5-pro:high"
 
 modelRoles:
-  default: anthropic/claude-sonnet-4-20250514
-  plan: anthropic/claude-opus-4-1:high
-  smol: anthropic/claude-sonnet-4-20250514
+  default: claude-sonnet-4-6
+  plan: claude-opus-4-6:high
+  smol: anthropic/claude-sonnet-4-6
+modelProviderOrder:
+  - github-copilot
+  - zenmux
+  - openai
 defaultThinkingLevel: high
 
 retry:
@@ -933,7 +946,6 @@ compaction:
 skills:
   enabled: true
 
-
 terminal:
   showImages: true
 
@@ -954,6 +966,8 @@ task:
     mode: none # none | worktree | fuse-overlay | fuse-projfs
     merge: patch # patch | branch
 ```
+
+`modelRoles` may use either canonical ids or explicit `provider/model` selectors. `modelProviderOrder` decides which provider backs a canonical model when multiple equivalent variants are available.
 
 Legacy migration notes:
 
@@ -1226,7 +1240,7 @@ Use `--tools <list>` to restrict available built-in tools.
 | `python`         | Execute Python code in IPython kernel                          |
 | `calc`           | Deterministic calculator/evaluator                             |
 | `ssh`            | Execute commands on configured SSH hosts                       |
-| `edit`           | In-place file editing with LINE#ID anchors                     |
+| `edit`           | In-place file editing with anchors                             |
 | `find`           | Find files by glob pattern                                     |
 | `grep`           | Search file content                                            |
 | `ast_grep`       | Structural code search using AST matching (ast-grep)           |
@@ -1236,7 +1250,7 @@ Use `--tools <list>` to restrict available built-in tools.
 | `read`           | Read files/directories (default text cap: 3000 lines)          |
 | `browser`        | Browser automation tool (model-facing name: `puppeteer`)       |
 | `task`           | Launch subagents for parallel execution                        |
-| `await`          | Block on async background jobs                                 |
+| `poll`           | Block on async background jobs                                 |
 | `todo_write`     | Phased task tracking with progress management                  |
 | `fetch`          | Fetch and extract URL content                                  |
 | `web_search`     | Multi-provider web search                                      |

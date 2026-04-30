@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { bashToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/bash";
@@ -47,6 +49,39 @@ describe("bashToolRenderer", () => {
 		const rendered = sanitizeText(component.render(120).join("\n"));
 		expect(rendered).toContain('MERMAID="line 1\\nline 2"');
 		expect(rendered).toContain("printf '%s' \"$MERMAID\"");
+	});
+
+	it("sanitizes command tabs and shortens home cwd in previews", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const component = bashToolRenderer.renderCall(
+			{
+				command: "printf\t'%s'",
+				cwd: path.join(os.homedir(), "projects", "demo"),
+			},
+			{ expanded: false, isPartial: false },
+			uiTheme,
+		);
+		const rendered = sanitizeText(component.render(120).join("\n"));
+		expect(rendered).toContain("~/projects/demo");
+		expect(rendered).not.toContain(os.homedir());
+		expect(rendered).not.toContain("\t");
+	});
+
+	it("shows the effective timeout from result details when it differs from call args", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const component = bashToolRenderer.renderResult(
+			{ content: [{ type: "text", text: "" }], details: { timeoutSeconds: 120 }, isError: false },
+			{ expanded: false, isPartial: false, renderContext: { timeout: 1200 } },
+			uiTheme,
+			{ command: "python3 scripts/edit-benchmark.py", timeout: 1200 },
+		);
+		const rendered = sanitizeText(component.render(120).join("\n"));
+		expect(rendered).toContain("Timeout: 120s");
+		expect(rendered).not.toContain("Timeout: 1200s");
 	});
 
 	it("bypasses truncation/styling for SIXEL lines", async () => {

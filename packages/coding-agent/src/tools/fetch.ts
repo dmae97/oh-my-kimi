@@ -4,7 +4,7 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { htmlToMarkdown } from "@oh-my-pi/pi-natives";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
-import { ptree, truncate } from "@oh-my-pi/pi-utils";
+import { $which, ptree, truncate } from "@oh-my-pi/pi-utils";
 import { parseHTML } from "linkedom";
 import type { Settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -18,12 +18,12 @@ import { ensureTool } from "../utils/tools-manager";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../web/parallel";
 import { specialHandlers } from "../web/scrapers";
 import type { RenderResult } from "../web/scrapers/types";
-import { finalizeOutput, loadPage, MAX_OUTPUT_CHARS } from "../web/scrapers/types";
+import { finalizeOutput, loadPage, looksLikeHtml, MAX_OUTPUT_CHARS } from "../web/scrapers/types";
 import { convertWithMarkit, fetchBinary } from "../web/scrapers/utils";
 import { applyListLimit } from "./list-limit";
 import { formatStyledArtifactReference, type OutputMeta } from "./output-meta";
 import { formatExpandHint, getDomain } from "./render-utils";
-import { ToolAbortError } from "./tool-errors";
+import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
 
@@ -84,7 +84,7 @@ const IMAGE_MIME_BY_EXTENSION = new Map<string, string>([
 ]);
 const SUPPORTED_INLINE_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const MAX_INLINE_IMAGE_SOURCE_BYTES = 20 * 1024 * 1024;
-const MAX_INLINE_IMAGE_OUTPUT_BYTES = 0.75 * 1024 * 1024;
+const MAX_INLINE_IMAGE_OUTPUT_BYTES = 300 * 1024;
 
 // =============================================================================
 // Utilities
@@ -94,7 +94,7 @@ const MAX_INLINE_IMAGE_OUTPUT_BYTES = 0.75 * 1024 * 1024;
  * Check if a command exists (cross-platform)
  */
 function hasCommand(cmd: string): boolean {
-	return Boolean(Bun.which(cmd));
+	return Boolean($which(cmd));
 }
 
 /**
@@ -135,6 +135,82 @@ function normalizeUrl(url: string): string {
 
 export function isReadableUrlPath(value: string): boolean {
 	return /^https?:\/\//i.test(value) || /^www\./i.test(value);
+}
+
+const URL_LINE_RANGE_RE = /^L?(\d+)(?:([-+])L?(\d+))?$/i;
+// Embedded URL selectors (after a `:` in the path) keep the explicit `L` prefix to avoid colliding with ports such as `https://example.com:50`.
+const URL_EMBEDDED_LINE_RANGE_RE = /^L\d+(?:[-+]L?\d+)?$/i;
+
+export interface ParsedReadUrlTarget {
+	path: string;
+	raw: boolean;
+	offset?: number;
+	limit?: number;
+}
+
+export function parseReadUrlTarget(readPath: string, sel?: string): ParsedReadUrlTarget | null {
+	const embedded = sel ? undefined : tryExtractEmbeddedUrlSelector(readPath);
+	const urlPath = embedded?.path ?? readPath;
+	if (!isReadableUrlPath(urlPath)) {
+		return null;
+	}
+
+	const selector = sel ?? embedded?.sel;
+	const raw = selector === "raw";
+	const lineMatch = selector ? URL_LINE_RANGE_RE.exec(selector) : null;
+	if (lineMatch) {
+		const startLine = Number.parseInt(lineMatch[1]!, 10);
+		if (startLine < 1) {
+			throw new ToolError("sel=0 is invalid; lines are 1-indexed. Use sel=1.");
+		}
+		const sep = lineMatch[2];
+		const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
+		let endLine: number | undefined;
+		if (sep === "+") {
+			if (rhs === undefined || rhs < 1) {
+				throw new ToolError(`Invalid range ${startLine}+${rhs ?? 0}: count must be >= 1.`);
+			}
+			endLine = startLine + rhs - 1;
+		} else if (sep === "-") {
+			if (rhs === undefined || rhs < startLine) {
+				throw new ToolError(`Invalid range ${startLine}-${rhs ?? 0}: end must be >= start.`);
+			}
+			endLine = rhs;
+		}
+		return {
+			path: urlPath,
+			raw: false,
+			offset: startLine,
+			limit: endLine !== undefined ? endLine - startLine + 1 : undefined,
+		};
+	}
+
+	return { path: urlPath, raw };
+}
+
+function tryExtractEmbeddedUrlSelector(readPath: string): { path: string; sel?: string } | null {
+	const lastColonIndex = readPath.lastIndexOf(":");
+	if (lastColonIndex <= 0) {
+		return null;
+	}
+
+	const candidateSelector = readPath.slice(lastColonIndex + 1);
+	const isEmbeddedSelector = candidateSelector === "raw" || URL_EMBEDDED_LINE_RANGE_RE.test(candidateSelector);
+	if (!isEmbeddedSelector) {
+		return null;
+	}
+
+	const basePath = readPath.slice(0, lastColonIndex);
+	if (!isReadableUrlPath(basePath)) {
+		return null;
+	}
+
+	try {
+		new URL(basePath.startsWith("http://") || basePath.startsWith("https://") ? basePath : `https://${basePath}`);
+		return { path: basePath, sel: candidateSelector };
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -187,19 +263,6 @@ function resolveImageMimeType(mime: string, extensionHint: string): string | nul
 
 function isInlineImageMimeTypeSupported(mimeType: string): boolean {
 	return SUPPORTED_INLINE_IMAGE_MIME_TYPES.has(mimeType);
-}
-
-/**
- * Check if content looks like HTML
- */
-function looksLikeHtml(content: string): boolean {
-	const trimmed = content.trim().toLowerCase();
-	return (
-		trimmed.startsWith("<!doctype") ||
-		trimmed.startsWith("<html") ||
-		trimmed.startsWith("<head") ||
-		trimmed.startsWith("<body")
-	);
 }
 
 /**

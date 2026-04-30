@@ -64,7 +64,6 @@ export interface ExperimentState {
 	scopePaths: string[];
 	offLimits: string[];
 	constraints: string[];
-	segmentFingerprint: string | null;
 }
 
 export interface RunExperimentProgressDetails {
@@ -96,6 +95,7 @@ export interface RunDetails {
 	parsedAsi: ASIData | null;
 	metricName: string;
 	metricUnit: string;
+	preRunDirtyPaths: string[];
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
 }
@@ -122,6 +122,7 @@ export interface PendingRunSummary {
 	parsedMetrics: NumericMetricMap | null;
 	parsedPrimary: number | null;
 	passed: boolean;
+	preRunDirtyPaths: string[];
 	runDirectory: string;
 	runNumber: number;
 }
@@ -165,7 +166,6 @@ export interface AutoresearchJsonConfigEntry {
 	scopePaths?: string[];
 	offLimits?: string[];
 	constraints?: string[];
-	segmentFingerprint?: string;
 }
 
 export interface AutoresearchJsonRunEntry {

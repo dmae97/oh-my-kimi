@@ -12,12 +12,13 @@
  * - instructions: *.instructions.md in .github/instructions/ with applyTo frontmatter
  */
 import * as path from "node:path";
+import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { registerProvider } from "../capability";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";
 import { readFile } from "../capability/fs";
 import { type Instruction, instructionCapability } from "../capability/instruction";
 import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
-import { parseFrontmatter } from "../utils/frontmatter";
+
 import { calculateDepth, createSourceMeta, getProjectPath, loadFilesFromDir } from "./helpers";
 
 const PROVIDER_ID = "github";

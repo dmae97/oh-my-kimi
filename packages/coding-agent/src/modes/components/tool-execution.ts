@@ -14,9 +14,9 @@ import {
 	type TUI,
 } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
+import { EDIT_MODE_STRATEGIES, type EditMode, type PerFileDiffPreview } from "../../edit";
 import type { Theme } from "../../modes/theme/theme";
 import { theme } from "../../modes/theme/theme";
-import { computeEditDiff, computeHashlineDiff, computePatchDiff, type DiffError, type DiffResult } from "../../patch";
 import { BASH_DEFAULT_PREVIEW_LINES } from "../../tools/bash";
 import {
 	formatArgsInline,
@@ -27,7 +27,6 @@ import {
 	JSON_TREE_SCALAR_LEN_COLLAPSED,
 	JSON_TREE_SCALAR_LEN_EXPANDED,
 	renderJsonTreeLines,
-	stripInternalArgs,
 } from "../../tools/json-tree";
 import { PYTHON_DEFAULT_PREVIEW_LINES } from "../../tools/python";
 import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
@@ -52,6 +51,16 @@ function cloneToolArgs<T>(args: T): T {
 	} catch {
 		return args;
 	}
+}
+
+function isEditLikeToolName(toolName: string): boolean {
+	return toolName === "edit" || toolName === "apply_patch";
+}
+
+function resolveEditModeForTool(toolName: string, tool: AgentTool | undefined): EditMode | undefined {
+	if (toolName === "apply_patch") return "apply_patch";
+	if (toolName !== "edit") return undefined;
+	return (tool as { mode?: EditMode } | undefined)?.mode;
 }
 
 export interface ToolExecutionOptions {
@@ -81,6 +90,7 @@ export interface ToolExecutionHandle {
 export class ToolExecutionComponent extends Container {
 	#contentBox: Box; // Used for custom tools and bash visual truncation
 	#contentText: Text; // For built-in tools (with its own padding/bg)
+	#multiFileBoxes: (Box | Spacer)[] = []; // Extra boxes for multi-file edit results
 	#imageComponents: Image[] = [];
 	#imageSpacers: Spacer[] = [];
 	#toolName: string;
@@ -99,9 +109,12 @@ export class ToolExecutionComponent extends Container {
 		isError?: boolean;
 		details?: any;
 	};
-	// Cached edit diff preview (computed when args arrive, before tool executes)
-	#editDiffPreview?: DiffResult | DiffError;
-	#editDiffArgsKey?: string; // Track which args the preview is for
+	// Edit preview state
+	#editMode?: EditMode;
+	#editDiffPreview?: PerFileDiffPreview[];
+	#editDiffScheduleTimer?: NodeJS.Timeout;
+	#editDiffAbort?: AbortController;
+	#editDiffLastArgsKey?: string;
 	// Cached converted images for Kitty protocol (which requires PNG), keyed by index
 	#convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	// Spinner animation for partial task results
@@ -126,17 +139,18 @@ export class ToolExecutionComponent extends Container {
 		tool: AgentTool | undefined,
 		ui: TUI,
 		cwd: string = getProjectDir(),
+		_toolCallId?: string,
 	) {
 		super();
 		this.#toolName = toolName;
 		this.#toolLabel = tool?.label ?? toolName;
-		this.#args = cloneToolArgs(args);
 		this.#showImages = options.showImages ?? true;
 		this.#editFuzzyThreshold = options.editFuzzyThreshold;
 		this.#editAllowFuzzy = options.editAllowFuzzy;
 		this.#tool = tool;
 		this.#ui = ui;
 		this.#cwd = cwd;
+		this.#args = cloneToolArgs(args);
 
 		this.addChild(new Spacer(1));
 
@@ -153,97 +167,98 @@ export class ToolExecutionComponent extends Container {
 			this.addChild(this.#contentText);
 		}
 
+		this.#editMode = resolveEditModeForTool(toolName, tool);
+
 		this.#updateDisplay();
+		this.#schedulePreviewDiff(0);
 	}
 
 	updateArgs(args: any, _toolCallId?: string): void {
 		this.#args = cloneToolArgs(args);
 		this.#updateSpinnerAnimation();
+		this.#schedulePreviewDiff();
 		this.#updateDisplay();
 	}
 
 	/**
 	 * Signal that args are complete (tool is about to execute).
-	 * This triggers diff computation for edit tool.
+	 * This triggers an immediate final diff computation for edit-like tools.
 	 */
 	setArgsComplete(_toolCallId?: string): void {
 		this.#argsComplete = true;
 		this.#updateSpinnerAnimation();
-		this.#maybeComputeEditDiff();
+		this.#schedulePreviewDiff(0);
 	}
 
 	/**
-	 * Compute edit diff preview when we have complete args.
-	 * This runs async and updates display when done.
+	 * Schedule a debounced compute of the streaming edit-diff preview.
+	 * `delayMs === 0` runs immediately (used on construction and on
+	 * `setArgsComplete`). All other calls coalesce to a trailing-edge timer.
 	 */
-	#maybeComputeEditDiff(): void {
-		if (this.#toolName !== "edit") return;
+	#schedulePreviewDiff(delayMs = 80): void {
+		if (!this.#editMode) return;
+		if (this.#editDiffScheduleTimer) {
+			clearTimeout(this.#editDiffScheduleTimer);
+			this.#editDiffScheduleTimer = undefined;
+		}
+		if (delayMs === 0) {
+			void this.#runPreviewDiff();
+			return;
+		}
+		this.#editDiffScheduleTimer = setTimeout(() => {
+			this.#editDiffScheduleTimer = undefined;
+			void this.#runPreviewDiff();
+		}, delayMs);
+	}
 
-		const path = this.#args?.path;
-		const op = this.#args?.op;
+	async #runPreviewDiff(): Promise<void> {
+		const editMode = this.#editMode;
+		if (!editMode) return;
+		const strategy = EDIT_MODE_STRATEGIES[editMode];
+		if (!strategy) return;
 
-		if (op) {
-			const diff = this.#args?.diff;
-			const rename = this.#args?.rename;
-			if (!path) return;
+		const args = this.#args;
+		if (args == null || typeof args !== "object") return;
 
-			const argsKey = JSON.stringify({ path, op, rename, diff });
-			if (this.#editDiffArgsKey === argsKey) return;
-			this.#editDiffArgsKey = argsKey;
+		const partialJson = (args as { __partialJson?: string }).__partialJson;
+		let effectiveArgs: unknown;
+		try {
+			effectiveArgs = strategy.extractCompleteEdits(args, partialJson);
+		} catch {
+			effectiveArgs = args;
+		}
 
-			computePatchDiff({ path, op, rename, diff }, this.#cwd, {
+		// Coalesce duplicate computes for identical args.
+		let argsKey: string;
+		try {
+			argsKey = JSON.stringify(effectiveArgs);
+		} catch {
+			argsKey = String(Date.now());
+		}
+		if (argsKey === this.#editDiffLastArgsKey) return;
+		this.#editDiffLastArgsKey = argsKey;
+
+		this.#editDiffAbort?.abort();
+		const controller = new AbortController();
+		this.#editDiffAbort = controller;
+
+		try {
+			const previews = await strategy.computeDiffPreview(effectiveArgs, {
+				cwd: this.#cwd,
+				signal: controller.signal,
 				fuzzyThreshold: this.#editFuzzyThreshold,
 				allowFuzzy: this.#editAllowFuzzy,
-			}).then(result => {
-				if (this.#editDiffArgsKey === argsKey) {
-					this.#editDiffPreview = result;
-					this.#updateDisplay();
-					this.#ui.requestRender();
-				}
 			});
-			return;
-		}
-		const edits = this.#args?.edits;
-		const move = this.#args?.move;
-		if (path && Array.isArray(edits)) {
-			const argsKey = JSON.stringify({ path, edits, move });
-			if (this.#editDiffArgsKey === argsKey) return;
-			this.#editDiffArgsKey = argsKey;
-
-			computeHashlineDiff({ path, edits, move }, this.#cwd).then(result => {
-				if (this.#editDiffArgsKey === argsKey) {
-					this.#editDiffPreview = result;
-					this.#updateDisplay();
-					this.#ui.requestRender();
-				}
-			});
-			return;
-		}
-
-		const oldText = this.#args?.old_text;
-		const newText = this.#args?.new_text;
-		const all = this.#args?.all;
-
-		// Need all three params to compute diff
-		if (!path || oldText === undefined || newText === undefined) return;
-
-		// Create a key to track which args this computation is for
-		const argsKey = JSON.stringify({ path, oldText, newText, all });
-
-		// Skip if we already computed for these exact args
-		if (this.#editDiffArgsKey === argsKey) return;
-
-		this.#editDiffArgsKey = argsKey;
-
-		// Compute diff async
-		computeEditDiff(path, oldText, newText, this.#cwd, true, all, this.#editFuzzyThreshold).then(result => {
-			// Only update if args haven't changed since we started
-			if (this.#editDiffArgsKey === argsKey) {
-				this.#editDiffPreview = result;
+			if (controller.signal.aborted) return;
+			if (previews) {
+				this.#editDiffPreview = previews;
 				this.#updateDisplay();
 				this.#ui.requestRender();
 			}
-		});
+		} catch (err) {
+			if (controller.signal.aborted) return;
+			logger.warn("Edit preview diff failed", { tool: this.#toolName, error: String(err) });
+		}
 	}
 
 	updateResult(
@@ -317,7 +332,7 @@ export class ToolExecutionComponent extends Container {
 	 */
 	#updateSpinnerAnimation(): void {
 		// Spinner for: task tool with partial result, or edit/write while args streaming
-		const isStreamingArgs = !this.#argsComplete && (this.#toolName === "edit" || this.#toolName === "write");
+		const isStreamingArgs = !this.#argsComplete && (isEditLikeToolName(this.#toolName) || this.#toolName === "write");
 		const isBackgroundAsyncTask =
 			this.#toolName === "task" &&
 			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
@@ -346,6 +361,12 @@ export class ToolExecutionComponent extends Container {
 			this.#spinnerInterval = undefined;
 			this.#spinnerFrame = undefined;
 		}
+		if (this.#editDiffScheduleTimer) {
+			clearTimeout(this.#editDiffScheduleTimer);
+			this.#editDiffScheduleTimer = undefined;
+		}
+		this.#editDiffAbort?.abort();
+		this.#editDiffAbort = undefined;
 	}
 
 	setExpanded(expanded: boolean): void {
@@ -443,51 +464,121 @@ export class ToolExecutionComponent extends Container {
 		} else if (this.#toolName in toolRenderers) {
 			// Built-in tools with renderers
 			const renderer = toolRenderers[this.#toolName];
-			// Inline renderers skip background styling
-			this.#contentBox.setBgFn(renderer.inline ? undefined : bgFn);
-			this.#contentBox.clear();
 
-			const shouldRenderCall = !this.#result || !renderer.mergeCallAndResult;
-			if (shouldRenderCall) {
-				// Render call component
-				try {
-					const callComponent = renderer.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
-					if (callComponent) {
-						this.#contentBox.addChild(ensureInvalidate(callComponent));
-					}
-				} catch (err) {
-					logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
-					// Fall back to default on error
-					this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
-				}
+			// Clean up previous multi-file boxes
+			for (const box of this.#multiFileBoxes) {
+				this.removeChild(box);
 			}
+			this.#multiFileBoxes = [];
 
-			// Render result component if we have a result
-			if (this.#result) {
-				try {
-					// Build render context for tools that need extra state
-					const renderContext = this.#buildRenderContext();
-					this.#renderState.renderContext = renderContext;
+			// Check for multi-file edit results
+			const perFileResults = this.#result?.details?.perFileResults as
+				| Array<{ path: string; isError?: boolean }>
+				| undefined;
+			if (perFileResults && perFileResults.length > 1) {
+				// Multi-file: render each file as its own Box (identical to separate tool calls)
+				this.#contentBox.setBgFn(undefined);
+				this.#contentBox.clear();
 
-					const resultComponent = renderer.renderResult(
-						{
-							content: this.#result.content as any,
-							details: this.#result.details,
-							isError: this.#result.isError,
-						},
-						this.#renderState,
-						theme,
-						this.#getCallArgsForRender(),
-					);
-					if (resultComponent) {
-						this.#contentBox.addChild(ensureInvalidate(resultComponent));
+				const renderContext = this.#buildRenderContext();
+				this.#renderState.renderContext = renderContext;
+
+				for (let i = 0; i < perFileResults.length; i++) {
+					const fileResult = perFileResults[i];
+					if (i > 0) {
+						const spacer = new Spacer(1);
+						this.#multiFileBoxes.push(spacer);
+						this.addChild(spacer);
 					}
-				} catch (err) {
-					logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
-					// Fall back to showing raw output on error
-					const output = this.#getTextOutput();
-					if (output) {
-						this.#contentBox.addChild(new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
+					const fileBgFn = fileResult.isError
+						? (text: string) => theme.bg("toolErrorBg", text)
+						: (text: string) => theme.bg("toolSuccessBg", text);
+					const fileBox = new Box(1, 1, fileBgFn);
+					try {
+						const resultComponent = renderer.renderResult(
+							{ content: [], details: fileResult, isError: fileResult.isError },
+							this.#renderState,
+							theme,
+						);
+						if (resultComponent) {
+							fileBox.addChild(ensureInvalidate(resultComponent));
+						}
+					} catch (err) {
+						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
+					}
+					this.#multiFileBoxes.push(fileBox);
+					this.addChild(fileBox);
+				}
+
+				// Show pending indicator for remaining files
+				const totalFiles = this.#args?.edits
+					? new Set((this.#args.edits as any[]).map((e: any) => e?.path).filter(Boolean)).size
+					: 0;
+				const remaining = Math.max(0, totalFiles - perFileResults.length);
+				if (remaining > 0 && this.#isPartial) {
+					const pendingSpacer = new Spacer(1);
+					this.#multiFileBoxes.push(pendingSpacer);
+					this.addChild(pendingSpacer);
+					const pendingBox = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
+					const pendingText = renderStatusLine(
+						{
+							icon: "pending",
+							title: "Edit",
+							description: theme.fg("dim", `${remaining} more file${remaining > 1 ? "s" : ""} pending…`),
+						},
+						theme,
+					);
+					pendingBox.addChild(new Text(pendingText, 0, 0));
+					this.#multiFileBoxes.push(pendingBox);
+					this.addChild(pendingBox);
+				}
+			} else {
+				// Single-file or no result: standard rendering
+				// Inline renderers skip background styling
+				this.#contentBox.setBgFn(renderer.inline ? undefined : bgFn);
+				this.#contentBox.clear();
+
+				const renderContext = this.#buildRenderContext();
+				this.#renderState.renderContext = renderContext;
+
+				const shouldRenderCall = !this.#result || !renderer.mergeCallAndResult;
+				if (shouldRenderCall) {
+					// Render call component
+					try {
+						const callComponent = renderer.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
+						if (callComponent) {
+							this.#contentBox.addChild(ensureInvalidate(callComponent));
+						}
+					} catch (err) {
+						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
+						// Fall back to default on error
+						this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
+					}
+				}
+
+				// Render result component if we have a result
+				if (this.#result) {
+					try {
+						const resultComponent = renderer.renderResult(
+							{
+								content: this.#result.content as any,
+								details: this.#result.details,
+								isError: this.#result.isError,
+							},
+							this.#renderState,
+							theme,
+							this.#getCallArgsForRender(),
+						);
+						if (resultComponent) {
+							this.#contentBox.addChild(ensureInvalidate(resultComponent));
+						}
+					} catch (err) {
+						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
+						// Fall back to showing raw output on error
+						const output = this.#getTextOutput();
+						if (output) {
+							this.#contentBox.addChild(new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
+						}
 					}
 				}
 			}
@@ -540,13 +631,20 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	#getCallArgsForRender(): any {
-		if (this.#toolName !== "edit") {
+		if (!isEditLikeToolName(this.#toolName)) {
 			return this.#args;
 		}
-		if (!this.#editDiffPreview || !("diff" in this.#editDiffPreview) || !this.#editDiffPreview.diff) {
+		const previews = this.#editDiffPreview;
+		if (!previews || previews.length === 0) {
 			return this.#args;
 		}
-		return { ...(this.#args as Record<string, unknown>), previewDiff: this.#editDiffPreview.diff };
+		// Single-file previews feed the existing `previewDiff` channel consumed
+		// by `formatStreamingDiff` in the renderer.
+		const first = previews[0];
+		if (!first?.diff) {
+			return this.#args;
+		}
+		return { ...(this.#args as Record<string, unknown>), previewDiff: first.diff };
 	}
 
 	/**
@@ -576,9 +674,20 @@ export class ToolExecutionComponent extends Container {
 			context.expanded = this.#expanded;
 			context.previewLines = PYTHON_DEFAULT_PREVIEW_LINES;
 			context.timeout = normalizeTimeoutSeconds(this.#args?.timeout, 600);
-		} else if (this.#toolName === "edit") {
-			// Edit needs diff preview and renderDiff function
-			context.editDiffPreview = this.#editDiffPreview;
+		} else if (isEditLikeToolName(this.#toolName)) {
+			context.editMode = this.#editMode;
+			const previews = this.#editDiffPreview;
+			if (previews && previews.length > 0) {
+				const first = previews[0];
+				if (first?.diff || first?.error) {
+					context.editDiffPreview = first.error
+						? { error: first.error }
+						: { diff: first.diff ?? "", firstChangedLine: first.firstChangedLine };
+				}
+				if (previews.length > 1) {
+					context.perFileDiffPreview = previews;
+				}
+			}
 			context.renderDiff = renderDiff;
 		}
 
@@ -630,9 +739,7 @@ export class ToolExecutionComponent extends Container {
 			lines.push("");
 			lines.push(theme.fg("dim", "Args"));
 			const tree = renderJsonTreeLines(
-				this.#args && typeof this.#args === "object" && !Array.isArray(this.#args)
-					? stripInternalArgs(this.#args as Record<string, unknown>)
-					: this.#args,
+				this.#args,
 				theme,
 				JSON_TREE_MAX_DEPTH_EXPANDED,
 				JSON_TREE_MAX_LINES_EXPANDED,

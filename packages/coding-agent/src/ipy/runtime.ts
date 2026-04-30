@@ -6,7 +6,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { $env, getPythonEnvDir } from "@oh-my-pi/pi-utils";
+import { $env, $which, getPythonEnvDir } from "@oh-my-pi/pi-utils";
 
 const DEFAULT_ENV_ALLOWLIST = new Set([
 	"PATH",
@@ -210,7 +210,7 @@ export function resolvePythonRuntime(cwd: string, baseEnv: Record<string, string
 		};
 	}
 
-	const pythonPath = Bun.which("python") ?? Bun.which("python3");
+	const pythonPath = $which("python") ?? $which("python3");
 	if (!pythonPath) {
 		throw new Error("Python executable not found on PATH");
 	}

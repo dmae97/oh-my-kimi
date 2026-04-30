@@ -6,7 +6,6 @@
  */
 import type { AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
-import type { SearchDb } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import type { Static, TSchema } from "@sinclair/typebox";
 import type { Rule } from "../../capability/rule";
@@ -72,8 +71,6 @@ export interface CustomToolContext {
 	modelRegistry: ModelRegistry;
 	/** Current model (may be undefined if no model is selected yet) */
 	model: Model | undefined;
-	/** Shared native search DB for grep/glob/fuzzyFind-backed workflows. */
-	searchDb?: SearchDb;
 	/** Whether the agent is idle (not streaming) */
 	isIdle(): boolean;
 	/** Whether there are queued messages waiting to be processed */
@@ -94,7 +91,7 @@ export type CustomToolSessionEvent =
 	  }
 	| {
 			reason: "auto_compaction_start";
-			trigger: "threshold" | "overflow";
+			trigger: "threshold" | "overflow" | "idle";
 			action: "context-full" | "handoff";
 	  }
 	| {
@@ -179,6 +176,8 @@ export interface CustomTool<TParams extends TSchema = TSchema, TDetails = any> {
 	name: string;
 	/** Human-readable label for UI */
 	label: string;
+	/** If true, tool is strictly typed and validated against the parameters schema before execution */
+	strict?: boolean;
 	/** Description for LLM */
 	description: string;
 	/** Parameter schema (TypeBox) */

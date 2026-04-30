@@ -82,3 +82,27 @@ export function $pickenv(...keys: string[]): string | undefined {
 	}
 	return undefined;
 }
+
+/**
+ * Parses a positive decimal integer from `$env[name]`.
+ * Empty, invalid, NaN, zero, or negative values return `defaultValue`.
+ */
+export function $envpos(name: string, defaultValue: number): number {
+	const raw = $env[name];
+	if (!raw) return defaultValue;
+	const parsed = Number.parseInt(raw, 10);
+	if (Number.isNaN(parsed) || parsed <= 0) return defaultValue;
+	return parsed;
+}
+
+/** True when `BUN_ENV` or `NODE_ENV` is the string `test`. */
+export function isBunTestRuntime(): boolean {
+	return Bun.env.BUN_ENV === "test" || Bun.env.NODE_ENV === "test";
+}
+
+const TRUTHY: Dict<boolean> = { "1": true, Y: true, TRUE: true, YES: true, ON: true };
+export function $flag(name: string, def: boolean = false): boolean {
+	const value = $env[name];
+	if (!value) return def;
+	return TRUTHY[value] === true;
+}

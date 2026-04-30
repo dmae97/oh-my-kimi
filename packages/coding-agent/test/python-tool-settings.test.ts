@@ -13,12 +13,16 @@ function createSession(
 	cwd: string,
 	sessionFile: string,
 	overrides?: Partial<Record<SettingPath, unknown>>,
+	kernelOwnerId?: string,
+	forcePythonWarmup = false,
 ): ToolSession {
 	return {
 		cwd,
 		hasUI: false,
 		getSessionFile: () => sessionFile,
 		getSessionSpawns: () => null,
+		getPythonKernelOwnerId: () => kernelOwnerId ?? null,
+		forcePythonWarmup,
 		settings: Settings.isolated({ "python.toolMode": "ipy-only", ...overrides }),
 	};
 }
@@ -32,6 +36,7 @@ describe("python tool settings", () => {
 	});
 
 	afterEach(() => {
+		pythonExecutor.resetPreludeDocsCache();
 		vi.restoreAllMocks();
 		fs.rmSync(testDir, { recursive: true, force: true });
 	});
@@ -55,7 +60,9 @@ describe("python tool settings", () => {
 		expect(tools.map(tool => tool.name).sort()).toEqual(["bash", "exit_plan_mode"]);
 	});
 
-	it("passes kernel mode from settings to executor", async () => {
+	it("passes kernel owner and kernel mode from settings to executor", async () => {
+		vi.spyOn(pythonExecutor, "getPreludeDocs").mockReturnValue([]);
+		const warmupSpy = vi.spyOn(pythonExecutor, "warmPythonEnvironment").mockResolvedValue({ ok: true, docs: [] });
 		const executeSpy = vi.spyOn(pythonExecutor, "executePython").mockResolvedValue({
 			output: "ok",
 			exitCode: 0,
@@ -70,17 +77,56 @@ describe("python tool settings", () => {
 		});
 
 		const sessionFile = path.join(testDir, "session.jsonl");
-		const session = createSession(testDir, sessionFile, { "python.kernelMode": "per-call" });
+		const kernelOwnerId = "owner-456";
+		const session = createSession(testDir, sessionFile, { "python.kernelMode": "per-call" }, kernelOwnerId);
 		const pythonTool = new PythonTool(session);
 
-		await pythonTool.execute("tool-call", { cells: [{ code: "print(1)" }] });
+		await pythonTool.execute("tool-call", { cells: [{ title: "print-single-cell", code: "print(1)" }] });
 
+		expect(warmupSpy).toHaveBeenCalledWith(
+			testDir,
+			`session:${sessionFile}:cwd:${testDir}`,
+			true,
+			sessionFile,
+			kernelOwnerId,
+			expect.any(AbortSignal),
+		);
 		expect(executeSpy).toHaveBeenCalledWith(
 			"print(1)",
 			expect.objectContaining({
 				kernelMode: "per-call",
 				sessionId: `session:${sessionFile}:cwd:${testDir}`,
+				kernelOwnerId,
 			}),
 		);
+	});
+
+	it("passes kernel owner into createTools warmup without changing session ids", async () => {
+		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
+		vi.spyOn(pythonExecutor, "getPreludeDocs").mockReturnValue([]);
+		const warmupSpy = vi.spyOn(pythonExecutor, "warmPythonEnvironment").mockResolvedValue({ ok: true, docs: [] });
+
+		const sessionFile = path.join(testDir, "session-create-tools.jsonl");
+		const kernelOwnerId = "owner-create-tools";
+		const previousSkipCheck = Bun.env.PI_PYTHON_SKIP_CHECK;
+
+		delete Bun.env.PI_PYTHON_SKIP_CHECK;
+		try {
+			await createTools(createSession(testDir, sessionFile, undefined, kernelOwnerId, true), ["python"]);
+
+			expect(warmupSpy).toHaveBeenCalledWith(
+				testDir,
+				`session:${sessionFile}:cwd:${testDir}`,
+				true,
+				sessionFile,
+				kernelOwnerId,
+			);
+		} finally {
+			if (previousSkipCheck === undefined) {
+				delete Bun.env.PI_PYTHON_SKIP_CHECK;
+			} else {
+				Bun.env.PI_PYTHON_SKIP_CHECK = previousSkipCheck;
+			}
+		}
 	});
 });

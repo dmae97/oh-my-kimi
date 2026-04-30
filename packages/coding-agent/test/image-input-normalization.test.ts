@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as imageConvert from "../src/utils/image-convert";
-import { ensureSupportedImageInput } from "../src/utils/image-input";
+import { ensureSupportedImageInput } from "../src/utils/image-loading";
 
 describe("ensureSupportedImageInput", () => {
 	afterEach(() => {

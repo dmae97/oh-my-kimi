@@ -1,43 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { Agent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import {
-	type AssistantMessage,
-	getBundledModel,
-	type SimpleStreamOptions,
-	type ThinkingBudgets,
-	type Usage,
-} from "@oh-my-pi/pi-ai";
+import { getBundledModel, type SimpleStreamOptions, type ThinkingBudgets } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { Type } from "@sinclair/typebox";
+import { createAssistantMessage, pushAlphaThenDoneEvent } from "./helpers";
 
 class MockAssistantStream extends AssistantMessageEventStream {}
-
-function createUsage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
-
-function createAssistantMessage(
-	content: AssistantMessage["content"],
-	stopReason: AssistantMessage["stopReason"] = "stop",
-): AssistantMessage {
-	return {
-		role: "assistant",
-		content,
-		api: "openai-responses",
-		provider: "openai",
-		model: "mock",
-		usage: createUsage(),
-		stopReason,
-		timestamp: Date.now(),
-	};
-}
 
 describe("Agent", () => {
 	it("should create an agent instance with default state", () => {
@@ -272,16 +240,7 @@ describe("Agent", () => {
 				});
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
-					if (callIndex === 0) {
-						const message = createAssistantMessage(
-							[{ type: "toolCall", id: "tool-1", name: "alpha", arguments: { value: "hello" } }],
-							"toolUse",
-						);
-						stream.push({ type: "done", reason: "toolUse", message });
-					} else {
-						const message = createAssistantMessage([{ type: "text", text: "done" }]);
-						stream.push({ type: "done", reason: "stop", message });
-					}
+					pushAlphaThenDoneEvent(stream, callIndex, createAssistantMessage);
 					callIndex += 1;
 				});
 				return stream;
@@ -342,16 +301,7 @@ describe("Agent", () => {
 				});
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
-					if (callIndex === 0) {
-						const message = createAssistantMessage(
-							[{ type: "toolCall", id: "tool-1", name: "alpha", arguments: { value: "hello" } }],
-							"toolUse",
-						);
-						stream.push({ type: "done", reason: "toolUse", message });
-					} else {
-						const message = createAssistantMessage([{ type: "text", text: "done" }]);
-						stream.push({ type: "done", reason: "stop", message });
-					}
+					pushAlphaThenDoneEvent(stream, callIndex, createAssistantMessage);
 					callIndex += 1;
 				});
 				return stream;

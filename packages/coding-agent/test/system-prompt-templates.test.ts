@@ -1,9 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { renderPromptTemplate, type TemplateContext } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
-import { buildSystemPrompt } from "@oh-my-pi/pi-coding-agent/system-prompt";
+import { type AgentTool, INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
+import { buildSystemPrompt, buildSystemPromptToolMetadata } from "@oh-my-pi/pi-coding-agent/system-prompt";
+import { prompt } from "@oh-my-pi/pi-utils";
+import { Type } from "@sinclair/typebox";
 import Handlebars from "handlebars";
 
 const baseGitContext = {
@@ -16,7 +18,7 @@ const baseGitContext = {
 
 const systemPromptsDir = path.resolve(import.meta.dir, "../src/prompts/system");
 
-const baseRenderContext: TemplateContext = {
+const baseRenderContext: prompt.TemplateContext = {
 	TASK_TOOL_NAME: "task",
 	ARGUMENTS: "alpha beta",
 	agent: "You are a delegated worker",
@@ -36,7 +38,7 @@ const baseRenderContext: TemplateContext = {
 	environment: [{ label: "OS", value: "Darwin" }],
 	finalPlanFilePath: "local://PLAN_FINAL.md",
 	git: baseGitContext,
-	intentField: "_i",
+	intentField: INTENT_FIELD,
 	intentTracing: true,
 	iterative: true,
 	maxRetries: 3,
@@ -55,7 +57,23 @@ const baseRenderContext: TemplateContext = {
 	skills: [{ name: "system-prompts", description: "Prompt design skill" }],
 	systemPromptCustomization: "System customization",
 	toolInfo: [{ name: "read", label: "Read", description: "Reads files" }],
-	tools: ["read", "grep", "find", "edit", "task", "web_search", "todo_write"],
+	toolRefs: {
+		read: "read",
+		search: "search",
+		find: "find",
+		edit: "edit",
+		task: "task",
+		web_search: "web_search",
+		todo_write: "todo_write",
+		inspect_image: "inspect_image",
+		search_tool_bm25: "search_tool_bm25",
+		lsp: "lsp",
+		ast_grep: "ast_grep",
+		ast_edit: "ast_edit",
+		grep: "grep",
+		write: "write",
+	},
+	tools: ["read", "search", "find", "edit", "task", "web_search", "todo_write"],
 	worktree: "/tmp/pi-issue-147",
 	writeToolName: "write",
 };
@@ -87,6 +105,10 @@ async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
 }
 
 describe("system Handlebars prompt templates", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	test("parses and compiles every system template", async () => {
 		const templates = await loadSystemPromptTemplates();
 		expect(templates.size).toBeGreaterThan(0);
@@ -101,7 +123,7 @@ describe("system Handlebars prompt templates", () => {
 		const templatePath = path.join(systemPromptsDir, "custom-system-prompt.md");
 		const template = await Bun.file(templatePath).text();
 
-		const both = renderPromptTemplate(template, {
+		const both = prompt.render(template, {
 			...baseRenderContext,
 			contextFiles: [{ path: "a.txt", content: "A" }],
 			git: { ...baseGitContext, isRepo: true },
@@ -110,7 +132,7 @@ describe("system Handlebars prompt templates", () => {
 		expect(both).toContain("## Context");
 		expect(both).toContain("## Version Control");
 
-		const contextOnly = renderPromptTemplate(template, {
+		const contextOnly = prompt.render(template, {
 			...baseRenderContext,
 			contextFiles: [{ path: "a.txt", content: "A" }],
 			git: { isRepo: false },
@@ -119,7 +141,7 @@ describe("system Handlebars prompt templates", () => {
 		expect(contextOnly).toContain("## Context");
 		expect(contextOnly).not.toContain("## Version Control");
 
-		const gitOnly = renderPromptTemplate(template, {
+		const gitOnly = prompt.render(template, {
 			...baseRenderContext,
 			contextFiles: [],
 			git: {
@@ -134,7 +156,7 @@ describe("system Handlebars prompt templates", () => {
 		expect(gitOnly).not.toContain("## Context");
 		expect(gitOnly).toContain("## Version Control");
 
-		const neither = renderPromptTemplate(template, {
+		const neither = prompt.render(template, {
 			...baseRenderContext,
 			contextFiles: [],
 			git: { isRepo: false },
@@ -149,7 +171,7 @@ describe("system Handlebars prompt templates", () => {
 		const template = await Bun.file(templatePath).text();
 
 		const baseTools = baseRenderContext.tools as string[];
-		const withInspectImage = renderPromptTemplate(template, {
+		const withInspectImage = prompt.render(template, {
 			...baseRenderContext,
 			tools: [...baseTools, "inspect_image"],
 		});
@@ -157,7 +179,7 @@ describe("system Handlebars prompt templates", () => {
 		expect(withInspectImage).toContain("**MUST** use `inspect_image` over `read`");
 		expect(withInspectImage).toContain("Write a specific `question` for `inspect_image`");
 
-		const withoutInspectImage = renderPromptTemplate(template, {
+		const withoutInspectImage = prompt.render(template, {
 			...baseRenderContext,
 			tools: baseTools.filter((tool: string) => tool !== "inspect_image"),
 		});
@@ -168,7 +190,7 @@ describe("system Handlebars prompt templates", () => {
 		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
 		const template = await Bun.file(templatePath).text();
 
-		const rendered = renderPromptTemplate(template, {
+		const rendered = prompt.render(template, {
 			...baseRenderContext,
 			mcpDiscoveryMode: true,
 			hasMCPDiscoveryServers: true,
@@ -232,5 +254,62 @@ describe("system Handlebars prompt templates", () => {
 		expect(countOccurrences(prompt, "Keep functions small.")).toBe(1);
 		expect(countOccurrences(prompt, "Extract shared helpers on the second use.")).toBe(1);
 		expect(countOccurrences(prompt, distinctRule)).toBe(1);
+	});
+
+	test("buildSystemPromptToolMetadata captures custom wire names", () => {
+		const editTool = {
+			name: "edit",
+			label: "Edit",
+			description: "Edits files",
+			parameters: Type.Object({}),
+			customWireName: "apply_patch",
+			execute: async () => ({ content: [] }),
+		} satisfies AgentTool;
+
+		const metadata = buildSystemPromptToolMetadata(new Map([["edit", editTool]]));
+
+		expect(metadata.get("edit")?.wireName).toBe("apply_patch");
+	});
+
+	test("buildSystemPrompt references overridden tool wire names", async () => {
+		const systemPrompt = await buildSystemPrompt({
+			cwd: os.tmpdir(),
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: ["read", "search", "find", "edit", "lsp", "bash", "python"],
+			tools: new Map([
+				["read", { label: "Read", description: "Reads files" }],
+				["search", { label: "Search", description: "Searches files" }],
+				["find", { label: "Find", description: "Finds files" }],
+				["edit", { label: "Edit", description: "Edits files", wireName: "apply_patch" }],
+				["lsp", { label: "LSP", description: "Queries language servers" }],
+				["bash", { label: "Bash", description: "Runs shell commands" }],
+				["python", { label: "Python", description: "Runs Python cells" }],
+			]),
+		});
+
+		expect(systemPrompt).toContain("Edit: `apply_patch`");
+		expect(systemPrompt).toContain("`read`, `search`, `find`, `apply_patch`, `lsp`");
+		expect(systemPrompt).toContain("Use `apply_patch` for surgical text changes");
+		expect(systemPrompt).not.toContain("Edit: `edit`");
+	});
+
+	test("buildSystemPrompt omits CPU info when os.cpus fails", async () => {
+		vi.spyOn(os, "cpus").mockImplementation(() => {
+			throw new Error("os.cpus() failed");
+		});
+
+		const systemPrompt = await buildSystemPrompt({
+			cwd: os.tmpdir(),
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: ["read"],
+		});
+
+		const workstation = /<workstation>\n(?<content>[\s\S]*?)\n<\/workstation>/u.exec(systemPrompt)?.groups?.content;
+		expect(workstation).toContain("OS:");
+		expect(workstation).not.toContain("CPU:");
 	});
 });

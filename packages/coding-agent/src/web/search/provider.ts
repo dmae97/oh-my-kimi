@@ -9,6 +9,7 @@ import { KagiProvider } from "./providers/kagi";
 import { KimiProvider } from "./providers/kimi";
 import { ParallelProvider } from "./providers/parallel";
 import { PerplexityProvider } from "./providers/perplexity";
+import { SearXNGProvider } from "./providers/searxng";
 import { SyntheticProvider } from "./providers/synthetic";
 import { TavilyProvider } from "./providers/tavily";
 import { ZaiProvider } from "./providers/zai";
@@ -31,6 +32,7 @@ const SEARCH_PROVIDERS: Record<SearchProviderId, SearchProvider> = {
 	parallel: new ParallelProvider(),
 	kagi: new KagiProvider(),
 	synthetic: new SyntheticProvider(),
+	searxng: new SearXNGProvider(),
 } as const;
 
 export const SEARCH_PROVIDER_ORDER: SearchProviderId[] = [
@@ -47,6 +49,7 @@ export const SEARCH_PROVIDER_ORDER: SearchProviderId[] = [
 	"parallel",
 	"kagi",
 	"synthetic",
+	"searxng",
 ];
 
 export function getSearchProvider(provider: SearchProviderId): SearchProvider {

@@ -187,7 +187,7 @@ impl builtins::Command for SetCommand {
 
     type Error = brush_core::Error;
 
-    #[expect(clippy::too_many_lines)]
+    
     #[allow(clippy::useless_let_if_seq)]
     async fn execute(
         &self,

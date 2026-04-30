@@ -163,7 +163,7 @@ describe("Input component", () => {
 		expect(input.getValue()).toBe("");
 
 		input.handleInput("c\x1b[201~");
-		expect(input.getValue()).toBe(`a${getIndentation()}bc`);
+		expect(input.getValue()).toBe(`a${" ".repeat(getIndentation())}bc`);
 	});
 
 	it("never renders a line wider than the terminal width (wide chars)", () => {

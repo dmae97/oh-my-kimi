@@ -31,7 +31,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { getConfigDirs } from "../../config";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -41,7 +41,6 @@ import {
 	resolveConfiguredModelPatterns,
 	resolveModelOverride,
 } from "../../config/model-resolver";
-import { renderPromptTemplate } from "../../config/prompt-templates";
 import { Settings } from "../../config/settings";
 import agentCreationArchitectPrompt from "../../prompts/system/agent-creation-architect.md" with { type: "text" };
 import agentCreationUserPrompt from "../../prompts/system/agent-creation-user.md" with { type: "text" };
@@ -627,8 +626,8 @@ export class AgentDashboard extends Container {
 			throw new Error("No available model to generate agent specification.");
 		}
 
-		const systemPrompt = renderPromptTemplate(agentCreationArchitectPrompt, { TASK_TOOL_NAME: "task" });
-		const userPrompt = renderPromptTemplate(agentCreationUserPrompt, { request: description });
+		const systemPrompt = prompt.render(agentCreationArchitectPrompt, { TASK_TOOL_NAME: "task" });
+		const userPrompt = prompt.render(agentCreationUserPrompt, { request: description });
 
 		const { session } = await createAgentSession({
 			cwd: this.cwd,

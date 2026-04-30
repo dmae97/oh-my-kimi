@@ -1,11 +1,11 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple, validateToolCall } from "@oh-my-pi/pi-ai";
+import { prompt } from "@oh-my-pi/pi-utils";
 import { type TSchema, Type } from "@sinclair/typebox";
 import changelogSystemPrompt from "../../commit/prompts/changelog-system.md" with { type: "text" };
 import changelogUserPrompt from "../../commit/prompts/changelog-user.md" with { type: "text" };
 import { CHANGELOG_CATEGORIES, type ChangelogCategory, type ChangelogGenerationResult } from "../../commit/types";
-import { renderPromptTemplate } from "../../config/prompt-templates";
 import { toReasoningEffort } from "../../thinking";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../utils";
 
@@ -48,7 +48,7 @@ export async function generateChangelogEntries({
 	stat,
 	diff,
 }: ChangelogPromptInput): Promise<ChangelogGenerationResult> {
-	const prompt = renderPromptTemplate(changelogUserPrompt, {
+	const userContent = prompt.render(changelogUserPrompt, {
 		changelog_path: changelogPath,
 		is_package_changelog: isPackageChangelog,
 		existing_entries: existingEntries,
@@ -58,8 +58,8 @@ export async function generateChangelogEntries({
 	const response = await completeSimple(
 		model,
 		{
-			systemPrompt: renderPromptTemplate(changelogSystemPrompt),
-			messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+			systemPrompt: prompt.render(changelogSystemPrompt),
+			messages: [{ role: "user", content: userContent, timestamp: Date.now() }],
 			tools: [changelogTool],
 		},
 		{ apiKey, maxTokens: 1200, reasoning: toReasoningEffort(thinkingLevel) },

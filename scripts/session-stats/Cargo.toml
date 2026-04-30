@@ -1,0 +1,31 @@
+[package]
+name = "session-stats"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Standalone crate: do not inherit from the parent workspace.
+[workspace]
+
+[[bin]]
+name = "session-stats"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+csv = "1"
+dirs = "5"
+rayon = "1.10"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+tiktoken-rs = "0.7"
+walkdir = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+split-debuginfo = "off"
+strip = "none"

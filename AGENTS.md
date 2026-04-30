@@ -339,7 +339,7 @@ const wrapped = Bun.wrapAnsi(text, width, {
 | File read/write | `Bun.file()`, `Bun.write()`           | `readFileSync`, `writeFileSync` |
 | Spawn process   | `$\`cmd\``, `Bun.spawn()`             | `child_process`                 |
 | Sleep           | `Bun.sleep(ms)`                       | `setTimeout` promise            |
-| Binary lookup   | `Bun.which("git")`                    | `spawnSync(["which", "git"])`   |
+| Binary lookup   | `$which("git")` from `@oh-my-pi/pi-utils` | `spawnSync(["which", "git"])`   |
 | HTTP server     | `Bun.serve()`                         | `http.createServer()`           |
 | SQLite          | `bun:sqlite`                          | `better-sqlite3`                |
 | Hashing         | `Bun.hash()`, Web Crypto              | `node:crypto`                   |

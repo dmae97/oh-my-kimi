@@ -1,0 +1,34 @@
+# Liquibase update / rollback output.
+
+[filters.liquibase]
+description = "Compact liquibase output"
+match_command = "^liquibase$"
+strip_ansi = true
+strip_lines_matching = [
+	"^\\s*$",
+	"^INFO ",
+	"^FINE ",
+	"^FINER ",
+	"^FINEST ",
+	"^\\[\\S+\\] INFO ",
+	"^\\[\\S+\\] FINE ",
+	"^Starting Liquibase",
+	"^Liquibase Version:",
+	"^Liquibase Community",
+	"^Liquibase Home:",
+	"^Running Changeset:",
+	"^####+",
+]
+truncate_lines_at = 300
+max_lines = 80
+on_empty = "liquibase: ok"
+
+[[tests.liquibase]]
+name = "keeps severe"
+input = "INFO Parsing changelog\nRunning Changeset: db/changelog.xml::1::author\nSEVERE ChangeSet failed: ORA-00942"
+expected = "SEVERE ChangeSet failed: ORA-00942\n"
+
+[[tests.liquibase]]
+name = "info noise collapses"
+input = "INFO Parsing changelog\nINFO Successful update"
+expected = "liquibase: ok"

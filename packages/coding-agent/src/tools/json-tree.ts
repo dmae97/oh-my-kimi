@@ -13,17 +13,17 @@ export const JSON_TREE_MAX_LINES_EXPANDED = 200;
 export const JSON_TREE_SCALAR_LEN_COLLAPSED = 60;
 export const JSON_TREE_SCALAR_LEN_EXPANDED = 2000;
 
-/** Keys injected by the harness that should not be displayed to users */
-const HIDDEN_ARG_KEYS = new Set([INTENT_FIELD, "__partialJson"]);
+const HIDDEN_ARG_KEYS = { [INTENT_FIELD]: 1, __partialJson: 1 };
 
-/** Strip harness-internal keys from tool args for display */
-export function stripInternalArgs(args: Record<string, unknown>): Record<string, unknown> {
-	const result: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(args)) {
-		if (!HIDDEN_ARG_KEYS.has(key)) result[key] = value;
-	}
-	return result;
+const ARGS_INLINE_PAIR_SEP = ", ";
+const ARGS_INLINE_PAIR_SEP_WIDTH = Bun.stringWidth(ARGS_INLINE_PAIR_SEP);
+const ARGS_INLINE_MORE = "…";
+const ARGS_INLINE_MORE_WIDTH = Bun.stringWidth(ARGS_INLINE_MORE);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === "object" && !Array.isArray(value);
 }
+
 /**
  * Format a scalar value for inline display.
  */
@@ -49,40 +49,35 @@ export function formatScalar(value: unknown, maxLen: number): string {
  * Format args inline for collapsed view.
  */
 export function formatArgsInline(args: Record<string, unknown>, maxWidth: number): string {
-	const entries = Object.entries(args).filter(([k]) => !HIDDEN_ARG_KEYS.has(k));
-	if (entries.length === 0) return "";
-
-	// Single arg: show key=value
-	if (entries.length === 1) {
-		const [key, value] = entries[0];
-		return `${key}=${formatScalar(value, maxWidth - key.length - 1)}`;
-	}
-
-	// Multiple args: show key=value, key=value...
-	const pairs: string[] = [];
-	let totalLen = 0;
-
-	for (const [key, value] of entries) {
-		const valueStr = formatScalar(value, 24);
-		const pairStr = `${key}=${valueStr}`;
-		const addLen = pairs.length > 0 ? pairStr.length + 2 : pairStr.length;
-
-		if (totalLen + addLen > maxWidth && pairs.length > 0) {
-			pairs.push("…");
-			break;
+	let result = "";
+	let width = 0;
+	for (const key in args) {
+		if (key in HIDDEN_ARG_KEYS) continue;
+		const value = args[key];
+		const sep = width > 0 ? ARGS_INLINE_PAIR_SEP : "";
+		const sepW = width > 0 ? ARGS_INLINE_PAIR_SEP_WIDTH : 0;
+		const current = width + sepW;
+		const cap = maxWidth - current - ARGS_INLINE_MORE_WIDTH;
+		if (cap <= 0) {
+			return `${result}${ARGS_INLINE_MORE}`;
 		}
-
-		pairs.push(pairStr);
-		totalLen += addLen;
+		const valueMaxLen = Math.min(maxWidth - current, 24);
+		const valueStr = formatScalar(value, valueMaxLen);
+		const piece = `${key}=${valueStr}`;
+		const pieceW = Bun.stringWidth(piece);
+		if (pieceW > cap) {
+			return `${result}${sep}${truncateToWidth(piece, cap)}`;
+		}
+		result += sep + piece;
+		width = current + pieceW;
 	}
-
-	return pairs.join(", ");
+	return result;
 }
 
 /**
  * Build tree prefix for nested rendering.
  */
-function buildTreePrefix(ancestors: boolean[], theme: Theme): string {
+function buildTreePrefix(theme: Theme, ancestors: readonly boolean[]): string {
 	return ancestors.map(hasNext => (hasNext ? `${theme.tree.vertical}  ` : "   ")).join("");
 }
 
@@ -119,109 +114,114 @@ export function renderJsonTreeLines(
 		}
 
 		const connector = isLast ? theme.tree.last : theme.tree.branch;
-		const prefix = `${buildTreePrefix(ancestors, theme)}${theme.fg("dim", connector)} `;
+		const prefix = `${buildTreePrefix(theme, ancestors)}${theme.fg("dim", connector)} `;
 
-		// Handle scalars
-		if (val === null || val === undefined || typeof val !== "object") {
-			const label = key ? theme.fg("muted", key) : theme.fg("muted", "value");
+		ancestors.push(!isLast);
+		try {
+			// Handle scalars
+			if (val === null || val === undefined || typeof val !== "object") {
+				const label = key ? theme.fg("muted", key) : theme.fg("muted", "value");
 
-			// Special handling for multiline strings
-			if (typeof val === "string" && val.includes("\n")) {
-				const strLines = val.split("\n");
-				const maxStrLines = Math.min(strLines.length, Math.max(1, maxLines - lines.length - 1));
-				const continuePrefix = buildTreePrefix([...ancestors, !isLast], theme);
+				// Special handling for multiline strings
+				if (typeof val === "string" && val.includes("\n")) {
+					const strLines = val.split("\n");
+					const maxStrLines = Math.min(strLines.length, Math.max(1, maxLines - lines.length - 1));
+					const continuePrefix = buildTreePrefix(theme, ancestors);
 
-				// First line with label
-				const firstLine = truncateToWidth(strLines[0], maxScalarLen);
-				pushLine(`${prefix}${iconScalar} ${label}: ${theme.fg("dim", `"${firstLine}`)}`);
+					// First line with label
+					const firstLine = truncateToWidth(strLines[0], maxScalarLen);
+					pushLine(`${prefix}${iconScalar} ${label}: ${theme.fg("dim", `"${firstLine}`)}`);
 
-				// Subsequent lines indented
-				for (let i = 1; i < maxStrLines; i++) {
+					// Subsequent lines indented
+					for (let i = 1; i < maxStrLines; i++) {
+						if (lines.length >= maxLines) {
+							truncated = true;
+							break;
+						}
+						const line = truncateToWidth(strLines[i], maxScalarLen);
+						pushLine(`${continuePrefix}   ${theme.fg("dim", ` ${line}`)}`);
+					}
+
+					// Show truncation and closing quote
+					if (strLines.length > maxStrLines) {
+						truncated = true;
+						pushLine(
+							`${continuePrefix}   ${theme.fg("dim", ` …(${strLines.length - maxStrLines} more lines)"`)}`,
+						);
+					} else {
+						// Add closing quote to last line - need to modify the last pushed line
+						const lastIdx = lines.length - 1;
+						lines[lastIdx] = `${lines[lastIdx]}${theme.fg("dim", '"')}`;
+					}
+					return;
+				}
+
+				const scalar = formatScalar(val, maxScalarLen);
+				pushLine(`${prefix}${iconScalar} ${label}: ${theme.fg("dim", scalar)}`);
+				return;
+			}
+
+			// Handle arrays
+			if (Array.isArray(val)) {
+				const header = key ? theme.fg("muted", key) : theme.fg("muted", "array");
+				pushLine(`${prefix}${iconArray} ${header}`);
+				if (val.length === 0) {
+					pushLine(
+						`${buildTreePrefix(theme, ancestors)}${theme.fg("dim", theme.tree.last)} ${theme.fg("dim", "[]")}`,
+					);
+					return;
+				}
+				if (depth >= maxDepth) {
+					pushLine(
+						`${buildTreePrefix(theme, ancestors)}${theme.fg("dim", theme.tree.last)} ${theme.fg("dim", "…")}`,
+					);
+					return;
+				}
+				for (let i = 0; i < val.length; i++) {
+					renderNode(val[i], `[${i}]`, ancestors, i === val.length - 1, depth + 1);
 					if (lines.length >= maxLines) {
 						truncated = true;
-						break;
+						return;
 					}
-					const line = truncateToWidth(strLines[i], maxScalarLen);
-					pushLine(`${continuePrefix}   ${theme.fg("dim", ` ${line}`)}`);
-				}
-
-				// Show truncation and closing quote
-				if (strLines.length > maxStrLines) {
-					truncated = true;
-					pushLine(`${continuePrefix}   ${theme.fg("dim", ` …(${strLines.length - maxStrLines} more lines)"`)}`);
-				} else {
-					// Add closing quote to last line - need to modify the last pushed line
-					const lastIdx = lines.length - 1;
-					lines[lastIdx] = `${lines[lastIdx]}${theme.fg("dim", '"')}`;
 				}
 				return;
 			}
 
-			const scalar = formatScalar(val, maxScalarLen);
-			pushLine(`${prefix}${iconScalar} ${label}: ${theme.fg("dim", scalar)}`);
-			return;
-		}
+			// Handle objects
+			if (!isRecord(val)) return;
 
-		// Handle arrays
-		if (Array.isArray(val)) {
-			const header = key ? theme.fg("muted", key) : theme.fg("muted", "array");
-			pushLine(`${prefix}${iconArray} ${header}`);
-			if (val.length === 0) {
-				pushLine(
-					`${buildTreePrefix([...ancestors, !isLast], theme)}${theme.fg("dim", theme.tree.last)} ${theme.fg("dim", "[]")}`,
-				);
-				return;
-			}
+			const header = key ? theme.fg("muted", key) : theme.fg("muted", "object");
+			pushLine(`${prefix}${iconObject} ${header}`);
 			if (depth >= maxDepth) {
+				pushLine(`${buildTreePrefix(theme, ancestors)}${theme.fg("dim", theme.tree.last)} ${theme.fg("dim", "…")}`);
+				return;
+			}
+			const keys = Object.keys(val);
+			if (keys.length === 0) {
 				pushLine(
-					`${buildTreePrefix([...ancestors, !isLast], theme)}${theme.fg("dim", theme.tree.last)} ${theme.fg("dim", "…")}`,
+					`${buildTreePrefix(theme, ancestors)}${theme.fg("dim", theme.tree.last)} ${theme.fg("dim", "{}")}`,
 				);
 				return;
 			}
-			const nextAncestors = [...ancestors, !isLast];
-			for (let i = 0; i < val.length; i++) {
-				renderNode(val[i], `[${i}]`, nextAncestors, i === val.length - 1, depth + 1);
+			for (let i = 0; i < keys.length; i++) {
+				const childKey = keys[i];
+				const child = val[childKey];
+				renderNode(child, childKey, ancestors, i === keys.length - 1, depth + 1);
 				if (lines.length >= maxLines) {
 					truncated = true;
 					return;
 				}
 			}
-			return;
-		}
-
-		// Handle objects
-		const header = key ? theme.fg("muted", key) : theme.fg("muted", "object");
-		pushLine(`${prefix}${iconObject} ${header}`);
-		const entries = Object.entries(val as Record<string, unknown>);
-		if (entries.length === 0) {
-			pushLine(
-				`${buildTreePrefix([...ancestors, !isLast], theme)}${theme.fg("dim", theme.tree.last)} ${theme.fg("dim", "{}")}`,
-			);
-			return;
-		}
-		if (depth >= maxDepth) {
-			pushLine(
-				`${buildTreePrefix([...ancestors, !isLast], theme)}${theme.fg("dim", theme.tree.last)} ${theme.fg("dim", "…")}`,
-			);
-			return;
-		}
-		const nextAncestors = [...ancestors, !isLast];
-		for (let i = 0; i < entries.length; i++) {
-			const [childKey, child] = entries[i];
-			renderNode(child, childKey, nextAncestors, i === entries.length - 1, depth + 1);
-			if (lines.length >= maxLines) {
-				truncated = true;
-				return;
-			}
+		} finally {
+			ancestors.pop();
 		}
 	};
 
 	// Render root level
-	if (value && typeof value === "object" && !Array.isArray(value)) {
-		const entries = Object.entries(value as Record<string, unknown>);
-		for (let i = 0; i < entries.length; i++) {
-			const [childKey, child] = entries[i];
-			renderNode(child, childKey, [], i === entries.length - 1, 1);
+	if (isRecord(value)) {
+		for (const key in value) {
+			if (key in HIDDEN_ARG_KEYS) continue;
+			renderNode(value[key], key, [], true, 1);
 			if (lines.length >= maxLines) {
 				truncated = true;
 				break;

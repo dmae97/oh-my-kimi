@@ -680,6 +680,43 @@ more text`,
 		});
 	});
 
+	describe("Mermaid fenced blocks", () => {
+		const renderMermaidLines = (text: string, resolveMermaidAscii: (source: string) => string | null) => {
+			const markdown = new Markdown(text, 0, 0, { ...defaultMarkdownTheme, resolveMermaidAscii });
+
+			return markdown.render(80).map(line => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+		};
+
+		it("renders resolver ASCII only when the mermaid source matches", () => {
+			const fencedMermaid = "```mermaid\nflowchart TD\n  Start-->Stop\n```";
+			const mermaidSource = "flowchart TD\n  Start-->Stop";
+			const seenSources: string[] = [];
+
+			const plainLines = renderMermaidLines(fencedMermaid, source => {
+				seenSources.push(source);
+				return source === mermaidSource ? "Start\n  |\nStop" : null;
+			});
+
+			expect(seenSources).toEqual([mermaidSource]);
+			expect(plainLines).toEqual(["Start", "  |", "Stop"]);
+			expect(plainLines.some(line => line.includes("```mermaid"))).toBeFalsy();
+		});
+
+		it("falls back to the original fenced code block when mermaid resolution returns null", () => {
+			const invalidMermaid = "```mermaid\nflowchart TD\n  A --\n```";
+			const invalidSource = "flowchart TD\n  A --";
+			const seenSources: string[] = [];
+
+			const plainLines = renderMermaidLines(invalidMermaid, source => {
+				seenSources.push(source);
+				return null;
+			});
+
+			expect(seenSources).toEqual([invalidSource]);
+			expect(plainLines).toEqual(["```mermaid", "  flowchart TD", "    A --", "```"]);
+		});
+	});
+
 	describe("Spacing after dividers", () => {
 		it("should have only one blank line between divider and following paragraph", () => {
 			const markdown = new Markdown(

@@ -117,6 +117,8 @@ When `CLAUDE_CODE_USE_FOUNDRY` is enabled, Anthropic requests switch to Foundry 
 | `AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN` | Enables web identity auth path |
 | `AWS_BEDROCK_SKIP_AUTH` | If `1`, injects dummy credentials (proxy/non-auth scenarios) |
 | `AWS_BEDROCK_FORCE_HTTP1` | If `1`, forces Node HTTP/1 request handler |
+| `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` | Routes Bedrock runtime and AWS SSO credential calls through the configured proxy using HTTP/1 |
+| `NO_PROXY` | Excludes matching hosts from proxy routing when a proxy variable is configured |
 
 Region fallback in provider code: `options.region` → `AWS_REGION` → `AWS_DEFAULT_REGION` → `us-east-1`.
 
@@ -315,13 +317,7 @@ These are read as runtime signals; they are usually set by the terminal/OS rathe
 
 ---
 
-## 9) Native loader/debug flags
-
-| Variable | Behavior |
-|---|---|
-| `PI_DEV` | Enables verbose native addon load diagnostics in `packages/natives` |
-
-## 10) TUI runtime flags (shared package, affects coding-agent UX)
+## 9) TUI runtime flags (shared package, affects coding-agent UX)
 
 | Variable | Behavior |
 |---|---|

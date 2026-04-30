@@ -1,14 +1,14 @@
 /**
  * Unified Web Search Tool
  *
- * Single tool supporting Anthropic, Perplexity, Exa, Brave, Jina, Kimi, Gemini, Codex, Tavily, Kagi, Z.AI, and Synthetic
+ * Single tool supporting Anthropic, Perplexity, Exa, Brave, Jina, Kimi, Gemini, Codex, Tavily, Kagi, Z.AI, SearXNG, and Synthetic
  * providers with provider-specific parameters exposed conditionally.
  *
  */
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { StringEnum } from "@oh-my-pi/pi-ai";
+import { prompt } from "@oh-my-pi/pi-utils";
 import { Type } from "@sinclair/typebox";
-import { renderPromptTemplate } from "../../config/prompt-templates";
 import type { CustomTool, CustomToolContext, RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { Theme } from "../../modes/theme/theme";
 import webSearchSystemPrompt from "../../prompts/system/web-search.md" with { type: "text" };
@@ -202,10 +202,10 @@ export async function runSearchQuery(
 /**
  * Web search tool implementation.
  *
- * Supports Anthropic, Perplexity, Exa, Brave, Jina, Kimi, Gemini, Codex, Z.AI, and Synthetic providers with automatic fallback.
+ * Supports Anthropic, Perplexity, Exa, Brave, Jina, Kimi, Gemini, Codex, Z.AI, SearXNG, and Synthetic providers with automatic fallback.
  * Session is accepted for interface consistency but not used.
  */
-export class SearchTool implements AgentTool<typeof webSearchSchema, SearchRenderDetails> {
+export class WebSearchTool implements AgentTool<typeof webSearchSchema, SearchRenderDetails> {
 	readonly name = "web_search";
 	readonly label = "Web Search";
 	readonly description: string;
@@ -213,7 +213,7 @@ export class SearchTool implements AgentTool<typeof webSearchSchema, SearchRende
 	readonly strict = true;
 
 	constructor(_session: ToolSession) {
-		this.description = renderPromptTemplate(webSearchDescription);
+		this.description = prompt.render(webSearchDescription);
 	}
 
 	async execute(
@@ -231,7 +231,7 @@ export class SearchTool implements AgentTool<typeof webSearchSchema, SearchRende
 export const webSearchCustomTool: CustomTool<typeof webSearchSchema, SearchRenderDetails> = {
 	name: "web_search",
 	label: "Web Search",
-	description: renderPromptTemplate(webSearchDescription),
+	description: prompt.render(webSearchDescription),
 	parameters: webSearchSchema,
 
 	async execute(

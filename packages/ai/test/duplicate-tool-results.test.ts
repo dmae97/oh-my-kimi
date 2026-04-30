@@ -87,6 +87,60 @@ describe("Duplicate Tool Results Regression", () => {
 		expect(toolResults.length).toBe(1);
 	});
 
+	it("does not synthesize 'No result provided' when a real tool result appears later in history", () => {
+		const toolCallId = "toolu_deferred_result_123";
+
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: toolCallId,
+					name: "todo_write",
+					arguments: { ops: [{ op: "update", id: "task-1", status: "completed" }] },
+				},
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-3-5-sonnet-20241022",
+			usage: {
+				input: 100,
+				output: 50,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 150,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+
+		const messages = [
+			assistantMessage,
+			{
+				role: "developer" as const,
+				content: "Follow-up guidance between the call and result",
+				timestamp: Date.now(),
+			},
+			{
+				role: "toolResult" as const,
+				toolCallId,
+				toolName: "todo_write",
+				content: [{ type: "text" as const, text: "todo updated" }],
+				isError: false,
+				timestamp: Date.now(),
+			},
+		];
+
+		const transformed = transformMessages(messages, model);
+		const toolResults = transformed.filter(
+			msg => msg.role === "toolResult" && (msg as ToolResultMessage).toolCallId === toolCallId,
+		);
+
+		expect(toolResults).toHaveLength(1);
+		expect((toolResults[0] as ToolResultMessage).content).toEqual([{ type: "text", text: "todo updated" }]);
+	});
+
 	it("should not duplicate tool results for aborted messages when results already exist", () => {
 		const toolCallId = "toolu_aborted_test_123";
 

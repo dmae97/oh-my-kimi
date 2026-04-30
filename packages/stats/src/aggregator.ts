@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import {
 	getRecentErrors as dbGetRecentErrors,
 	getRecentRequests as dbGetRecentRequests,
+	getCostTimeSeries,
 	getFileOffset,
 	getMessageById,
 	getMessageCount,
@@ -88,9 +89,9 @@ export async function getDashboardStats(): Promise<DashboardStats> {
 		timeSeries: getTimeSeries(24),
 		modelSeries: getModelTimeSeries(14),
 		modelPerformanceSeries: getModelPerformanceSeries(14),
+		costSeries: getCostTimeSeries(90),
 	};
 }
-
 export async function getRecentRequests(limit?: number): Promise<MessageStats[]> {
 	await initDb();
 	return dbGetRecentRequests(limit);

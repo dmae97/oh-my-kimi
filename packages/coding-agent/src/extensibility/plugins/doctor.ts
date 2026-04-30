@@ -1,3 +1,4 @@
+import { $which } from "@oh-my-pi/pi-utils";
 import { theme } from "../../modes/theme/theme";
 import type { DoctorCheck } from "./types";
 
@@ -12,7 +13,7 @@ export async function runDoctorChecks(): Promise<DoctorCheck[]> {
 	];
 
 	for (const tool of tools) {
-		const path = Bun.which(tool.name);
+		const path = $which(tool.name);
 		checks.push({
 			name: tool.name,
 			status: path ? "ok" : "warning",

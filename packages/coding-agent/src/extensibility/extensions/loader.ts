@@ -6,7 +6,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Model, TextContent } from "@oh-my-pi/pi-ai";
-import * as piCodingAgent from "@oh-my-pi/pi-coding-agent";
 import type { KeyId } from "@oh-my-pi/pi-tui";
 import { hasFsCode, isEacces, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
@@ -92,6 +91,14 @@ export class ExtensionRuntime implements IExtensionRuntime {
 	setThinkingLevel(): void {
 		throw new ExtensionRuntimeNotInitializedError();
 	}
+
+	getSessionName(): string | undefined {
+		throw new ExtensionRuntimeNotInitializedError();
+	}
+
+	setSessionName(): Promise<void> {
+		throw new ExtensionRuntimeNotInitializedError();
+	}
 }
 
 /**
@@ -102,7 +109,6 @@ export class ExtensionRuntime implements IExtensionRuntime {
 class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 	readonly logger = logger;
 	readonly typebox = TypeBox;
-	readonly pi = piCodingAgent;
 	readonly flagValues = new Map<string, boolean | string>();
 	readonly pendingProviderRegistrations: Array<{
 		name: string;
@@ -111,6 +117,7 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 	}> = [];
 
 	constructor(
+		public readonly pi: typeof import("@oh-my-pi/pi-coding-agent"),
 		private readonly extension: Extension,
 		private readonly runtime: IExtensionRuntime,
 		private readonly cwd: string,
@@ -224,6 +231,14 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		this.runtime.setThinkingLevel(level, persist);
 	}
 
+	getSessionName(): string | undefined {
+		return this.runtime.getSessionName();
+	}
+
+	setSessionName(name: string): Promise<void> {
+		return this.runtime.setSessionName(name);
+	}
+
 	registerProvider(name: string, config: import("./types").ProviderConfig): void {
 		this.runtime.pendingProviderRegistrations.push({ name, config, sourceId: this.extension.path });
 	}
@@ -265,7 +280,13 @@ async function loadExtension(
 		}
 
 		const extension = createExtension(extensionPath, resolvedPath);
-		const api = new ConcreteExtensionAPI(extension, runtime, cwd, eventBus);
+		const api = new ConcreteExtensionAPI(
+			await import("@oh-my-pi/pi-coding-agent"),
+			extension,
+			runtime,
+			cwd,
+			eventBus,
+		);
 		await factory(api);
 
 		return { extension, error: null };
@@ -286,7 +307,7 @@ export async function loadExtensionFromFactory(
 	name = "<inline>",
 ): Promise<Extension> {
 	const extension = createExtension(name, name);
-	const api = new ConcreteExtensionAPI(extension, runtime, cwd, eventBus);
+	const api = new ConcreteExtensionAPI(await import("@oh-my-pi/pi-coding-agent"), extension, runtime, cwd, eventBus);
 	await factory(api);
 	return extension;
 }

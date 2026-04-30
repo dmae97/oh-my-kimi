@@ -1,8 +1,8 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type Api, type AssistantMessage, completeSimple, type Model } from "@oh-my-pi/pi-ai";
+import { prompt } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { expandRoleAlias, resolveModelFromString } from "../config/model-resolver";
-import { renderPromptTemplate } from "../config/prompt-templates";
 import inspectImageDescription from "../prompts/tools/inspect-image.md" with { type: "text" };
 import inspectImageSystemPromptTemplate from "../prompts/tools/inspect-image-system.md" with { type: "text" };
 import {
@@ -10,14 +10,14 @@ import {
 	type LoadedImageInput,
 	loadImageInput,
 	MAX_IMAGE_INPUT_BYTES,
-} from "../utils/image-input";
+} from "../utils/image-loading";
 import type { ToolSession } from "./index";
 import { ToolError } from "./tool-errors";
 
 const inspectImageSchema = Type.Object(
 	{
-		path: Type.String({ description: "Filesystem path to an image" }),
-		question: Type.String({ description: "Question to ask about the image" }),
+		path: Type.String({ description: "image path", examples: ["image.png"] }),
+		question: Type.String({ description: "question about image", examples: ["What is in this image?"] }),
 	},
 	{ additionalProperties: false },
 );
@@ -43,13 +43,13 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 	readonly label = "InspectImage";
 	readonly description: string;
 	readonly parameters = inspectImageSchema;
-	readonly strict = true;
+	readonly strict = false;
 
 	constructor(
 		private readonly session: ToolSession,
 		private readonly completeImageRequest: typeof completeSimple = completeSimple,
 	) {
-		this.description = renderPromptTemplate(inspectImageDescription);
+		this.description = prompt.render(inspectImageDescription);
 	}
 
 	async execute(
@@ -79,7 +79,7 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 		const resolvePattern = (pattern: string | undefined): Model<Api> | undefined => {
 			if (!pattern) return undefined;
 			const expanded = expandRoleAlias(pattern, this.session.settings);
-			return resolveModelFromString(expanded, availableModels, matchPreferences);
+			return resolveModelFromString(expanded, availableModels, matchPreferences, modelRegistry);
 		};
 
 		const activeModelPattern = this.session.getActiveModelString?.() ?? this.session.getModelString?.();
@@ -127,7 +127,7 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 		const response = await this.completeImageRequest(
 			model,
 			{
-				systemPrompt: renderPromptTemplate(inspectImageSystemPromptTemplate),
+				systemPrompt: prompt.render(inspectImageSystemPromptTemplate),
 				messages: [
 					{
 						role: "user",

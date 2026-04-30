@@ -1,10 +1,7 @@
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import { parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
 import { slashCommandCapability } from "../capability/slash-command";
-import {
-	appendInlineArgsFallback,
-	renderPromptTemplate,
-	templateUsesInlineArgPlaceholders,
-} from "../config/prompt-templates";
+import { appendInlineArgsFallback, templateUsesInlineArgPlaceholders } from "../config/prompt-templates";
 import type { SlashCommand } from "../discovery";
 import { loadCapability } from "../discovery";
 import {
@@ -14,7 +11,6 @@ import {
 } from "../slash-commands/builtin-registry";
 import { EMBEDDED_COMMAND_TEMPLATES } from "../task/commands";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
-import { parseFrontmatter } from "../utils/frontmatter";
 
 export type SlashCommandSource = "extension" | "prompt" | "skill";
 
@@ -223,7 +219,7 @@ export function expandSlashCommand(text: string, fileCommands: FileSlashCommand[
 		const argsText = args.join(" ");
 		const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(fileCommand.content);
 		const substituted = substituteArgs(fileCommand.content, args);
-		const rendered = renderPromptTemplate(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
+		const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
 		return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
 	}
 

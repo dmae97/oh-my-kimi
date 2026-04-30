@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ApplyPatchError, applyPatch } from "@oh-my-pi/pi-coding-agent/patch";
+import { ApplyPatchError, applyPatch } from "@oh-my-pi/pi-coding-agent/edit";
 
 describe("applyPatch adversarial inputs", () => {
 	let tempDir: string;

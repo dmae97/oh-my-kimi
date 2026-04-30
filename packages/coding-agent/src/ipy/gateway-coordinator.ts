@@ -313,9 +313,9 @@ async function killGateway(pid: number, context: string): Promise<void> {
 export async function acquireSharedGateway(cwd: string): Promise<AcquireResult | null> {
 	try {
 		return await withGatewayLock(async () => {
-			const existingInfo = await logger.timeAsync("acquireSharedGateway:readInfo", () => readGatewayInfo());
+			const existingInfo = await logger.time("acquireSharedGateway:readInfo", readGatewayInfo);
 			if (existingInfo) {
-				if (await logger.timeAsync("acquireSharedGateway:isAlive", () => isGatewayAlive(existingInfo))) {
+				if (await logger.time("acquireSharedGateway:isAlive", isGatewayAlive, existingInfo)) {
 					localGatewayUrl = existingInfo.url;
 					isCoordinatorInitialized = true;
 					logger.debug("Reusing global Python gateway", { url: existingInfo.url });
@@ -329,8 +329,10 @@ export async function acquireSharedGateway(cwd: string): Promise<AcquireResult |
 				await clearGatewayInfo();
 			}
 
-			const { url, pid, pythonPath, venvPath } = await logger.timeAsync("acquireSharedGateway:startGateway", () =>
-				startGatewayProcess(cwd),
+			const { url, pid, pythonPath, venvPath } = await logger.time(
+				"acquireSharedGateway:startGateway",
+				startGatewayProcess,
+				cwd,
 			);
 			const info: GatewayInfo = {
 				url,

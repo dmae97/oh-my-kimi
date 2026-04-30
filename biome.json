@@ -1,4 +1,10 @@
 {
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true,
+		"defaultBranch": "main"
+	},
 	"linter": {
 		"enabled": true,
 		"rules": {
@@ -44,6 +50,7 @@
 			"packages/*/examples/**/*.ts",
 			"packages/*/scripts/**/*.ts",
 			"packages/*/*.ts",
+			"!packages/natives/native/index.d.ts",
 			"!**/vendor/**/*",
 			"!**/node_modules/**/*",
 			"!**/test-sessions.ts",

@@ -5,6 +5,8 @@ import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { formatDuration, formatNumber, getProjectDir, relativePathWithinRoot } from "@oh-my-pi/pi-utils";
 import { theme } from "../../../modes/theme/theme";
 import { shortenPath } from "../../../tools/render-utils";
+import { getSessionAccentAnsi, getSessionAccentHex } from "../../../utils/session-color";
+import { sanitizeStatusText } from "../../shared";
 import { getContextUsageLevel, getContextUsageThemeColor } from "./context-thresholds";
 import type { RenderedSegment, SegmentContext, StatusLineSegment, StatusLineSegmentId } from "./types";
 
@@ -74,18 +76,24 @@ const modelSegment: StatusLineSegment = {
 	},
 };
 
-const planModeSegment: StatusLineSegment = {
-	id: "plan_mode",
+const modeSegment: StatusLineSegment = {
+	id: "mode",
 	render(ctx) {
-		const status = ctx.planMode;
-		if (!status || (!status.enabled && !status.paused)) {
-			return { content: "", visible: false };
+		const plan = ctx.planMode;
+		if (plan && (plan.enabled || plan.paused)) {
+			const label = plan.paused ? "Plan ⏸" : "Plan";
+			const content = withIcon(theme.icon.plan, label);
+			const color = plan.paused ? "warning" : "accent";
+			return { content: theme.fg(color, content), visible: true };
 		}
 
-		const label = status.paused ? "Plan ⏸" : "Plan";
-		const content = withIcon(theme.icon.plan, label);
-		const color = status.paused ? "warning" : "accent";
-		return { content: theme.fg(color, content), visible: true };
+		const loop = ctx.loopMode;
+		if (loop?.enabled) {
+			const content = withIcon(theme.icon.loop, "Loop");
+			return { content: theme.fg("customMessageLabel", content), visible: true };
+		}
+
+		return { content: "", visible: false };
 	},
 };
 
@@ -354,6 +362,18 @@ const cacheWriteSegment: StatusLineSegment = {
 	},
 };
 
+const sessionNameSegment: StatusLineSegment = {
+	id: "session_name",
+	render(ctx) {
+		const sessionManager = ctx.session.sessionManager;
+		const name = sessionManager?.titleSource === "auto" ? undefined : sessionManager?.getSessionName();
+		if (!name) return { content: "", visible: false };
+
+		const ansi = getSessionAccentAnsi(getSessionAccentHex(name)) ?? theme.getFgAnsi("accent");
+		return { content: `${ansi}${sanitizeStatusText(name)}\x1b[39m`, visible: true };
+	},
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Segment Registry
 // ═══════════════════════════════════════════════════════════════════════════
@@ -361,7 +381,7 @@ const cacheWriteSegment: StatusLineSegment = {
 export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	pi: piSegment,
 	model: modelSegment,
-	plan_mode: planModeSegment,
+	mode: modeSegment,
 	path: pathSegment,
 	git: gitSegment,
 	pr: prSegment,
@@ -379,6 +399,7 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	hostname: hostnameSegment,
 	cache_read: cacheReadSegment,
 	cache_write: cacheWriteSegment,
+	session_name: sessionNameSegment,
 };
 
 export function renderSegment(id: StatusLineSegmentId, ctx: SegmentContext): RenderedSegment {

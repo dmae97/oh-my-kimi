@@ -5,15 +5,14 @@ import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleSelection } from "../config/model-resolver";
-import { renderPromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
 import { toReasoningEffort } from "../thinking";
 
-const TITLE_SYSTEM_PROMPT = renderPromptTemplate(titleSystemPrompt);
+const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
 
 const DEFAULT_TERMINAL_TITLE = "π";
 const TERMINAL_TITLE_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
@@ -28,7 +27,7 @@ function getTitleModel(
 	const availableModels = registry.getAvailable();
 	if (availableModels.length === 0) return undefined;
 
-	const titleModel = resolveRoleSelection(["commit", "smol"], settings, availableModels);
+	const titleModel = resolveRoleSelection(["commit", "smol"], settings, availableModels, registry);
 	if (titleModel) {
 		return { model: titleModel.model, thinkingLevel: titleModel.thinkingLevel };
 	}
@@ -154,20 +153,29 @@ function getFallbackTerminalTitle(cwd: string | undefined): string | undefined {
 	return sanitizeTerminalTitlePart(baseName);
 }
 
-export function formatSessionTerminalTitle(sessionName: string | undefined, cwd?: string): string {
-	const label = sanitizeTerminalTitlePart(sessionName) ?? getFallbackTerminalTitle(cwd);
+export function formatSessionTerminalTitle(
+	sessionName: string | undefined,
+	cwd?: string,
+	titleSource?: "auto" | "user" | undefined,
+): string {
+	const label =
+		sanitizeTerminalTitlePart(titleSource === "auto" ? undefined : sessionName) ?? getFallbackTerminalTitle(cwd);
 	return label ? `${DEFAULT_TERMINAL_TITLE}: ${label}` : DEFAULT_TERMINAL_TITLE;
 }
 
 /**
- * Set the terminal title using OSC 2. Unsupported terminals ignore it.
+ * Set the terminal title using OSC 0 (sets both tab and window title). Unsupported terminals ignore it.
  */
 export function setTerminalTitle(title: string): void {
-	process.stdout.write(`\x1b]2;${sanitizeTerminalTitlePart(title) ?? DEFAULT_TERMINAL_TITLE}\x07`);
+	process.stdout.write(`\x1b]0;${sanitizeTerminalTitlePart(title) ?? DEFAULT_TERMINAL_TITLE}\x07`);
 }
 
-export function setSessionTerminalTitle(sessionName: string | undefined, cwd?: string): void {
-	setTerminalTitle(formatSessionTerminalTitle(sessionName, cwd));
+export function setSessionTerminalTitle(
+	sessionName: string | undefined,
+	cwd?: string,
+	titleSource?: "auto" | "user" | undefined,
+): void {
+	setTerminalTitle(formatSessionTerminalTitle(sessionName, cwd, titleSource));
 }
 
 /**

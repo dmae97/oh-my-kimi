@@ -77,14 +77,14 @@ export class LspLinterClient implements LinterClient {
 		const timeoutMs = 3000;
 		const start = Date.now();
 		while (Date.now() - start < timeoutMs) {
-			const diagnostics = client.diagnostics.get(uri);
-			if (diagnostics !== undefined) {
-				return diagnostics;
+			const publishedDiagnostics = client.diagnostics.get(uri);
+			if (publishedDiagnostics !== undefined) {
+				return publishedDiagnostics.diagnostics;
 			}
 			await Bun.sleep(100);
 		}
 
-		return client.diagnostics.get(uri) ?? [];
+		return client.diagnostics.get(uri)?.diagnostics ?? [];
 	}
 
 	dispose(): void {

@@ -146,7 +146,7 @@ export const TERMINAL_ID: TerminalId = (() => {
 		if (caseEq(TERM_PROGRAM, "alacritty")) return "alacritty";
 	}
 
-	if (!!TERM && TERM.toLowerCase().includes("ghostty")) return "ghostty";
+	if (TERM?.toLowerCase().includes("ghostty")) return "ghostty";
 
 	if (COLORTERM) {
 		if (caseEq(COLORTERM, "truecolor") || caseEq(COLORTERM, "24bit")) return "trueColor";

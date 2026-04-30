@@ -1,13 +1,14 @@
 telemetry = false
 
 [install]
-linker = "isolated"
+linker = "hoisted"
 exact = true
 saveTextLockfile = true
 
 [loader]
 ".md" = "text"
 ".py" = "text"
+".lark" = "text"
 
 [run]
 bun = true

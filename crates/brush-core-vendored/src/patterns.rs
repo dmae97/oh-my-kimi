@@ -138,7 +138,7 @@ impl Pattern {
     ///
     /// * `working_dir` - The current working directory, used for relative paths.
     /// * `path_filter` - Optionally provides a function that filters paths after expansion.
-    #[expect(clippy::too_many_lines)]
+    
     #[allow(clippy::unwrap_in_result)]
     pub(crate) fn expand<PF>(
         &self,

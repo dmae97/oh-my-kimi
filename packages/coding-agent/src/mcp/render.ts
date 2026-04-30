@@ -17,7 +17,6 @@ import {
 	JSON_TREE_SCALAR_LEN_COLLAPSED,
 	JSON_TREE_SCALAR_LEN_EXPANDED,
 	renderJsonTreeLines,
-	stripInternalArgs,
 } from "../tools/json-tree";
 import { formatExpandHint, truncateToWidth } from "../tools/render-utils";
 import { renderStatusLine } from "../tui";
@@ -58,13 +57,7 @@ export function renderMCPResult(
 		lines.push(`${theme.fg("dim", "Args")}`);
 		const maxDepth = JSON_TREE_MAX_DEPTH_EXPANDED;
 		const maxLines = JSON_TREE_MAX_LINES_EXPANDED;
-		const tree = renderJsonTreeLines(
-			stripInternalArgs(args),
-			theme,
-			maxDepth,
-			maxLines,
-			JSON_TREE_SCALAR_LEN_EXPANDED,
-		);
+		const tree = renderJsonTreeLines(args, theme, maxDepth, maxLines, JSON_TREE_SCALAR_LEN_EXPANDED);
 		for (const line of tree.lines) {
 			lines.push(line);
 		}

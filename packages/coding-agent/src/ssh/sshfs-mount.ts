@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getRemoteDir, postmortem } from "@oh-my-pi/pi-utils";
+import { $which, getRemoteDir, postmortem } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { getControlDir, getControlPathTemplate, type SSHConnectionTarget } from "./connection-manager";
 import { buildSshTarget, sanitizeHostName } from "./utils";
@@ -60,24 +60,24 @@ function buildSshfsArgs(host: SSHConnectionTarget): string[] {
 }
 
 async function unmountPath(path: string): Promise<boolean> {
-	const fusermount = Bun.which("fusermount") ?? Bun.which("fusermount3");
+	const fusermount = $which("fusermount") ?? $which("fusermount3");
 	if (fusermount) {
 		const result = await $`${fusermount} -u ${path}`.quiet().nothrow();
 		if (result.exitCode === 0) return true;
 	}
 
-	const umount = Bun.which("umount");
+	const umount = $which("umount");
 	if (!umount) return false;
 	const result = await $`${umount} ${path}`.quiet().nothrow();
 	return result.exitCode === 0;
 }
 
 export function hasSshfs(): boolean {
-	return Bun.which("sshfs") !== null;
+	return $which("sshfs") !== null;
 }
 
 export async function isMounted(path: string): Promise<boolean> {
-	const mountpoint = Bun.which("mountpoint");
+	const mountpoint = $which("mountpoint");
 	if (!mountpoint) return false;
 	const result = await $`${mountpoint} -q ${path}`.quiet().nothrow();
 	return result.exitCode === 0;

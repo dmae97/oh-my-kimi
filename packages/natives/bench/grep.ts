@@ -1,8 +1,5 @@
-import { spawn } from "node:child_process";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import { grep, SearchDb } from "../src/index.js";
+import { grep } from "../src/index.js";
 
 const ITERATIONS = 50;
 const CONCURRENCY = 8;
@@ -21,88 +18,78 @@ const cases: BenchCase[] = [
 	{ name: "Large (200+ files)", path: path.resolve(packages, "coding-agent/src"), pattern: "import", glob: "*.ts" },
 ];
 
-const benchDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-natives-grep-bench-"));
-const searchDb = new SearchDb(path.join(benchDir, "search-db"));
+// Warm per-root state before timing so the benchmark measures steady-state search.
+for (const c of cases) {
+	await grep({ pattern: c.pattern, path: c.path, glob: c.glob });
+}
 
-try {
-	// Warm per-root state before timing so the benchmark measures steady-state DB-backed search.
-	for (const c of cases) {
-		await grep({ pattern: c.pattern, path: c.path, glob: c.glob }, undefined, searchDb);
-	}
+console.log(`Benchmark: ${ITERATIONS} iterations per case\n`);
 
-	console.log(`Benchmark: ${ITERATIONS} iterations per case\n`);
+for (const c of cases) {
+	const grepArgs = { pattern: c.pattern, path: c.path, glob: c.glob };
+	const rgDefaultArgs = ["--hidden", "--no-ignore", "--no-ignore-vcs"];
+	const globArg = c.glob ? ["-g", c.glob] : [];
+	const runNative = () => grep(grepArgs);
 
-	for (const c of cases) {
-		const grepArgs = { pattern: c.pattern, path: c.path, glob: c.glob };
-		const rgDefaultArgs = ["--hidden", "--no-ignore", "--no-ignore-vcs"];
-		const globArg = c.glob ? ["-g", c.glob] : [];
-		const runNative = () => grep(grepArgs, undefined, searchDb);
+	const runRg = async (): Promise<string> => {
+		const proc = Bun.spawn(["rg", "--json", ...rgDefaultArgs, ...globArg, c.pattern, c.path], {
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const stdout = await new Response(proc.stdout).text();
+		await proc.exited;
+		return stdout;
+	};
 
-		const runRg = (): Promise<string> => {
-			const { promise, resolve, reject } = Promise.withResolvers<string>();
-			const proc = spawn("rg", ["--json", ...rgDefaultArgs, ...globArg, c.pattern, c.path], {
-				stdio: ["ignore", "pipe", "ignore"],
-			});
-			let stdout = "";
-			proc.stdout.on("data", (data: Buffer) => {
-				stdout += data.toString();
-			});
-			proc.on("close", () => resolve(stdout));
-			proc.on("error", reject);
-			return promise;
-		};
-
-		const countMatches = (result: string): number => {
-			const lines = result.split("\n").filter((l) => l.trim());
-			let matches = 0;
-			for (const line of lines) {
-				try {
-					if (JSON.parse(line).type === "match") matches++;
-				} catch {
-					/* ignore */
-				}
+	const countMatches = (result: string): number => {
+		const lines = result.split("\n").filter((l) => l.trim());
+		let matches = 0;
+		for (const line of lines) {
+			try {
+				if (JSON.parse(line).type === "match") matches++;
+			} catch {
+				/* ignore */
 			}
-			return matches;
-		};
-
-		const nativeMatches = (await runNative()).totalMatches;
-		const rgMatches = countMatches(await runRg());
-
-		let start = Bun.nanoseconds();
-		for (let i = 0; i < ITERATIONS; i++) await runNative();
-		const nativeMs = (Bun.nanoseconds() - start) / 1e6 / ITERATIONS;
-
-		start = Bun.nanoseconds();
-		for (let i = 0; i < ITERATIONS; i++) {
-			await Promise.all(Array.from({ length: CONCURRENCY }, () => runNative()));
 		}
-		const nativeConcurrentMs = (Bun.nanoseconds() - start) / 1e6 / ITERATIONS;
+		return matches;
+	};
 
-		start = Bun.nanoseconds();
-		for (let i = 0; i < ITERATIONS; i++) await runRg();
-		const rgMs = (Bun.nanoseconds() - start) / 1e6 / ITERATIONS;
+	const nativeMatches = (await runNative()).totalMatches;
+	const rgMatches = countMatches(await runRg());
 
-		start = Bun.nanoseconds();
-		for (let i = 0; i < ITERATIONS; i++) {
-			await Promise.all(Array.from({ length: CONCURRENCY }, () => runRg()));
-		}
-		const rgConcurrentMs = (Bun.nanoseconds() - start) / 1e6 / ITERATIONS;
+	let start = Bun.nanoseconds();
+	for (let i = 0; i < ITERATIONS; i++) await runNative();
+	const nativeMs = (Bun.nanoseconds() - start) / 1e6 / ITERATIONS;
 
-		console.log(`${c.name}:`);
-		console.log(`  Native + DB:          ${nativeMs.toFixed(2)}ms (${nativeMatches} matches)`);
-		console.log(`  Native + DB 8x:       ${nativeConcurrentMs.toFixed(2)}ms`);
-		console.log(`  Subprocess rg:        ${rgMs.toFixed(2)}ms (${rgMatches} matches)`);
-		console.log(`  Subprocess rg 8x:     ${rgConcurrentMs.toFixed(2)}ms`);
-
-		const nativeVsRg = rgMs / nativeMs;
-		const nativeVsRgConcurrent = rgConcurrentMs / nativeConcurrentMs;
-		console.log(
-			`  => Native + DB is ${nativeVsRg > 1 ? `${nativeVsRg.toFixed(1)}x faster` : `${(1 / nativeVsRg).toFixed(1)}x slower`} than rg (sequential)`,
-		);
-		console.log(
-			`  => Native + DB is ${nativeVsRgConcurrent > 1 ? `${nativeVsRgConcurrent.toFixed(1)}x faster` : `${(1 / nativeVsRgConcurrent).toFixed(1)}x slower`} than rg (8x concurrent)\n`,
-		);
+	start = Bun.nanoseconds();
+	for (let i = 0; i < ITERATIONS; i++) {
+		await Promise.all(Array.from({ length: CONCURRENCY }, () => runNative()));
 	}
-} finally {
-	await fs.rm(benchDir, { recursive: true, force: true });
+	const nativeConcurrentMs = (Bun.nanoseconds() - start) / 1e6 / ITERATIONS;
+
+	start = Bun.nanoseconds();
+	for (let i = 0; i < ITERATIONS; i++) await runRg();
+	const rgMs = (Bun.nanoseconds() - start) / 1e6 / ITERATIONS;
+
+	start = Bun.nanoseconds();
+	for (let i = 0; i < ITERATIONS; i++) {
+		await Promise.all(Array.from({ length: CONCURRENCY }, () => runRg()));
+	}
+	const rgConcurrentMs = (Bun.nanoseconds() - start) / 1e6 / ITERATIONS;
+
+	console.log(`${c.name}:`);
+	console.log(`  Native grep:         ${nativeMs.toFixed(2)}ms (${nativeMatches} matches)`);
+	console.log(`  Native grep 8x:      ${nativeConcurrentMs.toFixed(2)}ms`);
+	console.log(`  Subprocess rg:       ${rgMs.toFixed(2)}ms (${rgMatches} matches)`);
+	console.log(`  Subprocess rg 8x:    ${rgConcurrentMs.toFixed(2)}ms`);
+
+	const nativeVsRg = rgMs / nativeMs;
+	const nativeVsRgConcurrent = rgConcurrentMs / nativeConcurrentMs;
+	console.log(
+		`  => Native grep is ${nativeVsRg > 1 ? `${nativeVsRg.toFixed(1)}x faster` : `${(1 / nativeVsRg).toFixed(1)}x slower`} than rg (sequential)`,
+	);
+	console.log(
+		`  => Native grep is ${nativeVsRgConcurrent > 1 ? `${nativeVsRgConcurrent.toFixed(1)}x faster` : `${(1 / nativeVsRgConcurrent).toFixed(1)}x slower`} than rg (8x concurrent)\n`,
+	);
 }

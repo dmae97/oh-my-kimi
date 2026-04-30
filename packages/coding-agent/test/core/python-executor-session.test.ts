@@ -25,9 +25,10 @@ class FakeKernel {
 		return this.alive;
 	}
 
-	async shutdown(): Promise<void> {
+	async shutdown(): Promise<pythonKernel.KernelShutdownResult> {
 		this.shutdownCalls += 1;
 		this.alive = false;
+		return { confirmed: true };
 	}
 }
 

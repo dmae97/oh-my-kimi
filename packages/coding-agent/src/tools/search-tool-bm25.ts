@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
+import { prompt } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { renderPromptTemplate } from "../config/prompt-templates";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import {
 	buildDiscoverableMCPSearchIndex,
@@ -25,10 +25,8 @@ const MATCH_LABEL_LEN = 72;
 const MATCH_DESCRIPTION_LEN = 96;
 
 const searchToolBm25Schema = Type.Object({
-	query: Type.String({ description: "Search query for hidden MCP tool metadata" }),
-	limit: Type.Optional(
-		Type.Integer({ description: "Max matching tools to activate and return (default 8)", minimum: 1 }),
-	),
+	query: Type.String({ description: "mcp search query", examples: ["kubernetes pod", "image processing"] }),
+	limit: Type.Optional(Type.Integer({ description: "max matches", minimum: 1 })),
 });
 
 type SearchToolBm25Params = Static<typeof searchToolBm25Schema>;
@@ -105,7 +103,7 @@ function supportsMCPToolDiscoveryExecution(session: ToolSession): session is MCP
 
 export function renderSearchToolBm25Description(discoverableTools: DiscoverableMCPTool[] = []): string {
 	const summary = summarizeDiscoverableMCPTools(discoverableTools);
-	return renderPromptTemplate(searchToolBm25Description, {
+	return prompt.render(searchToolBm25Description, {
 		discoverableMCPToolCount: summary.toolCount,
 		discoverableMCPServerSummaries: summary.servers.map(formatDiscoverableMCPToolServerSummary),
 		hasDiscoverableMCPServers: summary.servers.length > 0,

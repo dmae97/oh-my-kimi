@@ -61,7 +61,6 @@ Filename strategy:
 
 - Release: `pi_natives.<platform>-<arch>.node`
 - x64 variant release: `pi_natives.<platform>-<arch>-modern.node` and/or `...-baseline.node`
-- Dev: `pi_natives.dev.node` (preferred when `PI_DEV` is set)
 
 ### Platform-specific variant detection
 

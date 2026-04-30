@@ -2,6 +2,155 @@
 
 ## [Unreleased]
 
+## [14.5.9] - 2026-04-30
+### Fixed
+
+- Fixed shell minimizer output so successful commands whose noise is fully stripped still return `OK` instead of an artifact-only result
+
+## [14.5.6] - 2026-04-29
+
+### Added
+
+- Added shell minimizer support for CMake, CTest, Ninja, GoogleTest binaries, and Bun/Bunx wrappers that run those tools
+
+## [14.5.2] - 2026-04-26
+### Changed
+
+- Changed local native build profile from `dev` to `local` for non-CI builds, updating the profile used by the build and local build output label
+
+## [14.4.2] - 2026-04-26
+
+### Removed
+
+- Removed the `chunk` napi module (`ChunkState`, chunk schema, chunk rendering, chunk edit) and dropped `generate_chunk_schema()` from the build script
+
+## [14.3.0] - 2026-04-25
+### Added
+
+- Added `text` to `MinimizerResult` so consumers can replace rewritten output with the minimized replacement text
+- Added `settingsHash` to `MinimizerOptions` to verify the minimizer `settingsPath` contents against a xxHash64 digest before applying them
+- Added `minimized` output telemetry via `MinimizerResult` on `ShellExecuteResult` and `ShellRunResult`, exposing the applied minimizer filter and original/minimized byte counts when output is rewritten
+- Added a new `minimizer` option to `ShellExecuteOptions` and `ShellOptions` to configure per-command output minimization
+- Added the `MinimizerOptions` API with controls for enabling minimization, overriding settings via `settingsPath`, allow/deny lists (`only`, `except`), and `maxCaptureBytes` capture limits
+
+### Changed
+
+- Changed the shell output minimizer to more aggressively compact successful test runs, git output, large listings, grep/find results, source reads, and dependency manifests
+- Changed compound and piped shell commands to bypass output minimization entirely, keeping minimization limited to eligible whole-command output after the command exits
+
+### Fixed
+
+- Fixed chunk edit batches so later operations can reuse an initially validated checksum after an earlier operation changes that same chunk
+
+### Removed
+
+- Removed `PI_DEV` loader diagnostic env var and associated console logging in the native addon loader
+
+### Security
+
+- Added trust-gated loading for minimizer settings by requiring a matching `settingsHash` before accepting a settings file
+
+## [14.2.0] - 2026-04-23
+
+### Added
+
+- Added Dart support to `astGrep` and `astEdit` through the native tree-sitter Dart grammar ([#748](https://github.com/can1357/oh-my-pi/pull/748) by [@0fflineuser](https://github.com/0fflineuser))
+
+## [14.1.1] - 2026-04-14
+
+### Added
+
+- Added support for honoring the `ZIG` environment variable when resolving the Zig executable for native builds
+
+### Removed
+
+- Removed the `SearchDb` API from the natives type declarations
+- Removed the optional `db` parameter from `fuzzyFind`, `glob`, and `grep`
+- Removed the `fuzzyFind`, `glob`, and `grep` cache database argument previously used for search state
+
+## [14.0.5] - 2026-04-11
+### Breaking Changes
+
+- Made `tabWidth` parameter required (no longer optional) for `visibleWidth`, `truncateToWidth`, `wrapTextWithAnsi`, `sliceWithWidth`, and `extractSegments`
+- Removed `getIndentation`, `getDefaultTabWidth`, and `setDefaultTabWidth` (moved to `@oh-my-pi/pi-utils`)
+- `visibleWidth`, `truncateToWidth`, `wrapTextWithAnsi`, `sliceWithWidth`, and `extractSegments` now require an explicit `tabWidth` argument
+
+## [14.0.4] - 2026-04-10
+
+### Added
+
+- Added `normalizeIndent` option to `EditParams` to control indentation normalization for response rendering and inserted content
+- Added `hasConflicts()` method to detect unresolved merge conflicts in parsed files
+- Added `conflictCount()` method to count unresolved merge conflicts in the chunk tree
+
+## [14.0.2] - 2026-04-09
+
+### Added
+
+- Added `Decl` variant to `ChunkRegion` enum for accessing semantic declarations without leading trivia
+- Added `check:types` script for explicit TypeScript type checking
+- Added `lint` script for running Biome linter
+- Added `fmt` script for code formatting with Biome
+- Added package exports field with typed entry point configuration
+- Added turbo.json configuration for build task caching and optimization
+
+### Changed
+
+- Renamed `build:native` script to `build` for simpler invocation
+- Updated `check` script to separately call `check:types` for type checking
+- Modified tsconfig.json to extend `tsconfig.workspace.json` instead of `tsconfig.base.json`
+
+## [14.0.0] - 2026-04-08
+
+### Breaking Changes
+
+- Changed `ChunkRegion.Inner` enum value to `ChunkRegion.Body` to align with region semantics
+- Changed `ChunkRegion` enum values from `Container`, `Prologue`, `Body`, `Epilogue` to `Head`, `Inner`, `Tail` with updated semantics for region targeting
+- Replaced `ChunkEditOp` enum values — `AppendChild`, `PrependChild`, `AppendSibling`, `PrependSibling`, and `ReplaceBody` are now `Before`, `After`, `Prepend`, and `Append` with updated semantics for region-scoped operations
+- Removed `ReplaceBody` operation — use `Replace` with `region: ChunkRegion.Body` to replace only chunk body content
+- Moved package entry point from `src/index.ts` to `native/index.js` — consumers must update imports to use the new native module path
+- Removed TypeScript source files from `src/` directory — all APIs now exported from auto-generated `native/index.js` with types in `native/index.d.ts`
+- Changed enum exports to runtime objects — `const enum` values are now available at runtime via generated enum exports in `native/index.js`
+
+### Added
+
+- Added `ChunkRegion` enum with `Container`, `Prologue`, `Body`, and `Epilogue` values for targeting specific regions within chunks
+- Added `region` parameter to `EditOperation` to specify which chunk region to target (defaults to `Container`)
+- Added `UnsupportedRegion` status to `ChunkReadStatus` enum to indicate when a chunk does not support the requested region
+- Added `normalizeIndent` parameter to `RenderParams` and `ReadRenderParams` to normalize displayed indentation to canonical tabs
+- Added `ReplaceBody` chunk edit operation to replace only the inner body of a chunk while preserving signature and closing delimiter
+- Added `ChunkFocusMode` enum with `Expanded`, `Collapsed`, and `Container` modes for controlling chunk participation in focus-scoped render passes
+- Added `FocusedPath` interface to pair paths with focus modes for the N-API boundary
+- Added `focusedPaths` parameter to `RenderParams` to restrict rendering to specified chunks with their focus modes
+- Generated native module bindings in `native/index.js` and `native/index.d.ts` from napi-rs build output
+- Added `gen-enums.ts` script to extract and export runtime enum values from TypeScript const enums
+- Added `embedded-addon.js` for managing embedded native addon variants and metadata
+- Added `MacOSPowerAssertion` for session-scoped macOS idle-sleep prevention without shelling out
+
+### Changed
+
+- Changed `ChunkInfo.name` field to optional `identifier` field — now provides bare chunk identifier without kind prefix instead of display name
+- Updated `region` parameter documentation in `EditOperation` to clarify full chunk targeting when omitted instead of container-scoped default
+- Updated `ChunkEditOp` documentation to reflect region-scoped semantics — operations now target specific regions rather than chunk structure positions
+- Changed `ChunkEditOp.Replace` documentation to clarify substring replacement via `find` parameter instead of line-based replacement
+- Changed `EditOperation` interface to use `find` parameter for scoped find/replace operations instead of `line` and `endLine` parameters
+- Changed `EditParams` documentation to remove mention of scheduling reordering for line-scoped groups
+- Simplified native build pipeline by removing `--dev` flag support; debug builds no longer available through npm scripts
+- Updated native module loader to check `XDG_DATA_HOME` environment variable for native addon location before falling back to `~/.omp/natives`
+- Removed native binding validation function that checked for required exports at load time
+- Refactored build pipeline to use napi-rs generated bindings instead of hand-written TypeScript wrappers
+- Updated `build-native.ts` to generate runtime enum exports after native compilation
+- Updated `embed-native.ts` to output JavaScript instead of TypeScript for embedded addon metadata
+
+### Removed
+
+- Removed `dev:native` npm script — use `build:native` for all build scenarios
+- Removed inline pi-utils helpers and dependency on `@oh-my-pi/pi-utils` from native module loader
+- Removed `logger.time()` wrapper calls from native module loading
+- Removed all TypeScript wrapper modules from `src/` directory (appearance, ast, chunk, clipboard, glob, grep, highlight, html, image, keys, projfs, ps, pty, shell, text, work)
+- Removed `src/bindings.ts` and `src/index.ts` entry points
+- Removed `src/search-db.ts` and `src/search-db-types.ts`
+
 ## [13.16.1] - 2026-03-27
 
 ### Added

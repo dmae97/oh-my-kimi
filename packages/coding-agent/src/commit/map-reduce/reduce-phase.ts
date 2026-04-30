@@ -1,11 +1,11 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple, validateToolCall } from "@oh-my-pi/pi-ai";
+import { prompt } from "@oh-my-pi/pi-utils";
 import { Type } from "@sinclair/typebox";
 import reduceSystemPrompt from "../../commit/prompts/reduce-system.md" with { type: "text" };
 import reduceUserPrompt from "../../commit/prompts/reduce-user.md" with { type: "text" };
 import type { ChangelogCategory, ConventionalAnalysis, FileObservation } from "../../commit/types";
-import { renderPromptTemplate } from "../../config/prompt-templates";
 import { toReasoningEffort } from "../../thinking";
 import { extractTextContent, extractToolCall, normalizeAnalysis, parseJsonPayload } from "../utils";
 
@@ -67,7 +67,7 @@ export async function runReducePhase({
 	scopeCandidates,
 	typesDescription,
 }: ReducePhaseInput): Promise<ConventionalAnalysis> {
-	const prompt = renderPromptTemplate(reduceUserPrompt, {
+	const userContent = prompt.render(reduceUserPrompt, {
 		types_description: typesDescription,
 		observations: observations.flatMap(obs => obs.observations.map(line => `- ${obs.file}: ${line}`)).join("\n"),
 		stat,
@@ -76,8 +76,8 @@ export async function runReducePhase({
 	const response = await completeSimple(
 		model,
 		{
-			systemPrompt: renderPromptTemplate(reduceSystemPrompt),
-			messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+			systemPrompt: prompt.render(reduceSystemPrompt),
+			messages: [{ role: "user", content: userContent, timestamp: Date.now() }],
 			tools: [ReduceTool],
 		},
 		{ apiKey, maxTokens: 2400, reasoning: toReasoningEffort(thinkingLevel) },

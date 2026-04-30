@@ -1,8 +1,11 @@
 export { truncate } from "@oh-my-pi/pi-utils";
 
+import * as fs from "node:fs/promises";
 import path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type Theme, theme } from "../modes/theme/theme";
+import { formatGroupedFiles } from "../tools/grouped-file-output";
+import { formatPathRelativeToCwd, resolveToCwd } from "../tools/path-utils";
 import type {
 	CodeAction,
 	Command,
@@ -16,142 +19,7 @@ import type {
 	WorkspaceEdit,
 } from "./types";
 
-// =============================================================================
-// Language Detection
-// =============================================================================
-
-const LANGUAGE_MAP: Record<string, string> = {
-	// TypeScript/JavaScript
-	".ts": "typescript",
-	".tsx": "typescriptreact",
-	".js": "javascript",
-	".jsx": "javascriptreact",
-	".mjs": "javascript",
-	".cjs": "javascript",
-	".mts": "typescript",
-	".cts": "typescript",
-
-	// Systems languages
-	".rs": "rust",
-	".go": "go",
-	".c": "c",
-	".h": "c",
-	".cpp": "cpp",
-	".cc": "cpp",
-	".cxx": "cpp",
-	".hpp": "cpp",
-	".hxx": "cpp",
-	".zig": "zig",
-
-	// Scripting languages
-	".py": "python",
-	".rb": "ruby",
-	".lua": "lua",
-	".sh": "shellscript",
-	".bash": "shellscript",
-	".zsh": "shellscript",
-	".fish": "fish",
-	".pl": "perl",
-	".php": "php",
-
-	// JVM languages
-	".java": "java",
-	".kt": "kotlin",
-	".kts": "kotlin",
-	".scala": "scala",
-	".groovy": "groovy",
-	".clj": "clojure",
-
-	// .NET languages
-	".cs": "csharp",
-	".fs": "fsharp",
-	".vb": "vb",
-
-	// Web
-	".html": "html",
-	".htm": "html",
-	".css": "css",
-	".scss": "scss",
-	".sass": "sass",
-	".less": "less",
-	".vue": "vue",
-	".svelte": "svelte",
-
-	// Data formats
-	".json": "json",
-	".jsonc": "jsonc",
-	".yaml": "yaml",
-	".yml": "yaml",
-	".toml": "toml",
-	".xml": "xml",
-	".ini": "ini",
-
-	// Documentation
-	".md": "markdown",
-	".markdown": "markdown",
-	".rst": "restructuredtext",
-	".adoc": "asciidoc",
-	".tex": "latex",
-
-	// Other
-	".sql": "sql",
-	".graphql": "graphql",
-	".gql": "graphql",
-	".proto": "protobuf",
-	".dockerfile": "dockerfile",
-	".tf": "terraform",
-	".hcl": "hcl",
-	".nix": "nix",
-	".ex": "elixir",
-	".exs": "elixir",
-	".erl": "erlang",
-	".hrl": "erlang",
-	".hs": "haskell",
-	".ml": "ocaml",
-	".mli": "ocaml",
-	".swift": "swift",
-	".r": "r",
-	".R": "r",
-	".jl": "julia",
-	".dart": "dart",
-	".elm": "elm",
-	".v": "v",
-	".nim": "nim",
-	".cr": "crystal",
-	".d": "d",
-	".pas": "pascal",
-	".pp": "pascal",
-	".lisp": "lisp",
-	".lsp": "lisp",
-	".rkt": "racket",
-	".scm": "scheme",
-	".ps1": "powershell",
-	".psm1": "powershell",
-	".bat": "bat",
-	".cmd": "bat",
-};
-
-/**
- * Detect language ID from file path.
- * Returns the LSP language identifier for the file type.
- */
-export function detectLanguageId(filePath: string): string {
-	const ext = path.extname(filePath).toLowerCase();
-	const basename = path.basename(filePath).toLowerCase();
-
-	// Handle special filenames
-	if (basename === "dockerfile" || basename.startsWith("dockerfile.")) {
-		return "dockerfile";
-	}
-	if (basename === "makefile" || basename === "gnumakefile") {
-		return "makefile";
-	}
-	if (basename === "cmakelists.txt" || ext === ".cmake") {
-		return "cmake";
-	}
-
-	return LANGUAGE_MAP[ext] ?? "plaintext";
-}
+export { detectLanguageId } from "../utils/lang-from-path";
 
 // =============================================================================
 // URI Handling (Cross-Platform)
@@ -287,7 +155,7 @@ const DIAG_PATH_RE = /^(.+?):(\d+:\d+\s+.*)$/;
 /**
  * Reformat pre-formatted diagnostic messages into grep-style directory/file groups.
  * Input:  ["path:line:col [sev] msg", ...]
- * Output: "# dir\n## └─ file.ts\n  line:col [sev] msg"
+ * Output: "# dir/\n## file.ts\n  line:col [sev] msg"
  *
  * Messages that don't match the expected format are appended ungrouped at the end.
  */
@@ -316,41 +184,10 @@ export function formatGroupedDiagnosticMessages(messages: string[]): string {
 		return ungrouped.join("\n");
 	}
 
-	const filesByDirectory = new Map<string, string[]>();
-	for (const filePath of fileOrder) {
-		const directory = path.dirname(filePath).replace(/\\/g, "/");
-		if (!filesByDirectory.has(directory)) {
-			filesByDirectory.set(directory, []);
-		}
-		filesByDirectory.get(directory)?.push(filePath);
-	}
-
-	const lines: string[] = [];
-	for (const [directory, directoryFiles] of filesByDirectory) {
-		if (directory === ".") {
-			for (const filePath of directoryFiles) {
-				if (lines.length > 0) {
-					lines.push("");
-				}
-				lines.push(`# ${path.basename(filePath)}`);
-				for (const diagnostic of diagnosticsByFile.get(filePath) ?? []) {
-					lines.push(`  ${diagnostic}`);
-				}
-			}
-			continue;
-		}
-
-		if (lines.length > 0) {
-			lines.push("");
-		}
-		lines.push(`# ${directory}`);
-		for (const filePath of directoryFiles) {
-			lines.push(`## └─ ${path.basename(filePath)}`);
-			for (const diagnostic of diagnosticsByFile.get(filePath) ?? []) {
-				lines.push(`  ${diagnostic}`);
-			}
-		}
-	}
+	const grouped = formatGroupedFiles(fileOrder, filePath => ({
+		modelLines: (diagnosticsByFile.get(filePath) ?? []).map(diagnostic => `  ${diagnostic}`),
+	}));
+	const lines: string[] = grouped.model;
 
 	if (ungrouped.length > 0) {
 		lines.push("");
@@ -392,7 +229,7 @@ export function formatDiagnosticsSummary(diagnostics: Diagnostic[]): string {
  * Format a location as file:line:col relative to cwd.
  */
 export function formatLocation(location: Location, cwd: string): string {
-	const file = path.relative(cwd, uriToFile(location.uri));
+	const file = formatPathRelativeToCwd(uriToFile(location.uri), cwd);
 	const line = location.range.start.line + 1;
 	const col = location.range.start.character + 1;
 	return `${file}:${line}:${col}`;
@@ -418,7 +255,7 @@ export function formatWorkspaceEdit(edit: WorkspaceEdit, cwd: string): string[] 
 	// Handle changes map (legacy format)
 	if (edit.changes) {
 		for (const [uri, textEdits] of Object.entries(edit.changes)) {
-			const file = path.relative(cwd, uriToFile(uri));
+			const file = formatPathRelativeToCwd(uriToFile(uri), cwd);
 			results.push(`${file}: ${textEdits.length} edit${textEdits.length > 1 ? "s" : ""}`);
 		}
 	}
@@ -427,20 +264,20 @@ export function formatWorkspaceEdit(edit: WorkspaceEdit, cwd: string): string[] 
 	if (edit.documentChanges) {
 		for (const change of edit.documentChanges) {
 			if ("edits" in change && change.textDocument) {
-				const file = path.relative(cwd, uriToFile(change.textDocument.uri));
+				const file = formatPathRelativeToCwd(uriToFile(change.textDocument.uri), cwd);
 				results.push(`${file}: ${change.edits.length} edit${change.edits.length > 1 ? "s" : ""}`);
 			} else if ("kind" in change) {
 				switch (change.kind) {
 					case "create":
-						results.push(`CREATE: ${path.relative(cwd, uriToFile(change.uri))}`);
+						results.push(`CREATE: ${formatPathRelativeToCwd(uriToFile(change.uri), cwd)}`);
 						break;
 					case "rename":
 						results.push(
-							`RENAME: ${path.relative(cwd, uriToFile(change.oldUri))} ${theme.nav.cursor} ${path.relative(cwd, uriToFile(change.newUri))}`,
+							`RENAME: ${formatPathRelativeToCwd(uriToFile(change.oldUri), cwd)} ${theme.nav.cursor} ${formatPathRelativeToCwd(uriToFile(change.newUri), cwd)}`,
 						);
 						break;
 					case "delete":
-						results.push(`DELETE: ${path.relative(cwd, uriToFile(change.uri))}`);
+						results.push(`DELETE: ${formatPathRelativeToCwd(uriToFile(change.uri), cwd)}`);
 						break;
 				}
 			}
@@ -685,6 +522,30 @@ export async function collectGlobMatches(
 	}
 	return { matches, truncated: false };
 }
+
+export async function resolveDiagnosticTargets(
+	file: string,
+	cwd: string,
+	maxMatches: number,
+): Promise<{ matches: string[]; truncated: boolean }> {
+	if (!hasGlobPattern(file)) {
+		return { matches: [file], truncated: false };
+	}
+
+	const resolved = resolveToCwd(file, cwd);
+	try {
+		const stat = await fs.stat(resolved);
+		if (stat.isFile()) {
+			return { matches: [file], truncated: false };
+		}
+	} catch (error) {
+		if (!isEnoent(error)) {
+			throw error;
+		}
+	}
+
+	return collectGlobMatches(file, cwd, maxMatches);
+}
 // =============================================================================
 // Hover Content Extraction
 // =============================================================================
@@ -735,38 +596,42 @@ function findSymbolMatchIndexes(lineText: string, symbol: string, caseInsensitiv
 	return indexes;
 }
 
-function normalizeOccurrence(occurrence?: number): number {
-	if (occurrence === undefined || !Number.isFinite(occurrence)) return 1;
-	return Math.max(1, Math.trunc(occurrence));
+/**
+ * Parses a symbol spec of the form `name` or `name#N` where N is the 1-indexed
+ * occurrence on the target line. Returns `name` and `occurrence` (default 1).
+ *
+ * Greedy match on `.+` so `#name#2` parses as symbol=`#name` (TS private field)
+ * with occurrence 2. Specs without a trailing `#\d+` are treated as literal.
+ */
+function parseSymbolSpec(spec: string): { symbol: string; occurrence: number } {
+	const match = spec.match(/^(.+)#(\d+)$/);
+	if (!match) return { symbol: spec, occurrence: 1 };
+	const occurrence = Math.max(1, Number.parseInt(match[2], 10));
+	return { symbol: match[1], occurrence };
 }
 
-export async function resolveSymbolColumn(
-	filePath: string,
-	line: number,
-	symbol?: string,
-	occurrence?: number,
-): Promise<number> {
+export async function resolveSymbolColumn(filePath: string, line: number, symbolSpec?: string): Promise<number> {
 	const lineNumber = Math.max(1, line);
-	const matchOccurrence = normalizeOccurrence(occurrence);
 	try {
 		const fileText = await Bun.file(filePath).text();
 		const lines = fileText.split("\n");
 		const targetLine = lines[lineNumber - 1] ?? "";
-		if (!symbol) {
+		if (!symbolSpec) {
 			return firstNonWhitespaceColumn(targetLine);
 		}
 
+		const { symbol, occurrence } = parseSymbolSpec(symbolSpec);
 		const exactIndexes = findSymbolMatchIndexes(targetLine, symbol);
 		const fallbackIndexes = exactIndexes.length > 0 ? exactIndexes : findSymbolMatchIndexes(targetLine, symbol, true);
 		if (fallbackIndexes.length === 0) {
 			throw new Error(`Symbol "${symbol}" not found on line ${lineNumber}`);
 		}
-		if (matchOccurrence > fallbackIndexes.length) {
+		if (occurrence > fallbackIndexes.length) {
 			throw new Error(
-				`Symbol "${symbol}" occurrence ${matchOccurrence} is out of bounds on line ${lineNumber} (found ${fallbackIndexes.length})`,
+				`Symbol "${symbol}" occurrence ${occurrence} is out of bounds on line ${lineNumber} (found ${fallbackIndexes.length})`,
 			);
 		}
-		return fallbackIndexes[matchOccurrence - 1];
+		return fallbackIndexes[occurrence - 1];
 	} catch (error) {
 		if (isEnoent(error)) {
 			throw new Error(`File not found: ${filePath}`);

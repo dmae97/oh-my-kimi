@@ -18,6 +18,7 @@ import { type GoogleOptions, streamGoogle } from "./providers/google";
 import { type GoogleGeminiCliOptions, streamGoogleGeminiCli } from "./providers/google-gemini-cli";
 import { type GoogleVertexOptions, streamGoogleVertex } from "./providers/google-vertex";
 import { isKimiModel, streamKimi } from "./providers/kimi";
+import { type OllamaChatOptions, streamOllama } from "./providers/ollama";
 import { streamOpenAICodexResponses } from "./providers/openai-codex-responses";
 import { type OpenAICompletionsOptions, streamOpenAICompletions } from "./providers/openai-completions";
 import { streamOpenAIResponses } from "./providers/openai-responses";
@@ -34,6 +35,7 @@ import type {
 	ThinkingBudgets,
 	ToolChoice,
 } from "./types";
+import { isFoundryEnabled } from "./utils/foundry";
 
 let cachedVertexAdcCredentialsExists: boolean | null = null;
 
@@ -53,13 +55,6 @@ function hasVertexAdcCredentials(): boolean {
 
 type KeyResolver = string | (() => string | undefined);
 
-function isFoundryEnabled(): boolean {
-	const value = $env.CLAUDE_CODE_USE_FOUNDRY;
-	if (!value) return false;
-	const normalized = value.trim().toLowerCase();
-	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
 const serviceProviderMap: Record<string, KeyResolver> = {
 	"alibaba-coding-plan": "ALIBABA_CODING_PLAN_API_KEY",
 	openai: "OPENAI_API_KEY",
@@ -67,6 +62,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	groq: "GROQ_API_KEY",
 	cerebras: "CEREBRAS_API_KEY",
 	xai: "XAI_API_KEY",
+	fireworks: "FIREWORKS_API_KEY",
 	openrouter: "OPENROUTER_API_KEY",
 	kilo: "KILO_API_KEY",
 	"vercel-ai-gateway": "AI_GATEWAY_API_KEY",
@@ -78,6 +74,8 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	"opencode-go": "OPENCODE_API_KEY",
 	"opencode-zen": "OPENCODE_API_KEY",
 	cursor: "CURSOR_ACCESS_TOKEN",
+	deepseek: "DEEPSEEK_API_KEY",
+	"openai-codex": "OPENAI_CODEX_OAUTH_TOKEN",
 	"azure-openai-responses": "AZURE_OPENAI_API_KEY",
 	exa: "EXA_API_KEY",
 	jina: "JINA_API_KEY",
@@ -135,6 +133,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	nanogpt: "NANO_GPT_API_KEY",
 	"lm-studio": "LM_STUDIO_API_KEY",
 	ollama: "OLLAMA_API_KEY",
+	"ollama-cloud": "OLLAMA_CLOUD_API_KEY",
 	"llama.cpp": "LLAMA_CPP_API_KEY",
 	qianfan: "QIANFAN_API_KEY",
 	"qwen-portal": () => $pickenv("QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"),
@@ -197,8 +196,13 @@ export function stream<TApi extends Api>(
 
 	const api: Api = model.api;
 	switch (api) {
-		case "anthropic-messages":
-			return streamAnthropic(model as Model<"anthropic-messages">, context, providerOptions);
+		case "anthropic-messages": {
+			const anthropicOptions = providerOptions as AnthropicOptions;
+			return streamAnthropic(model as Model<"anthropic-messages">, context, {
+				...anthropicOptions,
+				isOAuth: anthropicOptions.isOAuth ?? model.isOAuth,
+			});
+		}
 
 		case "openai-completions":
 			return streamOpenAICompletions(model as Model<"openai-completions">, context, providerOptions as any);
@@ -221,6 +225,9 @@ export function stream<TApi extends Api>(
 				context,
 				providerOptions as GoogleGeminiCliOptions,
 			);
+
+		case "ollama-chat":
+			return streamOllama(model as Model<"ollama-chat">, context, providerOptions as OllamaChatOptions);
 
 		case "cursor-agent":
 			return streamCursor(model as Model<"cursor-agent">, context, providerOptions as CursorOptions);
@@ -680,6 +687,13 @@ function mapOptionsForApi<TApi extends Api>(
 				toolChoice: mapGoogleToolChoice(options?.toolChoice),
 			});
 		}
+
+		case "ollama-chat":
+			return castApi<"ollama-chat">({
+				...base,
+				reasoning: resolveOpenAiReasoningEffort(model, options),
+				toolChoice: options?.toolChoice,
+			});
 
 		case "cursor-agent": {
 			const execHandlers = options?.cursorExecHandlers ?? options?.execHandlers;

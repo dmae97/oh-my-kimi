@@ -1,18 +1,35 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
+import { LspTool } from "@oh-my-pi/pi-coding-agent/lsp";
+import * as lspClient from "@oh-my-pi/pi-coding-agent/lsp/client";
+import * as lspConfig from "@oh-my-pi/pi-coding-agent/lsp/config";
+import { getServersForFile, loadConfig } from "@oh-my-pi/pi-coding-agent/lsp/config";
 import { renderCall, renderResult } from "@oh-my-pi/pi-coding-agent/lsp/render";
-import type { CodeAction, SymbolInformation } from "@oh-my-pi/pi-coding-agent/lsp/types";
+import type {
+	CodeAction,
+	Diagnostic,
+	LspClient,
+	ServerConfig,
+	SymbolInformation,
+} from "@oh-my-pi/pi-coding-agent/lsp/types";
 import {
 	applyCodeAction,
 	collectGlobMatches,
 	dedupeWorkspaceSymbols,
+	detectLanguageId,
+	fileToUri,
 	filterWorkspaceSymbols,
 	hasGlobPattern,
+	resolveDiagnosticTargets,
 	resolveSymbolColumn,
 } from "@oh-my-pi/pi-coding-agent/lsp/utils";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { clampTimeout } from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
+import * as piUtils from "@oh-my-pi/pi-utils";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("lsp regressions", () => {
@@ -44,6 +61,27 @@ describe("lsp regressions", () => {
 		}
 	});
 
+	it("treats existing bracket paths as literal diagnostic targets", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-bracket-path-");
+		try {
+			const filePath = `${tempDir.path()}/apps/frontend/src/app/runs/[runId]/public/opengraph-image.tsx`;
+			await Bun.write(filePath, "export default function OpenGraphImage() {}\n");
+
+			const result = await resolveDiagnosticTargets(
+				"apps/frontend/src/app/runs/[runId]/public/opengraph-image.tsx",
+				tempDir.path(),
+				10,
+			);
+
+			expect(result).toEqual({
+				matches: ["apps/frontend/src/app/runs/[runId]/public/opengraph-image.tsx"],
+				truncated: false,
+			});
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+
 	it("resolves the requested symbol occurrence on a line", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-regression-");
 		try {
@@ -51,7 +89,7 @@ describe("lsp regressions", () => {
 			await Bun.write(filePath, "foo(bar(foo));\n");
 
 			expect(await resolveSymbolColumn(filePath, 1, "foo")).toBe(0);
-			expect(await resolveSymbolColumn(filePath, 1, "foo", 2)).toBe(8);
+			expect(await resolveSymbolColumn(filePath, 1, "foo#2")).toBe(8);
 		} finally {
 			tempDir.removeSync();
 		}
@@ -77,7 +115,7 @@ describe("lsp regressions", () => {
 			const filePath = `${tempDir.path()}/symbol.ts`;
 			await Bun.write(filePath, "foo();\n");
 
-			await expect(resolveSymbolColumn(filePath, 1, "foo", 2)).rejects.toThrow(
+			await expect(resolveSymbolColumn(filePath, 1, "foo#2")).rejects.toThrow(
 				'Symbol "foo" occurrence 2 is out of bounds on line 1 (found 1)',
 			);
 		} finally {
@@ -129,6 +167,7 @@ describe("lsp regressions", () => {
 		expect(unique).toHaveLength(1);
 		expect(unique[0]?.name).toBe("logger");
 	});
+
 	it("applies command-only code actions by executing workspace commands", async () => {
 		const executedCommands: string[] = [];
 		const result = await applyCodeAction(
@@ -210,7 +249,6 @@ describe("lsp regressions", () => {
 						file: "src/example.ts",
 						line: 10,
 						symbol: "foo\tbar\nbaz",
-						occurrence: 2,
 					},
 				},
 			},
@@ -220,7 +258,165 @@ describe("lsp regressions", () => {
 		const resultText = sanitizeText(result.render(120).join("\n"));
 		const normalizedResultText = resultText.replace(/\s+/g, " ");
 		expect(normalizedResultText).toContain("symbol: foo bar baz");
-		expect(normalizedResultText).toContain("occurrence: 2");
 		expect(resultText).not.toContain("\t");
+	});
+
+	it("sanitizes tabs in rendered diagnostic output", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const renderOptions: RenderResultOptions = { expanded: false, isPartial: false };
+
+		const result = renderResult(
+			{
+				content: [
+					{
+						type: "text",
+						text: "Diagnostics: 1 error(s)\nsrc/example.go:183:41 [error] [compiler] too many\targuments in call (WrongArgCount)",
+					},
+				],
+			},
+			renderOptions,
+			uiTheme,
+		);
+
+		const resultText = sanitizeText(result.render(120).join("\n"));
+		expect(resultText).not.toContain("\t");
+		expect(resultText.replace(/\s+/g, " ")).toContain("too many arguments in call");
+	});
+
+	it("does not reuse stale file diagnostics after another URI publishes", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-stale-diags-");
+		try {
+			const targetFile = path.join(tempDir.path(), "target.ts");
+			const otherFile = path.join(tempDir.path(), "other.ts");
+			await Bun.write(targetFile, "export const target = 1;\n");
+			await Bun.write(otherFile, "export const other = 1;\n");
+
+			const targetUri = fileToUri(targetFile);
+			const otherUri = fileToUri(otherFile);
+			const server: ServerConfig = { command: "test-lsp", fileTypes: ["ts"], rootMarkers: [] };
+			const staleDiagnostic: Diagnostic = {
+				message: "stale target error",
+				severity: 1,
+				range: {
+					start: { line: 0, character: 0 },
+					end: { line: 0, character: 1 },
+				},
+			};
+			const otherDiagnostic: Diagnostic = {
+				message: "other file warning",
+				severity: 2,
+				range: {
+					start: { line: 0, character: 0 },
+					end: { line: 0, character: 1 },
+				},
+			};
+			const client: LspClient = {
+				name: "test-lsp",
+				cwd: tempDir.path(),
+				config: server,
+				proc: {
+					stdin: {
+						write() {},
+						flush: async () => {},
+					},
+				} as unknown as LspClient["proc"],
+				requestId: 0,
+				diagnostics: new Map([[targetUri, { diagnostics: [staleDiagnostic], version: null }]]),
+				diagnosticsVersion: 1,
+				openFiles: new Map([[targetUri, { version: 1, languageId: "typescript" }]]),
+				pendingRequests: new Map(),
+				messageBuffer: new Uint8Array(),
+				isReading: false,
+				lastActivity: Date.now(),
+				writeQueue: Promise.resolve(),
+				activeProgressTokens: new Set(),
+				projectLoaded: Promise.resolve(),
+				resolveProjectLoaded: () => {},
+			};
+
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
+			vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", server]]);
+			vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+
+			setTimeout(() => {
+				client.diagnostics.set(otherUri, { diagnostics: [otherDiagnostic], version: 1 });
+				client.diagnosticsVersion += 1;
+			}, 20);
+			setTimeout(() => {
+				client.diagnostics.set(targetUri, {
+					diagnostics: [],
+					version: client.openFiles.get(targetUri)?.version ?? 2,
+				});
+				client.diagnosticsVersion += 1;
+			}, 80);
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			const result = await tool.execute("diag-stale", {
+				action: "diagnostics",
+				file: targetFile,
+				timeout: 5,
+			});
+			const output = result.content
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("\n");
+
+			expect(output).toBe("No diagnostics");
+		} finally {
+			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
+	it("detects Windows local .exe LSP shims in node_modules/.bin", async () => {
+		if (process.platform !== "win32") {
+			return;
+		}
+
+		const tempDir = TempDir.createSync("@omp-lsp-win32-bin-");
+		const whichSpy = vi.spyOn(Bun, "which").mockReturnValue(null);
+
+		try {
+			await Bun.write(path.join(tempDir.path(), "package.json"), "{}");
+			const binDir = path.join(tempDir.path(), "node_modules", ".bin");
+			await fs.promises.mkdir(binDir, { recursive: true });
+			const localTsServer = path.join(binDir, "typescript-language-server.exe");
+			await Bun.write(localTsServer, "");
+
+			const config = loadConfig(tempDir.path());
+			expect(config.servers["typescript-language-server"]?.resolvedCommand).toBe(localTsServer);
+			expect(whichSpy).not.toHaveBeenCalledWith("typescript-language-server");
+		} finally {
+			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
+	it("detects tlaplus files for LSP startup and language ids", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-tlaplus-");
+		const specPath = path.join(tempDir.path(), "Spec.tla");
+		const aliasPath = path.join(tempDir.path(), "Spec.tlaplus");
+
+		await Bun.write(specPath, "---- MODULE Spec ----\n====\n");
+
+		const whichSpy = vi
+			.spyOn(piUtils, "$which")
+			.mockImplementation(command => (command === "tlapm_lsp" ? "/usr/local/bin/tlapm_lsp" : null));
+		const existsSpy = vi
+			.spyOn(fs, "existsSync")
+			.mockImplementation(candidate => typeof candidate === "string" && candidate === specPath);
+
+		try {
+			const config = loadConfig(tempDir.path());
+			expect(getServersForFile(config, specPath).map(([name]) => name)).toEqual(["tlaplus"]);
+			expect(whichSpy).toHaveBeenCalledWith("tlapm_lsp");
+			expect(existsSpy).toHaveBeenCalled();
+			expect(detectLanguageId(specPath)).toBe("tlaplus");
+			expect(detectLanguageId(aliasPath)).toBe("tlaplus");
+		} finally {
+			tempDir.removeSync();
+		}
 	});
 });

@@ -19,7 +19,7 @@ Avoid ports that depend on JS-only state or dynamic imports. N-API exports shoul
 **Rust side:**
 
 - Implementation lives in `crates/pi-natives/src/<module>.rs`. If you add a new module, register it in `crates/pi-natives/src/lib.rs`.
-- Export with `#[napi]` and `#[napi(js_name = "...")]` to keep JS-facing camelCase names. Use `#[napi(object)]` for structs.
+- Export with `#[napi]`; snake_case exports are converted to camelCase automatically. Use explicit `js_name` only for true aliases/non-default names. Use `#[napi(object)]` for structs.
 - Use `task::blocking(tag, cancel_token, work)` (see `crates/pi-natives/src/task.rs`) for CPU-bound or blocking work. Use `task::future(env, tag, work)` for async work that needs Tokio (e.g., shell sessions). Pass a `CancelToken` when you expose `timeoutMs` or `AbortSignal`.
 
 **JS side:**
@@ -37,7 +37,7 @@ Avoid ports that depend on JS-only state or dynamic imports. N-API exports shoul
 
 - Put the core logic in a plain Rust function.
 - If it’s a new module, add it to `crates/pi-natives/src/lib.rs`.
-- Expose it with `#[napi(js_name = "...")]` to keep camelCase names stable.
+- Expose it with `#[napi]` so the default snake_case -> camelCase mapping stays consistent.
 - Keep signatures owned and simple: `String`, `Vec<String>`, `Uint8Array`, or `Either<JsString, Uint8Array>` for large string/byte inputs.
 - For CPU-bound or blocking work, use `task::blocking`; for async work, use `task::future`. Pass a `CancelToken` and call `heartbeat()` inside long loops.
 
@@ -61,8 +61,7 @@ Avoid ports that depend on JS-only state or dynamic imports. N-API exports shoul
 
 5. **Build the native binary**
 
-- `bun --cwd=packages/natives run build:native`
-- Use `bun --cwd=packages/natives run dev:native` for debug builds (`pi_natives.dev.node`) and set `PI_DEV=1` when loading it.
+- `bun --cwd=packages/natives run build`
 
 6. **Run the benchmark**
 
@@ -77,14 +76,14 @@ Avoid ports that depend on JS-only state or dynamic imports. N-API exports shoul
 
 ### 1) Stale `pi_natives.node` prevents new exports
 
-The loader prefers the platform-tagged binary in `packages/natives/native` (`pi_natives.<platform>-<arch>.node`). When `PI_DEV=1`, it will load `pi_natives.dev.node` instead. There is also a fallback `pi_natives.node`. Compiled binaries extract to `~/.omp/natives/<version>/pi_natives.<platform>-<arch>.node`. If any of these are stale, exports won’t update.
+The loader prefers the platform-tagged binary in `packages/natives/native` (`pi_natives.<platform>-<arch>.node`). There is also a fallback `pi_natives.node`. Compiled binaries extract to `~/.omp/natives/<version>/pi_natives.<platform>-<arch>.node`. If any of these are stale, exports won’t update.
 
 **Fix:** remove the stale file before rebuilding.
 
 ```bash
 rm packages/natives/native/pi_natives.linux-x64.node
 rm packages/natives/native/pi_natives.node
-bun --cwd=packages/natives run build:native
+bun --cwd=packages/natives run build
 ```
 
 If you’re running a compiled binary, delete the cached addon directory:
@@ -107,7 +106,7 @@ This is **good** — it prevents silent mismatches. When you see this:
 Native addon missing exports ... Missing: visibleWidth
 ```
 
-it means your binary is stale, the Rust `#[napi(js_name = "...")]` doesn’t match the JS name, or the export never compiled in. Fix the build and the naming mismatch, don’t weaken validation.
+it means your binary is stale, the Rust export name (or explicit alias when used) doesn’t match the JS name, or the export never compiled in. Fix the build and the naming mismatch, don’t weaken validation.
 
 ### 3) Rust signature mismatch
 

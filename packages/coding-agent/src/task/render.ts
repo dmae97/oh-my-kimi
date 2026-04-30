@@ -101,12 +101,12 @@ function formatTaskId(id: string): string {
 	return `${indices} ${labels}`;
 }
 
-const MISSING_SUBMIT_RESULT_WARNING_PREFIX = "SYSTEM WARNING: Subagent exited without calling submit_result tool";
+const MISSING_YIELD_WARNING_PREFIX = "SYSTEM WARNING: Subagent exited without calling yield tool";
 
-function extractMissingSubmitResultWarning(output: string): { warning?: string; rest: string } {
+function extractMissingYieldWarning(output: string): { warning?: string; rest: string } {
 	const lines = output.split("\n");
 	const firstLine = lines[0]?.trim() ?? "";
-	if (!firstLine.startsWith(MISSING_SUBMIT_RESULT_WARNING_PREFIX)) {
+	if (!firstLine.startsWith(MISSING_YIELD_WARNING_PREFIX)) {
 		return { rest: output };
 	}
 	const rest = lines
@@ -572,9 +572,9 @@ function renderAgentProgress(
 
 	// Render extracted tool data inline (e.g., review findings)
 	if (progress.extractedToolData) {
-		// For completed tasks, check for review verdict from submit_result tool
+		// For completed tasks, check for review verdict from yield tool
 		if (progress.status === "completed") {
-			const completeData = progress.extractedToolData.submit_result as Array<{ data: unknown }> | undefined;
+			const completeData = progress.extractedToolData.yield as Array<{ data: unknown }> | undefined;
 			const reportFindingData = normalizeReportFindings(progress.extractedToolData.report_finding);
 			const reviewData = completeData
 				?.map(c => c.data as SubmitReviewDetails)
@@ -731,9 +731,7 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 	const prefix = isLast ? theme.fg("dim", theme.tree.last) : theme.fg("dim", theme.tree.branch);
 	const continuePrefix = isLast ? "   " : `${theme.fg("dim", theme.tree.vertical)}  `;
 
-	const { warning: missingCompleteWarning, rest: outputWithoutWarning } = extractMissingSubmitResultWarning(
-		result.output,
-	);
+	const { warning: missingCompleteWarning, rest: outputWithoutWarning } = extractMissingYieldWarning(result.output);
 	const aborted = result.aborted ?? false;
 	const mergeFailed = !aborted && result.exitCode === 0 && !!result.error;
 	const success = !aborted && result.exitCode === 0 && !result.error;
@@ -783,11 +781,11 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 			`${continuePrefix}${theme.fg("error", theme.status.aborted)} ${theme.fg("dim", truncateToWidth(replaceTabs(result.abortReason), 80))}`,
 		);
 	}
-	// Check for review result (submit_result with review schema + report_finding)
-	const completeData = result.extractedToolData?.submit_result as Array<{ data: unknown }> | undefined;
+	// Check for review result (yield with review schema + report_finding)
+	const completeData = result.extractedToolData?.yield as Array<{ data: unknown }> | undefined;
 	const reportFindingData = normalizeReportFindings(result.extractedToolData?.report_finding);
 
-	// Extract review verdict from submit_result tool's data field if it matches SubmitReviewDetails
+	// Extract review verdict from yield tool's data field if it matches SubmitReviewDetails
 	const reviewData = completeData
 		?.map(c => c.data as SubmitReviewDetails)
 		.filter(d => d && typeof d === "object" && "overall_correctness" in d);
@@ -804,7 +802,7 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 		const hasCompleteData = completeData && completeData.length > 0;
 		const message = hasCompleteData
 			? "Review verdict missing expected fields"
-			: "Review incomplete (submit_result not called)";
+			: "Review incomplete (yield not called)";
 		lines.push(`${continuePrefix}${theme.fg("warning", theme.status.warning)} ${theme.fg("dim", message)}`);
 		lines.push(`${continuePrefix}${formatFindingSummary(reportFindingData, theme)}`);
 		lines.push(...renderFindings(reportFindingData, continuePrefix, expanded, theme));
@@ -817,7 +815,7 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 	if (result.extractedToolData) {
 		for (const [toolName, dataArray] of Object.entries(result.extractedToolData)) {
 			// Skip review tools - handled above
-			if (toolName === "submit_result" || toolName === "report_finding") continue;
+			if (toolName === "yield" || toolName === "report_finding") continue;
 
 			const handler = subprocessToolRegistry.getHandler(toolName);
 			if (handler?.renderFinal && (dataArray as unknown[]).length > 0) {

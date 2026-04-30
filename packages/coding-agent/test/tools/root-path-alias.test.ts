@@ -3,9 +3,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { resolveToCwd } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
-import { PendingActionStore } from "@oh-my-pi/pi-coding-agent/tools/pending-action";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -46,13 +46,29 @@ describe("tool path root alias", () => {
 		expect(resolveToCwd("///", tempDir)).toBe(tempDir);
 	});
 
-	it("greps from cwd when path is slash", async () => {
-		const tools = await createTools(createTestSession(tempDir));
-		const tool = tools.find(entry => entry.name === "grep");
-		expect(tool).toBeDefined();
-		if (!tool) throw new Error("Missing grep tool");
+	it("rejects local:/ (single-slash) as an internal URL", () => {
+		expect(() => resolveToCwd("local:/PLAN.md", tempDir)).toThrow("internal scheme");
+	});
 
-		const result = await tool.execute("grep-root-alias", {
+	it("rejects local:// as an internal URL", () => {
+		expect(() => resolveToCwd("local://PLAN.md", tempDir)).toThrow("internal scheme");
+	});
+
+	it("rejects @local:/ (at-prefix single-slash) as an internal URL", () => {
+		expect(() => resolveToCwd("@local:/PLAN.md", tempDir)).toThrow("internal scheme");
+	});
+
+	it("rejects @local:// (at-prefix double-slash) as an internal URL", () => {
+		expect(() => resolveToCwd("@local://PLAN.md", tempDir)).toThrow("internal scheme");
+	});
+
+	it("searches from cwd when path is slash", async () => {
+		const tools = await createTools(createTestSession(tempDir));
+		const tool = tools.find(entry => entry.name === "search");
+		expect(tool).toBeDefined();
+		if (!tool) throw new Error("Missing search tool");
+
+		const result = await tool.execute("search-root-alias", {
 			pattern: "root-alias-needle",
 			path: "/",
 		});
@@ -100,11 +116,8 @@ describe("tool path root alias", () => {
 		if (!tool) throw new Error("Missing ast_grep tool");
 
 		const result = await tool.execute("ast-grep-root-alias", {
-			pat: ["rootAliasSymbol"],
-			sel: "identifier",
-			lang: "typescript",
-			path: "/",
-			glob: "**/*.ts",
+			pat: "rootAliasSymbol",
+			path: "/**/*.ts",
 		});
 		const details = result.details as { scopePath?: string } | undefined;
 
@@ -113,17 +126,21 @@ describe("tool path root alias", () => {
 	});
 
 	it("ast_edit rewrites within cwd when path is slash", async () => {
-		const pendingActionStore = new PendingActionStore();
-		const tools = await createTools(createTestSession(tempDir, { pendingActionStore }));
+		const queue = new ToolChoiceQueue();
+		const tools = await createTools(
+			createTestSession(tempDir, {
+				getToolChoiceQueue: () => queue,
+				buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
+				steer: () => {},
+			}),
+		);
 		const tool = tools.find(entry => entry.name === "ast_edit");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing ast_edit tool");
 
 		const preview = await tool.execute("ast-edit-root-alias", {
 			ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
-			lang: "typescript",
-			path: "/",
-			glob: "**/*.ts",
+			path: "/**/*.ts",
 		});
 		const details = preview.details as { scopePath?: string; totalReplacements?: number } | undefined;
 
@@ -131,10 +148,10 @@ describe("tool path root alias", () => {
 		expect(details?.scopePath).toBe(".");
 		expect(details?.totalReplacements).toBe(1);
 
-		const pending = pendingActionStore.peek();
-		expect(pending).not.toBeNull();
-		if (!pending) throw new Error("Expected pending action");
-		await pending.apply("apply root alias rewrite");
+		queue.nextToolChoice();
+		const invoker = queue.peekInFlightInvoker()!;
+		expect(invoker).toBeDefined();
+		await invoker({ action: "apply", reason: "apply root alias rewrite" });
 
 		expect(await Bun.file(path.join(tempDir, "sample.ts")).text()).toContain(
 			"modernWrap(rootAliasSymbol, anotherValue)",

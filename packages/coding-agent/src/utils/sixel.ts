@@ -1,4 +1,4 @@
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env, $flag } from "@oh-my-pi/pi-utils";
 
 const SIXEL_START_REGEX = /\x1bP(?:[0-9;]*)q/u;
 const SIXEL_END_SEQUENCE = "\x1b\\";
@@ -15,7 +15,7 @@ const SIXEL_PLACEHOLDER_PREFIX = "__OMP_SIXEL_SEQUENCE_";
  */
 export function isSixelPassthroughEnabled(): boolean {
 	const forcedProtocol = $env.PI_FORCE_IMAGE_PROTOCOL?.trim().toLowerCase();
-	return forcedProtocol === "sixel" && $env.PI_ALLOW_SIXEL_PASSTHROUGH === "1";
+	return forcedProtocol === "sixel" && $flag("PI_ALLOW_SIXEL_PASSTHROUGH");
 }
 /** Returns true when the text contains a SIXEL start sequence. */
 export function containsSixelSequence(text: string): boolean {

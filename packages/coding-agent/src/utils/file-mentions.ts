@@ -8,8 +8,10 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { glob } from "@oh-my-pi/pi-natives";
-import { formatHashLines } from "../patch/hashline";
+import { formatAge, formatBytes, readImageMetadata } from "@oh-my-pi/pi-utils";
+import { formatHashLines } from "../edit/line-hash";
 import type { FileMentionMessage } from "../session/messages";
 import {
 	DEFAULT_MAX_BYTES,
@@ -18,10 +20,8 @@ import {
 	truncateHeadBytes,
 } from "../session/streaming-output";
 import { resolveReadPath } from "../tools/path-utils";
-import { formatAge, formatBytes } from "../tools/render-utils";
 import { fuzzyMatch } from "./fuzzy";
 import { formatDimensionNote, resizeImage } from "./image-resize";
-import { detectSupportedImageMimeTypeFromFile } from "./mime";
 
 /** Regex to match @filepath patterns in text */
 const FILE_MENTION_REGEX = /@([^\s@]+)/g;
@@ -304,7 +304,8 @@ export async function generateFileMentionMessages(
 				continue;
 			}
 
-			const mimeType = await detectSupportedImageMimeTypeFromFile(absolutePath);
+			const imageMetadata = await readImageMetadata(absolutePath);
+			const mimeType = imageMetadata?.mimeType;
 			if (mimeType) {
 				if (stat.size > MAX_AUTO_READ_IMAGE_BYTES) {
 					files.push({
@@ -321,7 +322,7 @@ export async function generateFileMentionMessages(
 				}
 
 				const base64Content = buffer.toBase64();
-				let image = { type: "image" as const, mimeType, data: base64Content };
+				let image: ImageContent = { type: "image", mimeType, data: base64Content };
 				let dimensionNote: string | undefined;
 
 				if (autoResizeImages) {
@@ -329,12 +330,12 @@ export async function generateFileMentionMessages(
 						const resized = await resizeImage({ type: "image", data: base64Content, mimeType });
 						dimensionNote = formatDimensionNote(resized);
 						image = {
-							type: "image" as const,
+							type: "image",
 							mimeType: resized.mimeType,
 							data: resized.data,
 						};
 					} catch {
-						image = { type: "image" as const, mimeType, data: base64Content };
+						image = { type: "image", mimeType, data: base64Content };
 					}
 				}
 

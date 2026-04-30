@@ -114,8 +114,10 @@ async function loadImpl<T>(
 	const results = await Promise.all(
 		providers.map(async provider => {
 			try {
-				const result = await logger.timeAsync(`capability:${capability.id}:${provider.id}`, () =>
-					provider.load(ctx),
+				const result = await logger.time(
+					`capability:${capability.id}:${provider.id}`,
+					provider.load.bind(provider),
+					ctx,
 				);
 				return { provider, result };
 			} catch (error) {

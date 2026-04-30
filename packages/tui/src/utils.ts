@@ -1,16 +1,58 @@
-import { sliceWithWidth } from "@oh-my-pi/pi-natives";
+import type { Ellipsis, ExtractSegmentsResult, SliceResult } from "@oh-my-pi/pi-natives";
+import {
+	extractSegments as nativeExtractSegments,
+	sliceWithWidth as nativeSliceWithWidth,
+	truncateToWidth as nativeTruncateToWidth,
+	wrapTextWithAnsi as nativeWrapTextWithAnsi,
+} from "@oh-my-pi/pi-natives";
 import { getDefaultTabWidth, getIndentation } from "@oh-my-pi/pi-utils";
 
-export { Ellipsis, extractSegments, sliceWithWidth, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-natives";
+export { Ellipsis } from "@oh-my-pi/pi-natives";
+
+export { getDefaultTabWidth, getIndentation } from "@oh-my-pi/pi-utils";
+
+export function sliceWithWidth(line: string, startCol: number, length: number, strict?: boolean | null): SliceResult {
+	return nativeSliceWithWidth(line, startCol, length, strict ?? null, getDefaultTabWidth());
+}
+
+export function truncateToWidth(
+	text: string,
+	maxWidth: number,
+	ellipsisKind?: Ellipsis | null,
+	pad?: boolean | null,
+): string {
+	return nativeTruncateToWidth(text, maxWidth, ellipsisKind ?? null, pad ?? null, getDefaultTabWidth());
+}
+
+export function wrapTextWithAnsi(text: string, width: number): string[] {
+	return nativeWrapTextWithAnsi(text, width, getDefaultTabWidth());
+}
+
+export function extractSegments(
+	line: string,
+	beforeEnd: number,
+	afterStart: number,
+	afterLen: number,
+	strictAfter: boolean,
+): ExtractSegmentsResult {
+	return nativeExtractSegments(line, beforeEnd, afterStart, afterLen, strictAfter, getDefaultTabWidth());
+}
 
 // Pre-allocated space buffer for padding
 const SPACE_BUFFER = " ".repeat(512);
 
+/**
+ * Tab width in columns for `file`, using `process.cwd()` as the project root for relative paths.
+ */
+export function getIndentationNoescape(file?: string): number {
+	return getIndentation(file, process.cwd());
+}
+
 /*
  * Replace tabs with configured spacing for consistent rendering.
  */
-export function replaceTabs(text: string): string {
-	return text.replaceAll("\t", getIndentation());
+export function replaceTabs(text: string, file?: string): string {
+	return text.replaceAll("\t", " ".repeat(getIndentation(file)));
 }
 
 /**
@@ -30,19 +72,6 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
  */
 export function getSegmenter(): Intl.Segmenter {
 	return segmenter;
-}
-
-/**
- * Calculate the visible width of a string in terminal columns.
- */
-function _isPrintableAscii(str: string): boolean {
-	for (let i = 0; i < str.length; i++) {
-		const code = str.charCodeAt(i);
-		if (code < 0x20 || code > 0x7e) {
-			return false;
-		}
-	}
-	return true;
 }
 
 export function visibleWidthRaw(str: string): number {

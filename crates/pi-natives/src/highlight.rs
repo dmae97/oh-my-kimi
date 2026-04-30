@@ -138,17 +138,14 @@ pub struct HighlightColors {
 	/// ANSI color for numeric literals.
 	pub number:      String,
 	/// ANSI color for type identifiers.
-	#[napi(js_name = "type")]
 	pub r#type:      String,
 	/// ANSI color for operators.
 	pub operator:    String,
 	/// ANSI color for punctuation tokens.
 	pub punctuation: String,
 	/// ANSI color for diff inserted lines.
-	#[napi(js_name = "inserted")]
 	pub inserted:    Option<String>,
 	/// ANSI color for diff deleted lines.
-	#[napi(js_name = "deleted")]
 	pub deleted:     Option<String>,
 }
 
@@ -168,9 +165,8 @@ const LANG_ALIASES: &[(&[&str], &str)] = &[
 	(&["cs", "csharp"], "C#"),
 	(&["php"], "PHP"),
 	(&["sh", "bash", "zsh", "shell"], "Bash"),
-	(&["fish"], "Shell-Unix-Generic"),
 	(&["ps1", "powershell"], "PowerShell"),
-	(&["html", "htm"], "HTML"),
+	(&["html", "htm", "astro", "vue", "svelte"], "HTML"),
 	(&["css"], "CSS"),
 	(&["scss"], "SCSS"),
 	(&["sass"], "Sass"),
@@ -182,7 +178,7 @@ const LANG_ALIASES: &[(&[&str], &str)] = &[
 	(&["md", "markdown"], "Markdown"),
 	(&["sql"], "SQL"),
 	(&["lua"], "Lua"),
-	(&["perl", "pl"], "Perl"),
+	(&["perl", "pl", "pm"], "Perl"),
 	(&["r"], "R"),
 	(&["scala"], "Scala"),
 	(&["clj", "clojure"], "Clojure"),
@@ -194,9 +190,9 @@ const LANG_ALIASES: &[(&[&str], &str)] = &[
 	(&["graphql", "gql"], "GraphQL"),
 	(&["proto", "protobuf"], "Protocol Buffers"),
 	(&["tf", "hcl", "terraform"], "Terraform"),
-	(&["dockerfile", "docker"], "Dockerfile"),
-	(&["makefile", "make"], "Makefile"),
-	(&["cmake"], "CMake"),
+	(&["dockerfile", "docker", "containerfile"], "Dockerfile"),
+	(&["makefile", "make", "just", "justfile"], "Makefile"),
+	(&["cmake", "cmakelists"], "CMake"),
 	(&["ini", "cfg", "conf", "config", "properties"], "INI"),
 	(&["diff", "patch"], "Diff"),
 	(&["gitignore", "gitattributes", "gitmodules"], "Git Ignore"),
@@ -359,7 +355,7 @@ fn find_syntax<'a>(ss: &'a SyntaxSet, lang: &str) -> Option<&'a SyntaxReference>
 /// # Returns
 /// Highlighted code with ANSI color codes, or the original code if highlighting
 /// fails.
-#[napi(js_name = "highlightCode")]
+#[napi]
 pub fn highlight_code(code: String, lang: Option<String>, colors: HighlightColors) -> String {
 	let inserted = colors.inserted.as_deref().unwrap_or("");
 	let deleted = colors.deleted.as_deref().unwrap_or("");
@@ -453,7 +449,7 @@ pub fn highlight_code(code: String, lang: Option<String>, colors: HighlightColor
 /// Check if a language is supported for highlighting.
 /// Returns true if the language has either direct support or a fallback
 /// mapping.
-#[napi(js_name = "supportsLanguage")]
+#[napi]
 pub fn supports_language(lang: String) -> bool {
 	if is_known_alias(&lang) {
 		return true;
@@ -465,7 +461,7 @@ pub fn supports_language(lang: String) -> bool {
 }
 
 /// Get list of supported languages.
-#[napi(js_name = "getSupportedLanguages")]
+#[napi]
 pub fn get_supported_languages() -> Vec<String> {
 	let ss = get_syntax_set();
 	ss.syntaxes().iter().map(|s| s.name.clone()).collect()

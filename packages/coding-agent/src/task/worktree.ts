@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { projfsOverlayStart, projfsOverlayStop } from "@oh-my-pi/pi-natives";
-import { getWorktreeDir, isEnoent, logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { $which, getWorktreeDir, isEnoent, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import * as git from "../utils/git";
 
@@ -348,7 +348,7 @@ export async function ensureFuseOverlay(baseCwd: string, id: string): Promise<st
 	const mergedDir = path.join(baseDir, "merged");
 
 	// Clean up any stale mount at this path (linux only)
-	const fusermount = Bun.which("fusermount3") ?? Bun.which("fusermount");
+	const fusermount = $which("fusermount3") ?? $which("fusermount");
 	if (fusermount) {
 		await $`${fusermount} -u ${mergedDir}`.quiet().nothrow();
 	}
@@ -358,7 +358,7 @@ export async function ensureFuseOverlay(baseCwd: string, id: string): Promise<st
 	await fs.mkdir(workDir, { recursive: true });
 	await fs.mkdir(mergedDir, { recursive: true });
 
-	const binary = Bun.which("fuse-overlayfs");
+	const binary = $which("fuse-overlayfs");
 	if (!binary) {
 		await fs.rm(baseDir, { recursive: true, force: true });
 		throw new Error(
@@ -380,7 +380,7 @@ export async function ensureFuseOverlay(baseCwd: string, id: string): Promise<st
 
 export async function cleanupFuseOverlay(mergedDir: string): Promise<void> {
 	try {
-		const fusermount = Bun.which("fusermount3") ?? Bun.which("fusermount");
+		const fusermount = $which("fusermount3") ?? $which("fusermount");
 		if (fusermount) {
 			await $`${fusermount} -u ${mergedDir}`.quiet().nothrow();
 		}
@@ -515,29 +515,61 @@ export async function mergeTaskBranches(
 	const merged: string[] = [];
 	const failed: string[] = [];
 
-	for (const { branchName } of branches) {
-		try {
-			await git.cherryPick(repoRoot, branchName);
-		} catch (err) {
-			await git.cherryPick.abort(repoRoot);
-			const stderr =
-				err instanceof git.GitCommandError
-					? err.result.stderr.trim()
-					: err instanceof Error
-						? err.message
-						: String(err);
-			failed.push(branchName);
-			return {
-				merged,
-				failed: [...failed, ...branches.slice(merged.length + failed.length).map(b => b.branchName)],
-				conflict: `${branchName}: ${stderr}`,
-			};
-		}
+	// Stash dirty working tree so cherry-pick can operate on a clean HEAD.
+	// Without this, cherry-pick refuses to run when uncommitted changes exist.
+	const didStash = await git.stash.push(repoRoot, "omp-task-merge");
 
-		merged.push(branchName);
+	let conflictResult: MergeBranchResult | undefined;
+
+	try {
+		for (const { branchName } of branches) {
+			try {
+				await git.cherryPick(repoRoot, branchName);
+			} catch (err) {
+				try {
+					await git.cherryPick.abort(repoRoot);
+				} catch {
+					/* no state to abort */
+				}
+				const stderr =
+					err instanceof git.GitCommandError
+						? err.result.stderr.trim()
+						: err instanceof Error
+							? err.message
+							: String(err);
+				failed.push(branchName);
+				conflictResult = {
+					merged,
+					failed: [...failed, ...branches.slice(merged.length + failed.length).map(b => b.branchName)],
+					conflict: `${branchName}: ${stderr}`,
+				};
+				break;
+			}
+
+			merged.push(branchName);
+		}
+	} finally {
+		if (didStash) {
+			try {
+				await git.stash.pop(repoRoot, { index: true });
+			} catch {
+				// Stash-pop conflicts mean the replayed changes clash with the user's
+				// uncommitted edits. Treat this as a merge failure so the caller preserves
+				// recovery branches instead of reporting success and deleting them.
+				logger.warn("Failed to restore stashed changes after task merge; stash entry preserved");
+				if (!conflictResult) {
+					conflictResult = {
+						merged,
+						failed: merged,
+						conflict:
+							"stash pop: cherry-picked changes conflict with uncommitted edits. Run `git stash pop` and resolve manually.",
+					};
+				}
+			}
+		}
 	}
 
-	return { merged, failed };
+	return conflictResult ?? { merged, failed };
 }
 
 /** Clean up temporary task branches. */

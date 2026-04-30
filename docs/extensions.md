@@ -114,9 +114,12 @@ Core methods:
 - `registerMessageRenderer`
 - `sendMessage`, `sendUserMessage`, `appendEntry`
 - `getActiveTools`, `getAllTools`, `setActiveTools`
+- `getSessionName`, `setSessionName`
 - `setModel`, `getThinkingLevel`, `setThinkingLevel`
 - `registerProvider`
 - `events` (shared event bus)
+
+In interactive mode, `input` handlers run before the built-in first-message auto-title check. Extensions that call `await pi.setSessionName(...)` from `input` can set the persisted session name and prevent the default auto-generated title from running for that session.
 
 Also exposed:
 

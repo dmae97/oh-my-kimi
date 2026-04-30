@@ -58,7 +58,7 @@ describe("createTools", () => {
 		expect(names).toContain("read");
 		expect(names).toContain("edit");
 		expect(names).toContain("write");
-		expect(names).toContain("grep");
+		expect(names).toContain("search");
 		expect(names).toContain("find");
 		expect(names).toContain("lsp");
 		expect(names).toContain("notebook");
@@ -67,33 +67,61 @@ describe("createTools", () => {
 		expect(names).toContain("web_search");
 		expect(names).toContain("exit_plan_mode");
 		expect(names).not.toContain("fetch");
+		expect(names).not.toContain("vim");
+	});
+
+	it("keeps edit visible when vim edit mode is active", async () => {
+		const session = createTestSession({
+			settings: createSettingsWithOverrides({
+				"edit.mode": "vim",
+			}),
+		});
+		const tools = await createTools(session);
+		const names = tools.map(t => t.name);
+
+		expect(names).toContain("edit");
+		expect(names).not.toContain("vim");
 	});
 
 	it("includes bash and python when python mode is both", async () => {
 		const session = createTestSession({
 			settings: createSettingsWithOverrides({
 				"python.toolMode": "both",
-				"python.kernelMode": "session",
 			}),
 		});
 		const tools = await createTools(session);
 		const names = tools.map(t => t.name);
 
-		expect(names).toContain("bash");
 		expect(names).toContain("python");
+		expect(names).toContain("bash");
 	});
 
-	it("includes bash only when python mode is bash-only", async () => {
+	it("includes bash when python mode is bash-only", async () => {
 		const session = createTestSession({
 			settings: createSettingsWithOverrides({
 				"python.toolMode": "bash-only",
-				"python.kernelMode": "session",
 			}),
 		});
 		const tools = await createTools(session);
 		const names = tools.map(t => t.name);
 
 		expect(names).toContain("bash");
+		expect(names).not.toContain("python");
+	});
+
+	it("includes bash when python unavailable and python requested", async () => {
+		const session = createTestSession();
+		vi.spyOn(await import("@oh-my-pi/pi-coding-agent/ipy/kernel"), "checkPythonKernelAvailability").mockResolvedValue(
+			{
+				ok: false,
+				reason: "missing python",
+			},
+		);
+		const tools = await createTools(session, ["python"]);
+		const names = tools.map(t => t.name);
+
+		expect(names).toContain("bash");
+		expect(names).toContain("exit_plan_mode");
 		expect(names).not.toContain("python");
 	});
 
@@ -121,6 +149,18 @@ describe("createTools", () => {
 		expect(names).toEqual(["read", "write", "exit_plan_mode"]);
 	});
 
+	it("ignores vim as an unknown requested tool even when vim edit mode is active", async () => {
+		const session = createTestSession({
+			settings: createSettingsWithOverrides({
+				"edit.mode": "vim",
+			}),
+		});
+		const tools = await createTools(session, ["read", "vim"]);
+		const names = tools.map(t => t.name);
+
+		expect(names).toEqual(["read", "exit_plan_mode"]);
+	});
+
 	it("lowercases requested tool subset", async () => {
 		const session = createTestSession();
 		const tools = await createTools(session, ["Read", "Write"]);
@@ -137,12 +177,12 @@ describe("createTools", () => {
 		expect(names).toEqual(["report_finding", "exit_plan_mode"]);
 	});
 
-	it("includes submit_result tool when required", async () => {
-		const session = createTestSession({ requireSubmitResultTool: true });
+	it("includes yield tool when required", async () => {
+		const session = createTestSession({ requireYieldTool: true });
 		const tools = await createTools(session);
 		const names = tools.map(t => t.name);
 
-		expect(names).toContain("submit_result");
+		expect(names).toContain("yield");
 	});
 
 	it("excludes ask tool when hasUI is false", async () => {
@@ -161,101 +201,34 @@ describe("createTools", () => {
 		expect(names).toContain("ask");
 	});
 
-	it("excludes render_mermaid tool by default", async () => {
-		const session = createTestSession();
+	it("filters disabled builtin tools by settings", async () => {
+		const session = createTestSession({
+			settings: createSettingsWithOverrides({
+				"find.enabled": false,
+				"search.enabled": false,
+				"astGrep.enabled": false,
+				"astEdit.enabled": false,
+				"renderMermaid.enabled": false,
+				"web_search.enabled": false,
+				"notebook.enabled": false,
+				"browser.enabled": false,
+				"inspect_image.enabled": false,
+				"calc.enabled": false,
+			}),
+		});
 		const tools = await createTools(session);
 		const names = tools.map(t => t.name);
 
+		expect(names).not.toContain("find");
+		expect(names).not.toContain("search");
+		expect(names).not.toContain("ast_grep");
+		expect(names).not.toContain("ast_edit");
 		expect(names).not.toContain("render_mermaid");
-	});
-
-	it("includes render_mermaid tool when enabled", async () => {
-		const session = createTestSession({
-			settings: createSettingsWithOverrides({
-				"renderMermaid.enabled": true,
-			}),
-		});
-		const tools = await createTools(session);
-		const names = tools.map(t => t.name);
-
-		expect(names).toContain("render_mermaid");
-	});
-
-	it("excludes GitHub CLI tools by default", async () => {
-		const session = createTestSession();
-		const tools = await createTools(session);
-		const names = tools.map(t => t.name);
-
-		expect(names).not.toContain("gh_repo_view");
-		expect(names).not.toContain("gh_issue_view");
-		expect(names).not.toContain("gh_pr_view");
-		expect(names).not.toContain("gh_pr_diff");
-		expect(names).not.toContain("gh_pr_checkout");
-		expect(names).not.toContain("gh_pr_push");
-		expect(names).not.toContain("gh_run_watch");
-		expect(names).not.toContain("gh_search_issues");
-		expect(names).not.toContain("gh_search_prs");
-	});
-
-	it("includes GitHub CLI tools when enabled and gh is available", async () => {
-		vi.spyOn(Bun, "which").mockImplementation(command => (command === "gh" ? "/usr/bin/gh" : null));
-		const session = createTestSession({
-			settings: createSettingsWithOverrides({
-				"github.enabled": true,
-			}),
-		});
-		const tools = await createTools(session);
-		const names = tools.map(t => t.name);
-
-		expect(names).toContain("gh_repo_view");
-		expect(names).toContain("gh_issue_view");
-		expect(names).toContain("gh_pr_view");
-		expect(names).toContain("gh_pr_diff");
-		expect(names).toContain("gh_pr_checkout");
-		expect(names).toContain("gh_pr_push");
-		expect(names).toContain("gh_run_watch");
-		expect(names).toContain("gh_search_issues");
-		expect(names).toContain("gh_search_prs");
-	});
-
-	it("excludes inspect_image tool by default", async () => {
-		const session = createTestSession();
-		const tools = await createTools(session);
-		const names = tools.map(t => t.name);
-
+		expect(names).not.toContain("web_search");
+		expect(names).not.toContain("notebook");
+		expect(names).not.toContain("browser");
 		expect(names).not.toContain("inspect_image");
-	});
-
-	it("includes inspect_image tool when enabled", async () => {
-		const session = createTestSession({
-			settings: createSettingsWithOverrides({
-				"inspect_image.enabled": true,
-			}),
-		});
-		const tools = await createTools(session);
-		const names = tools.map(t => t.name);
-
-		expect(names).toContain("inspect_image");
-	});
-
-	it("excludes search_tool_bm25 by default", async () => {
-		const session = createTestSession();
-		const tools = await createTools(session);
-		const names = tools.map(t => t.name);
-
-		expect(names).not.toContain("search_tool_bm25");
-	});
-
-	it("excludes search_tool_bm25 when MCP tool discovery lacks execution hooks", async () => {
-		const session = createTestSession({
-			settings: createSettingsWithOverrides({
-				"mcp.discoveryMode": true,
-			}),
-		});
-		const tools = await createTools(session);
-		const names = tools.map(t => t.name);
-
-		expect(names).not.toContain("search_tool_bm25");
+		expect(names).not.toContain("calc");
 	});
 
 	it("includes search_tool_bm25 when MCP tool discovery is enabled and executable", async () => {
@@ -275,8 +248,9 @@ describe("createTools", () => {
 		expect(Object.keys(HIDDEN_TOOLS).sort()).toEqual([
 			"exit_plan_mode",
 			"report_finding",
+			"report_tool_issue",
 			"resolve",
-			"submit_result",
+			"yield",
 		]);
 	});
 });

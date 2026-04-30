@@ -5,7 +5,7 @@
 
 mod parsers;
 
-use std::{borrow::Cow, collections::HashMap, fmt, path::Path};
+use std::{borrow::Cow, collections::HashMap, fmt, path::Path, sync::LazyLock};
 
 use ast_grep_core::{
 	Doc, Language, Node,
@@ -13,6 +13,7 @@ use ast_grep_core::{
 	meta_var::MetaVariable,
 	tree_sitter::{LanguageExt, StrDoc, TSLanguage, TSRange},
 };
+use phf::phf_map;
 
 /// Implements a stub language (no expando / `pre_process_pattern` needed).
 /// Use when the language grammar accepts `$VAR` as valid identifiers.
@@ -106,17 +107,29 @@ macro_rules! impl_lang_expando {
 impl_lang_expando!(C, language_c, '𐀀');
 impl_lang_expando!(Cpp, language_cpp, '𐀀');
 impl_lang_expando!(CSharp, language_c_sharp, 'µ');
+impl_lang_expando!(Cmake, language_cmake, 'µ');
 impl_lang_expando!(Css, language_css, '_');
+impl_lang_expando!(Dockerfile, language_dockerfile, 'µ');
 impl_lang_expando!(Elixir, language_elixir, 'µ');
+impl_lang_expando!(Erlang, language_erlang, 'µ');
 impl_lang_expando!(Go, language_go, 'µ');
+impl_lang!(Graphql, language_graphql);
 impl_lang_expando!(Haskell, language_haskell, 'µ');
 impl_lang_expando!(Hcl, language_hcl, 'µ');
+impl_lang_expando!(Ini, language_ini, 'µ');
+impl_lang_expando!(Just, language_just, 'µ');
 impl_lang_expando!(Kotlin, language_kotlin, 'µ');
 impl_lang_expando!(Nix, language_nix, '_');
+impl_lang_expando!(Ocaml, language_ocaml, 'µ');
+impl_lang_expando!(Perl, language_perl, 'µ');
 impl_lang_expando!(Php, language_php, 'µ');
+impl_lang_expando!(Powershell, language_powershell, 'µ');
+impl_lang_expando!(Proto, language_proto, 'µ');
 impl_lang_expando!(Python, language_python, 'µ');
+impl_lang_expando!(R, language_r, 'µ');
 impl_lang_expando!(Ruby, language_ruby, 'µ');
 impl_lang_expando!(Rust, language_rust, 'µ');
+impl_lang_expando!(Sql, language_sql, 'µ');
 impl_lang_expando!(Swift, language_swift, 'µ');
 
 // New expando languages
@@ -127,9 +140,11 @@ impl_lang_expando!(Odin, language_odin, 'µ');
 impl_lang_expando!(Julia, language_julia, 'µ');
 impl_lang_expando!(Verilog, language_verilog, 'µ');
 impl_lang_expando!(Zig, language_zig, 'µ');
+impl_lang_expando!(Tlaplus, language_tlaplus, 'µ');
 
 // ── Stub languages ($ accepted in grammar) ──────────────────────────────
 
+impl_lang!(Astro, language_astro);
 impl_lang!(Bash, language_bash);
 impl_lang!(Clojure, language_clojure);
 impl_lang!(Java, language_java);
@@ -138,8 +153,10 @@ impl_lang!(Json, language_json);
 impl_lang!(Lua, language_lua);
 impl_lang!(Scala, language_scala);
 impl_lang!(Solidity, language_solidity);
+impl_lang!(Svelte, language_svelte);
 impl_lang!(Tsx, language_tsx);
 impl_lang!(TypeScript, language_typescript);
+impl_lang!(Vue, language_vue);
 impl_lang!(Yaml, language_yaml);
 
 // New stub languages
@@ -148,6 +165,7 @@ impl_lang!(Toml, language_toml);
 impl_lang!(Diff, language_diff);
 impl_lang!(Xml, language_xml);
 impl_lang!(Regex, language_regex);
+impl_lang!(Dart, language_dart);
 
 // ── Html (custom implementation with injection support) ──────────────────
 
@@ -249,21 +267,29 @@ fn node_to_range<D: Doc>(node: &Node<D>) -> TSRange {
 /// All supported languages for ast-grep structural search/replace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SupportLang {
+	Astro,
 	Bash,
 	C,
+	Cmake,
 	Cpp,
 	CSharp,
+	Dart,
 	Clojure,
 	Css,
 	Diff,
+	Dockerfile,
 	Elixir,
+	Erlang,
 	Go,
+	Graphql,
 	Haskell,
 	Hcl,
 	Html,
+	Ini,
 	Java,
 	JavaScript,
 	Json,
+	Just,
 	Julia,
 	Kotlin,
 	Lua,
@@ -271,33 +297,49 @@ pub enum SupportLang {
 	Markdown,
 	Nix,
 	ObjC,
+	Ocaml,
 	Odin,
+	Perl,
 	Php,
+	Powershell,
+	Proto,
 	Python,
+	R,
 	Regex,
 	Ruby,
 	Rust,
 	Scala,
 	Solidity,
+	Sql,
 	Starlark,
+	Svelte,
 	Swift,
 	Toml,
+	Tlaplus,
 	Tsx,
 	TypeScript,
 	Verilog,
+	Vue,
 	Xml,
 	Yaml,
 	Zig,
 }
 
+static SORTED_ALIASES: LazyLock<Box<[&'static str]>> = LazyLock::new(|| {
+	let mut aliases = LANG_ALIASES.keys().copied().collect::<Box<[_]>>();
+	aliases.sort_unstable();
+	aliases
+});
+
 impl SupportLang {
 	pub const fn all_langs() -> &'static [Self] {
 		use SupportLang::*;
 		&[
-			Bash, C, Cpp, CSharp, Clojure, Css, Diff, Elixir, Go, Haskell, Hcl, Html, Java,
-			JavaScript, Json, Julia, Kotlin, Lua, Make, Markdown, Nix, ObjC, Odin, Php, Python, Regex,
-			Ruby, Rust, Scala, Solidity, Starlark, Swift, Toml, Tsx, TypeScript, Verilog, Xml, Yaml,
-			Zig,
+			Astro, Bash, C, Cmake, Cpp, CSharp, Dart, Clojure, Css, Diff, Dockerfile, Elixir, Erlang,
+			Go, Graphql, Haskell, Hcl, Html, Ini, Java, JavaScript, Json, Just, Julia, Kotlin, Lua,
+			Make, Markdown, Nix, ObjC, Ocaml, Odin, Perl, Php, Powershell, Proto, Python, R, Regex,
+			Ruby, Rust, Scala, Solidity, Sql, Starlark, Svelte, Swift, Toml, Tlaplus, Tsx, TypeScript,
+			Verilog, Vue, Xml, Yaml, Zig,
 		]
 	}
 
@@ -305,21 +347,29 @@ impl SupportLang {
 	/// file-type inference results, and error messages.
 	pub const fn canonical_name(self) -> &'static str {
 		match self {
+			Self::Astro => "astro",
 			Self::Bash => "bash",
 			Self::C => "c",
+			Self::Cmake => "cmake",
 			Self::Cpp => "cpp",
 			Self::CSharp => "csharp",
+			Self::Dart => "dart",
 			Self::Clojure => "clojure",
 			Self::Css => "css",
 			Self::Diff => "diff",
+			Self::Dockerfile => "dockerfile",
 			Self::Elixir => "elixir",
+			Self::Erlang => "erlang",
 			Self::Go => "go",
+			Self::Graphql => "graphql",
 			Self::Haskell => "haskell",
 			Self::Hcl => "hcl",
 			Self::Html => "html",
+			Self::Ini => "ini",
 			Self::Java => "java",
 			Self::JavaScript => "javascript",
 			Self::Json => "json",
+			Self::Just => "just",
 			Self::Julia => "julia",
 			Self::Kotlin => "kotlin",
 			Self::Lua => "lua",
@@ -327,24 +377,42 @@ impl SupportLang {
 			Self::Markdown => "markdown",
 			Self::Nix => "nix",
 			Self::ObjC => "objc",
+			Self::Ocaml => "ocaml",
 			Self::Odin => "odin",
+			Self::Perl => "perl",
 			Self::Php => "php",
+			Self::Powershell => "powershell",
+			Self::Proto => "protobuf",
 			Self::Python => "python",
+			Self::R => "r",
 			Self::Regex => "regex",
 			Self::Ruby => "ruby",
 			Self::Rust => "rust",
 			Self::Scala => "scala",
 			Self::Solidity => "solidity",
+			Self::Sql => "sql",
 			Self::Starlark => "starlark",
+			Self::Svelte => "svelte",
 			Self::Swift => "swift",
 			Self::Toml => "toml",
+			Self::Tlaplus => "tlaplus",
 			Self::Tsx => "tsx",
 			Self::TypeScript => "typescript",
 			Self::Verilog => "verilog",
+			Self::Vue => "vue",
 			Self::Xml => "xml",
 			Self::Yaml => "yaml",
 			Self::Zig => "zig",
 		}
+	}
+
+	pub fn from_alias(value: &str) -> Option<Self> {
+		let lowered = value.trim().to_ascii_lowercase();
+		LANG_ALIASES.get(lowered.as_str()).copied()
+	}
+
+	pub fn sorted_aliases() -> &'static [&'static str] {
+		&SORTED_ALIASES
 	}
 }
 
@@ -357,24 +425,32 @@ impl fmt::Display for SupportLang {
 // ── Dispatch macro ──────────────────────────────────────────────────────
 
 macro_rules! execute_lang_method {
-	($me:path, $method:ident, $($pname:tt),*) => {
+	($me:expr, $method:ident, $($pname:tt),*) => {
 		use SupportLang as S;
-		match $me {
+		match *$me {
+			S::Astro => Astro.$method($($pname,)*),
 			S::Bash => Bash.$method($($pname,)*),
 			S::C => C.$method($($pname,)*),
+			S::Cmake => Cmake.$method($($pname,)*),
 			S::Cpp => Cpp.$method($($pname,)*),
 			S::CSharp => CSharp.$method($($pname,)*),
+			S::Dart => Dart.$method($($pname,)*),
 			S::Clojure => Clojure.$method($($pname,)*),
 			S::Css => Css.$method($($pname,)*),
 			S::Diff => Diff.$method($($pname,)*),
+			S::Dockerfile => Dockerfile.$method($($pname,)*),
 			S::Elixir => Elixir.$method($($pname,)*),
+			S::Erlang => Erlang.$method($($pname,)*),
 			S::Go => Go.$method($($pname,)*),
+			S::Graphql => Graphql.$method($($pname,)*),
 			S::Haskell => Haskell.$method($($pname,)*),
 			S::Hcl => Hcl.$method($($pname,)*),
 			S::Html => Html.$method($($pname,)*),
+			S::Ini => Ini.$method($($pname,)*),
 			S::Java => Java.$method($($pname,)*),
 			S::JavaScript => JavaScript.$method($($pname,)*),
 			S::Json => Json.$method($($pname,)*),
+			S::Just => Just.$method($($pname,)*),
 			S::Julia => Julia.$method($($pname,)*),
 			S::Kotlin => Kotlin.$method($($pname,)*),
 			S::Lua => Lua.$method($($pname,)*),
@@ -382,20 +458,29 @@ macro_rules! execute_lang_method {
 			S::Markdown => Markdown.$method($($pname,)*),
 			S::Nix => Nix.$method($($pname,)*),
 			S::ObjC => ObjC.$method($($pname,)*),
+			S::Ocaml => Ocaml.$method($($pname,)*),
 			S::Odin => Odin.$method($($pname,)*),
+			S::Perl => Perl.$method($($pname,)*),
 			S::Php => Php.$method($($pname,)*),
+			S::Powershell => Powershell.$method($($pname,)*),
+			S::Proto => Proto.$method($($pname,)*),
 			S::Python => Python.$method($($pname,)*),
+			S::R => R.$method($($pname,)*),
 			S::Regex => Regex.$method($($pname,)*),
 			S::Ruby => Ruby.$method($($pname,)*),
 			S::Rust => Rust.$method($($pname,)*),
 			S::Scala => Scala.$method($($pname,)*),
 			S::Solidity => Solidity.$method($($pname,)*),
+			S::Sql => Sql.$method($($pname,)*),
 			S::Starlark => Starlark.$method($($pname,)*),
+			S::Svelte => Svelte.$method($($pname,)*),
 			S::Swift => Swift.$method($($pname,)*),
 			S::Toml => Toml.$method($($pname,)*),
+			S::Tlaplus => Tlaplus.$method($($pname,)*),
 			S::Tsx => Tsx.$method($($pname,)*),
 			S::TypeScript => TypeScript.$method($($pname,)*),
 			S::Verilog => Verilog.$method($($pname,)*),
+			S::Vue => Vue.$method($($pname,)*),
 			S::Xml => Xml.$method($($pname,)*),
 			S::Yaml => Yaml.$method($($pname,)*),
 			S::Zig => Zig.$method($($pname,)*),
@@ -455,23 +540,31 @@ impl LanguageExt for SupportLang {
 const fn extensions(lang: SupportLang) -> &'static [&'static str] {
 	use SupportLang::*;
 	match lang {
+		Astro => &["astro"],
 		Bash => {
 			&["bash", "bats", "cgi", "command", "env", "fcgi", "ksh", "sh", "tmux", "tool", "zsh"]
 		},
 		C => &["c", "h"],
+		Cmake => &["cmake"],
 		Cpp => &["cc", "hpp", "cpp", "c++", "hh", "cxx", "cu", "ino"],
 		CSharp => &["cs"],
+		Dart => &["dart"],
 		Clojure => &["clj", "cljs", "cljc", "edn"],
 		Css => &["css", "scss"],
 		Diff => &["diff", "patch"],
+		Dockerfile => &["dockerfile"],
 		Elixir => &["ex", "exs"],
+		Erlang => &["erl", "hrl"],
 		Go => &["go"],
+		Graphql => &["graphql", "gql"],
 		Haskell => &["hs"],
 		Hcl => &["hcl", "tf", "tfvars"],
 		Html => &["html", "htm", "xhtml"],
+		Ini => &["ini", "cfg", "conf", "properties"],
 		Java => &["java"],
 		JavaScript => &["cjs", "js", "mjs", "jsx"],
 		Json => &["json"],
+		Just => &[],
 		Julia => &["jl"],
 		Kotlin => &["kt", "ktm", "kts"],
 		Lua => &["lua"],
@@ -479,20 +572,29 @@ const fn extensions(lang: SupportLang) -> &'static [&'static str] {
 		Markdown => &["md", "markdown", "mdx"],
 		Nix => &["nix"],
 		ObjC => &["m"],
+		Ocaml => &["ml"],
 		Odin => &["odin"],
+		Perl => &["pl", "pm"],
 		Php => &["php"],
+		Powershell => &["ps1", "psm1"],
+		Proto => &["proto"],
 		Python => &["py", "py3", "pyi", "bzl"],
-		Regex => &[], // regex has no file extension
+		R => &["r"],
+		Regex => &[],
 		Ruby => &["rb", "rbw", "gemspec"],
 		Rust => &["rs"],
 		Scala => &["scala", "sc", "sbt"],
 		Solidity => &["sol"],
+		Sql => &["sql"],
 		Starlark => &["star", "bzl"],
+		Svelte => &["svelte"],
 		Swift => &["swift"],
 		Toml => &["toml"],
+		Tlaplus => &["tla"],
 		Tsx => &["tsx"],
 		TypeScript => &["ts", "cts", "mts"],
 		Verilog => &["v", "sv", "svh", "vh"],
+		Vue => &["vue"],
 		Xml => &["xml", "xsl", "xslt", "svg", "plist"],
 		Yaml => &["yaml", "yml"],
 		Zig => &["zig"],
@@ -501,17 +603,183 @@ const fn extensions(lang: SupportLang) -> &'static [&'static str] {
 
 /// Guess language from file extension.
 fn from_extension(path: &Path) -> Option<SupportLang> {
-	let ext = path.extension()?.to_str()?;
-	// Special cases: Makefile has no extension
-	if ext.is_empty() {
-		let name = path.file_name()?.to_str()?;
-		return match name {
-			"Makefile" | "makefile" | "GNUmakefile" => Some(SupportLang::Make),
-			_ => None,
-		};
+	let name = path.file_name()?.to_str()?;
+	if name == "Makefile" || name == "makefile" || name == "GNUmakefile" {
+		return Some(SupportLang::Make);
 	}
+	if name == "Justfile" || name == "justfile" {
+		return Some(SupportLang::Just);
+	}
+	if name == "CMakeLists.txt" {
+		return Some(SupportLang::Cmake);
+	}
+	if name == "Dockerfile"
+		|| name == "dockerfile"
+		|| name.starts_with("Dockerfile.")
+		|| name.starts_with("dockerfile.")
+		|| name == "Containerfile"
+		|| name == "containerfile"
+	{
+		return Some(SupportLang::Dockerfile);
+	}
+
+	let ext = path.extension()?.to_str()?;
 	SupportLang::all_langs()
 		.iter()
 		.copied()
 		.find(|&l| extensions(l).contains(&ext))
 }
+
+static LANG_ALIASES: phf::Map<&'static str, SupportLang> = phf_map! {
+"astro"          => SupportLang::Astro,
+"bash"           => SupportLang::Bash,
+"sh"             => SupportLang::Bash,
+"zsh"            => SupportLang::Bash,
+"ksh"            => SupportLang::Bash,
+"bats"           => SupportLang::Bash,
+"c"              => SupportLang::C,
+"h"              => SupportLang::C,
+"cmake"          => SupportLang::Cmake,
+"cpp"            => SupportLang::Cpp,
+"c++"            => SupportLang::Cpp,
+"cc"             => SupportLang::Cpp,
+"cxx"            => SupportLang::Cpp,
+"hh"             => SupportLang::Cpp,
+"hpp"            => SupportLang::Cpp,
+"cu"             => SupportLang::Cpp,
+"ino"            => SupportLang::Cpp,
+"csharp"         => SupportLang::CSharp,
+"c#"             => SupportLang::CSharp,
+"cs"             => SupportLang::CSharp,
+"dart"           => SupportLang::Dart,
+"css"            => SupportLang::Css,
+"clj"            => SupportLang::Clojure,
+"cljc"           => SupportLang::Clojure,
+"cljs"           => SupportLang::Clojure,
+"clojure"        => SupportLang::Clojure,
+"clojurescript"  => SupportLang::Clojure,
+"edn"            => SupportLang::Clojure,
+"diff"           => SupportLang::Diff,
+"patch"          => SupportLang::Diff,
+"docker"         => SupportLang::Dockerfile,
+"dockerfile"     => SupportLang::Dockerfile,
+"containerfile"  => SupportLang::Dockerfile,
+"elixir"         => SupportLang::Elixir,
+"ex"             => SupportLang::Elixir,
+"exs"            => SupportLang::Elixir,
+"erlang"         => SupportLang::Erlang,
+"erl"            => SupportLang::Erlang,
+"hrl"            => SupportLang::Erlang,
+"go"             => SupportLang::Go,
+"golang"         => SupportLang::Go,
+"graphql"        => SupportLang::Graphql,
+"gql"            => SupportLang::Graphql,
+"haskell"        => SupportLang::Haskell,
+"hs"             => SupportLang::Haskell,
+"hcl"            => SupportLang::Hcl,
+"tf"             => SupportLang::Hcl,
+"tfvars"         => SupportLang::Hcl,
+"terraform"      => SupportLang::Hcl,
+"html"           => SupportLang::Html,
+"htm"            => SupportLang::Html,
+"xhtml"          => SupportLang::Html,
+"ini"            => SupportLang::Ini,
+"cfg"            => SupportLang::Ini,
+"conf"           => SupportLang::Ini,
+"config"         => SupportLang::Ini,
+"properties"     => SupportLang::Ini,
+"java"           => SupportLang::Java,
+"javascript"     => SupportLang::JavaScript,
+"js"             => SupportLang::JavaScript,
+"jsx"            => SupportLang::JavaScript,
+"mjs"            => SupportLang::JavaScript,
+"cjs"            => SupportLang::JavaScript,
+"json"           => SupportLang::Json,
+"just"           => SupportLang::Just,
+"justfile"       => SupportLang::Just,
+"julia"          => SupportLang::Julia,
+"jl"             => SupportLang::Julia,
+"kotlin"         => SupportLang::Kotlin,
+"kt"             => SupportLang::Kotlin,
+"kts"            => SupportLang::Kotlin,
+"ktm"            => SupportLang::Kotlin,
+"lua"            => SupportLang::Lua,
+"make"           => SupportLang::Make,
+"makefile"       => SupportLang::Make,
+"gnumake"        => SupportLang::Make,
+"mk"             => SupportLang::Make,
+"mak"            => SupportLang::Make,
+"markdown"       => SupportLang::Markdown,
+"md"             => SupportLang::Markdown,
+"mdx"            => SupportLang::Markdown,
+"nix"            => SupportLang::Nix,
+"objc"           => SupportLang::ObjC,
+"obj-c"          => SupportLang::ObjC,
+"objective-c"    => SupportLang::ObjC,
+"m"              => SupportLang::ObjC,
+"mm"             => SupportLang::ObjC,
+"ocaml"          => SupportLang::Ocaml,
+"ml"             => SupportLang::Ocaml,
+"odin"           => SupportLang::Odin,
+"perl"           => SupportLang::Perl,
+"pl"             => SupportLang::Perl,
+"pm"             => SupportLang::Perl,
+"php"            => SupportLang::Php,
+"powershell"     => SupportLang::Powershell,
+"ps1"            => SupportLang::Powershell,
+"psm1"           => SupportLang::Powershell,
+"protobuf"       => SupportLang::Proto,
+"proto"          => SupportLang::Proto,
+"python"         => SupportLang::Python,
+"py"             => SupportLang::Python,
+"py3"            => SupportLang::Python,
+"pyi"            => SupportLang::Python,
+"r"              => SupportLang::R,
+"regex"          => SupportLang::Regex,
+"re"             => SupportLang::Regex,
+"ruby"           => SupportLang::Ruby,
+"rb"             => SupportLang::Ruby,
+"rbw"            => SupportLang::Ruby,
+"gemspec"        => SupportLang::Ruby,
+"rust"           => SupportLang::Rust,
+"rs"             => SupportLang::Rust,
+"scala"          => SupportLang::Scala,
+"sc"             => SupportLang::Scala,
+"sbt"            => SupportLang::Scala,
+"solidity"       => SupportLang::Solidity,
+"sol"            => SupportLang::Solidity,
+"sql"            => SupportLang::Sql,
+"starlark"       => SupportLang::Starlark,
+"star"           => SupportLang::Starlark,
+"bzl"            => SupportLang::Starlark,
+"bazel"          => SupportLang::Starlark,
+"skylark"        => SupportLang::Starlark,
+"svelte"         => SupportLang::Svelte,
+"swift"          => SupportLang::Swift,
+"toml"           => SupportLang::Toml,
+"tla"            => SupportLang::Tlaplus,
+"tla+"           => SupportLang::Tlaplus,
+"tlaplus"        => SupportLang::Tlaplus,
+"pluscal"        => SupportLang::Tlaplus,
+"pcal"           => SupportLang::Tlaplus,
+"tsx"            => SupportLang::Tsx,
+"typescript"     => SupportLang::TypeScript,
+"ts"             => SupportLang::TypeScript,
+"mts"            => SupportLang::TypeScript,
+"cts"            => SupportLang::TypeScript,
+"verilog"        => SupportLang::Verilog,
+"systemverilog"  => SupportLang::Verilog,
+"sv"             => SupportLang::Verilog,
+"svh"            => SupportLang::Verilog,
+"vh"             => SupportLang::Verilog,
+"v"              => SupportLang::Verilog,
+"vue"            => SupportLang::Vue,
+"xml"            => SupportLang::Xml,
+"xsl"            => SupportLang::Xml,
+"xslt"           => SupportLang::Xml,
+"svg"            => SupportLang::Xml,
+"plist"          => SupportLang::Xml,
+"yaml"           => SupportLang::Yaml,
+"yml"            => SupportLang::Yaml,
+"zig"            => SupportLang::Zig,
+};

@@ -44,11 +44,10 @@ export interface MarkdownTheme {
 	underline: (text: string) => string;
 	highlightCode?: (code: string, lang?: string) => string[];
 	/**
-	 * Lookup a pre-rendered mermaid ASCII rendering by source hash.
-	 * Hash is computed as `Bun.hash.xxHash64(source.trim())`.
+	 * Resolve a mermaid ASCII rendering by fenced block source text.
 	 * Return null to fall back to fenced code rendering.
 	 */
-	getMermaidAscii?: (sourceHash: bigint) => string | null;
+	resolveMermaidAscii?: (source: string) => string | null;
 	symbols: SymbolTheme;
 }
 
@@ -324,9 +323,8 @@ export class Markdown implements Component {
 
 			case "code": {
 				// Handle mermaid diagrams with ASCII rendering when available
-				if (token.lang === "mermaid" && this.#theme.getMermaidAscii) {
-					const hash = Bun.hash.xxHash64(token.text.trim());
-					const ascii = this.#theme.getMermaidAscii(hash);
+				if (token.lang === "mermaid" && this.#theme.resolveMermaidAscii) {
+					const ascii = this.#theme.resolveMermaidAscii(token.text);
 
 					if (ascii) {
 						for (const asciiLine of Bun.stripANSI(ascii).split("\n")) {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Effort } from "../src/model-thinking";
+import { getBundledModel } from "../src/models";
 import { githubCopilotModelManagerOptions } from "../src/provider-models/openai-compat";
 
 const originalFetch = global.fetch;
@@ -37,13 +38,14 @@ function getHeaderValue(headers: unknown, key: string): string | undefined {
 async function discoverCopilotModels(
 	payload: unknown,
 	apiKey = "copilot-test-key",
-	expectedBaseUrl = "https://api.individual.githubcopilot.com",
+	expectedBaseUrl = "https://api.githubcopilot.com",
+	expectedAuthorizationToken = apiKey,
 ) {
 	const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
 		const url = typeof input === "string" ? input : input.toString();
 		expect(url).toBe(`${expectedBaseUrl}/models`);
 		expect(init?.method).toBe("GET");
-		expect(getHeaderValue(init?.headers, "Authorization")).toBe(`Bearer ${apiKey}`);
+		expect(getHeaderValue(init?.headers, "Authorization")).toBe(`Bearer ${expectedAuthorizationToken}`);
 		return new Response(JSON.stringify(payload), {
 			status: 200,
 			headers: { "Content-Type": "application/json" },
@@ -59,15 +61,29 @@ async function discoverCopilotModels(
 }
 
 describe("github copilot model limits mapping", () => {
-	it("uses proxy endpoint from token for discovery base URL", async () => {
-		const enterpriseToken = "tid=2;proxy-ep=proxy.enterprise.githubcopilot.com;exp=9999999999";
+	it("uses configured base URL for discovery", async () => {
 		const { fetchMock } = await discoverCopilotModels(
 			{ data: [] },
-			enterpriseToken,
-			"https://api.enterprise.githubcopilot.com",
+			"copilot-test-key",
+			"https://api.githubcopilot.com",
 		);
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
+
+	it("unwraps structured OAuth keys for discovery and routes enterprise discovery to the enterprise host", async () => {
+		const structuredApiKey = JSON.stringify({
+			token: "ghu_test_copilot_token",
+			enterpriseUrl: "ghe.example.com",
+		});
+		const { fetchMock } = await discoverCopilotModels(
+			{ data: [] },
+			structuredApiKey,
+			"https://copilot-api.ghe.example.com",
+			"ghu_test_copilot_token",
+		);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
 	it("uses capabilities.limits max_prompt_tokens as context window when context_length is absent", async () => {
 		const { models, fetchMock } = await discoverCopilotModels({
 			data: [
@@ -92,7 +108,7 @@ describe("github copilot model limits mapping", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("prefers explicit context_length/max_completion_tokens when present", async () => {
+	it("prefers explicit context_length/max_completion_tokens when max_prompt_tokens is absent", async () => {
 		const { models } = await discoverCopilotModels({
 			data: [
 				{
@@ -103,7 +119,6 @@ describe("github copilot model limits mapping", () => {
 					capabilities: {
 						limits: {
 							max_context_window_tokens: 400_000,
-							max_prompt_tokens: 272_000,
 							max_output_tokens: 128_000,
 						},
 					},
@@ -140,6 +155,25 @@ describe("github copilot model limits mapping", () => {
 		expect(model?.contextWindow).toBe(128_000);
 		expect(model?.maxTokens).toBe(16_000);
 	});
+
+	it("keeps bundled Copilot fallback limits truthful offline", () => {
+		expect(getBundledModel("github-copilot", "claude-opus-4.6")).toMatchObject({
+			contextWindow: 168_000,
+			maxTokens: 32_000,
+		});
+		expect(getBundledModel("github-copilot", "gpt-5.2")).toMatchObject({
+			contextWindow: 272_000,
+			maxTokens: 128_000,
+		});
+		expect(getBundledModel("github-copilot", "gpt-5.4-mini")).toMatchObject({
+			contextWindow: 272_000,
+			maxTokens: 128_000,
+		});
+		expect(getBundledModel("github-copilot", "grok-code-fast-1")).toMatchObject({
+			contextWindow: 192_000,
+			maxTokens: 64_000,
+		});
+	});
 	it("inherits bundled GPT-5.4 mini reasoning metadata during discovery", async () => {
 		const { models } = await discoverCopilotModels({
 			data: [
@@ -163,7 +197,9 @@ describe("github copilot model limits mapping", () => {
 		expect(model).toBeDefined();
 		expect(model?.api).toBe("openai-responses");
 		expect(model?.reasoning).toBe(true);
-		expect(model?.contextWindow).toBe(400_000);
+		// max_prompt_tokens is the true prompt budget; root-level context_length
+		// mirrors max_context_window_tokens (total window) and must not win.
+		expect(model?.contextWindow).toBe(272_000);
 		expect(model?.maxTokens).toBe(128_000);
 		expect(model?.premiumMultiplier).toBe(0.33);
 		expect(model?.thinking).toEqual({
@@ -171,5 +207,49 @@ describe("github copilot model limits mapping", () => {
 			minLevel: Effort.Low,
 			maxLevel: Effort.XHigh,
 		});
+	});
+
+	it("does not use max_context_window_tokens for contextWindow", async () => {
+		const { models } = await discoverCopilotModels({
+			data: [
+				{
+					id: "gpt-5.4",
+					name: "GPT-5.4",
+					capabilities: {
+						limits: {
+							max_context_window_tokens: 400_000,
+							max_output_tokens: 128_000,
+						},
+					},
+				},
+			],
+		});
+
+		const model = models.find(candidate => candidate.id === "gpt-5.4");
+		expect(model).toBeDefined();
+		// max_context_window_tokens is total window (prompt + output), not prompt capacity.
+		// Without max_prompt_tokens, contextWindow should fall back to bundled reference,
+		// NOT to max_context_window_tokens.
+		expect(model?.contextWindow).toBe(272_000);
+		expect(model?.maxTokens).toBe(128_000);
+	});
+
+	it("prefers Copilot-specific bundled reference over global reference", async () => {
+		// When the API returns no limits at all, the model should use the Copilot-specific
+		// bundled reference, not a global reference from another provider (e.g. OpenAI at 1050k).
+		const { models } = await discoverCopilotModels({
+			data: [
+				{
+					id: "gpt-5.4",
+					name: "GPT-5.4",
+				},
+			],
+		});
+
+		const model = models.find(candidate => candidate.id === "gpt-5.4");
+		expect(model).toBeDefined();
+		// Should use the Copilot-specific bundled reference (272k after models.json fix),
+		// not the OpenAI global reference (1050k).
+		expect(model?.contextWindow).toBe(272_000);
 	});
 });

@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { $which, logger } from "@oh-my-pi/pi-utils";
 import transcribeScript from "./transcribe.py" with { type: "text" };
 
 export interface TranscribeOptions {
@@ -14,7 +14,7 @@ const TRANSCRIBE_TIMEOUT_MS = 120_000;
  */
 export function resolvePython(): string | null {
 	for (const cmd of ["python", "py", "python3"]) {
-		if (Bun.which(cmd)) return cmd;
+		if ($which(cmd)) return cmd;
 	}
 	return null;
 }

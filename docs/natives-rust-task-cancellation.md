@@ -70,11 +70,11 @@ Behavior:
 |---|---|---|---|
 | `grep(options, onMatch?)` | `grep` | `task::blocking("grep", ct, ...)` | `CancelToken::new(options.timeoutMs, options.signal)` + `ct.heartbeat()` |
 | `glob(options, onMatch?)` | `glob` | `task::blocking("glob", ct, ...)` | `CancelToken::new(...)` + `ct.heartbeat()` in filter loop |
-| `fuzzyFind(options)` | `fuzzy_find` (`js_name = "fuzzyFind"`) | `task::blocking("fuzzy_find", ct, ...)` | `CancelToken::new(...)` + `ct.heartbeat()` in scoring loop |
+| `fuzzyFind(options)` | `fuzzy_find` | `task::blocking("fuzzy_find", ct, ...)` | `CancelToken::new(...)` + `ct.heartbeat()` in scoring loop |
 | `shell.run(options, onChunk?)` | `Shell::run` | `task::future(env, "shell.run", ...)` | `ct.wait()` raced against run task; bridges to Tokio `CancellationToken` |
-| `executeShell(options, onChunk?)` | `execute_shell` (`js_name = "executeShell"`) | `task::future(env, "shell.execute", ...)` | same as above |
+| `executeShell(options, onChunk?)` | `execute_shell` | `task::future(env, "shell.execute", ...)` | same as above |
 | `pty.start(options, onChunk?)` | `PtySession::start` | `task::future(env, "pty.start", ...)` + inner `spawn_blocking` | `CancelToken` checked in sync PTY loop via `heartbeat()` |
-| `htmlToMarkdown(html, options?)` | `html_to_markdown` (`js_name = "htmlToMarkdown"`) | `task::blocking("html_to_markdown", (), ...)` | none (`()` token) |
+| `htmlToMarkdown(html, options?)` | `html_to_markdown` | `task::blocking("html_to_markdown", (), ...)` | none (`()` token) |
 | `PhotonImage.parse/encode/resize` | `PhotonImage::{parse,encode,resize}` | `task::blocking(...)` | none (`()` token) |
 | `copyToClipboard/readImageFromClipboard` | `copy_to_clipboard` / `read_image_from_clipboard` | `task::blocking(...)` | none (`()` token) |
 

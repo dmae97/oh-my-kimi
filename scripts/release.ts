@@ -15,12 +15,16 @@ const changelogGlob = new Glob("packages/*/CHANGELOG.md");
 const packageJsonGlob = new Glob("packages/*/package.json");
 const cargoTomlGlob = new Glob("crates/*/Cargo.toml");
 
+function git(args: readonly string[]) {
+	return $`git -c core.fsmonitor=false -c core.untrackedCache=false ${args}`;
+}
+
 // =============================================================================
 // Shared functions
 // =============================================================================
 
 async function watchCI(): Promise<boolean> {
-	const commitSha = (await $`git rev-parse HEAD`.text()).trim();
+	const commitSha = (await git(["rev-parse", "HEAD"]).text()).trim();
 	console.log(`  Commit: ${commitSha.slice(0, 8)}`);
 
 	while (true) {
@@ -185,14 +189,14 @@ async function cmdRelease(version: string): Promise<void> {
 	// 1. Pre-flight checks
 	console.log("Pre-flight checks...");
 
-	const branch = await $`git branch --show-current`.text();
+	const branch = await git(["branch", "--show-current"]).text();
 	if (branch.trim() !== "main") {
 		console.error(`Error: Must be on main branch (currently on '${branch.trim()}')`);
 		process.exit(1);
 	}
 	console.log("  On main branch");
 
-	const status = await $`git status --porcelain`.text();
+	const status = await git(["status", "--porcelain"]).text();
 	if (status.trim()) {
 		console.error("Error: Uncommitted changes detected. Commit or stash first.");
 		console.error(status);
@@ -200,7 +204,7 @@ async function cmdRelease(version: string): Promise<void> {
 	}
 	console.log("  Working directory clean");
 
-	const latestTag = (await $`git describe --tags --abbrev=0`.text()).trim();
+	const latestTag = (await git(["describe", "--tags", "--abbrev=0"]).text()).trim();
 	if (compareVersions(version, latestTag) <= 0) {
 		console.error(`Error: Version ${version} must be greater than latest tag ${latestTag}`);
 		process.exit(1);
@@ -231,6 +235,16 @@ async function cmdRelease(version: string): Promise<void> {
 		console.log(`    ${pkgJson.name}: ${pkgJson.version}`);
 	}
 	console.log();
+
+	// Update @oh-my-pi/* catalog entries in root package.json
+	console.log("Updating root catalog versions...");
+	let rootPkgRaw = await Bun.file("package.json").text();
+	rootPkgRaw = rootPkgRaw.replace(
+		/("@oh-my-pi\/[^"]+":\s*)"[^"]+"/g,
+		`$1"${version}"`,
+	);
+	await Bun.write("package.json", rootPkgRaw);
+	console.log("  Updated root catalog @oh-my-pi/* entries");
 
 	// 3. Update Rust workspace version
 	console.log(`Updating Rust workspace version to ${version}…`);
@@ -274,15 +288,15 @@ async function cmdRelease(version: string): Promise<void> {
 
 	// 7. Commit and tag
 	console.log("Committing and tagging...");
-	await $`git add .`;
-	await $`git commit -m ${`chore: bump version to ${version}`}`;
-	await $`git tag ${`v${version}`}`;
+	await git(["add", "."]);
+	await git(["commit", "-m", `chore: bump version to ${version}`]);
+	await git(["tag", `v${version}`]);
 	console.log();
 
 	// 8. Push
 	console.log("Pushing to remote...");
-	await $`git push origin main`;
-	await $`git push origin ${`v${version}`}`;
+	await git(["push", "origin", "main"]);
+	await git(["push", "origin", `v${version}`]);
 	console.log();
 
 	// 9. Watch CI

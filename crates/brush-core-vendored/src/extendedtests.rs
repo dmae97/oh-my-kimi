@@ -67,7 +67,7 @@ async fn apply_unary_predicate(
     apply_unary_predicate_to_str(op, expanded_operand.as_str(), shell, params)
 }
 
-#[expect(clippy::too_many_lines)]
+
 pub(crate) fn apply_unary_predicate_to_str(
     op: &ast::UnaryPredicate,
     operand: &str,
@@ -191,7 +191,7 @@ pub(crate) fn apply_unary_predicate_to_str(
     }
 }
 
-#[expect(clippy::too_many_lines)]
+
 async fn apply_binary_predicate(
     op: &ast::BinaryPredicate,
     left: &ast::Word,

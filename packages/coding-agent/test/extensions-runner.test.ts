@@ -525,6 +525,82 @@ describe("ExtensionRunner", () => {
 		});
 	});
 
+	describe("session name API", () => {
+		it("lets extensions read and set the session name after initialization", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.on("session_start", async () => {
+						if (pi.getSessionName() !== undefined) {
+							throw new Error("expected unnamed session");
+						}
+						await pi.setSessionName("Named by extension");
+					});
+				}
+			`;
+			const explicitExtensionPath = path.join(tempDir.path(), "session-name.ts");
+			fs.writeFileSync(explicitExtensionPath, extCode);
+
+			const result = await loadTestExtensions([explicitExtensionPath]);
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			runner.initialize(
+				{
+					sendMessage: () => {},
+					sendUserMessage: () => {},
+					appendEntry: () => {},
+					setLabel: () => {},
+					getActiveTools: () => [],
+					getAllTools: () => [],
+					setActiveTools: async () => {},
+					getCommands: () => [],
+					setModel: async () => false,
+					getThinkingLevel: () => undefined,
+					setThinkingLevel: () => {},
+					getSessionName: () => sessionManager.getSessionName(),
+					setSessionName: async name => {
+						await sessionManager.setSessionName(name);
+					},
+				},
+				{
+					getModel: () => undefined,
+					isIdle: () => true,
+					abort: () => {},
+					hasPendingMessages: () => false,
+					shutdown: () => {},
+					getContextUsage: () => undefined,
+					compact: async () => {},
+					getSystemPrompt: () => "",
+				},
+			);
+
+			await runner.emit({ type: "session_start" });
+
+			expect(sessionManager.getSessionName()).toBe("Named by extension");
+			expect(sessionManager.getHeader()?.title).toBe("Named by extension");
+		});
+
+		it("keeps session naming unavailable during extension load", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.getSessionName();
+				}
+			`;
+			const explicitExtensionPath = path.join(tempDir.path(), "session-name-load.ts");
+			fs.writeFileSync(explicitExtensionPath, extCode);
+
+			const result = await loadTestExtensions([explicitExtensionPath]);
+			const loadError = result.errors.find(error => error.path.includes("session-name-load.ts"));
+
+			expect(loadError).toBeDefined();
+			expect(loadError?.error).toContain("Extension runtime not initialized");
+		});
+	});
+
 	describe("hasHandlers", () => {
 		it("returns true when handlers exist for event type", async () => {
 			const extCode = `

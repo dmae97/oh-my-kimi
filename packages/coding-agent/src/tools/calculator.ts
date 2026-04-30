@@ -1,9 +1,8 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
-import { untilAborted } from "@oh-my-pi/pi-utils";
+import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { renderPromptTemplate } from "../config/prompt-templates";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import calculatorDescription from "../prompts/tools/calculator.md" with { type: "text" };
@@ -32,11 +31,11 @@ type Token =
 const calculatorSchema = Type.Object({
 	calculations: Type.Array(
 		Type.Object({
-			expression: Type.String({ description: "Math expression to evaluate" }),
-			prefix: Type.String({ description: "Text to prepend to the result" }),
-			suffix: Type.String({ description: "Text to append to the result" }),
+			expression: Type.String({ description: "math expression", examples: ["2 + 2", "sqrt(16)"] }),
+			prefix: Type.String({ description: "prefix text" }),
+			suffix: Type.String({ description: "suffix text" }),
 		}),
-		{ description: "List of calculations to evaluate" },
+		{ description: "calculations to evaluate" },
 	),
 });
 
@@ -402,7 +401,7 @@ export class CalculatorTool implements AgentTool<typeof calculatorSchema, Calcul
 	readonly strict = true;
 
 	constructor(_session: ToolSession) {
-		this.description = renderPromptTemplate(calculatorDescription);
+		this.description = prompt.render(calculatorDescription);
 	}
 
 	async execute(

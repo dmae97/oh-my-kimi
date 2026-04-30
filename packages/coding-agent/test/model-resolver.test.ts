@@ -9,6 +9,7 @@ import {
 	resolveModelFromString,
 	resolveModelOverride,
 	resolveModelRoleValue,
+	resolveModelScope,
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
@@ -76,6 +77,23 @@ const mockOpenRouterModels: Model<"anthropic-messages">[] = [
 		contextWindow: 128000,
 		maxTokens: 4096,
 	},
+	{
+		id: "z-ai/glm-4.7",
+		name: "GLM 4.7",
+		api: "anthropic-messages",
+		provider: "openrouter",
+		baseUrl: "https://openrouter.ai/api/v1",
+		reasoning: true,
+		thinking: {
+			mode: "budget",
+			minLevel: Effort.Minimal,
+			maxLevel: Effort.High,
+		},
+		input: ["text"],
+		cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	},
 ];
 
 const mockProviderOverlapModels: Model<"anthropic-messages">[] = [
@@ -141,6 +159,66 @@ const mockCodexOverlapModels: Model<"anthropic-messages">[] = [
 		maxTokens: 8192,
 	},
 ];
+
+const canonicalVariantModels: Model<"anthropic-messages">[] = [
+	{
+		id: "claude-sonnet-4-5",
+		name: "Claude Sonnet 4.5",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		thinking: {
+			mode: "budget",
+			minLevel: Effort.Minimal,
+			maxLevel: Effort.High,
+		},
+		input: ["text", "image"],
+		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+		contextWindow: 200000,
+		maxTokens: 8192,
+	},
+	{
+		id: "anthropic/claude-sonnet-4.5",
+		name: "Claude Sonnet 4.5 (Copilot)",
+		api: "anthropic-messages",
+		provider: "github-copilot",
+		baseUrl: "https://api.githubcopilot.com",
+		reasoning: true,
+		thinking: {
+			mode: "budget",
+			minLevel: Effort.Minimal,
+			maxLevel: Effort.High,
+		},
+		input: ["text", "image"],
+		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+		contextWindow: 200000,
+		maxTokens: 8192,
+	},
+];
+
+const canonicalRegistry = {
+	resolveCanonicalModel: (canonicalId: string, options?: { candidates?: Model<"anthropic-messages">[] }) => {
+		if (canonicalId !== "claude-sonnet-4-5") return undefined;
+		const candidates = options?.candidates ?? canonicalVariantModels;
+		return (
+			candidates.find(model => model.provider === "github-copilot") ??
+			candidates.find(model => model.provider === "anthropic")
+		);
+	},
+	getCanonicalVariants: (canonicalId: string, options?: { candidates?: Model<"anthropic-messages">[] }) => {
+		if (canonicalId !== "claude-sonnet-4-5") return [];
+		const candidates = options?.candidates ?? canonicalVariantModels;
+		return candidates.map(model => ({
+			canonicalId,
+			selector: `${model.provider}/${model.id}`,
+			model,
+			source: model.id === canonicalId ? "bundled" : "heuristic",
+		}));
+	},
+	getCanonicalId: () => "claude-sonnet-4-5",
+	getAvailable: () => canonicalVariantModels,
+} as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"];
 
 const allModels = [...mockModels, ...mockOpenRouterModels, ...mockProviderOverlapModels, ...mockCodexOverlapModels];
 
@@ -258,6 +336,24 @@ describe("parseModelPattern", () => {
 			expect(result.explicitThinkingLevel).toBe(false);
 			expect(result.warning).toBeUndefined();
 		});
+
+		test("supports OpenRouter route suffixes that are not present in the catalog", () => {
+			const result = parseModelPattern("openrouter/z-ai/glm-4.7-20251222:nitro", allModels);
+			expect(result.model?.provider).toBe("openrouter");
+			expect(result.model?.id).toBe("z-ai/glm-4.7-20251222:nitro");
+			expect(result.thinkingLevel).toBeUndefined();
+			expect(result.explicitThinkingLevel).toBe(false);
+			expect(result.warning).toBeUndefined();
+		});
+
+		test("supports OpenRouter route suffixes with an appended thinking level", () => {
+			const result = parseModelPattern("openrouter/z-ai/glm-4.7-20251222:nitro:high", allModels);
+			expect(result.model?.provider).toBe("openrouter");
+			expect(result.model?.id).toBe("z-ai/glm-4.7-20251222:nitro");
+			expect(result.thinkingLevel).toBe(Effort.High);
+			expect(result.explicitThinkingLevel).toBe(true);
+			expect(result.warning).toBeUndefined();
+		});
 	});
 
 	describe("invalid thinking levels with OpenRouter models", () => {
@@ -317,6 +413,16 @@ describe("parseModelPattern", () => {
 			});
 			expect(result.model?.provider).toBe("openrouter");
 			expect(result.model?.id).toBe("moonshotai/kimi-k2.5");
+		});
+	});
+
+	describe("canonical ids", () => {
+		test("resolves an exact canonical id through the registry before bare-id matching", () => {
+			const result = parseModelPattern("claude-sonnet-4-5", canonicalVariantModels, undefined, {
+				modelRegistry: canonicalRegistry,
+			});
+			expect(result.model?.provider).toBe("github-copilot");
+			expect(result.model?.id).toBe("anthropic/claude-sonnet-4.5");
 		});
 	});
 });
@@ -403,6 +509,44 @@ describe("resolveAgentModelPatterns", () => {
 
 		expect(result).toEqual(["anthropic/claude-sonnet-4-5:high"]);
 	});
+
+	test("expands pi/designer to priority defaults", () => {
+		const settings = Settings.isolated({
+			modelRoles: {
+				default: "anthropic/claude-sonnet-4-5",
+			},
+		});
+
+		const result = resolveAgentModelPatterns({
+			agentModel: "pi/designer",
+			settings,
+		});
+
+		expect(result).toEqual([
+			"google-gemini-cli/gemini-3.1-pro",
+			"google-gemini-cli/gemini-3-pro",
+			"gemini-3.1-pro",
+			"gemini-3-1-pro",
+			"gemini-3-pro",
+			"gemini-3",
+		]);
+	});
+
+	test("prefers configured designer role override over priority defaults", () => {
+		const settings = Settings.isolated({
+			modelRoles: {
+				default: "anthropic/claude-sonnet-4-5",
+				designer: "openai/gpt-4o",
+			},
+		});
+
+		const result = resolveAgentModelPatterns({
+			agentModel: "pi/designer",
+			settings,
+		});
+
+		expect(result).toEqual(["openai/gpt-4o"]);
+	});
 });
 
 describe("resolveModelFromString", () => {
@@ -446,6 +590,21 @@ describe("resolveModelOverride", () => {
 	});
 });
 describe("resolveCliModel", () => {
+	test("resolves exact canonical ids to the preferred concrete provider", () => {
+		const result = resolveCliModel({
+			cliModel: "claude-sonnet-4-5",
+			modelRegistry: {
+				...canonicalRegistry,
+				getAll: () => canonicalVariantModels,
+			} as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"],
+		});
+
+		expect(result.error).toBeUndefined();
+		expect(result.selector).toBe("claude-sonnet-4-5");
+		expect(result.model?.provider).toBe("github-copilot");
+		expect(result.model?.id).toBe("anthropic/claude-sonnet-4.5");
+	});
+
 	test("resolves --model provider/id without --provider", () => {
 		const registry = {
 			getAll: () => allModels,
@@ -522,6 +681,37 @@ describe("resolveCliModel", () => {
 		expect(result.error).toContain("not found");
 	});
 
+	test("supports provider-prefixed OpenRouter route suffixes even when the base model is cataloged without them", () => {
+		const registry = {
+			getAll: () => allModels,
+		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"];
+
+		const result = resolveCliModel({
+			cliModel: "openrouter/z-ai/glm-4.7-20251222:nitro",
+			modelRegistry: registry,
+		});
+
+		expect(result.error).toBeUndefined();
+		expect(result.model?.provider).toBe("openrouter");
+		expect(result.model?.id).toBe("z-ai/glm-4.7-20251222:nitro");
+	});
+
+	test("supports explicit OpenRouter provider with route suffixes that are not in the catalog", () => {
+		const registry = {
+			getAll: () => allModels,
+		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"];
+
+		const result = resolveCliModel({
+			cliProvider: "openrouter",
+			cliModel: "z-ai/glm-4.7-20251222:nitro",
+			modelRegistry: registry,
+		});
+
+		expect(result.error).toBeUndefined();
+		expect(result.model?.provider).toBe("openrouter");
+		expect(result.model?.id).toBe("z-ai/glm-4.7-20251222:nitro");
+	});
+
 	test("returns a clear error when there are no models", () => {
 		const registry = {
 			getAll: () => [],
@@ -593,6 +783,22 @@ describe("resolveCliModel", () => {
 		expect(result.error).toBeUndefined();
 		expect(result.model?.provider).toBe("zai");
 		expect(result.model?.id).toBe("glm-5");
+	});
+});
+
+describe("resolveModelScope", () => {
+	test("expands exact canonical ids into all concrete variants", async () => {
+		const scoped = await resolveModelScope(["claude-sonnet-4-5"], {
+			getAvailable: () => canonicalVariantModels,
+			getCanonicalVariants: (canonicalId: string, options?: { candidates?: Model<"anthropic-messages">[] }) =>
+				canonicalRegistry.getCanonicalVariants!(canonicalId, options),
+		} as unknown as Parameters<typeof resolveModelScope>[1]);
+
+		expect(scoped).toHaveLength(2);
+		expect(scoped.map(entry => `${entry.model.provider}/${entry.model.id}`).sort()).toEqual([
+			"anthropic/claude-sonnet-4-5",
+			"github-copilot/anthropic/claude-sonnet-4.5",
+		]);
 	});
 });
 

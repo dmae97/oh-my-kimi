@@ -9,7 +9,7 @@ const BASH_BUILD: u32 = 1;
 const BASH_RELEASE: &str = "release";
 const BASH_MACHINE: &str = "unknown";
 
-#[expect(clippy::too_many_lines)]
+
 pub(crate) fn initialize_vars(
     shell: &mut Shell,
     do_not_inherit_env: bool,

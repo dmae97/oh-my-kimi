@@ -1,13 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { FileType, type GlobMatch, glob } from "@oh-my-pi/pi-natives";
+import * as natives from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
-import { isEnoent, untilAborted } from "@oh-my-pi/pi-utils";
+import { isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
-import { renderPromptTemplate } from "../config/prompt-templates";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import findDescription from "../prompts/tools/find.md" with { type: "text" };
@@ -24,15 +23,24 @@ import {
 import type { ToolSession } from ".";
 import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
-import { normalizePathLikeInput, parseFindPattern, resolveMultiFindPattern, resolveToCwd } from "./path-utils";
+import {
+	formatPathRelativeToCwd,
+	normalizePathLikeInput,
+	parseFindPattern,
+	resolveMultiFindPattern,
+	resolveToCwd,
+} from "./path-utils";
 import { formatCount, formatEmptyMessage, formatErrorMessage, PREVIEW_LIMITS } from "./render-utils";
 import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const findSchema = Type.Object({
-	pattern: Type.String({ description: "Glob pattern, e.g. '*.ts', 'src/**/*.json', 'lib/*.tsx'" }),
-	hidden: Type.Optional(Type.Boolean({ description: "Include hidden files and directories (default: true)" })),
-	limit: Type.Optional(Type.Number({ description: "Max results (default: 1000)" })),
+	pattern: Type.String({
+		description: "glob including search path",
+		examples: ["src/**/*.ts", "lib/*.json", "apps/,packages/", "*.ts"],
+	}),
+	hidden: Type.Optional(Type.Boolean({ description: "include hidden files", default: true })),
+	limit: Type.Optional(Type.Number({ description: "max results", default: 1000 })),
 });
 
 export type FindToolInput = Static<typeof findSchema>;
@@ -86,7 +94,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 		options?: FindToolOptions,
 	) {
 		this.#customOps = options?.operations;
-		this.description = renderPromptTemplate(findDescription);
+		this.description = prompt.render(findDescription);
 	}
 
 	async execute(
@@ -99,10 +107,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 		const { pattern, limit, hidden } = params;
 
 		return untilAborted(signal, async () => {
-			const formatScopePath = (targetPath: string): string => {
-				const relative = path.relative(this.session.cwd, targetPath).replace(/\\/g, "/");
-				return relative.length === 0 ? "." : relative;
-			};
+			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
 			const normalizedPattern = normalizePathLikeInput(pattern).replace(/\\/g, "/");
 			if (!normalizedPattern) {
 				throw new ToolError("Pattern must not be empty");
@@ -125,46 +130,23 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				throw new ToolError("Limit must be a positive number");
 			}
 			const includeHidden = hidden ?? true;
-
-			// If custom operations provided with glob, use that instead of fd
-			if (this.#customOps?.glob) {
-				if (!(await this.#customOps.exists(searchPath))) {
-					throw new ToolError(`Path not found: ${scopePath}`);
-				}
-
-				if (!hasGlob && this.#customOps.stat) {
-					const stat = await this.#customOps.stat(searchPath);
-					if (stat.isFile()) {
-						const files = [scopePath];
-						const details: FindToolDetails = {
-							scopePath,
-							fileCount: 1,
-							files,
-							truncated: false,
-						};
-						return toolResult(details).text(files.join("\n")).done();
-					}
-				}
-
-				const results = await this.#customOps.glob(globPattern, searchPath, {
-					ignore: ["**/node_modules/**", "**/.git/**"],
-					limit: effectiveLimit,
+			const timeoutSignal = AbortSignal.timeout(GLOB_TIMEOUT_MS);
+			const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+			const formatMatchPath = (matchPath: string, fileType?: natives.FileType): string => {
+				const hadTrailingSlash = matchPath.endsWith("/") || matchPath.endsWith("\\");
+				const absolutePath = path.isAbsolute(matchPath) ? matchPath : path.resolve(searchPath, matchPath);
+				return formatPathRelativeToCwd(absolutePath, this.session.cwd, {
+					trailingSlash: fileType === natives.FileType.Dir || hadTrailingSlash,
 				});
+			};
 
-				if (results.length === 0) {
+			const buildResult = (files: string[]): AgentToolResult<FindToolDetails> => {
+				if (files.length === 0) {
 					const details: FindToolDetails = { scopePath, fileCount: 0, files: [], truncated: false };
 					return toolResult(details).text("No files found matching pattern").done();
 				}
 
-				// Relativize paths
-				const relativized = results.map(p => {
-					if (p.startsWith(searchPath)) {
-						return p.slice(searchPath.length + 1);
-					}
-					return path.relative(searchPath, p);
-				});
-
-				const listLimit = applyListLimit(relativized, { limit: effectiveLimit });
+				const listLimit = applyListLimit(files, { limit: effectiveLimit });
 				const limited = listLimit.items;
 				const limitMeta = listLimit.meta;
 				const rawOutput = limited.join("\n");
@@ -187,6 +169,27 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				}
 
 				return resultBuilder.done();
+			};
+
+			if (this.#customOps?.glob) {
+				if (!(await this.#customOps.exists(searchPath))) {
+					throw new ToolError(`Path not found: ${scopePath}`);
+				}
+
+				if (!hasGlob && this.#customOps.stat) {
+					const stat = await this.#customOps.stat(searchPath);
+					if (stat.isFile()) {
+						return buildResult([scopePath]);
+					}
+				}
+
+				const results = await this.#customOps.glob(globPattern, searchPath, {
+					ignore: ["**/node_modules/**", "**/.git/**"],
+					limit: effectiveLimit,
+				});
+				const relativized = results.map(p => formatMatchPath(p));
+
+				return buildResult(relativized);
 			}
 
 			let searchStat: fs.Stats;
@@ -200,20 +203,13 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			}
 
 			if (!hasGlob && searchStat.isFile()) {
-				const files = [scopePath];
-				const details: FindToolDetails = {
-					scopePath,
-					fileCount: 1,
-					files,
-					truncated: false,
-				};
-				return toolResult(details).text(files.join("\n")).done();
+				return buildResult([scopePath]);
 			}
 			if (!searchStat.isDirectory()) {
 				throw new ToolError(`Path is not a directory: ${searchPath}`);
 			}
 
-			let matches: GlobMatch[];
+			let matches: natives.GlobMatch[];
 			const onUpdateMatches: string[] = [];
 			const updateIntervalMs = 200;
 			let lastUpdate = 0;
@@ -234,43 +230,36 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				});
 			};
 			const onMatch = onUpdate
-				? (match: GlobMatch | null) => {
-						if (signal?.aborted || !match) return;
-						let relativePath = match.path;
-						if (!relativePath) return;
-						if (match.fileType === FileType.Dir && !relativePath.endsWith("/")) {
-							relativePath += "/";
-						}
+				? (err: Error | null, match: natives.GlobMatch | null) => {
+						if (err || signal?.aborted || !match?.path) return;
+						const relativePath = formatMatchPath(match.path, match.fileType);
 						onUpdateMatches.push(relativePath);
 						emitUpdate();
 					}
 				: undefined;
-			const timeoutSignal = AbortSignal.timeout(GLOB_TIMEOUT_MS);
-			const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 
 			const doGlob = async (useGitignore: boolean) =>
 				untilAborted(combinedSignal, () =>
-					glob(
+					natives.glob(
 						{
 							pattern: globPattern,
 							path: searchPath,
-							fileType: FileType.File,
+							fileType: natives.FileType.File,
 							hidden: includeHidden,
 							maxResults: effectiveLimit,
 							sortByMtime: true,
 							gitignore: useGitignore,
+							signal: combinedSignal,
 						},
 						onMatch,
-						this.session.searchDb,
 					),
 				);
 
 			try {
-				let result = await doGlob(true);
-				// If gitignore filtering yielded nothing, retry without it
-				if (result.matches.length === 0) {
-					result = await doGlob(false);
-				}
+				const result = await doGlob(true);
+				// Sort by mtime descending (most recent first) in JS instead of native.
+				// This allows native glob to early-terminate at maxResults.
+				result.matches.sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
 				matches = result.matches;
 			} catch (error) {
 				if (error instanceof Error && error.name === "AbortError") {
@@ -283,64 +272,17 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				throw error;
 			}
 
-			if (matches.length === 0) {
-				const details: FindToolDetails = { scopePath, fileCount: 0, files: [], truncated: false };
-				return toolResult(details).text("No files found matching pattern").done();
-			}
 			const relativized: string[] = [];
-
 			for (const match of matches) {
 				throwIfAborted(signal);
-				const line = match.path;
-				if (!line) {
+				if (!match.path) {
 					continue;
 				}
 
-				const hadTrailingSlash = line.endsWith("/") || line.endsWith("\\");
-				let relativePath = line;
-
-				const isDirectory = match.fileType === FileType.Dir;
-
-				if ((isDirectory || hadTrailingSlash) && !relativePath.endsWith("/")) {
-					relativePath += "/";
-				}
-
-				relativized.push(relativePath);
+				relativized.push(formatMatchPath(match.path, match.fileType));
 			}
 
-			if (relativized.length === 0) {
-				const details: FindToolDetails = { scopePath, fileCount: 0, files: [], truncated: false };
-				return toolResult(details).text("No files found matching pattern").done();
-			}
-
-			// Results are already sorted by mtime from native (sortByMtime: true)
-
-			const listLimit = applyListLimit(relativized, { limit: effectiveLimit });
-			const limited = listLimit.items;
-			const limitMeta = listLimit.meta;
-
-			// Apply byte truncation (no line limit since we already have result limit)
-			const rawOutput = limited.join("\n");
-			const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-
-			const resultOutput = truncation.content;
-			const details: FindToolDetails = {
-				scopePath,
-				fileCount: limited.length,
-				files: limited,
-				truncated: Boolean(limitMeta.resultLimit || truncation.truncated),
-				resultLimitReached: limitMeta.resultLimit?.reached,
-				truncation: truncation.truncated ? truncation : undefined,
-			};
-
-			const resultBuilder = toolResult(details)
-				.text(resultOutput)
-				.limits({ resultLimit: limitMeta.resultLimit?.reached });
-			if (truncation.truncated) {
-				resultBuilder.truncation(truncation, { direction: "head" });
-			}
-
-			return resultBuilder.done();
+			return buildResult(relativized);
 		});
 	}
 }

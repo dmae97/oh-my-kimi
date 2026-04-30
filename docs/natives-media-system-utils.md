@@ -24,12 +24,12 @@ This document is a subsystem deep-dive for the **system/media/conversion primiti
 
 | TS export (packages/natives)                | Rust N-API export                                                       | Rust module                           |
 | ------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------- |
-| `PhotonImage.parse(bytes)`                  | `PhotonImage::parse` (`js_name = "parse"`)                              | `image.rs`                            |
-| `PhotonImage#resize(width, height, filter)` | `PhotonImage::resize` (`js_name = "resize"`)                            | `image.rs`                            |
-| `PhotonImage#encode(format, quality)`       | `PhotonImage::encode` (`js_name = "encode"`)                            | `image.rs`                            |
-| `htmlToMarkdown(html, options)`             | `html_to_markdown` (`js_name = "htmlToMarkdown"`)                       | `html.rs`                             |
-| `copyToClipboard(text)`                     | `copy_to_clipboard` (`js_name = "copyToClipboard"`) + TS fallback logic | `clipboard.rs` + `clipboard/index.ts` |
-| `readImageFromClipboard()`                  | `read_image_from_clipboard` (`js_name = "readImageFromClipboard"`)      | `clipboard.rs`                        |
+| `PhotonImage.parse(bytes)`                  | `PhotonImage::parse`                                                     | `image.rs`                            |
+| `PhotonImage#resize(width, height, filter)` | `PhotonImage::resize`                                                    | `image.rs`                            |
+| `PhotonImage#encode(format, quality)`       | `PhotonImage::encode`                                                    | `image.rs`                            |
+| `htmlToMarkdown(html, options)`             | `html_to_markdown`                                                       | `html.rs`                             |
+| `copyToClipboard(text)`                     | `copy_to_clipboard` + TS fallback logic                                  | `clipboard.rs` + `clipboard/index.ts` |
+| `readImageFromClipboard()`                  | `read_image_from_clipboard`                                              | `clipboard.rs`                        |
 | `getWorkProfile(lastSeconds)`               | `get_work_profile`                                                      | `prof.rs`                             |
 
 ## Data format boundaries and conversions

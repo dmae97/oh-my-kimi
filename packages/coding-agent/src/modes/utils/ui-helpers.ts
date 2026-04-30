@@ -127,6 +127,47 @@ export class UiHelpers {
 						this.ctx.chatContainer.addChild(component);
 						break;
 					}
+					if (
+						message.customType === "irc:incoming" ||
+						message.customType === "irc:autoreply" ||
+						message.customType === "irc:relay"
+					) {
+						const details = (
+							message as CustomMessage<{
+								from?: string;
+								to?: string;
+								message?: string;
+								reply?: string;
+								body?: string;
+								kind?: "message" | "reply";
+							}>
+						).details;
+						let arrow: string;
+						let body: string;
+						if (message.customType === "irc:incoming") {
+							const peer = details?.from ?? "?";
+							body = details?.message ?? "";
+							arrow = `\u21e6 ${peer}`;
+						} else if (message.customType === "irc:autoreply") {
+							const peer = details?.to ?? "?";
+							body = details?.reply ?? "";
+							arrow = `\u21e8 ${peer} (auto)`;
+						} else {
+							const from = details?.from ?? "?";
+							const to = details?.to ?? "?";
+							body = details?.body ?? "";
+							const suffix = details?.kind === "reply" ? " (auto)" : "";
+							arrow = `${from} \u21e8 ${to}${suffix}`;
+						}
+						const header = `${theme.fg("accent", `[IRC] ${arrow}`)}`;
+						this.ctx.chatContainer.addChild(new Text(header, 1, 0));
+						if (body) {
+							for (const line of body.split("\n")) {
+								this.ctx.chatContainer.addChild(new Text(theme.fg("muted", `  ${line}`), 0, 0));
+							}
+						}
+						break;
+					}
 					const renderer = this.ctx.session.extensionRunner?.getMessageRenderer(message.customType);
 					// Both HookMessage and CustomMessage have the same structure, cast for compatibility
 					const component = new CustomMessageComponent(message as CustomMessage<unknown>, renderer);
@@ -209,7 +250,7 @@ export class UiHelpers {
 		sessionContext: SessionContext,
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
-		this.ctx.optimisticUserMessageSignature = undefined;
+		// Preserved: message_start handler owns this lifecycle (see #783)
 		this.ctx.pendingTools.clear();
 
 		if (options.updateFooter) {
@@ -257,7 +298,9 @@ export class UiHelpers {
 					if (content.name === "read") {
 						if (hasErrorStop && errorMessage) {
 							if (!readGroup) {
-								readGroup = new ReadToolGroupComponent();
+								readGroup = new ReadToolGroupComponent({
+									showContentPreview: this.ctx.settings.get("read.toolResultPreview"),
+								});
 								readGroup.setExpanded(this.ctx.toolOutputExpanded);
 								this.ctx.chatContainer.addChild(readGroup);
 							}
@@ -297,6 +340,7 @@ export class UiHelpers {
 						tool,
 						this.ctx.ui,
 						this.ctx.sessionManager.getCwd(),
+						content.id,
 					);
 					component.setExpanded(this.ctx.toolOutputExpanded);
 					this.ctx.chatContainer.addChild(component);
@@ -329,7 +373,9 @@ export class UiHelpers {
 					let component = this.ctx.pendingTools.get(message.toolCallId);
 					if (!component) {
 						if (!readGroup) {
-							readGroup = new ReadToolGroupComponent();
+							readGroup = new ReadToolGroupComponent({
+								showContentPreview: this.ctx.settings.get("read.toolResultPreview"),
+							});
 							readGroup.setExpanded(this.ctx.toolOutputExpanded);
 							this.ctx.chatContainer.addChild(readGroup);
 						}

@@ -1,14 +1,12 @@
-import type * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Markdown, Text } from "@oh-my-pi/pi-tui";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir, prompt } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { renderPromptTemplate } from "../config/prompt-templates";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { executePython, getPreludeDocs, type PythonExecutorOptions } from "../ipy/executor";
+import { executePython, getPreludeDocs, type PythonExecutorOptions, warmPythonEnvironment } from "../ipy/executor";
 import type { PreludeHelper, PythonStatusEvent } from "../ipy/kernel";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
@@ -17,7 +15,6 @@ import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from ".
 import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
 import type { ToolSession } from ".";
 import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
-import { resolveToCwd } from "./path-utils";
 import { formatTitle, replaceTabs, shortenPath, truncateToWidth, wrapBrackets } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -48,14 +45,13 @@ function groupPreludeHelpers(helpers: PreludeHelper[]): PreludeCategory[] {
 export const pythonSchema = Type.Object({
 	cells: Type.Array(
 		Type.Object({
-			code: Type.String({ description: "Python code to execute" }),
-			title: Type.Optional(Type.String({ description: "Cell label, e.g. 'imports', 'helper'" })),
+			code: Type.String({ description: "python code", examples: ["print('hello')", "import json"] }),
+			title: Type.String({ description: "cell label", examples: ["imports", "helper"] }),
 		}),
-		{ description: "Cells to execute sequentially in persistent kernel" },
+		{ description: "cells to execute" },
 	),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default: 30)" })),
-	cwd: Type.Optional(Type.String({ description: "Working directory (default: cwd)" })),
-	reset: Type.Optional(Type.Boolean({ description: "Restart kernel before execution" })),
+	timeout: Type.Optional(Type.Number({ description: "timeout in seconds", default: 30 })),
+	reset: Type.Optional(Type.Boolean({ description: "restart kernel" })),
 });
 export type PythonToolParams = Static<typeof pythonSchema>;
 
@@ -136,7 +132,7 @@ function renderJsonTree(value: unknown, theme: Theme, expanded: boolean, maxDept
 export function getPythonToolDescription(): string {
 	const helpers = getPreludeDocs();
 	const categories = groupPreludeHelpers(helpers);
-	return renderPromptTemplate(pythonDescription, { categories });
+	return prompt.render(pythonDescription, { categories });
 }
 
 export interface PythonToolOptions {
@@ -146,7 +142,9 @@ export interface PythonToolOptions {
 export class PythonTool implements AgentTool<typeof pythonSchema> {
 	readonly name = "python";
 	readonly label = "Python";
-	readonly description: string;
+	get description(): string {
+		return getPythonToolDescription();
+	}
 	readonly parameters = pythonSchema;
 	readonly concurrency = "exclusive";
 	readonly strict = true;
@@ -158,7 +156,6 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 		options?: PythonToolOptions,
 	) {
 		this.#proxyExecutor = options?.proxyExecutor;
-		this.description = getPythonToolDescription();
 	}
 
 	async execute(
@@ -175,14 +172,18 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 		if (!this.session) {
 			throw new ToolError("Python tool requires a session when not using proxy executor");
 		}
+		const session = this.session;
 
-		const { cells, timeout: rawTimeout = 30, cwd, reset } = params;
+		const { cells, timeout: rawTimeout = 30, reset } = params;
 		// Clamp to reasonable range: 1s - 600s (10 min)
 		const timeoutSec = clampTimeout("python", rawTimeout);
 		const timeoutMs = timeoutSec * 1000;
 		const deadlineMs = Date.now() + timeoutMs;
 		const timeoutSignal = AbortSignal.timeout(Math.max(0, deadlineMs - Date.now()));
-		const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+		const sessionAbortController = new AbortController();
+		const combinedSignal = signal
+			? AbortSignal.any([signal, timeoutSignal, sessionAbortController.signal])
+			: AbortSignal.any([timeoutSignal, sessionAbortController.signal]);
 		let outputSink: OutputSink | undefined;
 		let outputSummary: OutputSummary | undefined;
 		let outputDumped = false;
@@ -193,298 +194,311 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 			return outputSummary;
 		};
 
-		try {
-			if (signal?.aborted) {
-				throw new ToolAbortError();
-			}
-
-			const commandCwd = cwd ? resolveToCwd(cwd, this.session.cwd) : this.session.cwd;
-			let cwdStat: fs.Stats;
+		const execution = (async (): Promise<AgentToolResult<PythonToolDetails | undefined>> => {
 			try {
-				cwdStat = await Bun.file(commandCwd).stat();
-			} catch {
-				throw new ToolError(`Working directory does not exist: ${commandCwd}`);
-			}
-			if (!cwdStat.isDirectory()) {
-				throw new ToolError(`Working directory is not a directory: ${commandCwd}`);
-			}
+				if (signal?.aborted) {
+					throw new ToolAbortError();
+				}
+				session.assertPythonExecutionAllowed?.();
 
-			const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES * 2);
-			const jsonOutputs: unknown[] = [];
-			const images: ImageContent[] = [];
-			const statusEvents: PythonStatusEvent[] = [];
+				const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES * 2);
+				const jsonOutputs: unknown[] = [];
+				const images: ImageContent[] = [];
+				const statusEvents: PythonStatusEvent[] = [];
 
-			const cellResults: PythonCellResult[] = cells.map((cell, index) => ({
-				index,
-				title: cell.title,
-				code: cell.code,
-				output: "",
-				status: "pending",
-			}));
-			const cellOutputs: string[] = [];
+				const cellResults: PythonCellResult[] = cells.map((cell, index) => ({
+					index,
+					title: cell.title,
+					code: cell.code,
+					output: "",
+					status: "pending",
+				}));
+				const cellOutputs: string[] = [];
 
-			const appendTail = (text: string) => {
-				tailBuffer.append(text);
-			};
-
-			const buildUpdateDetails = (): PythonToolDetails => {
-				const details: PythonToolDetails = {
-					cells: cellResults.map(cell => ({
-						...cell,
-						statusEvents: cell.statusEvents ? [...cell.statusEvents] : undefined,
-					})),
+				const appendTail = (text: string) => {
+					tailBuffer.append(text);
 				};
-				if (jsonOutputs.length > 0) {
-					details.jsonOutputs = jsonOutputs;
-				}
-				if (images.length > 0) {
-					details.images = images;
-				}
-				if (statusEvents.length > 0) {
-					details.statusEvents = statusEvents;
-				}
-				return details;
-			};
 
-			const pushUpdate = () => {
-				if (!onUpdate) return;
-				const tailText = tailBuffer.text();
-				onUpdate({
-					content: [{ type: "text", text: tailText }],
-					details: buildUpdateDetails(),
-				});
-			};
+				const buildUpdateDetails = (): PythonToolDetails => {
+					const details: PythonToolDetails = {
+						cells: cellResults.map(cell => ({
+							...cell,
+							statusEvents: cell.statusEvents ? [...cell.statusEvents] : undefined,
+						})),
+					};
+					if (jsonOutputs.length > 0) {
+						details.jsonOutputs = jsonOutputs;
+					}
+					if (images.length > 0) {
+						details.images = images;
+					}
+					if (statusEvents.length > 0) {
+						details.statusEvents = statusEvents;
+					}
+					return details;
+				};
 
-			const sessionFile = this.session.getSessionFile?.() ?? undefined;
-			const { path: artifactPath, id: artifactId } = (await this.session.allocateOutputArtifact?.("python")) ?? {};
-			outputSink = new OutputSink({
-				artifactPath,
-				artifactId,
-				onChunk: chunk => {
-					appendTail(chunk);
-					pushUpdate();
-				},
-			});
-			const sessionId = sessionFile ? `session:${sessionFile}:cwd:${commandCwd}` : `cwd:${commandCwd}`;
-			const baseExecutorOptions: Omit<PythonExecutorOptions, "reset"> = {
-				cwd: commandCwd,
-				deadlineMs,
-				signal: combinedSignal,
-				sessionId,
-				kernelMode: this.session.settings.get("python.kernelMode"),
-				useSharedGateway: this.session.settings.get("python.sharedGateway"),
-				sessionFile: sessionFile ?? undefined,
-			};
+				const pushUpdate = () => {
+					if (!onUpdate) return;
+					const tailText = tailBuffer.text();
+					onUpdate({
+						content: [{ type: "text", text: tailText }],
+						details: buildUpdateDetails(),
+					});
+				};
 
-			for (let i = 0; i < cells.length; i++) {
-				const cell = cells[i];
-				const isFirstCell = i === 0;
-				const cellResult = cellResults[i];
-				cellResult.status = "running";
-				cellResult.output = "";
-				cellResult.statusEvents = undefined;
-				cellResult.exitCode = undefined;
-				cellResult.durationMs = undefined;
-				pushUpdate();
-
-				const executorOptions: PythonExecutorOptions = {
-					...baseExecutorOptions,
-					reset: isFirstCell ? reset : false,
+				const sessionFile = session.getSessionFile?.() ?? undefined;
+				const kernelOwnerId = session.getPythonKernelOwnerId?.() ?? undefined;
+				const { path: artifactPath, id: artifactId } = (await session.allocateOutputArtifact?.("python")) ?? {};
+				session.assertPythonExecutionAllowed?.();
+				outputSink = new OutputSink({
+					artifactPath,
+					artifactId,
 					onChunk: chunk => {
-						outputSink!.push(chunk);
+						appendTail(chunk);
+						pushUpdate();
 					},
+				});
+				const sessionId = sessionFile ? `session:${sessionFile}:cwd:${session.cwd}` : `cwd:${session.cwd}`;
+
+				if (getPreludeDocs().length === 0) {
+					const warmup = await warmPythonEnvironment(
+						session.cwd,
+						sessionId,
+						session.settings.get("python.sharedGateway"),
+						sessionFile ?? undefined,
+						kernelOwnerId,
+						combinedSignal,
+					);
+					if (!warmup.ok) {
+						if (combinedSignal.aborted) throw new ToolAbortError();
+						throw new ToolError(warmup.reason ?? "Python prelude helpers unavailable");
+					}
+					session.assertPythonExecutionAllowed?.();
+				}
+
+				const baseExecutorOptions = {
+					cwd: session.cwd,
+					deadlineMs,
+					signal: combinedSignal,
+					sessionId,
+					kernelMode: session.settings.get("python.kernelMode"),
+					useSharedGateway: session.settings.get("python.sharedGateway"),
+					sessionFile: sessionFile ?? undefined,
+					kernelOwnerId,
 				};
 
-				const startTime = Date.now();
-				const result = await executePython(cell.code, executorOptions);
-				const durationMs = Date.now() - startTime;
-
-				const cellStatusEvents: PythonStatusEvent[] = [];
-				let cellHasMarkdown = false;
-				for (const output of result.displayOutputs) {
-					if (output.type === "json") {
-						jsonOutputs.push(output.data);
-					}
-					if (output.type === "image") {
-						images.push({ type: "image", data: output.data, mimeType: output.mimeType });
-					}
-					if (output.type === "status") {
-						statusEvents.push(output.event);
-						cellStatusEvents.push(output.event);
-					}
-					if (output.type === "markdown") {
-						cellHasMarkdown = true;
-					}
-				}
-
-				const cellOutput = result.output.trim();
-				cellResult.output = cellOutput;
-				cellResult.exitCode = result.exitCode;
-				cellResult.durationMs = durationMs;
-				cellResult.statusEvents = cellStatusEvents.length > 0 ? cellStatusEvents : undefined;
-				cellResult.hasMarkdown = cellHasMarkdown || undefined;
-
-				let combinedCellOutput = "";
-				if (cells.length > 1) {
-					const cellHeader = `[${i + 1}/${cells.length}]`;
-					const cellTitle = cell.title ? ` ${cell.title}` : "";
-					if (cellOutput) {
-						combinedCellOutput = `${cellHeader}${cellTitle}\n${cellOutput}`;
-					} else {
-						combinedCellOutput = `${cellHeader}${cellTitle} (ok)`;
-					}
-					cellOutputs.push(combinedCellOutput);
-				} else if (cellOutput) {
-					combinedCellOutput = cellOutput;
-					cellOutputs.push(combinedCellOutput);
-				}
-
-				if (combinedCellOutput) {
-					const prefix = cellOutputs.length > 1 ? "\n\n" : "";
-					appendTail(`${prefix}${combinedCellOutput}`);
-				}
-
-				if (result.cancelled) {
-					cellResult.status = "error";
+				for (let i = 0; i < cells.length; i++) {
+					const cell = cells[i];
+					const isFirstCell = i === 0;
+					const cellResult = cellResults[i];
+					cellResult.status = "running";
+					cellResult.output = "";
+					cellResult.statusEvents = undefined;
+					cellResult.exitCode = undefined;
+					cellResult.durationMs = undefined;
 					pushUpdate();
-					const errorMsg = result.output || "Command aborted";
-					const combinedOutput = cellOutputs.join("\n\n");
-					const outputText =
-						cells.length > 1
-							? `${combinedOutput}\n\nCell ${i + 1} aborted: ${errorMsg}`
-							: combinedOutput || errorMsg;
 
-					const rawSummary = (await finalizeOutput()) ?? {
-						output: "",
-						truncated: false,
-						totalLines: 0,
-						totalBytes: 0,
-						outputLines: 0,
-						outputBytes: 0,
-					};
-					const outputLines = combinedOutput.length > 0 ? combinedOutput.split("\n").length : 0;
-					const outputBytes = Buffer.byteLength(combinedOutput, "utf-8");
-					const missingLines = Math.max(0, rawSummary.totalLines - rawSummary.outputLines);
-					const missingBytes = Math.max(0, rawSummary.totalBytes - rawSummary.outputBytes);
-					const summaryForMeta: OutputSummary = {
-						output: combinedOutput,
-						truncated: rawSummary.truncated,
-						totalLines: outputLines + missingLines,
-						totalBytes: outputBytes + missingBytes,
-						outputLines,
-						outputBytes,
-						artifactId: rawSummary.artifactId,
+					const executorOptions: PythonExecutorOptions = {
+						...baseExecutorOptions,
+						reset: isFirstCell ? reset : false,
+						onChunk: chunk => {
+							outputSink!.push(chunk);
+						},
 					};
 
-					const details: PythonToolDetails = {
-						cells: cellResults,
-						jsonOutputs: jsonOutputs.length > 0 ? jsonOutputs : undefined,
-						images: images.length > 0 ? images : undefined,
-						statusEvents: statusEvents.length > 0 ? statusEvents : undefined,
-						isError: true,
-					};
+					const startTime = Date.now();
+					const result = await executePython(cell.code, executorOptions);
+					const durationMs = Date.now() - startTime;
 
-					return toolResult(details)
-						.text(outputText)
-						.truncationFromSummary(summaryForMeta, { direction: "tail" })
-						.done();
-				}
+					const cellStatusEvents: PythonStatusEvent[] = [];
+					let cellHasMarkdown = false;
+					for (const output of result.displayOutputs) {
+						if (output.type === "json") {
+							jsonOutputs.push(output.data);
+						}
+						if (output.type === "image") {
+							images.push({ type: "image", data: output.data, mimeType: output.mimeType });
+						}
+						if (output.type === "status") {
+							statusEvents.push(output.event);
+							cellStatusEvents.push(output.event);
+						}
+						if (output.type === "markdown") {
+							cellHasMarkdown = true;
+						}
+					}
 
-				if (result.exitCode !== 0 && result.exitCode !== undefined) {
-					cellResult.status = "error";
+					const cellOutput = result.output.trim();
+					cellResult.output = cellOutput;
+					cellResult.exitCode = result.exitCode;
+					cellResult.durationMs = durationMs;
+					cellResult.statusEvents = cellStatusEvents.length > 0 ? cellStatusEvents : undefined;
+					cellResult.hasMarkdown = cellHasMarkdown || undefined;
+
+					let combinedCellOutput = "";
+					if (cells.length > 1) {
+						const cellHeader = `[${i + 1}/${cells.length}]`;
+						const cellTitle = cell.title ? ` ${cell.title}` : "";
+						if (cellOutput) {
+							combinedCellOutput = `${cellHeader}${cellTitle}\n${cellOutput}`;
+						} else {
+							combinedCellOutput = `${cellHeader}${cellTitle} (ok)`;
+						}
+						cellOutputs.push(combinedCellOutput);
+					} else if (cellOutput) {
+						combinedCellOutput = cellOutput;
+						cellOutputs.push(combinedCellOutput);
+					}
+
+					if (combinedCellOutput) {
+						const prefix = cellOutputs.length > 1 ? "\n\n" : "";
+						appendTail(`${prefix}${combinedCellOutput}`);
+					}
+
+					if (result.cancelled) {
+						cellResult.status = "error";
+						pushUpdate();
+						const errorMsg = result.output || "Command aborted";
+						const combinedOutput = cellOutputs.join("\n\n");
+						const outputText =
+							cells.length > 1
+								? `${combinedOutput}\n\nCell ${i + 1} aborted: ${errorMsg}`
+								: combinedOutput || errorMsg;
+
+						const rawSummary = (await finalizeOutput()) ?? {
+							output: "",
+							truncated: false,
+							totalLines: 0,
+							totalBytes: 0,
+							outputLines: 0,
+							outputBytes: 0,
+						};
+						const outputLines = combinedOutput.length > 0 ? combinedOutput.split("\n").length : 0;
+						const outputBytes = Buffer.byteLength(combinedOutput, "utf-8");
+						const missingLines = Math.max(0, rawSummary.totalLines - rawSummary.outputLines);
+						const missingBytes = Math.max(0, rawSummary.totalBytes - rawSummary.outputBytes);
+						const summaryForMeta: OutputSummary = {
+							output: combinedOutput,
+							truncated: rawSummary.truncated,
+							totalLines: outputLines + missingLines,
+							totalBytes: outputBytes + missingBytes,
+							outputLines,
+							outputBytes,
+							artifactId: rawSummary.artifactId,
+						};
+
+						const details: PythonToolDetails = {
+							cells: cellResults,
+							jsonOutputs: jsonOutputs.length > 0 ? jsonOutputs : undefined,
+							images: images.length > 0 ? images : undefined,
+							statusEvents: statusEvents.length > 0 ? statusEvents : undefined,
+							isError: true,
+						};
+
+						return toolResult(details)
+							.text(outputText)
+							.truncationFromSummary(summaryForMeta, { direction: "tail" })
+							.done();
+					}
+
+					if (result.exitCode !== 0 && result.exitCode !== undefined) {
+						cellResult.status = "error";
+						pushUpdate();
+						const combinedOutput = cellOutputs.join("\n\n");
+						const outputText =
+							cells.length > 1
+								? `${combinedOutput}\n\nCell ${i + 1} failed (exit code ${result.exitCode}). Earlier cells succeeded—their state persists. Fix only cell ${i + 1}.`
+								: combinedOutput
+									? `${combinedOutput}\n\nCommand exited with code ${result.exitCode}`
+									: `Command exited with code ${result.exitCode}`;
+
+						const rawSummary = (await finalizeOutput()) ?? {
+							output: "",
+							truncated: false,
+							totalLines: 0,
+							totalBytes: 0,
+							outputLines: 0,
+							outputBytes: 0,
+						};
+						const outputLines = combinedOutput.length > 0 ? combinedOutput.split("\n").length : 0;
+						const outputBytes = Buffer.byteLength(combinedOutput, "utf-8");
+						const missingLines = Math.max(0, rawSummary.totalLines - rawSummary.outputLines);
+						const missingBytes = Math.max(0, rawSummary.totalBytes - rawSummary.outputBytes);
+						const summaryForMeta: OutputSummary = {
+							output: combinedOutput,
+							truncated: rawSummary.truncated,
+							totalLines: outputLines + missingLines,
+							totalBytes: outputBytes + missingBytes,
+							outputLines,
+							outputBytes,
+							artifactId: rawSummary.artifactId,
+						};
+
+						const details: PythonToolDetails = {
+							cells: cellResults,
+							jsonOutputs: jsonOutputs.length > 0 ? jsonOutputs : undefined,
+							images: images.length > 0 ? images : undefined,
+							statusEvents: statusEvents.length > 0 ? statusEvents : undefined,
+							isError: true,
+						};
+
+						return toolResult(details)
+							.text(outputText)
+							.truncationFromSummary(summaryForMeta, { direction: "tail" })
+							.done();
+					}
+
+					cellResult.status = "complete";
 					pushUpdate();
-					const combinedOutput = cellOutputs.join("\n\n");
-					const outputText =
-						cells.length > 1
-							? `${combinedOutput}\n\nCell ${i + 1} failed (exit code ${result.exitCode}). Earlier cells succeeded—their state persists. Fix only cell ${i + 1}.`
-							: combinedOutput
-								? `${combinedOutput}\n\nCommand exited with code ${result.exitCode}`
-								: `Command exited with code ${result.exitCode}`;
-
-					const rawSummary = (await finalizeOutput()) ?? {
-						output: "",
-						truncated: false,
-						totalLines: 0,
-						totalBytes: 0,
-						outputLines: 0,
-						outputBytes: 0,
-					};
-					const outputLines = combinedOutput.length > 0 ? combinedOutput.split("\n").length : 0;
-					const outputBytes = Buffer.byteLength(combinedOutput, "utf-8");
-					const missingLines = Math.max(0, rawSummary.totalLines - rawSummary.outputLines);
-					const missingBytes = Math.max(0, rawSummary.totalBytes - rawSummary.outputBytes);
-					const summaryForMeta: OutputSummary = {
-						output: combinedOutput,
-						truncated: rawSummary.truncated,
-						totalLines: outputLines + missingLines,
-						totalBytes: outputBytes + missingBytes,
-						outputLines,
-						outputBytes,
-						artifactId: rawSummary.artifactId,
-					};
-
-					const details: PythonToolDetails = {
-						cells: cellResults,
-						jsonOutputs: jsonOutputs.length > 0 ? jsonOutputs : undefined,
-						images: images.length > 0 ? images : undefined,
-						statusEvents: statusEvents.length > 0 ? statusEvents : undefined,
-						isError: true,
-					};
-
-					return toolResult(details)
-						.text(outputText)
-						.truncationFromSummary(summaryForMeta, { direction: "tail" })
-						.done();
 				}
 
-				cellResult.status = "complete";
-				pushUpdate();
+				const combinedOutput = cellOutputs.join("\n\n");
+				const outputText =
+					combinedOutput || (jsonOutputs.length > 0 || images.length > 0 ? "(no text output)" : "(no output)");
+				const rawSummary = (await finalizeOutput()) ?? {
+					output: "",
+					truncated: false,
+					totalLines: 0,
+					totalBytes: 0,
+					outputLines: 0,
+					outputBytes: 0,
+				};
+				const outputLines = combinedOutput.length > 0 ? combinedOutput.split("\n").length : 0;
+				const outputBytes = Buffer.byteLength(combinedOutput, "utf-8");
+				const missingLines = Math.max(0, rawSummary.totalLines - rawSummary.outputLines);
+				const missingBytes = Math.max(0, rawSummary.totalBytes - rawSummary.outputBytes);
+				const summaryForMeta: OutputSummary = {
+					output: combinedOutput,
+					truncated: rawSummary.truncated,
+					totalLines: outputLines + missingLines,
+					totalBytes: outputBytes + missingBytes,
+					outputLines,
+					outputBytes,
+					artifactId: rawSummary.artifactId,
+				};
+
+				const details: PythonToolDetails = {
+					cells: cellResults,
+					jsonOutputs: jsonOutputs.length > 0 ? jsonOutputs : undefined,
+					images: images.length > 0 ? images : undefined,
+					statusEvents: statusEvents.length > 0 ? statusEvents : undefined,
+				};
+
+				const resultBuilder = toolResult(details)
+					.text(outputText)
+					.truncationFromSummary(summaryForMeta, { direction: "tail" });
+
+				return resultBuilder.done();
+			} finally {
+				if (!outputDumped) {
+					try {
+						await finalizeOutput();
+					} catch {}
+				}
 			}
-
-			const combinedOutput = cellOutputs.join("\n\n");
-			const outputText =
-				combinedOutput || (jsonOutputs.length > 0 || images.length > 0 ? "(no text output)" : "(no output)");
-			const rawSummary = (await finalizeOutput()) ?? {
-				output: "",
-				truncated: false,
-				totalLines: 0,
-				totalBytes: 0,
-				outputLines: 0,
-				outputBytes: 0,
-			};
-			const outputLines = combinedOutput.length > 0 ? combinedOutput.split("\n").length : 0;
-			const outputBytes = Buffer.byteLength(combinedOutput, "utf-8");
-			const missingLines = Math.max(0, rawSummary.totalLines - rawSummary.outputLines);
-			const missingBytes = Math.max(0, rawSummary.totalBytes - rawSummary.outputBytes);
-			const summaryForMeta: OutputSummary = {
-				output: combinedOutput,
-				truncated: rawSummary.truncated,
-				totalLines: outputLines + missingLines,
-				totalBytes: outputBytes + missingBytes,
-				outputLines,
-				outputBytes,
-				artifactId: rawSummary.artifactId,
-			};
-
-			const details: PythonToolDetails = {
-				cells: cellResults,
-				jsonOutputs: jsonOutputs.length > 0 ? jsonOutputs : undefined,
-				images: images.length > 0 ? images : undefined,
-				statusEvents: statusEvents.length > 0 ? statusEvents : undefined,
-			};
-
-			const resultBuilder = toolResult(details)
-				.text(outputText)
-				.truncationFromSummary(summaryForMeta, { direction: "tail" });
-
-			return resultBuilder.done();
-		} finally {
-			if (!outputDumped) {
-				try {
-					await finalizeOutput();
-				} catch {}
-			}
-		}
+		})();
+		return await (session.trackPythonExecution?.(execution, sessionAbortController) ?? execution);
 	}
 }
 

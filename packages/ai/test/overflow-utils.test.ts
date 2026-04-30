@@ -23,6 +23,18 @@ function createErrorMessage(errorMessage: string): AssistantMessage {
 	};
 }
 
+describe("isContextOverflow - model_context_window_exceeded", () => {
+	it("detects model_context_window_exceeded in finish_reason error message", () => {
+		const message = createErrorMessage("Provider finish_reason: model_context_window_exceeded");
+		expect(isContextOverflow(message)).toBe(true);
+	});
+
+	it("detects raw model_context_window_exceeded in error message", () => {
+		const message = createErrorMessage("model_context_window_exceeded");
+		expect(isContextOverflow(message)).toBe(true);
+	});
+});
+
 describe("isContextOverflow - HTTP 413 variants", () => {
 	it("detects generic 413 payload-too-large errors", () => {
 		const message = createErrorMessage("413 Request Entity Too Large: payload too large for request body");

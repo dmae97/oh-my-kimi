@@ -115,7 +115,7 @@ Maintainer rule: if a wrapper is not re-exported from `src/index.ts`, it is not 
 
 ## JS API ↔ native export mapping (representative)
 
-The Rust side uses N-API export names (typically via `#[napi(js_name = ...)]`) that must match these binding keys.
+The Rust side uses N-API export names (typically from `#[napi]` snake_case -> camelCase conversion, with occasional explicit aliases) that must match these binding keys.
 
 | Category | Public JS API (wrapper) | Native binding key | Return type | Async? |
 |---|---|---|---|---|

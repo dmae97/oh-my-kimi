@@ -7,7 +7,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
-import { renderPromptTemplate } from "../../config/prompt-templates";
+import { prompt } from "@oh-my-pi/pi-utils";
 import branchSummaryPrompt from "../../prompts/compaction/branch-summary.md" with { type: "text" };
 import branchSummaryPreamble from "../../prompts/compaction/branch-summary-preamble.md" with { type: "text" };
 import {
@@ -244,9 +244,9 @@ export function prepareBranchEntries(entries: SessionEntry[], tokenBudget: numbe
 // Summary Generation
 // ============================================================================
 
-const BRANCH_SUMMARY_PREAMBLE = renderPromptTemplate(branchSummaryPreamble);
+const BRANCH_SUMMARY_PREAMBLE = prompt.render(branchSummaryPreamble);
 
-const BRANCH_SUMMARY_PROMPT = renderPromptTemplate(branchSummaryPrompt);
+const BRANCH_SUMMARY_PROMPT = prompt.render(branchSummaryPrompt);
 
 /**
  * Generate a summary of abandoned branch entries.

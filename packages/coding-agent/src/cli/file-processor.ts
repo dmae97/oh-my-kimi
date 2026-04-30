@@ -4,12 +4,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { getProjectDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { getProjectDir, isEnoent, readImageMetadata } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { resolveReadPath } from "../tools/path-utils";
 import { formatBytes } from "../tools/render-utils";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
-import { detectSupportedImageMimeTypeFromFile } from "../utils/mime";
 
 // Keep CLI startup responsive and avoid OOM when users pass huge files.
 // If a file exceeds these limits, we include it as a path-only <file/> block.
@@ -42,7 +41,8 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 			process.exit(1);
 		}
 
-		const mimeType = await detectSupportedImageMimeTypeFromFile(absolutePath);
+		const imageMetadata = await readImageMetadata(absolutePath);
+		const mimeType = imageMetadata?.mimeType;
 		const maxBytes = mimeType ? MAX_CLI_IMAGE_BYTES : MAX_CLI_TEXT_BYTES;
 		if (stat.size > maxBytes) {
 			console.error(
