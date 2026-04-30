@@ -1755,14 +1755,28 @@ function resolveApiByRules(
 	return fallback;
 }
 
-function createOpenCodeApiResolution(basePath: string): {
+function createOpenCodeApiResolution(
+	basePath: string,
+	idOverrides: Readonly<Record<string, Api>> = {},
+): {
 	defaultResolution: { api: Api; baseUrl: string };
 	rules: ApiResolutionRule[];
 } {
 	const completionsBaseUrl = `${basePath}/v1`;
+	// Per-API base URLs on the OpenCode-style endpoint:
+	// - openai-completions / openai-responses / google-generative-ai → /v1
+	// - anthropic-messages → bare basePath (the Anthropic client appends /v1/messages)
+	const baseUrlForApi = (api: Api): string => (api === "anthropic-messages" ? basePath : completionsBaseUrl);
+	const overrideRules: ApiResolutionRule[] = Object.entries(idOverrides).map(([id, api]) => ({
+		matches: modelId => modelId === id,
+		resolved: { api, baseUrl: baseUrlForApi(api) },
+	}));
 	return {
 		defaultResolution: { api: "openai-completions", baseUrl: completionsBaseUrl },
 		rules: [
+			// Per-id overrides take precedence over npm-based heuristics so we can
+			// correct upstream metadata mismatches (see OPENCODE_GO_API_RESOLUTION).
+			...overrideRules,
 			{
 				matches: (_modelId, raw) => raw.provider?.npm === "@ai-sdk/openai",
 				resolved: { api: "openai-responses", baseUrl: completionsBaseUrl },
@@ -1780,7 +1794,15 @@ function createOpenCodeApiResolution(basePath: string): {
 }
 
 const OPENCODE_ZEN_API_RESOLUTION = createOpenCodeApiResolution("https://opencode.ai/zen");
-const OPENCODE_GO_API_RESOLUTION = createOpenCodeApiResolution("https://opencode.ai/zen/go");
+// OpenCode Go: models.dev declares qwen3.5-plus / qwen3.6-plus with
+// `provider.npm = "@ai-sdk/anthropic"`, but per the OpenCode Go endpoint table
+// (https://opencode.ai/docs/go/#endpoints) they are served via @ai-sdk/alibaba
+// at https://opencode.ai/zen/go/v1/chat/completions (OpenAI-compatible).
+// Override the resolver so regenerating models.json keeps the correct routing.
+const OPENCODE_GO_API_RESOLUTION = createOpenCodeApiResolution("https://opencode.ai/zen/go", {
+	"qwen3.5-plus": "openai-completions",
+	"qwen3.6-plus": "openai-completions",
+});
 
 const COPILOT_BASE_URL = "https://api.githubcopilot.com";
 

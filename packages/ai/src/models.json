@@ -34729,9 +34729,9 @@
 		"qwen3.5-plus": {
 			"id": "qwen3.5-plus",
 			"name": "Qwen3.5 Plus",
-			"api": "anthropic-messages",
+			"api": "openai-completions",
 			"provider": "opencode-go",
-			"baseUrl": "https://opencode.ai/zen/go",
+			"baseUrl": "https://opencode.ai/zen/go/v1",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -34754,9 +34754,9 @@
 		"qwen3.6-plus": {
 			"id": "qwen3.6-plus",
 			"name": "Qwen3.6 Plus",
-			"api": "anthropic-messages",
+			"api": "openai-completions",
 			"provider": "opencode-go",
-			"baseUrl": "https://opencode.ai/zen/go",
+			"baseUrl": "https://opencode.ai/zen/go/v1",
 			"reasoning": true,
 			"input": [
 				"text",
