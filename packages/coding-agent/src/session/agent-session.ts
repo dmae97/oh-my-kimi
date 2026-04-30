@@ -6518,6 +6518,8 @@ export class AgentSession {
 		cancelled: boolean;
 		aborted?: boolean;
 		summaryEntry?: BranchSummaryEntry;
+		/** Raw session context built during navigation — pass to renderInitialMessages to skip a second O(N) walk. */
+		sessionContext?: SessionContext;
 	}> {
 		const oldLeafId = this.sessionManager.getLeafId();
 
@@ -6647,15 +6649,20 @@ export class AgentSession {
 			this.sessionManager.branch(newLeafId);
 		}
 
-		// Update agent state
-		const sessionContext = this.buildDisplaySessionContext();
-		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
-		this.agent.replaceMessages(sessionContext.messages);
+		// Update agent state — build display context to populate agent messages.
+		const stateContext = this.sessionManager.buildSessionContext();
+		const displayContext = deobfuscateSessionContext(stateContext, this.#obfuscator);
+		await this.#restoreMCPSelectionsForSessionContext(displayContext);
+		this.agent.replaceMessages(displayContext.messages);
 		this.#syncTodoPhasesFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 
-		// Emit session_tree event
-		if (this.#extensionRunner) {
+		this.#branchSummaryAbortController = undefined;
+
+		// Emit session_tree event; only handlers can mutate session entries, so skip
+		// the emit and the context rebuild when no handlers are registered (mirrors
+		// the session_before_tree guard above).
+		if (this.#extensionRunner?.hasHandlers("session_tree")) {
 			await this.#extensionRunner.emit({
 				type: "session_tree",
 				newLeafId: this.sessionManager.getLeafId(),
@@ -6663,10 +6670,10 @@ export class AgentSession {
 				summaryEntry,
 				fromExtension: summaryText ? fromExtension : undefined,
 			});
+			const rawContext = this.sessionManager.buildSessionContext();
+			return { editorText, cancelled: false, summaryEntry, sessionContext: rawContext };
 		}
-
-		this.#branchSummaryAbortController = undefined;
-		return { editorText, cancelled: false, summaryEntry };
+		return { editorText, cancelled: false, summaryEntry, sessionContext: stateContext };
 	}
 
 	/**

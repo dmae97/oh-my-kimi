@@ -159,7 +159,7 @@ export interface InteractiveModeContext {
 		sessionContext: SessionContext,
 		options?: { updateFooter?: boolean; populateHistory?: boolean },
 	): void;
-	renderInitialMessages(): void;
+	renderInitialMessages(prebuiltContext?: SessionContext): void;
 	getUserMessageText(message: Message): string;
 	findLastAssistantMessage(): AssistantMessage | undefined;
 	extractAssistantText(message: AssistantMessage): string;

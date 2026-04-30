@@ -659,9 +659,9 @@ export class SelectorController {
 							return;
 						}
 
-						// Update UI
+						// Update UI — pass the context built by navigateTree to skip a second O(N) walk.
 						this.ctx.chatContainer.clear();
-						this.ctx.renderInitialMessages();
+						this.ctx.renderInitialMessages(result.sessionContext);
 						await this.ctx.reloadTodos();
 						if (result.editorText && !this.ctx.editor.getText().trim()) {
 							this.ctx.editor.setText(result.editorText);
