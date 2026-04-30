@@ -1,9 +1,11 @@
-import type { Ellipsis, ExtractSegmentsResult, SliceResult } from "@oh-my-pi/pi-natives";
 import {
+	Ellipsis,
+	type ExtractSegmentsResult,
 	extractSegments as nativeExtractSegments,
 	sliceWithWidth as nativeSliceWithWidth,
 	truncateToWidth as nativeTruncateToWidth,
 	wrapTextWithAnsi as nativeWrapTextWithAnsi,
+	type SliceResult,
 } from "@oh-my-pi/pi-natives";
 import { getDefaultTabWidth, getIndentation } from "@oh-my-pi/pi-utils";
 
@@ -21,7 +23,12 @@ export function truncateToWidth(
 	ellipsisKind?: Ellipsis | null,
 	pad?: boolean | null,
 ): string {
-	return nativeTruncateToWidth(text, maxWidth, ellipsisKind ?? null, pad ?? null, getDefaultTabWidth());
+	// Guard nullish napi inputs: napi-rs 3 on the Windows prebuilt rejects
+	// `null` for `Option<u8>` (Ellipsis) / `Option<bool>` (pad) (issue #848),
+	// and `maxWidth` is a required `u32` that throws on `null`/`undefined`
+	// everywhere. Pass concrete defaults that mirror the Rust `unwrap_or`s.
+	const safeWidth = Number.isFinite(maxWidth) ? Math.max(0, Math.trunc(maxWidth)) : 0;
+	return nativeTruncateToWidth(text, safeWidth, ellipsisKind ?? Ellipsis.Unicode, pad ?? false, getDefaultTabWidth());
 }
 
 export function wrapTextWithAnsi(text: string, width: number): string[] {
