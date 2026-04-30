@@ -18,13 +18,64 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Compute a stable hash of every input that affects the native cdylib output,
+  # then look for a prior successful main build that already produced artifacts
+  # with this hash. If found, downstream consumers reuse those artifacts and
+  # the native job is skipped entirely.
+  rust-hash:
+    runs-on: ubuntu-22.04
+    outputs:
+      hash: ${{ steps.compute.outputs.hash }}
+      run-id: ${{ steps.find.outputs.run-id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute rust source hash
+        id: compute
+        shell: bash
+        run: |
+          hash=$(find crates Cargo.toml Cargo.lock rust-toolchain.toml \
+                  packages/natives/scripts packages/natives/package.json \
+                  scripts/ci-build-native.ts scripts/host-detect.ts \
+                  -type f -print0 \
+                | sort -z \
+                | xargs -0 sha256sum \
+                | sha256sum \
+                | cut -c1-16)
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+          echo "Rust source hash: $hash"
+      - name: Find prior main build with matching hash
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          hash="${{ steps.compute.outputs.hash }}"
+          # Canary artifact: main always builds linux-x64-modern, so its presence
+          # implies the run has the full multi-platform set we need.
+          canary="pi-natives-linux-x64-modern-h${hash}"
+          run_id=""
+          for candidate in $(gh run list \
+              --workflow=ci.yml --branch=main --status=success --event=push \
+              --limit=20 --json databaseId --jq='.[].databaseId'); do
+            if gh api "/repos/${{ github.repository }}/actions/runs/$candidate/artifacts?per_page=100" \
+                --jq ".artifacts[] | select(.name == \"$canary\") | select(.expired == false) | .id" \
+                | grep -q .; then
+              run_id="$candidate"
+              break
+            fi
+          done
+          if [ -n "$run_id" ]; then
+            echo "Reusing native artifacts from run $run_id"
+          else
+            echo "No cached native artifacts for hash $hash; native job will rebuild."
+          fi
+          echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+
   # Fast lint + type check (no Rust, no native build needed)
   check:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3"
@@ -38,17 +89,25 @@ jobs:
         run: bun run ci:check:full
 
   native:
+    needs: [rust-hash]
+    if: ${{ needs.rust-hash.outputs.run-id == '' }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ startsWith(github.ref, 'refs/tags/v') && fromJSON('[
-          {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variants":"baseline modern","rust_checks":true},
+        # Tag and main pushes build the full multi-platform set (so the cache
+        # has every artifact a future tag could need). PRs only build linux-x64.
+        include: ${{ (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main') && fromJSON('[
+          {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"baseline","rust_checks":true},
+          {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"modern"},
           {"os":"ubuntu-22.04","platform":"linux","arch":"arm64","target":"aarch64-unknown-linux-gnu"},
-          {"os":"macos-15-intel","platform":"darwin","arch":"x64","variants":"baseline modern"},
+          {"os":"macos-15-intel","platform":"darwin","arch":"x64","variant":"baseline"},
+          {"os":"macos-15-intel","platform":"darwin","arch":"x64","variant":"modern"},
           {"os":"macos-14","platform":"darwin","arch":"arm64"},
-          {"os":"windows-latest","platform":"win32","arch":"x64","variants":"baseline modern"}
+          {"os":"windows-latest","platform":"win32","arch":"x64","variant":"baseline"},
+          {"os":"windows-latest","platform":"win32","arch":"x64","variant":"modern"}
           ]') || fromJSON('[
-          {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variants":"baseline modern","rust_checks":true}
+          {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"baseline","rust_checks":true},
+          {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"modern"}
           ]') }}
     runs-on: ${{ matrix.os }}
     steps:
@@ -65,7 +124,9 @@ jobs:
         run: rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          shared-key: native-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.variant || 'default' }}
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
           cache-workspace-crates: true
       - uses: oven-sh/setup-bun@v2
         with:
@@ -87,7 +148,7 @@ jobs:
           CROSS_TARGET: ${{ matrix.target }}
           TARGET_PLATFORM: ${{ matrix.platform }}
           TARGET_ARCH: ${{ matrix.arch }}
-          TARGET_VARIANTS: ${{ matrix.variants }}
+          TARGET_VARIANTS: ${{ matrix.variant }}
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         shell: bash
         run: |
@@ -95,17 +156,18 @@ jobs:
       - name: Upload native addon(s)
         uses: actions/upload-artifact@v4
         with:
-          name: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}
+          name: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.variant && format('-{0}', matrix.variant) || '' }}-h${{ needs.rust-hash.outputs.hash }}
           path: packages/natives/native/pi_natives.${{ matrix.platform }}-${{ matrix.arch }}*.node
           if-no-files-found: error
 
   test:
     runs-on: ubuntu-22.04
+    needs: [native, rust-hash]
+    if: ${{ !cancelled() && needs.native.result != 'failure' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           lfs: true
       - uses: oven-sh/setup-bun@v2
         with:
@@ -115,6 +177,9 @@ jobs:
           toolchain: nightly-2026-04-29
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: test-linux-x64
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
           cache-workspace-crates: true
       - uses: taiki-e/install-action@v2
         with:
@@ -134,9 +199,28 @@ jobs:
           sudo ln -s $(which fdfind) /usr/local/bin/fd
           sudo ln -sf /usr/bin/convert /usr/local/bin/magick
       - run: bun install --frozen-lockfile
-      - run: bun run build:native
-      - name: Test workspace
-        run: bun run ci:test:full
+      - name: Resolve native source run
+        id: source
+        shell: bash
+        run: |
+          if [ "${{ needs.native.result }}" = "success" ]; then
+            echo "run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "run-id=${{ needs.rust-hash.outputs.run-id }}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Download native addons
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pi-natives-linux-x64-*-h${{ needs.rust-hash.outputs.hash }}
+          path: packages/natives/native
+          merge-multiple: true
+          run-id: ${{ steps.source.outputs.run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Test workspace (TS)
+        run: bun run test:ts
+      - name: Test workspace (Rust)
+        if: ${{ needs.native.result == 'success' }}
+        run: bun run test:rs
       - name: CLI smoke test
         run: bun run ci:test:smoke
 
@@ -144,8 +228,6 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3"
@@ -154,6 +236,9 @@ jobs:
           toolchain: nightly-2026-04-29
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: install-methods-linux-x64
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
           cache-workspace-crates: true
       - uses: mlugg/setup-zig@v2
         with:
@@ -174,32 +259,17 @@ jobs:
         run: bun run ci:test:install-methods
 
   release_binary:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [check, native, test, install_methods]
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.native.result != 'failure' && needs.test.result == 'success' && needs.check.result == 'success' && needs.install_methods.result == 'success' }}
+    needs: [check, native, test, install_methods, rust-hash]
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
-            target_id: linux-x64
-            native_artifact: pi-natives-linux-x64
-            binary_path: packages/coding-agent/binaries/omp-linux-x64
-          - os: ubuntu-24.04-arm
-            target_id: linux-arm64
-            native_artifact: pi-natives-linux-arm64
-            binary_path: packages/coding-agent/binaries/omp-linux-arm64
-          - os: macos-15-intel
-            target_id: darwin-x64
-            native_artifact: pi-natives-darwin-x64
-            binary_path: packages/coding-agent/binaries/omp-darwin-x64
-          - os: macos-14
-            target_id: darwin-arm64
-            native_artifact: pi-natives-darwin-arm64
-            binary_path: packages/coding-agent/binaries/omp-darwin-arm64
-          - os: windows-latest
-            target_id: win32-x64
-            native_artifact: pi-natives-win32-x64
-            binary_path: packages/coding-agent/binaries/omp-windows-x64.exe
+          - {os: ubuntu-22.04, platform: linux, arch: x64, target_id: linux-x64, binary_path: packages/coding-agent/binaries/omp-linux-x64}
+          - {os: ubuntu-24.04-arm, platform: linux, arch: arm64, target_id: linux-arm64, binary_path: packages/coding-agent/binaries/omp-linux-arm64}
+          - {os: macos-15-intel, platform: darwin, arch: x64, target_id: darwin-x64, binary_path: packages/coding-agent/binaries/omp-darwin-x64}
+          - {os: macos-14, platform: darwin, arch: arm64, target_id: darwin-arm64, binary_path: packages/coding-agent/binaries/omp-darwin-arm64}
+          - {os: windows-latest, platform: win32, arch: x64, target_id: win32-x64, binary_path: packages/coding-agent/binaries/omp-windows-x64.exe}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -216,11 +286,23 @@ jobs:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile
+      - name: Resolve native source run
+        id: source
+        shell: bash
+        run: |
+          if [ "${{ needs.native.result }}" = "success" ]; then
+            echo "run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "run-id=${{ needs.rust-hash.outputs.run-id }}" >> "$GITHUB_OUTPUT"
+          fi
       - name: Download native addon(s)
         uses: actions/download-artifact@v4
         with:
-          name: ${{ matrix.native_artifact }}
+          pattern: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}*-h${{ needs.rust-hash.outputs.hash }}
           path: packages/natives/native
+          merge-multiple: true
+          run-id: ${{ steps.source.outputs.run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build release binary
         env:
           RELEASE_TARGETS: ${{ matrix.target_id }}
@@ -246,8 +328,8 @@ jobs:
           path: ${{ matrix.binary_path }}
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [release_binary]
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.release_binary.result == 'success' }}
+    needs: [release_binary, native, rust-hash]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -274,12 +356,23 @@ jobs:
           pattern: omp-binary-*
           path: packages/coding-agent/binaries
           merge-multiple: true
+      - name: Resolve native source run
+        id: source
+        shell: bash
+        run: |
+          if [ "${{ needs.native.result }}" = "success" ]; then
+            echo "run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "run-id=${{ needs.rust-hash.outputs.run-id }}" >> "$GITHUB_OUTPUT"
+          fi
       - name: Download native addons
         uses: actions/download-artifact@v4
         with:
-          pattern: pi-natives-*
+          pattern: pi-natives-*-h${{ needs.rust-hash.outputs.hash }}
           path: packages/natives/native
           merge-multiple: true
+          run-id: ${{ steps.source.outputs.run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify native addons
         run: bun run ci:release:verify-natives
       - name: Stage native addons for release

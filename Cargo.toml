@@ -23,6 +23,11 @@ panic = "abort"
 
 [profile.ci]
 inherits = "release"
+lto = "thin"
+codegen-units = 16
+debug = "line-tables-only"
+strip = "none"
+split-debuginfo = "off"
 
 [profile.local]
 inherits = "release"

@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Stopped overriding `CARGO_TARGET_DIR` with an internal `target/napi-build/...` directory during native builds, so Cargo now uses the default or caller-provided target directory
+- Simplified native build profile suffix formatting without changing `local` and `ci` values
+- Changed the native build output behavior to avoid setting an isolated Cargo target directory automatically
 
 ## [14.5.12] - 2026-04-30
 ### Breaking Changes

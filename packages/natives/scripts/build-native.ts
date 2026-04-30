@@ -189,24 +189,10 @@ async function installGeneratedBindings(outputDir: string): Promise<void> {
 	}
 }
 
-function resolveManagedCargoTargetDir(profileLabel: string): string | null {
-	if (Bun.env.CARGO_TARGET_DIR) {
-		return null;
-	}
-
-	if (useLocalProfile) {
-		return null;
-	}
-
-	const buildTarget = crossTarget ?? `${targetPlatform}-${targetArch}`;
-	const variantLabel = effectiveVariant ?? "default";
-	return path.join(repoRoot, "target", "napi-build", `${buildTarget}-${variantLabel}-${profileLabel}`);
-}
-
 const isCI = Boolean(Bun.env.CI);
 const useLocalProfile = !isCI && !isCrossCompile;
 const profileLabel = useLocalProfile ? "local" : "ci";
-const profileSuffix = useLocalProfile ? " (local)" : " (ci)";
+const profileSuffix = ` (${profileLabel})`;
 
 const buildOutputDirPrefix = resolveBuildOutputDirPrefix(profileLabel);
 
@@ -247,12 +233,6 @@ const napiBin = Bun.which("napi", {
 });
 if (!napiBin) {
 	throw new Error("Could not locate @napi-rs/cli `napi` binary in node_modules/.bin");
-}
-
-const managedCargoTargetDir = resolveManagedCargoTargetDir(profileLabel);
-if (managedCargoTargetDir) {
-	Bun.env.CARGO_TARGET_DIR = managedCargoTargetDir;
-	console.log(`Using isolated CARGO_TARGET_DIR: ${managedCargoTargetDir}`);
 }
 
 const safeHostZigBuildConfig = resolveSafeHostZigBuildConfig();

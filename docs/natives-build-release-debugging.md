@@ -94,7 +94,7 @@ Runtime x64 candidate order also includes the unsuffixed default filename after 
 - `TARGET_PLATFORM`: override output platform tag naming.
 - `TARGET_ARCH`: override output arch naming.
 - `TARGET_VARIANT` (x64 only): force `modern` or `baseline` for output filename and RUSTFLAGS policy.
-- `CARGO_TARGET_DIR`: if set, respected; otherwise CI/cross builds use an isolated managed target directory under `target/napi-build/...`.
+- `CARGO_TARGET_DIR`: respected if set; otherwise the default `target/` dir is used so `Swatinem/rust-cache` can cache cleanly.
 - `RUSTFLAGS`:
   - if unset and not cross-compiling, script sets:
     - modern: `-C target-cpu=x86-64-v3`
