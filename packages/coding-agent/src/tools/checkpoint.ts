@@ -52,7 +52,7 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 	readonly description: string;
 	readonly parameters = checkpointSchema;
 	readonly strict = true;
-	readonly intent = (args: Partial<CheckpointParams>) => args.goal;
+	readonly intent = (args: Partial<CheckpointParams>) => (args.goal ? `checkpointing: ${args.goal}` : "checkpointing");
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(checkpointDescription);
@@ -95,7 +95,7 @@ export class RewindTool implements AgentTool<typeof rewindSchema, RewindToolDeta
 	readonly description: string;
 	readonly parameters = rewindSchema;
 	readonly strict = true;
-	readonly intent = (): string => "Rewinding to checkpoint";
+	readonly intent = (): string => "rewinding";
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(rewindDescription);

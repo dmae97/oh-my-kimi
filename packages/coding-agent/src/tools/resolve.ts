@@ -110,8 +110,13 @@ export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveToolD
 	readonly description: string;
 	readonly parameters = resolveSchema;
 	readonly strict = true;
-	readonly intent = (args: Partial<ResolveParams>) =>
-		args.action === "discard" ? "Discarding pending action" : "Applying pending action";
+	readonly intent = (args: Partial<ResolveParams>) => {
+		if (args.action === "discard") {
+			return args.reason ? `discarding: ${args.reason}` : "aiscarding changes";
+		} else {
+			return args.reason ? `accepting: ${args.reason}` : "accepting changes";
+		}
+	};
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(resolveDescription);
