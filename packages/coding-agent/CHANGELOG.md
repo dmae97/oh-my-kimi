@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.5.9] - 2026-04-30
+
 ### Added
 
 - Added the `/context` slash command to display an estimated context-usage breakdown panel for the current session

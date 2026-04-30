@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.5.9] - 2026-04-30
 ### Added
 
 - Added `usage.reasoningTokens` to OpenAI and Google usage output when providers report reasoning/thinking tokens
