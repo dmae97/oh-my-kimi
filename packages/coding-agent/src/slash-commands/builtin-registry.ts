@@ -356,6 +356,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "context",
+		description: "Show estimated context usage breakdown",
+		handle: (_command, runtime) => {
+			runtime.ctx.handleContextCommand();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "extensions",
 		aliases: ["status"],
 		description: "Open Extension Control Center dashboard",

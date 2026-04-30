@@ -1399,6 +1399,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#commandController.handleToolsCommand();
 	}
 
+	handleContextCommand(): void {
+		this.#commandController.handleContextCommand();
+	}
+
 	#prepareSessionSwitch(): void {
 		this.#btwController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();

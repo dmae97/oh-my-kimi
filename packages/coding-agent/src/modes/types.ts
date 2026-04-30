@@ -181,6 +181,7 @@ export interface InteractiveModeContext {
 	handleChangelogCommand(showFull?: boolean): Promise<void>;
 	handleHotkeysCommand(): void;
 	handleToolsCommand(): void;
+	handleContextCommand(): void;
 	handleDumpCommand(): void;
 	handleDebugTranscriptCommand(): Promise<void>;
 	handleClearCommand(): Promise<void>;

@@ -24,6 +24,7 @@ import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { PythonExecutionComponent } from "../../modes/components/python-execution";
 import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
+import { computeContextBreakdown, renderContextUsage } from "../../modes/utils/context-usage";
 import { buildHotkeysMarkdown } from "../../modes/utils/hotkeys-markdown";
 import { buildToolsMarkdown } from "../../modes/utils/tools-markdown";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
@@ -527,6 +528,22 @@ export class CommandController {
 	handleToolsCommand(): void {
 		const tools = buildToolsMarkdown({ tools: this.ctx.session.agent.state.tools });
 		showMarkdownPanel(this.ctx, "Available Tools", tools);
+	}
+
+	handleContextCommand(): void {
+		const breakdown = computeContextBreakdown(this.ctx.session);
+		if (breakdown.contextWindow <= 0) {
+			this.ctx.showWarning("Context usage is unavailable: no model is selected for this session.");
+			return;
+		}
+		const output = renderContextUsage(breakdown, theme);
+		this.ctx.chatContainer.addChild(new Spacer(1));
+		this.ctx.chatContainer.addChild(new DynamicBorder());
+		this.ctx.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Context Usage")), 1, 0));
+		this.ctx.chatContainer.addChild(new Spacer(1));
+		this.ctx.chatContainer.addChild(new Text(output, 1, 0));
+		this.ctx.chatContainer.addChild(new DynamicBorder());
+		this.ctx.ui.requestRender();
 	}
 
 	async handleMemoryCommand(text: string): Promise<void> {

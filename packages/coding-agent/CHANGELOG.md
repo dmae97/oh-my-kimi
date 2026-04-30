@@ -1,8 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added the `/context` slash command to display an estimated context-usage breakdown panel for the current session
 - Added `-LidA..LidB` syntax to delete inclusive line ranges in a single atom operation
 - Added `LidA..LidB=TEXT` range-replace syntax with `\TEXT` and `\` continuation lines for multi-line replacement blocks
 - Added shorthand cursor+insert operations in atom edits, including `^Lid` (insert before anchor), `^+TEXT`, `$+TEXT`, and `Lid+TEXT`/`@Lid+TEXT`
@@ -10,6 +12,7 @@
 
 ### Changed
 
+- Changed token counting to use tokenizer-based estimates instead of a character-per-4 heuristic for context and compaction calculations
 - Changed hashline anchor auto-rebase tolerance from ±2 lines to ±5 lines for stale Lid recovery
 - Changed atom input handling so `#`-prefixed lines are treated as comments and ignored
 - Changed execution when all edits are no-op `Lid=TEXT` replacements to return success with a no-change explanation instead of throwing
