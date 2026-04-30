@@ -129,32 +129,6 @@ async function installBinary(src: string, dest: string): Promise<void> {
 		}
 	}
 }
-async function patchGeneratedIndexLoader(): Promise<void> {
-	const indexPath = path.join(nativeDir, "index.js");
-	let content = await Bun.file(indexPath).text();
-	const embeddedLoadPatch = "let embeddedAddon = null;\n";
-	if (!content.includes(embeddedLoadPatch)) {
-		content = content.replace(/const \{ embeddedAddon \} = require\("\.\/embedded-addon"\);\n/, embeddedLoadPatch);
-	}
-	const lazyLoadPatch = [
-		"if (isCompiledBinary) {",
-		"\ttry {",
-		'\t\t({ embeddedAddon } = require("./embedded-addon"));',
-		"\t} catch {",
-		"\t\tembeddedAddon = null;",
-		"\t}",
-		"}",
-		"",
-	].join("\n");
-	if (!content.includes(lazyLoadPatch)) {
-		content = content.replace(
-			/(const isCompiledBinary =[\s\S]*?__filename\.includes\("%7EBUN"\);\n)/,
-			`$1\n${lazyLoadPatch}`,
-		);
-	}
-	await Bun.write(indexPath, content);
-}
-
 async function resolveBuiltAddonPath(outputDir: string, canonicalFilename: string): Promise<string> {
 	// napi-rs 3.x emits `${binaryName}.${platformArchABI}.node` where
 	// platformArchABI is e.g. `darwin-x64`, `linux-x64-gnu`, `win32-x64-msvc`,
@@ -308,7 +282,6 @@ try {
 	await installGeneratedBindings(buildOutputDir);
 
 	await generateEnumExports();
-	await patchGeneratedIndexLoader();
 
 	console.log("Build complete.");
 } finally {

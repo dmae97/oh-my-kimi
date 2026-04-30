@@ -34,7 +34,7 @@ async function main(): Promise<void> {
 					"build",
 					"--compile",
 					"--define",
-					"PI_COMPILED=true",
+					'process.env.PI_COMPILED="true"',
 					"--external",
 					"mupdf",
 					"--root",

@@ -320,7 +320,7 @@ export declare function copyToClipboard(text: string): void
  *
  * Uses ordinary encoding (no special-token handling), which is the right
  * choice for measuring user/model content rather than wire-protocol tokens.
- * Defaults to `o200k_base`; pass `Cl100kBase` for older OpenAI models.
+ * Defaults to `o200k_base`; pass `Cl100kBase` for older `OpenAI` models.
  */
 export declare function countTokens(input: string | Array<string>, encoding?: Encoding | undefined | null): number
 
