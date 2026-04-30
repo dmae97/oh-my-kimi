@@ -53,11 +53,35 @@ function normalizePathForComparison(filePath: string): string {
 	return normalized;
 }
 
-function isPathInDirectory(filePath: string, directoryPath: string): boolean {
+function tryRealpath(p: string): string | undefined {
+	try {
+		return fs.realpathSync.native(p);
+	} catch {
+		return undefined;
+	}
+}
+
+function isPathInDirectoryLexical(filePath: string, directoryPath: string): boolean {
 	const normalizedPath = normalizePathForComparison(path.resolve(filePath));
 	const normalizedDirectory = normalizePathForComparison(path.resolve(directoryPath));
 	const relativePath = path.relative(normalizedDirectory, normalizedPath);
 	return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
+}
+
+function isPathInDirectory(filePath: string, directoryPath: string): boolean {
+	if (isPathInDirectoryLexical(filePath, directoryPath)) return true;
+	// Layer realpath resolution on top of the lexical guard. On Windows, ~/.bun
+	// is a junction when Bun is installed via Scoop, so `bun pm bin -g` and the
+	// PATH-resolved omp path can refer to the same directory through different
+	// strings. path.resolve does not traverse junctions/symlinks; realpath does.
+	// Resolve the file's parent directory to tolerate the file itself not yet
+	// existing (e.g. a fresh install path) while still catching link-traversed
+	// equality once the directory exists.
+	const fileDir = tryRealpath(path.dirname(path.resolve(filePath)));
+	const dirReal = tryRealpath(path.resolve(directoryPath));
+	if (!fileDir || !dirReal) return false;
+	const resolvedFile = path.join(fileDir, path.basename(filePath));
+	return isPathInDirectoryLexical(resolvedFile, dirReal);
 }
 
 type UpdateTarget = { method: "bun" } | { method: "binary"; path: string };
