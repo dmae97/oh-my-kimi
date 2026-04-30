@@ -431,6 +431,7 @@ function mapOptionsForApi<TApi extends Api>(
 		sessionId: options?.sessionId,
 		providerSessionState: options?.providerSessionState,
 		onPayload: options?.onPayload,
+		onResponse: options?.onResponse,
 		execHandlers: options?.execHandlers,
 	};
 
