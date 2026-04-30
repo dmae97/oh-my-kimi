@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
@@ -33,6 +33,10 @@ import * as piUtils from "@oh-my-pi/pi-utils";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("lsp regressions", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	it("detects bracket-style glob patterns", () => {
 		expect(hasGlobPattern("src/[ab].ts")).toBe(true);
 		expect(hasGlobPattern("src/**/*.ts")).toBe(true);
@@ -416,6 +420,428 @@ describe("lsp regressions", () => {
 			expect(detectLanguageId(specPath)).toBe("tlaplus");
 			expect(detectLanguageId(aliasPath)).toBe("tlaplus");
 		} finally {
+			tempDir.removeSync();
+		}
+	});
+	it("rename_file applies LSP willRenameFiles edits and renames the file", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-rename-file-");
+		try {
+			const sourceFile = path.join(tempDir.path(), "src", "old.ts");
+			const destFile = path.join(tempDir.path(), "src", "new.ts");
+			const referencingFile = path.join(tempDir.path(), "src", "consumer.ts");
+			await Bun.write(sourceFile, "export const value = 42;\n");
+			await Bun.write(referencingFile, "import { value } from './old';\nconsole.log(value);\n");
+
+			const sourceUri = fileToUri(sourceFile);
+			const destUri = fileToUri(destFile);
+			const referencingUri = fileToUri(referencingFile);
+
+			const server: ServerConfig = { command: "test-lsp", fileTypes: ["ts"], rootMarkers: [] };
+			const client: LspClient = {
+				name: "test-lsp",
+				cwd: tempDir.path(),
+				config: server,
+				proc: {
+					stdin: { write() {}, flush: async () => {} },
+				} as unknown as LspClient["proc"],
+				requestId: 0,
+				diagnostics: new Map(),
+				diagnosticsVersion: 0,
+				openFiles: new Map(),
+				pendingRequests: new Map(),
+				messageBuffer: new Uint8Array(),
+				isReading: false,
+				lastActivity: Date.now(),
+				writeQueue: Promise.resolve(),
+				activeProgressTokens: new Set(),
+				projectLoaded: Promise.resolve(),
+				resolveProjectLoaded: () => {},
+			};
+
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { "test-lsp": server },
+				idleTimeoutMs: undefined,
+			});
+			vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+
+			const willRenameRequests: Array<{ method: string; params: unknown }> = [];
+			vi.spyOn(lspClient, "sendRequest").mockImplementation(async (_client, method, params) => {
+				willRenameRequests.push({ method, params });
+				if (method === "workspace/willRenameFiles") {
+					return {
+						changes: {
+							[referencingUri]: [
+								{
+									range: {
+										start: { line: 0, character: 22 },
+										end: { line: 0, character: 29 },
+									},
+									newText: "'./new'",
+								},
+							],
+						},
+					};
+				}
+				return null;
+			});
+
+			const notifications: Array<{ method: string; params: unknown }> = [];
+			vi.spyOn(lspClient, "sendNotification").mockImplementation(async (_client, method, params) => {
+				notifications.push({ method, params });
+			});
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			const result = await tool.execute("rename-file-test", {
+				action: "rename_file",
+				file: sourceFile,
+				new_name: destFile,
+				timeout: 5,
+			});
+
+			expect(willRenameRequests).toHaveLength(1);
+			expect(willRenameRequests[0]?.method).toBe("workspace/willRenameFiles");
+			expect(willRenameRequests[0]?.params).toEqual({
+				files: [{ oldUri: sourceUri, newUri: destUri }],
+			});
+
+			// Filesystem actually moved
+			expect(fs.existsSync(sourceFile)).toBe(false);
+			expect(fs.existsSync(destFile)).toBe(true);
+
+			// Importer file got the LSP-provided edit
+			const updatedConsumer = await Bun.file(referencingFile).text();
+			expect(updatedConsumer).toBe("import { value } from './new';\nconsole.log(value);\n");
+
+			// didRenameFiles notification fired with the same pair list
+			const didRename = notifications.find(n => n.method === "workspace/didRenameFiles");
+			expect(didRename).toBeDefined();
+			expect(didRename?.params).toEqual({
+				files: [{ oldUri: sourceUri, newUri: destUri }],
+			});
+
+			const output = result.content
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("\n");
+			expect(output).toContain("Renamed");
+		} finally {
+			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
+	it("rename_file with apply:false previews edits without filesystem changes", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-rename-file-preview-");
+		try {
+			const sourceFile = path.join(tempDir.path(), "old.ts");
+			const destFile = path.join(tempDir.path(), "new.ts");
+			await Bun.write(sourceFile, "export const value = 42;\n");
+
+			const server: ServerConfig = { command: "test-lsp", fileTypes: ["ts"], rootMarkers: [] };
+			const client: LspClient = {
+				name: "test-lsp",
+				cwd: tempDir.path(),
+				config: server,
+				proc: {
+					stdin: { write() {}, flush: async () => {} },
+				} as unknown as LspClient["proc"],
+				requestId: 0,
+				diagnostics: new Map(),
+				diagnosticsVersion: 0,
+				openFiles: new Map(),
+				pendingRequests: new Map(),
+				messageBuffer: new Uint8Array(),
+				isReading: false,
+				lastActivity: Date.now(),
+				writeQueue: Promise.resolve(),
+				activeProgressTokens: new Set(),
+				projectLoaded: Promise.resolve(),
+				resolveProjectLoaded: () => {},
+			};
+
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { "test-lsp": server },
+				idleTimeoutMs: undefined,
+			});
+			vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+			vi.spyOn(lspClient, "sendRequest").mockResolvedValue({
+				documentChanges: [],
+			});
+			const notifySpy = vi.spyOn(lspClient, "sendNotification").mockResolvedValue();
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			await tool.execute("rename-file-preview", {
+				action: "rename_file",
+				file: sourceFile,
+				new_name: destFile,
+				apply: false,
+				timeout: 5,
+			});
+
+			expect(fs.existsSync(sourceFile)).toBe(true);
+			expect(fs.existsSync(destFile)).toBe(false);
+			expect(notifySpy).not.toHaveBeenCalledWith(expect.anything(), "workspace/didRenameFiles", expect.anything());
+		} finally {
+			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
+	it("rename_file enumerates every file inside a directory rename", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-rename-dir-");
+		try {
+			const srcDir = path.join(tempDir.path(), "old");
+			const dstDir = path.join(tempDir.path(), "new");
+			const fileA = path.join(srcDir, "a.ts");
+			const fileB = path.join(srcDir, "nested", "b.ts");
+			await Bun.write(fileA, "export const a = 1;\n");
+			await Bun.write(fileB, "export const b = 2;\n");
+
+			const server: ServerConfig = { command: "test-lsp", fileTypes: ["ts"], rootMarkers: [] };
+			const client: LspClient = {
+				name: "test-lsp",
+				cwd: tempDir.path(),
+				config: server,
+				proc: {
+					stdin: { write() {}, flush: async () => {} },
+				} as unknown as LspClient["proc"],
+				requestId: 0,
+				diagnostics: new Map(),
+				diagnosticsVersion: 0,
+				openFiles: new Map(),
+				pendingRequests: new Map(),
+				messageBuffer: new Uint8Array(),
+				isReading: false,
+				lastActivity: Date.now(),
+				writeQueue: Promise.resolve(),
+				activeProgressTokens: new Set(),
+				projectLoaded: Promise.resolve(),
+				resolveProjectLoaded: () => {},
+			};
+
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { "test-lsp": server },
+				idleTimeoutMs: undefined,
+			});
+			vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+
+			const requests: Array<{ method: string; params: unknown }> = [];
+			vi.spyOn(lspClient, "sendRequest").mockImplementation(async (_c, method, params) => {
+				requests.push({ method, params });
+				return null;
+			});
+			vi.spyOn(lspClient, "sendNotification").mockResolvedValue();
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			await tool.execute("rename-dir-test", {
+				action: "rename_file",
+				file: srcDir,
+				new_name: dstDir,
+				timeout: 5,
+			});
+
+			expect(requests).toHaveLength(1);
+			const params = requests[0]?.params as { files: Array<{ oldUri: string; newUri: string }> };
+			expect(params.files).toHaveLength(2);
+			const oldUris = params.files.map(f => f.oldUri).sort();
+			const newUris = params.files.map(f => f.newUri).sort();
+			expect(oldUris).toEqual([fileToUri(fileA), fileToUri(fileB)].sort());
+			expect(newUris).toEqual(
+				[fileToUri(path.join(dstDir, "a.ts")), fileToUri(path.join(dstDir, "nested", "b.ts"))].sort(),
+			);
+
+			// Directory was actually moved
+			expect(fs.existsSync(srcDir)).toBe(false);
+			expect(fs.existsSync(path.join(dstDir, "a.ts"))).toBe(true);
+			expect(fs.existsSync(path.join(dstDir, "nested", "b.ts"))).toBe(true);
+		} finally {
+			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
+	it("request action sends raw LSP method with auto-built textDocument/position params", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-request-");
+		try {
+			const filePath = path.join(tempDir.path(), "src", "lib.rs");
+			await Bun.write(filePath, 'fn main() {\n    println!("hi");\n}\n');
+
+			const server: ServerConfig = { command: "test-rs", fileTypes: ["rs"], rootMarkers: [] };
+			const client: LspClient = {
+				name: "test-rs",
+				cwd: tempDir.path(),
+				config: server,
+				proc: {
+					stdin: { write() {}, flush: async () => {} },
+				} as unknown as LspClient["proc"],
+				requestId: 0,
+				diagnostics: new Map(),
+				diagnosticsVersion: 0,
+				openFiles: new Map(),
+				pendingRequests: new Map(),
+				messageBuffer: new Uint8Array(),
+				isReading: false,
+				lastActivity: Date.now(),
+				writeQueue: Promise.resolve(),
+				activeProgressTokens: new Set(),
+				projectLoaded: Promise.resolve(),
+				resolveProjectLoaded: () => {},
+			};
+
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { "test-rs": server },
+				idleTimeoutMs: undefined,
+			});
+			vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-rs", server]]);
+			vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+			vi.spyOn(lspClient, "ensureFileOpen").mockResolvedValue();
+			vi.spyOn(lspClient, "sendNotification").mockResolvedValue();
+
+			const captured: Array<{ method: string; params: unknown }> = [];
+			vi.spyOn(lspClient, "sendRequest").mockImplementation(async (_c, method, requestParams) => {
+				captured.push({ method, params: requestParams });
+				return { expansion: "macro_rules!" };
+			});
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			const result = await tool.execute("request-test", {
+				action: "request",
+				file: filePath,
+				line: 2,
+				query: "rust-analyzer/expandMacro",
+				timeout: 5,
+			});
+
+			expect(captured).toHaveLength(1);
+			expect(captured[0]?.method).toBe("rust-analyzer/expandMacro");
+			expect(captured[0]?.params).toEqual({
+				textDocument: { uri: fileToUri(filePath) },
+				position: { line: 1, character: 4 },
+			});
+
+			const output = result.content
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("\n");
+			expect(output).toContain("rust-analyzer/expandMacro");
+			expect(output).toContain('"expansion"');
+			expect(output).toContain("macro_rules!");
+		} finally {
+			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
+	it("request action forwards explicit JSON payload verbatim", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-request-payload-");
+		try {
+			const server: ServerConfig = { command: "test-lsp", fileTypes: ["ts"], rootMarkers: [] };
+			const client: LspClient = {
+				name: "test-lsp",
+				cwd: tempDir.path(),
+				config: server,
+				proc: {
+					stdin: { write() {}, flush: async () => {} },
+				} as unknown as LspClient["proc"],
+				requestId: 0,
+				diagnostics: new Map(),
+				diagnosticsVersion: 0,
+				openFiles: new Map(),
+				pendingRequests: new Map(),
+				messageBuffer: new Uint8Array(),
+				isReading: false,
+				lastActivity: Date.now(),
+				writeQueue: Promise.resolve(),
+				activeProgressTokens: new Set(),
+				projectLoaded: Promise.resolve(),
+				resolveProjectLoaded: () => {},
+			};
+
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { "test-lsp": server },
+				idleTimeoutMs: undefined,
+			});
+			vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+
+			const captured: Array<{ method: string; params: unknown }> = [];
+			vi.spyOn(lspClient, "sendRequest").mockImplementation(async (_c, method, requestParams) => {
+				captured.push({ method, params: requestParams });
+				return null;
+			});
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			await tool.execute("request-payload", {
+				action: "request",
+				query: "workspace/executeCommand",
+				payload: JSON.stringify({ command: "_typescript.organizeImports", arguments: ["a.ts"] }),
+				timeout: 5,
+			});
+
+			expect(captured).toHaveLength(1);
+			expect(captured[0]?.method).toBe("workspace/executeCommand");
+			expect(captured[0]?.params).toEqual({
+				command: "_typescript.organizeImports",
+				arguments: ["a.ts"],
+			});
+		} finally {
+			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
+	it("capabilities action dumps server capabilities", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-caps-");
+		try {
+			const server: ServerConfig = { command: "test-lsp", fileTypes: ["ts"], rootMarkers: [] };
+			const client: LspClient = {
+				name: "test-lsp",
+				cwd: tempDir.path(),
+				config: server,
+				proc: {
+					stdin: { write() {}, flush: async () => {} },
+				} as unknown as LspClient["proc"],
+				requestId: 0,
+				diagnostics: new Map(),
+				diagnosticsVersion: 0,
+				openFiles: new Map(),
+				pendingRequests: new Map(),
+				messageBuffer: new Uint8Array(),
+				isReading: false,
+				lastActivity: Date.now(),
+				writeQueue: Promise.resolve(),
+				activeProgressTokens: new Set(),
+				projectLoaded: Promise.resolve(),
+				resolveProjectLoaded: () => {},
+				serverCapabilities: {
+					hoverProvider: true,
+					definitionProvider: true,
+					executeCommandProvider: { commands: ["_typescript.organizeImports"] },
+					experimental: { "rust-analyzer/expandMacro": true },
+				},
+			};
+
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { "test-lsp": server },
+				idleTimeoutMs: undefined,
+			});
+			vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			const result = await tool.execute("caps-test", {
+				action: "capabilities",
+				timeout: 5,
+			});
+
+			const output = result.content
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("\n");
+			expect(output).toContain("test-lsp:");
+			expect(output).toContain("hoverProvider");
+			expect(output).toContain("_typescript.organizeImports");
+			expect(output).toContain("rust-analyzer/expandMacro");
+		} finally {
+			vi.restoreAllMocks();
 			tempDir.removeSync();
 		}
 	});

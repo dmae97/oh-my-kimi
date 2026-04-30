@@ -1,6 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+- Added `rename_file` action to the Lsp tool to rename files and directories with LSP `workspace/willRenameFiles` and `workspace/didRenameFiles` flow, applying returned workspace edits before moving files
+- Added `apply: false` preview mode for `rename_file` so users can see planned LSP edits without performing filesystem changes
+- Added `request` action to invoke arbitrary LSP methods, with automatic `textDocument`/`position` parameter construction from `file`/`line`/`symbol` and support for explicit JSON `payload`
+- Added `capabilities` action to display language server capabilities (for a file or all configured servers) through the LSP tool
+
 ### Changed
 
 - Parallelized plugin root preloading with other startup initialization in `runRootCommand` to reduce startup latency
