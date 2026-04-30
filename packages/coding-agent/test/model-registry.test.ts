@@ -94,7 +94,10 @@ describe("ModelRegistry", () => {
 	}
 
 	function getOpenAICompat(model: Model | undefined): OpenAICompat | undefined {
-		return model?.api === "openai-completions" ? (model.compat as OpenAICompat | undefined) : undefined;
+		// All custom-model compat overrides flow through OpenAICompatSchema regardless of
+		// the underlying api ("openai-completions" vs "openai-responses"), so we can read
+		// the field for any model in this fixture.
+		return model?.compat as OpenAICompat | undefined;
 	}
 
 	/** Create a baseUrl-only override (no custom models) */
