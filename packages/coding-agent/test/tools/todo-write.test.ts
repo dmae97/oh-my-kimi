@@ -19,18 +19,13 @@ function createSession(initialPhases: TodoPhase[] = []): ToolSession {
 }
 
 describe("TodoWriteTool auto-start behavior", () => {
-	it("auto-starts the first task after replace", async () => {
+	it("auto-starts the first task after init", async () => {
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("call-1", {
 			ops: [
 				{
-					op: "replace",
-					phases: [
-						{
-							name: "Execution",
-							tasks: [{ content: "status" }, { content: "diagnostics" }],
-						},
-					],
+					op: "init",
+					list: [{ phase: "Execution", items: ["status", "diagnostics"] }],
 				},
 			],
 		});
@@ -40,8 +35,8 @@ describe("TodoWriteTool auto-start behavior", () => {
 		const summary = result.content.find(part => part.type === "text");
 		if (!summary || summary.type !== "text") throw new Error("Expected text summary from todo_write");
 		expect(summary.text).toContain("Remaining items (2):");
-		expect(summary.text).toContain("task-1 status [in_progress] (Execution)");
-		expect(summary.text).toContain("task-2 diagnostics [pending] (Execution)");
+		expect(summary.text).toContain("status [in_progress] (Execution)");
+		expect(summary.text).toContain("diagnostics [pending] (Execution)");
 	});
 
 	it("auto-promotes the next pending task when current task is completed", async () => {
@@ -49,55 +44,27 @@ describe("TodoWriteTool auto-start behavior", () => {
 		await tool.execute("call-1", {
 			ops: [
 				{
-					op: "replace",
-					phases: [
-						{
-							name: "Execution",
-							tasks: [{ content: "status" }, { content: "diagnostics" }],
-						},
-					],
+					op: "init",
+					list: [{ phase: "Execution", items: ["status", "diagnostics"] }],
 				},
 			],
 		});
 
-		const result = await tool.execute("call-2", { ops: [{ op: "done", task: "task-1" }] });
+		const result = await tool.execute("call-2", { ops: [{ op: "done", task: "status" }] });
 
 		const tasks = result.details?.phases[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["completed", "in_progress"]);
 		const summary = result.content.find(part => part.type === "text");
 		if (!summary || summary.type !== "text") throw new Error("Expected text summary from todo_write");
 		expect(summary.text).toContain("Remaining items (1):");
-		expect(summary.text).toContain("task-2 diagnostics [in_progress] (Execution)");
+		expect(summary.text).toContain("diagnostics [in_progress] (Execution)");
 
-		const completedResult = await tool.execute("call-3", { ops: [{ op: "done", task: "task-2" }] });
+		const completedResult = await tool.execute("call-3", { ops: [{ op: "done", task: "diagnostics" }] });
 		const completedSummary = completedResult.content.find(part => part.type === "text");
 		if (!completedSummary || completedSummary.type !== "text") {
 			throw new Error("Expected text summary from todo_write");
 		}
 		expect(completedSummary.text).toContain("Remaining items: none.");
-	});
-
-	it("keeps only one in_progress task when replace input contains multiples", async () => {
-		const tool = new TodoWriteTool(createSession());
-		const result = await tool.execute("call-1", {
-			ops: [
-				{
-					op: "replace",
-					phases: [
-						{
-							name: "Execution",
-							tasks: [
-								{ content: "status", status: "in_progress" },
-								{ content: "diagnostics", status: "in_progress" },
-							],
-						},
-					],
-				},
-			],
-		});
-
-		const tasks = result.details?.phases[0]?.tasks ?? [];
-		expect(tasks.map(task => task.status)).toEqual(["in_progress", "pending"]);
 	});
 });
 
@@ -107,18 +74,13 @@ describe("TodoWriteTool ops operations", () => {
 		await tool.execute("call-1", {
 			ops: [
 				{
-					op: "replace",
-					phases: [
-						{
-							name: "Phase A",
-							tasks: [{ content: "first" }, { content: "second" }, { content: "third" }],
-						},
-					],
+					op: "init",
+					list: [{ phase: "Phase A", items: ["first", "second", "third"] }],
 				},
 			],
 		});
 
-		const result = await tool.execute("call-2", { ops: [{ op: "start", task: "task-3" }] });
+		const result = await tool.execute("call-2", { ops: [{ op: "start", task: "third" }] });
 
 		const tasks = result.details?.phases[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["pending", "pending", "in_progress"]);
@@ -129,16 +91,16 @@ describe("TodoWriteTool ops operations", () => {
 		await tool.execute("call-1", {
 			ops: [
 				{
-					op: "replace",
-					phases: [
-						{ name: "A", tasks: [{ content: "a1" }, { content: "a2" }] },
-						{ name: "B", tasks: [{ content: "b1" }] },
+					op: "init",
+					list: [
+						{ phase: "A", items: ["a1", "a2"] },
+						{ phase: "B", items: ["b1"] },
 					],
 				},
 			],
 		});
 
-		const result = await tool.execute("call-2", { ops: [{ op: "start", task: "task-3" }] });
+		const result = await tool.execute("call-2", { ops: [{ op: "start", task: "b1" }] });
 
 		const allTasks = result.details?.phases.flatMap(phase => phase.tasks) ?? [];
 		expect(allTasks.map(task => task.status)).toEqual(["pending", "pending", "in_progress"]);
@@ -147,30 +109,30 @@ describe("TodoWriteTool ops operations", () => {
 	it("appends items to an existing phase", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "First" }] }] }],
+			ops: [{ op: "init", list: [{ phase: "Work", items: ["First"] }] }],
 		});
 
 		const result = await tool.execute("call-2", {
 			ops: [
 				{
 					op: "append",
-					phase: "phase-1",
-					items: [{ id: "task-9", label: "Second" }],
+					phase: "Work",
+					items: ["Second"],
 				},
 			],
 		});
 
 		const tasks = result.details?.phases[0]?.tasks ?? [];
-		expect(tasks.map(task => ({ id: task.id, content: task.content, status: task.status }))).toEqual([
-			{ id: "task-1", content: "First", status: "in_progress" },
-			{ id: "task-9", content: "Second", status: "pending" },
+		expect(tasks.map(task => ({ content: task.content, status: task.status }))).toEqual([
+			{ content: "First", status: "in_progress" },
+			{ content: "Second", status: "pending" },
 		]);
 	});
 
 	it("creates a phase when append targets a missing phase", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "First" }] }] }],
+			ops: [{ op: "init", list: [{ phase: "Work", items: ["First"] }] }],
 		});
 
 		const result = await tool.execute("call-2", {
@@ -178,16 +140,13 @@ describe("TodoWriteTool ops operations", () => {
 				{
 					op: "append",
 					phase: "Cleanup",
-					items: [{ id: "task-10", label: "Remove dead code" }],
+					items: ["Remove dead code"],
 				},
 			],
 		});
 
-		expect(result.details?.phases.map(phase => ({ id: phase.id, name: phase.name }))).toEqual([
-			{ id: "phase-1", name: "Work" },
-			{ id: "Cleanup", name: "Cleanup" },
-		]);
-		expect(result.details?.phases[1]?.tasks.map(task => task.id)).toEqual(["task-10"]);
+		expect(result.details?.phases.map(phase => phase.name)).toEqual(["Work", "Cleanup"]);
+		expect(result.details?.phases[1]?.tasks.map(task => task.content)).toEqual(["Remove dead code"]);
 	});
 
 	it("marks all tasks in a phase done", async () => {
@@ -195,16 +154,16 @@ describe("TodoWriteTool ops operations", () => {
 		await tool.execute("call-1", {
 			ops: [
 				{
-					op: "replace",
-					phases: [
-						{ name: "Work", tasks: [{ content: "First" }, { content: "Second" }] },
-						{ name: "Later", tasks: [{ content: "Third" }] },
+					op: "init",
+					list: [
+						{ phase: "Work", items: ["First", "Second"] },
+						{ phase: "Later", items: ["Third"] },
 					],
 				},
 			],
 		});
 
-		const result = await tool.execute("call-2", { ops: [{ op: "done", phase: "phase-1" }] });
+		const result = await tool.execute("call-2", { ops: [{ op: "done", phase: "Work" }] });
 		const allTasks = result.details?.phases.flatMap(phase => phase.tasks) ?? [];
 		expect(allTasks.map(task => task.status)).toEqual(["completed", "completed", "in_progress"]);
 	});
@@ -214,8 +173,8 @@ describe("TodoWriteTool ops operations", () => {
 		await tool.execute("call-1", {
 			ops: [
 				{
-					op: "replace",
-					phases: [{ name: "Work", tasks: [{ content: "First" }, { content: "Second" }] }],
+					op: "init",
+					list: [{ phase: "Work", items: ["First", "Second"] }],
 				},
 			],
 		});
@@ -232,13 +191,13 @@ describe("TodoWriteTool ops operations", () => {
 		await tool.execute("call-1", {
 			ops: [
 				{
-					op: "replace",
-					phases: [{ name: "Work", tasks: [{ content: "First" }, { content: "Second" }] }],
+					op: "init",
+					list: [{ phase: "Work", items: ["First", "Second"] }],
 				},
 			],
 		});
 
-		const result = await tool.execute("call-2", { ops: [{ op: "drop", phase: "phase-1" }] });
+		const result = await tool.execute("call-2", { ops: [{ op: "drop", phase: "Work" }] });
 		const tasks = result.details?.phases[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["abandoned", "abandoned"]);
 	});

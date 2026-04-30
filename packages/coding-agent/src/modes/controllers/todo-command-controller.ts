@@ -21,7 +21,7 @@ const USAGE = [
 	"  /todo export <path>                Write todos as Markdown to <path>",
 	"  /todo import <path>                Replace todos from Markdown at <path>",
 	"  /todo append [<phase>] <task...>   Append a task; phase fuzzy-matched or auto-created",
-	"  /todo start  <task>                Mark task in_progress (id or fuzzy content)",
+	"  /todo start  <task>                Mark task in_progress (fuzzy content match)",
 	"  /todo done   [<task|phase>]        Mark task/phase/all completed",
 	"  /todo drop   [<task|phase>]        Mark task/phase/all abandoned",
 	"  /todo rm     [<task|phase>]        Remove task/phase/all",
@@ -59,43 +59,8 @@ function tokenize(input: string): string[] {
 }
 
 // =============================================================================
-// Roman numerals + name normalization
+// Name normalization
 // =============================================================================
-
-const ROMAN_PAIRS: Array<[number, string]> = [
-	[1000, "M"],
-	[900, "CM"],
-	[500, "D"],
-	[400, "CD"],
-	[100, "C"],
-	[90, "XC"],
-	[50, "L"],
-	[40, "XL"],
-	[10, "X"],
-	[9, "IX"],
-	[5, "V"],
-	[4, "IV"],
-	[1, "I"],
-];
-
-function toRoman(n: number): string {
-	if (n <= 0) return "I";
-	let out = "";
-	let rem = n;
-	for (const [value, sym] of ROMAN_PAIRS) {
-		while (rem >= value) {
-			out += sym;
-			rem -= value;
-		}
-	}
-	return out;
-}
-
-const PHASE_PREFIX_RE = /^([IVXLCDM]+|[A-Z]|\d+)\.\s*/i;
-
-function stripPrefix(name: string): string {
-	return name.replace(PHASE_PREFIX_RE, "").trim();
-}
 
 function titleCase(s: string): string {
 	return s
@@ -105,13 +70,6 @@ function titleCase(s: string): string {
 		.join(" ");
 }
 
-function buildPhaseName(rawName: string, existingPhases: TodoPhase[]): string {
-	const stripped = stripPrefix(rawName.trim());
-	if (!stripped) return `${toRoman(existingPhases.length + 1)}. Todos`;
-	const titled = titleCase(stripped);
-	return `${toRoman(existingPhases.length + 1)}. ${titled}`;
-}
-
 // =============================================================================
 // Fuzzy matching
 // =============================================================================
@@ -119,20 +77,13 @@ function buildPhaseName(rawName: string, existingPhases: TodoPhase[]): string {
 function findPhaseFuzzy(phases: TodoPhase[], query: string): TodoPhase | undefined {
 	const q = query.trim().toLowerCase();
 	if (!q) return undefined;
-	// Exact id
-	const byId = phases.find(p => p.id.toLowerCase() === q);
-	if (byId) return byId;
 	// Exact name (case-insensitive)
 	const byName = phases.find(p => p.name.toLowerCase() === q);
 	if (byName) return byName;
-	// Stripped name match
-	const strippedQ = stripPrefix(q);
-	const byStripped = phases.find(p => stripPrefix(p.name).toLowerCase() === strippedQ);
-	if (byStripped) return byStripped;
-	// Substring (prefer prefix match on stripped name)
-	const prefixMatches = phases.filter(p => stripPrefix(p.name).toLowerCase().startsWith(strippedQ));
+	// Substring (prefer prefix match)
+	const prefixMatches = phases.filter(p => p.name.toLowerCase().startsWith(q));
 	if (prefixMatches.length === 1) return prefixMatches[0];
-	const subMatches = phases.filter(p => stripPrefix(p.name).toLowerCase().includes(strippedQ));
+	const subMatches = phases.filter(p => p.name.toLowerCase().includes(q));
 	if (subMatches.length === 1) return subMatches[0];
 	return undefined;
 }
@@ -140,9 +91,10 @@ function findPhaseFuzzy(phases: TodoPhase[], query: string): TodoPhase | undefin
 function findTaskFuzzy(phases: TodoPhase[], query: string): { task: TodoItem; phase: TodoPhase } | undefined {
 	const q = query.trim().toLowerCase();
 	if (!q) return undefined;
+	// Exact content (case-insensitive)
 	for (const phase of phases) {
 		for (const task of phase.tasks) {
-			if (task.id.toLowerCase() === q) return { task, phase };
+			if (task.content.toLowerCase() === q) return { task, phase };
 		}
 	}
 	const matches: Array<{ task: TodoItem; phase: TodoPhase }> = [];
@@ -169,7 +121,7 @@ function buildSystemReminder(action: string, phases: TodoPhase[]): string {
 	return [
 		"<system-reminder>",
 		`The user manually modified the todo list (${action}).`,
-		"Current todo list (note task ids may have been reassigned by /todo edit):",
+		"Current todo list:",
 		"",
 		md,
 		"</system-reminder>",
@@ -327,28 +279,24 @@ export class TodoCommandController {
 		if (phaseName) {
 			targetPhase = findPhaseFuzzy(next, phaseName);
 			if (!targetPhase) {
-				const newName = buildPhaseName(phaseName, next);
-				targetPhase = { id: `phase-${next.length + 1}`, name: newName, tasks: [] };
+				targetPhase = { name: titleCase(phaseName), tasks: [] };
 				next.push(targetPhase);
 			}
 		} else if (next.length > 0) {
 			targetPhase = next[next.length - 1];
 		} else {
-			targetPhase = { id: "phase-1", name: `${toRoman(1)}. Todos`, tasks: [] };
+			targetPhase = { name: "Todos", tasks: [] };
 			next.push(targetPhase);
 		}
 
-		const usedTaskIds = new Set(next.flatMap(p => p.tasks.map(t => t.id)));
-		let n = 1;
-		while (usedTaskIds.has(`task-${n}`)) n++;
+		const finalContent = titleCaseSentence(content);
 		targetPhase.tasks.push({
-			id: `task-${n}`,
-			content: titleCaseSentence(content),
+			content: finalContent,
 			status: "pending",
 		});
 
 		this.#commit(next, `/todo append → ${targetPhase.name}`);
-		this.ctx.showStatus(`Appended to ${targetPhase.name}: ${content}`);
+		this.ctx.showStatus(`Appended to ${targetPhase.name}: ${finalContent}`);
 	}
 
 	// ------------------------------------------------------------- start / done / drop / rm
@@ -364,12 +312,12 @@ export class TodoCommandController {
 			this.ctx.showError(`No task matched "${rest}". Use /todo to list current tasks.`);
 			return;
 		}
-		const { phases, errors } = applyOpsToPhases(current, [{ op: "start", task: hit.task.id }]);
+		const { phases, errors } = applyOpsToPhases(current, [{ op: "start", task: hit.task.content }]);
 		if (errors.length > 0) {
 			this.ctx.showError(errors.join("; "));
 			return;
 		}
-		this.#commit(phases, `/todo start ${hit.task.id}`);
+		this.#commit(phases, `/todo start ${hit.task.content}`);
 		this.ctx.showStatus(`Started: ${hit.task.content}`);
 	}
 
@@ -391,19 +339,19 @@ export class TodoCommandController {
 
 		const taskHit = findTaskFuzzy(current, trimmed);
 		if (taskHit) {
-			const { phases, errors } = applyOpsToPhases(current, [{ op, task: taskHit.task.id }]);
+			const { phases, errors } = applyOpsToPhases(current, [{ op, task: taskHit.task.content }]);
 			if (errors.length > 0) {
 				this.ctx.showError(errors.join("; "));
 				return;
 			}
-			this.#commit(phases, `/todo ${op} ${taskHit.task.id}`);
+			this.#commit(phases, `/todo ${op} ${taskHit.task.content}`);
 			this.ctx.showStatus(`Marked ${target}: ${taskHit.task.content}`);
 			return;
 		}
 
 		const phaseHit = findPhaseFuzzy(current, trimmed);
 		if (phaseHit) {
-			const { phases, errors } = applyOpsToPhases(current, [{ op, phase: phaseHit.id }]);
+			const { phases, errors } = applyOpsToPhases(current, [{ op, phase: phaseHit.name }]);
 			if (errors.length > 0) {
 				this.ctx.showError(errors.join("; "));
 				return;
@@ -426,18 +374,18 @@ export class TodoCommandController {
 		}
 		const taskHit = findTaskFuzzy(current, trimmed);
 		if (taskHit) {
-			const { phases, errors } = applyOpsToPhases(current, [{ op: "rm", task: taskHit.task.id }]);
+			const { phases, errors } = applyOpsToPhases(current, [{ op: "rm", task: taskHit.task.content }]);
 			if (errors.length > 0) {
 				this.ctx.showError(errors.join("; "));
 				return;
 			}
-			this.#commit(phases, `/todo rm ${taskHit.task.id}`);
+			this.#commit(phases, `/todo rm ${taskHit.task.content}`);
 			this.ctx.showStatus(`Removed: ${taskHit.task.content}`);
 			return;
 		}
 		const phaseHit = findPhaseFuzzy(current, trimmed);
 		if (phaseHit) {
-			const { phases, errors } = applyOpsToPhases(current, [{ op: "rm", phase: phaseHit.id }]);
+			const { phases, errors } = applyOpsToPhases(current, [{ op: "rm", phase: phaseHit.name }]);
 			if (errors.length > 0) {
 				this.ctx.showError(errors.join("; "));
 				return;
@@ -460,7 +408,7 @@ export class TodoCommandController {
 
 		const current = this.#currentPhases();
 		const initialMarkdown =
-			current.length > 0 ? phasesToMarkdown(current) : "# I. Todos\n- [ ] (replace this with your tasks)\n";
+			current.length > 0 ? phasesToMarkdown(current) : "# Todos\n- [ ] (replace this with your tasks)\n";
 
 		const fileHandle = await this.#openTtyHandle();
 		this.ctx.ui.stop();

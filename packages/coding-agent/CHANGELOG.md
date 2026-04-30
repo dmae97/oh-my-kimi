@@ -1,6 +1,20 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- `todo_write`: renamed `replace` op to `init` and reshaped its input to `list: [{phase: string, items: string[]}]`. Tasks no longer accept a `status` field; all start `pending` and the first auto-promotes to `in_progress`. The `append` op's `items` is now `string[]` (was `{id, label}[]`)
+- `todo_write`: removed the synthetic `task-N` / `phase-N` ids — task identity is now its `content` and phase identity is its `name`. The `task` field on `start`/`done`/`drop`/`note` and the `phase` field on `done`/`drop`/`rm`/`append` take those values directly
+- `todo_write`: phase names no longer accept a numeric/roman prefix (`I.`, `1.`, `Phase 1:`, …). The renderer numbers phases visually (Ⅰ. Ⅱ. Ⅲ. …) and the model-facing state stores the bare noun phrase
+
+### Changed
+
+- Changed `/todo` task and phase operations to target items by fuzzy content or phase name matching instead of numeric IDs
+- Changed initial todo markdown export template heading from `# I. Todos` to `# Todos`
+
+### Fixed
+
+- Fixed todo auto-clear scheduling to identify completed tasks by phase and content so only the matching task is cleared after delays
 
 ## [14.5.10] - 2026-04-30
 

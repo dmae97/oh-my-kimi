@@ -42,7 +42,6 @@ export type SubmittedUserInput = {
 export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
 
 export type TodoItem = {
-	id: string;
 	content: string;
 	status: TodoStatus;
 	details?: string;
@@ -50,7 +49,6 @@ export type TodoItem = {
 };
 
 export type TodoPhase = {
-	id: string;
 	name: string;
 	tasks: TodoItem[];
 };

@@ -85,9 +85,8 @@ describe("AgentSession newSession clears todo artifacts", () => {
 
 		session.setTodoPhases([
 			{
-				id: "phase-1",
 				name: "Tasks",
-				tasks: [{ id: "task-1", content: "do the thing", status: "pending" }],
+				tasks: [{ content: "do the thing", status: "pending" }],
 			},
 		]);
 		expect(session.getTodoPhases()).toHaveLength(1);
@@ -113,9 +112,8 @@ describe("AgentSession newSession clears todo artifacts", () => {
 
 		session.setTodoPhases([
 			{
-				id: "phase-1",
 				name: "Execution",
-				tasks: [{ id: "task-1", content: "stale from old branch", status: "in_progress" }],
+				tasks: [{ content: "stale from old branch", status: "in_progress" }],
 			},
 		]);
 		expect(session.getTodoPhases()).toHaveLength(1);

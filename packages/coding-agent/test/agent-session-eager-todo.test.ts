@@ -211,13 +211,8 @@ describe("AgentSession eager todo enforcement", () => {
 			createToolCallAssistantMessage("todo_write", {
 				ops: [
 					{
-						op: "replace",
-						phases: [
-							{
-								name: "List worktrees",
-								tasks: [{ content: "List all git worktrees in the current repository", status: "in_progress" }],
-							},
-						],
+						op: "init",
+						list: [{ phase: "List worktrees", items: ["List all git worktrees in the current repository"] }],
 					},
 				],
 			}),

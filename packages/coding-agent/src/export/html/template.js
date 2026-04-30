@@ -964,6 +964,16 @@
         return html;
       }
 
+      function todoRoman(n) {
+        if (n <= 0) return '';
+        var pairs = [[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
+        var out = '', rem = n;
+        for (var i = 0; i < pairs.length; i++) {
+          while (rem >= pairs[i][0]) { out += pairs[i][1]; rem -= pairs[i][0]; }
+        }
+        return out;
+      }
+
       function renderTodoWrite(name, args, result, ctx) {
         let html = toolHead('todo_write');
         const ops = Array.isArray(args.ops) ? args.ops : null;
@@ -983,8 +993,10 @@
         const phases = result?.details?.phases;
         if (Array.isArray(phases)) {
           html += '<div class="todo-tree">';
-          for (const phase of phases) {
-            html += '<div class="todo-phase">' + escapeHtml(String(phase.name || '')) + '</div>';
+          for (var __i = 0; __i < phases.length; __i++) {
+            var phase = phases[__i];
+            var phaseLabel = todoRoman(__i + 1) + '. ' + String(phase.name || '');
+            html += '<div class="todo-phase">' + escapeHtml(phaseLabel) + '</div>';
             if (Array.isArray(phase.tasks)) {
               for (const task of phase.tasks) {
                 const status = task.status || 'pending';

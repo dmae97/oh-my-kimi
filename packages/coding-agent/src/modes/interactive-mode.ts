@@ -48,6 +48,7 @@ import { getRecentSessions } from "../session/session-manager";
 import { STTController, type SttState } from "../stt";
 import type { ExitPlanModeDetails, LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
+import { formatPhaseDisplayName } from "../tools/todo-write";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { getSessionAccentAnsi, getSessionAccentHexForTitle } from "../utils/session-color";
@@ -707,9 +708,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		const lines = ["", indent + theme.bold(theme.fg("accent", "Todos"))];
 
 		if (!this.todoExpanded) {
-			const activePhase = this.#getActivePhase(phases);
+			const activeIdx = phases.indexOf(this.#getActivePhase(phases) ?? phases[0]);
+			const activePhase = phases[activeIdx];
 			if (!activePhase) return;
-			lines.push(`${indent}${theme.fg("accent", `${hook} ${activePhase.name}`)}`);
+			lines.push(
+				`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(activePhase.name, activeIdx + 1)}`)}`,
+			);
 			const visibleTasks = activePhase.tasks.slice(0, 5);
 			visibleTasks.forEach((todo, index) => {
 				const prefix = `${indent}${index === 0 ? hook : " "} `;
@@ -723,13 +727,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-		for (const phase of phases) {
-			lines.push(`${indent}${theme.fg("accent", `${hook} ${phase.name}`)}`);
+		phases.forEach((phase, phaseIndex) => {
+			lines.push(`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(phase.name, phaseIndex + 1)}`)}`);
 			phase.tasks.forEach((todo, index) => {
 				const prefix = `${indent}${index === 0 ? hook : " "} `;
 				lines.push(this.#formatTodoLine(todo, prefix));
 			});
-		}
+		});
 
 		this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
 	}
@@ -1712,7 +1716,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		} else {
 			this.todoPhases = [
 				{
-					id: "default",
 					name: "Todos",
 					tasks: todos as TodoItem[],
 				},

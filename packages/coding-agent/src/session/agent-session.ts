@@ -387,6 +387,11 @@ function formatRetryFallbackBaseSelector(selector: RetryFallbackSelector): strin
 	return `${selector.provider}/${selector.id}`;
 }
 
+/** Composite key for auto-clear timers, keyed by phase name + task content. */
+function todoClearKey(phaseName: string, taskContent: string): string {
+	return `${phaseName}\u0000${taskContent}`;
+}
+
 const noOpUIContext: ExtensionUIContext = {
 	select: async (_title, _options, _dialogOptions) => undefined,
 	confirm: async (_title, _message, _dialogOptions) => false,
@@ -3347,10 +3352,9 @@ export class AgentSession {
 
 	#cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
 		return phases.map(phase => ({
-			id: phase.id,
 			name: phase.name,
 			tasks: phase.tasks.map(task => {
-				const out: TodoItem = { id: task.id, content: task.content, status: task.status };
+				const out: TodoItem = { content: task.content, status: task.status };
 				if (task.notes && task.notes.length > 0) out.notes = [...task.notes];
 				return out;
 			}),
@@ -3362,43 +3366,43 @@ export class AgentSession {
 		const delaySec = this.settings.get("tasks.todoClearDelay") ?? 60;
 		if (delaySec < 0) return; // "Never" — no auto-clear
 		const delayMs = delaySec * 1000;
-		const doneTaskIds = new Set<string>();
+		const doneKeys = new Set<string>();
 		for (const phase of phases) {
 			for (const task of phase.tasks) {
 				if (task.status === "completed" || task.status === "abandoned") {
-					doneTaskIds.add(task.id);
+					doneKeys.add(todoClearKey(phase.name, task.content));
 				}
 			}
 		}
 
 		// Cancel timers for tasks that are no longer done (e.g. status was reverted)
-		for (const [id, timer] of this.#todoClearTimers) {
-			if (!doneTaskIds.has(id)) {
+		for (const [key, timer] of this.#todoClearTimers) {
+			if (!doneKeys.has(key)) {
 				clearTimeout(timer);
-				this.#todoClearTimers.delete(id);
+				this.#todoClearTimers.delete(key);
 			}
 		}
 
 		// Schedule new timers for newly-done tasks
-		for (const id of doneTaskIds) {
-			if (this.#todoClearTimers.has(id)) continue;
+		for (const key of doneKeys) {
+			if (this.#todoClearTimers.has(key)) continue;
 			if (delayMs === 0) {
 				// Instant — run synchronously on next microtask to batch removals
-				const timer = setTimeout(() => this.#runTodoAutoClear(id), 0);
-				this.#todoClearTimers.set(id, timer);
+				const timer = setTimeout(() => this.#runTodoAutoClear(key), 0);
+				this.#todoClearTimers.set(key, timer);
 			} else {
-				const timer = setTimeout(() => this.#runTodoAutoClear(id), delayMs);
-				this.#todoClearTimers.set(id, timer);
+				const timer = setTimeout(() => this.#runTodoAutoClear(key), delayMs);
+				this.#todoClearTimers.set(key, timer);
 			}
 		}
 	}
 
 	/** Remove a single completed task and notify the UI. */
-	#runTodoAutoClear(taskId: string): void {
-		this.#todoClearTimers.delete(taskId);
+	#runTodoAutoClear(key: string): void {
+		this.#todoClearTimers.delete(key);
 		let removed = false;
 		for (const phase of this.#todoPhases) {
-			const idx = phase.tasks.findIndex(t => t.id === taskId);
+			const idx = phase.tasks.findIndex(t => todoClearKey(phase.name, t.content) === key);
 			if (idx !== -1 && (phase.tasks[idx].status === "completed" || phase.tasks[idx].status === "abandoned")) {
 				phase.tasks.splice(idx, 1);
 				removed = true;
@@ -4568,7 +4572,7 @@ export class AgentSession {
 						(task): task is TodoItem & { status: "pending" | "in_progress" } =>
 							task.status === "pending" || task.status === "in_progress",
 					)
-					.map(task => ({ id: task.id, content: task.content, status: task.status })),
+					.map(task => ({ content: task.content, status: task.status })),
 			}))
 			.filter(phase => phase.tasks.length > 0);
 		const incomplete = incompleteByPhase.flatMap(phase => phase.tasks);
