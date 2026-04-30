@@ -1,11 +1,14 @@
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Readability } from "@mozilla/readability";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { StringEnum } from "@oh-my-pi/pi-ai";
+import { Process, ProcessStatus } from "@oh-my-pi/pi-natives";
 import { $which, getPuppeteerDir, logger, prompt, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import type { Subprocess } from "bun";
 import { type HTMLElement, parseHTML } from "linkedom";
 import type {
 	Browser,
@@ -495,6 +498,7 @@ const browserSchema = Type.Object({
 	action: StringEnum(
 		[
 			"open",
+			"attach",
 			"goto",
 			"observe",
 			"click",
@@ -569,6 +573,8 @@ const browserSchema = Type.Object({
 			examples: ["text/Drop zone"],
 		}),
 	),
+	app_args: Type.Optional(Type.Array(Type.String(), { description: "extra CLI args for the launched app" })),
+	target: Type.Optional(Type.String({ description: "substring matched against url+title to pick a BrowserWindow" })),
 });
 
 /** Input schema for the Puppeteer tool. */
@@ -721,6 +727,185 @@ function formatEvaluateResult(value: unknown): string {
 }
 
 /**
+ * Tracks how the current browser session was acquired so close/ensurePage
+ * can do the right thing per mode.
+ *
+ * - `spawned`: omp launched the binary; on close we kill the tree.
+ * - `connected`: caller passed a CDP url; on close we only disconnect.
+ */
+type AttachState =
+	| { kind: "spawned"; pid: number; cdpUrl: string; appLabel: string; subprocess: Subprocess }
+	| { kind: "connected"; cdpUrl: string };
+
+const ATTACH_TARGET_SKIP_PATTERN =
+	/request[\s_-]?handler|devtools|background[\s_-]?(?:page|host)|service[\s_-]?worker/i;
+
+/**
+ * Allocate an unused TCP port on 127.0.0.1 by binding to port 0 and reading
+ * back the kernel-assigned port. There's a small race between close and the
+ * subsequent bind in the launched app, but Chromium's listener will retry.
+ */
+async function findFreeCdpPort(): Promise<number> {
+	const { promise, resolve, reject } = Promise.withResolvers<number>();
+	const server = net.createServer();
+	server.unref();
+	server.once("error", reject);
+	server.listen(0, "127.0.0.1", () => {
+		const addr = server.address();
+		if (addr && typeof addr === "object" && typeof addr.port === "number") {
+			const port = addr.port;
+			server.close(closeErr => (closeErr ? reject(closeErr) : resolve(port)));
+		} else {
+			server.close();
+			reject(new Error("Failed to allocate ephemeral CDP port"));
+		}
+	});
+	return promise;
+}
+
+/** Poll `${cdpUrl}/json/version` until it responds with 200, with abort + timeout support. */
+async function waitForCdp(cdpUrl: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	let lastErr: unknown;
+	const probeUrl = `${cdpUrl.replace(/\/+$/, "")}/json/version`;
+	while (Date.now() < deadline) {
+		throwIfAborted(signal);
+		const probeTimeout = AbortSignal.timeout(2000);
+		const probeSignal = signal ? AbortSignal.any([signal, probeTimeout]) : probeTimeout;
+		try {
+			const res = await fetch(probeUrl, { signal: probeSignal });
+			if (res.ok) {
+				await res.body?.cancel();
+				return;
+			}
+			lastErr = new Error(`HTTP ${res.status}`);
+			await res.body?.cancel();
+		} catch (err) {
+			if (signal?.aborted) throwIfAborted(signal);
+			lastErr = err;
+		}
+		await Bun.sleep(150);
+	}
+	throw new ToolError(
+		`Timed out waiting for CDP endpoint ${cdpUrl}${lastErr instanceof Error ? `: ${lastErr.message}` : ""}`,
+	);
+}
+
+/**
+ * Pick the best page target on an attached browser. Without a matcher, prefer
+ * a page that doesn't look like a helper window (devtools, request handler,
+ * background pages); with a matcher, return the first url+title substring hit.
+ */
+/**
+ * Pull a `--remote-debugging-port=<n>` value out of an argv array (Chromium
+ * accepts both `--flag=value` and `--flag value`). Returns null if absent or
+ * malformed.
+ */
+function findCdpPortInArgs(args: string[]): number | null {
+	for (const arg of args) {
+		const m = /^--remote-debugging-port=(\d+)$/.exec(arg);
+		if (m) {
+			const port = Number.parseInt(m[1]!, 10);
+			if (Number.isFinite(port) && port > 0) return port;
+		}
+	}
+	for (let i = 0; i < args.length - 1; i++) {
+		if (args[i] === "--remote-debugging-port") {
+			const port = Number.parseInt(args[i + 1]!, 10);
+			if (Number.isFinite(port) && port > 0) return port;
+		}
+	}
+	return null;
+}
+
+/** One-shot probe: returns true when `/json/version` answers 200 within the timeout. */
+async function probeCdpAt(port: number, signal?: AbortSignal): Promise<boolean> {
+	const probeTimeout = AbortSignal.timeout(1500);
+	const probeSignal = signal ? AbortSignal.any([signal, probeTimeout]) : probeTimeout;
+	try {
+		const res = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: probeSignal });
+		await res.body?.cancel();
+		return res.ok;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * If any running instance of `exe` was launched with `--remote-debugging-port`
+ * and that endpoint actually answers, return it so attach can reuse it instead
+ * of killing and respawning. Idempotent re-attaches are the common case.
+ */
+async function findReusableCdp(exe: string, signal?: AbortSignal): Promise<{ cdpUrl: string; pid: number } | null> {
+	const candidates = Process.fromPath(exe).filter(p => p.status() === ProcessStatus.Running);
+	for (const proc of candidates) {
+		let args: string[];
+		try {
+			args = proc.args();
+		} catch {
+			continue;
+		}
+		const port = findCdpPortInArgs(args);
+		if (port === null) continue;
+		if (await probeCdpAt(port, signal)) {
+			return { cdpUrl: `http://127.0.0.1:${port}`, pid: proc.pid };
+		}
+	}
+	return null;
+}
+
+async function pickElectronTarget(browser: Browser, matcher?: string): Promise<Page> {
+	const pages = await browser.pages();
+	if (!pages.length) {
+		throw new ToolError("No page targets available on the attached browser");
+	}
+	const enriched = await Promise.all(
+		pages.map(async page => ({
+			page,
+			url: page.url(),
+			title: ((await page.title().catch(() => "")) ?? "").trim(),
+		})),
+	);
+	if (matcher) {
+		const needle = matcher.toLowerCase();
+		const hit = enriched.find(p => p.url.toLowerCase().includes(needle) || p.title.toLowerCase().includes(needle));
+		if (hit) return hit.page;
+		const summary = enriched.map(p => `- ${p.title || "(untitled)"}  ${p.url}`).join("\n");
+		throw new ToolError(`No page target matched ${JSON.stringify(matcher)}. Available pages:\n${summary}`);
+	}
+	return (
+		enriched.find(p => !ATTACH_TARGET_SKIP_PATTERN.test(p.url) && !ATTACH_TARGET_SKIP_PATTERN.test(p.title))?.page ??
+		enriched[0]!.page
+	);
+}
+
+/**
+ * SIGTERM the process tree, wait briefly, then SIGKILL anything still alive.
+ * Single-process variant for our own spawned children.
+ */
+async function gracefulKillTreeOnce(pid: number, gracePeriodMs = 2000): Promise<void> {
+	const process = Process.fromPid(pid);
+	if (!process) return;
+	await process.terminate({ gracefulMs: gracePeriodMs, timeoutMs: 500 });
+}
+
+/**
+ * Multi-process variant for `kill_existing`: find every PID running `executablePath`
+ * (single-instance apps may keep an orphan around) and tear them all down.
+ */
+async function killExistingByPath(executablePath: string, signal?: AbortSignal): Promise<number> {
+	const processes = Process.fromPath(executablePath);
+	if (!processes.length) return 0;
+	const results = await Promise.all(
+		processes.map(async process => {
+			throwIfAborted(signal);
+			return await process.terminate({ gracefulMs: 3000, timeoutMs: 1000 });
+		}),
+	);
+	return results.length;
+}
+
+/**
  * Puppeteer tool for headless browser automation.
  */
 export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolDetails> {
@@ -734,6 +919,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 	#currentHeadless: boolean | null = null;
 	#browserSession: CDPSession | null = null;
 	#userAgentOverride: UserAgentOverride | null = null;
+	#attachState: AttachState | null = null;
 	#elementIdCounter = 0;
 	readonly #elementCache = new Map<number, ElementHandle>();
 	readonly #patchedClients = new WeakSet<object>();
@@ -744,6 +930,28 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 
 	async #closeBrowser(): Promise<void> {
 		await this.#clearElementCache();
+		const attachState = this.#attachState;
+		if (attachState) {
+			// Pages and the browser belong to the user's app — disconnect, never close.
+			this.#page = null;
+			if (this.#browser?.connected) {
+				try {
+					this.#browser.disconnect();
+				} catch (err) {
+					logger.debug("Failed to disconnect from attached browser", {
+						error: (err as Error).message,
+					});
+				}
+			}
+			this.#browser = null;
+			this.#browserSession = null;
+			this.#userAgentOverride = null;
+			if (attachState.kind === "spawned") {
+				await gracefulKillTreeOnce(attachState.pid);
+			}
+			this.#attachState = null;
+			return;
+		}
 		if (this.#page && !this.#page.isClosed()) {
 			await this.#page.close();
 		}
@@ -809,6 +1017,21 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 	}
 
 	async #ensurePage(params?: BrowserParams): Promise<Page> {
+		if (this.#attachState) {
+			if (!this.#browser?.connected) {
+				const reason =
+					this.#attachState.kind === "spawned"
+						? "the spawned app process is no longer reachable"
+						: "the remote CDP endpoint closed";
+				throw new ToolError(`Attached browser disconnected (${reason}). Run attach again.`);
+			}
+			if (this.#page && !this.#page.isClosed()) {
+				return this.#page;
+			}
+			// Don't open a new tab in the user's app; re-pick from existing targets.
+			this.#page = await pickElectronTarget(this.#browser, undefined);
+			return this.#page;
+		}
 		const desiredHeadless = this.session.settings.get("browser.headless");
 		if (this.#currentHeadless !== null && this.#currentHeadless !== desiredHeadless) {
 			return this.#resetBrowser(params);
@@ -816,7 +1039,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 		if (this.#page && !this.#page.isClosed()) {
 			return this.#page;
 		}
-		if (!this.#browser?.isConnected()) {
+		if (!this.#browser?.connected) {
 			return this.#resetBrowser(params);
 		}
 		this.#page = await this.#browser.newPage();
@@ -824,6 +1047,99 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 		if (this.#currentHeadless || params?.viewport) {
 			await this.#applyViewport(this.#page, params?.viewport);
 		}
+		return this.#page;
+	}
+
+	/**
+	 * Attach Puppeteer to an Electron app. Dispatches on the existing params:
+	 * - `url` → connect to an existing CDP endpoint (e.g. http://127.0.0.1:9222)
+	 * - `path` → if a running instance of that exact binary already exposes a
+	 *   CDP port (per its argv), reuse it; otherwise kill stale instances and
+	 *   spawn a fresh one with `--remote-debugging-port`. Single-instance
+	 *   Electron apps would otherwise just forward args and exit.
+	 *
+	 * Stealth patches and viewport overrides are deliberately not applied —
+	 * those disguise headless Chromium on the open web and would tamper with a
+	 * real desktop app's renderer.
+	 */
+	async #attach(params: BrowserParams, signal?: AbortSignal): Promise<Page> {
+		await this.#closeBrowser();
+
+		let cdpUrl: string;
+		let attachState: AttachState;
+
+		if (params.url) {
+			cdpUrl = params.url.replace(/\/+$/, "");
+			await waitForCdp(cdpUrl, 5_000, signal);
+			attachState = { kind: "connected", cdpUrl };
+		} else if (params.path) {
+			const exe = resolveToCwd(params.path, this.session.cwd);
+			if (!path.isAbsolute(exe)) {
+				throw new ToolError(
+					`attach path must resolve to an absolute path (got ${JSON.stringify(params.path)}). Pass the binary inside Foo.app/Contents/MacOS/, not the .app bundle.`,
+				);
+			}
+			const reused = await findReusableCdp(exe, signal);
+			if (reused) {
+				logger.debug("Reusing existing CDP endpoint for attach", {
+					exe,
+					pid: reused.pid,
+					cdpUrl: reused.cdpUrl,
+				});
+				cdpUrl = reused.cdpUrl;
+				attachState = { kind: "connected", cdpUrl };
+			} else {
+				const killed = await killExistingByPath(exe, signal);
+				if (killed > 0) {
+					logger.debug("Killed existing instances before attach", { exe, killed });
+				}
+				const port = await findFreeCdpPort();
+				const launchArgs = [...(params.app_args ?? []), `--remote-debugging-port=${port}`];
+				const subprocess = Bun.spawn([exe, ...launchArgs], {
+					stdout: "ignore",
+					stderr: "ignore",
+					stdin: "ignore",
+				});
+				subprocess.unref();
+				cdpUrl = `http://127.0.0.1:${port}`;
+				try {
+					await waitForCdp(cdpUrl, 30_000, signal);
+				} catch (err) {
+					const proc = Process.fromPid(subprocess.pid);
+					const exited = !proc || proc.status() !== ProcessStatus.Running;
+					if (!exited) await gracefulKillTreeOnce(subprocess.pid);
+					if (err instanceof ToolAbortError) throw err;
+					if (err instanceof Error && err.name === "AbortError") throw err;
+					const detail = exited
+						? " (the app process exited before the CDP endpoint was ready; verify path and app_args)"
+						: "";
+					throw new ToolError(
+						`Failed to attach to ${path.basename(exe)} on ${cdpUrl}: ${(err as Error).message}${detail}`,
+					);
+				}
+				attachState = {
+					kind: "spawned",
+					pid: subprocess.pid,
+					cdpUrl,
+					appLabel: path.basename(exe),
+					subprocess,
+				};
+			}
+		} else {
+			throw new ToolError("attach requires either `url` (existing CDP endpoint) or `path` (executable to spawn)");
+		}
+
+		const puppeteer = await loadPuppeteer();
+		try {
+			this.#browser = await puppeteer.connect({ browserURL: cdpUrl, defaultViewport: null });
+		} catch (err) {
+			if (attachState.kind === "spawned") {
+				await gracefulKillTreeOnce(attachState.pid);
+			}
+			throw new ToolError(`Connected to ${cdpUrl} but puppeteer.connect failed: ${(err as Error).message}`);
+		}
+		this.#attachState = attachState;
+		this.#page = await pickElectronTarget(this.#browser, params.target);
 		return this.#page;
 	}
 
@@ -1232,6 +1548,23 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 					const viewport = page.viewport();
 					details.viewport = viewport ?? DEFAULT_VIEWPORT;
 					return toolResult(details).text("Opened headless browser session").done();
+				}
+				case "attach": {
+					const page = await untilAborted(signal, () => this.#attach(params, signal));
+					const url = page.url();
+					const title = ((await untilAborted(signal, () => page.title())) as string) ?? "";
+					details.url = url;
+					details.result = title;
+					const state = this.#attachState;
+					const lines = [
+						state?.kind === "spawned"
+							? `Attached to spawned ${state.appLabel} (pid ${state.pid}, killed on close)`
+							: `Attached to existing CDP endpoint ${state?.cdpUrl ?? ""}`,
+						`URL: ${url}`,
+						title ? `Title: ${title}` : null,
+						state ? `CDP: ${state.cdpUrl}` : null,
+					].filter((l): l is string => typeof l === "string");
+					return toolResult(details).text(lines.join("\n")).done();
 				}
 				case "close": {
 					await untilAborted(signal, () => this.#closeBrowser());

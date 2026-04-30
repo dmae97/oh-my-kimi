@@ -6,8 +6,9 @@
  * - Cross-platform tree kill for process groups (Windows taskkill, Unix -pid).
  * - Convenience helpers: captureText / execText, AbortSignal, timeouts.
  */
+
+import { Process } from "@oh-my-pi/pi-natives";
 import type { Spawn, Subprocess } from "bun";
-import { terminate } from "./procmgr";
 
 type InMask = "pipe" | "ignore" | Buffer | Uint8Array | null;
 
@@ -215,7 +216,10 @@ export class ChildProcess<In extends InMask = InMask> {
 
 	kill(reason?: Exception) {
 		if (reason && !this.#exitReasonPending) this.#exitReasonPending = reason;
-		if (!this.proc.killed) void terminate({ target: this.proc });
+		if (!this.proc.killed)
+			void Process.fromPid(this.proc.pid)
+				?.terminate()
+				?.catch(e => void e);
 	}
 
 	// ── Output helpers ───────────────────────────────────────────────────

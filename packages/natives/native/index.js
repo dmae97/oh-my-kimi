@@ -257,6 +257,10 @@ module.exports.MacOSAppearance = {
   Dark: 'dark',
   Light: 'light',
 };
+module.exports.ProcessStatus = {
+  Running: 'running',
+  Exited: 'exited',
+};
 module.exports.SamplingFilter = {
   Nearest: 1,
   Triangle: 2,

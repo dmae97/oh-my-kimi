@@ -15,7 +15,6 @@ export * from "./mime";
 export * from "./peek-file";
 export * as postmortem from "./postmortem";
 export * as procmgr from "./procmgr";
-export { setNativeKillTree } from "./procmgr";
 export * as prompt from "./prompt";
 export * as ptree from "./ptree";
 export { AbortError, ChildProcess, Exception, NonZeroExitError } from "./ptree";

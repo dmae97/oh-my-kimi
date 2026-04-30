@@ -52,10 +52,7 @@ use tokio_util::sync::CancellationToken;
 #[cfg(windows)]
 use windows::configure_windows_path;
 
-use crate::task;
-
-const TERM_SIGNAL: i32 = 15;
-const KILL_SIGNAL: i32 = 9;
+use crate::{ps, task};
 
 struct ShellSessionCore {
 	shell: BrushShell,
@@ -795,76 +792,29 @@ async fn run_shell_command(
 	Ok((result, minimized_out))
 }
 
-#[cfg(unix)]
 fn terminate_background_jobs(shell: &BrushShell) {
 	if shell.jobs.jobs.is_empty() {
 		return;
 	}
-	let mut pgids = Vec::new();
-	let mut pids = Vec::new();
+	let mut targets = ps::TerminationTargets::new();
 	for job in &shell.jobs.jobs {
-		if let Some(pgid) = job.process_group_id()
-			&& !pgids.contains(&pgid)
-		{
-			pgids.push(pgid);
+		if let Some(pgid) = job.process_group_id() {
+			targets.add_pgid(pgid);
 		}
-		if let Some(pid) = job.representative_pid()
-			&& !pids.contains(&pid)
-		{
-			pids.push(pid);
+		if let Some(pid) = job.representative_pid() {
+			targets.add_pid(pid);
 		}
 	}
-	if pgids.is_empty() && pids.is_empty() {
+	if targets.is_empty() {
 		return;
 	}
 
-	for &pgid in &pgids {
-		let _ = crate::ps::kill_process_group(pgid, TERM_SIGNAL);
-	}
-	for &pid in &pids {
-		let _ = crate::ps::kill_tree(pid, TERM_SIGNAL);
-	}
-
+	targets.signal(ps::TERM_SIGNAL);
 	tokio::spawn(async move {
 		time::sleep(Duration::from_millis(500)).await;
-		for pid in pgids {
-			let _ = crate::ps::kill_process_group(pid, KILL_SIGNAL);
-		}
-		for pid in pids {
-			let _ = crate::ps::kill_tree(pid, KILL_SIGNAL);
-		}
+		targets.signal(ps::KILL_SIGNAL);
 	});
 }
-
-#[cfg(windows)]
-fn terminate_background_jobs(shell: &BrushShell) {
-	if shell.jobs.jobs.is_empty() {
-		return;
-	}
-	let mut pids = Vec::new();
-	for job in &shell.jobs.jobs {
-		if let Some(pid) = job.representative_pid()
-			&& !pids.contains(&pid)
-		{
-			pids.push(pid);
-		}
-	}
-	if pids.is_empty() {
-		return;
-	}
-
-	for &pid in &pids {
-		let _ = crate::ps::kill_tree(pid, TERM_SIGNAL);
-	}
-
-	tokio::spawn(async move {
-		time::sleep(Duration::from_millis(500)).await;
-		for pid in pids {
-			let _ = crate::ps::kill_tree(pid, KILL_SIGNAL);
-		}
-	});
-}
-
 fn should_skip_env_var(key: &str) -> bool {
 	if key.starts_with("BASH_FUNC_") && key.ends_with("%%") {
 		return true;

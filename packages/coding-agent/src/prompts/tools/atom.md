@@ -83,7 +83,7 @@ Lid=       blank the anchored line's content but KEEP the line (results in an em
 \	return (name || DEF).trim().toUpperCase();
 \}
 
-# Replace a block with a longer multi-line block, including blank lines (canonical form for refactors)
+# Replace one contiguous block when the existing lines themselves change; the replacement may have more/fewer lines than the selected range
 ---a.ts
 {{hrefr 3}}..{{hrefr 6}}=/** Format a display label, falling back to DEF when empty. */
 \export function label(name: string): string {
@@ -139,6 +139,7 @@ $
 - Current/added preview lines include fresh `LINE+hash|content` anchors. Removed preview lines show deleted content and **MUST NOT** be reused as anchors.
 - You **MUST** emit only lines that change. You **MUST NOT** echo unchanged context; the anchor implies position.
 - You **MUST NOT** write `Lid=<sameTextThatIsAlreadyOnThatLine>`; the tool reports a no-op (no change applied). Emit `Lid=TEXT` only when TEXT differs.
+- You **MUST NOT** use `Lid=<originalLineContent>` + `\continuations` as an "insert after" idiom. That form is a *replacement*: its first line lands at the anchor, and its continuations push the original next line down. When the anchor is a closing brace and your continuations also end in `}`, the original line below — often itself `}` (a sibling block, mod, or impl closer) — sits adjacent to yours and you ship a duplicate `}`. For pure insertion, use `@Lid` + `+TEXT…` (after) or `^Lid` + `+TEXT…` (before). Never re-state the anchor's content as the first line of a replacement.
 - A line of the form `Lid|content` (a Lid, then `|`, then text, with NO leading `+`/`-`/`^`/`@`/`\`/`=`/`..`) is **FORBIDDEN**. That shape only appears in `read`/`grep` output as an anchor for *you*; it is never an edit op. If you copy a `Lid|content` line verbatim from a read into a patch, you have made an error — every edit op must start with `+`, `-`, `^`, `@`, `\`, `$`, `!`, or a Lid immediately followed by `=` or `..`.
 - To replace a contiguous block with new content, the canonical form is `LidA..LidB=FIRST_LINE` + `\NEXT_LINE…`. You **MUST NOT** write the old block and then the new block — that is unified-diff thinking and the tool does not understand it. If you find yourself emitting pre-image lines (with or without operators) before your new content, STOP and rewrite the section as a single range-replace.
 - TEXT after `=`, `+`, or `\` includes leading whitespace verbatim. You **MUST NOT** trim or re-indent it.

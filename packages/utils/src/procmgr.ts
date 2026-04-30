@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
-import path from "node:path";
-import * as timers from "node:timers";
+import * as path from "node:path";
+import { Process, ProcessStatus } from "@oh-my-pi/pi-natives";
 import type { Subprocess } from "bun";
 import { $env } from "./env";
 import { $which } from "./which";
@@ -175,63 +175,19 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 }
 
 /**
- * Function signature for native process tree killing.
- * Returns the number of processes killed.
- */
-export type KillTreeFn = (pid: number, signal: number) => number;
-
-/**
- * Global native kill tree function, injected by pi-natives when loaded.
- * Falls back to platform-specific behavior if not set.
- */
-export let nativeKillTree: KillTreeFn | undefined;
-
-/**
- * Set the native kill tree function. Called by pi-natives on load.
- */
-export function setNativeKillTree(fn: KillTreeFn): void {
-	nativeKillTree = fn;
-}
-
-/**
- * Options for terminating a process and all its descendants.
- */
-export interface TerminateOptions {
-	/** The process to terminate */
-	target: Subprocess | number;
-	/** Whether to terminate the process tree (all descendants) */
-	group?: boolean;
-	/** Timeout in milliseconds */
-	timeout?: number;
-	/** Abort signal */
-	signal?: AbortSignal;
-}
-
-/**
  * Check if a process is running.
  */
 export function isPidRunning(pid: number | Subprocess): boolean {
-	try {
-		if (typeof pid === "number") {
-			process.kill(pid, 0);
-		} else {
-			if (pid.killed) return false;
-			if (pid.exitCode !== null) return false;
-		}
+	if (typeof pid !== "number") {
+		if (pid.killed) return false;
+		if (pid.exitCode !== null) return false;
 		return true;
-	} catch {
-		return false;
 	}
+
+	return Process.fromPid(pid)?.status() === ProcessStatus.Running;
 }
 
-function joinSignals(...sigs: (AbortSignal | null | undefined)[]): AbortSignal | undefined {
-	const nn = sigs.filter(Boolean) as AbortSignal[];
-	if (nn.length === 0) return undefined;
-	if (nn.length === 1) return nn[0];
-	return AbortSignal.any(nn);
-}
-
-export function onProcessExit(proc: Subprocess | number, abortSignal?: AbortSignal): Promise<boolean> {
+export async function onProcessExit(proc: Subprocess | number, abortSignal?: AbortSignal): Promise<boolean> {
 	if (typeof proc !== "number") {
 		return proc.exited.then(
 			() => true,
@@ -239,88 +195,5 @@ export function onProcessExit(proc: Subprocess | number, abortSignal?: AbortSign
 		);
 	}
 
-	if (!isPidRunning(proc)) {
-		return Promise.resolve(true);
-	}
-
-	const { promise, resolve, reject } = Promise.withResolvers<boolean>();
-	const localAbortController = new AbortController();
-
-	const timer = timers.promises.setInterval(300, null, {
-		signal: joinSignals(abortSignal, localAbortController.signal),
-	});
-	void (async () => {
-		try {
-			for await (const _ of timer) {
-				if (!isPidRunning(proc)) {
-					resolve(true);
-					break;
-				}
-			}
-		} catch (error) {
-			return reject(error);
-		} finally {
-			localAbortController.abort();
-		}
-		resolve(false);
-	})();
-
-	return promise;
-}
-
-/**
- * Terminate a process and all its descendants.
- */
-export async function terminate(options: TerminateOptions): Promise<boolean> {
-	const { target, group = false, timeout = 5000, signal } = options;
-
-	const abortController = new AbortController();
-	try {
-		const abortSignal = joinSignals(signal, abortController.signal);
-
-		// Determine PID
-		let pid: number | undefined;
-		const exitPromise = onProcessExit(target, abortSignal);
-		if (typeof target === "number") {
-			pid = target;
-		} else {
-			pid = target.pid;
-			if (target.killed) return true;
-		}
-
-		// Give it a moment to exit gracefully first.
-		try {
-			if (typeof target === "number") {
-				process.kill(target, TERM_SIGNAL);
-			} else {
-				target.kill(TERM_SIGNAL);
-			}
-
-			if (exitPromise) {
-				const exited = await Promise.race([Bun.sleep(1000).then(() => false), exitPromise]);
-				if (exited) return true;
-			}
-		} catch {}
-
-		if (nativeKillTree) {
-			nativeKillTree(pid, 9);
-		} else {
-			if (group && !IS_WINDOWS) {
-				try {
-					process.kill(-pid, "SIGKILL");
-				} catch {}
-			}
-			try {
-				if (typeof target === "number") {
-					process.kill(target, "SIGKILL");
-				} else {
-					target.kill("SIGKILL");
-				}
-			} catch {}
-		}
-
-		return await Promise.race([Bun.sleep(timeout).then(() => false), exitPromise]);
-	} finally {
-		abortController.abort();
-	}
+	return await Process.fromPid(proc)?.waitForExit({ signal: abortSignal }) ?? true;
 }

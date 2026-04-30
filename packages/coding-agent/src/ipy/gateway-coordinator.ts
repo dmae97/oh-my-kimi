@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import { createServer } from "node:net";
 import * as path from "node:path";
+import { Process } from "@oh-my-pi/pi-natives";
 import { getAgentDir, isEnoent, logger, procmgr } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 import { Settings } from "../config/settings";
@@ -300,7 +301,7 @@ async function startGatewayProcess(
 
 async function killGateway(pid: number, context: string): Promise<void> {
 	try {
-		await procmgr.terminate({ target: pid });
+		await Process.fromPid(pid)?.terminate();
 	} catch (err) {
 		logger.warn("Failed to kill shared gateway process", {
 			error: err instanceof Error ? err.message : String(err),

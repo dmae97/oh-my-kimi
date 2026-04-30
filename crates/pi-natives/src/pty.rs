@@ -19,7 +19,7 @@ use napi::{
 use napi_derive::napi;
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 
-use crate::task;
+use crate::{ps, task};
 
 /// Options for running a command in a PTY session.
 #[napi(object)]
@@ -76,8 +76,6 @@ const READER_EVENTS_PER_TICK: usize = 256;
 const POST_CANCEL_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
 const POST_EXIT_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
 const FINAL_READER_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
-const TERM_SIGNAL: i32 = 15;
-const KILL_SIGNAL: i32 = 9;
 
 struct PtySessionCore {
 	control_tx: mpsc::Sender<ControlMessage>,
@@ -189,48 +187,23 @@ impl PtySession {
 	}
 }
 
-#[cfg(unix)]
 fn terminate_pty_processes(
 	child: &mut Box<dyn Child + Send + Sync>,
 	child_pid: Option<i32>,
 	process_group_id: Option<i32>,
 ) {
+	let mut targets = ps::TerminationTargets::new();
 	if let Some(pgid) = process_group_id {
-		let _ = crate::ps::kill_process_group(pgid, TERM_SIGNAL);
+		targets.add_pgid(pgid);
 	}
-
 	if let Some(pid) = child_pid {
-		let _ = crate::ps::kill_tree(pid, TERM_SIGNAL);
+		targets.add_pid(pid);
 	}
 
+	targets.signal(ps::TERM_SIGNAL);
 	let _ = child.kill();
-
-	if let Some(pgid) = process_group_id {
-		let _ = crate::ps::kill_process_group(pgid, KILL_SIGNAL);
-	}
-
-	if let Some(pid) = child_pid {
-		let _ = crate::ps::kill_tree(pid, KILL_SIGNAL);
-	}
+	targets.signal(ps::KILL_SIGNAL);
 }
-
-#[cfg(not(unix))]
-fn terminate_pty_processes(
-	child: &mut Box<dyn Child + Send + Sync>,
-	child_pid: Option<i32>,
-	_process_group_id: Option<i32>,
-) {
-	if let Some(pid) = child_pid {
-		let _ = crate::ps::kill_tree(pid, TERM_SIGNAL);
-	}
-
-	let _ = child.kill();
-
-	if let Some(pid) = child_pid {
-		let _ = crate::ps::kill_tree(pid, KILL_SIGNAL);
-	}
-}
-
 fn run_pty_sync(
 	config: PtyRunConfig,
 	on_chunk: Option<ThreadsafeFunction<String>>,
