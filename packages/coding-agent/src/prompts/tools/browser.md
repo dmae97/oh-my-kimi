@@ -16,7 +16,9 @@ Drives a real Chromium tab with full puppeteer access via JS execution.
   - `tab.goto(url, { waitUntil? })` — clears the element cache and navigates.
   - `tab.observe({ includeAll?, viewportOnly? })` — accessibility snapshot. Returns `{ url, title, viewport, scroll, elements: [{ id, role, name, value, states, … }] }`. Element ids are stable until the next observe/goto.
   - `tab.id(n)` — resolves an element id from the most recent observe to a real `ElementHandle` you can `.click()`, `.type()`, etc.
-  - `tab.click(selector)` / `tab.type(selector, text)` / `tab.fill(selector, value)` / `tab.press(key, { selector? })` / `tab.scroll(dx, dy)` / `tab.drag(from, to)` / `tab.waitFor(selector)` — selector-based actions.
+  - `tab.click(selector)` / `tab.type(selector, text)` / `tab.fill(selector, value)` / `tab.press(key, { selector? })` / `tab.scroll(dx, dy)` — selector-based actions.
+  - `tab.waitFor(selector)` — waits until the selector is attached, returns the resolved `ElementHandle` for chaining (e.g. `const btn = await tab.waitFor('text/Submit'); await btn.click();`).
+  - `tab.drag(from, to)` — drag from one point to another. Each endpoint is either a selector string (drag center-to-center) or a `{ x, y }` viewport-coordinate point (e.g. for canvases, sliders).
   - `tab.screenshot({ selector?, fullPage?, save?, silent? })` — auto-attaches the image to the tool output unless `silent: true`. Saves full-res to `save` (or `browser.screenshotDir` setting) and a downscaled copy to the model.
   - `tab.extract(format = "markdown")` — Readability-extracted page content.
 - Selectors accept CSS as well as puppeteer query handlers: `aria/Sign in`, `text/Continue`, `xpath/…`, `pierce/…`. Playwright-style `p-aria/[name="…"]`, `p-text/…`, etc. are normalized.

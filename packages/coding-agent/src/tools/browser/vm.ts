@@ -393,6 +393,8 @@ export interface ScreenshotResult {
 	height: number;
 }
 
+export type DragTarget = string | { readonly x: number; readonly y: number };
+
 export interface TabApi {
 	readonly name: string;
 	readonly page: Page;
@@ -411,8 +413,8 @@ export interface TabApi {
 	fill(selector: string, value: string): Promise<void>;
 	press(key: KeyInput, opts?: { selector?: string }): Promise<void>;
 	scroll(deltaX: number, deltaY: number): Promise<void>;
-	drag(fromSelector: string, toSelector: string): Promise<void>;
-	waitFor(selector: string): Promise<void>;
+	drag(from: DragTarget, to: DragTarget): Promise<void>;
+	waitFor(selector: string): Promise<ElementHandle>;
 	id(n: number): Promise<ElementHandle>;
 }
 
@@ -528,47 +530,56 @@ export async function runInTab(opts: RunInTabOptions): Promise<RunInTabResult> {
 		scroll: async (deltaX, deltaY) => {
 			await untilAborted(signal, () => tab.page.mouse.wheel({ deltaX, deltaY }));
 		},
-		drag: async (fromSelector, toSelector) => {
-			const fromResolved = normalizeSelector(fromSelector);
-			const toResolved = normalizeSelector(toSelector);
-			const fromHandle = (await untilAborted(signal, () => tab.page.$(fromResolved))) as ElementHandle | null;
-			const toHandle = (await untilAborted(signal, () => tab.page.$(toResolved))) as ElementHandle | null;
-			if (!fromHandle || !toHandle) {
-				throw new ToolError("Drag selectors did not resolve to elements");
-			}
-			try {
-				const fromBox = (await untilAborted(signal, () => fromHandle.boundingBox())) as {
-					x: number;
-					y: number;
-					width: number;
-					height: number;
-				} | null;
-				const toBox = (await untilAborted(signal, () => toHandle.boundingBox())) as {
-					x: number;
-					y: number;
-					width: number;
-					height: number;
-				} | null;
-				if (!fromBox || !toBox) {
-					throw new ToolError("Drag elements are not visible");
+		drag: async (from, to) => {
+			const resolveDragPoint = async (
+				target: DragTarget,
+				role: "from" | "to",
+			): Promise<{ x: number; y: number; handle?: ElementHandle }> => {
+				if (typeof target === "string") {
+					const resolved = normalizeSelector(target);
+					const handle = (await untilAborted(signal, () => tab.page.$(resolved))) as ElementHandle | null;
+					if (!handle) throw new ToolError(`Drag ${role} selector did not resolve: ${target}`);
+					const box = (await untilAborted(signal, () => handle.boundingBox())) as {
+						x: number;
+						y: number;
+						width: number;
+						height: number;
+					} | null;
+					if (!box) {
+						await handle.dispose().catch(() => undefined);
+						throw new ToolError(`Drag ${role} element has no bounding box (likely not visible): ${target}`);
+					}
+					return { x: box.x + box.width / 2, y: box.y + box.height / 2, handle };
 				}
-				const startX = fromBox.x + fromBox.width / 2;
-				const startY = fromBox.y + fromBox.height / 2;
-				const endX = toBox.x + toBox.width / 2;
-				const endY = toBox.y + toBox.height / 2;
-				await untilAborted(signal, () => tab.page.mouse.move(startX, startY));
+				if (
+					target !== null &&
+					typeof target === "object" &&
+					typeof (target as { x: unknown }).x === "number" &&
+					typeof (target as { y: unknown }).y === "number"
+				) {
+					return { x: (target as { x: number }).x, y: (target as { y: number }).y };
+				}
+				throw new ToolError(
+					`Drag ${role} must be a selector string or { x: number, y: number } point. Got: ${typeof target}`,
+				);
+			};
+			const start = await resolveDragPoint(from, "from");
+			let end: { x: number; y: number; handle?: ElementHandle } | undefined;
+			try {
+				end = await resolveDragPoint(to, "to");
+				await untilAborted(signal, () => tab.page.mouse.move(start.x, start.y));
 				await untilAborted(signal, () => tab.page.mouse.down());
-				await untilAborted(signal, () => tab.page.mouse.move(endX, endY, { steps: 12 }));
+				await untilAborted(signal, () => tab.page.mouse.move(end!.x, end!.y, { steps: 12 }));
 				await untilAborted(signal, () => tab.page.mouse.up());
 			} finally {
-				await fromHandle.dispose().catch(() => undefined);
-				await toHandle.dispose().catch(() => undefined);
+				if (start.handle) await start.handle.dispose().catch(() => undefined);
+				if (end?.handle) await end.handle.dispose().catch(() => undefined);
 			}
 		},
 		waitFor: async selector => {
 			const resolved = normalizeSelector(selector);
 			const locator = tab.page.locator(resolved).setTimeout(timeoutMs);
-			await untilAborted(signal, () => locator.wait());
+			return (await untilAborted(signal, () => locator.waitHandle())) as ElementHandle;
 		},
 		id: async n => resolveCachedHandle(tab, n),
 	};
