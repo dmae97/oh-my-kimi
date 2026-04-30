@@ -55,7 +55,7 @@ describe("task.simple", () => {
 
 		expect(properties.context).toBeDefined();
 		expect(properties.schema).toBeUndefined();
-		expect(tool.description).toContain("Current input mode: `schema-free`.");
+		expect(tool.description).toContain("`context` or `assignment`");
 		expect(tool.description).toContain("- `context`:");
 		expect(tool.description).not.toContain("- `schema`:");
 		expect(getAssignmentDescription(tool)).toContain("shared background belongs in `context`");
@@ -72,8 +72,7 @@ describe("task.simple", () => {
 
 		expect(properties.context).toBeUndefined();
 		expect(properties.schema).toBeUndefined();
-		expect(tool.description).toContain("Current input mode: `independent`.");
-		expect(tool.description).toContain("Every assignment must stand on its own.");
+		expect(tool.description).toContain("each `assignment`");
 		expect(tool.description).not.toContain("- `context`:");
 		expect(tool.description).not.toContain("- `schema`:");
 		expect(getAssignmentDescription(tool)).toContain("include any background that would otherwise live in `context`");
