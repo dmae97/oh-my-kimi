@@ -137,6 +137,19 @@ describe("callWithCopilotModelRetry", () => {
 	});
 });
 
+describe("isRetryableError transport failures", () => {
+	it("retries Bun socket closure errors", () => {
+		expect(
+			isRetryableError(
+				new Error(
+					"The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+				),
+			),
+		).toBe(true);
+	});
+});
+
+
 describe("isRetryableError does not treat 4xx as retryable", () => {
 	// Regression guard: the new Copilot carveout must not leak into the generic predicate.
 	it("returns false for Copilot transient model errors", () => {

@@ -34,6 +34,16 @@ describe("isProviderRetryableError", () => {
 		).toBe(true);
 	});
 
+	it("retries Bun socket closure errors", () => {
+		expect(
+			isProviderRetryableError(
+				new Error(
+					"The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+				),
+			),
+		).toBe(true);
+	});
+
 	it("retries first-event timeout errors", () => {
 		expect(isProviderRetryableError(new Error("Anthropic stream timed out while waiting for the first event"))).toBe(
 			true,

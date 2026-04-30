@@ -11,6 +11,10 @@ type ErrorLike = {
 	error?: { code?: unknown } | null;
 };
 
+export function isUnexpectedSocketCloseMessage(message: string): boolean {
+	return /\b(?:the\s+)?socket connection (?:was )?closed unexpectedly\b/i.test(message);
+}
+
 const TRANSIENT_MESSAGE_PATTERN =
 	/overloaded|rate.?limit|too many requests|service.?unavailable|server error|internal error|connection.?error|unable to connect|fetch failed|stream stall/i;
 
@@ -35,7 +39,7 @@ export function isRetryableError(error: unknown): boolean {
 
 	if (VALIDATION_MESSAGE_PATTERN.test(message)) return false;
 
-	return TRANSIENT_MESSAGE_PATTERN.test(message);
+	return isUnexpectedSocketCloseMessage(message) || TRANSIENT_MESSAGE_PATTERN.test(message);
 }
 
 export function extractHttpStatusFromError(error: unknown): number | undefined {
@@ -123,8 +127,9 @@ export function isCopilotRetryableError(error: unknown): boolean {
 	}
 
 	const message = error instanceof Error ? error.message : String(error);
-	return /request was aborted|aborted|fetch failed|network error|timed?\s*out|timeout|other side closed/i.test(
-		message,
+	return (
+		isUnexpectedSocketCloseMessage(message) ||
+		/request was aborted|aborted|fetch failed|network error|timed?\s*out|timeout|other side closed/i.test(message)
 	);
 }
 
