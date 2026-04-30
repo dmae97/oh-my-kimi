@@ -47,7 +47,7 @@ function startIdleChecker(): void {
 		const now = Date.now();
 		for (const [key, client] of Array.from(clients.entries())) {
 			if (now - client.lastActivity > idleTimeoutMs) {
-				shutdownClient(key);
+				void shutdownClient(key);
 			}
 		}
 	}, IDLE_CHECK_INTERVAL_MS);
@@ -762,22 +762,25 @@ export async function refreshFile(client: LspClient, filePath: string, signal?: 
 /**
  * Shutdown a specific client by key.
  */
-export function shutdownClient(key: string): void {
-	const client = clients.get(key);
-	if (!client) return;
-
-	// Reject all pending requests
+async function shutdownClientInstance(client: LspClient): Promise<void> {
+	const err = new Error("LSP client shutdown");
 	for (const pending of Array.from(client.pendingRequests.values())) {
-		pending.reject(new Error("LSP client shutdown"));
+		pending.reject(err);
 	}
 	client.pendingRequests.clear();
 
-	// Send shutdown request (best effort, don't wait)
-	sendRequest(client, "shutdown", null).catch(() => {});
-
-	// Kill process
+	const timeout = Bun.sleep(5_000);
+	const shutdown = sendRequest(client, "shutdown", null).catch(() => {});
+	await Promise.race([shutdown, timeout]);
 	client.proc.kill();
+	await Promise.race([client.proc.exited.catch(() => {}), Bun.sleep(1_000)]);
+}
+
+export async function shutdownClient(key: string): Promise<void> {
+	const client = clients.get(key);
+	if (!client) return;
 	clients.delete(key);
+	await shutdownClientInstance(client);
 }
 
 // =============================================================================
@@ -890,27 +893,10 @@ export async function sendNotification(client: LspClient, method: string, params
 /**
  * Shutdown all LSP clients.
  */
-export function shutdownAll(): void {
+export async function shutdownAll(): Promise<void> {
 	const clientsToShutdown = Array.from(clients.values());
 	clients.clear();
-
-	const err = new Error("LSP client shutdown");
-	for (const client of clientsToShutdown) {
-		/// Reject all pending requests
-		const reqs = Array.from(client.pendingRequests.values());
-		client.pendingRequests.clear();
-		for (const pending of reqs) {
-			pending.reject(err);
-		}
-
-		void (async () => {
-			// Send shutdown request (best effort, don't wait)
-			const timeout = Bun.sleep(5_000);
-			const result = sendRequest(client, "shutdown", null).catch(() => {});
-			await Promise.race([result, timeout]);
-			client.proc.kill();
-		})().catch(() => {});
-	}
+	await Promise.allSettled(clientsToShutdown.map(client => shutdownClientInstance(client)));
 }
 
 /** Status of an LSP server */
@@ -938,13 +924,19 @@ export function getActiveClients(): LspServerStatus[] {
 
 // Register cleanup on module unload
 if (typeof process !== "undefined") {
-	process.on("beforeExit", shutdownAll);
+	process.on("beforeExit", () => {
+		void shutdownAll();
+	});
 	process.on("SIGINT", () => {
-		shutdownAll();
-		process.exit(0);
+		void (async () => {
+			await shutdownAll();
+			process.exit(0);
+		})();
 	});
 	process.on("SIGTERM", () => {
-		shutdownAll();
-		process.exit(0);
+		void (async () => {
+			await shutdownAll();
+			process.exit(0);
+		})();
 	});
 }

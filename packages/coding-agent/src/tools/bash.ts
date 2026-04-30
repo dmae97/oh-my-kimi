@@ -508,12 +508,17 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const headLines = head;
 		const tailLines = tail;
 
-		// Check interception if enabled and available tools are known
+		// Check both the original command and the cwd-normalized command so
+		// leading `cd ... &&` wrappers do not hide either shell-navigation rules
+		// or the dedicated-tool command that follows the directory change.
 		if (this.session.settings.get("bashInterceptor.enabled")) {
 			const rules = this.session.settings.getBashInterceptorRules();
-			const interception = checkBashInterception(command, ctx?.toolNames ?? [], rules);
-			if (interception.block) {
-				throw new ToolError(interception.message ?? "Command blocked");
+			const commandsToCheck = rawCommand === command ? [command] : [rawCommand, command];
+			for (const commandToCheck of commandsToCheck) {
+				const interception = checkBashInterception(commandToCheck, ctx?.toolNames ?? [], rules);
+				if (interception.block) {
+					throw new ToolError(interception.message ?? "Command blocked");
+				}
 			}
 		}
 

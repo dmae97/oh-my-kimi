@@ -516,14 +516,7 @@
 			"types": "./src/web/search/providers/*.ts",
 			"import": "./src/web/search/providers/*.ts"
 		},
-		"./hooks": {
-			"types": "./src/extensibility/hooks/index.ts",
-			"import": "./src/extensibility/hooks/index.ts"
-		},
-		"./hooks/*": {
-			"types": "./src/extensibility/hooks/*.ts",
-			"import": "./src/extensibility/hooks/*.ts"
-		},
+
 		"./*.js": "./src/*.ts"
 	}
 }
