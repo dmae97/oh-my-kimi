@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.5.10] - 2026-04-30
+
 ### Breaking Changes
 
 - Removed the `worktree` parameter from `github` `pr_checkout`. Worktrees are now always written to `~/.omp/wt/<encoded-primary-repo>/pr-<number>/`, derived from the primary repository path

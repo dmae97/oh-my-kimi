@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.5.10] - 2026-04-30
+
 ### Added
 
 - Added provider response metadata callbacks for Anthropic and OpenAI streaming requests.
