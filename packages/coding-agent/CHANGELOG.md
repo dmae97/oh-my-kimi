@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed plan mode to auto-redirect `write` and `edit` calls targeting a bare `PLAN.md` (or any same-basename cwd-relative path) to the canonical `local://PLAN.md` plan artifact instead of rejecting them
+
 ## [14.5.11] - 2026-04-30
 ### Breaking Changes
 

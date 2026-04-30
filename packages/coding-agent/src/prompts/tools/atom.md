@@ -36,7 +36,7 @@ Lid=       blank the anchored line's content but KEEP the line (results in an em
 - To insert ABOVE a line, you **MUST** use `^Lid` then `+TEXT`. To insert above line 1, you **MUST** use `^` (BOF) then `+TEXT`. To insert below a line, you **MUST** use `@Lid` then `+TEXT`.
 - Multiple `---PATH` sections **MAY** appear in one input; each section is applied in order.
 - `!rm` / `!mv DEST` **MUST NOT** be combined with line edits in the same section.
-- Lids contain a content hash. If a line has changed since you read it, the tool rejects the edit and shows the current content; you **MUST** re-read and retry with fresh Lids. Small drift (≤5 lines) where the original hash still matches a nearby line auto-rebases with a warning. Larger shifts may show a hash-only candidate, but two-letter hashes collide; verify surrounding content or re-read before using it.
+- Lids contain a content hash. If a line has changed since you read it, the tool rejects the edit and shows the current content; you **MUST** re-read and retry with fresh Lids.
 - After `+TEXT` (or `+`) the cursor advances past the inserted line, so consecutive `+TEXT` ops stack in order. After `Lid=TEXT` the cursor sits on the modified anchor; after `-Lid` it sits on the slot the deleted line vacated. You **MUST** use a fresh `@Lid` / `^Lid` / `^` / `$` to reposition.
 - The tool is syntax-blind: it will not check brackets, indentation, table column counts, or fence integrity. You **MUST** verify indentation-sensitive or structured files after editing (Python, Markdown tables/fences).
 - A section whose PATH does not yet exist creates the file from your `+TEXT` lines (use `^` or `$` then `+TEXT…`). No separate "create file" op is needed.
