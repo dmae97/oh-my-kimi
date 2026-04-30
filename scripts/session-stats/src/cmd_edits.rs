@@ -65,7 +65,7 @@ struct EditArgs {
 }
 
 pub fn run(args: Vec<String>) -> Result<()> {
-    let mut limit: usize = 100_000;
+    let mut limit: usize = 1_000;
     let mut workers: usize = 0;
     let mut date_filters: Vec<String> = Vec::new();
 

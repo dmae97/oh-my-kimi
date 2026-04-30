@@ -47,7 +47,7 @@ struct FileResult {
 }
 
 pub fn run(args: Vec<String>) -> Result<()> {
-    let mut limit: usize = 100_000;
+    let mut limit: usize = 1_000;
     let mut workers: usize = 0;
 
     let mut iter = args.into_iter();
@@ -72,7 +72,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
                     "usage: session-stats tools [-n N] [-j workers]\n\
                      \n\
                      Aggregates per-tool token usage across the most-recent N session\n\
-                     jsonl files (default 100000). Tokenizer: o200k_base."
+                     jsonl files (default 1000). Tokenizer: o200k_base."
                 );
                 return Ok(());
             }
@@ -217,35 +217,31 @@ fn normalize_tool(name: &str) -> String {
 
 fn print_grand(g: &SessionTotals, sessions: usize) {
     let total = g.arg_tok + g.res_tok + g.thinking_tok + g.text_tok + g.user_tok;
-    let share = |n: i64| pct(n, total);
-    println!("=== Grand totals across {sessions} sessions ===");
-    println!(
-        "tool call ARGS:        {:>10} tok ({:>5.1}%)",
-        commas(g.arg_tok),
-        share(g.arg_tok)
-    );
-    println!(
-        "tool RESULTS:          {:>10} tok ({:>5.1}%)",
-        commas(g.res_tok),
-        share(g.res_tok)
-    );
-    println!(
-        "assistant THINKING:    {:>10} tok ({:>5.1}%)",
-        commas(g.thinking_tok),
-        share(g.thinking_tok)
-    );
-    println!(
-        "assistant TEXT:        {:>10} tok ({:>5.1}%)",
-        commas(g.text_tok),
-        share(g.text_tok)
-    );
-    println!(
-        "user TEXT:             {:>10} tok ({:>5.1}%)",
-        commas(g.user_tok),
-        share(g.user_tok)
-    );
-    println!("                       ---------------");
-    println!("TOTAL:                 {:>10} tok", commas(total));
+    let rows: [(&str, i64); 5] = [
+        ("tool call ARGS", g.arg_tok),
+        ("tool RESULTS", g.res_tok),
+        ("assistant THINKING", g.thinking_tok),
+        ("assistant TEXT", g.text_tok),
+        ("user TEXT", g.user_tok),
+    ];
+    let label_w = rows.iter().map(|(l, _)| l.len()).max().unwrap_or(0);
+    let val_w = rows
+        .iter()
+        .map(|(_, n)| commas(*n).len())
+        .chain(std::iter::once(commas(total).len()))
+        .max()
+        .unwrap_or(0);
+
+    println!("=== Grand totals across {} sessions ===", commas(sessions as i64));
+    for (label, n) in rows {
+        println!(
+            "{label:<label_w$}  {:>val_w$} tok ({:>5.1}%)",
+            commas(n),
+            pct(n, total),
+        );
+    }
+    println!("{:<label_w$}  {}", "", "-".repeat(val_w));
+    println!("{:<label_w$}  {:>val_w$} tok", "TOTAL", commas(total));
     println!();
     println!(
         "tool calls: {}, tool results: {}",
@@ -312,43 +308,104 @@ fn print_table(tools: &HashMap<String, ToolAgg>) {
         .collect();
     rows.sort_by(|a, b| b.total.cmp(&a.total));
 
-    println!(
-        "{:<22} {:>6} {:>10} {:>10} {:>10} {:>8} {:>8} {:>8}",
-        "tool", "calls", "arg_tok", "res_tok", "total", "avg_arg", "avg_res", "res/arg"
-    );
-    println!("{}", "-".repeat(100));
-
     const TOP: usize = 25;
     let shown = TOP.min(rows.len());
-    for r in &rows[..shown] {
-        println!(
-            "{:<22} {:>6} {:>10} {:>10} {:>10} {:>8.1} {:>8.1} {:>8.2}",
-            r.name,
-            commas(r.calls),
-            commas(r.arg_tok),
-            commas(r.res_tok),
-            commas(r.total),
-            r.avg_arg,
-            r.avg_res,
-            r.res_o_arg
-        );
-    }
-    if rows.len() > TOP {
-        let (mut sc, mut sa, mut sr) = (0i64, 0i64, 0i64);
+    let head_rows = &rows[..shown];
+
+    // "(N others)" trailing summary, computed before width measurement so its
+    // string contents participate in column sizing.
+    let others = (rows.len() > TOP).then(|| {
+        let mut sc = 0i64;
+        let mut sa = 0i64;
+        let mut sr = 0i64;
         for r in &rows[TOP..] {
             sc += r.calls;
             sa += r.arg_tok;
             sr += r.res_tok;
         }
+        OthersRow {
+            label: format!("({} others)", rows.len() - TOP),
+            calls: sc,
+            arg_tok: sa,
+            res_tok: sr,
+            total: sa + sr,
+        }
+    });
+
+    // Compute column widths from header label and every value that will
+    // appear under that header (including the "others" summary row, if any).
+    let max_str = |header: &str, vals: &[&str]| -> usize {
+        vals.iter().map(|s| s.len()).chain(std::iter::once(header.len())).max().unwrap_or(0)
+    };
+
+    let names: Vec<&str> = head_rows
+        .iter()
+        .map(|r| r.name.as_str())
+        .chain(others.as_ref().map(|o| o.label.as_str()))
+        .collect();
+    let calls: Vec<String> = head_rows
+        .iter()
+        .map(|r| commas(r.calls))
+        .chain(others.as_ref().map(|o| commas(o.calls)))
+        .collect();
+    let arg_toks: Vec<String> = head_rows
+        .iter()
+        .map(|r| commas(r.arg_tok))
+        .chain(others.as_ref().map(|o| commas(o.arg_tok)))
+        .collect();
+    let res_toks: Vec<String> = head_rows
+        .iter()
+        .map(|r| commas(r.res_tok))
+        .chain(others.as_ref().map(|o| commas(o.res_tok)))
+        .collect();
+    let totals: Vec<String> = head_rows
+        .iter()
+        .map(|r| commas(r.total))
+        .chain(others.as_ref().map(|o| commas(o.total)))
+        .collect();
+    let avg_args: Vec<String> = head_rows.iter().map(|r| format!("{:.1}", r.avg_arg)).collect();
+    let avg_ress: Vec<String> = head_rows.iter().map(|r| format!("{:.1}", r.avg_res)).collect();
+    let res_o_args: Vec<String> =
+        head_rows.iter().map(|r| format!("{:.2}", r.res_o_arg)).collect();
+
+    let name_w = max_str("tool", &names);
+    let calls_w = max_str("calls", &calls.iter().map(String::as_str).collect::<Vec<_>>());
+    let arg_w = max_str("arg_tok", &arg_toks.iter().map(String::as_str).collect::<Vec<_>>());
+    let res_w = max_str("res_tok", &res_toks.iter().map(String::as_str).collect::<Vec<_>>());
+    let tot_w = max_str("total", &totals.iter().map(String::as_str).collect::<Vec<_>>());
+    let avga_w = max_str("avg_arg", &avg_args.iter().map(String::as_str).collect::<Vec<_>>());
+    let avgr_w = max_str("avg_res", &avg_ress.iter().map(String::as_str).collect::<Vec<_>>());
+    let ratio_w = max_str("res/arg", &res_o_args.iter().map(String::as_str).collect::<Vec<_>>());
+
+    let total_width = name_w + 1 + calls_w + 1 + arg_w + 1 + res_w + 1 + tot_w + 1 + avga_w + 1 + avgr_w + 1 + ratio_w;
+
+    println!(
+        "{:<name_w$} {:>calls_w$} {:>arg_w$} {:>res_w$} {:>tot_w$} {:>avga_w$} {:>avgr_w$} {:>ratio_w$}",
+        "tool", "calls", "arg_tok", "res_tok", "total", "avg_arg", "avg_res", "res/arg"
+    );
+    println!("{}", "-".repeat(total_width));
+
+    for (i, r) in head_rows.iter().enumerate() {
         println!(
-            "{:<22} {:>6} {:>10} {:>10} {:>10}",
-            format!("({} others)", rows.len() - TOP),
-            commas(sc),
-            commas(sa),
-            commas(sr),
-            commas(sa + sr),
+            "{:<name_w$} {:>calls_w$} {:>arg_w$} {:>res_w$} {:>tot_w$} {:>avga_w$} {:>avgr_w$} {:>ratio_w$}",
+            r.name, calls[i], arg_toks[i], res_toks[i], totals[i], avg_args[i], avg_ress[i], res_o_args[i],
         );
     }
+    if let Some(o) = others {
+        let i = head_rows.len();
+        println!(
+            "{:<name_w$} {:>calls_w$} {:>arg_w$} {:>res_w$} {:>tot_w$}",
+            o.label, calls[i], arg_toks[i], res_toks[i], totals[i],
+        );
+    }
+}
+
+struct OthersRow {
+    label: String,
+    calls: i64,
+    arg_tok: i64,
+    res_tok: i64,
+    total: i64,
 }
 
 fn write_csv(tools: &HashMap<String, ToolAgg>) -> Result<()> {

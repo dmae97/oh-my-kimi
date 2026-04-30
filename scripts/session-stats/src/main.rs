@@ -20,10 +20,10 @@ fn usage() {
 
   edits [-n N] [date prefix ...]
                              audit edit-tool usage across N most-recent
-                             sessions (default 100000). Optional date filters
+                             sessions (default 1000). Optional date filters
                              (e.g. 2026-04-28) further narrow the set.
   tools [-n N]               per-tool token totals across the N most-recent
-                             session jsonl files (default 100000).
+                             session jsonl files (default 1000).
 
 Token counting uses the o200k_base tokenizer (the GPT-4o / Claude-adjacent BPE).
 Walk root: ~/.omp/agent/sessions/"
