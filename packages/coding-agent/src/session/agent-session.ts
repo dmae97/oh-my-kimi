@@ -2309,10 +2309,20 @@ export class AgentSession {
 	 *      embeds these in the appended prompt under "## MCP Server Instructions".
 	 *      A server upgrade can change instructions while keeping tools identical.
 	 *
-	 * Inputs NOT covered: tool input schemas, memory instructions read from disk,
-	 * and any other ambient state the rebuild closure reads. Callers must explicitly
-	 * call `refreshBaseSystemPrompt()` after such side-effecting changes; see e.g.
-	 * the memory hooks and `#syncEditToolModeAfterModelChange`.
+	 * Settings-driven tool metadata is covered automatically: built-in tools that
+	 * depend on settings expose `description`/`label` via getters (see `TaskTool`,
+	 * `SearchToolBm25Tool`, `EditTool`), and the signature reads them live on every
+	 * call - so a settings flip that mutates the rendered string differs the signature
+	 * the next time `#applyActiveToolsByName` runs. Do not refactor `describeTool` to
+	 * cache per-tool strings without preserving this property.
+	 *
+	 * Inputs NOT covered: tool input schemas; memory instructions read from disk;
+	 * and SDK-init-time closure constants in `sdk.ts` (`repeatToolDescriptions`,
+	 * `eagerTasks`, `intentField`, `mcpDiscoveryEnabled`, `secretsEnabled`). The
+	 * closure-captured ones cannot change at runtime regardless of skip behavior.
+	 * For everything else, callers must explicitly call `refreshBaseSystemPrompt()`
+	 * after side-effecting changes; see e.g. the memory hooks and
+	 * `#syncEditToolModeAfterModelChange`.
 	 */
 	#computeAppliedToolSignature(toolNames: string[], tools: AgentTool[]): string {
 		// Order-preserving join: any reorder must produce a different signature so

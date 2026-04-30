@@ -334,4 +334,56 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		expect(rebuildCount).toBe(3);
 	});
 
+	it("rebuilds when a tool's getter-based description reflects new settings state", async () => {
+		// Built-in tools whose prompt-rendered metadata depends on settings expose
+		// `description` via getters that re-evaluate on every access (TaskTool reads
+		// task.disabledAgents/maxConcurrency/isolation.mode/simple/async.enabled,
+		// SearchToolBm25Tool reads the discoverable MCP tool count, EditTool resolves
+		// through the current edit-mode definition). The signature reads `tool.description`
+		// live each call, so a settings flip that mutates the rendered string MUST differ
+		// the signature on the next `#applyActiveToolsByName`. Defending this contract
+		// against a future refactor that caches per-tool description strings.
+		let rebuildCount = 0;
+		const { session } = newSession(
+			async toolNames => {
+				rebuildCount++;
+				return `tools:${toolNames.join(",")}`;
+			},
+			// Discovery-on so the dynamic tool participates in the registry segment too,
+			// matching the production pattern where `TaskTool` and friends are always
+			// reachable via the registry.
+			{ mcpDiscoveryEnabled: true },
+		);
+
+		// Reuse the initially-active MCP name so the tool stays in the active list
+		// across refreshes - we want to defend the path where `tool.description` is read
+		// for the active descriptionSegment, not just the registrySegment.
+		const settingState = { disabled: "none" };
+		const dynamicTool = createMcpCustomTool("mcp__nucleus_search", "nucleus", "search", "placeholder");
+		Object.defineProperty(dynamicTool, "description", {
+			get: () => `dynamic disabled=${settingState.disabled}`,
+			enumerable: true,
+			configurable: true,
+		});
+
+		await session.refreshMCPTools([dynamicTool]);
+		const baseline = rebuildCount;
+		expect(baseline).toBeGreaterThanOrEqual(1);
+
+		// Same underlying state, same tool object identity: skip.
+		await session.refreshMCPTools([dynamicTool]);
+		expect(rebuildCount).toBe(baseline);
+
+		// Mutate the settings-backed state. The tool object identity does not change,
+		// but its `description` getter now returns a new string. The signature must
+		// pick this up live (no per-tool caching) and force a rebuild.
+		settingState.disabled = "plan,explore";
+		await session.refreshMCPTools([dynamicTool]);
+		expect(rebuildCount).toBe(baseline + 1);
+
+		// Same state again: skip.
+		await session.refreshMCPTools([dynamicTool]);
+		expect(rebuildCount).toBe(baseline + 1);
+	});
+
 });
