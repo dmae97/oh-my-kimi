@@ -568,6 +568,27 @@ export interface OpenAICompat {
 }
 
 /**
+ * Compatibility settings for anthropic-messages API.
+ * Use this to disable features that strict-by-default Anthropic accepts but
+ * that proxy gateways (Vertex AI, AWS Bedrock-style fronts, etc.) reject.
+ */
+export interface AnthropicCompat {
+	/**
+	 * Drop the top-level `strict: true` field on tool definitions. Vertex AI's
+	 * Anthropic-compatible endpoint rejects unknown tool fields with
+	 * `tools.<n>.custom.strict: Extra inputs are not permitted`.
+	 */
+	disableStrictTools?: boolean;
+	/**
+	 * Map adaptive thinking (`thinking: { type: "adaptive" }`) to
+	 * `{ type: "enabled", budget_tokens }`. Vertex AI rejects the `adaptive`
+	 * tag with `Input tag 'adaptive' ... does not match any of the expected
+	 * tags: 'disabled', 'enabled'`.
+	 */
+	disableAdaptiveThinking?: boolean;
+}
+
+/**
  * OpenRouter provider routing preferences.
  * Controls which upstream providers OpenRouter routes requests to.
  * @see https://openrouter.ai/docs/provider-routing
@@ -619,8 +640,12 @@ export interface Model<TApi extends Api = any> {
 	priority?: number;
 	/** Canonical thinking capability metadata for this model. */
 	thinking?: ThinkingConfig;
-	/** Compatibility overrides for openai-completions API. If not set, auto-detected from baseUrl. */
-	compat?: TApi extends "openai-completions" ? OpenAICompat : never;
+	/** Compatibility overrides per API. If not set, auto-detected from baseUrl. */
+	compat?: TApi extends "openai-completions"
+		? OpenAICompat
+		: TApi extends "anthropic-messages"
+			? AnthropicCompat
+			: never;
 	/**
 	 * Which shape to use when exposing the Codex `apply_patch` tool to this model.
 	 * Generated catalog policy sets `"freeform"` for first-party GPT-5 Responses

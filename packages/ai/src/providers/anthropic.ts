@@ -796,7 +796,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				resolveAnthropicBaseUrl(model, options?.apiKey ?? getEnvApiKey(model.provider) ?? "") ??
 				"https://api.anthropic.com";
 			const providerSessionState = getAnthropicProviderSessionState(options?.providerSessionState);
-			let disableStrictTools = providerSessionState?.strictToolsDisabled ?? false;
+			let disableStrictTools =
+				(providerSessionState?.strictToolsDisabled ?? false) || (model.compat?.disableStrictTools ?? false);
 			let strictFallbackErrorMessage: string | undefined;
 			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
 				let nextParams = buildParams(model, baseUrl, context, isOAuthToken, options, disableStrictTools);
@@ -1565,7 +1566,8 @@ function buildParams(
 		const effort =
 			options.effort ?? (requestedEffort ? mapEffortToAnthropicAdaptiveEffort(model, requestedEffort) : undefined);
 
-		if (mode === "anthropic-adaptive") {
+		const disableAdaptiveThinking = model.compat?.disableAdaptiveThinking ?? false;
+		if (mode === "anthropic-adaptive" && !disableAdaptiveThinking) {
 			// Starting with Claude Opus 4.7, adaptive thinking content is omitted from the
 			// response by default. Opt into summarized reasoning so thinking deltas keep
 			// streaming with human-readable content for callers that rely on it.
