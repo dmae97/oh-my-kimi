@@ -51,7 +51,7 @@ import { getKimiCommonHeaders } from "../utils/oauth/kimi";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry, extractHttpStatusFromError } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
-import { mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
+import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -918,6 +918,15 @@ function buildParams(
 	} else if (supportsReasoningParams && options?.reasoning && model.reasoning && compat.supportsReasoningEffort) {
 		// OpenAI-style reasoning_effort
 		Reflect.set(params, "reasoning_effort", mapReasoningEffort(options.reasoning, compat.reasoningEffortMap));
+	}
+
+	if (compat.disableReasoningOnForcedToolChoice && isForcedToolChoice(params.tool_choice)) {
+		// Mirrors anthropic.ts:disableThinkingIfToolChoiceForced — backends like
+		// Kimi 400 with `tool_choice 'specified' is incompatible with thinking
+		// enabled`. Drop reasoning for this turn instead of dropping tool_choice;
+		// the agent still gets the forced tool call, just without thinking.
+		delete (params as { reasoning_effort?: unknown }).reasoning_effort;
+		delete (params as { reasoning?: unknown }).reasoning;
 	}
 
 	// OpenRouter provider routing preferences

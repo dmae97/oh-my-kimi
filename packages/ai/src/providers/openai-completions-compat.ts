@@ -53,6 +53,11 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 	const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
 	const isKilo = provider === "kilo" || baseUrl.includes("api.kilo.ai");
 	const isKimiModel = model.id.includes("moonshotai/kimi") || /^kimi[-.]/i.test(model.id);
+	const isAnthropicModel =
+		provider === "anthropic" ||
+		baseUrl.includes("api.anthropic.com") ||
+		/(^|\/)claude[-.]/i.test(model.id) ||
+		/(^|\/)anthropic\//i.test(model.id);
 	const isAlibaba = provider === "alibaba-coding-plan" || baseUrl.includes("dashscope");
 	const isQwen = model.id.toLowerCase().includes("qwen");
 	// DeepSeek V4 (and other reasoning-capable DeepSeek models) reject follow-up requests in
@@ -111,6 +116,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		supportsReasoningEffort: !isGrok && !isZai,
 		reasoningEffortMap,
 		supportsUsageInStreaming: !isCerebras,
+		disableReasoningOnForcedToolChoice: isKimiModel || isAnthropicModel,
 		supportsToolChoice: true,
 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
 		requiresToolResultName: isMistral,

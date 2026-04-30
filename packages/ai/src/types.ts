@@ -557,6 +557,14 @@ export interface OpenAICompat {
 	requiresAssistantContentForToolCalls?: boolean;
 	/** Whether the provider supports the `tool_choice` parameter. Default: true. */
 	supportsToolChoice?: boolean;
+	/**
+	 * Drop reasoning fields (`reasoning_effort`, OpenRouter `reasoning`) for
+	 * the request when `tool_choice` forces a tool call. Mirrors the Anthropic
+	 * `disableThinkingIfToolChoiceForced` rule for backends like Kimi that
+	 * 400 with `tool_choice 'specified' is incompatible with thinking
+	 * enabled` whenever both are present. Default: auto-detected (Kimi).
+	 */
+	disableReasoningOnForcedToolChoice?: boolean;
 	/** OpenRouter-specific routing preferences. Only used when baseUrl points to OpenRouter. */
 	openRouterRouting?: OpenRouterRouting;
 	/** Vercel AI Gateway routing preferences. Only used when baseUrl points to Vercel AI Gateway. */
