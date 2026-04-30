@@ -895,8 +895,8 @@ describe("buildSessionContext", () => {
 		];
 
 		const loaded = buildSessionContext(entries);
-		// model_change is later overwritten by assistant message's model info
-		expect(loaded.models.default).toBe("anthropic/claude-sonnet-4-5");
+		// Issue #849: explicit model_change wins over assistant-message inference.
+		expect(loaded.models.default).toBe("openai/gpt-4");
 		expect(loaded.thinkingLevel).toBe("high");
 	});
 });

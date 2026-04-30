@@ -151,8 +151,11 @@ describe("buildSessionContext", () => {
 				msg("3", "2", "assistant", "hi"),
 			];
 			const ctx = buildSessionContext(entries);
-			// Assistant message overwrites model change
-			expect(ctx.models.default).toBe("anthropic/claude-test");
+			// Issue #849: an explicit model_change with role="default" must NOT
+			// be silently overwritten by a later assistant message tagged with a
+			// different model id. Temporary fallbacks and provider-side
+			// downgrades both produce such mismatched messages.
+			expect(ctx.models.default).toBe("openai/gpt-4");
 		});
 	});
 
