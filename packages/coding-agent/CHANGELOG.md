@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Parallelized plugin root preloading with other startup initialization in `runRootCommand` to reduce startup latency
+- Parallelized session bootstrap work in `createAgentSession`, including AGENTS.md scanning, context discovery, prompt template loading, slash command loading, and skill discovery, to reduce time to first available session
 
 ## [14.5.12] - 2026-04-30
 

@@ -89,7 +89,7 @@ const AGENTS_MD_LIMIT = 200;
 const SYSTEM_PROMPT_PREP_TIMEOUT_MS = 5000;
 const AGENTS_MD_EXCLUDED_DIRS = new Set(["node_modules", ".git"]);
 
-interface AgentsMdSearch {
+export interface AgentsMdSearch {
 	scopePath: string;
 	limit: number;
 	pattern: string;
@@ -163,7 +163,7 @@ async function listAgentsMdFiles(root: string, limit: number): Promise<string[]>
 	}
 }
 
-async function buildAgentsMdSearch(cwd: string): Promise<AgentsMdSearch> {
+export async function buildAgentsMdSearch(cwd: string): Promise<AgentsMdSearch> {
 	const files = await listAgentsMdFiles(cwd, AGENTS_MD_LIMIT);
 	return {
 		scopePath: ".",
@@ -445,6 +445,8 @@ export interface BuildSystemPromptOptions {
 	alwaysApplyRules?: AlwaysApplyRule[];
 	/** Whether secret obfuscation is active. When true, explains the redaction format in the prompt. */
 	secretsEnabled?: boolean;
+	/** Pre-loaded AGENTS.md search (skips discovery if provided). May be a Promise to allow early kick-off. */
+	agentsMdSearch?: AgentsMdSearch | Promise<AgentsMdSearch>;
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -470,6 +472,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		mcpDiscoveryServerSummaries = [],
 		eagerTasks = false,
 		secretsEnabled = false,
+		agentsMdSearch: providedAgentsMdSearch,
 	} = options;
 	const resolvedCwd = cwd ?? getProjectDir();
 
@@ -480,7 +483,10 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		const contextFilesPromise = providedContextFiles
 			? Promise.resolve(providedContextFiles)
 			: logger.time("loadProjectContextFiles", loadProjectContextFiles, { cwd: resolvedCwd });
-		const agentsMdSearchPromise = logger.time("buildAgentsMdSearch", buildAgentsMdSearch, resolvedCwd);
+		const agentsMdSearchPromise =
+			providedAgentsMdSearch !== undefined
+				? Promise.resolve(providedAgentsMdSearch)
+				: logger.time("buildAgentsMdSearch", buildAgentsMdSearch, resolvedCwd);
 		const skillsPromise: Promise<Skill[]> =
 			providedSkills !== undefined
 				? Promise.resolve(providedSkills)

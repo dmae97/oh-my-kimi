@@ -615,6 +615,17 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		process.exit(1);
 	}
 
+	// Kick off plugin-root preload in parallel with the remaining startup work.
+	// Awaited later (before extension/skill discovery in createAgentSession needs it).
+	const home = os.homedir();
+	const pluginPreloadPromise =
+		parsedArgs.pluginDirs && parsedArgs.pluginDirs.length > 0
+			? logger.time("injectPluginDirRoots", injectPluginDirRoots, home, parsedArgs.pluginDirs, getProjectDir())
+			: logger.time("preloadPluginRoots", preloadPluginRoots, home, getProjectDir());
+	// Mark the promise as handled so a synchronous failure does not surface as an unhandled-rejection
+	// warning before we reach the await site below.
+	pluginPreloadPromise.catch(() => {});
+
 	const cwd = getProjectDir();
 	await logger.time("settings:init", Settings.init, { cwd });
 	if (parsedArgs.mode === "rpc") {
@@ -647,8 +658,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	const mode = parsedArgs.mode || "text";
 
 	// Initialize discovery system with settings for provider persistence
-	logger.time("initializeWithSettings");
-	initializeWithSettings(settings);
+	logger.time("initializeWithSettings", initializeWithSettings, settings);
 	modelRegistry.refreshInBackground();
 
 	// Apply model role overrides from CLI args or env vars (ephemeral, not persisted)
@@ -706,13 +716,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		sessionManager = await SessionManager.open(selectedPath);
 	}
 
-	// Wire --plugin-dir and preload plugin roots for sync consumers (LSP config)
-	const home = os.homedir();
-	if (parsedArgs.pluginDirs && parsedArgs.pluginDirs.length > 0) {
-		await logger.time("injectPluginDirRoots", injectPluginDirRoots, home, parsedArgs.pluginDirs!, getProjectDir());
-	} else {
-		await logger.time("preloadPluginRoots", preloadPluginRoots, home, getProjectDir());
-	}
+	await pluginPreloadPromise;
 
 	// Background marketplace auto-update — never blocks startup.
 	const autoUpdate = settings.get("marketplace.autoUpdate");
@@ -778,7 +782,6 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		createAgentSession,
 		sessionOptions,
 	);
-	logger.time("main:afterCreateSession");
 	if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
 		authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);
 	}
@@ -856,8 +859,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		await runAcpMode(session, createAcpSession);
 	} else if (isInteractive) {
 		const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
-		logger.time("main:getChangelogForDisplay");
-		const changelogMarkdown = await getChangelogForDisplay(parsedArgs);
+		const changelogMarkdown = await logger.time("main:getChangelogForDisplay", getChangelogForDisplay, parsedArgs);
 
 		const scopedModelsForDisplay = sessionOptions.scopedModels ?? scopedModels;
 		if (scopedModelsForDisplay.length > 0) {

@@ -99,6 +99,8 @@ import { SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
+	type AgentsMdSearch,
+	buildAgentsMdSearch,
 	buildSystemPrompt as buildSystemPromptInternal,
 	buildSystemPromptToolMetadata,
 	loadProjectContextFiles as loadContextFilesInternal,
@@ -667,17 +669,40 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage);
 
 	const settings = options.settings ?? (await logger.time("settings", Settings.init, { cwd, agentDir }));
-	logger.time("initializeWithSettings");
-	initializeWithSettings(settings);
+	logger.time("initializeWithSettings", initializeWithSettings, settings);
 	if (!options.modelRegistry) {
 		modelRegistry.refreshInBackground();
 	}
+	// Kick off AGENTS.md filesystem search in parallel — it is the slowest piece of buildSystemPrompt
+	// (~200ms on large repos) and only needs `cwd`, so it can overlap with everything that follows.
+	const agentsMdSearchPromise: Promise<AgentsMdSearch> = logger.time("buildAgentsMdSearch", buildAgentsMdSearch, cwd);
+	agentsMdSearchPromise.catch(() => {});
+
+	// Independent discoveries that depend only on cwd/agentDir — kicked off in parallel and awaited
+	// at their respective consumer sites. Their work can overlap with model resolution, secret loading,
+	// session-context build, tool creation, MCP discovery, and extension discovery.
+	const contextFilesPromise = options.contextFiles
+		? Promise.resolve(options.contextFiles)
+		: logger.time("discoverContextFiles", discoverContextFiles, cwd, agentDir);
+	contextFilesPromise.catch(() => {});
+	const promptTemplatesPromise = options.promptTemplates
+		? Promise.resolve(options.promptTemplates)
+		: logger.time("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir);
+	promptTemplatesPromise.catch(() => {});
+	const slashCommandsPromise = options.slashCommands
+		? Promise.resolve(options.slashCommands)
+		: logger.time("discoverSlashCommands", discoverSlashCommands, cwd);
+	slashCommandsPromise.catch(() => {});
 	const skillsSettings = settings.getGroup("skills");
 	const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
 	const discoveredSkillsPromise =
 		options.skills === undefined
-			? discoverSkills(cwd, agentDir, { ...skillsSettings, disabledExtensions: disabledExtensionIds })
+			? logger.time("discoverSkills", discoverSkills, cwd, agentDir, {
+					...skillsSettings,
+					disabledExtensions: disabledExtensionIds,
+				})
 			: undefined;
+	discoveredSkillsPromise?.catch(() => {});
 
 	// Initialize provider preferences from settings
 	const webSearchProvider = settings.get("providers.webSearch");
@@ -814,10 +839,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		skills = options.skills;
 		skillWarnings = [];
 	} else {
-		const discovered = await logger.time(
-			"discoverSkills",
-			() => discoveredSkillsPromise ?? Promise.resolve({ skills: [], warnings: [] }),
-		);
+		const discovered = await (discoveredSkillsPromise ?? Promise.resolve({ skills: [], warnings: [] }));
 		skills = discovered.skills;
 		skillWarnings = discovered.warnings;
 	}
@@ -851,10 +873,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		return { ttsrManager, rulebookRules, alwaysApplyRules };
 	});
 
-	const contextFiles = await logger.time(
-		"discoverContextFiles",
-		async () => options.contextFiles ?? (await discoverContextFiles(cwd, agentDir)),
-	);
+	const contextFiles = await contextFilesPromise;
 
 	let agent: Agent;
 	let session!: AgentSession;
@@ -1353,6 +1372,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				mcpDiscoveryServerSummaries: discoverableMCPSummary.servers.map(formatDiscoverableMCPToolServerSummary),
 				eagerTasks,
 				secretsEnabled,
+				agentsMdSearch: agentsMdSearchPromise,
 			});
 
 			if (options.systemPrompt === undefined) {
@@ -1376,6 +1396,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					mcpDiscoveryServerSummaries: discoverableMCPSummary.servers.map(formatDiscoverableMCPToolServerSummary),
 					eagerTasks,
 					secretsEnabled,
+					agentsMdSearch: agentsMdSearchPromise,
 				});
 			}
 			return options.systemPrompt(defaultPrompt);
@@ -1446,13 +1467,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		const systemPrompt = await logger.time("buildSystemPrompt", rebuildSystemPrompt, initialToolNames, toolRegistry);
 
-		const promptTemplates =
-			options.promptTemplates ??
-			(await logger.time("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir));
+		const promptTemplates = await promptTemplatesPromise;
 		toolSession.promptTemplates = promptTemplates;
 
-		const slashCommands =
-			options.slashCommands ?? (await logger.time("discoverSlashCommands", discoverSlashCommands, cwd));
+		const slashCommands = await slashCommandsPromise;
 
 		// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
 		const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
@@ -1765,7 +1783,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			});
 		}
 
-		logger.time("createAgentSession:return");
 		return {
 			session,
 			extensionsResult,

@@ -1474,8 +1474,9 @@ export async function prewarmOpenAICodexResponses(
 	if (!sessionKey || !providerSessionState) return;
 	const state = getCodexWebSocketSessionState(sessionKey, providerSessionState);
 	if (!shouldUseCodexWebSocket(model, state, options?.preferWebsockets)) return;
-	logger.time("prewarmCodex:createHeaders");
-	const headers = createCodexHeaders(
+	const headers = logger.time(
+		"prewarmCodex:createHeaders",
+		createCodexHeaders,
 		{ ...(model.headers ?? {}), ...(options?.headers ?? {}) },
 		accountId,
 		apiKey,
@@ -1483,8 +1484,14 @@ export async function prewarmOpenAICodexResponses(
 		"websocket",
 		state,
 	);
-	logger.time("prewarmCodex:establishWs");
-	await getOrCreateCodexWebSocketConnection(state, toWebSocketUrl(url), headers, options?.signal);
+	await logger.time(
+		"prewarmCodex:establishWs",
+		getOrCreateCodexWebSocketConnection,
+		state,
+		toWebSocketUrl(url),
+		headers,
+		options?.signal,
+	);
 	state.prewarmed = true;
 }
 

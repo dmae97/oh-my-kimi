@@ -4,6 +4,7 @@
  * Logs to ~/.omp/logs/ with size-based rotation, supporting concurrent omp instances.
  * Each log entry includes process.pid for traceability.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
 import winston from "winston";
 import DailyRotateFile from "winston-daily-rotate-file";
@@ -96,109 +97,260 @@ export function debug(message: string, context?: Record<string, unknown>): void 
 	}
 }
 
-const LOGGED_TIMING_THRESHOLD_MS = 5;
+const LOGGED_TIMING_THRESHOLD_MS = 0.5;
 
-/** Sequential wall-clock markers (next marker closes the previous segment). */
-let gTimings: [op: string, ts: number][] = [];
+interface Span {
+	op: string;
+	start: number;
+	end?: number;
+	parent?: Span;
+	children: Span[];
+	/** Marker / point event without a duration. */
+	point?: boolean;
+}
 
-/** Await-accurate durations (safe for parallel work; sums can overlap). */
-let gAsyncSpans: [op: string, durationMs: number][] = [];
-
-/** Whether to record timings. */
+const spanStorage = new AsyncLocalStorage<Span>();
+let gRootSpan: Span | undefined;
 let gRecordTimings = false;
 
 /**
- * Print collected timings to stderr.
- * Wall segments are gaps between consecutive {@link time} markers only; they are wrong when
- * concurrent code also calls {@link time} (e.g. parallel capability loads). Use {@link timeAsync}
- * for those awaits instead.
+ * Print collected timings as an indented tree.
+ * Each span shows wall duration; parents with children also show "(self)" for unattributed time.
+ * Sibling spans are sorted by start time. Spans whose intervals overlap with siblings ran in parallel.
  */
 export function printTimings(): void {
-	if (!gRecordTimings || gTimings.length === 0) {
+	if (!gRecordTimings || !gRootSpan) {
 		console.error("\n--- Startup Timings ---\n(no markers)\n");
 		return;
 	}
 
-	const endTs = performance.now();
-	gTimings.push(["(end)", endTs]);
-
-	console.error("\n--- Startup timings (wall segments between time() markers) ---");
-	const firstTs = gTimings[0][1];
-	for (let i = 0; i < gTimings.length - 1; i++) {
-		const [op, ts] = gTimings[i];
-		const [, nextTs] = gTimings[i + 1];
-		const dur = nextTs - ts;
-		if (dur > LOGGED_TIMING_THRESHOLD_MS) {
-			console.error(`  ${op}: ${dur}ms`);
-		}
+	gRootSpan.end = performance.now();
+	const lines: string[] = [];
+	lines.push("");
+	lines.push("--- Startup timings (hierarchical) ---");
+	const work: Span[] = [];
+	const loads: Span[] = [];
+	for (const child of gRootSpan.children) {
+		if (isModuleLoadSpan(child)) loads.push(child);
+		else work.push(child);
 	}
-	console.error(`  span (first marker → end): ${endTs - firstTs}ms`);
-
-	if (gAsyncSpans.length > 0) {
-		console.error("\n--- Async (await-accurate; parallel spans may overlap) ---");
-		for (const [op, dur] of gAsyncSpans) {
-			if (dur > LOGGED_TIMING_THRESHOLD_MS) {
-				console.error(`  ${op}: ${dur}ms`);
-			}
-		}
+	for (const child of work.sort((a, b) => a.start - b.start)) {
+		printSpan(child, 0, lines);
 	}
-
-	console.error("------------------------\n");
-
-	gTimings.pop();
+	if (loads.length > 0) {
+		printModuleLoadSummary(loads, 0, lines);
+	}
+	const totalMs = (gRootSpan.end - gRootSpan.start).toFixed(1);
+	lines.push(`Total: ${totalMs}ms`);
+	lines.push("--------------------------------------");
+	lines.push("");
+	console.error(lines.join("\n"));
+	gRootSpan.end = undefined;
 }
 
 /**
- * Begin recording startup timings. Seeds the timeline so the first segment is meaningful.
+ * Begin recording startup timings under a new root span.
+ * Idempotent: a second call while already recording is a no-op so that side-effect
+ * starters (see module-timer.ts) and explicit starters (main.ts) can coexist.
  */
 export function startTiming(): void {
-	gTimings = [["(startup)", performance.now()]];
-	gAsyncSpans = [];
+	if (gRecordTimings) return;
+	gRootSpan = {
+		op: "(root)",
+		start: performance.now(),
+		parent: undefined,
+		children: [],
+	};
 	gRecordTimings = true;
+}
+
+/**
+ * Record an externally-measured span as a leaf child of the active span (or root
+ * when no span is active). Used by the module-load timing plugin to splice load
+ * events into the tree retroactively.
+ */
+export function recordModuleLoadSpan(path: string, start: number, durationMs: number): void {
+	if (!gRecordTimings || !gRootSpan) return;
+	const parent = spanStorage.getStore() ?? gRootSpan;
+	const span: Span = {
+		op: `load:${shortenLoadPath(path)}`,
+		start,
+		end: start + durationMs,
+		parent,
+		children: [],
+	};
+	parent.children.push(span);
+}
+
+function shortenLoadPath(p: string): string {
+	const cwd = process.cwd();
+	if (p.startsWith(`${cwd}/`)) return p.slice(cwd.length + 1);
+	const home = process.env.HOME;
+	if (home && p.startsWith(`${home}/`)) return `~/${p.slice(home.length + 1)}`;
+	return p;
 }
 
 /**
  * End timing window and clear buffers.
  */
 export function endTiming(): void {
-	gTimings = [];
-	gAsyncSpans = [];
+	gRootSpan = undefined;
 	gRecordTimings = false;
 }
 
-function recordAsyncSpan(op: string, start: number): void {
-	const dur = performance.now() - start;
-	if (dur > LOGGED_TIMING_THRESHOLD_MS) {
-		gAsyncSpans.push([op, dur]);
+function durationOf(span: Span): number {
+	if (span.point || span.end === undefined) return 0;
+	return span.end - span.start;
+}
+
+/** Self time = total - union of child intervals (handles parallel children correctly). */
+function selfTimeOf(span: Span): number {
+	const dur = durationOf(span);
+	if (span.children.length === 0 || span.point) return dur;
+	const intervals = span.children
+		.filter(c => !c.point && c.end !== undefined)
+		.map(c => [c.start, c.end as number] as const)
+		.sort((a, b) => a[0] - b[0]);
+	if (intervals.length === 0) return dur;
+	let union = 0;
+	let curStart = intervals[0][0];
+	let curEnd = intervals[0][1];
+	for (let i = 1; i < intervals.length; i++) {
+		const [s, e] = intervals[i];
+		if (s > curEnd) {
+			union += curEnd - curStart;
+			curStart = s;
+			curEnd = e;
+		} else if (e > curEnd) {
+			curEnd = e;
+		}
+	}
+	union += curEnd - curStart;
+	return Math.max(0, dur - union);
+}
+
+function fmtMs(ms: number): string {
+	if (ms < 1) return `${ms.toFixed(2)}ms`;
+	if (ms < 100) return `${ms.toFixed(1)}ms`;
+	return `${ms.toFixed(0)}ms`;
+}
+
+const MODULE_LOAD_PREFIX = "load:";
+const MODULE_LOAD_VERBOSE_TOP = 10;
+
+function isModuleLoadSpan(span: Span): boolean {
+	return span.op.startsWith(MODULE_LOAD_PREFIX);
+}
+
+function printSpan(span: Span, depth: number, lines: string[]): void {
+	const indent = "  ".repeat(depth);
+	if (span.point) {
+		lines.push(`${indent}• ${span.op}`);
+		return;
+	}
+	const dur = durationOf(span);
+	if (dur < LOGGED_TIMING_THRESHOLD_MS && span.children.length === 0) return;
+	const parallel = isParallel(span);
+	const tag = parallel ? " [parallel]" : "";
+	const self = selfTimeOf(span);
+	const selfStr = span.children.length > 0 && self > LOGGED_TIMING_THRESHOLD_MS ? ` (self ${fmtMs(self)})` : "";
+	lines.push(`${indent}${span.op}: ${fmtMs(dur)}${selfStr}${tag}`);
+
+	// Split children into work spans and module-load spans for summarization.
+	const work: Span[] = [];
+	const loads: Span[] = [];
+	for (const child of span.children) {
+		if (isModuleLoadSpan(child)) loads.push(child);
+		else work.push(child);
+	}
+	for (const child of work.sort((a, b) => a.start - b.start)) {
+		printSpan(child, depth + 1, lines);
+	}
+	if (loads.length > 0) {
+		printModuleLoadSummary(loads, depth + 1, lines);
 	}
 }
 
+/** Collapse the (typically hundreds of) module-load spans into one summary line. */
+function printModuleLoadSummary(loads: Span[], depth: number, lines: string[]): void {
+	const childIndent = "  ".repeat(depth);
+	const grandIndent = "  ".repeat(depth + 1);
+	let unionStart = Number.POSITIVE_INFINITY;
+	let unionEnd = 0;
+	let totalSelf = 0;
+	for (const span of loads) {
+		if (span.end === undefined) continue;
+		if (span.start < unionStart) unionStart = span.start;
+		if (span.end > unionEnd) unionEnd = span.end;
+		totalSelf += span.end - span.start;
+	}
+	const wall = unionEnd > unionStart ? unionEnd - unionStart : 0;
+	lines.push(`${childIndent}(modules): ${loads.length} loaded, wall ${fmtMs(wall)}, sum ${fmtMs(totalSelf)}`);
+	const showAll = process.env.PI_TIMING === "full";
+	const sorted = [...loads].sort((a, b) => durationOf(b) - durationOf(a));
+	const visible = showAll ? sorted : sorted.slice(0, MODULE_LOAD_VERBOSE_TOP);
+	for (const span of visible) {
+		const dur = durationOf(span);
+		if (dur < LOGGED_TIMING_THRESHOLD_MS) break;
+		const tag = isParallel(span) ? " [parallel]" : "";
+		lines.push(`${grandIndent}${span.op}: ${fmtMs(dur)}${tag}`);
+	}
+	if (!showAll && sorted.length > MODULE_LOAD_VERBOSE_TOP) {
+		lines.push(`${grandIndent}… ${sorted.length - MODULE_LOAD_VERBOSE_TOP} more (PI_TIMING=full to show all)`);
+	}
+}
+
+/** A span is parallel if it overlaps a sibling that started before it. */
+function isParallel(span: Span): boolean {
+	const parent = span.parent;
+	if (!parent || span.end === undefined) return false;
+	for (const sibling of parent.children) {
+		if (sibling === span || sibling.end === undefined || sibling.point) continue;
+		// Overlap test: A overlaps B iff A.start < B.end && B.start < A.end
+		if (sibling.start < span.end && span.start < sibling.end) return true;
+	}
+	return false;
+}
+
 /**
- * Wall-clock segment boundary: duration for this label runs until the next {@link time} call.
- * Do not use across `await` when other tasks may call {@link time}; use {@link timeAsync} for the awaited work.
+ * Time a span. Three forms:
+ *   time(op)                    — point event (zero-duration breadcrumb)
+ *   time(op, fn, ...args)        — wrap fn in a span; returns fn's return value (sync or Promise)
+ *
+ * Spans nest hierarchically via AsyncLocalStorage: a child started inside another span's fn
+ * (even across awaits) becomes that span's child. Parallel children are recorded as siblings
+ * with overlapping intervals.
  */
 export function time(op: string): void;
 export function time<T, A extends unknown[]>(op: string, fn: (...args: A) => T, ...args: A): T;
 export function time<T, A extends unknown[]>(op: string, fn?: (...args: A) => T, ...args: A): T | undefined {
-	if (fn === undefined) {
-		if (gRecordTimings) {
-			gTimings.push([op, performance.now()]);
-		}
-		return undefined as T;
-	} else if (gRecordTimings) {
-		const start = performance.now();
-		try {
-			const result = fn(...args);
-			if (result instanceof Promise) {
-				return result.finally(recordAsyncSpan.bind(null, op, start)) as T;
-			}
-			recordAsyncSpan(op, start);
-			return result;
-		} catch (error) {
-			recordAsyncSpan(op, start);
-			throw error;
-		}
-	} else {
+	if (!gRecordTimings || !gRootSpan) {
+		if (fn === undefined) return undefined as T;
 		return fn(...args);
+	}
+
+	const parent = spanStorage.getStore() ?? gRootSpan;
+	const span: Span = { op, start: performance.now(), parent, children: [] };
+	parent.children.push(span);
+
+	if (fn === undefined) {
+		span.end = span.start;
+		span.point = true;
+		return undefined as T;
+	}
+
+	const finish = (): void => {
+		span.end = performance.now();
+	};
+	try {
+		const result = spanStorage.run(span, () => fn(...args));
+		if (result instanceof Promise) {
+			return result.finally(finish) as T;
+		}
+		finish();
+		return result;
+	} catch (error) {
+		finish();
+		throw error;
 	}
 }
