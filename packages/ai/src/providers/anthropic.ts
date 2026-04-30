@@ -1661,7 +1661,7 @@ function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResul
 	};
 	if (isZaiAnthropicEndpoint(model)) {
 		// Z.AI workaround (issue #814): include `id` aliased to `tool_use_id`.
-		(block as Record<string, unknown>).id = msg.toolCallId;
+		(block as unknown as Record<string, unknown>).id = msg.toolCallId;
 	}
 	return block;
 }

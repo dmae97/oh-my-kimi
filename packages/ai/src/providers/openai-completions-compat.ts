@@ -185,6 +185,8 @@ export function resolveOpenAICompat(
 			model.compat.requiresReasoningContentForToolCalls ?? detected.requiresReasoningContentForToolCalls,
 		requiresAssistantContentForToolCalls:
 			model.compat.requiresAssistantContentForToolCalls ?? detected.requiresAssistantContentForToolCalls,
+		disableReasoningOnForcedToolChoice:
+			model.compat.disableReasoningOnForcedToolChoice ?? detected.disableReasoningOnForcedToolChoice,
 		openRouterRouting: model.compat.openRouterRouting ?? detected.openRouterRouting,
 		vercelGatewayRouting: model.compat.vercelGatewayRouting ?? detected.vercelGatewayRouting,
 		supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,

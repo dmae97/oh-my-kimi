@@ -93,6 +93,10 @@ describe("ModelRegistry", () => {
 		return registry.getAll().filter(m => m.provider === provider);
 	}
 
+	function getOpenAICompat(model: Model | undefined): OpenAICompat | undefined {
+		return model?.api === "openai-completions" ? (model.compat as OpenAICompat | undefined) : undefined;
+	}
+
 	/** Create a baseUrl-only override (no custom models) */
 	function overrideConfig(baseUrl: string, headers?: Record<string, string>) {
 		return { baseUrl, ...(headers && { headers }) };
@@ -511,8 +515,8 @@ describe("ModelRegistry", () => {
 			const models = getModelsForProvider(registry, "openrouter");
 			expect(models.length).toBeGreaterThan(0);
 			for (const model of models) {
-				expect(model.compat?.supportsUsageInStreaming).toBe(false);
-				expect(model.compat?.supportsStrictMode).toBe(false);
+				expect(getOpenAICompat(model)?.supportsUsageInStreaming).toBe(false);
+				expect(getOpenAICompat(model)?.supportsStrictMode).toBe(false);
 			}
 		});
 
@@ -541,8 +545,9 @@ describe("ModelRegistry", () => {
 
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
 			const model = registry.find("demo", "demo-model");
-			expect(model?.compat?.supportsUsageInStreaming).toBe(false);
-			expect(model?.compat?.maxTokensField).toBe("max_tokens");
+			const compat = getOpenAICompat(model);
+			expect(compat?.supportsUsageInStreaming).toBe(false);
+			expect(compat?.maxTokensField).toBe("max_tokens");
 		});
 
 		test("model-level compat overrides provider-level compat for custom models", () => {
@@ -574,8 +579,9 @@ describe("ModelRegistry", () => {
 
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
 			const model = registry.find("demo", "demo-model");
-			expect(model?.compat?.supportsUsageInStreaming).toBe(true);
-			expect(model?.compat?.maxTokensField).toBe("max_completion_tokens");
+			const compat = getOpenAICompat(model);
+			expect(compat?.supportsUsageInStreaming).toBe(true);
+			expect(compat?.maxTokensField).toBe("max_completion_tokens");
 		});
 	});
 
@@ -883,12 +889,12 @@ describe("ModelRegistry", () => {
 				},
 			});
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
-			expect(registry.find("openai", "gpt-5.4")?.compat?.extraBody).toEqual({ source: "proxy" });
+			expect(getOpenAICompat(registry.find("openai", "gpt-5.4"))?.extraBody).toEqual({ source: "proxy" });
 
 			using _hook = mockOpenAiCompatibleModels("https://my-proxy.example.com/v1/models", ["gpt-5.4"]);
 			await registry.refreshProvider("openai", "online");
 
-			expect(registry.find("openai", "gpt-5.4")?.compat?.extraBody).toEqual({ source: "proxy" });
+			expect(getOpenAICompat(registry.find("openai", "gpt-5.4"))?.extraBody).toEqual({ source: "proxy" });
 		});
 
 		test("modelOverrides still apply after discoverable refresh", async () => {
@@ -962,9 +968,10 @@ describe("ModelRegistry", () => {
 
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
 			const model = registry.find("minimax-code", "MiniMax-M2.5");
-			expect(model?.compat?.thinkingFormat).toBeUndefined();
-			expect(model?.compat?.reasoningContentField).toBeUndefined();
-			expect(model?.compat?.extraBody).toEqual({ source: "proxy" });
+			const compat = getOpenAICompat(model);
+			expect(compat?.thinkingFormat).toBeUndefined();
+			expect(compat?.reasoningContentField).toBeUndefined();
+			expect(compat?.extraBody).toEqual({ source: "proxy" });
 		});
 
 		test("removing custom models from models.json keeps built-in provider models", async () => {

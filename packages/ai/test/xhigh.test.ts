@@ -39,7 +39,7 @@ describe.skipIf(!e2eApiKey("OPENAI_API_KEY"))("xhigh reasoning", () => {
 
 	describe("gpt-5-mini (does not support xhigh)", () => {
 		it("should error with openai-responses when using xhigh", async () => {
-			const model = getBundledModel("openai", "gpt-5-mini");
+			const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
 			const s = stream(model, makeContext(), { reasoning: "xhigh" });
 
 			for await (const _ of s) {
@@ -53,7 +53,7 @@ describe.skipIf(!e2eApiKey("OPENAI_API_KEY"))("xhigh reasoning", () => {
 
 		it("should error with openai-completions when using xhigh", async () => {
 			const model: Model<"openai-completions"> = {
-				...getBundledModel("openai", "gpt-5-mini"),
+				...(getBundledModel("openai", "gpt-5-mini") as Model<"openai-completions">),
 				api: "openai-completions",
 			};
 			const s = stream(model, makeContext(), { reasoning: "xhigh" });

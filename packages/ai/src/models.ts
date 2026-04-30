@@ -21,9 +21,9 @@ for (const [provider, models] of Object.entries(MODELS)) {
 
 export type GeneratedProvider = keyof typeof MODELS;
 
-export function getBundledModel(provider: GeneratedProvider, modelId: string): Model<Api> {
+export function getBundledModel<TApi extends Api = Api>(provider: GeneratedProvider, modelId: string): Model<TApi> {
 	const providerModels = modelRegistry.get(provider);
-	return providerModels?.get(modelId) as Model<Api>;
+	return providerModels?.get(modelId) as Model<TApi>;
 }
 
 export function getBundledProviders(): KnownProvider[] {

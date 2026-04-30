@@ -67,6 +67,7 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 			model: planModel,
 			thinkingLevel: undefined,
 			explicitThinkingLevel: false,
+			warning: undefined,
 		});
 		// Avoid kicking off real session work during plan mode entry.
 		vi.spyOn(session, "sendPlanModeContext").mockResolvedValue(undefined);

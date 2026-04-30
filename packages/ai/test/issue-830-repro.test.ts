@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "../src/provider-models/descriptors";
 import { MODELS_DEV_PROVIDER_DESCRIPTORS } from "../src/provider-models/openai-compat";
 import { getEnvApiKey } from "../src/stream";
+import type { OpenAICompat } from "../src/types";
 
 describe("deepseek built-in provider (issue #830)", () => {
 	test("registers built-in runtime descriptor with DEEPSEEK_API_KEY env discovery", () => {
@@ -35,10 +36,12 @@ describe("deepseek built-in provider (issue #830)", () => {
 		// Per-model compat: deepseek-v4 reasoning models leak chat-template tool-call markers
 		// (#798) and 400 on tool_choice when xhigh effort is used (#830 thread). Reasoning content
 		// must round-trip on tool calls (interleaved.field=reasoning_content from models.dev).
-		expect(descriptor?.compat?.supportsReasoningEffort).toBe(true);
-		expect(descriptor?.compat?.supportsToolChoice).toBe(false);
-		expect(descriptor?.compat?.requiresReasoningContentForToolCalls).toBe(true);
-		expect(descriptor?.compat?.reasoningContentField).toBe("reasoning_content");
-		expect(descriptor?.compat?.reasoningEffortMap?.xhigh).toBe("max");
+		const compat =
+			descriptor?.api === "openai-completions" ? (descriptor.compat as OpenAICompat | undefined) : undefined;
+		expect(compat?.supportsReasoningEffort).toBe(true);
+		expect(compat?.supportsToolChoice).toBe(false);
+		expect(compat?.requiresReasoningContentForToolCalls).toBe(true);
+		expect(compat?.reasoningContentField).toBe("reasoning_content");
+		expect(compat?.reasoningEffortMap?.xhigh).toBe("max");
 	});
 });

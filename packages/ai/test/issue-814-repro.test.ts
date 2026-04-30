@@ -14,16 +14,16 @@ import type { AssistantMessage, Model, ToolResultMessage, UserMessage } from "@o
  * endpoints must remain unchanged (no `id` field).
  */
 
-const baseModel = {
+const baseModel: Omit<Model<"anthropic-messages">, "provider" | "baseUrl"> = {
 	api: "anthropic-messages",
 	id: "glm-4.6",
 	name: "GLM-4.6",
-	input: ["text"] as const,
+	input: ["text"],
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	maxTokens: 8192,
 	contextWindow: 200000,
 	reasoning: false,
-} as const;
+};
 
 const zaiModel: Model<"anthropic-messages"> = {
 	...baseModel,
@@ -66,7 +66,7 @@ const assistant: AssistantMessage = {
 		totalTokens: 0,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	},
-	stopReason: "tool_use",
+	stopReason: "toolUse",
 	timestamp: Date.now(),
 };
 

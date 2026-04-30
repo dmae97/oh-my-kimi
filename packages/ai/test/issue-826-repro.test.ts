@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { Effort } from "../src/model-thinking";
 import { streamAnthropic } from "../src/providers/anthropic";
 import type { Context, Model, Tool } from "../src/types";
 
@@ -79,8 +80,9 @@ describe("issue #826: Anthropic strict-tools opt-out for Vertex-style proxies", 
 			reasoning: true,
 			thinking: {
 				mode: "anthropic-adaptive",
-				supportsAdaptiveEffort: true,
-			} as Model<"anthropic-messages">["thinking"],
+				minLevel: Effort.Minimal,
+				maxLevel: Effort.XHigh,
+			},
 		};
 		const { promise, resolve } = Promise.withResolvers<{ thinking?: { type?: string } }>();
 		void streamAnthropic(adaptiveModel, baseContext, {
@@ -104,8 +106,9 @@ describe("issue #826: Anthropic strict-tools opt-out for Vertex-style proxies", 
 			reasoning: true,
 			thinking: {
 				mode: "anthropic-adaptive",
-				supportsAdaptiveEffort: true,
-			} as Model<"anthropic-messages">["thinking"],
+				minLevel: Effort.Minimal,
+				maxLevel: Effort.XHigh,
+			},
 			compat: { disableAdaptiveThinking: true },
 		};
 		const { promise, resolve } = Promise.withResolvers<{ thinking?: { type?: string; budget_tokens?: number } }>();

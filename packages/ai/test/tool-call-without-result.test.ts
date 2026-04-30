@@ -109,7 +109,7 @@ describe("Tool Call Without Result Tests", () => {
 
 	describe.skipIf(!e2eApiKey("OPENAI_API_KEY"))("OpenAI Completions Provider", () => {
 		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini")!,
+			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">)!,
 			api: "openai-completions",
 		};
 
@@ -123,7 +123,7 @@ describe("Tool Call Without Result Tests", () => {
 	});
 
 	describe.skipIf(!e2eApiKey("OPENAI_API_KEY"))("OpenAI Responses Provider", () => {
-		const model = getBundledModel("openai", "gpt-5-mini");
+		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
 
 		it(
 			"should filter out tool calls without corresponding tool results",

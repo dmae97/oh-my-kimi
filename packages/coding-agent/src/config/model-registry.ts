@@ -145,8 +145,16 @@ const OpenAICompatSchema = Type.Object({
 	maxTokensField: Type.Optional(Type.Union([Type.Literal("max_completion_tokens"), Type.Literal("max_tokens")])),
 	supportsUsageInStreaming: Type.Optional(Type.Boolean()),
 	requiresToolResultName: Type.Optional(Type.Boolean()),
+	requiresMistralToolIds: Type.Optional(Type.Boolean()),
 	requiresAssistantAfterToolResult: Type.Optional(Type.Boolean()),
 	requiresThinkingAsText: Type.Optional(Type.Boolean()),
+	reasoningContentField: Type.Optional(
+		Type.Union([Type.Literal("reasoning_content"), Type.Literal("reasoning"), Type.Literal("reasoning_text")]),
+	),
+	requiresReasoningContentForToolCalls: Type.Optional(Type.Boolean()),
+	requiresAssistantContentForToolCalls: Type.Optional(Type.Boolean()),
+	supportsToolChoice: Type.Optional(Type.Boolean()),
+	disableReasoningOnForcedToolChoice: Type.Optional(Type.Boolean()),
 	thinkingFormat: Type.Optional(
 		Type.Union([
 			Type.Literal("openai"),
@@ -559,27 +567,20 @@ function resolveOAuthAccountIdForAccessToken(
 	return undefined;
 }
 
-function mergeCompat(
-	baseCompat: Model<Api>["compat"],
-	overrideCompat: ModelOverride["compat"],
-): Model<Api>["compat"] | undefined {
+function mergeCompat<TBase extends object, TOverride extends object>(
+	baseCompat: TBase | null | undefined,
+	overrideCompat: TOverride | null | undefined,
+): (TBase & TOverride) | TBase | TOverride | undefined {
+	if (!baseCompat) return overrideCompat ?? undefined;
 	if (!overrideCompat) return baseCompat;
-	const base = baseCompat ?? {};
-	const override = overrideCompat;
-	const merged: NonNullable<Model<Api>["compat"]> = { ...base, ...override };
-	if (baseCompat?.reasoningEffortMap || overrideCompat.reasoningEffortMap) {
-		merged.reasoningEffortMap = { ...baseCompat?.reasoningEffortMap, ...overrideCompat.reasoningEffortMap };
+
+	const merged: Record<string, unknown> = { ...(baseCompat as Record<string, unknown>) };
+	for (const [key, overrideValue] of Object.entries(overrideCompat)) {
+		const baseValue = (baseCompat as Record<string, unknown>)[key];
+		merged[key] =
+			isRecord(baseValue) && isRecord(overrideValue) ? mergeCompat(baseValue, overrideValue) : overrideValue;
 	}
-	if (baseCompat?.openRouterRouting || overrideCompat.openRouterRouting) {
-		merged.openRouterRouting = { ...baseCompat?.openRouterRouting, ...overrideCompat.openRouterRouting };
-	}
-	if (baseCompat?.vercelGatewayRouting || overrideCompat.vercelGatewayRouting) {
-		merged.vercelGatewayRouting = { ...baseCompat?.vercelGatewayRouting, ...overrideCompat.vercelGatewayRouting };
-	}
-	if (baseCompat?.extraBody || overrideCompat.extraBody) {
-		merged.extraBody = { ...baseCompat?.extraBody, ...overrideCompat.extraBody };
-	}
-	return merged;
+	return merged as TBase & TOverride;
 }
 
 function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<Api> {

@@ -154,7 +154,7 @@ describe("totalTokens field", () => {
 			"gpt-4o-mini - should return totalTokens equal to sum of components",
 			async () => {
 				const llm: Model<"openai-completions"> = {
-					...getBundledModel("openai", "gpt-4o-mini")!,
+					...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">)!,
 					api: "openai-completions",
 				};
 

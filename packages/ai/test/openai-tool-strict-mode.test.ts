@@ -71,7 +71,7 @@ function captureResponsesPayload(model: Model<"openai-responses">): Promise<unkn
 describe("OpenAI tool strict mode", () => {
 	it("sends strict=true for openai-completions tool schemas", async () => {
 		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
 		};
 
@@ -83,7 +83,7 @@ describe("OpenAI tool strict mode", () => {
 
 	it("omits strict for openai-completions when compatibility disables strict mode", async () => {
 		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
 			compat: { supportsStrictMode: false } satisfies OpenAICompat,
 		};
@@ -123,7 +123,7 @@ describe("OpenAI tool strict mode", () => {
 
 	it("uses uniformly non-strict tool schemas when provider requires all-or-none strictness", async () => {
 		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
 			compat: { toolStrictMode: "all_strict" } satisfies OpenAICompat,
 		};
@@ -150,7 +150,7 @@ describe("OpenAI tool strict mode", () => {
 
 	it("surfaces captured JSON error bodies when the SDK reports no body", async () => {
 		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
 		};
 		global.fetch = Object.assign(
@@ -179,7 +179,7 @@ describe("OpenAI tool strict mode", () => {
 
 	it("retries with non-strict tool schemas after strict-mode request errors", async () => {
 		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
 			compat: { toolStrictMode: "all_strict" } satisfies OpenAICompat,
 		};

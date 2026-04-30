@@ -71,7 +71,7 @@ function createSseResponse(events: unknown[], headers: Record<string, string> = 
 describe("streamSimple onResponse propagation", () => {
 	it("invokes onResponse for the default openai-completions path through streamSimple", async () => {
 		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
 		};
 
