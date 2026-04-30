@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { StringEnum } from "@oh-my-pi/pi-ai";
-import { abortableSleep, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { abortableSleep, getWorktreesDir, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import githubDescription from "../prompts/tools/github.md" with { type: "text" };
 import * as git from "../utils/git";
@@ -151,7 +151,7 @@ const githubSchema = Type.Object({
 	),
 	branch: Type.Optional(
 		Type.String({
-			description: "branch (repo_view, pr_checkout local branch, pr_push local branch, run_watch)",
+			description: "branch (repo_view, pr_push local branch, run_watch)",
 			examples: ["main", "develop"],
 		}),
 	),
@@ -162,10 +162,18 @@ const githubSchema = Type.Object({
 		}),
 	),
 	pr: Type.Optional(
-		Type.String({
-			description: "pr number, url, or branch (pr_view, pr_diff, pr_checkout)",
-			examples: ["123", "feature-branch"],
-		}),
+		Type.Union(
+			[
+				Type.String({ examples: ["123", "feature-branch"] }),
+				Type.Array(Type.String(), {
+					examples: [["123", "456"]],
+				}),
+			],
+			{
+				description:
+					"pr number, url, or branch (pr_view, pr_diff, pr_checkout); pass an array to batch-process multiple pull requests in one call",
+			},
+		),
 	),
 	comments: Type.Optional(Type.Boolean({ description: "include comments (issue_view, pr_view)", default: true })),
 	nameOnly: Type.Optional(Type.Boolean({ description: "return file names only (pr_diff)" })),
@@ -174,7 +182,6 @@ const githubSchema = Type.Object({
 			description: "file globs to exclude (pr_diff)",
 		}),
 	),
-	worktree: Type.Optional(Type.String({ description: "worktree path (pr_checkout)" })),
 	force: Type.Optional(Type.Boolean({ description: "reset existing local branch (pr_checkout)" })),
 	forceWithLease: Type.Optional(Type.Boolean({ description: "force-with-lease push (pr_push)" })),
 	query: Type.Optional(
@@ -205,6 +212,17 @@ export interface GhToolDetails {
 	conclusion?: string;
 	failedJobs?: string[];
 	watch?: GhRunWatchViewDetails;
+	checkouts?: GhPrCheckoutSummary[];
+}
+
+export interface GhPrCheckoutSummary {
+	prNumber?: number;
+	url?: string;
+	branch: string;
+	worktreePath: string;
+	remote: string;
+	remoteBranch: string;
+	reused: boolean;
 }
 
 export interface GhRunWatchJobDetails {
@@ -482,6 +500,17 @@ function normalizeOptionalString(value: string | null | undefined): string | und
 	return normalized ? normalized : undefined;
 }
 
+function normalizePrIdentifierList(value: string | string[] | undefined): string[] {
+	if (value === undefined) return [];
+	const raw = typeof value === "string" ? [value] : value;
+	const cleaned: string[] = [];
+	for (const entry of raw) {
+		const trimmed = entry?.trim();
+		if (trimmed) cleaned.push(trimmed);
+	}
+	return cleaned;
+}
+
 function requireNonEmpty(value: string | null | undefined, label: string): string {
 	const normalized = normalizeOptionalString(value);
 	if (!normalized) {
@@ -541,6 +570,19 @@ function sanitizeRemoteName(value: string): string {
 		.replace(/^-+/g, "")
 		.replace(/-+$/g, "");
 	return sanitized.length > 0 ? `fork-${sanitized}` : "fork";
+}
+
+/**
+ * Encode an absolute repository path into a single filesystem-safe segment.
+ * Mirrors the legacy session-dir encoding used elsewhere in the project: drop
+ * the leading separator, then collapse `/`, `\\`, and `:` to `-`. The result
+ * is not strictly injective for pathological inputs (e.g. `/a/b` vs `/a-b`)
+ * but matches the rest of the codebase and stays human-readable.
+ */
+function encodeRepoPathForFilesystem(repoPath: string): string {
+	const resolved = path.resolve(repoPath);
+	const encoded = resolved.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
+	return encoded || "root";
 }
 
 function toLocalBranchRef(value: string): string {
@@ -1908,24 +1950,40 @@ async function executePrView(
 	params: GithubInput,
 	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<GhToolDetails>> {
-	const pr = normalizeOptionalString(params.pr);
 	const repo = normalizeOptionalString(params.repo);
 	const includeComments = params.comments ?? true;
-	const args = ["pr", "view"];
-	if (pr) {
-		args.push(pr);
-	}
-	appendRepoFlag(args, repo, pr);
-	args.push("--json", (includeComments ? GH_PR_FIELDS : GH_PR_FIELDS_NO_COMMENTS).join(","));
+	const prList = normalizePrIdentifierList(params.pr);
+	const prRefs: (string | undefined)[] = prList.length > 0 ? prList : [undefined];
 
-	const data = await git.github.json<GhPrViewData>(session.cwd, args, signal, {
-		repoProvided: Boolean(repo),
-	});
-	const resolvedRepo = repo ?? parsePullRequestUrl(data.url).repo;
-	if (includeComments && resolvedRepo && typeof data.number === "number") {
-		data.reviewComments = await fetchPrReviewComments(session.cwd, resolvedRepo, data.number, signal);
+	const views = await Promise.all(
+		prRefs.map(async prRef => {
+			const args = ["pr", "view"];
+			if (prRef) args.push(prRef);
+			appendRepoFlag(args, repo, prRef);
+			args.push("--json", (includeComments ? GH_PR_FIELDS : GH_PR_FIELDS_NO_COMMENTS).join(","));
+
+			const data = await git.github.json<GhPrViewData>(session.cwd, args, signal, {
+				repoProvided: Boolean(repo),
+			});
+			const resolvedRepo = repo ?? parsePullRequestUrl(data.url).repo;
+			if (includeComments && resolvedRepo && typeof data.number === "number") {
+				data.reviewComments = await fetchPrReviewComments(session.cwd, resolvedRepo, data.number, signal);
+			}
+			return { prRef, data };
+		}),
+	);
+
+	if (views.length === 1) {
+		const [view] = views;
+		return buildTextResult(
+			formatPrView(view.data, { pr: view.prRef, repo, comments: includeComments }),
+			view.data.url,
+		);
 	}
-	return buildTextResult(formatPrView(data, { pr, repo, comments: includeComments }), data.url);
+
+	const sections = views.map(view => formatPrView(view.data, { pr: view.prRef, repo, comments: includeComments }));
+	const text = [`# ${views.length} Pull Requests`, "", ...joinSections(sections)].join("\n").trim();
+	return buildTextResult(text);
 }
 
 async function executePrDiff(
@@ -1933,29 +1991,51 @@ async function executePrDiff(
 	params: GithubInput,
 	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<GhToolDetails>> {
-	const pr = normalizeOptionalString(params.pr);
 	const repo = normalizeOptionalString(params.repo);
-	const args = ["pr", "diff"];
-	if (pr) {
-		args.push(pr);
-	}
-	appendRepoFlag(args, repo, pr);
-	args.push("--color", "never");
-	if (params.nameOnly) {
-		args.push("--name-only");
-	}
-	for (const pattern of params.exclude ?? []) {
-		const normalizedPattern = requireNonEmpty(pattern, "exclude pattern");
-		args.push("--exclude", normalizedPattern);
+	const prList = normalizePrIdentifierList(params.pr);
+	const prRefs: (string | undefined)[] = prList.length > 0 ? prList : [undefined];
+
+	const diffs = await Promise.all(
+		prRefs.map(async prRef => {
+			const args = ["pr", "diff"];
+			if (prRef) args.push(prRef);
+			appendRepoFlag(args, repo, prRef);
+			args.push("--color", "never");
+			if (params.nameOnly) args.push("--name-only");
+			for (const pattern of params.exclude ?? []) {
+				args.push("--exclude", requireNonEmpty(pattern, "exclude pattern"));
+			}
+			const output = await git.github.text(session.cwd, args, signal, {
+				repoProvided: Boolean(repo),
+				trimOutput: false,
+			});
+			return { prRef, output };
+		}),
+	);
+
+	const singleTitle = params.nameOnly ? "# Pull Request Files" : "# Pull Request Diff";
+	const emptyBody = params.nameOnly ? "No changed files." : "No diff output.";
+
+	if (diffs.length === 1) {
+		const [diff] = diffs;
+		const body = diff.output.length > 0 ? diff.output : emptyBody;
+		return buildTextResult(`${singleTitle}\n\n${body}`);
 	}
 
-	const output = await git.github.text(session.cwd, args, signal, {
-		repoProvided: Boolean(repo),
-		trimOutput: false,
+	const header = params.nameOnly
+		? `# ${diffs.length} Pull Request File Lists`
+		: `# ${diffs.length} Pull Request Diffs`;
+	const sections = diffs.map(diff => {
+		const label = diff.prRef ? `PR ${diff.prRef}` : "PR (current branch)";
+		const body = diff.output.length > 0 ? diff.output : emptyBody;
+		return `## ${label}\n\n${body}`;
 	});
-	const title = params.nameOnly ? "# Pull Request Files" : "# Pull Request Diff";
-	const body = output.length > 0 ? output : params.nameOnly ? "No changed files." : "No diff output.";
-	return buildTextResult(`${title}\n\n${body}`);
+	const text = [header, "", ...joinSections(sections)].join("\n").trim();
+	return buildTextResult(text);
+}
+
+function joinSections(sections: string[]): string[] {
+	return sections.flatMap((section, idx) => (idx === 0 ? [section] : ["", "---", "", section]));
 }
 
 async function executePrCheckout(
@@ -1963,16 +2043,68 @@ async function executePrCheckout(
 	params: GithubInput,
 	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<GhToolDetails>> {
-	const pr = normalizeOptionalString(params.pr);
 	const repo = normalizeOptionalString(params.repo);
-	const requestedBranch = normalizeOptionalString(params.branch);
-	const requestedWorktree = normalizeOptionalString(params.worktree);
 	const force = params.force ?? false;
-	const args = ["pr", "view"];
-	if (pr) {
-		args.push(pr);
+	const prList = normalizePrIdentifierList(params.pr);
+	const prRefs = prList.length > 0 ? prList : [undefined];
+	const isMulti = prRefs.length > 1;
+
+	const outcomes = await Promise.all(
+		prRefs.map(prRef => checkoutPullRequest(session, signal, { prRef, repo, force })),
+	);
+
+	if (!isMulti) {
+		const [outcome] = outcomes;
+		return buildTextResult(formatPrCheckoutResult(outcome), outcome.data.url, {
+			repo: repo ?? outcome.data.headRepository?.nameWithOwner,
+			branch: outcome.localBranch,
+			worktreePath: outcome.worktreePath,
+			remote: outcome.remoteName,
+			remoteBranch: outcome.headRefName,
+			checkouts: [outcomeToSummary(outcome)],
+		});
 	}
-	appendRepoFlag(args, repo, pr);
+
+	const sections = outcomes.map(formatPrCheckoutResult);
+	const reusedCount = outcomes.reduce((acc, o) => acc + (o.reused ? 1 : 0), 0);
+	const newCount = outcomes.length - reusedCount;
+	const headerParts: string[] = [];
+	if (newCount > 0) headerParts.push(`${newCount} checked out`);
+	if (reusedCount > 0) headerParts.push(`${reusedCount} reused`);
+	const header = `# ${outcomes.length} Pull Request Worktrees (${headerParts.join(", ")})`;
+	const text = [header, "", ...joinSections(sections)].join("\n").trim();
+
+	return buildTextResult(text, undefined, {
+		repo,
+		checkouts: outcomes.map(outcomeToSummary),
+	});
+}
+
+interface PrCheckoutOptions {
+	prRef: string | undefined;
+	repo: string | undefined;
+	force: boolean;
+}
+
+interface PrCheckoutOutcome {
+	data: GhPrViewData;
+	localBranch: string;
+	worktreePath: string;
+	remoteName: string;
+	remoteUrl: string;
+	headRefName: string;
+	reused: boolean;
+}
+
+async function checkoutPullRequest(
+	session: ToolSession,
+	signal: AbortSignal | undefined,
+	options: PrCheckoutOptions,
+): Promise<PrCheckoutOutcome> {
+	const { prRef, repo, force } = options;
+	const args = ["pr", "view"];
+	if (prRef) args.push(prRef);
+	appendRepoFlag(args, repo, prRef);
 	args.push("--json", GH_PR_CHECKOUT_FIELDS.join(","));
 
 	const data = await git.github.json<GhPrViewData>(session.cwd, args, signal, {
@@ -1987,87 +2119,103 @@ async function executePrCheckout(
 	const headRefOid = requireNonEmpty(data.headRefOid, "head commit");
 	const repoRoot = await requireGitRepoRoot(session.cwd, signal);
 	const primaryRepoRoot = await requirePrimaryGitRepoRoot(repoRoot, signal);
-	const localBranch = requestedBranch ?? `pr-${prNumber}`;
-	const worktreePath = requestedWorktree
-		? path.resolve(session.cwd, requestedWorktree)
-		: path.join(primaryRepoRoot, ".worktrees", localBranch);
-	const existingWorktrees = await git.worktree.list(repoRoot, signal);
-	const existingWorktree = existingWorktrees.find(entry => entry.branch === toLocalBranchRef(localBranch));
+	const localBranch = `pr-${prNumber}`;
+	const worktreePath = path.join(getWorktreesDir(), encodeRepoPathForFilesystem(primaryRepoRoot), localBranch);
 
-	const remote = await ensurePrRemote(repoRoot, data, signal);
-	await git.fetch(
+	// Every git mutation against `repoRoot` from here on must run under the
+	// per-repo lock. Worktrees of the same primary repo share `.git/config`,
+	// `commit-graph` chain, `packed-refs`, and worktree metadata files — git
+	// uses O_EXCL lock files for each, with no waiter. Concurrent in-process
+	// callers (e.g. parallel `pr_checkout` calls) would otherwise lose lock
+	// races and surface "could not lock config file" / "Another git process
+	// seems to be running" errors. The gh API call above stays outside the
+	// lock so multiple checkouts can fetch PR metadata in parallel.
+	return git.withRepoLock(
 		repoRoot,
-		remote.name,
-		`refs/heads/${headRefName}`,
-		`refs/remotes/${remote.name}/${headRefName}`,
-		signal,
-	);
+		async () => {
+			const existingWorktrees = await git.worktree.list(repoRoot, signal);
+			const existingWorktree = existingWorktrees.find(entry => entry.branch === toLocalBranchRef(localBranch));
 
-	if (!existingWorktree) {
-		const localBranchRef = toLocalBranchRef(localBranch);
-		const localBranchExists = await git.ref.exists(repoRoot, localBranchRef, signal);
-		if (localBranchExists) {
-			const existingOid = await git.ref.resolve(repoRoot, localBranchRef, signal);
-			if (existingOid !== headRefOid) {
-				if (!force) {
-					throw new ToolError(
-						`local branch ${localBranch} already exists at ${formatShortSha(existingOid ?? undefined) ?? existingOid ?? "unknown commit"}; pass force=true to reset it`,
-					);
+			const remote = await ensurePrRemote(repoRoot, data, signal);
+			await git.fetch(
+				repoRoot,
+				remote.name,
+				`refs/heads/${headRefName}`,
+				`refs/remotes/${remote.name}/${headRefName}`,
+				signal,
+			);
+
+			if (!existingWorktree) {
+				const localBranchRef = toLocalBranchRef(localBranch);
+				const localBranchExists = await git.ref.exists(repoRoot, localBranchRef, signal);
+				if (localBranchExists) {
+					const existingOid = await git.ref.resolve(repoRoot, localBranchRef, signal);
+					if (existingOid !== headRefOid) {
+						if (!force) {
+							throw new ToolError(
+								`local branch ${localBranch} already exists at ${formatShortSha(existingOid ?? undefined) ?? existingOid ?? "unknown commit"}; pass force=true to reset it`,
+							);
+						}
+
+						await git.branch.force(repoRoot, localBranch, `refs/remotes/${remote.name}/${headRefName}`, signal);
+					}
+				} else {
+					await git.branch.create(repoRoot, localBranch, `refs/remotes/${remote.name}/${headRefName}`, signal);
 				}
-
-				await git.branch.force(repoRoot, localBranch, `refs/remotes/${remote.name}/${headRefName}`, signal);
 			}
-		} else {
-			await git.branch.create(repoRoot, localBranch, `refs/remotes/${remote.name}/${headRefName}`, signal);
-		}
-	}
 
-	await git.config.setBranch(repoRoot, localBranch, "remote", remote.name, signal);
-	await git.config.setBranch(repoRoot, localBranch, "merge", `refs/heads/${headRefName}`, signal);
-	await git.config.setBranch(repoRoot, localBranch, "pushRemote", remote.name, signal);
-	await git.config.setBranch(repoRoot, localBranch, "ompPrHeadRef", headRefName, signal);
-	await git.config.setBranch(repoRoot, localBranch, "ompPrUrl", data.url ?? "", signal);
-	await git.config.setBranch(
-		repoRoot,
-		localBranch,
-		"ompPrIsCrossRepository",
-		String(Boolean(data.isCrossRepository)),
-		signal,
-	);
-	await git.config.setBranch(
-		repoRoot,
-		localBranch,
-		"ompPrMaintainerCanModify",
-		String(Boolean(data.maintainerCanModify)),
-		signal,
-	);
+			await git.config.setBranch(repoRoot, localBranch, "remote", remote.name, signal);
+			await git.config.setBranch(repoRoot, localBranch, "merge", `refs/heads/${headRefName}`, signal);
+			await git.config.setBranch(repoRoot, localBranch, "pushRemote", remote.name, signal);
+			await git.config.setBranch(repoRoot, localBranch, "ompPrHeadRef", headRefName, signal);
+			await git.config.setBranch(repoRoot, localBranch, "ompPrUrl", data.url ?? "", signal);
+			await git.config.setBranch(
+				repoRoot,
+				localBranch,
+				"ompPrIsCrossRepository",
+				String(Boolean(data.isCrossRepository)),
+				signal,
+			);
+			await git.config.setBranch(
+				repoRoot,
+				localBranch,
+				"ompPrMaintainerCanModify",
+				String(Boolean(data.maintainerCanModify)),
+				signal,
+			);
 
-	const finalWorktreePath = existingWorktree?.path ?? worktreePath;
-	if (!existingWorktree) {
-		await ensureGitWorktreePathAvailable(finalWorktreePath, existingWorktrees);
-		await fs.mkdir(path.dirname(finalWorktreePath), { recursive: true });
-		await git.worktree.add(repoRoot, finalWorktreePath, localBranch, { signal });
-	}
-	const resolvedWorktreePath = await fs.realpath(finalWorktreePath);
+			const finalWorktreePath = existingWorktree?.path ?? worktreePath;
+			if (!existingWorktree) {
+				await ensureGitWorktreePathAvailable(finalWorktreePath, existingWorktrees);
+				await fs.mkdir(path.dirname(finalWorktreePath), { recursive: true });
+				await git.worktree.add(repoRoot, finalWorktreePath, localBranch, { signal });
+			}
+			const resolvedWorktreePath = await fs.realpath(finalWorktreePath);
 
-	return buildTextResult(
-		formatPrCheckoutResult({
-			data,
-			localBranch,
-			worktreePath: resolvedWorktreePath,
-			remoteName: remote.name,
-			remoteUrl: remote.url,
-			reused: Boolean(existingWorktree),
-		}),
-		data.url,
-		{
-			repo: repo ?? data.headRepository?.nameWithOwner,
-			branch: localBranch,
-			worktreePath: resolvedWorktreePath,
-			remote: remote.name,
-			remoteBranch: headRefName,
+			return {
+				data,
+				localBranch,
+				worktreePath: resolvedWorktreePath,
+				remoteName: remote.name,
+				remoteUrl: remote.url,
+				headRefName,
+				reused: Boolean(existingWorktree),
+			};
 		},
+		signal,
 	);
+}
+
+function outcomeToSummary(outcome: PrCheckoutOutcome): GhPrCheckoutSummary {
+	return {
+		prNumber: typeof outcome.data.number === "number" ? outcome.data.number : undefined,
+		url: outcome.data.url ?? undefined,
+		branch: outcome.localBranch,
+		worktreePath: outcome.worktreePath,
+		remote: outcome.remoteName,
+		remoteBranch: outcome.headRefName,
+		reused: outcome.reused,
+	};
 }
 
 async function executePrPush(

@@ -4,9 +4,9 @@ GitHub CLI tool with a single op-based dispatch. Wraps `gh` for repository, issu
 Pick the operation via `op`. Each op uses a subset of the parameters:
 - `repo_view` — Read repository metadata. Optional `repo` (owner/repo) and `branch`. Falls back to the current checkout or default `gh` repo.
 - `issue_view` — Read an issue. Required `issue` (number or URL). Optional `repo`. Set `comments: false` to skip discussion.
-- `pr_view` — Read a pull request, including reviews and inline review comments. Optional `pr` (number, URL, or branch); omitting it targets the current branch's PR. Optional `repo`. Set `comments: false` for a lighter summary.
-- `pr_diff` — Read a pull request diff. Optional `pr`, `repo`. Set `nameOnly: true` for changed file names. Use `exclude` to drop generated paths from the diff.
-- `pr_checkout` — Check a pull request out into a dedicated git worktree. Optional `pr`, `repo`, `branch` (local), `worktree` (path), `force` (reset existing local branch).
+- `pr_view` — Read one or more pull requests, including reviews and inline review comments. Optional `pr` (number, URL, branch, or array of any — pass an array to fetch multiple PRs in one call); omitting it targets the current branch's PR. Optional `repo`. Set `comments: false` for a lighter summary.
+- `pr_diff` — Read one or more pull request diffs. Optional `pr` (single identifier or array for batch). Optional `repo`. Set `nameOnly: true` for changed file names. Use `exclude` to drop generated paths from the diff.
+- `pr_checkout` — Check one or more pull requests out into dedicated git worktrees. Optional `pr` (number, URL, branch, or array of any of those — pass an array to batch-check-out multiple PRs in one call), `repo`, `force` (reset existing local branch).
 - `pr_push` — Push a checked-out PR branch back to its source branch. Requires the branch to have been checked out via `op: pr_checkout` (carries push metadata). Optional `branch`; defaults to the current checked-out git branch. Optional `forceWithLease`.
 - `search_issues` — Search issues using normal GitHub issue search syntax. Required `query`. Optional `repo`, `limit`.
 - `search_prs` — Search pull requests using normal GitHub PR search syntax. Required `query`. Optional `repo`, `limit`.

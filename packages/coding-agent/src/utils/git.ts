@@ -150,6 +150,7 @@ const SHORT_LIVED_GIT_CONFIG: readonly (readonly [key: string, value: string])[]
 	["core.fsmonitor", "false"],
 	["core.untrackedCache", "false"],
 ];
+const REMOTE_ALREADY_EXISTS = /remote .* already exists/i;
 
 interface CommandOptions {
 	readonly env?: Record<string, string | undefined>;
@@ -265,6 +266,51 @@ async function tryText(
 	const result = await runCommand(cwd, args, options);
 	if (result.exitCode !== 0) return undefined;
 	return result.stdout;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Internal: per-repo write serialization
+// ════════════════════════════════════════════════════════════════════════════
+
+// Git uses lock files (`.git/config.lock`, commit-graph chain locks,
+// `packed-refs.lock`, …) for many of its mutating operations. Each is created
+// O_EXCL with no waiter, so concurrent in-process git invocations against the
+// same repository fail immediately rather than block. Worktrees share the
+// primary repo's `.git` directory, so racing across worktrees has the same
+// failure mode. We give callers a single per-repo serialization point keyed by
+// the primary repo root: any block that mutates repo state should hold this
+// lock so unrelated callers cannot collide on git's internal locks.
+const repoWriteChain = new Map<string, Promise<unknown>>();
+
+/**
+ * Serialize an async block that mutates a git repository against other
+ * in-process callers operating on the same repository. The lock is keyed by
+ * the primary repo root so worktrees of the same repo share a single queue.
+ * Failures in one block do not poison the queue for the next caller.
+ *
+ * Not reentrant: do NOT nest acquisitions for the same repo. Helpers in this
+ * module never auto-acquire — callers wrap the critical section themselves.
+ */
+export async function withRepoLock<T>(cwd: string, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+	const key = (await repo.primaryRoot(cwd, signal)) ?? cwd;
+	const prior = repoWriteChain.get(key);
+	const run = (async () => {
+		if (prior) {
+			try {
+				await prior;
+			} catch {
+				// A prior caller failing must not block us from running.
+			}
+		}
+		throwIfAborted(signal);
+		return fn();
+	})();
+	repoWriteChain.set(key, run);
+	try {
+		return await run;
+	} finally {
+		if (repoWriteChain.get(key) === run) repoWriteChain.delete(key);
+	}
 }
 
 function splitLines(text: string): string[] {
@@ -955,9 +1001,22 @@ export const remote = {
 		return trimScalar(await tryText(cwd, ["remote", "get-url", name], { readOnly: true, signal }));
 	},
 
-	/** Add a new remote. */
+	/**
+	 * Add a remote pointing at `url`. Idempotent: if a remote named `name`
+	 * already exists with the same URL (e.g. an in-process race or a leftover
+	 * remote from a previous run), this is treated as success. Throws when the
+	 * remote exists with a different URL — that's a real conflict the caller
+	 * needs to resolve, not paper over.
+	 */
 	async add(cwd: string, name: string, url: string, signal?: AbortSignal): Promise<void> {
-		await runEffect(cwd, ["remote", "add", name, url], { signal });
+		const result = await runCommand(cwd, ["remote", "add", name, url], { signal });
+		if (result.exitCode === 0) return;
+		if (REMOTE_ALREADY_EXISTS.test(result.stderr)) {
+			const existing = await remote.url(cwd, name, signal);
+			if (existing === url) return;
+			throw new ToolError(`remote ${name} already exists with URL ${existing ?? "(unset)"}, expected ${url}`);
+		}
+		throw new GitCommandError(["remote", "add", name, url], result);
 	},
 };
 

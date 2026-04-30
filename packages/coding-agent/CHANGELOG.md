@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Removed the `worktree` parameter from `github` `pr_checkout`. Worktrees are now always written to `~/.omp/wt/<encoded-primary-repo>/pr-<number>/`, derived from the primary repository path
@@ -9,6 +8,8 @@
 
 ### Added
 
+- Added `checkouts` summary entries to `pr_checkout` results, including each checkout's branch, worktree path, remote, and reuse status
+- Added combined summaries for `pr_view` and `pr_diff` when `pr` is an array, so multi-request responses now include all requested pull requests in one return
 - Added array support to the `pr` parameter on `github` `pr_view`, `pr_diff`, and `pr_checkout` so a single call can fetch, diff, or check out multiple pull requests in one batch
 - Added a per-repo serialization lock (`withRepoLock`) so concurrent `pr_checkout` calls against the same repository no longer race on git's internal `.git/config.lock`, commit-graph, and worktree lock files
 

@@ -9,6 +9,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { GithubTool } from "@oh-my-pi/pi-coding-agent/tools/gh";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
+import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
 
 function createSession(
 	cwd: string = "/tmp/test",
@@ -113,6 +114,42 @@ async function createPrFixture(): Promise<{
 		headRefName,
 		headRefOid,
 	};
+}
+
+/**
+ * Stub `os.homedir()` AND rebuild the cached `dirs` resolver in pi-utils so
+ * `getWorktreesDir()` resolves under an isolated temp home instead of the
+ * user's real `~/.omp/wt`. Returns the temp home and a cleanup hook.
+ */
+async function setupTempHome(): Promise<{ home: string; cleanup: () => Promise<void> }> {
+	const home = await fs.mkdtemp(path.join(os.tmpdir(), "gh-pr-tool-home-"));
+	vi.spyOn(os, "homedir").mockReturnValue(home);
+	// `dirs.configRoot` is computed at constructor time from `os.homedir()`, so
+	// we must rebuild the resolver after the spy is in place. `setAgentDir`
+	// recreates it; we point it at the temp home's default agent dir.
+	const originalAgentDir = getAgentDir();
+	setAgentDir(path.join(home, ".omp", "agent"));
+	return {
+		home,
+		cleanup: async () => {
+			setAgentDir(originalAgentDir);
+			await fs.rm(home, { recursive: true, force: true });
+		},
+	};
+}
+
+/**
+ * Compute the auto-derived worktree path for a given primary repo root and
+ * local branch name, mirroring the encoding used by `pr_checkout`. Resolves
+ * symlinks (matches the production `fs.realpath` step) so assertions match
+ * the value rendered into the tool result.
+ */
+async function expectedWorktreePath(home: string, primaryRoot: string, localBranch: string): Promise<string> {
+	const encoded = path
+		.resolve(primaryRoot)
+		.replace(/^[/\\]/, "")
+		.replace(/[/\\:]/g, "-");
+	return fs.realpath(path.join(home, ".omp", "wt", encoded, localBranch));
 }
 
 describe("github tool", () => {
@@ -378,6 +415,7 @@ describe("github tool", () => {
 
 	it("checks out a pull request into a worktree and configures contributor push metadata", async () => {
 		const fixture = await createPrFixture();
+		const tempHome = await setupTempHome();
 		try {
 			vi.spyOn(git.github, "json")
 				.mockResolvedValueOnce({
@@ -401,7 +439,8 @@ describe("github tool", () => {
 			const tool = new GithubTool(createSession(fixture.repoRoot));
 			const result = await tool.execute("pr-checkout", { op: "pr_checkout", pr: "123" });
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-			const worktreePath = await fs.realpath(path.join(fixture.repoRoot, ".worktrees", "pr-123"));
+			const primaryRoot = (await git.repo.primaryRoot(fixture.repoRoot)) ?? fixture.repoRoot;
+			const worktreePath = await expectedWorktreePath(tempHome.home, primaryRoot, "pr-123");
 
 			expect(text).toContain("Checked Out Pull Request #123");
 			expect(text).toContain(`Worktree: ${worktreePath}`);
@@ -412,8 +451,188 @@ describe("github tool", () => {
 			expect(runGit(fixture.repoRoot, ["worktree", "list", "--porcelain"])).toContain(`worktree ${worktreePath}`);
 			expect(runGit(worktreePath, ["branch", "--show-current"])).toBe("pr-123");
 		} finally {
+			await tempHome.cleanup();
 			await fs.rm(fixture.baseDir, { recursive: true, force: true });
 		}
+	});
+
+	it("treats git.remote.add as a no-op when the remote already exists with the same URL", async () => {
+		const fixture = await createPrFixture();
+		try {
+			// Fixture already created `forksrc -> forkBare`. A second add with the
+			// same URL must succeed silently — this is the cross-process / leftover-
+			// state path that used to fail with `error: remote forksrc already exists`.
+			await git.remote.add(fixture.repoRoot, "forksrc", fixture.forkBare);
+			expect(runGit(fixture.repoRoot, ["remote", "get-url", "forksrc"])).toBe(fixture.forkBare);
+		} finally {
+			await fs.rm(fixture.baseDir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects git.remote.add when the remote already exists with a different URL", async () => {
+		const fixture = await createPrFixture();
+		try {
+			await expect(git.remote.add(fixture.repoRoot, "forksrc", fixture.originBare)).rejects.toThrow(
+				/already exists with URL/,
+			);
+			// Existing URL is preserved — we never overwrote it.
+			expect(runGit(fixture.repoRoot, ["remote", "get-url", "forksrc"])).toBe(fixture.forkBare);
+		} finally {
+			await fs.rm(fixture.baseDir, { recursive: true, force: true });
+		}
+	});
+
+	it("serializes concurrent git mutations through withRepoLock so callers don't race git's internal locks", async () => {
+		const fixture = await createPrFixture();
+		try {
+			// Without serialization, ~20 concurrent `git config` invocations against
+			// the same `.git/config` produce "could not lock config file" failures
+			// (the lock is O_EXCL with no waiter). Wrapping each write in
+			// `withRepoLock` makes the queue per-repo so all 20 succeed.
+			const writes = Array.from({ length: 20 }, (_, idx) =>
+				git.withRepoLock(fixture.repoRoot, () =>
+					git.config.set(fixture.repoRoot, `branch.race-test.key${idx}`, `value-${idx}`),
+				),
+			);
+			await Promise.all(writes);
+			for (let idx = 0; idx < 20; idx += 1) {
+				expect(runGit(fixture.repoRoot, ["config", "--get", `branch.race-test.key${idx}`])).toBe(`value-${idx}`);
+			}
+		} finally {
+			await fs.rm(fixture.baseDir, { recursive: true, force: true });
+		}
+	});
+
+	it("checks out multiple pull requests in a single call when pr is an array", async () => {
+		const fixture = await createPrFixture();
+		const tempHome = await setupTempHome();
+		try {
+			// PR #100 reuses the fixture's contributor branch; push it to origin so
+			// the non-cross-repo path (which fetches from origin) finds it.
+			runGit(fixture.repoRoot, ["push", "origin", `${fixture.headRefName}:${fixture.headRefName}`]);
+
+			// Add a second feature branch on origin so PR #200 has somewhere to come
+			// from. Branch names differ to avoid worktree collisions.
+			runGit(fixture.repoRoot, ["checkout", "-b", "feature/another", "main"]);
+			await Bun.write(path.join(fixture.repoRoot, "OTHER.md"), "other\n");
+			runGit(fixture.repoRoot, ["add", "OTHER.md"]);
+			runGit(fixture.repoRoot, ["commit", "-m", "another"]);
+			const otherOid = runGit(fixture.repoRoot, ["rev-parse", "HEAD"]);
+			runGit(fixture.repoRoot, ["push", "-u", "origin", "feature/another"]);
+			runGit(fixture.repoRoot, ["checkout", "main"]);
+
+			vi.spyOn(git.github, "json")
+				.mockResolvedValueOnce({
+					number: 100,
+					title: "Same-repo PR 100",
+					url: "https://github.com/owner/repo/pull/100",
+					baseRefName: "main",
+					headRefName: fixture.headRefName,
+					headRefOid: fixture.headRefOid,
+					isCrossRepository: false,
+					maintainerCanModify: true,
+				})
+				.mockResolvedValueOnce({
+					number: 200,
+					title: "Same-repo PR 200",
+					url: "https://github.com/owner/repo/pull/200",
+					baseRefName: "main",
+					headRefName: "feature/another",
+					headRefOid: otherOid,
+					isCrossRepository: false,
+					maintainerCanModify: true,
+				});
+
+			const tool = new GithubTool(createSession(fixture.repoRoot));
+			const result = await tool.execute("pr-checkout", { op: "pr_checkout", pr: ["100", "200"] });
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			const primaryRoot = (await git.repo.primaryRoot(fixture.repoRoot)) ?? fixture.repoRoot;
+			const wt100 = await expectedWorktreePath(tempHome.home, primaryRoot, "pr-100");
+			const wt200 = await expectedWorktreePath(tempHome.home, primaryRoot, "pr-200");
+
+			expect(text).toContain("# 2 Pull Request Worktrees");
+			expect(text).toContain("Checked Out Pull Request #100");
+			expect(text).toContain("Checked Out Pull Request #200");
+			expect(text).toContain(`Worktree: ${wt100}`);
+			expect(text).toContain(`Worktree: ${wt200}`);
+			expect(runGit(wt100, ["branch", "--show-current"])).toBe("pr-100");
+			expect(runGit(wt200, ["branch", "--show-current"])).toBe("pr-200");
+			expect(runGit(fixture.repoRoot, ["config", "--get", "branch.pr-100.ompPrUrl"])).toBe(
+				"https://github.com/owner/repo/pull/100",
+			);
+			expect(runGit(fixture.repoRoot, ["config", "--get", "branch.pr-200.ompPrUrl"])).toBe(
+				"https://github.com/owner/repo/pull/200",
+			);
+
+			const summaries = result.details?.checkouts;
+			expect(summaries?.length).toBe(2);
+			expect(summaries?.map(s => s.prNumber)).toEqual([100, 200]);
+			expect(summaries?.every(s => s.reused === false)).toBe(true);
+		} finally {
+			await tempHome.cleanup();
+			await fs.rm(fixture.baseDir, { recursive: true, force: true });
+		}
+	});
+
+	it("aggregates multiple pull request diffs when pr is an array", async () => {
+		vi.spyOn(git.github, "text")
+			.mockResolvedValueOnce("diff --git a/one.ts b/one.ts\n+content one\n")
+			.mockResolvedValueOnce("diff --git a/two.ts b/two.ts\n+content two\n");
+
+		const tool = new GithubTool(createSession());
+		const result = await tool.execute("pr-diff", { op: "pr_diff", pr: ["10", "20"], repo: "owner/repo" });
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(text).toContain("# 2 Pull Request Diffs");
+		expect(text).toContain("## PR 10");
+		expect(text).toContain("## PR 20");
+		expect(text).toContain("content one");
+		expect(text).toContain("content two");
+		// Sections are separated by a horizontal rule.
+		expect(text.match(/\n---\n/g)?.length).toBe(1);
+	});
+
+	it("aggregates multiple pull request views when pr is an array", async () => {
+		vi.spyOn(git.github, "json")
+			.mockResolvedValueOnce({
+				number: 11,
+				title: "First view",
+				url: "https://github.com/owner/repo/pull/11",
+				baseRefName: "main",
+				headRefName: "feature/one",
+				state: "OPEN",
+				author: { login: "alice" },
+				createdAt: "2026-04-01T09:00:00Z",
+				updatedAt: "2026-04-01T10:00:00Z",
+				comments: [],
+				reviews: [],
+			})
+			.mockResolvedValueOnce({
+				number: 22,
+				title: "Second view",
+				url: "https://github.com/owner/repo/pull/22",
+				baseRefName: "main",
+				headRefName: "feature/two",
+				state: "OPEN",
+				author: { login: "bob" },
+				createdAt: "2026-04-01T11:00:00Z",
+				updatedAt: "2026-04-01T12:00:00Z",
+				comments: [],
+				reviews: [],
+			});
+
+		const tool = new GithubTool(createSession());
+		const result = await tool.execute("pr-view", {
+			op: "pr_view",
+			pr: ["11", "22"],
+			repo: "owner/repo",
+			comments: false,
+		});
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(text).toContain("# 2 Pull Requests");
+		expect(text).toContain("# Pull Request #11: First view");
+		expect(text).toContain("# Pull Request #22: Second view");
 	});
 
 	it("rejects PR pushes from branches without checkout metadata", async () => {
