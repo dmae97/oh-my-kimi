@@ -2,13 +2,14 @@
  * Extension runner - executes extensions and manages their lifecycle.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
+import type { ImageContent, Model, ProviderResponseMetadata } from "@oh-my-pi/pi-ai";
 import type { KeyId } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../../config/model-registry";
 import { type Theme, theme } from "../../modes/theme/theme";
 import type { SessionManager } from "../../session/session-manager";
 import type {
+	AfterProviderResponseEvent,
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
 	BeforeProviderRequestEvent,
@@ -70,6 +71,7 @@ type RunnerEmitEvent = Exclude<
 	| UserBashEvent
 	| ContextEvent
 	| BeforeProviderRequestEvent
+	| AfterProviderResponseEvent
 	| BeforeAgentStartEvent
 	| ResourcesDiscoverEvent
 	| InputEvent
@@ -757,6 +759,37 @@ export class ExtensionRunner {
 		}
 
 		return currentPayload;
+	}
+
+	async emitAfterProviderResponse(response: ProviderResponseMetadata, _model?: Model): Promise<void> {
+		const ctx = this.createContext();
+
+		for (const ext of this.extensions) {
+			const handlers = ext.handlers.get("after_provider_response");
+			if (!handlers || handlers.length === 0) continue;
+
+			for (const handler of handlers) {
+				try {
+					const event: AfterProviderResponseEvent = {
+						type: "after_provider_response",
+						status: response.status,
+						headers: response.headers,
+						requestId: response.requestId,
+						metadata: response.metadata,
+					};
+					await handler(event, ctx);
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					const stack = err instanceof Error ? err.stack : undefined;
+					this.emitError({
+						extensionPath: ext.path,
+						event: "after_provider_response",
+						error: message,
+						stack,
+					});
+				}
+			}
+		}
 	}
 
 	async emitBeforeAgentStart(

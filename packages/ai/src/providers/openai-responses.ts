@@ -38,6 +38,7 @@ import {
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
+import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
 import { mapToOpenAIResponsesToolChoice, type OpenAIResponsesToolChoice } from "../utils/tool-choice";
@@ -196,7 +197,13 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				body: params,
 			};
 			const openaiStream = await callWithCopilotModelRetry(
-				() => client.responses.create(params, { signal: requestSignal }),
+				async () => {
+					const { data, response, request_id } = await client.responses
+						.create(params, { signal: requestSignal })
+						.withResponse();
+					await notifyProviderResponse(options, response, model, request_id);
+					return data;
+				},
 				{ provider: model.provider, signal: requestSignal },
 			);
 			const firstEventWatchdog = createWatchdog(

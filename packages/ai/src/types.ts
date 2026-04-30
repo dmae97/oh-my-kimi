@@ -171,6 +171,13 @@ export interface ProviderSessionState {
 	close(): void;
 }
 
+export interface ProviderResponseMetadata {
+	status: number;
+	headers: Record<string, string>;
+	requestId?: string | null;
+	metadata?: Record<string, unknown>;
+}
+
 export interface StreamOptions {
 	temperature?: number;
 	topP?: number;
@@ -221,6 +228,10 @@ export interface StreamOptions {
 	 * Return undefined to keep the payload unchanged.
 	 */
 	onPayload?: (payload: unknown, model?: Model<Api>) => unknown | undefined | Promise<unknown | undefined>;
+	/**
+	 * Optional callback for provider response metadata after headers are received.
+	 */
+	onResponse?: (response: ProviderResponseMetadata, model?: Model<Api>) => void | Promise<void>;
 	/**
 	 * Optional override for the first streamed event watchdog in milliseconds.
 	 * Set to 0 to disable the first-event watchdog for this request.
