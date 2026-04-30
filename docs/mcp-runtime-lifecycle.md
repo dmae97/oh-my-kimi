@@ -12,8 +12,9 @@ This document describes how MCP servers are discovered, connected, exposed as to
    - failures per server,
    - or cached `DeferredMCPTool`s for still-pending servers.
 5. **SDK wiring** merges MCP tools into runtime tool registry for the session.
-6. **Live session** can refresh MCP tools via `/mcp` flows (`disconnectAll` + rediscover + `session.refreshMCPTools`).
-7. **Teardown** happens when callers invoke `disconnectServer`/`disconnectAll`; manager also clears MCP tool registrations for disconnected servers.
+6. **Post-connect enrichment** best-effort loads resources, resource templates, prompts, and optional resource subscriptions.
+7. **Live session** can refresh MCP tools via `/mcp` flows (`disconnectAll` + rediscover + `session.refreshMCPTools`) and can reconnect individual servers on transport close or `/mcp reconnect`.
+8. **Teardown** happens when callers invoke `disconnectServer`/`disconnectAll`; manager also clears MCP tool/resource/prompt registrations for disconnected servers.
 
 ## Discovery and load phase
 
@@ -59,11 +60,13 @@ So startup does not fail the whole agent session when individual MCP servers fai
 - `#pendingToolLoads: Map<string, Promise<{ connection, serverTools }>>` — connected but tools still loading.
 - `#tools: CustomTool[]` — current MCP tool view exposed to callers.
 - `#sources: Map<string, SourceMeta>` — provider/source metadata even before connect completes.
+- `#pendingReconnections: Map<string, Promise<MCPServerConnection | null>>` — reconnects in progress after a dropped transport or explicit reconnect.
+- `#serverConfigs: Map<string, MCPServerConfig>` — original unresolved configs preserved so reconnect can re-resolve credentials without leaking resolved tokens.
 
 `getConnectionStatus(name)` derives status from these maps:
 
 - `connected` if in `#connections`,
-- `connecting` if pending connect or pending tool load,
+- `connecting` if pending connect, pending tool load, or pending reconnect,
 - `disconnected` otherwise.
 
 ## Connection establishment and startup timing
@@ -73,17 +76,21 @@ So startup does not fail the whole agent session when individual MCP servers fai
 For each discovered server in `connectServers()`:
 
 1. store/update source metadata,
-2. skip if already connected/pending,
+2. skip if already connected/pending/reconnecting,
 3. validate transport fields (`validateServerConfig`),
 4. resolve auth/shell substitutions (`#resolveAuthConfig`),
-5. call `connectToServer(name, resolvedConfig)`,
-6. call `listTools(connection)`,
-7. cache tool definitions (`MCPToolCache.set`) best-effort.
+5. call `connectToServer(name, resolvedConfig)` with manager notification/request handlers,
+6. wire HTTP OAuth refresh and transport `onClose` reconnect handling,
+7. call `listTools(connection)`,
+8. cache tool definitions (`MCPToolCache.set`) best-effort,
+9. best-effort load resources, resource templates, prompts, and subscriptions after tools load.
 
 `connectToServer()` behavior (`src/mcp/client.ts`):
 
 - creates stdio or HTTP/SSE transport,
-- performs MCP `initialize` + `notifications/initialized`,
+- performs MCP `initialize`,
+- for HTTP/SSE, starts the optional background SSE listener before `notifications/initialized`,
+- sends `notifications/initialized`,
 - uses timeout (`config.timeout` or 30s default),
 - closes transport on init failure.
 
@@ -118,14 +125,15 @@ Each pending `toolsPromise` also has a background continuation that eventually:
 
 `discoverAndLoadMCPTools()` converts manager tools into `LoadedCustomTool[]` and decorates paths (`mcp:<server> via <providerName>` when known).
 
-`createAgentSession()` then pushes these tools into `customTools`, which are wrapped and added to the runtime tool registry with names like `mcp_<server>_<tool>`.
+`createAgentSession()` then pushes these tools into `customTools`, which are wrapped and added to the runtime tool registry with names like `mcp__<server>_<tool>`.
 
 ### Tool calls
 
 - `MCPTool` calls tools through an already connected `MCPServerConnection`.
 - `DeferredMCPTool` waits for `waitForConnection(server)` before calling; this allows cached tools to exist before connection is ready.
+- Both attempt a reconnect + single retry for retriable connection failures.
 
-Both return structured tool output and convert transport/tool errors into `MCP error: ...` tool content (abort remains abort).
+Both return structured tool output and convert remaining transport/tool errors into `MCP error: ...` tool content (abort remains abort).
 
 ## Refresh/reload paths (startup vs live reload)
 
@@ -142,24 +150,26 @@ Both return structured tool output and convert transport/tool errors into `MCP e
 2. `mcpManager.discoverAndConnect()`,
 3. `session.refreshMCPTools(mcpManager.getTools())`.
 
-`session.refreshMCPTools()` (`src/session/agent-session.ts`) removes all `mcp_` tools, re-wraps latest MCP tools, and re-activates tool set so MCP changes apply without restarting session.
+`session.refreshMCPTools()` (`src/session/agent-session.ts`) removes all `mcp__` tools, re-wraps latest MCP tools, and re-activates tool set so MCP changes apply without restarting session.
 
 There is also a follow-up path for late connections: after waiting for a specific server, if status becomes `connected`, it re-runs `session.refreshMCPTools(...)` so newly available tools are rebound in-session.
 
 ## Health, reconnect, and partial failure behavior
 
-Current runtime behavior is intentionally minimal:
+Current runtime behavior is connection-event driven:
 
-- **No autonomous health monitor** in manager/client.
-- **No automatic reconnect loop** when a transport drops.
-- Manager does not subscribe to transport `onClose`/`onError`; status is registry-driven.
-- Reconnect is explicit: reload flow or direct `connectServers()` invocation.
+- **No autonomous polling health monitor** in manager/client.
+- **Automatic reconnect is wired to `transport.onClose`** for managed connections.
+- Reconnect retries with backoff (`500`, `1000`, `2000`, `4000` ms), reloads tools, and notifies consumers on success.
+- Tool calls that see retriable connection errors also attempt one reconnect + retry.
+- Reconnect is also explicit via `/mcp reconnect <name>` or broader `/mcp reload`.
 
 Operationally:
 
 - one server failing does not remove tools from healthy servers,
 - connect/list failures are isolated per server,
-- tool cache and background updates are best-effort (warnings/errors logged, no hard stop).
+- stale tools may remain visible while reconnect is attempted; calls report MCP errors if recovery fails,
+- tool cache, resource/prompt loading, subscriptions, and background updates are best-effort (warnings/errors logged, no hard stop).
 
 ## Teardown semantics
 
@@ -167,30 +177,31 @@ Operationally:
 
 `disconnectServer(name)`:
 
-- removes pending entries/source metadata,
+- removes pending entries, source metadata, saved config, resource refresh/subscription state,
+- detaches `onClose` so explicit close does not trigger reconnect,
 - closes transport if connected,
-- removes that server’s `mcp_` tools from manager state.
+- filters manager tool state for names beginning with `mcp__${name}_`.
 
 ### Global teardown
 
 `disconnectAll()`:
 
-- closes all active transports with `Promise.allSettled`,
-- clears pending maps, sources, connections, and manager tool list.
+- detaches `onClose` for all active transports, then closes them with `Promise.allSettled`,
+- clears pending maps, sources, saved configs, connections, subscriptions, resource refreshes, and manager tool list.
 
-In current wiring, explicit teardown is used in MCP command flows (for reload/remove/disable). There is no separate automatic manager disposal hook in the startup path itself; callers are responsible for invoking manager disconnect methods when they need deterministic MCP shutdown.
+In current wiring, explicit teardown is used in MCP command flows (for reload/remove/disable). Startup stores the manager on the session; callers that need deterministic MCP shutdown should invoke manager disconnect methods.
 
 ## Failure modes and guarantees
 
-| Scenario | Behavior | Hard fail vs best-effort |
-| --- | --- | --- |
-| Discovery throws (capability/config load path) | Loader returns empty tools + synthetic `.mcp.json` error | Best-effort session startup |
-| Invalid server config | Server skipped with validation error entry | Best-effort per server |
-| Connect timeout/init failure | Server error recorded; others continue | Best-effort per server |
-| `tools/list` still pending at startup with cache hit | Deferred tools returned immediately | Best-effort fast startup |
-| `tools/list` still pending at startup without cache | Startup waits for pending to settle | Hard wait for correctness |
-| Late background tool-load failure | Logged after startup gate | Best-effort logging |
-| Runtime dropped transport | No automatic reconnect; future calls fail until reconnect/reload | Best-effort recovery via manual action |
+| Scenario                                             | Behavior                                                                                                                  | Hard fail vs best-effort       |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| Discovery throws (capability/config load path)       | Loader returns empty tools + synthetic `.mcp.json` error                                                                  | Best-effort session startup    |
+| Invalid server config                                | Server skipped with validation error entry                                                                                | Best-effort per server         |
+| Connect timeout/init failure                         | Server error recorded; others continue                                                                                    | Best-effort per server         |
+| `tools/list` still pending at startup with cache hit | Deferred tools returned immediately                                                                                       | Best-effort fast startup       |
+| `tools/list` still pending at startup without cache  | Startup waits for pending to settle                                                                                       | Hard wait for correctness      |
+| Late background tool-load failure                    | Logged after startup gate                                                                                                 | Best-effort logging            |
+| Runtime dropped transport                            | Manager attempts reconnect; stale tools remain while reconnecting and future calls may retry once or fail with MCP errors | Best-effort automatic recovery |
 
 ## Public API surface
 

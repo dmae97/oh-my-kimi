@@ -65,6 +65,7 @@ Session files are JSONL: one JSON object per line.
   "timestamp": "2026-02-16T10:20:30.000Z",
   "cwd": "/work/pi",
   "title": "optional session title",
+  "titleSource": "auto",
   "parentSession": "optional lineage marker"
 }
 ```
@@ -95,7 +96,7 @@ All non-header entries include:
 
 - `message`
 - `thinking_level_change`
-- `model_change`
+- `service_tier_change`
 - `compaction`
 - `branch_summary`
 - `custom`
@@ -104,6 +105,7 @@ All non-header entries include:
 - `ttsr_injection`
 - `session_init`
 - `mode_change`
+- `mcp_tool_selection`
 
 ### `message`
 
@@ -120,7 +122,19 @@ Stores an `AgentMessage` directly.
     "provider": "anthropic",
     "model": "claude-sonnet-4-5",
     "content": [{ "type": "text", "text": "Done." }],
-    "usage": { "input": 100, "output": 20, "cacheRead": 0, "cacheWrite": 0, "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0 } },
+    "usage": {
+      "input": 100,
+      "output": 20,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "total": 0
+      }
+    },
     "timestamp": 1760000000000
   }
 }
@@ -140,6 +154,20 @@ Stores an `AgentMessage` directly.
 ```
 
 `role` is optional; missing is treated as `default` in context reconstruction.
+
+### `service_tier_change`
+
+```json
+{
+  "type": "service_tier_change",
+  "id": "c1d2e3f4",
+  "parentId": "b1c2d3e4",
+  "timestamp": "2026-02-16T10:21:45.000Z",
+  "serviceTier": "flex"
+}
+```
+
+`serviceTier` can also be `null`.
 
 ### `thinking_level_change`
 
@@ -205,7 +233,7 @@ Extension state persistence; ignored by `buildSessionContext`.
 
 ### `custom_message`
 
-Extension-provided message that does participate in LLM context.
+Extension-provided message that does participate in LLM context. `content` can be a string or text/image content blocks, and `attribution` records whether the user or agent initiated it.
 
 ```json
 {
@@ -216,7 +244,8 @@ Extension-provided message that does participate in LLM context.
   "customType": "my-extension",
   "content": "Injected context",
   "display": true,
-  "details": { "debug": false }
+  "details": { "debug": false },
+  "attribution": "agent"
 }
 ```
 
@@ -244,6 +273,18 @@ Extension-provided message that does participate in LLM context.
   "parentId": "b2c3d4e5",
   "timestamp": "2026-02-16T10:28:00.000Z",
   "injectedRules": ["ruleA", "ruleB"]
+}
+```
+
+### `mcp_tool_selection`
+
+```json
+{
+  "type": "mcp_tool_selection",
+  "id": "d2e3f4a5",
+  "parentId": "c2d3e4f5",
+  "timestamp": "2026-02-16T10:28:30.000Z",
+  "selectedToolNames": ["server.tool"]
 }
 ```
 
@@ -339,9 +380,11 @@ Algorithm:
 2. Walk `parentId` chain from leaf to root and reverse to root->leaf path.
 3. Derive runtime state across path:
    - `thinkingLevel` from latest `thinking_level_change` (default `"off"`)
+   - `serviceTier` from latest `service_tier_change`
    - model map from `model_change` entries (`role ?? "default"`)
    - fallback `models.default` from assistant message provider/model if no explicit model change
    - deduplicated `injectedTtsrRules` from all `ttsr_injection` entries
+   - selected MCP discovery tools from latest `mcp_tool_selection`
    - mode/modeData from latest `mode_change` (default mode `"none"`)
 4. Build message list:
    - `message` entries pass through
@@ -352,7 +395,7 @@ Algorithm:
      - emit path entries starting at `firstKeptEntryId` up to the compaction boundary
      - emit entries after the compaction boundary
 
-`custom` and `session_init` entries do not inject model context directly.
+`custom`, `session_init`, `service_tier_change`, `mcp_tool_selection`, and `ttsr_injection` entries do not inject model context directly.
 
 ## Persistence Guarantees and Failure Model
 

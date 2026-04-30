@@ -11,11 +11,11 @@ The runtime has two layers:
 
 ## Runtime behavior by mode
 
-| Mode | `ctx.ui.custom(...)` availability | Notes |
-| --- | --- | --- |
-| Interactive TUI | Supported | Component is mounted in the editor area, focused, and must call `done(result)` to resolve. |
-| Background/headless | Not interactive | UI context is no-op (`hasUI === false`). |
-| RPC mode | Not supported | `custom()` returns `Promise<never>` and does not mount TUI components. |
+| Mode                | `ctx.ui.custom(...)` availability | Notes                                                                                                                          |
+| ------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Interactive TUI     | Supported                         | Component is mounted in the editor area or overlay, focused, and must call `done(result)` to resolve.                          |
+| Background/headless | Not interactive                   | UI context is no-op (`hasUI === false`).                                                                                       |
+| RPC mode            | Not mounted                       | `custom()` is implemented as unsupported UI and returns `undefined as never`; do not depend on interactive UI in RPC handlers. |
 
 If your extension/tool can run in non-interactive mode, guard with `ctx.hasUI` / `pi.hasUI`.
 
@@ -46,7 +46,7 @@ Cursor behavior uses `CURSOR_MARKER` (not `getCursorPosition`). Focused componen
 
 Your `render(width)` output must be terminal-safe:
 
-1. **Never exceed `width` on any line**. The renderer throws if a non-image line overflows.
+1. **Do not intentionally exceed `width` on any line**. The renderer truncates overwide non-image lines as a last-resort guard, but components should still return width-safe output.
 2. **Measure visual width**, not string length: use `visibleWidth()`.
 3. **Truncate/wrap ANSI-aware text** with `truncateToWidth()` / `wrapTextWithAnsi()`.
 4. **Sanitize tabs/content** from external sources using `replaceTabs()` (and higher-level sanitizers in coding-agent render paths).
@@ -91,8 +91,8 @@ Then use `isKeyRelease()` / `isKeyRepeat()` if needed.
 ## Focus, overlays, and cursor
 
 - `TUI.setFocus(component)` routes input to that component.
-- Overlay APIs exist in `TUI` (`showOverlay`, `OverlayHandle`), but extension `ctx.ui.custom` mounting in interactive mode currently replaces the editor component area directly.
-- The `custom(..., options?: { overlay?: boolean })` option exists in extension types; interactive extension mounting currently ignores this option.
+- Overlay APIs exist in `TUI` (`showOverlay`, `OverlayHandle`). In interactive extension/custom UI, `custom(..., { overlay: true })` mounts your component through `TUI.showOverlay(...)`; without `overlay`, it replaces the editor component area directly.
+- Overlay custom UI is anchored at `bottom-center` with full terminal width/max height and is removed through the returned overlay handle when `done(...)` closes the flow.
 
 ## Mount points and return contracts
 
@@ -115,11 +115,11 @@ custom<T>(
 Behavior in interactive mode (`extension-ui-controller.ts`):
 
 - Saves editor text.
-- Replaces editor component with your component.
+- Without `options.overlay`, replaces the editor component with your component.
+- With `options.overlay`, mounts your component as a bottom-centered overlay instead of replacing the editor.
 - Focuses your component.
-- On `done(result)`: calls `component.dispose?.()`, restores editor + text, focuses editor, resolves promise.
-
-So `done(...)` is mandatory for completion.
+- On `done(result)`: calls `component.dispose?.()`, hides the overlay if present, restores editor + text for non-overlay flows, focuses editor, resolves promise.
+  So `done(...)` is mandatory for completion.
 
 ## 2) Hook/custom-tool UI context (legacy typing)
 
@@ -142,7 +142,6 @@ async execute(toolCallId, params, onUpdate, ctx, signal) {
   return { content: [{ type: "text", text: picked ? `Picked: ${picked}` : "Cancelled" }] };
 }
 ```
-
 
 ## 3) Custom tool call/result renderers
 
@@ -168,9 +167,14 @@ These renderers are mounted by `ToolExecutionComponent`.
 Example cancellation pattern:
 
 ```ts
-const loader = new CancellableLoader(tui, theme.fg("accent"), theme.fg("muted"), "Working...");
+const loader = new CancellableLoader(
+  tui,
+  theme.fg("accent"),
+  theme.fg("muted"),
+  "Working...",
+);
 loader.onAbort = () => done(undefined);
-void doWork(loader.signal).then(result => done(result));
+void doWork(loader.signal).then((result) => done(result));
 return loader;
 ```
 
@@ -178,8 +182,16 @@ return loader;
 
 ```ts
 import type { Component } from "@oh-my-pi/pi-tui";
-import { SelectList, matchesKey, replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
-import { getSelectListTheme, type ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import {
+  SelectList,
+  matchesKey,
+  replaceTabs,
+  truncateToWidth,
+} from "@oh-my-pi/pi-tui";
+import {
+  getSelectListTheme,
+  type ExtensionAPI,
+} from "@oh-my-pi/pi-coding-agent";
 
 class Picker implements Component {
   list: SelectList;
@@ -194,7 +206,7 @@ class Picker implements Component {
     this.list = new SelectList(items, 8, getSelectListTheme());
     this.keybindings = keybindings;
     this.done = done;
-    this.list.onSelect = item => this.done(item.value);
+    this.list.onSelect = (item) => this.done(item.value);
     this.list.onCancel = () => this.done(undefined);
   }
 
@@ -207,7 +219,9 @@ class Picker implements Component {
   }
 
   render(width: number): string[] {
-    return this.list.render(width).map(line => truncateToWidth(replaceTabs(line), width));
+    return this.list
+      .render(width)
+      .map((line) => truncateToWidth(replaceTabs(line), width));
   }
 
   invalidate(): void {
@@ -221,14 +235,16 @@ export default function extension(pi: ExtensionAPI): void {
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) return;
 
-      const selected = await ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) => {
-        const items = [
-          { value: "fast", label: theme.fg("accent", "Fast") },
-          { value: "balanced", label: "Balanced" },
-          { value: "quality", label: "Quality" },
-        ];
-        return new Picker(items, keybindings, done);
-      });
+      const selected = await ctx.ui.custom<string | undefined>(
+        (tui, theme, keybindings, done) => {
+          const items = [
+            { value: "fast", label: theme.fg("accent", "Fast") },
+            { value: "balanced", label: "Balanced" },
+            { value: "quality", label: "Quality" },
+          ];
+          return new Picker(items, keybindings, done);
+        },
+      );
 
       if (selected) ctx.ui.notify(`Selected profile: ${selected}`, "info");
     },

@@ -6,7 +6,7 @@ This document describes how coding-agent stores large/binary payloads outside se
 
 The runtime uses two different persistence mechanisms for different data shapes:
 
-- **Content-addressed blobs** (`blob:sha256:<hash>`): global, binary-oriented storage used to externalize large image base64 payloads from persisted session entries.
+- **Content-addressed blobs** (`blob:sha256:<hash>`): global storage used to externalize large image base64 payloads and provider image data URLs from persisted session entries.
 - **Session-scoped artifacts** (files under `<sessionFile-without-.jsonl>/`): per-session text files used for full tool outputs and subagent outputs.
 
 They are intentionally separate:
@@ -48,7 +48,7 @@ Artifact types share this directory:
 
 ## Blob IDs: content hash
 
-`BlobStore.put()` computes SHA-256 over raw binary bytes and returns:
+`BlobStore.put()` computes SHA-256 over the bytes it is given and returns:
 
 - `hash`: hex digest,
 - `path`: `<blobsDir>/<hash>`,
@@ -80,13 +80,14 @@ Before session entries are written (`#rewriteFile` / incremental persist), `Sess
 
 Key behaviors:
 
-1. **Large string truncation**: oversized strings are cut and suffixed with `"[Session persistence truncated large content]"`.
+1. **Large string truncation**: oversized strings are cut and suffixed with `"[Session persistence truncated large content]"`; signature fields (`thinkingSignature`, `thoughtSignature`, `textSignature`) are cleared instead of truncated.
 2. **Transient field stripping**: `partialJson` and `jsonlEvents` are removed from persisted entries.
 3. **Image externalization to blobs**:
-   - only applies to image blocks in `content` arrays,
-   - only when `data` is not already a blob ref,
-   - only when base64 length is at least threshold (`BLOB_EXTERNALIZE_THRESHOLD = 1024`),
-   - replaces inline base64 with `blob:sha256:<hash>`.
+   - image blocks in `content` arrays are externalized when `data` is not already a blob ref and base64 length is at least threshold (`BLOB_EXTERNALIZE_THRESHOLD = 1024`),
+   - provider-style `image_url` data URLs are externalized when they start with `data:image/` and contain `;base64,`,
+   - image block `data` is stored as decoded binary bytes,
+   - provider data URLs are stored as the original UTF-8 data URL string,
+   - persisted values are replaced with `blob:sha256:<hash>`.
 
 This keeps session JSONL compact while preserving recoverability.
 
@@ -94,11 +95,12 @@ This keeps session JSONL compact while preserving recoverability.
 
 When opening a session (`setSessionFile`), after migrations, `SessionManager` runs `resolveBlobRefsInEntries()`.
 
-For each message/custom-message image block with `blob:sha256:<hash>`:
+For message/custom-message image blocks with `blob:sha256:<hash>` and for persisted provider `image_url` fields with blob refs:
 
 - reads blob bytes from blob store,
-- converts bytes back to base64,
-- mutates in-memory entry to inline base64 for runtime consumers.
+- converts image-block bytes back to base64,
+- converts provider `image_url` blobs back to the original string,
+- mutates in-memory entry fields for runtime consumers.
 
 If blob is missing:
 
@@ -200,19 +202,19 @@ Blob implications after fork:
 
 ## Failure handling and fallback paths
 
-| Case | Behavior |
-| --- | --- |
-| Blob file missing during rehydration | Warn and keep `blob:sha256:` ref string in-memory |
-| Blob read ENOENT via `BlobStore.get` | Returns `null` |
-| Artifact directory missing (`ArtifactManager.listFiles`) | Returns empty list (allocation can start fresh) |
-| Artifact directory missing (`artifact://` / `agent://`) | Throws explicit `No artifacts directory found` |
-| Artifact ID not found | Throws with available IDs listing |
-| OutputSink artifact writer init fails | Continues with tail-only truncation (no full-output artifact) |
-| No session file (some task paths) | Task tool falls back to temp artifacts directory for subagent outputs |
+| Case                                                     | Behavior                                                              |
+| -------------------------------------------------------- | --------------------------------------------------------------------- |
+| Blob file missing during rehydration                     | Warn and keep `blob:sha256:` ref string in-memory                     |
+| Blob read ENOENT via `BlobStore.get`                     | Returns `null`                                                        |
+| Artifact directory missing (`ArtifactManager.listFiles`) | Returns empty list (allocation can start fresh)                       |
+| Artifact directory missing (`artifact://` / `agent://`)  | Throws explicit `No artifacts directory found`                        |
+| Artifact ID not found                                    | Throws with available IDs listing                                     |
+| OutputSink artifact writer init fails                    | Continues with tail-only truncation (no full-output artifact)         |
+| No session file (some task paths)                        | Task tool falls back to temp artifacts directory for subagent outputs |
 
 ## Binary blob externalization vs text-output artifacts
 
-- **Blob externalization** is for binary image payloads inside persisted session entry content; it replaces inline base64 in JSONL with stable content refs.
+- **Blob externalization** is for image payloads inside persisted session entry content and provider image data URLs; it replaces inline payload strings in JSONL with stable content refs.
 - **Artifacts** are plain text files for execution output and subagent output; they are addressable by session-local IDs through internal URLs.
 
 The two systems intersect only indirectly (both reduce session JSONL bloat) but have different identity, lifetime, and retrieval paths.
@@ -220,11 +222,10 @@ The two systems intersect only indirectly (both reduce session JSONL bloat) but 
 ## Implementation files
 
 - [`src/session/blob-store.ts`](../packages/coding-agent/src/session/blob-store.ts) — blob reference format, hashing, put/get, externalize/resolve helpers.
-- [`src/session/artifacts.ts`](../packages/coding-agent/src/session/artifacts.ts) — session artifact directory model and numeric artifact ID allocation.
+- [`src/session/artifacts.ts`](../packages/coding-agent/src/session/artifacts.ts) — session artifact directory model and numeric artifact ID/path allocation.
 - [`src/session/streaming-output.ts`](../packages/coding-agent/src/session/streaming-output.ts) — `OutputSink` truncation/spill-to-file behavior and summary metadata.
 - [`src/session/session-manager.ts`](../packages/coding-agent/src/session/session-manager.ts) — persistence transforms, blob rehydration on load, session fork/move interactions.
 - [`src/session/agent-session.ts`](../packages/coding-agent/src/session/agent-session.ts) — artifact directory copy during interactive fork.
-- [`src/tools/output-utils.ts`](../packages/coding-agent/src/tools/output-utils.ts) — tool artifact manager bootstrap and per-tool artifact path allocation.
 - [`src/internal-urls/artifact-protocol.ts`](../packages/coding-agent/src/internal-urls/artifact-protocol.ts) — `artifact://` resolver.
 - [`src/internal-urls/agent-protocol.ts`](../packages/coding-agent/src/internal-urls/agent-protocol.ts) — `agent://` resolver + JSON extraction.
 - [`src/sdk.ts`](../packages/coding-agent/src/sdk.ts) — internal URL router wiring and artifacts-dir resolver.

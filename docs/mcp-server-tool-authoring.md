@@ -1,6 +1,6 @@
 # MCP server and tool authoring
 
-This document explains how MCP server definitions become callable `mcp_*` tools in coding-agent, and what operators should expect when configs are invalid, duplicated, disabled, or auth-gated.
+This document explains how MCP server definitions become callable `mcp__*` tools in coding-agent, and what operators should expect when configs are invalid, duplicated, disabled, or auth-gated.
 
 ## Architecture at a glance
 
@@ -10,7 +10,8 @@ Config sources (.omp/.claude/.cursor/.vscode/mcp.json, mcp.json, etc.)
   -> capability loader dedupes by server name (higher provider priority wins)
   -> loadAllMCPConfigs converts to MCPServerConfig + skips enabled:false
   -> MCPManager connects/listTools (with auth/header/env resolution)
-  -> MCPTool/DeferredMCPTool bridge exposes tools as mcp_<server>_<tool>
+  -> manager best-effort loads resources/prompts and subscribes to resource updates when enabled
+  -> MCPTool/DeferredMCPTool bridge exposes tools as mcp__<server>_<tool>
   -> AgentSession.refreshMCPTools replaces live MCP tools immediately
 ```
 
@@ -21,7 +22,7 @@ Config sources (.omp/.claude/.cursor/.vscode/mcp.json, mcp.json, etc.)
 - `stdio` (default when `type` missing): requires `command`, optional `args`, `env`, `cwd`
 - `http`: requires `url`, optional `headers`
 - `sse`: requires `url`, optional `headers` (kept for compatibility)
-- shared fields: `enabled`, `timeout`, `auth`
+- shared fields: `enabled`, `timeout`, `auth`, `oauth`
 
 `validateServerConfig()` (`src/mcp/config.ts`) enforces transport basics:
 
@@ -106,13 +107,13 @@ If credential lookup fails, manager logs a warning and continues with unresolved
 
 ### Header/env value resolution
 
-Before connect, manager resolves each header/env value via `resolveConfigValue()` (`src/config/resolve-config-value.ts`):
+Before connect, manager resolves stdio `env` values and HTTP/SSE `headers` values via `resolveConfigValue()` (`src/config/resolve-config-value.ts`):
 
 - value starting with `!` => execute shell command, use trimmed stdout (cached)
+- failed, timed-out, or whitespace-only commands produce `undefined`, so that entry is omitted
 - otherwise, treat value as environment variable name first (`process.env[name]`), fallback to literal value
-- unresolved command/env values are omitted from final headers/env map
 
-Operational caveat: this means a mistyped secret command/env key can silently remove that header/env entry, producing downstream 401/403 or server startup failures.
+Operational caveat: a mistyped `!` secret command can silently remove that header/env entry, producing downstream 401/403 or server startup failures. A mistyped environment variable name is sent literally unless that literal happens to be meaningful to the server.
 
 ## 4) Tool bridge: MCP -> agent-callable tools
 
@@ -123,7 +124,7 @@ Operational caveat: this means a mistyped secret command/env key can silently re
 Tool names are generated as:
 
 ```text
-mcp_<sanitized_server_name>_<sanitized_tool_name>
+mcp__<sanitized_server_name>_<sanitized_tool_name>
 ```
 
 Rules:
@@ -137,7 +138,7 @@ This avoids many collisions, but not all. Different raw names can still sanitize
 
 ### Schema mapping
 
-`convertSchema()` keeps MCP JSON Schema mostly as-is but patches object schemas missing `properties` with `{}` for provider compatibility.
+`tool-bridge.ts` passes each MCP `inputSchema` through `sanitizeSchemaForMCP()` before registering it as a `CustomTool` schema.
 
 ### Execution mapping
 
@@ -147,7 +148,8 @@ This avoids many collisions, but not all. Different raw names can still sanitize
 - flattens MCP content into displayable text
 - returns structured details (`serverName`, `mcpToolName`, provider metadata)
 - maps server-reported `isError` to `Error: ...` text result
-- maps thrown transport/runtime failures to `MCP error: ...`
+- attempts reconnect + one retry for retriable connection errors
+- maps remaining thrown transport/runtime failures to `MCP error: ...`
 - preserves abort semantics by translating AbortError into `ToolAbortError`
 
 ## 5) Operator lifecycle: add/edit/remove and live updates
@@ -161,7 +163,10 @@ Supported operations:
 - `enable` / `disable`
 - `test`
 - `reauth` / `unauth`
+- `reconnect`
 - `reload`
+- `resources`, `prompts`, `notifications`
+- Smithery search/login/logout flows
 
 Config writes are atomic (`writeMCPConfigFile`: temp file + rename).
 
@@ -171,7 +176,7 @@ After changes, controller calls `#reloadMCP()`:
 2. `mcpManager.discoverAndConnect()`
 3. `session.refreshMCPTools(mcpManager.getTools())`
 
-`refreshMCPTools()` replaces all `mcp_` registry entries and immediately re-activates the latest MCP tool set, so changes take effect without restarting the session.
+`refreshMCPTools()` replaces all `mcp__` registry entries and immediately re-activates the latest MCP tool set, so changes take effect without restarting the session.
 
 ### Mode differences
 
@@ -206,7 +211,7 @@ Bad source JSON in discovery is generally handled as warnings/logs; config-write
 For robust MCP authoring in this codebase:
 
 1. Keep server names globally unique across all MCP-capable config sources.
-2. Prefer alphanumeric/underscore names to avoid sanitized-name collisions in generated `mcp_*` tool names.
+2. Prefer names that remain distinct after MCP tool-name sanitization to avoid generated `mcp__` collisions.
 3. Use explicit `type` to avoid accidental stdio defaults.
 4. Treat `enabled: false` as hard-off: server is omitted from runtime connect set.
 5. For OAuth configs, store a valid `credentialId`; otherwise auth injection is skipped.

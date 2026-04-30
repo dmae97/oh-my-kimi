@@ -55,11 +55,11 @@ The capability type defines this manifest shape:
 
 ```ts
 interface ExtensionManifest {
-	name?: string;
-	description?: string;
-	mcpServers?: Record<string, Omit<MCPServer, "name" | "_source">>;
-	tools?: unknown[];
-	context?: unknown;
+  name?: string;
+  description?: string;
+  mcpServers?: Record<string, Omit<MCPServer, "name" | "_source">>;
+  tools?: unknown[];
+  context?: unknown;
 }
 ```
 

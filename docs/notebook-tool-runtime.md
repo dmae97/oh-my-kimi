@@ -117,10 +117,9 @@ Resource exhaustion recovery:
 
 ## 4) Environment/session variable injection
 
-Kernel startup receives optional env map from executor:
+Kernel startup receives the optional session file path from executor:
 
 - `PI_SESSION_FILE` (session state file path)
-- `ARTIFACTS` (artifact directory)
 
 `PythonKernel.#initializeKernelEnvironment(...)` then runs init script inside kernel to:
 
@@ -130,7 +129,7 @@ Kernel startup receives optional env map from executor:
 
 Implication:
 
-- prelude helpers that read session or artifact context rely on these env vars in Python process state.
+- prelude helpers that read session context rely on this env var in Python process state.
 
 ## 5) Streaming/chunk and display handling (kernel-backed path)
 

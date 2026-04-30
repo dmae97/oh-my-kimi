@@ -101,8 +101,8 @@ providers:
 
 ### Allowed auth/discovery values
 
-- `auth`: `apiKey` (default) or `none`
-- `discovery.type`: `ollama`
+- `auth`: `apiKey` (default), `none`, or `oauth`; for `models.yml` custom models, `oauth` is accepted by schema but does not waive the `apiKey` requirement
+- `discovery.type`: `ollama`, `llama.cpp`, or `lm-studio`
 
 ## Validation rules (current)
 
@@ -119,6 +119,8 @@ Required:
 Must define at least one of:
 
 - `baseUrl`
+- `headers`
+- `compat`
 - `modelOverrides`
 - `discovery`
 
@@ -142,7 +144,7 @@ ModelRegistry pipeline (on refresh):
 5. Merge custom `models`:
    - same `provider + id` replaces existing
    - otherwise append
-6. Apply runtime-discovered models (currently Ollama and LM Studio), then re-apply model overrides.
+6. Load cached/runtime-discovered models (Ollama, llama.cpp, LM Studio, plus built-in provider managers), then re-apply model overrides.
 
 ## Canonical model equivalence and coalescing
 
@@ -153,6 +155,7 @@ Canonical ids are official upstream ids only, for example:
 - `claude-opus-4-6`
 - `claude-haiku-4-5`
 - `gpt-5.3-codex`
+
 ### `models.yml` equivalence config
 
 Example:
@@ -223,23 +226,22 @@ Provider defaults vs per-model overrides:
 If `ollama` is not explicitly configured, registry adds an implicit discoverable provider:
 
 - provider: `ollama`
-- api: `openai-completions`
+- api: `openai-responses`
 - base URL: `OLLAMA_BASE_URL` or `http://127.0.0.1:11434`
 - auth mode: keyless (`auth: none` behavior)
 
-Runtime discovery calls `GET /api/tags` on Ollama and synthesizes model entries with local defaults.
+Runtime discovery calls Ollama endpoints and normalizes discovered OpenAI-compatible models to `openai-responses`.
 
 ### Implicit llama.cpp discovery
 
 If `llama.cpp` is not explicitly configured, registry adds an implicit discoverable provider:
-Note: it's using the newer antropic messages api instead of the openai-competions.
 
 - provider: `llama.cpp`
 - api: `openai-responses`
 - base URL: `LLAMA_CPP_BASE_URL` or `http://127.0.0.1:8080`
 - auth mode: keyless (`auth: none` behavior)
 
-Runtime discovery calls `GET models` on llama.cpp and synthesizes model entries with local defaults.
+Runtime discovery calls llama.cpp model endpoints and synthesizes model entries with local defaults.
 
 ### Implicit LM Studio discovery
 
@@ -260,11 +262,11 @@ You can configure discovery yourself:
 providers:
   ollama:
     baseUrl: http://127.0.0.1:11434
-    api: openai-completions
+    api: openai-responses
     auth: none
     discovery:
       type: ollama
-      
+
   llama.cpp:
     baseUrl: http://127.0.0.1:8080
     api: openai-responses
@@ -348,7 +350,7 @@ Resolution precedence for exact selectors:
 
 Supported model roles:
 
-- `default`, `smol`, `slow`, `plan`, `commit`
+- `default`, `smol`, `slow`, `vision`, `plan`, `designer`, `commit`, `task`
 
 Role aliases like `pi/smol` expand through `settings.modelRoles`. Each role value can also append a thinking selector such as `:minimal`, `:low`, `:medium`, or `:high`.
 
@@ -499,11 +501,7 @@ providers:
 
 ## Legacy consumer caveat
 
-Most model configuration now flows through `models.yml` via `ModelRegistry`.
-
-One notable legacy path remains: web-search Anthropic auth resolution still reads `~/.omp/agent/models.json` directly in `src/web/search/auth.ts`.
-
-If you rely on that specific path, keep JSON compatibility in mind until that module is migrated.
+Most model configuration now flows through `models.yml` via `ModelRegistry`. Explicit `.json` / `.jsonc` paths remain supported only when passed programmatically to `ModelRegistry`; the default user config is `~/.omp/agent/models.yml`.
 
 ## Failure mode
 

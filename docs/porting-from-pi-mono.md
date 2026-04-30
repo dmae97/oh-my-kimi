@@ -3,14 +3,14 @@
 This guide is a repeatable checklist for porting changes from pi-mono into this repo.
 Use it for any merge: single file, feature branch, or full release sync.
 
-## Last Sync Point
+## Last Sync Point (historical upstream marker)
 
 **Commit:** `b21b42d032919de2f2e6920a76fa9a37c3920c0a`
 **Date:** 2026-03-22
 
-Update this section after each sync; do not reuse the previous range.
+Update this section after each sync; do not reuse the previous range. This commit is an upstream pi-mono marker and may not exist in this repo's local object database.
 
-When starting a new sync, generate patches from this commit forward:
+When starting a new sync, generate patches from this commit forward in a pi-mono checkout or remote that contains the commit:
 
 ```bash
 git format-patch b21b42d032919de2f2e6920a76fa9a37c3920c0a..HEAD --stdout > changes.patch
@@ -30,13 +30,12 @@ git format-patch b21b42d032919de2f2e6920a76fa9a37c3920c0a..HEAD --stdout > chang
 
 ## 2) Match import extension conventions
 
-Most runtime TypeScript sources omit `.js` in internal imports, but some test/bench entrypoints keep `.js` for ESM
-runtime compatibility. Follow the local package’s existing style; do not blanket-strip extensions.
+Most runtime TypeScript sources omit `.js` in internal imports, but several current entrypoints and tool modules keep `.js` for ESM/runtime compatibility. Follow the surrounding file and package export style; do not blanket-strip or blanket-add extensions.
 
-- In `packages/coding-agent` runtime sources, keep internal imports extensionless unless importing non-TS assets.
+- In `packages/coding-agent` runtime sources, prefer extensionless internal imports when the surrounding module does, but preserve existing `.js` imports in files that already require them.
 - In `packages/tui/test` and `packages/natives/bench`, keep `.js` where surrounding files already use it.
-- Keep real file extensions when required by tooling (e.g., `.json`, `.css`, `.md` text embeds).
-- Example: `import { x } from "./foo.js";` → `import { x } from "./foo";` (only when the package convention is extensionless).
+- Keep real file extensions when required by tooling or import assertions (e.g., `.json`, `.css`, `.md` text embeds).
+- Example: `import { x } from "./foo.js";` → `import { x } from "./foo";` only when that package/file convention is extensionless.
 
 ## 3) Replace import scopes
 
@@ -51,30 +50,29 @@ Upstream uses different package scopes. Replace them consistently.
 
 ## 4) Use Bun APIs where they improve on Node
 
-We run on Bun. Replace Node APIs only when Bun provides a better alternative.
+We run on Bun, but the current source intentionally mixes Bun APIs with small Node standard-library APIs. Replace Node APIs only when Bun provides a clearer, safer, or simpler implementation; do not mechanically rewrite every Node import.
 
-**DO replace:**
+**Prefer replacing when porting new code:**
 
-- Process spawning: `child_process.spawn` → Bun Shell `$` for simple commands, `Bun.spawn`/`Bun.spawnSync` for streaming or long-running work
-- File I/O: `fs.readFileSync` → `Bun.file().text()` / `Bun.write()`
+- Process spawning: prefer Bun Shell `$` for simple commands; use `Bun.spawn`/`Bun.spawnSync` for streaming or process control. Keep existing `child_process` only where its exact semantics are needed.
 - HTTP clients: `node-fetch`, `axios` → native `fetch`
-- Crypto hashing: `node:crypto` → Web Crypto or `Bun.hash`
 - SQLite: `better-sqlite3` → `bun:sqlite`
 - Env loading: `dotenv` → Bun loads `.env` automatically
+- Runtime text/assets: prefer Bun imports such as `with { type: "text" }` or `Bun.file()` over copy steps or bundled fallback file reads.
 
 **DO NOT replace (these work fine in Bun):**
 
-- `os.homedir()` — do NOT replace with `Bun.env.HOME`, `Bun.env.HOME`, or literal `"~"`
+- `os.homedir()` — do NOT replace with `Bun.env.HOME` or literal `"~"`
 - `os.tmpdir()` — do NOT replace with `Bun.env.TMPDIR || "/tmp"` or hardcoded paths
 - `fs.mkdtempSync()` — do NOT replace with manual path construction
 - `path.join()`, `path.resolve()`, etc. — these are fine
 
-**Import style:** Use the `node:` prefix with namespace imports only (no named imports from `node:fs` or `node:path`).
+**Import style:** Use the `node:` prefix for Node standard-library imports. Namespace imports are common, but named imports are acceptable where the surrounding code already uses them.
 
 **Additional Bun conventions:**
 
 - Prefer Bun Shell `$` for short, non-streaming commands; use `Bun.spawn` only when you need streaming I/O or process control.
-- Use `Bun.file()`/`Bun.write()` for files and `node:fs/promises` for directories.
+- Use `Bun.file()`/`Bun.write()` for simple files and `node:fs/promises` for directory-oriented operations. Existing synchronous `node:fs` calls are acceptable when the calling flow is intentionally synchronous.
 - Avoid `Bun.file().exists()` checks; use `isEnoent` handling in try/catch.
 - Prefer `Bun.sleep(ms)` over `setTimeout` wrappers.
 
@@ -99,14 +97,14 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "myapp-"));
 
 ## 5) Prefer Bun embeds (no copying)
 
-Do not copy runtime assets or vendor files at build time.
+Do not add new runtime asset copy steps. Keep assets in repo and prefer Bun embeds/imports; preserve existing explicit generation workflows such as `packages/coding-agent/src/export/html/template.generated.ts`.
 
 - If upstream copies assets into a dist folder, replace with Bun-friendly embeds.
 - Prompts are static `.md` files; use Bun text imports (`with { type: "text" }`) and Handlebars instead of inline prompt strings.
 - Use `import.meta.dir` + `Bun.file` to load adjacent non-text resources.
 - Keep assets in-repo and let the bundler include them.
-- Eliminate copy scripts unless the user explicitly requests them.
-- If upstream reads a bundled fallback file at runtime, replace filesystem reads with a Bun text embed import.
+- Eliminate copy scripts unless the user explicitly requests them or the package already has an intentional generation step.
+- If upstream reads a bundled fallback file at runtime, replace filesystem reads with a Bun text embed import unless the current package already uses a generated asset pipeline.
   - Example (Codex instructions fallback):
     - `const FALLBACK_PROMPT_PATH = join(import.meta.dir, "codex-instructions.md");` -> removed
     - `import FALLBACK_INSTRUCTIONS from "./codex-instructions.md" with { type: "text" };`
@@ -126,19 +124,19 @@ Treat `package.json` as a contract. Merge intentionally.
 
 - Keep existing formatting conventions.
 - Do not introduce `any` unless required.
-- Avoid dynamic imports and inline type imports; use top-level imports only.
+- Avoid dynamic imports unless they are required for optional dependencies, startup cost, or runtime-only modules; prefer top-level imports otherwise.
 - Never build prompts in code; prompts are static `.md` files rendered with Handlebars.
-- In coding-agent, never use `console.log`/`console.warn`/`console.error`; use `logger` from `@oh-my-pi/pi-utils`.
+- In `packages/coding-agent`, use `logger` from `@oh-my-pi/pi-utils` for internal/runtime logging; CLI command files may use `console.*` for intentional user-facing output.
 - Use `Promise.withResolvers()` instead of `new Promise((resolve, reject) => ...)`.
-- **No `private`/`protected`/`public` keywords on class fields or methods.** Use ES `#` private fields for encapsulation; leave accessible members bare (no keyword). The only exception is constructor parameter properties (`constructor(private readonly x: T)`), where the keyword is required by TypeScript. When porting upstream code that uses `private foo` or `protected bar`, convert to `#foo` (private) or bare `bar` (accessible).
+- Prefer ES `#` private fields for new encapsulated state. Constructor parameter properties already exist in current code and are acceptable; do not churn unrelated access modifiers while porting.
 - Prefer existing helpers and utilities over new ad-hoc code.
-- Preserve Bun-first infrastructure changes already made in this repo:
-  - Runtime is Bun (no Node entry points).
+  Preserve Bun-first infrastructure changes already made in this repo:
+  - Runtime is Bun (no Node entry points for the main CLI).
   - Package manager is Bun (no npm lockfiles).
-  - Heavy Node APIs (`child_process`, `readline`) are replaced with Bun equivalents.
+  - Heavy Node APIs should not be introduced casually; current source still uses selected Node APIs (`node:crypto`, `node:readline`, synchronous `node:fs`, and `child_process`) where they fit provider, CLI, or process-control semantics.
   - Lightweight Node APIs (`os.homedir`, `os.tmpdir`, `fs.mkdtempSync`, `path.*`) are kept.
   - CLI shebangs use `bun` (not `node`, not `tsx`).
-  - Packages use source files directly (no TypeScript build step).
+  - TypeScript packages generally use source files directly; `@oh-my-pi/pi-natives` exports generated native bindings from `packages/natives/native`.
   - CI workflows run Bun for install/check/test.
 
 ## 8) Remove old compatibility layers
@@ -241,12 +239,12 @@ rg "case \"" path/to/file.ts
 Use this as a final pass before you finish:
 
 - [ ] Import extensions follow the local package convention (no blanket `.js` stripping)
-- [ ] No Node-only APIs in new/ported code
+- [ ] No newly introduced Node-only APIs unless they match an existing justified pattern
 - [ ] All package scopes updated
 - [ ] `package.json` scripts use Bun
 - [ ] Prompts are `.md` text imports (no inline prompt strings)
-- [ ] No `console.*` in coding-agent (use `logger`)
-- [ ] Assets load via Bun embed patterns (no copy scripts)
+- [ ] No internal/runtime `console.*` in coding-agent; CLI user-facing output is intentional
+- [ ] Assets load via Bun embed/import patterns, or through an existing intentional generation pipeline
 - [ ] Tests or checks run (or explicitly noted as blocked)
 - [ ] No functionality regressions (see sections 11-12)
 
@@ -304,8 +302,8 @@ Our fork has architectural decisions that differ from upstream. **Do not port th
 | Upstream                                    | Our Fork                                                  | Reason                                                                |
 | ------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------- |
 | `FooterDataProvider` class                  | `StatusLineComponent`                                     | Simpler, integrated status line                                       |
-| `ctx.ui.setHeader()` / `ctx.ui.setFooter()` | Stub in non-TUI modes                                     | Implemented in TUI, no-op elsewhere                                   |
-| `ctx.ui.setEditorComponent()`               | Stub in non-TUI modes                                     | Implemented in TUI, no-op elsewhere                                   |
+| `ctx.ui.setHeader()` / `ctx.ui.setFooter()` | No-op stubs in current extension contexts                 | Not currently wired to replace the TUI status/header UI               |
+| `ctx.ui.setEditorComponent()`               | No-op stubs in current extension contexts                 | Custom editor replacement is not currently wired                      |
 | `InteractiveModeOptions` options object     | Positional constructor args (options type still exported) | Keep constructor signature; update the type when upstream adds fields |
 
 ### Component Naming
@@ -327,9 +325,9 @@ Our fork has architectural decisions that differ from upstream. **Do not port th
 
 ### File Consolidation
 
-| Upstream                                           | Our Fork                                | Reason                                  |
-| -------------------------------------------------- | --------------------------------------- | --------------------------------------- |
-| `clipboard.ts` + `clipboard-image.ts` (tool files) | `@oh-my-pi/pi-natives` clipboard module | Merged into N-API native implementation |
+| Upstream                                           | Our Fork                                                  | Reason                                        |
+| -------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------- |
+| `clipboard.ts` + `clipboard-image.ts` (tool files) | `src/utils/clipboard.ts` backed by `@oh-my-pi/pi-natives` | Native implementation with a small TS wrapper |
 
 ### Test Framework
 
@@ -340,11 +338,11 @@ Our fork has architectural decisions that differ from upstream. **Do not port th
 
 ### Tool Architecture
 
-| Upstream                            | Our Fork                                                          | Notes                                                     |
-| ----------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------- |
-| `createTool(cwd: string, options?)` | `createTools(session: ToolSession)` via `BUILTIN_TOOLS` registry  | Tool factories accept `ToolSession` and can return `null` |
-| Per-tool `*Operations` interfaces   | Per-tool interfaces remain (`FindOperations`, `GrepOperations`)   | Used for SSH/remote overrides                             |
-| Node.js `fs/promises` everywhere    | `Bun.file()`/`Bun.write()` for files; `node:fs/promises` for dirs | Prefer Bun APIs when they simplify                        |
+| Upstream                            | Our Fork                                                                                                      | Notes                                                     |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `createTool(cwd: string, options?)` | `createTools(session: ToolSession)` via `BUILTIN_TOOLS` registry                                              | Tool factories accept `ToolSession` and can return `null` |
+| Per-tool `*Operations` interfaces   | Only current per-tool override interfaces remain (for example `FindOperations`)                               | Used for SSH/remote overrides where present               |
+| Node.js `fs/promises` everywhere    | Bun file APIs for simple file writes/reads, `node:fs/promises` for dirs, selected sync `node:fs` where needed | Prefer Bun APIs when they simplify                        |
 
 ### Auth Storage
 
@@ -355,17 +353,17 @@ Our fork has architectural decisions that differ from upstream. **Do not port th
 
 ### Extensions
 
-| Upstream                      | Our Fork                                   |
-| ----------------------------- | ------------------------------------------ |
-| `jiti` for TypeScript loading | Native Bun `import()`                      |
-| `pkg.pi` manifest field       | `pkg.omp ?? pkg.pi` (prefer our namespace) |
+| Upstream                      | Our Fork                                          |
+| ----------------------------- | ------------------------------------------------- |
+| `jiti` for TypeScript loading | Native Bun `import()`                             |
+| `pkg.pi` manifest field       | `pkg.omp` preferred; fallback to `pkg.pi` remains |
 
 ### Skip These Upstream Features
 
 When porting, **skip** these files/features entirely:
 
 - `footer-data-provider.ts` — we use StatusLineComponent
-- `clipboard-image.ts` — clipboard is in `@oh-my-pi/pi-natives` N-API module
+- `clipboard-image.ts` — image clipboard support is exposed through `src/utils/clipboard.ts` backed by `@oh-my-pi/pi-natives`
 - GitHub workflow files — we have our own CI
 - `models.generated.ts` — auto-generated, regenerate locally (as models.json instead)
 

@@ -7,11 +7,12 @@ This document describes how coding-agent implements MCP JSON-RPC messaging and h
 Covers:
 
 - JSON-RPC request/response and notification flow
+- Server-to-client request handling (`ping`, `roots/list`)
 - Request correlation and lifecycle for stdio and HTTP/SSE transports
-- Timeout and cancellation behavior
+- Timeout, cancellation, and auth-refresh behavior
 - Error propagation and malformed payload handling
 - Transport selection boundaries (`stdio` vs `http`/`sse`)
-- Which reconnect/retry responsibilities are transport-level vs manager-level
+- Which reconnect/retry responsibilities are transport-level vs manager/tool-bridge-level
 
 Does not cover extension authoring UX or command UI.
 
@@ -32,8 +33,9 @@ Does not cover extension authoring UX or command UI.
 - Message shapes are defined in `types.ts` (`JsonRpcRequest`, `JsonRpcNotification`, `JsonRpcResponse`, `JsonRpcMessage`).
 - MCP client logic (`client.ts`) decides method order and session handshake:
   1. `initialize` request
-  2. `notifications/initialized` notification
-  3. method calls like `tools/list`, `tools/call`
+  2. for HTTP/SSE transports, start the optional background SSE listener after the initialize response has established any session id
+  3. `notifications/initialized` notification
+  4. method calls like `tools/list`, `tools/call`
 
 ### Transport layer (`MCPTransport`)
 
@@ -43,16 +45,16 @@ Does not cover extension authoring UX or command UI.
 - `notify(method, params?) -> Promise<void>`
 - `close()`
 - `connected`
-- optional callbacks: `onClose`, `onError`, `onNotification`
+- optional callbacks: `onClose`, `onError`, `onNotification`, `onRequest`
 
 Transport implementations own framing and I/O details:
 
 - `StdioTransport`: newline-delimited JSON over subprocess stdio
 - `HttpTransport`: JSON-RPC over HTTP POST, with optional SSE responses/listening
 
-### Important current caveat
+### Manager/client wiring
 
-Transport callbacks (`onClose`, `onError`, `onNotification`) are implemented, but current `MCPClient`/`MCPManager` flows do not wire reconnection logic to these callbacks. Notifications are only consumed if caller registers handlers.
+`connectToServer()` always installs an `onRequest` handler for standard server-to-client requests. `MCPManager` installs notification handlers, OAuth refresh hooks for HTTP OAuth servers, and `onClose` reconnect handling for managed connections.
 
 ## Transport selection
 
@@ -67,7 +69,7 @@ Transport callbacks (`onClose`, `onError`, `onNotification`) are implemented, bu
 
 ## Request IDs
 
-Each transport generates per-request IDs (`Math.random` + timestamp string). IDs are transport-local correlation tokens.
+Each transport generates per-request IDs with `Snowflake.next()`. IDs are transport-local correlation tokens.
 
 ## Stdio correlation path
 
@@ -76,8 +78,9 @@ Each transport generates per-request IDs (`Math.random` + timestamp string). IDs
 - Read loop parses JSONL from stdout and calls `#handleMessage`.
 - If inbound message has matching `id`, request resolves/rejects.
 - If inbound message has `method` and no `id`, treated as notification and sent to `onNotification`.
+- If inbound message has both `method` and `id`, treated as a server-to-client request and answered through `onRequest`; without a handler the transport replies with JSON-RPC `-32601 Method not found`.
 
-Unknown IDs are ignored (no rejection, no error callback).
+Unknown response IDs are ignored (no rejection, no error callback).
 
 ## HTTP correlation path
 
@@ -85,8 +88,9 @@ Unknown IDs are ignored (no rejection, no error callback).
 - Non-SSE response path: parse one JSON-RPC response and return `result`/throw on `error`.
 - SSE response path (`Content-Type: text/event-stream`): stream events, return first message whose `id` matches expected request ID and has `result` or `error`.
 - SSE messages with `method` and no `id` are treated as notifications.
+- SSE messages with both `method` and `id` are treated as server-to-client requests and answered with a POSTed JSON-RPC response.
 
-If SSE stream ends before matching response, request fails with `No response received for request ID ...`.
+If SSE stream ends before matching response, request fails with `No response received for request ID ...`. After the matching response is captured, the transport drains remaining SSE messages in the background.
 
 ## Notifications
 
@@ -95,7 +99,7 @@ Client emits JSON-RPC notifications via `transport.notify(...)`.
 - Stdio: writes notification frame to stdin (`jsonrpc`, `method`, optional `params`) plus newline.
 - HTTP: sends POST body without `id`; success accepts `2xx` or `202 Accepted`.
 
-Server-initiated notifications are only surfaced through transport `onNotification`; there is no default global subscriber in manager/client.
+Server-initiated notifications are surfaced through transport `onNotification`; `MCPManager` consumes known MCP list/update notifications and can forward all notifications through its own callback.
 
 ## Stdio transport internals
 
@@ -168,18 +172,20 @@ So `connected` means "transport usable", not "persistent stream established".
 - Subsequent requests/notifications include `Mcp-Session-Id`.
 - `close()` tries to terminate server session with HTTP DELETE; termination failures are ignored.
 
-## Timeout and cancellation
+## Timeout, cancellation, and auth refresh
 
-For both `request()` and `notify()`:
+For `request()`:
 
 - timeout uses `AbortController` (`config.timeout ?? 30000`)
 - external signal, if provided, is merged via `AbortSignal.any([...])`
 - AbortError handling distinguishes caller abort vs timeout
 
-Errors thrown:
+For `notify()`:
 
-- timeout: `Request timeout after ...ms` (or `SSE response timeout ...`, `Notify timeout ...`)
-- caller abort: original AbortError is rethrown when external signal is already aborted
+- timeout uses an internal `AbortController` (`config.timeout ?? 30000`)
+- there is no external abort option on the transport interface
+
+For HTTP OAuth configs managed by `MCPManager`, `request()` retries once on `HTTP 401`/`403` if token refresh returns replacement headers.
 
 ## HTTP error propagation
 
@@ -204,9 +210,9 @@ Two SSE paths exist:
    - can process interleaved notifications during same stream
 
 2. **Background SSE listener** (`startSSEListener()`)
-   - optional GET listener for server-initiated notifications
-   - currently not automatically started by MCP manager/client
-   - if GET returns `405`, listener silently disables itself (server does not support this mode)
+   - optional GET listener for server-initiated notifications and server-to-client requests
+   - `connectToServer()` starts it for HTTP/SSE transports after `initialize` and before `notifications/initialized`
+   - if GET returns `405`, another non-OK status, or no body, listener silently disables itself
 
 ## Malformed payload and disconnect handling
 
@@ -214,7 +220,7 @@ SSE JSON parsing errors bubble out of `readSseJson` and reject request/listener.
 
 - Request SSE parse errors reject the active request.
 - Background listener errors trigger `onError` (except AbortError).
-- No auto-reconnect for background listener.
+- Transport does not restart the listener itself; managed connections may reconnect through manager `onClose` handling.
 
 ## `json-rpc.ts` utility vs transport abstraction
 
@@ -234,28 +240,28 @@ This path is lightweight but less robust than full transport implementation.
 
 Current transport implementations do **not**:
 
-- retry failed requests
+- retry ordinary failed requests, except the HTTP transport's single OAuth-refresh retry when `onAuthError` is wired
 - reconnect after stdio process exit
-- reconnect SSE listeners
+- reconnect SSE listeners by themselves
 - resend in-flight requests after disconnect
 
 They fail fast and propagate errors.
 
-## Manager/client-level
+## Manager/tool-bridge level
 
-`MCPManager` handles discovery/initial connection orchestration and can reconnect only by running connect flows again (`connectToServer`/`discoverAndConnect` paths). It does not auto-heal an already connected transport on runtime failure callbacks.
+`MCPManager` wires `transport.onClose` for managed connections and runs `reconnectServer(name)` when a transport closes unexpectedly. Reconnect tears down the stale connection, re-resolves auth/config values, retries with backoff (`500`, `1000`, `2000`, `4000` ms), reloads tools, and preserves stale tools while reconnecting.
 
-`MCPManager` does have startup fallback behavior for slow servers (deferred tools from cache), but that is tool availability fallback, not transport retry.
+`MCPTool` and `DeferredMCPTool` also attempt one reconnect + retry for retriable connection errors during a tool call. This is tool availability recovery, not transport-level retry.
 
 ## Failure scenarios summary
 
 - **Malformed stdio message line**: dropped; stream continues.
-- **Stdio stream/process ends**: transport closes; pending requests rejected as `Transport closed`.
-- **HTTP non-2xx**: request/notify throws HTTP error.
+- **Stdio stream/process ends**: transport closes; pending requests rejected as `Transport closed`; manager-managed connections trigger reconnect.
+- **HTTP non-2xx**: request/notify throws HTTP error; managed OAuth requests can refresh auth and retry once on 401/403.
 - **Invalid JSON response**: parse exception propagated.
 - **SSE ends without matching id**: request fails with `No response received for request ID ...`.
 - **Timeout**: transport-specific timeout error.
-- **Caller abort**: AbortError/reason propagated from caller signal.
+- **Caller abort**: AbortError/reason propagated from caller signal where the method accepts one.
 
 ## Practical boundary rule
 

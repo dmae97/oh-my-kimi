@@ -6,50 +6,44 @@ This document describes how the coding-agent resolves configuration today: which
 
 Primary implementation:
 
-- `src/config.ts`
-- `src/config/settings.ts`
-- `src/config/settings-schema.ts`
-- `src/discovery/builtin.ts`
-- `src/discovery/helpers.ts`
+- `packages/coding-agent/src/config.ts`
+- `packages/coding-agent/src/config/settings.ts`
+- `packages/coding-agent/src/config/settings-schema.ts`
+- `packages/coding-agent/src/discovery/builtin.ts`
+- `packages/coding-agent/src/discovery/helpers.ts`
 
 Key integration points:
 
-- `src/capability/index.ts`
-- `src/discovery/index.ts`
-- `src/extensibility/skills.ts`
-- `src/extensibility/hooks/loader.ts`
-- `src/extensibility/custom-tools/loader.ts`
-- `src/extensibility/extensions/loader.ts`
+- `packages/coding-agent/src/capability/index.ts`
+- `packages/coding-agent/src/discovery/index.ts`
+- `packages/coding-agent/src/extensibility/skills.ts`
+- `packages/coding-agent/src/extensibility/hooks/loader.ts`
+- `packages/coding-agent/src/extensibility/custom-tools/loader.ts`
+- `packages/coding-agent/src/extensibility/extensions/loader.ts`
 
 ---
 
 ## Resolution flow (visual)
 
 ```text
-         Config roots (ordered)
+         Generic helper order (`config.ts`)
 ┌───────────────────────────────────────┐
-│ 1) ~/.omp/agent + <cwd>/.omp          │
-│ 2) ~/.claude   + <cwd>/.claude        │
-│ 3) ~/.codex    + <cwd>/.codex         │
-│ 4) ~/.gemini   + <cwd>/.gemini        │
+│ 1) ~/.omp/agent, ~/.claude, ...       │
+│ 2) <cwd>/.omp, <cwd>/.claude, ...     │
 └───────────────────────────────────────┘
                     │
                     ▼
-        config.ts helper resolution
-  (getConfigDirs/findConfigFile/findNearest...)
+        capability providers enumerate items
+ (native provider scans project .omp before user .omp;
+  other providers have their own loading rules)
                     │
                     ▼
-       capability providers enumerate items
- (native, claude, codex, gemini, agents, etc.)
-                    │
-                    ▼
-      priority sort + per-capability dedup
+      provider priority sort + capability dedup
                     │
                     ▼
           subsystem-specific consumption
    (settings, skills, hooks, tools, extensions)
 ```
-
 
 ## 1) Config roots and source order
 
@@ -212,35 +206,35 @@ Relevant keys:
 
 ---
 
-## 6) Native `.omp` provider behavior (`src/discovery/builtin.ts`)
+## 6) Native `.omp` provider behavior (`packages/coding-agent/src/discovery/builtin.ts`)
 
-Native provider (`id: native`) reads from:
+Native provider (`id: native`) reads native config from:
 
 - project: `<cwd>/.omp/...`
 - user: `~/.omp/agent/...`
 
-### Directory admission rule
+### Directory admission rules
 
-`builtin.ts` only includes a config root if the directory exists **and is non-empty** (`ifNonEmptyDir`).
+- Slash commands, rules, prompts, instructions, hooks, tools, extensions, extension modules, and settings use a project/user root only when the root directory exists and is non-empty.
+- Skills scan `<ancestor>/.omp/skills` for each ancestor from the current working directory up to the repo root/home boundary, plus `~/.omp/agent/skills`, without requiring the root `.omp` directory itself to be non-empty.
+- `SYSTEM.md` and `AGENTS.md` read user-level files directly and use nearest-ancestor project `.omp` lookup for project files, but the project `.omp` directory must be non-empty.
 
 ### Scope-specific loading
 
-- Skills: `skills/*/SKILL.md`
+- Skills: `<ancestor>/.omp/skills/*/SKILL.md` and `~/.omp/agent/skills/*/SKILL.md`
 - Slash commands: `commands/*.md`
 - Rules: `rules/*.{md,mdc}`
 - Prompts: `prompts/*.md`
 - Instructions: `instructions/*.md`
 - Hooks: `hooks/pre/*`, `hooks/post/*`
-- Tools: `tools/*.json|*.md` and `tools/<name>/index.ts`
+- Tools: `tools/*.{json,md,ts,js,sh,bash,py}` and `tools/<name>/index.ts`
 - Extension modules: discovered under `extensions/` (+ legacy `settings.json.extensions` string array)
 - Extensions: `extensions/<name>/gemini-extension.json`
 - Settings capability: `settings.json`
 
 ### Nearest-project lookup nuance
 
-For `SYSTEM.md` and `AGENTS.md`, native provider uses nearest-ancestor project `.omp` directory search (walk-up) but still requires the `.omp` dir to be non-empty.
-
----
+## For `SYSTEM.md` and `AGENTS.md`, native provider uses nearest-ancestor project `.omp` directory search (walk-up) and still requires the project `.omp` dir to be non-empty.
 
 ## 7) How major subsystems consume config
 
@@ -291,8 +285,7 @@ Settings capability items are not deduplicated; `Settings.#loadProjectSettings()
 
 - `ConfigFile` JSON -> YAML migration for YAML-targeted files.
 - Settings migration from `settings.json` and `agent.db` to `config.yml`.
-- Settings key migrations (`queueMode`, `ask.timeout`, flat `theme`).
-- Extension manifest compatibility: loader accepts both `package.json.omp` and `package.json.pi` manifest sections.
+- Settings key migrations (`queueMode`, `ask.timeout`, flat `theme`, `task.isolation.enabled`, `statusLine.plan_mode`).
 - Legacy setting names `skills.enablePiUser` / `skills.enablePiProject` are still active gates for native skill source.
 
 If these compatibility paths are removed in code, update this document immediately; several runtime behaviors still depend on them today.

@@ -23,23 +23,23 @@ At session start, if a memory summary exists for the current project, it is inje
 
 The agent can read memory files directly using `memory://` URLs with the `read` tool:
 
-| URL | Content |
-|---|---|
-| `memory://root` | Compact summary injected at startup |
-| `memory://root/MEMORY.md` | Full long-term memory document |
-| `memory://root/skills/<name>/SKILL.md` | A generated skill playbook |
+| URL                                    | Content                             |
+| -------------------------------------- | ----------------------------------- |
+| `memory://root`                        | Compact summary injected at startup |
+| `memory://root/MEMORY.md`              | Full long-term memory document      |
+| `memory://root/skills/<name>/SKILL.md` | A generated skill playbook          |
 
 ### `/memory` slash command
 
-| Subcommand | Effect |
-|---|---|
-| `view` | Show the current memory injection payload |
-| `clear` / `reset` | Delete all memory data and generated artifacts |
-| `enqueue` / `rebuild` | Force consolidation to run at next startup |
+| Subcommand            | Effect                                         |
+| --------------------- | ---------------------------------------------- |
+| `view`                | Show the current memory injection payload      |
+| `clear` / `reset`     | Delete all memory data and generated artifacts |
+| `enqueue` / `rebuild` | Force consolidation to run at next startup     |
 
 ## How it works
 
-Memories are built by a background pipeline that at startup or manually triggered via slash command.
+Memories are built by a background pipeline that runs at startup or when manually triggered via slash command.
 
 **Phase 1 — per-session extraction:** For each past session that has changed since it was last processed, a model reads the session history and extracts durable signal: technical decisions, constraints, resolved failures, recurring workflows. Sessions that are too recent, too old, or currently active are skipped. Each extraction produces a raw memory block and a short synopsis for that session.
 
@@ -55,41 +55,41 @@ All output is scanned for secrets before being written to disk.
 
 ### Extraction behavior
 
-Memory extraction and consolidation behavior is driven entirely by static prompt files in `src/prompts/memories/`.
+Memory extraction and consolidation behavior is driven by static prompt files in `packages/coding-agent/src/prompts/memories/`.
 
-| File | Purpose | Variables |
-|---|---|---|
-| `stage_one_system.md` | System prompt for per-session extraction | — |
-| `stage_one_input.md` | User-turn template wrapping session content | `{{thread_id}}`, `{{response_items_json}}` |
-| `consolidation.md` | Prompt for cross-session consolidation | `{{raw_memories}}`, `{{rollout_summaries}}` |
-| `read_path.md` | Memory guidance injected into live sessions | `{{memory_summary}}` |
+| File                  | Purpose                                     | Variables                                   |
+| --------------------- | ------------------------------------------- | ------------------------------------------- |
+| `stage_one_system.md` | System prompt for per-session extraction    | —                                           |
+| `stage_one_input.md`  | User-turn template wrapping session content | `{{thread_id}}`, `{{response_items_json}}`  |
+| `consolidation.md`    | Prompt for cross-session consolidation      | `{{raw_memories}}`, `{{rollout_summaries}}` |
+| `read_path.md`        | Memory guidance injected into live sessions | `{{memory_summary}}`                        |
 
 ### Model selection
 
 Memory piggybacks on the model role system.
 
-| Phase | Role | Purpose |
-|---|---|---|
-| Phase 1 (extraction) | `default` | Per-session knowledge extraction |
-| Phase 2 (consolidation) | `smol` | Cross-session synthesis |
+| Phase                   | Role                                                                | Purpose                          |
+| ----------------------- | ------------------------------------------------------------------- | -------------------------------- |
+| Phase 1 (extraction)    | `default`                                                           | Per-session knowledge extraction |
+| Phase 2 (consolidation) | `smol` (falls back to `default`, then current/first registry model) | Cross-session synthesis          |
 
-If `smol` is not configured, Phase 2 falls back to the `default` role.
+If the requested memory role is not configured, memory model resolution falls back to the `default` role, then the active session model, then the first model in the registry.
 
 ## Configuration
 
-| Setting | Default | Description |
-|---|---|---|
-| `memories.enabled` | `false` | Master switch |
-| `memories.maxRolloutAgeDays` | `30` | Sessions older than this are not processed |
-| `memories.minRolloutIdleHours` | `12` | Sessions active more recently than this are skipped |
-| `memories.maxRolloutsPerStartup` | `64` | Cap on sessions processed in a single startup |
-| `memories.summaryInjectionTokenLimit` | `5000` | Max tokens of the summary injected into the system prompt |
+| Setting                               | Default | Description                                               |
+| ------------------------------------- | ------- | --------------------------------------------------------- |
+| `memories.enabled`                    | `false` | Master switch                                             |
+| `memories.maxRolloutAgeDays`          | `30`    | Sessions older than this are not processed                |
+| `memories.minRolloutIdleHours`        | `12`    | Sessions active more recently than this are skipped       |
+| `memories.maxRolloutsPerStartup`      | `64`    | Cap on sessions processed in a single startup             |
+| `memories.summaryInjectionTokenLimit` | `5000`  | Max tokens of the summary injected into the system prompt |
 
 Additional tuning knobs (concurrency, lease durations, token budgets) are available in config for advanced use.
 
 ## Key files
 
-- `src/memories/index.ts` — pipeline orchestration, injection, slash command handling
-- `src/memories/storage.ts` — SQLite-backed job queue and thread registry
-- `src/prompts/memories/` — memory prompt templates
-- `src/internal-urls/memory-protocol.ts` — `memory://` URL handler
+- `packages/coding-agent/src/memories/index.ts` — pipeline orchestration, injection, slash command handling
+- `packages/coding-agent/src/memories/storage.ts` — SQLite-backed job queue and thread registry
+- `packages/coding-agent/src/prompts/memories/` — memory prompt templates
+- `packages/coding-agent/src/internal-urls/memory-protocol.ts` — `memory://` URL handler

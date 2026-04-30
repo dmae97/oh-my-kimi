@@ -165,14 +165,16 @@ Lifecycle/state transition:
    - loads entries / migrates / blob-resolves / reindexes
    - if missing/invalid file data: initializes a new session at that path and rewrites header
 9. update `agent.sessionId`
-10. rebuild context via `buildSessionContext()`
-11. emit `session_switch` hook event (`reason: "resume"`, `previousSessionFile`)
-12. replace agent messages with rebuilt context
-13. restore default model from `sessionContext.models.default` if available and present in model registry
-14. restore thinking level:
-    - if branch already has `thinking_level_change`, apply saved session level
-    - else derive default thinking level from settings, clamp to model capability, set it, and append a new `thinking_level_change` entry
-15. reconnect agent listeners and return `true`
+10. rebuild display context via `buildDisplaySessionContext()`
+11. restore persisted/discovered MCP tool selections and rebuild active tools/system prompt when discovery is enabled
+12. emit `session_switch` hook event (`reason: "resume"`, `previousSessionFile`)
+13. replace agent messages with rebuilt context and sync todos
+14. close provider sessions when switching to a different session or when same-session reload changed replay messages
+15. restore default model from `sessionContext.models.default` if available and present in model registry
+16. restore thinking level and service tier:
+    - thinking uses persisted `thinking_level_change`, otherwise the configured default clamped to model capability
+    - service tier uses persisted `service_tier_change`, otherwise the configured `serviceTier` setting (`"none"` becomes unset)
+17. reconnect agent listeners and return `true`
 
 ## UI state rebuild after interactive switch
 

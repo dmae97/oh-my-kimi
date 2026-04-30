@@ -51,11 +51,12 @@ Those custom roles are then transformed into LLM-facing user messages in `conver
 
 ### Triggers
 
-Compaction can run in three ways:
+Compaction/context maintenance can run in four ways:
 
-1. **Manual**: `/compact [instructions]` calls `AgentSession.compact(...)`.
-2. **Automatic overflow recovery**: after an assistant error that matches context overflow.
-3. **Automatic threshold compaction**: after a successful turn when context exceeds threshold.
+1. **Manual context compaction**: `/compact [instructions]` calls `AgentSession.compact(...)`.
+2. **Automatic overflow recovery**: after a same-model assistant error that matches context overflow.
+3. **Automatic threshold maintenance**: after a successful turn when context exceeds the resolved threshold.
+4. **Idle maintenance**: `runIdleCompaction()` can invoke the same auto-maintenance path with reason `"idle"`.
 
 ### Compaction shape (visual)
 
@@ -91,22 +92,28 @@ What the LLM sees:
     prompt   from cmp          messages from firstKeptEntryId
 ```
 
+### Overflow-retry vs threshold/idle maintenance
 
-### Overflow-retry vs threshold compaction
+The automatic paths are intentionally different:
 
-The two automatic paths are intentionally different:
-
-- **Overflow-retry compaction**
-  - Trigger: current-model assistant error is detected as context overflow.
+- **Overflow recovery**
+  - Trigger: current-model assistant error is detected as context overflow and the error is not older than the latest compaction.
   - The failing assistant error message is removed from active agent state before retry.
-  - Auto compaction runs with `reason: "overflow"` and `willRetry: true`.
+  - Context promotion is tried first; if a configured larger model is available, the agent switches model and retries without compacting.
+  - If promotion is unavailable and compaction is enabled, context-full compaction runs with `reason: "overflow"` and `willRetry: true`; handoff strategy is not used for overflow.
   - On success, agent auto-continues (`agent.continue()`) after compaction.
 
-- **Threshold compaction**
-  - Trigger: `contextTokens > contextWindow - compaction.reserveTokens`.
-  - Runs with `reason: "threshold"` and `willRetry: false`.
-  - On success, if `compaction.autoContinue !== false`, injects a synthetic prompt:
-    - `"Continue if you have next steps."`
+- **Threshold maintenance**
+  - Trigger: successful, non-error assistant message whose adjusted context tokens exceed `resolveThresholdTokens(...)`.
+  - Tool-output pruning can reduce the measured token count before threshold comparison.
+  - Context promotion is tried before compaction.
+  - If promotion is unavailable, auto maintenance runs with `reason: "threshold"` and `willRetry: false`.
+  - With `compaction.strategy: "handoff"`, threshold maintenance starts a new handoff session instead of writing a compaction entry; if handoff returns no document without aborting, it falls back to context-full compaction.
+  - On success, if `compaction.autoContinue !== false`, schedules an agent-authored developer auto-continue prompt from `prompts/system/auto-continue.md`.
+
+- **Idle maintenance**
+  - Trigger: `runIdleCompaction()` when not streaming or already compacting.
+  - Uses `reason: "idle"` and does not auto-continue afterward.
 
 ### Pre-compaction pruning
 
@@ -189,11 +196,12 @@ Prompt selection:
 - split-turn second pass: `compaction-turn-prefix.md`
 - short UI summary: `compaction-short-summary.md`
 
-Remote summarization mode:
+Remote summarization modes:
 
-- If `compaction.remoteEndpoint` is set, compaction POSTs:
+- If `compaction.remoteEndpoint` is set and remote compaction is enabled, local summary generation POSTs:
   - `{ systemPrompt, prompt }`
 - Expects JSON containing at least `{ summary }`.
+- For OpenAI/OpenAI Codex models, compaction first tries the provider-native `/responses/compact` endpoint when remote compaction is enabled. It preserves provider replacement history in `preserveData.openaiRemoteCompaction` and falls back to local summarization if that native request fails.
 
 ### File-operation context in summaries
 
@@ -224,8 +232,8 @@ Summary text gets file tags appended via prompt template:
 
 After summary generation (or hook-provided summary), agent session:
 
-1. Appends `CompactionEntry` with `appendCompaction(...)`.
-2. Rebuilds context via `buildSessionContext()`.
+1. Appends `CompactionEntry` with `appendCompaction(...)` for context-full maintenance; handoff strategy creates a new session and injects a handoff `custom_message` instead.
+2. Rebuilds display context from the active leaf via `buildDisplaySessionContext()`.
 3. Replaces live agent messages with rebuilt context.
 4. Emits `session_compact` hook event.
 
@@ -261,7 +269,6 @@ After navigation with summary:
     A ───┤
          └─ E ─ F (new leaf)
 ```
-
 
 ### Preparation and token budget
 
@@ -334,8 +341,8 @@ Post-navigation event exposing new/old leaf and optional summary entry.
 - Manual compaction aborts current agent operation first.
 - `abortCompaction()` cancels both manual and auto-compaction controllers.
 - Auto compaction emits start/end session events for UI/state updates.
-- Auto compaction can try multiple model candidates and retry transient failures.
-- Overflow errors are excluded from generic retry path because they are handled by compaction.
+- Auto compaction can try multiple model candidates and retry transient failures; long retry delays prefer the next candidate when one is available.
+- Overflow errors are excluded from generic retry path because they are handled by context promotion/compaction.
 - If auto-compaction fails:
   - overflow path emits `Context overflow recovery failed: ...`
   - threshold path emits `Auto-compaction failed: ...`
@@ -346,10 +353,14 @@ Post-navigation event exposing new/old leaf and optional summary entry.
 From `settings-schema.ts`:
 
 - `compaction.enabled` = `true`
+- `compaction.strategy` = `"context-full"` (`"handoff"` and `"off"` are also supported)
 - `compaction.reserveTokens` = `16384`
 - `compaction.keepRecentTokens` = `20000`
 - `compaction.autoContinue` = `true`
+- `compaction.remoteEnabled` = `true`
 - `compaction.remoteEndpoint` = `undefined`
+- `compaction.thresholdPercent` = `-1` and `compaction.thresholdTokens` = `-1`; when no positive override is set, the threshold is `contextWindow - max(15% of contextWindow, reserveTokens)`
+- `compaction.idleEnabled` = `true`
 - `branchSummary.enabled` = `false`
 - `branchSummary.reserveTokens` = `16384`
 

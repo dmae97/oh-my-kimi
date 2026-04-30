@@ -5,7 +5,7 @@ This document explains how token/tool streaming is normalized in `@oh-my-pi/pi-a
 ## End-to-end flow
 
 1. `streamSimple()` (`packages/ai/src/stream.ts`) maps generic options and dispatches to a provider stream function.
-2. Provider stream functions (`anthropic.ts`, `openai-responses.ts`, `google.ts`) translate provider-native stream events into the unified `AssistantMessageEvent` sequence.
+2. Provider stream functions translate provider-native stream events into the unified `AssistantMessageEvent` sequence. Current built-ins include Anthropic, OpenAI Responses/Completions/Codex/Azure Responses, Google Gemini/Gemini CLI/Vertex, Bedrock Converse, Ollama, Cursor, plus GitLab Duo/Kimi wrappers and extension-registered custom APIs.
 3. Each provider pushes events into `AssistantMessageEventStream` (`packages/ai/src/utils/event-stream.ts`), which throttles delta events and exposes:
    - async iteration for incremental updates
    - `result()` for final `AssistantMessage`
@@ -18,9 +18,9 @@ All providers emit the same shape (`AssistantMessageEvent` in `packages/ai/src/t
 
 - `start`
 - content block lifecycle triplets:
-  - text: `text_start` → `text_delta`* → `text_end`
-  - thinking: `thinking_start` → `thinking_delta`* → `thinking_end`
-  - tool call: `toolcall_start` → `toolcall_delta`* → `toolcall_end`
+  - text: `text_start` → `text_delta`\* → `text_end`
+  - thinking: `thinking_start` → `thinking_delta`\* → `thinking_end`
+  - tool call: `toolcall_start` → `toolcall_delta`\* → `toolcall_end`
 - terminal event:
   - `done` with `reason: "stop" | "length" | "toolUse"`
   - or `error` with `reason: "aborted" | "error"`
@@ -66,9 +66,9 @@ Tool-call argument streaming:
 - `arguments` are reparsed on each delta via `parseStreamingJson()`
 - `toolcall_end` reparses once more, then strips `partialJson`
 
-## OpenAI Responses (`openai-responses`)
+## OpenAI Responses family (`openai-responses`, `openai-codex-responses`, `azure-openai-responses`)
 
-Source: `packages/ai/src/providers/openai-responses.ts`
+Sources: `packages/ai/src/providers/openai-responses.ts`, `openai-codex-responses.ts`, and `azure-openai-responses.ts`
 
 Normalization points:
 
@@ -182,7 +182,7 @@ Current design favors responsiveness and simple ordering over bounded-buffer flo
 
 `AgentSession` then consumes those events for session-level behaviors:
 
-- TTSR watches `message_update.assistantMessageEvent` for `text_delta` and `toolcall_delta`
+- TTSR watches `message_update.assistantMessageEvent` for `text_delta`, `thinking_delta`, and `toolcall_delta`
 - streaming edit guard inspects `toolcall_delta`/`toolcall_end` on `edit` calls and can abort early
 - persistence writes finalized messages at `message_end`
 - auto-retry examines assistant `stopReason === "error"` plus `errorMessage` heuristics
@@ -207,12 +207,13 @@ Provider-specific (not fully abstracted):
 
 ## Implementation files
 
-- [`../../ai/src/stream.ts`](../packages/ai/src/stream.ts) — provider dispatch, option mapping, API key/session plumbing.
+- [`../../ai/src/stream.ts`](../packages/ai/src/stream.ts) — provider dispatch, option mapping, API key/session plumbing, custom API dispatch, and provider-specific credential handling.
 - [`../../ai/src/utils/event-stream.ts`](../packages/ai/src/utils/event-stream.ts) — generic stream queue + assistant delta throttling.
 - [`../../ai/src/utils/json-parse.ts`](../packages/ai/src/utils/json-parse.ts) — partial JSON parsing for streamed tool arguments.
 - [`../../ai/src/providers/anthropic.ts`](../packages/ai/src/providers/anthropic.ts) — Anthropic event translation and tool JSON delta accumulation.
-- [`../../ai/src/providers/openai-responses.ts`](../packages/ai/src/providers/openai-responses.ts) — OpenAI Responses event translation and status mapping.
-- [`../../ai/src/providers/google.ts`](../packages/ai/src/providers/google.ts) — Gemini stream chunk-to-block translation.
+- [`../../ai/src/providers/openai-responses.ts`](../packages/ai/src/providers/openai-responses.ts), [`openai-codex-responses.ts`](../packages/ai/src/providers/openai-codex-responses.ts), [`azure-openai-responses.ts`](../packages/ai/src/providers/azure-openai-responses.ts) — Responses-family event translation and status mapping.
+- [`../../ai/src/providers/google.ts`](../packages/ai/src/providers/google.ts), [`google-gemini-cli.ts`](../packages/ai/src/providers/google-gemini-cli.ts), [`google-vertex.ts`](../packages/ai/src/providers/google-vertex.ts) — Gemini stream chunk-to-block translation variants.
 - [`../../ai/src/providers/google-shared.ts`](../packages/ai/src/providers/google-shared.ts) — Gemini finish-reason mapping and shared conversion rules.
+- [`../../ai/src/providers/amazon-bedrock.ts`](../packages/ai/src/providers/amazon-bedrock.ts), [`openai-completions.ts`](../packages/ai/src/providers/openai-completions.ts), [`ollama.ts`](../packages/ai/src/providers/ollama.ts), [`cursor.ts`](../packages/ai/src/providers/cursor.ts) — additional built-in stream adapters using the same event contract.
 - [`../../agent/src/agent-loop.ts`](../packages/agent/src/agent-loop.ts) — provider stream consumption and `message_update` bridging.
 - [`../src/session/agent-session.ts`](../packages/coding-agent/src/session/agent-session.ts) — session-level handling of streaming updates, abort, retry, and persistence.

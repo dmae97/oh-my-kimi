@@ -1,51 +1,48 @@
 # Natives Architecture
 
-`@oh-my-pi/pi-natives` is a three-layer stack:
+`@oh-my-pi/pi-natives` is now a two-layer package around a loader:
 
-1. **TypeScript wrapper/API layer** exposes stable JS/TS entrypoints.
-2. **Addon loading/validation layer** resolves and validates the `.node` binary for the current runtime.
-3. **Rust N-API module layer** implements performance-critical primitives exported to JS.
+1. **CommonJS loader/package entrypoint** resolves and loads the correct `.node` addon and patches generated enum objects onto the export object.
+2. **Rust N-API module layer** implements the exported functions/classes and emits the generated TypeScript declarations.
 
 This document is the foundation for deeper module-level docs.
 
 ## Implementation files
 
-- `packages/natives/src/index.ts`
-- `packages/natives/src/native.ts`
-- `packages/natives/src/bindings.ts`
-- `packages/natives/src/embedded-addon.ts`
+- `packages/natives/native/index.js`
+- `packages/natives/native/index.d.ts`
+- `packages/natives/native/loader-state.js`
+- `packages/natives/native/embedded-addon.js`
 - `packages/natives/scripts/build-native.ts`
 - `packages/natives/scripts/embed-native.ts`
+- `packages/natives/scripts/gen-enums.ts`
 - `packages/natives/package.json`
 - `crates/pi-natives/src/lib.rs`
 
-## Layer 1: TypeScript wrapper/API layer
+## Package entrypoint and public surface
 
-`packages/natives/src/index.ts` is the public barrel. It groups exports by capability domain and re-exports typed wrappers rather than exposing raw N-API bindings directly.
+`packages/natives/package.json` points directly at generated native bindings:
 
-Current top-level groups:
+- `main`: `./native/index.js`
+- `types`: `./native/index.d.ts`
+- `exports["."].types`: `./native/index.d.ts`
+- `exports["."].import`: `./native/index.js`
 
-- **Search/text primitives**: `grep`, `glob`, `text`, `highlight`
-- **Execution/process/terminal primitives**: `shell`, `pty`, `ps`, `keys`
-- **System/media/conversion primitives**: `image`, `html`, `clipboard`, `system-info`, `work`
+There is no current `packages/natives/src` TypeScript wrapper layer. Consumers import functions/classes/enums directly from `@oh-my-pi/pi-natives`; the type contract is the generated `native/index.d.ts` plus enum exports appended by `scripts/gen-enums.ts`.
 
-`packages/natives/src/bindings.ts` defines the base interface contract:
+Current capability groups in the generated API include:
 
-- `NativeBindings` starts with shared members (`cancelWork(id: number)`)
-- module-specific bindings are added by declaration merging from each module’s `types.ts`
-- `Cancellable` standardizes timeout and abort-signal options for wrappers that expose cancellation
+- **Search/text/code primitives**: `grep`, `search`, `hasMatch`, `fuzzyFind`, `glob`, `astGrep`, `astEdit`, text width/slicing/wrapping/sanitization, syntax highlighting, token counting.
+- **Execution/process/terminal primitives**: `executeShell`, `Shell`, `PtySession`, process-tree helpers, key parsing.
+- **System/media/conversion primitives**: clipboard, image resize/encode/SIXEL, HTML-to-Markdown, macOS appearance/power helpers, work profiling, Windows ProjFS overlay helpers.
 
-**Guaranteed contract (API-facing):** consumers import from `@oh-my-pi/pi-natives` and use typed wrappers.
+## Loader layer
 
-**Implementation detail (may change):** declaration merging and internal wrapper layout (`src/<module>/index.ts`, `src/<module>/types.ts`).
-
-## Layer 2: Addon loading and validation
-
-`packages/natives/src/native.ts` owns runtime addon selection, optional extraction, and export validation.
+`packages/natives/native/index.js` owns runtime addon selection and optional embedded extraction.
 
 ### Candidate resolution model
 
-- Platform tag is `"${process.platform}-${process.arch}"`.
+- Platform tag is `${process.platform}-${process.arch}`.
 - Supported tags are currently:
   - `linux-x64`
   - `linux-arm64`
@@ -55,56 +52,56 @@ Current top-level groups:
 - x64 can use CPU variants:
   - `modern` (AVX2-capable)
   - `baseline` (fallback)
-- Non-x64 uses the default filename (no variant suffix).
+- Non-x64 uses the default filename without a variant suffix.
 
 Filename strategy:
 
-- Release: `pi_natives.<platform>-<arch>.node`
-- x64 variant release: `pi_natives.<platform>-<arch>-modern.node` and/or `...-baseline.node`
+- Default: `pi_natives.<platform>-<arch>.node`
+- x64 variant: `pi_natives.<platform>-<arch>-modern.node` or `...-baseline.node`
+- x64 runtime fallback includes the unsuffixed default filename after variant candidates.
 
 ### Platform-specific variant detection
 
 For x64, variant selection uses:
 
-- **Linux**: `/proc/cpuinfo`
-- **macOS**: `sysctl machdep.cpu.leaf7_features` / `machdep.cpu.features`
-- **Windows**: PowerShell check for `System.Runtime.Intrinsics.X86.Avx2`
+- Linux: `/proc/cpuinfo`
+- macOS: `sysctl -n machdep.cpu.leaf7_features`, then `machdep.cpu.features`
+- Windows: PowerShell check for `System.Runtime.Intrinsics.X86.Avx2`
 
-`PI_NATIVE_VARIANT` can explicitly force `modern` or `baseline`.
+`PI_NATIVE_VARIANT` can force `modern` or `baseline`; invalid values are ignored.
 
 ### Binary distribution and extraction model
 
-`packages/natives/package.json` includes both `src` and `native` in published files. The `native/` directory stores prebuilt platform artifacts.
+`packages/natives/package.json` publishes `native/`, which contains the loader, generated declarations, generated enum patch, embedded-addon manifest stub, and prebuilt `.node` artifacts.
 
-For compiled binaries (`PI_COMPILED` or Bun embedded runtime markers), loader behavior is:
+For compiled binaries, loader behavior is:
 
-1. Check versioned user cache path: `<getNativesDir()>/<packageVersion>/...`
+1. Check versioned user cache path: `<getNativesDir()>/<packageVersion>/...`.
 2. Check legacy compiled-binary location:
    - Windows: `%LOCALAPPDATA%/omp` (fallback `%USERPROFILE%/AppData/Local/omp`)
    - non-Windows: `~/.local/bin`
-3. Fall back to packaged `native/` and executable directory candidates
+3. Fall back to packaged `native/` and executable directory candidates.
 
-If an embedded addon manifest is present (`embedded-addon.ts` generated by `scripts/embed-native.ts`), `native.ts` can materialize the matching embedded binary into the versioned cache directory before loading.
+`getNativesDir()` uses `$XDG_DATA_HOME/omp/natives` when `$XDG_DATA_HOME/omp` exists; otherwise it uses `~/.omp/natives`.
 
-### Validation and failure modes
+If a populated embedded addon manifest is present, it is also treated as a compiled-binary signal. The loader can extract the matching embedded `.node` into the versioned cache directory before candidate probing.
 
-After `require(candidate)`, `validateNative(...)` verifies required exports (for example `grep`, `glob`, `highlightCode`, `PtySession`, `Shell`, `getSystemInfo`, `getWorkProfile`, `invalidateFsScanCache`).
+### Failure modes
 
-Failure paths are explicit:
+Loader failures are explicit:
 
-- **Unsupported platform tag**: throws with supported platform list
-- **No loadable candidate**: throws with all attempted paths and remediation hints
-- **Missing exports**: throws with exact missing names and rebuild command
-- **Embedded extraction errors**: records directory/write failures and includes them in final load diagnostics
+- **Unsupported platform tag**: after failed probing, throws with supported platform list.
+- **No loadable candidate**: throws with all attempted paths and remediation hints.
+- **Embedded extraction errors**: directory/write failures are recorded and included in final load diagnostics if no candidate loads.
 
-**Guaranteed contract (API-facing):** addon load either succeeds with a validated binding set or fails fast with actionable error text.
+The current loader does not perform a separate post-`require` export validation pass.
 
-**Implementation detail (may change):** exact candidate search order and compiled-binary fallback path ordering.
+## Rust N-API module layer
 
-## Layer 3: Rust N-API module layer
+`crates/pi-natives/src/lib.rs` declares exported module ownership:
 
-`crates/pi-natives/src/lib.rs` is the Rust entry module that declares exported module ownership:
-
+- `appearance`
+- `ast`
 - `clipboard`
 - `fd`
 - `fs_cache`
@@ -115,53 +112,49 @@ Failure paths are explicit:
 - `html`
 - `image`
 - `keys`
+- `language`
+- `power`
 - `prof`
+- `projfs_overlay`
 - `ps`
 - `pty`
 - `shell`
-- `system_info`
 - `task`
 - `text`
+- `tokens`
+- `utils` (crate-private helpers)
 
-These modules implement the N-API symbols consumed and validated by `native.ts`. JS-level names are surfaced through the TS wrappers in `packages/natives/src`.
-
-**Guaranteed contract (API-facing):** Rust module exports must match the binding names expected by `validateNative` and wrapper modules.
-
-**Implementation detail (may change):** internal Rust module decomposition and helper module boundaries (`glob_util`, `task`, etc.).
+N-API exports are generated from Rust `#[napi]` functions/classes/objects/enums. Snake_case Rust names are exposed as camelCase JavaScript names unless explicitly configured by napi-rs.
 
 ## Ownership boundaries
 
-At architecture level, ownership is split as follows:
-
-- **TS wrapper/API ownership (`packages/natives/src`)**
-  - public API grouping, option typing, and stable JS ergonomics
-  - cancellation surface (`timeoutMs`, `AbortSignal`) exposed to callers
-- **Loader ownership (`packages/natives/src/native.ts`)**
+- **Loader/package ownership (`packages/natives/native`, `packages/natives/scripts`)**
   - runtime binary selection
   - CPU variant selection and override handling
-  - compiled-binary extraction and candidate probing
-  - hard validation of required native exports
+  - compiled-binary embedded extraction
+  - generated TypeScript declarations and enum export patching
 - **Rust ownership (`crates/pi-natives/src`)**
   - algorithmic and system-level implementation
   - platform-native behavior and performance-sensitive logic
-  - N-API symbol implementation that TS wrappers consume
+  - N-API symbol implementation consumed directly by package callers
+- **Consumer ownership (`packages/coding-agent`, `packages/tui`)**
+  - user-facing policy and fallbacks that are not built into the native API
+  - higher-level rendering, artifact, shell-session, and command behavior
 
 ## Runtime flow (high level)
 
 1. Consumer imports from `@oh-my-pi/pi-natives`.
-2. Wrapper module calls into singleton `native` binding.
-3. `native.ts` selects candidate binary for platform/arch/variant.
-4. Optional embedded binary extraction occurs for compiled distributions.
-5. Addon is loaded and export set is validated.
-6. Wrapper returns typed results to caller.
+2. `native/index.js` computes platform/arch/variant and candidate paths.
+3. Optional embedded binary extraction occurs for compiled distributions.
+4. The first `require(candidate)` that succeeds becomes the exported addon object.
+5. Generated enum objects are appended to `module.exports`.
+6. Caller invokes generated N-API functions/classes directly.
 
 ## Glossary
 
 - **Native addon**: A `.node` binary loaded via Node-API (N-API).
 - **Platform tag**: Runtime tuple `platform-arch` (for example `darwin-arm64`).
 - **Variant**: x64 CPU-specific build flavor (`modern` AVX2, `baseline` fallback).
-- **Wrapper**: TS function/class that provides typed API over raw native exports.
-- **Declaration merging**: TS technique used by module `types.ts` files to extend `NativeBindings`.
-- **Compiled binary mode**: Runtime mode where the CLI is bundled and native addons are resolved from extracted/cache paths instead of only package-local paths.
-- **Embedded addon**: Build artifact metadata and file references generated into `embedded-addon.ts` so compiled binaries can extract matching `.node` payloads.
-- **Validation gate**: `validateNative(...)` check that rejects stale/mismatched binaries missing required exports.
+- **Generated binding declaration**: `native/index.d.ts` emitted by napi-rs during `build-native.ts`.
+- **Compiled binary mode**: Runtime mode where the CLI is bundled and native addons are resolved from embedded/cache paths before package-local paths.
+- **Embedded addon**: Build artifact metadata and file references generated into `native/embedded-addon.js` so compiled binaries can extract matching `.node` payloads.

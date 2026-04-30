@@ -1,6 +1,6 @@
 # Plugin manager and installer plumbing
 
-This document describes how `omp plugin` operations mutate plugin state on disk and how installed plugins become runtime capabilities (tools today, hooks/commands path resolution available).
+This document describes how `omp plugin` operations mutate plugin state on disk and how installed plugins become runtime capabilities (tools and extensions today, hooks/commands path resolution available).
 
 ## Scope and architecture
 
@@ -19,11 +19,11 @@ There are two plugin-management implementations in the codebase:
 omp plugin <action> ...
   -> src/commands/plugin.ts
   -> runPluginCommand(...) in src/cli/plugin-cli.ts
-  -> PluginManager method (install/list/uninstall/link/...) 
+  -> PluginManager method (install/list/uninstall/link/...)
   -> mutate ~/.omp/plugins/{package.json,node_modules,omp-plugins.lock.json}
-  -> runtime discovery: discoverAndLoadCustomTools(...)
-  -> getAllPluginToolPaths(cwd)
-  -> custom tool loader imports tool modules
+  -> runtime discovery: discoverAndLoadCustomTools(...) and discoverAndLoadExtensions(...)
+  -> getAllPluginToolPaths(cwd) / getAllPluginExtensionPaths(cwd)
+  -> custom tool loader imports tool modules; extension loader imports extension modules
 ```
 
 ### Command entrypoints
@@ -164,6 +164,7 @@ Filtering:
 
 For each enabled plugin:
 
+- `resolvePluginExtensionPaths(plugin)`
 - `resolvePluginToolPaths(plugin)`
 - `resolvePluginHookPaths(plugin)`
 - `resolvePluginCommandPaths(plugin)`
@@ -178,8 +179,9 @@ Missing files are silently skipped (`existsSync` guard).
 ## Current runtime wiring differences
 
 - **Tools are wired into runtime today** via `discoverAndLoadCustomTools` (`custom-tools/loader.ts`), which calls `getAllPluginToolPaths(cwd)`.
-- Paths are de-duplicated by resolved absolute path in custom tool discovery (`seen` set, first path wins).
-- **Hooks/commands resolvers exist** and are exported, but this code path does not currently wire them into a runtime registry in the same way tools are wired.
+- **Extensions are wired into runtime today** via `discoverAndLoadExtensions` (`extensions/loader.ts`), which calls `getAllPluginExtensionPaths(cwd)`.
+- Paths are de-duplicated by resolved absolute path in custom tool and extension discovery (`seen` set, first path wins).
+- **Hooks/commands resolvers exist** and are exported, but this code path does not currently wire them into a runtime registry in the same way tools and extensions are wired.
 
 ## Lock/state management details
 
@@ -226,13 +228,13 @@ Because CLI uses `PluginManager`, these stricter link guards are not currently o
 
 The plugin manager is not transactional.
 
-| Operation stage | Failure behavior | Rollback |
-| --- | --- | --- |
-| `bun install` fails | install aborts with stderr | N/A (no state writes yet) |
-| Install succeeds, then manifest/feature validation fails | command fails | No uninstall rollback; dependency may remain in `node_modules`/`package.json` |
-| Install succeeds, then lockfile write fails | command fails | No rollback of installed package |
-| `bun uninstall` succeeds, lockfile write fails | command fails | Package removed, stale runtime state may remain |
-| `link` removes old target then symlink creation fails | command fails | No restoration of previous link/dir |
+| Operation stage                                          | Failure behavior           | Rollback                                                                      |
+| -------------------------------------------------------- | -------------------------- | ----------------------------------------------------------------------------- |
+| `bun install` fails                                      | install aborts with stderr | N/A (no state writes yet)                                                     |
+| Install succeeds, then manifest/feature validation fails | command fails              | No uninstall rollback; dependency may remain in `node_modules`/`package.json` |
+| Install succeeds, then lockfile write fails              | command fails              | No rollback of installed package                                              |
+| `bun uninstall` succeeds, lockfile write fails           | command fails              | Package removed, stale runtime state may remain                               |
+| `link` removes old target then symlink creation fails    | command fails              | No restoration of previous link/dir                                           |
 
 Operationally, `doctor --fix` can repair some drift (`bun install`, orphaned config cleanup, invalid-feature cleanup), but it is best-effort.
 
@@ -262,3 +264,4 @@ Operationally, `doctor --fix` can repair some drift (`bun install`, orphaned con
 - [`src/extensibility/plugins/parser.ts`](../packages/coding-agent/src/extensibility/plugins/parser.ts) — install spec and package-name parsing helpers
 - [`src/extensibility/plugins/types.ts`](../packages/coding-agent/src/extensibility/plugins/types.ts) — manifest/runtime/override type contracts
 - [`src/extensibility/custom-tools/loader.ts`](../packages/coding-agent/src/extensibility/custom-tools/loader.ts) — runtime wiring for plugin-provided tool modules
+- [`src/extensibility/extensions/loader.ts`](../packages/coding-agent/src/extensibility/extensions/loader.ts) — runtime wiring for plugin-provided extension modules

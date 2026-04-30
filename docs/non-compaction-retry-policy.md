@@ -32,16 +32,16 @@ So: overload/rate/server/network-style failures use this retry policy; context-w
 - assistant `stopReason === "error"`
 - `errorMessage` exists
 - message is **not** context overflow
-- `errorMessage` matches `#isRetryableErrorMessage(...)`
+- `errorMessage` matches transient transport/envelope patterns or `isUsageLimitError(...)`
 
-Current retryable pattern set (regex-based):
+Current retryable inputs are regex/string-classified:
 
-- overloaded
+- transient transport/envelope failures, including Anthropic stream-envelope failures before `message_start`
+- overloaded/provider-returned-error wording
 - rate limit / usage limit / too many requests
 - HTTP-like server classes: 429, 500, 502, 503, 504
-- service unavailable / server error / internal error
-- connection error / fetch failed
-- `retry delay` wording
+- service unavailable / server/internal error
+- network/connection/socket failures, refused/closed connections, upstream connect/reset-before-headers, socket hang up, timeout/timed out, fetch failed, terminated, retry delay wording, and unexpected socket close messages
 
 This is string-pattern classification, not typed provider error codes.
 
@@ -61,12 +61,13 @@ Flow (`#handleRetryableError`):
 3. Increment `#retryAttempt`.
 4. Create `#retryPromise` once (first attempt in a chain).
 5. If attempt exceeded `retry.maxRetries`, emit final failure event and stop.
-6. Compute delay: `retry.baseDelayMs * 2^(attempt-1)`.
-7. For usage-limit errors, parse retry hints and call auth storage (`markUsageLimitReached(...)`); if provider/model switch succeeds, force delay to `0`.
-8. Emit `auto_retry_start`.
-9. Remove the trailing assistant error message from agent runtime state (kept in persisted session history).
-10. Sleep with abort support.
-11. On wake, schedule `agent.continue()` via `setTimeout(..., 0)`.
+6. Compute base delay: `retry.baseDelayMs * 2^(attempt-1)`.
+7. For usage-limit errors, parse retry hints and call auth storage (`markUsageLimitReached(...)`); if credential switching succeeds, force delay to `0`, otherwise use a larger retry-after/backoff hint when present.
+8. If no credential switch occurred, suppress the current model selector for cooldown, try configured retry model fallback chains, and force delay to `0` on model switch.
+9. Emit `auto_retry_start`.
+10. Remove the trailing assistant error message from agent runtime state (kept in persisted session history).
+11. Sleep with abort support.
+12. Schedule `agent.continue()` through the post-prompt task scheduler (`delayMs: 1`) for the same prompt generation.
 
 ### What resets retry counters
 
@@ -98,7 +99,7 @@ Backoff sequence with default settings:
 - attempt 2: 4000 ms
 - attempt 3: 8000 ms
 
-Delay override inputs are only used in the usage-limit handling path, and only to influence auth-storage model/account switching decision. In the main non-compaction retry path, backoff remains local exponential delay unless switching succeeds (`delayMs = 0`).
+Delay override inputs can come from parsed retry headers (`retry-after-ms`, `retry-after`, `x-ratelimit-reset-ms`, `x-ratelimit-reset`) or usage-limit backoff. Credential/model fallback switches set delay to `0`; otherwise parsed hints can extend the exponential local delay.
 
 ## Abort mechanics
 
@@ -147,6 +148,8 @@ Defined in settings schema under retry group:
 - `retry.enabled`
 - `retry.maxRetries`
 - `retry.baseDelayMs`
+- `retry.fallbackChains`
+- `retry.fallbackRevertPolicy` (`"cooldown-expiry"` by default; `"never"` disables automatic restoration)
 
 Programmatic toggles in session:
 
@@ -174,6 +177,8 @@ Session-level retry events:
 
 - `auto_retry_start { attempt, maxAttempts, delayMs, errorMessage }`
 - `auto_retry_end { success, attempt, finalError? }`
+- `retry_fallback_applied { from, to, role }`
+- `retry_fallback_succeeded { model, role }`
 
 Propagation:
 
@@ -207,3 +212,4 @@ A new retry chain can still start later on a future retryable error after counte
 - Classification is regex text matching; provider-specific structured errors are not used here.
 - Retry strips the failing assistant error from **runtime context** before re-continue, but session history still keeps that error entry.
 - `RpcSessionState` currently exposes `autoCompactionEnabled` but not an `autoRetryEnabled` field; RPC callers must track their own toggle state or query settings through other APIs.
+- Model fallback changes append temporary `model_change` entries and may later restore the primary model when its cooldown expires, depending on `retry.fallbackRevertPolicy`.

@@ -22,7 +22,6 @@ Tool params:
 {
   cells: Array<{ code: string; title?: string }>;
   timeout?: number; // seconds, clamped to 1..600, default 30
-  cwd?: string;
   reset?: boolean; // reset kernel before first cell only
 }
 ```
@@ -71,7 +70,7 @@ There are two gateway paths:
 
 ## Kernel lifecycle
 
-Each execution uses a kernel created via `POST /api/kernels` on the selected gateway.
+Kernels are created via `POST /api/kernels` on the selected gateway when a retained session needs a kernel or when `per-call` mode starts a request.
 
 Kernel startup sequence:
 
@@ -92,10 +91,10 @@ Kernel shutdown:
 
 ## Session persistence semantics
 
-`python.kernelMode` controls kernel reuse:
+`python.kernelMode` controls retained kernel reuse:
 
 - `session` (default)
-  - Reuses kernel sessions keyed by session identity + cwd.
+  - Reuses kernel sessions keyed by session file plus cwd when a session file exists; otherwise by cwd.
   - Execution is serialized per session via a queue.
   - Idle sessions are evicted after 5 minutes.
   - At most 4 sessions; oldest is evicted on overflow.
@@ -135,10 +134,14 @@ Runtime selection order:
 
 When a venv is selected, its bin/Scripts path is prepended to `PATH`.
 
-Kernel env initialization inside Python also:
+Kernel startup receives the optional session file path from the executor:
+
+- `PI_SESSION_FILE` (session state file path)
+
+`PythonKernel.#initializeKernelEnvironment(...)` then runs init script inside kernel to:
 
 - `os.chdir(cwd)`
-- injects provided env map into `os.environ`
+- injects provided env entries into `os.environ`
 - ensures cwd is in `sys.path`
 
 ## Tool availability and mode selection

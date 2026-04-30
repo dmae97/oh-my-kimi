@@ -23,17 +23,19 @@ Boundary rule: the TUI engine is message-agnostic. It only knows `Component.rend
 
 ## Boot and component tree assembly
 
-`InteractiveMode` constructs `TUI(new ProcessTerminal(), showHardwareCursor)` and creates persistent containers:
+`InteractiveMode` constructs `TUI(new ProcessTerminal(), settings.get("showHardwareCursor"))`, applies `settings.get("clearOnShrink")`, and creates persistent containers:
 
 - `chatContainer`
 - `pendingMessagesContainer`
 - `statusContainer`
 - `todoContainer`
+- `btwContainer`
 - `statusLine`
+- `hookWidgetContainerAbove`
 - `editorContainer` (holds `CustomEditor`)
+- `hookWidgetContainerBelow`
 
-`init()` wires the tree in that order, focuses the editor, registers input handlers via `InputController`, starts TUI, and requests a forced render.
-
+`init()` wires the tree in that order, focuses the editor, registers input handlers via `InputController`, subscribes terminal appearance changes into theme auto-detection, starts TUI, and requests a forced render.
 A forced render (`requestRender(true)`) resets previous-line caches and cursor bookkeeping before repainting.
 
 ## Terminal lifecycle and stdin normalization
@@ -43,10 +45,10 @@ A forced render (`requestRender(true)`) resets previous-line caches and cursor b
 1. Enables raw mode and bracketed paste.
 2. Attaches resize handler.
 3. Creates a `StdinBuffer` to split partial escape chunks into complete sequences.
-4. Queries Kitty keyboard protocol support (`CSI ? u`), then enables protocol flags if supported.
-5. On Windows, attempts VT input enablement via `kernel32` mode flags.
-
-`StdinBuffer` behavior:
+4. Queries Kitty keyboard protocol support (`CSI ? u`), then enables protocol flags if supported; otherwise enables modifyOtherKeys fallback after a short timeout.
+5. Queries OSC 11 background color and enables Mode 2031 appearance notifications for dark/light theme detection.
+6. On Windows, attempts VT input enablement via `kernel32` mode flags.
+   `StdinBuffer` behavior:
 
 - Buffers fragmented escape sequences (CSI/OSC/DCS/APC/SS3).
 - Emits `data` only when a sequence is complete or timeout-flushed.
@@ -108,12 +110,12 @@ Render writes use synchronized output mode (`CSI ? 2026 h/l`) to reduce flicker/
 
 Critical safety checks in `TUI`:
 
-- Non-image rendered lines must not exceed terminal width; overflow throws and writes crash diagnostics.
-- Overlay compositing includes defensive truncation and post-composite width verification.
+- Non-image rendered lines are expected to fit terminal width; the differential path truncates overwide lines as a last-resort guard and can write debug diagnostics when redraw debugging is enabled.
+- Overlay compositing includes defensive truncation and post-composite width guarding.
 - Width changes force full redraw because wrapping semantics change.
 - Cursor position is clamped before movement.
 
-These constraints are runtime enforcement, not just conventions.
+These constraints are runtime guards plus component conventions; renderers should still return width-safe lines rather than rely on truncation.
 
 ## Resize handling
 
@@ -121,7 +123,8 @@ Resize events are event-driven from `ProcessTerminal` to `TUI.requestRender()`.
 
 Effects:
 
-- Any width change triggers full redraw.
+- Width changes trigger full redraw.
+- Height changes trigger full redraw except in Termux and terminal multiplexers, where the renderer avoids scrollback-hostile full replays.
 - Viewport/top tracking (`#previousViewportTop`, `#maxLinesRendered`) avoids invalid relative cursor math when content or terminal size changes.
 - Overlay visibility can depend on terminal dimensions (`OverlayOptions.visible`); focus is corrected when overlays become non-visible after resize.
 
@@ -204,7 +207,7 @@ Event-driven updates:
 - Agent session events (`EventController`)
 - Key input callbacks (`InputController`)
 - terminal resize callback
-- theme/branch watchers in `InteractiveMode`
+- terminal appearance callbacks, SIGWINCH theme reevaluation, and git branch watchers in `InteractiveMode`
 
 Throttled/debounced paths:
 

@@ -34,7 +34,9 @@ interface Rule {
   globs?: string[];
   alwaysApply?: boolean;
   description?: string;
-  ttsrTrigger?: string;
+  condition?: string[];
+  scope?: string[];
+  interruptMode?: "never" | "prose-only" | "tool-only" | "always";
   _source: SourceMeta;
 }
 ```
@@ -64,9 +66,9 @@ Normalization:
 - `name` = filename without `.md`/`.mdc`
 - frontmatter parsed via `parseFrontmatter`
 - `content` = body (frontmatter stripped)
-- `globs`, `alwaysApply`, `description`, `ttsr_trigger` mapped directly
+- `globs`, `alwaysApply`, `description`, `condition`/legacy `ttsr_trigger`, `scope`, and `interruptMode` are parsed by `buildRuleFromMarkdown`
 
-Important caveat: `globs` is cast as `string[] | undefined` with no element filtering in this provider.
+Important caveat: `condition` values that look like file globs are converted into `tool:edit(...)` / `tool:write(...)` scope shorthands with catch-all condition `.*`.
 
 ### Cursor provider (`cursor.ts`)
 
@@ -80,7 +82,7 @@ Normalization (`transformMDCRule`):
 - `description`: kept only if string
 - `alwaysApply`: only `true` is preserved (`false` becomes `undefined`)
 - `globs`: accepts array (string elements only) or single string
-- `ttsr_trigger`: string only
+- `condition`/legacy `ttsr_trigger`, `scope`, and `interruptMode` are parsed by shared rule helpers
 - `name` from filename without extension
 
 ### Windsurf provider (`windsurf.ts`)
@@ -93,9 +95,8 @@ Loads from:
 Normalization:
 
 - `globs`: array-of-string or single string
-- `alwaysApply`, `description` cast from frontmatter
-- `ttsr_trigger`: string only
-- `name` from filename for project rules
+- `alwaysApply`, `description`, `condition`/legacy `ttsr_trigger`, `scope`, and `interruptMode` parsed by shared rule helpers
+- `name` is fixed to `global_rules` for the user global file and derived from filename for project rules
 
 ### Cline provider (`cline.ts`)
 
@@ -107,9 +108,8 @@ Searches upward from `cwd` for nearest `.clinerules`:
 Normalization:
 
 - `globs`: array-of-string or single string
-- `alwaysApply`: only if boolean
-- `description`: string only
-- `ttsr_trigger`: string only
+- `alwaysApply`, `description`, `condition`/legacy `ttsr_trigger`, `scope`, and `interruptMode` parsed by shared rule helpers
+- `name` is fixed to `clinerules` for a `.clinerules` file and derived from filename for `.clinerules/*.md`
 
 ## 3. Frontmatter parsing behavior and ambiguity
 
@@ -161,22 +161,22 @@ Notable source-order differences:
 After rule discovery in `createAgentSession` (`sdk.ts`):
 
 1. All discovered rules are scanned.
-2. Rules with `condition` (frontmatter key; `ttsr_trigger` / `ttsrTrigger` accepted as fallback) are registered into `TtsrManager`.
+2. Rules with `condition` entries are registered into `TtsrManager`; legacy `ttsr_trigger` / `ttsrTrigger` are accepted during rule parsing as condition fallbacks.
 3. A separate `rulebookRules` list is built with this predicate:
 
 ```ts
-!registeredTtsrRuleNames.has(rule.name) && !rule.alwaysApply && !!rule.description
+!isTtsrRule && rule.alwaysApply !== true && !!rule.description;
 ```
 
 4. An `alwaysApplyRules` list is built:
 
 ```ts
-!registeredTtsrRuleNames.has(rule.name) && rule.alwaysApply === true
+!isTtsrRule && rule.alwaysApply === true;
 ```
 
 ### Bucket behavior
 
-- **TTSR bucket**: any rule with `condition` (description not required). Takes priority over other buckets.
+- **TTSR bucket**: any rule with a non-empty parsed `condition` that `TtsrManager.addRule(...)` accepts. Takes priority over other buckets.
 - **Always-apply bucket**: `alwaysApply === true`, not TTSR. Full content injected into system prompt. Resolvable via `rule://`.
 - **Rulebook bucket**: must have description, must not be TTSR, must not be `alwaysApply`. Listed in system prompt by name+description; content read on demand via `rule://`.
 - A rule with both `condition` and `alwaysApply` goes to TTSR only (TTSR takes priority).
@@ -205,10 +205,11 @@ After rule discovery in `createAgentSession` (`sdk.ts`):
 - **Full rule content is auto-injected into the system prompt** (before the rulebook rules section).
 - Rule is also addressable via `rule://<name>` for re-reading.
 
-### `ttsr_trigger`
+### `condition`, `scope`, and `interruptMode`
 
-- Mapped to `rule.ttsrTrigger`.
-- If present, rule is routed to TTSR manager, not rulebook.
+- `condition` is the current TTSR trigger field; legacy `ttsr_trigger` / `ttsrTrigger` are accepted as fallback inputs during parsing.
+- `scope` narrows TTSR matching scope. A condition token that looks like a file glob becomes `tool:edit(<glob>)` and `tool:write(<glob>)` scope entries plus catch-all condition `.*`.
+- `interruptMode` can override the global TTSR interrupt mode for the rule.
 
 ## 7. System prompt inclusion path
 
@@ -228,7 +229,9 @@ This is advisory/contextual: prompt text asks the model to read applicable rules
 `RuleProtocolHandler` is registered with:
 
 ```ts
-new RuleProtocolHandler({ getRules: () => [...rulebookRules, ...alwaysApplyRules] })
+new RuleProtocolHandler({
+  getRules: () => [...rulebookRules, ...alwaysApplyRules],
+});
 ```
 
 Implications:

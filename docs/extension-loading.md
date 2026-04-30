@@ -40,9 +40,15 @@ Notes:
 - Native auto-discovery is currently `.omp` based.
 - Legacy `.pi` is still accepted in `package.json` manifest keys (`pi.extensions`), but not as a native root here.
 
-### 2) Explicitly configured paths
+### 2) Installed plugin extension entries
 
-After auto-discovery, configured paths are appended and resolved.
+After native auto-discovery, `discoverAndLoadExtensions()` appends extension entry points from enabled installed plugins via `getAllPluginExtensionPaths(cwd)`.
+
+Plugin extension entries come from package `omp.extensions` / `pi.extensions` manifests, including enabled feature entries.
+
+### 3) Explicitly configured paths
+
+After plugin extension entries, configured paths are appended and resolved.
 
 Configured path sources in the main session startup path (`sdk.ts`):
 
@@ -154,7 +160,8 @@ Rules and constraints:
 Order:
 
 1. Native auto-discovered modules
-2. Explicit configured paths (in provided order)
+2. Installed plugin extension entries
+3. Explicit configured paths (in provided order)
 
 In `sdk.ts`, configured order is:
 

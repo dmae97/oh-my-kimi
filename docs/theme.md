@@ -156,12 +156,12 @@ Conversion behavior:
 - `theme.dark`
 - `theme.light`
 
-Auto theme slot selection uses `COLORFGBG` background detection:
+Auto theme slot selection uses terminal appearance in this order:
 
-- parse background index from `COLORFGBG`
-- `< 8` => dark slot (`theme.dark`)
-- `>= 8` => light slot (`theme.light`)
-- parse failure => dark slot
+1. terminal-reported OSC 11 background luminance, unless the macOS/Zellij fallback path is active
+2. `COLORFGBG` background index (`< 8` => dark, `>= 8` => light)
+3. macOS appearance fallback only for the known-broken macOS/Zellij OSC 11 path
+4. dark slot fallback
 
 Current defaults from settings schema:
 
@@ -194,12 +194,12 @@ Settings UI uses this for live preview and restores prior theme on cancel.
 
 When watcher is enabled (`setTheme(..., true)` / interactive init):
 
-- only watches custom file path `<customThemesDir>/<currentTheme>.json`
-- built-ins are effectively not watched
-- file `change`: attempts reload (debounced)
-- file `rename`/delete: falls back to `dark`, closes watcher
+- watches `<customThemesDir>/<currentTheme>.json` only when that file exists
+- built-ins are effectively not watched; built-in theme lookup also takes precedence over same-name custom files
+- matching file changes schedule a debounced reload; reload errors or temporary file absence keep the last successfully loaded theme
+- the watcher does not perform a delete/rename fallback; it waits for a future successful reload or explicit theme switch
 
-Auto mode also installs a `SIGWINCH` listener and can re-evaluate dark/light slot mapping when terminal state changes.
+Auto mode also reevaluates dark/light slot mapping from terminal appearance changes, `SIGWINCH`, and the macOS fallback observer when active.
 
 ## Color-blind mode behavior
 
@@ -343,4 +343,4 @@ Use this workflow:
 - `export` and `symbols` are optional.
 - `$schema` in theme JSON is informational; runtime validation is enforced by compiled TypeBox schema in code.
 - `setTheme` failure falls back to `dark`; `previewTheme` failure does not replace current theme.
-- File watcher reload errors keep the current loaded theme until a successful reload or fallback path is triggered.
+- File watcher reload errors or temporary missing files keep the current loaded theme until a successful reload or explicit theme switch.

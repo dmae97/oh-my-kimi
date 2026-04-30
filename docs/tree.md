@@ -197,12 +197,12 @@ Label edits in tree UI call `appendLabelChange(targetId, label)`.
 
 ## `/tree` vs adjacent operations
 
-| Operation | Scope | Result |
-|---|---|---|
-| `/tree` | Current session file | Moves leaf to selected point (same file) |
+| Operation | Scope                                            | Result                                                                                                                                                   |
+| --------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/tree`   | Current session file                             | Moves leaf to selected point (same file)                                                                                                                 |
 | `/branch` | Usually current session file -> new session file | By default branches from selected **user** message into a new session file; if `doubleEscapeAction = "tree"`, `/branch` opens tree navigation UI instead |
-| `/fork` | Whole current session | Duplicates session into a new persisted session file |
-| `/resume` | Session list | Switches to another session file |
+| `/fork`   | Whole current session                            | Duplicates session into a new persisted session file                                                                                                     |
+| `/resume` | Session list                                     | Switches to another session file                                                                                                                         |
 
 Key distinction: `/tree` is a navigation/repositioning tool inside one session file. `/branch`, `/fork`, and `/resume` all change session-file context.
 

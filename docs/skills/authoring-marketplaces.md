@@ -215,14 +215,14 @@ Minimum `package.json`:
 CLI equivalent:
 
 ```
-omp plugin install name@marketplace-name
 omp plugin marketplace add owner/repo
+omp plugin install name@marketplace-name
 ```
 
 Scope behavior:
 
-- **user** (default) — installed in `~/.omp/plugins/`, available in all projects
-- **project** — installed in `<project>/.omp/`, available only in that project
+- **user** (default) — installed in `~/.omp/plugins/installed_plugins.json`, available in all projects
+- **project** — installed in `<project>/.omp/plugins/installed_plugins.json`, available only in that project
 
 Project-scoped installs shadow user-scoped installs of the same plugin name.
 

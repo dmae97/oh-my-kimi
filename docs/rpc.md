@@ -2,8 +2,8 @@
 
 RPC mode runs the coding agent as a newline-delimited JSON protocol over stdio.
 
-- **stdin**: commands (`RpcCommand`) and extension UI responses
-- **stdout**: command responses (`RpcResponse`), session/agent events, extension UI requests
+- **stdin**: commands (`RpcCommand`), extension UI responses, and host-tool updates/results
+- **stdout**: a ready frame, command responses (`RpcResponse`), session/agent events, extension UI requests, host-tool requests/cancellations
 
 Primary implementation:
 
@@ -23,9 +23,10 @@ Behavior notes:
 
 - `@file` CLI arguments are rejected in RPC mode.
 - RPC mode disables automatic session title generation by default to avoid an extra model call.
-- RPC mode resets workflow-altering `todo.*`, `task.*`, and `async.*` settings to their built-in defaults instead of inheriting user overrides.
+- RPC mode resets workflow-altering `todo.*`, `task.*`, `async.*`, and `bash.autoBackground.*` settings to their built-in defaults instead of inheriting user overrides.
 - The process reads stdin as JSONL (`readJsonl(Bun.stdin.stream())`).
-- When stdin closes, the process exits with code `0`.
+- At startup it writes `{ "type": "ready" }` before processing commands.
+- When stdin closes, pending host-tool calls are rejected and the process exits with code `0`.
 - Responses/events are written as one JSON object per line.
 
 ## Transport and Framing
@@ -36,15 +37,18 @@ There is no envelope beyond the object shape itself.
 
 ### Outbound frame categories (stdout)
 
-1. `RpcResponse` (`{ type: "response", ... }`)
-2. `AgentSessionEvent` objects (`agent_start`, `message_update`, etc.)
-3. `RpcExtensionUIRequest` (`{ type: "extension_ui_request", ... }`)
-4. Extension errors (`{ type: "extension_error", extensionPath, event, error }`)
+1. Ready frame (`{ type: "ready" }`)
+2. `RpcResponse` (`{ type: "response", ... }`)
+3. `AgentSessionEvent` objects (`agent_start`, `message_update`, etc.)
+4. `RpcExtensionUIRequest` (`{ type: "extension_ui_request", ... }`)
+5. Host tool requests/cancellations (`host_tool_call`, `host_tool_cancel`)
+6. Extension errors (`{ type: "extension_error", extensionPath, event, error }`)
 
 ### Inbound frame categories (stdin)
 
 1. `RpcCommand`
 2. `RpcExtensionUIResponse` (`{ type: "extension_ui_response", ... }`)
+3. Host tool updates/results (`host_tool_update`, `host_tool_result`)
 
 ## Request/Response Correlation
 
@@ -162,6 +166,14 @@ Data payloads are command-specific and defined in `rpc-types.ts`.
         }
       ]
     }
+  ],
+  "systemPrompt": "...",
+  "dumpTools": [
+    {
+      "name": "read",
+      "description": "Read files and URLs",
+      "parameters": {}
+    }
   ]
 }
 ```
@@ -254,7 +266,12 @@ Common event types:
 Extension runner errors are emitted separately as:
 
 ```json
-{ "type": "extension_error", "extensionPath": "...", "event": "...", "error": "..." }
+{
+  "type": "extension_error",
+  "extensionPath": "...",
+  "event": "...",
+  "error": "..."
+}
 ```
 
 `message_update` includes streaming deltas in `assistantMessageEvent` (text/thinking/toolcall deltas).
@@ -310,7 +327,7 @@ Extensions in RPC mode use request/response UI frames.
 
 `RpcExtensionUIRequest` (`type: "extension_ui_request"`) methods:
 
-- `select`, `confirm`, `input`, `editor`
+- `select`, `confirm`, `input`, `editor`, `cancel`
 - `notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`
 
 Runtime note:
@@ -323,7 +340,14 @@ Runtime note:
 Example:
 
 ```json
-{ "type": "extension_ui_request", "id": "123", "method": "confirm", "title": "Confirm", "message": "Continue?", "timeout": 30000 }
+{
+  "type": "extension_ui_request",
+  "id": "123",
+  "method": "confirm",
+  "title": "Confirm",
+  "message": "Continue?",
+  "timeout": 30000
+}
 ```
 
 ### Inbound response
@@ -332,7 +356,7 @@ Example:
 
 - `{ type: "extension_ui_response", id: string, value: string }`
 - `{ type: "extension_ui_response", id: string, confirmed: boolean }`
-- `{ type: "extension_ui_response", id: string, cancelled: true }`
+- `{ type: "extension_ui_response", id: string, cancelled: true, timedOut?: boolean }`
 
 If a dialog has a timeout, RPC mode resolves to a default value when timeout/abort fires.
 
@@ -391,8 +415,7 @@ Completion uses:
 }
 ```
 
-Set `isError: true` on `host_tool_result` to surface the returned content as a
-tool error.
+Set top-level `isError: true` on `host_tool_result` to reject the pending host tool call and surface the returned text content as a tool error.
 
 ## Error Model and Recoverability
 
@@ -401,7 +424,13 @@ tool error.
 Failures are `success: false` with string `error`.
 
 ```json
-{ "id": "req_2", "type": "response", "command": "set_model", "success": false, "error": "Model not found: provider/model" }
+{
+  "id": "req_2",
+  "type": "response",
+  "command": "set_model",
+  "success": false,
+  "error": "Model not found: provider/model"
+}
 ```
 
 ### Recoverability expectations
@@ -410,7 +439,7 @@ Failures are `success: false` with string `error`.
 - Malformed JSONL / parse-loop exceptions emit a `parse` error response and continue reading subsequent lines.
 - Empty `set_session_name` is rejected (`Session name cannot be empty`).
 - Extension UI responses with unknown `id` are ignored.
-- Process termination conditions are stdin close or explicit extension-triggered shutdown.
+- Process termination conditions are stdin close or explicit extension-triggered shutdown after the current command.
 
 ## Compact Command Flows
 
@@ -436,7 +465,12 @@ stdout sequence (typical):
 stdin:
 
 ```json
-{ "id": "req_2", "type": "prompt", "message": "Also include risks", "streamingBehavior": "followUp" }
+{
+  "id": "req_2",
+  "type": "prompt",
+  "message": "Also include risks",
+  "streamingBehavior": "followUp"
+}
 ```
 
 ### 3) Inspect and tune queue behavior
@@ -454,7 +488,13 @@ stdin:
 stdout:
 
 ```json
-{ "type": "extension_ui_request", "id": "ui_7", "method": "input", "title": "Branch name", "placeholder": "feature/..." }
+{
+  "type": "extension_ui_request",
+  "id": "ui_7",
+  "method": "input",
+  "title": "Branch name",
+  "placeholder": "feature/..."
+}
 ```
 
 stdin:

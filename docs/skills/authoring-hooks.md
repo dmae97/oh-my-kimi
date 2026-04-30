@@ -12,7 +12,7 @@ Hooks are event-driven interceptors that run alongside the agent loop. They are 
 ## Factory signature
 
 ```ts
-import type { HookAPI } from "@oh-my-pi/pi-coding-agent/hooks";
+import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
 
 export default function myHook(omp: HookAPI): void {
   omp.on("tool_call", async (event, ctx) => {
@@ -151,7 +151,7 @@ Contract:
 ### 1. rm-rf blocker
 
 ```ts
-import type { HookAPI } from "@oh-my-pi/pi-coding-agent/hooks";
+import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
 
 export default function rmRfBlocker(omp: HookAPI): void {
   omp.on("tool_call", async (event, ctx) => {
@@ -177,7 +177,7 @@ export default function rmRfBlocker(omp: HookAPI): void {
 ### 2. API-key redactor
 
 ```ts
-import type { HookAPI } from "@oh-my-pi/pi-coding-agent/hooks";
+import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
 
 // Matches common API key patterns: sk-..., pk-..., AKIA..., ghp_..., etc.
 const SECRET_PATTERNS = [
@@ -210,7 +210,7 @@ export default function apiKeyRedactor(omp: HookAPI): void {
 ### 3. Context filter
 
 ```ts
-import type { HookAPI } from "@oh-my-pi/pi-coding-agent/hooks";
+import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
 
 export default function contextFilter(omp: HookAPI): void {
   omp.on("context", async (event) => {

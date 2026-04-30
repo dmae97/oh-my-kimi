@@ -24,7 +24,7 @@ It covers runtime behavior as implemented today, including precedence, invalid-d
 Task agents normalize into `AgentDefinition` (`src/task/types.ts`):
 
 - `name`, `description`, `systemPrompt` (required for a valid loaded agent)
-- optional `tools`, `spawns`, `model`, `thinkingLevel`, `output`
+- optional `tools`, `spawns`, `model`, `thinkingLevel`, `output`, `blocking`
 - `source`: `"bundled" | "user" | "project"`
 - optional `filePath`
 
@@ -124,9 +124,9 @@ Lookup is exact-name linear search:
 
 - `getAgent(agents, name)` => `agents.find(a => a.name === name)`
 
-In task execution (`TaskTool.execute`):
+In synchronous task execution (`TaskTool.#executeSync`):
 
-1. agents are rediscovered at call time (`discoverAgents(this.session.cwd)`)
+1. agents are rediscovered at execution time (`discoverAgents(this.session.cwd)`)
 2. requested `params.agent` is resolved through `getAgent`
 3. missing agent returns immediate tool response:
    - `Unknown agent "...". Available: ...`
@@ -134,19 +134,17 @@ In task execution (`TaskTool.execute`):
 
 ### Description vs execution-time discovery
 
-`TaskTool.create()` builds the tool description from discovery results at initialization time (`buildDescription`).
-
-`execute()` rediscoveres agents again. So the runtime set can differ from what was listed in the earlier tool description if agent files changed mid-session.
+`TaskTool.create()` builds the tool description from discovery results at initialization time. `#executeSync` rediscovers agents, so the runtime set can differ from what was listed in the earlier tool description if agent files changed mid-session. The async entry path still uses the initialization-time list to decide whether an agent is marked `blocking` before scheduling.
 
 ## Structured-output guardrails and schema precedence
 
 Runtime output schema precedence in `TaskTool.execute`:
 
-1. agent frontmatter `output`
-2. task call `params.schema`
+1. task call `params.schema` when `task.simple` allows custom schemas
+2. agent frontmatter `output`
 3. parent session `outputSchema`
 
-(`effectiveOutputSchema = effectiveAgent.output ?? outputSchema ?? this.session.outputSchema`)
+(`effectiveOutputSchema = outputSchema ?? effectiveAgent.output ?? this.session.outputSchema` when custom task schemas are enabled; otherwise task-call schema is skipped.)
 
 Prompt-time guardrail text in `src/prompts/tools/task.md` warns about mismatch behavior for structured-output agents (`explore`, `reviewer`): output-format instructions in prose can conflict with built-in schema and produce `null` outputs.
 
@@ -167,9 +165,13 @@ In `src/task/index.ts`, command helpers are re-exported with agent discovery hel
 
 An agent can be discoverable but still unavailable to run because of execution guardrails.
 
+### Disabled-agent settings
+
+`TaskTool.#executeSync` checks `task.disabledAgents` after resolving the agent. If the requested name is disabled, execution returns an immediate error listing enabled alternatives when available.
+
 ### Parent spawn policy
 
-`TaskTool.execute` checks `session.getSessionSpawns()`:
+`TaskTool.#executeSync` checks `session.getSessionSpawns()`:
 
 - `"*"` => allow any
 - `""` => deny all

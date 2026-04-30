@@ -108,7 +108,7 @@ User-facing `/branch` flow (`SelectorController.showUserMessageSelector` → `Ag
 
 `buildSessionContext()` (in `session-manager.ts`) resolves the active root→leaf path and builds effective LLM context state:
 
-- Tracks latest thinking/model/mode/ttsr state on path.
+- Tracks latest thinking/model/service-tier/mode/TTSR/MCP-selection state on path.
 - Handles latest compaction on path:
   - emits compaction summary first
   - replays kept messages from `firstKeptEntryId` to compaction point
@@ -179,6 +179,7 @@ Adjacent but related lifecycle hooks:
 - Summarization requires an active model; if absent, summarize navigation fails fast.
 - If summarization is aborted, navigation is cancelled and leaf is unchanged.
 - In-memory sessions never return a branch file path from `createBranchedSession`.
+- Tree context reconstruction includes service-tier and MCP tool-selection state, but those entries do not become LLM messages.
 
 ## Legacy compatibility still present
 

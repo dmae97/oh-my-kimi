@@ -20,7 +20,7 @@ A **plugin** is a directory containing skills, commands, hooks, MCP servers, or 
 **Scopes**: plugins can be installed at two scopes:
 
 - **user** (default) -- available in all projects, stored in `~/.omp/plugins/installed_plugins.json`
-- **project** -- available only in the current project, stored in `.omp/installed_plugins.json`
+- **project** -- available only in the current project, stored in `.omp/plugins/installed_plugins.json`
 
 Project-scoped installs shadow user-scoped installs of the same plugin.
 
@@ -28,28 +28,28 @@ Project-scoped installs shadow user-scoped installs of the same plugin.
 
 ### Interactive mode
 
-| Command | Effect |
-|---|---|
+| Command        | Effect                                    |
+| -------------- | ----------------------------------------- |
 | `/marketplace` | Open interactive plugin browser (install) |
 
 ### Marketplace management
 
-| Command | Effect |
-|---|---|
-| `/marketplace add <source>` | Add a marketplace source |
-| `/marketplace remove <name>` | Remove a marketplace |
+| Command                      | Effect                                       |
+| ---------------------------- | -------------------------------------------- |
+| `/marketplace add <source>`  | Add a marketplace source                     |
+| `/marketplace remove <name>` | Remove a marketplace                         |
 | `/marketplace update [name]` | Re-fetch catalog(s); omit name to update all |
-| `/marketplace list` | List configured marketplaces |
+| `/marketplace list`          | List configured marketplaces                 |
 
 ### Plugin operations
 
-| Command | Effect |
-|---|---|
-| `/marketplace discover [marketplace]` | Browse available plugins |
-| `/marketplace install [--force] [--scope user\|project] name@marketplace` | Install a plugin |
-| `/marketplace uninstall [--scope user\|project] name@marketplace` | Uninstall a plugin |
-| `/marketplace installed` | List installed marketplace plugins |
-| `/marketplace upgrade [--scope user\|project] [name@marketplace]` | Upgrade one or all plugins |
+| Command                                                                   | Effect                             |
+| ------------------------------------------------------------------------- | ---------------------------------- |
+| `/marketplace discover [marketplace]`                                     | Browse available plugins           |
+| `/marketplace install [--force] [--scope user\|project] name@marketplace` | Install a plugin                   |
+| `/marketplace uninstall [--scope user\|project] name@marketplace`         | Uninstall a plugin                 |
+| `/marketplace installed`                                                  | List installed marketplace plugins |
+| `/marketplace upgrade [--scope user\|project] [name@marketplace]`         | Upgrade one or all plugins         |
 
 ### CLI equivalents
 
@@ -61,19 +61,21 @@ omp plugin marketplace remove <name>
 omp plugin marketplace update [name]
 omp plugin marketplace list
 omp plugin discover [marketplace]
-omp plugin install --scope project name@marketplace
+omp plugin install [--force] [--scope user|project] name@marketplace
+omp plugin uninstall [--scope user|project] name@marketplace
+omp plugin upgrade [--scope user|project] [name@marketplace]
 ```
 
 ## Marketplace sources
 
 When you run `/marketplace add <source>`, the system classifies the source:
 
-| Source format | Type | Example |
-|---|---|---|
-| `owner/repo` | GitHub shorthand | `anthropics/claude-plugins-official` |
-| `https://...*.json` | Direct catalog URL | `https://example.com/marketplace.json` |
-| `https://...*.git` or `git@...` | Git repository | `https://github.com/org/repo.git` |
-| `./path` or `~/path` or `/path` | Local directory | `./my-marketplace` |
+| Source format                   | Type               | Example                                |
+| ------------------------------- | ------------------ | -------------------------------------- |
+| `owner/repo`                    | GitHub shorthand   | `anthropics/claude-plugins-official`   |
+| `https://...*.json`             | Direct catalog URL | `https://example.com/marketplace.json` |
+| `https://...*.git` or `git@...` | Git repository     | `https://github.com/org/repo.git`      |
+| `./path` or `~/path` or `/path` | Local directory    | `./my-marketplace`                     |
 
 The system clones the repository (or reads the local directory), locates `.claude-plugin/marketplace.json`, validates it, and caches the catalog locally.
 
@@ -104,41 +106,43 @@ A marketplace catalog lives at `.claude-plugin/marketplace.json` in the reposito
 
 ### Required fields
 
-| Field | Description |
-|---|---|
-| `name` | Marketplace name. Lowercase alphanumeric, hyphens, and dots. Must start and end with alphanumeric. Max 64 chars. |
-| `owner.name` | Marketplace owner name |
-| `plugins` | Array of plugin entries |
+| Field        | Description                                                                                                      |
+| ------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `name`       | Marketplace name. Lowercase alphanumeric, hyphens, and dots. Must start and end with alphanumeric. Max 64 chars. |
+| `owner.name` | Marketplace owner name                                                                                           |
+| `plugins`    | Array of plugin entries                                                                                          |
 
 ### Plugin entry fields
 
-| Field | Required | Description |
-|---|---|---|
-| `name` | yes | Plugin name (same rules as marketplace name) |
-| `source` | yes | Where to find the plugin (see below) |
-| `description` | no | Short description |
-| `version` | no | Version string |
-| `author` | no | `{ name, email? }` |
-| `homepage` | no | URL |
-| `category` | no | Category string (e.g. `development`, `productivity`, `security`) |
-| `tags` | no | Array of string tags |
-| `strict` | no | Boolean |
-| `commands` | no | Slash commands provided |
-| `agents` | no | Agents provided |
-| `hooks` | no | Hook definitions |
-| `mcpServers` | no | MCP server definitions |
-| `lspServers` | no | LSP server definitions |
+| Field         | Required | Description                                                      |
+| ------------- | -------- | ---------------------------------------------------------------- |
+| `name`        | yes      | Plugin name (same rules as marketplace name)                     |
+| `source`      | yes      | Where to find the plugin (see below)                             |
+| `description` | no       | Short description                                                |
+| `version`     | no       | Version string                                                   |
+| `author`      | no       | `{ name, email? }`                                               |
+| `homepage`    | no       | URL                                                              |
+| `category`    | no       | Category string (e.g. `development`, `productivity`, `security`) |
+| `tags`        | no       | Array of string tags                                             |
+| `strict`      | no       | Boolean                                                          |
+| `commands`    | no       | Slash commands provided                                          |
+| `agents`      | no       | Agents provided                                                  |
+| `hooks`       | no       | Hook definitions                                                 |
+| `mcpServers`  | no       | MCP server definitions                                           |
+| `lspServers`  | no       | LSP server definitions                                           |
 
 ### Plugin source formats
 
 The `source` field supports several formats:
 
 **Relative path** (within the marketplace repo):
+
 ```json
 "source": "./plugins/my-plugin"
 ```
 
 **Git repository URL**:
+
 ```json
 "source": {
   "source": "url",
@@ -148,6 +152,7 @@ The `source` field supports several formats:
 ```
 
 **GitHub shorthand**:
+
 ```json
 "source": {
   "source": "github",
@@ -158,6 +163,7 @@ The `source` field supports several formats:
 ```
 
 **Git subdirectory** (monorepo):
+
 ```json
 "source": {
   "source": "git-subdir",
@@ -169,6 +175,7 @@ The `source` field supports several formats:
 ```
 
 **npm package**:
+
 ```json
 "source": {
   "source": "npm",
@@ -181,16 +188,16 @@ The `source` field supports several formats:
 
 ```
 ~/.omp/
-  config/
-    marketplaces.json          # Registry of added marketplaces
+  marketplaces.json              # Registry of added marketplaces
   plugins/
-    installed_plugins.json     # User-scoped installed plugins
+    installed_plugins.json       # User-scoped installed plugins
     cache/
-      marketplaces/            # Cached marketplace catalogs
-      plugins/                 # Cached plugin directories
+      marketplaces/              # Cached marketplace catalogs
+      plugins/                   # Cached plugin directories
 
 <project>/.omp/
-  installed_plugins.json       # Project-scoped installed plugins
+  plugins/
+    installed_plugins.json       # Project-scoped installed plugins
 ```
 
 ## Naming rules

@@ -45,16 +45,23 @@ The same minimum-content guard exists again inside `AgentSession.handoff()` and 
 - Reads current branch entries (`sessionManager.getBranch()`)
 - Validates minimum message count (`>= 2`)
 - Creates `#handoffAbortController`
-- Builds a fixed, inline prompt requesting a structured handoff document (`Goal`, `Constraints & Preferences`, `Progress`, `Key Decisions`, `Critical Context`, `Next Steps`)
+- Renders the fixed prompt template `prompts/system/handoff-document.md` with optional `additionalFocus`
 - Appends `Additional focus: ...` if custom instructions are provided
 
-Prompt is sent via:
+Prompt is sent as an agent-authored developer message via:
 
 ```ts
-await this.prompt(handoffPrompt, { expandPromptTemplates: false });
+await this.#promptAgentWithIdleRetry([
+  {
+    role: "developer",
+    content: [{ type: "text", text: handoffPrompt }],
+    attribution: "agent",
+    timestamp: Date.now(),
+  },
+]);
 ```
 
-`expandPromptTemplates: false` prevents slash/prompt-template expansion of this internal instruction payload.
+Because handoff bypasses `prompt(...)`, normal slash/prompt-template expansion is not applied to this internal instruction payload.
 
 ### 2) Capture completion
 
@@ -71,10 +78,10 @@ Important extraction assumptions:
 
 ### 3) Cancellation checks
 
-`handoff()` returns `undefined` when either condition holds:
+Cancellation throws `Error("Handoff cancelled")`; a completed generation with no extracted text returns `undefined`.
 
-- no captured handoff text, or
-- `#handoffAbortController.signal.aborted` is true
+- no captured handoff text → returns `undefined`
+- aborted handoff signal → throws `Error("Handoff cancelled")`
 
 It always clears `#handoffAbortController` in `finally`.
 
@@ -83,13 +90,13 @@ It always clears `#handoffAbortController` in `finally`.
 If text was captured and not aborted:
 
 1. Flush current session writer (`sessionManager.flush()`)
-2. Start a brand-new session (`sessionManager.newSession()`)
-3. Reset in-memory agent state (`agent.reset()`)
-4. Rebind `agent.sessionId` to new session id
-5. Clear queued context arrays (`#steeringMessages`, `#followUpMessages`, `#pendingNextTurnMessages`)
-6. Reset todo reminder counter
-
-`newSession()` creates a fresh header and empty entry list (leaf reset to `null`). In the handoff path, no `parentSession` is passed.
+2. Cancel async jobs (`#asyncJobManager?.cancelAll()`)
+3. Start a brand-new session (`sessionManager.newSession()`)
+4. Reset in-memory agent state (`agent.reset()`)
+5. Rebind `agent.sessionId` to new session id
+6. Clear queued context arrays (`#steeringMessages`, `#followUpMessages`, `#pendingNextTurnMessages`) and any scheduled hidden next-turn generation
+7. Reset todo reminder counter
+   `newSession()` creates a fresh header and empty entry list (leaf reset to `null`). In the handoff path, no `parentSession` is passed.
 
 ### 5) Handoff-context injection
 
@@ -119,9 +126,10 @@ Semantics:
 
 After injection:
 
-1. `sessionManager.buildSessionContext()` resolves message list for current leaf
+1. `buildDisplaySessionContext()` resolves message list for current leaf
 2. `agent.replaceMessages(sessionContext.messages)` makes the injected handoff message active context
-3. Method returns `{ document: handoffText }`
+3. Todo phases are synchronized from the new branch
+4. Method returns `{ document: handoffText, savedPath? }`
 
 At this point, the active LLM context in the new session contains the injected handoff message, not the old transcript.
 
@@ -164,11 +172,11 @@ After session reset, handoff is persisted as `custom_message` with `customType: 
 - `abortHandoff()` → aborts `#handoffAbortController`
 - `isGeneratingHandoff` → true while controller exists
 
-When this abort path is used, the handoff subscriber rejects with `Error("Handoff cancelled")`, and command controller maps it to cancellation UI.
+When this abort path is used, the handoff completion waiter resolves as cancelled, `agent.abort()` is called, and `handoff()` throws `Error("Handoff cancelled")`; command controller maps it to cancellation UI.
 
-### Interactive `/handoff` path limitation
+### Interactive `/handoff` path
 
-In current interactive controller wiring, `/handoff` does not install a dedicated Escape handler that calls `abortHandoff()` (unlike compaction/branch-summary paths that temporarily override `editor.onEscape`).
+The editor does not install a dedicated Escape handler that calls `abortHandoff()` for `/handoff`, but `InputController` treats `session.isGeneratingHandoff` as a busy state.
 
 Practical impact:
 
@@ -206,15 +214,16 @@ High-level state flow:
 1. Interactive slash command intercepted
 2. Preflight message-count guard
 3. `#handoffAbortController` created (`isGeneratingHandoff = true`)
-4. Internal handoff prompt submitted (visible in chat as normal assistant generation)
+4. Internal developer handoff prompt submitted (visible in chat as normal assistant generation)
 5. On `agent_end`, last assistant text extracted
-6. If missing/aborted → return `undefined` or cancellation error path
+6. If missing text → return `undefined`; if aborted → cancellation error path
 7. If present:
    - flush old session
+   - cancel async jobs
    - create new empty session
    - reset runtime queues/counters
    - append `custom_message(handoff)`
-   - rebuild and replace active agent messages
+   - optionally save an auto-triggered handoff document under the session artifacts directory when `compaction.handoffSaveToDisk` is enabled
 8. Controller rebuilds chat UI and announces success
 9. `#handoffAbortController` cleared (`isGeneratingHandoff = false`)
 
@@ -223,5 +232,6 @@ High-level state flow:
 - Handoff extraction is heuristic: "last assistant text blocks"; no structural validation.
 - No hard check that generated markdown follows requested section format.
 - Missing extracted text is reported as cancellation in controller UX.
-- `/handoff` interactive flow currently lacks a dedicated Escape→`abortHandoff()` binding.
+- `/handoff` interactive flow currently lacks a dedicated Escape→`abortHandoff()` binding, though the session reports handoff as a busy state.
 - New session lineage metadata (`parentSession`) is not set by this path.
+- Auto-triggered handoffs can write a timestamped `handoff-*.md` artifact when `compaction.handoffSaveToDisk` is enabled; write failure is logged and does not fail the handoff.

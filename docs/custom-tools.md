@@ -67,39 +67,45 @@ A custom tool module must export a function (default export preferred):
 import type { CustomToolFactory } from "@oh-my-pi/pi-coding-agent";
 
 const factory: CustomToolFactory = (pi) => ({
-	name: "repo_stats",
-	label: "Repo Stats",
-	description: "Counts tracked TypeScript files",
-	parameters: pi.typebox.Type.Object({
-		glob: pi.typebox.Type.Optional(pi.typebox.Type.String({ default: "**/*.ts" })),
-	}),
+  name: "repo_stats",
+  label: "Repo Stats",
+  description: "Counts tracked TypeScript files",
+  parameters: pi.typebox.Type.Object({
+    glob: pi.typebox.Type.Optional(
+      pi.typebox.Type.String({ default: "**/*.ts" }),
+    ),
+  }),
 
-	async execute(toolCallId, params, onUpdate, ctx, signal) {
-		onUpdate?.({
-			content: [{ type: "text", text: "Scanning files..." }],
-			details: { phase: "scan" },
-		});
+  async execute(toolCallId, params, onUpdate, ctx, signal) {
+    onUpdate?.({
+      content: [{ type: "text", text: "Scanning files..." }],
+      details: { phase: "scan" },
+    });
 
-		const result = await pi.exec("git", ["ls-files", params.glob ?? "**/*.ts"], { signal, cwd: pi.cwd });
-		if (result.killed) {
-			throw new Error("Scan was cancelled");
-		}
-		if (result.code !== 0) {
-			throw new Error(result.stderr || "git ls-files failed");
-		}
+    const result = await pi.exec(
+      "git",
+      ["ls-files", params.glob ?? "**/*.ts"],
+      { signal, cwd: pi.cwd },
+    );
+    if (result.killed) {
+      throw new Error("Scan was cancelled");
+    }
+    if (result.code !== 0) {
+      throw new Error(result.stderr || "git ls-files failed");
+    }
 
-		const files = result.stdout.split("\n").filter(Boolean);
-		return {
-			content: [{ type: "text", text: `Found ${files.length} files` }],
-			details: { count: files.length, sample: files.slice(0, 10) },
-		};
-	},
+    const files = result.stdout.split("\n").filter(Boolean);
+    return {
+      content: [{ type: "text", text: `Found ${files.length} files` }],
+      details: { count: files.length, sample: files.slice(0, 10) },
+    };
+  },
 
-	onSession(event) {
-		if (event.reason === "shutdown") {
-			// cleanup resources if needed
-		}
-	},
+  onSession(event) {
+    if (event.reason === "shutdown") {
+      // cleanup resources if needed
+    }
+  },
 });
 
 export default factory;
@@ -131,7 +137,7 @@ Loader starts with a no-op UI context and requires host code to call `setUIConte
 `CustomTool.execute` signature:
 
 ```ts
-execute(toolCallId, params, onUpdate, ctx, signal)
+execute(toolCallId, params, onUpdate, ctx, signal);
 ```
 
 - `params` is statically typed from your TypeBox schema via `Static<TParams>`.
@@ -153,7 +159,7 @@ execute(toolCallId, params, onUpdate, ctx, signal)
 
 Optional rendering hooks:
 
-- `renderCall(args, theme)`
+- `renderCall(args, options, theme)`
 - `renderResult(result, options, theme, args?)`
 
 Runtime behavior in TUI:

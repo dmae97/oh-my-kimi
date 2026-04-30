@@ -13,17 +13,18 @@ This document describes operator-visible behavior for session export/share/fork/
 
 ## Operation matrix
 
-| Operation | Entry path | Session mutation | Session file creation/switch | Output artifact |
-|---|---|---|---|---|
-| `/dump` | Interactive slash command | No | No | Clipboard text |
-| `/export [path]` | Interactive slash command | No | No | HTML file |
-| `--export <session.jsonl> [outputPath]` | CLI startup fast-path | No runtime session mutation | No active session; reads target file | HTML file |
-| `/share` | Interactive slash command | No | No | Temp HTML + share URL/gist |
-| `/fork` | Interactive slash command | Yes (active session identity changes) | Creates new session file and switches current session to it (persistent mode only) | Copies artifact directory to new session namespace when present |
-| `/resume` | Interactive slash command | Yes (active in-memory state replaced) | Switches to selected existing session file | None |
-| `--resume` | CLI startup (picker) | Yes after session creation | Opens selected existing session file | None |
-| `--resume <id|path>` | CLI startup | Yes after session creation | Opens existing session; cross-project case can fork into current project | None |
-| `--continue` | CLI startup | Yes after session creation | Opens terminal breadcrumb or most-recent session; creates new one if none exists | None |
+| Operation                               | Entry path                | Session mutation                      | Session file creation/switch                                                       | Output artifact                                                                  |
+| --------------------------------------- | ------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ---- |
+| `/dump`                                 | Interactive slash command | No                                    | No                                                                                 | Clipboard text                                                                   |
+| `/export [path]`                        | Interactive slash command | No                                    | No                                                                                 | HTML file                                                                        |
+| `--export <session.jsonl> [outputPath]` | CLI startup fast-path     | No runtime session mutation           | No active session; reads target file                                               | HTML file                                                                        |
+| `/share`                                | Interactive slash command | No                                    | No                                                                                 | Temp HTML + share URL/gist                                                       |
+| `/fork`                                 | Interactive slash command | Yes (active session identity changes) | Creates new session file and switches current session to it (persistent mode only) | Copies artifact directory to new session namespace when present                  |
+| `--fork <id                             | path>`                    | CLI startup                           | Yes after session creation                                                         | Creates a new session fork from the selected source into current cwd/session dir | None |
+| `/resume`                               | Interactive slash command | Yes (active in-memory state replaced) | Switches to selected existing session file                                         | None                                                                             |
+| `--resume`                              | CLI startup (picker)      | Yes after session creation            | Opens selected existing session file                                               | None                                                                             |
+| `--resume <id                           | path>`                    | CLI startup                           | Yes after session creation                                                         | Opens existing session; cross-project case can fork into current project         | None |
+| `--continue`                            | CLI startup               | Yes after session creation            | Opens terminal breadcrumb or most-recent session; creates new one if none exists   | None                                                                             |
 
 ## Export and dump
 
@@ -135,7 +136,7 @@ Cancellation/abort semantics in share:
 
 ## Fork
 
-`/fork` creates a new session from the current one and switches the active session identity.
+Interactive `/fork` creates a new session from the current one and switches the active session identity.
 
 ### Preconditions and immediate guards
 
@@ -169,6 +170,15 @@ Cancellation/abort semantics in share:
 - In-memory session manager returns `undefined` from `fork()`.
 - `AgentSession.fork()` returns `false`.
 - UI reports `Fork failed (session not persisted or cancelled)`.
+
+### CLI `--fork <id|path>`
+
+Startup `--fork` is resolved before normal session creation:
+
+1. `--fork` is rejected with `--no-session`.
+2. Path-like values (`/`, `\`, or `.jsonl`) call `SessionManager.forkFrom(path, cwd, sessionDir)`.
+3. Other values resolve like resumable session ids via current scope and then global search when allowed.
+4. The forked file is created in the current cwd/session-dir scope and becomes the active session manager for startup.
 
 ## Resume and continue
 

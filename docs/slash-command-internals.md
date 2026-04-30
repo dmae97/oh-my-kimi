@@ -32,6 +32,7 @@ Current slash-command providers and priorities:
 2. `claude` — priority `80`
 3. `claude-plugins` — priority `70`
 4. `codex` — priority `70`
+5. `opencode` — priority `55`
 
 Tie behavior: equal-priority providers keep registration order. Current import order registers `claude-plugins` before `codex`, so plugin commands win over codex commands on name collisions.
 
@@ -49,10 +50,10 @@ This applies across providers and also within a provider if it returns duplicate
 Providers mostly use `loadFilesFromDir(...)`, which currently:
 
 - defaults to non-recursive matching (`*.md`)
-- uses native glob with `gitignore: true`, `hidden: false`
-- reads each matched file and transforms it into a `SlashCommand`
+- uses native glob with `gitignore: true`, `hidden: false`, `fileType: File`
+- reads matching files in parallel and transforms them into `SlashCommand` items
 
-So hidden files/directories are not loaded, and ignored paths are skipped.
+So hidden files/directories are not loaded, ignored paths are skipped, and file order follows native glob result order unless a provider adds its own ordering.
 
 ## 2) Provider-specific source paths and local precedence
 
@@ -67,7 +68,7 @@ Search roots come from `.omp` directories:
 
 ## `claude` provider (`claude.ts`)
 
-Loads:
+Loads, subject to `commands.enableClaudeUser` and `commands.enableClaudeProject` settings:
 
 - user: `~/.claude/commands/*.md`
 - project: `<cwd>/.claude/commands/*.md`
@@ -84,6 +85,15 @@ Loads:
 Both sides are loaded then flattened in user-first order, so **user Codex commands beat project Codex commands** on collisions.
 
 Codex command content is parsed with frontmatter stripping (`parseFrontmatter`), and command name can be overridden by frontmatter `name`; otherwise filename is used.
+
+## `opencode` provider (`opencode.ts`)
+
+Loads, subject to `commands.enableOpencodeUser` and `commands.enableOpencodeProject` settings:
+
+- user: `~/.config/opencode/commands/*.md`
+- project: `<cwd>/.opencode/commands/*.md`
+
+Both sides are loaded then flattened in user-first order, so **user OpenCode commands beat project OpenCode commands** on collisions. OpenCode command content is parsed with frontmatter stripping, and command name can be overridden by frontmatter `name`; otherwise filename is used.
 
 ## `claude-plugins` provider (`claude-plugins.ts`)
 
@@ -176,9 +186,10 @@ This is why slash command expansion sits before prompt-template expansion, and w
 - finds exact name match in loaded `fileCommands`
 - if matched, applies:
   - positional replacement: `$1`, `$2`, ...
+  - slice replacement: `$@[start]` / `$@[start:length]` using 1-based positions
   - aggregate replacement: `$ARGUMENTS` and `$@`
-  - then template rendering via `prompt.render` with `{ args, ARGUMENTS, arguments }`
-- if no match, returns original text unchanged
+  - template rendering via `prompt.render` with `{ args, ARGUMENTS, arguments }`
+  - inline-argument fallback append when the template did not use an inline argument placeholder
 
 ### `parseCommandArgs` caveats
 

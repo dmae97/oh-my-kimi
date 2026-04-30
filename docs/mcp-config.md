@@ -59,7 +59,7 @@ Top-level keys:
 
 - `$schema` — optional JSON Schema URL for tooling
 - `mcpServers` — map of server name to server config
-- `disabledServers` — user-level denylist used to turn off discovered servers by name
+- `disabledServers` — user-level denylist used to turn off discovered servers by name; runtime loading reads this list from `~/.omp/agent/mcp.json`
 
 Server names must match `^[a-zA-Z0-9_.-]{1,100}$`.
 
@@ -317,11 +317,12 @@ This is the part that usually trips people up.
 
 ### In `.omp/mcp.json` and `~/.omp/agent/mcp.json`
 
-Before OMP launches a server or makes an HTTP request, it resolves `env` and `headers` values like this:
+Before OMP launches a stdio server or makes an HTTP/SSE request, it resolves stdio `env` values and HTTP/SSE `headers` values like this:
 
-1. If a value starts with `!`, OMP runs it as a shell command and uses trimmed stdout.
-2. Otherwise OMP first checks whether the value matches an environment variable name.
-3. If that environment variable is not set, OMP uses the string literally.
+1. If a value starts with `!`, OMP runs the rest as a shell command with a 10s timeout and uses trimmed stdout.
+2. If the command fails, times out, or prints only whitespace, that `env`/`headers` entry is omitted.
+3. Otherwise OMP checks whether the value names an environment variable.
+4. If that environment variable is set to a non-empty value, OMP uses the environment value; otherwise it uses the string literally.
 
 Examples:
 
@@ -344,7 +345,7 @@ That means this is valid and convenient for local secrets:
 
 ### In root `mcp.json` and `.mcp.json`
 
-The standalone fallback loader also expands `${VAR}` and `${VAR:-default}` inside strings during discovery.
+The standalone fallback loader also expands `${VAR}` and `${VAR:-default}` inside strings during discovery for `command`, `args`, `env`, `cwd`, `url`, `headers`, `auth`, and `oauth`.
 
 Example:
 
@@ -366,7 +367,7 @@ If you want the least surprising OMP behavior, prefer `.omp/mcp.json` or `~/.omp
 
 ## `disabledServers`
 
-`disabledServers` is mainly useful in the user config file (`~/.omp/agent/mcp.json`) when a server is discovered from some other source and you want OMP to ignore it without editing that other tool's config.
+`disabledServers` is read from the user config file (`~/.omp/agent/mcp.json`) when a server is discovered from any source and you want OMP to ignore it without editing that other tool's config.
 
 Example:
 
@@ -392,6 +393,8 @@ After editing, use:
 - `/mcp reload` to rediscover and reconnect servers in the current session
 - `/mcp list` to see which config file a server came from
 - `/mcp test <name>` to test a single server
+- `/mcp reconnect <name>` to reconnect one server without rediscovering all configs
+- `/mcp resources`, `/mcp prompts`, and `/mcp notifications` to inspect non-tool MCP capabilities
 
 ## Validation rules OMP enforces
 
@@ -410,7 +413,7 @@ Practical implications:
 
 ## Discovery and precedence
 
-OMP does not merge duplicate server definitions across files. Discovery providers are prioritized, and the higher-priority definition wins.
+OMP does not merge duplicate server definitions across files. Discovery providers are prioritized, and the higher-priority definition wins. Separately, `disabledServers` from `~/.omp/agent/mcp.json` can suppress a discovered server by name.
 
 In practice:
 
@@ -439,7 +442,7 @@ The JSON is valid, but the server may still be unreachable. Use `/mcp test <name
 
 ### The server exists in another tool's config but not in OMP
 
-Run `/mcp list`. OMP discovers many third-party MCP files, but project-level loading can also be disabled via the `mcp.enableProjectConfig` setting.
+Run `/mcp list`. OMP discovers many third-party MCP files, but project-level loading can also be disabled via the `mcp.enableProjectConfig` setting, and a user-level `disabledServers` entry can suppress a server by name.
 
 ## References
 
