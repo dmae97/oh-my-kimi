@@ -40,7 +40,7 @@ describe("EvalTool language resolution", () => {
 
 		const tool = new EvalTool(makeSession());
 		await tool.execute("call-1", {
-			input: "=== CELL one ===\n```js\nconst x = 1;\n```\n",
+			input: "```js one\nconst x = 1;\n```\n",
 		});
 
 		expect(jsExecuteSpy).toHaveBeenCalledTimes(1);
@@ -54,7 +54,7 @@ describe("EvalTool language resolution", () => {
 
 		const tool = new EvalTool(makeSession());
 		await tool.execute("call-2", {
-			input: "=== CELL one ===\n```python\nprint('hi')\n```\n",
+			input: "```python one\nprint('hi')\n```\n",
 		});
 
 		expect(pythonExecuteSpy).toHaveBeenCalledTimes(1);
@@ -68,7 +68,7 @@ describe("EvalTool language resolution", () => {
 
 		const tool = new EvalTool(makeSession());
 		await tool.execute("call-3", {
-			input: "=== CELL one ===\ndef greet():\n    print('hi')\ngreet()\n",
+			input: "def greet():\n    print('hi')\ngreet()\n",
 		});
 
 		expect(pythonExecuteSpy).toHaveBeenCalledTimes(1);

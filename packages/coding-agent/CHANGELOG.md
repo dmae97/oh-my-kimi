@@ -6,7 +6,7 @@
 - Removed the built-in `python` tool in favor of `eval`, so tool allowlists and tool-call handlers referencing `python` need to migrate
 - Removed the `python.toolMode` setting and replaced mode control with separate `eval.py` and `eval.js` toggles
 - Changed the tool runtime config surface by migrating `python` execution timeout/export behavior to `eval` and replacing `./ipy/*` internal exports with `./eval/*` paths
-- Changed the `eval` tool wire format to a single `input` string with `=== CELL ===` sections, fenced language selection, per-cell header timeouts, and `=== RESET ===` directives instead of top-level `cells`, `language`, `timeout`, and `reset` fields
+- Changed the `eval` tool wire format to a single `input` string composed of markdown fenced code blocks (with per-fence language, timeout, title, and reset metadata in the info string) instead of top-level `cells`, `language`, `timeout`, and `reset` fields
 
 ### Added
 

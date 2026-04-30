@@ -40,7 +40,7 @@ const shouldRun = Boolean(pythonPath) && hasKernelDeps;
 
 describe.skipIf(!shouldRun)("PYTHON_PRELUDE integration", () => {
 	it("exposes prelude helpers via eval python backend", async () => {
-		const helpers = ["env", "read", "write", "append", "rm", "mv", "cp", "find", "grep"];
+		const helpers = ["env", "read", "write", "append", "find", "glob", "grep", "rgrep", "sed", "tree", "stat", "diff", "run", "output"];
 
 		const session = {
 			cwd: getProjectDir(),
@@ -64,8 +64,7 @@ describe.skipIf(!shouldRun)("PYTHON_PRELUDE integration", () => {
 	`;
 
 		const result = await tool.execute("tool-call-1", {
-			input: `=== CELL prelude helpers ===
-\`\`\`py
+			input: `\`\`\`py prelude helpers
 ${code}
 \`\`\`
 `,

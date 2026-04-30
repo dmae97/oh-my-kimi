@@ -378,7 +378,7 @@ describe("AgentSession python cleanup", () => {
 		expect(EvalTool).toBeDefined();
 		let toolExecutionSettled = false;
 		const toolExecution = EvalTool!
-			.execute("call-id", { input: "=== CELL ===\n```py\nprint('tool')\n```" }, undefined, undefined, undefined)
+			.execute("call-id", { input: "```py\nprint('tool')\n```" }, undefined, undefined, undefined)
 			.finally(() => {
 				toolExecutionSettled = true;
 			});
@@ -437,7 +437,7 @@ describe("AgentSession python cleanup", () => {
 		expect(EvalTool).toBeDefined();
 		const toolExecution = EvalTool!.execute(
 			"call-id",
-			{ input: "=== CELL ===\n```py\nprint('tool after warmup')\n```" },
+			{ input: "```py\nprint('tool after warmup')\n```" },
 			undefined,
 			undefined,
 			undefined,
@@ -493,7 +493,7 @@ describe("AgentSession python cleanup", () => {
 		expect(EvalTool).toBeDefined();
 		let toolExecutionSettled = false;
 		const toolExecution = EvalTool!
-			.execute("call-id", { input: "=== CELL ===\n```py\nprint('tool')\n```" }, undefined, undefined, undefined)
+			.execute("call-id", { input: "```py\nprint('tool')\n```" }, undefined, undefined, undefined)
 			.finally(() => {
 				toolExecutionSettled = true;
 			});
@@ -507,14 +507,14 @@ describe("AgentSession python cleanup", () => {
 
 		expect(disposed).toBe(false);
 		expect(toolExecutionSettled).toBe(false);
-		expect(warmupSpy).toHaveBeenCalledTimes(1);
+		expect(warmupSpy).toHaveBeenCalledTimes(2);
 		expect(executeSpy).toHaveBeenCalledTimes(1);
 
 		const [toolResult] = await Promise.all([toolExecution, disposeSession]);
 
 		expect(disposed).toBe(true);
 		expect(toolExecutionSettled).toBe(true);
-		expect(warmupSpy).toHaveBeenCalledTimes(1);
+		expect(warmupSpy).toHaveBeenCalledTimes(2);
 		expect(executeSpy).toHaveBeenCalledTimes(1);
 		expect(toolResult.details?.isError).toBe(true);
 		expect(toolResult.content).toContainEqual(
@@ -726,7 +726,7 @@ describe("AgentSession python cleanup", () => {
 		await expect(
 			EvalTool!.execute(
 				"call-id",
-				{ input: "=== CELL ===\n```py\nprint('late')\n```" },
+				{ input: "```py\nprint('late')\n```" },
 				undefined,
 				undefined,
 				undefined,
@@ -767,7 +767,7 @@ describe("AgentSession python cleanup", () => {
 		expect(EvalTool).toBeDefined();
 		const execution = EvalTool!.execute(
 			"call-id",
-			{ input: "=== CELL ===\n```py\nprint('late after artifact')\n```" },
+			{ input: "```py\nprint('late after artifact')\n```" },
 			undefined,
 			undefined,
 			undefined,
