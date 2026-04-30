@@ -724,13 +724,7 @@ describe("AgentSession python cleanup", () => {
 		expect(EvalTool).toBeDefined();
 		const disposeSession = session.dispose();
 		await expect(
-			EvalTool!.execute(
-				"call-id",
-				{ input: "```py\nprint('late')\n```" },
-				undefined,
-				undefined,
-				undefined,
-			),
+			EvalTool!.execute("call-id", { input: "```py\nprint('late')\n```" }, undefined, undefined, undefined),
 		).rejects.toThrow("Python execution is unavailable while session disposal is in progress");
 		await disposeSession;
 		expect(warmupSpy).toHaveBeenCalledTimes(1);
