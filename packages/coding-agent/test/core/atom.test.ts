@@ -271,6 +271,34 @@ describe("atom parser — basic forms", () => {
 		expect(applyDiff(longer, diff)).toBe("aaa\nONE\nTWO\n# Heading\neee");
 	});
 
+	it("blank line between two `\\TEXT` continuation lines is treated as implicit `\\` blank", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		// Note the LITERAL blank line between the two `\TEXT` continuations —
+		// without forgiveness this would error with "\TEXT continuation is only
+		// valid immediately after a Lid=TEXT…".
+		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=ONE`, "\\TWO", "", "\\THREE"].join("\n");
+		expect(applyDiff(longer, diff)).toBe("aaa\nONE\nTWO\n\nTHREE\neee");
+	});
+
+	it("multiple consecutive blank lines inside a continuation chain all become blank inserts", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=ONE`, "\\TWO", "", "", "\\FIVE"].join("\n");
+		expect(applyDiff(longer, diff)).toBe("aaa\nONE\nTWO\n\n\nFIVE\neee");
+	});
+
+	it("blank line after a single-anchor `Lid=` followed by `\\TEXT` is treated as implicit `\\`", () => {
+		const content = "aaa\nbbb\nccc";
+		const diff = [`${tag(2, "bbb")}=ONE`, "", "\\THREE"].join("\n");
+		expect(applyDiff(content, diff)).toBe("aaa\nONE\n\nTHREE\nccc");
+	});
+
+	it("trailing blank line after the last `\\TEXT` continuation still terminates the replacement", () => {
+		const longer = "aaa\nbbb\nccc\nddd\neee";
+		// Blank tail with no follow-up `\TEXT` — must NOT swallow into the replacement.
+		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=ONE`, "\\TWO", ""].join("\n");
+		expect(applyDiff(longer, diff)).toBe("aaa\nONE\nTWO\neee");
+	});
+
 	it("`^Lid` moves the cursor BEFORE the anchored line", () => {
 		const diff = `^${tag(2, "bbb")}\n+INSERTED`;
 		expect(applyDiff(content, diff)).toBe("aaa\nINSERTED\nbbb\nccc");

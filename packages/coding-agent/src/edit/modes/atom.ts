@@ -518,11 +518,26 @@ function isReplaceStart(line: string): boolean {
 	return /^[1-9]\d*[a-z]{2}[ \t]*[=|]/.test(stripped);
 }
 
+// Lookahead used by the blank-line forgiveness rule below: returns true when
+// the first non-blank line at or after `start` is a `\TEXT` continuation.
+function nextNonBlankIsBackslash(lines: readonly string[], start: number): boolean {
+	for (let j = start; j < lines.length; j++) {
+		const peek = lines[j].endsWith("\r") ? lines[j].slice(0, -1) : lines[j];
+		if (peek.length === 0) continue;
+		return peek.startsWith("\\");
+	}
+	return false;
+}
+
 // Explicit continuation uses `\TEXT` after a replacement op (`Lid=FIRST` or
 // `LidA..LidB=FIRST`). The leading backslash is the continuation marker; the
 // rest of the line is inserted literally, so `\\TEXT` inserts a line starting
-// with `\TEXT`. Raw unprefixed continuation remains an undocumented
-// best-effort recovery for range replacements only, kept for old transcripts.
+// with `\TEXT`. As a forgiveness rule, a literal blank line inside an active
+// replacement that is itself followed (possibly through more blanks) by another
+// `\TEXT` continuation is treated as an implicit `\` blank insert — authors
+// frequently drop a real blank between `\TEXT` lines instead of writing `\`.
+// Raw unprefixed continuation remains an undocumented best-effort recovery for
+// range replacements only, kept for old transcripts.
 function preprocessRangeReplaceContinuation(diff: string): string {
 	const lines = diff.split("\n");
 	let inRangeReplace = false;
@@ -538,6 +553,14 @@ function preprocessRangeReplaceContinuation(diff: string): string {
 				);
 			}
 			lines[i] = `+${RANGE_CONTINUATION_SENTINEL}${rawLine.slice(1)}`;
+			continue;
+		}
+
+		// Forgiveness: a blank line inside an active replacement that is followed
+		// by another `\TEXT` continuation is treated as an implicit `\` blank
+		// insert. Keeps the replacement open across the blank.
+		if (inReplace && line.length === 0 && nextNonBlankIsBackslash(lines, i + 1)) {
+			lines[i] = `+${RANGE_CONTINUATION_SENTINEL}`;
 			continue;
 		}
 
