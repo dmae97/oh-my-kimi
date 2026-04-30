@@ -145,6 +145,7 @@
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
+        "lru-cache": "catalog:",
         "marked": "catalog:",
       },
       "devDependencies": {

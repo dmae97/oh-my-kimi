@@ -1,3 +1,4 @@
+import { LRUCache } from "lru-cache/raw";
 import { marked, type Token, type Tokens } from "marked";
 import type { SymbolTheme } from "../symbols";
 import { TERMINAL } from "../terminal-capabilities";
@@ -12,38 +13,13 @@ import { applyBackgroundToLine, padding, replaceTabs, visibleWidth, wrapTextWith
 // render of a fresh component. This module-level cache survives across
 // component lifetimes and eliminates redundant marked.lexer + highlightCode
 // (Rust FFI) work for content/layout combinations already seen this session.
-//
-// Implementation: a plain Map used as an ordered LRU. JavaScript Maps iterate
-// in insertion order; we delete-then-reinsert on access to move an entry to
-// the "most recent" end, and evict the first (oldest) entry on overflow.
-// This avoids the lru-cache package dep (not yet in tui/package.json) while
-// keeping the diff contained to this file.
 
 const RENDER_CACHE_MAX = 256; // sane cap: ~256 distinct message × width combos
-const _renderCache = new Map<string, string[]>();
-
-function renderCacheGet(key: string): string[] | undefined {
-	const v = _renderCache.get(key);
-	if (v === undefined) return undefined;
-	// Move to MRU position.
-	_renderCache.delete(key);
-	_renderCache.set(key, v);
-	return v;
-}
-
-function renderCacheSet(key: string, value: string[]): void {
-	if (_renderCache.has(key)) {
-		_renderCache.delete(key);
-	} else if (_renderCache.size >= RENDER_CACHE_MAX) {
-		// Evict LRU (first inserted = Map iterator's first entry).
-		_renderCache.delete(_renderCache.keys().next().value!);
-	}
-	_renderCache.set(key, value);
-}
+const renderCache = new LRUCache<string, string[]>({ max: RENDER_CACHE_MAX });
 
 /** Drop all L2 cache entries. Call on theme change to prevent stale styled output. */
 export function clearRenderCache(): void {
-	_renderCache.clear();
+	renderCache.clear();
 }
 
 // Stable numeric IDs for structural theme/style objects (no ID field on type).
@@ -197,7 +173,7 @@ export class Markdown implements Component {
 		// session-tree navigations. Key encodes every dimension that affects the
 		// render output so different configurations never collide.
 		const cacheKey = `${normalizedText}\x00${width}\x00${this.#paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}`;
-		const cached = renderCacheGet(cacheKey);
+		const cached = renderCache.get(cacheKey);
 		if (cached !== undefined) {
 			// Populate L1 so subsequent calls from this instance are O(1) map lookup.
 			this.#cachedText = this.#text;
@@ -274,7 +250,7 @@ export class Markdown implements Component {
 
 		// Update L2 module-level LRU so future instances with the same key skip
 		// the marked.lexer + highlightCode (Rust FFI) work entirely.
-		renderCacheSet(cacheKey, result);
+		renderCache.set(cacheKey, result);
 
 		return result;
 	}
