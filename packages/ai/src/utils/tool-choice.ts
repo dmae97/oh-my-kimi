@@ -57,9 +57,11 @@ export function mapToOpenAICompletionsToolChoice(choice?: ToolChoice): OpenAICom
 /**
  * Returns true when an OpenAI-completions `tool_choice` value forces a tool
  * call (`"required"` or a function-name pin), as opposed to leaving it open
- * (`"auto"`, `"none"`, or unset).
+ * (`"auto"`, `"none"`, or unset). Accepts `unknown` because the param shape
+ * pulled from the OpenAI SDK (`ChatCompletionToolChoiceOption`) widens with
+ * each release; this check only needs the open/forced bit.
  */
-export function isForcedToolChoice(choice: OpenAICompletionsToolChoice): boolean {
+export function isForcedToolChoice(choice: unknown): boolean {
 	if (choice === undefined || choice === "auto" || choice === "none") return false;
 	return true;
 }
