@@ -793,7 +793,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel = defaultRoleSpec.thinkingLevel;
 	}
 
-	// Fall back to settings default
+	// Prefer the selected model's configured defaultLevel, otherwise fall back
+	// to the global settings default.
+	if (thinkingLevel === undefined && model?.thinking?.defaultLevel !== undefined) {
+		thinkingLevel = model.thinking.defaultLevel;
+	}
 	if (thinkingLevel === undefined) {
 		thinkingLevel = settings.get("defaultThinkingLevel");
 	}

@@ -3614,8 +3614,9 @@ export class AgentSession {
 		);
 		this.settings.getStorage()?.recordModelUsage(`${model.provider}/${model.id}`);
 
-		// Re-apply the current thinking level for the newly selected model
-		this.setThinkingLevel(this.thinkingLevel);
+		// Re-apply thinking for the newly selected model. Prefer the model's
+		// configured defaultLevel; otherwise preserve the current level.
+		this.setThinkingLevel(model.thinking?.defaultLevel ?? this.thinkingLevel);
 		await this.#syncEditToolModeAfterModelChange(previousEditMode);
 	}
 
@@ -3636,8 +3637,9 @@ export class AgentSession {
 		this.sessionManager.appendModelChange(`${model.provider}/${model.id}`, "temporary");
 		this.settings.getStorage()?.recordModelUsage(`${model.provider}/${model.id}`);
 
-		// Apply explicit thinking level, or re-clamp current level to new model's capabilities
-		this.setThinkingLevel(thinkingLevel ?? this.thinkingLevel);
+		// Apply explicit thinking level if given; otherwise prefer the model's
+		// configured defaultLevel; otherwise re-clamp the current level.
+		this.setThinkingLevel(thinkingLevel ?? model.thinking?.defaultLevel ?? this.thinkingLevel);
 		await this.#syncEditToolModeAfterModelChange(previousEditMode);
 	}
 

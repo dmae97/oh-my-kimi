@@ -183,6 +183,7 @@ const ModelThinkingSchema = Type.Object({
 	minLevel: EffortSchema,
 	maxLevel: EffortSchema,
 	mode: ThinkingControlModeSchema,
+	defaultLevel: Type.Optional(EffortSchema),
 });
 
 // Schema for custom model definition
