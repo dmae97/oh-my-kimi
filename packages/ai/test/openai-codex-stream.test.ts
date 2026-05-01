@@ -38,7 +38,284 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
+function createCodexTestToken(accountId = "acc_test"): string {
+	const payload = Buffer.from(
+		JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+		"utf8",
+	).toBase64();
+	return `aaa.${payload}.bbb`;
+}
+
+function createCodexTestModel(baseUrl?: string): Model<"openai-codex-responses"> {
+	return {
+		id: "gpt-5.3-codex-spark",
+		name: "GPT-5.3 Codex Spark",
+		api: "openai-codex-responses",
+		provider: "openai-codex",
+		baseUrl: baseUrl ?? "",
+		reasoning: true,
+		preferWebsockets: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 128000,
+	};
+}
+
+function createCodexTestContext(): Context {
+	return {
+		systemPrompt: "You are a helpful assistant.",
+		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+	};
+}
+
+function createCompletedCodexSse(text: string): string {
+	return `${[
+		`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}`,
+		`data: ${JSON.stringify({ type: "response.output_text.delta", delta: text })}`,
+		`data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "message", id: "msg_1", role: "assistant", status: "completed", content: [{ type: "output_text", text }] } })}`,
+		`data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8, input_tokens_details: { cached_tokens: 0 } } } })}`,
+	].join("\n\n")}\n\n`;
+}
+
+function encodeWebSocketMessage(value: Record<string, unknown>): Uint8Array {
+	return new TextEncoder().encode(JSON.stringify(value));
+}
+
+function createMessageEvent(data: unknown): MessageEvent {
+	return new MessageEvent("message", { data });
+}
+
+function emitWebSocketEvent(listeners: Map<string, Set<(event: Event) => void>>, type: string, event: Event): void {
+	const eventListeners = listeners.get(type);
+	if (!eventListeners) return;
+	for (const listener of eventListeners) {
+		listener(event);
+	}
+}
+
 describe("openai-codex streaming", () => {
+	it("normalizes Codex response endpoint base URLs", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const context = createCodexTestContext();
+		const requestedUrls: string[] = [];
+		const sse = createCompletedCodexSse("Hello");
+		global.fetch = vi.fn(async (input: string | URL) => {
+			requestedUrls.push(typeof input === "string" ? input : input.toString());
+			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+		}) as unknown as typeof fetch;
+
+		for (const baseUrl of [
+			undefined,
+			"https://chatgpt.com/backend-api",
+			"https://chatgpt.com/backend-api/codex",
+			"https://chatgpt.com/backend-api/codex/responses",
+		]) {
+			const model = { ...createCodexTestModel(baseUrl), preferWebsockets: false };
+			const result = await streamOpenAICodexResponses(model, context, { apiKey: token }).result();
+			expect(result.stopReason).toBe("stop");
+		}
+
+		expect(requestedUrls).toEqual([
+			"https://chatgpt.com/backend-api/codex/responses",
+			"https://chatgpt.com/backend-api/codex/responses",
+			"https://chatgpt.com/backend-api/codex/responses",
+			"https://chatgpt.com/backend-api/codex/responses",
+		]);
+	});
+
+	it("parses websocket JSON from non-string payloads", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		type WsListener = (event: Event) => void;
+		class BinaryPayloadWebSocket {
+			static readonly CONNECTING = 0;
+			static readonly OPEN = 1;
+			static readonly CLOSING = 2;
+			static readonly CLOSED = 3;
+			readyState = BinaryPayloadWebSocket.CONNECTING;
+			#listeners = new Map<string, Set<WsListener>>();
+
+			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
+				setTimeout(() => {
+					this.readyState = BinaryPayloadWebSocket.OPEN;
+					this.#emit("open", new Event("open"));
+				}, 0);
+			}
+
+			addEventListener(type: string, listener: unknown): void {
+				if (typeof listener !== "function") return;
+				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
+				listeners.add(listener as WsListener);
+				this.#listeners.set(type, listeners);
+			}
+
+			removeEventListener(type: string, listener: unknown): void {
+				if (typeof listener !== "function") return;
+				this.#listeners.get(type)?.delete(listener as WsListener);
+			}
+
+			send(): void {
+				const added = encodeWebSocketMessage({
+					type: "response.output_item.added",
+					item: { type: "message", id: "msg_ws", role: "assistant", status: "in_progress", content: [] },
+				});
+				const contentPart = encodeWebSocketMessage({
+					type: "response.content_part.added",
+					part: { type: "output_text", text: "" },
+				});
+				const delta = encodeWebSocketMessage({ type: "response.output_text.delta", delta: "Hello binary" });
+				const done = encodeWebSocketMessage({
+					type: "response.output_item.done",
+					item: {
+						type: "message",
+						id: "msg_ws",
+						role: "assistant",
+						status: "completed",
+						content: [{ type: "output_text", text: "Hello binary" }],
+					},
+				});
+				const completed = encodeWebSocketMessage({
+					type: "response.done",
+					response: {
+						id: "resp_ws",
+						status: "completed",
+						usage: {
+							input_tokens: 5,
+							output_tokens: 3,
+							total_tokens: 8,
+							input_tokens_details: { cached_tokens: 0 },
+						},
+					},
+				});
+				this.#emit(
+					"message",
+					createMessageEvent(added.buffer.slice(added.byteOffset, added.byteOffset + added.byteLength)),
+				);
+				this.#emit("message", createMessageEvent(contentPart));
+				this.#emit("message", createMessageEvent(new DataView(delta.buffer, delta.byteOffset, delta.byteLength)));
+				this.#emit("message", createMessageEvent(new Blob([done])));
+				this.#emit(
+					"message",
+					createMessageEvent(
+						completed.buffer.slice(completed.byteOffset, completed.byteOffset + completed.byteLength),
+					),
+				);
+			}
+
+			close(): void {
+				this.readyState = BinaryPayloadWebSocket.CLOSED;
+			}
+
+			#emit(type: string, event: Event): void {
+				emitWebSocketEvent(this.#listeners, type, event);
+			}
+		}
+
+		global.WebSocket = BinaryPayloadWebSocket as unknown as typeof WebSocket;
+		const result = await streamOpenAICodexResponses(
+			createCodexTestModel("https://chatgpt.com/backend-api"),
+			createCodexTestContext(),
+			{
+				apiKey: token,
+				sessionId: "ws-binary-payload-session",
+				providerSessionState: new Map<string, ProviderSessionState>(),
+			},
+		).result();
+		expect(result.content.find(block => block.type === "text")?.text).toBe("Hello binary");
+		expect(result.stopReason).toBe("stop");
+	});
+
+	it("omits request-body headers and replaces stale beta headers for websocket handshakes", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		let capturedHeaders: Record<string, string> | undefined;
+		type WsListener = (event: Event) => void;
+		class HeaderCaptureWebSocket {
+			static readonly CONNECTING = 0;
+			static readonly OPEN = 1;
+			static readonly CLOSING = 2;
+			static readonly CLOSED = 3;
+			readyState = HeaderCaptureWebSocket.CONNECTING;
+			#listeners = new Map<string, Set<WsListener>>();
+
+			constructor(_url: string, options?: { headers?: Record<string, string> }) {
+				capturedHeaders = options?.headers;
+				setTimeout(() => {
+					this.readyState = HeaderCaptureWebSocket.OPEN;
+					this.#emit("open", new Event("open"));
+				}, 0);
+			}
+
+			addEventListener(type: string, listener: unknown): void {
+				if (typeof listener !== "function") return;
+				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
+				listeners.add(listener as WsListener);
+				this.#listeners.set(type, listeners);
+			}
+
+			removeEventListener(type: string, listener: unknown): void {
+				if (typeof listener !== "function") return;
+				this.#listeners.get(type)?.delete(listener as WsListener);
+			}
+
+			send(): void {
+				this.#emit(
+					"message",
+					createMessageEvent(
+						JSON.stringify({
+							type: "response.done",
+							response: {
+								id: "resp_ws",
+								status: "completed",
+								usage: {
+									input_tokens: 1,
+									output_tokens: 1,
+									total_tokens: 2,
+									input_tokens_details: { cached_tokens: 0 },
+								},
+							},
+						}),
+					),
+				);
+			}
+
+			close(): void {
+				this.readyState = HeaderCaptureWebSocket.CLOSED;
+			}
+
+			#emit(type: string, event: Event): void {
+				emitWebSocketEvent(this.#listeners, type, event);
+			}
+		}
+
+		global.WebSocket = HeaderCaptureWebSocket as unknown as typeof WebSocket;
+		await streamOpenAICodexResponses(
+			createCodexTestModel("https://chatgpt.com/backend-api"),
+			createCodexTestContext(),
+			{
+				apiKey: token,
+				headers: {
+					accept: "application/json",
+					"content-type": "application/json",
+					"OpenAI-Beta": "responses=experimental",
+					"openai-beta": "responses=stale",
+				},
+				sessionId: "ws-header-session",
+				providerSessionState: new Map<string, ProviderSessionState>(),
+			},
+		).result();
+
+		expect(capturedHeaders?.accept).toBeUndefined();
+		expect(capturedHeaders?.["content-type"]).toBeUndefined();
+		expect(capturedHeaders?.["openai-beta"]).toBe("responses_websockets=2026-02-06");
+		expect(Object.keys(capturedHeaders ?? {}).filter(key => key.toLowerCase() === "openai-beta")).toHaveLength(1);
+	});
+
 	it("streams SSE responses into AssistantMessageEventStream", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
@@ -288,7 +565,9 @@ describe("openai-codex streaming", () => {
 			`data: ${JSON.stringify({ type: "response.failed", code: "server_error", message: "late failure after terminal event" })}`,
 		].join("\n\n")}\n\n`;
 
-		global.fetch = vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
+		global.fetch = vi.fn(
+			async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }),
+		) as unknown as typeof fetch;
 
 		const model: Model<"openai-codex-responses"> = {
 			id: "gpt-5.1-codex",

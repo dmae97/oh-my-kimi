@@ -8,6 +8,14 @@ export interface AbortSourceTracker {
 
 /**
  * Tracks whether a merged request signal was aborted by the caller or by provider-local logic.
+ *
+ * Caller aborts always take priority. When both the caller and a local watchdog fire near
+ * each other, the merged `requestSignal.reason` reflects whichever AbortController called
+ * `.abort()` first — but ordering is racy and not meaningful for upstream consumers. What
+ * matters is intent: if the caller's signal aborted, the request was cancelled by the
+ * caller, and any local watchdog reason is incidental and **MUST NOT** be surfaced as a
+ * retryable transient error (which would cause auto-retry to re-enter streaming and leave
+ * the UI showing a spinner the user already tried to cancel).
  */
 export function createAbortSourceTracker(callerSignal?: AbortSignal): AbortSourceTracker {
 	const requestAbortController = new AbortController();
@@ -25,12 +33,19 @@ export function createAbortSourceTracker(callerSignal?: AbortSignal): AbortSourc
 			return reason;
 		},
 		getLocalAbortReason() {
-			if (!localAbortReason) return undefined;
+			// Caller intent dominates. Surface a local reason only when the caller did not
+			// abort, so timeout/idle-watchdog errors don't masquerade as the user's cancel.
+			if (!localAbortReason || callerSignal?.aborted) return undefined;
 			return requestSignal.reason === localAbortReason ? localAbortReason : undefined;
 		},
 		wasCallerAbort() {
-			if (!callerSignal?.aborted) return false;
-			return requestSignal.reason !== localAbortReason;
+			// If the caller signal aborted, treat it as a caller abort regardless of which
+			// AbortController won the race to set `requestSignal.reason`. The previous
+			// `requestSignal.reason !== localAbortReason` heuristic flipped the result to
+			// `false` when a local watchdog fired microseconds before the user's ESC, which
+			// then routed user-initiated cancels through the auto-retry transient-error
+			// path.
+			return callerSignal?.aborted === true;
 		},
 	};
 }

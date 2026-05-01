@@ -93,6 +93,37 @@ describe("agentLoop with AgentMessage", () => {
 		expect(eventTypes).toContain("agent_end");
 	});
 
+	it("emits an aborted assistant message when cancellation happens before provider events", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+		const userPrompt: AgentMessage = createUserMessage("Hello");
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+		const controller = new AbortController();
+		const streamFn = () => new MockAssistantStream();
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([userPrompt], context, config, controller.signal, streamFn);
+		queueMicrotask(() => controller.abort());
+
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		const messages = await stream.result();
+		const finalMessage = messages[messages.length - 1];
+		expect(finalMessage.role).toBe("assistant");
+		if (finalMessage.role !== "assistant") throw new Error("Expected assistant message");
+		expect(finalMessage.stopReason).toBe("aborted");
+		expect(finalMessage.errorMessage).toBe("Request was aborted");
+		expect(events.map(event => event.type)).toContain("agent_end");
+	});
+
 	it("should handle custom message types via convertToLlm", async () => {
 		// Create a custom message type
 		interface CustomNotification {

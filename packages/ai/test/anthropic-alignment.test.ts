@@ -783,6 +783,58 @@ describe("Anthropic request fingerprint alignment", () => {
 		);
 	});
 
+	it("sends temperature for Anthropic requests without enabled thinking", async () => {
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: "Stay concise.",
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{ temperature: 0.2 },
+		)) as { temperature?: number; thinking?: { type?: string } };
+
+		expect(payload.temperature).toBe(0.2);
+		expect(payload.thinking).toBeUndefined();
+	});
+
+	it("sends disabled thinking for reasoning models when thinking is explicitly disabled", async () => {
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: "Stay concise.",
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{ thinkingEnabled: false },
+		)) as { thinking?: { type?: string } };
+
+		expect(payload.thinking).toEqual({ type: "disabled" });
+	});
+
+	it("drops temperature and sampling params for Opus 4.7 without enabled thinking", async () => {
+		const payload = (await captureAnthropicPayload(
+			{ ...ANTHROPIC_MODEL, id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+			{
+				systemPrompt: "Stay concise.",
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				temperature: 0.2,
+				topP: 0.3,
+				topK: 4,
+			},
+		)) as {
+			temperature?: number;
+			top_p?: number;
+			top_k?: number;
+			thinking?: { type?: string };
+		};
+
+		expect(payload.temperature).toBeUndefined();
+		expect(payload.top_p).toBeUndefined();
+		expect(payload.top_k).toBeUndefined();
+		expect(payload.thinking).toBeUndefined();
+	});
+
 	it("drops sampling params and requests summarized adaptive thinking for Opus 4.7", async () => {
 		const payload = (await captureAnthropicPayload(
 			{

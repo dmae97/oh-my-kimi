@@ -43,13 +43,7 @@ import { getOpenAIStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/i
 import { parseStreamingJson } from "../utils/json-parse";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
 import { compactGrammarDefinition } from "./grammar";
-import {
-	CODEX_BASE_URL,
-	getCodexAccountId,
-	OPENAI_HEADER_VALUES,
-	OPENAI_HEADERS,
-	URL_PATHS,
-} from "./openai-codex/constants";
+import { CODEX_BASE_URL, getCodexAccountId, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "./openai-codex/constants";
 import {
 	type CodexRequestOptions,
 	type InputItem,
@@ -481,8 +475,7 @@ async function buildCodexRequestContext(
 
 	const accountId = getAccountId(apiKey);
 	const baseUrl = model.baseUrl || CODEX_BASE_URL;
-	const baseWithSlash = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-	const url = rewriteUrlForCodex(new URL(URL_PATHS.RESPONSES.slice(1), baseWithSlash).toString());
+	const url = resolveCodexResponsesUrl(baseUrl);
 	const transformedBody = await buildTransformedCodexRequestBody(model, context, options);
 	options?.onPayload?.(transformedBody);
 
@@ -555,7 +548,7 @@ async function buildTransformedCodexRequestBody(
 		params.service_tier = options.serviceTier;
 	}
 	if (context.tools && context.tools.length > 0) {
-		params.tools = convertTools(context.tools, model);
+		params.tools = convertOpenAICodexResponsesTools(context.tools, model);
 		if (options?.toolChoice) {
 			const toolChoice = normalizeCodexToolChoice(options.toolChoice, context.tools, model);
 			if (toolChoice) {
@@ -1524,8 +1517,7 @@ export async function prewarmOpenAICodexResponses(
 	if (!apiKey) return;
 	const accountId = getAccountId(apiKey);
 	const baseUrl = model.baseUrl || CODEX_BASE_URL;
-	const baseWithSlash = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-	const url = rewriteUrlForCodex(new URL(URL_PATHS.RESPONSES.slice(1), baseWithSlash).toString());
+	const url = resolveCodexResponsesUrl(baseUrl);
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
 	const sessionKey = getCodexWebSocketSessionKey(options?.sessionId, model, accountId, baseUrl);
 	const publicSessionKey = getCodexPublicSessionKey(options?.sessionId, model, baseUrl);
@@ -1921,22 +1913,25 @@ class CodexWebSocketConnection {
 			this.#push(null);
 		});
 		socket.addEventListener("message", event => {
-			if (typeof event.data !== "string") return;
-			try {
-				const parsed = JSON.parse(event.data) as Record<string, unknown>;
-				if (parsed.type === "error" && typeof parsed.error === "object" && parsed.error) {
-					const inner = parsed.error as Record<string, unknown>;
-					if (typeof parsed.code !== "string" && typeof inner.code === "string") {
-						parsed.code = inner.code;
+			void (async () => {
+				try {
+					const text = await decodeCodexWebSocketData(event.data);
+					if (!text) return;
+					const parsed = JSON.parse(text) as Record<string, unknown>;
+					if (parsed.type === "error" && typeof parsed.error === "object" && parsed.error) {
+						const inner = parsed.error as Record<string, unknown>;
+						if (typeof parsed.code !== "string" && typeof inner.code === "string") {
+							parsed.code = inner.code;
+						}
+						if (typeof parsed.message !== "string" && typeof inner.message === "string") {
+							parsed.message = inner.message;
+						}
 					}
-					if (typeof parsed.message !== "string" && typeof inner.message === "string") {
-						parsed.message = inner.message;
-					}
+					this.#push(parsed);
+				} catch (error) {
+					this.#push(createCodexWebSocketTransportError(String(error)));
 				}
-				this.#push(parsed);
-			} catch (error) {
-				this.#push(createCodexWebSocketTransportError(String(error)));
-			}
+			})();
 		});
 
 		logger.time("codexWs:awaitTcpHandshake");
@@ -2148,6 +2143,8 @@ function createCodexHeaders(
 		transport === "websocket"
 			? OPENAI_HEADER_VALUES.BETA_RESPONSES_WEBSOCKETS_V2
 			: OPENAI_HEADER_VALUES.BETA_RESPONSES;
+	headers.delete(OPENAI_HEADERS.BETA);
+	headers.delete("openai-beta");
 	headers.set(OPENAI_HEADERS.BETA, betaHeader);
 	headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
 	headers.set("User-Agent", getCodexUserAgent());
@@ -2171,10 +2168,11 @@ function createCodexHeaders(
 	}
 	if (transport === "sse") {
 		headers.set("accept", "text/event-stream");
+		headers.set("content-type", "application/json");
 	} else {
 		headers.delete("accept");
+		headers.delete("content-type");
 	}
-	headers.set("content-type", "application/json");
 	return headers;
 }
 
@@ -2274,8 +2272,29 @@ function redactHeaders(headers: Headers): Record<string, string> {
 	return redacted;
 }
 
-function rewriteUrlForCodex(url: string): string {
-	return url.replace(URL_PATHS.RESPONSES, URL_PATHS.CODEX_RESPONSES);
+function resolveCodexResponsesUrl(baseUrl: string | undefined): string {
+	const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : CODEX_BASE_URL;
+	const normalized = raw.replace(/\/+$/, "");
+	if (normalized.endsWith("/codex/responses")) return normalized;
+	if (normalized.endsWith("/codex")) return `${normalized}/responses`;
+	return `${normalized}/codex/responses`;
+}
+
+async function decodeCodexWebSocketData(data: unknown): Promise<string | null> {
+	if (typeof data === "string") return data;
+	if (data instanceof ArrayBuffer) {
+		return new TextDecoder().decode(new Uint8Array(data));
+	}
+	if (ArrayBuffer.isView(data)) {
+		const view = data;
+		return new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+	}
+	if (data && typeof data === "object" && "arrayBuffer" in data) {
+		const blobLike = data as { arrayBuffer: () => Promise<ArrayBuffer> };
+		const arrayBuffer = await blobLike.arrayBuffer();
+		return new TextDecoder().decode(new Uint8Array(arrayBuffer));
+	}
+	return null;
 }
 
 function getAccountId(accessToken: string): string {
@@ -2517,7 +2536,10 @@ type CodexToolPayload =
 	  };
 
 /** @internal Exported for tests. */
-export function convertTools(tools: Tool[], model: Model<"openai-codex-responses">): CodexToolPayload[] {
+export function convertOpenAICodexResponsesTools(
+	tools: Tool[],
+	model: Model<"openai-codex-responses">,
+): CodexToolPayload[] {
 	const allowFreeform = supportsFreeformApplyPatchCodex(model);
 	return tools.map((tool): CodexToolPayload => {
 		if (allowFreeform && tool.customFormat) {

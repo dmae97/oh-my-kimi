@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `thinkingDisplay` option to Anthropic options to control whether adaptive and explicit reasoning is returned as `summarized` or `omitted`
@@ -9,12 +8,19 @@
 
 ### Changed
 
+- Changed Anthropic request payloads to send `thinking: { type: "disabled" }` when `thinkingEnabled` is explicitly `false` on reasoning-enabled models
 - Changed Anthropic cache retention handling so `cacheRetention: "long"` now uses `ttl: "1h"` only for canonical Anthropic endpoints with long-cache support
 - Changed Anthropic tool schema generation to include `eager_input_streaming` only on models that advertise support
 - Changed Anthropic OAuth login flow to include browser fallback guidance and richer error context when token exchange or refresh fails
 
 ### Fixed
 
+- Fixed Anthropic non-thinking requests to include the caller-provided `temperature` value in request payloads
+- Fixed Anthropic `claude-opus-4-7` non-thinking payloads to omit sampling fields (`temperature`, `top_p`, and `top_k`)
+- Fixed OpenAI Codex base URL normalization so configured base URLs with or without `/codex` or `/codex/responses` now resolve to `/codex/responses`
+- Fixed OpenAI Codex websocket handling to parse JSON from non-string message payloads including `ArrayBuffer`, typed arrays, and `Blob` values
+- Fixed OpenAI Codex websocket handshakes to replace stale `openai-beta` values with the websocket beta and avoid sending request-body headers over websocket transport
+- Fixed abort tracking so caller-initiated cancellations are treated as user aborts even after local watchdog timeouts, preventing unintended automatic retries
 - Fixed Anthropic stream handling to parse raw SSE envelopes directly, ignore unrelated events, and repair malformed JSON in SSE payloads
 - Fixed Anthropic streaming to emit an explicit error when the SSE stream ends without a `message_stop` event
 - Fixed OpenAI Codex websocket continuations to send true `previous_response_id` deltas for `store: false` transcripts, expose request stats, and default text verbosity to `low` unless explicitly overridden.

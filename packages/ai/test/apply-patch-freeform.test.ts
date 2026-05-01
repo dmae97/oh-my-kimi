@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-	convertTools as convertCodexTools,
+	convertOpenAICodexResponsesTools as convertCodexTools,
 	normalizeCodexToolChoice,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import {

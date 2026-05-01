@@ -1837,6 +1837,9 @@ function buildParams(
 		max_tokens: options?.maxTokens || (model.maxTokens / 3) | 0,
 		stream: true,
 	};
+	if (options?.temperature !== undefined && !options?.thinkingEnabled) {
+		params.temperature = options.temperature;
+	}
 
 	if (options?.topP !== undefined) {
 		params.top_p = options.topP;
@@ -1849,6 +1852,7 @@ function buildParams(
 	if (hasOpus47ApiRestrictions(model.id)) {
 		delete params.top_p;
 		delete params.top_k;
+		delete params.temperature;
 	}
 
 	if (context.tools) {
@@ -1860,36 +1864,41 @@ function buildParams(
 		);
 	}
 
-	if (options?.thinkingEnabled && model.reasoning) {
-		const mode = model.thinking?.mode;
-		const requestedEffort = options.reasoning;
-		const effort =
-			options.effort ?? (requestedEffort ? mapEffortToAnthropicAdaptiveEffort(model, requestedEffort) : undefined);
+	if (model.reasoning) {
+		if (options?.thinkingEnabled) {
+			const mode = model.thinking?.mode;
+			const requestedEffort = options.reasoning;
+			const effort =
+				options.effort ??
+				(requestedEffort ? mapEffortToAnthropicAdaptiveEffort(model, requestedEffort) : undefined);
 
-		const compat = getAnthropicCompat(model);
-		if (mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
-			// Starting with Claude Opus 4.7, adaptive thinking content is omitted from the
-			// response by default. Opt into summarized reasoning so thinking deltas keep
-			// streaming with human-readable content for callers that rely on it.
-			const adaptive: { type: "adaptive"; display?: AnthropicThinkingDisplay } = { type: "adaptive" };
-			if (supportsAdaptiveThinkingDisplay(model.id)) {
-				adaptive.display = options.thinkingDisplay ?? "summarized";
+			const compat = getAnthropicCompat(model);
+			if (mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
+				// Starting with Claude Opus 4.7, adaptive thinking content is omitted from the
+				// response by default. Opt into summarized reasoning so thinking deltas keep
+				// streaming with human-readable content for callers that rely on it.
+				const adaptive: { type: "adaptive"; display?: AnthropicThinkingDisplay } = { type: "adaptive" };
+				if (supportsAdaptiveThinkingDisplay(model.id)) {
+					adaptive.display = options.thinkingDisplay ?? "summarized";
+				}
+				params.thinking = adaptive as typeof params.thinking;
+				if (effort) {
+					// SDK's OutputConfig.effort type is not yet widened to include the new "xhigh"
+					// level introduced with Claude Opus 4.7. Cast until the SDK catches up.
+					params.output_config = { effort } as typeof params.output_config;
+				}
+			} else {
+				params.thinking = {
+					type: "enabled",
+					budget_tokens: options.thinkingBudgetTokens || 1024,
+					display: options.thinkingDisplay ?? "summarized",
+				} as typeof params.thinking;
+				if (mode === "anthropic-budget-effort" && effort) {
+					params.output_config = { effort } as typeof params.output_config;
+				}
 			}
-			params.thinking = adaptive as typeof params.thinking;
-			if (effort) {
-				// SDK's OutputConfig.effort type is not yet widened to include the new "xhigh"
-				// level introduced with Claude Opus 4.7. Cast until the SDK catches up.
-				params.output_config = { effort } as typeof params.output_config;
-			}
-		} else {
-			params.thinking = {
-				type: "enabled",
-				budget_tokens: options.thinkingBudgetTokens || 1024,
-				display: options.thinkingDisplay ?? "summarized",
-			} as typeof params.thinking;
-			if (mode === "anthropic-budget-effort" && effort) {
-				params.output_config = { effort } as typeof params.output_config;
-			}
+		} else if (options?.thinkingEnabled === false) {
+			params.thinking = { type: "disabled" };
 		}
 	}
 

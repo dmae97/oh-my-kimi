@@ -4,6 +4,7 @@
  */
 import {
 	type AssistantMessage,
+	type AssistantMessageEvent,
 	type Context,
 	EventStream,
 	streamSimple,
@@ -348,38 +349,23 @@ async function streamAssistantResponse(
 	let partialMessage: AssistantMessage | null = null;
 	let addedPartial = false;
 
-	for await (const event of response) {
+	const responseIterator = response[Symbol.asyncIterator]();
+	while (true) {
+		const read = await readResponseEvent(responseIterator, signal);
+		if (read.type === "aborted") {
+			return emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
+		}
+		if (read.type === "error") {
+			throw read.error;
+		}
+		if (read.result.done) {
+			break;
+		}
+
+		const event = read.result.value;
 		// Check for abort signal before processing each event
 		if (signal?.aborted) {
-			const errorMessage = "Request was aborted";
-			const abortedMessage: AssistantMessage = partialMessage
-				? { ...partialMessage, stopReason: "aborted", errorMessage }
-				: {
-						role: "assistant",
-						content: [],
-						api: config.model.api,
-						provider: config.model.provider,
-						model: config.model.id,
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
-						stopReason: "aborted",
-						errorMessage,
-						timestamp: Date.now(),
-					};
-			if (addedPartial) {
-				context.messages[context.messages.length - 1] = abortedMessage;
-			} else {
-				context.messages.push(abortedMessage);
-				stream.push({ type: "message_start", message: { ...abortedMessage } });
-			}
-			stream.push({ type: "message_end", message: abortedMessage });
-			return abortedMessage;
+			return emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
 		}
 
 		switch (event.type) {
@@ -432,6 +418,83 @@ async function streamAssistantResponse(
 	}
 
 	return await response.result();
+}
+
+type ResponseEventRead =
+	| { type: "event"; result: IteratorResult<AssistantMessageEvent> }
+	| { type: "error"; error: unknown }
+	| { type: "aborted" };
+
+async function readResponseEvent(
+	iterator: AsyncIterator<AssistantMessageEvent>,
+	signal: AbortSignal | undefined,
+): Promise<ResponseEventRead> {
+	if (!signal) {
+		return { type: "event", result: await iterator.next() };
+	}
+	if (signal.aborted) {
+		const returnPromise = iterator.return?.();
+		if (returnPromise) void returnPromise.catch(() => {});
+		return { type: "aborted" };
+	}
+
+	const { promise: abortPromise, resolve: resolveAbort } = Promise.withResolvers<ResponseEventRead>();
+	const onAbort = () => resolveAbort({ type: "aborted" });
+	signal.addEventListener("abort", onAbort, { once: true });
+
+	const eventPromise = iterator.next().then(
+		result => ({ type: "event" as const, result }),
+		error => ({ type: "error" as const, error }),
+	);
+
+	try {
+		const read = await Promise.race([eventPromise, abortPromise]);
+		if (read.type === "aborted") {
+			const returnPromise = iterator.return?.();
+			if (returnPromise) void returnPromise.catch(() => {});
+		}
+		return read;
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+	}
+}
+
+function emitAbortedAssistantMessage(
+	partialMessage: AssistantMessage | null,
+	addedPartial: boolean,
+	context: AgentContext,
+	config: AgentLoopConfig,
+	stream: EventStream<AgentEvent, AgentMessage[]>,
+): AssistantMessage {
+	const errorMessage = "Request was aborted";
+	const abortedMessage: AssistantMessage = partialMessage
+		? { ...partialMessage, stopReason: "aborted", errorMessage }
+		: {
+				role: "assistant",
+				content: [],
+				api: config.model.api,
+				provider: config.model.provider,
+				model: config.model.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "aborted",
+				errorMessage,
+				timestamp: Date.now(),
+			};
+	if (addedPartial) {
+		context.messages[context.messages.length - 1] = abortedMessage;
+	} else {
+		context.messages.push(abortedMessage);
+		stream.push({ type: "message_start", message: { ...abortedMessage } });
+	}
+	stream.push({ type: "message_end", message: abortedMessage });
+	return abortedMessage;
 }
 
 /**
