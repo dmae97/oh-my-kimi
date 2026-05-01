@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.5.14] - 2026-05-01
 ### Changed
 
 - Changed markdown conversion and archive tooling to defer loading heavy dependencies (Turndown, fflate, and browser agent content) until first use, reducing startup overhead for CLI startup and command initialization
