@@ -70,6 +70,7 @@ export interface SearchToolDetails {
 }
 
 type SearchParams = Static<typeof searchSchema>;
+type SearchTarget = { path: string; glob?: string; isDirectory: boolean };
 
 export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDetails> {
 	readonly name = "search";
@@ -117,6 +118,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			let searchPath: string;
 			let scopePath: string;
 			let exactFilePaths: string[] | undefined;
+			let multiTargets: Array<{ basePath: string; glob?: string }> | undefined;
 			let globFilter: string | undefined;
 			const rawPath = normalizePathLikeInput(searchDir);
 			if (rawPath.length === 0) {
@@ -137,8 +139,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				const multiSearchPath = await resolveMultiSearchPath(rawPath, this.session.cwd, globFilter);
 				if (multiSearchPath) {
 					searchPath = multiSearchPath.basePath;
-					globFilter = multiSearchPath.exactFilePaths ? undefined : multiSearchPath.glob;
 					exactFilePaths = multiSearchPath.exactFilePaths;
+					multiTargets = multiSearchPath.targets;
+					globFilter = exactFilePaths || multiTargets ? undefined : multiSearchPath.glob;
 					scopePath = multiSearchPath.scopePath;
 				} else {
 					const parsedPath = parseSearchPath(rawPath);
@@ -163,19 +166,26 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			// Run grep
 			let result: GrepResult;
 			try {
-				if (exactFilePaths) {
+				if (exactFilePaths || multiTargets) {
 					const matches: GrepMatch[] = [];
 					let limitReached = false;
-					for (const exactFilePath of exactFilePaths) {
-						const fileResult = await grep(
+					let totalMatches = 0;
+					let filesSearched = 0;
+					const targets = exactFilePaths
+						? exactFilePaths.map(filePath => ({ basePath: filePath, glob: undefined as string | undefined }))
+						: (multiTargets ?? []);
+					for (const target of targets) {
+						const targetResult = await grep(
 							{
 								pattern: normalizedPattern,
-								path: exactFilePath,
+								path: target.basePath,
+								glob: target.glob,
 								ignoreCase,
 								multiline: effectiveMultiline,
 								hidden: true,
 								gitignore: useGitignore,
 								cache: false,
+								maxCount: exactFilePaths ? undefined : internalLimit,
 								contextBefore: normalizedContextBefore,
 								contextAfter: normalizedContextAfter,
 								maxColumns: DEFAULT_MAX_COLUMN,
@@ -183,16 +193,21 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 							},
 							undefined,
 						);
-						limitReached = limitReached || Boolean(fileResult.limitReached);
-						const relativeFilePath = path.relative(searchPath, exactFilePath).replace(/\\/g, "/");
-						matches.push(...fileResult.matches.map(match => ({ ...match, path: relativeFilePath })));
+						limitReached = limitReached || Boolean(targetResult.limitReached);
+						totalMatches += targetResult.totalMatches;
+						filesSearched += targetResult.filesSearched;
+						for (const match of targetResult.matches) {
+							const absolute = path.resolve(target.basePath, match.path);
+							const rebased = path.relative(searchPath, absolute).replace(/\\/g, "/");
+							matches.push({ ...match, path: rebased });
+						}
 					}
 					const offsetMatches = matches.slice(normalizedSkip);
 					result = {
 						matches: offsetMatches,
-						totalMatches: offsetMatches.length,
+						totalMatches: exactFilePaths ? offsetMatches.length : totalMatches,
 						filesWithMatches: new Set(offsetMatches.map(match => match.path)).size,
-						filesSearched: exactFilePaths.length,
+						filesSearched: exactFilePaths ? exactFilePaths.length : filesSearched,
 						limitReached,
 					};
 				} else {

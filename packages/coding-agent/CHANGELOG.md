@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed multi-target `search`, `ast-grep`, and `ast-edit` path handling by running each resolved target separately under root-level path resolution
+- Fixed pagination and match/replacement summaries for multi-target AST and text searches so totals and affected file counts include all targets
+- Fixed returned file paths for multi-target `search` and `ast-grep` results by normalizing them to the original search scope
 
 ## [14.5.14] - 2026-05-01
 ### Changed

@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type AstFindMatch, astGrep } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -43,6 +44,63 @@ const astGrepSchema = Type.Object({
 	}),
 	skip: Type.Optional(Type.Number({ description: "matches to skip", default: 0 })),
 });
+
+async function runMultiTargetAstGrep(
+	targets: Array<{ basePath: string; glob?: string }>,
+	options: { patterns: string[]; commonBasePath: string; skip: number; limit: number; signal?: AbortSignal },
+): Promise<{
+	matches: AstFindMatch[];
+	totalMatches: number;
+	filesWithMatches: number;
+	filesSearched: number;
+	limitReached: boolean;
+	parseErrors?: string[];
+}> {
+	const aggregatedMatches: AstFindMatch[] = [];
+	const parseErrors: string[] = [];
+	let totalMatches = 0;
+	let filesSearched = 0;
+	let limitReached = false;
+	for (const target of targets) {
+		const targetResult = await astGrep({
+			patterns: options.patterns,
+			path: target.basePath,
+			glob: target.glob,
+			offset: 0,
+			limit: options.skip + options.limit + 1,
+			includeMeta: true,
+			signal: options.signal,
+		});
+		totalMatches += targetResult.totalMatches;
+		filesSearched += targetResult.filesSearched;
+		limitReached = limitReached || targetResult.limitReached;
+		if (targetResult.parseErrors) parseErrors.push(...targetResult.parseErrors);
+		for (const match of targetResult.matches) {
+			const absolute = path.resolve(target.basePath, match.path);
+			const rebased = path.relative(options.commonBasePath, absolute).replace(/\\/g, "/");
+			aggregatedMatches.push({ ...match, path: rebased });
+		}
+	}
+	aggregatedMatches.sort((left, right) => {
+		const pathCmp = left.path.localeCompare(right.path);
+		if (pathCmp !== 0) return pathCmp;
+		if (left.startLine !== right.startLine) return left.startLine - right.startLine;
+		if (left.startColumn !== right.startColumn) return left.startColumn - right.startColumn;
+		if (left.byteStart !== right.byteStart) return left.byteStart - right.byteStart;
+		return left.byteEnd - right.byteEnd;
+	});
+	const visible = aggregatedMatches.slice(options.skip);
+	const paged = visible.slice(0, options.limit);
+	const filesWithMatches = new Set(aggregatedMatches.map(match => match.path)).size;
+	return {
+		matches: paged,
+		totalMatches,
+		filesWithMatches,
+		filesSearched,
+		limitReached: limitReached || visible.length > options.limit,
+		parseErrors: parseErrors.length > 0 ? parseErrors : undefined,
+	};
+}
 
 export interface AstGrepToolDetails {
 	matchCount: number;
@@ -91,6 +149,7 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 			let searchPath: string | undefined;
 			let scopePath: string | undefined;
 			let globFilter: string | undefined;
+			let multiTargets: Array<{ basePath: string; glob?: string }> | undefined;
 			const rawPath = normalizePathLikeInput(params.path);
 			if (rawPath.length === 0) {
 				throw new ToolError("`path` must be a non-empty path or glob");
@@ -110,7 +169,8 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 				const multiSearchPath = await resolveMultiSearchPath(rawPath, this.session.cwd, globFilter);
 				if (multiSearchPath) {
 					searchPath = multiSearchPath.basePath;
-					globFilter = multiSearchPath.glob;
+					globFilter = multiSearchPath.targets ? undefined : multiSearchPath.glob;
+					multiTargets = multiSearchPath.targets;
 					scopePath = multiSearchPath.scopePath;
 				} else {
 					const parsedPath = parseSearchPath(rawPath);
@@ -130,14 +190,23 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 				throw new ToolError(`Path not found: ${scopePath}`);
 			}
 
-			const result = await astGrep({
-				patterns,
-				path: resolvedSearchPath,
-				glob: globFilter,
-				offset: skip,
-				includeMeta: true,
-				signal,
-			});
+			const DEFAULT_AST_LIMIT = 50;
+			const result = multiTargets
+				? await runMultiTargetAstGrep(multiTargets, {
+						patterns,
+						commonBasePath: resolvedSearchPath,
+						skip,
+						limit: DEFAULT_AST_LIMIT,
+						signal,
+					})
+				: await astGrep({
+						patterns,
+						path: resolvedSearchPath,
+						glob: globFilter,
+						offset: skip,
+						includeMeta: true,
+						signal,
+					});
 
 			const normalizedParseErrors = (result.parseErrors ?? []).map(error => {
 				const parseError = error.match(/^.+: (.+: parse error \(syntax tree contains error nodes\))$/);

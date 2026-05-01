@@ -210,11 +210,17 @@ export interface ParsedFindPattern {
 	hasGlob: boolean;
 }
 
+export interface ResolvedSearchTarget {
+	basePath: string;
+	glob?: string;
+}
+
 export interface ResolvedMultiSearchPath {
 	basePath: string;
 	glob?: string;
 	scopePath: string;
 	exactFilePaths?: string[];
+	targets?: ResolvedSearchTarget[];
 }
 
 export interface ResolvedMultiFindPattern {
@@ -556,12 +562,21 @@ export async function resolveMultiSearchPath(
 		}
 		return relativeBasePath === "." ? path.basename(item.absoluteBasePath) : relativeBasePath;
 	});
+	const rootPath = path.parse(commonBasePath).root;
+	const isDegenerateRoot = commonBasePath === rootPath && parsedItems.length > 1;
+	const targets = isDegenerateRoot
+		? parsedItems.map(item => ({
+				basePath: item.absoluteBasePath,
+				glob: item.parsedPath.glob ? combineSearchGlobs(item.parsedPath.glob, suffixGlob) : suffixGlob,
+			}))
+		: undefined;
 
 	return {
 		basePath: commonBasePath,
 		glob: buildBraceUnion(combinedPatterns),
 		scopePath: toScopeDisplay(pathItems, cwd),
 		exactFilePaths: allExactFiles ? parsedItems.map(item => item.absoluteBasePath) : undefined,
+		targets,
 	};
 }
 
