@@ -1,0 +1,309 @@
+import { describe, expect, it } from "bun:test";
+import { getBundledModel } from "../src/models";
+import { convertMessages, detectCompat } from "../src/providers/openai-completions";
+import type { AssistantMessage, Model, ThinkingContent, ToolCall } from "../src/types";
+
+function deepseekModel(overrides: Partial<Model<"openai-completions">>): Model<"openai-completions"> {
+	return {
+		...getBundledModel("openai", "gpt-4o-mini"),
+		api: "openai-completions",
+		reasoning: true,
+		...overrides,
+	};
+}
+
+function assistantToolCall(model: Model<"openai-completions">, content?: Array<{ type: string; [key: string]: unknown }>): AssistantMessage {
+	return {
+		role: "assistant",
+		content: content ?? [
+			{
+				type: "toolCall",
+				id: "call_test_1",
+				name: "read",
+				arguments: { path: "/tmp/test" },
+			},
+		],
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "toolUse",
+		timestamp: Date.now(),
+	};
+}
+
+describe("DeepSeek reasoning_content tool-call replay", () => {
+	// ----------------------------------------------------------------
+	// Fix 1: reasoningEffortMap for DeepSeek-family on any provider
+	// ----------------------------------------------------------------
+	describe("reasoningEffortMap (Fix 1)", () => {
+		it("maps xhigh → max for DeepSeek-family on opencode-go", () => {
+			const compat = detectCompat(
+				deepseekModel({
+					provider: "opencode-go",
+					baseUrl: "https://opencode.ai/zen/go/v1",
+					id: "deepseek-v4-flash",
+				}),
+			);
+			expect(compat.reasoningEffortMap.xhigh).toBe("max");
+		});
+
+		it("maps xhigh → max for DeepSeek-family on NVIDIA", () => {
+			const compat = detectCompat(
+				deepseekModel({
+					provider: "nvidia",
+					baseUrl: "https://integrate.api.nvidia.com/v1",
+					id: "deepseek-ai/deepseek-v4-flash",
+				}),
+			);
+			expect(compat.reasoningEffortMap.xhigh).toBe("max");
+		});
+
+		it("maps xhigh → max for DeepSeek on the official endpoint", () => {
+			const compat = detectCompat(
+				deepseekModel({
+					provider: "deepseek",
+					baseUrl: "https://api.deepseek.com/v1",
+					id: "deepseek-v4-pro",
+				}),
+			);
+			expect(compat.reasoningEffortMap.xhigh).toBe("max");
+		});
+
+		it("does NOT map xhigh for non-DeepSeek models", () => {
+			const compat = detectCompat(
+				deepseekModel({
+					provider: "openai",
+					baseUrl: "https://api.openai.com/v1",
+					id: "gpt-4o-mini",
+					reasoning: false,
+				}),
+			);
+			expect(compat.reasoningEffortMap.xhigh).toBeUndefined();
+		});
+	});
+
+	// ----------------------------------------------------------------
+	// allowsSyntheticReasoningContentForToolCalls flag
+	// ----------------------------------------------------------------
+	describe("allowsSyntheticReasoningContentForToolCalls flag", () => {
+		it("is false for DeepSeek-family reasoning models", () => {
+			const compat = detectCompat(
+				deepseekModel({
+					provider: "deepseek",
+					baseUrl: "https://api.deepseek.com/v1",
+					id: "deepseek-v4-pro",
+				}),
+			);
+			expect(compat.allowsSyntheticReasoningContentForToolCalls).toBe(false);
+		});
+
+		it("is false for DeepSeek-family on NVIDIA", () => {
+			const compat = detectCompat(
+				deepseekModel({
+					provider: "nvidia",
+					baseUrl: "https://integrate.api.nvidia.com/v1",
+					id: "deepseek-ai/deepseek-v4-flash",
+				}),
+			);
+			expect(compat.allowsSyntheticReasoningContentForToolCalls).toBe(false);
+		});
+
+		it("is true for non-DeepSeek reasoning models on OpenRouter", () => {
+			const compat = detectCompat({
+				...getBundledModel("openai", "gpt-4o-mini"),
+				api: "openai-completions",
+				provider: "openrouter",
+				baseUrl: "https://openrouter.ai/api/v1",
+				id: "qwen/qwq-32b",
+				reasoning: true,
+			});
+			// Qwen is not isDeepseekFamily, so synthetic is allowed
+			expect(compat.allowsSyntheticReasoningContentForToolCalls).toBe(true);
+		});
+	});
+
+	// ----------------------------------------------------------------
+	// Fix 2: reasoning_content from empty thinking blocks with signature
+	// ----------------------------------------------------------------
+	describe("thinking-block signature recovery (Fix 2)", () => {
+		it("recovers reasoning_content from empty thinking block with valid signature", () => {
+			const model = deepseekModel({
+				provider: "opencode-go",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+				id: "deepseek-v4-flash",
+			});
+			const compat = detectCompat(model);
+			// Simulate a tool-call turn with an empty thinking block that has a valid
+			// signature — this happens when reasoning text was lost but the signature
+			// (field name) is preserved.
+			const msg: AssistantMessage = {
+				role: "assistant",
+				content: [
+					{
+						type: "thinking",
+						thinking: "",
+						thinkingSignature: "reasoning_content",
+					} as ThinkingContent,
+					{
+						type: "toolCall",
+						id: "call_empty_thinking",
+						name: "read",
+						arguments: { path: "/tmp/test" },
+					} as ToolCall,
+				],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			};
+			const messages = convertMessages(model, { messages: [msg] }, compat);
+			const assistant = messages.find(m => m.role === "assistant");
+			expect(assistant).toBeDefined();
+			// The reasoning_content field should be set from the signature, even if empty.
+			expect(Reflect.get(assistant as object, "reasoning_content")).toBe("");
+		});
+
+		it("recovers reasoning_content from non-empty thinking block with signature", () => {
+			const model = deepseekModel({
+				provider: "opencode-go",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+				id: "deepseek-v4-flash",
+			});
+			const compat = detectCompat(model);
+			const msg: AssistantMessage = {
+				role: "assistant",
+				content: [
+					{
+						type: "thinking",
+						thinking: "I need to read the file first.",
+						thinkingSignature: "reasoning_content",
+					} as ThinkingContent,
+					{
+						type: "toolCall",
+						id: "call_with_thinking",
+						name: "read",
+						arguments: { path: "/tmp/test" },
+					} as ToolCall,
+				],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			};
+			const messages = convertMessages(model, { messages: [msg] }, compat);
+			const assistant = messages.find(m => m.role === "assistant");
+			expect(assistant).toBeDefined();
+			expect(Reflect.get(assistant as object, "reasoning_content")).toBe("I need to read the file first.");
+		});
+	});
+
+	// ----------------------------------------------------------------
+	// Fix 3: Empty-string fallback when NO thinking blocks exist
+	// (matches the actual observed 400 failure: proxy-stripped reasoning)
+	// ----------------------------------------------------------------
+	describe("empty-string fallback for missing reasoning_content (Fix 3)", () => {
+		it("sets reasoning_content to empty string when no thinking blocks exist for DeepSeek", () => {
+			const model = deepseekModel({
+				provider: "opencode-go",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+				id: "deepseek-v4-flash",
+			});
+			const compat = detectCompat(model);
+			// Tool-call turn with NO thinking blocks at all — matches the actual
+			// observed 400 error pattern where proxy stripped reasoning_content.
+			const msg = assistantToolCall(model, [
+				{
+					type: "toolCall",
+					id: "call_no_thinking",
+					name: "read",
+					arguments: { path: "/tmp/test" },
+				} as ToolCall,
+			]);
+			const messages = convertMessages(model, { messages: [msg] }, compat);
+			const assistant = messages.find(m => m.role === "assistant");
+			expect(assistant).toBeDefined();
+			// reasoning_content must be present (empty string) — not absent and not "."
+			const rc = Reflect.get(assistant as object, "reasoning_content");
+			expect(rc).toBeDefined();
+			expect(rc).toBe("");
+		});
+
+		it("sets content to empty string (not null) when reasoning_content is present", () => {
+			const model = deepseekModel({
+				provider: "nvidia",
+				baseUrl: "https://integrate.api.nvidia.com/v1",
+				id: "deepseek-ai/deepseek-v4-flash",
+			});
+			const compat = detectCompat(model);
+			const msg = assistantToolCall(model, [
+				{
+					type: "toolCall",
+					id: "call_no_content",
+					name: "list_files",
+					arguments: { path: "." },
+				} as ToolCall,
+			]);
+			const messages = convertMessages(model, { messages: [msg] }, compat);
+			const assistant = messages.find(m => m.role === "assistant");
+			expect(assistant).toBeDefined();
+			expect((assistant as { content: unknown }).content).toBe("");
+		});
+	});
+
+	// ----------------------------------------------------------------
+	// Tier 3: Synthetic placeholder for non-DeepSeek providers
+	// ----------------------------------------------------------------
+	describe("synthetic placeholder for non-DeepSeek providers (Tier 3)", () => {
+		it("still uses \".\" placeholder for Kimi models that accept it", () => {
+			const model: Model<"openai-completions"> = {
+				...getBundledModel("openai", "gpt-4o-mini"),
+				api: "openai-completions",
+				provider: "opencode-go",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+				id: "moonshotai/kimi-k2.5",
+				reasoning: true,
+			};
+			const compat = detectCompat(model);
+			expect(compat.requiresReasoningContentForToolCalls).toBe(true);
+			expect(compat.allowsSyntheticReasoningContentForToolCalls).toBe(true);
+			const msg = assistantToolCall(model, [
+				{
+					type: "toolCall",
+					id: "call_kimi",
+					name: "read",
+					arguments: { path: "/tmp" },
+				} as ToolCall,
+			]);
+			const messages = convertMessages(model, { messages: [msg] }, compat);
+			const assistant = messages.find(m => m.role === "assistant");
+			expect(assistant).toBeDefined();
+			expect(Reflect.get(assistant as object, "reasoning_content")).toBe(".");
+		});
+	});
+});
