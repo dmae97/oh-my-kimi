@@ -116,6 +116,24 @@ function cloneModelWithRequestedId(model: Model<Api>, requestedId: string): Mode
 	};
 }
 
+const providerModelIndexCache = new WeakMap<readonly Model<Api>[], Map<string, Model<Api> | null>>();
+
+function getProviderModelIndex(availableModels: readonly Model<Api>[]): Map<string, Model<Api> | null> {
+	let index = providerModelIndexCache.get(availableModels);
+	if (index) return index;
+	index = new Map<string, Model<Api> | null>();
+	for (const m of availableModels) {
+		const key = `${m.provider.toLowerCase()}\u0000${m.id.toLowerCase()}`;
+		if (index.has(key)) {
+			index.set(key, null); // ambiguous sentinel; do not overwrite back
+		} else {
+			index.set(key, m);
+		}
+	}
+	providerModelIndexCache.set(availableModels, index);
+	return index;
+}
+
 export function resolveProviderModelReference(
 	provider: string,
 	modelId: string,
@@ -127,14 +145,13 @@ export function resolveProviderModelReference(
 		return undefined;
 	}
 
-	const exactMatches = availableModels.filter(
-		model => model.provider.toLowerCase() === normalizedProvider && model.id.toLowerCase() === normalizedModelId,
-	);
-	if (exactMatches.length === 1) {
-		return exactMatches[0];
+	const index = getProviderModelIndex(availableModels);
+	const exact = index.get(`${normalizedProvider}\u0000${normalizedModelId}`);
+	if (exact === null) {
+		return undefined; // ambiguous
 	}
-	if (exactMatches.length > 1) {
-		return undefined;
+	if (exact !== undefined) {
+		return exact;
 	}
 
 	if (normalizedProvider !== "openrouter") {
@@ -142,15 +159,12 @@ export function resolveProviderModelReference(
 	}
 
 	for (const fallbackId of getOpenRouterFallbackModelIds(modelId).slice(1)) {
-		const baseMatches = availableModels.filter(
-			model =>
-				model.provider.toLowerCase() === normalizedProvider && model.id.toLowerCase() === fallbackId.toLowerCase(),
-		);
-		if (baseMatches.length === 1) {
-			return cloneModelWithRequestedId(baseMatches[0], modelId);
-		}
-		if (baseMatches.length > 1) {
+		const fallback = index.get(`${normalizedProvider}\u0000${fallbackId.toLowerCase()}`);
+		if (fallback === null) {
 			return undefined;
+		}
+		if (fallback !== undefined) {
+			return cloneModelWithRequestedId(fallback, modelId);
 		}
 	}
 
