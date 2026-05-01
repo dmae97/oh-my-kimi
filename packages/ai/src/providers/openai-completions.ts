@@ -1203,9 +1203,12 @@ export function convertMessages(
 						assistantMsg.content = [{ type: "text", text: thinkingText }];
 					}
 				} else {
-					// Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
+					// Use the signature from the first thinking block if available, but only for
+					// recognized OpenAI-compat reasoning field names. Opaque signatures from other
+					// providers (Anthropic encrypted, OpenAI Responses JSON) are not valid property names.
 					const signature = nonEmptyThinkingBlocks[0].thinkingSignature;
-					if (signature && signature.length > 0) {
+					const recognizedFields = ["reasoning_content", "reasoning", "reasoning_text"];
+					if (signature && recognizedFields.includes(signature)) {
 						(assistantMsg as any)[signature] = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n");
 					}
 				}
@@ -1234,25 +1237,71 @@ export function convertMessages(
 			}
 
 			const toolCalls = msg.content.filter(b => b.type === "toolCall") as ToolCall[];
-			// Inject a `reasoning_content` placeholder on assistant tool-call turns when the backend
-			// rejects history without it. The compat flag captures the rule:
-			//   - Kimi (native or via OpenCode-Go): chat completion endpoint demands the field.
-			//   - Reasoning models reached through OpenRouter (e.g. DeepSeek V4 Pro): the underlying
-			//     provider's thinking-mode validator demands it on every prior assistant turn. omp
-			//     cannot synthesize real reasoning when the conversation was warmed up by another
-			//     provider whose reasoning is redacted/encrypted (Anthropic) or simply absent, so we
-			//     emit a placeholder. Real captured reasoning, when present, is preserved earlier via
-			//     the `thinkingSignature` echo path and short-circuits via `hasReasoningField`.
-			// `thinkingFormat` is gated to formats that consume the field (openai/openrouter chat
-			// completions); formats with their own conventions (zai, qwen) are excluded.
-			const stubsReasoningContent =
+			// Replay reasoning_content on assistant turns for backends that validate
+			// thinking-mode history. DeepSeek V4 requires reasoning_content on EVERY
+			// assistant turn once any prior turn included it — not just tool-call turns.
+			// The replay logic has three tiers:
+			//   1. Recover from thinking blocks with valid signatures (covers same-model replay
+			//      where nonEmptyThinkingBlocks may have filtered out empty-text blocks)
+			//   2. For providers that require the field but returned no reasoning at all
+			//      (e.g. proxy-stripped reasoning_content), emit an empty string
+			//   3. For providers that accept synthetic placeholders (Kimi, OpenRouter), emit "."
+			// DeepSeek V4 rejects synthetic "." placeholders — it validates the exact value —
+			// so the allowsSyntheticReasoningContentForToolCalls flag controls tier 3.
+			const canUseSyntheticReasoningContent =
 				compat.requiresReasoningContentForToolCalls &&
+				compat.allowsSyntheticReasoningContentForToolCalls &&
 				(compat.thinkingFormat === "openai" || compat.thinkingFormat === "openrouter");
+			// DeepSeek reasoning models require reasoning_content on ALL assistant turns,
+			// not just tool-call turns. Other providers (Kimi, OpenRouter) only require it
+			// on tool-call turns.
+			const needsReasoningOnAllTurns =
+				compat.requiresReasoningContentForToolCalls && !compat.allowsSyntheticReasoningContentForToolCalls;
+			const needsReasoningField = needsReasoningOnAllTurns || toolCalls.length > 0;
 			let hasReasoningField =
 				(assistantMsg as any).reasoning_content !== undefined ||
 				(assistantMsg as any).reasoning !== undefined ||
 				(assistantMsg as any).reasoning_text !== undefined;
-			if (toolCalls.length > 0 && stubsReasoningContent && !hasReasoningField) {
+			// Tier 1: Recover reasoning_content from ALL thinking blocks (including empty-text
+			// ones) when the provider requires exact replay and rejects synthetic placeholders.
+			// This covers the case where thinking blocks have valid signatures but were excluded
+			// by the nonEmptyThinkingBlocks filter above, or where thinking text is empty but
+			// the signature identifies the correct field name for replay.
+			// Only recognized OpenAI-compat reasoning field names qualify — opaque signatures
+			// from other providers (Anthropic encrypted, OpenAI Responses JSON, etc.) are not
+			// valid property names for the wire message.
+			if (
+				needsReasoningField &&
+				!hasReasoningField &&
+				compat.requiresReasoningContentForToolCalls &&
+				!compat.allowsSyntheticReasoningContentForToolCalls
+			) {
+				const allThinkingBlocks = msg.content.filter(b => b.type === "thinking") as ThinkingContent[];
+				if (allThinkingBlocks.length > 0) {
+					const signature = allThinkingBlocks[0].thinkingSignature;
+					const recognizedFields = ["reasoning_content", "reasoning", "reasoning_text"];
+					if (signature && recognizedFields.includes(signature)) {
+						(assistantMsg as any)[signature] = allThinkingBlocks.map(b => b.thinking).join("\n");
+						hasReasoningField = true;
+					}
+				}
+			}
+			// Tier 2: When the provider requires reasoning_content but there are genuinely no
+			// thinking blocks at all (e.g. proxy stripped reasoning_content from the response),
+			// emit an empty string. The field must be present; an empty string is the most honest
+			// representation of "no reasoning was captured."
+			if (
+				needsReasoningField &&
+				!hasReasoningField &&
+				compat.requiresReasoningContentForToolCalls &&
+				!compat.allowsSyntheticReasoningContentForToolCalls
+			) {
+				const reasoningField = compat.reasoningContentField ?? "reasoning_content";
+				(assistantMsg as any)[reasoningField] = "";
+				hasReasoningField = true;
+			}
+			// Tier 3: For providers that accept synthetic placeholders (Kimi, OpenRouter).
+			if (toolCalls.length > 0 && canUseSyntheticReasoningContent && !hasReasoningField) {
 				const reasoningField = compat.reasoningContentField ?? "reasoning_content";
 				(assistantMsg as any)[reasoningField] = ".";
 				hasReasoningField = true;
