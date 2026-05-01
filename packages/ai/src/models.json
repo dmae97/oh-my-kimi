@@ -45747,7 +45747,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 222222,
+			"contextWindow": 1000000,
 			"maxTokens": 8888,
 			"compat": {
 				"supportsUsageInStreaming": false
@@ -46969,7 +46969,7 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.06,
+				"input": 0.12,
 				"output": 0.24,
 				"cacheRead": 0,
 				"cacheWrite": 0
@@ -46984,7 +46984,7 @@
 		},
 		"alibaba/qwen-3-235b": {
 			"id": "alibaba/qwen-3-235b",
-			"name": "Qwen3-235B-A22B",
+			"name": "Qwen3 235B A22b Instruct 2507",
 			"api": "anthropic-messages",
 			"baseUrl": "https://ai-gateway.vercel.sh",
 			"provider": "vercel-ai-gateway",
@@ -46993,13 +46993,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.071,
-				"output": 0.463,
-				"cacheRead": 0,
+				"input": 0.6,
+				"output": 1.2,
+				"cacheRead": 0.6,
 				"cacheWrite": 0
 			},
-			"contextWindow": 40960,
-			"maxTokens": 16384
+			"contextWindow": 131000,
+			"maxTokens": 40000
 		},
 		"alibaba/qwen-3-30b": {
 			"id": "alibaba/qwen-3-30b",
@@ -47036,13 +47036,38 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.09999999999999999,
-				"output": 0.3,
+				"input": 0.16,
+				"output": 0.64,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 40960,
-			"maxTokens": 16384,
+			"contextWindow": 128000,
+			"maxTokens": 8192,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"alibaba/qwen-3.6-max-preview": {
+			"id": "alibaba/qwen-3.6-max-preview",
+			"name": "Qwen 3.6 Max Preview",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1.3,
+				"output": 7.8,
+				"cacheRead": 0.26,
+				"cacheWrite": 1.625
+			},
+			"contextWindow": 240000,
+			"maxTokens": 64000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -47051,7 +47076,7 @@
 		},
 		"alibaba/qwen3-235b-a22b-thinking": {
 			"id": "alibaba/qwen3-235b-a22b-thinking",
-			"name": "Qwen3 235B A22B Thinking 2507",
+			"name": "Qwen3 VL 235B A22B Thinking",
 			"api": "anthropic-messages",
 			"baseUrl": "https://ai-gateway.vercel.sh",
 			"provider": "vercel-ai-gateway",
@@ -47061,13 +47086,13 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.3,
-				"output": 2.9000000000000004,
+				"input": 0.39999999999999997,
+				"output": 4,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 262114,
-			"maxTokens": 262114,
+			"contextWindow": 131072,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -47085,13 +47110,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
-				"output": 1.5999999999999999,
-				"cacheRead": 0,
+				"input": 1.5,
+				"output": 7.5,
+				"cacheRead": 0.3,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 66536
+			"maxTokens": 65536
 		},
 		"alibaba/qwen3-coder-30b-a3b": {
 			"id": "alibaba/qwen3-coder-30b-a3b",
@@ -47104,13 +47129,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.07,
-				"output": 0.27,
+				"input": 0.15,
+				"output": 0.6,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 160000,
-			"maxTokens": 32768,
+			"contextWindow": 262144,
+			"maxTokens": 8192,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -47159,6 +47184,25 @@
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 65536
+		},
+		"alibaba/qwen3-max": {
+			"id": "alibaba/qwen3-max",
+			"name": "Qwen3 Max",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 1.2,
+				"output": 6,
+				"cacheRead": 0.24,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"alibaba/qwen3-max-preview": {
 			"id": "alibaba/qwen3-max-preview",
@@ -47215,13 +47259,38 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.22,
-				"output": 0.88,
+				"input": 0.39999999999999997,
+				"output": 4,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 256000,
-			"maxTokens": 256000,
+			"contextWindow": 131072,
+			"maxTokens": 32768,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"alibaba/qwen3.5-flash": {
+			"id": "alibaba/qwen3.5-flash",
+			"name": "Qwen 3.5 Flash",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.09999999999999999,
+				"output": 0.39999999999999997,
+				"cacheRead": 0.001,
+				"cacheWrite": 0.125
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 64000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -47244,6 +47313,56 @@
 				"output": 2.4,
 				"cacheRead": 0.04,
 				"cacheWrite": 0.5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 64000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"alibaba/qwen3.6-27b": {
+			"id": "alibaba/qwen3.6-27b",
+			"name": "Qwen 3.6 27B",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.6,
+				"output": 3.5999999999999996,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 256000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"alibaba/qwen3.6-plus": {
+			"id": "alibaba/qwen3.6-plus",
+			"name": "Qwen 3.6 Plus",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.5,
+				"output": 3,
+				"cacheRead": 0.09999999999999999,
+				"cacheWrite": 0.625
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 64000,
@@ -47291,7 +47410,7 @@
 				"cacheWrite": 1
 			},
 			"contextWindow": 200000,
-			"maxTokens": 64000
+			"maxTokens": 8192
 		},
 		"anthropic/claude-3.5-sonnet": {
 			"id": "anthropic/claude-3.5-sonnet",
@@ -47351,7 +47470,7 @@
 				"cacheWrite": 3.75
 			},
 			"contextWindow": 200000,
-			"maxTokens": 64000,
+			"maxTokens": 8192,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -47396,7 +47515,7 @@
 				"cacheWrite": 18.75
 			},
 			"contextWindow": 200000,
-			"maxTokens": 64000,
+			"maxTokens": 32000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -47421,7 +47540,7 @@
 				"cacheWrite": 18.75
 			},
 			"contextWindow": 200000,
-			"maxTokens": 64000,
+			"maxTokens": 32000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -47459,6 +47578,31 @@
 			"api": "anthropic-messages",
 			"baseUrl": "https://ai-gateway.vercel.sh",
 			"provider": "vercel-ai-gateway",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 5,
+				"output": 25,
+				"cacheRead": 0.5,
+				"cacheWrite": 6.25
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"anthropic/claude-opus-4.7": {
+			"id": "anthropic/claude-opus-4.7",
+			"name": "Claude Opus 4.7",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -47546,7 +47690,7 @@
 				"cacheWrite": 3.75
 			},
 			"contextWindow": 1000000,
-			"maxTokens": 64000,
+			"maxTokens": 128000,
 			"thinking": {
 				"mode": "anthropic-adaptive",
 				"minLevel": "minimal",
@@ -47571,6 +47715,30 @@
 			},
 			"contextWindow": 131000,
 			"maxTokens": 131000
+		},
+		"arcee-ai/trinity-large-thinking": {
+			"id": "arcee-ai/trinity-large-thinking",
+			"name": "Trinity Large Thinking",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.25,
+				"output": 0.8999999999999999,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262100,
+			"maxTokens": 80000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
 		},
 		"bytedance/seed-1.6": {
 			"id": "bytedance/seed-1.6",
@@ -47615,6 +47783,30 @@
 			"contextWindow": 256000,
 			"maxTokens": 8000
 		},
+		"deepseek/deepseek-r1": {
+			"id": "deepseek/deepseek-r1",
+			"name": "DeepSeek-R1",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 1.35,
+				"output": 5.4,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 128000,
+			"maxTokens": 8192,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
 		"deepseek/deepseek-v3": {
 			"id": "deepseek/deepseek-v3",
 			"name": "DeepSeek V3 0324",
@@ -47645,13 +47837,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.21,
-				"output": 0.7899999999999999,
-				"cacheRead": 0,
+				"input": 0.56,
+				"output": 1.68,
+				"cacheRead": 0.28,
 				"cacheWrite": 0
 			},
 			"contextWindow": 163840,
-			"maxTokens": 128000,
+			"maxTokens": 8192,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -47671,7 +47863,7 @@
 			"cost": {
 				"input": 0.27,
 				"output": 1,
-				"cacheRead": 0,
+				"cacheRead": 0.135,
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
@@ -47693,13 +47885,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.26,
-				"output": 0.38,
-				"cacheRead": 0.13,
+				"input": 0.28,
+				"output": 0.42,
+				"cacheRead": 0.028,
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": 64000,
+			"maxTokens": 8000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -47717,18 +47909,106 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.28,
-				"output": 0.42,
+				"input": 0.62,
+				"output": 1.85,
 				"cacheRead": 0.028,
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": 64000,
+			"maxTokens": 8000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
 				"maxLevel": "xhigh"
 			}
+		},
+		"deepseek/deepseek-v4-flash": {
+			"id": "deepseek/deepseek-v4-flash",
+			"name": "DeepSeek V4 Flash",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.14,
+				"output": 0.28,
+				"cacheRead": 0.0028,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 384000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"deepseek/deepseek-v4-pro": {
+			"id": "deepseek/deepseek-v4-pro",
+			"name": "DeepSeek V4 Pro",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.435,
+				"output": 0.87,
+				"cacheRead": 0.0036,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 384000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"google/gemini-2.0-flash": {
+			"id": "google/gemini-2.0-flash",
+			"name": "Gemini 2.0 Flash",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.15,
+				"output": 0.6,
+				"cacheRead": 0.024999999999999998,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 8192
+		},
+		"google/gemini-2.0-flash-lite": {
+			"id": "google/gemini-2.0-flash-lite",
+			"name": "Gemini 2.0 Flash Lite",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.075,
+				"output": 0.3,
+				"cacheRead": 0.02,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 8192
 		},
 		"google/gemini-2.5-flash": {
 			"id": "google/gemini-2.5-flash",
@@ -47744,11 +48024,11 @@
 			"cost": {
 				"input": 0.3,
 				"output": 2.5,
-				"cacheRead": 0,
+				"cacheRead": 0.03,
 				"cacheWrite": 0
 			},
-			"contextWindow": 1048000,
-			"maxTokens": 64000,
+			"contextWindow": 1000000,
+			"maxTokens": 65536,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -47772,8 +48052,8 @@
 				"cacheRead": 0.01,
 				"cacheWrite": 0
 			},
-			"contextWindow": 1048000,
-			"maxTokens": 64000
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		},
 		"google/gemini-2.5-flash-lite-preview-09-2025": {
 			"id": "google/gemini-2.5-flash-lite-preview-09-2025",
@@ -47839,11 +48119,11 @@
 			"cost": {
 				"input": 1.25,
 				"output": 10,
-				"cacheRead": 0,
+				"cacheRead": 0.125,
 				"cacheWrite": 0
 			},
-			"contextWindow": 1048000,
-			"maxTokens": 64000,
+			"contextWindow": 1048576,
+			"maxTokens": 65536,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -47868,7 +48148,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": 64000,
+			"maxTokens": 65000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -47892,12 +48172,126 @@
 				"cacheRead": 0.19999999999999998,
 				"cacheWrite": 0
 			},
-			"contextWindow": 1048000,
+			"contextWindow": 1000000,
 			"maxTokens": 64000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "low",
 				"maxLevel": "high"
+			}
+		},
+		"google/gemini-3.1-flash-lite-preview": {
+			"id": "google/gemini-3.1-flash-lite-preview",
+			"name": "Gemini 3.1 Flash Lite Preview",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.25,
+				"output": 1.5,
+				"cacheRead": 0.03,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 65000
+		},
+		"google/gemini-3.1-pro-preview": {
+			"id": "google/gemini-3.1-pro-preview",
+			"name": "Gemini 3.1 Pro Preview",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 12,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 64000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "low",
+				"maxLevel": "high"
+			}
+		},
+		"google/gemma-4-26b-a4b-it": {
+			"id": "google/gemma-4-26b-a4b-it",
+			"name": "Gemma 4 26B A4B IT",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.13,
+				"output": 0.39999999999999997,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 131072
+		},
+		"google/gemma-4-31b-it": {
+			"id": "google/gemma-4-31b-it",
+			"name": "Gemma-4-31B-IT",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.14,
+				"output": 0.39999999999999997,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"inception/mercury-2": {
+			"id": "inception/mercury-2",
+			"name": "Mercury 2",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.25,
+				"output": 0.75,
+				"cacheRead": 0.024999999999999998,
+				"cacheWrite": 0
+			},
+			"contextWindow": 128000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
 			}
 		},
 		"inception/mercury-coder-small": {
@@ -47919,6 +48313,30 @@
 			"contextWindow": 32000,
 			"maxTokens": 16384
 		},
+		"kwaipilot/kat-coder-pro-v2": {
+			"id": "kwaipilot/kat-coder-pro-v2",
+			"name": "Kat Coder Pro V2",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.3,
+				"output": 1.2,
+				"cacheRead": 0.06,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 256000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
 		"meituan/longcat-flash-chat": {
 			"id": "meituan/longcat-flash-chat",
 			"name": "LongCat Flash Chat",
@@ -47936,7 +48354,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": 8192
+			"maxTokens": 100000
 		},
 		"meituan/longcat-flash-thinking": {
 			"id": "meituan/longcat-flash-thinking",
@@ -47973,13 +48391,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
-				"output": 0.39999999999999997,
+				"input": 0.72,
+				"output": 0.72,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 131072,
-			"maxTokens": 16384
+			"contextWindow": 128000,
+			"maxTokens": 8192
 		},
 		"meta/llama-3.1-8b": {
 			"id": "meta/llama-3.1-8b",
@@ -47992,13 +48410,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.03,
-				"output": 0.049999999999999996,
+				"input": 0.22,
+				"output": 0.22,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 131072,
-			"maxTokens": 16384
+			"contextWindow": 128000,
+			"maxTokens": 8192
 		},
 		"meta/llama-3.2-11b": {
 			"id": "meta/llama-3.2-11b",
@@ -48071,12 +48489,12 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.15,
-				"output": 0.6,
+				"input": 0.24,
+				"output": 0.9700000000000001,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 131072,
+			"contextWindow": 128000,
 			"maxTokens": 8192
 		},
 		"meta/llama-4-scout": {
@@ -48091,12 +48509,12 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.08,
-				"output": 0.3,
+				"input": 0.16999999999999998,
+				"output": 0.66,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 131072,
+			"contextWindow": 128000,
 			"maxTokens": 8192
 		},
 		"minimax/minimax-m2": {
@@ -48115,8 +48533,8 @@
 				"cacheRead": 0.03,
 				"cacheWrite": 0.375
 			},
-			"contextWindow": 204000,
-			"maxTokens": 64000,
+			"contextWindow": 205000,
+			"maxTokens": 205000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -48136,11 +48554,11 @@
 			"cost": {
 				"input": 0.3,
 				"output": 1.2,
-				"cacheRead": 0.15,
-				"cacheWrite": 0
+				"cacheRead": 0.03,
+				"cacheWrite": 0.375
 			},
-			"contextWindow": 204000,
-			"maxTokens": 64000,
+			"contextWindow": 204800,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -48188,7 +48606,79 @@
 				"cacheWrite": 0.375
 			},
 			"contextWindow": 204800,
-			"maxTokens": 131072,
+			"maxTokens": 131000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"minimax/minimax-m2.5-highspeed": {
+			"id": "minimax/minimax-m2.5-highspeed",
+			"name": "MiniMax M2.5 High Speed",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.6,
+				"output": 2.4,
+				"cacheRead": 0.03,
+				"cacheWrite": 0.375
+			},
+			"contextWindow": 204800,
+			"maxTokens": 131000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"minimax/minimax-m2.7": {
+			"id": "minimax/minimax-m2.7",
+			"name": "MiniMax M2.7",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.3,
+				"output": 1.2,
+				"cacheRead": 0.06,
+				"cacheWrite": 0.375
+			},
+			"contextWindow": 204800,
+			"maxTokens": 131000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"minimax/minimax-m2.7-highspeed": {
+			"id": "minimax/minimax-m2.7-highspeed",
+			"name": "MiniMax M2.7 highspeed",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.6,
+				"output": 2.4,
+				"cacheRead": 0.06,
+				"cacheWrite": 0.375
+			},
+			"contextWindow": 204800,
+			"maxTokens": 131100,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -48225,8 +48715,8 @@
 				"text"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
+				"input": 0.39999999999999997,
+				"output": 2,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
@@ -48263,8 +48753,8 @@
 				"text"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
+				"input": 0.09999999999999999,
+				"output": 0.3,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
@@ -48282,8 +48772,8 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.04,
-				"output": 0.04,
+				"input": 0.09999999999999999,
+				"output": 0.09999999999999999,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
@@ -48301,8 +48791,8 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.09999999999999999,
-				"output": 0.09999999999999999,
+				"input": 0.15,
+				"output": 0.15,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
@@ -48391,7 +48881,7 @@
 		},
 		"moonshotai/kimi-k2": {
 			"id": "moonshotai/kimi-k2",
-			"name": "Kimi K2",
+			"name": "Kimi K2 Instruct",
 			"api": "anthropic-messages",
 			"baseUrl": "https://ai-gateway.vercel.sh",
 			"provider": "vercel-ai-gateway",
@@ -48400,13 +48890,32 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.5,
-				"output": 2,
+				"input": 0.5700000000000001,
+				"output": 2.3,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": 16384
+			"maxTokens": 131072
+		},
+		"moonshotai/kimi-k2-0905": {
+			"id": "moonshotai/kimi-k2-0905",
+			"name": "Kimi K2 0905",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.6,
+				"output": 2.5,
+				"cacheRead": 0.3,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 128000
 		},
 		"moonshotai/kimi-k2-thinking": {
 			"id": "moonshotai/kimi-k2-thinking",
@@ -48419,13 +48928,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.47,
-				"output": 2,
-				"cacheRead": 0.14100000000000001,
+				"input": 0.6,
+				"output": 2.5,
+				"cacheRead": 0.15,
 				"cacheWrite": 0
 			},
-			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"contextWindow": 262114,
+			"maxTokens": 262114,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -48448,8 +48957,8 @@
 				"cacheRead": 0.15,
 				"cacheWrite": 0
 			},
-			"contextWindow": 262000,
-			"maxTokens": 64000,
+			"contextWindow": 262114,
+			"maxTokens": 262114,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -48467,9 +48976,9 @@
 				"text"
 			],
 			"cost": {
-				"input": 2.4,
-				"output": 10,
-				"cacheRead": 0,
+				"input": 1.15,
+				"output": 8,
+				"cacheRead": 0.15,
 				"cacheWrite": 0
 			},
 			"contextWindow": 256000,
@@ -48487,13 +48996,38 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.5,
-				"output": 2.8,
-				"cacheRead": 0,
+				"input": 0.6,
+				"output": 3,
+				"cacheRead": 0.09999999999999999,
 				"cacheWrite": 0
 			},
-			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"contextWindow": 262114,
+			"maxTokens": 262114,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"moonshotai/kimi-k2.6": {
+			"id": "moonshotai/kimi-k2.6",
+			"name": "Kimi K2.6",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.95,
+				"output": 4,
+				"cacheRead": 0.16,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262000,
+			"maxTokens": 262000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -48536,8 +49070,8 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.04,
-				"output": 0.16,
+				"input": 0.06,
+				"output": 0.22999999999999998,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
@@ -48648,7 +49182,7 @@
 			"cost": {
 				"input": 0.09999999999999999,
 				"output": 0.39999999999999997,
-				"cacheRead": 0.03,
+				"cacheRead": 0.024999999999999998,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1047576,
@@ -48708,11 +49242,11 @@
 			"cost": {
 				"input": 1.25,
 				"output": 10,
-				"cacheRead": 0.13,
+				"cacheRead": 0.125,
 				"cacheWrite": 0
 			},
 			"contextWindow": 400000,
-			"maxTokens": 64000,
+			"maxTokens": 128000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -48721,7 +49255,7 @@
 		},
 		"openai/gpt-5-chat": {
 			"id": "openai/gpt-5-chat",
-			"name": "GPT-5 Chat",
+			"name": "GPT 5 Chat",
 			"api": "anthropic-messages",
 			"baseUrl": "https://ai-gateway.vercel.sh",
 			"provider": "vercel-ai-gateway",
@@ -48758,11 +49292,11 @@
 			"cost": {
 				"input": 1.25,
 				"output": 10,
-				"cacheRead": 0.13,
+				"cacheRead": 0.125,
 				"cacheWrite": 0
 			},
 			"contextWindow": 272000,
-			"maxTokens": 64000,
+			"maxTokens": 128000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -48783,7 +49317,7 @@
 			"cost": {
 				"input": 0.25,
 				"output": 2,
-				"cacheRead": 0.03,
+				"cacheRead": 0.024999999999999998,
 				"cacheWrite": 0
 			},
 			"contextWindow": 400000,
@@ -48808,7 +49342,7 @@
 			"cost": {
 				"input": 0.049999999999999996,
 				"output": 0.39999999999999997,
-				"cacheRead": 0.01,
+				"cacheRead": 0.005,
 				"cacheWrite": 0
 			},
 			"contextWindow": 400000,
@@ -48858,7 +49392,7 @@
 			"cost": {
 				"input": 1.25,
 				"output": 10,
-				"cacheRead": 0.13,
+				"cacheRead": 0.125,
 				"cacheWrite": 0
 			},
 			"contextWindow": 272000,
@@ -48912,7 +49446,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 272000,
-			"maxTokens": 64000,
+			"maxTokens": 128000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "medium",
@@ -48933,7 +49467,7 @@
 			"cost": {
 				"input": 1.25,
 				"output": 10,
-				"cacheRead": 0.13,
+				"cacheRead": 0.125,
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
@@ -48958,7 +49492,7 @@
 			"cost": {
 				"input": 1.25,
 				"output": 10,
-				"cacheRead": 0.13,
+				"cacheRead": 0.125,
 				"cacheWrite": 0
 			},
 			"contextWindow": 400000,
@@ -48983,7 +49517,7 @@
 			"cost": {
 				"input": 1.75,
 				"output": 14,
-				"cacheRead": 0.18,
+				"cacheRead": 0.175,
 				"cacheWrite": 0
 			},
 			"contextWindow": 400000,
@@ -48996,7 +49530,7 @@
 		},
 		"openai/gpt-5.2-chat": {
 			"id": "openai/gpt-5.2-chat",
-			"name": "GPT-5.2 Chat",
+			"name": "GPT 5.2 Chat",
 			"api": "anthropic-messages",
 			"baseUrl": "https://ai-gateway.vercel.sh",
 			"provider": "vercel-ai-gateway",
@@ -49069,6 +49603,188 @@
 				"maxLevel": "xhigh"
 			}
 		},
+		"openai/gpt-5.3-chat": {
+			"id": "openai/gpt-5.3-chat",
+			"name": "GPT-5.3 Chat",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 1.75,
+				"output": 14,
+				"cacheRead": 0.175,
+				"cacheWrite": 0
+			},
+			"contextWindow": 128000,
+			"maxTokens": 16384
+		},
+		"openai/gpt-5.3-codex": {
+			"id": "openai/gpt-5.3-codex",
+			"name": "GPT-5.3 Codex",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1.75,
+				"output": 14,
+				"cacheRead": 0.175,
+				"cacheWrite": 0
+			},
+			"contextWindow": 272000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "low",
+				"maxLevel": "xhigh"
+			}
+		},
+		"openai/gpt-5.4": {
+			"id": "openai/gpt-5.4",
+			"name": "GPT-5.4",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2.5,
+				"output": 15,
+				"cacheRead": 0.25,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1050000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "low",
+				"maxLevel": "xhigh"
+			}
+		},
+		"openai/gpt-5.4-mini": {
+			"id": "openai/gpt-5.4-mini",
+			"name": "GPT-5.4 Mini",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.75,
+				"output": 4.5,
+				"cacheRead": 0.075,
+				"cacheWrite": 0
+			},
+			"contextWindow": 400000,
+			"maxTokens": 128000
+		},
+		"openai/gpt-5.4-nano": {
+			"id": "openai/gpt-5.4-nano",
+			"name": "GPT-5.4 Nano",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.19999999999999998,
+				"output": 1.25,
+				"cacheRead": 0.02,
+				"cacheWrite": 0
+			},
+			"contextWindow": 400000,
+			"maxTokens": 128000
+		},
+		"openai/gpt-5.4-pro": {
+			"id": "openai/gpt-5.4-pro",
+			"name": "GPT-5.4 Pro",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 30,
+				"output": 180,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1050000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "low",
+				"maxLevel": "xhigh"
+			}
+		},
+		"openai/gpt-5.5": {
+			"id": "openai/gpt-5.5",
+			"name": "GPT-5.5",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 5,
+				"output": 30,
+				"cacheRead": 0.5,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "low",
+				"maxLevel": "xhigh"
+			}
+		},
+		"openai/gpt-5.5-pro": {
+			"id": "openai/gpt-5.5-pro",
+			"name": "GPT-5.5 Pro",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 30,
+				"output": 180,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "low",
+				"maxLevel": "xhigh"
+			}
+		},
 		"openai/gpt-oss-120b": {
 			"id": "openai/gpt-oss-120b",
 			"name": "GPT OSS 120B",
@@ -49104,13 +49820,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.07,
-				"output": 0.3,
+				"input": 0.049999999999999996,
+				"output": 0.19999999999999998,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": 65536,
+			"maxTokens": 8192,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -49427,7 +50143,7 @@
 			"cost": {
 				"input": 3,
 				"output": 15,
-				"cacheRead": 0,
+				"cacheRead": 0.75,
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
@@ -49446,7 +50162,7 @@
 			"cost": {
 				"input": 5,
 				"output": 25,
-				"cacheRead": 0,
+				"cacheRead": 1.25,
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
@@ -49465,7 +50181,7 @@
 			"cost": {
 				"input": 0.3,
 				"output": 0.5,
-				"cacheRead": 0,
+				"cacheRead": 0.075,
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
@@ -49504,7 +50220,7 @@
 			"cost": {
 				"input": 3,
 				"output": 15,
-				"cacheRead": 0,
+				"cacheRead": 0.75,
 				"cacheWrite": 0
 			},
 			"contextWindow": 256000,
@@ -49523,7 +50239,8 @@
 			"provider": "vercel-ai-gateway",
 			"reasoning": false,
 			"input": [
-				"text"
+				"text",
+				"image"
 			],
 			"cost": {
 				"input": 0.19999999999999998,
@@ -49542,7 +50259,8 @@
 			"provider": "vercel-ai-gateway",
 			"reasoning": true,
 			"input": [
-				"text"
+				"text",
+				"image"
 			],
 			"cost": {
 				"input": 0.19999999999999998,
@@ -49566,7 +50284,8 @@
 			"provider": "vercel-ai-gateway",
 			"reasoning": false,
 			"input": [
-				"text"
+				"text",
+				"image"
 			],
 			"cost": {
 				"input": 0.19999999999999998,
@@ -49585,7 +50304,8 @@
 			"provider": "vercel-ai-gateway",
 			"reasoning": true,
 			"input": [
-				"text"
+				"text",
+				"image"
 			],
 			"cost": {
 				"input": 0.19999999999999998,
@@ -49595,6 +50315,171 @@
 			},
 			"contextWindow": 2000000,
 			"maxTokens": 30000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"xai/grok-4.20-multi-agent": {
+			"id": "xai/grok-4.20-multi-agent",
+			"name": "Grok 4.20 Multi-Agent",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 6,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 0
+			},
+			"contextWindow": 2000000,
+			"maxTokens": 2000000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"xai/grok-4.20-multi-agent-beta": {
+			"id": "xai/grok-4.20-multi-agent-beta",
+			"name": "Grok 4.20 Multi Agent Beta",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 6,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 0
+			},
+			"contextWindow": 2000000,
+			"maxTokens": 2000000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"xai/grok-4.20-non-reasoning": {
+			"id": "xai/grok-4.20-non-reasoning",
+			"name": "Grok 4.20 Non-Reasoning",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 6,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 0
+			},
+			"contextWindow": 2000000,
+			"maxTokens": 2000000
+		},
+		"xai/grok-4.20-non-reasoning-beta": {
+			"id": "xai/grok-4.20-non-reasoning-beta",
+			"name": "Grok 4.20 Beta Non-Reasoning",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 6,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 0
+			},
+			"contextWindow": 2000000,
+			"maxTokens": 2000000
+		},
+		"xai/grok-4.20-reasoning": {
+			"id": "xai/grok-4.20-reasoning",
+			"name": "Grok 4.20 Reasoning",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 6,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 0
+			},
+			"contextWindow": 2000000,
+			"maxTokens": 2000000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"xai/grok-4.20-reasoning-beta": {
+			"id": "xai/grok-4.20-reasoning-beta",
+			"name": "Grok 4.20 Beta Reasoning",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 6,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 0
+			},
+			"contextWindow": 2000000,
+			"maxTokens": 2000000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"xai/grok-4.3": {
+			"id": "xai/grok-4.3",
+			"name": "Grok 4.3",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1.25,
+				"output": 2.5,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 1000000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -49636,13 +50521,87 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.09,
-				"output": 0.29,
-				"cacheRead": 0,
+				"input": 0.09999999999999999,
+				"output": 0.3,
+				"cacheRead": 0.01,
 				"cacheWrite": 0
 			},
-			"contextWindow": 262000,
-			"maxTokens": 64000,
+			"contextWindow": 262144,
+			"maxTokens": 32000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"xiaomi/mimo-v2-pro": {
+			"id": "xiaomi/mimo-v2-pro",
+			"name": "MiMo V2 Pro",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1,
+				"output": 3,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"xiaomi/mimo-v2.5": {
+			"id": "xiaomi/mimo-v2.5",
+			"name": "MiMo-V2.5",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.39999999999999997,
+				"output": 2,
+				"cacheRead": 0.08,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1050000,
+			"maxTokens": 131100,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"xiaomi/mimo-v2.5-pro": {
+			"id": "xiaomi/mimo-v2.5-pro",
+			"name": "MiMo-V2.5-Pro",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1,
+				"output": 3,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1050000,
+			"maxTokens": 131000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -49662,11 +50621,11 @@
 			"cost": {
 				"input": 0.6,
 				"output": 2.2,
-				"cacheRead": 0,
+				"cacheRead": 0.11,
 				"cacheWrite": 0
 			},
-			"contextWindow": 131072,
-			"maxTokens": 131072,
+			"contextWindow": 128000,
+			"maxTokens": 96000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -49711,11 +50670,11 @@
 			"cost": {
 				"input": 0.6,
 				"output": 1.7999999999999998,
-				"cacheRead": 0,
+				"cacheRead": 0.11,
 				"cacheWrite": 0
 			},
-			"contextWindow": 65536,
-			"maxTokens": 16384,
+			"contextWindow": 66000,
+			"maxTokens": 16000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -49733,8 +50692,8 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.44999999999999996,
-				"output": 1.7999999999999998,
+				"input": 0.6,
+				"output": 2.2,
 				"cacheRead": 0.11,
 				"cacheWrite": 0
 			},
@@ -49807,13 +50766,37 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.43,
-				"output": 1.75,
-				"cacheRead": 0.08,
+				"input": 2.25,
+				"output": 2.75,
+				"cacheRead": 2.25,
 				"cacheWrite": 0
 			},
-			"contextWindow": 202752,
-			"maxTokens": 120000,
+			"contextWindow": 131000,
+			"maxTokens": 40000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"zai/glm-4.7-flash": {
+			"id": "zai/glm-4.7-flash",
+			"name": "GLM 4.7 Flash",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.07,
+				"output": 0.39999999999999997,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 131000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -49846,7 +50829,7 @@
 		},
 		"zai/glm-5": {
 			"id": "zai/glm-5",
-			"name": "GLM-5",
+			"name": "GLM 5",
 			"api": "anthropic-messages",
 			"baseUrl": "https://ai-gateway.vercel.sh",
 			"provider": "vercel-ai-gateway",
@@ -49861,7 +50844,80 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 202800,
-			"maxTokens": 131072,
+			"maxTokens": 131100,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"zai/glm-5-turbo": {
+			"id": "zai/glm-5-turbo",
+			"name": "GLM 5 Turbo",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 1.2,
+				"output": 4,
+				"cacheRead": 0.24,
+				"cacheWrite": 0
+			},
+			"contextWindow": 202800,
+			"maxTokens": 131100,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"zai/glm-5.1": {
+			"id": "zai/glm-5.1",
+			"name": "GLM 5.1",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 1.4,
+				"output": 4.4,
+				"cacheRead": 0.26,
+				"cacheWrite": 0
+			},
+			"contextWindow": 202800,
+			"maxTokens": 64000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"zai/glm-5v-turbo": {
+			"id": "zai/glm-5v-turbo",
+			"name": "GLM 5V Turbo",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1.2,
+				"output": 4,
+				"cacheRead": 0.24,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 128000,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",

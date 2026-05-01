@@ -980,18 +980,28 @@ export interface VercelAiGatewayModelManagerConfig {
 	baseUrl?: string;
 }
 
+function normalizeVercelAiGatewayBaseUrls(rawBaseUrl: string | undefined): { baseUrl: string; catalogBaseUrl: string } {
+	const baseUrl = (rawBaseUrl === undefined ? "https://ai-gateway.vercel.sh" : rawBaseUrl.trim()).replace(/\/+$/, "");
+	const catalogBaseUrl = baseUrl === "" || baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+
+	return {
+		baseUrl: baseUrl.endsWith("/v1") ? baseUrl.slice(0, -3) : baseUrl,
+		catalogBaseUrl,
+	};
+}
+
 export function vercelAiGatewayModelManagerOptions(
 	config?: VercelAiGatewayModelManagerConfig,
 ): ModelManagerOptions<"anthropic-messages"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://ai-gateway.vercel.sh";
+	const { baseUrl, catalogBaseUrl } = normalizeVercelAiGatewayBaseUrls(config?.baseUrl);
 	return {
 		providerId: "vercel-ai-gateway",
 		fetchDynamicModels: () =>
 			fetchOpenAICompatibleModels({
 				api: "anthropic-messages",
 				provider: "vercel-ai-gateway",
-				baseUrl,
+				baseUrl: catalogBaseUrl,
 				apiKey,
 				filterModel: (entry: OpenAICompatibleModelRecord) => {
 					const tags = entry.tags;
@@ -1007,6 +1017,7 @@ export function vercelAiGatewayModelManagerOptions(
 
 					return {
 						...defaults,
+						baseUrl,
 						reasoning: tags.includes("reasoning"),
 						input: tags.includes("vision") ? ["text", "image"] : ["text"],
 						cost: {
