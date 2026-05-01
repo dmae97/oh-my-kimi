@@ -66,10 +66,10 @@ function formatDate(date?: CrossrefDate): string | null {
 	return formatted.join("-");
 }
 
-function formatAbstract(abstract?: string): string | null {
+async function formatAbstract(abstract?: string): Promise<string | null> {
 	if (!abstract) return null;
 	const normalized = abstract.replace(/<\/?jats:p[^>]*>/g, match => (match.startsWith("</") ? "</p>" : "<p>"));
-	const markdown = htmlToBasicMarkdown(normalized);
+	const markdown = await htmlToBasicMarkdown(normalized);
 	return markdown.trim().length > 0 ? markdown : null;
 }
 
@@ -114,7 +114,7 @@ export const handleCrossref: SpecialHandler = async (
 			formatDate(message.issued) ||
 			formatDate(message.created);
 		const doiValue = message.DOI || doi;
-		const abstract = formatAbstract(message.abstract);
+		const abstract = await formatAbstract(message.abstract);
 		const type = message.type?.replace(/-/g, " ");
 
 		let md = `# ${title}\n\n`;

@@ -253,17 +253,27 @@ async function getChangelogForDisplay(parsed: Args): Promise<string | undefined>
 	if (!lastVersion) {
 		if (entries.length > 0) {
 			settings.set("lastChangelogVersion", VERSION);
+			await flushChangelogVersion();
 			return entries.map(e => e.content).join("\n\n");
 		}
 	} else {
 		const newEntries = getNewEntries(entries, lastVersion);
 		if (newEntries.length > 0) {
 			settings.set("lastChangelogVersion", VERSION);
+			await flushChangelogVersion();
 			return newEntries.map(e => e.content).join("\n\n");
 		}
 	}
 
 	return undefined;
+}
+
+async function flushChangelogVersion(): Promise<void> {
+	try {
+		await settings.flush();
+	} catch (error: unknown) {
+		logger.warn("Failed to persist lastChangelogVersion", { error });
+	}
 }
 
 async function createSessionManager(parsed: Args, cwd: string): Promise<SessionManager | undefined> {

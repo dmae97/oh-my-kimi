@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added package-level `google-gemini-headers` exports (`getGeminiCliHeaders`, `getGeminiCliUserAgent`, `getAntigravityHeaders`, `extractRetryDelay`, and `ANTIGRAVITY_SYSTEM_INSTRUCTION`) for header and retry handling reuse without importing full Google providers
+
+### Changed
+
+- Changed package exports and streaming/provider wiring to load heavy Google/Kimi/GitLab/synthetic provider modules lazily through `register-builtins`, reducing startup import overhead from optional provider SDKs
 
 ### Fixed
 

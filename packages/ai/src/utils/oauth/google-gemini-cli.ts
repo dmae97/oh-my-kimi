@@ -4,7 +4,7 @@
  */
 
 import { $env } from "@oh-my-pi/pi-utils";
-import { getGeminiCliHeaders } from "../../providers/google-gemini-cli";
+import { getGeminiCliHeaders } from "../../providers/google-gemini-headers";
 import { runGoogleOAuthLogin } from "./google-oauth-shared";
 import type { OAuthController, OAuthCredentials } from "./types";
 

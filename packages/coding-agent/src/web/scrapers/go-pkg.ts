@@ -159,7 +159,7 @@ export const handleGoPkg: SpecialHandler = async (
 			// Get overview paragraph
 			const overview = docSection.querySelector(".go-Message");
 			if (overview) {
-				const overviewMd = htmlToBasicMarkdown(overview.innerHTML);
+				const overviewMd = await htmlToBasicMarkdown(overview.innerHTML);
 				sections.push(overviewMd);
 				sections.push("");
 			}
@@ -172,7 +172,7 @@ export const handleGoPkg: SpecialHandler = async (
 				const docParts: string[] = [];
 				for (let i = 0; i < Math.min(3, paragraphs.length); i++) {
 					const p = paragraphs[i];
-					const text = htmlToBasicMarkdown(p.innerHTML).trim();
+					const text = (await htmlToBasicMarkdown(p.innerHTML)).trim();
 					if (text) {
 						docParts.push(text);
 					}

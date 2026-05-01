@@ -9,19 +9,37 @@ import {
 	mapEffortToGoogleThinkingLevel,
 	requireSupportedEffort,
 } from "./model-thinking";
-import { type BedrockOptions, streamBedrock } from "./providers/amazon-bedrock";
-import { type AnthropicOptions, streamAnthropic } from "./providers/anthropic";
-import { streamAzureOpenAIResponses } from "./providers/azure-openai-responses";
-import { type CursorOptions, streamCursor } from "./providers/cursor";
+import type { BedrockOptions } from "./providers/amazon-bedrock";
+import type { AnthropicOptions } from "./providers/anthropic";
+import type { CursorOptions } from "./providers/cursor";
 import { isGitLabDuoModel, streamGitLabDuo } from "./providers/gitlab-duo";
-import { type GoogleOptions, streamGoogle } from "./providers/google";
-import { type GoogleGeminiCliOptions, streamGoogleGeminiCli } from "./providers/google-gemini-cli";
-import { type GoogleVertexOptions, streamGoogleVertex } from "./providers/google-vertex";
+import type { GoogleOptions } from "./providers/google";
+import type { GoogleGeminiCliOptions } from "./providers/google-gemini-cli";
+import type { GoogleVertexOptions } from "./providers/google-vertex";
 import { isKimiModel, streamKimi } from "./providers/kimi";
-import { type OllamaChatOptions, streamOllama } from "./providers/ollama";
-import { streamOpenAICodexResponses } from "./providers/openai-codex-responses";
-import { type OpenAICompletionsOptions, streamOpenAICompletions } from "./providers/openai-completions";
-import { streamOpenAIResponses } from "./providers/openai-responses";
+import type { OllamaChatOptions } from "./providers/ollama";
+import type { OpenAICompletionsOptions } from "./providers/openai-completions";
+// Heavy provider stream functions are imported lazily via register-builtins,
+// which wraps each provider module in a dynamic import. This keeps the
+// AWS SDK, google-auth-library, @google/genai, @bufbuild/protobuf, and
+// other provider SDKs out of the CLI startup parse graph. The
+// gitlab-duo / kimi / synthetic providers stay eager because their modules
+// export routing predicates (isGitLabDuoModel, isKimiModel, isSyntheticModel)
+// that must be callable synchronously before streaming begins, and their
+// modules are thin wrappers with no heavy SDK dependencies.
+import {
+	streamAnthropic,
+	streamAzureOpenAIResponses,
+	streamBedrock,
+	streamCursor,
+	streamGoogle,
+	streamGoogleGeminiCli,
+	streamGoogleVertex,
+	streamOllama,
+	streamOpenAICodexResponses,
+	streamOpenAICompletions,
+	streamOpenAIResponses,
+} from "./providers/register-builtins";
 import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
 import type {
 	Api,

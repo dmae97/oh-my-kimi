@@ -29,7 +29,7 @@ interface MDNDoc {
 /**
  * Convert MDN body sections to markdown
  */
-function convertMDNBody(sections: MDNSection[]): string {
+async function convertMDNBody(sections: MDNSection[]): Promise<string> {
 	const parts: string[] = [];
 
 	for (const section of sections) {
@@ -38,7 +38,7 @@ function convertMDNBody(sections: MDNSection[]): string {
 		switch (type) {
 			case "prose":
 				if (value.content) {
-					const markdown = htmlToBasicMarkdown(value.content);
+					const markdown = await htmlToBasicMarkdown(value.content);
 					if (value.title) {
 						const level = value.isH3 ? "###" : "##";
 						parts.push(`${level} ${value.title}\n\n${markdown}`);
@@ -74,7 +74,7 @@ function convertMDNBody(sections: MDNSection[]): string {
 				if (value.items) {
 					for (const item of value.items) {
 						parts.push(`**${item.term}**`);
-						const desc = htmlToBasicMarkdown(item.description);
+						const desc = await htmlToBasicMarkdown(item.description);
 						parts.push(desc);
 					}
 				}
@@ -83,9 +83,13 @@ function convertMDNBody(sections: MDNSection[]): string {
 			case "table":
 				if (value.rows && value.rows.length > 0) {
 					// Simple markdown table
-					const header = value.rows[0].map(cell => htmlToBasicMarkdown(cell)).join(" | ");
+					const header = (await Promise.all(value.rows[0].map(cell => htmlToBasicMarkdown(cell)))).join(" | ");
 					const separator = value.rows[0].map(() => "---").join(" | ");
-					const bodyRows = value.rows.slice(1).map(row => row.map(cell => htmlToBasicMarkdown(cell)).join(" | "));
+					const bodyRows = await Promise.all(
+						value.rows
+							.slice(1)
+							.map(async row => (await Promise.all(row.map(cell => htmlToBasicMarkdown(cell)))).join(" | ")),
+					);
 
 					parts.push(`| ${header} |`);
 					parts.push(`| ${separator} |`);
@@ -144,12 +148,12 @@ export const handleMDN: SpecialHandler = async (url: string, timeout: number, si
 		parts.push(`# ${doc.title}`);
 
 		if (doc.summary) {
-			const summary = htmlToBasicMarkdown(doc.summary);
+			const summary = await htmlToBasicMarkdown(doc.summary);
 			parts.push(summary);
 		}
 
 		if (doc.body && doc.body.length > 0) {
-			const bodyMarkdown = convertMDNBody(doc.body);
+			const bodyMarkdown = await convertMDNBody(doc.body);
 			parts.push(bodyMarkdown);
 		}
 

@@ -1,11 +1,9 @@
 import { ANTHROPIC_THINKING, mapAnthropicToolChoice } from "../stream";
 import type { Api, Context, Model, SimpleStreamOptions } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { streamAnthropic } from "./anthropic";
 import type { OpenAICompletionsOptions } from "./openai-completions";
-import { streamOpenAICompletions } from "./openai-completions";
 import type { OpenAIResponsesOptions } from "./openai-responses";
-import { streamOpenAIResponses } from "./openai-responses";
+import { streamAnthropic, streamOpenAICompletions, streamOpenAIResponses } from "./register-builtins";
 import { createProviderErrorMessage } from "./shared/error-message";
 
 const GITLAB_COM_URL = "https://gitlab.com";

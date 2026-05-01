@@ -101,7 +101,7 @@ export const handleReadTheDocs: SpecialHandler = async (
 	// If no raw source, convert HTML to markdown
 	if (!content && mainContent) {
 		const html = mainContent.innerHTML;
-		content = htmlToBasicMarkdown(html);
+		content = await htmlToBasicMarkdown(html);
 	}
 
 	if (!content) {

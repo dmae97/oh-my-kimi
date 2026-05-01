@@ -89,11 +89,11 @@ function formatDate(isoDate: string): string {
 /**
  * Format a status/post as markdown
  */
-function formatStatus(status: MastodonStatus, isReblog = false): string {
+async function formatStatus(status: MastodonStatus, isReblog = false): Promise<string> {
 	// Handle reblogs (boosts)
 	if (status.reblog && !isReblog) {
 		let md = `🔁 **${status.account.display_name || status.account.username}** boosted:\n\n`;
-		md += formatStatus(status.reblog, true);
+		md += await formatStatus(status.reblog, true);
 		return md;
 	}
 
@@ -116,7 +116,7 @@ function formatStatus(status: MastodonStatus, isReblog = false): string {
 	}
 
 	// Main content (convert HTML to markdown)
-	const content = htmlToBasicMarkdown(status.content);
+	const content = await htmlToBasicMarkdown(status.content);
 	md += `${content}\n\n`;
 
 	// Poll
@@ -152,7 +152,7 @@ function formatStatus(status: MastodonStatus, isReblog = false): string {
 /**
  * Format an account/profile as markdown
  */
-function formatAccount(account: MastodonAccount): string {
+async function formatAccount(account: MastodonAccount): Promise<string> {
 	let md = `# ${account.display_name || account.username}\n\n`;
 
 	md += `**@${account.acct}**`;
@@ -161,7 +161,7 @@ function formatAccount(account: MastodonAccount): string {
 
 	// Bio
 	if (account.note) {
-		const bio = htmlToBasicMarkdown(account.note);
+		const bio = await htmlToBasicMarkdown(account.note);
 		if (bio && bio !== account.display_name) {
 			md += `${bio}\n\n`;
 		}
@@ -179,7 +179,7 @@ function formatAccount(account: MastodonAccount): string {
 	if (account.fields && account.fields.length > 0) {
 		md += "\n**Profile Fields:**\n";
 		for (const field of account.fields) {
-			const value = htmlToBasicMarkdown(field.value);
+			const value = await htmlToBasicMarkdown(field.value);
 			md += `- **${field.name}:** ${value}\n`;
 		}
 	}
@@ -228,7 +228,7 @@ export const handleMastodon: SpecialHandler = async (
 			const status = tryParseJson<MastodonStatus>(result.content);
 			if (!status) return null;
 
-			const md = formatStatus(status);
+			const md = await formatStatus(status);
 
 			return buildResult(md, {
 				url,
@@ -263,7 +263,7 @@ export const handleMastodon: SpecialHandler = async (
 				signal,
 			});
 
-			let md = formatAccount(account);
+			let md = await formatAccount(account);
 
 			if (statusesResult.ok) {
 				const statuses = tryParseJson<MastodonStatus[]>(statusesResult.content);
@@ -271,7 +271,7 @@ export const handleMastodon: SpecialHandler = async (
 					md += "\n---\n\n## Recent Posts\n\n";
 					for (const status of statuses.slice(0, 5)) {
 						md += `### ${formatDate(status.created_at)}\n\n`;
-						const content = htmlToBasicMarkdown(status.content);
+						const content = await htmlToBasicMarkdown(status.content);
 						md += `${content}\n\n`;
 						md += `\uD83D\uDCAC ${status.replies_count} \u00B7 \uD83D\uDD01 ${status.reblogs_count} \u00B7 \u2B50 ${status.favourites_count}\n\n`;
 					}

@@ -77,12 +77,12 @@ function formatCategory(topic: DiscourseTopic): string | null {
 	return parts.length ? parts.join(" ") : null;
 }
 
-function formatPostBody(post: DiscoursePost): string {
+async function formatPostBody(post: DiscoursePost): Promise<string> {
 	const raw = post.raw?.trim();
 	if (raw) return raw;
 	const cooked = post.cooked?.trim();
 	if (!cooked) return "";
-	return htmlToBasicMarkdown(cooked);
+	return await htmlToBasicMarkdown(cooked);
 }
 
 function buildTopicUrl(baseUrl: string, topicId: string): string {
@@ -168,9 +168,9 @@ export const handleDiscourse: SpecialHandler = async (
 		md += "\n";
 
 		const description = topic.excerpt
-			? htmlToBasicMarkdown(topic.excerpt)
+			? await htmlToBasicMarkdown(topic.excerpt)
 			: posts.length
-				? formatPostBody(posts[0])
+				? await formatPostBody(posts[0])
 				: "";
 		if (description) {
 			md += `## Description\n\n${description}\n\n`;
@@ -182,7 +182,7 @@ export const handleDiscourse: SpecialHandler = async (
 				const author = formatAuthor({ name: post.name, username: post.username });
 				const date = formatIsoDate(post.created_at);
 				const likes = post.like_count ?? 0;
-				const content = formatPostBody(post);
+				const content = await formatPostBody(post);
 				const postLabel = post.post_number != null ? `Post ${post.post_number}` : `Post ${post.id}`;
 
 				md += `### ${postLabel} - ${author} - ${date} - Likes: ${likes}\n\n`;

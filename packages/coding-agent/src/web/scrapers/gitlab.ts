@@ -259,7 +259,7 @@ async function renderGitLabIssue(
 	}
 
 	md += `\n---\n\n## Description\n\n`;
-	md += issue.description ? htmlToBasicMarkdown(issue.description) : "*No description*";
+	md += issue.description ? await htmlToBasicMarkdown(issue.description) : "*No description*";
 
 	return { content: md, ok: true };
 }

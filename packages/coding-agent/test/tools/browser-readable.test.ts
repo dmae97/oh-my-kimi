@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { extractReadableFromHtml } from "@oh-my-pi/pi-coding-agent/tools/browser";
 
 describe("browser readable extraction", () => {
-	it("extracts markdown content from article-style pages", () => {
+	it("extracts markdown content from article-style pages", async () => {
 		const html = `<!doctype html>
 			<html>
 				<head><title>Docs</title></head>
@@ -14,7 +14,7 @@ describe("browser readable extraction", () => {
 				</body>
 			</html>`;
 
-		const result = extractReadableFromHtml(html, "https://example.com/docs", "markdown");
+		const result = await extractReadableFromHtml(html, "https://example.com/docs", "markdown");
 
 		expect(result).not.toBeNull();
 		expect(result?.title).toBe("Docs");
@@ -22,7 +22,7 @@ describe("browser readable extraction", () => {
 		expect(result?.markdown).toContain("stores output only when you opt in");
 	});
 
-	it("extracts docs-style main content", () => {
+	it("extracts docs-style main content", async () => {
 		const html = `<!doctype html>
 			<html>
 				<head><title>Reference</title></head>
@@ -39,7 +39,7 @@ describe("browser readable extraction", () => {
 				</body>
 			</html>`;
 
-		const result = extractReadableFromHtml(html, "https://developers.openai.com/apps-sdk/reference", "text");
+		const result = await extractReadableFromHtml(html, "https://developers.openai.com/apps-sdk/reference", "text");
 
 		expect(result).not.toBeNull();
 		expect(result?.title).toBe("Reference");

@@ -94,7 +94,7 @@ export const handleSpdx: SpecialHandler = async (
 		const licenseText = license.licenseText
 			? license.licenseText
 			: license.licenseTextHtml
-				? htmlToBasicMarkdown(license.licenseTextHtml)
+				? await htmlToBasicMarkdown(license.licenseTextHtml)
 				: null;
 
 		if (licenseText) {

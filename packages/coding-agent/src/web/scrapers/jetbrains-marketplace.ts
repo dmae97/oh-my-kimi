@@ -108,7 +108,7 @@ export const handleJetBrainsMarketplace: SpecialHandler = async (
 
 		const vendorName = plugin.vendor?.name ?? plugin.vendor?.publicName;
 		const descriptionSource = plugin.description ?? plugin.preview ?? "";
-		const description = descriptionSource ? htmlToBasicMarkdown(descriptionSource) : "";
+		const description = descriptionSource ? await htmlToBasicMarkdown(descriptionSource) : "";
 		const tags = (plugin.tags ?? []).map(tag => tag.name).filter(Boolean) as string[];
 		const rating = extractRating(plugin);
 		const buildCompatibility = update ? formatBuildCompatibility(update) : null;

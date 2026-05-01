@@ -16,7 +16,6 @@ import type {
 	WorkerInitPayload,
 	WorkerOutbound,
 } from "./tab-protocol";
-import { WorkerCore } from "./tab-worker";
 
 interface WorkerHandle {
 	send(msg: WorkerInbound, transferList?: Transferable[]): void;
@@ -398,7 +397,7 @@ function wrapBunWorker(worker: Worker): WorkerHandle {
  * entry. This preserves normal browser behavior but cannot interrupt synchronous
  * infinite loops because user code runs on the main thread.
  */
-function spawnInlineWorker(): WorkerHandle {
+async function spawnInlineWorker(): Promise<WorkerHandle> {
 	const hostListeners = new Set<(message: WorkerOutbound) => void>();
 	const workerListeners = new Set<(message: WorkerInbound) => void>();
 	const workerTransport: Transport = {
@@ -413,6 +412,7 @@ function spawnInlineWorker(): WorkerHandle {
 		},
 		close: () => {},
 	};
+	const { WorkerCore } = await import("./tab-worker");
 	new WorkerCore(workerTransport);
 	return {
 		mode: "inline",

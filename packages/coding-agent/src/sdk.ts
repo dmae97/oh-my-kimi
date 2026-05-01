@@ -300,7 +300,6 @@ function getDefaultAgentDir(): string {
  */
 export async function discoverAuthStorage(agentDir: string = getDefaultAgentDir()): Promise<AuthStorage> {
 	const dbPath = getAgentDbPath(agentDir);
-	logger.debug("discoverAuthStorage", { agentDir, dbPath });
 
 	const storage = await AuthStorage.create(dbPath, { configValueResolver: resolveConfigValue });
 	await storage.reload();

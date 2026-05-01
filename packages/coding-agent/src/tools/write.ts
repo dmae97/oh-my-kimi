@@ -6,7 +6,6 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { unzipSync, zipSync } from "fflate";
 import { stripHashlinePrefixes } from "../edit";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { createLspWritethrough, type FileDiagnosticsResult, type WritethroughCallback, writethroughNoop } from "../lsp";
@@ -43,6 +42,12 @@ import {
 } from "./sqlite-reader";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
+
+let fflateModulePromise: Promise<typeof import("fflate")> | undefined;
+async function loadFflate(): Promise<typeof import("fflate")> {
+	if (!fflateModulePromise) fflateModulePromise = import("fflate");
+	return fflateModulePromise;
+}
 
 const writeSchema = Type.Object({
 	path: Type.String({ description: "file path", examples: ["src/new.ts"] }),
@@ -229,6 +234,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			if (resolvedArchivePath.exists) {
 				try {
 					const bytes = await Bun.file(resolvedArchivePath.absolutePath).bytes();
+					const { unzipSync } = await loadFflate();
 					const existing = unzipSync(new Uint8Array(bytes));
 					for (const [entryPath, data] of Object.entries(existing)) {
 						zipEntries[entryPath.replace(/\\/g, "/")] = data;
@@ -241,6 +247,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			zipEntries[resolvedArchivePath.archiveSubPath] = new TextEncoder().encode(content);
 
 			try {
+				const { zipSync } = await loadFflate();
 				const zipBuffer = zipSync(zipEntries);
 				await Bun.write(resolvedArchivePath.absolutePath, zipBuffer);
 			} catch (error) {

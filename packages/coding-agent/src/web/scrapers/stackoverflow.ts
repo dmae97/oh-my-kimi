@@ -90,7 +90,7 @@ export const handleStackOverflow: SpecialHandler = async (
 		md += question.is_answered ? " (Answered)" : "";
 		md += `\n**Tags:** ${question.tags.join(", ")}\n`;
 		md += `**Asked by:** ${question.owner.display_name} · ${formatIsoDate(question.creation_date * 1000)}\n\n`;
-		md += `---\n\n## Question\n\n${htmlToBasicMarkdown(question.body)}\n\n`;
+		md += `---\n\n## Question\n\n${await htmlToBasicMarkdown(question.body)}\n\n`;
 
 		// Fetch answers
 		const aUrl = `https://api.stackexchange.com/2.3/questions/${questionId}/answers?order=desc&sort=votes&site=${site}&filter=withbody`;
@@ -103,7 +103,7 @@ export const handleStackOverflow: SpecialHandler = async (
 				for (const answer of aData.items.slice(0, 5)) {
 					const accepted = answer.is_accepted ? " (Accepted)" : "";
 					md += `### Score: ${answer.score}${accepted} · by ${answer.owner.display_name}\n\n`;
-					md += `${htmlToBasicMarkdown(answer.body)}\n\n---\n\n`;
+					md += `${await htmlToBasicMarkdown(answer.body)}\n\n---\n\n`;
 				}
 			}
 		}

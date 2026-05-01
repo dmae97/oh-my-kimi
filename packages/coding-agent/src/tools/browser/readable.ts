@@ -26,13 +26,17 @@ function normalize(text: string | null | undefined): string | undefined {
  * CSS selector chain over the same pre-parsed DOM. Returns null if neither
  * path yields usable content.
  */
-export function extractReadableFromHtml(html: string, url: string, format: ReadableFormat): ReadableResult | null {
+export async function extractReadableFromHtml(
+	html: string,
+	url: string,
+	format: ReadableFormat,
+): Promise<ReadableResult | null> {
 	const { document } = parseHTML(html);
 
 	// --- Primary: Readability article extraction ---
 	const article = new Readability(document).parse();
 	if (article) {
-		const result = toReadableResult(url, format, article.textContent, article.content, {
+		const result = await toReadableResult(url, format, article.textContent, article.content, {
 			title: article.title,
 			byline: article.byline,
 			excerpt: article.excerpt,
@@ -55,7 +59,7 @@ export function extractReadableFromHtml(html: string, url: string, format: Reada
 		const innerHTML = el.innerHTML?.trim();
 		const textContent = el.textContent?.trim();
 		if (!innerHTML || !textContent) continue;
-		const result = toReadableResult(url, format, textContent, innerHTML, {
+		const result = await toReadableResult(url, format, textContent, innerHTML, {
 			title: document.title,
 			excerpt: textContent.slice(0, 240),
 			length: textContent.length,
@@ -67,15 +71,16 @@ export function extractReadableFromHtml(html: string, url: string, format: Reada
 }
 
 /** Shared builder for both extraction paths. */
-function toReadableResult(
+async function toReadableResult(
 	url: string,
 	format: ReadableFormat,
 	textContent: string | null | undefined,
 	htmlContent: string | null | undefined,
 	meta: { title?: string | null; byline?: string | null; excerpt?: string | null; length?: number | null },
-): ReadableResult | null {
+): Promise<ReadableResult | null> {
 	const text = normalize(textContent);
-	const markdown = format === "markdown" ? (normalize(htmlToBasicMarkdown(htmlContent ?? "")) ?? text) : undefined;
+	const markdown =
+		format === "markdown" ? (normalize(await htmlToBasicMarkdown(htmlContent ?? "")) ?? text) : undefined;
 	const normalizedText = format === "text" ? text : undefined;
 	if (!normalizedText && !markdown) return null;
 	return {

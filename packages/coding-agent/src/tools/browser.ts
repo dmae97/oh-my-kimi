@@ -110,12 +110,14 @@ function resolveBrowserKind(params: BrowserParams, session: ToolSession): Browse
 export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolDetails> {
 	readonly name = "browser";
 	readonly label = "Browser";
-	readonly description: string;
 	readonly parameters = browserSchema;
 	readonly strict = true;
 
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(browserDescription, {});
+	constructor(private readonly session: ToolSession) {}
+	#description?: string;
+	get description(): string {
+		this.#description ??= prompt.render(browserDescription, {});
+		return this.#description;
 	}
 
 	/** Restart browser to apply mode changes (e.g. headless toggle). Drops only headless browsers. */

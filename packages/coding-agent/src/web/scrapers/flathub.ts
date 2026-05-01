@@ -170,7 +170,7 @@ export const handleFlathub: SpecialHandler = async (
 		}
 
 		if (app.description) {
-			const description = htmlToBasicMarkdown(app.description);
+			const description = await htmlToBasicMarkdown(app.description);
 			if (description) md += `\n## Description\n\n${description}\n`;
 		}
 
@@ -204,7 +204,7 @@ export const handleFlathub: SpecialHandler = async (
 				md += `${line}\n`;
 
 				if (release.description) {
-					const releaseDesc = htmlToBasicMarkdown(release.description).replace(/\n+/g, " ").trim();
+					const releaseDesc = (await htmlToBasicMarkdown(release.description)).replace(/\n+/g, " ").trim();
 					if (releaseDesc) md += `  - ${releaseDesc}\n`;
 				}
 			}

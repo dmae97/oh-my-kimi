@@ -100,7 +100,7 @@ export const handleW3c: SpecialHandler = async (
 		const title = getString(specPayload, "title");
 		const shortnameValue = getString(specPayload, "shortname") ?? shortname;
 		const description = getString(specPayload, "description") ?? getString(specPayload, "abstract");
-		const abstract = description ? htmlToBasicMarkdown(description) : undefined;
+		const abstract = description ? await htmlToBasicMarkdown(description) : undefined;
 
 		const latestVersionUrl =
 			getString(latestPayload, "uri") ??

@@ -133,7 +133,7 @@ export const handleDevTo: SpecialHandler = async (
 			if (article.body_markdown) {
 				md += article.body_markdown;
 			} else if (article.body_html) {
-				md += htmlToBasicMarkdown(article.body_html);
+				md += await htmlToBasicMarkdown(article.body_html);
 			}
 
 			notes.push("Fetched via dev.to API");

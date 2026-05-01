@@ -25,7 +25,8 @@ import type { CommitCommandArgs, ConventionalAnalysis } from "./types";
 
 const SUMMARY_MAX_CHARS = 72;
 const RECENT_COMMITS_COUNT = 8;
-const TYPES_DESCRIPTION = prompt.render(typesDescriptionPrompt);
+let _typesDescription: string | undefined;
+const TYPES_DESCRIPTION = (): string => (_typesDescription ??= prompt.render(typesDescriptionPrompt));
 
 /**
  * Execute the omp commit pipeline for staged changes.
@@ -176,7 +177,7 @@ async function generateAnalysis(input: {
 			diff: input.diff,
 			stat: input.stat,
 			scopeCandidates: input.scopeCandidates,
-			typesDescription: TYPES_DESCRIPTION,
+			typesDescription: TYPES_DESCRIPTION(),
 			settings: {
 				enabled: input.commitSettings.mapReduceEnabled,
 				minFiles: input.commitSettings.mapReduceMinFiles,
@@ -193,7 +194,7 @@ async function generateAnalysis(input: {
 		thinkingLevel: input.primaryThinkingLevel,
 		contextFiles: input.contextFiles,
 		userContext: input.userContext,
-		typesDescription: TYPES_DESCRIPTION,
+		typesDescription: TYPES_DESCRIPTION(),
 		recentCommits: input.recentCommits,
 		scopeCandidates: input.scopeCandidates,
 		stat: input.stat,

@@ -2,8 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { renderKernelDisplay } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 
 describe("PythonKernel display rendering", () => {
-	it("normalizes text/plain output and returns no display outputs", () => {
-		const { text, outputs } = renderKernelDisplay({
+	it("normalizes text/plain output and returns no display outputs", async () => {
+		const { text, outputs } = await renderKernelDisplay({
 			data: { "text/plain": "hello" },
 		});
 
@@ -11,8 +11,8 @@ describe("PythonKernel display rendering", () => {
 		expect(outputs).toHaveLength(0);
 	});
 
-	it("collects image and json display outputs without text", () => {
-		const { text, outputs } = renderKernelDisplay({
+	it("collects image and json display outputs without text", async () => {
+		const { text, outputs } = await renderKernelDisplay({
 			data: { "image/png": "abc", "application/json": { foo: "bar" } },
 		});
 
@@ -23,8 +23,8 @@ describe("PythonKernel display rendering", () => {
 		]);
 	});
 
-	it("converts text/html to markdown", () => {
-		const { text, outputs } = renderKernelDisplay({
+	it("converts text/html to markdown", async () => {
+		const { text, outputs } = await renderKernelDisplay({
 			data: { "text/html": "<p><strong>Hello</strong></p>" },
 		});
 
@@ -32,8 +32,8 @@ describe("PythonKernel display rendering", () => {
 		expect(text).toBe("**Hello**\n");
 	});
 
-	it("combines text/plain with json output", () => {
-		const { text, outputs } = renderKernelDisplay({
+	it("combines text/plain with json output", async () => {
+		const { text, outputs } = await renderKernelDisplay({
 			data: { "text/plain": "value", "application/json": { ok: true } },
 		});
 

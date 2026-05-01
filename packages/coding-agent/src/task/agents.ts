@@ -69,10 +69,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	},
 ];
 
-const EMBEDDED_AGENTS: { name: string; content: string }[] = EMBEDDED_AGENT_DEFS.map(def => ({
-	name: def.fileName,
-	content: buildAgentContent(def),
-}));
+// Computed lazily on first loadBundledAgents() call to avoid eager prompt.render at module load.
 
 export class AgentParsingError extends Error {
 	constructor(
@@ -133,7 +130,9 @@ export function loadBundledAgents(): AgentDefinition[] {
 	if (bundledAgentsCache !== null) {
 		return bundledAgentsCache;
 	}
-	bundledAgentsCache = EMBEDDED_AGENTS.map(({ name, content }) => parseAgent(`embedded:${name}`, content, "bundled"));
+	bundledAgentsCache = EMBEDDED_AGENT_DEFS.map(def =>
+		parseAgent(`embedded:${def.fileName}`, buildAgentContent(def), "bundled"),
+	);
 	return bundledAgentsCache;
 }
 

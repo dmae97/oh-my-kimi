@@ -271,10 +271,10 @@ function normalizeDisplayText(text: string): string {
 }
 
 /** Renders a Jupyter display_data message into text and structured outputs. */
-export function renderKernelDisplay(content: Record<string, unknown>): {
+export async function renderKernelDisplay(content: Record<string, unknown>): Promise<{
 	text: string;
 	outputs: KernelDisplayOutput[];
-} {
+}> {
 	const data = content.data as Record<string, unknown> | undefined;
 	if (!data) return { text: "", outputs: [] };
 
@@ -307,7 +307,7 @@ export function renderKernelDisplay(content: Record<string, unknown>): {
 		return { text: normalizeDisplayText(String(data["text/plain"])), outputs };
 	}
 	if (data["text/html"] !== undefined) {
-		const markdown = htmlToBasicMarkdown(String(data["text/html"])) || "";
+		const markdown = (await htmlToBasicMarkdown(String(data["text/html"]))) || "";
 		return { text: markdown ? normalizeDisplayText(markdown) : "", outputs };
 	}
 	return { text: "", outputs };
@@ -872,7 +872,7 @@ export class PythonKernel {
 				}
 				case "execute_result":
 				case "display_data": {
-					const { text, outputs } = renderKernelDisplay(response.content);
+					const { text, outputs } = await renderKernelDisplay(response.content);
 					if (text && options?.onChunk) {
 						await options.onChunk(text);
 					}
