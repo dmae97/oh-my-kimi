@@ -348,8 +348,6 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 				});
 				const sessionId = sessionFile ? `session:${sessionFile}:cwd:${session.cwd}` : `cwd:${session.cwd}`;
 
-				const warmedBackends = new Set<EvalLanguage>();
-
 				for (let i = 0; i < cells.length; i++) {
 					const cell = cells[i];
 					const backend = cell.resolved.backend;
@@ -359,23 +357,6 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					const combinedSignal = signal
 						? AbortSignal.any([signal, timeoutSignal, sessionAbortController.signal])
 						: AbortSignal.any([timeoutSignal, sessionAbortController.signal]);
-
-					if (!warmedBackends.has(backend.id) && backend.warm) {
-						const warmup = await backend.warm({
-							cwd: session.cwd,
-							sessionId,
-							sessionFile: sessionFile ?? undefined,
-							kernelOwnerId,
-							signal: combinedSignal,
-							session,
-						});
-						if (!warmup.ok) {
-							if (combinedSignal.aborted) throw new ToolAbortError();
-							throw new ToolError(warmup.reason ?? `${backend.label} prelude helpers unavailable`);
-						}
-						session.assertEvalExecutionAllowed?.();
-					}
-					warmedBackends.add(backend.id);
 
 					const cellResult = cellResults[i];
 					cellResult.status = "running";

@@ -3,7 +3,6 @@ import {
 	disposeAllKernelSessions,
 	disposeKernelSessionsByOwner,
 	executePython,
-	warmPythonEnvironment,
 } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
 import * as gatewayCoordinator from "@oh-my-pi/pi-coding-agent/eval/py/gateway-coordinator";
 import type {
@@ -13,7 +12,6 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 import * as pythonKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 import { PythonKernel } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
-import { TempDir } from "@oh-my-pi/pi-utils";
 
 const OK_RESULT: KernelExecuteResult = {
 	status: "ok",
@@ -775,80 +773,6 @@ describe("python executor owner cleanup", () => {
 		expect(globalKernel.shutdown).toHaveBeenCalledTimes(1);
 		await globalCleanup;
 	});
-
-	it("attaches cached warmup sessions to newly provided owners", async () => {
-		using tempDir = TempDir.createSync("@python-owner-warmup-");
-		const kernel = {
-			execute: vi.fn(async () => OK_RESULT),
-			ping: vi.fn(async () => true),
-			isAlive: () => true,
-			shutdown: vi.fn(async (): Promise<KernelShutdownResult> => ({ confirmed: true })),
-		};
-		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
-		const startSpy = vi.spyOn(PythonKernel, "start").mockResolvedValue(kernel as unknown as PythonKernelInstance);
-
-		const firstWarmup = await warmPythonEnvironment(tempDir.path(), "warm-session", true, undefined, "owner-a");
-		expect(firstWarmup.ok).toBe(true);
-
-		const cachedWarmup = await warmPythonEnvironment(tempDir.path(), "warm-session", true, undefined, "owner-b");
-		expect(cachedWarmup.ok).toBe(true);
-		expect(startSpy).toHaveBeenCalledTimes(1);
-
-		await disposeKernelSessionsByOwner("owner-a");
-		expect(kernel.shutdown).not.toHaveBeenCalled();
-
-		await executePython("1 + 1", {
-			cwd: tempDir.path(),
-			sessionId: "warm-session",
-			kernelMode: "session",
-			kernelOwnerId: "owner-b",
-		});
-
-		expect(startSpy).toHaveBeenCalledTimes(1);
-		expect(kernel.execute).toHaveBeenCalledTimes(1);
-
-		await disposeKernelSessionsByOwner("owner-b");
-		expect(kernel.shutdown).toHaveBeenCalledTimes(1);
-	});
-
-	it("keeps cache-hit ownerless warmups provisional until an explicit owner takes over", async () => {
-		using tempDir = TempDir.createSync("@python-owner-fallback-");
-		const kernel = {
-			execute: vi.fn(async () => OK_RESULT),
-			ping: vi.fn(async () => true),
-			isAlive: () => true,
-			shutdown: vi.fn(async (): Promise<KernelShutdownResult> => ({ confirmed: true })),
-		};
-		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
-		const startSpy = vi.spyOn(PythonKernel, "start").mockResolvedValue(kernel as unknown as PythonKernelInstance);
-
-		const firstWarmup = await warmPythonEnvironment(tempDir.path(), "warm-fallback-session", true);
-		expect(firstWarmup.ok).toBe(true);
-
-		const cachedWarmup = await warmPythonEnvironment(tempDir.path(), "warm-fallback-session", true);
-		expect(cachedWarmup.ok).toBe(true);
-		expect(startSpy).toHaveBeenCalledTimes(1);
-
-		await executePython("1 + 1", {
-			cwd: tempDir.path(),
-			sessionId: "warm-fallback-session",
-			kernelMode: "session",
-			kernelOwnerId: "owner-a",
-		});
-
-		expect(kernel.execute).toHaveBeenCalledTimes(1);
-
-		const postTakeoverWarmup = await warmPythonEnvironment(tempDir.path(), "warm-fallback-session", true);
-		expect(postTakeoverWarmup.ok).toBe(true);
-		expect(startSpy).toHaveBeenCalledTimes(1);
-
-		await disposeKernelSessionsByOwner("owner-a");
-		expect(kernel.shutdown).toHaveBeenCalledTimes(1);
-
-		await disposeKernelSessionsByOwner("warm-fallback-session");
-		expect(kernel.shutdown).toHaveBeenCalledTimes(1);
-	});
-
 	it("leaves per-call kernels out of owner-scoped retained cleanup and keeps global cleanup intact", async () => {
 		const perCallKernel = new FakeKernel();
 		const retainedKernel = new FakeKernel();

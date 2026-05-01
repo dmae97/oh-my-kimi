@@ -206,9 +206,6 @@ export interface CreateAgentSessionOptions {
 	enableLsp?: boolean;
 	/** Skip Python kernel availability check and prelude warmup */
 	skipPythonPreflight?: boolean;
-	/** Force Python prelude warmup even when test env would normally skip it */
-	forcePythonWarmup?: boolean;
-
 	/** Tool names explicitly requested (enables disabled-by-default tools) */
 	toolNames?: string[];
 
@@ -956,7 +953,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return !requestedToolNames || requestedToolNames.includes("edit");
 			},
 			skipPythonPreflight: options.skipPythonPreflight,
-			forcePythonWarmup: options.forcePythonWarmup,
 			contextFiles,
 			skills,
 			eventBus,

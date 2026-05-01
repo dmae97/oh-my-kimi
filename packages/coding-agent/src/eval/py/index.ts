@@ -1,11 +1,6 @@
 import type { ToolSession } from "../../tools";
-import type {
-	ExecutorBackend,
-	ExecutorBackendCallOptions,
-	ExecutorBackendExecOptions,
-	ExecutorBackendResult,
-} from "../backend";
-import { executePython, type PythonExecutorOptions, warmPythonEnvironment } from "./executor";
+import type { ExecutorBackend, ExecutorBackendExecOptions, ExecutorBackendResult } from "../backend";
+import { executePython, type PythonExecutorOptions } from "./executor";
 import { checkPythonKernelAvailability } from "./kernel";
 
 const PYTHON_SESSION_PREFIX = "python:";
@@ -27,19 +22,6 @@ export default {
 	async isAvailable(session: ToolSession): Promise<boolean> {
 		const availability = await checkPythonKernelAvailability(session.cwd);
 		return availability.ok;
-	},
-
-	async warm(opts: ExecutorBackendCallOptions): Promise<{ ok: boolean; reason?: string }> {
-		const useSharedGateway = readSetting<boolean>(opts.session, "python.sharedGateway");
-		const result = await warmPythonEnvironment(
-			opts.cwd,
-			namespaceSessionId(opts.sessionId),
-			useSharedGateway,
-			opts.sessionFile,
-			opts.kernelOwnerId,
-			opts.signal,
-		);
-		return { ok: result.ok, reason: result.reason };
 	},
 
 	async execute(code: string, opts: ExecutorBackendExecOptions): Promise<ExecutorBackendResult> {

@@ -391,7 +391,7 @@ A `ToolFactory` is `(session: ToolSession) => Tool | null | Promise<Tool | null>
 
 1. Normalizes requested tool names (`toolNames`) and always injects `exit_plan_mode`.
 2. Resolves eval backend allowance via `PI_PY` override (`getEvalBackendsFromEnv()`) or `eval.py` / `eval.js` settings.
-3. Performs Python kernel preflight/warmup when applicable (`checkPythonKernelAvailability`, `warmPythonEnvironment`).
+3. Performs Python kernel preflight when applicable (`checkPythonKernelAvailability`).
 4. Computes effective gating (`isToolAllowed`) from settings and runtime state:
    - feature toggles (`find.enabled`, `grep.enabled`, etc.)
    - recursion guard for `task` (`task.maxRecursionDepth` vs `session.taskDepth`)
@@ -777,7 +777,7 @@ This subsystem is split into two layers:
 - Entry points:
   - `executePython(code, options)`
   - `executePythonWithKernel(kernel, code, options)`
-  - warmup/session utilities (`warmPythonEnvironment`, `disposeAllKernelSessions`).
+  - session utilities (`disposeAllKernelSessions`, `disposeKernelSessionsByOwner`).
 - Manages kernel session lifecycle in `kernelSessions: Map<string, KernelSession>` with:
   - bounded session count (`MAX_KERNEL_SESSIONS`), LRU eviction (`evictOldestSession`)
   - idle cleanup timer (`cleanupIdleSessions`)
