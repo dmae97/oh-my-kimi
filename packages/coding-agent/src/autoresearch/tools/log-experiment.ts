@@ -74,9 +74,33 @@ const logExperimentSchema = Type.Object({
 		}),
 	),
 	asi: Type.Optional(
-		Type.Record(Type.String(), Type.Unknown(), {
-			description: "Actionable side information captured for this run.",
-		}),
+		Type.Object(
+			{
+				hypothesis: Type.Optional(
+					Type.String({
+						description:
+							"REQUIRED on every log_experiment call (any status). One-sentence prediction this run was meant to test.",
+					}),
+				),
+				rollback_reason: Type.Optional(
+					Type.String({
+						description:
+							"REQUIRED when status is discard, crash, or checks_failed. Why this approach is being rolled back.",
+					}),
+				),
+				next_action_hint: Type.Optional(
+					Type.String({
+						description:
+							"REQUIRED when status is discard, crash, or checks_failed. Concrete next experiment direction.",
+					}),
+				),
+			},
+			{
+				additionalProperties: Type.Unknown(),
+				description:
+					"Actionable side information captured for this run. Always include `hypothesis`. On discard/crash/checks_failed also include `rollback_reason` and `next_action_hint`. Extra free-form keys are accepted.",
+			},
+		),
 	),
 });
 
@@ -440,10 +464,10 @@ function sanitizeAsiValue(value: unknown): ASIData[string] | undefined {
 
 export function validateAsiRequirements(asi: ASIData | undefined, status: ExperimentResult["status"]): string | null {
 	if (!asi) {
-		return "asi is required. Include at minimum a non-empty hypothesis.";
+		return 'asi is required. Pass `asi: { hypothesis: "..." }` describing what this run was meant to verify.';
 	}
 	if (typeof asi.hypothesis !== "string" || asi.hypothesis.trim().length === 0) {
-		return "asi.hypothesis is required and must be a non-empty string.";
+		return 'asi.hypothesis is required and must be a non-empty string. Pass `asi: { hypothesis: "..." }`.';
 	}
 	if (status === "keep") return null;
 	if (typeof asi.rollback_reason !== "string" || asi.rollback_reason.trim().length === 0) {

@@ -1156,9 +1156,11 @@ describe("autoresearch lifecycle tool activation", () => {
 describe("autoresearch ASI requirements", () => {
 	it("requires a hypothesis for every run", () => {
 		expect(validateAsiRequirements(undefined, "keep")).toBe(
-			"asi is required. Include at minimum a non-empty hypothesis.",
+			'asi is required. Pass `asi: { hypothesis: "..." }` describing what this run was meant to verify.',
 		);
-		expect(validateAsiRequirements({}, "keep")).toBe("asi.hypothesis is required and must be a non-empty string.");
+		expect(validateAsiRequirements({}, "keep")).toBe(
+			'asi.hypothesis is required and must be a non-empty string. Pass `asi: { hypothesis: "..." }`.',
+		);
 	});
 
 	it("requires rollback metadata for failed runs", () => {
