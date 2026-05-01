@@ -34,18 +34,6 @@ export function getSessionAccentHex(name: string): string {
 }
 
 /**
- * Auto-generated titles should not drive the session accent.
- * Legacy sessions with unknown title source keep the old behavior.
- */
-export function getSessionAccentHexForTitle(
-	name: string | undefined,
-	titleSource: "auto" | "user" | undefined,
-): string | undefined {
-	if (!name || titleSource === "auto") return undefined;
-	return getSessionAccentHex(name);
-}
-
-/**
  * Convert a hex accent color to an ANSI-16m foreground escape sequence.
  * Returns `undefined` if `hex` is nullish or Bun.color conversion fails.
  */

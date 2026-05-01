@@ -367,7 +367,6 @@ export class InputController {
 								setSessionTerminalTitle(
 									this.ctx.sessionManager.getSessionName()!,
 									this.ctx.sessionManager.getCwd(),
-									this.ctx.sessionManager.titleSource,
 								);
 								this.ctx.updateEditorBorderColor();
 							}

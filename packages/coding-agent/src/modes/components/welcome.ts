@@ -94,9 +94,19 @@ export class WelcomeComponent implements Component {
 		if (this.recentSessions.length === 0) {
 			sessionLines.push(` ${theme.fg("dim", "No recent sessions")}`);
 		} else {
+			// Reserve width for the bullet prefix (" • ") and the trailing " (timeAgo)"
+			// so the relative time is never the part that gets truncated. The name
+			// absorbs whatever space is left.
+			const bulletPrefix = ` ${theme.md.bullet} `;
+			const prefixWidth = visibleWidth(bulletPrefix);
 			for (const session of this.recentSessions.slice(0, 3)) {
+				const timeSuffixRaw = ` (${session.timeAgo})`;
+				const timeWidth = visibleWidth(timeSuffixRaw);
+				const nameBudget = Math.max(1, rightCol - prefixWidth - timeWidth);
+				const nameVis = visibleWidth(session.name);
+				const name = nameVis > nameBudget ? truncateToWidth(session.name, nameBudget) : session.name;
 				sessionLines.push(
-					` ${theme.fg("dim", `${theme.md.bullet} `)}${theme.fg("muted", session.name)}${theme.fg("dim", ` (${session.timeAgo})`)}`,
+					`${theme.fg("dim", bulletPrefix)}${theme.fg("muted", name)}${theme.fg("dim", timeSuffixRaw)}`,
 				);
 			}
 		}

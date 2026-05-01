@@ -3,14 +3,12 @@
  */
 import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
-import { completeSimple } from "@oh-my-pi/pi-ai";
+import { type Api, completeSimple, type Model } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
-import { toReasoningEffort } from "../thinking";
 
 const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
 
@@ -76,6 +74,9 @@ ${truncatedMessage}
 		return null;
 	}
 
+	// Title generation is a 3-6 word task; force reasoning off so reasoning models
+	// don't burn the entire output budget on internal thinking and return an empty
+	// string. With reasoning disabled, 30 tokens of output is plenty.
 	const request = {
 		model: `${candidate.model.provider}/${candidate.model.id}`,
 		systemPrompt: TITLE_SYSTEM_PROMPT,
@@ -94,7 +95,7 @@ ${truncatedMessage}
 			{
 				apiKey,
 				maxTokens: 30,
-				reasoning: toReasoningEffort(candidate.thinkingLevel),
+				disableReasoning: true,
 			},
 		);
 
@@ -153,13 +154,8 @@ function getFallbackTerminalTitle(cwd: string | undefined): string | undefined {
 	return sanitizeTerminalTitlePart(baseName);
 }
 
-export function formatSessionTerminalTitle(
-	sessionName: string | undefined,
-	cwd?: string,
-	titleSource?: "auto" | "user" | undefined,
-): string {
-	const label =
-		sanitizeTerminalTitlePart(titleSource === "auto" ? undefined : sessionName) ?? getFallbackTerminalTitle(cwd);
+export function formatSessionTerminalTitle(sessionName: string | undefined, cwd?: string): string {
+	const label = sanitizeTerminalTitlePart(sessionName) ?? getFallbackTerminalTitle(cwd);
 	return label ? `${DEFAULT_TERMINAL_TITLE}: ${label}` : DEFAULT_TERMINAL_TITLE;
 }
 
@@ -170,12 +166,8 @@ export function setTerminalTitle(title: string): void {
 	process.stdout.write(`\x1b]0;${sanitizeTerminalTitlePart(title) ?? DEFAULT_TERMINAL_TITLE}\x07`);
 }
 
-export function setSessionTerminalTitle(
-	sessionName: string | undefined,
-	cwd?: string,
-	titleSource?: "auto" | "user" | undefined,
-): void {
-	setTerminalTitle(formatSessionTerminalTitle(sessionName, cwd, titleSource));
+export function setSessionTerminalTitle(sessionName: string | undefined, cwd?: string): void {
+	setTerminalTitle(formatSessionTerminalTitle(sessionName, cwd));
 }
 
 /**

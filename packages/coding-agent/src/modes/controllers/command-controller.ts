@@ -626,11 +626,7 @@ export class CommandController {
 		}
 		if (!(await this.ctx.session.newSession(options))) return;
 		this.ctx.resetObserverRegistry();
-		setSessionTerminalTitle(
-			this.ctx.sessionManager.getSessionName(),
-			this.ctx.sessionManager.getCwd(),
-			this.ctx.sessionManager.titleSource,
-		);
+		setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
 
 		this.ctx.statusLine.invalidate();
 		this.ctx.statusLine.setSessionStartTime(Date.now());
@@ -747,7 +743,7 @@ export class CommandController {
 				return;
 			}
 			const name = this.ctx.sessionManager.getSessionName()!;
-			setSessionTerminalTitle(name, this.ctx.sessionManager.getCwd(), this.ctx.sessionManager.titleSource);
+			setSessionTerminalTitle(name, this.ctx.sessionManager.getCwd());
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
 			this.ctx.showStatus(`Session renamed to "${name}".`);

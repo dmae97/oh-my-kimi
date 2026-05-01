@@ -678,8 +678,7 @@ export class EventController {
 		if (this.ctx.isBackgrounded === false) return;
 		const notify = settings.get("completion.notify");
 		if (notify === "off") return;
-		const title =
-			this.ctx.sessionManager.titleSource === "auto" ? undefined : this.ctx.sessionManager.getSessionName();
+		const title = this.ctx.sessionManager.getSessionName();
 		const message = title ? `${title}: Complete` : "Complete";
 		TERMINAL.sendNotification(message);
 	}

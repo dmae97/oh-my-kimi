@@ -150,11 +150,7 @@ export class ExtensionUiController {
 				if (!success) {
 					return { cancelled: true };
 				}
-				setSessionTerminalTitle(
-					this.ctx.sessionManager.getSessionName(),
-					this.ctx.sessionManager.getCwd(),
-					this.ctx.sessionManager.titleSource,
-				);
+				setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
 
 				// Call setup callback if provided
 				if (options?.setup) {
@@ -223,11 +219,7 @@ export class ExtensionUiController {
 				if (!result) {
 					return { cancelled: true };
 				}
-				setSessionTerminalTitle(
-					this.ctx.sessionManager.getSessionName(),
-					this.ctx.sessionManager.getCwd(),
-					this.ctx.sessionManager.titleSource,
-				);
+				setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
 				this.ctx.chatContainer.clear();
 				this.ctx.renderInitialMessages();
 				await this.ctx.reloadTodos();
@@ -875,11 +867,7 @@ export class ExtensionUiController {
 
 	async #updateSessionName(name: string): Promise<void> {
 		await this.ctx.sessionManager.setSessionName(name, "user");
-		setSessionTerminalTitle(
-			this.ctx.sessionManager.getSessionName(),
-			this.ctx.sessionManager.getCwd(),
-			this.ctx.sessionManager.titleSource,
-		);
+		setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
 	}
 
 	#sendExtensionUserMessage: SendUserMessageHandler = (content, options) => {

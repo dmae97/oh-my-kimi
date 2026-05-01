@@ -870,8 +870,8 @@ function sanitizeSessionName(value: string | undefined): string | undefined {
 
 class RecentSessionInfo {
 	#fullName: string | undefined;
-	#name: string | undefined;
 	#timeAgo: string | undefined;
+	readonly #headerTimestamp: string | undefined;
 
 	constructor(
 		readonly path: string,
@@ -879,27 +879,31 @@ class RecentSessionInfo {
 		header: Record<string, unknown>,
 		firstPrompt?: string,
 	) {
-		// Extract title from session header, falling back to first user prompt, then id
+		// Prefer an explicit title, then the first user prompt. The raw UUID `id` is
+		// intentionally not used as a fallback: showing it as a "name" is unfriendly and
+		// indistinguishable from neighboring sessions in the UI. The friendly fallback is
+		// derived lazily in `fullName` from the session timestamp.
 		const trystr = (v: unknown) => (typeof v === "string" ? v : undefined);
-		this.#fullName =
-			sanitizeSessionName(trystr(header.title)) ??
-			sanitizeSessionName(firstPrompt) ??
-			sanitizeSessionName(trystr(header.id));
+		this.#fullName = sanitizeSessionName(trystr(header.title)) ?? sanitizeSessionName(firstPrompt);
+		this.#headerTimestamp = trystr(header.timestamp);
 	}
 
-	/** Full session name from header, or filename without extension as fallback */
+	/** Display name. Falls back to a timestamp-based label, never the raw UUID. */
 	get fullName(): string {
 		if (this.#fullName) return this.#fullName;
-		this.#fullName = this.path.split("/").pop()?.replace(".jsonl", "") ?? "Unknown";
+		const ts = this.#headerTimestamp ? Date.parse(this.#headerTimestamp) : Number.NaN;
+		const date = new Date(Number.isFinite(ts) ? ts : this.mtime);
+		const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+		this.#fullName = `Untitled · ${time}`;
 		return this.#fullName;
 	}
 
-	/** Truncated name for display (max 40 chars) */
+	/**
+	 * Display name without an arbitrary length cap. The renderer is responsible for
+	 * width-aware truncation so adjacent fields (e.g. the relative time) stay visible.
+	 */
 	get name(): string {
-		if (this.#name) return this.#name;
-		const fullName = this.fullName;
-		this.#name = fullName.length <= 40 ? fullName : `${fullName.slice(0, 39)}…`;
-		return this.#name;
+		return this.fullName;
 	}
 
 	/** Human-readable relative time (e.g., "2 hours ago") */
