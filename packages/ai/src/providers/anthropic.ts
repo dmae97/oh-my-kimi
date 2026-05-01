@@ -6,6 +6,7 @@ import type {
 	ContentBlockParam,
 	MessageCreateParamsStreaming,
 	MessageParam,
+	RawMessageStreamEvent,
 } from "@anthropic-ai/sdk/resources/messages";
 import { $env, abortableSleep, isEnoent } from "@oh-my-pi/pi-utils";
 import { hasOpus47ApiRestrictions, mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
@@ -38,7 +39,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
 import { createWatchdog, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
-import { parseStreamingJson } from "../utils/json-parse";
+import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { extractHttpStatusFromError, isCopilotRetryableError, isUnexpectedSocketCloseMessage } from "../utils/retry";
@@ -57,6 +58,7 @@ export type AnthropicHeaderOptions = {
 	extraBetas?: string[];
 	stream?: boolean;
 	modelHeaders?: Record<string, string>;
+	isCloudflareAiGateway?: boolean;
 };
 
 export function normalizeAnthropicBaseUrl(baseUrl?: string): string | undefined {
@@ -88,6 +90,9 @@ const claudeCodeBetaDefaults = [
 	"context-management-2025-06-27",
 	"prompt-caching-scope-2026-01-05",
 ];
+const fineGrainedToolStreamingBeta = "fine-grained-tool-streaming-2025-05-14";
+const interleavedThinkingBeta = "interleaved-thinking-2025-05-14";
+
 function getHeaderCaseInsensitive(headers: Record<string, string> | undefined, headerName: string): string | undefined {
 	if (!headers) return undefined;
 	const normalizedName = headerName.toLowerCase();
@@ -130,6 +135,16 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 	const modelHeaders = Object.fromEntries(
 		Object.entries(options.modelHeaders ?? {}).filter(([key]) => !enforcedHeaderKeys.has(key.toLowerCase())),
 	);
+
+	if (options.isCloudflareAiGateway) {
+		return {
+			...modelHeaders,
+			Accept: acceptHeader,
+			...sharedHeaders,
+			"Anthropic-Beta": betaHeader,
+			"cf-aig-authorization": `Bearer ${options.apiKey}`,
+		};
+	}
 
 	if (oauthToken) {
 		const incomingUserAgent = getHeaderCaseInsensitive(options.modelHeaders, "User-Agent");
@@ -235,6 +250,7 @@ function dropAnthropicStrictTools(params: MessageCreateParamsStreaming): void {
 }
 
 function getCacheControl(
+	model: Model<"anthropic-messages">,
 	baseUrl: string,
 	cacheRetention?: CacheRetention,
 ): { retention: CacheRetention; cacheControl?: AnthropicCacheControl } {
@@ -242,7 +258,10 @@ function getCacheControl(
 	if (retention === "none") {
 		return { retention };
 	}
-	const ttl = retention === "long" && baseUrl.includes("api.anthropic.com") ? "1h" : undefined;
+	const ttl =
+		retention === "long" && isAnthropicApiBaseUrl(baseUrl) && getAnthropicCompat(model).supportsLongCacheRetention
+			? "1h"
+			: undefined;
 	return {
 		retention,
 		cacheControl: { type: "ephemeral", ...(ttl && { ttl }) },
@@ -312,6 +331,7 @@ const enforcedHeaderKeys = new Set(
 		"X-App",
 		"Authorization",
 		"X-Api-Key",
+		"cf-aig-authorization",
 	].map(key => key.toLowerCase()),
 );
 
@@ -424,6 +444,7 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 }
 
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type AnthropicThinkingDisplay = "summarized" | "omitted";
 
 export interface AnthropicOptions extends StreamOptions {
 	/**
@@ -452,6 +473,12 @@ export interface AnthropicOptions extends StreamOptions {
 	 * Converted to adaptive effort when effort is not explicitly provided.
 	 */
 	reasoning?: SimpleStreamOptions["reasoning"];
+	/**
+	 * Controls how Anthropic returns thinking content when the selected thinking
+	 * transport supports a display option. Defaults to "summarized" where the
+	 * API accepts it.
+	 */
+	thinkingDisplay?: AnthropicThinkingDisplay;
 	interleavedThinking?: boolean;
 	toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
 	betas?: string[] | string;
@@ -474,12 +501,13 @@ export type AnthropicClientOptionsArgs = {
 	headers?: Record<string, string>;
 	dynamicHeaders?: Record<string, string>;
 	isOAuth?: boolean;
+	hasTools?: boolean;
 };
 
 export type AnthropicClientOptionsResult = {
 	isOAuthToken: boolean;
 	apiKey: string | null;
-	authToken?: string;
+	authToken?: string | null;
 	baseURL?: string;
 	maxRetries: number;
 	dangerouslyAllowBrowser: boolean;
@@ -623,6 +651,248 @@ function mergeHeaders(...headerSources: (Record<string, string> | undefined)[]):
 // The Anthropic SDK logs malformed SSE frames directly before rethrowing them.
 // We surface the resulting provider error ourselves, so keep the SDK quiet.
 const ANTHROPIC_SDK_LOG_LEVEL = "off" as const;
+
+interface ServerSentEvent {
+	event: string | null;
+	data: string;
+	raw: string[];
+}
+
+interface SseDecoderState {
+	event: string | null;
+	data: string[];
+	raw: string[];
+}
+
+const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
+	"message_start",
+	"message_delta",
+	"message_stop",
+	"content_block_start",
+	"content_block_delta",
+	"content_block_stop",
+]);
+
+function flushSseEvent(state: SseDecoderState): ServerSentEvent | null {
+	if (!state.event && state.data.length === 0) {
+		return null;
+	}
+
+	const event: ServerSentEvent = {
+		event: state.event,
+		data: state.data.join("\n"),
+		raw: [...state.raw],
+	};
+	state.event = null;
+	state.data = [];
+	state.raw = [];
+	return event;
+}
+
+function decodeSseLine(line: string, state: SseDecoderState): ServerSentEvent | null {
+	if (line === "") {
+		return flushSseEvent(state);
+	}
+
+	state.raw.push(line);
+	if (line.startsWith(":")) {
+		return null;
+	}
+
+	const delimiterIndex = line.indexOf(":");
+	const fieldName = delimiterIndex === -1 ? line : line.slice(0, delimiterIndex);
+	let value = delimiterIndex === -1 ? "" : line.slice(delimiterIndex + 1);
+	if (value.startsWith(" ")) {
+		value = value.slice(1);
+	}
+
+	if (fieldName === "event") {
+		state.event = value;
+	} else if (fieldName === "data") {
+		state.data.push(value);
+	}
+
+	return null;
+}
+
+function nextLineBreakIndex(text: string): number {
+	const carriageReturnIndex = text.indexOf("\r");
+	const newlineIndex = text.indexOf("\n");
+	if (carriageReturnIndex === -1) {
+		return newlineIndex;
+	}
+	if (newlineIndex === -1) {
+		return carriageReturnIndex;
+	}
+	return Math.min(carriageReturnIndex, newlineIndex);
+}
+
+function consumeLine(text: string): { line: string; rest: string } | null {
+	const lineBreakIndex = nextLineBreakIndex(text);
+	if (lineBreakIndex === -1) {
+		return null;
+	}
+
+	let nextIndex = lineBreakIndex + 1;
+	if (text[lineBreakIndex] === "\r" && text[nextIndex] === "\n") {
+		nextIndex += 1;
+	}
+
+	return {
+		line: text.slice(0, lineBreakIndex),
+		rest: text.slice(nextIndex),
+	};
+}
+
+async function* iterateSseMessages(
+	body: ReadableStream<Uint8Array>,
+	signal?: AbortSignal,
+): AsyncGenerator<ServerSentEvent> {
+	const reader = body.getReader();
+	const decoder = new TextDecoder();
+	const state: SseDecoderState = { event: null, data: [], raw: [] };
+	let buffer = "";
+
+	try {
+		while (true) {
+			if (signal?.aborted) {
+				throw new Error("Request was aborted");
+			}
+
+			const { value, done } = await reader.read();
+			if (done) {
+				break;
+			}
+
+			buffer += decoder.decode(value, { stream: true });
+			let consumed = consumeLine(buffer);
+			while (consumed) {
+				buffer = consumed.rest;
+				const event = decodeSseLine(consumed.line, state);
+				if (event) {
+					yield event;
+				}
+				consumed = consumeLine(buffer);
+			}
+		}
+
+		buffer += decoder.decode();
+		let consumed = consumeLine(buffer);
+		while (consumed) {
+			buffer = consumed.rest;
+			const event = decodeSseLine(consumed.line, state);
+			if (event) {
+				yield event;
+			}
+			consumed = consumeLine(buffer);
+		}
+
+		if (buffer.length > 0) {
+			const event = decodeSseLine(buffer, state);
+			if (event) {
+				yield event;
+			}
+		}
+
+		const trailingEvent = flushSseEvent(state);
+		if (trailingEvent) {
+			yield trailingEvent;
+		}
+	} finally {
+		reader.releaseLock();
+	}
+}
+
+async function* iterateAnthropicEvents(
+	response: Response,
+	signal?: AbortSignal,
+): AsyncGenerator<RawMessageStreamEvent> {
+	if (!response.body) {
+		throw new Error("Attempted to iterate over an Anthropic response with no body");
+	}
+
+	let sawMessageStart = false;
+	let sawMessageEnd = false;
+
+	for await (const sse of iterateSseMessages(response.body, signal)) {
+		if (sse.event === "error") {
+			throw new Error(sse.data);
+		}
+
+		if (!ANTHROPIC_MESSAGE_EVENTS.has(sse.event ?? "")) {
+			continue;
+		}
+
+		try {
+			const event = parseJsonWithRepair<RawMessageStreamEvent>(sse.data);
+			if (event.type === "message_start") {
+				sawMessageStart = true;
+			} else if (event.type === "message_stop") {
+				sawMessageEnd = true;
+			}
+			yield event;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(
+				`Could not parse Anthropic SSE event ${sse.event}: ${message}; data=${sse.data}; raw=${sse.raw.join("\\n")}`,
+			);
+		}
+	}
+
+	if (sawMessageStart && !sawMessageEnd) {
+		throw createAnthropicStreamEnvelopeError("stream ended before message_stop");
+	}
+}
+
+type AnthropicRawResponseRequest = {
+	asResponse(): Promise<Response>;
+};
+
+function hasAnthropicRawResponseRequest(request: unknown): request is AnthropicRawResponseRequest {
+	return isRecord(request) && typeof request.asResponse === "function";
+}
+
+type AnthropicStreamWithResponseRequest = {
+	withResponse(): Promise<{
+		data: AsyncIterable<RawMessageStreamEvent>;
+		response: Response;
+		request_id: string | null;
+	}>;
+};
+
+function hasAnthropicStreamWithResponseRequest(request: unknown): request is AnthropicStreamWithResponseRequest {
+	return isRecord(request) && typeof request.withResponse === "function";
+}
+
+async function getAnthropicStreamResponse(
+	request: unknown,
+	signal?: AbortSignal,
+): Promise<{ events: AsyncIterable<RawMessageStreamEvent>; response: Response; requestId: string | null }> {
+	if (hasAnthropicRawResponseRequest(request)) {
+		const response = await request.asResponse();
+		return {
+			events: iterateAnthropicEvents(response, signal),
+			response,
+			requestId: response.headers.get("request-id"),
+		};
+	}
+	if (hasAnthropicStreamWithResponseRequest(request)) {
+		const { data, response, request_id } = await request.withResponse();
+		return { events: data, response, requestId: request_id };
+	}
+	throw new Error("Anthropic SDK request did not expose a stream response");
+}
+
+function getAnthropicCompat(
+	model: Model<"anthropic-messages">,
+): Required<NonNullable<Model<"anthropic-messages">["compat"]>> {
+	return {
+		disableStrictTools: model.compat?.disableStrictTools ?? false,
+		disableAdaptiveThinking: model.compat?.disableAdaptiveThinking ?? false,
+		supportsEagerToolInputStreaming: model.compat?.supportsEagerToolInputStreaming ?? true,
+		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
+	};
+}
 
 const PROVIDER_MAX_RETRIES = 3;
 const PROVIDER_BASE_DELAY_MS = 2000;
@@ -789,6 +1059,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					headers: options?.headers,
 					dynamicHeaders: copilotDynamicHeaders?.headers,
 					isOAuth: options?.isOAuth,
+					hasTools: !!context.tools?.length,
 				});
 				client = created.client;
 				isOAuthToken = created.isOAuthToken;
@@ -844,8 +1115,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				let streamedReplayUnsafeContent = false;
 
 				try {
-					const { data: anthropicStream, response, request_id } = await anthropicRequest.withResponse();
-					await notifyProviderResponse(options, response, model, request_id);
+					const {
+						events: anthropicStream,
+						response,
+						requestId,
+					} = await getAnthropicStreamResponse(anthropicRequest, requestSignal);
+					await notifyProviderResponse(options, response, model, requestId);
 					const firstEventWatchdog = createWatchdog(firstEventTimeoutMs, () =>
 						activeAbortTracker.abortLocally(firstEventTimeoutAbortError),
 					);
@@ -1199,9 +1474,12 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		interleavedThinking = true,
 		headers,
 		dynamicHeaders,
+		hasTools = false,
 		isOAuth,
 	} = args;
+	const compat = getAnthropicCompat(model);
 	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinkingDisplay(model.id);
+	const needsFineGrainedToolStreamingBeta = hasTools && !compat.supportsEagerToolInputStreaming;
 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
 	const baseUrl = resolveAnthropicBaseUrl(model, apiKey);
 	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model);
@@ -1209,6 +1487,9 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	if (model.provider === "github-copilot") {
 		const copilotApiKey = parseGitHubCopilotApiKey(apiKey).accessToken;
 		const betaFeatures = [...extraBetas];
+		if (needsFineGrainedToolStreamingBeta) {
+			betaFeatures.push(fineGrainedToolStreamingBeta);
+		}
 		const defaultHeaders = mergeHeaders(
 			{
 				Accept: stream ? "text/event-stream" : "application/json",
@@ -1235,8 +1516,11 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	}
 
 	const betaFeatures = [...extraBetas];
+	if (needsFineGrainedToolStreamingBeta) {
+		betaFeatures.push(fineGrainedToolStreamingBeta);
+	}
 	if (needsInterleavedBeta) {
-		betaFeatures.push("interleaved-thinking-2025-05-14");
+		betaFeatures.push(interleavedThinkingBeta);
 	}
 
 	const defaultHeaders = buildAnthropicHeaders({
@@ -1246,7 +1530,21 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		extraBetas: betaFeatures,
 		stream,
 		modelHeaders: mergeHeaders(model.headers, foundryCustomHeaders, headers, dynamicHeaders),
+		isCloudflareAiGateway: model.provider === "cloudflare-ai-gateway",
 	});
+
+	if (model.provider === "cloudflare-ai-gateway") {
+		return {
+			isOAuthToken: false,
+			apiKey: null,
+			authToken: null,
+			baseURL: baseUrl,
+			maxRetries: 5,
+			dangerouslyAllowBrowser: true,
+			defaultHeaders,
+			logLevel: ANTHROPIC_SDK_LOG_LEVEL,
+		};
+	}
 
 	return {
 		isOAuthToken: oauthToken,
@@ -1532,7 +1830,7 @@ function buildParams(
 	options?: AnthropicOptions,
 	disableStrictTools = false,
 ): MessageCreateParamsStreaming {
-	const { cacheControl } = getCacheControl(baseUrl, options?.cacheRetention);
+	const { cacheControl } = getCacheControl(model, baseUrl, options?.cacheRetention);
 	const params: AnthropicSamplingParams = {
 		model: model.id,
 		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
@@ -1558,6 +1856,7 @@ function buildParams(
 			context.tools,
 			isOAuthToken,
 			disableStrictTools || model.provider === "github-copilot",
+			getAnthropicCompat(model).supportsEagerToolInputStreaming,
 		);
 	}
 
@@ -1567,14 +1866,14 @@ function buildParams(
 		const effort =
 			options.effort ?? (requestedEffort ? mapEffortToAnthropicAdaptiveEffort(model, requestedEffort) : undefined);
 
-		const disableAdaptiveThinking = model.compat?.disableAdaptiveThinking ?? false;
-		if (mode === "anthropic-adaptive" && !disableAdaptiveThinking) {
+		const compat = getAnthropicCompat(model);
+		if (mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
 			// Starting with Claude Opus 4.7, adaptive thinking content is omitted from the
 			// response by default. Opt into summarized reasoning so thinking deltas keep
 			// streaming with human-readable content for callers that rely on it.
-			const adaptive: { type: "adaptive"; display?: "summarized" | "omitted" } = { type: "adaptive" };
+			const adaptive: { type: "adaptive"; display?: AnthropicThinkingDisplay } = { type: "adaptive" };
 			if (supportsAdaptiveThinkingDisplay(model.id)) {
-				adaptive.display = "summarized";
+				adaptive.display = options.thinkingDisplay ?? "summarized";
 			}
 			params.thinking = adaptive as typeof params.thinking;
 			if (effort) {
@@ -1586,7 +1885,8 @@ function buildParams(
 			params.thinking = {
 				type: "enabled",
 				budget_tokens: options.thinkingBudgetTokens || 1024,
-			};
+				display: options.thinkingDisplay ?? "summarized",
+			} as typeof params.thinking;
 			if (mode === "anthropic-budget-effort" && effort) {
 				params.output_config = { effort } as typeof params.output_config;
 			}
@@ -2108,7 +2408,12 @@ function buildAnthropicToolSchemaPlans(tools: Tool[], disableStrictTools = false
 	return plans;
 }
 
-function convertTools(tools: Tool[], isOAuthToken: boolean, disableStrictTools = false): Anthropic.Messages.Tool[] {
+function convertTools(
+	tools: Tool[],
+	isOAuthToken: boolean,
+	disableStrictTools = false,
+	supportsEagerToolInputStreaming = true,
+): Anthropic.Messages.Tool[] {
 	if (!tools) return [];
 	const schemaPlans = buildAnthropicToolSchemaPlans(tools, disableStrictTools);
 
@@ -2118,6 +2423,7 @@ function convertTools(tools: Tool[], isOAuthToken: boolean, disableStrictTools =
 			name: isOAuthToken ? applyClaudeToolPrefix(tool.name) : tool.name,
 			description: tool.description || "",
 			input_schema: plan.inputSchema,
+			...(supportsEagerToolInputStreaming ? { eager_input_streaming: true } : {}),
 			...(plan.strict ? { strict: true } : {}),
 		};
 	});

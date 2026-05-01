@@ -37,6 +37,14 @@ const ANTHROPIC_MODEL: Model<"anthropic-messages"> = {
 	maxTokens: 8_192,
 };
 
+const CLOUDFLARE_ANTHROPIC_MODEL: Model<"anthropic-messages"> = {
+	...ANTHROPIC_MODEL,
+	id: "anthropic/claude-sonnet-4-5",
+	name: "Claude Sonnet 4.5 via Cloudflare",
+	provider: "cloudflare-ai-gateway",
+	baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic",
+};
+
 function createAbortedSignal(): AbortSignal {
 	const controller = new AbortController();
 	controller.abort();
@@ -547,6 +555,86 @@ describe("Anthropic request fingerprint alignment", () => {
 		const beta = options.defaultHeaders["Anthropic-Beta"];
 		expect(beta).toContain("context-management-2025-06-27");
 		expect(beta).not.toContain("fine-grained-tool-streaming-2025-05-14");
+	});
+
+	it("adds legacy fine-grained tool-streaming beta only for tool requests on incompatible models", () => {
+		const incompatibleModel: Model<"anthropic-messages"> = {
+			...ANTHROPIC_MODEL,
+			compat: { supportsEagerToolInputStreaming: false },
+		};
+
+		const withoutTools = buildAnthropicClientOptions({
+			model: incompatibleModel,
+			apiKey: "sk-ant-api-test",
+			extraBetas: [],
+			stream: true,
+			interleavedThinking: false,
+			hasTools: false,
+		});
+		const withCompatibleTools = buildAnthropicClientOptions({
+			model: ANTHROPIC_MODEL,
+			apiKey: "sk-ant-api-test",
+			extraBetas: [],
+			stream: true,
+			interleavedThinking: false,
+			hasTools: true,
+		});
+		const withIncompatibleTools = buildAnthropicClientOptions({
+			model: incompatibleModel,
+			apiKey: "sk-ant-api-test",
+			extraBetas: [],
+			stream: true,
+			interleavedThinking: false,
+			hasTools: true,
+		});
+
+		expect(withoutTools.defaultHeaders["Anthropic-Beta"]).not.toContain("fine-grained-tool-streaming-2025-05-14");
+		expect(withCompatibleTools.defaultHeaders["Anthropic-Beta"]).not.toContain(
+			"fine-grained-tool-streaming-2025-05-14",
+		);
+		expect(withIncompatibleTools.defaultHeaders["Anthropic-Beta"]).toContain(
+			"fine-grained-tool-streaming-2025-05-14",
+		);
+	});
+
+	it("uses Cloudflare AI Gateway authorization without Anthropic credential headers", () => {
+		const options = buildAnthropicClientOptions({
+			model: CLOUDFLARE_ANTHROPIC_MODEL,
+			apiKey: "cf-gateway-token",
+			extraBetas: [],
+			stream: true,
+			interleavedThinking: false,
+			dynamicHeaders: {},
+		});
+
+		expect(options.baseURL).toBe("https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic");
+		expect(options.apiKey).toBeNull();
+		expect(options.authToken).toBeNull();
+		expect(options.defaultHeaders["cf-aig-authorization"]).toBe("Bearer cf-gateway-token");
+		expect(options.defaultHeaders.Authorization).toBeUndefined();
+		expect(options.defaultHeaders["X-Api-Key"]).toBeUndefined();
+	});
+
+	it("keeps Cloudflare gateway auth authoritative over caller-supplied auth headers", () => {
+		const options = buildAnthropicClientOptions({
+			model: {
+				...CLOUDFLARE_ANTHROPIC_MODEL,
+				headers: {
+					Authorization: "Bearer anthropic-oauth",
+					"X-Api-Key": "sk-ant-api-leak",
+					"cf-aig-authorization": "Bearer stale-token",
+				},
+			},
+			apiKey: "cf-gateway-token",
+			extraBetas: [],
+			stream: true,
+			interleavedThinking: false,
+			dynamicHeaders: {},
+		});
+
+		expect(options.defaultHeaders["cf-aig-authorization"]).toBe("Bearer cf-gateway-token");
+		expect(options.defaultHeaders.Authorization).toBeUndefined();
+		expect(options.defaultHeaders["X-Api-Key"]).toBeUndefined();
 	});
 
 	it("applies Claude Code TLS profile for direct Anthropic transport", () => {

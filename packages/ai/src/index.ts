@@ -18,7 +18,7 @@ export * from "./providers/google-gemini-headers";
 export type * from "./providers/google-vertex";
 export * from "./providers/kimi";
 export * from "./providers/ollama";
-export type { OpenAICodexResponsesOptions } from "./providers/openai-codex-responses";
+export * from "./providers/openai-codex-responses";
 export * from "./providers/openai-completions";
 export * from "./providers/openai-responses";
 export * from "./providers/synthetic";

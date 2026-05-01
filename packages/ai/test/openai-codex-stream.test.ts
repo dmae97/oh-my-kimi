@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { enrichModelThinking } from "@oh-my-pi/pi-ai/model-thinking";
 import {
 	getOpenAICodexTransportDetails,
+	getOpenAICodexWebSocketDebugStats,
 	prewarmOpenAICodexResponses,
 	streamOpenAICodexResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
@@ -165,7 +166,7 @@ describe("openai-codex streaming", () => {
 			`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}`,
 			`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Hello" })}`,
 			`data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "message", id: "msg_1", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Hello" }] } })}`,
-			`data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8, input_tokens_details: { cached_tokens: 0 } } } })}`,
+			`data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", service_tier: "default", usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8, input_tokens_details: { cached_tokens: 0 } } } })}`,
 		].join("\n\n")}\n\n`;
 		const fetchMock = vi.fn(async (_input: string | URL, init?: RequestInit) => {
 			capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -184,7 +185,7 @@ describe("openai-codex streaming", () => {
 			baseUrl: "https://chatgpt.com/backend-api",
 			reasoning: true,
 			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
@@ -200,6 +201,9 @@ describe("openai-codex streaming", () => {
 		}).result();
 		expect(result.stopReason).toBe("stop");
 		expect(capturedBody?.service_tier).toBe("priority");
+		expect(result.usage.cost.input).toBeCloseTo(0.00001);
+		expect(result.usage.cost.output).toBeCloseTo(0.000012);
+		expect(result.usage.cost.total).toBeCloseTo(0.000022);
 	});
 
 	it("fails truncated SSE streams that never emit a terminal response event", async () => {
@@ -264,6 +268,48 @@ describe("openai-codex streaming", () => {
 		const result = await streamOpenAICodexResponses(model, context, { apiKey: token }).result();
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("terminal completion event");
+	});
+
+	it("stops reading SSE responses after a terminal response event", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+
+		const payload = Buffer.from(
+			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
+			"utf8",
+		).toBase64();
+		const token = `aaa.${payload}.bbb`;
+		const sse = `${[
+			`data: ${JSON.stringify({ type: "response.output_item.added", item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] } })}`,
+			`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}`,
+			`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Hello" })}`,
+			`data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "message", id: "msg_1", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Hello" }] } })}`,
+			`data: ${JSON.stringify({ type: "response.done", response: { status: "completed", usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8, input_tokens_details: { cached_tokens: 0 } } } })}`,
+			`data: ${JSON.stringify({ type: "response.failed", code: "server_error", message: "late failure after terminal event" })}`,
+		].join("\n\n")}\n\n`;
+
+		global.fetch = vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		const context: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		};
+
+		const result = await streamOpenAICodexResponses(model, context, { apiKey: token }).result();
+		expect(result.stopReason).toBe("stop");
+		expect(result.content.find(block => block.type === "text")?.text).toBe("Hello");
 	});
 
 	it("surfaces 429 errors after retry budget checks without body reuse failures", async () => {
@@ -450,6 +496,7 @@ describe("openai-codex streaming", () => {
 				// Verify sessionId is set in headers
 				expect(headers?.get("conversation_id")).toBe(sessionId);
 				expect(headers?.get("session_id")).toBe(sessionId);
+				expect(headers?.get("x-client-request-id")).toBe(sessionId);
 
 				// Verify sessionId is set in request body as prompt_cache_key
 				const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
@@ -1172,6 +1219,224 @@ describe("openai-codex streaming", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 		expect(sentRequests[0]?.type).toBe("response.create");
 		expect(sentRequests[0]?.service_tier).toBe("priority");
+	});
+
+	it("sends websocket continuation deltas after prior assistant response items and records stats", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const payload = Buffer.from(
+			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
+			"utf8",
+		).toBase64();
+		const token = `aaa.${payload}.bbb`;
+		const sentRequests: Array<Record<string, unknown>> = [];
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not be called");
+		});
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		type WsListener = (event: Event) => void;
+		class DeltaWebSocket {
+			static readonly CONNECTING = 0;
+			static readonly OPEN = 1;
+			static readonly CLOSING = 2;
+			static readonly CLOSED = 3;
+			readyState = DeltaWebSocket.CONNECTING;
+			#listeners = new Map<string, Set<WsListener>>();
+
+			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
+				setTimeout(() => {
+					this.readyState = DeltaWebSocket.OPEN;
+					this.#emit("open", new Event("open"));
+				}, 0);
+			}
+
+			addEventListener(type: string, listener: unknown): void {
+				if (typeof listener !== "function") return;
+				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
+				listeners.add(listener as WsListener);
+				this.#listeners.set(type, listeners);
+			}
+
+			removeEventListener(type: string, listener: unknown): void {
+				if (typeof listener !== "function") return;
+				const listeners = this.#listeners.get(type);
+				listeners?.delete(listener as WsListener);
+			}
+
+			send(data: string): void {
+				const request = JSON.parse(data) as Record<string, unknown>;
+				sentRequests.push(request);
+				const responseIndex = sentRequests.length;
+				const responseId = `resp_${responseIndex}`;
+				const messageId = `msg_${responseIndex}`;
+				const text = responseIndex === 1 ? "First answer" : "Second answer";
+				this.#emit("message", {
+					data: JSON.stringify({ type: "response.created", response: { id: responseId } }),
+				} as unknown as Event);
+				this.#emit("message", {
+					data: JSON.stringify({
+						type: "response.output_item.added",
+						item: { type: "message", id: messageId, role: "assistant", status: "in_progress", content: [] },
+					}),
+				} as unknown as Event);
+				this.#emit("message", {
+					data: JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } }),
+				} as unknown as Event);
+				this.#emit("message", {
+					data: JSON.stringify({ type: "response.output_text.delta", delta: text }),
+				} as unknown as Event);
+				this.#emit("message", {
+					data: JSON.stringify({
+						type: "response.output_item.done",
+						item: {
+							type: "message",
+							id: messageId,
+							role: "assistant",
+							status: "completed",
+							content: [{ type: "output_text", text }],
+						},
+					}),
+				} as unknown as Event);
+				this.#emit("message", {
+					data: JSON.stringify({
+						type: "response.done",
+						response: {
+							id: responseId,
+							status: "completed",
+							usage: {
+								input_tokens: 5,
+								output_tokens: 3,
+								total_tokens: 8,
+								input_tokens_details: { cached_tokens: 0 },
+							},
+						},
+					}),
+				} as unknown as Event);
+			}
+
+			close(): void {
+				this.readyState = DeltaWebSocket.CLOSED;
+			}
+
+			#emit(type: string, event: Event): void {
+				const listeners = this.#listeners.get(type);
+				if (!listeners) return;
+				for (const listener of listeners) {
+					listener(event);
+				}
+			}
+		}
+
+		global.WebSocket = DeltaWebSocket as unknown as typeof WebSocket;
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.3-codex-spark",
+			name: "GPT-5.3 Codex Spark",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			preferWebsockets: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 128000,
+		};
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const firstContext: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "First question", timestamp: Date.now() }],
+		};
+		const firstResponse = await streamOpenAICodexResponses(model, firstContext, {
+			apiKey: token,
+			sessionId: "ws-delta-session",
+			providerSessionState,
+		}).result();
+		const secondContext: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [
+				...firstContext.messages,
+				firstResponse,
+				{ role: "user", content: "Second question", timestamp: Date.now() },
+			],
+		};
+		await streamOpenAICodexResponses(model, secondContext, {
+			apiKey: token,
+			sessionId: "ws-delta-session",
+			providerSessionState,
+		}).result();
+
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(sentRequests).toHaveLength(2);
+		expect(sentRequests[0]?.previous_response_id).toBeUndefined();
+		expect(sentRequests[0]?.prompt_cache_key).toBe("ws-delta-session");
+		expect(sentRequests[1]?.type).toBe("response.create");
+		expect(sentRequests[1]?.previous_response_id).toBe("resp_1");
+		expect(sentRequests[1]?.prompt_cache_key).toBe("ws-delta-session");
+		const deltaInput = sentRequests[1]?.input;
+		expect(Array.isArray(deltaInput)).toBe(true);
+		const deltaItems = deltaInput as Array<{ role?: string }>;
+		expect(deltaItems).toHaveLength(1);
+		expect(deltaItems[0]?.role).toBe("user");
+		expect(JSON.stringify(deltaItems)).toContain("Second question");
+		expect(JSON.stringify(deltaItems)).not.toContain("First answer");
+
+		const stats = getOpenAICodexWebSocketDebugStats(model, {
+			sessionId: "ws-delta-session",
+			providerSessionState,
+		});
+		expect(stats).toEqual({
+			fullContextRequests: 1,
+			deltaRequests: 1,
+			lastInputItems: 1,
+			lastDeltaInputItems: 1,
+			lastPreviousResponseId: "resp_1",
+		});
+	});
+
+	it("uses low Codex text verbosity by default while preserving explicit overrides", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-verbosity-");
+		setAgentDir(tempDir.path());
+		const payload = Buffer.from(
+			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
+			"utf8",
+		).toBase64();
+		const token = `aaa.${payload}.bbb`;
+		const capturedBodies: Array<Record<string, unknown>> = [];
+		const sse = `${[
+			`data: ${JSON.stringify({ type: "response.output_item.added", item: { type: "message", id: "msg_verbosity", role: "assistant", status: "in_progress", content: [] } })}`,
+			`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}`,
+			`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Hello" })}`,
+			`data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "message", id: "msg_verbosity", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Hello" }] } })}`,
+			`data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8, input_tokens_details: { cached_tokens: 0 } } } })}`,
+		].join("\n\n")}\n\n`;
+		const fetchMock = vi.fn(async (_input: string | URL, init?: RequestInit) => {
+			capturedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+		});
+		global.fetch = fetchMock as unknown as typeof fetch;
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		const context: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		};
+
+		await streamOpenAICodexResponses(model, context, { apiKey: token }).result();
+		await streamOpenAICodexResponses(model, context, { apiKey: token, textVerbosity: "high" }).result();
+
+		expect((capturedBodies[0]?.text as { verbosity?: string } | undefined)?.verbosity).toBe("low");
+		expect((capturedBodies[1]?.text as { verbosity?: string } | undefined)?.verbosity).toBe("high");
 	});
 
 	it("uses websocket v2 beta header when v2 mode is enabled", async () => {
