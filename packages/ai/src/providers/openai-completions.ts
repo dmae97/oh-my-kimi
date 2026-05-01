@@ -1237,8 +1237,10 @@ export function convertMessages(
 			}
 
 			const toolCalls = msg.content.filter(b => b.type === "toolCall") as ToolCall[];
-			// Replay reasoning_content on assistant tool-call turns for backends that validate
-			// thinking-mode history. The replay logic has three tiers:
+			// Replay reasoning_content on assistant turns for backends that validate
+			// thinking-mode history. DeepSeek V4 requires reasoning_content on EVERY
+			// assistant turn once any prior turn included it — not just tool-call turns.
+			// The replay logic has three tiers:
 			//   1. Recover from thinking blocks with valid signatures (covers same-model replay
 			//      where nonEmptyThinkingBlocks may have filtered out empty-text blocks)
 			//   2. For providers that require the field but returned no reasoning at all
@@ -1250,6 +1252,12 @@ export function convertMessages(
 				compat.requiresReasoningContentForToolCalls &&
 				compat.allowsSyntheticReasoningContentForToolCalls &&
 				(compat.thinkingFormat === "openai" || compat.thinkingFormat === "openrouter");
+			// DeepSeek reasoning models require reasoning_content on ALL assistant turns,
+			// not just tool-call turns. Other providers (Kimi, OpenRouter) only require it
+			// on tool-call turns.
+			const needsReasoningOnAllTurns =
+				compat.requiresReasoningContentForToolCalls && !compat.allowsSyntheticReasoningContentForToolCalls;
+			const needsReasoningField = needsReasoningOnAllTurns || toolCalls.length > 0;
 			let hasReasoningField =
 				(assistantMsg as any).reasoning_content !== undefined ||
 				(assistantMsg as any).reasoning !== undefined ||
@@ -1263,7 +1271,7 @@ export function convertMessages(
 			// from other providers (Anthropic encrypted, OpenAI Responses JSON, etc.) are not
 			// valid property names for the wire message.
 			if (
-				toolCalls.length > 0 &&
+				needsReasoningField &&
 				!hasReasoningField &&
 				compat.requiresReasoningContentForToolCalls &&
 				!compat.allowsSyntheticReasoningContentForToolCalls
@@ -1283,7 +1291,7 @@ export function convertMessages(
 			// emit an empty string. The field must be present; an empty string is the most honest
 			// representation of "no reasoning was captured."
 			if (
-				toolCalls.length > 0 &&
+				needsReasoningField &&
 				!hasReasoningField &&
 				compat.requiresReasoningContentForToolCalls &&
 				!compat.allowsSyntheticReasoningContentForToolCalls

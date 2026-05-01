@@ -12,7 +12,10 @@ function deepseekModel(overrides: Partial<Model<"openai-completions">>): Model<"
 	};
 }
 
-function assistantToolCall(model: Model<"openai-completions">, content?: Array<{ type: string; [key: string]: unknown }>): AssistantMessage {
+function assistantToolCall(
+	model: Model<"openai-completions">,
+	content?: Array<{ type: string; [key: string]: unknown }>,
+): AssistantMessage {
 	return {
 		role: "assistant",
 		content: content ?? [
@@ -371,10 +374,124 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 	});
 
 	// ----------------------------------------------------------------
+	// Fix 4: reasoning_content on ALL assistant turns, not just tool-call turns
+	// DeepSeek V4 requires reasoning_content on every assistant message once any
+	// prior turn included it — including plain text responses with no tool calls.
+	// ----------------------------------------------------------------
+	describe("reasoning_content on non-tool-call assistant turns (Fix 4)", () => {
+		it("injects empty reasoning_content on plain text assistant turn for DeepSeek", () => {
+			const model = deepseekModel({
+				provider: "deepseek",
+				baseUrl: "https://api.deepseek.com/v1",
+				id: "deepseek-v4-pro",
+			});
+			const compat = detectCompat(model);
+			// Plain text assistant response — no tool calls, no thinking blocks.
+			// This is the exact pattern from the observed 400 error.
+			const msg: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "Here is the answer to your question." }],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: Date.now(),
+			};
+			const messages = convertMessages(model, { messages: [msg] }, compat);
+			const assistant = messages.find(m => m.role === "assistant");
+			expect(assistant).toBeDefined();
+			// reasoning_content must be present — even on non-tool-call turns
+			const rc = Reflect.get(assistant as object, "reasoning_content");
+			expect(rc).toBeDefined();
+			expect(rc).toBe("");
+		});
+
+		it("injects reasoning_content from thinking blocks on plain text assistant turn", () => {
+			const model = deepseekModel({
+				provider: "opencode-go",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+				id: "deepseek-v4-flash",
+			});
+			const compat = detectCompat(model);
+			const msg: AssistantMessage = {
+				role: "assistant",
+				content: [
+					{
+						type: "thinking",
+						thinking: "Let me think about this.",
+						thinkingSignature: "reasoning_content",
+					} as ThinkingContent,
+					{ type: "text", text: "The answer is 42." },
+				],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: Date.now(),
+			};
+			const messages = convertMessages(model, { messages: [msg] }, compat);
+			const assistant = messages.find(m => m.role === "assistant");
+			expect(assistant).toBeDefined();
+			expect(Reflect.get(assistant as object, "reasoning_content")).toBe("Let me think about this.");
+			expect((assistant as { content: unknown }).content).toBe("The answer is 42.");
+		});
+
+		it("does NOT inject reasoning_content on non-tool-call turn for non-DeepSeek providers", () => {
+			const model: Model<"openai-completions"> = {
+				...getBundledModel("openai", "gpt-4o-mini"),
+				api: "openai-completions",
+				provider: "openrouter",
+				baseUrl: "https://openrouter.ai/api/v1",
+				id: "qwen/qwq-32b",
+				reasoning: true,
+			};
+			const compat = detectCompat(model);
+			const msg: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "Plain answer." }],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: Date.now(),
+			};
+			const messages = convertMessages(model, { messages: [msg] }, compat);
+			const assistant = messages.find(m => m.role === "assistant");
+			expect(assistant).toBeDefined();
+			// OpenRouter reasoning models only need reasoning_content on tool-call turns
+			expect(Reflect.get(assistant as object, "reasoning_content")).toBeUndefined();
+		});
+	});
+
+	// ----------------------------------------------------------------
 	// Tier 3: Synthetic placeholder for non-DeepSeek providers
 	// ----------------------------------------------------------------
 	describe("synthetic placeholder for non-DeepSeek providers (Tier 3)", () => {
-		it("still uses \".\" placeholder for Kimi models that accept it", () => {
+		it('still uses "." placeholder for Kimi models that accept it', () => {
 			const model: Model<"openai-completions"> = {
 				...getBundledModel("openai", "gpt-4o-mini"),
 				api: "openai-completions",
