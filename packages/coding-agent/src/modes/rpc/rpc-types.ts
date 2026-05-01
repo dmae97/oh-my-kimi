@@ -7,6 +7,7 @@
 import type { AgentMessage, AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Effort, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import type { BashResult } from "../../exec/bash-executor";
+import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { SessionStats } from "../../session/agent-session";
 import type { CompactionResult } from "../../session/compaction";
 import type { TodoPhase } from "../../tools/todo-write";
@@ -90,6 +91,8 @@ export interface RpcSessionState {
 	/** For session dump / export (plain-text parity with /dump). */
 	systemPrompt?: string;
 	dumpTools?: Array<{ name: string; description: string; parameters: unknown }>;
+	/** Current context window usage. Null tokens/percent when unknown (e.g. right after compaction). */
+	contextUsage?: ContextUsage;
 }
 
 export interface RpcHandoffResult {

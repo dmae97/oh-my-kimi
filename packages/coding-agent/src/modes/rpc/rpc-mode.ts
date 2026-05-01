@@ -574,6 +574,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 						description: tool.description,
 						parameters: tool.parameters,
 					})),
+					contextUsage: session.getContextUsage(),
 				};
 				return success(id, "get_state", state);
 			}
