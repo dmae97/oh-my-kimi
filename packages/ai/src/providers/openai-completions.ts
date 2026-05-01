@@ -1203,9 +1203,12 @@ export function convertMessages(
 						assistantMsg.content = [{ type: "text", text: thinkingText }];
 					}
 				} else {
-					// Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
+					// Use the signature from the first thinking block if available, but only for
+					// recognized OpenAI-compat reasoning field names. Opaque signatures from other
+					// providers (Anthropic encrypted, OpenAI Responses JSON) are not valid property names.
 					const signature = nonEmptyThinkingBlocks[0].thinkingSignature;
-					if (signature && signature.length > 0) {
+					const recognizedFields = ["reasoning_content", "reasoning", "reasoning_text"];
+					if (signature && recognizedFields.includes(signature)) {
 						(assistantMsg as any)[signature] = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n");
 					}
 				}
@@ -1256,6 +1259,9 @@ export function convertMessages(
 			// This covers the case where thinking blocks have valid signatures but were excluded
 			// by the nonEmptyThinkingBlocks filter above, or where thinking text is empty but
 			// the signature identifies the correct field name for replay.
+			// Only recognized OpenAI-compat reasoning field names qualify — opaque signatures
+			// from other providers (Anthropic encrypted, OpenAI Responses JSON, etc.) are not
+			// valid property names for the wire message.
 			if (
 				toolCalls.length > 0 &&
 				!hasReasoningField &&
@@ -1265,7 +1271,8 @@ export function convertMessages(
 				const allThinkingBlocks = msg.content.filter(b => b.type === "thinking") as ThinkingContent[];
 				if (allThinkingBlocks.length > 0) {
 					const signature = allThinkingBlocks[0].thinkingSignature;
-					if (signature) {
+					const recognizedFields = ["reasoning_content", "reasoning", "reasoning_text"];
+					if (signature && recognizedFields.includes(signature)) {
 						(assistantMsg as any)[signature] = allThinkingBlocks.map(b => b.thinking).join("\n");
 						hasReasoningField = true;
 					}

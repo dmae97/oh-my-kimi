@@ -221,6 +221,100 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 			expect(assistant).toBeDefined();
 			expect(Reflect.get(assistant as object, "reasoning_content")).toBe("I need to read the file first.");
 		});
+		it("does not use opaque signature as property name but still sets reasoning_content from thinking text", () => {
+			const model = deepseekModel({
+				provider: "opencode-go",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+				id: "deepseek-v4-flash",
+			});
+			const compat = detectCompat(model);
+			// Simulate a thinking block with an opaque signature from another provider
+			// (e.g. Anthropic encrypted signature, OpenAI Responses JSON item).
+			// The code should NOT write to a property named after the opaque signature.
+			// It should still set reasoning_content from the thinking text via the
+			// existing thinkingFormat="openai" path.
+			const msg: AssistantMessage = {
+				role: "assistant",
+				content: [
+					{
+						type: "thinking",
+						thinking: "some reasoning",
+						thinkingSignature: "rs_6f3a1b2c4d5e6f7a8b9c0d1e2f3a4b5c",
+					} as ThinkingContent,
+					{
+						type: "toolCall",
+						id: "call_opaque_sig",
+						name: "read",
+						arguments: { path: "/tmp/test" },
+					} as ToolCall,
+				],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			};
+			const messages = convertMessages(model, { messages: [msg] }, compat);
+			const assistant = messages.find(m => m.role === "assistant");
+			expect(assistant).toBeDefined();
+			// Should NOT have used the opaque signature as a property name.
+			expect(Reflect.get(assistant as object, "rs_6f3a1b2c4d5e6f7a8b9c0d1e2f3a4b5c")).toBeUndefined();
+			// Should have set reasoning_content from the thinking text via the openai path.
+			expect(Reflect.get(assistant as object, "reasoning_content")).toBe("some reasoning");
+		});
+		it("falls through to empty-string when thinking block has opaque signature and empty text", () => {
+			const model = deepseekModel({
+				provider: "opencode-go",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+				id: "deepseek-v4-flash",
+			});
+			const compat = detectCompat(model);
+			// Empty-text thinking block with opaque signature — Tier 1 should reject the
+			// opaque signature, nonEmptyThinkingBlocks won't include it, and the openai path
+			// won't set anything. Tier 2 should then emit empty reasoning_content.
+			const msg: AssistantMessage = {
+				role: "assistant",
+				content: [
+					{
+						type: "thinking",
+						thinking: "",
+						thinkingSignature: "rs_6f3a1b2c4d5e6f7a8b9c0d1e2f3a4b5c",
+					} as ThinkingContent,
+					{
+						type: "toolCall",
+						id: "call_empty_opaque",
+						name: "read",
+						arguments: { path: "/tmp/test" },
+					} as ToolCall,
+				],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			};
+			const messages = convertMessages(model, { messages: [msg] }, compat);
+			const assistant = messages.find(m => m.role === "assistant");
+			expect(assistant).toBeDefined();
+			expect(Reflect.get(assistant as object, "rs_6f3a1b2c4d5e6f7a8b9c0d1e2f3a4b5c")).toBeUndefined();
+			expect(Reflect.get(assistant as object, "reasoning_content")).toBe("");
+		});
 	});
 
 	// ----------------------------------------------------------------
