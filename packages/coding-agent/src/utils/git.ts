@@ -1258,6 +1258,23 @@ export async function restore(cwd: string, options: RestoreOptions = {}): Promis
 	await runEffect(cwd, args, { signal: options.signal });
 }
 
+/**
+ * Run `git reset` with options. Default is a soft reset (no flag); pass `hard: true` for a destructive reset.
+ *
+ * NOTE: stage.reset() handles the per-file unstaging case. This helper exists for tree-wide resets.
+ */
+export async function reset(
+	cwd: string,
+	options: { hard?: boolean; mixed?: boolean; soft?: boolean; target?: string; signal?: AbortSignal } = {},
+): Promise<void> {
+	const args = ["reset"];
+	if (options.hard) args.push("--hard");
+	else if (options.mixed) args.push("--mixed");
+	else if (options.soft) args.push("--soft");
+	if (options.target) args.push(options.target);
+	await runEffect(cwd, args, { signal: options.signal });
+}
+
 export async function clean(
 	cwd: string,
 	options: { ignoredOnly?: boolean; paths?: readonly string[]; signal?: AbortSignal } = {},
