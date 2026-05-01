@@ -1202,7 +1202,7 @@ function handleResponseCompleted(
 			state.lastResponseId = response.id;
 			state.lastResponseItems = stripInputItemIds(structuredCloneJSON(runtime.nativeOutputItems));
 		}
-		state.canAppend = rawEvent.type === "response.done";
+		state.canAppend = rawEvent.type === "response.done" || rawEvent.type === "response.completed";
 	}
 
 	calculateCost(model, output.usage);
@@ -1843,12 +1843,10 @@ class CodexWebSocketConnection {
 			await this.#connectPromise;
 			return;
 		}
-		const WebSocketWithHeaders = WebSocket as unknown as {
-			new (url: string, options?: { headers?: Record<string, string> }): WebSocket;
-		};
 		const { promise, resolve, reject } = Promise.withResolvers<void>();
 		this.#connectPromise = promise;
-		const socket = new WebSocketWithHeaders(this.#url, { headers: this.#headers });
+		const socket = new WebSocket(this.#url, { headers: this.#headers });
+		socket.binaryType = "nodebuffer";
 		this.#socket = socket;
 		let settled = false;
 		let timeout: NodeJS.Timeout | undefined;
@@ -1878,15 +1876,15 @@ class CodexWebSocketConnection {
 			}
 		}, CODEX_WEBSOCKET_CONNECT_TIMEOUT_MS);
 
-		socket.addEventListener("open", event => {
+		socket.onopen = event => {
 			if (!settled) {
 				settled = true;
 				clearPending();
 				this.#captureHandshakeHeaders(socket, event);
 				resolve();
 			}
-		});
-		socket.addEventListener("error", event => {
+		};
+		socket.onerror = event => {
 			const eventRecord = event as unknown as Record<string, unknown>;
 			const detail =
 				(typeof eventRecord.message === "string" && eventRecord.message) ||
@@ -1900,8 +1898,8 @@ class CodexWebSocketConnection {
 				return;
 			}
 			this.#push(error);
-		});
-		socket.addEventListener("close", event => {
+		};
+		socket.onclose = event => {
 			this.#socket = null;
 			if (!settled) {
 				settled = true;
@@ -1911,28 +1909,26 @@ class CodexWebSocketConnection {
 			}
 			this.#push(createCodexWebSocketTransportError(`websocket closed (${event.code})`));
 			this.#push(null);
-		});
-		socket.addEventListener("message", event => {
-			void (async () => {
-				try {
-					const text = await decodeCodexWebSocketData(event.data);
-					if (!text) return;
-					const parsed = JSON.parse(text) as Record<string, unknown>;
-					if (parsed.type === "error" && typeof parsed.error === "object" && parsed.error) {
-						const inner = parsed.error as Record<string, unknown>;
-						if (typeof parsed.code !== "string" && typeof inner.code === "string") {
-							parsed.code = inner.code;
-						}
-						if (typeof parsed.message !== "string" && typeof inner.message === "string") {
-							parsed.message = inner.message;
-						}
+		};
+		socket.onmessage = event => {
+			try {
+				const text = typeof event.data === "string" ? event.data : Buffer.from(event.data).toString("utf-8");
+				if (!text) return;
+				const parsed = JSON.parse(text) as Record<string, unknown>;
+				if (parsed.type === "error" && typeof parsed.error === "object" && parsed.error) {
+					const inner = parsed.error as Record<string, unknown>;
+					if (typeof parsed.code !== "string" && typeof inner.code === "string") {
+						parsed.code = inner.code;
 					}
-					this.#push(parsed);
-				} catch (error) {
-					this.#push(createCodexWebSocketTransportError(String(error)));
+					if (typeof parsed.message !== "string" && typeof inner.message === "string") {
+						parsed.message = inner.message;
+					}
 				}
-			})();
-		});
+				this.#push(parsed);
+			} catch (error) {
+				this.#push(createCodexWebSocketTransportError(String(error)));
+			}
+		};
 
 		logger.time("codexWs:awaitTcpHandshake");
 		try {
@@ -2278,23 +2274,6 @@ function resolveCodexResponsesUrl(baseUrl: string | undefined): string {
 	if (normalized.endsWith("/codex/responses")) return normalized;
 	if (normalized.endsWith("/codex")) return `${normalized}/responses`;
 	return `${normalized}/codex/responses`;
-}
-
-async function decodeCodexWebSocketData(data: unknown): Promise<string | null> {
-	if (typeof data === "string") return data;
-	if (data instanceof ArrayBuffer) {
-		return new TextDecoder().decode(new Uint8Array(data));
-	}
-	if (ArrayBuffer.isView(data)) {
-		const view = data;
-		return new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
-	}
-	if (data && typeof data === "object" && "arrayBuffer" in data) {
-		const blobLike = data as { arrayBuffer: () => Promise<ArrayBuffer> };
-		const arrayBuffer = await blobLike.arrayBuffer();
-		return new TextDecoder().decode(new Uint8Array(arrayBuffer));
-	}
-	return null;
 }
 
 function getAccountId(accessToken: string): string {

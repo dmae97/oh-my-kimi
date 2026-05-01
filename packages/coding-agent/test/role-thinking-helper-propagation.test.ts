@@ -50,7 +50,7 @@ describe("role thinking helper propagation", () => {
 		expect(completeSimpleMock.mock.calls[0]?.[2]).toMatchObject({ reasoning: Effort.Minimal });
 	});
 
-	it("passes smol-role thinking to title generation", async () => {
+	it("disables reasoning for title generation even when smol role has thinking", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const settings = createSettings({
 			default: `${model.provider}/${model.id}:high`,
@@ -67,6 +67,6 @@ describe("role thinking helper propagation", () => {
 
 		const title = await generateSessionTitle("Investigate resolver", registry as never, settings);
 		expect(title).toBe("Investigate resolver");
-		expect(completeSimpleMock.mock.calls[0]?.[2]).toMatchObject({ reasoning: Effort.Low });
+		expect(completeSimpleMock.mock.calls[0]?.[2]).toMatchObject({ disableReasoning: true });
 	});
 });

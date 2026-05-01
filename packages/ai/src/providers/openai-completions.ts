@@ -9,6 +9,7 @@ import type {
 	ChatCompletionMessageParam,
 	ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions";
+import type { Effort } from "../model-thinking";
 import { calculateCost } from "../models";
 import { getEnvApiKey } from "../stream";
 import {
@@ -17,6 +18,7 @@ import {
 	type Message,
 	type MessageAttribution,
 	type Model,
+	type OpenAICompat,
 	type ProviderSessionState,
 	type ServiceTier,
 	type StopReason,
@@ -125,13 +127,21 @@ function hasToolHistory(messages: Message[]): boolean {
 export interface OpenAICompletionsOptions extends StreamOptions {
 	toolChoice?: ToolChoice;
 	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	/** Force-disable reasoning for OpenRouter-format requests (sends `reasoning: { enabled: false }`). */
+	disableReasoning?: boolean;
 	serviceTier?: ServiceTier;
 }
 
-type OpenAICompletionsSamplingParams = OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming & {
+type OpenAICompletionsParams = OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming & {
 	top_k?: number;
 	min_p?: number;
 	repetition_penalty?: number;
+	thinking?: { type: "enabled" | "disabled" };
+	enable_thinking?: boolean;
+	chat_template_kwargs?: { enable_thinking: boolean };
+	reasoning?: { effort?: string } | { enabled: false };
+	provider?: OpenAICompat["openRouterRouting"];
+	providerOptions?: { gateway?: { only?: string[]; order?: string[] } };
 };
 
 type AppliedToolStrictMode = "mixed" | "all_strict" | "none";
@@ -824,7 +834,7 @@ function buildParams(
 	options: OpenAICompletionsOptions | undefined,
 	resolvedBaseUrl?: string,
 	toolStrictModeOverride?: ToolStrictModeOverride,
-): { params: OpenAICompletionsSamplingParams; toolStrictMode: AppliedToolStrictMode } {
+): { params: OpenAICompletionsParams; toolStrictMode: AppliedToolStrictMode } {
 	const compat = getCompat(model, resolvedBaseUrl);
 	const messages = convertMessages(model, context, compat);
 	maybeAddOpenRouterAnthropicCacheControl(model, messages);
@@ -837,7 +847,7 @@ function buildParams(
 	const effectiveMaxTokens = options?.maxTokens ?? (isKimi ? model.maxTokens : undefined);
 
 	const requestModelId = model.provider === "fireworks" ? toFireworksWireModelId(model.id) : model.id;
-	const params: OpenAICompletionsSamplingParams = {
+	const params: OpenAICompletionsParams = {
 		model: requestModelId,
 		messages,
 		stream: true,
@@ -845,7 +855,7 @@ function buildParams(
 	let toolStrictMode: AppliedToolStrictMode = "none";
 
 	if (compat.supportsUsageInStreaming !== false) {
-		(params as { stream_options?: { include_usage: boolean } }).stream_options = { include_usage: true };
+		params.stream_options = { include_usage: true };
 	}
 
 	if (compat.supportsStore) {
@@ -854,7 +864,7 @@ function buildParams(
 
 	if (effectiveMaxTokens) {
 		if (compat.maxTokensField === "max_tokens") {
-			(params as any).max_tokens = effectiveMaxTokens;
+			params.max_tokens = effectiveMaxTokens;
 		} else {
 			params.max_completion_tokens = effectiveMaxTokens;
 		}
@@ -897,27 +907,40 @@ function buildParams(
 
 	if (supportsReasoningParams && compat.thinkingFormat === "zai" && model.reasoning) {
 		// Z.ai uses binary thinking: { type: "enabled" | "disabled" }
-		// Must explicitly disable since z.ai defaults to thinking enabled
-		Reflect.set(params, "thinking", { type: options?.reasoning ? "enabled" : "disabled" });
+		// Must explicitly disable since z.ai defaults to thinking enabled.
+		const enabled = options?.reasoning && !options?.disableReasoning;
+		params.thinking = { type: enabled ? "enabled" : "disabled" };
 	} else if (supportsReasoningParams && compat.thinkingFormat === "qwen" && model.reasoning) {
 		// Qwen uses top-level enable_thinking: boolean
-		Reflect.set(params, "enable_thinking", !!options?.reasoning);
+		params.enable_thinking = !!options?.reasoning && !options?.disableReasoning;
 	} else if (supportsReasoningParams && compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
-		Reflect.set(params, "chat_template_kwargs", { enable_thinking: !!options?.reasoning });
+		params.chat_template_kwargs = {
+			enable_thinking: !!options?.reasoning && !options?.disableReasoning,
+		};
+	} else if (supportsReasoningParams && compat.thinkingFormat === "openrouter" && model.reasoning) {
+		// OpenRouter normalizes reasoning across providers via a nested reasoning object.
+		// Without an explicit signal, OpenRouter defaults reasoning models to thinking, which
+		// silently consumes the entire output budget on small `max_tokens` requests (e.g.
+		// title generation). Honor `disableReasoning` to opt out cleanly.
+		const openRouterParams = params as typeof params & {
+			reasoning?: { effort?: string } | { enabled: false };
+		};
+		if (options?.disableReasoning) {
+			openRouterParams.reasoning = { enabled: false };
+		} else if (options?.reasoning) {
+			openRouterParams.reasoning = {
+				effort: mapReasoningEffort(options.reasoning, compat.reasoningEffortMap),
+			};
+		}
 	} else if (
 		supportsReasoningParams &&
-		compat.thinkingFormat === "openrouter" &&
 		options?.reasoning &&
-		model.reasoning
+		!options?.disableReasoning &&
+		model.reasoning &&
+		compat.supportsReasoningEffort
 	) {
-		// OpenRouter normalizes reasoning across providers via a nested reasoning object.
-		const openRouterParams = params as typeof params & { reasoning?: { effort?: string } };
-		openRouterParams.reasoning = {
-			effort: mapReasoningEffort(options.reasoning, compat.reasoningEffortMap),
-		};
-	} else if (supportsReasoningParams && options?.reasoning && model.reasoning && compat.supportsReasoningEffort) {
 		// OpenAI-style reasoning_effort
-		Reflect.set(params, "reasoning_effort", mapReasoningEffort(options.reasoning, compat.reasoningEffortMap));
+		params.reasoning_effort = mapReasoningEffort(options.reasoning, compat.reasoningEffortMap) as Effort;
 	}
 
 	if (compat.disableReasoningOnForcedToolChoice && isForcedToolChoice(params.tool_choice)) {
@@ -925,13 +948,13 @@ function buildParams(
 		// Kimi 400 with `tool_choice 'specified' is incompatible with thinking
 		// enabled`. Drop reasoning for this turn instead of dropping tool_choice;
 		// the agent still gets the forced tool call, just without thinking.
-		delete (params as { reasoning_effort?: unknown }).reasoning_effort;
-		delete (params as { reasoning?: unknown }).reasoning;
+		delete params.reasoning_effort;
+		delete params.reasoning;
 	}
 
 	// OpenRouter provider routing preferences
 	if (model.baseUrl.includes("openrouter.ai") && compat.openRouterRouting) {
-		Reflect.set(params, "provider", compat.openRouterRouting);
+		params.provider = compat.openRouterRouting;
 	}
 
 	// Vercel AI Gateway provider routing preferences
@@ -941,7 +964,7 @@ function buildParams(
 			const gatewayOptions: Record<string, string[]> = {};
 			if (routing.only) gatewayOptions.only = routing.only;
 			if (routing.order) gatewayOptions.order = routing.order;
-			Reflect.set(params, "providerOptions", { gateway: gatewayOptions });
+			params.providerOptions = { gateway: gatewayOptions };
 		}
 	}
 
@@ -949,13 +972,6 @@ function buildParams(
 		Object.assign(params, compat.extraBody);
 	}
 
-	return buildParamsResult(params, toolStrictMode);
-}
-
-function buildParamsResult(
-	params: OpenAICompletionsSamplingParams,
-	toolStrictMode: AppliedToolStrictMode,
-): { params: OpenAICompletionsSamplingParams; toolStrictMode: AppliedToolStrictMode } {
 	return { params, toolStrictMode };
 }
 

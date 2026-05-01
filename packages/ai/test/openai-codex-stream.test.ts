@@ -82,15 +82,108 @@ function encodeWebSocketMessage(value: Record<string, unknown>): Uint8Array {
 	return new TextEncoder().encode(JSON.stringify(value));
 }
 
-function createMessageEvent(data: unknown): MessageEvent {
-	return new MessageEvent("message", { data });
-}
+type WsHeaders = Record<string, string>;
+type WsEventType = "open" | "message" | "error" | "close";
 
-function emitWebSocketEvent(listeners: Map<string, Set<(event: Event) => void>>, type: string, event: Event): void {
-	const eventListeners = listeners.get(type);
-	if (!eventListeners) return;
-	for (const listener of eventListeners) {
-		listener(event);
+const DEFAULT_USAGE = {
+	input_tokens: 5,
+	output_tokens: 3,
+	total_tokens: 8,
+	input_tokens_details: { cached_tokens: 0 },
+};
+
+/**
+ * Drop-in mock for the global `WebSocket` used by the codex websocket transport.
+ *
+ * Production code wires lifecycle handlers via `onopen`/`onmessage`/`onerror`/`onclose`
+ * properties; tests drive the connection by calling `emit()`, `scheduleOpen()`,
+ * `sendJson()`, or the `emitCodexResponse()` convenience.
+ */
+class MockWebSocket {
+	static readonly CONNECTING = 0;
+	static readonly OPEN = 1;
+	static readonly CLOSING = 2;
+	static readonly CLOSED = 3;
+
+	readyState: number = MockWebSocket.CONNECTING;
+	binaryType: "blob" | "arraybuffer" | "nodebuffer" = "blob";
+
+	onopen: ((event: Event) => void) | null = null;
+	onmessage: ((event: MessageEvent) => void) | null = null;
+	onerror: ((event: Event) => void) | null = null;
+	onclose: ((event: Event) => void) | null = null;
+
+	constructor(
+		public readonly url: string,
+		public readonly options?: { headers?: WsHeaders },
+	) {}
+
+	send(_data: string): void {}
+
+	close(): void {
+		this.readyState = MockWebSocket.CLOSED;
+	}
+
+	/** Dispatch an event to the matching `on{type}` handler. */
+	emit(type: WsEventType, event: Event): void {
+		const handler = (this as unknown as Record<string, unknown>)[`on${type}`];
+		if (typeof handler === "function") (handler as (e: Event) => void).call(this, event);
+	}
+
+	/** Asynchronously transition to OPEN and emit `open`. */
+	scheduleOpen(): void {
+		setTimeout(() => {
+			this.readyState = MockWebSocket.OPEN;
+			this.emit("open", new Event("open"));
+		}, 0);
+	}
+
+	/** Emit a message frame with arbitrary data. */
+	sendMessage(data: unknown): void {
+		this.emit("message", { data } as unknown as MessageEvent);
+	}
+
+	/** Emit a message frame with stringified-JSON data. */
+	sendJson(payload: Record<string, unknown>): void {
+		this.sendMessage(JSON.stringify(payload));
+	}
+
+	/** Emit the standard Codex completed-response sequence. */
+	emitCodexResponse(opts: {
+		messageId: string;
+		responseId: string;
+		text: string;
+		terminalType?: "response.done" | "response.completed";
+		includeCreated?: boolean;
+	}): void {
+		const { messageId, responseId, text, terminalType = "response.done", includeCreated = false } = opts;
+		if (includeCreated) {
+			this.sendJson({ type: "response.created", response: { id: responseId } });
+		}
+		this.sendJson({
+			type: "response.output_item.added",
+			item: { type: "message", id: messageId, role: "assistant", status: "in_progress", content: [] },
+		});
+		this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+		this.sendJson({ type: "response.output_text.delta", delta: text });
+		this.sendJson({
+			type: "response.output_item.done",
+			item: {
+				type: "message",
+				id: messageId,
+				role: "assistant",
+				status: "completed",
+				content: [{ type: "output_text", text }],
+			},
+		});
+		this.sendJson({
+			type: terminalType,
+			response: {
+				id: responseId,
+				status: "completed",
+				usage: DEFAULT_USAGE,
+			},
+		});
 	}
 }
 
@@ -130,32 +223,10 @@ describe("openai-codex streaming", () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
-		type WsListener = (event: Event) => void;
-		class BinaryPayloadWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = BinaryPayloadWebSocket.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
-
-			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
-				setTimeout(() => {
-					this.readyState = BinaryPayloadWebSocket.OPEN;
-					this.#emit("open", new Event("open"));
-				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				this.#listeners.get(type)?.delete(listener as WsListener);
+		class BinaryPayloadWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
 			}
 
 			send(): void {
@@ -180,38 +251,14 @@ describe("openai-codex streaming", () => {
 				});
 				const completed = encodeWebSocketMessage({
 					type: "response.done",
-					response: {
-						id: "resp_ws",
-						status: "completed",
-						usage: {
-							input_tokens: 5,
-							output_tokens: 3,
-							total_tokens: 8,
-							input_tokens_details: { cached_tokens: 0 },
-						},
-					},
+					response: { id: "resp_ws", status: "completed", usage: DEFAULT_USAGE },
 				});
-				this.#emit(
-					"message",
-					createMessageEvent(added.buffer.slice(added.byteOffset, added.byteOffset + added.byteLength)),
-				);
-				this.#emit("message", createMessageEvent(contentPart));
-				this.#emit("message", createMessageEvent(new DataView(delta.buffer, delta.byteOffset, delta.byteLength)));
-				this.#emit("message", createMessageEvent(new Blob([done])));
-				this.#emit(
-					"message",
-					createMessageEvent(
-						completed.buffer.slice(completed.byteOffset, completed.byteOffset + completed.byteLength),
-					),
-				);
-			}
-
-			close(): void {
-				this.readyState = BinaryPayloadWebSocket.CLOSED;
-			}
-
-			#emit(type: string, event: Event): void {
-				emitWebSocketEvent(this.#listeners, type, event);
+				// Exercise every payload shape the production decoder must accept.
+				this.sendMessage(added.buffer.slice(added.byteOffset, added.byteOffset + added.byteLength));
+				this.sendMessage(contentPart);
+				this.sendMessage(Buffer.from(delta));
+				this.sendMessage(Buffer.from(done));
+				this.sendMessage(completed.buffer.slice(completed.byteOffset, completed.byteOffset + completed.byteLength));
 			}
 		}
 
@@ -234,62 +281,27 @@ describe("openai-codex streaming", () => {
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		let capturedHeaders: Record<string, string> | undefined;
-		type WsListener = (event: Event) => void;
-		class HeaderCaptureWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = HeaderCaptureWebSocket.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
-
-			constructor(_url: string, options?: { headers?: Record<string, string> }) {
+		class HeaderCaptureWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
 				capturedHeaders = options?.headers;
-				setTimeout(() => {
-					this.readyState = HeaderCaptureWebSocket.OPEN;
-					this.#emit("open", new Event("open"));
-				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				this.#listeners.get(type)?.delete(listener as WsListener);
+				this.scheduleOpen();
 			}
 
 			send(): void {
-				this.#emit(
-					"message",
-					createMessageEvent(
-						JSON.stringify({
-							type: "response.done",
-							response: {
-								id: "resp_ws",
-								status: "completed",
-								usage: {
-									input_tokens: 1,
-									output_tokens: 1,
-									total_tokens: 2,
-									input_tokens_details: { cached_tokens: 0 },
-								},
-							},
-						}),
-					),
-				);
-			}
-
-			close(): void {
-				this.readyState = HeaderCaptureWebSocket.CLOSED;
-			}
-
-			#emit(type: string, event: Event): void {
-				emitWebSocketEvent(this.#listeners, type, event);
+				this.sendJson({
+					type: "response.done",
+					response: {
+						id: "resp_ws",
+						status: "completed",
+						usage: {
+							input_tokens: 1,
+							output_tokens: 1,
+							total_tokens: 2,
+							input_tokens_details: { cached_tokens: 0 },
+						},
+					},
+				});
 			}
 		}
 
@@ -1027,51 +1039,17 @@ describe("openai-codex streaming", () => {
 			return new Response("not found", { status: 404 });
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
-		type WsListener = (event: Event) => void;
-		class FailingWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = FailingWebSocket.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
-			url: string;
-			options?: { headers?: Record<string, string> };
-
-			constructor(url: string, options?: { headers?: Record<string, string> }) {
-				this.url = url;
-				this.options = options;
+		class FailingWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
 				setTimeout(() => {
 					expect(this.options?.headers?.["OpenAI-Beta"] ?? this.options?.headers?.["openai-beta"]).toStartWith(
 						"responses_websockets=",
 					);
-					this.#emit("error", new Event("error"));
-					this.#emit("close", new Event("close"));
-					this.readyState = FailingWebSocket.CLOSED;
+					this.emit("error", new Event("error"));
+					this.emit("close", new Event("close"));
+					this.readyState = MockWebSocket.CLOSED;
 				}, 0);
-			}
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
-			}
-
-			send(): void {}
-			close(): void {
-				this.readyState = FailingWebSocket.CLOSED;
-			}
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
 			}
 		}
 
@@ -1130,49 +1108,16 @@ describe("openai-codex streaming", () => {
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
 
-		type WsListener = (event: Event) => void;
 		let constructorCount = 0;
-		class FailingConnectWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = FailingConnectWebSocket.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
-
-			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
+		class FailingConnectWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
 				constructorCount += 1;
 				setTimeout(() => {
-					this.#emit("error", new Event("error"));
-					this.#emit("close", new Event("close"));
-					this.readyState = FailingConnectWebSocket.CLOSED;
+					this.emit("error", new Event("error"));
+					this.emit("close", new Event("close"));
+					this.readyState = MockWebSocket.CLOSED;
 				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
-			}
-
-			send(): void {}
-			close(): void {
-				this.readyState = FailingConnectWebSocket.CLOSED;
-			}
-
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
 			}
 		}
 
@@ -1238,92 +1183,20 @@ describe("openai-codex streaming", () => {
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
 
-		type WsListener = (event: Event) => void;
-		class HandshakeWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = HandshakeWebSocket.CONNECTING;
+		class HandshakeWebSocket extends MockWebSocket {
 			handshakeHeaders = {
 				"x-codex-turn-state": "ws-turn-state-1",
 				"x-models-etag": "models-etag-1",
 				"x-reasoning-included": "true",
 			};
-			#listeners = new Map<string, Set<WsListener>>();
 
-			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
-				setTimeout(() => {
-					this.readyState = HandshakeWebSocket.OPEN;
-					this.#emit("open", new Event("open"));
-				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
 			}
 
 			send(): void {
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.added",
-						item: { type: "message", id: "msg_ws", role: "assistant", status: "in_progress", content: [] },
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.output_text.delta", delta: "Hello WS" }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.done",
-						item: {
-							type: "message",
-							id: "msg_ws",
-							role: "assistant",
-							status: "completed",
-							content: [{ type: "output_text", text: "Hello WS" }],
-						},
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.done",
-						response: {
-							id: "resp_ws",
-							status: "completed",
-							usage: {
-								input_tokens: 5,
-								output_tokens: 3,
-								total_tokens: 8,
-								input_tokens_details: { cached_tokens: 0 },
-							},
-						},
-					}),
-				} as unknown as Event);
-			}
-
-			close(): void {
-				this.readyState = HandshakeWebSocket.CLOSED;
-			}
-
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
+				this.emitCodexResponse({ messageId: "msg_ws", responseId: "resp_ws", text: "Hello WS" });
 			}
 		}
 
@@ -1380,91 +1253,35 @@ describe("openai-codex streaming", () => {
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
 
-		type WsListener = (event: Event) => void;
-		class ServiceTierWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = ServiceTierWebSocket.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
-
-			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
-				setTimeout(() => {
-					this.readyState = ServiceTierWebSocket.OPEN;
-					this.#emit("open", new Event("open"));
-				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
+		class ServiceTierWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
 			}
 
 			send(data: string): void {
 				sentRequests.push(JSON.parse(data) as Record<string, unknown>);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.added",
-						item: { type: "message", id: "msg_ws", role: "assistant", status: "in_progress", content: [] },
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.output_text.delta", delta: "Hello WS" }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.done",
-						item: {
-							type: "message",
-							id: "msg_ws",
-							role: "assistant",
-							status: "completed",
-							content: [{ type: "output_text", text: "Hello WS" }],
-						},
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.created", response: { id: "resp_ws" } }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.done",
-						response: {
-							id: "resp_ws",
-							status: "completed",
-							usage: {
-								input_tokens: 5,
-								output_tokens: 3,
-								total_tokens: 8,
-								input_tokens_details: { cached_tokens: 0 },
-							},
-						},
-					}),
-				} as unknown as Event);
-			}
-
-			close(): void {
-				this.readyState = ServiceTierWebSocket.CLOSED;
-			}
-
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
+				this.sendJson({
+					type: "response.output_item.added",
+					item: { type: "message", id: "msg_ws", role: "assistant", status: "in_progress", content: [] },
+				});
+				this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+				this.sendJson({ type: "response.output_text.delta", delta: "Hello WS" });
+				this.sendJson({
+					type: "response.output_item.done",
+					item: {
+						type: "message",
+						id: "msg_ws",
+						role: "assistant",
+						status: "completed",
+						content: [{ type: "output_text", text: "Hello WS" }],
+					},
+				});
+				this.sendJson({ type: "response.created", response: { id: "resp_ws" } });
+				this.sendJson({
+					type: "response.done",
+					response: { id: "resp_ws", status: "completed", usage: DEFAULT_USAGE },
+				});
 			}
 		}
 
@@ -1514,96 +1331,22 @@ describe("openai-codex streaming", () => {
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
 
-		type WsListener = (event: Event) => void;
-		class DeltaWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = DeltaWebSocket.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
-
-			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
-				setTimeout(() => {
-					this.readyState = DeltaWebSocket.OPEN;
-					this.#emit("open", new Event("open"));
-				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
+		class DeltaWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
 			}
 
 			send(data: string): void {
-				const request = JSON.parse(data) as Record<string, unknown>;
-				sentRequests.push(request);
+				sentRequests.push(JSON.parse(data) as Record<string, unknown>);
 				const responseIndex = sentRequests.length;
-				const responseId = `resp_${responseIndex}`;
-				const messageId = `msg_${responseIndex}`;
-				const text = responseIndex === 1 ? "First answer" : "Second answer";
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.created", response: { id: responseId } }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.added",
-						item: { type: "message", id: messageId, role: "assistant", status: "in_progress", content: [] },
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.output_text.delta", delta: text }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.done",
-						item: {
-							type: "message",
-							id: messageId,
-							role: "assistant",
-							status: "completed",
-							content: [{ type: "output_text", text }],
-						},
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.done",
-						response: {
-							id: responseId,
-							status: "completed",
-							usage: {
-								input_tokens: 5,
-								output_tokens: 3,
-								total_tokens: 8,
-								input_tokens_details: { cached_tokens: 0 },
-							},
-						},
-					}),
-				} as unknown as Event);
-			}
-
-			close(): void {
-				this.readyState = DeltaWebSocket.CLOSED;
-			}
-
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
+				this.emitCodexResponse({
+					messageId: `msg_${responseIndex}`,
+					responseId: `resp_${responseIndex}`,
+					text: responseIndex === 1 ? "First answer" : "Second answer",
+					terminalType: "response.completed",
+					includeCreated: true,
+				});
 			}
 		}
 
@@ -1734,90 +1477,17 @@ describe("openai-codex streaming", () => {
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
 
-		type WsListener = (event: Event) => void;
-		class WebSocketV2HeaderProbe {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = WebSocketV2HeaderProbe.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
-
-			constructor(_url: string, options?: { headers?: Record<string, string> }) {
+		class WebSocketV2HeaderProbe extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
 				expect(options?.headers?.["OpenAI-Beta"] ?? options?.headers?.["openai-beta"]).toBe(
 					"responses_websockets=2026-02-06",
 				);
-				setTimeout(() => {
-					this.readyState = WebSocketV2HeaderProbe.OPEN;
-					this.#emit("open", new Event("open"));
-				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
+				this.scheduleOpen();
 			}
 
 			send(): void {
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.added",
-						item: { type: "message", id: "msg_v2", role: "assistant", status: "in_progress", content: [] },
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.output_text.delta", delta: "Hello v2" }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.done",
-						item: {
-							type: "message",
-							id: "msg_v2",
-							role: "assistant",
-							status: "completed",
-							content: [{ type: "output_text", text: "Hello v2" }],
-						},
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.done",
-						response: {
-							id: "resp_v2",
-							status: "completed",
-							usage: {
-								input_tokens: 5,
-								output_tokens: 3,
-								total_tokens: 8,
-								input_tokens_details: { cached_tokens: 0 },
-							},
-						},
-					}),
-				} as unknown as Event);
-			}
-
-			close(): void {
-				this.readyState = WebSocketV2HeaderProbe.CLOSED;
-			}
-
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
+				this.emitCodexResponse({ messageId: "msg_v2", responseId: "resp_v2", text: "Hello v2" });
 			}
 		}
 
@@ -1873,50 +1543,15 @@ describe("openai-codex streaming", () => {
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
 
-		type WsListener = (event: Event) => void;
 		let sendCount = 0;
-		class IdleWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = IdleWebSocket.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
-
-			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
-				setTimeout(() => {
-					this.readyState = IdleWebSocket.OPEN;
-					this.#emit("open", new Event("open"));
-				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
+		class IdleWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
 			}
 
 			send(): void {
 				sendCount += 1;
-			}
-
-			close(): void {
-				this.readyState = IdleWebSocket.CLOSED;
-			}
-
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
 			}
 		}
 
@@ -1979,104 +1614,29 @@ describe("openai-codex streaming", () => {
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
 
-		type WsListener = (event: Event) => void;
 		let constructorCount = 0;
 		const requestTypes: string[] = [];
 
-		class FlakyCloseWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = FlakyCloseWebSocket.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
-
-			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
+		class FlakyCloseWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
 				constructorCount += 1;
-				setTimeout(() => {
-					this.readyState = FlakyCloseWebSocket.OPEN;
-					this.#emit("open", new Event("open"));
-				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
+				this.scheduleOpen();
 			}
 
 			send(data: string): void {
 				const request = JSON.parse(data) as { type?: string };
 				requestTypes.push(typeof request.type === "string" ? request.type : "");
 				if (requestTypes.length === 1) {
-					this.readyState = FlakyCloseWebSocket.CLOSED;
-					this.#emit("close", { code: 1012 } as unknown as Event);
+					this.readyState = MockWebSocket.CLOSED;
+					this.emit("close", { code: 1012 } as unknown as Event);
 					return;
 				}
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.added",
-						item: {
-							type: "message",
-							id: "msg_retry_close",
-							role: "assistant",
-							status: "in_progress",
-							content: [],
-						},
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.output_text.delta", delta: "Hello retry close" }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.done",
-						item: {
-							type: "message",
-							id: "msg_retry_close",
-							role: "assistant",
-							status: "completed",
-							content: [{ type: "output_text", text: "Hello retry close" }],
-						},
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.done",
-						response: {
-							id: "resp_retry_close",
-							status: "completed",
-							usage: {
-								input_tokens: 5,
-								output_tokens: 3,
-								total_tokens: 8,
-								input_tokens_details: { cached_tokens: 0 },
-							},
-						},
-					}),
-				} as unknown as Event);
-			}
-
-			close(): void {
-				this.readyState = FlakyCloseWebSocket.CLOSED;
-			}
-
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
+				this.emitCodexResponse({
+					messageId: "msg_retry_close",
+					responseId: "resp_retry_close",
+					text: "Hello retry close",
+				});
 			}
 		}
 
@@ -2142,49 +1702,15 @@ describe("openai-codex streaming", () => {
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
 
-		type WsListener = (event: Event) => void;
-		class UnavailableBeforeStreamWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = UnavailableBeforeStreamWebSocket.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
-
-			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
+		class UnavailableBeforeStreamWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
 				setTimeout(() => {
-					this.readyState = UnavailableBeforeStreamWebSocket.OPEN;
-					this.#emit("open", new Event("open"));
-					this.readyState = UnavailableBeforeStreamWebSocket.CLOSED;
-					this.#emit("close", { code: 1006 } as unknown as Event);
+					this.readyState = MockWebSocket.OPEN;
+					this.emit("open", new Event("open"));
+					this.readyState = MockWebSocket.CLOSED;
+					this.emit("close", { code: 1006 } as unknown as Event);
 				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
-			}
-
-			send(): void {}
-
-			close(): void {
-				this.readyState = UnavailableBeforeStreamWebSocket.CLOSED;
-			}
-
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
 			}
 		}
 
@@ -2241,41 +1767,19 @@ describe("openai-codex streaming", () => {
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
 
-		type WsListener = (event: Event) => void;
 		const sentTypesByConnection: string[][] = [];
 		let constructorCount = 0;
 		let abortSecondRequest: (() => void) | undefined;
 
-		class AbortResetWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = AbortResetWebSocket.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
+		class AbortResetWebSocket extends MockWebSocket {
 			#connectionIndex: number;
 
-			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
 				this.#connectionIndex = constructorCount;
 				constructorCount += 1;
 				sentTypesByConnection[this.#connectionIndex] = [];
-				setTimeout(() => {
-					this.readyState = AbortResetWebSocket.OPEN;
-					this.#emit("open", new Event("open"));
-				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
+				this.scheduleOpen();
 			}
 
 			send(data: string): void {
@@ -2285,25 +1789,16 @@ describe("openai-codex streaming", () => {
 				const requestIndex = sentTypesByConnection[this.#connectionIndex]?.length ?? 0;
 
 				if (this.#connectionIndex === 0 && requestIndex === 1) {
-					this.#emitCompleted("msg_1", "resp_1", "Hello one");
+					this.emitCodexResponse({ messageId: "msg_1", responseId: "resp_1", text: "Hello one" });
 					return;
 				}
 				if (this.#connectionIndex === 0 && requestIndex === 2) {
-					this.#emit("message", {
-						data: JSON.stringify({
-							type: "response.output_item.added",
-							item: { type: "message", id: "msg_2", role: "assistant", status: "in_progress", content: [] },
-						}),
-					} as unknown as Event);
-					this.#emit("message", {
-						data: JSON.stringify({
-							type: "response.content_part.added",
-							part: { type: "output_text", text: "" },
-						}),
-					} as unknown as Event);
-					this.#emit("message", {
-						data: JSON.stringify({ type: "response.output_text.delta", delta: "Still streaming" }),
-					} as unknown as Event);
+					this.sendJson({
+						type: "response.output_item.added",
+						item: { type: "message", id: "msg_2", role: "assistant", status: "in_progress", content: [] },
+					});
+					this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+					this.sendJson({ type: "response.output_text.delta", delta: "Still streaming" });
 					setTimeout(() => {
 						abortSecondRequest?.();
 					}, 0);
@@ -2311,64 +1806,10 @@ describe("openai-codex streaming", () => {
 				}
 				if (this.#connectionIndex === 1 && requestIndex === 1) {
 					expect(requestType).toBe("response.create");
-					this.#emitCompleted("msg_3", "resp_3", "Hello three");
+					this.emitCodexResponse({ messageId: "msg_3", responseId: "resp_3", text: "Hello three" });
 					return;
 				}
 				throw new Error(`Unexpected websocket send sequence: ${this.#connectionIndex}:${requestIndex}`);
-			}
-
-			close(): void {
-				this.readyState = AbortResetWebSocket.CLOSED;
-			}
-
-			#emitCompleted(messageId: string, responseId: string, text: string): void {
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.added",
-						item: { type: "message", id: messageId, role: "assistant", status: "in_progress", content: [] },
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.output_text.delta", delta: text }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.done",
-						item: {
-							type: "message",
-							id: messageId,
-							role: "assistant",
-							status: "completed",
-							content: [{ type: "output_text", text }],
-						},
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.done",
-						response: {
-							id: responseId,
-							status: "completed",
-							usage: {
-								input_tokens: 5,
-								output_tokens: 3,
-								total_tokens: 8,
-								input_tokens_details: { cached_tokens: 0 },
-							},
-						},
-					}),
-				} as unknown as Event);
-			}
-
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
 			}
 		}
 
@@ -2452,37 +1893,14 @@ describe("openai-codex streaming", () => {
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
 
-		type WsListener = (event: Event) => void;
 		const sentTypes: string[] = [];
 		let constructorCount = 0;
 
-		class ErrorResetWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = ErrorResetWebSocket.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
-
-			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
+		class ErrorResetWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
 				constructorCount += 1;
-				setTimeout(() => {
-					this.readyState = ErrorResetWebSocket.OPEN;
-					this.#emit("open", new Event("open"));
-				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
+				this.scheduleOpen();
 			}
 
 			send(data: string): void {
@@ -2492,79 +1910,23 @@ describe("openai-codex streaming", () => {
 				const requestIndex = sentTypes.length;
 
 				if (requestIndex === 1) {
-					this.#emitCompleted("msg_1", "resp_1", "Hello one");
+					this.emitCodexResponse({ messageId: "msg_1", responseId: "resp_1", text: "Hello one" });
 					return;
 				}
 				if (requestIndex === 2) {
-					this.#emit("message", {
-						data: JSON.stringify({
-							type: "error",
-							code: "invalid_request_error",
-							message: "simulated request error",
-						}),
-					} as unknown as Event);
+					this.sendJson({
+						type: "error",
+						code: "invalid_request_error",
+						message: "simulated request error",
+					});
 					return;
 				}
 				if (requestIndex === 3) {
 					expect(requestType).toBe("response.create");
-					this.#emitCompleted("msg_3", "resp_3", "Hello three");
+					this.emitCodexResponse({ messageId: "msg_3", responseId: "resp_3", text: "Hello three" });
 					return;
 				}
 				throw new Error(`Unexpected websocket request index: ${requestIndex}`);
-			}
-
-			close(): void {
-				this.readyState = ErrorResetWebSocket.CLOSED;
-			}
-
-			#emitCompleted(messageId: string, responseId: string, text: string): void {
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.added",
-						item: { type: "message", id: messageId, role: "assistant", status: "in_progress", content: [] },
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.output_text.delta", delta: text }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.done",
-						item: {
-							type: "message",
-							id: messageId,
-							role: "assistant",
-							status: "completed",
-							content: [{ type: "output_text", text }],
-						},
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.done",
-						response: {
-							id: responseId,
-							status: "completed",
-							usage: {
-								input_tokens: 5,
-								output_tokens: 3,
-								total_tokens: 8,
-								input_tokens_details: { cached_tokens: 0 },
-							},
-						},
-					}),
-				} as unknown as Event);
-			}
-
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
 			}
 		}
 
@@ -2653,49 +2015,14 @@ describe("openai-codex streaming", () => {
 		);
 		global.fetch = fetchMock as unknown as typeof fetch;
 
-		type WsListener = (event: Event) => void;
-		class MalformedMessageWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = MalformedMessageWebSocket.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
-
-			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
-				setTimeout(() => {
-					this.readyState = MalformedMessageWebSocket.OPEN;
-					this.#emit("open", new Event("open"));
-				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
+		class MalformedMessageWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
 			}
 
 			send(): void {
-				this.#emit("message", { data: "{" } as unknown as Event);
-			}
-
-			close(): void {
-				this.readyState = MalformedMessageWebSocket.CLOSED;
-			}
-
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
+				this.sendMessage("{");
 			}
 		}
 
@@ -2755,68 +2082,27 @@ describe("openai-codex streaming", () => {
 		);
 		global.fetch = fetchMock as unknown as typeof fetch;
 
-		type WsListener = (event: Event) => void;
-		class BufferedCloseWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = BufferedCloseWebSocket.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
-
-			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
-				setTimeout(() => {
-					this.readyState = BufferedCloseWebSocket.OPEN;
-					this.#emit("open", new Event("open"));
-				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
+		class BufferedCloseWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
 			}
 
 			send(): void {
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.added",
-						item: {
-							type: "message",
-							id: "msg_ws_partial",
-							role: "assistant",
-							status: "in_progress",
-							content: [],
-						},
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.output_text.delta", delta: "Partial output" }),
-				} as unknown as Event);
-				this.readyState = BufferedCloseWebSocket.CLOSED;
-				this.#emit("close", { code: 1006 } as unknown as Event);
-			}
-
-			close(): void {
-				this.readyState = BufferedCloseWebSocket.CLOSED;
-			}
-
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
+				this.sendJson({
+					type: "response.output_item.added",
+					item: {
+						type: "message",
+						id: "msg_ws_partial",
+						role: "assistant",
+						status: "in_progress",
+						content: [],
+					},
+				});
+				this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+				this.sendJson({ type: "response.output_text.delta", delta: "Partial output" });
+				this.readyState = MockWebSocket.CLOSED;
+				this.emit("close", { code: 1006 } as unknown as Event);
 			}
 		}
 
@@ -2879,39 +2165,17 @@ describe("openai-codex streaming", () => {
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
 
-		type WsListener = (event: Event) => void;
 		const requestTypes: string[] = [];
-		class DivergedAppendWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-			readyState = DivergedAppendWebSocket.CONNECTING;
+		class DivergedAppendWebSocket extends MockWebSocket {
 			handshakeHeaders = {
 				"x-codex-turn-state": "ws-turn-state-1",
 				"x-models-etag": "ws-models-etag-1",
 			};
-			#listeners = new Map<string, Set<WsListener>>();
 			#sendCount = 0;
 
-			constructor(_url: string, _options?: { headers?: Record<string, string> }) {
-				setTimeout(() => {
-					this.readyState = DivergedAppendWebSocket.OPEN;
-					this.#emit("open", new Event("open"));
-				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
 			}
 
 			send(data: string): void {
@@ -2919,61 +2183,11 @@ describe("openai-codex streaming", () => {
 				const request = JSON.parse(data) as { type?: string };
 				requestTypes.push(typeof request.type === "string" ? request.type : "");
 				const idSuffix = String(this.#sendCount);
-				this.#emitCompleted(`msg_${idSuffix}`, `resp_${idSuffix}`, `Hello WS ${idSuffix}`);
-			}
-
-			close(): void {
-				this.readyState = DivergedAppendWebSocket.CLOSED;
-			}
-
-			#emitCompleted(messageId: string, responseId: string, text: string): void {
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.added",
-						item: { type: "message", id: messageId, role: "assistant", status: "in_progress", content: [] },
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.output_text.delta", delta: text }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.done",
-						item: {
-							type: "message",
-							id: messageId,
-							role: "assistant",
-							status: "completed",
-							content: [{ type: "output_text", text }],
-						},
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.done",
-						response: {
-							id: responseId,
-							status: "completed",
-							usage: {
-								input_tokens: 5,
-								output_tokens: 3,
-								total_tokens: 8,
-								input_tokens_details: { cached_tokens: 0 },
-							},
-						},
-					}),
-				} as unknown as Event);
-			}
-
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
+				this.emitCodexResponse({
+					messageId: `msg_${idSuffix}`,
+					responseId: `resp_${idSuffix}`,
+					text: `Hello WS ${idSuffix}`,
+				});
 			}
 		}
 
@@ -3043,103 +2257,24 @@ describe("openai-codex streaming", () => {
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
 
-		type WsListener = (event: Event) => void;
 		let constructorCount = 0;
 		let sendCount = 0;
-		class ReusableWebSocket {
-			static readonly CONNECTING = 0;
-			static readonly OPEN = 1;
-			static readonly CLOSING = 2;
-			static readonly CLOSED = 3;
-
-			readyState = ReusableWebSocket.CONNECTING;
-			#listeners = new Map<string, Set<WsListener>>();
-
-			constructor(
-				public readonly url: string,
-				public readonly options?: { headers?: Record<string, string> },
-			) {
+		class ReusableWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
 				constructorCount += 1;
-				setTimeout(() => {
-					this.readyState = ReusableWebSocket.OPEN;
-					this.#emit("open", new Event("open"));
-				}, 0);
-			}
-
-			addEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type) ?? new Set<WsListener>();
-				listeners.add(listener as WsListener);
-				this.#listeners.set(type, listeners);
-			}
-
-			removeEventListener(type: string, listener: unknown): void {
-				if (typeof listener !== "function") return;
-				const listeners = this.#listeners.get(type);
-				listeners?.delete(listener as WsListener);
+				this.scheduleOpen();
 			}
 
 			send(data: string): void {
 				sendCount += 1;
 				const request = JSON.parse(data) as Record<string, unknown>;
 				expect(typeof request.type).toBe("string");
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.added",
-						item: {
-							type: "message",
-							id: `msg_${sendCount}`,
-							role: "assistant",
-							status: "in_progress",
-							content: [],
-						},
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({ type: "response.output_text.delta", delta: `Hello ${sendCount}` }),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.output_item.done",
-						item: {
-							type: "message",
-							id: `msg_${sendCount}`,
-							role: "assistant",
-							status: "completed",
-							content: [{ type: "output_text", text: `Hello ${sendCount}` }],
-						},
-					}),
-				} as unknown as Event);
-				this.#emit("message", {
-					data: JSON.stringify({
-						type: "response.done",
-						response: {
-							id: `resp_${sendCount}`,
-							status: "completed",
-							usage: {
-								input_tokens: 5,
-								output_tokens: 3,
-								total_tokens: 8,
-								input_tokens_details: { cached_tokens: 0 },
-							},
-						},
-					}),
-				} as unknown as Event);
-			}
-
-			close(): void {
-				this.readyState = ReusableWebSocket.CLOSED;
-			}
-
-			#emit(type: string, event: Event): void {
-				const listeners = this.#listeners.get(type);
-				if (!listeners) return;
-				for (const listener of listeners) {
-					listener(event);
-				}
+				this.emitCodexResponse({
+					messageId: `msg_${sendCount}`,
+					responseId: `resp_${sendCount}`,
+					text: `Hello ${sendCount}`,
+				});
 			}
 		}
 
