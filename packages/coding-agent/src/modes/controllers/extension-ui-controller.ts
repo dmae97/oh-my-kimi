@@ -68,7 +68,7 @@ export class ExtensionUiController {
 			},
 			setFooter: () => {},
 			setHeader: () => {},
-			setEditorComponent: () => {},
+			setEditorComponent: factory => this.ctx.setEditorComponent(factory),
 			getToolsExpanded: () => this.ctx.toolOutputExpanded,
 			setToolsExpanded: expanded => this.ctx.setToolsExpanded(expanded),
 		};
