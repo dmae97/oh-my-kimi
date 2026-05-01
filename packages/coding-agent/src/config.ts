@@ -175,6 +175,15 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		return result;
 	}
 
+	getMtimeMs(): number | null {
+		try {
+			return fs.statSync(this.path()).mtimeMs;
+		} catch (err) {
+			if (isEnoent(err)) return null;
+			throw err;
+		}
+	}
+
 	withValidation(name: string, validate: (value: T) => void): this {
 		const prev = this.#auxValidate;
 		this.#auxValidate = (value: T) => {

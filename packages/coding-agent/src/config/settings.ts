@@ -398,21 +398,22 @@ export class Settings {
 	// ─────────────────────────────────────────────────────────────────────────
 
 	async #load(): Promise<Settings> {
+		// Project settings load (loadCapability scans cwd) is independent of the
+		// persist chain (storage open → legacy migration → global config.yml read),
+		// so kick it off first and await after the persist chain completes. The
+		// persist steps remain sequential: migration may write config.yml, which
+		// #loadYaml then reads; migration's db fallback needs #storage opened.
+		const projectPromise = this.#loadProjectSettings();
+
 		if (this.#persist) {
-			// Open storage
 			this.#storage = await AgentStorage.open(getAgentDbPath(this.#agentDir));
-
-			// Migrate from legacy formats if needed
 			await this.#migrateFromLegacy();
-
-			// Load global settings from config.yml
 			this.#global = await this.#loadYaml(this.#configPath!);
 		}
 
-		// Load project settings
-		this.#project = await this.#loadProjectSettings();
+		this.#project = await projectPromise;
 
-		// Build merged view
+		// Build merged view (global → project → overrides; project wins over global)
 		this.#rebuildMerged();
 		this.#fireAllHooks();
 		return this;

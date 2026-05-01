@@ -418,8 +418,17 @@ function disambiguateClosingBraces(template: string): string {
 	return template.replace(/\}\}(\}+)/g, "}}{{!---}}$1");
 }
 
+const compiledTemplateCache = new Map<string, (context: TemplateContext) => string>();
+
 export function compile(template: string): (context: TemplateContext) => string {
-	return handlebars.compile(disambiguateClosingBraces(template), { noEscape: true, strict: false });
+	const disambiguated = disambiguateClosingBraces(template);
+	const cached = compiledTemplateCache.get(disambiguated);
+	if (cached) return cached;
+	const compiled = handlebars.compile(disambiguated, { noEscape: true, strict: false }) as (
+		context: TemplateContext,
+	) => string;
+	compiledTemplateCache.set(disambiguated, compiled);
+	return compiled;
 }
 
 export function render(template: string, context: TemplateContext = {}): string {

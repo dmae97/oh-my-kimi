@@ -797,6 +797,7 @@ export class ModelRegistry {
 	#equivalenceConfig: ModelEquivalenceConfig | undefined;
 	#configError: ConfigError | undefined = undefined;
 	#modelsConfigFile: ConfigFile<ModelsConfig>;
+	#lastStaticLoadMtime: number | null = null;
 	#registeredProviderSources: Set<string> = new Set();
 	#providerDiscoveryStates: Map<string, ProviderDiscoveryState> = new Map();
 	#cacheDbPath?: string;
@@ -882,6 +883,11 @@ export class ModelRegistry {
 	}
 
 	#reloadStaticModels(): void {
+		const currentMtime = this.#modelsConfigFile.getMtimeMs();
+		if (currentMtime !== null && currentMtime === this.#lastStaticLoadMtime) {
+			// models.json unchanged since last load; reload + canonical rebuild would be redundant.
+			return;
+		}
 		this.#modelsConfigFile.invalidate();
 		this.#customProviderApiKeys.clear();
 		this.#keylessProviders.clear();
@@ -936,6 +942,7 @@ export class ModelRegistry {
 		const withModelOverrides = this.#applyModelOverrides(combined, this.#modelOverrides);
 		this.#models = this.#applyRuntimeProviderOverrides(withModelOverrides);
 		this.#rebuildCanonicalIndex();
+		this.#lastStaticLoadMtime = this.#modelsConfigFile.getMtimeMs();
 	}
 
 	/** Load built-in models, applying provider-level overrides only.
@@ -959,14 +966,19 @@ export class ModelRegistry {
 
 	#mergeResolvedModels(baseModels: Model<Api>[], replacementModels: Model<Api>[]): Model<Api>[] {
 		const merged = [...baseModels];
+		const indexByKey = new Map<string, number>();
+		for (let i = 0; i < merged.length; i += 1) {
+			const m = merged[i];
+			indexByKey.set(`${m.provider}\u0000${m.id}`, i);
+		}
 		for (const replacementModel of replacementModels) {
-			const existingIndex = merged.findIndex(
-				m => m.provider === replacementModel.provider && m.id === replacementModel.id,
-			);
-			if (existingIndex >= 0) {
+			const key = `${replacementModel.provider}\u0000${replacementModel.id}`;
+			const existingIndex = indexByKey.get(key);
+			if (existingIndex !== undefined) {
 				merged[existingIndex] = replacementModel;
 			} else {
 				merged.push(replacementModel);
+				indexByKey.set(key, merged.length - 1);
 			}
 		}
 		return merged;
@@ -975,9 +987,15 @@ export class ModelRegistry {
 	/** Merge custom models with built-in, replacing by provider+id match */
 	#mergeCustomModels(builtInModels: Model<Api>[], customModels: CustomModelOverlay[]): Model<Api>[] {
 		const merged = [...builtInModels];
+		const indexByKey = new Map<string, number>();
+		for (let i = 0; i < merged.length; i += 1) {
+			const m = merged[i];
+			indexByKey.set(`${m.provider}\u0000${m.id}`, i);
+		}
 		for (const customModel of customModels) {
-			const existingIndex = merged.findIndex(m => m.provider === customModel.provider && m.id === customModel.id);
-			if (existingIndex >= 0) {
+			const key = `${customModel.provider}\u0000${customModel.id}`;
+			const existingIndex = indexByKey.get(key);
+			if (existingIndex !== undefined) {
 				const existingModel = merged[existingIndex];
 				merged[existingIndex] = enrichModelThinking({
 					...existingModel,
@@ -1002,6 +1020,7 @@ export class ModelRegistry {
 				} as Model<Api>);
 			} else {
 				merged.push(finalizeCustomModel(customModel, { useDefaults: true }));
+				indexByKey.set(key, merged.length - 1);
 			}
 		}
 		return merged;
@@ -2047,6 +2066,7 @@ export class ModelRegistry {
 			this.#runtimeProviderSourceByName.delete(providerName);
 			this.#clearRuntimeProviderState(providerName);
 		}
+		this.#lastStaticLoadMtime = null;
 		this.#reloadStaticModels();
 		this.#rebuildCanonicalIndex();
 	}
@@ -2125,6 +2145,7 @@ export class ModelRegistry {
 			this.#runtimeProviderSourceByName.set(providerName, sourceId);
 		}
 		if (sourceHandoff) {
+			this.#lastStaticLoadMtime = null;
 			this.#reloadStaticModels();
 		}
 
