@@ -416,19 +416,12 @@ pub(crate) fn execute_external_command(
 		}
 	}
 
-	// If we're to lead our own process group and stdin is a terminal,
-	// then we need to arrange for the new process to move itself
-	// to the foreground. Otherwise (e.g. when brush is embedded as a library
-	// and stdin is not a terminal), detach the child from the controlling
-	// terminal entirely so it cannot steal foreground from the parent and
-	// so any `/dev/tty` access in the child fails fast instead of suspending
-	// it via SIGTTIN/SIGTTOU.
-	if new_pg {
-		if child_stdin_is_terminal {
-			cmd.take_foreground();
-		} else {
-			cmd.detach_session();
-		}
+	// See `child_session_action` for the decision rationale and call-out about
+	// pipeline groups.
+	match child_session_action(new_pg, child_stdin_is_terminal, process_group_id.is_some()) {
+		ChildSessionAction::DetachSession => cmd.detach_session(),
+		ChildSessionAction::TakeForeground => cmd.take_foreground(),
+		ChildSessionAction::None => {}
 	}
 
 	// When tracing is enabled, report.
@@ -762,4 +755,53 @@ fn try_unwrap_bare_input_redir_program(program: &ast::Program) -> Option<&ast::I
 		) if fd.is_none_or(|fd| fd == openfiles::OpenFiles::STDIN_FD) => Some(redir),
 		_ => None,
 	}
+}
+
+
+/// What to do with the child's controlling-tty/session ownership immediately
+/// before spawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildSessionAction {
+	/// Call `setsid()` (via `cmd.detach_session()`) so the child cannot stop
+	/// the parent through SIGTTIN/SIGTTOU on the inherited tty.
+	DetachSession,
+	/// Move the child to the foreground of its tty so it participates in
+	/// interactive job control.
+	TakeForeground,
+	/// Leave session/foreground state alone.
+	None,
+}
+
+/// Decide whether to detach the child's session, foreground it, or do nothing.
+///
+/// The pre-fix code only detached when `new_pg` was set, which is gated on
+/// brush's `interactive` flag. When brush is embedded in a non-interactive host
+/// (e.g. `pi-natives` inside OMP), `new_pg` is false, the child inherited the
+/// host's controlling tty, and any `/dev/tty` open or `tcsetpgrp` call from the
+/// child could SIGTTIN/SIGTTOU and stop the host.
+///
+/// `detach_session()` is also unsafe to call when joining an established
+/// pipeline group (`!new_pg && in_pipeline_group`): `setsid()` would either
+/// fail with EPERM or move the child into a fresh session, breaking the
+/// pipeline's shared process group and its job-control signal propagation.
+/// Pipeline stages therefore keep their pre-fix behavior (no detach).
+///
+/// `take_foreground()` is preserved exactly: still gated on
+/// `new_pg && child_stdin_is_terminal`.
+pub fn child_session_action(
+	new_pg: bool,
+	child_stdin_is_terminal: bool,
+	in_pipeline_group: bool,
+) -> ChildSessionAction {
+	if new_pg && child_stdin_is_terminal {
+		return ChildSessionAction::TakeForeground;
+	}
+	if child_stdin_is_terminal {
+		return ChildSessionAction::None;
+	}
+	let joining_pipeline_group = !new_pg && in_pipeline_group;
+	if joining_pipeline_group {
+		return ChildSessionAction::None;
+	}
+	ChildSessionAction::DetachSession
 }
