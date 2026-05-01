@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.5.13] - 2026-05-01
 ### Changed
 
 - Stopped overriding `CARGO_TARGET_DIR` with an internal `target/napi-build/...` directory during native builds, so Cargo now uses the default or caller-provided target directory

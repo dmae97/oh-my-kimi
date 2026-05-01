@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.5.13] - 2026-05-01
+
 ### Breaking Changes
 
 - Removed the built-in `python` tool in favor of `eval`, so tool allowlists and tool-call handlers referencing `python` need to migrate
