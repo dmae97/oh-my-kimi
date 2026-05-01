@@ -1653,6 +1653,25 @@ function isZaiAnthropicEndpoint(model: Model<"anthropic-messages">): boolean {
 	}
 }
 
+/**
+ * Returns true for providers whose Anthropic-compatible endpoints do NOT
+ * implement signature-based thinking-chain integrity (DeepSeek, Z.AI, etc.).
+ * For these providers, unsigned thinking blocks must be preserved as
+ * `type: "thinking"` instead of being degraded to text.
+ */
+function isNonSigningAnthropicEndpoint(model: Model<"anthropic-messages">): boolean {
+	// Known non-signing providers
+	if (model.provider === "zai" || model.provider === "deepseek") return true;
+	const baseUrl = model.baseUrl;
+	if (!baseUrl) return false;
+	try {
+		const hostname = new URL(baseUrl).hostname.toLowerCase();
+		return hostname === "api.deepseek.com" || hostname.endsWith(".deepseek.com");
+	} catch {
+		return false;
+	}
+}
+
 function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResultMessage): ContentBlockParam {
 	const block: ContentBlockParam = {
 		type: "tool_result",
@@ -1752,10 +1771,18 @@ export function convertAnthropicMessages(
 					}
 					if (block.thinking.trim().length === 0) continue;
 					if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
-						blocks.push({
-							type: "text",
-							text: block.thinking.toWellFormed(),
-						});
+						if (isNonSigningAnthropicEndpoint(model)) {
+							blocks.push({
+								type: "thinking",
+								thinking: block.thinking.toWellFormed(),
+								signature: "",
+							});
+						} else {
+							blocks.push({
+								type: "text",
+								text: block.thinking.toWellFormed(),
+							});
+						}
 					} else {
 						blocks.push({
 							type: "thinking",
