@@ -61,7 +61,25 @@ const TRAILING_CANONICAL_MARKERS = [
 	"int8",
 	"int4",
 ] as const;
+const TRAILING_MARKER_SUFFIXES: readonly string[] = (() => {
+	const suffixes: string[] = [];
+	for (const marker of TRAILING_CANONICAL_MARKERS) {
+		const lower = marker.toLowerCase();
+		suffixes.push(`-${lower}`, `:${lower}`);
+	}
+	return suffixes;
+})();
 const WRAPPER_PREFIXES = ["duo-chat-"] as const;
+
+let __referenceDataCache: CanonicalReferenceData | undefined;
+const EMPTY_COMPILED_EQUIVALENCE: CompiledEquivalenceConfig = {
+	overrides: new Map<string, string>(),
+	exclude: new Set<string>(),
+};
+const __resolutionCache: WeakMap<
+	CompiledEquivalenceConfig,
+	WeakMap<Model<Api>, ResolvedCanonicalModel>
+> = new WeakMap();
 const FAMILY_EXTRACTION_PATTERNS = [
 	/(?:^|[/:._-])((?:claude|gemini|gpt|grok|glm|qwen|minimax|kimi|deepseek|llama|gemma|nova|mistral|ministral|pixtral|codestral|devstral|magistral|ernie|doubao|seed|aion|olmo|molmo|nemotron|palmyra|command|codex|coder|o[1345])[-a-z0-9.]+)(?::|$)/i,
 	/(?:^|[/:._-])((?:claude|gemini|gpt|grok|glm|qwen|minimax|kimi|deepseek|llama|gemma|nova|mistral|ministral|pixtral|codestral|devstral|magistral|ernie|doubao|seed|aion|olmo|molmo|nemotron|palmyra|command|codex|coder|o[1345])[-a-z0-9.]+(?:[-_/][a-z0-9.]+)*)(?::|$)/i,
@@ -79,6 +97,9 @@ function shouldReplaceReference(existing: Model<Api> | undefined, candidate: Mod
 }
 
 function createCanonicalReferenceData(): CanonicalReferenceData {
+	if (__referenceDataCache) {
+		return __referenceDataCache;
+	}
 	const references = new Map<string, Model<Api>>();
 	for (const provider of getBundledProviders()) {
 		for (const model of getBundledModels(provider as Parameters<typeof getBundledModels>[0])) {
@@ -89,10 +110,12 @@ function createCanonicalReferenceData(): CanonicalReferenceData {
 			}
 		}
 	}
-	return {
-		references,
-		officialIds: new Set(references.keys()),
+	const officialIds = new Set(references.keys());
+	__referenceDataCache = {
+		references: Object.freeze(references) as Map<string, Model<Api>>,
+		officialIds: Object.freeze(officialIds) as Set<string>,
 	};
+	return __referenceDataCache;
 }
 
 function normalizeSelectorKey(selector: string): string {
@@ -135,10 +158,12 @@ function buildExclusionSet(exclusions: readonly string[] | undefined): Set<strin
 }
 
 function compileEquivalenceConfig(config: ModelEquivalenceConfig | undefined): CompiledEquivalenceConfig {
-	return {
-		overrides: buildOverrideMap(config?.overrides),
-		exclude: buildExclusionSet(config?.exclude),
-	};
+	const overrides = buildOverrideMap(config?.overrides);
+	const exclude = buildExclusionSet(config?.exclude);
+	if (overrides.size === 0 && exclude.size === 0) {
+		return EMPTY_COMPILED_EQUIVALENCE;
+	}
+	return { overrides, exclude };
 }
 
 function addCanonicalCandidate(candidates: Set<string>, candidate: string): void {
@@ -149,12 +174,10 @@ function addCanonicalCandidate(candidates: Set<string>, candidate: string): void
 }
 
 function stripTrailingMarker(candidate: string): string | undefined {
-	for (const marker of TRAILING_CANONICAL_MARKERS) {
-		for (const separator of ["-", ":"] as const) {
-			const suffix = `${separator}${marker}`;
-			if (candidate.toLowerCase().endsWith(suffix)) {
-				return candidate.slice(0, -suffix.length);
-			}
+	const lower = candidate.toLowerCase();
+	for (const suffix of TRAILING_MARKER_SUFFIXES) {
+		if (lower.endsWith(suffix)) {
+			return candidate.slice(0, -suffix.length);
 		}
 	}
 	return undefined;
@@ -450,8 +473,8 @@ function getHeuristicCanonicalCandidates(modelId: string): string[] {
 	const queue = [modelId];
 	const visited = new Set<string>();
 
-	while (queue.length > 0) {
-		const candidate = queue.shift();
+	for (let qi = 0; qi < queue.length; qi += 1) {
+		const candidate = queue[qi];
 		if (!candidate) {
 			continue;
 		}
@@ -644,8 +667,18 @@ export function buildCanonicalModelIndex(
 	const byId = new Map<string, CanonicalModelRecord>();
 	const bySelector = new Map<string, string>();
 
+	let modelCache = __resolutionCache.get(compiledEquivalence);
+	if (!modelCache) {
+		modelCache = new WeakMap<Model<Api>, ResolvedCanonicalModel>();
+		__resolutionCache.set(compiledEquivalence, modelCache);
+	}
+
 	for (const model of models) {
-		const canonical = resolveCanonicalIdForModel(model, compiledEquivalence, referenceData);
+		let canonical = modelCache.get(model);
+		if (!canonical) {
+			canonical = resolveCanonicalIdForModel(model, compiledEquivalence, referenceData);
+			modelCache.set(model, canonical);
+		}
 		const selector = formatCanonicalVariantSelector(model);
 		const variant: CanonicalModelVariant = {
 			canonicalId: canonical.id,

@@ -294,15 +294,21 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const allowPython = backends.python;
 	const allowJs = backends.js;
 	const skipPythonPreflight = session.skipPythonPreflight === true;
+	// Eval tool is enabled if EITHER backend is reachable. We only need to know
+	// whether python is reachable when JS is disabled — otherwise allowEval is
+	// already true and the python-availability check can be deferred to first
+	// invocation of the python backend (already handled inside the executor).
 	let pythonAvailable = true;
-	const shouldCheckPython =
-		!skipPythonPreflight && allowPython && (requestedTools === undefined || requestedTools.includes("eval"));
-
-	if (shouldCheckPython) {
+	if (
+		!skipPythonPreflight &&
+		allowPython &&
+		!allowJs &&
+		(requestedTools === undefined || requestedTools.includes("eval"))
+	) {
 		const availability = await logger.time("createTools:pythonCheck", checkPythonKernelAvailability, session.cwd);
 		pythonAvailable = availability.ok;
 		if (!availability.ok) {
-			logger.warn("Python kernel unavailable; eval will dispatch to JavaScript backend", {
+			logger.warn("Python kernel unavailable and JS backend disabled; eval will be unavailable", {
 				reason: availability.reason,
 			});
 		}

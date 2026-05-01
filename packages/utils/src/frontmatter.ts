@@ -8,23 +8,33 @@ function stripHtmlComments(content: string): string {
 
 /** Convert kebab-case to camelCase (e.g. "thinking-level" -> "thinkingLevel") */
 function kebabToCamel(key: string): string {
+	if (!key.includes("-")) return key;
 	return key.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 }
 
 /** Recursively normalize object keys from kebab-case to camelCase */
 function normalizeKeys<T>(obj: T): T {
-	if (obj === null || typeof obj !== "object") {
-		return obj;
-	}
+	if (obj === null || typeof obj !== "object") return obj;
 	if (Array.isArray(obj)) {
-		return obj.map(normalizeKeys) as T;
+		let changed = false;
+		const out: unknown[] = new Array(obj.length);
+		for (let i = 0; i < obj.length; i++) {
+			const v = obj[i];
+			const nv = normalizeKeys(v);
+			out[i] = nv;
+			if (nv !== v) changed = true;
+		}
+		return (changed ? (out as unknown) : obj) as T;
 	}
+	let changed = false;
 	const result: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-		const normalizedKey = kebabToCamel(key);
-		result[normalizedKey] = normalizeKeys(value);
+		const nk = key.includes("-") ? kebabToCamel(key) : key;
+		const nv = normalizeKeys(value);
+		result[nk] = nv;
+		if (nk !== key || nv !== value) changed = true;
 	}
-	return result as T;
+	return (changed ? result : obj) as T;
 }
 
 export class FrontmatterError extends Error {

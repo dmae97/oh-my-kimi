@@ -2,10 +2,9 @@
  * System prompt construction and project context loading
  */
 
-import * as fs from "node:fs";
 import * as os from "node:os";
-import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import { FileType, glob } from "@oh-my-pi/pi-natives";
 import { $env, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { contextFileCapability } from "./capability/context-file";
@@ -96,68 +95,31 @@ export interface AgentsMdSearch {
 	files: string[];
 }
 
-function normalizePath(value: string): string {
-	return value.replace(/\\/g, "/");
-}
-
-function shouldSkipAgentsDir(name: string): boolean {
-	if (AGENTS_MD_EXCLUDED_DIRS.has(name)) return true;
-	return name.startsWith(".");
-}
-
-async function collectAgentsMdFiles(
-	root: string,
-	dir: string,
-	depth: number,
-	limit: number,
-	discovered: Set<string>,
-): Promise<void> {
-	if (depth > AGENTS_MD_MAX_DEPTH || discovered.size >= limit) {
-		return;
-	}
-
-	let entries: fs.Dirent[];
-	try {
-		entries = await fs.promises.readdir(dir, { withFileTypes: true });
-	} catch {
-		return;
-	}
-
-	if (depth >= AGENTS_MD_MIN_DEPTH) {
-		const hasAgentsMd = entries.some(entry => entry.isFile() && entry.name === "AGENTS.md");
-		if (hasAgentsMd) {
-			const relPath = normalizePath(path.relative(root, path.join(dir, "AGENTS.md")));
-			if (relPath.length > 0) {
-				discovered.add(relPath);
-			}
-			if (discovered.size >= limit) {
-				return;
-			}
-		}
-	}
-
-	if (depth === AGENTS_MD_MAX_DEPTH) {
-		return;
-	}
-
-	const childDirs = entries
-		.filter(entry => entry.isDirectory() && !shouldSkipAgentsDir(entry.name))
-		.map(entry => entry.name)
-		.sort();
-
-	await Promise.all(
-		childDirs.map(async child => {
-			if (discovered.size >= limit) return;
-			await collectAgentsMdFiles(root, path.join(dir, child), depth + 1, limit, discovered);
-		}),
-	);
-}
-
 async function listAgentsMdFiles(root: string, limit: number): Promise<string[]> {
 	try {
-		const discovered = new Set<string>();
-		await collectAgentsMdFiles(root, root, 0, limit, discovered);
-		return Array.from(discovered).sort().slice(0, limit);
+		const result = await glob({
+			pattern: "**/AGENTS.md",
+			path: root,
+			fileType: FileType.File,
+			recursive: true,
+			hidden: false,
+			gitignore: true,
+			maxResults: limit * 4,
+			cache: true,
+		});
+		const files: string[] = [];
+		for (const m of result.matches) {
+			const rel = m.path.replace(/\\/g, "/");
+			if (!rel?.endsWith("AGENTS.md")) continue;
+			const segments = rel.split("/");
+			const depth = segments.length - 1;
+			if (depth < AGENTS_MD_MIN_DEPTH || depth > AGENTS_MD_MAX_DEPTH) continue;
+			const dirSegments = segments.slice(0, -1);
+			if (dirSegments.some(seg => AGENTS_MD_EXCLUDED_DIRS.has(seg) || seg.startsWith("."))) continue;
+			files.push(rel);
+			if (files.length >= limit) break;
+		}
+		return Array.from(new Set(files)).sort().slice(0, limit);
 	} catch {
 		return [];
 	}

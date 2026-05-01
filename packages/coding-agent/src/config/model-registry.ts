@@ -810,6 +810,8 @@ export class ModelRegistry {
 	#runtimeProviderOverrides: Map<string, ProviderOverride> = new Map();
 	#runtimeProvidersBySource: Map<string, Set<string>> = new Map();
 	#runtimeProviderSourceByName: Map<string, string> = new Map();
+	#rebuildPending: boolean = false;
+	#rebuildSuspended: number = 0;
 
 	/**
 	 * @param authStorage - Auth storage for API key resolution
@@ -836,9 +838,14 @@ export class ModelRegistry {
 	 * Reload models from disk (built-in + custom from models.json).
 	 */
 	async refresh(strategy: ModelRefreshStrategy = "online-if-uncached"): Promise<void> {
-		this.#reloadStaticModels();
-		this.#suppressedSelectors.clear();
-		await this.#refreshRuntimeDiscoveries(strategy);
+		this.#suspendRebuild();
+		try {
+			this.#reloadStaticModels();
+			this.#suppressedSelectors.clear();
+			await this.#refreshRuntimeDiscoveries(strategy);
+		} finally {
+			this.#resumeRebuild();
+		}
 	}
 
 	refreshInBackground(strategy: ModelRefreshStrategy = "online-if-uncached"): void {
@@ -860,13 +867,18 @@ export class ModelRegistry {
 	}
 
 	async refreshProvider(providerId: string, strategy: ModelRefreshStrategy = "online"): Promise<void> {
-		this.#reloadStaticModels();
-		for (const selector of this.#suppressedSelectors.keys()) {
-			if (selector.startsWith(`${providerId}/`)) {
-				this.#suppressedSelectors.delete(selector);
+		this.#suspendRebuild();
+		try {
+			this.#reloadStaticModels();
+			for (const selector of this.#suppressedSelectors.keys()) {
+				if (selector.startsWith(`${providerId}/`)) {
+					this.#suppressedSelectors.delete(selector);
+				}
 			}
+			await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
+		} finally {
+			this.#resumeRebuild();
 		}
-		await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
 	}
 
 	#reloadStaticModels(): void {
@@ -1756,7 +1768,26 @@ export class ModelRegistry {
 	}
 
 	#rebuildCanonicalIndex(): void {
+		if (this.#rebuildSuspended > 0) {
+			this.#rebuildPending = true;
+			return;
+		}
 		this.#canonicalIndex = buildCanonicalModelIndex(this.#models, this.#equivalenceConfig);
+		this.#rebuildPending = false;
+	}
+
+	#suspendRebuild(): void {
+		this.#rebuildSuspended += 1;
+	}
+
+	#resumeRebuild(): void {
+		if (this.#rebuildSuspended > 0) {
+			this.#rebuildSuspended -= 1;
+		}
+		if (this.#rebuildSuspended === 0 && this.#rebuildPending) {
+			this.#rebuildPending = false;
+			this.#canonicalIndex = buildCanonicalModelIndex(this.#models, this.#equivalenceConfig);
+		}
 	}
 
 	#parseModels(config: ModelsConfig): CustomModelOverlay[] {

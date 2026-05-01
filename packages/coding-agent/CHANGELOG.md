@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Removed the built-in `python` tool in favor of `eval`, so tool allowlists and tool-call handlers referencing `python` need to migrate
@@ -19,10 +20,17 @@
 
 ### Changed
 
+- Changed AGENTS.md discovery to respect `.gitignore` files during project context collection so ignored context files are no longer loaded
+- Changed eval tool initialization to skip Python kernel preflight when the JavaScript backend is enabled, avoiding unnecessary startup checks
+- Changed model registry refresh flow to defer rebuilding the canonical model index until refresh operations complete, reducing refresh churn
 - Changed execution/tool discovery flow so `exec` maps to `eval` when any `eval` backend is enabled, while `bash` stays independently available
 - Changed `eval` dispatch to automatically fall back to JavaScript when Python is unavailable and JavaScript backend is enabled
 - Parallelized plugin root preloading with other startup initialization in `runRootCommand` to reduce startup latency
 - Parallelized session bootstrap work in `createAgentSession`, including AGENTS.md scanning, context discovery, prompt template loading, slash command loading, and skill discovery, to reduce time to first available session
+
+### Fixed
+
+- Fixed eval startup messaging to report `eval` as unavailable when Python is unreachable and JavaScript backend is disabled
 
 ## [14.5.12] - 2026-04-30
 
