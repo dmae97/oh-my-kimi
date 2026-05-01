@@ -1,6 +1,5 @@
 import { untilAborted } from "@oh-my-pi/pi-utils";
-import type { StreamInfo } from "markit-ai";
-import { Markit } from "markit-ai";
+import type { Markit, StreamInfo } from "markit-ai";
 import { ToolAbortError } from "../tools/tool-errors";
 
 export interface MarkitConversionResult {
@@ -9,7 +8,15 @@ export interface MarkitConversionResult {
 	error?: string;
 }
 
-const markit = new Markit();
+let markit: () => Markit | Promise<Markit> = async () => {
+	const promise = import("markit-ai").then(({ Markit }) => {
+		const instance = new Markit();
+		markit = () => instance;
+		return instance;
+	});
+	markit = () => promise;
+	return promise;
+};
 
 function normalizeExtension(extension: string): string {
 	const trimmed = extension.trim().toLowerCase();
@@ -24,9 +31,10 @@ function normalizeError(error: unknown): string {
 	return "Conversion failed";
 }
 
-async function runMarkitConversion<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+async function runMarkitConversion<T>(task: (markit: Markit) => Promise<T>, signal?: AbortSignal): Promise<T> {
 	try {
-		return signal ? await untilAborted(signal, task) : await task();
+		const instance = await markit();
+		return signal ? await untilAborted(signal, () => task(instance)) : await task(instance);
 	} catch (error) {
 		if (error instanceof ToolAbortError) {
 			throw error;
@@ -48,7 +56,7 @@ function finalizeConversion(markdown?: string): MarkitConversionResult {
 
 export async function convertFileWithMarkit(filePath: string, signal?: AbortSignal): Promise<MarkitConversionResult> {
 	try {
-		const result = await runMarkitConversion(() => markit.convertFile(filePath), signal);
+		const result = await runMarkitConversion(markit => markit.convertFile(filePath), signal);
 		return finalizeConversion(result.markdown);
 	} catch (error) {
 		if (error instanceof ToolAbortError) {
@@ -70,7 +78,7 @@ export async function convertBufferWithMarkit(
 	};
 
 	try {
-		const result = await runMarkitConversion(() => markit.convert(Buffer.from(buffer), streamInfo), signal);
+		const result = await runMarkitConversion(markit => markit.convert(Buffer.from(buffer), streamInfo), signal);
 		return finalizeConversion(result.markdown);
 	} catch (error) {
 		if (error instanceof ToolAbortError) {
