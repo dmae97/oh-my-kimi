@@ -120,6 +120,30 @@ describe("azure openai responses streaming", () => {
 		expect(result.errorMessage).toContain("incomplete: max_output_tokens");
 	});
 
+	it("surfaces response.completed failed status_details errors", async () => {
+		global.fetch = vi.fn(async () =>
+			createSseResponse([
+				{
+					type: "response.completed",
+					response: {
+						status: "failed",
+						status_details: {
+							error: { code: "server_error", message: "backend exploded late" },
+						},
+					},
+				},
+			]),
+		) as unknown as typeof fetch;
+
+		const result = await streamAzureOpenAIResponses(
+			azureModel,
+			{ messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }] },
+			{ apiKey: "test-key", azureBaseUrl: azureModel.baseUrl, azureApiVersion: "v1" },
+		).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("server_error: backend exploded late");
+	});
 	it("preserves assistant message phase when rebuilding fallback replay history", async () => {
 		const payload = await captureAzurePayload({
 			messages: [
