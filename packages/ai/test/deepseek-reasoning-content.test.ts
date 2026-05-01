@@ -14,7 +14,7 @@ function deepseekModel(overrides: Partial<Model<"openai-completions">>): Model<"
 
 function assistantToolCall(
 	model: Model<"openai-completions">,
-	content?: Array<{ type: string; [key: string]: unknown }>,
+	content?: AssistantMessage["content"],
 ): AssistantMessage {
 	return {
 		role: "assistant",

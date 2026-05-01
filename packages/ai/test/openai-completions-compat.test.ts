@@ -82,6 +82,7 @@ describe("openai-completions compatibility", () => {
 			thinkingFormat: "openai",
 			reasoningContentField: "reasoning_content",
 			requiresReasoningContentForToolCalls: false,
+			allowsSyntheticReasoningContentForToolCalls: true,
 			requiresAssistantContentForToolCalls: false,
 			openRouterRouting: {},
 			vercelGatewayRouting: {},
