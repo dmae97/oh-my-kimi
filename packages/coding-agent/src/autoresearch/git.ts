@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "../extensibility/extensions";
 import * as git from "../utils/git";
-import { isAutoresearchLocalStatePath, normalizeAutoresearchPath } from "./helpers";
+import { normalizePathSpec } from "./helpers";
 
 const AUTORESEARCH_BRANCH_PREFIX = "autoresearch/";
 const BRANCH_NAME_MAX_LENGTH = 48;
@@ -11,9 +11,10 @@ export interface EnsureAutoresearchBranchFailure {
 }
 
 export interface EnsureAutoresearchBranchSuccess {
-	branchName: string;
+	branchName: string | null;
 	created: boolean;
 	ok: true;
+	warning?: string;
 }
 
 export type EnsureAutoresearchBranchResult = EnsureAutoresearchBranchFailure | EnsureAutoresearchBranchSuccess;
@@ -23,6 +24,14 @@ export async function getCurrentAutoresearchBranch(_api: ExtensionAPI, workDir: 
 	return currentBranch.startsWith(AUTORESEARCH_BRANCH_PREFIX) ? currentBranch : null;
 }
 
+/**
+ * Ensure the working tree is on an `autoresearch/*` branch when possible.
+ *
+ * If the worktree is dirty and we're not already on an autoresearch branch, this returns
+ * `{ ok: true, branchName: null, warning }` rather than failing. The caller surfaces the
+ * warning and continues on the current branch — `keep` will skip auto-commits and `discard`
+ * will revert only run-modified paths instead of resetting to baseline.
+ */
 export async function ensureAutoresearchBranch(
 	api: ExtensionAPI,
 	workDir: string,
@@ -31,40 +40,38 @@ export async function ensureAutoresearchBranch(
 	const repoRoot = await git.repo.root(workDir);
 	if (!repoRoot) {
 		return {
-			error: "Autoresearch requires a git repository so it can isolate experiments and revert failed runs safely.",
-			ok: false,
+			ok: true,
+			branchName: null,
+			created: false,
+			warning:
+				"Not in a git repository — autoresearch will run without branch isolation, baseline reset, or auto-commits.",
 		};
 	}
 
 	let dirtyPathsOutput: string;
 	try {
-		dirtyPathsOutput = await git.status(repoRoot, {
-			porcelainV1: true,
-			untrackedFiles: "all",
-			z: true,
-		});
+		dirtyPathsOutput = await git.status(repoRoot, { porcelainV1: true, untrackedFiles: "all", z: true });
 	} catch (err) {
 		return {
-			error: `Unable to inspect git status before starting autoresearch: ${err instanceof Error ? err.message : String(err)}`,
 			ok: false,
+			error: `Unable to inspect git status before starting autoresearch: ${err instanceof Error ? err.message : String(err)}`,
 		};
 	}
 
 	const workDirPrefix = await readGitWorkDirPrefix(api, workDir);
-	const unsafeDirtyPaths = collectUnsafeDirtyPaths(dirtyPathsOutput, workDirPrefix);
+	const dirtyPaths = collectRelativeDirtyPaths(dirtyPathsOutput, workDirPrefix);
 	const currentBranch = await getCurrentAutoresearchBranch(api, workDir);
 	if (currentBranch) {
-		if (unsafeDirtyPaths.length > 0) {
-			return buildUnsafeDirtyPathsFailure(unsafeDirtyPaths);
-		}
-		return {
-			branchName: currentBranch,
-			created: false,
-			ok: true,
-		};
+		return { ok: true, branchName: currentBranch, created: false };
 	}
-	if (unsafeDirtyPaths.length > 0) {
-		return buildUnsafeDirtyPathsFailure(unsafeDirtyPaths);
+	if (dirtyPaths.length > 0) {
+		const preview = formatDirtyPaths(dirtyPaths);
+		return {
+			ok: true,
+			branchName: null,
+			created: false,
+			warning: `Worktree is dirty (${preview}). Continuing on the current branch; auto-commit and full-tree reset are disabled until you commit/stash these changes.`,
+		};
 	}
 
 	const branchName = await allocateBranchName(api, workDir, goal);
@@ -72,16 +79,11 @@ export async function ensureAutoresearchBranch(
 		await git.branch.checkoutNew(workDir, branchName);
 	} catch (err) {
 		return {
-			error: `Failed to create autoresearch branch ${branchName}: ${err instanceof Error ? err.message : String(err)}`,
 			ok: false,
+			error: `Failed to create autoresearch branch ${branchName}: ${err instanceof Error ? err.message : String(err)}`,
 		};
 	}
-
-	return {
-		branchName,
-		created: true,
-		ok: true,
-	};
+	return { ok: true, branchName, created: true };
 }
 
 export function parseWorkDirDirtyPaths(statusOutput: string, workDirPrefix: string): string[] {
@@ -96,7 +98,7 @@ export function parseWorkDirDirtyPaths(statusOutput: string, workDirPrefix: stri
 
 export function relativizeGitPathToWorkDir(repoRelativePath: string, workDirPrefix: string): string | null {
 	const normalizedPath = normalizeStatusPath(repoRelativePath);
-	const normalizedPrefix = normalizeAutoresearchPath(workDirPrefix);
+	const normalizedPrefix = normalizePathSpec(workDirPrefix);
 	if (normalizedPrefix === "" || normalizedPrefix === ".") {
 		return normalizedPath;
 	}
@@ -106,7 +108,7 @@ export function relativizeGitPathToWorkDir(repoRelativePath: string, workDirPref
 	if (!normalizedPath.startsWith(`${normalizedPrefix}/`)) {
 		return null;
 	}
-	return normalizeAutoresearchPath(normalizedPath.slice(normalizedPrefix.length + 1));
+	return normalizePathSpec(normalizedPath.slice(normalizedPrefix.length + 1));
 }
 
 async function readGitWorkDirPrefix(api: ExtensionAPI, workDir: string): Promise<string> {
@@ -162,12 +164,12 @@ function parseDirtyPathsLines(statusOutput: string): string[] {
 	return [...unsafePaths];
 }
 
-export function normalizeStatusPath(path: string): string {
-	let normalized = path.trim();
+export function normalizeStatusPath(rawPath: string): string {
+	let normalized = rawPath.trim();
 	if (normalized.startsWith('"') && normalized.endsWith('"')) {
 		normalized = normalized.slice(1, -1);
 	}
-	return normalizeAutoresearchPath(normalized);
+	return normalizePathSpec(normalized);
 }
 
 async function allocateBranchName(api: ExtensionAPI, workDir: string, goal: string | null): Promise<string> {
@@ -209,32 +211,23 @@ function addDirtyPath(paths: Set<string>, rawPath: string): void {
 	paths.add(normalizedPath);
 }
 
-function buildUnsafeDirtyPathsFailure(unsafeDirtyPaths: string[]): EnsureAutoresearchBranchFailure {
-	const preview = unsafeDirtyPaths.slice(0, 5).join(", ");
-	const suffix = unsafeDirtyPaths.length > 5 ? ` (+${unsafeDirtyPaths.length - 5} more)` : "";
-	return {
-		error:
-			"Autoresearch needs a clean git worktree before it can create or reuse an isolated branch. " +
-			`Commit or stash these paths first: ${preview}${suffix}`,
-		ok: false,
-	};
-}
-
 function isRenameOrCopy(statusToken: string): boolean {
 	const trimmed = statusToken.trim();
 	return trimmed.startsWith("R") || trimmed.startsWith("C");
 }
 
-function collectUnsafeDirtyPaths(statusOutput: string, workDirPrefix: string): string[] {
-	const unsafeDirtyPaths: string[] = [];
+function collectRelativeDirtyPaths(statusOutput: string, workDirPrefix: string): string[] {
+	const dirtyPaths: string[] = [];
 	for (const dirtyPath of parseDirtyPaths(statusOutput)) {
 		const relativePath = relativizeGitPathToWorkDir(dirtyPath, workDirPrefix);
-		if (relativePath && isAutoresearchLocalStatePath(relativePath)) {
-			continue;
-		}
-		unsafeDirtyPaths.push(relativePath ?? normalizeStatusPath(dirtyPath));
+		dirtyPaths.push(relativePath ?? normalizeStatusPath(dirtyPath));
 	}
-	return unsafeDirtyPaths;
+	return dirtyPaths;
+}
+
+function formatDirtyPaths(paths: string[]): string {
+	const preview = paths.slice(0, 5).join(", ");
+	return paths.length > 5 ? `${preview} (+${paths.length - 5} more)` : preview;
 }
 
 export interface DirtyPathEntry {
@@ -318,7 +311,6 @@ export function computeRunModifiedPaths(
 	const untracked: string[] = [];
 	for (const entry of parseWorkDirDirtyPathsWithStatus(currentStatusOutput, workDirPrefix)) {
 		if (preRunSet.has(entry.path)) continue;
-		if (isAutoresearchLocalStatePath(entry.path)) continue;
 		if (entry.untracked) {
 			untracked.push(entry.path);
 		} else {

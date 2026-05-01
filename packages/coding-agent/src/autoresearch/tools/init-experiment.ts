@@ -1,92 +1,68 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { StringEnum } from "@oh-my-pi/pi-ai";
 import { Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@sinclair/typebox";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
-import { applyAutoresearchContractToExperimentState } from "../apply-contract-to-state";
-import {
-	contractListsEqual,
-	contractPathListsEqual,
-	loadAutoresearchScriptSnapshot,
-	readAutoresearchContract,
-} from "../contract";
-import {
-	abandonUnloggedAutoresearchRuns,
-	collectLoggedRunNumbers,
-	isAutoresearchShCommand,
-	readMaxExperiments,
-	readPendingRunSummary,
-	resolveWorkDir,
-	validateWorkDir,
-} from "../helpers";
-import { cloneExperimentState } from "../state";
+import * as git from "../../utils/git";
+import { dedupeStrings, normalizePathSpec } from "../helpers";
+import { buildExperimentState } from "../state";
+import { openAutoresearchStorage, type SessionRow } from "../storage";
 import type { AutoresearchToolFactoryOptions, ExperimentState } from "../types";
 
 const initExperimentSchema = Type.Object({
-	name: Type.String({
-		description: "Human-readable experiment name.",
+	name: Type.String({ description: "Human-readable experiment name." }),
+	goal: Type.Optional(Type.String({ description: "Free-form description of what this session optimizes." })),
+	primary_metric: Type.String({
+		description:
+			"Primary metric name shown in the dashboard. Match the `METRIC <name>=<value>` lines printed by the benchmark.",
 	}),
-	from_autoresearch_md: Type.Optional(
-		Type.Boolean({
-			description:
-				"When true, load benchmark command, metrics, scope, off-limits, and constraints from autoresearch.md instead of passing mirrored fields below.",
-		}),
-	),
-	abandon_unlogged_runs: Type.Optional(
-		Type.Boolean({
-			description:
-				"When true, mark all completed but unlogged run artifacts as abandoned so initialization can proceed without logging them first.",
-		}),
-	),
-	new_segment: Type.Optional(
-		Type.Boolean({
-			description:
-				"When true, force a new segment even when the contract fields have not changed. Without this, re-initialization with matching contract is a no-op.",
-		}),
-	),
-	metric_name: Type.Optional(
-		Type.String({
-			description: "Primary metric name shown in the dashboard. Required when from_autoresearch_md is false.",
-		}),
-	),
 	metric_unit: Type.Optional(
-		Type.String({
-			description: "Unit for the primary metric, for example µs, ms, s, kb, or empty.",
-		}),
+		Type.String({ description: "Unit for the primary metric (e.g. ms, µs, mb). Empty when unitless." }),
 	),
 	direction: Type.Optional(
-		StringEnum(["lower", "higher"], {
-			description: "Whether lower or higher values are better. Defaults to lower.",
+		StringEnum(["lower", "higher"], { description: "Whether lower or higher values are better. Defaults to lower." }),
+	),
+	preferred_command: Type.Optional(
+		Type.String({
+			description:
+				"Preferred benchmark command for this segment. Advisory; run_experiment accepts any command but warns when the command differs.",
 		}),
 	),
-	benchmark_command: Type.Optional(
-		Type.String({
-			description: "Benchmark command recorded in autoresearch.md. Required when from_autoresearch_md is false.",
+	secondary_metrics: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "Names of secondary metrics tracked alongside the primary metric.",
 		}),
 	),
 	scope_paths: Type.Optional(
 		Type.Array(Type.String(), {
-			description: "Files in Scope from autoresearch.md. Required when from_autoresearch_md is false.",
-			minItems: 1,
+			description:
+				"Files or directories the agent expects to modify. Used post-hoc to flag scope deviations on log_experiment; never used to block edits.",
 		}),
 	),
 	off_limits: Type.Optional(
 		Type.Array(Type.String(), {
-			description: "Off Limits paths from autoresearch.md.",
+			description:
+				"Paths the agent SHOULD NOT modify. Used post-hoc to flag scope deviations on log_experiment; never used to block edits.",
 		}),
 	),
 	constraints: Type.Optional(
-		Type.Array(Type.String(), {
-			description: "Constraints from autoresearch.md.",
+		Type.Array(Type.String(), { description: "Free-form constraints (e.g. 'no api break')." }),
+	),
+	max_iterations: Type.Optional(Type.Number({ description: "Soft cap on iterations per segment. Optional." })),
+	new_segment: Type.Optional(
+		Type.Boolean({
+			description:
+				"When true, bump to a new segment even when an active session exists. New baselines and best-metric reset.",
 		}),
 	),
 });
 
 interface InitExperimentDetails {
 	state: ExperimentState;
+	createdSession: boolean;
+	bumpedSegment: boolean;
+	abandonedRuns: number;
 }
 
 export function createInitExperimentTool(
@@ -96,253 +72,81 @@ export function createInitExperimentTool(
 		name: "init_experiment",
 		label: "Init Experiment",
 		description:
-			"Initialize or reset the autoresearch session for the current optimization target before the first logged run of a segment.",
+			"Initialize or reconfigure the autoresearch session. Pass `new_segment: true` to start a fresh baseline within an existing session.",
 		parameters: initExperimentSchema,
 		defaultInactive: true,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const workDirError = validateWorkDir(ctx.cwd);
-			if (workDirError) {
-				return {
-					content: [{ type: "text", text: `Error: ${workDirError}` }],
-				};
-			}
-
+			const storage = await openAutoresearchStorage(ctx.cwd);
 			const runtime = options.getRuntime(ctx);
-			const state = runtime.state;
-			const isReinitializing = state.results.length > 0;
-			const workDir = resolveWorkDir(ctx.cwd);
-			const loggedRunNumbers = collectLoggedRunNumbers(state.results);
 
-			let abandonSummary = "";
-			if (params.abandon_unlogged_runs === true) {
-				const abandoned = await abandonUnloggedAutoresearchRuns(workDir, loggedRunNumbers);
-				if (abandoned > 0) {
-					abandonSummary =
-						abandoned === 1
-							? "Abandoned 1 unlogged run artifact.\n"
-							: `Abandoned ${abandoned} unlogged run artifacts.\n`;
-				}
-			}
+			const direction = params.direction ?? "lower";
+			const metricUnit = params.metric_unit ?? "";
+			const scopePaths = dedupeStrings((params.scope_paths ?? []).map(normalizePathSpec));
+			const offLimits = dedupeStrings((params.off_limits ?? []).map(normalizePathSpec));
+			const constraints = dedupeStrings(params.constraints ?? []);
+			const secondaryMetrics = dedupeStrings(params.secondary_metrics ?? []);
+			const preferredCommand = params.preferred_command?.trim() || null;
+			const goal = params.goal?.trim() || null;
+			const maxIterations =
+				params.max_iterations !== undefined && Number.isFinite(params.max_iterations) && params.max_iterations > 0
+					? Math.floor(params.max_iterations)
+					: null;
+			const branch = (await git.branch.current(ctx.cwd)) ?? null;
 
-			const pendingRun = await readPendingRunSummary(workDir, loggedRunNumbers);
-			if (pendingRun) {
-				const metricInfo = pendingRun.parsedPrimary !== null ? `, metric=${pendingRun.parsedPrimary}` : "";
-				const passedInfo = pendingRun.passed ? "passed" : "failed";
-				return {
-					content: [
-						{
-							type: "text",
-							text:
-								abandonSummary +
-								`Error: run #${pendingRun.runNumber} has not been logged yet.\n` +
-								`Pending: command="${pendingRun.command}"${metricInfo}, ${passedInfo}\n` +
-								"Call log_experiment before re-initializing, or pass abandon_unlogged_runs=true.",
-						},
-					],
-				};
-			}
+			const existing = storage.getActiveSession();
+			let session: SessionRow;
+			let createdSession = false;
+			let bumpedSegment = false;
+			let abandonedRuns = 0;
 
-			const contractResult = readAutoresearchContract(workDir);
-			const scriptSnapshot = loadAutoresearchScriptSnapshot(workDir);
-			const errors = [...contractResult.errors, ...scriptSnapshot.errors];
-			if (errors.length > 0) {
-				return {
-					content: [{ type: "text", text: `${abandonSummary}Error: ${errors.join(" ")}` }],
-				};
-			}
-
-			const benchmarkContract = contractResult.contract.benchmark;
-			const expectedDirection = benchmarkContract.direction ?? "lower";
-			const expectedMetricUnit = benchmarkContract.metricUnit;
-			if (benchmarkContract.command && !isAutoresearchShCommand(benchmarkContract.command)) {
-				return {
-					content: [
-						{
-							type: "text",
-							text:
-								abandonSummary +
-								"Error: Benchmark.command in autoresearch.md must invoke `autoresearch.sh` directly. " +
-								"Move the real workload into `autoresearch.sh` and re-run init_experiment.",
-						},
-					],
-				};
-			}
-
-			const fromMd = params.from_autoresearch_md === true;
-			if (!fromMd) {
-				const metricName = params.metric_name?.trim();
-				const benchmarkCommand = params.benchmark_command?.trim();
-				const scopePaths = params.scope_paths;
-				if (!metricName || !benchmarkCommand || !scopePaths || scopePaths.length === 0) {
-					return {
-						content: [
-							{
-								type: "text",
-								text:
-									abandonSummary +
-									"Error: when from_autoresearch_md is false or omitted, metric_name, benchmark_command, and scope_paths are required and must match autoresearch.md. " +
-									"Alternatively pass from_autoresearch_md=true with only name (plus optional flags).",
-							},
-						],
-					};
-				}
-				if (benchmarkContract.command !== benchmarkCommand) {
-					return {
-						content: [
-							{
-								type: "text",
-								text:
-									abandonSummary +
-									"Error: benchmark_command does not match autoresearch.md. " +
-									`Expected: ${benchmarkContract.command ?? "(missing)"}\nReceived: ${params.benchmark_command}`,
-							},
-						],
-					};
-				}
-				if (benchmarkContract.primaryMetric !== metricName) {
-					return {
-						content: [
-							{
-								type: "text",
-								text:
-									abandonSummary +
-									"Error: metric_name does not match autoresearch.md. " +
-									`Expected: ${benchmarkContract.primaryMetric ?? "(missing)"}\nReceived: ${params.metric_name}`,
-							},
-						],
-					};
-				}
-				if ((params.metric_unit ?? "") !== expectedMetricUnit) {
-					return {
-						content: [
-							{
-								type: "text",
-								text:
-									abandonSummary +
-									"Error: metric_unit does not match autoresearch.md. " +
-									`Expected: ${expectedMetricUnit || "(empty)"}\nReceived: ${params.metric_unit ?? "(empty)"}`,
-							},
-						],
-					};
-				}
-				if ((params.direction ?? "lower") !== expectedDirection) {
-					return {
-						content: [
-							{
-								type: "text",
-								text:
-									abandonSummary +
-									"Error: direction does not match autoresearch.md. " +
-									`Expected: ${expectedDirection}\nReceived: ${params.direction ?? "lower"}`,
-							},
-						],
-					};
-				}
-				if (!contractPathListsEqual(scopePaths, contractResult.contract.scopePaths)) {
-					return {
-						content: [
-							{
-								type: "text",
-								text:
-									abandonSummary +
-									"Error: scope_paths do not match autoresearch.md. " +
-									`Expected: ${contractResult.contract.scopePaths.join(", ")}`,
-							},
-						],
-					};
-				}
-				if (!contractPathListsEqual(params.off_limits ?? [], contractResult.contract.offLimits)) {
-					return {
-						content: [
-							{
-								type: "text",
-								text:
-									abandonSummary +
-									"Error: off_limits do not match autoresearch.md. " +
-									`Expected: ${contractResult.contract.offLimits.join(", ") || "(empty)"}`,
-							},
-						],
-					};
-				}
-				if (!contractListsEqual(params.constraints ?? [], contractResult.contract.constraints)) {
-					return {
-						content: [
-							{
-								type: "text",
-								text:
-									abandonSummary +
-									"Error: constraints do not match autoresearch.md. " +
-									`Expected: ${contractResult.contract.constraints.join(", ") || "(empty)"}`,
-							},
-						],
-					};
-				}
-			}
-
-			// Check if contract matches current state — if so, re-init is a no-op
-			if (isReinitializing && params.new_segment !== true) {
-				const contract = contractResult.contract;
-				const bm = contract.benchmark;
-				const contractMatches =
-					(bm.primaryMetric ?? "metric") === state.metricName &&
-					bm.metricUnit === state.metricUnit &&
-					(bm.direction ?? "lower") === state.bestDirection &&
-					(bm.command ?? null) === state.benchmarkCommand &&
-					contractPathListsEqual(contract.scopePaths, state.scopePaths) &&
-					contractPathListsEqual(contract.offLimits, state.offLimits) &&
-					contractListsEqual(contract.constraints, state.constraints);
-				if (contractMatches) {
-					runtime.autoresearchMode = true;
-					runtime.autoResumeArmed = true;
-					options.dashboard.updateWidget(ctx, runtime);
-					options.dashboard.requestRender();
-					return {
-						content: [
-							{
-								type: "text",
-								text:
-									abandonSummary +
-									`Experiment session already initialized with matching contract. Continuing segment ${state.currentSegment}.`,
-							},
-						],
-						details: { state: cloneExperimentState(state) },
-					};
-				}
-			}
-
-			applyAutoresearchContractToExperimentState(contractResult.contract, state);
-			state.name = params.name;
-			state.maxExperiments = readMaxExperiments(ctx.cwd);
-			state.bestMetric = null;
-			state.confidence = null;
-			if (isReinitializing) {
-				state.currentSegment += 1;
-			}
-
-			const jsonlPath = path.join(workDir, "autoresearch.jsonl");
-			const configLine = JSON.stringify({
-				type: "config",
-				name: state.name,
-				metricName: state.metricName,
-				metricUnit: state.metricUnit,
-				bestDirection: state.bestDirection,
-				benchmarkCommand: state.benchmarkCommand,
-				secondaryMetrics: state.secondaryMetrics.map(metric => metric.name),
-				scopePaths: state.scopePaths,
-				offLimits: state.offLimits,
-				constraints: state.constraints,
-			});
-
-			if (isReinitializing) {
-				fs.appendFileSync(jsonlPath, `${configLine}\n`);
+			if (!existing) {
+				const baselineCommit = await tryReadHeadSha(ctx.cwd);
+				session = storage.openSession({
+					name: params.name,
+					goal,
+					primaryMetric: params.primary_metric,
+					metricUnit,
+					direction,
+					preferredCommand,
+					branch,
+					baselineCommit,
+					maxIterations,
+					scopePaths,
+					offLimits,
+					constraints,
+					secondaryMetrics,
+				});
+				createdSession = true;
 			} else {
-				fs.writeFileSync(jsonlPath, `${configLine}\n`);
+				abandonedRuns = storage.abandonPendingRuns(existing.id);
+				const updates = {
+					goal,
+					preferredCommand,
+					maxIterations,
+					scopePaths,
+					offLimits,
+					constraints,
+					secondaryMetrics,
+					primaryMetric: params.primary_metric,
+					metricUnit,
+					direction,
+					branch,
+				};
+				let updated = storage.updateSession(existing.id, updates);
+				if (params.new_segment === true) {
+					updated = storage.bumpSegment(existing.id);
+					bumpedSegment = true;
+				}
+				session = updated;
 			}
 
+			const loggedRuns = storage.listLoggedRuns(session.id);
+			const state = buildExperimentState(session, loggedRuns);
+			runtime.state = state;
+			runtime.goal = session.goal;
 			runtime.autoresearchMode = true;
 			runtime.autoResumeArmed = true;
 			runtime.lastAutoResumePendingRunNumber = null;
-			runtime.lastRunChecks = null;
 			runtime.lastRunDuration = null;
 			runtime.lastRunAsi = null;
 			runtime.lastRunArtifactDir = null;
@@ -351,24 +155,52 @@ export function createInitExperimentTool(
 			options.dashboard.updateWidget(ctx, runtime);
 			options.dashboard.requestRender();
 
-			const lines = [
-				abandonSummary.trimEnd(),
-				`Experiment initialized: ${state.name}`,
-				`Metric: ${state.metricName} (${state.metricUnit || "unitless"}, ${state.bestDirection} is better)`,
-				`Benchmark command: ${state.benchmarkCommand}`,
-				`Working directory: ${workDir}`,
-				`Files in Scope: ${state.scopePaths.join(", ")}`,
-				isReinitializing
-					? "Previous results remain in history. This starts a new segment and requires a fresh baseline."
-					: "Now run the baseline experiment and log it.",
-			].filter(line => line.length > 0);
-			if (state.maxExperiments !== null) {
-				lines.push(`Max iterations: ${state.maxExperiments}`);
+			const lines: string[] = [];
+			if (abandonedRuns > 0) {
+				lines.push(`Abandoned ${abandonedRuns} pending run${abandonedRuns === 1 ? "" : "s"} before reconfiguring.`);
+			}
+			if (createdSession) {
+				lines.push(`Started session #${session.id}: ${session.name}`);
+			} else if (bumpedSegment) {
+				lines.push(`Bumped segment to ${session.currentSegment} for session #${session.id}: ${session.name}`);
+			} else {
+				lines.push(`Updated session #${session.id} (segment ${session.currentSegment}): ${session.name}`);
+			}
+			lines.push(
+				`Metric: ${session.primaryMetric} (${session.metricUnit || "unitless"}, ${session.direction} is better)`,
+			);
+			if (session.preferredCommand) {
+				lines.push(`Preferred command: ${session.preferredCommand}`);
+			}
+			if (session.scopePaths.length > 0) {
+				lines.push(`Files in scope: ${session.scopePaths.join(", ")}`);
+			}
+			if (session.offLimits.length > 0) {
+				lines.push(`Off limits: ${session.offLimits.join(", ")}`);
+			}
+			if (session.maxIterations !== null) {
+				lines.push(`Max iterations per segment: ${session.maxIterations}`);
+			}
+			if (session.branch) {
+				lines.push(`Active branch: ${session.branch}`);
+			}
+			if (session.baselineCommit) {
+				lines.push(`Baseline commit: ${session.baselineCommit.slice(0, 12)}`);
+			}
+			if (createdSession) {
+				lines.push("Run the baseline experiment now and log it.");
+			} else if (bumpedSegment) {
+				lines.push("Run a fresh baseline for the new segment.");
 			}
 
 			return {
 				content: [{ type: "text", text: lines.join("\n") }],
-				details: { state: cloneExperimentState(state) },
+				details: {
+					state,
+					createdSession,
+					bumpedSegment,
+					abandonedRuns,
+				},
 			};
 		},
 		renderCall(args, _options, theme): Text {
@@ -383,4 +215,12 @@ export function createInitExperimentTool(
 
 function renderInitCall(name: string, theme: Theme): string {
 	return `${theme.fg("toolTitle", theme.bold("init_experiment"))} ${theme.fg("accent", truncateToWidth(replaceTabs(name), 100))}`;
+}
+
+async function tryReadHeadSha(cwd: string): Promise<string | null> {
+	try {
+		return (await git.head.sha(cwd)) ?? null;
+	} catch {
+		return null;
+	}
 }

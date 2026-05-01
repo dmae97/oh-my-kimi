@@ -21,21 +21,6 @@ export interface MetricDef {
 	unit: string;
 }
 
-export interface AutoresearchBenchmarkContract {
-	command: string | null;
-	primaryMetric: string | null;
-	metricUnit: string;
-	direction: MetricDirection | null;
-	secondaryMetrics: string[];
-}
-
-export interface AutoresearchContract {
-	benchmark: AutoresearchBenchmarkContract;
-	scopePaths: string[];
-	offLimits: string[];
-	constraints: string[];
-}
-
 export interface ExperimentResult {
 	runNumber: number | null;
 	commit: string;
@@ -47,6 +32,11 @@ export interface ExperimentResult {
 	segment: number;
 	confidence: number | null;
 	asi?: ASIData;
+	modifiedPaths: string[];
+	scopeDeviations: string[];
+	justification: string | null;
+	flagged: boolean;
+	flaggedReason: string | null;
 }
 
 export interface ExperimentState {
@@ -57,6 +47,7 @@ export interface ExperimentState {
 	metricUnit: string;
 	secondaryMetrics: MetricDef[];
 	name: string | null;
+	goal: string | null;
 	currentSegment: number;
 	maxExperiments: number | null;
 	confidence: number | null;
@@ -64,6 +55,10 @@ export interface ExperimentState {
 	scopePaths: string[];
 	offLimits: string[];
 	constraints: string[];
+	notes: string;
+	branch: string | null;
+	baselineCommit: string | null;
+	sessionId: number | null;
 }
 
 export interface RunExperimentProgressDetails {
@@ -78,7 +73,6 @@ export interface RunDetails {
 	runNumber: number;
 	runDirectory: string;
 	benchmarkLogPath: string;
-	checksLogPath?: string;
 	command: string;
 	exitCode: number | null;
 	durationSeconds: number;
@@ -86,16 +80,14 @@ export interface RunDetails {
 	crashed: boolean;
 	timedOut: boolean;
 	tailOutput: string;
-	checksPass: boolean | null;
-	checksTimedOut: boolean;
-	checksOutput: string;
-	checksDuration: number;
 	parsedMetrics: NumericMetricMap | null;
 	parsedPrimary: number | null;
 	parsedAsi: ASIData | null;
 	metricName: string;
 	metricUnit: string;
 	preRunDirtyPaths: string[];
+	commandWarning: string | null;
+	abandonedPriorRun: number | null;
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
 }
@@ -104,18 +96,12 @@ export interface LogDetails {
 	experiment: ExperimentResult;
 	state: ExperimentState;
 	wallClockSeconds: number | null;
-}
-
-export interface ChecksResult {
-	pass: boolean;
-	output: string;
-	duration: number;
+	scopeDeviations: string[];
+	justification: string | null;
+	flaggedRuns: Array<{ runId: number; reason: string }>;
 }
 
 export interface PendingRunSummary {
-	checksDurationSeconds: number | null;
-	checksPass: boolean | null;
-	checksTimedOut: boolean;
 	command: string;
 	durationSeconds: number | null;
 	parsedAsi: ASIData | null;
@@ -125,6 +111,8 @@ export interface PendingRunSummary {
 	preRunDirtyPaths: string[];
 	runDirectory: string;
 	runNumber: number;
+	exitCode: number | null;
+	timedOut: boolean;
 }
 
 export interface RunningExperiment {
@@ -139,7 +127,6 @@ export interface AutoresearchRuntime {
 	autoResumeArmed: boolean;
 	dashboardExpanded: boolean;
 	lastAutoResumePendingRunNumber: number | null;
-	lastRunChecks: ChecksResult | null;
 	lastRunDuration: number | null;
 	lastRunAsi: ASIData | null;
 	lastRunArtifactDir: string | null;
@@ -148,41 +135,6 @@ export interface AutoresearchRuntime {
 	runningExperiment: RunningExperiment | null;
 	state: ExperimentState;
 	goal: string | null;
-}
-
-export interface AutoresearchConfig {
-	maxIterations?: number;
-	workingDir?: string;
-}
-
-export interface AutoresearchJsonConfigEntry {
-	type: "config";
-	name?: string;
-	metricName?: string;
-	metricUnit?: string;
-	bestDirection?: MetricDirection;
-	benchmarkCommand?: string;
-	secondaryMetrics?: string[];
-	scopePaths?: string[];
-	offLimits?: string[];
-	constraints?: string[];
-}
-
-export interface AutoresearchJsonRunEntry {
-	run?: number;
-	commit?: string;
-	metric?: number;
-	metrics?: NumericMetricMap;
-	status?: ExperimentStatus;
-	description?: string;
-	timestamp?: number;
-	confidence?: number | null;
-	asi?: ASIData;
-}
-
-export interface ReconstructedExperimentData {
-	hasLog: boolean;
-	state: ExperimentState;
 }
 
 export interface AutoresearchControlEntryData {

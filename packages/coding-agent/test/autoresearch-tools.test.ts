@@ -1,18 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
-import { abandonUnloggedAutoresearchRuns, readPendingRunSummary } from "../src/autoresearch/helpers";
 import { createSessionRuntime } from "../src/autoresearch/state";
+import { openAutoresearchStorage } from "../src/autoresearch/storage";
 import { createInitExperimentTool } from "../src/autoresearch/tools/init-experiment";
 import { createLogExperimentTool } from "../src/autoresearch/tools/log-experiment";
 import { createRunExperimentTool } from "../src/autoresearch/tools/run-experiment";
-import type { RunDetails } from "../src/autoresearch/types";
+import { createUpdateNotesTool } from "../src/autoresearch/tools/update-notes";
+import type { LogDetails, RunDetails } from "../src/autoresearch/types";
 import type { ExtensionAPI, ExtensionContext } from "../src/extensibility/extensions";
-import * as git from "../src/utils/git";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -24,61 +24,13 @@ function firstTextBlockText(content: Array<TextContent | ImageContent>): string 
 	return block.text;
 }
 
-function makeTempDir(): string {
-	const dir = path.join(os.tmpdir(), `pi-autoresearch-tools-${Snowflake.next()}`);
+function makeTempDir(prefix = "pi-autoresearch-tools"): string {
+	const dir = path.join(os.tmpdir(), `${prefix}-${Snowflake.next()}`);
 	fs.mkdirSync(dir, { recursive: true });
 	return dir;
 }
 
-function writeAutoresearchWorkspace(
-	dir: string,
-	options?: {
-		checksScript?: string;
-		contract?: string;
-		benchmarkScript?: string;
-	},
-): void {
-	fs.writeFileSync(
-		path.join(dir, "autoresearch.md"),
-		options?.contract ??
-			[
-				"# Autoresearch",
-				"",
-				"## Benchmark",
-				"- command: bash autoresearch.sh",
-				"- primary metric: runtime_ms",
-				"- metric unit: ms",
-				"- direction: lower",
-				"",
-				"## Files in Scope",
-				"- src",
-				"",
-				"## Off Limits",
-				"",
-				"## Constraints",
-				"- keep behavior stable",
-				"",
-			].join("\n"),
-	);
-	fs.writeFileSync(
-		path.join(dir, "autoresearch.sh"),
-		options?.benchmarkScript ??
-			[
-				"#!/usr/bin/env bash",
-				"set -euo pipefail",
-				"echo METRIC runtime_ms=10",
-				"echo METRIC memory_mb=32",
-				'echo ASI hypothesis="baseline"',
-			].join("\n"),
-	);
-	fs.chmodSync(path.join(dir, "autoresearch.sh"), 0o755);
-	if (options?.checksScript) {
-		fs.writeFileSync(path.join(dir, "autoresearch.checks.sh"), options.checksScript);
-		fs.chmodSync(path.join(dir, "autoresearch.checks.sh"), 0o755);
-	}
-}
-
-function createDashboardStub() {
+function dashboardStub() {
 	return {
 		clear(): void {},
 		requestRender(): void {},
@@ -87,2022 +39,612 @@ function createDashboardStub() {
 	};
 }
 
-function createContext(cwd: string): ExtensionContext {
+function createCtx(cwd: string): ExtensionContext {
 	return { cwd, hasUI: false } as ExtensionContext;
 }
 
-function createGitApi(): ExtensionAPI {
-	return {
-		exec: async (command: string, args: string[], options?: { cwd?: string }) => {
-			const result = Bun.spawnSync([command, ...args], {
-				cwd: options?.cwd ?? process.cwd(),
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-			return {
-				code: result.exitCode,
-				stdout: Buffer.from(result.stdout).toString("utf8"),
-				stderr: Buffer.from(result.stderr).toString("utf8"),
-			};
-		},
-	} as unknown as ExtensionAPI;
+interface PiHarness {
+	api: ExtensionAPI;
+	activeTools: string[];
+	appendEntries: Array<{ customType: string; data: unknown }>;
+	setActiveToolsCalls: string[][];
 }
 
-function createManagedGitApi(options?: { activeTools?: string[] }) {
-	const activeTools = [...(options?.activeTools ?? ["init_experiment", "run_experiment", "log_experiment"])];
+function createPiHarness(initialTools: string[] = []): PiHarness {
+	const activeTools = [...initialTools];
 	const appendEntries: Array<{ customType: string; data: unknown }> = [];
 	const setActiveToolsCalls: string[][] = [];
 	const api = {
 		appendEntry: (customType: string, data?: unknown) => {
 			appendEntries.push({ customType, data });
 		},
-		exec: async (command: string, args: string[], execOptions?: { cwd?: string }) => {
-			const result = Bun.spawnSync([command, ...args], {
-				cwd: execOptions?.cwd ?? process.cwd(),
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-			return {
-				code: result.exitCode,
-				stdout: Buffer.from(result.stdout).toString("utf8"),
-				stderr: Buffer.from(result.stderr).toString("utf8"),
-			};
-		},
+		exec: async () => ({ code: 0, stdout: "", stderr: "" }),
 		getActiveTools: () => [...activeTools],
 		setActiveTools: async (toolNames: string[]) => {
 			setActiveToolsCalls.push([...toolNames]);
 			activeTools.splice(0, activeTools.length, ...toolNames);
 		},
 	} as unknown as ExtensionAPI;
-	return { activeTools, api, appendEntries, setActiveToolsCalls };
+	return { api, activeTools, appendEntries, setActiveToolsCalls };
 }
 
-function expectRunDetails(details: unknown): RunDetails {
-	if (!details || typeof details !== "object" || !("benchmarkLogPath" in details)) {
-		throw new Error("Expected run details");
-	}
-	return details as RunDetails;
+async function initGitRepo(dir: string): Promise<{ baselineCommit: string; mainBranch: string }> {
+	await $`git init --initial-branch=main`.cwd(dir).quiet();
+	await $`git config user.email tester@example.com`.cwd(dir).quiet();
+	await $`git config user.name Tester`.cwd(dir).quiet();
+	await Bun.write(path.join(dir, "README.md"), "# baseline\n");
+	await $`git add -A`.cwd(dir).quiet();
+	await $`git commit -m baseline`.cwd(dir).quiet();
+	const sha = (await $`git rev-parse HEAD`.cwd(dir).text()).trim();
+	const branch = (await $`git rev-parse --abbrev-ref HEAD`.cwd(dir).text()).trim();
+	return { baselineCommit: sha, mainBranch: branch };
 }
 
-describe("autoresearch tools", () => {
-	const tempDirs: string[] = [];
+async function checkoutBranch(dir: string, name: string): Promise<void> {
+	await $`git checkout -b ${name}`.cwd(dir).quiet();
+}
 
-	afterEach(() => {
-		for (const dir of tempDirs.splice(0)) {
-			fs.rmSync(dir, { recursive: true, force: true });
-		}
+describe("init_experiment", () => {
+	let dbOverride: string;
+
+	beforeEach(() => {
+		dbOverride = makeTempDir("pi-autoresearch-init-db");
+		process.env.OMP_AUTORESEARCH_DB_DIR = dbOverride;
 	});
 
-	it("writes durable benchmark/check artifacts and run metadata", async () => {
+	afterEach(() => {
+		delete process.env.OMP_AUTORESEARCH_DB_DIR;
+		fs.rmSync(dbOverride, { recursive: true, force: true });
+	});
+
+	it("opens a new session and persists scope and metric metadata", async () => {
 		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir, {
-			checksScript: ["#!/usr/bin/env bash", "set -euo pipefail", "echo checks ok"].join("\n"),
-		});
-
-		vi.spyOn(git, "status").mockResolvedValue("");
-		vi.spyOn(git.show, "prefix").mockResolvedValue("");
-
 		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		const tool = createRunExperimentTool({
-			dashboard: createDashboardStub(),
+		const tool = createInitExperimentTool({
+			dashboard: dashboardStub(),
 			getRuntime: () => runtime,
-			pi: {} as ExtensionAPI,
+			pi: createPiHarness().api,
 		});
 
 		const result = await tool.execute(
 			"call-1",
-			{ command: "bash autoresearch.sh", timeout_seconds: 5, checks_timeout_seconds: 5 },
+			{
+				name: "speed",
+				goal: "make x fast",
+				primary_metric: "runtime_ms",
+				metric_unit: "ms",
+				direction: "lower",
+				preferred_command: "bun bench",
+				scope_paths: ["src", "src/foo"],
+				off_limits: ["test"],
+				secondary_metrics: ["memory_mb"],
+				constraints: ["no api break"],
+				max_iterations: 50,
+			},
 			undefined,
 			undefined,
-			createContext(dir),
+			createCtx(dir),
 		);
-		const details = expectRunDetails(result.details);
+		expect(firstTextBlockText(result.content)).toContain("Started session");
+		expect(result.details?.createdSession).toBe(true);
+		expect(result.details?.bumpedSegment).toBe(false);
 
-		expect(details.runNumber).toBe(1);
-		expect(details.parsedPrimary).toBe(10);
-		expect(details.parsedMetrics).toEqual({ memory_mb: 32, runtime_ms: 10 });
-		expect(details.benchmarkLogPath).toBe(path.join(details.runDirectory, "benchmark.log"));
+		const storage = await openAutoresearchStorage(dir);
+		const session = storage.getActiveSession();
+		expect(session).not.toBeNull();
+		expect(session?.primaryMetric).toBe("runtime_ms");
+		expect(session?.scopePaths).toEqual(["src", "src/foo"]);
+		expect(session?.offLimits).toEqual(["test"]);
+		expect(session?.secondaryMetrics).toEqual(["memory_mb"]);
+		expect(session?.maxIterations).toBe(50);
+	});
+
+	it("updates fields without bumping segment when no new_segment flag is passed", async () => {
+		const dir = makeTempDir();
+		const runtime = createSessionRuntime();
+		const tool = createInitExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: createPiHarness().api,
+		});
+
+		await tool.execute(
+			"call-a",
+			{ name: "a", primary_metric: "ms", scope_paths: ["src"] },
+			undefined,
+			undefined,
+			createCtx(dir),
+		);
+		const second = await tool.execute(
+			"call-b",
+			{ name: "a", primary_metric: "ms", scope_paths: ["src", "lib"], goal: "v2" },
+			undefined,
+			undefined,
+			createCtx(dir),
+		);
+		expect(second.details?.createdSession).toBe(false);
+		expect(second.details?.bumpedSegment).toBe(false);
+		expect(second.details?.state.scopePaths).toEqual(["src", "lib"]);
+		expect(second.details?.state.goal).toBe("v2");
+		expect(second.details?.state.currentSegment).toBe(0);
+	});
+
+	it("bumps segment when new_segment is true on a re-init", async () => {
+		const dir = makeTempDir();
+		const runtime = createSessionRuntime();
+		const tool = createInitExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: createPiHarness().api,
+		});
+		await tool.execute("a", { name: "x", primary_metric: "ms" }, undefined, undefined, createCtx(dir));
+		const result = await tool.execute(
+			"b",
+			{ name: "x", primary_metric: "ms", new_segment: true },
+			undefined,
+			undefined,
+			createCtx(dir),
+		);
+		expect(result.details?.bumpedSegment).toBe(true);
+		expect(result.details?.state.currentSegment).toBe(1);
+	});
+});
+
+describe("run_experiment", () => {
+	let dbOverride: string;
+
+	beforeEach(() => {
+		dbOverride = makeTempDir("pi-autoresearch-run-db");
+		process.env.OMP_AUTORESEARCH_DB_DIR = dbOverride;
+	});
+
+	afterEach(() => {
+		delete process.env.OMP_AUTORESEARCH_DB_DIR;
+		fs.rmSync(dbOverride, { recursive: true, force: true });
+	});
+
+	it("rejects when no session is active", async () => {
+		const dir = makeTempDir();
+		const runtime = createSessionRuntime();
+		const run = createRunExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: createPiHarness().api,
+		});
+		const result = await run.execute("call-1", { command: "echo hi" }, undefined, undefined, createCtx(dir));
+		expect(firstTextBlockText(result.content)).toContain("no active autoresearch session");
+	});
+
+	it("accepts arbitrary commands, parses METRIC/ASI, and stores a run", async () => {
+		const dir = makeTempDir();
+		const runtime = createSessionRuntime();
+		const init = createInitExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: createPiHarness().api,
+		});
+		await init.execute(
+			"i",
+			{ name: "speed", primary_metric: "runtime_ms", metric_unit: "ms" },
+			undefined,
+			undefined,
+			createCtx(dir),
+		);
+		const run = createRunExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: createPiHarness().api,
+		});
+		const result = await run.execute(
+			"r",
+			{
+				command: "echo METRIC runtime_ms=42; echo METRIC memory_mb=12; echo ASI hypothesis=baseline",
+				timeout_seconds: 5,
+			},
+			undefined,
+			undefined,
+			createCtx(dir),
+		);
+		const details = result.details as RunDetails;
+		expect(details.parsedPrimary).toBe(42);
+		expect(details.parsedMetrics).toMatchObject({ runtime_ms: 42, memory_mb: 12 });
+		expect(details.parsedAsi).toMatchObject({ hypothesis: "baseline" });
+		expect(details.passed).toBe(true);
 		expect(fs.existsSync(details.benchmarkLogPath)).toBe(true);
-		expect(fs.existsSync(details.checksLogPath ?? "")).toBe(true);
 
-		const runJson = JSON.parse(fs.readFileSync(path.join(details.runDirectory, "run.json"), "utf8")) as {
-			completedAt?: string;
-			parsedPrimary?: number;
-			checks?: { passed?: boolean };
-		};
-		expect(runJson.completedAt).toEqual(expect.any(String));
-		expect(runJson.parsedPrimary).toBe(10);
-		expect(runJson.checks?.passed).toBe(true);
+		const storage = await openAutoresearchStorage(dir);
+		const session = storage.getActiveSession();
+		const runs = storage.listRuns(session!.id);
+		expect(runs).toHaveLength(1);
+		expect(runs[0].parsedPrimary).toBe(42);
+		expect(runs[0].status).toBeNull();
 	});
 
-	it("ignores incomplete run artifacts until the benchmark has actually finished", async () => {
+	it("abandons a prior pending run instead of blocking", async () => {
 		const dir = makeTempDir();
-		tempDirs.push(dir);
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				runNumber: 1,
-				startedAt: new Date().toISOString(),
-			}),
-		);
-
-		const pendingRun = await readPendingRunSummary(dir);
-		expect(pendingRun).toBeNull();
-	});
-
-	it("persists init_experiment config metadata from autoresearch.md", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir, {
-			contract: [
-				"# Autoresearch",
-				"",
-				"## Benchmark",
-				"- command: bash autoresearch.sh",
-				"- primary metric: runtime_ms",
-				"- metric unit: ms",
-				"- direction: lower",
-				"- secondary metrics: memory_mb, tokens",
-				"",
-				"## Files in Scope",
-				"- src",
-				"",
-				"## Off Limits",
-				"- src/generated",
-				"",
-				"## Constraints",
-				"- keep behavior stable",
-				"",
-			].join("\n"),
-		});
-
 		const runtime = createSessionRuntime();
-		runtime.lastRunChecks = { pass: true, output: "stale", duration: 1 };
-		runtime.lastRunDuration = 1;
-		runtime.lastRunAsi = { hypothesis: "stale" };
-		runtime.lastRunArtifactDir = path.join(dir, ".autoresearch", "runs", "9999");
-		runtime.lastRunNumber = 99;
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 1,
-			checksPass: true,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: 1,
-			parsedAsi: { hypothesis: "stale" },
-			parsedMetrics: { runtime_ms: 10 },
-			parsedPrimary: 10,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "9999"),
-			runNumber: 99,
-		};
-		const tool = createInitExperimentTool({
-			dashboard: createDashboardStub(),
+		const initTool = createInitExperimentTool({
+			dashboard: dashboardStub(),
 			getRuntime: () => runtime,
-			pi: {} as ExtensionAPI,
+			pi: createPiHarness().api,
 		});
+		await initTool.execute("i", { name: "x", primary_metric: "m" }, undefined, undefined, createCtx(dir));
+		const run = createRunExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: createPiHarness().api,
+		});
+		await run.execute("r1", { command: "echo METRIC m=1" }, undefined, undefined, createCtx(dir));
+		const result = await run.execute("r2", { command: "echo METRIC m=2" }, undefined, undefined, createCtx(dir));
+		const details = result.details as RunDetails;
+		expect(details.abandonedPriorRun).not.toBeNull();
+		expect(details.runNumber).not.toBe(details.abandonedPriorRun);
+	});
 
-		const result = await tool.execute(
-			"init-1",
+	it("warns when command differs from the preferred command", async () => {
+		const dir = makeTempDir();
+		const runtime = createSessionRuntime();
+		const init = createInitExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: createPiHarness().api,
+		});
+		await init.execute(
+			"i",
+			{ name: "x", primary_metric: "m", preferred_command: "echo preferred" },
+			undefined,
+			undefined,
+			createCtx(dir),
+		);
+		const run = createRunExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: createPiHarness().api,
+		});
+		const result = await run.execute("r", { command: "echo METRIC m=1" }, undefined, undefined, createCtx(dir));
+		const details = result.details as RunDetails;
+		expect(details.commandWarning).toContain("preferred");
+		expect(firstTextBlockText(result.content)).toContain("preferred");
+	});
+});
+
+describe("log_experiment", () => {
+	let dbOverride: string;
+
+	beforeEach(() => {
+		dbOverride = makeTempDir("pi-autoresearch-log-db");
+		process.env.OMP_AUTORESEARCH_DB_DIR = dbOverride;
+	});
+
+	afterEach(() => {
+		delete process.env.OMP_AUTORESEARCH_DB_DIR;
+		fs.rmSync(dbOverride, { recursive: true, force: true });
+	});
+
+	async function setupRun(dir: string, runtime = createSessionRuntime()) {
+		const harness = createPiHarness();
+		const init = createInitExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: harness.api,
+		});
+		await init.execute(
+			"i",
 			{
-				name: "Reduce runtime variance",
-				metric_name: "runtime_ms",
+				name: "speed",
+				primary_metric: "runtime_ms",
 				metric_unit: "ms",
-				direction: "lower",
-				benchmark_command: "bash autoresearch.sh",
 				scope_paths: ["src"],
-				off_limits: ["src/generated"],
-				constraints: ["keep behavior stable"],
+				off_limits: ["forbidden"],
 			},
 			undefined,
 			undefined,
-			createContext(dir),
+			createCtx(dir),
 		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("Experiment initialized: Reduce runtime variance"),
+		const run = createRunExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: harness.api,
 		});
-		expect(runtime.state.secondaryMetrics).toEqual([
-			{ name: "memory_mb", unit: "mb" },
-			{ name: "tokens", unit: "" },
-		]);
+		await run.execute("r", { command: "echo METRIC runtime_ms=10" }, undefined, undefined, createCtx(dir));
+		const log = createLogExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: harness.api,
+		});
+		return { runtime, log, harness };
+	}
 
-		const configEntry = JSON.parse(fs.readFileSync(path.join(dir, "autoresearch.jsonl"), "utf8").trim()) as {
-			benchmarkCommand?: string;
-			constraints?: string[];
-			offLimits?: string[];
-			scopePaths?: string[];
-			secondaryMetrics?: string[];
-		};
-		expect(configEntry.benchmarkCommand).toBe("bash autoresearch.sh");
-		expect(configEntry.secondaryMetrics).toEqual(["memory_mb", "tokens"]);
-		expect(configEntry.scopePaths).toEqual(["src"]);
-		expect(configEntry.offLimits).toEqual(["src/generated"]);
-		expect(configEntry.constraints).toEqual(["keep behavior stable"]);
-		expect(runtime.lastRunChecks).toBeNull();
-		expect(runtime.lastRunDuration).toBeNull();
-		expect(runtime.lastRunAsi).toBeNull();
-		expect(runtime.lastRunArtifactDir).toBeNull();
-		expect(runtime.lastRunNumber).toBeNull();
-		expect(runtime.lastRunSummary).toBeNull();
+	it("rejects when no pending run exists", async () => {
+		const dir = makeTempDir();
+		const runtime = createSessionRuntime();
+		const harness = createPiHarness();
+		const init = createInitExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: harness.api,
+		});
+		await init.execute("i", { name: "x", primary_metric: "m" }, undefined, undefined, createCtx(dir));
+		const log = createLogExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: harness.api,
+		});
+		const result = await log.execute(
+			"l",
+			{ metric: 1, status: "keep", description: "x" },
+			undefined,
+			undefined,
+			createCtx(dir),
+		);
+		expect(firstTextBlockText(result.content)).toContain("no pending run");
 	});
 
-	it("rejects init_experiment when the passed contract no longer matches autoresearch.md", async () => {
+	it("stores keep with metric and updates baseline", async () => {
 		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir, {
-			contract: [
-				"# Autoresearch",
-				"",
-				"## Benchmark",
-				"- command: bash autoresearch.sh",
-				"- primary metric: runtime_ms",
-				"- metric unit: ms",
-				"- direction: lower",
-				"",
-				"## Files in Scope",
-				"- src",
-				"",
-				"## Off Limits",
-				"- src/generated",
-				"",
-				"## Constraints",
-				"- keep behavior stable",
-				"",
-			].join("\n"),
-		});
+		const { log, runtime } = await setupRun(dir);
+		const result = await log.execute(
+			"l",
+			{ metric: 10, status: "keep", description: "baseline" },
+			undefined,
+			undefined,
+			createCtx(dir),
+		);
+		const details = result.details as LogDetails;
+		expect(details.experiment.status).toBe("keep");
+		expect(details.experiment.metric).toBe(10);
+		expect(details.state.bestMetric).toBe(10);
+		expect(details.state.results).toHaveLength(1);
+		expect(runtime.state.bestMetric).toBe(10);
+	});
 
-		const runtime = createSessionRuntime();
-		const tool = createInitExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: {} as ExtensionAPI,
-		});
+	it("flags scope deviations and warns when justification is missing", async () => {
+		const dir = makeTempDir();
+		await initGitRepo(dir);
+		const { log } = await setupRun(dir);
+		fs.mkdirSync(path.join(dir, "forbidden"), { recursive: true });
+		await Bun.write(path.join(dir, "forbidden", "x.ts"), "export const v = 1;\n");
+		const result = await log.execute(
+			"l",
+			{ metric: 10, status: "keep", description: "wrote forbidden" },
+			undefined,
+			undefined,
+			createCtx(dir),
+		);
+		const details = result.details as LogDetails;
+		expect(details.scopeDeviations.length).toBeGreaterThan(0);
+		expect(details.justification).toBeNull();
+		expect(firstTextBlockText(result.content)).toContain("unjustified");
+	});
 
-		const result = await tool.execute(
-			"init-2",
+	it("records the justification when provided", async () => {
+		const dir = makeTempDir();
+		await initGitRepo(dir);
+		const { log } = await setupRun(dir);
+		fs.mkdirSync(path.join(dir, "forbidden"), { recursive: true });
+		await Bun.write(path.join(dir, "forbidden", "x.ts"), "export const v = 1;\n");
+		const result = await log.execute(
+			"l",
 			{
-				name: "Mismatch",
-				metric_name: "runtime_ms",
-				metric_unit: "ms",
-				direction: "lower",
-				benchmark_command: "bash autoresearch.sh",
-				scope_paths: ["src"],
-				off_limits: ["src/other-generated"],
-				constraints: ["keep behavior stable"],
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("off_limits do not match autoresearch.md"),
-		});
-		expect(fs.existsSync(path.join(dir, "autoresearch.jsonl"))).toBe(false);
-	});
-
-	it("rejects init_experiment while a previous run is still pending", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				completedAt: new Date().toISOString(),
-				durationSeconds: 1,
-				exitCode: 0,
-				parsedPrimary: 10,
-				runNumber: 1,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		const tool = createInitExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: {} as ExtensionAPI,
-		});
-
-		const result = await tool.execute(
-			"init-pending",
-			{
-				name: "Blocked",
-				metric_name: "runtime_ms",
-				metric_unit: "ms",
-				direction: "lower",
-				benchmark_command: "bash autoresearch.sh",
-				scope_paths: ["src"],
-				off_limits: [],
-				constraints: [],
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("has not been logged yet"),
-		});
-		expect(fs.existsSync(path.join(dir, "autoresearch.jsonl"))).toBe(false);
-	});
-
-	it("refuses to start a new benchmark while a previous run artifact is still unlogged", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({ command: "bash autoresearch.sh", exitCode: 0, parsedPrimary: 10, runNumber: 1 }),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		const tool = createRunExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: {} as ExtensionAPI,
-		});
-		const result = await tool.execute(
-			"call-1b",
-			{ command: "bash autoresearch.sh", timeout_seconds: 5 },
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("has not been logged yet"),
-		});
-	});
-
-	it("times out checks asynchronously and preserves the checks log", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir, {
-			checksScript: ["#!/usr/bin/env bash", "set -euo pipefail", "sleep 2", "echo done"].join("\n"),
-		});
-
-		vi.spyOn(git, "status").mockResolvedValue("");
-		vi.spyOn(git.show, "prefix").mockResolvedValue("");
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		const tool = createRunExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: {} as ExtensionAPI,
-		});
-		const result = await tool.execute(
-			"call-3",
-			{ command: "bash autoresearch.sh", timeout_seconds: 5, checks_timeout_seconds: 0.1 },
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-		const details = expectRunDetails(result.details);
-
-		expect(details.checksTimedOut).toBe(true);
-		expect(fs.existsSync(details.checksLogPath ?? "")).toBe(true);
-	});
-
-	it("honors user aborts while the experiment is running", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir, {
-			benchmarkScript: ["#!/usr/bin/env bash", "set -euo pipefail", "sleep 5", "echo METRIC runtime_ms=10"].join(
-				"\n",
-			),
-		});
-
-		vi.spyOn(git, "status").mockResolvedValue("");
-		vi.spyOn(git.show, "prefix").mockResolvedValue("");
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		const tool = createRunExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: {} as ExtensionAPI,
-		});
-		const controller = new AbortController();
-		setTimeout(() => controller.abort(), 100);
-
-		await expect(
-			tool.execute(
-				"call-4",
-				{ command: "bash autoresearch.sh", timeout_seconds: 10 },
-				controller.signal,
-				undefined,
-				createContext(dir),
-			),
-		).rejects.toThrow("aborted");
-		expect(fs.existsSync(path.join(dir, ".autoresearch", "runs", "0001", "run.json"))).toBe(true);
-	});
-
-	it("commits only in-scope changes and excludes autoresearch local state", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir, {
-			contract: [
-				"# Autoresearch",
-				"",
-				"## Benchmark",
-				"- command: bash autoresearch.sh",
-				"- primary metric: runtime_ms",
-				"- metric unit: ms",
-				"- direction: lower",
-				"",
-				"## Files in Scope",
-				"- src/in-scope.ts",
-				"",
-				"## Off Limits",
-				"- src/generated",
-				"",
-				"## Constraints",
-				"- keep behavior stable",
-				"",
-			].join("\n"),
-		});
-		fs.mkdirSync(path.join(dir, "src"), { recursive: true });
-		fs.writeFileSync(path.join(dir, "src", "in-scope.ts"), "export const value = 1;\n");
-		fs.writeFileSync(path.join(dir, "src", "out-of-scope.ts"), "export const value = 2;\n");
-
-		await $`git init`.cwd(dir).quiet();
-		await $`git config user.email test@example.com`.cwd(dir).quiet();
-		await $`git config user.name Test User`.cwd(dir).quiet();
-		await $`git add .`.cwd(dir).quiet();
-		await $`git commit -m initial`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-force-secondary-accept`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-keep`.cwd(dir).quiet();
-
-		fs.writeFileSync(path.join(dir, "src", "in-scope.ts"), "export const value = 3;\n");
-		fs.writeFileSync(path.join(dir, "autoresearch.program.md"), "# Strategy\n\n- focus on in-scope edits\n");
-		fs.writeFileSync(path.join(dir, "autoresearch.jsonl"), '{"type":"run"}\n');
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				exitCode: 0,
-				parsedMetrics: { runtime_ms: 9 },
-				parsedPrimary: 9,
-				runNumber: 1,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.state.scopePaths = ["src/in-scope.ts"];
-		runtime.state.offLimits = ["src/generated"];
-		runtime.state.constraints = ["keep behavior stable"];
-		const runDirectory = path.join(dir, ".autoresearch", "runs", "0001");
-		runtime.lastRunArtifactDir = runDirectory;
-		runtime.lastRunNumber = 1;
-		runtime.lastRunDuration = 1.2;
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: 1.2,
-			parsedAsi: null,
-			parsedMetrics: { runtime_ms: 9 },
-			parsedPrimary: 9,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory,
-			runNumber: 1,
-		};
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: createGitApi(),
-		});
-		const result = await tool.execute(
-			"call-5",
-			{
-				commit: "initial",
-				metric: 9,
-				status: "keep",
-				description: "Improve in scope",
-				asi: { hypothesis: "inline the hot path" },
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("Logged run #1: keep"),
-		});
-		const committedPaths = await $`git show --name-only --pretty=format: HEAD`.cwd(dir).text();
-		expect(committedPaths).toContain("src/in-scope.ts");
-		expect(committedPaths).toContain("autoresearch.program.md");
-		expect(committedPaths).not.toContain("autoresearch.jsonl");
-		expect(committedPaths).not.toContain(".autoresearch");
-
-		const runJson = JSON.parse(fs.readFileSync(path.join(runDirectory, "run.json"), "utf8")) as {
-			status?: string;
-		};
-		expect(runJson.status).toBe("keep");
-	});
-
-	it("commits in-scope changes when those paths were already dirty before the run", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir, {
-			contract: [
-				"# Autoresearch",
-				"",
-				"## Benchmark",
-				"- command: bash autoresearch.sh",
-				"- primary metric: runtime_ms",
-				"- metric unit: ms",
-				"- direction: lower",
-				"",
-				"## Files in Scope",
-				"- src/in-scope.ts",
-				"",
-				"## Off Limits",
-				"",
-				"## Constraints",
-				"- keep behavior stable",
-				"",
-			].join("\n"),
-		});
-		fs.mkdirSync(path.join(dir, "src"), { recursive: true });
-		fs.writeFileSync(path.join(dir, "src", "in-scope.ts"), "export const value = 1;\n");
-
-		await $`git init`.cwd(dir).quiet();
-		await $`git config user.email test@example.com`.cwd(dir).quiet();
-		await $`git config user.name Test User`.cwd(dir).quiet();
-		await $`git add .`.cwd(dir).quiet();
-		await $`git commit -m initial`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-keep-prerun-dirty`.cwd(dir).quiet();
-
-		fs.writeFileSync(path.join(dir, "src", "in-scope.ts"), "export const value = 3;\n");
-		fs.writeFileSync(path.join(dir, "autoresearch.program.md"), "# Strategy\n\n- focus on in-scope edits\n");
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				exitCode: 0,
-				parsedMetrics: { runtime_ms: 9 },
-				parsedPrimary: 9,
-				runNumber: 1,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.state.scopePaths = ["src/in-scope.ts"];
-		runtime.state.constraints = ["keep behavior stable"];
-		const runDirectory = path.join(dir, ".autoresearch", "runs", "0001");
-		runtime.lastRunArtifactDir = runDirectory;
-		runtime.lastRunNumber = 1;
-		runtime.lastRunDuration = 1.2;
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: 1.2,
-			parsedAsi: null,
-			parsedMetrics: { runtime_ms: 9 },
-			parsedPrimary: 9,
-			passed: true,
-			preRunDirtyPaths: ["src/in-scope.ts"],
-			runDirectory,
-			runNumber: 1,
-		};
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: createGitApi(),
-		});
-		const result = await tool.execute(
-			"call-keep-prerun-dirty",
-			{
-				commit: "initial",
-				metric: 9,
-				status: "keep",
-				description: "Improve in scope after prior WIP",
-				asi: { hypothesis: "refine further" },
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(firstTextBlockText(result.content)).toContain("Logged run #1: keep");
-		const committedPaths = await $`git show --name-only --pretty=format: HEAD`.cwd(dir).text();
-		expect(committedPaths).toContain("src/in-scope.ts");
-		expect(committedPaths).toContain("autoresearch.program.md");
-	});
-
-	it("rejects keep when an out-of-scope file is dirty", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir, {
-			contract: [
-				"# Autoresearch",
-				"",
-				"## Benchmark",
-				"- command: bash autoresearch.sh",
-				"- primary metric: runtime_ms",
-				"- metric unit: ms",
-				"- direction: lower",
-				"",
-				"## Files in Scope",
-				"- src/in-scope.ts",
-				"",
-				"## Off Limits",
-				"",
-				"## Constraints",
-				"",
-			].join("\n"),
-		});
-		fs.mkdirSync(path.join(dir, "src"), { recursive: true });
-		fs.writeFileSync(path.join(dir, "src", "in-scope.ts"), "export const value = 1;\n");
-		fs.writeFileSync(path.join(dir, "src", "out-of-scope.ts"), "export const value = 2;\n");
-
-		await $`git init`.cwd(dir).quiet();
-		await $`git config user.email test@example.com`.cwd(dir).quiet();
-		await $`git config user.name Test User`.cwd(dir).quiet();
-		await $`git add .`.cwd(dir).quiet();
-		await $`git commit -m initial`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-max-iterations-accept`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-force-secondary`.cwd(dir).quiet();
-
-		fs.writeFileSync(path.join(dir, "src", "out-of-scope.ts"), "export const value = 99;\n");
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				exitCode: 0,
-				parsedMetrics: { runtime_ms: 9 },
-				parsedPrimary: 9,
-				runNumber: 1,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.state.scopePaths = ["src/in-scope.ts"];
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: null,
-			parsedAsi: null,
-			parsedMetrics: { runtime_ms: 9 },
-			parsedPrimary: 9,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0001"),
-			runNumber: 1,
-		};
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: createGitApi(),
-		});
-		const result = await tool.execute(
-			"call-6",
-			{
-				commit: "initial",
-				metric: 9,
-				status: "keep",
-				description: "Should fail",
-				asi: { hypothesis: "touch wrong file" },
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("outside Files in Scope"),
-		});
-		expect(runtime.state.results).toHaveLength(0);
-	});
-
-	it("rejects keep when a dirty path is listed under Off Limits", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir, {
-			contract: [
-				"# Autoresearch",
-				"",
-				"## Benchmark",
-				"- command: bash autoresearch.sh",
-				"- primary metric: runtime_ms",
-				"- metric unit: ms",
-				"- direction: lower",
-				"",
-				"## Files in Scope",
-				"- src",
-				"",
-				"## Off Limits",
-				"- src/generated",
-				"",
-				"## Constraints",
-				"",
-			].join("\n"),
-		});
-		fs.mkdirSync(path.join(dir, "src", "generated"), { recursive: true });
-		fs.writeFileSync(path.join(dir, "src", "generated", "index.ts"), "export const value = 1;\n");
-
-		await $`git init`.cwd(dir).quiet();
-		await $`git config user.email test@example.com`.cwd(dir).quiet();
-		await $`git config user.name Test User`.cwd(dir).quiet();
-		await $`git add .`.cwd(dir).quiet();
-		await $`git commit -m initial`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-discard-cleanup`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-max-iterations`.cwd(dir).quiet();
-
-		fs.writeFileSync(path.join(dir, "src", "generated", "index.ts"), "export const value = 2;\n");
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				exitCode: 0,
-				parsedMetrics: { runtime_ms: 9 },
-				parsedPrimary: 9,
-				runNumber: 1,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.state.scopePaths = ["src"];
-		runtime.state.offLimits = ["src/generated"];
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: null,
-			parsedAsi: null,
-			parsedMetrics: { runtime_ms: 9 },
-			parsedPrimary: 9,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0001"),
-			runNumber: 1,
-		};
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: createGitApi(),
-		});
-		const result = await tool.execute(
-			"call-7",
-			{
-				commit: "initial",
-				metric: 9,
-				status: "keep",
-				description: "Should fail",
-				asi: { hypothesis: "touch forbidden path" },
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("Off Limits"),
-		});
-		expect(runtime.state.results).toHaveLength(0);
-	});
-
-	it("rejects keep when the metric is worse than the current best kept run", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-
-		await $`git init`.cwd(dir).quiet();
-		await $`git config user.email test@example.com`.cwd(dir).quiet();
-		await $`git config user.name Test User`.cwd(dir).quiet();
-		await $`git add .`.cwd(dir).quiet();
-		await $`git commit -m initial`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-discard`.cwd(dir).quiet();
-
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0003", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				completedAt: new Date().toISOString(),
-				durationSeconds: 1,
-				exitCode: 0,
-				parsedMetrics: { runtime_ms: 9 },
-				parsedPrimary: 9,
-				runNumber: 3,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.state.scopePaths = ["autoresearch.md"];
-		runtime.state.results = [
-			{
-				runNumber: 1,
-				commit: "aaaaaaa",
 				metric: 10,
-				metrics: {},
 				status: "keep",
-				description: "baseline",
-				timestamp: 1,
-				segment: 0,
-				confidence: null,
+				description: "wrote forbidden",
+				justification: "this file moved into scope",
 			},
+			undefined,
+			undefined,
+			createCtx(dir),
+		);
+		const details = result.details as LogDetails;
+		expect(details.scopeDeviations.length).toBeGreaterThan(0);
+		expect(details.justification).toBe("this file moved into scope");
+	});
+
+	it("flags previously logged runs via flag_runs", async () => {
+		const dir = makeTempDir();
+		const { log } = await setupRun(dir);
+		const first = await log.execute(
+			"l1",
+			{ metric: 10, status: "keep", description: "baseline" },
+			undefined,
+			undefined,
+			createCtx(dir),
+		);
+		const firstId = (first.details as LogDetails).experiment.runNumber;
+		expect(firstId).not.toBeNull();
+
+		// New run + log that flags the previous run.
+		const harness = createPiHarness();
+		const runtime = createSessionRuntime();
+		// Re-hydrate runtime by re-running the tools chain.
+		const init = createInitExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: harness.api,
+		});
+		await init.execute(
+			"i",
 			{
-				runNumber: 2,
-				commit: "bbbbbbb",
+				name: "speed",
+				primary_metric: "runtime_ms",
+				metric_unit: "ms",
+				scope_paths: ["src"],
+				off_limits: ["forbidden"],
+			},
+			undefined,
+			undefined,
+			createCtx(dir),
+		);
+		const run = createRunExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: harness.api,
+		});
+		await run.execute("r2", { command: "echo METRIC runtime_ms=8" }, undefined, undefined, createCtx(dir));
+		const log2 = createLogExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: harness.api,
+		});
+		const second = await log2.execute(
+			"l2",
+			{
 				metric: 8,
-				metrics: {},
 				status: "keep",
-				description: "winner",
-				timestamp: 2,
-				segment: 0,
-				confidence: null,
-			},
-		];
-		runtime.lastRunArtifactDir = path.join(dir, ".autoresearch", "runs", "0003");
-		runtime.lastRunNumber = 3;
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: 1,
-			parsedAsi: null,
-			parsedMetrics: { runtime_ms: 9 },
-			parsedPrimary: 9,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0003"),
-			runNumber: 3,
-		};
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: createGitApi(),
-		});
-		const result = await tool.execute(
-			"call-best",
-			{
-				commit: "initial",
-				metric: 9,
-				status: "keep",
-				description: "regression from best",
-				asi: { hypothesis: "try a weaker variant" },
+				description: "improved",
+				flag_runs: [{ run_id: firstId as number, reason: "reward-hacked" }],
 			},
 			undefined,
 			undefined,
-			createContext(dir),
+			createCtx(dir),
 		);
+		const details = second.details as LogDetails;
+		expect(details.flaggedRuns).toEqual([{ runId: firstId as number, reason: "reward-hacked" }]);
 
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("Current best: 8"),
-		});
-		expect(runtime.state.results).toHaveLength(2);
+		// Refresh storage to confirm DB row updated
+		const storage = await openAutoresearchStorage(dir);
+		const session = storage.getActiveSession();
+		const runs = storage.listLoggedRuns(session!.id);
+		const flagged = runs.find(r => r.id === firstId);
+		expect(flagged?.flagged).toBe(true);
+		expect(flagged?.flaggedReason).toBe("reward-hacked");
 	});
 
-	it("accepts log_experiment when configured secondary metrics are missing (secondary metrics are informational)", async () => {
+	it("on a non-autoresearch branch, discard reverts only run-modified files", async () => {
 		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir, {
-			contract: [
-				"# Autoresearch",
-				"",
-				"## Benchmark",
-				"- command: bash autoresearch.sh",
-				"- primary metric: runtime_ms",
-				"- metric unit: ms",
-				"- direction: lower",
-				"- secondary metrics: memory_mb, tokens",
-				"",
-				"## Files in Scope",
-				"- src",
-				"",
-				"## Off Limits",
-				"",
-				"## Constraints",
-				"- keep behavior stable",
-				"",
-			].join("\n"),
-		});
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				completedAt: new Date().toISOString(),
-				durationSeconds: 1,
-				exitCode: 0,
-				parsedMetrics: { memory_mb: 32, runtime_ms: 9 },
-				parsedPrimary: 9,
-				runNumber: 1,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.state.secondaryMetrics = [
-			{ name: "memory_mb", unit: "mb" },
-			{ name: "tokens", unit: "" },
-		];
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: 1,
-			parsedAsi: null,
-			parsedMetrics: { memory_mb: 32, runtime_ms: 9 },
-			parsedPrimary: 9,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0001"),
-			runNumber: 1,
-		};
-
-		vi.spyOn(git.branch, "current").mockResolvedValue("autoresearch/test-missing-secondary");
-		vi.spyOn(git, "status").mockResolvedValue("");
-		vi.spyOn(git.show, "prefix").mockResolvedValue("");
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: {} as ExtensionAPI,
-		});
-		const result = await tool.execute(
-			"call-missing-secondary",
-			{
-				commit: "initial",
-				metric: 9,
-				status: "discard",
-				description: "missing tokens metric",
-				metrics: { memory_mb: 32 },
-				asi: {
-					hypothesis: "watch memory only",
-					rollback_reason: "missing required metrics",
-					next_action_hint: "include all configured tradeoff metrics",
-				},
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("Logged run #1: discard"),
-		});
-		expect(runtime.state.results).toHaveLength(1);
-	});
-
-	it("accepts new secondary metrics without force (secondary metrics are informational)", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir, {
-			contract: [
-				"# Autoresearch",
-				"",
-				"## Benchmark",
-				"- command: bash autoresearch.sh",
-				"- primary metric: runtime_ms",
-				"- metric unit: ms",
-				"- direction: lower",
-				"- secondary metrics: memory_mb",
-				"",
-				"## Files in Scope",
-				"- src",
-				"",
-				"## Off Limits",
-				"",
-				"## Constraints",
-				"- keep behavior stable",
-				"",
-			].join("\n"),
-		});
-		await $`git init`.cwd(dir).quiet();
-		await $`git config user.email test@example.com`.cwd(dir).quiet();
-		await $`git config user.name Test User`.cwd(dir).quiet();
-		await $`git add .`.cwd(dir).quiet();
-		await $`git commit -m initial`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-new-secondary-reject`.cwd(dir).quiet();
-
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				completedAt: new Date().toISOString(),
-				durationSeconds: 1,
-				exitCode: 0,
-				parsedMetrics: { runtime_ms: 9 },
-				parsedPrimary: 9,
-				runNumber: 1,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: 1,
-			parsedAsi: null,
-			parsedMetrics: { runtime_ms: 9 },
-			parsedPrimary: 9,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0001"),
-			runNumber: 1,
-		};
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: createGitApi(),
-		});
-		const result = await tool.execute(
-			"call-new-secondary",
-			{
-				commit: "initial",
-				metric: 9,
-				status: "discard",
-				description: "introduce tokens metric",
-				metrics: { memory_mb: 32, tokens: 100 },
-				asi: {
-					hypothesis: "watch an extra tradeoff",
-					rollback_reason: "needs explicit opt-in",
-					next_action_hint: "retry with force if the metric matters",
-				},
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("Logged run #1: discard"),
-		});
-		expect(runtime.state.results).toHaveLength(1);
-	});
-
-	it("accepts a new secondary metric without force (secondary metrics are informational)", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-
-		await $`git init`.cwd(dir).quiet();
-		await $`git config user.email test@example.com`.cwd(dir).quiet();
-		await $`git config user.name Test User`.cwd(dir).quiet();
-		await $`git add .`.cwd(dir).quiet();
-		await $`git commit -m initial`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-force-secondary-accept`.cwd(dir).quiet();
-
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				completedAt: new Date().toISOString(),
-				durationSeconds: 1,
-				exitCode: 0,
-				parsedMetrics: { runtime_ms: 9 },
-				parsedPrimary: 9,
-				runNumber: 1,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.state.secondaryMetrics = [{ name: "memory_mb", unit: "mb" }];
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: 1,
-			parsedAsi: null,
-			parsedMetrics: { runtime_ms: 9 },
-			parsedPrimary: 9,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0001"),
-			runNumber: 1,
-		};
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: createGitApi(),
-		});
-		const result = await tool.execute(
-			"call-force-secondary",
-			{
-				commit: "initial",
-				metric: 9,
-				status: "discard",
-				description: "extra metric without force",
-				metrics: { memory_mb: 32, tokens: 100 },
-				asi: {
-					hypothesis: "capture an extra tradeoff",
-					rollback_reason: "benchmark was flat",
-					next_action_hint: "keep collecting tokens when useful",
-				},
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("Logged run #1: discard"),
-		});
-		expect(runtime.state.secondaryMetrics).toContainEqual({ name: "tokens", unit: "" });
-	});
-
-	it("rejects log_experiment at the tool boundary when asi is missing", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				completedAt: new Date().toISOString(),
-				durationSeconds: 1,
-				exitCode: 0,
-				parsedMetrics: { runtime_ms: 9 },
-				parsedPrimary: 9,
-				runNumber: 1,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: 1,
-			parsedAsi: null,
-			parsedMetrics: { runtime_ms: 9 },
-			parsedPrimary: 9,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0001"),
-			runNumber: 1,
-		};
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: {} as ExtensionAPI,
-		});
-		const result = await tool.execute(
-			"call-missing-asi",
-			{
-				commit: "initial",
-				metric: 9,
-				status: "keep",
-				description: "missing asi",
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("asi is required"),
-		});
-		expect(runtime.state.results).toHaveLength(0);
-		expect(fs.existsSync(path.join(dir, "autoresearch.jsonl"))).toBe(false);
-	});
-
-	it("requires failed benchmarks to be logged as crash", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				completedAt: new Date().toISOString(),
-				durationSeconds: 1,
-				exitCode: 1,
-				runNumber: 1,
-				timedOut: false,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: 1,
-			parsedAsi: null,
-			parsedMetrics: null,
-			parsedPrimary: null,
-			passed: false,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0001"),
-			runNumber: 1,
-		};
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: {
-				exec: async () => ({ code: 0, stderr: "", stdout: "autoresearch/test-20260323\n" }),
-			} as unknown as ExtensionAPI,
-		});
-		const result = await tool.execute(
-			"call-status-crash",
-			{
-				commit: "initial",
-				metric: 0,
-				status: "discard",
-				description: "wrong status",
-				asi: {
-					hypothesis: "broken attempt",
-					rollback_reason: "benchmark failed",
-					next_action_hint: "fix the crash first",
-				},
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("Log it as crash"),
-		});
-	});
-
-	it("requires failed checks to be logged as checks_failed", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				checks: { durationSeconds: 1, passed: false, timedOut: false },
-				command: "bash autoresearch.sh",
-				completedAt: new Date().toISOString(),
-				durationSeconds: 1,
-				exitCode: 0,
-				parsedPrimary: 10,
-				runNumber: 1,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 1,
-			checksPass: false,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: 1,
-			parsedAsi: null,
-			parsedMetrics: null,
-			parsedPrimary: 10,
-			passed: false,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0001"),
-			runNumber: 1,
-		};
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: {
-				exec: async () => ({ code: 0, stderr: "", stdout: "autoresearch/test-20260323\n" }),
-			} as unknown as ExtensionAPI,
-		});
-		const result = await tool.execute(
-			"call-status-checks",
-			{
-				commit: "initial",
-				metric: 10,
-				status: "crash",
-				description: "wrong checks status",
-				asi: {
-					hypothesis: "checks regressed",
-					rollback_reason: "test suite failed",
-					next_action_hint: "inspect failing checks",
-				},
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("Log it as checks_failed"),
-		});
-	});
-
-	it("persists autoresearch shutdown when the max iteration cap is reached", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-
-		await $`git init`.cwd(dir).quiet();
-		await $`git config user.email test@example.com`.cwd(dir).quiet();
-		await $`git config user.name Test User`.cwd(dir).quiet();
-		await $`git add .`.cwd(dir).quiet();
-		await $`git commit -m initial`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-max-iterations-accept`.cwd(dir).quiet();
-
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				exitCode: 0,
-				parsedMetrics: { runtime_ms: 9 },
-				parsedPrimary: 9,
-				runNumber: 1,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.autoresearchMode = true;
-		runtime.goal = "reduce runtime";
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.state.scopePaths = ["autoresearch.md"];
-		runtime.state.maxExperiments = 1;
-		runtime.lastRunArtifactDir = path.join(dir, ".autoresearch", "runs", "0001");
-		runtime.lastRunNumber = 1;
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: null,
-			parsedAsi: null,
-			parsedMetrics: { runtime_ms: 9 },
-			parsedPrimary: 9,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0001"),
-			runNumber: 1,
-		};
-
-		const managedApi = createManagedGitApi({
-			activeTools: ["read", "init_experiment", "run_experiment", "log_experiment"],
-		});
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: managedApi.api,
-		});
-		const result = await tool.execute(
-			"call-max",
-			{
-				commit: "initial",
-				metric: 9,
-				status: "keep",
-				description: "Baseline",
-				asi: { hypothesis: "record baseline" },
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("Autoresearch mode is now off"),
-		});
-		expect(runtime.autoresearchMode).toBe(false);
-		expect(managedApi.appendEntries).toContainEqual({
-			customType: "autoresearch-control",
-			data: { mode: "off", goal: "reduce runtime" },
-		});
-		expect(managedApi.setActiveToolsCalls).toEqual([["read"]]);
-	});
-
-	it("rejects keep when a rename touches an off-limits source path", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir, {
-			contract: [
-				"# Autoresearch",
-				"",
-				"## Benchmark",
-				"- command: bash autoresearch.sh",
-				"- primary metric: runtime_ms",
-				"- metric unit: ms",
-				"- direction: lower",
-				"",
-				"## Files in Scope",
-				"- src",
-				"",
-				"## Off Limits",
-				"- src/generated",
-				"",
-				"## Constraints",
-				"",
-			].join("\n"),
-		});
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.state.scopePaths = ["src"];
-		runtime.state.offLimits = ["src/generated"];
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: null,
-			parsedAsi: null,
-			parsedMetrics: { runtime_ms: 9 },
-			parsedPrimary: 9,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0001"),
-			runNumber: 1,
-		};
-
-		vi.spyOn(git, "status").mockResolvedValue("R  src/generated/index.ts\0src/index.ts\0");
-		vi.spyOn(git.show, "prefix").mockResolvedValue("");
-
-		const api = {} as ExtensionAPI;
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: api,
-		});
-		const result = await tool.execute(
-			"call-8",
-			{
-				commit: "initial",
-				metric: 9,
-				status: "keep",
-				description: "Should fail on rename",
-				asi: { hypothesis: "rename generated file" },
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("Off Limits"),
-		});
-		expect(runtime.state.results).toHaveLength(0);
-	});
-
-	it("reverts run-modified files on discard while preserving autoresearch control files", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-		fs.writeFileSync(path.join(dir, "autoresearch.program.md"), "# Strategy\n");
+		await initGitRepo(dir);
+		// Commit `src/edit-me.ts` to baseline so it is tracked, not in pre-run dirty paths.
 		fs.mkdirSync(path.join(dir, "src"), { recursive: true });
-		fs.writeFileSync(path.join(dir, "src", "main.ts"), "export const value = 1;\n");
-
-		await $`git init`.cwd(dir).quiet();
-		await $`git config user.email test@example.com`.cwd(dir).quiet();
-		await $`git config user.name Test User`.cwd(dir).quiet();
-		await $`git add .`.cwd(dir).quiet();
-		await $`git commit -m initial`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-discard-cleanup`.cwd(dir).quiet();
-
-		// Modify a tracked file and create an untracked file (simulating run-produced changes)
-		fs.writeFileSync(path.join(dir, "src", "main.ts"), "export const value = 99;\n");
-		fs.writeFileSync(path.join(dir, "src", "new-file.ts"), "export const extra = true;\n");
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				exitCode: 0,
-				parsedMetrics: { runtime_ms: 10 },
-				parsedPrimary: 10,
-				runNumber: 1,
-			}),
-		);
-
+		await Bun.write(path.join(dir, "src", "edit-me.ts"), "export const v = 1;\n");
+		await $`git add -A`.cwd(dir).quiet();
+		await $`git commit -m seed`.cwd(dir).quiet();
 		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.state.scopePaths = ["src"];
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: null,
-			parsedAsi: null,
-			parsedMetrics: { runtime_ms: 10 },
-			parsedPrimary: 10,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0001"),
-			runNumber: 1,
-		};
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
+		const harness = createPiHarness();
+		const init = createInitExperimentTool({
+			dashboard: dashboardStub(),
 			getRuntime: () => runtime,
-			pi: createGitApi(),
+			pi: harness.api,
 		});
-		const result = await tool.execute(
-			"call-discard",
-			{
-				commit: "initial",
-				metric: 10,
-				status: "discard",
-				description: "Discard noisy run",
-				asi: {
-					hypothesis: "investigate cache behavior",
-					rollback_reason: "changes did not help",
-					next_action_hint: "try a cleaner setup",
-				},
-			},
+		await init.execute(
+			"i",
+			{ name: "x", primary_metric: "m", scope_paths: ["src"] },
 			undefined,
 			undefined,
-			createContext(dir),
+			createCtx(dir),
 		);
-
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: expect.stringContaining("Logged run #1: discard"),
+		const run = createRunExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: harness.api,
 		});
-		// Tracked file should be reverted to its committed state
-		expect(fs.readFileSync(path.join(dir, "src", "main.ts"), "utf8")).toBe("export const value = 1;\n");
-		// Untracked file should be removed
-		expect(fs.existsSync(path.join(dir, "src", "new-file.ts"))).toBe(false);
-		// Autoresearch control files should be preserved
-		expect(fs.existsSync(path.join(dir, "autoresearch.md"))).toBe(true);
-		expect(fs.existsSync(path.join(dir, "autoresearch.program.md"))).toBe(true);
+		// Pre-existing untracked file (will not be touched by revert because it was dirty before run)
+		await Bun.write(path.join(dir, "preexisting.txt"), "leave me\n");
+		await run.execute("r", { command: "echo METRIC m=10" }, undefined, undefined, createCtx(dir));
+		// Simulate a run-introduced change
+		await Bun.write(path.join(dir, "src", "edit-me.ts"), "export const v = 2;\n");
+		await Bun.write(path.join(dir, "src", "new.ts"), "export const NEW = true;\n");
+
+		const log = createLogExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: harness.api,
+		});
+		await log.execute(
+			"l",
+			{ metric: 12, status: "discard", description: "regress" },
+			undefined,
+			undefined,
+			createCtx(dir),
+		);
+		// Pre-existing file untouched
+		expect(fs.readFileSync(path.join(dir, "preexisting.txt"), "utf8")).toBe("leave me\n");
+		// New untracked file removed
+		expect(fs.existsSync(path.join(dir, "src", "new.ts"))).toBe(false);
+		// Tracked edit reverted to baseline content
+		expect(fs.readFileSync(path.join(dir, "src", "edit-me.ts"), "utf8")).toBe("export const v = 1;\n");
 	});
 
-	it("treats run artifacts stamped with abandonedAt as not pending", async () => {
+	it("on an autoresearch branch, discard resets the worktree to baseline_commit", async () => {
 		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				abandonedAt: new Date().toISOString(),
-				command: "bash autoresearch.sh",
-				completedAt: new Date().toISOString(),
-				exitCode: 0,
-				parsedPrimary: 10,
-				runNumber: 1,
-			}),
-		);
-		expect(await readPendingRunSummary(dir)).toBeNull();
-	});
-
-	it("abandonUnloggedAutoresearchRuns stamps pending artifacts", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				completedAt: new Date().toISOString(),
-				exitCode: 0,
-				parsedPrimary: 10,
-				runNumber: 1,
-			}),
-		);
-		const n = await abandonUnloggedAutoresearchRuns(dir, new Set());
-		expect(n).toBe(1);
-		const runJson = JSON.parse(
-			fs.readFileSync(path.join(dir, ".autoresearch", "runs", "0001", "run.json"), "utf8"),
-		) as {
-			abandonedAt?: string;
-		};
-		expect(runJson.abandonedAt).toEqual(expect.any(String));
-		expect(await readPendingRunSummary(dir)).toBeNull();
-	});
-
-	it("allows init_experiment after abandon_unlogged_runs clears a pending artifact", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				completedAt: new Date().toISOString(),
-				exitCode: 0,
-				parsedPrimary: 10,
-				runNumber: 1,
-			}),
-		);
-
+		const { baselineCommit } = await initGitRepo(dir);
+		await checkoutBranch(dir, "autoresearch/test-20260501");
 		const runtime = createSessionRuntime();
-		const tool = createInitExperimentTool({
-			dashboard: createDashboardStub(),
+		const harness = createPiHarness();
+		const init = createInitExperimentTool({
+			dashboard: dashboardStub(),
 			getRuntime: () => runtime,
-			pi: {} as ExtensionAPI,
+			pi: harness.api,
 		});
+		await init.execute("i", { name: "x", primary_metric: "m" }, undefined, undefined, createCtx(dir));
+		const run = createRunExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: harness.api,
+		});
+		await run.execute("r", { command: "echo METRIC m=10" }, undefined, undefined, createCtx(dir));
+		// Modify and commit a file on the autoresearch branch — discard should reset HEAD back to baseline.
+		await Bun.write(path.join(dir, "src", "stub.ts"), "export const v = 1;\n");
+		await $`git add -A`.cwd(dir).quiet();
+		await $`git commit -m wip`.cwd(dir).quiet();
 
-		const blocked = await tool.execute(
-			"init-blocked",
-			{
-				name: "Should block",
-				metric_name: "runtime_ms",
-				metric_unit: "ms",
-				direction: "lower",
-				benchmark_command: "bash autoresearch.sh",
-				scope_paths: ["src"],
-				off_limits: [],
-				constraints: ["keep behavior stable"],
-			},
+		const log = createLogExperimentTool({
+			dashboard: dashboardStub(),
+			getRuntime: () => runtime,
+			pi: harness.api,
+		});
+		await log.execute(
+			"l",
+			{ metric: 12, status: "discard", description: "regress" },
 			undefined,
 			undefined,
-			createContext(dir),
+			createCtx(dir),
 		);
-		expect(firstTextBlockText(blocked.content)).toContain("has not been logged yet");
+		const headSha = (await $`git rev-parse HEAD`.cwd(dir).text()).trim();
+		expect(headSha).toBe(baselineCommit);
+		expect(fs.existsSync(path.join(dir, "src", "stub.ts"))).toBe(false);
+	});
+});
 
-		const ok = await tool.execute(
-			"init-abandon",
-			{
-				name: "Fresh segment",
-				metric_name: "runtime_ms",
-				metric_unit: "ms",
-				direction: "lower",
-				benchmark_command: "bash autoresearch.sh",
-				scope_paths: ["src"],
-				off_limits: [],
-				constraints: ["keep behavior stable"],
-				abandon_unlogged_runs: true,
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-		expect(firstTextBlockText(ok.content)).toContain("Abandoned 1 unlogged run artifact");
-		expect(firstTextBlockText(ok.content)).toContain("Experiment initialized: Fresh segment");
+describe("update_notes", () => {
+	let dbOverride: string;
+
+	beforeEach(() => {
+		dbOverride = makeTempDir("pi-autoresearch-notes-db");
+		process.env.OMP_AUTORESEARCH_DB_DIR = dbOverride;
 	});
 
-	it("initializes from autoresearch.md when from_autoresearch_md is true", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir, {
-			contract: [
-				"# Autoresearch",
-				"",
-				"## Benchmark",
-				"- command: bash autoresearch.sh",
-				"- primary metric: runtime_ms",
-				"- metric unit: ms",
-				"- direction: lower",
-				"- secondary metrics: memory_mb",
-				"",
-				"## Files in Scope",
-				"- src",
-				"",
-				"## Off Limits",
-				"- src/generated",
-				"",
-				"## Constraints",
-				"- keep behavior stable",
-				"",
-			].join("\n"),
-		});
-
-		const runtime = createSessionRuntime();
-		const tool = createInitExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: {} as ExtensionAPI,
-		});
-
-		const result = await tool.execute(
-			"init-from-md",
-			{
-				name: "From file only",
-				from_autoresearch_md: true,
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(firstTextBlockText(result.content)).toContain("Experiment initialized: From file only");
-		expect(runtime.state.metricName).toBe("runtime_ms");
-		expect(runtime.state.benchmarkCommand).toBe("bash autoresearch.sh");
-		expect(runtime.state.scopePaths).toEqual(["src"]);
-		expect(runtime.state.secondaryMetrics).toEqual([{ name: "memory_mb", unit: "mb" }]);
+	afterEach(() => {
+		delete process.env.OMP_AUTORESEARCH_DB_DIR;
+		fs.rmSync(dbOverride, { recursive: true, force: true });
 	});
 
-	it("runs a mismatched command when force is true", async () => {
+	it("replaces session notes and refreshes runtime state", async () => {
 		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir, {
-			benchmarkScript: ["#!/usr/bin/env bash", "set -euo pipefail", "echo METRIC runtime_ms=42"].join("\n"),
-		});
-
-		vi.spyOn(git, "status").mockResolvedValue("");
-		vi.spyOn(git.show, "prefix").mockResolvedValue("");
-
 		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.state.benchmarkCommand = "bash autoresearch.sh";
-
-		const tool = createRunExperimentTool({
-			dashboard: createDashboardStub(),
+		const harness = createPiHarness();
+		const init = createInitExperimentTool({
+			dashboard: dashboardStub(),
 			getRuntime: () => runtime,
-			pi: {} as ExtensionAPI,
+			pi: harness.api,
 		});
-
-		const result = await tool.execute(
-			"call-force-cmd",
-			{ command: "bash -c 'echo METRIC runtime_ms=99'", timeout_seconds: 5, force: true },
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		const details = expectRunDetails(result.details);
-		expect(details.parsedPrimary).toBe(99);
-		expect(firstTextBlockText(result.content)).toContain("force=true");
-	});
-
-	it("allows keep without ASI when log_experiment force is true", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-		await $`git init`.cwd(dir).quiet();
-		await $`git config user.email test@example.com`.cwd(dir).quiet();
-		await $`git config user.name Test User`.cwd(dir).quiet();
-		await $`git add .`.cwd(dir).quiet();
-		await $`git commit -m initial`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-force-asi`.cwd(dir).quiet();
-
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				completedAt: new Date().toISOString(),
-				durationSeconds: 1,
-				exitCode: 0,
-				parsedMetrics: { runtime_ms: 9 },
-				parsedPrimary: 9,
-				runNumber: 1,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.state.scopePaths = ["src"];
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: 1,
-			parsedAsi: null,
-			parsedMetrics: { runtime_ms: 9 },
-			parsedPrimary: 9,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0001"),
-			runNumber: 1,
-		};
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
+		await init.execute("i", { name: "x", primary_metric: "m" }, undefined, undefined, createCtx(dir));
+		const notes = createUpdateNotesTool({
+			dashboard: dashboardStub(),
 			getRuntime: () => runtime,
-			pi: createGitApi(),
+			pi: harness.api,
 		});
+		const result = await notes.execute("n", { body: "## Plan\n- step one\n" }, undefined, undefined, createCtx(dir));
+		expect(result.details?.notes).toContain("step one");
+		expect(runtime.state.notes).toContain("step one");
 
-		const result = await tool.execute(
-			"log-force-asi",
-			{
-				commit: "initial",
-				metric: 9,
-				status: "keep",
-				description: "force no asi",
-				force: true,
-			},
+		const append = await notes.execute(
+			"n2",
+			{ body: "", append_idea: "try caching" },
 			undefined,
 			undefined,
-			createContext(dir),
+			createCtx(dir),
 		);
-
-		expect(firstTextBlockText(result.content)).toContain("Logged run #1: keep");
-	});
-
-	it("allows keep on a regression when log_experiment force is true", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-
-		await $`git init`.cwd(dir).quiet();
-		await $`git config user.email test@example.com`.cwd(dir).quiet();
-		await $`git config user.name Test User`.cwd(dir).quiet();
-		await $`git add .`.cwd(dir).quiet();
-		await $`git commit -m initial`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-force-regression`.cwd(dir).quiet();
-
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0003", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				completedAt: new Date().toISOString(),
-				durationSeconds: 1,
-				exitCode: 0,
-				parsedMetrics: { runtime_ms: 9 },
-				parsedPrimary: 9,
-				runNumber: 3,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.state.scopePaths = ["src"];
-		runtime.state.results = [
-			{
-				runNumber: 1,
-				commit: "aaaaaaa",
-				metric: 10,
-				metrics: {},
-				status: "keep",
-				description: "baseline",
-				timestamp: 1,
-				segment: 0,
-				confidence: null,
-			},
-			{
-				runNumber: 2,
-				commit: "bbbbbbb",
-				metric: 8,
-				metrics: {},
-				status: "keep",
-				description: "winner",
-				timestamp: 2,
-				segment: 0,
-				confidence: null,
-			},
-		];
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: 1,
-			parsedAsi: null,
-			parsedMetrics: { runtime_ms: 9 },
-			parsedPrimary: 9,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0003"),
-			runNumber: 3,
-		};
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: createGitApi(),
-		});
-
-		const result = await tool.execute(
-			"log-force-regression",
-			{
-				commit: "initial",
-				metric: 9,
-				status: "keep",
-				description: "keep worse than best",
-				force: true,
-				asi: { hypothesis: "document intentional regression" },
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(firstTextBlockText(result.content)).toContain("Logged run #3: keep");
-		expect(runtime.state.results).toHaveLength(3);
-	});
-
-	it("refreshes scope from autoresearch.md at log_experiment time", async () => {
-		const dir = makeTempDir();
-		tempDirs.push(dir);
-		writeAutoresearchWorkspace(dir);
-		await $`git init`.cwd(dir).quiet();
-		await $`git config user.email test@example.com`.cwd(dir).quiet();
-		await $`git config user.name Test User`.cwd(dir).quiet();
-		await $`git add .`.cwd(dir).quiet();
-		await $`git commit -m initial`.cwd(dir).quiet();
-		await $`git checkout -b autoresearch/test-log-refresh`.cwd(dir).quiet();
-
-		await Bun.write(
-			path.join(dir, ".autoresearch", "runs", "0001", "run.json"),
-			JSON.stringify({
-				command: "bash autoresearch.sh",
-				completedAt: new Date().toISOString(),
-				durationSeconds: 1,
-				exitCode: 0,
-				parsedMetrics: { runtime_ms: 9 },
-				parsedPrimary: 9,
-				runNumber: 1,
-			}),
-		);
-
-		const runtime = createSessionRuntime();
-		runtime.state.metricName = "runtime_ms";
-		runtime.state.metricUnit = "ms";
-		runtime.state.scopePaths = ["wrong-path"];
-		runtime.lastRunSummary = {
-			checksDurationSeconds: 0,
-			checksPass: null,
-			checksTimedOut: false,
-			command: "bash autoresearch.sh",
-			durationSeconds: 1,
-			parsedAsi: null,
-			parsedMetrics: { runtime_ms: 9 },
-			parsedPrimary: 9,
-			passed: true,
-			preRunDirtyPaths: [],
-			runDirectory: path.join(dir, ".autoresearch", "runs", "0001"),
-			runNumber: 1,
-		};
-
-		const tool = createLogExperimentTool({
-			dashboard: createDashboardStub(),
-			getRuntime: () => runtime,
-			pi: createGitApi(),
-		});
-
-		const result = await tool.execute(
-			"log-refresh-scope",
-			{
-				commit: "initial",
-				metric: 9,
-				status: "discard",
-				description: "sync scope from md",
-				asi: {
-					hypothesis: "test refresh",
-					rollback_reason: "discard",
-					next_action_hint: "continue",
-				},
-			},
-			undefined,
-			undefined,
-			createContext(dir),
-		);
-
-		expect(firstTextBlockText(result.content)).toContain("Logged run #1: discard");
-		expect(runtime.state.scopePaths).toEqual(["src"]);
+		expect(append.details?.notes).toContain("- try caching");
+		expect(runtime.state.notes).toContain("- try caching");
 	});
 });

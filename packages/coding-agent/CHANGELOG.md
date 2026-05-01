@@ -1,6 +1,25 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Reworked autoresearch storage and protocol. State now lives in `~/.omp/autoresearch/<project>.db` (SQLite) and per-run logs in `~/.omp/autoresearch/<project>/runs/<id>/benchmark.log`. The repo-side artifacts `autoresearch.md`, `autoresearch.sh`, `autoresearch.checks.sh`, `autoresearch.program.md`, `autoresearch.ideas.md`, `autoresearch.jsonl`, `.autoresearch/`, and `autoresearch.config.json` are no longer read or written; they are deleted by `/autoresearch clear`. Any existing data is not migrated.
+- Removed the autoresearch edit guard. `write`/`edit`/`ast_edit` are no longer blocked based on scope. Scope/off-limits are now post-hoc accountability fields on `log_experiment`.
+- Replaced rigid `init_experiment` contract validation with a simpler schema: `name`, `goal`, `primary_metric`, `metric_unit`, `direction`, `preferred_command`, `secondary_metrics`, `scope_paths`, `off_limits`, `constraints`, `max_iterations`, `new_segment`. Removed `from_autoresearch_md`, `abandon_unlogged_runs`, and `force` flags.
+- Replaced `run_experiment` benchmark-command and `autoresearch.sh` requirements with a free-form `command` parameter. Removed `force` and `checks_timeout_seconds`. Pre-existing `autoresearch.checks.sh` is no longer auto-executed; run validation through the regular `bash` tool and report via `log_experiment status`.
+- Replaced `log_experiment` ASI requirements and `force`/`skip_restore` flags with `justification` (post-hoc explanation for scope deviations) and `flag_runs` (mark earlier runs suspect to exclude them from baseline math). ASI is now opaque metadata.
+- `/autoresearch clear` now resets the worktree to the session's recorded baseline commit (when on an `autoresearch/*` branch or with `--reset-tree`), closes the active session, and deletes any leftover legacy autoresearch repo artifacts.
+- Dirty worktree no longer blocks `/autoresearch`. The command surfaces a warning and continues on the current branch; auto-commit and full-tree reset are disabled until the worktree is clean.
+
+### Added
+
+- Added `update_notes` tool with `body` (replace) and `append_idea` (append a bullet under an `## Ideas` section). Notes are injected into the system prompt every iteration and replace the file-based `autoresearch.md` / `.program.md` / `.ideas.md` ecosystem.
+
+### Changed
+
+- Updated `log_experiment` summary output to include the count of scope deviations detected for a run
+- Used the active session context in autoresearch resume instructions instead of referencing deleted repo-side files
+
 ### Fixed
 
 - Fixed multi-target `search`, `ast-grep`, and `ast-edit` path handling by running each resolved target separately under root-level path resolution

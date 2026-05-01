@@ -70,7 +70,6 @@ export interface SearchToolDetails {
 }
 
 type SearchParams = Static<typeof searchSchema>;
-type SearchTarget = { path: string; glob?: string; isDirectory: boolean };
 
 export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDetails> {
 	readonly name = "search";

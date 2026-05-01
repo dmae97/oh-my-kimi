@@ -11,55 +11,25 @@ import { replaceTabs, shortenPath, truncateToWidth } from "../../tools/render-ut
 import * as git from "../../utils/git";
 import { parseWorkDirDirtyPaths } from "../git";
 import {
-	collectLoggedRunNumbers,
 	EXPERIMENT_MAX_BYTES,
 	EXPERIMENT_MAX_LINES,
 	formatElapsed,
 	formatNum,
-	getAutoresearchRunDirectory,
-	getNextAutoresearchRunNumber,
-	isAutoresearchLocalStatePath,
-	isAutoresearchShCommand,
 	killTree,
 	parseAsiLines,
 	parseMetricLines,
-	readPendingRunSummary,
-	resolveWorkDir,
-	validateWorkDir,
 } from "../helpers";
+import { buildExperimentState } from "../state";
+import { openAutoresearchStorage } from "../storage";
 import type { AutoresearchToolFactoryOptions, RunDetails, RunExperimentProgressDetails } from "../types";
 
 const runExperimentSchema = Type.Object({
-	command: Type.String({
-		description: "Shell command to run for this experiment.",
-	}),
-	timeout_seconds: Type.Optional(
-		Type.Number({
-			description: "Timeout in seconds. Defaults to 600.",
-		}),
-	),
-	checks_timeout_seconds: Type.Optional(
-		Type.Number({
-			description: "Timeout in seconds for autoresearch.checks.sh. Defaults to 300.",
-		}),
-	),
-	force: Type.Optional(
-		Type.Boolean({
-			description:
-				"When true, allow a command that differs from the segment benchmark command and skip the rule that autoresearch.sh must be invoked directly when that script exists.",
-		}),
-	),
+	command: Type.String({ description: "Shell command to run for this experiment." }),
+	timeout_seconds: Type.Optional(Type.Number({ description: "Timeout in seconds. Defaults to 600." })),
 });
 
 interface ProcessExecutionResult {
 	exitCode: number | null;
-	killed: boolean;
-	logPath: string;
-	output: string;
-}
-
-interface ChecksExecutionResult {
-	code: number | null;
 	killed: boolean;
 	logPath: string;
 	output: string;
@@ -80,136 +50,76 @@ export function createRunExperimentTool(
 		name: "run_experiment",
 		label: "Run Experiment",
 		description:
-			"Run an experiment command with timing, output capture, structured metric parsing, durable run artifacts, and optional autoresearch.checks.sh validation.",
+			"Run any benchmark command. Output is captured automatically; `METRIC name=value` and `ASI key=value` lines printed by the command are parsed.",
 		parameters: runExperimentSchema,
 		defaultInactive: true,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const workDirError = validateWorkDir(ctx.cwd);
-			if (workDirError) {
+			const storage = await openAutoresearchStorage(ctx.cwd);
+			const session = storage.getActiveSession();
+			if (!session) {
 				return {
-					content: [{ type: "text", text: `Error: ${workDirError}` }],
+					content: [
+						{
+							type: "text",
+							text: "Error: no active autoresearch session. Call init_experiment first.",
+						},
+					],
 				};
 			}
 
 			const runtime = options.getRuntime(ctx);
-			const state = runtime.state;
-			const workDir = resolveWorkDir(ctx.cwd);
-			const checksPath = path.join(workDir, "autoresearch.checks.sh");
-			const autoresearchScriptPath = path.join(workDir, "autoresearch.sh");
 
-			const forceCommand = params.force === true;
-			if (!forceCommand && state.benchmarkCommand && params.command.trim() !== state.benchmarkCommand) {
-				return {
-					content: [
-						{
-							type: "text",
-							text:
-								"Error: command does not match the benchmark command recorded for this segment.\n" +
-								`Expected: ${state.benchmarkCommand}\nReceived: ${params.command}`,
-						},
-					],
-				};
+			const abandonedPriorRun = (() => {
+				const pending = storage.getPendingRun(session.id);
+				if (!pending) return null;
+				storage.abandonPendingRuns(session.id);
+				return pending.id;
+			})();
+
+			let commandWarning: string | null = null;
+			if (session.preferredCommand && params.command.trim() !== session.preferredCommand.trim()) {
+				commandWarning = `Note: command differs from preferred (\`${session.preferredCommand}\`). Re-init the experiment if the workload itself changed.`;
 			}
 
-			if (!forceCommand && fs.existsSync(autoresearchScriptPath) && !isAutoresearchShCommand(params.command)) {
-				return {
-					content: [
-						{
-							type: "text",
-							text:
-								`Error: autoresearch.sh exists. Run it directly instead of using a different command.\n` +
-								`Expected something like: bash autoresearch.sh\n` +
-								`Received: ${params.command}`,
-						},
-					],
-				};
-			}
+			const preRunStatus = await tryGitStatus(ctx.cwd);
+			const workDirPrefix = await tryGitPrefix(ctx.cwd);
+			const preRunDirtyPaths = parseWorkDirDirtyPaths(preRunStatus, workDirPrefix);
 
-			if (state.maxExperiments !== null) {
-				const segmentRuns = state.results.filter(result => result.segment === state.currentSegment).length;
-				if (segmentRuns >= state.maxExperiments) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Maximum experiments reached (${state.maxExperiments}). Re-initialize to start a new segment.`,
-							},
-						],
-					};
-				}
-			}
-
-			const pendingRun =
-				runtime.lastRunSummary ?? (await readPendingRunSummary(workDir, collectLoggedRunNumbers(state.results)));
-			if (pendingRun) {
-				return {
-					content: [
-						{
-							type: "text",
-							text:
-								`Error: run #${pendingRun.runNumber} has not been logged yet. ` +
-								"Call log_experiment before starting another benchmark run.",
-						},
-					],
-				};
-			}
-
-			const runNumber = getNextAutoresearchRunNumber(workDir, runtime.lastRunNumber);
-			const runDirectory = getAutoresearchRunDirectory(workDir, runNumber);
-			const benchmarkLogPath = path.join(runDirectory, "benchmark.log");
-			const checksLogPath = path.join(runDirectory, "checks.log");
-			const runJsonPath = path.join(runDirectory, "run.json");
-			await fs.promises.mkdir(runDirectory, { recursive: true });
-
-			const preRunStatus = await git.status(workDir, {
-				porcelainV1: true,
-				untrackedFiles: "all",
-				z: true,
+			const startedAt = Date.now();
+			const insertedRun = storage.insertRun({
+				sessionId: session.id,
+				segment: session.currentSegment,
+				command: params.command,
+				logPath: "", // patched after we know the run id
+				preRunDirtyPaths,
+				startedAt,
 			});
-			const workDirPrefix = await git.show.prefix(workDir);
-			const preRunDirtyPaths = parseWorkDirDirtyPaths(preRunStatus, workDirPrefix).filter(
-				p => !isAutoresearchLocalStatePath(p),
-			);
 
-			runtime.lastRunChecks = null;
+			const runDirectory = path.join(storage.projectDir, "runs", String(insertedRun.id).padStart(4, "0"));
+			const benchmarkLogPath = path.join(runDirectory, "benchmark.log");
+			fs.mkdirSync(runDirectory, { recursive: true });
+			storage.updateRunLogPath(insertedRun.id, benchmarkLogPath);
+
 			runtime.lastRunDuration = null;
 			runtime.lastRunAsi = null;
 			runtime.lastRunArtifactDir = runDirectory;
-			runtime.lastRunNumber = runNumber;
+			runtime.lastRunNumber = insertedRun.id;
 			runtime.lastRunSummary = null;
-			await Bun.write(
-				runJsonPath,
-				JSON.stringify(
-					{
-						runNumber,
-						runDirectory,
-						benchmarkLogPath,
-						checksLogPath,
-						command: params.command,
-						preRunDirtyPaths,
-						startedAt: new Date().toISOString(),
-					},
-					null,
-					2,
-				),
-			);
-
 			runtime.runningExperiment = {
-				startedAt: Date.now(),
+				startedAt,
 				command: params.command,
 				runDirectory,
-				runNumber,
+				runNumber: insertedRun.id,
 			};
 			options.dashboard.updateWidget(ctx, runtime);
 			options.dashboard.requestRender();
 
 			const timeoutMs = Math.max(0, Math.floor((params.timeout_seconds ?? 600) * 1000));
-			const startedAt = Date.now();
 			let execution: ProcessExecutionResult;
 			try {
 				execution = await executeProcess({
 					command: ["bash", "-lc", params.command],
-					cwd: workDir,
+					cwd: ctx.cwd,
 					logPath: benchmarkLogPath,
 					timeoutMs,
 					signal,
@@ -232,40 +142,10 @@ export function createRunExperimentTool(
 				options.dashboard.requestRender();
 			}
 
-			const durationSeconds = (Date.now() - startedAt) / 1000;
+			const completedAt = Date.now();
+			const durationMs = completedAt - startedAt;
+			const durationSeconds = durationMs / 1000;
 			runtime.lastRunDuration = durationSeconds;
-
-			const benchmarkPassed = execution.exitCode === 0 && !execution.killed;
-			let checksPass: boolean | null = null;
-			let checksTimedOut = false;
-			let checksOutput = "";
-			let checksDuration = 0;
-			let checksLogPathValue: string | undefined;
-
-			if (benchmarkPassed && fs.existsSync(checksPath)) {
-				const checksStartedAt = Date.now();
-				const checksResult = await runChecks({
-					cwd: workDir,
-					pathToChecks: checksPath,
-					logPath: checksLogPath,
-					timeoutMs: Math.max(0, Math.floor((params.checks_timeout_seconds ?? 300) * 1000)),
-					signal,
-				});
-				checksDuration = (Date.now() - checksStartedAt) / 1000;
-				checksTimedOut = checksResult.killed;
-				checksPass = checksResult.code === 0 && !checksResult.killed;
-				checksOutput = checksResult.output;
-				checksLogPathValue = checksResult.logPath;
-			}
-
-			runtime.lastRunChecks =
-				checksPass === null
-					? null
-					: {
-							pass: checksPass,
-							output: checksOutput,
-							duration: checksDuration,
-						};
 
 			const llmTruncation = truncateTail(execution.output, {
 				maxBytes: EXPERIMENT_MAX_BYTES,
@@ -278,104 +158,81 @@ export function createRunExperimentTool(
 
 			const parsedMetricsMap = parseMetricLines(execution.output);
 			const parsedMetrics = parsedMetricsMap.size > 0 ? Object.fromEntries(parsedMetricsMap.entries()) : null;
-			const parsedPrimary = parsedMetricsMap.get(state.metricName) ?? null;
+			const parsedPrimary = parsedMetricsMap.get(session.primaryMetric) ?? null;
 			const parsedAsi = parseAsiLines(execution.output);
 			runtime.lastRunAsi = parsedAsi;
 
+			storage.markRunCompleted({
+				runId: insertedRun.id,
+				completedAt,
+				durationMs,
+				exitCode: execution.exitCode,
+				timedOut: execution.killed,
+				parsedPrimary,
+				parsedMetrics,
+				parsedAsi,
+			});
+
+			const passed = execution.exitCode === 0 && !execution.killed;
 			const resultDetails: RunDetails = {
-				runNumber,
+				runNumber: insertedRun.id,
 				runDirectory,
 				benchmarkLogPath,
-				checksLogPath: checksLogPathValue,
 				command: params.command,
 				exitCode: execution.exitCode,
 				durationSeconds,
-				passed: benchmarkPassed && (checksPass === null || checksPass),
-				crashed: execution.exitCode !== 0 || execution.killed || checksPass === false,
+				passed,
+				crashed: execution.exitCode !== 0 || execution.killed,
 				timedOut: execution.killed,
 				tailOutput: displayTruncation.content,
-				checksPass,
-				checksTimedOut,
-				checksOutput: checksOutput.split("\n").slice(-80).join("\n"),
-				checksDuration,
 				parsedMetrics,
 				parsedPrimary,
 				parsedAsi,
-				metricName: state.metricName,
-				metricUnit: state.metricUnit,
+				metricName: session.primaryMetric,
+				metricUnit: session.metricUnit,
 				preRunDirtyPaths,
+				commandWarning,
+				abandonedPriorRun,
 				truncation: llmTruncation.truncated ? llmTruncation : undefined,
 				fullOutputPath: execution.logPath,
 			};
+
 			runtime.lastRunSummary = {
-				checksDurationSeconds: checksDuration,
-				checksPass,
-				checksTimedOut,
 				command: params.command,
 				durationSeconds,
 				parsedAsi,
 				parsedMetrics,
 				parsedPrimary,
-				passed: resultDetails.passed,
+				passed,
 				preRunDirtyPaths,
 				runDirectory,
-				runNumber,
+				runNumber: insertedRun.id,
+				exitCode: execution.exitCode,
+				timedOut: execution.killed,
 			};
 			runtime.autoResumeArmed = true;
 			runtime.lastAutoResumePendingRunNumber = null;
+
+			// Refresh state to reflect any prior abandonment changes (logged set unchanged).
+			const refreshedSession = storage.getSessionById(session.id);
+			if (refreshedSession) {
+				runtime.state = buildExperimentState(refreshedSession, storage.listLoggedRuns(session.id));
+			}
 			options.dashboard.updateWidget(ctx, runtime);
 			options.dashboard.requestRender();
 
-			await Bun.write(
-				runJsonPath,
-				JSON.stringify(
-					{
-						runNumber,
-						runDirectory,
-						benchmarkLogPath,
-						checksLogPath: checksLogPathValue,
-						command: params.command,
-						completedAt: new Date().toISOString(),
-						durationSeconds,
-						exitCode: execution.exitCode,
-						timedOut: execution.killed,
-						checks: {
-							durationSeconds: checksDuration,
-							passed: checksPass,
-							timedOut: checksTimedOut,
-						},
-						parsedMetrics,
-						parsedPrimary,
-						parsedAsi,
-						preRunDirtyPaths,
-						truncation: resultDetails.truncation,
-						fullOutputPath: resultDetails.fullOutputPath,
-					},
-					null,
-					2,
-				),
-			);
-
-			const commandWarnings: string[] = [];
-			if (forceCommand) {
-				if (state.benchmarkCommand && params.command.trim() !== state.benchmarkCommand) {
-					commandWarnings.push(
-						`Warning: command override (force=true). Segment benchmark is ${state.benchmarkCommand}; ran ${params.command}.`,
-					);
-				}
-				if (fs.existsSync(autoresearchScriptPath) && !isAutoresearchShCommand(params.command)) {
-					commandWarnings.push(
-						"Warning: autoresearch.sh exists but the command was not a direct autoresearch.sh invocation (force=true).",
-					);
-				}
+			const headerLines: string[] = [];
+			if (commandWarning) headerLines.push(commandWarning);
+			if (abandonedPriorRun !== null) {
+				headerLines.push(`Note: abandoned prior pending run #${abandonedPriorRun} before starting this run.`);
 			}
-			const warningPrefix = commandWarnings.length > 0 ? `${commandWarnings.join("\n")}\n\n` : "";
+			const warningPrefix = headerLines.length > 0 ? `${headerLines.join("\n")}\n\n` : "";
 
 			return {
 				content: [
 					{
 						type: "text",
-						text: warningPrefix + buildRunText(resultDetails, llmTruncation.content, state.bestMetric),
+						text: warningPrefix + buildRunText(resultDetails, llmTruncation.content, runtime.state.bestMetric),
 					},
 				],
 				details: resultDetails,
@@ -395,17 +252,14 @@ export function createRunExperimentTool(
 				const preview = replaceTabs(result.content.find(part => part.type === "text")?.text ?? "");
 				return new Text(preview ? `${header}\n${theme.fg("dim", preview)}` : header, 0, 0);
 			}
-
 			const details = result.details;
 			if (!details || !isRunDetails(details)) {
 				return new Text(replaceTabs(result.content.find(part => part.type === "text")?.text ?? ""), 0, 0);
 			}
-
 			const statusText = renderStatus(details, theme);
 			if (!options.expanded && details.tailOutput.trim().length === 0) {
 				return new Text(statusText, 0, 0);
 			}
-
 			const preview = replaceTabs(
 				options.expanded ? details.tailOutput : details.tailOutput.split("\n").slice(-5).join("\n"),
 			);
@@ -418,7 +272,23 @@ export function createRunExperimentTool(
 	};
 }
 
-async function executeProcess(options: {
+async function tryGitStatus(cwd: string): Promise<string> {
+	try {
+		return await git.status(cwd, { porcelainV1: true, untrackedFiles: "all", z: true });
+	} catch {
+		return "";
+	}
+}
+
+async function tryGitPrefix(cwd: string): Promise<string> {
+	try {
+		return await git.show.prefix(cwd);
+	} catch {
+		return "";
+	}
+}
+
+async function executeProcess(opts: {
 	command: string[];
 	cwd: string;
 	logPath: string;
@@ -427,8 +297,8 @@ async function executeProcess(options: {
 	onProgress?(details: ProgressSnapshot): void;
 }): Promise<ProcessExecutionResult> {
 	const { promise, resolve, reject } = Promise.withResolvers<ProcessExecutionResult>();
-	const child = childProcess.spawn(options.command[0] ?? "bash", options.command.slice(1), {
-		cwd: options.cwd,
+	const child = childProcess.spawn(opts.command[0] ?? "bash", opts.command.slice(1), {
+		cwd: opts.cwd,
 		detached: true,
 		stdio: ["ignore", "pipe", "pipe"],
 	});
@@ -437,7 +307,7 @@ async function executeProcess(options: {
 	let chunksBytes = 0;
 	let killedByTimeout = false;
 	let resolved = false;
-	let writeStream: fs.WriteStream | undefined = fs.createWriteStream(options.logPath);
+	let writeStream: fs.WriteStream | undefined = fs.createWriteStream(opts.logPath);
 	let forceKillTimeout: NodeJS.Timeout | undefined;
 
 	const closeWriteStream = (): Promise<void> => {
@@ -459,7 +329,7 @@ async function executeProcess(options: {
 		if (progressTimer) clearInterval(progressTimer);
 		if (timeoutHandle) clearTimeout(timeoutHandle);
 		if (forceKillTimeout) clearTimeout(forceKillTimeout);
-		options.signal?.removeEventListener("abort", abortHandler);
+		opts.signal?.removeEventListener("abort", abortHandler);
 	};
 
 	const finish = (callback: () => void): void => {
@@ -486,8 +356,8 @@ async function executeProcess(options: {
 		});
 		return {
 			elapsed: formatElapsed(Date.now() - startedAt),
-			runDirectory: path.dirname(options.logPath),
-			fullOutputPath: options.logPath,
+			runDirectory: path.dirname(opts.logPath),
+			fullOutputPath: opts.logPath,
 			tailOutput: tail.content,
 			truncation: tail.truncated ? tail : undefined,
 		};
@@ -503,26 +373,26 @@ async function executeProcess(options: {
 	};
 
 	const startedAt = Date.now();
-	const progressTimer = options.onProgress
+	const progressTimer = opts.onProgress
 		? setInterval(() => {
-				options.onProgress?.(snapshot());
+				opts.onProgress?.(snapshot());
 			}, 1000)
 		: undefined;
 	const timeoutHandle =
-		options.timeoutMs > 0
+		opts.timeoutMs > 0
 			? setTimeout(() => {
 					killedByTimeout = true;
 					killTreeWithEscalation();
-				}, options.timeoutMs)
+				}, opts.timeoutMs)
 			: undefined;
 
 	const abortHandler = (): void => {
 		killTreeWithEscalation();
 	};
-	if (options.signal?.aborted) {
+	if (opts.signal?.aborted) {
 		abortHandler();
 	} else {
-		options.signal?.addEventListener("abort", abortHandler, { once: true });
+		opts.signal?.addEventListener("abort", abortHandler, { once: true });
 	}
 
 	child.stdout?.on("data", data => {
@@ -539,16 +409,16 @@ async function executeProcess(options: {
 	child.on("close", async code => {
 		try {
 			await closeWriteStream();
-			if (options.signal?.aborted) {
+			if (opts.signal?.aborted) {
 				finish(() => reject(new Error("aborted")));
 				return;
 			}
-			const output = await fs.promises.readFile(options.logPath, "utf8");
+			const output = await fs.promises.readFile(opts.logPath, "utf8");
 			finish(() =>
 				resolve({
 					exitCode: code,
 					killed: killedByTimeout,
-					logPath: options.logPath,
+					logPath: opts.logPath,
 					output,
 				}),
 			);
@@ -560,44 +430,15 @@ async function executeProcess(options: {
 	return promise;
 }
 
-async function runChecks(options: {
-	cwd: string;
-	pathToChecks: string;
-	logPath: string;
-	timeoutMs: number;
-	signal?: AbortSignal;
-}): Promise<ChecksExecutionResult> {
-	const result = await executeProcess({
-		command: ["bash", options.pathToChecks],
-		cwd: options.cwd,
-		logPath: options.logPath,
-		timeoutMs: options.timeoutMs,
-		signal: options.signal,
-	});
-	return {
-		code: result.exitCode,
-		killed: result.killed,
-		logPath: result.logPath,
-		output: result.output.trim(),
-	};
-}
-
 function buildRunText(details: RunDetails, outputPreview: string, bestMetric: number | null): string {
 	const lines: string[] = [];
-	lines.push(`Run directory: ${details.runDirectory}`);
+	lines.push(`Run #${details.runNumber} directory: ${details.runDirectory}`);
 	if (details.timedOut) {
 		lines.push(`TIMEOUT after ${details.durationSeconds.toFixed(1)}s`);
 	} else if (details.exitCode !== 0) {
 		lines.push(`FAILED with exit code ${details.exitCode} in ${details.durationSeconds.toFixed(1)}s`);
 	} else {
 		lines.push(`PASSED in ${details.durationSeconds.toFixed(1)}s`);
-	}
-	if (details.checksTimedOut) {
-		lines.push(`Checks timed out after ${details.checksDuration.toFixed(1)}s`);
-	} else if (details.checksPass === false) {
-		lines.push(`Checks failed in ${details.checksDuration.toFixed(1)}s`);
-	} else if (details.checksPass === true) {
-		lines.push(`Checks passed in ${details.checksDuration.toFixed(1)}s`);
 	}
 	if (bestMetric !== null) {
 		lines.push(`Current baseline ${details.metricName}: ${formatNum(bestMetric, details.metricUnit)}`);
@@ -627,26 +468,12 @@ function buildRunText(details: RunDetails, outputPreview: string, bestMetric: nu
 			`Output truncated (${formatBytes(EXPERIMENT_MAX_BYTES)} limit). Full output: ${details.fullOutputPath}`,
 		);
 	}
-	if (details.checksLogPath) {
-		lines.push(`Checks log: ${details.checksLogPath}`);
-	}
-	if (details.checksPass === false && details.checksOutput.length > 0) {
-		lines.push("");
-		lines.push("Checks output:");
-		lines.push(details.checksOutput);
-	}
 	return lines.join("\n").trimEnd();
 }
 
 function renderStatus(details: RunDetails, theme: Theme): string {
 	if (details.timedOut) {
 		return theme.fg("error", `TIMEOUT ${details.durationSeconds.toFixed(1)}s`);
-	}
-	if (details.checksTimedOut) {
-		return theme.fg("warning", `Checks timeout ${details.checksDuration.toFixed(1)}s`);
-	}
-	if (details.checksPass === false) {
-		return theme.fg("error", `Checks failed ${details.checksDuration.toFixed(1)}s`);
 	}
 	if (details.exitCode !== 0) {
 		return theme.fg("error", `FAIL exit=${details.exitCode} ${details.durationSeconds.toFixed(1)}s`);
@@ -665,5 +492,5 @@ function isRunDetails(value: unknown): value is RunDetails {
 
 function isProgressDetails(value: unknown): value is RunExperimentProgressDetails {
 	if (typeof value !== "object" || value === null) return false;
-	return "phase" in value && value.phase === "running";
+	return "phase" in value && (value as { phase: unknown }).phase === "running";
 }
