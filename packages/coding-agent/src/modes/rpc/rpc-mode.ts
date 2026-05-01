@@ -741,6 +741,11 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 				return success(id, "set_session_name");
 			}
 
+			case "handoff": {
+				const result = await session.handoff(command.customInstructions);
+				return success(id, "handoff", result ? { savedPath: result.savedPath } : null);
+			}
+
 			// =================================================================
 			// Messages
 			// =================================================================
