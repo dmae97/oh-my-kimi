@@ -11,6 +11,7 @@ import type { SessionStats } from "../../session/agent-session";
 import type { CompactionResult } from "../../session/compaction";
 import type {
 	RpcCommand,
+	RpcHandoffResult,
 	RpcHostToolCallRequest,
 	RpcHostToolCancelRequest,
 	RpcHostToolDefinition,
@@ -454,6 +455,14 @@ export class RpcClient {
 	 */
 	async getSessionStats(): Promise<SessionStats> {
 		const response = await this.#send({ type: "get_session_stats" });
+		return this.#getData(response);
+	}
+
+	/**
+	 * Hand off session context to a new session.
+	 */
+	async handoff(customInstructions?: string): Promise<RpcHandoffResult | null> {
+		const response = await this.#send({ type: "handoff", customInstructions });
 		return this.#getData(response);
 	}
 

@@ -574,6 +574,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 						description: tool.description,
 						parameters: tool.parameters,
 					})),
+					contextUsage: session.getContextUsage(),
 				};
 				return success(id, "get_state", state);
 			}
@@ -739,6 +740,11 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 					return error(id, "set_session_name", "Session name cannot be empty");
 				}
 				return success(id, "set_session_name");
+			}
+
+			case "handoff": {
+				const result = await session.handoff(command.customInstructions);
+				return success(id, "handoff", result ? { savedPath: result.savedPath } : null);
 			}
 
 			// =================================================================

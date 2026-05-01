@@ -7,6 +7,7 @@
 import type { AgentMessage, AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Effort, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import type { BashResult } from "../../exec/bash-executor";
+import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { SessionStats } from "../../session/agent-session";
 import type { CompactionResult } from "../../session/compaction";
 import type { TodoPhase } from "../../tools/todo-write";
@@ -63,6 +64,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_branch_messages" }
 	| { id?: string; type: "get_last_assistant_text" }
 	| { id?: string; type: "set_session_name"; name: string }
+	| { id?: string; type: "handoff"; customInstructions?: string }
 
 	// Messages
 	| { id?: string; type: "get_messages" };
@@ -89,6 +91,12 @@ export interface RpcSessionState {
 	/** For session dump / export (plain-text parity with /dump). */
 	systemPrompt?: string;
 	dumpTools?: Array<{ name: string; description: string; parameters: unknown }>;
+	/** Current context window usage. Null tokens/percent when unknown (e.g. right after compaction). */
+	contextUsage?: ContextUsage;
+}
+
+export interface RpcHandoffResult {
+	savedPath?: string;
 }
 
 // ============================================================================
@@ -180,6 +188,7 @@ export type RpcResponse =
 			data: { text: string | null };
 	  }
 	| { id?: string; type: "response"; command: "set_session_name"; success: true }
+	| { id?: string; type: "response"; command: "handoff"; success: true; data: RpcHandoffResult | null }
 
 	// Messages
 	| { id?: string; type: "response"; command: "get_messages"; success: true; data: { messages: AgentMessage[] } }

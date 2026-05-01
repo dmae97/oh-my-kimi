@@ -188,6 +188,72 @@ describe("AgentSession handoff", () => {
 		expect(events.filter(event => event.type === "auto_compaction_end")).toHaveLength(0);
 	});
 
+	it("persists handoff session immediately with previous session as parent", async () => {
+		const previousSessionFile = session.sessionFile;
+		if (!previousSessionFile) {
+			throw new Error("Expected previous session file");
+		}
+
+		const model = session.model;
+		if (!model) {
+			throw new Error("Expected model to be set");
+		}
+
+		const handoffText = "## Goal\nContinue from here";
+		const handoffAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: handoffText }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+
+		vi.spyOn(session.agent, "prompt").mockImplementation(async () => {
+			session.agent.replaceMessages([handoffAssistant]);
+			session.agent.emitExternalEvent({ type: "message_end", message: handoffAssistant });
+			session.agent.emitExternalEvent({ type: "agent_end", messages: [handoffAssistant] });
+		});
+
+		const result = await session.handoff();
+		const handoffSessionFile = session.sessionFile;
+		if (!handoffSessionFile) {
+			throw new Error("Expected handoff session file");
+		}
+
+		type PersistedEntry = {
+			type?: string;
+			parentSession?: string;
+			customType?: string;
+			display?: boolean;
+		};
+		const handoffEntries = (await Bun.file(handoffSessionFile).text())
+			.trim()
+			.split("\n")
+			.map(line => JSON.parse(line) as PersistedEntry);
+
+		expect(result?.document).toBe(handoffText);
+		expect(handoffSessionFile).not.toBe(previousSessionFile);
+		expect(handoffEntries[0]).toMatchObject({ type: "session", parentSession: previousSessionFile });
+		expect(
+			handoffEntries.some(
+				entry => entry.type === "custom_message" && entry.customType === "handoff" && entry.display,
+			),
+		).toBe(true);
+
+		const previousSessionText = await Bun.file(previousSessionFile).text();
+		expect(previousSessionText).toContain('"text":"seed"');
+	});
+
 	it("does not run auto maintenance when strategy is off", async () => {
 		session.settings.set("compaction.strategy", "off");
 		session.settings.set("compaction.thresholdPercent", 1);
