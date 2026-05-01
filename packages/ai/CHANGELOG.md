@@ -4,7 +4,10 @@
 
 ### Fixed
 
-- Fixed Vercel AI Gateway dynamic model discovery to use the versioned `/v1/models` catalog endpoint, restoring newly published models.
+- Fixed DeepSeek V4 tool-call follow-up 400 errors from three root causes:
+  - Mapped `reasoning_effort` "xhigh" to "max" for DeepSeek-family models on any provider (NVIDIA, OpenCode-Go, etc.), not just `deepseek`
+  - Recovered `reasoning_content` from thinking blocks with valid signatures that were filtered by the non-empty-text check
+- Added empty-string fallback when `reasoning_content` is genuinely absent (e.g. proxy-stripped) but the provider requires the field
 
 ## [14.5.13] - 2026-05-01
 

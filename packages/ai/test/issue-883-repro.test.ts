@@ -63,7 +63,7 @@ describe("issue #883 / #810 — DeepSeek V4 reasoning_content tool-call replay",
 		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
 	});
 
-	it("injects reasoning_content placeholder on assistant tool-call turn for deepseek-v4-pro", () => {
+	it("sets reasoning_content to empty string for deepseek-v4-pro tool-call turn with no thinking blocks", () => {
 		const model = deepseekModel({
 			provider: "deepseek",
 			baseUrl: "https://api.deepseek.com/v1",
@@ -74,8 +74,9 @@ describe("issue #883 / #810 — DeepSeek V4 reasoning_content tool-call replay",
 		const assistant = messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
 		const reasoningContent = Reflect.get(assistant as object, "reasoning_content");
-		expect(typeof reasoningContent).toBe("string");
-		expect((reasoningContent as string).length).toBeGreaterThan(0);
+		expect(reasoningContent).toBeDefined();
+		// DeepSeek rejects synthetic "." — when no thinking blocks exist, we emit empty string
+		expect(reasoningContent).toBe("");
 	});
 
 	it("normalizes assistant content to '' when reasoning_content placeholder is injected (DeepSeek invariant)", () => {
