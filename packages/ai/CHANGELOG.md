@@ -2,13 +2,15 @@
 
 ## [Unreleased]
 
-### Breaking Changes
-
-- Removed `utils/oauth` re-exports from the package entrypoint, so OAuth helper imports from the root module must be updated
-
 ### Fixed
 
 - Fixed Vercel AI Gateway dynamic model discovery to use the versioned `/v1/models` catalog endpoint, restoring newly published models.
+
+## [14.5.13] - 2026-05-01
+
+### Breaking Changes
+
+- Removed `utils/oauth` re-exports from the package entrypoint, so OAuth helper imports from the root module must be updated
 
 ## [14.5.10] - 2026-04-30
 

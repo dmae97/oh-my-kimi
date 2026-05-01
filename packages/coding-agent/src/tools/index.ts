@@ -1,11 +1,10 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { ToolChoice } from "@oh-my-pi/pi-ai";
-import { $env, $flag, isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
+import { $env, $flag, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import { EditTool } from "../edit";
-import { warmPythonEnvironment } from "../eval/py/executor";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import type { Skill } from "../extensibility/skills";
 import type { InternalUrlRouter } from "../internal-urls";
@@ -108,8 +107,6 @@ export interface ToolSession {
 	hasUI: boolean;
 	/** Skip Python kernel availability check and warmup */
 	skipPythonPreflight?: boolean;
-	/** Force Python prelude warmup even when test env would normally skip it */
-	forcePythonWarmup?: boolean;
 	/** Pre-loaded context files (AGENTS.md, etc) */
 	contextFiles?: ContextFileEntry[];
 	/** Pre-loaded skills */
@@ -297,54 +294,23 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const allowPython = backends.python;
 	const allowJs = backends.js;
 	const skipPythonPreflight = session.skipPythonPreflight === true;
+	// Eval tool is enabled if EITHER backend is reachable. We only need to know
+	// whether python is reachable when JS is disabled — otherwise allowEval is
+	// already true and the python-availability check can be deferred to first
+	// invocation of the python backend (already handled inside the executor).
 	let pythonAvailable = true;
-	const shouldCheckPython =
-		!skipPythonPreflight && allowPython && (requestedTools === undefined || requestedTools.includes("eval"));
-	const isTestEnv = isBunTestRuntime();
-	const forcePythonWarmup = session.forcePythonWarmup === true;
-	const skipPythonWarm = (isTestEnv && !forcePythonWarmup) || $flag("PI_PYTHON_SKIP_CHECK");
-	if (shouldCheckPython) {
+	if (
+		!skipPythonPreflight &&
+		allowPython &&
+		!allowJs &&
+		(requestedTools === undefined || requestedTools.includes("eval"))
+	) {
 		const availability = await logger.time("createTools:pythonCheck", checkPythonKernelAvailability, session.cwd);
 		pythonAvailable = availability.ok;
 		if (!availability.ok) {
-			logger.warn("Python kernel unavailable; eval will dispatch to JavaScript backend", {
+			logger.warn("Python kernel unavailable and JS backend disabled; eval will be unavailable", {
 				reason: availability.reason,
 			});
-		} else if (!skipPythonWarm) {
-			const sessionFile = session.getSessionFile?.() ?? undefined;
-			const kernelOwnerId = session.getEvalKernelOwnerId?.() ?? undefined;
-			const warmSessionId = sessionFile ? `session:${sessionFile}:cwd:${session.cwd}` : `cwd:${session.cwd}`;
-			const warmupAbortController = new AbortController();
-			try {
-				session.assertEvalExecutionAllowed?.();
-
-				const warmupExecution = session.trackEvalExecution
-					? logger.time(
-							"createTools:warmPython",
-							warmPythonEnvironment,
-							session.cwd,
-							warmSessionId,
-							session.settings.get("python.sharedGateway"),
-							sessionFile,
-							kernelOwnerId,
-							warmupAbortController.signal,
-						)
-					: logger.time(
-							"createTools:warmPython",
-							warmPythonEnvironment,
-							session.cwd,
-							warmSessionId,
-							session.settings.get("python.sharedGateway"),
-							sessionFile,
-							kernelOwnerId,
-						);
-				await (session.trackEvalExecution?.(warmupExecution, warmupAbortController) ?? warmupExecution);
-				session.assertEvalExecutionAllowed?.();
-			} catch (err) {
-				logger.warn("Failed to warm Python environment", {
-					error: err instanceof Error ? err.message : String(err),
-				});
-			}
 		}
 	}
 

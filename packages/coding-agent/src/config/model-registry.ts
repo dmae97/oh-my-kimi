@@ -797,6 +797,7 @@ export class ModelRegistry {
 	#equivalenceConfig: ModelEquivalenceConfig | undefined;
 	#configError: ConfigError | undefined = undefined;
 	#modelsConfigFile: ConfigFile<ModelsConfig>;
+	#lastStaticLoadMtime: number | null = null;
 	#registeredProviderSources: Set<string> = new Set();
 	#providerDiscoveryStates: Map<string, ProviderDiscoveryState> = new Map();
 	#cacheDbPath?: string;
@@ -810,6 +811,8 @@ export class ModelRegistry {
 	#runtimeProviderOverrides: Map<string, ProviderOverride> = new Map();
 	#runtimeProvidersBySource: Map<string, Set<string>> = new Map();
 	#runtimeProviderSourceByName: Map<string, string> = new Map();
+	#rebuildPending: boolean = false;
+	#rebuildSuspended: number = 0;
 
 	/**
 	 * @param authStorage - Auth storage for API key resolution
@@ -836,9 +839,14 @@ export class ModelRegistry {
 	 * Reload models from disk (built-in + custom from models.json).
 	 */
 	async refresh(strategy: ModelRefreshStrategy = "online-if-uncached"): Promise<void> {
-		this.#reloadStaticModels();
-		this.#suppressedSelectors.clear();
-		await this.#refreshRuntimeDiscoveries(strategy);
+		this.#suspendRebuild();
+		try {
+			this.#reloadStaticModels();
+			this.#suppressedSelectors.clear();
+			await this.#refreshRuntimeDiscoveries(strategy);
+		} finally {
+			this.#resumeRebuild();
+		}
 	}
 
 	refreshInBackground(strategy: ModelRefreshStrategy = "online-if-uncached"): void {
@@ -860,16 +868,26 @@ export class ModelRegistry {
 	}
 
 	async refreshProvider(providerId: string, strategy: ModelRefreshStrategy = "online"): Promise<void> {
-		this.#reloadStaticModels();
-		for (const selector of this.#suppressedSelectors.keys()) {
-			if (selector.startsWith(`${providerId}/`)) {
-				this.#suppressedSelectors.delete(selector);
+		this.#suspendRebuild();
+		try {
+			this.#reloadStaticModels();
+			for (const selector of this.#suppressedSelectors.keys()) {
+				if (selector.startsWith(`${providerId}/`)) {
+					this.#suppressedSelectors.delete(selector);
+				}
 			}
+			await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
+		} finally {
+			this.#resumeRebuild();
 		}
-		await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
 	}
 
 	#reloadStaticModels(): void {
+		const currentMtime = this.#modelsConfigFile.getMtimeMs();
+		if (currentMtime !== null && currentMtime === this.#lastStaticLoadMtime) {
+			// models.json unchanged since last load; reload + canonical rebuild would be redundant.
+			return;
+		}
 		this.#modelsConfigFile.invalidate();
 		this.#customProviderApiKeys.clear();
 		this.#keylessProviders.clear();
@@ -924,6 +942,7 @@ export class ModelRegistry {
 		const withModelOverrides = this.#applyModelOverrides(combined, this.#modelOverrides);
 		this.#models = this.#applyRuntimeProviderOverrides(withModelOverrides);
 		this.#rebuildCanonicalIndex();
+		this.#lastStaticLoadMtime = this.#modelsConfigFile.getMtimeMs();
 	}
 
 	/** Load built-in models, applying provider-level overrides only.
@@ -947,14 +966,19 @@ export class ModelRegistry {
 
 	#mergeResolvedModels(baseModels: Model<Api>[], replacementModels: Model<Api>[]): Model<Api>[] {
 		const merged = [...baseModels];
+		const indexByKey = new Map<string, number>();
+		for (let i = 0; i < merged.length; i += 1) {
+			const m = merged[i];
+			indexByKey.set(`${m.provider}\u0000${m.id}`, i);
+		}
 		for (const replacementModel of replacementModels) {
-			const existingIndex = merged.findIndex(
-				m => m.provider === replacementModel.provider && m.id === replacementModel.id,
-			);
-			if (existingIndex >= 0) {
+			const key = `${replacementModel.provider}\u0000${replacementModel.id}`;
+			const existingIndex = indexByKey.get(key);
+			if (existingIndex !== undefined) {
 				merged[existingIndex] = replacementModel;
 			} else {
 				merged.push(replacementModel);
+				indexByKey.set(key, merged.length - 1);
 			}
 		}
 		return merged;
@@ -963,9 +987,15 @@ export class ModelRegistry {
 	/** Merge custom models with built-in, replacing by provider+id match */
 	#mergeCustomModels(builtInModels: Model<Api>[], customModels: CustomModelOverlay[]): Model<Api>[] {
 		const merged = [...builtInModels];
+		const indexByKey = new Map<string, number>();
+		for (let i = 0; i < merged.length; i += 1) {
+			const m = merged[i];
+			indexByKey.set(`${m.provider}\u0000${m.id}`, i);
+		}
 		for (const customModel of customModels) {
-			const existingIndex = merged.findIndex(m => m.provider === customModel.provider && m.id === customModel.id);
-			if (existingIndex >= 0) {
+			const key = `${customModel.provider}\u0000${customModel.id}`;
+			const existingIndex = indexByKey.get(key);
+			if (existingIndex !== undefined) {
 				const existingModel = merged[existingIndex];
 				merged[existingIndex] = enrichModelThinking({
 					...existingModel,
@@ -990,6 +1020,7 @@ export class ModelRegistry {
 				} as Model<Api>);
 			} else {
 				merged.push(finalizeCustomModel(customModel, { useDefaults: true }));
+				indexByKey.set(key, merged.length - 1);
 			}
 		}
 		return merged;
@@ -1756,7 +1787,26 @@ export class ModelRegistry {
 	}
 
 	#rebuildCanonicalIndex(): void {
+		if (this.#rebuildSuspended > 0) {
+			this.#rebuildPending = true;
+			return;
+		}
 		this.#canonicalIndex = buildCanonicalModelIndex(this.#models, this.#equivalenceConfig);
+		this.#rebuildPending = false;
+	}
+
+	#suspendRebuild(): void {
+		this.#rebuildSuspended += 1;
+	}
+
+	#resumeRebuild(): void {
+		if (this.#rebuildSuspended > 0) {
+			this.#rebuildSuspended -= 1;
+		}
+		if (this.#rebuildSuspended === 0 && this.#rebuildPending) {
+			this.#rebuildPending = false;
+			this.#canonicalIndex = buildCanonicalModelIndex(this.#models, this.#equivalenceConfig);
+		}
 	}
 
 	#parseModels(config: ModelsConfig): CustomModelOverlay[] {
@@ -2016,6 +2066,7 @@ export class ModelRegistry {
 			this.#runtimeProviderSourceByName.delete(providerName);
 			this.#clearRuntimeProviderState(providerName);
 		}
+		this.#lastStaticLoadMtime = null;
 		this.#reloadStaticModels();
 		this.#rebuildCanonicalIndex();
 	}
@@ -2094,6 +2145,7 @@ export class ModelRegistry {
 			this.#runtimeProviderSourceByName.set(providerName, sourceId);
 		}
 		if (sourceHandoff) {
+			this.#lastStaticLoadMtime = null;
 			this.#reloadStaticModels();
 		}
 

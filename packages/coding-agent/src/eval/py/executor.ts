@@ -453,25 +453,6 @@ async function ensureKernelAvailable(
 	}
 }
 
-export async function warmPythonEnvironment(
-	cwd: string,
-	sessionId?: string,
-	_useSharedGateway?: boolean,
-	_sessionFile?: string,
-	kernelOwnerId?: string,
-	signal?: AbortSignal,
-): Promise<{ ok: boolean; reason?: string }> {
-	const resolvedSessionId = sessionId ?? `session:${cwd}`;
-	try {
-		await logger.time("warmPython:ensureKernelAvailable", ensureKernelAvailable, cwd, { signal });
-	} catch (err: unknown) {
-		const reason = err instanceof Error ? err.message : String(err);
-		return { ok: false, reason };
-	}
-	attachKernelOwner(resolvedSessionId, kernelOwnerId);
-	return { ok: true };
-}
-
 function isResourceExhaustionError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
 	return (

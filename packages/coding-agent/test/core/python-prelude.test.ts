@@ -2,8 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { warmPythonEnvironment } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
-import { EvalTool, getEvalToolDescription } from "@oh-my-pi/pi-coding-agent/tools/eval";
+import { EvalTool } from "@oh-my-pi/pi-coding-agent/tools/eval";
 import { $which, getProjectDir } from "@oh-my-pi/pi-utils";
 
 const resolvePythonPath = (): string | null => {
@@ -40,7 +39,22 @@ const shouldRun = Boolean(pythonPath) && hasKernelDeps;
 
 describe.skipIf(!shouldRun)("PYTHON_PRELUDE integration", () => {
 	it("exposes prelude helpers via eval python backend", async () => {
-		const helpers = ["env", "read", "write", "append", "find", "glob", "grep", "rgrep", "sed", "tree", "stat", "diff", "run", "output"];
+		const helpers = [
+			"env",
+			"read",
+			"write",
+			"append",
+			"find",
+			"glob",
+			"grep",
+			"rgrep",
+			"sed",
+			"tree",
+			"stat",
+			"diff",
+			"run",
+			"output",
+		];
 
 		const session = {
 			cwd: getProjectDir(),
@@ -73,13 +87,5 @@ ${code}
 		expect(output).toContain("HELPERS_OK=1");
 		expect(tool.description).toContain("read");
 		expect(tool.description).not.toContain("Documentation unavailable");
-	});
-
-	it("renders prelude docs in eval tool description", async () => {
-		const result = await warmPythonEnvironment(getProjectDir());
-		expect(result.ok).toBe(true);
-		const description = getEvalToolDescription();
-		expect(description).toContain("read");
-		expect(description).not.toContain("Documentation unavailable");
 	});
 });

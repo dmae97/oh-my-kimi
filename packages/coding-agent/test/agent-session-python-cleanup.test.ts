@@ -95,18 +95,15 @@ const createSession = async (
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			forcePythonWarmup: true,
 			toolNames: ["eval"],
 		})
 	).session;
 
-const stubPythonWarmup = () => vi.spyOn(pythonExecutor, "warmPythonEnvironment").mockResolvedValue({ ok: true });
-
-const createWarmupKernel = () => {
+const createMockKernel = () => {
 	let alive = true;
 	return {
 		execute: vi.fn(async () => {
-			if (!alive) throw new Error("Expected warmup kernel to be restarted after shutdown");
+			if (!alive) throw new Error("Expected mock kernel to be restarted after shutdown");
 			return OK_EXECUTION;
 		}),
 		ping: vi.fn(async () => alive),
@@ -132,7 +129,7 @@ describe("AgentSession python cleanup", () => {
 	it("does not dispose unrelated Python owners when createAgentSession fails before session construction", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		const unrelatedKernel = createWarmupKernel();
+		const unrelatedKernel = createMockKernel();
 		const unrelatedCwd = path.join(tempDir, "unrelated-before");
 		const throwingExtension: ExtensionFactory = () => {
 			throw new Error("Extension init failed");
@@ -164,7 +161,6 @@ describe("AgentSession python cleanup", () => {
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
-				forcePythonWarmup: true,
 				toolNames: ["eval"],
 			}),
 		).rejects.toThrow("Extension init failed");
@@ -172,7 +168,7 @@ describe("AgentSession python cleanup", () => {
 		expect(startSpy).toHaveBeenCalledTimes(1);
 		expect(unrelatedKernel.shutdown).not.toHaveBeenCalled();
 
-		const replacementKernel = createWarmupKernel();
+		const replacementKernel = createMockKernel();
 		startSpy.mockResolvedValueOnce(replacementKernel as unknown as PythonKernelInstance);
 		await pythonExecutor.executePython("print('fresh warmup before')", {
 			cwd,
@@ -198,7 +194,7 @@ describe("AgentSession python cleanup", () => {
 	it("does not dispose unrelated Python owners when createAgentSession fails after session construction", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		const unrelatedKernel = createWarmupKernel();
+		const unrelatedKernel = createMockKernel();
 		const unrelatedCwd = path.join(tempDir, "unrelated-after");
 		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
 		const startSpy = vi
@@ -229,7 +225,6 @@ describe("AgentSession python cleanup", () => {
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
-				forcePythonWarmup: true,
 				toolNames: ["eval"],
 			}),
 		).rejects.toThrow("Memory startup failed");
@@ -237,7 +232,7 @@ describe("AgentSession python cleanup", () => {
 		expect(startSpy).toHaveBeenCalledTimes(1);
 		expect(unrelatedKernel.shutdown).not.toHaveBeenCalled();
 
-		const replacementKernel = createWarmupKernel();
+		const replacementKernel = createMockKernel();
 		startSpy.mockResolvedValueOnce(replacementKernel as unknown as PythonKernelInstance);
 		await pythonExecutor.executePython("print('fresh warmup after')", {
 			cwd,
@@ -263,8 +258,6 @@ describe("AgentSession python cleanup", () => {
 	it("waits for active SDK session Python work before releasing a shared retained kernel", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		stubPythonWarmup();
-
 		const kernel = new FakeKernel();
 		const blockedExecution = Promise.withResolvers<typeof OK_EXECUTION>();
 		const blockedExecutionStarted = Promise.withResolvers<void>();
@@ -336,128 +329,9 @@ describe("AgentSession python cleanup", () => {
 
 		expect(kernel.shutdownCalls).toBe(1);
 	});
-
-	it("aborts tracked eval warmup during session dispose before executePython starts", async () => {
-		const { tempDir, cwd } = createTempProject();
-		tempDirs.push(tempDir);
-		const blockedWarmupStarted = Promise.withResolvers<void>();
-		const executeSpy = vi.spyOn(pythonExecutor, "executePython").mockResolvedValue({
-			output: "tool ok",
-			exitCode: 0,
-			cancelled: false,
-			truncated: false,
-			totalLines: 1,
-			totalBytes: 7,
-			outputLines: 1,
-			outputBytes: 7,
-			displayOutputs: [],
-			stdinRequested: false,
-		});
-		let warmupCallCount = 0;
-		const warmupSpy = vi
-			.spyOn(pythonExecutor, "warmPythonEnvironment")
-			.mockImplementation(async (_cwd, _sessionId, _useSharedGateway, _sessionFile, _kernelOwnerId, signal) => {
-				warmupCallCount += 1;
-				if (warmupCallCount === 1) {
-					return { ok: true };
-				}
-				blockedWarmupStarted.resolve();
-				return await new Promise<{ ok: boolean; reason?: string }>(resolve => {
-					const onAbort = () => resolve({ ok: false, reason: "Warmup aborted" });
-					if (signal?.aborted) {
-						onAbort();
-						return;
-					}
-					signal?.addEventListener("abort", onAbort, { once: true });
-				});
-			});
-		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
-
-		const session = await createSession(tempDir, cwd);
-		const EvalTool = session.getToolByName("eval");
-		expect(EvalTool).toBeDefined();
-		let toolExecutionSettled = false;
-		const toolExecution = EvalTool!
-			.execute("call-id", { input: "```py\nprint('tool')\n```" }, undefined, undefined, undefined)
-			.finally(() => {
-				toolExecutionSettled = true;
-			});
-		await blockedWarmupStarted.promise;
-
-		let disposed = false;
-		const disposeSession = session.dispose().then(() => {
-			disposed = true;
-		});
-		await Bun.sleep(0);
-
-		expect(disposed).toBe(false);
-		expect(toolExecutionSettled).toBe(false);
-		expect(warmupSpy).toHaveBeenCalledTimes(2);
-		expect(executeSpy).not.toHaveBeenCalled();
-
-		await expect(toolExecution).rejects.toThrow("Operation aborted");
-		await disposeSession;
-
-		expect(disposed).toBe(true);
-		expect(toolExecutionSettled).toBe(true);
-		expect(executeSpy).not.toHaveBeenCalled();
-	});
-
-	it("rejects eval starts when warmup finishes after dispose begins", async () => {
-		const { tempDir, cwd } = createTempProject();
-		tempDirs.push(tempDir);
-		const blockedWarmupStarted = Promise.withResolvers<void>();
-		const releaseWarmup = Promise.withResolvers<void>();
-		const executeSpy = vi.spyOn(pythonExecutor, "executePython").mockResolvedValue({
-			output: "late",
-			exitCode: 0,
-			cancelled: false,
-			truncated: false,
-			totalLines: 1,
-			totalBytes: 4,
-			outputLines: 1,
-			outputBytes: 4,
-			displayOutputs: [],
-			stdinRequested: false,
-		});
-		let warmupCallCount = 0;
-		const warmupSpy = vi.spyOn(pythonExecutor, "warmPythonEnvironment").mockImplementation(async () => {
-			warmupCallCount += 1;
-			if (warmupCallCount === 1) {
-				return { ok: true };
-			}
-			blockedWarmupStarted.resolve();
-			await releaseWarmup.promise;
-			return { ok: true };
-		});
-		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
-
-		const session = await createSession(tempDir, cwd);
-		const EvalTool = session.getToolByName("eval");
-		expect(EvalTool).toBeDefined();
-		const toolExecution = EvalTool!.execute(
-			"call-id",
-			{ input: "```py\nprint('tool after warmup')\n```" },
-			undefined,
-			undefined,
-			undefined,
-		);
-		await blockedWarmupStarted.promise;
-		const disposeSession = session.dispose();
-		releaseWarmup.resolve();
-		await expect(toolExecution).rejects.toThrow(
-			"Python execution is unavailable while session disposal is in progress",
-		);
-		await disposeSession;
-		expect(warmupSpy).toHaveBeenCalledTimes(2);
-		expect(executeSpy).not.toHaveBeenCalled();
-	});
 	it("aborts tracked eval execution during session dispose after warmup completes", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		const warmupSpy = vi.spyOn(pythonExecutor, "warmPythonEnvironment").mockImplementation(async () => {
-			return { ok: true };
-		});
 		const blockedExecuteStarted = Promise.withResolvers<void>();
 		const executeSpy = vi.spyOn(pythonExecutor, "executePython").mockImplementation(async (_code, options) => {
 			const signal = options?.signal;
@@ -507,14 +381,12 @@ describe("AgentSession python cleanup", () => {
 
 		expect(disposed).toBe(false);
 		expect(toolExecutionSettled).toBe(false);
-		expect(warmupSpy).toHaveBeenCalledTimes(2);
 		expect(executeSpy).toHaveBeenCalledTimes(1);
 
 		const [toolResult] = await Promise.all([toolExecution, disposeSession]);
 
 		expect(disposed).toBe(true);
 		expect(toolExecutionSettled).toBe(true);
-		expect(warmupSpy).toHaveBeenCalledTimes(2);
 		expect(executeSpy).toHaveBeenCalledTimes(1);
 		expect(toolResult.details?.isError).toBe(true);
 		expect(toolResult.content).toContainEqual(
@@ -525,8 +397,6 @@ describe("AgentSession python cleanup", () => {
 	it("detaches retained kernel ownership even when dispose times out waiting for Python work", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		stubPythonWarmup();
-
 		const kernel = new FakeKernel();
 		const blockedExecution = Promise.withResolvers<typeof OK_EXECUTION>();
 		const blockedExecutionStarted = Promise.withResolvers<void>();
@@ -583,7 +453,6 @@ describe("AgentSession python cleanup", () => {
 	it("rejects direct session Python starts once dispose begins", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		stubPythonWarmup();
 		const executeSpy = vi.spyOn(pythonExecutor, "executePython").mockResolvedValue({
 			output: "late",
 			exitCode: 0,
@@ -705,7 +574,6 @@ describe("AgentSession python cleanup", () => {
 	it("rejects eval starts once dispose begins", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		const warmupSpy = stubPythonWarmup();
 		const executeSpy = vi.spyOn(pythonExecutor, "executePython").mockResolvedValue({
 			output: "late",
 			exitCode: 0,
@@ -724,23 +592,15 @@ describe("AgentSession python cleanup", () => {
 		expect(EvalTool).toBeDefined();
 		const disposeSession = session.dispose();
 		await expect(
-			EvalTool!.execute(
-				"call-id",
-				{ input: "```py\nprint('late')\n```" },
-				undefined,
-				undefined,
-				undefined,
-			),
+			EvalTool!.execute("call-id", { input: "```py\nprint('late')\n```" }, undefined, undefined, undefined),
 		).rejects.toThrow("Python execution is unavailable while session disposal is in progress");
 		await disposeSession;
-		expect(warmupSpy).toHaveBeenCalledTimes(1);
 		expect(executeSpy).not.toHaveBeenCalled();
 	});
 
 	it("rejects eval starts that reach async preflight after dispose begins", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		const warmupSpy = stubPythonWarmup();
 		const executeSpy = vi.spyOn(pythonExecutor, "executePython").mockResolvedValue({
 			output: "late",
 			exitCode: 0,
@@ -777,15 +637,12 @@ describe("AgentSession python cleanup", () => {
 		releaseArtifact.resolve();
 		await expect(execution).rejects.toThrow("Python execution is unavailable while session disposal is in progress");
 		await disposeSession;
-		expect(warmupSpy).toHaveBeenCalledTimes(1);
 		expect(executeSpy).not.toHaveBeenCalled();
 	});
 
 	it("aborts every active Python execution owned by the session during dispose", async () => {
 		const { tempDir, cwd } = createTempProject();
 		tempDirs.push(tempDir);
-		stubPythonWarmup();
-
 		const kernel = new FakeKernel();
 		const blockedExecution = Promise.withResolvers<typeof OK_EXECUTION>();
 		const blockedExecutionStarted = Promise.withResolvers<void>();

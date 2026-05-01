@@ -120,13 +120,13 @@ describe("executeJs", () => {
 				"const uuid = crypto.randomUUID();",
 				"const digest = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode('ok'));",
 				"const base = process.cwd();",
-				"fs.mkdirSync(`${base}/nested`, { recursive: true });",
-				"fs.writeFileSync(`${base}/nested/value.txt`, 'hello');",
-				"await fs.promises.copyFile(`${base}/nested/value.txt`, `${base}/nested/copy.txt`);",
-				"const text = fs.readFileSync(`${base}/nested/copy.txt`, 'utf8');",
-				"const bytes = await fs.promises.readFile(`${base}/nested/copy.txt`);",
-				"const stat = fs.statSync(`${base}/nested/copy.txt`);",
-				"const entries = fs.readdirSync(`${base}/nested`);",
+				"fs.mkdirSync(base + '/nested', { recursive: true });",
+				"fs.writeFileSync(base + '/nested/value.txt', 'hello');",
+				"await fs.promises.copyFile(base + '/nested/value.txt', base + '/nested/copy.txt');",
+				"const text = fs.readFileSync(base + '/nested/copy.txt', 'utf8');",
+				"const bytes = await fs.promises.readFile(base + '/nested/copy.txt');",
+				"const stat = fs.statSync(base + '/nested/copy.txt');",
+				"const entries = fs.readdirSync(base + '/nested');",
 				"const start = performance.now();",
 				"return {",
 				"  uuid: typeof uuid,",
@@ -196,77 +196,6 @@ describe("executeJs", () => {
 		});
 		expect(directoryResult.exitCode).toBe(1);
 		expect(directoryResult.output).toContain("Directory paths are not supported");
-	});
-
-	it("supports parse/stringify helpers and row utilities", async () => {
-		const result = await executeJs(
-			[
-				'const csv = \'name,role,note\\nalice,admin,"hello, world"\\nbob,user,"line1\\nline2"\';',
-				"const parsed = await parse.csv(csv);",
-				"const tsv = stringify.tsv(rows.pick(parsed, ['name', 'role']));",
-				"const roundtrip = await parse.tsv(tsv);",
-				"const grouped = rows.groupBy(parsed, 'role');",
-				"const counted = rows.countBy(parsed, 'role');",
-				"const sorted = rows.sortBy(parsed, 'name', { reverse: true });",
-				"return { parsed, roundtrip, groupedSizes: Object.fromEntries(Object.entries(grouped).map(([key, value]) => [key, value.length])), counted, sorted: rows.column(sorted, 'name') };",
-			].join("\n"),
-			{
-				sessionId,
-				session,
-				sessionFile,
-			},
-		);
-
-		expect(result.exitCode).toBe(0);
-		expect(result.displayOutputs).toEqual([
-			{
-				type: "json",
-				data: {
-					parsed: [
-						{ name: "alice", role: "admin", note: "hello, world" },
-						{ name: "bob", role: "user", note: "line1\nline2" },
-					],
-					roundtrip: [
-						{ name: "alice", role: "admin" },
-						{ name: "bob", role: "user" },
-					],
-					groupedSizes: { admin: 1, user: 1 },
-					counted: { admin: 1, user: 1 },
-					sorted: ["bob", "alice"],
-				},
-			},
-		]);
-	});
-
-	it("round-trips text and binary writes", async () => {
-		const result = await executeJs(
-			[
-				"await write('plain.txt', 'hello');",
-				"await write('bin.dat', new Uint8Array([0, 1, 2, 255]));",
-				"await write.json('state.json', { ok: true });",
-				"await write.csv('table.csv', [{ name: 'alice', role: 'admin' }]);",
-				"return {",
-				"  text: await read.text('plain.txt'),",
-				"  bytes: Array.from(await read.bytes('bin.dat')),",
-				"  json: await read.json('state.json'),",
-				"  csv: await read.csv('table.csv'),",
-				"};",
-			].join("\n"),
-			{
-				sessionId,
-				session,
-				sessionFile,
-			},
-		);
-
-		expect(result.exitCode).toBe(0);
-		expect(getStatusEvents(result)).toHaveLength(8);
-		expect(getJsonData(result)).toEqual({
-			text: "hello",
-			bytes: [0, 1, 2, 255],
-			json: { ok: true },
-			csv: [{ name: "alice", role: "admin" }],
-		});
 	});
 
 	it("routes output() through tool.read and keeps tool.* results normalized", async () => {

@@ -10,21 +10,19 @@ interface PackageJsonInfo {
 }
 
 async function resolvePackageRunner(cwd: string): Promise<string> {
-	if ((await isFile(path.join(cwd, "bun.lock"))) || (await isFile(path.join(cwd, "bun.lockb")))) {
-		return "bun run";
-	}
-	if (await isFile(path.join(cwd, "pnpm-lock.yaml"))) {
-		return "pnpm run";
-	}
-	if (await isFile(path.join(cwd, "yarn.lock"))) {
-		return "yarn";
-	}
-	if ((await isFile(path.join(cwd, "package-lock.json"))) || (await isFile(path.join(cwd, "npm-shrinkwrap.json")))) {
-		return "npm run";
-	}
-	if ($which("bun")) {
-		return "bun run";
-	}
+	const [bunLock, bunLockb, pnpmLock, yarnLock, npmLock, npmShrink] = await Promise.all([
+		isFile(path.join(cwd, "bun.lock")),
+		isFile(path.join(cwd, "bun.lockb")),
+		isFile(path.join(cwd, "pnpm-lock.yaml")),
+		isFile(path.join(cwd, "yarn.lock")),
+		isFile(path.join(cwd, "package-lock.json")),
+		isFile(path.join(cwd, "npm-shrinkwrap.json")),
+	]);
+	if (bunLock || bunLockb) return "bun run";
+	if (pnpmLock) return "pnpm run";
+	if (yarnLock) return "yarn";
+	if (npmLock || npmShrink) return "npm run";
+	if ($which("bun")) return "bun run";
 	return "npm run";
 }
 
@@ -86,18 +84,23 @@ async function readPackageJson(filePath: string): Promise<PackageJsonInfo | null
 async function findWorkspacePackageJsons(cwd: string, patterns: string[]): Promise<string[]> {
 	const includePatterns = patterns.filter(pattern => !pattern.startsWith("!")).map(normalizeWorkspacePattern);
 	const excludePatterns = patterns.filter(pattern => pattern.startsWith("!")).map(normalizeWorkspacePattern);
-	const excluded = new Set<string>();
-	for (const pattern of excludePatterns) {
-		for await (const entry of new Bun.Glob(pattern.slice(1)).scan({ cwd, onlyFiles: true })) {
-			excluded.add(path.normalize(String(entry)));
-		}
-	}
-	const files = new Set<string>();
-	for (const pattern of includePatterns) {
+
+	const collect = async (pattern: string): Promise<string[]> => {
+		const out: string[] = [];
 		for await (const entry of new Bun.Glob(pattern).scan({ cwd, onlyFiles: true })) {
-			const normalized = path.normalize(String(entry));
-			if (normalized !== "package.json" && !excluded.has(normalized)) files.add(normalized);
+			out.push(path.normalize(String(entry)));
 		}
+		return out;
+	};
+
+	const [excludedLists, includedLists] = await Promise.all([
+		Promise.all(excludePatterns.map(pattern => collect(pattern.slice(1)))),
+		Promise.all(includePatterns.map(pattern => collect(pattern))),
+	]);
+	const excluded = new Set<string>(excludedLists.flat());
+	const files = new Set<string>();
+	for (const entry of includedLists.flat()) {
+		if (entry !== "package.json" && !excluded.has(entry)) files.add(entry);
 	}
 	return [...files].sort((left, right) => left.localeCompare(right));
 }
@@ -132,10 +135,10 @@ async function readPackageTasks(cwd: string): Promise<RunnerTask[] | null> {
 		);
 	}
 
-	for (const packageJsonPath of workspacePackageJsons) {
-		const pkg = await readPackageJson(path.join(cwd, packageJsonPath));
-		if (!pkg || pkg.scripts.length === 0) continue;
-		const packageDir = path.dirname(packageJsonPath);
+	const pkgs = await Promise.all(workspacePackageJsons.map(p => readPackageJson(path.join(cwd, p))));
+	pkgs.forEach((pkg, index) => {
+		if (!pkg || pkg.scripts.length === 0) return;
+		const packageDir = path.dirname(workspacePackageJsons[index]);
 		tasks.push(
 			...tasksForPackage({
 				pkg,
@@ -143,7 +146,7 @@ async function readPackageTasks(cwd: string): Promise<RunnerTask[] | null> {
 				namespaced: true,
 			}),
 		);
-	}
+	});
 
 	return tasks.length > 0 ? tasks : null;
 }
@@ -153,8 +156,7 @@ export const pkgRunner: TaskRunner = {
 	label: "Pkg",
 	async detect(cwd: string): Promise<DetectedRunner | null> {
 		try {
-			const commandPrefix = await resolvePackageRunner(cwd);
-			const tasks = await readPackageTasks(cwd);
+			const [commandPrefix, tasks] = await Promise.all([resolvePackageRunner(cwd), readPackageTasks(cwd)]);
 			if (!tasks || tasks.length === 0) return null;
 			return { id: "pkg", label: "Pkg", commandPrefix, tasks };
 		} catch (err) {

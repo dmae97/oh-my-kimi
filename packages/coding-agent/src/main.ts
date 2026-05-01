@@ -242,6 +242,11 @@ async function getChangelogForDisplay(parsed: Args): Promise<string | undefined>
 	}
 
 	const lastVersion = settings.get("lastChangelogVersion");
+	if (lastVersion === VERSION) {
+		// Steady state: user already saw the current version's changelog. Skip the file read + parse.
+		return undefined;
+	}
+
 	const changelogPath = getChangelogPath();
 	const entries = await parseChangelog(changelogPath);
 
@@ -627,7 +632,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	pluginPreloadPromise.catch(() => {});
 
 	const cwd = getProjectDir();
-	await logger.time("settings:init", Settings.init, { cwd });
+	const settingsInstance = await logger.time("settings:init", Settings.init, { cwd });
 	if (parsedArgs.mode === "rpc") {
 		applyRpcDefaultSettingOverrides();
 	}
@@ -659,7 +664,6 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 
 	// Initialize discovery system with settings for provider persistence
 	logger.time("initializeWithSettings", initializeWithSettings, settings);
-	modelRegistry.refreshInBackground();
 
 	// Apply model role overrides from CLI args or env vars (ephemeral, not persisted)
 	const smolModel = parsedArgs.smol ?? $env.PI_SMOL_MODEL;
@@ -763,6 +767,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	sessionOptions.authStorage = authStorage;
 	sessionOptions.modelRegistry = modelRegistry;
 	sessionOptions.hasUI = isInteractive;
+	sessionOptions.settings = settingsInstance;
 
 	// Handle CLI --api-key as runtime override (not persisted)
 	if (parsedArgs.apiKey) {
@@ -782,6 +787,10 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		createAgentSession,
 		sessionOptions,
 	);
+	// Kick off background model discovery only after createAgentSession finishes its parallel
+	// discovery arms; running these concurrently contends for the event loop and stretches
+	// every parallel arm by ~30ms.
+	modelRegistry.refreshInBackground();
 	if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
 		authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);
 	}
