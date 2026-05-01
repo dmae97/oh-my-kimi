@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getAntigravityUserAgent } from "../../providers/google-gemini-cli";
+import { getAntigravityUserAgent } from "../../providers/google-gemini-headers";
 import type { Model } from "../../types";
 import { toPositiveNumber } from "../../utils";
 

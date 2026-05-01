@@ -27,7 +27,7 @@ import { sanitizeSchemaForCCA } from "../utils/schema";
 import {
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
 	extractRetryDelay,
-	getAntigravityHeaders,
+	getAntigravityUserAgent,
 	getGeminiCliHeaders,
 } from "./google-gemini-headers";
 import {
@@ -69,15 +69,12 @@ const ANTIGRAVITY_DAILY_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com";
 const ANTIGRAVITY_SANDBOX_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 const ANTIGRAVITY_ENDPOINT_FALLBACKS = [ANTIGRAVITY_DAILY_ENDPOINT, ANTIGRAVITY_SANDBOX_ENDPOINT] as const;
 
-export { getAntigravityUserAgent } from "./antigravity-user-agent";
 export {
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
 	extractRetryDelay,
-	getAntigravityHeaders as getAntigravityAuthHeaders,
-	getAntigravityHeaders,
+	getAntigravityUserAgent,
 	getGeminiCliHeaders,
 	getGeminiCliUserAgent,
-	getGeminiCliUserAgentValue,
 } from "./google-gemini-headers";
 
 // Counter for generating unique tool call IDs
@@ -348,7 +345,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			if (replacementPayload !== undefined) {
 				requestBody = replacementPayload as typeof requestBody;
 			}
-			const headers = isAntigravity ? getAntigravityHeaders() : getGeminiCliHeaders(model.id);
+			const headers = isAntigravity ? { "User-Agent": getAntigravityUserAgent() } : getGeminiCliHeaders(model.id);
 
 			const requestHeaders = {
 				Authorization: `Bearer ${accessToken}`,

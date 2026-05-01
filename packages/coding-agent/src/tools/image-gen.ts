@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAntigravityHeaders, getEnvApiKey, type Model, StringEnum } from "@oh-my-pi/pi-ai";
+import { getAntigravityUserAgent, getEnvApiKey, type Model, StringEnum } from "@oh-my-pi/pi-ai";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
@@ -1055,7 +1055,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 						Authorization: `Bearer ${apiKey.apiKey}`,
 						"Content-Type": "application/json",
 						Accept: "text/event-stream",
-						...getAntigravityHeaders(),
+						"User-Agent": getAntigravityUserAgent(),
 					},
 					body: JSON.stringify(requestBody),
 					signal: requestSignal,

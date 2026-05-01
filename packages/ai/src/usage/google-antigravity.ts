@@ -1,4 +1,4 @@
-import { getAntigravityUserAgent } from "../providers/google-gemini-cli";
+import { getAntigravityUserAgent } from "../providers/google-gemini-headers";
 import type {
 	UsageAmount,
 	UsageFetchContext,

@@ -1364,16 +1364,10 @@ mod tests {
 		/// Interactive brush, leading its own pgroup, terminal stdin: foreground.
 		#[test]
 		fn interactive_with_terminal_stdin_takes_foreground() {
-			assert_eq!(
-				child_session_action(true, true, false),
-				ChildSessionAction::TakeForeground,
-			);
+			assert_eq!(child_session_action(true, true, false), ChildSessionAction::TakeForeground,);
 			// `in_pipeline_group` is meaningless when `new_pg` is true; result MUST
 			// not depend on it.
-			assert_eq!(
-				child_session_action(true, true, true),
-				ChildSessionAction::TakeForeground,
-			);
+			assert_eq!(child_session_action(true, true, true), ChildSessionAction::TakeForeground,);
 		}
 
 		/// Interactive brush leading its own pgroup but with non-terminal stdin
@@ -1381,33 +1375,21 @@ mod tests {
 		/// cannot stop the parent.
 		#[test]
 		fn interactive_with_non_terminal_stdin_detaches() {
-			assert_eq!(
-				child_session_action(true, false, false),
-				ChildSessionAction::DetachSession,
-			);
-			assert_eq!(
-				child_session_action(true, false, true),
-				ChildSessionAction::DetachSession,
-			);
+			assert_eq!(child_session_action(true, false, false), ChildSessionAction::DetachSession,);
+			assert_eq!(child_session_action(true, false, true), ChildSessionAction::DetachSession,);
 		}
 
 		/// Non-interactive brush, terminal stdin, no pipeline: nothing to do.
 		#[test]
 		fn non_interactive_with_terminal_stdin_does_nothing() {
-			assert_eq!(
-				child_session_action(false, true, false),
-				ChildSessionAction::None,
-			);
+			assert_eq!(child_session_action(false, true, false), ChildSessionAction::None,);
 		}
 
 		/// Non-interactive brush, terminal stdin, joining a pipeline pgroup:
 		/// nothing to do (parent already wired pgroup membership).
 		#[test]
 		fn non_interactive_terminal_stdin_in_pipeline_does_nothing() {
-			assert_eq!(
-				child_session_action(false, true, true),
-				ChildSessionAction::None,
-			);
+			assert_eq!(child_session_action(false, true, true), ChildSessionAction::None,);
 		}
 
 		/// **Embedded host bug fix.** Non-interactive brush, non-terminal stdin,
@@ -1416,10 +1398,7 @@ mod tests {
 		/// motivating bug for PR #895.
 		#[test]
 		fn embedded_host_with_non_terminal_stdin_detaches() {
-			assert_eq!(
-				child_session_action(false, false, false),
-				ChildSessionAction::DetachSession,
-			);
+			assert_eq!(child_session_action(false, false, false), ChildSessionAction::DetachSession,);
 		}
 
 		/// **Pipeline carve-out.** Non-interactive brush, non-terminal stdin
@@ -1430,10 +1409,7 @@ mod tests {
 		/// in PR #895.
 		#[test]
 		fn pipeline_stage_does_not_detach() {
-			assert_eq!(
-				child_session_action(false, false, true),
-				ChildSessionAction::None,
-			);
+			assert_eq!(child_session_action(false, false, true), ChildSessionAction::None,);
 		}
 	}
 
@@ -1454,19 +1430,13 @@ mod tests {
 	async fn embedded_external_command_runs_in_its_own_session() {
 		use std::io::Read as _;
 
+		// SAFETY: `getsid(0)` only queries the current process session; the return
+		// value is checked.
 		let host_sid = unsafe { libc::getsid(0) };
-		assert!(
-			host_sid > 0,
-			"getsid(0) failed: {}",
-			std::io::Error::last_os_error(),
-		);
+		assert!(host_sid > 0, "getsid(0) failed: {}", std::io::Error::last_os_error());
 
 		// Build the same kind of session pi-natives uses in production.
-		let config = ShellConfig {
-			session_env:   None,
-			snapshot_path: None,
-			minimizer:     None,
-		};
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
 		let mut session = create_session(&config).await.expect("create_session");
 
 		// Output pipe shared between the brush child and a concurrent reader. The
@@ -1492,14 +1462,15 @@ mod tests {
 				&& n > 0
 			{
 				buf.extend_from_slice(&chunk[..n]);
-				if let Some(tx) = pid_tx.take()
-					&& let Ok(s) = std::str::from_utf8(&buf)
-					&& let Some(line) = s.lines().next()
+				if pid_tx.is_some()
+					&& let Some(line_end) = buf.iter().position(|&byte| byte == b'\n')
+					&& let Ok(line) = std::str::from_utf8(&buf[..line_end])
 					&& let Ok(pid) = line.trim().parse::<i32>()
 				{
-					let _ = tx.send(pid);
-				} else if pid_tx.is_some() {
-					// keep the sender for the next iteration
+					let _ = pid_tx
+						.take()
+						.expect("pid sender should be present")
+						.send(pid);
 				}
 			}
 			buf
@@ -1511,7 +1482,7 @@ mod tests {
 			// `printf '%d\n' "$$"` then `sleep 0.5`. Long enough for our `getsid`.
 			let exec = session
 				.shell
-				.run_string("/bin/sh -c 'printf %d \"$$\"; sleep 0.5'", &params)
+				.run_string("/bin/sh -c 'printf \"%d\\n\" \"$$\"; sleep 0.5'", &params)
 				.await
 				.expect("run_string");
 			drop(params);
@@ -1527,6 +1498,8 @@ mod tests {
 		// Snapshot the child's session ID immediately, while the child is still
 		// in `sleep`. POSIX guarantees `getsid` against a live PID returns the
 		// session of that process.
+		// SAFETY: `child_pid` is a positive PID from the child; errors are reported via
+		// the checked return value.
 		let child_sid = unsafe { libc::getsid(child_pid) };
 		assert!(
 			child_sid > 0,
@@ -1548,8 +1521,8 @@ mod tests {
 
 		assert_ne!(
 			child_sid, host_sid,
-			"child PID {child_pid} inherited host session {host_sid}; \
-			 setsid() did not run — the embedded-host bug is back",
+			"child PID {child_pid} inherited host session {host_sid}; setsid() did not run — the \
+			 embedded-host bug is back",
 		);
 		assert_eq!(
 			child_sid, child_pid,
