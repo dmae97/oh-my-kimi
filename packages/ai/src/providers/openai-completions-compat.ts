@@ -107,7 +107,9 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 					medium: "default",
 					high: "default",
 					xhigh: "default",
-				} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
+			} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
+			: isDeepseekFamily && Boolean(model.reasoning)
+				? { xhigh: "max" }
 			: {};
 
 	return {
@@ -141,6 +143,9 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 			isKimiModel ||
 			(isDeepseekFamily && Boolean(model.reasoning)) ||
 			((provider === "openrouter" || baseUrl.includes("openrouter.ai")) && Boolean(model.reasoning)),
+		// DeepSeek V4 rejects synthetic reasoning_content placeholders (".") on tool-call turns.
+		// Kimi and OpenRouter accept them when actual reasoning is unavailable.
+		allowsSyntheticReasoningContentForToolCalls: !isDeepseekFamily || !Boolean(model.reasoning),
 		requiresAssistantContentForToolCalls: isKimiModel,
 		openRouterRouting: undefined,
 		vercelGatewayRouting: undefined,
@@ -183,6 +188,8 @@ export function resolveOpenAICompat(
 		reasoningContentField: model.compat.reasoningContentField ?? detected.reasoningContentField,
 		requiresReasoningContentForToolCalls:
 			model.compat.requiresReasoningContentForToolCalls ?? detected.requiresReasoningContentForToolCalls,
+		allowsSyntheticReasoningContentForToolCalls:
+			model.compat.allowsSyntheticReasoningContentForToolCalls ?? detected.allowsSyntheticReasoningContentForToolCalls,
 		requiresAssistantContentForToolCalls:
 			model.compat.requiresAssistantContentForToolCalls ?? detected.requiresAssistantContentForToolCalls,
 		disableReasoningOnForcedToolChoice:
