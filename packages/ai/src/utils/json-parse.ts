@@ -130,27 +130,19 @@ export function parseJsonWithRepair<T>(json: string): T {
  * @returns Parsed object or empty object if parsing fails
  */
 export function parseStreamingJson<T = Record<string, unknown>>(partialJson: string | undefined): T {
-	partialJson = partialJson?.trim();
+	partialJson = partialJson?.trimStart();
 	if (!partialJson) {
 		return {} as T;
 	}
-
-	// Try standard/repaired parsing first (fastest for complete JSON)
 	try {
-		return parseJsonWithRepair<T>(partialJson);
+		return JSON.parse(partialJson) as T;
 	} catch {
-		// Try partial-json for incomplete JSON
+		partialJson = repairJson(partialJson);
 		try {
-			const result = partialParse(partialJson);
-			return (result ?? {}) as T;
+			return (partialParse(partialJson) ?? {}) as T;
 		} catch {
-			try {
-				const result = partialParse(repairJson(partialJson));
-				return (result ?? {}) as T;
-			} catch {
-				// If all parsing fails, return empty object
-				return {} as T;
-			}
+			// If all parsing fails, return empty object
+			return {} as T;
 		}
 	}
 }
