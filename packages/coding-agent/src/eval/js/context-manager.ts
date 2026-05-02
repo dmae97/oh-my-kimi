@@ -429,7 +429,10 @@ async function createVmState(
 	const context = vm.createContext(contextGlobals);
 	context.globalThis = context;
 	state.context = context;
-	vm.runInContext(JAVASCRIPT_PRELUDE_SOURCE, context, { filename: "js-prelude.js" });
+	vm.runInContext(JAVASCRIPT_PRELUDE_SOURCE, context, {
+		filename: "js-prelude.js",
+		importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
+	});
 	return state;
 }
 
@@ -530,6 +533,7 @@ export async function executeInVmContext(options: {
 			const value = vm.runInContext(wrapped.source, state.context, {
 				filename: options.filename,
 				timeout: options.timeoutMs,
+				importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
 			});
 			const awaited = await awaitMaybePromise(value, options.runState.signal);
 			displayValue(state, awaited);
