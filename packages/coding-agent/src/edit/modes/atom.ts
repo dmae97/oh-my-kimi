@@ -879,6 +879,7 @@ function validateNoConflictingAtomMutations(edits: AtomEdit[]): void {
 		if (edit.kind !== "set" && edit.kind !== "delete") continue;
 		const existing = mutatingPerLine.get(edit.anchor.line);
 		if (existing) {
+			if (existing === "delete" && edit.kind === "delete") continue;
 			throw new Error(
 				`Conflicting ops on anchor line ${edit.anchor.line}: \`${existing}\` and \`${edit.kind}\`. ` +
 					"At most one mutating op (set/delete) is allowed per anchor.",

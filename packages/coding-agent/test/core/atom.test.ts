@@ -830,6 +830,26 @@ describe("parseAtom — emits internal AtomEdit shapes", () => {
 		const edits = parseAtom(diff);
 		expect(() => applyAtomEdits(content, edits)).toThrow(/Conflicting ops/);
 	});
+
+	it("duplicate delete ops on same anchor are idempotent", () => {
+		const content = "aaa\nbbb\nccc";
+		const t = tag(2, "bbb");
+		const diff = `-${t}\n-${t}`;
+		const edits = parseAtom(diff);
+		expect(applyAtomEdits(content, edits).lines).toBe("aaa\nccc");
+	});
+
+	it("range replace with redundant explicit delete inside the range", () => {
+		const content = "a\nb\nc\nd\ne";
+		const t2 = tag(2, "b");
+		const t4 = tag(4, "d");
+		const t3 = tag(3, "c");
+		// `2..4=NEW` expands to deletes on 2,3,4 plus an insert.
+		// An explicit `-3` on a line already inside that range must not conflict.
+		const diff = `${t2}..${t4}=NEW\n-${t3}`;
+		const edits = parseAtom(diff);
+		expect(applyAtomEdits(content, edits).lines).toBe("a\nNEW\ne");
+	});
 });
 
 // ───────────────────────────────────────────────────────────────────────────
