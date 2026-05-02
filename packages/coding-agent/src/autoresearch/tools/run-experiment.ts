@@ -7,7 +7,7 @@ import { Type } from "@sinclair/typebox";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateTail } from "../../session/streaming-output";
-import { replaceTabs, shortenPath, truncateToWidth } from "../../tools/render-utils";
+import { replaceTabs, shortenPath } from "../../tools/render-utils";
 import * as git from "../../utils/git";
 import { parseWorkDirDirtyPaths } from "../git";
 import {
@@ -20,11 +20,11 @@ import {
 	parseMetricLines,
 } from "../helpers";
 import { buildExperimentState } from "../state";
-import { openAutoresearchStorage } from "../storage";
+import { openAutoresearchStorageIfExists } from "../storage";
 import type { AutoresearchToolFactoryOptions, RunDetails, RunExperimentProgressDetails } from "../types";
+import { DEFAULT_HARNESS_COMMAND } from "./init-experiment";
 
 const runExperimentSchema = Type.Object({
-	command: Type.String({ description: "Shell command to run for this experiment." }),
 	timeout_seconds: Type.Optional(Type.Number({ description: "Timeout in seconds. Defaults to 600." })),
 });
 
@@ -54,14 +54,15 @@ export function createRunExperimentTool(
 		parameters: runExperimentSchema,
 		defaultInactive: true,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const storage = await openAutoresearchStorage(ctx.cwd);
-			const session = storage.getActiveSession();
-			if (!session) {
+			const storage = await openAutoresearchStorageIfExists(ctx.cwd);
+			const currentBranch = (await git.branch.current(ctx.cwd)) ?? null;
+			const session = storage?.getActiveSessionForBranch(currentBranch) ?? null;
+			if (!storage || !session) {
 				return {
 					content: [
 						{
 							type: "text",
-							text: "Error: no active autoresearch session. Call init_experiment first.",
+							text: "Error: no active autoresearch session for the current branch. Call init_experiment first.",
 						},
 					],
 				};
@@ -76,11 +77,7 @@ export function createRunExperimentTool(
 				return pending.id;
 			})();
 
-			let commandWarning: string | null = null;
-			if (session.preferredCommand && params.command.trim() !== session.preferredCommand.trim()) {
-				commandWarning = `Note: command differs from preferred (\`${session.preferredCommand}\`). Re-init the experiment if the workload itself changed.`;
-			}
-
+			const resolvedCommand = DEFAULT_HARNESS_COMMAND;
 			const preRunStatus = await tryGitStatus(ctx.cwd);
 			const workDirPrefix = await tryGitPrefix(ctx.cwd);
 			const preRunDirtyPaths = parseWorkDirDirtyPaths(preRunStatus, workDirPrefix);
@@ -89,7 +86,7 @@ export function createRunExperimentTool(
 			const insertedRun = storage.insertRun({
 				sessionId: session.id,
 				segment: session.currentSegment,
-				command: params.command,
+				command: resolvedCommand,
 				logPath: "", // patched after we know the run id
 				preRunDirtyPaths,
 				startedAt,
@@ -107,7 +104,7 @@ export function createRunExperimentTool(
 			runtime.lastRunSummary = null;
 			runtime.runningExperiment = {
 				startedAt,
-				command: params.command,
+				command: resolvedCommand,
 				runDirectory,
 				runNumber: insertedRun.id,
 			};
@@ -118,7 +115,7 @@ export function createRunExperimentTool(
 			let execution: ProcessExecutionResult;
 			try {
 				execution = await executeProcess({
-					command: ["bash", "-lc", params.command],
+					command: ["bash", "-lc", resolvedCommand],
 					cwd: ctx.cwd,
 					logPath: benchmarkLogPath,
 					timeoutMs,
@@ -178,7 +175,7 @@ export function createRunExperimentTool(
 				runNumber: insertedRun.id,
 				runDirectory,
 				benchmarkLogPath,
-				command: params.command,
+				command: resolvedCommand,
 				exitCode: execution.exitCode,
 				durationSeconds,
 				passed,
@@ -191,14 +188,13 @@ export function createRunExperimentTool(
 				metricName: session.primaryMetric,
 				metricUnit: session.metricUnit,
 				preRunDirtyPaths,
-				commandWarning,
 				abandonedPriorRun,
 				truncation: llmTruncation.truncated ? llmTruncation : undefined,
 				fullOutputPath: execution.logPath,
 			};
 
 			runtime.lastRunSummary = {
-				command: params.command,
+				command: resolvedCommand,
 				durationSeconds,
 				parsedAsi,
 				parsedMetrics,
@@ -222,7 +218,6 @@ export function createRunExperimentTool(
 			options.dashboard.requestRender();
 
 			const headerLines: string[] = [];
-			if (commandWarning) headerLines.push(commandWarning);
 			if (abandonedPriorRun !== null) {
 				headerLines.push(`Note: abandoned prior pending run #${abandonedPriorRun} before starting this run.`);
 			}
@@ -238,10 +233,9 @@ export function createRunExperimentTool(
 				details: resultDetails,
 			};
 		},
-		renderCall(args, _options, theme): Text {
-			const commandPreview = truncateToWidth(replaceTabs(args.command), 100);
+		renderCall(_args, _options, theme): Text {
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("run_experiment"))} ${theme.fg("muted", commandPreview)}`,
+				`${theme.fg("toolTitle", theme.bold("run_experiment"))} ${theme.fg("muted", DEFAULT_HARNESS_COMMAND)}`,
 				0,
 				0,
 			);

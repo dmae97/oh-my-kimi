@@ -51,7 +51,6 @@ export interface ExperimentState {
 	currentSegment: number;
 	maxExperiments: number | null;
 	confidence: number | null;
-	benchmarkCommand: string | null;
 	scopePaths: string[];
 	offLimits: string[];
 	constraints: string[];
@@ -86,7 +85,6 @@ export interface RunDetails {
 	metricName: string;
 	metricUnit: string;
 	preRunDirtyPaths: string[];
-	commandWarning: string | null;
 	abandonedPriorRun: number | null;
 	truncation?: TruncationResult;
 	fullOutputPath?: string;

@@ -1,7 +1,7 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getAutoresearchDbPath, getAutoresearchDir, getAutoresearchProjectDir, logger } from "@oh-my-pi/pi-utils";
+import { getAutoresearchDbPath, getAutoresearchProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { getEncodedProjectName } from "../task/worktree";
 import * as git from "../utils/git";
 import type { ASIData, ExperimentStatus, MetricDirection, NumericMetricMap } from "./types";
@@ -86,6 +86,7 @@ export interface UpdateSessionParams {
 	metricUnit?: string;
 	direction?: MetricDirection;
 	branch?: string | null;
+	baselineCommit?: string | null;
 	notes?: string;
 }
 
@@ -278,6 +279,24 @@ export class AutoresearchStorage {
 		return row ? rowToSession(row) : null;
 	}
 
+	getActiveSessionForBranch(branch: string | null): SessionRow | null {
+		// Most-recent active session whose recorded branch matches the caller's branch.
+		// `branch === null` means "no git repo / no branch info" — treat null on both
+		// sides as a match.
+		if (branch === null) {
+			const stmt = this.#db.prepare<SessionDbRow, []>(
+				"SELECT * FROM sessions WHERE closed_at IS NULL AND branch IS NULL ORDER BY id DESC LIMIT 1",
+			);
+			const row = stmt.get();
+			return row ? rowToSession(row) : null;
+		}
+		const stmt = this.#db.prepare<SessionDbRow, [string]>(
+			"SELECT * FROM sessions WHERE closed_at IS NULL AND branch = ? ORDER BY id DESC LIMIT 1",
+		);
+		const row = stmt.get(branch);
+		return row ? rowToSession(row) : null;
+	}
+
 	getSessionById(sessionId: number): SessionRow | null {
 		const stmt = this.#db.prepare<SessionDbRow, [number]>("SELECT * FROM sessions WHERE id = ?");
 		const row = stmt.get(sessionId);
@@ -361,6 +380,10 @@ export class AutoresearchStorage {
 		if (updates.branch !== undefined) {
 			setClauses.push("branch = ?");
 			values.push(updates.branch);
+		}
+		if (updates.baselineCommit !== undefined) {
+			setClauses.push("baseline_commit = ?");
+			values.push(updates.baselineCommit);
 		}
 		if (updates.notes !== undefined) {
 			setClauses.push("notes = ?");
@@ -516,25 +539,39 @@ export class AutoresearchStorage {
 const storageCache = new Map<string, AutoresearchStorage>();
 
 export async function openAutoresearchStorage(cwd: string): Promise<AutoresearchStorage> {
-	const override = process.env.OMP_AUTORESEARCH_DB_DIR;
-	const repoRoot = (await git.repo.root(cwd)) ?? cwd;
-	const encoded = getEncodedProjectName(repoRoot);
-	let dbPath: string;
-	let projectDir: string;
-	if (override) {
-		fs.mkdirSync(override, { recursive: true });
-		dbPath = path.join(override, `${encoded}.db`);
-		projectDir = path.join(override, encoded);
-	} else {
-		dbPath = getAutoresearchDbPath(encoded);
-		projectDir = getAutoresearchProjectDir(encoded);
-		fs.mkdirSync(getAutoresearchDir(), { recursive: true });
-	}
+	const { dbPath, projectDir } = await resolveAutoresearchPaths(cwd);
 	const cached = storageCache.get(dbPath);
 	if (cached) return cached;
+	fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 	const storage = new AutoresearchStorage(dbPath, projectDir);
 	storageCache.set(dbPath, storage);
 	return storage;
+}
+
+export async function openAutoresearchStorageIfExists(cwd: string): Promise<AutoresearchStorage | null> {
+	const { dbPath, projectDir } = await resolveAutoresearchPaths(cwd);
+	const cached = storageCache.get(dbPath);
+	if (cached) return cached;
+	if (!fs.existsSync(dbPath)) return null;
+	const storage = new AutoresearchStorage(dbPath, projectDir);
+	storageCache.set(dbPath, storage);
+	return storage;
+}
+
+async function resolveAutoresearchPaths(cwd: string): Promise<{ dbPath: string; projectDir: string }> {
+	const override = process.env.OMP_AUTORESEARCH_DB_DIR;
+	const repoRoot = (await git.repo.root(cwd)) ?? cwd;
+	const encoded = getEncodedProjectName(repoRoot);
+	if (override) {
+		return {
+			dbPath: path.join(override, `${encoded}.db`),
+			projectDir: path.join(override, encoded),
+		};
+	}
+	return {
+		dbPath: getAutoresearchDbPath(encoded),
+		projectDir: getAutoresearchProjectDir(encoded),
+	};
 }
 
 export function closeAllAutoresearchStorages(): void {

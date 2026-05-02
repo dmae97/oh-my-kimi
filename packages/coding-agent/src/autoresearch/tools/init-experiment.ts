@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { StringEnum } from "@oh-my-pi/pi-ai";
 import { Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@sinclair/typebox";
@@ -5,10 +6,15 @@ import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
 import * as git from "../../utils/git";
+import { parseWorkDirDirtyPaths } from "../git";
 import { dedupeStrings, normalizePathSpec } from "../helpers";
 import { buildExperimentState } from "../state";
 import { openAutoresearchStorage, type SessionRow } from "../storage";
 import type { AutoresearchToolFactoryOptions, ExperimentState } from "../types";
+
+export const HARNESS_FILENAME = "autoresearch.sh";
+export const DEFAULT_HARNESS_COMMAND = `bash ${HARNESS_FILENAME}`;
+const HARNESS_COMMIT_TITLE = "autoresearch: harness setup";
 
 const initExperimentSchema = Type.Object({
 	name: Type.String({ description: "Human-readable experiment name." }),
@@ -22,12 +28,6 @@ const initExperimentSchema = Type.Object({
 	),
 	direction: Type.Optional(
 		StringEnum(["lower", "higher"], { description: "Whether lower or higher values are better. Defaults to lower." }),
-	),
-	preferred_command: Type.Optional(
-		Type.String({
-			description:
-				"Preferred benchmark command for this segment. Advisory; run_experiment accepts any command but warns when the command differs.",
-		}),
 	),
 	secondary_metrics: Type.Optional(
 		Type.Array(Type.String(), {
@@ -63,6 +63,8 @@ interface InitExperimentDetails {
 	createdSession: boolean;
 	bumpedSegment: boolean;
 	abandonedRuns: number;
+	harnessCommitted: boolean;
+	baselineCommit: string | null;
 }
 
 export function createInitExperimentTool(
@@ -72,7 +74,7 @@ export function createInitExperimentTool(
 		name: "init_experiment",
 		label: "Init Experiment",
 		description:
-			"Initialize or reconfigure the autoresearch session. Pass `new_segment: true` to start a fresh baseline within an existing session.",
+			"Initialize or reconfigure the autoresearch session. On first call (Phase 1 → Phase 2 transition), requires `./autoresearch.sh` to exist and pending harness changes are auto-committed on an autoresearch branch. Pass `new_segment: true` to start a fresh baseline within an existing session.",
 		parameters: initExperimentSchema,
 		defaultInactive: true,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -85,29 +87,63 @@ export function createInitExperimentTool(
 			const offLimits = dedupeStrings((params.off_limits ?? []).map(normalizePathSpec));
 			const constraints = dedupeStrings(params.constraints ?? []);
 			const secondaryMetrics = dedupeStrings(params.secondary_metrics ?? []);
-			const preferredCommand = params.preferred_command?.trim() || null;
 			const goal = params.goal?.trim() || null;
 			const maxIterations =
 				params.max_iterations !== undefined && Number.isFinite(params.max_iterations) && params.max_iterations > 0
 					? Math.floor(params.max_iterations)
 					: null;
 			const branch = (await git.branch.current(ctx.cwd)) ?? null;
+			const onAutoresearchBranch = branch?.startsWith("autoresearch/") ?? false;
 
-			const existing = storage.getActiveSession();
+			const existing = storage.getActiveSessionForBranch(branch);
+			const isNewSegmentInit = existing !== null && params.new_segment === true;
+			const requiresHarness = !existing || isNewSegmentInit;
+
+			if (requiresHarness) {
+				const harnessExists = await Bun.file(path.join(ctx.cwd, HARNESS_FILENAME)).exists();
+				if (!harnessExists) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Error: ./${HARNESS_FILENAME} does not exist. Phase 1 of autoresearch is harness setup — write \`./${HARNESS_FILENAME}\` so it exits 0 and prints \`METRIC <name>=<value>\`, validate it via \`bash ${HARNESS_FILENAME}\`, then call init_experiment again.`,
+							},
+						],
+					};
+				}
+			}
+
+			let harnessCommitted = false;
+			let commitWarning: string | null = null;
+			if (requiresHarness && onAutoresearchBranch) {
+				const dirty = await detectPendingChanges(ctx.cwd);
+				if (dirty) {
+					try {
+						await git.stage.files(ctx.cwd, []);
+						const message = buildHarnessCommitMessage(goal, params.name);
+						await git.commit(ctx.cwd, message);
+						harnessCommitted = true;
+					} catch (err) {
+						commitWarning = `Failed to auto-commit harness changes: ${err instanceof Error ? err.message : String(err)}. Recording baseline at current HEAD; discard may not preserve uncommitted harness files.`;
+					}
+				}
+			}
+
+			const baselineCommit = await tryReadHeadSha(ctx.cwd);
+
 			let session: SessionRow;
 			let createdSession = false;
 			let bumpedSegment = false;
 			let abandonedRuns = 0;
 
 			if (!existing) {
-				const baselineCommit = await tryReadHeadSha(ctx.cwd);
 				session = storage.openSession({
 					name: params.name,
 					goal,
 					primaryMetric: params.primary_metric,
 					metricUnit,
 					direction,
-					preferredCommand,
+					preferredCommand: DEFAULT_HARNESS_COMMAND,
 					branch,
 					baselineCommit,
 					maxIterations,
@@ -119,9 +155,8 @@ export function createInitExperimentTool(
 				createdSession = true;
 			} else {
 				abandonedRuns = storage.abandonPendingRuns(existing.id);
-				const updates = {
+				const updates: Parameters<typeof storage.updateSession>[1] = {
 					goal,
-					preferredCommand,
 					maxIterations,
 					scopePaths,
 					offLimits,
@@ -132,8 +167,11 @@ export function createInitExperimentTool(
 					direction,
 					branch,
 				};
+				if (isNewSegmentInit) {
+					updates.baselineCommit = baselineCommit;
+				}
 				let updated = storage.updateSession(existing.id, updates);
-				if (params.new_segment === true) {
+				if (isNewSegmentInit) {
 					updated = storage.bumpSegment(existing.id);
 					bumpedSegment = true;
 				}
@@ -159,6 +197,12 @@ export function createInitExperimentTool(
 			if (abandonedRuns > 0) {
 				lines.push(`Abandoned ${abandonedRuns} pending run${abandonedRuns === 1 ? "" : "s"} before reconfiguring.`);
 			}
+			if (harnessCommitted && session.baselineCommit) {
+				lines.push(`Committed harness setup at ${session.baselineCommit.slice(0, 12)}.`);
+			}
+			if (commitWarning) {
+				lines.push(commitWarning);
+			}
 			if (createdSession) {
 				lines.push(`Started session #${session.id}: ${session.name}`);
 			} else if (bumpedSegment) {
@@ -169,9 +213,7 @@ export function createInitExperimentTool(
 			lines.push(
 				`Metric: ${session.primaryMetric} (${session.metricUnit || "unitless"}, ${session.direction} is better)`,
 			);
-			if (session.preferredCommand) {
-				lines.push(`Preferred command: ${session.preferredCommand}`);
-			}
+			lines.push(`Benchmark entrypoint: ${DEFAULT_HARNESS_COMMAND}`);
 			if (session.scopePaths.length > 0) {
 				lines.push(`Files in scope: ${session.scopePaths.join(", ")}`);
 			}
@@ -188,9 +230,16 @@ export function createInitExperimentTool(
 				lines.push(`Baseline commit: ${session.baselineCommit.slice(0, 12)}`);
 			}
 			if (createdSession) {
-				lines.push("Run the baseline experiment now and log it.");
+				lines.push(
+					"Phase 2: iteration loop is active. Run the baseline experiment with `run_experiment` and log it.",
+				);
 			} else if (bumpedSegment) {
 				lines.push("Run a fresh baseline for the new segment.");
+			}
+			if (requiresHarness && !onAutoresearchBranch) {
+				lines.push(
+					"Note: not on a dedicated `autoresearch/*` branch — `log_experiment discard` will only revert run-modified files, not reset to baseline.",
+				);
 			}
 
 			return {
@@ -200,6 +249,8 @@ export function createInitExperimentTool(
 					createdSession,
 					bumpedSegment,
 					abandonedRuns,
+					harnessCommitted,
+					baselineCommit: session.baselineCommit,
 				},
 			};
 		},
@@ -223,4 +274,24 @@ async function tryReadHeadSha(cwd: string): Promise<string | null> {
 	} catch {
 		return null;
 	}
+}
+
+async function detectPendingChanges(cwd: string): Promise<boolean> {
+	try {
+		const statusText = await git.status(cwd, { porcelainV1: true, untrackedFiles: "all", z: true });
+		const workDirPrefix = await git.show.prefix(cwd).catch(() => "");
+		return parseWorkDirDirtyPaths(statusText, workDirPrefix).length > 0;
+	} catch {
+		return false;
+	}
+}
+
+function buildHarnessCommitMessage(goal: string | null, name: string): string {
+	const lines = [HARNESS_COMMIT_TITLE, "", `Benchmark entrypoint: ${DEFAULT_HARNESS_COMMAND}`];
+	if (goal) {
+		lines.push(`Goal: ${goal}`);
+	} else {
+		lines.push(`Session: ${name}`);
+	}
+	return lines.join("\n");
 }

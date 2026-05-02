@@ -7,7 +7,7 @@ import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
 import * as git from "../../utils/git";
-import { computeRunModifiedPaths, getCurrentAutoresearchBranch } from "../git";
+import { computeRunModifiedPaths, getCurrentAutoresearchBranch, parseWorkDirDirtyPaths } from "../git";
 import { ensureNumericMetricMap, formatNum, mergeAsi, pathMatchesSpec, sanitizeAsi } from "../helpers";
 import {
 	buildExperimentState,
@@ -16,7 +16,7 @@ import {
 	findBaselineSecondary,
 	findBestKeptMetric,
 } from "../state";
-import { openAutoresearchStorage, type SessionRow } from "../storage";
+import { openAutoresearchStorageIfExists, type SessionRow } from "../storage";
 import type {
 	ASIData,
 	AutoresearchToolFactoryOptions,
@@ -81,14 +81,15 @@ export function createLogExperimentTool(
 		parameters: logExperimentSchema,
 		defaultInactive: true,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const storage = await openAutoresearchStorage(ctx.cwd);
-			const session = storage.getActiveSession();
-			if (!session) {
+			const storage = await openAutoresearchStorageIfExists(ctx.cwd);
+			const currentBranch = (await git.branch.current(ctx.cwd)) ?? null;
+			const session = storage?.getActiveSessionForBranch(currentBranch) ?? null;
+			if (!storage || !session) {
 				return {
 					content: [
 						{
 							type: "text",
-							text: "Error: no active autoresearch session. Call init_experiment first.",
+							text: "Error: no active autoresearch session for the current branch. Call init_experiment first.",
 						},
 					],
 				};
@@ -113,8 +114,23 @@ export function createLogExperimentTool(
 			const branchName = await getCurrentAutoresearchBranch(options.pi, ctx.cwd);
 			const onAutoresearchBranch = branchName !== null;
 
-			const { modifiedTracked, modifiedUntracked } = await detectModifiedPaths(ctx.cwd, pendingRun.preRunDirtyPaths);
-			const allModified = [...modifiedTracked, ...modifiedUntracked];
+			let allModified: string[];
+			if (onAutoresearchBranch) {
+				// On a dedicated autoresearch branch every iteration starts from a clean
+				// worktree (init_experiment baseline + previous keep commit / discard reset),
+				// so any currently-dirty path is the agent's iteration change. Off-branch we
+				// can't tell user dirt apart from agent edits, so we keep the (lossy)
+				// preRunDirtyPaths filter.
+				const statusText = await tryGitStatus(ctx.cwd);
+				const workDirPrefix = await tryGitPrefix(ctx.cwd);
+				allModified = parseWorkDirDirtyPaths(statusText, workDirPrefix);
+			} else {
+				const { modifiedTracked, modifiedUntracked } = await detectModifiedPaths(
+					ctx.cwd,
+					pendingRun.preRunDirtyPaths,
+				);
+				allModified = [...modifiedTracked, ...modifiedUntracked];
+			}
 			const scopeDeviations = computeScopeDeviations(allModified, session);
 
 			const justification = params.justification?.trim() || null;
@@ -165,7 +181,6 @@ export function createLogExperimentTool(
 					ctx.cwd,
 					pendingRun.preRunDirtyPaths,
 					onAutoresearchBranch,
-					session.baselineCommit,
 				);
 				if (revertResult.error) {
 					return {
@@ -346,14 +361,15 @@ async function revertFailedExperiment(
 	cwd: string,
 	preRunDirtyPaths: string[],
 	onAutoresearchBranch: boolean,
-	baselineCommit: string | null,
 ): Promise<KeepCommitResult> {
 	if (onAutoresearchBranch) {
+		// Discard reverts only the current iteration's uncommitted changes — never
+		// rewinds prior `keep` commits. Reset to HEAD so any kept improvements
+		// already on the branch survive.
 		try {
-			const target = baselineCommit && baselineCommit.length > 0 ? baselineCommit : "HEAD";
-			await git.reset(cwd, { hard: true, target });
+			await git.reset(cwd, { hard: true, target: "HEAD" });
 			await git.clean(cwd);
-			return { note: `worktree reset to ${target.slice(0, 12)}` };
+			return { note: "worktree reset to HEAD" };
 		} catch (err) {
 			return { error: `git reset/clean failed: ${err instanceof Error ? err.message : String(err)}` };
 		}

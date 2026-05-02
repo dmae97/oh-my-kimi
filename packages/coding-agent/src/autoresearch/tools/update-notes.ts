@@ -3,8 +3,9 @@ import { Type } from "@sinclair/typebox";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
+import * as git from "../../utils/git";
 import { buildExperimentState } from "../state";
-import { openAutoresearchStorage } from "../storage";
+import { openAutoresearchStorageIfExists } from "../storage";
 import type { AutoresearchToolFactoryOptions } from "../types";
 
 const updateNotesSchema = Type.Object({
@@ -34,14 +35,15 @@ export function createUpdateNotesTool(
 		parameters: updateNotesSchema,
 		defaultInactive: true,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const storage = await openAutoresearchStorage(ctx.cwd);
-			const session = storage.getActiveSession();
-			if (!session) {
+			const storage = await openAutoresearchStorageIfExists(ctx.cwd);
+			const currentBranch = (await git.branch.current(ctx.cwd)) ?? null;
+			const session = storage?.getActiveSessionForBranch(currentBranch) ?? null;
+			if (!storage || !session) {
 				return {
 					content: [
 						{
 							type: "text",
-							text: "Error: no active autoresearch session. Call init_experiment first.",
+							text: "Error: no active autoresearch session for the current branch. Call init_experiment first.",
 						},
 					],
 				};

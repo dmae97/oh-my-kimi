@@ -26,7 +26,6 @@ export function createExperimentState(): ExperimentState {
 		currentSegment: 0,
 		maxExperiments: null,
 		confidence: null,
-		benchmarkCommand: null,
 		scopePaths: [],
 		offLimits: [],
 		constraints: [],
@@ -177,7 +176,6 @@ export function buildExperimentState(session: SessionRow, loggedRuns: RunRow[]):
 	state.metricName = session.primaryMetric;
 	state.metricUnit = session.metricUnit;
 	state.bestDirection = session.direction;
-	state.benchmarkCommand = session.preferredCommand;
 	state.scopePaths = [...session.scopePaths];
 	state.offLimits = [...session.offLimits];
 	state.constraints = [...session.constraints];

@@ -9,6 +9,7 @@ import { createDashboardController } from "./dashboard";
 import { ensureAutoresearchBranch } from "./git";
 import { formatNum } from "./helpers";
 import promptTemplate from "./prompt.md" with { type: "text" };
+import setupPromptTemplate from "./prompt-setup.md" with { type: "text" };
 import resumeMessageTemplate from "./resume-message.md" with { type: "text" };
 import {
 	buildExperimentState,
@@ -20,7 +21,7 @@ import {
 	findBestKeptMetric,
 	reconstructControlState,
 } from "./state";
-import { openAutoresearchStorage, type RunRow } from "./storage";
+import { openAutoresearchStorage, openAutoresearchStorageIfExists, type RunRow, type SessionRow } from "./storage";
 import { createInitExperimentTool } from "./tools/init-experiment";
 import { createLogExperimentTool } from "./tools/log-experiment";
 import { createRunExperimentTool } from "./tools/run-experiment";
@@ -36,21 +37,49 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 	const getSessionKey = (ctx: ExtensionContext): string => ctx.sessionManager.getSessionId();
 	const getRuntime = (ctx: ExtensionContext): AutoresearchRuntime => runtimeStore.ensure(getSessionKey(ctx));
 
+	const loadActiveSession = async (
+		ctx: ExtensionContext,
+	): Promise<{ session: SessionRow | null; currentBranch: string | null }> => {
+		const currentBranch = await tryReadBranch(ctx.cwd);
+		const storage = await openAutoresearchStorageIfExists(ctx.cwd);
+		if (!storage) return { session: null, currentBranch };
+		const session = storage.getActiveSessionForBranch(currentBranch);
+		return { session, currentBranch };
+	};
+
 	const rehydrate = async (ctx: ExtensionContext): Promise<void> => {
 		const runtime = getRuntime(ctx);
 		const control = reconstructControlState(ctx.sessionManager.getBranch());
 		runtime.goal = control.goal;
-		runtime.autoresearchMode = control.autoresearchMode;
 		runtime.autoResumeArmed = false;
 		runtime.lastAutoResumePendingRunNumber = null;
 
-		const storage = await openAutoresearchStorage(ctx.cwd);
-		const session = storage.getActiveSession();
-		if (session) {
-			const loggedRuns = storage.listLoggedRuns(session.id);
-			runtime.state = buildExperimentState(session, loggedRuns);
-			runtime.goal = runtime.goal ?? session.goal;
-			runtime.lastRunSummary = pendingRunSummaryFromRow(storage.getPendingRun(session.id));
+		// Skip storage entirely if autoresearch was never activated in this conversation.
+		// This is the common case: every project gets a session_start event but most
+		// never touch autoresearch, so we must not create a SQLite file just to look.
+		const everActivated = control.lastMode !== null;
+		const { session, currentBranch } = everActivated
+			? await loadActiveSession(ctx)
+			: { session: null, currentBranch: null };
+
+		// Mode is effective only when the recorded session matches the current git
+		// branch. When the user switches off the autoresearch branch the widget hides
+		// and the experiment tools detach, but the session entries are preserved so
+		// switching back resumes seamlessly.
+		const onActiveBranch = session === null || session.branch === null || session.branch === currentBranch;
+		runtime.autoresearchMode = control.autoresearchMode && onActiveBranch;
+
+		if (session && onActiveBranch) {
+			const storage = await openAutoresearchStorageIfExists(ctx.cwd);
+			if (storage) {
+				const loggedRuns = storage.listLoggedRuns(session.id);
+				runtime.state = buildExperimentState(session, loggedRuns);
+				runtime.goal = runtime.goal ?? session.goal;
+				runtime.lastRunSummary = pendingRunSummaryFromRow(storage.getPendingRun(session.id));
+			} else {
+				runtime.state = createExperimentState();
+				runtime.lastRunSummary = null;
+			}
 		} else {
 			runtime.state = createExperimentState();
 			runtime.lastRunSummary = null;
@@ -151,8 +180,12 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 				ctx.ui.notify(branchResult.warning, "warning");
 			}
 
-			const storage = await openAutoresearchStorage(ctx.cwd);
-			const existingSession = storage.getActiveSession();
+			// Look up an existing session for the branch we just landed on. A session
+			// recorded under a different autoresearch/* branch is intentionally ignored
+			// — `/autoresearch` on a fresh branch starts a fresh session. Only open the
+			// DB if it already exists; the empty-state path must not create one.
+			const existingStorage = await openAutoresearchStorageIfExists(ctx.cwd);
+			const existingSession = existingStorage?.getActiveSessionForBranch(branchResult.branchName) ?? null;
 			const resumeContext = trimmed;
 			const branchStatusLine = branchResult.branchName
 				? branchResult.created
@@ -160,13 +193,13 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 					: `Using dedicated git branch \`${branchResult.branchName}\`.`
 				: "Continuing on the current branch — no autoresearch branch was created.";
 
-			if (existingSession) {
-				if (goalArg) storage.updateSession(existingSession.id, { goal: goalArg });
+			if (existingSession && existingStorage) {
+				if (goalArg) existingStorage.updateSession(existingSession.id, { goal: goalArg });
 				if (branchResult.branchName) {
-					storage.updateSession(existingSession.id, { branch: branchResult.branchName });
+					existingStorage.updateSession(existingSession.id, { branch: branchResult.branchName });
 				}
-				const refreshed = storage.getSessionById(existingSession.id) ?? existingSession;
-				runtime.state = buildExperimentState(refreshed, storage.listLoggedRuns(refreshed.id));
+				const refreshed = existingStorage.getSessionById(existingSession.id) ?? existingSession;
+				runtime.state = buildExperimentState(refreshed, existingStorage.listLoggedRuns(refreshed.id));
 				runtime.goal = refreshed.goal ?? goalArg;
 				setMode(ctx, true, runtime.goal, "on");
 				dashboard.updateWidget(ctx, runtime);
@@ -231,9 +264,9 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 			runtime.autoResumeArmed = false;
 			return;
 		}
-		const storage = await openAutoresearchStorage(ctx.cwd);
-		const session = storage.getActiveSession();
-		const pendingRow = session ? storage.getPendingRun(session.id) : null;
+		const { session } = await loadActiveSession(ctx);
+		const storage = session ? await openAutoresearchStorageIfExists(ctx.cwd) : null;
+		const pendingRow = session && storage ? storage.getPendingRun(session.id) : null;
 		const pendingRun = pendingRunSummaryFromRow(pendingRow);
 		runtime.lastRunSummary = pendingRun;
 		runtime.lastRunDuration = pendingRun?.durationSeconds ?? runtime.lastRunDuration;
@@ -261,12 +294,27 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 	api.on("before_agent_start", async (event, ctx) => {
 		const runtime = getRuntime(ctx);
 		if (!runtime.autoresearchMode) return;
-		const storage = await openAutoresearchStorage(ctx.cwd);
-		const session = storage.getActiveSession();
-		if (session) {
+		// Re-check git branch on every agent start. If the user manually switched
+		// off the autoresearch/* branch between turns, we silently drop autoresearch
+		// from this turn — the widget hides, the experiment tools detach, and we do
+		// not inject the autoresearch system prompt.
+		const { session, currentBranch } = await loadActiveSession(ctx);
+		const onActiveBranch = session === null || session.branch === null || session.branch === currentBranch;
+		if (!onActiveBranch) {
+			runtime.autoresearchMode = false;
+			runtime.state = createExperimentState();
+			runtime.lastRunSummary = null;
+			runtime.runningExperiment = null;
+			dashboard.updateWidget(ctx, runtime);
+			const experimentTools = new Set(EXPERIMENT_TOOL_NAMES);
+			await api.setActiveTools(api.getActiveTools().filter(name => !experimentTools.has(name)));
+			return;
+		}
+		const storage = await openAutoresearchStorageIfExists(ctx.cwd);
+		if (session && storage) {
 			runtime.state = buildExperimentState(session, storage.listLoggedRuns(session.id));
 		}
-		const pendingRow = session ? storage.getPendingRun(session.id) : null;
+		const pendingRow = session && storage ? storage.getPendingRun(session.id) : null;
 		const pendingRun = pendingRunSummaryFromRow(pendingRow);
 		runtime.lastRunSummary = pendingRun;
 		runtime.lastRunDuration = pendingRun?.durationSeconds ?? runtime.lastRunDuration;
@@ -301,9 +349,25 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 				run_number: r.runNumber,
 				paths: r.scopeDeviations.join(", "),
 			}));
-		const lastCommand = pendingRun?.command ?? null;
-		const showCommandWarning =
-			Boolean(state.benchmarkCommand) && lastCommand !== null && lastCommand !== state.benchmarkCommand;
+		if (!session) {
+			const currentBranch = await tryReadBranch(ctx.cwd);
+			const onAutoresearchBranch = currentBranch?.startsWith("autoresearch/") ?? false;
+			const baselineWarning = onAutoresearchBranch
+				? null
+				: "Heads up: you are not on a dedicated `autoresearch/*` branch. `log_experiment discard` will only revert run-modified files, not reset to baseline — so harness files written before `init_experiment` may not survive a discard. Clean the worktree and re-run `/autoresearch` if you want full revert safety.";
+			return {
+				systemPrompt: prompt.render(setupPromptTemplate, {
+					base_system_prompt: event.systemPrompt,
+					has_goal: goal.trim().length > 0,
+					goal,
+					working_dir: ctx.cwd,
+					has_branch: Boolean(currentBranch),
+					branch: currentBranch ?? "",
+					has_baseline_warning: baselineWarning !== null,
+					baseline_warning: baselineWarning ?? "",
+				}),
+			};
+		}
 		return {
 			systemPrompt: prompt.render(promptTemplate, {
 				base_system_prompt: event.systemPrompt,
@@ -339,9 +403,6 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 					pendingRun?.parsedPrimary !== null && pendingRun?.parsedPrimary !== undefined
 						? formatNum(pendingRun.parsedPrimary, state.metricUnit)
 						: null,
-				has_preferred_command_warning: showCommandWarning,
-				preferred_command: state.benchmarkCommand ?? "",
-				last_command: lastCommand ?? "",
 			}),
 		};
 	});

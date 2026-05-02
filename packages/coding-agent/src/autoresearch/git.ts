@@ -67,10 +67,8 @@ export async function ensureAutoresearchBranch(
 	if (dirtyPaths.length > 0) {
 		const preview = formatDirtyPaths(dirtyPaths);
 		return {
-			ok: true,
-			branchName: null,
-			created: false,
-			warning: `Worktree is dirty (${preview}). Continuing on the current branch; auto-commit and full-tree reset are disabled until you commit/stash these changes.`,
+			ok: false,
+			error: `Worktree is dirty (${preview}). Commit or stash these changes before starting autoresearch — a fresh autoresearch/* branch needs a clean baseline.`,
 		};
 	}
 
