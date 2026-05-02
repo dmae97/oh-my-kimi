@@ -119,6 +119,11 @@ function buildBasicAuthValue(username: string, password: string): string {
 	return Buffer.from(`${username}:${password}`, "utf-8").toString("base64");
 }
 
+/** RFC 7617 forbids C0 and C1 control characters in Basic auth credentials. */
+function hasControlCharacters(value: string): boolean {
+	return /[\u0000-\u001F\u007F-\u009F]/u.test(value);
+}
+
 /** Find SearXNG authentication from settings or environment. Basic auth takes precedence over bearer tokens. */
 function findAuth(): SearXNGAuth | null {
 	const basicUsername = findBasicUsername();
@@ -131,6 +136,9 @@ function findAuth(): SearXNGAuth | null {
 		}
 		if (basicUsername.includes(":")) {
 			throw new Error("SearXNG Basic auth username cannot contain ':' because RFC 7617 uses it as the separator.");
+		}
+		if (hasControlCharacters(basicUsername) || hasControlCharacters(basicPassword)) {
+			throw new Error("SearXNG Basic auth credentials must not contain RFC 7617 control characters.");
 		}
 		return { type: "basic", value: buildBasicAuthValue(basicUsername, basicPassword) };
 	}

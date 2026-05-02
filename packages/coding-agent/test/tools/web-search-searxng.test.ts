@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { hookFetch } from "@oh-my-pi/pi-utils";
+import { _resetSettingsForTest, Settings } from "../../src/config/settings";
 import { searchSearXNG } from "../../src/web/search/providers/searxng";
 
 describe("SearXNG web search provider", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
+		_resetSettingsForTest();
 		delete process.env.SEARXNG_ENDPOINT;
 		delete process.env.SEARXNG_TOKEN;
 		delete process.env.SEARXNG_BASIC_USERNAME;
@@ -44,6 +49,40 @@ describe("SearXNG web search provider", () => {
 			relatedQuestions: ["related search"],
 			sources: [{ title: "SearXNG", url: "https://example.com/result", snippet: "Metasearch result" }],
 		});
+	});
+
+	it("reads Basic auth credentials from nested config.yml settings", async () => {
+		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "searxng-settings-"));
+		try {
+			await Bun.write(
+				path.join(agentDir, "config.yml"),
+				[
+					"searxng:",
+					"  endpoint: https://searx.example.org",
+					"  basicUsername: alice",
+					"  basicPassword: s3cret",
+					"",
+				].join("\n"),
+			);
+			await Settings.init({ agentDir });
+
+			const captured: { headers?: Headers } = {};
+			using _hook = hookFetch((_input, init) => {
+				captured.headers = new Headers(init?.headers);
+				return new Response(JSON.stringify({ results: [] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			});
+
+			await searchSearXNG({ query: "settings basic auth" });
+
+			expect(captured.headers?.get("Authorization")).toBe(
+				`Basic ${Buffer.from("alice:s3cret", "utf-8").toString("base64")}`,
+			);
+		} finally {
+			await fs.rm(agentDir, { recursive: true, force: true });
+		}
 	});
 
 	it("prefers Basic auth over bearer token when both are configured", async () => {
@@ -133,6 +172,26 @@ describe("SearXNG web search provider", () => {
 
 		await expect(searchSearXNG({ query: "invalid username" })).rejects.toThrow(
 			"SearXNG Basic auth username cannot contain ':'",
+		);
+	});
+
+	it("rejects Basic auth usernames containing control characters", async () => {
+		process.env.SEARXNG_ENDPOINT = "https://searx.example.org";
+		process.env.SEARXNG_BASIC_USERNAME = "alice\u0007";
+		process.env.SEARXNG_BASIC_PASSWORD = "s3cret";
+
+		await expect(searchSearXNG({ query: "invalid username control character" })).rejects.toThrow(
+			"SearXNG Basic auth credentials must not contain RFC 7617 control characters",
+		);
+	});
+
+	it("rejects Basic auth passwords containing control characters", async () => {
+		process.env.SEARXNG_ENDPOINT = "https://searx.example.org";
+		process.env.SEARXNG_BASIC_USERNAME = "alice";
+		process.env.SEARXNG_BASIC_PASSWORD = "s3cret\u0001";
+
+		await expect(searchSearXNG({ query: "invalid password control character" })).rejects.toThrow(
+			"SearXNG Basic auth credentials must not contain RFC 7617 control characters",
 		);
 	});
 
