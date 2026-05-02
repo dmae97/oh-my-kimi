@@ -368,50 +368,68 @@ async function writeTempPatch(content: string): Promise<string> {
 
 type EntryType = "directory" | "file";
 
-function isOptionalGitMetadataUnavailable(err: unknown): boolean {
-	return isEnoent(err) || hasFsCode(err, "ENFILE") || hasFsCode(err, "EMFILE");
+function shouldRetry(err: unknown, n: number) {
+	if (isEnoent(err) || hasFsCode(err, "ENFILE") || hasFsCode(err, "EMFILE")) return false;
+	if (hasFsCode(err, "EINTR")) return n < EINTR_MAX_RETRIES;
+	if (n > EINTR_MAX_RETRIES) throw err;
+	throw err;
+}
+
+/**
+ * Bounded retry for synchronous I/O against `EINTR`. POSIX permits short syscalls
+ * to be interrupted by signals; when that happens libc traditionally retries.
+ * Node's sync wrappers surface the raw `EINTR` so we replicate the retry locally.
+ * Any other error (and persistent EINTR after `EINTR_MAX_RETRIES`) is rethrown
+ * for the caller's normal "optional metadata" classifier to handle.
+ */
+const EINTR_MAX_RETRIES = 3;
+function retryOnEintrSync<T>(op: () => T): T | null {
+	for (let attempt = 0; attempt <= EINTR_MAX_RETRIES; attempt += 1) {
+		try {
+			return op();
+		} catch (err) {
+			if (shouldRetry(err, attempt)) continue;
+			return null;
+		}
+	}
+	throw new Error("retryOnEintrSync: exhausted without resolution");
+}
+async function retryOnEintr<T>(op: () => Promise<T>): Promise<T | null> {
+	for (let attempt = 0; attempt <= EINTR_MAX_RETRIES; attempt += 1) {
+		try {
+			return await op();
+		} catch (err) {
+			if (shouldRetry(err, attempt)) continue;
+			return null;
+		}
+	}
+	throw new Error("retryOnEintr: exhausted without resolution");
 }
 
 function getEntryTypeSync(gitEntryPath: string): EntryType | null {
-	try {
+	return retryOnEintrSync(() => {
 		const stat = fs.statSync(gitEntryPath);
 		if (stat.isDirectory()) return "directory";
 		if (stat.isFile()) return "file";
 		return null;
-	} catch (err) {
-		if (isOptionalGitMetadataUnavailable(err)) return null;
-		throw err;
-	}
+	});
 }
 
 async function getEntryType(gitEntryPath: string): Promise<EntryType | null> {
-	try {
+	return retryOnEintr(async () => {
 		const stat = await fs.promises.stat(gitEntryPath);
 		if (stat.isDirectory()) return "directory";
 		if (stat.isFile()) return "file";
 		return null;
-	} catch (err) {
-		if (isOptionalGitMetadataUnavailable(err)) return null;
-		throw err;
-	}
+	});
 }
 
 function readOptionalTextSync(filePath: string): string | null {
-	try {
-		return fs.readFileSync(filePath, "utf8");
-	} catch (err) {
-		if (isOptionalGitMetadataUnavailable(err)) return null;
-		throw err;
-	}
+	return retryOnEintrSync(() => fs.readFileSync(filePath, "utf8"));
 }
 
 async function readOptionalText(filePath: string): Promise<string | null> {
-	try {
-		return await Bun.file(filePath).text();
-	} catch (err) {
-		if (isOptionalGitMetadataUnavailable(err)) return null;
-		throw err;
-	}
+	return retryOnEintr(async () => await Bun.file(filePath).text());
 }
 
 function parseGitDirPointer(content: string): string | null {
