@@ -2,14 +2,20 @@
  * Hashline edit mode — a line-addressable edit format using text hashes.
  *
  * Each line in a file is identified by its 1-indexed line number and a short
- * BPE-bigram hash derived from the normalized line text (xxHash32 mod 647,
- * mapped through HASHLINE_BIGRAMS).
+ * structural hash derived from the normalized line text. The hash is
+ * normally a 2-letter BPE bigram (xxHash32 mod 647 → HASHLINE_BIGRAMS); for
+ * brace lines it carries a structural marker — `>[a-z]` for closing-brace
+ * lines (lines whose trimmed content starts with `}`) and `[a-z]<` for
+ * opening-brace lines (lines whose trimmed content ends with `{`) — so the
+ * hash carries brace-balance signal AND never visually collides with a
+ * literal `}` or `{` in the line content.
+ *
  * The combined `LINE+ID` reference acts as both an address and a staleness check:
  * if the file has changed since the caller last read it, hash mismatches are caught
  * before any mutation occurs.
  *
  * Displayed format: `LINE+ID|TEXT`
- * Reference format: `"LINE+ID"` (e.g. `"1ab"`)
+ * Reference format: `"LINE+ID"` (e.g. `"1ab"`, `"5>t"`, `"9a<"`)
  *
  * In tool JSON, each edit's `content` is `string[]` (one string per logical line) or
  * `null` to delete the targeted range.
@@ -28,7 +34,16 @@ import { resolveToCwd } from "../../tools/path-utils";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
 import { formatCodeFrameLine } from "../../tools/render-utils";
 import { generateDiffString } from "../diff";
-import { computeLineHash, formatHashLine, HASHLINE_BIGRAM_RE_SRC, HASHLINE_CONTENT_SEPARATOR } from "../line-hash";
+import {
+	computeLineHash,
+	describeAnchorExamples,
+	formatHashLine,
+	HASHLINE_ANCHOR_RE_SRC,
+	HASHLINE_CONTENT_SEPARATOR,
+	HASHLINE_HASH_LAX_RE_SRC,
+	HASHLINE_HASH_RE_SRC,
+	HASHLINE_HASH_WIDTH_LABEL,
+} from "../line-hash";
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "../normalize";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
 
@@ -53,10 +68,10 @@ export type HashlineEdit =
 // Accept both `|` (canonical) and `:` (legacy) so re-reads of older outputs still parse.
 const HASHLINE_CONTENT_SEPARATOR_RE = "[:|]";
 const HASHLINE_PREFIX_RE = new RegExp(
-	`^\\s*(?:>>>|>>)?\\s*(?:[+*]\\s*)?\\d+${HASHLINE_BIGRAM_RE_SRC}${HASHLINE_CONTENT_SEPARATOR_RE}`,
+	`^\\s*(?:>>>|>>)?\\s*(?:[+*]\\s*)?\\d+${HASHLINE_HASH_RE_SRC}${HASHLINE_CONTENT_SEPARATOR_RE}`,
 );
 const HASHLINE_PREFIX_PLUS_RE = new RegExp(
-	`^\\s*(?:>>>|>>)?\\s*\\+\\s*\\d+${HASHLINE_BIGRAM_RE_SRC}${HASHLINE_CONTENT_SEPARATOR_RE}`,
+	`^\\s*(?:>>>|>>)?\\s*\\+\\s*\\d+${HASHLINE_HASH_RE_SRC}${HASHLINE_CONTENT_SEPARATOR_RE}`,
 );
 const DIFF_PLUS_RE = /^[+](?![+])/;
 const READ_TRUNCATION_NOTICE_RE = /^\[(?:Showing lines \d+-\d+ of \d+|\d+ more lines? in (?:file|\S+))\b.*\bsel=L?\d+/;
@@ -221,13 +236,16 @@ function resolveHashlineEditsForDiff(edits: HashlineEditInput[]): HashlineEdit[]
 	});
 }
 
+const HASHLINE_HASH_HINT_RE = new RegExp(`^${HASHLINE_HASH_LAX_RE_SRC}$`, "i");
+const HASHLINE_ANCHOR_EXAMPLES = describeAnchorExamples("160");
+
 export function formatFullAnchorRequirement(raw?: string): string {
 	const suffix = typeof raw === "string" ? raw.trim() : "";
-	const hashOnlyHint = /^[A-Za-z]{2}$/.test(suffix)
-		? ` It looks like you supplied only the 2-letter suffix (${JSON.stringify(suffix)}). Copy the full anchor exactly as shown (for example, "160${suffix}").`
+	const hashOnlyHint = HASHLINE_HASH_HINT_RE.test(suffix)
+		? ` It looks like you supplied only the ${HASHLINE_HASH_WIDTH_LABEL} suffix (${JSON.stringify(suffix)}). Copy the full anchor exactly as shown (for example, "160${suffix}").`
 		: "";
 	const received = raw === undefined ? "" : ` Received ${JSON.stringify(raw)}.`;
-	return `the full anchor exactly as shown by read/grep (line number + 2-letter suffix, for example "160sr")${received}${hashOnlyHint}`;
+	return `the full anchor exactly as shown by read/grep (line number + ${HASHLINE_HASH_WIDTH_LABEL} hash, for example ${HASHLINE_ANCHOR_EXAMPLES})${received}${hashOnlyHint}`;
 }
 
 function tryParseTag(raw: string): Anchor | undefined {
@@ -493,17 +511,16 @@ export async function* streamHashLinesFromLines(
 	if (last) yield last;
 }
 
+const PARSE_TAG_RE = new RegExp(`^${HASHLINE_ANCHOR_RE_SRC}`);
+
 /**
- * Parse a line reference string like `"5th"` into structured form.
+ * Parse a line reference string like `"5th"` (or a decorated form like
+ * `"*5th"`, `"+ 5th"`, `">5th"`) into structured form.
  *
- * @throws Error if the format is invalid (not `NUMBERBIGRAM`)
+ * @throws Error if the input does not match {@link HASHLINE_ANCHOR_RE_SRC}.
  */
 export function parseTag(ref: string): { line: number; hash: string } {
-	// Captures:
-	//  1. optional leading ">+-" markers and whitespace
-	//  2. line number (1+ digits)
-	//  3. hash (one BPE bigram from HASHLINE_BIGRAMS) directly adjacent (no separator)
-	const match = ref.match(new RegExp(`^\\s*[>+\\-*]*\\s*(\\d+)(${HASHLINE_BIGRAM_RE_SRC})`));
+	const match = ref.match(PARSE_TAG_RE);
 	if (!match) {
 		throw new Error(`Invalid line reference. Expected ${formatFullAnchorRequirement(ref)}.`);
 	}
@@ -891,6 +908,7 @@ function buildHashlineEditResult(params: {
 
 function validateHashlineEditRefs(edits: HashlineEdit[], fileLines: string[], warnings: string[]): HashMismatch[] {
 	const mismatches: HashMismatch[] = [];
+	const emittedRebaseKeys = new Set<string>();
 	for (const edit of edits) {
 		switch (edit.op) {
 			case "replace_line":
@@ -928,9 +946,13 @@ function validateHashlineEditRefs(edits: HashlineEdit[], fileLines: string[], wa
 		if (rebased !== null) {
 			const original = `${ref.line}${ref.hash}`;
 			ref.line = rebased;
-			warnings.push(
-				`Auto-rebased anchor ${original} → ${rebased}${ref.hash} (line shifted within ±${ANCHOR_REBASE_WINDOW}; hash matched).`,
-			);
+			const rebaseKey = `${original}→${rebased}${ref.hash}`;
+			if (!emittedRebaseKeys.has(rebaseKey)) {
+				emittedRebaseKeys.add(rebaseKey);
+				warnings.push(
+					`Auto-rebased anchor ${original} → ${rebased}${ref.hash} (line shifted within ±${ANCHOR_REBASE_WINDOW}; hash matched).`,
+				);
+			}
 			return;
 		}
 		mismatches.push({ line: ref.line, expected: ref.hash, actual: actualHash });
@@ -1012,7 +1034,7 @@ export interface CompactHashlineDiffOptions {
 }
 
 const NUMBERED_DIFF_LINE_RE = /^([ +-])(\s*\d+)\|(.*)$/;
-const HASHLINE_PREVIEW_PLACEHOLDER = "  ";
+const HASHLINE_PREVIEW_PLACEHOLDER = "--";
 const ELLIPSIS = "...";
 
 type DiffEntryKind = " " | "+" | "-" | "*";
@@ -1155,7 +1177,11 @@ function groupRuns(entries: Entry[]): Run[] {
  * unified-diff convention they replaced each other in place — and is shown as
  * `*<newLine><hash>|<newContent>` instead of two lines `-<old>` + `+<new>`.
  * Surplus removals or additions remain as their own runs after the paired
- * block, preserving the unified-diff `del-then-add` ordering.
+ * block, preserving the unified-diff `del-then-add` ordering. The collapse
+ * applies only when the two runs are the SAME length: pairing a 3-del run
+ * with a 1-add run produced a confusing mix of `*` and surplus `-`/`+`
+ * lines, so for size-mismatched (true range-replace) hunks we leave the
+ * `-` and `+` runs intact for clean unified-diff display.
  */
 function pairModifications(runs: Run[]): Run[] {
 	const isPairable = (entry: Entry): entry is DiffEntry => entry.kind !== "meta" && entry.content !== ELLIPSIS;
@@ -1177,6 +1203,14 @@ function pairModifications(runs: Run[]): Run[] {
 			continue;
 		}
 
+		// Only fold when every del has a 1:1 add partner (and vice-versa).
+		// Mismatched sizes mean a real range replace; leaving them as plain
+		// `-` then `+` runs is clearer than mixing `*` with surplus lines.
+		if (dels.length !== adds.length) {
+			out.push(run);
+			continue;
+		}
+
 		const mods: Entry[] = [];
 		for (let p = 0; p < pairCount; p++) {
 			mods.push({
@@ -1187,13 +1221,6 @@ function pairModifications(runs: Run[]): Run[] {
 			});
 		}
 		out.push({ kind: "*", entries: mods });
-
-		if (dels.length > pairCount) {
-			out.push({ kind: "-", entries: dels.slice(pairCount) });
-		}
-		if (adds.length > pairCount) {
-			out.push({ kind: "+", entries: adds.slice(pairCount) });
-		}
 
 		i++; // consume the `+` run
 	}

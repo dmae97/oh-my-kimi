@@ -7,11 +7,12 @@
  *   @Lid                    move cursor to just after the anchored line
  *   Lid=TEXT                set the anchored line to TEXT and move cursor after it
  *   -Lid                    delete the anchored line and move cursor to its slot
- *   LidA..LidB=TEXT         replace a range; following \TEXT lines continue it
- *   \TEXT                   append TEXT to the active replacement (set or range)
- *   +TEXT                   insert TEXT at the cursor
+ *   LidA..LidB=TEXT         replace a range with one line; following `+TEXT` lines extend it
+ *   +TEXT                   insert TEXT at the cursor (or extend the slot left by a preceding
+ *                           `Lid=…` / `LidA..LidB=…` op, since the cursor sits there)
  *   ^                       move cursor to beginning of file
  *   $                       move cursor to end of file
+ *   ^Lid                    move cursor BEFORE the anchored line
  */
 
 import * as fs from "node:fs/promises";
@@ -30,7 +31,13 @@ import {
 import { outputMeta } from "../../tools/output-meta";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
 import { generateDiffString } from "../diff";
-import { computeLineHash } from "../line-hash";
+import {
+	computeLineHash,
+	HASHLINE_HASH_LAX_RE_SRC,
+	HASHLINE_HASH_WIDTH_LABEL,
+	HASHLINE_LID_LAX_CAPTURE_RE_SRC,
+	HASHLINE_LID_LAX_RE_SRC,
+} from "../line-hash";
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "../normalize";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
 import {
@@ -54,10 +61,14 @@ export type AtomParams = Static<typeof atomEditParamsSchema>;
 // Parser
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Permissive: any 2 lowercase letters. Invalid hashes flow through to a
-// HashlineMismatchError downstream, matching the other hashline-backed modes.
-const LID_RE = /^([1-9]\d*)([a-z]{2})/;
-const LID_EXACT_RE = /^([1-9]\d*)([a-z]{2})$/;
+// All Lid-shape regexes derive from {@link HASHLINE_LID_LAX_RE_SRC} (and its
+// capture-group sibling {@link HASHLINE_LID_LAX_CAPTURE_RE_SRC}). Atom uses
+// the lax form so a syntactically well-formed but stale Lid (line was edited
+// since read) flows through to a HashlineMismatchError downstream instead of
+// an opaque parse error. Every Lid-shape change lives in line-hash.ts; the
+// atom parser composes against the centralized sources below.
+const LID_RE = new RegExp(`^${HASHLINE_LID_LAX_CAPTURE_RE_SRC}`);
+const LID_EXACT_RE = new RegExp(`^${HASHLINE_LID_LAX_CAPTURE_RE_SRC}$`);
 
 // Sentinel hash used for interior line anchors synthesized from `-LidA..LidB`
 // range deletes. validateAtomAnchors recognizes this and skips hash checking
@@ -228,7 +239,7 @@ function parseDeleteStmt(body: string, lineNum: number): ParsedStmt[] | null {
 	const trimmedBody = body.trimStart();
 
 	// Range delete: `-LidA..LidB` deletes the contiguous range LidA..LidB inclusive.
-	const rangeRe = /^([1-9]\d*)([a-z]{2})\.\.([1-9]\d*)([a-z]{2})$/;
+	const rangeRe = new RegExp(`^${HASHLINE_LID_LAX_CAPTURE_RE_SRC}\\.\\.${HASHLINE_LID_LAX_CAPTURE_RE_SRC}$`);
 	const rangeMatch = rangeRe.exec(trimmedBody);
 	if (rangeMatch) {
 		const startLine = Number.parseInt(rangeMatch[1], 10);
@@ -262,7 +273,9 @@ function parseDeleteStmt(body: string, lineNum: number): ParsedStmt[] | null {
 	// `|` (delete-with-old) form. Models reach for these when trying to
 	// "delete the range and replace with TEXT" — point at the `LidA..LidB=TEXT`
 	// shorthand instead.
-	const rangeWithSuffix = /^([1-9]\d*)([a-z]{2})\.\.([1-9]\d*)([a-z]{2})[ \t]*[=|](.*)$/.exec(trimmedBody);
+	const rangeWithSuffix = new RegExp(
+		`^${HASHLINE_LID_LAX_CAPTURE_RE_SRC}\\.\\.${HASHLINE_LID_LAX_CAPTURE_RE_SRC}[ \\t]*[=|](.*)$`,
+	).exec(trimmedBody);
 	if (rangeWithSuffix) {
 		const lidA = `${rangeWithSuffix[1]}${rangeWithSuffix[2]}`;
 		const lidB = `${rangeWithSuffix[3]}${rangeWithSuffix[4]}`;
@@ -313,7 +326,7 @@ function throwMalformedLidDiagnostic(line: string, lineNum: number, raw: string)
 	const withoutMove = withoutLegacyMove.startsWith("@") ? withoutLegacyMove.slice(1) : withoutLegacyMove;
 	const withoutDelete = withoutMove.startsWith("-") ? withoutMove.slice(1).trimStart() : withoutMove;
 
-	const partial = /^([a-z]{2})(?=[ \t]*[=|])/.exec(withoutDelete);
+	const partial = new RegExp(`^(${HASHLINE_HASH_LAX_RE_SRC})(?=[ \\t]*[=|])`).exec(withoutDelete);
 	if (partial) {
 		throw new Error(
 			`Diff line ${lineNum}: \`${partial[1]}\` is not a full Lid. Use the full Lid from read output, e.g. \`119${partial[1]}\`.`,
@@ -324,7 +337,7 @@ function throwMalformedLidDiagnostic(line: string, lineNum: number, raw: string)
 	if (missing) {
 		const prefix = text.startsWith("@@ ") ? `@@ ${missing[1]}` : missing[1];
 		throw new Error(
-			`Diff line ${lineNum}: \`${prefix}\` is missing the two-letter Lid suffix. Use the full Lid from read output, e.g. \`${prefix.startsWith("@@ ") ? "@@ " : ""}${missing[1]}ab\`.`,
+			`Diff line ${lineNum}: \`${prefix}\` is missing the ${HASHLINE_HASH_WIDTH_LABEL} Lid suffix. Use the full Lid from read output, e.g. \`${prefix.startsWith("@@ ") ? "@@ " : ""}${missing[1]}ab\`.`,
 		);
 	}
 
@@ -341,6 +354,16 @@ function parseDiffLine(raw: string, lineNum: number): ParsedStmt[] {
 	// inserts corrupts files, and the canonical syntax has no comment op.
 	if (line[0] === "#") return [];
 
+	// `\TEXT` continuation has been removed. After a `Lid=…` or `LidA..LidB=…`
+	// op, the cursor sits on the just-set/just-deleted slot; the canonical way
+	// to extend a single-line set or range-replace into a multi-line replacement
+	// is to follow it with `+TEXT` lines, which insert at that cursor.
+	if (line[0] === "\\") {
+		throw new Error(
+			`Diff line ${lineNum}: \`\\TEXT\` continuation has been removed. Use \`+TEXT\` to insert content after a \`Lid=…\` or \`LidA..LidB=…\` op — the cursor sits on the just-set/just-deleted slot, so following \`+TEXT\` lines extend the replacement.`,
+		);
+	}
+
 	const indentedHashline = parseIndentedHashlineStmt(line, lineNum);
 	if (indentedHashline) return indentedHashline;
 
@@ -349,9 +372,6 @@ function parseDiffLine(raw: string, lineNum: number): ParsedStmt[] {
 	// emit a tagged stmt so the normalizer can fuse it with a preceding `-Lid`.
 	if (line[0] === "+") {
 		const body = line.slice(1);
-		if (body.startsWith(RANGE_CONTINUATION_SENTINEL)) {
-			return [{ kind: "insert", text: body.slice(RANGE_CONTINUATION_SENTINEL.length), lineNum }];
-		}
 		const m = LID_RE.exec(body);
 		if (m) {
 			const sep = body[m[0].length];
@@ -477,7 +497,7 @@ function parseDiffLine(raw: string, lineNum: number): ParsedStmt[] {
 	const lidStmt = parseLidStmt(line, lineNum);
 	if (lidStmt) return lidStmt;
 
-	if (/^[a-z]{2}(?=[ \t]*[=|])/.test(line) || /^[1-9]\d*(?=[ \t]*[=|]|$)/.test(line)) {
+	if (new RegExp(`^${HASHLINE_HASH_LAX_RE_SRC}(?=[ \\t]*[=|])`).test(line) || /^[1-9]\d*(?=[ \t]*[=|]|$)/.test(line)) {
 		throwMalformedLidDiagnostic(line, lineNum, raw);
 	}
 
@@ -485,7 +505,7 @@ function parseDiffLine(raw: string, lineNum: number): ParsedStmt[] {
 	// emitted multi-line content after a `Lid=` or similar without `+` prefixes,
 	// or pasted raw context. Silently treating these as inserts corrupts files.
 	const preview = line.length > 80 ? `${line.slice(0, 80)}…` : line;
-	const trailingDash = /^([1-9]\d*[a-z]{2})-\s*$/.exec(line);
+	const trailingDash = new RegExp(`^(${HASHLINE_LID_LAX_RE_SRC})-\\s*$`).exec(line);
 	if (trailingDash) {
 		throw new Error(
 			`Diff line ${lineNum}: \`${line}\` looks like a delete with the operator on the wrong side. Use \`-${trailingDash[1]}\` to delete that line.`,
@@ -496,94 +516,9 @@ function parseDiffLine(raw: string, lineNum: number): ParsedStmt[] {
 	);
 }
 
-// Lines that look like recognized atom ops. Used to delimit range-replace
-// recovery continuation: after `LidA..LidB=TEXT` (or legacy `|` separator),
-// is treated as literal replacement text for backward compatibility.
-const OP_LINE_HEAD_RE = /^([+\-@$^!]|[1-9]\d*[a-z]{2}|[ \t]*$)/;
-const RANGE_CONTINUATION_SENTINEL = "\u0000";
-
-function isRangeReplaceStart(line: string): boolean {
-	return /^[1-9]\d*[a-z]{2}\.\.[1-9]\d*[a-z]{2}[ \t]*[=|]/.test(line);
-}
-
-// A single-line `Lid=TEXT` (or legacy `Lid|TEXT`, with optional leading `@`)
-// also opens a replacement that `\TEXT` continuation lines may extend. The
-// continuation lines become inserts at the cursor (which sits on the just-set
-// line), turning `Lid=A` + `\B` + `\C` into "set the line to A, then insert B
-// and C below it" — i.e. a multi-line rewrite of one anchor without forcing
-// the user to switch to the `LidA..LidB=` range form.
-function isReplaceStart(line: string): boolean {
-	if (isRangeReplaceStart(line)) return true;
-	const stripped = line.startsWith("@") ? line.slice(1) : line;
-	return /^[1-9]\d*[a-z]{2}[ \t]*[=|]/.test(stripped);
-}
-
-// Lookahead used by the blank-line forgiveness rule below: returns true when
-// the first non-blank line at or after `start` is a `\TEXT` continuation.
-function nextNonBlankIsBackslash(lines: readonly string[], start: number): boolean {
-	for (let j = start; j < lines.length; j++) {
-		const peek = lines[j].endsWith("\r") ? lines[j].slice(0, -1) : lines[j];
-		if (peek.length === 0) continue;
-		return peek.startsWith("\\");
-	}
-	return false;
-}
-
-// Explicit continuation uses `\TEXT` after a replacement op (`Lid=FIRST` or
-// `LidA..LidB=FIRST`). The leading backslash is the continuation marker; the
-// rest of the line is inserted literally, so `\\TEXT` inserts a line starting
-// with `\TEXT`. As a forgiveness rule, a literal blank line inside an active
-// replacement that is itself followed (possibly through more blanks) by another
-// `\TEXT` continuation is treated as an implicit `\` blank insert — authors
-// frequently drop a real blank between `\TEXT` lines instead of writing `\`.
-// Raw unprefixed continuation remains an undocumented best-effort recovery for
-// range replacements only, kept for old transcripts.
-function preprocessRangeReplaceContinuation(diff: string): string {
-	const lines = diff.split("\n");
-	let inRangeReplace = false;
-	let inReplace = false;
-	for (let i = 0; i < lines.length; i++) {
-		const rawLine = lines[i];
-		const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-
-		if (line.startsWith("\\")) {
-			if (!inReplace) {
-				throw new Error(
-					`Diff line ${i + 1}: \\TEXT continuation is only valid immediately after a Lid=TEXT or LidA..LidB=FIRST_LINE replacement.`,
-				);
-			}
-			lines[i] = `+${RANGE_CONTINUATION_SENTINEL}${rawLine.slice(1)}`;
-			continue;
-		}
-
-		// Forgiveness: a blank line inside an active replacement that is followed
-		// by another `\TEXT` continuation is treated as an implicit `\` blank
-		// insert. Keeps the replacement open across the blank.
-		if (inReplace && line.length === 0 && nextNonBlankIsBackslash(lines, i + 1)) {
-			lines[i] = `+${RANGE_CONTINUATION_SENTINEL}`;
-			continue;
-		}
-
-		if (inRangeReplace) {
-			if (line.length === 0 || OP_LINE_HEAD_RE.test(line)) {
-				inRangeReplace = isRangeReplaceStart(line);
-				inReplace = isReplaceStart(line);
-				continue;
-			}
-
-			lines[i] = `+${RANGE_CONTINUATION_SENTINEL}${rawLine}`;
-			continue;
-		}
-
-		inRangeReplace = isRangeReplaceStart(line);
-		inReplace = isReplaceStart(line);
-	}
-	return lines.join("\n");
-}
-
 function tokenizeDiff(diff: string): ParsedStmt[] {
 	const out: ParsedStmt[] = [];
-	const lines = preprocessRangeReplaceContinuation(diff).split("\n");
+	const lines = diff.split("\n");
 	for (let i = 0; i < lines.length; i++) {
 		const lineNum = i + 1;
 		const stmts = parseDiffLine(lines[i], lineNum);
@@ -831,6 +766,7 @@ function getAtomEditAnchors(edit: AtomEdit): Anchor[] {
 function validateAtomAnchors(edits: AtomEdit[], fileLines: string[], warnings: string[]): HashMismatch[] {
 	const mismatches: HashMismatch[] = [];
 	const rebasedAnchors = new Map<Anchor, HashMismatch>();
+	const emittedRebaseKeys = new Set<string>();
 	for (const edit of edits) {
 		for (const anchor of getAtomEditAnchors(edit)) {
 			if (anchor.line < 1 || anchor.line > fileLines.length) {
@@ -845,9 +781,13 @@ function validateAtomAnchors(edits: AtomEdit[], fileLines: string[], warnings: s
 				const original = `${anchor.line}${anchor.hash}`;
 				rebasedAnchors.set(anchor, { line: anchor.line, expected: anchor.hash, actual: actualHash });
 				anchor.line = rebased;
-				warnings.push(
-					`Auto-rebased anchor ${original} → ${rebased}${anchor.hash} (line shifted within ±${ANCHOR_REBASE_WINDOW}; hash matched).`,
-				);
+				const rebaseKey = `${original}→${rebased}${anchor.hash}`;
+				if (!emittedRebaseKeys.has(rebaseKey)) {
+					emittedRebaseKeys.add(rebaseKey);
+					warnings.push(
+						`Auto-rebased anchor ${original} → ${rebased}${anchor.hash} (line shifted within ±${ANCHOR_REBASE_WINDOW}; hash matched).`,
+					);
+				}
 				continue;
 			}
 			mismatches.push({ line: anchor.line, expected: anchor.hash, actual: actualHash });
@@ -887,6 +827,65 @@ function validateNoConflictingAtomMutations(edits: AtomEdit[]): void {
 		}
 		mutatingPerLine.set(edit.anchor.line, edit.kind);
 	}
+}
+
+// Heuristic: warn when `@Lid` lands on a brace-opening line and the
+// subsequent inserts are at sibling indent (≤ anchor indent), suggesting
+// the agent meant `^<nextSibling>` instead. The line still ends with `{`
+// after the hash-marker swap (markers became `[a-z]<` / `>[a-z]`); the
+// raw line content is unchanged, so this check works regardless of hash
+// alphabet.
+function detectAtomBracePositioningWarnings(edits: AtomEdit[], fileLines: string[]): string[] {
+	const warnings: string[] = [];
+	const seen = new Set<number>();
+
+	const getLeadingWhitespace = (line: string): string => {
+		const m = /^\s*/.exec(line);
+		return m ? m[0] : "";
+	};
+
+	const formatPreview = (text: string): string => (text.length > 60 ? `${text.slice(0, 60)}…` : text);
+
+	for (const edit of edits) {
+		// Only `@Lid` (after-anchor) inserts are at risk. `^Lid` (before),
+		// BOF, EOF, and direct `set`/`delete` ops do not have the foot-gun.
+		if (edit.kind !== "insert" || edit.cursor.kind !== "anchor") continue;
+
+		const anchor = edit.cursor.anchor;
+		if (seen.has(anchor.line)) continue;
+		if (anchor.line < 1 || anchor.line > fileLines.length) continue;
+
+		const anchorLine = fileLines[anchor.line - 1];
+		const trimmedEnd = anchorLine.trimEnd();
+		if (!trimmedEnd.endsWith("{")) continue;
+
+		// Find the first non-blank `+TEXT` after this `@Lid`.
+		const firstInsert = edits.find(
+			e =>
+				e.kind === "insert" &&
+				e.cursor.kind === "anchor" &&
+				e.cursor.anchor.line === anchor.line &&
+				e.text.trim().length > 0,
+		);
+		if (!firstInsert || firstInsert.kind !== "insert") continue;
+
+		const anchorIndent = getLeadingWhitespace(anchorLine);
+		const insertIndent = getLeadingWhitespace(firstInsert.text);
+
+		// Body content is STRICTLY more indented than the brace-opening line.
+		// `startsWith(anchorIndent)` rejects mixed tab/space cases that look
+		// longer in chars but differ in actual indent shape.
+		const isProperlyNested = insertIndent.length > anchorIndent.length && insertIndent.startsWith(anchorIndent);
+		if (isProperlyNested) continue;
+
+		seen.add(anchor.line);
+		const lid = `${anchor.line}${anchor.hash}`;
+		warnings.push(
+			`@${lid} inserts at indent ${insertIndent.length} just inside the brace-opening line "${formatPreview(trimmedEnd)}" (indent ${anchorIndent.length}); the inserted content sits inside the {...} block as the first body element. If you meant a sibling (after the closing brace), use \`^Lid\` on the next sibling line. If you meant body content, indent past column ${anchorIndent.length}.`,
+		);
+	}
+
+	return warnings;
 }
 
 function repairAtomOldNewSetLine(currentLine: string, nextLine: string): string {
@@ -1054,7 +1053,7 @@ function detectAndAutoFixDuplicates(
 			return {
 				fixed: trial,
 				warnings: [
-					`Auto-fixed: removed ${noun} ${previews}; the edit left adjacent identical lines and bracket balance was off. Verify the result.`,
+					`AUTO-FIX applied — verify the result. Removed ${noun} ${previews} to restore {}/()/[] balance the edit broke. If this is wrong, re-issue the edit so the duplicate is not produced in the first place.`,
 				],
 			};
 		}
@@ -1082,6 +1081,7 @@ export function applyAtomEdits(text: string, edits: AtomEdit[]): AtomApplyResult
 		throw new HashlineMismatchError(mismatches, fileLines);
 	}
 	validateNoConflictingAtomMutations(edits);
+	for (const w of detectAtomBracePositioningWarnings(edits, fileLines)) warnings.push(w);
 
 	const trackFirstChanged = (line: number) => {
 		if (firstChangedLine === undefined || line < firstChangedLine) firstChangedLine = line;
@@ -1345,17 +1345,23 @@ function hasAtomHeaderLine(input: string): boolean {
 	return stripped.split("\n").some(rawLine => rawLine.replace(/\r$/, "").startsWith(FILE_HEADER_PREFIX));
 }
 
+const RECOGNIZABLE_OP_RES: readonly RegExp[] = [
+	/^\$\+.*$/,
+	new RegExp(`^\\^${HASHLINE_LID_LAX_RE_SRC}(?:\\+.*)?$`),
+	new RegExp(`^- ?${HASHLINE_LID_LAX_RE_SRC}(?:\\.\\.${HASHLINE_LID_LAX_RE_SRC})?(?:[ \\t]*[=|].*| .*)?$`),
+	new RegExp(`^@?${HASHLINE_LID_LAX_RE_SRC}(?:\\+.*|[ \\t]*[=|].*|\\.\\.${HASHLINE_LID_LAX_RE_SRC}[ \\t]*=.*)?$`),
+	new RegExp(`^@@ (?:BOF|EOF|(?:- ?)?${HASHLINE_LID_LAX_RE_SRC}(?:[ \\t]*[=|].*)?)$`),
+];
+
 function containsRecognizableAtomOperations(input: string): boolean {
 	for (const rawLine of input.split("\n")) {
 		const line = rawLine.replace(/\r$/, "");
 		if (line.length === 0) continue;
 		if (line[0] === "+") return true;
 		if (line === "$" || line === "^") return true;
-		if (/^\$\+.*$/.test(line)) return true;
-		if (/^\^[1-9]\d*[a-z]{2}(?:\+.*)?$/.test(line)) return true;
-		if (/^- ?[1-9]\d*[a-z]{2}(?:\.\.[1-9]\d*[a-z]{2})?(?:[ \t]*[=|].*| .*)?$/.test(line)) return true;
-		if (/^@?[1-9]\d*[a-z]{2}(?:\+.*|[ \t]*[=|].*|\.\.[1-9]\d*[a-z]{2}[ \t]*=.*)?$/.test(line)) return true;
-		if (/^@@ (?:BOF|EOF|(?:- ?)?[1-9]\d*[a-z]{2}(?:[ \t]*[=|].*)?)$/.test(line)) return true;
+		for (const re of RECOGNIZABLE_OP_RES) {
+			if (re.test(line)) return true;
+		}
 	}
 	return false;
 }

@@ -17,10 +17,11 @@ import type { ToolSession } from "../tools";
 import { VimTool, vimSchema } from "../tools/vim";
 import { type EditMode, normalizeEditMode, resolveEditMode } from "../utils/edit-mode";
 import type { VimToolDetails } from "../vim/types";
+import { resolveLarkLidPlaceholders } from "./line-hash";
 import { type ApplyPatchParams, applyPatchSchema, expandApplyPatchToEntries } from "./modes/apply-patch";
 import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
 import { type AtomParams, atomEditParamsSchema, executeAtomSingle } from "./modes/atom";
-import atomGrammar from "./modes/atom.lark" with { type: "text" };
+import atomGrammarTemplate from "./modes/atom.lark" with { type: "text" };
 import {
 	executeHashlineSingle,
 	HashlineMismatchError,
@@ -36,6 +37,13 @@ export { DEFAULT_EDIT_MODE, type EditMode, normalizeEditMode } from "../utils/ed
 export * from "./apply-patch";
 export * from "./diff";
 export * from "./line-hash";
+
+// Resolve the `$HASHFMT$` placeholder in the atom Lark grammar against
+// the central lax-hash regex source. Keeps the grammar's LID rule in lockstep
+// with atom.ts and hashline.ts — every consumer derives the alphabet from one
+// place in line-hash.ts.
+const atomGrammar = resolveLarkLidPlaceholders(atomGrammarTemplate);
+
 export * from "./modes/apply-patch";
 export * from "./modes/atom";
 export * from "./modes/hashline";

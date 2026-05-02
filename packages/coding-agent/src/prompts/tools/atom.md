@@ -1,7 +1,7 @@
 Your patch language is a compact, line-anchored edit format.
 
 A patch contains one or more file sections. The first non-blank line of every section **MUST** be `---PATH`.
-A "Lid" is a per-line anchor emitted by `read`, `grep`, etc. — `<lineNumber><2-letter-hash>`, e.g. `5th`, `123ab`. You **MUST** copy a Lid verbatim from the latest output for the file you're editing.
+A "Lid" is a per-line anchor emitted by `read`, `grep`, etc. — `<lineNumber><hash>`, e.g. `5th`, `123ab`, or `7a<` (opening-brace marker), `42>p` (closing-brace marker). You **MUST** copy a Lid verbatim from the latest output for the file you're editing.
 
 This format is purely textual. The tool has NO awareness of language, indentation, brackets, fences, or table widths. You are responsible for emitting valid syntax in your replacements/insertions.
 
@@ -14,9 +14,7 @@ $          move cursor to EOF (after the last line)
 +TEXT      insert one line containing TEXT at the cursor
 +          insert one blank line at the cursor
 Lid=TEXT   replace the anchored line with TEXT
-LidA..LidB=TEXT replace the range with one line; following `\TEXT` lines append literal lines to the replacement
-\TEXT      append literal TEXT to the active replacement (after `Lid=…` or `LidA..LidB=…`)
-\          append a blank line to the active replacement
+LidA..LidB=TEXT replace the range with one line; following `+TEXT` lines extend the replacement (since the cursor sits at the slot the range vacated)
 Lid=       blank the anchored line's content but KEEP the line (results in an empty line, NOT a removed line; use `-Lid` to remove)
 -Lid       delete the anchored line (repeat for multi-line delete)
 -LidA..LidB delete the contiguous line range LidA..LidB (inclusive)
@@ -26,12 +24,9 @@ Lid=       blank the anchored line's content but KEEP the line (results in an em
 
 <rules>
 - Cursor-only ops (`^`, `$`, `@Lid`, `^Lid`) reposition without modifying. To insert anything you **MUST** follow them with `+TEXT` (or `+` for a blank).
-- TEXT in `+TEXT`, `Lid=TEXT`, and `\TEXT` is literal line content, INCLUDING leading whitespace. You **MUST NOT** trim or re-indent it.
+- TEXT in `+TEXT` and `Lid=TEXT` is literal line content, INCLUDING leading whitespace. You **MUST NOT** trim or re-indent it.
 - Consecutive `+TEXT` ops produce consecutive lines in the order written. You **MUST NOT** separate them with a stray `+` unless you intend to insert a blank line.
-- `Lid=TEXT` rewrites ONE line. To rewrite K adjacent lines, you **MUST** use `LidA..LidB=FIRST_LINE` followed immediately by `\NEXT_LINE` continuation lines (canonical form for any block replacement). You **MUST** use bare `\` for blank replacement lines.
-- You **MUST** prefix every replacement continuation line with `\`, especially when the replacement line starts with edit syntax characters such as `#`, `+`, `-`, `@`, `$`, `^`, `!`, or a Lid-shaped token.
-- `\TEXT` **MUST** appear only immediately after an active `Lid=…` or `LidA..LidB=…` replacement. It **MUST NOT** be used as a general insert operator.
-- A `\TEXT` line **MUST** be the immediate continuation of a `Lid=…` or `LidA..LidB=…` op on the line above (or another `\` line rooted in one). If the line above is `+TEXT`, a bare Lid, a cursor op, or whitespace, the `\` is invalid and the tool will not interpret it as part of a replacement.
+- `Lid=TEXT` rewrites ONE line. To rewrite K adjacent lines, you **MUST** use `LidA..LidB=FIRST_LINE` followed immediately by `+NEXT_LINE` lines (or use `Lid=FIRST_LINE` + `+NEXT_LINE…` to extend a single anchor downward). The `+TEXT` lines insert at the cursor that `Lid=…` / `LidA..LidB=…` parks on the just-set / just-vacated slot. Use bare `+` for blank replacement lines.
 - The legacy `-LidA..LidB` + `+TEXT…` block-rewrite form also works.
 - To insert ABOVE a line, you **MUST** use `^Lid` then `+TEXT`. To insert above line 1, you **MUST** use `^` (BOF) then `+TEXT`. To insert below a line, you **MUST** use `@Lid` then `+TEXT`.
 - Multiple `---PATH` sections **MAY** appear in one input; each section is applied in order.
@@ -86,12 +81,12 @@ Lid=       blank the anchored line's content but KEEP the line (results in an em
 # Replace one contiguous block when the existing lines themselves change; the replacement may have more/fewer lines than the selected range
 ---a.ts
 {{hrefr 3}}..{{hrefr 6}}=/** Format a display label, falling back to DEF when empty. */
-\export function label(name: string): string {
-\	const clean = (name || DEF).trim();
-\
-\	if (clean.length === 0) return DEF;
-\	return clean.toUpperCase();
-\}
++export function label(name: string): string {
++	const clean = (name || DEF).trim();
++
++	if (clean.length === 0) return DEF;
++	return clean.toUpperCase();
++}
 
 # Insert ABOVE a line
 ---a.ts
@@ -118,6 +113,22 @@ $
 ---a.ts
 -{{hrefr 2}}
 
+# Blank a line in place (line stays, content removed). Use this — not `-Lid` — when the EOL/indentation should remain.
+---a.ts
+{{hrefr 2}}=
+
+# Range replace expanding a 3-line block to 5 lines (cursor parks in the slot, so each `+TEXT` extends the replacement)
+---a.ts
+{{hrefr 3}}..{{hrefr 5}}=export function label(name: string): string {
++	if (!name) return DEF;
++	const clean = name.trim();
++	if (clean.length === 0) return DEF;
++	return clean;
+
+# Range replace contracting a 4-line block to 1 line
+---a.ts
+{{hrefr 3}}..{{hrefr 6}}=export const label = (name: string) => (name || DEF).trim() || DEF;
+
 # Delete the file (no other ops in the section)
 ---a.ts
 !rm
@@ -139,12 +150,14 @@ $
 - Current/added preview lines include fresh `LINE+hash|content` anchors. Removed preview lines show deleted content and **MUST NOT** be reused as anchors.
 - You **MUST** emit only lines that change. You **MUST NOT** echo unchanged context; the anchor implies position.
 - You **MUST NOT** write `Lid=<sameTextThatIsAlreadyOnThatLine>`; the tool reports a no-op (no change applied). Emit `Lid=TEXT` only when TEXT differs.
-- You **MUST NOT** use `Lid=<originalLineContent>` + `\continuations` as an "insert after" idiom. That form is a *replacement*: its first line lands at the anchor, and its continuations push the original next line down. When the anchor is a closing brace and your continuations also end in `}`, the original line below — often itself `}` (a sibling block, mod, or impl closer) — sits adjacent to yours and you ship a duplicate `}`. For pure insertion, use `@Lid` + `+TEXT…` (after) or `^Lid` + `+TEXT…` (before). Never re-state the anchor's content as the first line of a replacement.
-- A line of the form `Lid|content` (a Lid, then `|`, then text, with NO leading `+`/`-`/`^`/`@`/`\`/`=`/`..`) is **FORBIDDEN**. That shape only appears in `read`/`grep` output as an anchor for *you*; it is never an edit op. If you copy a `Lid|content` line verbatim from a read into a patch, you have made an error — every edit op must start with `+`, `-`, `^`, `@`, `\`, `$`, `!`, or a Lid immediately followed by `=` or `..`.
-- To replace a contiguous block with new content, the canonical form is `LidA..LidB=FIRST_LINE` + `\NEXT_LINE…`. You **MUST NOT** write the old block and then the new block — that is unified-diff thinking and the tool does not understand it. If you find yourself emitting pre-image lines (with or without operators) before your new content, STOP and rewrite the section as a single range-replace.
-- TEXT after `=`, `+`, or `\` includes leading whitespace verbatim. You **MUST NOT** trim or re-indent it.
+- You **MUST NOT** use `Lid=<originalLineContent>` + `+continuations` as an "insert after" idiom. That form is a *replacement* whose first line lands at the anchor and pushes the original next line down. When the anchor is a closing brace and your continuations also end in `}`, the original line below — often itself `}` (a sibling block, mod, or impl closer) — sits adjacent to yours and you ship a duplicate `}`. For pure insertion, use `@Lid` + `+TEXT…` (after) or `^Lid` + `+TEXT…` (before). Never re-state the anchor's content as the first line of a replacement.
+- A line of the form `Lid|content` (a Lid, then `|`, then text, with NO leading `+`/`-`/`^`/`@`/`=`/`..`) is **FORBIDDEN**. That shape only appears in `read`/`grep` output as an anchor for *you*; it is never an edit op. If you copy a `Lid|content` line verbatim from a read into a patch, you have made an error — every edit op must start with `+`, `-`, `^`, `@`, `$`, `!`, or a Lid immediately followed by `=` or `..`.
+- To replace a contiguous block with new content, the canonical form is `LidA..LidB=FIRST_LINE` + `+NEXT_LINE…`. You **MUST NOT** write the old block and then the new block — that is unified-diff thinking and the tool does not understand it. If you find yourself emitting pre-image lines (with or without operators) before your new content, STOP and rewrite the section as a single range-replace.
+- TEXT after `=` or `+` includes leading whitespace verbatim. You **MUST NOT** trim or re-indent it.
 - This is NOT unified diff. You **MUST NOT** write `@@` headers, `-OLD`/`+NEW` pairs, context lines, or `+Lid|…` (bad: `+5th|new text`; good: `5th=new text`).
 - You **MUST NOT** split `Lid=TEXT` across two physical lines.
-- For a contiguous range replacement, you **MAY** use either `Lid=FIRST_LINE` + `\NEXT_LINE…` (extends one anchor) or `LidA..LidB=FIRST_LINE` + `\NEXT_LINE…` (collapses an existing range), or fall back to `-LidA..LidB` + `+TEXT…` (delete + insert).
+- For a contiguous range replacement, you **MAY** use either `Lid=FIRST_LINE` + `+NEXT_LINE…` (extends one anchor downward) or `LidA..LidB=FIRST_LINE` + `+NEXT_LINE…` (collapses an existing range and fills the slot), or fall back to `-LidA..LidB` + `+TEXT…` (delete + insert).
 - The tool is syntax-blind. Indentation, brackets, fences, table widths — you remain responsible.
+- Hashes may contain `<` or `>` (the brace markers `[a-z]<` for `{`-ending lines, `>[a-z]` for `}`-starting lines). The Lid is everything before the first `|` separator. Example: in a read line `28>i|}` the Lid is `28>i` and the content is `}`. Copy the whole anchor up to the first `|` — do NOT split at `<`/`>` inside the hash.
+- `@Lid` + `+TEXT…` where the anchor line ends with `{` inserts your content as the FIRST element inside that block's body. If you intended a sibling (after the closing brace), use `^Lid` on the next sibling line instead. The tool emits a warning when the inserted indent ≤ the anchor indent in this configuration; treat the warning as "did you really mean body content?"
 </critical>

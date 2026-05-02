@@ -225,7 +225,11 @@ export type EditFailureCategory = (typeof EDIT_FAILURE_CATEGORIES)[number];
 function categorizeEditFailure(error: string, args: unknown): EditFailureCategory {
 	const payload = getEditPayloadFromArgs(args);
 	const hasRangeReplacePayload = /^[1-9]\d*[a-z]{2}\.\.[1-9]\d*[a-z]{2}[ \t]*=/m.test(payload);
-	if (/\\TEXT continuation|range[- ]replacement continuation|LidA\.\.LidB=FIRST_LINE/i.test(error)) {
+	if (
+		/\\TEXT.* (?:continuation|has been removed)|range[- ]replacement continuation|LidA\.\.LidB=FIRST_LINE/i.test(
+			error,
+		)
+	) {
 		return "range-continuation";
 	}
 	if (/unified-diff syntax|\+Lid[=|]|\+[1-9]\d*[a-z]{2}[=|]/i.test(error)) {
@@ -1010,7 +1014,6 @@ async function runSingleTask(
 		if (config.editFuzzyThreshold !== undefined)
 			process.env.PI_EDIT_FUZZY_THRESHOLD =
 				config.editFuzzyThreshold === "auto" ? "auto" : String(config.editFuzzyThreshold);
-		process.env.PI_STRICT_EDIT_MODE = "1";
 		process.env.PI_NO_TITLE = "1";
 
 		const useInProcess = config.inProcess !== false;

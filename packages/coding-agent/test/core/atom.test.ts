@@ -178,28 +178,28 @@ describe("atom parser — basic forms", () => {
 		expect(() => applyDiff(longer, diff)).toThrow(/use `2.{2}\.\.3.{2}=REPLACED`/);
 	});
 
-	it("`LidA..LidB=FIRST` accepts backslash continuation lines", () => {
+	it("`LidA..LidB=FIRST` accepts `+TEXT` continuation lines", () => {
 		const longer = "aaa\nbbb\nccc\nddd\neee";
-		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=export function label() {`, "\\    return 1;", "\\}"].join(
-			"\n",
-		);
+		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=export function label() {`, "+    return 1;", "+}"].join("\n");
 		expect(applyDiff(longer, diff)).toBe("aaa\nexport function label() {\n    return 1;\n}\neee");
 	});
 
 	it("`LidA..LidB|FIRST` accepts legacy pipe as range replacement separator", () => {
 		const longer = "aaa\nbbb\nccc\nddd\neee";
-		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}|ONE`, "\\TWO"].join("\n");
+		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}|ONE`, "+TWO"].join("\n");
 		expect(applyDiff(longer, diff)).toBe("aaa\nONE\nTWO\neee");
 	});
 
-	it("bare backslash continuation inserts a blank replacement line", () => {
+	it("bare `+` inside a range replacement inserts a blank replacement line", () => {
 		const longer = "aaa\nbbb\nccc\nddd\neee";
-		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=ONE`, "\\", "\\THREE"].join("\n");
+		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=ONE`, "+", "+THREE"].join("\n");
 		expect(applyDiff(longer, diff)).toBe("aaa\nONE\n\nTHREE\neee");
 	});
 
-	it("backslash continuation preserves atom-shaped literal content", () => {
+	it("`+TEXT` continuation preserves atom-shaped literal content (except Lid=TEXT-shaped lines)", () => {
 		const longer = "aaa\nbbb\nccc\nddd";
+		// `12ab=literal`-shaped content can't be expressed via `+TEXT` because
+		// `+Lid=TEXT` is reserved as the unified-diff-thinking diagnostic.
 		const literalLines = [
 			"#include <x>",
 			"# Heading",
@@ -209,53 +209,52 @@ describe("atom parser — basic forms", () => {
 			"$literal",
 			"^literal",
 			"!literal",
-			"12ab=literal",
 			"\\literal",
 		];
-		const diff = [`${tag(2, "bbb")}..${tag(3, "ccc")}=first`, ...literalLines.map(line => `\\${line}`)].join("\n");
+		const diff = [`${tag(2, "bbb")}..${tag(3, "ccc")}=first`, ...literalLines.map(line => `+${line}`)].join("\n");
 		expect(applyDiff(longer, diff)).toBe(["aaa", "first", ...literalLines, "ddd"].join("\n"));
 	});
 
-	it("backslash continuation is rejected outside a replacement op", () => {
-		expect(() => parseAtom("\\orphan")).toThrow(/\\TEXT continuation is only valid/);
+	it("`\\TEXT` is rejected with a redirect to `+TEXT`", () => {
+		expect(() => parseAtom("\\orphan")).toThrow(/has been removed.*Use `\+TEXT`/);
 	});
 
-	it("`Lid=FIRST` accepts backslash continuation lines (single-line set extends to multi-line)", () => {
+	it("`Lid=FIRST` accepts `+TEXT` continuation lines (single-line set extends to multi-line)", () => {
 		const content = "aaa\nbbb\nccc";
-		const diff = [`${tag(2, "bbb")}=export function label() {`, "\\    return 1;", "\\}"].join("\n");
+		const diff = [`${tag(2, "bbb")}=export function label() {`, "+    return 1;", "+}"].join("\n");
 		expect(applyDiff(content, diff)).toBe("aaa\nexport function label() {\n    return 1;\n}\nccc");
 	});
 
-	it("`@Lid=FIRST` accepts backslash continuation lines (legacy `@`-prefixed form)", () => {
+	it("`@Lid=FIRST` accepts `+TEXT` continuation lines (legacy `@`-prefixed form)", () => {
 		const content = "aaa\nbbb\nccc";
-		const diff = [`@${tag(2, "bbb")}=ONE`, "\\TWO"].join("\n");
+		const diff = [`@${tag(2, "bbb")}=ONE`, "+TWO"].join("\n");
 		expect(applyDiff(content, diff)).toBe("aaa\nONE\nTWO\nccc");
 	});
 
-	it("`Lid|FIRST` (legacy set syntax) accepts backslash continuation lines", () => {
+	it("`Lid|FIRST` (legacy set syntax) accepts `+TEXT` continuation lines", () => {
 		const content = "aaa\nbbb\nccc";
-		const diff = [`${tag(2, "bbb")}|ONE`, "\\TWO"].join("\n");
+		const diff = [`${tag(2, "bbb")}|ONE`, "+TWO"].join("\n");
 		expect(applyDiff(content, diff)).toBe("aaa\nONE\nTWO\nccc");
 	});
 
-	it("backslash continuation after `Lid=FIRST` rejects unprefixed recovery (range-only fallback)", () => {
+	it("unrecognized op after `Lid=FIRST` is rejected (no implicit recovery)", () => {
 		const content = "aaa\nbbb\nccc";
-		// Only range replacements get the legacy "raw unprefixed continuation" recovery;
-		// after a single-line set, an unprefixed line below should parse as its own op
-		// (or error), not silently fold into the replacement.
+		// After a single-line set the cursor sits on the anchored line; an
+		// unprefixed line below has no recognized op shape and must error
+		// rather than fold silently into the replacement.
 		const diff = [`${tag(2, "bbb")}=ONE`, "rawline"].join("\n");
 		expect(() => applyDiff(content, diff)).toThrow();
 	});
 
-	it("backslash continuation stops before the next atom op line", () => {
+	it("`+TEXT` continuation reroutes correctly when followed by an explicit cursor move", () => {
 		const longer = "aaa\nbbb\nccc\nddd\neee";
-		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=ONE`, "\\TWO", `@${tag(1, "aaa")}`, "+BELOW"].join("\n");
+		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=ONE`, "+TWO", `@${tag(1, "aaa")}`, "+BELOW"].join("\n");
 		expect(applyDiff(longer, diff)).toBe("aaa\nBELOW\nONE\nTWO\neee");
 	});
 
-	it("range replacement accepts optional whitespace before `=` with continuation", () => {
+	it("range replacement accepts optional whitespace before `=` with `+TEXT` continuation", () => {
 		const longer = "aaa\nbbb\nccc\nddd\neee";
-		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")} =ONE`, "\\TWO"].join("\n");
+		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")} =ONE`, "+TWO"].join("\n");
 		expect(applyDiff(longer, diff)).toBe("aaa\nONE\nTWO\neee");
 	});
 
@@ -263,40 +262,6 @@ describe("atom parser — basic forms", () => {
 		const longer = "aaa\nbbb\nccc\nddd\neee";
 		const diff = `${tag(2, "bbb")}..${tag(4, "ddd")} = TEXT`;
 		expect(applyDiff(longer, diff)).toBe("aaa\n TEXT\neee");
-	});
-
-	it("raw unprefixed range continuation remains accepted as recovery", () => {
-		const longer = "aaa\nbbb\nccc\nddd\neee";
-		const diff = `${tag(2, "bbb")}..${tag(4, "ddd")}=ONE\nTWO\n# Heading`;
-		expect(applyDiff(longer, diff)).toBe("aaa\nONE\nTWO\n# Heading\neee");
-	});
-
-	it("blank line between two `\\TEXT` continuation lines is treated as implicit `\\` blank", () => {
-		const longer = "aaa\nbbb\nccc\nddd\neee";
-		// Note the LITERAL blank line between the two `\TEXT` continuations —
-		// without forgiveness this would error with "\TEXT continuation is only
-		// valid immediately after a Lid=TEXT…".
-		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=ONE`, "\\TWO", "", "\\THREE"].join("\n");
-		expect(applyDiff(longer, diff)).toBe("aaa\nONE\nTWO\n\nTHREE\neee");
-	});
-
-	it("multiple consecutive blank lines inside a continuation chain all become blank inserts", () => {
-		const longer = "aaa\nbbb\nccc\nddd\neee";
-		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=ONE`, "\\TWO", "", "", "\\FIVE"].join("\n");
-		expect(applyDiff(longer, diff)).toBe("aaa\nONE\nTWO\n\n\nFIVE\neee");
-	});
-
-	it("blank line after a single-anchor `Lid=` followed by `\\TEXT` is treated as implicit `\\`", () => {
-		const content = "aaa\nbbb\nccc";
-		const diff = [`${tag(2, "bbb")}=ONE`, "", "\\THREE"].join("\n");
-		expect(applyDiff(content, diff)).toBe("aaa\nONE\n\nTHREE\nccc");
-	});
-
-	it("trailing blank line after the last `\\TEXT` continuation still terminates the replacement", () => {
-		const longer = "aaa\nbbb\nccc\nddd\neee";
-		// Blank tail with no follow-up `\TEXT` — must NOT swallow into the replacement.
-		const diff = [`${tag(2, "bbb")}..${tag(4, "ddd")}=ONE`, "\\TWO", ""].join("\n");
-		expect(applyDiff(longer, diff)).toBe("aaa\nONE\nTWO\neee");
 	});
 
 	it("`^Lid` moves the cursor BEFORE the anchored line", () => {
@@ -501,12 +466,11 @@ describe("atom parser — edge cases", () => {
 	});
 
 	it("rejects partial and missing Lids with repairable diagnostics", () => {
-		expect(() => parseAtom("@@ 98")).toThrow(/`@@ 98` is missing the two-letter Lid suffix/);
+		expect(() => parseAtom("@@ 98")).toThrow(/`@@ 98` is missing the 2-character Lid suffix/);
 		expect(() => parseAtom("yh=TEXT")).toThrow(/`yh` is not a full Lid/);
-		expect(() => parseAtom("123=TEXT")).toThrow(/`123` is missing the two-letter Lid suffix/);
-		expect(() => parseAtom("123|TEXT")).toThrow(/`123` is missing the two-letter Lid suffix/);
+		expect(() => parseAtom("123=TEXT")).toThrow(/`123` is missing the 2-character Lid suffix/);
+		expect(() => parseAtom("123|TEXT")).toThrow(/`123` is missing the 2-character Lid suffix/);
 	});
-
 	it("canonical equals replacement does not apply legacy OLD|NEW repair", () => {
 		const content = "aaa\nbbb\nccc";
 		const t = tag(2, "bbb");
@@ -794,6 +758,79 @@ describe("atom — hash mismatch", () => {
 			`Auto-rebased anchor ${t4} → 5${computeLineHash(5, "ddd")} (line shifted within ±5; hash matched).`,
 		]);
 	});
+
+	it("rebased anchor referenced multiple times emits one warning, not N", () => {
+		// `@Lid` followed by a run of `+TEXT` lines clones the cursor anchor onto
+		// every insert, so the same (stale) Lid hits validateAtomAnchors N times.
+		// Without dedup, the warning fires per-clone; with dedup, exactly once.
+		const content = "aaa\nINSERTED\nbbb\nccc";
+		const stale = tag(2, "bbb"); // bbb shifted to line 3
+		const diff = `@${stale}\n+L1\n+L2\n+L3\n+L4\n+L5`;
+		const result = applyAtomEdits(content, parseAtom(diff));
+
+		expect(result.lines).toBe("aaa\nINSERTED\nbbb\nL1\nL2\nL3\nL4\nL5\nccc");
+		expect(result.warnings).toEqual([
+			`Auto-rebased anchor ${stale} → 3${computeLineHash(3, "bbb")} (line shifted within ±5; hash matched).`,
+		]);
+	});
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// `@Lid` brace-body insertion heuristic
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("atom — @Lid lands inside brace-opening body", () => {
+	it("warns when @Lid sits on a `{`-ending line and inserts at sibling indent", () => {
+		// The agent meant: insert `restart()` as a sibling of `stop()`. They
+		// anchored on `stop(): void {` and used `@Lid`, which puts the new
+		// content inside the `stop()` body, breaking nesting.
+		const content = ["class S {", "    stop(): void {", "        history.push();", "    }", "}"].join("\n");
+		const stopBraceLid = tag(2, "    stop(): void {");
+		const diff = `@${stopBraceLid}\n+    restart(): void {\n+        history.clear();\n+    }`;
+		const result = applyAtomEdits(content, parseAtom(diff));
+
+		expect(result.warnings?.[0]).toContain(`@${stopBraceLid}`);
+		expect(result.warnings?.[0]).toContain("brace-opening line");
+		expect(result.warnings?.[0]).toContain("`^Lid` on the next sibling");
+	});
+
+	it("does NOT warn when inserted content is properly indented past the brace line", () => {
+		const content = ["class S {", "    stop(): void {", "    }", "}"].join("\n");
+		const stopBraceLid = tag(2, "    stop(): void {");
+		// 8-space indent — strictly more than the 4-space brace line.
+		const diff = `@${stopBraceLid}\n+        log("stopping");`;
+		const result = applyAtomEdits(content, parseAtom(diff));
+
+		expect(result.warnings ?? []).toEqual([]);
+	});
+
+	it("does NOT warn when ^Lid is used (insert before, no body-nesting risk)", () => {
+		const content = ["class S {", "    stop(): void {", "    }", "}"].join("\n");
+		const stopBraceLid = tag(2, "    stop(): void {");
+		const diff = `^${stopBraceLid}\n+    restart(): void {}`;
+		const result = applyAtomEdits(content, parseAtom(diff));
+
+		expect(result.warnings ?? []).toEqual([]);
+	});
+
+	it("does NOT warn when anchor line does not end in `{` (no brace foot-gun)", () => {
+		const content = ["aaa", "bbb", "ccc"].join("\n");
+		const t = tag(1, "aaa");
+		const diff = `@${t}\n+inserted`;
+		const result = applyAtomEdits(content, parseAtom(diff));
+
+		expect(result.warnings ?? []).toEqual([]);
+	});
+
+	it("emits one warning per anchor even when multiple `+TEXT` lines follow", () => {
+		const content = ["class S {", "    stop(): void {", "    }", "}"].join("\n");
+		const stopBraceLid = tag(2, "    stop(): void {");
+		const diff = `@${stopBraceLid}\n+    a\n+    b\n+    c\n+    d`;
+		const result = applyAtomEdits(content, parseAtom(diff));
+
+		const braceWarnings = (result.warnings ?? []).filter(w => w.includes("brace-opening line"));
+		expect(braceWarnings).toHaveLength(1);
+	});
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1069,7 +1106,7 @@ describe("applyAtomEdits — adjacent duplicate detection", () => {
 		const result = applyAtomEdits(content, parseAtom(diff));
 		expect(result.lines).toBe("const X = 1;\n\nexport function f(): number {\n\treturn X * 2;\n}");
 		expect(result.warnings ?? []).toEqual(
-			expect.arrayContaining([expect.stringMatching(/Auto-fixed: removed duplicate line/)]),
+			expect.arrayContaining([expect.stringMatching(/AUTO-FIX applied .* Removed duplicate line/)]),
 		);
 	});
 
@@ -1084,7 +1121,7 @@ describe("applyAtomEdits — adjacent duplicate detection", () => {
 		const result = applyAtomEdits(content, parseAtom(diff));
 		expect(result.lines).toBe("alpha\nexport function f() {\n\treturn 2;\n}\nbeta");
 		expect(result.warnings ?? []).toEqual(
-			expect.arrayContaining([expect.stringMatching(/Auto-fixed: removed duplicate line/)]),
+			expect.arrayContaining([expect.stringMatching(/AUTO-FIX applied .* Removed duplicate line/)]),
 		);
 	});
 
@@ -1103,7 +1140,7 @@ describe("applyAtomEdits — adjacent duplicate detection", () => {
 		const result = applyAtomEdits(content, parseAtom(diff));
 		expect(result.lines).toBe("fn sayA() {\n\n}\nfn sayB() {\n\n}");
 		expect(result.warnings ?? []).toEqual(
-			expect.arrayContaining([expect.stringMatching(/Auto-fixed: removed duplicate lines/)]),
+			expect.arrayContaining([expect.stringMatching(/AUTO-FIX applied .* Removed duplicate lines/)]),
 		);
 	});
 
@@ -1211,5 +1248,59 @@ describe("atomEditParamsSchema — extra-field tolerance", () => {
 	it("still requires `input`", () => {
 		const args = { path: "x.ts" };
 		expect(Value.Check(atomEditParamsSchema, args)).toBe(false);
+	});
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Brace-aware Lid hashes (`>[a-z]` and `[a-z]<`) parse and apply correctly
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("atom parser — brace-marker Lids", () => {
+	it("`Lid=TEXT` accepts a closing-brace anchor", () => {
+		const content = "function foo() {\n\treturn 1;\n}";
+		const closeHash = computeLineHash(3, "}");
+		expect(closeHash).toMatch(/^>[a-z]$/);
+		const diff = `3${closeHash}=} // end`;
+		expect(applyDiff(content, diff)).toBe("function foo() {\n\treturn 1;\n} // end");
+	});
+
+	it("`Lid=TEXT` accepts an opening-brace anchor", () => {
+		const content = "function foo() {\n\treturn 1;\n}";
+		const openHash = computeLineHash(1, "function foo() {");
+		expect(openHash).toMatch(/^[a-z]<$/);
+		const diff = `1${openHash}=function bar() {`;
+		expect(applyDiff(content, diff)).toBe("function bar() {\n\treturn 1;\n}");
+	});
+
+	it("`-Lid` deletes a closing-brace anchored line", () => {
+		const content = "function foo() {\n\treturn 1;\n}";
+		const closeHash = computeLineHash(3, "}");
+		expect(closeHash).toMatch(/^>[a-z]$/);
+		const diff = `-3${closeHash}`;
+		expect(applyDiff(content, diff)).toBe("function foo() {\n\treturn 1;");
+	});
+
+	it("`-Lid` deletes an opening-brace anchored line", () => {
+		const content = "function foo() {\n\treturn 1;\n}";
+		const openHash = computeLineHash(1, "function foo() {");
+		expect(openHash).toMatch(/^[a-z]<$/);
+		const diff = `-1${openHash}`;
+		expect(applyDiff(content, diff)).toBe("\treturn 1;\n}");
+	});
+
+	it("range delete spans brace-anchored boundaries", () => {
+		const content = "function foo() {\n\treturn 1;\n}";
+		const open = `1${computeLineHash(1, "function foo() {")}`;
+		const close = `3${computeLineHash(3, "}")}`;
+		const diff = `-${open}..${close}`;
+		expect(applyDiff(content, diff)).toBe("");
+	});
+
+	it("range replace spans brace-anchored boundaries", () => {
+		const content = "function foo() {\n\treturn 1;\n}";
+		const open = `1${computeLineHash(1, "function foo() {")}`;
+		const close = `3${computeLineHash(3, "}")}`;
+		const diff = `${open}..${close}=const foo = () => 1;`;
+		expect(applyDiff(content, diff)).toBe("const foo = () => 1;");
 	});
 });

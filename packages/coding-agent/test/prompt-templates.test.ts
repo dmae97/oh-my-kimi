@@ -10,6 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { expandPromptTemplate, type PromptTemplate } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
+import { HASHLINE_HASH_RE_SRC } from "@oh-my-pi/pi-coding-agent/edit";
 import { expandSlashCommand, type FileSlashCommand } from "@oh-my-pi/pi-coding-agent/extensibility/slash-commands";
 import { parseCommandArgs, substituteArgs } from "@oh-my-pi/pi-coding-agent/utils/command-args";
 
@@ -335,11 +336,13 @@ describe("hashline prompt helpers", () => {
 		const ref = raw.slice("raw=".length);
 
 		expect(quoted).toBe(`quoted="${ref}"`);
-		expect(ref).toMatch(/^5[a-z]{2}$/);
+		expect(ref).toMatch(new RegExp(`^5${HASHLINE_HASH_RE_SRC}$`));
 	});
 
 	test("href should not reuse hline state across prompt renders", () => {
-		expect(expandPrompt('{{hline 1 "const x = 1;"}}\n{{hrefr}}')).toMatch(/^1[a-z]{2}\|const x = 1;\n1[a-z]{2}$/);
+		expect(expandPrompt('{{hline 1 "const x = 1;"}}\n{{hrefr}}')).toMatch(
+			new RegExp(`^1${HASHLINE_HASH_RE_SRC}\\|const x = 1;\n1${HASHLINE_HASH_RE_SRC}$`),
+		);
 		expect(() => expandPrompt("{{hrefr}}")).toThrow("previous {{hline}}");
 	});
 });

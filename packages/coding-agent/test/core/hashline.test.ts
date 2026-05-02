@@ -4,12 +4,15 @@ import {
 	buildCompactHashlineDiffPreview,
 	computeLineHash,
 	formatHashLines,
-	HASHLINE_BIGRAM_RE_SRC,
 	HASHLINE_BIGRAMS,
 	HASHLINE_BIGRAMS_COUNT,
+	HASHLINE_HASH_LAX_RE_SRC,
+	HASHLINE_HASH_RE_SRC,
 	HashlineMismatchError,
 	hashlineParseText,
+	LARK_LID_HASH_LAX_PLACEHOLDER,
 	parseTag,
+	resolveLarkLidPlaceholders,
 	streamHashLinesFromLines,
 	streamHashLinesFromUtf8,
 	stripHashlinePrefixes,
@@ -25,9 +28,19 @@ function makeTag(line: number, content: string): Anchor {
 	};
 }
 
-/** Returns a valid bigram that's guaranteed NOT to equal the real hash of `(line, content)`. */
+/** Returns a hash that's guaranteed NOT to equal the real hash of `(line, content)`. */
 function staleBigramFor(line: number, content: string): string {
 	const real = computeLineHash(line, content);
+	if (real.startsWith(">")) {
+		// Closing-brace marker: keep the `>[a-z]` shape but rotate the letter.
+		const next = String.fromCharCode(((real.charCodeAt(1) - 97 + 1) % 26) + 97);
+		return `>${next}`;
+	}
+	if (real.endsWith("<")) {
+		// Opening-brace marker: keep the `[a-z]<` shape but rotate the letter.
+		const next = String.fromCharCode(((real.charCodeAt(0) - 97 + 1) % 26) + 97);
+		return `${next}<`;
+	}
 	const idx = HASHLINE_BIGRAMS.indexOf(real as (typeof HASHLINE_BIGRAMS)[number]);
 	return HASHLINE_BIGRAMS[(idx + 1) % HASHLINE_BIGRAMS_COUNT];
 }
@@ -37,9 +50,9 @@ function staleBigramFor(line: number, content: string): string {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("computeLineHash", () => {
-	it("returns 2-4 character alphanumeric hash string", () => {
+	it("returns 2-character hash string", () => {
 		const hash = computeLineHash(1, "hello");
-		expect(hash).toMatch(new RegExp(`^${HASHLINE_BIGRAM_RE_SRC}$`));
+		expect(hash).toMatch(new RegExp(`^${HASHLINE_HASH_RE_SRC}$`));
 	});
 
 	it("same content at same line produces same hash", () => {
@@ -56,7 +69,7 @@ describe("computeLineHash", () => {
 
 	it("empty line produces valid hash", () => {
 		const hash = computeLineHash(1, "");
-		expect(hash).toMatch(new RegExp(`^${HASHLINE_BIGRAM_RE_SRC}$`));
+		expect(hash).toMatch(new RegExp(`^${HASHLINE_HASH_RE_SRC}$`));
 	});
 
 	it("uses line number for symbol-only lines", () => {
@@ -69,6 +82,82 @@ describe("computeLineHash", () => {
 		const a = computeLineHash(1, "hello");
 		const b = computeLineHash(2, "hello");
 		expect(a).toBe(b);
+	});
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// computeLineHash — brace markers
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("computeLineHash — brace markers", () => {
+	it("bare closing brace `}` hashes to `>[a-z]`", () => {
+		expect(computeLineHash(1, "}")).toMatch(/^>[a-z]$/);
+	});
+
+	it("`});` is a closer", () => {
+		expect(computeLineHash(7, "});")).toMatch(/^>[a-z]$/);
+	});
+
+	it("`},` is a closer", () => {
+		expect(computeLineHash(3, "},")).toMatch(/^>[a-z]$/);
+	});
+
+	it("indented closer `   }` keeps closing form", () => {
+		expect(computeLineHash(2, "   }")).toMatch(/^>[a-z]$/);
+	});
+
+	it("`}//comment` (no space after brace) is still a closer", () => {
+		expect(computeLineHash(4, "}//comment")).toMatch(/^>[a-z]$/);
+	});
+
+	it("opener `function foo() {` hashes to `[a-z]<`", () => {
+		expect(computeLineHash(1, "function foo() {")).toMatch(/^[a-z]<$/);
+	});
+
+	it("opener `if (x) {` hashes to `[a-z]<`", () => {
+		expect(computeLineHash(2, "if (x) {")).toMatch(/^[a-z]<$/);
+	});
+
+	it("`} else {` resolves to opening form (open-brace wins)", () => {
+		expect(computeLineHash(5, "} else {")).toMatch(/^[a-z]<$/);
+	});
+
+	it("`} catch (err) {` resolves to opening form", () => {
+		expect(computeLineHash(8, "} catch (err) {")).toMatch(/^[a-z]<$/);
+	});
+
+	it("plain comment line stays in bigram alphabet (no braces)", () => {
+		const hash = computeLineHash(1, "// just a comment");
+		expect(hash).toMatch(/^[a-z]{2}$/);
+		expect(hash).not.toMatch(/[<>]/);
+	});
+
+	it("two `}` lines on different line numbers get distinct closing hashes", () => {
+		const a = computeLineHash(1, "}");
+		const b = computeLineHash(2, "}");
+		expect(a).toMatch(/^>[a-z]$/);
+		expect(b).toMatch(/^>[a-z]$/);
+		expect(a).not.toBe(b);
+	});
+
+	it("two `{` lines on different line numbers get distinct opening hashes", () => {
+		const a = computeLineHash(1, "{");
+		const b = computeLineHash(2, "{");
+		expect(a).toMatch(/^[a-z]<$/);
+		expect(b).toMatch(/^[a-z]<$/);
+		expect(a).not.toBe(b);
+	});
+
+	it("HASHLINE_HASH_RE_SRC matches both brace forms and bigrams", () => {
+		const re = new RegExp(`^${HASHLINE_HASH_RE_SRC}$`);
+		expect(re.test(computeLineHash(1, "}"))).toBe(true);
+		expect(re.test(computeLineHash(1, "{"))).toBe(true);
+		expect(re.test(computeLineHash(1, "hello"))).toBe(true);
+		expect(re.test(">a")).toBe(true);
+		expect(re.test("a<")).toBe(true);
+		expect(re.test("ab")).toBe(true);
+		expect(re.test(">>")).toBe(false);
+		expect(re.test("<<")).toBe(false);
 	});
 });
 
@@ -103,7 +192,7 @@ describe("formatHashLines", () => {
 		const result = formatHashLines("foo\n\nbar");
 		const lines = result.split("\n");
 		expect(lines).toHaveLength(3);
-		expect(lines[1]).toMatch(new RegExp(`^2${HASHLINE_BIGRAM_RE_SRC}|$`));
+		expect(lines[1]).toMatch(new RegExp(`^2${HASHLINE_HASH_RE_SRC}|$`));
 	});
 
 	it("round-trips with computeLineHash", () => {
@@ -112,7 +201,7 @@ describe("formatHashLines", () => {
 		const lines = formatted.split("\n");
 
 		for (let i = 0; i < lines.length; i++) {
-			const match = lines[i].match(new RegExp(`^(\\d+)(${HASHLINE_BIGRAM_RE_SRC})\\|(.*)$`));
+			const match = lines[i].match(new RegExp(`^(\\d+)(${HASHLINE_HASH_RE_SRC})\\|(.*)$`));
 			expect(match).not.toBeNull();
 			const lineNum = Number.parseInt(match![1], 10);
 			const hash = match![2];
@@ -216,6 +305,22 @@ describe("parseTag", () => {
 
 	it("rejects empty hash", () => {
 		expect(() => parseTag("5#")).toThrow(/Invalid line reference/);
+	});
+
+	it("strips leading anchor decorations (`*`, `+`, `-`, `>`) before parsing", () => {
+		expect(parseTag("*5th")).toEqual({ line: 5, hash: "th" });
+		expect(parseTag(" 5th")).toEqual({ line: 5, hash: "th" });
+		expect(parseTag("+5th")).toEqual({ line: 5, hash: "th" });
+		expect(parseTag("-5th")).toEqual({ line: 5, hash: "th" });
+		expect(parseTag(">5th")).toEqual({ line: 5, hash: "th" });
+		expect(parseTag(">>>+5th")).toEqual({ line: 5, hash: "th" });
+	});
+
+	it("parses brace-marker hashes through HASHLINE_ANCHOR_RE_SRC", () => {
+		expect(parseTag("3>p")).toEqual({ line: 3, hash: ">p" });
+		expect(parseTag("1a<")).toEqual({ line: 1, hash: "a<" });
+		// Decorations + brace marker still parses.
+		expect(parseTag("*3>p")).toEqual({ line: 3, hash: ">p" });
 	});
 });
 
@@ -691,7 +796,7 @@ describe("applyHashlineEdits — errors", () => {
 			const correctHash = computeLineHash(2, "bbb");
 			expect(msg).toContain(`*2${correctHash}|bbb`);
 			// Context lines use leading space and `|` separator
-			const contextLines = msg.split("\n").filter(l => /^ \d+[a-z]{2}\|/.test(l));
+			const contextLines = msg.split("\n").filter(l => new RegExp(`^ \\d+${HASHLINE_HASH_RE_SRC}\\|`).test(l));
 			expect(contextLines.length).toBeGreaterThan(0);
 		}
 	});
@@ -714,7 +819,9 @@ describe("applyHashlineEdits — errors", () => {
 			expect(e.mismatches[0].line).toBe(2);
 			expect(e.mismatches[1].line).toBe(4);
 			// Both mismatched lines use `*` prefix (vs leading space for context)
-			const markerLines = e.message.split("\n").filter(l => /^\*\d+[a-z]{2}\|/.test(l));
+			const markerLines = e.message
+				.split("\n")
+				.filter(l => new RegExp(`^\\*\\d+${HASHLINE_HASH_RE_SRC}\\|`).test(l));
 			expect(markerLines).toHaveLength(2);
 		}
 	});
@@ -780,7 +887,7 @@ describe("buildCompactHashlineDiffPreview", () => {
 		expect(preview.preview).toContain(`+3${computeLineHash(3, "two")}|two`);
 		expect(preview.preview).toContain(`+4${computeLineHash(4, "three")}|three`);
 		expect(preview.preview).toContain(`+5${computeLineHash(5, "four")}|four`);
-		expect(preview.preview).toContain("-2  |old");
+		expect(preview.preview).toContain("-2--|old");
 		expect(preview.preview).not.toContain(`-2${computeLineHash(2, "old")}`);
 		expect(preview.addedLines).toBe(4);
 		expect(preview.removedLines).toBe(1);
@@ -793,7 +900,7 @@ describe("buildCompactHashlineDiffPreview", () => {
 
 		expect(preview.preview).toContain(`*10${computeLineHash(10, "new")}|new`);
 		expect(preview.preview).not.toContain(`+10${computeLineHash(10, "new")}|new`);
-		expect(preview.preview).not.toContain("-10  |old");
+		expect(preview.preview).not.toContain("-10--|old");
 		expect(preview.preview).toContain(` 11${computeLineHash(11, "ctx-a")}|ctx-a`);
 		expect(preview.preview).toContain(` 12${computeLineHash(12, "ctx-b")}|ctx-b`);
 		expect(preview.preview).not.toContain("ctx-c");
@@ -804,30 +911,32 @@ describe("buildCompactHashlineDiffPreview", () => {
 		expect(preview.removedLines).toBe(1);
 	});
 
-	it("keeps surplus removals after the paired `*` block when more old lines were dropped than added", () => {
+	it("does NOT fold when more old lines were dropped than added; keeps clean -/+ runs", () => {
 		const diff = ["-100|del-a", "-101|del-b", "-102|del-c", "+100|new-a", " 103|tail"].join("\n");
 
 		const preview = buildCompactHashlineDiffPreview(diff);
 		const lines = preview.preview.split("\n");
 
 		expect(lines).toEqual([
-			`*100${computeLineHash(100, "new-a")}|new-a`,
-			"-101  |del-b",
-			"-102  |del-c",
+			"-100--|del-a",
+			"-101--|del-b",
+			"-102--|del-c",
+			`+100${computeLineHash(100, "new-a")}|new-a`,
 			` 101${computeLineHash(101, "tail")}|tail`,
 		]);
 		expect(preview.addedLines).toBe(1);
 		expect(preview.removedLines).toBe(3);
 	});
 
-	it("keeps surplus additions after the paired `*` block when more new lines were added than removed", () => {
+	it("does NOT fold when more new lines were added than removed; keeps clean -/+ runs", () => {
 		const diff = ["-10|old", "+10|new-a", "+11|new-b", "+12|new-c", " 11|tail"].join("\n");
 
 		const preview = buildCompactHashlineDiffPreview(diff);
 		const lines = preview.preview.split("\n");
 
 		expect(lines).toEqual([
-			`*10${computeLineHash(10, "new-a")}|new-a`,
+			"-10--|old",
+			`+10${computeLineHash(10, "new-a")}|new-a`,
 			`+11${computeLineHash(11, "new-b")}|new-b`,
 			`+12${computeLineHash(12, "new-c")}|new-c`,
 			` 13${computeLineHash(13, "tail")}|tail`,
@@ -844,7 +953,7 @@ describe("buildCompactHashlineDiffPreview", () => {
 		expect(preview.preview).not.toContain("*");
 		expect(preview.preview).toContain(`+2${computeLineHash(2, "one")}|one`);
 		expect(preview.preview).toContain(`+3${computeLineHash(3, "two")}|two`);
-		expect(preview.preview).toContain("-2  |old");
+		expect(preview.preview).toContain("-2--|old");
 	});
 
 	it("never truncates change runs — every removed and added line is shown in full", () => {
@@ -857,7 +966,7 @@ describe("buildCompactHashlineDiffPreview", () => {
 		expect(preview.preview).not.toContain("more removed lines");
 		expect(preview.preview).not.toContain("more preview lines");
 		for (let i = 0; i < 30; i++) {
-			expect(preview.preview).toContain(`-${100 + i}  |del-${i}`);
+			expect(preview.preview).toContain(`-${100 + i}--|del-${i}`);
 		}
 	});
 
@@ -1113,5 +1222,80 @@ describe("hashlineParseContent", () => {
 		];
 		const result = applyHashlineEdits(fileContent, edits);
 		expect(result.lines).toBe("const x = 1;\n// TODO: old\n# TODO: remove this -- done\nconst y = 2;");
+	});
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Hash format centralization — single source of truth for regex shape
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("hash format — central source of truth", () => {
+	it("strict regex matches every hash computeLineHash produces (sample sweep)", () => {
+		const strict = new RegExp(`^${HASHLINE_HASH_RE_SRC}$`);
+		const samples = [
+			[1, "hello"],
+			[2, "  return result;"],
+			[3, "}"],
+			[4, "function foo() {"],
+			[5, "} else {"],
+			[6, ""],
+			[7, "\t}"],
+		] as const;
+		for (const [line, content] of samples) {
+			const hash = computeLineHash(line, content);
+			expect(hash).toMatch(strict);
+		}
+	});
+
+	it("lax regex is a strict superset of the strict regex (every produced hash also matches lax)", () => {
+		const lax = new RegExp(`^${HASHLINE_HASH_LAX_RE_SRC}$`);
+		// Sample a few bigrams plus brace markers.
+		const samples = [
+			HASHLINE_BIGRAMS[0],
+			HASHLINE_BIGRAMS[42],
+			HASHLINE_BIGRAMS[HASHLINE_BIGRAMS_COUNT - 1],
+			">a",
+			">z",
+			"a<",
+			"z<",
+		];
+		for (const hash of samples) {
+			expect(hash).toMatch(lax);
+		}
+	});
+
+	it("lax regex accepts non-bigram letter pairs that strict rejects", () => {
+		const lax = new RegExp(`^${HASHLINE_HASH_LAX_RE_SRC}$`);
+		const strict = new RegExp(`^${HASHLINE_HASH_RE_SRC}$`);
+		// `bq`, `qj`, `xq` are letter pairs the BPE alphabet excludes (rare q/x/z heavy combos).
+		const offBigrams = ["bq", "qj", "xq"].filter(
+			p => !HASHLINE_BIGRAMS.includes(p as (typeof HASHLINE_BIGRAMS)[number]),
+		);
+		expect(offBigrams.length).toBeGreaterThan(0);
+		for (const candidate of offBigrams) {
+			expect(candidate).toMatch(lax);
+			expect(candidate).not.toMatch(strict);
+		}
+	});
+
+	it("resolveLarkLidPlaceholders substitutes the placeholder with the lax regex source", () => {
+		const grammar = `LID: /[1-9][0-9]*${LARK_LID_HASH_LAX_PLACEHOLDER}/`;
+		const resolved = resolveLarkLidPlaceholders(grammar);
+		expect(resolved).not.toContain(LARK_LID_HASH_LAX_PLACEHOLDER);
+		expect(resolved).toContain(HASHLINE_HASH_LAX_RE_SRC);
+	});
+
+	it("resolveLarkLidPlaceholders is a no-op when the grammar has no placeholder", () => {
+		const grammar = `start: "x"`;
+		expect(resolveLarkLidPlaceholders(grammar)).toBe(grammar);
+	});
+
+	it("atom.lark embeds the placeholder so resolveLarkLidPlaceholders has work to do", async () => {
+		const atomLark = await Bun.file(new URL("../../src/edit/modes/atom.lark", import.meta.url).pathname).text();
+		expect(atomLark).toContain(LARK_LID_HASH_LAX_PLACEHOLDER);
+
+		const resolved = resolveLarkLidPlaceholders(atomLark);
+		expect(resolved).not.toContain(LARK_LID_HASH_LAX_PLACEHOLDER);
+		expect(resolved).toContain(HASHLINE_HASH_LAX_RE_SRC);
 	});
 });
