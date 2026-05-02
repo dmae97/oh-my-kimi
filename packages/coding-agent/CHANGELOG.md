@@ -2,10 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed `/mcp reauth`, `/mcp unauth`, `/mcp enable`, and `/mcp disable` not finding servers configured in standalone `mcp.json` or `.mcp.json` files in the project root
-
 ## [14.6.1] - 2026-05-02
 ### Changed
 
