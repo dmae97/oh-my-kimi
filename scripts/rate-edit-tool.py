@@ -11,7 +11,7 @@ import tempfile
 import textwrap
 import threading
 import time
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -36,10 +36,6 @@ from omp_rpc import (  # noqa: E402
     RpcError,
     RpcNotification,
     RpcProcessExitError,
-    TodoAutoClearEvent,
-    TodoItem,
-    TodoPhase,
-    TodoReminderEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
@@ -69,7 +65,7 @@ PROMPT = textwrap.dedent(
 
     2. Exercise every supported edit operation against each fixture. Perform the full range of supported mutations — replacing content, inserting above/below a target, deleting, substring rewrites, append/prepend — using only what the schema actually exposes.
 
-    3. Push into awkward cases. Probe boundary conditions: first/last line of file, indentation-sensitive blocks (Python), nested members (decorators, methods, enum variants, Go interfaces/generics), markdown tables, fenced code blocks. Note whether error messages were clear and actionable when something went wrong.
+    3. Push into awkward cases. Probe boundary conditions: first/last line of file, indentation-sensitive blocks (Python), nested members (decorators, methods, enum variants, traits and generics). Note whether error messages were clear and actionable when something went wrong.
 
     4. Verify after edits. Re-read each file after meaningful edits and confirm only the intended lines changed.
 
@@ -141,13 +137,6 @@ ORACLE_REVIEW_PROMPT = textwrap.dedent(
     </instructions>
     """
 ).strip()
-
-TODOS = [
-    "Map the edit tool surface area across every fixture: main.ts, main.rs, main.go, main.py, main.md.",
-    "Exercise every supported edit operation on each fixture with concrete before/after verification.",
-    "Probe awkward boundary cases: decorators, docstrings, enum variants, Go interfaces/generics, indentation-sensitive blocks, markdown tables, fenced code blocks.",
-    "Summarize what was awkward, impossible, ambiguous, or under-documented with concrete examples spanning all fixtures.",
-]
 
 TS_FIXTURE = (
     textwrap.dedent(
@@ -486,134 +475,6 @@ RUST_FIXTURE = (
     + "\n"
 )
 
-GO_FIXTURE = (
-    textwrap.dedent(
-        """\
-    package main
-
-    import (
-        "context"
-        "errors"
-        "fmt"
-        "strings"
-        "sync"
-    )
-
-    // LogLevel names the severity of a structured log entry.
-    type LogLevel int
-
-    const (
-        DebugLevel LogLevel = iota
-        InfoLevel
-        WarnLevel
-        ErrorLevel
-    )
-
-    // String returns the canonical upper-case name for a LogLevel.
-    func (l LogLevel) String() string {
-        switch l {
-        case DebugLevel:
-            return "DEBUG"
-        case InfoLevel:
-            return "INFO"
-        case WarnLevel:
-            return "WARN"
-        case ErrorLevel:
-            return "ERROR"
-        default:
-            return fmt.Sprintf("LogLevel(%d)", int(l))
-        }
-    }
-
-    // Entry is a single structured log line.
-    type Entry struct {
-        Level   LogLevel          `json:"level"`
-        Message string            `json:"message"`
-        Fields  map[string]string `json:"fields,omitempty"`
-    }
-
-    // Sink receives structured log entries.
-    type Sink interface {
-        Write(ctx context.Context, entry Entry) error
-    }
-
-    // MemorySink stores entries in memory, useful for tests.
-    type MemorySink struct {
-        mu      sync.Mutex
-        entries []Entry
-    }
-
-    // Write appends the entry to the in-memory buffer.
-    func (s *MemorySink) Write(_ context.Context, entry Entry) error {
-        s.mu.Lock()
-        defer s.mu.Unlock()
-        s.entries = append(s.entries, entry)
-        return nil
-    }
-
-    // Snapshot returns a copy of the buffered entries.
-    func (s *MemorySink) Snapshot() []Entry {
-        s.mu.Lock()
-        defer s.mu.Unlock()
-        out := make([]Entry, len(s.entries))
-        copy(out, s.entries)
-        return out
-    }
-
-    // Filter returns items for which keep returns true.
-    func Filter[T any](items []T, keep func(T) bool) []T {
-        out := make([]T, 0, len(items))
-        for _, item := range items {
-            if keep(item) {
-                out = append(out, item)
-            }
-        }
-        return out
-    }
-
-    // Router fans entries out to every configured sink.
-    type Router struct {
-        sinks []Sink
-    }
-
-    // NewRouter constructs a router with the given sinks.
-    func NewRouter(sinks ...Sink) *Router {
-        return &Router{sinks: sinks}
-    }
-
-    // Dispatch writes the entry to every sink, joining per-sink errors.
-    func (r *Router) Dispatch(ctx context.Context, entry Entry) error {
-        var errs []error
-        for _, sink := range r.sinks {
-            if err := sink.Write(ctx, entry); err != nil {
-                errs = append(errs, err)
-            }
-        }
-        if len(errs) == 0 {
-            return nil
-        }
-        messages := make([]string, 0, len(errs))
-        for _, err := range errs {
-            messages = append(messages, err.Error())
-        }
-        return errors.New(strings.Join(messages, "; "))
-    }
-
-    func main() {
-        sink := &MemorySink{}
-        router := NewRouter(sink)
-        _ = router.Dispatch(context.Background(), Entry{
-            Level:   InfoLevel,
-            Message: "router ready",
-        })
-        fmt.Println(sink.Snapshot())
-    }
-    """
-    ).strip()
-    + "\n"
-)
-
-
 PYTHON_FIXTURE = (
     textwrap.dedent(
         """\
@@ -695,90 +556,29 @@ PYTHON_FIXTURE = (
     + "\n"
 )
 
-MARKDOWN_FIXTURE = (
-    textwrap.dedent(
-        """\
-    ---
-    title: Tooling Evaluation Notes
-    owner: Fixtures Team
-    ---
-
-    # Fixture Overview
-
-    This markdown fixture is intentionally prose-heavy.
-    It should help reveal how read and edit behave when the file is not routed through a language AST.
-
-    ## Acceptance checklist
-
-    - [ ] Verify heading edits keep spacing intact.
-    - [ ] Verify list edits preserve indentation.
-    - [ ] Verify table edits do not destroy alignment beyond what the tool promises.
-    - [ ] Verify fenced code blocks remain fenced after edits.
-
-    ## Comparison table
-
-    | Surface | Expected stress |
-    | --- | --- |
-    | `main.ts` | Type/interface and class member edits |
-    | `main.rs` | Enum and impl member edits |
-    | `main.py` | Indentation-sensitive blocks |
-    | `main.md` | Prose and block-level text edits |
-
-    ## Embedded examples
-
-    ```python
-    def greet(name: str) -> str:
-        return f"hello {name}"
-    ```
-
-    ```json
-    {
-      "mode": "demo",
-      "strict": true
-    }
-    ```
-
-    ## Notes
-
-    1. Paragraph edits should preserve blank lines.
-    2. List insertions should not collapse into one paragraph.
-    3. Deleting this section should not damage the fenced blocks above.
-    """
-    ).strip()
-    + "\n"
-)
-
 REFERENCE_FILES = {
     "PROMPT.md": PROMPT + "\n",
     "main.ts": TS_FIXTURE,
     "main.rs": RUST_FIXTURE,
-    "main.go": GO_FIXTURE,
     "main.py": PYTHON_FIXTURE,
-    "main.md": MARKDOWN_FIXTURE,
 }
 
 FIXTURES: tuple[tuple[str, str], ...] = (
     ("typescript", "main.ts"),
     ("rust", "main.rs"),
-    ("go", "main.go"),
     ("python", "main.py"),
-    ("markdown", "main.md"),
 )
 
 FIXTURE_DESCRIPTIONS: dict[str, str] = {
     "typescript": "TypeScript/AST",
     "rust": "Rust/AST",
-    "go": "Go/AST",
     "python": "indentation-sensitive",
-    "markdown": "prose/non-AST",
 }
 
 WORKSPACE_FILES = {
     "main.ts": TS_FIXTURE,
     "main.rs": RUST_FIXTURE,
-    "main.go": GO_FIXTURE,
     "main.py": PYTHON_FIXTURE,
-    "main.md": MARKDOWN_FIXTURE,
 }
 
 
@@ -813,9 +613,6 @@ class ModelResult:
     token_input: int | None
     token_output: int | None
     token_total: int | None
-    todo_completed: int
-    todo_total: int
-    todo_current: str | None
     error: str | None
     session_state: dict[str, Any] | None
 
@@ -832,23 +629,17 @@ class ModelProgress:
     token_input: int | None = None
     token_output: int | None = None
     token_total: int | None = None
-    todo_completed: int = 0
-    todo_total: int = 0
-    todo_current: str | None = None
     last_activity: str = "waiting"
     last_thinking: str | None = None
     last_text: str | None = None
     duration_seconds: float | None = None
     error: str | None = None
-    todo_order: list[str] = field(default_factory=list)
-    todo_items: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
-TOOL_WHITELIST = ("read", "edit", "todo_write", "report_tool_issue")
+TOOL_WHITELIST = ("read", "edit")
 MODEL_LABEL_WIDTH = 30
 STATUS_WIDTH = 7
 TOKENS_WIDTH = 9
-TODOS_WIDTH = 18
 ACTIVITY_WIDTH_FLOOR = 24
 THINKING_SNIPPET_LIMIT = 80
 TEXT_SNIPPET_LIMIT = 64
@@ -907,175 +698,6 @@ def extract_usage_tokens(
     )
 
 
-def build_todo_state_from_phases(
-    phases: tuple[TodoPhase, ...],
-) -> tuple[list[str], dict[str, tuple[str, str]]]:
-    order: list[str] = []
-    items: dict[str, tuple[str, str]] = {}
-    for phase in phases:
-        for task in phase.tasks:
-            order.append(task.id)
-            items[task.id] = (task.content, task.status)
-    return order, items
-
-
-def seed_todo_state(todos: list[str]) -> tuple[list[str], dict[str, tuple[str, str]]]:
-    order: list[str] = []
-    items: dict[str, tuple[str, str]] = {}
-    for index, content in enumerate(todos, start=1):
-        task_id = f"task-{index}"
-        order.append(task_id)
-        items[task_id] = (content, "pending")
-    return order, items
-
-
-def summarize_todo_state(
-    order: list[str], items: dict[str, tuple[str, str]]
-) -> tuple[int, int, str | None]:
-    if not order:
-        return 0, 0, None
-    completed = 0
-    current: str | None = None
-    for task_id in order:
-        content, status = items.get(task_id, ("", "pending"))
-        if status == "completed":
-            completed += 1
-        elif current is None and status == "in_progress":
-            current = content
-    if current is None:
-        for task_id in order:
-            content, status = items.get(task_id, ("", "pending"))
-            if status == "pending":
-                current = content
-                break
-    return completed, len(order), current
-
-
-def apply_todo_ops(progress: ModelProgress, args: Any) -> None:
-    if not isinstance(args, dict):
-        return
-    raw_ops = args.get("ops")
-    if not isinstance(raw_ops, list):
-        return
-
-    for raw_op in raw_ops:
-        if not isinstance(raw_op, dict):
-            continue
-        op = raw_op.get("op")
-        if op == "replace":
-            raw_phases = raw_op.get("phases")
-            if isinstance(raw_phases, list):
-                phases: list[TodoPhase] = []
-                for phase_index, raw_phase in enumerate(raw_phases, start=1):
-                    if not isinstance(raw_phase, dict):
-                        continue
-                    raw_tasks = raw_phase.get("tasks")
-                    if not isinstance(raw_tasks, list):
-                        continue
-                    tasks: list[TodoItem] = []
-                    for task_index, raw_task in enumerate(raw_tasks, start=1):
-                        if not isinstance(raw_task, dict):
-                            continue
-                        content = raw_task.get("content")
-                        status = raw_task.get("status")
-                        if not isinstance(content, str) or not isinstance(status, str):
-                            continue
-                        task_id = raw_task.get("id")
-                        if not isinstance(task_id, str) or not task_id:
-                            task_id = f"task-{task_index}"
-                        tasks.append(
-                            TodoItem(
-                                id=task_id,
-                                content=content,
-                                status=status,
-                                notes=None,
-                                details=None,
-                            )
-                        )
-                    phase_id = raw_phase.get("id")
-                    name = raw_phase.get("name")
-                    if not isinstance(name, str) or not name:
-                        name = f"Phase {phase_index}"
-                    if not isinstance(phase_id, str) or not phase_id:
-                        phase_id = f"phase-{phase_index}"
-                    phases.append(TodoPhase(id=phase_id, name=name, tasks=tuple(tasks)))
-                progress.todo_order, progress.todo_items = build_todo_state_from_phases(
-                    tuple(phases)
-                )
-        elif op == "update":
-            task_id = raw_op.get("id")
-            if not isinstance(task_id, str) or task_id not in progress.todo_items:
-                continue
-            content, status = progress.todo_items[task_id]
-            next_content = (
-                raw_op.get("content")
-                if isinstance(raw_op.get("content"), str)
-                else content
-            )
-            next_status = (
-                raw_op.get("status")
-                if isinstance(raw_op.get("status"), str)
-                else status
-            )
-            progress.todo_items[task_id] = (next_content, next_status)
-        elif op == "add_task":
-            phase = raw_op.get("phase")
-            task_payload = raw_op.get("task")
-            if not isinstance(task_payload, dict):
-                continue
-            task_id = task_payload.get("id")
-            if not isinstance(task_id, str) or not task_id:
-                task_id = (
-                    raw_op.get("id")
-                    if isinstance(raw_op.get("id"), str)
-                    else f"task-{len(progress.todo_order) + 1}"
-                )
-            content = task_payload.get("content")
-            status = task_payload.get("status")
-            if not isinstance(content, str) or not isinstance(status, str):
-                continue
-            if task_id not in progress.todo_items:
-                insert_after = (
-                    raw_op.get("after")
-                    if isinstance(raw_op.get("after"), str)
-                    else None
-                )
-                if insert_after in progress.todo_order:
-                    index = progress.todo_order.index(insert_after) + 1
-                    progress.todo_order.insert(index, task_id)
-                else:
-                    progress.todo_order.append(task_id)
-            progress.todo_items[task_id] = (content, status)
-        elif op == "remove_task":
-            task_id = raw_op.get("id")
-            if not isinstance(task_id, str):
-                continue
-            progress.todo_items.pop(task_id, None)
-            progress.todo_order = [
-                candidate for candidate in progress.todo_order if candidate != task_id
-            ]
-        elif op == "add_phase":
-            raw_tasks = raw_op.get("tasks")
-            if not isinstance(raw_tasks, list):
-                continue
-            for raw_task in raw_tasks:
-                if not isinstance(raw_task, dict):
-                    continue
-                content = raw_task.get("content")
-                status = raw_task.get("status")
-                if not isinstance(content, str) or not isinstance(status, str):
-                    continue
-                task_id = raw_task.get("id")
-                if not isinstance(task_id, str) or not task_id:
-                    task_id = f"task-{len(progress.todo_order) + 1}"
-                progress.todo_order.append(task_id)
-                progress.todo_items[task_id] = (content, status)
-
-    progress.todo_completed, progress.todo_total, progress.todo_current = (
-        summarize_todo_state(progress.todo_order, progress.todo_items)
-    )
-
-
 class ProgressPrinter:
     def __init__(
         self,
@@ -1122,16 +744,6 @@ class ProgressPrinter:
     def mark_ready(self, model: str) -> None:
         self._mutate_model(model, status="ready", last_activity="rpc ready")
 
-    def seed_todos(self, model: str, todos: list[str]) -> None:
-        with self._lock:
-            progress = self._states[model]
-            progress.todo_order, progress.todo_items = seed_todo_state(todos)
-            progress.todo_completed, progress.todo_total, progress.todo_current = (
-                summarize_todo_state(progress.todo_order, progress.todo_items)
-            )
-            progress.last_activity = f"seeded {progress.todo_total} todos"
-            self._refresh_locked()
-
     def mark_prompt_submitted(self, model: str) -> None:
         self._mutate_model(model, status="run", last_activity="prompt submitted")
 
@@ -1142,14 +754,12 @@ class ProgressPrinter:
         self._mutate_model(model, turns=turns)
 
     def note_tool_start(
-        self, model: str, tool_name: str, intent: str | None, tool_calls: int, args: Any
+        self, model: str, tool_name: str, intent: str | None, tool_calls: int
     ) -> None:
         with self._lock:
             progress = self._states[model]
             progress.status = "run"
             progress.tool_calls = tool_calls
-            if tool_name == "todo_write":
-                apply_todo_ops(progress, args)
             detail = truncate_text(intent, 36)
             progress.last_activity = f"{tool_name} · {detail}" if detail else tool_name
             self._refresh_locked()
@@ -1157,25 +767,6 @@ class ProgressPrinter:
     def note_tool_end(self, model: str, tool_name: str, is_error: bool | None) -> None:
         if is_error:
             self._mutate_model(model, last_activity=f"{tool_name} failed")
-
-    def note_todo_reminder(self, model: str, todos: tuple[TodoItem, ...]) -> None:
-        with self._lock:
-            progress = self._states[model]
-            progress.todo_order = [task.id for task in todos]
-            progress.todo_items = {
-                task.id: (task.content, task.status) for task in todos
-            }
-            progress.todo_completed, progress.todo_total, progress.todo_current = (
-                summarize_todo_state(progress.todo_order, progress.todo_items)
-            )
-            self._refresh_locked()
-
-    def note_todo_auto_clear(self, model: str) -> None:
-        with self._lock:
-            progress = self._states[model]
-            progress.todo_completed = progress.todo_total
-            progress.todo_current = None
-            self._refresh_locked()
 
     def note_thinking(self, model: str, delta: str, total_chars: int) -> None:
         with self._lock:
@@ -1286,7 +877,6 @@ class ProgressPrinter:
         table.add_column("Turns", justify="right", no_wrap=True, width=5)
         table.add_column("Tools", justify="right", no_wrap=True, width=5)
         table.add_column("Tokens", justify="right", no_wrap=True, width=8)
-        table.add_column("Todos", ratio=1, min_width=24)
 
         for model in self._model_order:
             state = self._states[model]
@@ -1296,7 +886,6 @@ class ProgressPrinter:
                 str(state.turns),
                 str(state.tool_calls),
                 format_count(state.token_total),
-                self._todo_text(state),
             )
 
         if self._final_message:
@@ -1320,15 +909,6 @@ class ProgressPrinter:
             "failed": "bold red",
         }
         return Text(status, style=styles.get(status, "white"))
-
-    @staticmethod
-    def _todo_text(state: ModelProgress) -> str:
-        if state.todo_total == 0:
-            return "-"
-        summary = f"{state.todo_completed}/{state.todo_total}"
-        if state.todo_current:
-            summary = f"{summary} · {truncate_text(state.todo_current, 24)}"
-        return summary
 
     @staticmethod
     def _model_text(state: ModelProgress) -> Text:
@@ -1407,9 +987,6 @@ class ModelRunRecorder:
         self.token_input: int | None = None
         self.token_output: int | None = None
         self.token_total: int | None = None
-        self.todo_completed = 0
-        self.todo_total = 0
-        self.todo_current: str | None = None
         self.review_sections: list[str] = []
         self.agent_ended = False
         self.auto_retry_active = False
@@ -1445,7 +1022,7 @@ class ModelRunRecorder:
         self._touch()
         self.tool_calls += 1
         self.printer.note_tool_start(
-            self.run_id, event.tool_name, event.intent, self.tool_calls, event.args
+            self.run_id, event.tool_name, event.intent, self.tool_calls
         )
 
     def record_tool_execution_update(self, _event: ToolExecutionUpdateEvent) -> None:
@@ -1542,35 +1119,6 @@ class ModelRunRecorder:
             self.text_chars += len(delta)
             self.printer.note_text(self.run_id, delta, self.text_chars)
 
-    def record_todo_reminder(self, event: TodoReminderEvent) -> None:
-        self._touch()
-        self.todo_completed = sum(
-            1 for task in event.todos if task.status == "completed"
-        )
-        self.todo_total = len(event.todos)
-        in_progress = next(
-            (task.content for task in event.todos if task.status == "in_progress"), None
-        )
-        pending = next(
-            (task.content for task in event.todos if task.status == "pending"), None
-        )
-        self.todo_current = in_progress or pending
-        self.printer.note_todo_reminder(self.run_id, event.todos)
-
-    def record_todo_auto_clear(self, _event: TodoAutoClearEvent) -> None:
-        self._touch()
-        self.todo_completed = self.todo_total
-        self.todo_current = None
-        self.printer.note_todo_auto_clear(self.run_id)
-
-    def sync_final_todos(self, phases: tuple[TodoPhase, ...]) -> None:
-        order, items = build_todo_state_from_phases(phases)
-        self.todo_completed, self.todo_total, self.todo_current = summarize_todo_state(
-            order, items
-        )
-        flattened = tuple(task for phase in phases for task in phase.tasks)
-        self.printer.note_todo_reminder(self.run_id, flattened)
-
     def build_review_markdown(self) -> str:
         if not self.review_sections:
             return ""
@@ -1579,8 +1127,6 @@ class ModelRunRecorder:
     def is_effectively_complete(self, *, quiet_seconds: float) -> bool:
         return (
             len(self.review_sections) > 0
-            and self.todo_total > 0
-            and self.todo_completed >= self.todo_total
             and not self.auto_retry_active
             and (time.monotonic() - self.last_event_at) >= quiet_seconds
         )
@@ -1651,14 +1197,10 @@ def run_model_sync(
             client.on_agent_end(recorder.record_agent_end)
             client.on_message_update(recorder.record_message_update)
             client.on_message_end(recorder.record_message_end)
-            client.on_todo_reminder(recorder.record_todo_reminder)
-            client.on_todo_auto_clear(recorder.record_todo_auto_clear)
             client.on_ui_request(recorder.record_ui)
             client.install_headless_ui()
 
             printer.mark_ready(run_id)
-            client.set_todos(TODOS)
-            printer.seed_todos(run_id, TODOS)
 
             deadline = time.monotonic() + timeout
 
@@ -1716,8 +1258,6 @@ def run_model_sync(
                 raise RpcError("Agent completed without final review text after retry")
 
             stats = client.get_session_stats()
-            todo_phases = client.get_todos()
-            recorder.sync_final_todos(todo_phases)
             if (
                 recorder.token_total is None or recorder.token_total <= 0
             ) and stats.tokens.total > 0:
@@ -1766,9 +1306,6 @@ def run_model_sync(
         token_input=recorder.token_input,
         token_output=recorder.token_output,
         token_total=recorder.token_total,
-        todo_completed=recorder.todo_completed,
-        todo_total=recorder.todo_total,
-        todo_current=recorder.todo_current,
         error=error_message,
         session_state=session_state,
     )
