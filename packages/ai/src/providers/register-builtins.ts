@@ -132,8 +132,6 @@ interface BedrockProviderModule {
 // Module-level lazy promise caches
 // ---------------------------------------------------------------------------
 
-const importNodeOnlyProvider = (specifier: string): Promise<unknown> => import(specifier);
-
 let anthropicProviderModulePromise: Promise<LazyProviderModule<"anthropic-messages">> | undefined;
 let azureOpenAIResponsesProviderModulePromise: Promise<LazyProviderModule<"azure-openai-responses">> | undefined;
 let googleProviderModulePromise: Promise<LazyProviderModule<"google-generative-ai">> | undefined;
@@ -320,7 +318,7 @@ function loadBedrockProviderModule(): Promise<LazyProviderModule<"bedrock-conver
 	if (bedrockProviderModuleOverride) {
 		return Promise.resolve(bedrockProviderModuleOverride);
 	}
-	bedrockProviderModulePromise ||= importNodeOnlyProvider("./amazon-bedrock").then(module => {
+	bedrockProviderModulePromise ||= import("./amazon-bedrock").then(module => {
 		const provider = module as BedrockProviderModule;
 		return { stream: provider.streamBedrock };
 	});
