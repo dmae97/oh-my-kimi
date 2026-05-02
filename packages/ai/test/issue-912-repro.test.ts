@@ -58,7 +58,7 @@ describe("issue #912 — github-copilot abort propagation", () => {
 		// signal — this is the regression vector. Real Bun fetch normally
 		// propagates abort to the body reader, but we cannot rely on it for
 		// every transport (HTTP/2, intermediaries, native sockets).
-		global.fetch = (async (input: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
+		global.fetch = (async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
 			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 			if (!url.endsWith("/responses")) {
 				throw new Error(`Unexpected fetch to ${url}`);

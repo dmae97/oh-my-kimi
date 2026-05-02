@@ -57,8 +57,10 @@ describe("issue 892: pi-natives public surface", () => {
 		// Mirror the failing consumer's package import (packages/utils/src/procmgr.ts,
 		// packages/coding-agent/src/tools/browser/attach.ts).
 		const mod = await import("@oh-my-pi/pi-natives");
-		expect(mod.ProcessStatus).toBeDefined();
-		expect(mod.ProcessStatus.Running).toBe("running");
-		expect(mod.ProcessStatus.Exited).toBe("exited");
+		const processStatusValues: Record<"Running" | "Exited", string> = {
+			Running: mod.ProcessStatus.Running,
+			Exited: mod.ProcessStatus.Exited,
+		};
+		expect(processStatusValues).toEqual({ Running: "running", Exited: "exited" });
 	});
 });
