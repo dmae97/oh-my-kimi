@@ -26,7 +26,7 @@ export const EVAL_DEFAULT_PREVIEW_LINES = 10;
 
 export const evalSchema = Type.Object({
 	input: Type.String({
-		description: "atom-style eval input containing CELL sections, fenced code, and optional RESET directive",
+		description: "eval input as a sequence of `===== <info> =====` cell headers followed by code",
 	}),
 });
 export type EvalToolParams = Static<typeof evalSchema>;
@@ -250,7 +250,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		let previousRuntimeLanguage: EvalLanguage | undefined;
 		const cells: ResolvedEvalCell[] = [];
 		for (const cell of parsedInput.cells) {
-			const requested = cell.languageOrigin === "fence" ? cell.language : (previousRuntimeLanguage ?? undefined);
+			const requested = cell.languageOrigin === "header" ? cell.language : (previousRuntimeLanguage ?? undefined);
 			const resolved = await resolveBackend(session, requested, cell.code);
 			previousRuntimeLanguage = resolved.backend.id;
 			cells.push({

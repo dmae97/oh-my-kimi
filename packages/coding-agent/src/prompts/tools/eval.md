@@ -1,17 +1,19 @@
 Run code in a persistent kernel, using a series of codeblocks acting as cells.
 
 <instruction>
-Each cell is a markdown fenced code block. The opening fence's info string carries metadata:
+Each cell is introduced by a header line of the form:
 
 ```
-<lang>? <duration>? (title-fragment | key=value)*
+===== <info> =====
 ```
-- **Language**: {{#if py}}`py`/`python` for Python{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`js`/`javascript`/`ts`/`typescript` for JavaScript{{/if}}.{{#ifAll py js}} Omitted → inherit the previous cell's language (the first cell defaults to Python, falling back to JavaScript when Python is unavailable).{{else}} Omitted → inherit the previous cell's language.{{/ifAll}}
-- **Positional duration**: `15s`, `500ms`, `2m`, or a bare integer (seconds). Default 30s.
+
+where each side is at least 5 equal signs. Everything between one header and the next (or end of input) is the cell's code, verbatim. The info is space-separated tokens, all optional, in any order:
+- **Language**: {{#if py}}`py` for Python{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`js` / `ts` for JavaScript{{/if}}.{{#ifAll py js}} Omitted → inherit the previous cell's language (the first cell defaults to Python, falling back to JavaScript when Python is unavailable).{{else}} Omitted → inherit the previous cell's language.{{/ifAll}}
+- **Title shorthand**: `py:"…"`, `js:"…"`, `ts:"…"` set the language and the cell title together.
 - **Attributes**:
-  - `id="…"` — cell id (shown as the title in the transcript).
-  - `t=<duration>` — overrides the positional duration.
-  - `rst=true` — wipe **this cell's own language kernel** before running.{{#ifAll py js}} Other languages are untouched.{{/ifAll}}
+  - `id:"…"` — cell title (when language is unchanged or already set).
+  - `t:<duration>` — per-cell timeout. Duration is digits with optional `ms` / `s` / `m` units (e.g. `t:500ms`, `t:15s`, `t:2m`). Default 30s.
+  - `rst` — wipe **this cell's own language kernel** before running.{{#ifAll py js}} Other languages are untouched.{{/ifAll}}
 
 **Work incrementally:** one logical step per cell (imports, define, test, use). Pass multiple small cells in one call. Define small reusable functions you can debug individually. You **MUST** put workflow explanations in the assistant message or cell title — never inside cell code.
 
@@ -51,30 +53,22 @@ Cells render like a Jupyter notebook. Pass any value to `display(value)`; non-pr
 </output>
 
 <caution>
-- In session mode, use `rst=true` on a cell to wipe its language's kernel before running.{{#ifAll py js}} Reset is per-language: a python cell's `rst=true` does not touch the JavaScript kernel and vice versa.{{/ifAll}}
+- In session mode, use `rst` on a cell to wipe its language's kernel before running.{{#ifAll py js}} Reset is per-language: a python cell's `rst` does not touch the JavaScript kernel and vice versa.{{/ifAll}}
 {{#if js}}- **js**: the VM exposes a selective `process` subset, Web APIs, `Buffer`, `fs/promises`.
 {{/if}}</caution>
 
 <example>
-{{#if py}}```py id="imports" t="10s"
+{{#if py}}===== py:"imports" t:10s =====
 import json
 from pathlib import Path
-```
 
-```py id="load config"
+===== py:"load config" =====
 data = json.loads(read('package.json'))
 display(data)
-```
 {{/if}}{{#ifAll py js}}
-
-{{/ifAll}}{{#if js}}```js id="js summary" rst=true
+{{/ifAll}}{{#if js}}===== js:"js summary" rst =====
 const data = JSON.parse(await read('package.json'));
 display(data);
 return data.name;
-```
-
-```
-return 'still JavaScript';
-```
 {{/if}}
 </example>

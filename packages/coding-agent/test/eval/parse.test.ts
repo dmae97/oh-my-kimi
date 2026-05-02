@@ -2,10 +2,9 @@ import { describe, expect, it } from "bun:test";
 import { parseEvalInput } from "../../src/eval/parse";
 
 describe("parseEvalInput", () => {
-	it("parses a single fenced cell with positional title and timeout", () => {
-		const result = parseEvalInput(`\`\`\`py setup 15s
+	it("parses a single header cell with title shorthand and t timeout", () => {
+		const result = parseEvalInput(`===== py:"setup" t:15s =====
 print("hi")
-\`\`\`
 `);
 
 		expect(result.cells).toEqual([
@@ -14,21 +13,18 @@ print("hi")
 				title: "setup",
 				code: 'print("hi")',
 				language: "python",
-				languageOrigin: "fence",
+				languageOrigin: "header",
 				timeoutMs: 15_000,
 				reset: false,
 			},
 		]);
 	});
 
-	it("treats rst=true as a per-language kernel wipe for that cell", () => {
-		const result = parseEvalInput(`\`\`\`py rst=true id="bootstrap"
+	it("treats bare rst as a per-language kernel wipe for that cell", () => {
+		const result = parseEvalInput(`===== py rst id:"bootstrap" =====
 import json
-\`\`\`
-
-\`\`\`js rst=true
+===== js rst =====
 const x = 1;
-\`\`\`
 `);
 
 		expect(result.cells.map(cell => [cell.language, cell.reset, cell.title])).toEqual([
@@ -37,42 +33,35 @@ const x = 1;
 		]);
 	});
 
-	it("inherits language and runs without reset for empty fence info", () => {
-		const result = parseEvalInput(`\`\`\`js
+	it("inherits language across consecutive cells when omitted", () => {
+		const result = parseEvalInput(`===== js =====
 const a = 1;
-\`\`\`
-
-\`\`\`
+===== =====
 const b = a + 1;
-\`\`\`
 `);
 
 		expect(result.cells.map(cell => [cell.language, cell.languageOrigin, cell.code, cell.reset])).toEqual([
-			["js", "fence", "const a = 1;", false],
-			["js", "fence", "const b = a + 1;", false],
+			["js", "header", "const a = 1;", false],
+			["js", "header", "const b = a + 1;", false],
 		]);
 	});
 
-	it("supports tilde fences and case-insensitive language tokens including ipython aliases", () => {
-		const result = parseEvalInput(`~~~TypeScript
+	it("accepts asymmetric bar runs and case-insensitive language tokens", () => {
+		const result = parseEvalInput(`===== TypeScript ======
 const a = 1;
-~~~
-
-\`\`\`IPython
+====== IPython =====
 print("ipy")
-\`\`\`
 `);
 
 		expect(result.cells.map(cell => [cell.language, cell.languageOrigin])).toEqual([
-			["js", "fence"],
-			["python", "fence"],
+			["js", "header"],
+			["python", "header"],
 		]);
 	});
 
 	it("uses canonical id and t attributes, with explicit attrs winning over positional", () => {
-		const result = parseEvalInput(`\`\`\`py 5s some words t=2m id="explicit win"
+		const result = parseEvalInput(`===== py 5s some words t:2m id:"explicit win" =====
 print(1)
-\`\`\`
 `);
 
 		expect(result.cells[0]).toMatchObject({
@@ -83,39 +72,28 @@ print(1)
 	});
 
 	it("accepts fallback aliases for id, t, and rst keys", () => {
-		const cases = [
-			{ key: "title", expectTitle: "alpha" },
-			{ key: "name", expectTitle: "alpha" },
-			{ key: "cell", expectTitle: "alpha" },
-			{ key: "file", expectTitle: "alpha" },
-			{ key: "label", expectTitle: "alpha" },
-		];
-		for (const { key, expectTitle } of cases) {
-			const result = parseEvalInput(`\`\`\`py ${key}="alpha"\nprint(1)\n\`\`\`\n`);
-			expect(result.cells[0].title).toBe(expectTitle);
+		const idAliases = ["title", "name", "cell", "file", "label"];
+		for (const key of idAliases) {
+			const result = parseEvalInput(`===== py ${key}:"alpha" =====\nprint(1)\n`);
+			expect(result.cells[0].title).toBe("alpha");
 		}
 
 		const timeoutAliases = ["timeout", "duration", "time"];
 		for (const key of timeoutAliases) {
-			const result = parseEvalInput(`\`\`\`py ${key}=2m\nprint(1)\n\`\`\`\n`);
+			const result = parseEvalInput(`===== py ${key}:2m =====\nprint(1)\n`);
 			expect(result.cells[0].timeoutMs).toBe(120_000);
 		}
 
-		const resetAliases = ["reset"];
-		for (const key of resetAliases) {
-			const result = parseEvalInput(`\`\`\`py ${key}=true\nprint(1)\n\`\`\`\n`);
-			expect(result.cells[0].reset).toBe(true);
-		}
+		const result = parseEvalInput(`===== py reset:true =====\nprint(1)\n`);
+		expect(result.cells[0].reset).toBe(true);
 	});
 
 	it("first occurrence wins when canonical and alias collide", () => {
-		const canonicalFirst = parseEvalInput(`\`\`\`py id="canon" title="alias"
+		const canonicalFirst = parseEvalInput(`===== py id:"canon" title:"alias" =====
 print(1)
-\`\`\`
 `);
-		const aliasFirst = parseEvalInput(`\`\`\`py title="alias" id="canon"
+		const aliasFirst = parseEvalInput(`===== py title:"alias" id:"canon" =====
 print(1)
-\`\`\`
 `);
 
 		expect(canonicalFirst.cells[0].title).toBe("canon");
@@ -123,26 +101,20 @@ print(1)
 	});
 
 	it("parses millisecond, second, and minute durations", () => {
-		const result = parseEvalInput(`\`\`\`py 500ms
+		const result = parseEvalInput(`===== py t:500ms =====
 a = 1
-\`\`\`
-
-\`\`\`py 5
+===== py t:5 =====
 a = 2
-\`\`\`
-
-\`\`\`py 2m
+===== py t:2m =====
 a = 3
-\`\`\`
 `);
 
 		expect(result.cells.map(cell => cell.timeoutMs)).toEqual([500, 5_000, 120_000]);
 	});
 
-	it("treats unrecognized fence info as title and inherits the language", () => {
-		const result = parseEvalInput(`\`\`\`ruby
+	it("treats unrecognized header tokens as a title and inherits the language", () => {
+		const result = parseEvalInput(`===== ruby =====
 puts "no"
-\`\`\`
 `);
 
 		expect(result.cells[0]).toMatchObject({
@@ -154,21 +126,18 @@ puts "no"
 	});
 
 	it("joins multiple positional title fragments with spaces", () => {
-		const result = parseEvalInput(`\`\`\`py compute totals
+		const result = parseEvalInput(`===== py compute totals =====
 print(1)
-\`\`\`
 `);
 
 		expect(result.cells[0].title).toBe("compute totals");
 	});
 
-	it("accepts back-to-back fenced cells without blank separators", () => {
-		const result = parseEvalInput(`\`\`\`py id=a
+	it("accepts back-to-back header cells without blank separators", () => {
+		const result = parseEvalInput(`===== py id:"a" =====
 print("a")
-\`\`\`
-\`\`\`py id=b
+===== py id:"b" =====
 print("b")
-\`\`\`
 `);
 
 		expect(result.cells.map(cell => [cell.title, cell.code])).toEqual([
@@ -177,7 +146,7 @@ print("b")
 		]);
 	});
 
-	it("wraps bare code with no fences in a single implicit cell", () => {
+	it("wraps bare code with no headers in a single implicit cell", () => {
 		const result = parseEvalInput(`print("hello")
 print("world")
 `);
@@ -195,37 +164,37 @@ print("world")
 		]);
 	});
 
-	it("surfaces raw inter-fence content as its own implicit cell that inherits language", () => {
-		const result = parseEvalInput(`\`\`\`js
+	it("strips blank lines between cells from the preceding cell's code", () => {
+		const result = parseEvalInput(`===== js =====
 const x = 1;
-\`\`\`
 
-inherited tail
+===== =====
+const y = 2;
 `);
 
 		expect(result.cells.map(cell => [cell.language, cell.languageOrigin, cell.code])).toEqual([
-			["js", "fence", "const x = 1;"],
-			["js", "fence", "inherited tail"],
+			["js", "header", "const x = 1;"],
+			["js", "header", "const y = 2;"],
 		]);
 	});
 
-	it("treats unclosed fences leniently and closes them at end of input", () => {
-		const result = parseEvalInput(`\`\`\`py
-print("still typing")`);
+	it("accepts an empty header introducing a default cell with no info", () => {
+		const result = parseEvalInput(`=====
+print("still typing")
+`);
 
 		expect(result.cells).toHaveLength(1);
 		expect(result.cells[0]).toMatchObject({
 			code: 'print("still typing")',
 			language: "python",
-			languageOrigin: "fence",
+			languageOrigin: "default",
 			reset: false,
 		});
 	});
 
 	it("ignores unknown attribute keys without erroring", () => {
-		const result = parseEvalInput(`\`\`\`py mystery=123 id=ok
+		const result = parseEvalInput(`===== py mystery:123 id:"ok" =====
 print(1)
-\`\`\`
 `);
 
 		expect(result.cells[0]).toMatchObject({ title: "ok", language: "python" });
@@ -233,19 +202,28 @@ print(1)
 
 	it("rejects an invalid rst value", () => {
 		expect(() =>
-			parseEvalInput(`\`\`\`py rst=maybe
+			parseEvalInput(`===== py rst:maybe =====
 print(1)
-\`\`\`
 `),
 		).toThrow("invalid rst value");
 	});
 
 	it("rejects an invalid t value", () => {
 		expect(() =>
-			parseEvalInput(`\`\`\`py t=forever
+			parseEvalInput(`===== py t:forever =====
 print(1)
-\`\`\`
 `),
 		).toThrow("invalid duration");
+	});
+
+	it("does not treat lines that start with equals but have no closing bar as a header", () => {
+		const result = parseEvalInput(`===== py =====
+x = 1
+===== not a header
+y = 2
+`);
+
+		expect(result.cells).toHaveLength(1);
+		expect(result.cells[0].code).toBe("x = 1\n===== not a header\ny = 2");
 	});
 });
