@@ -10,13 +10,13 @@ import type { Skill } from "../extensibility/skills";
 import type { HindsightSessionState } from "../hindsight/state";
 import type { InternalUrlRouter } from "../internal-urls";
 import { LspTool } from "../lsp";
-import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 import type { PlanModeState } from "../plan-mode/state";
 import type { AgentRegistry } from "../registry/agent-registry";
 import type { CustomMessage } from "../session/messages";
 import type { ToolChoiceQueue } from "../session/tool-choice-queue";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
+import type { DiscoverableTool, DiscoverableToolSearchIndex } from "../tool-discovery/tool-index";
 import type { EventBus } from "../utils/event-bus";
 import { WebSearchTool } from "../web/search";
 import { AskTool } from "./ask";
@@ -105,6 +105,12 @@ export type ContextFileEntry = {
 };
 
 export type { DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
+export type {
+	DiscoverableTool,
+	DiscoverableToolSearchIndex,
+	DiscoverableToolSearchResult,
+	DiscoverableToolSource,
+} from "../tool-discovery/tool-index";
 
 /** Session context for tool factories */
 export interface ToolSession {
@@ -184,14 +190,28 @@ export interface ToolSession {
 	setTodoPhases?: (phases: TodoPhase[]) => void;
 	/** Whether MCP tool discovery is active for this session. */
 	isMCPDiscoveryEnabled?: () => boolean;
-	/** Get hidden-but-discoverable MCP tools for search_tool_bm25 prompts and fallbacks. */
-	getDiscoverableMCPTools?: () => DiscoverableMCPTool[];
+	/** Get hidden-but-discoverable MCP tools for search_tool_bm25 prompts and fallbacks.
+	 * @deprecated Use getDiscoverableTools with source filter instead. Returns DiscoverableTool[] for forward compatibility. */
+	getDiscoverableMCPTools?: () => DiscoverableTool[];
 	/** Get the cached discoverable MCP search index for search_tool_bm25 execution. */
-	getDiscoverableMCPSearchIndex?: () => DiscoverableMCPSearchIndex;
+	getDiscoverableMCPSearchIndex?: () => DiscoverableToolSearchIndex;
 	/** Get MCP tools activated by prior search_tool_bm25 calls. */
 	getSelectedMCPToolNames?: () => string[];
 	/** Merge MCP tool selections into the active session tool set. */
 	activateDiscoveredMCPTools?: (toolNames: string[]) => Promise<string[]>;
+	// ── Generic tool discovery (unified — covers built-in + MCP + extension) ──
+	/** Whether any form of tool discovery is active (tools.discoveryMode !== "off" or mcp.discoveryMode). */
+	isToolDiscoveryEnabled?: () => boolean;
+	/** Get all hidden-but-discoverable tools for search_tool_bm25 prompts. */
+	getDiscoverableTools?: (filter?: {
+		source?: import("../tool-discovery/tool-index").DiscoverableToolSource;
+	}) => DiscoverableTool[];
+	/** Get the cached generic discoverable search index. */
+	getDiscoverableToolSearchIndex?: () => DiscoverableToolSearchIndex;
+	/** Get tool names activated by prior search_tool_bm25 calls (all sources). */
+	getSelectedDiscoveredToolNames?: () => string[];
+	/** Merge tool selections into the active session tool set. */
+	activateDiscoveredTools?: (toolNames: string[]) => Promise<string[]>;
 	/** The tool-choice queue used to force forthcoming tool invocations and carry invocation handlers. */
 	getToolChoiceQueue?(): ToolChoiceQueue;
 	/** Build a model-provider-specific ToolChoice that targets the named tool, or undefined if unsupported. */
@@ -209,25 +229,64 @@ export interface ToolSession {
 	queueDeferredMessage?(message: CustomMessage): void;
 }
 
-type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
+export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
 
+export type BuiltinToolLoadMode = "essential" | "discoverable";
+
+/** Per-tool discovery metadata for built-ins. Kept separate from BUILTIN_TOOLS so the public
+ *  factory map remains directly callable (`BUILTIN_TOOLS.read(session)`). */
+export interface BuiltinToolMetadata {
+	/** "essential" tools are always loaded regardless of discovery mode.
+	 *  "discoverable" tools are hidden behind search_tool_bm25 when tools.discoveryMode === "all". */
+	loadMode: BuiltinToolLoadMode;
+	/** Short one-line summary for the BM25 corpus (optional; falls back to tool description). */
+	summary?: string;
+}
+
+/** @deprecated Internal shape used by older callers. Prefer BUILTIN_TOOLS (factory) +
+ *  BUILTIN_TOOL_METADATA (loadMode/summary). */
+export interface BuiltinEntry extends BuiltinToolMetadata {
+	factory: ToolFactory;
+}
+
+/** Default essential tool names when tools.essentialOverride is empty. */
+export const DEFAULT_ESSENTIAL_TOOL_NAMES: readonly string[] = ["read", "bash", "edit"] as const;
+
+/**
+ * Resolve the active essential built-in tool names from settings.
+ * Returns `tools.essentialOverride` if non-empty (filtered to known built-ins),
+ * otherwise `DEFAULT_ESSENTIAL_TOOL_NAMES`.
+ */
+export function computeEssentialBuiltinNames(settings: Settings): string[] {
+	const override = settings.get("tools.essentialOverride") ?? [];
+	const cleaned = override.map(name => name.trim()).filter(Boolean);
+	if (cleaned.length > 0) {
+		return cleaned.filter(name => name in BUILTIN_TOOL_METADATA);
+	}
+	return [...DEFAULT_ESSENTIAL_TOOL_NAMES];
+}
+
+/**
+ * Public callable factory map. External callers may invoke `BUILTIN_TOOLS.read(session)` or
+ * `BUILTIN_TOOLS[name](session)` to construct a tool directly.
+ */
 export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
+	read: s => new ReadTool(s),
+	bash: s => new BashTool(s),
+	edit: s => new EditTool(s),
 	ast_grep: s => new AstGrepTool(s),
 	ast_edit: s => new AstEditTool(s),
 	render_mermaid: s => new RenderMermaidTool(s),
 	ask: AskTool.createIf,
-	bash: s => new BashTool(s),
 	debug: DebugTool.createIf,
 	eval: s => new EvalTool(s),
 	calc: s => new CalculatorTool(s),
 	ssh: loadSshTool,
-	edit: s => new EditTool(s),
 	github: GithubTool.createIf,
 	find: s => new FindTool(s),
 	search: s => new SearchTool(s),
 	lsp: LspTool.createIf,
 	notebook: s => new NotebookTool(s),
-	read: s => new ReadTool(s),
 	inspect_image: s => new InspectImageTool(s),
 	browser: s => new BrowserTool(s),
 	checkpoint: CheckpointTool.createIf,
@@ -245,6 +304,52 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	reflect: HindsightReflectTool.createIf,
 };
 
+export const BUILTIN_TOOL_METADATA: Record<string, BuiltinToolMetadata> = {
+	read: { loadMode: "essential" },
+	bash: { loadMode: "essential" },
+	edit: { loadMode: "essential" },
+	ast_grep: { loadMode: "discoverable", summary: "Search code with AST patterns (structural grep)" },
+	ast_edit: { loadMode: "discoverable", summary: "Perform AST-aware code edits (structural refactoring)" },
+	render_mermaid: { loadMode: "discoverable", summary: "Render a Mermaid diagram to an image" },
+	ask: { loadMode: "discoverable", summary: "Ask the user a clarifying question" },
+	debug: { loadMode: "discoverable", summary: "Debug a running process with DAP (debugger adapter protocol)" },
+	eval: { loadMode: "discoverable", summary: "Execute Python or JavaScript code in an in-process eval backend" },
+	calc: { loadMode: "discoverable", summary: "Evaluate a mathematical expression" },
+	ssh: { loadMode: "discoverable", summary: "Execute a command on a remote host over SSH" },
+	github: { loadMode: "discoverable", summary: "Interact with GitHub issues, pull requests, and repositories" },
+	find: { loadMode: "discoverable", summary: "Find files and directories matching a glob pattern" },
+	search: { loadMode: "discoverable", summary: "Search file contents using ripgrep (fast text search)" },
+	lsp: {
+		loadMode: "discoverable",
+		summary: "Query LSP (language server) for diagnostics, hover info, and references",
+	},
+	notebook: { loadMode: "discoverable", summary: "Read and execute Jupyter notebooks" },
+	inspect_image: { loadMode: "discoverable", summary: "Describe or analyze an image file" },
+	browser: {
+		loadMode: "discoverable",
+		summary: "Control a headless browser to navigate and interact with web pages",
+	},
+	checkpoint: {
+		loadMode: "discoverable",
+		summary: "Create a git-based checkpoint to save and restore session state",
+	},
+	rewind: { loadMode: "discoverable", summary: "Rewind to a previously created checkpoint" },
+	task: { loadMode: "discoverable", summary: "Spawn a subagent to complete a parallel task" },
+	job: { loadMode: "discoverable", summary: "Manage long-running background jobs (async bash/python)" },
+	recipe: { loadMode: "discoverable", summary: "Execute a saved bash recipe (multi-step shell command preset)" },
+	irc: { loadMode: "discoverable", summary: "Send and receive messages between agents over IRC-like channels" },
+	todo_write: {
+		loadMode: "discoverable",
+		summary: "Write a structured todo list to track progress within a session",
+	},
+	web_search: { loadMode: "discoverable", summary: "Search the web for up-to-date information" },
+	search_tool_bm25: { loadMode: "essential" },
+	write: { loadMode: "discoverable", summary: "Write content to a file (creates or overwrites)" },
+	retain: { loadMode: "discoverable", summary: "Store important facts in hindsight memory" },
+	recall: { loadMode: "discoverable", summary: "Search hindsight memory for relevant prior context" },
+	reflect: { loadMode: "discoverable", summary: "Reflect on recent work and write hindsight memory" },
+};
+
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	yield: s => new YieldTool(s),
 	report_finding: () => reportFindingTool,
@@ -258,6 +363,25 @@ export type ToolName = keyof typeof BUILTIN_TOOLS;
 export interface EvalBackendsAllowance {
 	python: boolean;
 	js: boolean;
+}
+
+/**
+ * Return all built-in tools whose metadata `loadMode` is "discoverable".
+ * Used by search_tool_bm25 to build the BM25 corpus when tools.discoveryMode === "all".
+ * Pass an optional exclusion set to filter out names that are already active.
+ */
+export function getBuiltinDiscoverableEntries(
+	excludeNames?: ReadonlySet<string>,
+): Array<{ name: string; entry: BuiltinEntry }> {
+	return Object.entries(BUILTIN_TOOL_METADATA)
+		.filter(([name, meta]) => meta.loadMode === "discoverable" && !excludeNames?.has(name))
+		.map(([name, meta]) => {
+			const factory = BUILTIN_TOOLS[name];
+			if (!factory) {
+				throw new Error(`BUILTIN_TOOL_METADATA["${name}"] has no matching factory in BUILTIN_TOOLS`);
+			}
+			return { name, entry: { factory, ...meta } satisfies BuiltinEntry };
+		});
 }
 
 /**
@@ -360,6 +484,17 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			}
 		}
 	}
+	// Resolve effective tool discovery mode.
+	// tools.discoveryMode takes precedence; mcp.discoveryMode is a back-compat alias for "mcp-only".
+	const toolsDiscoveryMode = session.settings.get("tools.discoveryMode");
+	const effectiveDiscoveryMode: "off" | "mcp-only" | "all" =
+		toolsDiscoveryMode !== "off"
+			? (toolsDiscoveryMode as "off" | "mcp-only" | "all")
+			: session.settings.get("mcp.discoveryMode")
+				? "mcp-only"
+				: "off";
+	const discoveryActive = effectiveDiscoveryMode !== "off";
+
 	const allTools: Record<string, ToolFactory> = { ...BUILTIN_TOOLS, ...HIDDEN_TOOLS };
 	const isToolAllowed = (name: string) => {
 		if (name === "lsp") return enableLsp && session.settings.get("lsp.enabled");
@@ -376,7 +511,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "notebook") return session.settings.get("notebook.enabled");
 		if (name === "inspect_image") return session.settings.get("inspect_image.enabled");
 		if (name === "web_search") return session.settings.get("web_search.enabled");
-		if (name === "search_tool_bm25") return session.settings.get("mcp.discoveryMode");
+		// search_tool_bm25 is allowed when either legacy mcp.discoveryMode or new tools.discoveryMode is active.
+		if (name === "search_tool_bm25") return discoveryActive;
 		if (name === "calc") return session.settings.get("calc.enabled");
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
@@ -401,14 +537,16 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		filteredRequestedTools !== undefined
 			? filteredRequestedTools.filter(name => name !== "resolve").map(name => [name, allTools[name]] as const)
 			: [
-					...Object.entries(BUILTIN_TOOLS).filter(([name]) => isToolAllowed(name)),
+					...Object.entries(BUILTIN_TOOLS)
+						.filter(([name]) => isToolAllowed(name))
+						.map(([name, factory]) => [name, factory] as const),
 					...(includeYield ? ([["yield", HIDDEN_TOOLS.yield]] as const) : []),
 					...([["exit_plan_mode", HIDDEN_TOOLS.exit_plan_mode]] as const),
 				];
 
 	const baseResults = await Promise.all(
 		baseEntries.map(async ([name, factory]) => {
-			const tool = await logger.time(`createTools:${name}`, factory, session);
+			const tool = await logger.time(`createTools:${name}`, factory as ToolFactory, session);
 			return tool ? wrapToolWithMetaNotice(tool) : null;
 		}),
 	);

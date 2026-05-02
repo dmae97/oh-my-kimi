@@ -1955,6 +1955,30 @@ export const SETTINGS_SCHEMA = {
 		default: 60_000,
 	},
 
+	// Tool Discovery
+	"tools.discoveryMode": {
+		type: "enum",
+		values: ["off", "mcp-only", "all"] as const,
+		default: "off",
+		ui: {
+			tab: "tools",
+			label: "Tool Discovery",
+			description:
+				"Hide tools behind a search tool to save tokens. 'mcp-only' hides MCP tools; 'all' hides all non-essential built-ins too.",
+		},
+	},
+
+	"tools.essentialOverride": {
+		type: "array",
+		default: [] as string[],
+		ui: {
+			tab: "tools",
+			label: "Essential Tools Override",
+			description:
+				"Override the always-loaded built-in tools (default: read, bash, edit). Leave empty to use defaults.",
+		},
+	},
+
 	// MCP
 	"mcp.enableProjectConfig": {
 		type: "boolean",
