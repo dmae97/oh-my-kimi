@@ -5,11 +5,18 @@
 
 - Reworked autoresearch storage and protocol. State now lives in `~/.omp/autoresearch/<project>.db` (SQLite) and per-run logs in `~/.omp/autoresearch/<project>/runs/<id>/benchmark.log`. The repo-side artifacts `autoresearch.md`, `autoresearch.sh`, `autoresearch.checks.sh`, `autoresearch.program.md`, `autoresearch.ideas.md`, `autoresearch.jsonl`, `.autoresearch/`, and `autoresearch.config.json` are no longer read or written; they are deleted by `/autoresearch clear`. Any existing data is not migrated.
 - Removed the autoresearch edit guard. `write`/`edit`/`ast_edit` are no longer blocked based on scope. Scope/off-limits are now post-hoc accountability fields on `log_experiment`.
-- Replaced rigid `init_experiment` contract validation with a simpler schema: `name`, `goal`, `primary_metric`, `metric_unit`, `direction`, `preferred_command`, `secondary_metrics`, `scope_paths`, `off_limits`, `constraints`, `max_iterations`, `new_segment`. Removed `from_autoresearch_md`, `abandon_unlogged_runs`, and `force` flags.
-- Replaced `run_experiment` benchmark-command and `autoresearch.sh` requirements with a free-form `command` parameter. Removed `force` and `checks_timeout_seconds`. Pre-existing `autoresearch.checks.sh` is no longer auto-executed; run validation through the regular `bash` tool and report via `log_experiment status`.
+- Replaced rigid `init_experiment` contract validation with a simpler schema: `name`, `goal`, `primary_metric`, `metric_unit`, `direction`, `secondary_metrics`, `scope_paths`, `off_limits`, `constraints`, `max_iterations`, `new_segment`. Removed `from_autoresearch_md`, `abandon_unlogged_runs`, `force`, and `preferred_command` flags — the harness `./autoresearch.sh` is the canonical workload, edit it and bump segment when you need to change it.
+- `run_experiment` no longer accepts a `command` parameter. The tool always runs `bash autoresearch.sh`. To change the workload, edit the harness and call `init_experiment new_segment: true`. Removed `force`, `checks_timeout_seconds`, and the legacy `autoresearch.checks.sh` auto-execution; run validation through the regular `bash` tool.
 - Replaced `log_experiment` ASI requirements and `force`/`skip_restore` flags with `justification` (post-hoc explanation for scope deviations) and `flag_runs` (mark earlier runs suspect to exclude them from baseline math). ASI is now opaque metadata.
 - `/autoresearch clear` now resets the worktree to the session's recorded baseline commit (when on an `autoresearch/*` branch or with `--reset-tree`), closes the active session, and deletes any leftover legacy autoresearch repo artifacts.
-- Dirty worktree no longer blocks `/autoresearch`. The command surfaces a warning and continues on the current branch; auto-commit and full-tree reset are disabled until the worktree is clean.
+- `/autoresearch` now refuses on a dirty worktree with an explicit error instead of silently continuing on the current branch. Commit or stash before invoking — the session needs a clean baseline on a dedicated `autoresearch/*` branch.
+- Reworked hashline anchor hash format for brace lines: closing-brace lines (trimmed content starts with `}`, e.g. `}`, `});`, `},`) now hash to `>[letter]` (e.g. `>t`), and opening-brace lines (trimmed content ends with `{`, e.g. `function () {`, `if (x) {`) now hash to `[letter]<` (e.g. `a<`). Lines that satisfy both (e.g. `} else {`) take the opening form. Hash markers use `<`/`>` instead of `{`/`}` so the hash never visually collides with literal `{` or `}` characters in line content (e.g. a read line `28>i|}` is unambiguously Lid `28>i` plus content `}`). The previous structural-ordinal hash for brace-only lines (`1st`, `2nd`, `3rd`, `100th`) is removed. Every previously captured `LINE+ID` reference for a brace line is invalidated and must be re-read.
+- Split `/autoresearch` into a two-phase protocol. Phase 1 (no session) prompts the agent to build the benchmark harness as `./autoresearch.sh` (must exit 0 and print `METRIC <name>=<value>`). Calling `init_experiment` ends Phase 1: it requires `./autoresearch.sh` to exist, auto-commits any pending harness changes on an `autoresearch/*` branch, then records that commit as the baseline. Phase 2 is the existing iteration loop.
+- Autoresearch sessions are now scoped to the git branch they were created on. Switching off the `autoresearch/*` branch hides the dashboard widget, detaches the experiment tools, and skips the autoresearch system prompt; switching back resumes seamlessly. `/autoresearch` on a fresh branch starts a fresh session instead of resurrecting a session bound to a different branch.
+- `log_experiment discard` no longer rewinds prior `keep` commits. On an `autoresearch/*` branch it now resets the worktree to `HEAD` (and `git clean`s untracked) instead of `git reset --hard $baseline_commit`. Discard reverts only the current iteration's uncommitted edits; previously kept improvements stay on the branch. `/autoresearch clear` continues to reset to the recorded baseline commit when explicitly requested.
+- Autoresearch SQLite storage is now created lazily on first `init_experiment`. Running `omp` in a project that never invokes `/autoresearch` no longer creates a per-folder DB.
+
+- Changed `search`, `find`, `ast_grep`, and `ast_edit` to accept `paths: string[]` instead of comma- or whitespace-delimited path strings.
 
 ### Added
 
@@ -19,12 +26,20 @@
 
 - Updated `log_experiment` summary output to include the count of scope deviations detected for a run
 - Used the active session context in autoresearch resume instructions instead of referencing deleted repo-side files
+- Surfaced brace-balance hints in the hashline anchor itself so models can keep `{` / `}` balanced when replacing brace lines without re-reading the surrounding context. Trades ~2 extra BPE tokens per brace anchor (~3-6% overhead on hashline-formatted reads) for the structural signal; non-brace anchors stay at 1 token.
+- Removed `PI_STRICT_EDIT_MODE`; model-specific edit mode fallbacks are no longer disableable by environment flag.
 
 ### Fixed
 
+- Atom edit auto-rebase warning now dedupes by `(originalLid, rebasedLine)` pair. Previously, `@Lid` followed by N `+TEXT` lines emitted N identical "Auto-rebased anchor" warnings (one per cloned cursor anchor); now emits exactly one per distinct rebase.
+- Atom/hashline diff preview no longer renders deleted lines with a 2-space hash placeholder (`-20  |old`) that visually mimicked a Lid. Removed lines now use `--` as the placeholder (`-20--|old`), making them unambiguously non-Lid.
+- Atom/hashline diff preview no longer folds size-mismatched `-`/`+` runs into a confusing mix of `*` (paired modification) lines plus surplus `-`/`+` lines. The `*` collapse now applies only to clean 1:1 line replacements (same number of dels and adds); range replaces with N→M (N≠M) render as plain unified-diff `-` then `+` runs.
+- Atom edits now warn when `@Lid` lands on a brace-opening line and the inserted content is at sibling indent (≤ anchor indent) — a foot-gun where the agent meant `^<nextSibling>` but the inserts ended up as the first body element of the `{...}` block.
+- Atom auto-fix warning for adjacent-duplicate cleanup is now formatted as `AUTO-FIX applied — verify the result. Removed ...` instead of the easier-to-miss `Auto-fixed: removed ...`, and explains that `{}/()/[]` balance was the trigger.
 - Fixed multi-target `search`, `ast-grep`, and `ast-edit` path handling by running each resolved target separately under root-level path resolution
 - Fixed pagination and match/replacement summaries for multi-target AST and text searches so totals and affected file counts include all targets
 - Fixed returned file paths for multi-target `search` and `ast-grep` results by normalizing them to the original search scope
+- Fixed `log_experiment keep` silently dropping the iteration's diff on an autoresearch branch. The previous logic filtered out every path that was already dirty when `run_experiment` ran — but in the iteration cycle the agent's edits always land before `run_experiment`, so the entire iteration was filtered away and nothing was committed. On an autoresearch branch, `keep` now treats every currently-dirty path as the iteration's change and commits it.
 
 ## [14.5.14] - 2026-05-01
 ### Changed

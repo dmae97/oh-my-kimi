@@ -11,7 +11,7 @@ describe("JSON repair", () => {
 	});
 
 	it("escapes raw control characters inside string literals", () => {
-		const json = "{\"text\":\"a\nb\u0001c\"}";
+		const json = '{"text":"a\nb\u0001c"}';
 
 		expect(repairJson(json)).toBe(String.raw`{"text":"a\nb\u0001c"}`);
 		expect(parseJsonWithRepair<{ text: string }>(json)).toEqual({ text: "a\nb\u0001c" });
@@ -24,11 +24,10 @@ describe("JSON repair", () => {
 		expect(parseJsonWithRepair<{ value: string }>(json)).toEqual({ value: String.raw`a\qb` });
 	});
 	it("preserves trailing spaces inside incomplete streaming strings", () => {
-		expect(parseStreamingJson<{ text: string }>(String.raw`{"text":"hello `)).toEqual({ text: "hello " });
+		expect(parseStreamingJson<{ text: string }>(`{"text":"hello `)).toEqual({ text: "hello " });
 	});
 
 	it("returns an empty object for whitespace-only streaming JSON", () => {
 		expect(parseStreamingJson<Record<string, unknown>>(" \t\n\r")).toEqual({});
 	});
-
 });
