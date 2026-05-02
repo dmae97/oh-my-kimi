@@ -540,13 +540,26 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 			calculateCost(model, output.usage);
 			output.stopReason = mapOpenAIResponsesStopReason(response?.status);
+			if (response?.status === "failed" || response?.status === "cancelled") {
+				const error = response?.error ?? (response as any)?.status_details?.error;
+				const details = response?.incomplete_details;
+				const statusDetailsReason = (response as any)?.status_details?.reason;
+				const message = error
+					? `${error.code || "unknown"}: ${error.message || "no message"}`
+					: details?.reason
+						? `incomplete: ${details.reason}`
+						: typeof statusDetailsReason === "string" && statusDetailsReason.length > 0
+							? `status_details: ${statusDetailsReason}`
+							: "Unknown error (no error details in response)";
+				throw new Error(message);
+			}
 			if (output.content.some(block => block.type === "toolCall") && output.stopReason === "stop") {
 				output.stopReason = "toolUse";
 			}
 		} else if (event.type === "error") {
 			throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
 		} else if (event.type === "response.failed") {
-			const error = event.response?.error;
+			const error = event.response?.error ?? (event.response as any)?.status_details?.error;
 			const details = event.response?.incomplete_details;
 			const message = error
 				? `${error.code || "unknown"}: ${error.message || "no message"}`
