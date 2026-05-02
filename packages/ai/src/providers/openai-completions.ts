@@ -81,6 +81,43 @@ function normalizeMistralToolId(id: string, isMistral: boolean): string {
 	return normalized;
 }
 
+/**
+ * Normalize OpenAI-compatible streaming `delta.content` into plain text.
+ *
+ * Most providers stream `delta.content` as a string, but some (notably Mistral
+ * Medium 3.5 / `mistral-medium-2604`) return an array of typed content parts
+ * — e.g. `[{ type: "text", text: "Hello" }]`. Without normalization those
+ * parts get string-coerced via `text += array`, producing the literal
+ * `[object Object]` sequences observed in issue #911.
+ *
+ * Returns the joined text. Non-text parts and unknown shapes are skipped so
+ * we never emit JS object sigils as visible output.
+ */
+function normalizeStreamingContentText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		let out = "";
+		for (const part of content) {
+			if (typeof part === "string") {
+				out += part;
+			} else if (part && typeof part === "object") {
+				const obj = part as { type?: unknown; text?: unknown };
+				if ((obj.type === undefined || obj.type === "text") && typeof obj.text === "string") {
+					out += obj.text;
+				}
+			}
+		}
+		return out;
+	}
+	if (content && typeof content === "object") {
+		const obj = content as { type?: unknown; text?: unknown };
+		if ((obj.type === undefined || obj.type === "text") && typeof obj.text === "string") {
+			return obj.text;
+		}
+	}
+	return "";
+}
+
 function serializeToolArguments(value: unknown): string {
 	if (value && typeof value === "object" && !Array.isArray(value)) {
 		try {
@@ -567,20 +604,17 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				}
 
 				if (choice.delta) {
-					if (
-						choice.delta.content !== null &&
-						choice.delta.content !== undefined &&
-						choice.delta.content.length > 0
-					) {
+					const normalizedDeltaText = normalizeStreamingContentText(choice.delta.content);
+					if (normalizedDeltaText.length > 0) {
 						if (!firstTokenTime) firstTokenTime = Date.now();
 						if (parseMiniMaxThinkTags) {
-							taggedTextBuffer += choice.delta.content;
+							taggedTextBuffer += normalizedDeltaText;
 							flushTaggedTextBuffer();
 						} else if (stripDeepseekChatTemplateTokens) {
-							deepseekStripBuffer += choice.delta.content;
+							deepseekStripBuffer += normalizedDeltaText;
 							flushDeepseekStripBuffer(false);
 						} else {
-							appendTextDelta(choice.delta.content);
+							appendTextDelta(normalizedDeltaText);
 						}
 					}
 
