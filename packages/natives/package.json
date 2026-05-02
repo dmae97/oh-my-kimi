@@ -2,6 +2,7 @@
 	"name": "@oh-my-pi/pi-natives",
 	"version": "14.6.0",
 	"description": "Native Rust bindings for grep, clipboard, image processing, syntax highlighting, PTY, and shell operations via N-API",
+	"type": "module",
 	"homepage": "https://github.com/can1357/oh-my-pi",
 	"author": "Can Boluk",
 	"license": "MIT",

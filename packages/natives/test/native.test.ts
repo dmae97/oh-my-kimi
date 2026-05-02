@@ -18,7 +18,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
-} from "../native/index";
+} from "../native/index.js";
 
 let testDir: string;
 

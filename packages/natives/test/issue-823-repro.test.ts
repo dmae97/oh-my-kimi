@@ -3,19 +3,20 @@
  *
  * On WSL (and any host where the user moves the standalone binary away from the
  * build-time native artifacts), the compiled `omp` binary fails to load
- * `pi_natives.linux-x64-*.node`. Root cause: the loader's `isCompiledBinary`
- * detection in `packages/natives/native/index.js` relies on
+ * `pi_natives.linux-x64-*.node`. Root cause: the old loader's
+ * `isCompiledBinary` detection relied on signals that are unreliable in a Bun
+ * standalone binary:
  *   - `process.env.PI_COMPILED` — never set, because `bun build --compile
  *     --define PI_COMPILED=true` substitutes the bare identifier, not
  *     property accesses on `process.env`.
- *   - `__filename.includes("$bunfs"|"~BUN"|"%7EBUN")` — Bun's compiled
- *     binaries keep the original build-host absolute path in `__filename`
- *     (only `import.meta.url` is rewritten to the bunfs URL).
+ *   - CommonJS `__filename` bunfs markers — Bun's compiled binaries kept the
+ *     original build-host absolute path there, while `import.meta.url` is the
+ *     value rewritten to the bunfs URL.
  *
- * Both signals are false at runtime, so the loader skips the embedded-addon
- * extraction path and only tries `nativeDir` (the dev machine's checkout) and
+ * When both signals were false, the loader skipped the embedded-addon
+ * extraction path and only tried `nativeDir` (the dev machine's checkout) and
  * `execDir`. On WSL with `~/.local/bin/omp` and no sibling `.node` file, this
- * fails with the error reported in the issue.
+ * failed with the error reported in the issue.
  *
  * The fix is to make the loader's compiled-binary detection authoritative on
  * the embedded-addon module presence (the embedded-addon stub exports `null`
@@ -26,14 +27,14 @@
 
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { detectCompiledBinary, getAddonFilenames, resolveLoaderCandidates } from "../native/loader-state";
+import { detectCompiledBinary, getAddonFilenames, resolveLoaderCandidates } from "../native/loader-state.js";
 
 describe("issue 823: standalone-binary native loader path resolution", () => {
 	it("detects compiled-binary mode from embedded-addon presence when env and url markers are absent", () => {
 		// Mirrors what a Bun standalone binary actually sees on linux-x64 / WSL:
 		// - `process.env.PI_COMPILED` is undefined (the build flag does not substitute property accesses).
-		// - `import.meta.url` does point at `$bunfs` for the entrypoint, but a CJS native loader
-		//   that lives in a required module historically read `__filename`, which is NOT rewritten.
+		// - `import.meta.url` points at `$bunfs` for bundled modules; the old CJS
+		//   loader used `__filename`, which is NOT rewritten.
 		// The embedded-addon module is the authoritative compiled-mode signal: it is `null` in
 		// development (the stub) and a populated object in the standalone build (after
 		// `embed:native` runs), and is bundled into the binary by `bun build --compile`.
@@ -110,7 +111,7 @@ describe("issue 823: standalone-binary native loader path resolution", () => {
 		expect(candidates).toContain(userDataModern);
 
 		// Order matters: embedded-extracted destinations must be probed before the
-		// (potentially-missing) build-host nativeDir path that survives in __dirname.
+		// (potentially-missing) build-host nativeDir path from the bundled module location.
 		expect(candidates.indexOf(versionedModern)).toBeLessThan(candidates.indexOf(buildHostModern));
 	});
 

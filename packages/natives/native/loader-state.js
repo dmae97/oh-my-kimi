@@ -1,24 +1,22 @@
-"use strict";
+import * as path from "node:path";
 
 /**
  * Pure helpers used by `./index.js` to decide whether the loader is running
  * inside a Bun-compiled standalone binary, and to compute the ordered list of
  * candidate paths the loader probes for `pi_natives.<platform>-<arch>*.node`.
  *
- * Kept as a separate CommonJS module so the logic can be unit-tested without
+ * Kept as a separate ESM module so the logic can be unit-tested without
  * triggering the side-effectful `loadNative()` call in `index.js`.
  *
  * Background (issue #823): `bun build --compile --define PI_COMPILED=true`
  * substitutes the bare identifier `PI_COMPILED`, NOT `process.env.PI_COMPILED`,
- * so a runtime read of the env var returns `undefined`. Bun also retains the
- * original build-host absolute path in `__filename` for required CJS modules —
- * only `import.meta.url` is rewritten to the bunfs URL. Both legacy signals are
- * therefore false in the shipped binary, which is why the embedded-addon
+ * so a runtime read of the env var returns `undefined`. Older CommonJS loader
+ * code also saw the original build-host absolute path in `__filename`; ESM
+ * `import.meta.url` is rewritten to the bunfs URL. The embedded-addon
  * presence (true iff the build pipeline ran `embed:native`, false in the
  * post-build `--reset` stub) is the authoritative compiled-mode signal.
  */
 
-const path = require("node:path");
 
 /**
  * @param {{
@@ -28,7 +26,7 @@ const path = require("node:path");
  * }} input
  * @returns {boolean}
  */
-function detectCompiledBinary({ embeddedAddon, env, importMetaUrl }) {
+export function detectCompiledBinary({ embeddedAddon, env, importMetaUrl }) {
 	if (embeddedAddon) return true;
 	if (env && env.PI_COMPILED) return true;
 	if (typeof importMetaUrl === "string") {
@@ -43,7 +41,7 @@ function detectCompiledBinary({ embeddedAddon, env, importMetaUrl }) {
  * @param {{ tag: string; arch: string; variant: "modern" | "baseline" | null | undefined }} input
  * @returns {string[]}
  */
-function getAddonFilenames({ tag, arch, variant }) {
+export function getAddonFilenames({ tag, arch, variant }) {
 	const defaultFilename = `pi_natives.${tag}.node`;
 	if (arch !== "x64" || !variant) return [defaultFilename];
 	const baselineFilename = `pi_natives.${tag}-baseline.node`;
@@ -65,7 +63,7 @@ function getAddonFilenames({ tag, arch, variant }) {
  * }} input
  * @returns {string[]}
  */
-function resolveLoaderCandidates({ addonFilenames, isCompiledBinary, nativeDir, execDir, versionedDir, userDataDir }) {
+export function resolveLoaderCandidates({ addonFilenames, isCompiledBinary, nativeDir, execDir, versionedDir, userDataDir }) {
 	const baseReleaseCandidates = addonFilenames.flatMap(filename => [
 		path.join(nativeDir, filename),
 		path.join(execDir, filename),
@@ -80,4 +78,3 @@ function resolveLoaderCandidates({ addonFilenames, isCompiledBinary, nativeDir, 
 	return [...new Set(releaseCandidates)];
 }
 
-module.exports = { detectCompiledBinary, getAddonFilenames, resolveLoaderCandidates };

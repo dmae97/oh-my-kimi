@@ -135,22 +135,13 @@ function resolveBuildOutputDirPrefix(profileLabel: string): string {
 }
 
 async function installGeneratedBindings(outputDir: string): Promise<void> {
-	for (const filename of ["index.js", "index.d.ts"]) {
-		const sourcePath = path.join(outputDir, filename);
-		const destPath = path.join(nativeDir, filename);
-		try {
-			await fs.copyFile(sourcePath, destPath);
-		} catch (err) {
-			const errno = err as NodeJS.ErrnoException;
-			if (errno.code === "ENOENT") {
-				const destExists = await Bun.file(destPath).exists();
-				if (destExists) {
-					continue;
-				}
-			}
-			const message = err instanceof Error ? err.message : String(err);
-			throw new Error(`Failed to install generated ${filename}: ${message}`);
-		}
+	const sourcePath = path.join(outputDir, "index.d.ts");
+	const destPath = path.join(nativeDir, "index.d.ts");
+	try {
+		await fs.copyFile(sourcePath, destPath);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		throw new Error(`Failed to install generated index.d.ts: ${message}`);
 	}
 }
 
