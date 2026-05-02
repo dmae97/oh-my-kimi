@@ -1,20 +1,43 @@
 import { describe, expect, it } from "bun:test";
 import { Settings } from "../../src/config/settings";
-import { BUILTIN_TOOLS, computeEssentialBuiltinNames, DEFAULT_ESSENTIAL_TOOL_NAMES } from "../../src/tools/index";
+import {
+	BUILTIN_TOOL_METADATA,
+	BUILTIN_TOOLS,
+	computeEssentialBuiltinNames,
+	DEFAULT_ESSENTIAL_TOOL_NAMES,
+} from "../../src/tools/index";
 
-// Test the loadMode annotations on BUILTIN_TOOLS
+describe("BUILTIN_TOOLS public factory map", () => {
+	it("exposes callable tool factories (back-compat for external SDK callers)", () => {
+		// External callers may invoke BUILTIN_TOOLS.read(session) directly. Verify the value
+		// is a function, not a metadata object wrapping a factory.
+		expect(typeof BUILTIN_TOOLS.read).toBe("function");
+		expect(typeof BUILTIN_TOOLS.bash).toBe("function");
+		expect(typeof BUILTIN_TOOLS.edit).toBe("function");
+	});
 
-describe("BUILTIN_TOOLS loadMode annotations", () => {
+	it("has a callable factory for every metadata entry", () => {
+		for (const name of Object.keys(BUILTIN_TOOL_METADATA)) {
+			expect(typeof BUILTIN_TOOLS[name]).toBe("function");
+		}
+	});
+
+	it("has metadata for every factory entry", () => {
+		for (const name of Object.keys(BUILTIN_TOOLS)) {
+			expect(BUILTIN_TOOL_METADATA[name]).toBeDefined();
+		}
+	});
+});
+
+describe("BUILTIN_TOOL_METADATA loadMode annotations", () => {
 	it("marks read, bash, edit as essential", () => {
-		expect(BUILTIN_TOOLS["read"]?.loadMode).toBe("essential");
-		expect(BUILTIN_TOOLS["bash"]?.loadMode).toBe("essential");
-		expect(BUILTIN_TOOLS["edit"]?.loadMode).toBe("essential");
+		expect(BUILTIN_TOOL_METADATA.read?.loadMode).toBe("essential");
+		expect(BUILTIN_TOOL_METADATA.bash?.loadMode).toBe("essential");
+		expect(BUILTIN_TOOL_METADATA.edit?.loadMode).toBe("essential");
 	});
 
 	it("marks search_tool_bm25 as essential (discovery tool itself)", () => {
-		// search_tool_bm25 is the discovery tool — it is always loaded when discovery is on,
-		// controlled via the isToolAllowed gate, not the loadMode.
-		expect(BUILTIN_TOOLS["search_tool_bm25"]?.loadMode).toBe("essential");
+		expect(BUILTIN_TOOL_METADATA.search_tool_bm25?.loadMode).toBe("essential");
 	});
 
 	it("marks non-essential tools as discoverable", () => {
@@ -45,24 +68,18 @@ describe("BUILTIN_TOOLS loadMode annotations", () => {
 			"write",
 		];
 		for (const name of discoverableExpected) {
-			expect(BUILTIN_TOOLS[name]?.loadMode).toBe("discoverable");
+			expect(BUILTIN_TOOL_METADATA[name]?.loadMode).toBe("discoverable");
 		}
 	});
 
 	it("provides a summary for every discoverable tool", () => {
 		const missing: string[] = [];
-		for (const [name, entry] of Object.entries(BUILTIN_TOOLS)) {
-			if (entry.loadMode === "discoverable" && !entry.summary) {
+		for (const [name, meta] of Object.entries(BUILTIN_TOOL_METADATA)) {
+			if (meta.loadMode === "discoverable" && !meta.summary) {
 				missing.push(name);
 			}
 		}
 		expect(missing).toEqual([]);
-	});
-
-	it("has a factory function for every entry", () => {
-		for (const [_name, entry] of Object.entries(BUILTIN_TOOLS)) {
-			expect(typeof entry.factory).toBe("function");
-		}
 	});
 });
 

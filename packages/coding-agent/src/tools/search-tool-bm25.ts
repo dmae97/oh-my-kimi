@@ -87,8 +87,17 @@ function getDiscoverableToolsForDescription(session: ToolSession): DiscoverableT
 		if (session.getDiscoverableTools) {
 			return session.getDiscoverableTools();
 		}
-		// Legacy MCP path — getDiscoverableMCPTools now returns DiscoverableTool[] directly
-		return session.getDiscoverableMCPTools?.() ?? [];
+		// Legacy MCP path — adapt DiscoverableMCPTool (with `description`) → DiscoverableTool.
+		const legacy = session.getDiscoverableMCPTools?.() ?? [];
+		return legacy.map(t => ({
+			name: t.name,
+			label: t.label,
+			summary: t.description,
+			source: "mcp" as const,
+			serverName: t.serverName,
+			mcpToolName: t.mcpToolName,
+			schemaKeys: t.schemaKeys,
+		}));
 	} catch {
 		return [];
 	}
@@ -101,9 +110,10 @@ function getDiscoverableToolSearchIndexForExecution(session: ToolSession): Disco
 			const cached = session.getDiscoverableToolSearchIndex();
 			if (cached) return cached;
 		}
-		// Legacy MCP: use cached MCP index
+		// Legacy MCP: use cached MCP index. Its documents expose `tool.description` as well as
+		// `tool.summary`, so it is structurally compatible with DiscoverableToolSearchIndex.
 		const mcpCached = session.getDiscoverableMCPSearchIndex?.();
-		if (mcpCached) return mcpCached;
+		if (mcpCached) return mcpCached as unknown as DiscoverableToolSearchIndex;
 	} catch {}
 	return buildDiscoverableToolSearchIndex(getDiscoverableToolsForDescription(session));
 }

@@ -816,4 +816,133 @@ describe("AgentSession MCP discovery", () => {
 		expect(session.getActiveToolNames()).toEqual(["read"]);
 		expect(session.systemPrompt).toEqual(["tools:read"]);
 	});
+
+	// ── Findings #2: legacy MCP discovery shapes ───────────────────────────────
+	it("getDiscoverableMCPTools returns the legacy MCP shape with `description` populated", () => {
+		const readTool = createBasicTool("read", "Read");
+		const docsSearchTool = createMcpTool("mcp__docs_search", "docs", "search", "Search internal docs", ["query"]);
+		const toolRegistry = new Map([
+			[readTool.name, readTool],
+			[docsSearchTool.name, docsSearchTool],
+		]);
+		const agent = new Agent({
+			initialState: { model: createModel(), systemPrompt: "initial", tools: [readTool], messages: [] },
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "mcp.discoveryMode": true }),
+			modelRegistry: {} as never,
+			toolRegistry,
+			mcpDiscoveryEnabled: true,
+			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+		});
+		sessions.push(session);
+
+		const discoverable = session.getDiscoverableMCPTools();
+		expect(discoverable).toHaveLength(1);
+		const entry = discoverable[0]!;
+		expect(entry.name).toBe("mcp__docs_search");
+		expect(entry.description).toBe("Search internal docs");
+		// Legacy shape must NOT carry `summary` — back-compat callers expect `description`.
+		expect((entry as { summary?: string }).summary).toBeUndefined();
+	});
+
+	it("getDiscoverableMCPSearchIndex documents expose tool.description (legacy shape)", () => {
+		const readTool = createBasicTool("read", "Read");
+		const docsSearchTool = createMcpTool("mcp__docs_search", "docs", "search", "Search internal docs", ["query"]);
+		const toolRegistry = new Map([
+			[readTool.name, readTool],
+			[docsSearchTool.name, docsSearchTool],
+		]);
+		const agent = new Agent({
+			initialState: { model: createModel(), systemPrompt: "initial", tools: [readTool], messages: [] },
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "mcp.discoveryMode": true }),
+			modelRegistry: {} as never,
+			toolRegistry,
+			mcpDiscoveryEnabled: true,
+			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+		});
+		sessions.push(session);
+
+		const index = session.getDiscoverableMCPSearchIndex();
+		expect(index.documents).toHaveLength(1);
+		const doc = index.documents[0]!;
+		expect(doc.tool.name).toBe("mcp__docs_search");
+		expect(doc.tool.description).toBe("Search internal docs");
+	});
+
+	// ── Findings #3: discovery index is invalidated on active-tool changes ─────
+	it("setActiveToolsByName invalidates the generic discoverable tool search index", async () => {
+		const readTool = createBasicTool("read", "Read");
+		const docsSearchTool = createMcpTool("mcp__docs_search", "docs", "search", "Search internal docs", ["query"]);
+		const toolRegistry = new Map([
+			[readTool.name, readTool],
+			[docsSearchTool.name, docsSearchTool],
+		]);
+		const agent = new Agent({
+			initialState: { model: createModel(), systemPrompt: "initial", tools: [readTool], messages: [] },
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "mcp.discoveryMode": true }),
+			modelRegistry: {} as never,
+			toolRegistry,
+			mcpDiscoveryEnabled: true,
+			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+		});
+		sessions.push(session);
+
+		// Index built before activation contains the discoverable MCP tool.
+		const beforeIndex = session.getDiscoverableToolSearchIndex();
+		const beforeNames = beforeIndex.documents.map(d => d.tool.name);
+		expect(beforeNames).toContain("mcp__docs_search");
+
+		await session.setActiveToolsByName(["read", "mcp__docs_search"]);
+
+		// After activation the same lookup must return a fresh index that no longer lists the
+		// now-active tool. If invalidation regressed, this would still return `beforeIndex`.
+		const afterIndex = session.getDiscoverableToolSearchIndex();
+		expect(afterIndex).not.toBe(beforeIndex);
+		expect(afterIndex.documents.map(d => d.tool.name)).not.toContain("mcp__docs_search");
+	});
+
+	// ── Findings #4: built-in discovery is restricted to declared discoverable ─
+	it("getDiscoverableTools({source:'builtin'}) excludes hidden and non-declared registry tools", () => {
+		const readTool = createBasicTool("read", "Read");
+		const findTool = createBasicTool("find", "Find");
+		const resolveTool = createBasicTool("resolve", "Resolve"); // hidden — must be excluded
+		const customTool = createBasicTool("custom_inactive", "Custom"); // not in metadata — must be excluded
+		const toolRegistry = new Map([
+			[readTool.name, readTool],
+			[findTool.name, findTool],
+			[resolveTool.name, resolveTool],
+			[customTool.name, customTool],
+		]);
+		const agent = new Agent({
+			initialState: { model: createModel(), systemPrompt: "initial", tools: [readTool], messages: [] },
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "tools.discoveryMode": "all" }),
+			modelRegistry: {} as never,
+			toolRegistry,
+			mcpDiscoveryEnabled: false,
+			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+		});
+		sessions.push(session);
+
+		const builtin = session.getDiscoverableTools({ source: "builtin" });
+		const names = builtin.map(t => t.name);
+		expect(names).toContain("find"); // declared discoverable AND present in registry
+		expect(names).not.toContain("read"); // already active
+		expect(names).not.toContain("resolve"); // hidden — not in BUILTIN_TOOL_METADATA
+		expect(names).not.toContain("custom_inactive"); // unknown — not in BUILTIN_TOOL_METADATA
+	});
 });

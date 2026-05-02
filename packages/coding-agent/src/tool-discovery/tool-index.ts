@@ -58,14 +58,32 @@ export type DiscoverableMCPToolServerSummary = DiscoverableToolServerSummary;
 /** @deprecated Use DiscoverableToolSummary */
 export type DiscoverableMCPToolSummary = DiscoverableToolSummary;
 
-/** @deprecated Use DiscoverableToolSearchDocument */
-export type DiscoverableMCPSearchDocument = DiscoverableToolSearchDocument;
+/** Tool object stored on legacy MCP index documents. Carries both legacy `description` and the
+ *  generic `summary`/`source` so the legacy index is structurally assignable to
+ *  DiscoverableToolSearchIndex (search functions read termFrequencies, not the tool fields). */
+export type DiscoverableMCPSearchTool = DiscoverableTool & { description: string };
 
-/** @deprecated Use DiscoverableToolSearchIndex */
-export type DiscoverableMCPSearchIndex = DiscoverableToolSearchIndex;
+/** @deprecated Use DiscoverableToolSearchDocument */
+export interface DiscoverableMCPSearchDocument {
+	tool: DiscoverableMCPSearchTool;
+	termFrequencies: Map<string, number>;
+	length: number;
+}
+
+/** @deprecated Use DiscoverableToolSearchIndex.
+ *  Documents on this index expose `tool.description` (legacy MCP shape) while still being
+ *  searchable via `searchDiscoverableTools`. */
+export interface DiscoverableMCPSearchIndex {
+	documents: DiscoverableMCPSearchDocument[];
+	averageLength: number;
+	documentFrequencies: Map<string, number>;
+}
 
 /** @deprecated Use DiscoverableToolSearchResult */
-export type DiscoverableMCPSearchResult = DiscoverableToolSearchResult;
+export interface DiscoverableMCPSearchResult {
+	tool: DiscoverableMCPSearchTool;
+	score: number;
+}
 
 // ─── BM25 Constants ───────────────────────────────────────────────────────────
 
@@ -319,28 +337,33 @@ export function summarizeDiscoverableMCPTools(tools: DiscoverableMCPTool[]): Dis
 	};
 }
 
-/** @deprecated Use buildDiscoverableToolSearchIndex */
-export function buildDiscoverableMCPSearchIndex(tools: Iterable<DiscoverableMCPTool>): DiscoverableToolSearchIndex {
-	// Adapt DiscoverableMCPTool (has .description) to DiscoverableTool (has .summary)
-	const adapted = Array.from(tools).map(t => ({
+/** @deprecated Use buildDiscoverableToolSearchIndex.
+ *  Builds an index whose documents preserve the legacy `description` field on each tool while
+ *  also carrying the generic `summary` (set from `description`) so the index remains usable
+ *  with `searchDiscoverableTools`. */
+export function buildDiscoverableMCPSearchIndex(tools: Iterable<DiscoverableMCPTool>): DiscoverableMCPSearchIndex {
+	const adapted: DiscoverableMCPSearchTool[] = Array.from(tools).map(t => ({
 		name: t.name,
 		label: t.label,
+		description: t.description,
 		summary: t.description,
 		source: "mcp" as DiscoverableToolSource,
 		serverName: t.serverName,
 		mcpToolName: t.mcpToolName,
 		schemaKeys: t.schemaKeys,
 	}));
-	return buildDiscoverableToolSearchIndex(adapted);
+	const generic = buildDiscoverableToolSearchIndex(adapted);
+	// Documents reference `adapted` tools (with `description`), so the cast is sound.
+	return generic as unknown as DiscoverableMCPSearchIndex;
 }
 
 /** @deprecated Use searchDiscoverableTools */
 export function searchDiscoverableMCPTools(
-	index: DiscoverableToolSearchIndex,
+	index: DiscoverableMCPSearchIndex | DiscoverableToolSearchIndex,
 	query: string,
 	limit: number,
 ): DiscoverableMCPSearchResult[] {
-	return searchDiscoverableTools(index, query, limit);
+	return searchDiscoverableTools(index as DiscoverableToolSearchIndex, query, limit) as DiscoverableMCPSearchResult[];
 }
 
 /** @deprecated Use formatDiscoverableToolServerSummary */

@@ -137,6 +137,7 @@ import {
 } from "../tool-discovery/tool-index";
 import { assertEditableFile } from "../tools/auto-generated-guard";
 import type { CheckpointState } from "../tools/checkpoint";
+import { BUILTIN_TOOL_METADATA } from "../tools/index";
 import { outputMeta } from "../tools/output-meta";
 import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
@@ -2110,8 +2111,15 @@ export class AgentSession {
 
 	#setDiscoverableMCPTools(discoverableMCPTools: Map<string, DiscoverableMCPTool>): void {
 		this.#discoverableMCPTools = discoverableMCPTools;
+		this.#invalidateDiscoveryCaches();
+	}
+
+	/** Single point for invalidating cached discovery indices. Call after any change that can
+	 *  affect which tools should be discoverable: registry mutations (refreshMCPTools,
+	 *  refreshRpcHostTools) or active-tool mutations (#applyActiveToolsByName). */
+	#invalidateDiscoveryCaches(): void {
 		this.#discoverableMCPSearchIndex = null;
-		this.#discoverableToolSearchIndex = null; // invalidate generic index too
+		this.#discoverableToolSearchIndex = null;
 	}
 
 	#filterSelectableMCPToolNames(toolNames: Iterable<string>): string[] {
@@ -2214,20 +2222,22 @@ export class AgentSession {
 		return this.#mcpDiscoveryEnabled;
 	}
 
-	getDiscoverableMCPTools(): DiscoverableTool[] {
-		// Return as DiscoverableTool[] for forward compatibility with the unified ToolSession interface.
+	/** @deprecated Use {@link getDiscoverableTools} with `{ source: "mcp" }` instead.
+	 *  Preserves the legacy `description`-bearing MCP shape for back-compat callers. */
+	getDiscoverableMCPTools(): DiscoverableMCPTool[] {
 		return Array.from(this.#discoverableMCPTools.values()).map(t => ({
 			name: t.name,
 			label: t.label,
-			summary: t.description,
-			source: "mcp" as const,
+			description: t.description,
 			serverName: t.serverName,
 			mcpToolName: t.mcpToolName,
 			schemaKeys: t.schemaKeys,
 		}));
 	}
 
-	getDiscoverableMCPSearchIndex(): DiscoverableToolSearchIndex {
+	/** @deprecated Use {@link getDiscoverableToolSearchIndex} instead.
+	 *  Returns the legacy MCP search index whose documents expose `tool.description`. */
+	getDiscoverableMCPSearchIndex(): DiscoverableMCPSearchIndex {
 		if (!this.#discoverableMCPSearchIndex) {
 			this.#discoverableMCPSearchIndex = buildDiscoverableMCPSearchIndex(this.#discoverableMCPTools.values());
 		}
@@ -2294,17 +2304,21 @@ export class AgentSession {
 		return filter?.source ? allTools.filter(t => t.source === filter.source) : allTools;
 	}
 
-	/** Collect built-in tools from the registry that are marked discoverable (not currently active). */
+	/** Collect built-in tools the model can discover via search_tool_bm25. Restricted to entries
+	 *  whose `BUILTIN_TOOL_METADATA[name].loadMode === "discoverable"`. This keeps hidden/internal
+	 *  tools (resolve, yield, exit_plan_mode, report_finding, report_tool_issue) out of the index
+	 *  and avoids mislabeling extension/custom default-inactive tools as built-ins. */
 	#collectDiscoverableBuiltinTools(): DiscoverableTool[] {
-		// Import here to avoid circular dep - BUILTIN_TOOLS is defined in tools/index.ts which imports from us.
-		// We instead use collectDiscoverableTools on the tool registry directly.
 		const activeNames = new Set(this.getActiveToolNames());
 		const result: DiscoverableTool[] = [];
-		for (const [name, tool] of this.#toolRegistry) {
-			// Skip MCP tools (handled separately), hidden tools, and already-active tools
-			if (isMCPToolName(name) || activeNames.has(name)) continue;
-			const t = collectDiscoverableTools([tool], { source: "builtin" });
-			result.push(...t);
+		for (const [name, meta] of Object.entries(BUILTIN_TOOL_METADATA)) {
+			if (meta.loadMode !== "discoverable") continue;
+			if (activeNames.has(name)) continue;
+			const tool = this.#toolRegistry.get(name);
+			if (!tool) continue;
+			const summaryMap = meta.summary ? new Map([[name, meta.summary]]) : undefined;
+			const collected = collectDiscoverableTools([tool], { source: "builtin", summaryMap });
+			result.push(...collected);
 		}
 		return result;
 	}
@@ -2316,9 +2330,10 @@ export class AgentSession {
 		return this.#discoverableToolSearchIndex;
 	}
 
-	/** Invalidate the generic search index cache (call after tool set changes). */
+	/** Invalidate the generic search index cache (call after tool set changes).
+	 *  Delegates to {@link #invalidateDiscoveryCaches} so all discovery-related caches stay in sync. */
 	#invalidateDiscoverableToolSearchIndex(): void {
-		this.#discoverableToolSearchIndex = null;
+		this.#invalidateDiscoveryCaches();
 	}
 
 	getSelectedDiscoveredToolNames(): string[] {
@@ -2393,6 +2408,10 @@ export class AgentSession {
 			);
 		}
 		this.agent.setTools(tools);
+
+		// Active tool set changed → discoverable tool list (which excludes already-active tools)
+		// is now stale. Invalidate before any prompt-template hook reads the discovery list.
+		this.#invalidateDiscoveryCaches();
 
 		// Rebuild base system prompt with new tool set, but only when the tool set
 		// actually changed. MCP servers can reconnect at arbitrary times and call
@@ -2627,6 +2646,11 @@ export class AgentSession {
 			this.#toolRegistry.set(finalTool.name, finalTool);
 			this.#rpcHostToolNames.add(finalTool.name);
 		}
+
+		// Registry contents changed — invalidate discovery caches so the next BM25 lookup sees
+		// the new RPC-host tool set. (#applyActiveToolsByName below also invalidates, but doing
+		// it here too keeps the contract local to "registry mutated".)
+		this.#invalidateDiscoveryCaches();
 
 		const activeNonRpcToolNames = previousActiveToolNames.filter(name => !previousRpcHostToolNames.has(name));
 		const preservedRpcToolNames = previousActiveToolNames.filter(

@@ -112,6 +112,7 @@ import { AgentOutputManager } from "./task/output-manager";
 import { parseThinkingLevel, resolveThinkingLevelForModel, toReasoningEffort } from "./thinking";
 import {
 	BashTool,
+	BUILTIN_TOOL_METADATA,
 	BUILTIN_TOOLS,
 	BUILTIN_TOOL_METADATA,
 	computeEssentialBuiltinNames,
@@ -280,6 +281,7 @@ export {
 	// Individual tool classes (for custom usage)
 	BashTool,
 	// Tool classes and factories
+	BUILTIN_TOOL_METADATA,
 	BUILTIN_TOOLS,
 	createTools,
 	EditTool,

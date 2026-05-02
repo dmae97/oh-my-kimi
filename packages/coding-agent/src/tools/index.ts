@@ -191,10 +191,11 @@ export interface ToolSession {
 	/** Whether MCP tool discovery is active for this session. */
 	isMCPDiscoveryEnabled?: () => boolean;
 	/** Get hidden-but-discoverable MCP tools for search_tool_bm25 prompts and fallbacks.
-	 * @deprecated Use getDiscoverableTools with source filter instead. Returns DiscoverableTool[] for forward compatibility. */
-	getDiscoverableMCPTools?: () => DiscoverableTool[];
-	/** Get the cached discoverable MCP search index for search_tool_bm25 execution. */
-	getDiscoverableMCPSearchIndex?: () => DiscoverableToolSearchIndex;
+	 * @deprecated Use getDiscoverableTools with source filter instead. */
+	getDiscoverableMCPTools?: () => import("../mcp/discoverable-tool-metadata").DiscoverableMCPTool[];
+	/** Get the cached discoverable MCP search index for search_tool_bm25 execution.
+	 * @deprecated Use getDiscoverableToolSearchIndex instead. */
+	getDiscoverableMCPSearchIndex?: () => import("../tool-discovery/tool-index").DiscoverableMCPSearchIndex;
 	/** Get MCP tools activated by prior search_tool_bm25 calls. */
 	getSelectedMCPToolNames?: () => string[];
 	/** Merge MCP tool selections into the active session tool set. */
@@ -304,6 +305,11 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	reflect: HindsightReflectTool.createIf,
 };
 
+/**
+ * Per-tool discovery metadata. Keys must align with BUILTIN_TOOLS. Used by initial-tool filtering
+ * (sdk.ts) and discovery-corpus collection (search-tool-bm25). Kept separate so the public
+ * BUILTIN_TOOLS map remains a directly callable factory record.
+ */
 export const BUILTIN_TOOL_METADATA: Record<string, BuiltinToolMetadata> = {
 	read: { loadMode: "essential" },
 	bash: { loadMode: "essential" },
@@ -382,6 +388,13 @@ export function getBuiltinDiscoverableEntries(
 			}
 			return { name, entry: { factory, ...meta } satisfies BuiltinEntry };
 		});
+}
+
+/** Names of all built-ins whose metadata `loadMode` is "discoverable". */
+export function getBuiltinDiscoverableNames(): string[] {
+	return Object.entries(BUILTIN_TOOL_METADATA)
+		.filter(([, meta]) => meta.loadMode === "discoverable")
+		.map(([name]) => name);
 }
 
 /**
