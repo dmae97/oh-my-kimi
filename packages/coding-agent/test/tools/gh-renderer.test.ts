@@ -121,4 +121,74 @@ describe("githubToolRenderer", () => {
 		expect(rendered).not.toContain("alpha");
 		expect(rendered).toContain("more log lines");
 	});
+
+	it("renders issue_view as a status header with collapsed body and expand hint", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+
+		const bodyLines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
+		const result = {
+			content: [
+				{
+					type: "text",
+					text: ["# Issue #903: Bug report", "State: OPEN", "", "## Body", "", ...bodyLines].join("\n"),
+				},
+			],
+		};
+
+		const component = githubToolRenderer.renderResult(result, { expanded: false, isPartial: false }, uiTheme, {
+			op: "issue_view",
+			issue: "903",
+			repo: "owner/repo",
+		});
+		const rendered = sanitizeText(component.render(80).join("\n"));
+
+		expect(rendered).toContain("GitHub Issue");
+		expect(rendered).toContain("#903");
+		expect(rendered).toContain("owner/repo");
+		expect(rendered).toContain("# Issue #903: Bug report");
+		expect(rendered).toContain("more lines");
+		expect(rendered).not.toContain("line 30");
+	});
+
+	it("renders issue_view fully when expanded", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+
+		const bodyLines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
+		const result = {
+			content: [{ type: "text", text: bodyLines.join("\n") }],
+		};
+
+		const component = githubToolRenderer.renderResult(result, { expanded: true, isPartial: false }, uiTheme, {
+			op: "issue_view",
+			issue: "https://github.com/owner/repo/issues/903",
+		});
+		const rendered = sanitizeText(component.render(80).join("\n"));
+
+		expect(rendered).toContain("#903");
+		expect(rendered).toContain("line 1");
+		expect(rendered).toContain("line 30");
+		expect(rendered).not.toContain("more lines");
+	});
+
+	it("truncates each line to the available width to avoid overflow", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+
+		const longLine = "x".repeat(500);
+		const result = { content: [{ type: "text", text: longLine }] };
+
+		const component = githubToolRenderer.renderResult(result, { expanded: false, isPartial: false }, uiTheme, {
+			op: "issue_view",
+			issue: "1",
+		});
+		const lines = component.render(60);
+		for (const line of lines) {
+			expect(sanitizeText(line).length).toBeLessThanOrEqual(60);
+		}
+	});
 });

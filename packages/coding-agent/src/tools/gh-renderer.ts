@@ -12,10 +12,13 @@ import type {
 import { formatShortSha } from "./gh-format";
 import {
 	formatExpandHint,
+	formatMoreItems,
 	formatStatusIcon,
 	PREVIEW_LIMITS,
 	replaceTabs,
 	type ToolUIColor,
+	type ToolUIStatus,
+	TRUNCATE_LENGTHS,
 	truncateToWidth as truncateVisualWidth,
 } from "./render-utils";
 
@@ -23,6 +26,10 @@ type GithubToolRenderArgs = {
 	op?: string;
 	run?: string;
 	branch?: string;
+	repo?: string;
+	issue?: string;
+	pr?: string | string[];
+	query?: string;
 };
 
 const SUCCESS_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
@@ -30,6 +37,87 @@ const FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "actio
 const RUNNING_STATUSES = new Set(["in_progress"]);
 const PENDING_STATUSES = new Set(["queued", "requested", "waiting", "pending"]);
 const FALLBACK_WIDTH = 80;
+
+const OP_TITLES: Record<string, string> = {
+	repo_view: "GitHub Repo",
+	issue_view: "GitHub Issue",
+	pr_view: "GitHub PR",
+	pr_diff: "GitHub PR Diff",
+	pr_checkout: "GitHub PR Checkout",
+	pr_push: "GitHub PR Push",
+	search_issues: "GitHub Search Issues",
+	search_prs: "GitHub Search PRs",
+	run_watch: "GitHub Run Watch",
+};
+
+function formatOpTitle(op: string | undefined): string {
+	if (op && OP_TITLES[op]) return OP_TITLES[op];
+	return "GitHub";
+}
+
+function extractIssueId(value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	const trimmed = value.trim();
+	if (!trimmed) return undefined;
+	if (/^\d+$/.test(trimmed)) return `#${trimmed}`;
+	const match = trimmed.match(/\/(?:issues|pull)\/(\d+)/);
+	if (match) return `#${match[1]}`;
+	return truncateVisualWidth(trimmed, TRUNCATE_LENGTHS.SHORT);
+}
+
+function formatPrIdentifier(pr: string | string[] | undefined): string | undefined {
+	if (pr === undefined) return undefined;
+	if (Array.isArray(pr)) {
+		const parts = pr.map(p => extractIssueId(p)).filter((p): p is string => p !== undefined);
+		if (parts.length === 0) return undefined;
+		if (parts.length > 3) {
+			return `${parts.slice(0, 3).join(", ")}, +${parts.length - 3} more`;
+		}
+		return parts.join(", ");
+	}
+	return extractIssueId(pr);
+}
+
+function buildOpMeta(args: GithubToolRenderArgs): string[] {
+	const meta: string[] = [];
+	const op = args.op;
+	switch (op) {
+		case "issue_view": {
+			const id = extractIssueId(args.issue);
+			if (id) meta.push(id);
+			if (args.repo) meta.push(args.repo);
+			break;
+		}
+		case "pr_view":
+		case "pr_diff":
+		case "pr_checkout":
+		case "pr_push": {
+			const id = formatPrIdentifier(args.pr);
+			if (id) meta.push(id);
+			else if (args.branch) meta.push(args.branch);
+			if (args.repo) meta.push(args.repo);
+			break;
+		}
+		case "search_issues":
+		case "search_prs": {
+			if (args.query) meta.push(truncateVisualWidth(args.query, TRUNCATE_LENGTHS.CONTENT));
+			if (args.repo) meta.push(args.repo);
+			break;
+		}
+		case "repo_view": {
+			if (args.repo) meta.push(args.repo);
+			if (args.branch) meta.push(args.branch);
+			break;
+		}
+		case "run_watch":
+			break;
+		default: {
+			if (args.repo) meta.push(args.repo);
+			break;
+		}
+	}
+	return meta;
+}
 
 function getWatchHeader(watch: GhRunWatchViewDetails): string {
 	if (watch.mode === "run" && watch.run) {
@@ -183,7 +271,7 @@ function renderFailedLogs(
 	return lines;
 }
 
-function buildRenderedLines(
+function buildWatchLines(
 	watch: GhRunWatchViewDetails,
 	theme: Theme,
 	options: RenderResultOptions,
@@ -215,92 +303,129 @@ function buildRenderedLines(
 	return lines;
 }
 
-function renderFallbackText(
-	result: { content: Array<{ type: string; text?: string }>; isError?: boolean },
-	theme: Theme,
-): Component {
-	const text = result.content
+function extractText(content: Array<{ type: string; text?: string }>): string {
+	return content
 		.filter(part => part.type === "text")
 		.map(part => part.text)
 		.filter((value): value is string => typeof value === "string" && value.length > 0)
 		.join("\n");
-	if (text) {
-		return new Text(replaceTabs(text), 0, 0);
-	}
+}
 
+function renderFallbackComponent(
+	result: { content: Array<{ type: string; text?: string }>; isError?: boolean },
+	options: RenderResultOptions,
+	theme: Theme,
+	args: GithubToolRenderArgs,
+): Component {
+	const text = extractText(result.content);
+	const title = formatOpTitle(args.op);
+	const meta = buildOpMeta(args);
+	const isError = result.isError === true;
+	const status: ToolUIStatus = isError ? "error" : text ? "success" : "warning";
 	const header = renderStatusLine(
 		{
-			icon: result.isError ? "error" : "warning",
-			title: "GitHub Run Watch",
-			description: result.isError ? "failed" : "no output",
+			icon: status,
+			title,
+			titleColor: isError ? "error" : "accent",
+			meta,
 		},
 		theme,
 	);
-	return new Text(header, 0, 0);
+
+	if (!text) {
+		const empty = isError ? "request failed" : "no output";
+		return new Text(`${header}\n${theme.fg("dim", empty)}`, 0, 0);
+	}
+
+	const allLines = replaceTabs(text).split("\n");
+
+	return {
+		render(width: number): string[] {
+			const lineWidth = Math.max(24, width || FALLBACK_WIDTH);
+			const expanded = options.expanded;
+			const limit = expanded ? allLines.length : Math.min(allLines.length, PREVIEW_LIMITS.OUTPUT_EXPANDED);
+			const visible = allLines.slice(0, limit);
+			const remaining = allLines.length - visible.length;
+
+			const out: string[] = [header];
+			for (const line of visible) {
+				const colored = isError ? theme.fg("error", line) : theme.fg("toolOutput", line);
+				out.push(truncateVisualWidth(colored, lineWidth));
+			}
+			if (!expanded && remaining > 0) {
+				const hint = formatExpandHint(theme, expanded, true);
+				const more = `${formatMoreItems(remaining, "line")}${hint ? ` ${hint}` : ""}`;
+				out.push(theme.fg("dim", more));
+			}
+			return out.map(line => truncateToWidth(line, lineWidth));
+		},
+		invalidate() {},
+	};
+}
+
+function renderWatchCall(args: GithubToolRenderArgs, options: RenderResultOptions, theme: Theme): Component {
+	const icon =
+		options.spinnerFrame !== undefined
+			? formatStatusIcon("running", theme, options.spinnerFrame)
+			: formatStatusIcon("pending", theme);
+
+	const runId = typeof args.run === "string" && args.run.trim().length > 0 ? args.run.trim() : undefined;
+	const branch = typeof args.branch === "string" && args.branch.trim().length > 0 ? args.branch.trim() : undefined;
+
+	const titleText = theme.fg("accent", "GitHub Run Watch");
+	let metaText: string;
+	if (runId) {
+		metaText = theme.fg("muted", `#${runId}`);
+	} else if (branch) {
+		metaText = theme.fg("text", branch);
+	} else {
+		metaText = theme.fg("muted", "current HEAD");
+	}
+
+	const header = `${icon} ${titleText}  ${metaText}`;
+	const wait = theme.fg("dim", "  waiting for workflow data...");
+	return new Text(`${header}\n${wait}`, 0, 0);
 }
 
 export const githubToolRenderer = {
 	renderCall(args: GithubToolRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
-		const lines: string[] = [];
-
-		// Header with spinner reflecting the dispatched op
-		const icon =
-			options.spinnerFrame !== undefined
-				? formatStatusIcon("running", uiTheme, options.spinnerFrame)
-				: formatStatusIcon("pending", uiTheme);
-
-		// Build a target description that mirrors the result view style
-		const runId = typeof args.run === "string" && args.run.trim().length > 0 ? args.run.trim() : undefined;
-		const branch = typeof args.branch === "string" && args.branch.trim().length > 0 ? args.branch.trim() : undefined;
-
 		const op = typeof args.op === "string" && args.op.trim().length > 0 ? args.op.trim() : undefined;
-		if (op && op !== "run_watch") {
-			const title = uiTheme.fg("accent", `GitHub ${op}`);
-			lines.push(`${icon} ${title}`);
-			return new Text(lines.join("\n"), 0, 0);
+		if (op === "run_watch") {
+			return renderWatchCall({ ...args, op }, options, uiTheme);
 		}
 
-		if (runId) {
-			// "⠋ GitHub Run Watch  run #12345"
-			const title = uiTheme.fg("accent", "GitHub Run Watch");
-			const meta = uiTheme.fg("muted", `#${runId}`);
-			lines.push(`${icon} ${title}  ${meta}`);
-		} else if (branch) {
-			// "⠋ GitHub Run Watch  feature-branch"
-			const title = uiTheme.fg("accent", "GitHub Run Watch");
-			const meta = uiTheme.fg("text", branch);
-			lines.push(`${icon} ${title}  ${meta}`);
-		} else {
-			// "⠋ GitHub Run Watch  current HEAD"
-			const title = uiTheme.fg("accent", "GitHub Run Watch");
-			const meta = uiTheme.fg("muted", "current HEAD");
-			lines.push(`${icon} ${title}  ${meta}`);
-		}
-
-		lines.push(uiTheme.fg("dim", "  waiting for workflow data..."));
-
-		return new Text(lines.join("\n"), 0, 0);
+		const status: ToolUIStatus = options.spinnerFrame !== undefined ? "running" : "pending";
+		const header = renderStatusLine(
+			{
+				icon: status,
+				spinnerFrame: options.spinnerFrame,
+				title: formatOpTitle(op),
+				meta: buildOpMeta({ ...args, op }),
+			},
+			uiTheme,
+		);
+		return new Text(header, 0, 0);
 	},
 
 	renderResult(
 		result: { content: Array<{ type: string; text?: string }>; details?: GhToolDetails; isError?: boolean },
 		options: RenderResultOptions,
 		uiTheme: Theme,
+		args?: GithubToolRenderArgs,
 	): Component {
 		const watch = result.details?.watch;
-		if (!watch) {
-			return renderFallbackText(result, uiTheme);
+		if (watch) {
+			return {
+				render(width: number): string[] {
+					const lineWidth = Math.max(24, width || FALLBACK_WIDTH);
+					return buildWatchLines(watch, uiTheme, options, lineWidth).map(line => truncateToWidth(line, lineWidth));
+				},
+				invalidate() {},
+			};
 		}
 
-		return {
-			render(width: number): string[] {
-				const lineWidth = Math.max(24, width || FALLBACK_WIDTH);
-				return buildRenderedLines(watch, uiTheme, options, lineWidth).map(line => truncateToWidth(line, lineWidth));
-			},
-			invalidate() {},
-		};
+		return renderFallbackComponent(result, options, uiTheme, args ?? {});
 	},
 
 	mergeCallAndResult: true,
-	inline: true,
 };

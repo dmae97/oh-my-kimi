@@ -1,6 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Updated GitHub call headers to display operation-specific titles and contextual metadata such as repository, branch, issue/PR IDs, and search query snippets for supported operations
+- Changed non-run-watch result rendering to honor terminal width, truncate long lines, and show a `+N more lines` expansion hint when output exceeds the preview limit
+
+### Fixed
+
+- Fixed GitHub tool output fallbacks that previously always showed a GitHub Run Watch heading so they now show the actual operation and clear `no output`/`request failed` status messaging
 
 ## [14.6.0] - 2026-05-02
 ### Breaking Changes
