@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.6.1] - 2026-05-02
 ### Changed
 
 - Changed the native package loader from CommonJS analyzer-visible assignments to a template-rendered ESM entry point with explicit named exports

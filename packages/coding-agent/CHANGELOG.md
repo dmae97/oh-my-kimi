@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.6.1] - 2026-05-02
 ### Changed
 
 - Updated GitHub call headers to display operation-specific titles and contextual metadata such as repository, branch, issue/PR IDs, and search query snippets for supported operations
