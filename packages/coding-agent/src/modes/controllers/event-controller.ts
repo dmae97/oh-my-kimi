@@ -110,8 +110,11 @@ export class EventController {
 		assistantComponent.setToolResultImages(toolCallId, images);
 		return true;
 	}
-	#updateWorkingMessageFromIntent(intent: string | undefined): void {
-		const trimmed = intent?.trim();
+	#updateWorkingMessageFromIntent(intent: unknown): void {
+		// Streamed JSON can deliver non-string `_i` (object, number, boolean) before
+		// schema validation; `?.` only guards null/undefined, so guard the type too.
+		if (typeof intent !== "string") return;
+		const trimmed = intent.trim();
 		if (!trimmed || trimmed === this.#lastIntent) return;
 		this.#lastIntent = trimmed;
 		this.ctx.setWorkingMessage(`${trimmed} (esc to interrupt)`);
@@ -288,7 +291,7 @@ export class EventController {
 				const args = content.arguments;
 				if (!args || typeof args !== "object") continue;
 				if (INTENT_FIELD in args) {
-					this.#updateWorkingMessageFromIntent(args[INTENT_FIELD] as string | undefined);
+					this.#updateWorkingMessageFromIntent(args[INTENT_FIELD]);
 					continue;
 				}
 				const tool = this.ctx.session.getToolByName(content.name);
