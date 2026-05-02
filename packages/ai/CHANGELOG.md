@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.6.0] - 2026-05-02
+
 ### Added
 
 - Added `disableReasoning` to stream and OpenAI completion options to force reasoning off for models that support it, sending `reasoning: { enabled: false }` for OpenRouter-compatible requests
