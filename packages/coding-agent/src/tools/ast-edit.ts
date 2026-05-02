@@ -20,7 +20,7 @@ import {
 	hasGlobPathChars,
 	normalizePathLikeInput,
 	parseSearchPath,
-	resolveMultiSearchPath,
+	resolveExplicitSearchPaths,
 	resolveToCwd,
 } from "./path-utils";
 import {
@@ -47,9 +47,10 @@ const astEditSchema = Type.Object({
 		minItems: 1,
 		description: "rewrite ops",
 	}),
-	path: Type.String({
-		description: "file, directory, glob, or comma-separated paths to rewrite",
-		examples: ["src/", "src/foo.ts", "src/**/*.ts"],
+	paths: Type.Array(Type.String({ description: "file, directory, glob, or internal URL to rewrite" }), {
+		minItems: 1,
+		description: "files, directories, globs, or internal URLs to rewrite",
+		examples: [["src/"], ["src/foo.ts"], ["src/**/*.ts"], ["src/", "packages/"]],
 	}),
 });
 
@@ -201,42 +202,46 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			const maxFiles = $envpos("PI_MAX_AST_FILES", 1000);
 
 			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
-			let searchPath: string | undefined;
-			let scopePath: string | undefined;
+			let searchPath: string;
+			let scopePath: string;
 			let globFilter: string | undefined;
 			let multiTargets: Array<{ basePath: string; glob?: string }> | undefined;
-			const rawPath = normalizePathLikeInput(params.path);
-			if (rawPath.length === 0) {
-				throw new ToolError("`path` must be a non-empty path or glob");
+			const rawPaths = params.paths.map(normalizePathLikeInput);
+			if (rawPaths.some(rawPath => rawPath.length === 0)) {
+				throw new ToolError("`paths` must contain non-empty paths or globs");
 			}
-			if (rawPath) {
-				const internalRouter = this.session.internalRouter;
-				if (internalRouter?.canHandle(rawPath)) {
-					if (hasGlobPathChars(rawPath)) {
-						throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
-					}
-					const resource = await internalRouter.resolve(rawPath);
-					if (!resource.sourcePath) {
-						throw new ToolError(`Cannot rewrite internal URL without backing file: ${rawPath}`);
-					}
-					searchPath = resource.sourcePath;
-					scopePath = formatScopePath(searchPath);
-				} else {
-					const multiSearchPath = await resolveMultiSearchPath(rawPath, this.session.cwd, globFilter);
-					if (multiSearchPath) {
-						searchPath = multiSearchPath.basePath;
-						globFilter = multiSearchPath.targets ? undefined : multiSearchPath.glob;
-						multiTargets = multiSearchPath.targets;
-						scopePath = multiSearchPath.scopePath;
-					} else {
-						const parsedPath = parseSearchPath(rawPath);
-						searchPath = resolveToCwd(parsedPath.basePath, this.session.cwd);
-						globFilter = parsedPath.glob;
-						scopePath = formatScopePath(searchPath);
-					}
+			const internalRouter = this.session.internalRouter;
+			const resolvedPathInputs: string[] = [];
+			for (const rawPath of rawPaths) {
+				if (!internalRouter?.canHandle(rawPath)) {
+					resolvedPathInputs.push(rawPath);
+					continue;
 				}
+				if (hasGlobPathChars(rawPath)) {
+					throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
+				}
+				const resource = await internalRouter.resolve(rawPath);
+				if (!resource.sourcePath) {
+					throw new ToolError(`Cannot rewrite internal URL without backing file: ${rawPath}`);
+				}
+				resolvedPathInputs.push(resource.sourcePath);
 			}
-			const resolvedSearchPath = searchPath ?? resolveToCwd(".", this.session.cwd);
+			if (resolvedPathInputs.length === 1) {
+				const parsedPath = parseSearchPath(resolvedPathInputs[0] ?? ".");
+				searchPath = resolveToCwd(parsedPath.basePath, this.session.cwd);
+				globFilter = parsedPath.glob;
+				scopePath = formatScopePath(searchPath);
+			} else {
+				const multiSearchPath = await resolveExplicitSearchPaths(resolvedPathInputs, this.session.cwd, globFilter);
+				if (!multiSearchPath) {
+					throw new ToolError("`paths` must contain at least one path or glob");
+				}
+				searchPath = multiSearchPath.basePath;
+				globFilter = multiSearchPath.targets ? undefined : multiSearchPath.glob;
+				multiTargets = multiSearchPath.targets;
+				scopePath = multiSearchPath.scopePath;
+			}
+			const resolvedSearchPath = searchPath;
 			scopePath = scopePath ?? formatScopePath(resolvedSearchPath);
 			let isDirectory: boolean;
 			try {
@@ -350,7 +355,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				count: fileReplacementCounts.get(filePath) ?? 0,
 			}));
 			if (result.limitReached) {
-				outputLines.push("", "Limit reached; narrow path.");
+				outputLines.push("", "Limit reached; narrow paths.");
 			}
 			if (dedupedParseErrors.length) {
 				outputLines.push("", ...formatParseErrors(dedupedParseErrors));
@@ -441,7 +446,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 
 interface AstEditRenderArgs {
 	ops?: Array<{ pat?: string; out?: string }>;
-	path?: string;
+	paths?: string[];
 }
 
 const COLLAPSED_CHANGE_LIMIT = PREVIEW_LIMITS.COLLAPSED_LINES * 2;
@@ -450,7 +455,7 @@ export const astEditToolRenderer = {
 	inline: true,
 	renderCall(args: AstEditRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		const meta: string[] = [];
-		if (args.path) meta.push(`in ${args.path}`);
+		if (args.paths?.length) meta.push(`in ${args.paths.join(", ")}`);
 		const rewriteCount = args.ops?.length ?? 0;
 		if (rewriteCount > 1) meta.push(`${rewriteCount} rewrites`);
 

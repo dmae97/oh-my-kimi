@@ -56,7 +56,7 @@ describe("SearchTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "needle",
-			path: "artifact://5",
+			paths: ["artifact://5"],
 		});
 
 		const text = getResultText(result);
@@ -73,7 +73,7 @@ describe("SearchTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "ERROR.*",
-			path: "artifact://3",
+			paths: ["artifact://3"],
 		});
 
 		const text = getResultText(result);
@@ -99,7 +99,7 @@ describe("SearchTool internal URL resolution", () => {
 		const session = createSession({ internalRouter: router });
 		const tool = new SearchTool(session);
 
-		expect(tool.execute("test-call", { pattern: "foo", path: "agent://0" })).rejects.toThrow(
+		expect(tool.execute("test-call", { pattern: "foo", paths: ["agent://0"] })).rejects.toThrow(
 			"Cannot search internal URL without a backing file",
 		);
 	});
@@ -112,7 +112,7 @@ describe("SearchTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "hello",
-			path: "test.txt",
+			paths: ["test.txt"],
 		});
 
 		const text = getResultText(result);
@@ -128,7 +128,7 @@ describe("SearchTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "data",
-			path: "data.log",
+			paths: ["data.log"],
 		});
 
 		const text = getResultText(result);
@@ -140,7 +140,7 @@ describe("SearchTool internal URL resolution", () => {
 		const session = createSession({ internalRouter: router });
 		const tool = new SearchTool(session);
 
-		expect(tool.execute("test-call", { pattern: "foo", path: "artifact://999" })).rejects.toThrow(
+		expect(tool.execute("test-call", { pattern: "foo", paths: ["artifact://999"] })).rejects.toThrow(
 			"Artifact 999 not found",
 		);
 	});

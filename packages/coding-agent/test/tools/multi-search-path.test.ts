@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { resolveMultiSearchPath } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
+import { resolveExplicitSearchPaths } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 
 const isWindows = process.platform === "win32";
 
@@ -26,17 +26,17 @@ function getText(result: { content: Array<{ type: string; text?: string }> }): s
 		.join("\n");
 }
 
-describe.skipIf(isWindows)("resolveMultiSearchPath cross-tree degeneracy", () => {
+describe.skipIf(isWindows)("resolveExplicitSearchPaths cross-tree degeneracy", () => {
 	it("returns per-path targets when commonBasePath collapses to filesystem root", async () => {
 		// Two real top-level directories that exist on every Unix host. Their only
 		// shared ancestor is `/`. A naive shared-base scan would walk the entire
 		// filesystem; the resolver must surface explicit `targets` so callers can
 		// fan out instead.
 		const cwd = os.tmpdir();
-		const resolved = await resolveMultiSearchPath("/tmp,/usr", cwd);
+		const resolved = await resolveExplicitSearchPaths(["/tmp", "/usr"], cwd);
 
 		expect(resolved).toBeDefined();
-		if (!resolved) throw new Error("expected resolveMultiSearchPath to resolve");
+		if (!resolved) throw new Error("expected resolveExplicitSearchPaths to resolve");
 		expect(resolved.basePath).toBe(path.parse(resolved.basePath).root);
 		expect(resolved.targets).toBeDefined();
 		const targetBases = (resolved.targets ?? []).map(target => target.basePath).sort();
@@ -76,7 +76,7 @@ describe.skipIf(isWindows)("search across unrelated filesystem trees", () => {
 		const start = performance.now();
 		const result = await tool.execute("search-cross-tree", {
 			pattern: "shared-needle",
-			path: `${dirA},${dirB}`,
+			paths: [dirA, dirB],
 		});
 		const durationMs = performance.now() - start;
 

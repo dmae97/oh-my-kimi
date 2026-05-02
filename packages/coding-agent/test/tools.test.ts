@@ -1175,7 +1175,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-11", {
 				pattern: "match",
-				path: testFile,
+				paths: [testFile],
 			});
 
 			const output = getTextOutput(result);
@@ -1184,14 +1184,14 @@ function b() {
 			expect(output).toMatch(/\*2\|match line/);
 		});
 
-		it("should accept wildcard patterns in the path parameter", async () => {
+		it("should accept wildcard patterns in paths", async () => {
 			fs.writeFileSync(path.join(testDir, "schema-review-alpha.test.ts"), "review target\n");
 			fs.writeFileSync(path.join(testDir, "schema-review-beta.test.ts"), "review target\n");
 			fs.writeFileSync(path.join(testDir, "schema-other.test.ts"), "review target\n");
 
 			const result = await searchTool.execute("test-call-11-path-glob", {
 				pattern: "review target",
-				path: `${testDir}/schema-review-*.test.ts`,
+				paths: [`${testDir}/schema-review-*.test.ts`],
 			});
 
 			const output = getTextOutput(result);
@@ -1200,7 +1200,7 @@ function b() {
 			expect(output).not.toContain("schema-other.test.ts");
 			expect(result.details?.fileCount).toBe(2);
 		});
-		it("should accept nested wildcard filters in the path parameter", async () => {
+		it("should accept nested wildcard filters in paths", async () => {
 			const packageDir = path.join(testDir, "node_modules", ".bun");
 			const aiDir = path.join(packageDir, "ai@6.0.119+build123", "node_modules", "ai");
 			const nestedDir = path.join(aiDir, "nested");
@@ -1212,7 +1212,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-11-path-and-glob", {
 				pattern: "providerOptions",
-				path: `${packageDir}/ai@6.0.119+*/node_modules/ai/**/*.{d.ts,ts}`,
+				paths: [`${packageDir}/ai@6.0.119+*/node_modules/ai/**/*.{d.ts,ts}`],
 				gitignore: false,
 			});
 
@@ -1235,7 +1235,7 @@ function b() {
 			);
 			const result = await contextSearchTool.execute("test-call-12", {
 				pattern: "match",
-				path: testFile,
+				paths: [testFile],
 			});
 
 			const output = getTextOutput(result);
@@ -1252,7 +1252,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-12-skip", {
 				pattern: "needle",
-				path: testFile,
+				paths: [testFile],
 				skip: 1,
 			});
 
@@ -1270,7 +1270,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-13-round-robin", {
 				pattern: "needle",
-				path: testDir,
+				paths: [testDir],
 			});
 
 			const output = getTextOutput(result);
@@ -1290,7 +1290,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-14-grouped-headings", {
 				pattern: "needle",
-				path: testDir,
+				paths: [testDir],
 			});
 
 			const output = getTextOutput(result);
@@ -1314,7 +1314,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-15-directory-headings", {
 				pattern: "Claude Opus",
-				path: testDir,
+				paths: [testDir],
 			});
 
 			const output = getTextOutput(result);
@@ -1333,7 +1333,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-15-gitignore-default", {
 				pattern: "needle",
-				path: scenarioDir,
+				paths: [scenarioDir],
 			});
 
 			const output = getTextOutput(result);
@@ -1351,7 +1351,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-16-gitignore-off", {
 				pattern: "needle",
-				path: scenarioDir,
+				paths: [scenarioDir],
 				gitignore: false,
 			});
 
@@ -1373,7 +1373,7 @@ function b() {
 
 			const result = await searchTool.execute("test-call-16-fifo-dir", {
 				pattern: "needle",
-				path: scenarioDir,
+				paths: [scenarioDir],
 				gitignore: false,
 			});
 
@@ -1386,18 +1386,18 @@ function b() {
 			expect(result.details?.matchCount).toBe(1);
 		});
 		it("should apply the fixed default match cap", async () => {
-			const lines = Array.from({ length: 60 }, (_, i) => `needle ${i + 1}`);
+			const lines = Array.from({ length: 600 }, (_, i) => `needle ${i + 1}`);
 			fs.writeFileSync(path.join(testDir, "default-limit.txt"), lines.join("\n"));
 
 			const result = await searchTool.execute("test-call-14-default-limit", {
 				pattern: "needle",
-				path: testDir,
+				paths: [testDir],
 			});
 
 			const output = getTextOutput(result);
-			expect(output).toContain("Result limit reached; narrow path or use skip=20.");
-			expect(result.details?.matchCount).toBe(20);
-			expect(result.details?.matchLimitReached).toBe(20);
+			expect(output).toContain("Result limit reached; narrow paths or use skip=500.");
+			expect(result.details?.matchCount).toBe(500);
+			expect(result.details?.matchLimitReached).toBe(500);
 		});
 	});
 
@@ -1407,7 +1407,7 @@ function b() {
 			fs.writeFileSync(testFile, "single");
 
 			const result = await findTool.execute("test-call-13a", {
-				pattern: testFile,
+				paths: [testFile],
 			});
 
 			const outputLines = getTextOutput(result)
@@ -1425,7 +1425,7 @@ function b() {
 			fs.writeFileSync(path.join(testDir, "visible.txt"), "visible");
 
 			const result = await findTool.execute("test-call-13", {
-				pattern: `${testDir}/**/*.txt`,
+				paths: [`${testDir}/**/*.txt`],
 				hidden: true,
 			});
 
@@ -1445,7 +1445,7 @@ function b() {
 			fs.writeFileSync(path.join(testDir, "kept.txt"), "kept");
 
 			const result = await findTool.execute("test-call-14", {
-				pattern: `${testDir}/**/*.txt`,
+				paths: [`${testDir}/**/*.txt`],
 			});
 
 			const output = getTextOutput(result);
@@ -1470,7 +1470,7 @@ function b() {
 			fs.utimesSync(newerFile, newerTime, newerTime);
 
 			const result = await findTool.execute("test-call-14b", {
-				pattern: `${testDir}/**/auth-actions.spec.ts`,
+				paths: [`${testDir}/**/auth-actions.spec.ts`],
 			});
 
 			const outputLines = getTextOutput(result)
@@ -1487,7 +1487,7 @@ function b() {
 			fs.writeFileSync(path.join(nestedDir, "daemon-telemetry.ts"), "telemetry\n");
 
 			const result = await findTool.execute("test-call-14c", {
-				pattern: "apps/daemon/src/**/daemon-telemetry.ts",
+				paths: ["apps/daemon/src/**/daemon-telemetry.ts"],
 			});
 
 			const outputLines = getTextOutput(result)
@@ -1507,7 +1507,7 @@ function b() {
 			fs.writeFileSync(path.join(clientDir, "client.ts"), "client\n");
 
 			const result = await findTool.execute("test-call-14e", {
-				pattern: "apps/daemon/src/**/*.ts,apps/client/src/**/*.ts",
+				paths: ["apps/daemon/src/**/*.ts", "apps/client/src/**/*.ts"],
 			});
 
 			const outputLines = getTextOutput(result)
@@ -1528,7 +1528,7 @@ function b() {
 
 			const startedAt = performance.now();
 			const result = await findTool.execute("test-call-14d", {
-				pattern: "**/.env*",
+				paths: ["**/.env*"],
 			});
 			const elapsedMs = performance.now() - startedAt;
 

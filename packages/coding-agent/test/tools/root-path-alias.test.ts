@@ -70,7 +70,7 @@ describe("tool path root alias", () => {
 
 		const result = await tool.execute("search-root-alias", {
 			pattern: "root-alias-needle",
-			path: "/",
+			paths: ["/"],
 		});
 		const details = result.details as { scopePath?: string } | undefined;
 
@@ -99,7 +99,7 @@ describe("tool path root alias", () => {
 		if (!tool) throw new Error("Missing find tool");
 
 		const result = await tool.execute("find-root-alias", {
-			pattern: "/",
+			paths: ["/"],
 		});
 		const details = result.details as { scopePath?: string } | undefined;
 		const text = getText(result);
@@ -117,7 +117,7 @@ describe("tool path root alias", () => {
 
 		const result = await tool.execute("ast-grep-root-alias", {
 			pat: "rootAliasSymbol",
-			path: "/**/*.ts",
+			paths: ["/**/*.ts"],
 		});
 		const details = result.details as { scopePath?: string } | undefined;
 
@@ -140,7 +140,7 @@ describe("tool path root alias", () => {
 
 		const preview = await tool.execute("ast-edit-root-alias", {
 			ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
-			path: "/**/*.ts",
+			paths: ["/**/*.ts"],
 		});
 		const details = preview.details as { scopePath?: string; totalReplacements?: number } | undefined;
 

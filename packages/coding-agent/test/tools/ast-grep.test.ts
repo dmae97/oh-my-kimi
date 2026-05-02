@@ -29,7 +29,7 @@ describe("ast_grep parse errors", () => {
 
 			const result = await tool!.execute("ast-grep-parse", {
 				pat: "someUnlikelyCall($A)",
-				path: filePath,
+				paths: [filePath],
 			});
 
 			const text = result.content.find(content => content.type === "text")?.text ?? "";
@@ -64,7 +64,7 @@ describe("ast_grep parse errors", () => {
 
 			const result = await tool!.execute("ast-grep-glob", {
 				pat: "providerOptions",
-				path: `${packagesDir}/pkg-*/src/**/*.ts`,
+				paths: [`${packagesDir}/pkg-*/src/**/*.ts`],
 			});
 
 			const text = result.content.find(content => content.type === "text")?.text ?? "";
@@ -96,7 +96,7 @@ describe("ast_grep parse errors", () => {
 
 			const result = await tool!.execute("ast-grep-tlaplus", {
 				pat: "Inc",
-				path: filePath,
+				paths: [filePath],
 			});
 
 			const text = result.content.find(content => content.type === "text")?.text ?? "";

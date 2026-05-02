@@ -2,13 +2,13 @@ Searches files using powerful regex matching.
 
 <instruction>
 - Supports full regex syntax (e.g., `log.*Error`, `function\\s+\\w+`); literal braces need escaping (`interface\\{\\}` for `interface{}` in Go)
-- `path` is required and accepts a file, directory, glob, comma-separated path list, or internal URL
+- `paths` is required and accepts an array of files, directories, globs, or internal URLs
 - Cross-line patterns are detected from literal `\n` or escaped `\\n` in `pattern`
 </instruction>
 
 <output>
 {{#if IS_HASHLINE_MODE}}
-- Text output is anchor-prefixed: `*123th|content` (match) or ` 123th|content` (context, leading space). The 2-letter ID is a content fingerprint.
+- Text output is anchor-prefixed: `*5th|content` (match) or ` 9x}|content` (context, leading space). The 2-char suffix is a content fingerprint.
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
 - Text output is line-number-prefixed

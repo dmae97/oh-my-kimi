@@ -416,9 +416,9 @@
             return `[bash: ${cmd}${rawCmd.length > 50 ? '...' : ''}]`;
           }
           case 'grep':
-            return `[grep: /${args.pattern || ''}/ in ${shortenPath(String(args.path || '.'))}]`;
+            return `[grep: /${args.pattern || ''}/ in ${shortenPath(String((args.paths || [args.path || '.']).join(', ')))}]`;
           case 'find':
-            return `[find: ${args.pattern || ''} in ${shortenPath(String(args.path || '.'))}]`;
+            return `[find: ${shortenPath(String((args.paths || [args.pattern || '.']).join(', ')))}]`;
           case 'ls':
             return `[ls: ${shortenPath(String(args.path || '.'))}]`;
           default: {

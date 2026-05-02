@@ -27,7 +27,7 @@ import {
 	formatPathRelativeToCwd,
 	normalizePathLikeInput,
 	parseFindPattern,
-	resolveMultiFindPattern,
+	resolveExplicitFindPatterns,
 	resolveToCwd,
 } from "./path-utils";
 import { formatCount, formatEmptyMessage, formatErrorMessage, PREVIEW_LIMITS } from "./render-utils";
@@ -35,9 +35,10 @@ import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const findSchema = Type.Object({
-	pattern: Type.String({
-		description: "glob including search path",
-		examples: ["src/**/*.ts", "lib/*.json", "apps/,packages/", "*.ts"],
+	paths: Type.Array(Type.String({ description: "glob including search path" }), {
+		minItems: 1,
+		description: "globs including search paths",
+		examples: [["src/**/*.ts"], ["lib/*.json"], ["apps/", "packages/"], ["*.ts"]],
 	}),
 	hidden: Type.Optional(Type.Boolean({ description: "include hidden files", default: true })),
 	limit: Type.Optional(Type.Number({ description: "max results", default: 1000 })),
@@ -104,17 +105,17 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 		onUpdate?: AgentToolUpdateCallback<FindToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<FindToolDetails>> {
-		const { pattern, limit, hidden } = params;
+		const { paths, limit, hidden } = params;
 
 		return untilAborted(signal, async () => {
 			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
-			const normalizedPattern = normalizePathLikeInput(pattern).replace(/\\/g, "/");
-			if (!normalizedPattern) {
-				throw new ToolError("Pattern must not be empty");
+			const normalizedPatterns = paths.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
+			if (normalizedPatterns.some(pattern => pattern.length === 0)) {
+				throw new ToolError("`paths` must contain non-empty globs or paths");
 			}
 
-			const multiPattern = await resolveMultiFindPattern(normalizedPattern, this.session.cwd);
-			const parsedPattern = multiPattern ? null : parseFindPattern(normalizedPattern);
+			const multiPattern = await resolveExplicitFindPatterns(normalizedPatterns, this.session.cwd);
+			const parsedPattern = multiPattern ? null : parseFindPattern(normalizedPatterns[0] ?? ".");
 			const hasGlob = multiPattern ? true : (parsedPattern?.hasGlob ?? false);
 			const globPattern = multiPattern?.globPattern ?? parsedPattern?.globPattern ?? "**/*";
 			const searchPath = resolveToCwd(multiPattern?.basePath ?? parsedPattern?.basePath ?? ".", this.session.cwd);
@@ -292,7 +293,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 // =============================================================================
 
 interface FindRenderArgs {
-	pattern: string;
+	paths?: string[];
 	limit?: number;
 }
 
@@ -305,7 +306,7 @@ export const findToolRenderer = {
 		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
 
 		const text = renderStatusLine(
-			{ icon: "pending", title: "Find", description: args.pattern || "*", meta },
+			{ icon: "pending", title: "Find", description: args.paths?.join(", ") || "*", meta },
 			uiTheme,
 		);
 		return new Text(text, 0, 0);
@@ -342,7 +343,7 @@ export const findToolRenderer = {
 				{
 					icon: "success",
 					title: "Find",
-					description: args?.pattern,
+					description: args?.paths?.join(", "),
 					meta: [formatCount("file", lines.length)],
 				},
 				uiTheme,
@@ -381,7 +382,7 @@ export const findToolRenderer = {
 
 		if (fileCount === 0) {
 			const header = renderStatusLine(
-				{ icon: "warning", title: "Find", description: args?.pattern, meta: ["0 files"] },
+				{ icon: "warning", title: "Find", description: args?.paths?.join(", "), meta: ["0 files"] },
 				uiTheme,
 			);
 			return new Text([header, formatEmptyMessage("No files found", uiTheme)].join("\n"), 0, 0);
@@ -390,7 +391,7 @@ export const findToolRenderer = {
 		if (details?.scopePath) meta.push(`in ${details.scopePath}`);
 		if (truncated) meta.push(uiTheme.fg("warning", "truncated"));
 		const header = renderStatusLine(
-			{ icon: truncated ? "warning" : "success", title: "Find", description: args?.pattern, meta },
+			{ icon: truncated ? "warning" : "success", title: "Find", description: args?.paths?.join(", "), meta },
 			uiTheme,
 		);
 

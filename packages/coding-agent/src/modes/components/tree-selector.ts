@@ -667,13 +667,12 @@ class TreeList implements Component {
 			}
 			case "search": {
 				const pattern = String(args.pattern || "");
-				const path = shortenPath(String(args.path || "."));
-				return `[search: /${pattern}/ in ${path}]`;
+				const paths = Array.isArray(args.paths) ? args.paths.join(", ") : String(args.path || ".");
+				return `[search: /${pattern}/ in ${shortenPath(paths)}]`;
 			}
 			case "find": {
-				const pattern = String(args.pattern || "");
-				const path = shortenPath(String(args.path || "."));
-				return `[find: ${pattern} in ${path}]`;
+				const paths = Array.isArray(args.paths) ? args.paths.join(", ") : String(args.pattern || ".");
+				return `[find: ${shortenPath(paths)}]`;
 			}
 			case "ls": {
 				const path = shortenPath(String(args.path || "."));

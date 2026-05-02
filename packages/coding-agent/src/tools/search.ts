@@ -22,7 +22,7 @@ import {
 	hasGlobPathChars,
 	normalizePathLikeInput,
 	parseSearchPath,
-	resolveMultiSearchPath,
+	resolveExplicitSearchPaths,
 	resolveToCwd,
 } from "./path-utils";
 import {
@@ -37,9 +37,10 @@ import { toolResult } from "./tool-result";
 
 const searchSchema = Type.Object({
 	pattern: Type.String({ description: "regex pattern", examples: ["function\\s+\\w+", "TODO"] }),
-	path: Type.String({
-		description: "file, directory, glob, comma-separated paths, or internal URL to search",
-		examples: ["src/", "src/foo.ts", "src/**/*.ts"],
+	paths: Type.Array(Type.String({ description: "file, directory, glob, or internal URL to search" }), {
+		minItems: 1,
+		description: "files, directories, globs, or internal URLs to search",
+		examples: [["src/"], ["src/foo.ts"], ["src/**/*.ts"], ["src/", "packages/"]],
 	}),
 	i: Type.Optional(Type.Boolean({ description: "case-insensitive search", default: false })),
 	gitignore: Type.Optional(Type.Boolean({ description: "respect gitignore", default: true })),
@@ -48,7 +49,7 @@ const searchSchema = Type.Object({
 
 export type SearchToolInput = Static<typeof searchSchema>;
 
-const DEFAULT_MATCH_LIMIT = 20;
+const DEFAULT_MATCH_LIMIT = 500;
 
 export interface SearchToolDetails {
 	truncation?: TruncationResult;
@@ -93,7 +94,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 		_onUpdate?: AgentToolUpdateCallback<SearchToolDetails>,
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<SearchToolDetails>> {
-		const { pattern, path: searchDir, i, gitignore, skip } = params;
+		const { pattern, paths, i, gitignore, skip } = params;
 
 		return untilAborted(signal, async () => {
 			const normalizedPattern = pattern.trim();
@@ -119,12 +120,17 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			let exactFilePaths: string[] | undefined;
 			let multiTargets: Array<{ basePath: string; glob?: string }> | undefined;
 			let globFilter: string | undefined;
-			const rawPath = normalizePathLikeInput(searchDir);
-			if (rawPath.length === 0) {
-				throw new ToolError("`path` must be a non-empty path or glob");
+			const rawPaths = paths.map(normalizePathLikeInput);
+			if (rawPaths.some(rawPath => rawPath.length === 0)) {
+				throw new ToolError("`paths` must contain non-empty paths or globs");
 			}
 			const internalRouter = this.session.internalRouter;
-			if (internalRouter?.canHandle(rawPath)) {
+			const resolvedPathInputs: string[] = [];
+			for (const rawPath of rawPaths) {
+				if (!internalRouter?.canHandle(rawPath)) {
+					resolvedPathInputs.push(rawPath);
+					continue;
+				}
 				if (hasGlobPathChars(rawPath)) {
 					throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
 				}
@@ -132,29 +138,30 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				if (!resource.sourcePath) {
 					throw new ToolError(`Cannot search internal URL without a backing file: ${rawPath}`);
 				}
-				searchPath = resource.sourcePath;
+				resolvedPathInputs.push(resource.sourcePath);
+			}
+			if (resolvedPathInputs.length === 1) {
+				const parsedPath = parseSearchPath(resolvedPathInputs[0] ?? ".");
+				searchPath = resolveToCwd(parsedPath.basePath, this.session.cwd);
+				globFilter = parsedPath.glob;
 				scopePath = formatScopePath(searchPath);
 			} else {
-				const multiSearchPath = await resolveMultiSearchPath(rawPath, this.session.cwd, globFilter);
-				if (multiSearchPath) {
-					searchPath = multiSearchPath.basePath;
-					exactFilePaths = multiSearchPath.exactFilePaths;
-					multiTargets = multiSearchPath.targets;
-					globFilter = exactFilePaths || multiTargets ? undefined : multiSearchPath.glob;
-					scopePath = multiSearchPath.scopePath;
-				} else {
-					const parsedPath = parseSearchPath(rawPath);
-					searchPath = resolveToCwd(parsedPath.basePath, this.session.cwd);
-					globFilter = parsedPath.glob;
-					scopePath = formatScopePath(searchPath);
+				const multiSearchPath = await resolveExplicitSearchPaths(resolvedPathInputs, this.session.cwd, globFilter);
+				if (!multiSearchPath) {
+					throw new ToolError("`paths` must contain at least one path or glob");
 				}
+				searchPath = multiSearchPath.basePath;
+				exactFilePaths = multiSearchPath.exactFilePaths;
+				multiTargets = multiSearchPath.targets;
+				globFilter = exactFilePaths || multiTargets ? undefined : multiSearchPath.glob;
+				scopePath = multiSearchPath.scopePath;
 			}
 			let isDirectory: boolean;
 			try {
 				const stat = await Bun.file(searchPath).stat();
 				isDirectory = stat.isDirectory();
 			} catch {
-				const hint = scopePath.includes(",") ? ` (comma-separated paths must each exist relative to cwd)` : "";
+				const hint = rawPaths.length > 1 ? " (`paths` entries must each exist relative to cwd)" : "";
 				throw new ToolError(`Path not found: ${scopePath}${hint}`);
 			}
 
@@ -275,7 +282,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				: result.matches.slice(0, effectiveLimit);
 			const matchLimitReached = result.matches.length > effectiveLimit;
 			const nextSkip = normalizedSkip + selectedMatches.length;
-			const limitMessage = `Result limit reached; narrow path or use skip=${nextSkip}.`;
+			const limitMessage = `Result limit reached; narrow paths or use skip=${nextSkip}.`;
 			const { record: recordFile, list: fileList } = createFileRecorder();
 			const fileMatchCounts = new Map<string, number>();
 			if (selectedMatches.length === 0) {
@@ -395,7 +402,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 
 interface SearchRenderArgs {
 	pattern: string;
-	path?: string;
+	paths?: string[];
 	i?: boolean;
 	gitignore?: boolean;
 	skip?: number;
@@ -407,7 +414,7 @@ export const searchToolRenderer = {
 	inline: true,
 	renderCall(args: SearchRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		const meta: string[] = [];
-		if (args.path) meta.push(`in ${args.path}`);
+		if (args.paths?.length) meta.push(`in ${args.paths.join(", ")}`);
 		if (args.i) meta.push("case:insensitive");
 		if (args.gitignore === false) meta.push("gitignore:false");
 		if (args.skip !== undefined && args.skip > 0) meta.push(`skip:${args.skip}`);

@@ -47,15 +47,6 @@ function fileExists(filePath: string): boolean {
 	}
 }
 
-async function pathExists(filePath: string): Promise<boolean> {
-	try {
-		await fs.promises.access(filePath, fs.constants.F_OK);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
 function normalizeAtPrefix(filePath: string): string {
 	if (!filePath.startsWith("@")) return filePath;
 
@@ -300,77 +291,6 @@ export function combineSearchGlobs(prefixGlob?: string, suffixGlob?: string): st
 	return `${normalizedPrefix}/${normalizedSuffix}`;
 }
 
-type TopLevelSeparator = "comma" | "whitespace";
-
-function splitTopLevel(value: string, separator: TopLevelSeparator): string[] {
-	const parts: string[] = [];
-	let current = "";
-	let braceDepth = 0;
-	let bracketDepth = 0;
-	let parenDepth = 0;
-	let quote: '"' | "'" | undefined;
-	let escaped = false;
-
-	const pushCurrent = () => {
-		const normalized = current.trim();
-		if (normalized.length > 0) {
-			parts.push(normalized);
-		}
-		current = "";
-	};
-
-	for (const char of value) {
-		if (escaped) {
-			current += char;
-			escaped = false;
-			continue;
-		}
-
-		if (char === "\\") {
-			current += char;
-			escaped = true;
-			continue;
-		}
-
-		if (quote) {
-			current += char;
-			if (char === quote) {
-				quote = undefined;
-			}
-			continue;
-		}
-
-		if (char === '"' || char === "'") {
-			quote = char;
-			current += char;
-			continue;
-		}
-
-		if (char === "{") braceDepth += 1;
-		else if (char === "}" && braceDepth > 0) braceDepth -= 1;
-		else if (char === "[") bracketDepth += 1;
-		else if (char === "]" && bracketDepth > 0) bracketDepth -= 1;
-		else if (char === "(") parenDepth += 1;
-		else if (char === ")" && parenDepth > 0) parenDepth -= 1;
-
-		const topLevel = braceDepth === 0 && bracketDepth === 0 && parenDepth === 0;
-		const isWhitespace = /\s/.test(char);
-		if (topLevel && separator === "comma" && char === ",") {
-			pushCurrent();
-			continue;
-		}
-		if (topLevel && separator === "whitespace" && isWhitespace) {
-			pushCurrent();
-			continue;
-		}
-
-		current += char;
-	}
-
-	pushCurrent();
-	return parts.length > 1 ? parts : [value.trim()];
-}
-
 function normalizePosixPath(filePath: string): string {
 	return filePath.replace(/\\/g, "/");
 }
@@ -418,121 +338,12 @@ function toScopeDisplay(items: string[], cwd: string): string {
 		.join(", ");
 }
 
-function looksLikeDelimitedPathToken(token: string): boolean {
-	return (
-		TOP_LEVEL_INTERNAL_URL_PREFIXES.some(prefix => token.startsWith(prefix)) ||
-		token.startsWith(".") ||
-		token.startsWith("/") ||
-		token.startsWith("~") ||
-		token.startsWith("@") ||
-		token.includes("/") ||
-		token.includes("\\") ||
-		hasGlobPathChars(token) ||
-		/\.[^./\\]+$/.test(token)
-	);
-}
-
-async function areDelimitedTokensResolvable(
-	tokens: string[],
-	cwd: string,
-	parseBasePath: (value: string) => string,
-	allowBareExistingTokens: boolean,
-): Promise<boolean> {
-	for (const token of tokens) {
-		if (TOP_LEVEL_INTERNAL_URL_PREFIXES.some(prefix => token.startsWith(prefix))) {
-			return false;
-		}
-
-		if (!allowBareExistingTokens && !looksLikeDelimitedPathToken(token)) {
-			// Bare names like "packages" don't look like path tokens syntactically,
-			// but may still be valid directory names. Check existence before rejecting.
-			const resolvedExactPath = resolveToCwd(token, cwd);
-			if (!(await pathExists(resolvedExactPath))) {
-				return false;
-			}
-			continue;
-		}
-
-		const basePath = parseBasePath(token);
-		const resolvedBasePath = resolveToCwd(basePath, cwd);
-		if (await pathExists(resolvedBasePath)) {
-			continue;
-		}
-
-		if (!allowBareExistingTokens) {
-			return false;
-		}
-
-		const resolvedExactPath = resolveToCwd(token, cwd);
-		if (!(await pathExists(resolvedExactPath))) {
-			return false;
-		}
-	}
-
-	return true;
-}
-
-async function filterResolvableTokens(
-	tokens: string[],
-	cwd: string,
-	parseBasePath: (value: string) => string,
-): Promise<string[]> {
-	const out: string[] = [];
-	for (const token of tokens) {
-		if (TOP_LEVEL_INTERNAL_URL_PREFIXES.some(prefix => token.startsWith(prefix))) continue;
-		const basePath = parseBasePath(token);
-		const resolvedBasePath = resolveToCwd(basePath, cwd);
-		if (await pathExists(resolvedBasePath)) {
-			out.push(token);
-			continue;
-		}
-		const resolvedExactPath = resolveToCwd(token, cwd);
-		if (await pathExists(resolvedExactPath)) {
-			out.push(token);
-		}
-	}
-	return out;
-}
-
-async function splitDelimitedSearchInput(
-	rawInput: string,
-	cwd: string,
-	parseBasePath: (value: string) => string,
-): Promise<string[] | undefined> {
-	const trimmed = rawInput.trim();
-	if (!trimmed) return undefined;
-
-	const resolvedExactPath = resolveToCwd(trimmed, cwd);
-	if (await pathExists(resolvedExactPath)) {
-		return undefined;
-	}
-
-	const commaSeparated = splitTopLevel(trimmed, "comma");
-	if (commaSeparated.length > 1) {
-		const resolvable = await filterResolvableTokens(commaSeparated, cwd, parseBasePath);
-		if (resolvable.length >= 1) {
-			return [...new Set(resolvable)];
-		}
-	}
-
-	const whitespaceSeparated = splitTopLevel(trimmed, "whitespace");
-	if (
-		whitespaceSeparated.length > 1 &&
-		(await areDelimitedTokensResolvable(whitespaceSeparated, cwd, parseBasePath, false))
-	) {
-		return [...new Set(whitespaceSeparated)];
-	}
-
-	return undefined;
-}
-
-export async function resolveMultiSearchPath(
-	rawPath: string,
+async function resolveSearchPathItems(
+	pathItems: string[],
 	cwd: string,
 	suffixGlob?: string,
 ): Promise<ResolvedMultiSearchPath | undefined> {
-	const pathItems = await splitDelimitedSearchInput(rawPath, cwd, value => parseSearchPath(value).basePath);
-	if (!pathItems || pathItems.length < 1) {
+	if (pathItems.length < 1) {
 		return undefined;
 	}
 
@@ -580,12 +391,19 @@ export async function resolveMultiSearchPath(
 	};
 }
 
-export async function resolveMultiFindPattern(
-	rawPattern: string,
+export async function resolveExplicitSearchPaths(
+	pathItems: string[],
+	cwd: string,
+	suffixGlob?: string,
+): Promise<ResolvedMultiSearchPath | undefined> {
+	return resolveSearchPathItems([...new Set(pathItems)], cwd, suffixGlob);
+}
+
+async function resolveFindPatternItems(
+	patternItems: string[],
 	cwd: string,
 ): Promise<ResolvedMultiFindPattern | undefined> {
-	const patternItems = await splitDelimitedSearchInput(rawPattern, cwd, value => parseFindPattern(value).basePath);
-	if (!patternItems || patternItems.length <= 1) {
+	if (patternItems.length <= 1) {
 		return undefined;
 	}
 
@@ -615,6 +433,13 @@ export async function resolveMultiFindPattern(
 		globPattern: buildBraceUnion(combinedPatterns) ?? "**/*",
 		scopePath: toScopeDisplay(patternItems, cwd),
 	};
+}
+
+export async function resolveExplicitFindPatterns(
+	patternItems: string[],
+	cwd: string,
+): Promise<ResolvedMultiFindPattern | undefined> {
+	return resolveFindPatternItems([...new Set(patternItems)], cwd);
 }
 
 export function resolveReadPath(filePath: string, cwd: string): string {

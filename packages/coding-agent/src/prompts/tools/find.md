@@ -1,6 +1,7 @@
 Finds files using fast pattern matching that works with any codebase size.
 
 <instruction>
+- `paths` is required and accepts an array of globs, files, or directories
 - You **SHOULD** perform multiple searches in parallel when potentially useful
 </instruction>
 
@@ -10,7 +11,7 @@ Matching file paths sorted by modification time (most recent first). Truncated a
 
 <examples>
 # Find files
-`{"pattern": "src/**/*.ts", "limit": 1000}`
+`{"paths": ["src/**/*.ts"], "limit": 1000}`
 </examples>
 
 <avoid>
