@@ -16,7 +16,7 @@ import type { Theme } from "../modes/theme/theme";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { computeEditDiff, type DiffError, type DiffResult } from "./diff";
 import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
-import { computeHashlineDiff, type HashlineToolEdit } from "./modes/hashline";
+import { computeHashlineDiff } from "./modes/hashline";
 import { computePatchDiff, type PatchEditEntry } from "./modes/patch";
 import type { ReplaceEditEntry } from "./modes/replace";
 
@@ -210,22 +210,22 @@ const patchStrategy: EditStreamingStrategy<PatchArgs> = {
 };
 
 interface HashlineArgs {
+	input?: string;
 	path?: string;
-	edits?: HashlineToolEdit[];
 	__partialJson?: string;
 }
 
 const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
-	extractCompleteEdits(args, partialJson) {
-		if (!args?.edits) return args;
-		return { ...args, edits: dropIncompleteLastEdit(args.edits, partialJson, "edits") };
+	extractCompleteEdits(args) {
+		return args;
 	},
 	async computeDiffPreview(args, ctx) {
-		if (!args.path || !args.edits?.length) return null;
+		if (typeof args.input !== "string" || args.input.length === 0) return null;
 		ctx.signal.throwIfAborted();
-		const result = await computeHashlineDiff({ path: args.path, edits: args.edits }, ctx.cwd);
+		const result = await computeHashlineDiff({ input: args.input, path: args.path }, ctx.cwd);
 		ctx.signal.throwIfAborted();
-		return [toPerFilePreview(args.path, result)];
+		if ("error" in result && !args.path) return [{ path: "", error: result.error }];
+		return [toPerFilePreview(args.path ?? "", result)];
 	},
 	renderStreamingFallback() {
 		return "";
@@ -289,32 +289,12 @@ const vimStrategy: EditStreamingStrategy<unknown> = {
 	},
 };
 
-interface AtomArgs {
-	input?: string;
-	__partialJson?: string;
-}
-
-const atomStrategy: EditStreamingStrategy<AtomArgs> = {
-	extractCompleteEdits(args) {
-		return args;
-	},
-	async computeDiffPreview() {
-		// Atom edits can target file headers plus compact diff statements.
-		// We intentionally avoid speculative parsing while args are partial.
-		return null;
-	},
-	renderStreamingFallback() {
-		return "";
-	},
-};
-
 export const EDIT_MODE_STRATEGIES: Record<EditMode, EditStreamingStrategy<unknown>> = {
 	replace: replaceStrategy as EditStreamingStrategy<unknown>,
 	patch: patchStrategy as EditStreamingStrategy<unknown>,
 	hashline: hashlineStrategy as EditStreamingStrategy<unknown>,
 	apply_patch: applyPatchStrategy as EditStreamingStrategy<unknown>,
 	vim: vimStrategy,
-	atom: atomStrategy as EditStreamingStrategy<unknown>,
 };
 
 export { resolveEditMode };

@@ -1,12 +1,11 @@
 import { $env } from "@oh-my-pi/pi-utils";
 
-export type EditMode = "replace" | "patch" | "hashline" | "vim" | "apply_patch" | "atom";
+export type EditMode = "replace" | "patch" | "hashline" | "vim" | "apply_patch";
 
 export const DEFAULT_EDIT_MODE: EditMode = "hashline";
 
 const EDIT_MODE_IDS = {
 	apply_patch: "apply_patch",
-	atom: "atom",
 	hashline: "hashline",
 	patch: "patch",
 	replace: "replace",
@@ -37,12 +36,6 @@ export function resolveEditMode(session: EditModeSessionLike): EditMode {
 
 	const envMode = normalizeEditMode($env.PI_EDIT_VARIANT);
 	if (envMode) return envMode;
-
-	if (activeModel?.includes("spark")) return "apply_patch";
-	if (activeModel?.includes("nano")) return "replace";
-	if (activeModel?.includes("mini")) return "replace";
-	if (activeModel?.includes("haiku")) return "replace";
-	if (activeModel?.includes("flash")) return "replace";
 
 	const settingsMode = normalizeEditMode(String(session.settings.get("edit.mode") ?? ""));
 	return settingsMode ?? DEFAULT_EDIT_MODE;

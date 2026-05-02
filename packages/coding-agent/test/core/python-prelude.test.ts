@@ -54,19 +54,16 @@ describe.skipIf(!shouldRun)("PYTHON_PRELUDE integration", () => {
 			}),
 		};
 		const tool = new EvalTool(session);
-		const code = `
-	helpers = ${JSON.stringify(helpers)}
-	missing = [name for name in helpers if name not in globals() or not callable(globals()[name])]
-	print("HELPERS_OK=" + ("1" if not missing else "0"))
-	if missing:
-		print("MISSING=" + ",".join(missing))
-	`;
+		const code = [
+			`helpers = ${JSON.stringify(helpers)}`,
+			"missing = [name for name in helpers if name not in globals() or not callable(globals()[name])]",
+			'print("HELPERS_OK=" + ("1" if not missing else "0"))',
+			"if missing:",
+			'    print("MISSING=" + ",".join(missing))',
+		].join("\n");
 
 		const result = await tool.execute("tool-call-1", {
-			input: `\`\`\`py prelude helpers
-${code}
-\`\`\`
-`,
+			input: `===== py:"prelude helpers" =====\n${code}\n`,
 		});
 		const output = result.content.find(item => item.type === "text")?.text ?? "";
 		expect(output).toContain("HELPERS_OK=1");

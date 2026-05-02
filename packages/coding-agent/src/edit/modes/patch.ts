@@ -1717,13 +1717,6 @@ export async function executePatchSingle(
 	const resolvedPath = resolvePlanPath(session, path);
 	const resolvedRename = rename ? resolvePlanPath(session, rename) : undefined;
 
-	if (path.endsWith(".ipynb")) {
-		throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
-	}
-	if (rename?.endsWith(".ipynb")) {
-		throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
-	}
-
 	await assertEditableFile(resolvedPath, path);
 
 	const input: PatchInput = { path: resolvedPath, op, rename: resolvedRename, diff };

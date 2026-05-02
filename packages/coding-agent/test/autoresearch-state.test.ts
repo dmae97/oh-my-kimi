@@ -560,7 +560,7 @@ describe("autoresearch slash command", () => {
 		expect(checkout?.args[2]).toMatch(/^autoresearch\/reduce-edit-benchmark-runtime-variance-\d{8}$/);
 	});
 
-	it("falls back to a warning instead of an error when the worktree is dirty", async () => {
+	it("aborts with an error when the worktree is dirty", async () => {
 		const dir = makeTempDir();
 		const harness = createCommandHarness(dir, async (_command, args) => {
 			if (args[0] === "rev-parse") return { code: 0, stderr: "", stdout: `${dir}\n` };
@@ -570,9 +570,11 @@ describe("autoresearch slash command", () => {
 			return { code: 0, stderr: "", stdout: "" };
 		});
 		await harness.command.handler("", harness.ctx);
-		expect(harness.notifications.some(n => n.type === "warning" && n.message.includes("dirty"))).toBe(true);
-		// Should not abort: also notifies enabled
-		expect(harness.notifications.some(n => n.message.includes("Autoresearch enabled"))).toBe(true);
+		expect(harness.notifications.some(n => n.type === "error" && n.message.includes("dirty"))).toBe(true);
+		// Should abort: no enabled notification, no checkout, no message sent
+		expect(harness.notifications.some(n => n.message.includes("Autoresearch enabled"))).toBe(false);
+		expect(harness.execCalls.find(c => c.command === "git" && c.args[0] === "checkout")).toBeUndefined();
+		expect(harness.sentMessages).toEqual([]);
 	});
 });
 

@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { HASHLINE_HASH_RE_SRC } from "@oh-my-pi/pi-coding-agent/edit";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
@@ -409,8 +408,8 @@ describe("tool path arrays", () => {
 		});
 		const text = getText(result);
 
-		expect(text).toMatch(new RegExp(` 1(?:${HASHLINE_HASH_RE_SRC})?\\|#if FLAG`));
-		expect(text).toMatch(new RegExp(`\\*2(?:${HASHLINE_HASH_RE_SRC})?\\|needle`));
-		expect(text).toMatch(new RegExp(` 3(?:${HASHLINE_HASH_RE_SRC})?\\|#endif`));
+		expect(text).toMatch(/ 1(?:[a-z]{2})?\|#if FLAG/);
+		expect(text).toMatch(/\*2(?:[a-z]{2})?\|needle/);
+		expect(text).toMatch(/ 3(?:[a-z]{2})?\|#endif/);
 	});
 });

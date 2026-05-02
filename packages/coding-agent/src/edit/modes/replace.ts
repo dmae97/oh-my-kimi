@@ -1026,10 +1026,6 @@ export async function executeReplaceSingle(
 
 	enforcePlanModeWrite(session, path);
 
-	if (path.endsWith(".ipynb")) {
-		throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
-	}
-
 	if (old_text.length === 0) {
 		throw new Error("old_text must not be empty.");
 	}

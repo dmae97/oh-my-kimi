@@ -29,7 +29,7 @@ export function resolveFileDisplayMode(session: FileDisplayModeSession, options?
 	const { settings } = session;
 	const hasEditTool = session.hasEditTool ?? true;
 	const editMode = resolveEditMode(session);
-	const usesHashLineAnchors = editMode === "hashline" || editMode === "atom";
+	const usesHashLineAnchors = editMode === "hashline";
 	const raw = options?.raw === true;
 	const hashLines = !raw && hasEditTool && usesHashLineAnchors && settings.get("readHashLines") !== false;
 	return {

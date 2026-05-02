@@ -234,28 +234,25 @@ describe("computeHashlineDiff", () => {
 		const sourcePath = path.join(tempDir, "source.txt");
 		await Bun.write(sourcePath, "unchanged content\n");
 
-		const result = await computeHashlineDiff({ path: sourcePath, edits: [] }, tempDir);
+		const result = await computeHashlineDiff({ input: `@${sourcePath}\n` }, tempDir);
 		expect("error" in result).toBe(true);
 		if ("error" in result) {
 			expect(result.error).toContain("No changes would be made");
 		}
 	});
 
-	test("accepts hashline tool edits without resolved op/lines", async () => {
+	test("accepts hashline input edits", async () => {
 		const sourcePath = path.join(tempDir, "source.txt");
 		await Bun.write(sourcePath, "first\n");
 
-		const result = await computeHashlineDiff(
-			{ path: sourcePath, edits: [{ loc: "append", content: ["second"] }] },
-			tempDir,
-		);
+		const result = await computeHashlineDiff({ input: `@${sourcePath}\n+ EOF\n|second` }, tempDir);
 		expect("diff" in result).toBe(true);
 		if ("diff" in result) {
 			expect(result.diff).toContain("second");
 		}
 	});
 	test("returns a handled error when the source path is a local URL", async () => {
-		const result = await computeHashlineDiff({ path: "local://PLAN.md", edits: [] }, tempDir);
+		const result = await computeHashlineDiff({ input: "@local://PLAN.md\n" }, tempDir);
 
 		expect("error" in result).toBe(true);
 		if ("error" in result) {

@@ -973,7 +973,7 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "editing",
 			label: "Edit Mode",
-			description: "Select the edit tool variant (replace, patch, hashline, atom, vim, or apply_patch)",
+			description: "Select the edit tool variant (replace, patch, hashline, vim, or apply_patch)",
 		},
 	},
 

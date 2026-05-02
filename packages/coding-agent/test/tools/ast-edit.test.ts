@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { adaptSchemaForStrict } from "@oh-my-pi/pi-ai/utils/schema";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { HASHLINE_HASH_RE_SRC } from "@oh-my-pi/pi-coding-agent/edit";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
@@ -82,8 +81,8 @@ describe("ast_edit tool schema", () => {
 
 			expect(removedLine).toBeDefined();
 			expect(addedLine).toBeDefined();
-			expect(removedLine).toMatch(new RegExp(`^-\\d+${HASHLINE_HASH_RE_SRC}\\|`));
-			expect(addedLine).toMatch(new RegExp(`^\\+\\d+${HASHLINE_HASH_RE_SRC}\\|`));
+			expect(removedLine).toMatch(/^-\d+[a-z]{2}\|/);
+			expect(addedLine).toMatch(/^\+\d+[a-z]{2}\|/);
 			expect(removedLine?.split("|", 1)[0].length).toBe(addedLine?.split("|", 1)[0].length);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });

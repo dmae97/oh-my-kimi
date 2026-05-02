@@ -668,34 +668,6 @@ export const HASHLINE_BIGRAMS = [
 export const HASHLINE_BIGRAMS_COUNT = HASHLINE_BIGRAMS.length;
 
 /**
- * Regex source matching one valid hashline anchor hash. Matches either:
- *   - a 2-letter BPE bigram from {@link HASHLINE_BIGRAMS} (the default
- *     1-token-per-anchor alphabet for ordinary lines), or
- *   - `>[a-z]` for lines whose trimmed content starts with `}`
- *     (closing-brace marker — uses `>` so the hash never visually collides
- *     with a literal `}` in line content), or
- *   - `[a-z]<` for lines whose trimmed content ends with `{`
- *     (opening-brace marker — uses `<` so the hash never visually collides
- *     with a literal `{` in line content).
- *
- * Brace markers cost ~2-3 BPE tokens instead of 1; the structural signal is
- * the explicit tradeoff. Keep in sync with {@link computeLineHash}.
- */
-export const HASHLINE_HASH_RE_SRC = `(?:${HASHLINE_BIGRAMS.join("|")}|>[a-z]|[a-z]<)`;
-
-/**
- * Lax hash regex source — same shape as {@link HASHLINE_HASH_RE_SRC} but
- * accepts any `[a-z]{2}` for the bigram arm instead of restricting to the
- * 647 BPE bigrams. Parsers that need to admit syntactically well-formed but
- * stale Lids use this form so the downstream content-fingerprint check can
- * emit a targeted hash-mismatch error rather than an opaque parse error.
- *
- * Keep in sync with {@link HASHLINE_HASH_RE_SRC} — the only legitimate
- * difference is the bigram arm. Update both whenever the hash shape changes.
- */
-export const HASHLINE_HASH_LAX_RE_SRC = `(?:[a-z]{2}|>[a-z]|[a-z]<)`;
-
-/**
  * Decoration prefix that may precede a `LINE+HASH` anchor in tool output:
  * `>` (context line in grep), `+` (added line in diff), `-` (removed line),
  * `*` (match line). Any combination, in any order, surrounded by optional
@@ -707,78 +679,57 @@ export const HASHLINE_ANCHOR_DECORATION_RE_SRC = `\\s*[>+\\-*]*\\s*`;
 
 /**
  * Capture-group regex source for a decorated `LINE+HASH` anchor. Group 1
- * captures the line number (digits only); group 2 captures the strict hash
- * from {@link HASHLINE_HASH_RE_SRC}. The source is intentionally unanchored
- * — anchoring with `^` (or composing into a larger pattern) is the caller's
- * responsibility.
+ * captures the line number (digits only); group 2 captures the hash. The
+ * source is intentionally unanchored — anchoring with `^` (or composing into a
+ * larger pattern) is the caller's responsibility.
  */
-export const HASHLINE_ANCHOR_RE_SRC = `${HASHLINE_ANCHOR_DECORATION_RE_SRC}(\\d+)(${HASHLINE_HASH_RE_SRC})`;
+export const HASHLINE_ANCHOR_RE_SRC = `${HASHLINE_ANCHOR_DECORATION_RE_SRC}(\\d+)([a-z]{2})`;
 
 /**
  * Bare `LINE+HASH` Lid (no decorations, no captures, no anchors). Use for
  * embedding inside larger patterns where the line+hash unit appears as a
- * literal (e.g. range bounds, alternation arms, op-line heuristics). Strict
- * variant — only hashes that {@link computeLineHash} actually produces match.
+ * literal (e.g. range bounds, alternation arms, op-line heuristics).
  */
-export const HASHLINE_LID_RE_SRC = `[1-9]\\d*${HASHLINE_HASH_RE_SRC}`;
-
-/**
- * Lax variant of {@link HASHLINE_LID_RE_SRC}: same shape, accepts any
- * `[a-z]{2}` for the bigram arm. Parsers admit syntactically well-formed
- * but stale Lids and let the downstream hash-fingerprint check emit a
- * targeted mismatch error.
- */
-export const HASHLINE_LID_LAX_RE_SRC = `[1-9]\\d*${HASHLINE_HASH_LAX_RE_SRC}`;
+export const HASHLINE_LID_RE_SRC = `[1-9]\\d*[a-z]{2}`;
 
 /**
  * Capture-group form of {@link HASHLINE_LID_RE_SRC}: group 1 captures the
- * line number, group 2 captures the strict hash.
+ * line number, group 2 captures the hash.
  */
-export const HASHLINE_LID_CAPTURE_RE_SRC = `([1-9]\\d*)(${HASHLINE_HASH_RE_SRC})`;
-
-/**
- * Capture-group form of {@link HASHLINE_LID_LAX_RE_SRC}: group 1 captures
- * the line number, group 2 captures the lax hash.
- */
-export const HASHLINE_LID_LAX_CAPTURE_RE_SRC = `([1-9]\\d*)(${HASHLINE_HASH_LAX_RE_SRC})`;
+export const HASHLINE_LID_CAPTURE_RE_SRC = `([1-9]\\d*)([a-z]{2})`;
 
 /** Width of a hash in display characters. */
 export const HASHLINE_HASH_WIDTH = 2;
 
-/** Human-readable hash-width label used in user-facing copy (e.g. "2-character"). */
-export const HASHLINE_HASH_WIDTH_LABEL = `${HASHLINE_HASH_WIDTH}-character`;
-
 /**
  * Representative hash suffixes for use in user-facing error messages and
- * prompt examples. Cycles through one bigram form, one closing-brace marker,
- * and one opening-brace marker so callers can show the full alphabet shape
- * with a single helper.
+ * prompt examples.
  */
-export const HASHLINE_HASH_EXAMPLES = ["sr", ">t", "a<"] as const;
+export const HASHLINE_HASH_EXAMPLES = ["sr", "ab", "th"] as const;
 
 /**
  * Format a comma-separated list of example anchors with an optional line-number
- * prefix, quoted for inclusion in error messages: `"160sr", "160>t", "160a<"`.
+ * prefix, quoted for inclusion in error messages: `"160sr", "160ab", "160th"`.
  */
 export function describeAnchorExamples(linePrefix = ""): string {
 	return HASHLINE_HASH_EXAMPLES.map(e => `"${linePrefix}${e}"`).join(", ");
 }
 
 /**
- * Sentinel token that {@link atomGrammar} (atom.lark) uses for the lax hash
+ * Sentinel token that the hashline Lark grammar uses for the hash
  * regex source. Replaced at module-load time by {@link resolveLarkLidPlaceholders}
  * so the grammar is re-derived from a single source of truth alongside its
- * TypeScript consumers. Update both atoms whenever the placeholder name changes.
+ * TypeScript consumers. Update the placeholder name here and in the grammar together.
  */
-export const LARK_LID_HASH_LAX_PLACEHOLDER = "$HASHFMT$";
+export const LARK_LID_HASH_PLACEHOLDER = "$HASHFMT$";
 
 /**
  * Substitute the LID hash placeholder in a Lark grammar text with the
- * central lax-hash regex source. Grammars that don't reference Lids pass
+ * `[a-z]{2}` hash regex source. Grammars that don't reference Lids pass
  * through unchanged.
  */
 export function resolveLarkLidPlaceholders(grammar: string): string {
-	return grammar.split(LARK_LID_HASH_LAX_PLACEHOLDER).join(HASHLINE_HASH_LAX_RE_SRC);
+	return grammar.replaceAll(LARK_LID_HASH_PLACEHOLDER, "[a-z]{2}");
 }
 
 export const HASHLINE_CONTENT_SEPARATOR = "|";
@@ -786,55 +737,23 @@ export const HASHLINE_CONTENT_SEPARATOR = "|";
 const RE_SIGNIFICANT = /[\p{L}\p{N}]/u;
 
 /**
- * Pick a single lowercase letter (`a`-`z`) from xxHash32 of `line`. Mirrors the
- * seed rule used by {@link computeLineHash} for the bigram path: lines with no
- * letter or digit (e.g. bare `}` / `{`) mix in the line number so adjacent
- * brace-only lines hash differently; lines with significant content stay
- * line-number-independent.
- */
-function braceLetter(line: string, idx: number): string {
-	const seed = RE_SIGNIFICANT.test(line) ? 0 : idx;
-	return String.fromCharCode(97 + (Bun.hash.xxHash32(line, seed) % 26));
-}
-
-/**
- * Compute a 2-character hash of a single line.
- *
- * - Lines whose trimmed content starts with `}` (closing brace) hash to
- *   `>[a-z]` (one of `>a`..`>z`).
- * - Lines whose trimmed content ends with `{` (opening brace) hash to
- *   `[a-z]<` (one of `a<`..`z<`). When both apply (e.g. `} else {`), the
- *   opening form wins — the new block is what needs tracking.
- * - All other lines map through {@link HASHLINE_BIGRAMS} via xxHash32 mod 647.
- *
- * For brace markers and other lines containing no letter/digit, the line
- * number is mixed into the seed so adjacent identical lines (e.g. consecutive
- * `}` lines) get distinct hashes; significant content stays
+ * Compute a 2-character hash of a single line via xxHash32 mod 647 over
+ * {@link HASHLINE_BIGRAMS}. Lines with no letter or digit (e.g. bare `}`,
+ * bare `{`) mix the line number into the seed so adjacent identical
+ * brace-only lines get distinct hashes; lines with significant content stay
  * line-number-independent so a line is identifiable across small shifts.
  *
  * The line input should not include a trailing newline.
  */
 export function computeLineHash(idx: number, line: string): string {
 	line = line.replace(/\r/g, "").trimEnd();
-
-	const trimmedStart = line.trimStart();
-	const endsOpen = line.endsWith("{");
-	const startsClose = trimmedStart.startsWith("}");
-
-	if (endsOpen) {
-		return `${braceLetter(line, idx)}<`;
-	}
-	if (startsClose) {
-		return `>${braceLetter(line, idx)}`;
-	}
-
 	const seed = RE_SIGNIFICANT.test(line) ? 0 : idx;
 	return HASHLINE_BIGRAMS[Bun.hash.xxHash32(line, seed) % HASHLINE_BIGRAMS_COUNT];
 }
 
 /**
  * Formats an anchor reference given a line number and its text.
- * Returns `LINE+ID` (e.g., `42sr`, `42>t`, or `42a<`) — no separator between
+ * Returns `LINE+ID` (e.g., `42sr`) — no separator between
  * number and hash.
  */
 export function formatLineHash(line: number, lines: string): string {
@@ -843,7 +762,7 @@ export function formatLineHash(line: number, lines: string): string {
 
 /**
  * Formats a single line with a hashline anchor.
- * Returns `LINE+ID|TEXT` (e.g., `42sr|function hi() {`, `3>p|}`).
+ * Returns `LINE+ID|TEXT` (e.g., `42sr|function hi() {`, `3ab|}`).
  */
 export function formatHashLine(lineNumber: number, line: string): string {
 	return `${lineNumber}${computeLineHash(lineNumber, line)}${HASHLINE_CONTENT_SEPARATOR}${line}`;
@@ -862,7 +781,7 @@ export function formatHashLine(lineNumber: number, line: string): string {
  * @example
  * ```
  * formatHashLines("function hi() {\n  return;\n}")
- * // "1a<|function hi() {\n2er|  return;\n3>p|}"
+ * // "1bm|function hi() {\n2er|  return;\n3ab|}"
  * ```
  */
 export function formatHashLines(text: string, startLine = 1): string {

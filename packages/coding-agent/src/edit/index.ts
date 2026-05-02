@@ -9,7 +9,6 @@ import {
 	writethroughNoop,
 } from "../lsp";
 import applyPatchDescription from "../prompts/tools/apply-patch.md" with { type: "text" };
-import atomDescription from "../prompts/tools/atom.md" with { type: "text" };
 import hashlineDescription from "../prompts/tools/hashline.md" with { type: "text" };
 import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
@@ -20,15 +19,13 @@ import type { VimToolDetails } from "../vim/types";
 import { resolveLarkLidPlaceholders } from "./line-hash";
 import { type ApplyPatchParams, applyPatchSchema, expandApplyPatchToEntries } from "./modes/apply-patch";
 import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
-import { type AtomParams, atomEditParamsSchema, executeAtomSingle } from "./modes/atom";
-import atomGrammarTemplate from "./modes/atom.lark" with { type: "text" };
 import {
 	executeHashlineSingle,
 	HashlineMismatchError,
 	type HashlineParams,
-	type HashlineToolEdit,
 	hashlineEditParamsSchema,
 } from "./modes/hashline";
+import hashlineGrammarTemplate from "./modes/hashline.lark" with { type: "text" };
 import { executePatchSingle, type PatchEditEntry, type PatchParams, patchEditSchema } from "./modes/patch";
 import { executeReplaceSingle, type ReplaceEditEntry, type ReplaceParams, replaceEditSchema } from "./modes/replace";
 import { type EditToolDetails, type EditToolPerFileResult, getLspBatchRequest, type LspBatchRequest } from "./renderer";
@@ -38,14 +35,10 @@ export * from "./apply-patch";
 export * from "./diff";
 export * from "./line-hash";
 
-// Resolve the `$HASHFMT$` placeholder in the atom Lark grammar against
-// the central lax-hash regex source. Keeps the grammar's LID rule in lockstep
-// with atom.ts and hashline.ts — every consumer derives the alphabet from one
-// place in line-hash.ts.
-const atomGrammar = resolveLarkLidPlaceholders(atomGrammarTemplate);
+// Resolve the `$HASHFMT$` placeholder in the hashline Lark grammar.
+const hashlineGrammar = resolveLarkLidPlaceholders(hashlineGrammarTemplate);
 
 export * from "./modes/apply-patch";
-export * from "./modes/atom";
 export * from "./modes/hashline";
 export * from "./modes/patch";
 export * from "./modes/replace";
@@ -57,12 +50,11 @@ type TInput =
 	| typeof replaceEditSchema
 	| typeof patchEditSchema
 	| typeof hashlineEditParamsSchema
-	| typeof atomEditParamsSchema
 	| typeof vimSchema
 	| typeof applyPatchSchema;
 
 type VimParams = Static<typeof vimSchema>;
-type EditParams = ReplaceParams | PatchParams | HashlineParams | AtomParams | VimParams | ApplyPatchParams;
+type EditParams = ReplaceParams | PatchParams | HashlineParams | VimParams | ApplyPatchParams;
 type EditToolResultDetails = EditToolDetails | VimToolDetails;
 
 type EditModeDefinition = {
@@ -300,7 +292,7 @@ export class EditTool implements AgentTool<TInput> {
 	 */
 	get customFormat(): { syntax: "lark"; definition: string } | undefined {
 		if (this.mode === "apply_patch") return { syntax: "lark", definition: applyPatchGrammar };
-		if (this.mode === "atom") return { syntax: "lark", definition: atomGrammar };
+		if (this.mode === "hashline") return { syntax: "lark", definition: hashlineGrammar };
 		return undefined;
 	}
 
@@ -398,30 +390,8 @@ export class EditTool implements AgentTool<TInput> {
 					batchRequest: LspBatchRequest | undefined,
 					_onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
 				) => {
-					const { edits, path } = params as HashlineParams;
+					const { input, path } = params as HashlineParams & { path?: string };
 					return executeHashlineSingle({
-						session: tool.session,
-						path,
-						edits: edits as HashlineToolEdit[],
-						signal,
-						batchRequest,
-						writethrough: tool.#writethrough,
-						beginDeferredDiagnosticsForPath: p => tool.#beginDeferredDiagnosticsForPath(p),
-					});
-				},
-			},
-			atom: {
-				description: () => prompt.render(atomDescription),
-				parameters: atomEditParamsSchema,
-				execute: (
-					tool: EditTool,
-					params: EditParams,
-					signal: AbortSignal | undefined,
-					batchRequest: LspBatchRequest | undefined,
-					_onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
-				) => {
-					const { input, path } = params as AtomParams & { path?: string };
-					return executeAtomSingle({
 						session: tool.session,
 						input,
 						path,

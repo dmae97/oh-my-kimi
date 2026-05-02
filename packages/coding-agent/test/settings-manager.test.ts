@@ -121,4 +121,24 @@ describe("Settings", () => {
 			expect(savedSettings.defaultThinkingLevel).toBe(Effort.High);
 		});
 	});
+
+	describe("migrations", () => {
+		it("maps removed atom edit mode settings to hashline", async () => {
+			await writeSettings({
+				edit: {
+					mode: "atom",
+					modelVariants: {
+						"claude-opus": "atom",
+						"gpt-5": "apply_patch",
+					},
+				},
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("edit.mode")).toBe("hashline");
+			expect(settings.getEditVariantForModel("claude-opus-4-5")).toBe("hashline");
+			expect(settings.getEditVariantForModel("gpt-5.2")).toBe("apply_patch");
+		});
+	});
 });

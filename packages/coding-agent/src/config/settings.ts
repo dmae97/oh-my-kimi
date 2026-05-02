@@ -326,7 +326,7 @@ export class Settings {
 
 	/**
 	 * Get the edit variant for a specific model.
-	 * Returns "patch", "replace", "hashline", "atom", "vim", "apply_patch", or null (use global default).
+	 * Returns "patch", "replace", "hashline", "vim", "apply_patch", or null (use global default).
 	 */
 	getEditVariantForModel(model: string | undefined): EditMode | null {
 		if (!model) return null;
@@ -531,6 +531,25 @@ export class Settings {
 				isolationObj.mode = isolationObj.enabled ? "worktree" : "none";
 			}
 			delete isolationObj.enabled;
+		}
+
+		// edit.mode: removed "atom" variant is now "hashline"
+		const editObj = raw.edit as Record<string, unknown> | undefined;
+		if (editObj) {
+			if (editObj.mode === "atom") {
+				editObj.mode = "hashline";
+			}
+			const modelVariants = editObj.modelVariants as Record<string, unknown> | undefined;
+			if (modelVariants && typeof modelVariants === "object" && !Array.isArray(modelVariants)) {
+				for (const [pattern, variant] of Object.entries(modelVariants)) {
+					if (variant === "atom") {
+						modelVariants[pattern] = "hashline";
+					}
+				}
+			}
+		}
+		if (raw["edit.mode"] === "atom") {
+			raw["edit.mode"] = "hashline";
 		}
 
 		// statusLine: rename "plan_mode" segment to "mode"
