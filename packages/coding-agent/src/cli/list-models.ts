@@ -4,6 +4,8 @@
 import { type Api, getSupportedEfforts, type Model } from "@oh-my-pi/pi-ai";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
+import { discoverAndLoadExtensions, loadExtensions } from "../extensibility/extensions";
+import { EventBus } from "../utils/event-bus";
 import { fuzzyFilter } from "../utils/fuzzy";
 
 interface ProviderRow {
@@ -125,4 +127,68 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 			images: "images",
 		});
 	}
+}
+
+/**
+ * Options for the `--list-models` command entry point.
+ */
+export interface RunListModelsOptions {
+	modelRegistry: ModelRegistry;
+	cwd: string;
+	/** CLI-supplied extension paths (e.g. from `-e <path>`). */
+	additionalExtensionPaths?: string[];
+	/** Extension paths configured under `extensions:` in user settings. */
+	settingsExtensions?: string[];
+	/** Disabled extension ids from settings (`disabledExtensions`). */
+	disabledExtensionIds?: string[];
+	/** When true, skip discovery and only load `additionalExtensionPaths`. */
+	disableExtensionDiscovery?: boolean;
+	searchPattern?: string;
+}
+
+/**
+ * Loads extensions (CLI `-e` paths and `settings.extensions`) and surfaces
+ * any provider/model registrations on the supplied `modelRegistry` before
+ * delegating to {@link listModels}. This is the single entry point used by
+ * `--list-models` and exists to ensure extension-contributed providers are
+ * visible in the listing (issue #905). The load is intentionally narrow:
+ * no agent loop, no MCP servers, no custom-tool registration.
+ */
+export async function runListModelsCommand(options: RunListModelsOptions): Promise<void> {
+	const {
+		modelRegistry,
+		cwd,
+		additionalExtensionPaths = [],
+		settingsExtensions = [],
+		disabledExtensionIds = [],
+		disableExtensionDiscovery = false,
+		searchPattern,
+	} = options;
+
+	const eventBus = new EventBus();
+	const extensionsResult = disableExtensionDiscovery
+		? await loadExtensions(additionalExtensionPaths, cwd, eventBus)
+		: await discoverAndLoadExtensions(
+				[...additionalExtensionPaths, ...settingsExtensions],
+				cwd,
+				eventBus,
+				disabledExtensionIds,
+			);
+
+	for (const { path: extPath, error } of extensionsResult.errors) {
+		process.stderr.write(`Failed to load extension: ${extPath}: ${error}\n`);
+	}
+
+	// Mirror sdk.ts: drain pending provider registrations into the registry.
+	const activeSources = extensionsResult.extensions.map(extension => extension.path);
+	modelRegistry.syncExtensionSources(activeSources);
+	for (const sourceId of new Set(activeSources)) {
+		modelRegistry.clearSourceRegistrations(sourceId);
+	}
+	for (const { name, config, sourceId } of extensionsResult.runtime.pendingProviderRegistrations) {
+		modelRegistry.registerProvider(name, config, sourceId);
+	}
+	extensionsResult.runtime.pendingProviderRegistrations = [];
+
+	await listModels(modelRegistry, searchPattern);
 }
