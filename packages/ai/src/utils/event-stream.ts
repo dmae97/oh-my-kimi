@@ -5,6 +5,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 	queue: T[] = [];
 	waiting: Array<{ resolve: (value: IteratorResult<T>) => void; reject: (err: unknown) => void }> = [];
 	done = false;
+	#failed = false;
 	#error: unknown = undefined;
 	finalResultPromise: Promise<R>;
 	resolveFinalResult!: (result: R) => void;
@@ -72,6 +73,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 	fail(err: unknown): void {
 		if (this.done) return;
 		this.done = true;
+		this.#failed = true;
 		this.#error = err;
 		this.rejectFinalResult(err);
 		while (this.waiting.length > 0) {
@@ -84,7 +86,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 		while (true) {
 			if (this.queue.length > 0) {
 				yield this.queue.shift()!;
-			} else if (this.#error !== undefined) {
+			} else if (this.#failed) {
 				throw this.#error;
 			} else if (this.done) {
 				return;
@@ -163,6 +165,15 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 			this.resolveFinalResult(result);
 		}
 		this.endWaiting();
+	}
+
+	override fail(err: unknown): void {
+		if (this.#flushTimer) {
+			clearTimeout(this.#flushTimer);
+			this.#flushTimer = undefined;
+		}
+		this.#deltaBuffer = [];
+		super.fail(err);
 	}
 
 	#scheduleFlush(): void {
