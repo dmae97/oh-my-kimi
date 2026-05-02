@@ -129,6 +129,12 @@ import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { t
 import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { deobfuscateSessionContext, type SecretObfuscator } from "../secrets/obfuscator";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
+import {
+	buildDiscoverableToolSearchIndex,
+	collectDiscoverableTools,
+	type DiscoverableTool,
+	type DiscoverableToolSearchIndex,
+} from "../tool-discovery/tool-index";
 import { assertEditableFile } from "../tools/auto-generated-guard";
 import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
@@ -536,6 +542,9 @@ export class AgentSession {
 	#discoverableMCPTools = new Map<string, DiscoverableMCPTool>();
 	#discoverableMCPSearchIndex: DiscoverableMCPSearchIndex | null = null;
 	#selectedMCPToolNames = new Set<string>();
+	// Generic tool discovery (covers built-in + MCP + extension when tools.discoveryMode === "all")
+	#discoverableToolSearchIndex: DiscoverableToolSearchIndex | null = null;
+	#selectedDiscoveredToolNames = new Set<string>();
 	#rpcHostToolNames = new Set<string>();
 	#defaultSelectedMCPServerNames = new Set<string>();
 	#defaultSelectedMCPToolNames = new Set<string>();
@@ -2102,6 +2111,7 @@ export class AgentSession {
 	#setDiscoverableMCPTools(discoverableMCPTools: Map<string, DiscoverableMCPTool>): void {
 		this.#discoverableMCPTools = discoverableMCPTools;
 		this.#discoverableMCPSearchIndex = null;
+		this.#discoverableToolSearchIndex = null; // invalidate generic index too
 	}
 
 	#filterSelectableMCPToolNames(toolNames: Iterable<string>): string[] {
@@ -2204,11 +2214,20 @@ export class AgentSession {
 		return this.#mcpDiscoveryEnabled;
 	}
 
-	getDiscoverableMCPTools(): DiscoverableMCPTool[] {
-		return Array.from(this.#discoverableMCPTools.values());
+	getDiscoverableMCPTools(): DiscoverableTool[] {
+		// Return as DiscoverableTool[] for forward compatibility with the unified ToolSession interface.
+		return Array.from(this.#discoverableMCPTools.values()).map(t => ({
+			name: t.name,
+			label: t.label,
+			summary: t.description,
+			source: "mcp" as const,
+			serverName: t.serverName,
+			mcpToolName: t.mcpToolName,
+			schemaKeys: t.schemaKeys,
+		}));
 	}
 
-	getDiscoverableMCPSearchIndex(): DiscoverableMCPSearchIndex {
+	getDiscoverableMCPSearchIndex(): DiscoverableToolSearchIndex {
 		if (!this.#discoverableMCPSearchIndex) {
 			this.#discoverableMCPSearchIndex = buildDiscoverableMCPSearchIndex(this.#discoverableMCPTools.values());
 		}
@@ -2240,6 +2259,106 @@ export class AgentSession {
 			...this.#filterSelectableMCPToolNames(nextSelectedMCPToolNames),
 		];
 		await this.setActiveToolsByName(nextActive);
+		return [...new Set(activated)];
+	}
+
+	// ── Generic tool discovery (covers built-in + MCP + extension) ────────────
+
+	/** Resolve effective discovery mode: tools.discoveryMode wins; mcp.discoveryMode is back-compat alias. */
+	#resolveEffectiveDiscoveryMode(): "off" | "mcp-only" | "all" {
+		const toolsMode = this.settings.get("tools.discoveryMode");
+		if (toolsMode !== "off") return toolsMode as "off" | "mcp-only" | "all";
+		if (this.settings.get("mcp.discoveryMode")) return "mcp-only";
+		return "off";
+	}
+
+	isToolDiscoveryEnabled(): boolean {
+		return this.#resolveEffectiveDiscoveryMode() !== "off";
+	}
+
+	getDiscoverableTools(filter?: { source?: DiscoverableTool["source"] }): DiscoverableTool[] {
+		// For "all" mode we combine built-in registry entries + MCP tools.
+		// For "mcp-only" mode we only return MCP tools.
+		const mode = this.#resolveEffectiveDiscoveryMode();
+		const mcpTools: DiscoverableTool[] = Array.from(this.#discoverableMCPTools.values()).map(t => ({
+			name: t.name,
+			label: t.label,
+			summary: t.description,
+			source: "mcp" as const,
+			serverName: t.serverName,
+			mcpToolName: t.mcpToolName,
+			schemaKeys: t.schemaKeys,
+		}));
+		const builtinTools: DiscoverableTool[] = mode === "all" ? this.#collectDiscoverableBuiltinTools() : [];
+		const allTools = [...builtinTools, ...mcpTools];
+		return filter?.source ? allTools.filter(t => t.source === filter.source) : allTools;
+	}
+
+	/** Collect built-in tools from the registry that are marked discoverable (not currently active). */
+	#collectDiscoverableBuiltinTools(): DiscoverableTool[] {
+		// Import here to avoid circular dep - BUILTIN_TOOLS is defined in tools/index.ts which imports from us.
+		// We instead use collectDiscoverableTools on the tool registry directly.
+		const activeNames = new Set(this.getActiveToolNames());
+		const result: DiscoverableTool[] = [];
+		for (const [name, tool] of this.#toolRegistry) {
+			// Skip MCP tools (handled separately), hidden tools, and already-active tools
+			if (isMCPToolName(name) || activeNames.has(name)) continue;
+			const t = collectDiscoverableTools([tool], { source: "builtin" });
+			result.push(...t);
+		}
+		return result;
+	}
+
+	getDiscoverableToolSearchIndex(): DiscoverableToolSearchIndex {
+		if (!this.#discoverableToolSearchIndex) {
+			this.#discoverableToolSearchIndex = buildDiscoverableToolSearchIndex(this.getDiscoverableTools());
+		}
+		return this.#discoverableToolSearchIndex;
+	}
+
+	/** Invalidate the generic search index cache (call after tool set changes). */
+	#invalidateDiscoverableToolSearchIndex(): void {
+		this.#discoverableToolSearchIndex = null;
+	}
+
+	getSelectedDiscoveredToolNames(): string[] {
+		// Union of MCP-selected and generic non-MCP selected
+		const mcpSelected = this.getSelectedMCPToolNames();
+		const nonMcpSelected = Array.from(this.#selectedDiscoveredToolNames).filter(
+			name => this.#toolRegistry.has(name) && !isMCPToolName(name),
+		);
+		return [...new Set([...mcpSelected, ...nonMcpSelected])];
+	}
+
+	async activateDiscoveredTools(toolNames: string[]): Promise<string[]> {
+		const mcpNames = toolNames.filter(isMCPToolName);
+		const nonMcpNames = toolNames.filter(name => !isMCPToolName(name));
+		const activated: string[] = [];
+
+		// Activate MCP tools via existing path
+		if (mcpNames.length > 0) {
+			const activatedMcp = await this.activateDiscoveredMCPTools(mcpNames);
+			activated.push(...activatedMcp);
+		}
+
+		// Activate non-MCP tools (built-ins that are in the registry but not currently active)
+		if (nonMcpNames.length > 0) {
+			const currentActiveNames = new Set(this.getActiveToolNames());
+			const newlyAdded: string[] = [];
+			for (const name of nonMcpNames) {
+				if (this.#toolRegistry.has(name) && !currentActiveNames.has(name)) {
+					newlyAdded.push(name);
+					this.#selectedDiscoveredToolNames.add(name);
+					activated.push(name);
+				}
+			}
+			if (newlyAdded.length > 0) {
+				const nextActive = [...this.getActiveToolNames(), ...newlyAdded];
+				await this.setActiveToolsByName(nextActive);
+				this.#invalidateDiscoverableToolSearchIndex();
+			}
+		}
+
 		return [...new Set(activated)];
 	}
 
