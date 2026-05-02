@@ -24,12 +24,8 @@ interface VmHelperOptions {
 	path?: string;
 	hidden?: boolean;
 	maxDepth?: number;
-	ignoreCase?: boolean;
-	literal?: boolean;
 	limit?: number;
 	offset?: number;
-	globPattern?: string;
-	flags?: string;
 	reverse?: boolean;
 	unique?: boolean;
 	count?: boolean;
@@ -169,50 +165,6 @@ function clearTrackedTimeout(state: VmContextState, repeat: boolean, timer: Node
 	state.timers.delete(timer);
 }
 
-async function listFiles(
-	state: VmContextState,
-	pattern: string,
-	searchPath: string,
-	options: VmHelperOptions,
-): Promise<string[]> {
-	const resolved = resolvePath(state, searchPath);
-	const hasRecursivePattern = pattern.includes("**");
-	const normalizedPattern = hasRecursivePattern ? pattern : `**/${pattern}`;
-	const matches = await Array.fromAsync(
-		new Bun.Glob(normalizedPattern).scan({
-			cwd: resolved,
-			dot: options.hidden ?? false,
-			absolute: true,
-			onlyFiles: false,
-		}),
-	);
-	const limited = matches.slice(0, options.limit ?? 1000).map(match => path.normalize(match));
-	return limited.sort();
-}
-
-async function grepFile(
-	filePath: string,
-	pattern: string,
-	options: VmHelperOptions,
-): Promise<Array<{ line: number; text: string }>> {
-	const content = await Bun.file(filePath).text();
-	const lines = content.split(/\r?\n/);
-	const matcher = options.literal
-		? (line: string) =>
-				options.ignoreCase ? line.toLowerCase().includes(pattern.toLowerCase()) : line.includes(pattern)
-		: (line: string) => new RegExp(pattern, options.flags ?? (options.ignoreCase ? "i" : "")).test(line);
-	const hits: Array<{ line: number; text: string }> = [];
-	for (let index = 0; index < lines.length; index++) {
-		if (matcher(lines[index])) {
-			hits.push({ line: index + 1, text: lines[index] });
-			if (hits.length >= (options.limit ?? 200)) {
-				break;
-			}
-		}
-	}
-	return hits;
-}
-
 async function createHelpers(state: VmContextState) {
 	return {
 		read: async (rawPath: string, options: VmHelperOptions = {}): Promise<string> => {
@@ -257,103 +209,6 @@ async function createHelpers(state: VmContextState) {
 				bytes: utf8Encoder.encode(content).byteLength,
 			});
 			return target;
-		},
-		stat: async (
-			rawPath: string,
-		): Promise<{ path: string; size: number; is_file: boolean; is_dir: boolean; mtime: string }> => {
-			const target = resolvePath(state, rawPath);
-			const info = await Bun.file(target).stat();
-			const result = {
-				path: target,
-				size: info.size,
-				is_file: info.isFile(),
-				is_dir: info.isDirectory(),
-				mtime: new Date(info.mtimeMs).toISOString(),
-			};
-			emitStatus(state, { op: "stat", path: target, size: result.size, is_dir: result.is_dir, mtime: result.mtime });
-			return result;
-		},
-		find: async (pattern: string, searchPath = ".", options: VmHelperOptions = {}): Promise<string[]> => {
-			const matches = await listFiles(state, pattern, searchPath, options);
-			emitStatus(state, {
-				op: "find",
-				pattern,
-				path: resolvePath(state, searchPath),
-				count: matches.length,
-				matches: matches.slice(0, 20),
-			});
-			return matches;
-		},
-		glob: async (pattern: string, searchPath = ".", options: VmHelperOptions = {}): Promise<string[]> => {
-			const resolved = resolvePath(state, searchPath);
-			const matches = await Array.fromAsync(
-				new Bun.Glob(pattern).scan({
-					cwd: resolved,
-					dot: options.hidden ?? false,
-					absolute: true,
-					onlyFiles: false,
-				}),
-			);
-			const limited = matches
-				.slice(0, options.limit ?? 1000)
-				.map(match => path.normalize(match))
-				.sort();
-			emitStatus(state, {
-				op: "glob",
-				pattern,
-				path: resolved,
-				count: limited.length,
-				matches: limited.slice(0, 20),
-			});
-			return limited;
-		},
-		grep: async (
-			pattern: string,
-			rawPath: string,
-			options: VmHelperOptions = {},
-		): Promise<Array<{ line: number; text: string }>> => {
-			const filePath = resolvePath(state, rawPath);
-			const hits = await grepFile(filePath, pattern, options);
-			emitStatus(state, { op: "grep", pattern, path: filePath, count: hits.length, hits: hits.slice(0, 10) });
-			return hits;
-		},
-		rgrep: async (
-			pattern: string,
-			searchPath = ".",
-			options: VmHelperOptions = {},
-		): Promise<Array<{ file: string; line: number; text: string }>> => {
-			const files = await listFiles(state, options.globPattern ?? "*", searchPath, {
-				...options,
-				limit: options.limit ?? 100,
-			});
-			const hits: Array<{ file: string; line: number; text: string }> = [];
-			for (const file of files) {
-				const fileStat = await Bun.file(file)
-					.stat()
-					.catch(() => undefined);
-				if (!fileStat || fileStat.isDirectory()) continue;
-				for (const hit of await grepFile(file, pattern, options)) {
-					hits.push({ file, line: hit.line, text: hit.text });
-					if (hits.length >= (options.limit ?? 100)) {
-						emitStatus(state, {
-							op: "rgrep",
-							pattern,
-							path: resolvePath(state, searchPath),
-							count: hits.length,
-							hits: hits.slice(0, 10),
-						});
-						return hits;
-					}
-				}
-			}
-			emitStatus(state, {
-				op: "rgrep",
-				pattern,
-				path: resolvePath(state, searchPath),
-				count: hits.length,
-				hits: hits.slice(0, 10),
-			});
-			return hits;
 		},
 		sortText: (text: string, options: VmHelperOptions = {}): string => {
 			const lines = String(text).split(/\r?\n/);
@@ -402,22 +257,6 @@ async function createHelpers(state: VmContextState) {
 			const limited = entries.slice(0, options.limit ?? entries.length);
 			emitStatus(state, { op: "counter", unique: counts.size, total: values.length, top: limited.slice(0, 10) });
 			return limited;
-		},
-		sed: async (
-			rawPath: string,
-			pattern: string,
-			replacement: string,
-			options: VmHelperOptions = {},
-		): Promise<number> => {
-			const filePath = resolvePath(state, rawPath);
-			const content = await Bun.file(filePath).text();
-			const regex = new RegExp(pattern, options.flags ?? "g");
-			const matches = content.match(regex);
-			const updated = content.replace(regex, replacement);
-			await Bun.write(filePath, updated);
-			const count = matches?.length ?? 0;
-			emitStatus(state, { op: "sed", path: filePath, count });
-			return count;
 		},
 		diff: async (rawA: string, rawB: string): Promise<string> => {
 			const fileA = resolvePath(state, rawA);

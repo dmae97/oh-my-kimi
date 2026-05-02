@@ -3,8 +3,7 @@ from __future__ import annotations
 if "__omp_prelude_loaded__" not in globals():
     __omp_prelude_loaded__ = True
     from pathlib import Path
-    import os, re, json, shutil, subprocess
-    from datetime import datetime
+    import os, json, shutil, subprocess
     from IPython.display import display as _ipy_display, JSON
 
     _PRESENTABLE_REPRS = (
@@ -80,184 +79,6 @@ if "__omp_prelude_loaded__" not in globals():
             f.write(content)
         _emit_status("append", path=str(p), chars=len(content))
         return p
-    def _load_gitignore_patterns(base: Path) -> list[str]:
-        """Load .gitignore patterns from base directory and parents."""
-        patterns: list[str] = []
-        # Always exclude these
-        patterns.extend(["**/.git", "**/.git/**", "**/node_modules", "**/node_modules/**"])
-        # Walk up to find .gitignore files
-        current = base.resolve()
-        for _ in range(20):  # Limit depth
-            gitignore = current / ".gitignore"
-            if gitignore.exists():
-                try:
-                    for line in gitignore.read_text().splitlines():
-                        line = line.strip()
-                        if line and not line.startswith("#"):
-                            # Normalize pattern for fnmatch
-                            if line.startswith("/"):
-                                patterns.append(str(current / line[1:]))
-                            else:
-                                patterns.append(f"**/{line}")
-                except Exception:
-                    pass
-            parent = current.parent
-            if parent == current:
-                break
-            current = parent
-        return patterns
-
-    def _match_gitignore(path: Path, patterns: list[str], base: Path) -> bool:
-        """Check if path matches any gitignore pattern."""
-        import fnmatch
-        rel = str(path.relative_to(base)) if path.is_relative_to(base) else str(path)
-        abs_path = str(path.resolve())
-        for pat in patterns:
-            if pat.startswith("**/"):
-                # Match against any part of the path
-                if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(rel, pat[3:]):
-                    return True
-                # Also check each path component
-                for part in path.parts:
-                    if fnmatch.fnmatch(part, pat[3:]):
-                        return True
-            elif fnmatch.fnmatch(abs_path, pat) or fnmatch.fnmatch(rel, pat):
-                return True
-        return False
-
-    def find(
-        pattern: str,
-        path: str | Path = ".",
-        *,
-        type: str = "file",
-        limit: int = 1000,
-        hidden: bool = False,
-        sort_by_mtime: bool = False,
-        maxdepth: int | None = None,
-        mindepth: int | None = None,
-    ) -> list[Path]:
-        """Recursive glob find. Respects .gitignore.
-        
-        maxdepth/mindepth are relative to path (0 = path itself, 1 = direct children).
-        """
-        p = Path(path).resolve()
-        base_depth = len(p.parts)
-        ignore_patterns = _load_gitignore_patterns(p)
-        matches: list[Path] = []
-        for m in p.rglob(pattern):
-            if len(matches) >= limit:
-                break
-            # Check depth constraints
-            rel_depth = len(m.resolve().parts) - base_depth
-            if maxdepth is not None and rel_depth > maxdepth:
-                continue
-            if mindepth is not None and rel_depth < mindepth:
-                continue
-            # Skip hidden files unless requested
-            if not hidden and any(part.startswith(".") for part in m.parts):
-                continue
-            # Skip gitignored paths
-            if _match_gitignore(m, ignore_patterns, p):
-                continue
-            # Filter by type
-            if type == "file" and m.is_dir():
-                continue
-            if type == "dir" and not m.is_dir():
-                continue
-            matches.append(m)
-        if sort_by_mtime:
-            matches.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-        else:
-            matches.sort()
-        _emit_status("find", pattern=pattern, path=str(p), count=len(matches), matches=[str(m) for m in matches[:20]])
-        return matches
-
-    def grep(
-        pattern: str,
-        path: str | Path,
-        *,
-        ignore_case: bool = False,
-        literal: bool = False,
-        context: int = 0,
-    ) -> list[dict]:
-        """Grep a single file. Returns dicts with line/text fields."""
-        p = Path(path)
-        lines = p.read_text(encoding="utf-8").splitlines()
-        if literal:
-            if ignore_case:
-                match_fn = lambda line: pattern.lower() in line.lower()
-            else:
-                match_fn = lambda line: pattern in line
-        else:
-            flags = re.IGNORECASE if ignore_case else 0
-            rx = re.compile(pattern, flags)
-            match_fn = lambda line: rx.search(line) is not None
-        
-        match_lines: set[int] = set()
-        for i, line in enumerate(lines, 1):
-            if match_fn(line):
-                match_lines.add(i)
-        
-        # Expand with context
-        if context > 0:
-            expanded: set[int] = set()
-            for ln in match_lines:
-                for offset in range(-context, context + 1):
-                    expanded.add(ln + offset)
-            output_lines = sorted(ln for ln in expanded if 1 <= ln <= len(lines))
-        else:
-            output_lines = sorted(match_lines)
-        
-        hits = [{"line": ln, "text": lines[ln - 1]} for ln in output_lines]
-        _emit_status("grep", pattern=pattern, path=str(p), count=len(match_lines), hits=hits[:10])
-        return hits
-
-    def rgrep(
-        pattern: str,
-        path: str | Path = ".",
-        *,
-        glob_pattern: str = "*",
-        ignore_case: bool = False,
-        literal: bool = False,
-        limit: int = 100,
-        hidden: bool = False,
-    ) -> list[dict]:
-        """Recursive grep across files matching glob_pattern. Returns dicts with file/line/text fields. Respects .gitignore."""
-        if literal:
-            if ignore_case:
-                match_fn = lambda line: pattern.lower() in line.lower()
-            else:
-                match_fn = lambda line: pattern in line
-        else:
-            flags = re.IGNORECASE if ignore_case else 0
-            rx = re.compile(pattern, flags)
-            match_fn = lambda line: rx.search(line) is not None
-        
-        base = Path(path)
-        ignore_patterns = _load_gitignore_patterns(base)
-        hits: list[dict] = []
-        for file_path in base.rglob(glob_pattern):
-            if len(hits) >= limit:
-                break
-            if file_path.is_dir():
-                continue
-            # Skip hidden files unless requested
-            if not hidden and any(part.startswith(".") for part in file_path.parts):
-                continue
-            # Skip gitignored paths
-            if _match_gitignore(file_path, ignore_patterns, base):
-                continue
-            try:
-                lines = file_path.read_text(encoding="utf-8").splitlines()
-            except Exception:
-                continue
-            for i, line in enumerate(lines, 1):
-                if len(hits) >= limit:
-                    break
-                if match_fn(line):
-                    hits.append({"file": str(file_path), "line": i, "text": line})
-        _emit_status("rgrep", pattern=pattern, path=str(base), count=len(hits), hits=hits[:10])
-        return hits
     class ShellResult:
         """Result from shell command execution."""
         __slots__ = ("args", "stdout", "stderr", "returncode")
@@ -409,20 +230,6 @@ if "__omp_prelude_loaded__" not in globals():
         _emit_status("tree", path=str(base), entries=len(lines) - 1, preview=out[:1000])
         return out
 
-    def stat(path: str | Path) -> dict:
-        """Get file/directory info."""
-        p = Path(path)
-        s = p.stat()
-        info = {
-            "path": str(p),
-            "size": s.st_size,
-            "is_file": p.is_file(),
-            "is_dir": p.is_dir(),
-            "mtime": datetime.fromtimestamp(s.st_mtime).isoformat(),
-        }
-        _emit_status("stat", path=str(p), size=s.st_size, is_dir=p.is_dir(), mtime=info["mtime"])
-        return info
-
     def diff(a: str | Path, b: str | Path) -> str:
         """Compare two files, return unified diff."""
         import difflib
@@ -434,31 +241,6 @@ if "__omp_prelude_loaded__" not in globals():
         _emit_status("diff", file_a=str(path_a), file_b=str(path_b), identical=not out, preview=out[:500])
         return out
 
-    def glob(pattern: str, path: str | Path = ".", *, hidden: bool = False) -> list[str]:
-        """Non-recursive glob (use find() for recursive). Respects .gitignore."""
-        p = Path(path)
-        ignore_patterns = _load_gitignore_patterns(p)
-        matches: list[Path] = []
-        for m in p.glob(pattern):
-            # Skip hidden files unless requested
-            if not hidden and m.name.startswith("."):
-                continue
-            # Skip gitignored paths
-            if _match_gitignore(m, ignore_patterns, p):
-                continue
-            matches.append(m)
-        matches = sorted(matches)
-        _emit_status("glob", pattern=pattern, path=str(p), count=len(matches), matches=[str(m) for m in matches[:20]])
-        return matches
-
-    def sed(path: str | Path, pattern: str, repl: str, *, flags: int = 0) -> int:
-        """Regex replace in file (like sed -i). Returns count."""
-        p = Path(path)
-        data = p.read_text(encoding="utf-8")
-        new, count = re.subn(pattern, repl, data, flags=flags)
-        p.write_text(new, encoding="utf-8")
-        _emit_status("sed", path=str(p), count=count)
-        return count
     def output(
         *ids: str,
         format: str = "raw",

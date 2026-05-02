@@ -31,18 +31,6 @@ write(path, content) → str
     Write content to a file (creates parent directories). Returns the resolved path.
 append(path, content) → str
     Append content to a file. Returns the resolved path.
-stat(path) → {path, size, is_file, is_dir, mtime}
-    File or directory metadata. mtime is an ISO-8601 string.
-find(pattern, path?=".", type?="file", limit?=1000, hidden?=False, sort_by_mtime?=False, maxdepth?=None, mindepth?=None) → list[path]
-    Recursive glob find. Respects .gitignore.
-glob(pattern, path?=".", hidden?=False) → list[path]
-    Non-recursive glob. Use find() for recursive walks. Respects .gitignore.
-grep(pattern, path, ignore_case?=False, literal?=False, context?=0) → list[{line, text}]
-    Search a single file.
-rgrep(pattern, path?=".", glob_pattern?="*", ignore_case?=False, literal?=False, limit?=100, hidden?=False) → list[{file, line, text}]
-    Search recursively across files. Respects .gitignore.
-sed(path, pattern, repl, flags?=0) → int
-    Regex replace in a file (like sed -i). Returns replacement count.
 tree(path?=".", max_depth?=3, show_hidden?=False) → str
     Render a directory tree.
 diff(a, b) → str

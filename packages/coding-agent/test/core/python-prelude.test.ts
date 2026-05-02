@@ -39,22 +39,7 @@ const shouldRun = Boolean(pythonPath) && hasKernelDeps;
 
 describe.skipIf(!shouldRun)("PYTHON_PRELUDE integration", () => {
 	it("exposes prelude helpers via eval python backend", async () => {
-		const helpers = [
-			"env",
-			"read",
-			"write",
-			"append",
-			"find",
-			"glob",
-			"grep",
-			"rgrep",
-			"sed",
-			"tree",
-			"stat",
-			"diff",
-			"run",
-			"output",
-		];
+		const helpers = ["env", "read", "write", "append", "tree", "diff", "run", "output"];
 
 		const session = {
 			cwd: getProjectDir(),
