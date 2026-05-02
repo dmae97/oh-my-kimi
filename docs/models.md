@@ -443,16 +443,48 @@ The built-in model generator also assigns this automatically for `*-spark` model
 
 ## Compatibility and routing fields
 
-`models.yml` supports this `compat` subset:
+The `compat` block on a provider or model overrides the URL-based auto-detection in `packages/ai/src/providers/openai-completions-compat.ts`. It is validated by `OpenAICompatSchema` in `packages/coding-agent/src/config/model-registry.ts` and consumed by every `openai-completions` transport (`packages/ai/src/providers/openai-completions.ts`). The canonical type is `OpenAICompat` in `packages/ai/src/types.ts`.
 
-- `supportsStore`
-- `supportsDeveloperRole`
-- `supportsReasoningEffort`
-- `maxTokensField` (`max_completion_tokens` or `max_tokens`)
-- `openRouterRouting.only` / `openRouterRouting.order`
-- `vercelGatewayRouting.only` / `vercelGatewayRouting.order`
+`models.yml` accepts the following keys (all optional; unset falls back to URL detection):
 
-These are consumed by the OpenAI-completions transport logic and combined with URL-based auto-detection.
+Request shaping:
+
+- `supportsStore` — emit `store: false` on requests. Default: auto (off for non-standard endpoints).
+- `supportsDeveloperRole` — use the `developer` system role for reasoning models instead of `system`. Default: auto.
+- `supportsUsageInStreaming` — send `stream_options: { include_usage: true }` to receive token usage on streaming responses. Default: `true`.
+- `maxTokensField` — `"max_completion_tokens"` or `"max_tokens"`. Default: auto.
+- `supportsToolChoice` — emit the `tool_choice` parameter when the caller forces a specific tool. Default: `true`. Set `false` for endpoints that 400 on `tool_choice` (e.g. DeepSeek when reasoning is on).
+- `disableReasoningOnForcedToolChoice` — drop `reasoning_effort` / OpenRouter `reasoning` whenever `tool_choice` forces a call. Default: auto (Kimi/Anthropic-fronted endpoints).
+- `extraBody` — extra top-level fields merged into every request body (gateway hints, controller selectors, etc.).
+
+Reasoning / thinking:
+
+- `supportsReasoningEffort` — accept `reasoning_effort`. Default: auto (off for Grok and zAI).
+- `reasoningEffortMap` — partial map from internal effort levels (`minimal|low|medium|high|xhigh`) to provider-specific strings (e.g. DeepSeek maps `xhigh -> "max"`).
+- `thinkingFormat` — request shape for thinking: `"openai"` (`reasoning_effort`), `"openrouter"` (`reasoning: { effort }`), `"zai"` (`thinking: { type: "enabled" }`), `"qwen"` (top-level `enable_thinking`), or `"qwen-chat-template"` (`chat_template_kwargs.enable_thinking`). Default: `"openai"`.
+- `reasoningContentField` — assistant field carrying chain-of-thought: `"reasoning_content"`, `"reasoning"`, or `"reasoning_text"`. Default: auto.
+- `requiresReasoningContentForToolCalls` — assistant tool-call turns must round-trip the reasoning field (DeepSeek-R1, Kimi, OpenRouter when reasoning is on). Default: `false`.
+- `requiresAssistantContentForToolCalls` — assistant tool-call turns must include non-empty text content (Kimi). Default: `false`.
+
+Tool / message normalization:
+
+- `requiresToolResultName` — tool-result messages need a `name` field (Mistral). Default: auto.
+- `requiresAssistantAfterToolResult` — a user message after a tool result needs an assistant turn in between. Default: auto.
+- `requiresThinkingAsText` — convert thinking blocks to text wrapped in `<thinking>` delimiters (Mistral). Default: auto.
+- `requiresMistralToolIds` — normalize tool-call ids to exactly 9 alphanumeric chars. Default: auto.
+- `supportsStrictMode` — accept the per-tool `strict` field on tool schemas. Default: conservative auto-detect per provider/baseUrl.
+- `toolStrictMode` — `"all_strict"` forces strict on every tool, `"none"` forces it off; unset keeps the existing per-tool mixed behavior.
+
+Gateway routing (only applied when `baseUrl` matches the gateway):
+
+- `openRouterRouting.only` / `openRouterRouting.order` — provider routing on `openrouter.ai` (see <https://openrouter.ai/docs/provider-routing>).
+- `vercelGatewayRouting.only` / `vercelGatewayRouting.order` — provider routing on `ai-gateway.vercel.sh` (see <https://vercel.com/docs/ai-gateway/models-and-providers/provider-options>).
+
+Provider-level `compat` is the baseline; per-model `compat` is deep-merged on top, with `openRouterRouting`, `vercelGatewayRouting`, and `extraBody` merged as nested objects.
+
+### Anthropic compatibility (`anthropic-messages`)
+
+For `anthropic-messages` models the runtime uses a separate `AnthropicCompat` shape (`packages/ai/src/types.ts`). The `models.yml` schema currently exposes only the strict-tools opt-out as a top-level provider field (see below); the remaining Anthropic-side knobs (`disableAdaptiveThinking`, `supportsEagerToolInputStreaming`, `supportsLongCacheRetention`) are set by built-in catalog metadata and are not user-configurable from `models.yml`.
 
 ### Strict tool schemas (`disableStrictTools`)
 
