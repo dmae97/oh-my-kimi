@@ -59,6 +59,15 @@ export interface IdleTimeoutIteratorOptions {
 	firstItemErrorMessage?: string;
 	onIdle?: () => void;
 	onFirstItemTimeout?: () => void;
+	/**
+	 * Cancel iteration as soon as this signal aborts. Required for caller-driven
+	 * cancellation (ESC) when the underlying transport does not surface signal
+	 * aborts to the iterator (HTTP/2 proxies, native sockets, mocked fetch).
+	 * Without this, the consumer sleeps on iterator.next() until the idle/first
+	 * -event watchdog fires — observable as the issue #912 "Working… forever"
+	 * symptom on the github-copilot provider.
+	 */
+	abortSignal?: AbortSignal;
 }
 
 /**
@@ -73,19 +82,20 @@ export async function* iterateWithIdleTimeout<T>(
 ): AsyncGenerator<T> {
 	let watchdog = options.watchdog;
 	const firstItemTimeoutMs = options.firstItemTimeoutMs ?? options.idleTimeoutMs;
-	if (
-		(firstItemTimeoutMs === undefined || firstItemTimeoutMs <= 0) &&
-		(options.idleTimeoutMs === undefined || options.idleTimeoutMs <= 0)
-	) {
-		for await (const item of iterable) {
-			watchdog && clearTimeout(watchdog);
-			watchdog = undefined;
-			yield item;
-		}
-		return;
-	}
-
+	const abortSignal = options.abortSignal;
 	const iterator = iterable[Symbol.asyncIterator]();
+
+	const closeIterator = (): void => {
+		const returnPromise = iterator.return?.();
+		if (returnPromise) {
+			void returnPromise.catch(() => {});
+		}
+	};
+
+	if (abortSignal?.aborted) {
+		closeIterator();
+		throw abortReason(abortSignal);
+	}
 
 	const withRacy = <T>(promise: Promise<T>) =>
 		promise.then(
@@ -98,54 +108,83 @@ export async function* iterateWithIdleTimeout<T>(
 		onFirst = null;
 	};
 
+	const noTimeoutEnforced =
+		(firstItemTimeoutMs === undefined || firstItemTimeoutMs <= 0) &&
+		(options.idleTimeoutMs === undefined || options.idleTimeoutMs <= 0);
+
 	while (true) {
 		const nextResultPromise = withRacy(iterator.next());
 		const activeTimeoutMs = !onFirst ? options.idleTimeoutMs : firstItemTimeoutMs;
 
-		if (activeTimeoutMs === undefined || activeTimeoutMs <= 0) {
-			const outcome = await nextResultPromise;
-			if (outcome.kind === "error") {
-				throw outcome.error;
-			}
-			if (outcome.result.done) {
-				return;
-			}
-			onFirst?.();
-			yield outcome.result.value;
-			continue;
+		const racers: Array<
+			Promise<
+				| { kind: "next"; result: IteratorResult<T> }
+				| { kind: "error"; error: unknown }
+				| { kind: "timeout" }
+				| { kind: "abort" }
+			>
+		> = [nextResultPromise];
+
+		let timer: NodeJS.Timeout | undefined;
+		let resolveTimeout: ((value: { kind: "timeout" }) => void) | undefined;
+		const enforceTimeout = !noTimeoutEnforced && activeTimeoutMs !== undefined && activeTimeoutMs > 0;
+		if (enforceTimeout) {
+			const { promise, resolve } = Promise.withResolvers<{ kind: "timeout" }>();
+			resolveTimeout = resolve;
+			timer = setTimeout(() => resolve({ kind: "timeout" }), activeTimeoutMs);
+			racers.push(promise);
 		}
 
-		const { promise: timeoutPromise, resolve: resolveTimeout } = Promise.withResolvers<{
-			kind: "timeout";
-		}>();
-		const timer = setTimeout(() => resolveTimeout({ kind: "timeout" }), activeTimeoutMs);
+		let abortListener: (() => void) | undefined;
+		let resolveAbort: ((value: { kind: "abort" }) => void) | undefined;
+		if (abortSignal) {
+			const { promise, resolve } = Promise.withResolvers<{ kind: "abort" }>();
+			resolveAbort = resolve;
+			abortListener = () => resolve({ kind: "abort" });
+			abortSignal.addEventListener("abort", abortListener, { once: true });
+			racers.push(promise);
+		}
 
 		try {
-			const outcome = await Promise.race([nextResultPromise, timeoutPromise]);
+			const outcome = await Promise.race(racers);
+			if (outcome.kind === "abort") {
+				closeIterator();
+				throw abortReason(abortSignal!);
+			}
 			if (outcome.kind === "timeout") {
 				if (!onFirst) {
 					options.onIdle?.();
 				} else {
 					options.onFirstItemTimeout?.();
 				}
-				const returnPromise = iterator.return?.();
-				if (returnPromise) {
-					void returnPromise.catch(() => {});
-				}
+				closeIterator();
 				throw new Error(!onFirst ? options.errorMessage : (options.firstItemErrorMessage ?? options.errorMessage));
 			}
-			watchdog && clearTimeout(watchdog);
-			watchdog = undefined;
 			if (outcome.kind === "error") {
 				throw outcome.error;
 			}
+			watchdog && clearTimeout(watchdog);
+			watchdog = undefined;
 			if (outcome.result.done) {
 				return;
 			}
 			onFirst?.();
 			yield outcome.result.value;
 		} finally {
-			clearTimeout(timer);
+			if (timer !== undefined) clearTimeout(timer);
+			// Resolve dangling promises so the racers don't leak (Promise.race is one-shot).
+			resolveTimeout?.({ kind: "timeout" });
+			if (abortListener && abortSignal) {
+				abortSignal.removeEventListener("abort", abortListener);
+			}
+			resolveAbort?.({ kind: "abort" });
 		}
 	}
+}
+
+function abortReason(signal: AbortSignal): Error {
+	const reason = signal.reason;
+	if (reason instanceof Error) return reason;
+	if (typeof reason === "string") return new Error(reason);
+	return new Error("Request was aborted");
 }

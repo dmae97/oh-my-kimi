@@ -220,6 +220,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					watchdog: firstEventWatchdog,
 					errorMessage: "OpenAI responses stream stalled while waiting for the next event",
 					onIdle: () => requestAbortController.abort(),
+					abortSignal: options?.signal,
 				}),
 				output,
 				stream,
