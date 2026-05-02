@@ -1,84 +1,113 @@
 import { parse as partialParse } from "partial-json";
 
-const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
+const QUOTE = 0x22;
+const BACKSLASH = 0x5c;
+const U = 0x75;
 
-function isControlCharacter(char: string): boolean {
-	const codePoint = char.codePointAt(0);
-	return codePoint !== undefined && codePoint >= 0x00 && codePoint <= 0x1f;
-}
+// Valid chars after `\`: " \ / b f n r t u
+const VALID_ESCAPE_CHAR = new Uint8Array(128);
+for (const ch of '"\\/bfnrtu') VALID_ESCAPE_CHAR[ch.charCodeAt(0)] = 1;
 
-function escapeControlCharacter(char: string): string {
-	switch (char) {
-		case "\b":
-			return "\\b";
-		case "\f":
-			return "\\f";
-		case "\n":
-			return "\\n";
-		case "\r":
-			return "\\r";
-		case "\t":
-			return "\\t";
-		default:
-			return `\\u${char.codePointAt(0)?.toString(16).padStart(4, "0") ?? "0000"}`;
+const CONTROL_ESCAPES: readonly string[] = (() => {
+	const e: string[] = [];
+	e[0x08] = "\\b";
+	e[0x09] = "\\t";
+	e[0x0a] = "\\n";
+	e[0x0c] = "\\f";
+	e[0x0d] = "\\r";
+	for (let cp = 0; cp <= 0x1f; cp++) {
+		e[cp] ??= `\\u${cp.toString(16).padStart(4, "0")}`;
 	}
+	return e;
+})();
+
+function isHexDigit(cp: number): boolean {
+	return (cp >= 0x30 && cp <= 0x39) || ((cp | 0x20) >= 0x61 && (cp | 0x20) <= 0x66);
 }
 
-/**
- * Repairs malformed JSON string literals by escaping raw control characters
- * inside strings and preserving invalid escapes as literal backslashes.
- */
 export function repairJson(json: string): string {
-	let repaired = "";
+	const len = json.length;
+	const parts: string[] = [];
+	let lastEmit = 0;
 	let inString = false;
+	let i = 0;
 
-	for (let index = 0; index < json.length; index++) {
-		const char = json[index];
-
+	while (i < len) {
 		if (!inString) {
-			repaired += char;
-			if (char === '"') {
-				inString = true;
-			}
+			// Fast scan: skip to next quote.
+			while (i < len && json.charCodeAt(i) !== QUOTE) i++;
+			if (i >= len) break;
+			inString = true;
+			i++;
 			continue;
 		}
 
-		if (char === '"') {
-			repaired += char;
+		// Fast scan inside string: advance past chars that need no handling.
+		while (i < len) {
+			const cp = json.charCodeAt(i);
+			if (cp < 0x20 || cp === QUOTE || cp === BACKSLASH) break;
+			i++;
+		}
+		if (i >= len) break;
+
+		const cp = json.charCodeAt(i);
+
+		if (cp === QUOTE) {
 			inString = false;
+			i++;
 			continue;
 		}
 
-		if (char === "\\") {
-			const nextChar = json[index + 1];
-			if (nextChar === undefined) {
-				repaired += "\\\\";
+		if (cp === BACKSLASH) {
+			// Need at least one char after the backslash; treat EOI as invalid escape.
+			if (i + 1 >= len) {
+				parts.push(json.slice(lastEmit, i), "\\\\");
+				lastEmit = i + 1;
+				i++;
 				continue;
 			}
 
-			if (nextChar === "u") {
-				const unicodeDigits = json.slice(index + 2, index + 6);
-				if (/^[0-9a-fA-F]{4}$/.test(unicodeDigits)) {
-					repaired += `\\u${unicodeDigits}`;
-					index += 5;
+			const nextCp = json.charCodeAt(i + 1);
+
+			if (nextCp === U) {
+				// Need full \uXXXX, all four digits, all hex.
+				if (
+					i + 5 < len &&
+					isHexDigit(json.charCodeAt(i + 2)) &&
+					isHexDigit(json.charCodeAt(i + 3)) &&
+					isHexDigit(json.charCodeAt(i + 4)) &&
+					isHexDigit(json.charCodeAt(i + 5))
+				) {
+					i += 6;
 					continue;
 				}
-			}
-
-			if (VALID_JSON_ESCAPES.has(nextChar)) {
-				repaired += `\\${nextChar}`;
-				index += 1;
+				// Truncated or non-hex \u — escape the backslash, re-process the rest.
+				parts.push(json.slice(lastEmit, i), "\\\\");
+				lastEmit = i + 1;
+				i++;
 				continue;
 			}
 
-			repaired += "\\\\";
+			if (nextCp < 128 && VALID_ESCAPE_CHAR[nextCp] === 1) {
+				i += 2;
+				continue;
+			}
+
+			parts.push(json.slice(lastEmit, i), "\\\\");
+			lastEmit = i + 1;
+			i++;
 			continue;
 		}
 
-		repaired += isControlCharacter(char) ? escapeControlCharacter(char) : char;
+		// Control character (cp < 0x20).
+		parts.push(json.slice(lastEmit, i), CONTROL_ESCAPES[cp]);
+		lastEmit = i + 1;
+		i++;
 	}
 
-	return repaired;
+	if (!parts.length) return json;
+	if (lastEmit < len) parts.push(json.slice(lastEmit));
+	return parts.join("");
 }
 
 export function parseJsonWithRepair<T>(json: string): T {
@@ -101,7 +130,8 @@ export function parseJsonWithRepair<T>(json: string): T {
  * @returns Parsed object or empty object if parsing fails
  */
 export function parseStreamingJson<T = Record<string, unknown>>(partialJson: string | undefined): T {
-	if (!partialJson || partialJson.trim() === "") {
+	partialJson = partialJson?.trim();
+	if (!partialJson) {
 		return {} as T;
 	}
 
