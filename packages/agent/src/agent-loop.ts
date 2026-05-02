@@ -49,7 +49,11 @@ export function agentLoop(
 			stream.push({ type: "message_end", message: prompt });
 		}
 
-		await runLoop(currentContext, newMessages, config, signal, stream, streamFn);
+		try {
+			await runLoop(currentContext, newMessages, config, signal, stream, streamFn);
+		} catch (err) {
+			stream.fail(err);
+		}
 	})();
 
 	return stream;
@@ -86,7 +90,11 @@ export function agentLoopContinue(
 		stream.push({ type: "agent_start" });
 		stream.push({ type: "turn_start" });
 
-		await runLoop(currentContext, newMessages, config, signal, stream, streamFn);
+		try {
+			await runLoop(currentContext, newMessages, config, signal, stream, streamFn);
+		} catch (err) {
+			stream.fail(err);
+		}
 	})();
 
 	return stream;
