@@ -3,6 +3,7 @@
  *
  * Handles /mcp subcommands for managing MCP servers.
  */
+import * as path from "node:path";
 import { Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import type { SourceMeta } from "../../capability/types";
@@ -655,6 +656,19 @@ export class MCPCommandController {
 		}
 		if (projectConfig.mcpServers?.[name]) {
 			return { filePath: projectPath, scope: "project", config: projectConfig.mcpServers[name] };
+		}
+
+		// Check standalone fallback files (mcp.json, .mcp.json) in project root
+		const standalonePaths = [path.join(cwd, "mcp.json"), path.join(cwd, ".mcp.json")];
+		for (const fallbackPath of standalonePaths) {
+			try {
+				const fallbackConfig = await readMCPConfigFile(fallbackPath);
+				if (fallbackConfig.mcpServers?.[name]) {
+					return { filePath: fallbackPath, scope: "project", config: fallbackConfig.mcpServers[name] };
+				}
+			} catch {
+				// Malformed JSON in standalone file — skip and continue lookup
+			}
 		}
 		return null;
 	}
