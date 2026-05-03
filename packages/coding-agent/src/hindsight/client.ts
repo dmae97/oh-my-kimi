@@ -132,6 +132,65 @@ export interface UpdateDocumentOptions {
 	tags?: string[];
 }
 
+export type MentalModelDetail = "metadata" | "content" | "full";
+export type MentalModelMode = "full" | "delta";
+
+export interface MentalModelTrigger {
+	mode?: MentalModelMode;
+	refresh_after_consolidation?: boolean;
+}
+
+/** Shape returned by list/get on the mental-models endpoint. Fields are populated by `detail`. */
+export interface MentalModelSummary {
+	id: string;
+	bank_id: string;
+	name: string;
+	tags?: string[];
+	last_refreshed_at?: string | null;
+	created_at?: string | null;
+	source_query?: string;
+	content?: string;
+	max_tokens?: number;
+	trigger?: MentalModelTrigger;
+	[key: string]: unknown;
+}
+
+export interface MentalModelListResponse {
+	items: MentalModelSummary[];
+	[key: string]: unknown;
+}
+
+export interface MentalModelHistoryEntry {
+	previous_content: string | null;
+	changed_at: string;
+	[key: string]: unknown;
+}
+
+export interface CreateMentalModelOptions {
+	id?: string;
+	tags?: string[];
+	maxTokens?: number;
+	trigger?: MentalModelTrigger;
+}
+
+export interface CreateMentalModelResponse {
+	operation_id?: string;
+	[key: string]: unknown;
+}
+
+export interface RefreshMentalModelResponse {
+	operation_id?: string;
+	[key: string]: unknown;
+}
+
+export interface ListMentalModelsOptions {
+	detail?: MentalModelDetail;
+}
+
+export interface GetMentalModelOptions {
+	detail?: MentalModelDetail;
+}
+
 export class HindsightError extends Error {
 	statusCode?: number;
 	details?: unknown;
@@ -327,6 +386,100 @@ export class HindsightApi {
 			{ allow404: true },
 		);
 		return result !== null;
+	}
+
+	/**
+	 * List mental models in a bank. Default `detail=content` includes the
+	 * generated `content` text but excludes the heavyweight `reflect_response`
+	 * provenance chain (which can exceed 200KB). Use `detail=metadata` for
+	 * inventory and `detail=full` only for debug surfaces.
+	 */
+	async listMentalModels(bankId: string, options?: ListMentalModelsOptions): Promise<MentalModelListResponse> {
+		return this.#request<MentalModelListResponse>(
+			"GET",
+			`/v1/default/banks/${encodeURIComponent(bankId)}/mental-models`,
+			"listMentalModels",
+			{ query: { detail: options?.detail ?? "content" } },
+		);
+	}
+
+	/** Fetch a single mental model. Returns `null` on 404. */
+	async getMentalModel(
+		bankId: string,
+		mentalModelId: string,
+		options?: GetMentalModelOptions,
+	): Promise<MentalModelSummary | null> {
+		return this.#request<MentalModelSummary | null>(
+			"GET",
+			`/v1/default/banks/${encodeURIComponent(bankId)}/mental-models/${encodeURIComponent(mentalModelId)}`,
+			"getMentalModel",
+			{ query: { detail: options?.detail ?? "content" }, allow404: true },
+		);
+	}
+
+	/**
+	 * Create a mental model. Asynchronous on the server: returns an
+	 * `operation_id`; the model's `content` populates after the background
+	 * reflect completes.
+	 */
+	async createMentalModel(
+		bankId: string,
+		name: string,
+		sourceQuery: string,
+		options?: CreateMentalModelOptions,
+	): Promise<CreateMentalModelResponse> {
+		return this.#request<CreateMentalModelResponse>(
+			"POST",
+			`/v1/default/banks/${encodeURIComponent(bankId)}/mental-models`,
+			"createMentalModel",
+			{
+				body: {
+					id: options?.id,
+					name,
+					source_query: sourceQuery,
+					tags: options?.tags,
+					max_tokens: options?.maxTokens,
+					trigger: options?.trigger,
+				},
+			},
+		);
+	}
+
+	/** Trigger an out-of-band refresh of a mental model. Returns the operation handle. */
+	async refreshMentalModel(bankId: string, mentalModelId: string): Promise<RefreshMentalModelResponse> {
+		return this.#request<RefreshMentalModelResponse>(
+			"POST",
+			`/v1/default/banks/${encodeURIComponent(bankId)}/mental-models/${encodeURIComponent(mentalModelId)}/refresh`,
+			"refreshMentalModel",
+			{},
+		);
+	}
+
+	/** Delete a mental model. Returns `true` on success, `false` if it was already gone (404). */
+	async deleteMentalModel(bankId: string, mentalModelId: string): Promise<boolean> {
+		const result = await this.#request<{ __deleted: boolean } | null>(
+			"DELETE",
+			`/v1/default/banks/${encodeURIComponent(bankId)}/mental-models/${encodeURIComponent(mentalModelId)}`,
+			"deleteMentalModel",
+			{ allow404: true },
+		);
+		return result !== null;
+	}
+
+	/**
+	 * Fetch the change history of a mental model. Each entry captures the
+	 * content snapshot BEFORE that change; the current content is read via
+	 * `getMentalModel`. Most-recent first.
+	 */
+	async getMentalModelHistory(bankId: string, mentalModelId: string): Promise<MentalModelHistoryEntry[]> {
+		const response = await this.#request<MentalModelHistoryEntry[] | { items?: MentalModelHistoryEntry[] }>(
+			"GET",
+			`/v1/default/banks/${encodeURIComponent(bankId)}/mental-models/${encodeURIComponent(mentalModelId)}/history`,
+			"getMentalModelHistory",
+			{},
+		);
+		if (Array.isArray(response)) return response;
+		return response.items ?? [];
 	}
 
 	async #request<T>(method: string, path: string, operation: string, opts?: RequestOptions): Promise<T> {

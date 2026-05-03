@@ -23,17 +23,22 @@ export interface RecallResultLike {
 const MEMORIES_REGEX = /<memories>[\s\S]*?<\/memories>/g;
 const LEGACY_HINDSIGHT_MEMORIES_REGEX = /<hindsight_memories>[\s\S]*?<\/hindsight_memories>/g;
 const LEGACY_RELEVANT_MEMORIES_REGEX = /<relevant_memories>[\s\S]*?<\/relevant_memories>/g;
+const MENTAL_MODELS_REGEX = /<mental_models>[\s\S]*?<\/mental_models>/g;
 
 /**
- * Strip `<memories>` and legacy memory blocks.
+ * Strip `<memories>`, `<mental_models>`, and legacy memory blocks.
  *
- * The recall path injects these tags into the system prompt; if they leak back
- * into the retention transcript, every retain becomes a tighter feedback loop
- * around the same memories. Always strip before retaining.
+ * Both `<memories>` (per-turn recall) and `<mental_models>` (curated semantic
+ * memory) are injected into the system prompt. If either leaks into the
+ * retention transcript, every retain becomes a tighter feedback loop —
+ * paraphrased memories feed the next consolidation, which feeds the next
+ * mental-model refresh, which feeds the next retain. Always strip before
+ * retaining.
  */
 export function stripMemoryTags(content: string): string {
 	return content
 		.replace(MEMORIES_REGEX, "")
+		.replace(MENTAL_MODELS_REGEX, "")
 		.replace(LEGACY_HINDSIGHT_MEMORIES_REGEX, "")
 		.replace(LEGACY_RELEVANT_MEMORIES_REGEX, "");
 }

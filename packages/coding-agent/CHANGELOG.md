@@ -1,12 +1,24 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added `hindsight.mentalModelsEnabled`, `hindsight.mentalModelAutoSeed`, `hindsight.mentalModelRefreshIntervalMs`, and `hindsight.mentalModelMaxRenderChars` settings to control curated Hindsight mental-model activation, seeding, refresh cadence, and prompt render budget
+- Added `<mental_models>` injection to developer instructions, loading bank-level curated summaries as stable background context
+- Added built-in `/memory mm` commands (`list`, `show`, `refresh`, `history`, `seed`, `reload`, `delete`) to inspect and manage mental models on the active bank
+- Added scope-aware mental-model seeding for `global`, `per-project`, and `per-project-tagged` banks, including built-in seed models like user preferences, project conventions, and project decisions
 - Added warning output when hashline block replacements auto-absorbed duplicate boundary lines
+
+### Changed
+
+- Changed the prompt assembly order so `<mental_models>` blocks are appended before `<memories>` recall blocks in developer instructions
 
 ### Fixed
 
+- Fixed the first-turn startup race so `<mental_models>` appears in the opening system prompt when mental-model loading is enabled
+- Fixed retention hygiene by stripping `<mental_models>` blocks from retained content to prevent curated summaries from feeding back into future memory writes
+- Fixed `<mental_models>` rendering to honor the configured character budget and truncate with an explicit truncation marker when the snapshot exceeds limits
 - Fixed hashline replacements so duplicated payload boundary lines adjacent to a replaced block are absorbed into the replacement range instead of being duplicated
 
 ## [14.6.3] - 2026-05-03

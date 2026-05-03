@@ -14,6 +14,7 @@ import {
 	clearHindsightSessionStateForTest,
 	getHindsightSessionState,
 	hindsightBackend,
+	reloadMentalModelsForSession,
 } from "@oh-my-pi/pi-coding-agent/hindsight/backend";
 import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import type { AgentSessionEventListener } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -337,6 +338,123 @@ describe("hindsightBackend first-turn injection", () => {
 		expect(prompt).toContain("</memories>");
 		expect(prompt).toContain("remembered fact");
 	});
+
+	it("places the <mental_models> block above the <memories> recall block in developer instructions", async () => {
+		// Stable, curated semantic memory must come first so the LLM's prior is
+		// anchored on it; the volatile per-turn recall block follows. Ordering
+		// is part of the integration's behavioural contract.
+		const settings = Settings.isolated({
+			"memory.backend": "hindsight",
+			"hindsight.apiUrl": "http://localhost:8888",
+			"hindsight.mentalModelsEnabled": true,
+		});
+		const session = makeFakeSession({ sessionId: "s-order" });
+		await hindsightBackend.start({
+			session: session as never,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: "/tmp",
+			taskDepth: 0,
+		});
+		const state = getHindsightSessionState("s-order");
+		expect(state).toBeDefined();
+		state!.mentalModelsSnippet = "<mental_models>\n# User Preferences\nprefers tabs\n</mental_models>";
+		state!.lastRecallSnippet = "<memories>\nrecalled fact\n</memories>";
+
+		const prompt = await hindsightBackend.buildDeveloperInstructions("/tmp", settings);
+		expect(prompt).toBeDefined();
+		// `<memories>` and `<mental_models>` are mentioned in STATIC_INSTRUCTIONS
+		// bullets too. Match the actual injected block opener (tag + newline)
+		// to disambiguate documentation prose from the injected payloads.
+		const mmIdx = prompt!.indexOf("<mental_models>\n");
+		const memIdx = prompt!.indexOf("<memories>\n");
+		expect(mmIdx).toBeGreaterThanOrEqual(0);
+		expect(memIdx).toBeGreaterThanOrEqual(0);
+		expect(mmIdx).toBeLessThan(memIdx);
+	});
+
+	it("reloadMentalModelsForSession refreshes the cached snippet and base prompt", async () => {
+		// Defends the TTL/manual reload contract: a fresh `listMentalModels`
+		// must update both `mentalModelsSnippet` and `mentalModelsLoadedAt`,
+		// and call `refreshBaseSystemPrompt` so the next turn picks up the
+		// new content.
+		const settings = Settings.isolated({
+			"memory.backend": "hindsight",
+			"hindsight.apiUrl": "http://localhost:8888",
+			"hindsight.mentalModelsEnabled": true,
+		});
+		const session = makeFakeSession({ sessionId: "s-ttl" });
+		// Initial start may issue its own listMentalModels (read-only by default);
+		// stub it to return nothing so the initial snippet is undefined.
+		const listSpy = vi.spyOn(HindsightApi.prototype, "listMentalModels").mockResolvedValue({ items: [] } as never);
+		await hindsightBackend.start({
+			session: session as never,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: "/tmp",
+			taskDepth: 0,
+		});
+		// Wait for the kicked-off load to settle.
+		await getHindsightSessionState("s-ttl")?.mentalModelsLoadPromise;
+		const state = getHindsightSessionState("s-ttl");
+		expect(state).toBeDefined();
+		expect(state!.mentalModelsSnippet).toBeUndefined();
+		expect(state!.mentalModelsLoadedAt).toBeDefined();
+		const initialLoadedAt = state!.mentalModelsLoadedAt!;
+		const refreshSpy = session.refreshBaseSystemPrompt as ReturnType<typeof vi.fn>;
+		const callsBefore = refreshSpy.mock.calls.length;
+
+		// Now publish content and trigger a reload.
+		listSpy.mockResolvedValue({
+			items: [
+				{
+					id: "user-preferences",
+					bank_id: state!.bankId,
+					name: "User Preferences",
+					content: "prefers concise prose",
+				},
+			],
+		} as never);
+		// Force the loadedAt timestamp to differ so the next assertion is meaningful.
+		state!.mentalModelsLoadedAt = initialLoadedAt - 1000;
+
+		const ok = await reloadMentalModelsForSession("s-ttl");
+		expect(ok).toBe(true);
+		expect(state!.mentalModelsSnippet).toBeDefined();
+		expect(state!.mentalModelsSnippet).toContain("# User Preferences");
+		expect(state!.mentalModelsSnippet).toContain("prefers concise prose");
+		expect(state!.mentalModelsLoadedAt).toBeGreaterThan(initialLoadedAt - 1000);
+		expect(refreshSpy.mock.calls.length).toBeGreaterThan(callsBefore);
+	});
+
+	it("reloadMentalModelsForSession returns false on subagent aliases", async () => {
+		// Aliases delegate to the parent; reloads on an alias must no-op so
+		// the parent's cache is the single source of truth.
+		const settings = Settings.isolated({
+			"memory.backend": "hindsight",
+			"hindsight.apiUrl": "http://localhost:8888",
+			"hindsight.mentalModelsEnabled": true,
+		});
+		vi.spyOn(HindsightApi.prototype, "listMentalModels").mockResolvedValue({ items: [] } as never);
+		const parent = makeFakeSession({ sessionId: "alias-parent" });
+		await hindsightBackend.start({
+			session: parent as never,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: "/tmp",
+			taskDepth: 0,
+		});
+		const child = makeFakeSession({ sessionId: "alias-child" });
+		await hindsightBackend.start({
+			session: child as never,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: "/tmp",
+			taskDepth: 1,
+		});
+		const ok = await reloadMentalModelsForSession("alias-child");
+		expect(ok).toBe(false);
+	});
 });
 
 describe("hindsightBackend.clear", () => {
@@ -367,5 +485,31 @@ describe("hindsightBackend.clear", () => {
 
 		await hindsightBackend.clear("/tmp", "/tmp");
 		expect(getHindsightSessionState("s7")).toBeUndefined();
+	});
+
+	it("does not delete server-side mental models on /memory clear (server-side state is sacred)", async () => {
+		// `/memory clear` is documented to wipe only the local recall cache.
+		// Mental models persist on the Hindsight server across sessions and
+		// must not be silently deleted by a local clear command — operators
+		// who actually want to drop server-side state use the Hindsight UI or
+		// `/memory mm delete <id>` explicitly.
+		const settings = Settings.isolated({
+			"memory.backend": "hindsight",
+			"hindsight.apiUrl": "http://localhost:8888",
+			"hindsight.mentalModelsEnabled": true,
+		});
+		vi.spyOn(HindsightApi.prototype, "listMentalModels").mockResolvedValue({ items: [] } as never);
+		const deleteSpy = vi.spyOn(HindsightApi.prototype, "deleteMentalModel").mockResolvedValue(true);
+		const session = makeFakeSession({ sessionId: "s-clear-mm" });
+		await hindsightBackend.start({
+			session: session as never,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: "/tmp",
+			taskDepth: 0,
+		});
+
+		await hindsightBackend.clear("/tmp", "/tmp");
+		expect(deleteSpy).not.toHaveBeenCalled();
 	});
 });

@@ -46,6 +46,18 @@ describe("stripMemoryTags", () => {
 	it("is a no-op when no tags are present", () => {
 		expect(stripMemoryTags("plain content")).toBe("plain content");
 	});
+
+	it("strips <mental_models> blocks so curated context cannot leak back into retention", () => {
+		const text = ["alpha", "<mental_models>", "# User Preferences", "prefers tabs", "</mental_models>", "beta"].join(
+			"\n",
+		);
+		const stripped = stripMemoryTags(text);
+		expect(stripped).not.toContain("<mental_models>");
+		expect(stripped).not.toContain("</mental_models>");
+		expect(stripped).not.toContain("# User Preferences");
+		expect(stripped).toContain("alpha");
+		expect(stripped).toContain("beta");
+	});
 });
 
 describe("composeRecallQuery", () => {

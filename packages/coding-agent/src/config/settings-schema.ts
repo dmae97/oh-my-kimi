@@ -1275,6 +1275,31 @@ export const SETTINGS_SCHEMA = {
 
 	"hindsight.debug": { type: "boolean", default: false },
 
+	"hindsight.mentalModelsEnabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "memory",
+			label: "Hindsight Mental Models",
+			description:
+				"Read curated reflect summaries (mental models) into developer instructions at boot. Loads existing models on the bank — does not write. Pair with hindsight.mentalModelAutoSeed to also auto-create the built-in seed set.",
+			condition: "hindsightActive",
+		},
+	},
+	"hindsight.mentalModelAutoSeed": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "memory",
+			label: "Hindsight Mental Model Auto-Seed",
+			description:
+				"At session start, create any built-in mental models (project-conventions, project-decisions, user-preferences) that do not yet exist on the bank.",
+			condition: "hindsightActive",
+		},
+	},
+	"hindsight.mentalModelRefreshIntervalMs": { type: "number", default: 5 * 60 * 1000 },
+	"hindsight.mentalModelMaxRenderChars": { type: "number", default: 16_000 },
+
 	// TTSR
 	"ttsr.enabled": {
 		type: "boolean",

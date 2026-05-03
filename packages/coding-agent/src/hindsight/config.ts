@@ -41,6 +41,11 @@ export interface HindsightConfig {
 	recallPromptPreamble: string;
 
 	debug: boolean;
+
+	mentalModelsEnabled: boolean;
+	mentalModelAutoSeed: boolean;
+	mentalModelRefreshIntervalMs: number;
+	mentalModelMaxRenderChars: number;
 }
 
 const VALID_RETAIN_MODES: HindsightConfig["retainMode"][] = ["full-session", "last-turn"];
@@ -152,6 +157,11 @@ export function loadHindsightConfig(settings: Settings, env: NodeJS.ProcessEnv =
 		recallPromptPreamble: DEFAULT_PREAMBLE,
 
 		debug: debugEnv ?? settings.get("hindsight.debug"),
+
+		mentalModelsEnabled: settings.get("hindsight.mentalModelsEnabled"),
+		mentalModelAutoSeed: settings.get("hindsight.mentalModelAutoSeed"),
+		mentalModelRefreshIntervalMs: settings.get("hindsight.mentalModelRefreshIntervalMs"),
+		mentalModelMaxRenderChars: settings.get("hindsight.mentalModelMaxRenderChars"),
 	};
 
 	return config;
