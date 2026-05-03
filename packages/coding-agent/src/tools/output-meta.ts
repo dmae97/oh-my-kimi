@@ -465,6 +465,7 @@ async function spillLargeResultToArtifact(
 ): Promise<AgentToolResult> {
 	const sessionManager = context?.sessionManager;
 	if (!sessionManager) return result;
+	if (toolName === "read") return result;
 	const { threshold, tailBytes, tailLines } = getSpillConfig(context?.settings);
 
 	// Skip if tool already saved an artifact
