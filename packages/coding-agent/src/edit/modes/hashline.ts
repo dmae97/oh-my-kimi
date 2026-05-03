@@ -626,6 +626,7 @@ function collectPayload(
 	startIndex: number,
 	opLineNum: number,
 	requirePayload: boolean,
+	warnings: string[],
 ): { payload: string[]; nextIndex: number } {
 	const payload: string[] = [];
 	let index = startIndex;
@@ -638,6 +639,15 @@ function collectPayload(
 	if (payload.length === 0 && requirePayload) {
 		throw new Error(`line ${opLineNum}: + and < operations require at least one |TEXT payload line.`);
 	}
+	// Detect a doubled prefix: every payload line was emitted as `||...`. After
+	// the first strip above, every entry still leads with `|`. Strip the extra
+	// layer and surface a warning so the caller can spot the wire-format slip.
+	// Require ≥2 lines to avoid clobbering an intentional single `|` payload
+	// (e.g. a markdown table fragment with a leading empty cell).
+	if (payload.length >= 2 && payload.every(p => p.startsWith("|"))) {
+		warnings.push(`line ${opLineNum}: every payload line started with "||"; auto-stripped one extra "|" prefix.`);
+		for (let i = 0; i < payload.length; i++) payload[i] = payload[i].slice(1);
+	}
 	return { payload, nextIndex: index };
 }
 
@@ -647,6 +657,7 @@ export function parseHashline(diff: string): HashlineEdit[] {
 
 export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]; warnings: string[] } {
 	const edits: HashlineEdit[] = [];
+	const warnings: string[] = [];
 	const lines = diff.split("\n");
 	let editIndex = 0;
 
@@ -669,7 +680,7 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		const insertBeforeMatch = INSERT_BEFORE_OP_RE.exec(line);
 		if (insertBeforeMatch) {
 			const cursor = parseInsertTarget(insertBeforeMatch[1], lineNum, "before");
-			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, true);
+			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, true, warnings);
 			for (const text of payload) pushInsert(cursor, text, lineNum);
 			i = nextIndex;
 			continue;
@@ -678,7 +689,7 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		const insertAfterMatch = INSERT_AFTER_OP_RE.exec(line);
 		if (insertAfterMatch) {
 			const cursor = parseInsertTarget(insertAfterMatch[1], lineNum, "after");
-			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, true);
+			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, true, warnings);
 			for (const text of payload) pushInsert(cursor, text, lineNum);
 			i = nextIndex;
 			continue;
@@ -696,7 +707,7 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		const replaceMatch = REPLACE_OP_RE.exec(line);
 		if (replaceMatch) {
 			const range = parseRange(replaceMatch[1], lineNum);
-			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, false);
+			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, false, warnings);
 			// `= A..B` with no payload blanks the range to a single empty line.
 			const replacement = payload.length === 0 ? [""] : payload;
 			for (const text of replacement) {
@@ -721,7 +732,7 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		);
 	}
 
-	return { edits, warnings: [] };
+	return { edits, warnings };
 }
 
 // ───────────────────────────────────────────────────────────────────────────

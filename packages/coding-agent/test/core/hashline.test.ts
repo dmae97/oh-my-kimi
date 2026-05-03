@@ -13,6 +13,7 @@ import {
 	HashlineMismatchError,
 	hashlineEditParamsSchema,
 	parseHashline,
+	parseHashlineWithWarnings,
 	splitHashlineInput,
 	splitHashlineInputs,
 } from "@oh-my-pi/pi-coding-agent/edit";
@@ -120,6 +121,33 @@ describe("hashline parser — block op syntax", () => {
 	it("rejects old cursor and equals-inline syntax after cutover", () => {
 		expect(() => parseHashline(`@${tag(1, "aaa")}\n+old`)).toThrow(/unrecognized op/);
 		expect(() => parseHashline(`${tag(1, "aaa")}=AAA`)).toThrow(/unrecognized op/);
+	});
+});
+
+describe("hashline parser — doubled `||` payload prefix", () => {
+	it("auto-strips one extra `|` when every payload line was emitted with `||`", () => {
+		const before = "aaa\nbbb\nccc";
+		const diff = [`= ${tag(2, "bbb")}`, "||BBB", "||CCC"].join("\n");
+		const { edits, warnings } = parseHashlineWithWarnings(diff);
+		expect(applyHashlineEdits(before, edits).lines).toBe("aaa\nBBB\nCCC\nccc");
+		expect(warnings.some(w => /auto-stripped one extra "\|" prefix/.test(w))).toBe(true);
+	});
+
+	it("preserves an intentional single `|` payload line", () => {
+		const before = "aaa\nbbb\nccc";
+		const diff = [`= ${tag(2, "bbb")}`, "||row|cell"].join("\n");
+		// Only one payload line — heuristic must not fire, leaving the leading `|` intact.
+		const { edits, warnings } = parseHashlineWithWarnings(diff);
+		expect(applyHashlineEdits(before, edits).lines).toBe("aaa\n|row|cell\nccc");
+		expect(warnings).toEqual([]);
+	});
+
+	it("leaves payload alone when only some lines start with `|`", () => {
+		const before = "aaa\nbbb\nccc";
+		const diff = [`= ${tag(2, "bbb")}`, "|first", "||second"].join("\n");
+		const { edits, warnings } = parseHashlineWithWarnings(diff);
+		expect(applyHashlineEdits(before, edits).lines).toBe("aaa\nfirst\n|second\nccc");
+		expect(warnings).toEqual([]);
 	});
 });
 
