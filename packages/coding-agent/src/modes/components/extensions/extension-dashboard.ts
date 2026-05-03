@@ -27,15 +27,24 @@ import { theme } from "../../../modes/theme/theme";
 import { matchesAppInterrupt } from "../../../modes/utils/keybinding-matchers";
 import { ExtensionList } from "./extension-list";
 import { InspectorPanel } from "./inspector-panel";
-import { applyFilter, createInitialState, filterByProvider, refreshState, toggleProvider } from "./state-manager";
+import {
+	applyDisabledExtensionsToState,
+	applyFilter,
+	createInitialState,
+	filterByProvider,
+	refreshState,
+	toggleProvider,
+} from "./state-manager";
 import type { DashboardState } from "./types";
 
 export class ExtensionDashboard extends Container {
 	#state!: DashboardState;
 	#mainList!: ExtensionList;
 	#inspector!: InspectorPanel;
+	#refreshToken = 0;
 
 	onClose?: () => void;
+	onRequestRender?: () => void;
 
 	private constructor(
 		private readonly cwd: string,
@@ -181,16 +190,20 @@ export class ExtensionDashboard extends Container {
 			}
 		}
 
+		this.#applyDisabledExtensions(disabled);
 		void this.#refreshFromState();
 	}
 
 	async #refreshFromState(): Promise<void> {
+		const refreshToken = ++this.#refreshToken;
 		// Remember current tab ID before refresh
 		const currentTabId = this.#state.tabs[this.#state.activeTabIndex]?.id;
 
 		const sm = this.settings ?? Settings.instance;
 		const disabledIds = sm ? ((sm.get("disabledExtensions") as string[]) ?? []) : [];
-		this.#state = await refreshState(this.#state, this.cwd, disabledIds);
+		const nextState = await refreshState(this.#state, this.cwd, disabledIds);
+		if (refreshToken !== this.#refreshToken) return;
+		this.#state = nextState;
 
 		// Find the same tab in the new (re-sorted) list
 		if (currentTabId) {
@@ -208,6 +221,17 @@ export class ExtensionDashboard extends Container {
 		}
 
 		this.#buildLayout();
+		this.onRequestRender?.();
+	}
+
+	#applyDisabledExtensions(disabledIds: string[]): void {
+		this.#state = applyDisabledExtensionsToState(this.#state, disabledIds);
+		this.#mainList.setExtensions(this.#state.searchFiltered);
+		if (this.#state.selected) {
+			this.#inspector.setExtension(this.#state.selected);
+		}
+		this.#buildLayout();
+		this.onRequestRender?.();
 	}
 
 	#switchTab(direction: 1 | -1): void {

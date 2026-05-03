@@ -510,6 +510,37 @@ export function filterByProvider(extensions: Extension[], providerId: string): E
 }
 
 /**
+ * Apply setting-backed item disable overrides to an existing dashboard state.
+ * This gives the UI immediate feedback while the full capability refresh runs.
+ */
+export function applyDisabledExtensionsToState(state: DashboardState, disabledIds: string[]): DashboardState {
+	const disabled = new Set(disabledIds);
+	const updateExtension = (ext: Extension): Extension => {
+		if (disabled.has(ext.id)) {
+			if (ext.state === "disabled" && ext.disabledReason === "item-disabled") return ext;
+			return { ...ext, state: "disabled", disabledReason: "item-disabled" };
+		}
+
+		if (ext.state !== "disabled" || ext.disabledReason !== "item-disabled") return ext;
+		if (!isProviderEnabled(ext.source.provider)) {
+			return { ...ext, state: "disabled", disabledReason: "provider-disabled" };
+		}
+
+		const enabled: Extension = { ...ext, state: "active" };
+		delete enabled.disabledReason;
+		return enabled;
+	};
+
+	return {
+		...state,
+		extensions: state.extensions.map(updateExtension),
+		tabFiltered: state.tabFiltered.map(updateExtension),
+		searchFiltered: state.searchFiltered.map(updateExtension),
+		selected: state.selected ? updateExtension(state.selected) : null,
+	};
+}
+
+/**
  * Create initial dashboard state.
  */
 export async function createInitialState(cwd?: string, disabledIds?: string[]): Promise<DashboardState> {
