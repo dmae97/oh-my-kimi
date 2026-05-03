@@ -1221,6 +1221,9 @@ async function recoverCodexStreamError(
 	if (await tryReconnectCodexWebSocketOnConnectionLimit(context, runtime, error)) {
 		return true;
 	}
+	if (await tryRecoverCodexPreviousResponseNotFound(context, runtime, error)) {
+		return true;
+	}
 	if (await tryReplayWebsocketFailureOverSse(context, runtime, error)) {
 		return true;
 	}
@@ -1275,6 +1278,44 @@ async function tryReconnectCodexWebSocketOnConnectionLimit(
 
 	// No content emitted yet — reconnect over websocket.
 	runtime.websocketStreamRetries += 1;
+	await reopenCodexWebSocketRuntimeStream(context, runtime, websocketState);
+	return true;
+}
+
+function isCodexPreviousResponseNotFound(error: unknown): boolean {
+	return error instanceof CodexProviderStreamError && error.code === "previous_response_not_found";
+}
+
+async function tryRecoverCodexPreviousResponseNotFound(
+	context: CodexStreamProcessingContext,
+	runtime: CodexStreamRuntime,
+	error: unknown,
+): Promise<boolean> {
+	const websocketState = context.requestContext.websocketState;
+	if (
+		!isCodexPreviousResponseNotFound(error) ||
+		!websocketState ||
+		runtime.transport !== "websocket" ||
+		context.output.content.length > 0 ||
+		context.options?.signal?.aborted ||
+		runtime.providerRetryAttempt >= CODEX_MAX_RETRIES
+	) {
+		return false;
+	}
+
+	runtime.providerRetryAttempt += 1;
+	resetCodexWebSocketAppendState(websocketState);
+	resetCodexSessionMetadata(websocketState);
+	runtime.currentItem = null;
+	runtime.currentBlock = null;
+	runtime.sawTerminalEvent = false;
+	runtime.nativeOutputItems.length = 0;
+	resetOutputState(context.output);
+	context.firstTokenTime = undefined;
+
+	logCodexDebug("codex previous_response_id expired; retrying with full context", {
+		retry: runtime.providerRetryAttempt,
+	});
 	await reopenCodexWebSocketRuntimeStream(context, runtime, websocketState);
 	return true;
 }
