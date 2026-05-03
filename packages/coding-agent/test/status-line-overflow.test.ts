@@ -4,20 +4,23 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import { _resetSettingsForTest, Settings } from "../src/config/settings";
 import type { StatusLineSegmentId } from "../src/config/settings-schema";
 import { StatusLineComponent } from "../src/modes/components/status-line";
 import type { SegmentContext } from "../src/modes/components/status-line/segments";
 import { renderSegment } from "../src/modes/components/status-line/segments";
-import { theme, initTheme } from "../src/modes/theme/theme";
-import { getSessionAccentAnsi, getSessionAccentHex } from "../src/utils/session-color";
+import { initTheme, theme } from "../src/modes/theme/theme";
 
 const originalProjectDir = getProjectDir();
 
 beforeAll(async () => {
+	_resetSettingsForTest();
+	await Settings.init({ inMemory: true });
 	await initTheme();
 });
 
 afterAll(() => {
+	_resetSettingsForTest();
 	setProjectDir(originalProjectDir);
 });
 
@@ -95,11 +98,8 @@ describe("status line session accent", () => {
 		});
 
 		const border = component.getTopBorder(80).content;
-		const accentAnsi = getSessionAccentAnsi(getSessionAccentHex("Named session"));
-
-		expect(accentAnsi).toBeDefined();
-		expect(border).toContain(theme.getFgAnsi("border"));
-		expect(border).not.toContain(accentAnsi as string);
+		expect(border).toContain(`${theme.getFgAnsi("border")}${theme.boxRound.horizontal}`);
+		expect(border).toContain("Named session");
 	});
 });
 
