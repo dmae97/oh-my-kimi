@@ -736,12 +736,41 @@ const regexEscape = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, 
  * their appended/prepended text.
  *
  * Override at runtime with the `PI_HL_SEP` env var (e.g.
- * `PI_HL_SEP=">"`, `PI_HL_SEP="\\"`). The value is read once at
- * module load; the edit grammar, prompt helper, and edit parser derive from it.
+ * `PI_HL_SEP=">"`, `PI_HL_SEP="\\"`). The value is read once at module load;
+ * the edit grammar, prompt helper, and edit parser derive from it.
+ *
+ * Default is `~`, chosen empirically. Benchmark across 8 candidate separators
+ * x 3 models (glm-4.7:nitro, gpt-5.4-nano, claude-sonnet-4-6), 24-48 runs per
+ * cell, hashline variant, 12 sampled tasks per run:
+ *
+ *   sep | task ✓ | edit ✓ | patch fail      | tok/run
+ *   ----|--------|--------|-----------------|--------
+ *    +  | 70.8%  | 78.0%  | 27/125 (21.6%)  | 32,127
+ *    ÷  | 70.7%  | 90.6%  | 22/211 (10.4%)  | 31,666
+ *    ~  | 69.4%  | 94.9%  |  6/107 ( 5.6%)  | 30,529   <-- default
+ *    >  | 69.2%  | 91.5%  | 21/219 ( 9.6%)  | 30,777
+ *    :  | 66.7%  | 86.4%  | 20/126 (15.9%)  | 33,900
+ *    |  | 65.9%  | 86.9%  | 20/127 (15.7%)  | 34,589
+ *    \  | 65.5%  | 89.8%  | 16/124 (12.9%)  | 36,010
+ *    %  | 63.9%  | 92.8%  | 11/125 ( 8.8%)  | 36,530
+ *
+ * `~` wins because:
+ *   - highest edit-tool success rate (94.9%) of any tested separator
+ *   - lowest patch-failure rate (5.6%) — model rarely emits a malformed payload
+ *   - cheapest in tokens alongside `>` (no retry overhead from format collisions)
+ *   - no line-leading role in any mainstream language, markdown, diff, regex,
+ *     or shell, so payload lines are unambiguous to both the parser and models
+ *   - task-success is statistically tied with `>` and `÷` (within run-to-run
+ *     noise), so the edit-reliability win is free
+ *
+ * `+` and `÷` lead on raw task-success but at the cost of ~2-4x more patch
+ * failures (the model retries until it lands a valid edit). `:`, `|`, `\`
+ * collide with line-leading syntax (label/object-key, body separator, escape)
+ * and degrade both edit reliability and intent-match.
  */
 export const HL_EDIT_SEP = (() => {
-	const sep = Bun.env.PI_HL_SEP;
-	return sep?.length === 1 ? sep : ">";
+	const sep = process.env.PI_HL_SEP?.trim();
+	return sep?.length === 1 ? sep : "~";
 })();
 
 /** Regex-escaped form of {@link HL_EDIT_SEP}, safe for regexes. */
