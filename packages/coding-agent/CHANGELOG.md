@@ -6,17 +6,30 @@
 - Added a `memory.backend` setting (off, local, hindsight) under a new Memory settings tab to control which memory subsystem is active
 - Added Hindsight memory settings (`hindsight.*`) for API connection, bank identification, and recall/retain policy
 - Added `retain`, `recall`, and `reflect` tools for direct long-term memory search, retention, and reflection when using the Hindsight backend
+- Added `hindsight.scoping` setting (`global`, `per-project`, `per-project-tagged`) that controls whether memories are shared across projects, isolated per cwd, or tagged so global + project memories merge on recall (default: `per-project-tagged`)
 - Added `search_code`, `search_commits`, and `search_repos` ops to the `github` tool so the search surface mirrors `gh search`'s subcommands
 
 ### Changed
 
+- Mapped invalid `hindsight.scoping` settings back to the default `per-project-tagged` behavior with a warning
 - Changed `/memory view`, `/memory clear`, and `/memory enqueue` to route through the selected memory backend instead of being hardcoded to local memories
 - Changed compaction context assembly to include backend-provided recall context when available
 - Updated multi-path `search`, `find`, `ast-edit`, and `ast-grep` calls to skip missing base paths, returning matches from remaining paths and reporting skipped paths in output
+- Replaced `hindsight.dynamicBankId` (boolean) with the explicit `hindsight.scoping` enum; legacy values are migrated automatically (`dynamicBankId=true` → `scoping="per-project"`)
 - Changed `search_repos` to run as a global repository search using query qualifiers without applying the `repo` filter
+
+### Deprecated
+
+- Set explicit `hindsight.scoping` now takes precedence over legacy `hindsight.dynamicBankId` when migrating old settings
+
+### Removed
+
+- Removed legacy `hindsight.dynamicBankId` and `hindsight.agentName` fields from the active settings model
+- Removed `hindsight.agentName` and the `HINDSIGHT_AGENT_NAME` / `HINDSIGHT_CHANNEL_ID` / `HINDSIGHT_USER_ID` env vars; the legacy `agent::project::channel::user` bank tuple is gone. A user-set `agentName` is migrated onto `hindsight.bankId`.
 
 ### Fixed
 
+- Forwarded project scoping tags to `hindsight` retain, recall, and reflect operations so manual memory commands honor the active tagging mode
 - Fixed legacy migrations by mapping existing `memories.enabled` values to `memory.backend` on load to preserve prior enable/disable behavior
 - Fixed memory retention so recalled `<memories>` blocks and legacy `<hindsight_memories>` / `<relevant_memories>` blocks are stripped before storing transcripts and do not feed back as new memory
 - Fixed `search_code` output to include each match path, repository, shortened SHA, and a one-line matching fragment

@@ -957,10 +957,21 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	"hindsight.bankIdPrefix": { type: "string", default: undefined },
-	"hindsight.dynamicBankId": { type: "boolean", default: false },
+	"hindsight.scoping": {
+		type: "enum",
+		values: ["global", "per-project", "per-project-tagged"] as const,
+		default: "per-project-tagged",
+		ui: {
+			tab: "memory",
+			label: "Hindsight Scoping",
+			description:
+				"global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = shared bank with project tags so global + project memories merge on recall",
+			submenu: true,
+			condition: "hindsightActive",
+		},
+	},
 	"hindsight.bankMission": { type: "string", default: undefined },
 	"hindsight.retainMission": { type: "string", default: undefined },
-	"hindsight.agentName": { type: "string", default: "omp" },
 
 	"hindsight.autoRecall": {
 		type: "boolean",

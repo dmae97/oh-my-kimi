@@ -29,10 +29,9 @@ function makeConfig(overrides: Partial<HindsightConfig> = {}): HindsightConfig {
 		hindsightApiToken: null,
 		bankId: null,
 		bankIdPrefix: "",
-		dynamicBankId: false,
+		scoping: "global",
 		bankMission: "",
 		retainMission: null,
-		agentName: "omp",
 		autoRecall: true,
 		autoRetain: true,
 		retainMode: "full-session",
@@ -61,12 +60,21 @@ function makeSession(settings: Settings, sessionId: string | null = TEST_SESSION
 	} as unknown as ToolSession;
 }
 
-function registerState(client: HindsightClient, settings?: Settings) {
+interface RegisterStateOptions {
+	retainTags?: string[];
+	recallTags?: string[];
+	recallTagsMatch?: "any" | "all" | "any_strict" | "all_strict";
+}
+
+function registerState(client: HindsightClient, settings?: Settings, opts: RegisterStateOptions = {}) {
 	setHindsightSessionStateForTest(TEST_SESSION_ID, {
 		client,
 		bankId: "test-bank",
+		retainTags: opts.retainTags,
+		recallTags: opts.recallTags,
+		recallTagsMatch: opts.recallTagsMatch,
 		config: makeConfig(),
-		session: { sessionId: TEST_SESSION_ID, sessionManager: { getEntries: () => [] } } as never,
+		session: { sessionId: TEST_SESSION_ID, sessionManager: { getEntries: () => [] } as never } as never,
 		missionsSet: new Set(),
 		lastRetainedTurn: 0,
 		hasRecalledForFirstTurn: false,
@@ -131,6 +139,22 @@ describe("retain.execute", () => {
 		expect(result.content[0]).toEqual({ type: "text", text: "Memory stored." });
 	});
 
+	it("forwards retain tags from session state when present", async () => {
+		const settings = Settings.isolated({ "memory.backend": "hindsight" });
+		const client = new HindsightClient({ baseUrl: "http://localhost:8888" });
+		const retainSpy = vi.spyOn(HindsightClient.prototype, "retain").mockResolvedValue({} as never);
+		registerState(client, settings, { retainTags: ["project:pi"] });
+
+		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
+		await tool.execute("call-tags", { content: "tagged fact" });
+
+		expect(retainSpy).toHaveBeenCalledWith(
+			"test-bank",
+			"tagged fact",
+			expect.objectContaining({ tags: ["project:pi"] }),
+		);
+	});
+
 	it("throws when no per-session state is registered", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
 		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
@@ -177,6 +201,22 @@ describe("recall.execute", () => {
 		expect(block).toMatch(/^Found 2 relevant memories \(as of \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\)/);
 		expect(block).toContain("- fact one [world]");
 		expect(block).toContain("- fact two");
+	});
+
+	it("forwards recall tags + tagsMatch from session state when present", async () => {
+		const settings = Settings.isolated({ "memory.backend": "hindsight" });
+		const client = new HindsightClient({ baseUrl: "http://localhost:8888" });
+		const recallSpy = vi.spyOn(HindsightClient.prototype, "recall").mockResolvedValue({ results: [] } as never);
+		registerState(client, settings, { recallTags: ["project:pi"], recallTagsMatch: "any" });
+
+		const tool = HindsightRecallTool.createIf(makeSession(settings))!;
+		await tool.execute("call-tags", { query: "anything" });
+
+		expect(recallSpy).toHaveBeenCalledWith(
+			"test-bank",
+			"anything",
+			expect.objectContaining({ tags: ["project:pi"], tagsMatch: "any" }),
+		);
 	});
 
 	it("rethrows underlying client errors", async () => {

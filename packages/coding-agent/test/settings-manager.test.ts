@@ -140,5 +140,35 @@ describe("Settings", () => {
 			expect(settings.getEditVariantForModel("claude-opus-4-5")).toBe("hashline");
 			expect(settings.getEditVariantForModel("gpt-5.2")).toBe("apply_patch");
 		});
+
+		it("maps legacy hindsight.dynamicBankId=true onto hindsight.scoping=per-project", async () => {
+			await writeSettings({
+				hindsight: { dynamicBankId: true },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("hindsight.scoping")).toBe("per-project");
+		});
+
+		it("does not override an explicit hindsight.scoping when migrating", async () => {
+			await writeSettings({
+				hindsight: { dynamicBankId: true, scoping: "global" },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("hindsight.scoping")).toBe("global");
+		});
+
+		it("promotes legacy hindsight.agentName onto hindsight.bankId when bankId is unset", async () => {
+			await writeSettings({
+				hindsight: { agentName: "ada-cli" },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("hindsight.bankId")).toBe("ada-cli");
+		});
 	});
 });

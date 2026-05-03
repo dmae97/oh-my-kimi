@@ -14,7 +14,7 @@ import type { HindsightClient } from "@vectorize-io/hindsight-client";
 import type { Settings } from "../config/settings";
 import type { MemoryBackend, MemoryBackendStartOptions } from "../memory-backend/types";
 import type { AgentSession } from "../session/agent-session";
-import { deriveBankId, ensureBankMission } from "./bank";
+import { computeBankScope, ensureBankMission } from "./bank";
 import { createHindsightClient } from "./client";
 import { type HindsightConfig, isHindsightConfigured, loadHindsightConfig } from "./config";
 import {
@@ -41,6 +41,11 @@ import { extractMessages } from "./transcript";
 export interface HindsightSessionState {
 	client: HindsightClient;
 	bankId: string;
+	/** Tags applied to every retain — non-empty in per-project-tagged mode. */
+	retainTags?: string[];
+	/** Tag filter applied to every recall/reflect — non-empty in per-project-tagged mode. */
+	recallTags?: string[];
+	recallTagsMatch?: "any" | "all" | "any_strict" | "all_strict";
 	config: HindsightConfig;
 	session: AgentSession;
 	missionsSet: Set<string>;
@@ -90,12 +95,14 @@ async function recallForContext(
 	query: string,
 	signal?: AbortSignal,
 ): Promise<RecallOutcome> {
-	const { client, bankId, config } = state;
+	const { client, bankId, recallTags, recallTagsMatch, config } = state;
 	try {
 		const response = await client.recall(bankId, query, {
 			budget: config.recallBudget,
 			maxTokens: config.recallMaxTokens,
 			types: config.recallTypes.length > 0 ? config.recallTypes : undefined,
+			tags: recallTags,
+			tagsMatch: recallTagsMatch,
 		});
 		if (signal?.aborted) return { context: null, ok: false };
 		const results = response.results ?? [];
@@ -116,7 +123,7 @@ async function retainSession(
 	sessionId: string,
 	messages: HindsightMessage[],
 ): Promise<void> {
-	const { client, bankId, config, missionsSet } = state;
+	const { client, bankId, retainTags, config, missionsSet } = state;
 	const retainFullWindow = config.retainMode === "full-session";
 
 	let target: HindsightMessage[];
@@ -139,6 +146,7 @@ async function retainSession(
 		documentId,
 		context: config.retainContext,
 		metadata: { session_id: sessionId },
+		tags: retainTags,
 		async: true,
 	});
 }
@@ -224,11 +232,14 @@ export const hindsightBackend: MemoryBackend = {
 		}
 
 		const client = createHindsightClient(config);
-		const bankId = deriveBankId(config, session.sessionManager.getCwd());
+		const scope = computeBankScope(config, session.sessionManager.getCwd());
 
 		const state: HindsightSessionState = {
 			client,
-			bankId,
+			bankId: scope.bankId,
+			retainTags: scope.retainTags,
+			recallTags: scope.recallTags,
+			recallTagsMatch: scope.recallTagsMatch,
 			config,
 			session,
 			missionsSet: new Set(),

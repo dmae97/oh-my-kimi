@@ -7,13 +7,13 @@
  *   3. `HINDSIGHT_*` environment variables
  *
  * Env wins because operators frequently override per-shell (CI, prod) without
- * touching the persisted settings file. The semantics mirror the upstream
- * OpenCode plugin so existing users carry a single mental model across
- * harnesses.
+ * touching the persisted settings file.
  */
 
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
+
+export type HindsightScoping = "global" | "per-project" | "per-project-tagged";
 
 export interface HindsightConfig {
 	hindsightApiUrl: string | null;
@@ -21,10 +21,9 @@ export interface HindsightConfig {
 
 	bankId: string | null;
 	bankIdPrefix: string;
-	dynamicBankId: boolean;
+	scoping: HindsightScoping;
 	bankMission: string;
 	retainMission: string | null;
-	agentName: string;
 
 	autoRecall: boolean;
 	autoRetain: boolean;
@@ -46,6 +45,7 @@ export interface HindsightConfig {
 
 const VALID_RETAIN_MODES: HindsightConfig["retainMode"][] = ["full-session", "last-turn"];
 const VALID_BUDGETS: HindsightConfig["recallBudget"][] = ["low", "mid", "high"];
+const VALID_SCOPINGS: HindsightScoping[] = ["global", "per-project", "per-project-tagged"];
 
 const DEFAULT_PREAMBLE =
 	"Relevant memories from past conversations (prioritize recent when conflicting). " +
@@ -82,6 +82,12 @@ function pickRetainMode(value: unknown): HindsightConfig["retainMode"] | undefin
 		: undefined;
 }
 
+function pickScoping(value: unknown): HindsightScoping | undefined {
+	return typeof value === "string" && (VALID_SCOPINGS as string[]).includes(value)
+		? (value as HindsightScoping)
+		: undefined;
+}
+
 /**
  * Load the resolved Hindsight config.
  *
@@ -93,13 +99,12 @@ export function loadHindsightConfig(settings: Settings, env: NodeJS.ProcessEnv =
 	const apiUrlEnv = envString(env.HINDSIGHT_API_URL);
 	const apiTokenEnv = envString(env.HINDSIGHT_API_TOKEN);
 	const bankIdEnv = envString(env.HINDSIGHT_BANK_ID);
-	const agentNameEnv = envString(env.HINDSIGHT_AGENT_NAME);
 	const bankMissionEnv = envString(env.HINDSIGHT_BANK_MISSION);
 	const retainModeEnv = pickRetainMode(env.HINDSIGHT_RETAIN_MODE);
 	const recallBudgetEnv = pickBudget(env.HINDSIGHT_RECALL_BUDGET);
 	const autoRecallEnv = envBool(env.HINDSIGHT_AUTO_RECALL);
 	const autoRetainEnv = envBool(env.HINDSIGHT_AUTO_RETAIN);
-	const dynamicBankEnv = envBool(env.HINDSIGHT_DYNAMIC_BANK_ID);
+	const scopingEnv = pickScoping(env.HINDSIGHT_SCOPING);
 	const debugEnv = envBool(env.HINDSIGHT_DEBUG);
 	const recallMaxTokensEnv = envInt(env.HINDSIGHT_RECALL_MAX_TOKENS);
 	const recallContextTurnsEnv = envInt(env.HINDSIGHT_RECALL_CONTEXT_TURNS);
@@ -114,6 +119,12 @@ export function loadHindsightConfig(settings: Settings, env: NodeJS.ProcessEnv =
 		});
 	}
 	const settingsRecallBudget = pickBudget(settings.get("hindsight.recallBudget"));
+	const settingsScoping = pickScoping(settings.get("hindsight.scoping"));
+	if (settings.get("hindsight.scoping") && !settingsScoping) {
+		logger.warn("Hindsight: invalid scoping setting, falling back to per-project-tagged", {
+			value: settings.get("hindsight.scoping"),
+		});
+	}
 
 	const config: HindsightConfig = {
 		hindsightApiUrl: apiUrlEnv ?? settings.get("hindsight.apiUrl") ?? null,
@@ -121,10 +132,9 @@ export function loadHindsightConfig(settings: Settings, env: NodeJS.ProcessEnv =
 
 		bankId: bankIdEnv ?? settings.get("hindsight.bankId") ?? null,
 		bankIdPrefix: settings.get("hindsight.bankIdPrefix") ?? "",
-		dynamicBankId: dynamicBankEnv ?? settings.get("hindsight.dynamicBankId"),
+		scoping: scopingEnv ?? settingsScoping ?? "per-project-tagged",
 		bankMission: bankMissionEnv ?? settings.get("hindsight.bankMission") ?? "",
 		retainMission: settings.get("hindsight.retainMission") ?? null,
-		agentName: agentNameEnv ?? settings.get("hindsight.agentName") ?? "omp",
 
 		autoRecall: autoRecallEnv ?? settings.get("hindsight.autoRecall"),
 		autoRetain: autoRetainEnv ?? settings.get("hindsight.autoRetain"),

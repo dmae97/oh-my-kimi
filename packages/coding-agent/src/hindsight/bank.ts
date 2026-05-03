@@ -1,9 +1,15 @@
 /**
- * Bank ID derivation and first-use mission setup.
+ * Bank ID derivation, project-tag scoping, and first-use mission setup.
  *
- * Static mode: bank id is `${prefix}${configured-or-default}`.
- * Dynamic mode: composed from a fixed granularity tuple
- *   (`agent::project::channel::user`) joined by `::`.
+ * Three scoping modes (`HindsightConfig.scoping`):
+ *   - `global`              — single shared bank, no per-project filter.
+ *   - `per-project`         — one bank per cwd basename, hard isolation.
+ *   - `per-project-tagged`  — single shared bank, retains carry a `project:<name>`
+ *                              tag and recall filters on it but still surfaces
+ *                              untagged ("global") memories alongside.
+ *
+ * The base bank id is `bankIdPrefix-bankId` (default `omp`). Per-project mode
+ * appends `-<project>`; tagged mode leaves the bank untouched and uses tags.
  *
  * Mission setup is idempotent at module level — a missionsSet keeps track of
  * banks we've already POSTed to so each session boundary doesn't fire a fresh
@@ -17,34 +23,73 @@ import type { HindsightClient } from "@vectorize-io/hindsight-client";
 import type { HindsightConfig } from "./config";
 
 const DEFAULT_BANK_NAME = "omp";
-const DYNAMIC_BANK_FIELDS = ["agent", "project", "channel", "user"] as const;
+const PROJECT_TAG_PREFIX = "project:";
+const UNKNOWN_PROJECT = "unknown";
 const MISSION_SET_CAP = 10_000;
 
+export type RecallTagsMatch = "any" | "all" | "any_strict" | "all_strict";
+
 /**
- * Derive a bank id for the given working directory and config.
+ * Resolved bank target for a session: which bank to talk to, plus optional
+ * tags to attach to retains and to filter recalls by.
+ */
+export interface BankScope {
+	bankId: string;
+	/** Tags applied to every retain. Undefined when scoping does not use tags. */
+	retainTags?: string[];
+	/** Tags filter for recall/reflect. Undefined when scoping does not use tags. */
+	recallTags?: string[];
+	/** Match mode for `recallTags`. Defaults to `any` so untagged ("global") memories surface too. */
+	recallTagsMatch?: RecallTagsMatch;
+}
+
+/** Compose the prefixed base bank id (no project segment). */
+function baseBankId(config: HindsightConfig): string {
+	const base = config.bankId?.trim() || DEFAULT_BANK_NAME;
+	const prefix = config.bankIdPrefix?.trim() || "";
+	return prefix ? `${prefix}-${base}` : base;
+}
+
+/** Best-effort project label from a working-directory path. */
+function projectLabel(directory: string): string {
+	if (!directory) return UNKNOWN_PROJECT;
+	return path.basename(directory) || UNKNOWN_PROJECT;
+}
+
+/**
+ * Resolve the active bank target plus optional tag scoping.
  *
- * Always returns a non-empty string. Missing channel/user env vars fall back
- * to `default`/`anonymous` so we always end up with a stable, dotted id.
+ * Always returns a non-empty `bankId`. Tag fields are populated only for
+ * `per-project-tagged`.
+ */
+export function computeBankScope(config: HindsightConfig, directory: string): BankScope {
+	const base = baseBankId(config);
+	switch (config.scoping) {
+		case "global":
+			return { bankId: base };
+		case "per-project":
+			return { bankId: `${base}-${projectLabel(directory)}` };
+		case "per-project-tagged": {
+			const tag = `${PROJECT_TAG_PREFIX}${projectLabel(directory)}`;
+			return {
+				bankId: base,
+				retainTags: [tag],
+				recallTags: [tag],
+				// `any` keeps untagged "global" memories visible alongside the
+				// project-tagged ones; flip to `*_strict` to harden isolation.
+				recallTagsMatch: "any",
+			};
+		}
+	}
+}
+
+/**
+ * Backwards-compatible thin wrapper: just return the bank id portion of the
+ * scope. New code should prefer `computeBankScope` directly so it can also
+ * apply the tag fields.
  */
 export function deriveBankId(config: HindsightConfig, directory: string): string {
-	const prefix = config.bankIdPrefix ?? "";
-	const join = (base: string) => (prefix ? `${prefix}-${base}` : base);
-
-	if (!config.dynamicBankId) {
-		return join(config.bankId?.trim() || DEFAULT_BANK_NAME);
-	}
-
-	const channelId = process.env.HINDSIGHT_CHANNEL_ID || "";
-	const userId = process.env.HINDSIGHT_USER_ID || "";
-
-	const fieldMap: Record<(typeof DYNAMIC_BANK_FIELDS)[number], string> = {
-		agent: config.agentName?.trim() || DEFAULT_BANK_NAME,
-		project: directory ? path.basename(directory) || "unknown" : "unknown",
-		channel: channelId || "default",
-		user: userId || "anonymous",
-	};
-
-	return join(DYNAMIC_BANK_FIELDS.map(f => fieldMap[f] || "unknown").join("::"));
+	return computeBankScope(config, directory).bankId;
 }
 
 /**

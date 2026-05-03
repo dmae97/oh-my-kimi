@@ -45,6 +45,8 @@ export class HindsightReflectTool implements AgentTool<typeof hindsightReflectSc
 				const response = await state.client.reflect(state.bankId, params.query, {
 					context: params.context,
 					budget: state.config.recallBudget,
+					tags: state.recallTags,
+					tagsMatch: state.recallTagsMatch,
 				});
 				const text = response.text?.trim() || "No relevant information found to reflect on.";
 				return {

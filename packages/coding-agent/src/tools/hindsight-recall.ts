@@ -46,6 +46,8 @@ export class HindsightRecallTool implements AgentTool<typeof hindsightRecallSche
 					budget: state.config.recallBudget,
 					maxTokens: state.config.recallMaxTokens,
 					types: state.config.recallTypes.length > 0 ? state.config.recallTypes : undefined,
+					tags: state.recallTags,
+					tagsMatch: state.recallTagsMatch,
 				});
 				const results = response.results ?? [];
 				if (results.length === 0) {

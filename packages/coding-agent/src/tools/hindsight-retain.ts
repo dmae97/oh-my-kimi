@@ -49,6 +49,7 @@ export class HindsightRetainTool implements AgentTool<typeof hindsightRetainSche
 				await state.client.retain(state.bankId, params.content, {
 					context: params.context ?? state.config.retainContext,
 					metadata: { session_id: sessionId ?? "" },
+					tags: state.retainTags,
 					async: true,
 				});
 				return {

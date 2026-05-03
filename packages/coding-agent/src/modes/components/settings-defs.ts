@@ -488,6 +488,25 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		},
 		{ value: "last-turn", label: "Last turn", description: "Chunked retention sliced by turn boundaries" },
 	],
+	// Hindsight scoping
+	"hindsight.scoping": [
+		{
+			value: "global",
+			label: "Global",
+			description: "One shared bank — every project sees the same memories",
+		},
+		{
+			value: "per-project",
+			label: "Per project",
+			description: "Isolated bank per cwd basename — projects cannot see each other's memories",
+		},
+		{
+			value: "per-project-tagged",
+			label: "Per project (tagged)",
+			description:
+				"Shared bank, retains tagged with project:<cwd>. Recall surfaces project + untagged global memories together",
+		},
+	],
 };
 
 function createSubmenuSettingDef(base: Omit<SettingDef, "type" | "options">, provider: OptionProvider): SettingDef {

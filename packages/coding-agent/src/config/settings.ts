@@ -581,6 +581,35 @@ export class Settings {
 			raw.memory = memoryRoot;
 		}
 
+		// hindsight: dynamicBankId/agentName -> scoping enum + bankId
+		// - dynamicBankId=true  → scoping="per-project" (closest semantic match;
+		//   the legacy `agent::project::channel::user` tuple was per-project in
+		//   practice — the channel/user env vars were rarely set).
+		// - hindsight.agentName was only used as the agent slot in the legacy
+		//   dynamic tuple; if the user customised it we surface it as the new
+		//   bankId base when no explicit bankId is set.
+		const hindsightObj = raw.hindsight as Record<string, unknown> | undefined;
+		if (hindsightObj) {
+			if ("dynamicBankId" in hindsightObj) {
+				if (!("scoping" in hindsightObj) && hindsightObj.dynamicBankId === true) {
+					hindsightObj.scoping = "per-project";
+				}
+				delete hindsightObj.dynamicBankId;
+			}
+			if ("agentName" in hindsightObj) {
+				const agentName = hindsightObj.agentName;
+				if (
+					!("bankId" in hindsightObj) &&
+					typeof agentName === "string" &&
+					agentName.trim().length > 0 &&
+					agentName !== "omp"
+				) {
+					hindsightObj.bankId = agentName;
+				}
+				delete hindsightObj.agentName;
+			}
+		}
+
 		return raw;
 	}
 

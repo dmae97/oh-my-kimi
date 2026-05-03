@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { deriveBankId, ensureBankMission } from "@oh-my-pi/pi-coding-agent/hindsight/bank";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
+import { computeBankScope, deriveBankId, ensureBankMission } from "@oh-my-pi/pi-coding-agent/hindsight/bank";
 import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
 import { HindsightClient } from "@vectorize-io/hindsight-client";
 
@@ -8,10 +8,9 @@ const baseConfig = (overrides: Partial<HindsightConfig> = {}): HindsightConfig =
 	hindsightApiToken: null,
 	bankId: null,
 	bankIdPrefix: "",
-	dynamicBankId: false,
+	scoping: "global",
 	bankMission: "",
 	retainMission: null,
-	agentName: "omp",
 	autoRecall: true,
 	autoRetain: true,
 	retainMode: "full-session",
@@ -28,54 +27,95 @@ const baseConfig = (overrides: Partial<HindsightConfig> = {}): HindsightConfig =
 	...overrides,
 });
 
-describe("deriveBankId", () => {
-	const originalChannel = process.env.HINDSIGHT_CHANNEL_ID;
-	const originalUser = process.env.HINDSIGHT_USER_ID;
+describe("computeBankScope", () => {
+	describe("scoping=global", () => {
+		it("returns the configured bank id verbatim", () => {
+			expect(computeBankScope(baseConfig({ bankId: "team-a" }), "/work/proj")).toEqual({
+				bankId: "team-a",
+			});
+		});
 
-	afterEach(() => {
-		if (originalChannel === undefined) delete process.env.HINDSIGHT_CHANNEL_ID;
-		else process.env.HINDSIGHT_CHANNEL_ID = originalChannel;
-		if (originalUser === undefined) delete process.env.HINDSIGHT_USER_ID;
-		else process.env.HINDSIGHT_USER_ID = originalUser;
+		it("falls back to the default bank name when bankId is unset", () => {
+			expect(computeBankScope(baseConfig(), "/whatever")).toEqual({ bankId: "omp" });
+		});
+
+		it("applies the configured prefix", () => {
+			expect(computeBankScope(baseConfig({ bankId: "team", bankIdPrefix: "prod" }), "/cwd")).toEqual({
+				bankId: "prod-team",
+			});
+		});
+
+		it("does not surface tag fields", () => {
+			const scope = computeBankScope(baseConfig(), "/work/proj");
+			expect(scope.retainTags).toBeUndefined();
+			expect(scope.recallTags).toBeUndefined();
+			expect(scope.recallTagsMatch).toBeUndefined();
+		});
 	});
 
-	it("returns the configured bank id verbatim in static mode", () => {
-		expect(deriveBankId(baseConfig({ bankId: "team-a" }), "/some/cwd")).toBe("team-a");
+	describe("scoping=per-project", () => {
+		it("appends the cwd basename to the base bank id", () => {
+			expect(computeBankScope(baseConfig({ scoping: "per-project" }), "/work/proj")).toEqual({
+				bankId: "omp-proj",
+			});
+		});
+
+		it("appends `unknown` for an empty cwd", () => {
+			expect(computeBankScope(baseConfig({ scoping: "per-project" }), "")).toEqual({
+				bankId: "omp-unknown",
+			});
+		});
+
+		it("composes prefix + bankId + project", () => {
+			const scope = computeBankScope(
+				baseConfig({ scoping: "per-project", bankId: "team", bankIdPrefix: "prod" }),
+				"/work/cool-app",
+			);
+			expect(scope.bankId).toBe("prod-team-cool-app");
+		});
+
+		it("does not surface tag fields (isolation is at the bank level)", () => {
+			const scope = computeBankScope(baseConfig({ scoping: "per-project" }), "/work/proj");
+			expect(scope.retainTags).toBeUndefined();
+			expect(scope.recallTags).toBeUndefined();
+		});
 	});
 
-	it("falls back to the default bank name when no bank id is configured", () => {
-		expect(deriveBankId(baseConfig(), "/whatever")).toBe("omp");
-	});
+	describe("scoping=per-project-tagged", () => {
+		it("keeps the base bank id and emits project tags with `any` match", () => {
+			expect(computeBankScope(baseConfig({ scoping: "per-project-tagged" }), "/work/proj")).toEqual({
+				bankId: "omp",
+				retainTags: ["project:proj"],
+				recallTags: ["project:proj"],
+				recallTagsMatch: "any",
+			});
+		});
 
-	it("applies the configured prefix when present", () => {
+		it("uses the same project label for retain and recall tags", () => {
+			const scope = computeBankScope(baseConfig({ scoping: "per-project-tagged" }), "/repo/cool-app");
+			expect(scope.retainTags).toEqual(["project:cool-app"]);
+			expect(scope.recallTags).toEqual(["project:cool-app"]);
+		});
+
+		it("falls back to project:unknown when cwd is empty", () => {
+			const scope = computeBankScope(baseConfig({ scoping: "per-project-tagged" }), "");
+			expect(scope.retainTags).toEqual(["project:unknown"]);
+			expect(scope.recallTags).toEqual(["project:unknown"]);
+		});
+	});
+});
+
+describe("deriveBankId (legacy wrapper)", () => {
+	it("returns the bankId field of the resolved scope", () => {
 		expect(deriveBankId(baseConfig({ bankId: "team", bankIdPrefix: "prod" }), "/cwd")).toBe("prod-team");
-	});
-
-	it("composes a `agent::project::channel::user` id in dynamic mode", () => {
-		delete process.env.HINDSIGHT_CHANNEL_ID;
-		delete process.env.HINDSIGHT_USER_ID;
-		const id = deriveBankId(baseConfig({ dynamicBankId: true, agentName: "code" }), "/work/proj");
-		expect(id).toBe("code::proj::default::anonymous");
-	});
-
-	it("uses HINDSIGHT_CHANNEL_ID/USER_ID env overrides for dynamic ids", () => {
-		process.env.HINDSIGHT_CHANNEL_ID = "ops";
-		process.env.HINDSIGHT_USER_ID = "ada";
-		const id = deriveBankId(baseConfig({ dynamicBankId: true }), "/repo/cool-app");
-		expect(id).toBe("omp::cool-app::ops::ada");
-	});
-
-	it("falls back to `unknown` when the directory is empty in dynamic mode", () => {
-		delete process.env.HINDSIGHT_CHANNEL_ID;
-		delete process.env.HINDSIGHT_USER_ID;
-		const id = deriveBankId(baseConfig({ dynamicBankId: true }), "");
-		expect(id).toBe("omp::unknown::default::anonymous");
+		expect(deriveBankId(baseConfig({ scoping: "per-project" }), "/work/proj")).toBe("omp-proj");
+		expect(deriveBankId(baseConfig({ scoping: "per-project-tagged" }), "/work/proj")).toBe("omp");
 	});
 });
 
 describe("ensureBankMission", () => {
 	let client: HindsightClient;
-	let createSpy: ReturnType<typeof vi.spyOn> | undefined;
+	let createSpy: Mock<HindsightClient["createBank"]> | undefined;
 
 	beforeEach(() => {
 		client = new HindsightClient({ baseUrl: "http://localhost:8888" });

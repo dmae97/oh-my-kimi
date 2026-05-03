@@ -167,10 +167,7 @@ describe("prepareRetentionTranscript", () => {
 	});
 
 	it("returns null when nothing meaningful remains", () => {
-		const empty = prepareRetentionTranscript(
-			[{ role: "user", content: "<memories>x</memories>" }],
-			true,
-		);
+		const empty = prepareRetentionTranscript([{ role: "user", content: "<memories>x</memories>" }], true);
 		expect(empty.transcript).toBeNull();
 	});
 });

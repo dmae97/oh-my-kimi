@@ -20,7 +20,7 @@ describe("loadHindsightConfig", () => {
 		expect(cfg.recallTypes).toEqual(["world", "experience"]);
 		expect(cfg.autoRecall).toBe(true);
 		expect(cfg.autoRetain).toBe(true);
-		expect(cfg.agentName).toBe("omp");
+		expect(cfg.scoping).toBe("per-project-tagged");
 	});
 
 	it("env overrides win over settings", () => {
@@ -28,21 +28,27 @@ describe("loadHindsightConfig", () => {
 			"hindsight.apiUrl": "http://settings.example",
 			"hindsight.autoRecall": true,
 			"hindsight.recallMaxTokens": 256,
-			"hindsight.dynamicBankId": false,
+			"hindsight.scoping": "global",
 			"hindsight.retainMode": "full-session",
 		});
 		const cfg = loadHindsightConfig(settings, {
 			HINDSIGHT_API_URL: "http://env.example",
 			HINDSIGHT_AUTO_RECALL: "false",
 			HINDSIGHT_RECALL_MAX_TOKENS: "9999",
-			HINDSIGHT_DYNAMIC_BANK_ID: "yes",
+			HINDSIGHT_SCOPING: "per-project",
 			HINDSIGHT_RETAIN_MODE: "last-turn",
 		});
 		expect(cfg.hindsightApiUrl).toBe("http://env.example");
 		expect(cfg.autoRecall).toBe(false);
 		expect(cfg.recallMaxTokens).toBe(9999);
-		expect(cfg.dynamicBankId).toBe(true);
+		expect(cfg.scoping).toBe("per-project");
 		expect(cfg.retainMode).toBe("last-turn");
+	});
+
+	it("ignores invalid scoping values and falls back to the schema default", () => {
+		const settings = Settings.isolated();
+		const cfg = loadHindsightConfig(settings, { HINDSIGHT_SCOPING: "garbage" });
+		expect(cfg.scoping).toBe("per-project-tagged");
 	});
 
 	it("ignores invalid retainMode env values and falls back to schema default", () => {
