@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.6.3] - 2026-05-03
+
 ### Breaking Changes
 
 - Renamed hashline separator configuration from `PI_HASHLINE_SEP` to `PI_HL_SEP` and changed the default payload separator from `\\` to `>`
