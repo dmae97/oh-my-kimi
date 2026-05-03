@@ -162,7 +162,10 @@ describe("prepareRetentionTranscript", () => {
 	});
 
 	it("returns null when nothing meaningful remains", () => {
-		const empty = prepareRetentionTranscript([{ role: "user", content: "<hindsight_memories>x</hindsight_memories>" }], true);
+		const empty = prepareRetentionTranscript(
+			[{ role: "user", content: "<hindsight_memories>x</hindsight_memories>" }],
+			true,
+		);
 		expect(empty.transcript).toBeNull();
 	});
 });

@@ -7,17 +7,15 @@ import type { ToolSession } from ".";
 
 const hindsightReflectSchema = Type.Object({
 	query: Type.String({ description: "The question to answer using long-term memory." }),
-	context: Type.Optional(
-		Type.String({ description: "Optional additional context to guide the reflection." }),
-	),
+	context: Type.Optional(Type.String({ description: "Optional additional context to guide the reflection." })),
 });
 
 export type HindsightReflectParams = Static<typeof hindsightReflectSchema>;
 
 const DESCRIPTION = [
 	"Generate a synthesised answer using long-term memory. Unlike recall (which returns raw memories),",
-	"reflect blends memories into a coherent answer. Use for questions like \"What do you know about",
-	"this user?\" or \"Summarize project decisions.\"",
+	'reflect blends memories into a coherent answer. Use for questions like "What do you know about',
+	'this user?" or "Summarize project decisions."',
 ].join(" ");
 
 export class HindsightReflectTool implements AgentTool<typeof hindsightReflectSchema> {

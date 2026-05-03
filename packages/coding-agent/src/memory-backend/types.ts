@@ -46,6 +46,17 @@ export interface MemoryBackend {
 	enqueue(agentDir: string, cwd: string): Promise<void>;
 
 	/**
+	 * Optional hook to inject a backend-specific block into the current turn's
+	 * system prompt before the agent starts generating.
+	 *
+	 * This is the only place a backend can affect the very first answer of a
+	 * fresh session. The returned text is appended to the already-built base
+	 * system prompt for this turn only; callers may separately cache it and
+	 * surface it through `buildDeveloperInstructions()` on later rebuilds.
+	 */
+	beforeAgentStartPrompt?(session: AgentSession, promptText: string): Promise<string | undefined>;
+
+	/**
 	 * Optional hook to splice extra context into a compaction summarization.
 	 *
 	 * Called from the compaction call site before the LLM summary is requested.

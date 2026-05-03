@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { Settings, _resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	clearHindsightSessionStateForTest,
 	getHindsightSessionState,
@@ -182,9 +182,7 @@ describe("hindsightBackend.preCompactionContext", () => {
 
 	it("returns undefined when no apiUrl is configured", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight", "hindsight.apiUrl": "" });
-		const messages: AgentMessage[] = [
-			{ role: "user", content: "hi", timestamp: 0 } as never,
-		];
+		const messages: AgentMessage[] = [{ role: "user", content: "hi", timestamp: 0 } as never];
 		const ctx = await hindsightBackend.preCompactionContext?.(messages, settings);
 		expect(ctx).toBeUndefined();
 	});
@@ -207,9 +205,7 @@ describe("hindsightBackend.preCompactionContext", () => {
 			results: [{ id: "1", text: "remembered fact" }],
 		} as never);
 
-		const messages: AgentMessage[] = [
-			{ role: "user", content: "What did we decide?", timestamp: 0 } as never,
-		];
+		const messages: AgentMessage[] = [{ role: "user", content: "What did we decide?", timestamp: 0 } as never];
 		const ctx = await hindsightBackend.preCompactionContext?.(messages, settings);
 		expect(ctx).toBeDefined();
 		expect(ctx).toContain("<hindsight_memories>");
@@ -234,6 +230,73 @@ describe("hindsightBackend.preCompactionContext", () => {
 		const messages: AgentMessage[] = [{ role: "user", content: "anything", timestamp: 0 } as never];
 		const ctx = await hindsightBackend.preCompactionContext?.(messages, settings);
 		expect(ctx).toBeUndefined();
+	});
+});
+
+describe("hindsightBackend first-turn injection", () => {
+	beforeEach(() => {
+		_resetSettingsForTest();
+		clearHindsightSessionStateForTest();
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		clearHindsightSessionStateForTest();
+	});
+
+	it("returns a tagged block for the current first turn before agent_start", async () => {
+		const settings = Settings.isolated({
+			"memory.backend": "hindsight",
+			"hindsight.apiUrl": "http://localhost:8888",
+		});
+		const session = makeFakeSession({
+			sessionId: "s8",
+			entries: [{ role: "assistant", text: "previous assistant context" }],
+		});
+		await hindsightBackend.start({
+			session: session as never,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: "/tmp",
+			taskDepth: 0,
+		});
+
+		vi.spyOn(HindsightClient.prototype, "recall").mockResolvedValue({
+			results: [{ id: "1", text: "Can prefers concise communication" }],
+		} as never);
+
+		const block = await hindsightBackend.beforeAgentStartPrompt?.(
+			session as never,
+			"What do I know about this user?",
+		);
+		expect(block).toContain("<hindsight_memories>");
+		expect(block).toContain("Can prefers concise communication");
+		expect(getHindsightSessionState("s8")?.hasRecalledForFirstTurn).toBe(true);
+		expect(getHindsightSessionState("s8")?.lastRecallSnippet).toBe(block);
+	});
+
+	it("keeps the <hindsight_memories> wrapper in buildDeveloperInstructions", async () => {
+		const settings = Settings.isolated({
+			"memory.backend": "hindsight",
+			"hindsight.apiUrl": "http://localhost:8888",
+		});
+		const session = makeFakeSession({ sessionId: "s9" });
+		await hindsightBackend.start({
+			session: session as never,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: "/tmp",
+			taskDepth: 0,
+		});
+
+		const state = getHindsightSessionState("s9");
+		expect(state).toBeDefined();
+		state!.lastRecallSnippet = "<hindsight_memories>\nremembered fact\n</hindsight_memories>";
+
+		const prompt = await hindsightBackend.buildDeveloperInstructions("/tmp", settings);
+		expect(prompt).toContain("<hindsight_memories>");
+		expect(prompt).toContain("</hindsight_memories>");
+		expect(prompt).toContain("remembered fact");
 	});
 });
 

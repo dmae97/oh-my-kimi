@@ -167,7 +167,10 @@ export interface RetentionTranscript {
  * Messages are tag-stripped before framing to break the recall→retain loop.
  * Returns `{ transcript: null }` when nothing meaningful survives.
  */
-export function prepareRetentionTranscript(messages: HindsightMessage[], retainFullWindow = false): RetentionTranscript {
+export function prepareRetentionTranscript(
+	messages: HindsightMessage[],
+	retainFullWindow = false,
+): RetentionTranscript {
 	if (messages.length === 0) return { transcript: null, messageCount: 0 };
 
 	let targetMessages: HindsightMessage[];

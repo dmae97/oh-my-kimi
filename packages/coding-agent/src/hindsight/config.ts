@@ -148,6 +148,8 @@ export function loadHindsightConfig(settings: Settings, env: NodeJS.ProcessEnv =
 }
 
 /** Whether the caller has enough config to talk to a Hindsight server. */
-export function isHindsightConfigured(config: HindsightConfig): config is HindsightConfig & { hindsightApiUrl: string } {
+export function isHindsightConfigured(
+	config: HindsightConfig,
+): config is HindsightConfig & { hindsightApiUrl: string } {
 	return typeof config.hindsightApiUrl === "string" && config.hindsightApiUrl.length > 0;
 }

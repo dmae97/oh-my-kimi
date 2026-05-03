@@ -2290,6 +2290,23 @@ export class AgentSession {
 		this.#lastAppliedToolSignature = this.#computeAppliedToolSignature(activeToolNames, activeTools);
 	}
 
+	async #buildSystemPromptForAgentStart(promptText: string): Promise<string> {
+		const backend = resolveMemoryBackend(this.settings);
+		if (!backend.beforeAgentStartPrompt) return this.#baseSystemPrompt;
+
+		try {
+			const injected = await backend.beforeAgentStartPrompt(this, promptText);
+			if (!injected) return this.#baseSystemPrompt;
+			return `${this.#baseSystemPrompt}\n\n${injected}`;
+		} catch (err) {
+			logger.debug("Memory backend beforeAgentStartPrompt failed", {
+				backend: backend.id,
+				error: String(err),
+			});
+			return this.#baseSystemPrompt;
+		}
+	}
+
 	/**
 	 * Compose a stable signature for the inputs that `rebuildSystemPrompt` reads.
 	 * Two calls producing identical signatures are guaranteed to produce identical
@@ -2909,12 +2926,14 @@ export class AgentSession {
 				messages.push(...fileMentionMessages);
 			}
 
+			const beforeAgentStartSystemPrompt = await this.#buildSystemPromptForAgentStart(expandedText);
+
 			// Emit before_agent_start extension event
 			if (this.#extensionRunner) {
 				const result = await this.#extensionRunner.emitBeforeAgentStart(
 					expandedText,
 					options?.images,
-					this.#baseSystemPrompt,
+					beforeAgentStartSystemPrompt,
 				);
 				if (result?.messages) {
 					const promptAttribution: "user" | "agent" | undefined =
@@ -2935,8 +2954,10 @@ export class AgentSession {
 				if (result?.systemPrompt !== undefined) {
 					this.agent.setSystemPrompt(result.systemPrompt);
 				} else {
-					this.agent.setSystemPrompt(this.#baseSystemPrompt);
+					this.agent.setSystemPrompt(beforeAgentStartSystemPrompt);
 				}
+			} else {
+				this.agent.setSystemPrompt(beforeAgentStartSystemPrompt);
 			}
 
 			// Bail out if a newer abort/prompt cycle has started since we began setup

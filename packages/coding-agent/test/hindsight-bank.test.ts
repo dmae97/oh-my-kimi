@@ -114,9 +114,7 @@ describe("ensureBankMission", () => {
 	});
 
 	it("swallows API failures and does not mark the bank as initialised", async () => {
-		createSpy = vi
-			.spyOn(HindsightClient.prototype, "createBank")
-			.mockRejectedValue(new Error("HTTP 500"));
+		createSpy = vi.spyOn(HindsightClient.prototype, "createBank").mockRejectedValue(new Error("HTTP 500"));
 		const seen = new Set<string>();
 		const config = baseConfig({ bankMission: "do the thing" });
 

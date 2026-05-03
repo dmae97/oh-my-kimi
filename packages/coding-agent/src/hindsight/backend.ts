@@ -24,7 +24,6 @@ import {
 	type HindsightMessage,
 	prepareRetentionTranscript,
 	sliceLastTurnsByUserBoundary,
-	stripMemoryTags,
 	truncateRecallQuery,
 } from "./content";
 import { extractMessages } from "./transcript";
@@ -111,7 +110,11 @@ async function recallForContext(
 	}
 }
 
-async function retainSession(state: HindsightSessionState, sessionId: string, messages: HindsightMessage[]): Promise<void> {
+async function retainSession(
+	state: HindsightSessionState,
+	sessionId: string,
+	messages: HindsightMessage[],
+): Promise<void> {
 	const { client, bankId, config, missionsSet } = state;
 	const retainFullWindow = config.retainMode === "full-session";
 
@@ -174,11 +177,13 @@ async function maybeRecallOnAgentStart(state: HindsightSessionState): Promise<vo
 	const messages = extractMessages(state.session.sessionManager);
 	const lastUser = [...messages].reverse().find(m => m.role === "user");
 	if (!lastUser) return;
-	state.hasRecalledForFirstTurn = true;
 
 	const query = composeRecallQuery(lastUser.content, messages, state.config.recallContextTurns);
 	const truncated = truncateRecallQuery(query, lastUser.content, state.config.recallMaxQueryChars);
-	const { context } = await recallForContext(state, truncated);
+	const { context, ok } = await recallForContext(state, truncated);
+	if (!ok) return;
+
+	state.hasRecalledForFirstTurn = true;
 	if (!context) return;
 
 	state.lastRecallSnippet = context;
@@ -254,9 +259,32 @@ export const hindsightBackend: MemoryBackend = {
 
 		const parts = [STATIC_INSTRUCTIONS];
 		if (recallSnippet) {
-			parts.push(stripMemoryTags(recallSnippet) || recallSnippet);
+			parts.push(recallSnippet);
 		}
 		return parts.join("\n\n");
+	},
+
+	async beforeAgentStartPrompt(session: AgentSession, promptText: string): Promise<string | undefined> {
+		const sessionId = session.sessionId;
+		if (!sessionId) return undefined;
+		const state = STATE_BY_SESSION_ID.get(sessionId);
+		if (!state?.config.autoRecall || state.hasRecalledForFirstTurn) return undefined;
+
+		const latestPrompt = promptText.trim();
+		if (!latestPrompt) return undefined;
+
+		const history = extractMessages(session.sessionManager);
+		const queryMessages = [...history, { role: "user", content: latestPrompt }];
+		const query = composeRecallQuery(latestPrompt, queryMessages, state.config.recallContextTurns);
+		const truncated = truncateRecallQuery(query, latestPrompt, state.config.recallMaxQueryChars);
+		const { context, ok } = await recallForContext(state, truncated);
+		if (!ok) return undefined;
+
+		state.hasRecalledForFirstTurn = true;
+		if (!context) return undefined;
+
+		state.lastRecallSnippet = context;
+		return context;
 	},
 
 	async clear(_agentDir, _cwd): Promise<void> {
