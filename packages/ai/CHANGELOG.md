@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.6.2] - 2026-05-03
 ### Added
 
 - Added `EventStream.fail(err)` method to terminate the async iterator with an error, enabling consumers to catch stream-level failures via `for await` without hanging

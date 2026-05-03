@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.6.2] - 2026-05-03
 ### Added
 
 - Added `statusLine.sessionAccent` to disable session-name accent coloring for the editor border and status line gap ([#918](https://github.com/can1357/oh-my-pi/issues/918))
