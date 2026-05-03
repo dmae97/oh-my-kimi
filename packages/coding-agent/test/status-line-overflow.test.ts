@@ -5,9 +5,11 @@ import * as path from "node:path";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import type { StatusLineSegmentId } from "../src/config/settings-schema";
+import { StatusLineComponent } from "../src/modes/components/status-line";
 import type { SegmentContext } from "../src/modes/components/status-line/segments";
 import { renderSegment } from "../src/modes/components/status-line/segments";
-import { initTheme } from "../src/modes/theme/theme";
+import { theme, initTheme } from "../src/modes/theme/theme";
+import { getSessionAccentAnsi, getSessionAccentHex } from "../src/utils/session-color";
 
 const originalProjectDir = getProjectDir();
 
@@ -59,6 +61,47 @@ function createCtx(overrides?: { pathMaxLength?: number; branch?: string | null 
 		},
 	};
 }
+
+function createStatusLineSession(sessionName: string) {
+	return {
+		state: { messages: [] },
+		isStreaming: false,
+		getAsyncJobSnapshot: () => ({ running: [] }),
+		getCurrentModel: () => undefined,
+		isFastModeEnabled: () => false,
+		sessionManager: {
+			getSessionName: () => sessionName,
+			getUsageStatistics: () => ({
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				premiumRequests: 0,
+				cost: 0,
+			}),
+		},
+	} as unknown as ConstructorParameters<typeof StatusLineComponent>[0];
+}
+
+describe("status line session accent", () => {
+	it("uses theme border color for the gap when session accent is disabled", () => {
+		const component = new StatusLineComponent(createStatusLineSession("Named session"));
+		component.updateSettings({
+			preset: "custom",
+			leftSegments: ["pi"],
+			rightSegments: ["session_name"],
+			separator: "powerline-thin",
+			sessionAccent: false,
+		});
+
+		const border = component.getTopBorder(80).content;
+		const accentAnsi = getSessionAccentAnsi(getSessionAccentHex("Named session"));
+
+		expect(accentAnsi).toBeDefined();
+		expect(border).toContain(theme.getFgAnsi("border"));
+		expect(border).not.toContain(accentAnsi as string);
+	});
+});
 
 describe("path segment truncation at varying maxLength", () => {
 	let tmpDir: string;

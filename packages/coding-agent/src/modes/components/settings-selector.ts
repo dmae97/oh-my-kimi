@@ -194,6 +194,7 @@ export interface StatusLinePreviewSettings {
 	leftSegments?: StatusLineSegmentId[];
 	rightSegments?: StatusLineSegmentId[];
 	separator?: StatusLineSeparatorStyle;
+	sessionAccent?: boolean;
 }
 
 export interface SettingsCallbacks {
@@ -563,6 +564,7 @@ export class SettingsSelectorComponent extends Container {
 			leftSegments: settings.get("statusLine.leftSegments"),
 			rightSegments: settings.get("statusLine.rightSegments"),
 			separator: settings.get("statusLine.separator"),
+			sessionAccent: settings.get("statusLine.sessionAccent"),
 		};
 		this.callbacks.onStatusLinePreview?.(statusLineSettings);
 		this.#updateStatusPreview();
