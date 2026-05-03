@@ -16,18 +16,12 @@ describe("resolveMemoryBackend", () => {
 		expect(resolveMemoryBackend(settings).id).toBe("off");
 	});
 
-	it("returns the local backend when memory.backend is local AND memories.enabled is true", () => {
-		const settings = Settings.isolated({ "memory.backend": "local", "memories.enabled": true });
+	it("returns the local backend when memory.backend is local", () => {
+		const settings = Settings.isolated({ "memory.backend": "local", "memories.enabled": false });
 		expect(resolveMemoryBackend(settings).id).toBe("local");
 	});
 
-	it("returns the off backend when memory.backend is local but memories.enabled is false", () => {
-		const settings = Settings.isolated({ "memory.backend": "local", "memories.enabled": false });
-		// Falls back to off so existing users with memories.enabled=false keep silence.
-		expect(resolveMemoryBackend(settings).id).toBe("off");
-	});
-
-	it("returns the hindsight backend when memory.backend is hindsight, regardless of memories.enabled", () => {
+	it("returns the hindsight backend when memory.backend is hindsight, regardless of legacy memories.enabled", () => {
 		const a = Settings.isolated({ "memory.backend": "hindsight", "memories.enabled": false });
 		const b = Settings.isolated({ "memory.backend": "hindsight", "memories.enabled": true });
 		expect(resolveMemoryBackend(a).id).toBe("hindsight");

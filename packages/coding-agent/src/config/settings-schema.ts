@@ -879,14 +879,11 @@ export const SETTINGS_SCHEMA = {
 	"branchSummary.reserveTokens": { type: "number", default: 16384 },
 
 	// Memories
+	// Legacy local-memory enable flag kept only for back-compat migration.
+	// Hidden from UI — users should use `memory.backend` instead.
 	"memories.enabled": {
 		type: "boolean",
 		default: false,
-		ui: {
-			tab: "memory",
-			label: "Memories",
-			description: "Enable autonomous memory extraction and consolidation",
-		},
 	},
 
 	"memories.maxRolloutsPerStartup": { type: "number", default: 64 },
@@ -925,11 +922,11 @@ export const SETTINGS_SCHEMA = {
 	"memory.backend": {
 		type: "enum",
 		values: ["off", "local", "hindsight"] as const,
-		default: "local",
+		default: "off",
 		ui: {
 			tab: "memory",
 			label: "Memory Backend",
-			description: "Local memory pipeline, Hindsight remote memory, or off",
+			description: "Off, local memory pipeline, or Hindsight remote memory",
 			submenu: true,
 		},
 	},

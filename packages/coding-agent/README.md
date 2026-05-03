@@ -17,11 +17,9 @@ Package-specific references:
 
 The agent supports three mutually-exclusive memory backends, selected via the `memory.backend` setting (Settings → Memory tab, or `~/.omp/config.yml`):
 
-|Backend|Behaviour|
----|---|
-`off`|No memory subsystem runs.|
-`local` (default)|Existing rollout-summarisation pipeline. Writes `memory_summary.md` and consolidated artifacts under the agent dir. Additionally gated by the legacy `memories.enabled` boolean — set it to `true` to actually run.|
-`hindsight`|Talks to a [Hindsight](https://hindsight.vectorize.io) server (Cloud or self-hosted Docker). Retains transcripts every Nth user turn, recalls memories on the first turn of a session, and exposes three tools: `hindsight_retain`, `hindsight_recall`, `hindsight_reflect`.|
+- `off` (default) — no memory subsystem runs.
+- `local` — existing rollout-summarisation pipeline; writes `memory_summary.md` and consolidated artifacts under the agent dir.
+- `hindsight` — talks to a [Hindsight](https://hindsight.vectorize.io) server (Cloud or self-hosted Docker), retains transcripts every Nth user turn, recalls memories on the first turn of a session, and exposes `hindsight_retain`, `hindsight_recall`, and `hindsight_reflect`.
 
 ### Hindsight quickstart
 

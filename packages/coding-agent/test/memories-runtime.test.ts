@@ -349,7 +349,7 @@ describe("buildMemoryToolDeveloperInstructions", () => {
 
 	test("returns undefined for missing or empty summaries", async () => {
 		const agentDir = await makeTempDir("memories-runtime-instructions");
-		const settings = Settings.isolated({ "memories.enabled": true });
+		const settings = Settings.isolated({ "memory.backend": "local" });
 
 		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings)).toBeUndefined();
 
@@ -362,7 +362,7 @@ describe("buildMemoryToolDeveloperInstructions", () => {
 	test("renders payload with truncation for non-empty summary", async () => {
 		const agentDir = await makeTempDir("memories-runtime-instructions");
 		const settings = Settings.isolated({
-			"memories.enabled": true,
+			"memory.backend": "local",
 			"memories.summaryInjectionTokenLimit": 8,
 		});
 		const memoryRoot = getMemoryRoot(agentDir, settings.getCwd());

@@ -10,16 +10,15 @@ import type { MemoryBackend } from "./types";
  * Selection rules (single source of truth — every memory consumer routes
  * through this):
  *   - `memory.backend === "hindsight"`  → Hindsight remote memory
- *   - `memory.backend === "local"` and `memories.enabled === true` → local pipeline
- *   - everything else → no-op
+ *   - `memory.backend === "local"`      → local pipeline
+ *   - everything else                   → no-op
  *
- * The legacy `memories.enabled` boolean still gates the local backend so users
- * who have it set to `false` keep getting silence, even after the new enum
- * defaults to `"local"`.
+ * `memories.enabled` remains accepted only as a legacy migration input. Once
+ * a config is loaded, `memory.backend` is the sole runtime selector.
  */
 export function resolveMemoryBackend(settings: Settings): MemoryBackend {
 	const id = settings.get("memory.backend");
 	if (id === "hindsight") return hindsightBackend;
-	if (id === "local" && settings.get("memories.enabled")) return localBackend;
+	if (id === "local") return localBackend;
 	return offBackend;
 }
