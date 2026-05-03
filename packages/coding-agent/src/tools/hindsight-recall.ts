@@ -3,6 +3,7 @@ import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { getHindsightSessionState } from "../hindsight/backend";
 import { formatCurrentTime, formatMemories } from "../hindsight/content";
+import recallDescription from "../prompts/tools/recall.md" with { type: "text" };
 import type { ToolSession } from ".";
 
 const hindsightRecallSchema = Type.Object({
@@ -13,16 +14,10 @@ const hindsightRecallSchema = Type.Object({
 
 export type HindsightRecallParams = Static<typeof hindsightRecallSchema>;
 
-const DESCRIPTION = [
-	"Search long-term memory (Hindsight) for relevant information. Use proactively before answering",
-	"questions about past conversations, user preferences, project history, or any topic where prior",
-	"context would help. When in doubt, recall first.",
-].join(" ");
-
 export class HindsightRecallTool implements AgentTool<typeof hindsightRecallSchema> {
 	readonly name = "recall";
 	readonly label = "Recall";
-	readonly description = DESCRIPTION;
+	readonly description = recallDescription;
 	readonly parameters = hindsightRecallSchema;
 	readonly strict = true;
 

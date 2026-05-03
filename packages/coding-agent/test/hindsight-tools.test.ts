@@ -142,24 +142,27 @@ describe("retain.execute", () => {
 		registerState(client, settings);
 
 		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
-		const result = await tool.execute("call-1", { content: "user prefers tabs" });
+		const result = await tool.execute("call-1", { items: [{ content: "user prefers tabs" }] });
 
-		expect(result.content[0]).toEqual({ type: "text", text: "Memory queued." });
+		expect(result.content[0]).toEqual({ type: "text", text: "1 memory queued." });
 		// Tool returns before any HTTP work happens.
 		expect(retainBatchSpy).not.toHaveBeenCalled();
 		expect(retainSpy).not.toHaveBeenCalled();
 		expect(getRetainQueueDepthForTest(TEST_SESSION_ID)).toBe(1);
 	});
 
-	it("flushes the queue as a single retainBatch call with content + metadata + tags", async () => {
+	it("flushes a multi-item tool call as a single retainBatch call with per-item context", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
 		const client = new HindsightApi({ baseUrl: "http://localhost:8888" });
 		const retainBatchSpy = vi.spyOn(HindsightApi.prototype, "retainBatch").mockResolvedValue({} as never);
 		registerState(client, settings, { retainTags: ["project:pi"] });
 
 		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
-		await tool.execute("call-a", { content: "fact one" });
-		await tool.execute("call-b", { content: "fact two", context: "user override" });
+		const result = await tool.execute("call-batch", {
+			items: [{ content: "fact one" }, { content: "fact two", context: "user override" }],
+		});
+		expect(result.content[0]).toEqual({ type: "text", text: "2 memories queued." });
+
 		await flushSessionQueue(TEST_SESSION_ID);
 
 		expect(retainBatchSpy).toHaveBeenCalledTimes(1);
@@ -190,7 +193,7 @@ describe("retain.execute", () => {
 		registerState(client, settings, { sessionOverrides: { emitNotice: noticeSpy } });
 
 		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
-		await tool.execute("call-x", { content: "doomed fact" });
+		await tool.execute("call-x", { items: [{ content: "doomed fact" }] });
 		await flushSessionQueue(TEST_SESSION_ID);
 
 		expect(noticeSpy).toHaveBeenCalledTimes(1);
@@ -204,7 +207,7 @@ describe("retain.execute", () => {
 	it("throws when no per-session state is registered", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
 		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
-		await expect(tool.execute("call-2", { content: "x" })).rejects.toThrow(/not initialised/i);
+		await expect(tool.execute("call-2", { items: [{ content: "x" }] })).rejects.toThrow(/not initialised/i);
 	});
 });
 

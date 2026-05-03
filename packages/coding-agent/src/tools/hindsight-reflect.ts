@@ -3,6 +3,7 @@ import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { getHindsightSessionState } from "../hindsight/backend";
 import { ensureBankMission } from "../hindsight/bank";
+import reflectDescription from "../prompts/tools/reflect.md" with { type: "text" };
 import type { ToolSession } from ".";
 
 const hindsightReflectSchema = Type.Object({
@@ -12,16 +13,10 @@ const hindsightReflectSchema = Type.Object({
 
 export type HindsightReflectParams = Static<typeof hindsightReflectSchema>;
 
-const DESCRIPTION = [
-	"Generate a synthesised answer using long-term memory. Unlike recall (which returns raw memories),",
-	'reflect blends memories into a coherent answer. Use for questions like "What do you know about',
-	'this user?" or "Summarize project decisions."',
-].join(" ");
-
 export class HindsightReflectTool implements AgentTool<typeof hindsightReflectSchema> {
 	readonly name = "reflect";
 	readonly label = "Reflect";
-	readonly description = DESCRIPTION;
+	readonly description = reflectDescription;
 	readonly parameters = hindsightReflectSchema;
 	readonly strict = true;
 

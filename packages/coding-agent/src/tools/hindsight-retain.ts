@@ -2,29 +2,32 @@ import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type Static, Type } from "@sinclair/typebox";
 import { getHindsightSessionState } from "../hindsight/backend";
 import { enqueueRetain } from "../hindsight/retain-queue";
+import retainDescription from "../prompts/tools/retain.md" with { type: "text" };
 import type { ToolSession } from ".";
 
 const hindsightRetainSchema = Type.Object({
-	content: Type.String({
-		description: "The information to remember. Be specific and self-contained — include who, what, when, why.",
-	}),
-	context: Type.Optional(
-		Type.String({ description: "Optional context describing where this information came from." }),
+	items: Type.Array(
+		Type.Object({
+			content: Type.String({
+				description: "The information to remember. Be specific and self-contained — include who, what, when, why.",
+			}),
+			context: Type.Optional(
+				Type.String({ description: "Optional context describing where this information came from." }),
+			),
+		}),
+		{
+			minItems: 1,
+			description:
+				"One or more memories to retain. Batch related facts in a single call rather than calling retain repeatedly — they are deduplicated and consolidated together.",
+		},
 	),
 });
 
 export type HindsightRetainParams = Static<typeof hindsightRetainSchema>;
-
-const DESCRIPTION = [
-	"Store information in long-term memory (Hindsight). Use this to remember durable facts:",
-	"user preferences, project context, decisions, and anything worth recalling in future sessions.",
-	"Be specific — include who, what, when, and why.",
-].join(" ");
-
 export class HindsightRetainTool implements AgentTool<typeof hindsightRetainSchema> {
 	readonly name = "retain";
 	readonly label = "Retain";
-	readonly description = DESCRIPTION;
+	readonly description = retainDescription;
 	readonly parameters = hindsightRetainSchema;
 	readonly strict = true;
 
@@ -42,16 +45,19 @@ export class HindsightRetainTool implements AgentTool<typeof hindsightRetainSche
 			throw new Error("Hindsight backend is not initialised for this session.");
 		}
 
-		// Push onto the global queue and return immediately. The queue flushes
-		// either when it reaches its batch threshold or when its debounce timer
-		// fires. If the eventual batch fails, the queue surfaces the failure
-		// via session.queueDeferredMessage — the agent learns about it on the
-		// next turn rather than blocking the current tool call.
-		enqueueRetain(sessionId, params.content, params.context);
+		// Push every item onto the global queue and return immediately. The
+		// queue flushes either when it reaches its batch threshold or when its
+		// debounce timer fires. If the eventual batch fails, the queue
+		// surfaces a UI-only warning notice — the LLM is not informed.
+		for (const item of params.items) {
+			enqueueRetain(sessionId, item.content, item.context);
+		}
 
+		const count = params.items.length;
+		const noun = count === 1 ? "memory" : "memories";
 		return {
-			content: [{ type: "text", text: "Memory queued." }],
-			details: {},
+			content: [{ type: "text", text: `${count} ${noun} queued.` }],
+			details: { count },
 		};
 	}
 }
