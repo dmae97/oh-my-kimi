@@ -46,6 +46,7 @@ import {
 	formatHashLine,
 	HASHLINE_ANCHOR_RE_SRC,
 	HASHLINE_CONTENT_SEPARATOR,
+	HASHLINE_CONTENT_SEPARATOR_RE_SRC,
 	HASHLINE_LID_CAPTURE_RE_SRC,
 } from "../line-hash";
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "../normalize";
@@ -131,7 +132,7 @@ const RANGE_INTERIOR_HASH = "**";
 /** Header marker introducing a new file section in multi-section input. */
 const FILE_HEADER_PREFIX = "@";
 
-const HASHLINE_CONTENT_SEPARATOR_RE = "[:|]";
+const HASHLINE_CONTENT_SEPARATOR_RE = `[:${HASHLINE_CONTENT_SEPARATOR_RE_SRC}]`;
 const HASHLINE_PREFIX_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*(?:[+*]\\s*)?\\d+[a-z]{2}${HASHLINE_CONTENT_SEPARATOR_RE}`);
 const HASHLINE_PREFIX_PLUS_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*\\+\\s*\\d+[a-z]{2}${HASHLINE_CONTENT_SEPARATOR_RE}`);
 const DIFF_PLUS_RE = /^[+](?![+])/;
@@ -603,9 +604,9 @@ export function buildCompactHashlineDiffPreview(
 // 10. Edit DSL parsing
 //
 // Grammar (one op per "block"):
-//   "+ ANCHOR"   followed by 1+ "|TEXT" payload lines           — insert
+//   "+ ANCHOR"   followed by 1+ "<sep>TEXT" payload lines        — insert
 //   "- A..B"     no payload                                     — delete range
-//   "= A..B"     followed by 1+ "|TEXT" payload lines           — replace
+//   "= A..B"     followed by 1+ "<sep>TEXT" payload lines        — replace
 //
 // ANCHOR is `LINE<hash>`, e.g. `160ab`. BOF / EOF are also valid insert targets.
 // ───────────────────────────────────────────────────────────────────────────
@@ -626,27 +627,17 @@ function collectPayload(
 	startIndex: number,
 	opLineNum: number,
 	requirePayload: boolean,
-	warnings: string[],
 ): { payload: string[]; nextIndex: number } {
 	const payload: string[] = [];
 	let index = startIndex;
 	while (index < lines.length) {
 		const line = stripTrailingCarriageReturn(lines[index]);
-		if (!line.startsWith("|")) break;
+		if (!line.startsWith(HASHLINE_CONTENT_SEPARATOR)) break;
 		payload.push(line.slice(1));
 		index++;
 	}
 	if (payload.length === 0 && requirePayload) {
 		throw new Error(`line ${opLineNum}: + and < operations require at least one |TEXT payload line.`);
-	}
-	// Detect a doubled prefix: every payload line was emitted as `||...`. After
-	// the first strip above, every entry still leads with `|`. Strip the extra
-	// layer and surface a warning so the caller can spot the wire-format slip.
-	// Require ≥2 lines to avoid clobbering an intentional single `|` payload
-	// (e.g. a markdown table fragment with a leading empty cell).
-	if (payload.length >= 2 && payload.every(p => p.startsWith("|"))) {
-		warnings.push(`line ${opLineNum}: every payload line started with "||"; auto-stripped one extra "|" prefix.`);
-		for (let i = 0; i < payload.length; i++) payload[i] = payload[i].slice(1);
 	}
 	return { payload, nextIndex: index };
 }
@@ -673,14 +664,14 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 			i++;
 			continue;
 		}
-		if (line.startsWith("|")) {
+		if (line.startsWith(HASHLINE_CONTENT_SEPARATOR)) {
 			throw new Error(`line ${lineNum}: payload line has no preceding +, <, or = operation.`);
 		}
 
 		const insertBeforeMatch = INSERT_BEFORE_OP_RE.exec(line);
 		if (insertBeforeMatch) {
 			const cursor = parseInsertTarget(insertBeforeMatch[1], lineNum, "before");
-			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, true, warnings);
+			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, true);
 			for (const text of payload) pushInsert(cursor, text, lineNum);
 			i = nextIndex;
 			continue;
@@ -689,7 +680,7 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		const insertAfterMatch = INSERT_AFTER_OP_RE.exec(line);
 		if (insertAfterMatch) {
 			const cursor = parseInsertTarget(insertAfterMatch[1], lineNum, "after");
-			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, true, warnings);
+			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, true);
 			for (const text of payload) pushInsert(cursor, text, lineNum);
 			i = nextIndex;
 			continue;
@@ -707,7 +698,7 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		const replaceMatch = REPLACE_OP_RE.exec(line);
 		if (replaceMatch) {
 			const range = parseRange(replaceMatch[1], lineNum);
-			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, false, warnings);
+			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, false);
 			// `= A..B` with no payload blanks the range to a single empty line.
 			const replacement = payload.length === 0 ? [""] : payload;
 			for (const text of replacement) {
@@ -727,7 +718,7 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		}
 
 		throw new Error(
-			`line ${lineNum}: unrecognized op. Use < ANCHOR (insert before), + ANCHOR (insert after), - A..B (delete), = A..B (replace), or |TEXT payload lines. ` +
+			`line ${lineNum}: unrecognized op. Use < ANCHOR (insert before), + ANCHOR (insert after), - A..B (delete), = A..B (replace), or "${HASHLINE_CONTENT_SEPARATOR}TEXT" payload lines. ` +
 				`Got ${JSON.stringify(line)}.`,
 		);
 	}
@@ -1011,7 +1002,7 @@ function stripLeadingBlankLines(input: string): string {
 function containsRecognizableHashlineOperations(input: string): boolean {
 	for (const rawLine of input.split("\n")) {
 		const line = stripTrailingCarriageReturn(rawLine);
-		if (/^[+<=-]\s+/.test(line) || line.startsWith("|")) return true;
+		if (/^[+<=-]\s+/.test(line) || line.startsWith(HASHLINE_CONTENT_SEPARATOR)) return true;
 	}
 	return false;
 }

@@ -16,7 +16,7 @@ import type { ToolSession } from "../tools";
 import { VimTool, vimSchema } from "../tools/vim";
 import { type EditMode, normalizeEditMode, resolveEditMode } from "../utils/edit-mode";
 import type { VimToolDetails } from "../vim/types";
-import { resolveLarkLidPlaceholders } from "./line-hash";
+import { resolveHashlineGrammarPlaceholders } from "./line-hash";
 import { type ApplyPatchParams, applyPatchSchema, expandApplyPatchToEntries } from "./modes/apply-patch";
 import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
 import {
@@ -35,8 +35,8 @@ export * from "./apply-patch";
 export * from "./diff";
 export * from "./line-hash";
 
-// Resolve the `$HASHFMT$` placeholder in the hashline Lark grammar.
-const hashlineGrammar = resolveLarkLidPlaceholders(hashlineGrammarTemplate);
+// Resolve the `$HASHFMT$` and `$HSEP$` placeholders in the hashline Lark grammar.
+const hashlineGrammar = resolveHashlineGrammarPlaceholders(hashlineGrammarTemplate);
 
 export * from "./modes/apply-patch";
 export * from "./modes/hashline";

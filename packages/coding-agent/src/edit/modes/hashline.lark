@@ -16,7 +16,7 @@ insert_before_op: "<" insert_target LF
 insert_after_op: "+" insert_target LF
 replace_op: "=" range LF
 delete_op: "-" range LF
-payload: "|" /[^\r\n]*/ LF
+payload: $HSEP$ /[^\r\n]*/ LF
 
 insert_target: LID | "EOF" | "BOF"
 range: LID (".." LID)?

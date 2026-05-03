@@ -159,6 +159,13 @@ prompt.registerHelper("hline", function (this: unknown, ...args: unknown[]): str
 	return `${ref}${HASHLINE_CONTENT_SEPARATOR}${text}`;
 });
 
+/**
+ * {{hsep}} — emit the configured hashline payload separator character.
+ * Stays in sync with {@link HASHLINE_CONTENT_SEPARATOR} so prompt templates
+ * never have to hardcode `|` and survive a separator switch automatically.
+ */
+prompt.registerHelper("hsep", (): string => HASHLINE_CONTENT_SEPARATOR);
+
 const INLINE_ARG_SHELL_PATTERN = /\$(?:ARGUMENTS|@(?:\[\d+(?::\d*)?\])?|\d+)/;
 const INLINE_ARG_TEMPLATE_PATTERN = /\{\{[\s\S]*?(?:\b(?:arguments|ARGUMENTS|args)\b|\barg\s+[^}]+)[\s\S]*?\}\}/;
 

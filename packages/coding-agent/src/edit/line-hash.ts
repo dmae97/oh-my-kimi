@@ -716,23 +716,44 @@ export function describeAnchorExamples(linePrefix = ""): string {
 }
 
 /**
- * Sentinel token that the hashline Lark grammar uses for the hash
- * regex source. Replaced at module-load time by {@link resolveLarkLidPlaceholders}
- * so the grammar is re-derived from a single source of truth alongside its
- * TypeScript consumers. Update the placeholder name here and in the grammar together.
+ * Sentinel tokens that the hashline Lark grammar uses when it needs values
+ * derived from a TypeScript constant (the LID hash regex source and the
+ * payload separator literal). They're replaced at module-load time by
+ * {@link resolveHashlineGrammarPlaceholders} so the grammar stays in sync
+ * with its TypeScript counterparts. Update these names here and in the
+ * grammar together.
  */
 export const LARK_LID_HASH_PLACEHOLDER = "$HASHFMT$";
+export const LARK_PAYLOAD_SEP_PLACEHOLDER = "$HSEP$";
 
 /**
- * Substitute the LID hash placeholder in a Lark grammar text with the
- * `[a-z]{2}` hash regex source. Grammars that don't reference Lids pass
- * through unchanged.
+ * Substitute every grammar placeholder with the value derived from its
+ * TypeScript counterpart. Grammars that don't reference these placeholders
+ * pass through unchanged.
  */
-export function resolveLarkLidPlaceholders(grammar: string): string {
-	return grammar.replaceAll(LARK_LID_HASH_PLACEHOLDER, "[a-z]{2}");
+export function resolveHashlineGrammarPlaceholders(grammar: string): string {
+	return grammar
+		.replaceAll(LARK_LID_HASH_PLACEHOLDER, "[a-z]{2}")
+		.replaceAll(LARK_PAYLOAD_SEP_PLACEHOLDER, JSON.stringify(HASHLINE_CONTENT_SEPARATOR));
 }
 
-export const HASHLINE_CONTENT_SEPARATOR = "|";
+/** @deprecated Use {@link resolveHashlineGrammarPlaceholders}. */
+export const resolveLarkLidPlaceholders = resolveHashlineGrammarPlaceholders;
+
+/**
+ * Single source of truth for the hashline payload separator. This is the
+ * character that introduces both the content portion of a formatted hashline
+ * (`LINE+ID|TEXT`) and every payload line in an edit op block (`|TEXT`).
+ *
+ * Override at runtime with the `PI_HASHLINE_SEP` env var (e.g.
+ * `PI_HASHLINE_SEP=">"`, `PI_HASHLINE_SEP="\\"`). The value is read once at
+ * module load; the regex source, grammar substitution, prompt helper, and
+ * doubled-prefix detection in the parser all derive from it.
+ */
+export const HASHLINE_CONTENT_SEPARATOR = Bun.env.PI_HASHLINE_SEP || "|";
+
+/** Regex-escaped form of {@link HASHLINE_CONTENT_SEPARATOR}, safe for embedding inside a regex. */
+export const HASHLINE_CONTENT_SEPARATOR_RE_SRC = HASHLINE_CONTENT_SEPARATOR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const RE_SIGNIFICANT = /[\p{L}\p{N}]/u;
 

@@ -8,15 +8,15 @@ This format is purely textual. The tool has NO awareness of language, indentatio
 
 <ops>
 @PATH            header: subsequent ops apply to PATH
-< ANCHOR         insert lines BEFORE the anchored line (or BOF); payload follows as `|TEXT` lines
-+ ANCHOR         insert lines AFTER  the anchored line (or EOF); payload follows as `|TEXT` lines
+< ANCHOR         insert lines BEFORE the anchored line (or BOF); payload follows as `{{hsep}}TEXT` lines
++ ANCHOR         insert lines AFTER  the anchored line (or EOF); payload follows as `{{hsep}}TEXT` lines
 - A..B           delete the line range (inclusive); `- A` for one line
-= A..B           replace the range with payload `|TEXT` lines, or with one blank line if no payload follows
+= A..B           replace the range with payload `{{hsep}}TEXT` lines, or with one blank line if no payload follows
 </ops>
 
 <rules>
-- Every line of inserted/replacement content **MUST** be emitted as a payload line starting with `|`.
-- `|` is syntax, not content. The inserted text begins after the first `|`; use a bare `|` to insert a blank line.
+- Every line of inserted/replacement content **MUST** be emitted as a payload line starting with `{{hsep}}`.
+- `{{hsep}}` is syntax, not content. The inserted text begins after the first `{{hsep}}`; use a bare `{{hsep}}` to insert a blank line.
 - `< A` inserts before line A; `+ A` inserts after line A. `< BOF` / `+ BOF` both prepend; `< EOF` / `+ EOF` both append.
 - `= A..B` replaces the inclusive range with the following payload lines. `= A` (or `= A..B`) with no payload blanks the range to a single empty line.
 - `- A..B` deletes the inclusive range; omit `..B` for one line.
@@ -35,30 +35,30 @@ This format is purely textual. The tool has NO awareness of language, indentatio
 # Replace one line (preserve the leading tab from the original)
 @a.ts
 = {{hrefr 5}}
-|	return clean.trim().toUpperCase();
+{{hsep}}	return clean.trim().toUpperCase();
 
 # Replace a contiguous range with multiple lines
 @a.ts
 = {{hrefr 3}}..{{hrefr 6}}
-|export function label(name: string): string {
-|	const clean = (name || DEF).trim();
-|	return clean.length === 0 ? DEF : clean.toUpperCase();
-|}
+{{hsep}}export function label(name: string): string {
+{{hsep}}	const clean = (name || DEF).trim();
+{{hsep}}	return clean.length === 0 ? DEF : clean.toUpperCase();
+{{hsep}}}
 
 # Insert BEFORE a line
 @a.ts
 < {{hrefr 5}}
-|	const debug = false;
+{{hsep}}	const debug = false;
 
 # Insert AFTER a line
 @a.ts
 + {{hrefr 4}}
-|	if (clean.length === 0) return DEF;
+{{hsep}}	if (clean.length === 0) return DEF;
 
 # Append to end of file
 @a.ts
 + EOF
-|export const done = true;
+{{hsep}}export const done = true;
 
 # Delete a single line
 @a.ts
@@ -70,9 +70,9 @@ This format is purely textual. The tool has NO awareness of language, indentatio
 </examples>
 
 <critical>
-- Always copy anchors exactly from tool output, but **NEVER** include line content after the `|` separator in the op line.
+- Always copy anchors exactly from tool output, but **NEVER** include line content after the `{{hsep}}` separator in the op line.
 - Only emit changed lines. Do not restate unchanged context as payload.
-- Every inserted/replacement content line **MUST** start with `|`; raw content lines are invalid.
+- Every inserted/replacement content line **MUST** start with `{{hsep}}`; raw content lines are invalid.
 - Do not write unified diff syntax (`@@`, `-OLD`, `+NEW`).
-- To replace a block, use one `= A..B` op followed by all replacement `|TEXT` payload lines.
+- To replace a block, use one `= A..B` op followed by all replacement `{{hsep}}TEXT` payload lines.
 </critical>
