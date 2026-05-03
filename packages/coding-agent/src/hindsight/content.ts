@@ -3,13 +3,10 @@
  *
  * Ports the semantics of the upstream OpenCode plugin
  * (vectorize-io/hindsight @ hindsight-integrations/opencode/src/content.ts):
- *   - tag stripping for anti-feedback (a recalled <hindsight_memories> block must
+ *   - tag stripping for anti-feedback (a recalled <memories> block must
  *     never end up retained as a new memory)
  *   - recall query composition + truncation under a character budget
  *   - retention transcript framing
- *
- * Everything in this file is deterministic and free of I/O so the unit tests
- * can pin the exact behaviour without spinning up an HTTP client.
  */
 
 export interface HindsightMessage {
@@ -23,18 +20,22 @@ export interface RecallResultLike {
 	mentioned_at?: string | null;
 }
 
-const HINDSIGHT_MEMORIES_REGEX = /<hindsight_memories>[\s\S]*?<\/hindsight_memories>/g;
-const RELEVANT_MEMORIES_REGEX = /<relevant_memories>[\s\S]*?<\/relevant_memories>/g;
+const MEMORIES_REGEX = /<memories>[\s\S]*?<\/memories>/g;
+const LEGACY_HINDSIGHT_MEMORIES_REGEX = /<hindsight_memories>[\s\S]*?<\/hindsight_memories>/g;
+const LEGACY_RELEVANT_MEMORIES_REGEX = /<relevant_memories>[\s\S]*?<\/relevant_memories>/g;
 
 /**
- * Strip `<hindsight_memories>` and `<relevant_memories>` blocks.
+ * Strip `<memories>` and legacy memory blocks.
  *
  * The recall path injects these tags into the system prompt; if they leak back
  * into the retention transcript, every retain becomes a tighter feedback loop
  * around the same memories. Always strip before retaining.
  */
 export function stripMemoryTags(content: string): string {
-	return content.replace(HINDSIGHT_MEMORIES_REGEX, "").replace(RELEVANT_MEMORIES_REGEX, "");
+	return content
+		.replace(MEMORIES_REGEX, "")
+		.replace(LEGACY_HINDSIGHT_MEMORIES_REGEX, "")
+		.replace(LEGACY_RELEVANT_MEMORIES_REGEX, "");
 }
 
 /** Format recall results into a bullet list for context injection. */

@@ -102,7 +102,7 @@ describe("Hindsight tool factories", () => {
 	});
 });
 
-describe("hindsight_retain.execute", () => {
+describe("retain.execute", () => {
 	beforeEach(() => {
 		_resetSettingsForTest();
 		clearHindsightSessionStateForTest();
@@ -138,7 +138,7 @@ describe("hindsight_retain.execute", () => {
 	});
 });
 
-describe("hindsight_recall.execute", () => {
+describe("recall.execute", () => {
 	beforeEach(() => {
 		_resetSettingsForTest();
 		clearHindsightSessionStateForTest();
@@ -190,7 +190,7 @@ describe("hindsight_recall.execute", () => {
 	});
 });
 
-describe("hindsight_reflect.execute", () => {
+describe("reflect.execute", () => {
 	beforeEach(() => {
 		_resetSettingsForTest();
 		clearHindsightSessionStateForTest();

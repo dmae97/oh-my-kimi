@@ -23,8 +23,8 @@ const DESCRIPTION = [
 ].join(" ");
 
 export class HindsightRetainTool implements AgentTool<typeof hindsightRetainSchema> {
-	readonly name = "hindsight_retain";
-	readonly label = "Hindsight retain";
+	readonly name = "retain";
+	readonly label = "Retain";
 	readonly description = DESCRIPTION;
 	readonly parameters = hindsightRetainSchema;
 	readonly strict = true;
@@ -56,7 +56,7 @@ export class HindsightRetainTool implements AgentTool<typeof hindsightRetainSche
 					details: {},
 				};
 			} catch (err) {
-				logger.warn("hindsight_retain failed", { bankId: state.bankId, error: String(err) });
+				logger.warn("retain failed", { bankId: state.bankId, error: String(err) });
 				throw err instanceof Error ? err : new Error(String(err));
 			}
 		});

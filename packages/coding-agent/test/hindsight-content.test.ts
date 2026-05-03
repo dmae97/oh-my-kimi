@@ -11,19 +11,24 @@ import {
 } from "@oh-my-pi/pi-coding-agent/hindsight/content";
 
 describe("stripMemoryTags", () => {
-	it("removes both <hindsight_memories> and <relevant_memories> blocks", () => {
+	it("removes both <memories> and legacy memory blocks", () => {
 		const text = [
 			"hello",
-			"<hindsight_memories>",
+			"<memories>",
 			"- some recalled fact",
-			"</hindsight_memories>",
+			"</memories>",
 			"middle",
+			"<hindsight_memories>",
+			"old recalled fact",
+			"</hindsight_memories>",
 			"<relevant_memories>",
 			"more facts",
 			"</relevant_memories>",
 			"end",
 		].join("\n");
 		const stripped = stripMemoryTags(text);
+		expect(stripped).not.toContain("<memories>");
+		expect(stripped).not.toContain("</memories>");
 		expect(stripped).not.toContain("<hindsight_memories>");
 		expect(stripped).not.toContain("</hindsight_memories>");
 		expect(stripped).not.toContain("<relevant_memories>");
@@ -34,7 +39,7 @@ describe("stripMemoryTags", () => {
 	});
 
 	it("strips multiple sequential blocks", () => {
-		const text = "<hindsight_memories>a</hindsight_memories><hindsight_memories>b</hindsight_memories>tail";
+		const text = "<memories>a</memories><memories>b</memories>tail";
 		expect(stripMemoryTags(text)).toBe("tail");
 	});
 
@@ -69,7 +74,7 @@ describe("composeRecallQuery", () => {
 	it("strips memory tags from prior context turns", () => {
 		const tagged: HindsightMessage[] = [
 			{ role: "user", content: "before" },
-			{ role: "assistant", content: "<hindsight_memories>secret</hindsight_memories>visible" },
+			{ role: "assistant", content: "<memories>secret</memories>visible" },
 			{ role: "user", content: "Latest" },
 		];
 		const out = composeRecallQuery("Latest", tagged, 5);
@@ -151,19 +156,19 @@ describe("prepareRetentionTranscript", () => {
 		const messages: HindsightMessage[] = [
 			{
 				role: "user",
-				content: "<hindsight_memories>\n- recalled fact about user\n</hindsight_memories>\nuser-real-question-here",
+				content: "<memories>\n- recalled fact about user\n</memories>\nuser-real-question-here",
 			},
 			{ role: "assistant", content: "answer about question" },
 		];
 		const { transcript } = prepareRetentionTranscript(messages, true);
-		expect(transcript).not.toContain("<hindsight_memories>");
+		expect(transcript).not.toContain("<memories>");
 		expect(transcript).not.toContain("recalled fact about user");
 		expect(transcript).toContain("user-real-question-here");
 	});
 
 	it("returns null when nothing meaningful remains", () => {
 		const empty = prepareRetentionTranscript(
-			[{ role: "user", content: "<hindsight_memories>x</hindsight_memories>" }],
+			[{ role: "user", content: "<memories>x</memories>" }],
 			true,
 		);
 		expect(empty.transcript).toBeNull();

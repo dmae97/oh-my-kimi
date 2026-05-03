@@ -237,9 +237,9 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	web_search: s => new WebSearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,
 	write: s => new WriteTool(s),
-	hindsight_retain: HindsightRetainTool.createIf,
-	hindsight_recall: HindsightRecallTool.createIf,
-	hindsight_reflect: HindsightReflectTool.createIf,
+	retain: HindsightRetainTool.createIf,
+	recall: HindsightRecallTool.createIf,
+	reflect: HindsightReflectTool.createIf,
 };
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
@@ -374,7 +374,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
 		if (name === "irc") return session.settings.get("irc.enabled");
 		if (name === "recipe") return session.settings.get("recipe.enabled");
-		if (name === "hindsight_retain" || name === "hindsight_recall" || name === "hindsight_reflect") {
+		if (name === "retain" || name === "recall" || name === "reflect") {
 			return session.settings.get("memory.backend") === "hindsight";
 		}
 		if (name === "task") {

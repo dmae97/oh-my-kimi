@@ -20,8 +20,8 @@ const DESCRIPTION = [
 ].join(" ");
 
 export class HindsightRecallTool implements AgentTool<typeof hindsightRecallSchema> {
-	readonly name = "hindsight_recall";
-	readonly label = "Hindsight recall";
+	readonly name = "recall";
+	readonly label = "Recall";
 	readonly description = DESCRIPTION;
 	readonly parameters = hindsightRecallSchema;
 	readonly strict = true;
@@ -65,7 +65,7 @@ export class HindsightRecallTool implements AgentTool<typeof hindsightRecallSche
 					details: {},
 				};
 			} catch (err) {
-				logger.warn("hindsight_recall failed", { bankId: state.bankId, error: String(err) });
+				logger.warn("recall failed", { bankId: state.bankId, error: String(err) });
 				throw err instanceof Error ? err : new Error(String(err));
 			}
 		});

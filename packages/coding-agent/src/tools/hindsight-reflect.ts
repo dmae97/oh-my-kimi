@@ -19,8 +19,8 @@ const DESCRIPTION = [
 ].join(" ");
 
 export class HindsightReflectTool implements AgentTool<typeof hindsightReflectSchema> {
-	readonly name = "hindsight_reflect";
-	readonly label = "Hindsight reflect";
+	readonly name = "reflect";
+	readonly label = "Reflect";
 	readonly description = DESCRIPTION;
 	readonly parameters = hindsightReflectSchema;
 	readonly strict = true;
@@ -52,7 +52,7 @@ export class HindsightReflectTool implements AgentTool<typeof hindsightReflectSc
 					details: {},
 				};
 			} catch (err) {
-				logger.warn("hindsight_reflect failed", { bankId: state.bankId, error: String(err) });
+				logger.warn("reflect failed", { bankId: state.bankId, error: String(err) });
 				throw err instanceof Error ? err : new Error(String(err));
 			}
 		});

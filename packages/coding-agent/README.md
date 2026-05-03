@@ -19,7 +19,7 @@ The agent supports three mutually-exclusive memory backends, selected via the `m
 
 - `off` (default) — no memory subsystem runs.
 - `local` — existing rollout-summarisation pipeline; writes `memory_summary.md` and consolidated artifacts under the agent dir.
-- `hindsight` — talks to a [Hindsight](https://hindsight.vectorize.io) server (Cloud or self-hosted Docker), retains transcripts every Nth user turn, recalls memories on the first turn of a session, and exposes `hindsight_retain`, `hindsight_recall`, and `hindsight_reflect`.
+- `hindsight` — talks to a [Hindsight](https://hindsight.vectorize.io) server (Cloud or self-hosted Docker), retains transcripts every Nth user turn, recalls memories on the first turn of a session, and exposes `retain`, `recall`, and `reflect`.
 
 ### Hindsight quickstart
 

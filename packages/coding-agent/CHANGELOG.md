@@ -5,7 +5,7 @@
 
 - Added a `memory.backend` setting (off, local, hindsight) under a new Memory settings tab to control which memory subsystem is active
 - Added Hindsight memory settings (`hindsight.*`) for API connection, bank identification, and recall/retain policy
-- Added `hindsight_recall`, `hindsight_retain`, and `hindsight_reflect` tools for direct long-term memory search, retention, and reflection when using the Hindsight backend
+- Added `retain`, `recall`, and `reflect` tools for direct long-term memory search, retention, and reflection when using the Hindsight backend
 - Added `search_code`, `search_commits`, and `search_repos` ops to the `github` tool so the search surface mirrors `gh search`'s subcommands
 
 ### Changed
@@ -18,7 +18,7 @@
 ### Fixed
 
 - Fixed legacy migrations by mapping existing `memories.enabled` values to `memory.backend` on load to preserve prior enable/disable behavior
-- Fixed memory retention so recalled `<hindsight_memories>` and `<relevant_memories>` blocks are stripped before storing transcripts and do not feed back as new memory
+- Fixed memory retention so recalled `<memories>` blocks and legacy `<hindsight_memories>` / `<relevant_memories>` blocks are stripped before storing transcripts and do not feed back as new memory
 - Fixed `search_code` output to include each match path, repository, shortened SHA, and a one-line matching fragment
 - Fixed `search_commits` output to show shortened SHAs with commit message first lines
 - Fixed `search_repos` output formatting to return repository summaries including language, stars, forks, issues, visibility, and key status fields

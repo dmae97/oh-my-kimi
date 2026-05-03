@@ -187,7 +187,7 @@ describe("hindsightBackend.preCompactionContext", () => {
 		expect(ctx).toBeUndefined();
 	});
 
-	it("returns a <hindsight_memories> block when recall yields results", async () => {
+	it("returns a <memories> block when recall yields results", async () => {
 		const settings = Settings.isolated({
 			"memory.backend": "hindsight",
 			"hindsight.apiUrl": "http://localhost:8888",
@@ -208,7 +208,7 @@ describe("hindsightBackend.preCompactionContext", () => {
 		const messages: AgentMessage[] = [{ role: "user", content: "What did we decide?", timestamp: 0 } as never];
 		const ctx = await hindsightBackend.preCompactionContext?.(messages, settings);
 		expect(ctx).toBeDefined();
-		expect(ctx).toContain("<hindsight_memories>");
+		expect(ctx).toContain("<memories>");
 		expect(ctx).toContain("remembered fact");
 	});
 
@@ -269,13 +269,13 @@ describe("hindsightBackend first-turn injection", () => {
 			session as never,
 			"What do I know about this user?",
 		);
-		expect(block).toContain("<hindsight_memories>");
+		expect(block).toContain("<memories>");
 		expect(block).toContain("Can prefers concise communication");
 		expect(getHindsightSessionState("s8")?.hasRecalledForFirstTurn).toBe(true);
 		expect(getHindsightSessionState("s8")?.lastRecallSnippet).toBe(block);
 	});
 
-	it("keeps the <hindsight_memories> wrapper in buildDeveloperInstructions", async () => {
+	it("keeps the <memories> wrapper in buildDeveloperInstructions", async () => {
 		const settings = Settings.isolated({
 			"memory.backend": "hindsight",
 			"hindsight.apiUrl": "http://localhost:8888",
@@ -291,11 +291,11 @@ describe("hindsightBackend first-turn injection", () => {
 
 		const state = getHindsightSessionState("s9");
 		expect(state).toBeDefined();
-		state!.lastRecallSnippet = "<hindsight_memories>\nremembered fact\n</hindsight_memories>";
+		state!.lastRecallSnippet = "<memories>\nremembered fact\n</memories>";
 
 		const prompt = await hindsightBackend.buildDeveloperInstructions("/tmp", settings);
-		expect(prompt).toContain("<hindsight_memories>");
-		expect(prompt).toContain("</hindsight_memories>");
+		expect(prompt).toContain("<memories>");
+		expect(prompt).toContain("</memories>");
 		expect(prompt).toContain("remembered fact");
 	});
 });
