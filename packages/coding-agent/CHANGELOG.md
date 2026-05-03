@@ -1,12 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `search_code`, `search_commits`, and `search_repos` ops to the `github` tool so the search surface mirrors `gh search`'s subcommands
 
 ### Changed
 
+- Updated multi-path `search`, `find`, `ast-edit`, and `ast-grep` calls to skip missing base paths, returning matches from remaining paths and reporting skipped paths in output
 - Changed `search_repos` to run as a global repository search using query qualifiers without applying the `repo` filter
 
 ### Fixed

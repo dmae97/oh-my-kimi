@@ -20,6 +20,7 @@ import {
 	hasGlobPathChars,
 	normalizePathLikeInput,
 	parseSearchPath,
+	partitionExistingPaths,
 	resolveExplicitSearchPaths,
 	resolveToCwd,
 } from "./path-utils";
@@ -226,13 +227,21 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				}
 				resolvedPathInputs.push(resource.sourcePath);
 			}
-			if (resolvedPathInputs.length === 1) {
-				const parsedPath = parseSearchPath(resolvedPathInputs[0] ?? ".");
+			let effectivePathInputs = resolvedPathInputs;
+			if (resolvedPathInputs.length > 1) {
+				const partition = await partitionExistingPaths(resolvedPathInputs, this.session.cwd, parseSearchPath);
+				if (partition.valid.length === 0) {
+					throw new ToolError(`Path not found: ${partition.missing.join(", ")}`);
+				}
+				effectivePathInputs = partition.valid;
+			}
+			if (effectivePathInputs.length === 1) {
+				const parsedPath = parseSearchPath(effectivePathInputs[0] ?? ".");
 				searchPath = resolveToCwd(parsedPath.basePath, this.session.cwd);
 				globFilter = parsedPath.glob;
 				scopePath = formatScopePath(searchPath);
 			} else {
-				const multiSearchPath = await resolveExplicitSearchPaths(resolvedPathInputs, this.session.cwd, globFilter);
+				const multiSearchPath = await resolveExplicitSearchPaths(effectivePathInputs, this.session.cwd, globFilter);
 				if (!multiSearchPath) {
 					throw new ToolError("`paths` must contain at least one path or glob");
 				}

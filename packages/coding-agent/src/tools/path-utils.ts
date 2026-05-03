@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -440,6 +441,60 @@ export async function resolveExplicitFindPatterns(
 	cwd: string,
 ): Promise<ResolvedMultiFindPattern | undefined> {
 	return resolveFindPatternItems([...new Set(patternItems)], cwd);
+}
+
+/**
+ * Result of partitioning a list of user-supplied paths/globs into entries whose
+ * base directory currently exists on disk versus those that do not.
+ *
+ * Used by multi-path tools (search, find, ast_grep, ast_edit) to tolerate one
+ * or more missing entries in a multi-path call: the surviving entries should
+ * still be searched, with the missing entries surfaced as a non-fatal warning.
+ */
+export interface PartitionedPaths {
+	/** Raw input strings whose resolved base path exists. */
+	valid: string[];
+	/** Raw input strings whose resolved base path is missing (ENOENT). */
+	missing: string[];
+}
+
+/**
+ * Stat each input's base path concurrently; return entries split by existence.
+ *
+ * `splitter` is expected to be {@link parseFindPattern} or
+ * {@link parseSearchPath}: both return a `basePath` field that this helper
+ * resolves against `cwd` and stats. ENOENT is the only swallowed error — every
+ * other stat failure (permission, IO, etc.) propagates so callers do not silently
+ * skip paths that exist but are unreadable.
+ *
+ * Order of `valid` and `missing` follows the input order, so callers can rely
+ * on `valid[0]` matching the first surviving user-supplied entry.
+ */
+export async function partitionExistingPaths(
+	items: string[],
+	cwd: string,
+	splitter: (item: string) => { basePath: string },
+): Promise<PartitionedPaths> {
+	const settled = await Promise.all(
+		items.map(async item => {
+			const { basePath } = splitter(item);
+			const absoluteBasePath = resolveToCwd(basePath, cwd);
+			try {
+				await fs.promises.stat(absoluteBasePath);
+				return { item, exists: true } as const;
+			} catch (err) {
+				if (isEnoent(err)) return { item, exists: false } as const;
+				throw err;
+			}
+		}),
+	);
+	const valid: string[] = [];
+	const missing: string[] = [];
+	for (const entry of settled) {
+		if (entry.exists) valid.push(entry.item);
+		else missing.push(entry.item);
+	}
+	return { valid, missing };
 }
 
 export function resolveReadPath(filePath: string, cwd: string): string {

@@ -22,6 +22,7 @@ import {
 	hasGlobPathChars,
 	normalizePathLikeInput,
 	parseSearchPath,
+	partitionExistingPaths,
 	resolveExplicitSearchPaths,
 	resolveToCwd,
 } from "./path-utils";
@@ -68,6 +69,10 @@ export interface SearchToolDetails {
 	 * `result.text` lines but uses a `│` gutter and `*` to mark match lines (vs space for
 	 * context). The TUI uses this directly so it never parses model-facing hashline anchors. */
 	displayContent?: string;
+	/** User-supplied paths whose base directory was missing on disk. The tool
+	 * skipped these and continued with the surviving entries; surfaced as a
+	 * non-fatal warning in the renderer and in the model-facing text. */
+	missingPaths?: string[];
 }
 
 type SearchParams = Static<typeof searchSchema>;
@@ -140,13 +145,26 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				}
 				resolvedPathInputs.push(resource.sourcePath);
 			}
-			if (resolvedPathInputs.length === 1) {
-				const parsedPath = parseSearchPath(resolvedPathInputs[0] ?? ".");
+			// Tolerate missing entries in a multi-path call: skip ones whose base
+			// directory is gone, and only error if every entry is missing. Single
+			// missing path keeps the original ENOENT semantics.
+			let missingPaths: string[] = [];
+			let effectivePaths = resolvedPathInputs;
+			if (resolvedPathInputs.length > 1) {
+				const partition = await partitionExistingPaths(resolvedPathInputs, this.session.cwd, parseSearchPath);
+				if (partition.valid.length === 0) {
+					throw new ToolError(`Path not found: ${partition.missing.join(", ")}`);
+				}
+				effectivePaths = partition.valid;
+				missingPaths = partition.missing;
+			}
+			if (effectivePaths.length === 1) {
+				const parsedPath = parseSearchPath(effectivePaths[0] ?? ".");
 				searchPath = resolveToCwd(parsedPath.basePath, this.session.cwd);
 				globFilter = parsedPath.glob;
 				scopePath = formatScopePath(searchPath);
 			} else {
-				const multiSearchPath = await resolveExplicitSearchPaths(resolvedPathInputs, this.session.cwd, globFilter);
+				const multiSearchPath = await resolveExplicitSearchPaths(effectivePaths, this.session.cwd, globFilter);
 				if (!multiSearchPath) {
 					throw new ToolError("`paths` must contain at least one path or glob");
 				}
@@ -285,6 +303,8 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			const limitMessage = `Result limit reached; narrow paths or use skip=${nextSkip}.`;
 			const { record: recordFile, list: fileList } = createFileRecorder();
 			const fileMatchCounts = new Map<string, number>();
+			const missingPathsNote =
+				missingPaths.length > 0 ? `Skipped missing paths: ${missingPaths.join(", ")}` : undefined;
 			if (selectedMatches.length === 0) {
 				const details: SearchToolDetails = {
 					scopePath,
@@ -292,8 +312,10 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					fileCount: 0,
 					files: [],
 					truncated: false,
+					missingPaths: missingPaths.length > 0 ? missingPaths : undefined,
 				};
-				return toolResult(details).text("No matches found").done();
+				const text = missingPathsNote ? `No matches found\n${missingPathsNote}` : "No matches found";
+				return toolResult(details).text(text).done();
 			}
 			const outputLines: string[] = [];
 			let linesTruncated = false;
@@ -365,6 +387,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			if (matchLimitReached || result.limitReached) {
 				outputLines.push("", limitMessage);
 			}
+			if (missingPathsNote) {
+				outputLines.push("", missingPathsNote);
+			}
 			const rawOutput = outputLines.join("\n");
 			const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 			const output = truncation.content;
@@ -382,6 +407,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				matchLimitReached: matchLimitReached ? effectiveLimit : undefined,
 				resultLimitReached: result.limitReached ? internalLimit : undefined,
 				displayContent: displayLines.join("\n"),
+				missingPaths: missingPaths.length > 0 ? missingPaths : undefined,
 			};
 			if (truncation.truncated) details.truncation = truncation;
 			if (linesTruncated) details.linesTruncated = true;
@@ -487,12 +513,20 @@ export const searchToolRenderer = {
 			details?.truncated || truncation || limits?.matchLimit || limits?.resultLimit || limits?.columnTruncated,
 		);
 
+		const missingPathsList = details?.missingPaths ?? [];
+		const missingNote =
+			missingPathsList.length > 0
+				? uiTheme.fg("warning", `skipped missing: ${missingPathsList.join(", ")}`)
+				: undefined;
+
 		if (matchCount === 0) {
 			const header = renderStatusLine(
 				{ icon: "warning", title: "Search", description: args?.pattern, meta: ["0 matches"] },
 				uiTheme,
 			);
-			return new Text([header, formatEmptyMessage("No matches found", uiTheme)].join("\n"), 0, 0);
+			const lines = [header, formatEmptyMessage("No matches found", uiTheme)];
+			if (missingNote) lines.push(missingNote);
+			return new Text(lines.join("\n"), 0, 0);
 		}
 
 		const summaryParts = [formatCount("match", matchCount), formatCount("file", fileCount)];
@@ -538,8 +572,11 @@ export const searchToolRenderer = {
 		if (limits?.columnTruncated) truncationReasons.push(`line length ${limits.columnTruncated.maxColumn}`);
 		if (truncation?.artifactId) truncationReasons.push(formatFullOutputReference(truncation.artifactId));
 
-		const extraLines =
-			truncationReasons.length > 0 ? [uiTheme.fg("warning", `truncated: ${truncationReasons.join(", ")}`)] : [];
+		const extraLines: string[] = [];
+		if (truncationReasons.length > 0) {
+			extraLines.push(uiTheme.fg("warning", `truncated: ${truncationReasons.join(", ")}`));
+		}
+		if (missingNote) extraLines.push(missingNote);
 
 		let cached: RenderCache | undefined;
 		return {
