@@ -309,7 +309,7 @@ function getCallPreview(
 }
 
 const MISSING_APPLY_PATCH_END_ERROR = "The last line of the patch must be '*** End Patch'";
-const HASHLINE_INPUT_HEADER_PREFIX = "@";
+const HL_INPUT_HEADER_PREFIX = "@";
 
 function normalizeHashlineInputPreviewPath(rawPath: string): string {
 	const trimmed = rawPath.trim();
@@ -323,8 +323,8 @@ function normalizeHashlineInputPreviewPath(rawPath: string): string {
 }
 
 function parseHashlineInputPreviewHeader(line: string): string | null {
-	if (!line.startsWith(HASHLINE_INPUT_HEADER_PREFIX)) return null;
-	const body = line.slice(HASHLINE_INPUT_HEADER_PREFIX.length).trim();
+	if (!line.startsWith(HL_INPUT_HEADER_PREFIX)) return null;
+	const body = line.slice(HL_INPUT_HEADER_PREFIX.length).trim();
 	const previewPath = normalizeHashlineInputPreviewPath(body);
 	return previewPath.length > 0 ? previewPath : null;
 }

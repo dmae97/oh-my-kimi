@@ -1,9 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Renamed hashline separator configuration from `PI_HASHLINE_SEP` to `PI_HL_SEP` and changed the default payload separator from `\\` to `>`
 
 ### Added
 
+- Added inline hashline edit syntax so `< ANCHOR${sep}TEXT` prepended text to an anchored line and `+ ANCHOR${sep}TEXT` appended text to it without requiring a multi-line payload block
 - Added a `memory.backend` setting (off, local, hindsight) under a new Memory settings tab to control which memory subsystem is active
 - Added Hindsight memory settings (`hindsight.*`) for API connection, bank identification, and recall/retain policy
 - Added `retain`, `recall`, and `reflect` tools for direct long-term memory search, retention, and reflection when using the Hindsight backend
@@ -12,6 +16,7 @@
 
 ### Changed
 
+- Changed hashline read/search previews and diff output to keep `|` as the anchor-to-text separator while using the separate configured edit payload separator
 - Mapped invalid `hindsight.scoping` settings back to the default `per-project-tagged` behavior with a warning
 - Changed `/memory view`, `/memory clear`, and `/memory enqueue` to route through the selected memory backend instead of being hardcoded to local memories
 - Changed compaction context assembly to include backend-provided recall context when available
@@ -30,6 +35,7 @@
 
 ### Fixed
 
+- Fixed inline hashline modify operations to fail fast when combined with a delete or replace on the same target line
 - Fixed hashline parsing of payload blocks to handle a shared extra leading symbol prefix (such as markdown `>>`) on all payload lines by stripping it as an auto-correction instead of rejecting the edit
 - Forwarded project scoping tags to `hindsight` retain, recall, and reflect operations so manual memory commands honor the active tagging mode
 - Fixed legacy migrations by mapping existing `memories.enabled` values to `memory.backend` on load to preserve prior enable/disable behavior

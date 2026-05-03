@@ -5,7 +5,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { $envpos, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { computeLineHash, HASHLINE_CONTENT_SEPARATOR } from "../edit/line-hash";
+import { computeLineHash, HL_BODY_SEP } from "../edit/line-hash";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import astEditDescription from "../prompts/tools/ast-edit.md" with { type: "text" };
@@ -330,7 +330,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					const afterRef = useHashLines
 						? `${change.startLine}${computeLineHash(change.startLine, afterFirstLine)}`
 						: `${change.startLine}:${change.startColumn}`;
-					const lineSeparator = useHashLines ? HASHLINE_CONTENT_SEPARATOR : " ";
+					const lineSeparator = useHashLines ? HL_BODY_SEP : " ";
 					modelOut.push(`-${beforeRef}${lineSeparator}${beforeLine}`);
 					modelOut.push(`+${afterRef}${lineSeparator}${afterLine}`);
 					displayOut.push(formatCodeFrameLine("-", change.startLine, beforeLine, lineNumberWidth));

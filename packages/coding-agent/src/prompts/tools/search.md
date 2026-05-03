@@ -7,7 +7,7 @@ Searches files using powerful regex matching.
 </instruction>
 
 <output>
-{{#if IS_HASHLINE_MODE}}
+{{#if IS_HL_MODE}}
 - Text output is anchor-prefixed: `*5th|content` (match) or ` 9x}|content` (context, leading space). The 2-char suffix is a content fingerprint.
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}

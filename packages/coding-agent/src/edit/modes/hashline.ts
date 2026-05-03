@@ -44,10 +44,12 @@ import {
 	computeLineHash,
 	describeAnchorExamples,
 	formatHashLine,
-	HASHLINE_ANCHOR_RE_SRC,
-	HASHLINE_CONTENT_SEPARATOR,
-	HASHLINE_CONTENT_SEPARATOR_RE_SRC,
-	HASHLINE_LID_CAPTURE_RE_SRC,
+	HL_ANCHOR_RE_RAW,
+	HL_BODY_SEP,
+	HL_BODY_SEP_RE_RAW,
+	HL_EDIT_SEP,
+	HL_EDIT_SEP_RE_RAW,
+	HL_HASH_CAPTURE_RE_RAW,
 } from "../line-hash";
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "../normalize";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
@@ -76,7 +78,8 @@ type HashlineCursor =
 
 export type HashlineEdit =
 	| { kind: "insert"; cursor: HashlineCursor; text: string; lineNum: number; index: number }
-	| { kind: "delete"; anchor: Anchor; lineNum: number; index: number; oldAssertion?: string };
+	| { kind: "delete"; anchor: Anchor; lineNum: number; index: number; oldAssertion?: string }
+	| { kind: "modify"; anchor: Anchor; prefix: string; suffix: string; lineNum: number; index: number };
 
 export const hashlineEditParamsSchema = Type.Object({ input: Type.String() });
 export type HashlineParams = Static<typeof hashlineEditParamsSchema>;
@@ -132,17 +135,18 @@ const RANGE_INTERIOR_HASH = "**";
 /** Header marker introducing a new file section in multi-section input. */
 const FILE_HEADER_PREFIX = "@";
 
-const HASHLINE_CONTENT_SEPARATOR_RE = `[:${HASHLINE_CONTENT_SEPARATOR_RE_SRC}]`;
-const HASHLINE_PREFIX_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*(?:[+*]\\s*)?\\d+[a-z]{2}${HASHLINE_CONTENT_SEPARATOR_RE}`);
-const HASHLINE_PREFIX_PLUS_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*\\+\\s*\\d+[a-z]{2}${HASHLINE_CONTENT_SEPARATOR_RE}`);
+const HL_EDIT_SEPARATOR_RE = HL_EDIT_SEP_RE_RAW;
+const HL_OUTPUT_PREFIX_SEPARATOR_RE = `[:${HL_BODY_SEP_RE_RAW}]`;
+const HL_PREFIX_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*(?:[+*]\\s*)?\\d+[a-z]{2}${HL_OUTPUT_PREFIX_SEPARATOR_RE}`);
+const HL_PREFIX_PLUS_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*\\+\\s*\\d+[a-z]{2}${HL_OUTPUT_PREFIX_SEPARATOR_RE}`);
 const DIFF_PLUS_RE = /^[+](?![+])/;
 const READ_TRUNCATION_NOTICE_RE = /^\[(?:Showing lines \d+-\d+ of \d+|\d+ more lines? in (?:file|\S+))\b.*\bsel=L?\d+/;
 
-const HASHLINE_HASH_HINT_RE = /^[a-z]{2}$/i;
-const HASHLINE_ANCHOR_EXAMPLES = describeAnchorExamples("160");
+const HL_HASH_HINT_RE = /^[a-z]{2}$/i;
+const HL_ANCHOR_EXAMPLES = describeAnchorExamples("160");
 
-const PARSE_TAG_RE = new RegExp(`^${HASHLINE_ANCHOR_RE_SRC}`);
-const LID_CAPTURE_RE = new RegExp(`^${HASHLINE_LID_CAPTURE_RE_SRC}$`);
+const PARSE_TAG_RE = new RegExp(`^${HL_ANCHOR_RE_RAW}`);
+const LID_CAPTURE_RE = new RegExp(`^${HL_HASH_CAPTURE_RE_RAW}$`);
 
 // ───────────────────────────────────────────────────────────────────────────
 // 4. Small string utilities
@@ -157,7 +161,7 @@ function stripLeadingHashlinePrefixes(line: string): string {
 	let previous: string;
 	do {
 		previous = result;
-		result = result.replace(HASHLINE_PREFIX_RE, "");
+		result = result.replace(HL_PREFIX_RE, "");
 	} while (result !== previous);
 	return result;
 }
@@ -194,8 +198,8 @@ function collectLinePrefixStats(lines: string[]): LinePrefixStats {
 			continue;
 		}
 		stats.nonEmpty++;
-		if (HASHLINE_PREFIX_RE.test(line)) stats.hashPrefixCount++;
-		if (HASHLINE_PREFIX_PLUS_RE.test(line)) stats.diffPlusHashPrefixCount++;
+		if (HL_PREFIX_RE.test(line)) stats.hashPrefixCount++;
+		if (HL_PREFIX_PLUS_RE.test(line)) stats.diffPlusHashPrefixCount++;
 		if (DIFF_PLUS_RE.test(line)) stats.diffPlusCount++;
 	}
 	return stats;
@@ -219,8 +223,8 @@ export function stripNewLinePrefixes(lines: string[]): string[] {
 		.map(line => {
 			if (stripHash) return stripLeadingHashlinePrefixes(line);
 			if (stripPlus) return line.replace(DIFF_PLUS_RE, "");
-			if (stats.diffPlusHashPrefixCount > 0 && HASHLINE_PREFIX_PLUS_RE.test(line)) {
-				return line.replace(HASHLINE_PREFIX_RE, "");
+			if (stats.diffPlusHashPrefixCount > 0 && HL_PREFIX_PLUS_RE.test(line)) {
+				return line.replace(HL_PREFIX_RE, "");
 			}
 			return line;
 		});
@@ -380,14 +384,14 @@ export async function* streamHashLinesFromUtf8(
 
 export function formatFullAnchorRequirement(raw?: string): string {
 	const suffix = typeof raw === "string" ? raw.trim() : "";
-	const hashOnlyHint = HASHLINE_HASH_HINT_RE.test(suffix)
+	const hashOnlyHint = HL_HASH_HINT_RE.test(suffix)
 		? ` It looks like you supplied only the hash suffix (${JSON.stringify(suffix)}). ` +
 			`Copy the full anchor exactly as shown (for example, "160${suffix}").`
 		: "";
 	const received = raw === undefined ? "" : ` Received ${JSON.stringify(raw)}.`;
 	return (
 		`the full anchor exactly as shown by read/search output ` +
-		`(line number + hash, for example ${HASHLINE_ANCHOR_EXAMPLES})${received}${hashOnlyHint}`
+		`(line number + hash, for example ${HL_ANCHOR_EXAMPLES})${received}${hashOnlyHint}`
 	);
 }
 
@@ -528,7 +532,7 @@ export class HashlineMismatchError extends Error {
 			const text = fileLines[lineNum - 1] ?? "";
 			const hash = computeLineHash(lineNum, text);
 			const marker = mismatchSet.has(lineNum) ? "*" : " ";
-			lines.push(`${marker}${lineNum}${hash}${HASHLINE_CONTENT_SEPARATOR}${text}`);
+			lines.push(`${marker}${lineNum}${hash}${HL_BODY_SEP}${text}`);
 		}
 		return lines.join("\n");
 	}
@@ -586,13 +590,13 @@ export function buildCompactHashlineDiffPreview(
 		switch (kind) {
 			case "+":
 				addedLines++;
-				return `+${lineNumber}${computeLineHash(lineNumber, content)}${HASHLINE_CONTENT_SEPARATOR}${content}`;
+				return `+${lineNumber}${computeLineHash(lineNumber, content)}${HL_BODY_SEP}${content}`;
 			case "-":
 				removedLines++;
-				return `-${lineNumber}--${HASHLINE_CONTENT_SEPARATOR}${content}`;
+				return `-${lineNumber}--${HL_BODY_SEP}${content}`;
 			default: {
 				const newLineNumber = lineNumber + addedLines - removedLines;
-				return ` ${newLineNumber}${computeLineHash(newLineNumber, content)}${HASHLINE_CONTENT_SEPARATOR}${content}`;
+				return ` ${newLineNumber}${computeLineHash(newLineNumber, content)}${HL_BODY_SEP}${content}`;
 			}
 		}
 	});
@@ -615,6 +619,8 @@ const INSERT_BEFORE_OP_RE = /^<\s*(\S+)$/;
 const INSERT_AFTER_OP_RE = /^\+\s*(\S+)$/;
 const DELETE_OP_RE = /^-\s*(\S+)$/;
 const REPLACE_OP_RE = /^=\s*(\S+)$/;
+const INLINE_BEFORE_OP_RE = new RegExp(`^<\\s*${HL_HASH_CAPTURE_RE_RAW}${HL_EDIT_SEPARATOR_RE}(.*)$`);
+const INLINE_AFTER_OP_RE = new RegExp(`^\\+\\s*${HL_HASH_CAPTURE_RE_RAW}${HL_EDIT_SEPARATOR_RE}(.*)$`);
 
 function cloneCursor(cursor: HashlineCursor): HashlineCursor {
 	if (cursor.kind === "before_anchor") return { kind: "before_anchor", anchor: { ...cursor.anchor } };
@@ -632,12 +638,12 @@ function collectPayload(
 	let index = startIndex;
 	while (index < lines.length) {
 		const line = stripTrailingCarriageReturn(lines[index]);
-		if (!line.startsWith(HASHLINE_CONTENT_SEPARATOR)) break;
+		if (!line.startsWith(HL_EDIT_SEP)) break;
 		payload.push(line.slice(1));
 		index++;
 	}
 	if (payload.length === 0 && requirePayload) {
-		throw new Error(`line ${opLineNum}: + and < operations require at least one |TEXT payload line.`);
+		throw new Error(`line ${opLineNum}: + and < operations require at least one ${HL_EDIT_SEP}TEXT payload line.`);
 	}
 	return { payload, nextIndex: index };
 }
@@ -664,8 +670,44 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 			i++;
 			continue;
 		}
-		if (line.startsWith(HASHLINE_CONTENT_SEPARATOR)) {
+		if (line.startsWith(HL_EDIT_SEP)) {
 			throw new Error(`line ${lineNum}: payload line has no preceding +, <, or = operation.`);
+		}
+
+		const inlineBeforeMatch = INLINE_BEFORE_OP_RE.exec(line);
+		if (inlineBeforeMatch) {
+			const anchor = parseLid(`${inlineBeforeMatch[1]}${inlineBeforeMatch[2]}`, lineNum);
+			edits.push({
+				kind: "modify",
+				anchor,
+				prefix: inlineBeforeMatch[3],
+				suffix: "",
+				lineNum,
+				index: editIndex++,
+			});
+			const cursor: HashlineCursor = { kind: "before_anchor", anchor };
+			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, false);
+			for (const text of payload) pushInsert(cursor, text, lineNum);
+			i = nextIndex;
+			continue;
+		}
+
+		const inlineAfterMatch = INLINE_AFTER_OP_RE.exec(line);
+		if (inlineAfterMatch) {
+			const anchor = parseLid(`${inlineAfterMatch[1]}${inlineAfterMatch[2]}`, lineNum);
+			edits.push({
+				kind: "modify",
+				anchor,
+				prefix: "",
+				suffix: inlineAfterMatch[3],
+				lineNum,
+				index: editIndex++,
+			});
+			const cursor: HashlineCursor = { kind: "after_anchor", anchor };
+			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, false);
+			for (const text of payload) pushInsert(cursor, text, lineNum);
+			i = nextIndex;
+			continue;
 		}
 
 		const insertBeforeMatch = INSERT_BEFORE_OP_RE.exec(line);
@@ -718,7 +760,7 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		}
 
 		throw new Error(
-			`line ${lineNum}: unrecognized op. Use < ANCHOR (insert before), + ANCHOR (insert after), - A..B (delete), = A..B (replace), or "${HASHLINE_CONTENT_SEPARATOR}TEXT" payload lines. ` +
+			`line ${lineNum}: unrecognized op. Use < ANCHOR (insert before), + ANCHOR (insert after), - A..B (delete), = A..B (replace), or "${HL_EDIT_SEP}TEXT" payload lines. ` +
 				`Got ${JSON.stringify(line)}.`,
 		);
 	}
@@ -753,6 +795,7 @@ interface IndexedEdit {
 
 function getHashlineEditAnchors(edit: HashlineEdit): Anchor[] {
 	if (edit.kind === "delete") return [edit.anchor];
+	if (edit.kind === "modify") return [edit.anchor];
 	if (edit.cursor.kind === "before_anchor") return [edit.cursor.anchor];
 	if (edit.cursor.kind === "after_anchor") return [edit.cursor.anchor];
 	return [];
@@ -852,9 +895,11 @@ function bucketAnchorEditsByLine(edits: IndexedEdit[]): Map<number, IndexedEdit[
 		const line =
 			entry.edit.kind === "delete"
 				? entry.edit.anchor.line
-				: entry.edit.cursor.kind === "before_anchor"
-					? entry.edit.cursor.anchor.line
-					: 0;
+				: entry.edit.kind === "modify"
+					? entry.edit.anchor.line
+					: entry.edit.cursor.kind === "before_anchor"
+						? entry.edit.cursor.anchor.line
+						: 0;
 		const bucket = byLine.get(line);
 		if (bucket) bucket.push(entry);
 		else byLine.set(line, [entry]);
@@ -920,16 +965,34 @@ export function applyHashlineEdits(text: string, edits: HashlineEdit[]): Hashlin
 		const currentLine = fileLines[idx] ?? "";
 		const beforeLines: string[] = [];
 		let deleteLine = false;
+		let prefix = "";
+		let suffix = "";
+		let modified = false;
 
 		for (const { edit } of bucket) {
-			if (edit.kind === "insert") beforeLines.push(edit.text);
-			else deleteLine = true;
+			if (edit.kind === "insert") {
+				beforeLines.push(edit.text);
+			} else if (edit.kind === "delete") {
+				deleteLine = true;
+			} else if (edit.kind === "modify") {
+				prefix = edit.prefix + prefix;
+				suffix = suffix + edit.suffix;
+				modified = true;
+			}
 		}
-		if (beforeLines.length === 0 && !deleteLine) continue;
+		if (beforeLines.length === 0 && !deleteLine && !modified) continue;
+		if (deleteLine && modified) {
+			throw new Error(
+				`line ${line}: cannot combine inline modify ("< ${line}${HL_EDIT_SEP}…" or "+ ${line}${HL_EDIT_SEP}…") with a delete or replace targeting the same line.`,
+			);
+		}
 
-		const replacement = deleteLine ? beforeLines : [...beforeLines, currentLine];
+		const effectiveLine = modified ? prefix + currentLine + suffix : currentLine;
+		const replacement = deleteLine ? beforeLines : [...beforeLines, effectiveLine];
 		const origins = replacement.map((): HashlineLineOrigin => (deleteLine ? "replacement" : "insert"));
-		if (!deleteLine) origins[origins.length - 1] = lineOrigins[idx] ?? "original";
+		if (!deleteLine) {
+			origins[origins.length - 1] = modified ? "replacement" : (lineOrigins[idx] ?? "original");
+		}
 
 		fileLines.splice(idx, 1, ...replacement);
 		lineOrigins.splice(idx, 1, ...origins);
@@ -1002,7 +1065,7 @@ function stripLeadingBlankLines(input: string): string {
 function containsRecognizableHashlineOperations(input: string): boolean {
 	for (const rawLine of input.split("\n")) {
 		const line = stripTrailingCarriageReturn(rawLine);
-		if (/^[+<=-]\s+/.test(line) || line.startsWith(HASHLINE_CONTENT_SEPARATOR)) return true;
+		if (/^[+<=-]\s+/.test(line) || line.startsWith(HL_EDIT_SEP)) return true;
 	}
 	return false;
 }
@@ -1121,6 +1184,7 @@ async function readHashlineFile(absolutePath: string): Promise<ReadHashlineFileR
 function hasAnchorScopedEdit(edits: HashlineEdit[]): boolean {
 	return edits.some(edit => {
 		if (edit.kind === "delete") return true;
+		if (edit.kind === "modify") return true;
 		return edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor";
 	});
 }

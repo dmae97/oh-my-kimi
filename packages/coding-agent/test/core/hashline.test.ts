@@ -10,11 +10,12 @@ import {
 	type ExecuteHashlineSingleOptions,
 	executeHashlineSingle,
 	generateDiffString,
-	HASHLINE_CONTENT_SEPARATOR,
 	HashlineMismatchError,
+	HL_BODY_SEP,
+	HL_BODY_SEP_RE_RAW,
+	HL_EDIT_SEP,
 	hashlineEditParamsSchema,
 	parseHashline,
-	parseHashlineWithWarnings,
 	splitHashlineInput,
 	splitHashlineInputs,
 } from "@oh-my-pi/pi-coding-agent/edit";
@@ -28,10 +29,12 @@ beforeAll(async () => {
 
 // Single source of truth for the payload separator under test. Every literal
 // payload line in this file goes through `pl()` so flipping
-// `HASHLINE_CONTENT_SEPARATOR` (e.g. to ">" or "\\") flips the test inputs in
+// `HL_EDIT_SEP` (e.g. to ">" or "\\") flips the test inputs in
 // lockstep without any `|`-vs-`>` churn.
-const sep = HASHLINE_CONTENT_SEPARATOR;
+const sep = HL_EDIT_SEP;
 const pl = (text: string): string => `${sep}${text}`;
+const outputSep = HL_BODY_SEP;
+const outputSepRe = HL_BODY_SEP_RE_RAW;
 
 function tag(line: number, content: string): string {
 	return `${line}${computeLineHash(line, content)}`;
@@ -117,13 +120,7 @@ describe("hashline parser — block op syntax", () => {
 	});
 
 	it("preserves payload text exactly after the first separator", () => {
-		const diff = [
-			`= ${tag(2, "bbb")}`,
-			pl(""),
-			pl("# not a header"),
-			pl("+ not an op"),
-			pl("  spaced"),
-		].join("\n");
+		const diff = [`= ${tag(2, "bbb")}`, pl(""), pl("# not a header"), pl("+ not an op"), pl("  spaced")].join("\n");
 		expect(applyDiff(content, diff)).toBe("aaa\n\n# not a header\n+ not an op\n  spaced\nccc");
 	});
 
@@ -138,55 +135,63 @@ describe("hashline parser — block op syntax", () => {
 	});
 });
 
-describe("hashline parser — common symbol prefix auto-strip", () => {
-	const before = "aaa\nbbb\nccc\nddd";
+describe("hashline parser — inline modify syntax", () => {
+	const content = "alpha\nbeta\ngamma";
 
-	it("strips a doubled separator when every payload line shares it", () => {
-		const diff = [`= ${tag(2, "bbb")}..${tag(3, "ccc")}`, pl(pl("X")), pl(pl("Y"))].join("\n");
-		const { edits, warnings } = parseHashlineWithWarnings(diff);
-		expect(applyHashlineEdits(before, edits).lines).toBe("aaa\nX\nY\nddd");
-		expect(warnings.some(w => /auto-stripped extra/.test(w))).toBe(true);
+	it("prepends text to the anchored line via `< ANCHOR<sep>TEXT`", () => {
+		const diff = `< ${tag(2, "beta")}${pl("// ")}`;
+		expect(applyDiff(content, diff)).toBe("alpha\n// beta\ngamma");
 	});
 
-	it("strips an arbitrary symbol prefix (e.g. `>>`) shared by every payload line", () => {
-		// Model legitimately uses the configured separator but tacks on a `>>`
-		// markdown decoration on every line. Both layers must come off.
-		const diff = [`= ${tag(2, "bbb")}..${tag(3, "ccc")}`, pl(">>X"), pl(">>Y")].join("\n");
-		const { edits, warnings } = parseHashlineWithWarnings(diff);
-		expect(applyHashlineEdits(before, edits).lines).toBe("aaa\nX\nY\nddd");
-		expect(warnings.some(w => /auto-stripped extra ">>"/.test(w))).toBe(true);
+	it("appends text to the anchored line via `+ ANCHOR<sep>TEXT`", () => {
+		const diff = `+ ${tag(2, "beta")}${pl(" // tag")}`;
+		expect(applyDiff(content, diff)).toBe("alpha\nbeta // tag\ngamma");
 	});
 
-	it("preserves indentation: whitespace-only common prefix is never stripped", () => {
-		const diff = [`= ${tag(2, "bbb")}..${tag(3, "ccc")}`, pl("\tindented1"), pl("\tindented2")].join("\n");
-		const { edits, warnings } = parseHashlineWithWarnings(diff);
-		expect(applyHashlineEdits(before, edits).lines).toBe("aaa\n\tindented1\n\tindented2\nddd");
-		expect(warnings).toEqual([]);
+	it("combines a prepend and an append on the same line", () => {
+		const diff = [`< ${tag(2, "beta")}${pl("[")}`, `+ ${tag(2, "beta")}${pl("]")}`].join("\n");
+		expect(applyDiff(content, diff)).toBe("alpha\n[beta]\ngamma");
 	});
 
-	it("leaves payload alone when payload lines disagree at the first symbol", () => {
-		const diff = [`= ${tag(2, "bbb")}..${tag(3, "ccc")}`, pl("+first"), pl("*second")].join("\n");
-		const { edits, warnings } = parseHashlineWithWarnings(diff);
-		expect(applyHashlineEdits(before, edits).lines).toBe("aaa\n+first\n*second\nddd");
-		expect(warnings).toEqual([]);
+	it("stacks multiple prepends with later edits wrapping earlier ones", () => {
+		const diff = [`< ${tag(2, "beta")}${pl("A")}`, `< ${tag(2, "beta")}${pl("B")}`].join("\n");
+		expect(applyDiff(content, diff)).toBe("alpha\nBAbeta\ngamma");
 	});
 
-	it("leaves a single payload line alone (heuristic requires ≥2 non-empty lines)", () => {
-		const diff = [`= ${tag(2, "bbb")}`, pl(pl("only"))].join("\n");
-		const { edits, warnings } = parseHashlineWithWarnings(diff);
-		expect(applyHashlineEdits(before, edits).lines).toBe(`aaa\n${sep}only\nccc\nddd`);
-		expect(warnings).toEqual([]);
+	it("stacks multiple appends with later edits wrapping earlier ones", () => {
+		const diff = [`+ ${tag(2, "beta")}${pl("A")}`, `+ ${tag(2, "beta")}${pl("B")}`].join("\n");
+		expect(applyDiff(content, diff)).toBe("alpha\nbetaAB\ngamma");
 	});
 
-	it("preserves blank payload lines when stripping a shared prefix from non-blank ones", () => {
-		const diff = [
-			`= ${tag(2, "bbb")}..${tag(3, "ccc")}`,
-			pl(pl("first")),
-			pl(""), // blank payload — no doubled prefix to share
-			pl(pl("third")),
-		].join("\n");
-		const { edits } = parseHashlineWithWarnings(diff);
-		expect(applyHashlineEdits(before, edits).lines).toBe("aaa\nfirst\n\nthird\nddd");
+	it("appends inline AND inserts payload lines after the modified line", () => {
+		const diff = [`+ ${tag(2, "beta")}${pl(" // tag")}`, pl("inserted-after-1"), pl("inserted-after-2")].join("\n");
+		expect(applyDiff(content, diff)).toBe("alpha\nbeta // tag\ninserted-after-1\ninserted-after-2\ngamma");
+	});
+
+	it("prepends inline AND inserts payload lines before the modified line", () => {
+		const diff = [`< ${tag(2, "beta")}${pl("// ")}`, pl("inserted-before-1"), pl("inserted-before-2")].join("\n");
+		expect(applyDiff(content, diff)).toBe("alpha\ninserted-before-1\ninserted-before-2\n// beta\ngamma");
+	});
+
+	it("allows a block insert-before to coexist with an inline modify on the same line", () => {
+		const diff = [`< ${tag(2, "beta")}`, pl("// note"), `+ ${tag(2, "beta")}${pl("!")}`].join("\n");
+		expect(applyDiff(content, diff)).toBe("alpha\n// note\nbeta!\ngamma");
+	});
+
+	it("rejects combining inline modify with a delete on the same line", () => {
+		const diff = [`- ${tag(2, "beta")}`, `+ ${tag(2, "beta")}${pl("!")}`].join("\n");
+		expect(() => applyDiff(content, diff)).toThrow(/cannot combine inline modify/);
+	});
+
+	it("validates the anchor hash for inline modify just like other ops", () => {
+		const diff = `+ ${mistag(2, "beta")}${pl("!")}`;
+		expect(() => applyDiff(content, diff)).toThrow(HashlineMismatchError);
+	});
+
+	it("treats an empty inline payload as a no-op when nothing else follows", () => {
+		const diff = `+ ${tag(2, "beta")}${pl("")}`;
+		const result = applyHashlineEdits(content, parseHashline(diff));
+		expect(result.lines).toBe(content);
 	});
 });
 
@@ -275,14 +280,9 @@ describe("hashline executor", () => {
 			const bPath = path.join(tempDir, "b.ts");
 			await Bun.write(aPath, "aaa\n");
 			await Bun.write(bPath, "bbb\n");
-			const input = [
-				"@a.ts",
-				`= ${tag(1, "aaa")}`,
-				pl("AAA"),
-				"@b.ts",
-				`= ${mistag(1, "bbb")}`,
-				pl("BBB"),
-			].join("\n");
+			const input = ["@a.ts", `= ${tag(1, "aaa")}`, pl("AAA"), "@b.ts", `= ${mistag(1, "bbb")}`, pl("BBB")].join(
+				"\n",
+			);
 
 			await expect(executeHashlineSingle(hashlineExecuteOptions(tempDir, input))).rejects.toThrow(
 				/changed since the last read/,
@@ -310,16 +310,14 @@ describe("buildCompactHashlineDiffPreview — anchors track post-edit line numbe
 		const { diff } = generateDiffString(before, after);
 		const preview = buildCompactHashlineDiffPreview(diff);
 
-		// Walk the preview and verify every ` LINE+HASH${sep}content` line matches what
+		// Walk the preview and verify every ` LINE+HASH${outputSep}content` line matches what
 		// the file now has at that line number.
 		const newFileLines = after.split("\n");
 		for (const line of preview.preview.split("\n")) {
 			if (!line.startsWith(" ")) continue;
 			// Skip context-elision markers ("...") which carry no real file content.
-			if (line.endsWith(`${sep}...`)) continue;
-			const match = new RegExp(`^\\s(\\d+)([a-z]{2})${sep.replace(/[.*+?^${}()|[\\\]\\\\]/g, "\\$&")}(.*)$`).exec(
-				line,
-			);
+			if (line.endsWith(`${outputSep}...`)) continue;
+			const match = new RegExp(`^\\s(\\d+)([a-z]{2})${outputSepRe}(.*)$`).exec(line);
 			expect(match).not.toBeNull();
 			if (!match) continue;
 			const lineNum = Number(match[1]);
@@ -338,11 +336,11 @@ describe("buildCompactHashlineDiffPreview — anchors track post-edit line numbe
 
 		const additions = preview.preview.split("\n").filter(line => line.startsWith("+"));
 		expect(additions).toEqual([
-			`+2${computeLineHash(2, "DELTA")}${sep}DELTA`,
-			`+3${computeLineHash(3, "EPSILON")}${sep}EPSILON`,
+			`+2${computeLineHash(2, "DELTA")}${outputSep}DELTA`,
+			`+3${computeLineHash(3, "EPSILON")}${outputSep}EPSILON`,
 		]);
 
 		const removals = preview.preview.split("\n").filter(line => line.startsWith("-"));
-		expect(removals).toEqual([`-2--${sep}beta`]);
+		expect(removals).toEqual([`-2--${outputSep}beta`]);
 	});
 });

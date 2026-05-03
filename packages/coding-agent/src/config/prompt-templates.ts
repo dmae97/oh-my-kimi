@@ -8,7 +8,7 @@ import {
 	parseFrontmatter,
 	prompt,
 } from "@oh-my-pi/pi-utils";
-import { computeLineHash, HASHLINE_CONTENT_SEPARATOR } from "../edit/line-hash";
+import { computeLineHash, HL_BODY_SEP, HL_EDIT_SEP } from "../edit/line-hash";
 import { jtdToTypeScript } from "../tools/jtd-to-typescript";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
 
@@ -53,10 +53,10 @@ interface HashlineHelperState {
 	byLine: Map<number, HashlineHelperRef>;
 }
 
-const HASHLINE_HELPER_STATE = Symbol("hashlineHelperState");
+const HL_HELPER_STATE = Symbol("hashlineHelperState");
 
 interface HashlineHelperStateHolder {
-	[HASHLINE_HELPER_STATE]?: HashlineHelperState;
+	[HL_HELPER_STATE]?: HashlineHelperState;
 }
 
 function isHelperOptions(value: unknown): value is prompt.HelperOptions {
@@ -78,10 +78,10 @@ function getHashlineHelperState(context: unknown, options: prompt.HelperOptions 
 	}
 
 	const holder = holderTarget as HashlineHelperStateHolder;
-	if (!holder[HASHLINE_HELPER_STATE]) {
-		holder[HASHLINE_HELPER_STATE] = { byLine: new Map() };
+	if (!holder[HL_HELPER_STATE]) {
+		holder[HL_HELPER_STATE] = { byLine: new Map() };
 	}
-	return holder[HASHLINE_HELPER_STATE];
+	return holder[HL_HELPER_STATE];
 }
 
 function isLineNumberArg(value: unknown): boolean {
@@ -156,15 +156,15 @@ prompt.registerHelper("hline", function (this: unknown, ...args: unknown[]): str
 	const { num, ref, text } = formatHashlineRef(lineNum, content);
 	const state = getHashlineHelperState(this, options);
 	rememberHashlineRef(state, num, ref);
-	return `${ref}${HASHLINE_CONTENT_SEPARATOR}${text}`;
+	return `${ref}${HL_BODY_SEP}${text}`;
 });
 
 /**
  * {{hsep}} — emit the configured hashline payload separator character.
- * Stays in sync with {@link HASHLINE_CONTENT_SEPARATOR} so prompt templates
- * never have to hardcode `|` and survive a separator switch automatically.
+ * Stays in sync with {@link HL_EDIT_SEP} so edit prompt templates
+ * never have to hardcode the payload separator.
  */
-prompt.registerHelper("hsep", (): string => HASHLINE_CONTENT_SEPARATOR);
+prompt.registerHelper("hsep", (): string => HL_EDIT_SEP);
 
 const INLINE_ARG_SHELL_PATTERN = /\$(?:ARGUMENTS|@(?:\[\d+(?::\d*)?\])?|\d+)/;
 const INLINE_ARG_TEMPLATE_PATTERN = /\{\{[\s\S]*?(?:\b(?:arguments|ARGUMENTS|args)\b|\barg\s+[^}]+)[\s\S]*?\}\}/;

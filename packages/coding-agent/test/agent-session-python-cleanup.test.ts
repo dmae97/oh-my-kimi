@@ -7,7 +7,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as pythonExecutor from "@oh-my-pi/pi-coding-agent/eval/py/executor";
 import type { PythonKernel as PythonKernelInstance } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 import * as pythonKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
-import * as memories from "@oh-my-pi/pi-coding-agent/memories";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { createAgentSession, type ExtensionFactory } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
@@ -200,8 +200,9 @@ describe("AgentSession python cleanup", () => {
 		const startSpy = vi
 			.spyOn(pythonKernel.PythonKernel, "start")
 			.mockResolvedValueOnce(unrelatedKernel as unknown as PythonKernelInstance);
-		vi.spyOn(memories, "startMemoryStartupTask").mockImplementation(() => {
-			throw new Error("Memory startup failed");
+		const throwingRegistry = new AgentRegistry();
+		vi.spyOn(throwingRegistry, "register").mockImplementation(() => {
+			throw new Error("Agent registry failed");
 		});
 
 		await pythonExecutor.executePython("print('unrelated after')", {
@@ -216,7 +217,7 @@ describe("AgentSession python cleanup", () => {
 				cwd,
 				agentDir: tempDir,
 				sessionManager: SessionManager.inMemory(cwd),
-				settings: Settings.isolated({ "python.kernelMode": "session" }),
+				settings: Settings.isolated({ "python.kernelMode": "session", "memory.backend": "local" }),
 				model: getModel(),
 				disableExtensionDiscovery: true,
 				skills: [],
@@ -226,8 +227,9 @@ describe("AgentSession python cleanup", () => {
 				enableMCP: false,
 				enableLsp: false,
 				toolNames: ["eval"],
+				agentRegistry: throwingRegistry,
 			}),
-		).rejects.toThrow("Memory startup failed");
+		).rejects.toThrow("Agent registry failed");
 
 		expect(startSpy).toHaveBeenCalledTimes(1);
 		expect(unrelatedKernel.shutdown).not.toHaveBeenCalled();

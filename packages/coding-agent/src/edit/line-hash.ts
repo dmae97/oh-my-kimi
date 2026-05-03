@@ -15,7 +15,7 @@
  * Order is stable forever — changing it would invalidate every saved
  * `LINE+ID` reference in transcripts and prompts.
  */
-export const HASHLINE_BIGRAMS = [
+export const HL_BIGRAMS = [
 	"aa",
 	"ab",
 	"ac",
@@ -665,7 +665,7 @@ export const HASHLINE_BIGRAMS = [
 	"zz",
 ] as const;
 
-export const HASHLINE_BIGRAMS_COUNT = HASHLINE_BIGRAMS.length;
+export const HL_BIGRAMS_COUNT = HL_BIGRAMS.length;
 
 /**
  * Decoration prefix that may precede a `LINE+HASH` anchor in tool output:
@@ -675,7 +675,7 @@ export const HASHLINE_BIGRAMS_COUNT = HASHLINE_BIGRAMS.length;
  * regex stays liberal because anchor-ref parsers accept whatever the model
  * echoes back.
  */
-export const HASHLINE_ANCHOR_DECORATION_RE_SRC = `\\s*[>+\\-*]*\\s*`;
+export const HL_ANCHOR_DECORATION_RE_RAW = `\\s*[>+\\-*]*\\s*`;
 
 /**
  * Capture-group regex source for a decorated `LINE+HASH` anchor. Group 1
@@ -683,36 +683,36 @@ export const HASHLINE_ANCHOR_DECORATION_RE_SRC = `\\s*[>+\\-*]*\\s*`;
  * source is intentionally unanchored — anchoring with `^` (or composing into a
  * larger pattern) is the caller's responsibility.
  */
-export const HASHLINE_ANCHOR_RE_SRC = `${HASHLINE_ANCHOR_DECORATION_RE_SRC}(\\d+)([a-z]{2})`;
+export const HL_ANCHOR_RE_RAW = `${HL_ANCHOR_DECORATION_RE_RAW}(\\d+)([a-z]{2})`;
 
 /**
  * Bare `LINE+HASH` Lid (no decorations, no captures, no anchors). Use for
  * embedding inside larger patterns where the line+hash unit appears as a
  * literal (e.g. range bounds, alternation arms, op-line heuristics).
  */
-export const HASHLINE_LID_RE_SRC = `[1-9]\\d*[a-z]{2}`;
+export const HL_HASH_RE_RAW = `[1-9]\\d*[a-z]{2}`;
 
 /**
- * Capture-group form of {@link HASHLINE_LID_RE_SRC}: group 1 captures the
+ * Capture-group form of {@link HL_HASH_RE_RAW}: group 1 captures the
  * line number, group 2 captures the hash.
  */
-export const HASHLINE_LID_CAPTURE_RE_SRC = `([1-9]\\d*)([a-z]{2})`;
+export const HL_HASH_CAPTURE_RE_RAW = `([1-9]\\d*)([a-z]{2})`;
 
 /** Width of a hash in display characters. */
-export const HASHLINE_HASH_WIDTH = 2;
+export const HL_HASH_WIDTH = 2;
 
 /**
  * Representative hash suffixes for use in user-facing error messages and
  * prompt examples.
  */
-export const HASHLINE_HASH_EXAMPLES = ["sr", "ab", "th"] as const;
+export const HL_HASH_EXAMPLES = ["sr", "ab", "th"] as const;
 
 /**
  * Format a comma-separated list of example anchors with an optional line-number
  * prefix, quoted for inclusion in error messages: `"160sr", "160ab", "160th"`.
  */
 export function describeAnchorExamples(linePrefix = ""): string {
-	return HASHLINE_HASH_EXAMPLES.map(e => `"${linePrefix}${e}"`).join(", ");
+	return HL_HASH_EXAMPLES.map(e => `"${linePrefix}${e}"`).join(", ");
 }
 
 /**
@@ -721,32 +721,43 @@ export function describeAnchorExamples(linePrefix = ""): string {
  * pass through unchanged.
  */
 export function resolveHashlineGrammarPlaceholders(grammar: string): string {
-	return grammar.replaceAll("$HFMT$", "[a-z]{2}").replaceAll("$HSEP$", JSON.stringify(HASHLINE_CONTENT_SEPARATOR));
+	return grammar.replaceAll("$HFMT$", "[a-z]{2}").replaceAll("$HSEP$", JSON.stringify(HL_EDIT_SEP));
 }
 
 /** @deprecated Use {@link resolveHashlineGrammarPlaceholders}. */
 export const resolveLarkLidPlaceholders = resolveHashlineGrammarPlaceholders;
 
-/**
- * Single source of truth for the hashline payload separator. This is the
- * character that introduces both the content portion of a formatted hashline
- * (`LINE+ID|TEXT`) and every payload line in an edit op block (`|TEXT`).
- *
- * Override at runtime with the `PI_HASHLINE_SEP` env var (e.g.
- * `PI_HASHLINE_SEP=">"`, `PI_HASHLINE_SEP="\\"`). The value is read once at
- * module load; the regex source, grammar substitution, prompt helper, and
- * doubled-prefix detection in the parser all derive from it.
- */
-export const HASHLINE_CONTENT_SEPARATOR = Bun.env.PI_HASHLINE_SEP || "\\";
+const regexEscape = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Regex-escaped form of {@link HASHLINE_CONTENT_SEPARATOR}, safe for embedding inside a regex. */
-export const HASHLINE_CONTENT_SEPARATOR_RE_SRC = HASHLINE_CONTENT_SEPARATOR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/**
+ * Single source of truth for the hashline edit payload separator. This is the
+ * configured separator that starts inserted/replacement payload lines in
+ * hashline edit input (`<separator>TEXT`) and separates inline modify ops from
+ * their appended/prepended text.
+ *
+ * Override at runtime with the `PI_HL_SEP` env var (e.g.
+ * `PI_HL_SEP=">"`, `PI_HL_SEP="\\"`). The value is read once at
+ * module load; the edit grammar, prompt helper, and edit parser derive from it.
+ */
+export const HL_EDIT_SEP = (() => {
+	const sep = Bun.env.PI_HL_SEP;
+	return sep?.length === 1 ? sep : ">";
+})();
+
+/** Regex-escaped form of {@link HL_EDIT_SEP}, safe for regexes. */
+export const HL_EDIT_SEP_RE_RAW = regexEscape(HL_EDIT_SEP);
+
+/** Stable separator for read/search/hashline display output. Intentionally not configurable. */
+export const HL_BODY_SEP = "|";
+
+/** Regex-escaped form of {@link HL_BODY_SEP}, safe for embedding inside a regex. */
+export const HL_BODY_SEP_RE_RAW = regexEscape(HL_BODY_SEP);
 
 const RE_SIGNIFICANT = /[\p{L}\p{N}]/u;
 
 /**
  * Compute a 2-character hash of a single line via xxHash32 mod 647 over
- * {@link HASHLINE_BIGRAMS}. Lines with no letter or digit (e.g. bare `}`,
+ * {@link HL_BIGRAMS}. Lines with no letter or digit (e.g. bare `}`,
  * bare `{`) mix the line number into the seed so adjacent identical
  * brace-only lines get distinct hashes; lines with significant content stay
  * line-number-independent so a line is identifiable across small shifts.
@@ -756,7 +767,7 @@ const RE_SIGNIFICANT = /[\p{L}\p{N}]/u;
 export function computeLineHash(idx: number, line: string): string {
 	line = line.replace(/\r/g, "").trimEnd();
 	const seed = RE_SIGNIFICANT.test(line) ? 0 : idx;
-	return HASHLINE_BIGRAMS[Bun.hash.xxHash32(line, seed) % HASHLINE_BIGRAMS_COUNT];
+	return HL_BIGRAMS[Bun.hash.xxHash32(line, seed) % HL_BIGRAMS_COUNT];
 }
 
 /**
@@ -773,7 +784,7 @@ export function formatLineHash(line: number, lines: string): string {
  * Returns `LINE+ID|TEXT` (e.g., `42sr|function hi() {`, `3ab|}`).
  */
 export function formatHashLine(lineNumber: number, line: string): string {
-	return `${lineNumber}${computeLineHash(lineNumber, line)}${HASHLINE_CONTENT_SEPARATOR}${line}`;
+	return `${lineNumber}${computeLineHash(lineNumber, line)}${HL_BODY_SEP}${line}`;
 }
 
 /**

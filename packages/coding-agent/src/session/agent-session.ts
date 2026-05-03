@@ -4239,9 +4239,10 @@ export class AgentSession {
 	 * Failures are swallowed: a memory backend going sideways MUST NOT block
 	 * compaction (which is itself the recovery path for context overflow).
 	 */
-	async #collectMemoryBackendContext(
-		preparation: { messagesToSummarize: AgentMessage[]; turnPrefixMessages: AgentMessage[] },
-	): Promise<string | undefined> {
+	async #collectMemoryBackendContext(preparation: {
+		messagesToSummarize: AgentMessage[];
+		turnPrefixMessages: AgentMessage[];
+	}): Promise<string | undefined> {
 		const backend = resolveMemoryBackend(this.settings);
 		if (!backend.preCompactionContext) return undefined;
 		const messages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);

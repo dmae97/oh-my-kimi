@@ -55,6 +55,10 @@ This format is purely textual. The tool has NO awareness of language, indentatio
 + {{hrefr 4}}
 {{hsep}}	if (clean.length === 0) return DEF;
 
+# Append WITHIN a line
+@a.ts
++ {{hrefr 4}}{{hsep}} // first run
+
 # Append to end of file
 @a.ts
 + EOF

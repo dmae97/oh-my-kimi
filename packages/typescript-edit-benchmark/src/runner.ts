@@ -264,7 +264,7 @@ function countEditFailureCategories(runs: TaskRunResult[]): Record<EditFailureCa
 	return counts;
 }
 
-const HASHLINE_SUBTYPES = ["set", "set_range", "insert"] as const;
+const HL_SUBTYPES = ["set", "set_range", "insert"] as const;
 const BENCHMARK_TOOL_NAMES = ["read", "edit", "write", "apply_patch"] as const;
 const EDIT_TOOL_NAMES = ["edit", "apply_patch"] as const;
 
@@ -277,13 +277,13 @@ function isMutationTool(toolName: unknown): boolean {
 }
 
 function countHashlineEditSubtypes(args: unknown): Record<string, number> {
-	const counts: Record<string, number> = Object.fromEntries(HASHLINE_SUBTYPES.map(k => [k, 0]));
+	const counts: Record<string, number> = Object.fromEntries(HL_SUBTYPES.map(k => [k, 0]));
 	if (!args || typeof args !== "object") return counts;
 	const edits = (args as { edits?: unknown[] }).edits;
 	if (!Array.isArray(edits)) return counts;
 	for (const edit of edits) {
 		if (!edit || typeof edit !== "object") continue;
-		for (const key of HASHLINE_SUBTYPES) {
+		for (const key of HL_SUBTYPES) {
 			if (key in edit) {
 				counts[key]++;
 				break;
@@ -984,7 +984,7 @@ async function runSingleTask(
 		editAutocorrects: 0,
 		totalInputChars: 0,
 	};
-	const hashlineSubtypes: Record<string, number> = Object.fromEntries(HASHLINE_SUBTYPES.map(k => [k, 0]));
+	const hashlineSubtypes: Record<string, number> = Object.fromEntries(HL_SUBTYPES.map(k => [k, 0]));
 
 	const logFile = path.join(TMP, `run-${task.id}-${runIndex}.jsonl`);
 	const logEvent = async (event: unknown) => {
@@ -1202,7 +1202,7 @@ async function runSingleTask(
 							pendingEdits.delete(e.toolCallId);
 							if (config.editVariant === "hashline" && args) {
 								const counts = countHashlineEditSubtypes(args);
-								for (const key of HASHLINE_SUBTYPES) {
+								for (const key of HL_SUBTYPES) {
 									hashlineSubtypes[key] += counts[key];
 								}
 							}
@@ -1384,7 +1384,7 @@ async function _runRpcBenchmarkRun(
 		editAutocorrects: 0,
 		totalInputChars: 0,
 	};
-	const hashlineSubtypes: Record<string, number> = Object.fromEntries(HASHLINE_SUBTYPES.map(k => [k, 0]));
+	const hashlineSubtypes: Record<string, number> = Object.fromEntries(HL_SUBTYPES.map(k => [k, 0]));
 
 	const logFile = path.join(sessionDir, `run-${task.id}-${runIndex}.jsonl`);
 	const logEvent = async (event: unknown) => {
@@ -1528,7 +1528,7 @@ async function _runRpcBenchmarkRun(
 						pendingEdits.delete(e.toolCallId);
 						if (config.editVariant === "hashline" && args) {
 							const counts = countHashlineEditSubtypes(args);
-							for (const key of HASHLINE_SUBTYPES) {
+							for (const key of HL_SUBTYPES) {
 								hashlineSubtypes[key] += counts[key];
 							}
 						}
@@ -2176,10 +2176,7 @@ export function buildBenchmarkResult(params: {
 	const hashlineEditSubtypes: Record<string, number> | undefined =
 		params.config.editVariant === "hashline"
 			? Object.fromEntries(
-					HASHLINE_SUBTYPES.map(key => [
-						key,
-						allRuns.reduce((sum, r) => sum + (r.hashlineEditSubtypes?.[key] ?? 0), 0),
-					]),
+					HL_SUBTYPES.map(key => [key, allRuns.reduce((sum, r) => sum + (r.hashlineEditSubtypes?.[key] ?? 0), 0)]),
 				)
 			: undefined;
 

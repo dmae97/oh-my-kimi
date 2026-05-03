@@ -14,7 +14,7 @@ The `read` tool is multi-purpose and more capable than it looks — inspects fil
 
 |`sel` value|Behavior|
 |---|---|
-|*(omitted)*|Read full file (up to {{DEFAULT_LIMIT}} lines)|
+|_(omitted)_|Read full file (up to {{DEFAULT_LIMIT}} lines)|
 |`50`|Read from line 50 onward|
 |`50-200`|Read lines 50-200|
 |`50+150`|Read 150 lines starting at line 50|
@@ -22,21 +22,24 @@ The `read` tool is multi-purpose and more capable than it looks — inspects fil
 
 # Filesystem
 - Reading a directory path returns a list of dirents.
-{{#if IS_HASHLINE_MODE}}
+  {{#if IS_HL_MODE}}
 - Reading a file returns lines prefixed with anchors (line+hash): `41th|def alpha():`
-{{else}}
-{{#if IS_LINE_NUMBER_MODE}}
+  {{else}}
+  {{#if IS_LINE_NUMBER_MODE}}
 - Reading a file returns lines prefixed with line numbers: `41|def alpha():`
-{{/if}}
-{{/if}}
+  {{/if}}
+  {{/if}}
 
 # Inspection
+
 Extracts text from PDF, Word, PowerPoint, Excel, RTF, EPUB, and Jupyter notebook files. Can inspect images.
 
 # Directories & Archives
+
 Directories and archive roots return a list of entries. Supports `.tar`, `.tar.gz`, `.tgz`, `.zip`. Use `archive.ext:path/inside/archive` to read contents.
 
 # SQLite Databases
+
 For `.sqlite`, `.sqlite3`, `.db`, `.db3`:
 - `file.db` — list tables with row counts
 - `file.db:table` — schema + sample rows
@@ -46,6 +49,7 @@ For `.sqlite`, `.sqlite3`, `.db`, `.db3`:
 - `file.db?q=SELECT …` — read-only SELECT query
 
 # URLs
+
 Extracts content from web pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom feeds, JSON endpoints, PDFs at URLs, and similar text-based resources. Returns clean reader-mode text/markdown — no browser required. Use `sel="raw"` for untouched HTML; `timeout` to override the default request timeout.
 </instruction>
 

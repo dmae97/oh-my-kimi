@@ -9,6 +9,7 @@ import {
 	DEFAULT_FUZZY_THRESHOLD,
 	findMatch,
 } from "@oh-my-pi/pi-coding-agent/edit";
+import { HL_EDIT_SEP } from "@oh-my-pi/pi-coding-agent/edit/line-hash";
 
 describe("findMatch", () => {
 	describe("exact matching", () => {
@@ -245,7 +246,7 @@ describe("computeHashlineDiff", () => {
 		const sourcePath = path.join(tempDir, "source.txt");
 		await Bun.write(sourcePath, "first\n");
 
-		const result = await computeHashlineDiff({ input: `@${sourcePath}\n+ EOF\n|second` }, tempDir);
+		const result = await computeHashlineDiff({ input: `@${sourcePath}\n+ EOF\n${HL_EDIT_SEP}second` }, tempDir);
 		expect("diff" in result).toBe(true);
 		if ("diff" in result) {
 			expect(result.diff).toContain("second");
