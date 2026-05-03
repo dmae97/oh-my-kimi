@@ -113,6 +113,24 @@ const GH_SEARCH_FIELDS = [
 	"updatedAt",
 	"url",
 ];
+const GH_SEARCH_CODE_FIELDS = ["path", "repository", "sha", "textMatches", "url"];
+const GH_SEARCH_COMMITS_FIELDS = ["author", "commit", "committer", "id", "repository", "sha", "url"];
+const GH_SEARCH_REPOS_FIELDS = [
+	"createdAt",
+	"description",
+	"forksCount",
+	"fullName",
+	"isArchived",
+	"isFork",
+	"isPrivate",
+	"language",
+	"openIssuesCount",
+	"owner",
+	"stargazersCount",
+	"updatedAt",
+	"url",
+	"visibility",
+];
 const SEARCH_LIMIT_DEFAULT = 10;
 const SEARCH_LIMIT_MAX = 50;
 const FILE_PREVIEW_LIMIT = 50;
@@ -139,6 +157,9 @@ const githubSchema = Type.Object({
 			"pr_push",
 			"search_issues",
 			"search_prs",
+			"search_code",
+			"search_commits",
+			"search_repos",
 			"run_watch",
 		],
 		{ description: "github operation" },
@@ -186,11 +207,16 @@ const githubSchema = Type.Object({
 	forceWithLease: Type.Optional(Type.Boolean({ description: "force-with-lease push (pr_push)" })),
 	query: Type.Optional(
 		Type.String({
-			description: "search query (search_issues, search_prs)",
+			description: "search query (search_issues, search_prs, search_code, search_commits, search_repos)",
 			examples: ["is:open label:bug"],
 		}),
 	),
-	limit: Type.Optional(Type.Number({ description: "max results (search_issues, search_prs)", default: 10 })),
+	limit: Type.Optional(
+		Type.Number({
+			description: "max results (search_issues, search_prs, search_code, search_commits, search_repos)",
+			default: 10,
+		}),
+	),
 	run: Type.Optional(Type.String({ description: "actions run id or url (run_watch)", examples: ["123456"] })),
 	tail: Type.Optional(Type.Number({ description: "log lines per failed job (run_watch)", default: 15 })),
 });
@@ -414,6 +440,58 @@ interface GhSearchResult {
 	url?: string;
 }
 
+interface GhSearchCodeTextMatch {
+	fragment?: string;
+	property?: string;
+}
+
+interface GhSearchCodeResult {
+	path?: string;
+	repository?: GhSearchRepository | null;
+	sha?: string;
+	textMatches?: GhSearchCodeTextMatch[];
+	url?: string;
+}
+
+interface GhSearchCommitGitActor {
+	name?: string;
+	email?: string;
+	date?: string;
+}
+
+interface GhSearchCommitDetail {
+	author?: GhSearchCommitGitActor | null;
+	committer?: GhSearchCommitGitActor | null;
+	message?: string;
+}
+
+interface GhSearchCommitResult {
+	author?: GhUser | null;
+	commit?: GhSearchCommitDetail | null;
+	committer?: GhUser | null;
+	id?: string;
+	repository?: GhSearchRepository | null;
+	sha?: string;
+	url?: string;
+}
+
+interface GhSearchRepoResult {
+	createdAt?: string;
+	description?: string | null;
+	forksCount?: number;
+	fullName?: string;
+	isArchived?: boolean;
+	isFork?: boolean;
+	isPrivate?: boolean;
+	language?: string | null;
+	openIssuesCount?: number;
+	owner?: GhUser | null;
+	stargazersCount?: number;
+	updatedAt?: string;
+	url?: string;
+	visibility?: string | null;
+}
+
 interface GhRunReference {
 	repo?: string;
 	runId?: number;
@@ -551,14 +629,25 @@ function appendRepoFlag(args: string[], repo: string | undefined, identifier?: s
 	args.push("--repo", repo);
 }
 
+const SEARCH_FIELDS_BY_COMMAND: Record<"issues" | "prs" | "code" | "commits" | "repos", readonly string[]> = {
+	issues: GH_SEARCH_FIELDS,
+	prs: GH_SEARCH_FIELDS,
+	code: GH_SEARCH_CODE_FIELDS,
+	commits: GH_SEARCH_COMMITS_FIELDS,
+	repos: GH_SEARCH_REPOS_FIELDS,
+};
+
 function buildGhSearchArgs(
-	command: "issues" | "prs",
+	command: "issues" | "prs" | "code" | "commits" | "repos",
 	query: string,
 	limit: number,
 	repo: string | undefined,
 ): string[] {
-	const args = ["search", command, "--limit", String(limit), "--json", GH_SEARCH_FIELDS.join(",")];
-	appendRepoFlag(args, repo);
+	const fields = SEARCH_FIELDS_BY_COMMAND[command];
+	const args = ["search", command, "--limit", String(limit), "--json", fields.join(",")];
+	if (command !== "repos") {
+		appendRepoFlag(args, repo);
+	}
 	args.push("--", query);
 	return args;
 }
@@ -1826,6 +1915,94 @@ function formatSearchResults(
 	return lines.join("\n").trim();
 }
 
+function formatSearchCodeResults(query: string, repo: string | undefined, items: GhSearchCodeResult[]): string {
+	const lines: string[] = [`# GitHub code search`, "", `Query: ${query}`];
+	pushLine(lines, "Repository", repo);
+	pushLine(lines, "Results", items.length);
+
+	if (items.length === 0) {
+		lines.push("");
+		lines.push("No code matches found.");
+		return lines.join("\n").trim();
+	}
+
+	for (const item of items) {
+		lines.push("");
+		lines.push(`- ${item.path ?? "(unknown path)"}`);
+		pushLine(lines, "  Repo", item.repository?.nameWithOwner);
+		pushLine(lines, "  Commit", formatShortSha(item.sha));
+		pushLine(lines, "  URL", item.url);
+		const fragment = item.textMatches?.find(match => match.fragment)?.fragment;
+		if (fragment) {
+			pushLine(lines, "  Match", normalizeText(fragment).split("\n", 1)[0]);
+		}
+	}
+
+	return lines.join("\n").trim();
+}
+
+function formatSearchCommitMessage(message: string | undefined): string | undefined {
+	if (!message) return undefined;
+	const firstLine = normalizeText(message).split("\n", 1)[0];
+	return firstLine || undefined;
+}
+
+function formatSearchCommitsResults(query: string, repo: string | undefined, items: GhSearchCommitResult[]): string {
+	const lines: string[] = [`# GitHub commits search`, "", `Query: ${query}`];
+	pushLine(lines, "Repository", repo);
+	pushLine(lines, "Results", items.length);
+
+	if (items.length === 0) {
+		lines.push("");
+		lines.push("No commits found.");
+		return lines.join("\n").trim();
+	}
+
+	for (const item of items) {
+		lines.push("");
+		const sha = formatShortSha(item.sha) ?? "(unknown sha)";
+		const subject = formatSearchCommitMessage(item.commit?.message) ?? "(no commit message)";
+		lines.push(`- ${sha} ${subject}`);
+		pushLine(lines, "  Repo", item.repository?.nameWithOwner);
+		pushLine(lines, "  Author", formatAuthor(item.author) ?? item.commit?.author?.name);
+		pushLine(lines, "  Date", item.commit?.author?.date ?? item.commit?.committer?.date);
+		pushLine(lines, "  URL", item.url);
+	}
+
+	return lines.join("\n").trim();
+}
+
+function formatSearchReposResults(query: string, items: GhSearchRepoResult[]): string {
+	const lines: string[] = [`# GitHub repositories search`, "", `Query: ${query}`];
+	pushLine(lines, "Results", items.length);
+
+	if (items.length === 0) {
+		lines.push("");
+		lines.push("No repositories found.");
+		return lines.join("\n").trim();
+	}
+
+	for (const item of items) {
+		lines.push("");
+		lines.push(`- ${item.fullName ?? "(unknown repository)"}`);
+		const description = normalizeText(item.description).split("\n", 1)[0];
+		if (description) {
+			pushLine(lines, "  Description", description);
+		}
+		pushLine(lines, "  Language", item.language ?? undefined);
+		pushLine(lines, "  Stars", item.stargazersCount);
+		pushLine(lines, "  Forks", item.forksCount);
+		pushLine(lines, "  Open issues", item.openIssuesCount);
+		pushLine(lines, "  Visibility", item.visibility ?? undefined);
+		pushLine(lines, "  Archived", item.isArchived);
+		pushLine(lines, "  Fork", item.isFork);
+		pushLine(lines, "  Updated", item.updatedAt);
+		pushLine(lines, "  URL", item.url);
+	}
+
+	return lines.join("\n").trim();
+}
+
 async function saveArtifactText(session: ToolSession, toolType: string, text: string): Promise<string | undefined> {
 	const { path: artifactPath, id: artifactId } = (await session.allocateOutputArtifact?.(toolType)) ?? {};
 	if (!artifactPath || !artifactId) {
@@ -1898,6 +2075,12 @@ export class GithubTool implements AgentTool<typeof githubSchema, GhToolDetails>
 					return executeSearchIssues(this.session, params, signal);
 				case "search_prs":
 					return executeSearchPrs(this.session, params, signal);
+				case "search_code":
+					return executeSearchCode(this.session, params, signal);
+				case "search_commits":
+					return executeSearchCommits(this.session, params, signal);
+				case "search_repos":
+					return executeSearchRepos(this.session, params, signal);
 				case "run_watch":
 					return executeRunWatch(this.session, this.name, params, signal, onUpdate);
 			}
@@ -2289,6 +2472,51 @@ async function executeSearchPrs(
 		repoProvided: Boolean(repo),
 	});
 	return buildTextResult(formatSearchResults("pull requests", query, repo, items));
+}
+
+async function executeSearchCode(
+	session: ToolSession,
+	params: GithubInput,
+	signal: AbortSignal | undefined,
+): Promise<AgentToolResult<GhToolDetails>> {
+	const query = requireNonEmpty(params.query, "query");
+	const repo = normalizeOptionalString(params.repo);
+	const limit = resolveSearchLimit(params.limit);
+	const args = buildGhSearchArgs("code", query, limit, repo);
+
+	const items = await git.github.json<GhSearchCodeResult[]>(session.cwd, args, signal, {
+		repoProvided: Boolean(repo),
+	});
+	return buildTextResult(formatSearchCodeResults(query, repo, items));
+}
+
+async function executeSearchCommits(
+	session: ToolSession,
+	params: GithubInput,
+	signal: AbortSignal | undefined,
+): Promise<AgentToolResult<GhToolDetails>> {
+	const query = requireNonEmpty(params.query, "query");
+	const repo = normalizeOptionalString(params.repo);
+	const limit = resolveSearchLimit(params.limit);
+	const args = buildGhSearchArgs("commits", query, limit, repo);
+
+	const items = await git.github.json<GhSearchCommitResult[]>(session.cwd, args, signal, {
+		repoProvided: Boolean(repo),
+	});
+	return buildTextResult(formatSearchCommitsResults(query, repo, items));
+}
+
+async function executeSearchRepos(
+	session: ToolSession,
+	params: GithubInput,
+	signal: AbortSignal | undefined,
+): Promise<AgentToolResult<GhToolDetails>> {
+	const query = requireNonEmpty(params.query, "query");
+	const limit = resolveSearchLimit(params.limit);
+	const args = buildGhSearchArgs("repos", query, limit, undefined);
+
+	const items = await git.github.json<GhSearchRepoResult[]>(session.cwd, args, signal);
+	return buildTextResult(formatSearchReposResults(query, items));
 }
 
 async function executeRunWatch(

@@ -47,6 +47,9 @@ const OP_TITLES: Record<string, string> = {
 	pr_push: "GitHub PR Push",
 	search_issues: "GitHub Search Issues",
 	search_prs: "GitHub Search PRs",
+	search_code: "GitHub Search Code",
+	search_commits: "GitHub Search Commits",
+	search_repos: "GitHub Search Repos",
 	run_watch: "GitHub Run Watch",
 };
 
@@ -99,9 +102,15 @@ function buildOpMeta(args: GithubToolRenderArgs): string[] {
 			break;
 		}
 		case "search_issues":
-		case "search_prs": {
+		case "search_prs":
+		case "search_code":
+		case "search_commits": {
 			if (args.query) meta.push(truncateVisualWidth(args.query, TRUNCATE_LENGTHS.CONTENT));
 			if (args.repo) meta.push(args.repo);
+			break;
+		}
+		case "search_repos": {
+			if (args.query) meta.push(truncateVisualWidth(args.query, TRUNCATE_LENGTHS.CONTENT));
 			break;
 		}
 		case "repo_view": {

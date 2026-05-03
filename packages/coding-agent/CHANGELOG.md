@@ -1,6 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `search_code`, `search_commits`, and `search_repos` ops to the `github` tool so the search surface mirrors `gh search`'s subcommands
+
+### Changed
+
+- Changed `search_repos` to run as a global repository search using query qualifiers without applying the `repo` filter
+
+### Fixed
+
+- Fixed `search_code` output to include each match path, repository, shortened SHA, and a one-line matching fragment
+- Fixed `search_commits` output to show shortened SHAs with commit message first lines
+- Fixed `search_repos` output formatting to return repository summaries including language, stars, forks, issues, visibility, and key status fields
 
 ## [14.6.2] - 2026-05-03
 ### Added
