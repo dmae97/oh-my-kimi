@@ -716,25 +716,12 @@ export function describeAnchorExamples(linePrefix = ""): string {
 }
 
 /**
- * Sentinel tokens that the hashline Lark grammar uses when it needs values
- * derived from a TypeScript constant (the LID hash regex source and the
- * payload separator literal). They're replaced at module-load time by
- * {@link resolveHashlineGrammarPlaceholders} so the grammar stays in sync
- * with its TypeScript counterparts. Update these names here and in the
- * grammar together.
- */
-export const LARK_LID_HASH_PLACEHOLDER = "$HASHFMT$";
-export const LARK_PAYLOAD_SEP_PLACEHOLDER = "$HSEP$";
-
-/**
  * Substitute every grammar placeholder with the value derived from its
  * TypeScript counterpart. Grammars that don't reference these placeholders
  * pass through unchanged.
  */
 export function resolveHashlineGrammarPlaceholders(grammar: string): string {
-	return grammar
-		.replaceAll(LARK_LID_HASH_PLACEHOLDER, "[a-z]{2}")
-		.replaceAll(LARK_PAYLOAD_SEP_PLACEHOLDER, JSON.stringify(HASHLINE_CONTENT_SEPARATOR));
+	return grammar.replaceAll("$HFMT$", "[a-z]{2}").replaceAll("$HSEP$", JSON.stringify(HASHLINE_CONTENT_SEPARATOR));
 }
 
 /** @deprecated Use {@link resolveHashlineGrammarPlaceholders}. */
@@ -750,7 +737,7 @@ export const resolveLarkLidPlaceholders = resolveHashlineGrammarPlaceholders;
  * module load; the regex source, grammar substitution, prompt helper, and
  * doubled-prefix detection in the parser all derive from it.
  */
-export const HASHLINE_CONTENT_SEPARATOR = Bun.env.PI_HASHLINE_SEP || "|";
+export const HASHLINE_CONTENT_SEPARATOR = Bun.env.PI_HASHLINE_SEP || "\\";
 
 /** Regex-escaped form of {@link HASHLINE_CONTENT_SEPARATOR}, safe for embedding inside a regex. */
 export const HASHLINE_CONTENT_SEPARATOR_RE_SRC = HASHLINE_CONTENT_SEPARATOR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

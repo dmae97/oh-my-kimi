@@ -22,5 +22,5 @@ insert_target: LID | "EOF" | "BOF"
 range: LID (".." LID)?
 
 path: /(?:[^\s\r\n]+|"[^"\r\n]+"|'[^'\r\n]+')/
-LID: /[1-9][0-9]*$HASHFMT$/
+LID: /[1-9][0-9]*$HFMT$/
 blank: LF
