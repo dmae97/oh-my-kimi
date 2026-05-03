@@ -53,6 +53,7 @@ export class EventController {
 			todo_reminder: e => this.#handleTodoReminder(e),
 			todo_auto_clear: e => this.#handleTodoAutoClear(e),
 			irc_message: e => this.#handleIrcMessage(e),
+			notice: e => this.#handleNotice(e),
 		} satisfies AgentSessionEventHandlers;
 	}
 
@@ -221,6 +222,17 @@ export class EventController {
 		this.#resetReadGroup();
 		this.ctx.addMessageToChat(event.message);
 		this.ctx.ui.requestRender();
+	}
+
+	async #handleNotice(event: Extract<AgentSessionEvent, { type: "notice" }>): Promise<void> {
+		const message = event.source ? `${event.source}: ${event.message}` : event.message;
+		if (event.level === "error") {
+			this.ctx.showError(message);
+		} else if (event.level === "warning") {
+			this.ctx.showWarning(message);
+		} else {
+			this.ctx.showStatus(message);
+		}
 	}
 
 	async #handleMessageUpdate(event: Extract<AgentSessionEvent, { type: "message_update" }>): Promise<void> {

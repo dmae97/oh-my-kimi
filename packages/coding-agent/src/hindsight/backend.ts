@@ -25,6 +25,7 @@ import {
 	sliceLastTurnsByUserBoundary,
 	truncateRecallQuery,
 } from "./content";
+import { clearRetainQueueForTest, flushAllRetainQueues, flushSessionQueue } from "./retain-queue";
 import { extractMessages } from "./transcript";
 
 /**
@@ -91,6 +92,7 @@ export function setHindsightSessionStateForTest(sessionId: string, state: Hindsi
 export function clearHindsightSessionStateForTest(): void {
 	for (const state of STATE_BY_SESSION_ID.values()) state.unsubscribe?.();
 	STATE_BY_SESSION_ID.clear();
+	clearRetainQueueForTest();
 }
 
 /**
@@ -228,11 +230,16 @@ async function maybeRecallOnAgentStart(state: HindsightSessionState): Promise<vo
 }
 
 function attachSessionListeners(state: HindsightSessionState): void {
+	const sessionId = state.session.sessionId;
 	const unsubscribe = state.session.subscribe(event => {
 		if (event.type === "agent_start") {
 			void maybeRecallOnAgentStart(state);
 		} else if (event.type === "agent_end") {
 			void maybeRetainOnAgentEnd(state);
+			// Drain any queued tool-initiated retain calls now that the turn
+			// is settled. The queue is also debounced/size-bounded, but
+			// flushing here keeps the bank fresh between turns.
+			if (sessionId) void flushSessionQueue(sessionId);
 		}
 	});
 	state.unsubscribe = unsubscribe;
@@ -350,6 +357,8 @@ export const hindsightBackend: MemoryBackend = {
 		// Hindsight memory is server-side. The local cache (per-session WeakMap-
 		// equivalent) is what we can wipe — operators who want to delete the
 		// upstream bank should use the Hindsight UI / `deleteBank` directly.
+		// Drain pending tool-initiated retains first so we don't lose them.
+		await flushAllRetainQueues();
 		for (const state of STATE_BY_SESSION_ID.values()) {
 			state.unsubscribe?.();
 		}
@@ -361,7 +370,9 @@ export const hindsightBackend: MemoryBackend = {
 	},
 
 	async enqueue(_agentDir, _cwd): Promise<void> {
-		// Force an immediate retain across every active session.
+		// Force an immediate retain across every active session, including
+		// the queued tool-initiated retains that haven't flushed yet.
+		await flushAllRetainQueues();
 		for (const state of STATE_BY_SESSION_ID.values()) {
 			if (state.aliasOf) continue;
 			const sessionId = state.session.sessionId;

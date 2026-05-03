@@ -3,8 +3,9 @@
  *
  * Replaces the `@vectorize-io/hindsight-client` SDK with hand-rolled fetch
  * calls so we depend on nothing more than the API endpoints we actually use:
- * `retain`, `recall`, `reflect`, and `createBank`. Centralising construction
- * here keeps a single seam for tests to spy on.
+ * `retain`, `retainBatch`, `recall`, `reflect`, bank + document management,
+ * and bulk listing. Centralising construction here keeps a single seam for
+ * tests to spy on.
  */
 
 import type { HindsightConfig } from "./config";
@@ -14,6 +15,8 @@ const DEFAULT_USER_AGENT = USER_AGENT;
 
 export type Budget = "low" | "mid" | "high" | string;
 export type TagsMatch = "any" | "all" | "any_strict" | "all_strict";
+export type UpdateMode = "replace" | "append";
+export type ConsolidationState = "failed" | "pending" | "done";
 
 export interface HindsightApiOptions {
 	baseUrl: string;
@@ -47,6 +50,33 @@ export interface BankProfileResponse {
 	[key: string]: unknown;
 }
 
+export interface ListMemoriesResponse {
+	[key: string]: unknown;
+}
+
+export interface DocumentResponse {
+	[key: string]: unknown;
+}
+
+export interface ListDocumentsResponse {
+	[key: string]: unknown;
+}
+
+/** Mirrors the shape accepted by `POST /v1/default/banks/{bank_id}/memories`. */
+export interface MemoryItemInput {
+	content: string;
+	timestamp?: Date | string;
+	context?: string;
+	metadata?: Record<string, string>;
+	documentId?: string;
+	tags?: string[];
+	/** Scoping policy for observations derived from this item. */
+	observationScopes?: "per_tag" | "combined" | "all_combinations" | string[][];
+	/** Per-item extraction strategy override. */
+	strategy?: string;
+	updateMode?: UpdateMode;
+}
+
 export interface RetainOptions {
 	timestamp?: Date | string;
 	context?: string;
@@ -54,7 +84,15 @@ export interface RetainOptions {
 	documentId?: string;
 	async?: boolean;
 	tags?: string[];
-	updateMode?: "replace" | "append";
+	updateMode?: UpdateMode;
+}
+
+export interface RetainBatchOptions {
+	/** Document id applied to every item that doesn't carry its own. */
+	documentId?: string;
+	/** Tags attached to the resulting document(s), not individual items. */
+	documentTags?: string[];
+	async?: boolean;
 }
 
 export interface RecallOptions {
@@ -77,6 +115,23 @@ export interface CreateBankOptions {
 	retainMission?: string;
 }
 
+export interface ListMemoriesOptions {
+	limit?: number;
+	offset?: number;
+	type?: string;
+	q?: string;
+	consolidationState?: ConsolidationState;
+}
+
+export interface ListDocumentsOptions {
+	limit?: number;
+	offset?: number;
+}
+
+export interface UpdateDocumentOptions {
+	tags?: string[];
+}
+
 export class HindsightError extends Error {
 	statusCode?: number;
 	details?: unknown;
@@ -87,6 +142,13 @@ export class HindsightError extends Error {
 		this.statusCode = statusCode;
 		this.details = details;
 	}
+}
+
+interface RequestOptions {
+	body?: Record<string, unknown>;
+	query?: Record<string, unknown>;
+	/** Return null instead of throwing on a 404 response. */
+	allow404?: boolean;
 }
 
 export class HindsightApi {
@@ -105,21 +167,51 @@ export class HindsightApi {
 	}
 
 	async retain(bankId: string, content: string, options?: RetainOptions): Promise<RetainResponse> {
-		const item: Record<string, unknown> = { content };
-		if (options?.timestamp !== undefined) {
-			item.timestamp = options.timestamp instanceof Date ? options.timestamp.toISOString() : options.timestamp;
-		}
-		if (options?.context !== undefined) item.context = options.context;
-		if (options?.metadata !== undefined) item.metadata = options.metadata;
-		if (options?.documentId !== undefined) item.document_id = options.documentId;
-		if (options?.tags !== undefined) item.tags = options.tags;
-		if (options?.updateMode !== undefined) item.update_mode = options.updateMode;
+		const item = buildMemoryItem({
+			content,
+			timestamp: options?.timestamp,
+			context: options?.context,
+			metadata: options?.metadata,
+			documentId: options?.documentId,
+			tags: options?.tags,
+			updateMode: options?.updateMode,
+		});
 
 		return this.#request<RetainResponse>(
 			"POST",
 			`/v1/default/banks/${encodeURIComponent(bankId)}/memories`,
 			"retain",
-			{ items: [item], async: options?.async },
+			{ body: { items: [item], async: options?.async } },
+		);
+	}
+
+	/**
+	 * Retain multiple memories in a single request. Mirrors the official
+	 * client's `retainBatch` — items hit `POST /memories` together so the
+	 * server can dedupe and consolidate as a batch instead of N round-trips.
+	 *
+	 * Per-item `documentId` wins; `options.documentId` only fills the gaps.
+	 */
+	async retainBatch(bankId: string, items: MemoryItemInput[], options?: RetainBatchOptions): Promise<RetainResponse> {
+		const processed = items.map(item => {
+			const built = buildMemoryItem(item);
+			if (built.document_id === undefined && options?.documentId !== undefined) {
+				built.document_id = options.documentId;
+			}
+			return built;
+		});
+
+		return this.#request<RetainResponse>(
+			"POST",
+			`/v1/default/banks/${encodeURIComponent(bankId)}/memories`,
+			"retainBatch",
+			{
+				body: {
+					items: processed,
+					document_tags: options?.documentTags,
+					async: options?.async,
+				},
+			},
 		);
 	}
 
@@ -129,12 +221,14 @@ export class HindsightApi {
 			`/v1/default/banks/${encodeURIComponent(bankId)}/memories/recall`,
 			"recall",
 			{
-				query,
-				types: options?.types,
-				max_tokens: options?.maxTokens,
-				budget: options?.budget ?? "mid",
-				tags: options?.tags,
-				tags_match: options?.tagsMatch,
+				body: {
+					query,
+					types: options?.types,
+					max_tokens: options?.maxTokens,
+					budget: options?.budget ?? "mid",
+					tags: options?.tags,
+					tags_match: options?.tagsMatch,
+				},
 			},
 		);
 	}
@@ -145,11 +239,13 @@ export class HindsightApi {
 			`/v1/default/banks/${encodeURIComponent(bankId)}/reflect`,
 			"reflect",
 			{
-				query,
-				context: options?.context,
-				budget: options?.budget ?? "low",
-				tags: options?.tags,
-				tags_match: options?.tagsMatch,
+				body: {
+					query,
+					context: options?.context,
+					budget: options?.budget ?? "low",
+					tags: options?.tags,
+					tags_match: options?.tagsMatch,
+				},
 			},
 		);
 	}
@@ -160,28 +256,104 @@ export class HindsightApi {
 			`/v1/default/banks/${encodeURIComponent(bankId)}`,
 			"createBank",
 			{
-				reflect_mission: options.reflectMission,
-				retain_mission: options.retainMission,
+				body: {
+					reflect_mission: options.reflectMission,
+					retain_mission: options.retainMission,
+				},
 			},
 		);
 	}
 
-	async #request<T>(method: string, path: string, operation: string, body: Record<string, unknown>): Promise<T> {
-		const url = `${this.#baseUrl}${path}`;
-		const payload = pruneUndefined(body);
+	/**
+	 * Bulk-list memory units in a bank with optional filters and pagination.
+	 * Endpoint: `GET /v1/default/banks/{bank_id}/memories/list`.
+	 */
+	async listMemories(bankId: string, options?: ListMemoriesOptions): Promise<ListMemoriesResponse> {
+		return this.#request<ListMemoriesResponse>(
+			"GET",
+			`/v1/default/banks/${encodeURIComponent(bankId)}/memories/list`,
+			"listMemories",
+			{
+				query: {
+					type: options?.type,
+					q: options?.q,
+					consolidation_state: options?.consolidationState,
+					limit: options?.limit,
+					offset: options?.offset,
+				},
+			},
+		);
+	}
+
+	/** Bulk-list documents in a bank. */
+	async listDocuments(bankId: string, options?: ListDocumentsOptions): Promise<ListDocumentsResponse> {
+		return this.#request<ListDocumentsResponse>(
+			"GET",
+			`/v1/default/banks/${encodeURIComponent(bankId)}/documents`,
+			"listDocuments",
+			{ query: { limit: options?.limit, offset: options?.offset } },
+		);
+	}
+
+	/** Fetch a document. Returns `null` on 404 instead of throwing. */
+	async getDocument(bankId: string, documentId: string): Promise<DocumentResponse | null> {
+		return this.#request<DocumentResponse | null>(
+			"GET",
+			`/v1/default/banks/${encodeURIComponent(bankId)}/documents/${encodeURIComponent(documentId)}`,
+			"getDocument",
+			{ allow404: true },
+		);
+	}
+
+	/** Update a document's mutable fields (currently just tags). */
+	async updateDocument(bankId: string, documentId: string, options: UpdateDocumentOptions): Promise<DocumentResponse> {
+		return this.#request<DocumentResponse>(
+			"PATCH",
+			`/v1/default/banks/${encodeURIComponent(bankId)}/documents/${encodeURIComponent(documentId)}`,
+			"updateDocument",
+			{ body: { tags: options.tags } },
+		);
+	}
+
+	/**
+	 * Delete a document and every memory derived from it. Returns `true` on
+	 * success, `false` if the document was already gone (404).
+	 */
+	async deleteDocument(bankId: string, documentId: string): Promise<boolean> {
+		const result = await this.#request<{ __deleted: boolean } | null>(
+			"DELETE",
+			`/v1/default/banks/${encodeURIComponent(bankId)}/documents/${encodeURIComponent(documentId)}`,
+			"deleteDocument",
+			{ allow404: true },
+		);
+		return result !== null;
+	}
+
+	async #request<T>(method: string, path: string, operation: string, opts?: RequestOptions): Promise<T> {
+		let url = `${this.#baseUrl}${path}`;
+		if (opts?.query) {
+			const qs = buildQueryString(opts.query);
+			if (qs) url += `?${qs}`;
+		}
+
+		const init: RequestInit = { method, headers: this.#headers };
+		if (opts?.body !== undefined) {
+			init.body = JSON.stringify(pruneUndefined(opts.body));
+		}
+
 		let response: Response;
 		try {
-			response = await fetch(url, {
-				method,
-				headers: this.#headers,
-				body: JSON.stringify(payload),
-			});
+			response = await fetch(url, init);
 		} catch (err) {
 			throw new HindsightError(
 				`${operation} request failed: ${err instanceof Error ? err.message : String(err)}`,
 				undefined,
 				err,
 			);
+		}
+
+		if (opts?.allow404 && response.status === 404) {
+			return null as T;
 		}
 
 		const text = await response.text();
@@ -204,6 +376,49 @@ export class HindsightApi {
 
 		return (parsed ?? {}) as T;
 	}
+}
+
+interface BuiltMemoryItem {
+	content: string;
+	timestamp?: string;
+	context?: string;
+	metadata?: Record<string, string>;
+	document_id?: string;
+	tags?: string[];
+	observation_scopes?: "per_tag" | "combined" | "all_combinations" | string[][];
+	strategy?: string;
+	update_mode?: UpdateMode;
+}
+
+function buildMemoryItem(item: MemoryItemInput): BuiltMemoryItem {
+	const out: BuiltMemoryItem = { content: item.content };
+	if (item.timestamp !== undefined) {
+		out.timestamp = item.timestamp instanceof Date ? item.timestamp.toISOString() : item.timestamp;
+	}
+	if (item.context !== undefined) out.context = item.context;
+	if (item.metadata !== undefined) out.metadata = item.metadata;
+	if (item.documentId !== undefined) out.document_id = item.documentId;
+	if (item.tags !== undefined) out.tags = item.tags;
+	if (item.observationScopes !== undefined) out.observation_scopes = item.observationScopes;
+	if (item.strategy !== undefined) out.strategy = item.strategy;
+	if (item.updateMode !== undefined) out.update_mode = item.updateMode;
+	return out;
+}
+
+function buildQueryString(query: Record<string, unknown>): string {
+	const params = new URLSearchParams();
+	for (const [key, value] of Object.entries(query)) {
+		if (value === undefined || value === null) continue;
+		if (Array.isArray(value)) {
+			for (const item of value) {
+				if (item === undefined || item === null) continue;
+				params.append(key, String(item));
+			}
+		} else {
+			params.set(key, String(value));
+		}
+	}
+	return params.toString();
 }
 
 function pruneUndefined(obj: Record<string, unknown>): Record<string, unknown> {

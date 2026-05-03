@@ -193,7 +193,8 @@ export type AgentSessionEvent =
 	| { type: "ttsr_triggered"; rules: Rule[] }
 	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
 	| { type: "todo_auto_clear" }
-	| { type: "irc_message"; message: CustomMessage };
+	| { type: "irc_message"; message: CustomMessage }
+	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -741,6 +742,19 @@ export class AgentSession {
 		for (const l of listeners) {
 			l(event);
 		}
+	}
+
+	/**
+	 * Emit a UI-only notice to the session. Surfaces in interactive mode as a
+	 * `showWarning` / `showError` / `showStatus` line; non-interactive modes
+	 * receive the event through the normal subscribe stream.
+	 *
+	 * Notices are NOT added to agent state and never reach the LLM — use this
+	 * for out-of-band conditions the user should see but the model shouldn't
+	 * react to (e.g. background queue flush failures).
+	 */
+	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void {
+		this.#emit({ type: "notice", level, message, source });
 	}
 
 	#queuedExtensionEvents: Promise<void> = Promise.resolve();

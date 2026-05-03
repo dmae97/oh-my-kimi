@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Renamed hashline separator configuration from `PI_HASHLINE_SEP` to `PI_HL_SEP` and changed the default payload separator from `\\` to `>`
@@ -16,6 +17,9 @@
 
 ### Changed
 
+- Changed `hindsight` tool retains to enqueue memory writes and return `Memory queued.` immediately instead of waiting on a network request
+- Changed `hindsight` tool memory writes to use automatic background batching (up to 16 items or 5 seconds) so tool calls do not block
+- Changed failed `hindsight` queue flushes to be surfaced as UI warning notices rather than failing the foreground `hindsight` tool call
 - Changed hashline read/search previews and diff output to keep `|` as the anchor-to-text separator while using the separate configured edit payload separator
 - Mapped invalid `hindsight.scoping` settings back to the default `per-project-tagged` behavior with a warning
 - Changed `/memory view`, `/memory clear`, and `/memory enqueue` to route through the selected memory backend instead of being hardcoded to local memories
@@ -35,6 +39,8 @@
 
 ### Fixed
 
+- Fixed pending `hindsight` queued memory writes to flush on agent end, clear, and enqueue operations so tool-invoked facts are not dropped when sessions transition
+- Fixed retained memory writes from the `hindsight` tool to include session context and tags consistently in background batches
 - Fixed inline hashline modify operations to fail fast when combined with a delete or replace on the same target line
 - Fixed hashline parsing of payload blocks to handle a shared extra leading symbol prefix (such as markdown `>>`) on all payload lines by stripping it as an auto-correction instead of rejecting the edit
 - Forwarded project scoping tags to `hindsight` retain, recall, and reflect operations so manual memory commands honor the active tagging mode

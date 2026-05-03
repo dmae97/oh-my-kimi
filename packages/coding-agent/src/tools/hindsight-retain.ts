@@ -1,8 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { getHindsightSessionState } from "../hindsight/backend";
-import { ensureBankMission } from "../hindsight/bank";
+import { enqueueRetain } from "../hindsight/retain-queue";
 import type { ToolSession } from ".";
 
 const hindsightRetainSchema = Type.Object({
@@ -36,30 +35,23 @@ export class HindsightRetainTool implements AgentTool<typeof hindsightRetainSche
 		return new HindsightRetainTool(session);
 	}
 
-	async execute(_id: string, params: HindsightRetainParams, signal?: AbortSignal): Promise<AgentToolResult> {
-		return untilAborted(signal, async () => {
-			const sessionId = this.session.getSessionId?.();
-			const state = sessionId ? getHindsightSessionState(sessionId) : undefined;
-			if (!state) {
-				throw new Error("Hindsight backend is not initialised for this session.");
-			}
+	async execute(_id: string, params: HindsightRetainParams): Promise<AgentToolResult> {
+		const sessionId = this.session.getSessionId?.();
+		const state = sessionId ? getHindsightSessionState(sessionId) : undefined;
+		if (!state || !sessionId) {
+			throw new Error("Hindsight backend is not initialised for this session.");
+		}
 
-			try {
-				await ensureBankMission(state.client, state.bankId, state.config, state.missionsSet);
-				await state.client.retain(state.bankId, params.content, {
-					context: params.context ?? state.config.retainContext,
-					metadata: { session_id: sessionId ?? "" },
-					tags: state.retainTags,
-					async: true,
-				});
-				return {
-					content: [{ type: "text", text: "Memory stored." }],
-					details: {},
-				};
-			} catch (err) {
-				logger.warn("retain failed", { bankId: state.bankId, error: String(err) });
-				throw err instanceof Error ? err : new Error(String(err));
-			}
-		});
+		// Push onto the global queue and return immediately. The queue flushes
+		// either when it reaches its batch threshold or when its debounce timer
+		// fires. If the eventual batch fails, the queue surfaces the failure
+		// via session.queueDeferredMessage — the agent learns about it on the
+		// next turn rather than blocking the current tool call.
+		enqueueRetain(sessionId, params.content, params.context);
+
+		return {
+			content: [{ type: "text", text: "Memory queued." }],
+			details: {},
+		};
 	}
 }

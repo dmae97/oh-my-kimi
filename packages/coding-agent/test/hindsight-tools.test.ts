@@ -16,6 +16,11 @@ import {
 } from "@oh-my-pi/pi-coding-agent/hindsight/backend";
 import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
+import {
+	clearRetainQueueForTest,
+	flushSessionQueue,
+	getRetainQueueDepthForTest,
+} from "@oh-my-pi/pi-coding-agent/hindsight/retain-queue";
 import { HindsightRecallTool } from "@oh-my-pi/pi-coding-agent/tools/hindsight-recall";
 import { HindsightReflectTool } from "@oh-my-pi/pi-coding-agent/tools/hindsight-reflect";
 import { HindsightRetainTool } from "@oh-my-pi/pi-coding-agent/tools/hindsight-retain";
@@ -64,6 +69,7 @@ interface RegisterStateOptions {
 	retainTags?: string[];
 	recallTags?: string[];
 	recallTagsMatch?: "any" | "all" | "any_strict" | "all_strict";
+	sessionOverrides?: Record<string, unknown>;
 }
 
 function registerState(client: HindsightApi, settings?: Settings, opts: RegisterStateOptions = {}) {
@@ -74,7 +80,12 @@ function registerState(client: HindsightApi, settings?: Settings, opts: Register
 		recallTags: opts.recallTags,
 		recallTagsMatch: opts.recallTagsMatch,
 		config: makeConfig(),
-		session: { sessionId: TEST_SESSION_ID, sessionManager: { getEntries: () => [] } as never } as never,
+		session: {
+			sessionId: TEST_SESSION_ID,
+			sessionManager: { getEntries: () => [] } as never,
+			emitNotice: () => {},
+			...opts.sessionOverrides,
+		} as never,
 		missionsSet: new Set(),
 		lastRetainedTurn: 0,
 		hasRecalledForFirstTurn: false,
@@ -114,45 +125,80 @@ describe("retain.execute", () => {
 	beforeEach(() => {
 		_resetSettingsForTest();
 		clearHindsightSessionStateForTest();
+		clearRetainQueueForTest();
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
 		clearHindsightSessionStateForTest();
+		clearRetainQueueForTest();
 	});
 
-	it("forwards content + bank id to client.retain and returns success", async () => {
+	it("queues the memory and reports success without calling the API", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
 		const client = new HindsightApi({ baseUrl: "http://localhost:8888" });
+		const retainBatchSpy = vi.spyOn(HindsightApi.prototype, "retainBatch").mockResolvedValue({} as never);
 		const retainSpy = vi.spyOn(HindsightApi.prototype, "retain").mockResolvedValue({} as never);
 		registerState(client, settings);
 
 		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
 		const result = await tool.execute("call-1", { content: "user prefers tabs" });
 
-		expect(retainSpy).toHaveBeenCalledTimes(1);
-		expect(retainSpy).toHaveBeenCalledWith(
-			"test-bank",
-			"user prefers tabs",
-			expect.objectContaining({ async: true, metadata: { session_id: TEST_SESSION_ID } }),
-		);
-		expect(result.content[0]).toEqual({ type: "text", text: "Memory stored." });
+		expect(result.content[0]).toEqual({ type: "text", text: "Memory queued." });
+		// Tool returns before any HTTP work happens.
+		expect(retainBatchSpy).not.toHaveBeenCalled();
+		expect(retainSpy).not.toHaveBeenCalled();
+		expect(getRetainQueueDepthForTest(TEST_SESSION_ID)).toBe(1);
 	});
 
-	it("forwards retain tags from session state when present", async () => {
+	it("flushes the queue as a single retainBatch call with content + metadata + tags", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
 		const client = new HindsightApi({ baseUrl: "http://localhost:8888" });
-		const retainSpy = vi.spyOn(HindsightApi.prototype, "retain").mockResolvedValue({} as never);
+		const retainBatchSpy = vi.spyOn(HindsightApi.prototype, "retainBatch").mockResolvedValue({} as never);
 		registerState(client, settings, { retainTags: ["project:pi"] });
 
 		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
-		await tool.execute("call-tags", { content: "tagged fact" });
+		await tool.execute("call-a", { content: "fact one" });
+		await tool.execute("call-b", { content: "fact two", context: "user override" });
+		await flushSessionQueue(TEST_SESSION_ID);
 
-		expect(retainSpy).toHaveBeenCalledWith(
-			"test-bank",
-			"tagged fact",
-			expect.objectContaining({ tags: ["project:pi"] }),
-		);
+		expect(retainBatchSpy).toHaveBeenCalledTimes(1);
+		const [bankId, items, options] = retainBatchSpy.mock.calls[0];
+		expect(bankId).toBe("test-bank");
+		expect(options).toEqual(expect.objectContaining({ async: true }));
+		expect(items).toEqual([
+			expect.objectContaining({
+				content: "fact one",
+				metadata: { session_id: TEST_SESSION_ID },
+				tags: ["project:pi"],
+			}),
+			expect.objectContaining({
+				content: "fact two",
+				context: "user override",
+				metadata: { session_id: TEST_SESSION_ID },
+				tags: ["project:pi"],
+			}),
+		]);
+		expect(getRetainQueueDepthForTest(TEST_SESSION_ID)).toBe(0);
+	});
+
+	it("emits a UI-only warning notice when the batch flush fails", async () => {
+		const settings = Settings.isolated({ "memory.backend": "hindsight" });
+		const client = new HindsightApi({ baseUrl: "http://localhost:8888" });
+		vi.spyOn(HindsightApi.prototype, "retainBatch").mockRejectedValue(new Error("HTTP 503"));
+		const noticeSpy = vi.fn();
+		registerState(client, settings, { sessionOverrides: { emitNotice: noticeSpy } });
+
+		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
+		await tool.execute("call-x", { content: "doomed fact" });
+		await flushSessionQueue(TEST_SESSION_ID);
+
+		expect(noticeSpy).toHaveBeenCalledTimes(1);
+		const [level, message, source] = noticeSpy.mock.calls[0];
+		expect(level).toBe("warning");
+		expect(source).toBe("Hindsight");
+		expect(message).toContain("HTTP 503");
+		expect(message).toContain("1 memory");
 	});
 
 	it("throws when no per-session state is registered", async () => {
