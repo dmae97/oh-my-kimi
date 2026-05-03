@@ -1,0 +1,190 @@
+import { describe, expect, it } from "bun:test";
+import {
+	composeRecallQuery,
+	formatCurrentTime,
+	formatMemories,
+	type HindsightMessage,
+	prepareRetentionTranscript,
+	sliceLastTurnsByUserBoundary,
+	stripMemoryTags,
+	truncateRecallQuery,
+} from "@oh-my-pi/pi-coding-agent/hindsight/content";
+
+describe("stripMemoryTags", () => {
+	it("removes both <hindsight_memories> and <relevant_memories> blocks", () => {
+		const text = [
+			"hello",
+			"<hindsight_memories>",
+			"- some recalled fact",
+			"</hindsight_memories>",
+			"middle",
+			"<relevant_memories>",
+			"more facts",
+			"</relevant_memories>",
+			"end",
+		].join("\n");
+		const stripped = stripMemoryTags(text);
+		expect(stripped).not.toContain("<hindsight_memories>");
+		expect(stripped).not.toContain("</hindsight_memories>");
+		expect(stripped).not.toContain("<relevant_memories>");
+		expect(stripped).not.toContain("</relevant_memories>");
+		expect(stripped).toContain("hello");
+		expect(stripped).toContain("middle");
+		expect(stripped).toContain("end");
+	});
+
+	it("strips multiple sequential blocks", () => {
+		const text = "<hindsight_memories>a</hindsight_memories><hindsight_memories>b</hindsight_memories>tail";
+		expect(stripMemoryTags(text)).toBe("tail");
+	});
+
+	it("is a no-op when no tags are present", () => {
+		expect(stripMemoryTags("plain content")).toBe("plain content");
+	});
+});
+
+describe("composeRecallQuery", () => {
+	const messages: HindsightMessage[] = [
+		{ role: "user", content: "What's the cwd?" },
+		{ role: "assistant", content: "It's /tmp/foo" },
+		{ role: "user", content: "Run the tests" },
+		{ role: "assistant", content: "Done" },
+		{ role: "user", content: "Latest question" },
+	];
+
+	it("returns the trimmed latest query when context turns is 0 or 1", () => {
+		expect(composeRecallQuery("  Latest question  ", messages, 0)).toBe("Latest question");
+		expect(composeRecallQuery("Latest question", messages, 1)).toBe("Latest question");
+	});
+
+	it("prepends prior context for context turns > 1", () => {
+		const out = composeRecallQuery("Latest question", messages, 2);
+		expect(out.startsWith("Prior context:")).toBe(true);
+		expect(out.endsWith("Latest question")).toBe(true);
+		// last user message must not be duplicated inside the context block
+		const contextSection = out.slice("Prior context:\n\n".length, out.lastIndexOf("\n\nLatest question"));
+		expect(contextSection.split("\n").every(line => !line.endsWith("Latest question"))).toBe(true);
+	});
+
+	it("strips memory tags from prior context turns", () => {
+		const tagged: HindsightMessage[] = [
+			{ role: "user", content: "before" },
+			{ role: "assistant", content: "<hindsight_memories>secret</hindsight_memories>visible" },
+			{ role: "user", content: "Latest" },
+		];
+		const out = composeRecallQuery("Latest", tagged, 5);
+		expect(out).not.toContain("secret");
+		expect(out).toContain("visible");
+	});
+});
+
+describe("truncateRecallQuery", () => {
+	it("returns the query untouched when under the budget", () => {
+		expect(truncateRecallQuery("short", "short", 100)).toBe("short");
+	});
+
+	it("falls back to the latest query alone when no prior context block exists", () => {
+		const long = "x".repeat(200);
+		expect(truncateRecallQuery(long, long, 50)).toBe(long.slice(0, 50));
+	});
+
+	it("drops oldest context lines first", () => {
+		const latest = "ZZ";
+		const composed = `Prior context:\n\nuser: AAAA\nuser: BBBB\nuser: CCCC\n\n${latest}`;
+		const out = truncateRecallQuery(composed, latest, "Prior context:\n\nuser: CCCC\n\nZZ".length);
+		expect(out.endsWith(latest)).toBe(true);
+		expect(out).toContain("CCCC");
+		expect(out).not.toContain("AAAA");
+	});
+});
+
+describe("sliceLastTurnsByUserBoundary", () => {
+	const messages: HindsightMessage[] = [
+		{ role: "user", content: "u1" },
+		{ role: "assistant", content: "a1" },
+		{ role: "user", content: "u2" },
+		{ role: "assistant", content: "a2" },
+		{ role: "user", content: "u3" },
+	];
+
+	it("returns the last N user-bounded turns", () => {
+		expect(sliceLastTurnsByUserBoundary(messages, 1)).toEqual([{ role: "user", content: "u3" }]);
+		expect(sliceLastTurnsByUserBoundary(messages, 2)).toEqual(messages.slice(2));
+	});
+
+	it("returns the full list when N exceeds the number of user turns", () => {
+		expect(sliceLastTurnsByUserBoundary(messages, 99)).toEqual(messages);
+	});
+
+	it("returns an empty list for empty input or non-positive turns", () => {
+		expect(sliceLastTurnsByUserBoundary([], 1)).toEqual([]);
+		expect(sliceLastTurnsByUserBoundary(messages, 0)).toEqual([]);
+	});
+});
+
+describe("prepareRetentionTranscript", () => {
+	it("uses only the last turn when retainFullWindow is false", () => {
+		const messages: HindsightMessage[] = [
+			{ role: "user", content: "earlier" },
+			{ role: "assistant", content: "earlier reply" },
+			{ role: "user", content: "latest user message" },
+			{ role: "assistant", content: "latest assistant reply" },
+		];
+		const { transcript, messageCount } = prepareRetentionTranscript(messages);
+		expect(messageCount).toBe(2);
+		expect(transcript).toContain("[role: user]\nlatest user message\n[user:end]");
+		expect(transcript).not.toContain("earlier reply");
+	});
+
+	it("uses every message when retainFullWindow is true", () => {
+		const messages: HindsightMessage[] = [
+			{ role: "user", content: "u1 with enough text" },
+			{ role: "assistant", content: "a1 with more text" },
+		];
+		const { transcript, messageCount } = prepareRetentionTranscript(messages, true);
+		expect(messageCount).toBe(2);
+		expect(transcript).toContain("u1");
+		expect(transcript).toContain("a1");
+	});
+
+	it("strips recalled memory blocks before retaining (no feedback loop)", () => {
+		const messages: HindsightMessage[] = [
+			{
+				role: "user",
+				content: "<hindsight_memories>\n- recalled fact about user\n</hindsight_memories>\nuser-real-question-here",
+			},
+			{ role: "assistant", content: "answer about question" },
+		];
+		const { transcript } = prepareRetentionTranscript(messages, true);
+		expect(transcript).not.toContain("<hindsight_memories>");
+		expect(transcript).not.toContain("recalled fact about user");
+		expect(transcript).toContain("user-real-question-here");
+	});
+
+	it("returns null when nothing meaningful remains", () => {
+		const empty = prepareRetentionTranscript([{ role: "user", content: "<hindsight_memories>x</hindsight_memories>" }], true);
+		expect(empty.transcript).toBeNull();
+	});
+});
+
+describe("formatMemories", () => {
+	it("renders results with type and date suffixes when present", () => {
+		const out = formatMemories([
+			{ text: "fact one", type: "world", mentioned_at: "2024-01-01" },
+			{ text: "fact two" },
+		]);
+		expect(out).toContain("- fact one [world] (2024-01-01)");
+		expect(out).toContain("- fact two");
+	});
+
+	it("returns an empty string for no results", () => {
+		expect(formatMemories([])).toBe("");
+	});
+});
+
+describe("formatCurrentTime", () => {
+	it("emits a UTC YYYY-MM-DD HH:MM stamp", () => {
+		const stamp = formatCurrentTime(new Date(Date.UTC(2024, 5, 7, 9, 5)));
+		expect(stamp).toBe("2024-06-07 09:05");
+	});
+});

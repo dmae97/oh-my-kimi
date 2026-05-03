@@ -31,6 +31,9 @@ import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FindTool } from "./find";
 import { GithubTool } from "./gh";
 import { InspectImageTool } from "./inspect-image";
+import { HindsightRecallTool } from "./hindsight-recall";
+import { HindsightReflectTool } from "./hindsight-reflect";
+import { HindsightRetainTool } from "./hindsight-retain";
 import { IrcTool } from "./irc";
 import { JobTool } from "./job";
 import { NotebookTool } from "./notebook";
@@ -71,6 +74,9 @@ export * from "./find";
 export * from "./gh";
 export * from "./image-gen";
 export * from "./inspect-image";
+export * from "./hindsight-recall";
+export * from "./hindsight-reflect";
+export * from "./hindsight-retain";
 export * from "./irc";
 export * from "./job";
 export * from "./notebook";
@@ -231,6 +237,9 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	web_search: s => new WebSearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,
 	write: s => new WriteTool(s),
+	hindsight_retain: HindsightRetainTool.createIf,
+	hindsight_recall: HindsightRecallTool.createIf,
+	hindsight_reflect: HindsightReflectTool.createIf,
 };
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
@@ -365,6 +374,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
 		if (name === "irc") return session.settings.get("irc.enabled");
 		if (name === "recipe") return session.settings.get("recipe.enabled");
+		if (name === "hindsight_retain" || name === "hindsight_recall" || name === "hindsight_reflect") {
+			return session.settings.get("memory.backend") === "hindsight";
+		}
 		if (name === "task") {
 			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 2;
 			const currentDepth = session.taskDepth ?? 0;

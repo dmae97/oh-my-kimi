@@ -17,7 +17,7 @@ import { clearClaudePluginRootsCache } from "../../discovery/helpers";
 import { getGatewayStatus } from "../../eval/py/gateway-coordinator";
 import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
-import { buildMemoryToolDeveloperInstructions, clearMemoryData, enqueueMemoryConsolidation } from "../../memories";
+import { resolveMemoryBackend } from "../../memory-backend";
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BorderedLoader } from "../../modes/components/bordered-loader";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
@@ -570,11 +570,12 @@ export class CommandController {
 		const argumentText = text.slice(7).trim();
 		const action = argumentText.split(/\s+/, 1)[0]?.toLowerCase() || "view";
 		const agentDir = this.ctx.settings.getAgentDir();
+		const backend = resolveMemoryBackend(this.ctx.settings);
 
 		if (action === "view") {
-			const payload = await buildMemoryToolDeveloperInstructions(agentDir, this.ctx.settings);
+			const payload = await backend.buildDeveloperInstructions(agentDir, this.ctx.settings);
 			if (!payload) {
-				this.ctx.showWarning("Memory payload is empty (memories disabled or no memory summary found).");
+				this.ctx.showWarning("Memory payload is empty (memory backend off, disabled, or no memory available).");
 				return;
 			}
 			this.ctx.chatContainer.addChild(new Spacer(1));
@@ -589,7 +590,7 @@ export class CommandController {
 
 		if (action === "reset" || action === "clear") {
 			try {
-				await clearMemoryData(agentDir, this.ctx.sessionManager.getCwd());
+				await backend.clear(agentDir, this.ctx.sessionManager.getCwd());
 				await this.ctx.session.refreshBaseSystemPrompt();
 				this.ctx.showStatus("Memory data cleared and system prompt refreshed.");
 			} catch (error) {
@@ -600,7 +601,7 @@ export class CommandController {
 
 		if (action === "enqueue" || action === "rebuild") {
 			try {
-				enqueueMemoryConsolidation(agentDir, this.ctx.sessionManager.getCwd());
+				await backend.enqueue(agentDir, this.ctx.sessionManager.getCwd());
 				this.ctx.showStatus("Memory consolidation enqueued.");
 			} catch (error) {
 				this.ctx.showError(`Memory enqueue failed: ${error instanceof Error ? error.message : String(error)}`);

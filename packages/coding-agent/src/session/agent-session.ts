@@ -111,6 +111,7 @@ import {
 	isMCPToolName,
 	selectDiscoverableMCPToolNamesByServer,
 } from "../mcp/discoverable-tool-metadata";
+import { resolveMemoryBackend } from "../memory-backend";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import type { PlanModeState } from "../plan-mode/state";
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
@@ -4118,6 +4119,11 @@ export class AgentSession {
 				preserveData = result?.preserveData;
 			}
 
+			const memoryBackendContext = await this.#collectMemoryBackendContext(preparation);
+			if (memoryBackendContext) {
+				hookContext = hookContext ? [...hookContext, memoryBackendContext] : [memoryBackendContext];
+			}
+
 			let summary: string;
 			let shortSummary: string | undefined;
 			let firstKeptEntryId: string;
@@ -4201,6 +4207,31 @@ export class AgentSession {
 				this.#compactionAbortController = undefined;
 			}
 			this.#reconnectToAgent();
+		}
+	}
+
+	/**
+	 * Ask the active memory backend for an extra-context block to splice into
+	 * the compaction summary prompt. Both the manual and auto compaction paths
+	 * funnel through this helper so the behaviour stays identical.
+	 *
+	 * Failures are swallowed: a memory backend going sideways MUST NOT block
+	 * compaction (which is itself the recovery path for context overflow).
+	 */
+	async #collectMemoryBackendContext(
+		preparation: { messagesToSummarize: AgentMessage[]; turnPrefixMessages: AgentMessage[] },
+	): Promise<string | undefined> {
+		const backend = resolveMemoryBackend(this.settings);
+		if (!backend.preCompactionContext) return undefined;
+		const messages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
+		try {
+			return await backend.preCompactionContext(messages, this.settings);
+		} catch (err) {
+			logger.debug("Memory backend preCompactionContext failed", {
+				backend: backend.id,
+				error: String(err),
+			});
+			return undefined;
 		}
 	}
 
@@ -5188,6 +5219,11 @@ export class AgentSession {
 				hookContext = result?.context;
 				hookPrompt = result?.prompt;
 				preserveData = result?.preserveData;
+			}
+
+			const memoryBackendContext = await this.#collectMemoryBackendContext(preparation);
+			if (memoryBackendContext) {
+				hookContext = hookContext ? [...hookContext, memoryBackendContext] : [memoryBackendContext];
 			}
 
 			let summary: string;

@@ -1,0 +1,58 @@
+/**
+ * Memory backend abstraction.
+ *
+ * Backends are mutually exclusive — `resolveMemoryBackend(settings)` returns
+ * exactly one. Implementations MUST be self-contained: they own the per-session
+ * state they create in `start()` and tear it down on `clear()`.
+ */
+
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { ModelRegistry } from "../config/model-registry";
+import type { Settings } from "../config/settings";
+import type { AgentSession } from "../session/agent-session";
+
+export type MemoryBackendId = "off" | "local" | "hindsight";
+
+export interface MemoryBackendStartOptions {
+	session: AgentSession;
+	settings: Settings;
+	modelRegistry: ModelRegistry;
+	agentDir: string;
+	taskDepth: number;
+}
+
+export interface MemoryBackend {
+	readonly id: MemoryBackendId;
+
+	/**
+	 * Wire any background work or session subscriptions for this backend.
+	 *
+	 * Called once per agent session at startup. Implementations MUST be
+	 * non-throwing: failures should be logged and swallowed so a misconfigured
+	 * memory backend cannot break the agent loop.
+	 */
+	start(options: MemoryBackendStartOptions): void | Promise<void>;
+
+	/**
+	 * Markdown injected as the system-prompt append section.
+	 * Returned on every prompt rebuild via `refreshBaseSystemPrompt()`.
+	 */
+	buildDeveloperInstructions(agentDir: string, settings: Settings): Promise<string | undefined>;
+
+	/** Wipe all persisted state for this backend (slash `/memory clear`). */
+	clear(agentDir: string, cwd: string): Promise<void>;
+
+	/** Force consolidation/retain to happen now (slash `/memory enqueue`). */
+	enqueue(agentDir: string, cwd: string): Promise<void>;
+
+	/**
+	 * Optional hook to splice extra context into a compaction summarization.
+	 *
+	 * Called from the compaction call site before the LLM summary is requested.
+	 * Returning a string appends one entry to the compaction's `extraContext`
+	 * list (which becomes part of the summarization prompt). Return `undefined`
+	 * to inject nothing — the local backend takes this branch because its
+	 * summary is already part of the system prompt.
+	 */
+	preCompactionContext?(messages: AgentMessage[], settings: Settings): Promise<string | undefined>;
+}

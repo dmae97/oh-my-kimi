@@ -23,6 +23,7 @@ export type SettingTab =
 	| "model"
 	| "interaction"
 	| "context"
+	| "memory"
 	| "editing"
 	| "tools"
 	| "tasks"
@@ -37,6 +38,7 @@ export const SETTING_TABS: SettingTab[] = [
 	"model",
 	"interaction",
 	"context",
+	"memory",
 	"editing",
 	"tools",
 	"tasks",
@@ -49,6 +51,7 @@ export const TAB_METADATA: Record<SettingTab, { label: string; icon: `tab.${stri
 	model: { label: "Model", icon: "tab.model" },
 	interaction: { label: "Interaction", icon: "tab.interaction" },
 	context: { label: "Context", icon: "tab.context" },
+	memory: { label: "Memory", icon: "tab.memory" },
 	editing: { label: "Editing", icon: "tab.editing" },
 	tools: { label: "Tools", icon: "tab.tools" },
 	tasks: { label: "Tasks", icon: "tab.tasks" },
@@ -153,6 +156,7 @@ const EMPTY_STRING_ARRAY: string[] = [];
 const EMPTY_STRING_RECORD: Record<string, string> = {};
 const DEFAULT_CYCLE_ORDER: string[] = ["smol", "default", "slow"];
 const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
+const HINDSIGHT_RECALL_TYPES_DEFAULT: string[] = ["world", "experience"];
 export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 	{
 		pattern: "^\\s*(cat|head|tail|less|more)\\s+",
@@ -879,7 +883,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
-			tab: "context",
+			tab: "memory",
 			label: "Memories",
 			description: "Enable autonomous memory extraction and consolidation",
 		},
@@ -914,6 +918,101 @@ export const SETTINGS_SCHEMA = {
 	"memories.fallbackTokenLimit": { type: "number", default: 16000 },
 
 	"memories.summaryInjectionTokenLimit": { type: "number", default: 5000 },
+
+	// Memory backend selector — picks between local memories pipeline,
+	// Hindsight remote memory, or off. Legacy `memories.enabled` keeps gating
+	// the local backend; see config/settings.ts migration for details.
+	"memory.backend": {
+		type: "enum",
+		values: ["off", "local", "hindsight"] as const,
+		default: "local",
+		ui: {
+			tab: "memory",
+			label: "Memory Backend",
+			description: "Local memory pipeline, Hindsight remote memory, or off",
+			submenu: true,
+		},
+	},
+
+	// Hindsight (https://hindsight.vectorize.io)
+	"hindsight.apiUrl": {
+		type: "string",
+		default: "http://localhost:8888",
+		ui: {
+			tab: "memory",
+			label: "Hindsight API URL",
+			description: "Hindsight server URL (Cloud or self-hosted)",
+			condition: "hindsightActive",
+		},
+	},
+
+	"hindsight.apiToken": { type: "string", default: undefined },
+
+	"hindsight.bankId": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Hindsight Bank ID",
+			description: "Memory bank identifier (default: project name)",
+			condition: "hindsightActive",
+		},
+	},
+
+	"hindsight.bankIdPrefix": { type: "string", default: undefined },
+	"hindsight.dynamicBankId": { type: "boolean", default: false },
+	"hindsight.bankMission": { type: "string", default: undefined },
+	"hindsight.retainMission": { type: "string", default: undefined },
+	"hindsight.agentName": { type: "string", default: "omp" },
+
+	"hindsight.autoRecall": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "memory",
+			label: "Hindsight Auto Recall",
+			description: "Recall memories on the first turn of each session",
+			condition: "hindsightActive",
+		},
+	},
+	"hindsight.autoRetain": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "memory",
+			label: "Hindsight Auto Retain",
+			description: "Retain transcript every N turns and at session boundaries",
+			condition: "hindsightActive",
+		},
+	},
+
+	"hindsight.retainMode": {
+		type: "enum",
+		values: ["full-session", "last-turn"] as const,
+		default: "full-session",
+		ui: {
+			tab: "memory",
+			label: "Hindsight Retain Mode",
+			description: "full-session = upsert one document per session, last-turn = chunked",
+			submenu: true,
+			condition: "hindsightActive",
+		},
+	},
+	"hindsight.retainEveryNTurns": { type: "number", default: 3 },
+	"hindsight.retainOverlapTurns": { type: "number", default: 2 },
+	"hindsight.retainContext": { type: "string", default: "omp" },
+
+	"hindsight.recallBudget": {
+		type: "enum",
+		values: ["low", "mid", "high"] as const,
+		default: "mid",
+	},
+	"hindsight.recallMaxTokens": { type: "number", default: 1024 },
+	"hindsight.recallContextTurns": { type: "number", default: 1 },
+	"hindsight.recallMaxQueryChars": { type: "number", default: 800 },
+	"hindsight.recallTypes": { type: "array", default: HINDSIGHT_RECALL_TYPES_DEFAULT },
+
+	"hindsight.debug": { type: "boolean", default: false },
 
 	// TTSR
 	"ttsr.enabled": {

@@ -9,6 +9,7 @@
 
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
+import { Settings } from "../../config/settings";
 import {
 	getDefault,
 	getEnumValues,
@@ -63,6 +64,13 @@ export type SettingDef = BooleanSettingDef | EnumSettingDef | SubmenuSettingDef 
 
 const CONDITIONS: Record<string, () => boolean> = {
 	hasImageProtocol: () => !!TERMINAL.imageProtocol,
+	hindsightActive: () => {
+		try {
+			return Settings.instance.get("memory.backend") === "hindsight";
+		} catch {
+			return false;
+		}
+	},
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -459,6 +467,21 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		},
 		{ value: "compact", label: "Compact", description: "Compact the session context, then re-submit the prompt" },
 		{ value: "reset", label: "Reset", description: "Start a new session, then re-submit the prompt" },
+	],
+	// Memory backend
+	"memory.backend": [
+		{ value: "off", label: "Off", description: "No memory subsystem runs" },
+		{ value: "local", label: "Local", description: "Local rollout summarisation pipeline (memory_summary.md)" },
+		{ value: "hindsight", label: "Hindsight", description: "Vectorize Hindsight remote memory service" },
+	],
+	// Hindsight retain mode
+	"hindsight.retainMode": [
+		{
+			value: "full-session",
+			label: "Full session",
+			description: "Upsert one document per session (recommended)",
+		},
+		{ value: "last-turn", label: "Last turn", description: "Chunked retention sliced by turn boundaries" },
 	],
 };
 

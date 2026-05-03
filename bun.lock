@@ -71,6 +71,7 @@
         "@oh-my-pi/pi-utils": "catalog:",
         "@puppeteer/browsers": "catalog:",
         "@sinclair/typebox": "catalog:",
+        "@vectorize-io/hindsight-client": "catalog:",
         "@xterm/headless": "catalog:",
         "ajv": "catalog:",
         "chalk": "catalog:",
@@ -230,6 +231,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/turndown": "5.0.6",
     "@typescript/native-preview": "7.0.0-dev.20260425.1",
+    "@vectorize-io/hindsight-client": "0.5.6",
     "@xterm/headless": "^6.0.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
@@ -756,6 +758,8 @@
     "@typescript/native-preview-win32-x64": ["@typescript/native-preview-win32-x64@7.0.0-dev.20260425.1", "", { "os": "win32", "cpu": "x64" }, "sha512-/iwK50mO31lKr1KVDRCqW5xGyKArZuq9jQr2b/PJ3e0xEuV6hoJ4Kok11LA1lhx1uctqr3UXKmfwQF3HWqcZTQ=="],
 
     "@typescript/vfs": ["@typescript/vfs@1.6.4", "", { "dependencies": { "debug": "^4.4.3" }, "peerDependencies": { "typescript": "*" } }, "sha512-PJFXFS4ZJKiJ9Qiuix6Dz/OwEIqHD7Dme1UwZhTK11vR+5dqW2ACbdndWQexBzCx+CPuMe5WBYQWCsFyGlQLlQ=="],
+
+    "@vectorize-io/hindsight-client": ["@vectorize-io/hindsight-client@0.5.6", "", {}, "sha512-VBMkCQP7dCy9BqkoqhZxxl5sVW6opKT3l6wexval7ZM4syTOGlmpu7BRhtFycxWmkWjXwH+XM6n4lzBoWTSPdA=="],
 
     "@xmldom/xmldom": ["@xmldom/xmldom@0.8.13", "", {}, "sha512-KRYzxepc14G/CEpEGc3Yn+JKaAeT63smlDr+vjB8jRfgTBBI9wRj/nkQEO+ucV8p8I9bfKLWp37uHgFrbntPvw=="],
 

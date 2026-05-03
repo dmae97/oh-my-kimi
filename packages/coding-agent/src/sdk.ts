@@ -82,7 +82,8 @@ import {
 	selectDiscoverableMCPToolNamesByServer,
 	summarizeDiscoverableMCPTools,
 } from "./mcp/discoverable-tool-metadata";
-import { buildMemoryToolDeveloperInstructions, getMemoryRoot, startMemoryStartupTask } from "./memories";
+import { getMemoryRoot } from "./memories";
+import { resolveMemoryBackend } from "./memory-backend";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
@@ -1334,7 +1335,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const promptTools = buildSystemPromptToolMetadata(tools, {
 				search_tool_bm25: { description: renderSearchToolBm25Description(discoverableMCPTools) },
 			});
-			const memoryInstructions = await buildMemoryToolDeveloperInstructions(agentDir, settings);
+			const memoryInstructions = await resolveMemoryBackend(settings).buildDeveloperInstructions(agentDir, settings);
 
 			// Build combined append prompt: memory instructions + MCP server instructions
 			const serverInstructions = mcpManager?.getServerInstructions();
@@ -1747,13 +1748,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		logger.time("startMemoryStartupTask", () =>
-			startMemoryStartupTask({
-				session,
-				settings,
-				modelRegistry,
-				agentDir,
-				taskDepth,
-			}),
+			Promise.resolve(
+				resolveMemoryBackend(settings).start({
+					session,
+					settings,
+					modelRegistry,
+					agentDir,
+					taskDepth,
+				}),
+			),
 		);
 
 		// Wire MCP manager callbacks to session for reactive tool updates.

@@ -568,6 +568,19 @@ export class Settings {
 			}
 		}
 
+		// Map legacy `memories.enabled` boolean to the explicit `memory.backend`
+		// enum if the latter hasn't been set yet. Idempotent: subsequent
+		// migrations are no-ops once memory.backend is materialised.
+		const memoryBackendObj = raw.memory as Record<string, unknown> | undefined;
+		const memoryBackendSet = memoryBackendObj && typeof memoryBackendObj.backend === "string";
+		const memoriesObj = raw.memories as Record<string, unknown> | undefined;
+		if (!memoryBackendSet && memoriesObj && typeof memoriesObj.enabled === "boolean") {
+			const next = memoriesObj.enabled ? "local" : "off";
+			const memoryRoot = (memoryBackendObj ?? {}) as Record<string, unknown>;
+			memoryRoot.backend = next;
+			raw.memory = memoryRoot;
+		}
+
 		return raw;
 	}
 
