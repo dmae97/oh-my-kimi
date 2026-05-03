@@ -1,10 +1,13 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `EventStream.fail(err)` method to terminate the async iterator with an error, enabling consumers to catch stream-level failures via `for await` without hanging
+
+### Fixed
+
+- Fixed OpenAI Responses tool schema conversion to rewrite non-strict `oneOf` unions to `anyOf` before sending tools to the Responses API ([#920](https://github.com/can1357/oh-my-pi/issues/920))
 
 ## [14.6.0] - 2026-05-02
 

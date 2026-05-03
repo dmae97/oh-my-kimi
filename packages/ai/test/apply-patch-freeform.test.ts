@@ -73,6 +73,39 @@ const plainTool: Tool = {
 	parameters: Type.Object({ path: Type.String() }),
 };
 
+const unionBranches = [
+	{
+		type: "object",
+		properties: { type: { enum: ["insert"] }, text: { type: "string" } },
+		required: ["type", "text"],
+	},
+	{
+		type: "object",
+		properties: { type: { enum: ["delete"] }, start: { type: "integer" } },
+		required: ["type", "start"],
+	},
+];
+
+function makeUnionTool(strict: boolean): Tool {
+	return {
+		name: "batch_update_doc",
+		description: "batch update",
+		strict,
+		parameters: {
+			type: "object",
+			properties: {
+				operations: {
+					type: "array",
+					items: {
+						oneOf: unionBranches,
+					},
+				},
+			},
+			required: ["operations"],
+		},
+	} as unknown as Tool;
+}
+
 describe("supportsFreeformApplyPatch", () => {
 	test("absent flag returns false", () => {
 		// No runtime auto-detection — requires generated model metadata.
@@ -127,6 +160,35 @@ describe("convertTools: freeform emission", () => {
 			Record<string, unknown>
 		>;
 		expect(out.type).toBe("function");
+	});
+
+	test("rewrites oneOf to anyOf for non-strict Responses tool schemas", () => {
+		const unionTool = makeUnionTool(false);
+
+		const [out] = convertTools([unionTool], true, makeModel()) as unknown as Array<{
+			parameters: { properties: { operations: { items: Record<string, unknown> } } };
+			strict?: boolean;
+		}>;
+
+		const items = out.parameters.properties.operations.items;
+		expect(out.strict).toBeUndefined();
+		expect(items.oneOf).toBeUndefined();
+		expect(items.anyOf).toEqual(unionBranches);
+	});
+
+	test("rewrites oneOf to anyOf before strict schema enforcement", () => {
+		const unionTool = makeUnionTool(true);
+
+		const [out] = convertTools([unionTool], true, makeModel()) as unknown as Array<{
+			parameters: { properties: { operations: { items: Record<string, unknown> } } };
+			strict?: boolean;
+		}>;
+
+		const items = out.parameters.properties.operations.items;
+		expect(out.strict).toBe(true);
+		expect(items.oneOf).toBeUndefined();
+		expect(items.anyOf).toMatchObject(unionBranches);
+		expect((items.anyOf as Array<Record<string, unknown>>)[0]?.additionalProperties).toBe(false);
 	});
 });
 

@@ -40,7 +40,7 @@ import {
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
-import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
+import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses } from "../utils/schema";
 import { mapToOpenAIResponsesToolChoice, type OpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
@@ -592,7 +592,8 @@ export function convertTools(tools: Tool[], strictMode: boolean, model: Model<"o
 		}
 		const strict = !NO_STRICT && strictMode && tool.strict !== false;
 		const baseParameters = tool.parameters as unknown as Record<string, unknown>;
-		const { schema: parameters, strict: effectiveStrict } = adaptSchemaForStrict(baseParameters, strict);
+		const responseParameters = sanitizeSchemaForOpenAIResponses(baseParameters);
+		const { schema: parameters, strict: effectiveStrict } = adaptSchemaForStrict(responseParameters, strict);
 		return {
 			type: "function",
 			name: tool.name,
