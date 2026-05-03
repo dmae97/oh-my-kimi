@@ -119,6 +119,56 @@ describe("hashline parser — block op syntax", () => {
 		expect(applyDiff(content, range)).toBe("aaa\nBBB\nCCC");
 	});
 
+	it("auto-absorbs duplicated multiline prefix boundaries during replacement", () => {
+		const source = ["// one", "// two", "old();"].join("\n");
+		const diff = [`= ${tag(3, "old();")}`, pl("// one"), pl("// two"), pl("new();")].join("\n");
+
+		expect(applyDiff(source, diff)).toBe(["// one", "// two", "new();"].join("\n"));
+	});
+
+	it("auto-absorbs duplicated multiline suffix boundaries during replacement", () => {
+		const source = ["old();", "// one", "// two"].join("\n");
+		const diff = [`= ${tag(1, "old();")}`, pl("new();"), pl("// one"), pl("// two")].join("\n");
+
+		expect(applyDiff(source, diff)).toBe(["new();", "// one", "// two"].join("\n"));
+	});
+
+	it("does not auto-absorb a single duplicated boundary line", () => {
+		const source = ["keep", "old();"].join("\n");
+		const diff = [`= ${tag(2, "old();")}`, pl("keep"), pl("new();")].join("\n");
+
+		expect(applyDiff(source, diff)).toBe(["keep", "keep", "new();"].join("\n"));
+	});
+
+	it("does not auto-absorb a duplicate boundary that another op already targets", () => {
+		// Lines 3-4 ("X","Y") match the payload's trailing block, but line 4
+		// is also the anchor of a separate insert. Absorbing it would silently
+		// steal that anchor and turn the insert into a replacement.
+		const source = ["A", "B", "X", "Y", "Z"].join("\n");
+		const diff = [
+			`= ${tag(1, "A")}..${tag(2, "B")}`,
+			pl("alpha"),
+			pl("X"),
+			pl("Y"),
+			`< ${tag(4, "Y")}`,
+			pl("extra"),
+		].join("\n");
+
+		expect(applyDiff(source, diff)).toBe(["alpha", "X", "Y", "X", "extra", "Y", "Z"].join("\n"));
+	});
+
+	it("surfaces a warning when boundary duplicates are auto-absorbed", () => {
+		const source = ["// one", "// two", "old();"].join("\n");
+		const diff = [`= ${tag(3, "old();")}`, pl("// one"), pl("// two"), pl("new();")].join("\n");
+
+		const result = applyHashlineEdits(source, parseHashline(diff));
+		expect(result.lines).toBe(["// one", "// two", "new();"].join("\n"));
+		expect(result.warnings).toBeDefined();
+		expect(result.warnings).toEqual(
+			expect.arrayContaining([expect.stringMatching(/Auto-absorbed 2 duplicate line\(s\) above replacement/)]),
+		);
+	});
+
 	it("preserves payload text exactly after the first separator", () => {
 		const diff = [`= ${tag(2, "bbb")}`, pl(""), pl("# not a header"), pl("+ not an op"), pl("  spaced")].join("\n");
 		expect(applyDiff(content, diff)).toBe("aaa\n\n# not a header\n+ not an op\n  spaced\nccc");

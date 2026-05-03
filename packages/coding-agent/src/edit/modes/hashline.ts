@@ -793,6 +793,16 @@ interface IndexedEdit {
 	idx: number;
 }
 
+type HashlineDeleteEdit = Extract<HashlineEdit, { kind: "delete" }>;
+
+interface HashlineReplacementGroup {
+	startIndex: number;
+	endIndex: number;
+	sourceLineNum: number;
+	replacement: string[];
+	deletes: HashlineDeleteEdit[];
+}
+
 function getHashlineEditAnchors(edit: HashlineEdit): Anchor[] {
 	if (edit.kind === "delete") return [edit.anchor];
 	if (edit.kind === "modify") return [edit.anchor];
@@ -889,6 +899,183 @@ function insertAtEnd(fileLines: string[], lineOrigins: HashlineLineOrigin[], lin
 }
 
 /** Bucket edits by the line they target so we can apply each line's group in one splice. */
+
+function getAnchorTargetLine(edit: HashlineEdit): number | undefined {
+	if (edit.kind === "delete" || edit.kind === "modify") return edit.anchor.line;
+	if (edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor") return edit.cursor.anchor.line;
+	return undefined;
+}
+
+function collectAnchorTargetLines(edits: HashlineEdit[]): Set<number> {
+	const lines = new Set<number>();
+	for (const edit of edits) {
+		const line = getAnchorTargetLine(edit);
+		if (line !== undefined) lines.add(line);
+	}
+	return lines;
+}
+
+function findReplacementGroup(edits: HashlineEdit[], startIndex: number): HashlineReplacementGroup | undefined {
+	const first = edits[startIndex];
+	if (first?.kind !== "insert" || first.cursor.kind !== "before_anchor") return undefined;
+
+	const sourceLineNum = first.lineNum;
+	const replacement: string[] = [];
+	let index = startIndex;
+	while (index < edits.length) {
+		const edit = edits[index];
+		if (edit.kind !== "insert" || edit.lineNum !== sourceLineNum || edit.cursor.kind !== "before_anchor") break;
+		replacement.push(edit.text);
+		index++;
+	}
+
+	const deletes: HashlineDeleteEdit[] = [];
+	while (index < edits.length) {
+		const edit = edits[index];
+		if (edit.kind !== "delete" || edit.lineNum !== sourceLineNum) break;
+		deletes.push(edit);
+		index++;
+	}
+	if (deletes.length === 0) return undefined;
+
+	const startLine = deletes[0].anchor.line;
+	for (let offset = 0; offset < deletes.length; offset++) {
+		if (deletes[offset].anchor.line !== startLine + offset) return undefined;
+	}
+	const cursorLine = first.cursor.anchor.line;
+	if (cursorLine !== startLine) return undefined;
+
+	return { startIndex, endIndex: index - 1, sourceLineNum, replacement, deletes };
+}
+
+function countMatchingPrefixBlock(fileLines: string[], startLine: number, replacement: string[]): number {
+	const max = Math.min(replacement.length, startLine - 1);
+	for (let count = max; count >= 2; count--) {
+		let matches = true;
+		for (let offset = 0; offset < count; offset++) {
+			if (fileLines[startLine - count - 1 + offset] !== replacement[offset]) {
+				matches = false;
+				break;
+			}
+		}
+		if (matches) return count;
+	}
+	return 0;
+}
+
+function countMatchingSuffixBlock(fileLines: string[], endLine: number, replacement: string[]): number {
+	const max = Math.min(replacement.length, fileLines.length - endLine);
+	for (let count = max; count >= 2; count--) {
+		let matches = true;
+		for (let offset = 0; offset < count; offset++) {
+			if (fileLines[endLine + offset] !== replacement[replacement.length - count + offset]) {
+				matches = false;
+				break;
+			}
+		}
+		if (matches) return count;
+	}
+	return 0;
+}
+
+function hasExternalTargets(lines: Iterable<number>, externalTargetLines: Set<number>): boolean {
+	for (const line of lines) {
+		if (externalTargetLines.has(line)) return true;
+	}
+	return false;
+}
+
+function contiguousRange(start: number, count: number): number[] {
+	return Array.from({ length: count }, (_, offset) => start + offset);
+}
+
+function deleteEditForAutoAbsorbedLine(
+	line: number,
+	sourceLineNum: number,
+	index: number,
+	fileLines: string[],
+): HashlineEdit {
+	return {
+		kind: "delete",
+		anchor: { line, hash: computeLineHash(line, fileLines[line - 1] ?? "") },
+		lineNum: sourceLineNum,
+		index,
+	};
+}
+
+function absorbReplacementBoundaryDuplicates(
+	edits: HashlineEdit[],
+	fileLines: string[],
+	warnings: string[],
+): HashlineEdit[] {
+	let nextSyntheticIndex = edits.length;
+	const absorbed: HashlineEdit[] = [];
+
+	// Anchor targets are stable across the loop because we only ever append
+	// synthetic deletes (never mutate originals). A line in this set that
+	// falls outside the current group's range is necessarily owned by another
+	// op, so absorbing it would silently steal its target.
+	const allTargetLines = collectAnchorTargetLines(edits);
+	const emittedAbsorbKeys = new Set<string>();
+
+	for (let index = 0; index < edits.length; index++) {
+		const group = findReplacementGroup(edits, index);
+		if (!group) {
+			absorbed.push(edits[index]);
+			continue;
+		}
+
+		const startLine = group.deletes[0].anchor.line;
+		const endLine = group.deletes[group.deletes.length - 1].anchor.line;
+
+		const prefixCount = countMatchingPrefixBlock(fileLines, startLine, group.replacement);
+		const suffixCount = countMatchingSuffixBlock(fileLines, endLine, group.replacement);
+		const prefixLines = contiguousRange(startLine - prefixCount, prefixCount);
+		const suffixLines = contiguousRange(endLine + 1, suffixCount);
+		const safePrefixCount = hasExternalTargets(prefixLines, allTargetLines) ? 0 : prefixCount;
+		const safeSuffixCount = hasExternalTargets(suffixLines, allTargetLines) ? 0 : suffixCount;
+
+		if (safePrefixCount > 0) {
+			const absorbStart = startLine - safePrefixCount;
+			const key = `prefix:${absorbStart}..${startLine - 1}`;
+			if (!emittedAbsorbKeys.has(key)) {
+				emittedAbsorbKeys.add(key);
+				warnings.push(
+					`Auto-absorbed ${safePrefixCount} duplicate line(s) above replacement at line ${group.sourceLineNum} ` +
+						`(file lines ${absorbStart}..${startLine - 1} matched the payload's leading lines; ` +
+						`widened the deletion to absorb them).`,
+				);
+			}
+		}
+		if (safeSuffixCount > 0) {
+			const absorbEnd = endLine + safeSuffixCount;
+			const key = `suffix:${endLine + 1}..${absorbEnd}`;
+			if (!emittedAbsorbKeys.has(key)) {
+				emittedAbsorbKeys.add(key);
+				warnings.push(
+					`Auto-absorbed ${safeSuffixCount} duplicate line(s) below replacement at line ${group.sourceLineNum} ` +
+						`(file lines ${endLine + 1}..${absorbEnd} matched the payload's trailing lines; ` +
+						`widened the deletion to absorb them).`,
+				);
+			}
+		}
+
+		for (const line of contiguousRange(startLine - safePrefixCount, safePrefixCount)) {
+			absorbed.push(deleteEditForAutoAbsorbedLine(line, group.sourceLineNum, nextSyntheticIndex++, fileLines));
+		}
+		for (let groupIndex = group.startIndex; groupIndex <= group.endIndex; groupIndex++) {
+			absorbed.push(edits[groupIndex]);
+		}
+		for (const line of contiguousRange(endLine + 1, safeSuffixCount)) {
+			absorbed.push(deleteEditForAutoAbsorbedLine(line, group.sourceLineNum, nextSyntheticIndex++, fileLines));
+		}
+
+		index = group.endIndex;
+	}
+
+	return absorbed;
+}
+
 function bucketAnchorEditsByLine(edits: IndexedEdit[]): Map<number, IndexedEdit[]> {
 	const byLine = new Map<number, IndexedEdit[]>();
 	for (const entry of edits) {
@@ -922,10 +1109,12 @@ export function applyHashlineEdits(text: string, edits: HashlineEdit[]): Hashlin
 	const mismatches = validateHashlineAnchors(edits, fileLines, warnings);
 	if (mismatches.length > 0) throw new HashlineMismatchError(mismatches, fileLines);
 
+	const normalizedEdits = absorbReplacementBoundaryDuplicates(edits, fileLines, warnings);
+
 	// Normalize after_anchor inserts to before_anchor of the next line, or EOF
 	// when the anchor is the final line. This keeps the bucketing logic below
 	// (which only knows about before_anchor / bof / eof) untouched.
-	for (const edit of edits) {
+	for (const edit of normalizedEdits) {
 		if (edit.kind !== "insert" || edit.cursor.kind !== "after_anchor") continue;
 		const anchorLine = edit.cursor.anchor.line;
 		if (anchorLine >= fileLines.length) {
@@ -944,7 +1133,7 @@ export function applyHashlineEdits(text: string, edits: HashlineEdit[]): Hashlin
 	const bofLines: string[] = [];
 	const eofLines: string[] = [];
 	const anchorEdits: IndexedEdit[] = [];
-	edits.forEach((edit, idx) => {
+	normalizedEdits.forEach((edit, idx) => {
 		if (edit.kind === "insert" && edit.cursor.kind === "bof") {
 			bofLines.push(edit.text);
 		} else if (edit.kind === "insert" && edit.cursor.kind === "eof") {

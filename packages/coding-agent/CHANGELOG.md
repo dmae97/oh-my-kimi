@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added warning output when hashline block replacements auto-absorbed duplicate boundary lines
+
+### Fixed
+
+- Fixed hashline replacements so duplicated payload boundary lines adjacent to a replaced block are absorbed into the replacement range instead of being duplicated
 
 ## [14.6.3] - 2026-05-03
 

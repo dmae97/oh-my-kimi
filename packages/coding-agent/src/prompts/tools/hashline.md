@@ -79,4 +79,5 @@ This format is purely textual. The tool has NO awareness of language, indentatio
 - Every inserted/replacement content line **MUST** start with `{{hsep}}`; raw content lines are invalid.
 - Do not write unified diff syntax (`@@`, `-OLD`, `+NEW`).
 - To replace a block, use one `= A..B` op followed by all replacement `{{hsep}}TEXT` payload lines.
+- `= A..B` deletes the range; payload is what's written. If a payload edge line already exists immediately outside `A..B`, widen the range to cover it — otherwise it duplicates.
 </critical>
