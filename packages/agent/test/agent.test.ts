@@ -379,4 +379,52 @@ describe("Agent", () => {
 			provider: "openai",
 		});
 	});
+
+	it("re-reads thinking level for each model call within a run", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		type Details = { value: string };
+		const alphaTool: AgentTool<typeof toolSchema, Details> = {
+			name: "alpha",
+			label: "Alpha",
+			description: "Alpha tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return { content: [{ type: "text", text: `alpha:${params.value}` }], details: { value: params.value } };
+			},
+		};
+
+		let callIndex = 0;
+		const reasoningPerCall: Array<SimpleStreamOptions["reasoning"]> = [];
+
+		const agent = new Agent({
+			initialState: {
+				model: getBundledModel("openai", "gpt-4o-mini"),
+				thinkingLevel: ThinkingLevel.Low,
+				tools: [alphaTool],
+				messages: [],
+			},
+			streamFn: (_model, _context, options) => {
+				reasoningPerCall.push(options?.reasoning);
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					pushAlphaThenDoneEvent(stream, callIndex, createAssistantMessage);
+					callIndex += 1;
+				});
+				return stream;
+			},
+		});
+
+		// Bump thinking level mid-run, after the first assistant turn finishes
+		// and before the second model call (which follows the tool result).
+		const unsubscribe = agent.subscribe(event => {
+			if (event.type === "message_end" && event.message.role === "toolResult") {
+				agent.setThinkingLevel(ThinkingLevel.High);
+			}
+		});
+
+		await agent.prompt("run");
+		unsubscribe();
+
+		expect(reasoningPerCall).toEqual([ThinkingLevel.Low, ThinkingLevel.High]);
+	});
 });

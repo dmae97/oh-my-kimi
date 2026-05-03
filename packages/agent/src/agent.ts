@@ -784,6 +784,7 @@ export class Agent {
 			intentTracing: this.#intentTracing,
 			onAssistantMessageEvent: this.#onAssistantMessageEvent,
 			getToolChoice,
+			getReasoning: () => this.#state.thinkingLevel,
 			getSteeringMessages: async () => {
 				if (skipInitialSteeringPoll) {
 					skipInitialSteeringPoll = false;

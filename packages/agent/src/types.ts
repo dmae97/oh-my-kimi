@@ -145,6 +145,14 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * When set and returns a value, overrides the static `toolChoice`.
 	 */
 	getToolChoice?: () => ToolChoice | undefined;
+
+	/**
+	 * Dynamic reasoning effort override, resolved per LLM call.
+	 * When set and returns a value, overrides the static `reasoning` captured
+	 * at run-loop start. Use this so mid-run thinking-level changes apply on
+	 * the next model call instead of waiting for the next prompt.
+	 */
+	getReasoning?: () => Effort | undefined;
 }
 
 export interface ToolCallContext {
