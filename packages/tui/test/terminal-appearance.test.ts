@@ -5,6 +5,8 @@ const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isT
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const processPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
+const originalWslDistroName = Bun.env.WSL_DISTRO_NAME;
+const originalWslInterop = Bun.env.WSL_INTEROP;
 
 function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
 	if (descriptor) {
@@ -12,6 +14,14 @@ function restoreProperty(target: object, key: string, descriptor: PropertyDescri
 		return;
 	}
 	delete (target as Record<string, unknown>)[key];
+}
+
+function restoreEnv(key: string, original: string | undefined): void {
+	if (original === undefined) {
+		delete Bun.env[key];
+		return;
+	}
+	Bun.env[key] = original;
 }
 
 describe("ProcessTerminal OSC 11 appearance detection", () => {
@@ -28,8 +38,8 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
 		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
 		restoreProperty(process, "platform", processPlatformDescriptor);
-		delete Bun.env.WSL_INTEROP;
-		delete Bun.env.WSL_DISTRO_NAME;
+		restoreEnv("WSL_INTEROP", originalWslInterop);
+		restoreEnv("WSL_DISTRO_NAME", originalWslDistroName);
 	});
 
 	function setupTerminal() {

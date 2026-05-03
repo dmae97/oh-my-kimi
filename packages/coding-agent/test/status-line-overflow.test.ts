@@ -10,6 +10,7 @@ import { StatusLineComponent } from "../src/modes/components/status-line";
 import type { SegmentContext } from "../src/modes/components/status-line/segments";
 import { renderSegment } from "../src/modes/components/status-line/segments";
 import { initTheme, theme } from "../src/modes/theme/theme";
+import { getSessionAccentAnsi, getSessionAccentHex } from "../src/utils/session-color";
 
 const originalProjectDir = getProjectDir();
 
@@ -87,19 +88,35 @@ function createStatusLineSession(sessionName: string) {
 }
 
 describe("status line session accent", () => {
-	it("uses theme border color for the gap when session accent is disabled", () => {
+	function buildComponent(sessionAccent: boolean) {
 		const component = new StatusLineComponent(createStatusLineSession("Named session"));
 		component.updateSettings({
 			preset: "custom",
 			leftSegments: ["pi"],
 			rightSegments: ["session_name"],
 			separator: "powerline-thin",
-			sessionAccent: false,
+			sessionAccent,
 		});
+		return component;
+	}
 
-		const border = component.getTopBorder(80).content;
+	const accentAnsi = getSessionAccentAnsi(getSessionAccentHex("Named session"));
+
+	it("paints the gap with the session accent when enabled", () => {
+		expect(accentAnsi).toBeDefined();
+		const border = buildComponent(true).getTopBorder(80).content;
+		expect(border).toContain(`${accentAnsi}${theme.boxRound.horizontal}`);
+	});
+
+	it("paints the gap with the border color and omits the session accent when disabled", () => {
+		expect(accentAnsi).toBeDefined();
+		const border = buildComponent(false).getTopBorder(80).content;
+		// Positive: gap is rendered with the theme border color.
 		expect(border).toContain(`${theme.getFgAnsi("border")}${theme.boxRound.horizontal}`);
-		expect(border).toContain("Named session");
+		// Negative: the gap-painting pattern (accent ANSI directly followed by a horizontal
+		// glyph) must not appear. The session_name segment may still emit the accent ANSI
+		// for its own text — we only care that the gap is not accent-painted.
+		expect(border).not.toContain(`${accentAnsi}${theme.boxRound.horizontal}`);
 	});
 });
 
