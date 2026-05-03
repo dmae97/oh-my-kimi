@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.6.4] - 2026-05-03
+
 ### Fixed
 
 - Fixed OpenAI Codex websocket continuations to retry with full context when `previous_response_id` expires server-side instead of surfacing `previous_response_not_found`.
