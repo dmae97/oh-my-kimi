@@ -17,6 +17,7 @@ import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import type { Skill } from "../extensibility/skills";
+import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { callTool } from "../mcp/client";
 import type { MCPManager } from "../mcp/manager";
@@ -163,6 +164,7 @@ export interface ExecutorOptions {
 	settings?: Settings;
 	/** Override local:// protocol options so subagent shares parent's local:// root */
 	localProtocolOptions?: LocalProtocolOptions;
+	parentHindsightSessionState?: HindsightSessionState;
 }
 
 function parseStringifiedJson(value: unknown): unknown {
@@ -979,6 +981,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				hasUI: false,
 				spawns: spawnsEnv,
 				taskDepth: childDepth,
+				parentHindsightSessionState: options.parentHindsightSessionState,
 				parentTaskPrefix: id,
 				agentId: id,
 				agentDisplayName: agent.name,

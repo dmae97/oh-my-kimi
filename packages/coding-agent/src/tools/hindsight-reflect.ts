@@ -1,7 +1,6 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { getHindsightSessionState } from "../hindsight/backend";
 import { ensureBankMission } from "../hindsight/bank";
 import reflectDescription from "../prompts/tools/reflect.md" with { type: "text" };
 import type { ToolSession } from ".";
@@ -29,8 +28,7 @@ export class HindsightReflectTool implements AgentTool<typeof hindsightReflectSc
 
 	async execute(_id: string, params: HindsightReflectParams, signal?: AbortSignal): Promise<AgentToolResult> {
 		return untilAborted(signal, async () => {
-			const sessionId = this.session.getSessionId?.();
-			const state = sessionId ? getHindsightSessionState(sessionId) : undefined;
+			const state = this.session.getHindsightSessionState?.();
 			if (!state) {
 				throw new Error("Hindsight backend is not initialised for this session.");
 			}

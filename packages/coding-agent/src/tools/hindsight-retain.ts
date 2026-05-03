@@ -1,7 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type Static, Type } from "@sinclair/typebox";
-import { getHindsightSessionState } from "../hindsight/backend";
-import { enqueueRetain } from "../hindsight/retain-queue";
 import retainDescription from "../prompts/tools/retain.md" with { type: "text" };
 import type { ToolSession } from ".";
 
@@ -39,18 +37,17 @@ export class HindsightRetainTool implements AgentTool<typeof hindsightRetainSche
 	}
 
 	async execute(_id: string, params: HindsightRetainParams): Promise<AgentToolResult> {
-		const sessionId = this.session.getSessionId?.();
-		const state = sessionId ? getHindsightSessionState(sessionId) : undefined;
-		if (!state || !sessionId) {
+		const state = this.session.getHindsightSessionState?.();
+		if (!state) {
 			throw new Error("Hindsight backend is not initialised for this session.");
 		}
 
-		// Push every item onto the global queue and return immediately. The
-		// queue flushes either when it reaches its batch threshold or when its
-		// debounce timer fires. If the eventual batch fails, the queue
+		// Push every item onto the session-owned queue and return immediately.
+		// The queue flushes either when it reaches its batch threshold or when
+		// its debounce timer fires. If the eventual batch fails, the queue
 		// surfaces a UI-only warning notice — the LLM is not informed.
 		for (const item of params.items) {
-			enqueueRetain(sessionId, item.content, item.context);
+			state.enqueueRetain(item.content, item.context);
 		}
 
 		const count = params.items.length;

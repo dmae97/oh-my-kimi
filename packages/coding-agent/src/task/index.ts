@@ -864,6 +864,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						skills: availableSkills,
 						promptTemplates,
 						localProtocolOptions,
+						parentHindsightSessionState: this.session.getHindsightSessionState?.(),
 					});
 				}
 
@@ -918,6 +919,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						skills: availableSkills,
 						promptTemplates,
 						localProtocolOptions,
+						parentHindsightSessionState: this.session.getHindsightSessionState?.(),
 					});
 					if (mergeMode === "branch" && result.exitCode === 0) {
 						try {

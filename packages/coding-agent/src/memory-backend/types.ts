@@ -9,6 +9,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
+import type { HindsightSessionState } from "../hindsight/state";
 import type { AgentSession } from "../session/agent-session";
 
 export type MemoryBackendId = "off" | "local" | "hindsight";
@@ -19,6 +20,7 @@ export interface MemoryBackendStartOptions {
 	modelRegistry: ModelRegistry;
 	agentDir: string;
 	taskDepth: number;
+	parentHindsightSessionState?: HindsightSessionState;
 }
 
 export interface MemoryBackend {
@@ -37,13 +39,17 @@ export interface MemoryBackend {
 	 * Markdown injected as the system-prompt append section.
 	 * Returned on every prompt rebuild via `refreshBaseSystemPrompt()`.
 	 */
-	buildDeveloperInstructions(agentDir: string, settings: Settings): Promise<string | undefined>;
+	buildDeveloperInstructions(
+		agentDir: string,
+		settings: Settings,
+		session?: AgentSession,
+	): Promise<string | undefined>;
 
 	/** Wipe all persisted state for this backend (slash `/memory clear`). */
-	clear(agentDir: string, cwd: string): Promise<void>;
+	clear(agentDir: string, cwd: string, session?: AgentSession): Promise<void>;
 
 	/** Force consolidation/retain to happen now (slash `/memory enqueue`). */
-	enqueue(agentDir: string, cwd: string): Promise<void>;
+	enqueue(agentDir: string, cwd: string, session?: AgentSession): Promise<void>;
 
 	/**
 	 * Optional hook to inject a backend-specific block into the current turn's
@@ -65,5 +71,9 @@ export interface MemoryBackend {
 	 * to inject nothing — the local backend takes this branch because its
 	 * summary is already part of the system prompt.
 	 */
-	preCompactionContext?(messages: AgentMessage[], settings: Settings): Promise<string | undefined>;
+	preCompactionContext?(
+		messages: AgentMessage[],
+		settings: Settings,
+		session?: AgentSession,
+	): Promise<string | undefined>;
 }

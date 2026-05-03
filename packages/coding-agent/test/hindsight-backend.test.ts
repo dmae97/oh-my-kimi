@@ -10,13 +10,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import {
-	clearHindsightSessionStateForTest,
-	getHindsightSessionState,
-	hindsightBackend,
-	reloadMentalModelsForSession,
-} from "@oh-my-pi/pi-coding-agent/hindsight/backend";
+import { hindsightBackend, reloadMentalModelsForSession } from "@oh-my-pi/pi-coding-agent/hindsight/backend";
 import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
+import type { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state";
 import type { AgentSessionEventListener } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 
 interface FakeSessionDeps {
@@ -28,6 +24,7 @@ interface FakeSessionDeps {
 function makeFakeSession(deps: FakeSessionDeps) {
 	const listeners = new Set<AgentSessionEventListener>();
 	const entries = deps.entries ?? [];
+	let hindsightState: HindsightSessionState | undefined;
 	const session = {
 		sessionId: deps.sessionId,
 		settings: Settings.isolated(),
@@ -64,6 +61,12 @@ function makeFakeSession(deps: FakeSessionDeps) {
 			return () => listeners.delete(listener);
 		},
 		refreshBaseSystemPrompt: vi.fn().mockResolvedValue(undefined),
+		getHindsightSessionState: () => hindsightState,
+		setHindsightSessionState(state: HindsightSessionState | undefined) {
+			const previous = hindsightState;
+			hindsightState = state;
+			return previous;
+		},
 		emit(event: Parameters<AgentSessionEventListener>[0]) {
 			for (const l of [...listeners]) l(event);
 		},
@@ -74,12 +77,10 @@ function makeFakeSession(deps: FakeSessionDeps) {
 describe("hindsightBackend.start", () => {
 	beforeEach(() => {
 		_resetSettingsForTest();
-		clearHindsightSessionStateForTest();
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		clearHindsightSessionStateForTest();
 	});
 
 	it("does nothing when memory.backend is hindsight but apiUrl is empty", async () => {
@@ -94,7 +95,7 @@ describe("hindsightBackend.start", () => {
 			taskDepth: 0,
 		});
 
-		expect(getHindsightSessionState("s1")).toBeUndefined();
+		expect(session.getHindsightSessionState()).toBeUndefined();
 	});
 
 	it("registers per-session state and subscribes to agent events when configured", async () => {
@@ -112,8 +113,30 @@ describe("hindsightBackend.start", () => {
 			taskDepth: 0,
 		});
 
-		expect(getHindsightSessionState("s2")).toBeDefined();
-		expect(getHindsightSessionState("s2")?.bankId).toBeTruthy();
+		expect(session.getHindsightSessionState()).toBeDefined();
+		expect(session.getHindsightSessionState()?.bankId).toBeTruthy();
+	});
+
+	it("rekeys state when the same AgentSession gets a new session id (resume/switch)", async () => {
+		const settings = Settings.isolated({
+			"memory.backend": "hindsight",
+			"hindsight.apiUrl": "http://localhost:8888",
+		});
+		const session = makeFakeSession({ sessionId: "s-before" });
+
+		await hindsightBackend.start({
+			session: session as never,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: "/tmp",
+			taskDepth: 0,
+		});
+
+		expect(session.getHindsightSessionState()).toBeDefined();
+		(session as { sessionId: string | null }).sessionId = "s-after";
+		session.getHindsightSessionState()?.setSessionId("s-after");
+		expect(session.getHindsightSessionState()?.sessionId).toBe("s-after");
+		expect(session.getHindsightSessionState()?.bankId).toBeTruthy();
 	});
 
 	it("retains every Nth user turn on agent_end and skips intermediate turns", async () => {
@@ -166,7 +189,7 @@ describe("hindsightBackend.start", () => {
 			agentDir: "/tmp",
 			taskDepth: 0,
 		});
-		const parentState = getHindsightSessionState("parent");
+		const parentState = parentSession.getHindsightSessionState();
 		expect(parentState).toBeDefined();
 
 		// Subagent runs with taskDepth > 0 should alias the parent.
@@ -177,8 +200,9 @@ describe("hindsightBackend.start", () => {
 			modelRegistry: {} as never,
 			agentDir: "/tmp",
 			taskDepth: 1,
+			parentHindsightSessionState: parentState,
 		});
-		const subState = getHindsightSessionState("sub");
+		const subState = subSession.getHindsightSessionState();
 		expect(subState).toBeDefined();
 		expect(subState?.aliasOf).toBe(parentState);
 		expect(subState?.bankId).toBe(parentState?.bankId);
@@ -205,19 +229,17 @@ describe("hindsightBackend.start", () => {
 			taskDepth: 1,
 		});
 
-		expect(getHindsightSessionState("orphan-sub")).toBeUndefined();
+		expect(session.getHindsightSessionState()).toBeUndefined();
 	});
 });
 
 describe("hindsightBackend.preCompactionContext", () => {
 	beforeEach(() => {
 		_resetSettingsForTest();
-		clearHindsightSessionStateForTest();
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		clearHindsightSessionStateForTest();
 	});
 
 	it("returns undefined when no apiUrl is configured", async () => {
@@ -246,7 +268,7 @@ describe("hindsightBackend.preCompactionContext", () => {
 		} as never);
 
 		const messages: AgentMessage[] = [{ role: "user", content: "What did we decide?", timestamp: 0 } as never];
-		const ctx = await hindsightBackend.preCompactionContext?.(messages, settings);
+		const ctx = await hindsightBackend.preCompactionContext?.(messages, settings, session as never);
 		expect(ctx).toBeDefined();
 		expect(ctx).toContain("<memories>");
 		expect(ctx).toContain("remembered fact");
@@ -268,7 +290,7 @@ describe("hindsightBackend.preCompactionContext", () => {
 
 		vi.spyOn(HindsightApi.prototype, "recall").mockResolvedValue({ results: [] } as never);
 		const messages: AgentMessage[] = [{ role: "user", content: "anything", timestamp: 0 } as never];
-		const ctx = await hindsightBackend.preCompactionContext?.(messages, settings);
+		const ctx = await hindsightBackend.preCompactionContext?.(messages, settings, session as never);
 		expect(ctx).toBeUndefined();
 	});
 });
@@ -276,12 +298,10 @@ describe("hindsightBackend.preCompactionContext", () => {
 describe("hindsightBackend first-turn injection", () => {
 	beforeEach(() => {
 		_resetSettingsForTest();
-		clearHindsightSessionStateForTest();
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		clearHindsightSessionStateForTest();
 	});
 
 	it("returns a tagged block for the current first turn before agent_start", async () => {
@@ -311,8 +331,8 @@ describe("hindsightBackend first-turn injection", () => {
 		);
 		expect(block).toContain("<memories>");
 		expect(block).toContain("Can prefers concise communication");
-		expect(getHindsightSessionState("s8")?.hasRecalledForFirstTurn).toBe(true);
-		expect(getHindsightSessionState("s8")?.lastRecallSnippet).toBe(block);
+		expect(session.getHindsightSessionState()?.hasRecalledForFirstTurn).toBe(true);
+		expect(session.getHindsightSessionState()?.lastRecallSnippet).toBe(block);
 	});
 
 	it("keeps the <memories> wrapper in buildDeveloperInstructions", async () => {
@@ -329,11 +349,11 @@ describe("hindsightBackend first-turn injection", () => {
 			taskDepth: 0,
 		});
 
-		const state = getHindsightSessionState("s9");
+		const state = session.getHindsightSessionState();
 		expect(state).toBeDefined();
 		state!.lastRecallSnippet = "<memories>\nremembered fact\n</memories>";
 
-		const prompt = await hindsightBackend.buildDeveloperInstructions("/tmp", settings);
+		const prompt = await hindsightBackend.buildDeveloperInstructions("/tmp", settings, session as never);
 		expect(prompt).toContain("<memories>");
 		expect(prompt).toContain("</memories>");
 		expect(prompt).toContain("remembered fact");
@@ -356,12 +376,12 @@ describe("hindsightBackend first-turn injection", () => {
 			agentDir: "/tmp",
 			taskDepth: 0,
 		});
-		const state = getHindsightSessionState("s-order");
+		const state = session.getHindsightSessionState();
 		expect(state).toBeDefined();
 		state!.mentalModelsSnippet = "<mental_models>\n# User Preferences\nprefers tabs\n</mental_models>";
 		state!.lastRecallSnippet = "<memories>\nrecalled fact\n</memories>";
 
-		const prompt = await hindsightBackend.buildDeveloperInstructions("/tmp", settings);
+		const prompt = await hindsightBackend.buildDeveloperInstructions("/tmp", settings, session as never);
 		expect(prompt).toBeDefined();
 		// `<memories>` and `<mental_models>` are mentioned in STATIC_INSTRUCTIONS
 		// bullets too. Match the actual injected block opener (tag + newline)
@@ -395,13 +415,13 @@ describe("hindsightBackend first-turn injection", () => {
 			taskDepth: 0,
 		});
 		// Wait for the kicked-off load to settle.
-		await getHindsightSessionState("s-ttl")?.mentalModelsLoadPromise;
-		const state = getHindsightSessionState("s-ttl");
+		await session.getHindsightSessionState()?.mentalModelsLoadPromise;
+		const state = session.getHindsightSessionState();
 		expect(state).toBeDefined();
 		expect(state!.mentalModelsSnippet).toBeUndefined();
 		expect(state!.mentalModelsLoadedAt).toBeDefined();
 		const initialLoadedAt = state!.mentalModelsLoadedAt!;
-		const refreshSpy = session.refreshBaseSystemPrompt as ReturnType<typeof vi.fn>;
+		const refreshSpy = session.refreshBaseSystemPrompt;
 		const callsBefore = refreshSpy.mock.calls.length;
 
 		// Now publish content and trigger a reload.
@@ -418,7 +438,7 @@ describe("hindsightBackend first-turn injection", () => {
 		// Force the loadedAt timestamp to differ so the next assertion is meaningful.
 		state!.mentalModelsLoadedAt = initialLoadedAt - 1000;
 
-		const ok = await reloadMentalModelsForSession("s-ttl");
+		const ok = await reloadMentalModelsForSession(session as never);
 		expect(ok).toBe(true);
 		expect(state!.mentalModelsSnippet).toBeDefined();
 		expect(state!.mentalModelsSnippet).toContain("# User Preferences");
@@ -451,8 +471,9 @@ describe("hindsightBackend first-turn injection", () => {
 			modelRegistry: {} as never,
 			agentDir: "/tmp",
 			taskDepth: 1,
+			parentHindsightSessionState: parent.getHindsightSessionState(),
 		});
-		const ok = await reloadMentalModelsForSession("alias-child");
+		const ok = await reloadMentalModelsForSession(child as never);
 		expect(ok).toBe(false);
 	});
 });
@@ -460,12 +481,10 @@ describe("hindsightBackend first-turn injection", () => {
 describe("hindsightBackend.clear", () => {
 	beforeEach(() => {
 		_resetSettingsForTest();
-		clearHindsightSessionStateForTest();
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		clearHindsightSessionStateForTest();
 	});
 
 	it("drops every registered session state", async () => {
@@ -481,10 +500,10 @@ describe("hindsightBackend.clear", () => {
 			agentDir: "/tmp",
 			taskDepth: 0,
 		});
-		expect(getHindsightSessionState("s7")).toBeDefined();
+		expect(session.getHindsightSessionState()).toBeDefined();
 
-		await hindsightBackend.clear("/tmp", "/tmp");
-		expect(getHindsightSessionState("s7")).toBeUndefined();
+		await hindsightBackend.clear("/tmp", "/tmp", session as never);
+		expect(session.getHindsightSessionState()).toBeUndefined();
 	});
 
 	it("does not delete server-side mental models on /memory clear (server-side state is sacred)", async () => {
@@ -509,7 +528,7 @@ describe("hindsightBackend.clear", () => {
 			taskDepth: 0,
 		});
 
-		await hindsightBackend.clear("/tmp", "/tmp");
+		await hindsightBackend.clear("/tmp", "/tmp", session as never);
 		expect(deleteSpy).not.toHaveBeenCalled();
 	});
 });

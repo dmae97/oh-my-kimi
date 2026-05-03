@@ -3,30 +3,22 @@
  *
  * These exercise the public tool surface (factory gating + execute path) by
  * spying on `HindsightApi.prototype.{retain, recall, reflect}` and stubbing
- * a per-session state via `setHindsightSessionStateForTest`. We deliberately
- * do not boot a real session — these tools only need a populated state
- * accessor and a Settings instance.
+ * Hindsight state on the fake ToolSession. We deliberately do not boot a real
+ * session — these tools only need a populated state accessor and Settings.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import {
-	clearHindsightSessionStateForTest,
-	setHindsightSessionStateForTest,
-} from "@oh-my-pi/pi-coding-agent/hindsight/backend";
 import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
-import {
-	clearRetainQueueForTest,
-	flushSessionQueue,
-	getRetainQueueDepthForTest,
-} from "@oh-my-pi/pi-coding-agent/hindsight/retain-queue";
+import { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state";
 import { HindsightRecallTool } from "@oh-my-pi/pi-coding-agent/tools/hindsight-recall";
 import { HindsightReflectTool } from "@oh-my-pi/pi-coding-agent/tools/hindsight-reflect";
 import { HindsightRetainTool } from "@oh-my-pi/pi-coding-agent/tools/hindsight-retain";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 
 const TEST_SESSION_ID = "test-session-id";
+let registeredState: HindsightSessionState | undefined;
 
 function makeConfig(overrides: Partial<HindsightConfig> = {}): HindsightConfig {
 	return {
@@ -66,6 +58,7 @@ function makeSession(settings: Settings, sessionId: string | null = TEST_SESSION
 		getSessionFile: () => null,
 		getSessionId: () => sessionId,
 		getSessionSpawns: () => null,
+		getHindsightSessionState: () => (sessionId === TEST_SESSION_ID ? registeredState : undefined),
 	} as unknown as ToolSession;
 }
 
@@ -77,7 +70,8 @@ interface RegisterStateOptions {
 }
 
 function registerState(client: HindsightApi, settings?: Settings, opts: RegisterStateOptions = {}) {
-	setHindsightSessionStateForTest(TEST_SESSION_ID, {
+	registeredState = new HindsightSessionState({
+		sessionId: TEST_SESSION_ID,
 		client,
 		bankId: "test-bank",
 		retainTags: opts.retainTags,
@@ -88,6 +82,7 @@ function registerState(client: HindsightApi, settings?: Settings, opts: Register
 			sessionId: TEST_SESSION_ID,
 			sessionManager: { getEntries: () => [] } as never,
 			emitNotice: () => {},
+			getHindsightSessionState: () => registeredState,
 			...opts.sessionOverrides,
 		} as never,
 		missionsSet: new Set(),
@@ -100,12 +95,12 @@ function registerState(client: HindsightApi, settings?: Settings, opts: Register
 describe("Hindsight tool factories", () => {
 	beforeEach(() => {
 		_resetSettingsForTest();
-		clearHindsightSessionStateForTest();
+		registeredState = undefined;
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		clearHindsightSessionStateForTest();
+		registeredState = undefined;
 	});
 
 	it("retain/recall/reflect factories return null when memory.backend !== hindsight", () => {
@@ -128,14 +123,12 @@ describe("Hindsight tool factories", () => {
 describe("retain.execute", () => {
 	beforeEach(() => {
 		_resetSettingsForTest();
-		clearHindsightSessionStateForTest();
-		clearRetainQueueForTest();
+		registeredState = undefined;
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		clearHindsightSessionStateForTest();
-		clearRetainQueueForTest();
+		registeredState = undefined;
 	});
 
 	it("queues the memory and reports success without calling the API", async () => {
@@ -152,7 +145,7 @@ describe("retain.execute", () => {
 		// Tool returns before any HTTP work happens.
 		expect(retainBatchSpy).not.toHaveBeenCalled();
 		expect(retainSpy).not.toHaveBeenCalled();
-		expect(getRetainQueueDepthForTest(TEST_SESSION_ID)).toBe(1);
+		expect(registeredState?.retainQueue.depth).toBe(1);
 	});
 
 	it("flushes a multi-item tool call as a single retainBatch call with per-item context", async () => {
@@ -167,7 +160,7 @@ describe("retain.execute", () => {
 		});
 		expect(result.content[0]).toEqual({ type: "text", text: "2 memories queued." });
 
-		await flushSessionQueue(TEST_SESSION_ID);
+		await registeredState?.flushRetainQueue();
 
 		expect(retainBatchSpy).toHaveBeenCalledTimes(1);
 		const [bankId, items, options] = retainBatchSpy.mock.calls[0];
@@ -186,7 +179,7 @@ describe("retain.execute", () => {
 				tags: ["project:pi"],
 			}),
 		]);
-		expect(getRetainQueueDepthForTest(TEST_SESSION_ID)).toBe(0);
+		expect(registeredState?.retainQueue.depth).toBe(0);
 	});
 
 	it("emits a UI-only warning notice when the batch flush fails", async () => {
@@ -198,7 +191,7 @@ describe("retain.execute", () => {
 
 		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
 		await tool.execute("call-x", { items: [{ content: "doomed fact" }] });
-		await flushSessionQueue(TEST_SESSION_ID);
+		await registeredState?.flushRetainQueue();
 
 		expect(noticeSpy).toHaveBeenCalledTimes(1);
 		const [level, message, source] = noticeSpy.mock.calls[0];
@@ -218,12 +211,12 @@ describe("retain.execute", () => {
 describe("recall.execute", () => {
 	beforeEach(() => {
 		_resetSettingsForTest();
-		clearHindsightSessionStateForTest();
+		registeredState = undefined;
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		clearHindsightSessionStateForTest();
+		registeredState = undefined;
 	});
 
 	it("returns the no-results sentinel when recall yields empty", async () => {
@@ -286,12 +279,12 @@ describe("recall.execute", () => {
 describe("reflect.execute", () => {
 	beforeEach(() => {
 		_resetSettingsForTest();
-		clearHindsightSessionStateForTest();
+		registeredState = undefined;
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		clearHindsightSessionStateForTest();
+		registeredState = undefined;
 	});
 
 	it("returns the reflect text and forwards context", async () => {

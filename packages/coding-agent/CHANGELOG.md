@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `hindsight.mentalModelsEnabled`, `hindsight.mentalModelAutoSeed`, `hindsight.mentalModelRefreshIntervalMs`, and `hindsight.mentalModelMaxRenderChars` settings to control curated Hindsight mental-model activation, seeding, refresh cadence, and prompt render budget
@@ -12,10 +11,14 @@
 
 ### Changed
 
+- Changed `/memory clear` and `/memory enqueue` to apply only to the current agent session’s Hindsight cache instead of all live Hindsight sessions
 - Changed the prompt assembly order so `<mental_models>` blocks are appended before `<memories>` recall blocks in developer instructions
 
 ### Fixed
 
+- Fixed Hindsight memory prompt injection and recall/retain tool execution to resolve against the active session state, preventing context from an unrelated session from being used
+- Fixed subagent `/task` sessions to persist memories into the parent agent’s Hindsight bank by explicit parent state wiring
+- Fixed per-session memory retention behavior when switching or resuming sessions by rekeying Hindsight state and resetting conversation-tracking counters so first-turn recall and nth-turn retain cadence no longer leak across conversations
 - Fixed the first-turn startup race so `<mental_models>` appears in the opening system prompt when mental-model loading is enabled
 - Fixed retention hygiene by stripping `<mental_models>` blocks from retained content to prevent curated summaries from feeding back into future memory writes
 - Fixed `<mental_models>` rendering to honor the configured character budget and truncate with an explicit truncation marker when the snapshot exceeds limits

@@ -19,7 +19,6 @@ import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
 import {
 	diffMentalModelContent,
-	getHindsightSessionState,
 	type HindsightApi,
 	type HindsightSessionState,
 	loadHindsightConfig,
@@ -583,7 +582,7 @@ export class CommandController {
 		const backend = resolveMemoryBackend(this.ctx.settings);
 
 		if (action === "view") {
-			const payload = await backend.buildDeveloperInstructions(agentDir, this.ctx.settings);
+			const payload = await backend.buildDeveloperInstructions(agentDir, this.ctx.settings, this.ctx.session);
 			if (!payload) {
 				this.ctx.showWarning("Memory payload is empty (memory backend off, disabled, or no memory available).");
 				return;
@@ -600,7 +599,7 @@ export class CommandController {
 
 		if (action === "reset" || action === "clear") {
 			try {
-				await backend.clear(agentDir, this.ctx.sessionManager.getCwd());
+				await backend.clear(agentDir, this.ctx.sessionManager.getCwd(), this.ctx.session);
 				await this.ctx.session.refreshBaseSystemPrompt();
 				this.ctx.showStatus("Memory data cleared and system prompt refreshed.");
 			} catch (error) {
@@ -611,7 +610,7 @@ export class CommandController {
 
 		if (action === "enqueue" || action === "rebuild") {
 			try {
-				await backend.enqueue(agentDir, this.ctx.sessionManager.getCwd());
+				await backend.enqueue(agentDir, this.ctx.sessionManager.getCwd(), this.ctx.session);
 				this.ctx.showStatus("Memory consolidation enqueued.");
 			} catch (error) {
 				this.ctx.showError(`Memory enqueue failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -633,12 +632,7 @@ export class CommandController {
 		const verb = parts[0]?.toLowerCase() ?? "list";
 		const arg = parts[1];
 
-		const sessionId = this.ctx.session.sessionId;
-		if (!sessionId) {
-			this.ctx.showError("No active session.");
-			return;
-		}
-		const state = getHindsightSessionState(sessionId);
+		const state = this.ctx.session.getHindsightSessionState();
 		const primary = state && !state.aliasOf ? state : undefined;
 		if (!primary) {
 			this.ctx.showError("Hindsight backend is not active for this session.");
@@ -668,7 +662,7 @@ export class CommandController {
 				await this.#mmSeed(primary);
 				return;
 			case "reload":
-				await this.#mmReload(sessionId);
+				await this.#mmReload(primary);
 				return;
 			case "delete":
 			case "remove":
@@ -768,7 +762,7 @@ export class CommandController {
 			// Reload the cache after a brief grace so the new content (if the refresh
 			// completes synchronously on the server) flows into the system prompt.
 			await Bun.sleep(500);
-			await reloadMentalModelsForSession(state.session.sessionId ?? "");
+			await reloadMentalModelsForSession(state.session);
 		} catch (error) {
 			this.ctx.showError(`mm refresh failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
@@ -852,8 +846,8 @@ export class CommandController {
 		}
 	}
 
-	async #mmReload(sessionId: string): Promise<void> {
-		const ok = await reloadMentalModelsForSession(sessionId);
+	async #mmReload(state: HindsightSessionState): Promise<void> {
+		const ok = await reloadMentalModelsForSession(state.session);
 		if (ok) {
 			this.ctx.showStatus("Mental-model cache reloaded.");
 		} else {
@@ -870,7 +864,7 @@ export class CommandController {
 			}
 			// Drop the cached snippet so the closing tag does not silently keep
 			// stale content in the system prompt until the next agent_end TTL.
-			await reloadMentalModelsForSession(state.session.sessionId ?? "");
+			await reloadMentalModelsForSession(state.session);
 			this.ctx.showStatus(`Deleted mental model ${id} from bank ${state.bankId}.`);
 		} catch (error) {
 			this.ctx.showError(`mm delete failed: ${error instanceof Error ? error.message : String(error)}`);
