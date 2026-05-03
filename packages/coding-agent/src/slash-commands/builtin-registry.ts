@@ -1,13 +1,7 @@
-import * as os from "node:os";
-import * as path from "node:path";
-
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
-import { getConfigDirName } from "@oh-my-pi/pi-utils";
-import { invalidate as invalidateFsCache } from "../capability/fs";
 import type { SettingPath, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
 import {
-	clearClaudePluginRootsCache,
 	clearPluginRootsAndCaches,
 	resolveActiveProjectRegistryPath,
 	resolveOrDefaultProjectRegistryPath,
@@ -942,14 +936,10 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		name: "reload-plugins",
 		description: "Reload all plugins (skills, commands, hooks, tools, agents, MCP)",
 		handle: async (_command, runtime) => {
-			// Invalidate the fs content cache for all registry files so
+			// Invalidate registry fs caches and the plugin roots cache so
 			// listClaudePluginRoots re-reads from disk on next access.
-			const home = os.homedir();
-			invalidateFsCache(path.join(home, ".claude", "plugins", "installed_plugins.json"));
-			invalidateFsCache(path.join(home, getConfigDirName(), "plugins", "installed_plugins.json"));
 			const projectPath = await resolveActiveProjectRegistryPath(runtime.ctx.sessionManager.getCwd());
-			if (projectPath) invalidateFsCache(projectPath);
-			clearClaudePluginRootsCache();
+			clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
 			await runtime.ctx.refreshSlashCommandState();
 			runtime.ctx.showStatus("Plugins reloaded.");
 			runtime.ctx.editor.setText("");

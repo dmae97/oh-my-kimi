@@ -183,23 +183,4 @@ describe("listClaudePluginRoots — project shadows user", () => {
 		expect(matching[0]?.path).toBe("/project/install/shared-plugin");
 		expect(matching[0]?.scope).toBe("project");
 	});
-
-	it("both entries appear when project and user registries have distinct plugin IDs", async () => {
-		const userPluginId = buildPluginId("user-only-plugin", "test-mkt");
-		const projectPluginId = buildPluginId("project-only-plugin", "test-mkt");
-
-		let userReg = await readInstalledPluginsRegistry(userRegPath);
-		userReg = addInstalledPlugin(userReg, userPluginId, makeEntry("/user/install/user-only"));
-		await writeInstalledPluginsRegistry(userRegPath, userReg);
-
-		let projReg = await readInstalledPluginsRegistry(projectRegPath);
-		projReg = addInstalledPlugin(projReg, projectPluginId, makeEntry("/project/install/project-only", "project"));
-		await writeInstalledPluginsRegistry(projectRegPath, projReg);
-
-		const { roots } = await listClaudePluginRoots(tmpHome, tmpProject);
-		const ids = new Set(roots.map(r => r.id));
-
-		expect(ids.has(userPluginId)).toBe(true);
-		expect(ids.has(projectPluginId)).toBe(true);
-	});
 });

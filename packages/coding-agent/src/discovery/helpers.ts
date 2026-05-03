@@ -3,7 +3,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { FileType, glob } from "@oh-my-pi/pi-natives";
-import { CONFIG_DIR_NAME, getConfigDirName, getProjectDir, parseFrontmatter, tryParseJson } from "@oh-my-pi/pi-utils";
+import {
+	CONFIG_DIR_NAME,
+	getConfigDirName,
+	getPluginsDir,
+	getProjectDir,
+	parseFrontmatter,
+	tryParseJson,
+} from "@oh-my-pi/pi-utils";
 import type { ExtensionModule } from "../capability/extension-module";
 import { invalidate as invalidateFsCache, readDirEntries, readFile } from "../capability/fs";
 import { parseRuleConditionAndScope, type Rule, type RuleFrontmatter } from "../capability/rule";
@@ -804,8 +811,9 @@ export async function listClaudePluginRoots(
 
 	// ── OMP installed plugins registry ───────────────────────────────────────
 	// OMP registry is authoritative: its entries replace Claude's entries for the same plugin ID.
-	// Path derived from `home` (not os.homedir()) so test isolation works when home is overridden.
-	const ompRegistryPath = path.join(home, getConfigDirName(), "plugins", "installed_plugins.json");
+	// getPluginsDir() resolves to the same path the marketplace writer uses
+	// (XDG-aware via the dir resolver), so reads and writes always agree.
+	const ompRegistryPath = path.join(getPluginsDir(), "installed_plugins.json");
 	const ompContent = await readFile(ompRegistryPath);
 	if (ompContent) {
 		const ompRegistry = parseClaudePluginsRegistry(ompContent);
@@ -928,9 +936,8 @@ export function clearClaudePluginRootsCache(): void {
  * installing/uninstalling/enabling/disabling plugins.
  */
 export function clearPluginRootsAndCaches(extraPaths?: readonly string[]): void {
-	const home = os.homedir();
-	invalidateFsCache(path.join(home, ".claude", "plugins", "installed_plugins.json"));
-	invalidateFsCache(path.join(home, getConfigDirName(), "plugins", "installed_plugins.json"));
+	invalidateFsCache(path.join(os.homedir(), ".claude", "plugins", "installed_plugins.json"));
+	invalidateFsCache(path.join(getPluginsDir(), "installed_plugins.json"));
 	for (const p of extraPaths ?? []) invalidateFsCache(p);
 	clearClaudePluginRootsCache();
 }
