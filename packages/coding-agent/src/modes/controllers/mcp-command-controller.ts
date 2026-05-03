@@ -658,16 +658,25 @@ export class MCPCommandController {
 			return { filePath: projectPath, scope: "project", config: projectConfig.mcpServers[name] };
 		}
 
-		// Check standalone fallback files (mcp.json, .mcp.json) in project root
+		// Check standalone fallback files (mcp.json, .mcp.json) in the project root —
+		// these match the discovery paths used by the mcp-json provider. Reads run in
+		// parallel (mirroring user/project above) but precedence is preserved by the
+		// for-loop's iteration order: mcp.json wins over .mcp.json on a same-name hit.
 		const standalonePaths = [path.join(cwd, "mcp.json"), path.join(cwd, ".mcp.json")];
-		for (const fallbackPath of standalonePaths) {
-			try {
-				const fallbackConfig = await readMCPConfigFile(fallbackPath);
-				if (fallbackConfig.mcpServers?.[name]) {
-					return { filePath: fallbackPath, scope: "project", config: fallbackConfig.mcpServers[name] };
+		const fallbackConfigs = await Promise.all(
+			standalonePaths.map(async fallbackPath => {
+				try {
+					return await readMCPConfigFile(fallbackPath);
+				} catch {
+					// Malformed JSON in a standalone file — skip and continue lookup.
+					return null;
 				}
-			} catch {
-				// Malformed JSON in standalone file — skip and continue lookup
+			}),
+		);
+		for (const [index, fallbackConfig] of fallbackConfigs.entries()) {
+			const config = fallbackConfig?.mcpServers?.[name];
+			if (config) {
+				return { filePath: standalonePaths[index]!, scope: "project", config };
 			}
 		}
 		return null;
