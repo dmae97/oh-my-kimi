@@ -713,6 +713,10 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 let globalInstance: Settings | null = null;
 let globalInstancePromise: Promise<Settings> | null = null;
 
+export function isSettingsInitialized(): boolean {
+	return globalInstance !== null;
+}
+
 /**
  * Reset the global singleton for testing.
  * @internal
