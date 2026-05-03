@@ -90,6 +90,10 @@ const RPC_DEFAULTED_SETTING_PATHS: SettingPath[] = [
 	"task.maxRecursionDepth",
 	"task.disabledAgents",
 	"task.agentModelOverrides",
+	// Memory subsystems are off-by-default for RPC hosts; embedders that want
+	// memory should opt in explicitly through their own settings layer.
+	"memory.backend",
+	"memories.enabled",
 ];
 
 function applyRpcDefaultSettingOverrides(): void {
