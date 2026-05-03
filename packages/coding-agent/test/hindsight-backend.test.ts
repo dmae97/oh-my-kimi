@@ -150,12 +150,51 @@ describe("hindsightBackend.start", () => {
 		expect(retainSpy).toHaveBeenCalledTimes(1);
 	});
 
-	it("does nothing on subagent runs (taskDepth > 0)", async () => {
+	it("aliases parent state on subagent runs (taskDepth > 0) so tools share the parent bank", async () => {
 		const settings = Settings.isolated({
 			"memory.backend": "hindsight",
 			"hindsight.apiUrl": "http://localhost:8888",
 		});
-		const session = makeFakeSession({ sessionId: "s4" });
+
+		// Register a primary (top-level) state first.
+		const parentSession = makeFakeSession({ sessionId: "parent" });
+		await hindsightBackend.start({
+			session: parentSession as never,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: "/tmp",
+			taskDepth: 0,
+		});
+		const parentState = getHindsightSessionState("parent");
+		expect(parentState).toBeDefined();
+
+		// Subagent runs with taskDepth > 0 should alias the parent.
+		const subSession = makeFakeSession({ sessionId: "sub" });
+		await hindsightBackend.start({
+			session: subSession as never,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: "/tmp",
+			taskDepth: 1,
+		});
+		const subState = getHindsightSessionState("sub");
+		expect(subState).toBeDefined();
+		expect(subState?.aliasOf).toBe(parentState);
+		expect(subState?.bankId).toBe(parentState?.bankId);
+		expect(subState?.client).toBe(parentState?.client);
+		expect(subState?.missionsSet).toBe(parentState?.missionsSet);
+		// Aliases must not subscribe to session events — the parent owns auto-recall/auto-retain.
+		expect(subState?.unsubscribe).toBeUndefined();
+		// hasRecalledForFirstTurn=true suppresses beforeAgentStartPrompt auto-recall on the sub.
+		expect(subState?.hasRecalledForFirstTurn).toBe(true);
+	});
+
+	it("returns silently for subagent runs when no primary state has been registered", async () => {
+		const settings = Settings.isolated({
+			"memory.backend": "hindsight",
+			"hindsight.apiUrl": "http://localhost:8888",
+		});
+		const session = makeFakeSession({ sessionId: "orphan-sub" });
 
 		await hindsightBackend.start({
 			session: session as never,
@@ -165,7 +204,7 @@ describe("hindsightBackend.start", () => {
 			taskDepth: 1,
 		});
 
-		expect(getHindsightSessionState("s4")).toBeUndefined();
+		expect(getHindsightSessionState("orphan-sub")).toBeUndefined();
 	});
 });
 

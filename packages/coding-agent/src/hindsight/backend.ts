@@ -52,6 +52,15 @@ export interface HindsightSessionState {
 	hasRecalledForFirstTurn: boolean;
 	lastRecallSnippet?: string;
 	unsubscribe?: () => void;
+	/**
+	 * When set, this entry is a subagent alias that reuses the parent's bank,
+	 * scope, config, client, and missionsSet. Aliases skip auto-recall and
+	 * auto-retain — those run on the parent only — but the recall/retain/reflect
+	 * tools resolve via the alias so they persist to the same bank as the
+	 * parent. Iteration sites (`enqueue`, `buildDeveloperInstructions`) skip
+	 * aliases to avoid double-counting the shared state.
+	 */
+	aliasOf?: HindsightSessionState;
 }
 
 const STATE_BY_SESSION_ID = new Map<string, HindsightSessionState>();
@@ -82,6 +91,22 @@ export function setHindsightSessionStateForTest(sessionId: string, state: Hindsi
 export function clearHindsightSessionStateForTest(): void {
 	for (const state of STATE_BY_SESSION_ID.values()) state.unsubscribe?.();
 	STATE_BY_SESSION_ID.clear();
+}
+
+/**
+ * Pick a top-level (non-alias) state. Subagent aliases reuse the parent's
+ * state, so when wiring a new subagent we need the originating primary entry
+ * to copy bank/scope/config/missionsSet from. Returns the most recently
+ * registered primary; with one top-level session per process this is the
+ * correct one. Returns undefined when no primary state has been registered.
+ */
+function pickPrimaryState(): HindsightSessionState | undefined {
+	let result: HindsightSessionState | undefined;
+	for (const state of STATE_BY_SESSION_ID.values()) {
+		if (state.aliasOf) continue;
+		result = state;
+	}
+	return result;
 }
 
 interface RecallOutcome {
@@ -219,10 +244,32 @@ export const hindsightBackend: MemoryBackend = {
 	async start(options: MemoryBackendStartOptions): Promise<void> {
 		const { session, settings } = options;
 		const sessionId = session.sessionId;
-		// Subagents and ephemeral runs share the same harness path but Hindsight
-		// only makes sense for top-level persistent sessions.
 		if (!sessionId) return;
-		if (options.taskDepth > 0) return;
+
+		// Subagents alias the parent's state so recall/retain/reflect tool calls
+		// persist to the same Hindsight bank. Auto-recall and auto-retain stay
+		// with the parent — running them per subagent would double-recall and
+		// pollute the bank with internal exploration transcripts.
+		if (options.taskDepth > 0) {
+			const parent = pickPrimaryState();
+			if (!parent) return;
+			const previous = STATE_BY_SESSION_ID.get(sessionId);
+			previous?.unsubscribe?.();
+			STATE_BY_SESSION_ID.set(sessionId, {
+				client: parent.client,
+				bankId: parent.bankId,
+				retainTags: parent.retainTags,
+				recallTags: parent.recallTags,
+				recallTagsMatch: parent.recallTagsMatch,
+				config: parent.config,
+				session,
+				missionsSet: parent.missionsSet,
+				lastRetainedTurn: 0,
+				hasRecalledForFirstTurn: true,
+				aliasOf: parent,
+			});
+			return;
+		}
 
 		const config = loadHindsightConfig(settings);
 		if (!isHindsightConfigured(config)) {
@@ -265,6 +312,7 @@ export const hindsightBackend: MemoryBackend = {
 		// freshest snippet across all states is the correct one.
 		let recallSnippet: string | undefined;
 		for (const state of STATE_BY_SESSION_ID.values()) {
+			if (state.aliasOf) continue;
 			if (state.lastRecallSnippet) recallSnippet = state.lastRecallSnippet;
 		}
 
@@ -315,6 +363,7 @@ export const hindsightBackend: MemoryBackend = {
 	async enqueue(_agentDir, _cwd): Promise<void> {
 		// Force an immediate retain across every active session.
 		for (const state of STATE_BY_SESSION_ID.values()) {
+			if (state.aliasOf) continue;
 			const sessionId = state.session.sessionId;
 			if (!sessionId) continue;
 			const messages = extractMessages(state.session.sessionManager);
