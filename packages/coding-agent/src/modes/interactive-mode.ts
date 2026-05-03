@@ -183,6 +183,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	optimisticUserMessageSignature: string | undefined = undefined;
 	locallySubmittedUserSignatures: Set<string> = new Set();
 	#pendingSubmittedInput: SubmittedUserInput | undefined;
+	#pendingSubmissionDispose: (() => void) | undefined;
 	lastSigintTime = 0;
 	lastEscapeTime = 0;
 	shutdownRequested = false;
@@ -567,6 +568,30 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 	}
 
+	recordLocalSubmission(text: string, imageCount = 0): () => void {
+		if (this.isKnownSlashCommand(text)) {
+			return () => {};
+		}
+		const signature = `${text}\u0000${imageCount}`;
+		this.locallySubmittedUserSignatures.add(signature);
+		let disposed = false;
+		return () => {
+			if (disposed) return;
+			disposed = true;
+			this.locallySubmittedUserSignatures.delete(signature);
+		};
+	}
+
+	async withLocalSubmission<T>(text: string, fn: () => Promise<T>, options?: { imageCount?: number }): Promise<T> {
+		const dispose = this.recordLocalSubmission(text, options?.imageCount ?? 0);
+		try {
+			return await fn();
+		} catch (err) {
+			dispose();
+			throw err;
+		}
+	}
+
 	startPendingSubmission(input: { text: string; images?: ImageContent[] }): SubmittedUserInput {
 		const submission: SubmittedUserInput = {
 			text: input.text,
@@ -575,8 +600,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			started: false,
 		};
 		this.#pendingSubmittedInput = submission;
-		this.optimisticUserMessageSignature = `${submission.text}\u0000${submission.images?.length ?? 0}`;
-		this.locallySubmittedUserSignatures.add(this.optimisticUserMessageSignature);
+		const imageCount = submission.images?.length ?? 0;
+		this.optimisticUserMessageSignature = `${submission.text}\u0000${imageCount}`;
+		this.#pendingSubmissionDispose = this.recordLocalSubmission(submission.text, imageCount);
 		this.addMessageToChat({
 			role: "user",
 			content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
@@ -598,7 +624,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		submission.cancelled = true;
 		this.#pendingSubmittedInput = undefined;
 		this.optimisticUserMessageSignature = undefined;
-		this.locallySubmittedUserSignatures.delete(`${submission.text}\u0000${submission.images?.length ?? 0}`);
+		this.#pendingSubmissionDispose?.();
+		this.#pendingSubmissionDispose = undefined;
 		this.#pendingWorkingMessage = undefined;
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
@@ -624,6 +651,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	finishPendingSubmission(input: SubmittedUserInput): void {
 		if (this.#pendingSubmittedInput === input) {
 			this.#pendingSubmittedInput = undefined;
+			this.#pendingSubmissionDispose = undefined;
 		}
 	}
 
@@ -1223,6 +1251,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	showError(message: string): void {
 		this.#pendingSubmittedInput = undefined;
 		this.optimisticUserMessageSignature = undefined;
+		this.#pendingSubmissionDispose?.();
+		this.#pendingSubmissionDispose = undefined;
 		this.#pendingWorkingMessage = undefined;
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();

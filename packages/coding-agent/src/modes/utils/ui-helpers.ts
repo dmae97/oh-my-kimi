@@ -534,6 +534,16 @@ export class UiHelpers {
 		this.ctx.showStatus("Queued message for after compaction");
 	}
 
+	async #deliverQueuedMessage(message: CompactionQueuedMessage): Promise<void> {
+		if (this.ctx.isKnownSlashCommand(message.text)) {
+			await this.ctx.session.prompt(message.text);
+			return;
+		}
+		await this.ctx.withLocalSubmission(message.text, () =>
+			message.mode === "followUp" ? this.ctx.session.followUp(message.text) : this.ctx.session.steer(message.text),
+		);
+	}
+
 	isKnownSlashCommand(text: string): boolean {
 		if (!text.startsWith("/")) return false;
 		const spaceIndex = text.indexOf(" ");
@@ -576,13 +586,7 @@ export class UiHelpers {
 		try {
 			if (options?.willRetry) {
 				for (const message of queuedMessages) {
-					if (this.ctx.isKnownSlashCommand(message.text)) {
-						await this.ctx.session.prompt(message.text);
-					} else if (message.mode === "followUp") {
-						await this.ctx.session.followUp(message.text);
-					} else {
-						await this.ctx.session.steer(message.text);
-					}
+					await this.#deliverQueuedMessage(message);
 				}
 				this.ctx.updatePendingMessagesDisplay();
 				return;
@@ -607,7 +611,10 @@ export class UiHelpers {
 			const rest = queuedMessages.slice(firstPromptIndex + 1);
 
 			for (const message of preCommands) {
-				await this.ctx.session.prompt(message.text);
+				// preCommands are all slash commands; #deliverQueuedMessage handles
+				// that branch (no local-submission marking needed since slash
+				// commands don't generate a matching user message_start).
+				await this.#deliverQueuedMessage(message);
 			}
 
 			// Pass streamingBehavior so that if the session is still streaming when
@@ -619,22 +626,22 @@ export class UiHelpers {
 			// deferred, the message lands in the same queue every other consumer
 			// (Alt+Up dequeue, post-stream drain) already drains, instead of being
 			// stranded in compactionQueuedMessages with no drainer.
+			//
+			// firstPrompt is fire-and-forget — its rejection is funneled through
+			// `restoreQueue` rather than rethrown, so we use the primitive
+			// recordLocalSubmission and dispose manually in the catch.
+			const disposeFirstPrompt = this.ctx.recordLocalSubmission(firstPrompt.text);
 			const promptPromise = this.ctx.session
 				.prompt(firstPrompt.text, {
 					streamingBehavior: firstPrompt.mode === "followUp" ? "followUp" : "steer",
 				})
 				.catch((error: unknown) => {
+					disposeFirstPrompt();
 					restoreQueue(error);
 				});
 
 			for (const message of rest) {
-				if (this.ctx.isKnownSlashCommand(message.text)) {
-					await this.ctx.session.prompt(message.text);
-				} else if (message.mode === "followUp") {
-					await this.ctx.session.followUp(message.text);
-				} else {
-					await this.ctx.session.steer(message.text);
-				}
+				await this.#deliverQueuedMessage(message);
 			}
 			this.ctx.updatePendingMessagesDisplay();
 			void promptPromise;

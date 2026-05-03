@@ -84,6 +84,8 @@ function makeCtx(initialQueue: CompactionQueuedMessage[]) {
 	const showStatus = mock((_msg: string) => {});
 	const updatePendingMessagesDisplay = mock(() => {});
 
+	const locallySubmittedUserSignatures = new Set<string>();
+	const isKnownSlashCommand = (text: string) => text.startsWith("/");
 	const ctx = {
 		session: fake.session,
 		compactionQueuedMessages: [...initialQueue],
@@ -91,7 +93,28 @@ function makeCtx(initialQueue: CompactionQueuedMessage[]) {
 		editor: { addToHistory: () => {}, setText: () => {}, getText: () => "" },
 		keybindings: { getDisplayString: () => "Alt+Up" },
 		fileSlashCommands: new Set<string>(),
-		isKnownSlashCommand: (text: string) => text.startsWith("/"),
+		locallySubmittedUserSignatures,
+		isKnownSlashCommand,
+		recordLocalSubmission(text: string, imageCount = 0) {
+			if (isKnownSlashCommand(text)) return () => {};
+			const sig = `${text}\u0000${imageCount}`;
+			locallySubmittedUserSignatures.add(sig);
+			let disposed = false;
+			return () => {
+				if (disposed) return;
+				disposed = true;
+				locallySubmittedUserSignatures.delete(sig);
+			};
+		},
+		async withLocalSubmission<T>(text: string, fn: () => Promise<T>, options?: { imageCount?: number }): Promise<T> {
+			const dispose = ctx.recordLocalSubmission(text, options?.imageCount ?? 0);
+			try {
+				return await fn();
+			} catch (err) {
+				dispose();
+				throw err;
+			}
+		},
 		updatePendingMessagesDisplay,
 		showError,
 		showStatus,
@@ -124,6 +147,19 @@ describe("issue #825: steer preview stuck after compaction", () => {
 		expect(remaining.find(m => m.text === "address review feedback")).toBeUndefined();
 	});
 
+	test("marks flushed compaction messages as local submissions before delivery", async () => {
+		const queued: CompactionQueuedMessage[] = [{ text: "draft-safe queued message", mode: "steer" }];
+		const { ctx, fake } = makeCtx(queued);
+		fake.session.isStreaming = false;
+		fake.session.prompt = mock(async (text: string, opts?: PromptOpts): Promise<void> => {
+			fake.promptCalls.push({ text, opts });
+		});
+
+		const helpers = new UiHelpers(ctx);
+		await helpers.flushCompactionQueue({ willRetry: false });
+
+		expect(ctx.locallySubmittedUserSignatures.has("draft-safe queued message\u00000")).toBe(true);
+	});
 	test("when the agent is genuinely idle, flush issues a fresh prompt as before", async () => {
 		const queued: CompactionQueuedMessage[] = [{ text: "ship it", mode: "steer" }];
 		const { ctx, fake } = makeCtx(queued);
@@ -144,5 +180,42 @@ describe("issue #825: steer preview stuck after compaction", () => {
 
 		expect(promptCalls.length).toBe(1);
 		expect(promptCalls[0].text).toBe("ship it");
+	});
+	test("removes the local-submission signature when willRetry delivery rejects", async () => {
+		const queued: CompactionQueuedMessage[] = [{ text: "willRetry boom", mode: "followUp" }];
+		const { ctx, fake } = makeCtx(queued);
+		fake.session.followUp = mock(async () => {
+			throw new Error("delivery failed");
+		});
+
+		const helpers = new UiHelpers(ctx);
+		// flushCompactionQueue funnels rejections through restoreQueue, so it
+		// resolves rather than rethrowing — but the signature must still be
+		// cleared so the restored queue can be re-flushed without stale state.
+		await helpers.flushCompactionQueue({ willRetry: true });
+
+		expect(ctx.locallySubmittedUserSignatures.has("willRetry boom\u00000")).toBe(false);
+		// And the message is restored to compactionQueuedMessages for retry.
+		const remaining = (ctx as unknown as { compactionQueuedMessages: CompactionQueuedMessage[] })
+			.compactionQueuedMessages;
+		expect(remaining.find(m => m.text === "willRetry boom")).toBeDefined();
+	});
+
+	test("removes the local-submission signature when the fire-and-forget firstPrompt rejects", async () => {
+		const queued: CompactionQueuedMessage[] = [{ text: "fire and forget", mode: "steer" }];
+		const { ctx, fake } = makeCtx(queued);
+		// Force the firstPrompt path (not willRetry, no slash commands) to reject.
+		fake.session.prompt = mock(async () => {
+			throw new Error("queue closed");
+		});
+
+		const helpers = new UiHelpers(ctx);
+		await helpers.flushCompactionQueue({ willRetry: false });
+		// Drain microtasks so the .catch on the fire-and-forget prompt resolves.
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(ctx.locallySubmittedUserSignatures.has("fire and forget\u00000")).toBe(false);
 	});
 });

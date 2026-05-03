@@ -38,6 +38,8 @@ async function createContext() {
 	};
 	const setActionKeys = vi.fn();
 	const showModelSelector = vi.fn();
+	const prompt = vi.fn(async () => {});
+	const updatePendingMessagesDisplay = vi.fn();
 	const editor: FakeEditor = {
 		setText(text: string) {
 			editorText = text;
@@ -52,7 +54,7 @@ async function createContext() {
 	};
 	const ctx = {
 		editor: editor as unknown as InteractiveModeContext["editor"],
-		ui: {} as InteractiveModeContext["ui"],
+		ui: { requestRender: vi.fn() } as unknown as InteractiveModeContext["ui"],
 		loadingAnimation: undefined,
 		autoCompactionLoader: undefined,
 		retryLoader: undefined,
@@ -65,13 +67,42 @@ async function createContext() {
 			isBashRunning: false,
 			isEvalRunning: false,
 			extensionRunner: undefined,
-		} as InteractiveModeContext["session"],
+			prompt,
+		} as unknown as InteractiveModeContext["session"],
 		keybindings: {
 			getKeys(action: string) {
 				return keyMap[action] ? [...keyMap[action]] : [];
 			},
 		} as InteractiveModeContext["keybindings"],
 		pendingImages: [],
+		locallySubmittedUserSignatures: new Set<string>(),
+		isKnownSlashCommand: () => false,
+		recordLocalSubmission(this: InteractiveModeContext, text: string, imageCount = 0) {
+			if (this.isKnownSlashCommand(text)) return () => {};
+			const sig = `${text}\u0000${imageCount}`;
+			this.locallySubmittedUserSignatures.add(sig);
+			let disposed = false;
+			return () => {
+				if (disposed) return;
+				disposed = true;
+				this.locallySubmittedUserSignatures.delete(sig);
+			};
+		},
+		async withLocalSubmission<T>(
+			this: InteractiveModeContext,
+			text: string,
+			fn: () => Promise<T>,
+			options?: { imageCount?: number },
+		): Promise<T> {
+			const dispose = this.recordLocalSubmission(text, options?.imageCount ?? 0);
+			try {
+				return await fn();
+			} catch (err) {
+				dispose();
+				throw err;
+			}
+		},
+		updatePendingMessagesDisplay,
 		isBashMode: false,
 		isPythonMode: false,
 		handleHotkeysCommand: vi.fn(),
@@ -96,6 +127,8 @@ async function createContext() {
 		spies: {
 			setActionKeys,
 			showModelSelector,
+			prompt,
+			updatePendingMessagesDisplay,
 		},
 	};
 }
@@ -118,5 +151,65 @@ describe("InputController keybinding setup", () => {
 
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(1, { temporaryOnly: true });
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(2);
+	});
+
+	it("marks streaming follow-up submissions as local", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		const session = ctx.session as unknown as { isStreaming: boolean };
+		session.isStreaming = true;
+		editor.setText("follow up after current response");
+		const controller = new InputController(ctx);
+
+		await controller.handleFollowUp();
+
+		expect(ctx.locallySubmittedUserSignatures.has("follow up after current response\u00000")).toBe(true);
+		expect(spies.prompt).toHaveBeenCalledWith("follow up after current response", {
+			streamingBehavior: "followUp",
+		});
+		expect(spies.updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
+	});
+
+	it("marks idle follow-up submissions as local", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		// Default fake session is idle.
+		editor.setText("plain idle submit");
+		const controller = new InputController(ctx);
+
+		await controller.handleFollowUp();
+
+		expect(ctx.locallySubmittedUserSignatures.has("plain idle submit\u00000")).toBe(true);
+		// Idle submit calls prompt() with no streamingBehavior.
+		expect(spies.prompt).toHaveBeenCalledWith("plain idle submit");
+	});
+
+	it("removes the signature when an idle follow-up submission rejects", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		spies.prompt.mockImplementationOnce(async () => {
+			throw new Error("boom");
+		});
+		editor.setText("doomed submit");
+		const controller = new InputController(ctx);
+
+		await expect(controller.handleFollowUp()).rejects.toThrow("boom");
+
+		// Contract: a thrown delivery error must not leave a stale signature
+		// behind, otherwise the next attempt with the same text would silently
+		// suppress the editor-clear protection that was meant for the failed call.
+		expect(ctx.locallySubmittedUserSignatures.has("doomed submit\u00000")).toBe(false);
+	});
+
+	it("removes the signature when a streaming follow-up rejects", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		const session = ctx.session as unknown as { isStreaming: boolean };
+		session.isStreaming = true;
+		spies.prompt.mockImplementationOnce(async () => {
+			throw new Error("queue full");
+		});
+		editor.setText("queued during stream");
+		const controller = new InputController(ctx);
+
+		await expect(controller.handleFollowUp()).rejects.toThrow("queue full");
+
+		expect(ctx.locallySubmittedUserSignatures.has("queued during stream\u00000")).toBe(false);
 	});
 });

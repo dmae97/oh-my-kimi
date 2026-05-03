@@ -151,6 +151,19 @@ export interface InteractiveModeContext {
 	cancelPendingSubmission(): boolean;
 	markPendingSubmissionStarted(input: SubmittedUserInput): boolean;
 	finishPendingSubmission(input: SubmittedUserInput): void;
+	/**
+	 * Marks a locally-initiated user submission so the eventual `message_start`
+	 * event for that user message does not clobber the editor draft (see #783).
+	 * Returns a dispose function that removes the signature; call it on
+	 * delivery failure so a retry can be re-marked cleanly.
+	 */
+	recordLocalSubmission(text: string, imageCount?: number): () => void;
+	/**
+	 * Wraps `fn` in a `recordLocalSubmission` marker that is automatically
+	 * removed if `fn` rejects. Use this for the common case where a thrown
+	 * delivery error should leave the signature set untouched.
+	 */
+	withLocalSubmission<T>(text: string, fn: () => Promise<T>, options?: { imageCount?: number }): Promise<T>;
 	isKnownSlashCommand(text: string): boolean;
 	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void;
 	renderSessionContext(
