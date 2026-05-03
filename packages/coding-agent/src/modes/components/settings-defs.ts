@@ -33,11 +33,16 @@ interface BaseSettingDef {
 	label: string;
 	description: string;
 	tab: SettingTab;
+	/**
+	 * Optional visibility predicate. When supplied and returning false, the
+	 * setting is hidden from the UI. Applies to every variant — booleans,
+	 * enums, submenus, and text inputs.
+	 */
+	condition?: () => boolean;
 }
 
 export interface BooleanSettingDef extends BaseSettingDef {
 	type: "boolean";
-	condition?: () => boolean;
 }
 
 export interface EnumSettingDef extends BaseSettingDef {
@@ -512,13 +517,11 @@ function pathToSettingDef(path: SettingPath): SettingDef | null {
 	if (!ui) return null;
 
 	const schemaType = getType(path);
-	const base = { path, label: ui.label, description: ui.description, tab: ui.tab };
-
-	// Check for condition
 	const condition = ui.condition ? CONDITIONS[ui.condition] : undefined;
+	const base = { path, label: ui.label, description: ui.description, tab: ui.tab, condition };
 
 	if (schemaType === "boolean") {
-		return { ...base, type: "boolean", condition };
+		return { ...base, type: "boolean" };
 	}
 
 	if (schemaType === "enum") {

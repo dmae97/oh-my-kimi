@@ -288,8 +288,8 @@ export class SettingsSelectorComponent extends Container {
 	 * Convert a setting definition to a SettingItem for the UI.
 	 */
 	#defToItem(def: SettingDef): SettingItem | null {
-		// Check condition
-		if (def.type === "boolean" && def.condition && !def.condition()) {
+		// Check condition: applies to every variant — booleans, enums, submenus, text inputs.
+		if (def.condition && !def.condition()) {
 			return null;
 		}
 
