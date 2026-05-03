@@ -29,6 +29,7 @@
 
 ### Fixed
 
+- Removed non-functional settings controls from the settings UI for values without valid option lists: `display.tabWidth`, `stt.language`, `recap.idleSeconds`, `recap.cacheTtlSeconds`, `recap.words`, `shellMinimizer.settingsPath`, `shellMinimizer.maxCaptureBytes`, `async.maxJobs`, and `bash.autoBackground.thresholdMs`
 - Forwarded project scoping tags to `hindsight` retain, recall, and reflect operations so manual memory commands honor the active tagging mode
 - Fixed legacy migrations by mapping existing `memories.enabled` values to `memory.backend` on load to preserve prior enable/disable behavior
 - Fixed memory retention so recalled `<memories>` blocks and legacy `<hindsight_memories>` / `<relevant_memories>` blocks are stripped before storing transcripts and do not feed back as new memory
