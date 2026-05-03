@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import { computeBankScope, deriveBankId, ensureBankMission } from "@oh-my-pi/pi-coding-agent/hindsight/bank";
+import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
-import { HindsightClient } from "@vectorize-io/hindsight-client";
 
 const baseConfig = (overrides: Partial<HindsightConfig> = {}): HindsightConfig => ({
 	hindsightApiUrl: "http://localhost:8888",
@@ -114,11 +114,11 @@ describe("deriveBankId (legacy wrapper)", () => {
 });
 
 describe("ensureBankMission", () => {
-	let client: HindsightClient;
-	let createSpy: Mock<HindsightClient["createBank"]> | undefined;
+	let client: HindsightApi;
+	let createSpy: Mock<HindsightApi["createBank"]> | undefined;
 
 	beforeEach(() => {
-		client = new HindsightClient({ baseUrl: "http://localhost:8888" });
+		client = new HindsightApi({ baseUrl: "http://localhost:8888" });
 	});
 
 	afterEach(() => {
@@ -126,7 +126,7 @@ describe("ensureBankMission", () => {
 	});
 
 	it("calls createBank exactly once per bank id", async () => {
-		createSpy = vi.spyOn(HindsightClient.prototype, "createBank").mockResolvedValue({} as never);
+		createSpy = vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
 		const seen = new Set<string>();
 		const config = baseConfig({ bankMission: "remember everything", retainMission: "extract facts" });
 
@@ -145,7 +145,7 @@ describe("ensureBankMission", () => {
 	});
 
 	it("is a no-op when no mission is configured", async () => {
-		createSpy = vi.spyOn(HindsightClient.prototype, "createBank").mockResolvedValue({} as never);
+		createSpy = vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
 		const seen = new Set<string>();
 		await ensureBankMission(client, "bank", baseConfig({ bankMission: "" }), seen);
 		await ensureBankMission(client, "bank", baseConfig({ bankMission: "   " }), seen);
@@ -154,7 +154,7 @@ describe("ensureBankMission", () => {
 	});
 
 	it("swallows API failures and does not mark the bank as initialised", async () => {
-		createSpy = vi.spyOn(HindsightClient.prototype, "createBank").mockRejectedValue(new Error("HTTP 500"));
+		createSpy = vi.spyOn(HindsightApi.prototype, "createBank").mockRejectedValue(new Error("HTTP 500"));
 		const seen = new Set<string>();
 		const config = baseConfig({ bankMission: "do the thing" });
 

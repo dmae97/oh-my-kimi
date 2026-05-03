@@ -3,8 +3,8 @@
  *
  * These exercise hindsightBackend.start / preCompactionContext / clear without
  * a real AgentSession by passing a fake session that exposes a `subscribe`
- * method we can drive manually. The HindsightClient is spied via
- * `vi.spyOn(HindsightClient.prototype, ...)` per AGENTS.md.
+ * method we can drive manually. The HindsightApi is spied via
+ * `vi.spyOn(HindsightApi.prototype, ...)` per AGENTS.md.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
@@ -15,8 +15,8 @@ import {
 	getHindsightSessionState,
 	hindsightBackend,
 } from "@oh-my-pi/pi-coding-agent/hindsight/backend";
+import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import type { AgentSessionEventListener } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { HindsightClient } from "@vectorize-io/hindsight-client";
 
 interface FakeSessionDeps {
 	sessionId: string | null;
@@ -121,8 +121,8 @@ describe("hindsightBackend.start", () => {
 			"hindsight.apiUrl": "http://localhost:8888",
 			"hindsight.retainEveryNTurns": 2,
 		});
-		const retainSpy = vi.spyOn(HindsightClient.prototype, "retain").mockResolvedValue({} as never);
-		vi.spyOn(HindsightClient.prototype, "createBank").mockResolvedValue({} as never);
+		const retainSpy = vi.spyOn(HindsightApi.prototype, "retain").mockResolvedValue({} as never);
+		vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
 
 		const entries: Array<{ role: "user" | "assistant"; text: string }> = [];
 		const session = makeFakeSession({ sessionId: "s3", entries });
@@ -201,7 +201,7 @@ describe("hindsightBackend.preCompactionContext", () => {
 			taskDepth: 0,
 		});
 
-		vi.spyOn(HindsightClient.prototype, "recall").mockResolvedValue({
+		vi.spyOn(HindsightApi.prototype, "recall").mockResolvedValue({
 			results: [{ id: "1", text: "remembered fact" }],
 		} as never);
 
@@ -226,7 +226,7 @@ describe("hindsightBackend.preCompactionContext", () => {
 			taskDepth: 0,
 		});
 
-		vi.spyOn(HindsightClient.prototype, "recall").mockResolvedValue({ results: [] } as never);
+		vi.spyOn(HindsightApi.prototype, "recall").mockResolvedValue({ results: [] } as never);
 		const messages: AgentMessage[] = [{ role: "user", content: "anything", timestamp: 0 } as never];
 		const ctx = await hindsightBackend.preCompactionContext?.(messages, settings);
 		expect(ctx).toBeUndefined();
@@ -261,7 +261,7 @@ describe("hindsightBackend first-turn injection", () => {
 			taskDepth: 0,
 		});
 
-		vi.spyOn(HindsightClient.prototype, "recall").mockResolvedValue({
+		vi.spyOn(HindsightApi.prototype, "recall").mockResolvedValue({
 			results: [{ id: "1", text: "Can prefers concise communication" }],
 		} as never);
 

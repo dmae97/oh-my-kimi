@@ -10,12 +10,11 @@
 
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { HindsightClient } from "@vectorize-io/hindsight-client";
 import type { Settings } from "../config/settings";
 import type { MemoryBackend, MemoryBackendStartOptions } from "../memory-backend/types";
 import type { AgentSession } from "../session/agent-session";
 import { computeBankScope, ensureBankMission } from "./bank";
-import { createHindsightClient } from "./client";
+import { createHindsightClient, type HindsightApi } from "./client";
 import { type HindsightConfig, isHindsightConfigured, loadHindsightConfig } from "./config";
 import {
 	composeRecallQuery,
@@ -39,7 +38,7 @@ import { extractMessages } from "./transcript";
  * paying a recall round-trip on every prompt rebuild.
  */
 export interface HindsightSessionState {
-	client: HindsightClient;
+	client: HindsightApi;
 	bankId: string;
 	/** Tags applied to every retain — non-empty in per-project-tagged mode. */
 	retainTags?: string[];

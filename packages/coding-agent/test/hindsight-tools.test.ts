@@ -2,7 +2,7 @@
  * Contract tests for the three Hindsight tool factories.
  *
  * These exercise the public tool surface (factory gating + execute path) by
- * spying on `HindsightClient.prototype.{retain, recall, reflect}` and stubbing
+ * spying on `HindsightApi.prototype.{retain, recall, reflect}` and stubbing
  * a per-session state via `setHindsightSessionStateForTest`. We deliberately
  * do not boot a real session — these tools only need a populated state
  * accessor and a Settings instance.
@@ -14,12 +14,12 @@ import {
 	clearHindsightSessionStateForTest,
 	setHindsightSessionStateForTest,
 } from "@oh-my-pi/pi-coding-agent/hindsight/backend";
+import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
 import { HindsightRecallTool } from "@oh-my-pi/pi-coding-agent/tools/hindsight-recall";
 import { HindsightReflectTool } from "@oh-my-pi/pi-coding-agent/tools/hindsight-reflect";
 import { HindsightRetainTool } from "@oh-my-pi/pi-coding-agent/tools/hindsight-retain";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
-import { HindsightClient } from "@vectorize-io/hindsight-client";
 
 const TEST_SESSION_ID = "test-session-id";
 
@@ -66,7 +66,7 @@ interface RegisterStateOptions {
 	recallTagsMatch?: "any" | "all" | "any_strict" | "all_strict";
 }
 
-function registerState(client: HindsightClient, settings?: Settings, opts: RegisterStateOptions = {}) {
+function registerState(client: HindsightApi, settings?: Settings, opts: RegisterStateOptions = {}) {
 	setHindsightSessionStateForTest(TEST_SESSION_ID, {
 		client,
 		bankId: "test-bank",
@@ -123,8 +123,8 @@ describe("retain.execute", () => {
 
 	it("forwards content + bank id to client.retain and returns success", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
-		const client = new HindsightClient({ baseUrl: "http://localhost:8888" });
-		const retainSpy = vi.spyOn(HindsightClient.prototype, "retain").mockResolvedValue({} as never);
+		const client = new HindsightApi({ baseUrl: "http://localhost:8888" });
+		const retainSpy = vi.spyOn(HindsightApi.prototype, "retain").mockResolvedValue({} as never);
 		registerState(client, settings);
 
 		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
@@ -141,8 +141,8 @@ describe("retain.execute", () => {
 
 	it("forwards retain tags from session state when present", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
-		const client = new HindsightClient({ baseUrl: "http://localhost:8888" });
-		const retainSpy = vi.spyOn(HindsightClient.prototype, "retain").mockResolvedValue({} as never);
+		const client = new HindsightApi({ baseUrl: "http://localhost:8888" });
+		const retainSpy = vi.spyOn(HindsightApi.prototype, "retain").mockResolvedValue({} as never);
 		registerState(client, settings, { retainTags: ["project:pi"] });
 
 		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
@@ -175,8 +175,8 @@ describe("recall.execute", () => {
 
 	it("returns the no-results sentinel when recall yields empty", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
-		const client = new HindsightClient({ baseUrl: "http://localhost:8888" });
-		vi.spyOn(HindsightClient.prototype, "recall").mockResolvedValue({ results: [] } as never);
+		const client = new HindsightApi({ baseUrl: "http://localhost:8888" });
+		vi.spyOn(HindsightApi.prototype, "recall").mockResolvedValue({ results: [] } as never);
 		registerState(client, settings);
 
 		const tool = HindsightRecallTool.createIf(makeSession(settings))!;
@@ -186,8 +186,8 @@ describe("recall.execute", () => {
 
 	it("formats non-empty results with count + UTC timestamp header", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
-		const client = new HindsightClient({ baseUrl: "http://localhost:8888" });
-		vi.spyOn(HindsightClient.prototype, "recall").mockResolvedValue({
+		const client = new HindsightApi({ baseUrl: "http://localhost:8888" });
+		vi.spyOn(HindsightApi.prototype, "recall").mockResolvedValue({
 			results: [
 				{ text: "fact one", type: "world", id: "1" },
 				{ text: "fact two", id: "2" },
@@ -205,8 +205,8 @@ describe("recall.execute", () => {
 
 	it("forwards recall tags + tagsMatch from session state when present", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
-		const client = new HindsightClient({ baseUrl: "http://localhost:8888" });
-		const recallSpy = vi.spyOn(HindsightClient.prototype, "recall").mockResolvedValue({ results: [] } as never);
+		const client = new HindsightApi({ baseUrl: "http://localhost:8888" });
+		const recallSpy = vi.spyOn(HindsightApi.prototype, "recall").mockResolvedValue({ results: [] } as never);
 		registerState(client, settings, { recallTags: ["project:pi"], recallTagsMatch: "any" });
 
 		const tool = HindsightRecallTool.createIf(makeSession(settings))!;
@@ -221,8 +221,8 @@ describe("recall.execute", () => {
 
 	it("rethrows underlying client errors", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
-		const client = new HindsightClient({ baseUrl: "http://localhost:8888" });
-		vi.spyOn(HindsightClient.prototype, "recall").mockRejectedValue(new Error("HTTP 503"));
+		const client = new HindsightApi({ baseUrl: "http://localhost:8888" });
+		vi.spyOn(HindsightApi.prototype, "recall").mockRejectedValue(new Error("HTTP 503"));
 		registerState(client, settings);
 
 		const tool = HindsightRecallTool.createIf(makeSession(settings))!;
@@ -243,9 +243,9 @@ describe("reflect.execute", () => {
 
 	it("returns the reflect text and forwards context", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
-		const client = new HindsightClient({ baseUrl: "http://localhost:8888" });
+		const client = new HindsightApi({ baseUrl: "http://localhost:8888" });
 		const reflectSpy = vi
-			.spyOn(HindsightClient.prototype, "reflect")
+			.spyOn(HindsightApi.prototype, "reflect")
 			.mockResolvedValue({ text: "Synthesised answer" } as never);
 		registerState(client, settings);
 
@@ -261,8 +261,8 @@ describe("reflect.execute", () => {
 
 	it("falls back to a sentinel when reflect returns blank text", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
-		const client = new HindsightClient({ baseUrl: "http://localhost:8888" });
-		vi.spyOn(HindsightClient.prototype, "reflect").mockResolvedValue({ text: "  " } as never);
+		const client = new HindsightApi({ baseUrl: "http://localhost:8888" });
+		vi.spyOn(HindsightApi.prototype, "reflect").mockResolvedValue({ text: "  " } as never);
 		registerState(client, settings);
 
 		const tool = HindsightReflectTool.createIf(makeSession(settings))!;

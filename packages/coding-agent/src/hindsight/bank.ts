@@ -19,7 +19,7 @@
 
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { HindsightClient } from "@vectorize-io/hindsight-client";
+import type { HindsightApi } from "./client";
 import type { HindsightConfig } from "./config";
 
 const DEFAULT_BANK_NAME = "omp";
@@ -99,7 +99,7 @@ export function deriveBankId(config: HindsightConfig, directory: string): string
  * cannot grow unboundedly across long-lived processes.
  */
 export async function ensureBankMission(
-	client: HindsightClient,
+	client: HindsightApi,
 	bankId: string,
 	config: HindsightConfig,
 	missionsSet: Set<string>,

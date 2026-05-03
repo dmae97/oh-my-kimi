@@ -66,8 +66,7 @@
 		"puppeteer-core": "catalog:",
 		"turndown": "catalog:",
 		"turndown-plugin-gfm": "catalog:",
-		"zod": "catalog:",
-		"@vectorize-io/hindsight-client": "catalog:"
+		"zod": "catalog:"
 	},
 	"devDependencies": {
 		"@types/bun": "catalog:",
