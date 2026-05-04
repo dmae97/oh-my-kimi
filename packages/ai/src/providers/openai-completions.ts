@@ -9,6 +9,7 @@ import type {
 	ChatCompletionMessageParam,
 	ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions";
+import packageJson from "../../package.json" with { type: "json" };
 import type { Effort } from "../model-thinking";
 import { calculateCost } from "../models";
 import { getEnvApiKey } from "../stream";
@@ -781,10 +782,26 @@ async function createClient(
 	}
 	const rawApiKey = apiKey;
 
-	let headers = { ...(model.headers ?? {}), ...(extraHeaders ?? {}) };
+	let headers = { ...model.headers };
 	if (model.provider === "openrouter") {
-		headers["X-Title"] = "Oh-My-Pi";
+		// App attribution — opts the agent into OpenRouter's public rankings and per-app
+		// analytics. `HTTP-Referer` is the unique app identifier; without it nothing is
+		// tracked. `X-OpenRouter-Title` is the display name (`X-Title` is the legacy
+		// alias kept for back-compat). `X-OpenRouter-Categories` slots us into the
+		// `cli-agent` marketplace category. `User-Agent` overrides the default OpenAI
+		// SDK UA so traffic is identifiable in upstream provider logs.
+		// https://openrouter.ai/docs/app-attribution
+		headers["User-Agent"] = `Oh-My-Pi/${packageJson.version}`;
+		headers["HTTP-Referer"] = "https://github.com/can1357/oh-my-pi";
+		headers["X-OpenRouter-Title"] = "Oh-My-Pi";
+		headers["X-OpenRouter-Categories"] = "cli-agent";
+		// Always-on response caching: identical requests return cached responses for free.
+		// TTL 1h; first call hits the provider, every identical call within the window
+		// replays from OpenRouter's edge cache. https://openrouter.ai/docs/features/response-caching
+		headers["X-OpenRouter-Cache"] = "true";
+		headers["X-OpenRouter-Cache-TTL"] = "3600";
 	}
+	Object.assign(headers, extraHeaders);
 	if (model.provider === "kimi-code") {
 		headers = { ...getKimiCommonHeaders(), ...headers };
 	}

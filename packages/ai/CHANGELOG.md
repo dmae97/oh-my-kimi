@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added always-on OpenRouter response caching (1h TTL) by sending `X-OpenRouter-Cache: true` and `X-OpenRouter-Cache-TTL: 3600` on every OpenRouter request — identical requests replay from OpenRouter's edge cache for free. https://openrouter.ai/docs/features/response-caching
+
 ## [14.6.4] - 2026-05-03
 
 ### Fixed

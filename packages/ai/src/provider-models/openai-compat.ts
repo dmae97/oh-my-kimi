@@ -764,9 +764,6 @@ export function openrouterModelManagerOptions(
 				provider: "openrouter",
 				baseUrl,
 				apiKey,
-				headers: {
-					"X-Title": "Oh-My-Pi",
-				},
 				filterModel: (entry: OpenAICompatibleModelRecord) => {
 					const params = entry.supported_parameters;
 					return Array.isArray(params) && params.includes("tools");

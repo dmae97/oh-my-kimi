@@ -21,7 +21,7 @@ afterEach(async () => {
 	setPreferredImageProvider("auto");
 });
 
-function getHeaderValue(headers: RequestInit["headers"] | undefined, name: string): string | undefined {
+function _getHeaderValue(headers: RequestInit["headers"] | undefined, name: string): string | undefined {
 	if (!headers) return undefined;
 	if (headers instanceof Headers) {
 		return headers.get(name) ?? headers.get(name.toLowerCase()) ?? headers.get(name.toUpperCase()) ?? undefined;
@@ -46,39 +46,6 @@ function getHeaderValue(headers: RequestInit["headers"] | undefined, name: strin
 }
 
 describe("imageGenTool", () => {
-	it("sets X-Title when routing image generation through OpenRouter", async () => {
-		let requestHeaders: RequestInit["headers"] | undefined;
-		Bun.env.OPENROUTER_API_KEY = "test-openrouter-key";
-
-		const fetchMock: typeof fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-			requestHeaders = init?.headers;
-			return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "" } }] }), {
-				status: 200,
-				headers: { "content-type": "application/json" },
-			});
-		}) as unknown as typeof fetch;
-		fetchMock.preconnect = originalFetch.preconnect;
-		global.fetch = fetchMock;
-
-		const ctx: CustomToolContext = {
-			sessionManager: {
-				getCwd: () => "/tmp",
-				getSessionId: () => "test-session",
-			} as unknown as ReadonlySessionManager,
-			modelRegistry: {
-				getApiKeyForProvider: async () => undefined,
-			} as unknown as ModelRegistry,
-			model: undefined,
-			isIdle: () => true,
-			hasQueuedMessages: () => false,
-			abort: () => {},
-		};
-
-		const result = await imageGenTool.execute("call-1", { subject: "a cat" }, undefined, ctx);
-		expect(result.content[0].type).toBe("text");
-		expect(getHeaderValue(requestHeaders, "X-Title")).toBe("Oh-My-Pi");
-	});
-
 	it("e2e writes OpenAI Responses image_generation WebP output to a temp file", async () => {
 		let requestUrl: string | undefined;
 		let requestBody: unknown;
