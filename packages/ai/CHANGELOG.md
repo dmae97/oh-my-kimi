@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.7.0] - 2026-05-04
 ### Breaking Changes
 
 - Changed `Context.systemPrompt` from a string to `string[]`, so callers must now pass an array of prompts instead of a single string

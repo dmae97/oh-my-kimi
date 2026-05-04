@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.7.0] - 2026-05-04
 ### Breaking Changes
 
 - Changed session system-prompt APIs to use ordered string block arrays by requiring `buildSystemPrompt`, `CreateAgentSessionOptions.systemPrompt`, `Session.rebuildSystemPrompt`, and extension `before_agent_start`/`getSystemPrompt` hooks to accept and return `systemPrompt: string[]` instead of a plain system-prompt string or separate `projectPrompt` field

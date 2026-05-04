@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.7.0] - 2026-05-04
 ### Breaking Changes
 
 - Changed `Agent` API types so `systemPrompt` is now a list of prompt strings, requiring callers to pass and update system prompts via string arrays

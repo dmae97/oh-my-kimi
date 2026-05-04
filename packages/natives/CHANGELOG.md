@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.7.0] - 2026-05-04
 ### Added
 
 - Added `summarizeCode` function to expose native code summarization with `kind`, `startLine`, `endLine`, and optional `text` segments plus parse/elision metadata
