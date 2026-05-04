@@ -203,6 +203,35 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain("call `search_tool_bm25` before concluding no such tool exists");
 	});
 
+	test("buildSystemPrompt renders workspace tree after directory context", async () => {
+		await withTempDir(async dir => {
+			const systemPrompt = await buildSystemPrompt({
+				cwd: dir,
+				contextFiles: [],
+				skills: [],
+				rules: [],
+				toolNames: ["read"],
+				agentsMdSearch: {
+					scopePath: ".",
+					limit: 200,
+					pattern: "AGENTS.md depth 1-4",
+					files: ["packages/coding-agent/AGENTS.md"],
+				},
+				workspaceTree: {
+					rootPath: dir,
+					rendered: ".\n  - src/        1m",
+					truncated: true,
+					totalLines: 2,
+				},
+			});
+
+			expect(systemPrompt).toContain("<workspace-tree>");
+			expect(systemPrompt).toContain("Working directory layout (sorted by mtime, recent first; depth ≤ 3):");
+			expect(systemPrompt).toContain("(some entries elided to keep the tree short");
+			expect(systemPrompt.indexOf("</dir-context>")).toBeLessThan(systemPrompt.indexOf("<workspace-tree>"));
+		});
+	});
+
 	test("buildSystemPrompt deduplicates always-apply rules already present in SYSTEM.md", async () => {
 		const duplicateRule = ["Use static imports.", "", "Do not use dynamic loading."].join("\n");
 		const distinctRule = "Validate inputs at boundaries.";

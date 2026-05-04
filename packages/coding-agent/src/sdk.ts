@@ -140,6 +140,7 @@ import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { queueResolveHandler } from "./tools/resolve";
 import { EventBus } from "./utils/event-bus";
 import { buildNamedToolChoice } from "./utils/tool-choice";
+import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
 // Types
 export interface CreateAgentSessionOptions {
@@ -270,6 +271,7 @@ export type { Skill } from "./extensibility/skills";
 export type { FileSlashCommand } from "./extensibility/slash-commands";
 export type { MCPManager, MCPServerConfig, MCPServerConnection, MCPToolsLoadResult } from "./mcp";
 export type { Tool } from "./tools";
+export { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
 export {
 	// Individual tool classes (for custom usage)
@@ -680,6 +682,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// (~200ms on large repos) and only needs `cwd`, so it can overlap with everything that follows.
 	const agentsMdSearchPromise: Promise<AgentsMdSearch> = logger.time("buildAgentsMdSearch", buildAgentsMdSearch, cwd);
 	agentsMdSearchPromise.catch(() => {});
+	const workspaceTreePromise: Promise<WorkspaceTree> = logger.time("buildWorkspaceTree", buildWorkspaceTree, cwd);
+	workspaceTreePromise.catch(() => {});
 
 	// Independent discoveries that depend only on cwd/agentDir — kicked off in parallel and awaited
 	// at their respective consumer sites. Their work can overlap with model resolution, secret loading,
@@ -1380,6 +1384,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				eagerTasks,
 				secretsEnabled,
 				agentsMdSearch: agentsMdSearchPromise,
+				workspaceTree: workspaceTreePromise,
 			});
 
 			if (options.systemPrompt === undefined) {
@@ -1404,6 +1409,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					eagerTasks,
 					secretsEnabled,
 					agentsMdSearch: agentsMdSearchPromise,
+					workspaceTree: workspaceTreePromise,
 				});
 			}
 			return options.systemPrompt(defaultPrompt);
