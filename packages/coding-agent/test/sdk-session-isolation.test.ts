@@ -149,7 +149,7 @@ describe("createAgentSession session storage isolation", () => {
 
 			const withoutSecrets = await createAgentSession(commonOptions);
 			try {
-				expect(withoutSecrets.session.systemPrompt).not.toContain(redactionGuidance);
+				expect(withoutSecrets.session.systemPrompt.join("\n")).not.toContain(redactionGuidance);
 			} finally {
 				await withoutSecrets.session.dispose();
 			}
@@ -159,7 +159,7 @@ describe("createAgentSession session storage isolation", () => {
 
 			const withSecrets = await createAgentSession(commonOptions);
 			try {
-				expect(withSecrets.session.systemPrompt).toContain(redactionGuidance);
+				expect(withSecrets.session.systemPrompt.join("\n")).toContain(redactionGuidance);
 			} finally {
 				await withSecrets.session.dispose();
 			}

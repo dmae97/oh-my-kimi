@@ -73,8 +73,8 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			);
 			expect(session.getActiveToolNames()).toContain("default_active_tool");
 			expect(session.getActiveToolNames()).not.toContain("default_inactive_tool");
-			expect(session.systemPrompt).toContain("default_active_tool");
-			expect(session.systemPrompt).not.toContain("default_inactive_tool");
+			expect(session.systemPrompt.join("\n")).toContain("default_active_tool");
+			expect(session.systemPrompt.join("\n")).not.toContain("default_inactive_tool");
 		} finally {
 			await session.dispose();
 		}
@@ -106,7 +106,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			expect(session.getActiveToolNames()).toEqual(
 				expect.arrayContaining(["read", "default_active_tool", "default_inactive_tool"]),
 			);
-			expect(session.systemPrompt).toContain("default_inactive_tool");
+			expect(session.systemPrompt.join("\n")).toContain("default_inactive_tool");
 		} finally {
 			await session.dispose();
 		}
