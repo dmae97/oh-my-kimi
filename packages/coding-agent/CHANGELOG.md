@@ -13,6 +13,7 @@
 - Added `buildWorkspaceTree` and `WorkspaceTree` exports so callers can precompute and pass a workspace context to prompt generation
 - Added `workspaceTree` support to `buildSystemPrompt` options to reuse a prebuilt directory snapshot
 - Added `read.summarize.enabled`, `read.summarize.minBodyLines`, and `read.summarize.minCommentLines` settings to control whether `read` returns structural summaries and how many multiline body/comment lines are collapsed
+- Added `edit.hashlineAutoDropPureInsertDuplicates` setting to opt into dropping 2+ pure-insert hashline payload lines that duplicate adjacent file context; default is `false`.
 
 ### Changed
 
@@ -22,7 +23,7 @@
 - Changed default `read` output for parseable code files without an explicit selector to return a structural summary instead of full verbatim lines, while still supporting full output for `:raw` and explicit ranges
 - Changed truncation/pagination hints in read, archive, and SQLite outputs to use colon syntax (`Use :<offset>`) when continuing reads
 - Changed the read tool UI preview title to include summary elision counts when a summary is returned
-- Extended hashline edit tool's auto-absorb mechanism to pure inserts (`+ ANCHOR`, `< ANCHOR`, `+ BOF`, `+ EOF`, `< BOF`, `< EOF`): leading payload lines that duplicate file lines immediately above the insertion point, or trailing payload lines that duplicate file lines immediately below it, are dropped automatically (matching the existing 2-line-minimum threshold used for `= A..B` boundary absorption). A warning is surfaced when this happens.
+- Changed hashline pure-insert duplicate auto-drop to be opt-in through `edit.hashlineAutoDropPureInsertDuplicates` instead of always enabled.
 
 ### Fixed
 

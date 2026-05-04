@@ -49,6 +49,10 @@ function applyDiff(content: string, diff: string): string {
 	return applyHashlineEdits(content, parseHashline(diff)).lines;
 }
 
+function applyDiffWithPureInsertAutoDrop(content: string, diff: string): string {
+	return applyHashlineEdits(content, parseHashline(diff), { autoDropPureInsertDuplicates: true }).lines;
+}
+
 async function withTempDir(fn: (tempDir: string) => Promise<void>): Promise<void> {
 	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "hashline-edit-"));
 	try {
@@ -58,9 +62,13 @@ async function withTempDir(fn: (tempDir: string) => Promise<void>): Promise<void
 	}
 }
 
-function hashlineExecuteOptions(tempDir: string, input: string): ExecuteHashlineSingleOptions {
+function hashlineExecuteOptions(
+	tempDir: string,
+	input: string,
+	settings = Settings.isolated(),
+): ExecuteHashlineSingleOptions {
 	return {
-		session: { cwd: tempDir } as ToolSession,
+		session: { cwd: tempDir, settings } as ToolSession,
 		input,
 		writethrough: async (targetPath, content) => {
 			await Bun.write(targetPath, content);
@@ -169,12 +177,18 @@ describe("hashline parser — block op syntax", () => {
 		);
 	});
 
+	it("does not auto-drop pure-insert duplicate boundaries by default", () => {
+		const source = ["aaa", "bbb", "ccc"].join("\n");
+		const diff = [`+ ${tag(2, "bbb")}`, pl("aaa"), pl("bbb"), pl("NEW")].join("\n");
+		expect(applyDiff(source, diff)).toBe("aaa\nbbb\naaa\nbbb\nNEW\nccc");
+	});
+
 	it("auto-absorbs duplicated leading payload of a pure `+ ANCHOR` insert", () => {
 		// `+ 2 ~aaa ~bbb ~NEW`: payload echoes the two file lines AT/ABOVE the
 		// insertion point (aaa, bbb), then adds NEW. The leading echo is absorbed.
 		const source = ["aaa", "bbb", "ccc"].join("\n");
 		const diff = [`+ ${tag(2, "bbb")}`, pl("aaa"), pl("bbb"), pl("NEW")].join("\n");
-		expect(applyDiff(source, diff)).toBe("aaa\nbbb\nNEW\nccc");
+		expect(applyDiffWithPureInsertAutoDrop(source, diff)).toBe("aaa\nbbb\nNEW\nccc");
 	});
 
 	it("auto-absorbs context-wrap echo (leading-above + trailing-below) on `+ ANCHOR`", () => {
@@ -183,7 +197,7 @@ describe("hashline parser — block op syntax", () => {
 		// only NEW inserted after bbb.
 		const source = ["aaa", "bbb", "ccc", "ddd"].join("\n");
 		const diff = [`+ ${tag(2, "bbb")}`, pl("aaa"), pl("bbb"), pl("NEW"), pl("ccc"), pl("ddd")].join("\n");
-		expect(applyDiff(source, diff)).toBe("aaa\nbbb\nNEW\nccc\nddd");
+		expect(applyDiffWithPureInsertAutoDrop(source, diff)).toBe("aaa\nbbb\nNEW\nccc\nddd");
 	});
 
 	it("auto-absorbs duplicated trailing payload of a pure `< ANCHOR` insert", () => {
@@ -191,21 +205,21 @@ describe("hashline parser — block op syntax", () => {
 		// line after it. Drop the trailing duplicates.
 		const source = ["aaa", "bbb", "ccc", "ddd"].join("\n");
 		const diff = [`< ${tag(3, "ccc")}`, pl("NEW"), pl("ccc"), pl("ddd")].join("\n");
-		expect(applyDiff(source, diff)).toBe("aaa\nbbb\nNEW\nccc\nddd");
+		expect(applyDiffWithPureInsertAutoDrop(source, diff)).toBe("aaa\nbbb\nNEW\nccc\nddd");
 	});
 
 	it("auto-absorbs duplicated leading payload at EOF insert", () => {
 		const source = ["aaa", "bbb", "ccc"].join("\n");
 		// `+ EOF` payload echoes the last two file lines, then adds NEW.
 		const diff = ["+ EOF", pl("bbb"), pl("ccc"), pl("NEW")].join("\n");
-		expect(applyDiff(source, diff)).toBe("aaa\nbbb\nccc\nNEW");
+		expect(applyDiffWithPureInsertAutoDrop(source, diff)).toBe("aaa\nbbb\nccc\nNEW");
 	});
 
 	it("auto-absorbs duplicated trailing payload at BOF insert", () => {
 		const source = ["aaa", "bbb", "ccc"].join("\n");
 		// `< BOF` payload prepends NEW but trails with the first two file lines.
 		const diff = ["< BOF", pl("NEW"), pl("aaa"), pl("bbb")].join("\n");
-		expect(applyDiff(source, diff)).toBe("NEW\naaa\nbbb\nccc");
+		expect(applyDiffWithPureInsertAutoDrop(source, diff)).toBe("NEW\naaa\nbbb\nccc");
 	});
 
 	it("does not auto-absorb a single duplicated boundary line in a pure insert", () => {
@@ -213,13 +227,13 @@ describe("hashline parser — block op syntax", () => {
 		const source = ["aaa", "bbb", "ccc"].join("\n");
 		const diff = [`+ ${tag(2, "bbb")}`, pl("bbb"), pl("NEW")].join("\n");
 		// Only "bbb" matches above; that's a 1-line dup, not absorbed.
-		expect(applyDiff(source, diff)).toBe("aaa\nbbb\nbbb\nNEW\nccc");
+		expect(applyDiffWithPureInsertAutoDrop(source, diff)).toBe("aaa\nbbb\nbbb\nNEW\nccc");
 	});
 
 	it("surfaces a warning when pure-insert duplicates are auto-dropped", () => {
 		const source = ["aaa", "bbb", "ccc"].join("\n");
 		const diff = [`+ ${tag(2, "bbb")}`, pl("aaa"), pl("bbb"), pl("NEW")].join("\n");
-		const result = applyHashlineEdits(source, parseHashline(diff));
+		const result = applyHashlineEdits(source, parseHashline(diff), { autoDropPureInsertDuplicates: true });
 		expect(result.lines).toBe("aaa\nbbb\nNEW\nccc");
 		expect(result.warnings).toBeDefined();
 		expect(result.warnings).toEqual(
@@ -379,6 +393,24 @@ describe("hashline executor", () => {
 			const result = await executeHashlineSingle(hashlineExecuteOptions(tempDir, input));
 			expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("new.ts:");
 			expect(await Bun.file(path.join(tempDir, "new.ts")).text()).toBe("export const x = 1;");
+		});
+	});
+
+	it("honors the pure-insert duplicate auto-drop setting", async () => {
+		await withTempDir(async tempDir => {
+			const filePath = path.join(tempDir, "a.ts");
+			const source = ["aaa", "bbb", "ccc"].join("\n");
+			const input = `@a.ts\n+ ${tag(2, "bbb")}\n${pl("aaa")}\n${pl("bbb")}\n${pl("NEW")}\n`;
+
+			await Bun.write(filePath, source);
+			await executeHashlineSingle(hashlineExecuteOptions(tempDir, input));
+			expect(await Bun.file(filePath).text()).toBe("aaa\nbbb\naaa\nbbb\nNEW\nccc");
+
+			await Bun.write(filePath, source);
+			const enabled = Settings.isolated({ "edit.hashlineAutoDropPureInsertDuplicates": true });
+			const result = await executeHashlineSingle(hashlineExecuteOptions(tempDir, input, enabled));
+			expect(await Bun.file(filePath).text()).toBe("aaa\nbbb\nNEW\nccc");
+			expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("Auto-dropped");
 		});
 	});
 

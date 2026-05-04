@@ -32,6 +32,7 @@ export interface StreamingDiffContext {
 	signal: AbortSignal;
 	fuzzyThreshold?: number;
 	allowFuzzy?: boolean;
+	hashlineAutoDropPureInsertDuplicates?: boolean;
 }
 
 export interface EditStreamingStrategy<Args = unknown> {
@@ -222,7 +223,11 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 	async computeDiffPreview(args, ctx) {
 		if (typeof args.input !== "string" || args.input.length === 0) return null;
 		ctx.signal.throwIfAborted();
-		const result = await computeHashlineDiff({ input: args.input, path: args.path }, ctx.cwd);
+		const result = await computeHashlineDiff(
+			{ input: args.input, path: args.path },
+			ctx.cwd,
+			{ autoDropPureInsertDuplicates: ctx.hashlineAutoDropPureInsertDuplicates },
+		);
 		ctx.signal.throwIfAborted();
 		if ("error" in result && !args.path) return [{ path: "", error: result.error }];
 		return [toPerFilePreview(args.path ?? "", result)];

@@ -103,6 +103,9 @@ export interface CompactHashlineDiffOptions {
 	/** Maximum entries kept on each side of an unchanged-context truncation (default: 2). */
 	maxUnchangedRun?: number;
 }
+export interface HashlineApplyOptions {
+	autoDropPureInsertDuplicates?: boolean;
+}
 
 export interface SplitHashlineOptions {
 	cwd?: string;
@@ -1146,6 +1149,7 @@ function absorbReplacementBoundaryDuplicates(
 	edits: HashlineEdit[],
 	fileLines: string[],
 	warnings: string[],
+	options: HashlineApplyOptions,
 ): HashlineEdit[] {
 	let nextSyntheticIndex = edits.length;
 	const absorbed: HashlineEdit[] = [];
@@ -1160,43 +1164,45 @@ function absorbReplacementBoundaryDuplicates(
 	for (let index = 0; index < edits.length; index++) {
 		const group = findReplacementGroup(edits, index);
 		if (!group) {
-			const pureInsert = findPureInsertGroup(edits, index);
-			if (pureInsert) {
-				const result = tryAbsorbPureInsertGroup(pureInsert, fileLines);
-				if (result.absorbedLeading > 0 || result.absorbedTrailing > 0) {
-					if (result.leadingFileRange) {
-						const { start, end } = result.leadingFileRange;
-						const key = `pure-insert-leading:${start}..${end}`;
-						if (!emittedAbsorbKeys.has(key)) {
-							emittedAbsorbKeys.add(key);
-							warnings.push(
-								`Auto-dropped ${result.absorbedLeading} duplicate line(s) at the start of insert at line ${pureInsert.sourceLineNum} ` +
-									`(file lines ${start}..${end} already match the payload's leading lines).`,
-							);
+			if (options.autoDropPureInsertDuplicates) {
+				const pureInsert = findPureInsertGroup(edits, index);
+				if (pureInsert) {
+					const result = tryAbsorbPureInsertGroup(pureInsert, fileLines);
+					if (result.absorbedLeading > 0 || result.absorbedTrailing > 0) {
+						if (result.leadingFileRange) {
+							const { start, end } = result.leadingFileRange;
+							const key = `pure-insert-leading:${start}..${end}`;
+							if (!emittedAbsorbKeys.has(key)) {
+								emittedAbsorbKeys.add(key);
+								warnings.push(
+									`Auto-dropped ${result.absorbedLeading} duplicate line(s) at the start of insert at line ${pureInsert.sourceLineNum} ` +
+										`(file lines ${start}..${end} already match the payload's leading lines).`,
+								);
+							}
 						}
-					}
-					if (result.trailingFileRange) {
-						const { start, end } = result.trailingFileRange;
-						const key = `pure-insert-trailing:${start}..${end}`;
-						if (!emittedAbsorbKeys.has(key)) {
-							emittedAbsorbKeys.add(key);
-							warnings.push(
-								`Auto-dropped ${result.absorbedTrailing} duplicate line(s) at the end of insert at line ${pureInsert.sourceLineNum} ` +
-									`(file lines ${start}..${end} already match the payload's trailing lines).`,
-							);
+						if (result.trailingFileRange) {
+							const { start, end } = result.trailingFileRange;
+							const key = `pure-insert-trailing:${start}..${end}`;
+							if (!emittedAbsorbKeys.has(key)) {
+								emittedAbsorbKeys.add(key);
+								warnings.push(
+									`Auto-dropped ${result.absorbedTrailing} duplicate line(s) at the end of insert at line ${pureInsert.sourceLineNum} ` +
+										`(file lines ${start}..${end} already match the payload's trailing lines).`,
+								);
+							}
 						}
+						for (const text of result.keptPayload) {
+							absorbed.push({
+								kind: "insert",
+								cursor: cloneCursor(pureInsert.cursor),
+								text,
+								lineNum: pureInsert.sourceLineNum,
+								index: nextSyntheticIndex++,
+							});
+						}
+						index = pureInsert.endIndex;
+						continue;
 					}
-					for (const text of result.keptPayload) {
-						absorbed.push({
-							kind: "insert",
-							cursor: cloneCursor(pureInsert.cursor),
-							text,
-							lineNum: pureInsert.sourceLineNum,
-							index: nextSyntheticIndex++,
-						});
-					}
-					index = pureInsert.endIndex;
-					continue;
 				}
 			}
 			absorbed.push(edits[index]);
@@ -1272,7 +1278,11 @@ function bucketAnchorEditsByLine(edits: IndexedEdit[]): Map<number, IndexedEdit[
 	return byLine;
 }
 
-export function applyHashlineEdits(text: string, edits: HashlineEdit[]): HashlineApplyResult {
+export function applyHashlineEdits(
+	text: string,
+	edits: HashlineEdit[],
+	options: HashlineApplyOptions = {},
+): HashlineApplyResult {
 	if (edits.length === 0) return { lines: text, firstChangedLine: undefined };
 
 	const fileLines = text.split("\n");
@@ -1287,7 +1297,7 @@ export function applyHashlineEdits(text: string, edits: HashlineEdit[]): Hashlin
 	const mismatches = validateHashlineAnchors(edits, fileLines, warnings);
 	if (mismatches.length > 0) throw new HashlineMismatchError(mismatches, fileLines);
 
-	const normalizedEdits = absorbReplacementBoundaryDuplicates(edits, fileLines, warnings);
+	const normalizedEdits = absorbReplacementBoundaryDuplicates(edits, fileLines, warnings, options);
 
 	// Normalize after_anchor inserts to before_anchor of the next line, or EOF
 	// when the anchor is the final line. This keeps the bucketing logic below
@@ -1510,6 +1520,7 @@ async function readHashlineFileText(file: { text(): Promise<string> }, pathText:
 export async function computeHashlineDiff(
 	input: { input: string; path?: string },
 	cwd: string,
+	options: HashlineApplyOptions = {},
 ): Promise<{ diff: string; firstChangedLine: number | undefined } | { error: string }> {
 	try {
 		const sections = splitHashlineInputs(input.input, { cwd, path: input.path });
@@ -1522,7 +1533,7 @@ export async function computeHashlineDiff(
 		const rawContent = await readHashlineFileText(Bun.file(absolutePath), section.path);
 		const { text: content } = stripBom(rawContent);
 		const normalized = normalizeToLF(content);
-		const result = applyHashlineEdits(normalized, parseHashline(section.diff));
+		const result = applyHashlineEdits(normalized, parseHashline(section.diff), options);
 		if (normalized === result.lines) return { error: `No changes would be made to ${section.path}.` };
 		return generateDiffString(normalized, result.lines);
 	} catch (err) {
@@ -1560,6 +1571,12 @@ function formatNoChangeDiagnostic(pathText: string): string {
 	return `Edits to ${pathText} resulted in no changes being made.`;
 }
 
+function getHashlineApplyOptions(session: ToolSession): HashlineApplyOptions {
+	return {
+		autoDropPureInsertDuplicates: session.settings.get("edit.hashlineAutoDropPureInsertDuplicates"),
+	};
+}
+
 function getTextContent(result: AgentToolResult<EditToolDetails>): string {
 	return result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
 }
@@ -1586,7 +1603,7 @@ async function preflightHashlineSection(options: ExecuteHashlineSingleOptions & 
 
 	const { text } = stripBom(source.rawContent);
 	const normalized = normalizeToLF(text);
-	const result = applyHashlineEdits(normalized, edits);
+	const result = applyHashlineEdits(normalized, edits, getHashlineApplyOptions(session));
 	if (normalized === result.lines) throw new Error(formatNoChangeDiagnostic(sectionPath));
 }
 
@@ -1614,7 +1631,7 @@ async function executeHashlineSection(
 	const { bom, text } = stripBom(source.rawContent);
 	const originalEnding = detectLineEnding(text);
 	const originalNormalized = normalizeToLF(text);
-	const result = applyHashlineEdits(originalNormalized, edits);
+	const result = applyHashlineEdits(originalNormalized, edits, getHashlineApplyOptions(session));
 
 	if (originalNormalized === result.lines) {
 		return {
