@@ -726,7 +726,7 @@ export function renderTable(
 		parts.push(
 			truncateToWidth(
 				replaceTabs(
-					`[${remaining} more rows; use sel="${meta.table}?limit=${meta.limit}&offset=${nextOffset}" to continue]`,
+					`[${remaining} more rows; append :${meta.table}?limit=${meta.limit}&offset=${nextOffset} to the database path to continue]`,
 				),
 				MAX_RENDER_WIDTH,
 			),

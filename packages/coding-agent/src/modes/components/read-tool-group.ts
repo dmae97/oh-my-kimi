@@ -8,6 +8,7 @@ import type { ToolExecutionHandle } from "./tool-execution";
 type ReadRenderArgs = {
 	path?: string;
 	file_path?: string;
+	// Legacy field from the old schema; tolerated for rebuilt transcripts.
 	sel?: string;
 };
 
@@ -37,7 +38,6 @@ function getSuffixResolution(details: ReadToolResultDetails | undefined): ReadTo
 type ReadEntry = {
 	toolCallId: string;
 	path: string;
-	sel?: string;
 	status: "pending" | "success" | "warning" | "error";
 	correctedFrom?: string;
 	contentText?: string;
@@ -62,15 +62,14 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	updateArgs(args: ReadRenderArgs, toolCallId?: string): void {
 		if (!toolCallId) return;
-		const rawPath = args.file_path || args.path || "";
+		const basePath = args.file_path || args.path || "";
+		const rawPath = args.sel ? `${basePath}:${args.sel}` : basePath;
 		const entry: ReadEntry = this.#entries.get(toolCallId) ?? {
 			toolCallId,
 			path: rawPath,
-			sel: args.sel,
 			status: "pending",
 		};
 		entry.path = rawPath;
-		entry.sel = args.sel;
 		this.#entries.set(toolCallId, entry);
 		this.#updateDisplay();
 	}
@@ -172,9 +171,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#addContentPreview(entry: ReadEntry): void {
 		const lang = getLanguageFromPath(entry.path);
 		const filePath = shortenPath(entry.path);
-		const selectionSuffix = entry.sel ? `:${entry.sel}` : "";
 		const correctionSuffix = entry.correctedFrom ? ` (corrected from ${shortenPath(entry.correctedFrom)})` : "";
-		const title = filePath ? `Read ${filePath}${selectionSuffix}${correctionSuffix}` : `Read${selectionSuffix}`;
+		const title = filePath ? `Read ${filePath}${correctionSuffix}` : "Read";
 		let cachedWidth: number | undefined;
 		let cachedLines: string[] | undefined;
 		const expanded = this.#expanded;
@@ -211,9 +209,6 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#formatPath(entry: ReadEntry): string {
 		const filePath = shortenPath(entry.path);
 		let pathDisplay = filePath ? theme.fg("accent", filePath) : theme.fg("toolOutput", "…");
-		if (entry.sel) {
-			pathDisplay += theme.fg("warning", `:${entry.sel}`);
-		}
 		if (entry.correctedFrom) {
 			pathDisplay += theme.fg("dim", ` (corrected from ${shortenPath(entry.correctedFrom)})`);
 		}

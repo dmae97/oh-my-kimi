@@ -5,6 +5,7 @@ import * as url from "node:url";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+const FILE_LINE_RANGE_RE = /^(?:L?\d+(?:[-+]L?\d+)?|raw)$/i;
 const NARROW_NO_BREAK_SPACE = "\u202F";
 const TOP_LEVEL_INTERNAL_URL_PREFIXES = [
 	"agent://",
@@ -100,6 +101,16 @@ export function expandTilde(filePath: string, home?: string): string {
 export function expandPath(filePath: string): string {
 	const normalized = stripFileUrl(normalizeUnicodeSpaces(normalizeAtPrefix(filePath)));
 	return expandTilde(normalized);
+}
+
+export function splitPathAndSel(rawPath: string): { path: string; sel?: string } {
+	const colon = rawPath.lastIndexOf(":");
+	if (colon <= 0) return { path: rawPath };
+
+	const candidate = rawPath.slice(colon + 1);
+	if (!FILE_LINE_RANGE_RE.test(candidate)) return { path: rawPath };
+
+	return { path: rawPath.slice(0, colon), sel: candidate };
 }
 
 function assertNotInternalUrl(expanded: string, original: string): void {

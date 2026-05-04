@@ -243,6 +243,7 @@ export const readImageFromClipboard = nativeBindings.readImageFromClipboard;
 export const sanitizeText = nativeBindings.sanitizeText;
 export const search = nativeBindings.search;
 export const sliceWithWidth = nativeBindings.sliceWithWidth;
+export const summarizeCode = nativeBindings.summarizeCode;
 export const supportsLanguage = nativeBindings.supportsLanguage;
 export const truncateToWidth = nativeBindings.truncateToWidth;
 export const visibleWidth = nativeBindings.visibleWidth;

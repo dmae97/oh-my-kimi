@@ -46,6 +46,7 @@ pub mod projfs_overlay;
 pub mod ps;
 pub mod pty;
 pub mod shell;
+pub mod summary;
 pub mod task;
 pub mod text;
 pub mod tokens;

@@ -274,13 +274,12 @@ describe("SQLite tool support", () => {
 		expect(text).toContain("Bob");
 		expect(text).toContain("Carol");
 		expect(text).not.toContain("Alice");
-		expect(text).toContain('use sel="users?limit=2&offset=3" to continue');
+		expect(text).toContain("append :users?limit=2&offset=3 to the database path to continue");
 	});
 
-	it("supports where and order via the sel parameter", async () => {
+	it("supports where and order via the path selector", async () => {
 		const result = await readTool.execute("sqlite-sel-query", {
-			path: sqlitePath,
-			sel: "users?where=status='active'&order=created:desc&limit=2",
+			path: `${sqlitePath}:users?where=status='active'&order=created:desc&limit=2`,
 		});
 		const text = getText(result);
 
@@ -301,8 +300,7 @@ describe("SQLite tool support", () => {
 
 	it("allows semicolons inside quoted SQLite where string literals", async () => {
 		const result = await readTool.execute("sqlite-sel-semicolon-literal", {
-			path: sqlitePath,
-			sel: "notes?where=body LIKE '%;%'&limit=5",
+			path: `${sqlitePath}:notes?where=body LIKE '%;%'&limit=5`,
 		});
 		const text = getText(result);
 
@@ -312,8 +310,7 @@ describe("SQLite tool support", () => {
 	it("rejects SQLite where clauses that try to override pagination control syntax", async () => {
 		await expect(
 			readTool.execute("sqlite-where-pagination-bypass", {
-				path: sqlitePath,
-				sel: "users?where=1=1 LIMIT 1000000 --&limit=2&offset=0",
+				path: `${sqlitePath}:users?where=1=1 LIMIT 1000000 --&limit=2&offset=0`,
 			}),
 		).rejects.toThrow(/comments or statement terminators/i);
 	});

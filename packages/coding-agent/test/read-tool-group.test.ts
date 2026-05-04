@@ -79,7 +79,7 @@ describe("ReadToolGroupComponent", () => {
 
 	it("does not render a duplicate summary row when inline previews are enabled", () => {
 		const component = new ReadToolGroupComponent({ showContentPreview: true });
-		component.updateArgs({ path: "/tmp/example.ts", sel: "L10-L20" }, "read-3");
+		component.updateArgs({ path: "/tmp/example.ts:L10-L20" }, "read-3");
 		component.updateResult(
 			{
 				content: [{ type: "text", text: "line 1\nline 2\nline 3\nline 4" }],

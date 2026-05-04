@@ -1160,6 +1160,45 @@ export interface SliceResult {
  */
 export declare function sliceWithWidth(line: string, startCol: number, length: number, strict: boolean | undefined | null, tabWidth: number): SliceResult
 
+export declare function summarizeCode(options: SummaryOptions): SummaryResult
+
+export interface SummaryOptions {
+  /** Source code to summarize. */
+  code: string
+  /** Language alias (e.g. "rust", "typescript") used before path inference. */
+  lang?: string
+  /** File path used to infer language by extension when `lang` is omitted. */
+  path?: string
+  /** Minimum total node lines before eliding a body/literal node. */
+  minBodyLines?: number
+  /** Minimum total comment lines before eliding a multiline block comment. */
+  minCommentLines?: number
+}
+
+export interface SummaryResult {
+  /** Canonical language name when parsing succeeded. */
+  language?: string
+  /** True when tree-sitter parsed the source without syntax errors. */
+  parsed: boolean
+  /** True when at least one elision span was emitted. */
+  elided: boolean
+  /** Total source lines. */
+  totalLines: number
+  /** Kept/elided segments in source order. */
+  segments: Array<SummarySegment>
+}
+
+export interface SummarySegment {
+  /** "kept" or "elided". */
+  kind: string
+  /** 1-based inclusive start line. */
+  startLine: number
+  /** 1-based inclusive end line. */
+  endLine: number
+  /** Verbatim text for kept segments; absent for elided segments. */
+  text?: string
+}
+
 /**
  * Check if a language is supported for highlighting.
  * Returns true if the language has either direct support or a fallback

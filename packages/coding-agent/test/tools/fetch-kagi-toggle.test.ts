@@ -352,7 +352,7 @@ describe("read tool URL handling", () => {
 			content: "<html><body>not really an image</body></html>",
 		});
 
-		const result = await tool.execute("fetch-html-png-path", { path: "https://example.com/foo.png", sel: "raw" });
+		const result = await tool.execute("fetch-html-png-path", { path: "https://example.com/foo.png:raw" });
 		const imageBlock = result.content.find(content => content.type === "image");
 		const textBlock = result.content.find(content => content.type === "text");
 
@@ -693,8 +693,7 @@ describe("read tool URL handling", () => {
 		loadPageSpy.mockRejectedValue(new Error("network should not be hit"));
 
 		const pagedResult = await tool.execute("fetch-offset-page", {
-			path: pageUrl,
-			sel: "L7-L8",
+			path: `${pageUrl}:L7-L8`,
 		});
 		const pagedText = pagedResult.content.find(content => content.type === "text");
 		expect(pagedText?.type).toBe("text");

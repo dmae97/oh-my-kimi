@@ -269,7 +269,7 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Line 2");
 			expect(output).toContain("Line 3");
 			// No truncation message since file fits within limits
-			expect(getTextOutput(result)).not.toContain("Use sel=");
+			expect(getTextOutput(result)).not.toContain("Use :");
 			expect(result.details?.truncation).toBeUndefined();
 		});
 
@@ -294,7 +294,7 @@ describe("Coding Agent Tools", () => {
 				content: "# Notebook Title\n\nNotebook body\n",
 			});
 
-			const result = await readTool.execute("test-call-ipynb", { path: notebookPath, sel: "raw" });
+			const result = await readTool.execute("test-call-ipynb", { path: `${notebookPath}:raw` });
 			const output = getTextOutput(result);
 
 			expect(convertSpy).toHaveBeenCalledTimes(1);
@@ -331,7 +331,7 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Line 1");
 			expect(output).toContain(`Line ${defaultLimit}`);
 			expect(output).not.toContain(`Line ${defaultLimit + 1}`);
-			expect(output).toContain(`[Showing lines 1-${defaultLimit} of 3500. Use sel=${defaultLimit + 1} to continue]`);
+			expect(output).toContain(`[Showing lines 1-${defaultLimit} of 3500. Use :${defaultLimit + 1} to continue]`);
 		});
 
 		it("should truncate when byte limit exceeded", async () => {
@@ -345,7 +345,7 @@ describe("Coding Agent Tools", () => {
 
 			expect(output).toContain("Line 1:");
 			// Should show byte limit message
-			expect(output).toMatch(/\[Showing lines 1-\d+ of 1000 \(\d+(\.\d+)?\s*KB limit\)\. Use sel=\d+ to continue\]/);
+			expect(output).toMatch(/\[Showing lines 1-\d+ of 1000 \(\d+(\.\d+)?\s*KB limit\)\. Use :\d+ to continue\]/);
 		});
 
 		it("should handle offset parameter", async () => {
@@ -353,14 +353,14 @@ describe("Coding Agent Tools", () => {
 			const lines = Array.from({ length: 100 }, (_, i) => `Line ${i + 1}`);
 			fs.writeFileSync(testFile, lines.join("\n"));
 
-			const result = await readTool.execute("test-call-5", { path: testFile, sel: "L51" });
+			const result = await readTool.execute("test-call-5", { path: `${testFile}:L51` });
 			const output = getTextOutput(result);
 
 			expect(output).not.toContain("Line 50");
 			expect(output).toContain("Line 51");
 			expect(output).toContain("Line 100");
 			// No truncation message since file fits within limits
-			expect(output).not.toContain("Use sel=");
+			expect(output).not.toContain("Use :");
 		});
 
 		it("should handle limit parameter", async () => {
@@ -368,13 +368,13 @@ describe("Coding Agent Tools", () => {
 			const lines = Array.from({ length: 100 }, (_, i) => `Line ${i + 1}`);
 			fs.writeFileSync(testFile, lines.join("\n"));
 
-			const result = await readTool.execute("test-call-6", { path: testFile, sel: "L1-L10" });
+			const result = await readTool.execute("test-call-6", { path: `${testFile}:L1-L10` });
 			const output = getTextOutput(result);
 
 			expect(output).toContain("Line 1");
 			expect(output).toContain("Line 10");
 			expect(output).not.toContain("Line 11");
-			expect(output).toContain("[Showing lines 1-10 of 100. Use sel=11 to continue]");
+			expect(output).toContain("[Showing lines 1-10 of 100. Use :11 to continue]");
 		});
 
 		it("should handle offset + limit together", async () => {
@@ -383,8 +383,7 @@ describe("Coding Agent Tools", () => {
 			fs.writeFileSync(testFile, lines.join("\n"));
 
 			const result = await readTool.execute("test-call-7", {
-				path: testFile,
-				sel: "L41-L60",
+				path: `${testFile}:L41-L60`,
 			});
 			const output = getTextOutput(result);
 
@@ -392,18 +391,18 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Line 41");
 			expect(output).toContain("Line 60");
 			expect(output).not.toContain("Line 61");
-			expect(output).toContain("[Showing lines 41-60 of 100. Use sel=61 to continue]");
+			expect(output).toContain("[Showing lines 41-60 of 100. Use :61 to continue]");
 		});
 
 		it("should show error when offset is beyond file length", async () => {
 			const testFile = path.join(testDir, "short.txt");
 			fs.writeFileSync(testFile, "Line 1\nLine 2\nLine 3");
 
-			const result = await readTool.execute("test-call-8", { path: testFile, sel: "L100" });
+			const result = await readTool.execute("test-call-8", { path: `${testFile}:L100` });
 			const output = getTextOutput(result);
 
 			expect(output).toContain("Line 100 is beyond end of file (3 lines total)");
-			expect(output).toContain("Use sel=1 to read from the start, or sel=3 to read the last line.");
+			expect(output).toContain("Use :1 to read from the start, or :3 to read the last line.");
 		});
 
 		it("should include truncation details when truncated", async () => {
@@ -493,15 +492,14 @@ describe("Coding Agent Tools", () => {
 				);
 
 				const result = await readTool.execute("test-call-archive-subpath", {
-					path: `${archivePath}:pkg/README.md`,
-					sel: "L1-L2",
+					path: `${archivePath}:pkg/README.md:L1-L2`,
 				});
 				const output = getTextOutput(result);
 
 				expect(output).toContain("# Archive README");
 				expect(output).toContain("Line 2");
 				expect(output).not.toContain("Line 3");
-				expect(output).toContain("Use sel=3");
+				expect(output).toContain("Use :3");
 			});
 		}
 

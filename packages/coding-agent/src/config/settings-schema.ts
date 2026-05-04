@@ -1466,6 +1466,36 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"read.summarize.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "editing",
+			label: "Read Summaries",
+			description: "Return structural code summaries when read is called without an explicit selector",
+		},
+	},
+
+	"read.summarize.minBodyLines": {
+		type: "number",
+		default: 4,
+		ui: {
+			tab: "editing",
+			label: "Read Summary Body Lines",
+			description: "Minimum multiline body or literal length before read summaries collapse it",
+		},
+	},
+
+	"read.summarize.minCommentLines": {
+		type: "number",
+		default: 6,
+		ui: {
+			tab: "editing",
+			label: "Read Summary Comment Lines",
+			description: "Minimum multiline block comment length before read summaries collapse it",
+		},
+	},
+
 	"read.toolResultPreview": {
 		type: "boolean",
 		default: false,

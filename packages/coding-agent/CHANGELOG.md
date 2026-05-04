@@ -1,6 +1,23 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Removed the top-level `sel` parameter from the `read` tool schema, requiring callers to migrate to `path`-embedded selectors (for example `path:50-100`, `path:raw`, or `https://...:L1-L40`)
+
+### Added
+
+- Added `read.summarize.enabled`, `read.summarize.minBodyLines`, and `read.summarize.minCommentLines` settings to control whether `read` returns structural summaries and how many multiline body/comment lines are collapsed
+
+### Changed
+
+- Changed default `read` output for parseable code files without an explicit selector to return a structural summary instead of full verbatim lines, while still supporting full output for `:raw` and explicit ranges
+- Changed truncation/pagination hints in read, archive, and SQLite outputs to use colon syntax (`Use :<offset>`) when continuing reads
+- Changed the read tool UI preview title to include summary elision counts when a summary is returned
+
+### Fixed
+
+- Fixed selector parsing for colon-containing paths by only splitting `:<sel>` when the suffix matches a valid line-range or `raw` pattern, preventing paths like `db.sqlite:users:42` from being misread as selectors
 
 ## [14.6.6] - 2026-05-04
 

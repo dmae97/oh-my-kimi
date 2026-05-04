@@ -140,7 +140,7 @@ const HL_OUTPUT_PREFIX_SEPARATOR_RE = `[:${HL_BODY_SEP_RE_RAW}]`;
 const HL_PREFIX_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*(?:[+*]\\s*)?\\d+[a-z]{2}${HL_OUTPUT_PREFIX_SEPARATOR_RE}`);
 const HL_PREFIX_PLUS_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*\\+\\s*\\d+[a-z]{2}${HL_OUTPUT_PREFIX_SEPARATOR_RE}`);
 const DIFF_PLUS_RE = /^[+](?![+])/;
-const READ_TRUNCATION_NOTICE_RE = /^\[(?:Showing lines \d+-\d+ of \d+|\d+ more lines? in (?:file|\S+))\b.*\bsel=L?\d+/;
+const READ_TRUNCATION_NOTICE_RE = /^\[(?:Showing lines \d+-\d+ of \d+|\d+ more lines? in (?:file|\S+))\b.*\bUse :L?\d+/;
 
 const HL_HASH_HINT_RE = /^[a-z]{2}$/i;
 const HL_ANCHOR_EXAMPLES = describeAnchorExamples("160");

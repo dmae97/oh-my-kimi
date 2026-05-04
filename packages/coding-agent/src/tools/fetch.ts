@@ -148,20 +148,20 @@ export interface ParsedReadUrlTarget {
 	limit?: number;
 }
 
-export function parseReadUrlTarget(readPath: string, sel?: string): ParsedReadUrlTarget | null {
-	const embedded = sel ? undefined : tryExtractEmbeddedUrlSelector(readPath);
+export function parseReadUrlTarget(readPath: string): ParsedReadUrlTarget | null {
+	const embedded = tryExtractEmbeddedUrlSelector(readPath);
 	const urlPath = embedded?.path ?? readPath;
 	if (!isReadableUrlPath(urlPath)) {
 		return null;
 	}
 
-	const selector = sel ?? embedded?.sel;
+	const selector = embedded?.sel;
 	const raw = selector === "raw";
 	const lineMatch = selector ? URL_LINE_RANGE_RE.exec(selector) : null;
 	if (lineMatch) {
 		const startLine = Number.parseInt(lineMatch[1]!, 10);
 		if (startLine < 1) {
-			throw new ToolError("sel=0 is invalid; lines are 1-indexed. Use sel=1.");
+			throw new ToolError("URL line selector 0 is invalid; lines are 1-indexed. Use :L1.");
 		}
 		const sep = lineMatch[2];
 		const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;

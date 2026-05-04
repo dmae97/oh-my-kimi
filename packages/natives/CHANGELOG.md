@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `summarizeCode` function to expose native code summarization with `kind`, `startLine`, `endLine`, and optional `text` segments plus parse/elision metadata
+- Added `minBodyLines` and `minCommentLines` options to `summarizeCode` to control when function/body and multiline comment elision is applied
+- Added `SummaryOptions` and `SummaryResult` TypeScript definitions for typed `summarizeCode` input and output
 
 ## [14.6.1] - 2026-05-02
 ### Changed
