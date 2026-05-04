@@ -8,7 +8,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { formatHashLines } from "../edit/line-hash";
+import { formatHashLine, formatHashLines, formatLineHash, HL_BODY_SEP } from "../edit/line-hash";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { parseInternalUrl } from "../internal-urls/parse";
 import type { InternalUrl } from "../internal-urls/types";
@@ -87,6 +87,57 @@ function formatTextWithMode(
 	if (shouldAddHashLines) return formatHashLines(text, startNum);
 	if (shouldAddLineNumbers) return prependLineNumbers(text, startNum);
 	return text;
+}
+
+const BRACE_PAIRS: Record<string, string> = { "{": "}", "(": ")", "[": "]" };
+const BRACE_TAIL_TRAILING_RE = /^[;,)\]}]*$/;
+
+/**
+ * Decide whether the kept lines surrounding an elided range collapse to a
+ * single brace-pair line in the rendered summary. Returns true when the head
+ * line ends with `{` / `(` / `[` and the tail line is the matching closer
+ * (optionally followed by terminating punctuation like `;`, `,`, or further
+ * closers — e.g. `};`, `})`, `]);`).
+ */
+function canMergeBracePair(headLine: string, tailLine: string): boolean {
+	const head = headLine.trimEnd();
+	const tail = tailLine.trim();
+	const opener = head.slice(-1);
+	const closer = BRACE_PAIRS[opener];
+	if (!closer) return false;
+	if (!tail.startsWith(closer)) return false;
+	return BRACE_TAIL_TRAILING_RE.test(tail.slice(closer.length));
+}
+
+function formatSingleLine(
+	line: number,
+	text: string,
+	shouldAddHashLines: boolean,
+	shouldAddLineNumbers: boolean,
+): string {
+	if (shouldAddHashLines) return formatHashLine(line, text);
+	if (shouldAddLineNumbers) return `${line}|${text}`;
+	return text;
+}
+
+function formatMergedBraceLine(
+	startLine: number,
+	endLine: number,
+	headText: string,
+	tailText: string,
+	shouldAddHashLines: boolean,
+	shouldAddLineNumbers: boolean,
+): { model: string; display: string } {
+	const merged = `${headText.trimEnd()} .. ${tailText.trim()}`;
+	if (shouldAddHashLines) {
+		const start = formatLineHash(startLine, headText);
+		const end = formatLineHash(endLine, tailText);
+		return { model: `${start}-${end}${HL_BODY_SEP}${merged}`, display: merged };
+	}
+	if (shouldAddLineNumbers) {
+		return { model: `${startLine}-${endLine}|${merged}`, display: merged };
+	}
+	return { model: merged, display: merged };
 }
 
 function countTextLines(text: string): number {
@@ -925,22 +976,85 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const displayMode = resolveFileDisplayMode(this.session);
 		const shouldAddHashLines = displayMode.hashLines;
 		const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
+
+		// Flatten segments into per-line units so we can merge a kept-head /
+		// elided / kept-tail sandwich into a single brace-pair line when the
+		// boundary lines look like `… {` and `}` (or matching variants).
+		type Unit =
+			| { kind: "line"; line: number; text: string }
+			| { kind: "elided"; startLine: number; endLine: number }
+			| {
+					kind: "merged";
+					startLine: number;
+					endLine: number;
+					headText: string;
+					tailText: string;
+			  };
+
+		const raw: Unit[] = [];
+		for (const segment of summary.segments) {
+			if (segment.kind === "elided") {
+				raw.push({ kind: "elided", startLine: segment.startLine, endLine: segment.endLine });
+				continue;
+			}
+			const text = segment.text ?? "";
+			if (text.length === 0) continue;
+			const lines = text.split("\n");
+			for (let i = 0; i < lines.length; i++) {
+				raw.push({ kind: "line", line: segment.startLine + i, text: lines[i] });
+			}
+		}
+
+		const units: Unit[] = [];
+		let i = 0;
+		while (i < raw.length) {
+			const cur = raw[i];
+			if (cur.kind === "elided") {
+				const prev = units.length > 0 ? units[units.length - 1] : null;
+				const next = i + 1 < raw.length ? raw[i + 1] : null;
+				if (prev?.kind === "line" && next?.kind === "line" && canMergeBracePair(prev.text, next.text)) {
+					units.pop();
+					units.push({
+						kind: "merged",
+						startLine: prev.line,
+						endLine: next.line,
+						headText: prev.text,
+						tailText: next.text,
+					});
+					i += 2;
+					continue;
+				}
+			}
+			units.push(cur);
+			i++;
+		}
+
 		const modelParts: string[] = [];
 		const displayParts: string[] = [];
 		let elidedSpans = 0;
-
-		for (const segment of summary.segments) {
-			if (segment.kind === "elided") {
+		for (const unit of units) {
+			if (unit.kind === "elided") {
 				modelParts.push("...");
 				displayParts.push("...");
 				elidedSpans++;
 				continue;
 			}
-
-			const text = segment.text ?? "";
-			if (text.length === 0) continue;
-			modelParts.push(formatTextWithMode(text, segment.startLine, shouldAddHashLines, shouldAddLineNumbers));
-			displayParts.push(text);
+			if (unit.kind === "merged") {
+				const formatted = formatMergedBraceLine(
+					unit.startLine,
+					unit.endLine,
+					unit.headText,
+					unit.tailText,
+					shouldAddHashLines,
+					shouldAddLineNumbers,
+				);
+				modelParts.push(formatted.model);
+				displayParts.push(formatted.display);
+				elidedSpans++;
+				continue;
+			}
+			modelParts.push(formatSingleLine(unit.line, unit.text, shouldAddHashLines, shouldAddLineNumbers));
+			displayParts.push(unit.text);
 		}
 
 		return { text: modelParts.join("\n"), displayText: displayParts.join("\n"), elidedSpans };

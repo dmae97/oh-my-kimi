@@ -165,10 +165,68 @@ fn collect_elisions(
 		}
 	}
 
-	for index in 0..node.child_count() {
+	// Detect consecutive runs of groupable siblings (e.g. import statements).
+	// When the run's total line span meets `min_body_lines`, elide the lines
+	// strictly between the first and last sibling's content, leaving the
+	// boundary statements visible.
+	let child_count = node.child_count();
+	let mut run_first: Option<Node<'_>> = None;
+	let mut run_last: Option<Node<'_>> = None;
+	let mut run_count: u32 = 0;
+	for index in 0..child_count {
+		let Some(child) = node.child(index) else {
+			continue;
+		};
+		if is_groupable_kind(language, child.kind()) {
+			if run_first.is_none() {
+				run_first = Some(child);
+			}
+			run_last = Some(child);
+			run_count += 1;
+		} else {
+			flush_groupable_run(run_first, run_last, run_count, min_body_lines, spans);
+			run_first = None;
+			run_last = None;
+			run_count = 0;
+		}
+	}
+	flush_groupable_run(run_first, run_last, run_count, min_body_lines, spans);
+
+	for index in 0..child_count {
 		if let Some(child) = node.child(index) {
 			collect_elisions(child, language, min_body_lines, min_comment_lines, spans);
 		}
+	}
+}
+
+fn flush_groupable_run(
+	first: Option<Node<'_>>,
+	last: Option<Node<'_>>,
+	count: u32,
+	min_body_lines: u32,
+	spans: &mut Vec<LineSpan>,
+) {
+	if count < 2 {
+		return;
+	}
+	let (Some(first), Some(last)) = (first, last) else {
+		return;
+	};
+	let first_start = node_start_line(first);
+	let last_start = node_start_line(last);
+	let last_end = node_end_line(last);
+	let span_lines = last_end.saturating_sub(first_start).saturating_add(1);
+	if span_lines < min_body_lines {
+		return;
+	}
+	// Use the line of the first node's last visible content as the lower bound
+	// (some grammars include trailing newlines in the node range, which would
+	// otherwise place `end_line` on the next sibling's first line).
+	let first_content_end = node_content_end_line(first).min(last_start.saturating_sub(1));
+	let start = first_content_end.saturating_add(1);
+	let end = last_start.saturating_sub(1);
+	if start <= end {
+		spans.push(LineSpan { start, end });
 	}
 }
 
@@ -186,6 +244,22 @@ fn node_end_line(node: Node<'_>) -> u32 {
 		.row
 		.saturating_add(1)
 		.min(u32::MAX as usize) as u32
+}
+
+/// Last source line containing a content byte from `node`.
+///
+/// Tree-sitter reports `end_position` as the position one past the last byte.
+/// When that byte is a newline, the resulting position lands at column 0 of
+/// the next row, which makes the naive `row + 1` answer one greater than the
+/// row of the last visible content. This helper subtracts that off.
+fn node_content_end_line(node: Node<'_>) -> u32 {
+	let pos = node.end_position();
+	let row = if pos.column == 0 && pos.row > 0 {
+		pos.row - 1
+	} else {
+		pos.row
+	};
+	row.saturating_add(1).min(u32::MAX as usize) as u32
 }
 
 fn node_line_count(node: Node<'_>) -> u32 {
@@ -217,7 +291,18 @@ fn is_elidable_kind(language: SupportLang, kind: &str) -> bool {
 	match language {
 		SupportLang::TypeScript | SupportLang::Tsx | SupportLang::JavaScript => matches!(
 			kind,
-			"statement_block" | "function_body" | "object" | "array" | "template_string"
+			"statement_block"
+				| "function_body"
+				| "object"
+				| "array"
+				| "template_string"
+				| "class_body"
+				| "interface_body"
+				| "enum_body"
+				| "object_type"
+				| "switch_body"
+				| "jsx_element"
+				| "jsx_self_closing_element"
 		),
 		SupportLang::Rust => matches!(
 			kind,
@@ -227,33 +312,363 @@ fn is_elidable_kind(language: SupportLang, kind: &str) -> bool {
 				| "struct_expression"
 				| "match_block"
 				| "raw_string_literal"
+				| "declaration_list"
+				| "field_declaration_list"
+				| "ordered_field_declaration_list"
+				| "enum_variant_list"
+				| "where_clause"
+				| "use_list"
+				| "macro_definition"
+				| "token_tree"
 		),
-		SupportLang::Python => matches!(kind, "block" | "dictionary" | "list" | "set" | "string"),
+		SupportLang::Python => matches!(
+			kind,
+			"block"
+				| "dictionary"
+				| "list" | "set"
+				| "string"
+				| "tuple"
+				| "argument_list"
+				| "parameters"
+				| "parenthesized_expression"
+				| "list_comprehension"
+				| "set_comprehension"
+				| "dictionary_comprehension"
+				| "generator_expression"
+				| "import_from_statement"
+				| "subscript"
+		),
 		SupportLang::Go => matches!(
 			kind,
-			"block" | "composite_literal" | "interpreted_string_literal" | "raw_string_literal"
+			"block"
+				| "composite_literal"
+				| "interpreted_string_literal"
+				| "raw_string_literal"
+				| "import_spec_list"
+				| "const_declaration"
+				| "var_declaration"
+				| "field_declaration_list"
+				| "interface_type"
+				| "expression_switch_statement"
+				| "type_switch_statement"
+				| "select_statement"
 		),
-		SupportLang::Java => matches!(kind, "block" | "array_initializer"),
-		SupportLang::C | SupportLang::Cpp | SupportLang::ObjC => {
-			matches!(kind, "compound_statement" | "initializer_list" | "string_literal")
-		},
-		SupportLang::CSharp => {
-			matches!(kind, "block" | "initializer_expression" | "array_initializer_expression")
-		},
-		SupportLang::Ruby => {
-			matches!(kind, "body_statement" | "method" | "do_block" | "array" | "hash")
-		},
-		SupportLang::Php => matches!(kind, "compound_statement" | "array_creation_expression"),
+		SupportLang::Java => matches!(
+			kind,
+			"block"
+				| "array_initializer"
+				| "class_body"
+				| "interface_body"
+				| "enum_body"
+				| "annotation_type_body"
+				| "constructor_body"
+				| "switch_block"
+				| "string_literal"
+		),
+		SupportLang::C => matches!(
+			kind,
+			"compound_statement"
+				| "initializer_list"
+				| "string_literal"
+				| "field_declaration_list"
+				| "enumerator_list"
+				| "concatenated_string"
+		),
+		SupportLang::Cpp => matches!(
+			kind,
+			"compound_statement"
+				| "initializer_list"
+				| "string_literal"
+				| "field_declaration_list"
+				| "enumerator_list"
+				| "concatenated_string"
+				| "declaration_list"
+				| "raw_string_literal"
+				| "requires_clause"
+		),
+		SupportLang::ObjC => matches!(
+			kind,
+			"compound_statement"
+				| "initializer_list"
+				| "string_literal"
+				| "protocol_declaration"
+				| "class_interface"
+				| "class_implementation"
+				| "instance_variables"
+				| "array_literal"
+				| "dictionary_literal"
+		),
+		SupportLang::CSharp => matches!(
+			kind,
+			"block"
+				| "initializer_expression"
+				| "array_initializer_expression"
+				| "declaration_list"
+				| "enum_member_declaration_list"
+				| "switch_expression"
+				| "raw_string_literal"
+				| "interpolated_string_expression"
+		),
+		SupportLang::Ruby => matches!(
+			kind,
+			"body_statement"
+				| "method"
+				| "do_block"
+				| "array"
+				| "hash" | "block"
+				| "case" | "heredoc_body"
+		),
+		SupportLang::Php => matches!(
+			kind,
+			"compound_statement"
+				| "array_creation_expression"
+				| "declaration_list"
+				| "enum_declaration_list"
+				| "match_block"
+				| "heredoc"
+				| "nowdoc"
+		),
 		SupportLang::Swift => matches!(
 			kind,
-			"function_body" | "array_literal" | "dictionary_literal" | "multi_line_string_literal"
+			"function_body"
+				| "array_literal"
+				| "dictionary_literal"
+				| "multi_line_string_literal"
+				| "class_body"
+				| "protocol_body"
+				| "enum_class_body"
+				| "computed_property"
+				| "lambda_literal"
 		),
-		SupportLang::Kotlin => {
-			matches!(kind, "function_body" | "collection_literal" | "multi_line_string_literal")
-		},
-		SupportLang::Scala => matches!(kind, "block" | "collection_literal"),
+		SupportLang::Kotlin => matches!(
+			kind,
+			"function_body"
+				| "collection_literal"
+				| "multi_line_string_literal"
+				| "class_body"
+				| "enum_class_body"
+				| "when_expression"
+				| "import_list"
+		),
+		SupportLang::Scala => matches!(
+			kind,
+			"block"
+				| "collection_literal"
+				| "template_body"
+				| "enum_body"
+				| "match_expression"
+				| "for_expression"
+				| "string"
+		),
 		SupportLang::Lua => matches!(kind, "block" | "table_constructor" | "string"),
-		_ => false,
+		SupportLang::Perl => {
+			matches!(kind, "block" | "list_expression" | "heredoc_content" | "regexp_content")
+		},
+		SupportLang::Dart => matches!(
+			kind,
+			"block"
+				| "function_expression_body"
+				| "class_body"
+				| "enum_body"
+				| "extension_body"
+				| "mixin_body"
+				| "list_literal"
+				| "set_or_map_literal"
+				| "string_literal"
+		),
+		SupportLang::Bash => matches!(
+			kind,
+			"compound_statement"
+				| "if_statement"
+				| "case_statement"
+				| "do_group"
+				| "subshell"
+				| "array"
+				| "heredoc_body"
+		),
+		SupportLang::Powershell => matches!(
+			kind,
+			"script_block"
+				| "statement_block"
+				| "class_statement"
+				| "param_block"
+				| "hash_literal_expression"
+				| "array_expression"
+				| "expandable_here_string_literal"
+				| "verbatim_here_string_characters"
+		),
+		SupportLang::Haskell => matches!(
+			kind,
+			"imports"
+				| "data_type"
+				| "class"
+				| "instance"
+				| "function"
+				| "do" | "case"
+				| "let" | "local_binds"
+				| "list" | "tuple"
+		),
+		SupportLang::Ocaml => matches!(
+			kind,
+			"structure"
+				| "signature"
+				| "variant_declaration"
+				| "record_declaration"
+				| "match_expression"
+				| "match_case"
+				| "let_expression"
+				| "value_definition"
+				| "list_expression"
+		),
+		SupportLang::Elixir => matches!(kind, "do_block" | "list" | "map" | "string" | "sigil"),
+		SupportLang::Erlang => matches!(
+			kind,
+			"fun_decl"
+				| "case_expr"
+				| "if_expr"
+				| "receive_expr"
+				| "record_decl"
+				| "list" | "map_expr"
+				| "tuple"
+		),
+		SupportLang::Clojure => {
+			matches!(kind, "list_lit" | "map_lit" | "vec_lit" | "set_lit" | "str_lit")
+		},
+		SupportLang::Solidity => {
+			matches!(kind, "contract_body" | "function_body" | "struct_body" | "enum_body")
+		},
+		SupportLang::Sql => matches!(kind, "column_definitions" | "case"),
+		SupportLang::Zig => matches!(kind, "Block" | "ContainerDecl" | "InitList"),
+		SupportLang::Odin => matches!(
+			kind,
+			"block" | "struct_declaration" | "enum_declaration" | "union_declaration" | "struct"
+		),
+		SupportLang::Verilog => matches!(
+			kind,
+			"module_declaration"
+				| "seq_block"
+				| "case_statement"
+				| "function_declaration"
+				| "task_declaration"
+				| "list_of_port_declarations"
+		),
+		SupportLang::Tlaplus => matches!(kind, "module" | "theorem" | "let_in"),
+		SupportLang::Nix => matches!(
+			kind,
+			"attrset_expression" | "list_expression" | "let_expression" | "indented_string_expression"
+		),
+		SupportLang::Proto => matches!(kind, "message_body" | "enum_body" | "oneof" | "service"),
+		SupportLang::Julia => matches!(
+			kind,
+			"function_definition"
+				| "struct_definition"
+				| "module_definition"
+				| "do_clause"
+				| "vector_expression"
+				| "string_literal"
+		),
+		SupportLang::R => matches!(kind, "braced_expression" | "call" | "string"),
+		SupportLang::Starlark => matches!(kind, "block" | "list" | "dictionary" | "string"),
+		SupportLang::Astro => {
+			matches!(kind, "frontmatter_js_block" | "script_element" | "style_element" | "element")
+		},
+		SupportLang::Vue => {
+			matches!(kind, "template_element" | "script_element" | "style_element" | "element")
+		},
+		SupportLang::Svelte => matches!(kind, "script_element" | "style_element" | "element"),
+		SupportLang::Html => matches!(kind, "element" | "script_element" | "style_element"),
+		SupportLang::Css => matches!(kind, "block" | "keyframe_block_list"),
+		SupportLang::Json => matches!(kind, "object" | "array"),
+		SupportLang::Xml => kind == "element",
+		SupportLang::Markdown => matches!(kind, "fenced_code_block" | "pipe_table" | "list"),
+		SupportLang::Graphql => matches!(
+			kind,
+			"fields_definition"
+				| "enum_values_definition"
+				| "input_fields_definition"
+				| "schema_definition"
+		),
+		SupportLang::Hcl => matches!(kind, "body" | "object"),
+		SupportLang::Dockerfile => kind == "shell_command",
+		SupportLang::Cmake => matches!(kind, "argument_list" | "body"),
+		SupportLang::Make => kind == "recipe",
+		SupportLang::Just => kind == "recipe_body",
+		// Skip: data formats with no closing-token anchor (Yaml mappings,
+		// Toml tables, Ini sections), the diff format whose informational
+		// content IS the lines inside hunks, and the leaf-token-only Regex
+		// grammar. Eliding any of these deletes the only content worth
+		// reading.
+		SupportLang::Yaml
+		| SupportLang::Toml
+		| SupportLang::Ini
+		| SupportLang::Diff
+		| SupportLang::Regex => false,
+	}
+}
+
+fn is_groupable_kind(language: SupportLang, kind: &str) -> bool {
+	match language {
+		SupportLang::TypeScript | SupportLang::Tsx | SupportLang::JavaScript => {
+			kind == "import_statement"
+		},
+		SupportLang::Rust => matches!(kind, "use_declaration" | "extern_crate_declaration"),
+		SupportLang::Python => {
+			matches!(kind, "import_statement" | "import_from_statement" | "future_import_statement")
+		},
+		SupportLang::Go => kind == "import_declaration",
+		SupportLang::Java => kind == "import_declaration",
+		SupportLang::C | SupportLang::Cpp => kind == "preproc_include",
+		SupportLang::ObjC => matches!(kind, "preproc_include" | "import_declaration"),
+		SupportLang::CSharp => kind == "using_directive",
+		SupportLang::Php => kind == "namespace_use_declaration",
+		SupportLang::Swift => kind == "import_declaration",
+		SupportLang::Scala => matches!(kind, "import_declaration" | "import"),
+		SupportLang::Dart => kind == "import_or_export",
+		SupportLang::Ocaml => kind == "open_module",
+		SupportLang::Solidity => kind == "import_directive",
+		SupportLang::Julia => matches!(kind, "import_statement" | "using_statement"),
+		SupportLang::Proto => kind == "import",
+		SupportLang::Perl => kind == "use_statement",
+		// Languages where imports either have no run pattern, are wrapped in a
+		// single AST node already covered by `is_elidable_kind` (Kotlin's
+		// `import_list`, Haskell's `imports`), or live inside a too-generic
+		// container (Powershell `statement_list`).
+		SupportLang::Kotlin
+		| SupportLang::Haskell
+		| SupportLang::Powershell
+		| SupportLang::Ruby
+		| SupportLang::Lua
+		| SupportLang::Elixir
+		| SupportLang::Erlang
+		| SupportLang::Clojure
+		| SupportLang::Sql
+		| SupportLang::Zig
+		| SupportLang::Odin
+		| SupportLang::Verilog
+		| SupportLang::Tlaplus
+		| SupportLang::Nix
+		| SupportLang::R
+		| SupportLang::Starlark
+		| SupportLang::Bash
+		| SupportLang::Astro
+		| SupportLang::Vue
+		| SupportLang::Svelte
+		| SupportLang::Html
+		| SupportLang::Css
+		| SupportLang::Json
+		| SupportLang::Xml
+		| SupportLang::Markdown
+		| SupportLang::Graphql
+		| SupportLang::Hcl
+		| SupportLang::Dockerfile
+		| SupportLang::Cmake
+		| SupportLang::Make
+		| SupportLang::Just
+		| SupportLang::Yaml
+		| SupportLang::Toml
+		| SupportLang::Ini
+		| SupportLang::Diff
+		| SupportLang::Regex => false,
 	}
 }
 
@@ -396,7 +811,7 @@ mod tests {
 			.map(|segment| segment.text.clone().unwrap_or_else(|| "...".to_string()))
 			.collect::<Vec<_>>()
 			.join("\n");
-		assert!(rendered.contains("impl Greeter {\n\tfn greet(&self) -> String {\n...\n\t}\n}"));
+		assert!(rendered.contains("impl Greeter {\n...\n}"));
 	}
 
 	#[test]
@@ -458,5 +873,173 @@ mod tests {
 		let result = summarize("plain text\nwith lines\n", "fixture.txt");
 		assert!(!result.parsed);
 		assert_eq!(result.segments[0].text.as_deref(), Some("plain text\nwith lines\n"));
+	}
+
+	#[test]
+	fn summarizes_typescript_interface_body() {
+		let result = summarize(
+			"export interface Args {\n\tcwd?: string;\n\tprovider?: string;\n\tmodel?: \
+			 string;\n\tapiKey?: string;\n}\n",
+			"fixture.ts",
+		);
+
+		assert!(result.parsed);
+		assert!(result.elided);
+		assert_eq!(segment_kinds(&result), vec!["kept", "elided", "kept"]);
+		assert_eq!(result.segments[0].text.as_deref(), Some("export interface Args {"));
+		assert_eq!(result.segments[2].text.as_deref(), Some("}"));
+	}
+
+	#[test]
+	fn summarizes_typescript_class_body() {
+		let result = summarize(
+			"export class Greeter {\n\tname: string = \"world\";\n\tlength(): number { return \
+			 this.name.length; }\n\tgreet(): string { return this.name; }\n\tshout(): string { \
+			 return this.name.toUpperCase(); }\n}\n",
+			"fixture.ts",
+		);
+
+		assert!(result.parsed);
+		assert!(result.elided);
+		assert_eq!(segment_kinds(&result), vec!["kept", "elided", "kept"]);
+		assert!(
+			result.segments[0]
+				.text
+				.as_deref()
+				.unwrap_or_default()
+				.contains("class Greeter")
+		);
+		assert_eq!(result.segments[2].text.as_deref(), Some("}"));
+	}
+
+	#[test]
+	fn summarizes_rust_trait_declaration_list() {
+		let result = summarize(
+			"pub trait Greeter {\n\tfn greet(&self) -> String;\n\tfn length(&self) -> usize;\n\tfn \
+			 shout(&self) -> String;\n\tfn whisper(&self) -> String;\n}\n",
+			"fixture.rs",
+		);
+
+		assert!(result.parsed);
+		assert!(result.elided);
+		assert_eq!(segment_kinds(&result), vec!["kept", "elided", "kept"]);
+		assert_eq!(result.segments[0].text.as_deref(), Some("pub trait Greeter {"));
+		assert_eq!(result.segments[2].text.as_deref(), Some("}"));
+	}
+
+	#[test]
+	fn summarizes_java_class_body() {
+		let result = summarize(
+			"public class Greeter {\n\tprivate String name;\n\tpublic Greeter(String n) { this.name \
+			 = n; }\n\tpublic String greet() { return name; }\n\tpublic int length() { return \
+			 name.length(); }\n}\n",
+			"fixture.java",
+		);
+
+		assert!(result.parsed);
+		assert!(result.elided);
+		assert_eq!(segment_kinds(&result), vec!["kept", "elided", "kept"]);
+		assert!(
+			result.segments[0]
+				.text
+				.as_deref()
+				.unwrap_or_default()
+				.contains("class Greeter")
+		);
+		assert_eq!(result.segments[2].text.as_deref(), Some("}"));
+	}
+
+	#[test]
+	fn summarizes_typescript_import_run() {
+		let code = "import a from \"a\";\nimport b from \"b\";\nimport c from \"c\";\nimport d from \
+		            \"d\";\nimport e from \"e\";\nimport f from \"f\";\n\nexport function main() \
+		            {}\n";
+		let result = summarize(code, "fixture.ts");
+
+		assert!(result.parsed);
+		assert!(result.elided);
+		// Lines 2-5 are between the first and last imports and must be elided.
+		let elided = result
+			.segments
+			.iter()
+			.find(|seg| seg.kind == "elided")
+			.expect("elided segment");
+		assert_eq!(elided.start_line, 2);
+		assert_eq!(elided.end_line, 5);
+		// First import line is kept.
+		assert!(
+			result.segments[0]
+				.text
+				.as_deref()
+				.unwrap_or_default()
+				.starts_with("import a from")
+		);
+	}
+
+	#[test]
+	fn does_not_elide_short_typescript_import_run() {
+		// 3 imports → total span 3 lines, below default min_body_lines (4).
+		let result = summarize(
+			"import a from \"a\";\nimport b from \"b\";\nimport c from \"c\";\n",
+			"fixture.ts",
+		);
+		assert!(result.parsed);
+		assert!(!result.elided);
+	}
+
+	#[test]
+	fn summarizes_python_import_run() {
+		let code = "import os\nimport sys\nfrom typing import List\nfrom pathlib import \
+		            Path\nimport json\nimport re\n\nprint('go')\n";
+		let result = summarize(code, "fixture.py");
+
+		assert!(result.parsed);
+		assert!(result.elided);
+		let elided = result
+			.segments
+			.iter()
+			.find(|seg| seg.kind == "elided")
+			.expect("elided segment");
+		assert_eq!(elided.start_line, 2);
+		assert_eq!(elided.end_line, 5);
+	}
+
+	#[test]
+	fn summarizes_c_preproc_include_run() {
+		// C grammar puts each #include's `end_position` at column 0 of the next
+		// row (the trailing `\n`). Without `node_content_end_line`, the run
+		// elision would emit a span that starts past the second include and
+		// only collapse the third — verify the boundary statements stay
+		// visible and the middle is collapsed.
+		let code = "#include <stdio.h>\n#include \"a.h\"\n#include \"b.h\"\n#include \
+		            \"c.h\"\n#include <string.h>\nint main(void) { return 0; }\n";
+		let result = summarize(code, "fixture.c");
+
+		assert!(result.parsed);
+		assert!(result.elided);
+		let elided = result
+			.segments
+			.iter()
+			.find(|seg| seg.kind == "elided")
+			.expect("elided segment");
+		assert_eq!(elided.start_line, 2);
+		assert_eq!(elided.end_line, 4);
+	}
+
+	#[test]
+	fn summarizes_rust_use_run() {
+		let code = "use std::fs;\nuse std::path::Path;\nuse std::collections::HashMap;\nuse \
+		            std::sync::Arc;\nuse std::io;\n\nfn main() {}\n";
+		let result = summarize(code, "fixture.rs");
+
+		assert!(result.parsed);
+		assert!(result.elided);
+		let elided = result
+			.segments
+			.iter()
+			.find(|seg| seg.kind == "elided")
+			.expect("elided segment");
+		assert_eq!(elided.start_line, 2);
+		assert_eq!(elided.end_line, 4);
 	}
 }

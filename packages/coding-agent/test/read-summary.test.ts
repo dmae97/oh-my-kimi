@@ -58,9 +58,8 @@ describe("read summary", () => {
 		const result = await tool.execute("read-summary-ts", { path: fixture });
 		const text = textOutput(result);
 
-		expect(text).toContain("export function alpha(value: string): string {");
-		expect(text).toContain("export function beta(): number {");
-		expect(text).toContain("...");
+		expect(text).toContain("export function alpha(value: string): string { .. }");
+		expect(text).toContain("export function beta(): number { .. }");
 		expect(text).not.toContain("const clean = value.trim()");
 		expect(result.details?.summary?.elidedSpans).toBe(2);
 	});
@@ -142,5 +141,62 @@ describe("read summary", () => {
 
 		expect(text).toContain("id: 42");
 		expect(text).toContain("name: Ada");
+	});
+
+	it("renders brace-pair elisions as a single anchored line with `..`", async () => {
+		// Regression for the read-tool format request: collapse the head /
+		// elided / closing-brace sandwich into one anchored line of the form
+		// `LINE+ID-LINE+ID|head { .. }` instead of three separate lines.
+		const fixture = path.join(tmpDir, "merge.ts");
+		await fs.writeFile(
+			fixture,
+			"export function stripNewLinePrefixes(lines: string[]): string[] {\n\tconst out: string[] = [];\n\tfor (const line of lines) {\n\t\tout.push(line.replace(/^\\n+/, ''));\n\t}\n\treturn out;\n}\n",
+		);
+
+		const tool = new ReadTool(createSession(tmpDir));
+		const result = await tool.execute("read-summary-merge", { path: fixture });
+		const text = textOutput(result);
+
+		expect(text).toContain("export function stripNewLinePrefixes(lines: string[]): string[] { .. }");
+		// The plain `...` ellipsis line must NOT appear once the merge fires.
+		expect(text).not.toContain("\n...\n");
+		// The merged anchor must be a hash-line range (LINE+ID-LINE+ID|head).
+		expect(text).toMatch(/\b1[a-z]{2}-7[a-z]{2}\|export function stripNewLinePrefixes/);
+		expect(result.details?.summary?.elidedSpans).toBe(1);
+	});
+
+	it("merges trailing-punctuation closers like `};` and `})`", async () => {
+		// `const x = { ... };` — closer is `};` not just `}`. The merge must
+		// still fire and preserve the trailing `;` on the merged line.
+		const fixture = path.join(tmpDir, "object.ts");
+		await fs.writeFile(fixture, "export const config = {\n\talpha: 1,\n\tbeta: 2,\n\tgamma: 3,\n\tdelta: 4,\n};\n");
+
+		const tool = new ReadTool(createSession(tmpDir));
+		const result = await tool.execute("read-summary-merge-trailing", { path: fixture });
+		const text = textOutput(result);
+
+		expect(text).toContain("export const config = { .. };");
+		expect(text).not.toContain("\n...\n");
+	});
+
+	it("does not merge when the closing line is not a bare brace", async () => {
+		// Python def: head ends with `:`, tail ends with `return …` — no brace
+		// pair. The summarizer must keep the original head / `...` / tail
+		// rendering instead of merging.
+		const fixture = path.join(tmpDir, "fixture.py");
+		await fs.writeFile(
+			fixture,
+			"def greet(name: str) -> str:\n    clean = name.strip()\n    label = clean or 'world'\n    upper = label.upper()\n    return f'hello {upper}'\n",
+		);
+
+		const tool = new ReadTool(createSession(tmpDir));
+		const result = await tool.execute("read-summary-no-merge", { path: fixture });
+		const text = textOutput(result);
+
+		expect(text).toContain("def greet(name: str) -> str:");
+		// Python's body elision keeps first/last body lines, so plain `...`
+		// must remain as the elided segment.
+		expect(text).toContain("\n...\n");
+		expect(text).not.toContain(" .. ");
 	});
 });
