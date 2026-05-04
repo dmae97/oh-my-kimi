@@ -341,6 +341,64 @@ describe("hashline executor", () => {
 			expect(await Bun.file(bPath).text()).toBe("bbb\n");
 		});
 	});
+
+	it("applies multiple sections targeting the same file against the original snapshot", async () => {
+		await withTempDir(async tempDir => {
+			const filePath = path.join(tempDir, "a.ts");
+			const original = ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10"].join("\n");
+			await Bun.write(filePath, `${original}\n`);
+
+			// Two sections, both anchored against the ORIGINAL file. Section 1 expands
+			// line 2 into 9 lines (net +8 shift, beyond the ±5 anchor rebase window).
+			// Section 2's anchor points at line 8 of the original; after section 1
+			// applies, that content moves to line 16. A naive sequential apply reads
+			// the modified disk and fails anchor validation because rebase cannot
+			// span the 8-line gap.
+			const input = [
+				"@a.ts",
+				`= ${tag(2, "L2")}`,
+				pl("L2a"),
+				pl("L2b"),
+				pl("L2c"),
+				pl("L2d"),
+				pl("L2e"),
+				pl("L2f"),
+				pl("L2g"),
+				pl("L2h"),
+				pl("L2i"),
+				"@a.ts",
+				`+ ${tag(8, "L8")}`,
+				pl("INSERTED"),
+			].join("\n");
+
+			await executeHashlineSingle(hashlineExecuteOptions(tempDir, input));
+
+			expect(await Bun.file(filePath).text()).toBe(
+				[
+					"L1",
+					"L2a",
+					"L2b",
+					"L2c",
+					"L2d",
+					"L2e",
+					"L2f",
+					"L2g",
+					"L2h",
+					"L2i",
+					"L3",
+					"L4",
+					"L5",
+					"L6",
+					"L7",
+					"L8",
+					"INSERTED",
+					"L9",
+					"L10",
+					"",
+				].join("\n"),
+			);
+		});
+	});
 });
 
 describe("hashlineEditParamsSchema — extra-field tolerance", () => {

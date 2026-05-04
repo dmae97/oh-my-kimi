@@ -1486,7 +1486,9 @@ async function executeHashlineSection(
 export async function executeHashlineSingle(
 	options: ExecuteHashlineSingleOptions,
 ): Promise<AgentToolResult<EditToolDetails, typeof hashlineEditParamsSchema>> {
-	const sections = splitHashlineInputs(options.input, { cwd: options.session.cwd, path: options.path });
+	const sections = mergeSamePathSections(
+		splitHashlineInputs(options.input, { cwd: options.session.cwd, path: options.path }),
+	);
 
 	// Fast path: a single section needs no preflight pass.
 	if (sections.length === 1) return executeHashlineSection({ ...options, ...sections[0] });
@@ -1517,4 +1519,21 @@ export async function executeHashlineSingle(
 			}),
 		},
 	};
+}
+
+/**
+ * Collapse consecutive or interleaved sections targeting the same path into a
+ * single section with concatenated diffs. Anchors authored against the same
+ * file snapshot must be applied as one batch; otherwise the first sub-edit
+ * shifts line numbers out from under the second's anchors and rebase fails.
+ * Path order is preserved by first occurrence.
+ */
+function mergeSamePathSections(sections: HashlineInputSection[]): HashlineInputSection[] {
+	const byPath = new Map<string, string[]>();
+	for (const section of sections) {
+		const existing = byPath.get(section.path);
+		if (existing) existing.push(section.diff);
+		else byPath.set(section.path, [section.diff]);
+	}
+	return Array.from(byPath, ([path, diffs]) => ({ path, diff: diffs.join("\n") }));
 }
