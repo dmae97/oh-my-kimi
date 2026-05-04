@@ -102,7 +102,7 @@ export async function generateCommitMessage(
 			const response = await completeSimple(
 				candidate.model,
 				{
-					systemPrompt: COMMIT_SYSTEM_PROMPT,
+					systemPrompt: [COMMIT_SYSTEM_PROMPT],
 					messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
 				},
 				{ apiKey, maxTokens: 60, reasoning: toReasoningEffort(candidate.thinkingLevel) },

@@ -1,14 +1,18 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
-- 
+- Changed session system-prompt APIs to use ordered string block arrays by requiring `buildSystemPrompt`, `CreateAgentSessionOptions.systemPrompt`, `Session.rebuildSystemPrompt`, and extension `before_agent_start`/`getSystemPrompt` hooks to accept and return `systemPrompt: string[]` instead of a plain system-prompt string or separate `projectPrompt` field
+- Changed `buildSystemPrompt` and session `rebuildSystemPrompt` APIs to return `{ systemPrompt, projectPrompt }`, requiring callers expecting a plain system prompt string to update to the new shape
 - Removed the top-level `sel` parameter from the `read` tool schema, requiring callers to migrate to `path`-embedded selectors (for example `path:50-100`, `path:raw`, or `https://...:L1-L40`)
 
 ### Added
 
+- Added a separate `projectPrompt` artifact containing per-session project context (workstation, context files, AGENTS.md rules, workspace tree, and append prompt) so dynamic context is decoupled from the static system prompt
+- Added `Project prompt` token accounting to context-usage breakdowns and charts
+- Added `tools.elideFileMutationInputs` setting to optionally elide large `write`, `edit`, and `apply_patch` payloads in history after successful mutations
+- Added hashline-style return data for elided `write` calls so tools can include the resulting file content without leaking full input text
 - Added `buildDirectoryTree` and `DirectoryTree` exports to generate configurable directory trees with options for depth, entry limits, hidden-file handling, and truncation caps
 - Added `buildWorkspaceTree` and `WorkspaceTree` exports so callers can precompute and pass a workspace context to prompt generation
 - Added `workspaceTree` support to `buildSystemPrompt` options to reuse a prebuilt directory snapshot
@@ -17,6 +21,11 @@
 
 ### Changed
 
+- Updated session dump and HTML export output to serialize ordered system-prompt blocks (including project context) and removed the dedicated project-prompt dump section
+- Renamed context-usage system-prompt accounting from a separate `projectPrompt` bucket to `systemContext` to match the new multi-block prompt structure
+- Changed prompt delivery to inject non-empty `projectPrompt` as a leading `developer` message before conversation messages instead of merging it into the base system prompt
+- Added `projectPrompt` to session dumps to expose the injected per-session project context separately
+- Changed write success output and preview rendering to display hashline-formatted written content from captured file text when mutation inputs are elided
 - Changed `read` directory rendering to return a two-level recency-sorted directory tree (including nested folders) instead of a flat alphabetical entry list, while still applying configurable truncation
 - Changed generated system prompts to include a working-directory tree block after directory context, showing recent files/directories (depth ≤ 3) and truncation notices when entries are elided
 - Changed `read` summary rendering to merge opening- and closing-brace boundaries around elided sections into a single `..` line (including closers like `};` or `})`), reducing those segments to one concise anchored summary line

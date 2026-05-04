@@ -127,7 +127,7 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 		const response = await this.completeImageRequest(
 			model,
 			{
-				systemPrompt: prompt.render(inspectImageSystemPromptTemplate),
+				systemPrompt: [prompt.render(inspectImageSystemPromptTemplate)],
 				messages: [
 					{
 						role: "user",

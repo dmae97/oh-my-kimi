@@ -502,7 +502,7 @@ export interface Tool<TParameters extends TSchema = TSchema> {
 }
 
 export interface Context {
-	systemPrompt?: string;
+	systemPrompt?: string[];
 	messages: Message[];
 	tools?: Tool[];
 }

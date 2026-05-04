@@ -54,7 +54,7 @@ export interface TestSessionOptions {
 	/** Use in-memory session (no file persistence) */
 	inMemory?: boolean;
 	/** Custom system prompt */
-	systemPrompt?: string;
+	systemPrompt?: string | string[];
 	/** Custom settings overrides */
 	settingsOverrides?: Record<string, unknown>;
 }
@@ -91,7 +91,9 @@ export async function createTestSession(options: TestSessionOptions = {}): Promi
 		getApiKey: () => e2eApiKey("ANTHROPIC_API_KEY"),
 		initialState: {
 			model,
-			systemPrompt: options.systemPrompt ?? "You are a helpful assistant. Be extremely concise.",
+			systemPrompt: Array.isArray(options.systemPrompt)
+				? options.systemPrompt
+				: [options.systemPrompt ?? "You are a helpful assistant. Be extremely concise."],
 			tools,
 		},
 	});

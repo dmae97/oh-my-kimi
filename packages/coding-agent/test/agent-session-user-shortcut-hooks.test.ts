@@ -42,7 +42,7 @@ describe("AgentSession user shortcut hooks", () => {
 		const agent = new Agent({
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},

@@ -18,13 +18,13 @@ const CELL_FILLED_MESSAGES = "⛃";
 const CELL_FREE = "⛶";
 const CELL_BUFFER = "⛝";
 
-type CategoryId = "systemPrompt" | "systemTools" | "skills" | "messages";
+type CategoryId = "systemPrompt" | "systemContext" | "systemTools" | "skills" | "messages";
 
 interface CategoryInfo {
 	id: CategoryId;
 	label: string;
 	tokens: number;
-	color: "accent" | "warning" | "success" | "userMessageText";
+	color: "accent" | "warning" | "success" | "userMessageText" | "customMessageLabel";
 	glyph: string;
 }
 
@@ -86,12 +86,19 @@ export function computeContextBreakdown(session: AgentSession): ContextBreakdown
 	//   Tools         = JSON tool schema sent separately on the wire
 	//   Skills        = the skill list embedded in the system prompt
 	//   Messages      = conversation messages
-	const systemPromptTextTokens = countTokens(session.systemPrompt);
-	const systemPromptTokens = Math.max(0, systemPromptTextTokens - skillsTokens);
+	const systemPromptTokens = Math.max(0, countTokens(session.systemPrompt[0] ?? "") - skillsTokens);
+	const systemContextTokens = countTokens(session.systemPrompt.slice(1));
 
 	const categories: CategoryInfo[] = [
 		{ id: "systemPrompt", label: "System prompt", tokens: systemPromptTokens, color: "accent", glyph: CELL_FILLED },
 		{ id: "systemTools", label: "System tools", tokens: toolsTokens, color: "warning", glyph: CELL_FILLED },
+		{
+			id: "systemContext",
+			label: "System context",
+			tokens: systemContextTokens,
+			color: "customMessageLabel",
+			glyph: CELL_FILLED,
+		},
 		{ id: "skills", label: "Skills", tokens: skillsTokens, color: "success", glyph: CELL_FILLED },
 		{
 			id: "messages",
@@ -134,7 +141,7 @@ export function computeContextBreakdown(session: AgentSession): ContextBreakdown
 
 interface CellSpec {
 	glyph: string;
-	color: "accent" | "warning" | "success" | "userMessageText" | "muted" | "dim";
+	color: "accent" | "warning" | "success" | "userMessageText" | "customMessageLabel" | "muted" | "dim";
 }
 
 function planCells(breakdown: ContextBreakdown): CellSpec[] {

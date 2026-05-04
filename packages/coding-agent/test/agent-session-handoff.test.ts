@@ -38,7 +38,7 @@ describe("AgentSession handoff", () => {
 		const agent = new Agent({
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},
@@ -465,7 +465,7 @@ describe("AgentSession handoff", () => {
 			getApiKey: () => "test-key",
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},
@@ -572,7 +572,7 @@ describe("AgentSession handoff", () => {
 			modelRegistry,
 		);
 		const emitBeforeAgentStart = vi.spyOn(extensionRunner, "emitBeforeAgentStart").mockResolvedValueOnce({
-			systemPrompt: "Hook override",
+			systemPrompt: ["Hook override"],
 		});
 		vi.spyOn(extensionRunner, "emit").mockResolvedValue(undefined);
 
@@ -582,12 +582,12 @@ describe("AgentSession handoff", () => {
 			getApiKey: () => "test-key",
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},
 			streamFn: (_model, context) => {
-				observedSystemPrompts.push(context.systemPrompt ?? "");
+				observedSystemPrompts.push(context.systemPrompt?.join("\n\n") ?? "");
 				streamCallCount++;
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {

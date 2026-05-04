@@ -240,7 +240,7 @@ export interface ExtensionContext {
 	/** Gracefully shutdown and exit. */
 	shutdown(): void;
 	/** Get the current effective system prompt. */
-	getSystemPrompt(): string;
+	getSystemPrompt(): string[];
 	/** @deprecated Use hasPendingMessages() instead */
 	hasQueuedMessages(): boolean;
 }
@@ -492,7 +492,7 @@ export interface BeforeAgentStartEvent {
 	type: "before_agent_start";
 	prompt: string;
 	images?: ImageContent[];
-	systemPrompt: string;
+	systemPrompt: string[];
 }
 
 /** Fired when an agent loop starts */
@@ -876,7 +876,7 @@ export interface ToolResultEventResult {
 export interface BeforeAgentStartEventResult {
 	message?: Pick<CustomMessage, "customType" | "content" | "display" | "details" | "attribution">;
 	/** Replace the system prompt for this turn. If multiple extensions return this, they are chained. */
-	systemPrompt?: string;
+	systemPrompt?: string[];
 }
 
 export interface SessionBeforeSwitchResult {
@@ -1318,7 +1318,7 @@ export interface ExtensionContextActions {
 	shutdown: () => void;
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (instructionsOrOptions?: string | CompactOptions) => Promise<void>;
-	getSystemPrompt: () => string;
+	getSystemPrompt: () => string[];
 }
 
 /** Actions for ExtensionCommandContext (ctx.* in command handlers). */

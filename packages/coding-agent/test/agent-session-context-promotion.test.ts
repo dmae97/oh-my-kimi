@@ -106,7 +106,7 @@ describe("AgentSession context promotion", () => {
 		const agent = new Agent({
 			initialState: {
 				model: sparkModel,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},
@@ -151,7 +151,7 @@ describe("AgentSession context promotion", () => {
 		const agent = new Agent({
 			initialState: {
 				model: sparkModel,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},
@@ -187,7 +187,7 @@ describe("AgentSession context promotion", () => {
 		const agent = new Agent({
 			initialState: {
 				model: codexModel,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},
@@ -224,7 +224,7 @@ describe("AgentSession context promotion", () => {
 		const agent = new Agent({
 			initialState: {
 				model: nonCodexModel,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},
@@ -259,7 +259,7 @@ describe("AgentSession context promotion", () => {
 		const agent = new Agent({
 			initialState: {
 				model: codexModel,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},
@@ -300,7 +300,7 @@ describe("AgentSession context promotion", () => {
 		const agent = new Agent({
 			initialState: {
 				model: codexModel,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},
@@ -346,7 +346,7 @@ describe("AgentSession context promotion", () => {
 		const agent = new Agent({
 			initialState: {
 				model: sparkModel,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},

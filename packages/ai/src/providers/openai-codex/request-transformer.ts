@@ -77,7 +77,7 @@ export async function transformRequestBody(
 	body: RequestBody,
 	model: Model<Api>,
 	options: CodexRequestOptions = {},
-	prompt?: { instructions: string; developerMessages: string[] },
+	prompt?: { developerMessages: string[] },
 ): Promise<RequestBody> {
 	body.store = false;
 	body.stream = true;

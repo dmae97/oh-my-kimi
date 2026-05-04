@@ -14,7 +14,6 @@ import { parseInternalUrl } from "../internal-urls/parse";
 import type { InternalUrl } from "../internal-urls/types";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
 import readDescription from "../prompts/tools/read.md" with { type: "text" };
-import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
 import type { ToolSession } from "../sdk";
 import {
 	DEFAULT_MAX_BYTES,
@@ -29,6 +28,7 @@ import { CachedOutputBlock } from "../tui/output-block";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { ImageInputTooLargeError, loadImageInput, MAX_IMAGE_INPUT_BYTES } from "../utils/image-loading";
 import { convertFileWithMarkit } from "../utils/markit";
+import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
 import { type ArchiveReader, openArchive, parseArchivePathCandidates } from "./archive-reader";
 import {
 	executeReadUrl,
@@ -83,7 +83,6 @@ const READ_DIRECTORY_EXCLUDED_DIRS = new Set([
 	".parcel-cache",
 	"coverage",
 ]);
-
 
 function isRemoteMountPath(absolutePath: string): boolean {
 	return absolutePath.startsWith(REMOTE_MOUNT_PREFIX);
@@ -1532,7 +1531,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		const resultBuilder = toolResult(details).text(truncation.content).sourcePath(tree.rootPath);
 		if (tree.truncated) {
-			resultBuilder.limits({ resultLimit: true });
+			resultBuilder.limits({ resultLimit: 1 });
 		}
 		if (truncation.truncated) {
 			resultBuilder.truncation(truncation, { direction: "head" });

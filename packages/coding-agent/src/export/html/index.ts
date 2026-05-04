@@ -124,7 +124,7 @@ export async function exportSessionToHtml(
 		header: sm.getHeader(),
 		entries: sm.getEntries(),
 		leafId: sm.getLeafId(),
-		systemPrompt: state?.systemPrompt,
+		systemPrompt: state?.systemPrompt.join("\n\n"),
 		tools: state?.tools?.map(t => ({ name: t.name, description: t.description })),
 	};
 

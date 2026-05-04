@@ -49,7 +49,7 @@ function createMockSession(
 
 	const session = {
 		state,
-		agent: { state: { systemPrompt: "test" } },
+		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
 		extensionRunner: undefined,
 		sessionManager: {

@@ -51,7 +51,7 @@ describe("InteractiveMode LSP startup welcome banner", () => {
 			agent: new Agent({
 				initialState: {
 					model,
-					systemPrompt: "Test",
+					systemPrompt: ["Test"],
 					tools: [],
 					messages: [],
 				},

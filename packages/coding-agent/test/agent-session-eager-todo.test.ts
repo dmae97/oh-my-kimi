@@ -131,7 +131,7 @@ describe("AgentSession eager todo enforcement", () => {
 			getApiKey: () => "test-key",
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [todoWriteTool, mockBashTool],
 				messages: [],
 			},

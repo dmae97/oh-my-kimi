@@ -12,7 +12,7 @@ describe("Agent", () => {
 		const agent = new Agent();
 
 		expect(agent.state).toBeDefined();
-		expect(agent.state.systemPrompt).toBe("");
+		expect(agent.state.systemPrompt).toEqual([]);
 		expect(agent.state.model).toBeDefined();
 		expect(agent.state.thinkingLevel).toBeUndefined();
 		expect(agent.state.tools).toEqual([]);
@@ -27,13 +27,13 @@ describe("Agent", () => {
 		const customModel = getBundledModel("openai", "gpt-4o-mini");
 		const agent = new Agent({
 			initialState: {
-				systemPrompt: "You are a helpful assistant.",
+				systemPrompt: ["You are a helpful assistant."],
 				model: customModel,
 				thinkingLevel: ThinkingLevel.Low,
 			},
 		});
 
-		expect(agent.state.systemPrompt).toBe("You are a helpful assistant.");
+		expect(agent.state.systemPrompt).toEqual(["You are a helpful assistant."]);
 		expect(agent.state.model).toBe(customModel);
 		expect(agent.state.thinkingLevel).toBe(ThinkingLevel.Low);
 	});
@@ -50,13 +50,13 @@ describe("Agent", () => {
 		expect(eventCount).toBe(0);
 
 		// State mutators don't emit events
-		agent.setSystemPrompt("Test prompt");
+		agent.setSystemPrompt(["Test prompt"]);
 		expect(eventCount).toBe(0);
-		expect(agent.state.systemPrompt).toBe("Test prompt");
+		expect(agent.state.systemPrompt).toEqual(["Test prompt"]);
 
 		// Unsubscribe should work
 		unsubscribe();
-		agent.setSystemPrompt("Another prompt");
+		agent.setSystemPrompt(["Another prompt"]);
 		expect(eventCount).toBe(0); // Should not increase
 	});
 
@@ -64,8 +64,8 @@ describe("Agent", () => {
 		const agent = new Agent();
 
 		// Test setSystemPrompt
-		agent.setSystemPrompt("Custom prompt");
-		expect(agent.state.systemPrompt).toBe("Custom prompt");
+		agent.setSystemPrompt(["Custom prompt"]);
+		expect(agent.state.systemPrompt).toEqual(["Custom prompt"]);
 
 		// Test setModel
 		const newModel = getBundledModel("google", "gemini-2.5-flash");
@@ -229,13 +229,13 @@ describe("Agent", () => {
 		const agent = new Agent({
 			initialState: {
 				model: getBundledModel("openai", "gpt-4o-mini"),
-				systemPrompt: "prompt-one",
+				systemPrompt: ["prompt-one"],
 				tools: [alphaTool],
 				messages: [],
 			},
 			streamFn: (_model, context) => {
 				callContexts.push({
-					systemPrompt: context.systemPrompt ?? "",
+					systemPrompt: context.systemPrompt?.join("\n\n") ?? "",
 					toolNames: (context.tools ?? []).map(tool => tool.name),
 				});
 				const stream = new MockAssistantStream();
@@ -249,7 +249,7 @@ describe("Agent", () => {
 
 		const unsubscribe = agent.subscribe(event => {
 			if (event.type === "message_end" && event.message.role === "toolResult") {
-				agent.setSystemPrompt("prompt-two");
+				agent.setSystemPrompt(["prompt-two"]);
 				agent.setTools([alphaTool, betaTool]);
 			}
 		});

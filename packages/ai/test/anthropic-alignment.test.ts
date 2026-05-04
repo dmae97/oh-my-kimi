@@ -125,7 +125,7 @@ describe("Anthropic request fingerprint alignment", () => {
 	});
 
 	it("injects billing header and Claude Agent SDK identity block", () => {
-		const blocks = buildAnthropicSystemBlocks("Stay concise.", {
+		const blocks = buildAnthropicSystemBlocks(["Stay concise."], {
 			includeClaudeCodeInstruction: true,
 			extraInstructions: ["Use citations when possible"],
 		});
@@ -147,24 +147,40 @@ describe("Anthropic request fingerprint alignment", () => {
 		});
 	});
 
-	it("applies cache_control to system blocks when cacheControl option is set", () => {
-		const blocks = buildAnthropicSystemBlocks("Stay concise.", {
+	it("attaches cache_control only to the last emitted system block when cacheControl is set", () => {
+		const blocks = buildAnthropicSystemBlocks(["Stay concise."], {
 			includeClaudeCodeInstruction: true,
 			extraInstructions: ["Use citations when possible"],
 			cacheControl: { type: "ephemeral" },
 		});
 
 		expect(blocks).toBeDefined();
+		// Earlier blocks must NOT carry cache_control; a single trailing breakpoint covers them all.
 		expect(blocks?.[2]).toEqual({
 			type: "text",
 			text: "Use citations when possible",
-			cache_control: { type: "ephemeral" },
 		});
 		expect(blocks?.[3]).toEqual({
 			type: "text",
 			text: "Stay concise.",
 			cache_control: { type: "ephemeral" },
 		});
+	});
+
+	it("places the automatic Anthropic cache breakpoint on the last ordered system prompt", async () => {
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["stable system", "stable durable context"],
+				messages: [{ role: "user", content: "variable context", timestamp: Date.now() }],
+			},
+			{ isOAuth: false },
+		)) as { system?: Array<{ type: string; text?: string; cache_control?: unknown }> };
+
+		expect(payload.system).toEqual([
+			{ type: "text", text: "stable system" },
+			{ type: "text", text: "stable durable context", cache_control: { type: "ephemeral" } },
+		]);
 	});
 
 	it("uses Bearer auth for non-Anthropic API bases with api-key credentials", () => {
@@ -217,7 +233,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		const payload = (await captureAnthropicPayload(
 			{ ...ANTHROPIC_MODEL, id: "claude-3-5-haiku", name: "Claude 3.5 Haiku" },
 			{
-				systemPrompt: "Stay concise.",
+				systemPrompt: ["Stay concise."],
 				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 			},
 		)) as { system?: Array<{ type: string; text?: string }> };
@@ -241,7 +257,7 @@ describe("Anthropic request fingerprint alignment", () => {
 
 	it("injects generated metadata.user_id for OAuth requests when missing", async () => {
 		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
-			systemPrompt: "Stay concise.",
+			systemPrompt: ["Stay concise."],
 			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 		})) as { metadata?: { user_id?: string } };
 		const userId = payload.metadata?.user_id;
@@ -253,7 +269,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		const payload = (await captureAnthropicPayload(
 			ANTHROPIC_MODEL,
 			{
-				systemPrompt: "Stay concise.",
+				systemPrompt: ["Stay concise."],
 				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 			},
 			{ isOAuth: false },
@@ -266,7 +282,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		const payload = (await captureAnthropicPayload(
 			ANTHROPIC_MODEL,
 			{
-				systemPrompt: "Stay concise.",
+				systemPrompt: ["Stay concise."],
 				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 			},
 			{ metadata: { user_id: userId } },
@@ -279,7 +295,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		const payload = (await captureAnthropicPayload(
 			ANTHROPIC_MODEL,
 			{
-				systemPrompt: "Stay concise.",
+				systemPrompt: ["Stay concise."],
 				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 			},
 			{ metadata: { user_id: "invalid-user-id" } },
@@ -328,7 +344,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		];
 
 		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
-			systemPrompt: "Stay concise.",
+			systemPrompt: ["Stay concise."],
 			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 			tools,
 		})) as {
@@ -390,7 +406,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		];
 
 		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
-			systemPrompt: "Stay concise.",
+			systemPrompt: ["Stay concise."],
 			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 			tools,
 		})) as {
@@ -429,7 +445,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		];
 
 		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
-			systemPrompt: "Stay concise.",
+			systemPrompt: ["Stay concise."],
 			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 			tools,
 		})) as {
@@ -470,7 +486,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		const payload = (await captureAnthropicPayload(
 			ANTHROPIC_MODEL,
 			{
-				systemPrompt: "Stay concise.",
+				systemPrompt: ["Stay concise."],
 				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 				tools,
 			},
@@ -531,7 +547,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		const payload = (await captureAnthropicPayload(
 			ANTHROPIC_MODEL,
 			{
-				systemPrompt: "Stay concise.",
+				systemPrompt: ["Stay concise."],
 				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 				tools,
 			},
@@ -787,7 +803,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		const payload = (await captureAnthropicPayload(
 			ANTHROPIC_MODEL,
 			{
-				systemPrompt: "Stay concise.",
+				systemPrompt: ["Stay concise."],
 				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 			},
 			{ temperature: 0.2 },
@@ -801,7 +817,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		const payload = (await captureAnthropicPayload(
 			ANTHROPIC_MODEL,
 			{
-				systemPrompt: "Stay concise.",
+				systemPrompt: ["Stay concise."],
 				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 			},
 			{ thinkingEnabled: false },
@@ -814,7 +830,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		const payload = (await captureAnthropicPayload(
 			{ ...ANTHROPIC_MODEL, id: "claude-opus-4-7", name: "Claude Opus 4.7" },
 			{
-				systemPrompt: "Stay concise.",
+				systemPrompt: ["Stay concise."],
 				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 			},
 			{
@@ -848,7 +864,7 @@ describe("Anthropic request fingerprint alignment", () => {
 				},
 			},
 			{
-				systemPrompt: "Stay concise.",
+				systemPrompt: ["Stay concise."],
 				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 			},
 			{

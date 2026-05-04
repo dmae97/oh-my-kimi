@@ -63,7 +63,7 @@ function buildSystemBlocks(
 	const includeClaudeCode = !model.startsWith("claude-3-5-haiku");
 	const extraInstructions = auth.isOAuth ? ["You are a helpful AI assistant with web search capabilities."] : [];
 
-	return buildAnthropicSystemBlocks(systemPrompt, {
+	return buildAnthropicSystemBlocks(systemPrompt ? [systemPrompt] : undefined, {
 		includeClaudeCodeInstruction: includeClaudeCode,
 		extraInstructions,
 		cacheControl: { type: "ephemeral" },

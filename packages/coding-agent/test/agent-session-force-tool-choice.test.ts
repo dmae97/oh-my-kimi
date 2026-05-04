@@ -48,7 +48,7 @@ beforeEach(async () => {
 		getApiKey: () => "test-key",
 		initialState: {
 			model,
-			systemPrompt: "Test",
+			systemPrompt: ["Test"],
 			tools: [bashTool, writeTool],
 			messages: [],
 		},

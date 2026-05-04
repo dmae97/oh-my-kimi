@@ -1,6 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Changed `Agent` API types so `systemPrompt` is now a list of prompt strings, requiring callers to pass and update system prompts via string arrays
+
+### Changed
+
+- Removed automatic project-context injection into each model call from loop logic
+
+### Removed
+
+- Removed the `projectPrompt` field from agent state/context and the `setProjectPrompt` mutator
 
 ## [14.6.2] - 2026-05-03
 

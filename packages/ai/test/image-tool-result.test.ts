@@ -45,7 +45,7 @@ async function handleToolWithImageResult<TApi extends Api>(model: Model<TApi>, o
 	};
 
 	const context: Context = {
-		systemPrompt: "You are a helpful assistant that uses tools when asked.",
+		systemPrompt: ["You are a helpful assistant that uses tools when asked."],
 		messages: [
 			{
 				role: "user",
@@ -133,7 +133,7 @@ async function handleToolWithTextAndImageResult<TApi extends Api>(model: Model<T
 	};
 
 	const context: Context = {
-		systemPrompt: "You are a helpful assistant that uses tools when asked.",
+		systemPrompt: ["You are a helpful assistant that uses tools when asked."],
 		messages: [
 			{
 				role: "user",

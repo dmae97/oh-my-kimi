@@ -44,7 +44,7 @@ describe("AgentSession role model thinking behavior", () => {
 		const agent = new Agent({
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 				thinkingLevel: options.initialThinkingLevel,
@@ -179,7 +179,7 @@ describe("AgentSession role model thinking behavior", () => {
 		const agent = new Agent({
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 				thinkingLevel: undefined,
@@ -209,7 +209,7 @@ describe("AgentSession role model thinking behavior", () => {
 		const agent = new Agent({
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 				thinkingLevel: Effort.High,

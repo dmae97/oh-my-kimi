@@ -1,6 +1,23 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Changed `Context.systemPrompt` from a string to `string[]`, so callers must now pass an array of prompts instead of a single string
+- Changed behavior will throw at runtime for non-array system prompts because request builders now normalize system prompts as an array
+
+### Added
+
+- Added support for multiple system prompts by changing `Context.systemPrompt` to an ordered string array and preserving provider-appropriate instruction precedence
+
+### Changed
+
+- Changed request builders for Anthropic, OpenAI, Bedrock, Azure, Cursor, Google, and Ollama to propagate every non-empty system prompt entry without demoting durable instructions into ordinary conversation turns
+
+### Fixed
+
+- Filtered out empty normalized system prompts so blank entries are no longer sent to providers
+- Removed blank system prompt strings from provider payloads to avoid unnecessary empty instruction messages
 
 ## [14.6.6] - 2026-05-04
 

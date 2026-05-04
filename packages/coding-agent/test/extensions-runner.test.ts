@@ -647,7 +647,7 @@ describe("ExtensionRunner", () => {
 					shutdown: () => {},
 					getContextUsage: () => undefined,
 					compact: async () => {},
-					getSystemPrompt: () => "",
+					getSystemPrompt: () => [],
 				},
 			);
 

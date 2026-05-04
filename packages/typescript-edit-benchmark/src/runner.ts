@@ -33,7 +33,7 @@ function formatLogPath(logFile: string): string {
 /** Subset of session state used for markdown conversation dumps (parity with /dump). */
 type ConversationDumpSessionState = {
 	sessionFile?: string;
-	systemPrompt?: string;
+	systemPrompt?: string[];
 	model?: Model;
 	thinkingLevel?: ThinkingLevel | undefined;
 	dumpTools?: Array<{ name: string; description: string; parameters: unknown }>;
@@ -99,7 +99,7 @@ export interface BenchmarkConfig {
 type ConversationDumpSnapshot = {
 	messages: AgentMessage[];
 	sourceSessionFile?: string;
-	systemPrompt?: string;
+	systemPrompt?: string[];
 	model?: Model;
 	thinkingLevel?: ThinkingLevel | undefined;
 	dumpTools?: Array<{ name: string; description: string; parameters: unknown }>;
@@ -1050,7 +1050,7 @@ async function runSingleTask(
 			}
 
 			const initialState = await client.getState();
-			const systemPromptTokens = estimateTokens(initialState.systemPrompt ?? "");
+			const systemPromptTokens = estimateTokens(initialState.systemPrompt?.join("\n\n") ?? "");
 
 			const maxAttempts = Math.max(1, Math.floor(config.maxAttempts ?? 1));
 			const maxTimeoutRetries = config.maxTimeoutRetries ?? 3;

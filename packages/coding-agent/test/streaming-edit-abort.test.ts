@@ -91,7 +91,7 @@ async function createSession(
 		getApiKey: () => "test-key",
 		initialState: {
 			model,
-			systemPrompt: "Test",
+			systemPrompt: ["Test"],
 			tools: [tool],
 		},
 		streamFn,

@@ -36,6 +36,7 @@ import {
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
 	normalizeResponsesToolCallId,
+	normalizeSystemPrompts,
 } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
@@ -51,6 +52,7 @@ import {
 	transformRequestBody,
 } from "./openai-codex/request-transformer";
 import { parseCodexError } from "./openai-codex/response-handler";
+import { normalizeOpenAIResponsesPromptCacheKey } from "./openai-responses";
 import {
 	encodeResponsesToolCallId,
 	encodeTextSignatureV1,
@@ -476,6 +478,7 @@ async function buildCodexRequestContext(
 	const accountId = getAccountId(apiKey);
 	const baseUrl = model.baseUrl || CODEX_BASE_URL;
 	const url = resolveCodexResponsesUrl(baseUrl);
+	const promptCacheKey = normalizeOpenAIResponsesPromptCacheKey(options?.sessionId);
 	const transformedBody = await buildTransformedCodexRequestBody(model, context, options);
 	options?.onPayload?.(transformedBody);
 
@@ -490,8 +493,8 @@ async function buildCodexRequestContext(
 	};
 
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
-	const sessionKey = getCodexWebSocketSessionKey(options?.sessionId, model, accountId, baseUrl);
-	const publicSessionKey = getCodexPublicSessionKey(options?.sessionId, model, baseUrl);
+	const sessionKey = getCodexWebSocketSessionKey(promptCacheKey, model, accountId, baseUrl);
+	const publicSessionKey = getCodexPublicSessionKey(promptCacheKey, model, baseUrl);
 	if (sessionKey && publicSessionKey) {
 		providerSessionState?.webSocketPublicToPrivate.set(publicSessionKey, sessionKey);
 	}
@@ -520,7 +523,7 @@ async function buildTransformedCodexRequestBody(
 		model: model.id,
 		input: [...convertMessages(model, context)],
 		stream: true,
-		prompt_cache_key: options?.sessionId,
+		prompt_cache_key: normalizeOpenAIResponsesPromptCacheKey(options?.sessionId),
 	};
 
 	if (options?.maxTokens) {
@@ -567,8 +570,11 @@ async function buildTransformedCodexRequestBody(
 		}
 	}
 
-	params.instructions = context.systemPrompt;
-
+	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
+	if (systemPrompts.length > 0) {
+		params.instructions = systemPrompts[0];
+	}
+	const developerMessages = systemPrompts.slice(1);
 	const codexOptions: CodexRequestOptions = {
 		reasoningEffort: options?.reasoning,
 		reasoningSummary: options?.reasoningSummary ?? "auto",
@@ -576,7 +582,7 @@ async function buildTransformedCodexRequestBody(
 		include: options?.include,
 	};
 
-	return transformRequestBody(params, model, codexOptions);
+	return transformRequestBody(params, model, codexOptions, { developerMessages });
 }
 
 async function openInitialCodexEventStream(
@@ -628,7 +634,7 @@ async function openInitialCodexEventStream(
 async function openCodexWebSocketTransport(
 	requestContext: CodexRequestContext,
 	requestSetup: CodexRequestSetup,
-	options: OpenAICodexResponsesOptions | undefined,
+	_options: OpenAICodexResponsesOptions | undefined,
 	websocketState: CodexWebSocketSessionState,
 	retry: number,
 ): Promise<{
@@ -641,7 +647,7 @@ async function openCodexWebSocketTransport(
 		requestContext.requestHeaders,
 		requestContext.accountId,
 		requestContext.apiKey,
-		options?.sessionId,
+		requestContext.transformedBody.prompt_cache_key,
 		"websocket",
 		websocketState,
 	);
@@ -670,7 +676,7 @@ async function openCodexWebSocketTransport(
 async function openCodexSseTransport(
 	requestContext: CodexRequestContext,
 	requestSetup: CodexRequestSetup,
-	options: OpenAICodexResponsesOptions | undefined,
+	_options: OpenAICodexResponsesOptions | undefined,
 	state: CodexWebSocketSessionState | undefined,
 	body = requestContext.transformedBody,
 ): Promise<{
@@ -684,7 +690,7 @@ async function openCodexSseTransport(
 			requestContext.requestHeaders,
 			requestContext.accountId,
 			requestContext.apiKey,
-			options?.sessionId,
+			body.prompt_cache_key,
 			body,
 			state,
 			requestSetup.requestSignal,
@@ -1559,9 +1565,10 @@ export async function prewarmOpenAICodexResponses(
 	const accountId = getAccountId(apiKey);
 	const baseUrl = model.baseUrl || CODEX_BASE_URL;
 	const url = resolveCodexResponsesUrl(baseUrl);
+	const promptCacheKey = normalizeOpenAIResponsesPromptCacheKey(options?.sessionId);
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
-	const sessionKey = getCodexWebSocketSessionKey(options?.sessionId, model, accountId, baseUrl);
-	const publicSessionKey = getCodexPublicSessionKey(options?.sessionId, model, baseUrl);
+	const sessionKey = getCodexWebSocketSessionKey(promptCacheKey, model, accountId, baseUrl);
+	const publicSessionKey = getCodexPublicSessionKey(promptCacheKey, model, baseUrl);
 	if (publicSessionKey && sessionKey) {
 		providerSessionState?.webSocketPublicToPrivate.set(publicSessionKey, sessionKey);
 	}
@@ -1574,7 +1581,7 @@ export async function prewarmOpenAICodexResponses(
 		{ ...(model.headers ?? {}), ...(options?.headers ?? {}) },
 		accountId,
 		apiKey,
-		options?.sessionId,
+		promptCacheKey,
 		"websocket",
 		state,
 	);
@@ -1595,8 +1602,9 @@ function getCodexWebSocketSessionKey(
 	accountId: string,
 	baseUrl: string,
 ): string | undefined {
-	if (!sessionId || sessionId.length === 0) return undefined;
-	return `${accountId}:${baseUrl}:${model.id}:${sessionId}`;
+	const promptCacheKey = normalizeOpenAIResponsesPromptCacheKey(sessionId);
+	if (!promptCacheKey) return undefined;
+	return `${accountId}:${baseUrl}:${model.id}:${promptCacheKey}`;
 }
 
 function getCodexPublicSessionKey(
@@ -1604,8 +1612,9 @@ function getCodexPublicSessionKey(
 	model: Model<"openai-codex-responses">,
 	baseUrl: string,
 ): string | undefined {
-	if (!sessionId || sessionId.length === 0) return undefined;
-	return `${baseUrl}:${model.id}:${sessionId}`;
+	const promptCacheKey = normalizeOpenAIResponsesPromptCacheKey(sessionId);
+	if (!promptCacheKey) return undefined;
+	return `${baseUrl}:${model.id}:${promptCacheKey}`;
 }
 
 function getCodexWebSocketSessionState(

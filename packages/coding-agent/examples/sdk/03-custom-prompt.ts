@@ -7,8 +7,10 @@ import { createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent";
 
 // Option 1: Replace prompt entirely
 const { session: session1 } = await createAgentSession({
-	systemPrompt: `You are a helpful assistant that speaks like a pirate.
+	systemPrompt: [
+		`You are a helpful assistant that speaks like a pirate.
 Always end responses with "Arrr!"`,
+	],
 	sessionManager: SessionManager.inMemory(),
 });
 
@@ -24,11 +26,12 @@ console.log("\n");
 
 // Option 2: Modify default prompt (receives default, returns modified)
 const { session: session2 } = await createAgentSession({
-	systemPrompt: defaultPrompt => `${defaultPrompt}
-
-## Additional Instructions
+	systemPrompt: defaultPrompt => [
+		...defaultPrompt,
+		`## Additional Instructions
 - Always be concise
 - Use bullet points when listing things`,
+	],
 	sessionManager: SessionManager.inMemory(),
 });
 

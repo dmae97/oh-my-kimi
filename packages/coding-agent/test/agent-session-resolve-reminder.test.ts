@@ -40,7 +40,7 @@ describe("AgentSession resolve reminder", () => {
 		const agent = new Agent({
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},

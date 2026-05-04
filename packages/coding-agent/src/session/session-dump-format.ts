@@ -25,7 +25,7 @@ export interface SessionDumpToolInfo {
 
 export interface FormatSessionDumpTextOptions {
 	messages: readonly AgentMessage[];
-	systemPrompt?: string | null;
+	systemPrompt?: readonly string[] | null;
 	model?: Model | null;
 	thinkingLevel?: ThinkingLevel | string | null;
 	tools?: readonly SessionDumpToolInfo[];
@@ -64,11 +64,16 @@ function formatArgsAsXml(args: Record<string, unknown>, indent = "\t"): string {
 export function formatSessionDumpText(options: FormatSessionDumpTextOptions): string {
 	const lines: string[] = [];
 
-	const systemPrompt = options.systemPrompt;
-	if (systemPrompt) {
+	const systemPrompt = options.systemPrompt?.filter(prompt => prompt.length > 0) ?? [];
+	if (systemPrompt.length > 0) {
 		lines.push("## System Prompt\n");
-		lines.push(systemPrompt);
-		lines.push("\n");
+		for (let index = 0; index < systemPrompt.length; index++) {
+			if (systemPrompt.length > 1) {
+				lines.push(`### System Prompt ${index + 1}\n`);
+			}
+			lines.push(systemPrompt[index]);
+			lines.push("\n");
+		}
 	}
 
 	const model = options.model;

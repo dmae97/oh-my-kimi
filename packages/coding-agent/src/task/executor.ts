@@ -967,9 +967,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				contextFiles: options.contextFiles,
 				skills: options.skills,
 				promptTemplates: options.promptTemplates,
-				systemPrompt: defaultPrompt =>
+				systemPrompt: defaultPrompt => [
 					prompt.render(subagentSystemPromptTemplate, {
-						base: defaultPrompt,
+						base: defaultPrompt.join("\n\n"),
 						agent: agent.systemPrompt,
 						worktree: worktree ?? "",
 						outputSchema: normalizedOutputSchema,
@@ -977,6 +977,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						ircPeers: ircEnabled ? renderIrcPeerRoster(id) : "",
 						ircSelfId: ircEnabled ? id : "",
 					}),
+				],
 				sessionManager,
 				hasUI: false,
 				spawns: spawnsEnv,
@@ -1016,7 +1017,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			session.sessionManager.appendSessionInit({
-				systemPrompt: session.agent.state.systemPrompt,
+				systemPrompt: session.agent.state.systemPrompt.join("\n\n"),
 				task,
 				tools: session.getActiveToolNames(),
 				outputSchema,

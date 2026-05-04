@@ -79,7 +79,7 @@ function createFallbackAgent(primaryModel: Model, requestedModels: string[]): Ag
 		getApiKey: provider => `${provider}-test-key`,
 		initialState: {
 			model: primaryModel,
-			systemPrompt: "Test",
+			systemPrompt: ["Test"],
 			tools: [],
 			messages: [],
 		},
@@ -150,7 +150,7 @@ describe("AgentSession retry fallback", () => {
 			getApiKey: provider => `${provider}-test-key`,
 			initialState: {
 				model: primaryModel,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},
@@ -278,7 +278,7 @@ describe("AgentSession retry fallback", () => {
 			getApiKey: provider => `${provider}-test-key`,
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},
@@ -361,7 +361,7 @@ describe("AgentSession retry fallback", () => {
 			getApiKey: provider => `${provider}-test-key`,
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},
@@ -443,7 +443,7 @@ describe("AgentSession retry fallback", () => {
 			getApiKey: provider => `${provider}-test-key`,
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},
@@ -527,7 +527,7 @@ describe("AgentSession retry fallback", () => {
 			getApiKey: provider => `${provider}-test-key`,
 			initialState: {
 				model: primaryModel,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},
@@ -596,7 +596,7 @@ describe("AgentSession retry fallback", () => {
 			getApiKey: provider => `${provider}-test-key`,
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},

@@ -57,7 +57,7 @@ async function testContextOverflow(model: Model, apiKey: string): Promise<Overfl
 	const overflowContent = generateOverflowContent(model.contextWindow);
 
 	const context: Context = {
-		systemPrompt: "You are a helpful assistant.",
+		systemPrompt: ["You are a helpful assistant."],
 		messages: [
 			{
 				role: "user",

@@ -60,7 +60,7 @@ describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("AgentSession branching", () =>
 			getApiKey: () => e2eApiKey("ANTHROPIC_API_KEY"),
 			initialState: {
 				model,
-				systemPrompt: "You are a helpful assistant. Be extremely concise, reply with just a few words.",
+				systemPrompt: ["You are a helpful assistant. Be extremely concise, reply with just a few words."],
 				tools,
 			},
 		});

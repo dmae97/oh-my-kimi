@@ -290,7 +290,7 @@ export async function generateBranchSummary(
 	// Call LLM for summarization
 	const response = await completeSimple(
 		model,
-		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
+		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
 		{ apiKey, signal, maxTokens: 2048 },
 	);
 

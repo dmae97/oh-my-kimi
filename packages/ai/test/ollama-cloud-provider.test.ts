@@ -429,6 +429,36 @@ describe("ollama-cloud provider support", () => {
 		});
 	});
 
+	test("emits one Ollama system message per ordered system prompt entry", async () => {
+		let requestBody: Record<string, unknown> | undefined;
+		global.fetch = vi.fn(async (_input, init) => {
+			requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+			return createNdjsonResponse([
+				{
+					model: "gpt-oss:120b",
+					message: { role: "assistant", content: "done" },
+					done: false,
+				},
+				{ model: "gpt-oss:120b", done: true, done_reason: "stop", prompt_eval_count: 3, eval_count: 1 },
+			]);
+		}) as unknown as typeof fetch;
+
+		await stream(
+			cloudModel,
+			{
+				systemPrompt: ["Stable instruction.", "Extra policy."],
+				messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
+			},
+			{ apiKey: "cloud-test-key" },
+		).result();
+
+		const messages = requestBody?.messages as Array<Record<string, unknown>> | undefined;
+		expect(messages).toHaveLength(3);
+		expect(messages?.[0]).toEqual({ role: "system", content: "Stable instruction." });
+		expect(messages?.[1]).toEqual({ role: "system", content: "Extra policy." });
+		expect(messages?.map(message => message.role)).toEqual(["system", "system", "user"]);
+	});
+
 	describe("mapToolChoice", () => {
 		test("omits tool_choice when undefined or auto", async () => {
 			let requestBody: Record<string, unknown> | undefined;

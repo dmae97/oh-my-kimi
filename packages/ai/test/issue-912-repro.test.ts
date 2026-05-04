@@ -26,7 +26,7 @@ function makeCopilotResponsesModel(baseUrl: string): Model<"openai-responses"> {
 
 function makeContext(): Context {
 	return {
-		systemPrompt: "You are a helpful assistant.",
+		systemPrompt: ["You are a helpful assistant."],
 		messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
 	};
 }

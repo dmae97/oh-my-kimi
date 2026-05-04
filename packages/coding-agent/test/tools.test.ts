@@ -38,7 +38,6 @@ function writeFileWithMtime(filePath: string, content: string, mtimeMs: number):
 	fs.utimesSync(filePath, mtime, mtime);
 }
 
-
 function createFifoOrSkip(fifoPath: string): boolean {
 	if (process.platform === "win32") {
 		return false;

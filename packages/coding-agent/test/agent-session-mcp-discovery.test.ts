@@ -105,7 +105,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
 			},
@@ -117,7 +117,9 @@ describe("AgentSession MCP discovery", () => {
 			modelRegistry: {} as never,
 			toolRegistry,
 			mcpDiscoveryEnabled: true,
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -150,7 +152,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool, docsSearchTool],
 				messages: [],
 			},
@@ -162,7 +164,9 @@ describe("AgentSession MCP discovery", () => {
 			modelRegistry: {} as never,
 			toolRegistry,
 			mcpDiscoveryEnabled: false,
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -172,7 +176,7 @@ describe("AgentSession MCP discovery", () => {
 
 		expect(session.getSelectedMCPToolNames()).toEqual([]);
 		expect(session.getActiveToolNames()).toEqual(["read"]);
-		expect(session.systemPrompt).toBe("tools:read");
+		expect(session.systemPrompt).toEqual(["tools:read"]);
 	});
 
 	it("keeps manually deactivated MCP tools off after refresh in non-discovery sessions", async () => {
@@ -190,7 +194,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool, docsSearchTool],
 				messages: [],
 			},
@@ -202,7 +206,9 @@ describe("AgentSession MCP discovery", () => {
 			modelRegistry: {} as never,
 			toolRegistry,
 			mcpDiscoveryEnabled: false,
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -219,7 +225,7 @@ describe("AgentSession MCP discovery", () => {
 
 		expect(session.getSelectedMCPToolNames()).toEqual([]);
 		expect(session.getActiveToolNames()).toEqual(["read"]);
-		expect(session.systemPrompt).toBe("tools:read");
+		expect(session.systemPrompt).toEqual(["tools:read"]);
 	});
 
 	it("preserves directly activated MCP tools across refreshes in discovery mode", async () => {
@@ -237,7 +243,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
 			},
@@ -249,7 +255,9 @@ describe("AgentSession MCP discovery", () => {
 			modelRegistry: {} as never,
 			toolRegistry,
 			mcpDiscoveryEnabled: true,
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -283,7 +291,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
 			},
@@ -295,7 +303,9 @@ describe("AgentSession MCP discovery", () => {
 			modelRegistry: {} as never,
 			toolRegistry,
 			mcpDiscoveryEnabled: true,
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -308,12 +318,12 @@ describe("AgentSession MCP discovery", () => {
 		await session.activateDiscoveredMCPTools(["mcp__docs_search"]);
 		expect(session.getSelectedMCPToolNames()).toEqual(["mcp__docs_search"]);
 		expect(session.getActiveToolNames()).toEqual(["read", "mcp__docs_search"]);
-		expect(session.systemPrompt).toBe("tools:read,mcp__docs_search");
+		expect(session.systemPrompt).toEqual(["tools:read,mcp__docs_search"]);
 
 		await session.activateDiscoveredMCPTools(["mcp__slack_send_message"]);
 		expect(session.getSelectedMCPToolNames()).toEqual(["mcp__docs_search", "mcp__slack_send_message"]);
 		expect(session.getActiveToolNames()).toEqual(["read", "mcp__docs_search", "mcp__slack_send_message"]);
-		expect(session.systemPrompt).toBe("tools:read,mcp__docs_search,mcp__slack_send_message");
+		expect(session.systemPrompt).toEqual(["tools:read,mcp__docs_search,mcp__slack_send_message"]);
 	});
 	it("reapplies default MCP server baselines when refreshed tools reconnect", async () => {
 		const readTool = createBasicTool("read", "Read");
@@ -326,7 +336,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
 			},
@@ -339,7 +349,9 @@ describe("AgentSession MCP discovery", () => {
 			toolRegistry,
 			mcpDiscoveryEnabled: true,
 			defaultSelectedMCPServerNames: ["slack"],
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -356,7 +368,7 @@ describe("AgentSession MCP discovery", () => {
 
 		expect(session.getSelectedMCPToolNames()).toEqual(["mcp__slack_send_message"]);
 		expect(session.getActiveToolNames()).toEqual(["read", "mcp__slack_send_message"]);
-		expect(session.systemPrompt).toBe("tools:read,mcp__slack_send_message");
+		expect(session.systemPrompt).toEqual(["tools:read,mcp__slack_send_message"]);
 		expect(sessionManager.buildSessionContext().selectedMCPToolNames).toEqual(["mcp__slack_send_message"]);
 	});
 
@@ -371,7 +383,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
 			},
@@ -383,7 +395,9 @@ describe("AgentSession MCP discovery", () => {
 			modelRegistry: {} as never,
 			toolRegistry,
 			mcpDiscoveryEnabled: true,
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -404,7 +418,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
 			},
@@ -416,7 +430,9 @@ describe("AgentSession MCP discovery", () => {
 			modelRegistry: {} as never,
 			toolRegistry: new Map([[readTool.name, readTool]]),
 			mcpDiscoveryEnabled: true,
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -440,7 +456,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: sessionManager.buildSessionContext().messages,
 			},
@@ -452,7 +468,9 @@ describe("AgentSession MCP discovery", () => {
 			modelRegistry: {} as never,
 			toolRegistry,
 			mcpDiscoveryEnabled: true,
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -464,7 +482,7 @@ describe("AgentSession MCP discovery", () => {
 		expect(result.cancelled).toBe(false);
 		expect(session.getSelectedMCPToolNames()).toEqual([]);
 		expect(session.getActiveToolNames()).toEqual(["read"]);
-		expect(session.systemPrompt).toBe("tools:read");
+		expect(session.systemPrompt).toEqual(["tools:read"]);
 	});
 
 	it("restores MCP discovery selections when navigating to a branch without them", async () => {
@@ -483,7 +501,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: sessionManager.buildSessionContext().messages,
 			},
@@ -495,7 +513,9 @@ describe("AgentSession MCP discovery", () => {
 			modelRegistry: {} as never,
 			toolRegistry,
 			mcpDiscoveryEnabled: true,
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -507,7 +527,7 @@ describe("AgentSession MCP discovery", () => {
 		expect(result.cancelled).toBe(false);
 		expect(session.getSelectedMCPToolNames()).toEqual([]);
 		expect(session.getActiveToolNames()).toEqual(["read"]);
-		expect(session.systemPrompt).toBe("tools:read");
+		expect(session.systemPrompt).toEqual(["tools:read"]);
 	});
 
 	it("preserves explicit MCP baseline when branching into older history without persisted selection", async () => {
@@ -526,7 +546,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool, docsSearchTool],
 				messages: sessionManager.buildSessionContext().messages,
 			},
@@ -540,7 +560,9 @@ describe("AgentSession MCP discovery", () => {
 			mcpDiscoveryEnabled: true,
 			initialSelectedMCPToolNames: ["mcp__docs_search"],
 			defaultSelectedMCPToolNames: ["mcp__docs_search"],
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -549,7 +571,7 @@ describe("AgentSession MCP discovery", () => {
 		expect(result.cancelled).toBe(false);
 		expect(session.getSelectedMCPToolNames()).toEqual(["mcp__docs_search"]);
 		expect(session.getActiveToolNames()).toEqual(["read", "mcp__docs_search"]);
-		expect(session.systemPrompt).toBe("tools:read,mcp__docs_search");
+		expect(session.systemPrompt).toEqual(["tools:read,mcp__docs_search"]);
 	});
 
 	it("preserves explicit MCP baseline when navigating into older history without persisted selection", async () => {
@@ -573,7 +595,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool, docsSearchTool],
 				messages: sessionManager.buildSessionContext().messages,
 			},
@@ -587,7 +609,9 @@ describe("AgentSession MCP discovery", () => {
 			mcpDiscoveryEnabled: true,
 			initialSelectedMCPToolNames: ["mcp__docs_search"],
 			defaultSelectedMCPToolNames: ["mcp__docs_search"],
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -596,7 +620,7 @@ describe("AgentSession MCP discovery", () => {
 		expect(result.cancelled).toBe(false);
 		expect(session.getSelectedMCPToolNames()).toEqual(["mcp__docs_search"]);
 		expect(session.getActiveToolNames()).toEqual(["read", "mcp__docs_search"]);
-		expect(session.systemPrompt).toBe("tools:read,mcp__docs_search");
+		expect(session.systemPrompt).toEqual(["tools:read,mcp__docs_search"]);
 	});
 
 	it("restores session defaults in memory across session switches without rewriting sessions missing persisted metadata", async () => {
@@ -635,7 +659,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: reasoningModel,
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool, docsSearchTool],
 				messages: sessionManager.buildSessionContext().messages,
 			},
@@ -653,7 +677,9 @@ describe("AgentSession MCP discovery", () => {
 			mcpDiscoveryEnabled: true,
 			initialSelectedMCPToolNames: ["mcp__docs_search"],
 			defaultSelectedMCPToolNames: ["mcp__docs_search"],
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -676,7 +702,7 @@ describe("AgentSession MCP discovery", () => {
 		expect(session.serviceTier).toBe("priority");
 		expect(session.getSelectedMCPToolNames()).toEqual([]);
 		expect(session.getActiveToolNames()).toEqual(["read"]);
-		expect(session.systemPrompt).toBe("tools:read");
+		expect(session.systemPrompt).toEqual(["tools:read"]);
 		expect(fs.readFileSync(olderSessionFile!, "utf8")).toBe(olderSessionBeforeSwitch);
 		expect(fs.statSync(olderSessionFile!).mtimeMs).toBe(olderSessionMtimeBeforeSwitch);
 
@@ -686,7 +712,7 @@ describe("AgentSession MCP discovery", () => {
 		expect(session.serviceTier).toBe("flex");
 		expect(session.getSelectedMCPToolNames()).toEqual(["mcp__docs_search"]);
 		expect(session.getActiveToolNames()).toEqual(["read", "mcp__docs_search"]);
-		expect(session.systemPrompt).toBe("tools:read,mcp__docs_search");
+		expect(session.systemPrompt).toEqual(["tools:read,mcp__docs_search"]);
 		expect(fs.readFileSync(originalSessionFile!, "utf8")).toBe(originalSessionBeforeSwitch);
 		expect(fs.statSync(originalSessionFile!).mtimeMs).toBe(originalSessionMtimeBeforeSwitch);
 	});
@@ -702,7 +728,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool, docsSearchTool],
 				messages: [],
 			},
@@ -716,7 +742,9 @@ describe("AgentSession MCP discovery", () => {
 			mcpDiscoveryEnabled: true,
 			initialSelectedMCPToolNames: ["mcp__docs_search", "mcp__slack_send_message"],
 			defaultSelectedMCPToolNames: ["mcp__docs_search", "mcp__slack_send_message"],
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -738,7 +766,7 @@ describe("AgentSession MCP discovery", () => {
 
 		expect(session.getSelectedMCPToolNames()).toEqual(["mcp__docs_search", "mcp__slack_send_message"]);
 		expect(session.getActiveToolNames()).toEqual(["read", "mcp__docs_search", "mcp__slack_send_message"]);
-		expect(session.systemPrompt).toBe("tools:read,mcp__docs_search,mcp__slack_send_message");
+		expect(session.systemPrompt).toEqual(["tools:read,mcp__docs_search,mcp__slack_send_message"]);
 		expect(sessionManager.buildSessionContext().selectedMCPToolNames).toEqual([
 			"mcp__docs_search",
 			"mcp__slack_send_message",
@@ -760,7 +788,7 @@ describe("AgentSession MCP discovery", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
 			},
@@ -772,7 +800,9 @@ describe("AgentSession MCP discovery", () => {
 			modelRegistry: {} as never,
 			toolRegistry,
 			mcpDiscoveryEnabled: true,
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
 		});
 		sessions.push(session);
 
@@ -784,6 +814,6 @@ describe("AgentSession MCP discovery", () => {
 
 		expect(session.getSelectedMCPToolNames()).toEqual([]);
 		expect(session.getActiveToolNames()).toEqual(["read"]);
-		expect(session.systemPrompt).toBe("tools:read");
+		expect(session.systemPrompt).toEqual(["tools:read"]);
 	});
 });

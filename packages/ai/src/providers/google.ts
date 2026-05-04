@@ -17,6 +17,7 @@ import type {
 	ThinkingContent,
 	ToolCall,
 } from "../types";
+import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import type { GoogleThinkingLevel } from "./google-gemini-cli";
@@ -313,6 +314,7 @@ function buildParams(
 	context: Context,
 	options: GoogleOptions = {},
 ): GenerateContentParameters {
+	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	const contents = convertMessages(model, context);
 
 	const generationConfig: GoogleSamplingConfig = {};
@@ -340,7 +342,7 @@ function buildParams(
 
 	const config: GenerateContentConfig = {
 		...(Object.keys(generationConfig).length > 0 && generationConfig),
-		...(context.systemPrompt && { systemInstruction: context.systemPrompt.toWellFormed() }),
+		...(systemPrompts.length > 0 && { systemInstruction: { parts: systemPrompts.map(text => ({ text })) } }),
 		...(context.tools && context.tools.length > 0 && { tools: convertTools(context.tools, model) }),
 	};
 

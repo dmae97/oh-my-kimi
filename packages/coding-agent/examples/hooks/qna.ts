@@ -85,7 +85,7 @@ export default function (pi: HookAPI) {
 
 					const response = await complete(
 						ctx.model!,
-						{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
+						{ systemPrompt: [SYSTEM_PROMPT], messages: [userMessage] },
 						{ apiKey, signal: loader.signal },
 					);
 

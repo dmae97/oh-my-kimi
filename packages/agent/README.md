@@ -16,7 +16,7 @@ import { getModel } from "@oh-my-pi/pi-ai";
 
 const agent = new Agent({
 	initialState: {
-		systemPrompt: "You are a helpful assistant.",
+		systemPrompt: ["You are a helpful assistant."],
 		model: getModel("anthropic", "claude-sonnet-4-20250514"),
 	},
 });
@@ -132,7 +132,7 @@ The last message in context must be `user` or `toolResult` (not `assistant`).
 const agent = new Agent({
   // Initial state
   initialState: {
-    systemPrompt: string,
+    systemPrompt: string[],
     model: Model,
     thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
     tools: AgentTool<any>[],
@@ -163,7 +163,7 @@ const agent = new Agent({
 
 ```typescript
 interface AgentState {
-	systemPrompt: string;
+	systemPrompt: string[];
 	model: Model;
 	thinkingLevel: ThinkingLevel;
 	tools: AgentTool<any>[];
@@ -348,7 +348,7 @@ For direct control without the Agent class:
 import { agentLoop, agentLoopContinue } from "@oh-my-pi/pi-agent";
 
 const context: AgentContext = {
-	systemPrompt: "You are helpful.",
+	systemPrompt: ["You are helpful."],
 	messages: [],
 	tools: [],
 };

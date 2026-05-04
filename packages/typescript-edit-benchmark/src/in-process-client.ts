@@ -94,7 +94,7 @@ export class InProcessClient {
 			modelRegistry: shared?.modelRegistry,
 			sessionManager: SessionManager.inMemory(this.#options.cwd),
 			systemPrompt: this.#options.appendSystemPrompt
-				? (defaultPrompt: string) => `${defaultPrompt}\n\n${this.#options.appendSystemPrompt}`
+				? (defaultPrompt: string[]) => [...defaultPrompt, this.#options.appendSystemPrompt!]
 				: undefined,
 			toolNames: this.#options.tools ?? ["read", "edit", "write"],
 			hasUI: false,
@@ -162,7 +162,7 @@ export class InProcessClient {
 
 	async getState(): Promise<{
 		sessionFile?: string;
-		systemPrompt?: string;
+		systemPrompt?: string[];
 		model?: Model;
 		thinkingLevel?: ThinkingLevel | undefined;
 		dumpTools?: Array<{ name: string; description: string; parameters: unknown }>;

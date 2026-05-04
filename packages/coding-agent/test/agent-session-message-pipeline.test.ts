@@ -8,7 +8,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 function createAgent(): Agent {
 	return new Agent({
 		initialState: {
-			systemPrompt: "system prompt",
+			systemPrompt: ["system prompt"],
 			messages: [],
 			tools: [],
 		},

@@ -33,6 +33,7 @@ import {
 	type ToolChoice,
 	type ToolResultMessage,
 } from "../types";
+import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { toFireworksWireModelId } from "../utils/fireworks-model-id";
@@ -1178,10 +1179,13 @@ export function convertMessages(
 		return generateFallbackToolCallId(seed);
 	};
 
-	if (context.systemPrompt) {
+	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
+	if (systemPrompts.length > 0) {
 		const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
 		const role = useDeveloperRole ? "developer" : "system";
-		params.push({ role: role, content: context.systemPrompt.toWellFormed() });
+		for (const systemPrompt of systemPrompts) {
+			params.push({ role, content: systemPrompt });
+		}
 	}
 
 	let lastRole: string | null = null;

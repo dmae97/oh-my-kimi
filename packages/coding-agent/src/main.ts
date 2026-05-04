@@ -540,11 +540,11 @@ async function buildSessionOptions(
 
 	// System prompt
 	if (resolvedSystemPrompt && resolvedAppendPrompt) {
-		options.systemPrompt = `${resolvedSystemPrompt}\n\n${resolvedAppendPrompt}`;
+		options.systemPrompt = defaultPrompt => [resolvedSystemPrompt, resolvedAppendPrompt, ...defaultPrompt.slice(1)];
 	} else if (resolvedSystemPrompt) {
-		options.systemPrompt = resolvedSystemPrompt;
+		options.systemPrompt = defaultPrompt => [resolvedSystemPrompt, ...defaultPrompt.slice(1)];
 	} else if (resolvedAppendPrompt) {
-		options.systemPrompt = defaultPrompt => `${defaultPrompt}\n\n${resolvedAppendPrompt}`;
+		options.systemPrompt = defaultPrompt => [...defaultPrompt, resolvedAppendPrompt];
 	}
 
 	// Tools

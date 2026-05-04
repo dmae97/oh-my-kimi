@@ -34,7 +34,7 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 			agent: new Agent({
 				initialState: {
 					model: defaultModel,
-					systemPrompt: "Test",
+					systemPrompt: ["Test"],
 					tools: [],
 					messages: [],
 				},

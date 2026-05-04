@@ -26,6 +26,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types";
+import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson } from "../utils/json-parse";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
@@ -2145,12 +2146,29 @@ function findLastUserMessageIndex(messages: Message[]): number {
  * only an empty placeholder where historical user turns should be.
  * The last user message is excluded because it is sent in the action.
  */
+/**
+ * Build one Cursor system-message JSON blob per ordered system prompt. Emitting separate blobs
+ * (rather than a single `\n\n`-joined string) lets Cursor's blob cache hit independently per
+ * entry: changing only the last prompt does not invalidate earlier blob ids, so the prefix
+ * up to the changed prompt remains cached on the server side.
+ *
+ * When no system prompts are provided, returns a single default greeting so we never emit
+ * an empty `rootPromptMessagesJson` head.
+ */
+export function buildCursorSystemPromptJsons(systemPrompt: readonly string[] | undefined): string[] {
+	const systemPrompts = normalizeSystemPrompts(systemPrompt);
+	if (systemPrompts.length === 0) {
+		return [JSON.stringify({ role: "system", content: "You are a helpful assistant." })];
+	}
+	return systemPrompts.map(content => JSON.stringify({ role: "system", content }));
+}
+
 function buildRootPromptMessagesJson(
 	messages: Message[],
-	systemPromptId: Uint8Array,
+	systemPromptIds: Uint8Array[],
 	blobStore: Map<string, Uint8Array>,
 ): Uint8Array[] {
-	const entries: Uint8Array[] = [systemPromptId];
+	const entries: Uint8Array[] = [...systemPromptIds];
 	const lastUserIdx = findLastUserMessageIndex(messages);
 
 	const pushJson = (obj: unknown) => {
@@ -2299,12 +2317,9 @@ function buildGrpcRequest(
 } {
 	const blobStore = state.blobStore;
 
-	const systemPromptJson = JSON.stringify({
-		role: "system",
-		content: context.systemPrompt || "You are a helpful assistant.",
-	});
-	const systemPromptBytes = new TextEncoder().encode(systemPromptJson);
-	const systemPromptId = storeCursorBlob(blobStore, systemPromptBytes);
+	const systemPromptIds = buildCursorSystemPromptJsons(context.systemPrompt).map(json =>
+		storeCursorBlob(blobStore, new TextEncoder().encode(json)),
+	);
 
 	const lastMessage = context.messages[context.messages.length - 1];
 	const userText =
@@ -2339,18 +2354,19 @@ function buildGrpcRequest(
 	// field (not `turns[]`) to construct the actual model prompt; if we only send the
 	// system prompt here, multi-turn conversations lose prior context and the model
 	// sees only the current user message.
-	const rootPromptMessagesJson = buildRootPromptMessagesJson(context.messages, systemPromptId, blobStore);
+	const rootPromptMessagesJson = buildRootPromptMessagesJson(context.messages, systemPromptIds, blobStore);
 
 	// Preserve cached non-history state fields (todos, file states, summaries, etc.)
 	// when the system prompt is unchanged; otherwise start fresh.
-	const hasMatchingPrompt = state.conversationState?.rootPromptMessagesJson?.some(entry =>
-		Buffer.from(entry).equals(systemPromptId),
-	);
+	const cachedPromptHead = state.conversationState?.rootPromptMessagesJson?.slice(0, systemPromptIds.length) ?? [];
+	const hasMatchingPrompt =
+		cachedPromptHead.length === systemPromptIds.length &&
+		systemPromptIds.every((id, idx) => Buffer.from(cachedPromptHead[idx]).equals(id));
 	const baseState =
 		state.conversationState && hasMatchingPrompt
 			? state.conversationState
 			: create(ConversationStateStructureSchema, {
-					rootPromptMessagesJson: [systemPromptId],
+					rootPromptMessagesJson: systemPromptIds,
 					turns: [],
 					todos: [],
 					pendingToolCalls: [],

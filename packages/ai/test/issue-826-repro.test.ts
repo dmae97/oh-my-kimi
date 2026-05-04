@@ -28,7 +28,7 @@ const bashTool: Tool = {
 };
 
 const baseContext: Context = {
-	systemPrompt: "Stay concise.",
+	systemPrompt: ["Stay concise."],
 	messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 	tools: [bashTool],
 };

@@ -58,7 +58,7 @@ export async function generateChangelogEntries({
 	const response = await completeSimple(
 		model,
 		{
-			systemPrompt: prompt.render(changelogSystemPrompt),
+			systemPrompt: [prompt.render(changelogSystemPrompt)],
 			messages: [{ role: "user", content: userContent, timestamp: Date.now() }],
 			tools: [changelogTool],
 		},

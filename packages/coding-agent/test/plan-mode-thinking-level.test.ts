@@ -43,7 +43,7 @@ describe("plan mode thinking level", () => {
 
 		session = new AgentSession({
 			agent: new Agent({
-				initialState: { model: sonnet, systemPrompt: "Test", tools: [], messages: [] },
+				initialState: { model: sonnet, systemPrompt: ["Test"], tools: [], messages: [] },
 			}),
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ modelRoles }),

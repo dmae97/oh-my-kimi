@@ -14,6 +14,7 @@ import type {
 	ToolResultMessage,
 	UserMessage,
 } from "../types";
+import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { parseStreamingJson } from "../utils/json-parse";
@@ -186,10 +187,14 @@ function convertMessage(message: Message): OllamaMessage {
 
 function convertMessages(model: Model<"ollama-chat">, context: Context): OllamaMessage[] {
 	const messages: Message[] = [];
-	if (context.systemPrompt) {
+	// Emit one developer message per ordered system prompt. The wire role is mapped to "system"
+	// by `convertMessage`, but keeping the prompts separate preserves prefix-cache stability:
+	// if only the trailing prompt changes between calls, the leading system messages keep
+	// their identical token prefix so KV-cache reuse covers them.
+	for (const systemPrompt of normalizeSystemPrompts(context.systemPrompt)) {
 		messages.push({
 			role: "developer",
-			content: context.systemPrompt,
+			content: systemPrompt,
 			timestamp: Date.now(),
 		});
 	}

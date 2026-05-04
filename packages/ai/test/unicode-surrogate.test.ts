@@ -32,7 +32,7 @@ const [anthropicOAuthToken, githubCopilotToken, geminiCliToken, antigravityToken
 async function testEmojiInToolResults<TApi extends Api>(llm: Model<TApi>, options: OptionsForApi<TApi> = {}) {
 	// Simulate a tool that returns emoji
 	const context: Context = {
-		systemPrompt: "You are a helpful assistant.",
+		systemPrompt: ["You are a helpful assistant."],
 		messages: [
 			{
 				role: "user",
@@ -117,7 +117,7 @@ async function testEmojiInToolResults<TApi extends Api>(llm: Model<TApi>, option
 
 async function testRealWorldLinkedInData<TApi extends Api>(llm: Model<TApi>, options: OptionsForApi<TApi> = {}) {
 	const context: Context = {
-		systemPrompt: "You are a helpful assistant.",
+		systemPrompt: ["You are a helpful assistant."],
 		messages: [
 			{
 				role: "user",
@@ -205,7 +205,7 @@ Unanswered Comments: 2
 
 async function testUnpairedHighSurrogate<TApi extends Api>(llm: Model<TApi>, options: OptionsForApi<TApi> = {}) {
 	const context: Context = {
-		systemPrompt: "You are a helpful assistant.",
+		systemPrompt: ["You are a helpful assistant."],
 		messages: [
 			{
 				role: "user",

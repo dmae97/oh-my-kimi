@@ -18,6 +18,7 @@ import type {
 	ThinkingContent,
 	ToolCall,
 } from "../types";
+import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
 import { refreshAntigravityToken } from "../utils/oauth/google-antigravity";
@@ -865,8 +866,8 @@ export function buildRequest(
 	options: GoogleGeminiCliOptions = {},
 	isAntigravity = false,
 ): CloudCodeAssistRequest {
+	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	const contents = convertMessages(model, context);
-
 	const generationConfig: CloudCodeAssistRequest["request"]["generationConfig"] = {};
 	if (options.temperature !== undefined) {
 		generationConfig.temperature = options.temperature;
@@ -913,9 +914,9 @@ export function buildRequest(
 	}
 
 	// System instruction must be object with parts, not plain string
-	if (context.systemPrompt) {
+	if (systemPrompts.length > 0) {
 		request.systemInstruction = {
-			parts: [{ text: context.systemPrompt.toWellFormed() }],
+			parts: systemPrompts.map(text => ({ text })),
 		};
 	}
 

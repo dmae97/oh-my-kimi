@@ -63,7 +63,7 @@ describe("AgentSession before_agent_start attribution fallback", () => {
 			getApiKey: () => "test-key",
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 			},

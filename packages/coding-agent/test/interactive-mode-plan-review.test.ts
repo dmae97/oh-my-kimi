@@ -37,7 +37,7 @@ describe("InteractiveMode plan review rendering", () => {
 			agent: new Agent({
 				initialState: {
 					model,
-					systemPrompt: "Test",
+					systemPrompt: ["Test"],
 					tools: [],
 					messages: [],
 				},

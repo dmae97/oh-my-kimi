@@ -48,7 +48,7 @@ function identityConverter(messages: AgentMessage[]): Message[] {
 describe("agentLoop with AgentMessage", () => {
 	it("should emit events with AgentMessage types", async () => {
 		const context: AgentContext = {
-			systemPrompt: "You are helpful.",
+			systemPrompt: ["You are helpful."],
 			messages: [],
 			tools: [],
 		};
@@ -95,7 +95,7 @@ describe("agentLoop with AgentMessage", () => {
 
 	it("emits an aborted assistant message when cancellation happens before provider events", async () => {
 		const context: AgentContext = {
-			systemPrompt: "You are helpful.",
+			systemPrompt: ["You are helpful."],
 			messages: [],
 			tools: [],
 		};
@@ -139,7 +139,7 @@ describe("agentLoop with AgentMessage", () => {
 		};
 
 		const context: AgentContext = {
-			systemPrompt: "You are helpful.",
+			systemPrompt: ["You are helpful."],
 			messages: [notification as unknown as AgentMessage], // Custom message in context
 			tools: [],
 		};
@@ -181,7 +181,7 @@ describe("agentLoop with AgentMessage", () => {
 
 	it("should apply transformContext before convertToLlm", async () => {
 		const context: AgentContext = {
-			systemPrompt: "You are helpful.",
+			systemPrompt: ["You are helpful."],
 			messages: [
 				createUserMessage("old message 1"),
 				createAssistantMessage([{ type: "text", text: "old response 1" }]),
@@ -253,7 +253,7 @@ describe("agentLoop with AgentMessage", () => {
 		};
 
 		const context: AgentContext = {
-			systemPrompt: "",
+			systemPrompt: [""],
 			messages: [],
 			tools: [tool],
 		};
@@ -323,7 +323,7 @@ describe("agentLoop with AgentMessage", () => {
 		};
 
 		const context: AgentContext = {
-			systemPrompt: "",
+			systemPrompt: [""],
 			messages: [],
 			tools: [tool],
 		};
@@ -395,7 +395,7 @@ describe("agentLoop with AgentMessage", () => {
 		};
 
 		const context: AgentContext = {
-			systemPrompt: "",
+			systemPrompt: [""],
 			messages: [],
 			tools: [tool],
 		};
@@ -490,7 +490,7 @@ describe("agentLoop with AgentMessage", () => {
 		};
 
 		const context: AgentContext = {
-			systemPrompt: "",
+			systemPrompt: [""],
 			messages: [],
 			tools: [tool],
 		};
@@ -559,7 +559,7 @@ describe("agentLoop with AgentMessage", () => {
 
 	it("emits an explicit warning toolResult when assistant aborts after issuing tool calls", async () => {
 		const context: AgentContext = {
-			systemPrompt: "You are helpful.",
+			systemPrompt: ["You are helpful."],
 			messages: [],
 			tools: [],
 		};
@@ -627,7 +627,7 @@ describe("agentLoop with AgentMessage", () => {
 		};
 
 		const context: AgentContext = {
-			systemPrompt: "",
+			systemPrompt: [""],
 			messages: [],
 			tools: [tool],
 		};
@@ -752,7 +752,7 @@ it("refreshes tools and system prompt between same-turn model calls", async () =
 	activeTools = [alphaTool];
 
 	const context: AgentContext = {
-		systemPrompt: activeSystemPrompt,
+		systemPrompt: [activeSystemPrompt],
 		messages: [],
 		tools: activeTools,
 	};
@@ -761,7 +761,7 @@ it("refreshes tools and system prompt between same-turn model calls", async () =
 		model: createModel(),
 		convertToLlm: identityConverter,
 		syncContextBeforeModelCall: async currentContext => {
-			currentContext.systemPrompt = activeSystemPrompt;
+			currentContext.systemPrompt = [activeSystemPrompt];
 			currentContext.tools = activeTools;
 		},
 	};
@@ -784,16 +784,16 @@ it("refreshes tools and system prompt between same-turn model calls", async () =
 	}
 
 	expect(callContexts).toHaveLength(2);
-	expect(callContexts[0]?.systemPrompt).toBe("prompt-one");
+	expect(callContexts[0]?.systemPrompt).toEqual(["prompt-one"]);
 	expect(callContexts[0]?.tools?.map(tool => tool.name)).toEqual(["alpha"]);
-	expect(callContexts[1]?.systemPrompt).toBe("prompt-two");
+	expect(callContexts[1]?.systemPrompt).toEqual(["prompt-two"]);
 	expect(callContexts[1]?.tools?.map(tool => tool.name)).toEqual(["alpha", "beta"]);
 });
 
 describe("agentLoopContinue with AgentMessage", () => {
 	it("should throw when context has no messages", () => {
 		const context: AgentContext = {
-			systemPrompt: "You are helpful.",
+			systemPrompt: ["You are helpful."],
 			messages: [],
 			tools: [],
 		};
@@ -810,7 +810,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 		const userMessage: AgentMessage = createUserMessage("Hello");
 
 		const context: AgentContext = {
-			systemPrompt: "You are helpful.",
+			systemPrompt: ["You are helpful."],
 			messages: [userMessage],
 			tools: [],
 		};
@@ -863,7 +863,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 		};
 
 		const context: AgentContext = {
-			systemPrompt: "You are helpful.",
+			systemPrompt: ["You are helpful."],
 			messages: [hookMessage as unknown as AgentMessage],
 			tools: [],
 		};

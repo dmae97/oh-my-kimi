@@ -1019,7 +1019,7 @@ export async function generateSummary(
 
 	const response = await completeSimple(
 		model,
-		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
+		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
 		{ maxTokens, signal, apiKey, reasoning: Effort.High, initiatorOverride: options?.initiatorOverride },
 	);
 
@@ -1066,7 +1066,7 @@ async function generateShortSummary(
 	const response = await completeSimple(
 		model,
 		{
-			systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
+			systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT],
 			messages: [{ role: "user", content: [{ type: "text", text: promptText }], timestamp: Date.now() }],
 		},
 		{ maxTokens, signal, apiKey, reasoning: Effort.High, initiatorOverride: options?.initiatorOverride },
@@ -1386,7 +1386,7 @@ async function generateTurnPrefixSummary(
 
 	const response = await completeSimple(
 		model,
-		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
+		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
 		{ maxTokens, signal, apiKey, reasoning: Effort.High, initiatorOverride },
 	);
 

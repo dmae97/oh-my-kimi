@@ -76,7 +76,7 @@ export async function runReducePhase({
 	const response = await completeSimple(
 		model,
 		{
-			systemPrompt: prompt.render(reduceSystemPrompt),
+			systemPrompt: [prompt.render(reduceSystemPrompt)],
 			messages: [{ role: "user", content: userContent, timestamp: Date.now() }],
 			tools: [ReduceTool],
 		},

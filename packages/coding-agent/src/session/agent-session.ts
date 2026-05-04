@@ -245,8 +245,8 @@ export interface AgentSessionConfig {
 	onResponse?: SimpleStreamOptions["onResponse"];
 	/** Current session message-to-LLM conversion pipeline */
 	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
-	/** System prompt builder that can consider tool availability */
-	rebuildSystemPrompt?: (toolNames: string[], tools: Map<string, AgentTool>) => Promise<string>;
+	/** System prompt builder that can consider tool availability. Returns ordered provider-facing blocks. */
+	rebuildSystemPrompt?: (toolNames: string[], tools: Map<string, AgentTool>) => Promise<{ systemPrompt: string[] }>;
 	/**
 	 * Optional accessor for live MCP server instructions. Read by the session's
 	 * `rebuildSystemPrompt`-skip optimization to detect server-side instruction
@@ -520,9 +520,11 @@ export class AgentSession {
 	#onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	#onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
-	#rebuildSystemPrompt: ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<string>) | undefined;
+	#rebuildSystemPrompt:
+		| ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<{ systemPrompt: string[] }>)
+		| undefined;
 	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
-	#baseSystemPrompt: string;
+	#baseSystemPrompt: string[];
 	/**
 	 * Signature of the (toolNames, tool descriptions) tuple passed to the most
 	 * recent successful `rebuildSystemPrompt` call. Used to skip redundant rebuilds
@@ -2083,8 +2085,8 @@ export class AgentSession {
 	getLastAssistantMessage(): AssistantMessage | undefined {
 		return this.#findLastAssistantMessage();
 	}
-	/** Current effective system prompt (includes any per-turn extension modifications) */
-	get systemPrompt(): string {
+	/** Current effective system prompt blocks (includes any per-turn extension modifications) */
+	get systemPrompt(): string[] {
 		return this.agent.state.systemPrompt;
 	}
 
@@ -2281,7 +2283,8 @@ export class AgentSession {
 		if (this.#rebuildSystemPrompt) {
 			const signature = this.#computeAppliedToolSignature(validToolNames, tools);
 			if (signature !== this.#lastAppliedToolSignature) {
-				this.#baseSystemPrompt = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
+				const built = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
+				this.#baseSystemPrompt = built.systemPrompt;
 				this.agent.setSystemPrompt(this.#baseSystemPrompt);
 				this.#lastAppliedToolSignature = signature;
 			}
@@ -2324,7 +2327,8 @@ export class AgentSession {
 	async refreshBaseSystemPrompt(): Promise<void> {
 		if (!this.#rebuildSystemPrompt) return;
 		const activeToolNames = this.getActiveToolNames();
-		this.#baseSystemPrompt = await this.#rebuildSystemPrompt(activeToolNames, this.#toolRegistry);
+		const built = await this.#rebuildSystemPrompt(activeToolNames, this.#toolRegistry);
+		this.#baseSystemPrompt = built.systemPrompt;
 		this.agent.setSystemPrompt(this.#baseSystemPrompt);
 		// Refresh the cached signature so a subsequent `#applyActiveToolsByName` with
 		// the same tool set does not re-rebuild on top of the explicit refresh we
@@ -2335,14 +2339,14 @@ export class AgentSession {
 		this.#lastAppliedToolSignature = this.#computeAppliedToolSignature(activeToolNames, activeTools);
 	}
 
-	async #buildSystemPromptForAgentStart(promptText: string): Promise<string> {
+	async #buildSystemPromptForAgentStart(promptText: string): Promise<string[]> {
 		const backend = resolveMemoryBackend(this.settings);
 		if (!backend.beforeAgentStartPrompt) return this.#baseSystemPrompt;
 
 		try {
 			const injected = await backend.beforeAgentStartPrompt(this, promptText);
 			if (!injected) return this.#baseSystemPrompt;
-			return `${this.#baseSystemPrompt}\n\n${injected}`;
+			return [...this.#baseSystemPrompt, injected];
 		} catch (err) {
 			logger.debug("Memory backend beforeAgentStartPrompt failed", {
 				backend: backend.id,
@@ -4215,7 +4219,11 @@ export class AgentSession {
 					apiKey,
 					customInstructions,
 					compactionAbortController.signal,
-					{ promptOverride: hookPrompt, extraContext: hookContext, remoteInstructions: this.#baseSystemPrompt },
+					{
+						promptOverride: hookPrompt,
+						extraContext: hookContext,
+						remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
+					},
 				);
 				summary = result.summary;
 				shortSummary = result.shortSummary;
@@ -5328,7 +5336,7 @@ export class AgentSession {
 							compactResult = await compact(preparation, candidate, apiKey, undefined, autoCompactionSignal, {
 								promptOverride: hookPrompt,
 								extraContext: hookContext,
-								remoteInstructions: this.#baseSystemPrompt,
+								remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
 								initiatorOverride: "agent",
 							});
 							break;

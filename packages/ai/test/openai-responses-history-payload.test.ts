@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import { type OpenAIResponsesOptions, streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import type { Context, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
 import { createOpenAIResponsesHistoryPayload, truncateResponseItemId } from "../src/utils";
 
@@ -165,12 +165,14 @@ function captureResponsesPayload(
 	model: Model<"openai-responses">,
 	context: Context,
 	providerSessionState?: Map<string, ProviderSessionState>,
+	options?: Omit<OpenAIResponsesOptions, "apiKey" | "signal" | "providerSessionState" | "onPayload">,
 ): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamOpenAIResponses(model, context, {
 		apiKey: "test-key",
 		signal: createAbortedSignal(),
 		providerSessionState,
+		...options,
 		onPayload: payload => resolve(payload),
 	});
 	return promise;
@@ -285,6 +287,58 @@ function containsUserInputText(input: unknown[] | undefined, text: string): bool
 }
 
 describe("OpenAI responses history payload", () => {
+	it("prepends multiple OpenAI developer instructions in order without changing prompt cache key routing", async () => {
+		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const payload = (await captureResponsesPayload(
+			model,
+			{
+				systemPrompt: ["stable instructions", "second instructions"],
+				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+			},
+			undefined,
+			{ sessionId: "session-abc" },
+		)) as { input?: unknown[]; prompt_cache_key?: unknown };
+
+		expect(payload.input).toEqual([
+			{ role: "developer", content: "stable instructions" },
+			{ role: "developer", content: "second instructions" },
+			{ role: "user", content: [{ type: "input_text", text: "hi" }] },
+		]);
+		expect(payload.prompt_cache_key).toBe("session-abc");
+	});
+
+	it("falls back to system instructions for OpenAI-compatible endpoints without developer-role support", async () => {
+		const model = {
+			...(getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">),
+			baseUrl: "https://proxy.example.com/v1",
+		};
+		const payload = (await captureResponsesPayload(model, {
+			systemPrompt: ["stable instructions", "second instructions"],
+			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+		})) as { input?: unknown[] };
+
+		expect(payload.input).toEqual([
+			{ role: "system", content: "stable instructions" },
+			{ role: "system", content: "second instructions" },
+			{ role: "user", content: [{ type: "input_text", text: "hi" }] },
+		]);
+	});
+
+	it("keeps system instruction order ahead of replayed native history", async () => {
+		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const payload = (await captureResponsesPayload(model, {
+			...assistantSnapshotContext,
+			systemPrompt: ["stable instructions", "second instructions"],
+		})) as { input?: unknown[] };
+
+		expect(payload.input).toEqual([
+			{ role: "developer", content: "stable instructions" },
+			{ role: "developer", content: "second instructions" },
+			...snapshotHistoryItems,
+			{ role: "user", content: [{ type: "input_text", text: "follow-up user" }] },
+		]);
+	});
+
 	it("inlines preserved replacement history for openai-responses", async () => {
 		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
 		const payload = (await captureResponsesPayload(model, preservedHistoryContext)) as { input?: unknown[] };

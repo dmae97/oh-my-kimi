@@ -129,6 +129,25 @@ describe("Google Gemini CLI alignment", () => {
 		expect(payload.userAgent).toBeUndefined();
 		expect(payload.requestId).toBeUndefined();
 	});
+	it("keeps every system prompt block in systemInstruction instead of conversation contents", () => {
+		const model = createModel("google-gemini-cli");
+		const context: Context = {
+			systemPrompt: ["primary instruction", "", "supplemental \uD800instruction"],
+			messages: [{ role: "user", content: "implement token refresh", timestamp: Date.now() }],
+		};
+		const payload = buildRequest(model, context, "proj-123", {}, false) as {
+			request: {
+				contents: Array<{ role?: string; parts?: Array<{ text?: string }> }>;
+				systemInstruction?: { role?: string; parts: Array<{ text: string }> };
+			};
+		};
+
+		expect(payload.request.systemInstruction).toEqual({
+			parts: [{ text: "primary instruction" }, { text: "supplemental �instruction" }],
+		});
+		expect(payload.request.systemInstruction?.role).toBeUndefined();
+		expect(payload.request.contents).toEqual([{ role: "user", parts: [{ text: "implement token refresh" }] }]);
+	});
 
 	it("keeps antigravity metadata in antigravity request payloads", () => {
 		const model = createModel("google-antigravity");

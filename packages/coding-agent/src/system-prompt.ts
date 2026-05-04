@@ -13,6 +13,7 @@ import type { SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
 import { loadSkills, type Skill } from "./extensibility/skills";
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
+import projectPromptTemplate from "./prompts/system/project-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
@@ -414,10 +415,16 @@ export interface BuildSystemPromptOptions {
 	workspaceTree?: WorkspaceTree | Promise<WorkspaceTree>;
 }
 
+/** Result of building provider-facing system prompt messages. */
+export interface BuildSystemPromptResult {
+	/** Ordered system prompt blocks. Providers should preserve entries as distinct messages/blocks. */
+	systemPrompt: string[];
+}
+
 /** Build the system prompt with tools, guidelines, and context */
-export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<string> {
+export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<BuildSystemPromptResult> {
 	if ($env.NULL_PROMPT === "true") {
-		return "";
+		return { systemPrompt: [] };
 	}
 
 	const {
@@ -618,5 +625,11 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		rendered += `\n\n<critical>\nThe \`${reportToolIssueToolName}\` tool is available for automated QA. If ANY tool you call returns output that is unexpected, incorrect, malformed, or otherwise inconsistent with what you anticipated given the tool's described behavior and your parameters, call \`${reportToolIssueToolName}\` with the tool name and a concise description of the discrepancy. Do not hesitate to report — false positives are acceptable.\n</critical>`;
 	}
 
-	return rendered;
+	const systemPrompt = [rendered];
+	const projectPrompt = resolvedCustomPrompt ? "" : prompt.render(projectPromptTemplate, data).trim();
+	if (projectPrompt) {
+		systemPrompt.push(projectPrompt);
+	}
+
+	return { systemPrompt };
 }

@@ -356,54 +356,58 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 				? null
 				: "Heads up: you are not on a dedicated `autoresearch/*` branch. `log_experiment discard` will only revert run-modified files, not reset to baseline — so harness files written before `init_experiment` may not survive a discard. Clean the worktree and re-run `/autoresearch` if you want full revert safety.";
 			return {
-				systemPrompt: prompt.render(setupPromptTemplate, {
-					base_system_prompt: event.systemPrompt,
-					has_goal: goal.trim().length > 0,
-					goal,
-					working_dir: ctx.cwd,
-					has_branch: Boolean(currentBranch),
-					branch: currentBranch ?? "",
-					has_baseline_warning: baselineWarning !== null,
-					baseline_warning: baselineWarning ?? "",
-				}),
+				systemPrompt: [
+					prompt.render(setupPromptTemplate, {
+						base_system_prompt: event.systemPrompt.join("\n\n"),
+						has_goal: goal.trim().length > 0,
+						goal,
+						working_dir: ctx.cwd,
+						has_branch: Boolean(currentBranch),
+						branch: currentBranch ?? "",
+						has_baseline_warning: baselineWarning !== null,
+						baseline_warning: baselineWarning ?? "",
+					}),
+				],
 			};
 		}
 		return {
-			systemPrompt: prompt.render(promptTemplate, {
-				base_system_prompt: event.systemPrompt,
-				has_goal: goal.trim().length > 0,
-				goal,
-				working_dir: ctx.cwd,
-				default_metric_name: state.metricName,
-				metric_name: state.metricName,
-				has_branch: Boolean(state.branch),
-				branch: state.branch,
-				has_baseline_commit: Boolean(state.baselineCommit),
-				baseline_commit: state.baselineCommit ? state.baselineCommit.slice(0, 12) : "",
-				has_notes: state.notes.trim().length > 0,
-				notes: state.notes,
-				current_segment: state.currentSegment + 1,
-				current_segment_run_count: currentSegmentResults.length,
-				has_baseline_metric: baselineMetric !== null,
-				baseline_metric_display: formatNum(baselineMetric, state.metricUnit),
-				baseline_run_number: baselineRunNumber,
-				has_best_result: bestResult !== null && bestMetric !== null,
-				best_metric_display: bestMetric !== null ? formatNum(bestMetric, state.metricUnit) : "-",
-				best_run_number: bestResult ? (bestResult.runNumber ?? state.results.indexOf(bestResult) + 1) : null,
-				has_recent_results: recentResults.length > 0,
-				recent_results: recentResults,
-				has_unjustified_runs: unjustifiedRuns.length > 0,
-				unjustified_runs: unjustifiedRuns,
-				has_pending_run: Boolean(pendingRun),
-				pending_run_number: pendingRun?.runNumber,
-				pending_run_command: pendingRun?.command,
-				pending_run_passed: pendingRun?.passed ?? false,
-				has_pending_run_metric: pendingRun?.parsedPrimary !== null && pendingRun?.parsedPrimary !== undefined,
-				pending_run_metric_display:
-					pendingRun?.parsedPrimary !== null && pendingRun?.parsedPrimary !== undefined
-						? formatNum(pendingRun.parsedPrimary, state.metricUnit)
-						: null,
-			}),
+			systemPrompt: [
+				prompt.render(promptTemplate, {
+					base_system_prompt: event.systemPrompt.join("\n\n"),
+					has_goal: goal.trim().length > 0,
+					goal,
+					working_dir: ctx.cwd,
+					default_metric_name: state.metricName,
+					metric_name: state.metricName,
+					has_branch: Boolean(state.branch),
+					branch: state.branch,
+					has_baseline_commit: Boolean(state.baselineCommit),
+					baseline_commit: state.baselineCommit ? state.baselineCommit.slice(0, 12) : "",
+					has_notes: state.notes.trim().length > 0,
+					notes: state.notes,
+					current_segment: state.currentSegment + 1,
+					current_segment_run_count: currentSegmentResults.length,
+					has_baseline_metric: baselineMetric !== null,
+					baseline_metric_display: formatNum(baselineMetric, state.metricUnit),
+					baseline_run_number: baselineRunNumber,
+					has_best_result: bestResult !== null && bestMetric !== null,
+					best_metric_display: bestMetric !== null ? formatNum(bestMetric, state.metricUnit) : "-",
+					best_run_number: bestResult ? (bestResult.runNumber ?? state.results.indexOf(bestResult) + 1) : null,
+					has_recent_results: recentResults.length > 0,
+					recent_results: recentResults,
+					has_unjustified_runs: unjustifiedRuns.length > 0,
+					unjustified_runs: unjustifiedRuns,
+					has_pending_run: Boolean(pendingRun),
+					pending_run_number: pendingRun?.runNumber,
+					pending_run_command: pendingRun?.command,
+					pending_run_passed: pendingRun?.passed ?? false,
+					has_pending_run_metric: pendingRun?.parsedPrimary !== null && pendingRun?.parsedPrimary !== undefined,
+					pending_run_metric_display:
+						pendingRun?.parsedPrimary !== null && pendingRun?.parsedPrimary !== undefined
+							? formatNum(pendingRun.parsedPrimary, state.metricUnit)
+							: null,
+				}),
+			],
 		};
 	});
 

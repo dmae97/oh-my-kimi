@@ -89,7 +89,7 @@ export async function generateConventionalAnalysis({
 	const response = await completeSimple(
 		model,
 		{
-			systemPrompt: prompt.render(analysisSystemPrompt),
+			systemPrompt: [prompt.render(analysisSystemPrompt)],
 			messages: [{ role: "user", content: userContent, timestamp: Date.now() }],
 			tools: [ConventionalAnalysisTool],
 		},

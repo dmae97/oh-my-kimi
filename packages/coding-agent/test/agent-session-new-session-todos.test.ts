@@ -52,7 +52,7 @@ describe("AgentSession newSession clears todo artifacts", () => {
 			getApiKey: () => "test",
 			initialState: {
 				model,
-				systemPrompt: "test",
+				systemPrompt: ["test"],
 				tools: [new TodoWriteTool(toolSession)],
 			},
 		});

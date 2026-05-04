@@ -47,7 +47,7 @@ async function testTotalTokensWithCache<TApi extends Api>(
 ): Promise<{ first: Usage; second: Usage }> {
 	// First request - no cache
 	const context1: Context = {
-		systemPrompt: LONG_SYSTEM_PROMPT,
+		systemPrompt: [LONG_SYSTEM_PROMPT],
 		messages: [
 			{
 				role: "user",
@@ -62,7 +62,7 @@ async function testTotalTokensWithCache<TApi extends Api>(
 
 	// Second request - should trigger cache read (same system prompt, add conversation)
 	const context2: Context = {
-		systemPrompt: LONG_SYSTEM_PROMPT,
+		systemPrompt: [LONG_SYSTEM_PROMPT],
 		messages: [
 			...context1.messages,
 			response1, // Include previous assistant response

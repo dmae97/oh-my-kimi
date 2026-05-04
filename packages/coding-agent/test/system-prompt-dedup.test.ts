@@ -42,7 +42,7 @@ describe("SYSTEM.md prompt assembly", () => {
 			agentDir: projectDir,
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated(),
-			systemPrompt,
+			systemPrompt: [systemPrompt],
 			disableExtensionDiscovery: true,
 			skills: [],
 			contextFiles: [],
@@ -75,7 +75,7 @@ describe("SYSTEM.md prompt assembly", () => {
 		const nearPath = path.join(tempDir, "near", "CLAUDE.md");
 		const sharedContent = "Shared context instructions";
 
-		const prompt = await buildSystemPrompt({
+		const { systemPrompt } = await buildSystemPrompt({
 			cwd: tempDir,
 			customPrompt: "Base prompt",
 			contextFiles: [
@@ -87,10 +87,11 @@ describe("SYSTEM.md prompt assembly", () => {
 			toolNames: [],
 		});
 
-		const matches = prompt.match(new RegExp(escapeRegExp(sharedContent), "g")) ?? [];
+		const promptText = systemPrompt.join("\n\n");
+		const matches = promptText.match(new RegExp(escapeRegExp(sharedContent), "g")) ?? [];
 		expect(matches).toHaveLength(1);
-		expect(prompt).not.toContain(`<file path="${farPath}">`);
-		expect(prompt).toContain(`<file path="${nearPath}">`);
+		expect(promptText).not.toContain(`<file path="${farPath}">`);
+		expect(promptText).toContain(`<file path="${nearPath}">`);
 	});
 
 	it("drops identical discovered context entries and keeps the closest copy", async () => {
@@ -113,7 +114,7 @@ describe("SYSTEM.md prompt assembly", () => {
 		const farPath = path.join(tempDir, "far", "AGENTS.md");
 		const nearPath = path.join(tempDir, "near", "CLAUDE.md");
 
-		const prompt = await buildSystemPrompt({
+		const { systemPrompt } = await buildSystemPrompt({
 			cwd: tempDir,
 			customPrompt: "Base prompt",
 			contextFiles: [
@@ -124,8 +125,9 @@ describe("SYSTEM.md prompt assembly", () => {
 			rules: [],
 			toolNames: [],
 		});
+		const promptText = systemPrompt.join("\n\n");
 
-		expect(prompt).toContain("Root context instructions");
-		expect(prompt).toContain("Near context instructions");
+		expect(promptText).toContain("Root context instructions");
+		expect(promptText).toContain("Near context instructions");
 	});
 });

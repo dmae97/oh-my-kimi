@@ -56,7 +56,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			getApiKey: () => "test-key",
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 			},
 			streamFn: (_model, _context, options) => {
@@ -165,7 +165,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			getApiKey: () => "test-key",
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 			},
 			convertToLlm,
@@ -239,7 +239,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			getApiKey: () => "test-key",
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 			},
 			streamFn: () => {
@@ -384,7 +384,7 @@ describe("AgentSession TTSR resume gate", () => {
 
 		const agent = new Agent({
 			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: "Test", tools: [] },
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
 			streamFn: (_model, _context, options) => {
 				streamCallCount++;
 				const stream = new MockAssistantStream();
@@ -445,7 +445,7 @@ describe("AgentSession TTSR resume gate", () => {
 
 		const agent = new Agent({
 			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: "Test", tools: [] },
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
 			streamFn: (_model, _context, _options) => {
 				streamCallCount++;
 				const stream = new MockAssistantStream();
@@ -517,7 +517,7 @@ describe("AgentSession TTSR resume gate", () => {
 
 		const agent = new Agent({
 			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: "Test", tools: [] },
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
 			streamFn: (_model, _context, options) => {
 				const stream = new MockAssistantStream();
 				const signal = options?.signal;
@@ -633,7 +633,7 @@ describe("AgentSession TTSR resume gate", () => {
 
 		const agent = new Agent({
 			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: "Test", tools: [mockTool] },
+			initialState: { model, systemPrompt: ["Test"], tools: [mockTool] },
 			streamFn: (_model, _context, options) => {
 				streamCallCount++;
 				const stream = new MockAssistantStream();
@@ -743,7 +743,7 @@ describe("AgentSession TTSR resume gate", () => {
 
 		const agent = new Agent({
 			getApiKey: () => "test-key",
-			initialState: { model: sparkModel, systemPrompt: "Test", tools: [] },
+			initialState: { model: sparkModel, systemPrompt: ["Test"], tools: [] },
 			streamFn: () => {
 				streamCallCount++;
 				const stream = new MockAssistantStream();

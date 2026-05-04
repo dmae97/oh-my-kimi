@@ -89,7 +89,7 @@ export interface RpcSessionState {
 	queuedMessageCount: number;
 	todoPhases: TodoPhase[];
 	/** For session dump / export (plain-text parity with /dump). */
-	systemPrompt?: string;
+	systemPrompt?: string[];
 	dumpTools?: Array<{ name: string; description: string; parameters: unknown }>;
 	/** Current context window usage. Null tokens/percent when unknown (e.g. right after compaction). */
 	contextUsage?: ContextUsage;

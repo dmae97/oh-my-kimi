@@ -44,7 +44,7 @@ describe("issue #775: per-model defaultLevel", () => {
 		const agent = new Agent({
 			initialState: {
 				model: initialModel,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 				messages: [],
 				thinkingLevel: Effort.Low,

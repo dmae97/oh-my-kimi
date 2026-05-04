@@ -81,7 +81,7 @@ ${truncatedMessage}
 		const response = await completeSimple(
 			model,
 			{
-				systemPrompt: request.systemPrompt,
+				systemPrompt: [request.systemPrompt],
 				messages: [{ role: "user", content: request.userMessage, timestamp: Date.now() }],
 			},
 			{

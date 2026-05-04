@@ -120,6 +120,66 @@ describe("openai-completions compatibility", () => {
 		expect(assistant.content).toBe("hello world");
 	});
 
+	it("preserves multiple system prompts as leading system messages for chat completions", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+		};
+
+		const messages = convertMessages(
+			model,
+			{
+				systemPrompt: ["stable instructions", "cacheable policy"],
+				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+			},
+			detectCompat(model),
+		);
+
+		expect(messages.slice(0, 3)).toEqual([
+			{ role: "system", content: "stable instructions" },
+			{ role: "system", content: "cacheable policy" },
+			{ role: "user", content: "hello" },
+		]);
+	});
+
+	it("uses developer messages for reasoning chat models only when the target supports them", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			reasoning: true,
+		};
+
+		const supportedMessages = convertMessages(
+			model,
+			{
+				systemPrompt: ["stable instructions", "cacheable policy"],
+				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+			},
+			detectCompat(model),
+		);
+
+		expect(supportedMessages.slice(0, 3)).toEqual([
+			{ role: "developer", content: "stable instructions" },
+			{ role: "developer", content: "cacheable policy" },
+			{ role: "user", content: "hello" },
+		]);
+
+		const unsupportedMessages = convertMessages(
+			model,
+			{
+				systemPrompt: ["stable instructions", "cacheable policy"],
+				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+			},
+			{ ...detectCompat(model), supportsDeveloperRole: false },
+		);
+
+		expect(unsupportedMessages.slice(0, 3)).toEqual([
+			{ role: "system", content: "stable instructions" },
+			{ role: "system", content: "cacheable policy" },
+			{ role: "user", content: "hello" },
+		]);
+	});
+
 	it("reads usage from choice usage fallback", async () => {
 		const model: Model<"openai-completions"> = {
 			...getBundledModel("openai", "gpt-4o-mini"),

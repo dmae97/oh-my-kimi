@@ -33,7 +33,13 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "../types";
-import { isAnthropicOAuthToken, isRecord, normalizeToolCallId, resolveCacheRetention } from "../utils";
+import {
+	isAnthropicOAuthToken,
+	isRecord,
+	normalizeSystemPrompts,
+	normalizeToolCallId,
+	resolveCacheRetention,
+} from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { isFoundryEnabled } from "../utils/foundry";
@@ -1417,18 +1423,18 @@ type SystemBlockOptions = {
 };
 
 export function buildAnthropicSystemBlocks(
-	systemPrompt: string | undefined,
+	systemPrompt: readonly string[] | undefined,
 	options: SystemBlockOptions = {},
 ): AnthropicSystemBlock[] | undefined {
 	const { includeClaudeCodeInstruction = false, extraInstructions = [], billingPayload, cacheControl } = options;
 	const blocks: AnthropicSystemBlock[] = [];
-	const sanitizedPrompt = systemPrompt ? systemPrompt.toWellFormed() : "";
+	const sanitizedPrompts = normalizeSystemPrompts(systemPrompt);
 	const trimmedInstructions = extraInstructions.map(instruction => instruction.trim()).filter(Boolean);
-	const hasBillingHeader = sanitizedPrompt.includes(CLAUDE_BILLING_HEADER_PREFIX);
+	const hasBillingHeader = sanitizedPrompts.some(prompt => prompt.includes(CLAUDE_BILLING_HEADER_PREFIX));
 
 	if (includeClaudeCodeInstruction && !hasBillingHeader) {
 		const payloadSeed = billingPayload ?? {
-			system: sanitizedPrompt,
+			system: sanitizedPrompts,
 			extraInstructions: trimmedInstructions,
 		};
 		blocks.push(
@@ -1441,19 +1447,19 @@ export function buildAnthropicSystemBlocks(
 	}
 
 	for (const instruction of trimmedInstructions) {
-		blocks.push({
-			type: "text",
-			text: instruction,
-			...(cacheControl ? { cache_control: cacheControl } : {}),
-		});
+		blocks.push({ type: "text", text: instruction });
 	}
 
-	if (systemPrompt) {
-		blocks.push({
-			type: "text",
-			text: sanitizedPrompt,
-			...(cacheControl ? { cache_control: cacheControl } : {}),
-		});
+	for (const systemPrompt of sanitizedPrompts) {
+		blocks.push({ type: "text", text: systemPrompt });
+	}
+
+	// Attach cache_control to the LAST emitted block only. Anthropic breakpoints are cumulative
+	// prefix cuts, so a single trailing breakpoint covers every preceding block; spreading
+	// cache_control across N blocks wastes slots against the 4-breakpoint cap.
+	const lastIndex = blocks.length - 1;
+	if (cacheControl && lastIndex >= 0) {
+		blocks[lastIndex] = { ...blocks[lastIndex], cache_control: cacheControl };
 	}
 
 	return blocks.length > 0 ? blocks : undefined;
@@ -1921,10 +1927,11 @@ function buildParams(
 	}
 
 	const shouldInjectClaudeCodeInstruction = isOAuthToken && !model.id.startsWith("claude-3-5-haiku");
+	const billingSystemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	const billingPayload = shouldInjectClaudeCodeInstruction
 		? {
 				...params,
-				...(context.systemPrompt ? { system: context.systemPrompt.toWellFormed() } : {}),
+				...(billingSystemPrompts.length > 0 ? { system: billingSystemPrompts } : {}),
 			}
 		: undefined;
 	const systemBlocks = buildAnthropicSystemBlocks(context.systemPrompt, {

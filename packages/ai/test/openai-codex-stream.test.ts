@@ -64,7 +64,7 @@ function createCodexTestModel(baseUrl?: string): Model<"openai-codex-responses">
 
 function createCodexTestContext(): Context {
 	return {
-		systemPrompt: "You are a helpful assistant.",
+		systemPrompt: ["You are a helpful assistant."],
 		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 	};
 }
@@ -417,7 +417,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
@@ -480,7 +480,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
@@ -550,7 +550,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
@@ -594,7 +594,7 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
@@ -650,7 +650,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
@@ -714,7 +714,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
@@ -817,7 +817,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
@@ -910,7 +910,7 @@ describe("openai-codex streaming", () => {
 		});
 
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
@@ -1002,7 +1002,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
@@ -1068,7 +1068,7 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
@@ -1137,7 +1137,7 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
@@ -1220,7 +1220,7 @@ describe("openai-codex streaming", () => {
 			preferWebsockets: false,
 		};
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
@@ -1301,7 +1301,7 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
@@ -1366,7 +1366,7 @@ describe("openai-codex streaming", () => {
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const firstContext: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant.", "Use concise answers."],
 			messages: [{ role: "user", content: "First question", timestamp: Date.now() }],
 		};
 		const firstResponse = await streamOpenAICodexResponses(model, firstContext, {
@@ -1375,7 +1375,7 @@ describe("openai-codex streaming", () => {
 			providerSessionState,
 		}).result();
 		const secondContext: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant.", "Use concise answers."],
 			messages: [
 				...firstContext.messages,
 				firstResponse,
@@ -1392,9 +1392,18 @@ describe("openai-codex streaming", () => {
 		expect(sentRequests).toHaveLength(2);
 		expect(sentRequests[0]?.previous_response_id).toBeUndefined();
 		expect(sentRequests[0]?.prompt_cache_key).toBe("ws-delta-session");
+		expect(sentRequests[0]?.instructions).toBe("You are a helpful assistant.");
+		const initialInput = sentRequests[0]?.input;
+		expect(Array.isArray(initialInput)).toBe(true);
+		const initialItems = initialInput as Array<{ role?: string; content?: unknown }>;
+		expect(initialItems).toHaveLength(2);
+		expect(initialItems[0]?.role).toBe("developer");
+		expect(JSON.stringify(initialItems[0]?.content)).toContain("Use concise answers.");
+		expect(initialItems[1]?.role).toBe("user");
 		expect(sentRequests[1]?.type).toBe("response.create");
 		expect(sentRequests[1]?.previous_response_id).toBe("resp_1");
 		expect(sentRequests[1]?.prompt_cache_key).toBe("ws-delta-session");
+		expect(sentRequests[1]?.instructions).toBe("You are a helpful assistant.");
 		const deltaInput = sentRequests[1]?.input;
 		expect(Array.isArray(deltaInput)).toBe(true);
 		const deltaItems = deltaInput as Array<{ role?: string }>;
@@ -1478,7 +1487,7 @@ describe("openai-codex streaming", () => {
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const firstContext: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "First question", timestamp: Date.now() }],
 		};
 		const firstResponse = await streamOpenAICodexResponses(model, firstContext, {
@@ -1487,7 +1496,7 @@ describe("openai-codex streaming", () => {
 			providerSessionState,
 		}).result();
 		const secondContext: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [
 				...firstContext.messages,
 				firstResponse,
@@ -1558,7 +1567,7 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
@@ -1615,7 +1624,7 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
@@ -1679,7 +1688,7 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
@@ -1764,7 +1773,7 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
@@ -1838,7 +1847,7 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
@@ -1936,18 +1945,18 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 		const firstContext: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 		const secondContext: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [
 				{ role: "user", content: "Say hello", timestamp: Date.now() },
 				{ role: "user", content: "Keep going", timestamp: Date.now() + 1 },
 			],
 		};
 		const thirdContext: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [
 				{ role: "user", content: "Say hello", timestamp: Date.now() },
 				{ role: "user", content: "Keep going", timestamp: Date.now() + 1 },
@@ -2053,18 +2062,18 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 		const firstContext: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 		const secondContext: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [
 				{ role: "user", content: "Say hello", timestamp: Date.now() },
 				{ role: "user", content: "Keep going", timestamp: Date.now() + 1 },
 			],
 		};
 		const thirdContext: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [
 				{ role: "user", content: "Say hello", timestamp: Date.now() },
 				{ role: "user", content: "Keep going", timestamp: Date.now() + 1 },
@@ -2151,7 +2160,7 @@ describe("openai-codex streaming", () => {
 		const result = await streamOpenAICodexResponses(
 			model,
 			{
-				systemPrompt: "You are a helpful assistant.",
+				systemPrompt: ["You are a helpful assistant."],
 				messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 			},
 			{
@@ -2231,7 +2240,7 @@ describe("openai-codex streaming", () => {
 		const result = await streamOpenAICodexResponses(
 			model,
 			{
-				systemPrompt: "You are a helpful assistant.",
+				systemPrompt: ["You are a helpful assistant."],
 				messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 			},
 			{
@@ -2319,11 +2328,11 @@ describe("openai-codex streaming", () => {
 			preferWebsockets: false,
 		};
 		const firstContext: Context = {
-			systemPrompt: "Prompt A",
+			systemPrompt: ["Prompt A"],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 		const secondContext: Context = {
-			systemPrompt: "Prompt B",
+			systemPrompt: ["Prompt B"],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
@@ -2406,11 +2415,11 @@ describe("openai-codex streaming", () => {
 		await prewarmOpenAICodexResponses(model, { apiKey: token, sessionId: "ws-reuse-session", providerSessionState });
 
 		const firstContext: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "First", timestamp: Date.now() }],
 		};
 		const secondContext: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [
 				{ role: "user", content: "First", timestamp: Date.now() },
 				{ role: "user", content: "Second", timestamp: Date.now() },
@@ -2486,7 +2495,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 

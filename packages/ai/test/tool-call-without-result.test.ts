@@ -32,7 +32,7 @@ async function testToolCallWithoutResult<TApi extends Api>(
 ) {
 	// Step 1: Create context with the calculate tool
 	const context: Context = {
-		systemPrompt: "You are a helpful assistant. Use the calculate tool when asked to perform calculations.",
+		systemPrompt: ["You are a helpful assistant. Use the calculate tool when asked to perform calculations."],
 		messages: [],
 		tools: [calculateTool],
 	};

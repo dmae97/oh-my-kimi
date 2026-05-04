@@ -102,6 +102,7 @@ import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
 	type AgentsMdSearch,
+	type BuildSystemPromptResult,
 	buildAgentsMdSearch,
 	buildSystemPrompt as buildSystemPromptInternal,
 	buildSystemPromptToolMetadata,
@@ -166,8 +167,8 @@ export interface CreateAgentSessionOptions {
 	/** Models available for cycling (Ctrl+P in interactive mode) */
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 
-	/** System prompt. String replaces default, function receives default and returns final. */
-	systemPrompt?: string | ((defaultPrompt: string) => string);
+	/** System prompt blocks. Array replaces default, function receives default blocks and returns final blocks. */
+	systemPrompt?: string[] | ((defaultPrompt: string[]) => string[]);
 	/** Optional provider-facing session identifier for prompt caches and sticky auth selection.
 	 * Keeps persisted session files isolated while reusing provider-side caches. */
 	providerSessionId?: string;
@@ -401,9 +402,12 @@ export interface BuildSystemPromptOptions {
 }
 
 /**
- * Build the default system prompt.
+ * Build the default provider-facing system prompt blocks.
+ *
+ * The returned `systemPrompt` preserves the stable harness prompt and dynamic project context
+ * as separate entries so providers can cache prompt prefixes without concatenating blocks.
  */
-export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<string> {
+export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<BuildSystemPromptResult> {
 	return await buildSystemPromptInternal({
 		cwd: options.cwd,
 		skills: options.skills,
@@ -654,7 +658,7 @@ function buildMCPPromptCommands(manager: MCPManager): LoadedCustomCommand[] {
  * const { session } = await createAgentSession({
  *   model: myModel,
  *   getApiKey: async () => Bun.env.MY_KEY,
- *   systemPrompt: 'You are helpful.',
+ *   systemPrompt: ['You are helpful.'],
  *   tools: codingTools({ cwd: getProjectDir() }),
  *   skills: [],
  *   sessionManager: SessionManager.inMemory(),
@@ -1334,7 +1338,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const repeatToolDescriptions = settings.get("repeatToolDescriptions");
 		const eagerTasks = settings.get("task.eager");
 		const intentField = settings.get("tools.intentTracing") || $flag("PI_INTENT_TRACING") ? INTENT_FIELD : undefined;
-		const rebuildSystemPrompt = async (toolNames: string[], tools: Map<string, AgentTool>): Promise<string> => {
+		const rebuildSystemPrompt = async (
+			toolNames: string[],
+			tools: Map<string, AgentTool>,
+		): Promise<BuildSystemPromptResult> => {
 			toolContextStore.setToolNames(toolNames);
 			const discoverableMCPTools = mcpDiscoveryEnabled ? collectDiscoverableMCPTools(tools.values()) : [];
 			const discoverableMCPSummary = summarizeDiscoverableMCPTools(discoverableMCPTools);
@@ -1390,29 +1397,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (options.systemPrompt === undefined) {
 				return defaultPrompt;
 			}
-			if (typeof options.systemPrompt === "string") {
-				return await buildSystemPromptInternal({
-					cwd,
-					skills,
-					contextFiles,
-					tools: promptTools,
-					toolNames,
-					rules: rulebookRules,
-					alwaysApplyRules,
-					skillsSettings: settings.getGroup("skills"),
-					customPrompt: options.systemPrompt,
-					appendSystemPrompt: appendPrompt,
-					repeatToolDescriptions,
-					intentField,
-					mcpDiscoveryMode: hasDiscoverableMCPTools,
-					mcpDiscoveryServerSummaries: discoverableMCPSummary.servers.map(formatDiscoverableMCPToolServerSummary),
-					eagerTasks,
-					secretsEnabled,
-					agentsMdSearch: agentsMdSearchPromise,
-					workspaceTree: workspaceTreePromise,
-				});
+			if (Array.isArray(options.systemPrompt)) {
+				return { systemPrompt: options.systemPrompt };
 			}
-			return options.systemPrompt(defaultPrompt);
+			return {
+				systemPrompt: options.systemPrompt(defaultPrompt.systemPrompt),
+			};
 		};
 
 		const toolNamesFromRegistry = Array.from(toolRegistry.keys());
@@ -1478,7 +1468,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
-		const systemPrompt = await logger.time("buildSystemPrompt", rebuildSystemPrompt, initialToolNames, toolRegistry);
+		const { systemPrompt } = await logger.time(
+			"buildSystemPrompt",
+			rebuildSystemPrompt,
+			initialToolNames,
+			toolRegistry,
+		);
 
 		const promptTemplates = await promptTemplatesPromise;
 		toolSession.promptTemplates = promptTemplates;

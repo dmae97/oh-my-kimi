@@ -84,7 +84,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
-				systemPrompt: "initial",
+				systemPrompt: ["initial"],
 				tools: [readTool, initialMcp as unknown as AgentTool],
 				messages: [],
 			},
@@ -95,7 +95,9 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry: {} as never,
 			toolRegistry,
-			rebuildSystemPrompt,
+			rebuildSystemPrompt: async (toolNames, _tools) => ({
+				systemPrompt: [await rebuildSystemPrompt(toolNames)],
+			}),
 			mcpDiscoveryEnabled: options.mcpDiscoveryEnabled,
 			getMcpServerInstructions: options.getMcpServerInstructions,
 		});

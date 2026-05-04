@@ -205,7 +205,7 @@ describe("BashTool through AgentSession runs children in their own session (e2e)
 			getApiKey: () => "test-key",
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [bashTool as unknown as AgentTool],
 				messages: [],
 			},

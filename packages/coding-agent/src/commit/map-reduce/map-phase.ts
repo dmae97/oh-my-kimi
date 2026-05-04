@@ -62,7 +62,7 @@ export async function runMapPhase({
 			context_header: contextHeader,
 		});
 		const request = {
-			systemPrompt,
+			systemPrompt: [systemPrompt],
 			messages: [{ role: "user", content: userContent, timestamp: Date.now() }] as Message[],
 		};
 

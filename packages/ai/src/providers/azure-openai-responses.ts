@@ -18,6 +18,7 @@ import {
 	type Tool,
 	type ToolChoice,
 } from "../types";
+import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
@@ -28,7 +29,7 @@ import {
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
-import { supportsDeveloperRole } from "./openai-responses";
+import { normalizeOpenAIResponsesPromptCacheKey, supportsDeveloperRole } from "./openai-responses";
 import {
 	appendResponsesToolResultMessages,
 	convertResponsesAssistantMessage,
@@ -273,7 +274,7 @@ function buildParams(
 		model: deploymentName,
 		input: messages,
 		stream: true,
-		prompt_cache_key: options?.sessionId,
+		prompt_cache_key: normalizeOpenAIResponsesPromptCacheKey(options?.sessionId),
 	};
 
 	if (options?.maxTokens) {
@@ -350,12 +351,12 @@ function convertMessages(
 	const transformedMessages = transformMessages(context.messages, model, normalizeResponsesToolCallIdForTransform);
 	const knownCallIds = new Set<string>();
 
-	if (context.systemPrompt) {
+	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
+	if (systemPrompts.length > 0) {
 		const role = model.reasoning && supportsDeveloperRole(resolvedBaseUrl ?? model) ? "developer" : "system";
-		messages.push({
-			role,
-			content: context.systemPrompt.toWellFormed(),
-		});
+		for (const systemPrompt of systemPrompts) {
+			messages.push({ role, content: systemPrompt });
+		}
 	}
 
 	let msgIndex = 0;

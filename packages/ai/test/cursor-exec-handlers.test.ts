@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { resolveExecHandler } from "../src/providers/cursor";
+import { buildCursorSystemPromptJsons, resolveExecHandler } from "../src/providers/cursor";
 
 describe("Cursor resolveExecHandler execHandlers binding", () => {
 	it("invokes handler with correct this when passed as bound method", async () => {
@@ -48,5 +48,20 @@ describe("Cursor resolveExecHandler execHandlers binding", () => {
 
 		// Should get error result (handler threw accessing undefined.sentinel)
 		expect(execResult).toEqual({ tag: "error", message: expect.any(String) });
+	});
+});
+
+describe("Cursor system prompt encoding", () => {
+	it("emits one Cursor system blob per ordered prompt", () => {
+		const jsons = buildCursorSystemPromptJsons(["Primary instructions.", "Developer constraints."]);
+		expect(jsons).toHaveLength(2);
+		expect(JSON.parse(jsons[0])).toEqual({ role: "system", content: "Primary instructions." });
+		expect(JSON.parse(jsons[1])).toEqual({ role: "system", content: "Developer constraints." });
+	});
+
+	it("falls back to a single default system message when all entries are empty", () => {
+		const jsons = buildCursorSystemPromptJsons(["", ""]);
+		expect(jsons).toHaveLength(1);
+		expect(JSON.parse(jsons[0])).toEqual({ role: "system", content: "You are a helpful assistant." });
 	});
 });

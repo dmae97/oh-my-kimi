@@ -97,7 +97,7 @@ describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("Compaction hooks", () => {
 			getApiKey: () => e2eApiKey("ANTHROPIC_API_KEY"),
 			initialState: {
 				model,
-				systemPrompt: "You are a helpful assistant. Be concise.",
+				systemPrompt: ["You are a helpful assistant. Be concise."],
 				tools,
 			},
 		});

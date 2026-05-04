@@ -602,7 +602,7 @@ async function runStage1Job(options: {
 		const response = await completeSimple(
 			model,
 			{
-				systemPrompt: stageOneSystemTemplate,
+				systemPrompt: [stageOneSystemTemplate],
 				messages: [{ role: "user", content: [{ type: "text", text: inputPrompt }], timestamp: Date.now() }],
 			},
 			{

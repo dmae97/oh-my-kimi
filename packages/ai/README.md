@@ -107,7 +107,7 @@ const tools: Tool[] = [
 
 // Build a conversation context (easily serializable and transferable between models)
 const context: Context = {
-	systemPrompt: "You are a helpful assistant.",
+	systemPrompt: ["You are a helpful assistant."],
 	messages: [{ role: "user", content: "What time is it?" }],
 	tools,
 };
@@ -873,7 +873,7 @@ import { Context, getModel, complete } from "@oh-my-pi/pi-ai";
 
 // Create and use a context
 const context: Context = {
-	systemPrompt: "You are a helpful assistant.",
+	systemPrompt: ["You are a helpful assistant."],
 	messages: [{ role: "user", content: "What is TypeScript?" }],
 };
 

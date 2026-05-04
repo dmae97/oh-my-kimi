@@ -53,7 +53,7 @@ export async function generateSummary({
 	const response = await completeSimple(
 		model,
 		{
-			systemPrompt,
+			systemPrompt: [systemPrompt],
 			messages: [{ role: "user", content: userPrompt, timestamp: Date.now() }],
 			tools: [SummaryTool],
 		},

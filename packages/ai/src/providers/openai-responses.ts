@@ -25,6 +25,7 @@ import {
 	createOpenAIResponsesHistoryPayload,
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
+	normalizeSystemPrompts,
 	resolveCacheRetention,
 	sanitizeOpenAIResponsesHistoryItemsForReplay,
 } from "../utils";
@@ -71,6 +72,13 @@ function getPromptCacheRetention(baseUrl: string, cacheRetention: CacheRetention
 		return "24h";
 	}
 	return undefined;
+}
+
+export function normalizeOpenAIResponsesPromptCacheKey(sessionId: string | undefined): string | undefined {
+	if (!sessionId || sessionId.length === 0) return undefined;
+	const wellFormed = sessionId.toWellFormed();
+	if (wellFormed.length <= 64) return wellFormed;
+	return `pc_${Bun.hash(wellFormed).toString(36)}`;
 }
 
 // OpenAI Responses-specific options
@@ -331,7 +339,9 @@ function createClient(
 function getOpenAIResponsesCacheSessionId(
 	options: Pick<OpenAIResponsesOptions, "cacheRetention" | "sessionId"> | undefined,
 ): string | undefined {
-	return resolveCacheRetention(options?.cacheRetention) === "none" ? undefined : options?.sessionId;
+	return resolveCacheRetention(options?.cacheRetention) === "none"
+		? undefined
+		: normalizeOpenAIResponsesPromptCacheKey(options?.sessionId);
 }
 
 function buildParams(
@@ -352,12 +362,11 @@ function buildParams(
 	);
 	const messages: ResponseInput = [...conversationMessages];
 
-	if (context.systemPrompt) {
-		const role = model.reasoning && supportsDeveloperRole(resolvedBaseUrl ?? model) ? "developer" : "system";
-		messages.unshift({
-			role,
-			content: context.systemPrompt.toWellFormed(),
-		});
+	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
+	if (systemPrompts.length > 0) {
+		const role: "developer" | "system" =
+			model.reasoning && supportsDeveloperRole(resolvedBaseUrl ?? model) ? "developer" : "system";
+		messages.unshift(...systemPrompts.map(systemPrompt => ({ role, content: systemPrompt })));
 	}
 
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention);

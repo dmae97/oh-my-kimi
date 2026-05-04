@@ -87,7 +87,7 @@ const { session } = await createAgentSession({
 	model,
 	authStorage: customAuth,
 	modelRegistry: customRegistry,
-	systemPrompt: "You are helpful.",
+	systemPrompt: ["You are helpful."],
 	toolNames: ["read", "bash"],
 	customTools: [{ tool: myTool }],
 	hooks: [{ factory: myHook }],

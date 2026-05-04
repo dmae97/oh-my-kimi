@@ -55,7 +55,7 @@ import type {
 /** Combined result from all before_agent_start handlers */
 interface BeforeAgentStartCombinedResult {
 	messages?: NonNullable<BeforeAgentStartEventResult["message"]>[];
-	systemPrompt?: string;
+	systemPrompt?: string[];
 }
 
 export type ExtensionErrorListener = (error: ExtensionError) => void;
@@ -168,7 +168,7 @@ export class ExtensionRunner {
 	#hasPendingMessagesFn: () => boolean = () => false;
 	#getContextUsageFn: () => ContextUsage | undefined = () => undefined;
 	#compactFn: (instructionsOrOptions?: string | CompactOptions) => Promise<void> = async () => {};
-	#getSystemPromptFn: () => string = () => "";
+	#getSystemPromptFn: () => string[] = () => [];
 	#newSessionHandler: NewSessionHandler = async () => ({ cancelled: false });
 	#branchHandler: BranchHandler = async () => ({ cancelled: false });
 	#navigateTreeHandler: NavigateTreeHandler = async () => ({ cancelled: false });
@@ -795,7 +795,7 @@ export class ExtensionRunner {
 	async emitBeforeAgentStart(
 		prompt: string,
 		images: ImageContent[] | undefined,
-		systemPrompt: string,
+		systemPrompt: string[],
 	): Promise<BeforeAgentStartCombinedResult | undefined> {
 		const ctx = this.createContext();
 		const messages: NonNullable<BeforeAgentStartEventResult["message"]>[] = [];
