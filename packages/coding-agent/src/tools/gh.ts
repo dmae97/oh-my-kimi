@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { StringEnum } from "@oh-my-pi/pi-ai";
@@ -151,6 +152,7 @@ const githubSchema = Type.Object({
 		[
 			"repo_view",
 			"issue_view",
+			"pr_create",
 			"pr_view",
 			"pr_diff",
 			"pr_checkout",
@@ -205,6 +207,53 @@ const githubSchema = Type.Object({
 	),
 	force: Type.Optional(Type.Boolean({ description: "reset existing local branch (pr_checkout)" })),
 	forceWithLease: Type.Optional(Type.Boolean({ description: "force-with-lease push (pr_push)" })),
+	title: Type.Optional(
+		Type.String({
+			description: "PR title (pr_create)",
+			examples: ["Fix login bug"],
+		}),
+	),
+	body: Type.Optional(
+		Type.String({
+			description: "PR body markdown (pr_create); mutually exclusive with fill",
+		}),
+	),
+	base: Type.Optional(
+		Type.String({
+			description: "PR base branch (pr_create); defaults to repo default branch",
+			examples: ["main"],
+		}),
+	),
+	head: Type.Optional(
+		Type.String({
+			description: "PR head branch (pr_create); defaults to current branch",
+			examples: ["feature/foo"],
+		}),
+	),
+	draft: Type.Optional(Type.Boolean({ description: "open PR as draft (pr_create)" })),
+	fill: Type.Optional(
+		Type.Boolean({
+			description: "auto-fill PR title/body from commits (pr_create); mutually exclusive with title/body",
+		}),
+	),
+	reviewer: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "reviewers to request (pr_create); accepts users or org/team",
+			examples: [["octocat", "myorg/team"]],
+		}),
+	),
+	assignee: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "assignees (pr_create); use @me for the authenticated user",
+			examples: [["@me"]],
+		}),
+	),
+	label: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "labels to apply (pr_create)",
+			examples: [["bug", "enhancement"]],
+		}),
+	),
 	query: Type.Optional(
 		Type.String({
 			description: "search query (search_issues, search_prs, search_code, search_commits, search_repos)",
@@ -2063,6 +2112,8 @@ export class GithubTool implements AgentTool<typeof githubSchema, GhToolDetails>
 					return executeRepoView(this.session, params, signal);
 				case "issue_view":
 					return executeIssueView(this.session, params, signal);
+				case "pr_create":
+					return executePrCreate(this.session, params, signal);
 				case "pr_view":
 					return executePrView(this.session, params, signal);
 				case "pr_diff":
@@ -2440,6 +2491,142 @@ async function executePrPush(
 			remoteBranch: target.remoteBranch,
 		},
 	);
+}
+
+async function executePrCreate(
+	session: ToolSession,
+	params: GithubInput,
+	signal: AbortSignal | undefined,
+): Promise<AgentToolResult<GhToolDetails>> {
+	const repo = normalizeOptionalString(params.repo);
+	const title = normalizeOptionalString(params.title);
+	const body = params.body;
+	const base = normalizeOptionalString(params.base);
+	const head = normalizeOptionalString(params.head);
+	const draft = params.draft ?? false;
+	const fill = params.fill ?? false;
+	const reviewers = normalizePrIdentifierList(params.reviewer);
+	const assignees = normalizePrIdentifierList(params.assignee);
+	const labels = normalizePrIdentifierList(params.label);
+
+	if (!fill && !title) {
+		throw new ToolError("title is required unless fill is true");
+	}
+	if (fill && (title || body !== undefined)) {
+		throw new ToolError("fill is mutually exclusive with title and body");
+	}
+
+	const args = ["pr", "create"];
+	appendRepoFlag(args, repo);
+	if (title) args.push("--title", title);
+	if (base) args.push("--base", base);
+	if (head) args.push("--head", head);
+	if (draft) args.push("--draft");
+	if (fill) args.push("--fill");
+	for (const reviewer of reviewers) args.push("--reviewer", reviewer);
+	for (const assignee of assignees) args.push("--assignee", assignee);
+	for (const label of labels) args.push("--label", label);
+
+	let bodyDir: string | undefined;
+	try {
+		if (!fill) {
+			if (body !== undefined && body.length > 0) {
+				// Route through a temp file so multi-KB bodies stay clear of any
+				// argv-length limits and shell-quoting hazards on uncommon platforms.
+				bodyDir = await fs.mkdtemp(path.join(os.tmpdir(), "gh-pr-body-"));
+				const bodyFile = path.join(bodyDir, "body.md");
+				await Bun.write(bodyFile, body);
+				args.push("--body-file", bodyFile);
+			} else {
+				// Avoid gh dropping into an interactive editor when no body is given.
+				args.push("--body", "");
+			}
+		}
+
+		const output = await git.github.text(session.cwd, args, signal, {
+			repoProvided: Boolean(repo),
+		});
+		const url =
+			output
+				.split("\n")
+				.map(line => line.trim())
+				.find(line => line.startsWith("https://github.com/")) ?? output.trim();
+		const parsed = parsePullRequestUrl(url);
+		const resolvedRepo = repo ?? parsed.repo;
+
+		let prView: GhPrViewData | undefined;
+		if (resolvedRepo && parsed.prNumber !== undefined) {
+			try {
+				prView = await git.github.json<GhPrViewData>(
+					session.cwd,
+					[
+						"pr",
+						"view",
+						String(parsed.prNumber),
+						"--repo",
+						resolvedRepo,
+						"--json",
+						GH_PR_FIELDS_NO_COMMENTS.join(","),
+					],
+					signal,
+					{ repoProvided: true },
+				);
+			} catch {
+				// Best-effort summary; PR creation already succeeded.
+			}
+		}
+
+		const text = formatPrCreateResult({
+			url,
+			prNumber: parsed.prNumber,
+			data: prView,
+			title,
+			base,
+			head,
+			draft,
+		});
+		return buildTextResult(text, url || prView?.url);
+	} finally {
+		if (bodyDir) {
+			await fs.rm(bodyDir, { recursive: true, force: true }).catch(() => {});
+		}
+	}
+}
+
+function formatPrCreateResult(options: {
+	url: string;
+	prNumber?: number;
+	data?: GhPrViewData;
+	title?: string;
+	base?: string;
+	head?: string;
+	draft?: boolean;
+}): string {
+	const number = options.prNumber ?? options.data?.number;
+	const headerTitle = options.data?.title ?? options.title ?? "Untitled";
+	const header =
+		number !== undefined
+			? `# Created Pull Request #${number}: ${headerTitle}`
+			: `# Created Pull Request: ${headerTitle}`;
+	const lines: string[] = [header, ""];
+	pushLine(lines, "URL", options.url || options.data?.url);
+	pushLine(lines, "State", options.data?.state);
+	pushLine(lines, "Draft", options.data?.isDraft ?? options.draft);
+	pushLine(lines, "Base", options.data?.baseRefName ?? options.base);
+	pushLine(lines, "Head", options.data?.headRefName ?? options.head);
+	pushLine(lines, "Author", formatAuthor(options.data?.author));
+	pushLine(lines, "Created", options.data?.createdAt);
+	pushLine(lines, "Labels", formatLabels(options.data?.labels));
+
+	const bodyText = normalizeText(options.data?.body);
+	if (bodyText) {
+		lines.push("");
+		lines.push("## Body");
+		lines.push("");
+		lines.push(bodyText);
+	}
+
+	return lines.join("\n").trim();
 }
 
 async function executeSearchIssues(
