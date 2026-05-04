@@ -20,6 +20,8 @@ pub struct RawEvent {
     pub kind: String,
     #[serde(default)]
     pub message: Option<Box<RawValue>>,
+    #[serde(default)]
+    pub timestamp: String,
 }
 
 #[derive(Deserialize)]
@@ -32,6 +34,8 @@ pub struct Message {
     pub tool_name: String,
     #[serde(default, rename = "toolCallId")]
     pub tool_call_id: String,
+    #[serde(default)]
+    pub model: String,
 }
 
 #[derive(Deserialize)]
@@ -253,4 +257,88 @@ where
             })
             .collect()
     })
+}
+
+// ---- timestamp / bucket helpers ----
+
+/// Parses an RFC3339 timestamp into unix seconds. Returns 0 on failure.
+pub fn parse_ts(s: &str) -> i64 {
+    if s.is_empty() {
+        return 0;
+    }
+    chrono::DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.timestamp())
+        .unwrap_or(0)
+}
+
+/// Parses a bucket spec like "h", "day", "week", "month", "1h", "12h", "7d", "2w".
+/// Returns the bucket size in seconds.
+pub fn parse_bucket(spec: &str) -> anyhow::Result<i64> {
+    use anyhow::bail;
+    let s = spec.trim();
+    let secs: i64 = match s {
+        "" => bail!("empty bucket spec"),
+        "hour" | "h" | "1h" => 3600,
+        "day" | "d" | "1d" => 86_400,
+        "week" | "w" | "1w" | "7d" => 7 * 86_400,
+        "month" | "mo" | "1mo" | "30d" => 30 * 86_400,
+        other => {
+            let bytes = other.as_bytes();
+            let last = *bytes.last().unwrap();
+            let unit_secs: i64 = match last {
+                b'h' => 3600,
+                b'd' => 86_400,
+                b'w' => 7 * 86_400,
+                _ => bail!("bad bucket spec {spec:?} (use h/d/w or e.g. 7d, 12h)"),
+            };
+            let n: i64 = other[..other.len() - 1]
+                .parse()
+                .map_err(|_| anyhow::anyhow!("bad bucket count in {spec:?}"))?;
+            if n <= 0 {
+                bail!("bucket count must be > 0");
+            }
+            n * unit_secs
+        }
+    };
+    Ok(secs)
+}
+
+/// Returns a label for the bucket starting at `start_secs`.
+/// Buckets shorter than a day include the hour; multi-day buckets show start..end (exclusive).
+pub fn bucket_label(start_secs: i64, bucket_secs: i64) -> String {
+    use chrono::TimeZone;
+    let start = chrono::Utc.timestamp_opt(start_secs, 0).single();
+    let end = chrono::Utc.timestamp_opt(start_secs + bucket_secs - 1, 0).single();
+    match (start, end) {
+        (Some(s), _) if bucket_secs < 86_400 => s.format("%Y-%m-%d %H:00").to_string(),
+        (Some(s), _) if bucket_secs == 86_400 => s.format("%Y-%m-%d").to_string(),
+        (Some(s), Some(e)) => format!(
+            "{}..{}",
+            s.format("%Y-%m-%d"),
+            e.format("%Y-%m-%d")
+        ),
+        _ => start_secs.to_string(),
+    }
+}
+
+/// Formats a unix timestamp as an RFC3339 string (UTC).
+pub fn format_iso(unix_secs: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Utc
+        .timestamp_opt(unix_secs, 0)
+        .single()
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        .unwrap_or_default()
+}
+
+/// Computes a percentile over an integer slice. The slice is sorted in place.
+/// `p` is 0..=100.
+pub fn percentile(v: &mut [i64], p: f64) -> f64 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.sort_unstable();
+    let p = p.clamp(0.0, 100.0);
+    let idx = ((p / 100.0) * (v.len() as f64 - 1.0)).round() as usize;
+    v[idx.min(v.len() - 1)] as f64
 }

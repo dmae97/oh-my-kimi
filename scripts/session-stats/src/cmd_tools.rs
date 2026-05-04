@@ -13,7 +13,13 @@
 //!   user TEXT          — user-authored text content
 //!
 //! Output: grand totals + per-tool breakdown sorted by total (arg+res) tokens.
-//! Optional CSV at `$TOOL_USAGE_CSV`.
+//! Optional CSV at `$TOOL_USAGE_CSV` (per-tool totals) or
+//! `--calls-csv PATH` / `$TOOL_CALLS_CSV` (one row per tool call).
+//!
+//! Pass `--by <h|d|w|m|Nh|Nd|Nw>` to bucket per-call data into rolling windows
+//! and surface per-tool tokens/call (avg + p50 + p95) over time, so you can
+//! spot regressions in tool efficiency. The buckets do not align to calendar
+//! boundaries; they are pure `floor(unix_secs / N)` slices.
 
 use crate::common::*;
 use anyhow::{Context, Result, bail};
@@ -44,11 +50,35 @@ struct SessionTotals {
 struct FileResult {
     totals: SessionTotals,
     tools: HashMap<String, ToolAgg>,
+    calls: Vec<CallRecord>,
+}
+
+#[derive(Clone)]
+struct CallRecord {
+    ts: i64,
+    tool: String,
+    session: String,
+    model: String,
+    arg_tok: i32,
+    res_tok: i32,
+}
+
+struct PendingCall {
+    tool: String,
+    ts: i64,
+    arg_tok: i32,
+    model: String,
 }
 
 pub fn run(args: Vec<String>) -> Result<()> {
     let mut limit: usize = 1_000;
     let mut workers: usize = 0;
+    let mut by: Option<i64> = None;
+    let mut top: usize = 12;
+    let mut tool_filter: Option<String> = None;
+    let mut calls_csv: Option<String> = std::env::var("TOOL_CALLS_CSV")
+        .ok()
+        .filter(|s| !s.is_empty());
 
     let mut iter = args.into_iter();
     while let Some(a) = iter.next() {
@@ -67,12 +97,42 @@ pub fn run(args: Vec<String>) -> Result<()> {
                     .parse()
                     .context("-j value")?;
             }
+            "--by" => {
+                let spec = iter.next().context("--by requires a bucket spec")?;
+                by = Some(parse_bucket(&spec)?);
+            }
+            "--top" => {
+                top = iter
+                    .next()
+                    .context("--top requires a value")?
+                    .parse()
+                    .context("--top value")?;
+            }
+            "--tool" => {
+                tool_filter = Some(iter.next().context("--tool requires a name")?);
+            }
+            "--calls-csv" => {
+                calls_csv = Some(iter.next().context("--calls-csv requires a path")?);
+            }
             "-h" | "--help" => {
                 eprintln!(
-                    "usage: session-stats tools [-n N] [-j workers]\n\
-                     \n\
-                     Aggregates per-tool token usage across the most-recent N session\n\
-                     jsonl files (default 1000). Tokenizer: o200k_base."
+"usage: session-stats tools [-n N] [-j workers] [--by SPEC] [--top N]
+                           [--tool NAME] [--calls-csv PATH]
+
+Aggregates per-tool token usage across the most-recent N session
+jsonl files (default 1000). Tokenizer: o200k_base.
+
+  --by SPEC      bucket per-call data into rolling windows. SPEC is one of:
+                 hour, day, week, month, or <N>{{h,d,w}} (e.g. 7d, 12h, 2w).
+                 Buckets are pure floor(unix_secs / N); they do not align to
+                 calendar boundaries.
+  --top N        limit per-tool series to the N most-called tools (default 12).
+  --tool NAME    show only this tool in the bucketed series.
+  --calls-csv PATH
+                 emit one CSV row per tool call (ts, session, tool, model,
+                 arg_tok, res_tok). Env fallback: TOOL_CALLS_CSV.
+
+TOOL_USAGE_CSV env still emits the per-tool grand-totals CSV."
                 );
                 return Ok(());
             }
@@ -94,6 +154,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
     let sessions = results.len();
     let mut grand = SessionTotals::default();
     let mut tools: HashMap<String, ToolAgg> = HashMap::new();
+    let mut all_calls: Vec<CallRecord> = Vec::new();
     for r in results {
         grand.arg_tok += r.totals.arg_tok;
         grand.res_tok += r.totals.res_tok;
@@ -109,12 +170,26 @@ pub fn run(args: Vec<String>) -> Result<()> {
             dst.arg_tok += t.arg_tok;
             dst.res_tok += t.res_tok;
         }
+        all_calls.extend(r.calls);
+    }
+
+    if let Some(ref name) = tool_filter {
+        all_calls.retain(|c| &c.tool == name);
     }
 
     print_grand(&grand, sessions);
     println!();
     print_table(&tools);
     write_csv(&tools)?;
+
+    if let Some(bucket_secs) = by {
+        println!();
+        print_buckets(&all_calls, bucket_secs, top, tool_filter.as_deref());
+    }
+    if let Some(path) = calls_csv {
+        write_calls_csv(&all_calls, &path)?;
+        eprintln!("wrote {} calls to {path}", commas(all_calls.len() as i64));
+    }
     Ok(())
 }
 
@@ -130,9 +205,12 @@ fn process_file(path: &Path) -> Option<FileResult> {
 
     let mut totals = SessionTotals::default();
     let mut tools: HashMap<String, ToolAgg> = HashMap::new();
-    // Pending arg attribution: when a result arrives we credit the tool listed
-    // here; otherwise we fall back to message.toolName on the result event.
-    let mut pending: HashMap<String, String> = HashMap::new();
+    let mut calls: Vec<CallRecord> = Vec::new();
+    let session = session_id_from_path(path);
+    // Pending call records: keyed by toolCallId so the matching toolResult
+    // can finalize a CallRecord with both arg+res tokens. Falls back to
+    // message.toolName when the id is absent (legacy sessions).
+    let mut pending: HashMap<String, PendingCall> = HashMap::new();
 
     for line in reader.lines() {
         let Ok(line) = line else { continue };
@@ -165,7 +243,15 @@ fn process_file(path: &Path) -> Option<FileResult> {
                             let t = tools.entry(name.clone()).or_default();
                             t.calls += 1;
                             t.arg_tok += tok;
-                            pending.insert(it.id, name);
+                            pending.insert(
+                                it.id,
+                                PendingCall {
+                                    tool: name,
+                                    ts: parse_ts(&ev.timestamp),
+                                    arg_tok: clamp_i32(tok),
+                                    model: m.model.clone(),
+                                },
+                            );
                         }
                         "thinking" => {
                             totals.thinking_tok += count_tokens(&it.thinking) as i64;
@@ -182,12 +268,24 @@ fn process_file(path: &Path) -> Option<FileResult> {
                 let tok = count_tokens(&text) as i64;
                 totals.res_tok += tok;
                 totals.n_results += 1;
-                let name = pending
-                    .remove(&m.tool_call_id)
+                let pc = pending.remove(&m.tool_call_id);
+                let name = pc
+                    .as_ref()
+                    .map(|p| p.tool.clone())
                     .unwrap_or_else(|| normalize_tool(&m.tool_name));
-                let t = tools.entry(name).or_default();
+                let t = tools.entry(name.clone()).or_default();
                 t.results += 1;
                 t.res_tok += tok;
+                if let Some(p) = pc {
+                    calls.push(CallRecord {
+                        ts: p.ts,
+                        tool: name,
+                        session: session.clone(),
+                        model: p.model,
+                        arg_tok: p.arg_tok,
+                        res_tok: clamp_i32(tok),
+                    });
+                }
             }
             "user" => {
                 for it in items {
@@ -200,7 +298,7 @@ fn process_file(path: &Path) -> Option<FileResult> {
         }
     }
 
-    Some(FileResult { totals, tools })
+    Some(FileResult { totals, tools, calls })
 }
 
 use serde_json::value::RawValue;
@@ -437,6 +535,166 @@ fn write_csv(tools: &HashMap<String, ToolAgg>) -> Result<()> {
             &t.arg_tok.to_string(),
             &t.res_tok.to_string(),
             &(t.arg_tok + t.res_tok).to_string(),
+        ])?;
+    }
+    w.flush()?;
+    Ok(())
+}
+
+// ---- per-call helpers ----
+
+fn session_id_from_path(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn clamp_i32(n: i64) -> i32 {
+    n.clamp(0, i32::MAX as i64) as i32
+}
+
+fn print_buckets(
+    calls: &[CallRecord],
+    bucket_secs: i64,
+    top: usize,
+    tool_filter: Option<&str>,
+) {
+    if calls.is_empty() {
+        println!("(no per-call records — no toolCall/toolResult pairs found)");
+        return;
+    }
+
+    // Pick the tools to show: top-N by call count, ignoring records with ts==0
+    // (events that lacked a parseable timestamp).
+    let mut per_tool: HashMap<&str, i64> = HashMap::new();
+    for c in calls {
+        if c.ts == 0 {
+            continue;
+        }
+        *per_tool.entry(c.tool.as_str()).or_default() += 1;
+    }
+    let mut ranked: Vec<(&str, i64)> = per_tool.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    if tool_filter.is_none() {
+        ranked.truncate(top);
+    }
+
+    let bucket_human = humanize_bucket(bucket_secs);
+    println!(
+        "=== per-call tokens by {} bucket (rolling, no calendar alignment) ===",
+        bucket_human
+    );
+    println!(
+        "showing {} tool{} (sorted by call count). totals/calls match per-call records only;",
+        ranked.len(),
+        if ranked.len() == 1 { "" } else { "s" }
+    );
+    println!(
+        "calls without a matching toolResult or without a parseable timestamp are skipped here."
+    );
+
+    // Group calls per (tool, bucket_id).
+    let mut by_bucket: HashMap<(&str, i64), Vec<&CallRecord>> = HashMap::new();
+    for c in calls {
+        if c.ts == 0 {
+            continue;
+        }
+        if !ranked.iter().any(|(t, _)| *t == c.tool.as_str()) {
+            continue;
+        }
+        let bid = c.ts.div_euclid(bucket_secs);
+        by_bucket.entry((c.tool.as_str(), bid)).or_default().push(c);
+    }
+
+    for (tool, total_calls) in ranked {
+        let mut bids: Vec<i64> = by_bucket
+            .keys()
+            .filter(|(t, _)| *t == tool)
+            .map(|(_, b)| *b)
+            .collect();
+        if bids.is_empty() {
+            continue;
+        }
+        bids.sort();
+
+        println!();
+        println!("=== {tool}  ({} calls) ===", commas(total_calls));
+        println!(
+            "{:<22} {:>7} {:>9} {:>9} {:>9} {:>9} {:>9}",
+            "window", "calls", "avg_arg", "avg_res", "avg_tot", "p50_tot", "p95_tot"
+        );
+        let dashes = 22 + 1 + 7 + 5 * (1 + 9);
+        println!("{}", "-".repeat(dashes));
+
+        for bid in bids {
+            let records = by_bucket.get(&(tool, bid)).expect("present");
+            let n = records.len() as i64;
+            let mut sum_arg = 0i64;
+            let mut sum_res = 0i64;
+            let mut totals: Vec<i64> = Vec::with_capacity(records.len());
+            for r in records {
+                sum_arg += r.arg_tok as i64;
+                sum_res += r.res_tok as i64;
+                totals.push(r.arg_tok as i64 + r.res_tok as i64);
+            }
+            let avg_arg = sum_arg as f64 / n as f64;
+            let avg_res = sum_res as f64 / n as f64;
+            let avg_tot = avg_arg + avg_res;
+            let p50 = percentile(&mut totals.clone(), 50.0);
+            let p95 = percentile(&mut totals, 95.0);
+            let label = bucket_label(bid * bucket_secs, bucket_secs);
+            println!(
+                "{:<22} {:>7} {:>9} {:>9} {:>9} {:>9} {:>9}",
+                label,
+                commas(n),
+                commas(avg_arg.round() as i64),
+                commas(avg_res.round() as i64),
+                commas(avg_tot.round() as i64),
+                commas(p50.round() as i64),
+                commas(p95.round() as i64),
+            );
+        }
+    }
+}
+
+fn humanize_bucket(bucket_secs: i64) -> String {
+    if bucket_secs % (7 * 86_400) == 0 {
+        let n = bucket_secs / (7 * 86_400);
+        if n == 1 { "7d".into() } else { format!("{n}w") }
+    } else if bucket_secs % 86_400 == 0 {
+        format!("{}d", bucket_secs / 86_400)
+    } else if bucket_secs % 3600 == 0 {
+        format!("{}h", bucket_secs / 3600)
+    } else {
+        format!("{}s", bucket_secs)
+    }
+}
+
+fn write_calls_csv(calls: &[CallRecord], path: &str) -> Result<()> {
+    let f = File::create(path).with_context(|| format!("create {path}"))?;
+    let mut w = csv::Writer::from_writer(f);
+    w.write_record([
+        "ts_unix",
+        "ts_iso",
+        "session",
+        "tool",
+        "model",
+        "arg_tok",
+        "res_tok",
+        "total_tok",
+    ])?;
+    for c in calls {
+        let total = c.arg_tok as i64 + c.res_tok as i64;
+        w.write_record([
+            &c.ts.to_string(),
+            &format_iso(c.ts),
+            &c.session,
+            &c.tool,
+            &c.model,
+            &c.arg_tok.to_string(),
+            &c.res_tok.to_string(),
+            &total.to_string(),
         ])?;
     }
     w.flush()?;

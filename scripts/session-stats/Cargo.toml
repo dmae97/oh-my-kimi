@@ -12,6 +12,7 @@ name = "session-stats"
 path = "src/main.rs"
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 anyhow = "1"
 csv = "1"
 dirs = "5"
