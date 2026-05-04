@@ -111,9 +111,7 @@ describe("pi-natives", () => {
 			});
 
 			expect(rust.elided).toBe(true);
-			expect(rust.segments.map(segment => segment.text ?? "...").join("\n")).toContain(
-				"impl Greeter {\n...\n}",
-			);
+			expect(rust.segments.map(segment => segment.text ?? "...").join("\n")).toContain("impl Greeter {\n...\n}");
 			expect(python.elided).toBe(true);
 			expect(python.segments[0].text).toContain("def greet");
 			expect(python.segments.at(-1)?.text).toContain("return");
