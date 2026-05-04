@@ -50,7 +50,7 @@ const searchSchema = Type.Object({
 
 export type SearchToolInput = Static<typeof searchSchema>;
 
-const DEFAULT_MATCH_LIMIT = 500;
+const DEFAULT_MATCH_LIMIT = 100;
 
 export interface SearchToolDetails {
 	truncation?: TruncationResult;
