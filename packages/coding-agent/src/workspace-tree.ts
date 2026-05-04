@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { glob } from "@oh-my-pi/pi-natives";
 import { formatAge, formatBytes } from "@oh-my-pi/pi-utils";
@@ -151,24 +152,39 @@ function matchChildName(parentRelativePath: string, matchPath: string): string |
 	return name.includes("/") ? null : name;
 }
 
-async function listDirectoryTreeChildren(
+async function listDirectChildNames(
 	rootPath: string,
 	parent: DirectoryTreeNode,
 	options: ResolvedDirectoryTreeOptions,
-): Promise<DirectoryTreeNode[]> {
+): Promise<string[]> {
+	if (!options.gitignore) {
+		const directoryPath = parent.relativePath ? path.join(rootPath, parent.relativePath) : rootPath;
+		return await fs.readdir(directoryPath);
+	}
+
 	const result = await glob({
 		pattern: directChildPattern(parent.relativePath),
 		path: rootPath,
 		recursive: false,
 		hidden: options.hidden,
-		gitignore: options.gitignore,
+		gitignore: true,
 		cache: options.cache,
 	});
 
+	return result.matches
+		.map(match => matchChildName(parent.relativePath, match.path))
+		.filter((name): name is string => name !== null);
+}
+
+async function listDirectoryTreeChildren(
+	rootPath: string,
+	parent: DirectoryTreeNode,
+	options: ResolvedDirectoryTreeOptions,
+): Promise<DirectoryTreeNode[]> {
+	const childNames = await listDirectChildNames(rootPath, parent, options);
+
 	const children = await Promise.all(
-		result.matches.map(async (match): Promise<DirectoryTreeNode | null> => {
-			const name = matchChildName(parent.relativePath, match.path);
-			if (!name) return null;
+		childNames.map(async (name): Promise<DirectoryTreeNode | null> => {
 			if (options.excludedNames.has(name)) return null;
 			if (!options.hidden && name.startsWith(".")) return null;
 			const relativePath = childRelativePath(parent.relativePath, name);
@@ -210,7 +226,10 @@ function applyDirectoryLimit(
 		return { visibleChildren: children, droppedCount: 0 };
 	}
 	if (entryLimit <= 1) {
-		return { visibleChildren: children.slice(0, Math.max(0, entryLimit)), droppedCount: children.length - entryLimit };
+		return {
+			visibleChildren: children.slice(0, Math.max(0, entryLimit)),
+			droppedCount: children.length - entryLimit,
+		};
 	}
 
 	const recentChildren = children.slice(0, entryLimit - 1);
