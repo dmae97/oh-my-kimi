@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Ctrl+D draft persistence: pressing Ctrl+D with text in the editor now exits the app and saves the unsent text as a per-session draft. Resuming the same session (e.g. via `--resume`) restores the draft into the editor (one-shot, removed after restore).
+
 ## [14.6.4] - 2026-05-03
 ### Added
 

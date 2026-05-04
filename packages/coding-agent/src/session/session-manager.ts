@@ -2182,6 +2182,63 @@ export class SessionManager {
 		return manager.getPath(id);
 	}
 
+	/**
+	 * Path to the unsent-input draft sidecar for the current session. Lives inside
+	 * the artifacts directory so it is removed together with the session on
+	 * `dropSession`. Returns null when the session has no on-disk identity.
+	 */
+	#getDraftPath(): string | null {
+		const dir = this.getArtifactsDir();
+		return dir ? path.join(dir, "draft.txt") : null;
+	}
+
+	/**
+	 * Persist (or clear) the current editor draft so the next resume of this
+	 * session can restore it. Empty text deletes any stale draft. No-op when the
+	 * session is not persisted.
+	 */
+	async saveDraft(text: string): Promise<void> {
+		const draftPath = this.#getDraftPath();
+		if (!draftPath || !this.persist) return;
+		if (text.length === 0) {
+			try {
+				await this.storage.unlink(draftPath);
+			} catch (err) {
+				if (!isEnoent(err)) throw err;
+			}
+			return;
+		}
+		// Force the session header onto disk so resume can find the file we are
+		// attaching this draft to. Without this, a session whose first message
+		// never produced an assistant reply would persist a draft next to a
+		// session file that does not exist on disk.
+		await this.ensureOnDisk();
+		await this.storage.writeText(draftPath, text);
+	}
+
+	/**
+	 * Read and remove the saved draft. Returns the previously-saved text, or
+	 * null when no draft is pending. Single-shot: a successful read removes the
+	 * sidecar so a subsequent resume does not re-restore the same text.
+	 */
+	async consumeDraft(): Promise<string | null> {
+		const draftPath = this.#getDraftPath();
+		if (!draftPath) return null;
+		let text: string;
+		try {
+			text = await this.storage.readText(draftPath);
+		} catch (err) {
+			if (isEnoent(err)) return null;
+			throw err;
+		}
+		try {
+			await this.storage.unlink(draftPath);
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+		}
+		return text;
+	}
+
 	/** The source that set the session name: "user" (manual /rename or RPC) or "auto" (generated title). */
 	get titleSource(): "auto" | "user" | undefined {
 		return this.#titleSource;

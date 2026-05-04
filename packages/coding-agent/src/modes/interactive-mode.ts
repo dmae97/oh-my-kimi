@@ -445,6 +445,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Restore mode from session (e.g. plan mode on resume)
 		await this.#restoreModeFromSession();
 
+		// Restore unsent editor draft from previous session shutdown (Ctrl+D).
+		// One-shot: consumeDraft removes the sidecar after read so the next
+		// resume does not re-restore the same text.
+		try {
+			const draft = await this.sessionManager.consumeDraft();
+			if (draft && !this.editor.getText()) {
+				this.editor.setText(draft);
+				this.updateEditorBorderColor();
+				this.ui.requestRender();
+			}
+		} catch (err) {
+			logger.warn("Failed to restore session draft", { error: String(err) });
+		}
+
 		// Subscribe to agent events
 		this.#subscribeToAgent();
 
@@ -1189,8 +1203,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#isShuttingDown) return;
 		this.#isShuttingDown = true;
 
+		// Snapshot the editor before any teardown empties it. Persisting the draft
+		// here covers Ctrl+D shutdown with non-empty text; for /exit the editor is
+		// already cleared so saveDraft("") just removes any stale sidecar.
+		const draftText = this.editor.getText();
+
 		// Flush pending session writes before shutdown
 		await this.sessionManager.flush();
+		try {
+			await this.sessionManager.saveDraft(draftText);
+		} catch (err) {
+			logger.warn("Failed to save session draft", { error: String(err) });
+		}
 		this.#btwController.dispose();
 
 		// Emit shutdown event to hooks

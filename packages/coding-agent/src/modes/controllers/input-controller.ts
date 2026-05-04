@@ -403,7 +403,9 @@ export class InputController {
 	}
 
 	handleCtrlD(): void {
-		// Only called when editor is empty (enforced by CustomEditor)
+		// Editor text (if any) is snapshotted at the start of shutdown() and
+		// persisted as a draft for the next resume. Empty text is also fine —
+		// shutdown clears any stale sidecar in that case.
 		void this.ctx.shutdown();
 	}
 

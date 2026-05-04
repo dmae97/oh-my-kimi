@@ -197,12 +197,11 @@ export class CustomEditor extends Editor {
 			return;
 		}
 
-		// Intercept configured exit shortcut (only when editor is empty)
+		// Intercept configured exit shortcut. Always consume the shortcut so it
+		// never reaches the parent handler; firing onExit is the controller's
+		// chance to snapshot the current text as a draft before shutting down.
 		if (this.#matchesAction(data, "app.exit")) {
-			if (this.getText().length === 0 && this.onExit) {
-				this.onExit();
-			}
-			// Always consume exit shortcut (don't pass to parent)
+			this.onExit?.();
 			return;
 		}
 
