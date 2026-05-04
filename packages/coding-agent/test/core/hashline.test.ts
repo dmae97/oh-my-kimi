@@ -169,6 +169,64 @@ describe("hashline parser — block op syntax", () => {
 		);
 	});
 
+	it("auto-absorbs duplicated leading payload of a pure `+ ANCHOR` insert", () => {
+		// `+ 2 ~aaa ~bbb ~NEW`: payload echoes the two file lines AT/ABOVE the
+		// insertion point (aaa, bbb), then adds NEW. The leading echo is absorbed.
+		const source = ["aaa", "bbb", "ccc"].join("\n");
+		const diff = [`+ ${tag(2, "bbb")}`, pl("aaa"), pl("bbb"), pl("NEW")].join("\n");
+		expect(applyDiff(source, diff)).toBe("aaa\nbbb\nNEW\nccc");
+	});
+
+	it("auto-absorbs context-wrap echo (leading-above + trailing-below) on `+ ANCHOR`", () => {
+		// `+ 2 ~aaa ~bbb ~NEW ~ccc ~ddd`: payload wraps NEW with context above
+		// (aaa, bbb) AND below (ccc, ddd). Both ends should be absorbed, leaving
+		// only NEW inserted after bbb.
+		const source = ["aaa", "bbb", "ccc", "ddd"].join("\n");
+		const diff = [`+ ${tag(2, "bbb")}`, pl("aaa"), pl("bbb"), pl("NEW"), pl("ccc"), pl("ddd")].join("\n");
+		expect(applyDiff(source, diff)).toBe("aaa\nbbb\nNEW\nccc\nddd");
+	});
+
+	it("auto-absorbs duplicated trailing payload of a pure `< ANCHOR` insert", () => {
+		// Insert before line 3 ("ccc"). Trailing payload echoes the anchor and the
+		// line after it. Drop the trailing duplicates.
+		const source = ["aaa", "bbb", "ccc", "ddd"].join("\n");
+		const diff = [`< ${tag(3, "ccc")}`, pl("NEW"), pl("ccc"), pl("ddd")].join("\n");
+		expect(applyDiff(source, diff)).toBe("aaa\nbbb\nNEW\nccc\nddd");
+	});
+
+	it("auto-absorbs duplicated leading payload at EOF insert", () => {
+		const source = ["aaa", "bbb", "ccc"].join("\n");
+		// `+ EOF` payload echoes the last two file lines, then adds NEW.
+		const diff = ["+ EOF", pl("bbb"), pl("ccc"), pl("NEW")].join("\n");
+		expect(applyDiff(source, diff)).toBe("aaa\nbbb\nccc\nNEW");
+	});
+
+	it("auto-absorbs duplicated trailing payload at BOF insert", () => {
+		const source = ["aaa", "bbb", "ccc"].join("\n");
+		// `< BOF` payload prepends NEW but trails with the first two file lines.
+		const diff = ["< BOF", pl("NEW"), pl("aaa"), pl("bbb")].join("\n");
+		expect(applyDiff(source, diff)).toBe("NEW\naaa\nbbb\nccc");
+	});
+
+	it("does not auto-absorb a single duplicated boundary line in a pure insert", () => {
+		// One-line echo should NOT trigger absorb (matches replacement-absorb threshold).
+		const source = ["aaa", "bbb", "ccc"].join("\n");
+		const diff = [`+ ${tag(2, "bbb")}`, pl("bbb"), pl("NEW")].join("\n");
+		// Only "bbb" matches above; that's a 1-line dup, not absorbed.
+		expect(applyDiff(source, diff)).toBe("aaa\nbbb\nbbb\nNEW\nccc");
+	});
+
+	it("surfaces a warning when pure-insert duplicates are auto-dropped", () => {
+		const source = ["aaa", "bbb", "ccc"].join("\n");
+		const diff = [`+ ${tag(2, "bbb")}`, pl("aaa"), pl("bbb"), pl("NEW")].join("\n");
+		const result = applyHashlineEdits(source, parseHashline(diff));
+		expect(result.lines).toBe("aaa\nbbb\nNEW\nccc");
+		expect(result.warnings).toBeDefined();
+		expect(result.warnings).toEqual(
+			expect.arrayContaining([expect.stringMatching(/Auto-dropped 2 duplicate line\(s\) at the start of insert/)]),
+		);
+	});
+
 	it("preserves payload text exactly after the first separator", () => {
 		const diff = [`= ${tag(2, "bbb")}`, pl(""), pl("# not a header"), pl("+ not an op"), pl("  spaced")].join("\n");
 		expect(applyDiff(content, diff)).toBe("aaa\n\n# not a header\n+ not an op\n  spaced\nccc");

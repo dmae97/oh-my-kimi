@@ -14,6 +14,7 @@
 - Changed default `read` output for parseable code files without an explicit selector to return a structural summary instead of full verbatim lines, while still supporting full output for `:raw` and explicit ranges
 - Changed truncation/pagination hints in read, archive, and SQLite outputs to use colon syntax (`Use :<offset>`) when continuing reads
 - Changed the read tool UI preview title to include summary elision counts when a summary is returned
+- Extended hashline edit tool's auto-absorb mechanism to pure inserts (`+ ANCHOR`, `< ANCHOR`, `+ BOF`, `+ EOF`, `< BOF`, `< EOF`): leading payload lines that duplicate file lines immediately above the insertion point, or trailing payload lines that duplicate file lines immediately below it, are dropped automatically (matching the existing 2-line-minimum threshold used for `= A..B` boundary absorption). A warning is surfaced when this happens.
 
 ### Fixed
 

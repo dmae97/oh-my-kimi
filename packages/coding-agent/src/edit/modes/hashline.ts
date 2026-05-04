@@ -1003,6 +1003,145 @@ function deleteEditForAutoAbsorbedLine(
 	};
 }
 
+interface HashlinePureInsertGroup {
+	startIndex: number;
+	endIndex: number;
+	sourceLineNum: number;
+	cursor: HashlineCursor;
+	payload: string[];
+}
+
+function cursorMatches(a: HashlineCursor, b: HashlineCursor): boolean {
+	if (a.kind !== b.kind) return false;
+	if (a.kind === "bof" || a.kind === "eof") return true;
+	const aAnchor = (a as { anchor: Anchor }).anchor;
+	const bAnchor = (b as { anchor: Anchor }).anchor;
+	return aAnchor.line === bAnchor.line && aAnchor.hash === bAnchor.hash;
+}
+
+/**
+ * Collects a run of consecutive `insert` edits that all share the same
+ * `lineNum` and `cursor`, IFF that run is not immediately followed by a
+ * `delete` at the same `lineNum` (which would make it a replacement group
+ * instead). Returns the contiguous payload so we can check it for boundary
+ * duplicates against the file.
+ */
+function findPureInsertGroup(edits: HashlineEdit[], startIndex: number): HashlinePureInsertGroup | undefined {
+	const first = edits[startIndex];
+	if (first?.kind !== "insert") return undefined;
+
+	const sourceLineNum = first.lineNum;
+	const cursor = first.cursor;
+	const payload: string[] = [];
+	let index = startIndex;
+	while (index < edits.length) {
+		const edit = edits[index];
+		if (edit.kind !== "insert" || edit.lineNum !== sourceLineNum) break;
+		if (!cursorMatches(edit.cursor, cursor)) break;
+		payload.push(edit.text);
+		index++;
+	}
+
+	// If the run is followed by a delete at the same source lineNum, this is a
+	// replacement group (handled by absorbReplacement…). Decline.
+	if (index < edits.length && edits[index].kind === "delete" && edits[index].lineNum === sourceLineNum) {
+		return undefined;
+	}
+
+	return { startIndex, endIndex: index - 1, sourceLineNum, cursor, payload };
+}
+
+/**
+ * For a pure-insert group, locate the file region adjacent to the insertion
+ * point. Returns 0-indexed bounds:
+ *   - `aboveEndIdx`: index of the last file line strictly above the insertion
+ *     point (-1 if none).
+ *   - `belowStartIdx`: index of the first file line strictly below the
+ *     insertion point (`fileLines.length` if none).
+ */
+function pureInsertNeighborhood(
+	cursor: HashlineCursor,
+	fileLines: string[],
+): { aboveEndIdx: number; belowStartIdx: number } {
+	if (cursor.kind === "bof") return { aboveEndIdx: -1, belowStartIdx: 0 };
+	if (cursor.kind === "eof") return { aboveEndIdx: fileLines.length - 1, belowStartIdx: fileLines.length };
+	if (cursor.kind === "before_anchor") {
+		return { aboveEndIdx: cursor.anchor.line - 2, belowStartIdx: cursor.anchor.line - 1 };
+	}
+	// after_anchor
+	return { aboveEndIdx: cursor.anchor.line - 1, belowStartIdx: cursor.anchor.line };
+}
+
+interface PureInsertAbsorbResult {
+	keptPayload: string[];
+	absorbedLeading: number;
+	absorbedTrailing: number;
+	leadingFileRange?: { start: number; end: number }; // 1-indexed inclusive
+	trailingFileRange?: { start: number; end: number }; // 1-indexed inclusive
+}
+
+/**
+ * Mirror of replacement-absorb's prefix/suffix block check, but for pure
+ * inserts: drop payload lines that exactly duplicate the file lines
+ * immediately above (leading) or immediately below (trailing) the insertion
+ * point. Requires a minimum run of 2 to avoid spurious single-line matches,
+ * matching the existing replacement-absorb threshold.
+ */
+function tryAbsorbPureInsertGroup(group: HashlinePureInsertGroup, fileLines: string[]): PureInsertAbsorbResult {
+	const empty: PureInsertAbsorbResult = { keptPayload: group.payload, absorbedLeading: 0, absorbedTrailing: 0 };
+	if (group.payload.length < 2) return empty;
+
+	const { aboveEndIdx, belowStartIdx } = pureInsertNeighborhood(group.cursor, fileLines);
+
+	// Leading: payload[0..k-1] vs fileLines[aboveEndIdx-k+1 .. aboveEndIdx].
+	let absorbedLeading = 0;
+	const maxLead = Math.min(group.payload.length, aboveEndIdx + 1);
+	for (let count = maxLead; count >= 2; count--) {
+		let ok = true;
+		for (let offset = 0; offset < count; offset++) {
+			if (group.payload[offset] !== fileLines[aboveEndIdx - count + 1 + offset]) {
+				ok = false;
+				break;
+			}
+		}
+		if (ok) {
+			absorbedLeading = count;
+			break;
+		}
+	}
+
+	// Trailing: payload[len-k..len-1] vs fileLines[belowStartIdx..belowStartIdx+k-1].
+	// Don't double-count payload lines already absorbed as leading.
+	let absorbedTrailing = 0;
+	const remaining = group.payload.length - absorbedLeading;
+	const maxTrail = Math.min(remaining, fileLines.length - belowStartIdx);
+	for (let count = maxTrail; count >= 2; count--) {
+		let ok = true;
+		for (let offset = 0; offset < count; offset++) {
+			if (group.payload[group.payload.length - count + offset] !== fileLines[belowStartIdx + offset]) {
+				ok = false;
+				break;
+			}
+		}
+		if (ok) {
+			absorbedTrailing = count;
+			break;
+		}
+	}
+
+	if (absorbedLeading === 0 && absorbedTrailing === 0) return empty;
+
+	return {
+		keptPayload: group.payload.slice(absorbedLeading, group.payload.length - absorbedTrailing),
+		absorbedLeading,
+		absorbedTrailing,
+		leadingFileRange:
+			absorbedLeading > 0 ? { start: aboveEndIdx - absorbedLeading + 2, end: aboveEndIdx + 1 } : undefined,
+		trailingFileRange:
+			absorbedTrailing > 0 ? { start: belowStartIdx + 1, end: belowStartIdx + absorbedTrailing } : undefined,
+	};
+}
+
 function absorbReplacementBoundaryDuplicates(
 	edits: HashlineEdit[],
 	fileLines: string[],
@@ -1021,6 +1160,45 @@ function absorbReplacementBoundaryDuplicates(
 	for (let index = 0; index < edits.length; index++) {
 		const group = findReplacementGroup(edits, index);
 		if (!group) {
+			const pureInsert = findPureInsertGroup(edits, index);
+			if (pureInsert) {
+				const result = tryAbsorbPureInsertGroup(pureInsert, fileLines);
+				if (result.absorbedLeading > 0 || result.absorbedTrailing > 0) {
+					if (result.leadingFileRange) {
+						const { start, end } = result.leadingFileRange;
+						const key = `pure-insert-leading:${start}..${end}`;
+						if (!emittedAbsorbKeys.has(key)) {
+							emittedAbsorbKeys.add(key);
+							warnings.push(
+								`Auto-dropped ${result.absorbedLeading} duplicate line(s) at the start of insert at line ${pureInsert.sourceLineNum} ` +
+									`(file lines ${start}..${end} already match the payload's leading lines).`,
+							);
+						}
+					}
+					if (result.trailingFileRange) {
+						const { start, end } = result.trailingFileRange;
+						const key = `pure-insert-trailing:${start}..${end}`;
+						if (!emittedAbsorbKeys.has(key)) {
+							emittedAbsorbKeys.add(key);
+							warnings.push(
+								`Auto-dropped ${result.absorbedTrailing} duplicate line(s) at the end of insert at line ${pureInsert.sourceLineNum} ` +
+									`(file lines ${start}..${end} already match the payload's trailing lines).`,
+							);
+						}
+					}
+					for (const text of result.keptPayload) {
+						absorbed.push({
+							kind: "insert",
+							cursor: cloneCursor(pureInsert.cursor),
+							text,
+							lineNum: pureInsert.sourceLineNum,
+							index: nextSyntheticIndex++,
+						});
+					}
+					index = pureInsert.endIndex;
+					continue;
+				}
+			}
 			absorbed.push(edits[index]);
 			continue;
 		}
