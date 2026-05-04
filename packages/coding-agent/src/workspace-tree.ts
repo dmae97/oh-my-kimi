@@ -2,11 +2,38 @@ import * as path from "node:path";
 import { glob } from "@oh-my-pi/pi-natives";
 import { formatAge, formatBytes } from "@oh-my-pi/pi-utils";
 
-export interface WorkspaceTree {
+export interface DirectoryTree {
 	rootPath: string;
 	rendered: string;
 	truncated: boolean;
 	totalLines: number;
+}
+
+export interface WorkspaceTree extends DirectoryTree {}
+
+export interface DirectoryTreeOptions {
+	/** Directory depth below the root to include. Root itself is depth 0. */
+	maxDepth?: number;
+	/** Per-directory child cap. Use null to disable per-directory truncation. */
+	directoryEntryLimit?: number | null;
+	/** Optional root child cap. Defaults to directoryEntryLimit; use null to keep all root children. */
+	rootEntryLimit?: number | null;
+	/** Hard rendered line cap. Use null to disable line-cap pruning. */
+	lineCap?: number | null;
+	/** Depth at or above which line-cap pruning is forbidden. Root is 0, root children are 1. */
+	lineCapProtectedDepth?: number;
+	/** Entry names to skip before stat/render. */
+	excludedNames?: ReadonlySet<string> | readonly string[];
+	/** Directory names to skip before traversal. */
+	excludedDirectoryNames?: ReadonlySet<string> | readonly string[];
+	/** Include hidden files and directories. */
+	hidden?: boolean;
+	/** Respect .gitignore while listing children. */
+	gitignore?: boolean;
+	/** Use native glob shared cache. */
+	cache?: boolean;
+	/** Rendered label for the root line. */
+	rootLabel?: string;
 }
 
 const WORKSPACE_TREE_MAX_DEPTH = 3;
@@ -26,17 +53,33 @@ const WORKSPACE_TREE_EXCLUDED_DIRS = new Set([
 	"coverage",
 ]);
 
+const DIRECTORY_TREE_EXCLUDED_NAMES = new Set([".DS_Store"]);
+
 const GLOB_SPECIAL_CHARS = new Set(["!", "(", ")", "*", "?", "[", "]", "{", "}", "\\"]);
 
-interface WorkspaceTreeNode {
+interface DirectoryTreeNode {
 	name: string;
 	relativePath: string;
 	depth: number;
 	isDirectory: boolean;
 	mtimeMs: number;
 	size: number;
-	children: WorkspaceTreeNode[];
+	children: DirectoryTreeNode[];
 	droppedChildCount: number;
+}
+
+interface ResolvedDirectoryTreeOptions {
+	maxDepth: number;
+	directoryEntryLimit: number | null;
+	rootEntryLimit: number | null;
+	lineCap: number | null;
+	lineCapProtectedDepth: number;
+	excludedDirectoryNames: ReadonlySet<string>;
+	excludedNames: ReadonlySet<string>;
+	hidden: boolean;
+	gitignore: boolean;
+	cache: boolean;
+	rootLabel: string;
 }
 
 interface RenderLine {
@@ -56,7 +99,32 @@ function emptyWorkspaceTree(rootPath: string): WorkspaceTree {
 	};
 }
 
-function compareByRecency(a: WorkspaceTreeNode, b: WorkspaceTreeNode): number {
+function resolveDirectoryTreeOptions(options: DirectoryTreeOptions): ResolvedDirectoryTreeOptions {
+	const directoryEntryLimit = options.directoryEntryLimit === undefined ? null : options.directoryEntryLimit;
+	const rootEntryLimit = options.rootEntryLimit === undefined ? directoryEntryLimit : options.rootEntryLimit;
+	const excludedDirectoryNames =
+		options.excludedDirectoryNames instanceof Set
+			? options.excludedDirectoryNames
+			: new Set(options.excludedDirectoryNames ?? []);
+	const providedExcludedNames =
+		options.excludedNames instanceof Set ? options.excludedNames : new Set(options.excludedNames ?? []);
+	const excludedNames = new Set([...DIRECTORY_TREE_EXCLUDED_NAMES, ...providedExcludedNames]);
+	return {
+		maxDepth: options.maxDepth ?? 1,
+		directoryEntryLimit,
+		rootEntryLimit,
+		lineCap: options.lineCap === undefined ? null : options.lineCap,
+		lineCapProtectedDepth: options.lineCapProtectedDepth ?? 0,
+		excludedDirectoryNames,
+		excludedNames,
+		hidden: options.hidden ?? true,
+		gitignore: options.gitignore ?? false,
+		cache: options.cache ?? true,
+		rootLabel: options.rootLabel ?? ".",
+	};
+}
+
+function compareByRecency(a: DirectoryTreeNode, b: DirectoryTreeNode): number {
 	const mtimeCompare = b.mtimeMs - a.mtimeMs;
 	if (mtimeCompare !== 0) return mtimeCompare;
 	return a.name.localeCompare(b.name);
@@ -83,65 +151,83 @@ function matchChildName(parentRelativePath: string, matchPath: string): string |
 	return name.includes("/") ? null : name;
 }
 
-async function listWorkspaceTreeChildren(rootPath: string, parent: WorkspaceTreeNode): Promise<WorkspaceTreeNode[]> {
+async function listDirectoryTreeChildren(
+	rootPath: string,
+	parent: DirectoryTreeNode,
+	options: ResolvedDirectoryTreeOptions,
+): Promise<DirectoryTreeNode[]> {
 	const result = await glob({
 		pattern: directChildPattern(parent.relativePath),
 		path: rootPath,
 		recursive: false,
-		hidden: false,
-		gitignore: true,
-		cache: true,
+		hidden: options.hidden,
+		gitignore: options.gitignore,
+		cache: options.cache,
 	});
 
 	const children = await Promise.all(
-		result.matches.map(async (match): Promise<WorkspaceTreeNode | null> => {
+		result.matches.map(async (match): Promise<DirectoryTreeNode | null> => {
 			const name = matchChildName(parent.relativePath, match.path);
 			if (!name) return null;
-			if (name.startsWith(".")) return null;
-			const absolutePath = path.join(rootPath, childRelativePath(parent.relativePath, name));
+			if (options.excludedNames.has(name)) return null;
+			if (!options.hidden && name.startsWith(".")) return null;
+			const relativePath = childRelativePath(parent.relativePath, name);
+			const absolutePath = path.join(rootPath, relativePath);
 			try {
 				const stat = await Bun.file(absolutePath).stat();
 				const isDirectory = stat.isDirectory();
-				if (isDirectory && WORKSPACE_TREE_EXCLUDED_DIRS.has(name)) return null;
+				if (isDirectory && options.excludedDirectoryNames.has(name)) return null;
 				return {
 					name,
-					relativePath: childRelativePath(parent.relativePath, name),
+					relativePath,
 					depth: parent.depth + 1,
 					isDirectory,
 					mtimeMs: stat.mtimeMs,
 					size: stat.size,
 					children: [],
 					droppedChildCount: 0,
-				} satisfies WorkspaceTreeNode;
+				} satisfies DirectoryTreeNode;
 			} catch {
 				return null;
 			}
 		}),
 	);
 
-	return children.filter((child): child is WorkspaceTreeNode => child !== null).sort(compareByRecency);
+	return children.filter((child): child is DirectoryTreeNode => child !== null).sort(compareByRecency);
 }
 
-function applyDirectoryLimit(children: WorkspaceTreeNode[]): {
-	visibleChildren: WorkspaceTreeNode[];
-	droppedCount: number;
-} {
-	if (children.length <= WORKSPACE_TREE_DIR_LIMIT) {
+function entryLimitForNode(node: DirectoryTreeNode, options: ResolvedDirectoryTreeOptions): number | null {
+	return node.depth === 0 ? options.rootEntryLimit : options.directoryEntryLimit;
+}
+
+function applyDirectoryLimit(
+	node: DirectoryTreeNode,
+	children: DirectoryTreeNode[],
+	options: ResolvedDirectoryTreeOptions,
+): { visibleChildren: DirectoryTreeNode[]; droppedCount: number } {
+	const entryLimit = entryLimitForNode(node, options);
+	if (entryLimit === null || children.length <= entryLimit) {
 		return { visibleChildren: children, droppedCount: 0 };
 	}
+	if (entryLimit <= 1) {
+		return { visibleChildren: children.slice(0, Math.max(0, entryLimit)), droppedCount: children.length - entryLimit };
+	}
 
-	const recentChildren = children.slice(0, WORKSPACE_TREE_DIR_LIMIT - 1);
+	const recentChildren = children.slice(0, entryLimit - 1);
 	const oldestChild = children[children.length - 1];
 	return {
 		visibleChildren: oldestChild ? [...recentChildren, oldestChild] : recentChildren,
-		droppedCount: children.length - WORKSPACE_TREE_DIR_LIMIT,
+		droppedCount: children.length - entryLimit,
 	};
 }
 
-async function collectWorkspaceTree(rootPath: string): Promise<{ root: WorkspaceTreeNode; truncated: boolean }> {
+async function collectDirectoryTree(
+	rootPath: string,
+	options: ResolvedDirectoryTreeOptions,
+): Promise<{ root: DirectoryTreeNode; truncated: boolean }> {
 	const rootStat = await Bun.file(rootPath).stat();
-	const root: WorkspaceTreeNode = {
-		name: ".",
+	const root: DirectoryTreeNode = {
+		name: options.rootLabel,
 		relativePath: "",
 		depth: 0,
 		isDirectory: true,
@@ -152,16 +238,16 @@ async function collectWorkspaceTree(rootPath: string): Promise<{ root: Workspace
 	};
 
 	let truncated = false;
-	const queue: WorkspaceTreeNode[] = [root];
+	const queue: DirectoryTreeNode[] = [root];
 	let cursor = 0;
 
 	while (cursor < queue.length) {
 		const parent = queue[cursor];
 		cursor += 1;
-		if (!parent || parent.depth >= WORKSPACE_TREE_MAX_DEPTH) continue;
+		if (!parent || parent.depth >= options.maxDepth) continue;
 
-		const children = await listWorkspaceTreeChildren(rootPath, parent);
-		const limited = applyDirectoryLimit(children);
+		const children = await listDirectoryTreeChildren(rootPath, parent, options);
+		const limited = applyDirectoryLimit(parent, children, options);
 		parent.children = limited.visibleChildren;
 		parent.droppedChildCount = limited.droppedCount;
 		if (limited.droppedCount > 0) truncated = true;
@@ -179,9 +265,9 @@ function formatNodeAge(nowMs: number, mtimeMs: number): string {
 	return formatAge(ageSeconds);
 }
 
-function pushNodeLine(lines: RenderLine[], node: WorkspaceTreeNode, nowMs: number): void {
+function pushNodeLine(lines: RenderLine[], node: DirectoryTreeNode, nowMs: number): void {
 	if (node.depth === 0) {
-		lines.push({ label: ".", depth: 0, isRoot: true });
+		lines.push({ label: node.name, depth: 0, isRoot: true });
 		return;
 	}
 
@@ -195,7 +281,7 @@ function pushNodeLine(lines: RenderLine[], node: WorkspaceTreeNode, nowMs: numbe
 	});
 }
 
-function pushDroppedChildrenLine(lines: RenderLine[], parent: WorkspaceTreeNode): void {
+function pushDroppedChildrenLine(lines: RenderLine[], parent: DirectoryTreeNode): void {
 	if (parent.droppedChildCount <= 0) return;
 	const childDepth = parent.depth + 1;
 	const indent = "  ".repeat(childDepth);
@@ -205,11 +291,11 @@ function pushDroppedChildrenLine(lines: RenderLine[], parent: WorkspaceTreeNode)
 	});
 }
 
-function collectRenderLines(node: WorkspaceTreeNode, nowMs: number, lines: RenderLine[]): void {
+function collectRenderLines(node: DirectoryTreeNode, nowMs: number, lines: RenderLine[]): void {
 	pushNodeLine(lines, node, nowMs);
 
 	if (node.droppedChildCount > 0) {
-		const recentChildren = node.children.slice(0, WORKSPACE_TREE_DIR_LIMIT - 1);
+		const recentChildren = node.children.slice(0, -1);
 		const oldestChild = node.children[node.children.length - 1];
 		for (const child of recentChildren) collectRenderLines(child, nowMs, lines);
 		pushDroppedChildrenLine(lines, node);
@@ -220,24 +306,29 @@ function collectRenderLines(node: WorkspaceTreeNode, nowMs: number, lines: Rende
 	for (const child of node.children) collectRenderLines(child, nowMs, lines);
 }
 
-function applyLineCap(lines: RenderLine[]): { lines: RenderLine[]; elidedCount: number } {
-	if (lines.length <= WORKSPACE_TREE_LINE_CAP) return { lines, elidedCount: 0 };
+function applyLineCap(
+	lines: RenderLine[],
+	options: ResolvedDirectoryTreeOptions,
+): { lines: RenderLine[]; elidedCount: number } {
+	if (options.lineCap === null || lines.length <= options.lineCap) return { lines, elidedCount: 0 };
 
-	const targetLineCount = WORKSPACE_TREE_LINE_CAP - 1;
+	const targetLineCount = Math.max(1, options.lineCap - 1);
 	const removeCount = lines.length - targetLineCount;
 	const removable = lines
 		.map((line, index) => ({ line, index }))
-		.filter(item => !item.line.isRoot)
+		.filter(item => !item.line.isRoot && item.line.depth > options.lineCapProtectedDepth)
 		.sort((a, b) => b.line.depth - a.line.depth || b.index - a.index)
 		.slice(0, removeCount);
+	if (removable.length === 0) return { lines, elidedCount: 0 };
+
 	const removedIndexes = new Set(removable.map(item => item.index));
 	const cappedLines = lines.filter((_, index) => !removedIndexes.has(index));
 	cappedLines.push({
-		label: `… (${removeCount} lines elided beyond depth/cap)`,
+		label: `… (${removable.length} lines elided beyond depth/cap)`,
 		depth: 0,
 	});
 
-	return { lines: cappedLines, elidedCount: removeCount };
+	return { lines: cappedLines, elidedCount: removable.length };
 }
 
 function renderLines(lines: RenderLine[]): string {
@@ -251,20 +342,35 @@ function renderLines(lines: RenderLine[]): string {
 		.join("\n");
 }
 
+export async function buildDirectoryTree(rootPath: string, options: DirectoryTreeOptions = {}): Promise<DirectoryTree> {
+	const resolvedRootPath = path.resolve(rootPath);
+	const resolvedOptions = resolveDirectoryTreeOptions(options);
+	const nowMs = Date.now();
+	const { root, truncated: directoryTruncated } = await collectDirectoryTree(resolvedRootPath, resolvedOptions);
+	const lines: RenderLine[] = [];
+	collectRenderLines(root, nowMs, lines);
+	const { lines: cappedLines, elidedCount } = applyLineCap(lines, resolvedOptions);
+	return {
+		rootPath: resolvedRootPath,
+		rendered: renderLines(cappedLines),
+		truncated: directoryTruncated || elidedCount > 0,
+		totalLines: cappedLines.length,
+	};
+}
+
 export async function buildWorkspaceTree(cwd: string): Promise<WorkspaceTree> {
 	const rootPath = path.resolve(cwd);
 	try {
-		const nowMs = Date.now();
-		const { root, truncated: directoryTruncated } = await collectWorkspaceTree(rootPath);
-		const lines: RenderLine[] = [];
-		collectRenderLines(root, nowMs, lines);
-		const { lines: cappedLines, elidedCount } = applyLineCap(lines);
-		return {
-			rootPath,
-			rendered: renderLines(cappedLines),
-			truncated: directoryTruncated || elidedCount > 0,
-			totalLines: cappedLines.length,
-		};
+		return await buildDirectoryTree(rootPath, {
+			maxDepth: WORKSPACE_TREE_MAX_DEPTH,
+			directoryEntryLimit: WORKSPACE_TREE_DIR_LIMIT,
+			lineCap: WORKSPACE_TREE_LINE_CAP,
+			excludedDirectoryNames: WORKSPACE_TREE_EXCLUDED_DIRS,
+			hidden: false,
+			gitignore: true,
+			cache: true,
+			rootLabel: ".",
+		});
 	} catch {
 		return emptyWorkspaceTree(rootPath);
 	}

@@ -271,7 +271,7 @@ export type { Skill } from "./extensibility/skills";
 export type { FileSlashCommand } from "./extensibility/slash-commands";
 export type { MCPManager, MCPServerConfig, MCPServerConnection, MCPToolsLoadResult } from "./mcp";
 export type { Tool } from "./tools";
-export { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
+export { buildDirectoryTree, buildWorkspaceTree, type DirectoryTree, type WorkspaceTree } from "./workspace-tree";
 
 export {
 	// Individual tool classes (for custom usage)

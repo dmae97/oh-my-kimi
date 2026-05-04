@@ -14,6 +14,7 @@ import { parseInternalUrl } from "../internal-urls/parse";
 import type { InternalUrl } from "../internal-urls/types";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
 import readDescription from "../prompts/tools/read.md" with { type: "text" };
+import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
 import type { ToolSession } from "../sdk";
 import {
 	DEFAULT_MAX_BYTES,
@@ -41,7 +42,7 @@ import {
 import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
 import { expandPath, formatPathRelativeToCwd, resolveReadPath, splitPathAndSel } from "./path-utils";
-import { formatAge, formatBytes, shortenPath, wrapBrackets } from "./render-utils";
+import { formatBytes, shortenPath, wrapBrackets } from "./render-utils";
 import {
 	executeReadQuery,
 	getRowByKey,
@@ -68,6 +69,21 @@ const MAX_SUMMARY_BYTES = 2 * 1024 * 1024;
 const MAX_SUMMARY_LINES = 20_000;
 // Remote mount path prefix (sshfs mounts) - skip fuzzy matching to avoid hangs
 const REMOTE_MOUNT_PREFIX = getRemoteDir() + path.sep;
+
+const READ_DIRECTORY_EXCLUDED_DIRS = new Set([
+	"node_modules",
+	".git",
+	".next",
+	"dist",
+	"build",
+	"target",
+	".venv",
+	".cache",
+	".turbo",
+	".parcel-cache",
+	"coverage",
+]);
+
 
 function isRemoteMountPath(absolutePath: string): boolean {
 	return absolutePath.startsWith(REMOTE_MOUNT_PREFIX);
@@ -1483,61 +1499,41 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		limit: number | undefined,
 		signal?: AbortSignal,
 	): Promise<AgentToolResult<ReadToolDetails>> {
-		const DEFAULT_LIMIT = 500;
-		const effectiveLimit = limit ?? DEFAULT_LIMIT;
+		const READ_DIRECTORY_MAX_DEPTH = 2;
+		const READ_DIRECTORY_CHILD_LIMIT = 12;
 
-		let entries: string[];
+		throwIfAborted(signal);
+		let tree: DirectoryTree;
 		try {
-			entries = await fs.readdir(absolutePath);
+			tree = await buildDirectoryTree(absolutePath, {
+				maxDepth: READ_DIRECTORY_MAX_DEPTH,
+				directoryEntryLimit: READ_DIRECTORY_CHILD_LIMIT,
+				rootEntryLimit: null,
+				lineCap: limit ?? null,
+				lineCapProtectedDepth: 1,
+				hidden: true,
+				gitignore: false,
+				cache: true,
+				excludedDirectoryNames: READ_DIRECTORY_EXCLUDED_DIRS,
+				rootLabel: ".",
+			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new ToolError(`Cannot read directory: ${message}`);
 		}
+		throwIfAborted(signal);
 
-		// Sort alphabetically (case-insensitive)
-		entries.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-
-		const listLimit = applyListLimit(entries, { limit: effectiveLimit });
-		const limitedEntries = listLimit.items;
-		const limitMeta = listLimit.meta;
-
-		// Format entries with directory indicators and ages
-		const results: string[] = [];
-
-		for (const entry of limitedEntries) {
-			throwIfAborted(signal);
-			const fullPath = path.join(absolutePath, entry);
-			let suffix = "";
-			let age = "";
-
-			try {
-				const entryStat = await fs.stat(fullPath);
-				suffix = entryStat.isDirectory() ? "/" : "";
-				const ageSeconds = Math.floor((Date.now() - entryStat.mtimeMs) / 1000);
-				age = formatAge(ageSeconds);
-			} catch {
-				// Skip entries we can't stat
-				continue;
-			}
-
-			const line = age ? `${entry}${suffix} (${age})` : entry + suffix;
-			results.push(line);
-		}
-
-		if (results.length === 0) {
-			return { content: [{ type: "text", text: "(empty directory)" }], details: {} };
-		}
-
-		const output = results.join("\n");
+		const output = tree.totalLines <= 1 ? "(empty directory)" : tree.rendered;
 		const truncation = truncateHead(output, { maxLines: Number.MAX_SAFE_INTEGER });
-
 		const details: ReadToolDetails = {
 			isDirectory: true,
+			resolvedPath: tree.rootPath,
 		};
 
-		const resultBuilder = toolResult(details)
-			.text(truncation.content)
-			.limits({ resultLimit: limitMeta.resultLimit?.reached });
+		const resultBuilder = toolResult(details).text(truncation.content).sourcePath(tree.rootPath);
+		if (tree.truncated) {
+			resultBuilder.limits({ resultLimit: true });
+		}
 		if (truncation.truncated) {
 			resultBuilder.truncation(truncation, { direction: "head" });
 			details.truncation = truncation;

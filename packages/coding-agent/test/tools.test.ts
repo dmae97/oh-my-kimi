@@ -31,6 +31,14 @@ function getTextOutput(result: any): string {
 	);
 }
 
+function writeFileWithMtime(filePath: string, content: string, mtimeMs: number): void {
+	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	fs.writeFileSync(filePath, content);
+	const mtime = new Date(mtimeMs);
+	fs.utimesSync(filePath, mtime, mtime);
+}
+
+
 function createFifoOrSkip(fifoPath: string): boolean {
 	if (process.platform === "win32") {
 		return false;
@@ -419,6 +427,42 @@ describe("Coding Agent Tools", () => {
 			expect(result.details?.truncation?.truncatedBy).toBe("lines");
 			expect(result.details?.truncation?.totalLines).toBe(3500);
 			expect(result.details?.truncation?.outputLines).toBe(defaultLimit);
+		});
+
+		it("should render directories as a two-level tree without capping root entries", async () => {
+			const childDir = path.join(testDir, "child");
+			const base = Date.now() - 60_000;
+			fs.mkdirSync(childDir, { recursive: true });
+			writeFileWithMtime(path.join(testDir, ".hidden-root"), "hidden", base + 20_000);
+			writeFileWithMtime(path.join(testDir, ".DS_Store"), "mac metadata", base + 25_000);
+			writeFileWithMtime(path.join(testDir, "node_modules", "pkg", "index.js"), "ignored", base + 24_000);
+			for (let i = 0; i < 13; i += 1) {
+				const fileName = `root-${String(i).padStart(2, "0")}.txt`;
+				writeFileWithMtime(path.join(testDir, fileName), fileName, base + i);
+			}
+			for (let i = 0; i < 13; i += 1) {
+				const fileName = `child-${String(i).padStart(2, "0")}.txt`;
+				writeFileWithMtime(path.join(childDir, fileName), fileName, base + i);
+			}
+			writeFileWithMtime(path.join(childDir, "nested", "deep.txt"), "deep", base + 30_000);
+
+			const result = await readTool.execute("test-call-directory-tree", { path: testDir });
+			const output = getTextOutput(result);
+
+			expect(result.details?.isDirectory).toBe(true);
+			expect(output).toContain(".");
+			expect(output).toContain(".hidden-root");
+			expect(output).not.toContain(".DS_Store");
+			expect(output).not.toContain("node_modules");
+			expect(output).toContain("root-00.txt");
+			expect(output).toContain("root-01.txt");
+			expect(output).toContain("root-12.txt");
+			expect(output).toContain("child/");
+			expect(output).toContain("nested/");
+			expect(output).toContain("… 2 more");
+			expect(output).not.toContain("child-01.txt");
+			expect(output).toContain("child-00.txt");
+			expect(output).not.toContain("deep.txt");
 		});
 
 		it("should treat .tar archives like directories", async () => {

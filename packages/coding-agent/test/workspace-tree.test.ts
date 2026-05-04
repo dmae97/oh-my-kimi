@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildWorkspaceTree } from "@oh-my-pi/pi-coding-agent/workspace-tree";
+import { buildDirectoryTree, buildWorkspaceTree } from "@oh-my-pi/pi-coding-agent/workspace-tree";
 
 const tempDirs: string[] = [];
 
@@ -121,5 +121,38 @@ describe("buildWorkspaceTree", () => {
 		expect(tree.totalLines).toBeLessThanOrEqual(120);
 		expect(renderedLines.length).toBeLessThanOrEqual(120);
 		expect(tree.rendered).toContain("lines elided beyond depth/cap");
+	});
+
+	it("can keep root entries uncapped while truncating child directories", async () => {
+		const cwd = await makeTempDir();
+		const childDir = path.join(cwd, "child");
+		const base = Date.now() - 60_000;
+		await touchDirWithMtime(childDir, base + 30_000);
+		await writeFileWithMtime(path.join(cwd, ".DS_Store"), "mac metadata", base + 40_000);
+		for (let i = 0; i < 13; i += 1) {
+			const fileName = `root-${String(i).padStart(2, "0")}.txt`;
+			await writeFileWithMtime(path.join(cwd, fileName), fileName, base + i);
+		}
+		for (let i = 0; i < 13; i += 1) {
+			const fileName = `child-${String(i).padStart(2, "0")}.txt`;
+			await writeFileWithMtime(path.join(childDir, fileName), fileName, base + i);
+		}
+
+		const tree = await buildDirectoryTree(cwd, {
+			maxDepth: 2,
+			directoryEntryLimit: 12,
+			rootEntryLimit: null,
+			hidden: true,
+			gitignore: false,
+		});
+
+		expect(tree.truncated).toBe(true);
+		expect(tree.rendered).not.toContain(".DS_Store");
+		expect(tree.rendered).toContain("root-11.txt");
+		expect(tree.rendered).toContain("root-12.txt");
+		expect(tree.rendered).toContain("child-11.txt");
+		expect(tree.rendered).not.toContain("child-01.txt");
+		expect(tree.rendered).toContain("child-00.txt");
+		expect(tree.rendered).toContain("… 1 more");
 	});
 });
