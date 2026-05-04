@@ -783,18 +783,48 @@ export const HL_BODY_SEP = "|";
 export const HL_BODY_SEP_RE_RAW = regexEscape(HL_BODY_SEP);
 
 const RE_SIGNIFICANT = /[\p{L}\p{N}]/u;
+const RE_STRUCTURAL_STRIP = /[\s{}]/g;
+
+/**
+ * Bigram returned for lines that contain only whitespace and `{`/`}`.
+ * Picks the English ordinal suffix for the line number (`1` → `st`,
+ * `2` → `nd`, `3` → `rd`, `11`/`12`/`13` → `th`, else `th`) so the
+ * line digits + bigram BPE-merge into a single ordinal token (`1st`, `42nd`,
+ * `100th`, …). Brace-only lines therefore cost one token for the whole
+ * `LINE+ID` anchor instead of two.
+ */
+function structuralBigram(line: number): string {
+	const mod100 = line % 100;
+	if (mod100 >= 11 && mod100 <= 13) return "th";
+	switch (line % 10) {
+		case 1:
+			return "st";
+		case 2:
+			return "nd";
+		case 3:
+			return "rd";
+		default:
+			return "th";
+	}
+}
 
 /**
  * Compute a 2-character hash of a single line via xxHash32 mod 647 over
- * {@link HL_BIGRAMS}. Lines with no letter or digit (e.g. bare `}`,
- * bare `{`) mix the line number into the seed so adjacent identical
- * brace-only lines get distinct hashes; lines with significant content stay
- * line-number-independent so a line is identifiable across small shifts.
+ * {@link HL_BIGRAMS}. Lines that contain only whitespace and `{`/`}` collapse
+ * to an ordinal-suffix bigram (see {@link structuralBigram}) so brace-only
+ * structure shares one merged ordinal token (`1st`, `42nd`, `100th`, …).
+ * Other lines with no letter or digit mix the line number into the seed so
+ * adjacent identical punctuation-only lines get distinct hashes; lines with
+ * significant content stay line-number-independent so a line is identifiable
+ * across small shifts.
  *
  * The line input should not include a trailing newline.
  */
 export function computeLineHash(idx: number, line: string): string {
 	line = line.replace(/\r/g, "").trimEnd();
+	if (line.replace(RE_STRUCTURAL_STRIP, "").length === 0) {
+		return structuralBigram(idx);
+	}
 	const seed = RE_SIGNIFICANT.test(line) ? 0 : idx;
 	return HL_BIGRAMS[Bun.hash.xxHash32(line, seed) % HL_BIGRAMS_COUNT];
 }
