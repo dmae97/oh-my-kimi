@@ -8,8 +8,8 @@ This format is purely textual. The tool has NO awareness of language, indentatio
 
 <ops>
 @PATH            header: subsequent ops apply to PATH
-< ANCHOR         insert lines BEFORE the anchored line (or BOF); payload follows as `{{hsep}}TEXT` lines
 + ANCHOR         insert lines AFTER  the anchored line (or EOF); payload follows as `{{hsep}}TEXT` lines
+< ANCHOR         insert lines BEFORE the anchored line (or BOF); payload follows as `{{hsep}}TEXT` lines
 - A..B           delete the line range (inclusive); `- A` for one line
 = A..B           replace the range with payload `{{hsep}}TEXT` lines, or with one blank line if no payload follows
 </ops>
@@ -20,6 +20,7 @@ This format is purely textual. The tool has NO awareness of language, indentatio
 - `< A` inserts before line A; `+ A` inserts after line A. `< BOF` / `+ BOF` both prepend; `< EOF` / `+ EOF` both append.
 - `= A..B` replaces the inclusive range with the following payload lines. `= A` (or `= A..B`) with no payload blanks the range to a single empty line.
 - `- A..B` deletes the inclusive range; omit `..B` for one line.
+- Pick the smallest op for the change: pure addition → `+`/`<`; pure deletion → `-`; `= A..B` ONLY when content inside `A..B` is actually being modified or removed.
 </rules>
 
 <case file="a.ts">
@@ -39,11 +40,9 @@ This format is purely textual. The tool has NO awareness of language, indentatio
 
 # Replace a contiguous range with multiple lines
 @a.ts
-= {{hrefr 3}}..{{hrefr 6}}
-{{hsep}}export function label(name: string): string {
+= {{hrefr 4}}..{{hrefr 5}}
 {{hsep}}	const clean = (name || DEF).trim();
 {{hsep}}	return clean.length === 0 ? DEF : clean.toUpperCase();
-{{hsep}}}
 
 # Insert BEFORE a line
 @a.ts
@@ -73,11 +72,30 @@ This format is purely textual. The tool has NO awareness of language, indentatio
 = {{hrefr 2}}
 </examples>
 
+<anti-pattern>
+# WRONG — replaces 6 lines just to add one. Use `+` at the boundary instead.
+@a.ts
+= {{hrefr 1}}..{{hrefr 6}}
+{{hsep}}const DEF = "guest";
+{{hsep}}const DEBUG = false;
+{{hsep}}
+{{hsep}}export function label(name) {
+{{hsep}}	const clean = name || DEF;
+{{hsep}}	return clean.trim();
+{{hsep}}}
+
+# RIGHT — same effect, one-line insert
+@a.ts
++ {{hrefr 1}}
+{{hsep}}const DEBUG = false;
+
+If your replacement payload would render with even one unchanged line in the diff, you have the wrong op or the wrong range. Stop and rewrite as `+`/`<`/`-` plus a narrower `=`.
+</anti-pattern>
+
 <critical>
 - Always copy anchors exactly from tool output, but **NEVER** include line content after the `{{hsep}}` separator in the op line.
-- Only emit changed lines. Do not restate unchanged context as payload.
 - Every inserted/replacement content line **MUST** start with `{{hsep}}`; raw content lines are invalid.
 - Do not write unified diff syntax (`@@`, `-OLD`, `+NEW`).
-- To replace a block, use one `= A..B` op followed by all replacement `{{hsep}}TEXT` payload lines.
 - `= A..B` deletes the range; payload is what's written. If a payload edge line already exists immediately outside `A..B`, widen the range to cover it — otherwise it duplicates.
+- Multiple ops in one patch are cheap. Prefer two narrow ops over one wide `=`.
 </critical>
