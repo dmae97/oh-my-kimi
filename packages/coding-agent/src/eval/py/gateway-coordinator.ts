@@ -2,13 +2,12 @@ import * as fs from "node:fs";
 import { createServer } from "node:net";
 import * as path from "node:path";
 import { Process } from "@oh-my-pi/pi-natives";
-import { getAgentDir, isEnoent, logger, procmgr } from "@oh-my-pi/pi-utils";
+import { getPythonGatewayDir, isEnoent, logger, procmgr } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 import { Settings } from "../../config/settings";
 import { getOrCreateSnapshot } from "../../utils/shell-snapshot";
 import { filterEnv, resolvePythonRuntime } from "./runtime";
 
-const GATEWAY_DIR_NAME = "python-gateway";
 const GATEWAY_INFO_FILE = "gateway.json";
 const GATEWAY_LOCK_FILE = "gateway.lock";
 const GATEWAY_STARTUP_TIMEOUT_MS = 30000;
@@ -66,7 +65,7 @@ async function allocatePort(): Promise<number> {
 }
 
 function getGatewayDir(): string {
-	return path.join(getAgentDir(), GATEWAY_DIR_NAME);
+	return getPythonGatewayDir();
 }
 
 function getGatewayInfoPath(): string {
