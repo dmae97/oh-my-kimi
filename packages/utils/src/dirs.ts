@@ -192,6 +192,12 @@ class DirResolver {
 
 let dirs = new DirResolver(process.env.PI_CODING_AGENT_DIR);
 
+// Anchor home for the resolver. Captured at module load to stay stable across
+// test mocks of `os.homedir()`. `getPluginsDir(home)` compares against this so
+// production callers (`home === RESOLVER_HOME`) hit the XDG-aware resolver while
+// tests passing a temp HOME short-circuit to a deterministic path.
+const RESOLVER_HOME = os.homedir();
+
 // =============================================================================
 // Root directories
 // =============================================================================
@@ -236,8 +242,20 @@ export function getLogPath(date = new Date()): string {
 	return path.join(getLogsDir(), `${APP_NAME}.${date.toISOString().slice(0, 10)}.log`);
 }
 
-/** Get the plugins directory (~/.omp/plugins). */
-export function getPluginsDir(): string {
+/**
+ * Get the plugins directory (~/.omp/plugins or its XDG equivalent).
+ *
+ * No-arg form (production callers) goes through the XDG-aware DirResolver so
+ * reads and writes always agree. The optional `home` parameter is for test
+ * isolation: when it differs from `os.homedir()` it short-circuits the resolver
+ * and returns `<home>/<configDir>/plugins` so tests with a temp HOME get a
+ * deterministic path. Passing `os.homedir()` explicitly is identical to the
+ * no-arg form — XDG semantics are preserved.
+ */
+export function getPluginsDir(home?: string): string {
+	if (home !== undefined && home !== RESOLVER_HOME) {
+		return path.join(home, getConfigDirName(), "plugins");
+	}
 	return dirs.rootSubdir("plugins", "data");
 }
 

@@ -811,9 +811,10 @@ export async function listClaudePluginRoots(
 
 	// ── OMP installed plugins registry ───────────────────────────────────────
 	// OMP registry is authoritative: its entries replace Claude's entries for the same plugin ID.
-	// getPluginsDir() resolves to the same path the marketplace writer uses
-	// (XDG-aware via the dir resolver), so reads and writes always agree.
-	const ompRegistryPath = path.join(getPluginsDir(), "installed_plugins.json");
+	// In production `home` is `os.homedir()`, so `getPluginsDir(home)` resolves to the
+	// same XDG-aware path the marketplace writer uses (reads and writes always agree).
+	// Tests pass a temp dir, which short-circuits the resolver for deterministic isolation.
+	const ompRegistryPath = path.join(getPluginsDir(home), "installed_plugins.json");
 	const ompContent = await readFile(ompRegistryPath);
 	if (ompContent) {
 		const ompRegistry = parseClaudePluginsRegistry(ompContent);

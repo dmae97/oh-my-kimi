@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `listClaudePluginRoots` OMP registry path using `getPluginsDir()` (which ignores the `home` argument) instead of deriving the path from the `home` parameter, causing tests that pass a temp directory as `home` to always pick up the real user registry alongside the test fixture
+
 ## [14.7.0] - 2026-05-04
 ### Breaking Changes
 
