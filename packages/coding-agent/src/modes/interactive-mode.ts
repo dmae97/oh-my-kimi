@@ -856,8 +856,15 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Restore mode state from session entries on resume (e.g. plan mode). */
 	async #restoreModeFromSession(): Promise<void> {
-		if (!this.session.settings.get("plan.enabled")) return;
 		const sessionContext = this.sessionManager.buildSessionContext();
+		if (!this.session.settings.get("plan.enabled")) {
+			// Clear stale plan/plan_paused mode so re-enabling the setting
+			// later doesn't unexpectedly restore an old plan session.
+			if (sessionContext.mode === "plan" || sessionContext.mode === "plan_paused") {
+				this.sessionManager.appendModeChange("none");
+			}
+			return;
+		}
 		if (sessionContext.mode === "plan") {
 			const planFilePath = sessionContext.modeData?.planFilePath as string | undefined;
 			await this.#enterPlanMode({ planFilePath });
@@ -1095,6 +1102,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async handlePlanModeCommand(initialPrompt?: string): Promise<void> {
+		if (this.planModeEnabled) {
+			const confirmed = await this.showHookConfirm(
+				"Exit plan mode?",
+				"This exits plan mode without approving a plan.",
+			);
+			if (!confirmed) return;
+			await this.#exitPlanMode({ paused: true });
+			return;
+		}
 		if (!this.session.settings.get("plan.enabled")) {
 			this.showWarning("Plan mode is disabled. Enable it in settings (plan.enabled).");
 			return;
