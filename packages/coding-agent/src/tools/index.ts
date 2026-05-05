@@ -299,7 +299,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const enableLsp = session.enableLsp ?? true;
 	const requestedTools =
 		toolNames && toolNames.length > 0 ? [...new Set(toolNames.map(name => name.toLowerCase()))] : undefined;
-	if (requestedTools && !requestedTools.includes("exit_plan_mode")) {
+	const planEnabled = session.settings.get("plan.enabled");
+	if (planEnabled && requestedTools && !requestedTools.includes("exit_plan_mode")) {
 		requestedTools.push("exit_plan_mode");
 	}
 	const backends = resolveEvalBackends(session);
@@ -362,6 +363,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	}
 	const allTools: Record<string, ToolFactory> = { ...BUILTIN_TOOLS, ...HIDDEN_TOOLS };
 	const isToolAllowed = (name: string) => {
+		if (name === "exit_plan_mode") return planEnabled;
 		if (name === "lsp") return enableLsp && session.settings.get("lsp.enabled");
 		if (name === "bash") return true;
 		if (name === "eval") return allowEval;
@@ -403,7 +405,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			: [
 					...Object.entries(BUILTIN_TOOLS).filter(([name]) => isToolAllowed(name)),
 					...(includeYield ? ([["yield", HIDDEN_TOOLS.yield]] as const) : []),
-					...([["exit_plan_mode", HIDDEN_TOOLS.exit_plan_mode]] as const),
+					...(planEnabled ? ([["exit_plan_mode", HIDDEN_TOOLS.exit_plan_mode]] as const) : []),
 				];
 
 	const baseResults = await Promise.all(
