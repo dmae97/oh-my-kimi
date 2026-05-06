@@ -9,11 +9,26 @@ export interface IsolationBackendResolution {
 	warning: string;
 }
 
+type ProcessorEnv = Pick<NodeJS.ProcessEnv, "PROCESSOR_ARCHITECTURE" | "PROCESSOR_ARCHITEW6432">;
+
+function isWindowsArm64HostUnderX64Emulation(
+	platform: NodeJS.Platform,
+	arch: NodeJS.Architecture,
+	env: ProcessorEnv,
+): boolean {
+	if (platform !== "win32" || arch !== "x64") return false;
+	return (
+		env.PROCESSOR_ARCHITECTURE?.toUpperCase() === "ARM64" || env.PROCESSOR_ARCHITEW6432?.toUpperCase() === "ARM64"
+	);
+}
+
 export async function resolveIsolationBackendForTaskExecution(
 	requestedMode: TaskIsolationMode,
 	isIsolated: boolean,
 	repoRoot: string | null,
 	platform: NodeJS.Platform = process.platform,
+	arch: NodeJS.Architecture = process.arch,
+	env: ProcessorEnv = process.env,
 ): Promise<IsolationBackendResolution> {
 	let effectiveIsolationMode = requestedMode;
 	let warning = "";
@@ -36,6 +51,13 @@ export async function resolveIsolationBackendForTaskExecution(
 	}
 
 	if (!(requestedMode === "fuse-projfs" && platform === "win32")) {
+		return { effectiveIsolationMode, warning };
+	}
+
+	if (isWindowsArm64HostUnderX64Emulation(platform, arch, env)) {
+		effectiveIsolationMode = "worktree";
+		warning =
+			"<system-notification>ProjFS isolation is disabled on Windows ARM64 x64 emulation. Falling back to worktree isolation.</system-notification>";
 		return { effectiveIsolationMode, warning };
 	}
 
