@@ -11,6 +11,7 @@ describe("Python gateway environment filtering", () => {
 			UNSAFE_TOKEN: "nope",
 			PI_CUSTOM: "1",
 			LC_ALL: "en_US.UTF-8",
+			LD_LIBRARY_PATH: "/opt/conda/lib",
 		};
 
 		const filtered = filterEnv(env);
@@ -19,6 +20,7 @@ describe("Python gateway environment filtering", () => {
 		expect(filtered.HOME).toBe("/home/test");
 		expect(filtered.PI_CUSTOM).toBe("1");
 		expect(filtered.LC_ALL).toBe("en_US.UTF-8");
+		expect(filtered.LD_LIBRARY_PATH).toBe("/opt/conda/lib");
 		expect(filtered.OPENAI_API_KEY).toBeUndefined();
 		expect(filtered.ANTHROPIC_API_KEY).toBeUndefined();
 		expect(filtered.UNSAFE_TOKEN).toBeUndefined();
