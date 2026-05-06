@@ -663,9 +663,22 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	finishPendingSubmission(input: SubmittedUserInput): void {
-		if (this.#pendingSubmittedInput === input) {
+		const wasPendingSubmission = this.#pendingSubmittedInput === input;
+		const pendingSubmissionDispose = this.#pendingSubmissionDispose;
+		if (wasPendingSubmission) {
 			this.#pendingSubmittedInput = undefined;
 			this.#pendingSubmissionDispose = undefined;
+		}
+
+		if (wasPendingSubmission && !this.session.isStreaming && !this.streamingComponent) {
+			this.optimisticUserMessageSignature = undefined;
+			pendingSubmissionDispose?.();
+			this.#pendingWorkingMessage = undefined;
+			if (this.loadingAnimation) {
+				this.loadingAnimation.stop();
+				this.loadingAnimation = undefined;
+				this.statusContainer.clear();
+			}
 		}
 	}
 
