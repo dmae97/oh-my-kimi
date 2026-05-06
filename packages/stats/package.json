@@ -60,7 +60,6 @@
 	"files": [
 		"src",
 		"build.ts",
-		"scripts/client-bundle-validation.ts",
 		"tailwind.config.js",
 		"README.md"
 	],

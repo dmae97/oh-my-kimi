@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { compile } from "@tailwindcss/node";
-import { validateClientBundleReactVersions } from "./scripts/client-bundle-validation";
 
 /**
  * Extract Tailwind class names from source files by scanning for className attributes.
@@ -55,7 +54,6 @@ const result = await Bun.build({
 	outdir: "./dist/client",
 	minify: true,
 	naming: "[dir]/[name].[ext]",
-	metafile: true,
 });
 
 if (!result.success) {
@@ -63,14 +61,6 @@ if (!result.success) {
 	for (const message of result.logs) {
 		console.error(message);
 	}
-	process.exit(1);
-}
-
-try {
-	const versions = await validateClientBundleReactVersions(result.metafile);
-	console.log(`Verified React bundle versions: react ${versions.react}, react-dom ${versions["react-dom"]}`);
-} catch (error) {
-	console.error(error instanceof Error ? error.message : error);
 	process.exit(1);
 }
 

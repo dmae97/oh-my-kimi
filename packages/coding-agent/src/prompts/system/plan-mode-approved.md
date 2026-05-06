@@ -9,7 +9,6 @@ Context was preserved for execution. Use the existing conversation history when 
 Execution may be running in fresh context. Treat the finalized plan as the source of truth.
 {{/if}}
 
-
 ## Plan
 
 {{planContent}}
