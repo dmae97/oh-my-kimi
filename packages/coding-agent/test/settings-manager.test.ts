@@ -80,6 +80,35 @@ describe("Settings", () => {
 			expect((savedSettings.modelRoles as { default?: string } | undefined)?.default).toBe("claude-sonnet");
 		});
 
+		it("filters model allow-list and disabled providers by current path prefix", async () => {
+			const workDir = path.join(projectDir, "work", "service");
+			const privateDir = path.join(projectDir, "private", "app");
+			fs.mkdirSync(workDir, { recursive: true });
+			fs.mkdirSync(privateDir, { recursive: true });
+
+			await writeSettings({
+				enabledModels: [
+					"claude-sonnet-4-5",
+					{ path: path.join(projectDir, "work"), values: ["anthropic/claude-opus-4-5"] },
+					{ path: path.join(projectDir, "private"), values: ["openai/gpt-5.2-codex"] },
+				],
+				disabledProviders: [
+					"ollama",
+					{ path: path.join(projectDir, "work"), values: ["openai"] },
+					{ path: path.join(projectDir, "private"), values: ["anthropic"] },
+				],
+			});
+
+			const workSettings = await Settings.init({ cwd: workDir, agentDir });
+			expect(workSettings.get("enabledModels")).toEqual(["claude-sonnet-4-5", "anthropic/claude-opus-4-5"]);
+			expect(workSettings.get("disabledProviders")).toEqual(["ollama", "openai"]);
+
+			_resetSettingsForTest();
+			const privateSettings = await Settings.init({ cwd: privateDir, agentDir });
+			expect(privateSettings.get("enabledModels")).toEqual(["claude-sonnet-4-5", "openai/gpt-5.2-codex"]);
+			expect(privateSettings.get("disabledProviders")).toEqual(["ollama", "anthropic"]);
+		});
+
 		it("should preserve custom settings when changing theme", async () => {
 			await writeSettings({
 				modelRoles: { default: "claude-sonnet" },
