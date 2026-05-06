@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed VLLM model discovery to use `max_model_len` as the context window when the endpoint reports it.
+- Fixed local Ollama model discovery to apply `/api/show` thinking and vision capabilities in addition to native context windows ([#928](https://github.com/can1357/oh-my-pi/issues/928)).
 
 ## [14.7.0] - 2026-05-04
 ### Breaking Changes

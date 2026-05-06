@@ -1,6 +1,7 @@
 import type { ModelManagerOptions } from "../model-manager";
+import { Effort } from "../model-thinking";
 import { getBundledModels } from "../models";
-import type { Api, Model } from "../types";
+import type { Api, Model, ThinkingConfig } from "../types";
 import { isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
 import {
 	fetchOpenAICompatibleModels,
@@ -192,7 +193,7 @@ function toOllamaNativeBaseUrl(baseUrl: string): string {
 
 async function fetchOllamaNativeModels(
 	baseUrl: string,
-	resolveLimits: (modelId: string) => Promise<OllamaModelLimits>,
+	resolveMetadata: (modelId: string) => Promise<OllamaResolvedMetadata>,
 ): Promise<Model<"openai-responses">[] | null> {
 	const nativeBaseUrl = toOllamaNativeBaseUrl(baseUrl);
 	let response: Response;
@@ -213,18 +214,19 @@ async function fetchOllamaNativeModels(
 		entries.map(async (entry): Promise<Model<"openai-responses"> | null> => {
 			const id = entry.model ?? entry.name;
 			if (!id) return null;
-			const { contextWindow, maxTokens } = await resolveLimits(id);
+			const metadata = await resolveMetadata(id);
 			return {
 				id,
 				name: entry.name ?? id,
 				api: "openai-responses",
 				provider: "ollama",
 				baseUrl,
-				reasoning: false,
-				input: ["text"],
+				reasoning: metadata.reasoning ?? false,
+				thinking: metadata.thinking,
+				input: metadata.input ?? ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow,
-				maxTokens,
+				contextWindow: metadata.contextWindow,
+				maxTokens: metadata.maxTokens,
 			};
 		}),
 	);
@@ -241,18 +243,62 @@ const OLLAMA_FALLBACK_CONTEXT_WINDOW = 128_000;
 /** Cap max output tokens at a value that matches OMP's other openai-responses defaults. */
 const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 
-interface OllamaModelLimits {
+interface OllamaResolvedMetadata {
 	contextWindow: number;
 	maxTokens: number;
+	capabilities?: string[];
+	reasoning?: boolean;
+	thinking?: ThinkingConfig;
+	input?: ("text" | "image")[];
+}
+
+interface OllamaShowMetadata {
+	contextWindow?: number;
+	maxTokens?: number;
+	capabilities?: string[];
+	reasoning?: boolean;
+	thinking?: ThinkingConfig;
+	input?: ("text" | "image")[];
+}
+
+function getOllamaContextWindow(modelInfo: Record<string, unknown> | undefined): number | undefined {
+	if (!modelInfo) {
+		return undefined;
+	}
+	for (const [key, value] of Object.entries(modelInfo)) {
+		if (typeof value !== "number" || value <= 0) {
+			continue;
+		}
+		if (key.endsWith(".context_length") || key.endsWith(".num_ctx") || key.endsWith(".context_window")) {
+			return value;
+		}
+	}
+}
+
+function getOllamaCapabilities(value: unknown): string[] | undefined {
+	if (!Array.isArray(value)) {
+		return undefined;
+	}
+	return value.filter((item): item is string => typeof item === "string");
+}
+
+function getOllamaThinkingConfig(capabilities: string[] | undefined): ThinkingConfig | undefined {
+	if (!capabilities?.includes("thinking")) {
+		return undefined;
+	}
+	return {
+		mode: "effort",
+		minLevel: Effort.Minimal,
+		maxLevel: Effort.High,
+	};
 }
 
 /**
- * Query Ollama's `/api/show` endpoint for a single model and pull its native
- * context length out of `model_info.<arch>.context_length`. Returns the
- * discovered limits, or `undefined` when the endpoint or field is
- * unavailable so callers can layer their own fallback.
+ * Query Ollama's `/api/show` endpoint for a single model and pull native
+ * context and capability metadata from the response. Returns `undefined` when
+ * the endpoint is unavailable so callers can layer their own fallback.
  */
-async function fetchOllamaShowLimits(nativeBaseUrl: string, modelId: string): Promise<OllamaModelLimits | undefined> {
+async function fetchOllamaShowMetadata(nativeBaseUrl: string, modelId: string): Promise<OllamaShowMetadata | undefined> {
 	try {
 		const response = await fetch(`${nativeBaseUrl}/api/show`, {
 			method: "POST",
@@ -262,13 +308,21 @@ async function fetchOllamaShowLimits(nativeBaseUrl: string, modelId: string): Pr
 		if (!response.ok) {
 			return undefined;
 		}
-		const payload = (await response.json()) as { model_info?: Record<string, unknown> };
-		const info = payload.model_info ?? {};
-		for (const [key, value] of Object.entries(info)) {
-			if (key.endsWith(".context_length") && typeof value === "number" && value > 0) {
-				return { contextWindow: value, maxTokens: OLLAMA_DEFAULT_MAX_TOKENS };
-			}
-		}
+		const payload = (await response.json()) as { capabilities?: unknown; model_info?: Record<string, unknown> };
+		const capabilities = getOllamaCapabilities(payload.capabilities);
+		const contextWindow = getOllamaContextWindow(payload.model_info);
+		return {
+			contextWindow,
+			maxTokens: contextWindow ? OLLAMA_DEFAULT_MAX_TOKENS : undefined,
+			capabilities,
+			reasoning: capabilities ? capabilities.includes("thinking") : undefined,
+			thinking: getOllamaThinkingConfig(capabilities),
+			input: capabilities
+				? capabilities.includes("vision")
+					? (["text", "image"] as Array<"text" | "image">)
+					: (["text"] as Array<"text">)
+				: undefined,
+		};
 	} catch {
 		// fall through; caller decides on the fallback
 	}
@@ -276,23 +330,27 @@ async function fetchOllamaShowLimits(nativeBaseUrl: string, modelId: string): Pr
 }
 
 /**
- * Build a resolver that fetches `/api/show` limits per model id and caches the
- * result in-memory for the lifetime of the manager. Successful lookups are
+ * Build a resolver that fetches `/api/show` metadata per model id and caches
+ * the result in-memory for the lifetime of the manager. Successful lookups are
  * cached so repeated `fetchDynamicModels` calls do not refetch; failed
  * lookups stay uncached so a later refresh can recover.
  */
-function createOllamaLimitsResolver(nativeBaseUrl: string): (modelId: string) => Promise<OllamaModelLimits> {
-	const cache = new Map<string, Promise<OllamaModelLimits>>();
+function createOllamaMetadataResolver(nativeBaseUrl: string): (modelId: string) => Promise<OllamaResolvedMetadata> {
+	const cache = new Map<string, Promise<OllamaResolvedMetadata>>();
 	return modelId => {
 		const cached = cache.get(modelId);
 		if (cached) return cached;
 		const pending = (async () => {
-			const limits = await fetchOllamaShowLimits(nativeBaseUrl, modelId);
-			if (!limits) {
+			const metadata = await fetchOllamaShowMetadata(nativeBaseUrl, modelId);
+			if (!metadata) {
 				cache.delete(modelId);
 				return { contextWindow: OLLAMA_FALLBACK_CONTEXT_WINDOW, maxTokens: OLLAMA_DEFAULT_MAX_TOKENS };
 			}
-			return limits;
+			return {
+				...metadata,
+				contextWindow: metadata.contextWindow ?? OLLAMA_FALLBACK_CONTEXT_WINDOW,
+				maxTokens: metadata.maxTokens ?? OLLAMA_DEFAULT_MAX_TOKENS,
+			};
 		})();
 		cache.set(modelId, pending);
 		void pending.catch(() => cache.delete(modelId));
@@ -702,7 +760,7 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 	const baseUrl = normalizeOllamaBaseUrl(config?.baseUrl);
 	const nativeBaseUrl = toOllamaNativeBaseUrl(baseUrl);
 	const references = createBundledReferenceMap<"openai-responses">("ollama" as Parameters<typeof getBundledModels>[0]);
-	const resolveLimits = createOllamaLimitsResolver(nativeBaseUrl);
+	const resolveMetadata = createOllamaMetadataResolver(nativeBaseUrl);
 	return {
 		providerId: "ollama",
 		fetchDynamicModels: async () => {
@@ -727,13 +785,20 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 			if (openAiCompatible && openAiCompatible.length > 0) {
 				await Promise.all(
 					openAiCompatible.map(async model => {
-						const limits = await resolveLimits(model.id);
-						model.contextWindow = limits.contextWindow;
+						const metadata = await resolveMetadata(model.id);
+						model.contextWindow = metadata.contextWindow;
+						if (metadata.reasoning !== undefined) {
+							model.reasoning = metadata.reasoning;
+							model.thinking = metadata.thinking;
+						}
+						if (metadata.input) {
+							model.input = metadata.input;
+						}
 					}),
 				);
 				return openAiCompatible;
 			}
-			const nativeFallback = await fetchOllamaNativeModels(baseUrl, resolveLimits);
+			const nativeFallback = await fetchOllamaNativeModels(baseUrl, resolveMetadata);
 			if (nativeFallback && nativeFallback.length > 0) {
 				return nativeFallback;
 			}
