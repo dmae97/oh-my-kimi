@@ -141,6 +141,30 @@ describe("hashline parser — block op syntax", () => {
 		expect(applyDiff(source, diff)).toBe(["new();", "// one", "// two"].join("\n"));
 	});
 
+	it("auto-absorbs a duplicated single structural suffix during replacement", () => {
+		const source = ["old();", "};"].join("\n");
+		const diff = [`= ${tag(1, "old();")}`, pl("new();"), pl("};")].join("\n");
+
+		expect(applyDiff(source, diff)).toBe(["new();", "};"].join("\n"));
+	});
+
+	it("auto-absorbs a duplicated single structural prefix during replacement", () => {
+		const source = ["};", "old();"].join("\n");
+		const diff = [`= ${tag(2, "old();")}`, pl("};"), pl("new();")].join("\n");
+
+		expect(applyDiff(source, diff)).toBe(["};", "new();"].join("\n"));
+	});
+
+	it("does not absorb a single structural replacement suffix when it preserves balance", () => {
+		// The replacement payload `if ok {` + `}` is itself net-zero, so the trailing
+		// `}` is a legitimate part of the new block, not a duplicate of the file's
+		// existing `}`. The single-line structural absorb must NOT fire here.
+		const source = ["old();", "}"].join("\n");
+		const diff = [`= ${tag(1, "old();")}`, pl("if ok {"), pl("}")].join("\n");
+
+		expect(applyDiff(source, diff)).toBe(["if ok {", "}", "}"].join("\n"));
+	});
+
 	it("does not auto-absorb a single duplicated boundary line", () => {
 		const source = ["keep", "old();"].join("\n");
 		const diff = [`= ${tag(2, "old();")}`, pl("keep"), pl("new();")].join("\n");
@@ -177,10 +201,34 @@ describe("hashline parser — block op syntax", () => {
 		);
 	});
 
-	it("does not auto-drop pure-insert duplicate boundaries by default", () => {
+	it("does not auto-drop generic (multi-line) pure-insert duplicate boundaries by default", () => {
+		// Multi-line context echo (`aaa`, `bbb`) is gated on the
+		// `autoDropPureInsertDuplicates` opt-in, unlike the single-line
+		// structural absorb covered by the test below.
 		const source = ["aaa", "bbb", "ccc"].join("\n");
 		const diff = [`+ ${tag(2, "bbb")}`, pl("aaa"), pl("bbb"), pl("NEW")].join("\n");
 		expect(applyDiff(source, diff)).toBe("aaa\nbbb\naaa\nbbb\nNEW\nccc");
+	});
+
+	it("auto-drops a duplicated single structural suffix for pure insert by default", () => {
+		const source = ["if ok {", "   keep();", "   }"].join("\n");
+		const diff = [`< ${tag(3, "   }")}`, pl("   added();"), pl("   }")].join("\n");
+
+		expect(applyDiff(source, diff)).toBe(["if ok {", "   keep();", "   added();", "   }"].join("\n"));
+	});
+
+	it("auto-drops a duplicated single structural prefix for pure insert by default", () => {
+		const source = ["   });", "next();"].join("\n");
+		const diff = [`+ ${tag(1, "   });")}`, pl("   });"), pl("added();")].join("\n");
+
+		expect(applyDiff(source, diff)).toBe(["   });", "added();", "next();"].join("\n"));
+	});
+
+	it("does not drop a single structural pure-insert suffix when it preserves balance", () => {
+		const source = ["if outer {", "}"].join("\n");
+		const diff = [`< ${tag(2, "}")}`, pl("if inner {"), pl("}")].join("\n");
+
+		expect(applyDiff(source, diff)).toBe(["if outer {", "if inner {", "}", "}"].join("\n"));
 	});
 
 	it("auto-absorbs duplicated leading payload of a pure `+ ANCHOR` insert", () => {

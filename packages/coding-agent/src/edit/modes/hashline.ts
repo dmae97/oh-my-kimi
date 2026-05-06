@@ -981,6 +981,110 @@ function countMatchingSuffixBlock(fileLines: string[], endLine: number, replacem
 	return 0;
 }
 
+// Single-line duplicate absorption is limited to structural closing delimiters.
+// General one-line context is too easy to delete incorrectly, but duplicated
+// `};` / `)` / `]` boundaries usually indicate a replacement range stopped one
+// line early and would otherwise produce a syntax error.
+const STRUCTURAL_CLOSING_BOUNDARY_RE = /^\s*[\])}]+[;,]?\s*$/;
+
+function isStructuralClosingBoundaryLine(line: string): boolean {
+	return STRUCTURAL_CLOSING_BOUNDARY_RE.test(line);
+}
+
+interface DelimiterBalance {
+	paren: number;
+	bracket: number;
+	brace: number;
+}
+
+const ZERO_DELIMITER_BALANCE: DelimiterBalance = { paren: 0, bracket: 0, brace: 0 };
+
+/**
+ * Naive bracket counter — does NOT skip string/template/comment contents. The
+ * single-line structural absorb relies on this being safe-by-asymmetry: the
+ * candidate boundary line is constrained by `STRUCTURAL_CLOSING_BOUNDARY_RE`
+ * to be pure delimiters, so noise in deleted lines or non-boundary kept payload
+ * tends to push `expected !== kept` and biases the heuristic toward NOT
+ * absorbing (the safe direction). If we ever extend this to opening boundaries
+ * or non-structural single lines, swap this for a real tokenizer.
+ */
+function computeDelimiterBalance(lines: string[]): DelimiterBalance {
+	const balance: DelimiterBalance = { paren: 0, bracket: 0, brace: 0 };
+	for (const line of lines) {
+		for (const char of line) {
+			switch (char) {
+				case "(":
+					balance.paren++;
+					break;
+				case ")":
+					balance.paren--;
+					break;
+				case "[":
+					balance.bracket++;
+					break;
+				case "]":
+					balance.bracket--;
+					break;
+				case "{":
+					balance.brace++;
+					break;
+				case "}":
+					balance.brace--;
+					break;
+			}
+		}
+	}
+	return balance;
+}
+
+function delimiterBalancesEqual(a: DelimiterBalance, b: DelimiterBalance): boolean {
+	return a.paren === b.paren && a.bracket === b.bracket && a.brace === b.brace;
+}
+
+/**
+ * Decides whether the structural-boundary candidate should be dropped: the
+ * `keptPayload` (full payload with the boundary line removed) must restore the
+ * caller's `expectedBalance`, while the `fullPayload` (boundary line still
+ * present) must NOT. For replacements `expectedBalance` is the deleted
+ * region's net delimiter balance; for pure inserts it is zero.
+ */
+function shouldDropSingleStructuralBoundary(
+	fullPayload: string[],
+	keptPayload: string[],
+	expectedBalance: DelimiterBalance,
+): boolean {
+	return (
+		delimiterBalancesEqual(computeDelimiterBalance(keptPayload), expectedBalance) &&
+		!delimiterBalancesEqual(computeDelimiterBalance(fullPayload), expectedBalance)
+	);
+}
+
+function countMatchingSingleStructuralPrefixBoundary(
+	fileLines: string[],
+	startLine: number,
+	replacement: string[],
+	expectedBalance: DelimiterBalance,
+): number {
+	if (replacement.length === 0 || startLine <= 1) return 0;
+	const line = replacement[0];
+	if (!isStructuralClosingBoundaryLine(line)) return 0;
+	if (fileLines[startLine - 2] !== line) return 0;
+	return shouldDropSingleStructuralBoundary(replacement, replacement.slice(1), expectedBalance) ? 1 : 0;
+}
+
+function countMatchingSingleStructuralSuffixBoundary(
+	fileLines: string[],
+	endLine: number,
+	replacement: string[],
+	expectedBalance: DelimiterBalance,
+): number {
+	if (replacement.length === 0 || endLine >= fileLines.length) return 0;
+	const line = replacement[replacement.length - 1];
+	if (!isStructuralClosingBoundaryLine(line)) return 0;
+	if (fileLines[endLine] !== line) return 0;
+	return shouldDropSingleStructuralBoundary(replacement, replacement.slice(0, -1), expectedBalance) ? 1 : 0;
+}
+
 function hasExternalTargets(lines: Iterable<number>, externalTargetLines: Set<number>): boolean {
 	for (const line of lines) {
 		if (externalTargetLines.has(line)) return true;
@@ -1087,49 +1191,80 @@ interface PureInsertAbsorbResult {
  * Mirror of replacement-absorb's prefix/suffix block check, but for pure
  * inserts: drop payload lines that exactly duplicate the file lines
  * immediately above (leading) or immediately below (trailing) the insertion
- * point. Requires a minimum run of 2 to avoid spurious single-line matches,
- * matching the existing replacement-absorb threshold.
+ * point. Generic context echo absorption requires a minimum run of 2, but a
+ * single structural closing delimiter is absorbed because duplicated `}` /
+ * `});`-style boundaries almost always mean the insert included adjacent
+ * context.
  */
-function tryAbsorbPureInsertGroup(group: HashlinePureInsertGroup, fileLines: string[]): PureInsertAbsorbResult {
+function tryAbsorbPureInsertGroup(
+	group: HashlinePureInsertGroup,
+	fileLines: string[],
+	allowGenericBoundaryAbsorb: boolean,
+): PureInsertAbsorbResult {
 	const empty: PureInsertAbsorbResult = { keptPayload: group.payload, absorbedLeading: 0, absorbedTrailing: 0 };
-	if (group.payload.length < 2) return empty;
+	if (group.payload.length === 0) return empty;
 
 	const { aboveEndIdx, belowStartIdx } = pureInsertNeighborhood(group.cursor, fileLines);
 
 	// Leading: payload[0..k-1] vs fileLines[aboveEndIdx-k+1 .. aboveEndIdx].
 	let absorbedLeading = 0;
-	const maxLead = Math.min(group.payload.length, aboveEndIdx + 1);
-	for (let count = maxLead; count >= 2; count--) {
-		let ok = true;
-		for (let offset = 0; offset < count; offset++) {
-			if (group.payload[offset] !== fileLines[aboveEndIdx - count + 1 + offset]) {
-				ok = false;
+	if (allowGenericBoundaryAbsorb) {
+		const maxLead = Math.min(group.payload.length, aboveEndIdx + 1);
+		for (let count = maxLead; count >= 2; count--) {
+			let ok = true;
+			for (let offset = 0; offset < count; offset++) {
+				if (group.payload[offset] !== fileLines[aboveEndIdx - count + 1 + offset]) {
+					ok = false;
+					break;
+				}
+			}
+			if (ok) {
+				absorbedLeading = count;
 				break;
 			}
 		}
-		if (ok) {
-			absorbedLeading = count;
-			break;
-		}
+	}
+	if (
+		absorbedLeading === 0 &&
+		group.payload.length > 0 &&
+		aboveEndIdx >= 0 &&
+		isStructuralClosingBoundaryLine(group.payload[0]) &&
+		group.payload[0] === fileLines[aboveEndIdx] &&
+		shouldDropSingleStructuralBoundary(group.payload, group.payload.slice(1), ZERO_DELIMITER_BALANCE)
+	) {
+		absorbedLeading = 1;
 	}
 
 	// Trailing: payload[len-k..len-1] vs fileLines[belowStartIdx..belowStartIdx+k-1].
 	// Don't double-count payload lines already absorbed as leading.
 	let absorbedTrailing = 0;
-	const remaining = group.payload.length - absorbedLeading;
-	const maxTrail = Math.min(remaining, fileLines.length - belowStartIdx);
-	for (let count = maxTrail; count >= 2; count--) {
-		let ok = true;
-		for (let offset = 0; offset < count; offset++) {
-			if (group.payload[group.payload.length - count + offset] !== fileLines[belowStartIdx + offset]) {
-				ok = false;
+	const remainingPayload = group.payload.slice(absorbedLeading);
+	const remaining = remainingPayload.length;
+	if (allowGenericBoundaryAbsorb) {
+		const maxTrail = Math.min(remaining, fileLines.length - belowStartIdx);
+		for (let count = maxTrail; count >= 2; count--) {
+			let ok = true;
+			for (let offset = 0; offset < count; offset++) {
+				if (group.payload[group.payload.length - count + offset] !== fileLines[belowStartIdx + offset]) {
+					ok = false;
+					break;
+				}
+			}
+			if (ok) {
+				absorbedTrailing = count;
 				break;
 			}
 		}
-		if (ok) {
-			absorbedTrailing = count;
-			break;
-		}
+	}
+	if (
+		absorbedTrailing === 0 &&
+		remaining > 0 &&
+		belowStartIdx < fileLines.length &&
+		isStructuralClosingBoundaryLine(remainingPayload[remainingPayload.length - 1]) &&
+		remainingPayload[remainingPayload.length - 1] === fileLines[belowStartIdx] &&
+		shouldDropSingleStructuralBoundary(remainingPayload, remainingPayload.slice(0, -1), ZERO_DELIMITER_BALANCE)
+	) {
+		absorbedTrailing = 1;
 	}
 
 	if (absorbedLeading === 0 && absorbedTrailing === 0) return empty;
@@ -1164,46 +1299,53 @@ function absorbReplacementBoundaryDuplicates(
 	for (let index = 0; index < edits.length; index++) {
 		const group = findReplacementGroup(edits, index);
 		if (!group) {
-			if (options.autoDropPureInsertDuplicates) {
-				const pureInsert = findPureInsertGroup(edits, index);
-				if (pureInsert) {
-					const result = tryAbsorbPureInsertGroup(pureInsert, fileLines);
-					if (result.absorbedLeading > 0 || result.absorbedTrailing > 0) {
-						if (result.leadingFileRange) {
-							const { start, end } = result.leadingFileRange;
-							const key = `pure-insert-leading:${start}..${end}`;
-							if (!emittedAbsorbKeys.has(key)) {
-								emittedAbsorbKeys.add(key);
-								warnings.push(
-									`Auto-dropped ${result.absorbedLeading} duplicate line(s) at the start of insert at line ${pureInsert.sourceLineNum} ` +
-										`(file lines ${start}..${end} already match the payload's leading lines).`,
-								);
-							}
+			const pureInsert = findPureInsertGroup(edits, index);
+			if (pureInsert) {
+				const result = tryAbsorbPureInsertGroup(
+					pureInsert,
+					fileLines,
+					options.autoDropPureInsertDuplicates === true,
+				);
+				if (result.absorbedLeading > 0 || result.absorbedTrailing > 0) {
+					if (result.leadingFileRange) {
+						const { start, end } = result.leadingFileRange;
+						const key = `pure-insert-leading:${start}..${end}`;
+						if (!emittedAbsorbKeys.has(key)) {
+							emittedAbsorbKeys.add(key);
+							warnings.push(
+								`Auto-dropped ${result.absorbedLeading} duplicate line(s) at the start of insert at line ${pureInsert.sourceLineNum} ` +
+									`(file lines ${start}..${end} already match the payload's leading lines).`,
+							);
 						}
-						if (result.trailingFileRange) {
-							const { start, end } = result.trailingFileRange;
-							const key = `pure-insert-trailing:${start}..${end}`;
-							if (!emittedAbsorbKeys.has(key)) {
-								emittedAbsorbKeys.add(key);
-								warnings.push(
-									`Auto-dropped ${result.absorbedTrailing} duplicate line(s) at the end of insert at line ${pureInsert.sourceLineNum} ` +
-										`(file lines ${start}..${end} already match the payload's trailing lines).`,
-								);
-							}
-						}
-						for (const text of result.keptPayload) {
-							absorbed.push({
-								kind: "insert",
-								cursor: cloneCursor(pureInsert.cursor),
-								text,
-								lineNum: pureInsert.sourceLineNum,
-								index: nextSyntheticIndex++,
-							});
-						}
-						index = pureInsert.endIndex;
-						continue;
 					}
+					if (result.trailingFileRange) {
+						const { start, end } = result.trailingFileRange;
+						const key = `pure-insert-trailing:${start}..${end}`;
+						if (!emittedAbsorbKeys.has(key)) {
+							emittedAbsorbKeys.add(key);
+							warnings.push(
+								`Auto-dropped ${result.absorbedTrailing} duplicate line(s) at the end of insert at line ${pureInsert.sourceLineNum} ` +
+									`(file lines ${start}..${end} already match the payload's trailing lines).`,
+							);
+						}
+					}
+					for (const text of result.keptPayload) {
+						absorbed.push({
+							kind: "insert",
+							cursor: cloneCursor(pureInsert.cursor),
+							text,
+							lineNum: pureInsert.sourceLineNum,
+							index: nextSyntheticIndex++,
+						});
+					}
+					index = pureInsert.endIndex;
+					continue;
 				}
+				for (let groupIndex = pureInsert.startIndex; groupIndex <= pureInsert.endIndex; groupIndex++) {
+					absorbed.push(edits[groupIndex]);
+				}
+				index = pureInsert.endIndex;
+				continue;
 			}
 			absorbed.push(edits[index]);
 			continue;
@@ -1212,8 +1354,15 @@ function absorbReplacementBoundaryDuplicates(
 		const startLine = group.deletes[0].anchor.line;
 		const endLine = group.deletes[group.deletes.length - 1].anchor.line;
 
-		const prefixCount = countMatchingPrefixBlock(fileLines, startLine, group.replacement);
-		const suffixCount = countMatchingSuffixBlock(fileLines, endLine, group.replacement);
+		const deletedBalance = computeDelimiterBalance(
+			group.deletes.map(deleteEdit => fileLines[deleteEdit.anchor.line - 1] ?? ""),
+		);
+		const prefixCount =
+			countMatchingPrefixBlock(fileLines, startLine, group.replacement) ||
+			countMatchingSingleStructuralPrefixBoundary(fileLines, startLine, group.replacement, deletedBalance);
+		const suffixCount =
+			countMatchingSuffixBlock(fileLines, endLine, group.replacement) ||
+			countMatchingSingleStructuralSuffixBoundary(fileLines, endLine, group.replacement, deletedBalance);
 		const prefixLines = contiguousRange(startLine - prefixCount, prefixCount);
 		const suffixLines = contiguousRange(endLine + 1, suffixCount);
 		const safePrefixCount = hasExternalTargets(prefixLines, allTargetLines) ? 0 : prefixCount;
