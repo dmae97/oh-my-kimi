@@ -1,14 +1,6 @@
-import { describe, expect, test, vi } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { applyDisabledExtensionsToState } from "@oh-my-pi/pi-coding-agent/modes/components/extensions/state-manager";
 import type { DashboardState, Extension } from "@oh-my-pi/pi-coding-agent/modes/components/extensions/types";
-
-vi.mock("@oh-my-pi/pi-coding-agent/discovery", () => ({
-	disableProvider: vi.fn(),
-	enableProvider: vi.fn(),
-	getAllProvidersInfo: vi.fn(() => []),
-	isProviderEnabled: vi.fn(() => true),
-	loadCapability: vi.fn(),
-}));
 
 function extension(overrides: Partial<Extension> & Pick<Extension, "id">): Extension {
 	return {
