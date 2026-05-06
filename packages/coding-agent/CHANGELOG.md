@@ -1,9 +1,16 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `pr_create` operation to the GitHub tool to create pull requests with title/body (or `fill`), base/head branch, draft, reviewer, assignee, and label options and return a summarized result including the new PR URL
+- Added `read.summarize.prose` setting to keep Markdown and plain-text reads out of the structural summarizer by default.
+
+### Changed
+
+- Changed the `PI_GREP_WORKERS` environment variable help text to state that it sets filesystem walker workers, defaults to 4, and uses `0` for automatic worker selection
+- Changed hashline replacement and pure-insert auto-absorb to also drop a single duplicated structural-closing line (`}`, `);`, `]`, etc.) on either boundary when keeping it would unbalance brackets. The pure-insert variant fires regardless of `edit.hashlineAutoDropPureInsertDuplicates`, while the existing 2+ line generic absorb stays gated on that setting.
 
 ## [14.7.0] - 2026-05-04
 ### Breaking Changes

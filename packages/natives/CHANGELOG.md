@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `size` property to `GlobMatch` for regular files to expose their byte size
+
+### Changed
+
+- Sped up native `grep` files-with-matches searches by stopping after the first match per file, reading small files without mmap overhead, and relying on grep-searcher binary detection instead of a separate full-file NUL scan.
+
+### Fixed
+
+- Fixed native `grep` `filesWithMatches` mode so `totalMatches` reports the number of matching files rather than line-match totals
+- Fixed native `grep` count-mode limits applying to files instead of matches, and restored timeout/abort cancellation checks for small native filesystem scans.
+
 ## [14.7.0] - 2026-05-04
 ### Added
 

@@ -372,7 +372,12 @@ fn collect_candidates(
 	let skip_node_modules = !mentions_node_modules;
 	let scan = fs_cache::get_or_scan(
 		&search_path,
-		fs_cache::ScanOptions { include_hidden: true, use_gitignore: true, skip_node_modules },
+		fs_cache::ScanOptions {
+			include_hidden: true,
+			use_gitignore: true,
+			skip_node_modules,
+			detail: fs_cache::ScanDetail::Minimal,
+		},
 		ct,
 	)?;
 	let mut files = collect_from_entries(
@@ -386,7 +391,12 @@ fn collect_candidates(
 	if files.is_empty() && scan.cache_age_ms >= fs_cache::empty_recheck_ms() {
 		let fresh = fs_cache::force_rescan(
 			&search_path,
-			fs_cache::ScanOptions { include_hidden: true, use_gitignore: true, skip_node_modules },
+			fs_cache::ScanOptions {
+				include_hidden: true,
+				use_gitignore: true,
+				skip_node_modules,
+				detail: fs_cache::ScanDetail::Minimal,
+			},
 			true,
 			ct,
 		)?;

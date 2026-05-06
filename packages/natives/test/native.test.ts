@@ -192,6 +192,26 @@ describe("pi-natives", () => {
 			expect(result.filesWithMatches).toBeGreaterThan(0);
 		});
 
+		it("counts files instead of line matches in filesWithMatches mode", async () => {
+			const scopedDir = await fs.mkdtemp(path.join(os.tmpdir(), "natives-grep-files-"));
+			try {
+				await fs.writeFile(path.join(scopedDir, "one.ts"), "return 1;\nreturn 2;\n");
+				await fs.writeFile(path.join(scopedDir, "two.ts"), "return 3;\n");
+
+				const result = await grep({
+					pattern: "return",
+					path: scopedDir,
+					mode: GrepOutputMode.FilesWithMatches,
+				});
+
+				expect(result.totalMatches).toBe(2);
+				expect(result.filesWithMatches).toBe(2);
+				expect(result.matches.map(match => path.basename(match.path)).sort()).toEqual(["one.ts", "two.ts"]);
+			} finally {
+				await fs.rm(scopedDir, { recursive: true, force: true });
+			}
+		});
+
 		it("should treat unknown grep type filter as a strict extension filter", async () => {
 			const result = await grep({
 				pattern: "return",

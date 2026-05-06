@@ -198,6 +198,7 @@ fn fuzzy_find_sync(config: FuzzyFindConfig, ct: task::CancelToken) -> Result<Fuz
 		include_hidden,
 		use_gitignore: respect_gitignore,
 		skip_node_modules: true,
+		detail: fs_cache::ScanDetail::Minimal,
 	};
 	let mut scored = if use_cache {
 		let scan = fs_cache::get_or_scan(&root, scan_options, &ct)?;
