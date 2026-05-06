@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -124,6 +124,34 @@ describe("apply_patch rendering", () => {
 			expect(after).toContain("(preview)");
 			expect(after).toContain("const value = 2;");
 		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("refreshes streaming preview immediately on arg updates without scheduling a debounce", async () => {
+		await getUiTheme();
+		const uiStub = { requestRender() {} } as unknown as TUI;
+		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "apply-patch-instant-preview-"));
+		const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+		try {
+			await Bun.write(path.join(tmpDir, "preview.ts"), "const value = 1;\n");
+			const component = new ToolExecutionComponent("apply_patch", { input: "" }, {}, undefined, uiStub, tmpDir);
+
+			setTimeoutSpy.mockClear();
+			component.updateArgs({
+				input: [
+					"*** Begin Patch",
+					"*** Update File: preview.ts",
+					"@@",
+					"-const value = 1;",
+					"+const value = 2;",
+					"*** End Patch",
+				].join("\n"),
+			});
+
+			expect(setTimeoutSpy).not.toHaveBeenCalled();
+		} finally {
+			setTimeoutSpy.mockRestore();
 			await fs.rm(tmpDir, { recursive: true, force: true });
 		}
 	});

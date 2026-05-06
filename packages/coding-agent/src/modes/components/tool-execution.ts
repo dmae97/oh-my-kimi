@@ -114,7 +114,6 @@ export class ToolExecutionComponent extends Container {
 	// Edit preview state
 	#editMode?: EditMode;
 	#editDiffPreview?: PerFileDiffPreview[];
-	#editDiffScheduleTimer?: NodeJS.Timeout;
 	#editDiffAbort?: AbortController;
 	#editDiffLastArgsKey?: string;
 	// Cached converted images for Kitty protocol (which requires PNG), keyed by index
@@ -173,13 +172,13 @@ export class ToolExecutionComponent extends Container {
 		this.#editMode = resolveEditModeForTool(toolName, tool);
 
 		this.#updateDisplay();
-		this.#schedulePreviewDiff(0);
+		void this.#runPreviewDiff();
 	}
 
 	updateArgs(args: any, _toolCallId?: string): void {
 		this.#args = cloneToolArgs(args);
 		this.#updateSpinnerAnimation();
-		this.#schedulePreviewDiff();
+		void this.#runPreviewDiff();
 		this.#updateDisplay();
 	}
 
@@ -190,28 +189,7 @@ export class ToolExecutionComponent extends Container {
 	setArgsComplete(_toolCallId?: string): void {
 		this.#argsComplete = true;
 		this.#updateSpinnerAnimation();
-		this.#schedulePreviewDiff(0);
-	}
-
-	/**
-	 * Schedule a debounced compute of the streaming edit-diff preview.
-	 * `delayMs === 0` runs immediately (used on construction and on
-	 * `setArgsComplete`). All other calls coalesce to a trailing-edge timer.
-	 */
-	#schedulePreviewDiff(delayMs = 80): void {
-		if (!this.#editMode) return;
-		if (this.#editDiffScheduleTimer) {
-			clearTimeout(this.#editDiffScheduleTimer);
-			this.#editDiffScheduleTimer = undefined;
-		}
-		if (delayMs === 0) {
-			void this.#runPreviewDiff();
-			return;
-		}
-		this.#editDiffScheduleTimer = setTimeout(() => {
-			this.#editDiffScheduleTimer = undefined;
-			void this.#runPreviewDiff();
-		}, delayMs);
+		void this.#runPreviewDiff();
 	}
 
 	async #runPreviewDiff(): Promise<void> {
@@ -364,10 +342,6 @@ export class ToolExecutionComponent extends Container {
 			clearInterval(this.#spinnerInterval);
 			this.#spinnerInterval = undefined;
 			this.#spinnerFrame = undefined;
-		}
-		if (this.#editDiffScheduleTimer) {
-			clearTimeout(this.#editDiffScheduleTimer);
-			this.#editDiffScheduleTimer = undefined;
 		}
 		this.#editDiffAbort?.abort();
 		this.#editDiffAbort = undefined;
