@@ -81,8 +81,12 @@ import {
 	collectDiscoverableMCPTools,
 	formatDiscoverableMCPToolServerSummary,
 	selectDiscoverableMCPToolNamesByServer,
-	summarizeDiscoverableMCPTools,
 } from "./mcp/discoverable-tool-metadata";
+import {
+	collectDiscoverableTools,
+	summarizeDiscoverableTools,
+	type DiscoverableTool,
+} from "./tool-discovery/tool-index";
 import { getMemoryRoot } from "./memories";
 import { resolveMemoryBackend } from "./memory-backend";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
@@ -112,7 +116,9 @@ import { AgentOutputManager } from "./task/output-manager";
 import { parseThinkingLevel, resolveThinkingLevelForModel, toReasoningEffort } from "./thinking";
 import {
 	BashTool,
+	BUILTIN_TOOL_METADATA,
 	BUILTIN_TOOLS,
+	computeEssentialBuiltinNames,
 	createTools,
 	discoverStartupLspServers,
 	EditTool,
@@ -278,6 +284,7 @@ export {
 	// Individual tool classes (for custom usage)
 	BashTool,
 	// Tool classes and factories
+	BUILTIN_TOOL_METADATA,
 	BUILTIN_TOOLS,
 	createTools,
 	EditTool,
@@ -995,6 +1002,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getDiscoverableMCPSearchIndex: () => session.getDiscoverableMCPSearchIndex(),
 			getSelectedMCPToolNames: () => session.getSelectedMCPToolNames(),
 			activateDiscoveredMCPTools: toolNames => session.activateDiscoveredMCPTools(toolNames),
+			// Generic tool discovery (unified — covers built-in + MCP + extension)
+			isToolDiscoveryEnabled: () => session.isToolDiscoveryEnabled(),
+			getDiscoverableTools: filter => session.getDiscoverableTools(filter),
+			getDiscoverableToolSearchIndex: () => session.getDiscoverableToolSearchIndex(),
+			getSelectedDiscoveredToolNames: () => session.getSelectedDiscoveredToolNames(),
+			activateDiscoveredTools: toolNames => session.activateDiscoveredTools(toolNames),
 			getCheckpointState: () => session.getCheckpointState(),
 			setCheckpointState: state => session.setCheckpointState(state ?? undefined),
 			getToolChoiceQueue: () => session.toolChoiceQueue,
@@ -1344,11 +1357,39 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		): Promise<BuildSystemPromptResult> => {
 			toolContextStore.setToolNames(toolNames);
 			const discoverableMCPTools = mcpDiscoveryEnabled ? collectDiscoverableMCPTools(tools.values()) : [];
-			const discoverableMCPSummary = summarizeDiscoverableMCPTools(discoverableMCPTools);
-			const hasDiscoverableMCPTools =
-				mcpDiscoveryEnabled && toolNames.includes("search_tool_bm25") && discoverableMCPTools.length > 0;
+			const activeToolNames = new Set(toolNames);
+			const builtinSummaryMap = new Map(
+				Object.entries(BUILTIN_TOOL_METADATA)
+					.filter(([, meta]) => typeof meta.summary === "string")
+					.map(([name, meta]) => [name, meta.summary!] as const),
+			);
+			const discoverableBuiltinTools: DiscoverableTool[] =
+				effectiveDiscoveryMode === "all"
+					? collectDiscoverableTools(
+							Array.from(tools.values()).filter(tool => {
+								const meta = BUILTIN_TOOL_METADATA[tool.name];
+								return meta?.loadMode === "discoverable" && !activeToolNames.has(tool.name);
+							}),
+							{ source: "builtin", summaryMap: builtinSummaryMap },
+						)
+					: [];
+			const discoverableToolsForDesc: DiscoverableTool[] = [
+				...discoverableBuiltinTools,
+				...discoverableMCPTools.map(t => ({
+					name: t.name,
+					label: t.label,
+					summary: t.description,
+					source: "mcp" as const,
+					serverName: t.serverName,
+					mcpToolName: t.mcpToolName,
+					schemaKeys: t.schemaKeys,
+				})),
+			];
+			const discoverableToolSummary = summarizeDiscoverableTools(discoverableToolsForDesc);
+			const hasDiscoverableTools =
+				mcpDiscoveryEnabled && toolNames.includes("search_tool_bm25") && discoverableToolsForDesc.length > 0;
 			const promptTools = buildSystemPromptToolMetadata(tools, {
-				search_tool_bm25: { description: renderSearchToolBm25Description(discoverableMCPTools) },
+				search_tool_bm25: { description: renderSearchToolBm25Description(discoverableToolsForDesc) },
 			});
 			const memoryInstructions = await resolveMemoryBackend(settings).buildDeveloperInstructions(
 				agentDir,
@@ -1386,8 +1427,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				appendSystemPrompt: appendPrompt,
 				repeatToolDescriptions,
 				intentField,
-				mcpDiscoveryMode: hasDiscoverableMCPTools,
-				mcpDiscoveryServerSummaries: discoverableMCPSummary.servers.map(formatDiscoverableMCPToolServerSummary),
+				mcpDiscoveryMode: hasDiscoverableTools,
+				mcpDiscoveryServerSummaries: discoverableToolSummary.servers.map(formatDiscoverableMCPToolServerSummary),
 				eagerTasks,
 				secretsEnabled,
 				agentsMdSearch: agentsMdSearchPromise,
@@ -1411,7 +1452,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			toolNamesFromRegistry;
 		const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
 		const includeExitPlanMode = requestedToolNames.includes("exit_plan_mode");
-		const mcpDiscoveryEnabled = settings.get("mcp.discoveryMode") ?? false;
+		// Effective discovery mode: tools.discoveryMode takes precedence; mcp.discoveryMode is back-compat alias.
+		const toolsDiscoveryModeSetting = settings.get("tools.discoveryMode");
+		const effectiveDiscoveryMode: "off" | "mcp-only" | "all" =
+			toolsDiscoveryModeSetting !== "off"
+				? (toolsDiscoveryModeSetting as "off" | "mcp-only" | "all")
+				: settings.get("mcp.discoveryMode")
+					? "mcp-only"
+					: "off";
+		const mcpDiscoveryEnabled = effectiveDiscoveryMode !== "off"; // back-compat: true when any discovery active
 		const defaultInactiveToolNames = new Set(
 			registeredTools.filter(tool => tool.definition.defaultInactive).map(tool => tool.definition.name),
 		);
@@ -1466,6 +1515,26 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (toolRegistry.has(name) && !initialToolNames.includes(name)) {
 				initialToolNames.push(name);
 			}
+		}
+
+		// When tools.discoveryMode === "all", hide non-essential built-in discoverable tools
+		// from the initial set unless they were explicitly requested or restored from persistence.
+		// The model finds them via search_tool_bm25 and activates them on demand.
+		if (effectiveDiscoveryMode === "all") {
+			const essentialBuiltinNames = new Set(computeEssentialBuiltinNames(settings));
+			const explicitlyRequestedToolNames = new Set(options.toolNames?.map(name => name.toLowerCase()) ?? []);
+			// Back-compat: persisted activations live under selectedMCPToolNames today (built-in
+			// activation persistence is a follow-up). MCP names won't collide with built-in names.
+			const restoredDiscoveredNames = new Set(existingSession.selectedMCPToolNames);
+			initialToolNames = initialToolNames.filter(name => {
+				const meta = BUILTIN_TOOL_METADATA[name];
+				if (!meta) return true; // not a built-in — leave MCP/custom/extension to existing logic
+				if (meta.loadMode === "essential") return true;
+				if (essentialBuiltinNames.has(name)) return true;
+				if (explicitlyRequestedToolNames.has(name)) return true;
+				if (restoredDiscoveredNames.has(name)) return true;
+				return false;
+			});
 		}
 
 		const { systemPrompt } = await logger.time(
