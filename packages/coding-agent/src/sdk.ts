@@ -81,8 +81,12 @@ import {
 	collectDiscoverableMCPTools,
 	formatDiscoverableMCPToolServerSummary,
 	selectDiscoverableMCPToolNamesByServer,
-	summarizeDiscoverableMCPTools,
 } from "./mcp/discoverable-tool-metadata";
+import {
+	collectDiscoverableTools,
+	summarizeDiscoverableTools,
+	type DiscoverableTool,
+} from "./tool-discovery/tool-index";
 import { getMemoryRoot } from "./memories";
 import { resolveMemoryBackend } from "./memory-backend";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
@@ -114,7 +118,6 @@ import {
 	BashTool,
 	BUILTIN_TOOL_METADATA,
 	BUILTIN_TOOLS,
-	BUILTIN_TOOL_METADATA,
 	computeEssentialBuiltinNames,
 	createTools,
 	discoverStartupLspServers,
@@ -1354,19 +1357,37 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		): Promise<BuildSystemPromptResult> => {
 			toolContextStore.setToolNames(toolNames);
 			const discoverableMCPTools = mcpDiscoveryEnabled ? collectDiscoverableMCPTools(tools.values()) : [];
-			const discoverableMCPSummary = summarizeDiscoverableMCPTools(discoverableMCPTools);
-			const hasDiscoverableMCPTools =
-				mcpDiscoveryEnabled && toolNames.includes("search_tool_bm25") && discoverableMCPTools.length > 0;
-			// Adapt DiscoverableMCPTool[] to DiscoverableTool[] for the unified search tool description
-			const discoverableToolsForDesc = discoverableMCPTools.map(t => ({
-				name: t.name,
-				label: t.label,
-				summary: t.description,
-				source: "mcp" as const,
-				serverName: t.serverName,
-				mcpToolName: t.mcpToolName,
-				schemaKeys: t.schemaKeys,
-			}));
+			const activeToolNames = new Set(toolNames);
+			const builtinSummaryMap = new Map(
+				Object.entries(BUILTIN_TOOL_METADATA)
+					.filter(([, meta]) => typeof meta.summary === "string")
+					.map(([name, meta]) => [name, meta.summary!] as const),
+			);
+			const discoverableBuiltinTools: DiscoverableTool[] =
+				effectiveDiscoveryMode === "all"
+					? collectDiscoverableTools(
+							Array.from(tools.values()).filter(tool => {
+								const meta = BUILTIN_TOOL_METADATA[tool.name];
+								return meta?.loadMode === "discoverable" && !activeToolNames.has(tool.name);
+							}),
+							{ source: "builtin", summaryMap: builtinSummaryMap },
+						)
+					: [];
+			const discoverableToolsForDesc: DiscoverableTool[] = [
+				...discoverableBuiltinTools,
+				...discoverableMCPTools.map(t => ({
+					name: t.name,
+					label: t.label,
+					summary: t.description,
+					source: "mcp" as const,
+					serverName: t.serverName,
+					mcpToolName: t.mcpToolName,
+					schemaKeys: t.schemaKeys,
+				})),
+			];
+			const discoverableToolSummary = summarizeDiscoverableTools(discoverableToolsForDesc);
+			const hasDiscoverableTools =
+				mcpDiscoveryEnabled && toolNames.includes("search_tool_bm25") && discoverableToolsForDesc.length > 0;
 			const promptTools = buildSystemPromptToolMetadata(tools, {
 				search_tool_bm25: { description: renderSearchToolBm25Description(discoverableToolsForDesc) },
 			});
@@ -1406,8 +1427,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				appendSystemPrompt: appendPrompt,
 				repeatToolDescriptions,
 				intentField,
-				mcpDiscoveryMode: hasDiscoverableMCPTools,
-				mcpDiscoveryServerSummaries: discoverableMCPSummary.servers.map(formatDiscoverableMCPToolServerSummary),
+				mcpDiscoveryMode: hasDiscoverableTools,
+				mcpDiscoveryServerSummaries: discoverableToolSummary.servers.map(formatDiscoverableMCPToolServerSummary),
 				eagerTasks,
 				secretsEnabled,
 				agentsMdSearch: agentsMdSearchPromise,

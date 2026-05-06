@@ -47,7 +47,7 @@ describe("BUILTIN_TOOL_METADATA loadMode annotations", () => {
 			"render_mermaid",
 			"ask",
 			"debug",
-			"python",
+			"eval",
 			"calc",
 			"ssh",
 			"github",
@@ -66,6 +66,9 @@ describe("BUILTIN_TOOL_METADATA loadMode annotations", () => {
 			"todo_write",
 			"web_search",
 			"write",
+			"retain",
+			"recall",
+			"reflect",
 		];
 		for (const name of discoverableExpected) {
 			expect(BUILTIN_TOOL_METADATA[name]?.loadMode).toBe("discoverable");

@@ -826,7 +826,7 @@ describe("AgentSession MCP discovery", () => {
 			[docsSearchTool.name, docsSearchTool],
 		]);
 		const agent = new Agent({
-			initialState: { model: createModel(), systemPrompt: "initial", tools: [readTool], messages: [] },
+			initialState: { model: createModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
 		});
 		const session = new AgentSession({
 			agent,
@@ -835,7 +835,7 @@ describe("AgentSession MCP discovery", () => {
 			modelRegistry: {} as never,
 			toolRegistry,
 			mcpDiscoveryEnabled: true,
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({ systemPrompt: [`tools:${toolNames.join(",")}`] }),
 		});
 		sessions.push(session);
 
@@ -856,7 +856,7 @@ describe("AgentSession MCP discovery", () => {
 			[docsSearchTool.name, docsSearchTool],
 		]);
 		const agent = new Agent({
-			initialState: { model: createModel(), systemPrompt: "initial", tools: [readTool], messages: [] },
+			initialState: { model: createModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
 		});
 		const session = new AgentSession({
 			agent,
@@ -865,7 +865,7 @@ describe("AgentSession MCP discovery", () => {
 			modelRegistry: {} as never,
 			toolRegistry,
 			mcpDiscoveryEnabled: true,
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({ systemPrompt: [`tools:${toolNames.join(",")}`] }),
 		});
 		sessions.push(session);
 
@@ -885,7 +885,7 @@ describe("AgentSession MCP discovery", () => {
 			[docsSearchTool.name, docsSearchTool],
 		]);
 		const agent = new Agent({
-			initialState: { model: createModel(), systemPrompt: "initial", tools: [readTool], messages: [] },
+			initialState: { model: createModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
 		});
 		const session = new AgentSession({
 			agent,
@@ -894,7 +894,7 @@ describe("AgentSession MCP discovery", () => {
 			modelRegistry: {} as never,
 			toolRegistry,
 			mcpDiscoveryEnabled: true,
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({ systemPrompt: [`tools:${toolNames.join(",")}`] }),
 		});
 		sessions.push(session);
 
@@ -925,7 +925,7 @@ describe("AgentSession MCP discovery", () => {
 			[customTool.name, customTool],
 		]);
 		const agent = new Agent({
-			initialState: { model: createModel(), systemPrompt: "initial", tools: [readTool], messages: [] },
+			initialState: { model: createModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
 		});
 		const session = new AgentSession({
 			agent,
@@ -934,7 +934,7 @@ describe("AgentSession MCP discovery", () => {
 			modelRegistry: {} as never,
 			toolRegistry,
 			mcpDiscoveryEnabled: false,
-			rebuildSystemPrompt: async toolNames => `tools:${toolNames.join(",")}`,
+			rebuildSystemPrompt: async toolNames => ({ systemPrompt: [`tools:${toolNames.join(",")}`] }),
 		});
 		sessions.push(session);
 

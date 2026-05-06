@@ -2290,15 +2290,18 @@ export class AgentSession {
 		// For "all" mode we combine built-in registry entries + MCP tools.
 		// For "mcp-only" mode we only return MCP tools.
 		const mode = this.#resolveEffectiveDiscoveryMode();
-		const mcpTools: DiscoverableTool[] = Array.from(this.#discoverableMCPTools.values()).map(t => ({
-			name: t.name,
-			label: t.label,
-			summary: t.description,
-			source: "mcp" as const,
-			serverName: t.serverName,
-			mcpToolName: t.mcpToolName,
-			schemaKeys: t.schemaKeys,
-		}));
+		const activeNames = new Set(this.getActiveToolNames());
+		const mcpTools: DiscoverableTool[] = Array.from(this.#discoverableMCPTools.values())
+			.filter(t => !activeNames.has(t.name))
+			.map(t => ({
+				name: t.name,
+				label: t.label,
+				summary: t.description,
+				source: "mcp" as const,
+				serverName: t.serverName,
+				mcpToolName: t.mcpToolName,
+				schemaKeys: t.schemaKeys,
+			}));
 		const builtinTools: DiscoverableTool[] = mode === "all" ? this.#collectDiscoverableBuiltinTools() : [];
 		const allTools = [...builtinTools, ...mcpTools];
 		return filter?.source ? allTools.filter(t => t.source === filter.source) : allTools;
@@ -2337,10 +2340,12 @@ export class AgentSession {
 	}
 
 	getSelectedDiscoveredToolNames(): string[] {
-		// Union of MCP-selected and generic non-MCP selected
+		// Union of MCP-selected and generic non-MCP selected. Non-MCP selections are only
+		// selected while they are still active; otherwise BM25 must be able to rediscover them.
+		const activeNames = new Set(this.getActiveToolNames());
 		const mcpSelected = this.getSelectedMCPToolNames();
 		const nonMcpSelected = Array.from(this.#selectedDiscoveredToolNames).filter(
-			name => this.#toolRegistry.has(name) && !isMCPToolName(name),
+			name => activeNames.has(name) && this.#toolRegistry.has(name) && !isMCPToolName(name),
 		);
 		return [...new Set([...mcpSelected, ...nonMcpSelected])];
 	}
@@ -2406,6 +2411,12 @@ export class AgentSession {
 					name => isMCPToolName(name) && this.#discoverableMCPTools.has(name) && this.#toolRegistry.has(name),
 				),
 			);
+		}
+		const activeNameSet = new Set(validToolNames);
+		for (const name of Array.from(this.#selectedDiscoveredToolNames)) {
+			if (!activeNameSet.has(name) || isMCPToolName(name) || !this.#toolRegistry.has(name)) {
+				this.#selectedDiscoveredToolNames.delete(name);
+			}
 		}
 		this.agent.setTools(tools);
 
