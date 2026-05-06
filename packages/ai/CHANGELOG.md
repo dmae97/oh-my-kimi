@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed VLLM model discovery to use `max_model_len` as the context window when the endpoint reports it.
+
 ## [14.7.0] - 2026-05-04
 ### Breaking Changes
 
