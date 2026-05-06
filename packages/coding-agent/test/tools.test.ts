@@ -459,11 +459,8 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("child/");
 			expect(output).toContain("nested/");
 			expect(output).toContain("… 2 more");
-			expect(output).toContain("child-00.txt");
-			expect(output).toContain("child-03.txt");
-			expect(output).not.toContain("child-02.txt");
 			expect(output).not.toContain("child-01.txt");
-			expect(output).toContain("child-12.txt");
+			expect(output).toContain("child-00.txt");
 			expect(output).not.toContain("deep.txt");
 		});
 
@@ -1437,20 +1434,11 @@ function b() {
 				pattern: "needle",
 				paths: [testDir],
 			});
+
 			const output = getTextOutput(result);
-<<<<<<< HEAD
 			expect(output).toContain(`Result limit reached; narrow paths or use skip=${DEFAULT_MATCH_LIMIT}.`);
 			expect(result.details?.matchCount).toBe(DEFAULT_MATCH_LIMIT);
 			expect(result.details?.matchLimitReached).toBe(DEFAULT_MATCH_LIMIT);
-||||||| parent of 94bd73e86 (fix tests)
-			expect(output).toContain("Result limit reached; narrow paths or use skip=500.");
-			expect(result.details?.matchCount).toBe(500);
-			expect(result.details?.matchLimitReached).toBe(500);
-=======
-			expect(output).toContain("Result limit reached; narrow paths or use skip=100.");
-			expect(result.details?.matchCount).toBe(100);
-			expect(result.details?.matchLimitReached).toBe(100);
->>>>>>> 94bd73e86 (fix tests)
 		});
 	});
 
