@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { detectCompat, streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { Context, Tool } from "@oh-my-pi/pi-ai/types";
+import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
 import { Type } from "@sinclair/typebox";
 
 const originalFetch = global.fetch;
@@ -38,17 +38,19 @@ async function capturePayload(opts: Parameters<typeof streamOpenAICompletions>[2
 	return (await promise) as Record<string, unknown>;
 }
 
-describe("issue #945 — OpenCode Go DeepSeek does not support tool_choice", () => {
-	it("detects deepseek-v4-pro as not supporting tool_choice even without generated compat", () => {
-		const model = getBundledModel("opencode-go", "deepseek-v4-pro");
+describe("issue #945 — OpenCode Go DeepSeek disables reasoning when tool_choice is used", () => {
+	it("detects deepseek-v4-pro as supporting tool_choice with per-request reasoning suppression", () => {
+		const model = getBundledModel("opencode-go", "deepseek-v4-pro") as Model<"openai-completions">;
 		expect(model.compat?.supportsToolChoice).toBeUndefined();
-		expect(detectCompat(model).supportsToolChoice).toBe(false);
+		const compat = detectCompat(model);
+		expect(compat.supportsToolChoice).toBe(true);
+		expect(compat.disableReasoningOnToolChoice).toBe(true);
 	});
 
-	it("omits tool_choice while preserving tools and reasoning_effort", async () => {
+	it("preserves tool_choice and tools while omitting reasoning_effort", async () => {
 		const body = await capturePayload({ reasoning: "high", toolChoice: "auto" });
 		expect(body.tools).toBeDefined();
-		expect(body.tool_choice).toBeUndefined();
-		expect(body.reasoning_effort).toBe("high");
+		expect(body.tool_choice).toBe("auto");
+		expect(body.reasoning_effort).toBeUndefined();
 	});
 });

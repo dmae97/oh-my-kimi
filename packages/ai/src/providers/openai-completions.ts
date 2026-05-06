@@ -996,6 +996,14 @@ function buildParams(
 		params.reasoning_effort = mapReasoningEffort(options.reasoning, compat.reasoningEffortMap) as Effort;
 	}
 
+	if (compat.disableReasoningOnToolChoice && params.tool_choice !== undefined) {
+		// DeepSeek reasoning models accept tools/tool_choice, but reject that
+		// control field while thinking is enabled. Keep the tool-selection
+		// contract and suppress reasoning for this single request.
+		delete params.reasoning_effort;
+		delete params.reasoning;
+	}
+
 	if (compat.disableReasoningOnForcedToolChoice && isForcedToolChoice(params.tool_choice)) {
 		// Mirrors anthropic.ts:disableThinkingIfToolChoiceForced — backends like
 		// Kimi 400 with `tool_choice 'specified' is incompatible with thinking
