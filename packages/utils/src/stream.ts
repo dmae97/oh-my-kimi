@@ -76,31 +76,6 @@ export async function* readJsonl<T>(stream: ReadableStream<Uint8Array>, signal?:
 // SSE (Server-Sent Events)
 // =============================================================================
 
-/** Byte lookup table: 1 = whitespace, 0 = not. */
-const WS = new Uint8Array(256);
-WS[0x09] = 1; // tab
-WS[0x0a] = 1; // LF
-WS[0x0d] = 1; // CR
-WS[0x20] = 1; // space
-
-const createPattern = (prefix: string) => {
-	const pre = Buffer.from(prefix, "utf-8");
-	return {
-		strip(buf: Uint8Array): number | null {
-			const n = pre.length;
-			if (buf.length < n) return null;
-			if (pre.equals(buf.subarray(0, n))) {
-				return n;
-			}
-			return null;
-		},
-	};
-};
-
-const PAT_DATA = createPattern("data:");
-
-const PAT_DONE = createPattern("[DONE]");
-
 class ConcatSink {
 	#space?: Buffer;
 	#length = 0;
@@ -208,10 +183,14 @@ class ConcatSink {
 	}
 }
 
-const kDoneError = new Error("SSE stream done");
-
 /**
  * Stream parsed JSON objects from SSE `data:` lines.
+ *
+ * Thin wrapper over {@link readSseEvents}: yields one parsed JSON value per
+ * dispatched SSE event, skipping events with empty `data` and stopping at the
+ * OpenAI-style `[DONE]` sentinel. If your consumer doesn't care about `event:`
+ * names or doesn't need a custom parse step, use this; otherwise call
+ * `readSseEvents` directly.
  *
  * @example
  * ```ts
@@ -221,60 +200,149 @@ const kDoneError = new Error("SSE stream done");
  * ```
  */
 export async function* readSseJson<T>(stream: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncGenerator<T> {
+	for await (const sse of readSseEvents(stream, signal)) {
+		const data = sse.data;
+		if (data === "" || data === "[DONE]") {
+			if (data === "[DONE]") return;
+			continue;
+		}
+		yield JSON.parse(data) as T;
+	}
+}
+
+/**
+ * A single Server-Sent Event dispatched on a blank-line boundary.
+ *
+ * - `event` is the value of the most recent `event:` field, or `null` if none.
+ * - `data` is the concatenation (joined by `\n`) of every `data:` field in the
+ *   event, exactly as required by the SSE spec.
+ * - `raw` is the list of decoded non-empty lines that made up the event,
+ *   preserved for diagnostic context (error reporting, debugging). The
+ *   dispatching blank line is not included.
+ */
+export interface ServerSentEvent {
+	event: string | null;
+	data: string;
+	raw: string[];
+}
+
+interface SseEventState {
+	event: string | null;
+	// `data` accumulates across multiple `data:` lines per the SSE spec, joined
+	// by `\n`. We keep the running string here and append as lines arrive instead
+	// of buffering an array and joining at flush. `null` means "no data: field
+	// seen yet" (distinct from a `data:` field with an empty value).
+	data: string | null;
+	raw: string[];
+}
+
+// Single decoder reused for all line decodes. Safe because lines are split on
+// LF (0x0a) which is always a single-byte ASCII char in UTF-8 and never appears
+// inside a multi-byte sequence — so each line is itself a complete UTF-8 run.
+const SSE_LINE_DECODER = new TextDecoder("utf-8");
+
+function decodeSseLineBytes(line: Uint8Array, end: number): string {
+	return end === line.length ? SSE_LINE_DECODER.decode(line) : SSE_LINE_DECODER.decode(line.subarray(0, end));
+}
+
+function flushSseEvent(state: SseEventState): ServerSentEvent | null {
+	if (state.event === null && state.data === null) return null;
+	const event: ServerSentEvent = {
+		event: state.event,
+		data: state.data ?? "",
+		raw: state.raw,
+	};
+	state.event = null;
+	state.data = null;
+	state.raw = [];
+	return event;
+}
+
+function pushSseLine(line: Uint8Array, state: SseEventState): ServerSentEvent | null {
+	// `appendAndFlushLines` splits on LF only; strip a trailing CR so CRLF sources
+	// don't leak `\r` into field values.
+	let end = line.length;
+	if (end > 0 && line[end - 1] === 0x0d /* '\r' */) end--;
+	if (end === 0) return flushSseEvent(state);
+
+	// Comment line: keep in `raw` for diagnostic context, skip parsing.
+	if (line[0] === 0x3a /* ':' */) {
+		state.raw.push(decodeSseLineBytes(line, end));
+		return null;
+	}
+
+	const text = decodeSseLineBytes(line, end);
+	state.raw.push(text);
+
+	const colon = text.indexOf(":");
+	const fieldName = colon === -1 ? text : text.slice(0, colon);
+	let value = colon === -1 ? "" : text.slice(colon + 1);
+	if (value.charCodeAt(0) === 0x20 /* ' ' */) value = value.slice(1);
+
+	if (fieldName === "event") {
+		state.event = value;
+	} else if (fieldName === "data") {
+		if (state.data === null) {
+			state.data = value;
+		} else {
+			state.data += "\n";
+			state.data += value;
+		}
+	}
+	// `id` and `retry` are intentionally ignored — the providers we consume
+	// don't use them, and the underlying transport handles reconnects itself.
+	return null;
+}
+
+/**
+ * Stream raw Server-Sent Events from an HTTP response body.
+ *
+ * Yields one `ServerSentEvent` per blank-line dispatch. The consumer is
+ * responsible for parsing `data` (e.g. JSON, plain text, error envelope).
+ * Use `readSseJson` instead when every event is a single `data:` JSON object
+ * and you don't need access to the `event:` field.
+ *
+ * Internally backed by a Buffer-based line reader (`ConcatSink`) so chunk
+ * concatenation is O(n) and never triggers per-line string slicing of the
+ * accumulated buffer.
+ *
+ * @example
+ * ```ts
+ * for await (const sse of readSseEvents(response.body!)) {
+ *   if (sse.event === "ping") continue;
+ *   const obj = JSON.parse(sse.data);
+ * }
+ * ```
+ */
+export async function* readSseEvents(
+	stream: ReadableStream<Uint8Array>,
+	signal?: AbortSignal,
+): AsyncGenerator<ServerSentEvent> {
 	const lineBuffer = new ConcatSink();
-	const jsonBuffer = new ConcatSink();
-
-	// pipeThrough with { signal } makes the stream abort-aware: the pipe
-	// cancels the source and errors the output when the signal fires,
-	// so for-await-of exits cleanly without manual reader/listener management.
-	stream = createAbortableStream(stream, signal);
+	const state: SseEventState = { event: null, data: null, raw: [] };
+	const source = createAbortableStream(stream, signal);
 	try {
-		const processLine = function* (line: Uint8Array) {
-			// Strip trailing spaces including \r.
-			let end = line.length;
-			while (end && WS[line[end - 1]]) {
-				--end;
-			}
-			if (!end) return; // blank line
-
-			const trimmed = end === line.length ? line : line.subarray(0, end);
-
-			// Check "data:" prefix and optional space afterwards.
-			let beg = PAT_DATA.strip(trimmed);
-			if (beg === null) return;
-			while (beg < end && WS[trimmed[beg]]) {
-				++beg;
-			}
-			if (beg >= end) return;
-
-			// Fast-path: the OpenAI-style done marker isn't JSON.
-			const donePrefix = PAT_DONE.strip(trimmed.subarray(beg, end));
-			if (donePrefix !== null && donePrefix === end - beg) {
-				throw kDoneError;
-			}
-
-			yield* jsonBuffer.pullJSONL<T>(trimmed, beg, end);
-		};
-		for await (const chunk of stream) {
+		for await (const chunk of source) {
 			for (const line of lineBuffer.appendAndFlushLines(chunk)) {
-				yield* processLine(line);
+				const event = pushSseLine(line, state);
+				if (event) yield event;
 			}
 		}
+		// Treat any trailing partial line (no terminating LF) as a complete line.
 		if (!lineBuffer.isEmpty) {
 			const tail = lineBuffer.flush();
 			if (tail) {
 				lineBuffer.clear();
-				yield* processLine(tail);
+				const event = pushSseLine(tail, state);
+				if (event) yield event;
 			}
 		}
+		// Real services don't always close on a blank line — flush any pending event.
+		const trailing = flushSseEvent(state);
+		if (trailing) yield trailing;
 	} catch (err) {
-		if (err === kDoneError) return;
-		// Abort errors are expected — just stop the generator.
 		if (signal?.aborted) return;
 		throw err;
-	}
-	if (!jsonBuffer.isEmpty) {
-		throw new Error("SSE stream ended unexpectedly");
 	}
 }
 

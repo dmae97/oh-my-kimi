@@ -22,6 +22,9 @@ import type {
 	StreamFn,
 } from "./types";
 
+/** Sentinel returned by the abort race in `streamAssistantResponse`. */
+const ABORTED: unique symbol = Symbol("agent-loop-aborted");
+
 /**
  * Start an agent loop with a new prompt message.
  * The prompt is added to the context and events are emitted for it.
@@ -360,113 +363,95 @@ async function streamAssistantResponse(
 	let addedPartial = false;
 
 	const responseIterator = response[Symbol.asyncIterator]();
-	while (true) {
-		const read = await readResponseEvent(responseIterator, signal);
-		if (read.type === "aborted") {
+	// Set up a single abort race: register the abort listener once for the whole
+	// stream and reuse the same race promise for every iterator.next() instead of
+	// allocating Promise.withResolvers and add/removeEventListener per event.
+	let abortRacePromise: Promise<typeof ABORTED> | undefined;
+	let detachAbortListener: (() => void) | undefined;
+	if (signal) {
+		if (signal.aborted) {
 			return emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
 		}
-		if (read.type === "error") {
-			throw read.error;
-		}
-		if (read.result.done) {
-			break;
-		}
+		const { promise, resolve } = Promise.withResolvers<typeof ABORTED>();
+		const onAbort = () => resolve(ABORTED);
+		signal.addEventListener("abort", onAbort, { once: true });
+		abortRacePromise = promise;
+		detachAbortListener = () => signal.removeEventListener("abort", onAbort);
+	}
 
-		const event = read.result.value;
-		// Check for abort signal before processing each event
-		if (signal?.aborted) {
-			return emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
-		}
+	try {
+		while (true) {
+			let next: IteratorResult<AssistantMessageEvent>;
+			if (abortRacePromise) {
+				const result = await Promise.race([responseIterator.next(), abortRacePromise]);
+				if (result === ABORTED) {
+					responseIterator.return?.()?.catch(() => {});
+					return emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
+				}
+				next = result;
+			} else {
+				next = await responseIterator.next();
+			}
+			if (signal?.aborted) {
+				return emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
+			}
+			if (next.done) break;
 
-		switch (event.type) {
-			case "start":
-				partialMessage = event.partial;
-				context.messages.push(partialMessage);
-				addedPartial = true;
-				stream.push({ type: "message_start", message: { ...partialMessage } });
-				break;
+			const event = next.value;
 
-			case "text_start":
-			case "text_delta":
-			case "text_end":
-			case "thinking_start":
-			case "thinking_delta":
-			case "thinking_end":
-			case "toolcall_start":
-			case "toolcall_delta":
-			case "toolcall_end":
-				if (partialMessage) {
+			switch (event.type) {
+				case "start":
 					partialMessage = event.partial;
-					context.messages[context.messages.length - 1] = partialMessage;
-					config.onAssistantMessageEvent?.(partialMessage, event);
-					if (signal?.aborted) {
-						continue;
-					}
-					stream.push({
-						type: "message_update",
-						assistantMessageEvent: event,
-						message: { ...partialMessage },
-					});
-				}
-				break;
+					context.messages.push(partialMessage);
+					addedPartial = true;
+					stream.push({ type: "message_start", message: { ...partialMessage } });
+					break;
 
-			case "done":
-			case "error": {
-				const finalMessage = await response.result();
-				if (addedPartial) {
-					context.messages[context.messages.length - 1] = finalMessage;
-				} else {
-					context.messages.push(finalMessage);
+				case "text_start":
+				case "text_delta":
+				case "text_end":
+				case "thinking_start":
+				case "thinking_delta":
+				case "thinking_end":
+				case "toolcall_start":
+				case "toolcall_delta":
+				case "toolcall_end":
+					if (partialMessage) {
+						partialMessage = event.partial;
+						context.messages[context.messages.length - 1] = partialMessage;
+						config.onAssistantMessageEvent?.(partialMessage, event);
+						if (signal?.aborted) {
+							continue;
+						}
+						stream.push({
+							type: "message_update",
+							assistantMessageEvent: event,
+							message: { ...partialMessage },
+						});
+					}
+					break;
+
+				case "done":
+				case "error": {
+					const finalMessage = await response.result();
+					if (addedPartial) {
+						context.messages[context.messages.length - 1] = finalMessage;
+					} else {
+						context.messages.push(finalMessage);
+					}
+					if (!addedPartial) {
+						stream.push({ type: "message_start", message: { ...finalMessage } });
+					}
+					stream.push({ type: "message_end", message: finalMessage });
+					return finalMessage;
 				}
-				if (!addedPartial) {
-					stream.push({ type: "message_start", message: { ...finalMessage } });
-				}
-				stream.push({ type: "message_end", message: finalMessage });
-				return finalMessage;
 			}
 		}
+	} finally {
+		detachAbortListener?.();
 	}
 
 	return await response.result();
-}
-
-type ResponseEventRead =
-	| { type: "event"; result: IteratorResult<AssistantMessageEvent> }
-	| { type: "error"; error: unknown }
-	| { type: "aborted" };
-
-async function readResponseEvent(
-	iterator: AsyncIterator<AssistantMessageEvent>,
-	signal: AbortSignal | undefined,
-): Promise<ResponseEventRead> {
-	if (!signal) {
-		return { type: "event", result: await iterator.next() };
-	}
-	if (signal.aborted) {
-		const returnPromise = iterator.return?.();
-		if (returnPromise) void returnPromise.catch(() => {});
-		return { type: "aborted" };
-	}
-
-	const { promise: abortPromise, resolve: resolveAbort } = Promise.withResolvers<ResponseEventRead>();
-	const onAbort = () => resolveAbort({ type: "aborted" });
-	signal.addEventListener("abort", onAbort, { once: true });
-
-	const eventPromise = iterator.next().then(
-		result => ({ type: "event" as const, result }),
-		error => ({ type: "error" as const, error }),
-	);
-
-	try {
-		const read = await Promise.race([eventPromise, abortPromise]);
-		if (read.type === "aborted") {
-			const returnPromise = iterator.return?.();
-			if (returnPromise) void returnPromise.catch(() => {});
-		}
-		return read;
-	} finally {
-		signal.removeEventListener("abort", onAbort);
-	}
 }
 
 function emitAbortedAssistantMessage(

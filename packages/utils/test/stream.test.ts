@@ -1,6 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
-import { parseJsonlLenient, readJsonl, readLines, readSseJson } from "../src/stream";
+import {
+	parseJsonlLenient,
+	readJsonl,
+	readLines,
+	readSseEvents,
+	readSseJson,
+	type ServerSentEvent,
+} from "../src/stream";
 
 const encoder = new TextEncoder();
 
@@ -120,11 +127,11 @@ describe("parseJsonlLenient", () => {
 describe("readSseJson", () => {
 	it("parses data lines and stops at [DONE]", async () => {
 		const chunks = [
-			encoder.encode('data: {"a":1}\n'),
-			encoder.encode("event: ping\n"),
-			encoder.encode('data: {"b":2}\r\n'),
-			encoder.encode("data: [DONE]\n"),
-			encoder.encode('data: {"c":3}\n'),
+			encoder.encode('data: {"a":1}\n\n'),
+			encoder.encode("event: ping\ndata: \n\n"),
+			encoder.encode('data: {"b":2}\r\n\r\n'),
+			encoder.encode("data: [DONE]\n\n"),
+			encoder.encode('data: {"c":3}\n\n'),
 		];
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
@@ -137,7 +144,7 @@ describe("readSseJson", () => {
 		expect(output).toEqual([{ a: 1 }, { b: 2 }]);
 	});
 
-	it("parses trailing line without newline", async () => {
+	it("flushes a trailing event without the closing blank line", async () => {
 		const chunks = [encoder.encode('data: {"c":3}')];
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
@@ -151,7 +158,7 @@ describe("readSseJson", () => {
 	});
 
 	it("handles data lines split across chunks", async () => {
-		const chunks = [encoder.encode('data: {"a"'), encoder.encode(":1}\n")];
+		const chunks = [encoder.encode('data: {"a"'), encoder.encode(":1}\n\n")];
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
 				for (const chunk of chunks) controller.enqueue(chunk);
@@ -161,5 +168,111 @@ describe("readSseJson", () => {
 
 		const output = await collectAsync(readSseJson(stream));
 		expect(output).toEqual([{ a: 1 }]);
+	});
+});
+
+function bytesStreamFromChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
+	return new ReadableStream<Uint8Array>({
+		start(controller) {
+			for (const chunk of chunks) controller.enqueue(chunk);
+			controller.close();
+		},
+	});
+}
+
+describe("readSseEvents", () => {
+	it("dispatches events on blank-line boundaries", async () => {
+		const stream = bytesStreamFromChunks([
+			encoder.encode('event: message_start\ndata: {"id":1}\n\n'),
+			encoder.encode("event: message_stop\ndata: {}\n\n"),
+		]);
+		const events = await collectAsync(readSseEvents(stream));
+		expect(events.map(e => e.event)).toEqual(["message_start", "message_stop"]);
+		expect(events.map(e => e.data)).toEqual(['{"id":1}', "{}"]);
+	});
+
+	it("joins multiple data: lines with newlines", async () => {
+		const stream = bytesStreamFromChunks([encoder.encode("event: chunk\ndata: line1\ndata: line2\ndata: line3\n\n")]);
+		const [evt] = await collectAsync(readSseEvents(stream));
+		expect(evt.event).toBe("chunk");
+		expect(evt.data).toBe("line1\nline2\nline3");
+	});
+
+	it("skips comment lines but preserves them in raw", async () => {
+		const stream = bytesStreamFromChunks([encoder.encode(": keep-alive\nevent: ping\ndata: ok\n\n")]);
+		const [evt] = await collectAsync(readSseEvents(stream));
+		expect(evt.event).toBe("ping");
+		expect(evt.data).toBe("ok");
+		expect(evt.raw).toEqual([": keep-alive", "event: ping", "data: ok"]);
+	});
+
+	it("strips a single optional space after the field colon (and only one)", async () => {
+		const stream = bytesStreamFromChunks([encoder.encode("event:  spaced\ndata:  body\n\n")]);
+		const [evt] = await collectAsync(readSseEvents(stream));
+		expect(evt.event).toBe(" spaced");
+		expect(evt.data).toBe(" body");
+	});
+
+	it("handles CRLF line terminators", async () => {
+		const stream = bytesStreamFromChunks([encoder.encode("event: a\r\ndata: 1\r\n\r\nevent: b\r\ndata: 2\r\n\r\n")]);
+		const events = await collectAsync(readSseEvents(stream));
+		expect(events.map(e => `${e.event}=${e.data}`)).toEqual(["a=1", "b=2"]);
+	});
+
+	it("recovers when a chunk boundary splits inside a field name", async () => {
+		const stream = bytesStreamFromChunks([
+			encoder.encode("eve"),
+			encoder.encode("nt: split\nda"),
+			encoder.encode("ta: payload\n\n"),
+		]);
+		const events = await collectAsync(readSseEvents(stream));
+		expect(events).toHaveLength(1);
+		expect(events[0].event).toBe("split");
+		expect(events[0].data).toBe("payload");
+	});
+
+	it("recovers when a chunk boundary splits inside a multi-byte UTF-8 sequence", async () => {
+		// "héllo" → bytes for 'é' are 0xC3 0xA9; split between them.
+		const full = encoder.encode("data: héllo\n\n");
+		const split = full.indexOf(0xc3) + 1;
+		const stream = bytesStreamFromChunks([full.subarray(0, split), full.subarray(split)]);
+		const [evt] = await collectAsync(readSseEvents(stream));
+		expect(evt.data).toBe("héllo");
+	});
+
+	it("flushes a pending event even without the trailing blank line", async () => {
+		const stream = bytesStreamFromChunks([encoder.encode("event: trailing\ndata: tail\n")]);
+		const events = await collectAsync(readSseEvents(stream));
+		expect(events).toEqual([
+			{ event: "trailing", data: "tail", raw: ["event: trailing", "data: tail"] },
+		] satisfies ServerSentEvent[]);
+	});
+
+	it("treats a tail without any newline as a complete final line", async () => {
+		const stream = bytesStreamFromChunks([encoder.encode("event: x\ndata: y")]);
+		const events = await collectAsync(readSseEvents(stream));
+		expect(events).toHaveLength(1);
+		expect(events[0].event).toBe("x");
+		expect(events[0].data).toBe("y");
+	});
+
+	it("survives a one-byte-per-chunk drip feed without quadratic blowup", async () => {
+		// The legacy decoder rebuilt the entire string buffer per line and was
+		// O(n²) in this case. Should now complete in well under a second.
+		const lines: string[] = [];
+		for (let i = 0; i < 2000; i++) {
+			lines.push(`event: e${i}`, `data: ${i}`, "");
+		}
+		const payload = encoder.encode(`${lines.join("\n")}\n`);
+		const oneByteChunks = Array.from(payload, byte => Uint8Array.of(byte));
+		const stream = bytesStreamFromChunks(oneByteChunks);
+		const start = performance.now();
+		const events = await collectAsync(readSseEvents(stream));
+		const elapsed = performance.now() - start;
+		expect(events).toHaveLength(2000);
+		expect(events[1999].event).toBe("e1999");
+		expect(events[1999].data).toBe("1999");
+		// Generous bound: the previous quadratic implementation needed >5s here.
+		expect(elapsed).toBeLessThan(2000);
 	});
 });
