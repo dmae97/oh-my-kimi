@@ -5,7 +5,6 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
-import { realpathSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -218,11 +217,7 @@ async function runInteractiveMode(
 
 function normalizePathForComparison(value: string): string {
 	const resolved = path.resolve(value);
-	let realPath = resolved;
-	try {
-		realPath = realpathSync(resolved);
-	} catch {}
-	return process.platform === "win32" ? realPath.toLowerCase() : realPath;
+	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 async function promptForkSession(session: SessionInfo): Promise<boolean> {
@@ -354,7 +349,7 @@ async function maybeAutoChdir(parsed: Args): Promise<void> {
 	}
 
 	const normalizePath = (value: string) => {
-		const resolved = realpathSync(path.resolve(value));
+		const resolved = path.resolve(value);
 		return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 	};
 
