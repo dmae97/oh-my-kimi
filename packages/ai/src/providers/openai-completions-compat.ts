@@ -119,7 +119,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		reasoningEffortMap,
 		supportsUsageInStreaming: !isCerebras,
 		disableReasoningOnForcedToolChoice: isKimiModel || isAnthropicModel,
-		supportsToolChoice: true,
+		supportsToolChoice: !(isDeepseekFamily && Boolean(model.reasoning)),
 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
 		requiresToolResultName: isMistral,
 		requiresAssistantAfterToolResult: false,
