@@ -187,6 +187,91 @@ describe("github tool", () => {
 		expect(text).toContain("Topics: cli, github");
 	});
 
+	it("creates a pull request via gh and renders the resulting summary", async () => {
+		const textCalls: string[][] = [];
+		const textSpy = vi.spyOn(git.github, "text").mockImplementation(async (_cwd, args) => {
+			textCalls.push([...args]);
+			return "https://github.com/owner/repo/pull/77\n";
+		});
+		const jsonCalls: string[][] = [];
+		const jsonSpy = vi.spyOn(git.github, "json").mockImplementation(async (_cwd, args) => {
+			jsonCalls.push([...args]);
+			return {
+				number: 77,
+				title: "Add gizmo",
+				state: "OPEN",
+				isDraft: true,
+				baseRefName: "main",
+				headRefName: "feature/gizmo",
+				author: { login: "octocat" },
+				createdAt: "2026-05-01T09:00:00Z",
+				labels: [{ name: "enhancement" }],
+				body: "Adds a gizmo.",
+				url: "https://github.com/owner/repo/pull/77",
+			} as never;
+		});
+
+		const tool = new GithubTool(createSession());
+		const result = await tool.execute("pr-create", {
+			op: "pr_create",
+			repo: "owner/repo",
+			title: "Add gizmo",
+			body: "Adds a gizmo.",
+			base: "main",
+			head: "feature/gizmo",
+			draft: true,
+			reviewer: ["reviewer1"],
+			label: ["enhancement"],
+		});
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		// gh pr create invocation: must pass --repo, --title, --base, --head,
+		// --draft, --reviewer, --label, and route the body through --body-file
+		// (not --body, to keep multi-KB bodies clear of argv-length limits).
+		expect(textSpy).toHaveBeenCalledTimes(1);
+		const createArgs = textCalls[0];
+		expect(createArgs.slice(0, 2)).toEqual(["pr", "create"]);
+		expect(createArgs).toEqual(expect.arrayContaining(["--repo", "owner/repo"]));
+		expect(createArgs).toEqual(expect.arrayContaining(["--title", "Add gizmo"]));
+		expect(createArgs).toEqual(expect.arrayContaining(["--base", "main"]));
+		expect(createArgs).toEqual(expect.arrayContaining(["--head", "feature/gizmo"]));
+		expect(createArgs).toContain("--draft");
+		expect(createArgs).toEqual(expect.arrayContaining(["--reviewer", "reviewer1"]));
+		expect(createArgs).toEqual(expect.arrayContaining(["--label", "enhancement"]));
+		const bodyFlagIndex = createArgs.indexOf("--body-file");
+		expect(bodyFlagIndex).toBeGreaterThanOrEqual(0);
+		const bodyFilePath = createArgs[bodyFlagIndex + 1];
+		expect(bodyFilePath).toMatch(/gh-pr-body-/);
+		expect(createArgs).not.toContain("--body");
+
+		// Follow-up summary fetch must target the parsed PR number/repo.
+		expect(jsonSpy).toHaveBeenCalledTimes(1);
+		const viewArgs = jsonCalls[0];
+		expect(viewArgs.slice(0, 3)).toEqual(["pr", "view", "77"]);
+		expect(viewArgs).toEqual(expect.arrayContaining(["--repo", "owner/repo"]));
+
+		// Output: PR number + summary rendered, URL surfaces, body block included.
+		expect(text).toContain("# Created Pull Request #77: Add gizmo");
+		expect(text).toContain("URL: https://github.com/owner/repo/pull/77");
+		expect(text).toContain("Draft: true");
+		expect(text).toContain("Base: main");
+		expect(text).toContain("Head: feature/gizmo");
+		expect(text).toContain("Labels: enhancement");
+		expect(text).toContain("Adds a gizmo.");
+	});
+
+	it("rejects pr_create when neither title nor fill is supplied", async () => {
+		const textSpy = vi.spyOn(git.github, "text");
+		const jsonSpy = vi.spyOn(git.github, "json");
+		const tool = new GithubTool(createSession());
+
+		await expect(tool.execute("pr-create", { op: "pr_create", repo: "owner/repo" })).rejects.toThrow(
+			"title is required unless fill is true",
+		);
+		expect(textSpy).not.toHaveBeenCalled();
+		expect(jsonSpy).not.toHaveBeenCalled();
+	});
+
 	it("formats issue comments and omits minimized ones", async () => {
 		vi.spyOn(git.github, "json").mockResolvedValue({
 			number: 42,

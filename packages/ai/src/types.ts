@@ -576,6 +576,13 @@ export interface OpenAICompat {
 	 * enabled` whenever both are present. Default: auto-detected (Kimi).
 	 */
 	disableReasoningOnForcedToolChoice?: boolean;
+	/**
+	 * Drop reasoning fields (`reasoning_effort`, OpenRouter `reasoning`) for
+	 * any request that sends `tool_choice`. Use for providers/models that accept
+	 * tools and `tool_choice`, but reject `tool_choice` while thinking is enabled.
+	 * Default: auto-detected (DeepSeek reasoning models).
+	 */
+	disableReasoningOnToolChoice?: boolean;
 	/** OpenRouter-specific routing preferences. Only used when baseUrl points to OpenRouter. */
 	openRouterRouting?: OpenRouterRouting;
 	/** Vercel AI Gateway routing preferences. Only used when baseUrl points to Vercel AI Gateway. */
@@ -666,7 +673,7 @@ export interface Model<TApi extends Api = any> {
 	/** Canonical thinking capability metadata for this model. */
 	thinking?: ThinkingConfig;
 	/** Compatibility overrides per API. If not set, auto-detected from baseUrl. */
-	compat?: TApi extends "openai-completions"
+	compat?: TApi extends "openai-completions" | "openai-responses"
 		? OpenAICompat
 		: TApi extends "anthropic-messages"
 			? AnthropicCompat

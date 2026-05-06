@@ -377,6 +377,23 @@ For `enabledModels` and CLI `--models`:
 - explicit `provider/modelId` entries stay exact
 - globs and fuzzy matches still operate on concrete models
 
+Global `enabledModels` and `disabledProviders` entries may also be scoped to a path prefix:
+
+```yaml
+enabledModels:
+  - claude-sonnet-4-5
+  - path: ~/work
+    models:
+      - anthropic/claude-opus-4-5
+disabledProviders:
+  - ollama
+  - path: ~/private
+    providers:
+      - anthropic
+```
+
+String entries apply everywhere. Scoped entries apply when the current working directory is the configured path or one of its subdirectories. Use `path`, `paths`, `pathPrefix`, or `pathPrefixes`; use `models` for `enabledModels`, `providers` for `disabledProviders`, or `values` for either.
+
 ## `/model` and `--list-models`
 
 Both surfaces keep provider-prefixed models visible and selectable.

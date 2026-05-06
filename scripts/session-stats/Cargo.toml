@@ -15,12 +15,12 @@ path = "src/main.rs"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 anyhow = "1"
 csv = "1"
-dirs = "5"
-rayon = "1.10"
+dirs = "6"
+rayon = "1.12"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-tiktoken-rs = "0.7"
+tiktoken-rs = "0.11"
 walkdir = "2"
 
 [profile.release]

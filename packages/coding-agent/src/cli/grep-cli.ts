@@ -150,7 +150,7 @@ ${chalk.bold("Options:")}
   --no-gitignore        Include files excluded by .gitignore
 
 ${chalk.bold("Environment:")}
-  PI_GREP_WORKERS=0    Disable worker pool (use single-threaded mode)
+  PI_GREP_WORKERS=N    Set filesystem walker workers (default 4, 0 = auto)
 
 ${chalk.bold("Examples:")}
   ${APP_NAME} grep "import" src/

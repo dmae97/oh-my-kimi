@@ -1407,8 +1407,11 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 				baseUrl,
 				apiKey,
 				mapModel: (entry, defaults) => {
-					const reference = references.get(defaults.id);
-					return mapWithBundledReference(entry, defaults, reference);
+					const model = mapWithBundledReference(entry, defaults, references.get(defaults.id));
+					return {
+						...model,
+						contextWindow: toPositiveNumber(entry.max_model_len, model.contextWindow),
+					};
 				},
 			}),
 	};

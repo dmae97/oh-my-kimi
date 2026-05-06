@@ -519,6 +519,8 @@ export interface GlobMatch {
    * `symlink_metadata`).
    */
   mtime?: number
+  /** File size in bytes for regular files. */
+  size?: number
 }
 
 /** Input options for `glob`, including traversal, filtering, and cancellation. */
@@ -647,7 +649,10 @@ export declare enum GrepOutputMode {
 export interface GrepResult {
   /** Matches or per-file counts, depending on output mode. */
   matches: Array<GrepMatch>
-  /** Total matches across all files. */
+  /**
+   * Total matches across all files, or matched file count in filesWithMatches
+   * mode.
+   */
   totalMatches: number
   /** Number of files with at least one match. */
   filesWithMatches: number

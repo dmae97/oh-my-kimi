@@ -584,6 +584,7 @@ function socketToSink(socket: Bun.Socket<undefined>): DapWriteSink {
 		},
 		flush() {
 			socket.flush();
+			return undefined;
 		},
 	};
 }

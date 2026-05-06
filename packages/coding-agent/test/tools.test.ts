@@ -15,7 +15,7 @@ import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
 import { JobTool } from "@oh-my-pi/pi-coding-agent/tools/job";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
-import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
+import { DEFAULT_MATCH_LIMIT, SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import * as markitUtils from "@oh-my-pi/pi-coding-agent/utils/markit";
 import { $which, Snowflake } from "@oh-my-pi/pi-utils";
@@ -1427,7 +1427,7 @@ function b() {
 			expect(result.details?.matchCount).toBe(1);
 		});
 		it("should apply the fixed default match cap", async () => {
-			const lines = Array.from({ length: 600 }, (_, i) => `needle ${i + 1}`);
+			const lines = Array.from({ length: DEFAULT_MATCH_LIMIT + 100 }, (_, i) => `needle ${i + 1}`);
 			fs.writeFileSync(path.join(testDir, "default-limit.txt"), lines.join("\n"));
 
 			const result = await searchTool.execute("test-call-14-default-limit", {
@@ -1436,9 +1436,9 @@ function b() {
 			});
 
 			const output = getTextOutput(result);
-			expect(output).toContain("Result limit reached; narrow paths or use skip=500.");
-			expect(result.details?.matchCount).toBe(500);
-			expect(result.details?.matchLimitReached).toBe(500);
+			expect(output).toContain(`Result limit reached; narrow paths or use skip=${DEFAULT_MATCH_LIMIT}.`);
+			expect(result.details?.matchCount).toBe(DEFAULT_MATCH_LIMIT);
+			expect(result.details?.matchLimitReached).toBe(DEFAULT_MATCH_LIMIT);
 		});
 	});
 

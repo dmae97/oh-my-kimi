@@ -55,6 +55,18 @@ describe("autocompleteMaxVisible setting", () => {
 		expect(settings.get("autocompleteMaxVisible")).toBe(15);
 	});
 
+	it("should let project config.yml override global config.yml", async () => {
+		await Bun.write(path.join(agentDir, "config.yml"), YAML.stringify({ autocompleteMaxVisible: 15 }, null, 2));
+		await Bun.write(
+			path.join(getProjectAgentDir(projectDir), "config.yml"),
+			YAML.stringify({ autocompleteMaxVisible: 20 }, null, 2),
+		);
+
+		const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+		expect(settings.get("autocompleteMaxVisible")).toBe(20);
+	});
+
 	it("should coerce submenu string values for live editor updates", () => {
 		const setAutocompleteMaxVisible = vi.fn();
 		const controller = new SelectorController({

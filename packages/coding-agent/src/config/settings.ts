@@ -12,6 +12,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import {
 	getAgentDbPath,
@@ -96,6 +97,74 @@ function setByPath(obj: RawSettings, segments: string[], value: unknown): void {
 		current = current[segment] as RawSettings;
 	}
 	current[segments[segments.length - 1]] = value;
+}
+
+const PATH_SCOPED_ARRAY_SETTINGS = new Set<SettingPath>(["enabledModels", "disabledProviders"]);
+
+type PathScopedStringArrayEntry = {
+	path?: unknown;
+	paths?: unknown;
+	pathPrefix?: unknown;
+	pathPrefixes?: unknown;
+	values?: unknown;
+	items?: unknown;
+	models?: unknown;
+	providers?: unknown;
+};
+
+function normalizePathPrefix(prefix: string): string {
+	const expanded =
+		prefix === "~" ? os.homedir() : prefix.startsWith("~/") ? path.join(os.homedir(), prefix.slice(2)) : prefix;
+	return path.resolve(expanded);
+}
+
+function pathMatchesPrefix(cwd: string, prefix: string): boolean {
+	const relative = path.relative(normalizePathPrefix(prefix), path.resolve(cwd));
+	return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function stringArrayFromUnknown(value: unknown): string[] {
+	if (typeof value === "string") return [value];
+	if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string");
+	return [];
+}
+
+function resolvePathScopedStringArray(settingPath: SettingPath, value: unknown, cwd: string): string[] | undefined {
+	if (!PATH_SCOPED_ARRAY_SETTINGS.has(settingPath) || !Array.isArray(value)) return undefined;
+
+	const resolved: string[] = [];
+	for (const entry of value) {
+		if (typeof entry === "string") {
+			resolved.push(entry);
+			continue;
+		}
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+
+		const scoped = entry as PathScopedStringArrayEntry;
+		const prefixes = [
+			...stringArrayFromUnknown(scoped.path),
+			...stringArrayFromUnknown(scoped.paths),
+			...stringArrayFromUnknown(scoped.pathPrefix),
+			...stringArrayFromUnknown(scoped.pathPrefixes),
+		];
+		if (prefixes.length === 0 || !prefixes.some(prefix => pathMatchesPrefix(cwd, prefix))) continue;
+
+		const values =
+			settingPath === "enabledModels"
+				? [
+						...stringArrayFromUnknown(scoped.values),
+						...stringArrayFromUnknown(scoped.items),
+						...stringArrayFromUnknown(scoped.models),
+					]
+				: [
+						...stringArrayFromUnknown(scoped.values),
+						...stringArrayFromUnknown(scoped.items),
+						...stringArrayFromUnknown(scoped.providers),
+					];
+		resolved.push(...values);
+	}
+
+	return resolved;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -201,7 +270,8 @@ export class Settings {
 		const segments = path.split(".");
 		const value = getByPath(this.#merged, segments);
 		if (value !== undefined) {
-			return value as SettingValue<P>;
+			const pathScopedValue = resolvePathScopedStringArray(path, value, this.#cwd);
+			return (pathScopedValue ?? value) as SettingValue<P>;
 		}
 		return getDefault(path);
 	}
