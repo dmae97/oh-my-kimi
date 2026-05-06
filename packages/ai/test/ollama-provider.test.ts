@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
+import { Effort } from "../src/model-thinking";
 import { ollamaModelManagerOptions } from "../src/provider-models/openai-compat";
 
 const originalFetch = global.fetch;
@@ -42,7 +43,7 @@ describe("ollama local provider discovery", () => {
 		expect(model?.api).toBe("openai-responses");
 		expect(model?.contextWindow).toBe(1048576);
 		expect(model?.reasoning).toBe(true);
-		expect(model?.thinking).toEqual({ mode: "effort", minLevel: "minimal", maxLevel: "high" });
+		expect(model?.thinking).toEqual({ mode: "effort", minLevel: Effort.Minimal, maxLevel: Effort.High });
 		expect(model?.input).toEqual(["text", "image"]);
 	});
 });
