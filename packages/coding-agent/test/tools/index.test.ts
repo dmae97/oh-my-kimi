@@ -233,6 +233,20 @@ describe("createTools", () => {
 		expect(names).not.toContain("calc");
 	});
 
+	it("excludes exit_plan_mode when plan mode is disabled", async () => {
+		const session = createTestSession({
+			settings: createSettingsWithOverrides({
+				"plan.enabled": false,
+			}),
+		});
+
+		const defaultTools = await createTools(session);
+		expect(defaultTools.map(t => t.name)).not.toContain("exit_plan_mode");
+
+		const requestedTools = await createTools(session, ["read", "exit_plan_mode"]);
+		expect(requestedTools.map(t => t.name)).toEqual(["read"]);
+	});
+
 	it("includes search_tool_bm25 when MCP tool discovery is enabled and executable", async () => {
 		const session = createTestSession({
 			settings: createSettingsWithOverrides({

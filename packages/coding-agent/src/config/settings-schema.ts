@@ -2006,6 +2006,17 @@ export const SETTINGS_SCHEMA = {
 	// Tasks
 	// ────────────────────────────────────────────────────────────────────────
 
+	// Plan mode
+	"plan.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tasks",
+			label: "Plan Mode",
+			description: "Enable plan mode for read-only exploration and planning before execution",
+		},
+	},
+
 	// Delegation
 	"task.isolation.mode": {
 		type: "enum",

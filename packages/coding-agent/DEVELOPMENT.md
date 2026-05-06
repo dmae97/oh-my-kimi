@@ -389,7 +389,7 @@ A `ToolFactory` is `(session: ToolSession) => Tool | null | Promise<Tool | null>
 
 `createTools(session, toolNames?)` is the entry point. It:
 
-1. Normalizes requested tool names (`toolNames`) and always injects `exit_plan_mode`.
+1. Normalizes requested tool names (`toolNames`) and injects `exit_plan_mode` while `plan.enabled` is true.
 2. Resolves eval backend allowance via `PI_PY` override (`getEvalBackendsFromEnv()`) or `eval.py` / `eval.js` settings.
 3. Performs Python kernel preflight when applicable (`checkPythonKernelAvailability`).
 4. Computes effective gating (`isToolAllowed`) from settings and runtime state:
@@ -1139,7 +1139,7 @@ Primary file: `packages/coding-agent/src/tools/index.ts`.
 
 Notes from current behavior:
 
-- `createTools()` always injects `exit_plan_mode` when `toolNames` are specified.
+- `createTools()` injects `exit_plan_mode` when `toolNames` are specified and `plan.enabled` is true.
 - `resolve` is included only when at least one active tool is marked `deferrable: true` (built-in or extension/custom).
 - `yield` is force-added when `session.requireYieldTool === true`.
 - Eval availability is mode-driven (`PI_PY`, `eval.py`, `eval.js`); eval falls back to JavaScript when Python is unavailable and JavaScript is enabled. The standalone `bash` tool is always available.
