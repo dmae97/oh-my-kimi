@@ -159,6 +159,18 @@ describe("ModelRegistry runtime provider registration", () => {
 		expectProviderHeader(registry, providerName, runtimeHeader, undefined);
 	});
 
+	test("registerProvider applies authHeader overrides to existing provider models across refresh", async () => {
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const providerName = "anthropic";
+
+		expect(getProviderModels(registry, providerName).length).toBeGreaterThan(1);
+		registry.registerProvider(providerName, { apiKey: "RUNTIME_AUTH_KEY", authHeader: true }, "ext://runtime");
+		await expectProviderHeaderAcrossRefresh(registry, providerName, "Authorization", "Bearer RUNTIME_AUTH_KEY");
+
+		registry.clearSourceRegistrations("ext://runtime");
+		expectProviderHeader(registry, providerName, "Authorization", undefined);
+	});
+
 	test("registerProvider preserves explicit thinking on runtime models", () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 		const config: ProviderConfigInput = {

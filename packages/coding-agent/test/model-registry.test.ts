@@ -447,6 +447,24 @@ describe("ModelRegistry", () => {
 			}
 		});
 
+		test("authHeader override applies bearer auth to built-in models without custom models", () => {
+			writeRawModelsJson({
+				anthropic: {
+					baseUrl: "https://anthropic-proxy.example.com/v1",
+					apiKey: "issue-929-key",
+					authHeader: true,
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const anthropicModels = getModelsForProvider(registry, "anthropic");
+
+			expect(anthropicModels.length).toBeGreaterThan(1);
+			for (const model of anthropicModels) {
+				expect(model.headers?.Authorization).toBe("Bearer issue-929-key");
+			}
+		});
+
 		test("baseUrl-only override does not affect other providers", () => {
 			writeRawModelsJson({
 				anthropic: overrideConfig("https://my-proxy.example.com/v1"),

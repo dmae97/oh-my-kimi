@@ -421,6 +421,7 @@ interface ProviderOverride {
 	baseUrl?: string;
 	headers?: Record<string, string>;
 	apiKey?: string;
+	authHeader?: boolean;
 	compat?: Model<Api>["compat"];
 }
 
@@ -667,14 +668,20 @@ function mergeCustomModelHeaders(
 	authHeader: boolean | undefined,
 	apiKeyConfig: string | undefined,
 ): Record<string, string> | undefined {
-	let headers = providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined;
-	if (authHeader && apiKeyConfig) {
-		const resolvedKey = resolveApiKeyConfig(apiKeyConfig);
-		if (resolvedKey) {
-			headers = { ...headers, Authorization: `Bearer ${resolvedKey}` };
-		}
+	return mergeAuthHeader({ ...providerHeaders, ...modelHeaders }, authHeader, apiKeyConfig);
+}
+
+function mergeAuthHeader(
+	headers: Record<string, string> | undefined,
+	authHeader: boolean | undefined,
+	apiKeyConfig: string | undefined,
+): Record<string, string> | undefined {
+	const nextHeaders = headers && Object.keys(headers).length > 0 ? { ...headers } : undefined;
+	if (!authHeader || !apiKeyConfig) {
+		return nextHeaders;
 	}
-	return headers;
+	const resolvedKey = resolveApiKeyConfig(apiKeyConfig);
+	return resolvedKey ? { ...nextHeaders, Authorization: `Bearer ${resolvedKey}` } : nextHeaders;
 }
 
 /**
@@ -954,10 +961,9 @@ export class ModelRegistry {
 
 			return models.map(m => {
 				if (!providerOverride) return m;
+				const withTransportOverride = this.#applyProviderTransportOverride(m, providerOverride);
 				return {
-					...m,
-					baseUrl: providerOverride.baseUrl ?? m.baseUrl,
-					headers: providerOverride.headers ? { ...m.headers, ...providerOverride.headers } : m.headers,
+					...withTransportOverride,
 					compat: mergeCompat(m.compat, providerOverride.compat),
 				};
 			});
@@ -1143,11 +1149,12 @@ export class ModelRegistry {
 		const configuredProviders = new Set(Object.keys(value.providers ?? {}));
 
 		for (const [providerName, providerConfig] of providerEntries) {
-			// Always set overrides when baseUrl/headers/apiKey/compat/disableStrictTools are present
+			// Always set overrides when baseUrl/headers/apiKey/authHeader/compat/disableStrictTools are present
 			if (
 				providerConfig.baseUrl ||
 				providerConfig.headers ||
 				providerConfig.apiKey ||
+				providerConfig.authHeader !== undefined ||
 				providerConfig.compat ||
 				providerConfig.disableStrictTools
 			) {
@@ -1156,6 +1163,7 @@ export class ModelRegistry {
 					baseUrl: providerConfig.baseUrl,
 					headers: providerConfig.headers,
 					apiKey: providerConfig.apiKey,
+					authHeader: providerConfig.authHeader,
 					compat: mergeCompat(providerConfig.compat, disableStrictCompat),
 				});
 			}
@@ -1738,18 +1746,24 @@ export class ModelRegistry {
 		return {
 			baseUrl: override.baseUrl ?? baseOverride?.baseUrl,
 			apiKey: override.apiKey ?? baseOverride?.apiKey,
+			authHeader: override.authHeader ?? baseOverride?.authHeader,
 			headers: override.headers ? { ...(baseOverride?.headers ?? {}), ...override.headers } : baseOverride?.headers,
 			compat: override.compat ? mergeCompat(baseOverride?.compat, override.compat) : baseOverride?.compat,
 		};
 	}
 	#applyProviderTransportOverride<T extends { baseUrl?: string; headers?: Record<string, string> }>(
 		entry: T,
-		override: Pick<ProviderOverride, "baseUrl" | "headers">,
+		override: Pick<ProviderOverride, "baseUrl" | "headers" | "authHeader" | "apiKey">,
 	): T {
+		const headers = mergeAuthHeader(
+			override.headers ? { ...entry.headers, ...override.headers } : entry.headers,
+			override.authHeader,
+			override.apiKey,
+		);
 		return {
 			...entry,
 			baseUrl: override.baseUrl ?? entry.baseUrl,
-			headers: override.headers ? { ...entry.headers, ...override.headers } : entry.headers,
+			headers,
 		};
 	}
 	#applyRuntimeProviderOverrides(models: Model<Api>[]): Model<Api>[] {
@@ -2206,8 +2220,13 @@ export class ModelRegistry {
 			return;
 		}
 
-		if (config.baseUrl || config.headers) {
-			const transportOverride = { baseUrl: config.baseUrl, headers: config.headers };
+		if (config.baseUrl || config.headers || config.apiKey || config.authHeader !== undefined) {
+			const transportOverride = {
+				baseUrl: config.baseUrl,
+				headers: config.headers,
+				apiKey: config.apiKey,
+				authHeader: config.authHeader,
+			};
 			const nextRuntimeOverride = this.#mergeProviderOverride(
 				this.#runtimeProviderOverrides.get(providerName),
 				transportOverride,
