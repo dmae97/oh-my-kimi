@@ -4,8 +4,8 @@ use super::git;
 use crate::shell::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
 const GT_SUBCOMMANDS: &[&str] = &[
-	"log", "submit", "sync", "restack", "create", "branch", "status", "diff", "show", "add", "push",
-	"pull", "fetch", "stash", "worktree",
+	"log", "submit", "sync", "restack", "create", "branch", "diff", "show", "add", "push", "pull",
+	"fetch", "stash", "worktree",
 ];
 
 pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
@@ -22,9 +22,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		Some("log") => compact_log(&cleaned),
 		Some("branch") => primitives::compact_listing(&cleaned, 40),
 		Some("submit" | "sync" | "restack" | "create") => compact_noisy_command(&cleaned, exit_code),
-		Some(
-			"status" | "diff" | "show" | "add" | "push" | "pull" | "fetch" | "stash" | "worktree",
-		) => {
+		Some("diff" | "show" | "add" | "push" | "pull" | "fetch" | "stash" | "worktree") => {
 			let git_ctx = MinimizerCtx {
 				program:    "git",
 				subcommand: ctx.subcommand,
@@ -197,7 +195,7 @@ mod tests {
 	fn supports_known_gt_and_git_passthrough_subcommands() {
 		assert!(supports("gt", Some("log")));
 		assert!(supports("gt", Some("submit")));
-		assert!(supports("gt", Some("status")));
+		assert!(!supports("gt", Some("status")));
 		assert!(supports("gt", Some("diff")));
 		assert!(!supports("git", Some("log")));
 	}
@@ -236,15 +234,14 @@ mod tests {
 	}
 
 	#[test]
-	fn status_uses_git_style_compaction() {
+	fn status_is_not_supported() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx_with_command(Some("status"), "gt status", &cfg);
-		let out = filter(&ctx, "## main\n M a.rs\n?? b.rs\n", 0);
+		let input = "## main\n M a.rs\n?? b.rs\n";
+		let out = filter(&ctx, input, 0);
 
-		assert!(out.changed);
-		assert!(out.text.contains("git status: main"));
-		assert!(out.text.contains("modified: 1"));
-		assert!(out.text.contains("untracked: 1"));
+		assert!(!out.changed);
+		assert_eq!(out.text, input);
 	}
 
 	#[test]

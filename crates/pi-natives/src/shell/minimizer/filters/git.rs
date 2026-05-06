@@ -1,17 +1,14 @@
 //! Git output filters.
 
-use std::collections::BTreeMap;
-
 use crate::shell::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
 pub fn supports(subcommand: Option<&str>) -> bool {
 	matches!(
 		subcommand,
 		Some(
-			"status"
-				| "diff" | "show"
-				| "log" | "add"
-				| "commit"
+			"diff"
+				| "show" | "log"
+				| "add" | "commit"
 				| "push" | "pull"
 				| "branch"
 				| "fetch"
@@ -36,7 +33,6 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, _exit_code: i32) -> Minimizer
 
 	let cleaned = primitives::strip_ansi(input);
 	let text = match ctx.subcommand {
-		Some("status") => condense_status(&cleaned),
 		Some("diff") => condense_diff(&cleaned),
 		Some("show") => primitives::head_tail_lines(&cleaned, 80, 40),
 		Some("log") => condense_log(&cleaned, 32, 16),
@@ -53,193 +49,6 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, _exit_code: i32) -> Minimizer
 	} else {
 		MinimizerOutput::transformed(text, input.len())
 	}
-}
-
-struct StatusEntry {
-	status: String,
-	path:   String,
-}
-
-#[derive(Default)]
-struct StatusCounts {
-	staged:    usize,
-	unstaged:  usize,
-	untracked: usize,
-	conflicts: usize,
-}
-
-fn condense_status(input: &str) -> String {
-	let mut branch = None;
-	let mut entries = Vec::new();
-	let mut current_section: Option<&str> = None;
-
-	for line in input.lines() {
-		if let Some(value) = line.strip_prefix("## ") {
-			branch = Some(value.trim());
-			continue;
-		}
-		if let Some(entry) = parse_short_status_line(line) {
-			entries.push(entry);
-			continue;
-		}
-
-		let trimmed = line.trim();
-		if let Some(name) = trimmed.strip_prefix("On branch ") {
-			branch = Some(name.trim());
-			continue;
-		}
-		if trimmed.starts_with("Changes to be committed") {
-			current_section = Some("staged");
-			continue;
-		}
-		if trimmed.starts_with("Changes not staged") {
-			current_section = Some("unstaged");
-			continue;
-		}
-		if trimmed.starts_with("Untracked files") {
-			current_section = Some("untracked");
-			continue;
-		}
-		if trimmed.starts_with("Unmerged paths") {
-			current_section = Some("conflicts");
-			continue;
-		}
-		if let Some(entry) = parse_long_status_line(trimmed, current_section) {
-			entries.push(entry);
-		}
-	}
-
-	if entries.is_empty() {
-		return input.to_string();
-	}
-
-	let mut counts = StatusCounts::default();
-	for entry in &entries {
-		count_status(&entry.status, &mut counts);
-	}
-
-	let mut groups: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-	for entry in &entries {
-		groups
-			.entry(status_group_label(&entry.status))
-			.or_default()
-			.push(&entry.path);
-	}
-
-	let mut out = String::from("git status");
-	if let Some(branch) = branch {
-		out.push_str(": ");
-		out.push_str(branch);
-	}
-	out.push('\n');
-	push_count(&mut out, "staged", counts.staged);
-	push_count(&mut out, "modified", counts.unstaged);
-	push_count(&mut out, "untracked", counts.untracked);
-	push_count(&mut out, "conflicts", counts.conflicts);
-	for (label, paths) in groups {
-		out.push_str(label);
-		out.push_str(":\n");
-		for path in paths.iter().take(24) {
-			out.push_str("  ");
-			out.push_str(path);
-			out.push('\n');
-		}
-		if paths.len() > 24 {
-			out.push_str("  … ");
-			out.push_str(&(paths.len() - 24).to_string());
-			out.push_str(" more\n");
-		}
-	}
-	out
-}
-
-fn parse_short_status_line(line: &str) -> Option<StatusEntry> {
-	let status = line.get(..2)?;
-	let path = line.get(3..)?.trim();
-	let mut chars = status.chars();
-	let x = chars.next()?;
-	let y = chars.next()?;
-	if line.chars().nth(2) != Some(' ')
-		|| path.is_empty()
-		|| !is_status_char(x)
-		|| !is_status_char(y)
-	{
-		return None;
-	}
-	Some(StatusEntry { status: status.to_string(), path: path.to_string() })
-}
-
-fn parse_long_status_line(trimmed: &str, current_section: Option<&str>) -> Option<StatusEntry> {
-	let (kind, path) = trimmed.split_once(':')?;
-	let path = path.trim();
-	if path.is_empty() {
-		return None;
-	}
-	let status = match current_section {
-		Some("staged") => match kind {
-			"new file" => "A ",
-			"deleted" => "D ",
-			"renamed" => "R ",
-			_ => "M ",
-		},
-		Some("unstaged") => match kind {
-			"deleted" => " D",
-			_ => " M",
-		},
-		Some("untracked") => "??",
-		Some("conflicts") => "UU",
-		_ => return None,
-	};
-	Some(StatusEntry { status: status.to_string(), path: path.to_string() })
-}
-
-const fn is_status_char(ch: char) -> bool {
-	matches!(ch, ' ' | 'M' | 'A' | 'D' | 'R' | 'C' | 'U' | '?' | '!')
-}
-
-fn count_status(status: &str, counts: &mut StatusCounts) {
-	if status == "??" {
-		counts.untracked += 1;
-		return;
-	}
-	if status.contains('U') {
-		counts.conflicts += 1;
-		return;
-	}
-	let mut chars = status.chars();
-	if matches!(chars.next(), Some('M' | 'A' | 'D' | 'R' | 'C')) {
-		counts.staged += 1;
-	}
-	if matches!(chars.next(), Some('M' | 'D')) {
-		counts.unstaged += 1;
-	}
-}
-
-fn status_group_label(status: &str) -> &'static str {
-	if status == "??" {
-		return "Untracked";
-	}
-	if status.contains('U') {
-		return "Conflicts";
-	}
-	let mut chars = status.chars();
-	if matches!(chars.next(), Some('M' | 'A' | 'D' | 'R' | 'C')) {
-		return "Staged";
-	}
-	if matches!(chars.next(), Some('M' | 'D')) {
-		return "Modified";
-	}
-	"Changed"
-}
-
-fn push_count(out: &mut String, label: &str, count: usize) {
-	if count == 0 {
-		return;
-	}
-	out.push_str(label);
-	out.push_str(": ");
-	out.push_str(&count.to_string());
-	out.push('\n');
 }
 
 fn is_show_path_content(command: &str) -> bool {
@@ -572,29 +381,8 @@ mod tests {
 	}
 
 	#[test]
-	fn status_compacts_paths_into_groups() {
-		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
-		let ctx = test_ctx(Some("status"), "git status --short", &cfg);
-		let input = "## main\n M packages/agent/lib/agent.ts\n M \
-		             packages/agent/tests/session-restore.test.ts\n?? \
-		             crates/pi-natives/src/shell/minimizer/filters/git.rs\n";
-		let out = filter(&ctx, input, 0);
-		assert!(out.changed);
-		assert!(out.text.contains("git status: main"));
-		assert!(out.text.contains("modified: 2"));
-		assert!(out.text.contains("untracked: 1"));
-		assert!(
-			out.text
-				.contains("Modified:\n  packages/agent/lib/agent.ts")
-		);
-		assert!(
-			out.text
-				.contains("  packages/agent/tests/session-restore.test.ts")
-		);
-		assert!(
-			out.text
-				.contains("Untracked:\n  crates/pi-natives/src/shell/minimizer/filters/git.rs")
-		);
+	fn status_is_not_supported() {
+		assert!(!supports(Some("status")));
 	}
 
 	#[test]

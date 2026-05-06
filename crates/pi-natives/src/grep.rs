@@ -1110,9 +1110,8 @@ mod tests {
 		std::thread::sleep(Duration::from_millis(1));
 		let result = grep_sync(base_grep_config(root.path()), None, ct);
 
-		let err = match result {
-			Ok(_) => panic!("pre-cancelled grep should fail before returning matches"),
-			Err(err) => err,
+		let Err(err) = result else {
+			panic!("pre-cancelled grep should fail before returning matches");
 		};
 		assert!(
 			err.to_string().contains("Timeout"),

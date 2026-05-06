@@ -325,10 +325,20 @@ mod tests {
 	#[test]
 	fn enabled_known_filter_minimizes() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
-		assert!(should_minimize("git status", &cfg));
-		let out = apply("git status", "## main\n M file.rs\n", 0, &cfg);
+		assert!(should_minimize("git diff", &cfg));
+		let out = apply("git diff", "diff --git a/file.rs b/file.rs\n@@\n-old\n+new\n", 0, &cfg);
 		assert!(out.changed);
-		assert!(out.text.contains("modified: 1"));
+		assert!(out.text.contains("file changed"));
+	}
+
+	#[test]
+	fn enabled_config_does_not_minimize_git_status() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		assert!(!should_minimize("git status", &cfg));
+		let input = "## main\n M file.rs\n";
+		let out = apply("git status", input, 0, &cfg);
+		assert!(!out.changed);
+		assert_eq!(out.text, input);
 	}
 
 	#[test]
