@@ -3,6 +3,12 @@ Plan approved. You **MUST** execute it now.
 </critical>
 
 Finalized plan artifact: `{{finalPlanFilePath}}`
+{{#if contextPreserved}}
+Context was preserved for execution. Use the existing conversation history when it is useful, and treat the finalized plan as the source of truth if it conflicts with earlier exploration.
+{{else}}
+Execution may be running in fresh context. Treat the finalized plan as the source of truth.
+{{/if}}
+
 
 ## Plan
 

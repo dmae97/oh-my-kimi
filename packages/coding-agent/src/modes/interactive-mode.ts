@@ -1060,7 +1060,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #approvePlan(
 		planContent: string,
-		options: { planFilePath: string; finalPlanFilePath: string },
+		options: { planFilePath: string; finalPlanFilePath: string; preserveContext?: boolean },
 	): Promise<void> {
 		await renameApprovedPlanFile({
 			planFilePath: options.planFilePath,
@@ -1070,14 +1070,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 		const previousTools = this.#planModePreviousTools ?? this.session.getActiveToolNames();
 		await this.#exitPlanMode({ silent: true, paused: false });
-		await this.handleClearCommand();
-		// The new session has a fresh local:// root — persist the approved plan there
-		// so `local://<title>.md` resolves correctly in the execution session.
-		const newLocalPath = resolveLocalUrlToPath(options.finalPlanFilePath, {
-			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-			getSessionId: () => this.sessionManager.getSessionId(),
-		});
-		await Bun.write(newLocalPath, planContent);
+		if (!options.preserveContext) {
+			await this.handleClearCommand();
+			// The new session has a fresh local:// root — persist the approved plan there
+			// so `local://<title>.md` resolves correctly in the execution session.
+			const newLocalPath = resolveLocalUrlToPath(options.finalPlanFilePath, {
+				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
+				getSessionId: () => this.sessionManager.getSessionId(),
+			});
+			await Bun.write(newLocalPath, planContent);
+		}
 		if (previousTools.length > 0) {
 			await this.session.setActiveToolsByName(previousTools);
 		}
@@ -1086,6 +1088,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const planModePrompt = prompt.render(planModeApprovedPrompt, {
 			planContent,
 			finalPlanFilePath: options.finalPlanFilePath,
+			contextPreserved: options.preserveContext === true,
 		});
 		await this.session.prompt(planModePrompt, { synthetic: true });
 	}
@@ -1129,14 +1132,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#renderPlanPreview(planContent);
 		const choice = await this.showHookSelector(
 			"Plan mode - next step",
-			["Approve and execute", "Refine plan", "Stay in plan mode"],
+			["Approve and execute", "Approve and keep context", "Refine plan", "Stay in plan mode"],
 			{
 				helpText: this.#getPlanReviewHelpText(),
 				onExternalEditor: () => void this.#openPlanInExternalEditor(planFilePath),
 			},
 		);
 
-		if (choice === "Approve and execute") {
+		if (choice === "Approve and execute" || choice === "Approve and keep context") {
 			const finalPlanFilePath = details.finalPlanFilePath || planFilePath;
 			try {
 				const latestPlanContent = await this.#readPlanFile(planFilePath);
@@ -1144,7 +1147,11 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.showError(`Plan file not found at ${planFilePath}`);
 					return;
 				}
-				await this.#approvePlan(latestPlanContent, { planFilePath, finalPlanFilePath });
+				await this.#approvePlan(latestPlanContent, {
+					planFilePath,
+					finalPlanFilePath,
+					preserveContext: choice === "Approve and keep context",
+				});
 			} catch (error) {
 				this.showError(
 					`Failed to finalize approved plan: ${error instanceof Error ? error.message : String(error)}`,

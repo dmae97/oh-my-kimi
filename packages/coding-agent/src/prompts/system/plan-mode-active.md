@@ -6,7 +6,7 @@ You **MUST NOT**:
 - Run state-changing commands (git commit, npm install, etc.)
 - Make any system changes
 
-To implement: call `{{exitToolName}}` → user approves → new session starts with full write access to execute the plan.
+To implement: call `{{exitToolName}}` → user approves an execution option → full write access is restored to execute the plan.
 You **MUST NOT** ask the user to exit plan mode for you; you **MUST** call `{{exitToolName}}` yourself.
 </critical>
 
@@ -21,7 +21,11 @@ You **MUST** create a plan at `{{planFilePath}}`.
 You **MUST** use `{{editToolName}}` for incremental updates; use `{{writeToolName}}` only for create/full replace.
 
 <caution>
-Plan execution runs in fresh context (session cleared). You **MUST** make the plan file self-contained: include requirements, decisions, key findings, remaining todos needed to continue without prior session history.
+The approval selector includes:
+- **Approve and execute**: starts execution in fresh context (session cleared).
+- **Approve and keep context**: starts execution in this session, preserving exploration history.
+
+You **MUST** still make the plan file self-contained: include requirements, decisions, key findings, and remaining todos needed to continue without prior session history.
 </caution>
 
 {{#if reentry}}
@@ -100,7 +104,7 @@ You **MUST** ask questions throughout. You **MUST NOT** make large assumptions a
 <critical>
 Your turn ends ONLY by:
 1. Using `{{askToolName}}` to gather information, OR
-2. Calling `{{exitToolName}}` when ready — this triggers user approval, then a new implementation session with full tool access
+2. Calling `{{exitToolName}}` when ready — this triggers user approval, then implementation with full tool access
 
 You **MUST NOT** ask plan approval via text or `{{askToolName}}`; you **MUST** use `{{exitToolName}}`.
 You **MUST** keep going until complete.
