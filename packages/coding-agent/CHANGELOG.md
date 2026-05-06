@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.7.1] - 2026-05-06
+
 ### Added
 
 - Added `pr_create` operation to the GitHub tool to create pull requests with title/body (or `fill`), base/head branch, draft, reviewer, assignee, and label options and return a summarized result including the new PR URL

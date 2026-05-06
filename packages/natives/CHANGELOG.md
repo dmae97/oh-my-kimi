@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.7.1] - 2026-05-06
+
 ### Added
 
 - Added `size` property to `GlobMatch` for regular files to expose their byte size
