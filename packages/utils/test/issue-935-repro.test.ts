@@ -8,15 +8,15 @@ describe("issue #935 path equivalence", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("preserves the lexical project path instead of canonicalizing symlink or junction targets", () => {
+	it("falls back to the lexical project path when realpath fails", () => {
 		const inputPath = path.resolve("/sessions/link-project");
-		const targetPath = path.resolve("/sessions/real-project");
-		const realpathSpy = vi.spyOn(fs, "realpathSync").mockImplementation(((p: fs.PathLike) => {
-			if (path.resolve(String(p)) === inputPath) return targetPath;
-			return path.resolve(String(p));
-		}) as typeof fs.realpathSync);
+		const realpathSpy = vi.spyOn(fs, "realpathSync").mockImplementation((() => {
+			const error = new Error("ENOENT: no such file or directory, realpath");
+			(error as NodeJS.ErrnoException).code = "ENOENT";
+			throw error;
+		}) as unknown as typeof fs.realpathSync);
 
 		expect(resolveEquivalentPath(inputPath)).toBe(inputPath);
-		expect(realpathSpy).not.toHaveBeenCalled();
+		expect(realpathSpy).toHaveBeenCalledWith(inputPath);
 	});
 });

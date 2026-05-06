@@ -10,7 +10,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { $env, getProjectDir, logger, postmortem, setProjectDir, VERSION } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	getProjectDir,
+	logger,
+	normalizePathForComparison,
+	postmortem,
+	setProjectDir,
+	VERSION,
+} from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import type { Args } from "./cli/args";
 import { processFileArguments } from "./cli/file-processor";
@@ -215,11 +223,6 @@ async function runInteractiveMode(
 	}
 }
 
-function normalizePathForComparison(value: string): string {
-	const resolved = path.resolve(value);
-	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
 async function promptForkSession(session: SessionInfo): Promise<boolean> {
 	if (!process.stdin.isTTY) {
 		return false;
@@ -348,10 +351,7 @@ async function maybeAutoChdir(parsed: Args): Promise<void> {
 		return;
 	}
 
-	const normalizePath = (value: string) => {
-		const resolved = path.resolve(value);
-		return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-	};
+	const normalizePath = normalizePathForComparison;
 
 	const cwd = normalizePath(getProjectDir());
 	const normalizedHome = normalizePath(home);

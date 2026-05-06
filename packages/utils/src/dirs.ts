@@ -48,7 +48,12 @@ function standardizeMacOSPath(p: string): string {
 }
 
 export function resolveEquivalentPath(inputPath: string): string {
-	return path.resolve(inputPath);
+	const resolvedPath = path.resolve(inputPath);
+	try {
+		return fs.realpathSync(resolvedPath);
+	} catch {
+		return resolvedPath;
+	}
 }
 
 export function normalizePathForComparison(inputPath: string): string {

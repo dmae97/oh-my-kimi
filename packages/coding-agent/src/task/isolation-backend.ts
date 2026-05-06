@@ -9,7 +9,7 @@ export interface IsolationBackendResolution {
 	warning: string;
 }
 
-type ProcessorEnv = Pick<NodeJS.ProcessEnv, "PROCESSOR_ARCHITECTURE" | "PROCESSOR_ARCHITEW6432">;
+type ProcessorEnv = Partial<Pick<NodeJS.ProcessEnv, "PROCESSOR_ARCHITECTURE" | "PROCESSOR_ARCHITEW6432">>;
 
 function isWindowsArm64HostUnderX64Emulation(
 	platform: NodeJS.Platform,
@@ -28,7 +28,7 @@ export async function resolveIsolationBackendForTaskExecution(
 	repoRoot: string | null,
 	platform: NodeJS.Platform = process.platform,
 	arch: NodeJS.Architecture = process.arch,
-	env: ProcessorEnv = process.env,
+	env: ProcessorEnv = process.env as ProcessorEnv,
 ): Promise<IsolationBackendResolution> {
 	let effectiveIsolationMode = requestedMode;
 	let warning = "";
