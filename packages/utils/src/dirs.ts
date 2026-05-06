@@ -281,9 +281,9 @@ export function getPythonEnvDir(): string {
 	return dirs.rootSubdir("python-env", "data");
 }
 
-/** Get the shared Python gateway state directory (~/.omp/python-gateway). */
+/** Get the shared Python gateway state directory (~/.omp/agent/python-gateway; XDG default: $XDG_STATE_HOME/omp/python-gateway). */
 export function getPythonGatewayDir(): string {
-	return dirs.rootSubdir("python-gateway", "state");
+	return dirs.agentSubdir(undefined, "python-gateway", "state");
 }
 
 /** Get the puppeteer sandbox directory (~/.omp/puppeteer). */
