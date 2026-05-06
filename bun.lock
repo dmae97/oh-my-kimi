@@ -71,6 +71,7 @@
         "@oh-my-pi/pi-utils": "catalog:",
         "@puppeteer/browsers": "catalog:",
         "@sinclair/typebox": "catalog:",
+        "@types/turndown": "catalog:",
         "@xterm/headless": "catalog:",
         "ajv": "catalog:",
         "chalk": "catalog:",
@@ -87,7 +88,6 @@
       },
       "devDependencies": {
         "@types/bun": "catalog:",
-        "@types/turndown": "catalog:",
       },
     },
     "packages/natives": {
