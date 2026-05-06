@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed SearXNG web search Basic Auth validation to reject RFC 7617 control characters and clarified the equivalent `config.yml` and environment variable settings.
+
 ## [14.7.1] - 2026-05-06
 
 ### Added
