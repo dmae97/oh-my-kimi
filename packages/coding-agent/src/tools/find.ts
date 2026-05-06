@@ -88,6 +88,8 @@ export interface FindToolOptions {
 
 export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 	readonly name = "find";
+	readonly summary = "Find files and directories matching a glob pattern";
+	readonly loadMode = "discoverable";
 	readonly label = "Find";
 	readonly description: string;
 	readonly parameters = findSchema;

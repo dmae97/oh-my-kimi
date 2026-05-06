@@ -35,9 +35,11 @@ export interface RenderMermaidToolDetails {
 export class RenderMermaidTool implements AgentTool<typeof renderMermaidSchema, RenderMermaidToolDetails> {
 	readonly name = "render_mermaid";
 	readonly label = "RenderMermaid";
+	readonly summary = "Render a Mermaid diagram to an image";
 	readonly description: string;
 	readonly parameters = renderMermaidSchema;
 	readonly strict = true;
+	readonly loadMode = "discoverable";
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(renderMermaidDescription);

@@ -236,6 +236,7 @@ function formatTimeoutClampNotice(requestedTimeoutSec: number, effectiveTimeoutS
 export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	readonly name = "bash";
 	readonly label = "Bash";
+	readonly loadMode = "essential";
 	readonly description: string;
 	readonly parameters: BashToolSchema;
 	readonly concurrency = "exclusive";

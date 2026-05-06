@@ -116,7 +116,6 @@ import {
 } from "./tool-discovery/tool-index";
 import {
 	BashTool,
-	BUILTIN_TOOL_METADATA,
 	BUILTIN_TOOLS,
 	computeEssentialBuiltinNames,
 	createTools,
@@ -284,7 +283,6 @@ export {
 	// Individual tool classes (for custom usage)
 	BashTool,
 	// Tool classes and factories
-	BUILTIN_TOOL_METADATA,
 	BUILTIN_TOOLS,
 	createTools,
 	EditTool,
@@ -1358,19 +1356,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			toolContextStore.setToolNames(toolNames);
 			const discoverableMCPTools = mcpDiscoveryEnabled ? collectDiscoverableMCPTools(tools.values()) : [];
 			const activeToolNames = new Set(toolNames);
-			const builtinSummaryMap = new Map(
-				Object.entries(BUILTIN_TOOL_METADATA)
-					.filter(([, meta]) => typeof meta.summary === "string")
-					.map(([name, meta]) => [name, meta.summary!] as const),
-			);
 			const discoverableBuiltinTools: DiscoverableTool[] =
 				effectiveDiscoveryMode === "all"
 					? collectDiscoverableTools(
-							Array.from(tools.values()).filter(tool => {
-								const meta = BUILTIN_TOOL_METADATA[tool.name];
-								return meta?.loadMode === "discoverable" && !activeToolNames.has(tool.name);
-							}),
-							{ source: "builtin", summaryMap: builtinSummaryMap },
+							Array.from(tools.values()).filter(
+								tool => tool.loadMode === "discoverable" && !activeToolNames.has(tool.name),
+							),
+							{ source: "builtin" },
 						)
 					: [];
 			const discoverableToolsForDesc: DiscoverableTool[] = [
@@ -1527,9 +1519,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// activation persistence is a follow-up). MCP names won't collide with built-in names.
 			const restoredDiscoveredNames = new Set(existingSession.selectedMCPToolNames);
 			initialToolNames = initialToolNames.filter(name => {
-				const meta = BUILTIN_TOOL_METADATA[name];
-				if (!meta) return true; // not a built-in — leave MCP/custom/extension to existing logic
-				if (meta.loadMode === "essential") return true;
+				const tool = toolRegistry.get(name);
+				if (!tool?.loadMode) return true; // not a built-in — leave MCP/custom/extension to existing logic
+				if (tool.loadMode === "essential") return true;
 				if (essentialBuiltinNames.has(name)) return true;
 				if (explicitlyRequestedToolNames.has(name)) return true;
 				if (restoredDiscoveredNames.has(name)) return true;

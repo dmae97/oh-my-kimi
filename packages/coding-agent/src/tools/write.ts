@@ -166,6 +166,8 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	readonly nonAbortable = true;
 	readonly strict = true;
 	readonly concurrency = "exclusive";
+	readonly loadMode = "discoverable";
+	readonly summary = "Write content to a file (creates or overwrites)";
 
 	readonly #writethrough: WritethroughCallback;
 

@@ -248,6 +248,10 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	hidden?: boolean;
 	/** If true, tool can stage a pending action that requires explicit resolution via the resolve tool. */
 	deferrable?: boolean;
+	/** Built-in tool loading behavior. "essential" loads initially; "discoverable" can be activated by tool search. */
+	loadMode?: "essential" | "discoverable";
+	/** Short one-line summary used for tool discovery indexes. */
+	summary?: string;
 	/** If true, tool execution ignores abort signals (runs to completion) */
 	nonAbortable?: boolean;
 	/**

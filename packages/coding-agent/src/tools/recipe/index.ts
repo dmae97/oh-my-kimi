@@ -33,6 +33,8 @@ export class RecipeTool implements AgentTool<typeof recipeSchema, BashToolDetail
 	readonly parameters = recipeSchema;
 	readonly strict = true;
 	readonly concurrency = "exclusive";
+	readonly loadMode = "discoverable";
+	readonly summary = "Execute a saved bash recipe (multi-step shell command preset)";
 	readonly mergeCallAndResult = true;
 	readonly inline = true;
 	readonly renderCall: (args: RecipeRenderArgs, options: RenderResultOptions, uiTheme: Theme) => Component;

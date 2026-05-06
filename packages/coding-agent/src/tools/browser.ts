@@ -110,6 +110,8 @@ function resolveBrowserKind(params: BrowserParams, session: ToolSession): Browse
 export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolDetails> {
 	readonly name = "browser";
 	readonly label = "Browser";
+	readonly loadMode = "discoverable";
+	readonly summary = "Control a headless browser to navigate and interact with web pages";
 	readonly parameters = browserSchema;
 	readonly strict = true;
 

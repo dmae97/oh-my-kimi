@@ -80,6 +80,8 @@ type SearchParams = Static<typeof searchSchema>;
 export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDetails> {
 	readonly name = "search";
 	readonly label = "Search";
+	readonly loadMode = "discoverable";
+	readonly summary = "Search file contents using ripgrep (fast text search)";
 	readonly description: string;
 	readonly parameters = searchSchema;
 	readonly strict = true;

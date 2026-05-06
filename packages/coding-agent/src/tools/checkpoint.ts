@@ -49,9 +49,11 @@ function isTopLevelSession(session: ToolSession): boolean {
 export class CheckpointTool implements AgentTool<typeof checkpointSchema, CheckpointToolDetails> {
 	readonly name = "checkpoint";
 	readonly label = "Checkpoint";
+	readonly summary = "Create a git-based checkpoint to save and restore session state";
 	readonly description: string;
 	readonly parameters = checkpointSchema;
 	readonly strict = true;
+	readonly loadMode = "discoverable";
 	readonly intent = (args: Partial<CheckpointParams>) => (args.goal ? `checkpointing: ${args.goal}` : "checkpointing");
 
 	constructor(private readonly session: ToolSession) {
@@ -92,9 +94,11 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 export class RewindTool implements AgentTool<typeof rewindSchema, RewindToolDetails> {
 	readonly name = "rewind";
 	readonly label = "Rewind";
+	readonly summary = "Rewind to a previously created checkpoint";
 	readonly description: string;
 	readonly parameters = rewindSchema;
 	readonly strict = true;
+	readonly loadMode = "discoverable";
 	readonly intent = (): string => "rewinding";
 
 	constructor(private readonly session: ToolSession) {

@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `loadMode` option to `AgentTool` to mark built-in tools as `essential` for initial loading or `discoverable` for search activation
+- Added optional `summary` field to `AgentTool` definitions for one-line text used in tool discovery indexes
 
 ## [14.7.0] - 2026-05-04
 ### Breaking Changes

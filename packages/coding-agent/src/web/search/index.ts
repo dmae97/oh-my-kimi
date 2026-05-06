@@ -211,6 +211,8 @@ export class WebSearchTool implements AgentTool<typeof webSearchSchema, SearchRe
 	readonly description: string;
 	readonly parameters = webSearchSchema;
 	readonly strict = true;
+	readonly loadMode = "discoverable";
+	readonly summary = "Search the web for up-to-date information";
 
 	constructor(_session: ToolSession) {
 		this.description = prompt.render(webSearchDescription);

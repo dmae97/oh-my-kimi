@@ -156,12 +156,19 @@ export function getDiscoverableTool(
 		label?: string;
 		description?: string;
 		mcpServerName?: string;
+		summary?: string;
 		mcpToolName?: string;
 		parameters?: unknown;
 	};
 	const source: DiscoverableToolSource = overrides?.source ?? (isMCPToolName(tool.name) ? "mcp" : "builtin");
+	const rawSummary =
+		typeof overrides?.summary === "string"
+			? overrides.summary
+			: typeof toolRecord.summary === "string"
+				? toolRecord.summary
+				: undefined;
 	const rawDescription = typeof toolRecord.description === "string" ? toolRecord.description : "";
-	const summary = overrides?.summary ?? rawDescription.slice(0, 200);
+	const summary = rawSummary ?? rawDescription.slice(0, 200);
 	return {
 		name: tool.name,
 		label: typeof toolRecord.label === "string" ? toolRecord.label : tool.name,

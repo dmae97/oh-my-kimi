@@ -120,6 +120,8 @@ type SshToolParams = Static<typeof sshSchema>;
 
 export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 	readonly name = "ssh";
+	readonly summary = "Execute a command on a remote host over SSH";
+	readonly loadMode = "discoverable";
 	readonly label = "SSH";
 	readonly parameters = sshSchema;
 	readonly concurrency = "exclusive";

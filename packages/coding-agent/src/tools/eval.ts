@@ -207,6 +207,8 @@ async function resolveBackend(
 
 export class EvalTool implements AgentTool<typeof evalSchema> {
 	readonly name = "eval";
+	readonly summary = "Execute Python or JavaScript code in an in-process eval backend";
+	readonly loadMode = "discoverable";
 	readonly label = "Eval";
 	get description(): string {
 		if (!this.session) return getEvalToolDescription();

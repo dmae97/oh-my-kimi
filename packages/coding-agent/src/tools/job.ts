@@ -76,10 +76,11 @@ export interface JobToolDetails {
 export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 	readonly name = "job";
 	readonly label = "Job";
+	readonly summary = "Manage long-running background jobs (async bash/python)";
 	readonly description: string;
 	readonly parameters = jobSchema;
 	readonly strict = true;
-
+	readonly loadMode = "discoverable";
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(jobDescription);
 	}

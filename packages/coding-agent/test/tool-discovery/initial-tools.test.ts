@@ -1,12 +1,65 @@
 import { describe, expect, it } from "bun:test";
 import { Settings } from "../../src/config/settings";
+import type { ToolSession } from "../../src/tools/index";
 import {
-	BUILTIN_TOOL_METADATA,
+	AskTool,
 	BUILTIN_TOOLS,
 	computeEssentialBuiltinNames,
+	createTools,
 	DEFAULT_ESSENTIAL_TOOL_NAMES,
+	IrcTool,
+	JobTool,
+	RecipeTool,
+	SshTool,
 } from "../../src/tools/index";
 
+const allToolsSettings = Settings.isolated({
+	"astGrep.enabled": true,
+	"astEdit.enabled": true,
+	"renderMermaid.enabled": true,
+	"debug.enabled": true,
+	"find.enabled": true,
+	"search.enabled": true,
+	"github.enabled": true,
+	"lsp.enabled": true,
+	"notebook.enabled": true,
+	"inspect_image.enabled": true,
+	"web_search.enabled": true,
+	"calc.enabled": true,
+	"browser.enabled": true,
+	"checkpoint.enabled": true,
+	"irc.enabled": true,
+	"recipe.enabled": true,
+	"todo.enabled": true,
+	"memory.backend": "hindsight",
+	"tools.discoveryMode": "all",
+});
+
+const toolSession: ToolSession = {
+	cwd: "/tmp/test",
+	hasUI: false,
+	getSessionFile: () => null,
+	getSessionSpawns: () => null,
+	settings: allToolsSettings,
+	isToolDiscoveryEnabled: () => true,
+	getSelectedDiscoveredToolNames: () => [],
+	activateDiscoveredTools: async names => names,
+};
+
+async function getToolMetadata(): Promise<Map<string, { loadMode?: string; summary?: string }>> {
+	const tools = await createTools(toolSession, Object.keys(BUILTIN_TOOLS));
+	const metadata = new Map(tools.map(tool => [tool.name, { loadMode: tool.loadMode, summary: tool.summary }]));
+	for (const tool of [
+		new AskTool({ ...toolSession, hasUI: true }),
+		new SshTool(toolSession, [], new Map(), ""),
+		new JobTool(toolSession),
+		new RecipeTool(toolSession, []),
+		new IrcTool(toolSession),
+	]) {
+		metadata.set(tool.name, { loadMode: tool.loadMode, summary: tool.summary });
+	}
+	return metadata;
+}
 describe("BUILTIN_TOOLS public factory map", () => {
 	it("exposes callable tool factories (back-compat for external SDK callers)", () => {
 		// External callers may invoke BUILTIN_TOOLS.read(session) directly. Verify the value
@@ -16,31 +69,23 @@ describe("BUILTIN_TOOLS public factory map", () => {
 		expect(typeof BUILTIN_TOOLS.edit).toBe("function");
 	});
 
-	it("has a callable factory for every metadata entry", () => {
-		for (const name of Object.keys(BUILTIN_TOOL_METADATA)) {
-			expect(typeof BUILTIN_TOOLS[name]).toBe("function");
-		}
-	});
-
-	it("has metadata for every factory entry", () => {
-		for (const name of Object.keys(BUILTIN_TOOLS)) {
-			expect(BUILTIN_TOOL_METADATA[name]).toBeDefined();
-		}
+	it("sets loading fields on tool definitions without wrapping factories", async () => {
+		const metadata = await getToolMetadata();
+		const missing = Object.keys(BUILTIN_TOOLS).filter(name => metadata.get(name)?.loadMode === undefined);
+		expect(missing).toEqual([]);
 	});
 });
 
-describe("BUILTIN_TOOL_METADATA loadMode annotations", () => {
-	it("marks read, bash, edit as essential", () => {
-		expect(BUILTIN_TOOL_METADATA.read?.loadMode).toBe("essential");
-		expect(BUILTIN_TOOL_METADATA.bash?.loadMode).toBe("essential");
-		expect(BUILTIN_TOOL_METADATA.edit?.loadMode).toBe("essential");
+describe("built-in tool loadMode annotations", () => {
+	it("marks read, bash, edit, and search_tool_bm25 as essential", async () => {
+		const metadata = await getToolMetadata();
+		expect(metadata.get("read")?.loadMode).toBe("essential");
+		expect(metadata.get("bash")?.loadMode).toBe("essential");
+		expect(metadata.get("edit")?.loadMode).toBe("essential");
+		expect(metadata.get("search_tool_bm25")?.loadMode).toBe("essential");
 	});
 
-	it("marks search_tool_bm25 as essential (discovery tool itself)", () => {
-		expect(BUILTIN_TOOL_METADATA.search_tool_bm25?.loadMode).toBe("essential");
-	});
-
-	it("marks non-essential tools as discoverable", () => {
+	it("marks non-essential tools as discoverable", async () => {
 		const discoverableExpected = [
 			"ast_grep",
 			"ast_edit",
@@ -70,14 +115,15 @@ describe("BUILTIN_TOOL_METADATA loadMode annotations", () => {
 			"recall",
 			"reflect",
 		];
-		for (const name of discoverableExpected) {
-			expect(BUILTIN_TOOL_METADATA[name]?.loadMode).toBe("discoverable");
-		}
+		const metadata = await getToolMetadata();
+		const missing = discoverableExpected.filter(name => metadata.get(name)?.loadMode !== "discoverable");
+		expect(missing).toEqual([]);
 	});
 
-	it("provides a summary for every discoverable tool", () => {
+	it("provides a summary for every discoverable tool", async () => {
 		const missing: string[] = [];
-		for (const [name, meta] of Object.entries(BUILTIN_TOOL_METADATA)) {
+		const metadata = await getToolMetadata();
+		for (const [name, meta] of metadata) {
 			if (meta.loadMode === "discoverable" && !meta.summary) {
 				missing.push(name);
 			}

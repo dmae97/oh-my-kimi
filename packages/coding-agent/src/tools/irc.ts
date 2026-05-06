@@ -74,10 +74,11 @@ export interface IrcDetails {
 export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 	readonly name = "irc";
 	readonly label = "IRC";
+	readonly summary = "Send and receive messages between agents over IRC-like channels";
 	readonly description: string;
 	readonly parameters = ircSchema;
 	readonly strict = true;
-
+	readonly loadMode = "discoverable";
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(ircDescription);
 	}

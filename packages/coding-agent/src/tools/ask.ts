@@ -379,9 +379,11 @@ type AskParams = AskToolInput;
 export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	readonly name = "ask";
 	readonly label = "Ask";
+	readonly summary = "Ask the user a clarifying question";
 	readonly description: string;
 	readonly parameters = askSchema;
 	readonly strict = true;
+	readonly loadMode = "discoverable";
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(askDescription);

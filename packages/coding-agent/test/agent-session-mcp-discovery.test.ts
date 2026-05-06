@@ -915,7 +915,10 @@ describe("AgentSession MCP discovery", () => {
 	// ── Findings #4: built-in discovery is restricted to declared discoverable ─
 	it("getDiscoverableTools({source:'builtin'}) excludes hidden and non-declared registry tools", () => {
 		const readTool = createBasicTool("read", "Read");
+		readTool.loadMode = "essential";
 		const findTool = createBasicTool("find", "Find");
+		findTool.loadMode = "discoverable";
+		findTool.summary = "Find files and directories matching a glob pattern";
 		const resolveTool = createBasicTool("resolve", "Resolve"); // hidden — must be excluded
 		const customTool = createBasicTool("custom_inactive", "Custom"); // not in metadata — must be excluded
 		const toolRegistry = new Map([
@@ -942,7 +945,7 @@ describe("AgentSession MCP discovery", () => {
 		const names = builtin.map(t => t.name);
 		expect(names).toContain("find"); // declared discoverable AND present in registry
 		expect(names).not.toContain("read"); // already active
-		expect(names).not.toContain("resolve"); // hidden — not in BUILTIN_TOOL_METADATA
-		expect(names).not.toContain("custom_inactive"); // unknown — not in BUILTIN_TOOL_METADATA
+		expect(names).not.toContain("resolve"); // hidden — no discoverable loadMode
+		expect(names).not.toContain("custom_inactive"); // unknown — no discoverable loadMode
 	});
 });

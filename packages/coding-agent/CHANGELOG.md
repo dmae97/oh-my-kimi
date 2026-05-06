@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Removed the exported `BUILTIN_TOOL_METADATA` API, including `BuiltinEntry`-style metadata exports and discoverable-built-in helper exports, which will break consumers relying on those symbols
+
+### Changed
+
+- Updated discoverable tool search (`search_tool_bm25` and related discovery metadata) to read each tool’s own `summary` field when present, improving discoverability descriptions for built-in tools
 
 ### Fixed
 

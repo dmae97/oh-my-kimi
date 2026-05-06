@@ -234,22 +234,6 @@ export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool |
 
 export type BuiltinToolLoadMode = "essential" | "discoverable";
 
-/** Per-tool discovery metadata for built-ins. Kept separate from BUILTIN_TOOLS so the public
- *  factory map remains directly callable (`BUILTIN_TOOLS.read(session)`). */
-export interface BuiltinToolMetadata {
-	/** "essential" tools are always loaded regardless of discovery mode.
-	 *  "discoverable" tools are hidden behind search_tool_bm25 when tools.discoveryMode === "all". */
-	loadMode: BuiltinToolLoadMode;
-	/** Short one-line summary for the BM25 corpus (optional; falls back to tool description). */
-	summary?: string;
-}
-
-/** @deprecated Internal shape used by older callers. Prefer BUILTIN_TOOLS (factory) +
- *  BUILTIN_TOOL_METADATA (loadMode/summary). */
-export interface BuiltinEntry extends BuiltinToolMetadata {
-	factory: ToolFactory;
-}
-
 /** Default essential tool names when tools.essentialOverride is empty. */
 export const DEFAULT_ESSENTIAL_TOOL_NAMES: readonly string[] = ["read", "bash", "edit"] as const;
 
@@ -262,7 +246,7 @@ export function computeEssentialBuiltinNames(settings: Settings): string[] {
 	const override = settings.get("tools.essentialOverride") ?? [];
 	const cleaned = override.map(name => name.trim()).filter(Boolean);
 	if (cleaned.length > 0) {
-		return cleaned.filter(name => name in BUILTIN_TOOL_METADATA);
+		return cleaned.filter(name => name in BUILTIN_TOOLS);
 	}
 	return [...DEFAULT_ESSENTIAL_TOOL_NAMES];
 }
@@ -305,57 +289,6 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	reflect: HindsightReflectTool.createIf,
 };
 
-/**
- * Per-tool discovery metadata. Keys must align with BUILTIN_TOOLS. Used by initial-tool filtering
- * (sdk.ts) and discovery-corpus collection (search-tool-bm25). Kept separate so the public
- * BUILTIN_TOOLS map remains a directly callable factory record.
- */
-export const BUILTIN_TOOL_METADATA: Record<string, BuiltinToolMetadata> = {
-	read: { loadMode: "essential" },
-	bash: { loadMode: "essential" },
-	edit: { loadMode: "essential" },
-	ast_grep: { loadMode: "discoverable", summary: "Search code with AST patterns (structural grep)" },
-	ast_edit: { loadMode: "discoverable", summary: "Perform AST-aware code edits (structural refactoring)" },
-	render_mermaid: { loadMode: "discoverable", summary: "Render a Mermaid diagram to an image" },
-	ask: { loadMode: "discoverable", summary: "Ask the user a clarifying question" },
-	debug: { loadMode: "discoverable", summary: "Debug a running process with DAP (debugger adapter protocol)" },
-	eval: { loadMode: "discoverable", summary: "Execute Python or JavaScript code in an in-process eval backend" },
-	calc: { loadMode: "discoverable", summary: "Evaluate a mathematical expression" },
-	ssh: { loadMode: "discoverable", summary: "Execute a command on a remote host over SSH" },
-	github: { loadMode: "discoverable", summary: "Interact with GitHub issues, pull requests, and repositories" },
-	find: { loadMode: "discoverable", summary: "Find files and directories matching a glob pattern" },
-	search: { loadMode: "discoverable", summary: "Search file contents using ripgrep (fast text search)" },
-	lsp: {
-		loadMode: "discoverable",
-		summary: "Query LSP (language server) for diagnostics, hover info, and references",
-	},
-	notebook: { loadMode: "discoverable", summary: "Read and execute Jupyter notebooks" },
-	inspect_image: { loadMode: "discoverable", summary: "Describe or analyze an image file" },
-	browser: {
-		loadMode: "discoverable",
-		summary: "Control a headless browser to navigate and interact with web pages",
-	},
-	checkpoint: {
-		loadMode: "discoverable",
-		summary: "Create a git-based checkpoint to save and restore session state",
-	},
-	rewind: { loadMode: "discoverable", summary: "Rewind to a previously created checkpoint" },
-	task: { loadMode: "discoverable", summary: "Spawn a subagent to complete a parallel task" },
-	job: { loadMode: "discoverable", summary: "Manage long-running background jobs (async bash/python)" },
-	recipe: { loadMode: "discoverable", summary: "Execute a saved bash recipe (multi-step shell command preset)" },
-	irc: { loadMode: "discoverable", summary: "Send and receive messages between agents over IRC-like channels" },
-	todo_write: {
-		loadMode: "discoverable",
-		summary: "Write a structured todo list to track progress within a session",
-	},
-	web_search: { loadMode: "discoverable", summary: "Search the web for up-to-date information" },
-	search_tool_bm25: { loadMode: "essential" },
-	write: { loadMode: "discoverable", summary: "Write content to a file (creates or overwrites)" },
-	retain: { loadMode: "discoverable", summary: "Store important facts in hindsight memory" },
-	recall: { loadMode: "discoverable", summary: "Search hindsight memory for relevant prior context" },
-	reflect: { loadMode: "discoverable", summary: "Reflect on recent work and write hindsight memory" },
-};
-
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	yield: s => new YieldTool(s),
 	report_finding: () => reportFindingTool,
@@ -369,32 +302,6 @@ export type ToolName = keyof typeof BUILTIN_TOOLS;
 export interface EvalBackendsAllowance {
 	python: boolean;
 	js: boolean;
-}
-
-/**
- * Return all built-in tools whose metadata `loadMode` is "discoverable".
- * Used by search_tool_bm25 to build the BM25 corpus when tools.discoveryMode === "all".
- * Pass an optional exclusion set to filter out names that are already active.
- */
-export function getBuiltinDiscoverableEntries(
-	excludeNames?: ReadonlySet<string>,
-): Array<{ name: string; entry: BuiltinEntry }> {
-	return Object.entries(BUILTIN_TOOL_METADATA)
-		.filter(([name, meta]) => meta.loadMode === "discoverable" && !excludeNames?.has(name))
-		.map(([name, meta]) => {
-			const factory = BUILTIN_TOOLS[name];
-			if (!factory) {
-				throw new Error(`BUILTIN_TOOL_METADATA["${name}"] has no matching factory in BUILTIN_TOOLS`);
-			}
-			return { name, entry: { factory, ...meta } satisfies BuiltinEntry };
-		});
-}
-
-/** Names of all built-ins whose metadata `loadMode` is "discoverable". */
-export function getBuiltinDiscoverableNames(): string[] {
-	return Object.entries(BUILTIN_TOOL_METADATA)
-		.filter(([, meta]) => meta.loadMode === "discoverable")
-		.map(([name]) => name);
 }
 
 /**

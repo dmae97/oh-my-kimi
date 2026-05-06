@@ -137,7 +137,6 @@ import {
 } from "../tool-discovery/tool-index";
 import { assertEditableFile } from "../tools/auto-generated-guard";
 import type { CheckpointState } from "../tools/checkpoint";
-import { BUILTIN_TOOL_METADATA } from "../tools/index";
 import { outputMeta } from "../tools/output-meta";
 import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
@@ -2307,20 +2306,17 @@ export class AgentSession {
 		return filter?.source ? allTools.filter(t => t.source === filter.source) : allTools;
 	}
 
-	/** Collect built-in tools the model can discover via search_tool_bm25. Restricted to entries
-	 *  whose `BUILTIN_TOOL_METADATA[name].loadMode === "discoverable"`. This keeps hidden/internal
-	 *  tools (resolve, yield, exit_plan_mode, report_finding, report_tool_issue) out of the index
+	/** Collect built-in tools the model can discover via search_tool_bm25. Restricted to tool
+	 *  definitions whose `loadMode === "discoverable"`. This keeps hidden/internal tools
+	 *  (resolve, yield, exit_plan_mode, report_finding, report_tool_issue) out of the index
 	 *  and avoids mislabeling extension/custom default-inactive tools as built-ins. */
 	#collectDiscoverableBuiltinTools(): DiscoverableTool[] {
 		const activeNames = new Set(this.getActiveToolNames());
 		const result: DiscoverableTool[] = [];
-		for (const [name, meta] of Object.entries(BUILTIN_TOOL_METADATA)) {
-			if (meta.loadMode !== "discoverable") continue;
-			if (activeNames.has(name)) continue;
-			const tool = this.#toolRegistry.get(name);
-			if (!tool) continue;
-			const summaryMap = meta.summary ? new Map([[name, meta.summary]]) : undefined;
-			const collected = collectDiscoverableTools([tool], { source: "builtin", summaryMap });
+		for (const tool of this.#toolRegistry.values()) {
+			if (tool.loadMode !== "discoverable") continue;
+			if (activeNames.has(tool.name)) continue;
+			const collected = collectDiscoverableTools([tool], { source: "builtin" });
 			result.push(...collected);
 		}
 		return result;

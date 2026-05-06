@@ -597,10 +597,12 @@ export const debugToolRenderer = {
 export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails> {
 	readonly name = "debug";
 	readonly label = "Debug";
+	readonly summary = "Debug a running process with DAP (debugger adapter protocol)";
 	readonly description: string;
 	readonly parameters = debugSchema;
 	readonly strict = true;
 	readonly concurrency = "exclusive";
+	readonly loadMode = "discoverable";
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(debugDescription);

@@ -503,11 +503,12 @@ function formatSummary(phases: TodoPhase[], errors: string[]): string {
 export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWriteToolDetails> {
 	readonly name = "todo_write";
 	readonly label = "Todo Write";
+	readonly summary = "Write a structured todo list to track progress within a session";
 	readonly description: string;
 	readonly parameters = todoWriteSchema;
 	readonly concurrency = "exclusive";
 	readonly strict = true;
-
+	readonly loadMode = "discoverable";
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(todoWriteDescription);
 	}

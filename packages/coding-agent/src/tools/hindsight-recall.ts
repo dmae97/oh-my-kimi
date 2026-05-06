@@ -19,6 +19,8 @@ export class HindsightRecallTool implements AgentTool<typeof hindsightRecallSche
 	readonly description = recallDescription;
 	readonly parameters = hindsightRecallSchema;
 	readonly strict = true;
+	readonly loadMode = "discoverable";
+	readonly summary = "Search hindsight memory for relevant prior context";
 
 	constructor(private readonly session: ToolSession) {}
 
