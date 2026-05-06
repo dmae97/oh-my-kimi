@@ -82,11 +82,6 @@ import {
 	formatDiscoverableMCPToolServerSummary,
 	selectDiscoverableMCPToolNamesByServer,
 } from "./mcp/discoverable-tool-metadata";
-import {
-	collectDiscoverableTools,
-	summarizeDiscoverableTools,
-	type DiscoverableTool,
-} from "./tool-discovery/tool-index";
 import { getMemoryRoot } from "./memories";
 import { resolveMemoryBackend } from "./memory-backend";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
@@ -114,6 +109,11 @@ import {
 } from "./system-prompt";
 import { AgentOutputManager } from "./task/output-manager";
 import { parseThinkingLevel, resolveThinkingLevelForModel, toReasoningEffort } from "./thinking";
+import {
+	collectDiscoverableTools,
+	type DiscoverableTool,
+	summarizeDiscoverableTools,
+} from "./tool-discovery/tool-index";
 import {
 	BashTool,
 	BUILTIN_TOOL_METADATA,
