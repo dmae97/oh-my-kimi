@@ -13,6 +13,7 @@ import {
 	type Context,
 	type MessageAttribution,
 	type Model,
+	type OpenAICompat,
 	type ProviderSessionState,
 	type ServiceTier,
 	type StreamFunction,
@@ -431,7 +432,9 @@ function buildParams(
 
 		if (options?.reasoning || options?.reasoningSummary) {
 			params.reasoning = {
-				effort: options?.reasoning || "medium",
+				effort: mapReasoningEffort(options?.reasoning || "medium", model.compat?.reasoningEffortMap) as NonNullable<
+					OpenAIResponsesSamplingParams["reasoning"]
+				>["effort"],
 				summary: options?.reasoningSummary || "auto",
 			};
 		} else if (model.name.startsWith("gpt-5")) {
@@ -449,6 +452,13 @@ function buildParams(
 	}
 
 	return { conversationMessages, params };
+}
+
+function mapReasoningEffort(
+	effort: NonNullable<OpenAIResponsesOptions["reasoning"]>,
+	reasoningEffortMap: OpenAICompat["reasoningEffortMap"] | undefined,
+): string {
+	return reasoningEffortMap?.[effort] ?? effort;
 }
 
 function isAzureOpenAIBaseUrl(baseUrl: string): boolean {

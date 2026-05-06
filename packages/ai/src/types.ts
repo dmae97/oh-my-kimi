@@ -666,7 +666,7 @@ export interface Model<TApi extends Api = any> {
 	/** Canonical thinking capability metadata for this model. */
 	thinking?: ThinkingConfig;
 	/** Compatibility overrides per API. If not set, auto-detected from baseUrl. */
-	compat?: TApi extends "openai-completions"
+	compat?: TApi extends "openai-completions" | "openai-responses"
 		? OpenAICompat
 		: TApi extends "anthropic-messages"
 			? AnthropicCompat
