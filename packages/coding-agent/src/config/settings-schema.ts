@@ -1485,6 +1485,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"read.summarize.prose": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "editing",
+			label: "Prose Summaries",
+			description: "Return structural summaries for Markdown and plain text reads",
+		},
+	},
+
 	"read.summarize.minBodyLines": {
 		type: "number",
 		default: 4,

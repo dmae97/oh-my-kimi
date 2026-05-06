@@ -64,6 +64,24 @@ describe("read summary", () => {
 		expect(result.details?.summary?.elidedSpans).toBe(2);
 	});
 
+	it("summarizes Markdown only when prose summaries are enabled", async () => {
+		const fixture = path.join(tmpDir, "fixture.md");
+		await fs.writeFile(
+			fixture,
+			"# Heading\n\nIntro line.\n\n```ts\nexport function alpha(): string {\n\tconst clean = 'alpha';\n\treturn clean;\n}\n```\n\nMore prose.\n",
+		);
+
+		const defaultTool = new ReadTool(createSession(tmpDir));
+		const defaultResult = await defaultTool.execute("read-summary-md-default", { path: fixture });
+		expect(textOutput(defaultResult)).toContain("const clean = 'alpha';");
+		expect(defaultResult.details?.summary).toBeUndefined();
+
+		const proseTool = new ReadTool(createSession(tmpDir, Settings.isolated({ "read.summarize.prose": true })));
+		const proseResult = await proseTool.execute("read-summary-md-prose", { path: fixture });
+		expect(textOutput(proseResult)).not.toContain("const clean = 'alpha';");
+		expect(proseResult.details?.summary?.elidedSpans).toBe(1);
+	});
+
 	it("does not truncate summarized output", async () => {
 		const fixture = path.join(tmpDir, "many.ts");
 		const source = Array.from(
