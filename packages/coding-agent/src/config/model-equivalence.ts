@@ -50,6 +50,7 @@ const TRAILING_CANONICAL_MARKERS = [
 	"minimal",
 	"xhigh",
 	"free",
+	"cloud",
 	"exacto",
 	"nitro",
 	"original",

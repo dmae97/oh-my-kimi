@@ -298,7 +298,10 @@ function getOllamaThinkingConfig(capabilities: string[] | undefined): ThinkingCo
  * context and capability metadata from the response. Returns `undefined` when
  * the endpoint is unavailable so callers can layer their own fallback.
  */
-async function fetchOllamaShowMetadata(nativeBaseUrl: string, modelId: string): Promise<OllamaShowMetadata | undefined> {
+async function fetchOllamaShowMetadata(
+	nativeBaseUrl: string,
+	modelId: string,
+): Promise<OllamaShowMetadata | undefined> {
 	try {
 		const response = await fetch(`${nativeBaseUrl}/api/show`, {
 			method: "POST",

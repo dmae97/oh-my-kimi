@@ -733,6 +733,69 @@ function buildCustomModelOverlay(
 	};
 }
 
+// Custom provider entries often front a known upstream model through a local proxy.
+// Use bundled metadata for missing pricing/capability fields, but keep the custom transport.
+function shouldReplaceCustomReference(existing: Model<Api> | undefined, candidate: Model<Api>): boolean {
+	if (!existing) return true;
+	if (candidate.contextWindow !== existing.contextWindow) {
+		return candidate.contextWindow > existing.contextWindow;
+	}
+	if (candidate.maxTokens !== existing.maxTokens) {
+		return candidate.maxTokens > existing.maxTokens;
+	}
+	const existingHasCachePricing = existing.cost.cacheRead > 0 || existing.cost.cacheWrite > 0;
+	const candidateHasCachePricing = candidate.cost.cacheRead > 0 || candidate.cost.cacheWrite > 0;
+	if (candidateHasCachePricing !== existingHasCachePricing) {
+		return candidateHasCachePricing;
+	}
+	return existing.provider !== "openai" && candidate.provider === "openai";
+}
+
+function buildCustomReferenceMap(): Map<string, Model<Api>> {
+	const references = new Map<string, Model<Api>>();
+	for (const provider of getBundledProviders()) {
+		for (const model of getBundledModels(provider as Parameters<typeof getBundledModels>[0])) {
+			const candidate = model as Model<Api>;
+			if (shouldReplaceCustomReference(references.get(candidate.id), candidate)) {
+				references.set(candidate.id, candidate);
+			}
+		}
+	}
+	return references;
+}
+
+const customReferenceMap = buildCustomReferenceMap();
+
+function getCustomReferenceCandidateIds(modelId: string): string[] {
+	const candidates = new Set<string>();
+	const queue = [modelId];
+	for (let index = 0; index < queue.length; index += 1) {
+		const candidate = queue[index]?.trim();
+		if (!candidate || candidates.has(candidate)) continue;
+		candidates.add(candidate);
+
+		for (const suffix of [":cloud", "-cloud"] as const) {
+			if (candidate.toLowerCase().endsWith(suffix)) {
+				queue.push(candidate.slice(0, -suffix.length));
+			}
+		}
+
+		const colonToDash = candidate.replace(/:/g, "-");
+		if (colonToDash !== candidate) {
+			queue.push(colonToDash);
+		}
+	}
+	return [...candidates];
+}
+
+function resolveCustomModelReference(modelId: string): Model<Api> | undefined {
+	for (const candidate of getCustomReferenceCandidateIds(modelId)) {
+		const reference = customReferenceMap.get(candidate);
+		if (reference) return reference;
+	}
+	return undefined;
+}
+
 function applyStandaloneCustomModelPolicies(model: CustomModelOverlay): CustomModelOverlay {
 	if (model.id !== "gpt-5.4" || model.provider === "github-copilot" || model.contextWindow !== undefined) {
 		return model;
@@ -742,23 +805,27 @@ function applyStandaloneCustomModelPolicies(model: CustomModelOverlay): CustomMo
 
 function finalizeCustomModel(model: CustomModelOverlay, options: CustomModelBuildOptions): Model<Api> {
 	const resolvedModel = options.useDefaults ? applyStandaloneCustomModelPolicies(model) : model;
+	const reference = options.useDefaults ? resolveCustomModelReference(resolvedModel.id) : undefined;
 	const cost =
-		resolvedModel.cost ?? (options.useDefaults ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } : undefined);
-	const input = resolvedModel.input ?? (options.useDefaults ? ["text"] : undefined);
+		resolvedModel.cost ??
+		reference?.cost ??
+		(options.useDefaults ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } : undefined);
+	const input = resolvedModel.input ?? reference?.input ?? (options.useDefaults ? ["text"] : undefined);
 	return enrichModelThinking({
 		id: resolvedModel.id,
 		name: resolvedModel.name ?? (options.useDefaults ? resolvedModel.id : undefined),
 		api: resolvedModel.api,
 		provider: resolvedModel.provider,
 		baseUrl: resolvedModel.baseUrl,
-		reasoning: resolvedModel.reasoning ?? (options.useDefaults ? false : undefined),
-		thinking: resolvedModel.thinking,
+		reasoning: resolvedModel.reasoning ?? reference?.reasoning ?? (options.useDefaults ? false : undefined),
+		thinking: resolvedModel.thinking ?? reference?.thinking,
 		input: input as ("text" | "image")[],
 		cost,
-		contextWindow: resolvedModel.contextWindow ?? (options.useDefaults ? 128000 : undefined),
-		maxTokens: resolvedModel.maxTokens ?? (options.useDefaults ? 16384 : undefined),
+		contextWindow:
+			resolvedModel.contextWindow ?? reference?.contextWindow ?? (options.useDefaults ? 128000 : undefined),
+		maxTokens: resolvedModel.maxTokens ?? reference?.maxTokens ?? (options.useDefaults ? 16384 : undefined),
 		headers: resolvedModel.headers,
-		compat: resolvedModel.compat,
+		compat: mergeCompat(reference?.compat, resolvedModel.compat),
 		contextPromotionTarget: resolvedModel.contextPromotionTarget,
 		premiumMultiplier: resolvedModel.premiumMultiplier,
 		isOAuth: resolvedModel.isOAuth,
