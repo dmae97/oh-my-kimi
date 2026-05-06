@@ -460,9 +460,9 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("nested/");
 			expect(output).toContain("… 2 more");
 			expect(output).toContain("child-00.txt");
-			expect(output).toContain("child-09.txt");
-			expect(output).not.toContain("child-10.txt");
-			expect(output).not.toContain("child-11.txt");
+			expect(output).toContain("child-03.txt");
+			expect(output).not.toContain("child-02.txt");
+			expect(output).not.toContain("child-01.txt");
 			expect(output).toContain("child-12.txt");
 			expect(output).not.toContain("deep.txt");
 		});
