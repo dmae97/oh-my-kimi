@@ -50,7 +50,7 @@ For `.sqlite`, `.sqlite3`, `.db`, `.db3`:
 
 # URLs
 
-Extracts content from web pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom feeds, JSON endpoints, PDFs at URLs, and similar text-based resources. Returns clean reader-mode text/markdown — no browser required. Use a `:raw` suffix for untouched HTML; `timeout` to override the default request timeout. URL line selectors require the `L` form, for example `https://example.com/page:L50-L60`.
+Extracts content from web pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom feeds, JSON endpoints, PDFs at URLs, and similar text-based resources. Returns clean reader-mode text/markdown — no browser required. Use a `:raw` suffix for untouched HTML. URL line selectors mirror the file form (`:50`, `:50-100`, `:50+150`, `:raw`). If a URL would otherwise look like `host:port`, add a trailing slash before the selector (e.g. `https://example.com/:80`).
 </instruction>
 
 <critical>

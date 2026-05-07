@@ -137,9 +137,10 @@ export function isReadableUrlPath(value: string): boolean {
 	return /^https?:\/\//i.test(value) || /^www\./i.test(value);
 }
 
-const URL_LINE_RANGE_RE = /^L?(\d+)(?:([-+])L?(\d+))?$/i;
-// Embedded URL selectors (after a `:` in the path) keep the explicit `L` prefix to avoid colliding with ports such as `https://example.com:50`.
-const URL_EMBEDDED_LINE_RANGE_RE = /^L\d+(?:[-+]L?\d+)?$/i;
+// URL line selectors mirror the file form: `:50`, `:50-100`, `:50+150`, `:raw`.
+// If a URL would otherwise look like `host:port`, add a trailing slash before the selector
+// (e.g. `https://example.com/:80` to read line 80 of the document at `https://example.com/`).
+const URL_LINE_RANGE_RE = /^(\d+)(?:([-+])(\d+))?$/;
 
 export interface ParsedReadUrlTarget {
 	path: string;
@@ -157,11 +158,11 @@ export function parseReadUrlTarget(readPath: string): ParsedReadUrlTarget | null
 
 	const selector = embedded?.sel;
 	const raw = selector === "raw";
-	const lineMatch = selector ? URL_LINE_RANGE_RE.exec(selector) : null;
+	const lineMatch = selector && selector !== "raw" ? URL_LINE_RANGE_RE.exec(selector) : null;
 	if (lineMatch) {
 		const startLine = Number.parseInt(lineMatch[1]!, 10);
 		if (startLine < 1) {
-			throw new ToolError("URL line selector 0 is invalid; lines are 1-indexed. Use :L1.");
+			throw new ToolError("URL line selector 0 is invalid; lines are 1-indexed. Use :1.");
 		}
 		const sep = lineMatch[2];
 		const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
@@ -195,13 +196,13 @@ function tryExtractEmbeddedUrlSelector(readPath: string): { path: string; sel?: 
 	}
 
 	const candidateSelector = readPath.slice(lastColonIndex + 1);
-	const isEmbeddedSelector = candidateSelector === "raw" || URL_EMBEDDED_LINE_RANGE_RE.test(candidateSelector);
-	if (!isEmbeddedSelector) {
+	const basePath = readPath.slice(0, lastColonIndex);
+	if (!isReadableUrlPath(basePath)) {
 		return null;
 	}
 
-	const basePath = readPath.slice(0, lastColonIndex);
-	if (!isReadableUrlPath(basePath)) {
+	const isEmbeddedSelector = candidateSelector === "raw" || URL_LINE_RANGE_RE.test(candidateSelector);
+	if (!isEmbeddedSelector) {
 		return null;
 	}
 
