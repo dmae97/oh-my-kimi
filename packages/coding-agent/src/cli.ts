@@ -1,5 +1,10 @@
 #!/usr/bin/env bun
-import { APP_NAME, MIN_BUN_VERSION, VERSION } from "@oh-my-pi/pi-utils";
+import { APP_NAME, MIN_BUN_VERSION, procmgr, VERSION } from "@oh-my-pi/pi-utils";
+
+// Strip macOS malloc-stack-logging env vars before any subprocess is spawned.
+// Otherwise every child bun process (subagents, plugin installs, ptree spawns,
+// etc.) prints a `MallocStackLogging: can't turn off …` warning to stderr.
+procmgr.scrubProcessEnv();
 /**
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
