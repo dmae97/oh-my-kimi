@@ -110,4 +110,40 @@ describe("prompt action autocomplete", () => {
 		const suggestions = await provider.getSuggestions(["release #v1"], 0, 11);
 		expect(suggestions).toBeNull();
 	});
+
+	it("delegates trySyncSlashCompletion to CombinedAutocompleteProvider", () => {
+		const provider = createPromptActionAutocompleteProvider({
+			commands: [{ name: "model", description: "Switch AI model" }],
+			basePath: "/tmp",
+			keybindings: AppKeybindingsManager.inMemory(),
+			copyCurrentLine: () => {},
+			copyPrompt: () => {},
+			undo: () => {},
+			moveCursorToMessageEnd: () => {},
+			moveCursorToMessageStart: () => {},
+			moveCursorToLineStart: () => {},
+			moveCursorToLineEnd: () => {},
+		});
+
+		const result = provider.trySyncSlashCompletion("/mo");
+		expect(result).not.toBeNull();
+		expect(result!.items.map(i => i.value)).toContain("model");
+	});
+
+	it("returns null from trySyncSlashCompletion for non-slash text", () => {
+		const provider = createPromptActionAutocompleteProvider({
+			commands: [{ name: "model", description: "Switch AI model" }],
+			basePath: "/tmp",
+			keybindings: AppKeybindingsManager.inMemory(),
+			copyCurrentLine: () => {},
+			copyPrompt: () => {},
+			undo: () => {},
+			moveCursorToMessageEnd: () => {},
+			moveCursorToMessageStart: () => {},
+			moveCursorToLineStart: () => {},
+			moveCursorToLineEnd: () => {},
+		});
+
+		expect(provider.trySyncSlashCompletion("hello")).toBeNull();
+	});
 });

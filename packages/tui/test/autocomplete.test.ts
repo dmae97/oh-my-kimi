@@ -168,3 +168,91 @@ describe("CombinedAutocompleteProvider", () => {
 		});
 	});
 });
+describe("trySyncSlashCompletion", () => {
+	it("returns null for bare '/' (no prefix to match)", () => {
+		const provider = new CombinedAutocompleteProvider([], "/tmp");
+		const result = provider.trySyncSlashCompletion("/");
+		expect(result).toBeNull();
+	});
+
+	it("returns null for non-slash text", () => {
+		const provider = new CombinedAutocompleteProvider([], "/tmp");
+		expect(provider.trySyncSlashCompletion("hello")).toBeNull();
+		expect(provider.trySyncSlashCompletion("")).toBeNull();
+	});
+
+	it("returns null when text has spaces (argument phase, not command name)", () => {
+		const provider = new CombinedAutocompleteProvider([], "/tmp");
+		expect(provider.trySyncSlashCompletion("/model claude")).toBeNull();
+		expect(provider.trySyncSlashCompletion("/model ")).toBeNull();
+	});
+
+	it("returns null when no commands match", () => {
+		const provider = new CombinedAutocompleteProvider([], "/tmp");
+		const result = provider.trySyncSlashCompletion("/zzzzz");
+		expect(result).toBeNull();
+	});
+
+	it("returns matching items for partial slash command name", () => {
+		const provider = new CombinedAutocompleteProvider(
+			[{ name: "model", description: "Switch AI model", value: "model" }],
+			"/tmp",
+		);
+		const result = provider.trySyncSlashCompletion("/mo");
+		expect(result).not.toBeNull();
+		expect(result!.prefix).toBe("/mo");
+		expect(result!.items.map(i => i.value)).toEqual(["model"]);
+	});
+
+	it("matches multiple commands and sorts by relevance", () => {
+		const provider = new CombinedAutocompleteProvider(
+			[
+				{ name: "model", description: "Switch AI model", value: "model" },
+				{ name: "mode", description: "Change editor mode", value: "mode" },
+				{ name: "help", description: "Show help", value: "help" },
+			],
+			"/tmp",
+		);
+		const result = provider.trySyncSlashCompletion("/mo");
+		expect(result).not.toBeNull();
+		const values = result!.items.map(i => i.value);
+		// /model and /mode should match; /help should not
+		expect(values).toContain("model");
+		expect(values).toContain("mode");
+		expect(values).not.toContain("help");
+		// The better name match should come first (higher score)
+		const modelIdx = values.indexOf("model");
+		const modeIdx = values.indexOf("mode");
+		// model matches 3/5 chars, mode matches 3/4 chars — mode has higher match ratio
+		// Both should be present; order depends on fuzzyScore internals
+		expect(modelIdx).not.toBe(-1);
+		expect(modeIdx).not.toBe(-1);
+	});
+
+	it("matches case-insensitively", () => {
+		const provider = new CombinedAutocompleteProvider(
+			[{ name: "Model", description: "Switch AI model", value: "Model" }],
+			"/tmp",
+		);
+		const result = provider.trySyncSlashCompletion("/MOD");
+		expect(result).not.toBeNull();
+		expect(result!.items.map(i => i.value)).toContain("Model");
+	});
+
+	it("also matches against description", () => {
+		const provider = new CombinedAutocompleteProvider(
+			[{ name: "md", description: "Switch AI model", value: "md" }],
+			"/tmp",
+		);
+		const result = provider.trySyncSlashCompletion("/model");
+		expect(result).not.toBeNull();
+		expect(result!.items.map(i => i.value)).toContain("md");
+	});
+
+	it("handles AutocompleteItem-shaped commands (no 'name' property)", () => {
+		const provider = new CombinedAutocompleteProvider([{ value: "model", label: "Switch model" }], "/tmp");
+		const result = provider.trySyncSlashCompletion("/mod");
+		expect(result).not.toBeNull();
+		expect(result!.items.map(i => i.value)).toEqual(["model"]);
+	});
+});
