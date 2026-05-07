@@ -26,6 +26,46 @@ import type {
 const ABORTED: unique symbol = Symbol("agent-loop-aborted");
 
 /**
+ * Normalize a value coming back from `tool.execute()` (or its streaming partial-update callback)
+ * into a structurally valid {@link AgentToolResult}.
+ *
+ * The tool interface is typed, but third-party tools (MCP, extensions, user-authored AgentTools)
+ * can violate the contract at runtime. Persisting a malformed result corrupts the session file
+ * (missing `content` array → crash on reload). We coerce at the single boundary where untyped
+ * results enter the agent loop, so every downstream consumer can rely on the type.
+ */
+function coerceToolResult(raw: unknown): { result: AgentToolResult<any>; malformed: boolean } {
+	const rawObj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+	const rawContent = rawObj?.content;
+	const details = rawObj && "details" in rawObj ? rawObj.details : {};
+
+	if (!Array.isArray(rawContent)) {
+		return {
+			result: {
+				content: [{ type: "text", text: "Tool returned an invalid result: missing content array." }],
+				details,
+			},
+			malformed: true,
+		};
+	}
+
+	const content: AgentToolResult["content"] = [];
+	for (const block of rawContent) {
+		if (!block || typeof block !== "object" || !("type" in block)) continue;
+		if (block.type === "text" && typeof (block as { text?: unknown }).text === "string") {
+			content.push({ type: "text", text: sanitizeText((block as { text: string }).text) });
+		} else if (
+			block.type === "image" &&
+			typeof (block as { data?: unknown }).data === "string" &&
+			typeof (block as { mimeType?: unknown }).mimeType === "string"
+		) {
+			content.push(block as { type: "image"; data: string; mimeType: string });
+		}
+	}
+	return { result: { content, details }, malformed: false };
+}
+
+/**
  * Start an agent loop with a new prompt message.
  * The prompt is added to the context and events are emitted for it.
  */
@@ -656,7 +696,7 @@ async function executeToolCalls(
 						toolCalls: toolCallInfos,
 					})
 				: undefined;
-			result = await tool.execute(
+			const rawResult = await tool.execute(
 				toolCall.id,
 				transformToolCallArguments ? transformToolCallArguments(effectiveArgs, toolCall.name) : effectiveArgs,
 				tool.nonAbortable ? undefined : toolSignal,
@@ -666,16 +706,14 @@ async function executeToolCalls(
 						toolCallId: toolCall.id,
 						toolName: toolCall.name,
 						args: argsForExecution,
-						partialResult: {
-							...partialResult,
-							content: partialResult.content.map(c =>
-								c.type === "text" ? { ...c, text: sanitizeText(c.text) } : c,
-							),
-						},
+						partialResult: coerceToolResult(partialResult).result,
 					});
 				},
 				toolContext,
 			);
+			const coerced = coerceToolResult(rawResult);
+			result = coerced.result;
+			if (coerced.malformed) isError = true;
 		} catch (e) {
 			result = {
 				content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }],
