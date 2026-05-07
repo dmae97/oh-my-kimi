@@ -7,7 +7,6 @@ The `read` tool is multi-purpose and more capable than it looks — inspects fil
 
 ## Parameters
 - `path` — file path or URL (required). Append `:<sel>` for line ranges or raw mode (for example `src/foo.ts:50-200` or `src/foo.ts:raw`).
-- `timeout` — seconds, for URLs only
 
 ## Selectors
 

@@ -419,7 +419,6 @@ const readSchema = Type.Object({
 		description: 'path or url; append :<sel> for line ranges or raw mode (e.g. "src/foo.ts:50-100")',
 		examples: ["src/foo.ts", "src/foo.ts:50-100", "https://example.com:L1-L40"],
 	}),
-	timeout: Type.Optional(Type.Number({ description: "timeout in seconds", default: 20 })),
 });
 
 export type ReadToolInput = Static<typeof readSchema>;
@@ -1085,7 +1084,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		_onUpdate?: AgentToolUpdateCallback<ReadToolDetails>,
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<ReadToolDetails>> {
-		let { path: readPath, timeout } = params;
+		let { path: readPath } = params;
 		if (readPath.startsWith("file://")) {
 			readPath = expandPath(readPath);
 		}
@@ -1099,7 +1098,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (parsedUrlTarget.offset !== undefined || parsedUrlTarget.limit !== undefined) {
 				const cached = await loadReadUrlCacheEntry(
 					this.session,
-					{ path: parsedUrlTarget.path, timeout, raw: parsedUrlTarget.raw },
+					{ path: parsedUrlTarget.path, raw: parsedUrlTarget.raw },
 					signal,
 					{
 						ensureArtifact: true,
@@ -1112,7 +1111,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					entityLabel: "URL output",
 				});
 			}
-			return executeReadUrl(this.session, { path: parsedUrlTarget.path, timeout, raw: parsedUrlTarget.raw }, signal);
+			return executeReadUrl(this.session, { path: parsedUrlTarget.path, raw: parsedUrlTarget.raw }, signal);
 		}
 
 		// Handle internal URLs (agent://, artifact://, memory://, skill://, rule://, local://, mcp://)
@@ -1569,7 +1568,6 @@ interface ReadRenderArgs {
 	path?: string;
 	file_path?: string;
 	sel?: string;
-	timeout?: number;
 	// Legacy fields from old schema — tolerated for in-flight tool calls during transition
 	offset?: number;
 	limit?: number;

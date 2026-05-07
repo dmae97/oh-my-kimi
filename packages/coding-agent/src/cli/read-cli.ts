@@ -15,7 +15,6 @@ import { renderError } from "../tools/tool-errors";
 
 export interface ReadCommandArgs {
 	path: string;
-	timeout?: number;
 }
 
 export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
@@ -38,7 +37,7 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 	const tool = wrapToolWithMetaNotice(new ReadTool(session));
 
 	try {
-		const result = await tool.execute("omp-read", { path: cmd.path, timeout: cmd.timeout });
+		const result = await tool.execute("omp-read", { path: cmd.path });
 
 		for (const block of result.content) {
 			if (block.type === "text") {
