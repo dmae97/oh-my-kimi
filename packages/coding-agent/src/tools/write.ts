@@ -532,18 +532,25 @@ function normalizeDisplayText(text: string): string {
 	return text.replace(/\r/g, "");
 }
 
-function formatStreamingContent(content: string, uiTheme: Theme): string {
+function formatStreamingContent(content: string, language: string | undefined, uiTheme: Theme): string {
 	if (!content) return "";
 	const lines = normalizeDisplayText(content).split("\n");
-	const displayLines = lines.slice(-WRITE_STREAMING_PREVIEW_LINES);
-	const hidden = lines.length - displayLines.length;
+	const totalLines = lines.length;
+	const startIndex = Math.max(0, totalLines - WRITE_STREAMING_PREVIEW_LINES);
+	const visibleLines = lines.slice(startIndex);
+	const hidden = startIndex;
+	const highlighted = highlightCode(visibleLines.join("\n"), language);
+	const lineNumberWidth = String(totalLines).length;
 
 	let text = "\n\n";
 	if (hidden > 0) {
-		text += uiTheme.fg("dim", `… (${hidden} earlier lines)\n`);
+		text += `${uiTheme.fg("dim", `… (${hidden} earlier line${hidden === 1 ? "" : "s"})`)}\n`;
 	}
-	for (const line of displayLines) {
-		text += `${uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(line), 80))}\n`;
+	for (let i = 0; i < highlighted.length; i++) {
+		const lineNum = startIndex + i + 1;
+		const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")}│`);
+		const body = replaceTabs(highlighted[i] ?? "");
+		text += ` ${gutter}${body}\n`;
 	}
 	text += uiTheme.fg("dim", `… (streaming)`);
 	return text;
@@ -596,7 +603,7 @@ export const writeToolRenderer = {
 		}
 
 		// Show streaming preview of content (tail)
-		text += formatStreamingContent(args.content, uiTheme);
+		text += formatStreamingContent(args.content, lang, uiTheme);
 
 		return new Text(text, 0, 0);
 	},
