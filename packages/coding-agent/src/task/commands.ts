@@ -9,8 +9,12 @@ import { type SlashCommand, slashCommandCapability } from "../capability/slash-c
 import { loadCapability } from "../discovery";
 // Embed command markdown files at build time
 import initMd from "../prompts/agents/init.md" with { type: "text" };
+import orchestrateMd from "../prompts/commands/orchestrate.md" with { type: "text" };
 
-const EMBEDDED_COMMANDS: { name: string; content: string }[] = [{ name: "init.md", content: prompt.render(initMd) }];
+const EMBEDDED_COMMANDS: { name: string; content: string }[] = [
+	{ name: "init.md", content: prompt.render(initMd) },
+	{ name: "orchestrate.md", content: prompt.render(orchestrateMd) },
+];
 
 export const EMBEDDED_COMMAND_TEMPLATES: ReadonlyArray<{ name: string; content: string }> = EMBEDDED_COMMANDS;
 
