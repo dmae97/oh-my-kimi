@@ -540,6 +540,19 @@ export interface OpenAICompat {
 	supportsStore?: boolean;
 	/** Whether the provider supports the `developer` role (vs `system`). Default: auto-detected from URL. */
 	supportsDeveloperRole?: boolean;
+	/**
+	 * Whether the provider's chat-completions endpoint accepts multiple
+	 * leading `system`/`developer` messages. When false, ordered system
+	 * prompts are coalesced into a single message joined by `\n\n` so
+	 * strict chat templates (e.g. Qwen-served via vLLM, MiniMax) accept
+	 * the request. Default: detected per provider/baseUrl. Canonical
+	 * OpenAI/Azure/OpenRouter/Cerebras/Together/Fireworks/Groq/DeepSeek/
+	 * Mistral/xAI/Z.ai/GitHub Copilot/Zenmux are treated as `true`;
+	 * unknown or strict-template hosts default to `false`. Setting this
+	 * to `true` preserves separate blocks, which is preferred for
+	 * KV-cache reuse when the trailing prompt changes between calls.
+	 */
+	supportsMultipleSystemMessages?: boolean;
 	/** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
 	supportsReasoningEffort?: boolean;
 	/** Optional mapping from pi-ai reasoning levels to provider/model-specific `reasoning_effort` values. */

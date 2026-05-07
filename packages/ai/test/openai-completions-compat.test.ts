@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { getBundledModel } from "../src/models";
 import { convertMessages, detectCompat, streamOpenAICompletions } from "../src/providers/openai-completions";
+import { resolveOpenAICompat } from "../src/providers/openai-completions-compat";
 import type { AssistantMessage, Context, Model, OpenAICompat } from "../src/types";
 
 const originalFetch = global.fetch;
@@ -69,6 +70,7 @@ describe("openai-completions compatibility", () => {
 		const compat = {
 			supportsStore: true,
 			supportsDeveloperRole: true,
+			supportsMultipleSystemMessages: true,
 			supportsReasoningEffort: true,
 			reasoningEffortMap: {},
 			supportsUsageInStreaming: true,
@@ -177,6 +179,129 @@ describe("openai-completions compatibility", () => {
 		expect(unsupportedMessages.slice(0, 3)).toEqual([
 			{ role: "system", content: "stable instructions" },
 			{ role: "system", content: "cacheable policy" },
+			{ role: "user", content: "hello" },
+		]);
+	});
+
+	it("coalesces ordered system prompts when the host disables multi-system support", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+		};
+
+		const messages = convertMessages(
+			model,
+			{
+				systemPrompt: ["stable instructions", "cacheable policy"],
+				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+			},
+			{ ...detectCompat(model), supportsMultipleSystemMessages: false },
+		);
+
+		expect(messages.slice(0, 2)).toEqual([
+			{ role: "system", content: "stable instructions\n\ncacheable policy" },
+			{ role: "user", content: "hello" },
+		]);
+	});
+
+	it("coalesces system prompts on a developer-role reasoning model when multi-system is disabled", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			reasoning: true,
+		};
+
+		const messages = convertMessages(
+			model,
+			{
+				systemPrompt: ["stable instructions", "cacheable policy"],
+				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+			},
+			{ ...detectCompat(model), supportsMultipleSystemMessages: false },
+		);
+
+		expect(messages.slice(0, 2)).toEqual([
+			{ role: "developer", content: "stable instructions\n\ncacheable policy" },
+			{ role: "user", content: "hello" },
+		]);
+	});
+
+	it("emits separate system prompts for an unknown OpenAI-compatible host when explicitly enabled", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "custom" as Model["provider"],
+			baseUrl: "https://example.invalid/v1",
+		};
+
+		const detected = detectCompat(model);
+		expect(detected.supportsMultipleSystemMessages).toBe(false);
+
+		const overridden = convertMessages(
+			model,
+			{
+				systemPrompt: ["stable instructions", "cacheable policy"],
+				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+			},
+			{ ...detected, supportsMultipleSystemMessages: true },
+		);
+
+		expect(overridden.slice(0, 3)).toEqual([
+			{ role: "system", content: "stable instructions" },
+			{ role: "system", content: "cacheable policy" },
+			{ role: "user", content: "hello" },
+		]);
+	});
+
+	it("auto-detects MiniMax OpenAI hosts as single-system to satisfy error 2013", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "minimax-code" as Model["provider"],
+			baseUrl: "https://api.minimax.io/v1",
+		};
+
+		const detected = detectCompat(model);
+		expect(detected.supportsMultipleSystemMessages).toBe(false);
+
+		const messages = convertMessages(
+			model,
+			{
+				systemPrompt: ["stable instructions", "cacheable policy"],
+				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+			},
+			detected,
+		);
+
+		expect(messages.slice(0, 2)).toEqual([
+			{ role: "system", content: "stable instructions\n\ncacheable policy" },
+			{ role: "user", content: "hello" },
+		]);
+	});
+
+	it("respects an explicit compat override for strict-template local providers", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "custom" as Model["provider"],
+			baseUrl: "https://my-vllm.local/v1",
+			compat: {
+				supportsDeveloperRole: false,
+				supportsMultipleSystemMessages: false,
+			},
+		};
+
+		const messages = convertMessages(
+			model,
+			{
+				systemPrompt: ["stable instructions", "cacheable policy"],
+				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+			},
+			resolveOpenAICompat(model),
+		);
+
+		expect(messages.slice(0, 2)).toEqual([
+			{ role: "system", content: "stable instructions\n\ncacheable policy" },
 			{ role: "user", content: "hello" },
 		]);
 	});

@@ -1191,8 +1191,18 @@ export function convertMessages(
 	if (systemPrompts.length > 0) {
 		const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
 		const role = useDeveloperRole ? "developer" : "system";
-		for (const systemPrompt of systemPrompts) {
-			params.push({ role, content: systemPrompt });
+		// Default to one block per ordered system prompt so the leading prefix
+		// stays byte-identical between turns and the provider's KV cache can
+		// reuse it. Hosts whose chat templates reject follow-up system messages
+		// (Qwen via vLLM, MiniMax, Alibaba Dashscope, Qwen Portal, …) opt out
+		// via `compat.supportsMultipleSystemMessages = false`; in that mode we
+		// coalesce into a single message joined by `\n\n`.
+		if (compat.supportsMultipleSystemMessages) {
+			for (const systemPrompt of systemPrompts) {
+				params.push({ role, content: systemPrompt });
+			}
+		} else {
+			params.push({ role, content: systemPrompts.join("\n\n") });
 		}
 	}
 

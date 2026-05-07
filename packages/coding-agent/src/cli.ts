@@ -5,6 +5,7 @@ import { APP_NAME, MIN_BUN_VERSION, procmgr, VERSION } from "@oh-my-pi/pi-utils"
 // Otherwise every child bun process (subagents, plugin installs, ptree spawns,
 // etc.) prints a `MallocStackLogging: can't turn off …` warning to stderr.
 procmgr.scrubProcessEnv();
+
 /**
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
