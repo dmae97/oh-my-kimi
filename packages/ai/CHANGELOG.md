@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.7.6] - 2026-05-07
+
 ### Added
 
 - Added `hideThinkingSummary` option to `SimpleStreamOptions`. When true, `streamSimple` requests that the underlying provider omit reasoning/thinking summaries: Anthropic receives `thinking.display = "omitted"` (where supported), and OpenAI Responses / Azure / Codex providers leave `reasoning.summary` unset so the server skips emitting the human-readable summary stream entirely.

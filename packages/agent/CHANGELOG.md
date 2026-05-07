@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.7.6] - 2026-05-07
+
 ### Added
 
 - Added `hideThinkingSummary` option/getter/setter on `Agent` and `AgentLoopConfig`. Forwarded to the underlying stream call so providers can omit reasoning/thinking summaries on demand.

@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.7.6] - 2026-05-07
 ### Changed
 
 - Changed the "Hide Thinking Blocks" setting (Ctrl+T) to also instruct the provider to omit thinking/reasoning summaries from responses, instead of just hiding them client-side. Anthropic sees `thinking.display = "omitted"` (where supported); OpenAI Responses / Azure / Codex requests drop `reasoning.summary` entirely.
