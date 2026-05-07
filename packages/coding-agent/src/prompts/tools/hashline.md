@@ -4,7 +4,7 @@ A patch contains one or more file sections. The first non-blank line of every ed
 Operations reference lines in the file by their line number and hash, called "Anchors", e.g. `5th`, `123ab`.
 You **MUST** copy them verbatim from the latest output for the file you're editing.
 
-This format is purely textual. The tool has NO awareness of language, indentation, brackets, fences, or table widths. You are responsible for emitting valid syntax in your replacements/insertions.
+Purely textual format. The tool has NO awareness of language, indentation, brackets, fences, or table widths. Emit valid syntax in replacements/insertions.
 
 <ops>
 @PATH            header: subsequent ops apply to PATH
@@ -89,7 +89,7 @@ This format is purely textual. The tool has NO awareness of language, indentatio
 + {{hrefr 1}}
 {{hsep}}const DEBUG = false;
 
-If your replacement payload would render with even one unchanged line in the diff, you have the wrong op or the wrong range. Stop and rewrite as `+`/`<`/`-` plus a narrower `=`.
+If your replacement payload would render with even one unchanged line in the diff, you have the wrong op or range. Stop and rewrite as `+`/`<`/`-` plus a narrower `=`.
 </anti-pattern>
 
 <critical>

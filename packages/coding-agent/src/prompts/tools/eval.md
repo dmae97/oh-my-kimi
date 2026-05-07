@@ -1,27 +1,31 @@
-Run code in a persistent kernel, using a series of codeblocks acting as cells.
+Run code in a persistent kernel using codeblock cells.
 
 <instruction>
-Each cell is introduced by a header line of the form:
+Cell header format:
 
 ```
 ===== <info> =====
 ```
 
-where each side is at least 5 equal signs. Everything between one header and the next (or end of input) is the cell's code, verbatim. The info is space-separated tokens, all optional, in any order:
-- **Language**: {{#if py}}`py` for Python{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`js` / `ts` for JavaScript{{/if}}.{{#ifAll py js}} Omitted → inherit the previous cell's language (the first cell defaults to Python, falling back to JavaScript when Python is unavailable).{{else}} Omitted → inherit the previous cell's language.{{/ifAll}}
+At least 5 equal signs on each side. Content between one header and the next (or end of input) is the cell's code, verbatim.
+- **Language**: {{#if py}}`py` for Python{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`js` / `ts` for JavaScript{{/if}}.{{#ifAll py js}} Omitted → inherit previous cell's language (first cell defaults to Python, falls back to JavaScript).{{else}} Omitted → inherit previous cell's language.{{/ifAll}}
 - **Title shorthand**: `py:"…"`, `js:"…"`, `ts:"…"` set the language and the cell title together.
 - **Attributes**:
   - `id:"…"` — cell title (when language is unchanged or already set).
-  - `t:<duration>` — per-cell timeout. Duration is digits with optional `ms` / `s` / `m` units (e.g. `t:500ms`, `t:15s`, `t:2m`). Default 30s.
-  - `rst` — wipe **this cell's own language kernel** before running.{{#ifAll py js}} Other languages are untouched.{{/ifAll}}
+  - `t:<duration>` — per-cell timeout. Digits with optional `ms` / `s` / `m` units (e.g., `t:500ms`, `t:15s`, `t:2m`). Default 30s.
+  - `rst` — wipe this cell's own language kernel before running.{{#ifAll py js}} Other languages are untouched.{{/ifAll}}
 
-**Work incrementally:** one logical step per cell (imports, define, test, use). Pass multiple small cells in one call. Define small reusable functions you can debug individually. You **MUST** put workflow explanations in the assistant message or cell title — never inside cell code.
+**Work incrementally:**
+- One logical step per cell (imports, define, test, use).
+- Pass multiple small cells in one call.
+- Define small reusable functions for individual debugging.
+- Put workflow explanations in the assistant message or cell title — never inside cell code.
 
 **On failure:** errors identify the failing cell (e.g., "Cell 3 failed"). Resubmit only the fixed cell (or fixed cell + remaining cells).
 </instruction>
 
 <prelude>
-{{#ifAll py js}}The same helpers are available in both runtimes with the same positional argument order. Python takes the trailing options as keyword args; JavaScript takes the same options as a trailing object literal. JavaScript helpers are async and `await`able; Python helpers run synchronously.{{else}}{{#if py}}Helpers run synchronously. Trailing options are passed as keyword arguments.{{/if}}{{#if js}}Helpers are async and `await`able. Trailing options are passed as a final object literal.{{/if}}{{/ifAll}}
+{{#ifAll py js}}Same helpers in both runtimes with the same positional argument order. Python: trailing options as keyword args. JavaScript: trailing options as a trailing object literal. JavaScript helpers are async and `await`able; Python helpers run synchronously.{{else}}{{#if py}}Helpers run synchronously. Trailing options are keyword arguments.{{/if}}{{#if js}}Helpers are async and `await`able. Trailing options are a final object literal.{{/if}}{{/ifAll}}
 ```
 display(value) → None
     Render a value in the current cell output.
@@ -49,7 +53,7 @@ output(*ids, format?="raw", query?=None, offset?=None, limit?=None) → str | di
 {{/if}}</prelude>
 
 <output>
-Cells render like a Jupyter notebook. Pass any value to `display(value)`; non-presentable data is rendered as an interactive JSON tree, and presentable values (figures, images, dataframes, etc.) render with their native representation.
+Cells render like a Jupyter notebook. `display(value)` renders non-presentable data as an interactive JSON tree. Presentable values (figures, images, dataframes, etc.) use their native representation.
 </output>
 
 <caution>

@@ -4,12 +4,9 @@ description: Generate AGENTS.md for current codebase
 thinking-level: medium
 ---
 
-You are an expert project lead specializing in writing excellent project documentation.
-
-You **MUST** launch multiple `explore` agents in parallel (via `task` tool) scanning different areas (core src, tests, configs/build, scripts/docs), then synthesize your findings into a detailed AGENTS.md file.
+Generate AGENTS.md by launching multiple `explore` agents in parallel (via `task` tool) scanning different areas (core src, tests, configs/build, scripts/docs), then synthesize findings into a single file.
 
 <structure>
-You will likely need to document these sections, but only take it as a starting point and adjust it to the specific codebase:
 - **Project Overview**: Brief description of project purpose
 - **Architecture & Data Flow**: High-level structure, key modules, data flow
 - **Key Directories**: Main source directories, purposes

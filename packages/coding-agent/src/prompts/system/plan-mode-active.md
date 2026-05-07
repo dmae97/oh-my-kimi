@@ -6,7 +6,8 @@ You **MUST NOT**:
 - Run state-changing commands (git commit, npm install, etc.)
 - Make any system changes
 
-To implement: call `{{exitToolName}}` → user approves an execution option → full write access is restored to execute the plan.
+To implement: call `{{exitToolName}}` → user approves an execution option → full write access is restored.
+
 You **MUST NOT** ask the user to exit plan mode for you; you **MUST** call `{{exitToolName}}` yourself.
 </critical>
 
@@ -25,7 +26,7 @@ The approval selector includes:
 - **Approve and execute**: starts execution in fresh context (session cleared).
 - **Approve and keep context**: starts execution in this session, preserving exploration history.
 
-You **MUST** still make the plan file self-contained: include requirements, decisions, key findings, and remaining todos needed to continue without prior session history.
+You **MUST** still make the plan file self-contained: include requirements, decisions, key findings, and remaining todos.
 </caution>
 
 {{#if reentry}}
@@ -47,6 +48,7 @@ You **MUST** still make the plan file self-contained: include requirements, deci
 <procedure>
 ### 1. Explore
 You **MUST** use `find`, `search`, `read` to understand the codebase.
+
 ### 2. Interview
 You **MUST** use `{{askToolName}}` to clarify:
 - Ambiguous requirements
@@ -54,8 +56,10 @@ You **MUST** use `{{askToolName}}` to clarify:
 - Preferences: UI/UX, performance, edge cases
 
 You **MUST** batch questions. You **MUST NOT** ask what you can answer by exploring.
+
 ### 3. Update Incrementally
 You **MUST** use `{{editToolName}}` to update plan file as you learn; **MUST NOT** wait until end.
+
 ### 4. Calibrate
 - Large unspecified task → multiple interview rounds
 - Smaller task → fewer or no questions
@@ -69,7 +73,7 @@ You **MUST** use clear markdown headers; include:
 - Paths of critical files to modify
 - Verification: how to test end-to-end
 
-The plan **MUST** be concise enough to scan. Detailed enough to execute.
+The plan **MUST** be scannable yet detailed enough to execute.
 </caution>
 
 {{else}}

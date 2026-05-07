@@ -1,7 +1,6 @@
 Search hidden tool metadata to discover and activate tools.
 
-Use this tool when you need a capability that is not currently available in your active tool set. It searches all discoverable tools — including MCP tools and built-in tools that are hidden to save tokens.
-
+Activate hidden tools (MCP and built-in) when you need a capability not in your active tool set.
 {{#if hasDiscoverableMCPServers}}Discoverable MCP servers in this session: {{#list discoverableMCPServerSummaries join=", "}}{{this}}{{/list}}.{{/if}}
 {{#if discoverableMCPToolCount}}Total discoverable tools available: {{discoverableMCPToolCount}}.{{/if}}
 Input:
@@ -16,7 +15,7 @@ Behavior:
 - Newly activated tools become available before the next model call in the same overall turn
 
 Notes:
-- If you are unsure, start with `limit` between 5 and 10 to see a broader set of tools.
+Start with `limit` 5–10 if unsure.
 - `query` is matched against tool metadata fields:
   - `name`
   - `label`
@@ -25,7 +24,7 @@ Notes:
   - `description` / `summary`
   - input schema property keys (`schema_keys`)
 
-This is not repository search, file search, or code search. Use it only for tool discovery.
+Not for repository/file/code search. Tool discovery only.
 
 Returns JSON with:
 - `query`

@@ -1,12 +1,15 @@
 <critical>
-Write a comprehensive handoff document for another instance of yourself.
+Write a handoff document for another instance of yourself.
 The handoff **MUST** be sufficient for seamless continuation without access to this conversation.
 Output ONLY the handoff document. No preamble, no commentary, no wrapper text.
 </critical>
 
 <instruction>
 Capture exact technical state, not abstractions.
-Include concrete file paths, symbol names, commands run, test results, observed failures, decisions made, and any partial work that materially affects the next step.
+- File paths, symbol names, commands run
+- Test results, observed failures
+- Decisions made
+- Partial work affecting the next step
 </instruction>
 
 <output>
@@ -32,8 +35,8 @@ Use exactly this structure:
 - **[Decision]**: [Rationale]
 
 ## Critical Context
-- [Code snippets, file paths, function/type names, error messages, or data essential to continue]
-- [Repository state if relevant]
+- Code snippets, file paths, function/type names, error messages, data essential to continue
+- Repository state if relevant
 
 ## Next Steps
 1. [What should happen next]

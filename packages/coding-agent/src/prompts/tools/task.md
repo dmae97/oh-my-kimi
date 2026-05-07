@@ -5,7 +5,7 @@ Launches subagents to parallelize workflows.
 - Use `job` (with `poll`) to wait. **MUST NOT** poll `read jobs://` in a loop.
 {{/if}}
 
-Subagents have no access to your conversation history. Every fact, file path, and decision they need **MUST** be explicit in {{#if contextEnabled}}`context` or `assignment`{{else}}each `assignment`{{/if}}.
+Subagents have no conversation history. Every fact, file path, and decision they need **MUST** be explicit in {{#if contextEnabled}}`context` or `assignment`{{else}}each `assignment`{{/if}}.
 
 <parameters>
 - `agent`: agent type for all tasks

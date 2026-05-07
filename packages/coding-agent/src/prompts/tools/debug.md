@@ -1,4 +1,5 @@
-Provides debugger access through the Debug Adapter Protocol (DAP). Use this to launch or attach debuggers, set breakpoints, step through execution, inspect threads/stack/variables, evaluate expressions, capture program output, and interrupt hung programs.
+Provides debugger access through the Debug Adapter Protocol (DAP).
+Use for launching or attaching debuggers, setting breakpoints, stepping through execution, inspecting threads/stack/variables, evaluating expressions, capturing output, and interrupting hung programs.
 
 <instruction>
 - Prefer over bash for program state, breakpoints, stepping, thread inspection, or interrupting a running process.
@@ -23,6 +24,7 @@ Provides debugger access through the Debug Adapter Protocol (DAP). Use this to l
 3. `debug(action: "continue")`
 4. If the program appears hung: `debug(action: "pause")`
 5. Inspect state with `threads`, `stack_trace`, `scopes`, and `variables`
+
 # Raw debugger command through repl
 `debug(action: "evaluate", expression: "info registers", context: "repl")`
 </examples>

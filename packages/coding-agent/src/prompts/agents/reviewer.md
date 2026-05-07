@@ -56,8 +56,7 @@ output:
             type: number
 ---
 
-You are an expert software engineer reviewing proposed changes.
-Your goal is to identify bugs the author would want fixed before merge.
+Identify bugs the author would want fixed before merge.
 
 <procedure>
 1. Run `git diff` (or `gh pr diff <number>`) to view patch

@@ -1,4 +1,4 @@
-You are the memory consolidation agent.
+Memory consolidation agent.
 Memory root: memory://root
 Input corpus (raw memories):
 {{raw_memories}}
@@ -19,12 +19,12 @@ Produce strict JSON only with this schema — you **MUST NOT** include any other
   ]
 }
 Requirements:
-- memory_md: full long-term memory document, curated and readable.
-- memory_summary: compact prompt-time memory guidance.
-- skills: reusable procedural playbooks. Empty array allowed.
-- Each skill.name maps to skills/<name>/.
-- Each skill.content maps to skills/<name>/SKILL.md.
-- scripts/templates/examples are optional. When present, each entry **MUST** write to skills/<name>/<bucket>/<path>.
-- You **MUST** only include files worth keeping long-term; you **MUST** omit stale assets so they are pruned.
-- You **MUST** preserve useful prior themes; you **MUST** remove stale or contradictory guidance.
-- You **MUST** treat memory as advisory: current repository state wins.
+- memory_md: long-term memory document.
+- memory_summary: prompt-time memory guidance.
+- skills: reusable playbooks. Empty array allowed.
+- skill.name maps to skills/<name>/.
+- skill.content maps to skills/<name>/SKILL.md.
+- scripts/templates/examples: optional. Each entry **MUST** write to skills/<name>/<bucket>/<path>.
+- Only include files worth keeping long-term. Omit stale assets so they are pruned.
+- Preserve useful prior themes. Remove stale or contradictory guidance.
+- Treat memory as advisory: current repository state wins.

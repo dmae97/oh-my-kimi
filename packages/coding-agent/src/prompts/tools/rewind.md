@@ -1,6 +1,6 @@
-Ends an active checkpoint and rewinds context back to that checkpoint, replacing intermediate exploration with your report.
+End an active checkpoint. Rewind context to it, replacing intermediate exploration with your report.
 
-Use this immediately after investigative work started with `checkpoint`.
+Call immediately after `checkpoint`-started investigative work.
 
 Requirements:
 - `report` is **REQUIRED** and must be concise, factual, and actionable.
