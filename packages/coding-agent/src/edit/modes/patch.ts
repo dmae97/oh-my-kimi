@@ -1000,7 +1000,7 @@ async function readExistingPatchFile(fileSystem: FileSystem, absolutePath: strin
 	try {
 		return await fileSystem.read(absolutePath);
 	} catch (error) {
-		if (isEnoent(error)) {
+		if (isEnoent(error) || (error instanceof Error && error.message.startsWith("File not found:"))) {
 			throw new ApplyPatchError(`File not found: ${path}`);
 		}
 		throw error;

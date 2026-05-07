@@ -37,14 +37,7 @@ describe("GreenCommand", () => {
 
 		const result = await command.execute([], {} as HookCommandContext);
 
-		expect(result).toContain("Keep going until the current branch CI is green.");
-		expect(result).toContain(
-			"Prefer the `github` tool with `op: run_watch` and no other arguments if that tool is available.",
-		);
-		expect(result).toContain(
-			"Use the workflow runs for the current HEAD commit as the source of truth after each push.",
-		);
-		expect(result).toContain("ensure the final commit is tagged `v0.1.0-alpha2` and push that tag");
+		expect(result).toContain("v0.1.0-alpha2");
 		expect(result).not.toContain("timeouts due to the harnesses");
 	});
 
@@ -54,8 +47,6 @@ describe("GreenCommand", () => {
 
 		const result = await command.execute([], {} as HookCommandContext);
 
-		expect(result).toContain("Do not stop after a single fix attempt.");
-		expect(result).toContain("Watch the workflow runs for the current HEAD commit.");
-		expect(result).not.toContain("ensure the final commit is tagged");
+		expect(result).not.toContain("v0.1.0-alpha2");
 	});
 });

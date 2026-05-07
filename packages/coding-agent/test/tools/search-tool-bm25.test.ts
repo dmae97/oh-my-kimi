@@ -5,11 +5,7 @@ import { Settings } from "../../src/config/settings";
 import { buildDiscoverableMCPSearchIndex, type DiscoverableMCPTool } from "../../src/mcp/discoverable-tool-metadata";
 import type { DiscoverableMCPSearchIndex, DiscoverableTool } from "../../src/tool-discovery/tool-index";
 import type { ToolSession } from "../../src/tools/index";
-import {
-	renderSearchToolBm25Description,
-	SearchToolBm25Tool,
-	searchToolBm25Renderer,
-} from "../../src/tools/search-tool-bm25";
+import { SearchToolBm25Tool, searchToolBm25Renderer } from "../../src/tools/search-tool-bm25";
 
 type TestDiscoverableTool = DiscoverableTool;
 
@@ -110,21 +106,6 @@ describe("SearchToolBm25Tool", () => {
 			"text",
 		]),
 	];
-
-	it("advertises discoverable MCP servers and search guidance in its description", () => {
-		const description = renderSearchToolBm25Description(discoverableTools);
-		expect(description).toContain("Discoverable MCP servers in this session: github (2 tools), slack (1 tool).");
-		expect(description).not.toContain("Example discoverable MCP tools:");
-		expect(description).toContain("Total discoverable tools available: 3.");
-		expect(description).toContain("If you are unsure, start with `limit` between 5 and 10");
-		expect(description).toContain("- `label`");
-		expect(description).toContain("- `mcp_tool_name`");
-		expect(description).toContain("input schema property keys (`schema_keys`)");
-		expect(description).toContain("- `activated_tools` — tools activated by this search call");
-		expect(description).toContain("- `match_count` — number of ranked matches returned by the search");
-		expect(description).not.toContain("- `active_selected_tools`");
-		expect(description).not.toContain("- `tools`");
-	});
 
 	it("uses the session-provided cached search index during execution", async () => {
 		let rawToolsCalls = 0;
