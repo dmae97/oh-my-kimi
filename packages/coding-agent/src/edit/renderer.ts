@@ -251,11 +251,12 @@ function formatStreamingDiff(diff: string, rawPath: string, uiTheme: Theme, labe
 	const displayLines = lines.slice(-EDIT_STREAMING_PREVIEW_LINES);
 	const hidden = total - displayLines.length;
 	let text = "\n\n";
-	if (hidden > 0) {
-		text += uiTheme.fg("dim", `… (${hidden} earlier lines)\n`);
-	}
 	text += renderDiffColored(displayLines.join("\n"), { filePath: rawPath });
-	text += uiTheme.fg("dim", `\n… (${label})`);
+	if (hidden > 0) {
+		text += uiTheme.fg("dim", `\n… (${label} +${hidden} lines)`);
+	} else {
+		text += uiTheme.fg("dim", `\n(${label})`);
+	}
 	return text;
 }
 
