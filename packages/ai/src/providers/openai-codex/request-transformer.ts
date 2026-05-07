@@ -4,7 +4,7 @@ import type { Api, Model } from "../../types";
 
 export interface ReasoningConfig {
 	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
-	summary: "auto" | "concise" | "detailed" | null;
+	summary?: "auto" | "concise" | "detailed";
 }
 
 export interface CodexRequestOptions {
@@ -52,11 +52,14 @@ export interface RequestBody {
 }
 
 function getReasoningConfig(model: Model<Api>, options: CodexRequestOptions): ReasoningConfig {
-	return {
+	const config: ReasoningConfig = {
 		effort:
 			options.reasoningEffort === "none" ? "none" : requireSupportedEffort(model, options.reasoningEffort as Effort),
-		summary: options.reasoningSummary ?? "detailed",
 	};
+	if (options.reasoningSummary !== null) {
+		config.summary = options.reasoningSummary ?? "detailed";
+	}
+	return config;
 }
 
 function filterInput(input: InputItem[] | undefined): InputItem[] | undefined {

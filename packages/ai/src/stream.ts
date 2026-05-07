@@ -462,6 +462,7 @@ function mapOptionsForApi<TApi extends Api>(
 					...base,
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
+					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
 				});
 			}
 
@@ -471,6 +472,7 @@ function mapOptionsForApi<TApi extends Api>(
 					...base,
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
+					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
 				});
 			}
 
@@ -483,6 +485,7 @@ function mapOptionsForApi<TApi extends Api>(
 					thinkingEnabled: true,
 					effort,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
+					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
 				});
 			}
 
@@ -492,6 +495,7 @@ function mapOptionsForApi<TApi extends Api>(
 					thinkingEnabled: true,
 					thinkingBudgetTokens: thinkingBudget,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
+					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
 				});
 			}
 
@@ -509,6 +513,7 @@ function mapOptionsForApi<TApi extends Api>(
 					...base,
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
+					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
 				});
 			} else {
 				return castApi<"anthropic-messages">({
@@ -517,6 +522,7 @@ function mapOptionsForApi<TApi extends Api>(
 					thinkingEnabled: true,
 					thinkingBudgetTokens: thinkingBudget,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
+					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
 				});
 			}
 		}
@@ -564,6 +570,7 @@ function mapOptionsForApi<TApi extends Api>(
 				reasoning: resolveOpenAiReasoningEffort(model, options),
 				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
 				serviceTier: options?.serviceTier,
+				reasoningSummary: options?.hideThinkingSummary ? null : undefined,
 			});
 
 		case "azure-openai-responses":
@@ -572,6 +579,7 @@ function mapOptionsForApi<TApi extends Api>(
 				reasoning: resolveOpenAiReasoningEffort(model, options),
 				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
 				serviceTier: options?.serviceTier,
+				reasoningSummary: options?.hideThinkingSummary ? null : undefined,
 			});
 
 		case "openai-codex-responses":
@@ -581,6 +589,7 @@ function mapOptionsForApi<TApi extends Api>(
 				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
 				serviceTier: options?.serviceTier,
 				preferWebsockets: options?.preferWebsockets,
+				reasoningSummary: options?.hideThinkingSummary ? null : undefined,
 			});
 
 		case "google-generative-ai": {

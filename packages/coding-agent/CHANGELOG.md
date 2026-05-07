@@ -1,6 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Changed the "Hide Thinking Blocks" setting (Ctrl+T) to also instruct the provider to omit thinking/reasoning summaries from responses, instead of just hiding them client-side. Anthropic sees `thinking.display = "omitted"` (where supported); OpenAI Responses / Azure / Codex requests drop `reasoning.summary` entirely.
+
+### Fixed
+
+- Fixed the `Hide Thinking Blocks` toggle so changing it updates the active session’s request settings immediately, ensuring new responses reflect the current hide-thinking preference
+- Fixed system prompt preparation to keep successful context data and only fall back to minimal defaults for preparation steps that fail
+- Fixed system prompt preparation timeout to apply per-step instead of all-or-nothing: a single slow step (e.g. `buildAgentsMdSearch` on a huge directory tree, `buildWorkspaceTree`, `loadProjectContextFiles`) now falls back to its own minimal default while the other steps still populate, and the warning names which steps timed out.
 
 ## [14.7.5] - 2026-05-07
 ### Added

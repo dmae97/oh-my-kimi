@@ -255,6 +255,14 @@ export interface SimpleStreamOptions extends StreamOptions {
 	 * this way when `reasoning` is undefined.
 	 */
 	disableReasoning?: boolean;
+	/**
+	 * If true, request that the provider omit thinking/reasoning summaries
+	 * from the response (e.g. Anthropic `thinking.display = "omitted"`,
+	 * OpenAI Responses `reasoning.summary` left unset). The model still
+	 * reasons internally; only the human-readable summary stream is dropped.
+	 * Useful when the UI hides thinking blocks anyway and the summary is wasted bandwidth.
+	 */
+	hideThinkingSummary?: boolean;
 	/** Custom token budgets for thinking levels (token-based providers only) */
 	thinkingBudgets?: ThinkingBudgets;
 	/** Cursor exec handlers for local tool execution */

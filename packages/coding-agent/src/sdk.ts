@@ -1637,6 +1637,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			presencePenalty: settings.get("presencePenalty") >= 0 ? settings.get("presencePenalty") : undefined,
 			repetitionPenalty: settings.get("repetitionPenalty") >= 0 ? settings.get("repetitionPenalty") : undefined,
 			serviceTier: initialServiceTier,
+			hideThinkingSummary: settings.get("hideThinkingBlock"),
 			kimiApiFormat: settings.get("providers.kimiApiFormat") ?? "anthropic",
 			preferWebsockets: preferOpenAICodexWebsockets,
 			getToolContext: tc => toolContextStore.getContext(tc),

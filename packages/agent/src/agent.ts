@@ -157,6 +157,12 @@ export interface AgentOptions {
 	presencePenalty?: number;
 	repetitionPenalty?: number;
 	serviceTier?: ServiceTier;
+	/**
+	 * If true, request that the underlying provider omit reasoning/thinking summaries
+	 * from the response. The model still reasons internally; only the human-readable
+	 * summary stream is suppressed. Useful when the UI hides thinking blocks anyway.
+	 */
+	hideThinkingSummary?: boolean;
 
 	/**
 	 * Maximum delay in milliseconds to wait for a retry when the server requests a long wait.
@@ -236,6 +242,7 @@ export class Agent {
 	#presencePenalty?: number;
 	#repetitionPenalty?: number;
 	#serviceTier?: ServiceTier;
+	#hideThinkingSummary?: boolean;
 	#maxRetryDelayMs?: number;
 	#getToolContext?: (toolCall?: ToolCallContext) => AgentToolContext | undefined;
 	#cursorExecHandlers?: CursorExecHandlers;
@@ -275,6 +282,7 @@ export class Agent {
 		this.#presencePenalty = opts.presencePenalty;
 		this.#repetitionPenalty = opts.repetitionPenalty;
 		this.#serviceTier = opts.serviceTier;
+		this.#hideThinkingSummary = opts.hideThinkingSummary;
 		this.#maxRetryDelayMs = opts.maxRetryDelayMs;
 		this.getApiKey = opts.getApiKey;
 		this.#onPayload = opts.onPayload;
@@ -393,6 +401,14 @@ export class Agent {
 
 	set serviceTier(value: ServiceTier | undefined) {
 		this.#serviceTier = value;
+	}
+
+	get hideThinkingSummary(): boolean | undefined {
+		return this.#hideThinkingSummary;
+	}
+
+	set hideThinkingSummary(value: boolean | undefined) {
+		this.#hideThinkingSummary = value;
 	}
 
 	/**
@@ -758,6 +774,7 @@ export class Agent {
 			presencePenalty: this.#presencePenalty,
 			repetitionPenalty: this.#repetitionPenalty,
 			serviceTier: this.#serviceTier,
+			hideThinkingSummary: this.#hideThinkingSummary,
 			interruptMode: this.#interruptMode,
 			sessionId: this.#sessionId,
 			providerSessionState: this.#providerSessionState,

@@ -6610,6 +6610,7 @@ export class AgentSession {
 			apiKey,
 			sessionId: this.sessionId,
 			reasoning: toReasoningEffort(this.thinkingLevel),
+			hideThinkingSummary: this.agent.hideThinkingSummary,
 			serviceTier: this.serviceTier,
 			signal: args.signal,
 			toolChoice: "none",

@@ -317,11 +317,14 @@ function buildParams(
 		// See: https://github.com/can1357/oh-my-pi/issues/41
 		params.include = ["reasoning.encrypted_content"];
 
-		if (options?.reasoning || options?.reasoningSummary) {
-			params.reasoning = {
+		if (options?.reasoning || options?.reasoningSummary !== undefined) {
+			const reasoningParams: NonNullable<typeof params.reasoning> = {
 				effort: options?.reasoning || "medium",
-				summary: options?.reasoningSummary || "auto",
 			};
+			if (options?.reasoningSummary !== null) {
+				reasoningParams.summary = options?.reasoningSummary || "auto";
+			}
+			params.reasoning = reasoningParams;
 		} else {
 			if (model.name.toLowerCase().startsWith("gpt-5")) {
 				// Jesus Christ, see https://community.openai.com/t/need-reasoning-false-option-for-gpt-5/1351588/7

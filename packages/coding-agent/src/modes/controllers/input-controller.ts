@@ -701,6 +701,7 @@ export class InputController {
 	toggleThinkingBlockVisibility(): void {
 		this.ctx.hideThinkingBlock = !this.ctx.hideThinkingBlock;
 		settings.set("hideThinkingBlock", this.ctx.hideThinkingBlock);
+		this.ctx.session.agent.hideThinkingSummary = this.ctx.hideThinkingBlock;
 
 		// Rebuild chat from session messages
 		this.ctx.chatContainer.clear();
