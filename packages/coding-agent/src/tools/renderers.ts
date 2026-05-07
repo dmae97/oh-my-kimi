@@ -22,7 +22,6 @@ import { findToolRenderer } from "./find";
 import { githubToolRenderer } from "./gh-renderer";
 import { inspectImageToolRenderer } from "./inspect-image-renderer";
 import { jobToolRenderer } from "./job";
-import { notebookToolRenderer } from "./notebook";
 import { readToolRenderer } from "./read";
 import { recipeToolRenderer } from "./recipe/render";
 import { resolveToolRenderer } from "./resolve";
@@ -60,7 +59,6 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	find: findToolRenderer as ToolRenderer,
 	search: searchToolRenderer as ToolRenderer,
 	lsp: lspToolRenderer as ToolRenderer,
-	notebook: notebookToolRenderer as ToolRenderer,
 	inspect_image: inspectImageToolRenderer as ToolRenderer,
 	read: readToolRenderer as ToolRenderer,
 	job: jobToolRenderer as ToolRenderer,

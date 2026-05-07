@@ -1756,11 +1756,6 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// Optional tools
-	"notebook.enabled": {
-		type: "boolean",
-		default: true,
-		ui: { tab: "tools", label: "Notebook", description: "Enable the notebook tool for notebook editing" },
-	},
 
 	"renderMermaid.enabled": {
 		type: "boolean",

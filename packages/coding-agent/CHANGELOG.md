@@ -1,6 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Removed the dedicated `notebook` tool; `.ipynb` reads and edits now go through `read` and `edit`.
+
+### Changed
+
+- Changed `read` tool behavior for `.ipynb:raw` requests to return raw notebook content instead of converting via markit
+- Changed `.ipynb` edit and read handling to route through notebook serialization helpers
+- Changed `.ipynb` reads to return an editable cell text representation and apply edits back to notebook JSON while preserving cell metadata and outputs where possible.
+
+### Removed
+
+- Removed the `notebook.enabled` configuration option from tool settings
 
 ## [14.7.2] - 2026-05-06
 ### Breaking Changes

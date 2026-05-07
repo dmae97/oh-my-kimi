@@ -9,6 +9,7 @@ import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { formatHashLine, formatHashLines, formatLineHash, HL_BODY_SEP } from "../edit/line-hash";
+import { isNotebookPath, readEditableNotebookText } from "../edit/notebook";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { parseInternalUrl } from "../internal-urls/parse";
 import type { InternalUrl } from "../internal-urls/types";
@@ -1196,7 +1197,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const ext = path.extname(absolutePath).toLowerCase();
 		const _hasEditTool = this.session.hasEditTool ?? true;
 		const _language = getLanguageFromPath(absolutePath);
-		const shouldConvertWithMarkit = CONVERTIBLE_EXTENSIONS.has(ext) || (ext === ".ipynb" && parsed.kind === "raw");
+		const shouldConvertWithMarkit = CONVERTIBLE_EXTENSIONS.has(ext);
 		// Read the file based on type
 		let content: Array<TextContent | ImageContent> | undefined;
 		let details: ReadToolDetails = {};
@@ -1263,8 +1264,20 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					throw error;
 				}
 			}
+		} else if (isNotebookPath(absolutePath) && parsed.kind !== "raw") {
+			const { offset, limit } = selToOffsetLimit(parsed);
+			return this.#buildInMemoryTextResult(
+				await readEditableNotebookText(absolutePath, localReadPath),
+				offset,
+				limit,
+				{
+					details: { resolvedPath: absolutePath },
+					sourcePath: absolutePath,
+					entityLabel: "notebook",
+				},
+			);
 		} else if (shouldConvertWithMarkit) {
-			// Convert document or notebook via markit.
+			// Convert document via markit.
 			const result = await convertFileWithMarkit(absolutePath, signal);
 			if (result.ok) {
 				// Apply truncation to converted content

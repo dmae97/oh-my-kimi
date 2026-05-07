@@ -17,7 +17,6 @@ import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-m
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { DEFAULT_MATCH_LIMIT, SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
-import * as markitUtils from "@oh-my-pi/pi-coding-agent/utils/markit";
 import { $which, Snowflake } from "@oh-my-pi/pi-utils";
 import { unzipSync } from "fflate";
 
@@ -280,14 +279,21 @@ describe("Coding Agent Tools", () => {
 			expect(result.details?.truncation).toBeUndefined();
 		});
 
-		it("should convert ipynb files through markit for raw reads", async () => {
+		it("should read ipynb files as editable cell text", async () => {
 			const notebookPath = path.join(testDir, "notebook.ipynb");
 			const notebook = {
 				cells: [
 					{
 						cell_type: "markdown",
-						metadata: {},
+						metadata: { keep: true },
 						source: ["# Notebook Title\n", "\n", "Notebook body\n"],
+					},
+					{
+						cell_type: "code",
+						metadata: {},
+						source: ["print('hello')\n"],
+						execution_count: 7,
+						outputs: [{ output_type: "stream", name: "stdout", text: "hello\n" }],
 					},
 				],
 				metadata: {},
@@ -296,18 +302,53 @@ describe("Coding Agent Tools", () => {
 			};
 			fs.writeFileSync(notebookPath, JSON.stringify(notebook));
 
-			const convertSpy = vi.spyOn(markitUtils, "convertFileWithMarkit").mockResolvedValue({
-				ok: true,
-				content: "# Notebook Title\n\nNotebook body\n",
-			});
-
-			const result = await readTool.execute("test-call-ipynb", { path: `${notebookPath}:raw` });
+			const result = await readTool.execute("test-call-ipynb", { path: notebookPath });
 			const output = getTextOutput(result);
 
-			expect(convertSpy).toHaveBeenCalledTimes(1);
+			expect(output).toContain("# %% [markdown] cell:0");
 			expect(output).toContain("# Notebook Title");
 			expect(output).toContain("Notebook body");
+			expect(output).toContain("# %% [code] cell:1");
+			expect(output).toContain("print('hello')");
 			expect(output).not.toContain('"cell_type"');
+		});
+
+		it("should apply edits to the ipynb editable representation", async () => {
+			const notebookPath = path.join(testDir, "editable.ipynb");
+			const notebook = {
+				cells: [
+					{
+						cell_type: "markdown",
+						metadata: { keep: true },
+						source: ["Original title\n"],
+					},
+					{
+						cell_type: "code",
+						metadata: { trusted: true },
+						source: ["print('old')\n"],
+						execution_count: 3,
+						outputs: [{ output_type: "stream", name: "stdout", text: "old\n" }],
+					},
+				],
+				metadata: { kernelspec: { name: "python3" } },
+				nbformat: 4,
+				nbformat_minor: 5,
+			};
+			fs.writeFileSync(notebookPath, JSON.stringify(notebook));
+			const noLspEditTool = wrapToolWithMetaNotice(new EditTool({ ...session, enableLsp: false }));
+
+			await noLspEditTool.execute("test-edit-ipynb", {
+				path: notebookPath,
+				edits: [{ old_text: "print('old')", new_text: "print('new')" }],
+			});
+
+			const updated = JSON.parse(fs.readFileSync(notebookPath, "utf-8"));
+			expect(updated.cells).toHaveLength(2);
+			expect(updated.cells[1].source).toEqual(["print('new')\n"]);
+			expect(updated.cells[1].metadata).toEqual({ trusted: true });
+			expect(updated.cells[1].execution_count).toBe(3);
+			expect(updated.cells[1].outputs).toEqual([{ output_type: "stream", name: "stdout", text: "old\n" }]);
+			expect(updated.metadata).toEqual({ kernelspec: { name: "python3" } });
 		});
 
 		it("should handle non-existent files", async () => {

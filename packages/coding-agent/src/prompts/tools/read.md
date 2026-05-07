@@ -33,7 +33,7 @@ The `read` tool is multi-purpose and more capable than it looks — inspects fil
 
 # Inspection
 
-Extracts text from PDF, Word, PowerPoint, Excel, RTF, EPUB, and Jupyter notebook files. Can inspect images.
+Extracts text from PDF, Word, PowerPoint, Excel, RTF, EPUB, and Jupyter notebook files. Notebooks are shown as editable `# %% [type] cell:N` text; edits to that text are applied back to the underlying `.ipynb` JSON while preserving notebook metadata where possible. Can inspect images.
 
 # Directories & Archives
 

@@ -21,7 +21,7 @@ import {
 	restoreLineEndings,
 	stripBom,
 } from "../normalize";
-import { readEditFileText } from "../read-file";
+import { readEditFileText, serializeEditFileText } from "../read-file";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
 
 export interface FuzzyMatch {
@@ -1065,7 +1065,11 @@ export async function executeReplaceSingle(
 		throw new Error(`Edits to ${path} resulted in no changes being made.`);
 	}
 
-	const finalContent = bom + restoreLineEndings(result.content, originalEnding);
+	const finalContent = await serializeEditFileText(
+		absolutePath,
+		path,
+		bom + restoreLineEndings(result.content, originalEnding),
+	);
 	const diagnostics = await writethrough(
 		absolutePath,
 		finalContent,
