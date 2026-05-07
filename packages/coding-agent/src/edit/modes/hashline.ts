@@ -1548,7 +1548,7 @@ export function applyHashlineEdits(
 // but no header, we synthesize one from the caller-supplied `path` option.
 // ───────────────────────────────────────────────────────────────────────────
 
-interface HashlineInputSection {
+export interface HashlineInputSection {
 	path: string;
 	diff: string;
 }
@@ -1589,7 +1589,7 @@ function stripLeadingBlankLines(input: string): string {
 	return lines.join("\n");
 }
 
-function containsRecognizableHashlineOperations(input: string): boolean {
+export function containsRecognizableHashlineOperations(input: string): boolean {
 	for (const rawLine of input.split("\n")) {
 		const line = stripTrailingCarriageReturn(rawLine);
 		if (/^[+<=-]\s+/.test(line) || line.startsWith(HL_EDIT_SEP)) return true;
@@ -1670,18 +1670,12 @@ async function readHashlineFileText(
 	}
 }
 
-export async function computeHashlineDiff(
-	input: { input: string; path?: string },
+export async function computeHashlineSectionDiff(
+	section: HashlineInputSection,
 	cwd: string,
 	options: HashlineApplyOptions = {},
 ): Promise<{ diff: string; firstChangedLine: number | undefined } | { error: string }> {
 	try {
-		const sections = splitHashlineInputs(input.input, { cwd, path: input.path });
-		if (sections.length !== 1) {
-			return { error: "Streaming diff preview supports exactly one hashline section." };
-		}
-		const [section] = sections;
-
 		const absolutePath = resolveToCwd(section.path, cwd);
 		const rawContent = await readHashlineFileText(Bun.file(absolutePath), absolutePath, section.path);
 		const { text: content } = stripBom(rawContent);
@@ -1692,6 +1686,23 @@ export async function computeHashlineDiff(
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };
 	}
+}
+
+export async function computeHashlineDiff(
+	input: { input: string; path?: string },
+	cwd: string,
+	options: HashlineApplyOptions = {},
+): Promise<{ diff: string; firstChangedLine: number | undefined } | { error: string }> {
+	let sections: HashlineInputSection[];
+	try {
+		sections = splitHashlineInputs(input.input, { cwd, path: input.path });
+	} catch (err) {
+		return { error: err instanceof Error ? err.message : String(err) };
+	}
+	if (sections.length !== 1) {
+		return { error: "Streaming diff preview supports exactly one hashline section." };
+	}
+	return computeHashlineSectionDiff(sections[0], cwd, options);
 }
 
 // ───────────────────────────────────────────────────────────────────────────

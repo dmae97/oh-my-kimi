@@ -16,7 +16,13 @@ import type { Theme } from "../modes/theme/theme";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { computeEditDiff, type DiffError, type DiffResult } from "./diff";
 import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
-import { computeHashlineDiff } from "./modes/hashline";
+import {
+	computeHashlineDiff,
+	computeHashlineSectionDiff,
+	containsRecognizableHashlineOperations,
+	type HashlineInputSection,
+	splitHashlineInputs,
+} from "./modes/hashline";
 import { computePatchDiff, type PatchEditEntry } from "./modes/patch";
 import type { ReplaceEditEntry } from "./modes/replace";
 
@@ -223,12 +229,48 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 	async computeDiffPreview(args, ctx) {
 		if (typeof args.input !== "string" || args.input.length === 0) return null;
 		ctx.signal.throwIfAborted();
-		const result = await computeHashlineDiff({ input: args.input, path: args.path }, ctx.cwd, {
-			autoDropPureInsertDuplicates: ctx.hashlineAutoDropPureInsertDuplicates,
-		});
-		ctx.signal.throwIfAborted();
-		if ("error" in result && !args.path) return [{ path: "", error: result.error }];
-		return [toPerFilePreview(args.path ?? "", result)];
+
+		let sections: HashlineInputSection[];
+		try {
+			sections = splitHashlineInputs(args.input, { cwd: ctx.cwd, path: args.path });
+		} catch {
+			// Single-section fallback keeps the original error rendering for the
+			// "haven't typed `@PATH` yet" case.
+			const result = await computeHashlineDiff({ input: args.input, path: args.path }, ctx.cwd, {
+				autoDropPureInsertDuplicates: ctx.hashlineAutoDropPureInsertDuplicates,
+			});
+			ctx.signal.throwIfAborted();
+			if ("error" in result && !args.path) return [{ path: "", error: result.error }];
+			return [toPerFilePreview(args.path ?? "", result)];
+		}
+		if (sections.length === 0) return null;
+
+		// While the trailing section is still being typed (no operations yet)
+		// skip it so its empty/parse-error result doesn't replace previews of
+		// already-completed sections with an opaque header.
+		const lastIndex = sections.length - 1;
+		const trailingIncomplete =
+			sections.length > 1 && !containsRecognizableHashlineOperations(sections[lastIndex].diff);
+		const sectionsToProcess = trailingIncomplete ? sections.slice(0, -1) : sections;
+		const trailingProcessedIndex = sectionsToProcess.length - 1;
+
+		const previews: PerFileDiffPreview[] = [];
+		for (let i = 0; i < sectionsToProcess.length; i++) {
+			ctx.signal.throwIfAborted();
+			const section = sectionsToProcess[i];
+			const result = await computeHashlineSectionDiff(section, ctx.cwd, {
+				autoDropPureInsertDuplicates: ctx.hashlineAutoDropPureInsertDuplicates,
+			});
+			ctx.signal.throwIfAborted();
+			// In a multi-section preview, ignore parse/apply errors from the
+			// last section: it's still streaming and the partial op may not
+			// parse yet. Earlier sections are stable and stay rendered.
+			if (sectionsToProcess.length > 1 && i === trailingProcessedIndex && "error" in result) {
+				continue;
+			}
+			previews.push(toPerFilePreview(section.path, result));
+		}
+		return previews.length > 0 ? previews : null;
 	},
 	renderStreamingFallback() {
 		return "";

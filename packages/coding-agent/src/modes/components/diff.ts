@@ -1,7 +1,7 @@
 import { sanitizeText } from "@oh-my-pi/pi-natives";
 import { getIndentation } from "@oh-my-pi/pi-utils";
 import * as Diff from "diff";
-import { theme } from "../../modes/theme/theme";
+import { getLanguageFromPath, highlightCode, theme } from "../../modes/theme/theme";
 import { type CodeFrameMarker, formatCodeFrameLine, replaceTabs } from "../../tools/render-utils";
 
 /** SGR dim on / normal intensity — additive, preserves fg/bg colors. */
@@ -115,6 +115,10 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 		return Math.max(width, lineNumber.length);
 	}, 0);
 
+	// Batch-highlight context (unedited) lines so consecutive lines tokenize
+	// with full multi-line context. Highlighting is a no-op when no language
+	// can be detected from the file path.
+	const contextHighlights = highlightContextLines(parsedLines, options.filePath);
 	// Track the line number rendered on the previous emitted line so we can
 	// blank out duplicate gutters. Two cases trigger this:
 	//  1. Single-line replacement (`-N` followed by `+N`) — the `+N` repeats `N`.
@@ -206,15 +210,58 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 			);
 			i++;
 		} else {
-			result.push(
-				theme.fg(
-					"toolDiffContext",
-					formatLine(" ", parsed.lineNum, visualizeIndent(parsed.content, options.filePath)),
-				),
-			);
+			const highlighted = contextHighlights.get(i);
+			const content =
+				highlighted !== undefined
+					? replaceTabs(highlighted, options.filePath)
+					: visualizeIndent(parsed.content, options.filePath);
+			result.push(theme.fg("toolDiffContext", formatLine(" ", parsed.lineNum, content)));
 			i++;
 		}
 	}
 
 	return result.join("\n");
+}
+
+/**
+ * Batch-highlight runs of consecutive context lines.
+ * Returns a map keyed by index in `parsedLines` to the highlighted content
+ * for that line. Lines whose language is unknown are not added to the map,
+ * letting callers fall back to the existing rendering path.
+ */
+function highlightContextLines(
+	parsedLines: Array<{ prefix: CodeFrameMarker; lineNum: string; content: string } | null>,
+	filePath: string | undefined,
+): Map<number, string> {
+	const map = new Map<number, string>();
+	const lang = filePath ? getLanguageFromPath(filePath) : undefined;
+	if (!lang) return map;
+
+	let runIndices: number[] = [];
+	let runContents: string[] = [];
+	const flush = () => {
+		if (runContents.length === 0) return;
+		const highlighted = highlightCode(runContents.join("\n"), lang);
+		for (let k = 0; k < runIndices.length; k++) {
+			map.set(runIndices[k], highlighted[k] ?? runContents[k]);
+		}
+		runIndices = [];
+		runContents = [];
+	};
+
+	for (let j = 0; j < parsedLines.length; j++) {
+		const p = parsedLines[j];
+		// Collapse markers ("...") are emitted as context lines but are not real
+		// code; highlighting them produces nonsense (e.g. "..." → spread operator)
+		// and would also stitch together unrelated context blocks across the gap.
+		const isCollapseMarker = p?.prefix === " " && (p.content === "..." || p.content === "…");
+		if (p && p.prefix === " " && !isCollapseMarker) {
+			runIndices.push(j);
+			runContents.push(p.content);
+		} else {
+			flush();
+		}
+	}
+	flush();
+	return map;
 }

@@ -1,12 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Removed the dedicated `notebook` tool; `.ipynb` reads and edits now go through `read` and `edit`.
 
 ### Changed
 
+- Changed diff previews to syntax-highlight contiguous context lines in the unchanged sections when file language can be detected
 - Changed `read` tool behavior for `.ipynb:raw` requests to return raw notebook content instead of converting via markit
 - Changed `.ipynb` edit and read handling to route through notebook serialization helpers
 - Changed `.ipynb` reads to return an editable cell text representation and apply edits back to notebook JSON while preserving cell metadata and outputs where possible.
@@ -14,6 +16,10 @@
 ### Removed
 
 - Removed the `notebook.enabled` configuration option from tool settings
+
+### Fixed
+
+- Fixed hashline edit streaming preview collapsing to a header-only "opaque box" when a second `@PATH` section header arrived mid-stream — earlier completed sections now stay rendered while the trailing section is still being typed.
 
 ## [14.7.2] - 2026-05-06
 ### Breaking Changes
