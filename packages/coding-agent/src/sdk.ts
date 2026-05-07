@@ -201,6 +201,10 @@ export interface CreateAgentSessionOptions {
 	rules?: Rule[];
 	/** Context files (AGENTS.md content). Default: discovered walking up from cwd */
 	contextFiles?: Array<{ path: string; content: string }>;
+	/** Pre-built AGENTS.md search (skips re-scanning the workspace; passed by parents to subagents). */
+	agentsMdSearch?: AgentsMdSearch;
+	/** Pre-built workspace tree (skips re-scanning; passed by parents to subagents). */
+	workspaceTree?: WorkspaceTree;
 	/** Prompt templates. Default: discovered from cwd/.omp/prompts/ + agentDir/prompts/ */
 	promptTemplates?: PromptTemplate[];
 	/** File-based slash commands. Default: discovered from commands/ directories */
@@ -687,11 +691,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	if (!options.modelRegistry) {
 		modelRegistry.refreshInBackground();
 	}
-	// Kick off AGENTS.md filesystem search in parallel — it is the slowest piece of buildSystemPrompt
-	// (~200ms on large repos) and only needs `cwd`, so it can overlap with everything that follows.
-	const agentsMdSearchPromise: Promise<AgentsMdSearch> = logger.time("buildAgentsMdSearch", buildAgentsMdSearch, cwd);
+	// Kick off AGENTS.md filesystem search and workspace tree in parallel — they are the slowest pieces of
+	// buildSystemPrompt (can be many seconds on large repos) and only need `cwd`, so they overlap with
+	// everything that follows. Subagents inherit the parent's resolved values via options.
+	const agentsMdSearchPromise: Promise<AgentsMdSearch> = options.agentsMdSearch
+		? Promise.resolve(options.agentsMdSearch)
+		: logger.time("buildAgentsMdSearch", buildAgentsMdSearch, cwd);
 	agentsMdSearchPromise.catch(() => {});
-	const workspaceTreePromise: Promise<WorkspaceTree> = logger.time("buildWorkspaceTree", buildWorkspaceTree, cwd);
+	const workspaceTreePromise: Promise<WorkspaceTree> = options.workspaceTree
+		? Promise.resolve(options.workspaceTree)
+		: logger.time("buildWorkspaceTree", buildWorkspaceTree, cwd);
 	workspaceTreePromise.catch(() => {});
 
 	// Independent discoveries that depend only on cwd/agentDir — kicked off in parallel and awaited
@@ -889,7 +898,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		return { ttsrManager, rulebookRules, alwaysApplyRules };
 	});
 
-	const contextFiles = await contextFilesPromise;
+	const [contextFiles, resolvedAgentsMdSearch, resolvedWorkspaceTree] = await Promise.all([
+		contextFilesPromise,
+		agentsMdSearchPromise,
+		workspaceTreePromise,
+	]);
 
 	let agent: Agent;
 	let session!: AgentSession;
@@ -973,6 +986,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			},
 			skipPythonPreflight: options.skipPythonPreflight,
 			contextFiles,
+			agentsMdSearch: resolvedAgentsMdSearch,
+			workspaceTree: resolvedWorkspaceTree,
 			skills,
 			eventBus,
 			outputSchema: options.outputSchema,
