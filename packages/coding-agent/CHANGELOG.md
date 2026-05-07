@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.7.4] - 2026-05-07
+
 ### Breaking Changes
 
 - Removed the dedicated `notebook` tool; `.ipynb` reads and edits now go through `read` and `edit`.
