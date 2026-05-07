@@ -73,6 +73,15 @@ import { MCPCommandController } from "./controllers/mcp-command-controller";
 import { SelectorController } from "./controllers/selector-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
+import {
+	consumeLoopLimitIteration,
+	createLoopLimitRuntime,
+	describeLoopLimit,
+	describeLoopLimitRuntime,
+	isLoopDurationExpired,
+	type LoopLimitRuntime,
+	parseLoopLimitArgs,
+} from "./loop-limit";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { SessionObserverRegistry } from "./session-observer-registry";
 import type { Theme } from "./theme/theme";
@@ -158,6 +167,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	planModePlanFilePath: string | undefined = undefined;
 	loopModeEnabled = false;
 	loopPrompt: string | undefined = undefined;
+	loopLimit: LoopLimitRuntime | undefined = undefined;
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
@@ -535,25 +545,35 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #runLoopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
+		if (!consumeLoopLimitIteration(this.loopLimit)) {
+			this.disableLoopMode("Loop limit reached. Loop mode disabled.");
+			return;
+		}
+
 		if (action === "compact") {
 			await this.handleCompactCommand();
 		} else if (action === "reset") {
 			await this.handleClearCommand();
 		}
 		if (!this.loopModeEnabled || !this.onInputCallback) return;
+		if (isLoopDurationExpired(this.loopLimit)) {
+			this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
+			return;
+		}
 		this.onInputCallback(this.startPendingSubmission({ text: prompt }));
 	}
 
-	disableLoopMode(): void {
+	disableLoopMode(message = "Loop mode disabled."): void {
 		const wasEnabled = this.loopModeEnabled;
 		this.loopModeEnabled = false;
 		this.loopPrompt = undefined;
+		this.loopLimit = undefined;
 		this.#cancelLoopAutoSubmit();
 		this.statusLine.setLoopModeStatus(undefined);
 		this.updateEditorTopBorder();
 		this.ui.requestRender();
 		if (wasEnabled) {
-			this.showStatus("Loop mode disabled.");
+			this.showStatus(message);
 		}
 	}
 
@@ -567,18 +587,26 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#cancelLoopAutoSubmit();
 	}
 
-	async handleLoopCommand(): Promise<void> {
+	async handleLoopCommand(args = ""): Promise<void> {
 		if (this.loopModeEnabled) {
 			this.disableLoopMode();
 			return;
 		}
+		const parsedLimit = parseLoopLimitArgs(args);
+		if (typeof parsedLimit === "string") {
+			this.showError(parsedLimit);
+			return;
+		}
 		this.loopModeEnabled = true;
 		this.loopPrompt = undefined;
+		this.loopLimit = createLoopLimitRuntime(parsedLimit);
 		this.statusLine.setLoopModeStatus({ enabled: true });
 		this.updateEditorTopBorder();
 		this.ui.requestRender();
+		const limitSuffix = parsedLimit ? ` Limited to ${describeLoopLimit(parsedLimit)}.` : "";
+		const remainingSuffix = this.loopLimit ? ` ${describeLoopLimitRuntime(this.loopLimit)}.` : "";
 		this.showStatus(
-			"Loop mode enabled. Your next prompt will repeat after each turn. Esc cancels the current iteration; /loop again to disable.",
+			`Loop mode enabled.${limitSuffix}${remainingSuffix} Your next prompt will repeat after each turn. Esc cancels the current iteration; /loop again to disable.`,
 		);
 	}
 
