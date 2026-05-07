@@ -9,7 +9,7 @@ import { type Static, Type } from "@sinclair/typebox";
 import { stripHashlinePrefixes } from "../edit";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { createLspWritethrough, type FileDiagnosticsResult, type WritethroughCallback, writethroughNoop } from "../lsp";
-import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
+import { getLanguageFromPath, highlightCode, type Theme } from "../modes/theme/theme";
 import writeDescription from "../prompts/tools/write.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
@@ -523,12 +523,9 @@ function countLines(text: string): number {
 	return text.split("\n").length;
 }
 
-function formatMetadataLine(lineCount: number | null, language: string | undefined, uiTheme: Theme): string {
-	const icon = uiTheme.getLangIcon(language);
-	if (lineCount !== null) {
-		return uiTheme.fg("dim", `${icon} ${lineCount} lines`);
-	}
-	return uiTheme.fg("dim", `${icon}`);
+function formatLineCountSuffix(lineCount: number, uiTheme: Theme): string {
+	if (lineCount <= 0) return "";
+	return uiTheme.fg("dim", ` · ${lineCount} line${lineCount === 1 ? "" : "s"}`);
 }
 
 function normalizeDisplayText(text: string): string {
@@ -552,23 +549,34 @@ function formatStreamingContent(content: string, uiTheme: Theme): string {
 	return text;
 }
 
-function renderContentPreview(content: string, expanded: boolean, uiTheme: Theme): string {
+function renderContentPreview(
+	content: string,
+	expanded: boolean,
+	language: string | undefined,
+	uiTheme: Theme,
+): string {
 	if (!content) return "";
-	const lines = normalizeDisplayText(content).split("\n");
-	const maxLines = expanded ? lines.length : Math.min(lines.length, WRITE_PREVIEW_LINES);
-	const displayLines = expanded ? lines : lines.slice(-maxLines);
-	const hidden = lines.length - displayLines.length;
+	const rawLines = normalizeDisplayText(content).split("\n");
+	const totalLines = rawLines.length;
+	const maxLines = expanded ? totalLines : Math.min(totalLines, WRITE_PREVIEW_LINES);
+	const visibleLines = rawLines.slice(0, maxLines);
+	const highlighted = highlightCode(visibleLines.join("\n"), language);
+	const lineNumberWidth = String(maxLines).length;
+	const hidden = totalLines - maxLines;
 
 	let text = "\n\n";
-	for (const line of displayLines) {
-		text += `${uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(line), 80))}\n`;
+	for (let i = 0; i < highlighted.length; i++) {
+		const lineNum = i + 1;
+		const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")}│`);
+		const body = replaceTabs(highlighted[i] ?? "");
+		text += ` ${gutter}${body}\n`;
 	}
 	if (!expanded && hidden > 0) {
 		const hint = formatExpandHint(uiTheme, expanded, hidden > 0);
 		const moreLine = `${formatMoreItems(hidden, "line")}${hint ? ` ${hint}` : ""}`;
 		text += uiTheme.fg("dim", moreLine);
 	}
-	return text;
+	return text.trimEnd();
 }
 
 export const writeToolRenderer = {
@@ -606,17 +614,17 @@ export const writeToolRenderer = {
 		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
 		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
 		const lineCount = countLines(fileContent);
+		const lineSuffix = formatLineCountSuffix(lineCount, uiTheme);
 
 		// Build header with status icon
 		const header = renderStatusLine(
 			{
 				icon: "success",
 				title: "Write",
-				description: `${langIcon} ${pathDisplay}`,
+				description: `${langIcon} ${pathDisplay}${lineSuffix}`,
 			},
 			uiTheme,
 		);
-		const metadataLine = formatMetadataLine(lineCount, lang ?? "text", uiTheme);
 		const diagnostics = result.details?.diagnostics;
 
 		let cached: RenderCache | undefined;
@@ -628,8 +636,7 @@ export const writeToolRenderer = {
 				if (cached?.key === key) return cached.lines;
 
 				let text = header;
-				text += `\n${metadataLine}`;
-				text += renderContentPreview(fileContent, expanded, uiTheme);
+				text += renderContentPreview(fileContent, expanded, lang, uiTheme);
 
 				if (diagnostics) {
 					const diagText = formatDiagnostics(diagnostics, expanded, uiTheme, fp =>
