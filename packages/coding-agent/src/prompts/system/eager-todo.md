@@ -10,3 +10,4 @@ You **MUST** keep exactly one task `in_progress` and all later tasks `pending`.
 
 After `todo_write` succeeds, continue the request in the same turn.
 Do not call `todo_write` again unless task state materially changed.
+</system-reminder>
