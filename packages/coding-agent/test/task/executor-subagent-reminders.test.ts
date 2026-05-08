@@ -145,7 +145,7 @@ describe("runSubprocess yield reminders", () => {
 		expect(promptOptions).toHaveLength(2);
 		expect(promptOptions[0]?.attribution).toBe("agent");
 		expect(promptOptions[1]?.attribution).toBe("agent");
-		expect(prompts[1]).toContain("You stopped without calling yield");
+		expect(prompts[1]).toContain("Your last turn ended without a tool call");
 		expect(result.output).toContain('"done": true');
 		expect(result.output.includes("SYSTEM WARNING")).toBe(false);
 	});
