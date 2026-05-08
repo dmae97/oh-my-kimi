@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { glob } from "@oh-my-pi/pi-natives";
-import { formatAge, formatBytes } from "@oh-my-pi/pi-utils";
+import { $which, formatAge, formatBytes, logger } from "@oh-my-pi/pi-utils";
 
 export interface DirectoryTree {
 	rootPath: string;
@@ -35,6 +35,13 @@ export interface DirectoryTreeOptions {
 	cache?: boolean;
 	/** Rendered label for the root line. */
 	rootLabel?: string;
+	/**
+	 * Pre-built map of `parentRelativePath` → child name set used in place of
+	 * native directory listing. When provided, the tree builder consults this
+	 * map for child enumeration instead of `glob` / `readdir`. Stat calls per
+	 * displayed node are still performed for mtime/size/dir-ness.
+	 */
+	childIndex?: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 const WORKSPACE_TREE_MAX_DEPTH = 3;
@@ -81,6 +88,7 @@ interface ResolvedDirectoryTreeOptions {
 	gitignore: boolean;
 	cache: boolean;
 	rootLabel: string;
+	childIndex: ReadonlyMap<string, ReadonlySet<string>> | null;
 }
 
 interface RenderLine {
@@ -122,6 +130,7 @@ function resolveDirectoryTreeOptions(options: DirectoryTreeOptions): ResolvedDir
 		gitignore: options.gitignore ?? false,
 		cache: options.cache ?? true,
 		rootLabel: options.rootLabel ?? ".",
+		childIndex: options.childIndex ?? null,
 	};
 }
 
@@ -157,6 +166,10 @@ async function listDirectChildNames(
 	parent: DirectoryTreeNode,
 	options: ResolvedDirectoryTreeOptions,
 ): Promise<string[]> {
+	if (options.childIndex) {
+		const names = options.childIndex.get(parent.relativePath);
+		return names ? Array.from(names) : [];
+	}
 	if (!options.gitignore) {
 		const directoryPath = parent.relativePath ? path.join(rootPath, parent.relativePath) : rootPath;
 		return await fs.readdir(directoryPath);
@@ -377,19 +390,96 @@ export async function buildDirectoryTree(rootPath: string, options: DirectoryTre
 	};
 }
 
+/**
+ * Build a `parentRelativePath` → child name index from a flat list of POSIX
+ * paths. Intermediate directory components are inferred from path segments;
+ * the index covers every ancestor directory implied by the input.
+ */
+function buildChildIndexFromPaths(paths: readonly string[]): Map<string, Set<string>> {
+	const index = new Map<string, Set<string>>();
+	const ensure = (parent: string): Set<string> => {
+		let bucket = index.get(parent);
+		if (!bucket) {
+			bucket = new Set<string>();
+			index.set(parent, bucket);
+		}
+		return bucket;
+	};
+	for (const raw of paths) {
+		if (!raw) continue;
+		const normalized = raw.replace(/\\/g, "/");
+		const parts = normalized.split("/").filter(segment => segment.length > 0);
+		if (parts.length === 0) continue;
+		for (let i = 0; i < parts.length; i += 1) {
+			const parent = parts.slice(0, i).join("/");
+			const segment = parts[i];
+			if (segment !== undefined) ensure(parent).add(segment);
+		}
+	}
+	return index;
+}
+
+const GIT_LS_FILES_TIMEOUT_MS = 3000;
+
+/**
+ * List tracked + untracked-not-ignored files at `rootPath` via `git ls-files`.
+ * Returns `null` when git is unavailable, the directory is not inside a
+ * worktree, or the call fails / times out — caller falls back to native
+ * directory listing.
+ */
+async function tryListGitFiles(rootPath: string): Promise<string[] | null> {
+	const gitPath = $which("git");
+	if (!gitPath) return null;
+	const signal = AbortSignal.timeout(GIT_LS_FILES_TIMEOUT_MS);
+	try {
+		const child = Bun.spawn([gitPath, "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+			cwd: rootPath,
+			stdout: "pipe",
+			stderr: "pipe",
+			stdin: "ignore",
+			signal,
+		});
+		const [stdout, exitCode] = await Promise.all([
+			new Response(child.stdout as ReadableStream<Uint8Array>).text(),
+			child.exited,
+		]);
+		if (exitCode !== 0) return null;
+		if (!stdout) return [];
+		// `-z` separates entries with NUL; trailing NUL after final entry.
+		return stdout.split("\0").filter(entry => entry.length > 0);
+	} catch (error) {
+		logger.debug("git ls-files failed; falling back to native directory listing", {
+			rootPath,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return null;
+	}
+}
+
 export async function buildWorkspaceTree(cwd: string): Promise<WorkspaceTree> {
 	const rootPath = path.resolve(cwd);
+	const baseOptions = {
+		maxDepth: WORKSPACE_TREE_MAX_DEPTH,
+		directoryEntryLimit: WORKSPACE_TREE_DIR_LIMIT,
+		lineCap: WORKSPACE_TREE_LINE_CAP,
+		excludedDirectoryNames: WORKSPACE_TREE_EXCLUDED_DIRS,
+		hidden: false,
+		cache: true,
+		rootLabel: ".",
+	} satisfies DirectoryTreeOptions;
+
 	try {
-		return await buildDirectoryTree(rootPath, {
-			maxDepth: WORKSPACE_TREE_MAX_DEPTH,
-			directoryEntryLimit: WORKSPACE_TREE_DIR_LIMIT,
-			lineCap: WORKSPACE_TREE_LINE_CAP,
-			excludedDirectoryNames: WORKSPACE_TREE_EXCLUDED_DIRS,
-			hidden: false,
-			gitignore: true,
-			cache: true,
-			rootLabel: ".",
-		});
+		const gitFiles = await tryListGitFiles(rootPath);
+		if (gitFiles !== null) {
+			// Git already applied gitignore + tracking semantics: bypass native
+			// recursive scan and feed the index directly to the tree builder.
+			return await buildDirectoryTree(rootPath, {
+				...baseOptions,
+				gitignore: false,
+				childIndex: buildChildIndexFromPaths(gitFiles),
+			});
+		}
+		return await buildDirectoryTree(rootPath, { ...baseOptions, gitignore: true });
 	} catch {
 		return emptyWorkspaceTree(rootPath);
 	}

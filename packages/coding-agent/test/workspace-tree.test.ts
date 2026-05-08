@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { buildDirectoryTree, buildWorkspaceTree } from "@oh-my-pi/pi-coding-agent/workspace-tree";
+import { $ } from "bun";
 
 const tempDirs: string[] = [];
 
@@ -154,5 +155,37 @@ describe("buildWorkspaceTree", () => {
 		expect(tree.rendered).not.toContain("child-01.txt");
 		expect(tree.rendered).toContain("child-00.txt");
 		expect(tree.rendered).toContain("… 1 more");
+	});
+});
+
+describe("buildWorkspaceTree (git-backed listing)", () => {
+	afterEach(async () => {
+		await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
+	});
+
+	it("derives the tree from `git ls-files` and skips gitignored entries even without explicit excludes", async () => {
+		const cwd = await makeTempDir();
+		// `git init` produces a real worktree so tryListGitFiles activates.
+		await $`git init -q --initial-branch=main`.cwd(cwd).quiet().nothrow();
+		await $`git config user.email test@example.com`.cwd(cwd).quiet().nothrow();
+		await $`git config user.name test`.cwd(cwd).quiet().nothrow();
+
+		const base = Date.now() - 60_000;
+		await Bun.write(path.join(cwd, ".gitignore"), "secret.txt\nbuild-output/\n");
+		await writeFileWithMtime(path.join(cwd, "kept.txt"), "kept", base + 5_000);
+		await writeFileWithMtime(path.join(cwd, "secret.txt"), "secret", base + 4_000);
+		await touchDirWithMtime(path.join(cwd, "build-output"), base + 3_000);
+		await writeFileWithMtime(path.join(cwd, "build-output", "artifact.bin"), "x", base + 3_000);
+		await touchDirWithMtime(path.join(cwd, "src"), base + 2_000);
+		await writeFileWithMtime(path.join(cwd, "src", "main.ts"), "main", base + 2_000);
+
+		const tree = await buildWorkspaceTree(cwd);
+
+		expect(tree.rendered).toContain("kept.txt");
+		expect(tree.rendered).toContain("src/");
+		expect(tree.rendered).toContain("main.ts");
+		expect(tree.rendered).not.toContain("secret.txt");
+		expect(tree.rendered).not.toContain("build-output");
+		expect(tree.rendered).not.toContain("artifact.bin");
 	});
 });
