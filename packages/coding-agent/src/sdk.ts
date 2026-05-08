@@ -898,10 +898,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		return { ttsrManager, rulebookRules, alwaysApplyRules };
 	});
 
+	// Resolve contextFiles up-front (it's needed before tool creation). The agentsMd / workspace tree
+	// scans are slowest on large repos and we MUST NOT block startup on them — race them against a
+	// short deadline. On timeout we forward `undefined` to ToolSession; buildSystemPromptInternal will
+	// re-race them through its own withDeadline path, and subagents will scan independently (still
+	// cheaper than an unbounded parent hang). Background work continues so caches still warm.
+	const STARTUP_SCAN_DEADLINE_MS = 5000;
+	const raceWithDeadline = <T>(name: string, work: Promise<T>): Promise<T | undefined> =>
+		Promise.race([
+			work,
+			Bun.sleep(STARTUP_SCAN_DEADLINE_MS).then(() => {
+				logger.warn("Startup scan exceeded deadline; deferring to system prompt fallback", {
+					name,
+					timeoutMs: STARTUP_SCAN_DEADLINE_MS,
+					cwd,
+				});
+				return undefined;
+			}),
+		]);
 	const [contextFiles, resolvedAgentsMdSearch, resolvedWorkspaceTree] = await Promise.all([
 		contextFilesPromise,
-		agentsMdSearchPromise,
-		workspaceTreePromise,
+		raceWithDeadline("buildAgentsMdSearch", agentsMdSearchPromise),
+		raceWithDeadline("buildWorkspaceTree", workspaceTreePromise),
 	]);
 
 	let agent: Agent;

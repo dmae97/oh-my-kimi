@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed indefinite startup hang on large repos introduced in 14.7.6 ([#975](https://github.com/can1357/oh-my-pi/issues/975)). `createAgentSession` was awaiting `buildAgentsMdSearch` and `buildWorkspaceTree` directly in its blocking `Promise.all`, bypassing the existing 5s preparation deadline that previously protected startup. Both scans are now raced against a 5s deadline; on timeout the parent forwards `undefined` to `ToolSession` and `buildSystemPromptInternal` re-races them through its own `withDeadline` path, while the background scans continue so caches still warm.
+
 ## [14.7.6] - 2026-05-07
 ### Changed
 
