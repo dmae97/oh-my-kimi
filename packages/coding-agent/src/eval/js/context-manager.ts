@@ -1,5 +1,7 @@
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import * as util from "node:util";
 import * as vm from "node:vm";
 
@@ -417,6 +419,8 @@ async function createVmState(
 		btoa,
 		Buffer,
 		process: createProcessSubset(cwd),
+		require: buildRequire(cwd),
+		createRequire,
 		fs,
 		fetch,
 		Blob,
@@ -478,13 +482,81 @@ async function runQueued<T>(state: VmContextState, work: () => Promise<T>): Prom
 	}
 }
 
+function buildRequire(cwd: string): NodeJS.Require {
+	// Anchor `require` resolution at the session cwd. The filename does not need to exist;
+	// Node only uses it as a base for module resolution.
+	return createRequire(pathToFileURL(path.join(cwd, "[eval]")).href);
+}
+
+// Static `import ... from "x"` is not valid inside vm.runInContext. Rewrite the common
+// forms to dynamic `await import(...)` so users can paste ESM-style imports verbatim.
+const STATIC_IMPORT_RE = /^[ \t]*import\b(?:[ \t]+([^'"\n]+?)[ \t]+from)?[ \t]*(['"])([^'"\n]+)\2[ \t]*;?[ \t]*$/gm;
+
+function splitTopLevel(clause: string): string[] {
+	const out: string[] = [];
+	let depth = 0;
+	let buf = "";
+	for (const ch of clause) {
+		if (ch === "{") depth++;
+		else if (ch === "}") depth--;
+		if (ch === "," && depth === 0) {
+			if (buf.trim()) out.push(buf.trim());
+			buf = "";
+		} else {
+			buf += ch;
+		}
+	}
+	if (buf.trim()) out.push(buf.trim());
+	return out;
+}
+
+function rewriteImportClause(clause: string, sourceLiteral: string): string {
+	let defaultName: string | undefined;
+	let namespaceName: string | undefined;
+	let namedBlock: string | undefined;
+	for (const part of splitTopLevel(clause)) {
+		if (part.startsWith("{")) {
+			namedBlock = part;
+		} else if (part.startsWith("*")) {
+			const m = part.match(/^\*\s+as\s+([A-Za-z_$][\w$]*)$/);
+			if (!m) return `await import(${sourceLiteral}); /* unrewritten import: ${clause} */`;
+			namespaceName = m[1];
+		} else if (/^[A-Za-z_$][\w$]*$/.test(part)) {
+			defaultName = part;
+		} else {
+			return `await import(${sourceLiteral}); /* unrewritten import: ${clause} */`;
+		}
+	}
+	if (namedBlock) {
+		const inner = namedBlock.slice(1, -1).trim();
+		const renamed = inner.replace(/([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)/g, "$1: $2");
+		const props = defaultName ? `default: ${defaultName}, ${renamed}` : renamed;
+		return `const { ${props} } = await import(${sourceLiteral});`;
+	}
+	if (namespaceName && defaultName) {
+		return `const ${namespaceName} = await import(${sourceLiteral}); const ${defaultName} = ${namespaceName}.default;`;
+	}
+	if (namespaceName) return `const ${namespaceName} = await import(${sourceLiteral});`;
+	if (defaultName) return `const ${defaultName} = (await import(${sourceLiteral})).default;`;
+	return `await import(${sourceLiteral});`;
+}
+
+export function rewriteStaticImports(code: string): string {
+	return code.replace(STATIC_IMPORT_RE, (_match, clause: string | undefined, _quote, source: string) => {
+		const literal = JSON.stringify(source);
+		if (!clause) return `await import(${literal});`;
+		return rewriteImportClause(clause.trim(), literal);
+	});
+}
+
 function wrapCode(code: string): { source: string; asyncWrapped: boolean } {
-	const needsAsyncWrapper = /\bawait\b|\breturn\b/.test(code);
+	const rewritten = rewriteStaticImports(code);
+	const needsAsyncWrapper = /\bawait\b|\breturn\b/.test(rewritten);
 	if (!needsAsyncWrapper) {
-		return { source: code, asyncWrapped: false };
+		return { source: rewritten, asyncWrapped: false };
 	}
 	return {
-		source: `(async () => {\n${code}\n})()`,
+		source: `(async () => {\n${rewritten}\n})()`,
 		asyncWrapped: true,
 	};
 }

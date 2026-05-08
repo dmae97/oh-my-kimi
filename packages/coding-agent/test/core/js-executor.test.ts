@@ -262,4 +262,25 @@ describe("executeJs", () => {
 		expect(result.exitCode).toBeUndefined();
 		expect(result.output).toContain("Command timed out");
 	});
+
+	it('rewrites static `import { x } from "pkg"` to dynamic import', async () => {
+		const result = await executeJs('import { join } from "node:path";\nreturn join("a", "b");', {
+			sessionId,
+			session,
+			sessionFile,
+		});
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe(path.join("a", "b"));
+	});
+
+	it("exposes a cwd-bound `require` and `createRequire`", async () => {
+		const result = await executeJs(
+			'return { hasRequire: typeof require === "function", hasCreate: typeof createRequire === "function", path: require("node:path").sep };',
+			{ sessionId, session, sessionFile },
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.displayOutputs).toEqual([
+			{ type: "json", data: { hasRequire: true, hasCreate: true, path: path.sep } },
+		]);
+	});
 });
