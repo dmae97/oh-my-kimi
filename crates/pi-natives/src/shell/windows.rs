@@ -17,7 +17,7 @@ pub fn configure_windows_path(shell: &mut BrushShell) -> Result<()> {
 	}
 
 	let existing_path = shell
-		.env
+		.env()
 		.get("PATH")
 		.and_then(|(_, var)| match var.value() {
 			ShellValue::String(value) => Some(value.clone()),
@@ -66,7 +66,7 @@ pub fn configure_windows_path(shell: &mut BrushShell) -> Result<()> {
 	let mut var = ShellVariable::new(ShellValue::String(updated_path));
 	var.export();
 	shell
-		.env
+		.env_mut()
 		.set_global("PATH", var)
 		.map_err(|err| Error::from_reason(format!("Failed to set PATH: {err}")))?;
 
