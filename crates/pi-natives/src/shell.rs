@@ -30,8 +30,9 @@ mod minimizer;
 
 use brush_builtins::{BuiltinSet, default_builtins};
 use brush_core::{
-	CreateOptions, ExecutionContext, ExecutionControlFlow, ExecutionExitCode, ExecutionResult,
-	ProcessGroupPolicy, Shell as BrushShell, ShellValue, ShellVariable, builtins,
+	ExecutionContext, ExecutionControlFlow, ExecutionExitCode, ExecutionResult, ProcessGroupPolicy,
+	ProfileLoadBehavior, RcLoadBehavior, Shell as BrushShell, ShellValue, ShellVariable, SourceInfo,
+	builtins,
 	env::EnvironmentScope,
 	openfiles::{self, OpenFile, OpenFiles},
 };
@@ -432,6 +433,7 @@ const fn exit_code(result: &ExecutionResult) -> i32 {
 		ExecutionExitCode::CannotExecute => 126,
 		ExecutionExitCode::NotFound => 127,
 		ExecutionExitCode::Interrupted => 130,
+		ExecutionExitCode::BrokenPipe => 141,
 		ExecutionExitCode::Custom(code) => code as i32,
 	}
 }
@@ -496,17 +498,12 @@ fn merge_path_values(_existing: &str, incoming: &str) -> String {
 }
 
 async fn create_session(config: &ShellConfig) -> Result<ShellSessionCore> {
-	let create_options = CreateOptions {
-		interactive: false,
-		login: false,
-		no_profile: true,
-		no_rc: true,
-		do_not_inherit_env: true,
-		builtins: default_builtins(BuiltinSet::BashMode),
-		..Default::default()
-	};
-
-	let mut shell = BrushShell::new(create_options)
+	let mut shell = BrushShell::builder()
+		.do_not_inherit_env(true)
+		.profile(ProfileLoadBehavior::Skip)
+		.rc(RcLoadBehavior::Skip)
+		.builtins(default_builtins(BuiltinSet::BashMode))
+		.build()
 		.await
 		.map_err(|err| Error::from_reason(format!("Failed to initialize shell: {err}")))?;
 
@@ -516,8 +513,8 @@ async fn create_session(config: &ShellConfig) -> Result<ShellSessionCore> {
 	if let Some(suspend_builtin) = shell.builtin_mut("suspend") {
 		suspend_builtin.disabled = true;
 	}
-	shell.register_builtin("sleep", builtins::builtin::<SleepCommand>());
-	shell.register_builtin("timeout", builtins::builtin::<TimeoutCommand>());
+	shell.register_builtin("sleep", builtins::builtin::<SleepCommand, _>());
+	shell.register_builtin("timeout", builtins::builtin::<TimeoutCommand, _>());
 
 	let mut merged_path: Option<String> = None;
 	for (key, value) in std::env::vars() {
@@ -535,7 +532,7 @@ async fn create_session(config: &ShellConfig) -> Result<ShellSessionCore> {
 		let mut var = ShellVariable::new(ShellValue::String(value));
 		var.export();
 		shell
-			.env
+			.env_mut()
 			.set_global(normalized_key, var)
 			.map_err(|err| Error::from_reason(format!("Failed to set env: {err}")))?;
 	}
@@ -551,7 +548,7 @@ async fn create_session(config: &ShellConfig) -> Result<ShellSessionCore> {
 		let mut var = ShellVariable::new(ShellValue::String(path_value));
 		var.export();
 		shell
-			.env
+			.env_mut()
 			.set_global("PATH", var)
 			.map_err(|err| Error::from_reason(format!("Failed to set env: {err}")))?;
 	}
@@ -565,7 +562,7 @@ async fn create_session(config: &ShellConfig) -> Result<ShellSessionCore> {
 			let mut var = ShellVariable::new(ShellValue::String(value.clone()));
 			var.export();
 			shell
-				.env
+				.env_mut()
 				.set_global(normalized_key, var)
 				.map_err(|err| Error::from_reason(format!("Failed to set env: {err}")))?;
 		}
@@ -583,6 +580,7 @@ async fn create_session(config: &ShellConfig) -> Result<ShellSessionCore> {
 
 async fn source_snapshot(shell: &mut BrushShell, snapshot_path: &str) -> Result<()> {
 	let mut params = shell.default_exec_params();
+	let source_info = SourceInfo::from("pi-natives:snapshot");
 	params.set_fd(OpenFiles::STDIN_FD, null_file()?);
 	params.set_fd(OpenFiles::STDOUT_FD, null_file()?);
 	params.set_fd(OpenFiles::STDERR_FD, null_file()?);
@@ -590,7 +588,7 @@ async fn source_snapshot(shell: &mut BrushShell, snapshot_path: &str) -> Result<
 	let escaped = snapshot_path.replace('\'', "'\\''");
 	let command = format!("source '{escaped}'");
 	shell
-		.run_string(command, &params)
+		.run_string(command, &source_info, &params)
 		.await
 		.map_err(|err| Error::from_reason(format!("Failed to source snapshot: {err}")))?;
 	Ok(())
@@ -627,7 +625,10 @@ async fn run_shell_command(
 
 	let mut env_scope_pushed = false;
 	if let Some(env) = options.env.as_ref() {
-		session.shell.env.push_scope(EnvironmentScope::Command);
+		session
+			.shell
+			.env_mut()
+			.push_scope(EnvironmentScope::Command);
 		env_scope_pushed = true;
 		for (key, value) in env {
 			let normalized_key = normalize_env_key(key);
@@ -636,12 +637,13 @@ async fn run_shell_command(
 			}
 			let mut var = ShellVariable::new(ShellValue::String(value.clone()));
 			var.export();
-			if let Err(err) = session
-				.shell
-				.env
-				.add(normalized_key, var, EnvironmentScope::Command)
+			if let Err(err) =
+				session
+					.shell
+					.env_mut()
+					.add(normalized_key, var, EnvironmentScope::Command)
 			{
-				let _ = session.shell.env.pop_scope(EnvironmentScope::Command);
+				let _ = session.shell.env_mut().pop_scope(EnvironmentScope::Command);
 				return Err(Error::from_reason(format!("Failed to set env: {err}")));
 			}
 		}
@@ -694,9 +696,10 @@ async fn run_shell_command(
 			reader_cancel.cancel();
 		}
 	});
+	let source_info = SourceInfo::from("pi-natives:command");
 	let result = session
 		.shell
-		.run_string(options.command.clone(), &params)
+		.run_string(options.command.clone(), &source_info, &params)
 		.await;
 
 	if cancel_token.is_cancelled() {
@@ -706,7 +709,7 @@ async fn run_shell_command(
 	if env_scope_pushed {
 		session
 			.shell
-			.env
+			.env_mut()
 			.pop_scope(EnvironmentScope::Command)
 			.map_err(|err| Error::from_reason(format!("Failed to pop env scope: {err}")))?;
 	}
@@ -793,11 +796,11 @@ async fn run_shell_command(
 }
 
 fn terminate_background_jobs(shell: &BrushShell) {
-	if shell.jobs.jobs.is_empty() {
+	if shell.jobs().jobs.is_empty() {
 		return;
 	}
 	let mut targets = ps::TerminationTargets::new();
-	for job in &shell.jobs.jobs {
+	for job in &shell.jobs().jobs {
 		if let Some(pgid) = job.process_group_id() {
 			targets.add_pgid(pgid);
 		}
@@ -1202,9 +1205,9 @@ struct SleepCommand {
 impl builtins::Command for SleepCommand {
 	type Error = brush_core::Error;
 
-	fn execute(
+	fn execute<SE: brush_core::ShellExtensions>(
 		&self,
-		context: ExecutionContext<'_>,
+		context: ExecutionContext<'_, SE>,
 	) -> impl Future<Output = std::result::Result<ExecutionResult, brush_core::Error>> + Send {
 		let durations = self.durations.clone();
 		async move {
@@ -1246,9 +1249,9 @@ struct TimeoutCommand {
 impl builtins::Command for TimeoutCommand {
 	type Error = brush_core::Error;
 
-	fn execute(
+	fn execute<SE: brush_core::ShellExtensions>(
 		&self,
-		context: ExecutionContext<'_>,
+		context: ExecutionContext<'_, SE>,
 	) -> impl Future<Output = std::result::Result<ExecutionResult, brush_core::Error>> + Send {
 		let duration = self.duration.clone();
 		let command = self.command.clone();
@@ -1279,7 +1282,10 @@ impl builtins::Command for TimeoutCommand {
 			}
 
 			let cancel_token = context.cancel_token();
-			let run_future = context.shell.run_string(command_line, &params);
+			let source_info = SourceInfo::from("pi-natives:timeout");
+			let run_future = context
+				.shell
+				.run_string(command_line, &source_info, &params);
 			tokio::pin!(run_future);
 
 			if let Some(cancel_token) = cancel_token {
@@ -1479,10 +1485,11 @@ mod tests {
 		// Run brush in the background so we can call `getsid(child_pid)` while
 		// the child is still alive.
 		let shell_handle = tokio::spawn(async move {
+			let source_info = SourceInfo::from("pi-natives:test");
 			// `printf '%d\n' "$$"` then `sleep 0.5`. Long enough for our `getsid`.
 			let exec = session
 				.shell
-				.run_string("/bin/sh -c 'printf \"%d\\n\" \"$$\"; sleep 0.5'", &params)
+				.run_string("/bin/sh -c 'printf \"%d\\n\" \"$$\"; sleep 0.5'", &source_info, &params)
 				.await
 				.expect("run_string");
 			drop(params);

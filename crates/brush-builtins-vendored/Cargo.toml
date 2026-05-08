@@ -232,6 +232,7 @@ features = [
     "fs",
     "process",
     "resource",
+    "poll",
     "signal",
     "term",
     "user",

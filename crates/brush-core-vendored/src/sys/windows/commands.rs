@@ -1,10 +1,12 @@
 //! Command execution utilities.
 
-use std::ffi::OsStr;
+use std::{ffi::OsStr, os::windows::process::CommandExt as WindowsCommandExt};
+
+use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
 
 use crate::{ShellFd, error, openfiles};
 
-/// Extension trait for Unix-like command extensions.
+/// Extension trait for Windows command extensions.
 pub trait CommandExt {
 	/// Sets the zeroth argument (argv[0]) of the command.
 	///
@@ -28,12 +30,14 @@ impl CommandExt for std::process::Command {
 	where
 		S: AsRef<OsStr>,
 	{
-		// NOTE: no-op.
+		// NOTE: Windows does not support overriding argv[0] directly.
 		self
 	}
 
-	fn process_group(&mut self, _pgroup: i32) -> &mut Self {
-		// NOTE: no-op.
+	fn process_group(&mut self, pgroup: i32) -> &mut Self {
+		if pgroup == 0 {
+			self.creation_flags(CREATE_NEW_PROCESS_GROUP);
+		}
 		self
 	}
 }
@@ -69,7 +73,12 @@ impl CommandFdInjectionExt for std::process::Command {
 		mut open_files: impl Iterator<Item = (ShellFd, openfiles::OpenFile)>,
 	) -> Result<(), error::Error> {
 		if open_files.next().is_some() {
-			return Err(error::ErrorKind::NotSupportedOnThisPlatform("fd redirections").into());
+			return Err(
+				error::ErrorKind::NotSupportedOnThisPlatform(
+					"fd redirections beyond stdin/stdout/stderr on Windows",
+				)
+				.into(),
+			);
 		}
 
 		Ok(())
@@ -86,22 +95,24 @@ pub trait CommandFgControlExt {
 
 impl CommandFgControlExt for std::process::Command {
 	fn take_foreground(&mut self) {
-		// NOTE: This is a no-op.
+		self.creation_flags(CREATE_NEW_PROCESS_GROUP);
 	}
 
 	fn lead_session(&mut self) {
-		// NOTE: This is a no-op.
+		self.creation_flags(CREATE_NEW_PROCESS_GROUP);
 	}
 }
 
-/// Extension trait for detaching commands from the parent's controlling terminal.
+/// Extension trait for detaching a command from the parent's controlling terminal.
 pub trait CommandSessionExt {
-	/// Arranges for the command to run in a new session with no controlling terminal.
+	/// Arranges for the command to run in a new POSIX session with no controlling
+	/// terminal. On Windows this is a no-op; process-group behavior is handled
+	/// by `CommandFgControlExt` via `CREATE_NEW_PROCESS_GROUP`.
 	fn detach_session(&mut self);
 }
 
 impl CommandSessionExt for std::process::Command {
 	fn detach_session(&mut self) {
-		// NOTE: This is a no-op on platforms without setsid support.
+		// NOTE: Windows has no setsid; intentionally a no-op.
 	}
 }

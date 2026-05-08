@@ -2,10 +2,13 @@ use std::{
 	collections::VecDeque,
 	io::Write,
 	path::{Path, PathBuf},
+	sync::Arc,
 };
 
 use brush_parser::ast::{self, CommandPrefixOrSuffixItem};
 use itertools::Itertools;
+
+use tokio_util::sync::CancellationToken;
 
 use crate::{
 	ShellFd,
@@ -28,6 +31,39 @@ struct PipelineExecutionContext<'a, SE: extensions::ShellExtensions> {
 	process_group_id: Option<i32>,
 }
 
+/// Information about an expanded external command launch.
+pub struct ExternalCommandInfo<'a> {
+	/// Shell command name before path resolution.
+	pub command_name:    &'a str,
+	/// Resolved executable path used for the process launch.
+	pub executable_path: &'a str,
+	/// Expanded process arguments, excluding `argv[0]`.
+	pub args:            Vec<&'a str>,
+}
+
+/// Marker strings written around a launched command's output.
+#[derive(Clone)]
+pub struct ExternalCommandOutputMarkers {
+	/// Marker written immediately before the process is spawned.
+	pub start_marker:      String,
+	/// Prefix for the completion marker; the numeric exit code is inserted
+	/// between this prefix and [`Self::end_marker_suffix`].
+	pub end_marker_prefix: String,
+	/// Suffix for the completion marker.
+	pub end_marker_suffix: String,
+}
+
+/// Optional hook used by embedders that need to identify output boundaries
+/// for individual external command launches.
+pub trait ExternalCommandOutputMarker: Send + Sync {
+	/// Returns markers for this external command, or `None` to leave its
+	/// output unmarked.
+	fn markers_for_external_command(
+		&self,
+		info: ExternalCommandInfo<'_>,
+	) -> Option<ExternalCommandOutputMarkers>;
+}
+
 /// Parameters for execution.
 #[derive(Clone, Default)]
 pub struct ExecutionParameters {
@@ -35,12 +71,56 @@ pub struct ExecutionParameters {
 	open_files:               openfiles::OpenFiles,
 	/// Policy for how to manage spawned external processes.
 	pub process_group_policy: ProcessGroupPolicy,
+	/// Optional cancellation token shared with callers.
+	cancel_token:             Option<CancellationToken>,
+	/// Optional command-output marker hook.
+	command_output_marker:    Option<Arc<dyn ExternalCommandOutputMarker>>,
+	/// Whether command-output marking was disabled by shell syntax that can
+	/// consume or redirect command output.
+	command_output_disabled:  bool,
 	/// Whether `errexit` (exit on error) behavior should be
 	/// suppressed in this execution context. Defaults to `false`.
 	pub suppress_errexit:     bool,
 }
 
 impl ExecutionParameters {
+	/// Assigns a cancellation token for this execution.
+	pub fn set_cancel_token(&mut self, token: CancellationToken) {
+		self.cancel_token = Some(token);
+	}
+
+	/// Returns the cancellation token, if present.
+	pub fn cancel_token(&self) -> Option<CancellationToken> {
+		self.cancel_token.clone()
+	}
+
+	/// Returns true when cancellation has been requested.
+	pub fn is_cancelled(&self) -> bool {
+		self
+			.cancel_token
+			.as_ref()
+			.is_some_and(CancellationToken::is_cancelled)
+	}
+
+	/// Assigns an external-command output marker hook for this execution.
+	pub fn set_command_output_marker(&mut self, marker: Arc<dyn ExternalCommandOutputMarker>) {
+		self.command_output_marker = Some(marker);
+		self.command_output_disabled = false;
+	}
+
+	/// Disables external-command output marking for this execution branch.
+	pub fn disable_command_output_marking(&mut self) {
+		self.command_output_disabled = true;
+	}
+
+	/// Returns the active output marker hook, if marking is still safe.
+	pub fn command_output_marker(&self) -> Option<&Arc<dyn ExternalCommandOutputMarker>> {
+		if self.command_output_disabled {
+			return None;
+		}
+		self.command_output_marker.as_ref()
+	}
+
 	/// Returns the standard input file; usable with `write!` et al.
 	///
 	/// # Arguments
@@ -173,6 +253,14 @@ impl ExecutionParameters {
 	}
 }
 
+fn ensure_not_cancelled(params: &ExecutionParameters) -> Result<(), error::Error> {
+	if params.is_cancelled() {
+		return Err(error::ErrorKind::Interrupted.into());
+	}
+	Ok(())
+}
+
+
 #[derive(Clone, Debug, Default)]
 /// Policy for how to manage spawned external processes.
 pub enum ProcessGroupPolicy {
@@ -208,9 +296,11 @@ impl Execute for ast::Program {
 		shell: &mut Shell<impl extensions::ShellExtensions>,
 		params: &ExecutionParameters,
 	) -> Result<ExecutionResult, error::Error> {
+		ensure_not_cancelled(params)?;
 		let mut result = ExecutionResult::success();
 
 		for command in &self.complete_commands {
+			ensure_not_cancelled(params)?;
 			// Execute the command and handle any errors without immediately propagating
 			// them. This allows interactive shells to continue executing subsequent
 			// commands even after errors.
@@ -243,13 +333,15 @@ impl Execute for ast::CompoundList {
 		shell: &mut Shell<impl extensions::ShellExtensions>,
 		params: &ExecutionParameters,
 	) -> Result<ExecutionResult, error::Error> {
+		ensure_not_cancelled(params)?;
 		let mut result = ExecutionResult::success();
 
 		for ast::CompoundListItem(ao_list, sep) in &self.0 {
+			ensure_not_cancelled(params)?;
 			let run_async = matches!(sep, ast::SeparatorOperator::Async);
 
 			if run_async {
-				let job = spawn_async_ao_list_in_task(ao_list, shell, params);
+				let job = spawn_async_ao_list_as_job(ao_list, shell, params).await?;
 				let job_formatted = job.to_pid_style_string();
 
 				if shell.options().interactive && !shell.is_subshell() {
@@ -273,24 +365,114 @@ impl Execute for ast::CompoundList {
 	}
 }
 
-fn spawn_async_ao_list_in_task<'a, SE: extensions::ShellExtensions>(
+async fn spawn_async_ao_list_as_job<'a, SE: extensions::ShellExtensions>(
 	ao_list: &ast::AndOrList,
 	shell: &'a mut Shell<SE>,
 	params: &ExecutionParameters,
-) -> &'a jobs::Job {
+) -> Result<&'a jobs::Job, error::Error> {
+	let mut async_params = params.clone();
+	async_params.disable_command_output_marking();
+
+	// Redirect stdin to null, per spec.
+	if let Ok(null) = openfiles::null() {
+		async_params.set_fd(openfiles::OpenFiles::STDIN_FD, null);
+	}
+
+	let job = if should_try_spawn_pipeline_as_job(ao_list, shell, &async_params).await? {
+		match try_spawn_pipeline_as_job(&ao_list.first, ao_list.to_string(), shell, &async_params)
+			.await?
+		{
+			Some(job) => job,
+			None => spawn_async_ao_list_in_task(ao_list, shell, &async_params),
+		}
+	} else {
+		spawn_async_ao_list_in_task(ao_list, shell, &async_params)
+	};
+
+	Ok(shell.jobs_mut().add_as_current(job))
+}
+
+async fn should_try_spawn_pipeline_as_job<SE: extensions::ShellExtensions>(
+	ao_list: &ast::AndOrList,
+	shell: &mut Shell<SE>,
+	params: &ExecutionParameters,
+) -> Result<bool, error::Error> {
+	if !ao_list.additional.is_empty() {
+		return Ok(false);
+	}
+
+	let pipeline = &ao_list.first;
+	if pipeline.bang {
+		return Ok(false);
+	}
+
+	let [ast::Command::Simple(simple_cmd)] = pipeline.seq.as_slice() else {
+		return Ok(false);
+	};
+	let Some(command_word) = simple_cmd.word_or_name.as_ref() else {
+		return Ok(false);
+	};
+
+	let expanded = expansion::full_expand_and_split_word(shell, params, command_word).await?;
+	let [command_name] = expanded.as_slice() else {
+		return Ok(false);
+	};
+
+	if shell.aliases().contains_key(command_name) {
+		return Ok(false);
+	}
+	if shell
+		.builtins()
+		.get(command_name.as_str())
+		.is_some_and(|registration| !registration.disabled)
+	{
+		return Ok(false);
+	}
+	if shell.funcs().get(command_name.as_str()).is_some() {
+		return Ok(false);
+	}
+
+	Ok(true)
+}
+
+async fn try_spawn_pipeline_as_job<SE: extensions::ShellExtensions>(
+	pipeline: &ast::Pipeline,
+	command_line: String,
+	shell: &mut Shell<SE>,
+	params: &ExecutionParameters,
+) -> Result<Option<jobs::Job>, error::Error> {
+	let mut subshell = shell.clone();
+	subshell.options_mut().interactive = false;
+
+	let spawn_results = spawn_pipeline_processes(pipeline, &mut subshell, params).await?;
+	let mut tasks = VecDeque::new();
+
+	for spawn_result in spawn_results {
+		if let ExecutionWaitResult::Stopped(child) = spawn_result.poll().await? {
+			tasks.push_back(jobs::JobTask::External(child));
+		}
+	}
+
+	if tasks.is_empty() {
+		return Ok(None);
+	}
+
+	Ok(Some(jobs::Job::new(tasks, command_line, jobs::JobState::Running)))
+}
+
+fn spawn_async_ao_list_in_task<SE: extensions::ShellExtensions>(
+	ao_list: &ast::AndOrList,
+	shell: &mut Shell<SE>,
+	params: &ExecutionParameters,
+) -> jobs::Job {
 	// Clone the inputs.
 	let mut cloned_shell = shell.clone();
-	let mut cloned_params = params.clone();
+	let cloned_params = params.clone();
 	let cloned_ao_list = ao_list.clone();
 
 	// Mark the child shell as not interactive; we don't want it messing with the
 	// terminal too much.
 	cloned_shell.options_mut().interactive = false;
-
-	// Redirect stdin to null, per spec.
-	if let Ok(null) = openfiles::null() {
-		cloned_params.set_fd(openfiles::OpenFiles::STDIN_FD, null);
-	}
 
 	let join_handle = tokio::spawn(async move {
 		cloned_ao_list
@@ -298,11 +480,11 @@ fn spawn_async_ao_list_in_task<'a, SE: extensions::ShellExtensions>(
 			.await
 	});
 
-	shell.jobs_mut().add_as_current(jobs::Job::new(
+	jobs::Job::new(
 		[jobs::JobTask::Internal(join_handle)],
 		ao_list.to_string(),
 		jobs::JobState::Running,
-	))
+	)
 }
 
 #[async_trait::async_trait]
@@ -312,6 +494,7 @@ impl Execute for ast::AndOrList {
 		shell: &mut Shell<impl extensions::ShellExtensions>,
 		params: &ExecutionParameters,
 	) -> Result<ExecutionResult, error::Error> {
+		ensure_not_cancelled(params)?;
 		let has_operators = !self.additional.is_empty();
 
 		// For the first command, suppress errexit if there are more commands after it
@@ -323,6 +506,7 @@ impl Execute for ast::AndOrList {
 		let mut result = self.first.execute(shell, &first_params).await?;
 
 		for (index, next_ao) in self.additional.iter().enumerate() {
+			ensure_not_cancelled(params)?;
 			// Check for non-normal control flow.
 			if !result.is_normal_flow() {
 				break;
@@ -368,6 +552,7 @@ impl Execute for ast::Pipeline {
 		shell: &mut Shell<impl extensions::ShellExtensions>,
 		params: &ExecutionParameters,
 	) -> Result<ExecutionResult, error::Error> {
+		ensure_not_cancelled(params)?;
 		// Capture current timing if so requested.
 		let stopwatch = self
 			.timed
@@ -449,6 +634,7 @@ async fn spawn_pipeline_processes(
 	shell: &mut Shell<impl extensions::ShellExtensions>,
 	params: &ExecutionParameters,
 ) -> Result<VecDeque<ExecutionSpawnResult>, error::Error> {
+	ensure_not_cancelled(params)?;
 	let pipeline_len = pipeline.seq.len();
 	let mut pipe_readers = vec![];
 	let mut pipe_writers = vec![];
@@ -470,6 +656,7 @@ async fn spawn_pipeline_processes(
 	}
 
 	for (current_pipeline_index, command) in pipeline.seq.iter().enumerate() {
+		ensure_not_cancelled(params)?;
 		//
 		// We run a command directly in the current shell if either of the following is
 		// true:
@@ -486,6 +673,10 @@ async fn spawn_pipeline_processes(
 
 		// Set up parameters appropriate for this command.
 		let mut cmd_params = params.clone();
+		if pipeline_len > 1 {
+			cmd_params.disable_command_output_marking();
+		}
+
 
 		// Install pipes.
 		if let Some(Some(reader)) = pipe_readers.pop() {
@@ -538,6 +729,7 @@ async fn wait_for_pipeline_processes_and_update_status(
 	shell: &mut Shell<impl extensions::ShellExtensions>,
 	params: &ExecutionParameters,
 ) -> Result<ExecutionResult, error::Error> {
+	ensure_not_cancelled(params)?;
 	let mut result = ExecutionResult::success();
 	let mut stopped_children = vec![];
 	let mut last_failure_exit_code: Option<ExecutionExitCode> = None;
@@ -546,10 +738,11 @@ async fn wait_for_pipeline_processes_and_update_status(
 	shell.last_pipeline_statuses_mut().clear();
 
 	while let Some(child) = process_spawn_results.pop_front() {
+		ensure_not_cancelled(params)?;
 		let wait_result = if !stopped_children.is_empty() {
 			child.poll().await?
 		} else {
-			child.wait().await?
+			child.wait_with_cancel(params.cancel_token()).await?
 		};
 
 		match wait_result {
@@ -613,6 +806,7 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::Command {
 		mut pipeline_context: PipelineExecutionContext<'_, SE>,
 		mut params: ExecutionParameters,
 	) -> Result<ExecutionSpawnResult, error::Error> {
+		ensure_not_cancelled(&params)?;
 		if pipeline_context.shell.options().do_not_execute_commands {
 			return Ok(ExecutionSpawnResult::Completed(ExecutionResult::success()));
 		}
@@ -623,6 +817,7 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::Command {
 		match self {
 			Self::Simple(simple) => simple.execute_in_pipeline(pipeline_context, params).await,
 			Self::Compound(compound, redirects) => {
+				params.disable_command_output_marking();
 				// Set up any additional redirects.
 				if let Some(redirects) = redirects {
 					for redirect in &redirects.0 {
@@ -635,10 +830,13 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::Command {
 					.await?
 					.into())
 			},
-			Self::Function(func) => Ok(func
-				.execute(&mut pipeline_context.shell, &params)
-				.await?
-				.into()),
+			Self::Function(func) => {
+				params.disable_command_output_marking();
+				Ok(func
+					.execute(&mut pipeline_context.shell, &params)
+					.await?
+					.into())
+			},
 			Self::ExtendedTest(e, redirects) => {
 				// Set up any additional redirects.
 				if let Some(redirects) = redirects {
@@ -677,6 +875,7 @@ impl Execute for ast::CompoundCommand {
 		shell: &mut Shell<impl extensions::ShellExtensions>,
 		params: &ExecutionParameters,
 	) -> Result<ExecutionResult, error::Error> {
+		ensure_not_cancelled(params)?;
 		match self {
 			Self::BraceGroup(ast::BraceGroupCommand { list, .. }) => list.execute(shell, params).await,
 			Self::Subshell(ast::SubshellCommand { list, .. }) => {
@@ -721,6 +920,7 @@ impl Execute for ast::CoprocessCommand {
 		shell: &mut Shell<impl extensions::ShellExtensions>,
 		params: &ExecutionParameters,
 	) -> Result<ExecutionResult, error::Error> {
+		ensure_not_cancelled(params)?;
 		if shell.options().do_not_execute_commands {
 			return Ok(ExecutionResult::success());
 		}
@@ -760,6 +960,7 @@ impl Execute for ast::CoprocessCommand {
 			.set_fd(OpenFiles::STDOUT_FD, stdout_writer.into());
 
 		let body = self.body.clone();
+		let cancel_token = child_params.cancel_token();
 		let join_handle = tokio::spawn(async move {
 			let pipeline_context = PipelineExecutionContext {
 				shell:            commands::ShellForCommand::ParentShell(&mut child_shell),
@@ -768,7 +969,7 @@ impl Execute for ast::CoprocessCommand {
 			let spawn_result = body
 				.execute_in_pipeline(pipeline_context, child_params)
 				.await?;
-			match spawn_result.wait().await? {
+			match spawn_result.wait_with_cancel(cancel_token).await? {
 				ExecutionWaitResult::Completed(result) => Ok(result),
 				ExecutionWaitResult::Stopped(_) => Ok(ExecutionResult::stopped()),
 			}
@@ -804,6 +1005,7 @@ impl Execute for ast::ForClauseCommand {
 		shell: &mut Shell<impl extensions::ShellExtensions>,
 		params: &ExecutionParameters,
 	) -> Result<ExecutionResult, error::Error> {
+		ensure_not_cancelled(params)?;
 		let mut result = ExecutionResult::success();
 
 		// If we were given explicit words to iterate over, then expand them all, with
@@ -820,6 +1022,7 @@ impl Execute for ast::ForClauseCommand {
 		}
 
 		for value in expanded_values {
+			ensure_not_cancelled(params)?;
 			if shell.options().print_commands_and_arguments {
 				if let Some(unexpanded_values) = &self.values {
 					shell
@@ -874,6 +1077,7 @@ impl Execute for ast::CaseClauseCommand {
 		shell: &mut Shell<impl extensions::ShellExtensions>,
 		params: &ExecutionParameters,
 	) -> Result<ExecutionResult, error::Error> {
+		ensure_not_cancelled(params)?;
 		// N.B. One would think it makes sense to trace the expanded value being
 		// switched on, but that's not it.
 		if shell.options().print_commands_and_arguments {
@@ -887,6 +1091,7 @@ impl Execute for ast::CaseClauseCommand {
 		let mut force_execute_next_case = false;
 
 		for case in &self.cases {
+			ensure_not_cancelled(params)?;
 			if force_execute_next_case {
 				force_execute_next_case = false;
 			} else {
@@ -941,6 +1146,7 @@ impl Execute for ast::IfClauseCommand {
 		shell: &mut Shell<impl extensions::ShellExtensions>,
 		params: &ExecutionParameters,
 	) -> Result<ExecutionResult, error::Error> {
+		ensure_not_cancelled(params)?;
 		// Execute condition with errexit suppressed
 		let mut condition_params = params.clone();
 		condition_params.suppress_errexit = true;
@@ -957,6 +1163,7 @@ impl Execute for ast::IfClauseCommand {
 
 		if let Some(elses) = &self.elses {
 			for else_clause in elses {
+				ensure_not_cancelled(params)?;
 				match &else_clause.condition {
 					Some(else_condition) => {
 						let else_condition_result =
@@ -994,6 +1201,7 @@ impl Execute for (WhileOrUntil, &ast::WhileOrUntilClauseCommand) {
 		shell: &mut Shell<impl extensions::ShellExtensions>,
 		params: &ExecutionParameters,
 	) -> Result<ExecutionResult, error::Error> {
+		ensure_not_cancelled(params)?;
 		let is_while = match self.0 {
 			WhileOrUntil::While => true,
 			WhileOrUntil::Until => false,
@@ -1008,6 +1216,7 @@ impl Execute for (WhileOrUntil, &ast::WhileOrUntilClauseCommand) {
 		condition_params.suppress_errexit = true;
 
 		loop {
+			ensure_not_cancelled(params)?;
 			let condition_result = test_condition.execute(shell, &condition_params).await?;
 
 			// Update status for condition
@@ -1052,6 +1261,7 @@ impl Execute for ast::ArithmeticCommand {
 		shell: &mut Shell<impl extensions::ShellExtensions>,
 		params: &ExecutionParameters,
 	) -> Result<ExecutionResult, error::Error> {
+		ensure_not_cancelled(params)?;
 		let value = self.expr.eval(shell, params, true).await?;
 		let result = if value != 0 {
 			ExecutionResult::success()
@@ -1072,12 +1282,14 @@ impl Execute for ast::ArithmeticForClauseCommand {
 		shell: &mut Shell<impl extensions::ShellExtensions>,
 		params: &ExecutionParameters,
 	) -> Result<ExecutionResult, error::Error> {
+		ensure_not_cancelled(params)?;
 		let mut result = ExecutionResult::success();
 		if let Some(initializer) = &self.initializer {
 			initializer.eval(shell, params, true).await?;
 		}
 
 		loop {
+			ensure_not_cancelled(params)?;
 			if let Some(condition) = &self.condition {
 				// An empty condition (e.g., `for (( ; ; ))`) means "always true".
 				if !condition.value.is_empty() && condition.eval(shell, params, true).await? == 0 {
@@ -1155,6 +1367,7 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::SimpleComma
 		mut context: PipelineExecutionContext<'_, SE>,
 		mut params: ExecutionParameters,
 	) -> Result<ExecutionSpawnResult, error::Error> {
+		ensure_not_cancelled(&params)?;
 		let prefix_iter = self.prefix.as_ref().map(|s| s.0.iter()).unwrap_or_default();
 		let suffix_iter = self.suffix.as_ref().map(|s| s.0.iter()).unwrap_or_default();
 		let cmd_name_items = self
@@ -1171,6 +1384,7 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::SimpleComma
 		let status_change_count_before_expansion = context.shell.last_exit_status_change_count();
 
 		for item in prefix_iter.chain(cmd_name_items.iter()).chain(suffix_iter) {
+			ensure_not_cancelled(&params)?;
 			match item {
 				CommandPrefixOrSuffixItem::IoRedirect(redirect) => {
 					if let Err(e) = setup_redirect(&mut context.shell, &mut params, redirect).await {
@@ -1179,6 +1393,7 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::SimpleComma
 					}
 				},
 				CommandPrefixOrSuffixItem::ProcessSubstitution(kind, subshell_command) => {
+					params.disable_command_output_marking();
 					let (installed_fd_num, substitution_file) =
 						setup_process_substitution(&context.shell, &params, kind, subshell_command)?;
 
@@ -1599,6 +1814,7 @@ pub(crate) async fn setup_redirect(
 	params: &'_ mut ExecutionParameters,
 	redirect: &ast::IoRedirect,
 ) -> Result<(), error::Error> {
+	params.disable_command_output_marking();
 	match redirect {
 		ast::IoRedirect::OutputAndError(f, append) => {
 			let mut expanded_fields = expansion::full_expand_and_split_word(shell, params, f).await?;

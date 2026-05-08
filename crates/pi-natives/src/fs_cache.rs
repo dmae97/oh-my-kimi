@@ -723,9 +723,8 @@ mod tests {
 			&ct,
 		);
 
-		let err = match result {
-			Ok(_) => panic!("pre-cancelled scans should fail before returning entries"),
-			Err(err) => err,
+		let Err(err) = result else {
+			panic!("pre-cancelled scans should fail before returning entries");
 		};
 		assert!(
 			err.to_string().contains("Timeout"),

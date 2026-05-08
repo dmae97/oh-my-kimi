@@ -115,7 +115,8 @@ impl builtins::Command for ReadCommand {
 		let timeout = self.timeout_in_seconds.map(Duration::from_secs_f64);
 
 		// Perform the read operation (potentially with timeout).
-		let read_result = self.read_line(input_stream, context.stderr(), timeout)?;
+		let read_result =
+			self.read_line(input_stream, context.stderr(), timeout, || context.is_cancelled())?;
 
 		// Determine whether to skip IFS splitting (for -N option).
 		let skip_ifs_splitting = self.return_after_n_chars_no_delimiter.is_some();
@@ -329,6 +330,17 @@ enum InputEvent {
 	CtrlD,
 }
 
+fn ensure_not_cancelled<F>(is_cancelled: &F) -> Result<(), brush_core::Error>
+where
+	F: Fn() -> bool,
+{
+	if is_cancelled() {
+		return Err(ErrorKind::Interrupted.into());
+	}
+
+	Ok(())
+}
+
 impl InputReader {
 	/// Creates a new input reader with optional timeout.
 	fn new(
@@ -350,22 +362,73 @@ impl InputReader {
 		brush_core::sys::poll::poll_for_input(&self.input, Duration::ZERO).unwrap_or(false)
 	}
 
-	/// Reads the next input event, handling timeout and control characters.
-	fn read_event(&mut self) -> Result<InputEvent, brush_core::Error> {
-		// Check timeout before attempting read.
-		if let Some(deadline) = self.deadline {
-			let remaining = deadline.saturating_duration_since(Instant::now());
-			if remaining.is_zero() {
-				return Ok(InputEvent::Timeout);
-			}
+	#[cfg(unix)]
+	fn wait_for_input<F>(&self, is_cancelled: &F) -> Result<Option<InputEvent>, brush_core::Error>
+	where
+		F: Fn() -> bool,
+	{
+		const INPUT_POLL_INTERVAL_MS: u64 = 100;
 
-			// Poll for input with remaining timeout.
-			match brush_core::sys::poll::poll_for_input(&self.input, remaining) {
-				Ok(true) => { /* Data available, proceed. */ },
-				Ok(false) => return Ok(InputEvent::Timeout),
+		if self.deadline.is_none() && self.input.try_borrow_as_fd().is_err() {
+			ensure_not_cancelled(is_cancelled)?;
+			return Ok(None);
+		}
+
+		loop {
+			ensure_not_cancelled(is_cancelled)?;
+
+			let timeout = if let Some(deadline) = self.deadline {
+				let remaining = deadline.saturating_duration_since(Instant::now());
+				if remaining.is_zero() {
+					return Ok(Some(InputEvent::Timeout));
+				}
+
+				remaining.min(Duration::from_millis(INPUT_POLL_INTERVAL_MS))
+			} else {
+				Duration::from_millis(INPUT_POLL_INTERVAL_MS)
+			};
+
+			match brush_core::sys::poll::poll_for_input(&self.input, timeout) {
+				Ok(true) => return Ok(None),
+				Ok(false) => continue,
 				Err(e) => return Err(e.into()),
 			}
 		}
+	}
+
+	#[cfg(not(unix))]
+	fn wait_for_input<F>(&self, is_cancelled: &F) -> Result<Option<InputEvent>, brush_core::Error>
+	where
+		F: Fn() -> bool,
+	{
+		ensure_not_cancelled(is_cancelled)?;
+
+		if let Some(deadline) = self.deadline {
+			let remaining = deadline.saturating_duration_since(Instant::now());
+			if remaining.is_zero() {
+				return Ok(Some(InputEvent::Timeout));
+			}
+
+			match brush_core::sys::poll::poll_for_input(&self.input, remaining) {
+				Ok(true) => {},
+				Ok(false) => return Ok(Some(InputEvent::Timeout)),
+				Err(e) => return Err(e.into()),
+			}
+		}
+
+		Ok(None)
+	}
+
+	/// Reads the next input event, handling timeout and control characters.
+	fn read_event<F>(&mut self, is_cancelled: &F) -> Result<InputEvent, brush_core::Error>
+	where
+		F: Fn() -> bool,
+	{
+		if let Some(event) = self.wait_for_input(is_cancelled)? {
+			return Ok(event);
+		}
+
+		ensure_not_cancelled(is_cancelled)?;
 
 		let n = self.input.read(&mut self.buffer)?;
 		if n == 0 {
@@ -403,15 +466,19 @@ struct LineReaderConfig {
 /// - Bash processes: 'a' (output 1), '\b' → 'b' (output 2), 'c' (output 3) →
 ///   "abc"
 /// - The backslash is consumed but doesn't count toward the limit
-fn read_line_with_reader(
+fn read_line_with_reader<F>(
 	reader: &mut InputReader,
 	config: &LineReaderConfig,
-) -> Result<ReadResult, brush_core::Error> {
+	is_cancelled: &F,
+) -> Result<ReadResult, brush_core::Error>
+where
+	F: Fn() -> bool,
+{
 	let mut line = String::new();
 	let mut pending_backslash = false;
 
 	loop {
-		let event = reader.read_event()?;
+		let event = reader.read_event(is_cancelled)?;
 
 		match event {
 			InputEvent::Eof => {
@@ -504,12 +571,16 @@ impl ReadCommand {
 	/// - Without `-r`: backslash-newline is line continuation, other backslashes
 	///   escape the next char
 	/// - With `-r`: backslash is treated as a literal character
-	fn read_line(
+	fn read_line<F>(
 		&self,
 		input_file: brush_core::openfiles::OpenFile,
 		mut stderr_file: impl std::io::Write,
 		timeout: Option<Duration>,
-	) -> Result<ReadResult, brush_core::Error> {
+		is_cancelled: F,
+	) -> Result<ReadResult, brush_core::Error>
+	where
+		F: Fn() -> bool,
+	{
 		let term_mode = self.setup_terminal_settings(&input_file)?;
 
 		// Display prompt on stderr, but only if input is from a terminal (per bash
@@ -543,6 +614,7 @@ impl ReadCommand {
 
 		// Handle -t 0 special case: just check if input is available without reading.
 		if timeout == Some(Duration::ZERO) {
+			ensure_not_cancelled(&is_cancelled)?;
 			return Ok(if reader.check_input_available() {
 				ReadResult::InputReady
 			} else {
@@ -553,7 +625,7 @@ impl ReadCommand {
 		// Configure and perform the read.
 		let config = LineReaderConfig { delimiter, char_limit, process_escapes: !self.raw_mode };
 
-		read_line_with_reader(&mut reader, &config)
+		read_line_with_reader(&mut reader, &config, &is_cancelled)
 	}
 
 	fn setup_terminal_settings(
@@ -830,5 +902,44 @@ mod tests {
 	fn test_build_variable_fields_none_input() {
 		let result = build_variable_fields(None, " ", false, 3);
 		assert!(result.is_empty());
+	}
+
+	fn test_command() -> ReadCommand {
+		ReadCommand {
+			array_variable: None,
+			delimiter: None,
+			use_readline: false,
+			initial_text: None,
+			return_after_n_chars: None,
+			return_after_n_chars_no_delimiter: None,
+			prompt: None,
+			raw_mode: false,
+			silent: false,
+			timeout_in_seconds: None,
+			fd_num_to_read: None,
+			variable_names: Vec::new(),
+		}
+	}
+
+	#[test]
+	fn test_ensure_not_cancelled_returns_interrupted() {
+		let is_cancelled = || true;
+
+		let err = ensure_not_cancelled(&is_cancelled)
+			.expect_err("cancelled state must interrupt read builtin");
+		assert_eq!(err.to_string(), "interrupted");
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn test_read_line_returns_interrupted_when_cancelled_before_input() {
+		let command = test_command();
+		let (reader, _writer) = std::io::pipe().expect("pipe creation must succeed");
+		let input_file = brush_core::openfiles::OpenFile::from(reader);
+
+		let err = command
+			.read_line(input_file, Vec::<u8>::new(), None, || true)
+			.expect_err("cancelled state must interrupt read builtin");
+		assert_eq!(err.to_string(), "interrupted");
 	}
 }

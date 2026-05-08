@@ -8,7 +8,7 @@ use crate::{
 	ExecutionParameters, ShellFd,
 	env::{EnvironmentLookup, EnvironmentScope},
 	error, openfiles, pathsearch,
-	sys::{fs::PathExt as _, users},
+	sys::users,
 	variables,
 };
 
@@ -126,14 +126,9 @@ impl<SE: crate::extensions::ShellExtensions> crate::Shell<SE> {
 		&self,
 		candidate_name: S,
 	) -> Option<PathBuf> {
-		let path = self.env_str("PATH").unwrap_or_default();
-		for one_dir in crate::sys::fs::split_paths(path.as_ref()) {
-			let candidate_path = one_dir.join(candidate_name.as_ref());
-			if candidate_path.executable() {
-				return Some(candidate_path);
-			}
-		}
-		None
+		let path_var = self.env_str("PATH").unwrap_or_default();
+		let paths = crate::sys::fs::split_paths(path_var.as_ref());
+		pathsearch::search_for_executable(paths, candidate_name.as_ref()).next()
 	}
 
 	/// Uses the shell's hash-based path cache to check whether the given

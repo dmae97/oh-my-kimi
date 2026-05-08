@@ -4,21 +4,21 @@ use std::{
 	borrow::Cow,
 	ffi::OsStr,
 	fmt::Display,
+	io::{self, Write},
 	path::{Path, PathBuf},
-	process::Stdio,
 };
 
 use brush_parser::ast;
 use itertools::Itertools;
-use sys::commands::{CommandExt, CommandFdInjectionExt, CommandFgControlExt};
+use sys::commands::{CommandExt, CommandFdInjectionExt, CommandFgControlExt, CommandSessionExt};
 
 use crate::{
 	ErrorKind, ExecutionControlFlow, ExecutionExitCode, ExecutionParameters, ExecutionResult, Shell,
 	ShellFd, builtins, commands, env, error, escape,
 	extensions::{self, ShellExtensions},
 	functions,
-	interp::{self, Execute, ProcessGroupPolicy},
-	openfiles::{self, OpenFile, OpenFiles},
+	interp::{self, Execute, ExternalCommandInfo, ExternalCommandOutputMarkers, ProcessGroupPolicy},
+	openfiles::{self, OpenFiles},
 	pathsearch, processes,
 	results::ExecutionSpawnResult,
 	sys, trace_categories, traps, variables,
@@ -56,6 +56,16 @@ impl<SE: ShellExtensions> ExecutionContext<'_, SE> {
 	/// Returns the standard error file; usable with `write!` et al.
 	pub fn stderr(&self) -> impl std::io::Write + 'static {
 		self.params.stderr(self.shell)
+	}
+
+	/// Returns the cancellation token, if one is configured.
+	pub fn cancel_token(&self) -> Option<tokio_util::sync::CancellationToken> {
+		self.params.cancel_token()
+	}
+
+	/// Returns true when cancellation has been requested.
+	pub fn is_cancelled(&self) -> bool {
+		self.params.is_cancelled()
 	}
 
 	/// Returns the file descriptor with the given number. Returns `None`
@@ -221,27 +231,27 @@ pub fn compose_std_command<S: AsRef<OsStr>, SE: extensions::ShellExtensions>(
 
 	// Redirect stdin, if applicable.
 	match context.try_fd(OpenFiles::STDIN_FD) {
-		Some(OpenFile::Stdin(_)) | None => (),
+		None => (),
 		Some(stdin_file) => {
-			let as_stdio: Stdio = stdin_file.into();
+			let as_stdio = stdin_file.into_stdio()?;
 			cmd.stdin(as_stdio);
 		},
 	}
 
 	// Redirect stdout, if applicable.
 	match context.try_fd(OpenFiles::STDOUT_FD) {
-		Some(OpenFile::Stdout(_)) | None => (),
+		None => (),
 		Some(stdout_file) => {
-			let as_stdio: Stdio = stdout_file.into();
+			let as_stdio = stdout_file.into_stdio()?;
 			cmd.stdout(as_stdio);
 		},
 	}
 
 	// Redirect stderr, if applicable.
 	match context.try_fd(OpenFiles::STDERR_FD) {
-		Some(OpenFile::Stderr(_)) | None => {},
+		None => {},
 		Some(stderr_file) => {
-			let as_stdio: Stdio = stderr_file.into();
+			let as_stdio = stderr_file.into_stdio()?;
 			cmd.stderr(as_stdio);
 		},
 	}
@@ -500,12 +510,15 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 		func_registration: functions::Registration,
 	) -> Result<ExecutionSpawnResult, error::Error> {
 		let mut shell = self.shell;
+		let mut params = self.params;
+		params.disable_command_output_marking();
+
 		let last_arg = Self::take_last_arg(&self.args);
 
 		let cmd_context = ExecutionContext {
 			shell:        &mut shell,
 			command_name: self.command_name,
-			params:       self.params,
+			params,
 		};
 
 		// Strip the function name off args.
@@ -581,6 +594,8 @@ pub(crate) fn execute_external_command(
 
 	// Figure out if we should be setting up a new process group.
 	let new_pg = matches!(context.params.process_group_policy, ProcessGroupPolicy::NewProcessGroup);
+	let session_action =
+		child_session_action(new_pg, child_stdin_is_terminal, process_group_id.is_some());
 
 	// Compose the std::process::Command that encapsulates what we want to launch.
 	// argv[0] defaults to context.command_name (the user-facing name of the
@@ -594,25 +609,41 @@ pub(crate) fn execute_external_command(
 		cmd_args.as_slice(),
 		false, /* empty environment? */
 	)?;
+	let mut marker_output = prepare_output_markers(&context, executable_path, cmd_args.as_slice());
 
-	// Set up process group state.
+
+	// Set up process group/session state.
+	let command_leads_session = new_pg
+		&& matches!(session_action, ChildSessionAction::TakeForeground)
+		&& context.shell.options().external_cmd_leads_session;
+
 	if new_pg {
-		// Check if we'll be doing terminal control setup (which includes setsid)
-		if child_stdin_is_terminal && context.shell.options().external_cmd_leads_session {
-			// Don't set process_group(0) - setsid() in pre_exec will handle it
-			cmd.lead_session();
-		} else {
-			// Normal case: create new process group in current session
-			cmd.process_group(0);
-			if child_stdin_is_terminal {
-				cmd.take_foreground();
+		match session_action {
+			ChildSessionAction::DetachSession => {
+				// `detach_session()` calls `setsid()`, which creates a fresh session
+				// and process group; requesting `process_group(0)` as well would
+				// conflict with that setup.
+			}
+			ChildSessionAction::TakeForeground if command_leads_session => {
+				// Don't set process_group(0) - setsid() in pre_exec will handle it.
+				cmd.lead_session();
+			}
+			ChildSessionAction::TakeForeground | ChildSessionAction::None => {
+				// Normal case: create new process group in current session.
+				cmd.process_group(0);
 			}
 		}
-	} else {
+	} else if let Some(pgid) = process_group_id {
 		// We need to join an established process group.
-		if let Some(pgid) = process_group_id {
-			cmd.process_group(pgid);
-		}
+		cmd.process_group(pgid);
+	}
+
+	// See `child_session_action` for the decision rationale and call-out about
+	// pipeline groups.
+	match session_action {
+		ChildSessionAction::DetachSession => cmd.detach_session(),
+		ChildSessionAction::TakeForeground if !command_leads_session => cmd.take_foreground(),
+		ChildSessionAction::TakeForeground | ChildSessionAction::None => {}
 	}
 
 	// When tracing is enabled, report.
@@ -639,13 +670,21 @@ pub(crate) fn execute_external_command(
 				tracing::warn!("could not retrieve pid for child process");
 			}
 
-			Ok(ExecutionSpawnResult::StartedProcess(processes::ChildProcess::new(
-				child,
-				pid,
-				actual_pgid,
-			)))
+			let mut child_process = processes::ChildProcess::new(child, pid, actual_pgid);
+			if let Some((output, markers)) = marker_output.take() {
+				child_process.set_completion_marker(
+					output,
+					markers.end_marker_prefix,
+					markers.end_marker_suffix,
+				);
+			}
+			Ok(ExecutionSpawnResult::StartedProcess(child_process))
 		},
 		Err(spawn_err) => {
+			if let Some((mut output, markers)) = marker_output.take() {
+				let _ = write_completion_marker(&mut output, &markers, 127);
+			}
+
 			if context.shell.options().interactive {
 				sys::terminal::move_self_to_foreground()?;
 			}
@@ -664,6 +703,36 @@ pub(crate) fn execute_external_command(
 			}
 		},
 	}
+}
+
+fn prepare_output_markers<SE: extensions::ShellExtensions>(
+	context: &ExecutionContext<'_, SE>,
+	executable_path: &str,
+	args: &[&String],
+) -> Option<(openfiles::OpenFile, ExternalCommandOutputMarkers)> {
+	let marker = context.params.command_output_marker()?;
+	let markers = marker.markers_for_external_command(ExternalCommandInfo {
+		command_name:    context.command_name.as_str(),
+		executable_path,
+		args:            args.iter().map(|arg| arg.as_str()).collect(),
+	})?;
+	let mut output = context.params.try_stdout(context.shell)?;
+	if output.write_all(markers.start_marker.as_bytes()).is_err() {
+		return None;
+	}
+	if output.flush().is_err() {
+		return None;
+	}
+	Some((output, markers))
+}
+
+fn write_completion_marker(
+	output: &mut openfiles::OpenFile,
+	markers: &ExternalCommandOutputMarkers,
+	exit_code: i32,
+) -> io::Result<()> {
+	write!(output, "{}{}{}", markers.end_marker_prefix, exit_code, markers.end_marker_suffix)?;
+	output.flush()
 }
 
 async fn execute_builtin_command<SE: extensions::ShellExtensions>(
@@ -763,6 +832,7 @@ pub(crate) async fn invoke_command_in_subshell_and_get_output(
 	// Get our own set of parameters we can customize and use.
 	let mut params = params.clone();
 	params.process_group_policy = ProcessGroupPolicy::SameProcessGroup;
+	params.disable_command_output_marking();
 
 	// Set up pipe so we can read the output.
 	let (reader, writer) = std::io::pipe()?;
@@ -866,4 +936,54 @@ fn try_unwrap_bare_input_redir_program(program: &ast::Program) -> Option<&ast::I
 		) if fd.is_none_or(|fd| fd == openfiles::OpenFiles::STDIN_FD) => Some(redir),
 		_ => None,
 	}
+}
+
+/// What to do with the child's controlling-tty/session ownership immediately
+/// before spawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildSessionAction {
+	/// Call `setsid()` (via `cmd.detach_session()`) so the child cannot stop
+	/// the parent through SIGTTIN/SIGTTOU on the inherited tty.
+	DetachSession,
+	/// Move the child to the foreground of its tty so it participates in
+	/// interactive job control.
+	TakeForeground,
+	/// Leave session/foreground state alone.
+	None,
+}
+
+/// Decide whether to detach the child's session, foreground it, or do nothing.
+///
+/// The pre-fix code only detached when `new_pg` was set, which is gated on
+/// brush's interactive job-control path. When brush is embedded in a
+/// non-interactive host (e.g. `pi-natives` inside OMP), `new_pg` is false, the
+/// child inherited the host's controlling tty, and any `/dev/tty` open or
+/// `tcsetpgrp` call from the child could SIGTTIN/SIGTTOU and stop the host.
+///
+/// `detach_session()` is unsafe to call when joining an established pipeline
+/// group (`!new_pg && in_pipeline_group`): `setsid()` would either fail with
+/// EPERM or move the child into a fresh session, breaking the pipeline's shared
+/// process group and its job-control signal propagation. Pipeline stages
+/// therefore keep their pre-fix behavior (no detach).
+///
+/// Foregrounding remains gated on `new_pg && child_stdin_is_terminal`.
+pub fn child_session_action(
+	new_pg: bool,
+	child_stdin_is_terminal: bool,
+	in_pipeline_group: bool,
+) -> ChildSessionAction {
+	if new_pg && child_stdin_is_terminal {
+		return ChildSessionAction::TakeForeground;
+	}
+
+	if child_stdin_is_terminal {
+		return ChildSessionAction::None;
+	}
+
+	let joining_pipeline_group = !new_pg && in_pipeline_group;
+	if joining_pipeline_group {
+		return ChildSessionAction::None;
+	}
+
+	ChildSessionAction::DetachSession
 }

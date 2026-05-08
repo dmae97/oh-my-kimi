@@ -2,6 +2,9 @@
 
 use std::{collections::VecDeque, fmt::Display};
 
+#[cfg(windows)]
+use std::os::windows::io::OwnedHandle;
+
 use futures::FutureExt;
 
 use crate::{ExecutionResult, error, processes, sys, trace_categories, traps};
@@ -42,12 +45,15 @@ impl JobTask {
 	pub async fn wait(&mut self) -> Result<JobTaskWaitResult, error::Error> {
 		match self {
 			Self::External(process) => {
-				let wait_result = process.wait().await?;
+				let wait_result = process.wait(None).await?;
 				match wait_result {
 					processes::ProcessWaitResult::Completed(output) => {
 						Ok(JobTaskWaitResult::Completed(output.into()))
 					},
 					processes::ProcessWaitResult::Stopped => Ok(JobTaskWaitResult::Stopped),
+					processes::ProcessWaitResult::Cancelled => {
+						Ok(JobTaskWaitResult::Completed(ExecutionResult::new(130)))
+					},
 				}
 			},
 			Self::Internal(handle) => Ok(JobTaskWaitResult::Completed(handle.await??)),
@@ -450,5 +456,18 @@ impl Job {
 	pub fn process_group_id(&self) -> Option<sys::process::ProcessId> {
 		// TODO(jobs): Don't assume that the first PID is the PGID.
 		self.pgid.or_else(|| self.representative_pid())
+	}
+
+	/// Duplicates process handles for termination on Windows.
+	#[cfg(windows)]
+	pub fn duplicate_kill_handles(&self) -> Vec<OwnedHandle> {
+		self
+			.tasks
+			.iter()
+			.filter_map(|task| match task {
+				JobTask::External(process) => process.duplicate_kill_handle(),
+				JobTask::Internal(_) => None,
+			})
+			.collect()
 	}
 }

@@ -165,6 +165,28 @@ impl OpenFile {
 		}
 	}
 
+	pub(crate) fn into_stdio(self) -> Result<Stdio, error::Error> {
+		#[cfg(unix)]
+		{
+			let owned_fd = self.try_clone_to_owned()?;
+			Ok(Stdio::from(std::fs::File::from(owned_fd)))
+		}
+
+		#[cfg(not(unix))]
+		{
+			let stdio = match self {
+				Self::Stdin(_) => Stdio::inherit(),
+				Self::Stdout(_) => Stdio::inherit(),
+				Self::Stderr(_) => Stdio::inherit(),
+				Self::File(f) => f.into(),
+				Self::PipeReader(f) => f.into(),
+				Self::PipeWriter(f) => f.into(),
+				Self::Stream(_) => return Err(error::ErrorKind::CannotConvertToNativeFd.into()),
+			};
+			Ok(stdio)
+		}
+	}
+
 	pub(crate) fn is_dir(&self) -> bool {
 		match self {
 			Self::Stdin(_) | Self::Stdout(_) | Self::Stderr(_) => false,
@@ -221,22 +243,6 @@ impl From<std::io::PipeReader> for OpenFile {
 impl From<std::io::PipeWriter> for OpenFile {
 	fn from(writer: std::io::PipeWriter) -> Self {
 		Self::PipeWriter(writer)
-	}
-}
-
-impl From<OpenFile> for Stdio {
-	fn from(open_file: OpenFile) -> Self {
-		match open_file {
-			OpenFile::Stdin(_) => Self::inherit(),
-			OpenFile::Stdout(_) => Self::inherit(),
-			OpenFile::Stderr(_) => Self::inherit(),
-			OpenFile::File(f) => f.into(),
-			OpenFile::PipeReader(f) => f.into(),
-			OpenFile::PipeWriter(f) => f.into(),
-			// NOTE: Custom streams cannot be converted to `Stdio`; we do our best here
-			// and return a null device instead.
-			OpenFile::Stream(_) => Self::null(),
-		}
 	}
 }
 

@@ -1,3 +1,4 @@
+#![cfg_attr(windows, feature(windows_by_handle))]
 //! Core implementation of the brush shell. Implements the shell's abstraction,
 //! its interpreter, and various facilities used internally by the shell.
 
@@ -53,7 +54,10 @@ pub mod parser {
 pub use commands::{CommandArg, ExecutionContext};
 pub use error::{BuiltinError, Error, ErrorKind};
 pub use extensions::ShellExtensions;
-pub use interp::{ExecutionParameters, ProcessGroupPolicy};
+pub use interp::{
+	ExecutionParameters, ExternalCommandInfo, ExternalCommandOutputMarker,
+	ExternalCommandOutputMarkers, ProcessGroupPolicy,
+};
 pub use parser::{SourcePosition, SourcePositionOffset, SourceSpan};
 pub use results::{ExecutionControlFlow, ExecutionExitCode, ExecutionResult, ExecutionSpawnResult};
 pub use shell::{

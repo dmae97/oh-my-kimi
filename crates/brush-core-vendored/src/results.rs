@@ -3,6 +3,8 @@
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::{error, processes};
 
 /// Represents the result of executing a command or similar item.
@@ -242,17 +244,30 @@ impl From<ExecutionResult> for ExecutionSpawnResult {
 }
 
 impl ExecutionSpawnResult {
-	/// Waits for the command to complete.
+	/// Waits for the command to complete without a cancellation token.
 	pub async fn wait(self) -> Result<ExecutionWaitResult, error::Error> {
+		self.wait_with_cancel(None).await
+	}
+
+	/// Waits for the command to complete.
+	///
+	/// If a cancellation token is provided and triggered, the process will be killed.
+	pub async fn wait_with_cancel(
+		self,
+		cancel_token: Option<CancellationToken>,
+	) -> Result<ExecutionWaitResult, error::Error> {
 		let result = match self {
 			Self::StartedProcess(mut child) => {
 				// Wait for the process to exit or for a relevant signal, whichever happens
 				// first.
-				match child.wait().await? {
+				match child.wait(cancel_token).await? {
 					processes::ProcessWaitResult::Completed(output) => {
 						ExecutionWaitResult::Completed(ExecutionResult::from(output))
 					},
 					processes::ProcessWaitResult::Stopped => ExecutionWaitResult::Stopped(child),
+					processes::ProcessWaitResult::Cancelled => {
+						ExecutionWaitResult::Completed(ExecutionResult::new(130))
+					},
 				}
 			},
 			Self::Completed(result) => ExecutionWaitResult::Completed(result),
@@ -264,7 +279,6 @@ impl ExecutionSpawnResult {
 
 		Ok(result)
 	}
-
 	pub(crate) async fn poll(self) -> Result<ExecutionWaitResult, error::Error> {
 		let result = match self {
 			Self::StartedProcess(child) => ExecutionWaitResult::Stopped(child),

@@ -1,6 +1,7 @@
-pub use crate::sys::stubs::{async_pipe, commands};
+pub use crate::sys::stubs::async_pipe;
+pub mod commands;
 pub(crate) mod env;
-pub use crate::sys::stubs::fd;
+pub mod fd;
 pub(crate) mod fs;
 pub use crate::sys::stubs::input;
 pub(crate) mod network;
@@ -13,7 +14,8 @@ pub mod signal {
 	pub(crate) use crate::sys::stubs::signal::*;
 }
 
-pub use crate::sys::{stubs::terminal, tokio_process as process};
+pub use crate::sys::tokio_process as process;
+pub mod terminal;
 pub(crate) mod users;
 
 /// Platform-specific errors.

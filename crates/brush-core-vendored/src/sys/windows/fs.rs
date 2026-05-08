@@ -5,10 +5,20 @@ use std::{
 	path::{Path, PathBuf},
 	sync::LazyLock,
 };
+use std::os::windows::{
+	fs::OpenOptionsExt,
+	io::AsRawHandle,
+};
 
 use crate::error;
 // Selectively re-export items from stubs that we don't override.
 pub(crate) use crate::sys::stubs::fs::MetadataExt;
+use windows_sys::Win32::{
+	Foundation::HANDLE,
+	Storage::FileSystem::{
+		BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, GetFileInformationByHandle,
+	},
+};
 
 /// Cached list of executable extensions from the `PATHEXT` environment
 /// variable. Each entry retains its leading dot (e.g. `".exe"`) and is stored
@@ -18,12 +28,37 @@ pub(crate) use crate::sys::stubs::fs::MetadataExt;
 /// inside the running shell are not reflected here. Bash itself has no
 /// `PATHEXT` semantics, so this is generally acceptable for now.
 static PATHEXT_EXTENSIONS: LazyLock<Vec<String>> = LazyLock::new(|| {
-	std::env::var("PATHEXT")
-		.unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+	let fallback = || {
+		[".com", ".exe", ".bat", ".cmd"]
+			.into_iter()
+			.map(|ext| ext.to_string())
+			.collect::<Vec<_>>()
+	};
+
+	let Some(value) = std::env::var_os("PATHEXT") else {
+		return fallback();
+	};
+
+	let extensions = value
+		.to_string_lossy()
 		.split(';')
-		.filter(|s| !s.is_empty())
-		.map(|s| s.to_ascii_lowercase())
-		.collect()
+		.filter_map(|entry| {
+			let entry = entry.trim();
+			if entry.is_empty() {
+				None
+			} else if entry.starts_with('.') {
+				Some(entry.to_ascii_lowercase())
+			} else {
+				Some(format!(".{}", entry.to_ascii_lowercase()))
+			}
+		})
+		.collect::<Vec<_>>();
+
+	if extensions.is_empty() {
+		fallback()
+	} else {
+		extensions
+	}
 });
 
 /// Returns the stem of a PATHEXT entry (with any leading `.` removed).
@@ -77,11 +112,11 @@ pub fn resolve_executable(path: PathBuf) -> Option<PathBuf> {
 
 impl crate::sys::fs::PathExt for Path {
 	fn readable(&self) -> bool {
-		self.exists()
+		std::fs::OpenOptions::new().read(true).open(self).is_ok()
 	}
 
 	fn writable(&self) -> bool {
-		self.metadata().is_ok_and(|m| !m.permissions().readonly())
+		std::fs::OpenOptions::new().write(true).open(self).is_ok()
 	}
 
 	fn executable(&self) -> bool {
@@ -126,16 +161,48 @@ impl crate::sys::fs::PathExt for Path {
 	}
 
 	fn get_device_and_inode(&self) -> Result<(u64, u64), crate::error::Error> {
-		// TODO(windows): implement using file index / volume serial number.
-		Err(error::ErrorKind::NotSupportedOnThisPlatform("get_device_and_inode").into())
+		let file = std::fs::OpenOptions::new()
+			.access_mode(0)
+			.custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+			.open(self)?;
+		let mut info = BY_HANDLE_FILE_INFORMATION {
+			// SAFETY: `BY_HANDLE_FILE_INFORMATION` is a plain C output buffer for
+			// `GetFileInformationByHandle`; all fields are overwritten before any
+			// successful read from the structure below.
+			..unsafe { std::mem::zeroed() }
+		};
+
+		let succeeded = {
+			// SAFETY: `file.as_raw_handle()` is a live file handle owned by `file`
+			// for the duration of the call, and `info` points to initialized writable
+			// storage for the API's output structure.
+			(unsafe {
+				GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &mut info)
+			}) != 0
+		};
+		if !succeeded {
+			return Err(std::io::Error::last_os_error().into());
+		}
+
+		let file_index = (u64::from(info.nFileIndexHigh) << 32)
+			| u64::from(info.nFileIndexLow);
+		Ok((u64::from(info.dwVolumeSerialNumber), file_index))
 	}
 }
 
 /// Splits a platform-specific PATH-like value into individual paths.
 ///
-/// On Windows, this delegates to [`std::env::split_paths`].
-pub fn split_paths<T: AsRef<OsStr> + ?Sized>(s: &T) -> std::env::SplitPaths<'_> {
-	std::env::split_paths(s)
+/// On Windows, entries are parsed with [`std::env::split_paths`] and then have
+/// surrounding double quotes removed. Quoted PATH entries are common on Windows
+/// and must resolve to the unquoted directory when searching for executables.
+pub fn split_paths<T: AsRef<OsStr> + ?Sized>(
+	s: &T,
+) -> impl Iterator<Item = PathBuf> + '_ {
+	std::env::split_paths(s).map(trim_surrounding_path_quotes)
+}
+
+fn trim_surrounding_path_quotes(path: PathBuf) -> PathBuf {
+	PathBuf::from(path.to_string_lossy().trim_matches('"').to_string())
 }
 
 /// Opens a null file that will discard all I/O.
@@ -170,16 +237,18 @@ pub fn get_default_standard_utils_paths() -> Vec<PathBuf> {
 
 fn default_system_paths() -> Vec<PathBuf> {
 	let mut paths = Vec::new();
-	if let Ok(sysroot) = std::env::var("SystemRoot") {
-		paths.push(PathBuf::from(&sysroot).join("system32"));
-		paths.push(PathBuf::from(&sysroot));
-		paths.push(PathBuf::from(&sysroot).join("System32").join("Wbem"));
-		paths.push(
-			PathBuf::from(&sysroot)
-				.join("System32")
-				.join("WindowsPowerShell")
-				.join("v1.0"),
-		);
+	if let Some(system32) = system32_path() {
+		paths.push(system32.clone());
+		if let Some(system_root) = system32.parent() {
+			paths.push(system_root.to_path_buf());
+		}
+		paths.push(system32.join("Wbem"));
+		paths.push(system32.join("WindowsPowerShell").join("v1.0"));
+	}
+	if paths.is_empty()
+		&& let Some(env_path) = std::env::var_os("PATH")
+	{
+		paths.extend(std::env::split_paths(&env_path));
 	}
 	if let Ok(userprofile) = std::env::var("USERPROFILE") {
 		paths.push(
@@ -191,6 +260,11 @@ fn default_system_paths() -> Vec<PathBuf> {
 		);
 	}
 	paths
+}
+
+fn system32_path() -> Option<PathBuf> {
+	let system_root = std::env::var_os("SystemRoot")?;
+	Some(PathBuf::from(system_root).join("System32"))
 }
 
 /// Returns the path to the system-wide shell profile script.
@@ -319,6 +393,18 @@ pub fn normalize_path_separators(s: &str) -> std::borrow::Cow<'_, str> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn trim_surrounding_path_quotes_removes_quoted_windows_path() {
+		assert_eq!(
+			trim_surrounding_path_quotes(PathBuf::from(r#""C:\Program Files\Brush""#)),
+			PathBuf::from(r"C:\Program Files\Brush"),
+		);
+		assert_eq!(
+			trim_surrounding_path_quotes(PathBuf::from(r"C:\Windows\System32")),
+			PathBuf::from(r"C:\Windows\System32"),
+		);
+	}
 
 	#[test]
 	fn path_separator_helpers_both_slashes() {
