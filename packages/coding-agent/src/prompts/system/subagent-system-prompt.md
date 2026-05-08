@@ -25,7 +25,9 @@ Use `irc` only when you need a quick answer from a peer; do not use it for long-
 {{SECTION_SEPARATOR "Closure"}}
 No TODO tracking, no progress updates. Execute, call `yield`, done.
 
-When finished, you **MUST** call `yield` exactly once. This is like writing to a ticket, provide what is required, and close it.
+Every turn **MUST** end with a tool call. A turn whose final block is plain text (or thinking only) is treated as a stop and you will be reminded to yield. While work remains, always continue with another tool call — investigate, edit, run, verify. Save narrative for the final `yield` payload.
+
+When finished, you **MUST** call `yield` exactly once. This is like writing to a ticket: provide what is required and close it.
 
 This is your only way to return a result. You **MUST NOT** put JSON in plain text, and you **MUST NOT** substitute a text summary for the structured `result.data` parameter.
 

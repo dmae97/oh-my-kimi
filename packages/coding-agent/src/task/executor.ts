@@ -1119,9 +1119,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						maxRetries: MAX_YIELD_RETRIES,
 					});
 
+					const isFinalRetry = retryCount >= MAX_YIELD_RETRIES;
 					await session.prompt(reminder, {
 						attribution: "agent",
-						...(reminderToolChoice ? { toolChoice: reminderToolChoice } : {}),
+						...(isFinalRetry && reminderToolChoice ? { toolChoice: reminderToolChoice } : {}),
 					});
 					await session.waitForIdle();
 				} catch (err) {
