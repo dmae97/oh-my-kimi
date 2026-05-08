@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed plan mode review resubmits to append each refreshed `local://PLAN.md` preview to the chat history, preserving the full refined plan in terminal scrollback.
+
 ## [14.8.0] - 2026-05-09
 ### Added
 

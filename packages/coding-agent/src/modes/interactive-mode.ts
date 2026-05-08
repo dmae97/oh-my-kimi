@@ -1011,13 +1011,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	#renderPlanPreview(planContent: string): void {
-		const planReviewContainer = this.#planReviewContainer ?? new Container();
-		if (this.#planReviewContainer) {
-			// Re-append the preview so repeated plan-review refreshes stay adjacent to the
-			// active selector instead of updating an older off-screen preview in place.
-			this.chatContainer.removeChild(this.#planReviewContainer);
-		}
+	#renderPlanPreview(planContent: string, options?: { append?: boolean }): void {
+		const existingContainer = this.#planReviewContainer;
+		const replaceExisting = options?.append !== true && existingContainer !== undefined;
+		const planReviewContainer = replaceExisting ? existingContainer : new Container();
 		planReviewContainer.clear();
 		planReviewContainer.addChild(new Spacer(1));
 		planReviewContainer.addChild(new DynamicBorder());
@@ -1025,7 +1022,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		planReviewContainer.addChild(new Spacer(1));
 		planReviewContainer.addChild(new Markdown(planContent, 1, 1, getMarkdownTheme()));
 		planReviewContainer.addChild(new DynamicBorder());
-		this.chatContainer.addChild(planReviewContainer);
+		if (!replaceExisting) {
+			this.chatContainer.addChild(planReviewContainer);
+		}
 		this.#planReviewContainer = planReviewContainer;
 		this.ui.requestRender();
 	}
@@ -1182,7 +1181,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-		this.#renderPlanPreview(planContent);
+		this.#renderPlanPreview(planContent, { append: true });
 		const choice = await this.showHookSelector(
 			"Plan mode - next step",
 			["Approve and execute", "Approve and keep context", "Refine plan", "Stay in plan mode"],
