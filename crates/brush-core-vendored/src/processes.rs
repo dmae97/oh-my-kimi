@@ -47,7 +47,7 @@ impl ChildProcess {
 		pgid: Option<sys::process::ProcessId>,
 	) -> Self {
 		#[cfg(windows)]
-		let kill_handle = duplicate_handle(child.as_raw_handle());
+		let kill_handle = child.raw_handle().and_then(duplicate_handle);
 
 		Self {
 			exec_future: Box::pin(child.wait_with_output()),
@@ -201,8 +201,9 @@ impl Drop for ChildProcess {
 
 #[cfg(windows)]
 fn duplicate_handle(handle: RawHandle) -> Option<OwnedHandle> {
-	use windows_sys::Win32::System::Threading::{
-		DUPLICATE_SAME_ACCESS, DuplicateHandle, GetCurrentProcess,
+	use windows_sys::Win32::{
+		Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle},
+		System::Threading::GetCurrentProcess,
 	};
 
 	// SAFETY: GetCurrentProcess returns a pseudo-handle for the current process
