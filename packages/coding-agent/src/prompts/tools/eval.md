@@ -20,6 +20,7 @@ At least 5 equal signs on each side. Content between one header and the next (or
 - Pass multiple small cells in one call.
 - Define small reusable functions for individual debugging.
 - Put workflow explanations in the assistant message or cell title — never inside cell code.
+{{#if py}}- Python cells run inside an IPython kernel with a live event loop. Use top-level `await` directly (e.g. `await main()`); `asyncio.run(...)` raises "cannot be called from a running event loop".{{/if}}
 
 **On failure:** errors identify the failing cell (e.g., "Cell 3 failed"). Resubmit only the fixed cell (or fixed cell + remaining cells).
 </instruction>
