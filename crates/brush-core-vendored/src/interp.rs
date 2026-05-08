@@ -29,6 +29,8 @@ struct PipelineExecutionContext<'a, SE: extensions::ShellExtensions> {
 	shell:            commands::ShellForCommand<'a, SE>,
 	/// Process group ID for spawned processes.
 	process_group_id: Option<i32>,
+	/// Whether this command is part of a multi-command pipeline.
+	in_pipeline:       bool,
 }
 
 /// Information about an expanded external command launch.
@@ -698,11 +700,13 @@ async fn spawn_pipeline_processes(
 					parent: shell,
 				},
 				process_group_id,
+				in_pipeline: pipeline_len > 1,
 			}
 		} else {
 			PipelineExecutionContext {
 				shell: commands::ShellForCommand::ParentShell(shell),
 				process_group_id,
+				in_pipeline: pipeline_len > 1,
 			}
 		};
 
@@ -965,6 +969,7 @@ impl Execute for ast::CoprocessCommand {
 			let pipeline_context = PipelineExecutionContext {
 				shell:            commands::ShellForCommand::ParentShell(&mut child_shell),
 				process_group_id: None,
+				in_pipeline:       false,
 			};
 			let spawn_result = body
 				.execute_in_pipeline(pipeline_context, child_params)
@@ -1489,7 +1494,11 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::SimpleComma
 			};
 
 			let context =
-				PipelineExecutionContext { shell, process_group_id: context.process_group_id };
+				PipelineExecutionContext {
+					shell,
+					process_group_id: context.process_group_id,
+					in_pipeline: context.in_pipeline,
+				};
 
 			match execute_command(context, params, cmd_name, assignments, args).await {
 				Ok(result) => Ok(result),
@@ -1574,6 +1583,7 @@ async fn execute_command(
 	// Construct the command struct.
 	let mut cmd = commands::SimpleCommand::new(context.shell, params, cmd_name, args);
 	cmd.process_group_id = context.process_group_id;
+	cmd.in_pipeline = context.in_pipeline;
 
 	// Arrange to pop off that ephemeral environment scope.
 	cmd.post_execute = Some(|shell| shell.env_mut().pop_scope(EnvironmentScope::Command));

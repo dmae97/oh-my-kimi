@@ -315,6 +315,8 @@ pub struct SimpleCommand<'a, SE: extensions::ShellExtensions> {
 	/// The process group ID to use for externally executed commands. This may be
 	/// `None`, in which case the default behavior will be used.
 	pub process_group_id: Option<i32>,
+	/// Whether this command is part of a multi-command pipeline.
+	pub in_pipeline: bool,
 
 	/// Optional override for the `argv[0]` value presented to an externally
 	/// spawned process. When `None`, `command_name` is used.
@@ -350,6 +352,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 			use_functions: true,
 			path_dirs: None,
 			process_group_id: None,
+			in_pipeline: false,
 			argv0: None,
 			post_execute: None,
 		}
@@ -551,6 +554,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 		let result = execute_external_command(
 			cmd_context,
 			resolved_path.as_ref(),
+			self.in_pipeline,
 			self.process_group_id,
 			self.argv0.as_deref(),
 			&self.args[1..],
@@ -570,6 +574,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 pub(crate) fn execute_external_command(
 	context: ExecutionContext<'_, impl extensions::ShellExtensions>,
 	executable_path: &str,
+	in_pipeline: bool,
 	process_group_id: Option<i32>,
 	argv0_override: Option<&str>,
 	args: &[CommandArg],
@@ -594,8 +599,7 @@ pub(crate) fn execute_external_command(
 
 	// Figure out if we should be setting up a new process group.
 	let new_pg = matches!(context.params.process_group_policy, ProcessGroupPolicy::NewProcessGroup);
-	let session_action =
-		child_session_action(new_pg, child_stdin_is_terminal, process_group_id.is_some());
+	let session_action = child_session_action(new_pg, child_stdin_is_terminal, in_pipeline);
 
 	// Compose the std::process::Command that encapsulates what we want to launch.
 	// argv[0] defaults to context.command_name (the user-facing name of the
@@ -960,11 +964,12 @@ pub enum ChildSessionAction {
 /// child inherited the host's controlling tty, and any `/dev/tty` open or
 /// `tcsetpgrp` call from the child could SIGTTIN/SIGTTOU and stop the host.
 ///
-/// `detach_session()` is unsafe to call when joining an established pipeline
-/// group (`!new_pg && in_pipeline_group`): `setsid()` would either fail with
-/// EPERM or move the child into a fresh session, breaking the pipeline's shared
-/// process group and its job-control signal propagation. Pipeline stages
-/// therefore keep their pre-fix behavior (no detach).
+/// `detach_session()` is unsafe for any member of a multi-command pipeline:
+/// for the first stage it puts the process-group leader in a different session,
+/// causing later stages' `setpgid()` to fail with EPERM; for later stages it
+/// either fails with EPERM or moves the child into a fresh session, breaking the
+/// pipeline's shared process group and job-control signal propagation. Pipeline
+/// stages therefore keep their pre-fix behavior (no detach).
 ///
 /// Foregrounding remains gated on `new_pg && child_stdin_is_terminal`.
 pub fn child_session_action(
@@ -980,8 +985,7 @@ pub fn child_session_action(
 		return ChildSessionAction::None;
 	}
 
-	let joining_pipeline_group = !new_pg && in_pipeline_group;
-	if joining_pipeline_group {
+	if in_pipeline_group {
 		return ChildSessionAction::None;
 	}
 

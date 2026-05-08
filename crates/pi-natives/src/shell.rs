@@ -1371,18 +1371,18 @@ mod tests {
 		#[test]
 		fn interactive_with_terminal_stdin_takes_foreground() {
 			assert_eq!(child_session_action(true, true, false), ChildSessionAction::TakeForeground,);
-			// `in_pipeline_group` is meaningless when `new_pg` is true; result MUST
-			// not depend on it.
+			// Terminal foregrounding wins even when this is the first stage of a
+			// pipeline; no detach is attempted.
 			assert_eq!(child_session_action(true, true, true), ChildSessionAction::TakeForeground,);
 		}
 
-		/// Interactive brush leading its own pgroup but with non-terminal stdin
-		/// (e.g. redirected): detach so SIGTTIN/SIGTTOU on the inherited tty
-		/// cannot stop the parent.
+		/// Brush leading a new pgroup with non-terminal stdin detaches only when
+		/// it is not part of a multi-command pipeline. Pipeline leaders must stay
+		/// in the parent session so later stages can join their process group.
 		#[test]
-		fn interactive_with_non_terminal_stdin_detaches() {
+		fn non_terminal_stdin_leading_new_pgroup_detaches_unless_pipeline() {
 			assert_eq!(child_session_action(true, false, false), ChildSessionAction::DetachSession,);
-			assert_eq!(child_session_action(true, false, true), ChildSessionAction::DetachSession,);
+			assert_eq!(child_session_action(true, false, true), ChildSessionAction::None,);
 		}
 
 		/// Non-interactive brush, terminal stdin, no pipeline: nothing to do.
@@ -1408,11 +1408,12 @@ mod tests {
 		}
 
 		/// **Pipeline carve-out.** Non-interactive brush, non-terminal stdin
-		/// (pipe), joining an established pipeline pgroup: MUST NOT detach.
-		/// `setsid()` would either fail with EPERM or move the child into a new
-		/// session, breaking the pipeline's shared process group and its
-		/// job-control signal propagation. This is the regression Codex flagged
-		/// in PR #895.
+		/// (pipe), and a multi-command pipeline: MUST NOT detach. For the first
+		/// external stage, `setsid()` puts the process-group leader into a
+		/// different session, so later stages fail to join its group with
+		/// EPERM. For later stages, `setsid()` would either fail with EPERM or
+		/// move the child into a new session, breaking the pipeline's shared
+		/// process group and job-control signal propagation.
 		#[test]
 		fn pipeline_stage_does_not_detach() {
 			assert_eq!(child_session_action(false, false, true), ChildSessionAction::None,);
