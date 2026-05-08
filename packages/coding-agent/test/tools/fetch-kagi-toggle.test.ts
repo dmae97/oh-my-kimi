@@ -100,7 +100,7 @@ describe("read tool URL selector shorthands", () => {
 			};
 		});
 
-		const result = await tool.execute("fetch-embedded-lines", { path: `${pageUrl}:L7-L8` });
+		const result = await tool.execute("fetch-embedded-lines", { path: `${pageUrl}:7-8` });
 		const textBlock = result.content.find(content => content.type === "text");
 
 		expect(textBlock?.type).toBe("text");
@@ -693,7 +693,7 @@ describe("read tool URL handling", () => {
 		loadPageSpy.mockRejectedValue(new Error("network should not be hit"));
 
 		const pagedResult = await tool.execute("fetch-offset-page", {
-			path: `${pageUrl}:L7-L8`,
+			path: `${pageUrl}:7-8`,
 		});
 		const pagedText = pagedResult.content.find(content => content.type === "text");
 		expect(pagedText?.type).toBe("text");
