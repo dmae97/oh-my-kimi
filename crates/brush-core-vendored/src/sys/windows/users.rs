@@ -1,82 +1,87 @@
 #![allow(clippy::missing_const_for_fn)]
+#![allow(clippy::unnecessary_wraps)]
+
+use std::{path::PathBuf, sync::LazyLock};
 
 use crate::error;
-use std::{mem::MaybeUninit, path::PathBuf, sync::OnceLock};
-use windows_sys::Win32::{
-    Foundation::{CloseHandle, HANDLE},
-    Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY},
-    System::Threading::{GetCurrentProcess, OpenProcessToken},
-};
 
-//
-// Non-Unix implementation
-//
+/// Placeholder UID for non-elevated Windows processes.
+///
+/// Real Unix-style UIDs don't exist on Windows; this value is a
+/// conventional non-root sentinel (matching the typical first
+/// regular-user UID on Linux).
+const NON_ELEVATED_UID: u32 = 1000;
 
-pub(crate) fn get_user_home_dir(username: &str) -> Option<PathBuf> {
-    homedir::home(username).unwrap_or_default()
+/// Placeholder GID for non-elevated Windows processes (see
+/// [`NON_ELEVATED_UID`]).
+const NON_ELEVATED_GID: u32 = 1000;
+
+/// Cached elevation status. The underlying check queries the process token,
+/// which can't change after process start, so it's safe to memoize.
+static IS_ELEVATED: LazyLock<bool> = LazyLock::new(|| {
+	check_elevation::is_elevated().unwrap_or_else(|err| {
+		tracing::warn!("failed to determine process elevation: {err}");
+		false
+	})
+});
+
+pub(crate) fn get_user_home_dir(_username: &str) -> Option<PathBuf> {
+	// std::env::home_dir() doesn't support getting home dir for arbitrary users
+	// For now, we only support getting the current user's home dir
+	None
 }
 
 pub(crate) fn get_current_user_home_dir() -> Option<PathBuf> {
-    homedir::my_home().unwrap_or_default()
+	std::env::home_dir()
+}
+
+pub(crate) fn get_current_user_default_shell() -> Option<PathBuf> {
+	None
+}
+
+fn is_elevated() -> bool {
+	*IS_ELEVATED
 }
 
 pub(crate) fn is_root() -> bool {
-    static IS_ROOT: OnceLock<bool> = OnceLock::new();
-    *IS_ROOT.get_or_init(|| {
-        // SAFETY: Windows APIs are called with valid handles and buffers.
-        unsafe {
-            let mut elevation = MaybeUninit::<TOKEN_ELEVATION>::zeroed();
-            let mut return_length = 0u32;
-            let status = GetTokenInformation(
-                (!3 as HANDLE), // GetCurrentProcessToken(),
-                TokenElevation,
-                elevation.as_mut_ptr().cast(),
-                std::mem::size_of::<TOKEN_ELEVATION>() as u32,
-                &mut return_length,
-            );
-            if status == 0 {
-                return false;
-            }
-            elevation.assume_init().TokenIsElevated != 0
-        }
-    })
+	is_elevated()
 }
 
 pub(crate) fn get_current_uid() -> Result<u32, error::Error> {
-    Err(error::ErrorKind::NotSupportedOnThisPlatform("getting current uid").into())
+	Ok(if is_elevated() { 0 } else { NON_ELEVATED_UID })
 }
 
 pub(crate) fn get_current_gid() -> Result<u32, error::Error> {
-    Err(error::ErrorKind::NotSupportedOnThisPlatform("getting current gid").into())
+	Ok(if is_elevated() { 0 } else { NON_ELEVATED_GID })
 }
 
 pub(crate) fn get_effective_uid() -> Result<u32, error::Error> {
-    Err(error::ErrorKind::NotSupportedOnThisPlatform("getting effective uid").into())
+	Ok(if is_elevated() { 0 } else { NON_ELEVATED_UID })
 }
 
 pub(crate) fn get_effective_gid() -> Result<u32, error::Error> {
-    Err(error::ErrorKind::NotSupportedOnThisPlatform("getting effective gid").into())
+	Ok(if is_elevated() { 0 } else { NON_ELEVATED_GID })
 }
 
 pub(crate) fn get_current_username() -> Result<String, error::Error> {
-    let username = whoami::fallible::username()?;
-    Ok(username)
+	let username = whoami::username().map_err(std::io::Error::from)?;
+	Ok(username)
 }
 
 #[allow(clippy::unnecessary_wraps)]
 pub(crate) fn get_user_group_ids() -> Result<Vec<u32>, error::Error> {
-    // TODO: implement some version of this for Windows
-    Ok(vec![])
+	// TODO(windows): implement some version of this for Windows
+	Ok(vec![])
 }
 
 #[expect(clippy::unnecessary_wraps)]
 pub(crate) fn get_all_users() -> Result<Vec<String>, error::Error> {
-    // TODO: implement some version of this for Windows
-    Ok(vec![])
+	// TODO(windows): implement some version of this for Windows
+	Ok(vec![])
 }
 
 #[expect(clippy::unnecessary_wraps)]
 pub(crate) fn get_all_groups() -> Result<Vec<String>, error::Error> {
-    // TODO: implement some version of this for Windows
-    Ok(vec![])
+	// TODO(windows): implement some version of this for Windows
+	Ok(vec![])
 }

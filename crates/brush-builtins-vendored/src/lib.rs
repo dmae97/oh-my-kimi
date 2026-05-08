@@ -8,21 +8,17 @@ mod bg;
 mod bind;
 #[cfg(feature = "builtin.break")]
 mod break_;
-#[cfg(feature = "builtin.brushinfo")]
-mod brushinfo;
 #[cfg(feature = "builtin.builtin")]
 mod builtin_;
+#[cfg(feature = "builtin.caller")]
+mod caller;
 #[cfg(feature = "builtin.cd")]
 mod cd;
 #[cfg(feature = "builtin.colon")]
 mod colon;
 #[cfg(feature = "builtin.command")]
 mod command;
-#[cfg(any(
-    feature = "builtin.complete",
-    feature = "builtin.compgen",
-    feature = "builtin.compopt"
-))]
+#[cfg(any(feature = "builtin.complete", feature = "builtin.compgen", feature = "builtin.compopt"))]
 mod complete;
 #[cfg(feature = "builtin.continue")]
 mod continue_;
@@ -114,8 +110,9 @@ mod unimp;
 pub use builder::ShellBuilderExt;
 pub use factory::{BuiltinSet, default_builtins};
 
-/// Macro to define a struct that represents a shell built-in flag argument that can be
-/// enabled or disabled by specifying an option with a leading '+' or '-' character.
+/// Macro to define a struct that represents a shell built-in flag argument that
+/// can be enabled or disabled by specifying an option with a leading '+' or '-'
+/// character.
 ///
 /// # Arguments
 ///

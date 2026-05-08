@@ -1,16 +1,24 @@
 //! Command execution
 
-use std::{borrow::Cow, ffi::OsStr, fmt::Display, io, io::Write, sync::Arc};
+use std::{
+	borrow::Cow,
+	ffi::OsStr,
+	fmt::Display,
+	path::{Path, PathBuf},
+	process::Stdio,
+};
 
 use brush_parser::ast;
 use itertools::Itertools;
-use sys::commands::{CommandExt, CommandFdInjectionExt, CommandFgControlExt, CommandSessionExt};
+use sys::commands::{CommandExt, CommandFdInjectionExt, CommandFgControlExt};
 
 use crate::{
-	ErrorKind, ExecutionControlFlow, ExecutionParameters, ExecutionResult, ExternalCommandInfo,
-	ExternalCommandOutputMarkers, Shell, ShellFd, builtins, env, error, escape,
+	ErrorKind, ExecutionControlFlow, ExecutionExitCode, ExecutionParameters, ExecutionResult, Shell,
+	ShellFd, builtins, commands, env, error, escape,
+	extensions::{self, ShellExtensions},
+	functions,
 	interp::{self, Execute, ProcessGroupPolicy},
-	openfiles::{self, OpenFiles},
+	openfiles::{self, OpenFile, OpenFiles},
 	pathsearch, processes,
 	results::ExecutionSpawnResult,
 	sys, trace_categories, traps, variables,
@@ -25,28 +33,28 @@ pub enum CommandWaitResult {
 }
 
 /// Represents the context for executing a command.
-pub struct ExecutionContext<'a> {
+pub struct ExecutionContext<'a, SE: ShellExtensions = extensions::DefaultShellExtensions> {
 	/// The shell in which the command is being executed.
-	pub shell:        &'a mut Shell,
-	/// The name of the command being executed.    
+	pub shell:        &'a mut Shell<SE>,
+	/// The name of the command being executed.
 	pub command_name: String,
 	/// The parameters for the execution.
 	pub params:       ExecutionParameters,
 }
 
-impl ExecutionContext<'_> {
+impl<SE: ShellExtensions> ExecutionContext<'_, SE> {
 	/// Returns the standard input file; usable with `write!` et al.
-	pub fn stdin(&self) -> impl io::Read + 'static {
+	pub fn stdin(&self) -> impl std::io::Read + 'static {
 		self.params.stdin(self.shell)
 	}
 
 	/// Returns the standard output file; usable with `write!` et al.
-	pub fn stdout(&self) -> impl io::Write + 'static {
+	pub fn stdout(&self) -> impl std::io::Write + 'static {
 		self.params.stdout(self.shell)
 	}
 
 	/// Returns the standard error file; usable with `write!` et al.
-	pub fn stderr(&self) -> impl io::Write + 'static {
+	pub fn stderr(&self) -> impl std::io::Write + 'static {
 		self.params.stderr(self.shell)
 	}
 
@@ -63,21 +71,6 @@ impl ExecutionContext<'_> {
 	/// Iterates over all open file descriptors.
 	pub fn iter_fds(&self) -> impl Iterator<Item = (ShellFd, openfiles::OpenFile)> {
 		self.params.iter_fds(self.shell)
-	}
-
-	/// Returns the cancellation token, if one is configured.
-	pub fn cancel_token(&self) -> Option<tokio_util::sync::CancellationToken> {
-		self.params.cancel_token()
-	}
-
-	/// Returns true when cancellation has been requested.
-	pub fn is_cancelled(&self) -> bool {
-		self.params.is_cancelled()
-	}
-
-	pub(crate) const fn should_cmd_lead_own_process_group(&self) -> bool {
-		self.shell.options.interactive
-			&& matches!(self.params.process_group_policy, ProcessGroupPolicy::NewProcessGroup)
 	}
 }
 
@@ -130,6 +123,40 @@ impl CommandArg {
 	}
 }
 
+/// Encapsulates a possibly-owned reference to a `Shell` for command execution.
+pub enum ShellForCommand<'a, SE: extensions::ShellExtensions> {
+	/// The command is run in the same shell as its parent; the provided
+	/// mutable reference allows modifying the parent shell.
+	ParentShell(&'a mut Shell<SE>),
+	/// The command is run in its own owned shell (which is also provided).
+	OwnedShell {
+		/// The owned shell.
+		target: Box<Shell<SE>>,
+		/// The parent shell.
+		parent: &'a mut Shell<SE>,
+	},
+}
+
+impl<SE: extensions::ShellExtensions> std::ops::Deref for ShellForCommand<'_, SE> {
+	type Target = Shell<SE>;
+
+	fn deref(&self) -> &Self::Target {
+		match self {
+			ShellForCommand::ParentShell(shell) => shell,
+			ShellForCommand::OwnedShell { target, .. } => target,
+		}
+	}
+}
+
+impl<SE: extensions::ShellExtensions> std::ops::DerefMut for ShellForCommand<'_, SE> {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		match self {
+			ShellForCommand::ParentShell(shell) => shell,
+			ShellForCommand::OwnedShell { target, .. } => target,
+		}
+	}
+}
+
 /// Composes a `std::process::Command` to execute the given command.
 /// Appropriately configures the command name and arguments, redirections,
 /// injected file descriptors, environment variables, etc.
@@ -145,8 +172,8 @@ impl CommandArg {
 ///   environment; if false, the command will inherit environment variables
 ///   marked as exported in the provided `Shell`.
 #[allow(unused_variables, reason = "argv0 is only used on unix platforms")]
-pub fn compose_std_command<S: AsRef<OsStr>>(
-	context: &ExecutionContext<'_>,
+pub fn compose_std_command<S: AsRef<OsStr>, SE: extensions::ShellExtensions>(
+	context: &ExecutionContext<'_, SE>,
 	command_name: &str,
 	argv0: &str,
 	args: &[S],
@@ -169,7 +196,7 @@ pub fn compose_std_command<S: AsRef<OsStr>>(
 
 	// Add in exported variables.
 	if !empty_env {
-		for (k, v) in context.shell.env.iter_exported() {
+		for (k, v) in context.shell.env().iter_exported() {
 			// NOTE: To match bash behavior, we only include exported variables
 			// that are set (i.e., have a value). This means a variable that
 			// shows up in `declare -p` but has no *set* value will be omitted.
@@ -177,6 +204,8 @@ pub fn compose_std_command<S: AsRef<OsStr>>(
 				cmd.env(k.as_str(), v.value().to_cow_str(context.shell).as_ref());
 			}
 		}
+		// Set _ to the resolved command path for external commands.
+		cmd.env("_", command_name);
 	}
 
 	// Add in exported functions.
@@ -184,7 +213,7 @@ pub fn compose_std_command<S: AsRef<OsStr>>(
 		for (func_name, registration) in context.shell.funcs().iter() {
 			if registration.is_exported() {
 				let var_name = std::format!("BASH_FUNC_{func_name}%%");
-				let value = std::format!("() {}", registration.definition.body);
+				let value = std::format!("() {}", registration.definition().body);
 				cmd.env(var_name, value);
 			}
 		}
@@ -192,27 +221,27 @@ pub fn compose_std_command<S: AsRef<OsStr>>(
 
 	// Redirect stdin, if applicable.
 	match context.try_fd(OpenFiles::STDIN_FD) {
-		None => (),
+		Some(OpenFile::Stdin(_)) | None => (),
 		Some(stdin_file) => {
-			let as_stdio = stdin_file.into_stdio()?;
+			let as_stdio: Stdio = stdin_file.into();
 			cmd.stdin(as_stdio);
 		},
 	}
 
 	// Redirect stdout, if applicable.
 	match context.try_fd(OpenFiles::STDOUT_FD) {
-		None => (),
+		Some(OpenFile::Stdout(_)) | None => (),
 		Some(stdout_file) => {
-			let as_stdio = stdout_file.into_stdio()?;
+			let as_stdio: Stdio = stdout_file.into();
 			cmd.stdout(as_stdio);
 		},
 	}
 
 	// Redirect stderr, if applicable.
 	match context.try_fd(OpenFiles::STDERR_FD) {
-		None => {},
+		Some(OpenFile::Stderr(_)) | None => {},
 		Some(stderr_file) => {
-			let as_stdio = stderr_file.into_stdio()?;
+			let as_stdio: Stdio = stderr_file.into();
 			cmd.stderr(as_stdio);
 		},
 	}
@@ -227,201 +256,363 @@ pub fn compose_std_command<S: AsRef<OsStr>>(
 }
 
 pub(crate) async fn on_preexecute(
-	context: &mut ExecutionContext<'_>,
-	args: &[CommandArg],
+	cmd: &mut commands::SimpleCommand<'_, impl extensions::ShellExtensions>,
 ) -> Result<(), error::Error> {
-	// See if we have a DEBUG trap handler registered; call it if we do.
-	invoke_debug_trap_handler_if_registered(context, args).await?;
+	// Set BASH_COMMAND before invoking the DEBUG trap (and generally before
+	// executing commands).
+	let full_cmd = cmd.args.iter().map(|arg| arg.to_string()).join(" ");
+	cmd.shell.env_mut().update_or_add(
+		"BASH_COMMAND",
+		variables::ShellValueLiteral::Scalar(full_cmd),
+		|_| Ok(()),
+		env::EnvironmentLookup::Anywhere,
+		env::EnvironmentScope::Global,
+	)?;
+
+	// Fire the DEBUG trap if one is registered.
+	if cmd.shell.traps().handles(traps::TrapSignal::Debug) {
+		let _ = cmd
+			.shell
+			.invoke_trap_handler(traps::TrapSignal::Debug, &cmd.params)
+			.await?;
+	}
 
 	Ok(())
 }
 
-async fn invoke_debug_trap_handler_if_registered(
-	context: &mut ExecutionContext<'_>,
-	args: &[CommandArg],
-) -> Result<(), error::Error> {
-	if context.shell.traps.handler_depth == 0 {
-		let debug_trap_handler = context
-			.shell
-			.traps
-			.handlers
-			.get(&traps::TrapSignal::Debug)
-			.cloned();
-		if let Some(debug_trap_handler) = debug_trap_handler {
-			// TODO: Confirm whether trap handlers should be executed in the same process
-			// group.
-			let mut handler_params = context.params.clone();
-			handler_params.process_group_policy = ProcessGroupPolicy::SameProcessGroup;
+/// Represents a simple command to be executed.
+pub struct SimpleCommand<'a, SE: extensions::ShellExtensions> {
+	/// The shell to run the command in.
+	shell: ShellForCommand<'a, SE>,
 
-			let full_cmd = args.iter().map(|arg| arg.to_string()).join(" ");
+	/// The execution parameters for the command.
+	pub params: ExecutionParameters,
 
-			// TODO: This shouldn't *just* be set in a trap situation.
-			context.shell.env.update_or_add(
-				"BASH_COMMAND",
-				variables::ShellValueLiteral::Scalar(full_cmd),
-				|_| Ok(()),
-				env::EnvironmentLookup::Anywhere,
-				env::EnvironmentScope::Global,
-			)?;
+	/// The name of the command to execute.
+	pub command_name: String,
 
-			context.shell.traps.handler_depth += 1;
+	/// The arguments to the command, including the command itself.
+	pub args: Vec<CommandArg>,
 
-			// TODO: Discard result?
-			let _ = context
-				.shell
-				.run_string(debug_trap_handler, &handler_params)
-				.await;
+	/// Whether to consider shell functions when looking up the command name.
+	/// If true, shell functions will be checked; if false, they will be ignored.
+	pub use_functions: bool,
 
-			context.shell.traps.handler_depth -= 1;
+	/// Optional list of directories to search for external commands. If left
+	/// `None`, the default search logic will be used.
+	pub path_dirs: Option<Vec<PathBuf>>,
+
+	/// The process group ID to use for externally executed commands. This may be
+	/// `None`, in which case the default behavior will be used.
+	pub process_group_id: Option<i32>,
+
+	/// Optional override for the `argv[0]` value presented to an externally
+	/// spawned process. When `None`, `command_name` is used.
+	pub argv0: Option<String>,
+
+	/// Optionally provides a function that can run after execution occurs. Note
+	/// that it is *not* invoked if the shell is discarded during the execution
+	/// process.
+	#[allow(clippy::type_complexity)]
+	pub post_execute: Option<fn(&mut Shell<SE>) -> Result<(), error::Error>>,
+}
+
+impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
+	/// Creates a new `SimpleCommand` instance.
+	///
+	/// # Arguments
+	///
+	/// * `shell` - The shell in which to execute the command.
+	/// * `params` - The execution parameters for the command.
+	/// * `command_name` - The name of the command to execute.
+	/// * `args` - The arguments to the command, including the command itself.
+	pub const fn new(
+		shell: ShellForCommand<'a, SE>,
+		params: ExecutionParameters,
+		command_name: String,
+		args: Vec<CommandArg>,
+	) -> Self {
+		Self {
+			shell,
+			params,
+			command_name,
+			args,
+			use_functions: true,
+			path_dirs: None,
+			process_group_id: None,
+			argv0: None,
+			post_execute: None,
 		}
 	}
 
-	Ok(())
-}
+	/// Executes the simple command.
+	///
+	/// The command may be a builtin, a shell function, or an externally
+	/// executed command. This function's implementation is responsible for
+	/// dispatching it appropriately according to the context provided.
+	#[allow(clippy::missing_panics_doc, reason = "these unwrap calls should not panic")]
+	pub async fn execute(mut self) -> Result<ExecutionSpawnResult, error::Error> {
+		// First see if it's the name of a builtin.
+		let builtin = self.shell.builtins().get(&self.command_name).cloned();
 
-/// Executes a simple command.
-///
-/// The command may be a builtin, a shell function, or an externally
-/// executed command. This function's implementation is responsible for
-/// dispatching it appropriately according to the context provided.
-///
-/// # Arguments
-///
-/// * `cmd_context` - The context in which the command is being executed.
-/// * `process_group_id` - The process group ID to use for externally executed
-///   commands. This may be modified if a new process group is created.
-/// * `args` - The arguments to the command.
-/// * `use_functions` - If true, the command name will be checked against shell
-///   functions; if not, shell functions will not be consulted.
-/// * `path_dirs` - If provided, these directories will be searched for external
-///   commands; if not provided, the default search logic will be used.
-pub async fn execute(
-	mut cmd_context: ExecutionContext<'_>,
-	process_group_id: &mut Option<i32>,
-	args: Vec<CommandArg>,
-	use_functions: bool,
-	path_dirs: Option<Vec<String>>,
-) -> Result<ExecutionSpawnResult, error::Error> {
-	// First see if it's the name of a builtin.
-	let builtin = cmd_context
-		.shell
-		.builtins()
-		.get(&cmd_context.command_name)
-		.cloned();
-
-	// If we found a special builtin (that's not disabled), then invoke it.
-	if builtin
-		.as_ref()
-		.is_some_and(|r| !r.disabled && r.special_builtin)
-	{
-		return execute_builtin_command(&builtin.unwrap(), cmd_context, args).await;
-	}
-
-	// Assuming we weren't requested not to do so, check if it's the name of
-	// a shell function.
-	if use_functions {
-		if let Some(func_reg) = cmd_context
-			.shell
-			.funcs()
-			.get(cmd_context.command_name.as_str())
+		// If we're in POSIX mode and found a special builtin (that's not disabled),
+		// then invoke it without considering functions.
+		if self.shell.options().posix_mode
+			&& builtin
+				.as_ref()
+				.is_some_and(|r| !r.disabled && r.special_builtin)
 		{
-			cmd_context.params.disable_command_output_marking();
-			// Strip the function name off args.
-			return invoke_shell_function(func_reg.definition.clone(), cmd_context, &args[1..]).await;
+			#[allow(clippy::unwrap_used, reason = "we just checked that builtin is Some")]
+			let builtin = builtin.unwrap();
+			return self.execute_via_builtin(builtin).await;
 		}
-	}
 
-	// If we found a (non-special) builtin and it's not disabled, then invoke it.
-	if let Some(builtin) = builtin {
-		if !builtin.disabled {
-			return execute_builtin_command(&builtin, cmd_context, args).await;
+		// Assuming we weren't requested not to do so, check if it's the name of
+		// a shell function.
+		if self.use_functions {
+			if let Some(func_registration) =
+				self.shell.funcs().get(self.command_name.as_str()).cloned()
+			{
+				return self.execute_via_function(func_registration).await;
+			}
 		}
-	}
 
-	// We still haven't found a command to invoke. We'll need to look for an
-	// external command.
-	if !cmd_context.command_name.contains(std::path::MAIN_SEPARATOR) {
-		// All else failed; if we were given path directories to search, try to look
-		// through them for a matching executable. Otherwise, use our default search
-		// logic.
-		let path = if let Some(path_dirs) = path_dirs {
-			pathsearch::search_for_executable(
-				path_dirs.iter().map(String::as_str),
-				cmd_context.command_name.as_str(),
-			)
-			.next()
+		// If we haven't yet resolved the command name and found a builtin that's not
+		// disabled, then invoke it.
+		if let Some(builtin) = builtin {
+			if !builtin.disabled {
+				return self.execute_via_builtin(builtin).await;
+			}
+		}
+
+		// We still haven't found a command to invoke. We'll need to look for an
+		// external command.
+		if !sys::fs::contains_path_separator(&self.command_name) {
+			// All else failed; if we were given path directories to search, try to look
+			// through them for a matching executable. Otherwise, use our default search
+			// logic.
+			let path = if let Some(path_dirs) = &self.path_dirs {
+				pathsearch::search_for_executable(path_dirs.iter(), self.command_name.as_str()).next()
+			} else {
+				self
+					.shell
+					.find_first_executable_in_path_using_cache(&self.command_name)
+			};
+
+			if let Some(path) = path {
+				self.execute_via_external(&path)
+			} else {
+				// Bash updates $_ even when the command is not found, so mirror
+				// that here before reporting the error.
+				let last_arg = Self::take_last_arg(&self.args);
+				self.shell.update_last_arg_variable(last_arg);
+
+				if let Some(post_execute) = self.post_execute {
+					let _ = post_execute(&mut self.shell);
+				}
+
+				Err(ErrorKind::CommandNotFound(self.command_name).into())
+			}
 		} else {
-			cmd_context
-				.shell
-				.find_first_executable_in_path_using_cache(&cmd_context.command_name)
+			let command_name = PathBuf::from(self.command_name.clone());
+			self.execute_via_external(command_name.as_path())
+		}
+	}
+
+	/// Extracts the owned string representation of the last argument of a
+	/// command, suitable for recording into `$_`.
+	fn take_last_arg(args: &[CommandArg]) -> Option<String> {
+		args.last().map(ToString::to_string)
+	}
+
+	async fn execute_via_builtin(
+		self,
+		builtin: builtins::Registration<SE>,
+	) -> Result<ExecutionSpawnResult, error::Error> {
+		match self.shell {
+			ShellForCommand::OwnedShell { target, .. } => {
+				Ok(Self::execute_via_builtin_in_owned_shell(
+					*target,
+					self.params,
+					builtin,
+					self.command_name,
+					self.args,
+				))
+			},
+			ShellForCommand::ParentShell(..) => {
+				self.execute_via_builtin_in_parent_shell(builtin).await
+			},
+		}
+	}
+
+	fn execute_via_builtin_in_owned_shell(
+		mut shell: Shell<SE>,
+		params: ExecutionParameters,
+		builtin: builtins::Registration<SE>,
+		command_name: String,
+		args: Vec<CommandArg>,
+	) -> ExecutionSpawnResult {
+		let last_arg = Self::take_last_arg(&args);
+		let join_handle = tokio::task::spawn_blocking(move || {
+			let cmd_context = ExecutionContext { shell: &mut shell, command_name, params };
+
+			let rt = tokio::runtime::Handle::current();
+			let result = rt.block_on(execute_builtin_command(&builtin, cmd_context, args));
+
+			// Update $_ after command execution.
+			shell.update_last_arg_variable(last_arg);
+
+			result
+		});
+
+		ExecutionSpawnResult::StartedTask(join_handle)
+	}
+
+	async fn execute_via_builtin_in_parent_shell(
+		self,
+		builtin: builtins::Registration<SE>,
+	) -> Result<ExecutionSpawnResult, error::Error> {
+		let mut shell = self.shell;
+		let last_arg = Self::take_last_arg(&self.args);
+
+		let cmd_context = ExecutionContext {
+			shell:        &mut shell,
+			command_name: self.command_name,
+			params:       self.params,
 		};
 
-		if let Some(path) = path {
-			let resolved_path = path.to_string_lossy();
-			execute_external_command(cmd_context, resolved_path.as_ref(), process_group_id, &args[1..])
-		} else {
-			Err(ErrorKind::CommandNotFound(cmd_context.command_name).into())
-		}
-	} else {
-		let resolved_path = cmd_context.command_name.clone();
+		let result = execute_builtin_command(&builtin, cmd_context, self.args).await;
 
-		// Strip the command name off args.
-		execute_external_command(cmd_context, resolved_path.as_str(), process_group_id, &args[1..])
+		// Update $_ after command execution.
+		shell.update_last_arg_variable(last_arg);
+
+		if let Some(post_execute) = self.post_execute {
+			let _ = post_execute(&mut shell);
+		}
+
+		let result = result?;
+
+		Ok(result.into())
+	}
+
+	async fn execute_via_function(
+		self,
+		func_registration: functions::Registration,
+	) -> Result<ExecutionSpawnResult, error::Error> {
+		let mut shell = self.shell;
+		let last_arg = Self::take_last_arg(&self.args);
+
+		let cmd_context = ExecutionContext {
+			shell:        &mut shell,
+			command_name: self.command_name,
+			params:       self.params,
+		};
+
+		// Strip the function name off args.
+		let result = invoke_shell_function(func_registration, cmd_context, &self.args[1..]).await;
+
+		// $_ is reset *after* the function body runs, to the last argument of
+		// the invocation (or the function name itself if zero args). Any
+		// mutations made inside the body are overwritten — this matches bash,
+		// where the caller observes only the invocation's last argument.
+		shell.update_last_arg_variable(last_arg);
+
+		if let Some(post_execute) = self.post_execute {
+			let _ = post_execute(&mut shell);
+		}
+
+		result
+	}
+
+	fn execute_via_external(self, path: &Path) -> Result<ExecutionSpawnResult, error::Error> {
+		let mut shell = self.shell;
+		let last_arg = Self::take_last_arg(&self.args);
+
+		let cmd_context = ExecutionContext {
+			shell:        &mut shell,
+			command_name: self.command_name,
+			params:       self.params,
+		};
+
+		let resolved_path = path.to_string_lossy();
+		let result = execute_external_command(
+			cmd_context,
+			resolved_path.as_ref(),
+			self.process_group_id,
+			self.argv0.as_deref(),
+			&self.args[1..],
+		);
+
+		// Update $_ after command execution.
+		shell.update_last_arg_variable(last_arg);
+
+		if let Some(post_execute) = self.post_execute {
+			let _ = post_execute(&mut shell);
+		}
+
+		result
 	}
 }
 
 pub(crate) fn execute_external_command(
-	context: ExecutionContext<'_>,
+	context: ExecutionContext<'_, impl extensions::ShellExtensions>,
 	executable_path: &str,
-	process_group_id: &mut Option<i32>,
+	process_group_id: Option<i32>,
+	argv0_override: Option<&str>,
 	args: &[CommandArg],
 ) -> Result<ExecutionSpawnResult, error::Error> {
 	// Filter out the args; we only want strings.
-	let mut cmd_args = vec![];
-	for arg in args {
-		if let CommandArg::String(s) = arg {
-			cmd_args.push(s);
-		}
-	}
+	let cmd_args = args
+		.iter()
+		.filter_map(|e| {
+			if let CommandArg::String(s) = e {
+				Some(s)
+			} else {
+				None
+			}
+		})
+		.collect::<Vec<_>>();
 
 	// Before we lose ownership of the open files, figure out if stdin will be a
 	// terminal.
 	let child_stdin_is_terminal = context
 		.try_fd(openfiles::OpenFiles::STDIN_FD)
-		.is_some_and(|f| f.is_term());
+		.is_some_and(|f| f.is_terminal());
 
 	// Figure out if we should be setting up a new process group.
-	let new_pg = context.should_cmd_lead_own_process_group();
-	let mut marker_output =
-		prepare_output_markers(&context, executable_path, cmd_args.as_slice());
+	let new_pg = matches!(context.params.process_group_policy, ProcessGroupPolicy::NewProcessGroup);
 
 	// Compose the std::process::Command that encapsulates what we want to launch.
+	// argv[0] defaults to context.command_name (the user-facing name of the
+	// command) unless the caller specified an explicit override.
+	let argv0 = argv0_override.unwrap_or(context.command_name.as_str());
 	#[allow(unused_mut, reason = "only mutated on unix platforms")]
 	let mut cmd = compose_std_command(
 		&context,
 		executable_path,
-		context.command_name.as_str(),
+		argv0,
 		cmd_args.as_slice(),
 		false, /* empty environment? */
 	)?;
 
 	// Set up process group state.
 	if new_pg {
-		// We need to set up a new process group.
-		cmd.process_group(0);
+		// Check if we'll be doing terminal control setup (which includes setsid)
+		if child_stdin_is_terminal && context.shell.options().external_cmd_leads_session {
+			// Don't set process_group(0) - setsid() in pre_exec will handle it
+			cmd.lead_session();
+		} else {
+			// Normal case: create new process group in current session
+			cmd.process_group(0);
+			if child_stdin_is_terminal {
+				cmd.take_foreground();
+			}
+		}
 	} else {
 		// We need to join an established process group.
 		if let Some(pgid) = process_group_id {
-			cmd.process_group(*pgid);
+			cmd.process_group(pgid);
 		}
-	}
-
-	// See `child_session_action` for the decision rationale and call-out about
-	// pipeline groups.
-	match child_session_action(new_pg, child_stdin_is_terminal, process_group_id.is_some()) {
-		ChildSessionAction::DetachSession => cmd.detach_session(),
-		ChildSessionAction::TakeForeground => cmd.take_foreground(),
-		ChildSessionAction::None => {}
 	}
 
 	// When tracing is enabled, report.
@@ -439,34 +630,27 @@ pub(crate) fn execute_external_command(
 			// Retrieve the pid.
 			#[expect(clippy::cast_possible_wrap)]
 			let pid = child.id().map(|id| id as i32);
+			let mut actual_pgid = process_group_id;
 			if let Some(pid) = &pid {
 				if new_pg {
-					*process_group_id = Some(*pid);
+					actual_pgid = Some(*pid);
 				}
 			} else {
 				tracing::warn!("could not retrieve pid for child process");
 			}
 
-			let mut child_process = processes::ChildProcess::new(pid, child);
-			if let Some((output, markers)) = marker_output.take() {
-				child_process.set_completion_marker(
-					output,
-					markers.end_marker_prefix,
-					markers.end_marker_suffix,
-				);
-			}
-			Ok(ExecutionSpawnResult::StartedProcess(child_process))
+			Ok(ExecutionSpawnResult::StartedProcess(processes::ChildProcess::new(
+				child,
+				pid,
+				actual_pgid,
+			)))
 		},
 		Err(spawn_err) => {
-			if let Some((mut output, markers)) = marker_output.take() {
-				let _ = write_completion_marker(&mut output, &markers, 127);
-			}
-
-			if context.shell.options.interactive {
+			if context.shell.options().interactive {
 				sys::terminal::move_self_to_foreground()?;
 			}
 
-			if spawn_err.kind() == io::ErrorKind::NotFound {
+			if spawn_err.kind() == std::io::ErrorKind::NotFound {
 				if !context.shell.working_dir().exists() {
 					Err(
 						error::ErrorKind::WorkingDirMissing(context.shell.working_dir().to_owned())
@@ -482,51 +666,36 @@ pub(crate) fn execute_external_command(
 	}
 }
 
-fn prepare_output_markers(
-	context: &ExecutionContext<'_>,
-	executable_path: &str,
-	args: &[&String],
-) -> Option<(openfiles::OpenFile, ExternalCommandOutputMarkers)> {
-	let marker = context.params.command_output_marker()?;
-	let markers = marker.markers_for_external_command(ExternalCommandInfo {
-		command_name:    context.command_name.as_str(),
-		executable_path,
-		args:            args.iter().map(|arg| arg.as_str()).collect(),
-	})?;
-	let mut output = context.params.try_stdout(context.shell)?;
-	if output.write_all(markers.start_marker.as_bytes()).is_err() {
-		return None;
-	}
-	if output.flush().is_err() {
-		return None;
-	}
-	Some((output, markers))
-}
-
-fn write_completion_marker(
-	output: &mut openfiles::OpenFile,
-	markers: &ExternalCommandOutputMarkers,
-	exit_code: i32,
-) -> io::Result<()> {
-	write!(output, "{}{}{}", markers.end_marker_prefix, exit_code, markers.end_marker_suffix)?;
-	output.flush()
-}
-
-async fn execute_builtin_command(
-	builtin: &builtins::Registration,
-	context: ExecutionContext<'_>,
+async fn execute_builtin_command<SE: extensions::ShellExtensions>(
+	builtin: &builtins::Registration<SE>,
+	context: ExecutionContext<'_, SE>,
 	args: Vec<CommandArg>,
-) -> Result<ExecutionSpawnResult, error::Error> {
-	let result = (builtin.execute_func)(context, args).await?;
-	Ok(result.into())
+) -> Result<ExecutionResult, error::Error> {
+	// In POSIX mode, special builtins that return errors are to be treated as
+	// fatal.
+	let mark_errors_fatal = builtin.special_builtin && context.shell.options().posix_mode;
+
+	match (builtin.execute_func)(context, args).await {
+		Ok(result) => Ok(result),
+		Err(e) => {
+			// Broken pipe errors should silently return the appropriate exit code
+			if let Some(io_err) = e.as_io_error() {
+				if io_err.kind() == std::io::ErrorKind::BrokenPipe {
+					return Ok(ExecutionExitCode::from(io_err).into());
+				}
+			}
+
+			Err(if mark_errors_fatal { e.into_fatal() } else { e })
+		},
+	}
 }
 
 pub(crate) async fn invoke_shell_function(
-	function_definition: Arc<ast::FunctionDefinition>,
-	mut context: ExecutionContext<'_>,
+	function: functions::Registration,
+	mut context: ExecutionContext<'_, impl extensions::ShellExtensions>,
 	args: &[CommandArg],
 ) -> Result<ExecutionSpawnResult, error::Error> {
-	let ast::FunctionBody(body, redirects) = &function_definition.body;
+	let ast::FunctionBody(body, redirects) = &function.definition().body;
 
 	// Apply any redirects specified at function definition-time.
 	if let Some(redirects) = redirects {
@@ -535,18 +704,19 @@ pub(crate) async fn invoke_shell_function(
 		}
 	}
 
-	// Temporarily replace positional parameters.
-	let prior_positional_params = std::mem::take(&mut context.shell.positional_parameters);
-	context.shell.positional_parameters = args.iter().map(|a| a.to_string()).collect();
+	let positional_args = args.iter().map(|a| a.to_string());
 
 	// Pass through open files.
 	let params = context.params.clone();
 
 	// Note that we're going deeper. Once we do this, we need to make sure we don't
 	// bail early before "exiting" the function.
-	context
-		.shell
-		.enter_function(context.command_name.as_str(), &function_definition)?;
+	context.shell.enter_function(
+		context.command_name.as_str(),
+		&function,
+		positional_args,
+		&context.params,
+	)?;
 
 	// Invoke the function.
 	let result = body.execute(context.shell, &params).await;
@@ -556,9 +726,6 @@ pub(crate) async fn invoke_shell_function(
 
 	// We've come back out, reflect it.
 	context.shell.leave_function()?;
-
-	// Restore positional parameters.
-	context.shell.positional_parameters = prior_positional_params;
 
 	// Get the actual execution result from the body of the function.
 	let mut result = result?;
@@ -579,52 +746,49 @@ pub(crate) async fn invoke_shell_function(
 }
 
 pub(crate) async fn invoke_command_in_subshell_and_get_output(
-	shell: &mut Shell,
+	shell: &mut Shell<impl extensions::ShellExtensions>,
 	params: &ExecutionParameters,
 	s: String,
 ) -> Result<String, error::Error> {
 	// Instantiate a subshell to run the command in.
-	let subshell = shell.clone();
+	let mut subshell = shell.clone();
+
+	// Command substitutions don't inherit errexit by default. Only inherit it when
+	// command_subst_inherits_errexit is enabled, otherwise disable errexit in the
+	// subshell.
+	if !shell.options().command_subst_inherits_errexit {
+		subshell.options_mut().exit_on_nonzero_command_exit = false;
+	}
 
 	// Get our own set of parameters we can customize and use.
 	let mut params = params.clone();
 	params.process_group_policy = ProcessGroupPolicy::SameProcessGroup;
-	params.disable_command_output_marking();
 
 	// Set up pipe so we can read the output.
-	let (reader, writer) = io::pipe()?;
+	let (reader, writer) = std::io::pipe()?;
 	params.set_fd(OpenFiles::STDOUT_FD, writer.into());
 
-	// Start the execution of the command, but don't wait for it to
-	// complete. In case the command generates lots of output, we
-	// need to start reading in parallel so the command doesn't block
-	// when the pipe's buffer fills up. We pass ownership of the
-	// subshell and params to run_substitution_command; we must
-	// ensure that they're both dropped by the time this call
-	// returns (so they're not holding onto the write end of the pipe).
-	let cmd_join_handle = tokio::task::spawn_blocking(move || {
-		let rt = tokio::runtime::Handle::current();
-		rt.block_on(run_substitution_command(subshell, params, s))
-	});
+	let mut async_reader = sys::async_pipe::AsyncPipeReader::new(reader)?;
 
-	// Read subshell output without pinning a Tokio blocking worker for the
-	// lifetime of the pipe. Detached descendants can keep the pipe open long
-	// after the direct child exits.
-	let output_future = read_pipe_to_string(reader);
+	let cmd_join_handle = tokio::spawn(run_substitution_command(subshell, params, s));
 
-	// Wait for both the output reader and the command to complete.
-	let (output_result, cmd_result) = tokio::join!(output_future, cmd_join_handle);
-	let output_str = output_result?;
-	let cmd_result = cmd_result.map_err(io::Error::other)??;
+	let output_str = async_reader.read_to_string().await?;
+
+	// Now observe the command's completion.
+	let run_result = cmd_join_handle.await?;
+	let cmd_result = run_result?;
 
 	// Store the status.
-	*shell.last_exit_status_mut() = cmd_result.exit_code.into();
+	shell.set_last_exit_status(cmd_result.exit_code.into());
+
+	// Note: $_ is naturally isolated from the parent because we cloned the
+	// shell to run the substitution.
 
 	Ok(output_str)
 }
 
 async fn run_substitution_command(
-	mut shell: Shell,
+	mut shell: Shell<impl extensions::ShellExtensions>,
 	mut params: ExecutionParameters,
 	command: String,
 ) -> Result<ExecutionResult, error::Error> {
@@ -637,71 +801,18 @@ async fn run_substitution_command(
 	if let Ok(program) = &parse_result {
 		if let Some(redir) = try_unwrap_bare_input_redir_program(program) {
 			interp::setup_redirect(&mut shell, &mut params, redir).await?;
-			io::copy(&mut params.stdin(&shell), &mut params.stdout(&shell))?;
+			std::io::copy(&mut params.stdin(&shell), &mut params.stdout(&shell))?;
 			return Ok(ExecutionResult::new(0));
 		}
 	}
 
-	let source_info = brush_parser::SourceInfo { source: String::from("main") };
+	// TODO(source-info): review this
+	let source_info = crate::SourceInfo::from("main");
 
 	// Handle the parse result using default shell behavior.
 	shell
 		.run_parsed_result(parse_result, &source_info, &params)
 		.await
-}
-
-#[cfg(unix)]
-async fn read_pipe_to_string(reader: io::PipeReader) -> io::Result<String> {
-	let reader = register_nonblocking_pipe(reader)?;
-	let mut output = Vec::new();
-	let mut buf = [0u8; 8192];
-
-	loop {
-		let mut readiness = reader.readable().await?;
-		let n = match readiness.try_io(|inner| read_nonblocking(inner.get_ref(), &mut buf)) {
-			Ok(Ok(0)) => break,
-			Ok(Ok(n)) => n,
-			Ok(Err(err)) if err.kind() == io::ErrorKind::Interrupted => continue,
-			Ok(Err(err)) => return Err(err),
-			Err(_would_block) => continue,
-		};
-		output.extend_from_slice(&buf[..n]);
-	}
-
-	String::from_utf8(output).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
-}
-
-#[cfg(not(unix))]
-async fn read_pipe_to_string(reader: io::PipeReader) -> io::Result<String> {
-	tokio::task::spawn_blocking(move || io::read_to_string(reader))
-		.await
-		.map_err(io::Error::other)?
-}
-
-#[cfg(unix)]
-fn register_nonblocking_pipe(
-	reader: io::PipeReader,
-) -> io::Result<tokio::io::unix::AsyncFd<io::PipeReader>> {
-	set_nonblocking(&reader)?;
-	tokio::io::unix::AsyncFd::new(reader)
-}
-
-#[cfg(unix)]
-fn set_nonblocking<T: std::os::fd::AsFd>(file: &T) -> io::Result<()> {
-	let flags = nix::fcntl::fcntl(file, nix::fcntl::FcntlArg::F_GETFL).map_err(io::Error::from)?;
-	let flags = nix::fcntl::OFlag::from_bits_truncate(flags);
-	if flags.contains(nix::fcntl::OFlag::O_NONBLOCK) {
-		return Ok(());
-	}
-
-	nix::fcntl::fcntl(file, nix::fcntl::FcntlArg::F_SETFL(flags | nix::fcntl::OFlag::O_NONBLOCK))
-		.map_err(io::Error::from)?;
-	Ok(())
-}
-
-#[cfg(unix)]
-fn read_nonblocking<T: std::os::fd::AsFd>(file: &T, buf: &mut [u8]) -> io::Result<usize> {
-	nix::unistd::read(file, buf).map_err(io::Error::from)
 }
 
 // Detects a subshell command that consists solely of a single input redirection
@@ -755,53 +866,4 @@ fn try_unwrap_bare_input_redir_program(program: &ast::Program) -> Option<&ast::I
 		) if fd.is_none_or(|fd| fd == openfiles::OpenFiles::STDIN_FD) => Some(redir),
 		_ => None,
 	}
-}
-
-
-/// What to do with the child's controlling-tty/session ownership immediately
-/// before spawn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChildSessionAction {
-	/// Call `setsid()` (via `cmd.detach_session()`) so the child cannot stop
-	/// the parent through SIGTTIN/SIGTTOU on the inherited tty.
-	DetachSession,
-	/// Move the child to the foreground of its tty so it participates in
-	/// interactive job control.
-	TakeForeground,
-	/// Leave session/foreground state alone.
-	None,
-}
-
-/// Decide whether to detach the child's session, foreground it, or do nothing.
-///
-/// The pre-fix code only detached when `new_pg` was set, which is gated on
-/// brush's `interactive` flag. When brush is embedded in a non-interactive host
-/// (e.g. `pi-natives` inside OMP), `new_pg` is false, the child inherited the
-/// host's controlling tty, and any `/dev/tty` open or `tcsetpgrp` call from the
-/// child could SIGTTIN/SIGTTOU and stop the host.
-///
-/// `detach_session()` is also unsafe to call when joining an established
-/// pipeline group (`!new_pg && in_pipeline_group`): `setsid()` would either
-/// fail with EPERM or move the child into a fresh session, breaking the
-/// pipeline's shared process group and its job-control signal propagation.
-/// Pipeline stages therefore keep their pre-fix behavior (no detach).
-///
-/// `take_foreground()` is preserved exactly: still gated on
-/// `new_pg && child_stdin_is_terminal`.
-pub fn child_session_action(
-	new_pg: bool,
-	child_stdin_is_terminal: bool,
-	in_pipeline_group: bool,
-) -> ChildSessionAction {
-	if new_pg && child_stdin_is_terminal {
-		return ChildSessionAction::TakeForeground;
-	}
-	if child_stdin_is_terminal {
-		return ChildSessionAction::None;
-	}
-	let joining_pipeline_group = !new_pg && in_pipeline_group;
-	if joining_pipeline_group {
-		return ChildSessionAction::None;
-	}
-	ChildSessionAction::DetachSession
 }

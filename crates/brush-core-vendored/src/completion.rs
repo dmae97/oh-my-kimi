@@ -6,11 +6,13 @@ use std::{
 	path::{Path, PathBuf},
 };
 
+use brush_parser::unquote_str;
 use clap::ValueEnum;
-use indexmap::IndexSet;
+use strum::IntoEnumIterator;
 
 use crate::{
-	Shell, commands, env, error, escape, jobs, namedoptions, patterns,
+	Shell, commands, env, error, escape, expansion, extensions, interfaces, jobs, namedoptions,
+	patterns,
 	sys::{self, users},
 	trace_categories, traps,
 	variables::{self, ShellValueLiteral},
@@ -18,6 +20,7 @@ use crate::{
 
 /// Type of action to take to generate completion candidates.
 #[derive(Clone, Debug, ValueEnum)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CompleteAction {
 	/// Complete with valid aliases.
 	#[clap(name = "alias")]
@@ -125,6 +128,7 @@ pub enum CompleteOption {
 
 /// Encapsulates the shell's programmable command completion configuration.
 #[derive(Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Config {
 	commands: HashMap<String, Spec>,
 
@@ -140,10 +144,32 @@ pub struct Config {
 	/// Optionally, stores the current completion options in effect. May be
 	/// mutated while a completion generation is in-flight.
 	pub current_completion_options: Option<GenerationOptions>,
+
+	/// Fallback options to use when 'default' completions are requested (not to
+	/// be confused with the 'default' completion spec, nor 'bashdefault'
+	/// completions).
+	pub fallback_options: FallbackOptions,
+}
+
+/// Options for fallback completions.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct FallbackOptions {
+	/// If true, mark directory completions with a trailing slash.
+	pub mark_directories:           bool,
+	/// If true, mark symlinked directory completions with a trailing slash.
+	pub mark_symlinked_directories: bool,
+}
+
+impl Default for FallbackOptions {
+	fn default() -> Self {
+		Self { mark_directories: true, mark_symlinked_directories: false }
+	}
 }
 
 /// Options for generating completions.
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GenerationOptions {
 	//
 	// Options
@@ -169,6 +195,7 @@ pub struct GenerationOptions {
 /// Encapsulates a command completion specification; provides policy for how to
 /// generate completions for a given input.
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Spec {
 	//
 	// Options
@@ -207,6 +234,34 @@ pub struct Spec {
 	pub suffix: Option<String>,
 }
 
+/// Describes what triggered the completion process.
+#[derive(Clone, Copy, Debug, Default)]
+pub enum CompletionTrigger {
+	/// Interactive completion triggered by Tab key (normal completion).
+	#[default]
+	InteractiveComplete,
+	/// Programmatic generation via the `compgen` builtin.
+	Programmatic,
+}
+
+impl CompletionTrigger {
+	/// Returns the `COMP_TYPE` value for this trigger.
+	pub const fn comp_type(self) -> i32 {
+		match self {
+			Self::InteractiveComplete => 9, // TAB = normal completion
+			Self::Programmatic => 0,
+		}
+	}
+
+	/// Returns the `COMP_KEY` value for this trigger.
+	pub const fn comp_key(self) -> i32 {
+		match self {
+			Self::InteractiveComplete => 9, // TAB key
+			Self::Programmatic => 0,
+		}
+	}
+}
+
 /// Encapsulates context used during completion generation.
 #[derive(Debug)]
 pub struct Context<'a> {
@@ -226,7 +281,10 @@ pub struct Context<'a> {
 	/// The 0-based index of the cursor in the input line.
 	pub cursor_index: usize,
 	/// The tokens in the input line.
-	pub tokens:       &'a [&'a brush_parser::Token],
+	pub tokens:       &'a [&'a CompletionToken<'a>],
+
+	/// What triggered the completion.
+	pub trigger: CompletionTrigger,
 }
 
 impl Spec {
@@ -236,42 +294,51 @@ impl Spec {
 	///
 	/// * `shell` - The shell instance to use for completion generation.
 	/// * `context` - The context in which completion is being generated.
-
+	#[expect(clippy::too_many_lines)]
 	pub async fn get_completions(
 		&self,
-		shell: &mut Shell,
+		shell: &mut Shell<impl extensions::ShellExtensions>,
 		context: &Context<'_>,
 	) -> Result<Answer, crate::error::Error> {
 		// Store the current options in the shell; this is needed since the compopt
 		// built-in has the ability of modifying the options for an in-flight
 		// completion process.
-		shell.completion_config.current_completion_options = Some(self.options.clone());
+		shell.completion_config_mut().current_completion_options = Some(self.options.clone());
 
 		// Generate completions based on any provided actions (and on words).
 		let mut candidates = self.generate_action_completions(shell, context).await?;
 		if let Some(word_list) = &self.word_list {
 			let params = shell.default_exec_params();
-			let words = crate::expansion::full_expand_and_split_str(shell, &params, word_list).await?;
+			// Per POSIX / bash docs, -W word list is subject to shell expansion
+			// and field splitting but NOT pathname expansion (globbing).
+			let options =
+				crate::expansion::ExpanderOptions { pathname_expand: false, ..Default::default() };
+			let words = crate::expansion::full_expand_and_split_word_with_options(
+				shell, &params, word_list, &options,
+			)
+			.await?;
 			for word in words {
 				if word.starts_with(context.token_to_complete) {
-					candidates.insert(word);
+					candidates.push(word);
 				}
 			}
 		}
 
 		if let Some(glob_pattern) = &self.glob_pattern {
 			let pattern = patterns::Pattern::from(glob_pattern.as_str())
-				.set_extended_globbing(shell.options.extended_globbing)
-				.set_case_insensitive(shell.options.case_insensitive_pathname_expansion);
+				.set_extended_globbing(shell.options().extended_globbing)
+				.set_case_insensitive(shell.options().case_insensitive_pathname_expansion);
 
-			let expansions = pattern.expand(
-				shell.working_dir(),
-				Some(&patterns::Pattern::accept_all_expand_filter),
-				&patterns::FilenameExpansionOptions::default(),
-			)?;
+			let expansions = pattern
+				.expand(
+					shell.working_dir(),
+					Some(&patterns::Pattern::accept_all_expand_filter),
+					&patterns::FilenameExpansionOptions::default(),
+				)?
+				.into_paths();
 
 			for expansion in expansions {
-				candidates.insert(expansion);
+				candidates.push(expansion);
 			}
 		}
 		if let Some(function_name) = &self.function_name {
@@ -294,25 +361,25 @@ impl Spec {
 		}
 
 		// Apply filter pattern, if present. Anything the filter selects gets removed.
-		if let Some(filter_pattern) = &self.filter_pattern {
-			if !filter_pattern.is_empty() {
-				let mut updated = IndexSet::new();
+		if let Some(filter_pattern) = &self.filter_pattern
+			&& !filter_pattern.is_empty()
+		{
+			let mut updated = Vec::new();
 
-				for candidate in candidates {
-					let matches = completion_filter_pattern_matches(
-						filter_pattern.as_str(),
-						candidate.as_str(),
-						context.token_to_complete,
-						shell,
-					)?;
+			for candidate in candidates {
+				let matches = completion_filter_pattern_matches(
+					filter_pattern.as_str(),
+					candidate.as_str(),
+					context.token_to_complete,
+					shell,
+				)?;
 
-					if self.filter_pattern_excludes != matches {
-						updated.insert(candidate);
-					}
+				if self.filter_pattern_excludes != matches {
+					updated.push(candidate);
 				}
-
-				candidates = updated;
 			}
+
+			candidates = updated;
 		}
 
 		// Add prefix and/or suffix, if present.
@@ -321,9 +388,9 @@ impl Spec {
 			let prefix = self.prefix.as_ref().unwrap_or(&empty);
 			let suffix = self.suffix.as_ref().unwrap_or(&empty);
 
-			let mut updated = IndexSet::new();
+			let mut updated = Vec::new();
 			for candidate in candidates {
-				updated.insert(std::format!("{prefix}{candidate}{suffix}"));
+				updated.push(std::format!("{prefix}{candidate}{suffix}"));
 			}
 
 			candidates = updated;
@@ -333,45 +400,47 @@ impl Spec {
 		// Now apply options
 		//
 
-		let options = if let Some(options) = &shell.completion_config.current_completion_options {
+		let options = if let Some(options) = &shell.completion_config().current_completion_options {
 			options
 		} else {
 			&self.options
 		};
 
-		let processing_options = ProcessingOptions {
+		let mut processing_options = ProcessingOptions {
 			treat_as_filenames:               options.file_names,
 			no_autoquote_filenames:           options.no_quote,
 			no_trailing_space_at_end_of_line: options.no_space,
 		};
 
-		if options.plus_dirs {
+		if options.plus_dirs || options.dir_names {
 			// Also add dir name completion.
 			let mut dir_candidates =
 				get_file_completions(shell, context.token_to_complete, /* must_be_dir */ true).await;
 			candidates.append(&mut dir_candidates);
 		}
 
-		// If we still haven't found any completion candidates by now, then consider
-		// whether any requests were made for fallbacks.
-		if candidates.is_empty() {
-			if options.bash_default {
-				//
-				// TODO: if we have no completions, then fall back to default "bash"
-				// completions. It's not clear what exactly this means, though. From basic
-				// testing, it doesn't seem to include basic file and directory name
-				// completion.
-				//
-				tracing::debug!(target: trace_categories::COMPLETION, "unimplemented: complete -o bashdefault");
-			}
-			if options.default || options.dir_names {
-				// N.B. We approximate "default" readline completion behavior by getting file
-				// and dir completions.
-				let must_be_dir = options.dir_names;
+		// If we still have no candidates, and bashdefault completions were requested,
+		// then generate those.
+		if candidates.is_empty() && options.bash_default {
+			// TODO(completions): it's not clear what default "bash" completions means. From
+			// basic testing, this doesn't seem to include basic file and directory name
+			// completion.
+			tracing::debug!(target: trace_categories::COMPLETION, "unimplemented: complete -o bashdefault");
+		}
 
-				let mut default_candidates =
-					get_file_completions(shell, context.token_to_complete, must_be_dir).await;
-				candidates.append(&mut default_candidates);
+		// If we still have no candidates, and default completions were requested, then
+		// generate those.
+		if candidates.is_empty() && options.default {
+			// N.B. We approximate "default" readline completion behavior by getting file
+			// and dir completions.
+			let must_be_dir = options.dir_names;
+
+			let mut default_candidates =
+				get_file_completions(shell, context.token_to_complete, must_be_dir).await;
+			candidates.append(&mut default_candidates);
+
+			if shell.completion_config().fallback_options.mark_directories {
+				processing_options.treat_as_filenames = true;
 			}
 		}
 
@@ -383,44 +452,64 @@ impl Spec {
 		Ok(Answer::Candidates(candidates, processing_options))
 	}
 
+	#[expect(clippy::too_many_lines)]
 	async fn generate_action_completions(
 		&self,
-		shell: &Shell,
+		shell: &Shell<impl extensions::ShellExtensions>,
 		context: &Context<'_>,
-	) -> Result<IndexSet<String>, error::Error> {
-		let mut candidates = IndexSet::new();
+	) -> Result<Vec<String>, error::Error> {
+		let mut candidates = Vec::new();
 
 		let token = context.token_to_complete;
 
 		for action in &self.actions {
 			match action {
 				CompleteAction::Alias => {
-					for name in shell.aliases.keys() {
+					for name in shell.aliases().keys() {
 						if name.starts_with(token) {
-							candidates.insert(name.clone());
+							candidates.push(name.clone());
 						}
 					}
 				},
 				CompleteAction::ArrayVar => {
-					for (name, var) in shell.env.iter() {
+					for (name, var) in shell.env().iter() {
 						if var.value().is_array() && name.starts_with(token) {
-							candidates.insert(name.to_owned());
+							candidates.push(name.to_owned());
 						}
 					}
 				},
 				CompleteAction::Binding => {
-					tracing::debug!(target: trace_categories::COMPLETION, "unimplemented: complete -A binding");
+					for input_func in interfaces::InputFunction::iter() {
+						let name: &'static str = input_func.into();
+						if name.starts_with(token) {
+							candidates.push(name.to_string());
+						}
+					}
 				},
 				CompleteAction::Builtin => {
 					for name in shell.builtins().keys() {
 						if name.starts_with(token) {
-							candidates.insert(name.to_owned());
+							candidates.push(name.to_owned());
 						}
 					}
 				},
 				CompleteAction::Command => {
-					let mut command_completions = get_command_completions(shell, context);
+					let mut command_completions =
+						get_external_command_completions(shell, context.token_to_complete);
 					candidates.append(&mut command_completions);
+					for name in shell.builtins().keys() {
+						if name.starts_with(token) {
+							candidates.push(name.to_owned());
+						}
+					}
+					for keyword in shell.get_keywords() {
+						if keyword.starts_with(token) {
+							candidates.push(keyword.to_string());
+						}
+					}
+					for (name, _) in shell.funcs().iter() {
+						candidates.push(name.to_owned());
+					}
 				},
 				CompleteAction::Directory => {
 					let mut file_completions =
@@ -430,21 +519,21 @@ impl Spec {
 				CompleteAction::Disabled => {
 					for (name, registration) in shell.builtins() {
 						if registration.disabled && name.starts_with(token) {
-							candidates.insert(name.to_owned());
+							candidates.push(name.to_owned());
 						}
 					}
 				},
 				CompleteAction::Enabled => {
 					for (name, registration) in shell.builtins() {
 						if !registration.disabled && name.starts_with(token) {
-							candidates.insert(name.to_owned());
+							candidates.push(name.to_owned());
 						}
 					}
 				},
 				CompleteAction::Export => {
-					for (key, value) in shell.env.iter() {
+					for (key, value) in shell.env().iter() {
 						if value.is_exported() && key.starts_with(token) {
-							candidates.insert(key.to_owned());
+							candidates.push(key.to_owned());
 						}
 					}
 				},
@@ -455,13 +544,13 @@ impl Spec {
 				},
 				CompleteAction::Function => {
 					for (name, _) in shell.funcs().iter() {
-						candidates.insert(name.to_owned());
+						candidates.push(name.to_owned());
 					}
 				},
 				CompleteAction::Group => {
 					for group_name in users::get_all_groups()? {
 						if group_name.starts_with(token) {
-							candidates.insert(group_name);
+							candidates.push(group_name);
 						}
 					}
 				},
@@ -469,7 +558,7 @@ impl Spec {
 					// For now, we only have help topics for built-in commands.
 					for name in shell.builtins().keys() {
 						if name.starts_with(token) {
-							candidates.insert(name.to_owned());
+							candidates.push(name.to_owned());
 						}
 					}
 				},
@@ -478,31 +567,31 @@ impl Spec {
 					if let Ok(name) = sys::network::get_hostname() {
 						let name = name.to_string_lossy();
 						if name.starts_with(token) {
-							candidates.insert(name.to_string());
+							candidates.push(name.to_string());
 						}
 					}
 				},
 				CompleteAction::Job => {
-					for job in &shell.jobs.jobs {
+					for job in &shell.jobs().jobs {
 						let command_name = job.command_name();
 						if command_name.starts_with(token) {
-							candidates.insert(command_name.to_owned());
+							candidates.push(command_name.to_owned());
 						}
 					}
 				},
 				CompleteAction::Keyword => {
 					for keyword in shell.get_keywords() {
 						if keyword.starts_with(token) {
-							candidates.insert(keyword.clone());
+							candidates.push(keyword.to_string());
 						}
 					}
 				},
 				CompleteAction::Running => {
-					for job in &shell.jobs.jobs {
+					for job in &shell.jobs().jobs {
 						if matches!(job.state, jobs::JobState::Running) {
 							let command_name = job.command_name();
 							if command_name.starts_with(token) {
-								candidates.insert(command_name.to_owned());
+								candidates.push(command_name.to_owned());
 							}
 						}
 					}
@@ -513,30 +602,30 @@ impl Spec {
 				CompleteAction::SetOpt => {
 					for option in namedoptions::options(namedoptions::ShellOptionKind::SetO).iter() {
 						if option.name.starts_with(token) {
-							candidates.insert(option.name.to_owned());
+							candidates.push(option.name.to_owned());
 						}
 					}
 				},
 				CompleteAction::ShOpt => {
 					for option in namedoptions::options(namedoptions::ShellOptionKind::Shopt).iter() {
 						if option.name.starts_with(token) {
-							candidates.insert(option.name.to_owned());
+							candidates.push(option.name.to_owned());
 						}
 					}
 				},
 				CompleteAction::Signal => {
 					for signal in traps::TrapSignal::iterator() {
 						if signal.as_str().starts_with(token) {
-							candidates.insert(signal.as_str().to_string());
+							candidates.push(signal.as_str().to_string());
 						}
 					}
 				},
 				CompleteAction::Stopped => {
-					for job in &shell.jobs.jobs {
+					for job in &shell.jobs().jobs {
 						if matches!(job.state, jobs::JobState::Stopped) {
 							let command_name = job.command_name();
 							if command_name.starts_with(token) {
-								candidates.insert(job.command_name().to_owned());
+								candidates.push(job.command_name().to_owned());
 							}
 						}
 					}
@@ -544,14 +633,14 @@ impl Spec {
 				CompleteAction::User => {
 					for user_name in users::get_all_users()? {
 						if user_name.starts_with(token) {
-							candidates.insert(user_name);
+							candidates.push(user_name);
 						}
 					}
 				},
 				CompleteAction::Variable => {
-					for (key, _) in shell.env.iter() {
+					for (key, _) in shell.env().iter() {
 						if key.starts_with(token) {
-							candidates.insert(key.to_owned());
+							candidates.push(key.to_owned());
 						}
 					}
 				},
@@ -563,23 +652,23 @@ impl Spec {
 
 	async fn call_completion_command(
 		&self,
-		shell: &Shell,
+		shell: &Shell<impl extensions::ShellExtensions>,
 		command_name: &str,
 		context: &Context<'_>,
-	) -> Result<IndexSet<String>, error::Error> {
+	) -> Result<Vec<String>, error::Error> {
 		// Move to a subshell so we can start filling out variables.
 		let mut shell = shell.clone();
 
 		let vars_and_values: Vec<(&str, ShellValueLiteral)> = vec![
 			("COMP_LINE", context.input_line.into()),
 			("COMP_POINT", context.cursor_index.to_string().into()),
-			// TODO: add COMP_KEY
-			// TODO: add COMP_TYPE
+			("COMP_KEY", context.trigger.comp_key().to_string().into()),
+			("COMP_TYPE", context.trigger.comp_type().to_string().into()),
 		];
 
 		// Fill out variables.
 		for (var, value) in vars_and_values {
-			shell.env.update_or_add(
+			shell.env_mut().update_or_add(
 				var,
 				value,
 				|v| {
@@ -613,9 +702,9 @@ impl Spec {
 				.await?;
 
 		// Split results.
-		let mut candidates = IndexSet::new();
+		let mut candidates = Vec::new();
 		for line in output.lines() {
-			candidates.insert(line.to_owned());
+			candidates.push(line.to_owned());
 		}
 
 		Ok(candidates)
@@ -623,22 +712,22 @@ impl Spec {
 
 	async fn call_completion_function(
 		&self,
-		shell: &mut Shell,
+		shell: &mut Shell<impl extensions::ShellExtensions>,
 		function_name: &str,
 		context: &Context<'_>,
 	) -> Result<Answer, error::Error> {
-		// TODO: Don't pollute the persistent environment with these?
+		// TODO(completions): Don't pollute the persistent environment with these?
 		let vars_and_values: Vec<(&str, ShellValueLiteral)> = vec![
 			("COMP_LINE", context.input_line.into()),
 			("COMP_POINT", context.cursor_index.to_string().into()),
-			// TODO: add COMP_KEY
-			// TODO: add COMP_TYPE
+			("COMP_KEY", context.trigger.comp_key().to_string().into()),
+			("COMP_TYPE", context.trigger.comp_type().to_string().into()),
 			(
 				"COMP_WORDS",
 				context
 					.tokens
 					.iter()
-					.map(|t| t.to_str())
+					.map(|t| t.text)
 					.collect::<Vec<_>>()
 					.into(),
 			),
@@ -648,9 +737,9 @@ impl Spec {
 		tracing::debug!(target: trace_categories::COMPLETION, "[calling completion func '{function_name}']: {}",
             vars_and_values.iter().map(|(k, v)| std::format!("{k}={v}")).collect::<Vec<String>>().join(" "));
 
-		let mut vars_to_remove = vec![];
+		let mut vars_to_remove = Vec::with_capacity(vars_and_values.len());
 		for (var, value) in vars_and_values {
-			shell.env.update_or_add(
+			shell.env_mut().update_or_add(
 				var,
 				value,
 				|_| Ok(()),
@@ -666,21 +755,26 @@ impl Spec {
 			args.push(preceding_token);
 		}
 
-		// TODO: Find a more appropriate interlock here. For now we use the existing
-		// handler depth count to suppress any debug traps.
-		shell.traps.handler_depth += 1;
+		// Suppress trap delivery during completion function invocation.
+		// N.B. We use manual acquire/release rather than an RAII guard because an
+		// RAII guard would need to hold `&mut Shell`, preventing the mutable borrow
+		// required by `invoke_function()`. This is safe because `invoke_result` is
+		// captured into a variable (never early-returned with `?`), so
+		// `release_trap_delivery_block()` always runs.
+		shell.acquire_trap_delivery_block();
 
 		let params = shell.default_exec_params();
 		let invoke_result = shell
 			.invoke_function(function_name, args.iter(), &params)
 			.await;
+
 		tracing::debug!(target: trace_categories::COMPLETION, "[completion function '{function_name}' returned: {invoke_result:?}]");
 
-		shell.traps.handler_depth -= 1;
+		shell.release_trap_delivery_block();
 
 		// Make a best-effort attempt to unset the temporary variables.
 		for var_name in vars_to_remove {
-			let _ = shell.env.unset(var_name);
+			let _ = shell.env_mut().unset(var_name);
 		}
 
 		let result = invoke_result.unwrap_or_else(|e| {
@@ -693,7 +787,7 @@ impl Spec {
 		if result == 124 {
 			Ok(Answer::RestartCompletionProcess)
 		} else {
-			if let Some(reply) = shell.env.unset("COMPREPLY")? {
+			if let Some(reply) = shell.env_mut().unset("COMPREPLY")? {
 				tracing::debug!(target: trace_categories::COMPLETION, "[completion function yielded: {reply:?}]");
 
 				match reply.value() {
@@ -704,16 +798,14 @@ impl Spec {
 						));
 					},
 					variables::ShellValue::String(s) => {
-						let mut candidates = IndexSet::new();
-						candidates.insert(s.to_owned());
-
+						let candidates = vec![s.to_owned()];
 						return Ok(Answer::Candidates(candidates, ProcessingOptions::default()));
 					},
 					_ => (),
 				}
 			}
 
-			Ok(Answer::Candidates(IndexSet::new(), ProcessingOptions::default()))
+			Ok(Answer::Candidates(Vec::new(), ProcessingOptions::default()))
 		}
 	}
 }
@@ -730,7 +822,7 @@ pub struct Completions {
 	/// boundary.
 	pub delete_count:    usize,
 	/// The ordered set of completions.
-	pub candidates:      IndexSet<String>,
+	pub candidates:      Vec<String>,
 	/// Options for processing the candidates.
 	pub options:         ProcessingOptions,
 }
@@ -748,6 +840,28 @@ pub struct ProcessingOptions {
 	pub no_trailing_space_at_end_of_line: bool,
 }
 
+/// Represents a token in the input line being completed.
+#[derive(Debug, Clone, Copy)]
+pub struct CompletionToken<'a> {
+	/// The text of the token.
+	pub text:  &'a str,
+	/// The start of the token, expressed as a byte offset into the input line.
+	pub start: usize,
+}
+
+impl CompletionToken<'_> {
+	/// Returns the length of the token, expressed as a byte count.
+	pub const fn length(&self) -> usize {
+		self.text.len()
+	}
+
+	/// Returns the end of the token, expressed as a byte offset into the input
+	/// line.
+	pub const fn end(&self) -> usize {
+		self.start + self.length()
+	}
+}
+
 impl Default for ProcessingOptions {
 	fn default() -> Self {
 		Self {
@@ -762,7 +876,7 @@ impl Default for ProcessingOptions {
 pub enum Answer {
 	/// The completion process generated a set of candidates along with options
 	/// controlling how to process them.
-	Candidates(IndexSet<String>, ProcessingOptions),
+	Candidates(Vec<String>, ProcessingOptions),
 	/// The completion process needs to be restarted.
 	RestartCompletionProcess,
 }
@@ -859,6 +973,11 @@ impl Config {
 	/// # Arguments
 	///
 	/// * `name` - The name of the command.
+	#[allow(
+		clippy::missing_panics_doc,
+		clippy::unwrap_used,
+		reason = "these unwrap calls should not fail"
+	)]
 	pub fn get_or_add_mut(&mut self, name: &str) -> &mut Spec {
 		match name {
 			EMPTY_COMMAND => {
@@ -893,7 +1012,7 @@ impl Config {
 	#[expect(clippy::string_slice)]
 	pub async fn get_completions(
 		&self,
-		shell: &mut Shell,
+		shell: &mut Shell<impl extensions::ShellExtensions>,
 		input: &str,
 		position: usize,
 	) -> Result<Completions, error::Error> {
@@ -910,16 +1029,16 @@ impl Config {
 
 		// Copy a set of references to the tokens; we will adjust this list as
 		// we find we need to insert an empty token.
-		let mut adjusted_tokens: Vec<&brush_parser::Token> = tokens.iter().collect();
+		let mut adjusted_tokens: Vec<&CompletionToken<'_>> = tokens.iter().collect();
 
 		// Try to find which token we are in.
 		for (i, token) in tokens.iter().enumerate() {
 			// If the cursor is before the start of the token, then it's between
 			// this token and the one that preceded it (or it's before the first
 			// token if this is the first token).
-			if cursor < token.location().start.index {
-				// TODO: Should insert an empty token here; the position looks to have
-				// been between this token and the preceding one.
+			if cursor < token.start {
+				// TODO(completions): Should insert an empty token here; the position looks to
+				// have been between this token and the preceding one.
 				completion_token_index = i;
 				break;
 			}
@@ -928,13 +1047,13 @@ impl Config {
 			// to generate completions to replace/update this token. We'll pay
 			// attention to the position to figure out the prefix that we should
 			// be completing.
-			else if cursor >= token.location().start.index && cursor <= token.location().end.index {
+			else if cursor >= token.start && cursor <= token.end() {
 				// Update insertion index.
-				insertion_index = token.location().start.index;
+				insertion_index = token.start;
 
 				// Update prefix.
 				let offset_into_token = cursor - insertion_index;
-				let token_str = token.to_str();
+				let token_str = token.text;
 				completion_prefix = &token_str[..offset_into_token];
 
 				// Update token index.
@@ -950,8 +1069,7 @@ impl Config {
 
 		// If the position is after the last token, then we need to insert an empty
 		// token for the new token to be generated.
-		let empty_token =
-			brush_parser::Token::Word(String::new(), brush_parser::TokenLocation::default());
+		let empty_token = CompletionToken { text: "", start: input.len() };
 		if completion_token_index == tokens.len() {
 			adjusted_tokens.push(&empty_token);
 		}
@@ -967,12 +1085,13 @@ impl Config {
 
 			let completion_context = Context {
 				token_to_complete: completion_prefix,
-				preceding_token:   preceding_token.map(|t| t.to_str()),
-				command_name:      adjusted_tokens.first().map(|token| token.to_str()),
+				preceding_token:   preceding_token.map(|t| t.text),
+				command_name:      adjusted_tokens.first().map(|token| token.text),
 				input_line:        input,
 				token_index:       completion_token_index,
 				tokens:            adjusted_tokens.as_slice(),
 				cursor_index:      position,
+				trigger:           CompletionTrigger::InteractiveComplete,
 			};
 
 			result = self
@@ -992,13 +1111,16 @@ impl Config {
 			Answer::RestartCompletionProcess => Ok(Completions {
 				insertion_index,
 				delete_count: 0,
-				candidates: IndexSet::new(),
+				candidates: Vec::new(),
 				options: ProcessingOptions::default(),
 			}),
 		}
 	}
 
-	fn tokenize_input_for_completion(shell: &Shell, input: &str) -> Vec<brush_parser::Token> {
+	fn tokenize_input_for_completion<'a>(
+		shell: &Shell<impl extensions::ShellExtensions>,
+		input: &'a str,
+	) -> Vec<CompletionToken<'a>> {
 		const FALLBACK: &str = " \t\n\"\'@><=;|&(:";
 
 		let delimiter_str = shell
@@ -1010,7 +1132,11 @@ impl Config {
 		simple_tokenize_by_delimiters(input, delimiters.as_slice())
 	}
 
-	async fn get_completions_for_token(&self, shell: &mut Shell, context: Context<'_>) -> Answer {
+	async fn get_completions_for_token(
+		&self,
+		shell: &mut Shell<impl extensions::ShellExtensions>,
+		context: Context<'_>,
+	) -> Answer {
 		// See if we can find a completion spec matching the current command.
 		let mut found_spec: Option<&Spec> = None;
 
@@ -1020,11 +1146,11 @@ impl Config {
 					found_spec = Some(spec);
 				}
 			} else {
-				if let Some(spec) = shell.completion_config.commands.get(command_name) {
+				if let Some(spec) = shell.completion_config().commands.get(command_name) {
 					found_spec = Some(spec);
 				} else if let Some(file_name) = PathBuf::from(command_name).file_name() {
 					if let Some(spec) = shell
-						.completion_config
+						.completion_config()
 						.commands
 						.get(&file_name.to_string_lossy().to_string())
 					{
@@ -1050,9 +1176,7 @@ impl Config {
 				.to_owned()
 				.get_completions(shell, &context)
 				.await
-				.unwrap_or_else(|_err| {
-					Answer::Candidates(IndexSet::new(), ProcessingOptions::default())
-				})
+				.unwrap_or_else(|_err| Answer::Candidates(Vec::new(), ProcessingOptions::default()))
 		} else {
 			// If we didn't find a spec, then fall back to basic completion.
 			get_completions_using_basic_lookup(shell, &context).await
@@ -1061,133 +1185,290 @@ impl Config {
 }
 
 async fn get_file_completions(
-	shell: &Shell,
+	shell: &Shell<impl extensions::ShellExtensions>,
 	token_to_complete: &str,
 	must_be_dir: bool,
-) -> IndexSet<String> {
+) -> Vec<String> {
 	// Basic-expand the token-to-be-completed; it won't have been expanded to this
 	// point.
 	let mut throwaway_shell = shell.clone();
 	let params = throwaway_shell.default_exec_params();
-	let expanded_token = throwaway_shell
-		.basic_expand_string(&params, token_to_complete)
-		.await
-		.unwrap_or_else(|_err| token_to_complete.to_owned());
+	let options =
+		expansion::ExpanderOptions { execute_command_substitutions: false, ..Default::default() };
+	let expanded_token = expansion::basic_expand_word_with_options(
+		&mut throwaway_shell,
+		&params,
+		&unquote_str(token_to_complete),
+		&options,
+	)
+	.await
+	.unwrap_or_else(|_err| token_to_complete.to_owned());
+
+	// Normalize path separators before building the glob pattern, because backslash
+	// is the escape character in glob syntax and must not be confused with a
+	// Windows path separator.
+	let expanded_token = sys::fs::normalize_path_separators(&expanded_token).into_owned();
 
 	let glob = std::format!("{expanded_token}*");
 
 	let path_filter = |path: &Path| !must_be_dir || shell.absolute_path(path).is_dir();
 
 	let pattern = patterns::Pattern::from(glob)
-		.set_extended_globbing(shell.options.extended_globbing)
-		.set_case_insensitive(shell.options.case_insensitive_pathname_expansion);
+		.set_extended_globbing(shell.options().extended_globbing)
+		.set_case_insensitive(shell.options().case_insensitive_pathname_expansion);
 
-	pattern
+	let mut completions: Vec<String> = pattern
 		.expand(
 			shell.working_dir(),
 			Some(&path_filter),
 			&patterns::FilenameExpansionOptions::default(),
 		)
 		.unwrap_or_default()
+		.into_paths()
 		.into_iter()
-		.collect()
+		.map(|p| match sys::fs::normalize_path_separators(&p) {
+			std::borrow::Cow::Borrowed(_) => p,
+			std::borrow::Cow::Owned(normalized) => normalized,
+		})
+		.collect();
+
+	match expanded_token.as_str() {
+		"." => {
+			completions.push(".".into());
+			completions.push("..".into());
+		},
+		".." => {
+			completions.push("..".into());
+		},
+		_ => {},
+	}
+
+	completions.sort();
+	completions.dedup();
+	completions
 }
 
-fn get_command_completions(shell: &Shell, context: &Context<'_>) -> IndexSet<String> {
-	let mut candidates = IndexSet::new();
+fn get_external_command_completions(
+	shell: &Shell<impl extensions::ShellExtensions>,
+	prefix: &str,
+) -> Vec<String> {
+	let mut candidates = Vec::new();
 
 	// Look for external commands.
 	for path in shell.find_executables_in_path_with_prefix(
-		context.token_to_complete,
-		shell.options.case_insensitive_pathname_expansion,
+		prefix,
+		shell.options().case_insensitive_pathname_expansion,
 	) {
 		if let Some(file_name) = path.file_name() {
-			candidates.insert(file_name.to_string_lossy().to_string());
+			candidates.push(file_name.to_string_lossy().to_string());
 		}
 	}
 
 	candidates.into_iter().collect()
 }
 
-async fn get_completions_using_basic_lookup(shell: &Shell, context: &Context<'_>) -> Answer {
-	let mut candidates = get_file_completions(shell, context.token_to_complete, false).await;
+/// Attempts to complete a variable name from the given token.
+/// Returns `Some(Answer)` if the token looks like a variable reference being
+/// typed, or `None` if file/command completion should be used instead.
+///
+/// # Arguments
+///
+/// * `shell` - The shell instance to use for variable lookup.
+/// * `token` - The token being completed. May be empty.
+fn try_get_variable_completions(
+	shell: &Shell<impl extensions::ShellExtensions>,
+	token: &str,
+) -> Option<Answer> {
+	// Determine if this is a braced or unbraced variable reference
+	let (var_prefix, use_braces) = if let Some(prefix) = token.strip_prefix("${") {
+		// For braced: only complete if brace isn't closed yet
+		if prefix.contains('}') {
+			return None;
+		}
+		(prefix, true)
+	} else if let Some(prefix) = token.strip_prefix('$') {
+		(prefix, false)
+	} else {
+		return None;
+	};
+
+	// If there's a path separator, this is a path like $HOME/foo, not a variable to
+	// complete
+	if sys::fs::contains_path_separator(var_prefix) {
+		return None;
+	}
+
+	// Find matching variables
+	let mut candidates: Vec<String> = shell
+		.env()
+		.iter()
+		.filter(|(key, _)| key.starts_with(var_prefix))
+		.map(|(key, _)| {
+			if use_braces {
+				format!("${{{key}}}")
+			} else {
+				format!("${key}")
+			}
+		})
+		.collect();
+	candidates.sort();
+
+	// Variable completions should not be treated as filenames (no escaping needed)
+	let options = ProcessingOptions { treat_as_filenames: false, ..ProcessingOptions::default() };
+
+	Some(Answer::Candidates(candidates, options))
+}
+
+/// Adds command-position completions to candidates.
+/// This includes external commands, builtins, functions, aliases, and keywords.
+fn add_command_completions(
+	shell: &Shell<impl extensions::ShellExtensions>,
+	prefix: &str,
+	candidates: &mut Vec<String>,
+) {
+	// Add external commands.
+	let mut command_completions = get_external_command_completions(shell, prefix);
+	candidates.append(&mut command_completions);
+
+	// Add built-in commands.
+	for (name, registration) in shell.builtins() {
+		if !registration.disabled && name.starts_with(prefix) {
+			candidates.push(name.to_owned());
+		}
+	}
+
+	// Add shell functions.
+	for (name, _) in shell.funcs().iter() {
+		if name.starts_with(prefix) {
+			candidates.push(name.to_owned());
+		}
+	}
+
+	// Add aliases.
+	for name in shell.aliases().keys() {
+		if name.starts_with(prefix) {
+			candidates.push(name.to_owned());
+		}
+	}
+
+	// Add keywords.
+	for keyword in shell.get_keywords() {
+		if keyword.starts_with(prefix) {
+			candidates.push(keyword.to_string());
+		}
+	}
+}
+
+async fn get_completions_using_basic_lookup(
+	shell: &Shell<impl extensions::ShellExtensions>,
+	context: &Context<'_>,
+) -> Answer {
+	let token = context.token_to_complete;
+
+	// Try variable completion first (e.g., $HO -> $HOME, ${HO -> ${HOME})
+	if let Some(answer) = try_get_variable_completions(shell, token) {
+		return answer;
+	}
+
+	// File completions
+	let mut candidates = get_file_completions(shell, token, false).await;
 
 	// If this appears to be the command token (and if there's *some* prefix without
 	// a path separator) then also consider whether we should search the path for
 	// completions too.
-	// TODO: Do a better job than just checking if index == 0.
-	if context.token_index == 0
-		&& !context.token_to_complete.is_empty()
-		&& !context
-			.token_to_complete
-			.contains(std::path::MAIN_SEPARATOR)
-	{
-		// Add external commands.
-		let mut command_completions = get_command_completions(shell, context);
-		candidates.append(&mut command_completions);
+	// TODO(completions): Do a better job than just checking if index == 0.
+	let is_command_position =
+		context.token_index == 0 && !token.is_empty() && !sys::fs::contains_path_separator(token);
 
-		// Add built-in commands.
-		for (name, registration) in shell.builtins() {
-			if !registration.disabled && name.starts_with(context.token_to_complete) {
-				candidates.insert(name.to_owned());
-			}
-		}
-
-		// Add shell functions.
-		for (name, _) in shell.funcs().iter() {
-			if name.starts_with(context.token_to_complete) {
-				candidates.insert(name.to_owned());
-			}
-		}
-
-		// Add aliases.
-		for name in shell.aliases.keys() {
-			if name.starts_with(context.token_to_complete) {
-				candidates.insert(name.to_owned());
-			}
-		}
-
-		// Add keywords.
-		for keyword in shell.get_keywords() {
-			if keyword.starts_with(context.token_to_complete) {
-				candidates.insert(keyword.clone());
-			}
-		}
-
-		// Sort.
+	if is_command_position {
+		add_command_completions(shell, token, &mut candidates);
 		candidates.sort();
-	}
-
-	#[cfg(windows)]
-	{
-		candidates = candidates
-			.into_iter()
-			.map(|c| c.replace('\\', "/"))
-			.collect();
 	}
 
 	Answer::Candidates(candidates, ProcessingOptions::default())
 }
 
-fn simple_tokenize_by_delimiters(input: &str, delimiters: &[char]) -> Vec<brush_parser::Token> {
-	//
-	// This is an overly naive tokenization.
-	//
-
+/// Tokenizes input by splitting on delimiter characters. Words (non-delimiter
+/// sequences) are emitted as tokens. Consecutive non-whitespace delimiters are
+/// grouped into a single token. Whitespace delimiters separate tokens but are
+/// not emitted themselves.
+#[allow(clippy::string_slice, reason = "used indices come from char_indices")]
+fn simple_tokenize_by_delimiters<'a>(
+	input: &'a str,
+	delimiters: &[char],
+) -> Vec<CompletionToken<'a>> {
 	let mut tokens = vec![];
-	let mut start = 0;
+	let mut word_start = None;
+	let mut word_is_delimiters = false;
+	let mut quote_char: Option<char> = None;
+	let mut escaped = false;
 
-	for piece in input.split_inclusive(delimiters) {
-		let next_start = start + piece.len();
+	for (i, c) in input.char_indices() {
+		let mut is_active_delimiter = false;
+		if escaped {
+			escaped = false;
+		} else if let Some(q) = quote_char {
+			if c == '\\' && q == '"' {
+				// an escape in double-quoted string works as an escape.
+				escaped = true;
+			} else if c == q {
+				// end of quote.
+				quote_char = None;
+			}
+		} else {
+			if c == '\\' {
+				escaped = true;
+			} else if word_start.is_none() && (c == '\'' || c == '\"') {
+				// start a new quote.
+				quote_char = Some(c);
+			} else {
+				is_active_delimiter = delimiters.contains(&c);
+			}
+		}
 
-		let piece = piece.strip_suffix(delimiters).unwrap_or(piece);
-		let end = start + piece.len();
-		tokens.push(brush_parser::Token::Word(piece.to_string(), brush_parser::TokenLocation {
-			start: brush_parser::SourcePosition { index: start, line: 1, column: start + 1 }.into(),
-			end:   brush_parser::SourcePosition { index: end, line: 1, column: end + 1 }.into(),
-		}));
+		if is_active_delimiter {
+			// If we were building a regular word and this is a delimiter, then finish it.
+			// Similarly, if this is a whitespace delimiter, finish any delimiter sequence.
+			if let Some(start) = word_start {
+				if !word_is_delimiters || c.is_ascii_whitespace() {
+					tokens.push(CompletionToken { text: &input[start..i], start });
+					word_start = None;
+					word_is_delimiters = false;
+				}
 
-		start = next_start;
+				if !c.is_ascii_whitespace() {
+					if word_start.is_none() {
+						word_start = Some(i);
+						word_is_delimiters = true;
+					}
+				}
+			} else if !c.is_ascii_whitespace() {
+				// Non-whitespace delimiter: start or continue delimiter sequence
+				if word_start.is_none() {
+					word_start = Some(i);
+					word_is_delimiters = true;
+				}
+			}
+		} else {
+			// Regular character (not a delimiter). Finish any delimiter sequence.
+			if word_is_delimiters {
+				if let Some(start) = word_start {
+					tokens.push(CompletionToken { text: &input[start..i], start });
+					word_start = None;
+					word_is_delimiters = false;
+				}
+			}
+
+			// Start or continue a word
+			if word_start.is_none() {
+				word_start = Some(i);
+			}
+		}
+	}
+
+	// Add any remaining delimiter sequence
+	if let Some(start) = word_start {
+		tokens.push(CompletionToken { text: &input[start..], start });
 	}
 
 	tokens
@@ -1197,17 +1478,17 @@ fn completion_filter_pattern_matches(
 	pattern: &str,
 	candidate: &str,
 	token_being_completed: &str,
-	shell: &Shell,
+	shell: &Shell<impl extensions::ShellExtensions>,
 ) -> Result<bool, error::Error> {
 	let pattern = replace_unescaped_ampersands(pattern, token_being_completed);
 
 	//
-	// TODO: Replace unescaped '&' with the word being completed.
+	// TODO(completions): Replace unescaped '&' with the word being completed.
 	//
 
 	let pattern = patterns::Pattern::from(pattern.as_ref())
-		.set_extended_globbing(shell.options.extended_globbing)
-		.set_case_insensitive(shell.options.case_insensitive_pathname_expansion);
+		.set_extended_globbing(shell.options().extended_globbing)
+		.set_case_insensitive(shell.options().case_insensitive_pathname_expansion);
 
 	let matches = pattern.exactly_matches(candidate)?;
 
@@ -1235,4 +1516,73 @@ fn replace_unescaped_ampersands<'a>(pattern: &'a str, replacement: &str) -> Cow<
 	}
 
 	result.into()
+}
+
+#[cfg(test)]
+mod tests {
+	use pretty_assertions::assert_matches;
+
+	use super::*;
+
+	#[test]
+	#[allow(clippy::too_many_lines)]
+	fn completion_tokenization() {
+		assert_matches!(simple_tokenize_by_delimiters("one two", &[' ']).as_slice(), [
+			CompletionToken { text: "one", start: 0 },
+			CompletionToken { text: "two", start: 4 }
+		]);
+
+		assert_matches!(simple_tokenize_by_delimiters("one \t two", &[' ', '\t']).as_slice(), [
+			CompletionToken { text: "one", start: 0 },
+			CompletionToken { text: "two", start: 6 }
+		]);
+
+		assert_matches!(simple_tokenize_by_delimiters("    ", &[' ']).as_slice(), []);
+
+		assert_matches!(simple_tokenize_by_delimiters(":", &[':']).as_slice(), [CompletionToken {
+			text:  ":",
+			start: 0,
+		}]);
+
+		assert_matches!(simple_tokenize_by_delimiters("a:::b", &[':', ' ']).as_slice(), [
+			CompletionToken { text: "a", start: 0 },
+			CompletionToken { text: ":::", start: 1 },
+			CompletionToken { text: "b", start: 4 }
+		]);
+
+		assert_matches!(simple_tokenize_by_delimiters("a: : :b", &[':', ' ']).as_slice(), [
+			CompletionToken { text: "a", start: 0 },
+			CompletionToken { text: ":", start: 1 },
+			CompletionToken { text: ":", start: 3 },
+			CompletionToken { text: ":", start: 5 },
+			CompletionToken { text: "b", start: 6 }
+		]);
+
+		assert_matches!(simple_tokenize_by_delimiters("one two:three", &[':', ' ']).as_slice(), [
+			CompletionToken { text: "one", start: 0 },
+			CompletionToken { text: "two", start: 4 },
+			CompletionToken { text: ":", start: 7 },
+			CompletionToken { text: "three", start: 8 }
+		]);
+
+		assert_matches!(simple_tokenize_by_delimiters("one'two", &['\'']).as_slice(), [
+			CompletionToken { text: "one", start: 0 },
+			CompletionToken { text: "'", start: 3 },
+			CompletionToken { text: "two", start: 4 },
+		]);
+
+		assert_matches!(simple_tokenize_by_delimiters("one 'two:three'", &[':', ' ']).as_slice(), [
+			CompletionToken { text: "one", start: 0 },
+			CompletionToken { text: "'two:three'", start: 4 },
+		]);
+
+		assert_matches!(
+			simple_tokenize_by_delimiters("one \\'two \"two four\"", &[':', ' ']).as_slice(),
+			[
+				CompletionToken { text: "one", start: 0 },
+				CompletionToken { text: "\\'two", start: 4 },
+				CompletionToken { text: "\"two four\"", start: 10 },
+			]
+		);
+	}
 }
