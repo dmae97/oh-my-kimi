@@ -14,8 +14,15 @@ describe("issue #957 - Kimi OAuth refresh", () => {
 		const issuedAt = 1_700_000_000_000;
 		let now = issuedAt;
 		vi.spyOn(Date, "now").mockImplementation(() => now);
-		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue({});
-
+		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue({
+			"User-Agent": "KimiCLI/0.0.0",
+			"X-Msh-Platform": "kimi_cli",
+			"X-Msh-Version": "0.0.0",
+			"X-Msh-Device-Name": "test",
+			"X-Msh-Device-Model": "test",
+			"X-Msh-Os-Version": "test",
+			"X-Msh-Device-Id": "test",
+		});
 		const fetchMock = vi.fn(async (_input: string | URL, init?: RequestInit) => {
 			const params = new URLSearchParams(String(init?.body));
 			expect(params.get("grant_type")).toBe("refresh_token");
