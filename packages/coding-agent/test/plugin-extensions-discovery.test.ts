@@ -105,6 +105,7 @@ describe("plugin extension discovery", () => {
 		fs.writeFileSync(
 			extensionPath,
 			[
+				'import * as nodePath from "path";',
 				'import { isToolCallEventType as legacyRoot } from "@mariozechner/pi-coding-agent";',
 				'import { isToolCallEventType as legacyExtensions } from "@mariozechner/pi-coding-agent/extensibility/extensions";',
 				`import { isToolCallEventType as modernRoot } from ${JSON.stringify(currentPiCodingAgentPath)};`,
@@ -112,6 +113,7 @@ describe("plugin extension discovery", () => {
 				"",
 				'if (legacyRoot !== modernRoot) throw new Error("legacy root import did not remap");',
 				'if (legacyExtensions !== modernExtensions) throw new Error("legacy extension import did not remap");',
+				'if (typeof nodePath.join !== "function") throw new Error("node builtin import did not resolve");',
 				"",
 				"export default function(pi) {",
 				"\tconst { Type } = pi.typebox;",

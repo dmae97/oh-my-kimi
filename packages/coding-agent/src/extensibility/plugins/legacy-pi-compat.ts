@@ -83,16 +83,24 @@ function isUrlLikeSpecifier(specifier: string): boolean {
 	return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(specifier);
 }
 
+function shouldPreserveImportSpecifier(specifier: string): boolean {
+	return specifier.startsWith(".") || path.isAbsolute(specifier) || isUrlLikeSpecifier(specifier);
+}
+
+function toRewrittenImportSpecifier(resolvedPath: string): string {
+	return isUrlLikeSpecifier(resolvedPath) ? resolvedPath : toImportSpecifier(resolvedPath);
+}
+
 function rewriteBareImportsForLegacyExtension(source: string, importerPath: string): string {
 	const importerDir = path.dirname(importerPath);
 	return source.replace(ANY_IMPORT_SPECIFIER_REGEX, (match, prefix: string, specifier: string, suffix: string) => {
 		// Skip relative, absolute, URL-style, and already-resolved Node specifiers.
-		if (specifier.startsWith(".") || path.isAbsolute(specifier) || isUrlLikeSpecifier(specifier)) {
+		if (shouldPreserveImportSpecifier(specifier)) {
 			return match;
 		}
 		try {
 			const resolved = Bun.resolveSync(specifier, importerDir);
-			return `${prefix}${toImportSpecifier(resolved)}${suffix}`;
+			return `${prefix}${toRewrittenImportSpecifier(resolved)}${suffix}`;
 		} catch {
 			return match;
 		}
