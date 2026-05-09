@@ -403,11 +403,19 @@ function inferModelThinking<TApi extends Api>(model: ApiModel<TApi>): ThinkingCo
 	if (!minLevel || !maxLevel) {
 		throw new Error(`Model ${model.provider}/${model.id} resolved to an empty thinking range`);
 	}
-	return {
+	const config: ThinkingConfig = {
 		mode: inferThinkingControlMode(model, parsedModel),
 		minLevel,
 		maxLevel,
 	};
+	// Encode explicit levels only when the inferred set has gaps the min..max range cannot represent.
+	const minIndex = THINKING_EFFORTS.indexOf(minLevel);
+	const maxIndex = THINKING_EFFORTS.indexOf(maxLevel);
+	const expandedRange = THINKING_EFFORTS.slice(minIndex, maxIndex + 1);
+	if (expandedRange.length !== efforts.length) {
+		config.levels = efforts;
+	}
+	return config;
 }
 
 function normalizeThinkingConfig(thinking: ThinkingConfig | undefined): ThinkingConfig | undefined {
@@ -420,10 +428,19 @@ function normalizeThinkingConfig(thinking: ThinkingConfig | undefined): Thinking
 function thinkingsEqual(left: ThinkingConfig | undefined, right: ThinkingConfig | undefined): boolean {
 	if (left === right) return true;
 	if (!left || !right) return false;
-	return left.mode === right.mode && left.minLevel === right.minLevel && left.maxLevel === right.maxLevel;
+	if (left.mode !== right.mode || left.minLevel !== right.minLevel || left.maxLevel !== right.maxLevel) return false;
+	const leftLevels = left.levels;
+	const rightLevels = right.levels;
+	if (leftLevels === rightLevels) return true;
+	if (!leftLevels || !rightLevels) return false;
+	if (leftLevels.length !== rightLevels.length) return false;
+	return leftLevels.every((level, index) => level === rightLevels[index]);
 }
 
 function expandEffortRange(thinking: ThinkingConfig): readonly Effort[] {
+	if (thinking.levels && thinking.levels.length > 0) {
+		return thinking.levels;
+	}
 	const minIndex = THINKING_EFFORTS.indexOf(thinking.minLevel);
 	const maxIndex = THINKING_EFFORTS.indexOf(thinking.maxLevel);
 	if (minIndex === -1 || maxIndex === -1 || minIndex > maxIndex) {

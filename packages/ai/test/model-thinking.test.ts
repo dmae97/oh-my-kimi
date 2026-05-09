@@ -76,6 +76,7 @@ describe("model thinking metadata", () => {
 			mode: "google-level",
 			minLevel: Effort.Low,
 			maxLevel: Effort.High,
+			levels: [Effort.Low, Effort.High],
 		});
 		expect(mapEffortToGoogleThinkingLevel(model, Effort.Low)).toBe("LOW");
 		expect(mapEffortToGoogleThinkingLevel(model, Effort.High)).toBe("HIGH");

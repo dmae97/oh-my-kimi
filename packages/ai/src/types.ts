@@ -83,6 +83,12 @@ export interface ThinkingConfig {
 	minLevel: Effort;
 	/** Most intensive supported user-facing effort level. */
 	maxLevel: Effort;
+	/**
+	 * Optional explicit list of supported levels. When present, takes precedence over
+	 * the `minLevel`..`maxLevel` range — used to encode discrete sets with gaps
+	 * (e.g. Gemini 3 Pro supports `low` and `high` but not `medium`).
+	 */
+	levels?: readonly Effort[];
 	/** Optional default effort applied when this model is selected. Falls back to global default if absent. */
 	defaultLevel?: Effort;
 	/** Provider-specific transport used to encode the selected effort. */
