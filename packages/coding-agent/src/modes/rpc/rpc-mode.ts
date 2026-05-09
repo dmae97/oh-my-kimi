@@ -150,7 +150,6 @@ export function requestRpcEditor(
 	} as RpcExtensionUIRequest);
 	return promise;
 }
-
 /**
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
@@ -776,9 +775,16 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 					return error(id, "login", `Unknown OAuth provider: ${command.providerId}`);
 				}
 				const uiCtx = new RpcExtensionUIContext(pendingExtensionRequests, output);
+				// Track whether onAuth has fired. Providers that use OAuthCallbackFlow
+				// always call onAuth first (emit browser URL), then onManualCodeInput as
+				// a fallback. Providers that require interactive input (API-key paste,
+				// GitHub Enterprise URL, device-code entry) call onPrompt before onAuth.
+				// We use this ordering to self-classify at runtime — no static allowlist.
+				let authEmitted = false;
 				try {
 					await session.modelRegistry.authStorage.login(command.providerId, {
 						onAuth: info => {
+							authEmitted = true;
 							output({
 								type: "extension_ui_request",
 								id: Snowflake.next() as string,
@@ -790,12 +796,23 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 						onProgress: message => {
 							uiCtx.notify(message, "info");
 						},
-						onPrompt: () =>
-							// Never resolve rather than throw. OAuthCallbackFlow.#waitForCallback
-							// races onManualCodeInput against the browser callback and catches any
-							// rejection as null, which causes a tight retry loop. A forever-pending
-							// promise makes the race block until the callback server wins instead.
-							new Promise<string>(() => {}),
+						onPrompt: () => {
+							if (!authEmitted) {
+								// onPrompt called before any auth URL — provider requires
+								// interactive input that cannot be satisfied headlessly.
+								return Promise.reject(
+									new Error(
+										`Provider '${command.providerId}' requires interactive prompts ` +
+											"which are not supported in RPC mode. Use the terminal UI to log in.",
+									),
+								);
+							}
+							// onAuth has already fired — we are inside OAuthCallbackFlow's
+							// manual-redirect fallback race. Returning a never-settling promise
+							// lets the race block until the callback server wins; a rejection
+							// would be caught as null and spin the while(true) loop.
+							return new Promise<string>(() => {});
+						},
 					});
 					await session.modelRegistry.refresh();
 					return success(id, "login", { providerId: command.providerId });
