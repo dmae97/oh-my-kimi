@@ -13,7 +13,7 @@ import {
 	modelsAreEqual,
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
-import type { Component, EditorComponent, EditorTheme, SlashCommand } from "@oh-my-pi/pi-tui";
+import type { Component, EditorTheme, SlashCommand } from "@oh-my-pi/pi-tui";
 import {
 	Container,
 	clearRenderCache,
@@ -1322,19 +1322,14 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	setEditorComponent(
-		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => EditorComponent) | undefined,
+		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined,
 	): void {
 		const previousEditor = this.editor;
 		const previousText = previousEditor.getText();
-		const nextComponent = factory
+		const nextEditor = factory
 			? factory(this.ui, getEditorTheme(), this.keybindings)
 			: new CustomEditor(getEditorTheme());
 
-		if (!this.#isCustomEditorCompatible(nextComponent)) {
-			this.showWarning("Custom editor components must implement CustomEditor-compatible interactive methods.");
-			return;
-		}
-		const nextEditor = nextComponent;
 		nextEditor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		nextEditor.setAutocompleteMaxVisible(this.settings.get("autocompleteMaxVisible"));
 		nextEditor.onAutocompleteCancel = () => {
@@ -1365,18 +1360,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.updateEditorTopBorder();
 		this.ui.requestRender();
 	}
-	#isCustomEditorCompatible(component: EditorComponent): component is CustomEditor {
-		const candidate = component as CustomEditor;
-		return (
-			typeof candidate.setUseTerminalCursor === "function" &&
-			typeof candidate.setAutocompleteMaxVisible === "function" &&
-			typeof candidate.setMaxHeight === "function" &&
-			typeof candidate.setHistoryStorage === "function" &&
-			typeof candidate.setActionKeys === "function" &&
-			typeof candidate.clearCustomKeyHandlers === "function" &&
-			typeof candidate.setCustomKeyHandler === "function"
-		);
-	}
+
 	// Event handling
 	async handleBackgroundEvent(event: AgentSessionEvent): Promise<void> {
 		await this.#eventController.handleBackgroundEvent(event);

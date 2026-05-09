@@ -3,7 +3,6 @@ import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { Editor } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { CustomEditor } from "../src/modes/components/custom-editor";
@@ -39,7 +38,7 @@ describe("InteractiveMode.setEditorComponent", () => {
 			agent: new Agent({
 				initialState: {
 					model,
-					systemPrompt: "Test",
+					systemPrompt: ["Test"],
 					tools: [],
 					messages: [],
 				},
@@ -73,17 +72,5 @@ describe("InteractiveMode.setEditorComponent", () => {
 		expect(mode.editor.onSubmit).toBeDefined();
 		expect(mode.editor.onEscape).toBeDefined();
 		expect(refreshSpy).toHaveBeenCalled();
-	});
-
-	it("keeps the current editor when factory returns a non-CustomEditor", () => {
-		const previousEditor = mode.editor;
-		const warningSpy = vi.spyOn(mode, "showWarning");
-
-		mode.setEditorComponent((_tui, editorTheme) => new Editor(editorTheme));
-
-		expect(mode.editor).toBe(previousEditor);
-		expect(warningSpy).toHaveBeenCalledWith(
-			"Custom editor components must implement CustomEditor-compatible interactive methods.",
-		);
 	});
 });
