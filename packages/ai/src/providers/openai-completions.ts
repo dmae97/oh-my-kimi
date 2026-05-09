@@ -287,10 +287,18 @@ function getTrailingPartialTag(text: string, tags: readonly string[]): string {
 // Body is restricted to identifier-like chars (with the DeepSeek tokenizer's `▁`),
 // capped at a sane length to avoid swallowing legitimate angle-bracket text.
 const DEEPSEEK_SPECIAL_TOKEN_REGEX = /<(?:｜|\|)[A-Za-z0-9_.｜|▁]{1,64}(?:｜|\|)>/g;
+const DEEPSEEK_SPECIAL_TOKEN_AT_START_REGEX = /^\s*<(?:｜|\|)[A-Za-z0-9_.｜|▁]{1,64}(?:｜|\|)>/;
+const DEEPSEEK_SPECIAL_TOKEN_AT_END_REGEX = /<(?:｜|\|)[A-Za-z0-9_.｜|▁]{1,64}(?:｜|\|)>\s*$/;
 const DEEPSEEK_OPEN_DELIMS = ["<｜", "<|"] as const;
 
 function stripDeepseekSpecialTokens(text: string): string {
-	return text.replace(DEEPSEEK_SPECIAL_TOKEN_REGEX, "");
+	const stripped = text.replace(DEEPSEEK_SPECIAL_TOKEN_REGEX, "");
+	if (stripped === text) return text;
+
+	let normalized = stripped;
+	if (DEEPSEEK_SPECIAL_TOKEN_AT_START_REGEX.test(text)) normalized = normalized.replace(/^\s+/u, "");
+	if (DEEPSEEK_SPECIAL_TOKEN_AT_END_REGEX.test(text)) normalized = normalized.replace(/\s+$/u, "");
+	return normalized;
 }
 
 // Find any trailing partial `<｜...` (or `<|...`) that has not yet been closed by a
@@ -431,10 +439,12 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			stream.push({ type: "start", partial: output });
 
 			const parseMiniMaxThinkTags = model.provider === "minimax-code";
-			// NVIDIA NIM and similar OpenAI-compatible hosts return DeepSeek's chat-template
-			// tool-call markers in `delta.content` even though tool calls are also surfaced
-			// structurally. Strip the leaked markers so users don't see raw `<｜...｜>` tokens.
-			const stripDeepseekChatTemplateTokens = model.provider === "nvidia" && /deepseek/i.test(model.id);
+			// Some OpenAI-compatible DeepSeek hosts (including NVIDIA NIM and DeepSeek's
+			// native API) leak chat-template tool-call markers in `delta.content` even
+			// though tool calls are also surfaced structurally. Strip the leaked markers
+			// so users don't see raw `<｜...｜>` tokens.
+			const stripDeepseekChatTemplateTokens =
+				/deepseek/i.test(model.id) && (model.provider === "nvidia" || model.provider === "deepseek");
 			type OpenAIStreamBlock = TextContent | ThinkingContent | (ToolCall & { partialArgs: string });
 			let currentBlock: OpenAIStreamBlock | undefined;
 			const blockIndex = (block: OpenAIStreamBlock | undefined): number => {
@@ -568,7 +578,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					deepseekStripBuffer = trailing;
 				}
 				const stripped = stripDeepseekSpecialTokens(flushable);
-				if (stripped) appendTextDelta(stripped);
+				if (stripped && (stripped === flushable || stripped.trim().length > 0)) appendTextDelta(stripped);
 			};
 
 			for await (const chunk of iterateWithIdleTimeout(openaiStream, {
