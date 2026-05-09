@@ -182,8 +182,11 @@ export function linkOpenAIPromotionTargets(models: ApiModel<Api>[]): void {
 }
 
 /**
- * Returns supported thinking efforts from canonical model rules constrained by
- * explicit model metadata.
+ * Returns the supported thinking efforts declared on the model metadata.
+ *
+ * Catalog enrichment is responsible for normalizing bundled model metadata up front.
+ * Runtime callers must treat explicit `model.thinking` on custom models as authoritative
+ * so proxy-specific overrides from `models.yml` survive request construction.
  *
  * @throws Error when a reasoning-capable model is missing thinking metadata
  */
@@ -194,12 +197,7 @@ export function getSupportedEfforts<TApi extends Api>(model: ApiModel<TApi>): re
 	if (!model.thinking) {
 		throw new Error(`Model ${model.provider}/${model.id} is missing thinking metadata`);
 	}
-	const configuredEfforts = expandEffortRange(model.thinking);
-	const parsedModel = parseKnownModel(model.id);
-	if (parsedModel.family === "unknown") {
-		return configuredEfforts;
-	}
-	return intersectEfforts(configuredEfforts, inferSupportedEfforts(parsedModel, model));
+	return expandEffortRange(model.thinking);
 }
 
 /**
@@ -419,10 +417,6 @@ function expandEffortRange(thinking: ThinkingConfig): readonly Effort[] {
 		return [];
 	}
 	return THINKING_EFFORTS.slice(minIndex, maxIndex + 1);
-}
-
-function intersectEfforts(left: readonly Effort[], right: readonly Effort[]): readonly Effort[] {
-	return left.filter(effort => right.includes(effort));
 }
 
 function inferSupportedEfforts<TApi extends Api>(parsedModel: ParsedModel, model: ApiModel<TApi>): readonly Effort[] {
