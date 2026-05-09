@@ -11,6 +11,7 @@ import type { SessionStats } from "../../session/agent-session";
 import type { CompactionResult } from "../../session/compaction";
 import type {
 	RpcCommand,
+	RpcExtensionUIRequest,
 	RpcHandoffResult,
 	RpcHostToolCallRequest,
 	RpcHostToolCancelRequest,
@@ -124,6 +125,11 @@ function isRpcHostToolCancelRequest(value: unknown): value is RpcHostToolCancelR
 	return value.type === "host_tool_cancel" && typeof value.id === "string" && typeof value.targetId === "string";
 }
 
+function isRpcExtensionUiRequest(value: unknown): value is RpcExtensionUIRequest {
+	if (!isRecord(value)) return false;
+	return value.type === "extension_ui_request" && typeof value.id === "string" && typeof value.method === "string";
+}
+
 function normalizeToolResult<TDetails>(result: RpcClientToolResult<TDetails>): AgentToolResult<TDetails> {
 	if (typeof result === "string") {
 		return {
@@ -145,6 +151,7 @@ export class RpcClient {
 	#customTools: RpcClientCustomTool[] = [];
 	#pendingHostToolCalls = new Map<string, { controller: AbortController }>();
 	#requestId = 0;
+	#extensionUiListeners: Set<(req: RpcExtensionUIRequest) => void> = new Set();
 	#abortController = new AbortController();
 
 	constructor(private options: RpcClientOptions = {}) {
@@ -530,10 +537,27 @@ export class RpcClient {
 	 * Trigger OAuth login for the given provider.
 	 * The server will emit an `open_url` extension_ui_request for the auth URL.
 	 * Resolves when login completes or rejects on failure.
+	 *
+	 * @param onOpenUrl Called when the server emits the auth URL. The host must open
+	 *   it in a browser for the callback-server OAuth flow to complete.
 	 */
-	async login(providerId: string): Promise<{ providerId: string }> {
-		const response = await this.#send({ type: "login", providerId });
-		return this.#getData<{ providerId: string }>(response);
+	async login(
+		providerId: string,
+		options?: { onOpenUrl?: (url: string, instructions?: string) => void },
+	): Promise<{ providerId: string }> {
+		const { onOpenUrl } = options ?? {};
+		const listener = onOpenUrl
+			? (req: RpcExtensionUIRequest) => {
+					if (req.method === "open_url") onOpenUrl(req.url, req.instructions);
+				}
+			: undefined;
+		if (listener) this.#extensionUiListeners.add(listener);
+		try {
+			const response = await this.#send({ type: "login", providerId });
+			return this.#getData<{ providerId: string }>(response);
+		} finally {
+			if (listener) this.#extensionUiListeners.delete(listener);
+		}
 	}
 
 	/**
@@ -638,6 +662,13 @@ export class RpcClient {
 
 		if (isRpcHostToolCallRequest(data)) {
 			void this.#handleHostToolCall(data);
+			return;
+		}
+
+		if (isRpcExtensionUiRequest(data)) {
+			for (const listener of this.#extensionUiListeners) {
+				listener(data);
+			}
 			return;
 		}
 
