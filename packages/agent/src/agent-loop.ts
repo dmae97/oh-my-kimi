@@ -385,15 +385,22 @@ async function streamAssistantResponse(
 
 	const streamFunction = streamFn || streamSimple;
 
-	// Resolve API key (important for expiring tokens)
+	// Resolve API key (important for expiring tokens) — do this before resolving
+	// metadata so that the session-sticky credential recorded by getApiKey is
+	// visible to metadataResolver (e.g. for the correct account_uuid in metadata.user_id).
 	const resolvedApiKey =
 		(config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
+
+	// Re-resolve metadata after credential selection so the per-request value
+	// reflects the credential actually used, not the snapshot from AgentLoopConfig construction.
+	const resolvedMetadata = config.metadataResolver ? config.metadataResolver(config.model.provider) : config.metadata;
 
 	const dynamicToolChoice = config.getToolChoice?.();
 	const dynamicReasoning = config.getReasoning?.();
 	const response = await streamFunction(config.model, llmContext, {
 		...config,
 		apiKey: resolvedApiKey,
+		metadata: resolvedMetadata,
 		toolChoice: dynamicToolChoice ?? config.toolChoice,
 		reasoning: dynamicReasoning ?? config.reasoning,
 		signal,

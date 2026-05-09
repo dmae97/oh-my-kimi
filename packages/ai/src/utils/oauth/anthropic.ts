@@ -48,25 +48,47 @@ async function postJson(url: string, body: Record<string, string | number>): Pro
 	return responseBody;
 }
 
-function parseOAuthTokenResponse(
-	responseBody: string,
-	operation: string,
-): {
+/**
+ * Decoded shape of Anthropic's `/v1/oauth/token` response (both
+ * `authorization_code` exchange and `refresh_token` refresh return the same
+ * envelope). The `account` block is inlined alongside the tokens, so we can
+ * surface `accountId` / `email` on {@link OAuthCredentials} without a separate
+ * `/api/oauth/profile` round-trip.
+ */
+interface AnthropicTokenResponse {
 	access_token: string;
 	refresh_token: string;
 	expires_in: number;
-} {
+	account?: { uuid?: string; email_address?: string };
+}
+
+function parseOAuthTokenResponse(responseBody: string, operation: string): AnthropicTokenResponse {
 	try {
-		return JSON.parse(responseBody) as {
-			access_token: string;
-			refresh_token: string;
-			expires_in: number;
-		};
+		return JSON.parse(responseBody) as AnthropicTokenResponse;
 	} catch (error) {
 		throw new Error(
 			`Anthropic ${operation} returned invalid JSON. url=${TOKEN_URL}; body=${responseBody}; details=${formatErrorDetails(error)}`,
 		);
 	}
+}
+
+/**
+ * Lift the OAuth response's `account: { uuid, email_address }` block onto
+ * {@link OAuthCredentials} so downstream identity propagation (e.g.
+ * `metadata.user_id.account_uuid`, usage tracking) works without a separate
+ * `/api/oauth/profile` round-trip. Returns `undefined` for either field when
+ * the response omits it or carries a non-string / empty value.
+ */
+function extractAccountFromTokenResponse(data: AnthropicTokenResponse): {
+	accountId?: string;
+	email?: string;
+} {
+	const accountUuid = data.account?.uuid;
+	const emailAddress = data.account?.email_address;
+	return {
+		accountId: typeof accountUuid === "string" && accountUuid.length > 0 ? accountUuid : undefined,
+		email: typeof emailAddress === "string" && emailAddress.length > 0 ? emailAddress : undefined,
+	};
 }
 
 export class AnthropicOAuthFlow extends OAuthCallbackFlow {
@@ -130,11 +152,14 @@ export class AnthropicOAuthFlow extends OAuthCallbackFlow {
 		}
 
 		const tokenData = parseOAuthTokenResponse(responseBody, "token exchange");
+		const { accountId, email } = extractAccountFromTokenResponse(tokenData);
 
 		return {
 			refresh: tokenData.refresh_token,
 			access: tokenData.access_token,
 			expires: Date.now() + tokenData.expires_in * 1000 - 5 * 60 * 1000,
+			accountId,
+			email,
 		};
 	}
 }
@@ -163,10 +188,13 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
 	}
 
 	const data = parseOAuthTokenResponse(responseBody, "token refresh");
+	const { accountId, email } = extractAccountFromTokenResponse(data);
 
 	return {
 		refresh: data.refresh_token || refreshToken,
 		access: data.access_token,
 		expires: Date.now() + data.expires_in * 1000 - 5 * 60 * 1000,
+		accountId,
+		email,
 	};
 }

@@ -148,6 +148,7 @@ import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
 import { buildNamedToolChoice } from "../utils/tool-choice";
+import type { AuthStorage } from "./auth-storage";
 import {
 	type CompactionResult,
 	calculateContextTokens,
@@ -280,6 +281,13 @@ export interface AgentSessionConfig {
 	agentId?: string;
 	/** Shared agent registry (for forwarding IRC observations to the main session UI). */
 	agentRegistry?: AgentRegistry;
+	/**
+	 * Override the provider-facing session ID for all API requests from this session.
+	 * When absent, `sessionManager.getSessionId()` is used. Needed when benchmark or
+	 * SDK callers issue probes / prewarming with an explicit `--provider-session-id`
+	 * so that credential sticky selection is consistent with the session's streaming calls.
+	 */
+	providerSessionId?: string;
 }
 
 /** Options for AgentSession.prompt() */
@@ -400,6 +408,46 @@ function todoClearKey(phaseName: string, taskContent: string): string {
 	return `${phaseName}\u0000${taskContent}`;
 }
 
+/**
+ * Build the per-request `metadata` payload for the Anthropic provider, shaped
+ * like real Claude Code's `getAPIMetadata` output (`{ session_id, account_uuid }`)
+ * so the backend buckets requests under one session and attributes them to the
+ * authenticated OAuth account when available. Resolved at request time so token
+ * refreshes and login/logout transitions don't strand a stale account UUID in
+ * memory. `account_uuid` is omitted for non-Anthropic providers to avoid leaking
+ * the user's Claude identity to third-party APIs (including Anthropic-format-
+ * compatible proxies such as cloudflare-ai-gateway or gitlab-duo).
+ *
+ * `provider` is the target provider string (e.g. `"anthropic"`) and gates the
+ * `account_uuid` lookup — only `"anthropic"` requests carry it.
+ *
+ * `sessionId` is forwarded to the auth-storage session-sticky lookup so that
+ * multi-credential setups attribute to the same OAuth account used for the
+ * actual API request rather than always picking the first credential.
+ *
+ * `authStorage` is treated as optional so test fixtures that stub `modelRegistry`
+ * without a real storage layer still work; the resolver simply skips the lookup
+ * and emits `{ session_id }` alone, matching the no-OAuth-credential path.
+ */
+function buildSessionMetadata(
+	sessionId: string,
+	provider: string,
+	authStorage: AuthStorage | undefined,
+): Record<string, unknown> {
+	const userId: Record<string, string> = { session_id: sessionId };
+	// Only look up account_uuid when the request is going to Anthropic. Injecting
+	// a Claude OAuth account_uuid into requests bound for other providers (including
+	// Anthropic-format-compatible proxies like cloudflare-ai-gateway or gitlab-duo)
+	// would leak the user's Anthropic identity to unrelated third-party APIs.
+	if (provider === "anthropic") {
+		const accountUuid = authStorage?.getOAuthAccountId("anthropic", sessionId);
+		if (typeof accountUuid === "string" && accountUuid.length > 0) {
+			userId.account_uuid = accountUuid;
+		}
+	}
+	return { user_id: JSON.stringify(userId) };
+}
+
 const noOpUIContext: ExtensionUIContext = {
 	select: async (_title, _options, _dialogOptions) => undefined,
 	confirm: async (_title, _message, _dialogOptions) => false,
@@ -503,6 +551,7 @@ export class AgentSession {
 	// Agent identity + registry for IRC relay forwarding to the main session UI.
 	#agentId: string | undefined;
 	#agentRegistry: AgentRegistry | undefined;
+	#providerSessionId: string | undefined;
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
 	#turnIndex = 0;
@@ -652,6 +701,7 @@ export class AgentSession {
 		this.#obfuscator = config.obfuscator;
 		this.#agentId = config.agentId;
 		this.#agentRegistry = config.agentRegistry;
+		this.#providerSessionId = config.providerSessionId;
 		this.agent.setAssistantMessageEventInterceptor((message, assistantMessageEvent) => {
 			const event: AgentEvent = {
 				type: "message_update",
@@ -662,6 +712,7 @@ export class AgentSession {
 			this.#maybeAbortStreamingEdit(event);
 		});
 		this.agent.providerSessionState = this.#providerSessionState;
+		this.#syncAgentSessionId();
 		this.#syncTodoPhasesFromBranch();
 
 		// Always subscribe to agent events for internal handling
@@ -1987,7 +2038,24 @@ export class AgentSession {
 		this.#unsubscribeAgent = this.agent.subscribe(this.#handleAgentEvent);
 	}
 
-	/** Keep Hindsight metadata aligned when the underlying agent session id changes. */
+	/**
+	 * Set agent.sessionId from the session manager and install a dynamic
+	 * metadata resolver so every API request carries `metadata.user_id` shaped
+	 * like real Claude Code's `getAPIMetadata` output: `{ session_id,
+	 * account_uuid }` (the latter only when an Anthropic OAuth credential with
+	 * a known account UUID is loaded). Resolving live keeps the value in sync
+	 * with auth-state changes (login/logout, token refresh that surfaces a new
+	 * account uuid) without needing to re-call `#syncAgentSessionId()` on every
+	 * such event.
+	 */
+	#syncAgentSessionId(sessionId?: string): void {
+		const sid = this.#providerSessionId ?? sessionId ?? this.sessionManager.getSessionId();
+		this.agent.sessionId = sid;
+		this.agent.setMetadataResolver((provider: string) =>
+			buildSessionMetadata(sid, provider, this.#modelRegistry.authStorage),
+		);
+	}
+
 	#rekeyHindsightMemoryForCurrentSessionId(): void {
 		if (resolveMemoryBackend(this.settings).id !== "hindsight") return;
 		const sid = this.agent.sessionId;
@@ -2692,12 +2760,20 @@ export class AgentSession {
 	}
 
 	/** Apply session-level stream hooks to a direct side request. */
-	prepareSimpleStreamOptions(options: SimpleStreamOptions): SimpleStreamOptions {
+	prepareSimpleStreamOptions(options: SimpleStreamOptions, provider = "anthropic"): SimpleStreamOptions {
 		const sessionOnPayload = this.#onPayload;
 		const sessionOnResponse = this.#onResponse;
-		if (!sessionOnPayload && !sessionOnResponse) return options;
+		const sessionMetadata = this.agent.metadataForProvider(provider);
+		if (!sessionOnPayload && !sessionOnResponse && !sessionMetadata) return options;
 
 		const preparedOptions: SimpleStreamOptions = { ...options };
+
+		// Stamp session metadata (e.g. user_id={session_id}) onto direct-call requests so
+		// they share the same session bucket as Agent.prompt-routed requests on Anthropic
+		// OAuth. Caller-provided metadata wins so explicit overrides are respected.
+		if (sessionMetadata && !options.metadata) {
+			preparedOptions.metadata = sessionMetadata;
+		}
 
 		if (sessionOnPayload) {
 			if (!options.onPayload) {
@@ -2750,7 +2826,7 @@ export class AgentSession {
 
 	/** Current session ID */
 	get sessionId(): string {
-		return this.sessionManager.getSessionId();
+		return this.#providerSessionId ?? this.sessionManager.getSessionId();
 	}
 
 	/** Current session display name, if set */
@@ -3810,7 +3886,7 @@ export class AgentSession {
 		}
 		await this.sessionManager.newSession(options);
 		this.setTodoPhases([]);
-		this.agent.sessionId = this.sessionManager.getSessionId();
+		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#resetHindsightConversationTrackingIfHindsight();
 		this.#steeringMessages = [];
@@ -3905,7 +3981,7 @@ export class AgentSession {
 		}
 
 		// Update agent session ID
-		this.agent.sessionId = this.sessionManager.getSessionId();
+		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 
 		// Emit session_switch event with reason "fork" to hooks
@@ -4373,6 +4449,7 @@ export class AgentSession {
 						promptOverride: hookPrompt,
 						extraContext: hookContext,
 						remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
+						metadata: this.agent.metadataForProvider(compactionModel.provider),
 					},
 				);
 				summary = result.summary;
@@ -4616,7 +4693,7 @@ export class AgentSession {
 			this.#asyncJobManager?.cancelAll();
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
 			this.agent.reset();
-			this.agent.sessionId = this.sessionManager.getSessionId();
+			this.#syncAgentSessionId();
 			this.#rekeyHindsightMemoryForCurrentSessionId();
 			this.#resetHindsightConversationTrackingIfHindsight();
 			this.#steeringMessages = [];
@@ -5487,6 +5564,7 @@ export class AgentSession {
 								promptOverride: hookPrompt,
 								extraContext: hookContext,
 								remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
+								metadata: this.agent.metadataForProvider(candidate.provider),
 								initiatorOverride: "agent",
 							});
 							break;
@@ -6606,15 +6684,18 @@ export class AgentSession {
 			systemPrompt: this.systemPrompt,
 			messages: llmMessages,
 		};
-		const options = this.prepareSimpleStreamOptions({
-			apiKey,
-			sessionId: this.sessionId,
-			reasoning: toReasoningEffort(this.thinkingLevel),
-			hideThinkingSummary: this.agent.hideThinkingSummary,
-			serviceTier: this.serviceTier,
-			signal: args.signal,
-			toolChoice: "none",
-		});
+		const options = this.prepareSimpleStreamOptions(
+			{
+				apiKey,
+				sessionId: this.sessionId,
+				reasoning: toReasoningEffort(this.thinkingLevel),
+				hideThinkingSummary: this.agent.hideThinkingSummary,
+				serviceTier: this.serviceTier,
+				signal: args.signal,
+				toolChoice: "none",
+			},
+			model.provider,
+		);
 
 		let replyText = "";
 		let assistantMessage: AssistantMessage | undefined;
@@ -6791,7 +6872,7 @@ export class AgentSession {
 
 		try {
 			await this.sessionManager.setSessionFile(sessionPath);
-			this.agent.sessionId = this.sessionManager.getSessionId();
+			this.#syncAgentSessionId();
 			this.#rekeyHindsightMemoryForCurrentSessionId();
 
 			const sessionContext = this.buildDisplaySessionContext();
@@ -6869,7 +6950,7 @@ export class AgentSession {
 			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
-			this.agent.sessionId = previousSessionState.sessionId;
+			this.#syncAgentSessionId(previousSessionState.sessionId);
 			this.#rekeyHindsightMemoryForCurrentSessionId();
 			let restoreMcpError: unknown;
 			try {
@@ -6961,7 +7042,7 @@ export class AgentSession {
 			this.sessionManager.createBranchedSession(selectedEntry.parentId);
 		}
 		this.#syncTodoPhasesFromBranch();
-		this.agent.sessionId = this.sessionManager.getSessionId();
+		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#resetHindsightConversationTrackingIfHindsight();
 
@@ -7082,6 +7163,7 @@ export class AgentSession {
 				signal: this.#branchSummaryAbortController.signal,
 				customInstructions: options.customInstructions,
 				reserveTokens: branchSummarySettings.reserveTokens,
+				metadata: this.agent.metadataForProvider(model.provider),
 			});
 			this.#branchSummaryAbortController = undefined;
 			if (result.aborted) {
