@@ -561,6 +561,21 @@ export class ModelSelectorComponent extends Container {
 		return `${ageMinutes}m ago`;
 	}
 
+	#formatDiscoveryErrorHint(error: string | undefined): string | undefined {
+		if (!error) {
+			return undefined;
+		}
+		const httpMatch = error.match(/^HTTP (\d+) from (.+)$/);
+		if (!httpMatch) {
+			return undefined;
+		}
+		const [, statusCode, url] = httpMatch;
+		if (statusCode === "404") {
+			return `  Discovery endpoint ${url} returned 404. Point baseUrl at the host that serves /models (usually .../v1).`;
+		}
+		return `  Discovery failed: ${error}`;
+	}
+
 	#getProviderEmptyStateMessage(): string | undefined {
 		const activeProvider = this.#getActiveProvider();
 		if (activeProvider === ALL_TAB || activeProvider === CANONICAL_TAB || this.#searchInput.getValue().trim()) {
@@ -577,13 +592,18 @@ export class ModelSelectorComponent extends Container {
 					? `  Using cached model list from ${age}. Live refresh is still pending.`
 					: "  Using cached model list. Live refresh is still pending.";
 			case "unavailable":
-				return age ? `  Provider unavailable. Using cached model list from ${age}.` : "  Provider unavailable.";
+				return (
+					this.#formatDiscoveryErrorHint(state.error) ??
+					(age ? `  Provider unavailable. Using cached model list from ${age}.` : "  Provider unavailable.")
+				);
 			case "unauthenticated":
 				return "  Provider requires authentication before models can be discovered.";
 			case "idle":
 				return "  Provider has not been refreshed yet.";
+			case "empty":
+				return "  Discovery succeeded but returned 0 models. Check that /models returns { data: [{ id }] }.";
 			case "ok":
-				return "  Provider reported no models.";
+				return undefined;
 		}
 	}
 

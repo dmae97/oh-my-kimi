@@ -257,7 +257,12 @@ const ModelOverrideSchema = Type.Object({
 type ModelOverride = Static<typeof ModelOverrideSchema>;
 
 const ProviderDiscoverySchema = Type.Object({
-	type: Type.Union([Type.Literal("ollama"), Type.Literal("llama.cpp"), Type.Literal("lm-studio")]),
+	type: Type.Union([
+		Type.Literal("ollama"),
+		Type.Literal("llama.cpp"),
+		Type.Literal("lm-studio"),
+		Type.Literal("openai-models-list"),
+	]),
 });
 
 const ProviderAuthSchema = Type.Union([Type.Literal("apiKey"), Type.Literal("none"), Type.Literal("oauth")]);
@@ -435,7 +440,7 @@ interface DiscoveryProviderConfig {
 	optional?: boolean;
 }
 
-export type ProviderDiscoveryStatus = "idle" | "ok" | "cached" | "unavailable" | "unauthenticated";
+export type ProviderDiscoveryStatus = "idle" | "ok" | "empty" | "cached" | "unavailable" | "unauthenticated";
 
 export interface ProviderDiscoveryState {
 	provider: string;
@@ -1378,11 +1383,13 @@ export class ModelRegistry {
 			? result.models.length > 0
 				? "cached"
 				: "unavailable"
-			: result.models.length > 0 && strategy !== "offline"
-				? "ok"
-				: cached
+			: strategy === "offline"
+				? cached
 					? "cached"
-					: "idle";
+					: "idle"
+				: result.models.length > 0
+					? "ok"
+					: "empty";
 		this.#providerDiscoveryStates.set(providerId, {
 			provider: providerId,
 			status,
@@ -1411,7 +1418,8 @@ export class ModelRegistry {
 			case "llama.cpp":
 				return this.#discoverLlamaCppModels(providerConfig);
 			case "lm-studio":
-				return this.#discoverLmStudioModels(providerConfig);
+			case "openai-models-list":
+				return this.#discoverOpenAIModelsList(providerConfig);
 		}
 	}
 
@@ -1706,8 +1714,8 @@ export class ModelRegistry {
 		return this.#applyProviderModelOverrides(providerConfig.provider, discovered);
 	}
 
-	async #discoverLmStudioModels(providerConfig: DiscoveryProviderConfig): Promise<Model<Api>[]> {
-		const baseUrl = this.#normalizeLmStudioBaseUrl(providerConfig.baseUrl);
+	async #discoverOpenAIModelsList(providerConfig: DiscoveryProviderConfig): Promise<Model<Api>[]> {
+		const baseUrl = this.#normalizeOpenAIModelsListBaseUrl(providerConfig.baseUrl);
 		const modelsUrl = `${baseUrl}/models`;
 
 		const headers: Record<string, string> = { ...(providerConfig.headers ?? {}) };
@@ -1777,7 +1785,7 @@ export class ModelRegistry {
 		}
 	}
 
-	#normalizeLmStudioBaseUrl(baseUrl?: string): string {
+	#normalizeOpenAIModelsListBaseUrl(baseUrl?: string): string {
 		const defaultBaseUrl = "http://127.0.0.1:1234/v1";
 		const raw = baseUrl || defaultBaseUrl;
 		try {
