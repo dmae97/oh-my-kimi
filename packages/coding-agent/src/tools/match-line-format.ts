@@ -1,4 +1,4 @@
-import { computeLineHash } from "../edit/line-hash";
+import { computeLineHash } from "../hashline/hash";
 
 /**
  * Format a single line of match output for grep/ast-grep style results.

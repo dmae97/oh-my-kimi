@@ -9,7 +9,7 @@ import {
 	DEFAULT_FUZZY_THRESHOLD,
 	findMatch,
 } from "@oh-my-pi/pi-coding-agent/edit";
-import { HL_EDIT_SEP } from "@oh-my-pi/pi-coding-agent/edit/line-hash";
+import { HL_EDIT_SEP } from "@oh-my-pi/pi-coding-agent/hashline/hash";
 
 describe("findMatch", () => {
 	describe("exact matching", () => {

@@ -2,6 +2,14 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import { prompt } from "@oh-my-pi/pi-utils";
 import type { Static } from "@sinclair/typebox";
 import {
+	executeHashlineSingle,
+	HashlineMismatchError,
+	type HashlineParams,
+	hashlineEditParamsSchema,
+} from "../hashline";
+import hashlineGrammarTemplate from "../hashline/grammar.lark" with { type: "text" };
+import { resolveHashlineGrammarPlaceholders } from "../hashline/hash";
+import {
 	createLspWritethrough,
 	type FileDiagnosticsResult,
 	type WritethroughCallback,
@@ -16,16 +24,8 @@ import type { ToolSession } from "../tools";
 import { VimTool, vimSchema } from "../tools/vim";
 import { type EditMode, normalizeEditMode, resolveEditMode } from "../utils/edit-mode";
 import type { VimToolDetails } from "../vim/types";
-import { resolveHashlineGrammarPlaceholders } from "./line-hash";
 import { type ApplyPatchParams, applyPatchSchema, expandApplyPatchToEntries } from "./modes/apply-patch";
 import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
-import {
-	executeHashlineSingle,
-	HashlineMismatchError,
-	type HashlineParams,
-	hashlineEditParamsSchema,
-} from "./modes/hashline";
-import hashlineGrammarTemplate from "./modes/hashline.lark" with { type: "text" };
 import { executePatchSingle, type PatchEditEntry, type PatchParams, patchEditSchema } from "./modes/patch";
 import { executeReplaceSingle, type ReplaceEditEntry, type ReplaceParams, replaceEditSchema } from "./modes/replace";
 import { type EditToolDetails, type EditToolPerFileResult, getLspBatchRequest, type LspBatchRequest } from "./renderer";
@@ -34,13 +34,12 @@ export { DEFAULT_EDIT_MODE, type EditMode, normalizeEditMode } from "../utils/ed
 export * from "./apply-patch";
 export * from "./diff";
 export * from "./file-read-cache";
-export * from "./line-hash";
 
 // Resolve the `$HFMT$` and `$HSEP$` placeholders in the hashline Lark grammar.
 const hashlineGrammar = resolveHashlineGrammarPlaceholders(hashlineGrammarTemplate);
 
+export * from "../hashline";
 export * from "./modes/apply-patch";
-export * from "./modes/hashline";
 export * from "./modes/patch";
 export * from "./modes/replace";
 export * from "./normalize";

@@ -12,17 +12,18 @@
  * The shared renderer / `ToolExecutionComponent` consult the strategy via
  * the injected `editMode` rather than probing argument shape.
  */
-import type { Theme } from "../modes/theme/theme";
-import { type EditMode, resolveEditMode } from "../utils/edit-mode";
-import { computeEditDiff, type DiffError, type DiffResult } from "./diff";
-import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
+
 import {
 	computeHashlineDiff,
 	computeHashlineSectionDiff,
 	containsRecognizableHashlineOperations,
 	type HashlineInputSection,
 	splitHashlineInputs,
-} from "./modes/hashline";
+} from "../hashline";
+import type { Theme } from "../modes/theme/theme";
+import { type EditMode, resolveEditMode } from "../utils/edit-mode";
+import { computeEditDiff, type DiffError, type DiffResult } from "./diff";
+import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
 import { computePatchDiff, type PatchEditEntry } from "./modes/patch";
 import type { ReplaceEditEntry } from "./modes/replace";
 

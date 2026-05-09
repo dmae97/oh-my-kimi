@@ -16,7 +16,6 @@ export type * from "./config/prompt-templates";
 export * from "./config/prompt-templates";
 export type { RetrySettings, SkillsSettings } from "./config/settings";
 export { Settings, settings } from "./config/settings";
-export * from "./edit/modes/hashline";
 // Custom commands
 export type * from "./extensibility/custom-commands/types";
 export type * from "./extensibility/custom-tools";
@@ -30,6 +29,7 @@ export * from "./extensibility/extensions";
 export * from "./extensibility/skills";
 // Slash commands
 export { type FileSlashCommand, loadSlashCommands as discoverSlashCommands } from "./extensibility/slash-commands";
+export * from "./hashline";
 export type * from "./lsp";
 // Main entry point
 export * from "./main";

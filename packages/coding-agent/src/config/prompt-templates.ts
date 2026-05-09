@@ -8,7 +8,7 @@ import {
 	parseFrontmatter,
 	prompt,
 } from "@oh-my-pi/pi-utils";
-import { computeLineHash, HL_BODY_SEP, HL_EDIT_SEP } from "../edit/line-hash";
+import { computeLineHash, HL_BODY_SEP, HL_EDIT_SEP } from "../hashline/hash";
 import { jtdToTypeScript } from "../tools/jtd-to-typescript";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
 

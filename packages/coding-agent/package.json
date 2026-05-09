@@ -227,6 +227,14 @@
 			"types": "./src/edit/modes/*.ts",
 			"import": "./src/edit/modes/*.ts"
 		},
+		"./hashline": {
+			"types": "./src/hashline/index.ts",
+			"import": "./src/hashline/index.ts"
+		},
+		"./hashline/*": {
+			"types": "./src/hashline/*.ts",
+			"import": "./src/hashline/*.ts"
+		},
 		"./exa": {
 			"types": "./src/exa/index.ts",
 			"import": "./src/exa/index.ts"
