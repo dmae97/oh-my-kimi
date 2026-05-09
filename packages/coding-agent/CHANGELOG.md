@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed hashline auto-rebase. Anchor mismatches now reject immediately so the model re-reads instead of silently relocating an edit to a hash-collision within ±5 lines, which could otherwise apply the change to the wrong region. Stale-anchor recovery via the cached read snapshot is unaffected.
+
 ## [14.8.0] - 2026-05-09
 ### Added
 

@@ -14,7 +14,7 @@
  *   5.  Read-output prefix stripping  (stripNewLinePrefixes, hashlineParseText)
  *   6.  Hashline streaming            (streamHashLinesFromUtf8)
  *   7.  Anchor parsing & validation   (parseTag, parseLid, parseRange, ...)
- *   8.  Mismatch error & rebase       (HashlineMismatchError, tryRebaseAnchor)
+ *   8.  Mismatch error                (HashlineMismatchError)
  *   9.  Compact diff preview          (buildCompactHashlineDiffPreview)
  *  10.  Edit DSL parsing              (parseHashline, parseHashlineWithWarnings)
  *  11.  Edit application              (applyHashlineEdits)
@@ -128,9 +128,6 @@ export interface ExecuteHashlineSingleOptions {
 // ───────────────────────────────────────────────────────────────────────────
 // 3. Constants & shared regexes
 // ───────────────────────────────────────────────────────────────────────────
-
-/** How far either side of an anchor we'll search when auto-rebasing on hash match. */
-export const ANCHOR_REBASE_WINDOW = 5;
 
 /** Lines of context shown either side of a hash mismatch. */
 const MISMATCH_CONTEXT = 2;
@@ -469,7 +466,7 @@ export function validateLineRef(ref: { line: number; hash: string }, fileLines: 
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// 8. Mismatch error & rebase
+// 8. Mismatch error
 // ───────────────────────────────────────────────────────────────────────────
 
 function getMismatchDisplayLines(mismatches: HashMismatch[], fileLines: string[]): number[] {
@@ -542,27 +539,6 @@ export class HashlineMismatchError extends Error {
 		}
 		return lines.join("\n");
 	}
-}
-
-/**
- * Try to find a unique line within ±window where the file's actual hash
- * matches the anchor's expected hash. Returns the new line number, or `null`
- * if zero or multiple candidates were found.
- */
-export function tryRebaseAnchor(
-	anchor: { line: number; hash: string },
-	fileLines: string[],
-	window: number = ANCHOR_REBASE_WINDOW,
-): number | null {
-	const lo = Math.max(1, anchor.line - window);
-	const hi = Math.min(fileLines.length, anchor.line + window);
-	let found: number | null = null;
-	for (let lineNum = lo; lineNum <= hi; lineNum++) {
-		if (computeLineHash(lineNum, fileLines[lineNum - 1] ?? "") !== anchor.hash) continue;
-		if (found !== null) return null;
-		found = lineNum;
-	}
-	return found;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -818,16 +794,12 @@ function getHashlineEditAnchors(edit: HashlineEdit): Anchor[] {
 }
 
 /**
- * Verify every anchor's hash, attempting a small ±window rebase before
- * reporting a mismatch. Mutates anchors in place when rebased. Also detects
- * ambiguous cases where two edits target the same line via different anchors,
- * one of which had to be rebased (treated as a mismatch).
+ * Verify every anchor's hash. Any mismatch is reported as a `HashMismatch`;
+ * there is no auto-rebase. Callers are expected to surface mismatches as
+ * `HashlineMismatchError` so the model re-reads and re-anchors.
  */
-function validateHashlineAnchors(edits: HashlineEdit[], fileLines: string[], warnings: string[]): HashMismatch[] {
+function validateHashlineAnchors(edits: HashlineEdit[], fileLines: string[]): HashMismatch[] {
 	const mismatches: HashMismatch[] = [];
-	const rebasedAnchors = new Map<Anchor, HashMismatch>();
-	const emittedRebaseKeys = new Set<string>();
-
 	for (const edit of edits) {
 		for (const anchor of getHashlineEditAnchors(edit)) {
 			if (anchor.line < 1 || anchor.line > fileLines.length) {
@@ -838,42 +810,9 @@ function validateHashlineAnchors(edits: HashlineEdit[], fileLines: string[], war
 			const actualHash = computeLineHash(anchor.line, fileLines[anchor.line - 1] ?? "");
 			if (actualHash === anchor.hash) continue;
 
-			const rebased = tryRebaseAnchor(anchor, fileLines);
-			if (rebased !== null) {
-				const original = `${anchor.line}${anchor.hash}`;
-				rebasedAnchors.set(anchor, { line: anchor.line, expected: anchor.hash, actual: actualHash });
-				anchor.line = rebased;
-				const rebaseKey = `${original}→${rebased}${anchor.hash}`;
-				if (!emittedRebaseKeys.has(rebaseKey)) {
-					emittedRebaseKeys.add(rebaseKey);
-					warnings.push(
-						`Auto-rebased anchor ${original} → ${rebased}${anchor.hash} ` +
-							`(line shifted within ±${ANCHOR_REBASE_WINDOW}; hash matched).`,
-					);
-				}
-				continue;
-			}
 			mismatches.push({ line: anchor.line, expected: anchor.hash, actual: actualHash });
 		}
 	}
-
-	// Detect collisions: two delete edits resolving to the same line, where at
-	// least one had to be rebased — that's likely the rebase landing on the
-	// wrong row, so surface the original mismatch.
-	const seenLines = new Map<number, Anchor>();
-	for (const edit of edits) {
-		if (edit.kind !== "delete") continue;
-		const existing = seenLines.get(edit.anchor.line);
-		if (existing) {
-			const rebasedA = rebasedAnchors.get(edit.anchor);
-			const rebasedB = rebasedAnchors.get(existing);
-			if (rebasedA) mismatches.push(rebasedA);
-			else if (rebasedB) mismatches.push(rebasedB);
-			continue;
-		}
-		seenLines.set(edit.anchor.line, edit.anchor);
-	}
-
 	return mismatches;
 }
 
@@ -1446,7 +1385,7 @@ export function applyHashlineEdits(
 		if (firstChangedLine === undefined || line < firstChangedLine) firstChangedLine = line;
 	};
 
-	const mismatches = validateHashlineAnchors(edits, fileLines, warnings);
+	const mismatches = validateHashlineAnchors(edits, fileLines);
 	if (mismatches.length > 0) throw new HashlineMismatchError(mismatches, fileLines);
 
 	const normalizedEdits = absorbReplacementBoundaryDuplicates(edits, fileLines, warnings, options);
@@ -2025,7 +1964,7 @@ export async function executeHashlineSingle(
  * Collapse consecutive or interleaved sections targeting the same path into a
  * single section with concatenated diffs. Anchors authored against the same
  * file snapshot must be applied as one batch; otherwise the first sub-edit
- * shifts line numbers out from under the second's anchors and rebase fails.
+ * shifts line numbers out from under the second's anchors and validation fails.
  * Path order is preserved by first occurrence.
  */
 function mergeSamePathSections(sections: HashlineInputSection[]): HashlineInputSection[] {

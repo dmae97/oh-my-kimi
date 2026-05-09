@@ -379,28 +379,20 @@ describe("hashline — stale anchors", () => {
 		expect(() => applyDiff("aaa\nbbb\nccc", diff)).toThrow(HashlineMismatchError);
 	});
 
-	it("rebases a uniquely shifted anchor within the configured window", () => {
+	it("rejects when an anchor's stored line shifted (no auto-rebase)", () => {
 		const stale = tag(2, "bbb");
 		const diff = [`= ${stale}`, pl("BBB")].join("\n");
-		const result = applyHashlineEdits("aaa\nINSERTED\nbbb\nccc", parseHashline(diff));
-		expect(result.lines).toBe("aaa\nINSERTED\nBBB\nccc");
-		expect(result.warnings?.[0]).toContain(`Auto-rebased anchor ${stale}`);
+		expect(() => applyDiff("aaa\nINSERTED\nbbb\nccc", diff)).toThrow(HashlineMismatchError);
 	});
 
-	it("rejects when the line is in bounds but the hash matches no nearby line", () => {
-		// Two-char hash, fabricated by guaranteeing it equals neither line 2's nor any other line's hash
-		const fakeHash = computeLineHash(2, "bbb") === "zz" ? "yy" : "zz";
-		const diff = [`= 2${fakeHash}`, pl("BBB")].join("\n");
-		expect(() => applyDiff("aaa\nbbb\nccc", diff)).toThrow(HashlineMismatchError);
-	});
-
-	it("rejects when multiple lines within the rebase window share the same hash", () => {
+	it("rejects when the line hash matches a different nearby line", () => {
 		// Significant-content lines hash by content alone; identical content gives
-		// identical hashes, so multiple lines in ±5 collide and force a reject.
+		// identical hashes, so an anchor pointing at a different line with the
+		// same hash must not be silently relocated.
 		const file = ["x = 1", "y = 2", "x = 1", "z = 3", "x = 1", "w = 4"].join("\n");
 		const collidingHash = computeLineHash(1, "x = 1");
-		// User points at line 4 (`z = 3`) with the colliding hash; the rebase
-		// window covers lines 1, 3, and 5, all of which match — ambiguous.
+		// User points at line 4 (`z = 3`) with the colliding hash; without auto-
+		// rebase, this is a plain mismatch.
 		const diff = [`= 4${collidingHash}`, pl("REPLACED")].join("\n");
 		expect(() => applyDiff(file, diff)).toThrow(HashlineMismatchError);
 	});
@@ -495,11 +487,10 @@ describe("hashline executor", () => {
 			await Bun.write(filePath, `${original}\n`);
 
 			// Two sections, both anchored against the ORIGINAL file. Section 1 expands
-			// line 2 into 9 lines (net +8 shift, beyond the ±5 anchor rebase window).
-			// Section 2's anchor points at line 8 of the original; after section 1
-			// applies, that content moves to line 16. A naive sequential apply reads
-			// the modified disk and fails anchor validation because rebase cannot
-			// span the 8-line gap.
+			// line 2 into 9 lines (net +8 shift). Section 2's anchor points at line 8
+			// of the original; after section 1 applies, that content moves to line 16.
+			// A naive sequential apply reads the modified disk and fails anchor
+			// validation outright.
 			const input = [
 				"@a.ts",
 				`= ${tag(2, "L2")}`,
@@ -610,9 +601,9 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 			// Simulate the read tool having shown V0 to the model in this session.
 			getFileReadCache(session).recordContiguous(filePath, 1, v0Lines);
 
-			// External actor (linter, subagent, user) prepends 7 lines. The shift
-			// is past hashline's ±5 anchor rebase window, so anchors authored
-			// against V0 cannot be auto-rebased onto V1.
+			// External actor (linter, subagent, user) prepends 7 lines. Anchors
+			// authored against V0 no longer match V1, so the model's edit cannot
+			// land without consulting the cached snapshot.
 			const headerLines = ["H1", "H2", "H3", "H4", "H5", "H6", "H7"];
 			const v1Lines = [...headerLines, ...v0Lines];
 			await Bun.write(filePath, `${v1Lines.join("\n")}\n`);
@@ -709,9 +700,9 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 			expect(snap?.lines.get(3)).toBe("gamma");
 
 			// External actor prepends 7 lines after the edit. Anchors authored
-			// against V1 (the post-edit state the model just observed) cannot
-			// auto-rebase past the ±5 window — recovery must consult the cached
-			// V1 snapshot to land the second edit.
+			// against V1 (the post-edit state the model just observed) no longer
+			// match V2 — recovery must consult the cached V1 snapshot to land the
+			// second edit.
 			const v2Lines = ["H1", "H2", "H3", "H4", "H5", "H6", "H7", ...v1Lines];
 			await Bun.write(filePath, `${v2Lines.join("\n")}\n`);
 
