@@ -205,7 +205,9 @@ export class EventController {
 		} else if (event.message.role === "assistant") {
 			this.#lastThinkingCount = 0;
 			this.#resetReadGroup();
-			this.ctx.streamingComponent = new AssistantMessageComponent(undefined, this.ctx.hideThinkingBlock);
+			this.ctx.streamingComponent = new AssistantMessageComponent(undefined, this.ctx.hideThinkingBlock, () =>
+				this.ctx.ui.requestRender(),
+			);
 			this.ctx.streamingMessage = event.message;
 			this.ctx.chatContainer.addChild(this.ctx.streamingComponent);
 			this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);

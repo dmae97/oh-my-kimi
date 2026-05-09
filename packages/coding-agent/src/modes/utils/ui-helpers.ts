@@ -226,7 +226,9 @@ export class UiHelpers {
 				break;
 			}
 			case "assistant": {
-				const assistantComponent = new AssistantMessageComponent(message, this.ctx.hideThinkingBlock);
+				const assistantComponent = new AssistantMessageComponent(message, this.ctx.hideThinkingBlock, () =>
+					this.ctx.ui.requestRender(),
+				);
 				this.ctx.chatContainer.addChild(assistantComponent);
 				break;
 			}
