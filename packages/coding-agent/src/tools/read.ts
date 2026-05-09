@@ -163,6 +163,33 @@ function countTextLines(text: string): number {
 }
 const READ_CHUNK_SIZE = 8 * 1024;
 
+/**
+ * Number of unanchored context lines to include before/after a user-requested
+ * range. Anchor-stale failures are heavily concentrated on edits whose anchors
+ * land just outside the most recent read window — a few lines of pre-anchored
+ * context covers off-by-one anchor selection without much cost.
+ */
+const RANGE_CONTEXT_LINES = 3;
+
+/**
+ * Expand a [start, end) range with ±RANGE_CONTEXT_LINES context lines on the
+ * sides where the user actually constrained the range. A start of 0 (no
+ * explicit offset) does not get leading context — that's already an open-ended
+ * read from the top.
+ */
+function expandRangeWithContext(
+	requestedStart: number,
+	requestedEnd: number,
+	totalLines: number,
+	expandStart: boolean,
+	expandEnd: boolean,
+): { startLine: number; endLine: number } {
+	return {
+		startLine: expandStart ? Math.max(0, requestedStart - RANGE_CONTEXT_LINES) : requestedStart,
+		endLine: expandEnd ? Math.min(totalLines, requestedEnd + RANGE_CONTEXT_LINES) : requestedEnd,
+	};
+}
+
 async function streamLinesFromFile(
 	filePath: string,
 	startLine: number,
@@ -645,9 +672,26 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const details = options.details ?? {};
 		const allLines = text.split("\n");
 		const totalLines = allLines.length;
-		const startLine = offset ? Math.max(0, offset - 1) : 0;
-		const startLineDisplay = startLine + 1;
+		// User-requested 0-indexed range start. Lines BEFORE this are leading
+		// context (added below if offset is explicit).
+		const requestedStart = offset ? Math.max(0, offset - 1) : 0;
 		const ignoreResultLimits = options.ignoreResultLimits ?? false;
+		const requestedEnd =
+			limit !== undefined && !ignoreResultLimits
+				? Math.min(requestedStart + limit, allLines.length)
+				: allLines.length;
+		// Expand only on sides the user actually constrained: leading context
+		// when offset>1, trailing context when a finite limit was set.
+		const expanded = expandRangeWithContext(
+			requestedStart,
+			requestedEnd,
+			allLines.length,
+			offset !== undefined && offset > 1,
+			limit !== undefined && !ignoreResultLimits,
+		);
+		const startLine = expanded.startLine;
+		const endLineExpanded = expanded.endLine;
+		const startLineDisplay = startLine + 1;
 
 		const resultBuilder = toolResult(details);
 		if (options.sourcePath) {
@@ -660,20 +704,19 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			resultBuilder.sourceInternal(options.sourceInternal);
 		}
 
-		if (startLine >= allLines.length) {
+		if (requestedStart >= allLines.length) {
 			const suggestion =
 				allLines.length === 0
 					? `The ${options.entityLabel} is empty.`
 					: `Use :1 to read from the start, or :${allLines.length} to read the last line.`;
 			return resultBuilder
 				.text(
-					`Line ${startLineDisplay} is beyond end of ${options.entityLabel} (${allLines.length} lines total). ${suggestion}`,
+					`Line ${requestedStart + 1} is beyond end of ${options.entityLabel} (${allLines.length} lines total). ${suggestion}`,
 				)
 				.done();
 		}
 
-		const endLine =
-			limit !== undefined && !ignoreResultLimits ? Math.min(startLine + limit, allLines.length) : allLines.length;
+		const endLine = endLineExpanded;
 		const selectedContent = allLines.slice(startLine, endLine).join("\n");
 		const userLimitedLines = limit !== undefined && !ignoreResultLimits ? endLine - startLine : undefined;
 		const truncation = ignoreResultLimits ? noTruncResult(selectedContent) : truncateHead(selectedContent);
@@ -1318,13 +1361,20 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (!content) {
 				// Raw text or line-range mode
 				const { offset, limit } = selToOffsetLimit(parsed);
-				const startLine = offset ? Math.max(0, offset - 1) : 0;
+				// User-requested 0-indexed range start. Lines BEFORE this become
+				// leading context (added below if offset is explicit).
+				const requestedStart = offset ? Math.max(0, offset - 1) : 0;
+				const expandStart = offset !== undefined && offset > 1;
+				const expandEnd = limit !== undefined;
+				const leadingContext = expandStart ? Math.min(requestedStart, RANGE_CONTEXT_LINES) : 0;
+				const trailingContext = expandEnd ? RANGE_CONTEXT_LINES : 0;
+				const startLine = requestedStart - leadingContext;
 				const startLineDisplay = startLine + 1;
 
 				const DEFAULT_LIMIT = this.#defaultLimit;
 				const effectiveLimit = limit ?? DEFAULT_LIMIT;
-				const maxLinesToCollect = Math.min(effectiveLimit, DEFAULT_MAX_LINES);
-				const selectedLineLimit = effectiveLimit;
+				const maxLinesToCollect = Math.min(effectiveLimit + leadingContext + trailingContext, DEFAULT_MAX_LINES);
+				const selectedLineLimit = effectiveLimit + leadingContext + trailingContext;
 				// Scale byte budget with line limit so the configured line count actually fits.
 				// Assume ~512 bytes/line average; never go below the shared default.
 				const maxBytesForRead = Math.max(DEFAULT_MAX_BYTES, maxLinesToCollect * 512);
@@ -1348,13 +1398,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				} = streamResult;
 
 				// Check if offset is out of bounds - return graceful message instead of throwing
-				if (startLine >= totalFileLines) {
+				if (requestedStart >= totalFileLines) {
 					const suggestion =
 						totalFileLines === 0
 							? "The file is empty."
 							: `Use :1 to read from the start, or :${totalFileLines} to read the last line.`;
 					return toolResult<ReadToolDetails>({ resolvedPath: absolutePath, suffixResolution })
-						.text(`Line ${startLineDisplay} is beyond end of file (${totalFileLines} lines total). ${suggestion}`)
+						.text(`Line ${requestedStart + 1} is beyond end of file (${totalFileLines} lines total). ${suggestion}`)
 						.done();
 				}
 

@@ -106,7 +106,7 @@ describe("read tool URL selector shorthands", () => {
 		expect(textBlock?.type).toBe("text");
 		expect(textBlock?.text).toContain("Line 1");
 		expect(textBlock?.text).toContain("Line 2");
-		expect(textBlock?.text).not.toContain("Line 3");
+		// Read tool widens the window by ±3 unanchored context lines.
 		expect(loadPageSpy).toHaveBeenCalledTimes(1);
 		expect(loadPageSpy).toHaveBeenCalledWith(pageUrl, expect.anything());
 	});
@@ -697,9 +697,12 @@ describe("read tool URL handling", () => {
 		});
 		const pagedText = pagedResult.content.find(content => content.type === "text");
 		expect(pagedText?.type).toBe("text");
+		// `:7-8` selects 2 lines starting at offset 7 of the wrapped cached
+		// output. Read tool widens the window by ±3 unanchored context lines
+		// so anchors at the boundary stay fresh, so adjacent content lines are
+		// also visible.
 		expect(pagedText?.text).toContain("Line 1");
 		expect(pagedText?.text).toContain("Line 2");
-		expect(pagedText?.text).not.toContain("Line 3");
 		expect(loadPageSpy).not.toHaveBeenCalled();
 		expect(fs.readdirSync(path.join(testDir, "session")).some(file => file.endsWith(".read.log"))).toBe(true);
 	});
