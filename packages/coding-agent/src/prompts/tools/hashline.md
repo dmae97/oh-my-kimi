@@ -20,7 +20,8 @@ Purely textual format. The tool has NO awareness of language, indentation, brack
 - `< A` inserts before line A; `+ A` inserts after line A. `< BOF` / `+ BOF` both prepend; `< EOF` / `+ EOF` both append.
 - `= A..B` replaces the inclusive range with the following payload lines. `= A` (or `= A..B`) with no payload blanks the range to a single empty line.
 - `- A..B` deletes the inclusive range; omit `..B` for one line.
-- Pick the smallest op for the change: pure addition → `+`/`<`; pure deletion → `-`; `= A..B` ONLY when content inside `A..B` is actually being modified or removed.
+- **Choose a self-contained syntactic unit first.** If the change touches part of a multiline call, destructuring assignment, control-flow header, wrapper, or other construct, widen the range to include the whole construct before optimizing for size.
+- Only after the range is self-contained, pick the smallest op for the change: pure addition → `+`/`<`; pure deletion → `-`; `= A..B` ONLY when content inside `A..B` is actually being modified or removed.
 </rules>
 
 <brace-shapes>
@@ -35,7 +36,7 @@ When your edit involves brace boundaries (`{` / `}`), prefer these shapes:
 - **Do not replay the line past your range.** For `= A..B`, never end the payload with content that already exists at B+1. Stop the payload at the last line you are actually changing; if you need that next line gone, extend B.
 - **Do not duplicate chunks inside one payload.** When emitting a long `=` payload, never paste the same multi-line block twice. If you catch yourself re-emitting an earlier run of lines, stop and rewrite the op.
 - **Anchor only inside the visible region.** If the read output around your `=`/`-` end anchor is truncated (you cannot see the line at B+1), issue a fresh `read` before editing — anchoring blind drops or duplicates the boundary line.
-- **Prefer narrow ops over wide `=`.** A `+`/`<` insert plus a small `-` delete is almost always clearer and safer than a single wide `= A..B` that re-emits unchanged context.
+- **Prefer the narrowest self-contained edit.** Once your range cleanly contains the construct you are changing, a `+`/`<` insert plus a small `-` delete is almost always clearer and safer than a single wide `= A..B` that re-emits unchanged context.
 </common-failures>
 
 <case file="a.ts">
@@ -45,6 +46,18 @@ When your edit involves brace boundaries (`{` / `}`), prefer these shapes:
 {{hline 4 "\tconst clean = name || DEF;"}}
 {{hline 5 "\treturn clean.trim();"}}
 {{hline 6 "}"}}
+</case>
+
+<case file="b.ts">
+{{hline 1 "const {"}}
+{{hline 2 "\tevents,"}}
+{{hline 3 "\tresponse,"}}
+{{hline 4 "\trequestId,"}}
+{{hline 5 "} = await getStreamResponse("}}
+{{hline 6 "\trequest,"}}
+{{hline 7 "\tsignal,"}}
+{{hline 8 ");"}}
+{{hline 9 "await notify(requestId);"}}
 </case>
 
 <examples>
@@ -58,6 +71,19 @@ When your edit involves brace boundaries (`{` / `}`), prefer these shapes:
 = {{hrefr 4}}..{{hrefr 5}}
 {{hsep}}	const clean = (name || DEF).trim();
 {{hsep}}	return clean.length === 0 ? DEF : clean.toUpperCase();
+
+# Replace a full multiline destructuring/call statement
+@b.ts
+= {{hrefr 1}}..{{hrefr 8}}
+{{hsep}}const {
+{{hsep}}	events,
+{{hsep}}	response,
+{{hsep}}	requestId,
+{{hsep}}} = await getStreamResponse(
+{{hsep}}	request,
+{{hsep}}	signal,
+{{hsep}}	onEvent,
+{{hsep}});
 
 # Insert BEFORE a line
 @a.ts
@@ -103,7 +129,28 @@ When your edit involves brace boundaries (`{` / `}`), prefer these shapes:
 + {{hrefr 1}}
 {{hsep}}const DEBUG = false;
 
-If your replacement payload would render with even one unchanged line in the diff, you have the wrong op or range. Stop and rewrite as `+`/`<`/`-` plus a narrower `=`.
+# WRONG — continuation-fragment payload from the middle of a larger statement.
+@b.ts
+= {{hrefr 5}}..{{hrefr 7}}
+{{hsep}}} = await getStreamResponse(
+{{hsep}}	request,
+{{hsep}}	signal,
+{{hsep}}	onEvent,
+
+# RIGHT — widen to the full statement so the payload starts at a self-contained boundary.
+@b.ts
+= {{hrefr 1}}..{{hrefr 8}}
+{{hsep}}const {
+{{hsep}}	events,
+{{hsep}}	response,
+{{hsep}}	requestId,
+{{hsep}}} = await getStreamResponse(
+{{hsep}}	request,
+{{hsep}}	signal,
+{{hsep}}	onEvent,
+{{hsep}});
+
+If your replacement payload would render with even one unchanged line in the diff, or if the first or last payload line is only a continuation fragment from a larger construct (`} =`, `);`, `,`, `.method(`), you have the wrong op or range. Stop and widen to a self-contained boundary before minimizing the edit.
 </anti-pattern>
 
 <critical>
