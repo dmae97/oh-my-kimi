@@ -26,7 +26,7 @@ payload: $HSEP$ line_text? LF
 line_text: /[^\r\n]+/
 
 insert_target: LID | "EOF" | "BOF"
-range: LID (".." LID)?
+range: LID ".." LID
 
 path: /(?:[^\s\r\n]+|"[^"\r\n]+"|'[^'\r\n]+')/
 LID: /[1-9][0-9]*$HFMT$/

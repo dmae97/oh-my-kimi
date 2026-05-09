@@ -23,10 +23,23 @@ interface ParsedRange {
 }
 
 function parseRange(raw: string, lineNum: number): ParsedRange {
-	const [startRaw, endRaw] = raw.split("..");
-	if (!startRaw) throw new Error(`line ${lineNum}: range is missing its first anchor.`);
+	if (!raw.includes("..")) {
+		throw new Error(
+			`line ${lineNum}: explicit ranges are required for delete/replace. ` +
+				`Repeat the same anchor on both sides for a one-line edit (for example, ` +
+				`${describeAnchorExamples("119")}..${describeAnchorExamples("119")}); ` +
+				`got ${JSON.stringify(raw)}.`,
+		);
+	}
+	const [startRaw, endRaw, extra] = raw.split("..");
+	if (extra !== undefined || !startRaw || !endRaw) {
+		throw new Error(
+			`line ${lineNum}: range must include exactly two full anchors separated by "..". ` +
+				`For a one-line edit, repeat the same anchor on both sides.`,
+		);
+	}
 	const start = parseLid(startRaw, lineNum);
-	const end = endRaw === undefined ? { ...start } : parseLid(endRaw, lineNum);
+	const end = parseLid(endRaw, lineNum);
 	if (end.line < start.line) {
 		throw new Error(`line ${lineNum}: range ${startRaw}..${endRaw} ends before it starts.`);
 	}
