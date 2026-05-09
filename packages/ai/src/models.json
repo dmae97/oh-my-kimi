@@ -18451,7 +18451,7 @@
 			"compat": {
 				"supportsStore": false,
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {
@@ -18481,7 +18481,7 @@
 			"compat": {
 				"supportsStore": false,
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {
@@ -18508,7 +18508,7 @@
 			},
 			"compat": {
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"contextWindow": 1000000,
@@ -18540,7 +18540,7 @@
 			"compat": {
 				"supportsStore": false,
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {
@@ -18570,7 +18570,7 @@
 			"compat": {
 				"supportsStore": false,
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {
@@ -18597,7 +18597,7 @@
 			},
 			"compat": {
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"contextWindow": 204800,
@@ -18629,7 +18629,7 @@
 			"compat": {
 				"supportsStore": false,
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {
@@ -18659,7 +18659,7 @@
 			"compat": {
 				"supportsStore": false,
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {
@@ -18691,7 +18691,7 @@
 			"compat": {
 				"supportsStore": false,
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {
@@ -18721,7 +18721,7 @@
 			"compat": {
 				"supportsStore": false,
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {
@@ -18748,7 +18748,7 @@
 			},
 			"compat": {
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"contextWindow": 1000000,
@@ -18780,7 +18780,7 @@
 			"compat": {
 				"supportsStore": false,
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {
@@ -18810,7 +18810,7 @@
 			"compat": {
 				"supportsStore": false,
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {
@@ -18837,7 +18837,7 @@
 			},
 			"compat": {
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"contextWindow": 204800,
@@ -18869,7 +18869,7 @@
 			"compat": {
 				"supportsStore": false,
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {
@@ -18899,7 +18899,7 @@
 			"compat": {
 				"supportsStore": false,
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
+				"supportsReasoningEffort": false,
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {

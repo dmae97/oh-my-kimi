@@ -314,6 +314,16 @@ function applyGeneratedModelPolicy(model: ApiModel<Api>): void {
 		model.maxTokens = copilotLimits.maxTokens;
 	}
 
+	if (model.api === "openai-completions" && (model.provider === "minimax-code" || model.provider === "minimax-code-cn")) {
+		model.compat = {
+			...model.compat,
+			supportsStore: false,
+			supportsDeveloperRole: false,
+			supportsReasoningEffort: false,
+			reasoningContentField: "reasoning_content",
+		};
+		delete model.compat.thinkingFormat;
+	}
 	const parsedModel = parseKnownModel(model.id);
 	const applyPatchToolType = inferGeneratedApplyPatchToolType(model, parsedModel);
 	if (applyPatchToolType) {

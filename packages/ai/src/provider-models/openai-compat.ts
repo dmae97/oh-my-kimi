@@ -2112,7 +2112,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDe
 		compat: {
 			supportsStore: false,
 			supportsDeveloperRole: false,
-			thinkingFormat: "zai",
+			supportsReasoningEffort: false,
 			reasoningContentField: "reasoning_content",
 		},
 	}),
@@ -2120,7 +2120,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDe
 		compat: {
 			supportsStore: false,
 			supportsDeveloperRole: false,
-			thinkingFormat: "zai",
+			supportsReasoningEffort: false,
 			reasoningContentField: "reasoning_content",
 		},
 	}),
