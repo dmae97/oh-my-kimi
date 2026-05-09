@@ -13,6 +13,7 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -410,16 +411,17 @@ function todoClearKey(phaseName: string, taskContent: string): string {
 
 /**
  * Build the per-request `metadata` payload for the Anthropic provider, shaped
- * like real Claude Code's `getAPIMetadata` output (`{ session_id, account_uuid }`)
- * so the backend buckets requests under one session and attributes them to the
- * authenticated OAuth account when available. Resolved at request time so token
- * refreshes and login/logout transitions don't strand a stale account UUID in
- * memory. `account_uuid` is omitted for non-Anthropic providers to avoid leaking
- * the user's Claude identity to third-party APIs (including Anthropic-format-
- * compatible proxies such as cloudflare-ai-gateway or gitlab-duo).
+ * like real Claude Code's `getAPIMetadata` output (`{ session_id, account_uuid,
+ * device_id }`) so the backend buckets requests under one session and attributes
+ * them to the authenticated OAuth account when available. Resolved at request
+ * time so token refreshes and login/logout transitions don't strand a stale
+ * account UUID in memory. `account_uuid` and `device_id` are omitted for
+ * non-Anthropic providers to avoid leaking the user's Claude identity to
+ * third-party APIs (including Anthropic-format-compatible proxies such as
+ * cloudflare-ai-gateway or gitlab-duo).
  *
  * `provider` is the target provider string (e.g. `"anthropic"`) and gates the
- * `account_uuid` lookup — only `"anthropic"` requests carry it.
+ * `account_uuid` and `device_id` lookups — only `"anthropic"` requests carry them.
  *
  * `sessionId` is forwarded to the auth-storage session-sticky lookup so that
  * multi-credential setups attribute to the same OAuth account used for the
@@ -443,6 +445,15 @@ function buildSessionMetadata(
 		const accountUuid = authStorage?.getOAuthAccountId("anthropic", sessionId);
 		if (typeof accountUuid === "string" && accountUuid.length > 0) {
 			userId.account_uuid = accountUuid;
+			// Derive device_id from account_uuid so the payload matches the real CC
+			// getAPIMetadata shape without hardware fingerprinting. A SHA-256 of a
+			// namespaced account UUID produces a stable 64-hex value that is
+			// indistinguishable from a randomly generated device ID on the wire, is
+			// deterministic per account (survives reinstalls), and is auditable: it
+			// is derived solely from the OAuth UUID the user already consented to
+			// share with Anthropic. Omitted when no OAuth credential is available
+			// (API-key callers) to avoid sending a hash of an empty string.
+			userId.device_id = crypto.createHash("sha256").update(`omp-device-id-v1:${accountUuid}`).digest("hex");
 		}
 	}
 	return { user_id: JSON.stringify(userId) };
