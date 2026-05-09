@@ -4,6 +4,7 @@
 
 ### Fixed
 - Fixed Kimi Code OAuth expiry handling to refresh access tokens 5 minutes before server expiry, avoiding daily 401s from using tokens right up to the cutoff.
+- Fixed OpenAI Responses custom tool replay to preserve custom tool call item IDs with the `ctc_` prefix instead of rewriting them as `fc_` function-call IDs ([#977](https://github.com/can1357/oh-my-pi/issues/977)).
 
 ## [14.7.6] - 2026-05-07
 

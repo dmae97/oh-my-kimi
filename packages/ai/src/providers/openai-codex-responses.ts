@@ -2438,7 +2438,7 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 				}
 				if (block.type === "toolCall") {
 					const toolCall = block as ToolCall;
-					const normalized = normalizeResponsesToolCallId(toolCall.id);
+					const normalized = normalizeResponsesToolCallId(toolCall.id, toolCall.customWireName ? "ctc" : "fc");
 					if (toolCall.customWireName) {
 						const rawInput = typeof toolCall.arguments?.input === "string" ? toolCall.arguments.input : "";
 						customCallIds.add(normalized.callId);

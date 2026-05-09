@@ -187,9 +187,9 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 			continue;
 		}
 
-		const normalized = normalizeResponsesToolCallId(block.id);
+		const normalized = normalizeResponsesToolCallId(block.id, block.customWireName ? "ctc" : "fc");
 		let itemId: string | undefined = normalized.itemId;
-		if (isDifferentModel && (itemId?.startsWith("fc_") || itemId?.startsWith("fcr_"))) {
+		if (isDifferentModel && (itemId?.startsWith("fc_") || itemId?.startsWith("fcr_") || itemId?.startsWith("ctc_"))) {
 			itemId = undefined;
 		}
 		knownCallIds.add(normalized.callId);

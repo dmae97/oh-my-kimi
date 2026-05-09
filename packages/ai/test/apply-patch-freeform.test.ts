@@ -490,10 +490,56 @@ describe("history replay: custom_tool_call round-trip", () => {
 		const items = convertResponsesAssistantMessage(assistantMsg, makeModel(), 0, knownCallIds, true, customCallIds);
 
 		expect(items).toHaveLength(1);
-		const item = items[0] as { type: string; name?: string; input?: string };
+		const item = items[0] as { type: string; id?: string; name?: string; input?: string };
 		expect(item.type).toBe("custom_tool_call");
+		expect(item.id).toBe("ctc_1");
 		expect(item.name).toBe("apply_patch");
 		expect(item.input).toBe("*** Begin Patch\n*** End Patch\n");
+		expect(customCallIds.has("call_1")).toBe(true);
+	});
+
+	test("custom tool call omits item id when replayed across same-provider model switch", () => {
+		const assistantMsg: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "call_1|ctc_1",
+					name: "edit",
+					arguments: { input: "*** Begin Patch\n*** End Patch\n" },
+					customWireName: "apply_patch",
+				},
+			],
+			timestamp: Date.now(),
+			provider: "openai",
+			model: "gpt-5",
+			api: "openai-responses",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+		};
+		const knownCallIds = new Set<string>();
+		const customCallIds = new Set<string>();
+		const items = convertResponsesAssistantMessage(
+			assistantMsg,
+			makeModel({ id: "gpt-5.1" }),
+			0,
+			knownCallIds,
+			true,
+			customCallIds,
+		);
+
+		expect(items).toHaveLength(1);
+		const item = items[0] as { type: string; id?: string; call_id?: string };
+		expect(item.type).toBe("custom_tool_call");
+		expect(item.id).toBeUndefined();
+		expect(item.call_id).toBe("call_1");
 		expect(customCallIds.has("call_1")).toBe(true);
 	});
 
