@@ -163,6 +163,10 @@ export function renderResult(
 			} else if (symbolsMatch) {
 				label = "Symbols";
 				bodyLines = renderSymbols(symbolsMatch, lines, expanded, theme);
+			} else if (result.details?.action === "diagnostics" && text === "OK") {
+				label = "Diagnostics";
+				state = "success";
+				bodyLines = [`${theme.styledSymbol("status.success", "success")} ${theme.fg("dim", "OK")}`];
 			} else {
 				label = "Response";
 				bodyLines = renderGeneric(text, lines, expanded, theme);

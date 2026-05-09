@@ -367,7 +367,7 @@ describe("lsp regressions", () => {
 				.map(block => block.text)
 				.join("\n");
 
-			expect(output).toBe("No diagnostics");
+			expect(output).toBe("OK");
 		} finally {
 			vi.restoreAllMocks();
 			tempDir.removeSync();

@@ -1340,7 +1340,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 				if (!detailed && targets.length === 1) {
 					if (uniqueDiagnostics.length === 0) {
 						return {
-							content: [{ type: "text", text: "No diagnostics" }],
+							content: [{ type: "text", text: "OK" }],
 							details: { action, serverName: Array.from(allServerNames).join(", "), success: true },
 						};
 					}
