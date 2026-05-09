@@ -9,6 +9,7 @@
 //! Run with no subcommand for help.
 
 mod cmd_edits;
+mod cmd_followups;
 mod cmd_tools;
 mod common;
 
@@ -42,6 +43,7 @@ fn main() -> ExitCode {
     let rest: Vec<String> = args.collect();
     let result = match cmd.as_str() {
         "edits" => cmd_edits::run(rest),
+        "followups" => cmd_followups::run(rest),
         "tools" => cmd_tools::run(rest),
         "-h" | "--help" | "help" => {
             usage();
