@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.8.0] - 2026-05-09
 ### Added
 
 - Added hashline stale-anchor recovery by replaying edits against a session-scoped `read`/`search` snapshot and 3-way-merging them onto the current file when anchors no longer match
