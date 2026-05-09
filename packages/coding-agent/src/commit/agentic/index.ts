@@ -266,10 +266,11 @@ async function runSplitCommit(
 		throw new Error(order.error);
 	}
 
+	const stagedDiff = await git.diff(ctx.cwd, { cached: true });
 	await git.stage.reset(ctx.cwd);
 	for (const commitIndex of order) {
 		const commit = plan.commits[commitIndex];
-		await git.stage.hunks(ctx.cwd, commit.changes);
+		await git.stage.hunks(ctx.cwd, commit.changes, { rawDiff: stagedDiff, diffCached: true });
 		const analysis: ConventionalAnalysis = {
 			type: commit.type,
 			scope: commit.scope,

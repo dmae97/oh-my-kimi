@@ -40,6 +40,12 @@ export type HunkSelection = {
 	hunks: { type: "all" } | { type: "indices"; indices: number[] } | { type: "lines"; start: number; end: number };
 };
 
+export interface StageHunksOptions {
+	readonly diffCached?: boolean;
+	readonly rawDiff?: string;
+	readonly signal?: AbortSignal;
+}
+
 export interface DiffOptions {
 	readonly allowFailure?: boolean;
 	readonly base?: string;
@@ -803,10 +809,10 @@ export const stage = {
 		await runEffect(cwd, args, { signal });
 	},
 
-	/** Selectively stage hunks from the working tree diff. */
-	async hunks(cwd: string, selections: HunkSelection[], signal?: AbortSignal): Promise<void> {
+	/** Selectively stage hunks from the provided diff or the current working tree diff. */
+	async hunks(cwd: string, selections: HunkSelection[], options: StageHunksOptions = {}): Promise<void> {
 		if (selections.length === 0) return;
-		const rawDiff = await diff(cwd, { cached: false, signal });
+		const rawDiff = options.rawDiff ?? (await diff(cwd, { cached: options.diffCached, signal: options.signal }));
 		const fileDiffs = parseFileDiffs(rawDiff);
 		const fileDiffMap = new Map(fileDiffs.map(entry => [entry.filename, entry]));
 		const patchParts: string[] = [];
@@ -833,7 +839,7 @@ export const stage = {
 
 		const patchText = patch.join(patchParts);
 		if (!patchText.trim()) return;
-		await patch.applyText(cwd, patchText, { cached: true, signal });
+		await patch.applyText(cwd, patchText, { cached: true, signal: options.signal });
 	},
 
 	/** Unstage files. Empty array unstages all (`git reset`). */
