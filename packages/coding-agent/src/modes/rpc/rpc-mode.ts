@@ -790,12 +790,12 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 						onProgress: message => {
 							uiCtx.notify(message, "info");
 						},
-						onPrompt: async () => {
-							throw new Error(
-								"This provider requires manual verification code entry, " +
-									"which is not supported in RPC mode. Use the terminal UI to log in to this provider.",
-							);
-						},
+						onPrompt: () =>
+							// Never resolve rather than throw. OAuthCallbackFlow.#waitForCallback
+							// races onManualCodeInput against the browser callback and catches any
+							// rejection as null, which causes a tight retry loop. A forever-pending
+							// promise makes the race block until the callback server wins instead.
+							new Promise<string>(() => {}),
 					});
 					await session.modelRegistry.refresh();
 					return success(id, "login", { providerId: command.providerId });
