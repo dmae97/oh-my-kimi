@@ -517,6 +517,26 @@ export class RpcClient {
 	}
 
 	/**
+	 * Get list of OAuth providers available for login, with their current authentication status.
+	 */
+	async getLoginProviders(): Promise<Array<{ id: string; name: string; available: boolean; authenticated: boolean }>> {
+		const response = await this.#send({ type: "get_login_providers" });
+		return this.#getData<{
+			providers: Array<{ id: string; name: string; available: boolean; authenticated: boolean }>;
+		}>(response).providers;
+	}
+
+	/**
+	 * Trigger OAuth login for the given provider.
+	 * The server will emit an `open_url` extension_ui_request for the auth URL.
+	 * Resolves when login completes or rejects on failure.
+	 */
+	async login(providerId: string): Promise<{ providerId: string }> {
+		const response = await this.#send({ type: "login", providerId });
+		return this.#getData<{ providerId: string }>(response);
+	}
+
+	/**
 	 * Replace the host-owned custom tools exposed to the RPC session.
 	 * Changes take effect before the next model call.
 	 */
