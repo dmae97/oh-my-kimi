@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { renderSegment } from "../src/modes/components/status-line/segments";
 import type { SegmentContext } from "../src/modes/components/status-line/segments";
+import { renderSegment } from "../src/modes/components/status-line/segments";
 import { initTheme, theme } from "../src/modes/theme/theme";
 
 beforeAll(async () => {

@@ -1,82 +1,70 @@
 # session-stats
 
 Ad-hoc analyses over the local agent session corpus
-(`~/.omp/agent/sessions/`). Single Rust binary with subcommands.
-
-## Subcommands
-
-### `edits` — edit-tool reliability audit
-
-Audits how agents have used the `edit` / `ast_edit` / `write` tools.
-
-For each call we:
-
-- detect the **argument-schema family** in use (the edit tool has shipped many
-  shapes over time: `oldText/newText`, `op+pos+end+lines`, `loc+content`,
-  `loc+splice/pre/post/sed`, etc.);
-- record the locator shape and verb combination (for the current schema);
-- pair the call with its `toolResult` and classify the outcome
-  (`success` / `truncated` / `aborted` / `fail:anchor-stale` /
-  `fail:no-match` / `fail:parse` / `fail:no-enclosing-block` / …).
-
-Output: markdown-ish report on stdout plus per-call CSV at `$EDIT_ANALYSIS_CSV`
-(default `./edit-analysis.csv`).
-
-### `tools` — per-tool token budget
-
-Aggregates token usage across the most-recent N sessions. Buckets:
-
-- `tool ARGS`          — assistant tool-call argument JSON
-- `tool RESULTS`       — tool result content text
-- `assistant THINKING` — assistant `thinking` blocks
-- `assistant TEXT`     — assistant prose
-- `user TEXT`          — user-authored text content
-
-Token counting uses **`o200k_base`** via `tiktoken-rs` (the GPT-4o / GPT-5
-family BPE — well-defined offline and within ~5-10% of Claude's own counts in
-aggregate across English/code).
-
-Output: grand totals + per-tool breakdown sorted by total (arg+res) tokens.
-Optional CSV at `$TOOL_USAGE_CSV`.
-
-## Usage
-
-```sh
-# Edit audit on the most-recent sessions.
-cargo run --release --manifest-path scripts/session-stats/Cargo.toml -- edits
-
-# Edit audit on the 200 most-recent sessions.
-cargo run --release --manifest-path scripts/session-stats/Cargo.toml -- edits -n 200
-
-# Edit audit on a specific date.
-cargo run --release --manifest-path scripts/session-stats/Cargo.toml -- edits 2026-04-28
-
-# Tool token budget on the 1000 most-recent sessions.
-cargo run --release --manifest-path scripts/session-stats/Cargo.toml -- tools -n 1000
-
-# Tool token budget on every jsonl on disk.
-cargo run --release --manifest-path scripts/session-stats/Cargo.toml -- tools -n 0
-
-# Dump per-tool CSV alongside the report.
-TOOL_USAGE_CSV=tools.csv \
-  cargo run --release --manifest-path scripts/session-stats/Cargo.toml -- tools -n 200
-```
-
-The walk root is `~/.omp/agent/sessions/`. Subagent jsonls
-(`<session-id>/<n>-<name>.jsonl`) count as their own session and are included
-in the recency window independently.
+(`~/.omp/agent/sessions/`). SQLite-backed; data is synced once into the same
+`~/.omp/stats.db` that `packages/stats` uses, then queried by short Python
+scripts.
 
 ## Layout
 
 ```
 scripts/session-stats/
-  Cargo.toml
-  src/
-    main.rs        # subcommand dispatch
-    common.rs      # shared JSONL shapes, walk, tokenizer, formatting helpers
-    cmd_edits.rs   # edits subcommand
-    cmd_tools.rs   # tools subcommand
+  sync.py       # walks ~/.omp/agent/sessions/ and populates ss_* tables
+  analyze.py    # tools | edits | followups subcommands over the synced db
 ```
 
-The crate is a standalone Cargo project (it carries its own `[workspace]`
-declaration) so it does not perturb the main workspace's lockfile.
+## One-time prep
+
+```sh
+pip install tiktoken
+```
+
+## Sync
+
+```sh
+bun run stats:sync                  # incremental
+python3 scripts/session-stats/sync.py --workers 16 --full     # rebuild all
+python3 scripts/session-stats/sync.py --limit 200             # newest 200 only
+```
+
+The sync is incremental: per-file `mtime`, `size`, `byte_offset`, and
+`parser_version` are tracked in `ss_sessions`. Re-runs only parse new bytes
+and only re-tokenize / re-classify what changed. A bump of `EDIT_PARSER_VERSION`
+in `sync.py` invalidates `ss_edit_*` rows on next sync.
+
+Tokenization is `o200k_base` (GPT-4o / GPT-5 family) via tiktoken — well
+within ~5–10% of Claude's BPE in aggregate.
+
+## Schema
+
+All tables are prefixed `ss_` to avoid collision with `packages/stats`.
+
+|Table|Granularity|
+|---|---|
+|`ss_sessions`|one row per `.jsonl`; carries sync state + session metadata|
+|`ss_tool_calls`|one row per `toolCall` content block (`arg_json`, `arg_tokens`)|
+|`ss_tool_results`|one row per `toolResult` message (`result_text`, `result_tokens`, `is_error`)|
+|`ss_assistant_msgs`|per assistant message text + thinking blobs and token counts|
+|`ss_user_msgs`|per user message text and token count|
+|`ss_edit_calls`|per `edit` call: `success`, `warnings`, `raw_input_len`|
+|`ss_edit_sections`|per `@PATH` section in an edit; precomputed `longest_repeat_*`, `dup_anchors`|
+
+Indexes on `(tool_name, timestamp)` and `(session_file, seq)` make per-tool
+aggregations and ordered session walks cheap.
+
+## Analyses
+
+```sh
+bun run stats:tools                        # per-tool token totals
+bun run stats:tools -- --by d --top 8      # bucket by day, top 8 tools each
+bun run stats:edits                        # edit-tool reliability audit
+bun run stats:followups                    # five hashline-edit detectors
+bun run stats:followups -- --max-fix 2 --min-dup 8 --show 20
+```
+
+All three accept `-n N` / `--folder SUBSTR` to scope the query.
+
+The Rust crate that previously lived here was retired in favor of this
+SQLite-backed flow. The schema persists everything the analyses used to
+recompute on every run (token counts, hashline parse output, success flags),
+so subsequent invocations are sub-second over the full corpus.

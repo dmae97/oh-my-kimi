@@ -314,7 +314,10 @@ function applyGeneratedModelPolicy(model: ApiModel<Api>): void {
 		model.maxTokens = copilotLimits.maxTokens;
 	}
 
-	if (model.api === "openai-completions" && (model.provider === "minimax-code" || model.provider === "minimax-code-cn")) {
+	if (
+		model.api === "openai-completions" &&
+		(model.provider === "minimax-code" || model.provider === "minimax-code-cn")
+	) {
 		model.compat = {
 			...model.compat,
 			supportsStore: false,
