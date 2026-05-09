@@ -1114,24 +1114,16 @@ export class MCPCommandController {
 
 		let connection: MCPServerConnection | undefined;
 		try {
-			const cwd = getProjectDir();
-			const userPath = getMCPConfigPath("user", cwd);
-			const projectPath = getMCPConfigPath("project", cwd);
+			const found = await this.#findConfiguredServer(name);
 
-			// Find the server config
-			const [userConfig, projectConfig] = await Promise.all([
-				readMCPConfigFile(userPath),
-				readMCPConfigFile(projectPath),
-			]);
-
-			const config = userConfig.mcpServers?.[name] ?? projectConfig.mcpServers?.[name];
-
-			if (!config) {
+			if (!found) {
 				this.ctx.showError(
 					`Server "${name}" not found.\n\nTip: Run ${theme.fg("accent", "/mcp list")} to see available servers.`,
 				);
 				return;
 			}
+
+			const { config } = found;
 			if (config.enabled === false) {
 				this.ctx.showError(`Server "${name}" is disabled. Run /mcp enable ${name} first.`);
 				return;
