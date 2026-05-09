@@ -553,7 +553,7 @@ export class RpcClient {
 			: undefined;
 		if (listener) this.#extensionUiListeners.add(listener);
 		try {
-			const response = await this.#send({ type: "login", providerId });
+			const response = await this.#send({ type: "login", providerId }, 300_000);
 			return this.#getData<{ providerId: string }>(response);
 		} finally {
 			if (listener) this.#extensionUiListeners.delete(listener);
@@ -685,7 +685,7 @@ export class RpcClient {
 		}
 	}
 
-	#send(command: RpcCommandBody): Promise<RpcResponse> {
+	#send(command: RpcCommandBody, timeoutMs = 30_000): Promise<RpcResponse> {
 		if (!this.#process?.stdin) {
 			throw new Error("Client not started");
 		}
@@ -694,7 +694,7 @@ export class RpcClient {
 		const fullCommand = { ...command, id } as RpcCommand;
 		const { promise, resolve, reject } = Promise.withResolvers<RpcResponse>();
 		let settled = false;
-		const timeoutId = this.#startTimeout(30000, () => {
+		const timeoutId = this.#startTimeout(timeoutMs, () => {
 			if (settled) return;
 			this.#pendingRequests.delete(id);
 			settled = true;
