@@ -17,8 +17,8 @@ export function invalidateFsScanAfterDelete(path: string): void {
 /**
  * Invalidate shared filesystem scan caches after a rename/move.
  *
- * Both source and destination paths must be invalidated because cached roots can
- * include either side of the move.
+ * Some watchers care about the disappearance at the old path; others about the
+ * appearance at the new one. Bust both to keep callers honest.
  */
 export function invalidateFsScanAfterRename(oldPath: string, newPath: string): void {
 	invalidateFsScanCache(oldPath);

@@ -8,6 +8,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import { getFileReadCache } from "../edit/file-read-cache";
 import { formatHashLine, formatHashLines, formatLineHash, HL_BODY_SEP } from "../edit/line-hash";
 import { isNotebookPath, readEditableNotebookText } from "../edit/notebook";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -1404,7 +1405,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							? "The file is empty."
 							: `Use :1 to read from the start, or :${totalFileLines} to read the last line.`;
 					return toolResult<ReadToolDetails>({ resolvedPath: absolutePath, suffixResolution })
-						.text(`Line ${requestedStart + 1} is beyond end of file (${totalFileLines} lines total). ${suggestion}`)
+						.text(
+							`Line ${requestedStart + 1} is beyond end of file (${totalFileLines} lines total). ${suggestion}`,
+						)
 						.done();
 				}
 
@@ -1427,6 +1430,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					lastLinePartial: false,
 					firstLineExceedsLimit,
 				};
+
+				if (collectedLines.length > 0 && !firstLineExceedsLimit) {
+					getFileReadCache(this.session).recordContiguous(absolutePath, startLineDisplay, collectedLines);
+				}
 
 				const isRawMode = parsed.kind === "raw";
 				const shouldAddHashLines = !isRawMode && displayMode.hashLines;

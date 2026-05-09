@@ -9,7 +9,9 @@ import {
 	computeLineHash,
 	type ExecuteHashlineSingleOptions,
 	executeHashlineSingle,
+	FileReadCache,
 	generateDiffString,
+	getFileReadCache,
 	HashlineMismatchError,
 	HL_BODY_SEP,
 	HL_BODY_SEP_RE_RAW,
@@ -18,6 +20,7 @@ import {
 	parseHashline,
 	splitHashlineInput,
 	splitHashlineInputs,
+	tryRecoverHashlineWithCache,
 } from "@oh-my-pi/pi-coding-agent/edit";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { Value } from "@sinclair/typebox/value";
@@ -62,13 +65,18 @@ async function withTempDir(fn: (tempDir: string) => Promise<void>): Promise<void
 	}
 }
 
+function makeHashlineSession(tempDir: string, settings = Settings.isolated()): ToolSession {
+	return { cwd: tempDir, settings } as ToolSession;
+}
+
 function hashlineExecuteOptions(
 	tempDir: string,
 	input: string,
 	settings = Settings.isolated(),
+	session: ToolSession = makeHashlineSession(tempDir, settings),
 ): ExecuteHashlineSingleOptions {
 	return {
-		session: { cwd: tempDir, settings } as ToolSession,
+		session,
 		input,
 		writethrough: async (targetPath, content) => {
 			await Bun.write(targetPath, content);
@@ -588,5 +596,168 @@ describe("buildCompactHashlineDiffPreview — anchors track post-edit line numbe
 
 		const removals = preview.preview.split("\n").filter(line => line.startsWith("-"));
 		expect(removals).toEqual([`-2--${outputSep}beta`]);
+	});
+});
+
+describe("hashline — anchor-stale recovery via read snapshot cache", () => {
+	it("recovers when the file was modified out-of-band after a read", async () => {
+		await withTempDir(async tempDir => {
+			const filePath = path.join(tempDir, "a.ts");
+			const v0Lines = ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8"];
+			await Bun.write(filePath, `${v0Lines.join("\n")}\n`);
+
+			const session = makeHashlineSession(tempDir);
+			// Simulate the read tool having shown V0 to the model in this session.
+			getFileReadCache(session).recordContiguous(filePath, 1, v0Lines);
+
+			// External actor (linter, subagent, user) prepends 7 lines. The shift
+			// is past hashline's ±5 anchor rebase window, so anchors authored
+			// against V0 cannot be auto-rebased onto V1.
+			const headerLines = ["H1", "H2", "H3", "H4", "H5", "H6", "H7"];
+			const v1Lines = [...headerLines, ...v0Lines];
+			await Bun.write(filePath, `${v1Lines.join("\n")}\n`);
+
+			// Model authors anchor against V0 — line 2 is "L2" in V0.
+			const input = `@a.ts\n= ${tag(2, "L2")}\n${pl("L2-MODEL")}\n`;
+			const result = await executeHashlineSingle(hashlineExecuteOptions(tempDir, input, undefined, session));
+
+			const finalLines = (await Bun.file(filePath).text()).replace(/\n$/, "").split("\n");
+			// The external prepend AND the model's edit must both be present.
+			expect(finalLines.slice(0, 7)).toEqual(["H1", "H2", "H3", "H4", "H5", "H6", "H7"]);
+			expect(finalLines).toContain("L2-MODEL");
+			expect(finalLines).not.toContain("L2");
+			// Other unchanged lines preserved.
+			expect(finalLines).toContain("L7");
+			expect(finalLines).toContain("L8");
+
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			expect(text).toMatch(/Recovered from stale anchors using a previous read snapshot/);
+		});
+	});
+
+	it("falls back to mismatch error when the cache does not cover the failing anchor", async () => {
+		await withTempDir(async tempDir => {
+			const filePath = path.join(tempDir, "a.ts");
+			const v0Lines = Array.from({ length: 10 }, (_, idx) => `L${idx + 1}`);
+			await Bun.write(filePath, `${v0Lines.join("\n")}\n`);
+
+			const session = makeHashlineSession(tempDir);
+			// Cache only covers the first three lines — but the edit targets line 6.
+			getFileReadCache(session).recordContiguous(filePath, 1, v0Lines.slice(0, 3));
+
+			const v1Lines = [...v0Lines];
+			v1Lines[5] = "L6-CHANGED";
+			await Bun.write(filePath, `${v1Lines.join("\n")}\n`);
+
+			const input = `@a.ts\n= ${tag(6, "L6")}\n${pl("L6-MODEL")}\n`;
+			await expect(
+				executeHashlineSingle(hashlineExecuteOptions(tempDir, input, undefined, session)),
+			).rejects.toThrow(HashlineMismatchError);
+			// Disk content unchanged.
+			expect(await Bun.file(filePath).text()).toBe(`${v1Lines.join("\n")}\n`);
+		});
+	});
+
+	it("returns null from tryRecoverHashlineWithCache when applyPatch cannot land", () => {
+		const cache = new FileReadCache();
+		const fakePath = "/tmp/__hashline-recovery-applypatch__.ts";
+		cache.recordContiguous(fakePath, 1, ["alpha", "beta", "gamma", "delta", "epsilon"]);
+
+		// Live file is completely different — patch context cannot match even
+		// with fuzz tolerance.
+		const currentText = "totally\nunrelated\ncontent\nhere\nnow\n";
+		const edits = parseHashline(`= ${tag(2, "beta")}\n${pl("BETA-MODEL")}`);
+
+		const recovered = tryRecoverHashlineWithCache({
+			cache,
+			absolutePath: fakePath,
+			currentText,
+			edits,
+			options: {},
+		});
+		expect(recovered).toBeNull();
+	});
+
+	it("isolates caches across sessions", () => {
+		const a = new FileReadCache();
+		const b = new FileReadCache();
+		const fakePath = "/tmp/__hashline-cache-isolation__.ts";
+		a.recordContiguous(fakePath, 1, ["x", "y", "z"]);
+		expect(a.get(fakePath)).not.toBeNull();
+		expect(b.get(fakePath)).toBeNull();
+	});
+
+	it("captures the post-edit result so the next edit can recover from anchors against it", async () => {
+		await withTempDir(async tempDir => {
+			const filePath = path.join(tempDir, "a.ts");
+			const v0Lines = ["alpha", "beta", "gamma", "delta", "epsilon"];
+			await Bun.write(filePath, `${v0Lines.join("\n")}\n`);
+
+			const session = makeHashlineSession(tempDir);
+			// Initial read populates the cache with V0.
+			getFileReadCache(session).recordContiguous(filePath, 1, v0Lines);
+
+			// First edit: change line 2 → BETA. After the write, the cache should
+			// reflect V1 (post-edit), not V0.
+			const firstInput = `@a.ts\n= ${tag(2, "beta")}\n${pl("BETA")}\n`;
+			await executeHashlineSingle(hashlineExecuteOptions(tempDir, firstInput, undefined, session));
+			const v1Lines = ["alpha", "BETA", "gamma", "delta", "epsilon"];
+			expect(await Bun.file(filePath).text()).toBe(`${v1Lines.join("\n")}\n`);
+			const snap = getFileReadCache(session).get(filePath);
+			expect(snap?.lines.get(1)).toBe("alpha");
+			expect(snap?.lines.get(2)).toBe("BETA");
+			expect(snap?.lines.get(3)).toBe("gamma");
+
+			// External actor prepends 7 lines after the edit. Anchors authored
+			// against V1 (the post-edit state the model just observed) cannot
+			// auto-rebase past the ±5 window — recovery must consult the cached
+			// V1 snapshot to land the second edit.
+			const v2Lines = ["H1", "H2", "H3", "H4", "H5", "H6", "H7", ...v1Lines];
+			await Bun.write(filePath, `${v2Lines.join("\n")}\n`);
+
+			const secondInput = `@a.ts\n= ${tag(3, "gamma")}\n${pl("GAMMA")}\n`;
+			const result = await executeHashlineSingle(hashlineExecuteOptions(tempDir, secondInput, undefined, session));
+
+			const finalLines = (await Bun.file(filePath).text()).replace(/\n$/, "").split("\n");
+			expect(finalLines.slice(0, 7)).toEqual(["H1", "H2", "H3", "H4", "H5", "H6", "H7"]);
+			expect(finalLines).toContain("BETA");
+			expect(finalLines).toContain("GAMMA");
+			expect(finalLines).not.toContain("gamma");
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			expect(text).toMatch(/Recovered from stale anchors using a previous read snapshot/);
+		});
+	});
+
+	it("drops a cached entry when newly recorded lines disagree on overlap", () => {
+		const cache = new FileReadCache();
+		const fakePath = "/tmp/__hashline-cache-conflict__.ts";
+		cache.recordContiguous(fakePath, 1, ["a", "b", "c", "d", "e"]);
+		cache.recordSparse(fakePath, [
+			[3, "c"],
+			[4, "D-CHANGED"],
+			[5, "e"],
+			[6, "f"],
+			[7, "g"],
+		]);
+
+		const snap = cache.get(fakePath);
+		expect(snap).not.toBeNull();
+		// Old entries dropped; only the divergent record's entries remain.
+		expect(snap?.lines.has(1)).toBe(false);
+		expect(snap?.lines.has(2)).toBe(false);
+		expect(snap?.lines.get(4)).toBe("D-CHANGED");
+		expect(snap?.lines.get(7)).toBe("g");
+	});
+
+	it("evicts old paths past the per-session LRU cap", () => {
+		const cache = new FileReadCache();
+		// Cap is 30 paths. Insert 32 distinct paths; the oldest two must evict.
+		for (let i = 0; i < 32; i++) {
+			cache.recordContiguous(`/tmp/file-${i}.ts`, 1, ["x"]);
+		}
+		expect(cache.get("/tmp/file-0.ts")).toBeNull();
+		expect(cache.get("/tmp/file-1.ts")).toBeNull();
+		expect(cache.get("/tmp/file-2.ts")).not.toBeNull();
+		expect(cache.get("/tmp/file-31.ts")).not.toBeNull();
 	});
 });

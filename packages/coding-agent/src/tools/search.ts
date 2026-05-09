@@ -6,6 +6,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import { getFileReadCache } from "../edit/file-read-cache";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import searchDescription from "../prompts/tools/search.md" with { type: "text" };
@@ -345,26 +346,31 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					}
 					return nextWidth;
 				}, 0);
+				const cacheEntries: Array<readonly [number, string]> = [];
 				for (const match of fileMatches) {
-					const pushLine = (lineNumber: number, line: string, isMatch: boolean) => {
+					const pushLine = (lineNumber: number, line: string, isMatch: boolean, recordable: boolean) => {
 						modelOut.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
 						displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
+						if (recordable) cacheEntries.push([lineNumber, line] as const);
 					};
 					if (match.contextBefore) {
 						for (const ctx of match.contextBefore) {
-							pushLine(ctx.lineNumber, ctx.line, false);
+							pushLine(ctx.lineNumber, ctx.line, false, true);
 						}
 					}
-					pushLine(match.lineNumber, match.line, true);
+					pushLine(match.lineNumber, match.line, true, !match.truncated);
 					if (match.truncated) {
 						linesTruncated = true;
 					}
 					if (match.contextAfter) {
 						for (const ctx of match.contextAfter) {
-							pushLine(ctx.lineNumber, ctx.line, false);
+							pushLine(ctx.lineNumber, ctx.line, false, true);
 						}
 					}
 					fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
+				}
+				if (cacheEntries.length > 0) {
+					getFileReadCache(this.session).recordSparse(path.resolve(searchPath, relativePath), cacheEntries);
 				}
 				return { model: modelOut, display: displayOut };
 			};
