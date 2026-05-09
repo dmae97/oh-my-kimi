@@ -23,6 +23,21 @@ Purely textual format. The tool has NO awareness of language, indentation, brack
 - Pick the smallest op for the change: pure addition → `+`/`<`; pure deletion → `-`; `= A..B` ONLY when content inside `A..B` is actually being modified or removed.
 </rules>
 
+<brace-shapes>
+When your edit involves brace boundaries (`{` / `}`), prefer these shapes:
+- **Whole block replace/delete**: pick the range so it spans both halves of the brace pair — start on the line that ends with `{`, end on the matching `}`. For pure removal use `-` with empty payload; for replacement, the payload's first line ends with `{` and last line is the matching `}`.
+- **Signature-only edit**: if you are only changing the line that ends with `{` (function signature, control statement, etc.), use a one-line `=` on that opener; the body and matching `}` are untouched and stay outside the range.
+- **Insert inside a block**: anchor on the opener (`+ ANCHOR` after the `{` line) or just above the closer (`+ ANCHOR` after the last interior line); emit only the new interior lines. Do not include the surrounding `{` or `}` in the payload — they're already there.
+- **Range ending on `}`**: only end on `}` when that `}` is itself part of what you're changing. The line at B+1 should be blank, an opener (next block), or a signature — not another `}`. Otherwise extend B past the closer or stop one line earlier.
+</brace-shapes>
+
+<common-failures>
+- **Do not replay the line past your range.** For `= A..B`, never end the payload with content that already exists at B+1. Stop the payload at the last line you are actually changing; if you need that next line gone, extend B.
+- **Do not duplicate chunks inside one payload.** When emitting a long `=` payload, never paste the same multi-line block twice. If you catch yourself re-emitting an earlier run of lines, stop and rewrite the op.
+- **Anchor only inside the visible region.** If the read output around your `=`/`-` end anchor is truncated (you cannot see the line at B+1), issue a fresh `read` before editing — anchoring blind drops or duplicates the boundary line.
+- **Prefer narrow ops over wide `=`.** A `+`/`<` insert plus a small `-` delete is almost always clearer and safer than a single wide `= A..B` that re-emits unchanged context.
+</common-failures>
+
 <case file="a.ts">
 {{hline 1 "const DEF = \"guest\";"}}
 {{hline 2 ""}}
@@ -73,16 +88,15 @@ Purely textual format. The tool has NO awareness of language, indentation, brack
 </examples>
 
 <anti-pattern>
-# WRONG — replaces 6 lines just to add one. Use `+` at the boundary instead.
+# WRONG — replaces 5 lines just to add one. Use `+` at the boundary instead.
 @a.ts
-= {{hrefr 1}}..{{hrefr 6}}
+= {{hrefr 1}}..{{hrefr 5}}
 {{hsep}}const DEF = "guest";
 {{hsep}}const DEBUG = false;
 {{hsep}}
 {{hsep}}export function label(name) {
 {{hsep}}	const clean = name || DEF;
 {{hsep}}	return clean.trim();
-{{hsep}}}
 
 # RIGHT — same effect, one-line insert
 @a.ts
