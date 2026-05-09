@@ -68,6 +68,37 @@ function rewriteLegacyPiImports(source: string): string {
 	);
 }
 
+// Match `from "..."`, `from '...'`, `import("...")`, `import('...')` import specifiers.
+const ANY_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s*\(\s*)["'])([^"']+)(["'])/g;
+
+/**
+ * Resolves bare module specifiers in a legacy-namespaced extension source file
+ * to absolute paths anchored at the extension's own directory. Without this,
+ * imports inside files loaded via the `omp-legacy-pi-file:` namespace bypass
+ * Node-style node_modules lookup, so an extension cannot use its own deps.
+ * Relative paths and already-resolved absolute paths are left untouched.
+ */
+function rewriteBareImportsForLegacyExtension(source: string, importerPath: string): string {
+	const importerDir = path.dirname(importerPath);
+	return source.replace(ANY_IMPORT_SPECIFIER_REGEX, (match, prefix: string, specifier: string, suffix: string) => {
+		// Skip relative, absolute, URL-style, and already-resolved Node specifiers.
+		if (
+			specifier.startsWith(".") ||
+			specifier.startsWith("/") ||
+			specifier.startsWith("node:") ||
+			specifier.includes("://")
+		) {
+			return match;
+		}
+		try {
+			const resolved = Bun.resolveSync(specifier, importerDir);
+			return `${prefix}${resolved}${suffix}`;
+		} catch {
+			return match;
+		}
+	});
+}
+
 function getLoader(path: string): "js" | "jsx" | "ts" | "tsx" {
 	if (path.endsWith(".tsx")) {
 		return "tsx";
@@ -117,10 +148,19 @@ export function installLegacyPiSpecifierShim(): void {
 				namespace: LEGACY_PI_FILE_NAMESPACE,
 			}));
 
-			build.onLoad({ filter: /\.[cm]?[jt]sx?$/, namespace: LEGACY_PI_FILE_NAMESPACE }, async args => ({
-				contents: rewriteLegacyPiImports(await Bun.file(args.path).text()),
-				loader: getLoader(args.path),
-			}));
+			build.onLoad({ filter: /\.[cm]?[jt]sx?$/, namespace: LEGACY_PI_FILE_NAMESPACE }, async args => {
+				const raw = await Bun.file(args.path).text();
+				// Bare specifiers (e.g. "lodash", "@scope/pkg/sub") imported from a legacy-namespaced
+				// extension file would otherwise bypass Node-style node_modules lookup because the
+				// importer lives in a custom namespace. Pre-resolve them to absolute paths so the
+				// extension's own node_modules are honored.
+				const withLegacyRemap = rewriteLegacyPiImports(raw);
+				const withBareResolved = rewriteBareImportsForLegacyExtension(withLegacyRemap, args.path);
+				return {
+					contents: withBareResolved,
+					loader: getLoader(args.path),
+				};
+			});
 		},
 	});
 }

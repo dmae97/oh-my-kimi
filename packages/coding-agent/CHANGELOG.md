@@ -7,6 +7,10 @@
 
 - Added hashline stale-anchor recovery by replaying edits against a session-scoped `read`/`search` snapshot and 3-way-merging them onto the current file when anchors no longer match
 
+### Fixed
+
+- Fixed legacy pi extensions failing to import their own bare-specifier dependencies (e.g. `import x from "pkg"`): files loaded via the `omp-legacy-pi-file:` namespace now pre-resolve bare imports against the extension's directory so the extension's own `node_modules` is honored.
+
 ### Changed
 
 - Changed hashline success output to include a warning when stale-anchor recovery is used
