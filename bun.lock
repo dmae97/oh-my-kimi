@@ -62,6 +62,7 @@
       },
       "dependencies": {
         "@agentclientprotocol/sdk": "catalog:",
+        "@babel/parser": "catalog:",
         "@mozilla/readability": "catalog:",
         "@oh-my-pi/omp-stats": "catalog:",
         "@oh-my-pi/pi-agent-core": "catalog:",

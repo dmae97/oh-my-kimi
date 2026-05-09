@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import * as util from "node:util";
 import * as vm from "node:vm";
 
+import { parse as babelParse } from "@babel/parser";
 import * as Diff from "diff";
 import type { ToolSession } from "../../tools";
 import { ToolError } from "../../tools/tool-errors";
@@ -488,65 +489,108 @@ function buildRequire(cwd: string): NodeJS.Require {
 	return createRequire(pathToFileURL(path.join(cwd, "[eval]")).href);
 }
 
-// Static `import ... from "x"` is not valid inside vm.runInContext. Rewrite the common
-// forms to dynamic `await import(...)` so users can paste ESM-style imports verbatim.
-const STATIC_IMPORT_RE = /^[ \t]*import\b(?:[ \t]+([^'"\n]+?)[ \t]+from)?[ \t]*(['"])([^'"\n]+)\2[ \t]*;?[ \t]*$/gm;
+// Static `import ... from "x"` is not valid inside vm.runInContext (script-mode parsing).
+// Rewrite top-level static imports to dynamic `await import(...)` so users can paste ESM
+// source verbatim. We use a real parser instead of regex matching so imports embedded in
+// string literals, template literals, or comments — common in codemods — stay intact.
 
-function splitTopLevel(clause: string): string[] {
-	const out: string[] = [];
-	let depth = 0;
-	let buf = "";
-	for (const ch of clause) {
-		if (ch === "{") depth++;
-		else if (ch === "}") depth--;
-		if (ch === "," && depth === 0) {
-			if (buf.trim()) out.push(buf.trim());
-			buf = "";
-		} else {
-			buf += ch;
-		}
-	}
-	if (buf.trim()) out.push(buf.trim());
-	return out;
+type BabelImportDeclaration = {
+	type: "ImportDeclaration";
+	start: number;
+	end: number;
+	source: { value: string };
+	specifiers: ReadonlyArray<{
+		type: "ImportDefaultSpecifier" | "ImportNamespaceSpecifier" | "ImportSpecifier";
+		local: { name: string };
+		imported?: { type: "Identifier"; name: string } | { type: "StringLiteral"; value: string };
+	}>;
+	attributes?: ReadonlyArray<{
+		key: { type: "Identifier"; name: string } | { type: "StringLiteral"; value: string };
+		value: { value: string };
+	}>;
+};
+
+function buildDynamicImportCall(sourceLiteral: string, withClause: string | undefined): string {
+	return withClause ? `import(${sourceLiteral}, { with: ${withClause} })` : `import(${sourceLiteral})`;
 }
 
-function rewriteImportClause(clause: string, sourceLiteral: string): string {
+function buildWithClause(node: BabelImportDeclaration): string | undefined {
+	const attrs = node.attributes;
+	if (!attrs || attrs.length === 0) return undefined;
+	const pairs = attrs.map(attr => {
+		const key = attr.key.type === "Identifier" ? attr.key.name : JSON.stringify(attr.key.value);
+		return `${key}: ${JSON.stringify(attr.value.value)}`;
+	});
+	return `{ ${pairs.join(", ")} }`;
+}
+
+function rewriteImportNode(node: BabelImportDeclaration): string {
+	const sourceLiteral = JSON.stringify(node.source.value);
+	const withClause = buildWithClause(node);
+	const importCall = buildDynamicImportCall(sourceLiteral, withClause);
+
 	let defaultName: string | undefined;
 	let namespaceName: string | undefined;
-	let namedBlock: string | undefined;
-	for (const part of splitTopLevel(clause)) {
-		if (part.startsWith("{")) {
-			namedBlock = part;
-		} else if (part.startsWith("*")) {
-			const m = part.match(/^\*\s+as\s+([A-Za-z_$][\w$]*)$/);
-			if (!m) return `await import(${sourceLiteral}); /* unrewritten import: ${clause} */`;
-			namespaceName = m[1];
-		} else if (/^[A-Za-z_$][\w$]*$/.test(part)) {
-			defaultName = part;
-		} else {
-			return `await import(${sourceLiteral}); /* unrewritten import: ${clause} */`;
+	const namedPairs: Array<[string, string]> = [];
+	for (const spec of node.specifiers) {
+		if (spec.type === "ImportDefaultSpecifier") {
+			defaultName = spec.local.name;
+		} else if (spec.type === "ImportNamespaceSpecifier") {
+			namespaceName = spec.local.name;
+		} else if (spec.type === "ImportSpecifier" && spec.imported) {
+			const imported = spec.imported.type === "Identifier" ? spec.imported.name : spec.imported.value;
+			namedPairs.push([imported, spec.local.name]);
 		}
 	}
-	if (namedBlock) {
-		const inner = namedBlock.slice(1, -1).trim();
-		const renamed = inner.replace(/([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)/g, "$1: $2");
-		const props = defaultName ? `default: ${defaultName}, ${renamed}` : renamed;
-		return `const { ${props} } = await import(${sourceLiteral});`;
+
+	if (namedPairs.length > 0) {
+		const inner = namedPairs.map(([imp, loc]) => (imp === loc ? imp : `${imp}: ${loc}`)).join(", ");
+		const props = defaultName ? `default: ${defaultName}, ${inner}` : inner;
+		return `const { ${props} } = await ${importCall};`;
 	}
 	if (namespaceName && defaultName) {
-		return `const ${namespaceName} = await import(${sourceLiteral}); const ${defaultName} = ${namespaceName}.default;`;
+		return `const ${namespaceName} = await ${importCall}; const ${defaultName} = ${namespaceName}.default;`;
 	}
-	if (namespaceName) return `const ${namespaceName} = await import(${sourceLiteral});`;
-	if (defaultName) return `const ${defaultName} = (await import(${sourceLiteral})).default;`;
-	return `await import(${sourceLiteral});`;
+	if (namespaceName) return `const ${namespaceName} = await ${importCall};`;
+	if (defaultName) return `const ${defaultName} = (await ${importCall}).default;`;
+	return `await ${importCall};`;
 }
 
 export function rewriteStaticImports(code: string): string {
-	return code.replace(STATIC_IMPORT_RE, (_match, clause: string | undefined, _quote, source: string) => {
-		const literal = JSON.stringify(source);
-		if (!clause) return `await import(${literal});`;
-		return rewriteImportClause(clause.trim(), literal);
-	});
+	if (!code.includes("import")) return code;
+
+	let ast: { program: { body: ReadonlyArray<{ type: string }> } };
+	try {
+		ast = babelParse(code, {
+			sourceType: "module",
+			allowAwaitOutsideFunction: true,
+			allowReturnOutsideFunction: true,
+			allowImportExportEverywhere: true,
+			allowNewTargetOutsideFunction: true,
+			allowSuperOutsideMethod: true,
+			allowUndeclaredExports: true,
+			errorRecovery: true,
+		}) as unknown as typeof ast;
+	} catch {
+		// Parser bailed entirely — let the VM surface the real syntax error.
+		return code;
+	}
+
+	// Only rewrite top-level imports. Anything nested deeper is invalid JS anyway and the
+	// VM will report it.
+	const imports: BabelImportDeclaration[] = [];
+	for (const node of ast.program.body) {
+		if (node.type === "ImportDeclaration") imports.push(node as unknown as BabelImportDeclaration);
+	}
+	if (imports.length === 0) return code;
+
+	// Splice from the back so earlier offsets stay valid.
+	imports.sort((a, b) => b.start - a.start);
+	let result = code;
+	for (const node of imports) {
+		result = result.slice(0, node.start) + rewriteImportNode(node) + result.slice(node.end);
+	}
+	return result;
 }
 
 function wrapCode(code: string): { source: string; asyncWrapped: boolean } {
