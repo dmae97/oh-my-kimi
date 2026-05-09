@@ -8,7 +8,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getPluginsLockfile, getPluginsNodeModules, getPluginsPackageJson, isEnoent } from "@oh-my-pi/pi-utils";
 import { getConfigDirPaths } from "../../config";
+import { installLegacyPiSpecifierShim } from "./legacy-pi-compat";
 import type { InstalledPlugin, PluginManifest, PluginRuntimeConfig, ProjectPluginOverrides } from "./types";
+
+installLegacyPiSpecifierShim();
 
 // =============================================================================
 // Runtime Config Loading
@@ -41,11 +44,6 @@ async function loadProjectOverrides(cwd: string): Promise<ProjectPluginOverrides
 	}
 	return {};
 }
-
-// =============================================================================
-// Plugin Discovery
-// =============================================================================
-
 /**
  * Get list of enabled plugins with their resolved configurations.
  * Respects both global runtime config and project overrides.
@@ -69,7 +67,6 @@ export async function getEnabledPlugins(cwd: string): Promise<InstalledPlugin[]>
 	const runtimeConfig = await loadRuntimeConfig();
 	const projectOverrides = await loadProjectOverrides(cwd);
 	const plugins: InstalledPlugin[] = [];
-
 	for (const [name] of Object.entries(deps)) {
 		const pluginPkgPath = path.join(nodeModulesPath, name, "package.json");
 		let pluginPkg: { version: string; omp?: PluginManifest; pi?: PluginManifest };
@@ -103,7 +100,6 @@ export async function getEnabledPlugins(cwd: string): Promise<InstalledPlugin[]>
 
 		// Resolve enabled features (project overrides take precedence)
 		const enabledFeatures = projectOverrides.features?.[name] ?? runtimeState?.enabledFeatures ?? null;
-
 		plugins.push({
 			name,
 			version: pluginPkg.version,
