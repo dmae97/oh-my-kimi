@@ -75,7 +75,9 @@ function rewriteLegacyPiImports(source: string): string {
 	);
 }
 
-// Match `from "..."`, `from '...'`, `import("...")`, `import('...')` import specifiers.
+// Match static `from "..."` / `from '...'` import specifiers.
+const STATIC_IMPORT_SPECIFIER_REGEX = /(from\s+["'])([^"']+)(["'])/g;
+// Match static imports plus dynamic `import("...")` / `import('...')` specifiers.
 const ANY_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s*\(\s*)["'])([^"']+)(["'])/g;
 
 /** Resolve bare imports against the extension directory before loading mirrored legacy Pi files. */
@@ -125,7 +127,7 @@ async function rewriteRelativeImportsForLegacyExtension(
 ): Promise<string> {
 	const replacements = new Map<string, string>();
 
-	for (const match of source.matchAll(ANY_IMPORT_SPECIFIER_REGEX)) {
+	for (const match of source.matchAll(STATIC_IMPORT_SPECIFIER_REGEX)) {
 		const specifier = match[2];
 		if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
 			continue;
@@ -140,7 +142,7 @@ async function rewriteRelativeImportsForLegacyExtension(
 		return source;
 	}
 
-	return source.replace(ANY_IMPORT_SPECIFIER_REGEX, (match, prefix: string, specifier: string, suffix: string) => {
+	return source.replace(STATIC_IMPORT_SPECIFIER_REGEX, (match, prefix: string, specifier: string, suffix: string) => {
 		const replacement = replacements.get(specifier);
 		return replacement ? `${prefix}${replacement}${suffix}` : match;
 	});

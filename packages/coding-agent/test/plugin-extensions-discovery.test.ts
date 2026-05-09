@@ -106,6 +106,7 @@ describe("plugin extension discovery", () => {
 			extensionPath,
 			[
 				'import * as nodePath from "path";',
+				'if (false) import("./optional-missing.js");',
 				'import { isToolCallEventType as legacyRoot } from "@mariozechner/pi-coding-agent";',
 				'import { isToolCallEventType as legacyExtensions } from "@mariozechner/pi-coding-agent/extensibility/extensions";',
 				`import { isToolCallEventType as modernRoot } from ${JSON.stringify(currentPiCodingAgentPath)};`,
