@@ -553,7 +553,7 @@ export class RpcClient {
 			: undefined;
 		if (listener) this.#extensionUiListeners.add(listener);
 		try {
-			const response = await this.#send({ type: "login", providerId }, 300_000);
+			const response = await this.#send({ type: "login", providerId }, 600_000);
 			return this.#getData<{ providerId: string }>(response);
 		} finally {
 			if (listener) this.#extensionUiListeners.delete(listener);
