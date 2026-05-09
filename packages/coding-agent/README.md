@@ -12,6 +12,7 @@ Package-specific references:
 - [MCP runtime lifecycle](../../docs/mcp-runtime-lifecycle.md)
 - [MCP server/tool authoring](../../docs/mcp-server-tool-authoring.md)
 - [DEVELOPMENT](./DEVELOPMENT.md)
+- [RenderMermaid guide](../../docs/render-mermaid.md)
 
 ## Memory backends
 
