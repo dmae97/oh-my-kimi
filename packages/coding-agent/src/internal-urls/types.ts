@@ -6,7 +6,9 @@
  */
 
 /**
- * Resolved internal resource returned by protocol handlers.
+ * Raw resource payload returned by protocol handlers. The `immutable` flag is
+ * applied by the router from {@link ProtocolHandler.immutable}, so handlers do
+ * not need to set it themselves.
  */
 export interface InternalResource {
 	/** Canonical URL that was resolved */
@@ -21,6 +23,13 @@ export interface InternalResource {
 	sourcePath?: string;
 	/** Additional notes about resolution */
 	notes?: string[];
+	/**
+	 * True when the resolved content cannot be edited by the agent (e.g. sealed
+	 * artifacts, harness docs, machine-generated memory summaries). Hashline
+	 * anchors and similar edit affordances are suppressed for immutable
+	 * resources. Mutable resources (e.g. local://) behave like editable files.
+	 */
+	immutable?: boolean;
 }
 
 /**
@@ -44,7 +53,14 @@ export interface ProtocolHandler {
 	/** The scheme this handler processes (without trailing ://) */
 	readonly scheme: string;
 	/**
-	 * Resolve an internal URL to its content.
+	 * Whether resources produced by this handler are immutable (cannot be
+	 * edited by the agent). When true, callers suppress hashline anchors and
+	 * other edit affordances. When false, resources behave like editable files.
+	 */
+	readonly immutable: boolean;
+	/**
+	 * Resolve an internal URL to its content. The router stamps the
+	 * {@link InternalResource.immutable} flag from {@link ProtocolHandler.immutable}.
 	 * @param url Parsed URL object
 	 * @throws Error with user-friendly message if resolution fails
 	 */

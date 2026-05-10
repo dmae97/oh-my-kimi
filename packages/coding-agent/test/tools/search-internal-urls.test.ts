@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ArtifactProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/artifact-protocol";
+import { LocalProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
@@ -87,6 +88,7 @@ describe("SearchTool internal URL resolution", () => {
 		const router = new InternalUrlRouter();
 		router.register({
 			scheme: "agent",
+			immutable: true,
 			async resolve() {
 				return {
 					url: "agent://0",
@@ -152,6 +154,52 @@ describe("SearchTool internal URL resolution", () => {
 		expect(text).toContain("needle");
 		// No hashline anchors (LINE+ID|content) for immutable sources
 		expect(text).not.toMatch(/^\*?\s*\d+[a-z]{2}\|/m);
+	});
+
+	it("keeps hashline anchors when searching mutable local:// sources", async () => {
+		const localRoot = path.join(artifactsDir, "local");
+		await fs.mkdir(localRoot, { recursive: true });
+		await Bun.write(path.join(localRoot, "plan.md"), "alpha line\nbeta needle line\ngamma line\n");
+
+		const router = new InternalUrlRouter();
+		router.register(
+			new LocalProtocolHandler({
+				getArtifactsDir: () => artifactsDir,
+				getSessionId: () => "session",
+			}),
+		);
+		const session = createSession({ internalRouter: router, hasEditTool: true });
+		const tool = new SearchTool(session);
+
+		const result = await tool.execute("test-call", {
+			pattern: "needle",
+			paths: ["local://plan.md"],
+		});
+
+		const text = getResultText(result);
+		expect(text).toContain("needle");
+		// Hashline anchor (LINE+ID|content) is kept for mutable local:// sources
+		expect(text).toMatch(/^\*?\s*\d+[a-z]{2}\|/m);
+	});
+
+	it("keeps hashlines on mutable files when mixed with immutable artifact:// inputs", async () => {
+		const content = "alpha line\nbeta needle line\ngamma line\n";
+		await Bun.write(path.join(artifactsDir, "11.bash.log"), content);
+		await Bun.write(path.join(tmpDir, "mixed.txt"), "mixed needle line\n");
+
+		const router = createRouterWithArtifacts();
+		const session = createSession({ internalRouter: router, hasEditTool: true });
+		const tool = new SearchTool(session);
+
+		const result = await tool.execute("test-call", {
+			pattern: "needle",
+			paths: ["artifact://11", "mixed.txt"],
+		});
+
+		const text = getResultText(result);
+		expect(text).toContain("needle");
+		// Mutable mixed.txt keeps hashlines somewhere in the output
+		expect(text).toMatch(/^\*?\s*\d+[a-z]{2}\|.*mixed needle/m);
 	});
 
 	it("throws on nonexistent artifact ID", async () => {

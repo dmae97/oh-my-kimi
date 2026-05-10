@@ -106,6 +106,7 @@ function formatAvailableResources(mcpManager: MCPManager): string {
  */
 export class McpProtocolHandler implements ProtocolHandler {
 	readonly scheme = "mcp";
+	readonly immutable = true;
 
 	constructor(private readonly options: McpProtocolOptions) {}
 

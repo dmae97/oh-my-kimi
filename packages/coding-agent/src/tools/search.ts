@@ -121,7 +121,6 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			const patternHasNewline = normalizedPattern.includes("\n") || normalizedPattern.includes("\\n");
 			const effectiveMultiline = patternHasNewline;
 
-			let hasImmutableInput = false;
 			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
 			let searchPath: string;
 			let scopePath: string;
@@ -134,12 +133,15 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			}
 			const internalRouter = this.session.internalRouter;
 			const resolvedPathInputs: string[] = [];
+			// Absolute filesystem paths whose source is immutable (e.g. artifact://,
+			// pi://, skill://). Hashline anchors are suppressed for these on a
+			// per-file basis, leaving editable mixed-in files untouched.
+			const immutableSourcePaths = new Set<string>();
 			for (const rawPath of rawPaths) {
 				if (!internalRouter?.canHandle(rawPath)) {
 					resolvedPathInputs.push(rawPath);
 					continue;
 				}
-				hasImmutableInput = true;
 				if (hasGlobPathChars(rawPath)) {
 					throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
 				}
@@ -147,9 +149,13 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				if (!resource.sourcePath) {
 					throw new ToolError(`Cannot search internal URL without a backing file: ${rawPath}`);
 				}
+				if (resource.immutable) {
+					immutableSourcePaths.add(path.resolve(resource.sourcePath));
+				}
 				resolvedPathInputs.push(resource.sourcePath);
 			}
-			const useHashLines = resolveFileDisplayMode(this.session, { immutable: hasImmutableInput }).hashLines;
+			const baseDisplayMode = resolveFileDisplayMode(this.session);
+			const immutableDisplayMode = resolveFileDisplayMode(this.session, { immutable: true });
 			// Tolerate missing entries in a multi-path call: skip ones whose base
 			// directory is gone, and only error if every entry is missing. Single
 			// missing path keeps the original ENOENT semantics.
@@ -338,6 +344,10 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				const modelOut: string[] = [];
 				const displayOut: string[] = [];
 				const fileMatches = matchesByFile.get(relativePath) ?? [];
+				const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
+				const useHashLines = immutableSourcePaths.has(absoluteFilePath)
+					? immutableDisplayMode.hashLines
+					: baseDisplayMode.hashLines;
 				const lineNumberWidth = fileMatches.reduce((width, match) => {
 					let nextWidth = Math.max(width, String(match.lineNumber).length);
 					for (const ctx of match.contextBefore ?? []) {

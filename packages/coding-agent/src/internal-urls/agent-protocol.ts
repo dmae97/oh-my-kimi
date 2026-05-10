@@ -42,6 +42,7 @@ async function listAvailableOutputs(artifactsDir: string): Promise<string[]> {
  */
 export class AgentProtocolHandler implements ProtocolHandler {
 	readonly scheme = "agent";
+	readonly immutable = true;
 
 	constructor(private readonly options: AgentProtocolOptions) {}
 

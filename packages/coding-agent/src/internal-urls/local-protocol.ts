@@ -141,6 +141,7 @@ export function resolveLocalUrlToPath(input: string | InternalUrl, options: Loca
  */
 export class LocalProtocolHandler implements ProtocolHandler {
 	readonly scheme = "local";
+	readonly immutable = false;
 
 	constructor(private readonly options: LocalProtocolOptions) {}
 

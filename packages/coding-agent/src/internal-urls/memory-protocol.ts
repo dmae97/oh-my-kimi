@@ -70,6 +70,7 @@ export function resolveMemoryUrlToPath(url: InternalUrl, memoryRoot: string): st
  */
 export class MemoryProtocolHandler implements ProtocolHandler {
 	readonly scheme = "memory";
+	readonly immutable = true;
 
 	constructor(private readonly options: MemoryProtocolOptions) {}
 

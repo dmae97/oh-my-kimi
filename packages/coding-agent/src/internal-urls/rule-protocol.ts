@@ -23,6 +23,7 @@ export interface RuleProtocolOptions {
  */
 export class RuleProtocolHandler implements ProtocolHandler {
 	readonly scheme = "rule";
+	readonly immutable = true;
 
 	constructor(private readonly options: RuleProtocolOptions) {}
 

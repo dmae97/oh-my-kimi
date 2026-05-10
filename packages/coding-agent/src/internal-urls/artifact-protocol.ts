@@ -44,6 +44,7 @@ async function listAvailableArtifacts(artifactsDir: string): Promise<string[]> {
  */
 export class ArtifactProtocolHandler implements ProtocolHandler {
 	readonly scheme = "artifact";
+	readonly immutable = true;
 
 	constructor(private readonly options: ArtifactProtocolOptions) {}
 

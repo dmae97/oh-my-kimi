@@ -49,6 +49,7 @@ export class InternalUrlRouter {
 			throw new Error(`Unknown protocol: ${scheme}://\nSupported: ${available || "none"}`);
 		}
 
-		return handler.resolve(parsed as InternalUrl);
+		const resource = await handler.resolve(parsed as InternalUrl);
+		return { ...resource, immutable: resource.immutable ?? handler.immutable };
 	}
 }

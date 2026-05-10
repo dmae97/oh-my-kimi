@@ -24,7 +24,7 @@ function createInternalRouter(resources: Record<string, { sourcePath?: string; e
 	canHandle: (input: string) => boolean;
 	resolve: (
 		input: string,
-	) => Promise<{ url: string; content: string; contentType: "text/plain"; sourcePath?: string }>;
+	) => Promise<{ url: string; content: string; contentType: "text/plain"; sourcePath?: string; immutable: boolean }>;
 } {
 	return {
 		canHandle: input => /^(agent|artifact|plan|memory|rule):\/\//.test(input),
@@ -41,6 +41,7 @@ function createInternalRouter(resources: Record<string, { sourcePath?: string; e
 				content: "",
 				contentType: "text/plain",
 				sourcePath: entry.sourcePath,
+				immutable: true,
 			};
 		},
 	};

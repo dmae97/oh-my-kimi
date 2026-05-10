@@ -24,6 +24,7 @@ function normalizeJobId(url: InternalUrl): string {
 
 export class JobsProtocolHandler implements ProtocolHandler {
 	readonly scheme = "jobs";
+	readonly immutable = true;
 
 	constructor(private readonly options: JobsProtocolOptions) {}
 
