@@ -394,6 +394,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.addChild(new Spacer(1));
 			this.ui.addChild(this.#welcomeComponent);
 			this.ui.addChild(new Spacer(1));
+			this.#welcomeComponent.playIntro(() => this.ui.requestRender());
 
 			// Add changelog if provided
 			if (this.#changelogMarkdown) {
