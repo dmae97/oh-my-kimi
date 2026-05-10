@@ -431,7 +431,7 @@ function prependSuffixResolutionNotice(text: string, suffixResolution?: { from: 
 const readSchema = Type.Object({
 	path: Type.String({
 		description: 'path or url; append :<sel> for line ranges or raw mode (e.g. "src/foo.ts:50-100")',
-		examples: ["src/foo.ts", "src/foo.ts:50-100", "https://example.com:L1-L40"],
+		examples: ["src/foo.ts", "src/foo.ts:50-100", "https://example.com/:1-40"],
 	}),
 });
 
