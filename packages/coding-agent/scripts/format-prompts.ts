@@ -16,9 +16,9 @@ import { prompt } from "@oh-my-pi/pi-utils";
  */
 import { Glob } from "bun";
 
-const PROMPTS_DIR = import.meta.dir + "/../src/prompts/";
-const COMMIT_PROMPTS_DIR = import.meta.dir + "/../src/commit/prompts/";
-const AGENTIC_PROMPTS_DIR = import.meta.dir + "/../src/commit/agentic/prompts/";
+const PROMPTS_DIR = `${import.meta.dir}/../src/prompts/`;
+const COMMIT_PROMPTS_DIR = `${import.meta.dir}/../src/commit/prompts/`;
+const AGENTIC_PROMPTS_DIR = `${import.meta.dir}/../src/commit/agentic/prompts/`;
 
 const PROMPT_DIRS = [PROMPTS_DIR, COMMIT_PROMPTS_DIR, AGENTIC_PROMPTS_DIR];
 
