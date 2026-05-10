@@ -135,6 +135,25 @@ describe("SearchTool internal URL resolution", () => {
 		expect(text).toContain("data");
 	});
 
+	it("suppresses hashline anchors when searching immutable artifact:// sources", async () => {
+		const content = "alpha line\nbeta needle line\ngamma line\n";
+		await Bun.write(path.join(artifactsDir, "9.bash.log"), content);
+
+		const router = createRouterWithArtifacts();
+		const session = createSession({ internalRouter: router, hasEditTool: true });
+		const tool = new SearchTool(session);
+
+		const result = await tool.execute("test-call", {
+			pattern: "needle",
+			paths: ["artifact://9"],
+		});
+
+		const text = getResultText(result);
+		expect(text).toContain("needle");
+		// No hashline anchors (LINE+ID|content) for immutable sources
+		expect(text).not.toMatch(/^\*?\s*\d+[a-z]{2}\|/m);
+	});
+
 	it("throws on nonexistent artifact ID", async () => {
 		const router = createRouterWithArtifacts();
 		const session = createSession({ internalRouter: router });

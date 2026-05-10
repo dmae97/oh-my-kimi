@@ -121,7 +121,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			const patternHasNewline = normalizedPattern.includes("\n") || normalizedPattern.includes("\\n");
 			const effectiveMultiline = patternHasNewline;
 
-			const useHashLines = resolveFileDisplayMode(this.session).hashLines;
+			let hasImmutableInput = false;
 			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
 			let searchPath: string;
 			let scopePath: string;
@@ -139,6 +139,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					resolvedPathInputs.push(rawPath);
 					continue;
 				}
+				hasImmutableInput = true;
 				if (hasGlobPathChars(rawPath)) {
 					throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
 				}
@@ -148,6 +149,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				}
 				resolvedPathInputs.push(resource.sourcePath);
 			}
+			const useHashLines = resolveFileDisplayMode(this.session, { immutable: hasImmutableInput }).hashLines;
 			// Tolerate missing entries in a multi-path call: skip ones whose base
 			// directory is gone, and only error if every entry is missing. Single
 			// missing path keeps the original ENOENT semantics.
