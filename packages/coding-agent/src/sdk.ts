@@ -917,6 +917,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	let agent: Agent;
 	let session!: AgentSession;
 	let hasSession = false;
+	let hasRegistered = false;
 	const enableLsp = options.enableLsp ?? true;
 	const backgroundJobsEnabled = isBackgroundJobSupportEnabled(settings);
 	const asyncMaxJobs = Math.min(100, Math.max(1, settings.get("async.maxJobs") ?? 100));
@@ -1552,6 +1553,21 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			});
 		}
 
+		// Pre-register in the global agent registry BEFORE building the system prompt,
+		// so that subagents launched in the same parallel batch can see each other in
+		// their initial `# IRC Peers` block (rendered inside `rebuildSystemPrompt`).
+		// The session reference is attached after construction below.
+		agentRegistry.register({
+			id: resolvedAgentId,
+			displayName: resolvedAgentDisplayName,
+			kind: (options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? "sub" : "main",
+			parentId: options.parentTaskPrefix,
+			session: null,
+			sessionFile: sessionManager.getSessionFile() ?? null,
+			status: "running",
+		});
+		hasRegistered = true;
+
 		const { systemPrompt } = await logger.time(
 			"buildSystemPrompt",
 			rebuildSystemPrompt,
@@ -1751,17 +1767,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		});
 		hasSession = true;
 
-		// Register this session in the global agent registry so other agents can
-		// address it via the irc tool. Wrap dispose to unregister on teardown.
-		agentRegistry.register({
-			id: resolvedAgentId,
-			displayName: resolvedAgentDisplayName,
-			kind: (options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? "sub" : "main",
-			parentId: options.parentTaskPrefix,
-			session,
-			sessionFile: sessionManager.getSessionFile() ?? null,
-			status: "running",
-		});
+		// Attach the live session to the pre-registered ref so peers can route IRC
+		// messages here. Refresh sessionFile in case it was unavailable at pre-register
+		// time. The dispose wrapper below unregisters on teardown.
+		agentRegistry.attachSession(resolvedAgentId, session, sessionManager.getSessionFile() ?? null);
 		{
 			const originalDispose = session.dispose.bind(session);
 			session.dispose = async () => {
@@ -1908,6 +1917,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (hasSession) {
 				await session.dispose();
 			} else {
+				if (hasRegistered) agentRegistry.unregister(resolvedAgentId);
 				await disposeKernelSessionsByOwner(evalKernelOwnerId);
 			}
 		} catch (cleanupError) {

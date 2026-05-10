@@ -86,10 +86,11 @@ export class AgentRegistry {
 		this.#emit({ type: "status_changed", ref });
 	}
 
-	attachSession(id: string, session: AgentSession): void {
+	attachSession(id: string, session: AgentSession, sessionFile?: string | null): void {
 		const ref = this.#refs.get(id);
 		if (!ref) return;
 		ref.session = session;
+		if (sessionFile !== undefined) ref.sessionFile = sessionFile;
 		ref.lastActivity = Date.now();
 	}
 
