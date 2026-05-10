@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.9.3] - 2026-05-10
 ### Added
 
 - Added `onHarmonyLeak` option on `Agent`/loop config to receive GPT-5 Harmony leak audit callbacks

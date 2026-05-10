@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.9.3] - 2026-05-10
+
 ### Fixed
 - Anthropic provider now retries generic transient connect failures (`unable to connect`, `fetch failed`, `connection error`, etc.) by falling back to the shared `isRetryableError` allowlist after the provider-specific patterns. Previously these errors bypassed the hand-curated regex in `isProviderRetryableError` and aborted the stream on the first attempt, while the OpenAI SDK and Codex `fetchWithRetry` paths already handled them.
 

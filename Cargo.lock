@@ -2371,7 +2371,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "14.9.2"
+version = "14.9.3"
 dependencies = [
  "anyhow",
  "arboard",
