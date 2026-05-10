@@ -100,9 +100,7 @@ import { SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
-	type AgentsMdSearch,
 	type BuildSystemPromptResult,
-	buildAgentsMdSearch,
 	buildSystemPrompt as buildSystemPromptInternal,
 	buildSystemPromptToolMetadata,
 	loadProjectContextFiles as loadContextFilesInternal,
@@ -201,8 +199,6 @@ export interface CreateAgentSessionOptions {
 	rules?: Rule[];
 	/** Context files (AGENTS.md content). Default: discovered walking up from cwd */
 	contextFiles?: Array<{ path: string; content: string }>;
-	/** Pre-built AGENTS.md search (skips re-scanning the workspace; passed by parents to subagents). */
-	agentsMdSearch?: AgentsMdSearch;
 	/** Pre-built workspace tree (skips re-scanning; passed by parents to subagents). */
 	workspaceTree?: WorkspaceTree;
 	/** Prompt templates. Default: discovered from cwd/.omp/prompts/ + agentDir/prompts/ */
@@ -691,16 +687,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	if (!options.modelRegistry) {
 		modelRegistry.refreshInBackground();
 	}
-	// Kick off AGENTS.md filesystem search and workspace tree in parallel — they are the slowest pieces of
-	// buildSystemPrompt (can be many seconds on large repos) and only need `cwd`, so they overlap with
-	// everything that follows. Subagents inherit the parent's resolved values via options.
-	const agentsMdSearchPromise: Promise<AgentsMdSearch> = options.agentsMdSearch
-		? Promise.resolve(options.agentsMdSearch)
-		: logger.time("buildAgentsMdSearch", buildAgentsMdSearch, cwd);
-	agentsMdSearchPromise.catch(() => {});
+	// Kick off workspace tree discovery early. The native workspace scan returns
+	// both the rendered-tree input and the AGENTS.md directory-context index, so
+	// startup does not perform a second recursive filesystem search. Subagents
+	// inherit the parent's resolved values via options.
+	const STARTUP_SCAN_DEADLINE_MS = 5000;
 	const workspaceTreePromise: Promise<WorkspaceTree> = options.workspaceTree
 		? Promise.resolve(options.workspaceTree)
-		: logger.time("buildWorkspaceTree", buildWorkspaceTree, cwd);
+		: logger.time("buildWorkspaceTree", () => buildWorkspaceTree(cwd, { timeoutMs: STARTUP_SCAN_DEADLINE_MS }));
 	workspaceTreePromise.catch(() => {});
 
 	// Independent discoveries that depend only on cwd/agentDir — kicked off in parallel and awaited
@@ -898,12 +892,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		return { ttsrManager, rulebookRules, alwaysApplyRules };
 	});
 
-	// Resolve contextFiles up-front (it's needed before tool creation). The agentsMd / workspace tree
-	// scans are slowest on large repos and we MUST NOT block startup on them — race them against a
-	// short deadline. On timeout we forward `undefined` to ToolSession; buildSystemPromptInternal will
-	// re-race them through its own withDeadline path, and subagents will scan independently (still
-	// cheaper than an unbounded parent hang). Background work continues so caches still warm.
-	const STARTUP_SCAN_DEADLINE_MS = 5000;
+	// Resolve contextFiles up-front (it's needed before tool creation). The
+	// workspace tree scan is slow on large repos and we MUST NOT block startup on
+	// it. On timeout we forward `undefined` to ToolSession; buildSystemPromptInternal
+	// will re-race the same promise through its own withDeadline path. Background
+	// work continues so caches still warm.
 	const raceWithDeadline = <T>(name: string, work: Promise<T>): Promise<T | undefined> =>
 		Promise.race([
 			work,
@@ -916,9 +909,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return undefined;
 			}),
 		]);
-	const [contextFiles, resolvedAgentsMdSearch, resolvedWorkspaceTree] = await Promise.all([
+	const [contextFiles, resolvedWorkspaceTree] = await Promise.all([
 		contextFilesPromise,
-		raceWithDeadline("buildAgentsMdSearch", agentsMdSearchPromise),
 		raceWithDeadline("buildWorkspaceTree", workspaceTreePromise),
 	]);
 
@@ -1004,7 +996,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			},
 			skipPythonPreflight: options.skipPythonPreflight,
 			contextFiles,
-			agentsMdSearch: resolvedAgentsMdSearch,
 			workspaceTree: resolvedWorkspaceTree,
 			skills,
 			eventBus,
@@ -1456,7 +1447,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				mcpDiscoveryServerSummaries: discoverableToolSummary.servers.map(formatDiscoverableMCPToolServerSummary),
 				eagerTasks,
 				secretsEnabled,
-				agentsMdSearch: agentsMdSearchPromise,
 				workspaceTree: workspaceTreePromise,
 			});
 

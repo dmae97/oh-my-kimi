@@ -211,17 +211,12 @@ describe("system Handlebars prompt templates", () => {
 				skills: [],
 				rules: [],
 				toolNames: ["read"],
-				agentsMdSearch: {
-					scopePath: ".",
-					limit: 200,
-					pattern: "AGENTS.md depth 1-4",
-					files: ["packages/coding-agent/AGENTS.md"],
-				},
 				workspaceTree: {
 					rootPath: dir,
 					rendered: ".\n  - src/        1m",
 					truncated: true,
 					totalLines: 2,
+					agentsMdFiles: ["packages/coding-agent/AGENTS.md"],
 				},
 			});
 

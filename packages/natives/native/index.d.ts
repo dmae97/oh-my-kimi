@@ -769,6 +769,50 @@ export declare enum KeyEventType {
 }
 
 /**
+ * Walk the workspace once and return tree entries plus AGENTS.md candidates.
+ *
+ * File-level ignore rules for AGENTS.md are bypassed by checking each
+ * traversed directory directly when `collectAgentsMd` is enabled, but ignored
+ * directories are still pruned by the walker and are not searched.
+ */
+export declare function listWorkspace(options: ListWorkspaceOptions): Promise<ListWorkspaceResult>
+
+/** Input options for `listWorkspace`, the single-pass workspace startup scan. */
+export interface ListWorkspaceOptions {
+  /** Directory to scan. */
+  path: string
+  /** Maximum depth for returned tree entries. Root children are depth 1. */
+  maxDepth: number
+  /** Include hidden files and directories. Default: false. */
+  hidden?: boolean
+  /** Respect .gitignore files. Default: true. */
+  gitignore?: boolean
+  /**
+   * Also surface AGENTS.md files in directories at depth 1..=4, even when
+   * gitignore would otherwise hide the file. Walks deeper than `maxDepth`
+   * to find them. Default: false.
+   */
+  collectAgentsMd?: boolean
+  /** Timeout in milliseconds for the operation. */
+  timeoutMs?: number
+  /** Abort signal for cancelling the operation. */
+  signal?: unknown
+}
+
+/** Result payload returned by a workspace scan. */
+export interface ListWorkspaceResult {
+  /** Entries within `maxDepth`, with mtime and regular-file size metadata. */
+  entries: Array<GlobMatch>
+  /**
+   * Directory-scoped AGENTS.md files within depth 1..=4 (capped at 200).
+   * Always empty when `collectAgentsMd` is false.
+   */
+  agentsMdFiles: Array<string>
+  /** True when any output cap was hit. */
+  truncated: boolean
+}
+
+/**
  * System UI appearance reported by native macOS APIs (`detectMacOSAppearance`
  * and observer).
  */

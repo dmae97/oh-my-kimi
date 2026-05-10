@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { buildDirectoryTree, buildWorkspaceTree } from "@oh-my-pi/pi-coding-agent/workspace-tree";
-import { $ } from "bun";
 
 const tempDirs: string[] = [];
 
@@ -141,10 +140,8 @@ describe("buildWorkspaceTree", () => {
 
 		const tree = await buildDirectoryTree(cwd, {
 			maxDepth: 2,
-			directoryEntryLimit: 12,
-			rootEntryLimit: null,
-			hidden: true,
-			gitignore: false,
+			perDirLimit: 12,
+			rootLimit: null,
 		});
 
 		expect(tree.truncated).toBe(true);
@@ -156,36 +153,45 @@ describe("buildWorkspaceTree", () => {
 		expect(tree.rendered).toContain("child-00.txt");
 		expect(tree.rendered).toContain("… 1 more");
 	});
-});
 
-describe("buildWorkspaceTree (git-backed listing)", () => {
-	afterEach(async () => {
-		await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
-	});
-
-	it("derives the tree from `git ls-files` and skips gitignored entries even without explicit excludes", async () => {
+	it("returns AGENTS.md files at directory depths one through four", async () => {
 		const cwd = await makeTempDir();
-		// `git init` produces a real worktree so tryListGitFiles activates.
-		await $`git init -q --initial-branch=main`.cwd(cwd).quiet().nothrow();
-		await $`git config user.email test@example.com`.cwd(cwd).quiet().nothrow();
-		await $`git config user.name test`.cwd(cwd).quiet().nothrow();
 
-		const base = Date.now() - 60_000;
-		await Bun.write(path.join(cwd, ".gitignore"), "secret.txt\nbuild-output/\n");
-		await writeFileWithMtime(path.join(cwd, "kept.txt"), "kept", base + 5_000);
-		await writeFileWithMtime(path.join(cwd, "secret.txt"), "secret", base + 4_000);
-		await touchDirWithMtime(path.join(cwd, "build-output"), base + 3_000);
-		await writeFileWithMtime(path.join(cwd, "build-output", "artifact.bin"), "x", base + 3_000);
-		await touchDirWithMtime(path.join(cwd, "src"), base + 2_000);
-		await writeFileWithMtime(path.join(cwd, "src", "main.ts"), "main", base + 2_000);
+		await Bun.write(path.join(cwd, "AGENTS.md"), "root rules");
+		await Bun.write(path.join(cwd, "one", "AGENTS.md"), "depth one rules");
+		await Bun.write(path.join(cwd, "one", "two", "AGENTS.md"), "depth two rules");
+		await Bun.write(path.join(cwd, "one", "two", "three", "AGENTS.md"), "depth three rules");
+		await Bun.write(path.join(cwd, "one", "two", "three", "four", "AGENTS.md"), "depth four rules");
+		await Bun.write(path.join(cwd, "one", "two", "three", "four", "five", "AGENTS.md"), "too deep");
 
 		const tree = await buildWorkspaceTree(cwd);
 
-		expect(tree.rendered).toContain("kept.txt");
+		expect(tree.agentsMdFiles).toEqual([
+			"one/AGENTS.md",
+			"one/two/AGENTS.md",
+			"one/two/three/AGENTS.md",
+			"one/two/three/four/AGENTS.md",
+		]);
+	});
+
+	it("surfaces gitignored AGENTS.md files but not AGENTS.md under ignored directories", async () => {
+		const cwd = await makeTempDir();
+		await Bun.write(path.join(cwd, ".gitignore"), "src/AGENTS.md\nignored-dir/\nnode_modules/\n.git/\n.hidden/\n");
+		await Bun.write(path.join(cwd, "src", "AGENTS.md"), "src rules");
+		await Bun.write(path.join(cwd, "src", "main.ts"), "source");
+		await Bun.write(path.join(cwd, "ignored-dir", "AGENTS.md"), "ignored dir rules");
+		await Bun.write(path.join(cwd, "node_modules", "pkg", "AGENTS.md"), "ignored dependency rules");
+		await Bun.write(path.join(cwd, ".git", "AGENTS.md"), "ignored git rules");
+		await Bun.write(path.join(cwd, ".hidden", "AGENTS.md"), "ignored hidden rules");
+
+		const tree = await buildWorkspaceTree(cwd);
+
 		expect(tree.rendered).toContain("src/");
+		expect(tree.rendered).toContain("AGENTS.md");
 		expect(tree.rendered).toContain("main.ts");
-		expect(tree.rendered).not.toContain("secret.txt");
-		expect(tree.rendered).not.toContain("build-output");
-		expect(tree.rendered).not.toContain("artifact.bin");
+		expect(tree.rendered).not.toContain("ignored-dir");
+		expect(tree.rendered).not.toContain("node_modules");
+		expect(tree.rendered).not.toContain(".hidden");
+		expect(tree.agentsMdFiles).toEqual(["src/AGENTS.md"]);
 	});
 });

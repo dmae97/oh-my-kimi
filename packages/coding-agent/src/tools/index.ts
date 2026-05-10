@@ -14,7 +14,6 @@ import type { PlanModeState } from "../plan-mode/state";
 import type { AgentRegistry } from "../registry/agent-registry";
 import type { CustomMessage } from "../session/messages";
 import type { ToolChoiceQueue } from "../session/tool-choice-queue";
-import type { AgentsMdSearch } from "../system-prompt";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
 import type { DiscoverableTool, DiscoverableToolSearchIndex } from "../tool-discovery/tool-index";
@@ -122,8 +121,6 @@ export interface ToolSession {
 	skipPythonPreflight?: boolean;
 	/** Pre-loaded context files (AGENTS.md, etc) */
 	contextFiles?: ContextFileEntry[];
-	/** Pre-loaded AGENTS.md search (forwarded to subagents to skip re-scanning) */
-	agentsMdSearch?: AgentsMdSearch;
 	/** Pre-loaded workspace tree (forwarded to subagents to skip re-scanning) */
 	workspaceTree?: WorkspaceTree;
 	/** Pre-loaded skills */

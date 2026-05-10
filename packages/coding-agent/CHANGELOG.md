@@ -1,9 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `agentsMdFiles` to `WorkspaceTree` so AGENTS.md discovery results are returned with the workspace scan output
+
+### Changed
+
+- Changed startup workspace discovery to use one native `listWorkspace` walk for both the rendered tree and AGENTS.md directory-context candidates, removing the layered `git ls-files` orchestration and secondary AGENTS.md glob.
 
 ### Fixed
 
+- Fixed AGENTS.md context discovery to include AGENTS.md files that are explicitly gitignored while still excluding AGENTS.md files under ignored directories
 - Fixed task tool renderer spamming `Tool renderer failed: undefined is not an object (evaluating 'args.tasks.length')` warnings while a `task` call was streaming in (the `tasks` array is undefined until the partial JSON parser closes it); the renderer now tolerates an absent `tasks` field and shows `0 agents` until the array arrives ([#985](https://github.com/can1357/oh-my-pi/issues/985)).
 - Fixed MCP HTTP streamable transport spamming `HTTP SSE stream error: ReadableStream already has a controller` after every JSON-RPC request whose response was returned as `text/event-stream`. The transport used to break out of the SSE iterator once the matching response was captured and then re-open `response.body` for a background drain, but the body had already been piped through a `TransformStream` and could not be re-read. The drain now runs from a single iterator that resolves the response promise inline and continues to dispatch piggybacked notifications on the same stream.
 

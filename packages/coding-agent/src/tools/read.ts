@@ -73,20 +73,6 @@ const PROSE_SUMMARY_EXTENSIONS = new Set([".md", ".txt"]);
 // Remote mount path prefix (sshfs mounts) - skip fuzzy matching to avoid hangs
 const REMOTE_MOUNT_PREFIX = getRemoteDir() + path.sep;
 
-const READ_DIRECTORY_EXCLUDED_DIRS = new Set([
-	"node_modules",
-	".git",
-	".next",
-	"dist",
-	"build",
-	"target",
-	".venv",
-	".cache",
-	".turbo",
-	".parcel-cache",
-	"coverage",
-]);
-
 function isRemoteMountPath(absolutePath: string): boolean {
 	return absolutePath.startsWith(REMOTE_MOUNT_PREFIX);
 }
@@ -1581,15 +1567,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		try {
 			tree = await buildDirectoryTree(absolutePath, {
 				maxDepth: READ_DIRECTORY_MAX_DEPTH,
-				directoryEntryLimit: READ_DIRECTORY_CHILD_LIMIT,
-				rootEntryLimit: null,
+				perDirLimit: READ_DIRECTORY_CHILD_LIMIT,
+				rootLimit: null,
 				lineCap: limit ?? null,
-				lineCapProtectedDepth: 1,
-				hidden: true,
-				gitignore: false,
-				cache: true,
-				excludedDirectoryNames: READ_DIRECTORY_EXCLUDED_DIRS,
-				rootLabel: ".",
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);

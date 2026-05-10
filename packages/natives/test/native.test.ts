@@ -12,6 +12,7 @@ import {
 	grep,
 	htmlToMarkdown,
 	invalidateFsScanCache,
+	listWorkspace,
 	MacOSPowerAssertion,
 	PtySession,
 	sanitizeText,
@@ -418,6 +419,43 @@ describe("pi-natives", () => {
 			await Bun.sleep(250);
 			const second = await glob({ pattern: fileName, path: testDir, hidden: true, gitignore: true, cache: true });
 			expect(second.totalMatches).toBe(1);
+		});
+	});
+
+	describe("listWorkspace", () => {
+		it("returns tree entries and gitignored AGENTS.md files outside ignored directories", async () => {
+			const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "natives-workspace-"));
+			try {
+				await fs.writeFile(path.join(workspaceDir, ".gitignore"), "ignored.txt\nsrc/AGENTS.md\nignored-dir/\n");
+				await fs.writeFile(path.join(workspaceDir, "kept.ts"), "export const kept = true;\n");
+				await fs.writeFile(path.join(workspaceDir, "ignored.txt"), "ignored\n");
+				await fs.mkdir(path.join(workspaceDir, "src"), { recursive: true });
+				await fs.writeFile(path.join(workspaceDir, "src", "AGENTS.md"), "src rules\n");
+				await fs.writeFile(path.join(workspaceDir, "src", "main.ts"), "export const main = true;\n");
+				await fs.mkdir(path.join(workspaceDir, "ignored-dir"), { recursive: true });
+				await fs.writeFile(path.join(workspaceDir, "ignored-dir", "AGENTS.md"), "ignored rules\n");
+
+				const result = await listWorkspace({
+					path: workspaceDir,
+					maxDepth: 3,
+					gitignore: true,
+					hidden: false,
+					collectAgentsMd: true,
+				});
+				const entryPaths = result.entries.map(entry => entry.path);
+
+				expect(result.truncated).toBe(false);
+				expect(entryPaths).toContain("kept.ts");
+				expect(entryPaths).toContain("src");
+				expect(entryPaths).toContain("src/AGENTS.md");
+				expect(entryPaths).toContain("src/main.ts");
+				expect(entryPaths).not.toContain("ignored.txt");
+				expect(entryPaths).not.toContain("ignored-dir");
+				expect(entryPaths).not.toContain("ignored-dir/AGENTS.md");
+				expect(result.agentsMdFiles).toEqual(["src/AGENTS.md"]);
+			} finally {
+				await fs.rm(workspaceDir, { recursive: true, force: true });
+			}
 		});
 	});
 

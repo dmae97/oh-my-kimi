@@ -231,6 +231,7 @@ export const hasMatch = nativeBindings.hasMatch;
 export const highlightCode = nativeBindings.highlightCode;
 export const htmlToMarkdown = nativeBindings.htmlToMarkdown;
 export const invalidateFsScanCache = nativeBindings.invalidateFsScanCache;
+export const listWorkspace = nativeBindings.listWorkspace;
 export const matchesKey = nativeBindings.matchesKey;
 export const matchesKittySequence = nativeBindings.matchesKittySequence;
 export const matchesLegacySequence = nativeBindings.matchesLegacySequence;

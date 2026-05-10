@@ -28,7 +28,6 @@ import { createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { AuthStorage } from "../session/auth-storage";
 import { SessionManager } from "../session/session-manager";
-import type { AgentsMdSearch } from "../system-prompt";
 import { type ContextFileEntry, truncateTail } from "../tools";
 import { jtdToJsonSchema, normalizeSchema } from "../tools/jtd-to-json-schema";
 import { ToolAbortError } from "../tools/tool-errors";
@@ -165,7 +164,6 @@ export interface ExecutorOptions {
 	contextFiles?: ContextFileEntry[];
 	skills?: Skill[];
 	promptTemplates?: PromptTemplate[];
-	agentsMdSearch?: AgentsMdSearch;
 	workspaceTree?: WorkspaceTree;
 	mcpManager?: MCPManager;
 	authStorage?: AuthStorage;
@@ -995,7 +993,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				contextFiles: options.contextFiles,
 				skills: options.skills,
 				promptTemplates: options.promptTemplates,
-				agentsMdSearch: options.agentsMdSearch,
 				workspaceTree: options.workspaceTree,
 				systemPrompt: defaultPrompt => [
 					prompt.render(subagentSystemPromptTemplate, {
