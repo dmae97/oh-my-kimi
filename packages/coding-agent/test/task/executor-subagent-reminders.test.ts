@@ -114,6 +114,31 @@ describe("runSubprocess yield reminders", () => {
 		enableLsp: false,
 	};
 
+	it("skips modelRegistry.refresh when reusing the parent registry", async () => {
+		const session = createMockSession(({ emit }) => {
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-skip-refresh",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+		const createAgentSessionSpy = mockCreateAgentSession(session);
+		const modelRegistry = {
+			refresh: async () => {},
+		} as unknown as import("../../src/config/model-registry").ModelRegistry;
+		const refreshSpy = vi.spyOn(modelRegistry, "refresh");
+
+		await runSubprocess({ ...baseOptions, id: "subagent-skip-refresh", modelRegistry });
+
+		expect(refreshSpy).not.toHaveBeenCalled();
+		expect(createAgentSessionSpy).toHaveBeenCalledTimes(1);
+	});
+
 	it("sends reminder prompt when subagent stops without yield", async () => {
 		const prompts: string[] = [];
 		const promptOptions: Array<PromptOptions | undefined> = [];

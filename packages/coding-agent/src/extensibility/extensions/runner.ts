@@ -60,6 +60,15 @@ interface BeforeAgentStartCombinedResult {
 
 export type ExtensionErrorListener = (error: ExtensionError) => void;
 
+export const EXTENSION_HANDLER_TIMEOUT_MS = 30_000;
+let extensionHandlerTimeoutMs = EXTENSION_HANDLER_TIMEOUT_MS;
+
+export function __test_setExtensionHandlerTimeoutMs(timeoutMs: number): void {
+	extensionHandlerTimeoutMs = timeoutMs;
+}
+
+const EXTENSION_HANDLER_TIMEOUT = Symbol("extensionHandlerTimeout");
+
 /**
  * Events handled by the generic emit() method.
  * Events with dedicated emitXxx() methods are excluded for stronger type safety.
@@ -434,6 +443,46 @@ export class ExtensionRunner {
 		);
 	}
 
+	async #runHandlerWithTimeout<TEvent extends { type: string }, TResult>(
+		handler: (event: TEvent, ctx: ExtensionContext) => Promise<TResult | undefined> | TResult | undefined,
+		event: TEvent,
+		ctx: ExtensionContext,
+		ext: Extension,
+		timeoutMs: number,
+	): Promise<TResult | undefined> {
+		try {
+			const handlerResult = await Promise.race([
+				Promise.resolve(handler(event, ctx)),
+				Bun.sleep(timeoutMs).then(() => EXTENSION_HANDLER_TIMEOUT),
+			]);
+			if (handlerResult === EXTENSION_HANDLER_TIMEOUT) {
+				const error = `handler timed out after ${timeoutMs}ms`;
+				logger.warn("Extension handler timed out", {
+					extensionPath: ext.path,
+					event: event.type,
+					timeoutMs,
+				});
+				this.emitError({
+					extensionPath: ext.path,
+					event: event.type,
+					error,
+				});
+				return undefined;
+			}
+			return handlerResult as TResult | undefined;
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			const stack = err instanceof Error ? err.stack : undefined;
+			this.emitError({
+				extensionPath: ext.path,
+				event: event.type,
+				error: message,
+				stack,
+			});
+			return undefined;
+		}
+	}
+
 	async emit<TEvent extends RunnerEmitEvent>(event: TEvent): Promise<RunnerEmitResult<TEvent>> {
 		const ctx = this.createContext();
 		let result: SessionBeforeEventResult | SessionCompactingResult | undefined;
@@ -443,28 +492,23 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
-				try {
-					const handlerResult = await handler(event, ctx);
+				const handlerResult = await this.#runHandlerWithTimeout(
+					handler,
+					event,
+					ctx,
+					ext,
+					extensionHandlerTimeoutMs,
+				);
 
-					if (this.#isSessionBeforeEvent(event) && handlerResult) {
-						result = handlerResult as SessionBeforeEventResult;
-						if (result.cancel) {
-							return result as RunnerEmitResult<TEvent>;
-						}
+				if (this.#isSessionBeforeEvent(event) && handlerResult) {
+					result = handlerResult as SessionBeforeEventResult;
+					if (result.cancel) {
+						return result as RunnerEmitResult<TEvent>;
 					}
+				}
 
-					if (event.type === "session.compacting" && handlerResult) {
-						result = handlerResult as SessionCompactingResult;
-					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: event.type,
-						error: message,
-						stack,
-					});
+				if (event.type === "session.compacting" && handlerResult) {
+					result = handlerResult as SessionCompactingResult;
 				}
 			}
 		}
@@ -482,31 +526,26 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
-				try {
-					const handlerResult = (await handler(currentEvent, ctx)) as ToolResultEventResult | undefined;
-					if (!handlerResult) continue;
+				const handlerResult = (await this.#runHandlerWithTimeout(
+					handler,
+					currentEvent,
+					ctx,
+					ext,
+					extensionHandlerTimeoutMs,
+				)) as ToolResultEventResult | undefined;
+				if (!handlerResult) continue;
 
-					if (handlerResult.content !== undefined) {
-						currentEvent.content = handlerResult.content;
-						modified = true;
-					}
-					if (handlerResult.details !== undefined) {
-						currentEvent.details = handlerResult.details;
-						modified = true;
-					}
-					if (handlerResult.isError !== undefined) {
-						currentEvent.isError = handlerResult.isError;
-						modified = true;
-					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: "tool_result",
-						error: message,
-						stack,
-					});
+				if (handlerResult.content !== undefined) {
+					currentEvent.content = handlerResult.content;
+					modified = true;
+				}
+				if (handlerResult.details !== undefined) {
+					currentEvent.details = handlerResult.details;
+					modified = true;
+				}
+				if (handlerResult.isError !== undefined) {
+					currentEvent.isError = handlerResult.isError;
+					modified = true;
 				}
 			}
 		}
@@ -574,20 +613,15 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
-				try {
-					const handlerResult = await handler(event, ctx);
-					if (handlerResult) {
-						return handlerResult as R;
-					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: eventName,
-						error: message,
-						stack,
-					});
+				const handlerResult = await this.#runHandlerWithTimeout(
+					handler,
+					event,
+					ctx,
+					ext,
+					extensionHandlerTimeoutMs,
+				);
+				if (handlerResult) {
+					return handlerResult as R;
 				}
 			}
 		}
@@ -613,29 +647,24 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
-				try {
-					const event: ResourcesDiscoverEvent = { type: "resources_discover", cwd, reason };
-					const handlerResult = await handler(event, ctx);
-					const result = handlerResult as ResourcesDiscoverResult | undefined;
+				const event: ResourcesDiscoverEvent = { type: "resources_discover", cwd, reason };
+				const handlerResult = await this.#runHandlerWithTimeout(
+					handler,
+					event,
+					ctx,
+					ext,
+					extensionHandlerTimeoutMs,
+				);
+				const result = handlerResult as ResourcesDiscoverResult | undefined;
 
-					if (result?.skillPaths?.length) {
-						skillPaths.push(...result.skillPaths.map(path => ({ path, extensionPath: ext.path })));
-					}
-					if (result?.promptPaths?.length) {
-						promptPaths.push(...result.promptPaths.map(path => ({ path, extensionPath: ext.path })));
-					}
-					if (result?.themePaths?.length) {
-						themePaths.push(...result.themePaths.map(path => ({ path, extensionPath: ext.path })));
-					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: "resources_discover",
-						error: message,
-						stack,
-					});
+				if (result?.skillPaths?.length) {
+					skillPaths.push(...result.skillPaths.map(path => ({ path, extensionPath: ext.path })));
+				}
+				if (result?.promptPaths?.length) {
+					promptPaths.push(...result.promptPaths.map(path => ({ path, extensionPath: ext.path })));
+				}
+				if (result?.themePaths?.length) {
+					themePaths.push(...result.themePaths.map(path => ({ path, extensionPath: ext.path })));
 				}
 			}
 		}
@@ -655,21 +684,14 @@ export class ExtensionRunner {
 
 		for (const ext of this.extensions) {
 			for (const handler of ext.handlers.get("input") ?? []) {
-				try {
-					const event: InputEvent = { type: "input", text: currentText, images: currentImages, source };
-					const result = (await handler(event, ctx)) as InputEventResult | undefined;
-					if (result?.handled) return result;
-					if (result?.text !== undefined) {
-						currentText = result.text;
-						currentImages = result.images ?? currentImages;
-					}
-				} catch (err) {
-					this.emitError({
-						extensionPath: ext.path,
-						event: "input",
-						error: err instanceof Error ? err.message : String(err),
-						stack: err instanceof Error ? err.stack : undefined,
-					});
+				const event: InputEvent = { type: "input", text: currentText, images: currentImages, source };
+				const result = (await this.#runHandlerWithTimeout(handler, event, ctx, ext, extensionHandlerTimeoutMs)) as
+					| InputEventResult
+					| undefined;
+				if (result?.handled) return result;
+				if (result?.text !== undefined) {
+					currentText = result.text;
+					currentImages = result.images ?? currentImages;
 				}
 			}
 		}
@@ -704,22 +726,17 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
-				try {
-					const event: ContextEvent = { type: "context", messages: currentMessages };
-					const handlerResult = await handler(event, ctx);
+				const event: ContextEvent = { type: "context", messages: currentMessages };
+				const handlerResult = await this.#runHandlerWithTimeout(
+					handler,
+					event,
+					ctx,
+					ext,
+					extensionHandlerTimeoutMs,
+				);
 
-					if (handlerResult && (handlerResult as ContextEventResult).messages) {
-						currentMessages = (handlerResult as ContextEventResult).messages!;
-					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: "context",
-						error: message,
-						stack,
-					});
+				if (handlerResult && (handlerResult as ContextEventResult).messages) {
+					currentMessages = (handlerResult as ContextEventResult).messages!;
 				}
 			}
 		}
@@ -736,24 +753,19 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
-				try {
-					const event: BeforeProviderRequestEvent = {
-						type: "before_provider_request",
-						payload: currentPayload,
-					};
-					const handlerResult = await handler(event, ctx);
-					if (handlerResult !== undefined) {
-						currentPayload = handlerResult;
-					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: "before_provider_request",
-						error: message,
-						stack,
-					});
+				const event: BeforeProviderRequestEvent = {
+					type: "before_provider_request",
+					payload: currentPayload,
+				};
+				const handlerResult = await this.#runHandlerWithTimeout(
+					handler,
+					event,
+					ctx,
+					ext,
+					extensionHandlerTimeoutMs,
+				);
+				if (handlerResult !== undefined) {
+					currentPayload = handlerResult;
 				}
 			}
 		}
@@ -769,25 +781,14 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
-				try {
-					const event: AfterProviderResponseEvent = {
-						type: "after_provider_response",
-						status: response.status,
-						headers: response.headers,
-						requestId: response.requestId,
-						metadata: response.metadata,
-					};
-					await handler(event, ctx);
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: "after_provider_response",
-						error: message,
-						stack,
-					});
-				}
+				const event: AfterProviderResponseEvent = {
+					type: "after_provider_response",
+					status: response.status,
+					headers: response.headers,
+					requestId: response.requestId,
+					metadata: response.metadata,
+				};
+				await this.#runHandlerWithTimeout(handler, event, ctx, ext, extensionHandlerTimeoutMs);
 			}
 		}
 	}
@@ -807,34 +808,29 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
-				try {
-					const event: BeforeAgentStartEvent = {
-						type: "before_agent_start",
-						prompt,
-						images,
-						systemPrompt: currentSystemPrompt,
-					};
-					const handlerResult = await handler(event, ctx);
+				const event: BeforeAgentStartEvent = {
+					type: "before_agent_start",
+					prompt,
+					images,
+					systemPrompt: currentSystemPrompt,
+				};
+				const handlerResult = await this.#runHandlerWithTimeout(
+					handler,
+					event,
+					ctx,
+					ext,
+					extensionHandlerTimeoutMs,
+				);
 
-					if (handlerResult) {
-						const result = handlerResult as BeforeAgentStartEventResult;
-						if (result.message) {
-							messages.push(result.message);
-						}
-						if (result.systemPrompt !== undefined) {
-							currentSystemPrompt = result.systemPrompt;
-							systemPromptModified = true;
-						}
+				if (handlerResult) {
+					const result = handlerResult as BeforeAgentStartEventResult;
+					if (result.message) {
+						messages.push(result.message);
 					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: "before_agent_start",
-						error: message,
-						stack,
-					});
+					if (result.systemPrompt !== undefined) {
+						currentSystemPrompt = result.systemPrompt;
+						systemPromptModified = true;
+					}
 				}
 			}
 		}

@@ -7,7 +7,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { discoverAndLoadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
-import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import {
+	__test_setExtensionHandlerTimeoutMs,
+	EXTENSION_HANDLER_TIMEOUT_MS,
+	ExtensionRunner,
+} from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getProjectAgentDir, logger, TempDir } from "@oh-my-pi/pi-utils";
@@ -30,6 +34,7 @@ describe("ExtensionRunner", () => {
 	});
 
 	afterEach(() => {
+		__test_setExtensionHandlerTimeoutMs(EXTENSION_HANDLER_TIMEOUT_MS);
 		authStorage.close();
 		tempDir.removeSync();
 	});
@@ -595,6 +600,73 @@ describe("ExtensionRunner", () => {
 				details: { source: "ext1" },
 				isError: true,
 			});
+		});
+	});
+
+	describe("handler timeouts", () => {
+		it("times out session_start handlers, emits an error, and continues to sibling extensions", async () => {
+			const hangExtensionPath = path.join(tempDir.path(), "hang-session-start.ts");
+			const fastExtensionPath = path.join(tempDir.path(), "fast-session-start.ts");
+			const markerPath = path.join(tempDir.path(), "session-start-marker.txt");
+			fs.writeFileSync(
+				hangExtensionPath,
+				`
+					export default function(pi) {
+						pi.on("session_start", async () => {
+							await new Promise(() => {});
+						});
+					}
+				`,
+			);
+			fs.writeFileSync(
+				fastExtensionPath,
+				`
+					import * as fs from "node:fs";
+
+					export default function(pi) {
+						pi.on("session_start", async () => {
+							fs.appendFileSync(${JSON.stringify(markerPath)}, "fast\\n");
+						});
+					}
+				`,
+			);
+
+			const result = await loadTestExtensions([hangExtensionPath, fastExtensionPath]);
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+			const errors: Array<{ extensionPath: string; event: string; error: string }> = [];
+			runner.onError(err => {
+				errors.push(err);
+			});
+			__test_setExtensionHandlerTimeoutMs(50);
+
+			const startedAt = performance.now();
+			await runner.emit({ type: "session_start" });
+			const elapsedMs = performance.now() - startedAt;
+
+			expect(elapsedMs).toBeGreaterThanOrEqual(40);
+			expect(elapsedMs).toBeLessThan(250);
+			expect(fs.readFileSync(markerPath, "utf8")).toBe("fast\n");
+			expect(warnSpy).toHaveBeenCalledWith("Extension handler timed out", {
+				extensionPath: hangExtensionPath,
+				event: "session_start",
+				timeoutMs: 50,
+			});
+			expect(errors).toEqual([
+				{
+					extensionPath: hangExtensionPath,
+					event: "session_start",
+					error: "handler timed out after 50ms",
+				},
+			]);
+
+			warnSpy.mockRestore();
 		});
 	});
 
