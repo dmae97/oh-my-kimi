@@ -236,7 +236,7 @@ async function runPhase1(options: {
 			logger.debug("Phase1 skipped: no model available");
 			return;
 		}
-		const phase1ApiKey = await modelRegistry.getApiKey(phase1Model, session.sessionManager.getSessionId());
+		const phase1ApiKey = await modelRegistry.getApiKey(phase1Model, session.sessionId);
 		if (!phase1ApiKey) {
 			logger.debug("Phase1 skipped: no API key for phase1 model", {
 				provider: phase1Model.provider,
@@ -274,6 +274,7 @@ async function runPhase1(options: {
 				apiKey: phase1ApiKey,
 				modelMaxTokens: computeModelTokenBudget(phase1Model, config),
 				config,
+				metadata: session.agent?.metadataForProvider(phase1Model.provider),
 			});
 
 			if (result.kind === "failed") {
@@ -397,7 +398,7 @@ async function runPhase2(options: {
 			});
 			return;
 		}
-		const phase2ApiKey = await modelRegistry.getApiKey(phase2Model, session.sessionManager.getSessionId());
+		const phase2ApiKey = await modelRegistry.getApiKey(phase2Model, session.sessionId);
 		if (!phase2ApiKey) {
 			markPhase2FailureWithFallback(db, {
 				claim,
@@ -428,6 +429,7 @@ async function runPhase2(options: {
 				memoryRoot,
 				model: phase2Model,
 				apiKey: phase2ApiKey,
+				metadata: session.agent?.metadataForProvider(phase2Model.provider),
 			});
 			await applyConsolidation(memoryRoot, consolidated);
 			if (heartbeatLostOwnership) {
@@ -575,6 +577,7 @@ async function runStage1Job(options: {
 	apiKey: string;
 	modelMaxTokens: number;
 	config: MemoryRuntimeConfig;
+	metadata?: Record<string, unknown>;
 }): Promise<
 	| {
 			kind: "output";
@@ -607,6 +610,7 @@ async function runStage1Job(options: {
 			},
 			{
 				apiKey,
+				metadata: options.metadata,
 				maxTokens: Math.max(1024, Math.min(4096, Math.floor(modelMaxTokens * 0.2))),
 				reasoning: Effort.Low,
 			},
@@ -711,7 +715,12 @@ async function readRolloutSummaries(memoryRoot: string): Promise<string> {
 	return blocks.join("\n\n");
 }
 
-async function runConsolidationModel(options: { memoryRoot: string; model: Model; apiKey: string }): Promise<{
+async function runConsolidationModel(options: {
+	memoryRoot: string;
+	model: Model;
+	apiKey: string;
+	metadata?: Record<string, unknown>;
+}): Promise<{
 	memoryMd: string;
 	memorySummary: string;
 	skills: Array<{
@@ -735,7 +744,7 @@ async function runConsolidationModel(options: { memoryRoot: string; model: Model
 		{
 			messages: [{ role: "user", content: [{ type: "text", text: input }], timestamp: Date.now() }],
 		},
-		{ apiKey, maxTokens: 8192, reasoning: Effort.Medium },
+		{ apiKey, metadata: options.metadata, maxTokens: 8192, reasoning: Effort.Medium },
 	);
 	if (response.stopReason === "error") {
 		throw new Error(response.errorMessage || "phase2 model error");

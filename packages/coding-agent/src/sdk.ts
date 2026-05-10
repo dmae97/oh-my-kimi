@@ -1675,9 +1675,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			preferWebsockets: preferOpenAICodexWebsockets,
 			getToolContext: tc => toolContextStore.getContext(tc),
 			getApiKey: async provider => {
-				// Use the provider-facing session id for sticky credential selection so cache keys
-				// and provider auth affinity stay aligned across fresh benchmark sessions.
-				const key = await modelRegistry.getApiKeyForProvider(provider, providerSessionId);
+				// Read agent.sessionId at call time so credential selection stays aligned
+				// with metadataResolver after /new, fork, resume, or branch switches.
+				const key = await modelRegistry.getApiKeyForProvider(provider, agent.sessionId);
 				if (!key) {
 					throw new Error(`No API key found for provider "${provider}"`);
 				}
@@ -1757,6 +1757,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			asyncJobManager,
 			agentId: resolvedAgentId,
 			agentRegistry,
+			providerSessionId: options.providerSessionId,
 		});
 		hasSession = true;
 

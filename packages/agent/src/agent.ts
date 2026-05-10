@@ -233,6 +233,8 @@ export class Agent {
 	#followUpMode: "all" | "one-at-a-time";
 	#interruptMode: "immediate" | "wait";
 	#sessionId?: string;
+	#metadata?: Record<string, unknown>;
+	#metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
 	#providerSessionState?: Map<string, ProviderSessionState>;
 	#thinkingBudgets?: ThinkingBudgets;
 	#temperature?: number;
@@ -311,6 +313,48 @@ export class Agent {
 	 */
 	set sessionId(value: string | undefined) {
 		this.#sessionId = value;
+	}
+
+	/**
+	 * Static metadata forwarded to every API request when no resolver is installed
+	 * (e.g. `metadata.user_id` for Anthropic session attribution). Setting this
+	 * clears any installed resolver.
+	 *
+	 * For live/provider-aware metadata (e.g. Anthropic OAuth `account_uuid` that
+	 * must reflect the credential selected per-request), use
+	 * {@link setMetadataResolver} and read via {@link metadataForProvider}.
+	 */
+	get metadata(): Record<string, unknown> | undefined {
+		return this.#metadata;
+	}
+
+	set metadata(value: Record<string, unknown> | undefined) {
+		this.#metadata = value;
+		this.#metadataResolver = undefined;
+	}
+
+	/**
+	 * Resolve request metadata for the given provider at call time. When a
+	 * resolver is installed via {@link setMetadataResolver}, it is invoked with
+	 * the provider string so the result can be scoped (e.g. `account_uuid` is
+	 * only included for `"anthropic"` requests). Falls back to the static
+	 * {@link metadata} value when no resolver is set.
+	 */
+	metadataForProvider(provider: string): Record<string, unknown> | undefined {
+		if (this.#metadataResolver) return this.#metadataResolver(provider);
+		return this.#metadata;
+	}
+
+	/**
+	 * Install a function that resolves request metadata at call time. The
+	 * resolver receives the target provider string and can gate provider-specific
+	 * fields (e.g. `account_uuid` only for `"anthropic"`). Invoked per LLM
+	 * request by `agent-loop` after `getApiKey` selects the session-sticky
+	 * credential. Pass `undefined` to clear and revert to the static
+	 * {@link metadata} value.
+	 */
+	setMetadataResolver(resolver: ((provider: string) => Record<string, unknown> | undefined) | undefined): void {
+		this.#metadataResolver = resolver;
 	}
 
 	/**
@@ -777,6 +821,8 @@ export class Agent {
 			hideThinkingSummary: this.#hideThinkingSummary,
 			interruptMode: this.#interruptMode,
 			sessionId: this.#sessionId,
+			metadata: this.#metadataResolver ? undefined : this.#metadata,
+			metadataResolver: this.#metadataResolver,
 			providerSessionState: this.#providerSessionState,
 			thinkingBudgets: this.#thinkingBudgets,
 			maxRetryDelayMs: this.#maxRetryDelayMs,

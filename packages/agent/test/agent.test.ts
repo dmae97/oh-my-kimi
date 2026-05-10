@@ -427,4 +427,60 @@ describe("Agent", () => {
 
 		expect(reasoningPerCall).toEqual([ThinkingLevel.Low, ThinkingLevel.High]);
 	});
+
+	it("returns static metadata via the plain setter", () => {
+		const agent = new Agent();
+		expect(agent.metadata).toBeUndefined();
+
+		const value = { user_id: "static" };
+		agent.metadata = value;
+		expect(agent.metadata).toEqual({ user_id: "static" });
+
+		agent.metadata = undefined;
+		expect(agent.metadata).toBeUndefined();
+	});
+
+	it("metadataForProvider resolves dynamic value at every call when a resolver is installed", () => {
+		const agent = new Agent();
+		let live = "alpha";
+		agent.setMetadataResolver(() => ({ user_id: live }));
+
+		expect(agent.metadataForProvider("anthropic")).toEqual({ user_id: "alpha" });
+		live = "beta";
+		expect(agent.metadataForProvider("anthropic")).toEqual({ user_id: "beta" });
+		// Static getter is unaffected by the resolver.
+		expect(agent.metadata).toBeUndefined();
+	});
+
+	it("clears any installed resolver when assigning the plain setter", () => {
+		const agent = new Agent();
+		agent.setMetadataResolver(() => ({ user_id: "from-resolver" }));
+		expect(agent.metadataForProvider("any")).toEqual({ user_id: "from-resolver" });
+
+		agent.metadata = { user_id: "from-static" };
+		expect(agent.metadata).toEqual({ user_id: "from-static" });
+		expect(agent.metadataForProvider("any")).toEqual({ user_id: "from-static" });
+	});
+
+	it("metadataForProvider returns undefined from the resolver even when a static value is set", () => {
+		// Pin the contract that an installed resolver wins unconditionally over
+		// `#metadata` in the per-provider path.
+		const agent = new Agent();
+		agent.metadata = { user_id: "static" };
+		agent.setMetadataResolver(() => undefined);
+		expect(agent.metadataForProvider("any")).toBeUndefined();
+		// The static getter returns the pre-set static value; the resolver does not affect it.
+		expect(agent.metadata).toEqual({ user_id: "static" });
+	});
+
+	it("reverts to the plain-setter value when the resolver is cleared via setMetadataResolver(undefined)", () => {
+		const agent = new Agent();
+		agent.metadata = { user_id: "static" };
+		agent.setMetadataResolver(() => ({ user_id: "from-resolver" }));
+		expect(agent.metadataForProvider("any")).toEqual({ user_id: "from-resolver" });
+
+		agent.setMetadataResolver(undefined);
+		expect(agent.metadataForProvider("any")).toEqual({ user_id: "static" });
+		expect(agent.metadata).toEqual({ user_id: "static" });
+	});
 });
