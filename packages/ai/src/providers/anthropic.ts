@@ -48,7 +48,12 @@ import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTi
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
-import { extractHttpStatusFromError, isCopilotRetryableError, isUnexpectedSocketCloseMessage } from "../utils/retry";
+import {
+	extractHttpStatusFromError,
+	isCopilotRetryableError,
+	isRetryableError,
+	isUnexpectedSocketCloseMessage,
+} from "../utils/retry";
 import { COMBINATOR_KEYS, NO_STRICT } from "../utils/schema";
 import { notifyRawSseEvent, wrapFetchForSseDebug } from "../utils/sse-debug";
 import {
@@ -841,14 +846,17 @@ export function isProviderRetryableError(error: unknown, provider?: string): boo
 	if (!(error instanceof Error)) return false;
 	if (provider === "github-copilot" && isCopilotRetryableError(error)) return true;
 	const msg = error.message.toLowerCase();
-	return (
+	if (
 		isUnexpectedSocketCloseMessage(msg) ||
 		/rate.?limit|too many requests|overloaded|service.?unavailable|internal_error|stream error.*received from peer|1302|timed?\s*out while waiting for the first event|timeout waiting for first/i.test(
 			msg,
 		) ||
 		isTransientStreamParseError(error) ||
 		isProviderRetryableStreamEnvelopeError(error)
-	);
+	) {
+		return true;
+	}
+	return isRetryableError(error);
 }
 
 function createEmptyUsage(premiumRequests?: number): Usage {
