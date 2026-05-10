@@ -1,6 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added macOS power assertion settings `power.preventIdleSleep`, `power.preventSystemSleep`, `power.declareUserActive`, and `power.preventDisplaySleep` so users can control what types of sleep are blocked during sessions
+
+### Changed
+
+- Changed power assertion behavior to take effect only while a prompt is in flight, replacing session-level persistent assertions
+
+### Fixed
+
+- Fixed power assertion state handling so subsequent prompts are no longer blocked after an aborted or canceled prompt
 
 ## [14.9.2] - 2026-05-10
 ### Added

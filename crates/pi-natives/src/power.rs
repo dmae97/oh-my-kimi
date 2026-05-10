@@ -7,11 +7,25 @@
 use napi_derive::napi;
 
 /// Options for starting a macOS power assertion.
+///
+/// Each boolean maps to a `caffeinate(8)` flag and a corresponding `IOKit`
+/// `IOPMAssertion` type. Multiple flags can be combined; when set, one
+/// assertion is taken per flag and all are released together when the
+/// handle is stopped or dropped.
+///
+/// If every flag is unset (or omitted), the handle behaves as if `idle`
+/// were `true` — preserving the historical default of `caffeinate -i`.
 #[napi(object, js_name = "MacOSPowerAssertionOptions")]
 pub struct MacOSPowerAssertionOptions {
 	/// Human-readable reason shown in macOS power diagnostics.
 	pub reason:  Option<String>,
-	/// Keep the display awake in addition to preventing idle system sleep.
+	/// `caffeinate -i`: prevent the system from idle-sleeping.
+	pub idle:    Option<bool>,
+	/// `caffeinate -s`: prevent the system from sleeping (AC power only).
+	pub system:  Option<bool>,
+	/// `caffeinate -u`: declare the user is active (wakes the display).
+	pub user:    Option<bool>,
+	/// `caffeinate -d`: prevent the display from idle-sleeping.
 	pub display: Option<bool>,
 }
 
@@ -28,7 +42,30 @@ mod platform {
 	const ASSERTION_LEVEL_ON: u32 = 255;
 	const ASSERTION_ID_NONE: u32 = 0;
 	const PREVENT_USER_IDLE_SYSTEM_SLEEP: &str = "PreventUserIdleSystemSleep";
+	const PREVENT_SYSTEM_SLEEP: &str = "PreventSystemSleep";
 	const PREVENT_USER_IDLE_DISPLAY_SLEEP: &str = "PreventUserIdleDisplaySleep";
+	const USER_IS_ACTIVE: &str = "UserIsActive";
+
+	/// Variants this module knows how to acquire. Mirrors the `caffeinate(8)`
+	/// flag set the public API exposes (`-i`, `-s`, `-u`, `-d`).
+	#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+	pub enum AssertionKind {
+		PreventIdleSystemSleep,
+		PreventSystemSleep,
+		DeclareUserActive,
+		PreventDisplaySleep,
+	}
+
+	impl AssertionKind {
+		const fn iokit_name(self) -> &'static str {
+			match self {
+				Self::PreventIdleSystemSleep => PREVENT_USER_IDLE_SYSTEM_SLEEP,
+				Self::PreventSystemSleep => PREVENT_SYSTEM_SLEEP,
+				Self::DeclareUserActive => USER_IS_ACTIVE,
+				Self::PreventDisplaySleep => PREVENT_USER_IDLE_DISPLAY_SLEEP,
+			}
+		}
+	}
 
 	type CFStringRef = *const c_void;
 	type CFTypeRef = *const c_void;
@@ -99,12 +136,8 @@ mod platform {
 	}
 
 	impl AssertionInner {
-		pub fn start(reason: &str, display: bool) -> Result<Self> {
-			let assertion_type = CfString::new(if display {
-				PREVENT_USER_IDLE_DISPLAY_SLEEP
-			} else {
-				PREVENT_USER_IDLE_SYSTEM_SLEEP
-			})?;
+		pub fn start(kind: AssertionKind, reason: &str) -> Result<Self> {
+			let assertion_type = CfString::new(kind.iokit_name())?;
 			let assertion_reason = CfString::new(reason)?;
 			let mut assertion_id = ASSERTION_ID_NONE;
 			// SAFETY: both `CFStringRef` values are valid live CoreFoundation strings owned
@@ -120,7 +153,7 @@ mod platform {
 			};
 			if status != 0 {
 				return Err(Error::from_reason(format!(
-					"Failed to acquire macOS power assertion (IOReturn={status})"
+					"Failed to acquire macOS power assertion {kind:?} (IOReturn={status})"
 				)));
 			}
 			Ok(Self { assertion_id })
@@ -154,18 +187,20 @@ mod platform {
 
 /// Long-lived macOS power assertion.
 ///
-/// On macOS this acquires an `IOKit` assertion that prevents idle sleep until
-/// the handle is stopped or dropped. On other platforms it is a no-op handle so
-/// the caller can keep one cross-platform code path.
+/// On macOS this acquires one or more `IOKit` assertions that prevent the
+/// requested sleep modes until the handle is stopped or dropped. On other
+/// platforms it is a no-op handle so the caller can keep one cross-platform
+/// code path.
 #[napi(js_name = "MacOSPowerAssertion")]
 pub struct MacOSPowerAssertion {
 	#[cfg(target_os = "macos")]
-	inner: Option<platform::AssertionInner>,
+	inners: Vec<platform::AssertionInner>,
 }
 
 #[napi]
 impl MacOSPowerAssertion {
-	/// Acquire a macOS power assertion.
+	/// Acquire a macOS power assertion. On non-macOS platforms returns a
+	/// no-op handle so callers can stay cross-platform.
 	#[napi(factory)]
 	pub fn start(options: Option<MacOSPowerAssertionOptions>) -> napi::Result<Self> {
 		let reason = options
@@ -173,29 +208,61 @@ impl MacOSPowerAssertion {
 			.and_then(|value| value.reason.as_deref())
 			.filter(|value| !value.trim().is_empty())
 			.unwrap_or("Oh My Pi agent session");
-		let display = options
-			.as_ref()
-			.and_then(|value| value.display)
-			.unwrap_or(false);
+		let idle = options.as_ref().and_then(|v| v.idle).unwrap_or(false);
+		let system = options.as_ref().and_then(|v| v.system).unwrap_or(false);
+		let user = options.as_ref().and_then(|v| v.user).unwrap_or(false);
+		let display = options.as_ref().and_then(|v| v.display).unwrap_or(false);
+
+		// Preserve historical default: an empty options object behaves as
+		// `caffeinate -i` (prevent idle system sleep).
+		let effective_idle = idle || !(system || user || display);
+
 		#[cfg(target_os = "macos")]
 		{
-			Ok(Self { inner: Some(platform::AssertionInner::start(reason, display)?) })
+			let mut kinds: Vec<platform::AssertionKind> = Vec::new();
+			if effective_idle {
+				kinds.push(platform::AssertionKind::PreventIdleSystemSleep);
+			}
+			if system {
+				kinds.push(platform::AssertionKind::PreventSystemSleep);
+			}
+			if user {
+				kinds.push(platform::AssertionKind::DeclareUserActive);
+			}
+			if display {
+				kinds.push(platform::AssertionKind::PreventDisplaySleep);
+			}
+			let mut inners: Vec<platform::AssertionInner> = Vec::with_capacity(kinds.len());
+			for kind in kinds {
+				inners.push(platform::AssertionInner::start(kind, reason)?);
+			}
+			Ok(Self { inners })
 		}
 		#[cfg(not(target_os = "macos"))]
 		{
-			let _ = reason;
-			let _ = display;
+			let _ = (reason, effective_idle, system, user, display);
 			Ok(Self {})
 		}
 	}
 
-	/// Release the power assertion early.
+	/// Release every assertion held by this handle. Safe to call multiple
+	/// times; subsequent calls are a no-op.
 	#[napi]
 	#[allow(clippy::missing_const_for_fn, reason = "not const on macOS")]
 	pub fn stop(&mut self) -> napi::Result<()> {
 		#[cfg(target_os = "macos")]
-		if let Some(inner) = &mut self.inner {
-			inner.stop()?;
+		{
+			let mut first_err: Option<napi::Error> = None;
+			for mut inner in self.inners.drain(..) {
+				if let Err(err) = inner.stop()
+					&& first_err.is_none()
+				{
+					first_err = Some(err);
+				}
+			}
+			if let Some(err) = first_err {
+				return Err(err);
+			}
 		}
 		Ok(())
 	}

@@ -646,23 +646,32 @@ export class AgentSession {
 	#hindsightSessionState: HindsightSessionState | undefined = undefined;
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
 
-	#startPowerAssertion(): void {
-		if (process.platform !== "darwin") {
-			return;
-		}
+	#acquirePowerAssertion(): void {
+		if (process.platform !== "darwin") return;
+		if (this.#powerAssertion) return;
+		const idle = this.settings.get("power.preventIdleSleep");
+		const system = this.settings.get("power.preventSystemSleep");
+		const user = this.settings.get("power.declareUserActive");
+		const display = this.settings.get("power.preventDisplaySleep");
+		// All four off → user opted out; do nothing.
+		if (!idle && !system && !user && !display) return;
 		try {
-			this.#powerAssertion = MacOSPowerAssertion.start({ reason: "Oh My Pi agent session" });
+			this.#powerAssertion = MacOSPowerAssertion.start({
+				reason: "Oh My Pi agent session",
+				idle,
+				system,
+				user,
+				display,
+			});
 		} catch (error) {
 			logger.warn("Failed to acquire macOS power assertion", { error: String(error) });
 		}
 	}
 
-	#stopPowerAssertion(): void {
+	#releasePowerAssertion(): void {
 		const assertion = this.#powerAssertion;
 		this.#powerAssertion = undefined;
-		if (!assertion) {
-			return;
-		}
+		if (!assertion) return;
 		try {
 			assertion.stop();
 		} catch (error) {
@@ -670,11 +679,30 @@ export class AgentSession {
 		}
 	}
 
+	#beginInFlight(): void {
+		this.#promptInFlightCount++;
+		if (this.#promptInFlightCount === 1) {
+			this.#acquirePowerAssertion();
+		}
+	}
+
+	#endInFlight(): void {
+		this.#promptInFlightCount = Math.max(0, this.#promptInFlightCount - 1);
+		if (this.#promptInFlightCount === 0) {
+			this.#releasePowerAssertion();
+		}
+	}
+
+	#resetInFlight(): void {
+		this.#promptInFlightCount = 0;
+		this.#releasePowerAssertion();
+	}
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
-		this.#startPowerAssertion();
+		// Power assertions are taken per turn (see #beginInFlight); nothing acquired here.
 		this.#asyncJobManager = config.asyncJobManager;
 		this.#evalKernelOwnerId = config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`;
 		this.#scopedModels = config.scopedModels ?? [];
@@ -2130,7 +2158,7 @@ export class AgentSession {
 			);
 		}
 		await disposeKernelSessionsByOwner(this.#evalKernelOwnerId);
-		this.#stopPowerAssertion();
+		this.#releasePowerAssertion();
 		await this.sessionManager.close();
 		this.#closeAllProviderSessions("dispose");
 		const hindsightState = this.setHindsightSessionState(undefined);
@@ -3171,7 +3199,7 @@ export class AgentSession {
 			skipPostPromptRecoveryWait?: boolean;
 		},
 	): Promise<void> {
-		this.#promptInFlightCount++;
+		this.#beginInFlight();
 		const generation = this.#promptGeneration;
 		try {
 			// Flush any pending bash messages before the new prompt
@@ -3291,7 +3319,7 @@ export class AgentSession {
 				await this.#waitForPostPromptRecovery();
 			}
 		} finally {
-			this.#promptInFlightCount = Math.max(0, this.#promptInFlightCount - 1);
+			this.#endInFlight();
 		}
 	}
 
@@ -3877,7 +3905,7 @@ export class AgentSession {
 		// Clear prompt-in-flight state: waitForIdle resolves when the agent loop's finally
 		// block runs, but nested prompt setup/finalizers may still be unwinding. Without this,
 		// a subsequent prompt() can incorrectly observe the session as busy after an abort.
-		this.#promptInFlightCount = 0;
+		this.#resetInFlight();
 		// Safety net: if the agent loop aborted without producing an assistant
 		// message (e.g. failed before the first stream), the in-flight yield was
 		// never resolved or rejected by the normal message_end path. Reject it now
@@ -4699,7 +4727,7 @@ export class AgentSession {
 			if (handoffSignal.aborted) {
 				throw new Error("Handoff cancelled");
 			}
-			this.#promptInFlightCount++;
+			this.#beginInFlight();
 			try {
 				this.agent.setSystemPrompt(this.#baseSystemPrompt);
 				await this.#promptAgentWithIdleRetry([
@@ -4711,7 +4739,7 @@ export class AgentSession {
 					},
 				]);
 			} finally {
-				this.#promptInFlightCount = Math.max(0, this.#promptInFlightCount - 1);
+				this.#endInFlight();
 			}
 			await completionPromise;
 

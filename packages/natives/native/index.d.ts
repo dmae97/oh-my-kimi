@@ -21,14 +21,21 @@ export declare class MacAppearanceObserver {
 /**
  * Long-lived macOS power assertion.
  *
- * On macOS this acquires an `IOKit` assertion that prevents idle sleep until
- * the handle is stopped or dropped. On other platforms it is a no-op handle so
- * the caller can keep one cross-platform code path.
+ * On macOS this acquires one or more `IOKit` assertions that prevent the
+ * requested sleep modes until the handle is stopped or dropped. On other
+ * platforms it is a no-op handle so the caller can keep one cross-platform
+ * code path.
  */
 export declare class MacOSPowerAssertion {
-  /** Acquire a macOS power assertion. */
+  /**
+   * Acquire a macOS power assertion. On non-macOS platforms returns a
+   * no-op handle so callers can stay cross-platform.
+   */
   static start(options?: MacOSPowerAssertionOptions | undefined | null): MacOSPowerAssertion
-  /** Release the power assertion early. */
+  /**
+   * Release every assertion held by this handle. Safe to call multiple
+   * times; subsequent calls are a no-op.
+   */
   stop(): void
 }
 
@@ -823,11 +830,27 @@ export declare enum MacOSAppearance {
   Light = 'light'
 }
 
-/** Options for starting a macOS power assertion. */
+/**
+ * Options for starting a macOS power assertion.
+ *
+ * Each boolean maps to a `caffeinate(8)` flag and a corresponding IOKit
+ * `IOPMAssertion` type. Multiple flags can be combined; when set, one
+ * assertion is taken per flag and all are released together when the
+ * handle is stopped or dropped.
+ *
+ * If every flag is unset (or omitted), the handle behaves as if `idle`
+ * were `true` — preserving the historical default of `caffeinate -i`.
+ */
 export interface MacOSPowerAssertionOptions {
   /** Human-readable reason shown in macOS power diagnostics. */
   reason?: string
-  /** Keep the display awake in addition to preventing idle system sleep. */
+  /** `caffeinate -i`: prevent the system from idle-sleeping. */
+  idle?: boolean
+  /** `caffeinate -s`: prevent the system from sleeping (AC power only). */
+  system?: boolean
+  /** `caffeinate -u`: declare the user is active (wakes the display). */
+  user?: boolean
+  /** `caffeinate -d`: prevent the display from idle-sleeping. */
   display?: boolean
 }
 

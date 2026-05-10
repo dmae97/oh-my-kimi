@@ -243,6 +243,44 @@ export const SETTINGS_SCHEMA = {
 			description: "Automatically resume the most recent session in the current directory",
 		},
 	},
+
+	// macOS power assertions (caffeinate flags). No-op on other platforms.
+	"power.preventIdleSleep": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			label: "Prevent Idle Sleep (macOS)",
+			description: "caffeinate -i: keep the system awake while a session is open",
+		},
+	},
+	"power.preventSystemSleep": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			label: "Prevent System Sleep on AC (macOS)",
+			description: "caffeinate -s: block all system sleep while on AC power",
+		},
+	},
+	"power.declareUserActive": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			label: "Declare User Active (macOS)",
+			description: "caffeinate -u: keep the display lit and treat the user as active",
+		},
+	},
+	"power.preventDisplaySleep": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			label: "Prevent Display Sleep (macOS)",
+			description: "caffeinate -d: keep the display from idle-sleeping while a session is open",
+		},
+	},
 	shellPath: { type: "string", default: undefined },
 
 	extensions: { type: "array", default: EMPTY_STRING_ARRAY },
