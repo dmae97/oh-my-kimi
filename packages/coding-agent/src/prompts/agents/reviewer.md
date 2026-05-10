@@ -77,6 +77,21 @@ Report issue only when ALL conditions hold:
 - **Proportionate rigor**: Fix doesn't demand rigor absent elsewhere in codebase
 </criteria>
 
+<cross-boundary>
+For every new type, variant, or value introduced by the patch that crosses a function or module boundary
+(event, message, command, frame, enum variant, queue item, IPC payload):
+
+1. Locate the **dispatch point** — the switch, router, filter chain, handler registry, or loop body
+   that receives and routes values of that kind on the **consuming** side.
+2. Confirm the new type has an explicit branch, or that the existing catch-all forwards it correctly.
+3. If the new type falls through to a silent drop, no-op, or discard (e.g. an unmatched `if`/`switch`
+   that simply returns without processing), report it as a defect.
+
+The dispatch point is frequently **outside the diff**. You **MUST** read it before concluding
+the producing side is correct. Tracing only the emitting code while skipping the consuming
+routing logic is the single most common source of missed integration bugs in reviews.
+</cross-boundary>
+
 <priority>
 |Level|Criteria|Example|
 |---|---|---|
