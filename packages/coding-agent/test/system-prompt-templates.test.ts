@@ -166,6 +166,29 @@ describe("system Handlebars prompt templates", () => {
 		expect(neither).not.toContain("## Version Control");
 	});
 
+	test("subagent system owns shared context while user prompt only owns assignment", async () => {
+		const systemTemplate = await Bun.file(path.join(systemPromptsDir, "subagent-system-prompt.md")).text();
+		const userTemplate = await Bun.file(path.join(systemPromptsDir, "subagent-user-prompt.md")).text();
+
+		const subagentSystem = prompt.render(systemTemplate, {
+			...baseRenderContext,
+			context: "Shared task background",
+			agent: "You are a task agent.",
+		});
+		const subagentUser = prompt.render(userTemplate, {
+			...baseRenderContext,
+			context: "Shared task background",
+			assignment: "Do the task.",
+		});
+
+		expect(subagentSystem).toContain("<|START_CONTEXT|>\nShared task background\n<|END_CONTEXT|>");
+		expect(subagentSystem).toContain("<|START_ROLE|>");
+		expect(subagentUser).toContain("Complete the assignment below, thoroughly:");
+		expect(subagentUser).toContain("Do the task.");
+		expect(subagentUser).not.toContain("<|START_CONTEXT|>");
+		expect(subagentUser).not.toContain("Shared task background");
+	});
+
 	test("system-prompt conditionally renders inspect_image guidance", async () => {
 		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
 		const template = await Bun.file(templatePath).text();
@@ -175,15 +198,15 @@ describe("system Handlebars prompt templates", () => {
 			...baseRenderContext,
 			tools: [...baseTools, "inspect_image"],
 		});
-		expect(withInspectImage).toContain("### Image inspection");
+		expect(withInspectImage).toContain("## Images");
 		expect(withInspectImage).toContain("**MUST** use `inspect_image` over `read`");
-		expect(withInspectImage).toContain("Write a specific `question` for `inspect_image`");
+		expect(withInspectImage).toContain("write a specific `question` for `inspect_image`");
 
 		const withoutInspectImage = prompt.render(template, {
 			...baseRenderContext,
 			tools: baseTools.filter((tool: string) => tool !== "inspect_image"),
 		});
-		expect(withoutInspectImage).not.toContain("### Image inspection");
+		expect(withoutInspectImage).not.toContain("## Images");
 	});
 
 	test("system-prompt renders MCP discovery hint when enabled", async () => {
@@ -197,12 +220,39 @@ describe("system Handlebars prompt templates", () => {
 			mcpDiscoveryServerSummaries: ["github (2 tools)", "slack (1 tool)"],
 		});
 
-		expect(rendered).toContain("### MCP tool discovery");
+		expect(rendered).toContain("## Discovery");
 		expect(rendered).toContain("Discoverable MCP servers in this session: github (2 tools), slack (1 tool).");
 		expect(rendered).not.toContain("Example discoverable MCP tools:");
 		expect(rendered).toContain("call `search_tool_bm25` before concluding no such tool exists");
 	});
 
+	test("buildSystemPrompt keeps system project and now as separate ordered blocks", async () => {
+		await withTempDir(async dir => {
+			const { systemPrompt } = await buildSystemPrompt({
+				cwd: dir,
+				contextFiles: [],
+				skills: [],
+				rules: [],
+				toolNames: ["read"],
+				workspaceTree: {
+					rootPath: dir,
+					rendered: ".\n  - src/        1m",
+					truncated: false,
+					totalLines: 2,
+					agentsMdFiles: [],
+				},
+			});
+
+			expect(systemPrompt).toHaveLength(3);
+			expect(systemPrompt[0]).toContain("<|START_CONTRACT|>");
+			expect(systemPrompt[0]).not.toContain("current working directory");
+			expect(systemPrompt[1]).toContain("<workstation>");
+			expect(systemPrompt[1]).toContain("<workspace-tree>");
+			expect(systemPrompt[1]).not.toContain("current working directory");
+			expect(systemPrompt[2]).toContain("Today is ");
+			expect(systemPrompt[2]).toContain(`current working directory is '${dir}'.`);
+		});
+	});
 	test("buildSystemPrompt renders workspace tree after directory context in project prompt", async () => {
 		await withTempDir(async dir => {
 			const { systemPrompt } = await buildSystemPrompt({
@@ -322,8 +372,7 @@ describe("system Handlebars prompt templates", () => {
 		const promptText = systemPrompt.join("\n\n");
 
 		expect(promptText).toContain("Edit: `apply_patch`");
-		expect(promptText).toContain("`read`, `search`, `find`, `apply_patch`, `lsp`");
-		expect(promptText).toContain("Use `apply_patch` for surgical text changes");
+		expect(promptText).toContain("use `apply_patch` for surgical text changes");
 		expect(promptText).not.toContain("Edit: `edit`");
 	});
 

@@ -139,6 +139,7 @@ export interface ExecutorOptions {
 	agent: AgentDefinition;
 	task: string;
 	assignment?: string;
+	context?: string;
 	description?: string;
 	index: number;
 	id: string;
@@ -994,17 +995,20 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				skills: options.skills,
 				promptTemplates: options.promptTemplates,
 				workspaceTree: options.workspaceTree,
-				systemPrompt: defaultPrompt => [
-					prompt.render(subagentSystemPromptTemplate, {
-						base: defaultPrompt.join("\n\n"),
+				systemPrompt: defaultPrompt => {
+					const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
 						agent: agent.systemPrompt,
+						context: options.context?.trim() ?? "",
 						worktree: worktree ?? "",
 						outputSchema: normalizedOutputSchema,
 						contextFile: options.contextFile,
 						ircPeers: ircEnabled ? renderIrcPeerRoster(id) : "",
 						ircSelfId: ircEnabled ? id : "",
-					}),
-				],
+					});
+					return defaultPrompt.length === 0
+						? [subagentPrompt]
+						: [...defaultPrompt.slice(0, -1), subagentPrompt, defaultPrompt[defaultPrompt.length - 1]];
+				},
 				sessionManager,
 				hasUI: false,
 				spawns: spawnsEnv,

@@ -139,6 +139,45 @@ describe("runSubprocess yield reminders", () => {
 		expect(createAgentSessionSpy).toHaveBeenCalledTimes(1);
 	});
 
+	it("renders shared task context in subagent system prompt before now", async () => {
+		let userPrompt = "";
+		const session = createMockSession(({ text, emit }) => {
+			userPrompt = text;
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-context-system",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+		const createAgentSessionSpy = mockCreateAgentSession(session);
+
+		await runSubprocess({
+			...baseOptions,
+			id: "subagent-context-system",
+			context: "Shared task background",
+			task: "Your assignment is below.\nBe thorough and complete fully before yielding.\n\nDo the task.",
+		});
+
+		const systemPromptBuilder = createAgentSessionSpy.mock.calls[0]?.[0]?.systemPrompt;
+		expect(systemPromptBuilder).toBeFunction();
+		if (typeof systemPromptBuilder !== "function") throw new Error("Expected system prompt builder");
+		const systemPrompt = systemPromptBuilder(["system", "project", "now"]);
+
+		expect(systemPrompt).toHaveLength(4);
+		expect(systemPrompt?.[0]).toBe("system");
+		expect(systemPrompt?.[1]).toBe("project");
+		expect(systemPrompt?.[2]).toContain("<|START_CONTEXT|>\nShared task background\n<|END_CONTEXT|>");
+		expect(systemPrompt?.[2]).toContain("<|START_ROLE|>\ntest\n<|END_ROLE|>");
+		expect(systemPrompt?.[3]).toBe("now");
+		expect(userPrompt).not.toContain("<|START_CONTEXT|>");
+		expect(userPrompt).not.toContain("Shared task background");
+	});
+
 	it("sends reminder prompt when subagent stops without yield", async () => {
 		const prompts: string[] = [];
 		const promptOptions: Array<PromptOptions | undefined> = [];

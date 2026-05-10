@@ -15,12 +15,8 @@ export interface PromptFormatOptions {
 const OPENING_XML = /^<([a-z_-]+)(?:\s+[^>]*)?>$/;
 // Closing XML tag
 const CLOSING_XML = /^<\/([a-z_-]+)>$/;
-// Handlebars block start: {{#if}}, {{#has}}, {{#list}}, etc.
-const OPENING_HBS = /^\{\{#/;
 // Handlebars block end: {{/if}}, {{/has}}, {{/list}}, etc.
 const CLOSING_HBS = /^\{\{\//;
-// List item (- or * or 1.)
-const LIST_ITEM = /^(?:[-*]\s|\d+\.\s)/;
 // Table row
 const TABLE_ROW = /^\|.*\|$/;
 // Table separator (|---|---|)
@@ -133,25 +129,18 @@ export function format(content: string, options: PromptFormatOptions = {}): stri
 			line = boldRfc2119Keywords(line);
 		}
 
-		const isBlank = trimmed === "";
-		if (isBlank) {
-			const prevLine = result[result.length - 1]?.trim() ?? "";
+		if (trimmed === "") {
 			const nextLine = lines[i + 1]?.trim() ?? "";
-
-			if (LIST_ITEM.test(nextLine)) {
+			// Strip any run of 2+ consecutive blank lines entirely; preserve a single blank.
+			if (nextLine === "") {
+				while (result.length > 0 && result[result.length - 1].trim() === "") {
+					result.pop();
+				}
+				while (i + 1 < lines.length && lines[i + 1].trim() === "") i++;
 				continue;
 			}
-
-			if (OPENING_XML.test(prevLine) || (isPreRender && OPENING_HBS.test(prevLine))) {
-				continue;
-			}
-
-			if (CLOSING_XML.test(nextLine) || (isPreRender && CLOSING_HBS.test(nextLine))) {
-				continue;
-			}
-
-			const prevIsBlank = prevLine === "";
-			if (prevIsBlank) {
+			const prevLine = result[result.length - 1]?.trim() ?? "";
+			if (prevLine === "") {
 				continue;
 			}
 		}
@@ -381,18 +370,6 @@ handlebars.registerHelper("includes", (collection: unknown, item: unknown): bool
 handlebars.registerHelper("not", (value: unknown): boolean => !value);
 
 handlebars.registerHelper("jsonStringify", (value: unknown): string => JSON.stringify(value));
-
-/**
- * {{SECTION_SEPARATOR "Name"}}
- * Renders a visible section header separator used by system-prompt templates.
- */
-export function sectionSeparator(name: string): string {
-	return `\n\n═══════════${name}═══════════\n`;
-}
-const sectionSeparatorHelper = (name: unknown): string => sectionSeparator(String(name));
-handlebars.registerHelper("SECTION_SEPARATOR", sectionSeparatorHelper);
-// Legacy misspelled alias retained for external templates copied from pre-rename versions.
-handlebars.registerHelper("SECTION_SEPERATOR", sectionSeparatorHelper);
 
 export function registerHelper(name: string, fn: HelperDelegate): void {
 	handlebars.registerHelper(name, fn);

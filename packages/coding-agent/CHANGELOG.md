@@ -2,8 +2,14 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed the `sectionSeparator` re-export from `config/prompt-templates`, so existing imports from `@oh-my-pi/pi-coding-agent/config/prompt-templates` now need to resolve `sectionSeparator` from its utility package
+
 ### Added
 
+- Added a dedicated `[now]` prompt block to `buildSystemPrompt` output containing current date, current working directory, and required end-of-turn continuation/verification guidance
+- Added a new `[project]` prompt block wrapper around workstation and workspace context and ensured it is emitted as a separate system prompt segment
 - Added dedicated HTML rendering for `eval` tool calls, including cell-by-cell parsing of `===== ... =====` blocks with inferred Python/JS/TypeScript highlighting
 - Added dedicated rendering support for `search`, `recipe`, and `irc` tool calls in transcript exports
 - Added a collapsible `Available Tools` section with a tool count and chip-style compact tool names
@@ -11,6 +17,10 @@
 
 ### Changed
 
+- Changed delegated subagent prompts so shared task context is now rendered only in the system-level `[context]` block, while the user-facing task message now contains only the assignment prompt text
+- Changed system prompt rendering to use block markers such as `[env]`, `[contract]`, `[role]`, `[coop]`, and `[closure]` for more explicit structural instructions
+- Changed the working-directory value in rendered prompts to use `shortenPath` before interpolation
+- Updated subagent prompt assembly to compose prompt blocks and place the `[now]` block after the subagent-specific instructions
 - Changed GitHub (`gh`) tool cards to include operation, PR, branch, and truncated query/title/body details
 - Changed tool-call output to display internal `_i` intent separately and hide it from rendered argument JSON
 - Changed `ast_edit` and `find`/`search` rendering to show resolved path values and option flags such as `limit`, `no-hidden`, and `no-reply`
@@ -18,6 +28,7 @@
 
 ### Fixed
 
+- Fixed subagent task prompt construction so a trailing `[now]` block in the base prompts is preserved and not swallowed when rendering `subagent-system-prompt`
 - Fixed edit rendering so provided `input` text is shown in the export even without a file path
 - Fixed `args.paths` handling in `ast_edit` and `find` so multiple paths are shown as a comma-separated list
 - Fixed power assertion state handling so subsequent prompts are no longer blocked after an aborted or canceled prompt

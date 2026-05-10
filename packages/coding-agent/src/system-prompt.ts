@@ -12,8 +12,10 @@ import type { SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
 import { loadSkills, type Skill } from "./extensibility/skills";
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
+import nowPromptTemplate from "./prompts/system/now-prompt.md" with { type: "text" };
 import projectPromptTemplate from "./prompts/system/project-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
+import { shortenPath } from "./tools/render-utils";
 import { AGENTS_MD_LIMIT, buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
 interface AlwaysApplyRule {
@@ -503,7 +505,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 
 	const date = new Date().toISOString().slice(0, 10);
 	const dateTime = date;
-	const promptCwd = resolvedCwd.replace(/\\/g, "/");
+	const promptCwd = shortenPath(resolvedCwd.replace(/\\/g, "/"));
 
 	// Build tool metadata for system prompt rendering
 	// Priority: explicit list > tools map > defaults
@@ -541,7 +543,6 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const injectedAlwaysApplyRules = dedupeAlwaysApplyRules(alwaysApplyRules, promptSources);
 
 	const environment = await logger.time("getEnvironmentInfo", getEnvironmentInfo);
-	const reportToolIssueToolName = toolPromptNames.get("report_tool_issue") ?? "report_tool_issue";
 	const data = {
 		systemPromptCustomization: effectiveSystemPromptCustomization,
 		customPrompt: resolvedCustomPrompt,
@@ -568,17 +569,15 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		eagerTasks,
 		secretsEnabled,
 	};
-	let rendered = prompt.render(resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate, data);
-
-	// When autoqa is active the report_tool_issue tool is in the tool set — nudge the agent.
-	if (toolNames.includes("report_tool_issue")) {
-		rendered += `\n\n<critical>\nThe \`${reportToolIssueToolName}\` tool is available for automated QA. If ANY tool you call returns output that is unexpected, incorrect, malformed, or otherwise inconsistent with what you anticipated given the tool's described behavior and your parameters, call \`${reportToolIssueToolName}\` with the tool name and a concise description of the discrepancy. Do not hesitate to report — false positives are acceptable.\n</critical>`;
-	}
-
+	const rendered = prompt.render(resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate, data);
 	const systemPrompt = [rendered];
 	const projectPrompt = resolvedCustomPrompt ? "" : prompt.render(projectPromptTemplate, data).trim();
 	if (projectPrompt) {
 		systemPrompt.push(projectPrompt);
+	}
+	const nowPrompt = prompt.render(nowPromptTemplate, data).trim();
+	if (nowPrompt) {
+		systemPrompt.push(nowPrompt);
 	}
 
 	return { systemPrompt };
