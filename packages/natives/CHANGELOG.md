@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.9.2] - 2026-05-10
+
 ### Added
 
 - Added `listWorkspace`, a native single-pass workspace walker that returns bounded tree entries and AGENTS.md directory-context candidates together.

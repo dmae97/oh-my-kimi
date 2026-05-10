@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.9.2] - 2026-05-10
 ### Added
 
 - Added `agentsMdFiles` to `WorkspaceTree` so AGENTS.md discovery results are returned with the workspace scan output
