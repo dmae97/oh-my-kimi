@@ -6,7 +6,7 @@ import {
 	INTENT_FIELD,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
-import type { Message, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
+import type { CredentialDisabledEvent, Message, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import {
 	getOpenAICodexTransportDetails,
 	prewarmOpenAICodexResponses,
@@ -670,10 +670,32 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	registerSshCleanup();
 	registerPythonCleanup();
 
-	// Use provided or create AuthStorage and ModelRegistry
-	const authStorage = options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir));
-	const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage);
-
+	// Pin authStorage to modelRegistry.authStorage: ModelRegistry.getApiKey() routes refresh
+	// failures through that instance, so any divergent storage handed to the bridge / mcpManager
+	// / session would silently miss credential_disabled events.
+	const modelRegistry =
+		options.modelRegistry ??
+		new ModelRegistry(options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir)));
+	const authStorage = modelRegistry.authStorage;
+	if (options.authStorage && options.authStorage !== authStorage) {
+		throw new Error(
+			"options.authStorage and options.modelRegistry.authStorage must be the same instance when both are provided",
+		);
+	}
+	// Subscribe before any getApiKey() call so startup model probes can't fire a
+	// credential_disabled event past us. An embedder's constructor handler makes the
+	// listener set non-empty from construction, which defeats AuthStorage's no-listener
+	// buffer — so we can't rely on it to catch startup events for the extension runner.
+	const startupCredentialDisabledEvents: CredentialDisabledEvent[] = [];
+	let credentialDisabledTarget: ExtensionRunner | undefined;
+	let unsubscribeCredentialDisabled: (() => void) | undefined = authStorage.onCredentialDisabled(event => {
+		if (credentialDisabledTarget) {
+			// Discard return: any handler error is routed through runner.onError listeners.
+			void credentialDisabledTarget.emitCredentialDisabled(event);
+		} else {
+			startupCredentialDisabledEvents.push(event);
+		}
+	});
 	const settings = options.settings ?? (await logger.time("settings", Settings.init, { cwd, agentDir }));
 	logger.time("initializeWithSettings", initializeWithSettings, settings);
 	if (!options.modelRegistry) {
@@ -1277,6 +1299,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			);
 		}
 
+		if (extensionRunner) {
+			credentialDisabledTarget = extensionRunner;
+			for (const event of startupCredentialDisabledEvents.splice(0)) {
+				// Discard return: any handler error is routed through runner.onError listeners.
+				void extensionRunner.emitCredentialDisabled(event);
+			}
+		} else {
+			// No runner to forward to; release our subscription. The embedder's own
+			// onCredentialDisabled (if any) keeps firing through its own subscription.
+			startupCredentialDisabledEvents.length = 0;
+			unsubscribeCredentialDisabled?.();
+			unsubscribeCredentialDisabled = undefined;
+		}
+
 		const getSessionContext = () => ({
 			sessionManager,
 			modelRegistry,
@@ -1766,6 +1802,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					await originalDispose();
 				} finally {
 					agentRegistry.unregister(resolvedAgentId);
+					unsubscribeCredentialDisabled?.();
 				}
 			};
 		}
@@ -1901,6 +1938,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			eventBus,
 		};
 	} catch (error) {
+		// Release the subscription if the throw happened after install but before the
+		// dispose-wrap took ownership. Idempotent with dispose() — Set.delete is a no-op
+		// for already-removed listeners.
+		unsubscribeCredentialDisabled?.();
 		try {
 			if (hasSession) {
 				await session.dispose();
