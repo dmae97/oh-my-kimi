@@ -328,66 +328,6 @@ describe("hashline parser — block op syntax", () => {
 	});
 });
 
-describe("hashline parser — inline modify syntax", () => {
-	const content = "alpha\nbeta\ngamma";
-
-	it("prepends text to the anchored line via `< ANCHOR<sep>TEXT`", () => {
-		const diff = `< ${tag(2, "beta")}${pl("// ")}`;
-		expect(applyDiff(content, diff)).toBe("alpha\n// beta\ngamma");
-	});
-
-	it("appends text to the anchored line via `+ ANCHOR<sep>TEXT`", () => {
-		const diff = `+ ${tag(2, "beta")}${pl(" // tag")}`;
-		expect(applyDiff(content, diff)).toBe("alpha\nbeta // tag\ngamma");
-	});
-
-	it("combines a prepend and an append on the same line", () => {
-		const diff = [`< ${tag(2, "beta")}${pl("[")}`, `+ ${tag(2, "beta")}${pl("]")}`].join("\n");
-		expect(applyDiff(content, diff)).toBe("alpha\n[beta]\ngamma");
-	});
-
-	it("stacks multiple prepends with later edits wrapping earlier ones", () => {
-		const diff = [`< ${tag(2, "beta")}${pl("A")}`, `< ${tag(2, "beta")}${pl("B")}`].join("\n");
-		expect(applyDiff(content, diff)).toBe("alpha\nBAbeta\ngamma");
-	});
-
-	it("stacks multiple appends with later edits wrapping earlier ones", () => {
-		const diff = [`+ ${tag(2, "beta")}${pl("A")}`, `+ ${tag(2, "beta")}${pl("B")}`].join("\n");
-		expect(applyDiff(content, diff)).toBe("alpha\nbetaAB\ngamma");
-	});
-
-	it("appends inline AND inserts payload lines after the modified line", () => {
-		const diff = [`+ ${tag(2, "beta")}${pl(" // tag")}`, pl("inserted-after-1"), pl("inserted-after-2")].join("\n");
-		expect(applyDiff(content, diff)).toBe("alpha\nbeta // tag\ninserted-after-1\ninserted-after-2\ngamma");
-	});
-
-	it("prepends inline AND inserts payload lines before the modified line", () => {
-		const diff = [`< ${tag(2, "beta")}${pl("// ")}`, pl("inserted-before-1"), pl("inserted-before-2")].join("\n");
-		expect(applyDiff(content, diff)).toBe("alpha\ninserted-before-1\ninserted-before-2\n// beta\ngamma");
-	});
-
-	it("allows a block insert-before to coexist with an inline modify on the same line", () => {
-		const diff = [`< ${tag(2, "beta")}`, pl("// note"), `+ ${tag(2, "beta")}${pl("!")}`].join("\n");
-		expect(applyDiff(content, diff)).toBe("alpha\n// note\nbeta!\ngamma");
-	});
-
-	it("rejects combining inline modify with a delete on the same line", () => {
-		const diff = [`- ${sameLineRange(tag(2, "beta"))}`, `+ ${tag(2, "beta")}${pl("!")}`].join("\n");
-		expect(() => applyDiff(content, diff)).toThrow(/cannot combine inline modify/);
-	});
-
-	it("validates the anchor hash for inline modify just like other ops", () => {
-		const diff = `+ ${mistag(2, "beta")}${pl("!")}`;
-		expect(() => applyDiff(content, diff)).toThrow(HashlineMismatchError);
-	});
-
-	it("treats an empty inline payload as a no-op when nothing else follows", () => {
-		const diff = `+ ${tag(2, "beta")}${pl("")}`;
-		const result = applyHashlineEdits(content, parseHashline(diff));
-		expect(result.lines).toBe(content);
-	});
-});
-
 describe("hashline — stale anchors", () => {
 	it("throws HashlineMismatchError when a Lid hash no longer matches", () => {
 		const diff = [`= ${sameLineRange(mistag(2, "bbb"))}`, pl("BBB")].join("\n");

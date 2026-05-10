@@ -1,9 +1,8 @@
 import { RANGE_INTERIOR_HASH } from "./constants";
-import { describeAnchorExamples, HL_EDIT_SEP, HL_EDIT_SEP_RE_RAW, HL_HASH_CAPTURE_RE_RAW } from "./hash";
+import { describeAnchorExamples, HL_EDIT_SEP, HL_HASH_CAPTURE_RE_RAW } from "./hash";
 import type { Anchor, HashlineCursor, HashlineEdit } from "./types";
 import { stripTrailingCarriageReturn } from "./utils";
 
-const HL_EDIT_SEPARATOR_RE = HL_EDIT_SEP_RE_RAW;
 const LID_CAPTURE_RE = new RegExp(`^${HL_HASH_CAPTURE_RE_RAW}$`);
 
 function parseLid(raw: string, lineNum: number): Anchor {
@@ -70,8 +69,6 @@ const INSERT_BEFORE_OP_RE = /^<\s*(\S+)$/;
 const INSERT_AFTER_OP_RE = /^\+\s*(\S+)$/;
 const DELETE_OP_RE = /^-\s*(\S+)$/;
 const REPLACE_OP_RE = /^=\s*(\S+)$/;
-const INLINE_BEFORE_OP_RE = new RegExp(`^<\\s*${HL_HASH_CAPTURE_RE_RAW}${HL_EDIT_SEPARATOR_RE}(.*)$`);
-const INLINE_AFTER_OP_RE = new RegExp(`^\\+\\s*${HL_HASH_CAPTURE_RE_RAW}${HL_EDIT_SEPARATOR_RE}(.*)$`);
 
 export function cloneCursor(cursor: HashlineCursor): HashlineCursor {
 	if (cursor.kind === "before_anchor") return { kind: "before_anchor", anchor: { ...cursor.anchor } };
@@ -123,42 +120,6 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		}
 		if (line.startsWith(HL_EDIT_SEP)) {
 			throw new Error(`line ${lineNum}: payload line has no preceding +, <, or = operation.`);
-		}
-
-		const inlineBeforeMatch = INLINE_BEFORE_OP_RE.exec(line);
-		if (inlineBeforeMatch) {
-			const anchor = parseLid(`${inlineBeforeMatch[1]}${inlineBeforeMatch[2]}`, lineNum);
-			edits.push({
-				kind: "modify",
-				anchor,
-				prefix: inlineBeforeMatch[3],
-				suffix: "",
-				lineNum,
-				index: editIndex++,
-			});
-			const cursor: HashlineCursor = { kind: "before_anchor", anchor };
-			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, false);
-			for (const text of payload) pushInsert(cursor, text, lineNum);
-			i = nextIndex;
-			continue;
-		}
-
-		const inlineAfterMatch = INLINE_AFTER_OP_RE.exec(line);
-		if (inlineAfterMatch) {
-			const anchor = parseLid(`${inlineAfterMatch[1]}${inlineAfterMatch[2]}`, lineNum);
-			edits.push({
-				kind: "modify",
-				anchor,
-				prefix: "",
-				suffix: inlineAfterMatch[3],
-				lineNum,
-				index: editIndex++,
-			});
-			const cursor: HashlineCursor = { kind: "after_anchor", anchor };
-			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, false);
-			for (const text of payload) pushInsert(cursor, text, lineNum);
-			i = nextIndex;
-			continue;
 		}
 
 		const insertBeforeMatch = INSERT_BEFORE_OP_RE.exec(line);

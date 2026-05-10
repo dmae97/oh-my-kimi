@@ -7,16 +7,12 @@ section: file_header line_op*
 
 file_header: "@" path LF
 
-line_op: inline_before_op payload*
-       | inline_after_op payload*
-       | insert_before_op payload+
+line_op: insert_before_op payload+
        | insert_after_op payload+
        | replace_op payload*
        | delete_op
        | blank
 
-inline_before_op: "<" LID $HSEP$ line_text? LF
-inline_after_op: "+" LID $HSEP$ line_text? LF
 insert_before_op: "<" insert_target LF
 insert_after_op: "+" insert_target LF
 replace_op: "=" range LF

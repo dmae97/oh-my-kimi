@@ -96,10 +96,6 @@ When your edit involves brace boundaries (`{` / `}`), prefer these shapes:
 + {{hrefr 4}}
 {{hsep}}	if (clean.length === 0) return DEF;
 
-# Append WITHIN a line
-@a.ts
-+ {{hrefr 4}}{{hsep}} // first run
-
 # Append to end of file
 @a.ts
 + EOF

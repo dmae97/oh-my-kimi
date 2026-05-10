@@ -42,7 +42,6 @@ async function readHashlineFile(absolutePath: string, pathText: string): Promise
 function hasAnchorScopedEdit(edits: HashlineEdit[]): boolean {
 	return edits.some(edit => {
 		if (edit.kind === "delete") return true;
-		if (edit.kind === "modify") return true;
 		return edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor";
 	});
 }

@@ -24,8 +24,7 @@ export type HashlineCursor =
 
 export type HashlineEdit =
 	| { kind: "insert"; cursor: HashlineCursor; text: string; lineNum: number; index: number }
-	| { kind: "delete"; anchor: Anchor; lineNum: number; index: number; oldAssertion?: string }
-	| { kind: "modify"; anchor: Anchor; prefix: string; suffix: string; lineNum: number; index: number };
+	| { kind: "delete"; anchor: Anchor; lineNum: number; index: number; oldAssertion?: string };
 
 export const hashlineEditParamsSchema = Type.Object({ input: Type.String() });
 export type HashlineParams = Static<typeof hashlineEditParamsSchema>;

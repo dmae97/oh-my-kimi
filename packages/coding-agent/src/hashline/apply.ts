@@ -1,6 +1,6 @@
 import { HashlineMismatchError } from "./anchors";
 import { RANGE_INTERIOR_HASH } from "./constants";
-import { computeLineHash, HL_EDIT_SEP } from "./hash";
+import { computeLineHash } from "./hash";
 import { cloneCursor } from "./parser";
 import type { Anchor, HashlineApplyOptions, HashlineCursor, HashlineEdit, HashMismatch } from "./types";
 
@@ -37,7 +37,6 @@ interface HashlineReplacementGroup {
 
 function getHashlineEditAnchors(edit: HashlineEdit): Anchor[] {
 	if (edit.kind === "delete") return [edit.anchor];
-	if (edit.kind === "modify") return [edit.anchor];
 	if (edit.cursor.kind === "before_anchor") return [edit.cursor.anchor];
 	if (edit.cursor.kind === "after_anchor") return [edit.cursor.anchor];
 	return [];
@@ -96,7 +95,7 @@ function insertAtEnd(fileLines: string[], lineOrigins: HashlineLineOrigin[], lin
 /** Bucket edits by the line they target so we can apply each line's group in one splice. */
 
 function getAnchorTargetLine(edit: HashlineEdit): number | undefined {
-	if (edit.kind === "delete" || edit.kind === "modify") return edit.anchor.line;
+	if (edit.kind === "delete") return edit.anchor.line;
 	if (edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor") return edit.cursor.anchor.line;
 	return undefined;
 }
@@ -607,11 +606,9 @@ function bucketAnchorEditsByLine(edits: IndexedEdit[]): Map<number, IndexedEdit[
 		const line =
 			entry.edit.kind === "delete"
 				? entry.edit.anchor.line
-				: entry.edit.kind === "modify"
-					? entry.edit.anchor.line
-					: entry.edit.cursor.kind === "before_anchor"
-						? entry.edit.cursor.anchor.line
-						: 0;
+				: entry.edit.cursor.kind === "before_anchor"
+					? entry.edit.cursor.anchor.line
+					: 0;
 		const bucket = byLine.get(line);
 		if (bucket) bucket.push(entry);
 		else byLine.set(line, [entry]);
@@ -683,33 +680,20 @@ export function applyHashlineEdits(
 		const currentLine = fileLines[idx] ?? "";
 		const beforeLines: string[] = [];
 		let deleteLine = false;
-		let prefix = "";
-		let suffix = "";
-		let modified = false;
 
 		for (const { edit } of bucket) {
 			if (edit.kind === "insert") {
 				beforeLines.push(edit.text);
 			} else if (edit.kind === "delete") {
 				deleteLine = true;
-			} else if (edit.kind === "modify") {
-				prefix = edit.prefix + prefix;
-				suffix = suffix + edit.suffix;
-				modified = true;
 			}
 		}
-		if (beforeLines.length === 0 && !deleteLine && !modified) continue;
-		if (deleteLine && modified) {
-			throw new Error(
-				`line ${line}: cannot combine inline modify ("< ${line}${HL_EDIT_SEP}…" or "+ ${line}${HL_EDIT_SEP}…") with a delete or replace targeting the same line.`,
-			);
-		}
+		if (beforeLines.length === 0 && !deleteLine) continue;
 
-		const effectiveLine = modified ? prefix + currentLine + suffix : currentLine;
-		const replacement = deleteLine ? beforeLines : [...beforeLines, effectiveLine];
+		const replacement = deleteLine ? beforeLines : [...beforeLines, currentLine];
 		const origins = replacement.map((): HashlineLineOrigin => (deleteLine ? "replacement" : "insert"));
 		if (!deleteLine) {
-			origins[origins.length - 1] = modified ? "replacement" : (lineOrigins[idx] ?? "original");
+			origins[origins.length - 1] = lineOrigins[idx] ?? "original";
 		}
 
 		fileLines.splice(idx, 1, ...replacement);
