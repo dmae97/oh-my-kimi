@@ -1,16 +1,25 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added dedicated HTML rendering for `eval` tool calls, including cell-by-cell parsing of `===== ... =====` blocks with inferred Python/JS/TypeScript highlighting
+- Added dedicated rendering support for `search`, `recipe`, and `irc` tool calls in transcript exports
+- Added a collapsible `Available Tools` section with a tool count and chip-style compact tool names
 - Added macOS power assertion settings `power.preventIdleSleep`, `power.preventSystemSleep`, `power.declareUserActive`, and `power.preventDisplaySleep` so users can control what types of sleep are blocked during sessions
 
 ### Changed
 
+- Changed GitHub (`gh`) tool cards to include operation, PR, branch, and truncated query/title/body details
+- Changed tool-call output to display internal `_i` intent separately and hide it from rendered argument JSON
+- Changed `ast_edit` and `find`/`search` rendering to show resolved path values and option flags such as `limit`, `no-hidden`, and `no-reply`
 - Changed power assertion behavior to take effect only while a prompt is in flight, replacing session-level persistent assertions
 
 ### Fixed
 
+- Fixed edit rendering so provided `input` text is shown in the export even without a file path
+- Fixed `args.paths` handling in `ast_edit` and `find` so multiple paths are shown as a comma-separated list
 - Fixed power assertion state handling so subsequent prompts are no longer blocked after an aborted or canceled prompt
 
 ## [14.9.2] - 2026-05-10

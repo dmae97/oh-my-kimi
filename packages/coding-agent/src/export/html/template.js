@@ -839,9 +839,11 @@
 
       function renderEdit(name, args, result, ctx) {
         const filePath = str(args.file_path == null ? args.path : args.file_path);
-        const pathHtml = filePath === null ? invalidArgHtml() : escapeHtml(shortenPath(filePath || ''));
+        const pathHtml = filePath ? escapeHtml(shortenPath(filePath)) : '';
         let html = toolHead('edit', pathHtml);
-        if (Array.isArray(args.edits)) {
+        if (typeof args.input === 'string' && args.input.length) {
+          html += codeBlock(args.input, null);
+        } else if (Array.isArray(args.edits)) {
           html += '<div class="tool-args">';
           for (const e of args.edits) {
             const op = e && typeof e.op === 'string' ? e.op : '?';
@@ -867,7 +869,8 @@
 
       function renderAstEdit(name, args, result, ctx) {
         const lang = args.lang || null;
-        const pathHtml = args.path ? escapeHtml(shortenPath(String(args.path))) : '';
+        const paths = Array.isArray(args.paths) ? args.paths.map(p => shortenPath(String(p))).join(', ') : (args.path ? shortenPath(String(args.path)) : '');
+        const pathHtml = paths ? escapeHtml(paths) : '';
         const badges = [];
         if (lang) badges.push(lang);
         if (args.glob) badges.push('glob=' + args.glob);
@@ -931,10 +934,12 @@
       }
 
       function renderFind(name, args, result, ctx) {
-        const pattern = str(args.pattern);
-        const patHtml = pattern === null ? invalidArgHtml() : escapeHtml(pattern);
-        const badges = args.limit ? ['limit=' + args.limit] : null;
-        let html = toolHead('find', '<span class="tool-pattern">' + patHtml + '</span>', badges);
+        const paths = Array.isArray(args.paths) ? args.paths.map(p => shortenPath(String(p))).join(', ') : (str(args.pattern) || '.');
+        const patHtml = paths ? escapeHtml(paths) : invalidArgHtml();
+        const badges = [];
+        if (args.limit) badges.push('limit=' + args.limit);
+        if (args.hidden === false) badges.push('no-hidden');
+        let html = toolHead('find', '<span class="tool-pattern">' + patHtml + '</span>', badges.length ? badges : null);
         if (result) {
           const output = ctx.getResultText();
           if (output) html += formatExpandableOutput(output, 10);
@@ -1168,14 +1173,18 @@
       }
 
       function renderGh(name, args, result, ctx) {
+        const op = str(args.op);
         const badges = [];
+        if (op) badges.push(op);
         if (args.repo) badges.push(String(args.repo));
         if (args.issue) badges.push('#' + args.issue);
-        if (args.pr) badges.push('PR ' + args.pr);
+        if (args.pr) badges.push(Array.isArray(args.pr) ? 'PRs ' + args.pr.join(',') : 'PR ' + args.pr);
         if (args.branch) badges.push('branch=' + args.branch);
-        if (args.query) badges.push('query=' + args.query);
+        if (args.query) badges.push('query=' + truncate(String(args.query), 60));
         if (args.run) badges.push('run=' + args.run);
+        if (args.title) badges.push('title=' + truncate(String(args.title), 40));
         let html = toolHead(name, '', badges);
+        if (args.body) html += '<div class="tool-output"><div>' + escapeHtml(truncate(String(args.body), 400)) + '</div></div>';
         if (result) {
           const output = ctx.getResultText();
           if (output) html += formatExpandableOutput(output, 12, 'markdown');
@@ -1249,6 +1258,121 @@
         return html;
       }
 
+      // Parse `===== <info> =====` cell headers used by the `eval` tool.
+      function parseEvalCells(input) {
+        const HEADER = /^={5,}\s*(.*?)\s*={5,}\s*$/;
+        const lines = String(input).split('\n');
+        const cells = [];
+        let inheritedLang = 'py';
+        let current = null;
+        for (const line of lines) {
+          const m = line.match(HEADER);
+          if (m) {
+            if (current) cells.push(current);
+            const info = m[1] || '';
+            let lang = inheritedLang;
+            let title = '';
+            const langMatch = info.match(/^(py|js|ts)(?::"([^"]*)")?/);
+            if (langMatch) {
+              lang = langMatch[1];
+              if (langMatch[2]) title = langMatch[2];
+            }
+            if (!title) {
+              const idMatch = info.match(/id:"([^"]*)"/);
+              if (idMatch) title = idMatch[1];
+            }
+            inheritedLang = lang;
+            const attrs = [];
+            const tMatch = info.match(/(?:^|\s)t:(\S+)/);
+            if (tMatch) attrs.push('t=' + tMatch[1]);
+            if (/(?:^|\s)rst(?:\s|$)/.test(info)) attrs.push('rst');
+            current = { lang, title, attrs, code: '' };
+          } else {
+            if (!current) current = { lang: inheritedLang, title: '', attrs: [], code: '' };
+            current.code += (current.code ? '\n' : '') + line;
+          }
+        }
+        if (current) cells.push(current);
+        return cells.map(c => ({ ...c, code: c.code.replace(/\s+$/, '') }));
+      }
+
+      function evalLangToHljs(lang) {
+        return lang === 'py' ? 'python' : lang === 'js' ? 'javascript' : lang === 'ts' ? 'typescript' : null;
+      }
+
+      function renderEval(name, args, result, ctx) {
+        let html = toolHead('eval');
+        if (typeof args.input !== 'string') {
+          html += '<div class="tool-error">[missing input]</div>';
+        } else {
+          const cells = parseEvalCells(args.input);
+          if (cells.length === 0) {
+            html += codeBlock(args.input, 'python');
+          } else {
+            for (const cell of cells) {
+              html += '<div class="tool-cell">';
+              const titleParts = [];
+              if (cell.title) titleParts.push(cell.title);
+              titleParts.push(cell.lang);
+              if (cell.attrs && cell.attrs.length) titleParts.push(...cell.attrs);
+              html += '<div class="tool-cell-title">' + escapeHtml(titleParts.join(' · ')) + '</div>';
+              html += codeBlock(cell.code, evalLangToHljs(cell.lang));
+              html += '</div>';
+            }
+          }
+        }
+        if (result) {
+          html += ctx.renderResultImages();
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 12);
+        }
+        return html;
+      }
+
+      function renderSearch(name, args, result, ctx) {
+        const pattern = str(args.pattern);
+        const paths = Array.isArray(args.paths) ? args.paths.map(p => shortenPath(String(p))).join(', ') : (args.path ? shortenPath(String(args.path)) : '.');
+        const patHtml = pattern === null ? invalidArgHtml() : escapeHtml(pattern);
+        let head = '<span class="tool-name">search</span> <span class="tool-pattern">/' + patHtml + '/</span>';
+        head += ' <span class="tool-arg-key">in</span> <span class="tool-path">' + escapeHtml(paths) + '</span>';
+        const badges = [];
+        if (args.i) badges.push('i');
+        if (args.skip) badges.push('skip=' + args.skip);
+        if (args.gitignore === false) badges.push('no-gitignore');
+        for (const b of badges) head += ' <span class="tool-badge">' + escapeHtml(b) + '</span>';
+        let html = '<div class="tool-header">' + head + '</div>';
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 12);
+        }
+        return html;
+      }
+
+      function renderRecipe(name, args, result, ctx) {
+        const op = str(args.op) || '?';
+        let html = toolHead('recipe', '<span class="tool-arg-val">' + escapeHtml(op) + '</span>');
+        if (result) {
+          html += ctx.renderResultImages();
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 10);
+        }
+        return html;
+      }
+
+      function renderIrc(name, args, result, ctx) {
+        const op = str(args.op) || '?';
+        const badges = [op];
+        if (args.to) badges.push('to=' + args.to);
+        if (args.awaitReply === false) badges.push('no-reply');
+        let html = toolHead('irc', '', badges);
+        if (args.message) html += '<div class="tool-output"><div>' + escapeHtml(String(args.message)) + '</div></div>';
+        if (result) {
+          const output = ctx.getResultText();
+          if (output) html += formatExpandableOutput(output, 8);
+        }
+        return html;
+      }
+
 
       function renderGenericTool(name, args, result, ctx) {
         let html = toolHead(name);
@@ -1266,6 +1390,7 @@
 
       const TOOL_RENDERERS = {
         bash: renderBash,
+        eval: renderEval,
         js: renderJsLike,
         python: renderJsLike,
         notebook: renderJsLike,
@@ -1275,6 +1400,7 @@
         ast_edit: renderAstEdit,
         ast_grep: renderAstGrep,
         grep: renderGrep,
+        search: renderSearch,
         find: renderFind,
         lsp: renderLsp,
         todo_write: renderTodoWrite,
@@ -1300,16 +1426,25 @@
         poll: renderJob,
         cancel_job: renderJob,
         job: renderJob,
+        recipe: renderRecipe,
+        irc: renderIrc,
       };
 
       function renderToolCall(call) {
         const result = findToolResult(call.id);
         const isError = result?.isError || false;
         const statusClass = result ? (isError ? 'error' : 'success') : 'pending';
-        const args = call.arguments || {};
+        const rawArgs = call.arguments || {};
+        const intent = typeof rawArgs._i === 'string' ? rawArgs._i.trim() : '';
+        // Strip internal _i intent so renderers don't dump it as JSON.
+        const args = {};
+        for (const k of Object.keys(rawArgs)) {
+          if (k !== '_i') args[k] = rawArgs[k];
+        }
         const name = call.name;
 
         const ctx = {
+          intent,
           getResultText: () => {
             if (!result) return '';
             const textBlocks = result.content.filter(c => c.type === 'text');
@@ -1331,6 +1466,7 @@
 
         const renderer = TOOL_RENDERERS[name] || renderGenericTool;
         let html = '<div class="tool-execution ' + statusClass + '">';
+        if (intent) html += '<div class="tool-intent">' + escapeHtml(intent) + '</div>';
         try {
           html += renderer(name, args, result, ctx);
         } catch (err) {
@@ -1638,11 +1774,12 @@
         }
 
         if (tools && tools.length > 0) {
-          html += `<div class="tools-list">
-            <div class="tools-header">Available Tools</div>
-            <div class="tools-content">
-              ${tools.map(t => `<div class="tool-item"><span class="tool-item-name">${escapeHtml(t.name)}</span> - <span class="tool-item-desc">${escapeHtml(t.description)}</span></div>`).join('')}
-            </div>
+          const namesHtml = tools.map(t => `<span class="tool-name-chip">${escapeHtml(t.name)}</span>`).join('');
+          const fullHtml = tools.map(t => `<div class="tool-item"><span class="tool-item-name">${escapeHtml(t.name)}</span> - <span class="tool-item-desc">${escapeHtml(t.description)}</span></div>`).join('');
+          html += `<div class="tools-list collapsed" onclick="this.classList.toggle('collapsed')">
+            <div class="tools-header">Available Tools (${tools.length})</div>
+            <div class="tools-collapsed">${namesHtml}</div>
+            <div class="tools-content">${fullHtml}</div>
           </div>`;
         }
 
