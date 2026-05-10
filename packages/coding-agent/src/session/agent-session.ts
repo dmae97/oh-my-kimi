@@ -152,6 +152,7 @@ import { extractFileMentions, generateFileMentionMessages } from "../utils/file-
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { AuthStorage } from "./auth-storage";
 import {
+	type CompactionPreparation,
 	type CompactionResult,
 	calculateContextTokens,
 	calculatePromptTokens,
@@ -160,6 +161,7 @@ import {
 	estimateTokens,
 	generateBranchSummary,
 	prepareCompaction,
+	type SummaryOptions,
 	shouldCompact,
 } from "./compaction";
 import { DEFAULT_PRUNE_CONFIG, pruneToolOutputs } from "./compaction/pruning";
@@ -4405,14 +4407,7 @@ export class AgentSession {
 			}
 
 			const compactionSettings = this.settings.getGroup("compaction");
-			const compactionModel = this.model;
-			const apiKey = await this.#modelRegistry.getApiKey(compactionModel, this.sessionId);
-			if (!apiKey) {
-				throw new Error(`No API key for ${compactionModel.provider}`);
-			}
-
 			const pathEntries = this.sessionManager.getBranch();
-
 			const preparation = prepareCompaction(pathEntries, compactionSettings);
 			if (!preparation) {
 				// Check why we can't compact
@@ -4482,17 +4477,14 @@ export class AgentSession {
 				preserveData ??= hookCompaction.preserveData;
 			} else {
 				// Generate compaction result
-				const result = await compact(
+				const result = await this.#compactWithFallbackModel(
 					preparation,
-					compactionModel,
-					apiKey,
 					customInstructions,
 					compactionAbortController.signal,
 					{
 						promptOverride: hookPrompt,
 						extraContext: hookContext,
 						remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
-						metadata: this.agent.metadataForProvider(compactionModel.provider),
 					},
 				);
 				summary = result.summary;
@@ -5406,6 +5398,50 @@ export class AgentSession {
 
 		return candidates;
 	}
+	#isCompactionAuthFailure(error: unknown): boolean {
+		if (!(error instanceof Error)) return false;
+		return /auth_unavailable|no auth available/i.test(error.message);
+	}
+
+	#buildCompactionAuthError(): Error {
+		const currentModel = this.model;
+		if (!currentModel) {
+			return new Error(
+				"Compaction requires a model with usable credentials, but no authenticated compaction model is available.",
+			);
+		}
+		return new Error(
+			`Compaction requires usable credentials for ${currentModel.provider}/${currentModel.id}. ` +
+				`Configure ${currentModel.provider} credentials or assign an authenticated fallback role such as modelRoles.smol.`,
+		);
+	}
+
+	async #compactWithFallbackModel(
+		preparation: CompactionPreparation,
+		customInstructions: string | undefined,
+		signal: AbortSignal,
+		options?: SummaryOptions,
+	): Promise<CompactionResult> {
+		const candidates = this.#getCompactionModelCandidates(this.#modelRegistry.getAvailable());
+
+		for (const candidate of candidates) {
+			const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
+			if (!apiKey) continue;
+
+			try {
+				return await compact(preparation, candidate, apiKey, customInstructions, signal, {
+					...options,
+					metadata: this.agent.metadataForProvider(candidate.provider),
+				});
+			} catch (error) {
+				if (!this.#isCompactionAuthFailure(error)) {
+					throw error;
+				}
+			}
+		}
+
+		throw this.#buildCompactionAuthError();
+	}
 
 	/**
 	 * Internal: Run auto-compaction with events.
@@ -5617,6 +5653,10 @@ export class AgentSession {
 							}
 
 							const message = error instanceof Error ? error.message : String(error);
+							if (this.#isCompactionAuthFailure(error)) {
+								lastError = this.#buildCompactionAuthError();
+								break;
+							}
 							const retryAfterMs = this.#parseRetryAfterMsFromError(message);
 							const shouldRetry =
 								retrySettings.enabled &&
