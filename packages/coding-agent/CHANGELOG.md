@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.9.0] - 2026-05-10
 ### Breaking Changes
 
 - Moved hashline APIs to the dedicated `@oh-my-pi/pi-coding-agent/hashline` module, moved hash helpers to `@oh-my-pi/pi-coding-agent/hashline/hash`, and removed the legacy `edit/modes/hashline` and `edit/line-hash` source subpaths.

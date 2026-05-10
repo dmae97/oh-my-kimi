@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.9.0] - 2026-05-10
 ### Added
 
 - Added `Agent#metadata` field forwarded to every API request; callers can set arbitrary provider metadata (e.g. `metadata.user_id`) once and have it applied to all subsequent stream calls without modifying per-call options
