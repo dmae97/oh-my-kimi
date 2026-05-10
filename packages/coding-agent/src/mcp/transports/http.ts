@@ -245,11 +245,7 @@ export class HttpTransport implements MCPTransport {
 		}
 	}
 
-	async #parseSSEResponse<T>(
-		response: Response,
-		expectedId: string | number,
-		options?: MCPRequestOptions,
-	): Promise<T> {
+	#parseSSEResponse<T>(response: Response, expectedId: string | number, options?: MCPRequestOptions): Promise<T> {
 		if (!response.body) {
 			throw new Error("No response body");
 		}
@@ -261,54 +257,60 @@ export class HttpTransport implements MCPTransport {
 			? AbortSignal.any([options.signal, abortController.signal])
 			: abortController.signal;
 
-		try {
-			let result: T | undefined;
-			let captured = false;
-			for await (const raw of readSseJson<JsonRpcMessage | JsonRpcMessage[]>(response.body, operationSignal)) {
-				// Flatten batches (JSON-RPC 2.0 section 6) into individual messages.
-				const messages = Array.isArray(raw) ? raw : [raw];
-				for (const message of messages) {
-					if (
-						!captured &&
-						"id" in message &&
-						message.id === expectedId &&
-						("result" in message || "error" in message)
-					) {
-						clearTimeout(timeoutId);
-						if (message.error) {
-							throw new Error(`MCP error ${message.error.code}: ${message.error.message}`);
-						}
-						result = message.result as T;
-						captured = true;
-						continue;
-					}
-					this.#dispatchSSEMessage(message);
-				}
-				if (captured) break;
-			}
-			if (!captured) {
-				throw new Error(`No response received for request ID ${expectedId}`);
-			}
-			// Reader released after break — safe to start a background drain
-			// for piggybacked notifications/requests on the same stream.
-			this.#drainSSEBackground(response.body, operationSignal);
-			return result as T;
-		} catch (error) {
-			if (error instanceof Error && error.name === "AbortError") {
-				if (options?.signal?.aborted) {
-					throw error;
-				}
-				throw new Error(`SSE response timeout after ${timeout}ms`);
-			}
-			throw error;
-		} finally {
-			clearTimeout(timeoutId);
-		}
-	}
+		const { promise, resolve, reject } = Promise.withResolvers<T>();
+		let captured = false;
 
-	/** Continue reading SSE messages in the background after the primary response is captured. */
-	#drainSSEBackground(body: ReadableStream<Uint8Array>, signal: AbortSignal): void {
-		void this.#readSSEStream(body, signal);
+		// Drain the SSE stream from a single iterator. We resolve the deferred
+		// promise as soon as the matching response arrives, then keep iterating
+		// in the background to pick up piggybacked notifications/requests.
+		// Re-reading `response.body` after `for await` breaks would lock the
+		// stream a second time and surface as "ReadableStream already has a
+		// controller", so we must not exit the loop early.
+		const drain = async (): Promise<void> => {
+			try {
+				for await (const raw of readSseJson<JsonRpcMessage | JsonRpcMessage[]>(response.body!, operationSignal)) {
+					const messages = Array.isArray(raw) ? raw : [raw];
+					for (const message of messages) {
+						if (
+							!captured &&
+							"id" in message &&
+							message.id === expectedId &&
+							("result" in message || "error" in message)
+						) {
+							captured = true;
+							clearTimeout(timeoutId);
+							if (message.error) {
+								reject(new Error(`MCP error ${message.error.code}: ${message.error.message}`));
+							} else {
+								resolve(message.result as T);
+							}
+							continue;
+						}
+						if (!this.#connected) continue;
+						this.#dispatchSSEMessage(message);
+					}
+				}
+				if (!captured) {
+					reject(new Error(`No response received for request ID ${expectedId}`));
+				}
+			} catch (error) {
+				if (captured) return;
+				if (error instanceof Error && error.name === "AbortError") {
+					if (options?.signal?.aborted) {
+						reject(error);
+					} else {
+						reject(new Error(`SSE response timeout after ${timeout}ms`));
+					}
+				} else {
+					reject(error as Error);
+				}
+			} finally {
+				clearTimeout(timeoutId);
+			}
+		};
+
+		void drain();
+		return promise;
 	}
 
 	async #handleServerRequest(request: JsonRpcRequest): Promise<void> {
