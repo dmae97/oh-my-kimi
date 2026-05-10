@@ -361,6 +361,26 @@ export function isClaudeCloakingUserId(userId: string): boolean {
 	return CLAUDE_CLOAKING_USER_ID_REGEX.test(userId);
 }
 
+/**
+ * Real Claude Code sends `metadata.user_id` as a JSON-stringified object of the
+ * shape `{ device_id, account_uuid, session_id, ...extra }` (see
+ * services/api/claude.ts → getAPIMetadata). Accept that shape so callers that
+ * supply a stable `session_id` aren't silently overwritten with fresh entropy
+ * on every request, which would inflate the backend session count.
+ */
+function isClaudeJsonUserId(userId: string): boolean {
+	if (userId.length === 0 || userId[0] !== "{") return false;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(userId);
+	} catch {
+		return false;
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+	const obj = parsed as Record<string, unknown>;
+	return typeof obj.session_id === "string" && obj.session_id.length > 0;
+}
+
 export function generateClaudeCloakingUserId(): string {
 	const userHash = nodeCrypto.randomBytes(32).toString("hex");
 	const accountId = nodeCrypto.randomUUID().toLowerCase();
@@ -370,7 +390,7 @@ export function generateClaudeCloakingUserId(): string {
 
 function resolveAnthropicMetadataUserId(userId: unknown, isOAuthToken: boolean): string | undefined {
 	if (typeof userId === "string") {
-		if (!isOAuthToken || isClaudeCloakingUserId(userId)) {
+		if (!isOAuthToken || isClaudeCloakingUserId(userId) || isClaudeJsonUserId(userId)) {
 			return userId;
 		}
 	}

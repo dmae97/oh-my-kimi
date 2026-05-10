@@ -36,6 +36,11 @@ function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel
  * @param registry Model registry
  * @param settings Settings used to resolve the smol role
  * @param sessionId Optional session id for sticky API key selection
+ * @param currentModel Current model (used to derive title model)
+ * @param metadataResolver Optional resolver evaluated after credential selection
+ *   to produce request metadata (e.g. user_id for session attribution). Using a
+ *   resolver instead of a pre-evaluated value ensures the metadata's account_uuid
+ *   reflects the credential actually selected for this request.
  */
 export async function generateSessionTitle(
 	firstMessage: string,
@@ -43,6 +48,7 @@ export async function generateSessionTitle(
 	settings: Settings,
 	sessionId?: string,
 	currentModel?: Model<Api>,
+	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
 ): Promise<string | null> {
 	const model = getTitleModel(registry, settings, currentModel);
 	if (!model) {
@@ -65,6 +71,10 @@ ${truncatedMessage}
 		});
 		return null;
 	}
+	// Resolve metadata after getApiKey so the session-sticky credential for this
+	// request is already recorded; metadataResolver can then return the correct
+	// account_uuid rather than the snapshot-at-call-site value.
+	const metadata = metadataResolver?.(model.provider);
 
 	// Title generation is a 3-6 word task; force reasoning off so reasoning models
 	// don't burn the entire output budget on internal thinking and return an empty
@@ -88,6 +98,7 @@ ${truncatedMessage}
 				apiKey,
 				maxTokens: 30,
 				disableReasoning: true,
+				metadata,
 			},
 		);
 

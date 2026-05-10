@@ -40,6 +40,16 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	sessionId?: string;
 
 	/**
+	 * Optional resolver called per LLM request to produce request metadata.
+	 * When set, the agent loop evaluates it **after** `getApiKey` resolves the
+	 * session-sticky credential, ensuring the metadata's `account_uuid` reflects
+	 * the credential actually used for the request (not the credential that was
+	 * current when `AgentLoopConfig` was first constructed). Overrides the static
+	 * `metadata` field when present.
+	 */
+	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
+
+	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
 	 *
 	 * Each AgentMessage must be converted to a UserMessage, AssistantMessage, or ToolResultMessage

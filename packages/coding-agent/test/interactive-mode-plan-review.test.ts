@@ -58,7 +58,7 @@ describe("InteractiveMode plan review rendering", () => {
 		_resetSettingsForTest();
 	});
 
-	it("re-appends refreshed plan review previews at the chat tail", async () => {
+	it("appends each submitted plan review preview to preserve scrollback", async () => {
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
@@ -92,9 +92,14 @@ describe("InteractiveMode plan review rendering", () => {
 			finalPlanFilePath: "local://PLAN.md",
 		});
 
-		expect(mode.chatContainer.children.at(-1)).toBe(firstPreview);
+		const secondPreview = mode.chatContainer.children.at(-1);
+		expect(secondPreview).toBeDefined();
+		expect(secondPreview).not.toBe(firstPreview);
 		expect(mode.chatContainer.children.at(-2)).toBe(marker);
-		expect(firstPreview!.render(120).join("\n")).toContain("Second plan");
+		expect(mode.chatContainer.children.at(-3)).toBe(firstPreview);
+		expect(firstPreview!.render(120).join("\n")).toContain("First plan");
+		expect(firstPreview!.render(120).join("\n")).not.toContain("Second plan");
+		expect(secondPreview!.render(120).join("\n")).toContain("Second plan");
 	});
 
 	it("offers approve-and-keep-context as a distinct plan approval path", async () => {

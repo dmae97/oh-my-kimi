@@ -291,6 +291,55 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.metadata?.user_id).toBe(userId);
 	});
 
+	it("preserves real Claude Code JSON-format metadata.user_id for OAuth requests", async () => {
+		// Matches the shape produced by services/api/claude.ts → getAPIMetadata in
+		// the Claude Code source: { device_id, account_uuid, session_id, ...extra }.
+		const userId = JSON.stringify({
+			device_id: "a".repeat(64),
+			account_uuid: "12345678-1234-1234-1234-1234567890ab",
+			session_id: "abcdefab-cdef-abcd-efab-cdefabcdef12",
+		});
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{ metadata: { user_id: userId } },
+		)) as { metadata?: { user_id?: string } };
+
+		expect(payload.metadata?.user_id).toBe(userId);
+	});
+
+	it("preserves a minimal { session_id } JSON metadata.user_id for OAuth requests", async () => {
+		const userId = JSON.stringify({ session_id: "0190fb1e-0000-7000-8000-000000000001" });
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{ metadata: { user_id: userId } },
+		)) as { metadata?: { user_id?: string } };
+
+		expect(payload.metadata?.user_id).toBe(userId);
+	});
+
+	it("replaces JSON metadata.user_id missing session_id for OAuth requests", async () => {
+		const userId = JSON.stringify({ device_id: "x".repeat(64) });
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{ metadata: { user_id: userId } },
+		)) as { metadata?: { user_id?: string } };
+
+		expect(payload.metadata?.user_id).not.toBe(userId);
+		expect(isClaudeCloakingUserId(payload.metadata?.user_id ?? "")).toBe(true);
+	});
+
 	it("replaces invalid caller metadata.user_id for OAuth requests", async () => {
 		const payload = (await captureAnthropicPayload(
 			ANTHROPIC_MODEL,

@@ -727,6 +727,44 @@ export class AuthStorage {
 	}
 
 	/**
+	 * Get the OAuth `accountId` for a provider, preferring the credential that is
+	 * session-sticky for `sessionId` when multiple OAuth credentials are configured.
+	 * Falls back to the first OAuth credential when no session preference exists (e.g.
+	 * first call before any `getApiKey` has been issued, or single-credential setups).
+	 * Returns `undefined` when no OAuth credential carries an `accountId`.
+	 */
+	getOAuthAccountId(provider: string, sessionId?: string): string | undefined {
+		const allCredentials = this.#getCredentialsForProvider(provider);
+		const oauthCredentials = allCredentials.filter((c): c is OAuthCredential => c.type === "oauth");
+		if (oauthCredentials.length === 0) return undefined;
+
+		// Runtime override always returns before recording a session credential.
+		if (this.#runtimeOverrides.has(provider)) return undefined;
+
+		// Prefer the session-sticky credential when available.
+		const sessionPref = this.#getSessionCredential(provider, sessionId);
+		// If the session has been routed to a stored API key, do not inject OAuth account_uuid.
+		if (sessionPref !== undefined && sessionPref.type !== "oauth") return undefined;
+
+		// When no session-sticky credential is recorded yet (first call before any getApiKey,
+		// or all stored credentials are unavailable), the request falls through to the env-key
+		// or fallback-resolver path in getApiKey() — neither is OAuth-authenticated, so
+		// account_uuid injection would misattribute traffic. Only apply this guard when
+		// sessionPref is absent; a recorded OAuth sticky (sessionPref.type === "oauth") must
+		// NOT be blocked even if an env key also happens to exist.
+		if (!sessionPref && (getEnvApiKey(provider) || this.#fallbackResolver?.(provider))) return undefined;
+		// Resolve the sticky index against the full credential list — the index is
+		// recorded against the unfiltered provider array (by #recordSessionCredential /
+		// #tryOAuthCredential), not the OAuth-only subset, so dereferencing it into the
+		// filtered array would be off-by-N when any non-OAuth credential precedes the
+		// OAuth ones (e.g. [api_key, oauth_A, oauth_B] stored order).
+		const stickyCredential = sessionPref?.type === "oauth" ? allCredentials[sessionPref.index] : undefined;
+		const preferred = stickyCredential?.type === "oauth" ? stickyCredential : oauthCredentials[0];
+		const accountId = preferred?.accountId;
+		return typeof accountId === "string" && accountId.length > 0 ? accountId : undefined;
+	}
+
+	/**
 	 * Get all credentials.
 	 */
 	getAll(): AuthStorageData {
@@ -2034,7 +2072,11 @@ export class AuthStorage {
 			return oauthKey;
 		}
 
-		// Fall back to environment variable
+		// Fall back to environment variable or custom resolver. If we reach here after
+		// an OAuth miss, the session sticky (if any) is stale — the request will
+		// authenticate via env/fallback, not OAuth, so clear the sticky now so that
+		// getOAuthAccountId() correctly suppresses account_uuid for this session.
+		if (sessionId) this.#sessionLastCredential.get(provider)?.delete(sessionId);
 		const envKey = getEnvApiKey(provider);
 		if (envKey) return envKey;
 
