@@ -941,8 +941,13 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			checkAbort();
 			const authStorage = options.authStorage ?? (await discoverAuthStorage());
 			checkAbort();
+			const registryFromParent = options.modelRegistry !== undefined;
 			const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage);
-			await modelRegistry.refresh();
+			if (!registryFromParent) {
+				await modelRegistry.refresh();
+			} else {
+				logger.debug("runSubagent: reusing parent modelRegistry; skipping refresh");
+			}
 			checkAbort();
 
 			const {
