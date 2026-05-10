@@ -181,11 +181,11 @@ describe("system Handlebars prompt templates", () => {
 			assignment: "Do the task.",
 		});
 
-		expect(subagentSystem).toContain("<|START_CONTEXT|>\nShared task background\n<|END_CONTEXT|>");
-		expect(subagentSystem).toContain("<|START_ROLE|>");
+		expect(subagentSystem).toContain("[CONTEXT]\nShared task background\n[/CONTEXT]");
+		expect(subagentSystem).toContain("[ROLE]");
 		expect(subagentUser).toContain("Complete the assignment below, thoroughly:");
 		expect(subagentUser).toContain("Do the task.");
-		expect(subagentUser).not.toContain("<|START_CONTEXT|>");
+		expect(subagentUser).not.toContain("[CONTEXT]");
 		expect(subagentUser).not.toContain("Shared task background");
 	});
 
@@ -244,7 +244,7 @@ describe("system Handlebars prompt templates", () => {
 			});
 
 			expect(systemPrompt).toHaveLength(3);
-			expect(systemPrompt[0]).toContain("<|START_CONTRACT|>");
+			expect(systemPrompt[0]).toContain("[CONTRACT]");
 			expect(systemPrompt[0]).not.toContain("current working directory");
 			expect(systemPrompt[1]).toContain("<workstation>");
 			expect(systemPrompt[1]).toContain("<workspace-tree>");
