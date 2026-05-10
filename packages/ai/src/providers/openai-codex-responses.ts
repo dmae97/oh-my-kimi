@@ -54,12 +54,14 @@ import {
 import { parseCodexError } from "./openai-codex/response-handler";
 import { normalizeOpenAIResponsesPromptCacheKey } from "./openai-responses";
 import {
+	convertResponsesInputContent,
 	encodeResponsesToolCallId,
 	encodeTextSignatureV1,
 	mapOpenAIResponsesStopReason,
 	parseTextSignature,
 } from "./openai-responses-shared";
 import { transformMessages } from "./transform-messages";
+import { joinTextWithImagePlaceholder } from "./vision-guard";
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
 	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -2527,13 +2529,21 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 		}
 
 		if (msg.role === "toolResult") {
+			const supportsImages = model.input.includes("image");
 			const textResult = msg.content
 				.filter(content => content.type === "text")
 				.map(content => content.text)
 				.join("\n");
 			const hasImages = msg.content.some(content => content.type === "image");
+			const omittedImages = hasImages && !supportsImages;
 			const normalized = normalizeResponsesToolCallId(msg.toolCallId);
-			const output = (textResult.length > 0 ? textResult : "(see attached image)").toWellFormed();
+			const output = (
+				omittedImages
+					? joinTextWithImagePlaceholder(textResult, true)
+					: textResult.length > 0
+						? textResult
+						: "(see attached image)"
+			).toWellFormed();
 			if (customCallIds.has(normalized.callId)) {
 				messages.push({
 					type: "custom_tool_call_output",
@@ -2547,7 +2557,7 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 					output,
 				});
 			}
-			if (hasImages && model.input.includes("image")) {
+			if (hasImages && supportsImages) {
 				const contentParts: ResponseInputContent[] = [
 					{ type: "input_text", text: "Attached image(s) from tool result:" } satisfies ResponseInputText,
 				];
@@ -2579,22 +2589,11 @@ function normalizeInputMessageContent(
 		return [{ type: "input_text", text: content.toWellFormed() }];
 	}
 
-	const normalizedContent: ResponseInputContent[] = content.map(item => {
-		if (item.type === "text") {
-			return { type: "input_text", text: item.text.toWellFormed() } satisfies ResponseInputText;
-		}
-		return {
-			type: "input_image",
-			detail: "auto",
-			image_url: `data:${item.mimeType};base64,${item.data}`,
-		} satisfies ResponseInputImage;
-	});
-
-	const maybeWithoutImages = model.input.includes("image")
-		? normalizedContent
-		: normalizedContent.filter(item => item.type !== "input_image");
-	return maybeWithoutImages.filter(item => item.type !== "input_text" || item.text.trim().length > 0);
+	return convertResponsesInputContent(content, model.input.includes("image")) ?? [];
 }
+
+/** @internal Exported for tests. */
+export { convertMessages as convertCodexResponsesMessages };
 
 /**
  * Whether this Codex-backend model should get the custom-tool grammar

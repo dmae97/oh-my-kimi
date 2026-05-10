@@ -57,6 +57,7 @@ import {
 	resolveGitHubCopilotBaseUrl,
 } from "./github-copilot-headers";
 import { transformMessages } from "./transform-messages";
+import { NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
 
 export type AnthropicHeaderOptions = {
 	apiKey: string;
@@ -418,7 +419,10 @@ export const stripClaudeToolPrefix = (name: string, prefixOverride: string = cla
 /**
  * Convert content blocks to Anthropic API format
  */
-function convertContentBlocks(content: (TextContent | ImageContent)[]):
+function convertContentBlocks(
+	content: (TextContent | ImageContent)[],
+	supportsImages = true,
+):
 	| string
 	| Array<
 			| { type: "text"; text: string }
@@ -431,36 +435,35 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 					};
 			  }
 	  > {
-	// If only text blocks, return as concatenated string for simplicity
-	const hasImages = content.some(c => c.type === "image");
-	if (!hasImages) {
-		return content
-			.map(c => (c as TextContent).text)
-			.join("\n")
-			.toWellFormed();
+	const textBlocks = content
+		.filter((block): block is TextContent => block.type === "text")
+		.map(block => block.text.toWellFormed())
+		.filter(text => text.trim().length > 0);
+	const imageBlocks = content.filter((block): block is ImageContent => block.type === "image");
+	const omittedImages = !supportsImages && imageBlocks.length > 0;
+	if (imageBlocks.length === 0 || !supportsImages) {
+		if (omittedImages) {
+			textBlocks.push(NON_VISION_IMAGE_PLACEHOLDER);
+		}
+		return textBlocks.join("\n").toWellFormed();
 	}
 
-	// If we have images, convert to content block array
-	const blocks = content.map(block => {
-		if (block.type === "text") {
-			return {
-				type: "text" as const,
-				text: block.text.toWellFormed(),
-			};
-		}
-		return {
+	const blocks = [
+		...textBlocks.map(text => ({
+			type: "text" as const,
+			text,
+		})),
+		...imageBlocks.map(block => ({
 			type: "image" as const,
 			source: {
 				type: "base64" as const,
 				media_type: block.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
 				data: block.data,
 			},
-		};
-	});
+		})),
+	];
 
-	// If only images (no text), add placeholder text block
-	const hasText = blocks.some(b => b.type === "text");
-	if (!hasText) {
+	if (!textBlocks.length) {
 		blocks.unshift({
 			type: "text" as const,
 			text: "(see attached image)",
@@ -1890,7 +1893,7 @@ function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResul
 	const block: ContentBlockParam = {
 		type: "tool_result",
 		tool_use_id: msg.toolCallId,
-		content: convertContentBlocks(msg.content),
+		content: convertContentBlocks(msg.content, model.input.includes("image")),
 		is_error: msg.isError,
 	};
 	if (isZaiAnthropicEndpoint(model)) {
@@ -1923,33 +1926,19 @@ export function convertAnthropicMessages(
 					});
 				}
 			} else {
-				const blocks: ContentBlockParam[] = msg.content.map(item => {
-					if (item.type === "text") {
-						return {
-							type: "text",
-							text: item.text.toWellFormed(),
-						};
-					}
-					return {
-						type: "image",
-						source: {
-							type: "base64",
-							media_type: item.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-							data: item.data,
-						},
-					};
-				});
-				let filteredBlocks = !model?.input.includes("image") ? blocks.filter(b => b.type !== "image") : blocks;
-				filteredBlocks = filteredBlocks.filter(b => {
-					if (b.type === "text") {
-						return b.text.trim().length > 0;
-					}
-					return true;
-				});
-				if (filteredBlocks.length === 0) continue;
+				const contentBlocks = convertContentBlocks(msg.content, model.input.includes("image"));
+				if (typeof contentBlocks === "string") {
+					if (contentBlocks.trim().length === 0) continue;
+					params.push({
+						role: "user",
+						content: contentBlocks,
+					});
+					continue;
+				}
+				if (contentBlocks.length === 0) continue;
 				params.push({
 					role: "user",
-					content: filteredBlocks,
+					content: contentBlocks,
 				});
 			}
 		} else if (msg.role === "assistant") {

@@ -27,6 +27,7 @@ import type {
 import { normalizeResponsesToolCallId } from "../utils";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson } from "../utils/json-parse";
+import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER, partitionVisionContent } from "./vision-guard";
 
 export function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): string {
 	const payload: TextSignatureV1 = { v: 1, id };
@@ -121,23 +122,29 @@ export function convertResponsesInputContent(
 		return [{ type: "input_text", text: content.toWellFormed() } satisfies ResponseInputText];
 	}
 
-	const normalizedContent = content
-		.map((item): ResponseInputContent => {
-			if (item.type === "text") {
-				return {
-					type: "input_text",
-					text: item.text.toWellFormed(),
-				} satisfies ResponseInputText;
-			}
-			return {
-				type: "input_image",
-				detail: "auto",
-				image_url: `data:${item.mimeType};base64,${item.data}`,
-			} satisfies ResponseInputImage;
-		})
-		.filter(item => supportsImages || item.type !== "input_image")
-		.filter(item => item.type !== "input_text" || item.text.trim().length > 0);
-
+	const { textBlocks, imageBlocks, omittedImages } = partitionVisionContent(content, supportsImages);
+	const normalizedContent: ResponseInputContent[] = [];
+	for (const item of textBlocks) {
+		const text = item.text.toWellFormed();
+		if (text.trim().length === 0) continue;
+		normalizedContent.push({
+			type: "input_text",
+			text,
+		} satisfies ResponseInputText);
+	}
+	for (const item of imageBlocks) {
+		normalizedContent.push({
+			type: "input_image",
+			detail: "auto",
+			image_url: `data:${item.mimeType};base64,${item.data}`,
+		} satisfies ResponseInputImage);
+	}
+	if (omittedImages) {
+		normalizedContent.push({
+			type: "input_text",
+			text: NON_VISION_IMAGE_PLACEHOLDER,
+		} satisfies ResponseInputText);
+	}
 	return normalizedContent.length > 0 ? normalizedContent : undefined;
 }
 
@@ -225,17 +232,25 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	knownCallIds: ReadonlySet<string>,
 	customCallIds?: ReadonlySet<string>,
 ): void {
+	const supportsImages = model.input.includes("image");
 	const textResult = toolResult.content
 		.filter((block): block is TextContent => block.type === "text")
 		.map(block => block.text)
 		.join("\n");
 	const hasImages = toolResult.content.some((block): block is ImageContent => block.type === "image");
+	const omittedImages = hasImages && !supportsImages;
 	const normalized = normalizeResponsesToolCallId(toolResult.toolCallId);
 	if (strictResponsesPairing && !knownCallIds.has(normalized.callId)) {
 		return;
 	}
 
-	const output = (textResult.length > 0 ? textResult : "(see attached image)").toWellFormed();
+	const output = (
+		omittedImages
+			? joinTextWithImagePlaceholder(textResult, true)
+			: textResult.length > 0
+				? textResult
+				: "(see attached image)"
+	).toWellFormed();
 	if (customCallIds?.has(normalized.callId)) {
 		messages.push({
 			type: "custom_tool_call_output",
@@ -250,7 +265,7 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 		});
 	}
 
-	if (!hasImages || !model.input.includes("image")) {
+	if (!hasImages || !supportsImages) {
 		return;
 	}
 

@@ -5,6 +5,7 @@ import { type Content, FinishReason, FunctionCallingConfigMode, type Part } from
 import type { Context, ImageContent, Model, StopReason, TextContent, Tool } from "../types";
 import { prepareSchemaForCCA, sanitizeSchemaForGoogle } from "../utils/schema";
 import { transformMessages } from "./transform-messages";
+import { NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
 
 export { sanitizeSchemaForGoogle };
 
@@ -108,30 +109,32 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 					parts: [{ text: msg.content.toWellFormed() }],
 				});
 			} else {
-				const parts: Part[] = msg.content.map(item => {
+				const supportsImages = model.input.includes("image");
+				const parts: Part[] = [];
+				let omittedImages = false;
+				for (const item of msg.content) {
 					if (item.type === "text") {
-						return { text: item.text.toWellFormed() };
-					} else {
-						return {
+						const text = item.text.toWellFormed();
+						if (text.trim().length === 0) continue;
+						parts.push({ text });
+					} else if (supportsImages) {
+						parts.push({
 							inlineData: {
 								mimeType: item.mimeType,
 								data: item.data,
 							},
-						};
+						});
+					} else {
+						omittedImages = true;
 					}
-				});
-				// Filter out images if model doesn't support them, and empty text blocks
-				let filteredParts = !model.input.includes("image") ? parts.filter(p => p.text !== undefined) : parts;
-				filteredParts = filteredParts.filter(p => {
-					if (p.text !== undefined) {
-						return p.text.trim().length > 0;
-					}
-					return true; // Keep non-text parts (images)
-				});
-				if (filteredParts.length === 0) continue;
+				}
+				if (omittedImages) {
+					parts.push({ text: NON_VISION_IMAGE_PLACEHOLDER });
+				}
+				if (parts.length === 0) continue;
 				contents.push({
 					role: "user",
-					parts: filteredParts,
+					parts,
 				});
 			}
 		} else if (msg.role === "assistant") {
@@ -194,11 +197,11 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 			});
 		} else if (msg.role === "toolResult") {
 			// Extract text and image content
+			const supportsImages = model.input.includes("image");
 			const textContent = msg.content.filter((c): c is TextContent => c.type === "text");
 			const textResult = textContent.map(c => c.text).join("\n");
-			const imageContent = model.input.includes("image")
-				? msg.content.filter((c): c is ImageContent => c.type === "image")
-				: [];
+			const imageContent = supportsImages ? msg.content.filter((c): c is ImageContent => c.type === "image") : [];
+			const omittedImages = !supportsImages && msg.content.some((c): c is ImageContent => c.type === "image");
 
 			const hasText = textResult.length > 0;
 			const hasImages = imageContent.length > 0;
@@ -209,7 +212,13 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 			const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
 
 			// Use "output" key for success, "error" key for errors as per SDK documentation
-			const responseValue = hasText ? textResult.toWellFormed() : hasImages ? "(see attached image)" : "";
+			const responseValue = omittedImages
+				? [hasText ? textResult.toWellFormed() : "", NON_VISION_IMAGE_PLACEHOLDER].filter(Boolean).join("\n")
+				: hasText
+					? textResult.toWellFormed()
+					: hasImages
+						? "(see attached image)"
+						: "";
 
 			const imageParts: Part[] = imageContent.map(imageBlock => ({
 				inlineData: {
