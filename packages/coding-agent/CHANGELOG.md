@@ -14,6 +14,10 @@
 - Fixed top-level static import rewriting in JS evaluation to use parser-based detection so only real import declarations are rewritten and `import` text inside strings, comments, or template literals is preserved
 - Fixed `import ... with` attribute handling in rewritten ESM imports so static imports with module attributes now become dynamic imports with matching `with` options
 
+### Fixed
+
+- Fixed plan mode review resubmits to append each refreshed `local://PLAN.md` preview to the chat history, preserving the full refined plan in terminal scrollback.
+
 ## [14.8.0] - 2026-05-09
 ### Added
 
