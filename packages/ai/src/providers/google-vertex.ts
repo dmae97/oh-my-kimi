@@ -287,7 +287,7 @@ export const streamGoogleVertex: StreamFunction<"google-vertex"> = (
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error("An unknown error occurred");
+				throw new Error(output.errorMessage ?? "An unknown error occurred");
 			}
 
 			output.duration = Date.now() - startTime;

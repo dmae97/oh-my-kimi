@@ -1195,6 +1195,13 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								output.stopReason = mapStopReason(event.delta.stop_reason);
 								sawTerminalEnvelope = true;
 							}
+							const stopDetails = event.delta.stop_details;
+							if (stopDetails && stopDetails.type === "refusal") {
+								const explanation = stopDetails.explanation?.trim();
+								const category = stopDetails.category;
+								const label = category ? `Refusal (${category})` : "Refusal";
+								output.errorMessage = explanation ? `${label}: ${explanation}` : label;
+							}
 							if (event.usage.input_tokens != null) {
 								output.usage.input = event.usage.input_tokens;
 							}
@@ -1231,7 +1238,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					}
 
 					if (output.stopReason === "aborted" || output.stopReason === "error") {
-						throw new Error("An unknown error occurred");
+						throw new Error(output.errorMessage ?? "An unknown error occurred");
 					}
 					break;
 				} catch (streamError) {
