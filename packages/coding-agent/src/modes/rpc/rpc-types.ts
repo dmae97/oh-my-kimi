@@ -67,7 +67,11 @@ export type RpcCommand =
 	| { id?: string; type: "handoff"; customInstructions?: string }
 
 	// Messages
-	| { id?: string; type: "get_messages" };
+	| { id?: string; type: "get_messages" }
+
+	// Login
+	| { id?: string; type: "get_login_providers" }
+	| { id?: string; type: "login"; providerId: string };
 
 // ============================================================================
 // RPC State
@@ -193,6 +197,16 @@ export type RpcResponse =
 	// Messages
 	| { id?: string; type: "response"; command: "get_messages"; success: true; data: { messages: AgentMessage[] } }
 
+	// Login
+	| {
+			id?: string;
+			type: "response";
+			command: "get_login_providers";
+			success: true;
+			data: { providers: Array<{ id: string; name: string; available: boolean; authenticated: boolean }> };
+	  }
+	| { id?: string; type: "response"; command: "login"; success: true; data: { providerId: string } }
+
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };
 
@@ -244,7 +258,8 @@ export type RpcExtensionUIRequest =
 			widgetPlacement?: "aboveEditor" | "belowEditor";
 	  }
 	| { type: "extension_ui_request"; id: string; method: "setTitle"; title: string }
-	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string };
+	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string }
+	| { type: "extension_ui_request"; id: string; method: "open_url"; url: string; instructions?: string };
 
 // ============================================================================
 // Host Tool Frames (bidirectional)

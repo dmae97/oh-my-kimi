@@ -10,6 +10,7 @@
  * - Events: AgentSessionEvent objects streamed as they occur
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
+import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import { $env, readJsonl, Snowflake } from "@oh-my-pi/pi-utils";
 import type {
 	ExtensionUIContext,
@@ -149,7 +150,6 @@ export function requestRpcEditor(
 	} as RpcExtensionUIRequest);
 	return promise;
 }
-
 /**
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
@@ -753,6 +753,72 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 
 			case "get_messages": {
 				return success(id, "get_messages", { messages: session.messages });
+			}
+
+			// =================================================================
+			// Login
+			// =================================================================
+
+			case "get_login_providers": {
+				const providers = getOAuthProviders().map(provider => ({
+					id: provider.id,
+					name: provider.name,
+					available: provider.available,
+					authenticated: session.modelRegistry.authStorage.hasAuth(provider.id),
+				}));
+				return success(id, "get_login_providers", { providers });
+			}
+
+			case "login": {
+				const knownProvider = getOAuthProviders().find(p => p.id === command.providerId);
+				if (!knownProvider) {
+					return error(id, "login", `Unknown OAuth provider: ${command.providerId}`);
+				}
+				const uiCtx = new RpcExtensionUIContext(pendingExtensionRequests, output);
+				// Track whether onAuth has fired. Providers that use OAuthCallbackFlow
+				// always call onAuth first (emit browser URL), then onManualCodeInput as
+				// a fallback. Providers that require interactive input (API-key paste,
+				// GitHub Enterprise URL, device-code entry) call onPrompt before onAuth.
+				// We use this ordering to self-classify at runtime — no static allowlist.
+				let authEmitted = false;
+				try {
+					await session.modelRegistry.authStorage.login(command.providerId, {
+						onAuth: info => {
+							authEmitted = true;
+							output({
+								type: "extension_ui_request",
+								id: Snowflake.next() as string,
+								method: "open_url",
+								url: info.url,
+								instructions: info.instructions,
+							} as RpcExtensionUIRequest);
+						},
+						onProgress: message => {
+							uiCtx.notify(message, "info");
+						},
+						onPrompt: () => {
+							if (!authEmitted) {
+								// onPrompt called before any auth URL — provider requires
+								// interactive input that cannot be satisfied headlessly.
+								return Promise.reject(
+									new Error(
+										`Provider '${command.providerId}' requires interactive prompts ` +
+											"which are not supported in RPC mode. Use the terminal UI to log in.",
+									),
+								);
+							}
+							// onAuth has already fired — we are inside OAuthCallbackFlow's
+							// manual-redirect fallback race. Returning a never-settling promise
+							// lets the race block until the callback server wins; a rejection
+							// would be caught as null and spin the while(true) loop.
+							return new Promise<string>(() => {});
+						},
+					});
+					await session.modelRegistry.refresh();
+					return success(id, "login", { providerId: command.providerId });
+				} catch (err: unknown) {
+					return error(id, "login", err instanceof Error ? err.message : String(err));
+				}
 			}
 
 			default: {
