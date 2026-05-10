@@ -82,6 +82,21 @@ export interface StoredAuthCredential {
 // AuthStorage Options
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Event payload describing a credential that was just soft-disabled.
+ *
+ * Today the only call site is OAuth refresh failures with a definitive cause
+ * (`invalid_grant`, `401/403` not from a network blip, etc.) — the
+ * disabled_cause string is the verbatim error captured for forensics.
+ *
+ * Subscribers can use this to surface a notification, banner, or auto-launch
+ * a re-login flow instead of letting the credential silently disappear.
+ */
+export interface CredentialDisabledEvent {
+	provider: string;
+	disabledCause: string;
+}
+
 export type AuthStorageOptions = {
 	usageProviderResolver?: (provider: Provider) => UsageProvider | undefined;
 	rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
@@ -94,6 +109,14 @@ export type AuthStorageOptions = {
 	 * - Default: checks environment variable first, then treats as literal
 	 */
 	configValueResolver?: (config: string) => Promise<string | undefined>;
+	/**
+	 * Optional callback fired when AuthStorage automatically disables a
+	 * credential because something detected it as no longer usable — today
+	 * that's the OAuth refresh-failure path in `getApiKey`. NOT fired for
+	 * user-initiated `remove()` (the user already knows) or dedup of
+	 * duplicate credentials (uninteresting hygiene).
+	 */
+	onCredentialDisabled?: (event: CredentialDisabledEvent) => void | Promise<void>;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -260,6 +283,7 @@ export class AuthStorage {
 	#fallbackResolver?: (provider: string) => string | undefined;
 	#store: AuthCredentialStore;
 	#configValueResolver: (config: string) => Promise<string | undefined>;
+	#onCredentialDisabled?: (event: CredentialDisabledEvent) => void | Promise<void>;
 	#closed = false;
 
 	constructor(store: AuthCredentialStore, options: AuthStorageOptions = {}) {
@@ -270,6 +294,7 @@ export class AuthStorage {
 		this.#usageCache = new AuthStorageUsageCache(this.#store);
 		this.#usageFetch = options.usageFetch ?? fetch;
 		this.#usageRequestTimeoutMs = options.usageRequestTimeoutMs ?? DEFAULT_USAGE_REQUEST_TIMEOUT_MS;
+		this.#onCredentialDisabled = options.onCredentialDisabled;
 		this.#usageLogger =
 			options.usageLogger ??
 			({
@@ -601,6 +626,23 @@ export class AuthStorage {
 		const updated = entries.filter((_value, idx) => idx !== index);
 		this.#setStoredCredentials(provider, updated);
 		this.#resetProviderAssignments(provider);
+		this.#emitCredentialDisabled({ provider, disabledCause });
+	}
+
+	#emitCredentialDisabled(event: CredentialDisabledEvent): void {
+		const handler = this.#onCredentialDisabled;
+		if (!handler) return;
+		const logHandlerError = (error: unknown): void => {
+			logger.warn("onCredentialDisabled handler threw", { provider: event.provider, error: String(error) });
+		};
+		try {
+			const result = handler(event);
+			if (result && typeof (result as PromiseLike<void>).then === "function") {
+				(result as Promise<void>).catch(logHandlerError);
+			}
+		} catch (error) {
+			logHandlerError(error);
+		}
 	}
 
 	/**
