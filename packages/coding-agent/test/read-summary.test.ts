@@ -126,6 +126,28 @@ describe("read summary", () => {
 		expect(text).not.toMatch(/^1[a-z]{2}\|/);
 	});
 
+	it("returns raw verbatim content for compound `:lines:raw` selector", async () => {
+		const fixture = path.join(tmpDir, "compound.ts");
+		await fs.writeFile(fixture, "alpha\nbeta\ngamma\ndelta\nepsilon\n");
+
+		const tool = new ReadTool(createSession(tmpDir));
+		const linesFirst = await tool.execute("read-summary-compound-lines-raw", { path: `${fixture}:2-4:raw` });
+		const linesFirstText = textOutput(linesFirst);
+		// Verbatim: no hashline anchors and no line-number prefix.
+		expect(linesFirstText).toContain("beta");
+		expect(linesFirstText).toContain("gamma");
+		expect(linesFirstText).toContain("delta");
+		expect(linesFirstText).not.toMatch(/^\s*\d+[a-z]{2}\|/m);
+		expect(linesFirstText).not.toMatch(/^\s*\d+\|/m);
+		// Note: explicit ranges expand with surrounding context lines, so we don't
+		// assert on what is excluded — only that the requested range is present
+		// verbatim with no anchor or line-number prefixes.
+
+		const rawFirst = await tool.execute("read-summary-compound-raw-lines", { path: `${fixture}:raw:2-4` });
+		const rawFirstText = textOutput(rawFirst);
+		expect(rawFirstText).toBe(linesFirstText);
+	});
+
 	it("falls back to normal reads when summaries are disabled or parsing fails", async () => {
 		const valid = path.join(tmpDir, "valid.ts");
 		const broken = path.join(tmpDir, "broken.ts");

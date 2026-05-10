@@ -6,6 +6,8 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const FILE_LINE_RANGE_RE = /^(?:L?\d+(?:[-+]L?\d+)?|raw)$/i;
+const FILE_LINE_RANGE_ONLY_RE = /^L?\d+(?:[-+]L?\d+)?$/i;
+const FILE_RAW_ONLY_RE = /^raw$/i;
 const NARROW_NO_BREAK_SPACE = "\u202F";
 const TOP_LEVEL_INTERNAL_URL_PREFIXES = [
 	"agent://",
@@ -110,7 +112,25 @@ export function splitPathAndSel(rawPath: string): { path: string; sel?: string }
 	const candidate = rawPath.slice(colon + 1);
 	if (!FILE_LINE_RANGE_RE.test(candidate)) return { path: rawPath };
 
-	return { path: rawPath.slice(0, colon), sel: candidate };
+	let basePath = rawPath.slice(0, colon);
+	let sel = candidate;
+
+	// Allow a compound trailing selector: `path:1-50:raw` or `path:raw:1-50`.
+	// The two chunks must be one line-range plus one `raw`, in either order.
+	const innerColon = basePath.lastIndexOf(":");
+	if (innerColon > 0) {
+		const innerCandidate = basePath.slice(innerColon + 1);
+		const innerIsRaw = FILE_RAW_ONLY_RE.test(innerCandidate);
+		const outerIsRaw = FILE_RAW_ONLY_RE.test(candidate);
+		const innerIsRange = FILE_LINE_RANGE_ONLY_RE.test(innerCandidate);
+		const outerIsRange = FILE_LINE_RANGE_ONLY_RE.test(candidate);
+		if ((innerIsRaw && outerIsRange) || (innerIsRange && outerIsRaw)) {
+			sel = `${innerCandidate}:${candidate}`;
+			basePath = basePath.slice(0, innerColon);
+		}
+	}
+
+	return { path: basePath, sel };
 }
 
 function assertNotInternalUrl(expanded: string, original: string): void {

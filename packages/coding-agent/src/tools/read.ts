@@ -462,34 +462,67 @@ type ReadParams = ReadToolInput;
 type ParsedSelector =
 	| { kind: "none" }
 	| { kind: "raw" }
-	| { kind: "lines"; startLine: number; endLine: number | undefined };
+	| { kind: "lines"; startLine: number; endLine: number | undefined; raw?: boolean };
 
 const LINE_RANGE_RE = /^L?(\d+)(?:([-+])L?(\d+))?$/i;
 
+/** Returns true when the selector requested verbatim/raw output (alone or combined with a range). */
+function isRawSelector(parsed: ParsedSelector): boolean {
+	return parsed.kind === "raw" || (parsed.kind === "lines" && parsed.raw === true);
+}
+
+function parseLineRangeChunk(sel: string): { startLine: number; endLine: number | undefined } | null {
+	const lineMatch = LINE_RANGE_RE.exec(sel);
+	if (!lineMatch) return null;
+	const rawStart = Number.parseInt(lineMatch[1]!, 10);
+	if (rawStart < 1) {
+		throw new ToolError("Line selector 0 is invalid; lines are 1-indexed. Use :1.");
+	}
+	const sep = lineMatch[2];
+	const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
+	let rawEnd: number | undefined;
+	if (sep === "+") {
+		if (rhs === undefined || rhs < 1) {
+			throw new ToolError(`Invalid range ${rawStart}+${rhs ?? 0}: count must be >= 1.`);
+		}
+		rawEnd = rawStart + rhs - 1;
+	} else if (sep === "-") {
+		if (rhs === undefined || rhs < rawStart) {
+			throw new ToolError(`Invalid range ${rawStart}-${rhs ?? 0}: end must be >= start.`);
+		}
+		rawEnd = rhs;
+	}
+	return { startLine: rawStart, endLine: rawEnd };
+}
+
 function parseSel(sel: string | undefined): ParsedSelector {
 	if (!sel || sel.length === 0) return { kind: "none" };
+
+	// Compound selector: `1-50:raw` or `raw:1-50`. Split into chunks and accept
+	// any combination of one line range and the literal `raw`.
+	if (sel.includes(":")) {
+		const chunks = sel.split(":");
+		if (chunks.length === 2) {
+			const [a, b] = chunks as [string, string];
+			const aIsRaw = a.toLowerCase() === "raw";
+			const bIsRaw = b.toLowerCase() === "raw";
+			const rangeChunk = aIsRaw ? b : bIsRaw ? a : null;
+			const rawChunk = aIsRaw ? a : bIsRaw ? b : null;
+			if (rangeChunk !== null && rawChunk !== null) {
+				const range = parseLineRangeChunk(rangeChunk);
+				if (range) {
+					return { kind: "lines", startLine: range.startLine, endLine: range.endLine, raw: true };
+				}
+			}
+		}
+		// Unrecognized compound — fall through (sqlite/archive/url consume their own colon syntax).
+		return { kind: "none" };
+	}
+
 	if (sel.toLowerCase() === "raw") return { kind: "raw" };
-	const lineMatch = LINE_RANGE_RE.exec(sel);
-	if (lineMatch) {
-		const rawStart = Number.parseInt(lineMatch[1]!, 10);
-		if (rawStart < 1) {
-			throw new ToolError("Line selector 0 is invalid; lines are 1-indexed. Use :1.");
-		}
-		const sep = lineMatch[2];
-		const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
-		let rawEnd: number | undefined;
-		if (sep === "+") {
-			if (rhs === undefined || rhs < 1) {
-				throw new ToolError(`Invalid range ${rawStart}+${rhs ?? 0}: count must be >= 1.`);
-			}
-			rawEnd = rawStart + rhs - 1;
-		} else if (sep === "-") {
-			if (rhs === undefined || rhs < rawStart) {
-				throw new ToolError(`Invalid range ${rawStart}-${rhs ?? 0}: end must be >= start.`);
-			}
-			rawEnd = rhs;
-		}
-		return { kind: "lines", startLine: rawStart, endLine: rawEnd };
+	const range = parseLineRangeChunk(sel);
+	if (range) {
+		return { kind: "lines", startLine: range.startLine, endLine: range.endLine };
 	}
 	// Unrecognized selectors fall through; sqlite/archive/url readers consume their own colon syntax.
 	return { kind: "none" };
@@ -1152,7 +1185,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (internalRouter?.canHandle(internalTarget.path)) {
 			const parsed = parseSel(internalTarget.sel);
 			const { offset, limit } = selToOffsetLimit(parsed);
-			return this.#handleInternalUrl(internalTarget.path, offset, limit);
+			return this.#handleInternalUrl(internalTarget.path, offset, limit, { raw: isRawSelector(parsed) });
 		}
 
 		const archivePath = await this.#resolveArchiveReadPath(readPath, signal);
@@ -1166,7 +1199,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				limit,
 				{ ...archivePath, archiveSubPath: archiveSubPath.path },
 				signal,
-				{ raw: archiveParsed.kind === "raw" },
+				{ raw: isRawSelector(archiveParsed) },
 			);
 		}
 
@@ -1295,7 +1328,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					throw error;
 				}
 			}
-		} else if (isNotebookPath(absolutePath) && parsed.kind !== "raw") {
+		} else if (isNotebookPath(absolutePath) && !isRawSelector(parsed)) {
 			const { offset, limit } = selToOffsetLimit(parsed);
 			return this.#buildInMemoryTextResult(
 				await readEditableNotebookText(absolutePath, localReadPath),
@@ -1423,7 +1456,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					getFileReadCache(this.session).recordContiguous(absolutePath, startLineDisplay, collectedLines);
 				}
 
-				const isRawMode = parsed.kind === "raw";
+				const isRawMode = isRawSelector(parsed);
 				const shouldAddHashLines = !isRawMode && displayMode.hashLines;
 				const shouldAddLineNumbers = isRawMode ? false : shouldAddHashLines ? false : displayMode.lineNumbers;
 				let capturedDisplayContent: { text: string; startLine: number } | undefined;
@@ -1512,7 +1545,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	 * Handle internal URLs (agent://, artifact://, memory://, skill://, rule://, local://, mcp://).
 	 * Supports pagination via offset/limit but rejects them when query extraction is used.
 	 */
-	async #handleInternalUrl(url: string, offset?: number, limit?: number): Promise<AgentToolResult<ReadToolDetails>> {
+	async #handleInternalUrl(
+		url: string,
+		offset?: number,
+		limit?: number,
+		options?: { raw?: boolean },
+	): Promise<AgentToolResult<ReadToolDetails>> {
 		const internalRouter = this.session.internalRouter!;
 
 		// Check if URL has query extraction (agent:// only).
@@ -1553,6 +1591,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			entityLabel: "resource",
 			ignoreResultLimits: scheme === "skill",
 			immutable: true,
+			raw: options?.raw,
 		});
 	}
 
