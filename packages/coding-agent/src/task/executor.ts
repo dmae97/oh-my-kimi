@@ -10,7 +10,7 @@ import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import Ajv, { type ValidateFunction } from "ajv";
 import { ModelRegistry } from "../config/model-registry";
-import { resolveModelOverride } from "../config/model-resolver";
+import { resolveModelOverrideWithAuthFallback } from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
@@ -144,6 +144,11 @@ export interface ExecutorOptions {
 	index: number;
 	id: string;
 	modelOverride?: string | string[];
+	/**
+	 * Active model selector of the parent session, used as an auth-aware fallback
+	 * if the resolved subagent model has no working credentials. See #985.
+	 */
+	parentActiveModelPattern?: string;
 	thinkingLevel?: ThinkingLevel;
 	outputSchema?: unknown;
 	/** Parent task recursion depth (0 = top-level, 1 = first child, etc.) */
@@ -944,7 +949,21 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				model,
 				thinkingLevel: resolvedThinkingLevel,
 				explicitThinkingLevel,
-			} = resolveModelOverride(modelPatterns, modelRegistry, settings);
+				authFallbackUsed,
+			} = await resolveModelOverrideWithAuthFallback(
+				modelPatterns,
+				options.parentActiveModelPattern,
+				modelRegistry,
+				settings,
+			);
+			if (authFallbackUsed && model) {
+				logger.warn("Subagent model has no working credentials; falling back to parent session model", {
+					requested: modelPatterns,
+					parentModel: options.parentActiveModelPattern,
+					resolvedProvider: model.provider,
+					resolvedModel: model.id,
+				});
+			}
 			const effectiveThinkingLevel = explicitThinkingLevel
 				? resolvedThinkingLevel
 				: (thinkingLevel ?? resolvedThinkingLevel);

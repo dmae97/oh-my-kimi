@@ -16,7 +16,7 @@ import chalk from "chalk";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { parseThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
 import { fuzzyMatch } from "../utils/fuzzy";
-import { MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "./model-registry";
+import { isAuthenticated, MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "./model-registry";
 import type { Settings } from "./settings";
 
 /** Default model IDs for each known provider */
@@ -730,6 +730,57 @@ export function resolveModelOverride(
 		}
 	}
 	return { explicitThinkingLevel: false };
+}
+
+/**
+ * Resolve a list of override patterns to the first matching model, with an
+ * auth-aware fallback to the parent session's active model.
+ *
+ * If the resolved subagent model has no working credentials (provider has no
+ * usable auth), and the parent's active model resolves with working auth,
+ * use the parent's model instead. This prevents subagent dispatch from
+ * silently routing to a provider the user can't actually call (e.g.
+ * `modelRoles.task` pointing at an unqualified id whose only available
+ * provider variant has no configured credentials — see #985).
+ *
+ * If neither the subagent nor the parent has working auth, returns the
+ * primary resolution unchanged so the existing error path still surfaces
+ * a meaningful failure downstream.
+ */
+export async function resolveModelOverrideWithAuthFallback(
+	modelPatterns: string[],
+	parentActiveModelPattern: string | undefined,
+	modelRegistry: ModelLookupRegistry & Pick<ModelRegistry, "getApiKey">,
+	settings?: Settings,
+): Promise<{
+	model?: Model<Api>;
+	thinkingLevel?: ThinkingLevel;
+	explicitThinkingLevel: boolean;
+	authFallbackUsed: boolean;
+}> {
+	const primary = resolveModelOverride(modelPatterns, modelRegistry, settings);
+	if (!primary.model || !parentActiveModelPattern) {
+		return { ...primary, authFallbackUsed: false };
+	}
+
+	const primaryKey = await modelRegistry.getApiKey(primary.model);
+	if (isAuthenticated(primaryKey)) {
+		return { ...primary, authFallbackUsed: false };
+	}
+
+	const fallback = resolveModelOverride([parentActiveModelPattern], modelRegistry, settings);
+	if (!fallback.model) {
+		return { ...primary, authFallbackUsed: false };
+	}
+	if (modelsAreEqual(fallback.model, primary.model)) {
+		return { ...primary, authFallbackUsed: false };
+	}
+	const fallbackKey = await modelRegistry.getApiKey(fallback.model);
+	if (!isAuthenticated(fallbackKey)) {
+		return { ...primary, authFallbackUsed: false };
+	}
+
+	return { ...fallback, authFallbackUsed: true };
 }
 
 /**

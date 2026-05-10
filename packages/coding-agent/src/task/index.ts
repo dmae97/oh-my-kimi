@@ -583,11 +583,12 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 		// Apply per-agent model override from settings (highest priority)
 		const agentModelOverrides = this.session.settings.get("task.agentModelOverrides");
 		const settingsModelOverride = agentModelOverrides[agentName];
+		const parentActiveModelPattern = this.session.getActiveModelString?.();
 		const modelOverride = resolveAgentModelPatterns({
 			settingsOverride: settingsModelOverride,
 			agentModel: effectiveAgent.model,
 			settings: this.session.settings,
-			activeModelPattern: this.session.getActiveModelString?.(),
+			activeModelPattern: parentActiveModelPattern,
 			fallbackModelPattern: this.session.getModelString?.(),
 		});
 		const thinkingLevelOverride = effectiveAgent.thinkingLevel;
@@ -843,6 +844,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						id: task.id,
 						taskDepth,
 						modelOverride,
+						parentActiveModelPattern,
 						thinkingLevel: thinkingLevelOverride,
 						outputSchema: effectiveOutputSchema,
 						sessionFile,
@@ -900,6 +902,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						id: task.id,
 						taskDepth,
 						modelOverride,
+						parentActiveModelPattern,
 						thinkingLevel: thinkingLevelOverride,
 						outputSchema: effectiveOutputSchema,
 						sessionFile,
