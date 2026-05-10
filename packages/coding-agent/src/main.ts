@@ -659,7 +659,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	if (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") {
 		applyRpcDefaultSettingOverrides();
 	}
-	if (parsedArgs.noPty) {
+	if (parsedArgs.noPty || parsedArgs.mode === "rpc-ui") {
 		Bun.env.PI_NO_PTY = "1";
 	}
 	if (parsedArgs.noTitle || parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") {
