@@ -1,4 +1,4 @@
-import { RANGE_INTERIOR_HASH } from "./constants";
+import { ABORT_MARKER, ABORT_WARNING, BEGIN_PATCH_MARKER, END_PATCH_MARKER, RANGE_INTERIOR_HASH } from "./constants";
 import { describeAnchorExamples, HL_EDIT_SEP, HL_HASH_CAPTURE_RE_RAW } from "./hash";
 import type { Anchor, HashlineCursor, HashlineEdit } from "./types";
 import { stripTrailingCarriageReturn } from "./utils";
@@ -115,6 +115,17 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		const line = stripTrailingCarriageReturn(lines[i]);
 
 		if (line.trim().length === 0) {
+			i++;
+			continue;
+		}
+		if (line === END_PATCH_MARKER) {
+			break;
+		}
+		if (line === ABORT_MARKER) {
+			warnings.push(ABORT_WARNING);
+			break;
+		}
+		if (line === BEGIN_PATCH_MARKER) {
 			i++;
 			continue;
 		}

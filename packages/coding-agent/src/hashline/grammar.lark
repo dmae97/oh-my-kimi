@@ -1,29 +1,22 @@
-%import common.LF
-%import common.WS_INLINE
+start: begin_patch hunk+ end_patch
+begin_patch: "*** Begin Patch" LF
+end_patch: "*** End Patch" LF?
 
-start: section+
+hunk: update_hunk
+update_hunk: "@" filename LF line_op*
 
-section: file_header line_op*
+filename: /(.+)/
 
-file_header: "@" path LF
-
-line_op: insert_before_op payload+
-       | insert_after_op payload+
-       | replace_op payload*
-       | delete_op
-       | blank
-
-insert_before_op: "<" insert_target LF
-insert_after_op: "+" insert_target LF
-replace_op: "=" range LF
-delete_op: "-" range LF
-payload: $HSEP$ line_text? LF
-
-line_text: /[^\r\n]+/
-
-insert_target: LID | "EOF" | "BOF"
-range: LID ".." LID
-
-path: /(?:[^\s\r\n]+|"[^"\r\n]+"|'[^'\r\n]+')/
-LID: /[1-9][0-9]*$HFMT$/
+line_op: insert_before | insert_after | replace | delete | blank
+insert_before: ("<" | "< ") anchor LF payload+
+insert_after: ("+" | "+ ") anchor LF payload+
+replace: ("=" | "= ") range LF payload*
+delete: ("-" | "- ") range LF
+payload: $HSEP$ /(.*)/ LF
 blank: LF
+
+anchor: LID | "EOF" | "BOF"
+range: LID ".." LID
+LID: /[1-9]\d*$HFMT$/
+
+%import common.LF

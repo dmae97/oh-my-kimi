@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { FILE_HEADER_PREFIX } from "./constants";
+import { ABORT_MARKER, BEGIN_PATCH_MARKER, END_PATCH_MARKER, FILE_HEADER_PREFIX } from "./constants";
 import { HL_EDIT_SEP } from "./hash";
 import type { SplitHashlineOptions } from "./types";
 import { stripTrailingCarriageReturn } from "./utils";
@@ -38,10 +38,22 @@ function parseHashlineHeaderLine(line: string, cwd?: string): HashlineInputSecti
 	return { path: parsedPath, diff: "" };
 }
 
+function isPatchEnvelopeMarker(line: string): boolean {
+	const trimmed = line.trimEnd();
+	return trimmed === BEGIN_PATCH_MARKER || trimmed === END_PATCH_MARKER;
+}
+
 function stripLeadingBlankLines(input: string): string {
 	const stripped = input.startsWith("\uFEFF") ? input.slice(1) : input;
 	const lines = stripped.split("\n");
-	while (lines.length > 0 && lines[0].replace(/\r$/, "").trim().length === 0) lines.shift();
+	while (lines.length > 0) {
+		const head = lines[0].replace(/\r$/, "");
+		if (head.trim().length === 0 || head.trimEnd() === BEGIN_PATCH_MARKER) {
+			lines.shift();
+			continue;
+		}
+		break;
+	}
 	return lines.join("\n");
 }
 
@@ -96,6 +108,8 @@ export function splitHashlineInputs(input: string, options: SplitHashlineOptions
 
 	for (const rawLine of lines) {
 		const line = stripTrailingCarriageReturn(rawLine);
+		if (line.trimEnd() === END_PATCH_MARKER || line.trimEnd() === ABORT_MARKER) break;
+		if (isPatchEnvelopeMarker(line)) continue;
 		const header = parseHashlineHeaderLine(line, options.cwd);
 		if (header !== null) {
 			flush();

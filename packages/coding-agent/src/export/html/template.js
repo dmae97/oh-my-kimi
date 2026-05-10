@@ -1258,8 +1258,65 @@
         return html;
       }
 
-      // Parse `===== <info> =====` cell headers used by the `eval` tool.
+      // Parse `*** Begin <LANG>` cell headers (canonical) and the legacy
+      // `===== <info> =====` headers used by older transcripts. Cells emitted
+      // before the format cutover still need to render in HTML exports.
       function parseEvalCells(input) {
+        const text = String(input);
+        if (/^[*]{2,}\s*Begin\b/im.test(text)) return parseEvalCellsNew(text);
+        return parseEvalCellsLegacy(text);
+      }
+
+      function evalLangAlias(token) {
+        const t = String(token || '').toUpperCase();
+        if (t === 'PY' || t === 'PYTHON' || t === 'IPY' || t === 'IPYTHON') return 'py';
+        if (t === 'JS' || t === 'JAVASCRIPT') return 'js';
+        if (t === 'TS' || t === 'TYPESCRIPT') return 'ts';
+        return null;
+      }
+
+      function parseEvalCellsNew(text) {
+        const STARS = '\\*{2,}';
+        const BEGIN = new RegExp('^' + STARS + '\\s*Begin\\b\\s*(\\S+)?\\s*$', 'i');
+        const END = new RegExp('^' + STARS + '\\s*End\\b.*$', 'i');
+        const TITLE = new RegExp('^' + STARS + '\\s*Title\\s*:\\s*(.+?)\\s*$', 'i');
+        const TIMEOUT = new RegExp('^' + STARS + '\\s*Timeout\\s*:\\s*(\\S+)\\s*$', 'i');
+        const RESET = new RegExp('^' + STARS + '\\s*Reset\\s*$', 'i');
+        const lines = text.split('\n');
+        if (lines.length && lines[lines.length - 1] === '') lines.pop();
+        const cells = [];
+        let i = 0;
+        while (i < lines.length && lines[i].trim() === '') i++;
+        while (i < lines.length) {
+          const beginMatch = BEGIN.exec(lines[i]);
+          if (!beginMatch) { i++; continue; }
+          const lang = evalLangAlias(beginMatch[1]) || 'py';
+          i++;
+          let title = '';
+          const attrs = [];
+          while (i < lines.length) {
+            const tm = TITLE.exec(lines[i]);
+            if (tm) { if (!title) title = tm[1]; i++; continue; }
+            const to = TIMEOUT.exec(lines[i]);
+            if (to) { attrs.push('t=' + to[1]); i++; continue; }
+            if (RESET.test(lines[i])) { attrs.push('rst'); i++; continue; }
+            break;
+          }
+          const codeLines = [];
+          while (i < lines.length) {
+            if (END.test(lines[i])) { i++; break; }
+            if (BEGIN.test(lines[i])) break;
+            codeLines.push(lines[i]);
+            i++;
+          }
+          while (codeLines.length && codeLines[codeLines.length - 1].trim() === '') codeLines.pop();
+          cells.push({ lang, title, attrs, code: codeLines.join('\n') });
+          while (i < lines.length && lines[i].trim() === '') i++;
+        }
+        return cells;
+      }
+
+      function parseEvalCellsLegacy(input) {
         const HEADER = /^={5,}\s*(.*?)\s*={5,}\s*$/;
         const lines = String(input).split('\n');
         const cells = [];

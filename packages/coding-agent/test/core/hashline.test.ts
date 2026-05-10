@@ -18,6 +18,7 @@ import {
 	HL_EDIT_SEP,
 	hashlineEditParamsSchema,
 	parseHashline,
+	parseHashlineWithWarnings,
 	splitHashlineInput,
 	splitHashlineInputs,
 	tryRecoverHashlineWithCache,
@@ -713,5 +714,49 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 		expect(cache.get("/tmp/file-1.ts")).toBeNull();
 		expect(cache.get("/tmp/file-2.ts")).not.toBeNull();
 		expect(cache.get("/tmp/file-31.ts")).not.toBeNull();
+	});
+});
+
+describe("hashline *** Abort recovery sentinel (harmony-leak mitigation)", () => {
+	const sentinel = "*** Abort";
+
+	it("parser breaks at *** Abort and surfaces a warning", () => {
+		const diff = [`+ ${tag(1, "alpha")}`, pl("HELLO"), sentinel, `+ ${tag(99, "junk")}`, pl("never")].join("\n");
+		const { edits, warnings } = parseHashlineWithWarnings(diff);
+		expect(edits).toHaveLength(1);
+		expect(edits[0]).toMatchObject({ kind: "insert", text: "HELLO" });
+		expect(warnings.length).toBeGreaterThan(0);
+		expect(warnings[0]).toMatch(/truncated mid-call/i);
+	});
+
+	it("appended sentinel from harmony-leak truncation: ops above are preserved", () => {
+		// Mirrors the exact shape harmony-leak emits inside a single section.
+		const diff = `+ ${tag(1, "alpha")}\n${pl("KEPT")}\n*** Abort\n`;
+		const { edits, warnings } = parseHashlineWithWarnings(diff);
+		expect(edits).toHaveLength(1);
+		expect(edits[0]).toMatchObject({ text: "KEPT" });
+		expect(warnings.length).toBeGreaterThan(0);
+	});
+
+	it("splitter respects *** Abort like *** End Patch", () => {
+		const input = [
+			`@a.ts`,
+			`+ ${tag(1, "alpha")}`,
+			pl("a-payload"),
+			sentinel,
+			`@b.ts`,
+			`+ ${tag(1, "beta")}`,
+			pl("never-emitted"),
+		].join("\n");
+		const sections = splitHashlineInputs(input);
+		expect(sections).toHaveLength(1);
+		expect(sections[0].path).toBe("a.ts");
+		expect(sections[0].diff.includes("never-emitted")).toBe(false);
+	});
+
+	it("clean input without sentinel produces no warning", () => {
+		const diff = `+ ${tag(1, "alpha")}\n${pl("PAYLOAD")}\n`;
+		const { warnings } = parseHashlineWithWarnings(diff);
+		expect(warnings).toEqual([]);
 	});
 });

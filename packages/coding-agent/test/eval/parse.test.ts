@@ -2,228 +2,272 @@ import { describe, expect, it } from "bun:test";
 import { parseEvalInput } from "../../src/eval/parse";
 
 describe("parseEvalInput", () => {
-	it("parses a single header cell with title shorthand and t timeout", () => {
-		const result = parseEvalInput(`===== py:"setup" t:15s =====
+	it("parses a single cell with title and timeout", () => {
+		const result = parseEvalInput(`*** Begin PY
+*** Title: setup
+*** Timeout: 15s
 print("hi")
-`);
-
-		expect(result.cells).toEqual([
-			{
-				index: 0,
-				title: "setup",
-				code: 'print("hi")',
-				language: "python",
-				languageOrigin: "header",
-				timeoutMs: 15_000,
-				reset: false,
-			},
-		]);
-	});
-
-	it("treats bare rst as a per-language kernel wipe for that cell", () => {
-		const result = parseEvalInput(`===== py rst id:"bootstrap" =====
-import json
-===== js rst =====
-const x = 1;
-`);
-
-		expect(result.cells.map(cell => [cell.language, cell.reset, cell.title])).toEqual([
-			["python", true, "bootstrap"],
-			["js", true, undefined],
-		]);
-	});
-
-	it("inherits language across consecutive cells when omitted", () => {
-		const result = parseEvalInput(`===== js =====
-const a = 1;
-===== =====
-const b = a + 1;
-`);
-
-		expect(result.cells.map(cell => [cell.language, cell.languageOrigin, cell.code, cell.reset])).toEqual([
-			["js", "header", "const a = 1;", false],
-			["js", "header", "const b = a + 1;", false],
-		]);
-	});
-
-	it("accepts asymmetric bar runs and case-insensitive language tokens", () => {
-		const result = parseEvalInput(`===== TypeScript ======
-const a = 1;
-====== IPython =====
-print("ipy")
-`);
-
-		expect(result.cells.map(cell => [cell.language, cell.languageOrigin])).toEqual([
-			["js", "header"],
-			["python", "header"],
-		]);
-	});
-
-	it("uses canonical id and t attributes, with explicit attrs winning over positional", () => {
-		const result = parseEvalInput(`===== py 5s some words t:2m id:"explicit win" =====
-print(1)
-`);
-
-		expect(result.cells[0]).toMatchObject({
-			title: "explicit win",
-			timeoutMs: 120_000,
-			language: "python",
-		});
-	});
-
-	it("accepts fallback aliases for id, t, and rst keys", () => {
-		const idAliases = ["title", "name", "cell", "file", "label"];
-		for (const key of idAliases) {
-			const result = parseEvalInput(`===== py ${key}:"alpha" =====\nprint(1)\n`);
-			expect(result.cells[0].title).toBe("alpha");
-		}
-
-		const timeoutAliases = ["timeout", "duration", "time"];
-		for (const key of timeoutAliases) {
-			const result = parseEvalInput(`===== py ${key}:2m =====\nprint(1)\n`);
-			expect(result.cells[0].timeoutMs).toBe(120_000);
-		}
-
-		const result = parseEvalInput(`===== py reset:true =====\nprint(1)\n`);
-		expect(result.cells[0].reset).toBe(true);
-	});
-
-	it("first occurrence wins when canonical and alias collide", () => {
-		const canonicalFirst = parseEvalInput(`===== py id:"canon" title:"alias" =====
-print(1)
-`);
-		const aliasFirst = parseEvalInput(`===== py title:"alias" id:"canon" =====
-print(1)
-`);
-
-		expect(canonicalFirst.cells[0].title).toBe("canon");
-		expect(aliasFirst.cells[0].title).toBe("alias");
-	});
-
-	it("parses millisecond, second, and minute durations", () => {
-		const result = parseEvalInput(`===== py t:500ms =====
-a = 1
-===== py t:5 =====
-a = 2
-===== py t:2m =====
-a = 3
-`);
-
-		expect(result.cells.map(cell => cell.timeoutMs)).toEqual([500, 5_000, 120_000]);
-	});
-
-	it("treats unrecognized header tokens as a title and inherits the language", () => {
-		const result = parseEvalInput(`===== ruby =====
-puts "no"
-`);
-
-		expect(result.cells[0]).toMatchObject({
-			title: "ruby",
-			code: 'puts "no"',
-			language: "python",
-			languageOrigin: "default",
-		});
-	});
-
-	it("joins multiple positional title fragments with spaces", () => {
-		const result = parseEvalInput(`===== py compute totals =====
-print(1)
-`);
-
-		expect(result.cells[0].title).toBe("compute totals");
-	});
-
-	it("accepts back-to-back header cells without blank separators", () => {
-		const result = parseEvalInput(`===== py id:"a" =====
-print("a")
-===== py id:"b" =====
-print("b")
-`);
-
-		expect(result.cells.map(cell => [cell.title, cell.code])).toEqual([
-			["a", 'print("a")'],
-			["b", 'print("b")'],
-		]);
-	});
-
-	it("wraps bare code with no headers in a single implicit cell", () => {
-		const result = parseEvalInput(`print("hello")
-print("world")
-`);
-
-		expect(result.cells).toEqual([
-			{
-				index: 0,
-				title: undefined,
-				code: 'print("hello")\nprint("world")',
-				language: "python",
-				languageOrigin: "default",
-				timeoutMs: 30_000,
-				reset: false,
-			},
-		]);
-	});
-
-	it("strips blank lines between cells from the preceding cell's code", () => {
-		const result = parseEvalInput(`===== js =====
-const x = 1;
-
-===== =====
-const y = 2;
-`);
-
-		expect(result.cells.map(cell => [cell.language, cell.languageOrigin, cell.code])).toEqual([
-			["js", "header", "const x = 1;"],
-			["js", "header", "const y = 2;"],
-		]);
-	});
-
-	it("accepts an empty header introducing a default cell with no info", () => {
-		const result = parseEvalInput(`=====
-print("still typing")
+*** End PY
 `);
 
 		expect(result.cells).toHaveLength(1);
 		expect(result.cells[0]).toMatchObject({
-			code: 'print("still typing")',
+			index: 0,
+			title: "setup",
+			code: 'print("hi")',
 			language: "python",
-			languageOrigin: "default",
+			languageOrigin: "header",
+			timeoutMs: 15_000,
 			reset: false,
 		});
 	});
 
-	it("ignores unknown attribute keys without erroring", () => {
-		const result = parseEvalInput(`===== py mystery:123 id:"ok" =====
-print(1)
+	it("treats *** Reset as a per-cell kernel wipe", () => {
+		const result = parseEvalInput(`*** Begin PY
+*** Title: bootstrap
+*** Reset
+import json
+*** End PY
+*** Begin JS
+*** Reset
+const x = 1;
+*** End JS
 `);
 
-		expect(result.cells[0]).toMatchObject({ title: "ok", language: "python" });
+		expect(result.cells).toHaveLength(2);
+		expect(result.cells[0]).toMatchObject({ language: "python", title: "bootstrap", reset: true });
+		expect(result.cells[1]).toMatchObject({ language: "js", reset: true, title: undefined });
 	});
 
-	it("rejects an invalid rst value", () => {
-		expect(() =>
-			parseEvalInput(`===== py rst:maybe =====
-print(1)
-`),
-		).toThrow("invalid rst value");
-	});
-
-	it("rejects an invalid t value", () => {
-		expect(() =>
-			parseEvalInput(`===== py t:forever =====
-print(1)
-`),
-		).toThrow("invalid duration");
-	});
-
-	it("does not treat lines that start with equals but have no closing bar as a header", () => {
-		const result = parseEvalInput(`===== py =====
-x = 1
-===== not a header
-y = 2
+	it("accepts JS, TS, and PY language tokens (case-insensitive)", () => {
+		const result = parseEvalInput(`*** Begin TS
+const a = 1;
+*** End TS
+*** Begin py
+print("py")
+*** End py
 `);
 
+		expect(result.cells.map(c => c.language)).toEqual(["js", "python"]);
+	});
+
+	it("parses millisecond, second, and minute durations", () => {
+		const result = parseEvalInput(`*** Begin PY
+*** Timeout: 500ms
+a = 1
+*** End PY
+*** Begin PY
+*** Timeout: 5
+a = 2
+*** End PY
+*** Begin PY
+*** Timeout: 2m
+a = 3
+*** End PY
+`);
+
+		expect(result.cells.map(c => c.timeoutMs)).toEqual([500, 5_000, 120_000]);
+	});
+
+	it("attribute order is flexible and only the first wins", () => {
+		const result = parseEvalInput(`*** Begin PY
+*** Timeout: 1s
+*** Title: first
+*** Title: ignored
+*** Timeout: 9s
+print(1)
+*** End PY
+`);
+
+		expect(result.cells[0]).toMatchObject({ title: "first", timeoutMs: 1_000 });
+	});
+
+	it("preserves blank lines inside the cell body", () => {
+		const result = parseEvalInput(`*** Begin JS
+const x = 1;
+
+const y = 2;
+*** End JS
+`);
+
+		expect(result.cells[0].code).toBe("const x = 1;\n\nconst y = 2;");
+	});
+
+	it("treats blank lines between cells as separators, not code", () => {
+		const result = parseEvalInput(`*** Begin PY
+print("a")
+*** End PY
+
+
+*** Begin PY
+print("b")
+*** End PY
+`);
+
+		expect(result.cells).toHaveLength(2);
+		expect(result.cells[0].code).toBe('print("a")');
+		expect(result.cells[1].code).toBe('print("b")');
+	});
+
+	it("falls back to language sniffing when the begin marker has no recognized language", () => {
+		const result = parseEvalInput(`*** Begin RUBY
+const x = 1;
+console.log(x);
+*** End
+`);
+		expect(result.cells[0]).toMatchObject({ language: "js", languageOrigin: "default" });
+	});
+
+	it("accepts `**Begin` (two stars) as well as `***Begin`", () => {
+		const result = parseEvalInput(`**Begin PY
+print(1)
+**End
+`);
+		expect(result.cells[0]).toMatchObject({ language: "python", code: "print(1)" });
+	});
+
+	it("implicitly closes a cell when a new *** Begin appears without an *** End", () => {
+		const result = parseEvalInput(`*** Begin PY
+print("a")
+*** Begin JS
+const x = 1;
+*** End JS
+`);
+		expect(result.cells).toHaveLength(2);
+		expect(result.cells[0]).toMatchObject({ language: "python", code: 'print("a")' });
+		expect(result.cells[1]).toMatchObject({ language: "js", code: "const x = 1;" });
+	});
+
+	it("ignores the language token on `*** End` (leniency)", () => {
+		const result = parseEvalInput(`*** Begin PY
+print(1)
+*** End JS
+`);
+		expect(result.cells[0]).toMatchObject({ language: "python", code: "print(1)" });
+	});
+
+	it("accepts long-form language aliases (Python, JavaScript, TypeScript)", () => {
+		const result = parseEvalInput(`*** Begin Python
+print(1)
+*** End
+*** begin javascript
+const x = 1;
+*** End
+`);
+		expect(result.cells.map(c => c.language)).toEqual(["python", "js"]);
+	});
+
+	it("tolerates whitespace and case variations on directives", () => {
+		const result = parseEvalInput(`***\tBegin\tPY
+***title:   tabby
+***\tTimeout:\t250ms
+***reset
+print(1)
+***End
+`);
+		expect(result.cells[0]).toMatchObject({
+			title: "tabby",
+			timeoutMs: 250,
+			reset: true,
+			language: "python",
+			code: "print(1)",
+		});
+	});
+
+	it("implicitly closes the final cell at EOF when *** End is missing", () => {
+		const result = parseEvalInput(`*** Begin PY
+print(1)
+`);
 		expect(result.cells).toHaveLength(1);
-		expect(result.cells[0].code).toBe("x = 1\n===== not a header\ny = 2");
+		expect(result.cells[0]).toMatchObject({ language: "python", code: "print(1)" });
+	});
+
+	it("treats bare code without any *** Begin as a single implicit cell", () => {
+		const result = parseEvalInput(`def greet():\n    print('hi')\ngreet()\n`);
+		expect(result.cells).toHaveLength(1);
+		expect(result.cells[0]).toMatchObject({
+			language: "python",
+			languageOrigin: "default",
+			code: "def greet():\n    print('hi')\ngreet()",
+		});
+	});
+
+	it("strips a markdown code fence wrapper and uses its language tag", () => {
+		const result = parseEvalInput("```js\nconst x = 1;\n```\n");
+		expect(result.cells).toHaveLength(1);
+		expect(result.cells[0]).toMatchObject({
+			language: "js",
+			languageOrigin: "header",
+			code: "const x = 1;",
+		});
+	});
+
+	it("rejects invalid duration", () => {
+		expect(() =>
+			parseEvalInput(`*** Begin PY
+*** Timeout: forever
+print(1)
+*** End PY
+`),
+		).toThrow(/invalid duration/);
+	});
+	describe("*** Abort recovery sentinel (harmony-leak mitigation)", () => {
+		it("drops the in-progress cell and stops parsing", () => {
+			const result = parseEvalInput(`*** Begin PY
+print("a")
+*** End PY
+*** Begin JS
+const partial = 1;  /* contamination starts mid-cell */
+*** Abort
+*** Begin TS
+const never_runs = 1;
+`);
+			expect(result.aborted).toBe(true);
+			expect(result.cells).toHaveLength(1);
+			expect(result.cells[0].language).toBe("python");
+			expect(result.cells[0].code).toBe('print("a")');
+		});
+
+		it("between cells: keeps preceding cells, sets aborted, drops trailing cells", () => {
+			const result = parseEvalInput(`*** Begin PY
+print("a")
+*** End PY
+
+*** Abort
+
+*** Begin PY
+print("never")
+*** End PY
+`);
+			expect(result.aborted).toBe(true);
+			expect(result.cells).toHaveLength(1);
+			expect(result.cells[0].code).toBe('print("a")');
+		});
+
+		it("implicit-cell input containing *** Abort is rejected entirely", () => {
+			const result = parseEvalInput(`print("partial")
+*** Abort
+`);
+			expect(result.aborted).toBe(true);
+			expect(result.cells).toHaveLength(0);
+		});
+
+		it("appended sentinel from harmony-leak truncation: abort flag set, prior cell preserved", () => {
+			// Mirrors the exact shape harmony-leak emits: original input truncated
+			// at the contaminated line, then "\n*** Abort\n" appended.
+			const truncated = `*** Begin PY\nprint("ok")\n*** End PY\n*** Abort\n`;
+			const result = parseEvalInput(truncated);
+			expect(result.aborted).toBe(true);
+			expect(result.cells).toHaveLength(1);
+			expect(result.cells[0].code).toBe('print("ok")');
+		});
+
+		it("absent sentinel: aborted is undefined (not falsely set)", () => {
+			const result = parseEvalInput(`*** Begin PY
+print(1)
+*** End PY
+`);
+			expect(result.aborted).toBeUndefined();
+		});
 	});
 });

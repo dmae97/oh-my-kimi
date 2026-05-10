@@ -21,6 +21,7 @@ import {
 	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
 import { agentLoop, agentLoopContinue } from "./agent-loop";
+import type { HarmonyAuditEvent } from "./harmony-leak";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -144,6 +145,11 @@ export interface AgentOptions {
 	 * Use this when abort decisions must happen before buffered events continue flowing.
 	 */
 	onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
+
+	/**
+	 * Called when GPT-5 Harmony protocol leakage is detected and mitigated.
+	 */
+	onHarmonyLeak?: (event: HarmonyAuditEvent) => void | Promise<void>;
 	/**
 	 * Custom token budgets for thinking levels (token-based providers only).
 	 */
@@ -264,6 +270,7 @@ export class Agent {
 	#onResponse?: SimpleStreamOptions["onResponse"];
 	#onSseEvent?: SimpleStreamOptions["onSseEvent"];
 	#onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
+	#onHarmonyLeak?: (event: HarmonyAuditEvent) => void | Promise<void>;
 
 	/** Buffered Cursor tool results with text length at time of call (for correct ordering) */
 	#cursorToolResultBuffer: CursorToolResultEntry[] = [];
@@ -304,6 +311,7 @@ export class Agent {
 		this.#intentTracing = opts.intentTracing === true;
 		this.#getToolChoice = opts.getToolChoice;
 		this.#onAssistantMessageEvent = opts.onAssistantMessageEvent;
+		this.#onHarmonyLeak = opts.onHarmonyLeak;
 	}
 
 	/**
@@ -861,6 +869,7 @@ export class Agent {
 			transformToolCallArguments: this.#transformToolCallArguments,
 			intentTracing: this.#intentTracing,
 			onAssistantMessageEvent: this.#onAssistantMessageEvent,
+			onHarmonyLeak: this.#onHarmonyLeak,
 			getToolChoice,
 			getReasoning: () => this.#state.thinkingLevel,
 			getSteeringMessages: async () => {

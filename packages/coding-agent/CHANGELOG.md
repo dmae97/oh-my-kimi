@@ -3,10 +3,14 @@
 ## [Unreleased]
 ### Breaking Changes
 
+- Changed the `eval` tool input format to canonical `*** Begin <LANG>` ... `*** End <LANG>` cells with `*** Title`, `*** Timeout`, and `*** Reset` directives, so legacy `===== ... =====` eval inputs are no longer accepted for execution
 - Removed the `sectionSeparator` re-export from `config/prompt-templates`, so existing imports from `@oh-my-pi/pi-coding-agent/config/prompt-templates` now need to resolve `sectionSeparator` from its utility package
 
 ### Added
 
+- Added support for the `*** Abort` recovery marker in eval and hashline parsing to terminate processing safely when stream corruption is detected
+- Added support for wrapping hashline edits in `*** Begin Patch` and `*** End Patch` markers so patch input with these envelopes is parsed and applied
+- Added support in the HTML export renderer for the new `*** Begin`/`*** End` eval cell format
 - Added a dedicated `[now]` prompt block to `buildSystemPrompt` output containing current date, current working directory, and required end-of-turn continuation/verification guidance
 - Added a new `[project]` prompt block wrapper around workstation and workspace context and ensured it is emitted as a separate system prompt segment
 - Added dedicated HTML rendering for `eval` tool calls, including cell-by-cell parsing of `===== ... =====` blocks with inferred Python/JS/TypeScript highlighting
@@ -16,6 +20,7 @@
 
 ### Changed
 
+- Kept legacy `===== ... =====` eval transcripts renderable in HTML while adding parsing for the new `*** Begin` format for newer transcripts
 - Changed the system prompt’s Bash usage guidance to explicitly forbid specific anti-patterns (`sed`/`awk` line-range reads, stderr redirects, and `| head|tail` pagination) and require using dedicated tools for those operations
 - Changed delegated subagent prompts so shared task context is now rendered only in the system-level `[context]` block, while the user-facing task message now contains only the assignment prompt text
 - Changed system prompt rendering to use block markers such as `[env]`, `[contract]`, `[role]`, `[coop]`, and `[closure]` for more explicit structural instructions
@@ -32,6 +37,8 @@
 
 ### Fixed
 
+- Fixed eval tool outputs to append a truncation warning and ask users to re-issue remaining work when parsing is aborted by `*** Abort`
+- Fixed hashline parsing and input splitting to stop at `*** Abort` and ignore trailing edits after the marker
 - Fixed subagent task prompt construction so a trailing `[now]` block in the base prompts is preserved and not swallowed when rendering `subagent-system-prompt`
 - Fixed edit rendering so provided `input` text is shown in the export even without a file path
 - Fixed `args.paths` handling in `ast_edit` and `find` so multiple paths are shown as a comma-separated list

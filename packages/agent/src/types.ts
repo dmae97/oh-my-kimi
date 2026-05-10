@@ -14,6 +14,7 @@ import type {
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
 import type { Static, TSchema } from "@sinclair/typebox";
+import type { HarmonyAuditEvent } from "./harmony-leak";
 
 /** Stream function - can return sync or Promise for async config lookup */
 export type StreamFn = (
@@ -149,6 +150,11 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * Callers may abort synchronously to stop consuming buffered provider events.
 	 */
 	onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
+
+	/**
+	 * Called when GPT-5 Harmony protocol leakage is detected and mitigated.
+	 */
+	onHarmonyLeak?: (event: HarmonyAuditEvent) => void | Promise<void>;
 
 	/**
 	 * Dynamic tool choice override, resolved per LLM call.

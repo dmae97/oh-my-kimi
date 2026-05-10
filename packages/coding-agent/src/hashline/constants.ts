@@ -6,3 +6,23 @@ export const RANGE_INTERIOR_HASH = "**";
 
 /** Header marker introducing a new file section in multi-section input. */
 export const FILE_HEADER_PREFIX = "@";
+
+/** Optional patch envelope start marker; silently consumed when present. */
+export const BEGIN_PATCH_MARKER = "*** Begin Patch";
+
+/** Optional patch envelope end marker; terminates parsing when encountered. */
+export const END_PATCH_MARKER = "*** End Patch";
+
+/**
+ * Recovery sentinel emitted by the agent loop when a contaminated
+ * `to=functions.edit` stream is truncated mid-call (see
+ * `docs/ERRATA-GPT5-HARMONY.md`). Behaves like `END_PATCH_MARKER` for
+ * parsing — terminates the line loop — and additionally surfaces a
+ * warning in the tool result so the model knows to re-issue any
+ * remaining edits.
+ */
+export const ABORT_MARKER = "*** Abort";
+
+/** Warning text appended to the tool result when ABORT_MARKER terminates parsing. */
+export const ABORT_WARNING =
+	"Tool stream truncated mid-call due to detected output corruption. Applied ops above are valid. Re-issue any remaining edits.";

@@ -63,7 +63,7 @@ describe.skipIf(!shouldRun)("PYTHON_PRELUDE integration", () => {
 		].join("\n");
 
 		const result = await tool.execute("tool-call-1", {
-			input: `===== py:"prelude helpers" =====\n${code}\n`,
+			input: `*** Begin PY\n*** Title: prelude helpers\n${code}\n*** End PY\n`,
 		});
 		const output = result.content.find(item => item.type === "text")?.text ?? "";
 		expect(output).toContain("HELPERS_OK=1");

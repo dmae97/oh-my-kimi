@@ -1,6 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `onHarmonyLeak` option on `Agent`/loop config to receive GPT-5 Harmony leak audit callbacks
+- Added harmony-leak detection and audit exports to the package index for programmatic leak detection and recovery hooks
+
+### Changed
+
+- Changed OpenAI Codex model runs to detect GPT-5 Harmony protocol leakage during streaming and automatically retry or recover tool calls instead of sending contaminated arguments downstream
+
+### Security
+
+- Hardened tool-call handling against leaked `to=functions.*` protocol tails by truncating or retrying before execution
+- Hardened failure handling so repeated GPT-5 Harmony leak mitigation is retried only up to two times before escalating to an explicit error
 
 ## [14.9.0] - 2026-05-10
 ### Added

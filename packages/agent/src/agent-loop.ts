@@ -12,6 +12,15 @@ import {
 	validateToolArguments,
 } from "@oh-my-pi/pi-ai";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
+import {
+	createHarmonyAuditEvent,
+	extractHarmonyRemoved,
+	type HarmonyDetection,
+	type HarmonyRecoveredToolCall,
+	isHarmonyLeakMitigationTarget,
+	recoverHarmonyToolCall,
+	signalListLabel,
+} from "./harmony-leak";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -24,6 +33,17 @@ import type {
 
 /** Sentinel returned by the abort race in `streamAssistantResponse`. */
 const ABORTED: unique symbol = Symbol("agent-loop-aborted");
+
+class HarmonyLeakInterruption extends Error {
+	constructor(
+		readonly detection: HarmonyDetection,
+		readonly removed: string,
+		readonly recovered?: HarmonyRecoveredToolCall,
+	) {
+		super(`Detected GPT-5 Harmony protocol leakage (${signalListLabel(detection.signals)})`);
+		this.name = "HarmonyLeakInterruption";
+	}
+}
 
 /**
  * Normalize a value coming back from `tool.execute()` (or its streaming partial-update callback)
@@ -255,6 +275,8 @@ async function runLoop(
 	let firstTurn = true;
 	// Check for steering messages at start (user may have typed while waiting)
 	let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
+	let harmonyRetryAttempt = 0;
+	let harmonyTruncateResumeCount = 0;
 
 	// Outer loop: continues when queued follow-up messages arrive after agent would stop
 	while (true) {
@@ -285,7 +307,44 @@ async function runLoop(
 			}
 
 			// Stream assistant response
-			const message = await streamAssistantResponse(currentContext, config, signal, stream, streamFn);
+			let recovered: HarmonyRecoveredToolCall | undefined;
+			let message: AssistantMessage;
+			try {
+				message = await streamAssistantResponse(
+					currentContext,
+					config,
+					signal,
+					stream,
+					streamFn,
+					harmonyRetryAttempt,
+				);
+				harmonyRetryAttempt = 0;
+				harmonyTruncateResumeCount = 0;
+			} catch (err) {
+				if (!(err instanceof HarmonyLeakInterruption)) throw err;
+				if (err.recovered) {
+					if (harmonyTruncateResumeCount >= 2) {
+						await emitHarmonyAudit(config, err, "escalated", harmonyRetryAttempt);
+						throw new Error(
+							`GPT-5 Harmony leak recurred after truncate-and-resume recovery (${signalListLabel(err.detection.signals)}).`,
+						);
+					}
+					harmonyTruncateResumeCount++;
+					recovered = err.recovered;
+					message = recovered.message;
+					await emitHarmonyAudit(config, err, "truncate_resume", harmonyRetryAttempt);
+				} else {
+					if (harmonyRetryAttempt >= 2) {
+						await emitHarmonyAudit(config, err, "escalated", harmonyRetryAttempt);
+						throw new Error(
+							`GPT-5 Harmony leak persisted after ${harmonyRetryAttempt} retries (${signalListLabel(err.detection.signals)}).`,
+						);
+					}
+					await emitHarmonyAudit(config, err, "abort_retry", harmonyRetryAttempt);
+					harmonyRetryAttempt++;
+					continue;
+				}
+			}
 			newMessages.push(message);
 			let steeringMessagesFromExecution: AgentMessage[] | undefined;
 
@@ -355,6 +414,23 @@ async function runLoop(
 	stream.end(newMessages);
 }
 
+async function emitHarmonyAudit(
+	config: AgentLoopConfig,
+	interruption: HarmonyLeakInterruption,
+	action: "truncate_resume" | "abort_retry" | "escalated",
+	retryN: number,
+): Promise<void> {
+	await config.onHarmonyLeak?.(
+		createHarmonyAuditEvent({
+			action,
+			detection: interruption.detection,
+			model: config.model,
+			retryN,
+			removed: interruption.removed,
+		}),
+	);
+}
+
 /**
  * Stream an assistant response from the LLM.
  * This is where AgentMessage[] gets transformed to Message[] for the LLM.
@@ -365,6 +441,7 @@ async function streamAssistantResponse(
 	signal: AbortSignal | undefined,
 	stream: EventStream<AgentEvent, AgentMessage[]>,
 	streamFn?: StreamFn,
+	harmonyRetryAttempt = 0,
 ): Promise<AssistantMessage> {
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
 	let messages = context.messages;
@@ -397,33 +474,63 @@ async function streamAssistantResponse(
 
 	const dynamicToolChoice = config.getToolChoice?.();
 	const dynamicReasoning = config.getReasoning?.();
+	const harmonyMitigationEnabled = isHarmonyLeakMitigationTarget(config.model);
+	const harmonyAbortController = harmonyMitigationEnabled ? new AbortController() : undefined;
+	const requestSignal = harmonyAbortController
+		? signal
+			? AbortSignal.any([signal, harmonyAbortController.signal])
+			: harmonyAbortController.signal
+		: signal;
 	const response = await streamFunction(config.model, llmContext, {
 		...config,
 		apiKey: resolvedApiKey,
 		metadata: resolvedMetadata,
 		toolChoice: dynamicToolChoice ?? config.toolChoice,
 		reasoning: dynamicReasoning ?? config.reasoning,
-		signal,
+		temperature:
+			harmonyRetryAttempt > 0 && config.temperature !== undefined ? config.temperature + 0.05 : config.temperature,
+		signal: requestSignal,
 	});
 
 	let partialMessage: AssistantMessage | null = null;
 	let addedPartial = false;
 
 	const responseIterator = response[Symbol.asyncIterator]();
+
+	const _interruptForHarmonyLeak = (message: AssistantMessage, detection: HarmonyDetection): never => {
+		const recovered = recoverHarmonyToolCall(message, detection);
+		const removed = recovered?.removed ?? extractHarmonyRemoved(message, detection);
+		harmonyAbortController?.abort();
+		responseIterator.return?.()?.catch(() => {});
+		if (recovered) {
+			if (addedPartial) {
+				context.messages[context.messages.length - 1] = recovered.message;
+			} else {
+				context.messages.push(recovered.message);
+				stream.push({ type: "message_start", message: { ...recovered.message } });
+			}
+			stream.push({ type: "message_end", message: recovered.message });
+			throw new HarmonyLeakInterruption(detection, removed, recovered);
+		}
+		if (addedPartial) {
+			context.messages.pop();
+		}
+		throw new HarmonyLeakInterruption(detection, removed);
+	};
 	// Set up a single abort race: register the abort listener once for the whole
 	// stream and reuse the same race promise for every iterator.next() instead of
 	// allocating Promise.withResolvers and add/removeEventListener per event.
 	let abortRacePromise: Promise<typeof ABORTED> | undefined;
 	let detachAbortListener: (() => void) | undefined;
-	if (signal) {
-		if (signal.aborted) {
+	if (requestSignal) {
+		if (requestSignal.aborted) {
 			return emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
 		}
 		const { promise, resolve } = Promise.withResolvers<typeof ABORTED>();
 		const onAbort = () => resolve(ABORTED);
-		signal.addEventListener("abort", onAbort, { once: true });
+		requestSignal.addEventListener("abort", onAbort, { once: true });
 		abortRacePromise = promise;
-		detachAbortListener = () => signal.removeEventListener("abort", onAbort);
+		detachAbortListener = () => requestSignal.removeEventListener("abort", onAbort);
 	}
 
 	try {
@@ -439,7 +546,7 @@ async function streamAssistantResponse(
 			} else {
 				next = await responseIterator.next();
 			}
-			if (signal?.aborted) {
+			if (requestSignal?.aborted) {
 				return emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
 			}
 			if (next.done) break;
