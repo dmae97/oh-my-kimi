@@ -16,7 +16,6 @@ import { getSixelLineMask } from "../utils/sixel";
 import type { ToolSession } from ".";
 import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-interactive";
 import { checkBashInterception } from "./bash-interceptor";
-import { applyHeadTail } from "./bash-normalize";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
 import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
 import { resolveToCwd } from "./path-utils";
@@ -50,8 +49,7 @@ const bashSchemaBase = Type.Object({
 	),
 	timeout: Type.Optional(Type.Number({ description: "timeout in seconds", default: 300 })),
 	cwd: Type.Optional(Type.String({ description: "working directory", examples: ["src/", "/tmp"] })),
-	head: Type.Optional(Type.Number({ description: "first n lines of output" })),
-	tail: Type.Optional(Type.Number({ description: "last n lines of output" })),
+
 	pty: Type.Optional(
 		Type.Boolean({
 			description: "run in pty mode",
@@ -75,8 +73,7 @@ export interface BashToolInput {
 	env?: Record<string, string>;
 	timeout?: number;
 	cwd?: string;
-	head?: number;
-	tail?: number;
+
 	async?: boolean;
 	pty?: boolean;
 }
@@ -266,16 +263,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		});
 	}
 
-	#formatResultOutput(result: BashResult | BashInteractiveResult, headLines?: number, tailLines?: number): string {
-		let outputText = normalizeResultOutput(result);
-		const headTailResult = applyHeadTail(outputText, headLines, tailLines);
-		if (headTailResult.applied) {
-			outputText = headTailResult.text;
-		}
-		if (!outputText) {
-			outputText = "(no output)";
-		}
-		return outputText;
+	#formatResultOutput(result: BashResult | BashInteractiveResult): string {
+		const outputText = normalizeResultOutput(result);
+		return outputText || "(no output)";
 	}
 
 	#buildResultText(result: BashResult | BashInteractiveResult, timeoutSec: number, outputText: string): string {
@@ -297,11 +287,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	#buildCompletedResult(
 		result: BashResult | BashInteractiveResult,
 		timeoutSec: number,
-		headLines?: number,
-		tailLines?: number,
 		options: { requestedTimeoutSec?: number; notices?: string[] } = {},
 	): AgentToolResult<BashToolDetails> {
-		const outputLines = [this.#formatResultOutput(result, headLines, tailLines)];
+		const outputLines = [this.#formatResultOutput(result)];
 		const notices = options.notices?.filter(Boolean) ?? [];
 		if (notices.length > 0) outputLines.push("", ...notices);
 		const outputText = outputLines.join("\n");
@@ -356,8 +344,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		timeoutSec: number;
 		requestedTimeoutSec?: number;
 		timeoutClampNotice?: string;
-		headLines?: number;
-		tailLines?: number;
+
 		resolvedEnv?: Record<string, string>;
 		onUpdate?: AgentToolUpdateCallback<BashToolDetails>;
 		startBackgrounded: boolean;
@@ -394,16 +381,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						},
 						onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
 					});
-					const finalResult = this.#buildCompletedResult(
-						result,
-						options.timeoutSec,
-						options.headLines,
-						options.tailLines,
-						{
-							requestedTimeoutSec: options.requestedTimeoutSec,
-							notices: [options.timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
-						},
-					);
+					const finalResult = this.#buildCompletedResult(result, options.timeoutSec, {
+						requestedTimeoutSec: options.requestedTimeoutSec,
+						notices: [options.timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+					});
 					const finalText = this.#extractTextResult(finalResult);
 					latestText = finalText;
 					completion.resolve({ kind: "completed", result: finalResult });
@@ -481,8 +462,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			env: rawEnv,
 			timeout: rawTimeout = 300,
 			cwd,
-			head,
-			tail,
+
 			async: asyncRequested = false,
 			pty = false,
 		}: BashToolInput,
@@ -504,10 +484,6 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		if (asyncRequested && !this.#asyncEnabled) {
 			throw new ToolError("Async bash execution is disabled. Enable async.enabled to use async mode.");
 		}
-
-		// Only apply explicit head/tail params from tool input.
-		const headLines = head;
-		const tailLines = tail;
 
 		// Check both the original command and the cwd-normalized command so
 		// leading `cd ... &&` wrappers do not hide either shell-navigation rules
@@ -583,8 +559,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				timeoutSec,
 				requestedTimeoutSec,
 				timeoutClampNotice,
-				headLines,
-				tailLines,
+
 				resolvedEnv,
 				onUpdate,
 				startBackgrounded: true,
@@ -605,8 +580,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				timeoutSec,
 				requestedTimeoutSec,
 				timeoutClampNotice,
-				headLines,
-				tailLines,
+
 				resolvedEnv,
 				onUpdate,
 				startBackgrounded,
@@ -675,7 +649,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		if (isInteractiveResult(result) && result.timedOut) {
 			throw new ToolError(normalizeResultOutput(result) || `Command timed out after ${timeoutSec} seconds`);
 		}
-		return this.#buildCompletedResult(result, timeoutSec, headLines, tailLines, {
+		return this.#buildCompletedResult(result, timeoutSec, {
 			requestedTimeoutSec,
 			notices: [timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
 		});

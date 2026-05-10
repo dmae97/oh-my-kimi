@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Removed the `sectionSeparator` re-export from `config/prompt-templates`, so existing imports from `@oh-my-pi/pi-coding-agent/config/prompt-templates` now need to resolve `sectionSeparator` from its utility package
@@ -17,6 +16,7 @@
 
 ### Changed
 
+- Changed the system prompt’s Bash usage guidance to explicitly forbid specific anti-patterns (`sed`/`awk` line-range reads, stderr redirects, and `| head|tail` pagination) and require using dedicated tools for those operations
 - Changed delegated subagent prompts so shared task context is now rendered only in the system-level `[context]` block, while the user-facing task message now contains only the assignment prompt text
 - Changed system prompt rendering to use block markers such as `[env]`, `[contract]`, `[role]`, `[coop]`, and `[closure]` for more explicit structural instructions
 - Changed the working-directory value in rendered prompts to use `shortenPath` before interpolation
@@ -25,6 +25,10 @@
 - Changed tool-call output to display internal `_i` intent separately and hide it from rendered argument JSON
 - Changed `ast_edit` and `find`/`search` rendering to show resolved path values and option flags such as `limit`, `no-hidden`, and `no-reply`
 - Changed power assertion behavior to take effect only while a prompt is in flight, replacing session-level persistent assertions
+
+### Removed
+
+- Removed the unused `head` and `tail` parameters from the `bash` tool schema, along with the dead `normalizeBashCommand` / `applyHeadTail` post-processing module — output truncation is already handled by the harness's streaming tail buffer and artifact spillover, so the agent should rely on `read` (or the artifact link) instead of inline truncation pipes.
 
 ### Fixed
 

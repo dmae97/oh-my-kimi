@@ -803,10 +803,8 @@ This subsystem is split into two layers:
 #### Bash tool (`src/tools/bash.ts`)
 
 - Adapter class: `BashTool implements AgentTool<typeof bashSchema, BashToolDetails>`.
-- Defines tool contract (`bashSchema`: `command`, `timeout`, `cwd`, `head`, `tail`) and prompt text import (`../prompts/tools/bash.md`).
+- Defines tool contract (`bashSchema`: `command`, `timeout`, `cwd`, `pty`, optional `async`) and prompt text import (`../prompts/tools/bash.md`).
 - Pre-execution adaptation:
-  - strips inline shell truncation patterns (`normalizeBashCommand`)
-  - applies explicit/derived head-tail params
   - optional command interception (`checkBashInterception`) based on settings
   - expands internal URLs (`expandInternalUrls`)
   - resolves/validates working directory (`resolveToCwd`, `fs.promises.stat`).
@@ -815,7 +813,6 @@ This subsystem is split into two layers:
   - non-PTY path: `executeBash(...)`.
 - Streaming to UI is adapter-owned: updates `onUpdate` using `createTailBuffer(...)` while backend runs.
 - Post-execution shaping is adapter-owned:
-  - applies `applyHeadTail(...)`
   - converts backend cancellation/timeout/exit status into `ToolAbortError` / `ToolError`
   - returns `toolResult(...).text(...).truncationFromSummary(...)`.
 

@@ -179,7 +179,11 @@ You **MUST NOT** blindly use coreutils through bash / general-purpose tools when
 {{#has tools "search"}}- You **MUST** use `{{toolRefs.search}}`, not shell regex search.{{/has}}
 {{#has tools "find"}}- You **MUST** use `{{toolRefs.find}}`, not shell file globbing.{{/has}}
 {{#has tools "eval"}}- Then, you **MAY** use `{{toolRefs.eval}}` for quick compute, but you **SHOULD** go step by step.{{/has}}
-{{#has tools "bash"}}- Finally, you **MAY** use `{{toolRefs.bash}}` for simple one-liners only. But this is a last resort.{{/has}}
+{{#has tools "bash"}}- Finally, you **MAY** use `{{toolRefs.bash}}` for simple one-liners only. But this is a last resort. Bash commands matching the patterns above are intercepted and blocked at runtime.
+  - You **MUST NOT** read line ranges with `sed -n 'A,Bp'`, `awk 'NR≥A && NR≤B'`, or `head | tail` pipelines. Use `{{toolRefs.read}}` with `offset`/`limit`.
+  - You **MUST NOT** use `2>&1` or `2>/dev/null` — stdout and stderr are already merged.
+  - You **MUST NOT** suffix commands with `| head -n N` or `| tail -n N` — the harness already streams output and returns a truncated view, with the full result available via `artifact://<id>`.
+  - If you catch yourself typing `cat`, `head`, `tail`, `less`, `more`, `ls`, `grep`, `rg`, `find`, `fd`, `sed -i`, `awk -i`, or a heredoc redirect inside a Bash call, stop and switch to the dedicated tool.{{/has}}
 {{#has tools "report_tool_issue"}}
 <critical>
 The `{{toolRefs.report_tool_issue}}` tool is available for automated QA. If ANY tool you call returns output that is unexpected, incorrect, malformed, or otherwise inconsistent with what you anticipated given the tool's described behavior and your parameters, call `{{toolRefs.report_tool_issue}}` with the tool name and a concise description of the discrepancy. Do not hesitate to report — false positives are acceptable.
