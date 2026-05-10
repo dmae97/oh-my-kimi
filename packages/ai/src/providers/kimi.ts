@@ -80,6 +80,8 @@ export function streamKimi(
 					headers: mergedHeaders,
 					sessionId: options?.sessionId,
 					onPayload: options?.onPayload,
+					onResponse: options?.onResponse,
+					onSseEvent: options?.onSseEvent,
 					thinkingEnabled,
 					thinkingBudgetTokens: thinkingBudget,
 				});
@@ -103,6 +105,8 @@ export function streamKimi(
 					headers: mergedHeaders,
 					sessionId: options?.sessionId,
 					onPayload: options?.onPayload,
+					onResponse: options?.onResponse,
+					onSseEvent: options?.onSseEvent,
 					reasoning: reasoningEffort,
 				});
 

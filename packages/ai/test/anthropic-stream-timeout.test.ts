@@ -91,10 +91,12 @@ function createAnthropicMockStream({
 	signal,
 	connectDelayMs = 0,
 	events,
+	hangAfterEvents = false,
 }: {
 	signal: AbortSignal | undefined;
 	connectDelayMs?: number;
 	events?: MockAnthropicEvent[];
+	hangAfterEvents?: boolean;
 }): MockAnthropicRequest {
 	const response = new Response(null, {
 		status: 200,
@@ -109,6 +111,9 @@ function createAnthropicMockStream({
 			}
 			for (const event of events) {
 				yield event;
+			}
+			if (hangAfterEvents) {
+				await waitForAbortAndThrowAbortError(signal);
 			}
 		},
 	};
@@ -194,5 +199,58 @@ describe("anthropic first-event timeout retries", () => {
 		expect(result.stopReason).toBe("aborted");
 		expect(result.errorMessage).not.toBe("Anthropic stream timed out while waiting for the first event");
 		expect((result.errorMessage ?? "").toLowerCase()).toContain("abort");
+	});
+	it("fails hung Anthropic streams between tool-call events instead of waiting forever", async () => {
+		let attempt = 0;
+		const create = ((_body: unknown, requestOptions?: { signal?: AbortSignal }) => {
+			attempt += 1;
+			return createAnthropicMockStream({
+				signal: requestOptions?.signal,
+				events: [
+					{
+						type: "message_start",
+						message: {
+							id: "msg_stalled_tool",
+							usage: {
+								input_tokens: 12,
+								output_tokens: 0,
+								cache_read_input_tokens: 0,
+								cache_creation_input_tokens: 0,
+							},
+						},
+					},
+					{
+						type: "content_block_start",
+						index: 0,
+						content_block: {
+							type: "tool_use",
+							id: "toolu_stalled_todo",
+							name: "todo_write",
+							input: {},
+						},
+					},
+				],
+				hangAfterEvents: true,
+			}) as never;
+		}) as unknown as Anthropic["messages"]["create"];
+		const client = { messages: { create } } as Anthropic;
+
+		const result = await streamAnthropic(model, context, {
+			client,
+			streamFirstEventTimeoutMs: 1_000,
+			streamIdleTimeoutMs: 20,
+		}).result();
+
+		expect(attempt).toBe(1);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("Anthropic stream stalled while waiting for the next event");
+		expect(result.content).toEqual([
+			{
+				type: "toolCall",
+				id: "toolu_stalled_todo",
+				name: "todo_write",
+				arguments: {},
+			},
+		]);
 	});
 });

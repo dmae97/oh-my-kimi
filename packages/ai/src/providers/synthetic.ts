@@ -78,6 +78,8 @@ export function streamSynthetic(
 					headers: mergedHeaders,
 					sessionId: options?.sessionId,
 					onPayload: options?.onPayload,
+					onResponse: options?.onResponse,
+					onSseEvent: options?.onSseEvent,
 					thinkingEnabled,
 					thinkingBudgetTokens: thinkingBudget,
 				});
@@ -107,6 +109,8 @@ export function streamSynthetic(
 					headers: mergedHeaders,
 					sessionId: options?.sessionId,
 					onPayload: options?.onPayload,
+					onResponse: options?.onResponse,
+					onSseEvent: options?.onSseEvent,
 					reasoning: reasoningEffort,
 				});
 

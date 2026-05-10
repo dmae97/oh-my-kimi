@@ -93,6 +93,32 @@ const CODEX_WEBSOCKET_FATAL_PATTERNS = ["websocket error:", "websocket closed be
 /** Max total time to spend retrying 429s with server-provided delays (5 minutes). */
 const CODEX_RATE_LIMIT_BUDGET_MS = 5 * 60 * 1000;
 
+const CODEX_PROGRESS_EVENT_TYPES = new Set([
+	"response.created",
+	"response.output_item.added",
+	"response.reasoning_summary_part.added",
+	"response.reasoning_summary_text.delta",
+	"response.reasoning_summary_part.done",
+	"response.content_part.added",
+	"response.output_text.delta",
+	"response.refusal.delta",
+	"response.function_call_arguments.delta",
+	"response.function_call_arguments.done",
+	"response.custom_tool_call_input.delta",
+	"response.custom_tool_call_input.done",
+	"response.output_item.done",
+	"response.completed",
+	"response.done",
+	"response.incomplete",
+	"response.failed",
+	"error",
+]);
+
+function isCodexStreamProgressEvent(event: unknown): boolean {
+	if (!event || typeof event !== "object") return false;
+	const type = (event as { type?: unknown }).type;
+	return typeof type === "string" && CODEX_PROGRESS_EVENT_TYPES.has(type);
+}
 type CodexTransport = "sse" | "websocket";
 type CodexEventItem = ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall;
 type CodexOutputBlock = ThinkingContent | TextContent | (ToolCall & { partialJson: string });
@@ -201,14 +227,19 @@ function getCodexWebSocketRetryDelayMs(retry: number): number {
 	return baseDelay * Math.max(1, retry);
 }
 
-function getCodexWebSocketIdleTimeoutMs(): number {
-	return parseCodexPositiveInteger($env.PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS, CODEX_WEBSOCKET_IDLE_TIMEOUT_MS);
+function getCodexWebSocketIdleTimeoutMs(overrideMs?: number): number {
+	return (
+		overrideMs ?? parseCodexPositiveInteger($env.PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS, CODEX_WEBSOCKET_IDLE_TIMEOUT_MS)
+	);
 }
 
-function getCodexWebSocketFirstEventTimeoutMs(): number {
-	return parseCodexPositiveInteger(
-		$env.PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS,
-		Math.min(CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS, getCodexWebSocketIdleTimeoutMs()),
+function getCodexWebSocketFirstEventTimeoutMs(idleTimeoutMs: number, overrideMs?: number): number {
+	return (
+		overrideMs ??
+		parseCodexPositiveInteger(
+			$env.PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS,
+			Math.min(CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS, idleTimeoutMs),
+		)
 	);
 }
 
@@ -457,9 +488,11 @@ function createRequestSetup(options: OpenAICodexResponsesOptions | undefined): C
 		source: AsyncGenerator<Record<string, unknown>>,
 	): AsyncGenerator<Record<string, unknown>> =>
 		iterateWithIdleTimeout(source, {
-			idleTimeoutMs: getOpenAIStreamIdleTimeoutMs(),
+			idleTimeoutMs: options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs(),
 			errorMessage: "OpenAI Codex SSE stream stalled while waiting for the next event",
 			onIdle: () => requestAbortController.abort(),
+			abortSignal: options?.signal,
+			isProgressItem: isCodexStreamProgressEvent,
 		});
 	return { requestAbortController, requestSignal, wrapCodexSseStream };
 }
@@ -629,12 +662,12 @@ async function openInitialCodexEventStream(
 			}
 		}
 	}
-	return openCodexSseTransport(requestContext, requestSetup, options, websocketState, transformedBody);
+	return openCodexSseTransport(model, requestContext, requestSetup, options, websocketState, transformedBody);
 }
 async function openCodexWebSocketTransport(
 	requestContext: CodexRequestContext,
 	requestSetup: CodexRequestSetup,
-	_options: OpenAICodexResponsesOptions | undefined,
+	options: OpenAICodexResponsesOptions | undefined,
 	websocketState: CodexWebSocketSessionState,
 	retry: number,
 ): Promise<{
@@ -669,14 +702,16 @@ async function openCodexWebSocketTransport(
 		websocketRequest,
 		websocketState,
 		requestSetup.requestSignal,
+		options,
 	);
 	return { eventStream, requestBodyForState, transport: "websocket" };
 }
 
 async function openCodexSseTransport(
+	model: Model<"openai-codex-responses">,
 	requestContext: CodexRequestContext,
 	requestSetup: CodexRequestSetup,
-	_options: OpenAICodexResponsesOptions | undefined,
+	options: OpenAICodexResponsesOptions | undefined,
 	state: CodexWebSocketSessionState | undefined,
 	body = requestContext.transformedBody,
 ): Promise<{
@@ -694,6 +729,7 @@ async function openCodexSseTransport(
 			body,
 			state,
 			requestSetup.requestSignal,
+			event => options?.onSseEvent?.(event, model),
 		),
 	);
 	return { eventStream, requestBodyForState: structuredCloneJSON(body), transport: "sse" };
@@ -736,7 +772,13 @@ async function reopenCodexSseRuntimeStream(
 	runtime: CodexStreamRuntime,
 	state: CodexWebSocketSessionState | undefined,
 ): Promise<void> {
-	const next = await openCodexSseTransport(context.requestContext, context.requestSetup, context.options, state);
+	const next = await openCodexSseTransport(
+		context.model,
+		context.requestContext,
+		context.requestSetup,
+		context.options,
+		state,
+	);
 	runtime.eventStream = next.eventStream;
 	runtime.requestBodyForState = next.requestBodyForState;
 	runtime.transport = next.transport;
@@ -2014,9 +2056,17 @@ class CodexWebSocketConnection {
 		try {
 			this.#socket.send(JSON.stringify(request));
 			let sawFirstEvent = false;
+			let lastProgressAt = Date.now();
 			while (true) {
+				let timeoutMs = this.#firstEventTimeoutMs;
+				if (sawFirstEvent) {
+					timeoutMs = this.#idleTimeoutMs - (Date.now() - lastProgressAt);
+					if (timeoutMs <= 0) {
+						throw createCodexWebSocketTransportError("idle timeout waiting for websocket");
+					}
+				}
 				const next = await this.#nextMessage(
-					sawFirstEvent ? this.#idleTimeoutMs : this.#firstEventTimeoutMs,
+					timeoutMs,
 					sawFirstEvent ? "idle timeout waiting for websocket" : "timeout waiting for first websocket event",
 				);
 				if (next instanceof Error) {
@@ -2026,6 +2076,9 @@ class CodexWebSocketConnection {
 					throw createCodexWebSocketTransportError("websocket closed before response completion");
 				}
 				sawFirstEvent = true;
+				if (isCodexStreamProgressEvent(next)) {
+					lastProgressAt = Date.now();
+				}
 				yield next;
 				const eventType = typeof next.type === "string" ? next.type : "";
 				if (
@@ -2090,6 +2143,7 @@ async function getOrCreateCodexWebSocketConnection(
 	url: string,
 	headers: Headers,
 	signal?: AbortSignal,
+	options?: Pick<OpenAICodexResponsesOptions, "streamFirstEventTimeoutMs" | "streamIdleTimeoutMs">,
 ): Promise<CodexWebSocketConnection> {
 	const headerRecord = headersToRecord(headers);
 	if (state.connection?.isOpen()) {
@@ -2103,9 +2157,10 @@ async function getOrCreateCodexWebSocketConnection(
 	state.connection?.close("reconnect");
 	resetCodexWebSocketAppendState(state);
 	logger.time("codexWs:newSocket");
+	const idleTimeoutMs = getCodexWebSocketIdleTimeoutMs(options?.streamIdleTimeoutMs);
 	state.connection = new CodexWebSocketConnection(url, headerRecord, {
-		idleTimeoutMs: getCodexWebSocketIdleTimeoutMs(),
-		firstEventTimeoutMs: getCodexWebSocketFirstEventTimeoutMs(),
+		idleTimeoutMs,
+		firstEventTimeoutMs: getCodexWebSocketFirstEventTimeoutMs(idleTimeoutMs, options?.streamFirstEventTimeoutMs),
 		onHandshakeHeaders: handshakeHeaders => {
 			updateCodexSessionMetadataFromHeaders(state, handshakeHeaders);
 		},
@@ -2123,6 +2178,7 @@ async function openCodexSseEventStream(
 	body: RequestBody,
 	state: CodexWebSocketSessionState | undefined,
 	signal?: AbortSignal,
+	onSseEvent?: OpenAICodexResponsesOptions["onSseEvent"],
 ): Promise<AsyncGenerator<Record<string, unknown>>> {
 	const headers = createCodexHeaders(requestHeaders, accountId, apiKey, sessionId, "sse", state);
 	logCodexDebug("codex request", {
@@ -2159,7 +2215,9 @@ async function openCodexSseEventStream(
 	if (!response.body) {
 		throw new Error("No response body");
 	}
-	return readSseJson<Record<string, unknown>>(response.body, signal);
+	return readSseJson<Record<string, unknown>>(response.body, signal, event =>
+		onSseEvent?.({ event: event.event, data: event.data, raw: [...event.raw] }, undefined),
+	);
 }
 
 async function openCodexWebSocketEventStream(
@@ -2168,8 +2226,9 @@ async function openCodexWebSocketEventStream(
 	request: Record<string, unknown>,
 	state: CodexWebSocketSessionState,
 	signal?: AbortSignal,
+	options?: Pick<OpenAICodexResponsesOptions, "streamFirstEventTimeoutMs" | "streamIdleTimeoutMs">,
 ): Promise<AsyncGenerator<Record<string, unknown>>> {
-	const connection = await getOrCreateCodexWebSocketConnection(state, url, headers, signal);
+	const connection = await getOrCreateCodexWebSocketConnection(state, url, headers, signal, options);
 	return connection.streamRequest(request, signal);
 }
 

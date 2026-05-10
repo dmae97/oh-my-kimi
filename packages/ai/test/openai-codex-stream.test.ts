@@ -78,6 +78,59 @@ function createCompletedCodexSse(text: string): string {
 	].join("\n\n")}\n\n`;
 }
 
+function getRequestSignal(input: string | URL | Request, init: RequestInit | undefined): AbortSignal | undefined {
+	if (init?.signal) return init.signal;
+	if (input instanceof Request) return input.signal;
+	return undefined;
+}
+
+function createNoProgressCodexSse(signal: AbortSignal | undefined): Response {
+	const encoder = new TextEncoder();
+	let interval: NodeJS.Timeout | undefined;
+	let abortListener: (() => void) | undefined;
+	const encode = (event: unknown): Uint8Array => encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.enqueue(
+				encode({
+					type: "response.output_item.added",
+					item: {
+						type: "function_call",
+						id: "fc_stalled",
+						call_id: "call_stalled",
+						name: "todo_write",
+						arguments: "",
+					},
+				}),
+			);
+			interval = setInterval(() => {
+				controller.enqueue(
+					encode({
+						type: "response.in_progress",
+						response: { id: "resp_stalled", status: "in_progress" },
+					}),
+				);
+			}, 2);
+			abortListener = () => {
+				if (interval) clearInterval(interval);
+				if (abortListener) signal?.removeEventListener("abort", abortListener);
+				const reason = signal?.reason;
+				controller.error(reason instanceof Error ? reason : new Error("request aborted"));
+			};
+			if (signal?.aborted) {
+				queueMicrotask(() => abortListener?.());
+			} else {
+				signal?.addEventListener("abort", abortListener, { once: true });
+			}
+		},
+		cancel() {
+			if (interval) clearInterval(interval);
+			if (abortListener) signal?.removeEventListener("abort", abortListener);
+		},
+	});
+	return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
 function encodeWebSocketMessage(value: Record<string, unknown>): Uint8Array {
 	return new TextEncoder().encode(JSON.stringify(value));
 }
@@ -216,6 +269,33 @@ describe("openai-codex streaming", () => {
 			"https://chatgpt.com/backend-api/codex/responses",
 			"https://chatgpt.com/backend-api/codex/responses",
 			"https://chatgpt.com/backend-api/codex/responses",
+		]);
+	});
+
+	it("times out SSE streams that only emit no-progress status events", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const context = createCodexTestContext();
+		global.fetch = ((input: string | URL | Request, init?: RequestInit) =>
+			Promise.resolve(createNoProgressCodexSse(getRequestSignal(input, init)))) as typeof fetch;
+
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		const result = await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			streamIdleTimeoutMs: 20,
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("OpenAI Codex SSE stream stalled while waiting for the next event");
+		expect(result.content as unknown[]).toEqual([
+			{
+				type: "toolCall",
+				id: "call_stalled|fc_stalled",
+				name: "todo_write",
+				arguments: {},
+				partialJson: "",
+			},
 		]);
 	});
 
@@ -1713,6 +1793,72 @@ describe("openai-codex streaming", () => {
 		expect(transportDetails.lastTransport).toBe("sse");
 		expect(transportDetails.websocketDisabled).toBe(true);
 		expect(transportDetails.fallbackCount).toBe(1);
+	});
+
+	it("falls back to SSE when websocket status events do not make semantic progress", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const sse = createCompletedCodexSse("Hello fallback");
+		const fetchMock = vi.fn(async () => {
+			return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+		});
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		let sendCount = 0;
+		let interval: NodeJS.Timeout | undefined;
+		class NoProgressWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
+			}
+
+			send(): void {
+				sendCount += 1;
+				this.sendJson({
+					type: "response.output_item.added",
+					item: {
+						type: "function_call",
+						id: "fc_ws_stalled",
+						call_id: "call_ws_stalled",
+						name: "todo_write",
+						arguments: "",
+					},
+				});
+				interval = setInterval(() => {
+					this.sendJson({
+						type: "response.in_progress",
+						response: { id: "resp_ws_stalled", status: "in_progress" },
+					});
+				}, 2);
+			}
+
+			close(): void {
+				if (interval) clearInterval(interval);
+				super.close();
+			}
+		}
+		global.WebSocket = NoProgressWebSocket as unknown as typeof WebSocket;
+
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: token,
+			sessionId: "ws-no-progress-session",
+			providerSessionState,
+			streamIdleTimeoutMs: 20,
+		}).result();
+
+		expect(sendCount).toBe(1);
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const transportDetails = getOpenAICodexTransportDetails(model, {
+			sessionId: "ws-no-progress-session",
+			providerSessionState,
+		});
+		expect(transportDetails.lastTransport).toBe("sse");
+		expect(transportDetails.websocketDisabled).toBe(true);
 	});
 
 	it("retries websocket stream closes before surfacing transport errors", async () => {

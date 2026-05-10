@@ -199,8 +199,24 @@ class ConcatSink {
  * }
  * ```
  */
-export async function* readSseJson<T>(stream: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncGenerator<T> {
+export type SseEventObserver = (event: ServerSentEvent) => void;
+
+function notifySseEventObserver(observer: SseEventObserver | undefined, event: ServerSentEvent): void {
+	if (!observer) return;
+	try {
+		observer(event);
+	} catch {
+		// Diagnostic observers must never perturb provider stream consumption.
+	}
+}
+
+export async function* readSseJson<T>(
+	stream: ReadableStream<Uint8Array>,
+	signal?: AbortSignal,
+	onEvent?: SseEventObserver,
+): AsyncGenerator<T> {
 	for await (const sse of readSseEvents(stream, signal)) {
+		notifySseEventObserver(onEvent, sse);
 		const data = sse.data;
 		if (data === "" || data === "[DONE]") {
 			if (data === "[DONE]") return;

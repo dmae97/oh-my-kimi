@@ -1,6 +1,6 @@
 import { $env } from "@oh-my-pi/pi-utils";
 
-const DEFAULT_OPENAI_STREAM_IDLE_TIMEOUT_MS = 120_000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
 const DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS = 100_000;
 
 function normalizeIdleTimeoutMs(value: string | undefined, fallback: number): number | undefined {
@@ -12,12 +12,28 @@ function normalizeIdleTimeoutMs(value: string | undefined, fallback: number): nu
 }
 
 /**
+ * Returns the idle timeout used for provider streaming transports.
+ *
+ * `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS` is accepted as a backward-compatible alias.
+ * Set `PI_STREAM_IDLE_TIMEOUT_MS=0` to disable the watchdog.
+ */
+export function getStreamIdleTimeoutMs(): number | undefined {
+	return normalizeIdleTimeoutMs(
+		$env.PI_STREAM_IDLE_TIMEOUT_MS ?? $env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS,
+		DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+	);
+}
+
+/**
  * Returns the idle timeout used for OpenAI-family streaming transports.
  *
  * Set `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS=0` to disable the watchdog.
  */
 export function getOpenAIStreamIdleTimeoutMs(): number | undefined {
-	return normalizeIdleTimeoutMs($env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS, DEFAULT_OPENAI_STREAM_IDLE_TIMEOUT_MS);
+	return normalizeIdleTimeoutMs(
+		$env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS ?? $env.PI_STREAM_IDLE_TIMEOUT_MS,
+		DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+	);
 }
 
 /**
@@ -59,6 +75,12 @@ export interface IdleTimeoutIteratorOptions {
 	firstItemErrorMessage?: string;
 	onIdle?: () => void;
 	onFirstItemTimeout?: () => void;
+	/**
+	 * Optional semantic-progress predicate. Non-progress items are still yielded,
+	 * but they do not reset the idle deadline. This prevents provider
+	 * keepalive/no-op events from keeping a stalled tool call alive forever.
+	 */
+	isProgressItem?: (item: unknown) => boolean;
 	/**
 	 * Cancel iteration as soon as this signal aborts. Required for caller-driven
 	 * cancellation (ESC) when the underlying transport does not surface signal
@@ -103,18 +125,40 @@ export async function* iterateWithIdleTimeout<T>(
 			error => ({ kind: "error" as const, error }),
 		);
 
-	let onFirst: (() => void) | null = () => {
+	let awaitingFirstItem = true;
+	const markFirstItemReceived = () => {
 		watchdog && clearTimeout(watchdog);
-		onFirst = null;
+		watchdog = undefined;
+		awaitingFirstItem = false;
 	};
+	const isProgressItem = (item: T): boolean => {
+		if (!options.isProgressItem) return true;
+		try {
+			return options.isProgressItem(item);
+		} catch {
+			return true;
+		}
+	};
+	let lastProgressAt = Date.now();
 
 	const noTimeoutEnforced =
 		(firstItemTimeoutMs === undefined || firstItemTimeoutMs <= 0) &&
 		(options.idleTimeoutMs === undefined || options.idleTimeoutMs <= 0);
 
 	while (true) {
+		let activeTimeoutMs: number | undefined;
+		if (awaitingFirstItem) {
+			activeTimeoutMs = firstItemTimeoutMs;
+		} else if (options.idleTimeoutMs !== undefined && options.idleTimeoutMs > 0) {
+			activeTimeoutMs = options.idleTimeoutMs - (Date.now() - lastProgressAt);
+			if (activeTimeoutMs <= 0) {
+				options.onIdle?.();
+				closeIterator();
+				throw new Error(options.errorMessage);
+			}
+		}
+
 		const nextResultPromise = withRacy(iterator.next());
-		const activeTimeoutMs = !onFirst ? options.idleTimeoutMs : firstItemTimeoutMs;
 
 		const racers: Array<
 			Promise<
@@ -152,24 +196,29 @@ export async function* iterateWithIdleTimeout<T>(
 				throw abortReason(abortSignal!);
 			}
 			if (outcome.kind === "timeout") {
-				if (!onFirst) {
+				if (!awaitingFirstItem) {
 					options.onIdle?.();
 				} else {
 					options.onFirstItemTimeout?.();
 				}
 				closeIterator();
-				throw new Error(!onFirst ? options.errorMessage : (options.firstItemErrorMessage ?? options.errorMessage));
+				throw new Error(
+					!awaitingFirstItem ? options.errorMessage : (options.firstItemErrorMessage ?? options.errorMessage),
+				);
 			}
 			if (outcome.kind === "error") {
 				throw outcome.error;
 			}
-			watchdog && clearTimeout(watchdog);
-			watchdog = undefined;
 			if (outcome.result.done) {
+				markFirstItemReceived();
 				return;
 			}
-			onFirst?.();
-			yield outcome.result.value;
+			const item = outcome.result.value;
+			markFirstItemReceived();
+			if (isProgressItem(item)) {
+				lastProgressAt = Date.now();
+			}
+			yield item;
 		} finally {
 			if (timer !== undefined) clearTimeout(timer);
 			// Resolve dangling promises so the racers don't leak (Promise.race is one-shot).

@@ -15,6 +15,8 @@ import { formatBytes } from "../tools/render-utils";
 import { openPath } from "../utils/open";
 import { DebugLogViewerComponent } from "./log-viewer";
 import { generateHeapSnapshotData, type ProfilerSession, startCpuProfile } from "./profiler";
+import { RawSseViewerComponent } from "./raw-sse";
+import { resolveRawSseDebugBuffer } from "./raw-sse-buffer";
 import { clearArtifactCache, createDebugLogSource, createReportBundle, getArtifactCacheStats } from "./report-bundle";
 import { collectSystemInfo, formatSystemInfo } from "./system-info";
 
@@ -27,6 +29,7 @@ const DEBUG_MENU_ITEMS: SelectItem[] = [
 	{ value: "memory", label: "Report: memory issue", description: "Heap snapshot + bundle" },
 	{ value: "logs", label: "View: recent logs", description: "Show last 50 log entries" },
 	{ value: "system", label: "View: system info", description: "Show environment details" },
+	{ value: "raw-sse", label: "View: raw SSE stream", description: "Show live provider SSE frames" },
 	{
 		value: "transcript",
 		label: "Export: TUI transcript",
@@ -96,6 +99,9 @@ export class DebugSelectorComponent extends Container {
 				break;
 			case "logs":
 				await this.#handleViewLogs();
+				break;
+			case "raw-sse":
+				await this.#handleViewRawSse();
 				break;
 			case "system":
 				await this.#handleViewSystemInfo();
@@ -312,6 +318,21 @@ export class DebugSelectorComponent extends Container {
 			this.ctx.showError(`Failed to read logs: ${err instanceof Error ? err.message : String(err)}`);
 		}
 
+		this.ctx.ui.requestRender();
+	}
+
+	async #handleViewRawSse(): Promise<void> {
+		const viewer = new RawSseViewerComponent({
+			buffer: resolveRawSseDebugBuffer(this.ctx.session),
+			terminalRows: this.ctx.ui.terminal.rows,
+			onExit: () => this.ctx.showDebugSelector(),
+			onStatus: message => this.ctx.showStatus(message, { dim: true }),
+			onUpdate: () => this.ctx.ui.requestRender(),
+		});
+
+		this.ctx.editorContainer.clear();
+		this.ctx.editorContainer.addChild(viewer);
+		this.ctx.ui.setFocus(viewer);
 		this.ctx.ui.requestRender();
 	}
 

@@ -43,6 +43,7 @@ import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses } from "../utils/schema";
+import { wrapFetchForSseDebug } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice, type OpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
@@ -98,6 +99,32 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 const OPENAI_RESPONSES_PROVIDER_SESSION_STATE_PREFIX = "openai-responses:";
 const OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"OpenAI responses stream timed out while waiting for the first event";
+
+const OPENAI_RESPONSES_PROGRESS_EVENT_TYPES = new Set([
+	"response.created",
+	"response.output_item.added",
+	"response.reasoning_summary_part.added",
+	"response.reasoning_summary_text.delta",
+	"response.reasoning_summary_part.done",
+	"response.reasoning_text.delta",
+	"response.content_part.added",
+	"response.output_text.delta",
+	"response.refusal.delta",
+	"response.function_call_arguments.delta",
+	"response.function_call_arguments.done",
+	"response.custom_tool_call_input.delta",
+	"response.custom_tool_call_input.done",
+	"response.output_item.done",
+	"response.completed",
+	"response.failed",
+	"error",
+]);
+
+function isOpenAIResponsesProgressEvent(event: unknown): boolean {
+	if (!event || typeof event !== "object") return false;
+	const type = (event as { type?: unknown }).type;
+	return typeof type === "string" && OPENAI_RESPONSES_PROGRESS_EVENT_TYPES.has(type);
+}
 
 interface OpenAIResponsesProviderSessionState extends ProviderSessionState {
 	nativeHistoryReplayWarmed: boolean;
@@ -192,10 +219,11 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				options?.headers,
 				options?.initiatorOverride,
 				cacheSessionId,
+				options?.onSseEvent,
 			);
 			const providerSessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
 			const { params } = buildParams(model, context, options, providerSessionState, baseUrl);
-			const idleTimeoutMs = getOpenAIStreamIdleTimeoutMs();
+			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			options?.onPayload?.(params);
 			rawRequestDump = {
 				provider: model.provider,
@@ -230,6 +258,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					errorMessage: "OpenAI responses stream stalled while waiting for the next event",
 					onIdle: () => requestAbortController.abort(),
 					abortSignal: options?.signal,
+					isProgressItem: isOpenAIResponsesProgressEvent,
 				}),
 				output,
 				stream,
@@ -287,6 +316,7 @@ function createClient(
 	extraHeaders?: Record<string, string>,
 	initiatorOverride?: MessageAttribution,
 	sessionId?: string,
+	onSseEvent?: OpenAIResponsesOptions["onSseEvent"],
 ): {
 	client: OpenAI;
 	copilotPremiumRequests: number | undefined;
@@ -331,6 +361,7 @@ function createClient(
 			dangerouslyAllowBrowser: true,
 			maxRetries: 5,
 			defaultHeaders: headers,
+			fetch: onSseEvent ? wrapFetchForSseDebug(fetch, event => onSseEvent(event, model)) : fetch,
 		}),
 		copilotPremiumRequests,
 		baseUrl,

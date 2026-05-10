@@ -276,6 +276,8 @@ export function streamGitLabDuo(
 								sessionId: options.sessionId,
 								providerSessionState: options.providerSessionState,
 								onPayload: options.onPayload,
+								onResponse: options.onResponse,
+								onSseEvent: options.onSseEvent,
 								thinkingEnabled: Boolean(reasoningEffort) && model.reasoning,
 								thinkingBudgetTokens: reasoningEffort
 									? (options.thinkingBudgets?.[reasoningEffort] ?? ANTHROPIC_THINKING[reasoningEffort])
@@ -310,6 +312,8 @@ export function streamGitLabDuo(
 									sessionId: options.sessionId,
 									providerSessionState: options.providerSessionState,
 									onPayload: options.onPayload,
+									onResponse: options.onResponse,
+									onSseEvent: options.onSseEvent,
 									reasoning: reasoningEffort,
 									toolChoice: options.toolChoice,
 								} satisfies OpenAIResponsesOptions,
@@ -339,6 +343,8 @@ export function streamGitLabDuo(
 									sessionId: options.sessionId,
 									providerSessionState: options.providerSessionState,
 									onPayload: options.onPayload,
+									onResponse: options.onResponse,
+									onSseEvent: options.onSseEvent,
 									reasoning: reasoningEffort,
 									toolChoice: options.toolChoice,
 								} satisfies OpenAICompletionsOptions,

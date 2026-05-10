@@ -44,12 +44,13 @@ import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
-import { createWatchdog, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
+import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { extractHttpStatusFromError, isCopilotRetryableError, isUnexpectedSocketCloseMessage } from "../utils/retry";
 import { COMBINATOR_KEYS, NO_STRICT } from "../utils/schema";
+import { notifyRawSseEvent, wrapFetchForSseDebug } from "../utils/sse-debug";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -528,6 +529,7 @@ export type AnthropicClientOptionsArgs = {
 	dynamicHeaders?: Record<string, string>;
 	isOAuth?: boolean;
 	hasTools?: boolean;
+	onSseEvent?: AnthropicOptions["onSseEvent"];
 };
 
 export type AnthropicClientOptionsResult = {
@@ -539,6 +541,7 @@ export type AnthropicClientOptionsResult = {
 	dangerouslyAllowBrowser: boolean;
 	defaultHeaders: Record<string, string>;
 	logLevel: AnthropicSdkClientOptions["logLevel"];
+	fetch?: AnthropicSdkClientOptions["fetch"];
 	fetchOptions?: AnthropicSdkClientOptions["fetchOptions"];
 };
 
@@ -690,6 +693,7 @@ const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
 async function* iterateAnthropicEvents(
 	response: Response,
 	signal?: AbortSignal,
+	onSseEvent?: AnthropicOptions["onSseEvent"],
 ): AsyncGenerator<RawMessageStreamEvent> {
 	if (!response.body) {
 		throw new Error("Attempted to iterate over an Anthropic response with no body");
@@ -699,6 +703,7 @@ async function* iterateAnthropicEvents(
 	let sawMessageEnd = false;
 
 	for await (const sse of readSseEvents(response.body, signal)) {
+		notifyRawSseEvent(onSseEvent, sse);
 		if (sse.event === "error") {
 			throw new Error(sse.data);
 		}
@@ -751,11 +756,12 @@ function hasAnthropicStreamWithResponseRequest(request: unknown): request is Ant
 async function getAnthropicStreamResponse(
 	request: unknown,
 	signal?: AbortSignal,
+	onSseEvent?: AnthropicOptions["onSseEvent"],
 ): Promise<{ events: AsyncIterable<RawMessageStreamEvent>; response: Response; requestId: string | null }> {
 	if (hasAnthropicRawResponseRequest(request)) {
 		const response = await request.asResponse();
 		return {
-			events: iterateAnthropicEvents(response, signal),
+			events: iterateAnthropicEvents(response, signal, onSseEvent),
 			response,
 			requestId: response.headers.get("request-id"),
 		};
@@ -944,6 +950,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					dynamicHeaders: copilotDynamicHeaders?.headers,
 					isOAuth: options?.isOAuth,
 					hasTools: !!context.tools?.length,
+					onSseEvent: options?.onSseEvent,
 				});
 				client = created.client;
 				isOAuthToken = created.isOAuthToken;
@@ -983,7 +990,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				| (ToolCall & { partialJson: string })
 			) & { index: number };
 			const blocks = output.content as Block[];
-			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs();
+			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getStreamIdleTimeoutMs();
+			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
 			stream.push({ type: "start", partial: output });
 			// Retry loop for transient errors from the stream.
 			// Provider-level transport/rate-limit failures: only before any streamed content starts.
@@ -994,6 +1002,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				const firstEventTimeoutAbortError = new Error(
 					"Anthropic stream timed out while waiting for the first event",
 				);
+				const idleTimeoutAbortError = new Error("Anthropic stream stalled while waiting for the next event");
 				const { requestSignal } = activeAbortTracker;
 				const anthropicRequest = client.messages.create({ ...params, stream: true }, { signal: requestSignal });
 				let streamedReplayUnsafeContent = false;
@@ -1003,19 +1012,25 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						events: anthropicStream,
 						response,
 						requestId,
-					} = await getAnthropicStreamResponse(anthropicRequest, requestSignal);
-					await notifyProviderResponse(options, response, model, requestId);
-					const firstEventWatchdog = createWatchdog(firstEventTimeoutMs, () =>
-						activeAbortTracker.abortLocally(firstEventTimeoutAbortError),
+					} = await getAnthropicStreamResponse(
+						anthropicRequest,
+						requestSignal,
+						options?.client ? event => options?.onSseEvent?.(event, model) : undefined,
 					);
+					await notifyProviderResponse(options, response, model, requestId);
 					let sawEvent = false;
 					let sawMessageStart = false;
 					let sawTerminalEnvelope = false;
 
-					for await (const event of anthropicStream) {
-						if (!sawEvent) {
-							clearTimeout(firstEventWatchdog);
-						}
+					for await (const event of iterateWithIdleTimeout(anthropicStream, {
+						idleTimeoutMs,
+						firstItemTimeoutMs: firstEventTimeoutMs,
+						errorMessage: idleTimeoutAbortError.message,
+						firstItemErrorMessage: firstEventTimeoutAbortError.message,
+						onIdle: () => activeAbortTracker.abortLocally(idleTimeoutAbortError),
+						onFirstItemTimeout: () => activeAbortTracker.abortLocally(firstEventTimeoutAbortError),
+						abortSignal: options?.signal,
+					})) {
 						sawEvent = true;
 
 						if (event.type === "message_start") {
@@ -1360,6 +1375,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		dynamicHeaders,
 		hasTools = false,
 		isOAuth,
+		onSseEvent,
 	} = args;
 	const compat = getAnthropicCompat(model);
 	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinkingDisplay(model.id);
@@ -1368,6 +1384,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	const baseUrl = resolveAnthropicBaseUrl(model, apiKey);
 	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model);
 	const tlsFetchOptions = buildClaudeCodeTlsFetchOptions(model, baseUrl);
+	const debugFetch = onSseEvent ? wrapFetchForSseDebug(fetch, event => onSseEvent(event, model)) : undefined;
 	if (model.provider === "github-copilot") {
 		const copilotApiKey = parseGitHubCopilotApiKey(apiKey).accessToken;
 		const betaFeatures = [...extraBetas];
@@ -1395,6 +1412,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			dangerouslyAllowBrowser: true,
 			defaultHeaders,
 			logLevel: ANTHROPIC_SDK_LOG_LEVEL,
+			...(debugFetch ? { fetch: debugFetch } : {}),
 			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
 		};
 	}
@@ -1427,6 +1445,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			dangerouslyAllowBrowser: true,
 			defaultHeaders,
 			logLevel: ANTHROPIC_SDK_LOG_LEVEL,
+			...(debugFetch ? { fetch: debugFetch } : {}),
 		};
 	}
 
@@ -1439,6 +1458,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		dangerouslyAllowBrowser: true,
 		defaultHeaders,
 		logLevel: ANTHROPIC_SDK_LOG_LEVEL,
+		...(debugFetch ? { fetch: debugFetch } : {}),
 		...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
 	};
 }

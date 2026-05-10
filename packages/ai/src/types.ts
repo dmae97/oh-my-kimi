@@ -186,6 +186,12 @@ export interface ProviderResponseMetadata {
 	metadata?: Record<string, unknown>;
 }
 
+export interface RawSseEvent {
+	event: string | null;
+	data: string;
+	raw: string[];
+}
+
 export interface StreamOptions {
 	temperature?: number;
 	topP?: number;
@@ -241,10 +247,22 @@ export interface StreamOptions {
 	 */
 	onResponse?: (response: ProviderResponseMetadata, model?: Model<Api>) => void | Promise<void>;
 	/**
+	 * Optional callback for raw Server-Sent Events as they arrive from HTTP streaming providers.
+	 *
+	 * Diagnostic only: provider implementations must ignore callback failures and must not
+	 * let observers alter stream contents.
+	 */
+	onSseEvent?: (event: RawSseEvent, model?: Model<Api>) => void;
+	/**
 	 * Optional override for the first streamed event watchdog in milliseconds.
 	 * Set to 0 to disable the first-event watchdog for this request.
 	 */
 	streamFirstEventTimeoutMs?: number;
+	/**
+	 * Optional override for the maximum idle gap between streamed events in milliseconds.
+	 * Set to 0 to disable the inter-event idle watchdog for this request.
+	 */
+	streamIdleTimeoutMs?: number;
 	/** Cursor exec/MCP tool handlers (cursor-agent only). */
 	execHandlers?: CursorExecHandlers;
 }

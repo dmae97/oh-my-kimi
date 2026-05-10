@@ -144,6 +144,20 @@ describe("readSseJson", () => {
 		expect(output).toEqual([{ a: 1 }, { b: 2 }]);
 	});
 
+	it("reports raw events to diagnostic observers without changing parsed output", async () => {
+		const stream = bytesStreamFromChunks([
+			encoder.encode('event: message\ndata: {"a":1}\n\n'),
+			encoder.encode("event: done\ndata: [DONE]\n\n"),
+		]);
+		const observed: ServerSentEvent[] = [];
+
+		const output = await collectAsync(readSseJson(stream, undefined, event => observed.push(event)));
+
+		expect(output).toEqual([{ a: 1 }]);
+		expect(observed.map(event => event.event)).toEqual(["message", "done"]);
+		expect(observed[0].raw).toEqual(["event: message", 'data: {"a":1}']);
+	});
+
 	it("flushes a trailing event without the closing blank line", async () => {
 		const chunks = [encoder.encode('data: {"c":3}')];
 		const stream = new ReadableStream<Uint8Array>({

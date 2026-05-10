@@ -91,6 +91,27 @@ describe("AgentSession message pipeline", () => {
 		expect(result).toEqual({ original: true, session: true });
 	});
 
+	it("records raw SSE diagnostics into the session buffer before request hooks", async () => {
+		const requestOnSseEvent = vi.fn();
+		const session = new AgentSession({
+			agent: createAgent(),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: {} as never,
+			onSseEvent: requestOnSseEvent,
+		});
+		sessions.push(session);
+
+		const prepared = session.prepareSimpleStreamOptions({});
+		prepared.onSseEvent?.({ event: "message", data: "{}", raw: ["event: message", "data: {}"] });
+
+		expect(session.rawSseDebugBuffer.snapshot().totalEvents).toBe(1);
+		expect(requestOnSseEvent).toHaveBeenCalledWith(
+			{ event: "message", data: "{}", raw: ["event: message", "data: {}"] },
+			undefined,
+		);
+	});
+
 	it("emits message_update to session listeners before slow extension handlers finish", async () => {
 		const { promise, resolve } = Promise.withResolvers<void>();
 		const extensionEmit = vi.fn(async (event: { type: string }) => {

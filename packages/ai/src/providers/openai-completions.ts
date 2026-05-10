@@ -55,6 +55,7 @@ import { getKimiCommonHeaders } from "../utils/oauth/kimi";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry, extractHttpStatusFromError } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
+import { wrapFetchForSseDebug } from "../utils/sse-debug";
 import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
@@ -367,7 +368,14 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				requestHeaders,
 				getCapturedErrorResponse: captureErrorResponse,
 				clearCapturedErrorResponse,
-			} = await createClient(model, context, apiKey, options?.headers, options?.initiatorOverride);
+			} = await createClient(
+				model,
+				context,
+				apiKey,
+				options?.headers,
+				options?.initiatorOverride,
+				options?.onSseEvent,
+			);
 			getCapturedErrorResponse = captureErrorResponse;
 			let appliedToolStrictMode: AppliedToolStrictMode = "mixed";
 			const providerSessionState = getOpenAICompletionsProviderSessionState(
@@ -775,6 +783,7 @@ async function createClient(
 	apiKey?: string,
 	extraHeaders?: Record<string, string>,
 	initiatorOverride?: MessageAttribution,
+	onSseEvent?: OpenAICompletionsOptions["onSseEvent"],
 ): Promise<{
 	client: OpenAI;
 	copilotPremiumRequests: number | undefined;
@@ -871,6 +880,7 @@ async function createClient(
 		},
 		{ preconnect: fetch.preconnect },
 	);
+	const debugFetch = onSseEvent ? wrapFetchForSseDebug(wrappedFetch, event => onSseEvent(event, model)) : wrappedFetch;
 	return {
 		client: new OpenAI({
 			apiKey,
@@ -879,7 +889,7 @@ async function createClient(
 			maxRetries: 5,
 			defaultHeaders: headers,
 			defaultQuery: azureDefaultQuery,
-			fetch: wrappedFetch,
+			fetch: debugFetch,
 		}),
 		copilotPremiumRequests,
 		baseUrl,

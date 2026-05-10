@@ -136,6 +136,10 @@ export interface AgentOptions {
 	 */
 	onResponse?: SimpleStreamOptions["onResponse"];
 	/**
+	 * Inspect raw Server-Sent Events from HTTP streaming providers.
+	 */
+	onSseEvent?: SimpleStreamOptions["onSseEvent"];
+	/**
 	 * Inspect assistant streaming events before they are emitted to subscribers.
 	 * Use this when abort decisions must happen before buffered events continue flowing.
 	 */
@@ -258,6 +262,7 @@ export class Agent {
 	#getToolChoice?: () => ToolChoice | undefined;
 	#onPayload?: SimpleStreamOptions["onPayload"];
 	#onResponse?: SimpleStreamOptions["onResponse"];
+	#onSseEvent?: SimpleStreamOptions["onSseEvent"];
 	#onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
 
 	/** Buffered Cursor tool results with text length at time of call (for correct ordering) */
@@ -289,6 +294,7 @@ export class Agent {
 		this.getApiKey = opts.getApiKey;
 		this.#onPayload = opts.onPayload;
 		this.#onResponse = opts.onResponse;
+		this.#onSseEvent = opts.onSseEvent;
 		this.#getToolContext = opts.getToolContext;
 		this.#cursorExecHandlers = opts.cursorExecHandlers;
 		this.#cursorOnToolResult = opts.cursorOnToolResult;
@@ -477,6 +483,14 @@ export class Agent {
 	subscribe(fn: (e: AgentEvent) => void): () => void {
 		this.#listeners.add(fn);
 		return () => this.#listeners.delete(fn);
+	}
+
+	setProviderResponseInterceptor(fn: SimpleStreamOptions["onResponse"] | undefined): void {
+		this.#onResponse = fn;
+	}
+
+	setRawSseEventInterceptor(fn: SimpleStreamOptions["onSseEvent"] | undefined): void {
+		this.#onSseEvent = fn;
 	}
 
 	setAssistantMessageEventInterceptor(
@@ -832,6 +846,7 @@ export class Agent {
 			transformContext: this.#transformContext,
 			onPayload: this.#onPayload,
 			onResponse: this.#onResponse,
+			onSseEvent: this.#onSseEvent,
 			getApiKey: this.getApiKey,
 			getToolContext: this.#getToolContext,
 			syncContextBeforeModelCall: async context => {

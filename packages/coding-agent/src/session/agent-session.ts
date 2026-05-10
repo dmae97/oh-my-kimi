@@ -68,6 +68,7 @@ import {
 } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
+import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
 import {
 	disposeKernelSessionsByOwner,
@@ -251,6 +252,10 @@ export interface AgentSessionConfig {
 	onPayload?: SimpleStreamOptions["onPayload"];
 	/** Provider response hook used by the active session request path */
 	onResponse?: SimpleStreamOptions["onResponse"];
+	/** Raw SSE hook used by the active session request path */
+	onSseEvent?: SimpleStreamOptions["onSseEvent"];
+	/** Per-session raw SSE diagnostic buffer */
+	rawSseDebugBuffer?: RawSseDebugBuffer;
 	/** Current session message-to-LLM conversion pipeline */
 	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	/** System prompt builder that can consider tool availability. Returns ordered provider-facing blocks. */
@@ -585,6 +590,7 @@ export class AgentSession {
 	#transformContext: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	#onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	#onResponse: SimpleStreamOptions["onResponse"] | undefined;
+	#onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#rebuildSystemPrompt:
 		| ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<{ systemPrompt: string[] }>)
@@ -636,6 +642,7 @@ export class AgentSession {
 	#promptGeneration = 0;
 	#providerSessionState = new Map<string, ProviderSessionState>();
 	#hindsightSessionState: HindsightSessionState | undefined = undefined;
+	readonly rawSseDebugBuffer: RawSseDebugBuffer;
 
 	#startPowerAssertion(): void {
 		if (process.platform !== "darwin") {
@@ -682,7 +689,19 @@ export class AgentSession {
 		this.#toolRegistry = config.toolRegistry ?? new Map();
 		this.#transformContext = config.transformContext ?? (messages => messages);
 		this.#onPayload = config.onPayload;
-		this.#onResponse = config.onResponse;
+		this.rawSseDebugBuffer = config.rawSseDebugBuffer ?? new RawSseDebugBuffer();
+		const configuredOnResponse = config.onResponse;
+		this.#onResponse = async (response, model) => {
+			this.rawSseDebugBuffer.recordResponse(response, model);
+			await configuredOnResponse?.(response, model);
+		};
+		const configuredOnSseEvent = config.onSseEvent;
+		this.#onSseEvent = (event, model) => {
+			this.rawSseDebugBuffer.recordEvent(event, model);
+			configuredOnSseEvent?.(event, model);
+		};
+		this.agent.setProviderResponseInterceptor(this.#onResponse);
+		this.agent.setRawSseEventInterceptor(this.#onSseEvent);
 		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
 		this.#rebuildSystemPrompt = config.rebuildSystemPrompt;
 		this.#getMcpServerInstructions = config.getMcpServerInstructions;
@@ -2775,7 +2794,8 @@ export class AgentSession {
 		const sessionOnPayload = this.#onPayload;
 		const sessionOnResponse = this.#onResponse;
 		const sessionMetadata = this.agent.metadataForProvider(provider);
-		if (!sessionOnPayload && !sessionOnResponse && !sessionMetadata) return options;
+		const sessionOnSseEvent = this.#onSseEvent;
+		if (!sessionOnPayload && !sessionOnResponse && !sessionMetadata && !sessionOnSseEvent) return options;
 
 		const preparedOptions: SimpleStreamOptions = { ...options };
 
@@ -2808,6 +2828,18 @@ export class AgentSession {
 				preparedOptions.onResponse = async (response, model) => {
 					await sessionOnResponse(response, model);
 					await requestOnResponse(response, model);
+				};
+			}
+		}
+
+		if (sessionOnSseEvent) {
+			if (!options.onSseEvent) {
+				preparedOptions.onSseEvent = sessionOnSseEvent;
+			} else {
+				const requestOnSseEvent = options.onSseEvent;
+				preparedOptions.onSseEvent = (event, model) => {
+					sessionOnSseEvent(event, model);
+					requestOnSseEvent(event, model);
 				};
 			}
 		}

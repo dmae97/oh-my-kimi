@@ -28,6 +28,7 @@ import {
 	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
+import { wrapFetchForSseDebug } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
 import { normalizeOpenAIResponsesPromptCacheKey, supportsDeveloperRole } from "./openai-responses";
 import {
@@ -258,6 +259,7 @@ function createClient(model: Model<"azure-openai-responses">, apiKey: string, op
 		maxRetries: 5,
 		defaultHeaders: headers,
 		baseURL: baseUrl,
+		fetch: options?.onSseEvent ? wrapFetchForSseDebug(fetch, event => options.onSseEvent?.(event, model)) : fetch,
 	});
 }
 
