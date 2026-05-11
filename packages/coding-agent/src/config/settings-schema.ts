@@ -905,13 +905,13 @@ export const SETTINGS_SCHEMA = {
 
 	"ask.timeout": {
 		type: "number",
-		default: 30,
+		default: 0,
 		ui: {
 			tab: "interaction",
 			label: "Ask Timeout",
-			description: "Auto-select recommended option after timeout (0 to disable)",
+			description: "Auto-select recommended option after N seconds (0 = wait indefinitely; default)",
 			options: [
-				{ value: "0", label: "Disabled" },
+				{ value: "0", label: "Disabled (default)" },
 				{ value: "15", label: "15 seconds" },
 				{ value: "30", label: "30 seconds" },
 				{ value: "60", label: "60 seconds" },
