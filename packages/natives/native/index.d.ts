@@ -415,7 +415,7 @@ export declare enum Encoding {
  * streamed stdout/stderr output. Returns the exit code when the command
  * completes, or flags when cancelled or timed out.
  */
-export declare function executeShell(options: ShellExecuteOptions, onChunk?: ((error: Error | null, chunk: string) => void) | undefined | null): Promise<ShellExecuteResult>
+export declare function executeShell(options: ShellExecuteOptions, onChunk?: ((error: Error | null, chunk: string) => void) | undefined | null): Promise<ShellRunResult>
 
 /**
  * Extract the before/after slices around an overlay region.
@@ -833,7 +833,7 @@ export declare enum MacOSAppearance {
 /**
  * Options for starting a macOS power assertion.
  *
- * Each boolean maps to a `caffeinate(8)` flag and a corresponding IOKit
+ * Each boolean maps to a `caffeinate(8)` flag and a corresponding `IOKit`
  * `IOPMAssertion` type. Multiple flags can be combined; when set, one
  * assertion is taken per flag and all are released together when the
  * handle is stopped or dropped.
@@ -1158,18 +1158,6 @@ export interface ShellExecuteOptions {
   minimizer?: MinimizerOptions
   /** Abort signal for cancelling the operation. */
   signal?: unknown
-}
-
-/** Result of executing a shell command via brush-core. */
-export interface ShellExecuteResult {
-  /** Exit code when the command completes normally. */
-  exitCode?: number
-  /** Whether the command was cancelled via abort. */
-  cancelled: boolean
-  /** Whether the command timed out before completion. */
-  timedOut: boolean
-  /** See [`ShellRunResult::minimized`]. */
-  minimized?: MinimizerResult
 }
 
 /** Options for configuring a persistent shell session. */
