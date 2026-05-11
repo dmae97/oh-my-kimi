@@ -77,6 +77,14 @@ export class StatusLineComponent implements Component {
 	#cachedBreakdown: { usedTokens: number; contextWindow: number } | null = null;
 	#breakdownFetchedAt = 0;
 
+	// Anthropic usage caching (5-min TTL, OAuth/sub only)
+	#cachedUsage: {
+		fiveHour?: { percent: number; resetMinutes?: number };
+		sevenDay?: { percent: number; resetHours?: number };
+	} | null = null;
+	#usageFetchedAt = 0;
+	#usageInFlight = false;
+
 	constructor(private readonly session: AgentSession) {
 		this.#settings = {
 			preset: settings.get("statusLine.preset"),
@@ -322,8 +330,79 @@ export class StatusLineComponent implements Component {
 		return this.#cachedBreakdown;
 	}
 
+	#refreshUsageInBackground(): void {
+		const now = Date.now();
+		if (this.#usageInFlight) return;
+		if (this.#usageFetchedAt > 0 && now - this.#usageFetchedAt < 5 * 60_000) return;
+		const fetcher = (this.session as { fetchUsageReports?: () => Promise<unknown> }).fetchUsageReports;
+		if (typeof fetcher !== "function") return;
+		this.#usageInFlight = true;
+		void fetcher
+			.call(this.session)
+			.then(reports => {
+				this.#cachedUsage = this.#normalizeUsageReports(reports);
+				this.#usageFetchedAt = Date.now();
+			})
+			.catch(() => {
+				/* keep last known data on error */
+			})
+			.finally(() => {
+				this.#usageInFlight = false;
+			});
+	}
+
+	#normalizeUsageReports(reports: unknown): {
+		fiveHour?: { percent: number; resetMinutes?: number };
+		sevenDay?: { percent: number; resetHours?: number };
+	} | null {
+		if (!Array.isArray(reports)) return null;
+		let fiveHour: { percent: number; resetMinutes?: number } | undefined;
+		let sevenDay: { percent: number; resetHours?: number } | undefined;
+		const now = Date.now();
+		for (const report of reports) {
+			if (!report || typeof report !== "object") continue;
+			const limits = (report as { limits?: unknown }).limits;
+			if (!Array.isArray(limits)) continue;
+			for (const limit of limits) {
+				if (!limit || typeof limit !== "object") continue;
+				const l = limit as {
+					scope?: { windowId?: string; tier?: string };
+					window?: { resetsAt?: number };
+					amount?: { usedFraction?: number };
+				};
+				const fraction = l.amount?.usedFraction;
+				if (typeof fraction !== "number") continue;
+				const windowId = l.scope?.windowId;
+				const tier = l.scope?.tier;
+				const resetsAt = l.window?.resetsAt;
+				if (windowId === "5h" && !tier && !fiveHour) {
+					fiveHour = {
+						percent: fraction * 100,
+						resetMinutes:
+							typeof resetsAt === "number"
+								? Math.max(0, Math.round((resetsAt - now) / 60_000))
+								: undefined,
+					};
+				} else if (windowId === "7d" && !tier && !sevenDay) {
+					sevenDay = {
+						percent: fraction * 100,
+						resetHours:
+							typeof resetsAt === "number"
+								? Math.max(0, Math.round((resetsAt - now) / 3_600_000))
+								: undefined,
+					};
+				}
+			}
+		}
+		if (!fiveHour && !sevenDay) return null;
+		return { fiveHour, sevenDay };
+	}
+
 	#buildSegmentContext(width: number): SegmentContext {
 		const state = this.session.state;
+
+		// Trigger background fetch (5-min TTL); render uses cached value
+		this.#refreshUsageInBackground();
 
 		// Get usage statistics
 		const aggregateUsageStats = this.session.sessionManager?.getUsageStatistics() ?? {
@@ -363,6 +442,7 @@ export class StatusLineComponent implements Component {
 				status: this.#getGitStatus(),
 				pr: this.#lookupPr(),
 			},
+			usage: this.#cachedUsage,
 		};
 	}
 
