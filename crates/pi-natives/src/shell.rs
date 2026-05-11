@@ -84,6 +84,8 @@ pub struct ShellRunOptions<'env> {
 	pub cwd:        Option<String>,
 	/// Environment variables to apply for this command only.
 	pub env:        Option<HashMap<String, String>>,
+	/// Run the command attached to a PTY.
+	pub pty:        Option<bool>,
 	/// Timeout in milliseconds before cancelling the command.
 	pub timeout_ms: Option<u32>,
 	/// Abort signal for cancelling the operation.
@@ -101,6 +103,8 @@ pub struct ShellExecuteOptions<'env> {
 	pub env:           Option<HashMap<String, String>>,
 	/// Environment variables to apply once per session.
 	pub session_env:   Option<HashMap<String, String>>,
+	/// Run the command attached to a PTY.
+	pub pty:           Option<bool>,
 	/// Timeout in milliseconds before cancelling the command.
 	pub timeout_ms:    Option<u32>,
 	/// Optional snapshot file to source on session creation.
@@ -209,7 +213,7 @@ impl Shell {
 			command:    options.command,
 			cwd:        options.cwd,
 			env:        options.env,
-			pty:        false,
+			pty:        options.pty.unwrap_or(false),
 			timeout_ms: options.timeout_ms,
 		};
 		task::future(env, "shell.run", async move {
@@ -253,7 +257,7 @@ pub fn execute_shell<'env>(
 		timeout_ms:    options.timeout_ms,
 		snapshot_path: options.snapshot_path,
 		minimizer:     options.minimizer.map(Into::into),
-		pty:           false,
+		pty:           options.pty.unwrap_or(false),
 	};
 	task::future(env, "shell.execute", async move {
 		let chunk_tx = bridge_chunks(on_chunk);
@@ -367,6 +371,34 @@ mod tests {
 		assert_eq!(result.exit_code, Some(0));
 		assert_ne!(child_sid, host_sid);
 		assert_eq!(child_sid, child_pid);
+	}
+
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn pty_run_attaches_stdio_to_terminal() {
+		let shell = CoreShell::new(None);
+		let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+		let result = shell
+			.run(
+				CoreShellRunOptions {
+					command:    "test -t 0 && test -t 1 && tty".to_string(),
+					cwd:        None,
+					env:        None,
+					pty:        true,
+					timeout_ms: Some(5_000),
+				},
+				Some(tx),
+				CancelToken::default(),
+			)
+			.await
+			.expect("shell run");
+		let mut output = String::new();
+		while let Ok(chunk) = rx.try_recv() {
+			output.push_str(&chunk);
+		}
+
+		assert_eq!(result.exit_code, Some(0), "output: {output:?}");
+		assert!(output.contains("/dev/"), "tty output should include a terminal path: {output:?}");
 	}
 
 	#[tokio::test]
