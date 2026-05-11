@@ -11,6 +11,7 @@ import { InternalUrlRouter } from "../internal-urls";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import type { Theme } from "../modes/theme/theme";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
+import type { ClientBridgeTerminalExitStatus } from "../session/client-bridge";
 import { DEFAULT_MAX_BYTES, streamTailUpdates, TailBuffer } from "../session/streaming-output";
 import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
@@ -84,6 +85,7 @@ export interface BashToolDetails {
 	meta?: OutputMeta;
 	timeoutSeconds?: number;
 	requestedTimeoutSeconds?: number;
+	terminalId?: string;
 	async?: {
 		state: "running" | "completed" | "failed";
 		jobId: string;
@@ -289,7 +291,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	#buildCompletedResult(
 		result: BashResult | BashInteractiveResult,
 		timeoutSec: number,
-		options: { requestedTimeoutSec?: number; notices?: string[] } = {},
+		options: { requestedTimeoutSec?: number; notices?: string[]; terminalId?: string } = {},
 	): AgentToolResult<BashToolDetails> {
 		const outputLines = [this.#formatResultOutput(result)];
 		const notices = options.notices?.filter(Boolean) ?? [];
@@ -298,6 +300,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const details: BashToolDetails = { timeoutSeconds: timeoutSec };
 		if (options.requestedTimeoutSec !== undefined && options.requestedTimeoutSec !== timeoutSec) {
 			details.requestedTimeoutSeconds = options.requestedTimeoutSec;
+		}
+		if (options.terminalId !== undefined) {
+			details.terminalId = options.terminalId;
 		}
 		const resultBuilder = toolResult(details).text(outputText).truncationFromSummary(result, { direction: "tail" });
 		this.#buildResultText(result, timeoutSec, outputText);
@@ -615,6 +620,141 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			return this.#buildBackgroundStartResult(job.jobId, job.label, job.getLatestText(), timeoutSec, {
 				requestedTimeoutSec,
 				notices: [timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+			});
+		}
+
+		// Route through the client terminal when the client advertises the terminal capability.
+		// Skip when pty=true (PTY needs the local terminal UI).
+		const clientBridge = this.session.getClientBridge?.();
+		if (clientBridge?.capabilities.terminal && clientBridge.createTerminal && !pty) {
+			const handle = await clientBridge.createTerminal({
+				command,
+				cwd: commandCwd,
+				env: resolvedEnv
+					? Object.entries(resolvedEnv).map(([name, value]) => ({ name, value: value as string }))
+					: undefined,
+				outputByteLimit: DEFAULT_MAX_BYTES,
+			});
+
+			// Emit partial update so the editor can embed the live terminal card.
+			onUpdate?.({ content: [], details: { terminalId: handle.terminalId } });
+
+			const exitPromise = handle.waitForExit();
+			let exitStatus!: ClientBridgeTerminalExitStatus;
+
+			type BridgeRaceResult =
+				| { kind: "exit"; status: ClientBridgeTerminalExitStatus }
+				| { kind: "poll" }
+				| { kind: "timeout" }
+				| { kind: "aborted" };
+
+			// Set up abort listener before entering the poll loop.
+			const { promise: abortedP, resolve: resolveAborted } = Promise.withResolvers<void>();
+			const onAbortSignal = () => resolveAborted();
+			signal?.addEventListener("abort", onAbortSignal, { once: true });
+
+			try {
+				if (signal?.aborted) {
+					await handle.kill();
+					await handle.release();
+					throw new ToolAbortError("Command aborted");
+				}
+
+				const timeoutPromise = Bun.sleep(timeoutMs).then(() => ({ kind: "timeout" as const }));
+				// Poll until the process exits, times out, or the caller aborts.
+				for (;;) {
+					const racers: Array<Promise<BridgeRaceResult>> = [
+						exitPromise.then(s => ({ kind: "exit" as const, status: s })),
+						timeoutPromise,
+						Bun.sleep(250).then(() => ({ kind: "poll" as const })),
+					];
+					if (signal) {
+						racers.push(abortedP.then(() => ({ kind: "aborted" as const })));
+					}
+					const raced = await Promise.race(racers);
+
+					if (raced.kind === "aborted" || signal?.aborted) {
+						await handle.kill();
+						await handle.release();
+						throw new ToolAbortError("Command aborted");
+					}
+
+					if (raced.kind === "timeout") {
+						let current = { output: "", truncated: false };
+						try {
+							current = await handle.currentOutput();
+						} finally {
+							try {
+								await handle.kill();
+							} finally {
+								await handle.release();
+							}
+						}
+						const timedOutResult: BashInteractiveResult = {
+							output: current.output,
+							exitCode: undefined,
+							cancelled: false,
+							timedOut: true,
+							truncated: current.truncated,
+							totalLines: current.output.length > 0 ? current.output.split("\n").length : 0,
+							totalBytes: current.output.length,
+							outputLines: current.output.length > 0 ? current.output.split("\n").length : 0,
+							outputBytes: current.output.length,
+						};
+						return this.#buildCompletedResult(timedOutResult, timeoutSec, {
+							requestedTimeoutSec,
+							notices: [timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+							terminalId: handle.terminalId,
+						});
+					}
+
+					if (raced.kind === "exit") {
+						exitStatus = raced.status;
+						break;
+					}
+
+					// Poll tick: push current output so agent-loop transcript stays consistent.
+					const current = await handle.currentOutput();
+					onUpdate?.({
+						content: [{ type: "text", text: current.output }],
+						details: { terminalId: handle.terminalId },
+					});
+				}
+			} finally {
+				signal?.removeEventListener("abort", onAbortSignal);
+			}
+
+			// Fetch final output, then release the terminal.
+			const finalOutput = await handle.currentOutput();
+			await handle.release();
+
+			// Map exit status: null exitCode with a signal → treat as signal kill (137).
+			const rawExitCode = exitStatus.exitCode;
+			const exitCode: number | undefined = rawExitCode != null ? rawExitCode : exitStatus.signal ? 137 : undefined;
+
+			const outputText = finalOutput.output;
+			const outputByteLen = outputText.length;
+			const outputLineCount = outputText.length > 0 ? outputText.split("\n").length : 0;
+
+			const bridgeResult: BashResult = {
+				output: outputText,
+				exitCode,
+				cancelled: false,
+				truncated: finalOutput.truncated,
+				totalLines: outputLineCount,
+				totalBytes: outputByteLen,
+				outputLines: outputLineCount,
+				outputBytes: outputByteLen,
+			};
+
+			const bridgeNotices: string[] = [];
+			if (finalOutput.truncated) bridgeNotices.push("(output truncated)");
+			if (timeoutClampNotice) bridgeNotices.push(timeoutClampNotice);
+
+			return this.#buildCompletedResult(bridgeResult, timeoutSec, {
+				requestedTimeoutSec,
+				notices: bridgeNotices,
+				terminalId: handle.terminalId,
 			});
 		}
 

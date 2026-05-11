@@ -6,7 +6,7 @@ import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { glob, type SummaryResult, summarizeCode } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
-import { getRemoteDir, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
+import { getRemoteDir, logger, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { getFileReadCache } from "../edit/file-read-cache";
 import { isNotebookPath, readEditableNotebookText } from "../edit/notebook";
@@ -1045,12 +1045,25 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		}
 	}
 
+	#routeReadThroughBridge(
+		absolutePath: string,
+		options?: { line?: number; limit?: number },
+	): Promise<string> | undefined {
+		const bridge = this.session.getClientBridge?.();
+		if (!bridge?.capabilities.readTextFile || !bridge.readTextFile) return undefined;
+		return bridge.readTextFile({ path: absolutePath, ...options });
+	}
+
 	async #trySummarize(absolutePath: string, fileSize: number, signal?: AbortSignal): Promise<SummaryResult | null> {
 		if (fileSize > MAX_SUMMARY_BYTES) return null;
 
 		try {
 			throwIfAborted(signal);
-			const code = await Bun.file(absolutePath).text();
+			const bridgePromise = this.#routeReadThroughBridge(absolutePath);
+			const code =
+				bridgePromise !== undefined
+					? await bridgePromise.catch(() => Bun.file(absolutePath).text())
+					: await Bun.file(absolutePath).text();
 			throwIfAborted(signal);
 			if (countTextLines(code) > MAX_SUMMARY_LINES) return null;
 
@@ -1413,6 +1426,29 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (!content) {
 				// Raw text or line-range mode
 				const { offset, limit } = selToOffsetLimit(parsed);
+				// Try ACP bridge first — editor's in-memory buffer is source of truth.
+				// Request full text so local range rendering keeps normal context and line numbers.
+				const bridgePromise = this.#routeReadThroughBridge(absolutePath);
+				if (bridgePromise !== undefined) {
+					try {
+						const bridgeText = await bridgePromise;
+						const bridgeResult = this.#buildInMemoryTextResult(bridgeText, offset, limit, {
+							details: { resolvedPath: absolutePath, suffixResolution },
+							sourcePath: absolutePath,
+							entityLabel: "file",
+							raw: isRawSelector(parsed),
+						});
+						if (suffixResolution) {
+							const notice = `[Path '${suffixResolution.from}' not found; resolved to '${suffixResolution.to}' via suffix match]`;
+							const firstText = bridgeResult.content.find((c): c is TextContent => c.type === "text");
+							if (firstText) firstText.text = `${notice}\n${firstText.text}`;
+						}
+						return bridgeResult;
+					} catch (error) {
+						logger.warn("ACP fs readTextFile failed; falling back to disk", { path: absolutePath, error });
+					}
+				}
+
 				// User-requested 0-indexed range start. Lines BEFORE this become
 				// leading context (added below if offset is explicit).
 				const requestedStart = offset ? Math.max(0, offset - 1) : 0;

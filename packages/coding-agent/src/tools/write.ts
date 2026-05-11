@@ -609,6 +609,11 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		};
 	}
 
+	#routeWriteThroughBridge(absolutePath: string, content: string): Promise<void> | undefined {
+		const bridge = this.session.getClientBridge?.();
+		if (!bridge?.capabilities.writeTextFile || !bridge.writeTextFile) return undefined;
+		return bridge.writeTextFile({ path: absolutePath, content });
+	}
 	async execute(
 		_toolCallId: string,
 		{ path, content }: WriteParams,
@@ -680,6 +685,23 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			// Check if file exists and is auto-generated before overwriting
 			if (await fs.exists(absolutePath)) {
 				await assertEditableFile(absolutePath, path);
+			}
+
+			// Try ACP bridge first — no disk write when client handles it
+			const bridgePromise = this.#routeWriteThroughBridge(absolutePath, cleanContent);
+			if (bridgePromise !== undefined) {
+				try {
+					await bridgePromise;
+				} catch (error) {
+					throw new ToolError(error instanceof Error ? error.message : String(error));
+				}
+				invalidateFsScanAfterWrite(absolutePath);
+				const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
+				let resultText = `Successfully wrote ${cleanContent.length} bytes to ${displayPath}`;
+				if (stripped) {
+					resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
+				}
+				return { content: [{ type: "text", text: resultText }], details: {} };
 			}
 
 			const diagnostics = await this.#writethrough(absolutePath, cleanContent, signal, undefined, batchRequest);
