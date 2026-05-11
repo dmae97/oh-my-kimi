@@ -59,6 +59,7 @@ export interface AggregatedStats {
 	lastTimestamp: number;
 }
 
+export type TimeRange = "1h" | "24h" | "7d" | "30d" | "90d" | "all";
 export interface ModelStats extends AggregatedStats {
 	model: string;
 	provider: string;
@@ -111,5 +112,20 @@ export interface DashboardStats {
 	timeSeries: TimeSeriesPoint[];
 	modelSeries: ModelTimeSeriesPoint[];
 	modelPerformanceSeries: ModelPerformancePoint[];
+	costSeries: CostTimeSeriesPoint[];
+}
+
+export interface OverviewStats {
+	overall: AggregatedStats;
+	timeSeries: TimeSeriesPoint[];
+}
+
+export interface ModelDashboardStats {
+	byModel: ModelStats[];
+	modelSeries: ModelTimeSeriesPoint[];
+	modelPerformanceSeries: ModelPerformancePoint[];
+}
+
+export interface CostDashboardStats {
 	costSeries: CostTimeSeriesPoint[];
 }

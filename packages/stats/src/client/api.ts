@@ -1,11 +1,36 @@
-import type { DashboardStats, MessageStats, RequestDetails } from "./types";
+import type {
+	CostDashboardStats,
+	DashboardStats,
+	MessageStats,
+	ModelDashboardStats,
+	OverviewStats,
+	RequestDetails,
+} from "./types";
 
 const API_BASE = "/api";
 
-export async function getStats(): Promise<DashboardStats> {
-	const res = await fetch(`${API_BASE}/stats`);
+export async function getStats(range = "24h"): Promise<DashboardStats> {
+	const res = await fetch(`${API_BASE}/stats?range=${encodeURIComponent(range)}`);
 	if (!res.ok) throw new Error("Failed to fetch stats");
 	return res.json() as Promise<DashboardStats>;
+}
+
+export async function getOverviewStats(range = "24h"): Promise<OverviewStats> {
+	const res = await fetch(`${API_BASE}/stats/overview?range=${encodeURIComponent(range)}`);
+	if (!res.ok) throw new Error("Failed to fetch overview stats");
+	return res.json() as Promise<OverviewStats>;
+}
+
+export async function getModelDashboardStats(range = "24h"): Promise<ModelDashboardStats> {
+	const res = await fetch(`${API_BASE}/stats/model-dashboard?range=${encodeURIComponent(range)}`);
+	if (!res.ok) throw new Error("Failed to fetch model stats");
+	return res.json() as Promise<ModelDashboardStats>;
+}
+
+export async function getCostDashboardStats(range = "24h"): Promise<CostDashboardStats> {
+	const res = await fetch(`${API_BASE}/stats/costs?range=${encodeURIComponent(range)}`);
+	if (!res.ok) throw new Error("Failed to fetch cost stats");
+	return res.json() as Promise<CostDashboardStats>;
 }
 
 export async function getRecentRequests(limit = 50): Promise<MessageStats[]> {

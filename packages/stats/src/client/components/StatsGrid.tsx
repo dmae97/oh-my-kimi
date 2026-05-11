@@ -5,6 +5,15 @@ interface StatsGridProps {
 	stats: AggregatedStats;
 }
 
+const compactNumberFormatter = new Intl.NumberFormat(undefined, {
+	notation: "compact",
+	maximumFractionDigits: 1,
+});
+
+function formatCompactNumber(value: number): string {
+	return compactNumberFormatter.format(value);
+}
+
 const statConfig = [
 	{
 		key: "requests",
@@ -39,7 +48,7 @@ const statConfig = [
 		icon: Database,
 		color: "var(--accent-cyan)",
 		getValue: (s: AggregatedStats) => `${(s.cacheRate * 100).toFixed(1)}%`,
-		getDetail: (s: AggregatedStats) => `${(s.totalCacheReadTokens / 1000).toFixed(1)}k cached tokens`,
+		getDetail: (s: AggregatedStats) => `${formatCompactNumber(s.totalCacheReadTokens)} cached tokens`,
 	},
 	{
 		key: "errors",

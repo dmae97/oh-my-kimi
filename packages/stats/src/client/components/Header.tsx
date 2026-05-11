@@ -1,17 +1,28 @@
 import { Activity, RefreshCw } from "lucide-react";
+import type { TimeRange } from "../types";
 
 type Tab = "overview" | "requests" | "errors" | "models" | "costs";
+
+const tabs: Tab[] = ["overview", "requests", "errors", "models", "costs"];
+const timeRanges: { label: string; value: TimeRange }[] = [
+	{ label: "1h", value: "1h" },
+	{ label: "24h", value: "24h" },
+	{ label: "7d", value: "7d" },
+	{ label: "30d", value: "30d" },
+	{ label: "90d", value: "90d" },
+	{ label: "All", value: "all" },
+];
 
 interface HeaderProps {
 	activeTab: Tab;
 	onTabChange: (tab: Tab) => void;
 	onSync: () => void;
 	syncing: boolean;
+	timeRange: TimeRange;
+	onTimeRangeChange: (timeRange: TimeRange) => void;
 }
 
-const tabs: Tab[] = ["overview", "requests", "errors", "models", "costs"];
-
-export function Header({ activeTab, onTabChange, onSync, syncing }: HeaderProps) {
+export function Header({ activeTab, onTabChange, onSync, syncing, timeRange, onTimeRangeChange }: HeaderProps) {
 	return (
 		<header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 mb-8 border-b border-[var(--border-subtle)]">
 			<div className="flex items-center gap-3">
@@ -34,6 +45,19 @@ export function Header({ activeTab, onTabChange, onSync, syncing }: HeaderProps)
 							className={`tab-btn capitalize ${activeTab === tab ? "active" : ""}`}
 						>
 							{tab}
+						</button>
+					))}
+				</div>
+				<div className="flex bg-[var(--bg-surface)] rounded-[var(--radius-md)] p-1 border border-[var(--border-subtle)]">
+					{timeRanges.map(range => (
+						<button
+							key={range.value}
+							type="button"
+							onClick={() => onTimeRangeChange(range.value)}
+							className={`tab-btn ${timeRange === range.value ? "active" : ""}`}
+							title={range.value === "all" ? "All time" : `Last ${range.label}`}
+						>
+							{range.label}
 						</button>
 					))}
 				</div>

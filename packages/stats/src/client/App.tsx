@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { getRecentErrors, getRecentRequests, getStats, sync } from "./api";
+import {
+	getCostDashboardStats,
+	getModelDashboardStats,
+	getOverviewStats,
+	getRecentErrors,
+	getRecentRequests,
+	sync,
+} from "./api";
 import { ChartsContainer } from "./components/ChartsContainer";
 import { CostChart } from "./components/CostChart";
 import { CostSummary } from "./components/CostSummary";
@@ -8,64 +15,90 @@ import { ModelsTable } from "./components/ModelsTable";
 import { RequestDetail } from "./components/RequestDetail";
 import { RequestList } from "./components/RequestList";
 import { StatsGrid } from "./components/StatsGrid";
-import type { DashboardStats, MessageStats } from "./types";
+import type { CostDashboardStats, MessageStats, ModelDashboardStats, OverviewStats, TimeRange } from "./types";
 
 type Tab = "overview" | "requests" | "errors" | "models" | "costs";
 
 export default function App() {
-	const [stats, setStats] = useState<DashboardStats | null>(null);
+	const [overviewStats, setOverviewStats] = useState<OverviewStats | null>(null);
+	const [modelStats, setModelStats] = useState<ModelDashboardStats | null>(null);
+	const [costStats, setCostStats] = useState<CostDashboardStats | null>(null);
 	const [recentRequests, setRecentRequests] = useState<MessageStats[]>([]);
 	const [recentErrors, setRecentErrors] = useState<MessageStats[]>([]);
 	const [selectedRequest, setSelectedRequest] = useState<number | null>(null);
 	const [syncing, setSyncing] = useState(false);
 	const [activeTab, setActiveTab] = useState<Tab>("overview");
+	const [timeRange, setTimeRange] = useState<TimeRange>("24h");
 
-	const loadData = useCallback(async () => {
+	const loadRecentLists = useCallback(async () => {
 		try {
-			const [s, r, e] = await Promise.all([getStats(), getRecentRequests(50), getRecentErrors(50)]);
-			setStats(s);
-			setRecentRequests(r);
-			setRecentErrors(e);
+			const [requests, errors] = await Promise.all([getRecentRequests(50), getRecentErrors(50)]);
+			setRecentRequests(requests);
+			setRecentErrors(errors);
 		} catch (err) {
 			console.error(err);
 		}
 	}, []);
 
+	const loadActiveTabStats = useCallback(async () => {
+		try {
+			if (activeTab === "models") {
+				setModelStats(await getModelDashboardStats(timeRange));
+				return;
+			}
+			if (activeTab === "costs") {
+				setCostStats(await getCostDashboardStats(timeRange));
+				return;
+			}
+			if (activeTab === "overview") {
+				setOverviewStats(await getOverviewStats(timeRange));
+			}
+		} catch (err) {
+			console.error(err);
+		}
+	}, [activeTab, timeRange]);
+
 	const handleSync = async () => {
 		setSyncing(true);
 		try {
 			await sync();
-			await loadData();
+			await Promise.all([loadActiveTabStats(), loadRecentLists()]);
 		} finally {
 			setSyncing(false);
 		}
 	};
 
 	useEffect(() => {
-		loadData();
-		const interval = setInterval(loadData, 30000);
+		loadRecentLists();
+		const interval = setInterval(loadRecentLists, 30000);
 		return () => clearInterval(interval);
-	}, [loadData]);
+	}, [loadRecentLists]);
 
-	if (!stats) {
-		return (
-			<div className="min-h-screen flex items-center justify-center">
-				<div className="flex items-center gap-3 text-[var(--text-muted)]">
-					<div className="w-5 h-5 border-2 border-[var(--border-default)] border-t-[var(--accent-cyan)] rounded-full spin" />
-					<span className="text-sm">Loading analytics...</span>
-				</div>
-			</div>
-		);
-	}
+	useEffect(() => {
+		loadActiveTabStats();
+		const interval = setInterval(loadActiveTabStats, 30000);
+		return () => clearInterval(interval);
+	}, [loadActiveTabStats]);
 
 	return (
 		<div className="min-h-screen">
 			<div className="max-w-[1600px] mx-auto px-6 py-6">
-				<Header activeTab={activeTab} onTabChange={setActiveTab} onSync={handleSync} syncing={syncing} />
+				<Header
+					activeTab={activeTab}
+					onTabChange={setActiveTab}
+					onSync={handleSync}
+					syncing={syncing}
+					timeRange={timeRange}
+					onTimeRangeChange={setTimeRange}
+				/>
 
 				{activeTab === "overview" && (
 					<div className="space-y-6 animate-fade-in">
-						<StatsGrid stats={stats.overall} />
+						{overviewStats ? (
+							<StatsGrid stats={overviewStats.overall} />
+						) : (
+							<LoadingState label="Loading overview..." />
+						)}
 
 						<div className="grid lg:grid-cols-2 gap-6">
 							<RequestList
@@ -104,21 +137,47 @@ export default function App() {
 
 				{activeTab === "models" && (
 					<div className="space-y-6 animate-fade-in">
-						<ChartsContainer modelSeries={stats.modelSeries} />
-						<ModelsTable models={stats.byModel} performanceSeries={stats.modelPerformanceSeries} />
+						{modelStats ? (
+							<>
+								<ChartsContainer modelSeries={modelStats.modelSeries} />
+								<ModelsTable
+									models={modelStats.byModel}
+									performanceSeries={modelStats.modelPerformanceSeries}
+								/>
+							</>
+						) : (
+							<LoadingState label="Loading models..." />
+						)}
 					</div>
 				)}
 
 				{activeTab === "costs" && (
 					<div className="space-y-6 animate-fade-in">
-						<CostSummary costSeries={stats.costSeries} />
-						<CostChart costSeries={stats.costSeries} />
+						{costStats ? (
+							<>
+								<CostSummary costSeries={costStats.costSeries} />
+								<CostChart costSeries={costStats.costSeries} />
+							</>
+						) : (
+							<LoadingState label="Loading costs..." />
+						)}
 					</div>
 				)}
 
 				{selectedRequest !== null && (
 					<RequestDetail id={selectedRequest} onClose={() => setSelectedRequest(null)} />
 				)}
+			</div>
+		</div>
+	);
+}
+
+function LoadingState({ label }: { label: string }) {
+	return (
+		<div className="min-h-[180px] flex items-center justify-center">
+			<div className="flex items-center gap-3 text-[var(--text-muted)]">
+				<div className="w-5 h-5 border-2 border-[var(--border-default)] border-t-[var(--accent-cyan)] rounded-full spin" />
+				<span className="text-sm">{label}</span>
 			</div>
 		</div>
 	);
