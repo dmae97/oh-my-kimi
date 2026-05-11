@@ -2,6 +2,9 @@ import * as fs from "node:fs";
 import {
 	getRecentErrors as dbGetRecentErrors,
 	getRecentRequests as dbGetRecentRequests,
+	getBehaviorByModel,
+	getBehaviorOverall,
+	getBehaviorTimeSeries,
 	getCostTimeSeries,
 	getFileOffset,
 	getMessageById,
@@ -14,10 +17,11 @@ import {
 	getTimeSeries,
 	initDb,
 	insertMessageStats,
+	insertUserMessageStats,
 	setFileOffset,
 } from "./db";
 import { getSessionEntry, listAllSessionFiles, parseSessionFile } from "./parser";
-import type { DashboardStats, MessageStats, RequestDetails } from "./types";
+import type { BehaviorDashboardStats, DashboardStats, MessageStats, RequestDetails } from "./types";
 
 /**
  * Sync a single session file to the database.
@@ -42,16 +46,19 @@ async function syncSessionFile(sessionFile: string): Promise<number> {
 
 	// Parse file from last offset
 	const fromOffset = stored?.offset ?? 0;
-	const { stats, newOffset } = await parseSessionFile(sessionFile, fromOffset);
+	const { stats, userStats, newOffset } = await parseSessionFile(sessionFile, fromOffset);
 
 	if (stats.length > 0) {
 		insertMessageStats(stats);
+	}
+	if (userStats.length > 0) {
+		insertUserMessageStats(userStats);
 	}
 
 	// Update offset tracker
 	setFileOffset(sessionFile, newOffset, lastModified);
 
-	return stats.length;
+	return stats.length + userStats.length;
 }
 
 /**
@@ -237,4 +244,14 @@ export async function getRequestDetails(id: number): Promise<RequestDetails | nu
 export async function getTotalMessageCount(): Promise<number> {
 	await initDb();
 	return getMessageCount();
+}
+
+export async function getBehaviorDashboardStats(range?: string | null): Promise<BehaviorDashboardStats> {
+	await initDb();
+	const { cutoff } = getTimeRangeConfig(range);
+	return {
+		overall: getBehaviorOverall(cutoff),
+		byModel: getBehaviorByModel(cutoff),
+		behaviorSeries: getBehaviorTimeSeries(cutoff),
+	};
 }

@@ -129,3 +129,41 @@ export interface ModelDashboardStats {
 export interface CostDashboardStats {
 	costSeries: CostTimeSeriesPoint[];
 }
+
+export interface BehaviorTimeSeriesPoint {
+	timestamp: number;
+	model: string;
+	provider: string;
+	messages: number;
+	yellingSentences: number;
+	profanity: number;
+	dramaRuns: number;
+	chars: number;
+}
+
+export interface BehaviorOverallStats {
+	totalMessages: number;
+	totalYellingSentences: number;
+	totalProfanity: number;
+	totalDramaRuns: number;
+	totalChars: number;
+	firstTimestamp: number;
+	lastTimestamp: number;
+}
+
+export interface BehaviorModelStats {
+	model: string;
+	provider: string;
+	totalMessages: number;
+	totalYellingSentences: number;
+	totalProfanity: number;
+	totalDramaRuns: number;
+	totalChars: number;
+	lastTimestamp: number;
+}
+
+export interface BehaviorDashboardStats {
+	overall: BehaviorOverallStats;
+	byModel: BehaviorModelStats[];
+	behaviorSeries: BehaviorTimeSeriesPoint[];
+}

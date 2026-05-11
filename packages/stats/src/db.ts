@@ -4,6 +4,9 @@ import { type GeneratedProvider, getBundledModel, type Usage } from "@oh-my-pi/p
 import { getConfigRootDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
 import type {
 	AggregatedStats,
+	BehaviorModelStats,
+	BehaviorOverallStats,
+	BehaviorTimeSeriesPoint,
 	CostTimeSeriesPoint,
 	FolderStats,
 	MessageStats,
@@ -11,6 +14,7 @@ import type {
 	ModelStats,
 	ModelTimeSeriesPoint,
 	TimeSeriesPoint,
+	UserMessageStats,
 } from "./types";
 
 type ModelCost = { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -83,6 +87,30 @@ export async function initDb(): Promise<Database> {
 			offset INTEGER NOT NULL,
 			last_modified INTEGER NOT NULL
 		);
+
+		CREATE TABLE IF NOT EXISTS user_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_file TEXT NOT NULL,
+			entry_id TEXT NOT NULL,
+			folder TEXT NOT NULL,
+			timestamp INTEGER NOT NULL,
+			model TEXT,
+			provider TEXT,
+			chars INTEGER NOT NULL,
+			words INTEGER NOT NULL,
+			yelling_sentences INTEGER NOT NULL,
+			profanity INTEGER NOT NULL,
+			drama_runs INTEGER NOT NULL,
+			UNIQUE(session_file, entry_id)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp ON user_messages(timestamp);
+		CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp_model ON user_messages(timestamp, model, provider);
+
+		CREATE TABLE IF NOT EXISTS meta (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);
 	`);
 
 	const messageColumns = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
@@ -90,6 +118,38 @@ export async function initDb(): Promise<Database> {
 		db.exec("ALTER TABLE messages ADD COLUMN premium_requests REAL NOT NULL DEFAULT 0");
 	}
 	db.exec("UPDATE messages SET premium_requests = 0 WHERE premium_requests IS NULL");
+	// Bumping the metric definition (yelling sentences vs caps words) invalidates
+	// previously-ingested rows. If the legacy column is present we drop the table
+	// outright; the `IF NOT EXISTS` create above already gave us the new schema
+	// in parallel, but we want a clean wipe + re-ingest. The accompanying
+	// `backfillUserMessages` bump (v2) clears `file_offsets` so the next sync
+	// re-parses every session.
+	const userMessageColumns = db.prepare("PRAGMA table_info(user_messages)").all() as {
+		name: string;
+	}[];
+	if (userMessageColumns.some(column => column.name === "caps_words")) {
+		db.exec("DROP TABLE user_messages");
+		db.exec(`
+			CREATE TABLE user_messages (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				session_file TEXT NOT NULL,
+				entry_id TEXT NOT NULL,
+				folder TEXT NOT NULL,
+				timestamp INTEGER NOT NULL,
+				model TEXT,
+				provider TEXT,
+				chars INTEGER NOT NULL,
+				words INTEGER NOT NULL,
+				yelling_sentences INTEGER NOT NULL,
+				profanity INTEGER NOT NULL,
+				drama_runs INTEGER NOT NULL,
+				UNIQUE(session_file, entry_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp ON user_messages(timestamp);
+			CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp_model ON user_messages(timestamp, model, provider);
+		`);
+	}
+	backfillUserMessages(db);
 	backfillMissingCatalogCosts(db);
 	return db;
 }
@@ -633,5 +693,212 @@ export function getCostTimeSeries(days = 90, cutoff?: number | null): CostTimeSe
 		costCacheRead: row.cost_cache_read,
 		costCacheWrite: row.cost_cache_write,
 		requests: row.requests,
+	}));
+}
+
+/**
+ * Reset `file_offsets` (and any existing `user_messages` rows) so the next
+ * sync re-parses every session and re-derives behavioral metrics. Run once
+ * per metric-definition bump; the meta sentinel records the version.
+ *
+ * - v1: initial introduction of `user_messages`.
+ * - v2: yelling-sentence metric replaces caps-word counts; existing rows are
+ *   computed under the old definition and must be discarded.
+ *
+ * Existing `messages` rows are unaffected — `INSERT OR IGNORE` keeps them.
+ */
+function backfillUserMessages(database: Database): void {
+	const row = database.prepare("SELECT value FROM meta WHERE key = 'user_messages_v2'").get() as
+		| { value: string }
+		| undefined;
+	if (row) return;
+
+	database.exec("DELETE FROM user_messages");
+	database.exec("DELETE FROM file_offsets");
+	database
+		.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
+		.run("user_messages_v2", String(Date.now()));
+}
+
+/**
+ * Insert user-message stats. Idempotent via UNIQUE(session_file, entry_id).
+ */
+export function insertUserMessageStats(stats: UserMessageStats[]): number {
+	if (!db || stats.length === 0) return 0;
+
+	const stmt = db.prepare(`
+		INSERT OR IGNORE INTO user_messages (
+			session_file, entry_id, folder, timestamp, model, provider,
+			chars, words, yelling_sentences, profanity, drama_runs
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`);
+
+	let inserted = 0;
+	const insert = db.transaction(() => {
+		for (const s of stats) {
+			const result = stmt.run(
+				s.sessionFile,
+				s.entryId,
+				s.folder,
+				s.timestamp,
+				s.model,
+				s.provider,
+				s.chars,
+				s.words,
+				s.yellingSentences,
+				s.profanity,
+				s.dramaRuns,
+			);
+			if (result.changes > 0) inserted++;
+		}
+	});
+	insert();
+	return inserted;
+}
+
+const UNKNOWN_MODEL = "unknown";
+
+interface BehaviorSeriesRow {
+	bucket: number;
+	model: string;
+	provider: string;
+	messages: number;
+	yelling_sentences: number | null;
+	profanity: number | null;
+	drama_runs: number | null;
+	chars: number | null;
+}
+
+/**
+ * Daily behavioral time series, grouped by responding model+provider.
+ */
+export function getBehaviorTimeSeries(cutoff?: number | null): BehaviorTimeSeriesPoint[] {
+	if (!db) return [];
+	const hasCutoff = cutoff !== null && cutoff !== undefined && cutoff > 0;
+	const stmt = db.prepare(`
+		SELECT
+			(timestamp / 86400000) * 86400000 as bucket,
+			COALESCE(model, ?) as model,
+			COALESCE(provider, ?) as provider,
+			COUNT(*) as messages,
+			SUM(yelling_sentences) as yelling_sentences,
+			SUM(profanity) as profanity,
+			SUM(drama_runs) as drama_runs,
+			SUM(chars) as chars
+		FROM user_messages
+		${hasCutoff ? "WHERE timestamp >= ?" : ""}
+		GROUP BY bucket, model, provider
+		ORDER BY bucket ASC
+	`);
+	const rows = (
+		hasCutoff ? stmt.all(UNKNOWN_MODEL, UNKNOWN_MODEL, cutoff) : stmt.all(UNKNOWN_MODEL, UNKNOWN_MODEL)
+	) as BehaviorSeriesRow[];
+	return rows.map(row => ({
+		timestamp: row.bucket,
+		model: row.model,
+		provider: row.provider,
+		messages: row.messages,
+		yellingSentences: row.yelling_sentences ?? 0,
+		profanity: row.profanity ?? 0,
+		dramaRuns: row.drama_runs ?? 0,
+		chars: row.chars ?? 0,
+	}));
+}
+
+interface BehaviorOverallRow {
+	total_messages: number;
+	total_yelling_sentences: number | null;
+	total_profanity: number | null;
+	total_drama_runs: number | null;
+	total_chars: number | null;
+	first_timestamp: number | null;
+	last_timestamp: number | null;
+}
+
+/**
+ * Overall behavioral totals across the cutoff window.
+ */
+export function getBehaviorOverall(cutoff?: number | null): BehaviorOverallStats {
+	const empty: BehaviorOverallStats = {
+		totalMessages: 0,
+		totalYellingSentences: 0,
+		totalProfanity: 0,
+		totalDramaRuns: 0,
+		totalChars: 0,
+		firstTimestamp: 0,
+		lastTimestamp: 0,
+	};
+	if (!db) return empty;
+	const hasCutoff = cutoff !== null && cutoff !== undefined && cutoff > 0;
+	const stmt = db.prepare(`
+		SELECT
+			COUNT(*) as total_messages,
+			SUM(yelling_sentences) as total_yelling_sentences,
+			SUM(profanity) as total_profanity,
+			SUM(drama_runs) as total_drama_runs,
+			SUM(chars) as total_chars,
+			MIN(timestamp) as first_timestamp,
+			MAX(timestamp) as last_timestamp
+		FROM user_messages
+		${hasCutoff ? "WHERE timestamp >= ?" : ""}
+	`);
+	const row = (hasCutoff ? stmt.get(cutoff) : stmt.get()) as BehaviorOverallRow | undefined;
+	if (!row?.total_messages) return empty;
+	return {
+		totalMessages: row.total_messages,
+		totalYellingSentences: row.total_yelling_sentences ?? 0,
+		totalProfanity: row.total_profanity ?? 0,
+		totalDramaRuns: row.total_drama_runs ?? 0,
+		totalChars: row.total_chars ?? 0,
+		firstTimestamp: row.first_timestamp ?? 0,
+		lastTimestamp: row.last_timestamp ?? 0,
+	};
+}
+
+interface BehaviorByModelRow {
+	model: string;
+	provider: string;
+	total_messages: number;
+	total_yelling_sentences: number | null;
+	total_profanity: number | null;
+	total_drama_runs: number | null;
+	total_chars: number | null;
+	last_timestamp: number | null;
+}
+
+/**
+ * Per-model behavioral totals over the cutoff window. "Unknown" represents
+ * user messages that never received an assistant reply.
+ */
+export function getBehaviorByModel(cutoff?: number | null): BehaviorModelStats[] {
+	if (!db) return [];
+	const hasCutoff = cutoff !== null && cutoff !== undefined && cutoff > 0;
+	const stmt = db.prepare(`
+		SELECT
+			COALESCE(model, ?) as model,
+			COALESCE(provider, ?) as provider,
+			COUNT(*) as total_messages,
+			SUM(yelling_sentences) as total_yelling_sentences,
+			SUM(profanity) as total_profanity,
+			SUM(drama_runs) as total_drama_runs,
+			SUM(chars) as total_chars,
+			MAX(timestamp) as last_timestamp
+		FROM user_messages
+		${hasCutoff ? "WHERE timestamp >= ?" : ""}
+		GROUP BY model, provider
+		ORDER BY total_messages DESC
+	`);
+	const rows = (
+		hasCutoff ? stmt.all(UNKNOWN_MODEL, UNKNOWN_MODEL, cutoff) : stmt.all(UNKNOWN_MODEL, UNKNOWN_MODEL)
+	) as BehaviorByModelRow[];
+	return rows.map(row => ({
+		model: row.model,
+		provider: row.provider,
+		totalMessages: row.total_messages,
+		totalYellingSentences: row.total_yelling_sentences ?? 0,
+		totalProfanity: row.total_profanity ?? 0,
+		totalDramaRuns: row.total_drama_runs ?? 0,
+		totalChars: row.total_chars ?? 0,
+		lastTimestamp: row.last_timestamp ?? 0,
 	}));
 }

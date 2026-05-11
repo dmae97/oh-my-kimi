@@ -195,3 +195,84 @@ export interface SessionMessageEntry {
 }
 
 export type SessionEntry = SessionHeader | SessionMessageEntry | { type: string };
+
+/**
+ * Behavioral stats extracted from a single user message.
+ */
+export interface UserMessageStats {
+	/** Database ID */
+	id?: number;
+	/** Session file path */
+	sessionFile: string;
+	/** Entry ID within the session */
+	entryId: string;
+	/** Folder/project path */
+	folder: string;
+	/** Unix timestamp in ms */
+	timestamp: number;
+	/** Model that responded to this user message, if linked */
+	model: string | null;
+	/** Provider that responded to this user message, if linked */
+	provider: string | null;
+	/** Total characters of message text */
+	chars: number;
+	/** Whitespace-delimited word count */
+	words: number;
+	/** Yelling sentences (> 50% uppercase letters) */
+	yellingSentences: number;
+	/** Profanity hits */
+	profanity: number;
+	/** Runs of 3+ consecutive `!` / `?` */
+	dramaRuns: number;
+}
+
+/**
+ * Behavior time-series point (daily bucket, per responding model).
+ */
+export interface BehaviorTimeSeriesPoint {
+	/** Bucket timestamp (start of day) */
+	timestamp: number;
+	/** Responding model ("unknown" if user msg never got a reply) */
+	model: string;
+	/** Responding provider */
+	provider: string;
+	/** Number of user messages in bucket */
+	messages: number;
+	/** Total yelling sentences in bucket */
+	yellingSentences: number;
+	/** Total profanity hits in bucket */
+	profanity: number;
+	/** Total drama runs in bucket */
+	dramaRuns: number;
+	/** Total characters in bucket */
+	chars: number;
+}
+
+export interface BehaviorOverallStats {
+	totalMessages: number;
+	totalYellingSentences: number;
+	totalProfanity: number;
+	totalDramaRuns: number;
+	totalChars: number;
+	firstTimestamp: number;
+	lastTimestamp: number;
+}
+
+/**
+ * Per-model behavioral aggregate over the active range.
+ */
+export interface BehaviorModelStats {
+	model: string;
+	provider: string;
+	totalMessages: number;
+	totalYellingSentences: number;
+	totalProfanity: number;
+	totalDramaRuns: number;
+	totalChars: number;
+	lastTimestamp: number;
+}
+export interface BehaviorDashboardStats {
+	overall: BehaviorOverallStats;
+	byModel: BehaviorModelStats[];
+	behaviorSeries: BehaviorTimeSeriesPoint[];
+}

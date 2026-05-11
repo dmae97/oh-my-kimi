@@ -1,4 +1,5 @@
 import type {
+	BehaviorDashboardStats,
 	CostDashboardStats,
 	DashboardStats,
 	MessageStats,
@@ -55,4 +56,10 @@ export async function sync(): Promise<any> {
 	const res = await fetch(`${API_BASE}/sync`);
 	if (!res.ok) throw new Error("Failed to sync");
 	return res.json();
+}
+
+export async function getBehaviorDashboardStats(range = "24h"): Promise<BehaviorDashboardStats> {
+	const res = await fetch(`${API_BASE}/stats/behavior?range=${encodeURIComponent(range)}`);
+	if (!res.ok) throw new Error("Failed to fetch behavior stats");
+	return res.json() as Promise<BehaviorDashboardStats>;
 }

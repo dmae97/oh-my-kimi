@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+	getBehaviorDashboardStats,
 	getCostDashboardStats,
 	getModelDashboardStats,
 	getOverviewStats,
@@ -7,6 +8,9 @@ import {
 	getRecentRequests,
 	sync,
 } from "./api";
+import { BehaviorChart } from "./components/BehaviorChart";
+import { BehaviorModelsTable } from "./components/BehaviorModelsTable";
+import { BehaviorSummary } from "./components/BehaviorSummary";
 import { ChartsContainer } from "./components/ChartsContainer";
 import { CostChart } from "./components/CostChart";
 import { CostSummary } from "./components/CostSummary";
@@ -15,14 +19,22 @@ import { ModelsTable } from "./components/ModelsTable";
 import { RequestDetail } from "./components/RequestDetail";
 import { RequestList } from "./components/RequestList";
 import { StatsGrid } from "./components/StatsGrid";
-import type { CostDashboardStats, MessageStats, ModelDashboardStats, OverviewStats, TimeRange } from "./types";
+import type {
+	BehaviorDashboardStats,
+	CostDashboardStats,
+	MessageStats,
+	ModelDashboardStats,
+	OverviewStats,
+	TimeRange,
+} from "./types";
 
-type Tab = "overview" | "requests" | "errors" | "models" | "costs";
+type Tab = "overview" | "requests" | "errors" | "models" | "costs" | "behavior";
 
 export default function App() {
 	const [overviewStats, setOverviewStats] = useState<OverviewStats | null>(null);
 	const [modelStats, setModelStats] = useState<ModelDashboardStats | null>(null);
 	const [costStats, setCostStats] = useState<CostDashboardStats | null>(null);
+	const [behaviorStats, setBehaviorStats] = useState<BehaviorDashboardStats | null>(null);
 	const [recentRequests, setRecentRequests] = useState<MessageStats[]>([]);
 	const [recentErrors, setRecentErrors] = useState<MessageStats[]>([]);
 	const [selectedRequest, setSelectedRequest] = useState<number | null>(null);
@@ -48,6 +60,10 @@ export default function App() {
 			}
 			if (activeTab === "costs") {
 				setCostStats(await getCostDashboardStats(timeRange));
+				return;
+			}
+			if (activeTab === "behavior") {
+				setBehaviorStats(await getBehaviorDashboardStats(timeRange));
 				return;
 			}
 			if (activeTab === "overview") {
@@ -160,6 +176,26 @@ export default function App() {
 							</>
 						) : (
 							<LoadingState label="Loading costs..." />
+						)}
+					</div>
+				)}
+
+				{activeTab === "behavior" && (
+					<div className="space-y-6 animate-fade-in">
+						{behaviorStats ? (
+							<>
+								<BehaviorSummary
+									overall={behaviorStats.overall}
+									behaviorSeries={behaviorStats.behaviorSeries}
+								/>
+								<BehaviorChart behaviorSeries={behaviorStats.behaviorSeries} />
+								<BehaviorModelsTable
+									models={behaviorStats.byModel}
+									behaviorSeries={behaviorStats.behaviorSeries}
+								/>
+							</>
+						) : (
+							<LoadingState label="Loading behavior..." />
 						)}
 					</div>
 				)}

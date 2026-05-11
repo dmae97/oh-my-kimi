@@ -53,9 +53,6 @@ const CHART_THEMES = {
 	},
 } as const;
 
-const RANGE_OPTIONS = [14, 30, 90] as const;
-type RangeDays = (typeof RANGE_OPTIONS)[number];
-
 interface CostChartProps {
 	costSeries: CostTimeSeriesPoint[];
 }
@@ -88,16 +85,12 @@ function makeBarLabelPlugin(color: string): Plugin<"bar"> {
 
 export function CostChart({ costSeries }: CostChartProps) {
 	const [byModel, setByModel] = useState(false);
-	const [days, setDays] = useState<RangeDays>(30);
 	const theme = useSystemTheme();
 	const chartTheme = CHART_THEMES[theme];
 
-	const cutoff = Date.now() - days * 86400000;
-	const filtered = useMemo(() => costSeries.filter(p => p.timestamp >= cutoff), [costSeries, cutoff]);
-
 	const chartData = useMemo(
-		() => (byModel ? buildByModelSeries(filtered) : buildAggregateSeries(filtered)),
-		[filtered, byModel],
+		() => (byModel ? buildByModelSeries(costSeries) : buildAggregateSeries(costSeries)),
+		[costSeries, byModel],
 	);
 
 	const sharedPlugins = {
@@ -175,13 +168,7 @@ export function CostChart({ costSeries }: CostChartProps) {
 		};
 
 		return (
-			<ChartWrapper
-				byModel={byModel}
-				days={days}
-				onByModelChange={setByModel}
-				onDaysChange={setDays}
-				empty={chartData.labels.length === 0}
-			>
+			<ChartWrapper byModel={byModel} onByModelChange={setByModel} empty={chartData.labels.length === 0}>
 				<Line data={lineData} options={lineOptions} />
 			</ChartWrapper>
 		);
@@ -214,13 +201,7 @@ export function CostChart({ costSeries }: CostChartProps) {
 	};
 
 	return (
-		<ChartWrapper
-			byModel={byModel}
-			days={days}
-			onByModelChange={setByModel}
-			onDaysChange={setDays}
-			empty={chartData.labels.length === 0}
-		>
+		<ChartWrapper byModel={byModel} onByModelChange={setByModel} empty={chartData.labels.length === 0}>
 			<Bar data={barData} options={barOptions} plugins={[barLabelPlugin]} />
 		</ChartWrapper>
 	);
@@ -228,14 +209,12 @@ export function CostChart({ costSeries }: CostChartProps) {
 
 interface ChartWrapperProps {
 	byModel: boolean;
-	days: RangeDays;
 	onByModelChange: (v: boolean) => void;
-	onDaysChange: (v: RangeDays) => void;
 	empty: boolean;
 	children: React.ReactNode;
 }
 
-function ChartWrapper({ byModel, days, onByModelChange, onDaysChange, empty, children }: ChartWrapperProps) {
+function ChartWrapper({ byModel, onByModelChange, empty, children }: ChartWrapperProps) {
 	return (
 		<div className="surface overflow-hidden">
 			<div className="px-5 py-4 border-b border-[var(--border-subtle)] flex items-center justify-between gap-4 flex-wrap">
@@ -259,18 +238,6 @@ function ChartWrapper({ byModel, days, onByModelChange, onDaysChange, empty, chi
 						>
 							By Model
 						</button>
-					</div>
-					<div className="flex bg-[var(--bg-surface)] rounded-[var(--radius-sm)] p-0.5 border border-[var(--radius-sm)] border-[var(--border-subtle)]">
-						{RANGE_OPTIONS.map(d => (
-							<button
-								key={d}
-								type="button"
-								onClick={() => onDaysChange(d)}
-								className={`tab-btn text-xs ${days === d ? "active" : ""}`}
-							>
-								{d}d
-							</button>
-						))}
 					</div>
 				</div>
 			</div>

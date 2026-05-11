@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
 import {
+	getBehaviorDashboardStats,
 	getCostDashboardStats,
 	getDashboardStats,
 	getModelDashboardStats,
@@ -190,6 +191,11 @@ async function handleApi(req: Request): Promise<Response> {
 
 	if (path === "/api/stats/costs") {
 		const stats = await getCostDashboardStats(range);
+		return Response.json(stats);
+	}
+
+	if (path === "/api/stats/behavior") {
+		const stats = await getBehaviorDashboardStats(range);
 		return Response.json(stats);
 	}
 
