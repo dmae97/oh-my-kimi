@@ -1779,7 +1779,7 @@ export async function executePatchSingle(
 		content: [{ type: "text", text: resultText }],
 		details: {
 			diff: diffResult.diff,
-			path,
+			path: resolvedPath,
 			firstChangedLine: diffResult.firstChangedLine,
 			diagnostics: mergedDiagnostics,
 			op,

@@ -145,7 +145,7 @@ async function executeApplyPatchPerFile(
 			const result = await run(batchRequest);
 			const details = result.details;
 			perFileResults.push({
-				path,
+				path: details?.path ?? path,
 				diff: details?.diff ?? "",
 				firstChangedLine: details?.firstChangedLine,
 				diagnostics: details?.diagnostics,
@@ -207,6 +207,7 @@ async function executeSinglePathEntries(
 	const diffTexts: string[] = [];
 	let firstChangedLine: number | undefined;
 	let errorCount = 0;
+	let metadataPath: string | undefined;
 	let hasFirstOldText = false;
 	let firstOldText: string | undefined;
 	let hasLastNewText = false;
@@ -223,6 +224,9 @@ async function executeSinglePathEntries(
 			const details = result.details;
 			if (details?.diff) diffTexts.push(details.diff);
 			firstChangedLine ??= details?.firstChangedLine;
+			if (details?.path) {
+				metadataPath ??= details.path;
+			}
 			if (details && "oldText" in details && !hasFirstOldText) {
 				firstOldText = details.oldText;
 				hasFirstOldText = true;
@@ -256,7 +260,7 @@ async function executeSinglePathEntries(
 		details: {
 			diff: diffTexts.join("\n"),
 			firstChangedLine,
-			path,
+			path: metadataPath ?? path,
 			...(hasFirstOldText ? { oldText: firstOldText } : {}),
 			...(hasLastNewText ? { newText: lastNewText } : {}),
 		},

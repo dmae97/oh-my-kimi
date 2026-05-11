@@ -505,7 +505,7 @@ const noOpUIContext: ExtensionUIContext = {
 // ============================================================================
 
 /** Tools that require user permission before execution when an ACP client is connected. */
-const PERMISSION_REQUIRED_TOOLS = new Set(["bash", "edit", "write", "ast_edit"]);
+const PERMISSION_REQUIRED_TOOLS = new Set(["bash", "edit", "write", "ast_edit", "delete", "move"]);
 
 /** Permission options presented to the client on each gated tool call. */
 const PERMISSION_OPTIONS: ClientBridgePermissionOption[] = [
@@ -520,9 +520,31 @@ function derivePermissionTitle(toolName: string, args: unknown): string {
 	if (toolName === "bash") {
 		const cmd = typeof a.command === "string" ? a.command.slice(0, 80) : undefined;
 		if (cmd) return cmd;
-	} else if (toolName === "edit" || toolName === "write") {
+	} else if (toolName === "edit" || toolName === "write" || toolName === "delete") {
 		const p = typeof a.path === "string" ? a.path : undefined;
-		if (p) return `${toolName === "edit" ? "Edit" : "Write"} ${p}`;
+		if (p) {
+			const verb = toolName === "edit" ? "Edit" : toolName === "write" ? "Write" : "Delete";
+			return `${verb} ${p}`;
+		}
+	} else if (toolName === "move") {
+		const from =
+			typeof a.oldPath === "string"
+				? a.oldPath
+				: typeof a.path === "string"
+					? a.path
+					: typeof a.from === "string"
+						? a.from
+						: undefined;
+		const to =
+			typeof a.newPath === "string"
+				? a.newPath
+				: typeof a.to === "string"
+					? a.to
+					: typeof a.destination === "string"
+						? a.destination
+						: undefined;
+		if (from && to) return `Move ${from} to ${to}`;
+		if (from) return `Move ${from}`;
 	} else if (toolName === "ast_edit") {
 		const paths = Array.isArray(a.paths)
 			? (a.paths as unknown[]).filter(x => typeof x === "string").join(", ")
@@ -536,13 +558,24 @@ function extractPermissionLocations(args: unknown): { path: string; line?: numbe
 	if (!args || typeof args !== "object") return [];
 	const a = args as Record<string, unknown>;
 	const out: { path: string; line?: number }[] = [];
-	const single = typeof a.path === "string" ? a.path : typeof a.file === "string" ? a.file : undefined;
-	if (single) out.push({ path: single });
+	const pushPath = (value: unknown) => {
+		if (typeof value !== "string" || value.length === 0) return;
+		if (out.some(location => location.path === value)) return;
+		out.push({ path: value });
+	};
+	pushPath(a.path);
+	pushPath(a.file);
 	if (Array.isArray(a.paths)) {
 		for (const p of a.paths) {
-			if (typeof p === "string" && p !== single) out.push({ path: p });
+			pushPath(p);
 		}
 	}
+	pushPath(a.oldPath);
+	pushPath(a.newPath);
+	pushPath(a.from);
+	pushPath(a.to);
+	pushPath(a.source);
+	pushPath(a.destination);
 	return out;
 }
 

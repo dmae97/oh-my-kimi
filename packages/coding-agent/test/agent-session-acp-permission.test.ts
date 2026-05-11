@@ -1,7 +1,7 @@
 /**
  * Tests for the ACP permission gate in AgentSession.
  *
- * Verifies that sensitive tools (bash, edit, write, ast_edit) are gated behind
+ * Verifies that sensitive tools (bash, edit, write, ast_edit, delete, move) are gated behind
  * `ClientBridge.requestPermission` when a bridge is set, and that allow/reject
  * decisions are cached appropriately for allow_always / reject_always.
  */
@@ -14,7 +14,11 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import type { ClientBridge, ClientBridgePermissionOutcome } from "@oh-my-pi/pi-coding-agent/session/client-bridge";
+import type {
+	ClientBridge,
+	ClientBridgePermissionOutcome,
+	ClientBridgePermissionToolCall,
+} from "@oh-my-pi/pi-coding-agent/session/client-bridge";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -120,6 +124,54 @@ it("allow_once: calls bridge once and executes the underlying tool", async () =>
 
 	expect(permissionSpy).toHaveBeenCalledTimes(1);
 	expect(bashTool.executeCalls).toBe(1);
+});
+
+it("delete and move tools request ACP permission before executing", async () => {
+	const deleteTool = makeFakeTool("delete");
+	const moveTool = makeFakeTool("move");
+	const requests: ClientBridgePermissionToolCall[] = [];
+	const bridge: ClientBridge = {
+		capabilities: { requestPermission: true },
+		async requestPermission(toolCall, _options, _signal) {
+			requests.push(toolCall);
+			return { outcome: "selected", optionId: "allow_once", kind: "allow_once" };
+		},
+	};
+	const permissionSpy = spyOn(bridge, "requestPermission");
+	session = await createSession([deleteTool, moveTool], bridge);
+
+	await session.setActiveToolsByName(["delete", "move"]);
+	const wrappedDelete = session.agent.state.tools.find(t => t.name === "delete");
+	const wrappedMove = session.agent.state.tools.find(t => t.name === "move");
+	expect(wrappedDelete).toBeDefined();
+	expect(wrappedMove).toBeDefined();
+
+	await wrappedDelete!.execute(
+		"call-delete",
+		{ path: "/tmp/gone.ts" },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+	await wrappedMove!.execute(
+		"call-move",
+		{ oldPath: "/tmp/old.ts", newPath: "/tmp/new.ts" },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+
+	expect(permissionSpy).toHaveBeenCalledTimes(2);
+	expect(requests.map(({ toolName, title, locations }) => ({ toolName, title, locations }))).toEqual([
+		{ toolName: "delete", title: "Delete /tmp/gone.ts", locations: [{ path: "/tmp/gone.ts" }] },
+		{
+			toolName: "move",
+			title: "Move /tmp/old.ts to /tmp/new.ts",
+			locations: [{ path: "/tmp/old.ts" }, { path: "/tmp/new.ts" }],
+		},
+	]);
+	expect(deleteTool.executeCalls).toBe(1);
+	expect(moveTool.executeCalls).toBe(1);
 });
 
 it("setClientBridge wraps tools that were already active", async () => {

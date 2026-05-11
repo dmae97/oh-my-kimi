@@ -76,7 +76,7 @@ export interface EditToolDetails {
 	meta?: OutputMeta;
 	/** Per-file results (multi-file edits) */
 	perFileResults?: EditToolPerFileResult[];
-	/** File path for single-file edit results. Required by ACP diff metadata consumers. */
+	/** Absolute file path for single-file edit results. Required by ACP diff metadata consumers. */
 	path?: string;
 	/** Source-of-truth content before the edit; `undefined` for create operations. */
 	oldText?: string;

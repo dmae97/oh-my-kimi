@@ -66,7 +66,7 @@ describe("executePatchSingle — oldText/newText propagation", () => {
 			beginDeferredDiagnosticsForPath: noopBeginDeferred,
 		});
 
-		expect(result.details?.path).toBe("foo.txt");
+		expect(result.details?.path).toBe(path.join(tempDir, "foo.txt"));
 		expect(result.details?.oldText).toBe("a\n");
 		expect(result.details?.newText).toBe("b\n");
 	});
@@ -82,7 +82,7 @@ describe("executePatchSingle — oldText/newText propagation", () => {
 			beginDeferredDiagnosticsForPath: noopBeginDeferred,
 		});
 
-		expect(result.details?.path).toBe("new.txt");
+		expect(result.details?.path).toBe(path.join(tempDir, "new.txt"));
 		expect(result.details?.oldText).toBeUndefined();
 		expect(result.details?.newText).toBe("hello\n");
 	});
@@ -100,7 +100,7 @@ describe("executePatchSingle — oldText/newText propagation", () => {
 			beginDeferredDiagnosticsForPath: noopBeginDeferred,
 		});
 
-		expect(result.details?.path).toBe("gone.txt");
+		expect(result.details?.path).toBe(path.join(tempDir, "gone.txt"));
 		expect(result.details?.oldText).toBe("will be deleted\n");
 		expect(result.details?.newText).toBeUndefined();
 	});
@@ -118,7 +118,7 @@ describe("EditTool patch aggregation — oldText/newText propagation", () => {
 			],
 		});
 		const details = result.details as EditToolDetails;
-		expect(details.path).toBe("created.txt");
+		expect(details.path).toBe(path.join(tempDir, "created.txt"));
 		expect("oldText" in details).toBe(true);
 		expect(details.oldText).toBeUndefined();
 		expect(details.newText).toBe("b\n");
@@ -133,7 +133,7 @@ describe("EditTool patch aggregation — oldText/newText propagation", () => {
 			edits: [{ op: "update", diff: "@@\n-a\n+b" }, { op: "delete" }],
 		});
 		const details = result.details as EditToolDetails;
-		expect(details.path).toBe("updated-then-gone.txt");
+		expect(details.path).toBe(path.join(tempDir, "updated-then-gone.txt"));
 		expect(details.oldText).toBe("a\n");
 		expect("newText" in details).toBe(true);
 		expect(details.newText).toBeUndefined();
@@ -157,7 +157,7 @@ describe("executeReplaceSingle — oldText/newText propagation", () => {
 			beginDeferredDiagnosticsForPath: noopBeginDeferred,
 		});
 
-		expect(result.details?.path).toBe("bar.txt");
+		expect(result.details?.path).toBe(path.join(tempDir, "bar.txt"));
 		expect(result.details?.oldText).toBe(originalContent);
 		expect(result.details?.newText).toBe("line one\nline TWO\nline three\n");
 	});
