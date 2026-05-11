@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed subagents launched in the same parallel batch not seeing each other in their initial `# IRC Peers` system-prompt block by pre-registering the agent in the global `AgentRegistry` before `rebuildSystemPrompt` runs and attaching the live session afterwards
+- Fixed `/export` and `/tree` not showing developer-role messages (including the plan content injected after `/plan` approval) so the HTML export and TUI session tree now render developer messages dimmed with their actual content instead of hiding them entirely ([#753](https://github.com/can1357/oh-my-pi/issues/753))
 
 ## [14.9.3] - 2026-05-10
 ### Breaking Changes
