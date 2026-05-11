@@ -148,6 +148,8 @@ export interface EditRenderContext {
 	editDiffPreview?: DiffResult | DiffError;
 	/** Multi-file streaming diff preview (edits spanning several files) */
 	perFileDiffPreview?: PerFileDiffPreview[];
+	/** Raw in-flight edit text shown while a computed diff preview is unavailable */
+	editStreamingFallback?: string;
 	/** Function to render diff text with syntax highlighting */
 	renderDiff?: (diffText: string, options?: { filePath?: string }) => string;
 }
@@ -305,6 +307,9 @@ function getCallPreview(
 	}
 	if (args.newText || args.patch) {
 		return renderPlainTextPreview(args.newText ?? args.patch ?? "", uiTheme, rawPath);
+	}
+	if (renderContext?.editStreamingFallback) {
+		return renderContext.editStreamingFallback;
 	}
 	return "";
 }
