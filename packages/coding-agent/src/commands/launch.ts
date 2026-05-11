@@ -7,6 +7,7 @@ import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { parseArgs } from "../cli/args";
 import { runRootCommand } from "../main";
+import { prepareAcpTerminalAuthArgs } from "../modes/acp/terminal-auth";
 
 export default class Index extends Command {
 	static description = "AI coding assistant";
@@ -135,7 +136,8 @@ export default class Index extends Command {
 	static strict = false;
 
 	async run(): Promise<void> {
-		const parsed = parseArgs(this.argv);
-		await runRootCommand(parsed, this.argv);
+		const { args } = prepareAcpTerminalAuthArgs(this.argv);
+		const parsed = parseArgs(args);
+		await runRootCommand(parsed, args);
 	}
 }

@@ -660,13 +660,13 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 
 	const cwd = getProjectDir();
 	const settingsInstance = await logger.time("settings:init", Settings.init, { cwd });
-	if (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") {
+	if (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") {
 		applyRpcDefaultSettingOverrides();
 	}
 	if (parsedArgs.noPty || parsedArgs.mode === "rpc-ui") {
 		Bun.env.PI_NO_PTY = "1";
 	}
-	if (parsedArgs.noTitle || parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") {
+	if (parsedArgs.noTitle || parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") {
 		Bun.env.PI_NO_TITLE = "1";
 	}
 	const { pipedInput, fileText, fileImages } = await logger.time("prepareInitialMessage", async () => {
@@ -850,7 +850,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		}
 	}
 
-	if (!isInteractive && !session.model) {
+	if (!isInteractive && parsedArgs.mode !== "acp" && !session.model) {
 		if (modelFallbackMessage) {
 			process.stderr.write(`${chalk.red(modelFallbackMessage)}\n`);
 		} else {
