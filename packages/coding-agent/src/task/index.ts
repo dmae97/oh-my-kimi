@@ -785,9 +785,11 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 				};
 			}
 
-			// Write parent conversation context for subagents
+			// Write parent conversation context for subagents. When IRC is available,
+			// subagents should ask live peers instead of reading a stale markdown dump.
 			await fs.mkdir(effectiveArtifactsDir, { recursive: true });
-			const compactContext = this.session.getCompactContext?.();
+			const shouldWriteConversationContext = this.session.settings.get("irc.enabled") !== true;
+			const compactContext = shouldWriteConversationContext ? this.session.getCompactContext?.() : undefined;
 			let contextFilePath: string | undefined;
 			if (compactContext) {
 				contextFilePath = path.join(effectiveArtifactsDir, "context.md");
