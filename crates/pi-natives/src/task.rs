@@ -27,17 +27,10 @@
 //! }
 //! ```
 
-use std::{
-	future::Future,
-	sync::{
-		Arc, Weak,
-		atomic::{AtomicU8, Ordering},
-	},
-	time::{Duration, Instant},
-};
+use std::future::Future;
 
 use napi::{Env, Error, Result, Task, bindgen_prelude::*};
-use tokio::sync::Notify;
+use pi_shell::cancel as core_cancel;
 
 use crate::prof::profile_region;
 
@@ -47,55 +40,31 @@ use crate::prof::profile_region;
 
 /// Reason for task abortion.
 #[derive(Debug, Clone, Copy)]
-#[repr(u8)]
 pub enum AbortReason {
-	Unknown = 1,
-	Timeout = 2,
-	Signal  = 3,
-	User    = 4,
+	Unknown,
+	Timeout,
+	Signal,
+	User,
 }
 
-impl TryFrom<u8> for AbortReason {
-	type Error = ();
-
-	fn try_from(value: u8) -> std::result::Result<Self, ()> {
+impl From<core_cancel::AbortReason> for AbortReason {
+	fn from(value: core_cancel::AbortReason) -> Self {
 		match value {
-			0 => Err(()),
-			2 => Ok(Self::Timeout),
-			3 => Ok(Self::Signal),
-			4 => Ok(Self::User),
-			_ => Ok(Self::Unknown),
+			core_cancel::AbortReason::Unknown => Self::Unknown,
+			core_cancel::AbortReason::Timeout => Self::Timeout,
+			core_cancel::AbortReason::Signal => Self::Signal,
+			core_cancel::AbortReason::User => Self::User,
 		}
 	}
 }
 
-#[derive(Default)]
-struct Flag {
-	reason:   AtomicU8,
-	notifier: Notify,
-}
-
-impl Flag {
-	fn cause(&self) -> Option<AbortReason> {
-		self.reason.load(Ordering::Relaxed).try_into().ok()
-	}
-
-	async fn wait(&self) -> AbortReason {
-		if let Some(reason) = self.cause() {
-			return reason;
-		}
-		let notifier = self.notifier.notified();
-		if let Some(reason) = self.cause() {
-			return reason;
-		}
-		notifier.await;
-		self.cause().unwrap_or(AbortReason::Unknown)
-	}
-
-	fn abort(&self, reason: AbortReason) {
-		let old = self.reason.swap(reason as u8, Ordering::SeqCst);
-		if old == 0 {
-			self.notifier.notify_waiters();
+impl From<AbortReason> for core_cancel::AbortReason {
+	fn from(value: AbortReason) -> Self {
+		match value {
+			AbortReason::Unknown => Self::Unknown,
+			AbortReason::Timeout => Self::Timeout,
+			AbortReason::Signal => Self::Signal,
+			AbortReason::User => Self::User,
 		}
 	}
 }
@@ -106,8 +75,7 @@ impl Flag {
 /// cancellation requests from timeouts or abort signals.
 #[derive(Clone, Default)]
 pub struct CancelToken {
-	deadline: Option<Instant>,
-	flag:     Option<Arc<Flag>>,
+	core: core_cancel::CancelToken,
 }
 
 impl From<()> for CancelToken {
@@ -119,21 +87,10 @@ impl From<()> for CancelToken {
 impl CancelToken {
 	/// Create a new cancel token from optional timeout and abort signal.
 	pub fn new(timeout_ms: Option<u32>, signal: Option<Unknown>) -> Self {
-		let mut result = Self::default();
-		if let Some(signal) = signal.and_then(|s| AbortSignal::from_unknown(s).ok()) {
-			let flag = Arc::new(Flag::default());
-			signal.on_abort({
-				let weak = Arc::downgrade(&flag);
-				move || {
-					if let Some(flag) = weak.upgrade() {
-						flag.abort(AbortReason::Signal);
-					}
-				}
-			});
-			result.flag = Some(flag);
-		}
-		if let Some(timeout_ms) = timeout_ms {
-			result.deadline = Some(Instant::now() + Duration::from_millis(timeout_ms as u64));
+		let mut result = Self { core: core_cancel::CancelToken::new(timeout_ms) };
+		if let Some(signal) = signal.and_then(|value| AbortSignal::from_unknown(value).ok()) {
+			let abort_token = result.emplace_abort_token();
+			signal.on_abort(move || abort_token.abort(AbortReason::Signal));
 		}
 		result
 	}
@@ -143,92 +100,45 @@ impl CancelToken {
 	/// Returns `Ok(())` if work should continue, or an error if cancelled.
 	/// Call this periodically in long-running loops.
 	pub fn heartbeat(&self) -> Result<()> {
-		if let Some(flag) = &self.flag
-			&& let Some(reason) = flag.cause()
-		{
-			return Err(Error::from_reason(format!("Aborted: {reason:?}")));
-		}
-		if let Some(deadline) = self.deadline
-			&& deadline < Instant::now()
-		{
-			return Err(Error::from_reason("Aborted: Timeout"));
-		}
-		Ok(())
+		self
+			.core
+			.heartbeat()
+			.map_err(|err| Error::from_reason(err.to_string()))
 	}
 
 	/// Wait for the cancel token to be aborted.
 	pub async fn wait(&self) -> AbortReason {
-		let flag = self.flag.as_ref();
-		if let Some(flag) = flag.and_then(|f| f.cause()) {
-			return flag;
-		}
-		let fflag = async {
-			let Some(flag) = self.flag.as_ref() else {
-				return std::future::pending().await;
-			};
-			flag.wait().await
-		};
-
-		let fttl = async {
-			let Some(ttl) = self.deadline else {
-				return std::future::pending().await;
-			};
-			tokio::time::sleep_until(ttl.into()).await;
-			AbortReason::Timeout
-		};
-
-		let fuser = async {
-			if tokio::signal::ctrl_c().await.is_err() {
-				return std::future::pending().await;
-			}
-			AbortReason::User
-		};
-
-		tokio::select! {
-			reason = fflag => reason,
-			reason = fttl => reason,
-			reason = fuser => reason,
-		}
+		self.core.wait().await.into()
 	}
 
 	/// Get an abort token for external cancellation.
 	pub fn abort_token(&self) -> AbortToken {
-		AbortToken(self.flag.as_ref().map(Arc::downgrade))
+		AbortToken(self.core.abort_token())
 	}
 
 	/// Emplaces a cancel token if there is none, returns the abort token.
 	pub fn emplace_abort_token(&mut self) -> AbortToken {
-		AbortToken(Some(Arc::downgrade(self.flag.get_or_insert_default())))
+		AbortToken(self.core.emplace_abort_token())
 	}
 
 	/// Check if already aborted (non-blocking).
 	pub fn aborted(&self) -> bool {
-		if let Some(flag) = &self.flag
-			&& flag.cause().is_some()
-		{
-			return true;
-		}
-		if let Some(deadline) = self.deadline
-			&& deadline < Instant::now()
-		{
-			return true;
-		}
-		false
+		self.core.aborted()
+	}
+
+	pub fn into_core(self) -> core_cancel::CancelToken {
+		self.core
 	}
 }
 
 /// Token for requesting cancellation from outside the task.
 #[derive(Clone, Default)]
-pub struct AbortToken(Option<Weak<Flag>>);
+pub struct AbortToken(core_cancel::AbortToken);
 
 impl AbortToken {
 	/// Request cancellation of the associated task.
 	pub fn abort(&self, reason: AbortReason) {
-		if let Some(flag) = &self.0
-			&& let Some(flag) = flag.upgrade()
-		{
-			flag.abort(reason);
-		}
+		self.0.abort(reason.into());
 	}
 }
 

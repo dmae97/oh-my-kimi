@@ -5,13 +5,15 @@ use std::{
 	path::{Path, PathBuf},
 };
 
-use ast_grep_core::{
-	Language, MatchStrictness, matcher::Pattern, source::Edit, tree_sitter::LanguageExt,
-};
+use ast_grep_core::{MatchStrictness, matcher::Pattern, source::Edit, tree_sitter::LanguageExt};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use pi_ast::{
+	SupportLang,
+	ops::{self as shared_ops},
+};
 
-use crate::{fs_cache, glob_util, language::SupportLang, task};
+use crate::{fs_cache, glob_util, task};
 
 const DEFAULT_FIND_LIMIT: u32 = 50;
 
@@ -227,29 +229,12 @@ fn to_u32(value: usize) -> u32 {
 	value.min(u32::MAX as usize) as u32
 }
 
-fn supported_lang_list() -> String {
-	SupportLang::sorted_aliases().join(", ")
-}
-
 fn resolve_supported_lang(value: &str) -> Result<SupportLang> {
-	SupportLang::from_alias(value).ok_or_else(|| {
-		Error::from_reason(format!(
-			"Unsupported language '{value}'. Supported: {}",
-			supported_lang_list()
-		))
-	})
+	shared_ops::resolve_supported_lang(value).map_err(|err| Error::from_reason(err.to_string()))
 }
 
 fn resolve_language(lang: Option<&str>, file_path: &Path) -> Result<SupportLang> {
-	if let Some(lang) = lang.map(str::trim).filter(|lang| !lang.is_empty()) {
-		return resolve_supported_lang(lang);
-	}
-	SupportLang::from_path(file_path).ok_or_else(|| {
-		Error::from_reason(format!(
-			"Unable to infer language from file extension: {}. Specify `lang` explicitly.",
-			file_path.display()
-		))
-	})
+	shared_ops::resolve_language(lang, file_path).map_err(|err| Error::from_reason(err.to_string()))
 }
 
 /// Returns true if the file's extension resolves to a supported language.
@@ -257,10 +242,7 @@ fn resolve_language(lang: Option<&str>, file_path: &Path) -> Result<SupportLang>
 /// (the user chose to treat them as that language). When `lang` is None,
 /// only files with recognizable code extensions are included.
 fn is_supported_file(file_path: &Path, explicit_lang: Option<&str>) -> bool {
-	if explicit_lang.is_some() {
-		return true;
-	}
-	resolve_language(None, file_path).is_ok()
+	shared_ops::is_supported_file(file_path, explicit_lang)
 }
 
 fn infer_single_replace_lang(
@@ -414,43 +396,12 @@ fn compile_pattern(
 	strictness: &MatchStrictness,
 	lang: SupportLang,
 ) -> Result<Pattern> {
-	let mut compiled = if let Some(selector) = selector.map(str::trim).filter(|s| !s.is_empty()) {
-		Pattern::contextual(pattern, selector, lang)
-	} else {
-		Pattern::try_new(pattern, lang)
-	}
-	.map_err(|err| Error::from_reason(format!("Invalid pattern: {err}")))?;
-	compiled.strictness = strictness.clone();
-	Ok(compiled)
+	shared_ops::compile_pattern(pattern, selector, strictness, lang)
+		.map_err(|err| Error::from_reason(err.to_string()))
 }
 
 fn apply_edits(content: &str, edits: &[Edit<String>]) -> Result<String> {
-	let mut sorted: Vec<&Edit<String>> = edits.iter().collect();
-	sorted.sort_by_key(|edit| edit.position);
-	let mut prev_end = 0usize;
-	for edit in &sorted {
-		if edit.position < prev_end {
-			return Err(Error::from_reason(
-				"Overlapping replacements detected; refine pattern to avoid ambiguous edits"
-					.to_string(),
-			));
-		}
-		prev_end = edit.position.saturating_add(edit.deleted_length);
-	}
-
-	let mut output = content.to_string();
-	for edit in sorted.into_iter().rev() {
-		let start = edit.position;
-		let end = edit.position.saturating_add(edit.deleted_length);
-		if end > output.len() || start > end {
-			return Err(Error::from_reason("Computed edit range is out of bounds".to_string()));
-		}
-		let replacement = String::from_utf8(edit.inserted_text.clone()).map_err(|err| {
-			Error::from_reason(format!("Replacement text is not valid UTF-8: {err}"))
-		})?;
-		output.replace_range(start..end, &replacement);
-	}
-	Ok(output)
+	shared_ops::apply_edits(content, edits).map_err(|err| Error::from_reason(err.to_string()))
 }
 
 fn normalize_pattern_list(patterns: Option<Vec<String>>) -> Result<Vec<String>> {

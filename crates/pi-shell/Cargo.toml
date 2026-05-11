@@ -1,0 +1,37 @@
+[package]
+name = "pi-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["full"] }
+brush-core = { version = "0.5.0", path = "../brush-core-vendored" }
+brush-builtins = { version = "0.2.0", path = "../brush-builtins-vendored" }
+brush-parser = "0.3"
+clap = { version = "4", features = ["derive"] }
+os_pipe = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+toml = "1.1"
+regex = "1"
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+windows-sys = { version = "0.61", features = [
+	"Win32_Foundation",
+	"Win32_Storage_ProjectedFileSystem",
+	"Win32_System_Com",
+	"Win32_System_LibraryLoader",
+] }
