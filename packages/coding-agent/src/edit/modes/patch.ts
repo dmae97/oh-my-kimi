@@ -1772,15 +1772,21 @@ export async function executePatchSingle(
 		.diagnostics(mergedDiagnostics?.summary ?? "", mergedDiagnostics?.messages ?? [])
 		.get();
 
+	const oldText = result.change.type !== "create" ? result.change.oldContent : undefined;
+	const newText = result.change.type !== "delete" ? result.change.newContent : undefined;
+
 	return {
 		content: [{ type: "text", text: resultText }],
 		details: {
 			diff: diffResult.diff,
+			path,
 			firstChangedLine: diffResult.firstChangedLine,
 			diagnostics: mergedDiagnostics,
 			op,
 			move: effectiveRename,
 			meta,
+			oldText,
+			newText,
 		},
 	};
 }

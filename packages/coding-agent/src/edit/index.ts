@@ -152,6 +152,8 @@ async function executeApplyPatchPerFile(
 				op: details?.op,
 				move: details?.move,
 				meta: details?.meta,
+				oldText: details?.oldText,
+				newText: details?.newText,
 			});
 			const text = result.content?.find(c => c.type === "text")?.text ?? "";
 			if (text) contentTexts.push(text);
@@ -205,6 +207,10 @@ async function executeSinglePathEntries(
 	const diffTexts: string[] = [];
 	let firstChangedLine: number | undefined;
 	let errorCount = 0;
+	let hasFirstOldText = false;
+	let firstOldText: string | undefined;
+	let hasLastNewText = false;
+	let lastNewText: string | undefined;
 
 	for (let i = 0; i < runs.length; i++) {
 		const isLast = i === runs.length - 1;
@@ -217,6 +223,14 @@ async function executeSinglePathEntries(
 			const details = result.details;
 			if (details?.diff) diffTexts.push(details.diff);
 			firstChangedLine ??= details?.firstChangedLine;
+			if (details && "oldText" in details && !hasFirstOldText) {
+				firstOldText = details.oldText;
+				hasFirstOldText = true;
+			}
+			if (details && "newText" in details) {
+				lastNewText = details.newText;
+				hasLastNewText = true;
+			}
 			const text = result.content?.find(c => c.type === "text")?.text ?? "";
 			if (text) contentTexts.push(text);
 		} catch (err) {
@@ -242,6 +256,9 @@ async function executeSinglePathEntries(
 		details: {
 			diff: diffTexts.join("\n"),
 			firstChangedLine,
+			path,
+			...(hasFirstOldText ? { oldText: firstOldText } : {}),
+			...(hasLastNewText ? { newText: lastNewText } : {}),
 		},
 		// Any per-entry failure marks the aggregate result as an error so the
 		// renderer takes the error branch instead of falling through to the
