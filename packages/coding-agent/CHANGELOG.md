@@ -5,6 +5,7 @@
 
 - Removed `op: issue_view` and `op: pr_view` from the `github` tool. Read single issues/PRs via the `read` tool against `issue://<N>` / `pr://<N>` (or the long form `issue://<owner>/<repo>/<N>` / `pr://<owner>/<repo>/<N>`); append `?comments=0` to drop the comments section. The `issue` and `comments` parameters were removed from the tool schema since no remaining op consumes them. Mutating ops (`pr_create`, `pr_checkout`, `pr_push`), `repo_view`, `search_*`, and `run_watch` are unchanged.
 - Removed `op: pr_diff` (along with the `nameOnly` and `exclude` schema fields) from the `github` tool. Read PR diffs through the new `pr://` URL family: `pr://<N>/diff` for the changed-file listing, `pr://<N>/diff/<i>` for a single file slice (1-indexed), and `pr://<N>/diff/all` for the verbatim unified diff. Long-form `pr://<owner>/<repo>/<N>/diff[/…]` works the same way. All three variants share one `gh pr diff` invocation through a new `pr-diff` cache row, so the listing and per-file slices reconstruct from cached bytes without re-shelling. Diff content is served as `text/plain` so the `read` tool's line selectors (e.g. `pr://<N>/diff/all:200-400`) page the cached output without falsely advertising hashline anchors.
+- Renamed ACP custom extension methods from `omp/*` to `_omp/*` to comply with the ACP spec's `_`-prefix requirement for non-spec methods; existing callers must update method names
 
 ### Added
 
@@ -14,12 +15,25 @@
 - Added new `Approve and compact context` choice to the ExitPlanMode approval selector. Sits between `Approve and execute` (purge session) and `Approve and keep context` (full transcript) — runs `/compact` on the plan-mode transcript with a planning-specific summarization hint, then dispatches the plan-approved execution turn so it lands on a fresh cache anchor with the summarized rationale carried over. Cancelling the compaction (Esc or any other abort source) defers the execution dispatch and surfaces a warning so the operator can resubmit manually; non-abort failures proceed best-effort.
 - Added `CompactionCancelledError` typed sentinel and `CompactionOutcome` (`"ok" | "cancelled" | "failed"`) return type to `@oh-my-pi/pi-coding-agent/session/compaction`. `CommandController.executeCompaction` and `handleCompactCommand` now return the outcome instead of `void` so callers can discriminate user-driven aborts from generic failures without inspecting error messages.
 - Added a `credential_disabled` extension event so extensions can subscribe via `pi.on("credential_disabled", handler)` and react when `AuthStorage` automatically soft-disables a credential (e.g. OAuth `invalid_grant`). Replaces the current `agent_end` errorMessage regex pattern downstream extensions have to match against. Handler payload is `{ type, provider, disabledCause }`. `createAgentSession()` subscribes the per-session extension runner to the shared `AuthStorage` via `authStorage.onCredentialDisabled(...)` at the very top of session creation — before any startup model probes run — so events fire on every disable regardless of whether the embedder also has a constructor `onCredentialDisabled` handler attached. The SDK forwards through `ExtensionRunner.emitCredentialDisabled(event)`, which buffers events until `runner.initialize(...)` runs in the mode controller and then flushes them through `emit()` so extension handlers see populated UI/runtime context (rather than the constructor's no-op default with `hasUI=false`, an unset model, and no-op runtime actions). On `session.dispose()` the subscription is unsubscribed; the embedder's constructor-attached listener keeps firing through its own permanent subscription. The outer `createAgentSession()` catch also releases the subscription if startup throws before the dispose-wrap is wired, so repeated retries don't accumulate dead listeners.
+- Added `omp acp` subcommand for launching as an ACP (Agent Client Protocol) server over stdio
+- Added explicit `type` discriminators to ACP `initialize` auth methods, including a `terminal` setup method gated on `clientCapabilities.auth.terminal`
+- Added ACP equivalents for the remaining TUI slash commands (`/jobs`, `/changelog`, `/dump`, `/copy`, `/hotkeys`, `/extensions`, `/agents`, `/model`, `/plan`, `/loop`, `/btw`, `/login`, `/logout`, `/resume`, `/tree`, `/branch`, `/new`, `/drop`, `/handoff`, `/fork`, `/session delete`, `/export`, `/share`, `/todo`, `/memory`, `/move`, `/mcp`, `/ssh`, `/marketplace`, `/plugins`) so ACP clients reach feature parity with the TUI for non-interactive flows
+- Added ACP `plan` mode: when `plan.enabled` setting is on, ACP `session/new`/`load`/`resume`/`fork` advertise a `plan` mode alongside `default`; `session/set_mode` toggles plan-mode state so the next agent turn injects the plan-mode system prompt
+- Added ACP `ClientBridge` abstraction (`packages/coding-agent/src/session/client-bridge.ts`) that routes tool I/O through the connected client when capabilities are advertised at `initialize`; populated from `AgentSideConnection` in ACP mode
+- Added ACP `terminal/*` routing for `bash`: when the client advertises `terminal: true`, the tool creates a client-side terminal, embeds its `terminalId` on the live tool card, polls output, and releases the handle on exit or abort
+- Added ACP `fs/read_text_file` and `fs/write_text_file` routing for the `read` and `write` tools: when the client advertises `fs.readTextFile` / `fs.writeTextFile`, plain-text reads/writes go through the editor (surfacing unsaved buffer content and letting the editor track agent writes); falls back to disk only for reads, throws on bridge write failures
+- Added ACP `session/request_permission` gate around `bash`, `edit`, `write`, and `ast_edit` when an ACP client is connected; remembers `allow_always` / `reject_always` decisions per tool for the session lifetime
+- Added `diff` `ToolCallContent` emission for edit tool results: per-file `oldText`/`newText` is threaded through `EditToolPerFileResult` / `EditToolDetails` so ACP clients can render inline diffs
+- Added richer ACP `StopReason` mapping (`max_tokens`, `refusal`, `cancelled`) derived from the last assistant message's internal stop reason; previously only `end_turn`/`cancelled` were emitted
+- Added `_meta.messageCount` and `_meta.size` on `session/list` `SessionInfo` entries
+- Added ACP `tool_call_update` `locations` refresh from in-flight tool args and final result details so clients can "follow along" multi-file edits in real time
 
 ### Changed
 
 - Changed issue and pull-request list entries to link to repository-qualified URLs (for example `issue://owner/repo/<N>`) so list items open correctly outside the default repo
 - Aligned prompt instruction language by defining `NEVER` and `AVOID` as strict aliases for `MUST NOT` and `SHOULD NOT` in the system prompt, and standardized agent, tool, and system prompt templates to use those terms consistently
-
+- Changed `--mode acp` to apply the same stdout-quiet overrides as `--mode rpc` so no banner or status text leaks into the JSON-RPC channel
+- Changed ACP startup to no longer require a configured model so registry validators and clients can complete `initialize` and `authenticate` before any model is selected
 ### Fixed
 
 - Deferred flushing of buffered `credential_disabled` events during extension runner initialization to a microtask so handler failures are now routed through `onError()` registrations made immediately after `initialize()`, preserving extension error reporting
@@ -179,6 +193,8 @@
 - Fixed the SSH tool on native Windows by avoiding OpenSSH ControlMaster multiplexing, which Win32-OpenSSH does not support and reports as `getsockname failed` ([#154](https://github.com/can1357/oh-my-pi/issues/154)).
 - Fixed `/export` and `/tree` not showing developer-role messages (including the plan content injected after `/plan` approval) so the HTML export and TUI session tree now render developer messages dimmed with their actual content instead of hiding them entirely ([#753](https://github.com/can1357/oh-my-pi/issues/753))
 - Fixed `Timed out initializing browser tab worker` on prebuilt binaries by rewriting `spawnTabWorker` to import the worker entry with `with { type: "file" }` so Bun's `--compile` bundler statically discovers and embeds `tab-worker-entry.ts` in the single-file binary ([#1011](https://github.com/can1357/oh-my-pi/issues/1011))
+- Fixed ACP mode to advertise and handle non-TUI builtin slash commands and `/skill:<name>` commands
+- Fixed ACP `session/resume` and `session/close` to dispatch correctly under SDK 0.21 by renaming `unstable_resumeSession` / `unstable_closeSession` to the stable `resumeSession` / `closeSession` method names the SDK now routes to
 
 ## [14.9.3] - 2026-05-10
 ### Breaking Changes
