@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed subagents launched in the same parallel batch not seeing each other in their initial `# IRC Peers` system-prompt block by pre-registering the agent in the global `AgentRegistry` before `rebuildSystemPrompt` runs and attaching the live session afterwards
+- Fixed plugin manifest extensions whose entry points at a directory (e.g. `pi-goal`'s `"pi": { "extensions": [".pi/extensions/pi-goal"] }`) failing to load with `Failed to load extension: Directories cannot be read like files`. The plugin path resolver now resolves directory entries to their `index.{ts,js,mjs,cjs}` file, matching the behavior of native auto-discovery via `resolveExtensionEntries`.
 
 ## [14.9.3] - 2026-05-10
 ### Breaking Changes
