@@ -1,0 +1,836 @@
+import { describe, expect, it, spyOn } from "bun:test";
+import { Settings } from "../src/config/settings";
+import type { AgentSession } from "../src/session/agent-session";
+import type { SessionManager } from "../src/session/session-manager";
+import { executeAcpBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";
+
+interface FakeAcpBuiltinSession {
+	fastMode: boolean;
+	forcedToolChoice: string | undefined;
+	isStreaming: boolean;
+	sessionFile: string | undefined;
+	sessionId: string;
+	sessionName: string;
+	_todoPhases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
+	toggleFastMode(): boolean;
+	setFastMode(enabled: boolean): void;
+	isFastModeEnabled(): boolean;
+	setForcedToolChoice(toolName: string): void;
+	fetchUsageReports?: () => Promise<unknown>;
+	getAsyncJobSnapshot: (opts?: { recentLimit?: number }) => { running: unknown[]; recent: unknown[] } | null;
+	formatSessionAsText: () => string;
+	getLastAssistantText: () => string | undefined;
+	messages: unknown[];
+	model: { provider: string; id: string } | undefined;
+	newSession(opts?: { drop?: boolean; parentSession?: string }): Promise<boolean>;
+	fork(): Promise<boolean>;
+	handoff(instr?: string): Promise<{ document: string; savedPath?: string } | undefined>;
+	exportToHtml(outputPath?: string): Promise<string>;
+	getTodoPhases(): Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
+	setTodoPhases(phases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }>): void;
+	refreshBaseSystemPrompt(): Promise<void>;
+	getToolByName(name: string): unknown;
+	compact(args?: string): Promise<void>;
+	getContextUsage(): { tokens?: number; contextWindow: number } | undefined;
+	getAvailableModels(): Array<{ provider: string; id: string; contextWindow?: number }>;
+	setModel(model: unknown): Promise<void>;
+}
+
+function createRuntime() {
+	const output: string[] = [];
+	const session: FakeAcpBuiltinSession = {
+		fastMode: false,
+		forcedToolChoice: undefined as string | undefined,
+		isStreaming: false,
+		sessionFile: undefined,
+		sessionId: "fake-session-id",
+		sessionName: "Fake Session",
+		_todoPhases: [],
+		toggleFastMode() {
+			this.fastMode = !this.fastMode;
+			return this.fastMode;
+		},
+		setFastMode(enabled: boolean) {
+			this.fastMode = enabled;
+		},
+		isFastModeEnabled() {
+			return this.fastMode;
+		},
+		setForcedToolChoice(toolName: string) {
+			this.forcedToolChoice = toolName;
+		},
+		async newSession(_opts?: { drop?: boolean; parentSession?: string }) {
+			return true;
+		},
+		async fork() {
+			return true;
+		},
+		async handoff(_instr?: string) {
+			return undefined;
+		},
+		async exportToHtml(outputPath?: string) {
+			return outputPath ?? "/tmp/exported-session.html";
+		},
+		getTodoPhases() {
+			return this._todoPhases;
+		},
+		setTodoPhases(phases) {
+			this._todoPhases = phases;
+		},
+		async refreshBaseSystemPrompt() {},
+		getAsyncJobSnapshot: () => null,
+		formatSessionAsText: () => "",
+		getLastAssistantText: () => undefined,
+		messages: [],
+		model: undefined,
+		getToolByName: (_name: string) => undefined,
+		async compact(_args?: string) {},
+		getContextUsage: () => undefined,
+		getAvailableModels: () => [] as Array<{ provider: string; id: string; contextWindow?: number }>,
+		async setModel(_model: unknown) {},
+	};
+	const typedSession = session as unknown as AgentSession & FakeAcpBuiltinSession;
+	const fakeSessionManager = {
+		_sessionFile: undefined as string | undefined,
+		_cwd: "/tmp/project",
+		_entries: [] as { type: string }[],
+		_customEntries: [] as Array<{ customType: string; data: unknown }>,
+		_movedTo: undefined as string | undefined,
+		_flushed: false,
+		_sessionName: undefined as string | undefined,
+		getSessionId(): string {
+			return "fake-session-id";
+		},
+		getSessionFile(): string | undefined {
+			return this._sessionFile;
+		},
+		getEntries(): { type: string }[] {
+			return this._entries;
+		},
+		getBranch(): { type: string }[] {
+			return this._entries;
+		},
+		appendCustomEntry(customType: string, data?: unknown): string {
+			this._customEntries.push({ customType, data });
+			return "fake-entry-id";
+		},
+		async flush() {
+			this._flushed = true;
+		},
+		async moveTo(newCwd: string) {
+			this._cwd = newCwd;
+			this._movedTo = newCwd;
+		},
+		getCwd(): string {
+			return this._cwd;
+		},
+		async setSessionName(name: string, _source: string): Promise<boolean> {
+			this._sessionName = name;
+			return true;
+		},
+	};
+	return {
+		output,
+		session,
+		fakeSessionManager,
+		runtime: {
+			session: typedSession,
+			sessionManager: fakeSessionManager as unknown as SessionManager,
+			settings: Settings.isolated(),
+			cwd: "/tmp/project",
+			output: (text: string) => {
+				output.push(text);
+			},
+			refreshCommands: () => {},
+			notifyTitleChanged: undefined as (() => Promise<void> | void) | undefined,
+		},
+	};
+}
+
+describe("ACP builtin slash commands", () => {
+	it("consumes fast status without returning prompt text", async () => {
+		const { output, runtime } = createRuntime();
+
+		const result = await executeAcpBuiltinSlashCommand("/fast status", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output).toEqual(["Fast mode is off."]);
+	});
+
+	it("forces a tool and returns remaining prompt text", async () => {
+		const { output, runtime } = createRuntime();
+
+		const result = await executeAcpBuiltinSlashCommand("/force read inspect package.json", runtime);
+
+		expect(result).toEqual({ prompt: "inspect package.json" });
+		expect(runtime.session.forcedToolChoice).toBe("read");
+		expect(output).toEqual(["Next turn forced to use read."]);
+	});
+
+	it("renders provider usage reports when the session can fetch them", async () => {
+		const { output, runtime } = createRuntime();
+		runtime.session.fetchUsageReports = async () => [
+			{
+				provider: "openai-codex",
+				fetchedAt: Date.now(),
+				limits: [
+					{
+						id: "codex-5h",
+						label: "5 hours",
+						scope: { provider: "openai-codex", tier: "prolite", accountId: "account-1" },
+						window: { id: "5h", label: "5 hours", resetsAt: Date.now() + 60 * 60 * 1000 },
+						amount: { used: 0.24, usedFraction: 0.24, unit: "unknown" },
+					},
+				],
+				metadata: { email: "user@example.com" },
+			},
+		];
+
+		const result = await executeAcpBuiltinSlashCommand("/usage", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Openai Codex");
+		expect(output[0]).toContain("5 hours (prolite)");
+		expect(output[0]).toContain("user@example.com: 0.24 unknown used (76.0% left)");
+		expect(output[0]).toContain("resets in");
+	});
+
+	it("returns false for unknown commands", async () => {
+		const { runtime } = createRuntime();
+
+		const result = await executeAcpBuiltinSlashCommand("/not-a-real-command-xyz", runtime);
+
+		expect(result).toBe(false);
+	});
+
+	// /jobs
+	it("jobs: shows informative message when snapshot is null", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/jobs", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("background jobs");
+	});
+
+	it("jobs: lists running and recent jobs from snapshot", async () => {
+		const { output, runtime } = createRuntime();
+		runtime.session.getAsyncJobSnapshot = () => ({
+			running: [{ id: "j1", type: "bash", status: "running", label: "npm install", startTime: Date.now() - 5000 }],
+			recent: [{ id: "j2", type: "task", status: "completed", label: "build done", startTime: Date.now() - 60_000 }],
+		});
+
+		const result = await executeAcpBuiltinSlashCommand("/jobs", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("npm install");
+		expect(output[0]).toContain("build done");
+		expect(output[0]).toContain("Running Jobs");
+		expect(output[0]).toContain("Recent Jobs");
+	});
+
+	// /dump
+	it("dump: outputs transcript when present", async () => {
+		const { output, runtime } = createRuntime();
+		runtime.session.formatSessionAsText = () => "Session content here";
+
+		const result = await executeAcpBuiltinSlashCommand("/dump", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toBe("Session content here");
+	});
+
+	it("dump: outputs empty-state message when no messages", async () => {
+		const { output, runtime } = createRuntime();
+
+		const result = await executeAcpBuiltinSlashCommand("/dump", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("No messages");
+	});
+
+	// /model
+	it("model: returns current model when set", async () => {
+		const { output, runtime } = createRuntime();
+		runtime.session.model = { provider: "anthropic", id: "claude-opus-4-5" } as never;
+
+		const result = await executeAcpBuiltinSlashCommand("/model", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("anthropic/claude-opus-4-5");
+	});
+
+	it("model: returns no-selection message when undefined", async () => {
+		const { output, runtime } = createRuntime();
+
+		const result = await executeAcpBuiltinSlashCommand("/model", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("No model");
+	});
+
+	it("model: returns ACP usage message when args provided", async () => {
+		const { output, runtime } = createRuntime();
+
+		const result = await executeAcpBuiltinSlashCommand("/model claude-3-5-sonnet", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]?.toLowerCase()).toContain("acp");
+	});
+
+	// Removed TUI-only and dropped commands fall through as false
+	it("removed commands return false (fall through to model)", async () => {
+		const removedCommands = [
+			"/login",
+			"/logout",
+			"/resume",
+			"/tree",
+			"/branch",
+			"/plan",
+			"/loop",
+			"/hotkeys",
+			"/extensions",
+			"/agents",
+			"/copy",
+			"/btw hi",
+			"/new",
+			"/drop",
+			"/handoff",
+			"/fork",
+		];
+		for (const cmd of removedCommands) {
+			const { runtime } = createRuntime();
+			const result = await executeAcpBuiltinSlashCommand(cmd, runtime);
+			expect(result).toBe(false);
+		}
+	});
+});
+
+describe("session lifecycle commands", () => {
+	it("/session delete: returns in-memory usage when no sessionFile", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/session delete", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("in-memory");
+	});
+
+	it("/session delete: refuses while streaming", async () => {
+		const { output, session, fakeSessionManager, runtime } = createRuntime();
+		session.isStreaming = true;
+		fakeSessionManager._sessionFile = "/tmp/session.jsonl";
+		const result = await executeAcpBuiltinSlashCommand("/session delete", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("streaming");
+	});
+
+	it("/rename: renames and calls notifyTitleChanged on success", async () => {
+		const { output, fakeSessionManager, runtime } = createRuntime();
+		let notified = false;
+		runtime.notifyTitleChanged = async () => {
+			notified = true;
+		};
+		const result = await executeAcpBuiltinSlashCommand("/rename Project Apex", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(fakeSessionManager._sessionName).toBe("Project Apex");
+		expect(output[0]).toBe("Session renamed to Project Apex.");
+		expect(notified).toBe(true);
+	});
+
+	it("/rename: outputs precedence message when setSessionName returns false", async () => {
+		const { output, fakeSessionManager, runtime } = createRuntime();
+		let notified = false;
+		runtime.notifyTitleChanged = async () => {
+			notified = true;
+		};
+		fakeSessionManager.setSessionName = async () => false;
+		const result = await executeAcpBuiltinSlashCommand("/rename Bar", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("takes precedence");
+		expect(notified).toBe(false);
+	});
+
+	it("/move: reports moved path via sessionManager.getCwd() and calls notifyTitleChanged", async () => {
+		const { output, fakeSessionManager, runtime } = createRuntime();
+		let notified = false;
+		runtime.notifyTitleChanged = async () => {
+			notified = true;
+		};
+		const result = await executeAcpBuiltinSlashCommand("/move /tmp", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(fakeSessionManager._flushed).toBe(true);
+		expect(fakeSessionManager._movedTo).toBe("/tmp");
+		expect(output[0]).toContain("/tmp");
+		expect(notified).toBe(true);
+	});
+
+	it("/move: refuses while streaming", async () => {
+		const { output, session, runtime } = createRuntime();
+		session.isStreaming = true;
+		const result = await executeAcpBuiltinSlashCommand("/move /tmp", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("streaming");
+	});
+});
+
+describe("wave 3 commands", () => {
+	// /export
+	it("/export: calls exportToHtml with the given arg and outputs the path", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/export /tmp/out.html", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toBe("Session exported to: /tmp/out.html");
+	});
+
+	it("/export: uses default path when no arg given", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/export", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Session exported to:");
+	});
+
+	it("/export: returns usage on exportToHtml failure", async () => {
+		const { output, session, runtime } = createRuntime();
+		session.exportToHtml = async () => {
+			throw new Error("disk full");
+		};
+		const result = await executeAcpBuiltinSlashCommand("/export", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Failed to export session: disk full");
+	});
+
+	// /todo
+	it("/todo no-args: outputs empty state message when no todos", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/todo", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toBe("No todos. Use /todo append <task> to start one.");
+	});
+
+	it("/todo append: stores phases and records custom entry", async () => {
+		const { session, fakeSessionManager, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand('/todo append "Build" "Wire setup"', runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(session._todoPhases).toHaveLength(1);
+		expect(session._todoPhases[0]?.name).toBe("Build");
+		expect(session._todoPhases[0]?.tasks[0]?.content).toBe("Wire setup");
+		expect(fakeSessionManager._customEntries).toHaveLength(1);
+		expect(fakeSessionManager._customEntries[0]?.customType).toBe("user_todo_edit");
+	});
+
+	it("/todo edit: returns TUI-only usage message", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/todo edit", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("TUI editor");
+	});
+
+	it("/todo unknown: returns usage message", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/todo foobar", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Unknown /todo subcommand");
+	});
+
+	// /move
+	it("/move: returns usage when no arg", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/move", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Usage: /move");
+	});
+
+	it("/move: returns usage when path does not exist", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/move /no/such/path/xyz", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("does not exist");
+	});
+
+	// /memory
+	it("/memory unknown: returns usage message", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/memory unknownverb", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Usage: /memory");
+	});
+
+	it("/memory view: outputs memory payload (or empty message)", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/memory view", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output.length).toBeGreaterThan(0);
+	});
+
+	it("/memory (no args): defaults to view", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/memory", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output.length).toBeGreaterThan(0);
+	});
+
+	// /todo start fuzzy match
+	it("/todo start: finds pending task by substring and starts it", async () => {
+		const { output, session, runtime } = createRuntime();
+		session._todoPhases = [{ name: "Setup", tasks: [{ content: "Wire up router", status: "pending" }] }];
+		const result = await executeAcpBuiltinSlashCommand('/todo start "wire"', runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Wire up router");
+		expect(session._todoPhases[0]?.tasks[0]?.status).toBe("in_progress");
+	});
+
+	// /browser
+	it("/browser visible: sets headless=false; second call is idempotent", async () => {
+		const { runtime } = createRuntime();
+		runtime.settings.set("browser.enabled" as never, true as never);
+		runtime.settings.set("browser.headless" as never, true as never);
+		const r1 = await executeAcpBuiltinSlashCommand("/browser visible", runtime);
+		expect(r1).toEqual({ consumed: true });
+		expect(runtime.settings.get("browser.headless" as never)).toBe(false);
+		const r2 = await executeAcpBuiltinSlashCommand("/browser visible", runtime);
+		expect(r2).toEqual({ consumed: true });
+		expect(runtime.settings.get("browser.headless" as never)).toBe(false);
+	});
+
+	it("/browser no-arg after /browser visible toggles to headless", async () => {
+		const { output, runtime } = createRuntime();
+		runtime.settings.set("browser.enabled" as never, true as never);
+		runtime.settings.set("browser.headless" as never, true as never);
+		await executeAcpBuiltinSlashCommand("/browser visible", runtime);
+		const r = await executeAcpBuiltinSlashCommand("/browser", runtime);
+		expect(r).toEqual({ consumed: true });
+		expect(output[output.length - 1]).toContain("headless");
+		expect(runtime.settings.get("browser.headless" as never)).toBe(true);
+	});
+
+	// /compact
+	it("/compact: reports Compaction complete. after session.compact resolves", async () => {
+		const { output, session, runtime } = createRuntime();
+		let compactCalled = false;
+		session.compact = async (_args?: string) => {
+			compactCalled = true;
+		};
+		const result = await executeAcpBuiltinSlashCommand("/compact", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(compactCalled).toBe(true);
+		expect(output[0]).toContain("Compaction complete.");
+	});
+});
+
+describe("wave 4 commands", () => {
+	// /mcp
+	it("/mcp (no args): outputs help text containing list, enable, disable, remove, reload", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/mcp", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("list");
+		expect(output[0]).toContain("enable");
+		expect(output[0]).toContain("disable");
+		expect(output[0]).toContain("remove");
+		expect(output[0]).toContain("reload");
+	});
+
+	it("/mcp help: outputs help text containing list, enable, disable, remove, reload", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/mcp help", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("list");
+		expect(output[0]).toContain("enable");
+		expect(output[0]).toContain("disable");
+		expect(output[0]).toContain("remove");
+		expect(output[0]).toContain("reload");
+	});
+
+	it("/mcp add (no args): returns usage string", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/mcp add", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Usage");
+	});
+
+	it("/mcp reload: calls refreshCommands and outputs confirmation", async () => {
+		let refreshCalled = false;
+		const { output, runtime } = createRuntime();
+		runtime.refreshCommands = () => {
+			refreshCalled = true;
+		};
+		const result = await executeAcpBuiltinSlashCommand("/mcp reload", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(refreshCalled).toBe(true);
+		expect(output[0]).toContain("reload");
+	});
+
+	it("/mcp resources: outputs server list or no-server message", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/mcp resources", runtime);
+		expect(result).toEqual({ consumed: true });
+		// No servers configured in tmp project dir — should report that
+		expect(output[0]).toMatch(/No MCP servers configured|No resources/);
+	});
+
+	it("/mcp unknown-verb: returns usage pointing to help", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/mcp frobnicate", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Unknown");
+	});
+
+	// /ssh
+	it("/ssh (no args): outputs help text containing list and remove", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/ssh", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("list");
+		expect(output[0]).toContain("remove");
+	});
+
+	it("/ssh help: outputs help text containing list and remove", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/ssh help", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("list");
+		expect(output[0]).toContain("remove");
+	});
+
+	it("/ssh add (no args): returns usage", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/ssh add", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Usage");
+	});
+
+	it("/ssh unknown-verb: returns unknown subcommand message", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/ssh frobnicate", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Unknown");
+	});
+
+	// /marketplace
+	it("/marketplace help: outputs help text", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/marketplace help", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Marketplace commands");
+		expect(output[0]).toContain("install");
+	});
+
+	it("/marketplace install (no args): returns interactive picker usage", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/marketplace install", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("TUI-only");
+	});
+
+	it("/marketplace uninstall (no args): returns interactive picker usage", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/marketplace uninstall", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("TUI-only");
+	});
+
+	// /plugins
+	it("/plugins list: outputs without throwing when registries are empty", async () => {
+		const { MarketplaceManager } = await import("../src/extensibility/plugins/marketplace");
+		const { PluginManager } = await import("../src/extensibility/plugins");
+		const listInstalledSpy = spyOn(MarketplaceManager.prototype, "listInstalledPlugins").mockResolvedValue([]);
+		const npmListSpy = spyOn(PluginManager.prototype, "list").mockResolvedValue([]);
+		try {
+			const { output, runtime } = createRuntime();
+			const result = await executeAcpBuiltinSlashCommand("/plugins list", runtime);
+			expect(result).toEqual({ consumed: true });
+			expect(output.length).toBeGreaterThan(0);
+		} finally {
+			listInstalledSpy.mockRestore();
+			npmListSpy.mockRestore();
+		}
+	});
+
+	it("/plugins (no args): defaults to list", async () => {
+		const { MarketplaceManager } = await import("../src/extensibility/plugins/marketplace");
+		const { PluginManager } = await import("../src/extensibility/plugins");
+		const listInstalledSpy = spyOn(MarketplaceManager.prototype, "listInstalledPlugins").mockResolvedValue([]);
+		const npmListSpy = spyOn(PluginManager.prototype, "list").mockResolvedValue([]);
+		try {
+			const { output, runtime } = createRuntime();
+			const result = await executeAcpBuiltinSlashCommand("/plugins", runtime);
+			expect(result).toEqual({ consumed: true });
+			expect(output.length).toBeGreaterThan(0);
+		} finally {
+			listInstalledSpy.mockRestore();
+			npmListSpy.mockRestore();
+		}
+	});
+
+	// /todo start with in_progress status in fuzzy list
+	it("/todo start: resolves ambiguous matches by preferring active tasks", async () => {
+		const { output, session, runtime } = createRuntime();
+		session._todoPhases = [
+			{
+				name: "Phase 1",
+				tasks: [
+					{ content: "Wire auth middleware", status: "pending" },
+					{ content: "Wire session store", status: "completed" },
+				],
+			},
+		];
+		const result = await executeAcpBuiltinSlashCommand('/todo start "wire"', runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Wire auth middleware");
+	});
+});
+
+describe("wave 5 — adapters and polish", () => {
+	// /mcp help lists new subcommands
+	it("/mcp help: lists resources, prompts, test, add, smithery-search", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/mcp help", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("resources");
+		expect(output[0]).toContain("prompts");
+		expect(output[0]).toContain("test");
+		expect(output[0]).toContain("add");
+		expect(output[0]).toContain("smithery-search");
+	});
+
+	// /mcp add — verify parsing and output message
+	it("/mcp add foo --url https://example.com --token X --scope project: outputs success or propagates write error", async () => {
+		// Uses project scope so it writes to /tmp/project/.omp/mcp.json which test infra controls.
+		// We verify the command either reports success or a meaningful error (not a parse error).
+		const mcpModule = await import("../src/mcp/config-writer");
+		const spy = spyOn(mcpModule, "addMCPServer").mockResolvedValue(undefined);
+		try {
+			const { output, runtime } = createRuntime();
+			const result = await executeAcpBuiltinSlashCommand(
+				"/mcp add foo --url https://example.com --token X --scope project",
+				runtime,
+			);
+			expect(result).toEqual({ consumed: true });
+			expect(output[0]).toContain('Added MCP server "foo" (project).');
+			expect(spy).toHaveBeenCalledTimes(1);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	// /mcp test — spy on connectToServer
+	it("/mcp test bogus: returns error when server not found in config", async () => {
+		const { output, runtime } = createRuntime();
+		// No servers in /tmp/project config — server not found
+		const result = await executeAcpBuiltinSlashCommand("/mcp test bogus", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("not found");
+	});
+
+	// /ssh add — spy on addSSHHost
+	it("/ssh add foo --host x --user y --scope user: calls addSSHHost", async () => {
+		const sshModule = await import("../src/ssh/config-writer");
+		const spy = spyOn(sshModule, "addSSHHost").mockResolvedValue(undefined);
+		try {
+			const { output, runtime } = createRuntime();
+			const result = await executeAcpBuiltinSlashCommand("/ssh add foo --host x --user y --scope user", runtime);
+			expect(result).toEqual({ consumed: true });
+			expect(output[0]).toContain('Added SSH host "foo" (user).');
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	// /model with unknown id
+	it("/model gpt-fake-9000: returns unknown-model message", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/model gpt-fake-9000", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Unknown model");
+	});
+
+	// /model with known id (fake registry)
+	it("/model known-id: reports model set and triggers notifyTitleChanged", async () => {
+		const { output, session, runtime } = createRuntime();
+		session.getAvailableModels = () => [{ provider: "anthropic", id: "claude-sonnet-test" }];
+		let titleChanged = false;
+		runtime.notifyTitleChanged = () => {
+			titleChanged = true;
+		};
+		const result = await executeAcpBuiltinSlashCommand("/model claude-sonnet-test", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Model set to anthropic/claude-sonnet-test.");
+		expect(titleChanged).toBe(true);
+	});
+
+	// /usage bar character
+	it("/usage: includes bar character when usedFraction is 0.5", async () => {
+		const { output, runtime } = createRuntime();
+		runtime.session.fetchUsageReports = async () => [
+			{
+				provider: "test-provider",
+				fetchedAt: Date.now(),
+				limits: [
+					{
+						id: "test-limit",
+						label: "Monthly",
+						scope: { provider: "test-provider", tier: "pro", accountId: "acct-1" },
+						window: { id: "monthly", label: "monthly", resetsAt: Date.now() + 30 * 86400_000 },
+						amount: { used: 50, usedFraction: 0.5, unit: "requests" },
+					},
+				],
+				metadata: {},
+			},
+		];
+		const result = await executeAcpBuiltinSlashCommand("/usage", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("█");
+	});
+
+	// /context breakdown
+	it("/context: lists more than one breakdown line for session with messages", async () => {
+		const { output, session, runtime } = createRuntime();
+		// computeContextBreakdown needs model.contextWindow; fake session falls back gracefully
+		(session as unknown as Record<string, unknown>).model = {
+			provider: "anthropic",
+			id: "claude-test",
+			contextWindow: 200_000,
+		};
+		(session as unknown as Record<string, unknown>).skills = [];
+		(session as unknown as Record<string, unknown>).agent = { state: { tools: [] } };
+		(session as unknown as Record<string, unknown>).systemPrompt = ["You are a helpful assistant."];
+		(session as unknown as Record<string, unknown>).settings = {
+			getGroup: () => ({ enabled: false, strategy: "off" }),
+		};
+		session.messages = [
+			{ role: "user", content: "Hello, how are you?" },
+			{ role: "assistant", content: "I am doing well." },
+		];
+		const result = await executeAcpBuiltinSlashCommand("/context", runtime);
+		expect(result).toEqual({ consumed: true });
+		// Should show the breakdown with multiple lines (Messages category visible)
+		const text = output[0] ?? "";
+		expect(text).toContain("tokens");
+		expect(text.split("\n").length).toBeGreaterThan(1);
+	});
+
+	// /jobs empty state
+	it("/jobs: empty-state output mentions background jobs definition", async () => {
+		const { output, runtime } = createRuntime();
+		// Return empty snapshot (running=[], recent=[])
+		runtime.session.getAsyncJobSnapshot = () => ({ running: [], recent: [] });
+		const result = await executeAcpBuiltinSlashCommand("/jobs", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("background jobs");
+	});
+
+	// /marketplace discover bulleted list
+	it("/marketplace discover: output is bulleted with '  - ' token", async () => {
+		const { MarketplaceManager } = await import("../src/extensibility/plugins/marketplace");
+		const discoverSpy = spyOn(MarketplaceManager.prototype, "listAvailablePlugins").mockResolvedValue([
+			{ name: "hello", version: "1.0.0", description: "A greeting plugin" } as never,
+			{ name: "world", version: "2.0.0", description: undefined } as never,
+		]);
+		try {
+			const { output, runtime } = createRuntime();
+			const result = await executeAcpBuiltinSlashCommand("/marketplace discover", runtime);
+			expect(result).toEqual({ consumed: true });
+			expect(output[0]).toContain("  - ");
+			expect(output[0]).toContain("hello@1.0.0");
+		} finally {
+			discoverSpy.mockRestore();
+		}
+	});
+});

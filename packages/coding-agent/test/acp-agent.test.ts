@@ -3,11 +3,21 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentSideConnection, PromptRequest, SessionNotification } from "@agentclientprotocol/sdk";
+import {
+	zForkSessionResponse,
+	zLoadSessionResponse,
+	zNewSessionResponse,
+	zPromptResponse,
+	zSessionNotification,
+} from "@agentclientprotocol/sdk/dist/schema/zod.gen.js";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import { _resetSettingsForTest, Settings } from "../src/config/settings";
 import { AcpAgent } from "../src/modes/acp/acp-agent";
+import type { PlanModeState } from "../src/plan-mode/state";
 import type { AgentSession, AgentSessionEvent } from "../src/session/agent-session";
 import { SessionManager } from "../src/session/session-manager";
+import { expectAcpStructure } from "./helpers/acp-schema";
 
 const TEST_MODELS: Model[] = [
 	{
@@ -74,6 +84,13 @@ class FakeAgentSession {
 	queuedMessageCount = 0;
 	systemPrompt = "system";
 	disposed = false;
+	fastMode = false;
+	forcedToolChoice: string | undefined;
+	promptCalls: string[] = [];
+	customMessages: Array<{ customType: string; content: string; details?: unknown }> = [];
+	skillsSettings = { enableSkillCommands: true };
+	skills: Array<{ name: string; description: string; filePath: string; baseDir: string; source: string }> = [];
+	planModeState: PlanModeState | undefined;
 	#listeners = new Set<(event: AgentSessionEvent) => void>();
 
 	constructor(
@@ -123,6 +140,7 @@ class FakeAgentSession {
 	}
 
 	async prompt(text: string): Promise<void> {
+		this.promptCalls.push(text);
 		this.isStreaming = true;
 		this.sessionManager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
 		const assistantMessage = makeAssistantMessage("pong");
@@ -144,6 +162,27 @@ class FakeAgentSession {
 	}
 
 	async abort(): Promise<void> {
+		this.isStreaming = false;
+	}
+
+	async promptCustomMessage(message: { customType: string; content: string; details?: unknown }): Promise<void> {
+		this.customMessages.push(message);
+		this.isStreaming = true;
+		const assistantMessage = makeAssistantMessage("skill pong");
+		for (const listener of this.#listeners) {
+			listener({
+				type: "message_update",
+				message: assistantMessage,
+				assistantMessageEvent: { type: "text_delta", delta: "skill pong" },
+			} as AgentSessionEvent);
+		}
+		this.sessionManager.appendMessage(assistantMessage);
+		for (const listener of this.#listeners) {
+			listener({
+				type: "agent_end",
+				messages: [assistantMessage],
+			} as AgentSessionEvent);
+		}
 		this.isStreaming = false;
 	}
 
@@ -192,6 +231,37 @@ class FakeAgentSession {
 
 	setActiveToolsByName(_toolNames: string[]): void {}
 
+	setClientBridge(_bridge: unknown): void {}
+
+	getPlanModeState(): PlanModeState | undefined {
+		return this.planModeState;
+	}
+
+	setPlanModeState(state: PlanModeState | undefined): void {
+		this.planModeState = state;
+	}
+
+	getToolByName(_name: string): undefined {
+		return undefined;
+	}
+
+	toggleFastMode(): boolean {
+		this.fastMode = !this.fastMode;
+		return this.fastMode;
+	}
+
+	setFastMode(enabled: boolean): void {
+		this.fastMode = enabled;
+	}
+
+	isFastModeEnabled(): boolean {
+		return this.fastMode;
+	}
+
+	setForcedToolChoice(toolName: string): void {
+		this.forcedToolChoice = toolName;
+	}
+
 	async sendCustomMessage(_message: string, _options?: unknown): Promise<void> {}
 
 	async sendUserMessage(_content: string, _options?: unknown): Promise<void> {}
@@ -225,6 +295,12 @@ function getChunkMessageId(notification: SessionNotification): string | undefine
 	return typeof update.messageId === "string" ? update.messageId : undefined;
 }
 
+function expectAcpNotifications(updates: SessionNotification[]): void {
+	for (const update of updates) {
+		expectAcpStructure(zSessionNotification, update);
+	}
+}
+
 const cleanupRoots: string[] = [];
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
@@ -236,6 +312,7 @@ afterEach(async () => {
 		setAgentDir(fallbackAgentDir);
 		delete process.env.PI_CODING_AGENT_DIR;
 	}
+	_resetSettingsForTest();
 
 	for (const root of cleanupRoots.splice(0)) {
 		await fs.promises.rm(root, { recursive: true, force: true });
@@ -252,6 +329,7 @@ async function createHarness(): Promise<AgentHarness> {
 	await fs.promises.mkdir(cwdA, { recursive: true });
 	await fs.promises.mkdir(cwdB, { recursive: true });
 	setAgentDir(agentDir);
+	await Settings.init({ agentDir, inMemory: true });
 
 	const updates: SessionNotification[] = [];
 	const abortController = new AbortController();
@@ -288,6 +366,8 @@ describe("ACP agent", () => {
 		const harness = await createHarness();
 		const first = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const second = await harness.agent.newSession({ cwd: harness.cwdB, mcpServers: [] });
+		expectAcpStructure(zNewSessionResponse, first);
+		expectAcpStructure(zNewSessionResponse, second);
 
 		expect(first.models?.availableModels.map(model => model.modelId)).toEqual(
 			TEST_MODELS.map(model => `${model.provider}/${model.id}`),
@@ -302,6 +382,7 @@ describe("ACP agent", () => {
 			configId: "thinking",
 			value: "high",
 		});
+		expectAcpNotifications(harness.updates);
 
 		const firstSession = harness.findSession(first.sessionId);
 		const secondSession = harness.findSession(second.sessionId);
@@ -318,14 +399,81 @@ describe("ACP agent", () => {
 			cwd: harness.cwdA,
 			mcpServers: [],
 		});
+		expectAcpStructure(zForkSessionResponse, forked);
 		const forkedSession = harness.findSession(forked.sessionId);
 		const forkedMessages = forkedSession?.sessionManager.buildSessionContext().messages ?? [];
 		expect(forked.sessionId).not.toBe(first.sessionId);
 		expect(forkedMessages.some(message => message.role === "user" && message.content === "fork me")).toBe(true);
 
-		await harness.agent.unstable_closeSession({ sessionId: forked.sessionId });
+		await harness.agent.closeSession({ sessionId: forked.sessionId });
 		await expect(harness.agent.setSessionMode({ sessionId: forked.sessionId, modeId: "default" })).rejects.toThrow(
 			"Unsupported ACP session",
+		);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("advertises plan mode and emits schema-valid mode updates", async () => {
+		const harness = await createHarness();
+		Settings.instance.set("plan.enabled", true);
+
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		expectAcpStructure(zNewSessionResponse, created);
+		expect(created.modes?.availableModes.map(mode => mode.id)).toEqual(["default", "plan"]);
+		const initialModeConfig = created.configOptions?.find(option => option.id === "mode") as
+			| { currentValue?: unknown; options?: Array<{ value: string }> }
+			| undefined;
+		expect(initialModeConfig?.currentValue).toBe("default");
+		expect(initialModeConfig?.options?.map(option => option.value)).toEqual(["default", "plan"]);
+
+		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "plan" });
+
+		const session = harness.findSession(created.sessionId)!;
+		expect(session.planModeState).toEqual(
+			expect.objectContaining({ enabled: true, planFilePath: "local://PLAN.md", workflow: "parallel" }),
+		);
+		const modeNotifications = harness.updates.filter(
+			notification =>
+				notification.sessionId === created.sessionId &&
+				(notification.update.sessionUpdate === "current_mode_update" ||
+					notification.update.sessionUpdate === "config_option_update"),
+		);
+		expectAcpNotifications(modeNotifications);
+		expect(
+			modeNotifications.some(
+				notification =>
+					notification.update.sessionUpdate === "current_mode_update" &&
+					notification.update.currentModeId === "plan",
+			),
+		).toBe(true);
+		const configNotification = modeNotifications.findLast(
+			notification => notification.update.sessionUpdate === "config_option_update",
+		);
+		const currentModeConfig =
+			configNotification?.update.sessionUpdate === "config_option_update"
+				? (configNotification.update.configOptions.find(option => option.id === "mode") as
+						| { currentValue?: unknown }
+						| undefined)
+				: undefined;
+		expect(currentModeConfig?.currentValue).toBe("plan");
+
+		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "default" });
+		expect(session.planModeState).toBeUndefined();
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("accepts only ACP underscore-prefixed extension methods", async () => {
+		const harness = await createHarness();
+
+		const result = await harness.agent.extMethod("_omp/sessions/listAll", { limit: 2 });
+
+		expect(Array.isArray(result.sessions)).toBe(true);
+		expect(typeof result.total).toBe("number");
+		await expect(harness.agent.extMethod("omp/sessions/listAll", { limit: 2 })).rejects.toThrow(
+			"Unknown ACP ext method",
 		);
 
 		harness.abortController.abort();
@@ -341,7 +489,12 @@ describe("ACP agent", () => {
 		await stored.sessionManager.ensureOnDisk();
 		await stored.sessionManager.flush();
 
-		await harness.agent.loadSession({ sessionId: stored.sessionId, cwd: harness.cwdA, mcpServers: [] });
+		const loaded = await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+		expectAcpStructure(zLoadSessionResponse, loaded);
 		const replayChunks = harness.updates.filter(
 			update =>
 				update.sessionId === stored.sessionId &&
@@ -368,6 +521,8 @@ describe("ACP agent", () => {
 			messageId: "05b17a6f-b310-4be7-b767-6b4f3a84eb63",
 			prompt: [{ type: "text", text: "ping" }],
 		} as PromptRequest);
+		expectAcpStructure(zPromptResponse, response);
+		expectAcpNotifications(harness.updates);
 
 		const liveChunks = harness.updates.filter(
 			update => update.sessionId === live.sessionId && update.update.sessionUpdate === "agent_message_chunk",
@@ -385,6 +540,142 @@ describe("ACP agent", () => {
 				update => typeof getChunkMessageId(update) === "string" && getChunkMessageId(update)!.length > 0,
 			),
 		).toBe(true);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("advertises ACP-safe builtins and skill commands", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		const skillDir = path.join(harness.cwdA, ".skills", "sample");
+		const skillPath = path.join(skillDir, "SKILL.md");
+		await fs.promises.mkdir(skillDir, { recursive: true });
+		await fs.promises.writeFile(skillPath, "---\ndescription: Sample skill\n---\n# Sample\nDo work.\n");
+		session.skills = [
+			{
+				name: "sample",
+				description: "Sample skill",
+				filePath: skillPath,
+				baseDir: skillDir,
+				source: "test",
+			},
+		];
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000004",
+			prompt: [{ type: "text", text: "/reload-plugins" }],
+		} as PromptRequest);
+
+		const commandUpdates = harness.updates.filter(
+			update =>
+				update.sessionId === created.sessionId && update.update.sessionUpdate === "available_commands_update",
+		);
+		const names = commandUpdates.flatMap(update =>
+			update.update.sessionUpdate === "available_commands_update"
+				? update.update.availableCommands.map(command => command.name)
+				: [],
+		);
+		expect(names).toContain("fast");
+		expect(names).toContain("force");
+		expect(names).toContain("skill:sample");
+		expect(names).not.toContain("settings");
+		expect(names).not.toContain("copy");
+		expect(names).not.toContain("plan");
+		expect(names).not.toContain("loop");
+		expect(names).not.toContain("login");
+		expect(names).not.toContain("new");
+		expect(names).not.toContain("handoff");
+		expect(names).not.toContain("fork");
+		expect(names).not.toContain("btw");
+		expect(names).not.toContain("drop");
+		expect(names).not.toContain("resume");
+		expect(names).not.toContain("agents");
+		expect(names).not.toContain("extensions");
+		expect(names).not.toContain("hotkeys");
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("executes skill commands through custom skill messages", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		const skillDir = path.join(harness.cwdA, ".skills", "sample");
+		const skillPath = path.join(skillDir, "SKILL.md");
+		await fs.promises.mkdir(skillDir, { recursive: true });
+		await fs.promises.writeFile(skillPath, "---\ndescription: Sample skill\n---\n# Sample\nDo work.\n");
+		session.skills = [
+			{
+				name: "sample",
+				description: "Sample skill",
+				filePath: skillPath,
+				baseDir: skillDir,
+				source: "test",
+			},
+		];
+
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000001",
+			prompt: [{ type: "text", text: "/skill:sample extra context" }],
+		} as PromptRequest);
+
+		expect(session.promptCalls).toEqual([]);
+		expect(session.customMessages).toHaveLength(1);
+		expect(session.customMessages[0]!.customType).toBe("skill-prompt");
+		expect(session.customMessages[0]!.content).toContain("# Sample\nDo work.");
+		expect(session.customMessages[0]!.content).toContain(`Skill: ${skillPath}`);
+		expect(session.customMessages[0]!.content).toContain("User: extra context");
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("executes consumed ACP builtins without prompting the agent", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+
+		const response = await harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000002",
+			prompt: [{ type: "text", text: "/fast status" }],
+		} as PromptRequest);
+
+		const chunks = harness.updates.filter(
+			update => update.sessionId === created.sessionId && update.update.sessionUpdate === "agent_message_chunk",
+		);
+		expect(response.userMessageId).toBe("00000000-0000-4000-8000-000000000002");
+		expect(session.promptCalls).toEqual([]);
+		expect(
+			chunks.some(
+				update =>
+					update.update.sessionUpdate === "agent_message_chunk" &&
+					update.update.content.type === "text" &&
+					update.update.content.text === "Fast mode is off.",
+			),
+		).toBe(true);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("executes force builtins and forwards remaining prompt text", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000003",
+			prompt: [{ type: "text", text: "/force read inspect package.json" }],
+		} as PromptRequest);
+
+		expect(session.forcedToolChoice).toBe("read");
+		expect(session.promptCalls).toEqual(["inspect package.json"]);
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
