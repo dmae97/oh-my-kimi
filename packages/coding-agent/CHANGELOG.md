@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.9.7] - 2026-05-12
+
 ### Breaking Changes
 
 - Changed the `timeoutMs` execution option to no longer be enforced during worker-based JS runs, so callers must rely on external cancellation signals for time limits

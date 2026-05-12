@@ -2371,7 +2371,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "14.9.5"
+version = "14.9.7"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -2439,7 +2439,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "14.9.5"
+version = "14.9.7"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2487,7 +2487,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "14.9.5"
+version = "14.9.7"
 dependencies = [
  "anyhow",
  "brush-builtins",
