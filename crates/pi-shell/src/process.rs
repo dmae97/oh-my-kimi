@@ -291,13 +291,15 @@ mod platform {
 
 #[cfg(target_os = "macos")]
 mod platform {
-	use std::{collections::HashSet, ptr};
+	use std::{
+		collections::{HashMap, HashSet},
+		ptr,
+	};
 
 	use super::ProcessStatus;
 
 	#[link(name = "proc", kind = "dylib")]
 	unsafe extern "C" {
-		fn proc_listchildpids(ppid: i32, buffer: *mut i32, buffersize: i32) -> i32;
 		fn proc_listallpids(buffer: *mut i32, buffersize: i32) -> i32;
 		fn proc_pidpath(pid: i32, buffer: *mut std::ffi::c_void, buffersize: u32) -> i32;
 	}
@@ -332,36 +334,17 @@ mod platform {
 			if self.live_bsdinfo().is_none() {
 				return Vec::new();
 			}
-
-			// SAFETY: Passing a null buffer with size 0 is the documented libproc query
-			// form for obtaining the byte count needed for child PIDs; libproc does not
-			// dereference the null pointer in this mode.
-			let bytes = unsafe { proc_listchildpids(self.pid, ptr::null_mut(), 0) };
-			if bytes <= 0 {
-				return Vec::new();
-			}
-
-			let count = bytes as usize / size_of::<i32>();
-			let mut buffer = vec![0i32; count];
-			// SAFETY: `buffer` is valid for `buffer.len() * size_of::<i32>()` bytes and
-			// is properly aligned for `i32`; libproc writes at most the supplied size.
-			let actual = unsafe {
-				proc_listchildpids(
-					self.pid,
-					buffer.as_mut_ptr(),
-					(buffer.len() * size_of::<i32>()) as i32,
-				)
-			};
-			if actual <= 0 {
-				return Vec::new();
-			}
-
-			let child_count = ((actual as usize) / size_of::<i32>()).min(buffer.len());
-			buffer[..child_count]
-				.iter()
-				.copied()
-				.filter_map(Self::from_pid)
-				.collect()
+			// `proc_listchildpids` (the obvious choice) is broken on recent macOS
+			// kernels when queried for the *calling* process \u2014 it returns one byte of
+			// padding regardless of how many children the process actually has, so a
+			// process can never list its own descendants. Confirmed on darwin 25.4
+			// from C, Rust, and Bun callers via `proc_listchildpids(getpid(), \u2026)`,
+			// while `ps -P` and `pgrep -P` still see the same children. Walk the
+			// whole pid table via `proc_listallpids` and filter on `pbi_ppid`
+			// instead; this is the same approach we already use for `find_by_path`
+			// and that the Windows implementation uses via Toolhelp snapshots.
+			let tree = build_process_tree();
+			Self::children_from_tree(self.pid, &tree)
 		}
 
 		pub fn parent_pid(&self) -> Option<i32> {
@@ -398,19 +381,48 @@ mod platform {
 		/// Walk the descendant tree in post-order (leaves first), de-duplicating
 		/// by PID so concurrent reparenting cannot trap us in a cycle.
 		pub fn descendants(&self) -> Vec<Self> {
+			// One process-table snapshot per walk \u2014 building it inside the recursion
+			// would re-scan every pid for every visited node, producing an `O(N \u00b7 D)`
+			// kernel call pattern. Mirrors the Windows implementation.
+			let tree = build_process_tree();
 			let mut out = Vec::new();
 			let mut visited = HashSet::new();
 			visited.insert(self.pid);
-			self.descendants_into(&mut out, &mut visited);
+			Self::collect_descendants_from_tree(self.pid, &tree, &mut visited, &mut out);
 			out
 		}
 
-		fn descendants_into(&self, out: &mut Vec<Self>, visited: &mut HashSet<i32>) {
-			for child in self.children() {
-				if visited.insert(child.pid) {
-					child.descendants_into(out, visited);
-					out.push(child);
+		fn children_from_tree(parent: i32, tree: &HashMap<i32, Vec<i32>>) -> Vec<Self> {
+			let Some(child_pids) = tree.get(&parent) else {
+				return Vec::new();
+			};
+			child_pids
+				.iter()
+				.copied()
+				.filter_map(Self::from_pid)
+				.collect()
+		}
+
+		fn collect_descendants_from_tree(
+			parent: i32,
+			tree: &HashMap<i32, Vec<i32>>,
+			visited: &mut HashSet<i32>,
+			out: &mut Vec<Self>,
+		) {
+			let Some(child_pids) = tree.get(&parent) else {
+				return;
+			};
+			for &child_pid in child_pids {
+				if !visited.insert(child_pid) {
+					continue;
 				}
+				let Some(child) = Self::from_pid(child_pid) else {
+					continue;
+				};
+				// Post-order: grandchildren first, so leaf processes get signalled
+				// before their parents during tree termination.
+				Self::collect_descendants_from_tree(child_pid, tree, visited, out);
+				out.push(child);
 			}
 		}
 
@@ -447,8 +459,11 @@ mod platform {
 
 	const PROC_PIDPATHINFO_MAXSIZE: usize = 4096;
 
-	/// Find processes whose libproc-reported executable path equals `target`.
-	pub fn find_by_path(target: &str) -> Vec<Process> {
+	/// Snapshot every pid currently visible to `proc_listallpids`. macOS
+	/// silently truncates the second call to the supplied buffer size even
+	/// when the sizing query reports more bytes available, so the buffer is
+	/// padded well beyond the reported count.
+	fn snapshot_all_pids() -> Vec<i32> {
 		// SAFETY: Passing a null buffer with size 0 is the documented libproc query
 		// form for obtaining the byte count needed for all PIDs; libproc does not
 		// dereference the null pointer in this mode.
@@ -456,24 +471,53 @@ mod platform {
 		if bytes <= 0 {
 			return Vec::new();
 		}
-		// macOS truncates the second `proc_listallpids` call's result tightly to
-		// the buffer size we report — even when the buffer is large enough on paper —
-		// so a near-fit buffer can silently lose ~half the pids. Pad generously.
 		let count = (bytes as usize) / size_of::<i32>();
 		let cap = count.saturating_mul(4).max(2048);
 		let mut buffer = vec![0i32; cap];
 		// SAFETY: `buffer` is valid for `buffer.len() * size_of::<i32>()` bytes and
 		// is properly aligned for `i32`; libproc writes at most the supplied size.
-		let actual =
-			unsafe { proc_listallpids(buffer.as_mut_ptr(), (buffer.len() * size_of::<i32>()) as i32) };
+		let actual = unsafe {
+			proc_listallpids(buffer.as_mut_ptr(), (buffer.len() * size_of::<i32>()) as i32)
+		};
 		if actual <= 0 {
 			return Vec::new();
 		}
 		let pid_count = ((actual as usize) / size_of::<i32>()).min(buffer.len());
+		buffer.truncate(pid_count);
+		buffer
+	}
 
+	/// Build a `ppid -> [pids]` map from a one-shot scan of `proc_listallpids`.
+	///
+	/// Used as the foundation of `Process::children` and `Process::descendants`
+	/// on macOS where `proc_listchildpids` returns no children for self-queries.
+	pub(super) fn build_process_tree() -> HashMap<i32, Vec<i32>> {
+		let pids = snapshot_all_pids();
+		let mut tree: HashMap<i32, Vec<i32>> = HashMap::with_capacity(pids.len() / 2);
+		for pid in pids {
+			if pid <= 0 {
+				continue;
+			}
+			let Some(info) = read_bsdinfo(pid) else {
+				continue;
+			};
+			let Ok(ppid) = i32::try_from(info.pbi_ppid) else {
+				continue;
+			};
+			if ppid <= 0 {
+				continue;
+			}
+			tree.entry(ppid).or_default().push(pid);
+		}
+		tree
+	}
+
+	/// Find processes whose libproc-reported executable path equals `target`.
+	pub fn find_by_path(target: &str) -> Vec<Process> {
+		let pids = snapshot_all_pids();
 		let mut path_buf = vec![0u8; PROC_PIDPATHINFO_MAXSIZE];
 		let mut matches = Vec::new();
-		for &pid in &buffer[..pid_count] {
+		for pid in pids {
 			if pid <= 0 {
 				continue;
 			}
@@ -1376,7 +1420,6 @@ impl Process {
 	}
 }
 
-#[allow(dead_code, reason = "shared core keeps wait helper for future callers")]
 async fn wait_for_exit(
 	root: &Process,
 	descendants: &[Process],
@@ -1705,6 +1748,53 @@ mod tests {
 		assert!(
 			!kill_process_group(0, TERM_SIGNAL),
 			"kill_process_group must reject non-positive pgids",
+		);
+	}
+
+	/// Regression test for the macOS `proc_listchildpids` brokenness: on
+	/// darwin 25.4+ the kernel returns no entries when a process queries its
+	/// own children via that API, so `Process::descendants` produced an empty
+	/// list and termination cleanup silently became a no-op. The replacement
+	/// path scans `proc_listallpids` and groups by `pbi_ppid`, which actually
+	/// works. Linux has always worked via `/proc`.
+	#[cfg(unix)]
+	#[test]
+	fn descendants_includes_freshly_spawned_child() {
+		use std::{process::Command, thread, time::Duration};
+
+		let mut child = Command::new("sleep")
+			.arg("10")
+			.spawn()
+			.expect("spawn sleep");
+		let child_pid = i32::try_from(child.id()).expect("child pid fits in i32");
+
+		let self_pid = i32::try_from(std::process::id()).expect("self pid fits in i32");
+		let harness = Process::from_pid(self_pid).expect("harness Process ref");
+
+		// Allow a few polling iterations so the kernel's process-table query
+		// settles on a loaded host. proc_listallpids reflects newly forked pids
+		// within milliseconds in practice; 1s is a comfortable upper bound.
+		let mut found = false;
+		for _ in 0..40 {
+			if harness
+				.live_descendants()
+				.iter()
+				.any(|descendant| descendant.pid() == child_pid)
+			{
+				found = true;
+				break;
+			}
+			thread::sleep(Duration::from_millis(25));
+		}
+
+		let _ = child.kill();
+		let _ = child.wait();
+
+		assert!(
+			found,
+			"freshly spawned child pid {child_pid} must appear in `live_descendants` so the \
+			 cancellation cleanup can reach it; this regressed on macOS when the walk relied on \
+			 the broken `proc_listchildpids`",
 		);
 	}
 }

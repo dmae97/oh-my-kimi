@@ -1,13 +1,15 @@
 //! Runtime-agnostic brush shell execution.
 
 use std::{
-	collections::{HashMap, HashSet},
+	collections::HashMap,
 	fs,
 	io::{self, Write},
 	str,
 	sync::Arc,
 	time::Duration,
 };
+#[cfg(windows)]
+use std::collections::HashSet;
 
 use anyhow::{Error, Result};
 use brush_builtins::{BuiltinSet, default_builtins};
@@ -552,25 +554,6 @@ async fn run_shell_command(
 	params.process_group_policy = ProcessGroupPolicy::NewProcessGroup;
 	params.set_cancel_token(cancel_token.clone());
 	let baseline_descendants = process::current_descendant_pids();
-	let tracked_targets = Arc::new(TokioMutex::new(process::TerminationTargets::new()));
-	let tracking_cancel = CancellationToken::new();
-	let tracker_handle = tokio::spawn({
-		let baseline_descendants = baseline_descendants.clone();
-		let tracked_targets = Arc::clone(&tracked_targets);
-		let tracking_cancel = tracking_cancel.clone();
-		async move {
-			loop {
-				{
-					let mut targets = tracked_targets.lock().await;
-					process::add_new_descendants(&mut targets, &baseline_descendants);
-				}
-				tokio::select! {
-					() = tracking_cancel.cancelled() => break,
-					() = time::sleep(Duration::from_millis(50)) => {}
-				}
-			}
-		}
-	});
 	let reader_cancel = CancellationToken::new();
 	let (activity_tx, mut activity_rx) = mpsc::channel::<()>(1);
 	// Stream every raw chunk to the caller live, regardless of whether
@@ -609,16 +592,32 @@ async fn run_shell_command(
 	let process_cancel_bridge = tokio::spawn({
 		let cancel_token = cancel_token.clone();
 		let baseline_descendants = baseline_descendants.clone();
-		let tracked_targets = Arc::clone(&tracked_targets);
 		async move {
 			cancel_token.cancelled().await;
-			{
-				let mut targets = tracked_targets.lock().await;
+			// Rescan-and-signal loop. Each pass picks up grandchildren spawned
+			// during the previous wave's grace period, then exits early as soon
+			// as no descendants remain. The first wave is SIGTERM so well-behaved
+			// programs get a chance to clean up; subsequent waves escalate to
+			// SIGKILL. Cheaper than the previous 20\u202fHz tracker loop and avoids
+			// the constant kernel chatter when no cancellation ever happens.
+			const WAVES: u32 = 3;
+			for wave in 0..WAVES {
+				let mut targets = process::TerminationTargets::new();
 				process::add_new_descendants(&mut targets, &baseline_descendants);
-				targets.signal(process::TERM_SIGNAL);
+				if targets.is_empty() {
+					return;
+				}
+				let signal = if wave == 0 { process::TERM_SIGNAL } else { process::KILL_SIGNAL };
+				targets.signal(signal);
+				if wave + 1 < WAVES {
+					let pause = if wave == 0 {
+						Duration::from_millis(75)
+					} else {
+						Duration::from_millis(150)
+					};
+					time::sleep(pause).await;
+				}
 			}
-			time::sleep(Duration::from_millis(500)).await;
-			tracked_targets.lock().await.signal(process::KILL_SIGNAL);
 		}
 	});
 	let source_info = SourceInfo::from("pi-natives:command");
@@ -628,7 +627,7 @@ async fn run_shell_command(
 		.await;
 
 	if cancel_token.is_cancelled() {
-		terminate_background_jobs(&session.shell, &baseline_descendants);
+		terminate_background_jobs(&session.shell);
 	}
 
 	if env_scope_pushed {
@@ -690,8 +689,6 @@ async fn run_shell_command(
 	let _ = cancel_bridge.await;
 	process_cancel_bridge.abort();
 	let _ = process_cancel_bridge.await;
-	tracking_cancel.cancel();
-	let _ = tracker_handle.await;
 
 	let result = result.map_err(|err| Error::msg(format!("Shell execution failed: {err}")))?;
 	let mut minimized_out: Option<MinimizerResult> = None;
@@ -724,7 +721,7 @@ async fn run_shell_command(
 }
 
 
-fn terminate_background_jobs(shell: &BrushShell, baseline_descendants: &HashSet<i32>) {
+fn terminate_background_jobs(shell: &BrushShell) {
 	let mut targets = process::TerminationTargets::new();
 	for job in &shell.jobs().jobs {
 		if let Some(pgid) = job.process_group_id() {
@@ -735,15 +732,17 @@ fn terminate_background_jobs(shell: &BrushShell, baseline_descendants: &HashSet<
 		}
 	}
 	if targets.is_empty() {
-		process::add_new_descendants(&mut targets, baseline_descendants);
-	}
-	if targets.is_empty() {
+		// Pure descendant cleanup is handled by `process_cancel_bridge` while
+		// the cancel was still in flight. Here we only signal brush's own
+		// job-tracked targets \u2014 pgids of background-group leaders that may have
+		// already exited (so the descendant walk would no longer find them as
+		// new descendants, but their group still holds live grandchildren).
 		return;
 	}
 
 	targets.signal(process::TERM_SIGNAL);
 	tokio::spawn(async move {
-		time::sleep(Duration::from_millis(500)).await;
+		time::sleep(Duration::from_millis(150)).await;
 		targets.signal(process::KILL_SIGNAL);
 	});
 }
