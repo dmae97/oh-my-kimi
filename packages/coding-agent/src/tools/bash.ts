@@ -4,8 +4,10 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { ImageProtocol, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { $env, getProjectDir, isEnoent, prompt } from "@oh-my-pi/pi-utils";
 import { Type } from "@sinclair/typebox";
+import { AsyncJobManager } from "../async";
 import { type BashResult, executeBash } from "../exec/bash-executor";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import { InternalUrlRouter } from "../internal-urls";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import type { Theme } from "../modes/theme/theme";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
@@ -351,7 +353,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		onUpdate?: AgentToolUpdateCallback<BashToolDetails>;
 		startBackgrounded: boolean;
 	}): ManagedBashJobHandle {
-		const manager = this.session.asyncJobManager;
+		const manager = AsyncJobManager.instance();
 		if (!manager) {
 			throw new ToolError("Background job manager unavailable for this session.");
 		}
@@ -503,7 +505,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 
 		const internalUrlOptions: InternalUrlExpansionOptions = {
 			skills: this.session.skills ?? [],
-			internalRouter: this.session.internalRouter,
+			internalRouter: InternalUrlRouter.instance(),
 			localOptions: {
 				getArtifactsDir: this.session.getArtifactsDir,
 				getSessionId: this.session.getSessionId,
@@ -551,7 +553,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const timeoutClampNotice = formatTimeoutClampNotice(requestedTimeoutSec, timeoutSec);
 
 		if (asyncRequested) {
-			if (!this.session.asyncJobManager) {
+			if (!AsyncJobManager.instance()) {
 				throw new ToolError("Async job manager unavailable for this session.");
 			}
 			const job = this.#startManagedBashJob({
@@ -572,7 +574,8 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			});
 		}
 
-		if (this.#autoBackgroundEnabled && !pty && this.session.asyncJobManager) {
+		const autoBgManager = AsyncJobManager.instance();
+		if (this.#autoBackgroundEnabled && !pty && autoBgManager) {
 			const autoBackgroundWaitMs = this.#resolveAutoBackgroundWaitMs(timeoutMs);
 			const startBackgrounded = autoBackgroundWaitMs === 0;
 			const job = this.#startManagedBashJob({
@@ -595,16 +598,16 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			}
 			const waitResult = await this.#waitForManagedBashJob(job, autoBackgroundWaitMs, signal);
 			if (waitResult.kind === "completed") {
-				this.session.asyncJobManager.acknowledgeDeliveries([job.jobId]);
+				autoBgManager.acknowledgeDeliveries([job.jobId]);
 				return waitResult.result;
 			}
 			if (waitResult.kind === "failed") {
-				this.session.asyncJobManager.acknowledgeDeliveries([job.jobId]);
+				autoBgManager.acknowledgeDeliveries([job.jobId]);
 				throw waitResult.error;
 			}
 			if (waitResult.kind === "aborted") {
-				this.session.asyncJobManager.cancel(job.jobId);
-				this.session.asyncJobManager.acknowledgeDeliveries([job.jobId]);
+				autoBgManager.cancel(job.jobId);
+				autoBgManager.acknowledgeDeliveries([job.jobId]);
 				throw new ToolAbortError(job.getLatestText() || "Command aborted");
 			}
 			job.setBackgrounded(true);

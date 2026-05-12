@@ -20,7 +20,9 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import type { ToolSession } from "..";
+import { AsyncJobManager } from "../async";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
+import { MCPManager } from "../mcp/manager";
 import type { Theme } from "../modes/theme/theme";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
@@ -270,7 +272,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 			return this.#executeSync(_toolCallId, params, signal, onUpdate);
 		}
 
-		const manager = this.session.asyncJobManager;
+		const manager = AsyncJobManager.instance();
 		if (!manager) {
 			return {
 				content: [{ type: "text", text: "Async execution is enabled but no async job manager is available." }],
@@ -869,7 +871,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
 						settings: this.session.settings,
-						mcpManager: this.session.mcpManager,
+						mcpManager: MCPManager.instance(),
 						contextFiles,
 						skills: availableSkills,
 						workspaceTree: this.session.workspaceTree,
@@ -927,7 +929,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
 						settings: this.session.settings,
-						mcpManager: this.session.mcpManager,
+						mcpManager: MCPManager.instance(),
 						contextFiles,
 						skills: availableSkills,
 						workspaceTree: this.session.workspaceTree,

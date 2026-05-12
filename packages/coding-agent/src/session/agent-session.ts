@@ -55,7 +55,7 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import { abortableSleep, getAgentDbPath, isEnoent, logger, prompt, Snowflake } from "@oh-my-pi/pi-utils";
-import type { AsyncJob, AsyncJobManager } from "../async";
+import { type AsyncJob, AsyncJobManager } from "../async";
 import type { Rule } from "../capability/rule";
 import { MODEL_ROLE_IDS, type ModelRegistry } from "../config/model-registry";
 import {
@@ -225,8 +225,6 @@ export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
-	/** Async background jobs launched by tools */
-	asyncJobManager?: AsyncJobManager;
 	/** Models to cycle through with Ctrl+P (from --models flag) */
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	/** Initial session thinking selector. */
@@ -507,7 +505,6 @@ export class AgentSession {
 
 	readonly configWarnings: string[] = [];
 
-	#asyncJobManager: AsyncJobManager | undefined = undefined;
 	#scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	#thinkingLevel: ThinkingLevel | undefined;
 	#promptTemplates: PromptTemplate[];
@@ -704,7 +701,6 @@ export class AgentSession {
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
 		// Power assertions are taken per turn (see #beginInFlight); nothing acquired here.
-		this.#asyncJobManager = config.asyncJobManager;
 		this.#evalKernelOwnerId = config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`;
 		this.#scopedModels = config.scopedModels ?? [];
 		this.#thinkingLevel = config.thinkingLevel;
@@ -848,15 +844,16 @@ export class AgentSession {
 	}
 
 	getAsyncJobSnapshot(options?: { recentLimit?: number }): AsyncJobSnapshot | null {
-		if (!this.#asyncJobManager) return null;
-		const running = this.#asyncJobManager.getRunningJobs().map(job => ({
+		const manager = AsyncJobManager.instance();
+		if (!manager) return null;
+		const running = manager.getRunningJobs().map(job => ({
 			id: job.id,
 			type: job.type,
 			status: job.status,
 			label: job.label,
 			startTime: job.startTime,
 		}));
-		const recent = this.#asyncJobManager.getRecentJobs(options?.recentLimit ?? 5).map(job => ({
+		const recent = manager.getRecentJobs(options?.recentLimit ?? 5).map(job => ({
 			id: job.id,
 			type: job.type,
 			status: job.status,
@@ -2156,8 +2153,9 @@ export class AgentSession {
 		}
 		await this.#cancelPostPromptTasks();
 		this.#clearTodoClearTimers();
-		const drained = await this.#asyncJobManager?.dispose({ timeoutMs: 3_000 });
-		const deliveryState = this.#asyncJobManager?.getDeliveryState();
+		const asyncManager = AsyncJobManager.instance();
+		const drained = await asyncManager?.dispose({ timeoutMs: 3_000 });
+		const deliveryState = asyncManager?.getDeliveryState();
 		if (drained === false && deliveryState) {
 			logger.warn("Async job completion deliveries still pending during dispose", { ...deliveryState });
 		}
@@ -3955,7 +3953,7 @@ export class AgentSession {
 
 		this.#disconnectFromAgent();
 		await this.abort();
-		this.#asyncJobManager?.cancelAll();
+		AsyncJobManager.instance()?.cancelAll();
 		this.#closeAllProviderSessions("new session");
 		this.agent.reset();
 		if (options?.drop && previousSessionFile) {
@@ -4763,7 +4761,7 @@ export class AgentSession {
 			// Start a new session
 			const previousSessionFile = this.sessionFile;
 			await this.sessionManager.flush();
-			this.#asyncJobManager?.cancelAll();
+			AsyncJobManager.instance()?.cancelAll();
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
 			this.agent.reset();
 			this.#syncAgentSessionId();
@@ -7156,7 +7154,7 @@ export class AgentSession {
 
 		// Flush pending writes before branching
 		await this.sessionManager.flush();
-		this.#asyncJobManager?.cancelAll();
+		AsyncJobManager.instance()?.cancelAll();
 
 		if (!selectedEntry.parentId) {
 			await this.sessionManager.newSession({ parentSession: previousSessionFile });

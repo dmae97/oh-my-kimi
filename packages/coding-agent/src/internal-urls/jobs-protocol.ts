@@ -1,10 +1,6 @@
-import type { AsyncJobManager } from "../async";
+import { AsyncJobManager } from "../async";
 import { formatDuration } from "../tools/render-utils";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
-
-export interface JobsProtocolOptions {
-	getAsyncJobManager: () => AsyncJobManager | undefined;
-}
 
 function formatJobTime(startTime: number): string {
 	return new Date(startTime).toISOString();
@@ -26,10 +22,8 @@ export class JobsProtocolHandler implements ProtocolHandler {
 	readonly scheme = "jobs";
 	readonly immutable = true;
 
-	constructor(private readonly options: JobsProtocolOptions) {}
-
 	async resolve(url: InternalUrl): Promise<InternalResource> {
-		const manager = this.options.getAsyncJobManager();
+		const manager = AsyncJobManager.instance();
 		if (!manager) {
 			const content =
 				"# Jobs\n\nBackground job support is disabled. Enable `async.enabled` or `bash.autoBackground.enabled` to use jobs://.";

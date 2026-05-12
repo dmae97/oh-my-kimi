@@ -1,6 +1,12 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Changed `agent://` and `artifact://` URL resolution to search artifact outputs across all active sessions instead of only the current session, allowing parent and subagent sessions to read each other’s generated outputs by ID
+- Changed `memory://` URL resolution to walk all active sessions’ memory roots and return the first matching file, so worktree-based subagents can access their own memory views as well as shared roots
+- Changed internal URL routing to use a shared process-global `InternalUrlRouter` and protocol handlers, so built-in tools resolve `agent://`, `artifact://`, `memory://`, `skill://`, `rule://`, `mcp://`, `local://`, and `jobs://` URLs without requiring session-specific router wiring
+- Changed `jobs://` and `mcp://` handlers to use globally registered async-job and MCP managers so background-job and MCP resource links work for agents sharing session context
 
 ### Fixed
 

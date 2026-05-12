@@ -27,7 +27,7 @@ import chalk from "chalk";
 import { AsyncJobManager, isBackgroundJobSupportEnabled } from "./async";
 import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
-import { type Rule, ruleCapability } from "./capability/rule";
+import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelString, parseModelPattern, parseModelString, resolveModelRoleValue } from "./config/model-resolver";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./config/prompt-templates";
@@ -59,30 +59,22 @@ import {
 	type ToolDefinition,
 	wrapRegisteredTools,
 } from "./extensibility/extensions";
-import { loadSkills as loadSkillsInternal, type Skill, type SkillWarning } from "./extensibility/skills";
+import {
+	loadSkills as loadSkillsInternal,
+	type Skill,
+	type SkillWarning,
+	setActiveSkills,
+} from "./extensibility/skills";
 import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
 import type { HindsightSessionState } from "./hindsight/state";
-import {
-	AgentProtocolHandler,
-	ArtifactProtocolHandler,
-	InternalUrlRouter,
-	JobsProtocolHandler,
-	LocalProtocolHandler,
-	type LocalProtocolOptions,
-	McpProtocolHandler,
-	MemoryProtocolHandler,
-	PiProtocolHandler,
-	RuleProtocolHandler,
-	SkillProtocolHandler,
-} from "./internal-urls";
+import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
-import { discoverAndLoadMCPTools, type MCPManager, type MCPToolsLoadResult } from "./mcp";
+import { discoverAndLoadMCPTools, MCPManager, type MCPToolsLoadResult } from "./mcp";
 import {
 	collectDiscoverableMCPTools,
 	formatDiscoverableMCPToolServerSummary,
 	selectDiscoverableMCPToolNamesByServer,
 } from "./mcp/discoverable-tool-metadata";
-import { getMemoryRoot } from "./memories";
 import { resolveMemoryBackend } from "./memory-backend";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
@@ -1059,41 +1051,22 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			settings,
 			authStorage,
 			modelRegistry,
-			asyncJobManager,
 		};
 
-		// Initialize internal URL router for internal protocols (agent://, artifact://, memory://, skill://, rule://, mcp://, local://)
-		const internalRouter = new InternalUrlRouter();
+		// Wire process-wide internal URL singletons owned by their real classes.
+		// Top-level sessions install the active snapshots; subagents inherit them.
+		// Per-session artifacts/memory roots are walked from `AgentRegistry.global()`
+		// directly by the agent/artifact/memory protocol handlers, so no Set
+		// registration is needed here.
 		const getArtifactsDir = () => sessionManager.getArtifactsDir();
-		internalRouter.register(new AgentProtocolHandler({ getArtifactsDir }));
-		internalRouter.register(new ArtifactProtocolHandler({ getArtifactsDir }));
-		internalRouter.register(
-			new MemoryProtocolHandler({
-				getMemoryRoot: () => getMemoryRoot(agentDir, settings.getCwd()),
-			}),
-		);
-		internalRouter.register(
-			new LocalProtocolHandler(
-				options.localProtocolOptions ?? {
-					getArtifactsDir,
-					getSessionId: () => sessionManager.getSessionId(),
-				},
-			),
-		);
-		internalRouter.register(
-			new SkillProtocolHandler({
-				getSkills: () => skills,
-			}),
-		);
-		internalRouter.register(
-			new RuleProtocolHandler({
-				getRules: () => [...rulebookRules, ...alwaysApplyRules],
-			}),
-		);
-		internalRouter.register(new PiProtocolHandler());
-		internalRouter.register(new JobsProtocolHandler({ getAsyncJobManager: () => asyncJobManager }));
-		internalRouter.register(new McpProtocolHandler({ getMcpManager: () => mcpManager }));
-		toolSession.internalRouter = internalRouter;
+		if (!options.parentTaskPrefix) {
+			setActiveSkills(skills);
+			setActiveRules([...rulebookRules, ...alwaysApplyRules]);
+			if (asyncJobManager) AsyncJobManager.setInstance(asyncJobManager);
+		}
+		if (options.localProtocolOptions) {
+			LocalProtocolHandler.setOverride(options.localProtocolOptions);
+		}
 		toolSession.getArtifactsDir = getArtifactsDir;
 		toolSession.agentOutputManager = new AgentOutputManager(
 			getArtifactsDir,
@@ -1142,7 +1115,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				customTools.push(...mcpResult.tools.map(loaded => loaded.tool));
 			}
 		}
-		toolSession.mcpManager = mcpManager;
+		if (mcpManager) MCPManager.setInstance(mcpManager);
 
 		// Add image tools when the active model or configured image providers can generate images.
 		const imageGenTools = await logger.time("getImageGenTools", () => getImageGenTools(modelRegistry, model));
@@ -1760,7 +1733,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			defaultSelectedMCPServerNames: [...discoveryDefaultServers],
 			ttsrManager,
 			obfuscator,
-			asyncJobManager,
 			agentId: resolvedAgentId,
 			agentRegistry,
 			providerSessionId: options.providerSessionId,

@@ -6,6 +6,7 @@ import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import { InternalUrlRouter } from "../internal-urls";
 import type { Theme } from "../modes/theme/theme";
 import astGrepDescription from "../prompts/tools/ast-grep.md" with { type: "text" };
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
@@ -158,10 +159,10 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 			if (rawPaths.some(rawPath => rawPath.length === 0)) {
 				throw new ToolError("`paths` must contain non-empty paths or globs");
 			}
-			const internalRouter = this.session.internalRouter;
+			const internalRouter = InternalUrlRouter.instance();
 			const resolvedPathInputs: string[] = [];
 			for (const rawPath of rawPaths) {
-				if (!internalRouter?.canHandle(rawPath)) {
+				if (!internalRouter.canHandle(rawPath)) {
 					resolvedPathInputs.push(rawPath);
 					continue;
 				}

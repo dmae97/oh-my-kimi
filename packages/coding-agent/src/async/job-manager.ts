@@ -45,6 +45,23 @@ export interface AsyncJobRegisterOptions {
 }
 
 export class AsyncJobManager {
+	static #instance: AsyncJobManager | undefined;
+
+	/** Process-global instance shared by internal URL protocol handlers and tools. */
+	static instance(): AsyncJobManager | undefined {
+		return AsyncJobManager.#instance;
+	}
+
+	/** Install or clear the process-global instance. */
+	static setInstance(value: AsyncJobManager | undefined): void {
+		AsyncJobManager.#instance = value;
+	}
+
+	/** Reset the process-global instance. Test-only. */
+	static resetForTests(): void {
+		AsyncJobManager.#instance = undefined;
+	}
+
 	readonly #jobs = new Map<string, AsyncJob>();
 	readonly #deliveries: AsyncJobDelivery[] = [];
 	readonly #suppressedDeliveries = new Set<string>();

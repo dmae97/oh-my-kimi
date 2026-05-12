@@ -260,6 +260,7 @@ describe("Coding Agent Tools", () => {
 		} else {
 			Bun.env.PI_EDIT_VARIANT = originalEditVariant;
 		}
+		AsyncJobManager.resetForTests();
 	});
 
 	describe("read tool", () => {
@@ -1105,6 +1106,7 @@ function b() {
 					deliveries.push(text);
 				},
 			});
+			AsyncJobManager.setInstance(asyncJobManager);
 			const autoBackgroundBashTool = wrapToolWithMetaNotice(
 				new BashTool(
 					createTestToolSession(
@@ -1114,7 +1116,6 @@ function b() {
 							"bash.autoBackground.thresholdMs": 50,
 						}),
 						{
-							asyncJobManager,
 							getSessionId: () => "test-session",
 						},
 					),
@@ -1138,6 +1139,7 @@ function b() {
 					deliveries.push({ jobId, text });
 				},
 			});
+			AsyncJobManager.setInstance(asyncJobManager);
 			const autoBackgroundBashTool = wrapToolWithMetaNotice(
 				new BashTool(
 					createTestToolSession(
@@ -1147,7 +1149,6 @@ function b() {
 							"bash.autoBackground.thresholdMs": 50,
 						}),
 						{
-							asyncJobManager,
 							getSessionId: () => "test-session",
 						},
 					),
@@ -1184,6 +1185,7 @@ function b() {
 					deliveries.push({ jobId, text });
 				},
 			});
+			AsyncJobManager.setInstance(asyncJobManager);
 			const autoBackgroundBashTool = wrapToolWithMetaNotice(
 				new BashTool(
 					createTestToolSession(
@@ -1193,7 +1195,6 @@ function b() {
 							"bash.autoBackground.thresholdMs": 60_000,
 						}),
 						{
-							asyncJobManager,
 							getSessionId: () => "test-session",
 						},
 					),
@@ -1274,9 +1275,8 @@ function b() {
 			const manager = new AsyncJobManager({
 				onJobComplete: async () => {},
 			});
-			const session = createTestToolSession(testDir, Settings.isolated({ "bash.autoBackground.enabled": true }), {
-				asyncJobManager: manager,
-			});
+			const session = createTestToolSession(testDir, Settings.isolated({ "bash.autoBackground.enabled": true }), {});
+			AsyncJobManager.setInstance(manager);
 			const jobTool = JobTool.createIf(session)!;
 
 			const jobId = manager.register("bash", "test job", async () => "success");

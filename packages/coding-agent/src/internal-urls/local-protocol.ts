@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import { AgentRegistry } from "../registry/agent-registry";
 import { parseInternalUrl } from "./parse";
 import { validateRelativePath } from "./skill-protocol";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
@@ -136,17 +137,60 @@ export function resolveLocalUrlToPath(input: string | InternalUrl, options: Loca
  * Protocol handler for local:// URLs.
  *
  * URL forms:
- * - local:// - Lists all session local files
- * - local://<path> - Reads a file under session local root
+ * - local:// - Lists files at the session local root
+ * - local://<path> - Reads a file under the session local root
  */
 export class LocalProtocolHandler implements ProtocolHandler {
 	readonly scheme = "local";
 	readonly immutable = false;
 
-	constructor(private readonly options: LocalProtocolOptions) {}
+	static #override: LocalProtocolOptions | undefined;
+
+	/**
+	 * Install a process-global override that wins over the AgentRegistry-based
+	 * derivation. Used by SDK consumers that wire `localProtocolOptions` on
+	 * `createAgentSession` and by subagents that share their parent's root.
+	 */
+	static setOverride(value: LocalProtocolOptions | undefined): void {
+		LocalProtocolHandler.#override = value;
+	}
+
+	/** Reset the process-global override. Test-only. */
+	static resetOverrideForTests(): void {
+		LocalProtocolHandler.#override = undefined;
+	}
+
+	/**
+	 * Returns the active local-protocol options.
+	 *
+	 * Resolution order:
+	 * 1. Explicit override installed via {@link setOverride} (used by subagents
+	 *    that share their parent's root and by SDK consumers with a custom
+	 *    artifacts/session id mapping).
+	 * 2. The main session in `AgentRegistry.global()`. Its `SessionManager`
+	 *    supplies both `getArtifactsDir` and `getSessionId`.
+	 */
+	static resolveOptions(): LocalProtocolOptions | undefined {
+		const override = LocalProtocolHandler.#override;
+		if (override) return override;
+		const main = AgentRegistry.global()
+			.list()
+			.find(ref => ref.kind === "main");
+		const sessionManager = main?.session?.sessionManager;
+		if (!sessionManager) return undefined;
+		return {
+			getArtifactsDir: () => sessionManager.getArtifactsDir(),
+			getSessionId: () => sessionManager.getSessionId(),
+		};
+	}
 
 	async resolve(url: InternalUrl): Promise<InternalResource> {
-		const localRoot = path.resolve(resolveLocalRoot(this.options));
+		const opts = LocalProtocolHandler.resolveOptions();
+		if (!opts) {
+			throw new Error("No session - local:// unavailable");
+		}
+
+		const localRoot = path.resolve(resolveLocalRoot(opts));
 		await fs.mkdir(localRoot, { recursive: true });
 
 		let resolvedRoot: string;
@@ -172,9 +216,7 @@ export class LocalProtocolHandler implements ProtocolHandler {
 			const realParent = await fs.realpath(parentDir);
 			ensureWithinRoot(realParent, resolvedRoot);
 		} catch (error) {
-			if (!isEnoent(error)) {
-				throw error;
-			}
+			if (!isEnoent(error)) throw error;
 		}
 
 		let realTargetPath: string;

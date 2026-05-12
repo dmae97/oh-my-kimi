@@ -3,14 +3,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import {
-	addArtifactsDirSource,
-	InternalUrlRouter,
-	resetInternalUrlStateForTests,
-	setLocalOptions,
-} from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { InternalUrlRouter, LocalProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
+import { AgentRegistry } from "../../src/registry/agent-registry";
 
 function getResultText(result: { content: Array<{ type: string; text?: string }> }): string {
 	return result.content
@@ -28,15 +24,25 @@ describe("SearchTool internal URL resolution", () => {
 		artifactsDir = path.join(tmpDir, "artifacts");
 		await fs.mkdir(artifactsDir);
 
-		resetInternalUrlStateForTests();
+		AgentRegistry.resetGlobalForTests();
+		LocalProtocolHandler.resetOverrideForTests();
 		InternalUrlRouter.resetForTests();
 
-		addArtifactsDirSource(() => artifactsDir);
+		// Register a synthetic main session so artifact:// can derive
+		// `artifactsDir` from its sessionFile (sessionFile.slice(0,-6)).
+		AgentRegistry.global().register({
+			id: "test-main",
+			displayName: "test",
+			kind: "main",
+			session: null,
+			sessionFile: `${artifactsDir}.jsonl`,
+		});
 	});
 
 	afterEach(async () => {
 		await fs.rm(tmpDir, { recursive: true, force: true });
-		resetInternalUrlStateForTests();
+		AgentRegistry.resetGlobalForTests();
+		LocalProtocolHandler.resetOverrideForTests();
 		InternalUrlRouter.resetForTests();
 	});
 
@@ -148,7 +154,7 @@ describe("SearchTool internal URL resolution", () => {
 		await fs.mkdir(localRoot, { recursive: true });
 		await Bun.write(path.join(localRoot, "plan.md"), "alpha line\nbeta needle line\ngamma line\n");
 
-		setLocalOptions({ getArtifactsDir: () => artifactsDir, getSessionId: () => "session" });
+		LocalProtocolHandler.setOverride({ getArtifactsDir: () => artifactsDir, getSessionId: () => "session" });
 
 		const session = createSession({ hasEditTool: true });
 		const tool = new SearchTool(session);
