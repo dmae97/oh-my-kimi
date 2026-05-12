@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { ImageProtocol, TERMINAL, Text } from "@oh-my-pi/pi-tui";
-import { $env, getProjectDir, isEnoent, prompt } from "@oh-my-pi/pi-utils";
+import { $env, getProjectDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import { Type } from "@sinclair/typebox";
 import { AsyncJobManager } from "../async";
 import { type BashResult, executeBash } from "../exec/bash-executor";
@@ -654,108 +654,110 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			signal?.addEventListener("abort", onAbortSignal, { once: true });
 
 			try {
-				if (signal?.aborted) {
-					await handle.kill();
-					await handle.release();
-					throw new ToolAbortError("Command aborted");
-				}
-
-				const timeoutPromise = Bun.sleep(timeoutMs).then(() => ({ kind: "timeout" as const }));
-				// Poll until the process exits, times out, or the caller aborts.
-				for (;;) {
-					const racers: Array<Promise<BridgeRaceResult>> = [
-						exitPromise.then(s => ({ kind: "exit" as const, status: s })),
-						timeoutPromise,
-						Bun.sleep(250).then(() => ({ kind: "poll" as const })),
-					];
-					if (signal) {
-						racers.push(abortedP.then(() => ({ kind: "aborted" as const })));
-					}
-					const raced = await Promise.race(racers);
-
-					if (raced.kind === "aborted" || signal?.aborted) {
+				try {
+					if (signal?.aborted) {
 						await handle.kill();
-						await handle.release();
 						throw new ToolAbortError("Command aborted");
 					}
 
-					if (raced.kind === "timeout") {
-						let current = { output: "", truncated: false };
-						try {
-							current = await handle.currentOutput();
-						} finally {
-							try {
-								await handle.kill();
-							} finally {
-								await handle.release();
-							}
+					const timeoutPromise = Bun.sleep(timeoutMs).then(() => ({ kind: "timeout" as const }));
+					// Poll until the process exits, times out, or the caller aborts.
+					for (;;) {
+						const racers: Array<Promise<BridgeRaceResult>> = [
+							exitPromise.then(s => ({ kind: "exit" as const, status: s })),
+							timeoutPromise,
+							Bun.sleep(250).then(() => ({ kind: "poll" as const })),
+						];
+						if (signal) {
+							racers.push(abortedP.then(() => ({ kind: "aborted" as const })));
 						}
-						const timedOutResult: BashInteractiveResult = {
-							output: current.output,
-							exitCode: undefined,
-							cancelled: false,
-							timedOut: true,
-							truncated: current.truncated,
-							totalLines: current.output.length > 0 ? current.output.split("\n").length : 0,
-							totalBytes: current.output.length,
-							outputLines: current.output.length > 0 ? current.output.split("\n").length : 0,
-							outputBytes: current.output.length,
-						};
-						return this.#buildCompletedResult(timedOutResult, timeoutSec, {
-							requestedTimeoutSec,
-							notices: [timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
-							terminalId: handle.terminalId,
+						const raced = await Promise.race(racers);
+
+						if (raced.kind === "aborted" || signal?.aborted) {
+							await handle.kill();
+							throw new ToolAbortError("Command aborted");
+						}
+
+						if (raced.kind === "timeout") {
+							let current = { output: "", truncated: false };
+							try {
+								current = await handle.currentOutput();
+							} finally {
+								await handle.kill();
+							}
+							const timedOutResult: BashInteractiveResult = {
+								output: current.output,
+								exitCode: undefined,
+								cancelled: false,
+								timedOut: true,
+								truncated: current.truncated,
+								totalLines: current.output.length > 0 ? current.output.split("\n").length : 0,
+								totalBytes: current.output.length,
+								outputLines: current.output.length > 0 ? current.output.split("\n").length : 0,
+								outputBytes: current.output.length,
+							};
+							return this.#buildCompletedResult(timedOutResult, timeoutSec, {
+								requestedTimeoutSec,
+								notices: [timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+								terminalId: handle.terminalId,
+							});
+						}
+
+						if (raced.kind === "exit") {
+							exitStatus = raced.status;
+							break;
+						}
+
+						// Poll tick: push current output so agent-loop transcript stays consistent.
+						const current = await handle.currentOutput();
+						onUpdate?.({
+							content: [{ type: "text", text: current.output }],
+							details: { terminalId: handle.terminalId },
 						});
 					}
-
-					if (raced.kind === "exit") {
-						exitStatus = raced.status;
-						break;
-					}
-
-					// Poll tick: push current output so agent-loop transcript stays consistent.
-					const current = await handle.currentOutput();
-					onUpdate?.({
-						content: [{ type: "text", text: current.output }],
-						details: { terminalId: handle.terminalId },
-					});
+				} finally {
+					signal?.removeEventListener("abort", onAbortSignal);
 				}
+
+				// Fetch final output; the terminal is released in the outer finally.
+				const finalOutput = await handle.currentOutput();
+
+				// Map exit status: null exitCode with a signal → treat as signal kill (137).
+				const rawExitCode = exitStatus.exitCode;
+				const exitCode: number | undefined =
+					rawExitCode != null ? rawExitCode : exitStatus.signal ? 137 : undefined;
+
+				const outputText = finalOutput.output;
+				const outputByteLen = outputText.length;
+				const outputLineCount = outputText.length > 0 ? outputText.split("\n").length : 0;
+
+				const bridgeResult: BashResult = {
+					output: outputText,
+					exitCode,
+					cancelled: false,
+					truncated: finalOutput.truncated,
+					totalLines: outputLineCount,
+					totalBytes: outputByteLen,
+					outputLines: outputLineCount,
+					outputBytes: outputByteLen,
+				};
+
+				const bridgeNotices: string[] = [];
+				if (finalOutput.truncated) bridgeNotices.push("(output truncated)");
+				if (timeoutClampNotice) bridgeNotices.push(timeoutClampNotice);
+
+				return this.#buildCompletedResult(bridgeResult, timeoutSec, {
+					requestedTimeoutSec,
+					notices: bridgeNotices,
+					terminalId: handle.terminalId,
+				});
 			} finally {
-				signal?.removeEventListener("abort", onAbortSignal);
+				try {
+					await handle.release();
+				} catch (error) {
+					logger.warn("ACP terminal release failed", { terminalId: handle.terminalId, error });
+				}
 			}
-
-			// Fetch final output, then release the terminal.
-			const finalOutput = await handle.currentOutput();
-			await handle.release();
-
-			// Map exit status: null exitCode with a signal → treat as signal kill (137).
-			const rawExitCode = exitStatus.exitCode;
-			const exitCode: number | undefined = rawExitCode != null ? rawExitCode : exitStatus.signal ? 137 : undefined;
-
-			const outputText = finalOutput.output;
-			const outputByteLen = outputText.length;
-			const outputLineCount = outputText.length > 0 ? outputText.split("\n").length : 0;
-
-			const bridgeResult: BashResult = {
-				output: outputText,
-				exitCode,
-				cancelled: false,
-				truncated: finalOutput.truncated,
-				totalLines: outputLineCount,
-				totalBytes: outputByteLen,
-				outputLines: outputLineCount,
-				outputBytes: outputByteLen,
-			};
-
-			const bridgeNotices: string[] = [];
-			if (finalOutput.truncated) bridgeNotices.push("(output truncated)");
-			if (timeoutClampNotice) bridgeNotices.push(timeoutClampNotice);
-
-			return this.#buildCompletedResult(bridgeResult, timeoutSec, {
-				requestedTimeoutSec,
-				notices: bridgeNotices,
-				terminalId: handle.terminalId,
-			});
 		}
 
 		// Track output for streaming updates (tail only)

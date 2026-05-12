@@ -515,6 +515,8 @@ const PERMISSION_OPTIONS: ClientBridgePermissionOption[] = [
 	{ optionId: "reject_always", name: "Always reject", kind: "reject_always" },
 ];
 
+const PERMISSION_OPTIONS_BY_ID = new Map(PERMISSION_OPTIONS.map(option => [option.optionId, option]));
+
 function derivePermissionTitle(toolName: string, args: unknown): string {
 	const a = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
 	if (toolName === "bash") {
@@ -2691,12 +2693,16 @@ export class AgentSession {
 					if (outcome.outcome === "cancelled") {
 						throw new ToolAbortError("Permission request cancelled");
 					}
-					if (outcome.optionId === "allow_always") {
+					const selectedOption = PERMISSION_OPTIONS_BY_ID.get(outcome.optionId);
+					if (!selectedOption) {
+						throw new ToolError(`Tool permission response used unknown option ID: ${outcome.optionId}`);
+					}
+					if (selectedOption.kind === "allow_always") {
 						this.#acpPermissionDecisions.set(target.name, "allow_always");
-					} else if (outcome.optionId === "reject_always") {
+					} else if (selectedOption.kind === "reject_always") {
 						this.#acpPermissionDecisions.set(target.name, "reject_always");
 					}
-					if (outcome.optionId.startsWith("reject")) {
+					if (selectedOption.kind === "reject_once" || selectedOption.kind === "reject_always") {
 						throw new ToolError(`Tool call rejected by user (${target.name})`);
 					}
 					return await target.execute(toolCallId, args as never, signal, onUpdate, ctx);

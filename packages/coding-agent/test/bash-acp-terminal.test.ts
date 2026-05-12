@@ -76,6 +76,54 @@ describe("BashTool ACP terminal routing", () => {
 		expect(releaseSpy).toHaveBeenCalledTimes(1);
 	});
 
+	it("releases the client terminal when final output retrieval fails", async () => {
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "term-output-failure",
+			waitForExit: async () => ({ exitCode: 0, signal: null }),
+			currentOutput: async () => {
+				throw new Error("client output unavailable");
+			},
+			kill: async () => {},
+			release: async () => {},
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: async () => handle,
+		};
+		const releaseSpy = spyOn(handle, "release");
+
+		const tool = new BashTool(makeSession(bridge));
+
+		await expect(tool.execute("call-output-failure", { command: "echo hi" })).rejects.toThrow(
+			/client output unavailable/,
+		);
+		expect(releaseSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("releases the client terminal when waiting for exit fails", async () => {
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "term-exit-failure",
+			waitForExit: async () => {
+				throw new Error("client wait unavailable");
+			},
+			currentOutput: async () => ({ output: "", truncated: false }),
+			kill: async () => {},
+			release: async () => {},
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: async () => handle,
+		};
+		const releaseSpy = spyOn(handle, "release");
+
+		const tool = new BashTool(makeSession(bridge));
+
+		await expect(tool.execute("call-exit-failure", { command: "echo hi" })).rejects.toThrow(
+			/client wait unavailable/,
+		);
+		expect(releaseSpy).toHaveBeenCalledTimes(1);
+	});
+
 	it("kills and releases the client terminal when the command times out", async () => {
 		const pendingExit = Promise.withResolvers<{ exitCode: number | null; signal: string | null }>();
 		const handle: ClientBridgeTerminalHandle = {

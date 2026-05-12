@@ -237,6 +237,21 @@ it("reject_once: throws ToolError and never calls underlying execute", async () 
 	expect(editTool.executeCalls).toBe(0);
 });
 
+it("unknown selected permission option ID fails closed without executing", async () => {
+	const editTool = makeFakeTool("edit");
+	const bridge = makeBridge({ outcome: "selected", optionId: "allow_typo" });
+	session = await createSession([editTool], bridge);
+
+	await session.setActiveToolsByName(["edit"]);
+	const wrappedEdit = session.agent.state.tools.find(t => t.name === "edit");
+	expect(wrappedEdit).toBeDefined();
+
+	await expect(
+		wrappedEdit!.execute("call-unknown", { path: "/tmp/foo.ts" }, undefined, undefined as never, undefined as never),
+	).rejects.toThrow(/unknown option ID/);
+	expect(editTool.executeCalls).toBe(0);
+});
+
 // ---------------------------------------------------------------------------
 // 3. Always allow caches: bridge called exactly once across two executions
 // ---------------------------------------------------------------------------
