@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { getSessionsDir, isEnoent } from "@oh-my-pi/pi-utils";
-import type { MessageStats, SessionEntry, SessionMessageEntry, UserMessageStats } from "./types";
+import type { MessageStats, SessionEntry, SessionMessageEntry, UserMessageLink, UserMessageStats } from "./types";
 import { computeUserMessageMetrics } from "./user-metrics";
 
 /**
@@ -71,9 +71,12 @@ function extractUserStats(sessionFile: string, folder: string, entry: SessionMes
 		provider: null,
 		chars: metrics.chars,
 		words: metrics.words,
-		yellingSentences: metrics.yellingSentences,
+		yelling: metrics.yelling,
 		profanity: metrics.profanity,
-		dramaRuns: metrics.dramaRuns,
+		anguish: metrics.anguish,
+		negation: metrics.negation,
+		repetition: metrics.repetition,
+		blame: metrics.blame,
 	};
 }
 
@@ -131,21 +134,26 @@ function parseSessionEntriesLenient(bytes: Uint8Array): { entries: SessionEntry[
  * Parse a session file and extract all assistant message stats.
  * Uses incremental reading with offset tracking.
  */
-export async function parseSessionFile(
-	sessionPath: string,
-	fromOffset = 0,
-): Promise<{ stats: MessageStats[]; userStats: UserMessageStats[]; newOffset: number }> {
+export interface ParseSessionResult {
+	stats: MessageStats[];
+	userStats: UserMessageStats[];
+	userLinks: UserMessageLink[];
+	newOffset: number;
+}
+
+export async function parseSessionFile(sessionPath: string, fromOffset = 0): Promise<ParseSessionResult> {
 	let bytes: Uint8Array;
 	try {
 		bytes = await Bun.file(sessionPath).bytes();
 	} catch (err) {
-		if (isEnoent(err)) return { stats: [], userStats: [], newOffset: fromOffset };
+		if (isEnoent(err)) return { stats: [], userStats: [], userLinks: [], newOffset: fromOffset };
 		throw err;
 	}
 
 	const folder = extractFolderFromPath(sessionPath);
 	const stats: MessageStats[] = [];
 	const userStats: UserMessageStats[] = [];
+	const userLinks: UserMessageLink[] = [];
 	const userByEntryId = new Map<string, UserMessageStats>();
 	const start = Math.max(0, Math.min(fromOffset, bytes.length));
 	const unprocessed = bytes.subarray(start);
@@ -165,17 +173,26 @@ export async function parseSessionFile(
 			// Link assistant's responding model back to the user message it answered.
 			const parentId = (entry as SessionMessageEntry).parentId;
 			if (parentId) {
-				const parentUser = userByEntryId.get(parentId);
-				if (parentUser && parentUser.model === null) {
-					const msg = entry.message as AssistantMessage;
-					parentUser.model = msg.model;
-					parentUser.provider = msg.provider;
+				const msg = entry.message as AssistantMessage;
+				if (msg.model && msg.provider) {
+					// Emit unconditionally. The aggregator's UPDATE is guarded by
+					// `model IS NULL` so this is idempotent: a no-op for already
+					// linked rows, a fix-up for fresh inserts (which start NULL
+					// because the user row is recorded before its reply lands) and
+					// for cross-pass orphans whose parent was committed by an
+					// earlier incremental sync.
+					userLinks.push({
+						sessionFile: sessionPath,
+						entryId: parentId,
+						model: msg.model,
+						provider: msg.provider,
+					});
 				}
 			}
 		}
 	}
 
-	return { stats, userStats, newOffset: start + read };
+	return { stats, userStats, userLinks, newOffset: start + read };
 }
 
 /**

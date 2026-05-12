@@ -51,10 +51,14 @@ const CHART_THEMES = {
 } as const;
 
 const METRIC_OPTIONS = [
-	{ value: "yellingSentences", label: "Yelling" },
+	{ value: "yelling", label: "Yelling" },
 	{ value: "profanity", label: "Profanity" },
-	{ value: "dramaRuns", label: "Drama (!!! / ???)" },
-	{ value: "total", label: "All three combined" },
+	{ value: "anguish", label: "Anguish (!!!, nooo, dude, ..)" },
+	{ value: "negation", label: "Negation (no/nope/wrong)" },
+	{ value: "repetition", label: "Repetition (i meant, still doesnt)" },
+	{ value: "blame", label: "Blame (you didnt, stop X-ing)" },
+	{ value: "frustration", label: "Frustration (neg + rep + blame)" },
+	{ value: "total", label: "All signals combined" },
 ] as const;
 type Metric = (typeof METRIC_OPTIONS)[number]["value"];
 
@@ -70,7 +74,10 @@ interface BehaviorChartProps {
 }
 
 function pointHits(point: BehaviorTimeSeriesPoint, metric: Metric): number {
-	if (metric === "total") return point.yellingSentences + point.profanity + point.dramaRuns;
+	if (metric === "frustration") return point.negation + point.repetition + point.blame;
+	if (metric === "total") {
+		return point.yelling + point.profanity + point.anguish + point.negation + point.repetition + point.blame;
+	}
 	return point[metric];
 }
 

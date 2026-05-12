@@ -8,6 +8,58 @@ import { APP_NAME, formatDuration, formatNumber, formatPercent } from "@oh-my-pi
 import chalk from "chalk";
 import { openPath } from "../utils/open";
 
+/**
+ * Single-line TTY progress bar. On a non-TTY stream we just stay quiet -
+ * the final "Synced ..." summary still prints either way.
+ */
+function createSyncProgressReporter(): {
+	onProgress: (event: { current: number; total: number; sessionFile: string }) => void;
+	finish: () => void;
+} {
+	const stream = process.stderr;
+	const isTty = stream.isTTY === true;
+	let lastWidth = 0;
+	let lastRender = 0;
+	return {
+		onProgress(event) {
+			if (!isTty) return;
+			const now = Date.now();
+			// Throttle to ~30 fps and always force a render for the last file.
+			if (event.current < event.total && now - lastRender < 33) return;
+			lastRender = now;
+			const label = chalk.dim(shortenSessionFile(event.sessionFile));
+			const pct = ((event.current / event.total) * 100).toFixed(0).padStart(3, " ");
+			const counter = chalk.cyan(`[${event.current}/${event.total}]`);
+			const line = `${counter} ${pct}%  ${label}`;
+			const columns = stream.columns ?? 120;
+			const trimmed = truncateToColumns(line, columns - 1);
+			stream.write(`\r${trimmed.padEnd(lastWidth)}`);
+			lastWidth = trimmed.length;
+		},
+		finish() {
+			if (!isTty || lastWidth === 0) return;
+			stream.write(`\r${" ".repeat(lastWidth)}\r`);
+			lastWidth = 0;
+		},
+	};
+}
+
+function shortenSessionFile(p: string): string {
+	const marker = "/sessions/";
+	const idx = p.indexOf(marker);
+	return idx >= 0 ? p.slice(idx + marker.length) : p;
+}
+
+function truncateToColumns(s: string, max: number): string {
+	if (max <= 0) return "";
+	const width = Bun.stringWidth(s, { countAnsiEscapeCodes: false });
+	if (width <= max) return s;
+	// Cheap right-trim with an ellipsis - we don't need ANSI-aware slicing
+	// because the colored prefix is short and the truncated tail is the
+	// dim filename, where dropping bytes is fine.
+	return `${s.slice(0, Math.max(0, max - 1))}\u2026`;
+}
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -74,8 +126,10 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 	);
 
 	// Sync session files first
-	console.log("Syncing session files...");
-	const { processed, files } = await syncAllSessions();
+	const progress = createSyncProgressReporter();
+	process.stderr.write("Syncing session files...\n");
+	const { processed, files } = await syncAllSessions({ onProgress: progress.onProgress });
+	progress.finish();
 	const total = await getTotalMessageCount();
 	console.log(`Synced ${processed} new entries from ${files} files (${total} total)\n`);
 

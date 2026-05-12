@@ -1,12 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Changed the `timeoutMs` execution option to no longer be enforced during worker-based JS runs, so callers must rely on external cancellation signals for time limits
 
 ### Added
 
+- Added a live single-line sync progress display to the stats command showing current/total sessions while syncing
 - Added automatic inline JS evaluation fallback when worker creation failed so script execution still works in environments without worker support
 
 ### Changed

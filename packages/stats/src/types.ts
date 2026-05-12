@@ -219,11 +219,31 @@ export interface UserMessageStats {
 	/** Whitespace-delimited word count */
 	words: number;
 	/** Yelling sentences (> 50% uppercase letters) */
-	yellingSentences: number;
+	yelling: number;
 	/** Profanity hits */
 	profanity: number;
-	/** Runs of 3+ consecutive `!` / `?` */
-	dramaRuns: number;
+	/** Catch-all upset signal: drama runs + `noooo`/`ughh`/... + `dude` + `..` */
+	anguish: number;
+	/** Corrective negation ("no", "nope", "thats not what i meant") */
+	negation: number;
+	/** User repeating themselves ("i meant", "still doesnt work", "like i said") */
+	repetition: number;
+	/** Second-person reproach ("you didnt", "you broke", "stop X-ing") */
+	blame: number;
+}
+
+/**
+ * Pair emitted by the parser when it sees an assistant message whose
+ * `parentId` points to a user message that wasn't parsed in the same pass
+ * (e.g. user prompt landed in an earlier incremental sync). The aggregator
+ * applies the link to the persisted `user_messages` row so it stops showing
+ * up in the "unknown" model bucket.
+ */
+export interface UserMessageLink {
+	sessionFile: string;
+	entryId: string;
+	model: string;
+	provider: string;
 }
 
 /**
@@ -239,20 +259,29 @@ export interface BehaviorTimeSeriesPoint {
 	/** Number of user messages in bucket */
 	messages: number;
 	/** Total yelling sentences in bucket */
-	yellingSentences: number;
+	yelling: number;
 	/** Total profanity hits in bucket */
 	profanity: number;
-	/** Total drama runs in bucket */
-	dramaRuns: number;
+	/** Total anguish signal in bucket */
+	anguish: number;
+	/** Total corrective-negation hits in bucket */
+	negation: number;
+	/** Total user-repeating-themselves hits in bucket */
+	repetition: number;
+	/** Total second-person blame hits in bucket */
+	blame: number;
 	/** Total characters in bucket */
 	chars: number;
 }
 
 export interface BehaviorOverallStats {
 	totalMessages: number;
-	totalYellingSentences: number;
+	totalYelling: number;
 	totalProfanity: number;
-	totalDramaRuns: number;
+	totalAnguish: number;
+	totalNegation: number;
+	totalRepetition: number;
+	totalBlame: number;
 	totalChars: number;
 	firstTimestamp: number;
 	lastTimestamp: number;
@@ -265,9 +294,12 @@ export interface BehaviorModelStats {
 	model: string;
 	provider: string;
 	totalMessages: number;
-	totalYellingSentences: number;
+	totalYelling: number;
 	totalProfanity: number;
-	totalDramaRuns: number;
+	totalAnguish: number;
+	totalNegation: number;
+	totalRepetition: number;
+	totalBlame: number;
 	totalChars: number;
 	lastTimestamp: number;
 }

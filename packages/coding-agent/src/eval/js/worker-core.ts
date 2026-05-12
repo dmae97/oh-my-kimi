@@ -503,6 +503,7 @@ function indirectEval(source: string, filename?: string): unknown {
 	const withPragma = filename ? `${source}\n//# sourceURL=${filename}` : source;
 	// Read `eval` via a property access so the call site is *indirect* (global scope),
 	// not direct (this function's lexical scope). The cast erases the lib.dom return type.
+	// biome-ignore lint/security/noGlobalEval: indirect eval is intentional for sandbox execution
 	const geval = globalThis.eval as (src: string) => unknown;
 	return geval(withPragma);
 }

@@ -1,6 +1,26 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Broke backward compatibility of behavior stats fields by replacing `yellingSentences`/`dramaRuns` with `yelling`/`anguish` and adding `negation`, `repetition`, `blame` in query result types and persisted `user_messages` schema
+
+### Added
+
+- Added `SyncOptions` to `syncAllSessions` with `onProgress` and `workers` to optionally show per-file sync progress and tune parser concurrency
+- Added new frustration behavior metrics (`negation`, `repetition`, `blame`) plus a `frustration` aggregate in behavior charts, model tables, and summary cards
+
+### Changed
+
+- Changed sync ingestion to parse session files through a worker pool while applying parsed results and database writes on the main thread
+- Changed behavior analysis to strip code blocks, XML/URLs, quoted lines, and placeholders before scoring and to suppress signals on long structured messages
+- Changed dashboard metrics labels and totals to the new signal names, including replacing the old three-signal totals with `yelling`, `profanity`, `anguish`, and `frustration`
+- Changed sync output to print a live terminal progress indicator while processing session files
+
+### Fixed
+
+- Fixed user-message attribution so assistant model/provider links are backfilled during incremental sync instead of being left unknown
+- Fixed word-boundary regex handling in profanity detection so matching now works as intended in normal prose
 
 ## [14.9.5] - 2026-05-12
 

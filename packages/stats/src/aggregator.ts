@@ -19,65 +19,175 @@ import {
 	insertMessageStats,
 	insertUserMessageStats,
 	setFileOffset,
+	updateUserMessageLinks,
 } from "./db";
-import { getSessionEntry, listAllSessionFiles, parseSessionFile } from "./parser";
+import { getSessionEntry, listAllSessionFiles, type ParseSessionResult } from "./parser";
+import type { SyncWorkerRequest, SyncWorkerResponse } from "./sync-worker";
+// `with { type: "file" }` resolves to the worker's absolute path at runtime
+// (dev) and survives bundling (the asset is copied alongside the build).
+// tsgo doesn't recognize Bun's file-URL import attribute and would raise
+// TS1192/TS5097 here; Bun honors it. Same suppression pattern lives in
+// `tab-supervisor.ts` and `context-manager.ts`.
+// @ts-expect-error -- Bun file-URL import (see comment above).
+import syncWorkerUrl from "./sync-worker.ts" with { type: "file" };
 import type { BehaviorDashboardStats, DashboardStats, MessageStats, RequestDetails } from "./types";
 
 /**
- * Sync a single session file to the database.
- * Only processes new entries since the last sync.
+ * Apply a freshly parsed result to the database. Runs entirely on the
+ * main thread so the single SQLite handle owns every write.
  */
-async function syncSessionFile(sessionFile: string): Promise<number> {
-	// Get file stats
-	let fileStats: fs.Stats;
-	try {
-		fileStats = await fs.promises.stat(sessionFile);
-	} catch {
-		return 0;
+function applyParseResult(sessionFile: string, lastModified: number, result: ParseSessionResult): number {
+	if (result.stats.length > 0) insertMessageStats(result.stats);
+	if (result.userStats.length > 0) insertUserMessageStats(result.userStats);
+	if (result.userLinks.length > 0) updateUserMessageLinks(result.userLinks);
+	setFileOffset(sessionFile, result.newOffset, lastModified);
+	return result.stats.length + result.userStats.length;
+}
+
+/**
+ * Progress event emitted after each session file is fully processed.
+ * `current` is the number of files completed (skipped + parsed),
+ * `total` is the size of the work set. `processed` is the running total
+ * of inserted rows.
+ */
+export interface SyncProgress {
+	current: number;
+	total: number;
+	processed: number;
+	sessionFile: string;
+}
+
+export interface SyncOptions {
+	/** Called after each file completes. Synchronous; keep it cheap. */
+	onProgress?: (event: SyncProgress) => void;
+	/**
+	 * Worker pool size. Defaults to a sensible value derived from the host
+	 * (capped to avoid drowning a small machine in workers). Set to `1` to
+	 * force serial parsing without spawning workers.
+	 */
+	workers?: number;
+}
+
+function defaultWorkerCount(): number {
+	// `navigator.hardwareConcurrency` is the portable answer in Bun; fall
+	// back to a small fixed pool if it's somehow unavailable.
+	const hw = typeof navigator !== "undefined" ? (navigator.hardwareConcurrency ?? 0) : 0;
+	const raw = hw > 0 ? hw : 4;
+	// Cap at 8 - parse is JSON-bound, and SQLite writes serialize on main
+	// thread anyway, so more workers stop helping.
+	return Math.min(8, Math.max(2, Math.floor(raw)));
+}
+
+interface WorkerHandle {
+	worker: Worker;
+	busy: boolean;
+	resolve: ((res: ParseSessionResult) => void) | null;
+	reject: ((err: Error) => void) | null;
+}
+
+function spawnWorker(): WorkerHandle {
+	const worker = new Worker(syncWorkerUrl, { type: "module" });
+	const handle: WorkerHandle = { worker, busy: false, resolve: null, reject: null };
+	worker.onmessage = (event: MessageEvent<SyncWorkerResponse>) => {
+		const { resolve, reject } = handle;
+		handle.resolve = null;
+		handle.reject = null;
+		handle.busy = false;
+		if (!resolve || !reject) return;
+		if (event.data.ok) resolve(event.data.result);
+		else reject(new Error(event.data.error));
+	};
+	worker.onerror = (event: ErrorEvent) => {
+		const { reject } = handle;
+		handle.resolve = null;
+		handle.reject = null;
+		handle.busy = false;
+		reject?.(event.error instanceof Error ? event.error : new Error(event.message || "worker error"));
+	};
+	return handle;
+}
+
+function dispatch(handle: WorkerHandle, request: SyncWorkerRequest): Promise<ParseSessionResult> {
+	if (handle.busy) {
+		return Promise.reject(new Error("worker is busy - this is a bug in the dispatcher"));
 	}
-
-	const lastModified = fileStats.mtimeMs;
-
-	// Check if file has changed since last sync
-	const stored = getFileOffset(sessionFile);
-	if (stored && stored.lastModified >= lastModified) {
-		return 0; // File hasn't changed
-	}
-
-	// Parse file from last offset
-	const fromOffset = stored?.offset ?? 0;
-	const { stats, userStats, newOffset } = await parseSessionFile(sessionFile, fromOffset);
-
-	if (stats.length > 0) {
-		insertMessageStats(stats);
-	}
-	if (userStats.length > 0) {
-		insertUserMessageStats(userStats);
-	}
-
-	// Update offset tracker
-	setFileOffset(sessionFile, newOffset, lastModified);
-
-	return stats.length + userStats.length;
+	const { promise, resolve, reject } = Promise.withResolvers<ParseSessionResult>();
+	handle.busy = true;
+	handle.resolve = resolve;
+	handle.reject = reject;
+	handle.worker.postMessage(request);
+	return promise;
 }
 
 /**
  * Sync all session files to the database.
- * Returns the number of new entries processed.
+ *
+ * Parsing fans out across a worker pool (one in-flight job per worker)
+ * while DB writes and offset bookkeeping stay on the calling thread so the
+ * single SQLite handle stays uncontended. `onProgress` fires once per
+ * completed file (skipped files included so the bar walks at a steady
+ * rate).
  */
-export async function syncAllSessions(): Promise<{ processed: number; files: number }> {
+export async function syncAllSessions(opts?: SyncOptions): Promise<{ processed: number; files: number }> {
 	await initDb();
 
 	const files = await listAllSessionFiles();
+	if (files.length === 0) return { processed: 0, files: 0 };
+
 	let totalProcessed = 0;
 	let filesProcessed = 0;
+	let completed = 0;
+	let cursor = 0;
 
-	for (const file of files) {
-		const count = await syncSessionFile(file);
-		if (count > 0) {
-			totalProcessed += count;
-			filesProcessed++;
+	const poolSize = Math.max(1, Math.min(files.length, opts?.workers ?? defaultWorkerCount()));
+	const handles: WorkerHandle[] = [];
+	for (let i = 0; i < poolSize; i++) handles.push(spawnWorker());
+
+	const report = (sessionFile: string) => {
+		completed++;
+		opts?.onProgress?.({
+			current: completed,
+			total: files.length,
+			processed: totalProcessed,
+			sessionFile,
+		});
+	};
+
+	async function drain(handle: WorkerHandle): Promise<void> {
+		while (true) {
+			const idx = cursor++;
+			if (idx >= files.length) return;
+			const sessionFile = files[idx];
+
+			let fileStats: fs.Stats;
+			try {
+				fileStats = await fs.promises.stat(sessionFile);
+			} catch {
+				report(sessionFile);
+				continue;
+			}
+			const lastModified = fileStats.mtimeMs;
+			const stored = getFileOffset(sessionFile);
+			if (stored && stored.lastModified >= lastModified) {
+				report(sessionFile);
+				continue;
+			}
+
+			const fromOffset = stored?.offset ?? 0;
+			const result = await dispatch(handle, { sessionFile, fromOffset });
+			const inserted = applyParseResult(sessionFile, lastModified, result);
+			if (inserted > 0) {
+				totalProcessed += inserted;
+				filesProcessed++;
+			}
+			report(sessionFile);
 		}
+	}
+
+	try {
+		await Promise.all(handles.map(drain));
+	} finally {
+		for (const handle of handles) handle.worker.terminate();
 	}
 
 	return { processed: totalProcessed, files: filesProcessed };

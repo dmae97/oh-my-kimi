@@ -29,6 +29,7 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 - **Class privacy**: use ES `#private` fields; leave externally accessible members bare. **No `private`/`protected`/`public` keyword on fields or methods**, except on **constructor parameter properties** where TypeScript requires it (e.g. `constructor(private readonly session: ToolSession)`).
 - **Promises**: use `Promise.withResolvers()` instead of `new Promise((resolve, reject) => ...)`.
 - **Prompts**: never build prompts in code (no inline strings, template literals, or concatenation). Prompts live in static `.md` files; use Handlebars for dynamic content. Import them via `import content from "./prompt.md" with { type: "text" }` — not `readFile`.
+- **Worker scripts**: reference the entry via `import workerUrl from "./worker.ts" with { type: "file" }` so the path survives bundling. tsgo flags it (TS1192/TS5097) — suppress with `// @ts-expect-error -- Bun file-URL import` directly above the line (see `tab-supervisor.ts`, `context-manager.ts`, `aggregator.ts`).
 
 ## Bun Over Node
 

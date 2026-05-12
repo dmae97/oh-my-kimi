@@ -30,7 +30,8 @@ const MODEL_COLORS = [
 const SERIES_COLORS = {
 	yelling: "#fbbf24", // amber
 	profanity: "#f87171", // red
-	drama: "#a78bfa", // violet
+	anguish: "#a78bfa", // violet
+	frustration: "#22d3ee", // cyan - new semantic signals
 } as const;
 
 const CHART_THEMES = {
@@ -65,7 +66,8 @@ interface DailyPoint {
 	timestamp: number;
 	yelling: number;
 	profanity: number;
-	drama: number;
+	anguish: number;
+	frustration: number;
 	total: number;
 }
 
@@ -73,7 +75,7 @@ interface ModelTrendSeries {
 	data: DailyPoint[];
 }
 
-const GRID_TEMPLATE = "2fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 140px 40px";
+const GRID_TEMPLATE = "2fr 0.9fr 0.8fr 0.8fr 0.8fr 0.9fr 0.8fr 140px 40px";
 
 function formatInt(value: number): string {
 	return value.toLocaleString();
@@ -81,7 +83,13 @@ function formatInt(value: number): string {
 
 function totalHitRate(model: BehaviorModelStats): number {
 	if (model.totalMessages === 0) return 0;
-	const hits = model.totalYellingSentences + model.totalProfanity + model.totalDramaRuns;
+	const hits =
+		model.totalYelling +
+		model.totalProfanity +
+		model.totalAnguish +
+		model.totalNegation +
+		model.totalRepetition +
+		model.totalBlame;
 	return hits / model.totalMessages;
 }
 
@@ -128,7 +136,8 @@ export function BehaviorModelsTable({ models, behaviorSeries }: BehaviorModelsTa
 					<div className="text-right">Messages</div>
 					<div className="text-right">CAPS %</div>
 					<div className="text-right">Profanity %</div>
-					<div className="text-right">Drama %</div>
+					<div className="text-right">Anguish %</div>
+					<div className="text-right">Frustration %</div>
 					<div className="text-right">Hits %</div>
 					<div className="text-center">Trend</div>
 					<div />
@@ -140,7 +149,8 @@ export function BehaviorModelsTable({ models, behaviorSeries }: BehaviorModelsTa
 						const trend = trendByKey.get(key)?.data ?? [];
 						const trendColor = MODEL_COLORS[index % MODEL_COLORS.length];
 						const isExpanded = expandedKey === key;
-						const totalHits = model.totalYellingSentences + model.totalProfanity + model.totalDramaRuns;
+						const totalFrustration = model.totalNegation + model.totalRepetition + model.totalBlame;
+						const totalHits = model.totalYelling + model.totalProfanity + model.totalAnguish + totalFrustration;
 
 						return (
 							<div key={key} className="border-t border-[var(--border-subtle)]">
@@ -158,13 +168,16 @@ export function BehaviorModelsTable({ models, behaviorSeries }: BehaviorModelsTa
 											{formatInt(model.totalMessages)}
 										</div>
 										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
-											{formatRate(model.totalYellingSentences, model.totalMessages)}
+											{formatRate(model.totalYelling, model.totalMessages)}
 										</div>
 										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
 											{formatRate(model.totalProfanity, model.totalMessages)}
 										</div>
 										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
-											{formatRate(model.totalDramaRuns, model.totalMessages)}
+											{formatRate(model.totalAnguish, model.totalMessages)}
+										</div>
+										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
+											{formatRate(totalFrustration, model.totalMessages)}
 										</div>
 										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
 											{formatRate(totalHits, model.totalMessages)}
@@ -188,7 +201,7 @@ export function BehaviorModelsTable({ models, behaviorSeries }: BehaviorModelsTa
 											<div className="space-y-4 text-sm">
 												<DetailRow
 													label="Yelling (CAPS)"
-													total={model.totalYellingSentences}
+													total={model.totalYelling}
 													messages={model.totalMessages}
 													valueClass="text-[var(--accent-amber,#fbbf24)]"
 												/>
@@ -199,10 +212,28 @@ export function BehaviorModelsTable({ models, behaviorSeries }: BehaviorModelsTa
 													valueClass="text-[var(--accent-red,#f87171)]"
 												/>
 												<DetailRow
-													label="Drama (!!! / ???)"
-													total={model.totalDramaRuns}
+													label="Anguish (!!!, nooo, dude, ..)"
+													total={model.totalAnguish}
 													messages={model.totalMessages}
 													valueClass="text-[var(--accent-violet,#a78bfa)]"
+												/>
+												<DetailRow
+													label="Negation (no/nope/wrong)"
+													total={model.totalNegation}
+													messages={model.totalMessages}
+													valueClass="text-[var(--accent-cyan,#22d3ee)]"
+												/>
+												<DetailRow
+													label="Repetition (i meant, still doesnt)"
+													total={model.totalRepetition}
+													messages={model.totalMessages}
+													valueClass="text-[var(--accent-cyan,#22d3ee)]"
+												/>
+												<DetailRow
+													label="Blame (you didnt, stop X-ing)"
+													total={model.totalBlame}
+													messages={model.totalMessages}
+													valueClass="text-[var(--accent-cyan,#22d3ee)]"
 												/>
 												<DetailRow
 													label="Avg chars / msg"
@@ -322,9 +353,18 @@ function BreakdownChart({ data, chartTheme }: { data: DailyPoint[]; chartTheme: 
 				borderWidth: 2,
 			},
 			{
-				label: "Drama",
-				data: data.map(d => d.drama),
-				borderColor: SERIES_COLORS.drama,
+				label: "Anguish",
+				data: data.map(d => d.anguish),
+				borderColor: SERIES_COLORS.anguish,
+				backgroundColor: "transparent",
+				tension: 0.4,
+				pointRadius: 0,
+				borderWidth: 2,
+			},
+			{
+				label: "Frustration",
+				data: data.map(d => d.frustration),
+				borderColor: SERIES_COLORS.frustration,
 				backgroundColor: "transparent",
 				tension: 0.4,
 				pointRadius: 0,
@@ -394,13 +434,15 @@ function buildTrendLookup(points: BehaviorTimeSeriesPoint[]): Map<string, ModelT
 			timestamp: point.timestamp,
 			yelling: 0,
 			profanity: 0,
-			drama: 0,
+			anguish: 0,
+			frustration: 0,
 			total: 0,
 		};
-		existing.yelling += point.yellingSentences;
+		existing.yelling += point.yelling;
 		existing.profanity += point.profanity;
-		existing.drama += point.dramaRuns;
-		existing.total = existing.yelling + existing.profanity + existing.drama;
+		existing.anguish += point.anguish;
+		existing.frustration += point.negation + point.repetition + point.blame;
+		existing.total = existing.yelling + existing.profanity + existing.anguish + existing.frustration;
 		dayMap.set(point.timestamp, existing);
 	}
 
@@ -412,7 +454,8 @@ function buildTrendLookup(points: BehaviorTimeSeriesPoint[]): Map<string, ModelT
 					timestamp: ts,
 					yelling: 0,
 					profanity: 0,
-					drama: 0,
+					anguish: 0,
+					frustration: 0,
 					total: 0,
 				},
 		);

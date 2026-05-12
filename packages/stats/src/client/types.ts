@@ -135,17 +135,23 @@ export interface BehaviorTimeSeriesPoint {
 	model: string;
 	provider: string;
 	messages: number;
-	yellingSentences: number;
+	yelling: number;
 	profanity: number;
-	dramaRuns: number;
+	anguish: number;
+	negation: number;
+	repetition: number;
+	blame: number;
 	chars: number;
 }
 
 export interface BehaviorOverallStats {
 	totalMessages: number;
-	totalYellingSentences: number;
+	totalYelling: number;
 	totalProfanity: number;
-	totalDramaRuns: number;
+	totalAnguish: number;
+	totalNegation: number;
+	totalRepetition: number;
+	totalBlame: number;
 	totalChars: number;
 	firstTimestamp: number;
 	lastTimestamp: number;
@@ -155,9 +161,12 @@ export interface BehaviorModelStats {
 	model: string;
 	provider: string;
 	totalMessages: number;
-	totalYellingSentences: number;
+	totalYelling: number;
 	totalProfanity: number;
-	totalDramaRuns: number;
+	totalAnguish: number;
+	totalNegation: number;
+	totalRepetition: number;
+	totalBlame: number;
 	totalChars: number;
 	lastTimestamp: number;
 }

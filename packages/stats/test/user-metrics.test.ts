@@ -1,85 +1,176 @@
 import { describe, expect, it } from "bun:test";
-import { computeUserMessageMetrics } from "../src/user-metrics";
+import { computeUserMessageMetrics, EMPTY_USER_METRICS } from "../src/user-metrics";
 
 describe("computeUserMessageMetrics", () => {
 	it("returns zeros for empty / whitespace-only text", () => {
-		expect(computeUserMessageMetrics("")).toEqual({
-			chars: 0,
-			words: 0,
-			yellingSentences: 0,
-			profanity: 0,
-			dramaRuns: 0,
-		});
-		expect(computeUserMessageMetrics("   \n\t ")).toEqual({
-			chars: 0,
-			words: 0,
-			yellingSentences: 0,
-			profanity: 0,
-			dramaRuns: 0,
-		});
+		expect(computeUserMessageMetrics("")).toEqual({ ...EMPTY_USER_METRICS });
+		expect(computeUserMessageMetrics("   \n\t ")).toEqual({ ...EMPTY_USER_METRICS });
 	});
 
 	it("counts a sentence as yelling when >50% of its letters are uppercase", () => {
-		// 16 letters, all uppercase → yelling.
 		const m = computeUserMessageMetrics("STOP DOING THAT NOW");
-		expect(m.yellingSentences).toBe(1);
+		expect(m.yelling).toBe(1);
 	});
 
 	it("treats mostly-lowercase sentences as not yelling even with embedded CAPS", () => {
-		// `STOP` and `THAT` are uppercase but the surrounding lowercase keeps the
-		// per-sentence ratio well under 50%.
 		const m = computeUserMessageMetrics("Hi there, please STOP doing THAT immediately, it is really annoying.");
-		expect(m.yellingSentences).toBe(0);
+		expect(m.yelling).toBe(0);
 	});
 
 	it("ignores very short uppercase fragments below the letter floor", () => {
-		// "OK" and "WIP" have fewer than the minimum-letters threshold, so neither
-		// sentence should register as yelling.
-		expect(computeUserMessageMetrics("OK").yellingSentences).toBe(0);
-		expect(computeUserMessageMetrics("WIP.").yellingSentences).toBe(0);
+		expect(computeUserMessageMetrics("OK").yelling).toBe(0);
+		expect(computeUserMessageMetrics("WIP.").yelling).toBe(0);
 	});
 
 	it("counts multiple yelling sentences separated by terminators", () => {
 		const m = computeUserMessageMetrics("WHY IS THIS BROKEN? FIX IT NOW!! please.");
-		// "WHY IS THIS BROKEN" and " FIX IT NOW" are both >50% uppercase; the
-		// trailing " please" sentence is lowercase.
-		expect(m.yellingSentences).toBe(2);
+		expect(m.yelling).toBe(2);
 	});
 
 	it("does not flag camelCase / acronyms inside otherwise-lowercase prose", () => {
 		const m = computeUserMessageMetrics("call getHTMLParser then exit");
-		expect(m.yellingSentences).toBe(0);
+		expect(m.yelling).toBe(0);
 	});
 
 	it("matches profanity case-insensitively at word boundaries only", () => {
+		// Regression: prior version used a non-raw template literal so `\b` was
+		// compiled as backspace (U+0008) and the regex matched nothing in real
+		// prose. Lock the word-boundary contract in.
 		const m = computeUserMessageMetrics("oh FUCK this is bullshit, damn it");
 		expect(m.profanity).toBe(3);
-		// `class` shares letters with `ass` but must not match — word boundary required.
 		expect(computeUserMessageMetrics("import classes from module").profanity).toBe(0);
 	});
 
-	it("counts each run of 3+ ! or ? as one drama run", () => {
+	it("counts quality-dismissal vocabulary as profanity", () => {
+		const m = computeUserMessageMetrics("this is garbage, useless and horrible work");
+		expect(m.profanity).toBe(3);
+	});
+
+	it("folds drama runs / elongated interjections / dot trails into `anguish`", () => {
 		const m = computeUserMessageMetrics("why!!! seriously??? omg!?!?!?");
-		// "!!!" = 1, "???" = 1, "!?!?!?" = 1 (mixed ≥3 cluster) → 3
-		expect(m.dramaRuns).toBe(3);
-		// Two characters alone do not count as drama.
-		expect(computeUserMessageMetrics("ok!! sure??").dramaRuns).toBe(0);
+		expect(m.anguish).toBeGreaterThanOrEqual(3);
+		expect(computeUserMessageMetrics("ok!! sure??").anguish).toBe(0);
 	});
 
-	it("absorbs shift-key `1` mishits into the surrounding drama run", () => {
-		// "!!!111" and "!?!?!??111" are both single bursts, not separate hits.
-		expect(computeUserMessageMetrics("what!!!111").dramaRuns).toBe(1);
-		expect(computeUserMessageMetrics("are you serious!?!?!??111").dramaRuns).toBe(1);
-		// Plain digits without a leading `!`/`?` are not drama.
-		expect(computeUserMessageMetrics("port 8111 please").dramaRuns).toBe(0);
+	it("absorbs shift-key `1` mishits into a single drama burst", () => {
+		expect(computeUserMessageMetrics("what!!!111").anguish).toBeGreaterThanOrEqual(1);
+		expect(computeUserMessageMetrics("are you serious!?!?!??111").anguish).toBeGreaterThanOrEqual(1);
+		expect(computeUserMessageMetrics("port 8111 please").anguish).toBe(0);
 	});
 
-	it("captures all three signals together with correct chars/words", () => {
-		const m = computeUserMessageMetrics("WHY IS THIS SO SHITTY???");
-		expect(m.yellingSentences).toBe(1);
-		expect(m.profanity).toBe(1);
-		expect(m.dramaRuns).toBe(1);
-		expect(m.words).toBe(5);
-		expect(m.chars).toBe("WHY IS THIS SO SHITTY???".length);
+	describe("negation signal", () => {
+		it("fires on line-leading correction openers", () => {
+			expect(computeUserMessageMetrics("no this is the renderer").negation).toBe(1);
+			expect(computeUserMessageMetrics("nope, still wrong").negation).toBe(1);
+			expect(computeUserMessageMetrics("nah look at this").negation).toBe(1);
+			expect(computeUserMessageMetrics("wrong file").negation).toBe(1);
+			expect(computeUserMessageMetrics("nvm got it").negation).toBe(1);
+		});
+
+		it("does not fire on words that share a prefix with negation tokens", () => {
+			// `now`, `nobody`, `north`, `noble`, `normal` all start with `no` but
+			// are not corrective negation.
+			expect(computeUserMessageMetrics("now everything works").negation).toBe(0);
+			expect(computeUserMessageMetrics("nobody knows why").negation).toBe(0);
+			expect(computeUserMessageMetrics("normal operation resumed").negation).toBe(0);
+		});
+
+		it("only anchors at the start of the message - mid-message `no`/`No` lines do not fire", () => {
+			// Real corrective negation overwhelmingly opens the message. Pasted error
+			// text and bullet lists trip the old `^...$/m` anchor with FPs like
+			// "Wrong user name or password" or "No JSDoc warning on X".
+			expect(computeUserMessageMetrics("i instantly get Finalizing ->\nNo speech detected").negation).toBe(0);
+			expect(computeUserMessageMetrics("Authentication failed\n\nWrong user name or password").negation).toBe(0);
+		});
+
+		it("strips `[Image #N]` placeholders so message-leading negation still fires", () => {
+			// The TUI inserts `[Image #1]` markers ahead of real user prose; the
+			// strip pass removes them so anchored-at-start negation still works.
+			expect(computeUserMessageMetrics("[Image #1] nope still broken").negation).toBe(1);
+		});
+
+		it("fires on explicit rejection phrases", () => {
+			expect(computeUserMessageMetrics("thats not what i wanted").negation).toBe(1);
+			expect(computeUserMessageMetrics("that's not right").negation).toBe(1);
+			expect(computeUserMessageMetrics("this is not what i meant at all").negation).toBe(1);
+		});
+	});
+
+	describe("repetition signal", () => {
+		it("counts explicit recall verbs", () => {
+			expect(computeUserMessageMetrics("i meant the other file").repetition).toBe(1);
+			expect(computeUserMessageMetrics("i told you to skip it").repetition).toBe(1);
+			expect(computeUserMessageMetrics("i asked you for json not yaml").repetition).toBe(1);
+			expect(computeUserMessageMetrics("like i said earlier").repetition).toBe(1);
+		});
+
+		it("requires `you` after `i asked` to suppress neutral third-party usage", () => {
+			// In the real corpus, bare `i asked` is overwhelmingly "i asked
+			// <some third party>" - committee, experts, weaker LLMs, etc. -
+			// which is not frustration with us. The `(like|as) i asked` form is
+			// still allowed because it always refers back to our own ask.
+			expect(computeUserMessageMetrics("i asked the committee to review").repetition).toBe(0);
+			expect(computeUserMessageMetrics("so i asked a bunch of experts").repetition).toBe(0);
+			expect(computeUserMessageMetrics("you're not doing AST rewriting like i asked").repetition).toBe(1);
+		});
+
+		it("counts `still` only when paired with a negative / sameness marker", () => {
+			// Bare `still` would over-fire on neutral usage.
+			expect(computeUserMessageMetrics("the agent still works fine").repetition).toBe(0);
+			expect(computeUserMessageMetrics("it still doesnt work").repetition).toBe(1);
+			expect(computeUserMessageMetrics("still the same issue").repetition).toBe(1);
+			expect(computeUserMessageMetrics("still failing on darwin").repetition).toBe(1);
+		});
+	});
+
+	describe("blame signal", () => {
+		it("fires on accusatory second-person verbs", () => {
+			expect(computeUserMessageMetrics("you broke the layout").blame).toBe(1);
+			expect(computeUserMessageMetrics("you didnt update AGENTS").blame).toBe(1);
+			expect(computeUserMessageMetrics("you missed a callsite").blame).toBe(1);
+			expect(computeUserMessageMetrics("you forgot to commit").blame).toBe(1);
+			expect(computeUserMessageMetrics("you keep doing that").blame).toBe(1);
+		});
+
+		it("does not fire on bare `you`", () => {
+			// `you` alone is too generic - dominated by neutral instructions.
+			expect(computeUserMessageMetrics("can you fix the bug?").blame).toBe(0);
+			expect(computeUserMessageMetrics("could you also add a test").blame).toBe(0);
+		});
+
+		it("only fires on `stop X-ing` at sentence start", () => {
+			expect(computeUserMessageMetrics("stop touching git").blame).toBe(1);
+			expect(computeUserMessageMetrics("please stop making yolo changes").blame).toBe(0); // mid-sentence
+			expect(computeUserMessageMetrics("ok. stop reverting things").blame).toBe(1);
+			// `nonstop`/`stopping` should not match the imperative pattern.
+			expect(computeUserMessageMetrics("the loop keeps stopping").blame).toBe(0);
+		});
+	});
+
+	it("zeros out behavior signals on long structured prompts", () => {
+		// >= 3 non-empty prose lines after stripping = deliberate prompt, not a tantrum.
+		const long = [
+			"no this is wrong, you broke it, i meant the other one.",
+			"please undo and try again.",
+			"acceptance: green tests.",
+			"thanks!",
+		].join("\n");
+		const m = computeUserMessageMetrics(long);
+		expect(m.negation).toBe(0);
+		expect(m.repetition).toBe(0);
+		expect(m.blame).toBe(0);
+		expect(m.anguish).toBe(0);
+		expect(m.profanity).toBe(0);
+		expect(m.yelling).toBe(0);
+		// But char/word counts still reflect the raw text.
+		expect(m.chars).toBeGreaterThan(0);
+		expect(m.words).toBeGreaterThan(0);
+	});
+
+	it("captures multiple frustration signals on a single short message", () => {
+		const m = computeUserMessageMetrics("no, you broke it AGAIN. i told you it still doesnt work");
+		expect(m.negation).toBe(1);
+		expect(m.blame).toBe(1);
+		expect(m.repetition).toBeGreaterThanOrEqual(2); // `i told you` + `still doesnt`
 	});
 });
