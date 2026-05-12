@@ -151,10 +151,11 @@ describe("issue #985: subagent dispatch auth fallback", () => {
 	});
 
 	test("treats keyless providers (kNoAuth marker) as authenticated", async () => {
-		// Keyless providers (Ollama, llama.cpp without configured token) return
-		// the kNoAuth sentinel. isAuthenticated treats this as not-authed, so
-		// the helper should fall back to the parent — ensuring users on a
-		// real authed parent never get downgraded to an unreachable local proxy.
+		// Keyless-by-design providers (Ollama, llama.cpp, lm-studio) advertise the
+		// kNoAuth sentinel from getApiKey to signal that they do not require
+		// credentials. The helper treats this as authenticated so an explicitly
+		// configured local model is never silently rerouted to the parent's
+		// remote provider (see #1008).
 		const registry: ModelLookupRegistry & { getApiKey(model: Model<Api>): Promise<string | undefined> } = {
 			getAvailable: () => [parentModel, unauthedTaskModel],
 			getApiKey: async (model: Model<Api>) => {
@@ -170,7 +171,8 @@ describe("issue #985: subagent dispatch auth fallback", () => {
 			registry,
 		);
 
-		expect(result.authFallbackUsed).toBe(true);
-		expect(result.model?.provider).toBe("deepseek");
+		expect(result.authFallbackUsed).toBe(false);
+		expect(result.model?.provider).toBe("opencode-zen");
+		expect(result.model?.id).toBe("qwen3.6-plus-free");
 	});
 });
