@@ -187,7 +187,7 @@ function returnFinalExpression(code: string): { source: string; returned: boolea
 	const suffix = code.slice(expression.end);
 	const semicolonMatch = statement.match(/;\s*$/);
 	const trimmedStatement = semicolonMatch ? statement.slice(0, semicolonMatch.index) : statement;
-	return { source: `${prefix}globalThis.__omp_final_expr__ = (${trimmedStatement});${suffix}`, returned: true };
+	return { source: `${prefix}__omp_set_final_expr__((${trimmedStatement}));${suffix}`, returned: true };
 }
 
 /**

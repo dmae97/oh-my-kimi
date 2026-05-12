@@ -94,20 +94,22 @@ describe("executeJs", () => {
 		expect(persisted.output.trim()).toBe("41");
 	});
 
-	it("ignores inherited final expression markers", async () => {
-		try {
-			await executeJs("Object.prototype.__omp_final_expr__ = 'poisoned';", { sessionId, session, sessionFile });
+	it("does not expose the final expression marker as a global property", async () => {
+		const result = await executeJs("const localOnly = 7; localOnly;", { sessionId, session, sessionFile });
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("7");
 
-			const result = await executeJs("const localOnly = 7;", { sessionId, session, sessionFile });
-			expect(result.exitCode).toBe(0);
-			expect(result.output.trim()).toBe("");
+		const marker = await executeJs("return Object.hasOwn(globalThis, '__omp_final_expr__');", {
+			sessionId,
+			session,
+			sessionFile,
+		});
+		expect(marker.exitCode).toBe(0);
+		expect(marker.output.trim()).toBe("false");
 
-			const persisted = await executeJs("return localOnly;", { sessionId, session, sessionFile });
-			expect(persisted.exitCode).toBe(0);
-			expect(persisted.output.trim()).toBe("7");
-		} finally {
-			await executeJs("delete Object.prototype.__omp_final_expr__;", { sessionId, session, sessionFile });
-		}
+		const persisted = await executeJs("return localOnly;", { sessionId, session, sessionFile });
+		expect(persisted.exitCode).toBe(0);
+		expect(persisted.output.trim()).toBe("7");
 	});
 
 	it("ignores user-assigned final expression markers without a rewritten final expression", async () => {
@@ -119,6 +121,38 @@ describe("executeJs", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe("actual");
+	});
+
+	it("captures promise-valued final expression before promise callbacks can mutate the marker", async () => {
+		const result = await executeJs(
+			"const pending = Promise.resolve(1).then(value => { globalThis.__omp_final_expr__ = 999; return value; }); pending;",
+			{ sessionId, session, sessionFile },
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("1");
+	});
+
+	it("awaits rewritten thenable final expressions once", async () => {
+		const result = await executeJs(
+			[
+				"globalThis.thenCalls = 0;",
+				"const thenable = {",
+				"  then(resolve) {",
+				"    globalThis.thenCalls++;",
+				"    resolve('done');",
+				"  },",
+				"};",
+				"thenable;",
+			].join("\n"),
+			{ sessionId, session, sessionFile },
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("done");
+
+		const calls = await executeJs("return globalThis.thenCalls;", { sessionId, session, sessionFile });
+		expect(calls.exitCode).toBe(0);
+		expect(calls.output.trim()).toBe("1");
 	});
 
 	it("exposes the worker's real process object", async () => {
