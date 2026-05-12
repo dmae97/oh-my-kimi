@@ -136,6 +136,7 @@ function formatForLLM(response: SearchResponse): string {
 async function executeSearch(
 	_toolCallId: string,
 	params: SearchQueryParams,
+	signal?: AbortSignal,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchRenderDetails }> {
 	const providers =
 		params.provider && params.provider !== "auto"
@@ -165,6 +166,7 @@ async function executeSearch(
 				maxOutputTokens: params.max_tokens,
 				numSearchResults: params.num_search_results,
 				temperature: params.temperature,
+				signal,
 			});
 
 			const text = formatForLLM(response);
@@ -221,11 +223,11 @@ export class WebSearchTool implements AgentTool<typeof webSearchSchema, SearchRe
 	async execute(
 		_toolCallId: string,
 		params: SearchToolParams,
-		_signal?: AbortSignal,
+		signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback<SearchRenderDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<SearchRenderDetails>> {
-		return executeSearch(_toolCallId, params);
+		return executeSearch(_toolCallId, params, signal);
 	}
 }
 
@@ -241,9 +243,9 @@ export const webSearchCustomTool: CustomTool<typeof webSearchSchema, SearchRende
 		params: SearchToolParams,
 		_onUpdate,
 		_ctx: CustomToolContext,
-		_signal?: AbortSignal,
+		signal?: AbortSignal,
 	) {
-		return executeSearch(toolCallId, params);
+		return executeSearch(toolCallId, params, signal);
 	},
 
 	renderCall(args: SearchToolParams, options: RenderResultOptions, theme: Theme) {
