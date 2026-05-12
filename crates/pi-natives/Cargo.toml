@@ -13,67 +13,53 @@ crate-type = ["cdylib"]
 workspace = true
 
 [dependencies]
-mimalloc = "0.1"
-tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["full"] }
-napi = { version = "3", features = ["napi10", "tokio_rt", "tokio_time"] }
-napi-derive = "3"
-pi-shell = { path = "../pi-shell" }
-parking_lot = "0.12.5"
-dashmap = "6.1"
-clap = { version = "4", features = ["derive"] }
-portable-pty = "0.9"
-grep-regex = "0.1"
-grep-searcher = "0.1"
-grep-matcher = "0.1"
-globset = "0.4"
-ignore = "0.4"
-rayon = "1.12"
-ast-grep-core = { version = "0.39", default-features = false, features = [
-   "tree-sitter",
-] }
-pi-ast = { path = "../pi-ast" }
-pi-iso = { path = "../pi-iso" }
-inferno = { version = "0.12", default-features = false }
-image = { version = "0.25", default-features = false, features = [
-   "png",
-   "jpeg",
-   "gif",
-   "webp",
-] }
-webp = "0.3"
-arboard = { version = "3.6.1", features = ["wayland-data-control"] }
-icy_sixel = "0.5"
-unicode-segmentation = "1.13"
-unicode-width = "0.2"
-syntect = { version = "5.3", default-features = false, features = [
-   "default-syntaxes",
-   "default-themes",
-   "regex-fancy",
-] }
-html-to-markdown-rs = { version = "2.24", default-features = false }
-phf = { version = "0.13", features = ["macros"] }
-smallvec = { version = "1.15.1", features = [
-   "serde",
-   "write",
-   "union",
-   "const_new",
-] }
-memmap2 = "0.9"
-xxhash-rust = { version = "0.8", features = ["xxh64"] }
-regex = "1"
-tiktoken-rs = "0.11"
-similar = "3.1.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0", features = ["preserve_order"] }
-anyhow = "1.0"
-toml = "1.1"
+anyhow.workspace = true
+arboard.workspace = true
+ast-grep-core.workspace = true
+clap.workspace = true
+dashmap.workspace = true
+globset.workspace = true
+grep-matcher.workspace = true
+grep-regex.workspace = true
+grep-searcher.workspace = true
+html-to-markdown-rs.workspace = true
+icy_sixel.workspace = true
+ignore.workspace = true
+image.workspace = true
+inferno.workspace = true
+memmap2.workspace = true
+mimalloc.workspace = true
+napi.workspace = true
+napi-derive.workspace = true
+parking_lot.workspace = true
+phf.workspace = true
+pi-ast.workspace = true
+pi-iso.workspace = true
+pi-shell.workspace = true
+portable-pty.workspace = true
+rayon.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+similar.workspace = true
+smallvec.workspace = true
+syntect.workspace = true
+tiktoken-rs.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+toml.workspace = true
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+webp.workspace = true
+xxhash-rust.workspace = true
+
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-winreg = "0.56"
+winreg.workspace = true
+
 [build-dependencies]
-napi-build = "2"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+napi-build.workspace = true
+serde.workspace = true
+serde_json.workspace = true

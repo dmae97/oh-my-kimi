@@ -49,8 +49,16 @@ split-debuginfo = "unpacked"
 opt-level = 2
 debug = false
 
+[workspace.lints.rust]
+# ──────────────────────────────────────────────────────────────────────────────
+# Rust Lint Levels
+# ──────────────────────────────────────────────────────────────────────────────
+mismatched_lifetime_syntaxes = "allow"
+
 [workspace.lints.clippy]
+# ──────────────────────────────────────────────────────────────────────────────
 # Base Lint Levels
+# ──────────────────────────────────────────────────────────────────────────────
 all = { level = "warn", priority = -1 }
 correctness = { level = "deny", priority = -1 }
 nursery = { level = "warn", priority = -1 }
@@ -59,54 +67,298 @@ perf = { level = "warn", priority = -1 }
 style = { level = "warn", priority = -1 }
 suspicious = { level = "deny", priority = -1 }
 
+# ──────────────────────────────────────────────────────────────────────────────
 # Meta: Lint Attributes
-allow_attributes_without_reason = "warn"
+# ──────────────────────────────────────────────────────────────────────────────
+allow_attributes_without_reason = "warn" # Enforce reason for all #[allow]
 
+# ──────────────────────────────────────────────────────────────────────────────
 # Safety & Unsafe Code
+# ──────────────────────────────────────────────────────────────────────────────
+borrow_as_ptr = "allow"
+cast_ptr_alignment = "allow"
+ptr_as_ptr = "allow"
+ref_as_ptr = "allow"
 undocumented_unsafe_blocks = "warn"
+unsafe_derive_deserialize = "allow"
 
+# ──────────────────────────────────────────────────────────────────────────────
 # Numeric Casts & Conversions
-cast_lossless = "allow"
-cast_possible_truncation = "allow"
-cast_possible_wrap = "allow"
-cast_precision_loss = "allow"
-cast_sign_loss = "allow"
+# ──────────────────────────────────────────────────────────────────────────────
+cast_lossless = "allow"            # u32 as u64 - 'as' is cleaner than From
+cast_possible_truncation = "allow" # u64 as u32 - often intentional
+cast_possible_wrap = "allow"       # u32 as i32 - can be intentional
+cast_precision_loss = "allow"      # f64 as f32 - sometimes acceptable
+cast_sign_loss = "allow"           # i32 as u32 - sometimes needed
+tuple_array_conversions = "allow"  # Non-Into conversion is more clear
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Floating Point
+# ──────────────────────────────────────────────────────────────────────────────
+float_cmp = "allow" # Tests mostly do this + we know what we're doing
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Functions & Closures
-inline_always = "allow"
-must_use_candidate = "allow"
+# ──────────────────────────────────────────────────────────────────────────────
+inline_always = "allow"                      # Needed for performance-critical code
+must_use_candidate = "allow"                 # Not every function needs #[must_use]
 needless_pass_by_value = "allow"
-redundant_closure_for_method_calls = "allow"
-return_self_not_must_use = "allow"
+redundant_closure_for_method_calls = "allow" # .map(ToString::to_string) can be clearer
+return_self_not_must_use = "allow"           # Builder pattern methods
 
+# ──────────────────────────────────────────────────────────────────────────────
 # Structs & Types
-missing_fields_in_debug = "allow"
-struct_excessive_bools = "allow"
+# ──────────────────────────────────────────────────────────────────────────────
+inconsistent_struct_constructor = "allow"
+missing_fields_in_debug = "allow"         # Not every field needs to be in Debug output
+struct_excessive_bools = "allow"          # Usually with builders
 
+# ──────────────────────────────────────────────────────────────────────────────
 # Pattern Matching
-match_same_arms = "allow"
-match_wildcard_for_single_variants = "allow"
-option_if_let_else = "allow"
+# ──────────────────────────────────────────────────────────────────────────────
+match_same_arms = "allow"                    # Can be intentional for clarity
+match_wildcard_for_single_variants = "allow" # _ can be clearer than listing variants
+option_if_let_else = "allow"                 # match/if-let-else often clearer
 
+# ──────────────────────────────────────────────────────────────────────────────
 # Imports & Module Organization
+# ──────────────────────────────────────────────────────────────────────────────
 enum_glob_use = "allow"
-items_after_statements = "allow"
-wildcard_imports = "allow"
+items_after_statements = "allow" # Sometimes more readable
+wildcard_imports = "allow"       # Cleaner for preludes and test modules
 
+# ──────────────────────────────────────────────────────────────────────────────
 # Variables & Type Inference
-similar_names = "allow"
+# ──────────────────────────────────────────────────────────────────────────────
+let_underscore_untyped = "allow" # Type obvious from context
+similar_names = "allow"          # 'req' and 'res' together are fine
 
+# ──────────────────────────────────────────────────────────────────────────────
 # Literals & Formatting
-unreadable_literal = "allow"
+# ──────────────────────────────────────────────────────────────────────────────
+unreadable_literal = "allow" # 10_000_000 vs 0xDEADBEEF is context dependent
+verbose_bit_mask = "allow"   # Explicit bit patterns can be clearer than hex
 
+# ──────────────────────────────────────────────────────────────────────────────
 # Code Style
-default_trait_access = "allow"
-significant_drop_tightening = "allow"
+# ──────────────────────────────────────────────────────────────────────────────
+default_trait_access = "allow"        # Default::default() sometimes clearer
+significant_drop_tightening = "allow" # We pay attention to this already
 
+# ──────────────────────────────────────────────────────────────────────────────
 # Documentation
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
+# ──────────────────────────────────────────────────────────────────────────────
+missing_errors_doc = "allow" # Documenting every error return is often redundant
+missing_panics_doc = "allow" # Not every panic needs docs, especially assert!
 
+# ──────────────────────────────────────────────────────────────────────────────
 # Complexity
-too_many_lines = "allow"
-too_many_arguments = "allow"
+# ──────────────────────────────────────────────────────────────────────────────
+too_many_arguments = "allow" # Argument count is rarely the real complexity signal
+too_many_lines = "allow"     # Arbitrary limits don't account for necessary complexity
+
+[workspace.dependencies]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Internal Libraries
+# ──────────────────────────────────────────────────────────────────────────────
+pi-ast = { path = "crates/pi-ast" }
+pi-iso = { path = "crates/pi-iso" }
+pi-shell = { path = "crates/pi-shell" }
+brush-core = { path = "crates/brush-core-vendored" }
+brush-builtins = { path = "crates/brush-builtins-vendored" }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Async Runtime & Concurrency
+# ──────────────────────────────────────────────────────────────────────────────
+async-trait = "0.1"
+dashmap = "6.1"
+parking_lot = "0.12.5"
+rayon = "1.12"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["full"] }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Serialization & Data Formats
+# ──────────────────────────────────────────────────────────────────────────────
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+toml = "1.1"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Error Handling
+# ──────────────────────────────────────────────────────────────────────────────
+anyhow = "1.0"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CLI & Configuration
+# ──────────────────────────────────────────────────────────────────────────────
+clap = { version = "4", features = ["derive"] }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Text Processing & Parsing
+# ──────────────────────────────────────────────────────────────────────────────
+regex = "1"
+similar = "3.1.0"
+unicode-segmentation = "1.13"
+unicode-width = "0.2"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Data Structures - Collections
+# ──────────────────────────────────────────────────────────────────────────────
+phf = { version = "0.13", features = ["macros"] }
+smallvec = { version = "1.15.1", features = [
+   "serde",
+   "write",
+   "union",
+   "const_new",
+] }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Hashing
+# ──────────────────────────────────────────────────────────────────────────────
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Memory Management & Allocators
+# ──────────────────────────────────────────────────────────────────────────────
+memmap2 = "0.9"
+mimalloc = "0.1"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# System & Platform
+# ──────────────────────────────────────────────────────────────────────────────
+libc = "0.2"
+os_pipe = "1"
+windows-sys = { version = "0.61", features = [
+   "Win32_Foundation",
+   "Win32_Storage_FileSystem",
+   "Win32_Storage_ProjectedFileSystem",
+   "Win32_System_Com",
+   "Win32_System_LibraryLoader",
+   "Win32_System_IO",
+   "Win32_System_Ioctl",
+] }
+winreg = "0.56"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Node.js Bindings (NAPI)
+# ──────────────────────────────────────────────────────────────────────────────
+napi = { version = "3", features = ["napi10", "tokio_rt", "tokio_time"] }
+napi-build = "2"
+napi-derive = "3"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Terminal & PTY
+# ──────────────────────────────────────────────────────────────────────────────
+arboard = { version = "3.6.1", features = ["wayland-data-control"] }
+icy_sixel = "0.5"
+portable-pty = "0.9"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Search & File Walking
+# ──────────────────────────────────────────────────────────────────────────────
+globset = "0.4"
+grep-matcher = "0.1"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+ignore = "0.4"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Image Processing & Syntax Highlighting
+# ──────────────────────────────────────────────────────────────────────────────
+image = { version = "0.25", default-features = false, features = [
+   "png",
+   "jpeg",
+   "gif",
+   "webp",
+] }
+inferno = { version = "0.12", default-features = false }
+syntect = { version = "5.3", default-features = false, features = [
+   "default-syntaxes",
+   "default-themes",
+   "regex-fancy",
+] }
+webp = "0.3"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Markup Conversion
+# ──────────────────────────────────────────────────────────────────────────────
+html-to-markdown-rs = { version = "2.24", default-features = false }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tokenization
+# ──────────────────────────────────────────────────────────────────────────────
+tiktoken-rs = "0.11"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Shell Parsing
+# ──────────────────────────────────────────────────────────────────────────────
+brush-parser = "0.3"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# AST & Tree-Sitter
+# ──────────────────────────────────────────────────────────────────────────────
+ast-grep-core = { version = "0.39", default-features = false, features = [
+   "tree-sitter",
+] }
+tree-sitter = "0.25"
+tree-sitter-astro = { version = "0.1.1", package = "tree-sitter-astro-next" }
+tree-sitter-bash = "0.25"
+tree-sitter-c = "0.24"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-clojure = "0.1"
+tree-sitter-cmake = "0.7.1"
+tree-sitter-cpp = "0.23"
+tree-sitter-css = "0.25"
+tree-sitter-dart = "0.2"
+tree-sitter-diff = "0.1"
+tree-sitter-dockerfile = { version = "0.2.0", package = "tree-sitter-dockerfile-updated" }
+tree-sitter-elixir = "0.3"
+tree-sitter-erlang = "0.16.0"
+tree-sitter-go = "0.25"
+tree-sitter-graphql = "0.1.0"
+tree-sitter-haskell = "0.23"
+tree-sitter-hcl = "1.1"
+tree-sitter-html = "0.23"
+tree-sitter-ini = "1.4.0"
+tree-sitter-java = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-json = "0.24"
+tree-sitter-julia = "0.23"
+tree-sitter-just = "0.2.0"
+tree-sitter-kotlin = { version = "0.4", package = "tree-sitter-kotlin-sg" }
+tree-sitter-lua = "0.5"
+tree-sitter-make = "1.1"
+tree-sitter-md = "0.5"
+tree-sitter-nix = "0.3"
+tree-sitter-objc = "3.0"
+tree-sitter-ocaml = "0.24.2"
+tree-sitter-odin = "1.3"
+tree-sitter-perl = { version = "0.1.0", package = "tree-sitter-perl-next" }
+tree-sitter-php = "0.24"
+tree-sitter-powershell = "0.26.4"
+tree-sitter-proto = "0.4.0"
+tree-sitter-python = "0.25"
+tree-sitter-r = "1.2.0"
+tree-sitter-regex = "0.25"
+tree-sitter-ruby = "0.23"
+tree-sitter-rust = "0.24"
+tree-sitter-scala = "0.26"
+tree-sitter-solidity = "1.2"
+tree-sitter-sql = { version = "0.3.11", package = "tree-sitter-sequel" }
+tree-sitter-starlark = "1.3"
+tree-sitter-svelte = { version = "0.1.1", package = "tree-sitter-svelte-next" }
+tree-sitter-swift = "0.7"
+tree-sitter-tlaplus = "1.5"
+tree-sitter-toml-ng = "0.7"
+tree-sitter-typescript = "0.23"
+tree-sitter-verilog = "1.0"
+tree-sitter-vue = { version = "0.1.0", package = "tree-sitter-vue-next" }
+tree-sitter-xml = "0.7"
+tree-sitter-yaml = "0.7"
+tree-sitter-zig = "1.1"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Unsorted (added by `cargo add` - move into a section above)
+# ──────────────────────────────────────────────────────────────────────────────

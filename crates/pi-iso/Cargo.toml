@@ -10,24 +10,16 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-async-trait = "0.1"
-tokio = { version = "1", features = ["fs", "process", "rt", "macros", "io-util"] }
-similar = "3.1.0"
+async-trait.workspace = true
+similar.workspace = true
+tokio.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-parking_lot = "0.12.5"
+parking_lot.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-parking_lot = "0.12.5"
-windows-sys = { version = "0.61", features = [
-   "Win32_Foundation",
-   "Win32_Storage_FileSystem",
-   "Win32_Storage_ProjectedFileSystem",
-   "Win32_System_Com",
-   "Win32_System_LibraryLoader",
-   "Win32_System_IO",
-   "Win32_System_Ioctl",
-] }
+parking_lot.workspace = true
+windows-sys.workspace = true
