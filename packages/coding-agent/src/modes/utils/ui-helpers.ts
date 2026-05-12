@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message } from "@oh-my-pi/pi-ai";
-import { Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
+import { type Component, Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
@@ -70,7 +70,7 @@ export class UiHelpers {
 		this.ctx.ui.requestRender();
 	}
 
-	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
+	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): Component[] {
 		switch (message.role) {
 			case "bashExecution": {
 				const component = new BashExecutionComponent(message.command, this.ctx.ui, message.excludeFromContext);
@@ -159,14 +159,19 @@ export class UiHelpers {
 							const suffix = details?.kind === "reply" ? " (auto)" : "";
 							arrow = `${from} \u21e8 ${to}${suffix}`;
 						}
+						const components: Component[] = [];
 						const header = `${theme.fg("accent", `[IRC] ${arrow}`)}`;
-						this.ctx.chatContainer.addChild(new Text(header, 1, 0));
+						const headerComponent = new Text(header, 1, 0);
+						this.ctx.chatContainer.addChild(headerComponent);
+						components.push(headerComponent);
 						if (body) {
 							for (const line of body.split("\n")) {
-								this.ctx.chatContainer.addChild(new Text(theme.fg("muted", `  ${line}`), 0, 0));
+								const lineComponent = new Text(theme.fg("muted", `  ${line}`), 0, 0);
+								this.ctx.chatContainer.addChild(lineComponent);
+								components.push(lineComponent);
 							}
 						}
-						break;
+						return components;
 					}
 					const renderer = this.ctx.session.extensionRunner?.getMessageRenderer(message.customType);
 					// Both HookMessage and CustomMessage have the same structure, cast for compatibility
@@ -240,6 +245,7 @@ export class UiHelpers {
 				const _exhaustive: never = message;
 			}
 		}
+		return [];
 	}
 
 	/**
