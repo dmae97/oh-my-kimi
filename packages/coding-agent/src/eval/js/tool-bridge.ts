@@ -17,7 +17,14 @@ type ToolValue =
 			text: string;
 			details?: unknown;
 			images?: Array<{ mimeType: string; data: string }>;
+			hasError?: boolean;
 	  };
+function toolResultHasError(result: AgentToolResult): boolean {
+	if (!(result.details && typeof result.details === "object")) {
+		return false;
+	}
+	return (result.details as { isError?: unknown }).isError === true;
+}
 
 function getTool(session: ToolSession, name: string): AgentTool {
 	const tool = session.getToolByName?.(name);
@@ -38,7 +45,13 @@ function normalizeArgs(args: unknown): unknown {
 	return record;
 }
 
-function summarizeToolResult(name: string, args: unknown, result: AgentToolResult, text: string): JsStatusEvent {
+function summarizeToolResult(
+	name: string,
+	args: unknown,
+	result: AgentToolResult,
+	text: string,
+	hasError: boolean,
+): JsStatusEvent {
 	const record = (args && typeof args === "object" ? (args as Record<string, unknown>) : {}) as Record<
 		string,
 		unknown
@@ -46,39 +59,41 @@ function summarizeToolResult(name: string, args: unknown, result: AgentToolResul
 	const details = (
 		result.details && typeof result.details === "object" ? (result.details as Record<string, unknown>) : {}
 	) as Record<string, unknown>;
+	const withError = (event: JsStatusEvent): JsStatusEvent =>
+		hasError ? { ...event, hasError: true, error: text.slice(0, 500) } : event;
 
 	switch (name) {
 		case "read":
-			return { op: "read", path: record.path, chars: text.length, preview: text.slice(0, 500) };
+			return withError({ op: "read", path: record.path, chars: text.length, preview: text.slice(0, 500) });
 		case "write":
-			return {
+			return withError({
 				op: "write",
 				path: record.path,
 				chars: typeof record.content === "string" ? record.content.length : 0,
-			};
+			});
 		case "grep":
-			return {
+			return withError({
 				op: "grep",
 				pattern: record.pattern,
 				path: record.path,
 				count: details.matchCount ?? undefined,
-			};
+			});
 		case "find":
-			return {
+			return withError({
 				op: "find",
 				pattern: record.pattern,
 				count: details.fileCount ?? undefined,
 				matches: Array.isArray(details.files) ? details.files.slice(0, 20) : undefined,
-			};
+			});
 		case "bash":
-			return {
+			return withError({
 				op: "run",
 				cmd: record.command,
 				code: typeof details.exitCode === "number" ? details.exitCode : undefined,
 				output: text.slice(0, 500),
-			};
+			});
 		default:
-			return { op: name, chars: text.length };
+			return withError({ op: name, chars: text.length });
 	}
 }
 
@@ -97,21 +112,25 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 				content.type === "image" && typeof content.mimeType === "string" && typeof content.data === "string",
 		);
 		const text = textBlocks.map(block => block.text).join("");
-		options.emitStatus?.(summarizeToolResult(name, normalizedArgs, result, text));
-		if (result.details === undefined && imageBlocks.length === 0) {
+		const hasError = toolResultHasError(result);
+		options.emitStatus?.(summarizeToolResult(name, normalizedArgs, result, text, hasError));
+		if (result.details === undefined && imageBlocks.length === 0 && !hasError) {
 			return text;
 		}
-		return {
+		const value: Exclude<ToolValue, string> = {
 			text,
 			details: result.details,
-			images:
-				imageBlocks.length > 0
-					? imageBlocks.map(block => ({
-							mimeType: block.mimeType,
-							data: block.data,
-						}))
-					: undefined,
 		};
+		if (imageBlocks.length > 0) {
+			value.images = imageBlocks.map(block => ({
+				mimeType: block.mimeType,
+				data: block.data,
+			}));
+		}
+		if (hasError) {
+			value.hasError = true;
+		}
+		return value;
 	} catch (error) {
 		options.emitStatus?.({
 			op: name,

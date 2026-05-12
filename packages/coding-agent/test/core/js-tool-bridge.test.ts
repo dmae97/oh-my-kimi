@@ -79,6 +79,36 @@ describe("callSessionTool", () => {
 		});
 	});
 
+	it("marks structured results when the underlying tool reports an error", async () => {
+		const session = createSession([
+			createTool("mcp__demo_fail", async () => ({
+				content: [{ type: "text", text: "Error: bad input" }],
+				details: { serverName: "demo", mcpToolName: "fail", isError: true },
+			})),
+		]);
+		const statuses: Array<Record<string, unknown>> = [];
+
+		const result = await callSessionTool(
+			"mcp__demo_fail",
+			{},
+			{ session, emitStatus: event => statuses.push(event) },
+		);
+
+		expect(result).toEqual({
+			text: "Error: bad input",
+			details: { serverName: "demo", mcpToolName: "fail", isError: true },
+			hasError: true,
+		});
+		expect(statuses).toEqual([
+			expect.objectContaining({
+				op: "mcp__demo_fail",
+				chars: 16,
+				hasError: true,
+				error: "Error: bad input",
+			}),
+		]);
+	});
+
 	it("throws when the requested tool is not available in the session registry", async () => {
 		const session = createSession([]);
 
