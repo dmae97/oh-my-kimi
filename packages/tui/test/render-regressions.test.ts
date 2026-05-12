@@ -25,8 +25,7 @@ function rows(prefix: string, count: number): string[] {
 }
 
 async function settle(term: VirtualTerminal): Promise<void> {
-	await Bun.sleep(0);
-	await term.flush();
+	await term.waitForRender();
 }
 
 function visible(term: VirtualTerminal): string[] {

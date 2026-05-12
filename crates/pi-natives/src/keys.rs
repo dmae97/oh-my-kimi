@@ -841,9 +841,14 @@ fn matches_key_inner(bytes: &[u8], key_id: &str, kitty_protocol_active: bool) ->
 		let is_letter = ch.is_ascii_lowercase();
 
 		// ctrl+alt+letter in legacy mode
+		// Legacy: ctrl+alt+letter is ESC followed by the control character.
+		// If that legacy form does not match, continue so CSI-u and
+		// modifyOtherKeys sequences from tmux can still be recognized.
 		if modifier == (MOD_CTRL | MOD_ALT) && !kitty_protocol_active && is_letter {
 			let ctrl_char = raw_ctrl_char(ch);
-			return bytes.len() == 2 && bytes[0] == 0x1b && bytes[1] == ctrl_char;
+			if bytes.len() == 2 && bytes[0] == 0x1b && bytes[1] == ctrl_char {
+				return true;
+			}
 		}
 
 		// alt+letter in legacy mode
@@ -1469,5 +1474,17 @@ mod tests {
 		assert_eq!(parse_key_inner(b"\x1b[57400;133u", true).as_deref(), Some("ctrl+end"));
 		assert!(matches_key_inner(b"\x1b[57400;133u", "ctrl+end", true));
 		assert!(!matches_key_inner(b"\x1b[57400;133u", "1", true));
+	}
+
+	#[test]
+	fn ctrl_alt_letter_falls_through_to_csi_u_and_mok() {
+		// Legacy ESC+ctrl-char form (tmux without modifyOtherKeys) keeps matching.
+		assert!(matches_key_inner(b"\x1b\x01", "ctrl+alt+a", false));
+		// CSI-u form: \x1b[<codepoint>;<mod>u, mod = (ctrl|alt)+1 = 7.
+		assert!(matches_key_inner(b"\x1b[97;7u", "ctrl+alt+a", false));
+		// modifyOtherKeys form: \x1b[27;<mod>;<codepoint>~, mod = 7.
+		assert!(matches_key_inner(b"\x1b[27;7;97~", "ctrl+alt+a", false));
+		// Unrelated bytes still do not match.
+		assert!(!matches_key_inner(b"\x1b[97;7u", "ctrl+alt+b", false));
 	}
 }

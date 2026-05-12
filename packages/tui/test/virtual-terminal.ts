@@ -113,6 +113,13 @@ export class VirtualTerminal implements Terminal {
 		this.xterm.write(active ? "\x1b]9;4;3\x07" : "\x1b]9;4;0;\x07");
 	}
 
+	/** Wait for TUI's throttled render pipeline to settle (matches the 16ms frame budget). */
+	async waitForRender(): Promise<void> {
+		await new Promise<void>(resolve => process.nextTick(resolve));
+		await new Promise<void>(resolve => setTimeout(resolve, 20));
+		await this.flush();
+	}
+
 	// Test-specific methods not in Terminal interface
 
 	/**
