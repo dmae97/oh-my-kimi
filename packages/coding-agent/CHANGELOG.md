@@ -26,6 +26,10 @@
 - Changed internal URL routing to use a shared process-global `InternalUrlRouter` and protocol handlers, so built-in tools resolve `agent://`, `artifact://`, `memory://`, `skill://`, `rule://`, `mcp://`, and `local://` URLs without requiring session-specific router wiring
 - Changed `mcp://` handler to use the globally registered MCP manager so MCP resource links work for agents sharing session context
 
+### Changed
+
+- Changed the `ask.timeout` default from `30` (seconds) to `0` (wait indefinitely). Auto-selecting the recommended option after a fixed delay was surprising users mid-deliberation; the timer is now strictly opt-in. The legacy auto-select behavior is preserved when `ask.timeout` is set to a non-zero value, and the `ask` tool's prompt has been updated so the model expects unlimited reply time by default.
+
 ### Fixed
 
 - Added `ModelRegistry.hasConfiguredAuth(model)` to mirror the upstream `@mariozechner/pi-coding-agent` API surface; external plugins and downstream wrappers that pre-flight auth before launching a subagent no longer crash with `this._modelRegistry.hasConfiguredAuth is not a function` on the direct agent-launch path. ([#993](https://github.com/can1357/oh-my-pi/issues/993))
