@@ -1,8 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+- Added owner-based scoping to async job registration and queries so background jobs can be registered with an `ownerId` and filtered per agent in `getRunningJobs`, `getRecentJobs`, `getAllJobs`, and `cancelAll`
+- Added agent ownership metadata to async jobs started by `task` and `bash` tools so their lifecycle and cancellation is attributed to the creating agent
+
 ### Changed
 
+- Changed async job manager ownership so subagents inherit the parent session’s global `AsyncJobManager` instead of creating and owning separate instances
+- Changed session lifecycle cleanup so the global async-job manager is disposed only by the owning top-level session
+- Changed subagent session switches and handoff paths to stop global async-job cancellation and cancel only jobs owned by that session
 - Changed `agent://` and `artifact://` URL resolution to search artifact outputs across all active sessions instead of only the current session, allowing parent and subagent sessions to read each other’s generated outputs by ID
 - Changed `memory://` URL resolution to walk all active sessions’ memory roots and return the first matching file, so worktree-based subagents can access their own memory views as well as shared roots
 - Changed internal URL routing to use a shared process-global `InternalUrlRouter` and protocol handlers, so built-in tools resolve `agent://`, `artifact://`, `memory://`, `skill://`, `rule://`, `mcp://`, `local://`, and `jobs://` URLs without requiring session-specific router wiring
@@ -10,6 +19,7 @@
 
 ### Fixed
 
+- Fixed subagent disposal and session transitions that previously canceled all running async jobs, preventing inadvertent termination of a parent agent’s background work
 - Fixed multi-entry edits silently rendering a fake success when every entry failed (e.g. all hit the auto-generated guard), by surfacing `isError: true` from the single-path edit orchestrator so the renderer takes the error branch instead of falling through to the streaming-preview fallback that displays the *proposed* diff
 - Fixed the auto-generated streaming guard being gated behind `edit.streamingAbort` (default false), so it now pre-empts streaming edit tool calls targeting auto-generated files regardless of that setting
 - Fixed subagents launched in the same parallel batch not seeing each other in their initial `# IRC Peers` system-prompt block by pre-registering the agent in the global `AgentRegistry` before `rebuildSystemPrompt` runs and attaching the live session afterwards

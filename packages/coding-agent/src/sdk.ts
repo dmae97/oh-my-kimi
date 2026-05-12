@@ -935,34 +935,39 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		return preview;
 	};
-	const asyncJobManager = backgroundJobsEnabled
-		? new AsyncJobManager({
-				maxRunningJobs: asyncMaxJobs,
-				onJobComplete: async (jobId, result, job) => {
-					if (!session || asyncJobManager!.isDeliverySuppressed(jobId)) return;
-					const formattedResult = await formatAsyncResultForFollowUp(result);
-					if (asyncJobManager!.isDeliverySuppressed(jobId)) return;
+	// Only top-level sessions own an AsyncJobManager. Subagents reach the
+	// parent's manager via `AsyncJobManager.instance()` (set below), so creating
+	// a second instance here just to leave it orphaned wastes a constructor and
+	// risks accidental disposal of the parent's manager on subagent teardown.
+	const asyncJobManager =
+		backgroundJobsEnabled && !options.parentTaskPrefix
+			? new AsyncJobManager({
+					maxRunningJobs: asyncMaxJobs,
+					onJobComplete: async (jobId, result, job) => {
+						if (!session || asyncJobManager!.isDeliverySuppressed(jobId)) return;
+						const formattedResult = await formatAsyncResultForFollowUp(result);
+						if (asyncJobManager!.isDeliverySuppressed(jobId)) return;
 
-					const message = prompt.render(asyncResultTemplate, { jobId, result: formattedResult });
-					const durationMs = job ? Math.max(0, Date.now() - job.startTime) : undefined;
-					await session.sendCustomMessage(
-						{
-							customType: "async-result",
-							content: message,
-							display: true,
-							attribution: "agent",
-							details: {
-								jobId,
-								type: job?.type,
-								label: job?.label,
-								durationMs,
+						const message = prompt.render(asyncResultTemplate, { jobId, result: formattedResult });
+						const durationMs = job ? Math.max(0, Date.now() - job.startTime) : undefined;
+						await session.sendCustomMessage(
+							{
+								customType: "async-result",
+								content: message,
+								display: true,
+								attribution: "agent",
+								details: {
+									jobId,
+									type: job?.type,
+									label: job?.label,
+									durationMs,
+								},
 							},
-						},
-						{ deliverAs: "followUp", triggerTurn: true },
-					);
-				},
-			})
-		: undefined;
+							{ deliverAs: "followUp", triggerTurn: true },
+						);
+					},
+				})
+			: undefined;
 
 	const agentRegistry = options.agentRegistry ?? AgentRegistry.global();
 	const resolvedAgentId = options.agentId ?? options.parentTaskPrefix ?? MAIN_AGENT_ID;
@@ -1117,7 +1122,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				customTools.push(...mcpResult.tools.map(loaded => loaded.tool));
 			}
 		}
-		if (mcpManager) MCPManager.setInstance(mcpManager);
+		// Only top-level sessions own the global MCPManager. Subagents already
+		// receive the parent's manager via `options.mcpManager`, and reassigning
+		// the singleton to the same value is a no-op \u2014 keep the gate explicit
+		// to mirror the AsyncJobManager ownership rule.
+		if (mcpManager && !options.parentTaskPrefix) MCPManager.setInstance(mcpManager);
 
 		// Add image tools when the active model or configured image providers can generate images.
 		const imageGenTools = await logger.time("getImageGenTools", () => getImageGenTools(modelRegistry, model));
@@ -1699,6 +1708,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			sessionManager,
 			settings,
 			evalKernelOwnerId,
+			// Defined only for top-level sessions (creation is gated above).
+			// AgentSession uses this to decide whether it may dispose the global
+			// AsyncJobManager on teardown; subagents inherit the parent's and
+			// **MUST NOT** tear it down.
+			ownedAsyncJobManager: asyncJobManager,
 			scopedModels: options.scopedModels,
 			promptTemplates,
 			slashCommands,

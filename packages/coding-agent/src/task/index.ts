@@ -449,6 +449,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 					},
 					{
 						id: label,
+						ownerId: this.session.getAgentId?.() ?? undefined,
 						onProgress: (text, details) => {
 							const progressDetails =
 								(details as TaskToolDetails | undefined) ??

@@ -283,6 +283,12 @@ export interface AgentSessionConfig {
 	obfuscator?: SecretObfuscator;
 	/** Logical owner for retained Python kernels created by this session. */
 	evalKernelOwnerId?: string;
+	/**
+	 * AsyncJobManager that this session installed as the process-global instance.
+	 * Only set for top-level sessions; subagents inherit the parent's manager and
+	 * **MUST NOT** dispose it on their own teardown.
+	 */
+	ownedAsyncJobManager?: AsyncJobManager;
 	/** Agent identity (registry id like "0-Main" or "3-Alice") used for IRC routing. */
 	agentId?: string;
 	/** Shared agent registry (for forwarding IRC observations to the main session UI). */
@@ -555,6 +561,11 @@ export class AgentSession {
 	// Python execution state
 	#evalAbortControllers = new Set<AbortController>();
 	#evalKernelOwnerId: string;
+	/**
+	 * AsyncJobManager owned by this session (top-level only). Subagents leave
+	 * this undefined and **MUST NOT** dispose the global instance on teardown.
+	 */
+	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
 	#pendingPythonMessages: PythonExecutionMessage[] = [];
 	#activeEvalExecutions = new Set<Promise<unknown>>();
 	#evalExecutionDisposing = false;
@@ -702,6 +713,7 @@ export class AgentSession {
 		this.settings = config.settings;
 		// Power assertions are taken per turn (see #beginInFlight); nothing acquired here.
 		this.#evalKernelOwnerId = config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`;
+		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
 		this.#scopedModels = config.scopedModels ?? [];
 		this.#thinkingLevel = config.thinkingLevel;
 		this.#promptTemplates = config.promptTemplates ?? [];
@@ -861,6 +873,17 @@ export class AgentSession {
 			startTime: job.startTime,
 		}));
 		return { running, recent };
+	}
+
+	/**
+	 * Cancel async jobs registered by *this* agent only. Used by lifecycle
+	 * transitions (newSession, switchSession, handoff, dispose) so a subagent
+	 * cleans up its own background work without touching its parent's jobs.
+	 * No-op when no manager is installed or this session has no agent id.
+	 */
+	#cancelOwnAsyncJobs(): void {
+		if (!this.#agentId) return;
+		AsyncJobManager.instance()?.cancelAll({ ownerId: this.#agentId });
 	}
 
 	// =========================================================================
@@ -2153,11 +2176,21 @@ export class AgentSession {
 		}
 		await this.#cancelPostPromptTasks();
 		this.#clearTodoClearTimers();
-		const asyncManager = AsyncJobManager.instance();
-		const drained = await asyncManager?.dispose({ timeoutMs: 3_000 });
-		const deliveryState = asyncManager?.getDeliveryState();
-		if (drained === false && deliveryState) {
-			logger.warn("Async job completion deliveries still pending during dispose", { ...deliveryState });
+		// Cancel jobs this agent registered so a subagent's teardown doesn't
+		// leak its background bash/task work into the parent's manager. Only
+		// the session that owns the manager goes on to dispose it (which itself
+		// nukes any leftover jobs and pending deliveries).
+		this.#cancelOwnAsyncJobs();
+		const ownedAsyncManager = this.#ownedAsyncJobManager;
+		if (ownedAsyncManager) {
+			const drained = await ownedAsyncManager.dispose({ timeoutMs: 3_000 });
+			const deliveryState = ownedAsyncManager.getDeliveryState();
+			if (drained === false && deliveryState) {
+				logger.warn("Async job completion deliveries still pending during dispose", { ...deliveryState });
+			}
+			if (AsyncJobManager.instance() === ownedAsyncManager) {
+				AsyncJobManager.setInstance(undefined);
+			}
 		}
 		const pythonExecutionsSettled = await this.#prepareEvalExecutionsForDispose();
 		if (!pythonExecutionsSettled) {
@@ -3953,7 +3986,7 @@ export class AgentSession {
 
 		this.#disconnectFromAgent();
 		await this.abort();
-		AsyncJobManager.instance()?.cancelAll();
+		this.#cancelOwnAsyncJobs();
 		this.#closeAllProviderSessions("new session");
 		this.agent.reset();
 		if (options?.drop && previousSessionFile) {
@@ -4761,7 +4794,7 @@ export class AgentSession {
 			// Start a new session
 			const previousSessionFile = this.sessionFile;
 			await this.sessionManager.flush();
-			AsyncJobManager.instance()?.cancelAll();
+			this.#cancelOwnAsyncJobs();
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
 			this.agent.reset();
 			this.#syncAgentSessionId();
@@ -7154,7 +7187,7 @@ export class AgentSession {
 
 		// Flush pending writes before branching
 		await this.sessionManager.flush();
-		AsyncJobManager.instance()?.cancelAll();
+		this.#cancelOwnAsyncJobs();
 
 		if (!selectedEntry.parentId) {
 			await this.sessionManager.newSession({ parentSession: previousSessionFile });

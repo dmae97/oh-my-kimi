@@ -403,6 +403,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				}
 			},
 			{
+				ownerId: this.session.getAgentId?.() ?? undefined,
 				onProgress: async (text, details) => {
 					latestText = text;
 					await options.onUpdate?.({
