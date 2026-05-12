@@ -17,8 +17,9 @@ export async function getTemplate(): Promise<string> {
 		.replace(/\s*([{}:;,])\s*/g, "$1")
 		.trim();
 
-	// Inline everything
+	// Inline everything; use function replacements so `$'`, `$&`, `$$`, etc.
+	// inside the embedded CSS/JS are not interpreted as substitution patterns.
 	return html
-		.replace("<template-css/>", `<style>${minifiedCss}</style>`)
-		.replace("<template-js/>", `<script>${js}</script>`);
+		.replace("<template-css/>", () => `<style>${minifiedCss}</style>`)
+		.replace("<template-js/>", () => `<script>${js}</script>`);
 }
