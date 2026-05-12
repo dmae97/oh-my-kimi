@@ -3,7 +3,7 @@ from __future__ import annotations
 if "__omp_prelude_loaded__" not in globals():
     __omp_prelude_loaded__ = True
     from pathlib import Path
-    import os, json, shutil, subprocess
+    import os, json
     from IPython.display import display as _ipy_display, JSON
 
     _PRESENTABLE_REPRS = (
@@ -79,79 +79,6 @@ if "__omp_prelude_loaded__" not in globals():
             f.write(content)
         _emit_status("append", path=str(p), chars=len(content))
         return p
-    class ShellResult:
-        """Result from shell command execution."""
-        __slots__ = ("args", "stdout", "stderr", "returncode")
-        def __init__(self, args: str, stdout: str, stderr: str, returncode: int):
-            self.args = args
-            self.stdout = stdout
-            self.stderr = stderr
-            self.returncode = returncode
-
-        @property
-        def code(self) -> int:
-            return self.returncode
-
-        @property
-        def exit_code(self) -> int:
-            return self.returncode
-
-        def check_returncode(self) -> None:
-            if self.returncode != 0:
-                raise subprocess.CalledProcessError(
-                    self.returncode, self.args, output=self.stdout, stderr=self.stderr
-                )
-
-        def __repr__(self):
-            if self.returncode == 0:
-                return ""
-            return f"exit code {self.returncode}"
-
-        def __bool__(self):
-            return self.returncode == 0
-
-    def _make_shell_result(proc: subprocess.CompletedProcess[str], cmd: str) -> ShellResult:
-        """Create ShellResult and emit status."""
-        output = proc.stdout + proc.stderr if proc.stderr else proc.stdout
-        _emit_status("sh", cmd=cmd[:80], code=proc.returncode, output=output[:500])
-        return ShellResult(cmd, proc.stdout, proc.stderr, proc.returncode)
-
-    import signal as _signal
-
-    def _run_with_interrupt(args: list[str], cwd: str | None, timeout: int | None, cmd: str) -> ShellResult:
-        """Run subprocess with proper interrupt handling."""
-        proc = subprocess.Popen(
-            args,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-        )
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-        except KeyboardInterrupt:
-            os.killpg(proc.pid, _signal.SIGINT)
-            try:
-                stdout, stderr = proc.communicate(timeout=2)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, _signal.SIGKILL)
-                stdout, stderr = proc.communicate()
-            result = subprocess.CompletedProcess(args, -_signal.SIGINT, stdout, stderr)
-            return _make_shell_result(result, cmd)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, _signal.SIGKILL)
-            stdout, stderr = proc.communicate()
-            result = subprocess.CompletedProcess(args, -_signal.SIGKILL, stdout, stderr)
-            return _make_shell_result(result, cmd)
-        result = subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
-        return _make_shell_result(result, cmd)
-
-    def run(cmd: str, *, cwd: str | Path | None = None, timeout: int | None = None) -> ShellResult:
-        """Run a shell command. Returns ShellResult with stdout/stderr and returncode/exit_code fields."""
-        shell_path = shutil.which("bash") or shutil.which("sh") or "/bin/sh"
-        args = [shell_path, "-c", cmd]
-        return _run_with_interrupt(args, str(cwd) if cwd else None, timeout, cmd)
 
     def sort(text: str, *, reverse: bool = False, unique: bool = False) -> str:
         """Sort lines of text."""
@@ -268,12 +195,16 @@ if "__omp_prelude_loaded__" not in globals():
             output('explore_0', offset=10, limit=20)  # Lines 10-29
             output('explore_0', 'reviewer_1')  # Read multiple outputs
         """
-        session_file = os.environ.get("PI_SESSION_FILE")
-        if not session_file:
-            _emit_status("output", error="No session file available")
-            raise RuntimeError("No session - output artifacts unavailable")
-        
-        artifacts_dir = session_file.rsplit(".", 1)[0]  # Strip .jsonl extension
+        # Prefer PI_ARTIFACTS_DIR so subagents resolve through the parent's
+        # shared artifacts dir; fall back to deriving from PI_SESSION_FILE
+        # for legacy callers / top-level sessions where the two coincide.
+        artifacts_dir = os.environ.get("PI_ARTIFACTS_DIR")
+        if not artifacts_dir:
+            session_file = os.environ.get("PI_SESSION_FILE")
+            if not session_file:
+                _emit_status("output", error="No session file available")
+                raise RuntimeError("No session - output artifacts unavailable")
+            artifacts_dir = session_file.rsplit(".", 1)[0]  # Strip .jsonl extension
         if not Path(artifacts_dir).exists():
             _emit_status("output", error="Artifacts directory not found", path=artifacts_dir)
             raise RuntimeError(f"No artifacts directory found: {artifacts_dir}")

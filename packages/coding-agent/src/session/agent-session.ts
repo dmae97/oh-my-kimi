@@ -55,7 +55,7 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import { abortableSleep, getAgentDbPath, isEnoent, logger, prompt, Snowflake } from "@oh-my-pi/pi-utils";
-import type { AsyncJob, AsyncJobManager } from "../async";
+import { type AsyncJob, AsyncJobManager } from "../async";
 import type { Rule } from "../capability/rule";
 import { MODEL_ROLE_IDS, type ModelRegistry } from "../config/model-registry";
 import {
@@ -225,8 +225,6 @@ export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
-	/** Async background jobs launched by tools */
-	asyncJobManager?: AsyncJobManager;
 	/** Models to cycle through with Ctrl+P (from --models flag) */
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	/** Initial session thinking selector. */
@@ -285,6 +283,12 @@ export interface AgentSessionConfig {
 	obfuscator?: SecretObfuscator;
 	/** Logical owner for retained Python kernels created by this session. */
 	evalKernelOwnerId?: string;
+	/**
+	 * AsyncJobManager that this session installed as the process-global instance.
+	 * Only set for top-level sessions; subagents inherit the parent's manager and
+	 * **MUST NOT** dispose it on their own teardown.
+	 */
+	ownedAsyncJobManager?: AsyncJobManager;
 	/** Agent identity (registry id like "0-Main" or "3-Alice") used for IRC routing. */
 	agentId?: string;
 	/** Shared agent registry (for forwarding IRC observations to the main session UI). */
@@ -507,7 +511,6 @@ export class AgentSession {
 
 	readonly configWarnings: string[] = [];
 
-	#asyncJobManager: AsyncJobManager | undefined = undefined;
 	#scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	#thinkingLevel: ThinkingLevel | undefined;
 	#promptTemplates: PromptTemplate[];
@@ -558,6 +561,11 @@ export class AgentSession {
 	// Python execution state
 	#evalAbortControllers = new Set<AbortController>();
 	#evalKernelOwnerId: string;
+	/**
+	 * AsyncJobManager owned by this session (top-level only). Subagents leave
+	 * this undefined and **MUST NOT** dispose the global instance on teardown.
+	 */
+	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
 	#pendingPythonMessages: PythonExecutionMessage[] = [];
 	#activeEvalExecutions = new Set<Promise<unknown>>();
 	#evalExecutionDisposing = false;
@@ -704,8 +712,8 @@ export class AgentSession {
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
 		// Power assertions are taken per turn (see #beginInFlight); nothing acquired here.
-		this.#asyncJobManager = config.asyncJobManager;
 		this.#evalKernelOwnerId = config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`;
+		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
 		this.#scopedModels = config.scopedModels ?? [];
 		this.#thinkingLevel = config.thinkingLevel;
 		this.#promptTemplates = config.promptTemplates ?? [];
@@ -848,15 +856,16 @@ export class AgentSession {
 	}
 
 	getAsyncJobSnapshot(options?: { recentLimit?: number }): AsyncJobSnapshot | null {
-		if (!this.#asyncJobManager) return null;
-		const running = this.#asyncJobManager.getRunningJobs().map(job => ({
+		const manager = AsyncJobManager.instance();
+		if (!manager) return null;
+		const running = manager.getRunningJobs().map(job => ({
 			id: job.id,
 			type: job.type,
 			status: job.status,
 			label: job.label,
 			startTime: job.startTime,
 		}));
-		const recent = this.#asyncJobManager.getRecentJobs(options?.recentLimit ?? 5).map(job => ({
+		const recent = manager.getRecentJobs(options?.recentLimit ?? 5).map(job => ({
 			id: job.id,
 			type: job.type,
 			status: job.status,
@@ -864,6 +873,17 @@ export class AgentSession {
 			startTime: job.startTime,
 		}));
 		return { running, recent };
+	}
+
+	/**
+	 * Cancel async jobs registered by *this* agent only. Used by lifecycle
+	 * transitions (newSession, switchSession, handoff, dispose) so a subagent
+	 * cleans up its own background work without touching its parent's jobs.
+	 * No-op when no manager is installed or this session has no agent id.
+	 */
+	#cancelOwnAsyncJobs(): void {
+		if (!this.#agentId) return;
+		AsyncJobManager.instance()?.cancelAll({ ownerId: this.#agentId });
 	}
 
 	// =========================================================================
@@ -1739,7 +1759,6 @@ export class AgentSession {
 	}
 
 	#preCacheStreamingEditFile(event: AgentEvent): void {
-		if (!this.settings.get("edit.streamingAbort")) return;
 		if (this.#streamingEditAbortTriggered) return;
 		if (event.type !== "message_update") return;
 
@@ -1755,6 +1774,9 @@ export class AgentSession {
 		const streamingEdit = this.#getStreamingEditToolCall(event);
 		if (!streamingEdit) return;
 
+		// The auto-generated guard runs unconditionally: editing a generated file
+		// is never the user's intent, and the cost of a false-positive abort is one
+		// wasted turn vs. silently corrupting a regenerated source.
 		const shouldCheckAutoGenerated =
 			!streamingEdit.toolCall.id || !this.#streamingEditPrecheckedToolCallIds.has(streamingEdit.toolCall.id);
 		if (shouldCheckAutoGenerated) {
@@ -1768,7 +1790,12 @@ export class AgentSession {
 			);
 		}
 
-		this.#ensureFileCache(streamingEdit.resolvedPath);
+		// File-cache priming feeds #maybeAbortStreamingEdit's removed-lines check,
+		// which is the optional patch-preview verification gated by
+		// edit.streamingAbort. Skip the read when the setting is off.
+		if (this.settings.get("edit.streamingAbort")) {
+			this.#ensureFileCache(streamingEdit.resolvedPath);
+		}
 	}
 
 	#ensureFileCache(resolvedPath: string): void {
@@ -2149,10 +2176,21 @@ export class AgentSession {
 		}
 		await this.#cancelPostPromptTasks();
 		this.#clearTodoClearTimers();
-		const drained = await this.#asyncJobManager?.dispose({ timeoutMs: 3_000 });
-		const deliveryState = this.#asyncJobManager?.getDeliveryState();
-		if (drained === false && deliveryState) {
-			logger.warn("Async job completion deliveries still pending during dispose", { ...deliveryState });
+		// Cancel jobs this agent registered so a subagent's teardown doesn't
+		// leak its background bash/task work into the parent's manager. Only
+		// the session that owns the manager goes on to dispose it (which itself
+		// nukes any leftover jobs and pending deliveries).
+		this.#cancelOwnAsyncJobs();
+		const ownedAsyncManager = this.#ownedAsyncJobManager;
+		if (ownedAsyncManager) {
+			const drained = await ownedAsyncManager.dispose({ timeoutMs: 3_000 });
+			const deliveryState = ownedAsyncManager.getDeliveryState();
+			if (drained === false && deliveryState) {
+				logger.warn("Async job completion deliveries still pending during dispose", { ...deliveryState });
+			}
+			if (AsyncJobManager.instance() === ownedAsyncManager) {
+				AsyncJobManager.setInstance(undefined);
+			}
 		}
 		const pythonExecutionsSettled = await this.#prepareEvalExecutionsForDispose();
 		if (!pythonExecutionsSettled) {
@@ -3948,7 +3986,7 @@ export class AgentSession {
 
 		this.#disconnectFromAgent();
 		await this.abort();
-		this.#asyncJobManager?.cancelAll();
+		this.#cancelOwnAsyncJobs();
 		this.#closeAllProviderSessions("new session");
 		this.agent.reset();
 		if (options?.drop && previousSessionFile) {
@@ -4756,7 +4794,7 @@ export class AgentSession {
 			// Start a new session
 			const previousSessionFile = this.sessionFile;
 			await this.sessionManager.flush();
-			this.#asyncJobManager?.cancelAll();
+			this.#cancelOwnAsyncJobs();
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
 			this.agent.reset();
 			this.#syncAgentSessionId();
@@ -6675,7 +6713,7 @@ export class AgentSession {
 		const incomingRecord: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",
-			content: `[IRC \`${args.from}\` \u2192 you]\n\n${args.message}`,
+			content: `[IRC \`${args.from}\` → you]\n\n${args.message}`,
 			display: true,
 			details: { from: args.from, message: args.message },
 			attribution: "agent",
@@ -6707,7 +6745,7 @@ export class AgentSession {
 		const replyRecord: CustomMessage = {
 			role: "custom",
 			customType: "irc:autoreply",
-			content: `[IRC you \u2192 \`${args.from}\` (auto)]\n\n${replyText}`,
+			content: `[IRC you → \`${args.from}\` (auto)]\n\n${replyText}`,
 			display: true,
 			details: { to: args.from, reply: replyText },
 			attribution: "agent",
@@ -6746,7 +6784,7 @@ export class AgentSession {
 		const mainRef = registry.get(MAIN_AGENT_ID);
 		const mainSession = mainRef?.session;
 		if (!mainSession || mainSession === this) return;
-		const arrow = args.kind === "reply" ? "\u2192 (auto)" : "\u2192";
+		const arrow = args.kind === "reply" ? "→ (auto)" : "→";
 		const relayRecord: CustomMessage = {
 			role: "custom",
 			customType: "irc:relay",
@@ -7149,7 +7187,7 @@ export class AgentSession {
 
 		// Flush pending writes before branching
 		await this.sessionManager.flush();
-		this.#asyncJobManager?.cancelAll();
+		this.#cancelOwnAsyncJobs();
 
 		if (!selectedEntry.parentId) {
 			await this.sessionManager.newSession({ parentSession: previousSessionFile });

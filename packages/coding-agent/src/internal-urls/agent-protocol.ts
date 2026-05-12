@@ -1,7 +1,10 @@
 /**
  * Protocol handler for agent:// URLs.
  *
- * Resolves agent output IDs to artifact files in the session directory.
+ * Resolves agent output IDs against the artifacts directories of every active
+ * session. Parents and subagents share outputs via this registry: a subagent
+ * can read its parent's output IDs because both sessions are registered in
+ * the shared context.
  *
  * URL forms:
  * - agent://<id> - Full output content
@@ -11,27 +14,27 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import { AgentRegistry } from "../registry/agent-registry";
 import { applyQuery, pathToQuery } from "./json-query";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
-export interface AgentProtocolOptions {
-	/**
-	 * Returns the artifacts directory path, or null if no session.
-	 * Artifacts directory is the session file path without .jsonl extension.
-	 */
-	getArtifactsDir: () => string | null;
-}
-
 /**
- * List available output IDs in artifacts directory.
+ * Snapshot of artifacts dirs for every registered session, deduped.
+ *
+ * Prefers `sessionManager.getArtifactsDir()` because subagents adopt the
+ * parent's manager and report the parent's dir there; dedup then collapses
+ * the whole agent tree to one entry. Falls back to the raw session file
+ * when no live session reference is attached.
  */
-async function listAvailableOutputs(artifactsDir: string): Promise<string[]> {
-	try {
-		const files = await fs.readdir(artifactsDir);
-		return files.filter(f => f.endsWith(".md")).map(f => f.replace(".md", ""));
-	} catch {
-		return [];
+function artifactsDirsFromRegistry(): string[] {
+	const dirs: string[] = [];
+	for (const ref of AgentRegistry.global().list()) {
+		const dir =
+			ref.session?.sessionManager.getArtifactsDir() ?? (ref.sessionFile ? ref.sessionFile.slice(0, -6) : null);
+		if (!dir) continue;
+		if (!dirs.includes(dir)) dirs.push(dir);
 	}
+	return dirs;
 }
 
 /**
@@ -44,30 +47,12 @@ export class AgentProtocolHandler implements ProtocolHandler {
 	readonly scheme = "agent";
 	readonly immutable = true;
 
-	constructor(private readonly options: AgentProtocolOptions) {}
-
 	async resolve(url: InternalUrl): Promise<InternalResource> {
-		const artifactsDir = this.options.getArtifactsDir();
-		if (!artifactsDir) {
-			throw new Error("No session - agent outputs unavailable");
-		}
-
-		try {
-			await fs.stat(artifactsDir);
-		} catch (err) {
-			if (isEnoent(err)) {
-				throw new Error("No artifacts directory found");
-			}
-			throw err;
-		}
-
-		// Extract output ID from host
 		const outputId = url.rawHost || url.hostname;
 		if (!outputId) {
 			throw new Error("agent:// URL requires an output ID: agent://<id>");
 		}
 
-		// Check for conflicting extraction methods
 		const urlPath = url.pathname;
 		const queryParam = url.searchParams.get("q");
 		const hasPathExtraction = urlPath && urlPath !== "/" && urlPath !== "";
@@ -77,28 +62,57 @@ export class AgentProtocolHandler implements ProtocolHandler {
 			throw new Error("agent:// URL cannot combine path extraction with ?q=");
 		}
 
-		// Load the output file
-		const outputPath = path.join(artifactsDir, `${outputId}.md`);
-		try {
-			await fs.stat(outputPath);
-		} catch (err) {
-			if (isEnoent(err)) {
-				const available = await listAvailableOutputs(artifactsDir);
-				const availableStr = available.length > 0 ? available.join(", ") : "none";
-				throw new Error(`Not found: ${outputId}\nAvailable: ${availableStr}`);
-			}
-			throw err;
+		const dirs = artifactsDirsFromRegistry();
+
+		if (dirs.length === 0) {
+			throw new Error("No session - agent outputs unavailable");
 		}
 
-		const rawContent = await Bun.file(outputPath).text();
-		const notes: string[] = [];
+		let foundPath: string | undefined;
+		let anyDirExists = false;
+		const availableIds = new Set<string>();
 
-		// Handle extraction
+		for (const dir of dirs) {
+			try {
+				await fs.stat(dir);
+				anyDirExists = true;
+			} catch (err) {
+				if (isEnoent(err)) continue;
+				throw err;
+			}
+			const candidate = path.join(dir, `${outputId}.md`);
+			try {
+				await fs.stat(candidate);
+				foundPath = candidate;
+				break;
+			} catch (err) {
+				if (!isEnoent(err)) throw err;
+				try {
+					const files = await fs.readdir(dir);
+					for (const f of files) {
+						if (f.endsWith(".md")) availableIds.add(f.replace(/\.md$/, ""));
+					}
+				} catch {
+					// Listing failures are non-fatal; continue searching.
+				}
+			}
+		}
+
+		if (!anyDirExists) {
+			throw new Error("No artifacts directory found");
+		}
+
+		if (!foundPath) {
+			const availableStr = availableIds.size > 0 ? [...availableIds].join(", ") : "none";
+			throw new Error(`Not found: ${outputId}\nAvailable: ${availableStr}`);
+		}
+
+		const rawContent = await Bun.file(foundPath).text();
+		const notes: string[] = [];
 		let content = rawContent;
 		let contentType: InternalResource["contentType"] = "text/markdown";
 
 		if (hasPathExtraction || hasQueryExtraction) {
-			// Parse JSON
 			let jsonValue: unknown;
 			try {
 				jsonValue = JSON.parse(rawContent);
@@ -107,9 +121,7 @@ export class AgentProtocolHandler implements ProtocolHandler {
 				throw new Error(`Output ${outputId} is not valid JSON: ${message}`);
 			}
 
-			// Convert path to query if needed
 			const query = hasPathExtraction ? pathToQuery(urlPath) : queryParam!;
-
 			if (query) {
 				const extracted = applyQuery(jsonValue, query);
 				try {
@@ -119,7 +131,6 @@ export class AgentProtocolHandler implements ProtocolHandler {
 				}
 				notes.push(`Extracted: ${query}`);
 			} else {
-				// Empty path/query means return full JSON
 				content = JSON.stringify(jsonValue, null, 2);
 			}
 			contentType = "application/json";
@@ -130,7 +141,7 @@ export class AgentProtocolHandler implements ProtocolHandler {
 			content,
 			contentType,
 			size: Buffer.byteLength(content, "utf-8"),
-			sourcePath: outputPath,
+			sourcePath: foundPath,
 			notes,
 		};
 	}

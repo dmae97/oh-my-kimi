@@ -1,42 +1,58 @@
 /**
  * Internal URL router for internal protocols (agent://, artifact://, memory://, skill://, rule://, mcp://, pi://, local://).
+ *
+ * One process-global router with one handler per scheme. Access via
+ * `InternalUrlRouter.instance()`. Handlers are stateless; per-session and
+ * shared state lives in `./state.ts`.
  */
+import { AgentProtocolHandler } from "./agent-protocol";
+import { ArtifactProtocolHandler } from "./artifact-protocol";
+import { LocalProtocolHandler } from "./local-protocol";
+import { McpProtocolHandler } from "./mcp-protocol";
+import { MemoryProtocolHandler } from "./memory-protocol";
 import { parseInternalUrl } from "./parse";
+import { PiProtocolHandler } from "./pi-protocol";
+import { RuleProtocolHandler } from "./rule-protocol";
+import { SkillProtocolHandler } from "./skill-protocol";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
-/**
- * Router for internal URL schemes.
- *
- * Dispatches URLs like `agent://output_id` or `memory://root/memory_summary.md` to
- * registered protocol handlers.
- */
 export class InternalUrlRouter {
+	static #instance: InternalUrlRouter | undefined;
+
 	#handlers = new Map<string, ProtocolHandler>();
 
-	/**
-	 * Register a protocol handler.
-	 * @param handler Handler to register (uses handler.scheme as key)
-	 */
-	register(handler: ProtocolHandler): void {
-		this.#handlers.set(handler.scheme, handler);
+	constructor() {
+		this.register(new PiProtocolHandler());
+		this.register(new AgentProtocolHandler());
+		this.register(new ArtifactProtocolHandler());
+		this.register(new MemoryProtocolHandler());
+		this.register(new LocalProtocolHandler());
+		this.register(new SkillProtocolHandler());
+		this.register(new RuleProtocolHandler());
+		this.register(new McpProtocolHandler());
 	}
 
-	/**
-	 * Check if the router can handle a URL.
-	 * @param input URL string to check
-	 */
+	/** Process-global router instance. */
+	static instance(): InternalUrlRouter {
+		InternalUrlRouter.#instance ??= new InternalUrlRouter();
+		return InternalUrlRouter.#instance;
+	}
+
+	/** Reset the global instance in tests. */
+	static resetForTests(): void {
+		InternalUrlRouter.#instance = undefined;
+	}
+
+	register(handler: ProtocolHandler): void {
+		this.#handlers.set(handler.scheme.toLowerCase(), handler);
+	}
+
 	canHandle(input: string): boolean {
 		const match = input.match(/^([a-z][a-z0-9+.-]*):\/\//i);
 		if (!match) return false;
-		const scheme = match[1].toLowerCase();
-		return this.#handlers.has(scheme);
+		return this.#handlers.has(match[1].toLowerCase());
 	}
 
-	/**
-	 * Resolve an internal URL to its content.
-	 * @param input URL string (e.g., "agent://reviewer_0", "skill://notion-pages")
-	 * @throws Error if scheme is not registered or resolution fails
-	 */
 	async resolve(input: string): Promise<InternalResource> {
 		const parsed = parseInternalUrl(input);
 		const scheme = parsed.protocol.replace(/:$/, "").toLowerCase();

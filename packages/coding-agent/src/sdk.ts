@@ -27,7 +27,7 @@ import chalk from "chalk";
 import { AsyncJobManager, isBackgroundJobSupportEnabled } from "./async";
 import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
-import { type Rule, ruleCapability } from "./capability/rule";
+import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelString, parseModelPattern, parseModelString, resolveModelRoleValue } from "./config/model-resolver";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./config/prompt-templates";
@@ -59,30 +59,22 @@ import {
 	type ToolDefinition,
 	wrapRegisteredTools,
 } from "./extensibility/extensions";
-import { loadSkills as loadSkillsInternal, type Skill, type SkillWarning } from "./extensibility/skills";
+import {
+	loadSkills as loadSkillsInternal,
+	type Skill,
+	type SkillWarning,
+	setActiveSkills,
+} from "./extensibility/skills";
 import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
 import type { HindsightSessionState } from "./hindsight/state";
-import {
-	AgentProtocolHandler,
-	ArtifactProtocolHandler,
-	InternalUrlRouter,
-	JobsProtocolHandler,
-	LocalProtocolHandler,
-	type LocalProtocolOptions,
-	McpProtocolHandler,
-	MemoryProtocolHandler,
-	PiProtocolHandler,
-	RuleProtocolHandler,
-	SkillProtocolHandler,
-} from "./internal-urls";
+import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
-import { discoverAndLoadMCPTools, type MCPManager, type MCPToolsLoadResult } from "./mcp";
+import { discoverAndLoadMCPTools, MCPManager, type MCPToolsLoadResult } from "./mcp";
 import {
 	collectDiscoverableMCPTools,
 	formatDiscoverableMCPToolServerSummary,
 	selectDiscoverableMCPToolNamesByServer,
 } from "./mcp/discoverable-tool-metadata";
-import { getMemoryRoot } from "./memories";
 import { resolveMemoryBackend } from "./memory-backend";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
@@ -943,34 +935,39 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		return preview;
 	};
-	const asyncJobManager = backgroundJobsEnabled
-		? new AsyncJobManager({
-				maxRunningJobs: asyncMaxJobs,
-				onJobComplete: async (jobId, result, job) => {
-					if (!session || asyncJobManager!.isDeliverySuppressed(jobId)) return;
-					const formattedResult = await formatAsyncResultForFollowUp(result);
-					if (asyncJobManager!.isDeliverySuppressed(jobId)) return;
+	// Only top-level sessions own an AsyncJobManager. Subagents reach the
+	// parent's manager via `AsyncJobManager.instance()` (set below), so creating
+	// a second instance here just to leave it orphaned wastes a constructor and
+	// risks accidental disposal of the parent's manager on subagent teardown.
+	const asyncJobManager =
+		backgroundJobsEnabled && !options.parentTaskPrefix
+			? new AsyncJobManager({
+					maxRunningJobs: asyncMaxJobs,
+					onJobComplete: async (jobId, result, job) => {
+						if (!session || asyncJobManager!.isDeliverySuppressed(jobId)) return;
+						const formattedResult = await formatAsyncResultForFollowUp(result);
+						if (asyncJobManager!.isDeliverySuppressed(jobId)) return;
 
-					const message = prompt.render(asyncResultTemplate, { jobId, result: formattedResult });
-					const durationMs = job ? Math.max(0, Date.now() - job.startTime) : undefined;
-					await session.sendCustomMessage(
-						{
-							customType: "async-result",
-							content: message,
-							display: true,
-							attribution: "agent",
-							details: {
-								jobId,
-								type: job?.type,
-								label: job?.label,
-								durationMs,
+						const message = prompt.render(asyncResultTemplate, { jobId, result: formattedResult });
+						const durationMs = job ? Math.max(0, Date.now() - job.startTime) : undefined;
+						await session.sendCustomMessage(
+							{
+								customType: "async-result",
+								content: message,
+								display: true,
+								attribution: "agent",
+								details: {
+									jobId,
+									type: job?.type,
+									label: job?.label,
+									durationMs,
+								},
 							},
-						},
-						{ deliverAs: "followUp", triggerTurn: true },
-					);
-				},
-			})
-		: undefined;
+							{ deliverAs: "followUp", triggerTurn: true },
+						);
+					},
+				})
+			: undefined;
 
 	const agentRegistry = options.agentRegistry ?? AgentRegistry.global();
 	const resolvedAgentId = options.agentId ?? options.parentTaskPrefix ?? MAIN_AGENT_ID;
@@ -1056,44 +1053,27 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					return {};
 				}
 			},
+			getArtifactManager: () => sessionManager.getArtifactManager(),
 			settings,
 			authStorage,
 			modelRegistry,
-			asyncJobManager,
 		};
 
-		// Initialize internal URL router for internal protocols (agent://, artifact://, memory://, skill://, rule://, mcp://, local://)
-		const internalRouter = new InternalUrlRouter();
+		// Wire process-wide internal URL singletons owned by their real classes.
+		// Top-level sessions install the active snapshots; subagents inherit them.
+		// Artifact and agent-output URLs resolve via `AgentRegistry.global()` —
+		// the protocol handlers walk each ref's `sessionManager.getArtifactsDir()`,
+		// which collapses to the parent's dir for subagents (they adopt the
+		// parent's ArtifactManager) so one lookup hits everything.
 		const getArtifactsDir = () => sessionManager.getArtifactsDir();
-		internalRouter.register(new AgentProtocolHandler({ getArtifactsDir }));
-		internalRouter.register(new ArtifactProtocolHandler({ getArtifactsDir }));
-		internalRouter.register(
-			new MemoryProtocolHandler({
-				getMemoryRoot: () => getMemoryRoot(agentDir, settings.getCwd()),
-			}),
-		);
-		internalRouter.register(
-			new LocalProtocolHandler(
-				options.localProtocolOptions ?? {
-					getArtifactsDir,
-					getSessionId: () => sessionManager.getSessionId(),
-				},
-			),
-		);
-		internalRouter.register(
-			new SkillProtocolHandler({
-				getSkills: () => skills,
-			}),
-		);
-		internalRouter.register(
-			new RuleProtocolHandler({
-				getRules: () => [...rulebookRules, ...alwaysApplyRules],
-			}),
-		);
-		internalRouter.register(new PiProtocolHandler());
-		internalRouter.register(new JobsProtocolHandler({ getAsyncJobManager: () => asyncJobManager }));
-		internalRouter.register(new McpProtocolHandler({ getMcpManager: () => mcpManager }));
-		toolSession.internalRouter = internalRouter;
+		if (!options.parentTaskPrefix) {
+			setActiveSkills(skills);
+			setActiveRules([...rulebookRules, ...alwaysApplyRules]);
+			if (asyncJobManager) AsyncJobManager.setInstance(asyncJobManager);
+		}
+		if (options.localProtocolOptions) {
+			LocalProtocolHandler.setOverride(options.localProtocolOptions);
+		}
 		toolSession.getArtifactsDir = getArtifactsDir;
 		toolSession.agentOutputManager = new AgentOutputManager(
 			getArtifactsDir,
@@ -1142,7 +1122,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				customTools.push(...mcpResult.tools.map(loaded => loaded.tool));
 			}
 		}
-		toolSession.mcpManager = mcpManager;
+		// Only top-level sessions own the global MCPManager. Subagents already
+		// receive the parent's manager via `options.mcpManager`, and reassigning
+		// the singleton to the same value is a no-op \u2014 keep the gate explicit
+		// to mirror the AsyncJobManager ownership rule.
+		if (mcpManager && !options.parentTaskPrefix) MCPManager.setInstance(mcpManager);
 
 		// Add image tools when the active model or configured image providers can generate images.
 		const imageGenTools = await logger.time("getImageGenTools", () => getImageGenTools(modelRegistry, model));
@@ -1724,6 +1708,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			sessionManager,
 			settings,
 			evalKernelOwnerId,
+			// Defined only for top-level sessions (creation is gated above).
+			// AgentSession uses this to decide whether it may dispose the global
+			// AsyncJobManager on teardown; subagents inherit the parent's and
+			// **MUST NOT** tear it down.
+			ownedAsyncJobManager: asyncJobManager,
 			scopedModels: options.scopedModels,
 			promptTemplates,
 			slashCommands,
@@ -1760,7 +1749,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			defaultSelectedMCPServerNames: [...discoveryDefaultServers],
 			ttsrManager,
 			obfuscator,
-			asyncJobManager,
 			agentId: resolvedAgentId,
 			agentRegistry,
 			providerSessionId: options.providerSessionId,

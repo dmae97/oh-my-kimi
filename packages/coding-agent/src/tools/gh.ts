@@ -260,6 +260,27 @@ const githubSchema = Type.Object({
 			examples: ["is:open label:bug"],
 		}),
 	),
+	since: Type.Optional(
+		Type.String({
+			description:
+				"lower-bound date for search_issues/search_prs/search_commits/search_repos. Accepts a relative duration (`<n><unit>` with unit `m`/`h`/`d`/`w`/`mo`/`y`, e.g. `3d`, `12h`, `2w`) or an ISO date (`YYYY-MM-DD`) / datetime. Translated to a `created:>=…` (or `committer-date:`/`pushed:`) qualifier; not supported by search_code.",
+			examples: ["3d", "2w", "2026-05-01"],
+		}),
+	),
+	until: Type.Optional(
+		Type.String({
+			description:
+				"upper-bound date in the same format as `since`. With both, builds a `field:since..until` range qualifier.",
+			examples: ["1d", "2026-05-09"],
+		}),
+	),
+	dateField: Type.Optional(
+		StringEnum(["created", "updated"], {
+			description:
+				"date field used by `since`/`until`. issues/prs: `created` (default) or `updated`. repos: `created` (default) or `updated` (mapped to GitHub's `pushed:`). commits: ignored — always uses `committer-date`.",
+			default: "created",
+		}),
+	),
 	limit: Type.Optional(
 		Type.Number({
 			description: "max results (search_issues, search_prs, search_code, search_commits, search_repos)",
@@ -685,6 +706,110 @@ const SEARCH_FIELDS_BY_COMMAND: Record<"issues" | "prs" | "code" | "commits" | "
 	commits: GH_SEARCH_COMMITS_FIELDS,
 	repos: GH_SEARCH_REPOS_FIELDS,
 };
+
+const RELATIVE_DURATION_PATTERN = /^(\d+)\s*(m|h|d|w|mo|y)$/i;
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const FIXED_UNIT_MS: Record<string, number> = {
+	m: 60_000,
+	h: 3_600_000,
+	d: 86_400_000,
+	w: 7 * 86_400_000,
+};
+
+/**
+ * Resolve a search date bound to a GitHub-search-compatible literal. Returns
+ * either a `YYYY-MM-DD` date (relative durations and date-only inputs) or a
+ * full ISO 8601 datetime string (datetime inputs), so the caller can drop it
+ * straight into a qualifier like `created:>=<value>`.
+ */
+export function parseSearchDateBound(raw: string, now: Date = new Date()): string {
+	const trimmed = raw.trim();
+	if (!trimmed) {
+		throw new ToolError("date bound must not be empty");
+	}
+
+	const relMatch = trimmed.match(RELATIVE_DURATION_PATTERN);
+	if (relMatch) {
+		const count = Number(relMatch[1]);
+		const unit = relMatch[2].toLowerCase();
+		const fixedMs = FIXED_UNIT_MS[unit];
+		let bound: Date;
+		if (fixedMs !== undefined) {
+			bound = new Date(now.getTime() - count * fixedMs);
+		} else {
+			bound = new Date(now);
+			if (unit === "mo") {
+				bound.setUTCMonth(bound.getUTCMonth() - count);
+			} else {
+				bound.setUTCFullYear(bound.getUTCFullYear() - count);
+			}
+		}
+		return bound.toISOString().slice(0, 10);
+	}
+
+	if (ISO_DATE_PATTERN.test(trimmed)) {
+		return trimmed;
+	}
+
+	const parsedMs = Date.parse(trimmed);
+	if (!Number.isNaN(parsedMs)) {
+		return new Date(parsedMs).toISOString();
+	}
+
+	throw new ToolError(
+		`invalid date bound: ${raw}. Expected a relative duration like "3d", "12h", "2w", an ISO date "YYYY-MM-DD", or an ISO datetime.`,
+	);
+}
+
+/**
+ * Build the GitHub-search qualifier (e.g. `created:>=2026-05-09`) for the
+ * provided bounds, or `undefined` if neither bound is set.
+ */
+export function buildSearchDateQualifier(
+	field: string,
+	since: string | undefined,
+	until: string | undefined,
+	now?: Date,
+): string | undefined {
+	const sinceVal = since ? parseSearchDateBound(since, now) : undefined;
+	const untilVal = until ? parseSearchDateBound(until, now) : undefined;
+	if (sinceVal && untilVal) {
+		return `${field}:${sinceVal}..${untilVal}`;
+	}
+	if (sinceVal) {
+		return `${field}:>=${sinceVal}`;
+	}
+	if (untilVal) {
+		return `${field}:<=${untilVal}`;
+	}
+	return undefined;
+}
+
+function resolveSearchDateField(
+	command: "issues" | "prs" | "commits" | "repos",
+	requested: "created" | "updated" | undefined,
+): string {
+	if (command === "commits") {
+		return "committer-date";
+	}
+	const dateField = requested ?? "created";
+	if (command === "repos" && dateField === "updated") {
+		return "pushed";
+	}
+	return dateField;
+}
+
+function composeSearchQuery(parts: ReadonlyArray<string | undefined>): string {
+	const cleaned: string[] = [];
+	for (const part of parts) {
+		const trimmed = part?.trim();
+		if (trimmed) cleaned.push(trimmed);
+	}
+	if (cleaned.length === 0) {
+		throw new ToolError("query is required (or pass since/until to filter by date)");
+	}
+	return cleaned.join(" ");
+}
 
 function buildGhSearchArgs(
 	command: "issues" | "prs" | "code" | "commits" | "repos",
@@ -2636,9 +2761,11 @@ async function executeSearchIssues(
 	params: GithubInput,
 	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<GhToolDetails>> {
-	const query = requireNonEmpty(params.query, "query");
 	const repo = normalizeOptionalString(params.repo);
 	const limit = resolveSearchLimit(params.limit);
+	const dateField = resolveSearchDateField("issues", params.dateField);
+	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
+	const query = composeSearchQuery([params.query, dateQualifier]);
 	const args = buildGhSearchArgs("issues", query, limit, repo);
 
 	const items = await git.github.json<GhSearchResult[]>(session.cwd, args, signal, {
@@ -2652,9 +2779,11 @@ async function executeSearchPrs(
 	params: GithubInput,
 	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<GhToolDetails>> {
-	const query = requireNonEmpty(params.query, "query");
 	const repo = normalizeOptionalString(params.repo);
 	const limit = resolveSearchLimit(params.limit);
+	const dateField = resolveSearchDateField("prs", params.dateField);
+	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
+	const query = composeSearchQuery([params.query, dateQualifier]);
 	const args = buildGhSearchArgs("prs", query, limit, repo);
 
 	const items = await git.github.json<GhSearchResult[]>(session.cwd, args, signal, {
@@ -2669,6 +2798,9 @@ async function executeSearchCode(
 	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<GhToolDetails>> {
 	const query = requireNonEmpty(params.query, "query");
+	if (params.since !== undefined || params.until !== undefined) {
+		throw new ToolError("search_code does not support since/until; GitHub code search has no date qualifier.");
+	}
 	const repo = normalizeOptionalString(params.repo);
 	const limit = resolveSearchLimit(params.limit);
 	const args = buildGhSearchArgs("code", query, limit, repo);
@@ -2684,9 +2816,11 @@ async function executeSearchCommits(
 	params: GithubInput,
 	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<GhToolDetails>> {
-	const query = requireNonEmpty(params.query, "query");
 	const repo = normalizeOptionalString(params.repo);
 	const limit = resolveSearchLimit(params.limit);
+	const dateField = resolveSearchDateField("commits", params.dateField);
+	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
+	const query = composeSearchQuery([params.query, dateQualifier]);
 	const args = buildGhSearchArgs("commits", query, limit, repo);
 
 	const items = await git.github.json<GhSearchCommitResult[]>(session.cwd, args, signal, {
@@ -2700,8 +2834,10 @@ async function executeSearchRepos(
 	params: GithubInput,
 	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<GhToolDetails>> {
-	const query = requireNonEmpty(params.query, "query");
 	const limit = resolveSearchLimit(params.limit);
+	const dateField = resolveSearchDateField("repos", params.dateField);
+	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
+	const query = composeSearchQuery([params.query, dateQualifier]);
 	const args = buildGhSearchArgs("repos", query, limit, undefined);
 
 	const items = await git.github.json<GhSearchRepoResult[]>(session.cwd, args, signal);

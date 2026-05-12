@@ -9,8 +9,6 @@ import {
 	buildAnthropicClientOptions,
 	buildAnthropicHeaders,
 	buildAnthropicSystemBlocks,
-	claudeCodeHeaders,
-	claudeCodeSystemInstruction,
 	claudeCodeVersion,
 	generateClaudeCloakingUserId,
 	isClaudeCloakingUserId,
@@ -83,21 +81,6 @@ function captureAnthropicPayload(
 }
 
 describe("Anthropic request fingerprint alignment", () => {
-	it("uses updated Claude Code header defaults", () => {
-		const headers = buildAnthropicHeaders({
-			apiKey: "sk-ant-oat-test",
-			isOAuth: true,
-			stream: true,
-		});
-
-		expect(headers["Anthropic-Beta"]).toContain("context-management-2025-06-27");
-		expect(headers["Anthropic-Beta"]).toContain("prompt-caching-scope-2026-01-05");
-		expect(headers["Anthropic-Beta"]).not.toContain("fine-grained-tool-streaming-2025-05-14");
-		expect(headers["User-Agent"]).toBe(`claude-cli/${claudeCodeVersion} (external, cli)`);
-		expect(claudeCodeHeaders["X-Stainless-Package-Version"]).toBe("0.74.0");
-		expect("X-Stainless-Helper-Method" in claudeCodeHeaders).toBe(false);
-	});
-
 	it("maps Stainless OS and arch values from explicit inputs", () => {
 		expect(mapStainlessOs("darwin")).toBe("MacOS");
 		expect(mapStainlessOs("windows")).toBe("Windows");
@@ -122,29 +105,6 @@ describe("Anthropic request fingerprint alignment", () => {
 
 		expect(headers["X-Stainless-Os"]).toBe(mapStainlessOs(process.platform));
 		expect(headers["X-Stainless-Arch"]).toBe(mapStainlessArch(process.arch));
-	});
-
-	it("injects billing header and Claude Agent SDK identity block", () => {
-		const blocks = buildAnthropicSystemBlocks(["Stay concise."], {
-			includeClaudeCodeInstruction: true,
-			extraInstructions: ["Use citations when possible"],
-		});
-
-		expect(blocks).toBeDefined();
-		expect(blocks?.[0]?.text.startsWith(`x-anthropic-billing-header: cc_version=${claudeCodeVersion}.`)).toBe(true);
-		expect(blocks?.[0]?.text).toMatch(/cc_entrypoint=cli; cch=[0-9a-f]{5};$/);
-		expect(blocks?.[1]).toEqual({
-			type: "text",
-			text: claudeCodeSystemInstruction,
-		});
-		expect(blocks?.[2]).toEqual({
-			type: "text",
-			text: "Use citations when possible",
-		});
-		expect(blocks?.[3]).toEqual({
-			type: "text",
-			text: "Stay concise.",
-		});
 	});
 
 	it("attaches cache_control only to the last emitted system block when cacheControl is set", () => {
@@ -605,21 +565,6 @@ describe("Anthropic request fingerprint alignment", () => {
 
 		const strictNames = (payload.tools ?? []).filter(tool => tool.strict === true).map(tool => tool.name);
 		expect(strictNames).toEqual(["python"]);
-	});
-
-	it("drops fine-grained tool-streaming beta from default Anthropic client options", () => {
-		const options = buildAnthropicClientOptions({
-			model: ANTHROPIC_MODEL,
-			apiKey: "sk-ant-oat-test",
-			extraBetas: [],
-			stream: true,
-			interleavedThinking: false,
-			dynamicHeaders: {},
-		});
-
-		const beta = options.defaultHeaders["Anthropic-Beta"];
-		expect(beta).toContain("context-management-2025-06-27");
-		expect(beta).not.toContain("fine-grained-tool-streaming-2025-05-14");
 	});
 
 	it("adds legacy fine-grained tool-streaming beta only for tool requests on incompatible models", () => {

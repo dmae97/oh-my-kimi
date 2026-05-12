@@ -631,7 +631,7 @@ function renderNoteAttachments(phases: TodoPhase[], uiTheme: Theme): string[] {
 		for (const task of phase.tasks) {
 			if (task.status !== "in_progress" || !task.notes || task.notes.length === 0) continue;
 			const bar = uiTheme.fg("dim", uiTheme.tree.vertical);
-			const title = uiTheme.fg("dim", chalk.italic(`\u00a7 notes \u2014 ${task.content}`));
+			const title = uiTheme.fg("dim", chalk.italic(`§ notes — ${task.content}`));
 			lines.push("");
 			lines.push(`  ${title}`);
 			for (let j = 0; j < task.notes.length; j++) {

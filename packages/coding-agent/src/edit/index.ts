@@ -204,6 +204,7 @@ async function executeSinglePathEntries(
 	const contentTexts: string[] = [];
 	const diffTexts: string[] = [];
 	let firstChangedLine: number | undefined;
+	let errorCount = 0;
 
 	for (let i = 0; i < runs.length; i++) {
 		const isLast = i === runs.length - 1;
@@ -221,6 +222,7 @@ async function executeSinglePathEntries(
 		} catch (err) {
 			const errorText = err instanceof Error ? err.message : String(err);
 			contentTexts.push(`Error editing ${path}: ${errorText}`);
+			errorCount++;
 		}
 
 		if (!isLast && onUpdate) {
@@ -230,6 +232,7 @@ async function executeSinglePathEntries(
 					diff: diffTexts.join("\n"),
 					firstChangedLine,
 				},
+				...(errorCount > 0 ? { isError: true } : {}),
 			});
 		}
 	}
@@ -240,6 +243,11 @@ async function executeSinglePathEntries(
 			diff: diffTexts.join("\n"),
 			firstChangedLine,
 		},
+		// Any per-entry failure marks the aggregate result as an error so the
+		// renderer takes the error branch instead of falling through to the
+		// streaming-edit preview (which displays the *proposed* diff and looks
+		// indistinguishable from success).
+		...(errorCount > 0 ? { isError: true } : {}),
 	};
 }
 

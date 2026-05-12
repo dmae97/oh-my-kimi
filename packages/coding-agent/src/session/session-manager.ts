@@ -275,6 +275,7 @@ export type ReadonlySessionManager = Pick<
 	| "getSessionFile"
 	| "getSessionName"
 	| "getArtifactsDir"
+	| "getArtifactManager"
 	| "allocateArtifactPath"
 	| "saveArtifact"
 	| "getArtifactPath"
@@ -1622,6 +1623,10 @@ export class SessionManager {
 	#persistErrorReported = false;
 	#artifactManager: ArtifactManager | null = null;
 	#artifactManagerSessionFile: string | null = null;
+	// When set, take precedence over the lazily-derived per-session manager.
+	// Subagents adopt the parent's manager so artifact IDs are unique across the
+	// whole agent tree and all files land in the parent's artifacts dir.
+	#adoptedArtifactManager: ArtifactManager | null = null;
 	// In-memory artifact fallback for non-persistent sessions (persist=false).
 	// Keyed by sequential numeric ID string; mirrors the file-based ArtifactManager ID scheme.
 	#inMemoryArtifacts: Map<string, string> | null = null;
@@ -1675,6 +1680,7 @@ export class SessionManager {
 		this.#persistErrorReported = false;
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
+		this.#adoptedArtifactManager = null;
 		this.#buildIndex();
 		if (this.#sessionFile) {
 			writeTerminalBreadcrumb(this.cwd, this.#sessionFile);
@@ -2120,10 +2126,32 @@ export class SessionManager {
 	/**
 	 * Returns the session artifacts directory path (session file path without .jsonl).
 	 * Returns null when the session is not persisted to a file.
+	 * When this session has adopted an external ArtifactManager (subagent case),
+	 * returns that manager's directory so reads/writes land in the shared parent
+	 * dir instead of a private (non-existent) subdir.
 	 */
 	getArtifactsDir(): string | null {
+		if (this.#adoptedArtifactManager) return this.#adoptedArtifactManager.dir;
 		const sessionFile = this.#sessionFile;
 		return sessionFile ? sessionFile.slice(0, -6) : null;
+	}
+
+	/**
+	 * Adopt an externally-owned ArtifactManager. Used by subagents to share
+	 * the parent session's artifact directory and ID counter.
+	 */
+	adoptArtifactManager(manager: ArtifactManager): void {
+		this.#adoptedArtifactManager = manager;
+	}
+
+	/**
+	 * Returns the ArtifactManager this session writes through. Lazily creates
+	 * one bound to the current session file unless an external manager was
+	 * adopted via `adoptArtifactManager`. Returns null only for non-persistent
+	 * sessions with no adopted manager.
+	 */
+	getArtifactManager(): ArtifactManager | null {
+		return this.#getOrCreateArtifactManager();
 	}
 
 	/**
@@ -2131,6 +2159,7 @@ export class SessionManager {
 	 * Recreates the manager when the active session file changes.
 	 */
 	#getOrCreateArtifactManager(): ArtifactManager | null {
+		if (this.#adoptedArtifactManager) return this.#adoptedArtifactManager;
 		const sessionFile = this.#sessionFile;
 		if (!sessionFile) {
 			this.#artifactManager = null;
@@ -2142,7 +2171,7 @@ export class SessionManager {
 			return this.#artifactManager;
 		}
 
-		const manager = new ArtifactManager(sessionFile);
+		const manager = new ArtifactManager(sessionFile.slice(0, -6));
 		this.#artifactManager = manager;
 		this.#artifactManagerSessionFile = sessionFile;
 		return manager;

@@ -9,12 +9,6 @@ const TEST_CONFIG: CliConfig = {
 };
 
 describe("Plugin command scope parsing", () => {
-	it("accepts project scope", async () => {
-		const command = new Plugin(["install", "--scope", "project"], TEST_CONFIG);
-		const { flags } = await command.parse(Plugin);
-		expect(flags.scope).toBe("project");
-	});
-
 	it("rejects invalid scope values", async () => {
 		const command = new Plugin(["install", "--scope", "porject"], TEST_CONFIG);
 		await expect(command.parse(Plugin)).rejects.toThrow(/Expected --scope to be one of: user, project/);

@@ -1502,8 +1502,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#uiHelpers.isKnownSlashCommand(text);
 	}
 
-	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
-		this.#uiHelpers.addMessageToChat(message, options);
+	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): Component[] {
+		return this.#uiHelpers.addMessageToChat(message, options);
 	}
 
 	renderSessionContext(

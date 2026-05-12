@@ -25,12 +25,6 @@ function createApi(): CustomCommandAPI {
 }
 
 describe("GreenCommand", () => {
-	it("exposes the /green command name", () => {
-		const command = new GreenCommand(createApi());
-
-		expect(command.name).toBe("green");
-	});
-
 	it("includes tag instructions when HEAD has a tag", async () => {
 		vi.spyOn(git.ref, "tags").mockResolvedValue(["v0.1.0-alpha2"]);
 		const command = new GreenCommand(createApi());

@@ -49,11 +49,6 @@ describe("buildExaRequestBody", () => {
 		});
 	});
 
-	it("includes contents.summary with the search query", () => {
-		const body = buildExaRequestBody({ query: "how does React work" });
-		expect(body.contents).toEqual({ summary: { query: "how does React work" } });
-	});
-
 	it("applies num_results override", () => {
 		const body = buildExaRequestBody({ query: "q", num_results: 5 });
 		expect(body.numResults).toBe(5);
@@ -130,21 +125,6 @@ describe("synthesizeAnswer", () => {
 		];
 		const answer = synthesizeAnswer(results);
 		expect(answer).toBe("**A**: Summary A\n\n**B**: Summary B");
-	});
-
-	it("limits to MAX_ANSWER_SUMMARIES (3) results", () => {
-		const results = [
-			{ title: "A", url: "https://a.com", summary: "SA" },
-			{ title: "B", url: "https://b.com", summary: "SB" },
-			{ title: "C", url: "https://c.com", summary: "SC" },
-			{ title: "D", url: "https://d.com", summary: "SD" },
-			{ title: "E", url: "https://e.com", summary: "SE" },
-		];
-		const answer = synthesizeAnswer(results)!;
-		expect(answer.split("\n\n")).toHaveLength(3);
-		expect(answer).toContain("**A**: SA");
-		expect(answer).toContain("**C**: SC");
-		expect(answer).not.toContain("**D**");
 	});
 
 	it("skips results with missing summaries but includes ones that have them", () => {

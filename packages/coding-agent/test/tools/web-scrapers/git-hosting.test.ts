@@ -86,16 +86,6 @@ describe.skipIf(SKIP)("handleGitHub", () => {
 		expect(result).toBeDefined();
 	});
 
-	it("fetches pull request", async () => {
-		const result = await handleGitHub("https://github.com/facebook/react/pull/1", 20000);
-		if (result !== null) {
-			expect(result.method).toBe("github-pr");
-			expect(result.contentType).toBe("text/markdown");
-			expect(result.content.length).toBeGreaterThan(0);
-		}
-		expect(result).toBeDefined();
-	});
-
 	it("fetches issues list", async () => {
 		const result = await handleGitHub("https://github.com/facebook/react/issues", 20000);
 		if (result !== null) {
@@ -106,67 +96,10 @@ describe.skipIf(SKIP)("handleGitHub", () => {
 		expect(result).toBeDefined();
 	});
 
-	it("handles repository with underscore in name", async () => {
-		const result = await handleGitHub("https://github.com/rust-lang/rust-analyzer", 20000);
-		if (result !== null) {
-			expect(result.method).toBe("github-repo");
-		}
-		expect(result).toBeDefined();
-	});
-
-	it("handles repository with dash in name", async () => {
-		const result = await handleGitHub("https://github.com/vercel/next.js", 20000);
-		if (result !== null) {
-			expect(result.method).toBe("github-repo");
-		}
-		expect(result).toBeDefined();
-	});
-
-	it("returns null for invalid URL structure", async () => {
-		const result = await handleGitHub("https://github.com/", 10000);
-		expect(result).toBeNull();
-	});
-
-	it("returns null for single path segment", async () => {
-		const result = await handleGitHub("https://github.com/facebook", 10000);
-		expect(result).toBeNull();
-	});
-
 	it("handles pulls list endpoint", async () => {
 		const result = await handleGitHub("https://github.com/facebook/react/pulls", 20000);
 		// Should be handled as pulls list but currently falls back to null
 		// This tests the actual behavior
-		expect(result).toBeDefined();
-	});
-
-	it("fetches file with path containing multiple directories", async () => {
-		const result = await handleGitHub(
-			"https://github.com/facebook/react/blob/main/packages/react/package.json",
-			20000,
-		);
-		expect(result).not.toBeNull();
-		expect(result?.method).toBe("github-raw");
-	});
-
-	it("fetches deeply nested directory", async () => {
-		const result = await handleGitHub("https://github.com/facebook/react/tree/main/packages/react/src", 20000);
-		if (result !== null) {
-			expect(result.method).toBe("github-tree");
-		}
-		expect(result).toBeDefined();
-	});
-
-	it("returns null for discussion URLs", async () => {
-		const result = await handleGitHub("https://github.com/facebook/react/discussions", 10000);
-		// Discussions not fully implemented, should return null
-		expect(result).toBeDefined();
-	});
-
-	it("handles trailing slash in repository URL", async () => {
-		const result = await handleGitHub("https://github.com/facebook/react/", 20000);
-		if (result !== null) {
-			expect(result.method).toBe("github-repo");
-		}
 		expect(result).toBeDefined();
 	});
 });

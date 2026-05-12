@@ -1352,7 +1352,7 @@ export function renderReadUrlCall(
 ): Component {
 	const url = args.path ?? args.url ?? "";
 	const domain = getDomain(url);
-	const path = truncate(url.replace(/^https?:\/\/[^/]+/, ""), 50, "\u2026");
+	const path = truncate(url.replace(/^https?:\/\/[^/]+/, ""), 50, "…");
 	const description = `${domain}${path ? ` ${path}` : ""}`.trim();
 	const meta: string[] = [];
 	if (args.raw) meta.push("raw");

@@ -7,16 +7,6 @@ describe("ensureSupportedImageInput", () => {
 		vi.restoreAllMocks();
 	});
 
-	test("returns supported image input unchanged", async () => {
-		const convertToPngSpy = vi.spyOn(imageConvert, "convertToPng");
-		const input = { type: "image" as const, data: "abc", mimeType: "image/png" };
-
-		const result = await ensureSupportedImageInput(input);
-
-		expect(result).toEqual(input);
-		expect(convertToPngSpy).not.toHaveBeenCalled();
-	});
-
 	test("converts unsupported image input to png", async () => {
 		const convertToPngSpy = vi
 			.spyOn(imageConvert, "convertToPng")

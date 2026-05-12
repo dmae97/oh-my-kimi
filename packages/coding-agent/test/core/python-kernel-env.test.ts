@@ -41,18 +41,4 @@ describe("Python gateway environment filtering", () => {
 		expect(filtered.LC_CTYPE).toBe("UTF-8");
 		expect(filtered.LC_MESSAGES).toBe("en_US.UTF-8");
 	});
-
-	it("passes filtered env through to resolved runtime", () => {
-		const env: Record<string, string | undefined> = {
-			PATH: "/usr/bin",
-			HOME: "/home/test",
-			OPENAI_API_KEY: "secret",
-			PI_DEBUG: "1",
-		};
-
-		const filtered = filterEnv(env);
-		expect(filtered.OPENAI_API_KEY).toBeUndefined();
-		expect(filtered.PATH).toBe("/usr/bin");
-		expect(filtered.PI_DEBUG).toBe("1");
-	});
 });

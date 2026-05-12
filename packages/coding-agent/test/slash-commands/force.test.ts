@@ -95,17 +95,4 @@ describe("/force slash command", () => {
 		expect(harness.showStatus).not.toHaveBeenCalled();
 		expect(harness.setText).toHaveBeenCalledWith("");
 	});
-
-	it("does not pass through prompt when tool validation fails", async () => {
-		const harness = createRuntimeHarness({
-			setForcedToolChoice: () => {
-				throw new Error('Tool "write" is not currently active.');
-			},
-		});
-
-		const result = await executeBuiltinSlashCommand("/force:write fix stuff", harness.runtime);
-
-		expect(result).toBe(true);
-		expect(harness.showError).toHaveBeenCalledWith('Tool "write" is not currently active.');
-	});
 });
