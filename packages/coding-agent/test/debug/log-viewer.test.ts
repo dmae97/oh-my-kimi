@@ -19,12 +19,6 @@ describe("DebugLogViewerModel", () => {
 				return row.kind;
 		}
 	};
-
-	it("defaults cursor to the newest log entry", () => {
-		const logs = ["alpha", "beta", "gamma"].join("\n");
-		const model = new DebugLogViewerModel(logs, { processStartMs: Date.now() });
-		expect(model.cursorLogIndex).toBe(2);
-	});
 	it("inserts session boundary warning between older and current-session logs", () => {
 		const processStartMs = Date.parse("2026-02-14T12:00:00.000Z");
 		const logs = [

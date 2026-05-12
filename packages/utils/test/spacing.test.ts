@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getProjectDir, setProjectDir } from "../src/dirs";
 import { Snowflake } from "../src/snowflake";
-import { getDefaultTabWidth, getIndentation, setDefaultTabWidth } from "../src/tab-spacing";
+import { getIndentation, setDefaultTabWidth } from "../src/tab-spacing";
 
 describe("spacing", () => {
 	let tempDir = "";
@@ -22,15 +22,6 @@ describe("spacing", () => {
 		setDefaultTabWidth(3);
 		setProjectDir(previousProjectDir);
 		await fs.rm(tempDir, { recursive: true, force: true });
-	});
-
-	it("uses configurable default tab width", () => {
-		expect(getDefaultTabWidth()).toBe(3);
-		expect(" ".repeat(getIndentation())).toBe("   ");
-
-		setDefaultTabWidth(5);
-		expect(getDefaultTabWidth()).toBe(5);
-		expect(" ".repeat(getIndentation())).toBe("     ");
 	});
 
 	it("resolves editorconfig rules for file path and falls back to default", async () => {

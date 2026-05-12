@@ -272,15 +272,4 @@ describe("executeJs", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe(path.join("a", "b"));
 	});
-
-	it("exposes a cwd-bound `require` and `createRequire`", async () => {
-		const result = await executeJs(
-			'return { hasRequire: typeof require === "function", hasCreate: typeof createRequire === "function", path: require("node:path").sep };',
-			{ sessionId, session, sessionFile },
-		);
-		expect(result.exitCode).toBe(0);
-		expect(result.displayOutputs).toEqual([
-			{ type: "json", data: { hasRequire: true, hasCreate: true, path: path.sep } },
-		]);
-	});
 });

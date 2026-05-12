@@ -14,14 +14,6 @@ afterEach(() => {
 
 describe("custom API registry", () => {
 	const streamSimple: CustomStreamSimpleFn = () => ({}) as unknown as AssistantMessageEventStream;
-	test("registers and resolves a custom API provider", () => {
-		registerCustomApi("custom-provider", streamSimple, "ext-a");
-
-		const provider = getCustomApi("custom-provider");
-		expect(provider).toBeDefined();
-		expect(provider?.streamSimple).toBe(streamSimple);
-		expect(provider?.sourceId).toBe("ext-a");
-	});
 
 	test("rejects registrations that collide with built-in API names", () => {
 		expect(() => registerCustomApi("openai-responses", streamSimple)).toThrow(

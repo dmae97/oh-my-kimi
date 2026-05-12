@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
+import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { editToolRenderer } from "@oh-my-pi/pi-coding-agent/edit/renderer";
+import { HL_EDIT_SEP } from "@oh-my-pi/pi-coding-agent/hashline/hash";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { TUI } from "@oh-my-pi/pi-tui";
 
 async function getUiTheme() {
 	await themeModule.initTheme(false, undefined, undefined, "dark", "light");
@@ -38,6 +42,32 @@ describe("editToolRenderer", () => {
 		const rendered = Bun.stripANSI(component.render(160).join("\n"));
 		expect(rendered).toContain("packages/coding-agent/src/edit/renderer.ts");
 		expect(rendered).not.toContain("The first line of the patch must be");
+	});
+
+	it("shows hashline envelope input while preview diff is not computable yet", async () => {
+		await getUiTheme();
+		const uiStub = { requestRender() {} } as unknown as TUI;
+		const hashlineTool = { name: "edit", label: "Edit", mode: "hashline" } as unknown as AgentTool;
+		const component = new ToolExecutionComponent(
+			"edit",
+			{
+				input: [
+					"*** Begin Patch",
+					"@crates/pi-natives/src/shell.rs",
+					"+ EOF",
+					`${HL_EDIT_SEP}pub fn streaming_preview() {`,
+				].join("\n"),
+			},
+			{},
+			hashlineTool,
+			uiStub,
+		);
+
+		const rendered = Bun.stripANSI(component.render(160).join("\n"));
+		expect(rendered).toContain("crates/pi-natives/src/shell.rs");
+		expect(rendered).toContain("+ EOF");
+		expect(rendered).toContain(`${HL_EDIT_SEP}pub fn streaming_preview() {`);
+		expect(rendered).not.toContain("*** Begin Patch");
 	});
 
 	it("recognizes compact and quoted hashline input headers", async () => {

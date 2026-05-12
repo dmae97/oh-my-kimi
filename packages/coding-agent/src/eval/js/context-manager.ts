@@ -32,9 +32,6 @@ interface VmHelperOptions {
 	reverse?: boolean;
 	unique?: boolean;
 	count?: boolean;
-	cwd?: string;
-	timeoutMs?: number;
-	timeout?: number;
 }
 
 interface VmContextState {
@@ -303,41 +300,6 @@ async function createHelpers(state: VmContextState) {
 			emitStatus(state, { op: "tree", path: root, entries: entryCount, preview: result.slice(0, 1000) });
 			return result;
 		},
-		run: async (
-			command: string,
-			options: VmHelperOptions = {},
-		): Promise<{ stdout: string; stderr: string; exit_code: number }> => {
-			const cwd = options.cwd ? resolvePath(state, options.cwd) : state.cwd;
-			const timeoutMs =
-				typeof options.timeoutMs === "number"
-					? options.timeoutMs
-					: typeof options.timeout === "number"
-						? options.timeout * 1000
-						: undefined;
-			const timeoutSignal =
-				typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-					? AbortSignal.timeout(timeoutMs)
-					: undefined;
-			const signal =
-				state.currentRun?.signal && timeoutSignal
-					? AbortSignal.any([state.currentRun.signal, timeoutSignal])
-					: (state.currentRun?.signal ?? timeoutSignal);
-			const child = Bun.spawn(["bash", "-lc", command], {
-				cwd,
-				env: getMergedEnv(state),
-				stdout: "pipe",
-				stderr: "pipe",
-				signal,
-			});
-			const [stdout, stderr, exit_code] = await Promise.all([
-				new Response(child.stdout as ReadableStream<Uint8Array>).text(),
-				new Response(child.stderr as ReadableStream<Uint8Array>).text(),
-				child.exited,
-			]);
-			const output = `${stdout}${stderr}`.slice(0, 500);
-			emitStatus(state, { op: "run", cmd: command.slice(0, 120), code: exit_code, output });
-			return { stdout, stderr, exit_code };
-		},
 		env: (key?: string, value?: string): string | Record<string, string> | undefined => {
 			if (!key) {
 				const env = Object.fromEntries(Object.entries(getMergedEnv(state)).sort(([a], [b]) => a.localeCompare(b)));
@@ -419,6 +381,7 @@ async function createVmState(
 		atob,
 		btoa,
 		Buffer,
+		Bun,
 		process: createProcessSubset(cwd),
 		require: buildRequire(cwd),
 		createRequire,

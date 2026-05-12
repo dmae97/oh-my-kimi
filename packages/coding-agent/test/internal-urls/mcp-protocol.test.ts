@@ -1,6 +1,6 @@
-import { describe, expect, it } from "bun:test";
-import { InternalUrlRouter, McpProtocolHandler } from "../../src/internal-urls";
-import type { MCPManager } from "../../src/mcp/manager";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { InternalUrlRouter } from "../../src/internal-urls";
+import { MCPManager } from "../../src/mcp/manager";
 import type { MCPResource, MCPResourceReadResult, MCPResourceTemplate } from "../../src/mcp/types";
 
 function createMockManager(opts: {
@@ -19,25 +19,26 @@ function createMockManager(opts: {
 	} as unknown as MCPManager;
 }
 
-function createRouter(manager?: MCPManager): InternalUrlRouter {
-	const router = new InternalUrlRouter();
-	router.register(
-		new McpProtocolHandler({
-			getMcpManager: () => manager,
-		}),
-	);
-	return router;
-}
-
 describe("McpProtocolHandler", () => {
+	beforeEach(() => {
+		MCPManager.resetForTests();
+		InternalUrlRouter.resetForTests();
+	});
+
+	afterEach(() => {
+		MCPManager.resetForTests();
+		InternalUrlRouter.resetForTests();
+	});
+
 	it("returns error when no MCP manager is available", async () => {
-		const router = createRouter();
+		const router = InternalUrlRouter.instance();
 		await expect(router.resolve("mcp://test://resource")).rejects.toThrow("No MCP manager");
 	});
 
 	it("requires resource URI in mcp URL", async () => {
 		const manager = createMockManager({ servers: ["server-a"] });
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 		await expect(router.resolve("mcp://")).rejects.toThrow("mcp:// URL requires a resource URI");
 	});
 
@@ -48,7 +49,8 @@ describe("McpProtocolHandler", () => {
 			templates: [],
 		});
 		const manager = createMockManager({ servers: ["server-a"], resources });
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		await expect(router.resolve("mcp://test://missing")).rejects.toThrow("No MCP server has resource");
 		await expect(router.resolve("mcp://test://missing")).rejects.toThrow("file://known");
@@ -66,7 +68,8 @@ describe("McpProtocolHandler", () => {
 			resources,
 			readResult: { contents: [{ uri: "test://doc", text: "hello world" }] },
 		});
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		const resource = await router.resolve("mcp://test://doc");
 		expect(resource.content).toBe("hello world");
@@ -84,7 +87,8 @@ describe("McpProtocolHandler", () => {
 			resources,
 			readResult: { contents: [{ uri: "test://doc?q=1", text: "query resource" }] },
 		});
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		const resource = await router.resolve("mcp://test://doc?q=1");
 		expect(resource.content).toBe("query resource");
@@ -101,7 +105,8 @@ describe("McpProtocolHandler", () => {
 			resources,
 			readResult: { contents: [{ uri: "test://docs/foo/raw", text: "from template" }] },
 		});
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		const resource = await router.resolve("mcp://test://docs/foo/raw");
 		expect(resource.content).toBe("from template");
@@ -118,7 +123,8 @@ describe("McpProtocolHandler", () => {
 			resources,
 			readResult: { contents: [{ uri: "test://docs", text: "empty expansion" }] },
 		});
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		const resource = await router.resolve("mcp://test://docs");
 		expect(resource.content).toBe("empty expansion");
@@ -139,7 +145,8 @@ describe("McpProtocolHandler", () => {
 			resources,
 			readResult: { contents: [{ uri: "test://foo/123", text: "from specific" }] },
 		});
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		const resource = await router.resolve("mcp://test://foo/123");
 		expect(resource.notes).toEqual(["MCP server: specific-server"]);
@@ -160,7 +167,8 @@ describe("McpProtocolHandler", () => {
 			resources,
 			readResult: { contents: [{ uri: "test://foo", text: "from first" }] },
 		});
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		const resource = await router.resolve("mcp://test://foo");
 		expect(resource.notes).toEqual(["MCP server: first"]);
@@ -173,7 +181,8 @@ describe("McpProtocolHandler", () => {
 			templates: [{ uriTemplate: "testing://{id}", name: "testing-template" }],
 		});
 		const manager = createMockManager({ servers: ["tmpl-server"], resources });
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		await expect(router.resolve("mcp://test://foo")).rejects.toThrow("No MCP server has resource");
 	});
@@ -189,7 +198,8 @@ describe("McpProtocolHandler", () => {
 			resources,
 			readResult: undefined,
 		});
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		await expect(router.resolve("mcp://test://empty")).rejects.toThrow("returned no content");
 		await expect(router.resolve("mcp://test://empty")).rejects.toThrow("null-server");
@@ -209,7 +219,8 @@ describe("McpProtocolHandler", () => {
 				contents: [{ uri: "test://image", mimeType: "image/png", blob: blobData }],
 			},
 		});
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		const resource = await router.resolve("mcp://test://image");
 		expect(resource.content).toContain("[Binary content:");
@@ -233,7 +244,8 @@ describe("McpProtocolHandler", () => {
 				],
 			},
 		});
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		const resource = await router.resolve("mcp://test://mixed");
 		expect(resource.content).toContain("part one");
@@ -254,7 +266,8 @@ describe("McpProtocolHandler", () => {
 				contents: [{ uri: "test://blank" }],
 			},
 		});
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		const resource = await router.resolve("mcp://test://blank");
 		expect(resource.content).toBe("(empty resource)");
@@ -271,7 +284,8 @@ describe("McpProtocolHandler", () => {
 			resources,
 			readError: new Error("connection refused"),
 		});
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		await expect(router.resolve("mcp://test://fail")).rejects.toThrow("MCP resource read error:");
 		await expect(router.resolve("mcp://test://fail")).rejects.toThrow("connection refused");
@@ -292,7 +306,8 @@ describe("McpProtocolHandler", () => {
 			resources,
 			readResult: { contents: [{ uri: "test://shared", text: "from first" }] },
 		});
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		const resource = await router.resolve("mcp://test://shared");
 		expect(resource.notes).toEqual(["MCP server: first"]);
@@ -300,7 +315,8 @@ describe("McpProtocolHandler", () => {
 
 	it("shows (none) when no servers have any resources", async () => {
 		const manager = createMockManager({ servers: ["lonely-server"] });
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		await expect(router.resolve("mcp://test://anything")).rejects.toThrow("(none)");
 	});
@@ -318,7 +334,8 @@ describe("McpProtocolHandler", () => {
 				contents: [{ uri: "test://bin", blob: "data" }],
 			},
 		});
-		const router = createRouter(manager);
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
 
 		const resource = await router.resolve("mcp://test://bin");
 		expect(resource.content).toContain("[Binary content: unknown,");

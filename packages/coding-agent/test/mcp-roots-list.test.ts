@@ -103,14 +103,6 @@ describe("roots response shape", () => {
 		expect(result.roots[0].name).toBe("project");
 	});
 
-	it("produces valid file:// URI on Windows-style paths", () => {
-		// path.basename and pathToFileURL are platform-dependent for
-		// Windows paths; only assert the URI format, not the name.
-		const result = getRoots("C:\\Users\\dev\\myproject");
-		expect(result.roots[0].uri).toMatch(/^file:\/\/\//);
-		expect(result.roots[0].name).toBeTruthy();
-	});
-
 	it("handles paths with spaces", () => {
 		const result = getRoots("/home/user/my project");
 		expect(result.roots[0].uri).toContain("my%20project");

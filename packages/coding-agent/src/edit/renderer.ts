@@ -148,6 +148,8 @@ export interface EditRenderContext {
 	editDiffPreview?: DiffResult | DiffError;
 	/** Multi-file streaming diff preview (edits spanning several files) */
 	perFileDiffPreview?: PerFileDiffPreview[];
+	/** Raw in-flight edit text shown while a computed diff preview is unavailable */
+	editStreamingFallback?: string;
 	/** Function to render diff text with syntax highlighting */
 	renderDiff?: (diffText: string, options?: { filePath?: string }) => string;
 }
@@ -272,7 +274,7 @@ function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: T
 	const parts: string[] = [];
 	for (const preview of previews) {
 		if (!preview.diff && !preview.error) continue;
-		const header = uiTheme.fg("dim", `\n\n\u2500\u2500 ${shortenPath(preview.path)} \u2500\u2500`);
+		const header = uiTheme.fg("dim", `\n\n── ${shortenPath(preview.path)} ──`);
 		if (preview.error) {
 			parts.push(`${header}\n${uiTheme.fg("error", replaceTabs(preview.error, preview.path))}`);
 			continue;
@@ -305,6 +307,9 @@ function getCallPreview(
 	}
 	if (args.newText || args.patch) {
 		return renderPlainTextPreview(args.newText ?? args.patch ?? "", uiTheme, rawPath);
+	}
+	if (renderContext?.editStreamingFallback) {
+		return renderContext.editStreamingFallback;
 	}
 	return "";
 }

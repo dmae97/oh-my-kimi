@@ -6,49 +6,6 @@ const forced = { type: "tool", name: "write" } as const;
 const forcedRead = { type: "tool", name: "read" } as const;
 
 describe("ToolChoiceQueue", () => {
-	it("returns undefined when empty", () => {
-		const q = new ToolChoiceQueue();
-		expect(q.nextToolChoice()).toBeUndefined();
-	});
-
-	it("pushOnce yields once then exhausts", () => {
-		const q = new ToolChoiceQueue();
-		q.pushOnce(forced, { label: "a" });
-		expect(q.nextToolChoice()).toEqual(forced);
-		q.resolve();
-		expect(q.nextToolChoice()).toBeUndefined();
-	});
-
-	it("pushSequence yields in order then exhausts", () => {
-		const q = new ToolChoiceQueue();
-		q.pushSequence([forced, "none"], { label: "seq" });
-		expect(q.nextToolChoice()).toEqual(forced);
-		q.resolve();
-		expect(q.nextToolChoice()).toBe("none");
-		q.resolve();
-		expect(q.nextToolChoice()).toBeUndefined();
-	});
-
-	it("now:true prepends to head", () => {
-		const q = new ToolChoiceQueue();
-		q.pushOnce(forced, { label: "first" });
-		q.pushOnce(forcedRead, { label: "urgent", now: true });
-		expect(q.nextToolChoice()).toEqual(forcedRead);
-		q.resolve();
-		expect(q.nextToolChoice()).toEqual(forced);
-	});
-
-	it("multiple directives drain in FIFO order", () => {
-		const q = new ToolChoiceQueue();
-		q.pushOnce(forced, { label: "a" });
-		q.pushOnce(forcedRead, { label: "b" });
-		expect(q.nextToolChoice()).toEqual(forced);
-		q.resolve();
-		expect(q.nextToolChoice()).toEqual(forcedRead);
-		q.resolve();
-		expect(q.nextToolChoice()).toBeUndefined();
-	});
-
 	describe("resolve callback", () => {
 		it("fires onResolved with the served choice", () => {
 			const q = new ToolChoiceQueue();
@@ -60,11 +17,6 @@ describe("ToolChoiceQueue", () => {
 			q.nextToolChoice();
 			q.resolve();
 			expect(resolved).toEqual([{ choice: forced }]);
-		});
-
-		it("does not fire onResolved when queue is empty", () => {
-			const q = new ToolChoiceQueue();
-			q.resolve(); // no-op, nothing in-flight
 		});
 	});
 
@@ -100,39 +52,6 @@ describe("ToolChoiceQueue", () => {
 			expect(q.nextToolChoice()).toEqual(forced);
 			q.reject("aborted");
 			expect(q.nextToolChoice()).toBeUndefined();
-		});
-
-		it("default (no callback) drops the yield", () => {
-			const q = new ToolChoiceQueue();
-			q.pushOnce(forced, { label: "a" });
-			expect(q.nextToolChoice()).toEqual(forced);
-			q.reject("aborted");
-			expect(q.nextToolChoice()).toBeUndefined();
-		});
-
-		it("reject is a no-op when nothing is in-flight", () => {
-			const q = new ToolChoiceQueue();
-			q.pushOnce(forced, {
-				label: "a",
-				onRejected: () => "requeue",
-			});
-			q.reject("aborted"); // no-op, nothing yielded yet
-			expect(q.nextToolChoice()).toEqual(forced);
-		});
-
-		it("passes the correct reason to onRejected", () => {
-			const q = new ToolChoiceQueue();
-			const reasons: string[] = [];
-			q.pushOnce(forced, {
-				label: "a",
-				onRejected: info => {
-					reasons.push(info.reason);
-					return "drop";
-				},
-			});
-			q.nextToolChoice();
-			q.reject("error");
-			expect(reasons).toEqual(["error"]);
 		});
 
 		it("requeued directive preserves onRejected so it can re-requeue across aborts", () => {

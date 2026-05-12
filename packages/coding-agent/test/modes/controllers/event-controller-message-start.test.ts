@@ -1,7 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { TextContent, UserMessage } from "@oh-my-pi/pi-ai";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
+import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { Container } from "@oh-my-pi/pi-tui";
+
+beforeAll(() => {
+	initTheme();
+});
 
 function createUserMessage(text: string): UserMessage {
 	return {
@@ -109,5 +117,90 @@ describe("EventController message_start (user role)", () => {
 		expect(addMessageToChat).not.toHaveBeenCalled();
 		expect(setText).not.toHaveBeenCalled();
 		expect(ctx.optimisticUserMessageSignature).toBeUndefined();
+	});
+});
+
+function createIrcMessage(timestamp: number): CustomMessage<{ from: string; message: string }> {
+	return {
+		role: "custom",
+		customType: "irc:incoming",
+		content: "Ready",
+		display: true,
+		details: { from: "0-Main", message: "Ready" },
+		timestamp,
+	};
+}
+
+function createIrcContext() {
+	const chatContainer = new Container();
+	const requestRender = vi.fn();
+	const ctx = {
+		isInitialized: true,
+		statusLine: { invalidate: vi.fn() },
+		updateEditorTopBorder: vi.fn(),
+		ui: { requestRender },
+		chatContainer,
+		session: {},
+	} as unknown as InteractiveModeContext;
+	const helpers = new UiHelpers(ctx);
+	const addMessageToChat: InteractiveModeContext["addMessageToChat"] = vi.fn((message, options) =>
+		helpers.addMessageToChat(message, options),
+	);
+	ctx.addMessageToChat = addMessageToChat;
+	return { ctx, chatContainer, requestRender, addMessageToChat };
+}
+
+describe("EventController IRC expiry", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
+	it("renders IRC messages immediately and removes their components after the TTL", async () => {
+		vi.useFakeTimers();
+		const message = createIrcMessage(1);
+		const { ctx, chatContainer, requestRender } = createIrcContext();
+		const controller = new EventController(ctx);
+
+		await controller.handleEvent({ type: "irc_message", message });
+
+		expect(chatContainer.children).toHaveLength(2);
+		expect(requestRender).toHaveBeenCalledTimes(1);
+
+		vi.advanceTimersByTime(9_999);
+		expect(chatContainer.children).toHaveLength(2);
+
+		vi.advanceTimersByTime(1);
+		expect(chatContainer.children).toHaveLength(0);
+		expect(requestRender).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not schedule duplicate expiry for duplicate IRC events", async () => {
+		vi.useFakeTimers();
+		const message = createIrcMessage(2);
+		const { ctx, chatContainer, addMessageToChat } = createIrcContext();
+		const controller = new EventController(ctx);
+
+		await controller.handleEvent({ type: "irc_message", message });
+		await controller.handleEvent({ type: "irc_message", message });
+
+		expect(addMessageToChat).toHaveBeenCalledTimes(1);
+		expect(chatContainer.children).toHaveLength(2);
+		vi.advanceTimersByTime(10_000);
+		expect(chatContainer.children).toHaveLength(0);
+	});
+
+	it("clears pending IRC expiry timers on dispose", async () => {
+		vi.useFakeTimers();
+		const message = createIrcMessage(3);
+		const { ctx, chatContainer, requestRender } = createIrcContext();
+		const controller = new EventController(ctx);
+
+		await controller.handleEvent({ type: "irc_message", message });
+		controller.dispose();
+		vi.advanceTimersByTime(10_000);
+
+		expect(chatContainer.children).toHaveLength(2);
+		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
 });

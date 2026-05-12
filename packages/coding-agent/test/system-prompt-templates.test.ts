@@ -226,7 +226,7 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain("call `search_tool_bm25` before concluding no such tool exists");
 	});
 
-	test("buildSystemPrompt keeps system project and now as separate ordered blocks", async () => {
+	test("buildSystemPrompt keeps system and project as separate ordered blocks with date context in project", async () => {
 		await withTempDir(async dir => {
 			const { systemPrompt } = await buildSystemPrompt({
 				cwd: dir,
@@ -243,14 +243,14 @@ describe("system Handlebars prompt templates", () => {
 				},
 			});
 
-			expect(systemPrompt).toHaveLength(3);
+			expect(systemPrompt).toHaveLength(2);
 			expect(systemPrompt[0]).toContain("[CONTRACT]");
 			expect(systemPrompt[0]).not.toContain("current working directory");
 			expect(systemPrompt[1]).toContain("<workstation>");
 			expect(systemPrompt[1]).toContain("<workspace-tree>");
-			expect(systemPrompt[1]).not.toContain("current working directory");
-			expect(systemPrompt[2]).toContain("Today is ");
-			expect(systemPrompt[2]).toContain(`current working directory is '${dir}'.`);
+			expect(systemPrompt[1]).toContain("Today is ");
+			expect(systemPrompt[1]).toContain(`current working directory is '${dir}'.`);
+			expect(systemPrompt[1].indexOf("</workspace-tree>")).toBeLessThan(systemPrompt[1].indexOf("Today is "));
 		});
 	});
 	test("buildSystemPrompt renders workspace tree after directory context in project prompt", async () => {

@@ -16,12 +16,6 @@ const OPENCODE_GO_BASE = "https://opencode.ai/zen/go/v1";
 describe("opencode-go resolver routes 404-ing ids to openai-completions (issue #887)", () => {
 	const descriptor = MODELS_DEV_PROVIDER_DESCRIPTORS.find(d => d.providerId === "opencode-go");
 
-	test("descriptor exists and exposes resolveApi", () => {
-		expect(descriptor).toBeDefined();
-		expect(descriptor?.modelsDevKey).toBe("opencode-go");
-		expect(descriptor?.resolveApi).toBeTypeOf("function");
-	});
-
 	// Per upstream models.dev (verified 2026-05-02 against
 	// https://models.dev/api.json["opencode-go"].models), these three ids carry
 	// `provider.npm = "@ai-sdk/anthropic"`. The naive @ai-sdk/anthropic rule

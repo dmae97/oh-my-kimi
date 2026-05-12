@@ -7,6 +7,7 @@ import { $envpos, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { computeLineHash, HL_BODY_SEP } from "../hashline/hash";
+import { InternalUrlRouter } from "../internal-urls";
 import type { Theme } from "../modes/theme/theme";
 import astEditDescription from "../prompts/tools/ast-edit.md" with { type: "text" };
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
@@ -213,10 +214,10 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			if (rawPaths.some(rawPath => rawPath.length === 0)) {
 				throw new ToolError("`paths` must contain non-empty paths or globs");
 			}
-			const internalRouter = this.session.internalRouter;
+			const internalRouter = InternalUrlRouter.instance();
 			const resolvedPathInputs: string[] = [];
 			for (const rawPath of rawPaths) {
-				if (!internalRouter?.canHandle(rawPath)) {
+				if (!internalRouter.canHandle(rawPath)) {
 					resolvedPathInputs.push(rawPath);
 					continue;
 				}

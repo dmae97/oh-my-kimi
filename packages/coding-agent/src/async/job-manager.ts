@@ -16,6 +16,13 @@ export interface AsyncJob {
 	promise: Promise<void>;
 	resultText?: string;
 	errorText?: string;
+	/**
+	 * Registry id of the agent that registered the job (e.g. "0-Main",
+	 * "3-AuthLoader"). Used by scoped cancel/list APIs so a subagent's teardown
+	 * does not cancel its parent's jobs. Undefined for callers that don't
+	 * supply an id (e.g. legacy tests, SDK consumers without an agent context).
+	 */
+	ownerId?: string;
 }
 
 export interface AsyncJobManagerOptions {
@@ -41,10 +48,38 @@ export interface AsyncJobDeliveryState {
 
 export interface AsyncJobRegisterOptions {
 	id?: string;
+	/** Registry id of the agent that owns this job; used to scope cancelAll. */
+	ownerId?: string;
 	onProgress?: (text: string, details?: Record<string, unknown>) => void | Promise<void>;
 }
 
+/**
+ * Filter applied to job query/cancel APIs. With `ownerId`, results are
+ * restricted to jobs registered by that agent (registry id from
+ * `AgentRegistry`, e.g. "0-Main", "3-AuthLoader").
+ */
+export interface AsyncJobFilter {
+	ownerId?: string;
+}
+
 export class AsyncJobManager {
+	static #instance: AsyncJobManager | undefined;
+
+	/** Process-global instance shared by internal URL protocol handlers and tools. */
+	static instance(): AsyncJobManager | undefined {
+		return AsyncJobManager.#instance;
+	}
+
+	/** Install or clear the process-global instance. */
+	static setInstance(value: AsyncJobManager | undefined): void {
+		AsyncJobManager.#instance = value;
+	}
+
+	/** Reset the process-global instance. Test-only. */
+	static resetForTests(): void {
+		AsyncJobManager.#instance = undefined;
+	}
+
 	readonly #jobs = new Map<string, AsyncJob>();
 	readonly #deliveries: AsyncJobDelivery[] = [];
 	readonly #suppressedDeliveries = new Set<string>();
@@ -55,6 +90,16 @@ export class AsyncJobManager {
 	readonly #retentionMs: number;
 	#deliveryLoop: Promise<void> | undefined;
 	#disposed = false;
+
+	#filterJobs(jobs: Iterable<AsyncJob>, filter?: AsyncJobFilter): AsyncJob[] {
+		const ownerId = filter?.ownerId;
+		if (!ownerId) return Array.from(jobs);
+		const out: AsyncJob[] = [];
+		for (const job of jobs) {
+			if (job.ownerId === ownerId) out.push(job);
+		}
+		return out;
+	}
 
 	constructor(options: AsyncJobManagerOptions) {
 		this.#onJobComplete = options.onJobComplete;
@@ -95,6 +140,7 @@ export class AsyncJobManager {
 			label,
 			abortController,
 			promise: Promise.resolve(),
+			ownerId: options?.ownerId,
 		};
 
 		const reportProgress = async (text: string, details?: Record<string, unknown>): Promise<void> => {
@@ -138,9 +184,15 @@ export class AsyncJobManager {
 		return id;
 	}
 
-	cancel(id: string): boolean {
+	/**
+	 * Cancel a single job by id. When `filter.ownerId` is set and does not
+	 * match the job's owner, the call is treated as not-found (returns false)
+	 * so cross-agent cancellation is rejected at the manager level.
+	 */
+	cancel(id: string, filter?: AsyncJobFilter): boolean {
 		const job = this.#jobs.get(id);
 		if (!job) return false;
+		if (filter?.ownerId && job.ownerId !== filter.ownerId) return false;
 		if (job.status !== "running") return false;
 		job.status = "cancelled";
 		job.abortController.abort();
@@ -152,19 +204,19 @@ export class AsyncJobManager {
 		return this.#jobs.get(id);
 	}
 
-	getRunningJobs(): AsyncJob[] {
-		return Array.from(this.#jobs.values()).filter(job => job.status === "running");
+	getRunningJobs(filter?: AsyncJobFilter): AsyncJob[] {
+		return this.#filterJobs(this.#jobs.values(), filter).filter(job => job.status === "running");
 	}
 
-	getRecentJobs(limit = 10): AsyncJob[] {
-		return Array.from(this.#jobs.values())
+	getRecentJobs(limit = 10, filter?: AsyncJobFilter): AsyncJob[] {
+		return this.#filterJobs(this.#jobs.values(), filter)
 			.filter(job => job.status !== "running")
 			.sort((a, b) => b.startTime - a.startTime)
 			.slice(0, limit);
 	}
 
-	getAllJobs(): AsyncJob[] {
-		return Array.from(this.#jobs.values());
+	getAllJobs(filter?: AsyncJobFilter): AsyncJob[] {
+		return this.#filterJobs(this.#jobs.values(), filter);
 	}
 
 	getDeliveryState(): AsyncJobDeliveryState {
@@ -221,8 +273,13 @@ export class AsyncJobManager {
 		return before - this.#deliveries.length;
 	}
 
-	cancelAll(): void {
-		for (const job of this.getRunningJobs()) {
+	/**
+	 * Cancel running jobs. With `filter.ownerId` set, cancels only jobs the
+	 * matching agent registered; with no filter, cancels every running job
+	 * (used by `dispose()` to nuke the manager's state).
+	 */
+	cancelAll(filter?: AsyncJobFilter): void {
+		for (const job of this.getRunningJobs(filter)) {
 			job.status = "cancelled";
 			job.abortController.abort();
 			this.#scheduleEviction(job.id);

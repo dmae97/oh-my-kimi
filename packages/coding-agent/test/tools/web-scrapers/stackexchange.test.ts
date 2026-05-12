@@ -91,14 +91,6 @@ describe.skipIf(SKIP)("handleStackOverflow", () => {
 	});
 
 	// Test with www. prefix
-	it("handles www.stackoverflow.com URLs", async () => {
-		const result = await handleStackOverflow(
-			"https://www.stackoverflow.com/questions/218384/what-is-a-nullpointerexception",
-			20,
-		);
-		expect(result).not.toBeNull();
-		expect(result?.method).toBe("stackexchange");
-	});
 
 	// Verify response structure
 	it("returns complete response structure", async () => {

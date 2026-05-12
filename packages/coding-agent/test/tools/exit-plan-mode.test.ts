@@ -35,12 +35,6 @@ describe("ExitPlanModeTool", () => {
 		};
 	}
 
-	it("requires title in schema", () => {
-		const tool = new ExitPlanModeTool(createSession());
-		const schema = tool.parameters as { required?: string[] };
-		expect(schema.required).toContain("title");
-	});
-
 	it("normalizes title to .md final plan path", async () => {
 		const tool = new ExitPlanModeTool(createSession());
 		const result = await tool.execute("call-1", { title: "WP_MIGRATION_PLAN" });

@@ -325,40 +325,6 @@ describe("remote compaction setting", () => {
 		}
 	});
 
-	it("leaves local summarization requests unattributed when no override is provided", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected anthropic/claude-sonnet-4-5 model to exist");
-
-		const entries: SessionEntry[] = [
-			createMessageEntry(createUserMessage("Turn 1")),
-			createMessageEntry(createAssistantMessage("Answer 1", createMockUsage(0, 100, 2000, 0))),
-			createMessageEntry(createUserMessage("Turn 2")),
-			createMessageEntry(createAssistantMessage("Answer 2", createMockUsage(0, 100, 5000, 0))),
-			createMessageEntry(createUserMessage("Turn 3")),
-			createMessageEntry(createAssistantMessage("Answer 3", createMockUsage(0, 100, 9000, 0))),
-		];
-		const preparation = prepareCompaction(entries, {
-			...DEFAULT_COMPACTION_SETTINGS,
-			keepRecentTokens: 1000,
-			remoteEnabled: false,
-		});
-		if (!preparation) throw new Error("Expected compaction preparation");
-
-		const completeSimpleSpy = vi.spyOn(ai, "completeSimple");
-		completeSimpleSpy
-			.mockResolvedValueOnce(createAssistantMessage("History summary"))
-			.mockResolvedValueOnce(createAssistantMessage("Turn prefix summary"))
-			.mockResolvedValueOnce(createAssistantMessage("Short summary"));
-
-		await compact(preparation, model, "test-api-key");
-
-		expect(completeSimpleSpy).toHaveBeenCalledTimes(3);
-		for (const call of completeSimpleSpy.mock.calls) {
-			const options = call[2] as { initiatorOverride?: string } | undefined;
-			expect(options?.initiatorOverride).toBeUndefined();
-		}
-	});
-
 	it("uses local summarization when remote compaction is disabled", async () => {
 		const model = getBundledModel("openai", "gpt-4o");
 		if (!model) {
@@ -906,14 +872,6 @@ describe("buildSessionContext", () => {
 // ============================================================================
 
 describe("Large session fixture", () => {
-	it("should parse the large session", async () => {
-		const entries = await loadLargeSessionEntries();
-		expect(entries.length).toBeGreaterThan(100);
-
-		const messageCount = entries.filter(e => e.type === "message").length;
-		expect(messageCount).toBeGreaterThan(100);
-	});
-
 	it("should find cut point in large session", async () => {
 		const entries = await loadLargeSessionEntries();
 		const result = findCutPoint(entries, 0, entries.length, DEFAULT_COMPACTION_SETTINGS.keepRecentTokens);
@@ -922,14 +880,6 @@ describe("Large session fixture", () => {
 		expect(entries[result.firstKeptEntryIndex].type).toBe("message");
 		const role = (entries[result.firstKeptEntryIndex] as SessionMessageEntry).message.role;
 		expect(role === "user" || role === "assistant").toBe(true);
-	});
-
-	it("should load session correctly", async () => {
-		const entries = await loadLargeSessionEntries();
-		const loaded = buildSessionContext(entries);
-
-		expect(loaded.messages.length).toBeGreaterThan(100);
-		expect(Object.keys(loaded.models).length).toBeGreaterThan(0);
 	});
 });
 

@@ -32,7 +32,7 @@ pub enum CommandPlan {
 	/// arguments), verbatim from the parsed AST.
 	Single { program: String },
 	/// The command contains at least one `|` pipeline. We intentionally do
-	/// NOT identify upstream / downstream programs here \u2014 any pipe defeats
+	/// NOT identify upstream / downstream programs here — any pipe defeats
 	/// safe minimization for this engine.
 	Piped,
 	/// The command has multiple segments joined by `&&`, `||`, `;`, or `&`.
@@ -84,7 +84,7 @@ fn classify(program: &Program) -> CommandPlan {
 	let CompoundListItem(and_or, separator) = items[0];
 
 	// Async separator (`&`) backgrounds the command; treat as compound since
-	// the parent shell's stdout is the foreground command's \u2014 we don't know
+	// the parent shell's stdout is the foreground command's — we don't know
 	// which one we're capturing. Conservative bail.
 	if matches!(separator, SeparatorOperator::Async) {
 		return CommandPlan::Compound;
