@@ -2438,6 +2438,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pi-iso"
+version = "14.9.8"
+dependencies = [
+ "async-trait",
+ "libc",
+ "parking_lot",
+ "similar 3.1.0",
+ "tokio",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "pi-natives"
 version = "14.9.8"
 dependencies = [
@@ -2464,6 +2476,7 @@ dependencies = [
  "parking_lot",
  "phf 0.13.1",
  "pi-ast",
+ "pi-iso",
  "pi-shell",
  "portable-pty",
  "rayon",
@@ -2480,7 +2493,6 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "webp",
- "windows-sys 0.61.2",
  "winreg 0.56.0",
  "xxhash-rust",
 ]

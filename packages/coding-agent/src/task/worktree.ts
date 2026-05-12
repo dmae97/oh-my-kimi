@@ -2,9 +2,8 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { projfsOverlayStart, projfsOverlayStop } from "@oh-my-pi/pi-natives";
-import { $which, getWorktreeDir, isEnoent, logger, Snowflake } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { IsoBackendKind, isoResolve, isoStart, isoStop } from "@oh-my-pi/pi-natives";
+import { getWorktreeDir, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import * as git from "../utils/git";
 
 /** Baseline state for a single git repository. */
@@ -36,26 +35,10 @@ export async function getRepoRoot(cwd: string): Promise<string> {
 	return repoRoot;
 }
 
-const PROJFS_UNAVAILABLE_PREFIX = "PROJFS_UNAVAILABLE:";
 const GIT_NO_INDEX_NULL_PATH = process.platform === "win32" ? "NUL" : "/dev/null";
-
-export function isProjfsUnavailableError(err: unknown): boolean {
-	return err instanceof Error && err.message.includes(PROJFS_UNAVAILABLE_PREFIX);
-}
 
 export function getGitNoIndexNullPath(): string {
 	return GIT_NO_INDEX_NULL_PATH;
-}
-
-export async function ensureWorktree(baseCwd: string, id: string): Promise<string> {
-	const repoRoot = await getRepoRoot(baseCwd);
-	const encodedProject = getEncodedProjectName(repoRoot);
-	const worktreeDir = getWorktreeDir(encodedProject, id);
-	await fs.mkdir(path.dirname(worktreeDir), { recursive: true });
-	await git.worktree.tryRemove(repoRoot, worktreeDir);
-	await fs.rm(worktreeDir, { recursive: true, force: true });
-	await git.worktree.add(repoRoot, worktreeDir, "HEAD", { detach: true });
-	return worktreeDir;
 }
 
 /** Find nested git repositories (non-submodule) under the given root. */
@@ -113,56 +96,6 @@ export async function captureBaseline(repoRoot: string): Promise<WorktreeBaselin
 		})),
 	);
 	return { root, nested };
-}
-
-async function applyRepoBaseline(worktreeDir: string, rb: RepoBaseline, sourceRoot: string): Promise<void> {
-	await git.patch.applyText(worktreeDir, rb.staged, { cached: true });
-	await git.patch.applyText(worktreeDir, rb.staged);
-	await git.patch.applyText(worktreeDir, rb.unstaged);
-
-	for (const entry of rb.untracked) {
-		const source = path.join(sourceRoot, entry);
-		const destination = path.join(worktreeDir, entry);
-		try {
-			await fs.mkdir(path.dirname(destination), { recursive: true });
-			await fs.cp(source, destination, { recursive: true });
-		} catch (err) {
-			if (isEnoent(err)) continue;
-			throw err;
-		}
-	}
-}
-
-export async function applyBaseline(worktreeDir: string, baseline: WorktreeBaseline): Promise<void> {
-	await applyRepoBaseline(worktreeDir, baseline.root, baseline.root.repoRoot);
-
-	// Restore nested repos into the worktree
-	for (const entry of baseline.nested) {
-		const nestedDir = path.join(worktreeDir, entry.relativePath);
-		// Copy the nested repo wholesale (it's not managed by root git)
-		const sourceDir = path.join(baseline.root.repoRoot, entry.relativePath);
-		try {
-			await fs.cp(sourceDir, nestedDir, { recursive: true });
-		} catch (err) {
-			if (isEnoent(err)) continue;
-			throw err;
-		}
-		// Apply any uncommitted changes from the nested baseline
-		await applyRepoBaseline(nestedDir, entry.baseline, entry.baseline.repoRoot);
-		// Commit baseline state so captureRepoDeltaPatch can cleanly subtract it.
-		// Without this, `git add -A && git commit` by the task would include
-		// baseline untracked files in the diff-tree output.
-		if ((await git.status(nestedDir)).trim().length > 0) {
-			await git.stage.files(nestedDir);
-			await git.commit(nestedDir, "omp-baseline", { allowEmpty: true });
-			// Update baseline to reflect the committed state — prevents double-apply
-			// in captureRepoDeltaPatch's temp-index path
-			entry.baseline.headCommit = (await git.head.sha(nestedDir)) ?? "";
-			entry.baseline.staged = "";
-			entry.baseline.unstaged = "";
-			entry.baseline.untracked = [];
-		}
-	}
 }
 
 async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline): Promise<string> {
@@ -318,119 +251,125 @@ export async function applyNestedPatches(
 	}
 }
 
-export async function cleanupWorktree(dir: string): Promise<void> {
-	try {
-		const repository = await git.repo.resolve(dir);
-		const commonDir = repository?.commonDir ?? "";
-		if (commonDir && path.basename(commonDir) === ".git") {
-			const repoRoot = path.dirname(commonDir);
-			await git.worktree.tryRemove(repoRoot, dir);
-		}
-	} finally {
-		await fs.rm(dir, { recursive: true, force: true });
+// ═══════════════════════════════════════════════════════════════════════════
+// Unified isolation lifecycle — picks the best backend via the PAL and
+// returns the merged-view path together with the resolved kind.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * User-facing isolation mode names exposed by the `task.isolation.mode`
+ * setting. Mapped to a backend-kind hint via {@link parseIsolationMode};
+ * the PAL's `iso_resolve` then falls back through the kind order
+ * whenever the hint isn't available on the current host.
+ */
+export type TaskIsolationMode =
+	| "none"
+	| "auto"
+	| "apfs"
+	| "btrfs"
+	| "zfs"
+	| "reflink"
+	| "overlayfs"
+	| "projfs"
+	| "block-clone"
+	| "rcopy"
+	// Legacy values, accepted for back-compat with pre-PAL settings files.
+	| "worktree"
+	| "fuse-overlay"
+	| "fuse-projfs";
+
+/**
+ * Translate a {@link TaskIsolationMode} string to an [`IsoBackendKind`]
+ * the PAL can act on. `"none"` returns `null` (caller skips isolation
+ * entirely); `"auto"` returns `undefined` (no hint — let the resolver
+ * pick). Anything else returns the matching kind.
+ */
+export function parseIsolationMode(mode: TaskIsolationMode): IsoBackendKind | undefined {
+	switch (mode) {
+		case "none":
+		case "auto":
+			return undefined;
+		case "apfs":
+			return IsoBackendKind.Apfs;
+		case "btrfs":
+			return IsoBackendKind.Btrfs;
+		case "zfs":
+			return IsoBackendKind.Zfs;
+		case "reflink":
+			return IsoBackendKind.LinuxReflink;
+		case "overlayfs":
+		case "fuse-overlay":
+			return IsoBackendKind.Overlayfs;
+		case "projfs":
+		case "fuse-projfs":
+			return IsoBackendKind.Projfs;
+		case "block-clone":
+			return IsoBackendKind.WindowsBlockClone;
+		case "rcopy":
+		case "worktree":
+			return IsoBackendKind.Rcopy;
 	}
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Fuse-overlay isolation (Unix)
-// ═══════════════════════════════════════════════════════════════════════════
+export interface IsolationHandle {
+	/** Merged view materialised by the backend; pass this to the task. */
+	mergedDir: string;
+	/** Backend the PAL actually used. */
+	backend: IsoBackendKind;
+	/** True when the resolver downgraded from `preferred` to `backend`. */
+	fellBack: boolean;
+	/** Optional reason associated with `fellBack`. */
+	fallbackReason: string | null;
+}
 
-export async function ensureFuseOverlay(baseCwd: string, id: string): Promise<string> {
-	if (process.platform === "win32") {
-		throw new Error('fuse-overlay isolation is unsupported on Windows. Use task.isolation.mode = "fuse-projfs".');
-	}
-
+/**
+ * Materialise `merged` for a single task. `preferred` is a hint — when
+ * its prerequisites are missing the PAL silently falls back, and the
+ * caller learns about that through `IsolationHandle.fellBack` +
+ * `fallbackReason`.
+ */
+export async function ensureIsolation(
+	baseCwd: string,
+	id: string,
+	preferred?: IsoBackendKind,
+): Promise<IsolationHandle> {
 	const repoRoot = await getRepoRoot(baseCwd);
 	const encodedProject = getEncodedProjectName(repoRoot);
 	const baseDir = getWorktreeDir(encodedProject, id);
-	const upperDir = path.join(baseDir, "upper");
-	const workDir = path.join(baseDir, "work");
 	const mergedDir = path.join(baseDir, "merged");
 
-	// Clean up any stale mount at this path (linux only)
-	const fusermount = $which("fusermount3") ?? $which("fusermount");
-	if (fusermount) {
-		await $`${fusermount} -u ${mergedDir}`.quiet().nothrow();
-	}
+	const resolution = isoResolve(preferred ?? null);
 
 	await fs.rm(baseDir, { recursive: true, force: true });
-	await fs.mkdir(upperDir, { recursive: true });
-	await fs.mkdir(workDir, { recursive: true });
-	await fs.mkdir(mergedDir, { recursive: true });
-
-	const binary = $which("fuse-overlayfs");
-	if (!binary) {
-		await fs.rm(baseDir, { recursive: true, force: true });
-		throw new Error(
-			"fuse-overlayfs not found. Install it (e.g. `apt install fuse-overlayfs` or `pacman -S fuse-overlayfs`) to use fuse-overlay isolation.",
-		);
-	}
-
-	const result = await $`${binary} -o lowerdir=${repoRoot},upperdir=${upperDir},workdir=${workDir} ${mergedDir}`
-		.quiet()
-		.nothrow();
-	if (result.exitCode !== 0) {
-		const stderr = result.stderr.toString().trim();
-		await fs.rm(baseDir, { recursive: true, force: true });
-		throw new Error(`fuse-overlayfs mount failed (exit ${result.exitCode}): ${stderr}`);
-	}
-
-	return mergedDir;
-}
-
-export async function cleanupFuseOverlay(mergedDir: string): Promise<void> {
 	try {
-		const fusermount = $which("fusermount3") ?? $which("fusermount");
-		if (fusermount) {
-			await $`${fusermount} -u ${mergedDir}`.quiet().nothrow();
-		}
-	} finally {
-		// baseDir is the parent of the merged directory
-		const baseDir = path.dirname(mergedDir);
-		await fs.rm(baseDir, { recursive: true, force: true });
-	}
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ProjFS isolation (Windows)
-// ═══════════════════════════════════════════════════════════════════════════
-
-export async function ensureProjfsOverlay(baseCwd: string, id: string): Promise<string> {
-	if (process.platform !== "win32") {
-		throw new Error("fuse-projfs isolation is only available on Windows.");
-	}
-
-	const repoRoot = await getRepoRoot(baseCwd);
-	const encodedProject = getEncodedProjectName(repoRoot);
-	const baseDir = getWorktreeDir(encodedProject, id);
-	const mergedDir = path.join(baseDir, "merged");
-
-	await fs.rm(baseDir, { recursive: true, force: true });
-	await fs.mkdir(mergedDir, { recursive: true });
-	try {
-		projfsOverlayStart(repoRoot, mergedDir);
-		return mergedDir;
+		await isoStart(resolution.kind, repoRoot, mergedDir);
+		return {
+			mergedDir,
+			backend: resolution.kind,
+			fellBack: resolution.fellBack,
+			fallbackReason: resolution.reason ?? null,
+		};
 	} catch (err) {
 		await fs.rm(baseDir, { recursive: true, force: true });
 		throw err;
 	}
 }
 
-export async function cleanupProjfsOverlay(mergedDir: string): Promise<void> {
+/** Tear down a handle returned by {@link ensureIsolation}. */
+export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 	try {
-		if (process.platform === "win32") {
-			try {
-				projfsOverlayStop(mergedDir);
-			} catch (err) {
-				logger.warn("ProjFS overlay stop failed during cleanup", {
-					mergedDir,
-					error: err instanceof Error ? err.message : String(err),
-				});
-			}
+		try {
+			await isoStop(handle.backend, handle.mergedDir);
+		} catch (err) {
+			logger.warn("isolation backend stop failed during cleanup", {
+				backend: handle.backend,
+				mergedDir: handle.mergedDir,
+				error: err instanceof Error ? err.message : String(err),
+			});
 		}
 	} finally {
 		// baseDir is the parent of the merged directory
-		const baseDir = path.dirname(mergedDir);
+		const baseDir = path.dirname(handle.mergedDir);
 		await fs.rm(baseDir, { recursive: true, force: true });
 	}
 }

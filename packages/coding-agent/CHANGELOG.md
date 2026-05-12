@@ -1,6 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added new `task.isolation.mode` values `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, and `rcopy` for native PAL-backed task isolation backends
+- Added automatic PAL-backed isolation backend selection so `task.isolation.mode` uses the host's best-available backend
+
+### Changed
+
+- Changed `task.isolation.enabled=true` migration to map to `task.isolation.mode = "auto"` instead of legacy `worktree` isolation
+- Updated isolation configuration UI labels and descriptions to expose new back-end names (`overlayfs`, `projfs`, etc.) and removed references to deprecated values in guidance text
+
+### Fixed
+
+- Mapped legacy `task.isolation.mode` values `worktree`, `fuse-overlay`, and `fuse-projfs` to their new equivalents during settings migration to preserve behavior with older configs
 
 ## [14.9.8] - 2026-05-12
 

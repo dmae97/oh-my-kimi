@@ -765,6 +765,108 @@ export declare enum ImageFormat {
  */
 export declare function invalidateFsScanCache(path?: string | undefined | null): void
 
+/** Kind enum of the backend selected by default for this build target. */
+export declare function isoBackend(): IsoBackendKind
+
+/**
+ * Isolation backend identifier. Numeric so the JS side can `switch` on
+ * the enum without string comparisons.
+ */
+export declare enum IsoBackendKind {
+  Apfs = 0,
+  Btrfs = 1,
+  Zfs = 2,
+  LinuxReflink = 3,
+  Overlayfs = 4,
+  WindowsBlockClone = 5,
+  Projfs = 6,
+  Rcopy = 7
+}
+
+/** How a single file changed between `lower` and `merged`. */
+export declare enum IsoChangeKind {
+  Added = 0,
+  Modified = 1,
+  Removed = 2
+}
+
+/**
+ * Capture the changes between `lower` and `merged`.
+ *
+ * Uses [`pi_iso::IsolationBackend::diff`]'s default implementation —
+ * `git diff` when `merged/.git` exists, otherwise a mtime-skipped tree
+ * walk. The backend selection only affects the lifecycle methods; diff
+ * behaviour is uniform.
+ */
+export declare function isoDiff(lower: string, merged: string): Promise<IsoDiff>
+
+export interface IsoDiff {
+  files: Array<IsoFileChange>
+}
+
+/** One entry in an [`IsoDiff`]. */
+export interface IsoFileChange {
+  /** Path relative to `merged`. */
+  path: string
+  op: IsoChangeKind
+  /**
+   * Unified-diff text. `None` (`null` in JS) means the file is binary;
+   * read it directly from `merged` if you need the bytes.
+   */
+  diff?: string
+}
+
+/**
+ * True if `message` is an error message produced by [`IsoError::Unavailable`].
+ * Use this to distinguish "this backend isn't installed" from a hard
+ * failure when handling caught errors on the JS side.
+ */
+export declare function isoIsUnavailableError(message: string): boolean
+
+/**
+ * Probe whether the requested backend can start on this host. Pass
+ * `null`/omit `kind` to probe the platform-native backend.
+ */
+export declare function isoProbe(kind?: IsoBackendKind | undefined | null): IsoProbeResult
+
+/** Probe result for a specific isolation backend. */
+export interface IsoProbeResult {
+  /** True when the backend's prerequisites are satisfied. */
+  available: boolean
+  /** Human-readable explanation when `available` is false. */
+  reason?: string
+  /** Resolved backend kind. */
+  kind: IsoBackendKind
+}
+
+/**
+ * Pick the best backend available right now. `preferred` is treated as
+ * a hint — see [`pi_iso::resolve`] for the exact priority rules.
+ */
+export declare function isoResolve(preferred?: IsoBackendKind | undefined | null): IsoResolveResult
+
+/** Outcome of [`iso_resolve`]. */
+export interface IsoResolveResult {
+  /** Backend that will actually be used. */
+  kind: IsoBackendKind
+  /**
+   * True when the resolver fell back from `preferred` (or from the
+   * platform native) to a different backend.
+   */
+  fellBack: boolean
+  /** Human-readable reason for the fallback, if any. */
+  reason?: string
+}
+
+/**
+ * Materialise `merged` as a writable view of `lower` using the requested
+ * backend. `kind` defaults to the native backend.
+ */
+export declare function isoStart(kind: IsoBackendKind | undefined | null, lower: string, merged: string): Promise<void>
+
+/** Tear down a previously started backend at `merged`. */
+export declare function isoStop(kind: IsoBackendKind | undefined | null, merged: string): Promise<void>
+
 /** Event types from Kitty keyboard protocol (flag 2). */
 export declare enum KeyEventType {
   /** Key press event. */
@@ -1006,32 +1108,6 @@ export interface ProcessWaitOptions {
   /** Abort signal for cancelling the wait. */
   signal?: unknown
 }
-
-/** Probe whether `ProjFS` overlay virtualization can be started on this system. */
-export declare function projfsOverlayProbe(): ProjfsOverlayProbeResult
-
-/**
- * Result of probing Windows Projected File System (`ProjFS`) support for
- * overlay workflows.
- */
-export interface ProjfsOverlayProbeResult {
-  /** True when `ProjFS` APIs are available and loaded. */
-  available: boolean
-  /**
-   * Human-readable reason when `available` is false (e.g. wrong OS or missing
-   * DLL).
-   */
-  reason?: string
-}
-
-/**
- * Start a `ProjFS` overlay: `projection_root` shows the merged view;
- * `lower_root` is the backing tree.
- */
-export declare function projfsOverlayStart(lowerRoot: string, projectionRoot: string): void
-
-/** Stop `ProjFS` virtualization for an active `projection_root` session. */
-export declare function projfsOverlayStop(projectionRoot: string): void
 
 /** Result of a PTY command run. */
 export interface PtyRunResult {

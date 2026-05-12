@@ -2,15 +2,27 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getGitNoIndexNullPath, isProjfsUnavailableError, mergeTaskBranches } from "../../src/task/worktree";
+import { getGitNoIndexNullPath, mergeTaskBranches } from "../../src/task/worktree";
 
-const projfsOverlayStartMock = vi.fn();
-const projfsOverlayStopMock = vi.fn();
+const isoStartMock = vi.fn();
+const isoStopMock = vi.fn();
+const isoIsUnavailableErrorMock = vi.fn(
+	(message: string) => typeof message === "string" && message.startsWith("ISO_UNAVAILABLE:"),
+);
 const tempDirs: string[] = [];
 
+// Numeric mirror of the napi-generated const-enum so the production code's
+// `IsoBackendKind.Overlayfs` references resolve without loading the addon.
+const IsoBackendKind = { Apfs: 0, Overlayfs: 1, Projfs: 2, Rcopy: 3 } as const;
+
 vi.mock("@oh-my-pi/pi-natives", () => ({
-	projfsOverlayStart: projfsOverlayStartMock,
-	projfsOverlayStop: projfsOverlayStopMock,
+	IsoBackendKind,
+	isoBackend: vi.fn(() => IsoBackendKind.Rcopy),
+	isoDiff: vi.fn(),
+	isoIsUnavailableError: isoIsUnavailableErrorMock,
+	isoProbe: vi.fn(() => ({ available: true, reason: null, kind: IsoBackendKind.Rcopy })),
+	isoStart: isoStartMock,
+	isoStop: isoStopMock,
 }));
 
 async function runGit(repo: string, args: string[]): Promise<string> {
@@ -56,12 +68,6 @@ describe("worktree isolation helpers", () => {
 	it("returns platform-specific null path for git --no-index diffs", () => {
 		const expected = process.platform === "win32" ? "NUL" : "/dev/null";
 		expect(getGitNoIndexNullPath()).toBe(expected);
-	});
-
-	it("detects ProjFS prerequisite errors by prefix", () => {
-		expect(isProjfsUnavailableError(new Error("PROJFS_UNAVAILABLE: missing feature"))).toBe(true);
-		expect(isProjfsUnavailableError(new Error("fuse-overlay mount failed"))).toBe(false);
-		expect(isProjfsUnavailableError("PROJFS_UNAVAILABLE: not-an-error-instance")).toBe(false);
 	});
 
 	it("does not pop an unrelated pre-existing stash when the working tree is clean", async () => {

@@ -1,58 +1,105 @@
-//! Windows ProjFS-backed overlay lifecycle for task isolation.
+//! Windows Projected File System backend.
+//!
+//! Ported from the original `pi_natives::projfs_overlay`; the napi-derived
+//! types and the `Result<()>` alias from `napi::bindgen_prelude` are
+//! replaced with the platform-neutral [`crate::IsoError`] /
+//! [`crate::ProbeResult`].
 
-use napi::bindgen_prelude::*;
-use napi_derive::napi;
+use std::path::Path;
 
-const PROJFS_UNAVAILABLE_PREFIX: &str = "PROJFS_UNAVAILABLE:";
-
-/// Result of probing Windows Projected File System (`ProjFS`) support for
-/// overlay workflows.
-#[napi(object)]
-pub struct ProjfsOverlayProbeResult {
-	/// True when `ProjFS` APIs are available and loaded.
-	pub available: bool,
-	/// Human-readable reason when `available` is false (e.g. wrong OS or missing
-	/// DLL).
-	pub reason:    Option<String>,
-}
-
-/// Probe whether `ProjFS` overlay virtualization can be started on this system.
-#[napi]
-pub fn projfs_overlay_probe() -> ProjfsOverlayProbeResult {
-	imp::probe()
-}
-
-/// Start a `ProjFS` overlay: `projection_root` shows the merged view;
-/// `lower_root` is the backing tree.
-#[napi]
-pub fn projfs_overlay_start(lower_root: String, projection_root: String) -> Result<()> {
-	imp::start(&lower_root, &projection_root)
-}
-
-/// Stop `ProjFS` virtualization for an active `projection_root` session.
-#[napi]
-pub fn projfs_overlay_stop(projection_root: String) -> Result<()> {
-	imp::stop(&projection_root);
-	Ok(())
-}
+use async_trait::async_trait;
 
 #[cfg(not(windows))]
-mod imp {
-	use napi::bindgen_prelude::*;
+use crate::IsoError;
+use crate::{BackendKind, IsoResult, IsolationBackend, ProbeResult};
 
-	use super::{PROJFS_UNAVAILABLE_PREFIX, ProjfsOverlayProbeResult};
+pub struct ProjfsBackend;
 
-	const UNSUPPORTED_REASON: &str = "Windows ProjFS is unavailable on this platform";
+pub fn backend() -> &'static dyn IsolationBackend {
+	&ProjfsBackend
+}
 
-	pub fn probe() -> ProjfsOverlayProbeResult {
-		ProjfsOverlayProbeResult { available: false, reason: Some(UNSUPPORTED_REASON.to_string()) }
+#[async_trait]
+impl IsolationBackend for ProjfsBackend {
+	fn kind(&self) -> BackendKind {
+		BackendKind::Projfs
 	}
 
-	pub fn start(_lower_root: &str, _projection_root: &str) -> Result<()> {
-		Err(Error::from_reason(format!("{PROJFS_UNAVAILABLE_PREFIX} {UNSUPPORTED_REASON}")))
+	fn probe(&self) -> ProbeResult {
+		#[cfg(windows)]
+		{
+			// ProjFS's native bindings misbehave when the process is x64
+			// running under Windows ARM64 emulation — `LoadLibrary` succeeds
+			// but the callbacks crash on first invocation. Refuse early so
+			// `resolve()` falls back to a different backend instead of
+			// surfacing a hard crash to the caller.
+			if x64_under_arm64_emulation() {
+				return ProbeResult::unavailable(
+					"ProjFS is disabled on Windows ARM64 under x64 emulation (use a native ARM64 build)",
+				);
+			}
+			imp::probe()
+		}
+		#[cfg(not(windows))]
+		{
+			ProbeResult::unavailable("ProjFS isolation is only available on Windows")
+		}
 	}
 
-	pub const fn stop(_projection_root: &str) {}
+	fn start(&self, lower: &Path, merged: &Path) -> IsoResult<()> {
+		#[cfg(windows)]
+		{
+			imp::start(&lower.to_string_lossy(), &merged.to_string_lossy())
+		}
+		#[cfg(not(windows))]
+		{
+			let _ = (lower, merged);
+			Err(IsoError::unavailable("ProjFS isolation is only available on Windows"))
+		}
+	}
+
+	fn stop(&self, merged: &Path) -> IsoResult<()> {
+		#[cfg(windows)]
+		{
+			imp::stop(&merged.to_string_lossy());
+			Ok(())
+		}
+		#[cfg(not(windows))]
+		{
+			let _ = merged;
+			Ok(())
+		}
+	}
+}
+
+/// `true` when the current process is x64 running under Windows ARM64
+/// emulation (WOW64-on-ARM64). Detected by the `PROCESSOR_ARCHITEW6432`
+/// environment variable Windows sets in WOW64 children, plus the legacy
+/// `PROCESSOR_ARCHITECTURE` slot for completeness. Off Windows the
+/// answer is always `false`.
+#[cfg_attr(not(windows), allow(dead_code, reason = "windows-only ARM64 emulation guard"))]
+fn x64_under_arm64_emulation() -> bool {
+	if !cfg!(windows) || !cfg!(target_arch = "x86_64") {
+		return false;
+	}
+	let matches_arm64 = |var: &str| {
+		std::env::var(var)
+			.ok()
+			.is_some_and(|v| v.eq_ignore_ascii_case("ARM64"))
+	};
+	matches_arm64("PROCESSOR_ARCHITEW6432") || matches_arm64("PROCESSOR_ARCHITECTURE")
+}
+
+#[cfg(test)]
+mod tests {
+	use super::x64_under_arm64_emulation;
+
+	#[test]
+	fn returns_false_off_windows_or_non_x64() {
+		// Sanity: just calling it shouldn't panic. The result depends on
+		// build target + ambient env vars, both of which are stable in CI.
+		let _ = x64_under_arm64_emulation();
+	}
 }
 
 #[cfg(windows)]
@@ -76,7 +123,6 @@ mod imp {
 		sync::{Arc, LazyLock},
 	};
 
-	use napi::bindgen_prelude::*;
 	use parking_lot::Mutex;
 	use windows_sys::{
 		Win32::{
@@ -104,7 +150,7 @@ mod imp {
 		core::{GUID, HRESULT, PCSTR, PCWSTR},
 	};
 
-	use super::{PROJFS_UNAVAILABLE_PREFIX, ProjfsOverlayProbeResult};
+	use crate::{IsoError, IsoResult, ProbeResult};
 
 	const EMPTY_WIDE: [u16; 1] = [0];
 	const MAX_READ_CHUNK: usize = 1024 * 1024;
@@ -263,14 +309,14 @@ mod imp {
 	static PROJFS_SESSIONS: LazyLock<Mutex<BTreeMap<String, ProjfsSessionState>>> =
 		LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
-	pub fn probe() -> ProjfsOverlayProbeResult {
+	pub fn probe() -> ProbeResult {
 		match ProjfsApi::load() {
-			Ok(_) => ProjfsOverlayProbeResult { available: true, reason: None },
-			Err(reason) => ProjfsOverlayProbeResult { available: false, reason: Some(reason) },
+			Ok(_) => ProbeResult { available: true, reason: None },
+			Err(reason) => ProbeResult { available: false, reason: Some(reason) },
 		}
 	}
 
-	pub fn start(lower_root: &str, projection_root: &str) -> Result<()> {
+	pub fn start(lower_root: &str, projection_root: &str) -> IsoResult<()> {
 		let api = Arc::new(ProjfsApi::load().map_err(unavailable_error)?);
 		let lower_root_path = resolve_existing_dir(lower_root)?;
 		let projection_root_path = resolve_projection_root(projection_root)?;
@@ -279,7 +325,7 @@ mod imp {
 		{
 			let mut sessions = PROJFS_SESSIONS.lock();
 			if sessions.contains_key(&projection_key) {
-				return Err(Error::from_reason(format!(
+				return Err(IsoError::other(format!(
 					"ProjFS overlay is already active for {}",
 					projection_root_path.display()
 				)));
@@ -291,7 +337,7 @@ mod imp {
 		let guid_hr = unsafe { CoCreateGuid(&raw mut instance_id) };
 		if is_failed(guid_hr) {
 			PROJFS_SESSIONS.lock().remove(&projection_key);
-			return Err(Error::from_reason(format!(
+			return Err(IsoError::other(format!(
 				"Unable to create ProjFS instance identifier ({})",
 				format_hresult(guid_hr)
 			)));
@@ -378,7 +424,7 @@ mod imp {
 			}
 		};
 		stop_projfs_session(started_session);
-		Err(Error::from_reason(error_message))
+		Err(IsoError::other(error_message))
 	}
 
 	pub fn stop(projection_root: &str) {
@@ -721,13 +767,13 @@ mod imp {
 		}
 	}
 
-	fn resolve_existing_dir(path: &str) -> Result<PathBuf> {
+	fn resolve_existing_dir(path: &str) -> crate::IsoResult<PathBuf> {
 		let resolved = resolve_absolute_path(Path::new(path));
 		let metadata = fs::metadata(&resolved).map_err(|err| {
-			Error::from_reason(format!("Invalid ProjFS lower root {}: {err}", resolved.display()))
+			IsoError::other(format!("Invalid ProjFS lower root {}: {err}", resolved.display()))
 		})?;
 		if !metadata.is_dir() {
-			return Err(Error::from_reason(format!(
+			return Err(IsoError::other(format!(
 				"Invalid ProjFS lower root {}: path is not a directory",
 				resolved.display()
 			)));
@@ -735,22 +781,22 @@ mod imp {
 		Ok(fs::canonicalize(&resolved).unwrap_or(resolved))
 	}
 
-	fn resolve_projection_root(path: &str) -> Result<PathBuf> {
+	fn resolve_projection_root(path: &str) -> crate::IsoResult<PathBuf> {
 		let resolved = resolve_absolute_path(Path::new(path));
 		fs::create_dir_all(&resolved).map_err(|err| {
-			Error::from_reason(format!(
+			IsoError::other(format!(
 				"Unable to create ProjFS projection root {}: {err}",
 				resolved.display()
 			))
 		})?;
 		let metadata = fs::metadata(&resolved).map_err(|err| {
-			Error::from_reason(format!(
+			IsoError::other(format!(
 				"Unable to access ProjFS projection root {}: {err}",
 				resolved.display()
 			))
 		})?;
 		if !metadata.is_dir() {
-			return Err(Error::from_reason(format!(
+			return Err(IsoError::other(format!(
 				"Invalid ProjFS projection root {}: path is not a directory",
 				resolved.display()
 			)));
@@ -776,16 +822,16 @@ mod imp {
 		encoded
 	}
 
-	fn unavailable_error(reason: String) -> Error {
-		Error::from_reason(format!("{PROJFS_UNAVAILABLE_PREFIX} {reason}"))
+	fn unavailable_error(reason: String) -> IsoError {
+		IsoError::unavailable(reason)
 	}
 
-	fn classify_start_error(phase: &str, hr: HRESULT) -> Error {
+	fn classify_start_error(phase: &str, hr: HRESULT) -> IsoError {
 		let detail = format!("ProjFS {phase} failed ({})", format_hresult(hr));
 		if is_unavailable_hresult(hr) {
 			return unavailable_error(detail);
 		}
-		Error::from_reason(detail)
+		IsoError::other(detail)
 	}
 
 	const fn is_unavailable_hresult(hr: HRESULT) -> bool {

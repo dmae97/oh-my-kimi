@@ -1,6 +1,18 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Removed `projfsOverlayProbe`, `projfsOverlayStart`, and `projfsOverlayStop` overlays APIs and `ProjfsOverlayProbeResult` type from the public natives interface
+
+### Added
+
+- Added unified isolation APIs `isoBackend`, `isoProbe`, `isoResolve`, `isoStart`, `isoStop`, `isoDiff`, and `isoIsUnavailableError` for selecting, probing, resolving, starting, stopping, and diffing isolated filesystems
+- Added `IsoBackendKind`, `IsoChangeKind`, `IsoDiff`, `IsoFileChange`, `IsoProbeResult`, and `IsoResolveResult` type exports to describe isolation backend capabilities and diff outcomes
+
+### Changed
+
+- Changed `native` exports to remove the platform-specific ProjFS-only overlay surface in favor of generic isolation controls
 
 ## [14.9.5] - 2026-05-12
 

@@ -36,7 +36,6 @@ import { generateCommitMessage } from "../utils/commit-message-generator";
 import * as git from "../utils/git";
 import { discoverAgents, getAgent } from "./discovery";
 import { runSubprocess } from "./executor";
-import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { renderResult, renderCall as renderTaskCall } from "./render";
@@ -50,20 +49,17 @@ import {
 	type TaskToolDetails,
 } from "./types";
 import {
-	applyBaseline,
 	applyNestedPatches,
 	captureBaseline,
 	captureDeltaPatch,
-	cleanupFuseOverlay,
-	cleanupProjfsOverlay,
+	cleanupIsolation,
 	cleanupTaskBranches,
-	cleanupWorktree,
 	commitToBranch,
-	ensureFuseOverlay,
-	ensureProjfsOverlay,
-	ensureWorktree,
+	ensureIsolation,
 	getRepoRoot,
+	type IsolationHandle,
 	mergeTaskBranches,
+	parseIsolationMode,
 	type WorktreeBaseline,
 } from "./worktree";
 
@@ -530,7 +526,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 				content: [
 					{
 						type: "text",
-						text: "Task isolation is disabled. Remove the isolated argument or set task.isolation.mode to 'worktree', 'fuse-overlay', or 'fuse-projfs'.",
+						text: "Task isolation is disabled.",
 					},
 				],
 				details: {
@@ -700,28 +696,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 			}
 		}
 
-		let effectiveIsolationMode = isolationMode;
-		let isolationBackendWarning = "";
-		try {
-			const resolvedIsolation = await resolveIsolationBackendForTaskExecution(isolationMode, isIsolated, repoRoot);
-			effectiveIsolationMode = resolvedIsolation.effectiveIsolationMode;
-			isolationBackendWarning = resolvedIsolation.warning;
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			return {
-				content: [
-					{
-						type: "text",
-						text: message,
-					},
-				],
-				details: {
-					projectAgentsDir,
-					results: [],
-					totalDurationMs: Date.now() - startTime,
-				},
-			};
-		}
+		const preferredIsolationBackend = parseIsolationMode(isolationMode);
 
 		// Derive artifacts directory
 		const sessionFile = this.session.getSessionFile();
@@ -891,21 +866,15 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 				}
 
 				const taskStart = Date.now();
-				let isolationDir: string | undefined;
+				let isolationHandle: IsolationHandle | undefined;
 				try {
 					if (!repoRoot || !baseline) {
 						throw new Error("Isolated task execution not initialized.");
 					}
 					const taskBaseline = structuredClone(baseline);
 
-					if (effectiveIsolationMode === "fuse-overlay") {
-						isolationDir = await ensureFuseOverlay(repoRoot, task.id);
-					} else if (effectiveIsolationMode === "fuse-projfs") {
-						isolationDir = await ensureProjfsOverlay(repoRoot, task.id);
-					} else {
-						isolationDir = await ensureWorktree(repoRoot, task.id);
-						await applyBaseline(isolationDir, taskBaseline);
-					}
+					isolationHandle = await ensureIsolation(repoRoot, task.id, preferredIsolationBackend);
+					const isolationDir = isolationHandle.mergedDir;
 
 					const result = await runSubprocess({
 						cwd: this.session.cwd,
@@ -1017,14 +986,8 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						error: message,
 					};
 				} finally {
-					if (isolationDir) {
-						if (effectiveIsolationMode === "fuse-overlay") {
-							await cleanupFuseOverlay(isolationDir);
-						} else if (effectiveIsolationMode === "fuse-projfs") {
-							await cleanupProjfsOverlay(isolationDir);
-						} else {
-							await cleanupWorktree(isolationDir);
-						}
+					if (isolationHandle) {
+						await cleanupIsolation(isolationHandle);
 					}
 				}
 			};
@@ -1256,7 +1219,6 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 			});
 
 			const outputIds = results.filter(r => !r.aborted || r.output.trim()).map(r => `agent://${r.id}`);
-			const backendSummaryPrefix = isolationBackendWarning ? `\n\n${isolationBackendWarning}` : "";
 			const summary = prompt.render(taskSummaryTemplate, {
 				successCount,
 				totalCount: results.length,
@@ -1266,7 +1228,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 				summaries,
 				outputIds,
 				agentName,
-				mergeSummary: `${backendSummaryPrefix}${mergeSummary}`,
+				mergeSummary,
 			});
 
 			// Cleanup temp directory if used

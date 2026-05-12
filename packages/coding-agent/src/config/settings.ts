@@ -598,9 +598,26 @@ export class Settings {
 		const isolationObj = taskObj?.isolation as Record<string, unknown> | undefined;
 		if (isolationObj && "enabled" in isolationObj) {
 			if (typeof isolationObj.enabled === "boolean") {
-				isolationObj.mode = isolationObj.enabled ? "worktree" : "none";
+				isolationObj.mode = isolationObj.enabled ? "auto" : "none";
 			}
 			delete isolationObj.enabled;
+		}
+
+		// task.isolation.mode: legacy values from before the pi-iso PAL refactor.
+		// `worktree` was git worktree → now lives under `rcopy`. `fuse-overlay`
+		// and `fuse-projfs` are now the platform-named `overlayfs` / `projfs`
+		// kinds; the PAL falls back internally when the chosen one isn't
+		// available, so we don't need the old TS-side platform guards.
+		if (isolationObj && typeof isolationObj.mode === "string") {
+			const legacy: Record<string, string> = {
+				worktree: "rcopy",
+				"fuse-overlay": "overlayfs",
+				"fuse-projfs": "projfs",
+			};
+			const mapped = legacy[isolationObj.mode as string];
+			if (mapped !== undefined) {
+				isolationObj.mode = mapped;
+			}
 		}
 
 		// edit.mode: removed "atom" variant is now "hashline"
