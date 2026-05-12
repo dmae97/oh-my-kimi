@@ -60,7 +60,6 @@ With most FS/bash-like tools, static references to them will automatically resol
    - `/<path>`: JSON field extraction
 - `artifact://<id>`: Artifact content
 - `local://<name>.md`: Plan artifacts and shared content with subagents
-- `jobs://<id>`: Job status and result
 - `mcp://<uri>`: MCP resource
 - `pi://`: Harness documentation; do **NOT** read unless user mentions the harness itself
 

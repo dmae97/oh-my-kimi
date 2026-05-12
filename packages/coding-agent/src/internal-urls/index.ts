@@ -10,7 +10,6 @@
 
 export * from "./agent-protocol";
 export * from "./artifact-protocol";
-export * from "./jobs-protocol";
 export * from "./json-query";
 export * from "./local-protocol";
 export * from "./mcp-protocol";

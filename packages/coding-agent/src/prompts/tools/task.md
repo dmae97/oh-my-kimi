@@ -3,7 +3,7 @@ Launches subagents to parallelize workflows.
 {{#if asyncEnabled}}
 - Results are delivered automatically when complete.
 - If genuinely blocked on task completion, wait with `job` using `poll`; otherwise continue with another task when possible.
-- You can also read the `jobs://` URI for manager state and `jobs://<id>` for detail only when inspection is useful.
+- Call `job` with `list: true` to snapshot manager state; pass `poll: [id]` to wait or `cancel: [id]` to stop \u2014 only when inspection or intervention is useful.
 {{/if}}
 
 {{#if ircEnabled}}

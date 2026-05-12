@@ -2,10 +2,16 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed the `jobs://` internal URL protocol; inspect background jobs via the `job` tool's `list: true` operation instead
+
 ### Added
 
 - Added owner-based scoping to async job registration and queries so background jobs can be registered with an `ownerId` and filtered per agent in `getRunningJobs`, `getRecentJobs`, `getAllJobs`, and `cancelAll`
 - Added agent ownership metadata to async jobs started by `task` and `bash` tools so their lifecycle and cancellation is attributed to the creating agent
+- Added `list: true` operation to the `job` tool, returning an immediate snapshot of every job spawned by the calling agent without waiting (replaces the deleted `jobs://` URL)
+- Added per-agent visibility scoping to the `job` tool so `list`, `poll`, and `cancel` only see and act on jobs owned by the calling agent; cross-agent operations now return `not_found`
 
 ### Changed
 
@@ -14,8 +20,8 @@
 - Changed subagent session switches and handoff paths to stop global async-job cancellation and cancel only jobs owned by that session
 - Changed `agent://` and `artifact://` URL resolution to search artifact outputs across all active sessions instead of only the current session, allowing parent and subagent sessions to read each other’s generated outputs by ID
 - Changed `memory://` URL resolution to walk all active sessions’ memory roots and return the first matching file, so worktree-based subagents can access their own memory views as well as shared roots
-- Changed internal URL routing to use a shared process-global `InternalUrlRouter` and protocol handlers, so built-in tools resolve `agent://`, `artifact://`, `memory://`, `skill://`, `rule://`, `mcp://`, `local://`, and `jobs://` URLs without requiring session-specific router wiring
-- Changed `jobs://` and `mcp://` handlers to use globally registered async-job and MCP managers so background-job and MCP resource links work for agents sharing session context
+- Changed internal URL routing to use a shared process-global `InternalUrlRouter` and protocol handlers, so built-in tools resolve `agent://`, `artifact://`, `memory://`, `skill://`, `rule://`, `mcp://`, and `local://` URLs without requiring session-specific router wiring
+- Changed `mcp://` handler to use the globally registered MCP manager so MCP resource links work for agents sharing session context
 
 ### Fixed
 

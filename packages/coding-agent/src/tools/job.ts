@@ -3,7 +3,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { AsyncJobManager, isBackgroundJobSupportEnabled } from "../async";
+import { type AsyncJob, AsyncJobManager, isBackgroundJobSupportEnabled } from "../async";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import jobDescription from "../prompts/tools/job.md" with { type: "text" };
@@ -20,6 +20,7 @@ import {
 	type ToolUIColor,
 	type ToolUIStatus,
 } from "./render-utils";
+import { ToolError } from "./tool-errors";
 
 const jobSchema = Type.Object({
 	poll: Type.Optional(
@@ -32,6 +33,12 @@ const jobSchema = Type.Object({
 		Type.Array(Type.String(), {
 			description: "background job ids to cancel",
 			examples: [["job-1234"]],
+		}),
+	),
+	list: Type.Optional(
+		Type.Boolean({
+			description:
+				"Return an immediate snapshot of every job spawned by this agent (running + completed within retention). Read-only \u2014 cannot be combined with `poll` or `cancel`.",
 		}),
 	),
 });
@@ -105,11 +112,24 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 			};
 		}
 
+		// Scope every visible operation to the calling agent. Tests / SDK
+		// consumers without an agent id see everything (legacy behavior).
+		const ownerId = this.session.getAgentId?.() ?? undefined;
+		const ownerFilter = ownerId ? { ownerId } : undefined;
+
+		// `list` is a read-only snapshot mode. Replaces the legacy `jobs://` URL.
+		if (params.list) {
+			if (params.cancel?.length || params.poll?.length) {
+				throw new ToolError("`list` cannot be combined with `poll` or `cancel`.");
+			}
+			return this.#buildResult(manager, manager.getAllJobs(ownerFilter), []);
+		}
+
 		const cancelIds = params.cancel ?? [];
 		const cancelOutcomes: CancelOutcome[] = [];
 		for (const id of cancelIds) {
 			const existing = manager.getJob(id);
-			if (!existing) {
+			if (!existing || (ownerId && existing.ownerId !== ownerId)) {
 				cancelOutcomes.push({ id, status: "not_found", message: `Background job not found: ${id}` });
 				continue;
 			}
@@ -121,7 +141,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 				});
 				continue;
 			}
-			const cancelled = manager.cancel(id);
+			const cancelled = manager.cancel(id, ownerFilter);
 			cancelOutcomes.push(
 				cancelled
 					? { id, status: "cancelled", message: `Cancelled background job ${id}.` }
@@ -130,11 +150,11 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		}
 
 		const requestedPollIds = params.poll;
-		// If only `cancel` was provided (no `poll`), don't wait — return immediately.
+		// If only `cancel` was provided (no `poll`), don't wait \u2014 return immediately.
 		const shouldPoll = requestedPollIds !== undefined || cancelIds.length === 0;
 
 		if (!shouldPoll) {
-			const cancelledJobs = cancelIds.map(id => manager.getJob(id)).filter(j => j != null);
+			const cancelledJobs = this.#visibleJobs(manager, cancelIds, ownerId);
 			return this.#buildResult(manager, cancelledJobs, cancelOutcomes);
 		}
 
@@ -142,12 +162,12 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		// - If `poll` was passed explicitly, watch exactly those (filtered to existing).
 		// - If `poll` was omitted (and so was `cancel`), default to all running jobs.
 		const jobsToWatch = requestedPollIds
-			? requestedPollIds.map(id => manager.getJob(id)).filter(j => j != null)
-			: manager.getRunningJobs();
+			? this.#visibleJobs(manager, requestedPollIds, ownerId)
+			: manager.getRunningJobs(ownerFilter);
 
 		if (jobsToWatch.length === 0) {
 			if (cancelOutcomes.length > 0) {
-				const cancelledJobs = cancelIds.map(id => manager.getJob(id)).filter(j => j != null);
+				const cancelledJobs = this.#visibleJobs(manager, cancelIds, ownerId);
 				return this.#buildResult(manager, cancelledJobs, cancelOutcomes);
 			}
 			const message = requestedPollIds?.length
@@ -176,7 +196,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		const watchedJobIds = runningJobs.map(job => job.id);
 		manager.watchJobs(watchedJobIds);
 
-		const cancelledJobs = cancelIds.map(id => manager.getJob(id)).filter(j => j != null);
+		const cancelledJobs = this.#visibleJobs(manager, cancelIds, ownerId);
 		const allTrackedJobs = [...cancelledJobs, ...jobsToWatch];
 
 		const PROGRESS_INTERVAL_MS = 500;
@@ -217,6 +237,22 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		}
 
 		return this.#buildResult(manager, allTrackedJobs, cancelOutcomes);
+	}
+
+	/**
+	 * Resolve a list of job ids to job records visible to the calling agent.
+	 * Drops missing ids and ids owned by other agents, so cross-agent inspection
+	 * via the `job` tool is impossible.
+	 */
+	#visibleJobs(manager: AsyncJobManager, ids: string[], ownerId: string | undefined): AsyncJob[] {
+		const out: AsyncJob[] = [];
+		for (const id of ids) {
+			const job = manager.getJob(id);
+			if (!job) continue;
+			if (ownerId && job.ownerId !== ownerId) continue;
+			out.push(job);
+		}
+		return out;
 	}
 
 	#snapshotJobs(
