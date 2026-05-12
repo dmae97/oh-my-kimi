@@ -18,6 +18,7 @@ The `read` tool is multi-purpose and more capable than it looks — inspects fil
 |`:50+150`|Read 150 lines starting at line 50|
 |`:20+1`|Read exactly one line|
 |`:raw`|Read verbatim text without anchors or summarization|
+|`:conflicts`|Return a one-line-per-block index of every merge conflict in the file|
 
 # Filesystem
 - Reading a directory path returns a list of dirents.

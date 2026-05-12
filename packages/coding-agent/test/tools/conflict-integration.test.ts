@@ -101,7 +101,9 @@ describe("read surfaces conflicts as a warning footer", () => {
 		expect(text).toContain("──── #1  L2-6 ────");
 		expect(text).toContain("<<< ours");
 		expect(text).toContain(">>> theirs");
-		expect(text).toContain('NOTICE: Resolve each via `write({ path: "conflict://<N>", content })`');
+		expect(text).toContain("NOTICE: Inspect a block with `read conflict://<N>`");
+		expect(text).toContain('`write({ path: "conflict://<N>", content })`');
+		expect(text).toContain('`write({ path: "conflict://*", content })`');
 		expect(text).toContain("@ours");
 		// Registered on session.
 		const history = session.conflictHistory;
@@ -226,6 +228,66 @@ describe("read surfaces conflicts as a warning footer", () => {
 		const read = await getTool(session, "read");
 		const promise = read.execute("read-missing", { path: "conflict://99" });
 		await expect(promise).rejects.toThrow(/Conflict #99 not found/);
+	});
+
+	it("rejects `read conflict://*` (wildcard is write-only)", async () => {
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const promise = read.execute("read-wildcard", { path: "conflict://*" });
+		await expect(promise).rejects.toThrow(/wildcards are write-only/);
+	});
+
+	it("`read <path>:conflicts` lists every conflict in the file with stable ids", async () => {
+		const filePath = path.join(tempDir, "many.ts");
+		await Bun.write(filePath, TWO_BLOCKS);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+
+		const result = await read.execute("read-conflicts", { path: "many.ts:conflicts" });
+		const text = getText(result);
+		expect(text).toContain("2 unresolved conflicts in many.ts");
+		expect(text).toMatch(/#1\s+L1-5/);
+		expect(text).toMatch(/#2\s+L7-11/);
+		// No file body in summary mode.
+		expect(text).not.toContain("a-ours");
+		// Conflicts are registered for follow-up read/write.
+		expect(session.conflictHistory?.get(1)).toBeDefined();
+		expect(session.conflictHistory?.get(2)).toBeDefined();
+	});
+
+	it("`:conflicts` marks 3-way blocks distinctly", async () => {
+		const filePath = path.join(tempDir, "diff3.ts");
+		await Bun.write(filePath, THREE_WAY);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+
+		const result = await read.execute("read-diff3", { path: "diff3.ts:conflicts" });
+		const text = getText(result);
+		expect(text).toMatch(/#1\s+L2-8.*3-way/);
+	});
+
+	it("`:conflicts` on a clean file says so explicitly", async () => {
+		const filePath = path.join(tempDir, "clean-conflicts.ts");
+		await Bun.write(filePath, "const a = 1;\nconst b = 2;\n");
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+
+		const result = await read.execute("read-clean-conflicts", { path: "clean-conflicts.ts:conflicts" });
+		const text = getText(result);
+		expect(text).toContain("No unresolved git merge conflicts");
+	});
+
+	it("window-mode warning shows visible-of-total when window misses some conflicts", async () => {
+		const filePath = path.join(tempDir, "wide.ts");
+		await Bun.write(filePath, TWO_BLOCKS);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+
+		// Read only the first block window.
+		const result = await read.execute("read-window", { path: "wide.ts:1-5" });
+		const text = getText(result);
+		expect(text).toContain("1 of 2 unresolved");
+		expect(text).toContain("read wide.ts:conflicts");
 	});
 });
 
@@ -414,5 +476,64 @@ describe("write resolves conflicts via conflict://N", () => {
 		expect(getText(result)).toContain("auto-stripped hashline display prefixes");
 		const after = await Bun.file(filePath).text();
 		expect(after).toBe("line 1\ncleanline\nline N\n");
+	});
+
+	it("`write conflict://*` bulk-resolves every registered conflict, per-entry token expansion", async () => {
+		const fileA = path.join(tempDir, "bulkA.ts");
+		const fileB = path.join(tempDir, "bulkB.ts");
+		await Bun.write(fileA, TWO_BLOCKS);
+		await Bun.write(fileB, TWO_WAY);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-bulk-A", { path: "bulkA.ts:conflicts" });
+		await read.execute("read-bulk-B", { path: "bulkB.ts:conflicts" });
+		// All 3 conflicts registered.
+		expect(session.conflictHistory?.entries()).toHaveLength(3);
+
+		const result = await write.execute("write-bulk", {
+			path: "conflict://*",
+			content: "@theirs",
+		});
+		const text = getText(result);
+		expect(text).toContain("Resolved 3 conflicts across 2 files");
+		expect(text).toContain("bulkA.ts: 2 conflicts");
+		expect(text).toContain("bulkB.ts: 1 conflict");
+
+		// Per-entry expansion: each block keeps its own theirs side.
+		expect(await Bun.file(fileA).text()).toBe("a-theirs\nmiddle\nb-theirs\ntail\n");
+		expect(await Bun.file(fileB).text()).toBe("line 1\nnewApi(x)\nline N\n");
+		// History cleared after bulk resolve.
+		expect(session.conflictHistory?.entries()).toHaveLength(0);
+	});
+
+	it("`write conflict://*` errors when no conflicts are registered", async () => {
+		const session = createTestSession(tempDir);
+		const write = await getTool(session, "write");
+		await expect(write.execute("write-bulk-empty", { path: "conflict://*", content: "@ours" })).rejects.toThrow(
+			/nothing to resolve/,
+		);
+	});
+
+	it("splice relocates when line numbers shift out of band", async () => {
+		const filePath = path.join(tempDir, "shift.ts");
+		await Bun.write(filePath, TWO_WAY);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-shift", { path: "shift.ts" });
+		// Out-of-band edit before the conflict block: shifts line numbers.
+		const shifted = await Bun.file(filePath).text();
+		await Bun.write(filePath, `// extra line\n// another extra\n${shifted}`);
+
+		const result = await write.execute("write-shift", {
+			path: "conflict://1",
+			content: "@theirs",
+		});
+		expect(getText(result)).toContain("Resolved conflict #1");
+		const after = await Bun.file(filePath).text();
+		expect(after).toBe("// extra line\n// another extra\nline 1\nnewApi(x)\nline N\n");
 	});
 });

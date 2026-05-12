@@ -489,6 +489,126 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		};
 	}
 
+	/**
+	 * Bulk-resolve every registered conflict via `conflict://*`.
+	 *
+	 * Entries are grouped by file and applied bottom-up by recorded start
+	 * line so each splice keeps later anchors valid. `content` tokens are
+	 * expanded *per entry*, so `content: "@ours"` keeps each block's own
+	 * ours side rather than collapsing every conflict to the first
+	 * block's ours.
+	 *
+	 * All-or-nothing semantics within a file: if any splice for a file
+	 * fails (stale anchors, missing base for `@base`, etc.), that file is
+	 * left untouched and the error is surfaced. Files that succeed are
+	 * still written. The result text reports per-file counts so the agent
+	 * can re-read the failed files and retry.
+	 */
+	async #resolveAllConflicts(
+		replacementContent: string,
+		stripped: boolean,
+		signal: AbortSignal | undefined,
+		context: AgentToolContext | undefined,
+	): Promise<AgentToolResult<WriteToolDetails>> {
+		const history = getConflictHistory(this.session);
+		const allEntries = history.entries();
+		if (allEntries.length === 0) {
+			throw new ToolError(
+				"`conflict://*` has nothing to resolve — no conflicts are currently registered. Re-read the file(s) with conflicts first.",
+			);
+		}
+
+		const byFile = new Map<string, ConflictEntry[]>();
+		for (const entry of allEntries) {
+			const bucket = byFile.get(entry.absolutePath) ?? [];
+			bucket.push(entry);
+			byFile.set(entry.absolutePath, bucket);
+		}
+
+		const batchRequest = getLspBatchRequest(context?.toolCall);
+		const allDiagnostics: FileDiagnosticsResult[] = [];
+		const succeededFiles: { displayPath: string; count: number }[] = [];
+		const failedFiles: { displayPath: string; count: number; error: string }[] = [];
+		let totalResolvedIds = 0;
+
+		for (const [absolutePath, fileEntries] of byFile) {
+			const sample = fileEntries[0]!;
+			if (!(await fs.exists(absolutePath))) {
+				failedFiles.push({
+					displayPath: sample.displayPath,
+					count: fileEntries.length,
+					error: "file no longer exists",
+				});
+				continue;
+			}
+
+			fileEntries.sort((a, b) => b.startLine - a.startLine);
+
+			let text: string;
+			try {
+				text = await Bun.file(absolutePath).text();
+				for (const entry of fileEntries) {
+					const expanded = expandContentTokens(replacementContent, entry);
+					text = spliceConflict(text, entry, expanded);
+				}
+			} catch (error) {
+				failedFiles.push({
+					displayPath: sample.displayPath,
+					count: fileEntries.length,
+					error: error instanceof Error ? error.message : String(error),
+				});
+				continue;
+			}
+
+			const diagnostics = await this.#writethrough(absolutePath, text, signal, undefined, batchRequest);
+			invalidateFsScanAfterWrite(absolutePath);
+			this.session.fileReadCache?.invalidate(absolutePath);
+			for (const entry of fileEntries) history.invalidate(entry.id);
+			succeededFiles.push({ displayPath: sample.displayPath, count: fileEntries.length });
+			totalResolvedIds += fileEntries.length;
+			if (diagnostics) allDiagnostics.push(diagnostics);
+		}
+
+		const summaryLines: string[] = [];
+		const fileWord = (n: number) => (n === 1 ? "file" : "files");
+		const conflictWord = (n: number) => (n === 1 ? "conflict" : "conflicts");
+		if (succeededFiles.length > 0) {
+			summaryLines.push(
+				`Resolved ${totalResolvedIds} ${conflictWord(totalResolvedIds)} across ${succeededFiles.length} ${fileWord(succeededFiles.length)}:`,
+			);
+			for (const file of succeededFiles) {
+				summaryLines.push(`  ${file.displayPath}: ${file.count} ${conflictWord(file.count)}`);
+			}
+		}
+		if (failedFiles.length > 0) {
+			summaryLines.push(
+				`Failed to resolve ${failedFiles.length} ${fileWord(failedFiles.length)} — registered entries left intact for retry:`,
+			);
+			for (const file of failedFiles) {
+				summaryLines.push(`  ${file.displayPath}: ${file.count} ${conflictWord(file.count)} (${file.error})`);
+			}
+		}
+		if (stripped) {
+			summaryLines.push("Note: auto-stripped hashline display prefixes from content before writing.");
+		}
+		const resultText = summaryLines.join("\n");
+
+		if (allDiagnostics.length === 0) {
+			if (failedFiles.length > 0 && succeededFiles.length === 0) {
+				throw new ToolError(resultText);
+			}
+			return { content: [{ type: "text", text: resultText }], details: {} };
+		}
+		const mergedSummary = allDiagnostics.map(d => d.summary).join("\n");
+		const mergedMessages = allDiagnostics.flatMap(d => d.messages ?? []);
+		return {
+			content: [{ type: "text", text: resultText }],
+			details: {
+				meta: outputMeta().diagnostics(mergedSummary, mergedMessages).get(),
+			},
+		};
+	}
+
 	async execute(
 		_toolCallId: string,
 		{ path, content }: WriteParams,
@@ -505,6 +625,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					throw new ToolError(
 						`Conflict URI scope '/${conflictUri.scope}' is read-only — use \`read conflict://${conflictUri.id}/${conflictUri.scope}\` to inspect that side. To write, drop the scope (\`conflict://${conflictUri.id}\`) and put the chosen content (or shorthand like \`@${conflictUri.scope}\`) in \`content\`.`,
 					);
+				}
+				if (conflictUri.id === "*") {
+					return this.#resolveAllConflicts(cleanContent, stripped, signal, context);
 				}
 				const entry = getConflictHistory(this.session).get(conflictUri.id);
 				if (!entry) {

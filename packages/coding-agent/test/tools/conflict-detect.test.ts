@@ -198,6 +198,14 @@ describe("parseConflictUri", () => {
 		expect(() => parseConflictUri("conflict://1/extras")).toThrow(/scope must be one of/);
 	});
 
+	it("parses the bulk wildcard `conflict://*`", () => {
+		expect(parseConflictUri("conflict://*")).toEqual({ id: "*" });
+	});
+
+	it("rejects a scope segment on the wildcard", () => {
+		expect(() => parseConflictUri("conflict://*/ours")).toThrow(/wildcard/);
+	});
+
 	it("rejects malformed ids with a ToolError", () => {
 		expect(() => parseConflictUri("conflict://0")).toThrow(ToolError);
 		expect(() => parseConflictUri("conflict://-1")).toThrow(ToolError);
@@ -223,29 +231,44 @@ function makeEntry(overrides: Partial<ConflictEntry> = {}): ConflictEntry {
 
 describe("spliceConflict", () => {
 	const file = ["before", "<<<<<<< HEAD", "ours", "=======", "theirs", ">>>>>>> feat", "after", ""].join("\n");
+	const entry = makeEntry({
+		startLine: 2,
+		separatorLine: 4,
+		endLine: 6,
+		oursLabel: "HEAD",
+		theirsLabel: "feat",
+		oursLines: ["ours"],
+		theirsLines: ["theirs"],
+	});
 
 	it("replaces the marker region with the chosen content", () => {
-		const result = spliceConflict(file, makeEntry(), "resolved\n");
+		const result = spliceConflict(file, entry, "resolved\n");
 		expect(result).toBe("before\nresolved\nafter\n");
 	});
 
 	it("accepts multi-line replacement", () => {
-		const result = spliceConflict(file, makeEntry(), "alpha\nbeta\n");
+		const result = spliceConflict(file, entry, "alpha\nbeta\n");
 		expect(result).toBe("before\nalpha\nbeta\nafter\n");
 	});
 
 	it("accepts empty replacement", () => {
-		const result = spliceConflict(file, makeEntry(), "");
+		const result = spliceConflict(file, entry, "");
 		expect(result).toBe("before\n\nafter\n");
 	});
 
-	it("rejects stale ranges when the start marker has been edited away", () => {
-		const stale = ["before", "// resolved by hand", "after", ""].join("\n");
-		expect(() => spliceConflict(stale, makeEntry({ endLine: 2 }), "x\n")).toThrow(ToolError);
+	it("relocates the block when earlier lines have been added (line numbers shift)", () => {
+		const shifted = ["// new comment 1", "// new comment 2", ...file.split("\n")].join("\n");
+		const result = spliceConflict(shifted, entry, "resolved\n");
+		expect(result).toBe("// new comment 1\n// new comment 2\nbefore\nresolved\nafter\n");
 	});
 
-	it("rejects ranges past end of file", () => {
-		expect(() => spliceConflict("short\n", makeEntry({ startLine: 10, endLine: 15 }), "x\n")).toThrow(ToolError);
+	it("rejects when the recorded marker block has been edited away", () => {
+		const stale = ["before", "// resolved by hand", "after", ""].join("\n");
+		expect(() => spliceConflict(stale, entry, "x\n")).toThrow(/no longer present/);
+	});
+
+	it("rejects when the file is shorter than the recorded region", () => {
+		expect(() => spliceConflict("short\n", entry, "x\n")).toThrow(/no longer present/);
 	});
 });
 
@@ -357,7 +380,9 @@ describe("formatConflictWarning", () => {
 		expect(text).toContain(">>> theirs");
 		expect(text).toContain("\nc");
 		// NOTICE line with shorthand tokens.
-		expect(text).toContain('NOTICE: Resolve each via `write({ path: "conflict://<N>", content })`');
+		expect(text).toContain("NOTICE: Inspect a block with `read conflict://<N>`");
+		expect(text).toContain('`write({ path: "conflict://<N>", content })`');
+		expect(text).toContain('`write({ path: "conflict://*", content })`');
 		expect(text).toContain("@ours");
 		expect(text).toContain("@theirs");
 		// No per-block invocation; the old verbose header is gone.

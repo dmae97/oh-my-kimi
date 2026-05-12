@@ -36,11 +36,13 @@ import { type ArchiveReader, openArchive, parseArchivePathCandidates } from "./a
 import {
 	type ConflictEntry,
 	type ConflictScope,
+	formatConflictSummary,
 	formatConflictWarning,
 	getConflictHistory,
 	parseConflictUri,
 	renderConflictRegion,
 	scanConflictLines,
+	scanFileForConflicts,
 } from "./conflict-detect";
 import {
 	executeReadUrl,
@@ -474,6 +476,7 @@ type ReadParams = ReadToolInput;
 type ParsedSelector =
 	| { kind: "none" }
 	| { kind: "raw" }
+	| { kind: "conflicts" }
 	| { kind: "lines"; startLine: number; endLine: number | undefined; raw?: boolean };
 
 const LINE_RANGE_RE = /^L?(\d+)(?:([-+])L?(\d+))?$/i;
@@ -532,6 +535,7 @@ function parseSel(sel: string | undefined): ParsedSelector {
 	}
 
 	if (sel.toLowerCase() === "raw") return { kind: "raw" };
+	if (sel.toLowerCase() === "conflicts") return { kind: "conflicts" };
 	const range = parseLineRangeChunk(sel);
 	if (range) {
 		return { kind: "lines", startLine: range.startLine, endLine: range.endLine };
@@ -1167,6 +1171,11 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		const conflictUri = parseConflictUri(readPath);
 		if (conflictUri) {
+			if (conflictUri.id === "*") {
+				throw new ToolError(
+					"`read conflict://*` is not supported — wildcards are write-only. Use `read <path>:conflicts` for the full list of conflicts in a file, or `read conflict://<N>` to inspect a single block.",
+				);
+			}
 			return this.#readConflictRegion(conflictUri.id, conflictUri.scope);
 		}
 		const displayMode = resolveFileDisplayMode(this.session);
@@ -1271,6 +1280,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				dirResult.details.suffixResolution = suffixResolution;
 			}
 			return dirResult;
+		}
+
+		if (parsed.kind === "conflicts") {
+			return this.#readFileConflicts(absolutePath, suffixResolution, signal);
 		}
 
 		const imageMetadata = await readImageMetadata(absolutePath);
@@ -1545,7 +1558,22 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 								...block,
 							}),
 						);
-						outputText += formatConflictWarning(entries);
+						// Cheap full-file scan only when the window already showed
+						// at least one conflict — otherwise pay nothing on clean files.
+						let totalInFile = entries.length;
+						let scanTruncated = false;
+						try {
+							const fileScan = await scanFileForConflicts(absolutePath);
+							totalInFile = Math.max(entries.length, fileScan.blocks.length);
+							scanTruncated = fileScan.scanTruncated;
+						} catch {
+							// Best-effort enrichment; fall back to window-only count.
+						}
+						outputText += formatConflictWarning(entries, {
+							totalInFile,
+							displayPath: displayPathForWarning,
+							scanTruncated,
+						});
 						details.conflictCount = entries.length;
 					}
 				}
@@ -1602,6 +1630,42 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			displayContent: { text: rawText, startLine: region.startLine },
 		};
 		return toolResult<ReadToolDetails>(details).text(formattedText).sourcePath(entry.absolutePath).done();
+	}
+
+	/**
+	 * Implement `read <path>:conflicts`: scan the whole file once, register
+	 * every block in the session's conflict history, and return a compact
+	 * `#N L_a-L_b` index instead of file content. Designed for heavily
+	 * conflicted files where dumping every body would be wasteful.
+	 */
+	async #readFileConflicts(
+		absolutePath: string,
+		suffixResolution: { from: string; to: string } | undefined,
+		signal: AbortSignal | undefined,
+	): Promise<AgentToolResult<ReadToolDetails>> {
+		throwIfAborted(signal);
+		const scan = await scanFileForConflicts(absolutePath);
+		const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
+		const history = getConflictHistory(this.session);
+		const entries = scan.blocks.map(block =>
+			history.register({
+				absolutePath,
+				displayPath,
+				...block,
+			}),
+		);
+
+		const summary =
+			entries.length === 0
+				? `No unresolved git merge conflicts in ${displayPath}.`
+				: formatConflictSummary(entries, { displayPath, scanTruncated: scan.scanTruncated });
+
+		const details: ReadToolDetails = {
+			resolvedPath: absolutePath,
+			suffixResolution,
+			conflictCount: entries.length,
+		};
+		return toolResult<ReadToolDetails>(details).text(summary).sourcePath(absolutePath).done();
 	}
 
 	/**

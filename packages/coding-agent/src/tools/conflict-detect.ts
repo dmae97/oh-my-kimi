@@ -135,6 +135,32 @@ export function scanConflictLines(lines: readonly string[], firstLineNumber: num
 	return blocks;
 }
 
+const SCAN_FILE_DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Scan a whole file for unresolved conflict blocks.
+ *
+ * Reads at most `maxBytes` (default 10 MB) so this stays cheap on
+ * pathological files. Files truncated by the cap report
+ * `scanTruncated: true`; only complete blocks within the scanned prefix
+ * are returned, so trailing partial markers never invent fake blocks.
+ */
+export async function scanFileForConflicts(
+	absolutePath: string,
+	options: { maxBytes?: number } = {},
+): Promise<{ blocks: ConflictBlock[]; scanTruncated: boolean }> {
+	const maxBytes = options.maxBytes ?? SCAN_FILE_DEFAULT_MAX_BYTES;
+	const file = Bun.file(absolutePath);
+	const size = file.size;
+	const truncated = size > maxBytes;
+	const bytes = truncated ? new Uint8Array(await file.slice(0, maxBytes).arrayBuffer()) : await file.bytes();
+	const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+	// `split("\n")` over a truncated read may leave a partial last line; the
+	// scanner already tolerates an unclosed opener, so no extra trimming.
+	const lines = text.split("\n");
+	return { blocks: scanConflictLines(lines, 1), scanTruncated: truncated };
+}
+
 /**
  * Return the label after a marker prefix when the line is a valid
  * column-0 marker, or `null` when it isn't. Strict shape: prefix alone,
@@ -188,6 +214,11 @@ export class ConflictHistory {
 		return this.#entries.get(id);
 	}
 
+	/** Snapshot every registered entry in insertion (id) order. */
+	entries(): ConflictEntry[] {
+		return [...this.#entries.values()];
+	}
+
 	/** Drop a single entry by id. Used after a successful resolve. */
 	invalidate(id: number): void {
 		this.#entries.delete(id);
@@ -214,20 +245,26 @@ export type ConflictScope = "ours" | "theirs" | "base";
 
 const CONFLICT_SCOPES = new Set<ConflictScope>(["ours", "theirs", "base"]);
 
-/** Parsed `conflict://<N>` or `conflict://<N>/<scope>` URI. */
+/** Parsed `conflict://<N>` / `conflict://<N>/<scope>` / `conflict://*` URI. */
 export interface ParsedConflictUri {
-	id: number;
+	/** `"*"` selects every currently-registered conflict (bulk write only). */
+	id: number | "*";
 	scope?: ConflictScope;
 }
 
 const CONFLICT_URI_RE = /^conflict:\/\/(.+)$/;
 
 /**
- * Parse a `conflict://<N>` or `conflict://<N>/<scope>` URI.
+ * Parse a `conflict://<N>`, `conflict://<N>/<scope>`, or `conflict://*` URI.
  *
  * Returns `null` for non-conflict paths; throws `ToolError` for a
  * well-formed scheme with an invalid id or scope so the agent gets a
  * clear actionable message rather than a confusing "not found" later.
+ *
+ * `*` is the bulk-write wildcard — only valid as `conflict://*` (no
+ * scope segment). Use it with `write({ path: "conflict://*", content })`
+ * to apply `content` (with optional `@ours` / `@theirs` / `@base` /
+ * `@both` shorthand) to every currently-registered conflict in one shot.
  */
 export function parseConflictUri(raw: string): ParsedConflictUri | null {
 	const match = raw.match(CONFLICT_URI_RE);
@@ -237,9 +274,18 @@ export function parseConflictUri(raw: string): ParsedConflictUri | null {
 	const idPart = slashIdx === -1 ? tail : tail.slice(0, slashIdx);
 	const scopePart = slashIdx === -1 ? undefined : tail.slice(slashIdx + 1);
 
+	if (idPart === "*") {
+		if (scopePart !== undefined) {
+			throw new ToolError(
+				`Invalid conflict URI '${raw}': wildcard 'conflict://*' does not accept a scope segment. Drop '/${scopePart}' or use a numeric id.`,
+			);
+		}
+		return { id: "*" };
+	}
+
 	if (!/^\d+$/.test(idPart)) {
 		throw new ToolError(
-			`Invalid conflict URI '${raw}': must be 'conflict://<N>' (or 'conflict://<N>/<scope>') where N is a positive integer surfaced by a prior \`read\`.`,
+			`Invalid conflict URI '${raw}': must be 'conflict://<N>', 'conflict://<N>/<scope>', or 'conflict://*' where N is a positive integer surfaced by a prior \`read\`.`,
 		);
 	}
 	const id = Number.parseInt(idPart, 10);
@@ -261,40 +307,82 @@ export function parseConflictUri(raw: string): ParsedConflictUri | null {
 }
 
 /**
- * Splice the conflict region `[entry.startLine..entry.endLine]` (1-indexed,
- * inclusive of every marker and all sides) out of `originalText` and
- * replace it with `replacement`. A single trailing newline on
- * `replacement` is normalised so the splice rejoins cleanly.
+ * Splice the conflict region recorded in `entry` out of `originalText`
+ * and replace it with `replacement` (markers and all sides included).
  *
- * Re-validates that the recorded marker lines still look like markers
- * before splicing — if the file has been edited out-of-band and the
- * recorded range no longer brackets a conflict, throw rather than
- * corrupting the file.
+ * Works like the edit tool's patch infra: locates the recorded marker
+ * block by content (anchored to `entry.startLine` as the preferred
+ * match), so out-of-band edits earlier in the file that shift line
+ * numbers don't break resolution. Throws clearly when the marker block
+ * has actually been altered or removed.
  */
 export function spliceConflict(originalText: string, entry: ConflictEntry, replacement: string): string {
 	const lines = originalText.split("\n");
-	const startIdx = entry.startLine - 1;
-	const endIdx = entry.endLine - 1;
-	if (startIdx < 0 || endIdx >= lines.length || startIdx > endIdx) {
+	const expected = buildRecordedRegion(entry);
+	const match = locateRegion(lines, expected, entry.startLine - 1);
+	if (!match) {
 		throw new ToolError(
-			`Conflict #${entry.id} range [${entry.startLine}..${entry.endLine}] is outside the current file (${lines.length} lines). The file has changed since the conflict was registered — re-read it to pick up the new layout.`,
-		);
-	}
-	if (matchMarker(lines[startIdx], OURS_PREFIX) === null) {
-		throw new ToolError(
-			`Conflict #${entry.id} stale: line ${entry.startLine} of '${entry.displayPath}' no longer starts with '<<<<<<<'. Re-read the file to re-register the conflict.`,
-		);
-	}
-	if (matchMarker(lines[endIdx], THEIRS_PREFIX) === null) {
-		throw new ToolError(
-			`Conflict #${entry.id} stale: line ${entry.endLine} of '${entry.displayPath}' no longer starts with '>>>>>>>'. Re-read the file to re-register the conflict.`,
+			`Conflict #${entry.id} no longer present in '${entry.displayPath}': the recorded marker block can't be located. The file changed since the conflict was registered — re-read it to re-register conflicts.`,
 		);
 	}
 
 	const trimmed = normalizeTrailingNewline(replacement);
 	const replacementLines = trimmed.split("\n");
-	const next = [...lines.slice(0, startIdx), ...replacementLines, ...lines.slice(endIdx + 1)];
+	const next = [...lines.slice(0, match.startIdx), ...replacementLines, ...lines.slice(match.endIdx + 1)];
 	return next.join("\n");
+}
+
+/** Reconstruct the recorded marker block as it should appear in the file. */
+function buildRecordedRegion(entry: ConflictEntry): string[] {
+	const out: string[] = [];
+	out.push(entry.oursLabel ? `${OURS_PREFIX} ${entry.oursLabel}` : OURS_PREFIX);
+	out.push(...entry.oursLines);
+	if (entry.baseLines !== undefined) {
+		out.push(entry.baseLabel ? `${BASE_PREFIX} ${entry.baseLabel}` : BASE_PREFIX);
+		out.push(...entry.baseLines);
+	}
+	out.push(SEPARATOR);
+	out.push(...entry.theirsLines);
+	out.push(entry.theirsLabel ? `${THEIRS_PREFIX} ${entry.theirsLabel}` : THEIRS_PREFIX);
+	return out;
+}
+
+/**
+ * Find a contiguous match of `expected` inside `lines`, preferring the
+ * occurrence closest to `preferredIdx` to disambiguate when an identical
+ * block (vanishingly unlikely for real conflicts) appears more than once.
+ */
+function locateRegion(
+	lines: readonly string[],
+	expected: readonly string[],
+	preferredIdx: number,
+): { startIdx: number; endIdx: number } | null {
+	if (expected.length === 0 || expected.length > lines.length) return null;
+	// Fast path: try the recorded position first.
+	if (preferredIdx >= 0 && matchesAt(lines, preferredIdx, expected)) {
+		return { startIdx: preferredIdx, endIdx: preferredIdx + expected.length - 1 };
+	}
+	let best: number | null = null;
+	let bestDist = Number.POSITIVE_INFINITY;
+	const limit = lines.length - expected.length;
+	for (let i = 0; i <= limit; i++) {
+		if (!matchesAt(lines, i, expected)) continue;
+		const dist = Math.abs(i - preferredIdx);
+		if (dist < bestDist) {
+			best = i;
+			bestDist = dist;
+		}
+	}
+	if (best === null) return null;
+	return { startIdx: best, endIdx: best + expected.length - 1 };
+}
+
+function matchesAt(lines: readonly string[], startIdx: number, expected: readonly string[]): boolean {
+	if (startIdx < 0 || startIdx + expected.length > lines.length) return false;
+	for (let i = 0; i < expected.length; i++) {
+		if (lines[startIdx + i] !== expected[i]) return false;
+	}
+	return true;
 }
 
 function normalizeTrailingNewline(replacement: string): string {
@@ -420,12 +508,40 @@ const PREVIEW_SIDE_LINES = 6;
  * them; when a section body equals another section's body the redundant
  * body is collapsed to `≡ <other>`.
  */
-export function formatConflictWarning(entries: readonly ConflictEntry[]): string {
+export interface FormatConflictWarningOptions {
+	/**
+	 * Total number of conflicts in the underlying file. If greater than
+	 * `entries.length` the header notes how many are visible vs the total
+	 * and points at `:conflicts` for the compact list.
+	 */
+	totalInFile?: number;
+	/** Display path used inside the `:conflicts` hint. */
+	displayPath?: string;
+	/** Whether the underlying file scan hit its byte cap. */
+	scanTruncated?: boolean;
+}
+
+export function formatConflictWarning(
+	entries: readonly ConflictEntry[],
+	options: FormatConflictWarningOptions = {},
+): string {
 	if (entries.length === 0) return "";
+	const total = options.totalInFile ?? entries.length;
+	const partial = total > entries.length;
 	const out: string[] = [];
 	out.push("");
-	const word = entries.length === 1 ? "conflict" : "conflicts";
-	out.push(`⚠ ${entries.length} unresolved ${word} detected`);
+	const word = total === 1 ? "conflict" : "conflicts";
+	if (partial) {
+		const hintPath = options.displayPath ?? "<file>";
+		out.push(
+			`⚠ ${entries.length} of ${total} unresolved ${word} visible in this window (run \`read ${hintPath}:conflicts\` for the full list).`,
+		);
+	} else {
+		out.push(`⚠ ${total} unresolved ${word} detected`);
+	}
+	if (options.scanTruncated) {
+		out.push("- note: file scan hit the byte cap; additional conflicts may exist beyond the scanned prefix.");
+	}
 
 	const oursLabel = pickLabel(entries, e => e.oursLabel);
 	const theirsLabel = pickLabel(entries, e => e.theirsLabel);
@@ -435,7 +551,10 @@ export function formatConflictWarning(entries: readonly ConflictEntry[]): string
 	if (theirsLabel) out.push(`- theirs = ${theirsLabel}`);
 	if (anyBase) out.push(`- base = ${baseLabel ?? "(no label)"}`);
 	out.push(
-		'NOTICE: Resolve each via `write({ path: "conflict://<N>", content })`; the tool replaces the whole conflict region. Use `@ours` / `@theirs` / `@base` / `@both` as content shorthand for the recorded sections (alone or mixed line-by-line).',
+		'NOTICE: Inspect a block with `read conflict://<N>` (add `/ours` / `/theirs` / `/base` to render a single side). Resolve with `write({ path: "conflict://<N>", content })`, or bulk-resolve every registered conflict with `write({ path: "conflict://*", content })`. Writes replace the whole conflict region (markers + all sides).',
+	);
+	out.push(
+		'`content` shorthand: a line that is exactly `@ours` / `@theirs` / `@base` / `@both` expands to that recorded section. `@both` is ours-then-theirs with no separator. Lines that are not a token pass through verbatim, so `"// keep both\\n@ours\\n@theirs"` literally writes the comment, then ours, then theirs.',
 	);
 
 	for (const entry of entries) {
@@ -469,6 +588,46 @@ export function formatConflictWarning(entries: readonly ConflictEntry[]): string
 		}
 	}
 	return out.join("\n");
+}
+
+/**
+ * Render a single-line-per-block index of every conflict in a file.
+ * Used by `read <path>:conflicts` to give the agent a cheap overview
+ * of a heavily-conflicted file without dumping every body.
+ */
+export function formatConflictSummary(
+	entries: readonly ConflictEntry[],
+	options: { displayPath: string; scanTruncated?: boolean } = { displayPath: "" },
+): string {
+	const lines: string[] = [];
+	const total = entries.length;
+	const word = total === 1 ? "conflict" : "conflicts";
+	lines.push(`⚠ ${total} unresolved ${word} in ${options.displayPath || "<file>"}`);
+	if (options.scanTruncated) {
+		lines.push("- note: file scan hit the byte cap; additional conflicts may exist beyond the scanned prefix.");
+	}
+	const oursLabel = pickLabel(entries, e => e.oursLabel);
+	const theirsLabel = pickLabel(entries, e => e.theirsLabel);
+	const baseLabel = pickLabel(entries, e => (e.baseLines !== undefined ? e.baseLabel : undefined));
+	const anyBase = entries.some(e => e.baseLines !== undefined);
+	if (oursLabel) lines.push(`- ours = ${oursLabel}`);
+	if (theirsLabel) lines.push(`- theirs = ${theirsLabel}`);
+	if (anyBase) lines.push(`- base = ${baseLabel ?? "(no label)"}`);
+	lines.push(
+		'NOTICE: Bulk-resolve with `write({ path: "conflict://*", content })`, or address a single block with `write({ path: "conflict://<N>", content })`. Inspect a block with `read conflict://<N>` (add `/ours` / `/theirs` / `/base` for a single side).',
+	);
+	lines.push(
+		"`content` shorthand: `@ours` / `@theirs` / `@base` / `@both` lines expand to the recorded sections; `@both` = ours-then-theirs. Non-token lines pass through verbatim.",
+	);
+	lines.push("");
+	const idWidth = String(entries[entries.length - 1]?.id ?? 1).length;
+	for (const entry of entries) {
+		const range = entry.startLine === entry.endLine ? `L${entry.startLine}` : `L${entry.startLine}-${entry.endLine}`;
+		const idCell = `#${String(entry.id).padStart(idWidth, " ")}`;
+		const kind = entry.baseLines !== undefined ? "  (3-way)" : "";
+		lines.push(`${idCell}  ${range}${kind}`);
+	}
+	return lines.join("\n");
 }
 
 function pickLabel(

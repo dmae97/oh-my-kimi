@@ -1,12 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Changed the `eval` tool input format to a single-line `*** Cell <lang>:"<title>" [t:<duration>] [rst]` header per cell, replacing the `*** Begin <LANG>` / `*** End <LANG>` envelope and the standalone `*** Title:` / `*** Timeout:` / `*** Reset` directives. The lark grammar enforces a fixed attribute order; the runtime parser remains lenient (alias keys, bare positional tokens, single-quoted titles).
 
 ### Added
 
+- Added `:conflicts` read selector (`read <path>:conflicts`) to return a one-line index of all unresolved merge conflicts with stable `#N` IDs for quick inspection
+- Added bulk conflict resolution with `write({ path: "conflict://*", content })` to resolve all currently registered conflicts across files in one call, expanding `@ours`/`@theirs`/`@base`/`@both` per conflict and returning per-file counts
 - Added `read` support for `conflict://<N>` and `read conflict://<N>/<scope>` to inspect unresolved conflict regions captured by a prior read, including `ours`, `theirs`, and `base` side views with original file line alignment
 - Added shorthand content tokens `@ours`, `@theirs`, `@both`, and `@base` to conflict-resolution writes using `path: "conflict://<N>"` so replacement content can be composed from recorded conflict sections
 - Added conflict count metadata to read results so conflict files now show a warning badge (`⚠ N`) in the read tool UI
@@ -15,6 +18,8 @@
 
 ### Changed
 
+- Changed `read` conflict warning footers to show `X of Y` unresolved conflicts when a range only captures part of a file and provide a `read <path>:conflicts` hint for the full list
+- Changed conflict scanning in conflict read paths to inspect the whole file (with a 10 MB cap) so totals better reflect hidden conflicts and truncated scans are called out
 - Changed conflict marker scanning during `read` to only register fully formed, column-0 merge-marker blocks, so indented or malformed marker-like lines are no longer treated as conflicts
 - Changed `write` conflict resolution to validate `conflict://` IDs and report clear errors for malformed or unknown conflict URIs
 - Changed the HTML transcript renderer to parse the new `*** Cell` headers while keeping the older `*** Begin <LANG>` and `===== ... =====` formats renderable for historical sessions.
@@ -23,6 +28,8 @@
 
 ### Fixed
 
+- Fixed single-conflict `write` retries to re-locate the recorded conflict block by exact marker content so shifted line numbers from out-of-band edits no longer prevent resolution
+- Fixed `read conflict://*` handling by rejecting wildcard reads with a clear write-only guidance error
 - Fixed conflict resolution to verify the live file still contains recorded `<<<<<<<` and `>>>>>>>` markers before splicing, preventing stale conflict IDs from silently corrupting out-of-band-edited files
 - Fixed `@base` token handling so two-way conflicts without a base section now return a clear error
 - Improved `*** Cell` header parsing to reject invalid `rst` values with a clear `invalid rst value` error

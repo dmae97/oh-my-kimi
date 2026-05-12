@@ -5,7 +5,7 @@ import * as url from "node:url";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
-const FILE_LINE_RANGE_RE = /^(?:L?\d+(?:[-+]L?\d+)?|raw)$/i;
+const FILE_LINE_RANGE_RE = /^(?:L?\d+(?:[-+]L?\d+)?|raw|conflicts)$/i;
 const FILE_LINE_RANGE_ONLY_RE = /^L?\d+(?:[-+]L?\d+)?$/i;
 const FILE_RAW_ONLY_RE = /^raw$/i;
 const NARROW_NO_BREAK_SPACE = "\u202F";
