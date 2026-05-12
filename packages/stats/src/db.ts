@@ -34,6 +34,13 @@ interface CostBackfillRow {
 
 let db: Database | null = null;
 
+const BACKFILL_COMPLETE = "complete";
+const BACKFILL_PENDING = "pending";
+const USER_MESSAGES_BACKFILL_KEY = "user_messages_v5";
+const USER_MESSAGE_LINKS_REPAIR_KEY = "user_message_links_v1";
+function shouldResetBackfill(value: string | undefined): boolean {
+	return value !== BACKFILL_COMPLETE && value !== BACKFILL_PENDING;
+}
 /**
  * Initialize the database and create tables.
  */
@@ -720,8 +727,11 @@ export function getCostTimeSeries(days = 90, cutoff?: number | null): CostTimeSe
 
 /**
  * Reset `file_offsets` (and any existing `user_messages` rows) so the next
- * sync re-parses every session and re-derives behavioral metrics. Run once
- * per metric-definition bump; the meta sentinel records the version.
+ * successful sync re-parses every session and re-derives behavioral metrics.
+ * Run once per metric-definition bump; the meta sentinel is only marked
+ * complete after `syncAllSessions` finishes. Older timestamp sentinel values
+ * are treated as pending so a failed compiled-binary sync cannot permanently
+ * suppress the backfill.
  *
  * - v1: initial introduction of `user_messages`.
  * - v2: yelling-sentence metric replaces caps-word counts; existing rows are
@@ -738,16 +748,16 @@ export function getCostTimeSeries(days = 90, cutoff?: number | null): CostTimeSe
  * Existing `messages` rows are unaffected - `INSERT OR IGNORE` keeps them.
  */
 function backfillUserMessages(database: Database): void {
-	const row = database.prepare("SELECT value FROM meta WHERE key = 'user_messages_v5'").get() as
+	const row = database.prepare("SELECT value FROM meta WHERE key = ?").get(USER_MESSAGES_BACKFILL_KEY) as
 		| { value: string }
 		| undefined;
-	if (row) return;
+	if (!shouldResetBackfill(row?.value)) return;
 
 	database.exec("DELETE FROM user_messages");
 	database.exec("DELETE FROM file_offsets");
 	database
 		.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
-		.run("user_messages_v5", String(Date.now()));
+		.run(USER_MESSAGES_BACKFILL_KEY, BACKFILL_PENDING);
 }
 
 /**
@@ -759,15 +769,31 @@ function backfillUserMessages(database: Database): void {
  * sentinel row in `meta`.
  */
 function repairUserMessageLinks(database: Database): void {
-	const row = database.prepare("SELECT value FROM meta WHERE key = 'user_message_links_v1'").get() as
+	const row = database.prepare("SELECT value FROM meta WHERE key = ?").get(USER_MESSAGE_LINKS_REPAIR_KEY) as
 		| { value: string }
 		| undefined;
-	if (row) return;
+	if (!shouldResetBackfill(row?.value)) return;
 
 	database.exec("DELETE FROM file_offsets");
 	database
 		.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
-		.run("user_message_links_v1", String(Date.now()));
+		.run(USER_MESSAGE_LINKS_REPAIR_KEY, BACKFILL_PENDING);
+}
+
+export function markUserMessagesBackfillComplete(): void {
+	if (!db) return;
+	db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(
+		USER_MESSAGES_BACKFILL_KEY,
+		BACKFILL_COMPLETE,
+	);
+}
+
+export function markUserMessageLinksRepairComplete(): void {
+	if (!db) return;
+	db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(
+		USER_MESSAGE_LINKS_REPAIR_KEY,
+		BACKFILL_COMPLETE,
+	);
 }
 
 /**
