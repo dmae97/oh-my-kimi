@@ -82,9 +82,16 @@ export class JsRuntime {
 	}
 
 	async run(code: string, filename?: string): Promise<unknown> {
+		Reflect.deleteProperty(globalThis, "__omp_final_expr__");
 		const wrapped = wrapCode(code);
 		const value = indirectEval(wrapped.source, filename);
-		return await awaitMaybePromise(value);
+		const awaited = await awaitMaybePromise(value);
+		if (Reflect.has(globalThis, "__omp_final_expr__")) {
+			const finalValue = (globalThis as { __omp_final_expr__?: unknown }).__omp_final_expr__;
+			Reflect.deleteProperty(globalThis, "__omp_final_expr__");
+			return await awaitMaybePromise(finalValue);
+		}
+		return awaited;
 	}
 
 	displayValue(value: unknown): void {

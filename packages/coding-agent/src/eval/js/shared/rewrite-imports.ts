@@ -187,10 +187,7 @@ function returnFinalExpression(code: string): { source: string; returned: boolea
 	const suffix = code.slice(expression.end);
 	const semicolonMatch = statement.match(/;\s*$/);
 	const trimmedStatement = semicolonMatch ? statement.slice(0, semicolonMatch.index) : statement;
-	const needsAwait =
-		expression.expression?.type === "AwaitExpression" || expression.expression?.type === "CallExpression";
-	const displayExpression = needsAwait ? `await (${trimmedStatement})` : trimmedStatement;
-	return { source: `${prefix}__omp_display__(${displayExpression});${suffix}`, returned: true };
+	return { source: `${prefix}globalThis.__omp_final_expr__ = (${trimmedStatement});${suffix}`, returned: true };
 }
 
 /**

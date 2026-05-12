@@ -281,6 +281,17 @@ describe("executeJs", () => {
 		expect(result.output.trim()).toBe('{\n  "name": "demo",\n  "enabled": true\n}');
 	});
 
+	it("awaits identifier promise final expressions before displaying", async () => {
+		const result = await executeJs("const pending = read('config.json'); pending;", {
+			sessionId,
+			session,
+			sessionFile,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe('{\n  "name": "demo",\n  "enabled": true\n}');
+	});
+
 	it("auto-displays returned objects as structured output", async () => {
 		const result = await executeJs("return { answer: 42, nested: { ok: true } };", {
 			sessionId,
