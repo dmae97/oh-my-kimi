@@ -16,6 +16,13 @@ import { Ellipsis, Hasher, type RenderCache, renderStatusLine, truncateToWidth }
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { parseArchivePathCandidates } from "./archive-reader";
 import { assertEditableFile } from "./auto-generated-guard";
+import {
+	type ConflictEntry,
+	expandContentTokens,
+	getConflictHistory,
+	parseConflictUri,
+	spliceConflict,
+} from "./conflict-detect";
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import { type OutputMeta, outputMeta } from "./output-meta";
 import { formatPathRelativeToCwd } from "./path-utils";
@@ -423,6 +430,65 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		}
 	}
 
+	/**
+	 * Resolve a single `conflict://<N>` write by splicing the recorded
+	 * marker region in the registered file with `replacementContent`,
+	 * then routing the new file content through the normal writethrough
+	 * pipeline so LSP format/diagnostics still run.
+	 *
+	 * Entry ids are session-stable: they keep working even after later
+	 * writes resolve other blocks in the same file. The recorded range
+	 * is re-validated on disk before splicing so an out-of-band edit
+	 * surfaces as a clear error instead of corrupting the file.
+	 */
+	async #resolveConflict(
+		entry: ConflictEntry,
+		replacementContent: string,
+		stripped: boolean,
+		signal: AbortSignal | undefined,
+		context: AgentToolContext | undefined,
+	): Promise<AgentToolResult<WriteToolDetails>> {
+		const absolutePath = entry.absolutePath;
+		if (!(await fs.exists(absolutePath))) {
+			throw new ToolError(`Conflict #${entry.id} target '${entry.displayPath}' no longer exists.`);
+		}
+
+		const expanded = expandContentTokens(replacementContent, entry);
+		const originalText = await Bun.file(absolutePath).text();
+		const newContent = spliceConflict(originalText, entry, expanded);
+
+		const batchRequest = getLspBatchRequest(context?.toolCall);
+		const diagnostics = await this.#writethrough(absolutePath, newContent, signal, undefined, batchRequest);
+		invalidateFsScanAfterWrite(absolutePath);
+		this.session.fileReadCache?.invalidate(absolutePath);
+		this.session.conflictHistory?.invalidate(entry.id);
+
+		const range =
+			entry.startLine === entry.endLine
+				? `line ${entry.startLine}`
+				: `lines ${entry.startLine}\u2013${entry.endLine}`;
+		let resultText = `Resolved conflict #${entry.id} at ${range} in ${entry.displayPath}.`;
+		if (stripped) {
+			resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
+		}
+
+		if (!diagnostics) {
+			return {
+				content: [{ type: "text", text: resultText }],
+				details: {},
+			};
+		}
+		return {
+			content: [{ type: "text", text: resultText }],
+			details: {
+				diagnostics,
+				meta: outputMeta()
+					.diagnostics(diagnostics.summary, diagnostics.messages ?? [])
+					.get(),
+			},
+		};
+	}
+
 	async execute(
 		_toolCallId: string,
 		{ path, content }: WriteParams,
@@ -433,6 +499,16 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		return untilAborted(signal, async () => {
 			// Strip hashline display prefixes (LINE+ID|) if the model copied them from read output
 			const { text: cleanContent, stripped } = stripWriteContent(this.session, content);
+			const conflictUri = parseConflictUri(path);
+			if (conflictUri) {
+				const entry = getConflictHistory(this.session).get(conflictUri.id);
+				if (!entry) {
+					throw new ToolError(
+						`Conflict #${conflictUri.id} not found. Conflict ids are registered when \`read\` surfaces a marker block; re-read the file to get a current id.`,
+					);
+				}
+				return this.#resolveConflict(entry, cleanContent, stripped, signal, context);
+			}
 			const resolvedArchivePath = await this.#resolveArchiveWritePath(path);
 			if (resolvedArchivePath) {
 				enforcePlanModeWrite(this.session, resolvedArchivePath.archivePath, {

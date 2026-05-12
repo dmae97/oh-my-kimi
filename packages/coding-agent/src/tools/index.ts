@@ -228,6 +228,12 @@ export interface ToolSession {
 	 *  out-of-band. Lazily initialized by `getFileReadCache`. */
 	fileReadCache?: import("../edit/file-read-cache").FileReadCache;
 
+	/** Per-session log of unresolved git merge conflict regions surfaced by
+	 *  `read`. Each entry gets a stable id N referenced by `write conflict://N`
+	 *  to splice the recorded region with replacement content. Lazily initialized
+	 *  by `getConflictHistory`. */
+	conflictHistory?: import("./conflict-detect").ConflictHistory;
+
 	/** Queue a hidden message to be injected at the next agent turn. */
 	queueDeferredMessage?(message: CustomMessage): void;
 }

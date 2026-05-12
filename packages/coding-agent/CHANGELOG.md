@@ -1,22 +1,30 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Changed the `eval` tool input format to a single-line `*** Cell <lang>:"<title>" [t:<duration>] [rst]` header per cell, replacing the `*** Begin <LANG>` / `*** End <LANG>` envelope and the standalone `*** Title:` / `*** Timeout:` / `*** Reset` directives. The lark grammar enforces a fixed attribute order; the runtime parser remains lenient (alias keys, bare positional tokens, single-quoted titles).
 
 ### Added
 
+- Added shorthand content tokens `@ours`, `@theirs`, `@both`, and `@base` to conflict-resolution writes using `path: "conflict://<N>"` so replacement content can be composed from recorded conflict sections
+- Added conflict count metadata to read results so conflict files now show a warning badge (`⚠ N`) in the read tool UI
 - Added support for explicit boolean `rst` values (`rst:true`, `rst:false`, `rst:1`, `rst:0`, `rst:yes`, `rst:no`, `rst:on`, `rst:off`) in `*** Cell` headers
+- Added detection of unresolved git merge conflicts in `read` output: each marker block is registered with a session-stable id and surfaced in a footer with `ours`/`theirs` previews. Resolve a block by calling `write({ path: "conflict://<id>", content })` — the tool splices the recorded marker region (markers and all sides) with the supplied content and routes through the normal writethrough (LSP format/diagnostics, fs-cache invalidation).
 
 ### Changed
 
+- Changed conflict marker scanning during `read` to only register fully formed, column-0 merge-marker blocks, so indented or malformed marker-like lines are no longer treated as conflicts
+- Changed `write` conflict resolution to validate `conflict://` IDs and report clear errors for malformed or unknown conflict URIs
 - Changed the HTML transcript renderer to parse the new `*** Cell` headers while keeping the older `*** Begin <LANG>` and `===== ... =====` formats renderable for historical sessions.
 - Changed the `eval` tool parser so a stray non-marker line between cells no longer crashes with `null is not an object (evaluating 'BEGIN_RE.exec(lines[i])[1]')`; stray content is consumed without aborting parsing.
 - Changed `*** End` to be an optional, undocumented per-cell terminator (kept in the lark to satisfy GPT-trained models' natural terminator habit during constrained sampling).
 
 ### Fixed
 
+- Fixed conflict resolution to verify the live file still contains recorded `<<<<<<<` and `>>>>>>>` markers before splicing, preventing stale conflict IDs from silently corrupting out-of-band-edited files
+- Fixed `@base` token handling so two-way conflicts without a base section now return a clear error
 - Improved `*** Cell` header parsing to reject invalid `rst` values with a clear `invalid rst value` error
 
 ## [14.9.7] - 2026-05-12

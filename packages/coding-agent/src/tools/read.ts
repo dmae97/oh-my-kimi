@@ -33,6 +33,7 @@ import { ImageInputTooLargeError, loadImageInput, MAX_IMAGE_INPUT_BYTES } from "
 import { convertFileWithMarkit } from "../utils/markit";
 import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
 import { type ArchiveReader, openArchive, parseArchivePathCandidates } from "./archive-reader";
+import { formatConflictWarning, getConflictHistory, scanConflictLines } from "./conflict-detect";
 import {
 	executeReadUrl,
 	isReadableUrlPath,
@@ -455,6 +456,8 @@ export interface ReadToolDetails {
 	 * so the TUI can render the file content with its own gutter without re-parsing the formatted text. */
 	displayContent?: { text: string; startLine: number };
 	summary?: { lines: number; elidedSpans: number };
+	/** Number of unresolved git conflicts surfaced by this read (TUI uses for inline `⚠ N` badge). */
+	conflictCount?: number;
 }
 
 type ReadParams = ReadToolInput;
@@ -1517,6 +1520,23 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					details.displayContent = capturedDisplayContent;
 				}
 
+				if (!firstLineExceedsLimit && collectedLines.length > 0) {
+					const blocks = scanConflictLines(collectedLines, startLineDisplay);
+					if (blocks.length > 0) {
+						const history = getConflictHistory(this.session);
+						const displayPathForWarning = formatPathRelativeToCwd(absolutePath, this.session.cwd);
+						const entries = blocks.map(block =>
+							history.register({
+								absolutePath,
+								displayPath: displayPathForWarning,
+								...block,
+							}),
+						);
+						outputText += formatConflictWarning(entries);
+						details.conflictCount = entries.length;
+					}
+				}
+
 				content = [{ type: "text", text: outputText }];
 			}
 		}
@@ -1762,6 +1782,10 @@ export const readToolRenderer = {
 		}
 		if (details?.summary) {
 			title += ` (summary: ${details.summary.elidedSpans} elided span${details.summary.elidedSpans === 1 ? "" : "s"})`;
+		}
+		if (details?.conflictCount && details.conflictCount > 0) {
+			const n = details.conflictCount;
+			title += ` ${uiTheme.fg("warning", `(⚠ ${n} conflict${n === 1 ? "" : "s"})`)}`;
 		}
 		let cachedWidth: number | undefined;
 		let cachedLines: string[] | undefined;
