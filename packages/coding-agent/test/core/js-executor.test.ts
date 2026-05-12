@@ -155,6 +155,14 @@ describe("executeJs", () => {
 		expect(calls.output.trim()).toBe("1");
 	});
 
+	it("does not auto-display side-effect import rewrites", async () => {
+		const result = await executeJs('import "node:path";', { sessionId, session, sessionFile });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("");
+		expect(result.displayOutputs).toEqual([]);
+	});
+
 	it("exposes the worker's real process object", async () => {
 		const result = await executeJs(
 			[

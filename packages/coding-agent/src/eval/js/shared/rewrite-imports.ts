@@ -217,7 +217,12 @@ const LOOKS_LIKE_TS =
 	/(?:\binterface\s+\w|\btype\s+\w+\s*=|\b(?:as|satisfies)\s+(?:[A-Z]|\bconst\b)|:\s*(?:string|number|boolean|any|unknown|void|never|object|[A-Z]\w*)\b|<\s*[A-Z]\w*\s*[,>])/;
 
 export function wrapCode(code: string): { source: string; asyncWrapped: boolean; finalExpressionReturned: boolean } {
-	const rewritten = returnFinalExpression(demoteTopLevelLexicals(rewriteStaticImports(stripTypeScript(code))));
+	const stripped = stripTypeScript(code);
+	const finalExpression = returnFinalExpression(stripped);
+	const rewritten = {
+		source: demoteTopLevelLexicals(rewriteStaticImports(finalExpression.source)),
+		returned: finalExpression.returned,
+	};
 	const needsAsyncWrapper = /\bawait\b|\breturn\b/.test(rewritten.source);
 	if (!needsAsyncWrapper) {
 		return { source: rewritten.source, asyncWrapped: false, finalExpressionReturned: rewritten.returned };
