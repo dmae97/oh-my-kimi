@@ -2505,6 +2505,7 @@ dependencies = [
  "brush-builtins",
  "brush-core",
  "brush-parser 0.3.0",
+ "bytes",
  "clap",
  "libc",
  "os_pipe",
