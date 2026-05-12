@@ -1,7 +1,8 @@
-import { describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import { Chalk } from "chalk";
 import { Markdown, renderInlineMarkdown } from "../src/components/markdown.js";
+import { TERMINAL } from "../src/terminal-capabilities.js";
 import { type Component, TUI } from "../src/tui.js";
 import { defaultMarkdownTheme } from "./test-themes.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
@@ -1025,6 +1026,18 @@ bar`,
 		line.replace(/\x1b\]8;;[^\x07]*\x07/g, "").replace(/\x1b\[[0-9;]*m/g, "");
 
 	describe("Links", () => {
+		// CI environments often resolve to the "base" terminal which has hyperlinks
+		// disabled; force them on so OSC 8 assertions are deterministic. The render
+		// cache keys on TERMINAL.hyperlinks, so flipping the bit invalidates entries.
+		const terminalState = TERMINAL as unknown as { hyperlinks: boolean };
+		const originalHyperlinks = terminalState.hyperlinks;
+		beforeAll(() => {
+			terminalState.hyperlinks = true;
+		});
+		afterAll(() => {
+			terminalState.hyperlinks = originalHyperlinks;
+		});
+
 		it("should not duplicate URL for autolinked emails", () => {
 			const markdown = new Markdown("Contact user@example.com for help", 0, 0, defaultMarkdownTheme);
 
