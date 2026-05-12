@@ -14,6 +14,7 @@ import type {
 	ToolResultMessage,
 	UserMessage,
 } from "../types";
+import { abortableSleep } from "@oh-my-pi/pi-utils";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
@@ -320,6 +321,18 @@ function mapDoneReason(doneReason: string | undefined, output: AssistantMessage)
 	return "stop";
 }
 
+const OLLAMA_RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
+
+async function fetchChatWithRetry(url: string, init: RequestInit): Promise<Response> {
+	const signal = init.signal as AbortSignal | undefined;
+	for (let attempt = 0; attempt < OLLAMA_RETRY_DELAYS_MS.length; attempt++) {
+		const response = await fetch(url, init);
+		if (response.ok || response.status < 500) return response;
+		await abortableSleep(OLLAMA_RETRY_DELAYS_MS[attempt]!, signal);
+	}
+	return fetch(url, init);
+}
+
 export const streamOllama: StreamFunction<"ollama-chat"> = (
 	model: Model<"ollama-chat">,
 	context: Context,
@@ -353,7 +366,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 				url: `${baseUrl}/api/chat`,
 				body,
 			};
-			const response = await fetch(`${baseUrl}/api/chat`, {
+			const response = await fetchChatWithRetry(`${baseUrl}/api/chat`, {
 				method: "POST",
 				headers: {
 					...model.headers,
