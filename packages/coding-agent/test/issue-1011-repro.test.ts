@@ -1,66 +1,78 @@
 import { describe, expect, it } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 
 /**
  * Regression for https://github.com/can1357/oh-my-pi/issues/1011
  *
- * In v14.5.13 `spawnTabWorker` (in `src/tools/browser/tab-supervisor.ts`) was
- * introduced to host browser tabs in a `Worker`. The worker URL was assembled
- * as:
+ * In v14.5.13 `spawnTabWorker` (in `src/tools/browser/tab-supervisor.ts`)
+ * resolved the worker entry as `new URL("./tab-worker-entry.ts", import.meta.url)`
+ * and passed `.href` to `new Worker(...)`. Bun's `--compile` static analyzer
+ * cannot discover that pattern, so the entry was never embedded in the
+ * single-file binary and the runtime symptom was "Timed out initializing
+ * browser tab worker".
  *
- * ```ts
- * const url = new URL("./tab-worker-entry.ts", import.meta.url);
- * const worker = new Worker(url.href, { type: "module" });
- * ```
+ * The original fix used an `import "./worker.ts" with { type: "file" }`
+ * trick. That copied the entry as a raw asset but could not resolve its
+ * relative imports inside the compiled binary, so the worker still failed
+ * to load (issue #1027 was the same root cause, retriggered).
  *
- * Bun's `--compile` bundler does NOT statically discover that pattern (the
- * worker entry is hidden behind a local variable and `.href`), so the entry
- * file is never embedded in the single-file binary. At runtime the worker
- * thread tries to load `/$bunfs/root/tab-worker-entry.ts`, the module is
- * missing, and the supervisor surfaces the symptom from the issue:
- * `Timed out initializing browser tab worker`.
+ * The working pattern documented in AGENTS.md is a two-part contract:
  *
- * `Bun.build` exposes the same static-analysis pass that drives `--compile`.
- * If `tab-worker-entry.ts` is reachable to the bundler, it appears in the
- * outputs as a separate `asset` chunk. If the spawn pattern hides it from
- * the bundler, only the entry point is emitted.
+ *   1. `spawnTabWorker` branches on `isCompiledBinary()` and uses a literal
+ *      string path under `--compile`. Bun's `--compile` analyzer discovers
+ *      that literal at the `new Worker("...", ...)` call site. The path is
+ *      `--root`-relative (`./packages/coding-agent/src/...`) because the
+ *      build script passes `--root ../..`.
+ *   2. `scripts/build-binary.ts` lists the worker as an explicit additional
+ *      `--compile` entrypoint. Without this, Bun sees the literal at the
+ *      spawn site but never emits the worker module into bunfs.
  *
- * The bundler is driven through a `bun -e` subprocess that writes its report
- * to a tmp file: invoking `Bun.build` directly from inside `bun test` does
- * not auto-resolve TypeScript imports the way the real build pipeline does.
+ * Either half alone is insufficient — both must agree on the exact path.
+ * Runtime end-to-end coverage lives in `omp --smoke-test` (via the stats
+ * sync worker). This test is the cheap static contract that catches an
+ * accidental regression of either half in code review / CI.
  */
 describe("issue #1011 — tab worker entry must survive `bun build --compile`", () => {
-	it("bundles tab-worker-entry.ts as a discoverable asset of tab-supervisor.ts", async () => {
-		const supervisor = path.resolve(import.meta.dir, "../src/tools/browser/tab-supervisor.ts");
-		const packageDir = path.resolve(import.meta.dir, "..");
-		const reportPath = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "issue-1011-")), "report.json");
-		const script = `const r = await Bun.build({ entrypoints: [${JSON.stringify(supervisor)}], target: "bun" }); await Bun.write(${JSON.stringify(reportPath)}, JSON.stringify({ success: r.success, outputs: r.outputs.map(o => ({ path: o.path, kind: o.kind })), logs: r.logs.map(l => l.message) }));`;
-		const proc = Bun.spawnSync(["bun", "-e", script], {
-			cwd: packageDir,
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const stderr = proc.stderr.toString();
-		expect(proc.exitCode, `bun -e exited with ${proc.exitCode}; stderr=${stderr}`).toBe(0);
+	const packageDir = path.resolve(import.meta.dir, "..");
+	const supervisorPath = path.join(packageDir, "src/tools/browser/tab-supervisor.ts");
+	const buildBinaryPath = path.join(packageDir, "scripts/build-binary.ts");
+	// `--root` is `../..` from packages/coding-agent, so the literal that
+	// matches at runtime inside the compiled bunfs is repo-relative.
+	const compiledLiteral = "./packages/coding-agent/src/tools/browser/tab-worker-entry.ts";
+	// The build script's cwd is packages/coding-agent, so its entrypoint
+	// path is package-relative.
+	const buildEntrypoint = "./src/tools/browser/tab-worker-entry.ts";
 
-		const report = (await Bun.file(reportPath).json()) as {
-			success: boolean;
-			outputs: { path: string; kind: string }[];
-			logs: string[];
-		};
-		expect(report.success, `bundler logs: ${report.logs.join("; ")}`).toBe(true);
+	it("tab-supervisor uses the isCompiledBinary() hybrid spawn pattern with a static literal", async () => {
+		const source = await Bun.file(supervisorPath).text();
 
-		const workerAssets = report.outputs.filter(out => out.kind === "asset" && out.path.includes("tab-worker-entry"));
-		if (workerAssets.length === 0) {
-			const summary = report.outputs.map(o => `${o.kind}:${o.path}`).join(", ");
-			throw new Error(
-				`tab-worker-entry.ts was not bundled as an asset of tab-supervisor.ts. ` +
-					`Bun's --compile bundler cannot embed the worker because the Worker ` +
-					`constructor argument is not a statically-analyzable URL literal. ` +
-					`Bundler outputs were: [${summary}]`,
-			);
-		}
+		// The exact literal at the `new Worker(...)` call must be present
+		// and discoverable to Bun's `--compile` static analyzer.
+		expect(
+			source.includes(`new Worker("${compiledLiteral}"`),
+			`tab-supervisor.ts must spawn the worker with the literal "${compiledLiteral}" so Bun's --compile analyzer can embed it`,
+		).toBe(true);
+
+		// And the dev-mode branch should keep the portable import.meta.url
+		// form so spawns work outside of compiled binaries too.
+		expect(
+			/new Worker\(\s*new URL\("\.\/tab-worker-entry\.ts",\s*import\.meta\.url\)/.test(source),
+			"tab-supervisor.ts must keep a `new URL('./tab-worker-entry.ts', import.meta.url)` branch for dev/source spawns",
+		).toBe(true);
+
+		// And the branching must come from `isCompiledBinary()` — not, say,
+		// a hard-coded check, an env var, or a renamed helper.
+		expect(
+			source.includes("isCompiledBinary()"),
+			"tab-supervisor.ts must select the spawn pattern via isCompiledBinary()",
+		).toBe(true);
+	});
+
+	it("build-binary.ts lists tab-worker-entry as an explicit --compile entrypoint", async () => {
+		const source = await Bun.file(buildBinaryPath).text();
+		expect(
+			source.includes(`"${buildEntrypoint}"`),
+			`scripts/build-binary.ts must include "${buildEntrypoint}" as an explicit --compile entrypoint so Bun emits the worker into bunfs`,
+		).toBe(true);
 	});
 });
