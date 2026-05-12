@@ -1,11 +1,11 @@
 Manages background jobs: poll to wait for completion, cancel to stop running jobs.
 
-You **MUST** use the `job` tool (in a loop, if necessary) instead of manually reading in a loop or issuing sleep commands.
+Background job results are delivered automatically when possible. Read the `jobs://` URI, or `jobs://<id>` for detail, only for inspection when useful — not for waiting.
 
-Pass `poll` to wait for one or more background jobs to finalize. If the timeout elapses before any job changes state, it returns the current snapshot (still-running jobs and any already-completed deliveries) without erroring — call `job` again to keep waiting. Calling with no `poll` and no `cancel` waits on every running background job.
+If you are genuinely blocked on a background job result, pass `poll` to wait for one or more jobs to finalize. If the timeout elapses before any job changes state, it returns the current snapshot (still-running jobs and any already-completed deliveries) without erroring. Calling with no `poll` and no `cancel` waits on every running background job.
 
-You **MUST NOT** poll the same job repeatedly without evidence of progress. Between calls, inspect `read jobs://<id>` to confirm new output or activity. If a job is stalled, has hung, or is producing nothing useful, cancel it via `cancel` and try a different approach instead of waiting indefinitely.
+You **MUST NOT** wait by repeatedly reading the `jobs://` URI or `jobs://<id>` URI. If a job is stalled, has hung, or is producing nothing useful, cancel it via `cancel` and try a different approach instead of waiting indefinitely.
 
-Pass `cancel` to stop one or more running background jobs (started via async tool execution or bash auto-backgrounding). You **SHOULD** cancel jobs that are no longer needed or stuck. You **MAY** inspect jobs first with `read jobs://` or `read jobs://<job-id>`.
+Pass `cancel` to stop one or more running background jobs (started via async tool execution or bash auto-backgrounding). You **SHOULD** cancel jobs that are no longer needed or stuck. You **MAY** inspect the `jobs://` URI, or `jobs://<job-id>`, first.
 
 `poll` and `cancel` may be combined in a single call: cancellations apply first, then polling waits on the remaining ids. When only `cancel` is provided the call returns immediately without waiting.

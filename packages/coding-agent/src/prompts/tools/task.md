@@ -1,8 +1,9 @@
 Launches subagents to parallelize workflows.
 
 {{#if asyncEnabled}}
-- `read jobs://` for state, `read jobs://<id>` for detail.
-- Use `job` (with `poll`) to wait. **MUST NOT** poll `read jobs://` in a loop.
+- Results are delivered automatically when complete.
+- If genuinely blocked on task completion, wait with `job` using `poll`; otherwise continue with another task when possible.
+- You can also read the `jobs://` URI for manager state and `jobs://<id>` for detail only when inspection is useful.
 {{/if}}
 
 Subagents have no conversation history. Every fact, file path, and decision they need **MUST** be explicit in {{#if contextEnabled}}`context` or `assignment`{{else}}each `assignment`{{/if}}.
