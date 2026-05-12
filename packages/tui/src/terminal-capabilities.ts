@@ -102,8 +102,8 @@ function getFallbackImageProtocol(terminalId: TerminalId): ImageProtocol | null 
 }
 const KNOWN_TERMINALS = Object.freeze({
 	// Fallback terminals
-	base: new TerminalInfo("base", null, false, true, NotifyProtocol.Bell),
-	trueColor: new TerminalInfo("trueColor", null, true, true, NotifyProtocol.Bell),
+	base: new TerminalInfo("base", null, false, false, NotifyProtocol.Bell),
+	trueColor: new TerminalInfo("trueColor", null, true, false, NotifyProtocol.Bell),
 	// Recognized terminals
 	kitty: new TerminalInfo("kitty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99),
 	ghostty: new TerminalInfo("ghostty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9),
@@ -157,19 +157,19 @@ export const TERMINAL_ID: TerminalId = (() => {
 export const TERMINAL = (() => {
 	const terminal = getTerminalInfo(TERMINAL_ID);
 	const forcedImageProtocol = getForcedImageProtocol();
+	let resolved = terminal;
 	if (forcedImageProtocol !== undefined) {
-		return new TerminalInfo(
+		resolved = new TerminalInfo(
 			terminal.id,
 			forcedImageProtocol,
 			terminal.trueColor,
 			terminal.hyperlinks,
 			terminal.notifyProtocol,
 		);
-	}
-	if (!terminal.imageProtocol) {
+	} else if (!terminal.imageProtocol) {
 		const fallbackImageProtocol = getFallbackImageProtocol(terminal.id);
 		if (fallbackImageProtocol) {
-			return new TerminalInfo(
+			resolved = new TerminalInfo(
 				terminal.id,
 				fallbackImageProtocol,
 				terminal.trueColor,
@@ -178,7 +178,19 @@ export const TERMINAL = (() => {
 			);
 		}
 	}
-	return terminal;
+	// tmux and screen multiplexers do not reliably forward OSC 8 hyperlinks
+	// to the outer terminal, so force them off regardless of detected terminal.
+	const term = Bun.env.TERM?.toLowerCase() ?? "";
+	if (resolved.hyperlinks && (Bun.env.TMUX || term.startsWith("tmux") || term.startsWith("screen"))) {
+		resolved = new TerminalInfo(
+			resolved.id,
+			resolved.imageProtocol,
+			resolved.trueColor,
+			false,
+			resolved.notifyProtocol,
+		);
+	}
+	return resolved;
 })();
 
 type MutableTerminalInfo = {
