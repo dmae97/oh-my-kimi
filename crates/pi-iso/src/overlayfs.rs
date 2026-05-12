@@ -117,6 +117,10 @@ mod imp {
 		let upper = base.join("upper");
 		let work = base.join("work");
 
+		remove_dir_if_exists(&upper, "stale overlay upper")?;
+		remove_dir_if_exists(&work, "stale overlay work")?;
+		remove_dir_if_exists(&merged, "stale overlay merged")?;
+
 		fs::create_dir_all(&upper)
 			.map_err(|err| IsoError::other(format!("create upper dir {}: {err}", upper.display())))?;
 		fs::create_dir_all(&work)
@@ -152,23 +156,32 @@ mod imp {
 
 	pub fn stop(merged: &Path) -> IsoResult<()> {
 		let merged = absolutize(merged);
-		let flavor = ACTIVE_MOUNTS.lock().remove(&merged);
-		match flavor {
-			Some(MountFlavor::Fuse) => fuse_umount(&merged),
-			Some(MountFlavor::Kernel) | None => {
-				// `None` covers callers that skipped `start` (probe-style flow)
-				// or processes that re-attached after a crash; try a kernel
-				// umount first, fall back to fusermount so we don't silently
-				// leak a mount.
-				kernel_umount(&merged).or_else(|err| {
-					if err.is_unavailable() {
-						fuse_umount(&merged)
-					} else {
-						Err(err)
-					}
-				})
-			},
+		let result = {
+			let flavor = ACTIVE_MOUNTS.lock().remove(&merged);
+			match flavor {
+				Some(MountFlavor::Fuse) => fuse_umount(&merged),
+				Some(MountFlavor::Kernel) | None => {
+					// `None` covers callers that skipped `start` (probe-style flow)
+					// or processes that re-attached after a crash; try a kernel
+					// umount first, fall back to fusermount so we don't silently
+					// leak a mount.
+					kernel_umount(&merged).or_else(|err| {
+						if err.is_unavailable() {
+							fuse_umount(&merged)
+						} else {
+							Err(err)
+						}
+					})
+				},
+			}
+		};
+		result?;
+
+		if let Some(base) = merged.parent() {
+			remove_dir_if_exists(&base.join("upper"), "overlay upper")?;
+			remove_dir_if_exists(&base.join("work"), "overlay work")?;
 		}
+		remove_dir_if_exists(&merged, "overlay merged")
 	}
 
 	fn kernel_mount(merged: &Path, opts: &str) -> IsoResult<()> {
@@ -318,6 +331,14 @@ mod imp {
 			std::env::current_dir()
 				.map(|cwd| cwd.join(path))
 				.unwrap_or_else(|_| path.to_path_buf())
+		}
+	}
+
+	fn remove_dir_if_exists(path: &Path, label: &str) -> IsoResult<()> {
+		match fs::remove_dir_all(path) {
+			Ok(()) => Ok(()),
+			Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+			Err(err) => Err(IsoError::other(format!("remove {label} {}: {err}", path.display()))),
 		}
 	}
 

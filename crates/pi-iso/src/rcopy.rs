@@ -35,18 +35,19 @@ impl IsolationBackend for RcopyBackend {
 
 	fn start(&self, lower: &Path, merged: &Path) -> IsoResult<()> {
 		let lower = canonical_existing_dir(lower)?;
-		prepare_destination(merged)?;
+		let merged = absolutize(merged);
+		prepare_destination(&merged)?;
 		if is_git_worktree(&lower) {
-			git_worktree_add(&lower, merged)?;
+			git_worktree_add(&lower, &merged)?;
 			// `worktree add --detach HEAD` lands on a clean checkout. omp
 			// (and friends) expect `merged` to mirror `lower`'s **live**
 			// working tree, so seed the index + working tree + untracked
 			// files exactly as they exist in lower. No applyBaseline call
 			// in the caller — every backend's post-`start` invariant is
 			// the same.
-			seed_dirty_state(&lower, merged)
+			seed_dirty_state(&lower, &merged)
 		} else {
-			recursive_copy(&lower, merged)
+			recursive_copy(&lower, &merged)
 		}
 	}
 
@@ -81,6 +82,14 @@ fn canonical_existing_dir(path: &Path) -> IsoResult<PathBuf> {
 		)));
 	}
 	Ok(std::fs::canonicalize(&resolved).unwrap_or(resolved))
+}
+
+fn absolutize(path: &Path) -> PathBuf {
+	if path.is_absolute() {
+		path.to_path_buf()
+	} else {
+		std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
+	}
 }
 
 fn prepare_destination(merged: &Path) -> IsoResult<()> {

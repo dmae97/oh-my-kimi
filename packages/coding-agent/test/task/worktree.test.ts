@@ -2,28 +2,17 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getGitNoIndexNullPath, mergeTaskBranches } from "../../src/task/worktree";
+import * as natives from "@oh-my-pi/pi-natives";
+import {
+	captureBaseline,
+	captureDeltaPatch,
+	ensureIsolation,
+	getGitNoIndexNullPath,
+	mergeTaskBranches,
+	parseIsolationMode,
+} from "../../src/task/worktree";
 
-const isoStartMock = vi.fn();
-const isoStopMock = vi.fn();
-const isoIsUnavailableErrorMock = vi.fn(
-	(message: string) => typeof message === "string" && message.startsWith("ISO_UNAVAILABLE:"),
-);
 const tempDirs: string[] = [];
-
-// Numeric mirror of the napi-generated const-enum so the production code's
-// `IsoBackendKind.Overlayfs` references resolve without loading the addon.
-const IsoBackendKind = { Apfs: 0, Overlayfs: 1, Projfs: 2, Rcopy: 3 } as const;
-
-vi.mock("@oh-my-pi/pi-natives", () => ({
-	IsoBackendKind,
-	isoBackend: vi.fn(() => IsoBackendKind.Rcopy),
-	isoDiff: vi.fn(),
-	isoIsUnavailableError: isoIsUnavailableErrorMock,
-	isoProbe: vi.fn(() => ({ available: true, reason: null, kind: IsoBackendKind.Rcopy })),
-	isoStart: isoStartMock,
-	isoStop: isoStopMock,
-}));
 
 async function runGit(repo: string, args: string[]): Promise<string> {
 	const proc = Bun.spawn(["git", ...args], {
@@ -70,6 +59,49 @@ describe("worktree isolation helpers", () => {
 		expect(getGitNoIndexNullPath()).toBe(expected);
 	});
 
+	it("maps every isolation mode to the native backend contract", () => {
+		expect(parseIsolationMode("none")).toBeUndefined();
+		expect(parseIsolationMode("auto")).toBeUndefined();
+		expect(parseIsolationMode("apfs")).toBe(natives.IsoBackendKind.Apfs);
+		expect(parseIsolationMode("btrfs")).toBe(natives.IsoBackendKind.Btrfs);
+		expect(parseIsolationMode("zfs")).toBe(natives.IsoBackendKind.Zfs);
+		expect(parseIsolationMode("reflink")).toBe(natives.IsoBackendKind.LinuxReflink);
+		expect(parseIsolationMode("overlayfs")).toBe(natives.IsoBackendKind.Overlayfs);
+		expect(parseIsolationMode("fuse-overlay")).toBe(natives.IsoBackendKind.Overlayfs);
+		expect(parseIsolationMode("projfs")).toBe(natives.IsoBackendKind.Projfs);
+		expect(parseIsolationMode("fuse-projfs")).toBe(natives.IsoBackendKind.Projfs);
+		expect(parseIsolationMode("block-clone")).toBe(natives.IsoBackendKind.WindowsBlockClone);
+		expect(parseIsolationMode("rcopy")).toBe(natives.IsoBackendKind.Rcopy);
+		expect(parseIsolationMode("worktree")).toBe(natives.IsoBackendKind.Rcopy);
+	});
+
+	it("retries isoResolve candidates when a backend is path-unavailable", async () => {
+		const { repo } = await createGitRepo();
+		const unavailable = new Error("ISO_UNAVAILABLE: btrfs source is not a subvolume");
+		const isoResolve = vi.spyOn(natives, "isoResolve").mockReturnValue({
+			kind: natives.IsoBackendKind.Btrfs,
+			candidates: [natives.IsoBackendKind.Btrfs, natives.IsoBackendKind.Rcopy],
+			fellBack: false,
+			reason: undefined,
+		});
+		const isoStart = vi
+			.spyOn(natives, "isoStart")
+			.mockRejectedValueOnce(unavailable)
+			.mockResolvedValueOnce(undefined);
+		vi.spyOn(natives, "isoIsUnavailableError").mockImplementation(message => message.startsWith("ISO_UNAVAILABLE:"));
+
+		const handle = await ensureIsolation(repo, "retry-path-unavailable");
+
+		expect(isoResolve).toHaveBeenCalledWith(null);
+		expect(isoStart.mock.calls.map(call => call[0])).toEqual([
+			natives.IsoBackendKind.Btrfs,
+			natives.IsoBackendKind.Rcopy,
+		]);
+		expect(handle.backend).toBe(natives.IsoBackendKind.Rcopy);
+		expect(handle.fellBack).toBe(true);
+		expect(handle.fallbackReason).toBe(unavailable.message);
+	});
+
 	it("does not pop an unrelated pre-existing stash when the working tree is clean", async () => {
 		const { repo } = await createGitRepo();
 		await fs.writeFile(path.join(repo, "preexisting.txt"), "user stash\n");
@@ -102,5 +134,26 @@ describe("worktree isolation helpers", () => {
 		expect(await runGit(repo, ["status", "--porcelain=v1"])).toBe("M  staged.txt");
 		expect(await runGit(repo, ["diff", "--cached", "--", "staged.txt"])).toContain("+local staged change");
 		expect(await runGit(repo, ["stash", "list"])).toBe("");
+	});
+
+	it("subtracts baseline dirty state even when the task commits it", async () => {
+		const { repo } = await createGitRepo();
+		await fs.writeFile(path.join(repo, "merged.txt"), "baseline dirty change\n");
+		await fs.writeFile(path.join(repo, "preexisting.txt"), "baseline untracked\n");
+		const baseline = await captureBaseline(repo);
+
+		await runGit(repo, ["add", "-A"]);
+		await runGit(repo, ["commit", "-m", "baseline committed inside isolation"]);
+		await fs.writeFile(path.join(repo, "task.txt"), "task output\n");
+		await runGit(repo, ["add", "task.txt"]);
+		await runGit(repo, ["commit", "-m", "task output"]);
+
+		const delta = await captureDeltaPatch(repo, baseline);
+
+		expect(delta.nestedPatches).toEqual([]);
+		expect(delta.rootPatch).toContain("task.txt");
+		expect(delta.rootPatch).toContain("+task output");
+		expect(delta.rootPatch).not.toContain("baseline dirty change");
+		expect(delta.rootPatch).not.toContain("preexisting.txt");
 	});
 });

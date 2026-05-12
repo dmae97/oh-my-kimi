@@ -82,17 +82,29 @@ fn x64_under_arm64_emulation() -> bool {
 	if !cfg!(windows) || !cfg!(target_arch = "x86_64") {
 		return false;
 	}
-	let matches_arm64 = |var: &str| {
-		std::env::var(var)
-			.ok()
-			.is_some_and(|v| v.eq_ignore_ascii_case("ARM64"))
-	};
-	matches_arm64("PROCESSOR_ARCHITEW6432") || matches_arm64("PROCESSOR_ARCHITECTURE")
+	let env_value = |var: &str| std::env::var(var).ok();
+	vars_indicate_arm64_emulation(
+		env_value("PROCESSOR_ARCHITEW6432").as_deref(),
+		env_value("PROCESSOR_ARCHITECTURE").as_deref(),
+	)
+}
+
+fn vars_indicate_arm64_emulation(wow64_arch: Option<&str>, process_arch: Option<&str>) -> bool {
+	let matches_arm64 = |value: Option<&str>| value.is_some_and(|v| v.eq_ignore_ascii_case("ARM64"));
+	matches_arm64(wow64_arch) || matches_arm64(process_arch)
 }
 
 #[cfg(test)]
 mod tests {
-	use super::x64_under_arm64_emulation;
+	use super::{vars_indicate_arm64_emulation, x64_under_arm64_emulation};
+
+	#[test]
+	fn detects_windows_arm64_emulation_markers() {
+		assert!(vars_indicate_arm64_emulation(Some("ARM64"), None));
+		assert!(vars_indicate_arm64_emulation(None, Some("arm64")));
+		assert!(!vars_indicate_arm64_emulation(Some("AMD64"), Some("x86")));
+		assert!(!vars_indicate_arm64_emulation(None, None));
+	}
 
 	#[test]
 	fn returns_false_off_windows_or_non_x64() {
@@ -139,8 +151,9 @@ mod imp {
 			Storage::ProjectedFileSystem::{
 				PRJ_CALLBACK_DATA, PRJ_CALLBACKS, PRJ_CB_DATA_FLAG_ENUM_RESTART_SCAN,
 				PRJ_CB_DATA_FLAG_ENUM_RETURN_SINGLE_ENTRY, PRJ_DIR_ENTRY_BUFFER_HANDLE,
-				PRJ_FILE_BASIC_INFO, PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT, PRJ_PLACEHOLDER_INFO,
-				PRJ_STARTVIRTUALIZING_OPTIONS,
+				PRJ_EXT_INFO_TYPE_SYMLINK, PRJ_EXTENDED_INFO, PRJ_EXTENDED_INFO_0,
+				PRJ_EXTENDED_INFO_0_0, PRJ_FILE_BASIC_INFO, PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
+				PRJ_PLACEHOLDER_INFO, PRJ_STARTVIRTUALIZING_OPTIONS,
 			},
 			System::{
 				Com::CoCreateGuid,
@@ -176,7 +189,7 @@ mod imp {
 		PRJ_DIR_ENTRY_BUFFER_HANDLE,
 		PCWSTR,
 		*const PRJ_FILE_BASIC_INFO,
-		*const c_void,
+		*const PRJ_EXTENDED_INFO,
 	) -> HRESULT;
 	type PrjWriteFileDataFn = unsafe extern "system" fn(
 		PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
@@ -185,11 +198,12 @@ mod imp {
 		u64,
 		u32,
 	) -> HRESULT;
-	type PrjWritePlaceholderInfoFn = unsafe extern "system" fn(
+	type PrjWritePlaceholderInfo2Fn = unsafe extern "system" fn(
 		PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
 		PCWSTR,
 		*const PRJ_PLACEHOLDER_INFO,
 		u32,
+		*const PRJ_EXTENDED_INFO,
 	) -> HRESULT;
 
 	struct ProjfsApi {
@@ -203,7 +217,7 @@ mod imp {
 		prj_stop_virtualizing: PrjStopVirtualizingFn,
 		prj_fill_dir_entry_buffer2: PrjFillDirEntryBuffer2Fn,
 		prj_write_file_data: PrjWriteFileDataFn,
-		prj_write_placeholder_info: PrjWritePlaceholderInfoFn,
+		prj_write_placeholder_info2: PrjWritePlaceholderInfo2Fn,
 	}
 
 	unsafe impl Send for ProjfsApi {}
@@ -263,17 +277,18 @@ mod imp {
 					PrjFillDirEntryBuffer2Fn
 				),
 				prj_write_file_data: load_symbol!("PrjWriteFileData", PrjWriteFileDataFn),
-				prj_write_placeholder_info: load_symbol!(
-					"PrjWritePlaceholderInfo",
-					PrjWritePlaceholderInfoFn
+				prj_write_placeholder_info2: load_symbol!(
+					"PrjWritePlaceholderInfo2",
+					PrjWritePlaceholderInfo2Fn
 				),
 			})
 		}
 	}
 
 	struct DirectoryEntry {
-		name_wide:  Vec<u16>,
-		basic_info: PRJ_FILE_BASIC_INFO,
+		name_wide:      Vec<u16>,
+		basic_info:     PRJ_FILE_BASIC_INFO,
+		symlink_target: Option<Vec<u16>>,
 	}
 
 	#[derive(Default)]
@@ -538,12 +553,16 @@ mod imp {
 			};
 
 			if matched {
+				let extended_info = symlink_extended_info(entry.symlink_target.as_deref());
+				let extended_info_ptr = extended_info
+					.as_ref()
+					.map_or(std::ptr::null(), |info| info as *const _);
 				let hr = unsafe {
 					(context.api.prj_fill_dir_entry_buffer2)(
 						dir_entry_buffer_handle,
 						entry.name_wide.as_ptr(),
 						&raw const entry.basic_info,
-						std::ptr::null(),
+						extended_info_ptr,
 					)
 				};
 				if is_failed(hr) {
@@ -572,10 +591,18 @@ mod imp {
 
 		let relative_path = callback_relative_path(callback_data);
 		let source_path = context.lower_root.join(relative_path);
-		let metadata = match fs::metadata(&source_path) {
+		let metadata = match fs::symlink_metadata(&source_path) {
 			Ok(metadata) => metadata,
 			Err(err) => return io_error_to_hresult(&err),
 		};
+		let symlink_target = match symlink_target_wide(&source_path, &metadata) {
+			Ok(target) => target,
+			Err(err) => return io_error_to_hresult(&err),
+		};
+		let extended_info = symlink_extended_info(symlink_target.as_deref());
+		let extended_info_ptr = extended_info
+			.as_ref()
+			.map_or(std::ptr::null(), |info| info as *const _);
 
 		let placeholder_info =
 			PRJ_PLACEHOLDER_INFO { FileBasicInfo: to_basic_info(&metadata), ..Default::default() };
@@ -587,11 +614,12 @@ mod imp {
 		};
 
 		unsafe {
-			(context.api.prj_write_placeholder_info)(
+			(context.api.prj_write_placeholder_info2)(
 				callback_data.NamespaceVirtualizationContext,
 				destination,
 				&raw const placeholder_info,
 				mem::size_of::<PRJ_PLACEHOLDER_INFO>() as u32,
+				extended_info_ptr,
 			)
 		}
 	}
@@ -706,18 +734,21 @@ mod imp {
 		let mut entries = Vec::new();
 		for entry in fs::read_dir(&source_dir)? {
 			let entry = entry?;
-			let metadata = entry.metadata()?;
+			let path = entry.path();
+			let metadata = fs::symlink_metadata(&path)?;
+			let symlink_target = symlink_target_wide(&path, &metadata)?;
 			let name = entry.file_name();
 			let mut name_wide = to_wide(name.as_os_str());
 			if name_wide.is_empty() {
 				continue;
 			}
 			entries.push(DirectoryEntry {
-				name_wide:  {
+				name_wide: {
 					name_wide.shrink_to_fit();
 					name_wide
 				},
 				basic_info: to_basic_info(&metadata),
+				symlink_target,
 			});
 		}
 
@@ -740,6 +771,25 @@ mod imp {
 			ChangeTime:     metadata.last_write_time() as i64,
 			FileAttributes: metadata.file_attributes(),
 		}
+	}
+
+	fn symlink_target_wide(path: &Path, metadata: &fs::Metadata) -> io::Result<Option<Vec<u16>>> {
+		if !metadata.file_type().is_symlink() {
+			return Ok(None);
+		}
+		let mut target = to_wide(fs::read_link(path)?.as_os_str());
+		target.shrink_to_fit();
+		Ok(Some(target))
+	}
+
+	fn symlink_extended_info(target: Option<&[u16]>) -> Option<PRJ_EXTENDED_INFO> {
+		target.map(|target| PRJ_EXTENDED_INFO {
+			InfoType:       PRJ_EXT_INFO_TYPE_SYMLINK,
+			NextInfoOffset: 0,
+			Anonymous:      PRJ_EXTENDED_INFO_0 {
+				Symlink: PRJ_EXTENDED_INFO_0_0 { TargetName: target.as_ptr() },
+			},
+		})
 	}
 
 	fn callback_relative_path(callback_data: &PRJ_CALLBACK_DATA) -> PathBuf {

@@ -895,6 +895,11 @@ export async function readTree(
 	await runEffect(cwd, ["read-tree", treeish], options);
 }
 
+/** Write the current index as a tree and return its object id. */
+export async function writeTree(cwd: string, options: Pick<CommandOptions, "env" | "signal"> = {}): Promise<string> {
+	return (await runText(cwd, ["write-tree"], options)).trim();
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // API: show
 // ════════════════════════════════════════════════════════════════════════════

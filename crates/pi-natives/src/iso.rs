@@ -62,13 +62,15 @@ pub struct IsoProbeResult {
 /// Outcome of [`iso_resolve`].
 #[napi(object)]
 pub struct IsoResolveResult {
-	/// Backend that will actually be used.
-	pub kind:      IsoBackendKind,
+	/// Backend that will actually be tried first.
+	pub kind:       IsoBackendKind,
+	/// Host-available backends in retry order, starting with `kind`.
+	pub candidates: Vec<IsoBackendKind>,
 	/// True when the resolver fell back from `preferred` (or from the
-	/// platform native) to a different backend.
-	pub fell_back: bool,
+	/// first automatic candidate) to a different backend.
+	pub fell_back:  bool,
 	/// Human-readable reason for the fallback, if any.
-	pub reason:    Option<String>,
+	pub reason:     Option<String>,
 }
 
 /// One entry in an [`IsoDiff`].
@@ -113,9 +115,14 @@ pub fn iso_probe(kind: Option<IsoBackendKind>) -> IsoProbeResult {
 pub fn iso_resolve(preferred: Option<IsoBackendKind>) -> IsoResolveResult {
 	let resolution = pi_iso::resolve(preferred.map(from_napi_kind));
 	IsoResolveResult {
-		kind:      to_napi_kind(resolution.kind),
-		fell_back: resolution.fell_back,
-		reason:    resolution.reason,
+		kind:       to_napi_kind(resolution.kind),
+		candidates: resolution
+			.candidates
+			.into_iter()
+			.map(to_napi_kind)
+			.collect(),
+		fell_back:  resolution.fell_back,
+		reason:     resolution.reason,
 	}
 }
 

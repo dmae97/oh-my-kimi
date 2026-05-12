@@ -847,11 +847,13 @@ export declare function isoResolve(preferred?: IsoBackendKind | undefined | null
 
 /** Outcome of [`iso_resolve`]. */
 export interface IsoResolveResult {
-  /** Backend that will actually be used. */
+  /** Backend that will actually be tried first. */
   kind: IsoBackendKind
+  /** Host-available backends in retry order, starting with `kind`. */
+  candidates: Array<IsoBackendKind>
   /**
    * True when the resolver fell back from `preferred` (or from the
-   * platform native) to a different backend.
+   * first automatic candidate) to a different backend.
    */
   fellBack: boolean
   /** Human-readable reason for the fallback, if any. */

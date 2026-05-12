@@ -12,7 +12,6 @@ use std::{
 };
 
 use anyhow::{Error, Result};
-use bytes::Bytes;
 use brush_builtins::{BuiltinSet, default_builtins};
 use brush_core::{
 	ExecutionContext, ExecutionControlFlow, ExecutionExitCode, ExecutionResult, ProcessGroupPolicy,
@@ -21,6 +20,7 @@ use brush_core::{
 	env::EnvironmentScope,
 	openfiles::{self, OpenFile, OpenFiles},
 };
+use bytes::Bytes;
 use clap::Parser;
 #[cfg(not(unix))]
 use tokio::io::AsyncReadExt as _;
@@ -971,23 +971,21 @@ async fn run_shell_command_streams(
 	if !stdout_finished || !stderr_finished {
 		reader_cancel.cancel();
 	}
-	if !stdout_finished {
-		if time::timeout(READER_SHUTDOWN_TIMEOUT, &mut stdout_handle)
+	if !stdout_finished
+		&& time::timeout(READER_SHUTDOWN_TIMEOUT, &mut stdout_handle)
 			.await
 			.is_err()
-		{
-			stdout_handle.abort();
-			let _ = stdout_handle.await;
-		}
+	{
+		stdout_handle.abort();
+		let _ = stdout_handle.await;
 	}
-	if !stderr_finished {
-		if time::timeout(READER_SHUTDOWN_TIMEOUT, &mut stderr_handle)
+	if !stderr_finished
+		&& time::timeout(READER_SHUTDOWN_TIMEOUT, &mut stderr_handle)
 			.await
 			.is_err()
-		{
-			stderr_handle.abort();
-			let _ = stderr_handle.await;
-		}
+	{
+		stderr_handle.abort();
+		let _ = stderr_handle.await;
 	}
 	cancel_bridge.abort();
 	let _ = cancel_bridge.await;

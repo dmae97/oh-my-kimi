@@ -2,9 +2,12 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { IsoBackendKind, isoResolve, isoStart, isoStop } from "@oh-my-pi/pi-natives";
+import * as natives from "@oh-my-pi/pi-natives";
 import { getWorktreeDir, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import * as git from "../utils/git";
+
+const { IsoBackendKind } = natives;
+type IsoBackendKind = natives.IsoBackendKind;
 
 /** Baseline state for a single git repository. */
 export interface RepoBaseline {
@@ -13,6 +16,7 @@ export interface RepoBaseline {
 	staged: string;
 	unstaged: string;
 	untracked: string[];
+	untrackedPatch: string;
 }
 
 /** Baseline state for the project, including any nested git repos. */
@@ -79,12 +83,49 @@ async function discoverNestedRepos(repoRoot: string): Promise<string[]> {
 	return result;
 }
 
+async function captureUntrackedPatch(repoRoot: string, untracked: readonly string[]): Promise<string> {
+	if (untracked.length === 0) return "";
+	const nullPath = getGitNoIndexNullPath();
+	const untrackedDiffs = await Promise.all(
+		untracked.map(entry =>
+			git.diff(repoRoot, {
+				allowFailure: true,
+				binary: true,
+				noIndex: { left: nullPath, right: entry },
+			}),
+		),
+	);
+	return untrackedDiffs.filter(diff => diff.trim()).join("\n");
+}
+
 async function captureRepoBaseline(repoRoot: string): Promise<RepoBaseline> {
 	const headCommit = (await git.head.sha(repoRoot)) ?? "";
 	const staged = await git.diff(repoRoot, { binary: true, cached: true });
 	const unstaged = await git.diff(repoRoot, { binary: true });
 	const untracked = await git.ls.untracked(repoRoot);
-	return { repoRoot, headCommit, staged, unstaged, untracked };
+	const untrackedPatch = await captureUntrackedPatch(repoRoot, untracked);
+	return { repoRoot, headCommit, staged, unstaged, untracked, untrackedPatch };
+}
+
+async function writeSyntheticTree(repoDir: string, baseTreeish: string, patches: readonly string[]): Promise<string> {
+	const tempIndex = path.join(os.tmpdir(), `omp-task-index-${Snowflake.next()}`);
+	try {
+		await git.readTree(repoDir, baseTreeish, {
+			env: { GIT_INDEX_FILE: tempIndex },
+		});
+		for (const patch of patches) {
+			if (!patch.trim()) continue;
+			await git.patch.applyText(repoDir, patch, {
+				cached: true,
+				env: { GIT_INDEX_FILE: tempIndex },
+			});
+		}
+		return await git.writeTree(repoDir, {
+			env: { GIT_INDEX_FILE: tempIndex },
+		});
+	} finally {
+		await fs.rm(tempIndex, { force: true });
+	}
 }
 
 export async function captureBaseline(repoRoot: string): Promise<WorktreeBaseline> {
@@ -99,87 +140,23 @@ export async function captureBaseline(repoRoot: string): Promise<WorktreeBaselin
 }
 
 async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline): Promise<string> {
-	// Check if HEAD advanced (task committed changes)
 	const currentHead = (await git.head.sha(repoDir)) ?? "";
-	const headAdvanced = currentHead && currentHead !== rb.headCommit;
+	const currentStaged = await git.diff(repoDir, { binary: true, cached: true });
+	const currentUnstaged = await git.diff(repoDir, { binary: true });
+	const currentUntracked = await git.ls.untracked(repoDir);
+	const currentUntrackedPatch = await captureUntrackedPatch(repoDir, currentUntracked);
 
-	if (headAdvanced) {
-		// HEAD moved: use diff-tree to capture committed changes, plus any uncommitted on top
-		const parts: string[] = [];
+	const baselineTree = await writeSyntheticTree(repoDir, rb.headCommit, [rb.staged, rb.unstaged, rb.untrackedPatch]);
+	const currentTree = await writeSyntheticTree(repoDir, currentHead, [
+		currentStaged,
+		currentUnstaged,
+		currentUntrackedPatch,
+	]);
 
-		// Committed changes since baseline
-		const committedDiff = await git.diff.tree(repoDir, rb.headCommit, currentHead, {
-			allowFailure: true,
-			binary: true,
-		});
-		if (committedDiff.trim()) parts.push(committedDiff);
-
-		// Uncommitted changes on top of the new HEAD
-		const staged = await git.diff(repoDir, { binary: true, cached: true });
-		const unstaged = await git.diff(repoDir, { binary: true });
-		if (staged.trim()) parts.push(staged);
-		if (unstaged.trim()) parts.push(unstaged);
-
-		// New untracked files (relative to both baseline and current tracking)
-		const currentUntracked = await git.ls.untracked(repoDir);
-		const baselineUntracked = new Set(rb.untracked);
-		const newUntracked = currentUntracked.filter(entry => !baselineUntracked.has(entry));
-		if (newUntracked.length > 0) {
-			const nullPath = getGitNoIndexNullPath();
-			const untrackedDiffs = await Promise.all(
-				newUntracked.map(entry =>
-					git.diff(repoDir, {
-						allowFailure: true,
-						binary: true,
-						noIndex: { left: nullPath, right: entry },
-					}),
-				),
-			);
-			parts.push(...untrackedDiffs.filter(d => d.trim()));
-		}
-
-		return parts.join("\n");
-	}
-
-	// HEAD unchanged: use temp index approach (subtracts baseline from delta)
-	const tempIndex = path.join(os.tmpdir(), `omp-task-index-${Snowflake.next()}`);
-	try {
-		await git.readTree(repoDir, rb.headCommit, {
-			env: { GIT_INDEX_FILE: tempIndex },
-		});
-		await git.patch.applyText(repoDir, rb.staged, {
-			cached: true,
-			env: { GIT_INDEX_FILE: tempIndex },
-		});
-		await git.patch.applyText(repoDir, rb.unstaged, {
-			cached: true,
-			env: { GIT_INDEX_FILE: tempIndex },
-		});
-		const diff = await git.diff(repoDir, {
-			binary: true,
-			env: { GIT_INDEX_FILE: tempIndex },
-		});
-
-		const currentUntracked = await git.ls.untracked(repoDir);
-		const baselineUntracked = new Set(rb.untracked);
-		const newUntracked = currentUntracked.filter(entry => !baselineUntracked.has(entry));
-
-		if (newUntracked.length === 0) return diff;
-
-		const nullPath = getGitNoIndexNullPath();
-		const untrackedDiffs = await Promise.all(
-			newUntracked.map(entry =>
-				git.diff(repoDir, {
-					allowFailure: true,
-					binary: true,
-					noIndex: { left: nullPath, right: entry },
-				}),
-			),
-		);
-		return `${diff}${diff && !diff.endsWith("\n") ? "\n" : ""}${untrackedDiffs.join("\n")}`;
-	} finally {
-		await fs.rm(tempIndex, { force: true });
-	}
+	return git.diff.tree(repoDir, baselineTree, currentTree, {
+		allowFailure: true,
+		binary: true,
+	});
 }
 
 export interface NestedRepoPatch {
@@ -328,6 +305,11 @@ export interface IsolationHandle {
  * caller learns about that through `IsolationHandle.fellBack` +
  * `fallbackReason`.
  */
+
+function errorMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}
+
 export async function ensureIsolation(
 	baseCwd: string,
 	id: string,
@@ -338,28 +320,38 @@ export async function ensureIsolation(
 	const baseDir = getWorktreeDir(encodedProject, id);
 	const mergedDir = path.join(baseDir, "merged");
 
-	const resolution = isoResolve(preferred ?? null);
+	const resolution = natives.isoResolve(preferred ?? null);
+	const candidates = resolution.candidates.length > 0 ? resolution.candidates : [resolution.kind];
+	let fallbackReason = resolution.reason ?? null;
 
-	await fs.rm(baseDir, { recursive: true, force: true });
-	try {
-		await isoStart(resolution.kind, repoRoot, mergedDir);
-		return {
-			mergedDir,
-			backend: resolution.kind,
-			fellBack: resolution.fellBack,
-			fallbackReason: resolution.reason ?? null,
-		};
-	} catch (err) {
+	for (const candidate of candidates) {
 		await fs.rm(baseDir, { recursive: true, force: true });
-		throw err;
+		try {
+			await natives.isoStart(candidate, repoRoot, mergedDir);
+			return {
+				mergedDir,
+				backend: candidate,
+				fellBack: candidate !== resolution.kind || resolution.fellBack,
+				fallbackReason,
+			};
+		} catch (err) {
+			await fs.rm(baseDir, { recursive: true, force: true });
+			const message = errorMessage(err);
+			if (!natives.isoIsUnavailableError(message)) {
+				throw err;
+			}
+			fallbackReason ??= message;
+		}
 	}
+
+	throw new Error(fallbackReason ?? "No isolation backend is available.");
 }
 
 /** Tear down a handle returned by {@link ensureIsolation}. */
 export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 	try {
 		try {
-			await isoStop(handle.backend, handle.mergedDir);
+			await natives.isoStop(handle.backend, handle.mergedDir);
 		} catch (err) {
 			logger.warn("isolation backend stop failed during cleanup", {
 				backend: handle.backend,

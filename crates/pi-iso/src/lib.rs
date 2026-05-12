@@ -119,6 +119,22 @@ impl BackendKind {
 	}
 }
 
+#[cfg(target_os = "macos")]
+const MACOS_AUTO_ORDER: &[BackendKind] = &[BackendKind::Apfs, BackendKind::Zfs, BackendKind::Rcopy];
+#[cfg(target_os = "linux")]
+const LINUX_AUTO_ORDER: &[BackendKind] = &[
+	BackendKind::Btrfs,
+	BackendKind::Zfs,
+	BackendKind::LinuxReflink,
+	BackendKind::Overlayfs,
+	BackendKind::Rcopy,
+];
+#[cfg(windows)]
+const WINDOWS_AUTO_ORDER: &[BackendKind] =
+	&[BackendKind::WindowsBlockClone, BackendKind::Projfs, BackendKind::Rcopy];
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+const FALLBACK_AUTO_ORDER: &[BackendKind] = &[BackendKind::Rcopy];
+
 impl fmt::Display for BackendKind {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.write_str(self.as_str())
@@ -261,52 +277,93 @@ pub fn backend_kind() -> BackendKind {
 	default_backend().kind()
 }
 
-/// Outcome of [`resolve`]. `kind` is the backend that will actually be
-/// used; `fell_back` is `true` when a `preferred` choice (or the
-/// platform-native pick) was unusable and the resolver downgraded.
-/// `reason` carries the original probe's explanation when available.
-#[derive(Debug, Clone)]
-pub struct Resolution {
-	pub kind:      BackendKind,
-	pub fell_back: bool,
-	pub reason:    Option<String>,
+/// Backend preference order for automatic isolation on this build target.
+///
+/// The order is intentionally broader than [`BackendKind::native`]: it tries
+/// filesystem-native snapshot/reflink mechanisms first, then mount/projection
+/// overlays, and keeps [`BackendKind::Rcopy`] as the universal final fallback.
+pub const fn auto_order() -> &'static [BackendKind] {
+	#[cfg(target_os = "macos")]
+	{
+		MACOS_AUTO_ORDER
+	}
+	#[cfg(target_os = "linux")]
+	{
+		LINUX_AUTO_ORDER
+	}
+	#[cfg(windows)]
+	{
+		WINDOWS_AUTO_ORDER
+	}
+	#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+	{
+		FALLBACK_AUTO_ORDER
+	}
 }
 
-/// Pick the best backend available right now.
+/// Outcome of [`resolve`].
+///
+/// `kind` is the first host-available backend to try. `candidates` contains
+/// every host-available backend in fallback order, starting with `kind`, so
+/// callers can retry when a backend is unavailable for a specific filesystem
+/// path. `fell_back` is `true` when a `preferred` choice (or earlier automatic
+/// candidate) was unusable. `reason` carries the first unavailable probe's
+/// explanation when available.
+#[derive(Debug, Clone)]
+pub struct Resolution {
+	pub kind:       BackendKind,
+	pub candidates: Vec<BackendKind>,
+	pub fell_back:  bool,
+	pub reason:     Option<String>,
+}
+
+/// Pick the best backend whose host-level prerequisites are available.
 ///
 /// Caller priority:
 /// 1. If `preferred` is `Some` and its [`probe`](IsolationBackend::probe)
 ///    reports `available`, use it as-is.
-/// 2. Otherwise try the platform-native backend ([`BackendKind::native`]); if
-///    it differs from `preferred` and probes available, use it.
-/// 3. Otherwise fall back to [`BackendKind::Rcopy`], which is always available.
+/// 2. Otherwise walk [`auto_order`], skipping `preferred` if present.
+/// 3. [`BackendKind::Rcopy`] is the final automatic candidate and is expected
+///    to be available on every platform.
 ///
-/// The unavailable probe's `reason` is carried through `Resolution::reason`
-/// so callers can surface it to the user instead of guessing.
+/// This is only a host-level probe. Some backends still reject a specific
+/// `lower`/`merged` pair at [`IsolationBackend::start`] time (cross-device
+/// reflinks, non-subvolume btrfs paths, non-ZFS mountpoints). Callers that can
+/// recover should retry the remaining automatic candidates when `start`
+/// returns [`IsoError::Unavailable`].
 pub fn resolve(preferred: Option<BackendKind>) -> Resolution {
+	let mut reason = None;
+	let mut candidates = Vec::with_capacity(auto_order().len() + usize::from(preferred.is_some()));
+
 	if let Some(p) = preferred {
 		let probe = backend(p).probe();
 		if probe.available {
-			return Resolution { kind: p, fell_back: false, reason: None };
+			candidates.push(p);
+		} else {
+			reason = probe.reason;
 		}
-		let original_reason = probe.reason;
-		let native = BackendKind::native();
-		if native != p {
-			let np = backend(native).probe();
-			if np.available {
-				return Resolution { kind: native, fell_back: true, reason: original_reason };
-			}
+	}
+
+	for candidate in auto_order() {
+		if Some(*candidate) == preferred {
+			continue;
 		}
-		return Resolution {
-			kind:      BackendKind::Rcopy,
-			fell_back: true,
-			reason:    original_reason,
-		};
+		let probe = backend(*candidate).probe();
+		if probe.available {
+			candidates.push(*candidate);
+		} else if reason.is_none() {
+			reason = probe.reason;
+		}
 	}
-	let native = BackendKind::native();
-	let probe = backend(native).probe();
-	if probe.available {
-		return Resolution { kind: native, fell_back: false, reason: None };
+
+	if candidates.is_empty() {
+		candidates.push(BackendKind::Rcopy);
 	}
-	Resolution { kind: BackendKind::Rcopy, fell_back: true, reason: probe.reason }
+	let kind = candidates[0];
+	let fell_back = match preferred {
+		Some(p) => kind != p,
+		None => kind != auto_order()[0],
+	};
+
+	Resolution { kind, candidates, fell_back, reason }
 }

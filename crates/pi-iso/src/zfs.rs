@@ -128,10 +128,14 @@ mod imp {
 		match dataset_for_mountpoint(&merged)? {
 			Some(dataset) => {
 				let origin = zfs_get_value("origin", &dataset)?;
-				run_zfs_other(["destroy", dataset.as_str()])?;
-				if is_own_snapshot(&origin) {
-					run_zfs_other(["destroy", origin.as_str()])?;
+				if !is_own_clone(&dataset, &origin) {
+					return Err(IsoError::other(format!(
+						"refusing to destroy unrelated ZFS dataset {dataset} mounted at {}",
+						merged.display()
+					)));
 				}
+				run_zfs_other(["destroy", dataset.as_str()])?;
+				run_zfs_other(["destroy", origin.as_str()])?;
 				Ok(())
 			},
 			None => match fs::remove_dir_all(&merged) {
@@ -306,14 +310,25 @@ mod imp {
 		hash
 	}
 
-	fn is_own_snapshot(snapshot: &str) -> bool {
-		let Some((_, name)) = snapshot.rsplit_once('@') else {
-			return false;
-		};
+	fn is_own_name(name: &str) -> bool {
 		name.starts_with(SNAP_PREFIX)
 			&& name[SNAP_PREFIX.len()..]
 				.bytes()
 				.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+	}
+
+	fn is_own_snapshot(snapshot: &str) -> bool {
+		let Some((_, name)) = snapshot.rsplit_once('@') else {
+			return false;
+		};
+		is_own_name(name)
+	}
+
+	fn is_own_clone(dataset: &str, origin: &str) -> bool {
+		let Some(name) = dataset.rsplit('/').next() else {
+			return false;
+		};
+		is_own_name(name) && is_own_snapshot(origin)
 	}
 
 	fn absolute_path(path: &Path) -> PathBuf {

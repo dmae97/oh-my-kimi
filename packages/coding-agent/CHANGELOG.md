@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added new `task.isolation.mode` values `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, and `rcopy` for native PAL-backed task isolation backends
@@ -13,6 +14,8 @@
 
 ### Fixed
 
+- Fixed worktree delta capture to include previously untracked file state by baselining untracked patches for both snapshots
+- Fixed task isolation startup to try alternate PAL backends when the preferred one is unavailable, allowing successful fallback instead of immediate failure
 - Mapped legacy `task.isolation.mode` values `worktree`, `fuse-overlay`, and `fuse-projfs` to their new equivalents during settings migration to preserve behavior with older configs
 
 ## [14.9.8] - 2026-05-12
