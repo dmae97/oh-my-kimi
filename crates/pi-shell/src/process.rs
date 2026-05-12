@@ -1259,6 +1259,28 @@ impl Process {
 	pub fn status(&self) -> ProcessStatus {
 		self.inner.status()
 	}
+
+	/// Gracefully terminate this process and its descendants.
+	///
+	/// Sends `TERM_SIGNAL` to the optional process group, every live descendant,
+	/// and the root, then optionally waits up to `graceful_ms` for the tree to
+	/// exit before escalating to `KILL_SIGNAL`. Pass `graceful_ms < 0` to skip
+	/// the wait entirely (the polite signal is still emitted). Returns `true`
+	/// when the tree has exited by the end of the hard wave's wait window.
+	pub async fn terminate_tree(
+		&self,
+		group: bool,
+		graceful_ms: i32,
+		timeout_ms: u32,
+		ct: CancelToken,
+	) -> Result<bool> {
+		self.terminate_tree_impl(group, graceful_ms, timeout_ms, ct).await
+	}
+
+	/// Wait until this process exits, optionally bounded by `timeout`.
+	pub async fn wait_for_exit(&self, timeout: Option<Duration>, ct: CancelToken) -> Result<bool> {
+		wait_for_exit(self, &[], timeout, ct).await
+	}
 }
 
 impl Process {
@@ -1300,8 +1322,7 @@ impl Process {
 		signaled
 	}
 
-	#[allow(dead_code, reason = "shared core keeps termination API for future callers")]
-	async fn terminate_tree(
+	async fn terminate_tree_impl(
 		&self,
 		group: bool,
 		graceful_ms: i32,

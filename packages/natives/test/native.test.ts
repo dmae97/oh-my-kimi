@@ -513,28 +513,6 @@ describe("pi-natives", () => {
 	});
 
 	describe("shell", () => {
-		it("runs pty commands with terminal stdio", async () => {
-			if (process.platform === "win32") {
-				return;
-			}
-
-			let output = "";
-			const result = await executeShell(
-				{
-					command: "test -t 0 && test -t 1 && tty",
-					cwd: testDir,
-					pty: true,
-					timeoutMs: 5_000,
-				},
-				(_err, chunk) => {
-					output += chunk;
-				},
-			);
-
-			expect(result.exitCode).toBe(0);
-			expect(output).toContain("/dev/");
-		});
-
 		it("should time out background workloads without leaving delayed writers behind", async () => {
 			if (process.platform === "win32") {
 				return;

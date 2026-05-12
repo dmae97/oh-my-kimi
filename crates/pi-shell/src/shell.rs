@@ -3,10 +3,9 @@
 use std::{
 	collections::{HashMap, HashSet},
 	fs,
-	future::Future,
-	io::{self, Read, Write},
+	io::{self, Write},
 	str,
-	sync::{Arc, mpsc as std_mpsc},
+	sync::Arc,
 	time::Duration,
 };
 
@@ -20,7 +19,6 @@ use brush_core::{
 	openfiles::{self, OpenFile, OpenFiles},
 };
 use clap::Parser;
-use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 #[cfg(not(unix))]
 use tokio::io::AsyncReadExt as _;
 use tokio::{
@@ -78,7 +76,6 @@ struct ShellRunConfig {
 	command:   String,
 	cwd:       Option<String>,
 	env:       Option<HashMap<String, String>>,
-	pty:       bool,
 	minimizer: Option<minimizer::MinimizerConfig>,
 }
 
@@ -87,7 +84,6 @@ pub struct ShellRunOptions {
 	pub command:    String,
 	pub cwd:        Option<String>,
 	pub env:        Option<HashMap<String, String>>,
-	pub pty:        bool,
 	pub timeout_ms: Option<u32>,
 }
 
@@ -117,42 +113,9 @@ pub struct ShellExecuteOptions {
 	pub timeout_ms:    Option<u32>,
 	pub snapshot_path: Option<String>,
 	pub minimizer:     Option<minimizer::MinimizerOptions>,
-	pub pty:           bool,
 }
 
 pub type ShellExecuteResult = ShellRunResult;
-
-const PTY_DEFAULT_COLS: u16 = 120;
-const PTY_DEFAULT_ROWS: u16 = 40;
-const PTY_LOOP_INTERVAL: Duration = Duration::from_millis(16);
-const PTY_POST_CANCEL_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
-const PTY_POST_EXIT_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
-const PTY_FINAL_READER_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
-const PTY_READER_EVENTS_PER_TICK: usize = 256;
-
-struct PtyShellConfig {
-	command:           String,
-	cwd:               String,
-	env:               Vec<(String, String)>,
-	capture_output:    bool,
-	max_capture_bytes: usize,
-}
-
-struct PtyShellOutput {
-	exit_code: i32,
-	output:    Option<BufferedOutput>,
-}
-
-enum PtyReaderEvent {
-	Chunk(String),
-	Done,
-}
-
-struct CaptureState {
-	text:      String,
-	exceeded:  bool,
-	max_bytes: usize,
-}
 
 pub struct Shell {
 	session:     Arc<TokioMutex<Option<ShellSessionCore>>>,
@@ -194,7 +157,6 @@ impl Shell {
 			command:   options.command,
 			cwd:       options.cwd,
 			env:       options.env,
-			pty:       options.pty,
 			minimizer: self.config.minimizer.clone(),
 		};
 		run_shell_session(
@@ -231,7 +193,6 @@ pub async fn execute_shell(
 		command: options.command,
 		cwd: options.cwd,
 		env: options.env,
-		pty: options.pty,
 		minimizer,
 	};
 	run_shell_oneshot(config, run_config, on_chunk, cancel_token).await
@@ -274,7 +235,12 @@ async fn run_shell_session(
 				let _ = run_task.await;
 			}
 			abort_state.clear().await;
-			*session.lock().await = None;
+			// Use try_lock to avoid deadlocking if another task holds the session.
+			// If we can't acquire the lock, the session will be cleaned up when the
+			// holding task finishes.
+			if let Ok(mut guard) = session.try_lock() {
+				*guard = None;
+			}
 			return Ok(ShellRunResult {
 				exit_code: None,
 				cancelled: matches!(reason, AbortReason::Signal),
@@ -570,26 +536,6 @@ async fn run_shell_command(
 		0
 	};
 
-	if options.pty {
-		let result = run_pty_shell_command(
-			session,
-			options,
-			on_chunk,
-			cancel_token,
-			minimizer_mode,
-			max_capture_bytes,
-		)
-		.await;
-		if env_scope_pushed {
-			session
-				.shell
-				.env_mut()
-				.pop_scope(EnvironmentScope::Command)
-				.map_err(|err| Error::msg(format!("Failed to pop env scope: {err}")))?;
-		}
-		return result;
-	}
-
 	let (reader_file, writer_file) = pipe_to_files("output")?;
 
 	let stdout_file = OpenFile::from(
@@ -777,357 +723,6 @@ async fn run_shell_command(
 	Ok((result, minimized_out))
 }
 
-async fn run_pty_shell_command(
-	session: &ShellSessionCore,
-	options: &ShellRunConfig,
-	on_chunk: Option<mpsc::UnboundedSender<String>>,
-	cancel_token: CancellationToken,
-	minimizer_mode: minimizer::engine::MinimizerMode,
-	max_capture_bytes: usize,
-) -> Result<(ExecutionResult, Option<MinimizerResult>)> {
-	let pty_config = PtyShellConfig {
-		command: options.command.clone(),
-		cwd: session.shell.working_dir().to_string_lossy().into_owned(),
-		env: exported_env(&session.shell),
-		capture_output: !matches!(minimizer_mode, minimizer::engine::MinimizerMode::None),
-		max_capture_bytes,
-	};
-
-	let pty_output = tokio::task::spawn_blocking(move || {
-		run_pty_shell_command_sync(pty_config, on_chunk, cancel_token)
-	})
-	.await
-	.map_err(|err| Error::msg(format!("PTY execution task failed: {err}")))??;
-
-	let result = execution_result_from_exit_code(pty_output.exit_code);
-	let minimized_out = pty_output.output.and_then(|output| {
-		minimize_buffered_output(
-			&options.command,
-			output,
-			pty_output.exit_code,
-			options.minimizer.as_ref(),
-			minimizer_mode,
-		)
-	});
-	Ok((result, minimized_out))
-}
-
-fn run_pty_shell_command_sync(
-	config: PtyShellConfig,
-	on_chunk: Option<mpsc::UnboundedSender<String>>,
-	cancel_token: CancellationToken,
-) -> Result<PtyShellOutput> {
-	let pty_system = native_pty_system();
-	let pair = pty_system
-		.openpty(PtySize {
-			rows:         PTY_DEFAULT_ROWS,
-			cols:         PTY_DEFAULT_COLS,
-			pixel_width:  0,
-			pixel_height: 0,
-		})
-		.map_err(|err| Error::msg(format!("Failed to open PTY: {err}")))?;
-
-	let mut cmd = CommandBuilder::new("sh");
-	cmd.arg("-lc");
-	cmd.arg(&config.command);
-	cmd.cwd(config.cwd.as_str());
-	cmd.env_clear();
-	for (key, value) in &config.env {
-		cmd.env(key, value);
-	}
-
-	let mut child = pair
-		.slave
-		.spawn_command(cmd)
-		.map_err(|err| Error::msg(format!("Failed to spawn PTY command: {err}")))?;
-	drop(pair.slave);
-
-	let master = pair.master;
-	let mut reader = master
-		.try_clone_reader()
-		.map_err(|err| Error::msg(format!("Failed to create PTY reader: {err}")))?;
-	let (reader_tx, reader_rx) = std_mpsc::channel::<PtyReaderEvent>();
-	let reader_thread = std::thread::spawn(move || read_pty_output(&mut reader, reader_tx));
-
-	let child_pid = child
-		.process_id()
-		.and_then(|value| i32::try_from(value).ok());
-	#[cfg(unix)]
-	let process_group_id = master.process_group_leader().filter(|pgid| *pgid > 0);
-	#[cfg(not(unix))]
-	let process_group_id: Option<i32> = None;
-
-	let mut capture = config.capture_output.then(|| CaptureState {
-		text:      String::new(),
-		exceeded:  false,
-		max_bytes: config.max_capture_bytes,
-	});
-	let mut reader_done = false;
-	let mut exit_code: Option<i32> = None;
-	let mut terminate_requested = false;
-	let mut reader_drain_deadline = None;
-
-	while exit_code.is_none() || !reader_done {
-		if !terminate_requested && cancel_token.is_cancelled() {
-			terminate_pty_processes(&mut child, child_pid, process_group_id);
-			terminate_requested = true;
-			reader_drain_deadline = Some(std::time::Instant::now() + PTY_POST_CANCEL_DRAIN_TIMEOUT);
-		}
-
-		drain_pty_reader_events(&reader_rx, on_chunk.as_ref(), &mut capture, &mut reader_done);
-
-		if exit_code.is_none()
-			&& let Some(status) = child
-				.try_wait()
-				.map_err(|err| Error::msg(format!("Failed checking PTY status: {err}")))?
-		{
-			exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
-			if !reader_done && reader_drain_deadline.is_none() {
-				reader_drain_deadline = Some(std::time::Instant::now() + PTY_POST_EXIT_DRAIN_TIMEOUT);
-			}
-		}
-
-		if let Some(deadline) = reader_drain_deadline
-			&& std::time::Instant::now() >= deadline
-		{
-			break;
-		}
-
-		if exit_code.is_none() || !reader_done {
-			let wait_duration = reader_drain_deadline.map_or(PTY_LOOP_INTERVAL, |deadline| {
-				deadline
-					.saturating_duration_since(std::time::Instant::now())
-					.min(PTY_LOOP_INTERVAL)
-			});
-			match reader_rx.recv_timeout(wait_duration) {
-				Ok(event) => {
-					handle_pty_reader_event(event, on_chunk.as_ref(), &mut capture, &mut reader_done)
-				},
-				Err(std_mpsc::RecvTimeoutError::Timeout) => {},
-				Err(std_mpsc::RecvTimeoutError::Disconnected) => reader_done = true,
-			}
-		}
-	}
-
-	if exit_code.is_none() {
-		if terminate_requested {
-			if let Some(status) = child
-				.try_wait()
-				.map_err(|err| Error::msg(format!("Failed checking PTY status: {err}")))?
-			{
-				exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
-			}
-		} else {
-			let status = child
-				.wait()
-				.map_err(|err| Error::msg(format!("Failed waiting PTY process: {err}")))?;
-			exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
-		}
-	}
-
-	drop(master);
-	if !reader_done {
-		let finalize_deadline = std::time::Instant::now() + PTY_FINAL_READER_DRAIN_TIMEOUT;
-		while std::time::Instant::now() < finalize_deadline {
-			let wait_duration = finalize_deadline
-				.saturating_duration_since(std::time::Instant::now())
-				.min(Duration::from_millis(5));
-			match reader_rx.recv_timeout(wait_duration) {
-				Ok(event) => {
-					handle_pty_reader_event(event, on_chunk.as_ref(), &mut capture, &mut reader_done)
-				},
-				Err(std_mpsc::RecvTimeoutError::Timeout) => {},
-				Err(std_mpsc::RecvTimeoutError::Disconnected) => {
-					reader_done = true;
-					break;
-				},
-			}
-		}
-	}
-	if reader_done {
-		let _ = reader_thread.join();
-	}
-
-	Ok(PtyShellOutput {
-		exit_code: exit_code.unwrap_or(1),
-		output:    capture.map(CaptureState::finish),
-	})
-}
-
-fn exported_env(shell: &BrushShell) -> Vec<(String, String)> {
-	shell
-		.env()
-		.iter_exported()
-		.filter_map(|(key, value)| {
-			value
-				.value()
-				.try_get_cow_str(shell)
-				.map(|value| (key.clone(), value.into_owned()))
-		})
-		.collect()
-}
-
-fn execution_result_from_exit_code(exit_code: i32) -> ExecutionResult {
-	let code = u8::try_from(exit_code).unwrap_or(if exit_code < 0 { 1 } else { u8::MAX });
-	ExecutionResult::new(code)
-}
-
-fn minimize_buffered_output(
-	command: &str,
-	output: BufferedOutput,
-	exit_code: i32,
-	config: Option<&minimizer::MinimizerConfig>,
-	minimizer_mode: minimizer::engine::MinimizerMode,
-) -> Option<MinimizerResult> {
-	let config = config.filter(|_| !output.exceeded)?;
-	let minimized = match minimizer_mode {
-		minimizer::engine::MinimizerMode::WholeCommand => {
-			minimizer::apply(command, &output.text, exit_code, config)
-		},
-		minimizer::engine::MinimizerMode::None => {
-			minimizer::MinimizerOutput::passthrough(&output.text)
-		},
-	};
-	if !minimized.changed {
-		return None;
-	}
-	let original = minimized.original_text?;
-	let output_bytes = u32::try_from(minimized.text.len()).unwrap_or(u32::MAX);
-	Some(MinimizerResult {
-		filter: minimized.filter.to_string(),
-		text: minimized.text,
-		original_text: original,
-		input_bytes: u32::try_from(minimized.input_bytes).unwrap_or(u32::MAX),
-		output_bytes,
-	})
-}
-
-fn terminate_pty_processes(
-	child: &mut Box<dyn Child + Send + Sync>,
-	child_pid: Option<i32>,
-	process_group_id: Option<i32>,
-) {
-	let mut targets = process::TerminationTargets::new();
-	if let Some(pgid) = process_group_id {
-		targets.add_pgid(pgid);
-	}
-	if let Some(pid) = child_pid {
-		targets.add_pid(pid);
-	}
-	targets.signal(process::TERM_SIGNAL);
-	let _ = child.kill();
-	targets.signal(process::KILL_SIGNAL);
-}
-
-fn drain_pty_reader_events(
-	reader_rx: &std_mpsc::Receiver<PtyReaderEvent>,
-	on_chunk: Option<&mpsc::UnboundedSender<String>>,
-	capture: &mut Option<CaptureState>,
-	reader_done: &mut bool,
-) {
-	for _ in 0..PTY_READER_EVENTS_PER_TICK {
-		match reader_rx.try_recv() {
-			Ok(event) => handle_pty_reader_event(event, on_chunk, capture, reader_done),
-			Err(std_mpsc::TryRecvError::Empty) => break,
-			Err(std_mpsc::TryRecvError::Disconnected) => {
-				*reader_done = true;
-				break;
-			},
-		}
-	}
-}
-
-fn handle_pty_reader_event(
-	event: PtyReaderEvent,
-	on_chunk: Option<&mpsc::UnboundedSender<String>>,
-	capture: &mut Option<CaptureState>,
-	reader_done: &mut bool,
-) {
-	match event {
-		PtyReaderEvent::Chunk(chunk) => {
-			if let Some(capture) = capture.as_mut() {
-				capture.push(&chunk);
-			}
-			if let Some(on_chunk) = on_chunk {
-				let _ = on_chunk.send(chunk);
-			}
-		},
-		PtyReaderEvent::Done => *reader_done = true,
-	}
-}
-
-fn read_pty_output(reader: &mut Box<dyn Read + Send>, reader_tx: std_mpsc::Sender<PtyReaderEvent>) {
-	const REPLACEMENT: &str = "\u{FFFD}";
-	const BUF: usize = 65536;
-	let mut buf = vec![0_u8; BUF + 4];
-	let mut it = 0;
-	loop {
-		match reader.read(&mut buf[it..BUF]) {
-			Ok(0) => break,
-			Ok(n) => {
-				it += n;
-				while it > 0 {
-					let pending = &buf[..it];
-					match str::from_utf8(pending) {
-						Ok(text) => {
-							let _ = reader_tx.send(PtyReaderEvent::Chunk(text.to_string()));
-							it = 0;
-							break;
-						},
-						Err(err) => {
-							let valid_up_to = err.valid_up_to();
-							if valid_up_to > 0 {
-								if let Ok(text) = str::from_utf8(&pending[..valid_up_to]) {
-									let _ = reader_tx.send(PtyReaderEvent::Chunk(text.to_string()));
-								}
-								buf.copy_within(valid_up_to..it, 0);
-								it -= valid_up_to;
-							}
-							match err.error_len() {
-								Some(invalid_len) => {
-									let _ = reader_tx.send(PtyReaderEvent::Chunk(REPLACEMENT.to_string()));
-									let drop_len = invalid_len.min(it);
-									buf.copy_within(drop_len..it, 0);
-									it -= drop_len;
-								},
-								None => break,
-							}
-						},
-					}
-				}
-			},
-			Err(_) => break,
-		}
-	}
-	for chunk in buf[..it].utf8_chunks() {
-		let valid = chunk.valid();
-		if !valid.is_empty() {
-			let _ = reader_tx.send(PtyReaderEvent::Chunk(valid.to_string()));
-		}
-		if !chunk.invalid().is_empty() {
-			let _ = reader_tx.send(PtyReaderEvent::Chunk(REPLACEMENT.to_string()));
-		}
-	}
-	let _ = reader_tx.send(PtyReaderEvent::Done);
-}
-
-impl CaptureState {
-	fn push(&mut self, chunk: &str) {
-		if self.exceeded {
-			return;
-		}
-		if self.text.len().saturating_add(chunk.len()) > self.max_bytes {
-			self.exceeded = true;
-			self.text.clear();
-			return;
-		}
-		self.text.push_str(chunk);
-	}
-
-	fn finish(self) -> BufferedOutput {
-		BufferedOutput { text: self.text, exceeded: self.exceeded }
-	}
-}
 
 fn terminate_background_jobs(shell: &BrushShell, baseline_descendants: &HashSet<i32>) {
 	let mut targets = process::TerminationTargets::new();

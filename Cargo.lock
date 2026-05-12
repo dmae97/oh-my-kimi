@@ -2496,7 +2496,6 @@ dependencies = [
  "clap",
  "libc",
  "os_pipe",
- "portable-pty",
  "regex",
  "serde",
  "serde_json",

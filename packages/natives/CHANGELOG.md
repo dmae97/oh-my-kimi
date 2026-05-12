@@ -2,10 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed shell `pty` execution so `executeShell` and persistent `Shell.run` attach command stdio to a real PTY when requested.
-
 ## [14.9.3] - 2026-05-10
 ### Added
 
