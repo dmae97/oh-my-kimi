@@ -4,6 +4,10 @@ import { $env, logger } from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
 
+const TERMINAL_PROGRESS_KEEPALIVE_MS = 1000;
+const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
+const TERMINAL_PROGRESS_CLEAR_SEQUENCE = "\x1b]9;4;0;\x07";
+
 /**
  * Minimal terminal interface for TUI
  */
@@ -85,6 +89,9 @@ export interface Terminal {
 	// Title operations
 	setTitle(title: string): void; // Set terminal window title
 
+	// Progress indicator (OSC 9;4)
+	setProgress(active: boolean): void;
+
 	/**
 	 * Register a callback for terminal appearance (dark/light) changes.
 	 * Detection uses OSC 11 background color query with Mode 2031 as a change trigger.
@@ -123,6 +130,7 @@ export class ProcessTerminal implements Terminal {
 	#pendingDa1Sentinels = 0;
 	#osc11PollTimer?: Timer;
 	#mode2031DebounceTimer?: Timer;
+	#progressTimer?: ReturnType<typeof setInterval>;
 
 	get kittyProtocolActive(): boolean {
 		return this.#kittyProtocolActive;
@@ -505,6 +513,10 @@ export class ProcessTerminal implements Terminal {
 			activeTerminal = null;
 		}
 
+		if (this.#clearProgressTimer()) {
+			this.#safeWrite(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
+		}
+
 		// Disable bracketed paste mode
 		this.#safeWrite("\x1b[?2004l");
 
@@ -589,11 +601,11 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	get columns(): number {
-		return process.stdout.columns || 80;
+		return process.stdout.columns || Number(Bun.env.COLUMNS) || 80;
 	}
 
 	get rows(): number {
-		return process.stdout.rows || 24;
+		return process.stdout.rows || Number(Bun.env.LINES) || 24;
 	}
 
 	moveBy(lines: number): void {
@@ -630,5 +642,27 @@ export class ProcessTerminal implements Terminal {
 	setTitle(title: string): void {
 		// OSC 0;title BEL - set terminal window title
 		this.#safeWrite(`\x1b]0;${title}\x07`);
+	}
+
+	setProgress(active: boolean): void {
+		if (active) {
+			this.#safeWrite(TERMINAL_PROGRESS_ACTIVE_SEQUENCE);
+			if (!this.#progressTimer) {
+				this.#progressTimer = setInterval(() => {
+					this.#safeWrite(TERMINAL_PROGRESS_ACTIVE_SEQUENCE);
+				}, TERMINAL_PROGRESS_KEEPALIVE_MS);
+				this.#progressTimer.unref?.();
+			}
+		} else {
+			this.#clearProgressTimer();
+			this.#safeWrite(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
+		}
+	}
+
+	#clearProgressTimer(): boolean {
+		if (!this.#progressTimer) return false;
+		clearInterval(this.#progressTimer);
+		this.#progressTimer = undefined;
+		return true;
 	}
 }
