@@ -1,13 +1,14 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Removed the `jobs://` internal URL protocol; inspect background jobs via the `job` tool's `list: true` operation instead
 
 ### Added
 
+- Added `since` and `until` date-range filters to `search_issues`, `search_prs`, `search_commits`, and `search_repos`, accepting relative durations (`m`/`h`/`d`/`w`/`mo`/`y`), ISO dates, and ISO datetimes
+- Added `dateField` support for date filtering (`created` or `updated`) so search results can be constrained by creation, update, pushed (for repos), or committer date (for commits)
 - Added owner-based scoping to async job registration and queries so background jobs can be registered with an `ownerId` and filtered per agent in `getRunningJobs`, `getRecentJobs`, `getAllJobs`, and `cancelAll`
 - Added agent ownership metadata to async jobs started by `task` and `bash` tools so their lifecycle and cancellation is attributed to the creating agent
 - Added `list: true` operation to the `job` tool, returning an immediate snapshot of every job spawned by the calling agent without waiting (replaces the deleted `jobs://` URL)
@@ -15,6 +16,8 @@
 
 ### Changed
 
+- Changed `search_issues`, `search_prs`, `search_commits`, and `search_repos` to allow date-only queries where `query` is omitted if `since`/`until` is provided
+- Changed `search_code` to return a validation error when `since`/`until` is supplied because GitHub code search does not support date qualifiers
 - Changed async job manager ownership so subagents inherit the parent session’s global `AsyncJobManager` instead of creating and owning separate instances
 - Changed session lifecycle cleanup so the global async-job manager is disposed only by the owning top-level session
 - Changed subagent session switches and handoff paths to stop global async-job cancellation and cancel only jobs owned by that session
