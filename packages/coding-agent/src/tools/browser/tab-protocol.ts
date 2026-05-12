@@ -59,10 +59,13 @@ export type WorkerInitPayload =
 			dialogs?: "accept" | "dismiss";
 	  };
 
+export type ToolReply = { ok: true; value: unknown } | { ok: false; error: RunErrorPayload };
+
 export type WorkerInbound =
 	| { type: "init"; payload: WorkerInitPayload }
 	| { type: "run"; id: string; name: string; code: string; timeoutMs: number; session: SessionSnapshot }
 	| { type: "abort"; id: string }
+	| { type: "tool-reply"; id: string; reply: ToolReply }
 	| { type: "close" };
 
 export interface ReadyInfo {
@@ -91,6 +94,7 @@ export type WorkerOutbound =
 	| { type: "init-failed"; error: RunErrorPayload }
 	| { type: "result"; id: string; ok: true; payload: RunResultOk }
 	| { type: "result"; id: string; ok: false; error: RunErrorPayload }
+	| { type: "tool-call"; id: string; runId: string; name: string; args: unknown }
 	| { type: "log"; level: "debug" | "warn" | "error"; msg: string; meta?: Record<string, unknown> }
 	| { type: "closed" };
 

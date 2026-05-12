@@ -1,11 +1,9 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { ToolSession } from "../../tools";
 import { ToolError } from "../../tools/tool-errors";
+import type { JsStatusEvent } from "./shared/types";
 
-export interface JsStatusEvent {
-	op: string;
-	[key: string]: unknown;
-}
+export type { JsStatusEvent } from "./shared/types";
 
 interface ToolBridgeOptions {
 	session: ToolSession;

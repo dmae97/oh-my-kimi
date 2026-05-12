@@ -84,7 +84,7 @@ describe("executeJs", () => {
 		expect(resetResult.output.trim()).toBe("undefined");
 	});
 
-	it("exposes a read-only safe process subset", async () => {
+	it("exposes the worker's real process object", async () => {
 		const result = await executeJs(
 			[
 				"return {",
@@ -92,8 +92,6 @@ describe("executeJs", () => {
 				"  versionsNode: typeof process.versions.node,",
 				"  platform: process.platform,",
 				"  arch: process.arch,",
-				"  cwd: process.cwd(),",
-				"  frozen: Object.isFrozen(process) && Object.isFrozen(process.versions),",
 				"  hasEnv: 'env' in process,",
 				"  hasExit: 'exit' in process,",
 				"};",
@@ -107,10 +105,8 @@ describe("executeJs", () => {
 			versionsNode: "string",
 			platform: process.platform,
 			arch: process.arch,
-			cwd: tempDir.path(),
-			frozen: true,
-			hasEnv: false,
-			hasExit: false,
+			hasEnv: true,
+			hasExit: true,
 		});
 	});
 

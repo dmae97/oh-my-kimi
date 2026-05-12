@@ -1,18 +1,22 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Changed the `timeoutMs` execution option to no longer be enforced during worker-based JS runs, so callers must rely on external cancellation signals for time limits
 
 ### Added
 
+- Added browser-tab JavaScript execution through the shared runtime so tab runs now expose the standard helper globals (`read`, `write`, `sort`, `uniq`, `counter`, `diff`, `tree`, `env`, `output`, `display`, and `tool`)
+- Added static ESM `import` support to browser-tab JavaScript by rewriting top-level imports and resolving them against the tab session context
 - Added substring fallback matching to `HistoryStorage.search` so infix and short-token queries that FTS5 prefix matching misses are still returned
 - Added a live single-line sync progress display to the stats command showing current/total sessions while syncing
 - Added automatic inline JS evaluation fallback when worker creation failed so script execution still works in environments without worker support
 
 ### Changed
 
+- Changed JavaScript execution in `executeJs` to expose the worker’s real `process` object instead of a restricted, frozen subset
 - Changed JavaScript evaluation to run per session in a worker-backed runner with explicit initialization and teardown handling
 
 ### Fixed

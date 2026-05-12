@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as vm from "node:vm";
+
 import { Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
 import type { HTMLElement } from "linkedom";
 import type {
@@ -14,6 +14,8 @@ import type {
 	SerializedAXNode,
 	Target,
 } from "puppeteer-core";
+import { JsRuntime, type RuntimeHooks } from "../../eval/js/shared/runtime";
+import type { JsDisplayOutput } from "../../eval/js/shared/types";
 import { resizeImage } from "../../utils/image-resize";
 import { resolveToCwd } from "../path-utils";
 import { formatScreenshot } from "../render-utils";
@@ -34,6 +36,7 @@ import type {
 	RunResultOk,
 	ScreenshotResult,
 	SessionSnapshot,
+	ToolReply,
 	Transport,
 	WorkerInbound,
 	WorkerInitPayload,
@@ -175,6 +178,27 @@ function errorPayload(error: unknown): RunErrorPayload {
 		return { name: error.name, message: error.message, stack: error.stack, isToolError: false, isAbort: false };
 	}
 	return { name: "Error", message: String(error), isToolError: false, isAbort: false };
+}
+
+function safeJsonStringify(value: unknown): string {
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch {
+		return String(value);
+	}
+}
+
+function replyError(payload: RunErrorPayload): Error {
+	if (payload.isAbort) {
+		const err = new ToolAbortError(payload.message || "Tool call aborted");
+		if (payload.stack) err.stack = payload.stack;
+		return err;
+	}
+	const Ctor = payload.isToolError ? ToolError : Error;
+	const err = new Ctor(payload.message);
+	if (payload.name) err.name = payload.name;
+	if (payload.stack) err.stack = payload.stack;
+	return err;
 }
 
 async function targetIdForTarget(target: Target): Promise<string> {
@@ -361,6 +385,14 @@ async function clickQueryHandlerText(
 	);
 }
 
+interface ActiveRun {
+	id: string;
+	ac: AbortController;
+	displays: RunResultOk["displays"];
+	screenshots: ScreenshotResult[];
+	pendingTools: Map<string, { resolve(value: unknown): void; reject(error: Error): void }>;
+}
+
 export class WorkerCore {
 	#transport: Transport;
 	#browser?: Browser;
@@ -368,7 +400,8 @@ export class WorkerCore {
 	#targetId?: string;
 	#elementCache = new Map<number, ElementHandle>();
 	#elementCounter = 0;
-	#active?: { id: string; ac: AbortController };
+	#active: ActiveRun | null = null;
+	#runtime: JsRuntime | null = null;
 	#unsub: () => void;
 	#mode?: WorkerInitPayload["mode"];
 	#dialogPolicy?: DialogPolicy;
@@ -400,6 +433,9 @@ export class WorkerCore {
 				return;
 			case "abort":
 				if (this.#active?.id === msg.id) this.#active.ac.abort(new ToolAbortError());
+				return;
+			case "tool-reply":
+				this.#deliverToolReply(msg.id, msg.reply);
 				return;
 			case "close":
 				await this.#close();
@@ -502,37 +538,26 @@ export class WorkerCore {
 		const timeoutSignal = AbortSignal.timeout(msg.timeoutMs);
 		const ac = new AbortController();
 		const signal = AbortSignal.any([timeoutSignal, ac.signal]);
-		this.#active = { id: msg.id, ac };
 		const displays: RunResultOk["displays"] = [];
 		const screenshots: ScreenshotResult[] = [];
+		const active: ActiveRun = { id: msg.id, ac, displays, screenshots, pendingTools: new Map() };
+		this.#active = active;
 		try {
 			throwIfAborted(signal);
 			const page = this.#requirePage();
 			const browser = this.#requireBrowser();
 			const tabApi = this.#createTabApi(msg.name, msg.timeoutMs, signal, msg.session, displays, screenshots);
-			const ctx = vm.createContext({
+			const runtime = this.#ensureRuntime(msg.session);
+			runtime.setCwd(msg.session.cwd);
+			runtime.setRunScope({
 				page,
 				browser,
 				tab: tabApi,
-				display: (value: unknown): void => this.#display(displays, value),
 				assert: (cond: unknown, text?: string): void => {
 					if (!cond) throw new ToolError(text ?? "Assertion failed");
 				},
 				wait: (ms: number): Promise<void> => Bun.sleep(ms),
-				console: this.#console(),
-				setTimeout,
-				clearTimeout,
-				setInterval,
-				clearInterval,
-				queueMicrotask,
-				Promise,
-				URL,
-				URLSearchParams,
-				TextEncoder,
-				TextDecoder,
-				Buffer,
 			});
-			const wrapped = `(async () => {\n${msg.code}\n})()`;
 			const { promise: cancelRejection, reject: rejectCancel } = Promise.withResolvers<never>();
 			const onCancel = (): void => {
 				rejectCancel(
@@ -540,15 +565,17 @@ export class WorkerCore {
 						? new ToolError(`Browser code execution timed out after ${msg.timeoutMs}ms`)
 						: new ToolAbortError(),
 				);
+				// Cancel in-flight tool calls so user code's awaited proxies reject promptly.
+				for (const pending of active.pendingTools.values()) {
+					pending.reject(new ToolAbortError());
+				}
+				active.pendingTools.clear();
 			};
 			if (signal.aborted) onCancel();
 			else signal.addEventListener("abort", onCancel, { once: true });
 			try {
 				const returnValue = await Promise.race([
-					vm.runInContext(wrapped, ctx, {
-						filename: `browser-run-${msg.id}.js`,
-						lineOffset: -1,
-					}) as Promise<unknown>,
+					runtime.run(msg.code, `browser-run-${msg.id}.js`),
 					cancelRejection,
 				]);
 				await this.#postReadyInfo();
@@ -564,8 +591,62 @@ export class WorkerCore {
 		} catch (error) {
 			this.#transport.send({ type: "result", id: msg.id, ok: false, error: errorPayload(error) });
 		} finally {
-			if (this.#active?.id === msg.id) this.#active = undefined;
+			if (this.#active?.id === msg.id) this.#active = null;
 		}
+	}
+
+	#ensureRuntime(session: SessionSnapshot): JsRuntime {
+		if (this.#runtime) return this.#runtime;
+		this.#runtime = new JsRuntime({
+			initialCwd: session.cwd,
+			sessionId: `browser-tab-${this.#targetId ?? "unknown"}`,
+			getHooks: () => this.#hooksForActiveRun(),
+		});
+		return this.#runtime;
+	}
+
+	#hooksForActiveRun(): RuntimeHooks | null {
+		const active = this.#active;
+		if (!active) return null;
+		return {
+			// console.* output stays on the supervisor log channel — matches pre-runtime behavior
+			// where browser cells didn't surface `console.log` to the model.
+			onText: chunk => this.#log("debug", chunk.replace(/\n$/, "")),
+			onDisplay: output => this.#pushDisplay(active.displays, output),
+			callTool: (name, args) => this.#callTool(active, name, args),
+		};
+	}
+
+	#pushDisplay(displays: RunResultOk["displays"], output: JsDisplayOutput): void {
+		if (output.type === "image") {
+			displays.push({ type: "image", data: output.data, mimeType: output.mimeType });
+			return;
+		}
+		if (output.type === "json") {
+			displays.push({ type: "text", text: safeJsonStringify(output.data) });
+			return;
+		}
+		// status — surface as compact JSON so helper side effects (read/write/tree) appear in
+		// the cell result alongside explicit display() output.
+		displays.push({ type: "text", text: safeJsonStringify(output.event) });
+	}
+
+	async #callTool(active: ActiveRun, name: string, args: unknown): Promise<unknown> {
+		const id = `tab-tc-${active.id}-${crypto.randomUUID()}`;
+		const { promise, resolve, reject } = Promise.withResolvers<unknown>();
+		active.pendingTools.set(id, { resolve, reject });
+		this.#transport.send({ type: "tool-call", id, runId: active.id, name, args });
+		return await promise;
+	}
+
+	#deliverToolReply(id: string, reply: ToolReply): void {
+		const active = this.#active;
+		if (!active) return;
+		const pending = active.pendingTools.get(id);
+		if (!pending) return;
+		active.pendingTools.delete(id);
+		if (reply.ok) pending.resolve(reply.value);
+		else pending.reject(replyError(reply.error));
 	}
 
 	#createTabApi(
@@ -933,41 +1014,6 @@ export class WorkerCore {
 		}
 		return handle;
 	}
-
-	#display(displays: RunResultOk["displays"], value: unknown): void {
-		if (value === undefined || value === null) return;
-		if (
-			typeof value === "object" &&
-			value !== null &&
-			"type" in (value as Record<string, unknown>) &&
-			(value as { type?: unknown }).type === "image"
-		) {
-			const img = value as { data?: unknown; mimeType?: unknown };
-			if (typeof img.data === "string" && typeof img.mimeType === "string") {
-				displays.push({ type: "image", data: img.data, mimeType: img.mimeType });
-				return;
-			}
-		}
-		if (typeof value === "string") {
-			displays.push({ type: "text", text: value });
-			return;
-		}
-		try {
-			displays.push({ type: "text", text: JSON.stringify(value, null, 2) });
-		} catch {
-			displays.push({ type: "text", text: String(value) });
-		}
-	}
-
-	#console(): Pick<Console, "log" | "debug" | "warn" | "error"> {
-		return {
-			log: (...args: unknown[]) => this.#log("debug", args.map(String).join(" ")),
-			debug: (...args: unknown[]) => this.#log("debug", args.map(String).join(" ")),
-			warn: (...args: unknown[]) => this.#log("warn", args.map(String).join(" ")),
-			error: (...args: unknown[]) => this.#log("error", args.map(String).join(" ")),
-		};
-	}
-
 	#clearElementCache(): void {
 		if (this.#elementCache.size === 0) {
 			this.#elementCounter = 0;

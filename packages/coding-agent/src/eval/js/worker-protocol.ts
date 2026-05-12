@@ -1,9 +1,6 @@
-import type { JsStatusEvent } from "./tool-bridge";
+import type { JsDisplayOutput } from "./shared/types";
 
-export type JsDisplayOutput =
-	| { type: "json"; data: unknown }
-	| { type: "image"; data: string; mimeType: string }
-	| { type: "status"; event: JsStatusEvent };
+export type { JsDisplayOutput } from "./shared/types";
 
 export interface SessionSnapshot {
 	cwd: string;
