@@ -319,13 +319,25 @@ function applyGeneratedModelPolicy(model: ApiModel<Api>): void {
 		(model.provider === "minimax-code" || model.provider === "minimax-code-cn")
 	) {
 		model.compat = {
-			...model.compat,
+			...(model.compat ?? {}),
 			supportsStore: false,
 			supportsDeveloperRole: false,
 			supportsReasoningEffort: false,
 			reasoningContentField: "reasoning_content",
 		};
 		delete model.compat.thinkingFormat;
+	}
+	if (
+		model.api === "openai-completions" &&
+		model.provider === "opencode-go" &&
+		(model.id === "deepseek-v4-flash" || model.id === "deepseek-v4-pro")
+	) {
+		model.compat = {
+			...(model.compat ?? {}),
+			supportsToolChoice: false,
+			reasoningContentField: "reasoning_content",
+			requiresReasoningContentForToolCalls: true,
+		};
 	}
 	const parsedModel = parseKnownModel(model.id);
 	const applyPatchToolType = inferGeneratedApplyPatchToolType(model, parsedModel);
