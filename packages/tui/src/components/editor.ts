@@ -1543,8 +1543,20 @@ export class Editor implements Component, Focusable {
 		this.#recordUndoState();
 
 		this.#withUndoSuspended(() => {
+			// Some terminals (e.g. tmux popups with extended-keys-format=csi-u) re-encode
+			// control bytes inside bracketed paste as CSI-u Ctrl+<letter> sequences
+			// (ESC [ <codepoint> ; 5 u). Decode those back to their literal byte so the
+			// per-char filter below preserves newlines instead of stripping ESC and
+			// leaking the printable tail (e.g. "[106;5u") into the editor.
+			const decodedText = pastedText.replace(/\x1b\[(\d+);5u/g, (match, code) => {
+				const cp = Number(code);
+				if (cp >= 97 && cp <= 122) return String.fromCharCode(cp - 96);
+				if (cp >= 65 && cp <= 90) return String.fromCharCode(cp - 64);
+				return match;
+			});
+
 			// Clean the pasted text
-			const cleanText = pastedText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+			const cleanText = decodedText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
 			// Convert tabs to spaces (4 spaces per tab)
 			const tabExpandedText = cleanText.replace(/\t/g, "    ");
@@ -2427,7 +2439,7 @@ export class Editor implements Component, Focusable {
 		);
 		if (requestId !== this.#autocompleteRequestId) return;
 
-		if (suggestions && suggestions.items.length > 0) {
+		if (suggestions && Array.isArray(suggestions.items) && suggestions.items.length > 0) {
 			this.#autocompletePrefix = suggestions.prefix;
 			this.#autocompleteList = this.#createAutocompleteList(suggestions.prefix, suggestions.items);
 			this.#autocompleteState = "regular";
@@ -2491,7 +2503,7 @@ https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/
 		);
 		if (requestId !== this.#autocompleteRequestId) return;
 
-		if (suggestions && suggestions.items.length > 0) {
+		if (suggestions && Array.isArray(suggestions.items) && suggestions.items.length > 0) {
 			// If there's exactly one suggestion and this was an explicit Tab press, apply it immediately
 			if (explicitTab && suggestions.items.length === 1) {
 				const item = suggestions.items[0]!;
@@ -2557,7 +2569,7 @@ https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/
 		);
 		if (requestId !== this.#autocompleteRequestId) return;
 
-		if (suggestions && suggestions.items.length > 0) {
+		if (suggestions && Array.isArray(suggestions.items) && suggestions.items.length > 0) {
 			this.#autocompletePrefix = suggestions.prefix;
 			// Always create new SelectList to ensure update
 			this.#autocompleteList = this.#createAutocompleteList(suggestions.prefix, suggestions.items);
