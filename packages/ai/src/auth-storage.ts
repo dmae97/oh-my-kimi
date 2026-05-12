@@ -1993,6 +1993,27 @@ export class AuthStorage {
 			});
 
 			if (isDefinitiveFailure) {
+				// The credential at this index may have been rotated by another process between
+				// our in-memory snapshot and the refresh attempt: Anthropic rotates refresh
+				// tokens on every use, so the peer's success leaves our stored token invalid.
+				// Re-read the row from disk before marking it disabled — if the persisted
+				// refresh token has changed, the peer rotation succeeded and we should pick
+				// up the new credential instead of soft-deleting the row that the peer just
+				// updated.
+				const credentialId = this.#getStoredCredentials(provider)[selection.index]?.id;
+				if (credentialId !== undefined) {
+					const latestRow = this.#store.listAuthCredentials(provider).find(row => row.id === credentialId);
+					const latestCredential = latestRow?.credential;
+					if (latestCredential?.type === "oauth" && latestCredential.refresh !== selection.credential.refresh) {
+						logger.debug("OAuth refresh race detected; another process rotated token first", {
+							provider,
+							index: selection.index,
+							credentialId,
+						});
+						await this.reload();
+						return this.getApiKey(provider, sessionId, options);
+					}
+				}
 				// Permanently disable invalid credentials with an explicit cause for inspection/debugging
 				this.#disableCredentialAt(provider, selection.index, `oauth refresh failed: ${errorMsg}`);
 				if (this.#getCredentialsForProvider(provider).some(credential => credential.type === "oauth")) {
