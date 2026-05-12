@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
@@ -75,7 +76,9 @@ describe("AssistantMessageComponent mermaid markdown", () => {
 
 describe("AssistantMessageComponent tool images", () => {
 	it("converts WebP tool images for Kitty terminal rendering", async () => {
-		const webpBase64 = Buffer.from(await Bun.file("../../assets/python.webp").arrayBuffer()).toBase64();
+		const webpBase64 = Buffer.from(
+			await Bun.file(path.join(import.meta.dir, "../../../../../assets/python.webp")).arrayBuffer(),
+		).toBase64();
 		setTerminalImageProtocol(ImageProtocol.Kitty);
 
 		const converted = Promise.withResolvers<void>();
