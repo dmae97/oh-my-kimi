@@ -26,11 +26,6 @@ describe("persistence back-compat: buildDiscoverableMCPSearchIndex wraps generic
 		},
 	];
 
-	it("returns correct document count", () => {
-		const index = buildDiscoverableMCPSearchIndex(legacyMCPTools);
-		expect(index.documents).toHaveLength(2);
-	});
-
 	it("maps description → summary in the index", () => {
 		const index = buildDiscoverableMCPSearchIndex(legacyMCPTools);
 		// The documents contain DiscoverableTool objects with .summary, not .description

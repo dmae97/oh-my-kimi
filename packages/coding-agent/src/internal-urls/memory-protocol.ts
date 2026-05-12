@@ -1,6 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { getMemoryRoot } from "../memories";
+import { AgentRegistry } from "../registry/agent-registry";
 import { validateRelativePath } from "./skill-protocol";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
@@ -8,13 +10,20 @@ const DEFAULT_MEMORY_FILE = "memory_summary.md";
 const MEMORY_NAMESPACE = "root";
 
 /**
- * Options for the memory:// URL protocol.
+ * Snapshot of memory roots for every registered session, deduped.
+ * Each session has its own cwd (possibly a worktree), so subagents and main
+ * may see different roots.
  */
-export interface MemoryProtocolOptions {
-	/**
-	 * Returns the absolute path to the current project's memory root.
-	 */
-	getMemoryRoot: () => string;
+function memoryRootsFromRegistry(): string[] {
+	const agentDir = getAgentDir();
+	const roots: string[] = [];
+	for (const ref of AgentRegistry.global().list()) {
+		const sm = ref.session?.sessionManager;
+		if (!sm) continue;
+		const root = getMemoryRoot(agentDir, sm.getCwd());
+		if (root && !roots.includes(root)) roots.push(root);
+	}
+	return roots;
 }
 
 function ensureWithinRoot(targetPath: string, rootPath: string): void {
@@ -61,74 +70,95 @@ export function resolveMemoryUrlToPath(url: InternalUrl, memoryRoot: string): st
 	return path.resolve(memoryRoot, relativePath);
 }
 
+async function tryResolveInRoot(url: InternalUrl, memoryRoot: string): Promise<InternalResource | undefined> {
+	const resolved = path.resolve(memoryRoot);
+	let resolvedRoot: string;
+	try {
+		resolvedRoot = await fs.realpath(resolved);
+	} catch (error) {
+		if (isEnoent(error)) return undefined;
+		throw error;
+	}
+
+	const targetPath = resolveMemoryUrlToPath(url, resolvedRoot);
+	ensureWithinRoot(targetPath, resolvedRoot);
+
+	const parentDir = path.dirname(targetPath);
+	try {
+		const realParent = await fs.realpath(parentDir);
+		ensureWithinRoot(realParent, resolvedRoot);
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+
+	let realTargetPath: string;
+	try {
+		realTargetPath = await fs.realpath(targetPath);
+	} catch (error) {
+		if (isEnoent(error)) return undefined;
+		throw error;
+	}
+
+	ensureWithinRoot(realTargetPath, resolvedRoot);
+
+	const stat = await fs.stat(realTargetPath);
+	if (!stat.isFile()) {
+		throw new Error(`memory:// URL must resolve to a file: ${url.href}`);
+	}
+
+	const content = await Bun.file(realTargetPath).text();
+	const ext = path.extname(realTargetPath).toLowerCase();
+	const contentType: InternalResource["contentType"] = ext === ".md" ? "text/markdown" : "text/plain";
+
+	return {
+		url: url.href,
+		content,
+		contentType,
+		size: Buffer.byteLength(content, "utf-8"),
+		sourcePath: realTargetPath,
+		notes: [],
+	};
+}
+
 /**
  * Protocol handler for memory:// URLs.
  *
- * URL forms:
- * - memory://root - Reads memory_summary.md
- * - memory://root/<path> - Reads a relative file under memory root
+ * Walks every active session's memory root. Worktree-based subagents have
+ * their own root; first one containing the file wins. Parent and subagent
+ * sharing a cwd see the same file regardless of order.
  */
 export class MemoryProtocolHandler implements ProtocolHandler {
 	readonly scheme = "memory";
 	readonly immutable = true;
 
-	constructor(private readonly options: MemoryProtocolOptions) {}
-
 	async resolve(url: InternalUrl): Promise<InternalResource> {
-		const memoryRoot = path.resolve(this.options.getMemoryRoot());
-		let resolvedRoot: string;
-		try {
-			resolvedRoot = await fs.realpath(memoryRoot);
-		} catch (error) {
-			if (isEnoent(error)) {
-				throw new Error(
-					"Memory artifacts are not available for this project yet. Run a session with memories enabled first.",
-				);
-			}
-			throw error;
+		const roots = memoryRootsFromRegistry();
+
+		if (roots.length === 0) {
+			throw new Error(
+				"Memory artifacts are not available for this project yet. Run a session with memories enabled first.",
+			);
 		}
 
-		const targetPath = resolveMemoryUrlToPath(url, resolvedRoot);
-		ensureWithinRoot(targetPath, resolvedRoot);
-
-		const parentDir = path.dirname(targetPath);
-		try {
-			const realParent = await fs.realpath(parentDir);
-			ensureWithinRoot(realParent, resolvedRoot);
-		} catch (error) {
-			if (!isEnoent(error)) {
+		let anyExists = false;
+		for (const root of roots) {
+			try {
+				await fs.stat(root);
+				anyExists = true;
+			} catch (error) {
+				if (isEnoent(error)) continue;
 				throw error;
 			}
+			const result = await tryResolveInRoot(url, root);
+			if (result) return result;
 		}
 
-		let realTargetPath: string;
-		try {
-			realTargetPath = await fs.realpath(targetPath);
-		} catch (error) {
-			if (isEnoent(error)) {
-				throw new Error(`Memory file not found: ${url.href}`);
-			}
-			throw error;
+		if (!anyExists) {
+			throw new Error(
+				"Memory artifacts are not available for this project yet. Run a session with memories enabled first.",
+			);
 		}
 
-		ensureWithinRoot(realTargetPath, resolvedRoot);
-
-		const stat = await fs.stat(realTargetPath);
-		if (!stat.isFile()) {
-			throw new Error(`memory:// URL must resolve to a file: ${url.href}`);
-		}
-
-		const content = await Bun.file(realTargetPath).text();
-		const ext = path.extname(realTargetPath).toLowerCase();
-		const contentType: InternalResource["contentType"] = ext === ".md" ? "text/markdown" : "text/plain";
-
-		return {
-			url: url.href,
-			content,
-			contentType,
-			size: Buffer.byteLength(content, "utf-8"),
-			sourcePath: realTargetPath,
-			notes: [],
-		};
+		throw new Error(`Memory file not found: ${url.href}`);
 	}
 }

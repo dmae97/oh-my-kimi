@@ -1,17 +1,16 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { ToolChoice } from "@oh-my-pi/pi-ai";
 import { $env, $flag, logger } from "@oh-my-pi/pi-utils";
-import type { AsyncJobManager } from "../async";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import { EditTool } from "../edit";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import type { Skill } from "../extensibility/skills";
 import type { HindsightSessionState } from "../hindsight/state";
-import type { InternalUrlRouter } from "../internal-urls";
 import { LspTool } from "../lsp";
 import type { PlanModeState } from "../plan-mode/state";
 import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import type { ArtifactManager } from "../session/artifacts";
 import type { CustomMessage } from "../session/messages";
 import type { ToolChoiceQueue } from "../session/tool-choice-queue";
 import { TaskTool } from "../task";
@@ -159,6 +158,8 @@ export interface ToolSession {
 	agentRegistry?: AgentRegistry;
 	/** Get artifacts directory for artifact:// URLs */
 	getArtifactsDir?: () => string | null;
+	/** Get the ArtifactManager backing this session (shared across parent + subagents). */
+	getArtifactManager?: () => ArtifactManager | null;
 	/** Allocate a new artifact path and ID for session-scoped truncated output. */
 	allocateOutputArtifact?: (toolType: string) => Promise<{ id?: string; path?: string }>;
 	/** Get session spawns */
@@ -171,14 +172,8 @@ export interface ToolSession {
 	authStorage?: import("../session/auth-storage").AuthStorage;
 	/** Model registry for passing to subagents (avoids re-discovery) */
 	modelRegistry?: import("../config/model-registry").ModelRegistry;
-	/** MCP manager for proxying MCP calls through parent */
-	mcpManager?: import("../mcp/manager").MCPManager;
-	/** Internal URL router for protocols like agent://, skill://, and mcp:// */
-	internalRouter?: InternalUrlRouter;
 	/** Agent output manager for unique agent:// IDs across task invocations */
 	agentOutputManager?: AgentOutputManager;
-	/** Async background job manager for bash/task async execution */
-	asyncJobManager?: AsyncJobManager;
 	/** Settings instance for passing to subagents */
 	settings: Settings;
 	/** Plan mode state (if active) */

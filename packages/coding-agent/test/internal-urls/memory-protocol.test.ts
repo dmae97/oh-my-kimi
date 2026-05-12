@@ -1,36 +1,67 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { InternalUrlRouter, MemoryProtocolHandler } from "../../src/internal-urls";
+import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { getMemoryRoot } from "@oh-my-pi/pi-coding-agent/memories";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import { AgentRegistry } from "../../src/registry/agent-registry";
 
-async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-protocol-"));
+interface MemoryFixture {
+	cwd: string;
+	memoryRoot: string;
+	agentDir: string;
+	cleanupRoot: string;
+}
+
+async function withMemoryFixture(fn: (fixture: MemoryFixture) => Promise<void>): Promise<void> {
+	const cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-protocol-"));
+	const previousAgentDir = getAgentDir();
 	try {
-		return await fn(dir);
+		const agentDir = path.join(cleanupRoot, "agent");
+		await fs.mkdir(agentDir, { recursive: true });
+		const cwd = path.join(cleanupRoot, "project");
+		await fs.mkdir(cwd, { recursive: true });
+		setAgentDir(agentDir);
+		const memoryRoot = getMemoryRoot(agentDir, cwd);
+		await fs.mkdir(memoryRoot, { recursive: true });
+		AgentRegistry.global().register({
+			id: "test-main",
+			displayName: "test",
+			kind: "main",
+			session: {
+				sessionManager: {
+					getCwd: () => cwd,
+					getArtifactsDir: () => null,
+					getSessionId: () => "test",
+				},
+			} as unknown as AgentSession,
+			sessionFile: null,
+		});
+		await fn({ cwd, memoryRoot, agentDir, cleanupRoot });
 	} finally {
-		await fs.rm(dir, { recursive: true, force: true });
+		setAgentDir(previousAgentDir);
+		await fs.rm(cleanupRoot, { recursive: true, force: true });
 	}
 }
 
-function createRouter(memoryRoot: string): InternalUrlRouter {
-	const router = new InternalUrlRouter();
-	router.register(
-		new MemoryProtocolHandler({
-			getMemoryRoot: () => memoryRoot,
-		}),
-	);
-	return router;
-}
-
 describe("MemoryProtocolHandler", () => {
+	beforeEach(() => {
+		AgentRegistry.resetGlobalForTests();
+		InternalUrlRouter.resetForTests();
+	});
+
+	afterEach(() => {
+		AgentRegistry.resetGlobalForTests();
+		InternalUrlRouter.resetForTests();
+	});
+
 	it("resolves memory://root to memory_summary.md", async () => {
-		await withTempDir(async tempDir => {
-			const memoryRoot = path.join(tempDir, "memory");
-			await fs.mkdir(memoryRoot, { recursive: true });
+		await withMemoryFixture(async ({ memoryRoot }) => {
 			await Bun.write(path.join(memoryRoot, "memory_summary.md"), "summary");
 
-			const router = createRouter(memoryRoot);
+			const router = InternalUrlRouter.instance();
 			const resource = await router.resolve("memory://root");
 
 			expect(resource.content).toBe("summary");
@@ -39,13 +70,12 @@ describe("MemoryProtocolHandler", () => {
 	});
 
 	it("resolves memory://root/<path> within memory root", async () => {
-		await withTempDir(async tempDir => {
-			const memoryRoot = path.join(tempDir, "memory");
+		await withMemoryFixture(async ({ memoryRoot }) => {
 			const skillPath = path.join(memoryRoot, "skills", "demo", "SKILL.md");
 			await fs.mkdir(path.dirname(skillPath), { recursive: true });
 			await Bun.write(skillPath, "demo skill");
 
-			const router = createRouter(memoryRoot);
+			const router = InternalUrlRouter.instance();
 			const resource = await router.resolve("memory://root/skills/demo/SKILL.md");
 
 			expect(resource.content).toBe("demo skill");
@@ -54,11 +84,8 @@ describe("MemoryProtocolHandler", () => {
 	});
 
 	it("throws for unknown memory namespace", async () => {
-		await withTempDir(async tempDir => {
-			const memoryRoot = path.join(tempDir, "memory");
-			await fs.mkdir(memoryRoot, { recursive: true });
-
-			const router = createRouter(memoryRoot);
+		await withMemoryFixture(async () => {
+			const router = InternalUrlRouter.instance();
 			await expect(router.resolve("memory://other/memory_summary.md")).rejects.toThrow(
 				"Unknown memory namespace: other. Supported: root",
 			);
@@ -66,11 +93,8 @@ describe("MemoryProtocolHandler", () => {
 	});
 
 	it("blocks path traversal attempts", async () => {
-		await withTempDir(async tempDir => {
-			const memoryRoot = path.join(tempDir, "memory");
-			await fs.mkdir(memoryRoot, { recursive: true });
-
-			const router = createRouter(memoryRoot);
+		await withMemoryFixture(async () => {
+			const router = InternalUrlRouter.instance();
 			await expect(router.resolve("memory://root/../secret.md")).rejects.toThrow(
 				"Path traversal (..) is not allowed in memory:// URLs",
 			);
@@ -81,11 +105,8 @@ describe("MemoryProtocolHandler", () => {
 	});
 
 	it("throws clear error for missing files", async () => {
-		await withTempDir(async tempDir => {
-			const memoryRoot = path.join(tempDir, "memory");
-			await fs.mkdir(memoryRoot, { recursive: true });
-
-			const router = createRouter(memoryRoot);
+		await withMemoryFixture(async () => {
+			const router = InternalUrlRouter.instance();
 			await expect(router.resolve("memory://root/missing.md")).rejects.toThrow(
 				"Memory file not found: memory://root/missing.md",
 			);
@@ -95,15 +116,13 @@ describe("MemoryProtocolHandler", () => {
 	it("blocks symlink escapes outside memory root", async () => {
 		if (process.platform === "win32") return;
 
-		await withTempDir(async tempDir => {
-			const memoryRoot = path.join(tempDir, "memory");
-			const outsideDir = path.join(tempDir, "outside");
-			await fs.mkdir(memoryRoot, { recursive: true });
+		await withMemoryFixture(async ({ memoryRoot, cleanupRoot }) => {
+			const outsideDir = path.join(cleanupRoot, "outside");
 			await fs.mkdir(outsideDir, { recursive: true });
 			await Bun.write(path.join(outsideDir, "secret.md"), "secret");
 			await fs.symlink(outsideDir, path.join(memoryRoot, "linked"));
 
-			const router = createRouter(memoryRoot);
+			const router = InternalUrlRouter.instance();
 			await expect(router.resolve("memory://root/linked/secret.md")).rejects.toThrow(
 				"memory:// URL escapes memory root",
 			);

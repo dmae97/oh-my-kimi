@@ -16,6 +16,13 @@ import type {
 	WorkerInitPayload,
 	WorkerOutbound,
 } from "./tab-protocol";
+// Imported with `type: "file"` so Bun's bundler statically discovers the
+// worker entry and embeds it inside `bun build --compile` single-file
+// binaries. Without this attribute the bundler cannot reach the entry through
+// a `new URL(..., import.meta.url)` literal stored in a local variable, and
+// the prebuilt binary surfaces `Timed out initializing browser tab worker`
+// (issue #1011) because `/$bunfs/root/tab-worker-entry.ts` is missing.
+import tabWorkerEntryUrl from "./tab-worker-entry.ts" with { type: "file" };
 
 interface WorkerHandle {
 	send(msg: WorkerInbound, transferList?: Transferable[]): void;
@@ -364,8 +371,7 @@ async function raceWithTimeout<T>(
 
 async function spawnTabWorker(): Promise<WorkerHandle> {
 	try {
-		const url = new URL("./tab-worker-entry.ts", import.meta.url);
-		const worker = new Worker(url.href, { type: "module" });
+		const worker = new Worker(tabWorkerEntryUrl, { type: "module" });
 		return wrapBunWorker(worker);
 	} catch (err) {
 		logger.warn("Bun Worker spawn failed; using inline tab worker (no sync-loop guard)", {

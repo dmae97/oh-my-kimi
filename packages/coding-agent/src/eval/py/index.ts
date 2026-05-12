@@ -35,6 +35,7 @@ export default {
 			kernelMode,
 			useSharedGateway,
 			sessionFile: opts.sessionFile,
+			artifactsDir: opts.session.getArtifactsDir?.() ?? undefined,
 			kernelOwnerId: opts.kernelOwnerId,
 			reset: opts.reset,
 			artifactPath: opts.artifactPath,

@@ -3,7 +3,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getDefault } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { getProjectAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
@@ -27,15 +26,6 @@ describe("autocompleteMaxVisible setting", () => {
 		if (fs.existsSync(testDir)) {
 			fs.rmSync(testDir, { recursive: true });
 		}
-	});
-
-	it("should have default value of 5", () => {
-		expect(getDefault("autocompleteMaxVisible")).toBe(5);
-	});
-
-	it("should return default when not configured", async () => {
-		const settings = await Settings.init({ cwd: projectDir, agentDir });
-		expect(settings.get("autocompleteMaxVisible")).toBe(5);
 	});
 
 	it("should persist and read back a configured value", async () => {

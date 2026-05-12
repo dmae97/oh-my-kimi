@@ -17,6 +17,7 @@ Purely textual format. The tool has NO awareness of language, indentation, brack
 <rules>
 - Every line of inserted/replacement content **MUST** be emitted as a payload line starting with `{{hsep}}`.
 - `{{hsep}}` is syntax, not content. The inserted text begins after the first `{{hsep}}`; use a bare `{{hsep}}` to insert a blank line.
+- Payload is verbatim — don't escape unicode (write `—`, not `\u2014`).
 - `< A` inserts before line A; `+ A` inserts after line A. `< BOF` / `+ BOF` both prepend; `< EOF` / `+ EOF` both append.
 - `= A..B` replaces the inclusive range with the following payload lines. `= A..B` with no payload blanks the range to a single empty line.
 - `- A..B` deletes the inclusive range; `A..A` for one line.

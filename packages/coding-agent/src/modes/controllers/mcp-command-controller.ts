@@ -1238,12 +1238,12 @@ export class MCPCommandController {
 								? theme.fg("muted", "Connecting")
 								: theme.fg("warning", "Not connected yet");
 					this.#showMessage(
-						["", theme.fg("success", `\u2713 Enabled "${name}"`), "", `  Status: ${status}`, ""].join("\n"),
+						["", theme.fg("success", `✓ Enabled "${name}"`), "", `  Status: ${status}`, ""].join("\n"),
 					);
 				} else {
 					await this.ctx.mcpManager?.disconnectServer(name);
 					await this.ctx.session.refreshMCPTools(this.ctx.mcpManager?.getTools() ?? []);
-					this.#showMessage(["", theme.fg("success", `\u2713 Disabled "${name}"`), ""].join("\n"));
+					this.#showMessage(["", theme.fg("success", `✓ Disabled "${name}"`), ""].join("\n"));
 				}
 				return;
 			}
@@ -1429,12 +1429,9 @@ export class MCPCommandController {
 				await this.ctx.session.refreshMCPTools(this.ctx.mcpManager.getTools());
 				const serverTools = this.ctx.mcpManager.getTools().filter(t => t.mcpServerName === name);
 				this.#showMessage(
-					[
+					["\n", theme.fg("success", `✓ Reconnected to "${name}"`), `  Tools: ${serverTools.length}`, "\n"].join(
 						"\n",
-						theme.fg("success", `\u2713 Reconnected to "${name}"`),
-						`  Tools: ${serverTools.length}`,
-						"\n",
-					].join("\n"),
+					),
 				);
 			} else {
 				this.ctx.showError(`Failed to reconnect to "${name}". Check server status and logs.`);
@@ -1589,8 +1586,8 @@ export class MCPCommandController {
 			hasAny = true;
 
 			lines.push(`${theme.fg("accent", name)}:`);
-			const check = theme.fg("success", "\u2713");
-			const cross = theme.fg("dim", "\u2717");
+			const check = theme.fg("success", "✓");
+			const cross = theme.fg("dim", "✗");
 			if (supportsToolsChanged) lines.push(`  ${check} tools/list_changed`);
 			if (supportsResourcesChanged) lines.push(`  ${check} resources/list_changed`);
 			if (supportsPromptsChanged) lines.push(`  ${check} prompts/list_changed`);
@@ -1607,7 +1604,7 @@ export class MCPCommandController {
 				lines.push(`  ${check} resources/subscribe  ${subStatus}`);
 				if (enabled && subscribedUris && subscribedUris.size > 0) {
 					for (const uri of subscribedUris) {
-						lines.push(`    ${theme.fg("success", "\u2713")} ${theme.fg("dim", uri)}`);
+						lines.push(`    ${theme.fg("success", "✓")} ${theme.fg("dim", uri)}`);
 					}
 				}
 			} else if (supportsResources) {

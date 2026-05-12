@@ -1,11 +1,40 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Removed the `jobs://` internal URL protocol; inspect background jobs via the `job` tool's `list: true` operation instead
+
+### Added
+
+- Added `since` and `until` date-range filters to `search_issues`, `search_prs`, `search_commits`, and `search_repos`, accepting relative durations (`m`/`h`/`d`/`w`/`mo`/`y`), ISO dates, and ISO datetimes
+- Added `dateField` support for date filtering (`created` or `updated`) so search results can be constrained by creation, update, pushed (for repos), or committer date (for commits)
+- Added owner-based scoping to async job registration and queries so background jobs can be registered with an `ownerId` and filtered per agent in `getRunningJobs`, `getRecentJobs`, `getAllJobs`, and `cancelAll`
+- Added agent ownership metadata to async jobs started by `task` and `bash` tools so their lifecycle and cancellation is attributed to the creating agent
+- Added `list: true` operation to the `job` tool, returning an immediate snapshot of every job spawned by the calling agent without waiting (replaces the deleted `jobs://` URL)
+- Added per-agent visibility scoping to the `job` tool so `list`, `poll`, and `cancel` only see and act on jobs owned by the calling agent; cross-agent operations now return `not_found`
+
+### Changed
+
+- Changed `search_issues`, `search_prs`, `search_commits`, and `search_repos` to allow date-only queries where `query` is omitted if `since`/`until` is provided
+- Changed `search_code` to return a validation error when `since`/`until` is supplied because GitHub code search does not support date qualifiers
+- Changed async job manager ownership so subagents inherit the parent session’s global `AsyncJobManager` instead of creating and owning separate instances
+- Changed session lifecycle cleanup so the global async-job manager is disposed only by the owning top-level session
+- Changed subagent session switches and handoff paths to stop global async-job cancellation and cancel only jobs owned by that session
+- Changed `agent://` and `artifact://` URL resolution to search artifact outputs across all active sessions instead of only the current session, allowing parent and subagent sessions to read each other’s generated outputs by ID
+- Changed `memory://` URL resolution to walk all active sessions’ memory roots and return the first matching file, so worktree-based subagents can access their own memory views as well as shared roots
+- Changed internal URL routing to use a shared process-global `InternalUrlRouter` and protocol handlers, so built-in tools resolve `agent://`, `artifact://`, `memory://`, `skill://`, `rule://`, `mcp://`, and `local://` URLs without requiring session-specific router wiring
+- Changed `mcp://` handler to use the globally registered MCP manager so MCP resource links work for agents sharing session context
 
 ### Fixed
 
 - Fixed an ESM circular-import TDZ that crashed test suites when modules from the `task/` and `tools/` graphs were evaluated together (e.g. `executor-warnings.test.ts` + `task-simple-mode.test.ts`) by deferring `BUILTIN_TOOLS.task`'s `TaskTool.create` dereference to factory-call time and sourcing `truncateTail` from `session/streaming-output` instead of the `tools/` barrel
+- Treat keyless-by-design providers (llama.cpp, ollama, lm-studio) as authenticated in subagent model resolution; fixes silent fallback to parent remote model when a local model is configured. ([#1008](https://github.com/can1357/oh-my-pi/issues/1008))
+- Fixed subagent disposal and session transitions that previously canceled all running async jobs, preventing inadvertent termination of a parent agent’s background work
+- Fixed multi-entry edits silently rendering a fake success when every entry failed (e.g. all hit the auto-generated guard), by surfacing `isError: true` from the single-path edit orchestrator so the renderer takes the error branch instead of falling through to the streaming-preview fallback that displays the *proposed* diff
+- Fixed the auto-generated streaming guard being gated behind `edit.streamingAbort` (default false), so it now pre-empts streaming edit tool calls targeting auto-generated files regardless of that setting
 - Fixed subagents launched in the same parallel batch not seeing each other in their initial `# IRC Peers` system-prompt block by pre-registering the agent in the global `AgentRegistry` before `rebuildSystemPrompt` runs and attaching the live session afterwards
+- Fixed `Timed out initializing browser tab worker` on prebuilt binaries by rewriting `spawnTabWorker` to import the worker entry with `with { type: "file" }` so Bun's `--compile` bundler statically discovers and embeds `tab-worker-entry.ts` in the single-file binary ([#1011](https://github.com/can1357/oh-my-pi/issues/1011))
 
 ## [14.9.3] - 2026-05-10
 ### Breaking Changes

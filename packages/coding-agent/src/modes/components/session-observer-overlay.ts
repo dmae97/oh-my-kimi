@@ -192,7 +192,7 @@ export class SessionObserverOverlayComponent extends Container {
 		const statsLine = this.#buildStatsLine(session);
 		if (statsLine) this.#viewerFooterLines.push(statsLine);
 		this.#viewerFooterLines.push(
-			theme.fg("dim", "j/k:scroll  Enter:expand  [/]/\u2190\u2192:cycle agents  Esc/Ctrl+S:close  g/G:top/bottom"),
+			theme.fg("dim", "j/k:scroll  Enter:expand  [/]/←→:cycle agents  Esc/Ctrl+S:close  g/G:top/bottom"),
 		);
 
 		// Auto-scroll to bottom if we were at bottom
@@ -452,7 +452,7 @@ export class SessionObserverOverlayComponent extends Container {
 
 		// Tool call header
 		const intentStr = call.intent ? theme.fg("dim", ` ${sanitizeLine(call.intent, TRUNCATE_LENGTHS.SHORT)}`) : "";
-		lines.push(`${cursor} ${theme.fg("accent", "\u25B8")} ${theme.bold(theme.fg("muted", call.name))}${intentStr}`);
+		lines.push(`${cursor} ${theme.fg("accent", "▸")} ${theme.bold(theme.fg("muted", call.name))}${intentStr}`);
 
 		// Key arguments
 		const argSummary = this.#formatToolArgs(call.name, call.arguments);

@@ -209,6 +209,26 @@ export function parseRuleConditionAndScope(frontmatter: RuleFrontmatter): Pick<R
 	};
 }
 
+let activeRules: readonly Rule[] = [];
+
+/**
+ * Process-global snapshot of rules the active session loaded.
+ * Read by internal URL protocol handlers (rule://).
+ */
+export function getActiveRules(): readonly Rule[] {
+	return activeRules;
+}
+
+/** Replace the active rule snapshot. Called once per top-level session. */
+export function setActiveRules(value: readonly Rule[]): void {
+	activeRules = value;
+}
+
+/** Reset the active rule snapshot. Test-only. */
+export function resetActiveRulesForTests(): void {
+	activeRules = [];
+}
+
 export const ruleCapability = defineCapability<Rule>({
 	id: "rules",
 	displayName: "Rules",

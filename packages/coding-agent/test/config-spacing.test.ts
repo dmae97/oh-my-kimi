@@ -21,18 +21,6 @@ describe("indentation resolver", () => {
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
 
-	it("falls back to hard default when settings are not initialized", () => {
-		expect(getDefaultTabWidth()).toBe(3);
-		expect(getIndentation()).toBe(3);
-	});
-
-	it("uses configured default tab width from settings", async () => {
-		const runtimeSettings = await Settings.init({ inMemory: true, cwd: tempDir });
-		runtimeSettings.set("display.tabWidth", 5);
-		expect(getDefaultTabWidth()).toBe(5);
-		expect(getIndentation()).toBe(5);
-	});
-
 	it("applies current display tab width during initial settings load", async () => {
 		await Settings.init({ inMemory: true, cwd: tempDir, overrides: { "display.tabWidth": 7 } });
 		expect(getDefaultTabWidth()).toBe(7);

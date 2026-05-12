@@ -18,14 +18,26 @@ use pi_shell::{
 
 use crate::task;
 
+/// N-API opt-in handle for the minimizer.
 #[napi(object)]
 #[derive(Debug, Clone, Default)]
 pub struct MinimizerOptions {
+	/// Master switch. Absent / false = disabled.
 	pub enabled:           Option<bool>,
+	/// Optional path to a TOML settings file whose values override
+	/// field-level defaults. `~` is expanded.
 	pub settings_path:     Option<String>,
+	/// Optional xxHash64 digest (hex) of the settings file contents. When
+	/// supplied, the engine refuses to honor a settings file whose hash does
+	/// not match — a lightweight trust gate for agent-controllable paths.
 	pub settings_hash:     Option<String>,
+	/// Opt-in allowlist of program names (e.g. `"git"`). When empty or
+	/// absent, all built-in filters are active.
 	pub only:              Option<Vec<String>>,
+	/// Program names explicitly excluded from minimization.
 	pub except:            Option<Vec<String>>,
+	/// Maximum captured bytes per command before the engine falls back to
+	/// the raw, un-minimized output. Default 4 MiB.
 	pub max_capture_bytes: Option<u32>,
 }
 
@@ -42,10 +54,14 @@ impl From<MinimizerOptions> for minimizer::MinimizerOptions {
 	}
 }
 
+/// Options for configuring a persistent shell session.
 #[napi(object)]
 pub struct ShellOptions {
+	/// Environment variables to apply once per session.
 	pub session_env:   Option<HashMap<String, String>>,
+	/// Optional snapshot file to source on session creation.
 	pub snapshot_path: Option<String>,
+	/// Optional per-command output minimizer configuration.
 	pub minimizer:     Option<MinimizerOptions>,
 }
 
@@ -59,33 +75,63 @@ impl From<ShellOptions> for CoreShellOptions {
 	}
 }
 
+/// Options for running a shell command.
 #[napi(object)]
 pub struct ShellRunOptions<'env> {
+	/// Command string to execute in the shell.
 	pub command:    String,
+	/// Working directory for the command.
 	pub cwd:        Option<String>,
+	/// Environment variables to apply for this command only.
 	pub env:        Option<HashMap<String, String>>,
+	/// Timeout in milliseconds before cancelling the command.
 	pub timeout_ms: Option<u32>,
+	/// Abort signal for cancelling the operation.
 	pub signal:     Option<Unknown<'env>>,
 }
 
+/// Options for executing a shell command via brush-core.
 #[napi(object)]
 pub struct ShellExecuteOptions<'env> {
+	/// Command string to execute in the shell.
 	pub command:       String,
+	/// Working directory for the command.
 	pub cwd:           Option<String>,
+	/// Environment variables to apply for this command only.
 	pub env:           Option<HashMap<String, String>>,
+	/// Environment variables to apply once per session.
 	pub session_env:   Option<HashMap<String, String>>,
+	/// Timeout in milliseconds before cancelling the command.
 	pub timeout_ms:    Option<u32>,
+	/// Optional snapshot file to source on session creation.
 	pub snapshot_path: Option<String>,
+	/// Optional per-command output minimizer configuration.
 	pub minimizer:     Option<MinimizerOptions>,
+	/// Abort signal for cancelling the operation.
 	pub signal:        Option<Unknown<'env>>,
 }
 
+/// Telemetry for a single minimization.
+///
+/// Surfaced when the minimizer actually rewrote the command's output. The
+/// session layer is expected to persist `original_text` via its
+/// `ArtifactManager`, splice the resulting `artifact://<id>` reference
+/// into `text`, and replace any previously streamed raw output with the
+/// minimized text.
 #[napi(object)]
 pub struct MinimizerResult {
+	/// Dispatch label produced by the minimizer (e.g. `"git"`,
+	/// `"pipeline:gradle"`, `"pipeline+builtin"`).
 	pub filter:        String,
+	/// The minimized replacement text. Callers that streamed raw chunks
+	/// during execution should clear and replace their accumulated output
+	/// with this text.
 	pub text:          String,
+	/// The full original capture, before minimization.
 	pub original_text: String,
+	/// Captured byte length before minimization.
 	pub input_bytes:   u32,
+	/// Byte length of the minimized text the consumer received.
 	pub output_bytes:  u32,
 }
 
@@ -101,11 +147,19 @@ impl From<CoreMinimizerResult> for MinimizerResult {
 	}
 }
 
+/// Result of running a shell command.
 #[napi(object)]
 pub struct ShellRunResult {
+	/// Exit code when the command completes normally.
 	pub exit_code: Option<i32>,
+	/// Whether the command was cancelled via abort.
 	pub cancelled: bool,
+	/// Whether the command timed out before completion.
 	pub timed_out: bool,
+	/// When the minimizer rewrote the captured output, this carries the
+	/// original buffer + telemetry so the session layer can persist it as
+	/// an artifact and splice an `artifact://<id>` reference into the
+	/// minimized text shown to the agent. `None` when nothing was rewritten.
 	pub minimized: Option<MinimizerResult>,
 }
 
@@ -120,6 +174,7 @@ impl From<CoreShellRunResult> for ShellRunResult {
 	}
 }
 
+/// Persistent brush-core shell session.
 #[napi]
 pub struct Shell {
 	inner: Arc<CoreShell>,
@@ -127,11 +182,19 @@ pub struct Shell {
 
 #[napi]
 impl Shell {
+	/// Create a new shell session from optional configuration.
+	///
+	/// The options set session-scoped environment variables and a snapshot path.
 	#[napi(constructor)]
 	pub fn new(options: Option<ShellOptions>) -> Self {
 		Self { inner: Arc::new(CoreShell::new(options.map(Into::into))) }
 	}
 
+	/// Run a shell command using the provided options.
+	///
+	/// The `on_chunk` callback receives streamed stdout/stderr output. Returns
+	/// the exit code when the command completes, or flags when cancelled or
+	/// timed out.
 	#[napi]
 	pub fn run<'env>(
 		&self,
@@ -146,19 +209,25 @@ impl Shell {
 			command:    options.command,
 			cwd:        options.cwd,
 			env:        options.env,
-			pty:        false,
 			timeout_ms: options.timeout_ms,
 		};
 		task::future(env, "shell.run", async move {
-			let chunk_tx = bridge_chunks(on_chunk);
-			inner
+			let (chunk_tx, drain_handle) = bridge_chunks(on_chunk);
+			let result = inner
 				.run(run_options, chunk_tx, cancel_token.into_core())
 				.await
 				.map(Into::into)
-				.map_err(|err| Error::from_reason(err.to_string()))
+				.map_err(|err| Error::from_reason(err.to_string()));
+			if let Some(handle) = drain_handle {
+				let _ = handle.await;
+			}
+			result
 		})
 	}
 
+	/// Abort all running commands for this shell session.
+	///
+	/// Returns `Ok(())` even when no commands are running.
 	#[napi]
 	pub async fn abort(&self) -> Result<()> {
 		self.inner.abort().await;
@@ -166,6 +235,11 @@ impl Shell {
 	}
 }
 
+/// Execute a brush shell command.
+///
+/// Creates a fresh session for each call. The `on_chunk` callback receives
+/// streamed stdout/stderr output. Returns the exit code when the command
+/// completes, or flags when cancelled or timed out.
 #[napi]
 pub fn execute_shell<'env>(
 	env: &'env Env,
@@ -182,28 +256,33 @@ pub fn execute_shell<'env>(
 		timeout_ms:    options.timeout_ms,
 		snapshot_path: options.snapshot_path,
 		minimizer:     options.minimizer.map(Into::into),
-		pty:           false,
 	};
 	task::future(env, "shell.execute", async move {
-		let chunk_tx = bridge_chunks(on_chunk);
-		core_execute_shell(exec_options, chunk_tx, cancel_token.into_core())
+		let (chunk_tx, drain_handle) = bridge_chunks(on_chunk);
+		let result = core_execute_shell(exec_options, chunk_tx, cancel_token.into_core())
 			.await
 			.map(Into::into)
-			.map_err(|err| Error::from_reason(err.to_string()))
+			.map_err(|err| Error::from_reason(err.to_string()));
+		if let Some(handle) = drain_handle {
+			let _ = handle.await;
+		}
+		result
 	})
 }
 
 fn bridge_chunks(
 	on_chunk: Option<ThreadsafeFunction<String>>,
-) -> Option<mpsc::UnboundedSender<String>> {
-	let on_chunk = on_chunk?;
+) -> (Option<mpsc::UnboundedSender<String>>, Option<napi::tokio::task::JoinHandle<()>>) {
+	let Some(on_chunk) = on_chunk else {
+		return (None, None);
+	};
 	let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-	napi::tokio::spawn(async move {
+	let handle = napi::tokio::spawn(async move {
 		while let Some(chunk) = rx.recv().await {
 			on_chunk.call(Ok(chunk), ThreadsafeFunctionCallMode::NonBlocking);
 		}
 	});
-	Some(tx)
+	(Some(tx), Some(handle))
 }
 
 #[cfg(test)]
@@ -266,7 +345,6 @@ mod tests {
 						command:    "/bin/sh -c 'printf \"%d\\n\" \"$$\"; sleep 0.5'".to_string(),
 						cwd:        None,
 						env:        None,
-						pty:        false,
 						timeout_ms: None,
 					},
 					Some(tx),
@@ -310,7 +388,6 @@ mod tests {
 						command:    "sh -c 'sleep 30 & wait'".to_string(),
 						cwd:        None,
 						env:        None,
-						pty:        false,
 						timeout_ms: None,
 					},
 					None,

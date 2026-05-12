@@ -129,7 +129,7 @@ Implemented in `packages/coding-agent/src/eval/js/context-manager.ts` and `packa
 - Top-level static `import ... from ...` is rewritten to `await import(...)` by `rewriteStaticImports()`
 - The prelude installs globals:
   - `display`, `print`
-  - `read`, `write`, `append`, `sort`, `uniq`, `counter`, `diff`, `tree`, `run`, `env`, `output`
+  - `read`, `write`, `append`, `sort`, `uniq`, `counter`, `diff`, `tree`, `env`, `output`
   - `tool.<name>(args)` proxy for arbitrary session tool calls
 - JS helpers are async because they cross the VM/tool boundary
 - `display(value)` behavior:
@@ -183,8 +183,6 @@ A single tool call can mix Python and JS cells. Persistence is per language runt
 - Subprocesses / native bindings
   - Python availability check runs `<python> -c ...`.
   - Python backend may start or connect to a kernel gateway; details are in `docs/python-repl.md`.
-  - JS `run()` helper spawns `bash -lc <command>` via `Bun.spawn`.
-  - Python `run()` helper spawns `bash` or `sh` via `subprocess.Popen`.
 - Session state
   - `session.assertEvalExecutionAllowed?.()` can block execution.
   - `session.trackEvalExecution?.(...)` can register cancellable eval work.

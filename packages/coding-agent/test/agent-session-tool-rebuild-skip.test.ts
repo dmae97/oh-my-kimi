@@ -219,7 +219,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 
 	it("rebuilds when an MCP tool's label changes", async () => {
 		// Tool labels are rendered into the prompt body (`{{label}}: \`{{name}}\``),
-		// so a label change \u2014 even with name and description constant \u2014 must force
+		// so a label change — even with name and description constant — must force
 		// a rebuild. Otherwise we'd serve a stale label after an MCP server upgrade.
 		let rebuildCount = 0;
 		const { session } = newSession(async toolNames => {
@@ -273,7 +273,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 
 	it("rebuilds when a discoverable (inactive) registry tool's metadata changes", async () => {
 		// With MCP discovery on, the rebuilt prompt summarizes ALL discoverable MCP
-		// tools \u2014 including ones not in the active set. The signature must capture the
+		// tools — including ones not in the active set. The signature must capture the
 		// full registry; otherwise a description change to a discoverable-but-inactive
 		// tool would silently leave a stale summary in the cached prompt.
 		let rebuildCount = 0;

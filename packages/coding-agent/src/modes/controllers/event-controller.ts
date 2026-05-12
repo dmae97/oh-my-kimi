@@ -1,6 +1,6 @@
 import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
-import { Loader, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import { type Component, Loader, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
@@ -14,6 +14,8 @@ import { calculatePromptTokens } from "../../session/compaction/compaction";
 import type { ExitPlanModeDetails } from "../../tools";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
+
+const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
 
 type AgentSessionEventHandlers = {
 	[E in AgentSessionEventKind]: (event: Extract<AgentSessionEvent, { type: E }>) => Promise<void>;
@@ -29,6 +31,7 @@ export class EventController {
 	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 	#lastAssistantComponent: AssistantMessageComponent | undefined = undefined;
 	#idleCompactionTimer?: NodeJS.Timeout;
+	#ircExpiryTimers = new Map<string, NodeJS.Timeout>();
 	#handlers: AgentSessionEventHandlers;
 
 	constructor(private ctx: InteractiveModeContext) {
@@ -59,6 +62,10 @@ export class EventController {
 
 	dispose(): void {
 		this.#cancelIdleCompaction();
+		for (const timer of this.#ircExpiryTimers.values()) {
+			clearTimeout(timer);
+		}
+		this.#ircExpiryTimers.clear();
 	}
 
 	#resetReadGroup(): void {
@@ -222,8 +229,22 @@ export class EventController {
 		}
 		this.#renderedCustomMessages.add(signature);
 		this.#resetReadGroup();
-		this.ctx.addMessageToChat(event.message);
+		const components = this.ctx.addMessageToChat(event.message);
+		this.#scheduleIrcExpiry(signature, components);
 		this.ctx.ui.requestRender();
+	}
+
+	#scheduleIrcExpiry(signature: string, components: Component[]): void {
+		if (components.length === 0 || this.#ircExpiryTimers.has(signature)) return;
+		const timer = setTimeout(() => {
+			this.#ircExpiryTimers.delete(signature);
+			for (const component of components) {
+				this.ctx.chatContainer.removeChild(component);
+			}
+			this.ctx.ui.requestRender();
+		}, IRC_MESSAGE_VISIBLE_TTL_MS);
+		timer.unref?.();
+		this.#ircExpiryTimers.set(signature, timer);
 	}
 
 	async #handleNotice(event: Extract<AgentSessionEvent, { type: "notice" }>): Promise<void> {

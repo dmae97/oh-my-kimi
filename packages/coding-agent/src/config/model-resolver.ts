@@ -16,7 +16,7 @@ import chalk from "chalk";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { parseThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
 import { fuzzyMatch } from "../utils/fuzzy";
-import { isAuthenticated, MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "./model-registry";
+import { isAuthenticated, kNoAuth, MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "./model-registry";
 import type { Settings } from "./settings";
 
 /** Default model IDs for each known provider */
@@ -743,6 +743,12 @@ export function resolveModelOverride(
  * `modelRoles.task` pointing at an unqualified id whose only available
  * provider variant has no configured credentials — see #985).
  *
+ * Keyless-by-design providers (llama.cpp, ollama, lm-studio) advertise the
+ * `kNoAuth` sentinel from `getApiKey` to signal that they do not require
+ * credentials. Those are treated as authenticated here so an explicitly
+ * configured local model is never silently rerouted to the parent's remote
+ * provider (see #1008).
+ *
  * If neither the subagent nor the parent has working auth, returns the
  * primary resolution unchanged so the existing error path still surfaces
  * a meaningful failure downstream.
@@ -764,7 +770,7 @@ export async function resolveModelOverrideWithAuthFallback(
 	}
 
 	const primaryKey = await modelRegistry.getApiKey(primary.model);
-	if (isAuthenticated(primaryKey)) {
+	if (primaryKey === kNoAuth || isAuthenticated(primaryKey)) {
 		return { ...primary, authFallbackUsed: false };
 	}
 

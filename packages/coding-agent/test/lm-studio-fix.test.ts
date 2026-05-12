@@ -54,20 +54,4 @@ describe("ModelRegistry LM Studio Fixes", () => {
 		expect(available.some(m => m.provider === "ollama")).toBe(true);
 		expect(available.some(m => m.provider === "lm-studio")).toBe(true);
 	});
-
-	test("lm-studio discovery handles trailing slashes in baseUrl correctly", async () => {
-		let _requestedUrl = "";
-		using _hook = hookFetch(input => {
-			const url = String(input);
-			// Only track URLs from our test endpoints; ignore concurrent built-in provider discovery
-			if (url.includes("127.0.0.1:1234") || url.includes("127.0.0.1:9999") || url.startsWith("not a url")) {
-				_requestedUrl = url;
-				return new Response(JSON.stringify({ data: [{ id: "model-1" }] }), {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				});
-			}
-			return new Response(null, { status: 404 });
-		});
-	});
 });

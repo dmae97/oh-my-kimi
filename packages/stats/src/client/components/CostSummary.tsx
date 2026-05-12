@@ -32,7 +32,7 @@ export function CostSummary({ costSeries }: CostSummaryProps) {
 		{ label: "Avg / day", value: formatCost(avgDaily) },
 		{
 			label: "Top model",
-			value: topModel || "\u2014",
+			value: topModel || "—",
 			sub: topModel ? formatCost(topModelCost) : undefined,
 		},
 	];

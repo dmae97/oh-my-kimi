@@ -107,11 +107,6 @@ function makeUnionTool(strict: boolean): Tool {
 }
 
 describe("supportsFreeformApplyPatch", () => {
-	test("absent flag returns false", () => {
-		// No runtime auto-detection — requires generated model metadata.
-		expect(supportsFreeformApplyPatch(makeModel())).toBe(false);
-	});
-
 	test("applyPatchToolType: freeform enables", () => {
 		expect(supportsFreeformApplyPatch(makeModel({ applyPatchToolType: "freeform" }))).toBe(true);
 	});

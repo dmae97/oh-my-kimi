@@ -132,6 +132,23 @@ export interface MCPDiscoverOptions {
  * Manages connections to MCP servers and provides tools to the agent.
  */
 export class MCPManager {
+	static #instance: MCPManager | undefined;
+
+	/** Process-global instance shared by internal URL protocol handlers and tools. */
+	static instance(): MCPManager | undefined {
+		return MCPManager.#instance;
+	}
+
+	/** Install or clear the process-global instance. */
+	static setInstance(value: MCPManager | undefined): void {
+		MCPManager.#instance = value;
+	}
+
+	/** Reset the process-global instance. Test-only. */
+	static resetForTests(): void {
+		MCPManager.#instance = undefined;
+	}
+
 	#connections = new Map<string, MCPServerConnection>();
 	#tools: CustomTool<TSchema, MCPToolDetails>[] = [];
 	#pendingConnections = new Map<string, Promise<MCPServerConnection>>();

@@ -765,7 +765,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 					await mgr.upgradeAllPlugins();
 					logger.debug(`Auto-upgraded ${updates.length} marketplace plugin(s)`);
 				} else {
-					logger.debug(`${updates.length} marketplace plugin update(s) available \u2014 /marketplace upgrade`);
+					logger.debug(`${updates.length} marketplace plugin update(s) available — /marketplace upgrade`);
 				}
 			} catch {
 				// Silently ignore — network failure, corrupt data, offline.

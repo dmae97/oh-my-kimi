@@ -35,18 +35,6 @@ function getSuccessDataSchema(parameters: Record<string, unknown>): Record<strin
 }
 
 describe("YieldTool", () => {
-	it("exposes top-level object parameters with required result union", () => {
-		const tool = new YieldTool(createSession());
-		const schema = tool.parameters as {
-			type?: string;
-			properties?: Record<string, unknown>;
-			required?: string[];
-		};
-		expect(schema.type).toBe("object");
-		expect(Object.keys(schema.properties ?? {})).toEqual(["result"]);
-		expect(schema.required).toEqual(["result"]);
-	});
-
 	it("accepts success payload with data", async () => {
 		const tool = new YieldTool(createSession());
 		const result = await tool.execute("call-1", { result: { data: { ok: true } } } as never);

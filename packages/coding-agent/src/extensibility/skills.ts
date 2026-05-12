@@ -28,6 +28,26 @@ export interface LoadSkillsResult {
 	warnings: SkillWarning[];
 }
 
+let activeSkills: readonly Skill[] = [];
+
+/**
+ * Process-global snapshot of skills the active session loaded.
+ * Read by internal URL protocol handlers (skill://).
+ */
+export function getActiveSkills(): readonly Skill[] {
+	return activeSkills;
+}
+
+/** Replace the active skill snapshot. Called once per top-level session. */
+export function setActiveSkills(value: readonly Skill[]): void {
+	activeSkills = value;
+}
+
+/** Reset the active skill snapshot. Test-only. */
+export function resetActiveSkillsForTests(): void {
+	activeSkills = [];
+}
+
 export interface LoadSkillsFromDirOptions {
 	/** Directory to scan for skills */
 	dir: string;

@@ -1,9 +1,10 @@
 //! Runtime-agnostic brush shell execution.
 
+#[cfg(windows)]
+use std::collections::HashSet;
 use std::{
-	collections::{HashMap, HashSet},
+	collections::HashMap,
 	fs,
-	future::Future,
 	io::{self, Write},
 	str,
 	sync::Arc,
@@ -77,7 +78,6 @@ struct ShellRunConfig {
 	command:   String,
 	cwd:       Option<String>,
 	env:       Option<HashMap<String, String>>,
-	pty:       bool,
 	minimizer: Option<minimizer::MinimizerConfig>,
 }
 
@@ -86,7 +86,6 @@ pub struct ShellRunOptions {
 	pub command:    String,
 	pub cwd:        Option<String>,
 	pub env:        Option<HashMap<String, String>>,
-	pub pty:        bool,
 	pub timeout_ms: Option<u32>,
 }
 
@@ -116,7 +115,6 @@ pub struct ShellExecuteOptions {
 	pub timeout_ms:    Option<u32>,
 	pub snapshot_path: Option<String>,
 	pub minimizer:     Option<minimizer::MinimizerOptions>,
-	pub pty:           bool,
 }
 
 pub type ShellExecuteResult = ShellRunResult;
@@ -161,7 +159,6 @@ impl Shell {
 			command:   options.command,
 			cwd:       options.cwd,
 			env:       options.env,
-			pty:       options.pty,
 			minimizer: self.config.minimizer.clone(),
 		};
 		run_shell_session(
@@ -194,13 +191,8 @@ pub async fn execute_shell(
 		snapshot_path: options.snapshot_path,
 		minimizer:     minimizer.clone(),
 	};
-	let run_config = ShellRunConfig {
-		command: options.command,
-		cwd: options.cwd,
-		env: options.env,
-		pty: options.pty,
-		minimizer,
-	};
+	let run_config =
+		ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env, minimizer };
 	run_shell_oneshot(config, run_config, on_chunk, cancel_token).await
 }
 
@@ -241,7 +233,12 @@ async fn run_shell_session(
 				let _ = run_task.await;
 			}
 			abort_state.clear().await;
-			*session.lock().await = None;
+			// Use try_lock to avoid deadlocking if another task holds the session.
+			// If we can't acquire the lock, the session will be cleaned up when the
+			// holding task finishes.
+			if let Ok(mut guard) = session.try_lock() {
+				*guard = None;
+			}
 			return Ok(ShellRunResult {
 				exit_code: None,
 				cancelled: matches!(reason, AbortReason::Signal),
@@ -492,33 +489,12 @@ async fn run_shell_command(
 	on_chunk: Option<mpsc::UnboundedSender<String>>,
 	cancel_token: CancellationToken,
 ) -> Result<(ExecutionResult, Option<MinimizerResult>)> {
-	if options.pty {
-		// TODO: The shared brush path is currently pipe-based. PTY execution
-		// still falls back to the non-PTY brush path until a native PTY-backed
-		// brush integration lands.
-	}
 	if let Some(cwd) = options.cwd.as_deref() {
 		session
 			.shell
 			.set_working_dir(cwd)
 			.map_err(|err| Error::msg(format!("Failed to set cwd: {err}")))?;
 	}
-
-	let (reader_file, writer_file) = pipe_to_files("output")?;
-
-	let stdout_file = OpenFile::from(
-		writer_file
-			.try_clone()
-			.map_err(|err| Error::msg(format!("Failed to clone pipe: {err}")))?,
-	);
-	let stderr_file = OpenFile::from(writer_file);
-
-	let mut params = session.shell.default_exec_params();
-	params.set_fd(OpenFiles::STDIN_FD, null_file()?);
-	params.set_fd(OpenFiles::STDOUT_FD, stdout_file);
-	params.set_fd(OpenFiles::STDERR_FD, stderr_file);
-	params.process_group_policy = ProcessGroupPolicy::NewProcessGroup;
-	params.set_cancel_token(cancel_token.clone());
 
 	let mut env_scope_pushed = false;
 	if let Some(env) = options.env.as_ref() {
@@ -557,26 +533,23 @@ async fn run_shell_command(
 	} else {
 		0
 	};
+
+	let (reader_file, writer_file) = pipe_to_files("output")?;
+
+	let stdout_file = OpenFile::from(
+		writer_file
+			.try_clone()
+			.map_err(|err| Error::msg(format!("Failed to clone pipe: {err}")))?,
+	);
+	let stderr_file = OpenFile::from(writer_file);
+
+	let mut params = session.shell.default_exec_params();
+	params.set_fd(OpenFiles::STDIN_FD, null_file()?);
+	params.set_fd(OpenFiles::STDOUT_FD, stdout_file);
+	params.set_fd(OpenFiles::STDERR_FD, stderr_file);
+	params.process_group_policy = ProcessGroupPolicy::NewProcessGroup;
+	params.set_cancel_token(cancel_token.clone());
 	let baseline_descendants = process::current_descendant_pids();
-	let tracked_targets = Arc::new(TokioMutex::new(process::TerminationTargets::new()));
-	let tracking_cancel = CancellationToken::new();
-	let tracker_handle = tokio::spawn({
-		let baseline_descendants = baseline_descendants.clone();
-		let tracked_targets = Arc::clone(&tracked_targets);
-		let tracking_cancel = tracking_cancel.clone();
-		async move {
-			loop {
-				{
-					let mut targets = tracked_targets.lock().await;
-					process::add_new_descendants(&mut targets, &baseline_descendants);
-				}
-				tokio::select! {
-					() = tracking_cancel.cancelled() => break,
-					() = time::sleep(Duration::from_millis(50)) => {}
-				}
-			}
-		}
-	});
 	let reader_cancel = CancellationToken::new();
 	let (activity_tx, mut activity_rx) = mpsc::channel::<()>(1);
 	// Stream every raw chunk to the caller live, regardless of whether
@@ -615,16 +588,36 @@ async fn run_shell_command(
 	let process_cancel_bridge = tokio::spawn({
 		let cancel_token = cancel_token.clone();
 		let baseline_descendants = baseline_descendants.clone();
-		let tracked_targets = Arc::clone(&tracked_targets);
 		async move {
 			cancel_token.cancelled().await;
-			{
-				let mut targets = tracked_targets.lock().await;
+			// Rescan-and-signal loop. Each pass picks up grandchildren spawned
+			// during the previous wave's grace period, then exits early as soon
+			// as no descendants remain. The first wave is SIGTERM so well-behaved
+			// programs get a chance to clean up; subsequent waves escalate to
+			// SIGKILL. Cheaper than the previous 20 Hz tracker loop and avoids
+			// the constant kernel chatter when no cancellation ever happens.
+			const WAVES: u32 = 3;
+			for wave in 0..WAVES {
+				let mut targets = process::TerminationTargets::new();
 				process::add_new_descendants(&mut targets, &baseline_descendants);
-				targets.signal(process::TERM_SIGNAL);
+				if targets.is_empty() {
+					return;
+				}
+				let signal = if wave == 0 {
+					process::TERM_SIGNAL
+				} else {
+					process::KILL_SIGNAL
+				};
+				targets.signal(signal);
+				if wave + 1 < WAVES {
+					let pause = if wave == 0 {
+						Duration::from_millis(75)
+					} else {
+						Duration::from_millis(150)
+					};
+					time::sleep(pause).await;
+				}
 			}
-			time::sleep(Duration::from_millis(500)).await;
-			tracked_targets.lock().await.signal(process::KILL_SIGNAL);
 		}
 	});
 	let source_info = SourceInfo::from("pi-natives:command");
@@ -634,7 +627,7 @@ async fn run_shell_command(
 		.await;
 
 	if cancel_token.is_cancelled() {
-		terminate_background_jobs(&session.shell, &baseline_descendants);
+		terminate_background_jobs(&session.shell);
 	}
 
 	if env_scope_pushed {
@@ -694,10 +687,17 @@ async fn run_shell_command(
 	}
 	cancel_bridge.abort();
 	let _ = cancel_bridge.await;
-	process_cancel_bridge.abort();
-	let _ = process_cancel_bridge.await;
-	tracking_cancel.cancel();
-	let _ = tracker_handle.await;
+	if cancel_token.is_cancelled() {
+		// Cancel fired — the bridge is actively running its rescan-and-signal
+		// loop. Let it run to completion so all three waves get a chance to
+		// reach stragglers; aborting here would cut the kill loop short.
+		let _ = process_cancel_bridge.await;
+	} else {
+		// Happy path — the bridge is still parked on `cancel_token.cancelled()`
+		// and would never exit on its own. Tear it down.
+		process_cancel_bridge.abort();
+		let _ = process_cancel_bridge.await;
+	}
 
 	let result = result.map_err(|err| Error::msg(format!("Shell execution failed: {err}")))?;
 	let mut minimized_out: Option<MinimizerResult> = None;
@@ -729,7 +729,7 @@ async fn run_shell_command(
 	Ok((result, minimized_out))
 }
 
-fn terminate_background_jobs(shell: &BrushShell, baseline_descendants: &HashSet<i32>) {
+fn terminate_background_jobs(shell: &BrushShell) {
 	let mut targets = process::TerminationTargets::new();
 	for job in &shell.jobs().jobs {
 		if let Some(pgid) = job.process_group_id() {
@@ -740,15 +740,17 @@ fn terminate_background_jobs(shell: &BrushShell, baseline_descendants: &HashSet<
 		}
 	}
 	if targets.is_empty() {
-		process::add_new_descendants(&mut targets, baseline_descendants);
-	}
-	if targets.is_empty() {
+		// Pure descendant cleanup is handled by `process_cancel_bridge` while
+		// the cancel was still in flight. Here we only signal brush's own
+		// job-tracked targets — pgids of background-group leaders that may have
+		// already exited (so the descendant walk would no longer find them as
+		// new descendants, but their group still holds live grandchildren).
 		return;
 	}
 
 	targets.signal(process::TERM_SIGNAL);
 	tokio::spawn(async move {
-		time::sleep(Duration::from_millis(500)).await;
+		time::sleep(Duration::from_millis(150)).await;
 		targets.signal(process::KILL_SIGNAL);
 	});
 }
