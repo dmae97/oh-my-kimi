@@ -1,13 +1,13 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Changed the `timeoutMs` execution option to no longer be enforced during worker-based JS runs, so callers must rely on external cancellation signals for time limits
 
 ### Added
 
+- Added substring fallback matching to `HistoryStorage.search` so infix and short-token queries that FTS5 prefix matching misses are still returned
 - Added a live single-line sync progress display to the stats command showing current/total sessions while syncing
 - Added automatic inline JS evaluation fallback when worker creation failed so script execution still works in environments without worker support
 
@@ -17,6 +17,8 @@
 
 ### Fixed
 
+- Fixed query tokenization in `HistoryStorage.search` so punctuation-delimited terms like `git-commit` are aligned with indexing and matched correctly
+- Fixed history search result merging to de-duplicate matches and return full-text matches before substring-only matches while still respecting the requested limit
 - Fixed JS run cancellation so aborting a run now also cancels in-flight tool calls and terminates the active worker session
 - Fixed top-level `const`, `let`, and `class` declarations in evaluated JavaScript to persist across subsequent runs by rewriting top-level declarations
 

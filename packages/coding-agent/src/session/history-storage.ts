@@ -19,6 +19,12 @@ type HistoryRow = {
 
 const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
 
+// Escape LIKE wildcards so user input is treated as literal text.
+// Matches the `ESCAPE '\\'` clause used by substring-search statements.
+function escapeLikePattern(text: string): string {
+	return text.replace(/[\\%_]/g, "\\$&");
+}
+
 class AsyncDrain<T> {
 	#queue?: T[];
 	#promise = Promise.resolve();
@@ -63,6 +69,8 @@ export class HistoryStorage {
 	#recentStmt: Statement;
 	#searchStmt: Statement;
 	#lastPromptStmt: Statement;
+	// Cache substring-fallback prepared statements keyed by token count.
+	#substringStmts = new Map<number, Statement>();
 
 	// In-memory cache of last prompt to avoid sync DB reads on add
 	#lastPromptCache: string | null = null;
@@ -167,16 +175,53 @@ CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
 		const safeLimit = this.#normalizeLimit(limit);
 		if (safeLimit === 0) return [];
 
-		const ftsQuery = this.#buildFtsQuery(query);
-		if (!ftsQuery) return [];
+		const tokens = this.#tokenize(query);
+		if (tokens.length === 0) return [];
 
+		// 1. FTS5 prefix match (token AND, prefix-wildcard per token).
+		//    Handles punctuation by tokenizing query the same way unicode61 tokenizer
+		//    indexed the stored text, so "git-commit" -> "git"* "commit"*.
+		const ftsQuery = tokens.map(tok => `"${tok.replace(/"/g, '""')}"*`).join(" ");
+		let ftsRows: HistoryRow[] = [];
 		try {
-			const rows = this.#searchStmt.all(ftsQuery, safeLimit) as HistoryRow[];
-			return rows.map(row => this.#toEntry(row));
+			ftsRows = this.#searchStmt.all(ftsQuery, safeLimit) as HistoryRow[];
 		} catch (error) {
-			logger.error("HistoryStorage search failed", { error: String(error) });
-			return [];
+			// Malformed FTS expression - fall through to substring path.
+			logger.debug("HistoryStorage FTS query failed, using substring only", { error: String(error) });
 		}
+
+		if (ftsRows.length >= safeLimit) {
+			return ftsRows.map(row => this.#toEntry(row));
+		}
+
+		// 2. Substring fallback (token-AND LIKE). Catches infix matches FTS5's
+		//    prefix-only wildcard cannot reach (e.g. "mit" -> "commit"). Bounded
+		//    by safeLimit, ordered by recency - no full-table load into JS.
+		let subRows: HistoryRow[] = [];
+		try {
+			subRows = this.#searchSubstring(tokens, safeLimit);
+		} catch (error) {
+			logger.error("HistoryStorage substring search failed", { error: String(error) });
+		}
+
+		if (ftsRows.length === 0) {
+			return subRows.map(row => this.#toEntry(row));
+		}
+
+		const seen = new Set<number>();
+		const merged: HistoryEntry[] = [];
+		for (const row of ftsRows) {
+			if (seen.has(row.id)) continue;
+			seen.add(row.id);
+			merged.push(this.#toEntry(row));
+		}
+		for (const row of subRows) {
+			if (merged.length >= safeLimit) break;
+			if (seen.has(row.id)) continue;
+			seen.add(row.id);
+			merged.push(this.#toEntry(row));
+		}
+		return merged;
 	}
 
 	#ensureDir(dbPath: string): void {
@@ -225,21 +270,34 @@ END;
 		return Math.min(clamped, 1000);
 	}
 
-	#buildFtsQuery(query: string): string | null {
-		const tokens = query
-			.trim()
-			.split(/\s+/)
-			.map(token => token.trim())
-			.filter(Boolean);
+	/**
+	 * Split on non-alphanumeric runs, mirroring FTS5's `unicode61` tokenizer so
+	 * query tokens align with how stored prompts were indexed. Lowercases for
+	 * stable substring matching.
+	 */
+	#tokenize(query: string): string[] {
+		return query
+			.toLowerCase()
+			.split(/[^\p{L}\p{N}]+/u)
+			.filter(tok => tok.length > 0);
+	}
 
-		if (tokens.length === 0) return null;
+	#searchSubstring(tokens: string[], limit: number): HistoryRow[] {
+		const stmt = this.#getSubstringStmt(tokens.length);
+		const params: unknown[] = tokens.map(tok => `%${escapeLikePattern(tok)}%`);
+		params.push(limit);
+		return stmt.all(...(params as [string, ...unknown[]])) as HistoryRow[];
+	}
 
-		return tokens
-			.map(token => {
-				const escaped = token.replace(/"/g, '""');
-				return `"${escaped}"*`;
-			})
-			.join(" ");
+	#getSubstringStmt(tokenCount: number): Statement {
+		let stmt = this.#substringStmts.get(tokenCount);
+		if (stmt) return stmt;
+		const whereClause = Array(tokenCount).fill("prompt LIKE ? ESCAPE '\\' COLLATE NOCASE").join(" AND ");
+		stmt = this.#db.prepare(
+			`SELECT id, prompt, created_at, cwd FROM history WHERE ${whereClause} ORDER BY created_at DESC, id DESC LIMIT ?`,
+		);
+		this.#substringStmts.set(tokenCount, stmt);
+		return stmt;
 	}
 
 	#toEntry(row: HistoryRow): HistoryEntry {
