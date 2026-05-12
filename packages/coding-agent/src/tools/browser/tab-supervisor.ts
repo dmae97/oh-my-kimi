@@ -22,6 +22,10 @@ import type {
 // a `new URL(..., import.meta.url)` literal stored in a local variable, and
 // the prebuilt binary surfaces `Timed out initializing browser tab worker`
 // (issue #1011) because `/$bunfs/root/tab-worker-entry.ts` is missing.
+// tsgo doesn't recognize Bun's `with { type: "file" }` attribute and treats
+// this as a normal TS source import, raising TS1192/TS5097. Bun's bundler
+// (and runtime) honors the attribute and returns the embedded file URL.
+// @ts-expect-error -- Bun file-URL import (see comment above).
 import tabWorkerEntryUrl from "./tab-worker-entry.ts" with { type: "file" };
 
 interface WorkerHandle {
