@@ -15,6 +15,11 @@ export interface SSHConnectionTarget {
 
 export type SSHHostOs = "windows" | "linux" | "macos" | "unknown";
 export type SSHHostShell = "cmd" | "powershell" | "bash" | "zsh" | "sh" | "unknown";
+export type SshPlatform = typeof process.platform;
+
+export function supportsSshControlMaster(platform: SshPlatform = process.platform): boolean {
+	return platform !== "win32";
+}
 
 export interface SSHHostInfo {
 	version: number;
@@ -32,6 +37,10 @@ const HOST_INFO_VERSION = 2;
 const activeHosts = new Map<string, SSHConnectionTarget>();
 const pendingConnections = new Map<string, Promise<void>>();
 const hostInfoCache = new Map<string, SSHHostInfo>();
+
+interface SSHArgsOptions {
+	platform?: SshPlatform;
+}
 
 function ensureControlDir() {
 	fs.mkdirSync(CONTROL_DIR, { recursive: true, mode: 0o700 });
@@ -66,20 +75,14 @@ async function validateKeyPermissions(keyPath?: string): Promise<void> {
 	}
 }
 
-function buildCommonArgs(host: SSHConnectionTarget): string[] {
-	const args = [
-		"-n",
-		"-o",
-		"ControlMaster=auto",
-		"-o",
-		`ControlPath=${CONTROL_PATH}`,
-		"-o",
-		"ControlPersist=3600",
-		"-o",
-		"BatchMode=yes",
-		"-o",
-		"StrictHostKeyChecking=accept-new",
-	];
+function buildCommonArgs(host: SSHConnectionTarget, options?: SSHArgsOptions): string[] {
+	const args = ["-n"];
+
+	if (supportsSshControlMaster(options?.platform)) {
+		args.push("-o", "ControlMaster=auto", "-o", `ControlPath=${CONTROL_PATH}`, "-o", "ControlPersist=3600");
+	}
+
+	args.push("-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new");
 
 	if (host.port) {
 		args.push("-p", String(host.port));
@@ -357,9 +360,13 @@ export async function ensureHostInfo(host: SSHConnectionTarget): Promise<SSHHost
 	return probeHostInfo(host);
 }
 
-export async function buildRemoteCommand(host: SSHConnectionTarget, command: string): Promise<string[]> {
+export async function buildRemoteCommand(
+	host: SSHConnectionTarget,
+	command: string,
+	options?: SSHArgsOptions,
+): Promise<string[]> {
 	await validateKeyPermissions(host.keyPath);
-	return [...buildCommonArgs(host), buildSshTarget(host.username, host.host), command];
+	return [...buildCommonArgs(host, options), buildSshTarget(host.username, host.host), command];
 }
 
 let registered = false;
@@ -385,6 +392,14 @@ export async function ensureConnection(host: SSHConnectionTarget): Promise<void>
 		}
 
 		const target = buildSshTarget(host.username, host.host);
+		if (!supportsSshControlMaster()) {
+			activeHosts.set(key, host);
+			if (!hostInfoCache.has(key) && !(await loadHostInfoFromDisk(host))) {
+				await probeHostInfo(host);
+			}
+			return;
+		}
+
 		const check = await runSshSync(["-O", "check", ...buildCommonArgs(host), target]);
 		if (check.exitCode === 0) {
 			activeHosts.set(key, host);
@@ -415,6 +430,7 @@ export async function ensureConnection(host: SSHConnectionTarget): Promise<void>
 }
 
 async function closeConnectionInternal(host: SSHConnectionTarget): Promise<void> {
+	if (!supportsSshControlMaster()) return;
 	const target = buildSshTarget(host.username, host.host);
 	await runSshSync(["-O", "exit", ...buildCommonArgs(host), target]);
 }
