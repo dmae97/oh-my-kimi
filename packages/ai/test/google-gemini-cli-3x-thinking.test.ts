@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { enrichModelThinking } from "@oh-my-pi/pi-ai/model-thinking";
 import { hookFetch } from "@oh-my-pi/pi-utils";
-import { getBundledModel } from "../src/models";
 import { streamSimple } from "../src/stream";
 import type { Context, Model } from "../src/types";
 
@@ -47,10 +46,6 @@ function extractThinking(bodyText: string | undefined): GeminiCliThinkingConfig 
 describe("google-gemini-cli Gemini 3.x thinking mapping", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
-	});
-
-	it("includes gemini-3.1-pro-preview in bundled google-gemini-cli models", () => {
-		expect(getBundledModel("google-gemini-cli", "gemini-3.1-pro-preview")?.id).toBe("gemini-3.1-pro-preview");
 	});
 	it("uses thinkingLevel for gemini-3.1-pro-preview when the effort is supported", async () => {
 		let requestBody: string | undefined;

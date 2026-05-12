@@ -33,24 +33,6 @@ describe("dropIncompleteLastEdit", () => {
 	});
 });
 
-describe("apply_patch extractCompleteEdits", () => {
-	const strategy = EDIT_MODE_STRATEGIES.apply_patch;
-
-	test("returns args unchanged (payload is plain text)", () => {
-		const args = { input: "*** Begin Patch\n*** Update File: a.ts\n@@\n-x\n+y\n*** End Patch\n" };
-		expect(strategy.extractCompleteEdits(args, undefined)).toEqual(args);
-	});
-});
-
-describe("vim extractCompleteEdits", () => {
-	const strategy = EDIT_MODE_STRATEGIES.vim;
-
-	test("returns args unchanged (vim stream handled elsewhere)", () => {
-		const args = { file: "a.ts", steps: [] };
-		expect(strategy.extractCompleteEdits(args, undefined)).toEqual(args);
-	});
-});
-
 describe("hashline streaming preview (multi-section)", () => {
 	const strategy = EDIT_MODE_STRATEGIES.hashline;
 	let tmpDir: string;

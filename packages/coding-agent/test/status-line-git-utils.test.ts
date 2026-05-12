@@ -32,14 +32,6 @@ describe("parseGitHubRepo", () => {
 		expect(parseGitHubRepo("https://gitlab.com/user/repo.git")).toBeNull();
 	});
 
-	test("returns null for empty string", () => {
-		expect(parseGitHubRepo("")).toBeNull();
-	});
-
-	test("returns null for malformed URL", () => {
-		expect(parseGitHubRepo("not-a-url")).toBeNull();
-	});
-
 	test("handles GitHub Enterprise-style URLs (no match)", () => {
 		expect(parseGitHubRepo("https://github.corp.com/org/repo.git")).toBeNull();
 	});

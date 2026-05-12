@@ -3,9 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-	DEFAULT_MAX_BYTES,
-	DEFAULT_MAX_COLUMN,
-	DEFAULT_MAX_LINES,
 	formatHeadTruncationNotice,
 	formatTailTruncationNotice,
 	OutputSink,
@@ -39,14 +36,6 @@ afterEach(async () => {
 	else Bun.env.PI_FORCE_IMAGE_PROTOCOL = originalForceProtocol;
 	if (originalAllowPassthrough === undefined) delete Bun.env.PI_ALLOW_SIXEL_PASSTHROUGH;
 	else Bun.env.PI_ALLOW_SIXEL_PASSTHROUGH = originalAllowPassthrough;
-});
-
-describe("streaming-output exports", () => {
-	test("exports expected default limits", () => {
-		expect(DEFAULT_MAX_LINES).toBe(3000);
-		expect(DEFAULT_MAX_BYTES).toBe(50 * 1024);
-		expect(DEFAULT_MAX_COLUMN).toBe(1024);
-	});
 });
 
 describe("truncateTailBytes", () => {

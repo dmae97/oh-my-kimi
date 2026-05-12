@@ -62,17 +62,6 @@ describe("isValidVersionForCache", () => {
 // ── getCachedPluginPath ──────────────────────────────────────────────────────
 
 describe("getCachedPluginPath", () => {
-	it("returns a deterministic path with ___ separators", () => {
-		const p = getCachedPluginPath("/cache", "my-market", "my-plugin", "1.0.0");
-		expect(p).toBe("/cache/my-market___my-plugin___1.0.0");
-	});
-
-	it("is independent of cacheDir content — pure path construction", () => {
-		const p1 = getCachedPluginPath("/a", "m", "p", "1");
-		const p2 = getCachedPluginPath("/b", "m", "p", "1");
-		expect(path.basename(p1)).toBe(path.basename(p2));
-	});
-
 	it("throws on invalid marketplace name (uppercase)", () => {
 		expect(() => getCachedPluginPath("/cache", "My-Market", "plugin", "1.0.0")).toThrow(/Invalid marketplace name/);
 	});

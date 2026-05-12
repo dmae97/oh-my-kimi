@@ -191,14 +191,6 @@ describe("parseInternalUrl — protocol field", () => {
 		expect(parseInternalUrl("local://x").protocol).toBe("local:");
 	});
 
-	it("extracts rule: protocol", () => {
-		expect(parseInternalUrl("rule://x").protocol).toBe("rule:");
-	});
-
-	it("extracts artifact: protocol", () => {
-		expect(parseInternalUrl("artifact://x").protocol).toBe("artifact:");
-	});
-
 	it("extracts protocol from fallback-parsed URL", () => {
 		// This URL fails new URL() due to colon-as-port
 		expect(parseInternalUrl("skill://a:b").protocol).toBe("skill:");

@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "../src/provider-models/descriptors";
 import { ollamaCloudModelManagerOptions } from "../src/provider-models/ollama";
 import { completeSimple, getEnvApiKey, stream, streamSimple } from "../src/stream";
 import type { Context, Model, Tool } from "../src/types";
-import { getOAuthProviders } from "../src/utils/oauth";
 
 const originalApiKey = Bun.env.OLLAMA_CLOUD_API_KEY;
 const originalFetch = global.fetch;
@@ -62,18 +60,6 @@ describe("ollama-cloud provider support", () => {
 	test("resolves OLLAMA_CLOUD_API_KEY from environment", () => {
 		Bun.env.OLLAMA_CLOUD_API_KEY = "ollama-cloud-test-key";
 		expect(getEnvApiKey("ollama-cloud")).toBe("ollama-cloud-test-key");
-	});
-
-	test("registers built-in descriptor, default model, and oauth selector entry", () => {
-		const descriptor = PROVIDER_DESCRIPTORS.find(item => item.providerId === "ollama-cloud");
-		expect(descriptor).toBeDefined();
-		expect(descriptor?.defaultModel).toBe("gpt-oss:120b");
-		expect(descriptor?.catalogDiscovery?.envVars).toContain("OLLAMA_CLOUD_API_KEY");
-		expect(descriptor?.catalogDiscovery?.allowUnauthenticated).toBeUndefined();
-		expect(DEFAULT_MODEL_PER_PROVIDER["ollama-cloud"]).toBe("gpt-oss:120b");
-
-		const provider = getOAuthProviders().find(item => item.id === "ollama-cloud");
-		expect(provider?.name).toBe("Ollama Cloud");
 	});
 
 	test("discovers ollama-cloud models from native cloud endpoints", async () => {

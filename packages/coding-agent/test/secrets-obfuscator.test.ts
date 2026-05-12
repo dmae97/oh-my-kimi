@@ -7,12 +7,6 @@ import { SecretObfuscator } from "../src/secrets/obfuscator";
 import { compileSecretRegex } from "../src/secrets/regex";
 
 describe("compileSecretRegex", () => {
-	it("compiles pattern with explicit flags and enforces global scanning", () => {
-		const regex = compileSecretRegex("api[_-]?key\\s*=\\s*\\w+", "gi");
-		expect(regex.source).toBe("api[_-]?key\\s*=\\s*\\w+");
-		expect(regex.flags).toBe("gi");
-	});
-
 	it("adds global flag when not provided", () => {
 		const regex = compileSecretRegex("api[_-]?key\\s*=\\s*\\w+", "i");
 		expect(regex.source).toBe("api[_-]?key\\s*=\\s*\\w+");

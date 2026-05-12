@@ -1150,8 +1150,6 @@ export interface ShellExecuteOptions {
   env?: Record<string, string>
   /** Environment variables to apply once per session. */
   sessionEnv?: Record<string, string>
-  /** Run the command attached to a PTY. */
-  pty?: boolean
   /** Timeout in milliseconds before cancelling the command. */
   timeoutMs?: number
   /** Optional snapshot file to source on session creation. */
@@ -1180,8 +1178,6 @@ export interface ShellRunOptions {
   cwd?: string
   /** Environment variables to apply for this command only. */
   env?: Record<string, string>
-  /** Run the command attached to a PTY. */
-  pty?: boolean
   /** Timeout in milliseconds before cancelling the command. */
   timeoutMs?: number
   /** Abort signal for cancelling the operation. */

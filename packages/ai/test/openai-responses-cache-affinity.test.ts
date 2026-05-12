@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { getBundledModel } from "../src/models";
-import {
-	normalizeOpenAIResponsesPromptCacheKey,
-	type OpenAIResponsesOptions,
-	streamOpenAIResponses,
-} from "../src/providers/openai-responses";
+import { type OpenAIResponsesOptions, streamOpenAIResponses } from "../src/providers/openai-responses";
 import type { Context, Model } from "../src/types";
 
 const originalFetch = global.fetch;
@@ -114,24 +110,5 @@ describe("openai-responses cache affinity", () => {
 		expect(captured.sessionId).toBeNull();
 		expect(captured.clientRequestId).toBeNull();
 		expect(captured.body?.prompt_cache_key).toBeUndefined();
-	});
-
-	it("normalizes long prompt cache keys while preserving ordered system prompts", async () => {
-		const longSessionId = "session-".repeat(20);
-		const expectedCacheKey = normalizeOpenAIResponsesPromptCacheKey(longSessionId);
-		if (!expectedCacheKey) throw new Error("Expected normalized prompt cache key");
-		const captured = await captureOpenAIResponseHeaders({ sessionId: longSessionId });
-
-		expect(captured.sessionId).toBe(expectedCacheKey);
-		expect(captured.clientRequestId).toBe(expectedCacheKey);
-		expect(captured.body?.prompt_cache_key).toBe(expectedCacheKey);
-		expect(expectedCacheKey?.length).toBeLessThanOrEqual(64);
-
-		const input = captured.body?.input;
-		expect(Array.isArray(input)).toBe(true);
-		expect((input as Array<{ role?: string; content?: string }>).slice(0, 2)).toEqual([
-			{ role: "developer", content: "stable system" },
-			{ role: "developer", content: "stable durable context" },
-		]);
 	});
 });

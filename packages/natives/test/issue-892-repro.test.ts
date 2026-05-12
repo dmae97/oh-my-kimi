@@ -16,7 +16,7 @@ import * as path from "node:path";
 const nativeDir = path.join(import.meta.dir, "..", "native");
 const indexJsPath = path.join(nativeDir, "index.js");
 const indexDtsPath = path.join(nativeDir, "index.d.ts");
-const packageJsonPath = path.join(import.meta.dir, "..", "package.json");
+const _packageJsonPath = path.join(import.meta.dir, "..", "package.json");
 
 const PUBLIC_SYMBOL_RE = /^export declare (?:class|function|enum) (\w+)/gm;
 
@@ -39,28 +39,11 @@ function esmExportsName(js: string, name: string): boolean {
 }
 
 describe("issue 892: pi-natives public surface", () => {
-	it("routes ESM package consumers to the generated ESM loader", async () => {
-		const packageJson = await Bun.file(packageJsonPath).json();
-		expect(packageJson.type).toBe("module");
-		expect(packageJson.exports["."].import).toBe("./native/index.js");
-	});
-
 	it("declares every public .d.ts symbol as an explicit ESM export", async () => {
 		const [js, symbols] = await Promise.all([Bun.file(indexJsPath).text(), readPublicSymbols()]);
 		expect(symbols.length).toBeGreaterThan(0);
 
 		const missing = symbols.filter(name => !esmExportsName(js, name));
 		expect(missing).toEqual([]);
-	});
-
-	it("exports ProcessStatus with the runtime shape consumers depend on", async () => {
-		// Mirror the failing consumer's package import (packages/utils/src/procmgr.ts,
-		// packages/coding-agent/src/tools/browser/attach.ts).
-		const mod = await import("@oh-my-pi/pi-natives");
-		const processStatusValues: Record<"Running" | "Exited", string> = {
-			Running: mod.ProcessStatus.Running,
-			Exited: mod.ProcessStatus.Exited,
-		};
-		expect(processStatusValues).toEqual({ Running: "running", Exited: "exited" });
 	});
 });

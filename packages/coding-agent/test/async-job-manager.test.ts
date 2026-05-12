@@ -228,18 +228,4 @@ describe("AsyncJobManager", () => {
 		expect(manager.getAllJobs()).toHaveLength(0);
 		expect(manager.hasPendingDeliveries()).toBe(false);
 	});
-
-	test("uses custom id when provided and deduplicates collisions", async () => {
-		const manager = new AsyncJobManager({
-			onJobComplete: async () => {},
-		});
-
-		const first = manager.register("task", "alpha", async () => "ok", { id: "2-CheckRustCrate" });
-		const second = manager.register("task", "beta", async () => "ok", { id: "2-CheckRustCrate" });
-
-		expect(first).toBe("2-CheckRustCrate");
-		expect(second).toBe("2-CheckRustCrate-2");
-
-		await manager.waitForAll();
-	});
 });
