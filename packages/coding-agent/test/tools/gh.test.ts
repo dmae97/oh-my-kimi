@@ -558,9 +558,9 @@ describe("github tool", () => {
 	it("search_code: rejects since/until since GitHub code search has no date qualifier", async () => {
 		const spy = vi.spyOn(git.github, "json").mockResolvedValue([]);
 		const tool = new GithubTool(createSession());
-		await expect(
-			tool.execute("search-code", { op: "search_code", query: "foo", since: "3d" }),
-		).rejects.toThrow(/search_code does not support since\/until/);
+		await expect(tool.execute("search-code", { op: "search_code", query: "foo", since: "3d" })).rejects.toThrow(
+			/search_code does not support since\/until/,
+		);
 		expect(spy).not.toHaveBeenCalled();
 	});
 

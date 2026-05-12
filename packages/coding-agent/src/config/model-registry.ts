@@ -2072,6 +2072,19 @@ export class ModelRegistry {
 		return this.#models.filter(model => this.#isModelAvailable(model));
 	}
 
+	/**
+	 * Check whether auth is configured for a model's provider.
+	 *
+	 * Mirrors the upstream `@mariozechner/pi-coding-agent` API surface so that
+	 * external plugins/extensions and downstream wrappers (e.g. subagent launch
+	 * paths that pre-flight auth before model resolution) can probe a model
+	 * without resolving an API key. Returns true for keyless providers as well
+	 * as providers with stored credentials. See issue #993.
+	 */
+	hasConfiguredAuth(model: Model<Api>): boolean {
+		return this.#keylessProviders.has(model.provider) || this.authStorage.hasAuth(model.provider);
+	}
+
 	getDiscoverableProviders(): string[] {
 		const disabledProviders = getDisabledProviderIdsFromSettings();
 		return this.#discoverableProviders
