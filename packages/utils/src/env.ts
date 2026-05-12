@@ -100,6 +100,20 @@ export function isBunTestRuntime(): boolean {
 	return Bun.env.BUN_ENV === "test" || Bun.env.NODE_ENV === "test";
 }
 
+/**
+ * True when this code is running inside a `bun build --compile` standalone
+ * binary. Detects via the embedded virtual-filesystem path markers
+ * (`$bunfs`, `~BUN`, or its URL-encoded form `%7EBUN`) in `import.meta.url`,
+ * which Bun rewrites for every module bundled into the executable. The
+ * `PI_COMPILED` env var (set by the build script's `--define`) is checked
+ * first for cheap fast-path detection.
+ */
+export function isCompiledBinary(): boolean {
+	if (Bun.env.PI_COMPILED) return true;
+	const url = import.meta.url;
+	return url.includes("$bunfs") || url.includes("~BUN") || url.includes("%7EBUN");
+}
+
 const TRUTHY: Dict<boolean> = { "1": true, Y: true, TRUE: true, YES: true, ON: true };
 export function $flag(name: string, def: boolean = false): boolean {
 	const value = $env[name];

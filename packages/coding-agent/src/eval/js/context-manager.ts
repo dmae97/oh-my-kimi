@@ -1,14 +1,13 @@
-import { logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { isCompiledBinary, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "../../tools";
 import { ToolAbortError, ToolError } from "../../tools/tool-errors";
 import { callSessionTool, type JsStatusEvent } from "./tool-bridge";
 import { WorkerCore } from "./worker-core";
-// Imported with `type: "file"` so Bun's bundler statically discovers the worker entry and
-// embeds it inside `bun build --compile` single-file binaries. Mirrors the browser tab
-// worker setup; see packages/coding-agent/src/tools/browser/tab-supervisor.ts for the
-// rationale.
-// @ts-expect-error -- Bun file-URL import attribute is not modeled by tsgo.
-import jsWorkerEntryUrl from "./worker-entry.ts" with { type: "file" };
+// Worker entry. See `tab-supervisor.ts` for the rationale behind the
+// literal-string + `new URL(import.meta.url)` hybrid: the literal is what
+// Bun's `--compile` bundler discovers, the `new URL` form is what makes dev
+// runs portable across cwds. The worker is registered as an additional
+// `--compile` entrypoint in `scripts/build-binary.ts`.
 import type {
 	JsDisplayOutput,
 	RunErrorPayload,
@@ -344,7 +343,9 @@ async function raceWithTimeout<T>(promise: Promise<T>, timeoutMs: number, reason
 
 async function spawnJsWorker(): Promise<WorkerHandle> {
 	try {
-		const worker = new Worker(jsWorkerEntryUrl, { type: "module" });
+		const worker = isCompiledBinary()
+			? new Worker("./packages/coding-agent/src/eval/js/worker-entry.ts", { type: "module" })
+			: new Worker(new URL("./worker-entry.ts", import.meta.url).href, { type: "module" });
 		return wrapBunWorker(worker);
 	} catch (err) {
 		logger.warn("Bun Worker spawn failed; using inline JS eval worker (no sync-loop guard)", {

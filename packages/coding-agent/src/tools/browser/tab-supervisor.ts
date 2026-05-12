@@ -1,4 +1,4 @@
-import { getPuppeteerDir, logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { getPuppeteerDir, isCompiledBinary, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { Page, Target } from "puppeteer-core";
 import { callSessionTool } from "../../eval/js/tool-bridge";
 import type { ToolSession } from "../../sdk";
@@ -17,17 +17,15 @@ import type {
 	WorkerInitPayload,
 	WorkerOutbound,
 } from "./tab-protocol";
-// Imported with `type: "file"` so Bun's bundler statically discovers the
-// worker entry and embeds it inside `bun build --compile` single-file
-// binaries. Without this attribute the bundler cannot reach the entry through
-// a `new URL(..., import.meta.url)` literal stored in a local variable, and
-// the prebuilt binary surfaces `Timed out initializing browser tab worker`
-// (issue #1011) because `/$bunfs/root/tab-worker-entry.ts` is missing.
-// tsgo doesn't recognize Bun's `with { type: "file" }` attribute and treats
-// this as a normal TS source import, raising TS1192/TS5097. Bun's bundler
-// (and runtime) honors the attribute and returns the embedded file URL.
-// @ts-expect-error -- Bun file-URL import (see comment above).
-import tabWorkerEntryUrl from "./tab-worker-entry.ts" with { type: "file" };
+
+// Worker entry. The literal string in `new Worker("./packages/coding-agent/src/tools/browser/tab-worker-entry.ts", …)`
+// below is what Bun's `--compile` static analyzer needs to bundle the worker
+// (registered as an additional entrypoint in `scripts/build-binary.ts`); in
+// dev we resolve the same source via `import.meta.url`. Replaces the older
+// `with { type: "file" }` pattern, which only copied the entry as a raw
+// asset and could not resolve the worker's relative imports inside a
+// compiled binary (issue #1011 was a false-positive fix — the regression
+// test only checked emission, not actual worker startup).
 
 interface WorkerHandle {
 	send(msg: WorkerInbound, transferList?: Transferable[]): void;
@@ -456,7 +454,9 @@ async function raceWithTimeout<T>(
 
 async function spawnTabWorker(): Promise<WorkerHandle> {
 	try {
-		const worker = new Worker(tabWorkerEntryUrl, { type: "module" });
+		const worker = isCompiledBinary()
+			? new Worker("./packages/coding-agent/src/tools/browser/tab-worker-entry.ts", { type: "module" })
+			: new Worker(new URL("./tab-worker-entry.ts", import.meta.url).href, { type: "module" });
 		return wrapBunWorker(worker);
 	} catch (err) {
 		logger.warn("Bun Worker spawn failed; using inline tab worker (no sync-loop guard)", {

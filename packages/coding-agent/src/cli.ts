@@ -84,8 +84,30 @@ function isSubcommand(first: string | undefined): boolean {
 	return commands.some(e => e.name === first || e.aliases?.includes(first));
 }
 
+/**
+ * Smoke-test entry. Spawns the stats sync worker, pings it, exits.
+ *
+ * Purpose: catch the silent worker-load regressions that hit compiled
+ * binaries (issues #1011 and #1027). Neither `--version` nor
+ * `stats --summary` actually spawns a Worker on a fresh install — the
+ * sync path early-returns when no session files exist. This probe is the
+ * minimal end-to-end test that proves `new Worker(...)` resolves and the
+ * bundled worker module evaluates successfully. Wired into
+ * `scripts/install-tests/run-ci.sh` so binary / source-link / tarball
+ * installs all exercise it on every CI run.
+ */
+async function runSmokeTest(): Promise<void> {
+	const { smokeTestSyncWorker } = await import("@oh-my-pi/omp-stats");
+	await smokeTestSyncWorker();
+	process.stdout.write("smoke-test: ok\n");
+}
+
 /** Run the CLI with the given argv (no `process.argv` prefix). */
-export function runCli(argv: string[]): Promise<void> {
+export async function runCli(argv: string[]): Promise<void> {
+	if (argv[0] === "--smoke-test") {
+		await runSmokeTest();
+		return;
+	}
 	// --help and --version are handled by run() directly, don't rewrite those.
 	// Everything else that isn't a known subcommand routes to "launch".
 	const first = argv[0];

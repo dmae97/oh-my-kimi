@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { isCompiledBinary } from "@oh-my-pi/pi-utils";
 import {
 	getRecentErrors as dbGetRecentErrors,
 	getRecentRequests as dbGetRecentRequests,
@@ -23,13 +24,15 @@ import {
 } from "./db";
 import { getSessionEntry, listAllSessionFiles, type ParseSessionResult } from "./parser";
 import type { SyncWorkerRequest, SyncWorkerResponse } from "./sync-worker";
-// `with { type: "file" }` resolves to the worker's absolute path at runtime
-// (dev) and survives bundling (the asset is copied alongside the build).
-// tsgo doesn't recognize Bun's file-URL import attribute and would raise
-// TS1192/TS5097 here; Bun honors it. Same suppression pattern lives in
-// `tab-supervisor.ts` and `context-manager.ts`.
-// @ts-expect-error -- Bun file-URL import (see comment above).
-import syncWorkerUrl from "./sync-worker.ts" with { type: "file" };
+// Worker entry. Bun's `--compile` bundler statically discovers the string
+// literal in `new Worker("./packages/stats/src/sync-worker.ts", …)` below and
+// emits the worker as an additional entrypoint (registered in
+// `packages/coding-agent/scripts/build-binary.ts`). In dev runs we resolve
+// the same source file through `import.meta.url`, so the literal only has to
+// be valid relative to the `--root` directory (repo root). Importing the
+// source as `with { type: "file" }` is NOT sufficient — that copies the file
+// as a raw asset and does not bundle the worker's relative imports, so the
+// worker would crash on first `import` (issue #1011, PR #1027).
 import type { BehaviorDashboardStats, DashboardStats, MessageStats, RequestDetails } from "./types";
 
 /**
@@ -85,8 +88,22 @@ interface WorkerHandle {
 	reject: ((err: Error) => void) | null;
 }
 
+/**
+ * Create a fresh sync worker. In a `--compile` binary the literal-string
+ * specifier is what Bun's static analyzer needs (the file is also listed as
+ * an additional `--compile` entrypoint in
+ * `packages/coding-agent/scripts/build-binary.ts`). In dev runs we resolve
+ * the source URL via `import.meta.url` so the worker survives `cwd` changes
+ * by callers.
+ */
+function createSyncWorker(): Worker {
+	return isCompiledBinary()
+		? new Worker("./packages/stats/src/sync-worker.ts", { type: "module" })
+		: new Worker(new URL("./sync-worker.ts", import.meta.url).href, { type: "module" });
+}
+
 function spawnWorker(): WorkerHandle {
-	const worker = new Worker(syncWorkerUrl, { type: "module" });
+	const worker = createSyncWorker();
 	const handle: WorkerHandle = { worker, busy: false, resolve: null, reject: null };
 	worker.onmessage = (event: MessageEvent<SyncWorkerResponse>) => {
 		const { resolve, reject } = handle;
@@ -94,8 +111,16 @@ function spawnWorker(): WorkerHandle {
 		handle.reject = null;
 		handle.busy = false;
 		if (!resolve || !reject) return;
-		if (event.data.ok) resolve(event.data.result);
-		else reject(new Error(event.data.error));
+		const data = event.data;
+		if (!data.ok) {
+			reject(new Error(data.error));
+			return;
+		}
+		if (data.kind === "pong") {
+			reject(new Error("sync worker: unexpected pong on parse channel"));
+			return;
+		}
+		resolve(data.result);
 	};
 	worker.onerror = (event: ErrorEvent) => {
 		const { reject } = handle;
@@ -117,6 +142,45 @@ function dispatch(handle: WorkerHandle, request: SyncWorkerRequest): Promise<Par
 	handle.reject = reject;
 	handle.worker.postMessage(request);
 	return promise;
+}
+
+/**
+ * Smoke test: spawns one sync worker, pings it, asserts the pong response,
+ * then terminates. Used by `omp --smoke-test` so the install-method CI jobs
+ * catch the silent worker-load failure that hit compiled binaries in #1011
+ * and #1027 — neither `--version` nor `stats --summary` exercises the worker
+ * spawn path on a fresh install (no session files = early return), so a
+ * dedicated probe is the only reliable signal.
+ *
+ * Resolves with the worker's `import.meta.url` (caller-visible diagnostics);
+ * rejects on transport error, error response, or timeout.
+ */
+export async function smokeTestSyncWorker({ timeoutMs = 5_000 }: { timeoutMs?: number } = {}): Promise<void> {
+	const worker = createSyncWorker();
+	const { promise, resolve, reject } = Promise.withResolvers<void>();
+	const timer = setTimeout(() => reject(new Error(`sync worker did not pong within ${timeoutMs}ms`)), timeoutMs);
+	worker.onmessage = (event: MessageEvent<SyncWorkerResponse>) => {
+		const data = event.data;
+		if (!data.ok) {
+			reject(new Error(data.error));
+			return;
+		}
+		if (data.kind !== "pong") {
+			reject(new Error(`sync worker: expected pong, got ${JSON.stringify(data)}`));
+			return;
+		}
+		resolve();
+	};
+	worker.onerror = (event: ErrorEvent) => {
+		reject(event.error instanceof Error ? event.error : new Error(event.message || "worker error"));
+	};
+	try {
+		worker.postMessage({ kind: "ping" } satisfies SyncWorkerRequest);
+		await promise;
+	} finally {
+		clearTimeout(timer);
+		worker.terminate();
+	}
 }
 
 /**

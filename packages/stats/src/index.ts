@@ -11,6 +11,7 @@ export {
 	getTotalMessageCount,
 	type SyncOptions,
 	type SyncProgress,
+	smokeTestSyncWorker,
 	syncAllSessions,
 } from "./aggregator";
 export { closeDb } from "./db";

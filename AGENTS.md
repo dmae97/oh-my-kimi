@@ -29,7 +29,16 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 - **Class privacy**: use ES `#private` fields; leave externally accessible members bare. **No `private`/`protected`/`public` keyword on fields or methods**, except on **constructor parameter properties** where TypeScript requires it (e.g. `constructor(private readonly session: ToolSession)`).
 - **Promises**: use `Promise.withResolvers()` instead of `new Promise((resolve, reject) => ...)`.
 - **Prompts**: never build prompts in code (no inline strings, template literals, or concatenation). Prompts live in static `.md` files; use Handlebars for dynamic content. Import them via `import content from "./prompt.md" with { type: "text" }` — not `readFile`.
-- **Worker scripts**: reference the entry via `import workerUrl from "./worker.ts" with { type: "file" }` so the path survives bundling. tsgo flags it (TS1192/TS5097) — suppress with `// @ts-expect-error -- Bun file-URL import` directly above the line (see `tab-supervisor.ts`, `context-manager.ts`, `aggregator.ts`).
+- **Worker scripts**: spawn workers with the dev/compile-safe hybrid pattern. `with { type: "file" }` only copies the entry as a raw asset and does **not** bundle its imports — workers crashed silently in compiled binaries on every prior incarnation of that pattern (issues #1011, #1027). Use this shape instead:
+  ```ts
+  import { isCompiledBinary } from "@oh-my-pi/pi-utils";
+  const worker = isCompiledBinary()
+  	? new Worker("./packages/<pkg>/src/<worker>.ts", { type: "module" })
+  	: new Worker(new URL("./<worker>.ts", import.meta.url).href, { type: "module" });
+  ```
+  The literal in the compiled branch is what Bun's `--compile` static analyzer needs to discover the worker — its path is **`--root`-relative** (repo root, since `build-binary.ts` passes `--root ../..`), so it must start with `./packages/...`. The `new URL` form in the dev branch keeps spawns portable across cwds.
+  In addition, every worker entry **MUST** be listed as an extra `--compile` entrypoint in `packages/coding-agent/scripts/build-binary.ts`. Without that the analyzer sees the literal but the worker never gets emitted into bunfs. The three current entries (`sync-worker.ts`, `tab-worker-entry.ts`, `worker-entry.ts`) live there as the working reference.
+  Validate any new worker with the dedicated smoke probe: `omp --smoke-test` spawns the stats sync worker, pings it, and exits — it's wired into `ci:test:smoke` and `scripts/install-tests/run-ci.sh` so binary, source-link, and tarball installs all exercise it. Add a sibling smoke if the new worker is on a different module graph.
 
 ## Bun Over Node
 
