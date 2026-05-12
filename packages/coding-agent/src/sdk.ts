@@ -1048,6 +1048,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					return {};
 				}
 			},
+			getArtifactManager: () => sessionManager.getArtifactManager(),
 			settings,
 			authStorage,
 			modelRegistry,
@@ -1055,9 +1056,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		// Wire process-wide internal URL singletons owned by their real classes.
 		// Top-level sessions install the active snapshots; subagents inherit them.
-		// Per-session artifacts/memory roots are walked from `AgentRegistry.global()`
-		// directly by the agent/artifact/memory protocol handlers, so no Set
-		// registration is needed here.
+		// Artifact and agent-output URLs resolve via `AgentRegistry.global()` —
+		// the protocol handlers walk each ref's `sessionManager.getArtifactsDir()`,
+		// which collapses to the parent's dir for subagents (they adopt the
+		// parent's ArtifactManager) so one lookup hits everything.
 		const getArtifactsDir = () => sessionManager.getArtifactsDir();
 		if (!options.parentTaskPrefix) {
 			setActiveSkills(skills);

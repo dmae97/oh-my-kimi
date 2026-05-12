@@ -12,6 +12,10 @@ import * as path from "node:path";
  *
  * Artifacts are stored with sequential IDs in the session's artifact directory.
  * The directory is created lazily on first write.
+ *
+ * Subagents do not own their own `ArtifactManager`. The parent's instance is
+ * adopted via `SessionManager.adoptArtifactManager`, so the whole parent +
+ * subagent tree shares one ID space and one directory.
  */
 export class ArtifactManager {
 	#nextId = 0;
@@ -20,11 +24,10 @@ export class ArtifactManager {
 	#initialized = false;
 
 	/**
-	 * @param sessionFile Path to the session .jsonl file
+	 * @param dir Directory that will hold artifact files. Created lazily on first save.
 	 */
-	constructor(sessionFile: string) {
-		// Artifact directory is session file path without .jsonl extension
-		this.#dir = sessionFile.slice(0, -6);
+	constructor(dir: string) {
+		this.#dir = dir;
 	}
 
 	/**

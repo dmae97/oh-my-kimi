@@ -26,6 +26,7 @@ import submitReminderTemplate from "../prompts/system/subagent-yield-reminder.md
 import { AgentRegistry } from "../registry/agent-registry";
 import { createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
+import type { ArtifactManager } from "../session/artifacts";
 import type { AuthStorage } from "../session/auth-storage";
 import { SessionManager } from "../session/session-manager";
 import { type ContextFileEntry, truncateTail } from "../tools";
@@ -172,6 +173,12 @@ export interface ExecutorOptions {
 	settings?: Settings;
 	/** Override local:// protocol options so subagent shares parent's local:// root */
 	localProtocolOptions?: LocalProtocolOptions;
+	/**
+	 * Parent session's ArtifactManager. Subagent adopts it so artifact IDs are
+	 * unique across the whole agent tree and all artifacts land in the parent's
+	 * artifacts directory (no per-subagent subdir).
+	 */
+	parentArtifactManager?: ArtifactManager;
 	parentHindsightSessionState?: HindsightSessionState;
 }
 
@@ -976,6 +983,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const sessionManager = sessionFile
 				? await SessionManager.open(sessionFile)
 				: SessionManager.inMemory(worktree ?? cwd);
+			if (options.parentArtifactManager) {
+				sessionManager.adoptArtifactManager(options.parentArtifactManager);
+			}
 
 			const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
 			const enableMCP = !options.mcpManager;

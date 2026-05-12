@@ -268,12 +268,16 @@ if "__omp_prelude_loaded__" not in globals():
             output('explore_0', offset=10, limit=20)  # Lines 10-29
             output('explore_0', 'reviewer_1')  # Read multiple outputs
         """
-        session_file = os.environ.get("PI_SESSION_FILE")
-        if not session_file:
-            _emit_status("output", error="No session file available")
-            raise RuntimeError("No session - output artifacts unavailable")
-        
-        artifacts_dir = session_file.rsplit(".", 1)[0]  # Strip .jsonl extension
+        # Prefer PI_ARTIFACTS_DIR so subagents resolve through the parent's
+        # shared artifacts dir; fall back to deriving from PI_SESSION_FILE
+        # for legacy callers / top-level sessions where the two coincide.
+        artifacts_dir = os.environ.get("PI_ARTIFACTS_DIR")
+        if not artifacts_dir:
+            session_file = os.environ.get("PI_SESSION_FILE")
+            if not session_file:
+                _emit_status("output", error="No session file available")
+                raise RuntimeError("No session - output artifacts unavailable")
+            artifacts_dir = session_file.rsplit(".", 1)[0]  # Strip .jsonl extension
         if not Path(artifacts_dir).exists():
             _emit_status("output", error="Artifacts directory not found", path=artifacts_dir)
             raise RuntimeError(f"No artifacts directory found: {artifacts_dir}")

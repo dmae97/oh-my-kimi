@@ -39,6 +39,13 @@ export interface PythonExecutorOptions {
 	useSharedGateway?: boolean;
 	/** Session file path for accessing task outputs */
 	sessionFile?: string;
+	/**
+	 * Effective artifacts directory for the current session. Subagents share
+	 * the parent's directory, so this can differ from `sessionFile`'s sibling
+	 * dir. When present, exported to the kernel as `PI_ARTIFACTS_DIR` and
+	 * preferred over `PI_SESSION_FILE`-derived paths.
+	 */
+	artifactsDir?: string;
 	/** Artifact path/id for full output storage */
 	artifactPath?: string;
 	artifactId?: string;
@@ -102,6 +109,7 @@ let cleanupTimer: NodeJS.Timeout | null = null;
 interface KernelSessionExecutionOptions {
 	useSharedGateway?: boolean;
 	sessionFile?: string;
+	artifactsDir?: string;
 	signal?: AbortSignal;
 	deadlineMs?: number;
 	kernelOwnerId?: string;
@@ -121,6 +129,19 @@ function getExecutionDeadlineMs(options?: Pick<PythonExecutorOptions, "deadlineM
 	if (options?.deadlineMs !== undefined) return options.deadlineMs;
 	if (options?.timeoutMs === undefined) return undefined;
 	return Date.now() + options.timeoutMs;
+}
+
+/**
+ * Build the env block exposed to the Python kernel. Includes the session file
+ * (for things that need the raw session path) and the effective artifacts
+ * directory (preferred by the prelude when resolving output IDs, so subagents
+ * see the parent's flat dir instead of a non-existent sibling).
+ */
+function buildKernelEnv(options: { sessionFile?: string; artifactsDir?: string }): Record<string, string> | undefined {
+	const env: Record<string, string> = {};
+	if (options.sessionFile) env.PI_SESSION_FILE = options.sessionFile;
+	if (options.artifactsDir) env.PI_ARTIFACTS_DIR = options.artifactsDir;
+	return Object.keys(env).length > 0 ? env : undefined;
 }
 
 function getRemainingTimeoutMs(deadlineMs?: number): number | undefined {
@@ -523,9 +544,7 @@ async function createKernelSession(
 	isRetry?: boolean,
 ): Promise<KernelSession> {
 	requireRemainingTimeoutMs(options.deadlineMs);
-	const env: Record<string, string> | undefined = options.sessionFile
-		? { PI_SESSION_FILE: options.sessionFile }
-		: undefined;
+	const env = buildKernelEnv(options);
 	const startOptions = buildKernelStartOptions(cwd, env, options);
 
 	let kernel: PythonKernel;
@@ -586,9 +605,7 @@ async function restartKernelSession(
 				});
 			}
 		}
-		const env: Record<string, string> | undefined = options.sessionFile
-			? { PI_SESSION_FILE: options.sessionFile }
-			: undefined;
+		const env = buildKernelEnv(options);
 		const startOptions = buildKernelStartOptions(cwd, env, options);
 		const kernel = await PythonKernel.start(startOptions);
 		session.kernel = kernel;
@@ -936,10 +953,9 @@ export async function executePython(code: string, options?: PythonExecutorOption
 		await ensureKernelAvailable(cwd);
 
 		const kernelMode = executionOptions.kernelMode ?? "session";
-		const sessionFile = executionOptions.sessionFile;
 
 		if (kernelMode === "per-call") {
-			const env: Record<string, string> | undefined = sessionFile ? { PI_SESSION_FILE: sessionFile } : undefined;
+			const env = buildKernelEnv(executionOptions);
 			requireRemainingTimeoutMs(deadlineMs);
 			const startOptions = buildKernelStartOptions(cwd, env, executionOptions);
 			const kernel = await PythonKernel.start(startOptions);

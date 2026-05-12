@@ -731,6 +731,10 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 			getSessionId: this.session.getSessionId ?? (() => null),
 		};
 
+		// Subagents adopt the parent's ArtifactManager so artifact IDs are unique
+		// across the whole tree and outputs land flat in the parent's dir.
+		const parentArtifactManager = this.session.getArtifactManager?.() ?? undefined;
+
 		// Initialize progress tracking
 		const progressMap = new Map<number, AgentProgress>();
 
@@ -877,6 +881,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						workspaceTree: this.session.workspaceTree,
 						promptTemplates,
 						localProtocolOptions,
+						parentArtifactManager,
 						parentHindsightSessionState: this.session.getHindsightSessionState?.(),
 					});
 				}
@@ -935,6 +940,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						workspaceTree: this.session.workspaceTree,
 						promptTemplates,
 						localProtocolOptions,
+						parentArtifactManager,
 						parentHindsightSessionState: this.session.getHindsightSessionState?.(),
 					});
 					if (mergeMode === "branch" && result.exitCode === 0) {

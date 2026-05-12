@@ -20,15 +20,18 @@ import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
 /**
  * Snapshot of artifacts dirs for every registered session, deduped.
- * `SessionManager.getArtifactsDir()` is `sessionFile.slice(0, -6)`; we use
- * `sessionFile` directly here because handlers are read-only consumers.
+ *
+ * Prefers `sessionManager.getArtifactsDir()` because subagents adopt the
+ * parent's manager and report the parent's dir there; dedup then collapses
+ * the whole agent tree to one entry. Falls back to the raw session file
+ * when no live session reference is attached.
  */
 function artifactsDirsFromRegistry(): string[] {
 	const dirs: string[] = [];
 	for (const ref of AgentRegistry.global().list()) {
-		const file = ref.sessionFile;
-		if (!file) continue;
-		const dir = file.slice(0, -6);
+		const dir =
+			ref.session?.sessionManager.getArtifactsDir() ?? (ref.sessionFile ? ref.sessionFile.slice(0, -6) : null);
+		if (!dir) continue;
 		if (!dirs.includes(dir)) dirs.push(dir);
 	}
 	return dirs;
