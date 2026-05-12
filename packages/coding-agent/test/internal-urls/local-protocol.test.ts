@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -7,7 +7,7 @@ import {
 	LocalProtocolHandler,
 	resolveLocalRoot,
 	resolveLocalUrlToPath,
-} from "../../src/internal-urls";
+} from "@oh-my-pi/pi-coding-agent/internal-urls";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "local-protocol-"));
@@ -18,25 +18,28 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 	}
 }
 
-function createRouter(options: { artifactsDir?: string | null; sessionId?: string | null }): InternalUrlRouter {
-	const router = new InternalUrlRouter();
-	router.register(
-		new LocalProtocolHandler({
-			getArtifactsDir: () => options.artifactsDir ?? null,
-			getSessionId: () => options.sessionId ?? null,
-		}),
-	);
-	return router;
-}
-
 describe("LocalProtocolHandler", () => {
+	beforeEach(() => {
+		LocalProtocolHandler.resetOverrideForTests();
+		InternalUrlRouter.resetForTests();
+	});
+
+	afterEach(() => {
+		LocalProtocolHandler.resetOverrideForTests();
+		InternalUrlRouter.resetForTests();
+	});
+
 	it("lists files at local://", async () => {
 		await withTempDir(async tempDir => {
 			const artifactsDir = path.join(tempDir, "artifacts");
 			await fs.mkdir(path.join(artifactsDir, "local"), { recursive: true });
 			await Bun.write(path.join(artifactsDir, "local", "handoff.json"), '{"ok":true}');
 
-			const router = createRouter({ artifactsDir, sessionId: "session-a" });
+			LocalProtocolHandler.setOverride({
+				getArtifactsDir: () => artifactsDir,
+				getSessionId: () => "session-a",
+			});
+			const router = InternalUrlRouter.instance();
 			const resource = await router.resolve("local://");
 
 			expect(resource.contentType).toBe("text/markdown");
@@ -51,7 +54,11 @@ describe("LocalProtocolHandler", () => {
 			await fs.mkdir(path.dirname(localFile), { recursive: true });
 			await Bun.write(localFile, "trace");
 
-			const router = createRouter({ artifactsDir, sessionId: "session-b" });
+			LocalProtocolHandler.setOverride({
+				getArtifactsDir: () => artifactsDir,
+				getSessionId: () => "session-b",
+			});
+			const router = InternalUrlRouter.instance();
 			const resource = await router.resolve("local://subtasks/trace.txt");
 
 			expect(resource.content).toBe("trace");
@@ -61,7 +68,11 @@ describe("LocalProtocolHandler", () => {
 
 	it("blocks path traversal attempts", async () => {
 		await withTempDir(async tempDir => {
-			const router = createRouter({ artifactsDir: path.join(tempDir, "artifacts"), sessionId: "session-c" });
+			LocalProtocolHandler.setOverride({
+				getArtifactsDir: () => path.join(tempDir, "artifacts"),
+				getSessionId: () => "session-c",
+			});
+			const router = InternalUrlRouter.instance();
 			await expect(router.resolve("local://../secret.txt")).rejects.toThrow(
 				"Path traversal (..) is not allowed in local:// URLs",
 			);
@@ -91,7 +102,11 @@ describe("LocalProtocolHandler", () => {
 			await Bun.write(path.join(outsideDir, "secret.txt"), "secret");
 			await fs.symlink(outsideDir, path.join(localRoot, "linked"));
 
-			const router = createRouter({ artifactsDir, sessionId: "session-d" });
+			LocalProtocolHandler.setOverride({
+				getArtifactsDir: () => artifactsDir,
+				getSessionId: () => "session-d",
+			});
+			const router = InternalUrlRouter.instance();
 			await expect(router.resolve("local://linked/secret.txt")).rejects.toThrow("local:// URL escapes local root");
 		});
 	});

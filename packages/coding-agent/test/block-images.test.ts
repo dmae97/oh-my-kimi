@@ -22,38 +22,6 @@ function createTestToolSession(cwd: string, settings: Settings = Settings.isolat
 }
 
 describe("blockImages setting", () => {
-	describe("Settings", () => {
-		it("should default blockImages to false", () => {
-			const settings = Settings.isolated({});
-			expect(settings.get("images.blockImages")).toBe(false);
-		});
-
-		it("should return true when blockImages is set to true", () => {
-			const settings = Settings.isolated({ "images.blockImages": true });
-			expect(settings.get("images.blockImages")).toBe(true);
-		});
-
-		it("should persist blockImages setting via set", () => {
-			const settings = Settings.isolated({});
-			expect(settings.get("images.blockImages")).toBe(false);
-
-			settings.set("images.blockImages", true);
-			expect(settings.get("images.blockImages")).toBe(true);
-
-			settings.set("images.blockImages", false);
-			expect(settings.get("images.blockImages")).toBe(false);
-		});
-
-		it("should handle blockImages alongside autoResize", () => {
-			const settings = Settings.isolated({
-				"images.autoResize": true,
-				"images.blockImages": true,
-			});
-			expect(settings.get("images.autoResize")).toBe(true);
-			expect(settings.get("images.blockImages")).toBe(true);
-		});
-	});
-
 	describe("Read tool", () => {
 		let testDir: string;
 

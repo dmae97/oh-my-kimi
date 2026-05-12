@@ -2,7 +2,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { getSessionsDir, isEnoent } from "@oh-my-pi/pi-utils";
-import type { MessageStats, SessionEntry, SessionMessageEntry } from "./types";
+import type { MessageStats, SessionEntry, SessionMessageEntry, UserMessageStats } from "./types";
+import { computeUserMessageMetrics } from "./user-metrics";
 
 /**
  * Extract folder name from session filename.
@@ -24,6 +25,56 @@ function isAssistantMessage(entry: SessionEntry): entry is SessionMessageEntry {
 	if (entry.type !== "message") return false;
 	const msgEntry = entry as SessionMessageEntry;
 	return msgEntry.message?.role === "assistant";
+}
+
+/**
+ * Check if an entry is a user message (non-toolResult).
+ */
+function isUserMessage(entry: SessionEntry): entry is SessionMessageEntry {
+	if (entry.type !== "message") return false;
+	const msgEntry = entry as SessionMessageEntry;
+	return msgEntry.message?.role === "user";
+}
+
+/**
+ * Extract plain text from a user message content payload.
+ */
+function extractUserText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	const parts: string[] = [];
+	for (const block of content) {
+		if (block && typeof block === "object" && (block as { type?: unknown }).type === "text") {
+			const text = (block as { text?: unknown }).text;
+			if (typeof text === "string") parts.push(text);
+		}
+	}
+	return parts.join("");
+}
+
+/**
+ * Build user-message stats from an entry. Returns null for empty/synthetic content.
+ */
+function extractUserStats(sessionFile: string, folder: string, entry: SessionMessageEntry): UserMessageStats | null {
+	const msg = entry.message as { role: "user"; content?: unknown; synthetic?: boolean };
+	if (msg.role !== "user" || msg.synthetic) return null;
+	const text = extractUserText(msg.content);
+	if (!text.trim()) return null;
+	const metrics = computeUserMessageMetrics(text);
+	const ts = Date.parse(entry.timestamp);
+	return {
+		sessionFile,
+		entryId: entry.id,
+		folder,
+		timestamp: Number.isFinite(ts) ? ts : 0,
+		model: null,
+		provider: null,
+		chars: metrics.chars,
+		words: metrics.words,
+		yellingSentences: metrics.yellingSentences,
+		profanity: metrics.profanity,
+		dramaRuns: metrics.dramaRuns,
+	};
 }
 
 /**
@@ -83,28 +134,48 @@ function parseSessionEntriesLenient(bytes: Uint8Array): { entries: SessionEntry[
 export async function parseSessionFile(
 	sessionPath: string,
 	fromOffset = 0,
-): Promise<{ stats: MessageStats[]; newOffset: number }> {
+): Promise<{ stats: MessageStats[]; userStats: UserMessageStats[]; newOffset: number }> {
 	let bytes: Uint8Array;
 	try {
 		bytes = await Bun.file(sessionPath).bytes();
 	} catch (err) {
-		if (isEnoent(err)) return { stats: [], newOffset: fromOffset };
+		if (isEnoent(err)) return { stats: [], userStats: [], newOffset: fromOffset };
 		throw err;
 	}
 
 	const folder = extractFolderFromPath(sessionPath);
 	const stats: MessageStats[] = [];
+	const userStats: UserMessageStats[] = [];
+	const userByEntryId = new Map<string, UserMessageStats>();
 	const start = Math.max(0, Math.min(fromOffset, bytes.length));
 	const unprocessed = bytes.subarray(start);
 	const { entries, read } = parseSessionEntriesLenient(unprocessed);
 	for (const entry of entries) {
+		if (isUserMessage(entry)) {
+			const userMsg = extractUserStats(sessionPath, folder, entry);
+			if (userMsg) {
+				userStats.push(userMsg);
+				userByEntryId.set(entry.id, userMsg);
+			}
+			continue;
+		}
 		if (isAssistantMessage(entry)) {
 			const msgStats = extractStats(sessionPath, folder, entry);
 			if (msgStats) stats.push(msgStats);
+			// Link assistant's responding model back to the user message it answered.
+			const parentId = (entry as SessionMessageEntry).parentId;
+			if (parentId) {
+				const parentUser = userByEntryId.get(parentId);
+				if (parentUser && parentUser.model === null) {
+					const msg = entry.message as AssistantMessage;
+					parentUser.model = msg.model;
+					parentUser.provider = msg.provider;
+				}
+			}
 		}
 	}
 
-	return { stats, newOffset: start + read };
+	return { stats, userStats, newOffset: start + read };
 }
 
 /**

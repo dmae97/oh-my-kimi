@@ -8,6 +8,7 @@ import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { getFileReadCache } from "../edit/file-read-cache";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import { InternalUrlRouter } from "../internal-urls";
 import type { Theme } from "../modes/theme/theme";
 import searchDescription from "../prompts/tools/search.md" with { type: "text" };
 import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead } from "../session/streaming-output";
@@ -131,14 +132,14 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			if (rawPaths.some(rawPath => rawPath.length === 0)) {
 				throw new ToolError("`paths` must contain non-empty paths or globs");
 			}
-			const internalRouter = this.session.internalRouter;
+			const internalRouter = InternalUrlRouter.instance();
 			const resolvedPathInputs: string[] = [];
 			// Absolute filesystem paths whose source is immutable (e.g. artifact://,
 			// pi://, skill://). Hashline anchors are suppressed for these on a
 			// per-file basis, leaving editable mixed-in files untouched.
 			const immutableSourcePaths = new Set<string>();
 			for (const rawPath of rawPaths) {
-				if (!internalRouter?.canHandle(rawPath)) {
+				if (!internalRouter.canHandle(rawPath)) {
 					resolvedPathInputs.push(rawPath);
 					continue;
 				}

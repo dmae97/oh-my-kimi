@@ -59,6 +59,7 @@ export interface AggregatedStats {
 	lastTimestamp: number;
 }
 
+export type TimeRange = "1h" | "24h" | "7d" | "30d" | "90d" | "all";
 export interface ModelStats extends AggregatedStats {
 	model: string;
 	provider: string;
@@ -112,4 +113,57 @@ export interface DashboardStats {
 	modelSeries: ModelTimeSeriesPoint[];
 	modelPerformanceSeries: ModelPerformancePoint[];
 	costSeries: CostTimeSeriesPoint[];
+}
+
+export interface OverviewStats {
+	overall: AggregatedStats;
+	timeSeries: TimeSeriesPoint[];
+}
+
+export interface ModelDashboardStats {
+	byModel: ModelStats[];
+	modelSeries: ModelTimeSeriesPoint[];
+	modelPerformanceSeries: ModelPerformancePoint[];
+}
+
+export interface CostDashboardStats {
+	costSeries: CostTimeSeriesPoint[];
+}
+
+export interface BehaviorTimeSeriesPoint {
+	timestamp: number;
+	model: string;
+	provider: string;
+	messages: number;
+	yellingSentences: number;
+	profanity: number;
+	dramaRuns: number;
+	chars: number;
+}
+
+export interface BehaviorOverallStats {
+	totalMessages: number;
+	totalYellingSentences: number;
+	totalProfanity: number;
+	totalDramaRuns: number;
+	totalChars: number;
+	firstTimestamp: number;
+	lastTimestamp: number;
+}
+
+export interface BehaviorModelStats {
+	model: string;
+	provider: string;
+	totalMessages: number;
+	totalYellingSentences: number;
+	totalProfanity: number;
+	totalDramaRuns: number;
+	totalChars: number;
+	lastTimestamp: number;
+}
+
+export interface BehaviorDashboardStats {
+	overall: BehaviorOverallStats;
+	byModel: BehaviorModelStats[];
+	behaviorSeries: BehaviorTimeSeriesPoint[];
 }

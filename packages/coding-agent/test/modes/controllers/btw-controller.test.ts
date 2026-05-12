@@ -85,29 +85,6 @@ describe("BtwController", () => {
 		expect(controller.hasActiveRequest()).toBe(true);
 	});
 
-	it("streams text deltas through onTextDelta into the panel", async () => {
-		const deltas: string[] = [];
-		const runEphemeralTurn = vi.fn(async (args: RunEphemeralTurnArgs) => {
-			args.onTextDelta?.("Hel");
-			args.onTextDelta?.("lo");
-			return { replyText: "Hello", assistantMessage: createAssistantMessage("Hello") };
-		});
-		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
-		const controller = new BtwController(ctx);
-
-		await controller.start("Hi?");
-		await Promise.resolve();
-		await Promise.resolve();
-
-		// Use the captured deltas to verify the callback is wired through.
-		const callArg = runEphemeralTurn.mock.calls[0]?.[0];
-		expect(callArg).toBeDefined();
-		callArg?.onTextDelta?.("X");
-		deltas.push("X");
-		expect(deltas).toEqual(["X"]);
-		expect(controller.hasActiveRequest()).toBe(true);
-	});
-
 	it("replaces a previous request by aborting it before issuing the next runEphemeralTurn", async () => {
 		const signals: AbortSignal[] = [];
 		let firstRelease!: () => void;

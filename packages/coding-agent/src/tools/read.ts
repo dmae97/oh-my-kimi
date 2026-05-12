@@ -12,6 +12,7 @@ import { getFileReadCache } from "../edit/file-read-cache";
 import { isNotebookPath, readEditableNotebookText } from "../edit/notebook";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { formatHashLine, formatHashLines, formatLineHash, HL_BODY_SEP } from "../hashline/hash";
+import { InternalUrlRouter } from "../internal-urls";
 import { parseInternalUrl } from "../internal-urls/parse";
 import type { InternalUrl } from "../internal-urls/types";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
@@ -431,7 +432,7 @@ function prependSuffixResolutionNotice(text: string, suffixResolution?: { from: 
 const readSchema = Type.Object({
 	path: Type.String({
 		description: 'path or url; append :<sel> for line ranges or raw mode (e.g. "src/foo.ts:50-100")',
-		examples: ["src/foo.ts", "src/foo.ts:50-100", "https://example.com:L1-L40"],
+		examples: ["src/foo.ts", "src/foo.ts:50-100", "https://example.com/:1-40"],
 	}),
 });
 
@@ -1181,8 +1182,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		// Handle internal URLs (agent://, artifact://, memory://, skill://, rule://, local://, mcp://)
 		const internalTarget = splitPathAndSel(readPath);
-		const internalRouter = this.session.internalRouter;
-		if (internalRouter?.canHandle(internalTarget.path)) {
+		const internalRouter = InternalUrlRouter.instance();
+		if (internalRouter.canHandle(internalTarget.path)) {
 			const parsed = parseSel(internalTarget.sel);
 			const { offset, limit } = selToOffsetLimit(parsed);
 			return this.#handleInternalUrl(internalTarget.path, offset, limit, { raw: isRawSelector(parsed) });
@@ -1551,7 +1552,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		limit?: number,
 		options?: { raw?: boolean },
 	): Promise<AgentToolResult<ReadToolDetails>> {
-		const internalRouter = this.session.internalRouter!;
+		const internalRouter = InternalUrlRouter.instance();
 
 		// Check if URL has query extraction (agent:// only).
 		// Use parseInternalUrl which handles colons in host (namespaced skills).

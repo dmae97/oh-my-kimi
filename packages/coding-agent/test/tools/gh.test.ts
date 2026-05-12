@@ -6,7 +6,7 @@ import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { GithubTool } from "@oh-my-pi/pi-coding-agent/tools/gh";
+import { buildSearchDateQualifier, GithubTool, parseSearchDateBound } from "@oh-my-pi/pi-coding-agent/tools/gh";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
@@ -456,6 +456,112 @@ describe("github tool", () => {
 		expect(prArgs?.at(2)).toBe("--limit");
 		expect(prArgs?.at(-2)).toBe("--");
 		expect(prArgs?.at(-1)).toBe("-label:bug");
+	});
+
+	it("parseSearchDateBound: relative duration walks back from `now` and returns YYYY-MM-DD", () => {
+		const now = new Date("2026-05-12T15:00:00Z");
+		expect(parseSearchDateBound("3d", now)).toBe("2026-05-09");
+		expect(parseSearchDateBound("2w", now)).toBe("2026-04-28");
+		expect(parseSearchDateBound("12h", now)).toBe("2026-05-12");
+		expect(parseSearchDateBound("1mo", now)).toBe("2026-04-12");
+		expect(parseSearchDateBound("1y", now)).toBe("2025-05-12");
+	});
+
+	it("parseSearchDateBound: passes ISO dates through and normalizes ISO datetimes", () => {
+		expect(parseSearchDateBound("2026-05-01")).toBe("2026-05-01");
+		expect(parseSearchDateBound("2026-05-01T08:30:00Z")).toBe("2026-05-01T08:30:00.000Z");
+	});
+
+	it("parseSearchDateBound: rejects unparseable input", () => {
+		expect(() => parseSearchDateBound("yesterday")).toThrow(/invalid date bound/);
+		expect(() => parseSearchDateBound(" ")).toThrow(/must not be empty/);
+	});
+
+	it("buildSearchDateQualifier: emits >=, <=, or range depending on which bounds are set", () => {
+		const now = new Date("2026-05-12T00:00:00Z");
+		expect(buildSearchDateQualifier("created", "3d", undefined, now)).toBe("created:>=2026-05-09");
+		expect(buildSearchDateQualifier("created", undefined, "2026-05-01", now)).toBe("created:<=2026-05-01");
+		expect(buildSearchDateQualifier("committer-date", "7d", "1d", now)).toBe("committer-date:2026-05-05..2026-05-11");
+		expect(buildSearchDateQualifier("created", undefined, undefined)).toBeUndefined();
+	});
+
+	it("search_issues: appends a created:>= qualifier built from `since`", async () => {
+		const spy = vi.spyOn(git.github, "json").mockResolvedValue([]);
+		const tool = new GithubTool(createSession());
+		await tool.execute("search-issues", {
+			op: "search_issues",
+			query: "is:open",
+			repo: "owner/repo",
+			since: "2026-05-01",
+			limit: 5,
+		});
+
+		const args = spy.mock.calls[0]?.[1];
+		expect(args?.at(-1)).toBe("is:open created:>=2026-05-01");
+	});
+
+	it("search_prs: builds a qualifier-only query when `query` is omitted", async () => {
+		const spy = vi.spyOn(git.github, "json").mockResolvedValue([]);
+		const tool = new GithubTool(createSession());
+		await tool.execute("search-prs", {
+			op: "search_prs",
+			repo: "owner/repo",
+			since: "2026-05-01",
+			until: "2026-05-09",
+			dateField: "updated",
+			limit: 5,
+		});
+
+		const args = spy.mock.calls[0]?.[1];
+		expect(args?.at(-1)).toBe("updated:2026-05-01..2026-05-09");
+	});
+
+	it("search_prs: errors when neither `query` nor a date bound is provided", async () => {
+		vi.spyOn(git.github, "json").mockResolvedValue([]);
+		const tool = new GithubTool(createSession());
+		await expect(tool.execute("search-prs", { op: "search_prs", repo: "owner/repo" })).rejects.toThrow(
+			/query is required/,
+		);
+	});
+
+	it("search_commits: forces `committer-date` regardless of `dateField`", async () => {
+		const spy = vi.spyOn(git.github, "json").mockResolvedValue([]);
+		const tool = new GithubTool(createSession());
+		await tool.execute("search-commits", {
+			op: "search_commits",
+			query: "refactor",
+			repo: "owner/repo",
+			since: "2026-05-01",
+			dateField: "updated",
+			limit: 5,
+		});
+
+		const args = spy.mock.calls[0]?.[1];
+		expect(args?.at(-1)).toBe("refactor committer-date:>=2026-05-01");
+	});
+
+	it("search_repos: maps dateField=updated to the `pushed:` qualifier", async () => {
+		const spy = vi.spyOn(git.github, "json").mockResolvedValue([]);
+		const tool = new GithubTool(createSession());
+		await tool.execute("search-repos", {
+			op: "search_repos",
+			query: "language:rust",
+			since: "2026-05-01",
+			dateField: "updated",
+			limit: 1,
+		});
+
+		const args = spy.mock.calls[0]?.[1];
+		expect(args?.at(-1)).toBe("language:rust pushed:>=2026-05-01");
+	});
+
+	it("search_code: rejects since/until since GitHub code search has no date qualifier", async () => {
+		const spy = vi.spyOn(git.github, "json").mockResolvedValue([]);
+		const tool = new GithubTool(createSession());
+		await expect(tool.execute("search-code", { op: "search_code", query: "foo", since: "3d" })).rejects.toThrow(
+			/search_code does not support since\/until/,
+		);
+		expect(spy).not.toHaveBeenCalled();
 	});
 
 	it("formats code search results with paths, repo, sha, and match fragment", async () => {

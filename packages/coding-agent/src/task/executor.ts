@@ -26,9 +26,11 @@ import submitReminderTemplate from "../prompts/system/subagent-yield-reminder.md
 import { AgentRegistry } from "../registry/agent-registry";
 import { createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
+import type { ArtifactManager } from "../session/artifacts";
 import type { AuthStorage } from "../session/auth-storage";
 import { SessionManager } from "../session/session-manager";
-import { type ContextFileEntry, truncateTail } from "../tools";
+import { truncateTail } from "../session/streaming-output";
+import type { ContextFileEntry } from "../tools";
 import { jtdToJsonSchema, normalizeSchema } from "../tools/jtd-to-json-schema";
 import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
@@ -172,6 +174,12 @@ export interface ExecutorOptions {
 	settings?: Settings;
 	/** Override local:// protocol options so subagent shares parent's local:// root */
 	localProtocolOptions?: LocalProtocolOptions;
+	/**
+	 * Parent session's ArtifactManager. Subagent adopts it so artifact IDs are
+	 * unique across the whole agent tree and all artifacts land in the parent's
+	 * artifacts directory (no per-subagent subdir).
+	 */
+	parentArtifactManager?: ArtifactManager;
 	parentHindsightSessionState?: HindsightSessionState;
 }
 
@@ -563,6 +571,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	const lspEnabled = enableLsp ?? true;
 	const ircEnabled = subagentSettings.get("irc.enabled") === true;
+	const contextFileForPrompt = ircEnabled ? undefined : options.contextFile;
 	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("eval");
 
 	const outputChunks: string[] = [];
@@ -975,6 +984,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const sessionManager = sessionFile
 				? await SessionManager.open(sessionFile)
 				: SessionManager.inMemory(worktree ?? cwd);
+			if (options.parentArtifactManager) {
+				sessionManager.adoptArtifactManager(options.parentArtifactManager);
+			}
 
 			const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
 			const enableMCP = !options.mcpManager;
@@ -1001,7 +1013,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						context: options.context?.trim() ?? "",
 						worktree: worktree ?? "",
 						outputSchema: normalizedOutputSchema,
-						contextFile: options.contextFile,
+						contextFile: contextFileForPrompt,
 						ircPeers: ircEnabled ? renderIrcPeerRoster(id) : "",
 						ircSelfId: ircEnabled ? id : "",
 					});

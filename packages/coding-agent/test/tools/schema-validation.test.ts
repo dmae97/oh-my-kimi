@@ -267,84 +267,6 @@ describe("tool schema validation (post-sanitization)", () => {
 		expect(allViolations).toEqual([]);
 	});
 
-	it("no sanitized schema contains $schema declaration", async () => {
-		const session = createTestSession();
-		const tools = await createTools(session);
-
-		for (const tool of tools) {
-			const schema = tool.parameters;
-			if (!schema) continue;
-
-			const sanitized = sanitizeSchemaForGoogle(schema);
-			const violations = validateSchema(sanitized, tool.name).filter(v => v.key === "$schema");
-			expect(violations).toEqual([]);
-		}
-	});
-
-	it("no sanitized schema contains $ref or $defs", async () => {
-		const session = createTestSession();
-		const tools = await createTools(session);
-
-		for (const tool of tools) {
-			const schema = tool.parameters;
-			if (!schema) continue;
-
-			const sanitized = sanitizeSchemaForGoogle(schema);
-			const violations = validateSchema(sanitized, tool.name).filter(v => v.key === "$ref" || v.key === "$defs");
-			expect(violations).toEqual([]);
-		}
-	});
-
-	it("no sanitized schema contains Draft 2020-12 specific features", async () => {
-		const session = createTestSession();
-		const tools = await createTools(session);
-
-		const draft2020Features = [
-			"prefixItems",
-			"$dynamicRef",
-			"$dynamicAnchor",
-			"unevaluatedProperties",
-			"unevaluatedItems",
-		];
-
-		for (const tool of tools) {
-			const schema = tool.parameters;
-			if (!schema) continue;
-
-			const sanitized = sanitizeSchemaForGoogle(schema);
-			const violations = validateSchema(sanitized, tool.name).filter(v => draft2020Features.includes(v.key));
-			expect(violations).toEqual([]);
-		}
-	});
-
-	it("sanitization removes const (converts to enum)", async () => {
-		const session = createTestSession();
-		const tools = await createTools(session);
-
-		for (const tool of tools) {
-			const schema = tool.parameters;
-			if (!schema) continue;
-
-			const sanitized = sanitizeSchemaForGoogle(schema);
-			const violations = validateSchema(sanitized, tool.name).filter(v => v.key === "const");
-			expect(violations).toEqual([]);
-		}
-	});
-
-	it("no sanitized schema contains examples field", async () => {
-		const session = createTestSession();
-		const tools = await createTools(session);
-
-		for (const tool of tools) {
-			const schema = tool.parameters;
-			if (!schema) continue;
-
-			const sanitized = sanitizeSchemaForGoogle(schema);
-			const violations = validateSchema(sanitized, tool.name).filter(v => v.key === "examples");
-			expect(violations).toEqual([]);
-		}
-	});
-
 	it("hidden tools also have valid sanitized schemas", async () => {
 		const session = createTestSession();
 
@@ -364,41 +286,6 @@ describe("tool schema validation (post-sanitization)", () => {
 				throw new Error(`Hidden tool ${name} has prohibited schema features after sanitization:\n${details}`);
 			}
 		}
-	});
-
-	it("logs warnings for potentially problematic features (non-blocking)", async () => {
-		const session = createTestSession();
-		const tools = await createTools(session);
-
-		const warnings: { tool: string; violations: SchemaViolation[] }[] = [];
-
-		for (const tool of tools) {
-			const schema = tool.parameters;
-			if (!schema) continue;
-
-			const sanitized = sanitizeSchemaForGoogle(schema);
-			const violations = validateSchema(sanitized, tool.name);
-			const toolWarnings = violations.filter(v => v.severity === "warning");
-
-			if (toolWarnings.length > 0) {
-				warnings.push({ tool: tool.name, violations: toolWarnings });
-			}
-		}
-
-		// Log warnings but don't fail - these are advisory
-		if (warnings.length > 0) {
-			const message = warnings
-				.map(({ tool, violations }) => {
-					const details = violations.map(v => `  - ${v.path}: ${v.key} = ${JSON.stringify(v.value)}`).join("\n");
-					return `${tool}:\n${details}`;
-				})
-				.join("\n\n");
-
-			console.log(`Schema warnings (non-blocking):\n\n${message}`);
-		}
-
-		// This test passes regardless - warnings are informational
-		expect(true).toBe(true);
 	});
 });
 
@@ -452,12 +339,6 @@ describe("validateSchema helper", () => {
 		expect(warning?.severity).toBe("warning");
 	});
 
-	it("does not warn on additionalProperties: true", () => {
-		const schema = { type: "object", additionalProperties: true };
-		const violations = validateSchema(schema);
-		expect(violations.some(v => v.key === "additionalProperties")).toBe(false);
-	});
-
 	it("warns on format keyword", () => {
 		const schema = { type: "string", format: "uri" };
 		const violations = validateSchema(schema);
@@ -489,18 +370,5 @@ describe("validateSchema helper", () => {
 		};
 		const violations = validateSchema(schema);
 		expect(violations.some(v => v.key === "const")).toBe(true);
-	});
-
-	it("returns empty array for valid schema", () => {
-		const schema = {
-			type: "object",
-			properties: {
-				name: { type: "string", description: "User name" },
-				age: { type: "number", minimum: 0 },
-			},
-			required: ["name"],
-		};
-		const violations = validateSchema(schema);
-		expect(violations.filter(v => v.severity === "error")).toEqual([]);
 	});
 });

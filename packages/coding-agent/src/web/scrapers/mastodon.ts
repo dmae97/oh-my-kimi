@@ -273,7 +273,7 @@ export const handleMastodon: SpecialHandler = async (
 						md += `### ${formatDate(status.created_at)}\n\n`;
 						const content = await htmlToBasicMarkdown(status.content);
 						md += `${content}\n\n`;
-						md += `\uD83D\uDCAC ${status.replies_count} \u00B7 \uD83D\uDD01 ${status.reblogs_count} \u00B7 \u2B50 ${status.favourites_count}\n\n`;
+						md += `💬 ${status.replies_count} · 🔁 ${status.reblogs_count} · ⭐ ${status.favourites_count}\n\n`;
 					}
 				}
 			}

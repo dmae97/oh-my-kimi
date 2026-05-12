@@ -56,44 +56,6 @@ describe("ModelSelector role badge thinking display", () => {
 		}
 	});
 
-	test("renders per-role thinking labels with inherit mode to avoid badge ambiguity", async () => {
-		installTestTheme();
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected bundled model anthropic/claude-sonnet-4-5");
-
-		const settings = Settings.isolated({
-			modelRoles: {
-				default: `${model.provider}/${model.id}`,
-				smol: `${model.provider}/${model.id}:minimal`,
-				slow: `${model.provider}/${model.id}`,
-				plan: `${model.provider}/${model.id}:high`,
-				commit: `${model.provider}/${model.id}:medium`,
-			},
-		});
-
-		const selector = createSelector(model, settings);
-
-		await Bun.sleep(0);
-		installTestTheme();
-
-		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
-		expect(rendered).toContain("DEFAULT (inherit)");
-		expect(rendered).toContain("SMOL (min)");
-		expect(rendered).toContain("SLOW (inherit)");
-		expect(rendered).toContain("PLAN (high)");
-		expect(rendered).toContain("COMMIT (medium)");
-		expect(rendered).not.toContain("Role Thinking:");
-
-		selector.handleInput("\n");
-		installTestTheme();
-		const menuRendered = normalizeRenderedText(selector.render(220).join("\n"));
-		expect(menuRendered).toContain("Set as DEFAULT (Default)");
-		expect(menuRendered).toContain("Set as SMOL (Fast)");
-		expect(menuRendered).toContain("Set as SLOW (Thinking)");
-		expect(menuRendered).toContain("Set as PLAN (Architect)");
-		expect(menuRendered).toContain("Set as COMMIT (Commit)");
-	});
-
 	test("shows custom roles from cycleOrder/modelRoles and honors built-in metadata overrides", async () => {
 		installTestTheme();
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");

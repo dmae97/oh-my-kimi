@@ -8,7 +8,6 @@ Asks user when you need clarification or input during task execution.
 - Use `recommended: <index>` to mark default (0-indexed); " (Recommended)" added automatically
 - Use `questions` for multiple related questions instead of asking one at a time
 - Set `multi: true` on question to allow multiple selections
-- `ask.timeout` only applies while choosing options; once the user selects "Other (type your own)", there is no timeout
 </instruction>
 
 <caution>

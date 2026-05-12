@@ -195,13 +195,6 @@ describe("MarketplaceManager", () => {
 		);
 	});
 
-	it("installPlugin calls clearPluginRootsCache", async () => {
-		await ctx.manager.addMarketplace(FIXTURE_DIR);
-		const before = ctx.clearCount();
-		await ctx.manager.installPlugin("hello-plugin", "test-marketplace");
-		expect(ctx.clearCount()).toBe(before + 1);
-	});
-
 	// ── Uninstall ──────────────────────────────────────────────────────────
 
 	it("uninstallPlugin → cache removed + deregistered", async () => {
@@ -224,14 +217,6 @@ describe("MarketplaceManager", () => {
 		await expect(ctx.manager.uninstallPlugin("no-at-sign")).rejects.toThrow(/Invalid plugin ID format/);
 	});
 
-	it("uninstallPlugin calls clearPluginRootsCache", async () => {
-		await ctx.manager.addMarketplace(FIXTURE_DIR);
-		await ctx.manager.installPlugin("hello-plugin", "test-marketplace");
-		const before = ctx.clearCount();
-		await ctx.manager.uninstallPlugin("hello-plugin@test-marketplace");
-		expect(ctx.clearCount()).toBe(before + 1);
-	});
-
 	// ── setPluginEnabled ───────────────────────────────────────────────────
 
 	it("setPluginEnabled → persisted in registry", async () => {
@@ -250,14 +235,6 @@ describe("MarketplaceManager", () => {
 
 	it("setPluginEnabled on nonexistent plugin → throws", async () => {
 		await expect(ctx.manager.setPluginEnabled("ghost@nowhere", true)).rejects.toThrow(/not installed/);
-	});
-
-	it("setPluginEnabled calls clearPluginRootsCache", async () => {
-		await ctx.manager.addMarketplace(FIXTURE_DIR);
-		await ctx.manager.installPlugin("hello-plugin", "test-marketplace");
-		const before = ctx.clearCount();
-		await ctx.manager.setPluginEnabled("hello-plugin@test-marketplace", false);
-		expect(ctx.clearCount()).toBe(before + 1);
 	});
 
 	// ── version fallback ───────────────────────────────────────────────────

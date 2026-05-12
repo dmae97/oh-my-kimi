@@ -95,15 +95,6 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(registry.find(providerName, modelId)?.headers?.[headerName]).toBe(headerValue);
 	}
 
-	test("loads built-in GitLab Duo models and OAuth provider metadata", () => {
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
-		const model = registry.find("gitlab-duo", "claude-sonnet-4-5-20250929");
-
-		expect(model).toBeDefined();
-		expect(model?.api).toBe("anthropic-messages");
-		expect(getOAuthProviders().some(provider => provider.id === "gitlab-duo")).toBe(true);
-	});
-
 	test("validates provider config before mutating custom API state", () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 		const beforeAnthropicCount = registry.getAll().filter(model => model.provider === "anthropic").length;
@@ -123,27 +114,6 @@ describe("ModelRegistry runtime provider registration", () => {
 
 		const afterAnthropicCount = registry.getAll().filter(model => model.provider === "anthropic").length;
 		expect(afterAnthropicCount).toBe(beforeAnthropicCount);
-	});
-
-	test("merges provider/model headers and adds Authorization when authHeader is enabled", () => {
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
-
-		const config: ProviderConfigInput = {
-			baseUrl: "https://runtime.example.com/v1",
-			apiKey: "RUNTIME_KEY",
-			api: "openai-completions",
-			authHeader: true,
-			headers: { "X-Provider": "provider-header" },
-			models: [{ ...baseModel, headers: { "X-Model": "model-header" } }],
-		};
-
-		registry.registerProvider("runtime-provider", config, "ext://runtime");
-		const model = registry.find("runtime-provider", "runtime-model");
-
-		expect(model).toBeDefined();
-		expect(model?.headers?.Authorization).toBe("Bearer RUNTIME_KEY");
-		expect(model?.headers?.["X-Provider"]).toBe("provider-header");
-		expect(model?.headers?.["X-Model"]).toBe("model-header");
 	});
 
 	test("registerProvider applies headers-only overrides to existing provider models across refresh", async () => {

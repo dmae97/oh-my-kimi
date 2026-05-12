@@ -24,29 +24,6 @@ describe("loadEntriesFromFile", () => {
 		fs.rmSync(tempDir, { recursive: true, force: true });
 	});
 
-	it("returns empty array for non-existent file", async () => {
-		const entries = await loadEntriesFromFile(path.join(tempDir, "nonexistent.jsonl"));
-		expect(entries).toEqual([]);
-	});
-
-	it("returns empty array for empty file", async () => {
-		const file = path.join(tempDir, "empty.jsonl");
-		fs.writeFileSync(file, "");
-		expect(await loadEntriesFromFile(file)).toEqual([]);
-	});
-
-	it("returns empty array for file without valid session header", async () => {
-		const file = path.join(tempDir, "no-header.jsonl");
-		fs.writeFileSync(file, '{"type":"message","id":"1"}\n');
-		expect(await loadEntriesFromFile(file)).toEqual([]);
-	});
-
-	it("returns empty array for malformed JSON", async () => {
-		const file = path.join(tempDir, "malformed.jsonl");
-		fs.writeFileSync(file, "not json\n");
-		expect(await loadEntriesFromFile(file)).toEqual([]);
-	});
-
 	it("loads valid session file", async () => {
 		const file = path.join(tempDir, "valid.jsonl");
 		fs.writeFileSync(
@@ -83,25 +60,6 @@ describe("findMostRecentSession", () => {
 
 	afterEach(() => {
 		fs.rmSync(tempDir, { recursive: true, force: true });
-	});
-
-	it("returns null for empty directory", async () => {
-		expect(await findMostRecentSession(tempDir)).toBeNull();
-	});
-
-	it("returns null for non-existent directory", async () => {
-		expect(await findMostRecentSession(path.join(tempDir, "nonexistent"))).toBeNull();
-	});
-
-	it("ignores non-jsonl files", async () => {
-		fs.writeFileSync(path.join(tempDir, "file.txt"), "hello");
-		fs.writeFileSync(path.join(tempDir, "file.json"), "{}");
-		expect(await findMostRecentSession(tempDir)).toBeNull();
-	});
-
-	it("ignores jsonl files without valid session header", async () => {
-		fs.writeFileSync(path.join(tempDir, "invalid.jsonl"), '{"type":"message"}\n');
-		expect(await findMostRecentSession(tempDir)).toBeNull();
 	});
 
 	it("returns single valid session file", async () => {

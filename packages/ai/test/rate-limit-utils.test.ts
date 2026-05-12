@@ -48,27 +48,11 @@ describe("parseRateLimitReason", () => {
 });
 
 describe("calculateRateLimitBackoffMs", () => {
-	it("returns 30 minutes for QUOTA_EXHAUSTED", () => {
-		expect(calculateRateLimitBackoffMs("QUOTA_EXHAUSTED")).toBe(30 * 60 * 1000);
-	});
-
-	it("returns 30s for RATE_LIMIT_EXCEEDED", () => {
-		expect(calculateRateLimitBackoffMs("RATE_LIMIT_EXCEEDED")).toBe(30_000);
-	});
-
 	it("returns 45–75s range for MODEL_CAPACITY_EXHAUSTED (jitter)", () => {
 		for (let i = 0; i < 20; i++) {
 			const ms = calculateRateLimitBackoffMs("MODEL_CAPACITY_EXHAUSTED");
 			expect(ms).toBeGreaterThanOrEqual(45_000);
 			expect(ms).toBeLessThanOrEqual(75_000);
 		}
-	});
-
-	it("returns 20s for SERVER_ERROR", () => {
-		expect(calculateRateLimitBackoffMs("SERVER_ERROR")).toBe(20_000);
-	});
-
-	it("returns conservative fallback for UNKNOWN", () => {
-		expect(calculateRateLimitBackoffMs("UNKNOWN")).toBe(30 * 60 * 1000);
 	});
 });

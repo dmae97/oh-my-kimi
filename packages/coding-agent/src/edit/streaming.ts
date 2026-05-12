@@ -13,14 +13,19 @@
  * the injected `editMode` rather than probing argument shape.
  */
 
+import { sanitizeText } from "@oh-my-pi/pi-natives";
 import {
+	ABORT_MARKER,
+	BEGIN_PATCH_MARKER,
 	computeHashlineDiff,
 	computeHashlineSectionDiff,
 	containsRecognizableHashlineOperations,
+	END_PATCH_MARKER,
 	type HashlineInputSection,
 	splitHashlineInputs,
 } from "../hashline";
 import type { Theme } from "../modes/theme/theme";
+import { replaceTabs, truncateToWidth } from "../tools/render-utils";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { computeEditDiff, type DiffError, type DiffResult } from "./diff";
 import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
@@ -59,6 +64,52 @@ export interface EditStreamingStrategy<Args = unknown> {
 	 * compute returned `null` because args are still too partial).
 	 */
 	renderStreamingFallback(args: Args, uiTheme: Theme): string;
+}
+
+const STREAMING_FALLBACK_LINES = 12;
+const STREAMING_FALLBACK_WIDTH = 80;
+
+function isHashlineHeaderLine(line: string): boolean {
+	const trimmed = line.trimEnd();
+	return trimmed.startsWith("@") && trimmed.length > 1;
+}
+
+function isHashlineEnvelopeMarkerLine(line: string): boolean {
+	const trimmed = line.trimEnd();
+	return trimmed === BEGIN_PATCH_MARKER || trimmed === END_PATCH_MARKER || trimmed === ABORT_MARKER;
+}
+
+function trimHashlineStreamingSyntax(lines: string[]): string[] {
+	let index = lines.findIndex(line => line.trim().length > 0);
+	if (index === -1) return [];
+
+	if (lines[index].trimEnd() === BEGIN_PATCH_MARKER) {
+		index++;
+		while (index < lines.length && lines[index].trim().length === 0) index++;
+	}
+	if (index < lines.length && isHashlineHeaderLine(lines[index])) {
+		index++;
+	}
+
+	return lines.slice(index).filter(line => !isHashlineEnvelopeMarkerLine(line));
+}
+
+function renderHashlineInputFallback(input: string, uiTheme: Theme): string {
+	const lines = trimHashlineStreamingSyntax(sanitizeText(input).split("\n"));
+	if (!lines.some(line => line.trim().length > 0)) return "";
+
+	const displayLines = lines.slice(-STREAMING_FALLBACK_LINES);
+	const hidden = lines.length - displayLines.length;
+	let text = "\n\n";
+	text += displayLines
+		.map(line => uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(line), STREAMING_FALLBACK_WIDTH)))
+		.join("\n");
+	if (hidden > 0) {
+		text += uiTheme.fg("dim", `\n… (streaming +${hidden} lines)`);
+	} else {
+		text += uiTheme.fg("dim", "\n(streaming)");
+	}
+	return text;
 }
 
 // -----------------------------------------------------------------------------
@@ -273,8 +324,8 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 		}
 		return previews.length > 0 ? previews : null;
 	},
-	renderStreamingFallback() {
-		return "";
+	renderStreamingFallback(args, uiTheme) {
+		return typeof args.input === "string" ? renderHashlineInputFallback(args.input, uiTheme) : "";
 	},
 };
 

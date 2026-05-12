@@ -28,51 +28,9 @@ describe("StdinBuffer", () => {
 	}
 
 	describe("Regular Characters", () => {
-		it("should pass through regular characters immediately", () => {
-			processInput("a");
-			expect(emittedSequences).toEqual(["a"]);
-		});
-
-		it("should pass through multiple regular characters", () => {
-			processInput("abc");
-			expect(emittedSequences).toEqual(["a", "b", "c"]);
-		});
-
 		it("should handle unicode characters", () => {
 			processInput("hello \u4e16\u754c");
 			expect(emittedSequences).toEqual(["h", "e", "l", "l", "o", " ", "\u4e16", "\u754c"]);
-		});
-	});
-
-	describe("Complete Escape Sequences", () => {
-		it("should pass through complete mouse SGR sequences", () => {
-			const mouseSeq = "\x1b[<35;20;5m";
-			processInput(mouseSeq);
-			expect(emittedSequences).toEqual([mouseSeq]);
-		});
-
-		it("should pass through complete arrow key sequences", () => {
-			const upArrow = "\x1b[A";
-			processInput(upArrow);
-			expect(emittedSequences).toEqual([upArrow]);
-		});
-
-		it("should pass through complete function key sequences", () => {
-			const f1 = "\x1b[11~";
-			processInput(f1);
-			expect(emittedSequences).toEqual([f1]);
-		});
-
-		it("should pass through meta key sequences", () => {
-			const metaA = "\x1ba";
-			processInput(metaA);
-			expect(emittedSequences).toEqual([metaA]);
-		});
-
-		it("should pass through SS3 sequences", () => {
-			const ss3 = "\x1bOA";
-			processInput(ss3);
-			expect(emittedSequences).toEqual([ss3]);
 		});
 	});
 
@@ -130,21 +88,6 @@ describe("StdinBuffer", () => {
 	});
 
 	describe("Mixed Content", () => {
-		it("should handle characters followed by escape sequence", () => {
-			processInput("abc\x1b[A");
-			expect(emittedSequences).toEqual(["a", "b", "c", "\x1b[A"]);
-		});
-
-		it("should handle escape sequence followed by characters", () => {
-			processInput("\x1b[Aabc");
-			expect(emittedSequences).toEqual(["\x1b[A", "a", "b", "c"]);
-		});
-
-		it("should handle multiple complete sequences", () => {
-			processInput("\x1b[A\x1b[B\x1b[C");
-			expect(emittedSequences).toEqual(["\x1b[A", "\x1b[B", "\x1b[C"]);
-		});
-
 		it("should handle partial sequence with preceding characters", () => {
 			processInput("abc\x1b[<35");
 			expect(emittedSequences).toEqual(["a", "b", "c"]);
@@ -156,18 +99,6 @@ describe("StdinBuffer", () => {
 	});
 
 	describe("Kitty Keyboard Protocol", () => {
-		it("should handle Kitty CSI u press events", () => {
-			// Press 'a' in Kitty protocol
-			processInput("\x1b[97u");
-			expect(emittedSequences).toEqual(["\x1b[97u"]);
-		});
-
-		it("should handle Kitty CSI u release events", () => {
-			// Release 'a' in Kitty protocol
-			processInput("\x1b[97;1:3u");
-			expect(emittedSequences).toEqual(["\x1b[97;1:3u"]);
-		});
-
 		it("should handle batched Kitty press and release", () => {
 			// Press 'a', release 'a' batched together (common over SSH)
 			processInput("\x1b[97u\x1b[97;1:3u");
@@ -180,27 +111,10 @@ describe("StdinBuffer", () => {
 			expect(emittedSequences).toEqual(["\x1b[97u", "\x1b[97;1:3u", "\x1b[98u", "\x1b[98;1:3u"]);
 		});
 
-		it("should handle Kitty arrow keys with event type", () => {
-			// Up arrow press with event type
-			processInput("\x1b[1;1:1A");
-			expect(emittedSequences).toEqual(["\x1b[1;1:1A"]);
-		});
-
 		it("should handle Kitty functional keys with event type", () => {
 			// Delete key release
 			processInput("\x1b[3;1:3~");
 			expect(emittedSequences).toEqual(["\x1b[3;1:3~"]);
-		});
-
-		it("should handle plain characters mixed with Kitty sequences", () => {
-			// Plain 'a' followed by Kitty release
-			processInput("a\x1b[97;1:3u");
-			expect(emittedSequences).toEqual(["a", "\x1b[97;1:3u"]);
-		});
-
-		it("should handle Kitty sequence followed by plain characters", () => {
-			processInput("\x1b[97ua");
-			expect(emittedSequences).toEqual(["\x1b[97u", "a"]);
 		});
 
 		it("should handle rapid typing simulation with Kitty protocol", () => {

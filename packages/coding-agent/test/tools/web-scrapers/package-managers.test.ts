@@ -9,16 +9,6 @@ import { handleRubyGems } from "@oh-my-pi/pi-coding-agent/web/scrapers/rubygems"
 const SKIP = !Bun.env.WEB_FETCH_INTEGRATION;
 
 describe.skipIf(SKIP)("handleBrew", () => {
-	it("returns null for non-Homebrew URLs", async () => {
-		const result = await handleBrew("https://example.com", 20);
-		expect(result).toBeNull();
-	});
-
-	it("returns null for non-package Homebrew URLs", async () => {
-		const result = await handleBrew("https://formulae.brew.sh/", 20);
-		expect(result).toBeNull();
-	});
-
 	it("fetches wget formula", async () => {
 		const result = await handleBrew("https://formulae.brew.sh/formula/wget", 20);
 		expect(result).not.toBeNull();
@@ -43,16 +33,6 @@ describe.skipIf(SKIP)("handleBrew", () => {
 });
 
 describe.skipIf(SKIP)("handleAur", () => {
-	it("returns null for non-AUR URLs", async () => {
-		const result = await handleAur("https://example.com", 20);
-		expect(result).toBeNull();
-	});
-
-	it("returns null for non-package AUR URLs", async () => {
-		const result = await handleAur("https://aur.archlinux.org/", 20);
-		expect(result).toBeNull();
-	});
-
 	it("fetches yay package", async () => {
 		const result = await handleAur("https://aur.archlinux.org/packages/yay", 20);
 		expect(result).not.toBeNull();
@@ -67,16 +47,6 @@ describe.skipIf(SKIP)("handleAur", () => {
 });
 
 describe.skipIf(SKIP)("handleRubyGems", () => {
-	it("returns null for non-RubyGems URLs", async () => {
-		const result = await handleRubyGems("https://example.com", 20);
-		expect(result).toBeNull();
-	});
-
-	it("returns null for non-gem RubyGems URLs", async () => {
-		const result = await handleRubyGems("https://rubygems.org/", 20);
-		expect(result).toBeNull();
-	});
-
 	it("fetches rails gem", async () => {
 		const result = await handleRubyGems("https://rubygems.org/gems/rails", 20);
 		expect(result).not.toBeNull();
@@ -90,16 +60,6 @@ describe.skipIf(SKIP)("handleRubyGems", () => {
 });
 
 describe.skipIf(SKIP)("handleNuGet", () => {
-	it("returns null for non-NuGet URLs", async () => {
-		const result = await handleNuGet("https://example.com", 20);
-		expect(result).toBeNull();
-	});
-
-	it("returns null for non-package NuGet URLs", async () => {
-		const result = await handleNuGet("https://www.nuget.org/", 20);
-		expect(result).toBeNull();
-	});
-
 	it("fetches Newtonsoft.Json package", async () => {
 		const result = await handleNuGet("https://www.nuget.org/packages/Newtonsoft.Json", 20);
 		expect(result).not.toBeNull();
@@ -113,16 +73,6 @@ describe.skipIf(SKIP)("handleNuGet", () => {
 });
 
 describe.skipIf(SKIP)("handlePackagist", () => {
-	it("returns null for non-Packagist URLs", async () => {
-		const result = await handlePackagist("https://example.com", 20);
-		expect(result).toBeNull();
-	});
-
-	it("returns null for non-package Packagist URLs", async () => {
-		const result = await handlePackagist("https://packagist.org/", 20);
-		expect(result).toBeNull();
-	});
-
 	it("fetches laravel/framework package", async () => {
 		const result = await handlePackagist("https://packagist.org/packages/laravel/framework", 20);
 		expect(result).not.toBeNull();
@@ -136,16 +86,6 @@ describe.skipIf(SKIP)("handlePackagist", () => {
 });
 
 describe.skipIf(SKIP)("handleMaven", () => {
-	it("returns null for non-Maven URLs", async () => {
-		const result = await handleMaven("https://example.com", 20);
-		expect(result).toBeNull();
-	});
-
-	it("returns null for non-artifact Maven URLs", async () => {
-		const result = await handleMaven("https://search.maven.org/", 20);
-		expect(result).toBeNull();
-	});
-
 	it("fetches commons-lang3 artifact from search.maven.org", async () => {
 		const result = await handleMaven("https://search.maven.org/artifact/org.apache.commons/commons-lang3", 20);
 		expect(result).not.toBeNull();

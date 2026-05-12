@@ -3,7 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
 import {
+	getBehaviorDashboardStats,
+	getCostDashboardStats,
 	getDashboardStats,
+	getModelDashboardStats,
+	getOverviewStats,
 	getRecentErrors,
 	getRecentRequests,
 	getRequestDetails,
@@ -167,11 +171,31 @@ async function handleApi(req: Request): Promise<Response> {
 	const url = new URL(req.url);
 	const path = url.pathname;
 
-	// Sync sessions before returning stats
-	await syncAllSessions();
+	// Stats reads are DB-only; explicit /api/sync does the expensive session scan.
+	const range = url.searchParams.get("range");
 
 	if (path === "/api/stats") {
-		const stats = await getDashboardStats();
+		const stats = await getDashboardStats(range);
+		return Response.json(stats);
+	}
+
+	if (path === "/api/stats/overview") {
+		const stats = await getOverviewStats(range);
+		return Response.json(stats);
+	}
+
+	if (path === "/api/stats/model-dashboard") {
+		const stats = await getModelDashboardStats(range);
+		return Response.json(stats);
+	}
+
+	if (path === "/api/stats/costs") {
+		const stats = await getCostDashboardStats(range);
+		return Response.json(stats);
+	}
+
+	if (path === "/api/stats/behavior") {
+		const stats = await getBehaviorDashboardStats(range);
 		return Response.json(stats);
 	}
 
@@ -188,17 +212,17 @@ async function handleApi(req: Request): Promise<Response> {
 	}
 
 	if (path === "/api/stats/models") {
-		const stats = await getDashboardStats();
+		const stats = await getDashboardStats(range);
 		return Response.json(stats.byModel);
 	}
 
 	if (path === "/api/stats/folders") {
-		const stats = await getDashboardStats();
+		const stats = await getDashboardStats(range);
 		return Response.json(stats.byFolder);
 	}
 
 	if (path === "/api/stats/timeseries") {
-		const stats = await getDashboardStats();
+		const stats = await getDashboardStats(range);
 		return Response.json(stats.timeSeries);
 	}
 

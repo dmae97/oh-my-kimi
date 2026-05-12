@@ -89,6 +89,7 @@ export interface DiscoverableMCPSearchResult {
 
 const BM25_K1 = 1.2;
 const BM25_B = 0.75;
+const BM25_DELTA = 1.0;
 const FIELD_WEIGHTS = {
 	name: 6,
 	label: 4,
@@ -112,13 +113,24 @@ function getSchemaPropertyKeys(parameters: unknown): string[] {
 }
 
 function tokenize(value: string): string[] {
-	return value
-		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-		.replace(/[^a-zA-Z0-9]+/g, " ")
-		.toLowerCase()
-		.trim()
-		.split(/\s+/)
-		.filter(token => token.length > 0);
+	return (
+		value
+			.normalize("NFKD")
+			// Drop combining marks (accents) so "café" → "cafe".
+			.replace(/\p{M}+/gu, "")
+			// Split ACRONYMBoundary: "MCPTool" → "MCP Tool".
+			.replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, "$1 $2")
+			// Split camelCase / digit→letter: "fooBar" → "foo Bar", "v2Beta" → "v2 Beta".
+			.replace(/(\p{Ll}|\p{N})(\p{Lu})/gu, "$1 $2")
+			// Everything that isn't a letter or digit becomes a separator. This subsumes markdown
+			// punctuation (`|*_`#-~>[]()`), box-drawing glyphs (─│┌), em/en dashes, smart quotes,
+			// zero-width spaces, NBSPs, etc.
+			.replace(/[^\p{L}\p{N}]+/gu, " ")
+			.toLowerCase()
+			.trim()
+			.split(/\s+/)
+			.filter(token => token.length > 0)
+	);
 }
 
 function addWeightedTokens(termFrequencies: Map<string, number>, value: string | undefined, weight: number): void {
@@ -274,7 +286,8 @@ export function searchDiscoverableTools(
 				const documentFrequency = index.documentFrequencies.get(token) ?? 0;
 				const idf = Math.log(1 + (index.documents.length - documentFrequency + 0.5) / (documentFrequency + 0.5));
 				const normalization = BM25_K1 * (1 - BM25_B + BM25_B * (document.length / index.averageLength));
-				score += queryTermCount * idf * ((termFrequency * (BM25_K1 + 1)) / (termFrequency + normalization));
+				score +=
+					queryTermCount * idf * ((termFrequency * (BM25_K1 + 1)) / (termFrequency + normalization) + BM25_DELTA);
 			}
 			return { tool: document.tool, score };
 		})

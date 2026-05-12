@@ -229,17 +229,48 @@ describe("AsyncJobManager", () => {
 		expect(manager.hasPendingDeliveries()).toBe(false);
 	});
 
-	test("uses custom id when provided and deduplicates collisions", async () => {
+	test("cancelAll with ownerId only cancels matching jobs", async () => {
 		const manager = new AsyncJobManager({
 			onJobComplete: async () => {},
 		});
 
-		const first = manager.register("task", "alpha", async () => "ok", { id: "2-CheckRustCrate" });
-		const second = manager.register("task", "beta", async () => "ok", { id: "2-CheckRustCrate" });
+		const hold = (signal: AbortSignal) =>
+			new Promise<void>(resolve => {
+				signal.addEventListener("abort", () => resolve(), { once: true });
+			});
 
-		expect(first).toBe("2-CheckRustCrate");
-		expect(second).toBe("2-CheckRustCrate-2");
+		const parentJobId = manager.register(
+			"bash",
+			"parent-job",
+			async ({ signal }) => {
+				await hold(signal);
+				return "parent-cancelled";
+			},
+			{ ownerId: "0-Main" },
+		);
+		const subagentJobId = manager.register(
+			"bash",
+			"subagent-job",
+			async ({ signal }) => {
+				await hold(signal);
+				return "subagent-cancelled";
+			},
+			{ ownerId: "3-AuthLoader" },
+		);
 
+		manager.cancelAll({ ownerId: "3-AuthLoader" });
+
+		expect(manager.getJob(parentJobId)?.status).toBe("running");
+		expect(manager.getJob(subagentJobId)?.status).toBe("cancelled");
+
+		// Filtered query mirrors filtered cancel.
+		expect(manager.getRunningJobs({ ownerId: "0-Main" }).map(j => j.id)).toEqual([parentJobId]);
+		expect(manager.getRunningJobs({ ownerId: "3-AuthLoader" })).toEqual([]);
+		expect(manager.getAllJobs({ ownerId: "0-Main" }).map(j => j.id)).toEqual([parentJobId]);
+
+		// Unscoped cancelAll still cleans up everything.
+		manager.cancelAll();
 		await manager.waitForAll();
+		expect(manager.getJob(parentJobId)?.status).toBe("cancelled");
 	});
 });

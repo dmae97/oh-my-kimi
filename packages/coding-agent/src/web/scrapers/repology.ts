@@ -32,19 +32,19 @@ interface RepologyPackage {
 function statusIndicator(status: string): string {
 	switch (status) {
 		case "newest":
-			return "\u2705"; // green check
+			return "✅"; // green check
 		case "devel":
-			return "\uD83D\uDEA7"; // construction
+			return "🚧"; // construction
 		case "unique":
-			return "\uD83D\uDD35"; // blue circle
+			return "🔵"; // blue circle
 		case "outdated":
-			return "\uD83D\uDD34"; // red circle
+			return "🔴"; // red circle
 		case "legacy":
-			return "\u26A0\uFE0F"; // warning
+			return "⚠\uFE0F"; // warning
 		case "rolling":
-			return "\uD83D\uDD04"; // arrows
+			return "🔄"; // arrows
 		default:
-			return "\u2796"; // minus
+			return "➖"; // minus
 	}
 }
 

@@ -20,7 +20,9 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import type { ToolSession } from "..";
+import { AsyncJobManager } from "../async";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
+import { MCPManager } from "../mcp/manager";
 import type { Theme } from "../modes/theme/theme";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
@@ -141,6 +143,7 @@ function renderDescription(
 	asyncEnabled: boolean,
 	disabledAgents: string[],
 	simpleMode: TaskSimpleMode,
+	ircEnabled: boolean,
 ): string {
 	const filteredAgents = disabledAgents.length > 0 ? agents.filter(a => !disabledAgents.includes(a.name)) : agents;
 	const { contextEnabled, customSchemaEnabled } = getTaskSimpleModeCapabilities(simpleMode);
@@ -151,6 +154,7 @@ function renderDescription(
 		asyncEnabled,
 		contextEnabled,
 		customSchemaEnabled,
+		ircEnabled,
 		defaultMode: simpleMode === "default",
 		schemaFreeMode: simpleMode === "schema-free",
 		independentMode: simpleMode === "independent",
@@ -229,6 +233,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 			this.session.settings.get("async.enabled"),
 			disabledAgents,
 			this.#getTaskSimpleMode(),
+			this.session.settings.get("irc.enabled") === true,
 		);
 	}
 	private constructor(
@@ -270,7 +275,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 			return this.#executeSync(_toolCallId, params, signal, onUpdate);
 		}
 
-		const manager = this.session.asyncJobManager;
+		const manager = AsyncJobManager.instance();
 		if (!manager) {
 			return {
 				content: [{ type: "text", text: "Async execution is enabled but no async job manager is available." }],
@@ -444,6 +449,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 					},
 					{
 						id: label,
+						ownerId: this.session.getAgentId?.() ?? undefined,
 						onProgress: (text, details) => {
 							const progressDetails =
 								(details as TaskToolDetails | undefined) ??
@@ -729,6 +735,10 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 			getSessionId: this.session.getSessionId ?? (() => null),
 		};
 
+		// Subagents adopt the parent's ArtifactManager so artifact IDs are unique
+		// across the whole tree and outputs land flat in the parent's dir.
+		const parentArtifactManager = this.session.getArtifactManager?.() ?? undefined;
+
 		// Initialize progress tracking
 		const progressMap = new Map<number, AgentProgress>();
 
@@ -785,9 +795,11 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 				};
 			}
 
-			// Write parent conversation context for subagents
+			// Write parent conversation context for subagents. When IRC is available,
+			// subagents should ask live peers instead of reading a stale markdown dump.
 			await fs.mkdir(effectiveArtifactsDir, { recursive: true });
-			const compactContext = this.session.getCompactContext?.();
+			const shouldWriteConversationContext = this.session.settings.get("irc.enabled") !== true;
+			const compactContext = shouldWriteConversationContext ? this.session.getCompactContext?.() : undefined;
 			let contextFilePath: string | undefined;
 			if (compactContext) {
 				contextFilePath = path.join(effectiveArtifactsDir, "context.md");
@@ -867,12 +879,13 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
 						settings: this.session.settings,
-						mcpManager: this.session.mcpManager,
+						mcpManager: MCPManager.instance(),
 						contextFiles,
 						skills: availableSkills,
 						workspaceTree: this.session.workspaceTree,
 						promptTemplates,
 						localProtocolOptions,
+						parentArtifactManager,
 						parentHindsightSessionState: this.session.getHindsightSessionState?.(),
 					});
 				}
@@ -925,12 +938,13 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
 						settings: this.session.settings,
-						mcpManager: this.session.mcpManager,
+						mcpManager: MCPManager.instance(),
 						contextFiles,
 						skills: availableSkills,
 						workspaceTree: this.session.workspaceTree,
 						promptTemplates,
 						localProtocolOptions,
+						parentArtifactManager,
 						parentHindsightSessionState: this.session.getHindsightSessionState?.(),
 					});
 					if (mergeMode === "branch" && result.exitCode === 0) {

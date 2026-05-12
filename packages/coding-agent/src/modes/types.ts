@@ -170,7 +170,7 @@ export interface InteractiveModeContext {
 	 */
 	withLocalSubmission<T>(text: string, fn: () => Promise<T>, options?: { imageCount?: number }): Promise<T>;
 	isKnownSlashCommand(text: string): boolean;
-	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void;
+	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): Component[];
 	renderSessionContext(
 		sessionContext: SessionContext,
 		options?: { updateFooter?: boolean; populateHistory?: boolean },

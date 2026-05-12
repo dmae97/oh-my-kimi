@@ -223,6 +223,9 @@ export interface AgentToolResult<T = any, _TInput = unknown> {
 	content: (TextContent | ImageContent)[];
 	// Details to be displayed in a UI or logged
 	details?: T;
+	// Marks a non-throwing failure (e.g. an aggregator catching per-entry errors).
+	// agent-loop honors this and surfaces it as a tool error on the wire.
+	isError?: boolean;
 }
 
 // Callback for streaming tool execution updates

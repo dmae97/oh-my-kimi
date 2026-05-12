@@ -456,6 +456,10 @@
               const content = truncate(normalize(extractContent(msg.content)));
               return labelHtml + `<span class="tree-role-user">user:</span> ${escapeHtml(content)}`;
             }
+            if (msg.role === 'developer') {
+              const content = truncate(normalize(extractContent(msg.content)));
+              return labelHtml + `<span class="tree-role-developer">developer:</span> ${escapeHtml(content)}`;
+            }
             if (msg.role === 'assistant') {
               const textContent = truncate(normalize(extractContent(msg.content)));
               if (textContent) {
@@ -1648,6 +1652,18 @@
             return html;
           }
 
+          if (msg.role === 'developer') {
+            let html = `<div class="user-message developer-message" id="${entryId}">${copyBtnHtml}${tsHtml}`;
+            const content = msg.content;
+            const text = typeof content === 'string' ? content :
+              content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+            if (text.trim()) {
+              html += `<div class="markdown-content">${safeMarkedParse(text)}</div>`;
+            }
+            html += '</div>';
+            return html;
+          }
+
           if (msg.role === 'assistant') {
             let html = `<div class="assistant-message" id="${entryId}">${copyBtnHtml}${tsHtml}`;
 
@@ -1750,7 +1766,7 @@
       // ============================================================
 
       function computeStats(entryList) {
-        let userMessages = 0, assistantMessages = 0, toolResults = 0;
+        let userMessages = 0, developerMessages = 0, assistantMessages = 0, toolResults = 0;
         let customMessages = 0, compactions = 0, branchSummaries = 0, toolCalls = 0;
         const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
         const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -1760,6 +1776,7 @@
           if (entry.type === 'message') {
             const msg = entry.message;
             if (msg.role === 'user') userMessages++;
+            if (msg.role === 'developer') developerMessages++;
             if (msg.role === 'assistant') {
               assistantMessages++;
               if (msg.model) models.add(msg.provider ? `${msg.provider}/${msg.model}` : msg.model);
@@ -1787,7 +1804,7 @@
           }
         }
 
-        return { userMessages, assistantMessages, toolResults, customMessages, compactions, branchSummaries, toolCalls, tokens, cost, models: Array.from(models) };
+        return { userMessages, developerMessages, assistantMessages, toolResults, customMessages, compactions, branchSummaries, toolCalls, tokens, cost, models: Array.from(models) };
       }
 
       const globalStats = computeStats(entries);
@@ -1803,6 +1820,7 @@
 
         const msgParts = [];
         if (globalStats.userMessages) msgParts.push(`${globalStats.userMessages} user`);
+        if (globalStats.developerMessages) msgParts.push(`${globalStats.developerMessages} developer`);
         if (globalStats.assistantMessages) msgParts.push(`${globalStats.assistantMessages} assistant`);
         if (globalStats.toolResults) msgParts.push(`${globalStats.toolResults} tool results`);
         if (globalStats.customMessages) msgParts.push(`${globalStats.customMessages} custom`);

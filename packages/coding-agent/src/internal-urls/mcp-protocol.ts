@@ -1,10 +1,6 @@
-import type { MCPManager } from "../mcp/manager";
+import { MCPManager } from "../mcp/manager";
 import type { MCPResourceReadResult } from "../mcp/types";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
-
-export interface McpProtocolOptions {
-	getMcpManager: () => MCPManager | undefined;
-}
 
 function escapeRegex(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -108,10 +104,8 @@ export class McpProtocolHandler implements ProtocolHandler {
 	readonly scheme = "mcp";
 	readonly immutable = true;
 
-	constructor(private readonly options: McpProtocolOptions) {}
-
 	async resolve(url: InternalUrl): Promise<InternalResource> {
-		const mcpManager = this.options.getMcpManager();
+		const mcpManager = MCPManager.instance();
 		if (!mcpManager) {
 			throw new Error("No MCP manager available. MCP servers may not be configured.");
 		}
