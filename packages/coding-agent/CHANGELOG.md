@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.9.8] - 2026-05-12
+
 ### Breaking Changes
 
 - Changed the `eval` tool input format to a single-line `*** Cell <lang>:"<title>" [t:<duration>] [rst]` header per cell, replacing the `*** Begin <LANG>` / `*** End <LANG>` envelope and the standalone `*** Title:` / `*** Timeout:` / `*** Reset` directives. The lark grammar enforces a fixed attribute order; the runtime parser remains lenient (alias keys, bare positional tokens, single-quoted titles).

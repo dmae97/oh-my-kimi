@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.9.8] - 2026-05-12
+
 ### Added
 
 - Added `Terminal.setProgress(active)` to emit OSC 9;4 progress sequences with a ~1s keepalive interval so Ghostty does not clear the indicator during long-running work (ports pi-mono `a900d251` + `76bc605a`)
