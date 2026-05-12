@@ -6561,7 +6561,6 @@ export class AgentSession {
 				sessionId,
 				kernelOwnerId: this.#evalKernelOwnerId,
 				kernelMode: this.settings.get("python.kernelMode"),
-				useSharedGateway: this.settings.get("python.sharedGateway"),
 				onChunk,
 				signal: abortController.signal,
 			});

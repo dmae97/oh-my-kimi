@@ -2,10 +2,9 @@ import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import type { JsStatusEvent } from "../js/shared/types";
-import { shutdownSharedGateway } from "./gateway-coordinator";
+import type { KernelDisplayOutput } from "./display";
 import {
 	checkPythonKernelAvailability,
-	type KernelDisplayOutput,
 	type KernelExecuteOptions,
 	type KernelExecuteResult,
 	PythonKernel,
@@ -38,8 +37,6 @@ export interface PythonExecutorOptions {
 	kernelMode?: PythonKernelMode;
 	/** Restart the kernel before executing */
 	reset?: boolean;
-	/** Use shared gateway across pi instances (default: true) */
-	useSharedGateway?: boolean;
 	/** Session file path for accessing task outputs */
 	sessionFile?: string;
 	/**
@@ -102,7 +99,6 @@ interface KernelSession {
 	restartCount: number;
 	dead: boolean;
 	needsRestart: boolean;
-	kernelInvalidatedByRecovery: boolean;
 	disposing: boolean;
 	disposeCapacityPromise?: Promise<void>;
 	resolveDisposeCapacity?: () => void;
@@ -122,7 +118,6 @@ const disposingKernelSessions = new Set<KernelSession>();
 let cleanupTimer: NodeJS.Timeout | null = null;
 
 interface KernelSessionExecutionOptions {
-	useSharedGateway?: boolean;
 	sessionFile?: string;
 	artifactsDir?: string;
 	signal?: AbortSignal;
@@ -295,7 +290,6 @@ function buildKernelStartOptions(
 	return {
 		cwd,
 		env,
-		useSharedGateway: options.useSharedGateway,
 		signal: options.signal,
 		deadlineMs: options.deadlineMs,
 	};
@@ -379,7 +373,6 @@ function finishDisposingKernelSession(session: KernelSession): void {
 	session.disposeResultPromise = undefined;
 	session.disposeResultTimeoutMs = undefined;
 	session.nextDisposalRetryAt = undefined;
-	session.kernelInvalidatedByRecovery = false;
 	syncCleanupTimer();
 }
 
@@ -503,58 +496,6 @@ async function ensureKernelAvailable(
 	}
 }
 
-function isResourceExhaustionError(error: unknown): boolean {
-	const message = error instanceof Error ? error.message : String(error);
-	return (
-		message.includes("Too many open files") ||
-		message.includes("EMFILE") ||
-		message.includes("ENFILE") ||
-		message.includes("resource temporarily unavailable")
-	);
-}
-
-function clearSharedGatewayDisposingKernelSessionTracking(): void {
-	for (const session of Array.from(disposingKernelSessions.values())) {
-		if (!session.kernel.isSharedGateway) continue;
-		if (session.heartbeatTimer) {
-			clearInterval(session.heartbeatTimer);
-			session.heartbeatTimer = undefined;
-		}
-		disposingKernelSessions.delete(session);
-		session.resolveDisposeCapacity?.();
-		session.resolveDisposeCapacity = undefined;
-		session.disposeCapacityPromise = undefined;
-		session.resolveDisposeAttempt?.();
-		session.resolveDisposeAttempt = undefined;
-		session.disposeAttemptPromise = undefined;
-		session.disposeResultPromise = undefined;
-		session.disposeResultTimeoutMs = undefined;
-		session.nextDisposalRetryAt = undefined;
-		session.kernelInvalidatedByRecovery = false;
-	}
-}
-
-function markLiveKernelSessionsForRecovery(): void {
-	for (const session of kernelSessions.values()) {
-		if (session.heartbeatTimer) {
-			clearInterval(session.heartbeatTimer);
-			session.heartbeatTimer = undefined;
-		}
-		session.needsRestart = true;
-		session.kernelInvalidatedByRecovery = session.kernel.isSharedGateway;
-		session.restartCount = 0;
-	}
-}
-
-async function recoverFromResourceExhaustion(): Promise<void> {
-	logger.warn("Resource exhaustion detected, recovering by restarting shared gateway");
-	stopCleanupTimer();
-	markLiveKernelSessionsForRecovery();
-	clearSharedGatewayDisposingKernelSessionTracking();
-	await shutdownSharedGateway();
-	syncCleanupTimer();
-}
-
 function ensureKernelHeartbeat(session: KernelSession): void {
 	if (session.heartbeatTimer) return;
 	session.heartbeatTimer = setInterval(() => {
@@ -570,22 +511,12 @@ async function createKernelSession(
 	sessionId: string,
 	cwd: string,
 	options: KernelSessionExecutionOptions = {},
-	isRetry?: boolean,
 ): Promise<KernelSession> {
 	requireRemainingTimeoutMs(options.deadlineMs);
 	const env = buildKernelEnv(options);
 	const startOptions = buildKernelStartOptions(cwd, env, options);
 
-	let kernel: PythonKernel;
-	try {
-		kernel = await logger.time("createKernelSession:PythonKernel.start", PythonKernel.start, startOptions);
-	} catch (err) {
-		if (!isRetry && isResourceExhaustionError(err)) {
-			await recoverFromResourceExhaustion();
-			return createKernelSession(sessionId, cwd, options, true);
-		}
-		throw err;
-	}
+	const kernel = await logger.time("createKernelSession:PythonKernel.start", PythonKernel.start, startOptions);
 
 	const hasFallbackOwner = options.kernelOwnerId === undefined;
 	const initialOwnerId = options.kernelOwnerId ?? sessionId;
@@ -596,7 +527,6 @@ async function createKernelSession(
 		restartCount: 0,
 		dead: false,
 		needsRestart: false,
-		kernelInvalidatedByRecovery: false,
 		disposing: false,
 		disposeResultPromise: undefined,
 		nextDisposalRetryAt: undefined,
@@ -621,18 +551,16 @@ async function restartKernelSession(
 	}
 	requireRemainingTimeoutMs(options.deadlineMs);
 	try {
-		if (!session.kernelInvalidatedByRecovery) {
-			const deadKernel = session.dead || !session.kernel.isAlive();
-			const shutdownTimeoutMs = requireRemainingTimeoutMs(options.deadlineMs);
-			const shutdownResult = await session.kernel.shutdown({ signal: options.signal, timeoutMs: shutdownTimeoutMs });
-			if (!shutdownResult.confirmed && !deadKernel) {
-				throw new Error("Failed to confirm crashed kernel shutdown before restart");
-			}
-			if (!shutdownResult.confirmed) {
-				logger.warn("Proceeding with retained kernel restart after unconfirmed dead-kernel shutdown", {
-					sessionId: session.id,
-				});
-			}
+		const deadKernel = session.dead || !session.kernel.isAlive();
+		const shutdownTimeoutMs = requireRemainingTimeoutMs(options.deadlineMs);
+		const shutdownResult = await session.kernel.shutdown({ signal: options.signal, timeoutMs: shutdownTimeoutMs });
+		if (!shutdownResult.confirmed && !deadKernel) {
+			throw new Error("Failed to confirm crashed kernel shutdown before restart");
+		}
+		if (!shutdownResult.confirmed) {
+			logger.warn("Proceeding with retained kernel restart after unconfirmed dead-kernel shutdown", {
+				sessionId: session.id,
+			});
 		}
 		const env = buildKernelEnv(options);
 		const startOptions = buildKernelStartOptions(cwd, env, options);
@@ -640,7 +568,6 @@ async function restartKernelSession(
 		session.kernel = kernel;
 		session.dead = false;
 		session.needsRestart = false;
-		session.kernelInvalidatedByRecovery = false;
 		session.lastUsedAt = Date.now();
 		ensureKernelHeartbeat(session);
 	} catch (err) {
@@ -654,9 +581,6 @@ type KernelDisposalResult = { status: "confirmed" } | { status: "unconfirmed" } 
 type KernelDisposalWaitResult = KernelDisposalResult | { status: "timedOut" };
 
 function createKernelDisposalResultPromise(session: KernelSession, timeoutMs?: number): Promise<KernelDisposalResult> {
-	if (session.kernelInvalidatedByRecovery) {
-		return Promise.resolve({ status: "confirmed" as const });
-	}
 	return Promise.resolve()
 		.then(() => session.kernel.shutdown(timeoutMs === undefined ? undefined : { timeoutMs }))
 		.then(

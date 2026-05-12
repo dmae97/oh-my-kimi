@@ -1,9 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Changed the `timeoutMs` execution option to no longer be enforced during worker-based JS runs, so callers must rely on external cancellation signals for time limits
+- Replaced the Jupyter kernel gateway + WebSocket protocol behind the Python `eval` backend with a subprocess-backed runner that speaks NDJSON over stdin/stdout; removed the `jupyter_kernel_gateway`/`ipykernel` pip dependencies, the `python.sharedGateway` setting, the `omp jupyter` CLI command, and the `PI_PYTHON_GATEWAY_URL` / `PI_PYTHON_GATEWAY_TOKEN` environment variables
 
 ### Added
 
@@ -18,11 +20,16 @@
 
 ### Changed
 
-- Changed JavaScript execution in `executeJs` to expose the worker’s real `process` object instead of a restricted, frozen subset
+- Changed `setup python` to only verify a reachable Python 3 interpreter instead of installing Jupyter dependencies
+- Changed `info` output to remove the obsolete Python Gateway status block now that shared gateway management is no longer available
+- Changed JavaScript execution in `executeJs` to expose the worker\u2019s real `process` object instead of a restricted, frozen subset
 - Changed JavaScript evaluation to run per session in a worker-backed runner with explicit initialization and teardown handling
+- Changed the Python backend to launch one `python -u runner.py` subprocess per kernel; cancellation now sends `SIGINT` which raises a real `KeyboardInterrupt` in user code, and the same subprocess is reused across cells in session mode
+- Changed Python magic handling so `%pip`, `%cd`, `%env`, `%pwd`, `%ls`, `%time`, `%timeit`, `%who`, `%reset`, `%load`, `%run`, `%%bash`, `%%capture`, `%%timeit`, `%%writefile`, and `!shell` work without depending on IPython
 
 ### Fixed
 
+- Fixed Python output rendering so `text/markdown` takes precedence over `text/plain` and status bundles are emitted as status updates rather than plain text
 - Fixed query tokenization in `HistoryStorage.search` so punctuation-delimited terms like `git-commit` are aligned with indexing and matched correctly
 - Fixed history search result merging to de-duplicate matches and return full-text matches before substring-only matches while still respecting the requested limit
 - Fixed JS run cancellation so aborting a run now also cancels in-flight tool calls and terminates the active worker session

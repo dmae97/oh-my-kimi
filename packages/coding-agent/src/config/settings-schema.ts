@@ -1662,16 +1662,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"python.sharedGateway": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "editing",
-			label: "Shared Python Gateway",
-			description: "Share IPython kernel gateway across pi instances",
-		},
-	},
-
 	// ────────────────────────────────────────────────────────────────────────
 	// Tools
 	// ────────────────────────────────────────────────────────────────────────

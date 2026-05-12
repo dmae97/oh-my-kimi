@@ -252,10 +252,9 @@ Related vars:
 | Variable                  | Default / behavior                                                                                                  |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `PI_PY`                   | Eval backend override: `0`/`bash`=JavaScript only, `1`/`py`=Python only, `mix`/`both`=both; invalid values ignored |
-| `PI_PYTHON_SKIP_CHECK`    | If `1`, skips Python kernel availability checks/warm checks                                                         |
-| `PI_PYTHON_GATEWAY_URL`   | If set, uses external kernel gateway instead of local shared gateway                                                |
-| `PI_PYTHON_GATEWAY_TOKEN` | Optional auth token for external gateway (`Authorization: token <value>`)                                           |
-| `PI_PYTHON_IPC_TRACE`     | If `1`, enables low-level IPC trace path in kernel module                                                           |
+| `PI_PYTHON_SKIP_CHECK`    | If `1`, skips Python interpreter availability checks (subprocess runner still starts on demand)                     |
+| `PI_PYTHON_INTEGRATION`   | If `1`, opts gated integration tests in (e.g. `python-runner.integration.test.ts`) into running against real Python |
+| `PI_PYTHON_IPC_TRACE`     | If `1`, logs NDJSON frames exchanged with the Python runner subprocess                                              |
 | `VIRTUAL_ENV`             | Highest-priority venv path for Python runtime resolution                                                            |
 
 Extra conditional behavior:

@@ -177,12 +177,11 @@ A single tool call can mix Python and JS cells. Persistence is per language runt
   - JS/Python prelude helpers can read, write, append, diff, and traverse files under the session cwd or absolute paths.
   - Output may spill to an artifact file via `OutputSink`.
 - Network
-  - Python backend talks to a Jupyter kernel gateway over HTTP and WebSocket.
-  - External gateway mode uses `PI_PYTHON_GATEWAY_URL` and optional `PI_PYTHON_GATEWAY_TOKEN`.
+  - Python backend speaks NDJSON to a local `python3` subprocess over stdin/stdout (no network).
   - JS runtime exposes `fetch` and `tool.<name>()`; those tools may perform additional network I/O.
 - Subprocesses / native bindings
   - Python availability check runs `<python> -c ...`.
-  - Python backend may start or connect to a kernel gateway; details are in `docs/python-repl.md`.
+  - Python backend spawns one `python -u runner.py` subprocess per kernel; cancellation sends `SIGINT`. Details in `docs/python-repl.md`.
 - Session state
   - `session.assertEvalExecutionAllowed?.()` can block execution.
   - `session.trackEvalExecution?.(...)` can register cancellable eval work.

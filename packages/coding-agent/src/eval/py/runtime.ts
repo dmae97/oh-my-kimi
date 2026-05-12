@@ -161,19 +161,6 @@ export function resolveVenvPath(cwd: string): string | undefined {
 }
 
 /**
- * Resolve the windowless Python executable (pythonw.exe) on Windows.
- * Falls back to the regular Python path if pythonw.exe is not available.
- */
-function resolveWindowlessPython(pythonPath: string): string {
-	if (process.platform !== "win32") return pythonPath;
-	const pythonwPath = pythonPath.replace(/python\.exe$/i, "pythonw.exe");
-	if (pythonwPath !== pythonPath && fs.existsSync(pythonwPath)) {
-		return pythonwPath;
-	}
-	return pythonPath;
-}
-
-/**
  * Resolve Python runtime including executable path, environment, and venv detection.
  */
 export function resolvePythonRuntime(cwd: string, baseEnv: Record<string, string | undefined>): PythonRuntime {
@@ -189,7 +176,7 @@ export function resolvePythonRuntime(cwd: string, baseEnv: Record<string, string
 			const currentPath = env[pathKey];
 			env[pathKey] = currentPath ? `${binDir}${path.delimiter}${currentPath}` : binDir;
 			return {
-				pythonPath: resolveWindowlessPython(pythonCandidate),
+				pythonPath: pythonCandidate,
 				env,
 				venvPath,
 			};
@@ -205,7 +192,7 @@ export function resolvePythonRuntime(cwd: string, baseEnv: Record<string, string
 			process.platform === "win32" ? path.join(managed.venvPath, "Scripts") : path.join(managed.venvPath, "bin");
 		env[pathKey] = currentPath ? `${managedBin}${path.delimiter}${currentPath}` : managedBin;
 		return {
-			pythonPath: resolveWindowlessPython(managed.pythonPath),
+			pythonPath: managed.pythonPath,
 			env,
 			venvPath: managed.venvPath,
 		};
@@ -216,7 +203,7 @@ export function resolvePythonRuntime(cwd: string, baseEnv: Record<string, string
 		throw new Error("Python executable not found on PATH");
 	}
 	return {
-		pythonPath: resolveWindowlessPython(pythonPath),
+		pythonPath,
 		env,
 	};
 }

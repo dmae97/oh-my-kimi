@@ -1,20 +1,22 @@
-# Eval Tool Python Backend and IPython Runtime
+# Eval Tool Python Backend
 
-This document describes the current Python execution stack in `packages/coding-agent`.
-It covers tool behavior, kernel/gateway lifecycle, environment handling, execution semantics, output rendering, and operational failure modes.
+This document describes the Python execution stack in `packages/coding-agent`.
+It covers tool behavior, runner lifecycle, environment handling, execution semantics, output rendering, supported magics, and operational failure modes.
 
 ## Scope and Key Files
 
 - Tool surface: `src/tools/eval.ts`
 - Session/per-call kernel orchestration: `src/eval/py/executor.ts`
-- Kernel protocol + gateway integration: `src/eval/py/kernel.ts`
-- Shared local gateway coordinator: `src/eval/py/gateway-coordinator.ts`
+- Subprocess kernel client: `src/eval/py/kernel.ts`
+- Python wrapper / NDJSON server: `src/eval/py/runner.py`
+- Prelude helpers loaded into every kernel: `src/eval/py/prelude.py`
+- MIME bundle renderer (text + structured outputs): `src/eval/py/display.ts`
 - Interactive-mode renderer for user-triggered Python runs: `src/modes/components/eval-execution.ts`
 - Runtime/env filtering and Python resolution: `src/eval/py/runtime.ts`
 
 ## What eval's Python backend is
 
-The `eval` tool executes one or more Python cells through a Jupyter Kernel Gateway-backed kernel when `language: "python"` is selected or inferred (not by spawning `python -c` directly per cell).
+The `eval` tool executes one or more Python cells inside a long-lived `python3` subprocess that speaks NDJSON over stdin/stdout. No Jupyter, no kernel gateway, no extra pip dependencies — a vanilla Python 3.8+ interpreter is enough. Rich `display()` output (PIL, pandas, plotly, matplotlib figures) keeps working because the wrapper reimplements the MIME-bundle dispatch that IPython previously provided.
 
 Tool params:
 
@@ -28,66 +30,73 @@ Tool params:
 
 The tool is `concurrency = "exclusive"` for a session, so calls do not overlap.
 
-## Gateway lifecycle
-
-### Modes
-
-There are two gateway paths:
-
-1. **External gateway** (`PI_PYTHON_GATEWAY_URL` set)
-   - Uses the configured URL directly.
-   - Optional auth with `PI_PYTHON_GATEWAY_TOKEN`.
-   - No local gateway process is spawned or managed.
-
-2. **Local shared gateway** (default path)
-   - Uses a single shared process coordinated under `~/.omp/agent/python-gateway`.
-   - Metadata file: `gateway.json`
-   - Lock file: `gateway.lock`
-   - Spawn command:
-     - `python -m kernel_gateway`
-     - bound to `127.0.0.1:<allocated-port>`
-     - startup health check: `GET /api/kernelspecs`
-
-### Local shared gateway coordination
-
-`acquireSharedGateway()`:
-
-- Takes a file lock (`gateway.lock`) with heartbeat.
-- Reuses `gateway.json` if PID is alive and health check passes.
-- Cleans stale info/PIDs when needed.
-- Starts a new gateway when no healthy one exists.
-
-`releaseSharedGateway()` is currently a no-op (kernel shutdown does not tear down shared gateway).
-
-`shutdownSharedGateway()` explicitly terminates the shared process and clears gateway metadata.
-
-### Important constraint
-
-`python.sharedGateway=false` is rejected at kernel start:
-
-- Error: `Shared Python gateway required; local gateways are disabled`
-- There is no per-process non-shared local gateway mode.
-
 ## Kernel lifecycle
 
-Kernels are created via `POST /api/kernels` on the selected gateway when a retained session needs a kernel or when `per-call` mode starts a request.
+Each kernel is a single Python subprocess: `python -u <runner.py>`. The runner is bundled with the host binary (Bun text import), written to `~/.omp/python-env`-adjacent tmp cache once per script-hash, and reused by every subsequent spawn.
 
 Kernel startup sequence:
 
-1. Availability check (`checkPythonKernelAvailability`)
-2. Create kernel (`/api/kernels`)
-3. Open websocket (`/api/kernels/:id/channels`)
-4. Initialize kernel env (`cwd`, env vars, `sys.path`)
-5. Execute `PYTHON_PRELUDE`
-6. Load extension modules from:
-   - user: `~/.omp/agent/modules/*.py`
-   - project: `<cwd>/.omp/modules/*.py` (overrides same-name user module)
+1. Availability check (`checkPythonKernelAvailability`) — verifies that a Python interpreter resolves and runs.
+2. Spawn `python -u runner.py` with filtered env and `cwd`.
+3. Send an init request that runs `os.chdir(cwd)`, injects env entries, and adds `cwd` to `sys.path`.
+4. Execute `PYTHON_PRELUDE` (idempotent — only initializes once per process).
 
 Kernel shutdown:
 
-- Deletes remote kernel via `DELETE /api/kernels/:id`
-- Closes websocket
-- Calls shared gateway release hook (no-op today)
+- Send `{"type": "exit"}` over stdin.
+- Wait for process exit with `SHUTDOWN_GRACE_MS` budget.
+- Escalate to `SIGTERM` and finally `SIGKILL` if the process does not exit in time.
+
+## Wire protocol (NDJSON, host ↔ runner)
+
+One JSON object per line, UTF-8, `\n` terminated.
+
+Host → runner:
+
+```jsonc
+{"id": "<reqId>", "code": "<source>", "silent": false, "storeHistory": true}
+{"type": "exit"}
+```
+
+Runner → host:
+
+```jsonc
+{"type": "started",  "id": "<reqId>"}
+{"type": "stdout",   "id": "<reqId>", "data": "..."}
+{"type": "stderr",   "id": "<reqId>", "data": "..."}
+{"type": "display",  "id": "<reqId>", "bundle": {<mime>: <value>}}
+{"type": "result",   "id": "<reqId>", "bundle": {<mime>: <value>}}
+{"type": "error",    "id": "<reqId>", "ename": "...", "evalue": "...", "traceback": ["..."]}
+{"type": "done",     "id": "<reqId>", "status": "ok"|"error", "executionCount": N, "cancelled": false}
+```
+
+Status events the prelude emits (e.g. `_emit_status("find", count=…)`) ship inside display bundles under `application/x-omp-status` so the existing TUI status renderer keeps working.
+
+## Magics
+
+The runner's source transformer rewrites IPython-style magics to plain Python calls before parsing. Supported set:
+
+| Magic | Effect |
+| --- | --- |
+| `%pip <args>` | `python -m pip <args>` with live streaming output. Newly installed packages are evicted from `sys.modules` so the next `import` picks up the fresh install. |
+| `%cd <path>` | `os.chdir(path)` (with `~` expansion); emits status event. |
+| `%pwd` | Returns `os.getcwd()`. |
+| `%ls [path]` | Returns `sorted(os.listdir(path))`. |
+| `%env [KEY[=VAL]]` | List, read, or set env vars (matches prelude `env()` semantics). |
+| `%set_env KEY VALUE` | Set `os.environ[KEY]`. |
+| `%time <expr>` / `%timeit <expr>` | Time the expression; emits status event with elapsed ms. |
+| `%who` / `%whos` | List user-namespace names. |
+| `%reset` | Clear user globals and re-inject prelude. |
+| `%load <path>` | Read a file into a fresh cell and execute. |
+| `%run <path>` | `runpy.run_path` and merge globals back. |
+| `%%bash` / `%%sh` | Run the cell body via `bash`/`sh`. |
+| `%%capture [name]` | Run body with stdout/stderr captured into `name`. |
+| `%%timeit` | Time the cell body. |
+| `%%writefile <path>` | Write body to file. |
+| `!cmd` / `var = !cmd` | Run command via subprocess shell; returns an SList-style result with `.n` / `.s` helpers. |
+| `var = %name args` | Assignment forms work for line magics and `!cmd`. |
+
+Unknown magic names raise `NameError: UsageError: ...` inside the cell.
 
 ## Session persistence semantics
 
@@ -99,11 +108,10 @@ Kernel shutdown:
   - Idle sessions are evicted after 5 minutes.
   - At most 4 sessions; oldest is evicted on overflow.
   - Heartbeat checks detect dead kernels.
-  - Auto-restart allowed once; repeated crash => hard failure.
-
+  - Auto-restart allowed once; repeated crash ⇒ hard failure.
 - `per-call`
-  - Creates a fresh kernel for each execute request.
-  - Shuts kernel down after the request.
+  - Spawns a fresh subprocess for each request.
+  - Shuts the subprocess down after the request.
   - No cross-call state persistence.
 
 ### Multi-cell behavior in a single tool call
@@ -120,7 +128,7 @@ If an intermediate cell fails:
 
 ## Environment filtering and runtime resolution
 
-Environment is filtered before launching gateway/kernel runtime:
+Environment is filtered before launching the runner:
 
 - Allowlist includes core vars like `PATH`, `HOME`, locale vars, `VIRTUAL_ENV`, `PYTHONPATH`, etc.
 - Allow-prefixes: `LC_`, `XDG_`, `PI_`
@@ -134,15 +142,7 @@ Runtime selection order:
 
 When a venv is selected, its bin/Scripts path is prepended to `PATH`.
 
-Kernel startup receives the optional session file path from the executor:
-
-- `PI_SESSION_FILE` (session state file path)
-
-`PythonKernel.#initializeKernelEnvironment(...)` then runs init script inside kernel to:
-
-- `os.chdir(cwd)`
-- injects provided env entries into `os.environ`
-- ensures cwd is in `sys.path`
+The runner additionally receives `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-8` so streamed output reaches the host promptly.
 
 ## Tool availability and mode selection
 
@@ -154,9 +154,9 @@ Kernel startup receives the optional session file path from the executor:
 
 `PI_PY` accepted values:
 
-- `0` / `bash` -> JavaScript backend only
-- `1` / `py` -> Python backend only
-- `mix` / `both` -> both backends
+- `0` / `bash` → JavaScript backend only
+- `1` / `py` → Python backend only
+- `mix` / `both` → both backends
 
 If Python preflight fails and `eval.js` is enabled, `eval` remains available and dispatches to JavaScript unless `language: "python"` is explicitly requested.
 
@@ -164,45 +164,33 @@ If Python preflight fails and `eval.js` is enabled, `eval` remains available and
 
 ### Tool-level timeout
 
-`eval` timeout is in seconds, default 30, clamped to `1..600`.
-
-The tool combines:
-
-- caller abort signal
-- timeout abort signal
-
-with `AbortSignal.any(...)`.
+`eval` timeout is in seconds, default 30, clamped to `1..600`. The tool combines caller abort signal and timeout signal with `AbortSignal.any(...)`.
 
 ### Kernel execution cancellation
 
 On abort/timeout:
 
-- Execution is marked cancelled.
-- Kernel interrupt is attempted via REST (`POST /interrupt`) and control-channel `interrupt_request`.
-- Result includes `cancelled=true`.
-- Timeout path annotates output as `Command timed out after <n> seconds`.
+- The host sends `kill("SIGINT")` to the runner subprocess.
+- The runner's exec-time signal handler raises `KeyboardInterrupt` inside the user code.
+- Result includes `cancelled=true`; timeout path annotates output as `Command timed out after <n> seconds`.
+- Between requests the runner installs `SIG_IGN` for SIGINT so a stray cancel does not tear down the kernel.
+
+If a second cancel is required (runner stuck in C code), the host escalates to `SIGTERM` and the session restarts on the next call.
 
 ### stdin behavior
 
-Interactive stdin is not supported.
-
-If kernel emits `input_request`:
-
-- Tool records `stdinRequested=true`
-- Emits explanatory text
-- Sends empty `input_reply`
-- Execution is treated as failure at executor layer
+Interactive stdin is not supported. The runner does not forward `input()` prompts; user code that calls `input()` blocks until cancellation.
 
 ## Output capture and rendering
 
 ### Captured output classes
 
-From kernel messages:
+From runner frames:
 
-- `stream` -> plain text chunks
-- `display_data`/`execute_result` -> rich display handling
-- `error` -> traceback text
-- custom MIME `application/x-omp-status` -> structured status events
+- `stdout` / `stderr` → plain text chunks
+- `display` / `result` → rich display handling (MIME bundle)
+- `error` → traceback text
+- `application/x-omp-status` MIME inside `display` → structured status events
 
 Display MIME precedence:
 
@@ -212,15 +200,17 @@ Display MIME precedence:
 
 Additionally captured as structured outputs:
 
-- `application/json` -> JSON tree data
-- `image/png` -> image payloads
-- `application/x-omp-status` -> status events
+- `application/json` → JSON tree data
+- `image/png` / `image/jpeg` → image payloads
+- `application/x-omp-status` → status events
+
+### Matplotlib
+
+The runner sets `MPLBACKEND=Agg` as an environ default so figures render off-screen. After every cell, `pyplot.get_fignums()` is iterated; each figure is saved to PNG, emitted as an `image/png` display, and closed.
 
 ### Storage and truncation
 
-Output is streamed through `OutputSink` and may be persisted to artifact storage.
-
-Tool results can include truncation metadata and `artifact://<id>` for full output recovery.
+Output is streamed through `OutputSink` and may be persisted to artifact storage. Tool results can include truncation metadata and `artifact://<id>` for full output recovery.
 
 ### Renderer behavior
 
@@ -234,61 +224,18 @@ Tool results can include truncation metadata and `artifact://<id>` for full outp
   - clamps very long individual lines to 4000 chars for display safety
   - shows cancellation/error/truncation notices
 
-## External gateway support
+## Operational troubleshooting
 
-Set:
-
-```bash
-export PI_PYTHON_GATEWAY_URL="http://127.0.0.1:8888"
-# Optional:
-export PI_PYTHON_GATEWAY_TOKEN="..."
-```
-
-Behavior differences from local shared gateway:
-
-- No local gateway lock/info files
-- No local process spawn/termination
-- Health checks and kernel CRUD run against external endpoint
-- Auth failures are surfaced with explicit token guidance
-
-## Operational troubleshooting (current failure modes)
-
-- **Python backend not available**
-  - Check `eval.py`, Python kernel dependencies, and `PI_PY`.
-  - If preflight fails and `eval.js` is enabled, omit `language` or pass `language: "js"` to use JavaScript.
-
-- **Kernel availability errors**
-  - Local mode requires both `kernel_gateway` and `ipykernel` importable in resolved Python runtime.
-  - Install with:
-    ```bash
-    python -m pip install jupyter_kernel_gateway ipykernel
-    ```
-
-- **`python.sharedGateway=false` causes startup failure**
-  - This is expected with current implementation.
-
-- **External gateway auth/reachability failures**
-  - 401/403 -> set `PI_PYTHON_GATEWAY_TOKEN`.
-  - timeout/unreachable -> verify URL/network and gateway health.
-
-- **Execution hangs then times out**
-  - Increase tool `timeout` (max 600s) if workload is legitimate.
-  - For stuck code, cancellation triggers kernel interrupt but user code may still need refactor.
-
-- **stdin/input prompts in Python code**
-  - `input()` is not supported interactively in this runtime path; pass data programmatically.
-
-- **Resource exhaustion (`EMFILE` / too many open files)**
-  - Session manager triggers shared-gateway recovery (session teardown + shared gateway restart).
-
-- **Working directory errors**
-  - Tool validates `cwd` exists and is a directory before execution.
+- **Python backend not available** — Check `eval.py`, `PI_PY`, and that `python`/`python3` is on PATH. If preflight fails and `eval.js` is enabled, omit `language` or pass `language: "js"` to use JavaScript.
+- **No Python on PATH** — Install a system Python 3.8+ or place a venv at `~/.omp/python-env`. `omp setup python --check` reports the resolved interpreter.
+- **Execution hangs then times out** — Increase tool `timeout` (max 600s) if workload is legitimate. For stuck native code, cancellation triggers `SIGINT` first then escalates; the session restarts on the next request.
+- **stdin/input prompts in Python code** — `input()` is not supported; pass data programmatically.
+- **Working directory errors** — Tool validates `cwd` exists and is a directory before execution.
 
 ## Relevant environment variables
 
-- `PI_PY` — tool exposure override (`bash-only`/`ipy-only`/`both` mapping above)
-- `PI_PYTHON_GATEWAY_URL` — use external gateway
-- `PI_PYTHON_GATEWAY_TOKEN` — optional external gateway auth token
+- `PI_PY` — tool exposure override
 - `PI_PYTHON_SKIP_CHECK=1` — bypass Python preflight/warm checks
-- `PI_PYTHON_IPC_TRACE=1` — log kernel IPC send/receive traces
+- `PI_PYTHON_INTEGRATION=1` — enable gated integration tests that spawn a real Python
+- `PI_PYTHON_IPC_TRACE=1` — log NDJSON frames exchanged with the runner subprocess
 - `PI_DEBUG_STARTUP=1` — emit startup-stage debug markers

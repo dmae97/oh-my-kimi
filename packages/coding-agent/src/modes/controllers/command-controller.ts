@@ -14,7 +14,6 @@ import { formatDuration, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { reset as resetCapabilities } from "../../capability";
 import { clearClaudePluginRootsCache } from "../../discovery/helpers";
-import { getGatewayStatus } from "../../eval/py/gateway-coordinator";
 import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
 import {
@@ -400,28 +399,6 @@ export class CommandController {
 			if (normalizedPremiumRequests > 0) {
 				info += `${theme.fg("dim", "Premium Requests:")} ${normalizedPremiumRequests.toLocaleString()}\n`;
 			}
-		}
-
-		const gateway = await getGatewayStatus();
-		info += `\n${theme.bold("Python Gateway")}\n`;
-		if (gateway.active) {
-			info += `${theme.fg("dim", "Status:")} ${theme.fg("success", "Active (Global)")}\n`;
-			info += `${theme.fg("dim", "URL:")} ${gateway.url}\n`;
-			info += `${theme.fg("dim", "PID:")} ${gateway.pid}\n`;
-			if (gateway.pythonPath) {
-				info += `${theme.fg("dim", "Python:")} ${gateway.pythonPath}\n`;
-			}
-			if (gateway.venvPath) {
-				info += `${theme.fg("dim", "Venv:")} ${gateway.venvPath}\n`;
-			}
-			if (gateway.uptime !== null) {
-				const uptimeSec = Math.floor(gateway.uptime / 1000);
-				const mins = Math.floor(uptimeSec / 60);
-				const secs = uptimeSec % 60;
-				info += `${theme.fg("dim", "Uptime:")} ${mins}m ${secs}s\n`;
-			}
-		} else {
-			info += `${theme.fg("dim", "Status:")} ${theme.fg("dim", "Inactive")}\n`;
 		}
 
 		if (this.ctx.lspServers && this.ctx.lspServers.length > 0) {
