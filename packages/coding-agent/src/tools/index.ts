@@ -277,7 +277,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	browser: s => new BrowserTool(s),
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
-	task: TaskTool.create,
+	task: s => TaskTool.create(s),
 	job: JobTool.createIf,
 	recipe: RecipeTool.createIf,
 	irc: IrcTool.createIf,
