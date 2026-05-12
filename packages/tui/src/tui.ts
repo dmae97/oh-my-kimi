@@ -19,6 +19,13 @@ import {
 } from "./utils";
 
 const SEGMENT_RESET = "\x1b[0m";
+/**
+ * Per-line terminator written at the end of every non-image line. Closes both
+ * SGR state and any in-flight OSC 8 hyperlink so styles/links cannot bleed
+ * across lines in scrollback. Applied by {@link TUI.#applyLineResets} before
+ * diffing so `#previousLines` mirrors what was actually written.
+ */
+const LINE_TERMINATOR = "\x1b[0m\x1b]8;;\x07";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
@@ -997,6 +1004,26 @@ export class TUI extends Container {
 		return null;
 	}
 
+	/**
+	 * Append the per-line terminator ({@link LINE_TERMINATOR}) to every
+	 * non-image line and normalize for terminal rendering. Mutates the input
+	 * array in place so downstream diffing/storage sees exactly the bytes
+	 * written to the terminal — without this, the diff cache disagrees with
+	 * emitted output and OSC 8 hyperlink state can leak across lines.
+	 */
+	#applyLineResets(lines: string[]): string[] {
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			if (TERMINAL.isImageLine(line)) continue;
+			const normalized = normalizeTerminalOutput(line);
+			// Only close OSC 8 hyperlinks when the line actually opened one;
+			// emitting `\x1b]8;;\x07` on every line just feeds the terminal's OSC
+			// parser for no reason (measurable cost in xterm.js parse loop).
+			lines[i] = normalized + (normalized.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
+		}
+		return lines;
+	}
+
 	#doRender(): void {
 		if (this.#stopped) return;
 		const width = this.terminal.columns;
@@ -1021,6 +1048,12 @@ export class TUI extends Container {
 		// Extract cursor position (marker must be found before diff comparison)
 		const cursorPos = this.#extractCursorPosition(newLines, height);
 
+		// Terminate every non-image line so #previousLines mirrors emitted bytes
+		// (closes SGR + OSC 8 hyperlink state). Must run after cursor extraction
+		// because the marker is embedded mid-line, and before any diff/full render
+		// path so cache comparisons stay byte-accurate.
+		newLines = this.#applyLineResets(newLines);
+
 		// Width changed - need full re-render (line wrapping changes)
 		const widthChanged = this.#previousWidth !== 0 && this.#previousWidth !== width;
 		const heightChanged = this.#previousHeight !== 0 && this.#previousHeight !== height;
@@ -1031,11 +1064,11 @@ export class TUI extends Container {
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
 			// Skip clearing scrollback (3J) in multiplexers — users actively navigate scrollback history
 			if (clear) buffer += isMultiplexer ? "\x1b[2J\x1b[H" : "\x1b[2J\x1b[H\x1b[3J";
-			const reset = SEGMENT_RESET;
 			for (let i = 0; i < newLines.length; i++) {
 				if (i > 0) buffer += "\r\n";
-				const line = newLines[i];
-				buffer += TERMINAL.isImageLine(line) ? line : normalizeTerminalOutput(line) + reset;
+				// Lines were pre-terminated/normalized by #applyLineResets; image
+				// lines were left untouched there.
+				buffer += newLines[i];
 			}
 			this.#cursorRow = Math.max(0, newLines.length - 1);
 			const { seq, toRow } = this.#cursorControlSequence(cursorPos, newLines.length, this.#cursorRow);
@@ -1170,29 +1203,13 @@ export class TUI extends Container {
 			return;
 		}
 
-		// Check if firstChanged is above what was previously visible
-		const previousContentViewportTop = Math.max(0, this.#previousLines.length - height);
-		if (firstChanged < previousContentViewportTop) {
-			const newViewportTop = Math.max(0, newLines.length - height);
-			if (newViewportTop < previousContentViewportTop) {
-				// Viewport needs to shift up — can only be done with a full redraw
-				logRedraw(`viewport shift up (new=${newViewportTop} < prev=${previousContentViewportTop})`);
-				fullRender(true);
-				return;
-			}
-			// Viewport is stable or shifting down — skip invisible above-viewport changes
-			firstChanged = previousContentViewportTop;
-			if (lastChanged < firstChanged) {
-				// All changes are above the viewport — nothing visible to update
-				this.#cursorRow = Math.max(0, newLines.length - 1);
-				this.#maxLinesRendered = newLines.length;
-				this.#viewportTopRow = Math.max(0, newLines.length - height);
-				this.#writeCursorPosition(cursorPos, newLines.length);
-				this.#previousLines = newLines;
-				this.#previousWidth = width;
-				this.#previousHeight = height;
-				return;
-			}
+		// Differential rendering can only touch what was actually visible.
+		// Any change above the previous viewport requires a full redraw so terminal
+		// scrollback ends up consistent with the new transcript state.
+		if (firstChanged < prevViewportTop) {
+			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
+			fullRender(true);
+			return;
 		}
 
 		// Render from first changed line to end
@@ -1247,8 +1264,15 @@ export class TUI extends Container {
 					}
 				}
 				truncatedLine = truncateToWidth(line, width, Ellipsis.Omit);
+				// Re-append the terminator: truncateToWidth removes trailing
+				// content past the visible-width budget, which may also drop the
+				// terminator appended by #applyLineResets. Match the conditional
+				// OSC 8 close strategy used there.
+				truncatedLine += truncatedLine.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET;
 			}
-			buffer += isImage ? truncatedLine : normalizeTerminalOutput(truncatedLine) + SEGMENT_RESET;
+			// Non-image lines are pre-terminated/normalized by #applyLineResets;
+			// truncated lines re-append LINE_TERMINATOR above.
+			buffer += truncatedLine;
 		}
 
 		// Track where cursor ended up after rendering

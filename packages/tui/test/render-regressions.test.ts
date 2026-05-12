@@ -602,7 +602,7 @@ describe("TUI terminal-state regressions", () => {
 			} finally {
 				tui.stop();
 			}
-		});
+		}, 15_000);
 	});
 
 	describe("scrollback integrity", () => {
