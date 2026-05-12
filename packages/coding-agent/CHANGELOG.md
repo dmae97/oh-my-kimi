@@ -1,6 +1,22 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Changed the `timeoutMs` execution option to no longer be enforced during worker-based JS runs, so callers must rely on external cancellation signals for time limits
+
+### Added
+
+- Added automatic inline JS evaluation fallback when worker creation failed so script execution still works in environments without worker support
+
+### Changed
+
+- Changed JavaScript evaluation to run per session in a worker-backed runner with explicit initialization and teardown handling
+
+### Fixed
+
+- Fixed JS run cancellation so aborting a run now also cancels in-flight tool calls and terminates the active worker session
+- Fixed top-level `const`, `let`, and `class` declarations in evaluated JavaScript to persist across subsequent runs by rewriting top-level declarations
 
 ## [14.9.5] - 2026-05-12
 ### Breaking Changes
