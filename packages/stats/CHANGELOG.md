@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.9.9] - 2026-05-12
+
 ### Added
 
 - Added separate input-token and output-token totals to the overview dashboard cards.

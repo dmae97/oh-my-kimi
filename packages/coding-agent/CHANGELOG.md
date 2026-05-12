@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.9.9] - 2026-05-12
+
 ### Added
 
 - Added new `task.isolation.mode` values `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, and `rcopy` for native PAL-backed task isolation backends

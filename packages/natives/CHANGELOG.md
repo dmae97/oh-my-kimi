@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.9.9] - 2026-05-12
 ### Breaking Changes
 
 - Removed `projfsOverlayProbe`, `projfsOverlayStart`, and `projfsOverlayStop` overlays APIs and `ProjfsOverlayProbeResult` type from the public natives interface
