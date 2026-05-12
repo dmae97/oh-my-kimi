@@ -209,8 +209,10 @@ pub struct StreamSinks {
 	pub stderr: Option<mpsc::UnboundedSender<Bytes>>,
 }
 
-/// One-shot execution that delivers stdout and stderr as raw byte chunks on
-/// separate channels. The minimizer is intentionally disabled — its
+/// One-shot execution that delivers stdout/stderr as raw byte chunks.
+///
+/// Bytes are delivered on separate channels with no UTF-8 decoding and no
+/// merging. The minimizer is intentionally disabled — its
 /// `MinimizerResult.text` contract presumes a single merged transcript.
 pub async fn execute_shell_streams(
 	options: ShellExecuteOptions,

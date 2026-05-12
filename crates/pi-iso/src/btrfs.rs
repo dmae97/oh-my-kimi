@@ -140,9 +140,7 @@ mod imp {
 		let resolved = if path.is_absolute() {
 			path.to_path_buf()
 		} else {
-			std::env::current_dir()
-				.map(|cwd| cwd.join(path))
-				.unwrap_or_else(|_| path.to_path_buf())
+			std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
 		};
 		let meta = fs::metadata(&resolved).map_err(|err| {
 			IsoError::other(format!("invalid btrfs snapshot source {}: {err}", resolved.display()))

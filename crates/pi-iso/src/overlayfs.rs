@@ -280,8 +280,8 @@ mod imp {
 				.output();
 			match result {
 				Ok(out) if out.status.success() => return Ok(()),
-				Ok(_) => continue,
-				Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+				Ok(_) => {},
+				Err(err) if err.kind() == std::io::ErrorKind::NotFound => {},
 				Err(err) => return Err(IsoError::other(format!("spawn {binary}: {err}"))),
 			}
 		}
@@ -291,9 +291,8 @@ mod imp {
 	}
 
 	fn kernel_overlay_supported() -> bool {
-		let text = match fs::read_to_string("/proc/filesystems") {
-			Ok(text) => text,
-			Err(_) => return false,
+		let Ok(text) = fs::read_to_string("/proc/filesystems") else {
+			return false;
 		};
 		text
 			.lines()
@@ -328,9 +327,7 @@ mod imp {
 		if path.is_absolute() {
 			path.to_path_buf()
 		} else {
-			std::env::current_dir()
-				.map(|cwd| cwd.join(path))
-				.unwrap_or_else(|_| path.to_path_buf())
+			std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
 		}
 	}
 

@@ -82,6 +82,10 @@ impl BackendKind {
 
 	/// Parse the inverse of [`Self::as_str`]. Returns `None` for unknown
 	/// strings so callers can surface a precise error.
+	#[allow(
+		clippy::should_implement_trait,
+		reason = "Option<Self> return is more ergonomic than FromStr's Result"
+	)]
 	pub fn from_str(s: &str) -> Option<Self> {
 		Some(match s {
 			"apfs" => Self::Apfs,

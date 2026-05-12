@@ -236,8 +236,8 @@ fn into_iso_diff(diff: Diff) -> IsoDiff {
 
 #[allow(dead_code, reason = "compile-time check that the trait stays dyn-compatible")]
 fn _assert_backend_object_safe() {
-	fn _is_object_safe(_: &dyn IsolationBackend) {}
+	fn assert_object_safe(_: &dyn IsolationBackend) {}
 	let backend = pi_iso::default_backend();
-	_is_object_safe(backend);
+	assert_object_safe(backend);
 	let _: FileChange;
 }
