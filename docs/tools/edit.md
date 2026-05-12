@@ -8,7 +8,7 @@
 - Key collaborators:
   - `packages/coding-agent/src/utils/edit-mode.ts` — selects active edit mode
   - `packages/coding-agent/src/hashline/grammar.lark` — custom-tool grammar for hashline mode
-  - `packages/coding-agent/src/hashline/input.ts` — splits `@PATH` sections
+  - `packages/coding-agent/src/hashline/input.ts` — splits `@@ PATH` sections (legacy single-`@` headers are still accepted)
   - `packages/coding-agent/src/hashline/parser.ts` — parses ops and payload lines
   - `packages/coding-agent/src/hashline/apply.ts` — validates anchors and applies edits
   - `packages/coding-agent/src/hashline/anchors.ts` — stale-anchor mismatch formatting
@@ -26,11 +26,11 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `input` | `string` | Yes | One or more edit sections. First non-blank line must be `@PATH` unless the caller supplies the legacy fallback `path` outside the model schema and the body already looks like hashline ops (`packages/coding-agent/src/hashline/input.ts`). Optional `*** Begin Patch` / `*** End Patch` envelope is ignored if present. |
+| `input` | `string` | Yes | One or more edit sections. First non-blank line must be `@@ PATH` (legacy single-`@` is still accepted) unless the caller supplies the legacy fallback `path` outside the model schema and the body already looks like hashline ops (`packages/coding-agent/src/hashline/input.ts`). Optional `*** Begin Patch` / `*** End Patch` envelope is ignored if present. |
 
 Patch language inside `input`:
 
-- Section header: `@PATH`
+- Section header: `@@ PATH`
 - Insert after: `+ ANCHOR`
 - Insert before: `< ANCHOR`
 - Delete range: `- A..B`
@@ -102,24 +102,24 @@ Warnings:
 Hashline op examples:
 
 ```text
-@src/a.ts
+@@ src/a.ts
 + 4fb
 ~const added = true;
 ```
 
 ```text
-@src/a.ts
+@@ src/a.ts
 < 4fb
 ~const addedBefore = true;
 ```
 
 ```text
-@src/a.ts
+@@ src/a.ts
 - 4fb..6qx
 ```
 
 ```text
-@src/a.ts
+@@ src/a.ts
 = 4fb..5dm
 ~const clean = (name || DEF).trim();
 ~return clean.length === 0 ? DEF : clean.toUpperCase();
@@ -128,13 +128,13 @@ Hashline op examples:
 BOF/EOF examples:
 
 ```text
-@src/a.ts
+@@ src/a.ts
 + BOF
 ~const HEADER = true;
 ```
 
 ```text
-@src/a.ts
+@@ src/a.ts
 + EOF
 ~export const done = true;
 ```
@@ -166,7 +166,7 @@ BOF/EOF examples:
 
 ## Errors
 - Missing section header:
-  - `input must begin with "@PATH" on the first non-blank line; got: ... Example: "@src/foo.ts" then edit ops.`
+  - `input must begin with "@@ PATH" on the first non-blank line; got: ... Example: "@@ src/foo.ts" then edit ops.`
 - Empty header:
   - `Input header "@" is empty; provide a file path.`
 - Bad anchor token:
@@ -198,8 +198,8 @@ BOF/EOF examples:
 - Interior lines of a multi-line range use hash `**` (`RANGE_INTERIOR_HASH`) and are not individually verified; only the first and last anchor hashes are checked.
 - `computeLineHash()` trims trailing whitespace before hashing. Anchors survive line-ending changes and trailing-space-only changes, but not substantive line edits.
 - For punctuation-only lines, the hash mixes in the line number; identical `}` lines on different lines intentionally get different anchors.
-- `splitHashlineInputs()` normalizes absolute `@PATH` headers back to a cwd-relative path when the file is inside the current working tree.
-- Optional `*** Begin Patch` / `*** End Patch` markers are accepted in hashline mode, but the file sections are still `@PATH`-based, not Codex `*** Update File:` hunks.
+- `splitHashlineInputs()` normalizes absolute `@@ PATH` headers back to a cwd-relative path when the file is inside the current working tree. Headers with any run of leading `@` chars (e.g. `@ foo.ts`, `@@ foo.ts`, `@@@foo.ts`) are accepted to absorb unified-diff-style drift; the canonical form is `@@ PATH`.
+- Optional `*** Begin Patch` / `*** End Patch` markers are accepted in hashline mode, but the file sections are still `@@ PATH`-based, not Codex `*** Update File:` hunks.
 - `*** Abort` terminates parsing early and returns `ABORT_WARNING`; ops parsed before the marker still apply.
 - File-read cache invalidation is conflict-based, not write-through invalidation. If `read` later records content for a line that disagrees with the cached snapshot, the entire snapshot for that path is replaced with the newly observed lines (`packages/coding-agent/src/edit/file-read-cache.ts`).
 - There is no resolve-style apply/discard phase for hashline edits. The only preview path is the transient TUI diff preview in `packages/coding-agent/src/edit/streaming.ts`.

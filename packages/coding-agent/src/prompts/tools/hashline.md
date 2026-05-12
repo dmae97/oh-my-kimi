@@ -1,13 +1,13 @@
 Your patch language is a compact, line-anchored edit format.
 
-A patch contains one or more file sections. The first non-blank line of every edit section **MUST** be `@PATH`.
+A patch contains one or more file sections. The first non-blank line of every edit section **MUST** be `@@ PATH`.
 Operations reference lines in the file by their line number and hash, called "Anchors", e.g. `5th`, `123ab`.
 You **MUST** copy them verbatim from the latest output for the file you're editing.
 
 Purely textual format. The tool has NO awareness of language, indentation, brackets, fences, or table widths. Emit valid syntax in replacements/insertions.
 
 <ops>
-@PATH            header: subsequent ops apply to PATH
+@@ PATH          header: subsequent ops apply to PATH
 + ANCHOR         insert lines AFTER  the anchored line (or EOF); payload follows as `{{hsep}}TEXT` lines
 < ANCHOR         insert lines BEFORE the anchored line (or BOF); payload follows as `{{hsep}}TEXT` lines
 - A..B           delete the line range (inclusive).
@@ -64,18 +64,18 @@ When your edit involves brace boundaries (`{` / `}`), prefer these shapes:
 
 <examples>
 # Replace one line (preserve the leading tab from the original)
-@a.ts
+@@ a.ts
 = {{hrefr 5}}..{{hrefr 5}}
 {{hsep}}	return clean.trim().toUpperCase();
 
 # Replace a contiguous range with multiple lines
-@a.ts
+@@ a.ts
 = {{hrefr 4}}..{{hrefr 5}}
 {{hsep}}	const clean = (name || DEF).trim();
 {{hsep}}	return clean.length === 0 ? DEF : clean.toUpperCase();
 
 # Replace a full multiline destructuring/call statement
-@b.ts
+@@ b.ts
 = {{hrefr 1}}..{{hrefr 8}}
 {{hsep}}const {
 {{hsep}}	events,
@@ -88,32 +88,32 @@ When your edit involves brace boundaries (`{` / `}`), prefer these shapes:
 {{hsep}});
 
 # Insert BEFORE a line
-@a.ts
+@@ a.ts
 < {{hrefr 5}}
 {{hsep}}	const debug = false;
 
 # Insert AFTER a line
-@a.ts
+@@ a.ts
 + {{hrefr 4}}
 {{hsep}}	if (clean.length === 0) return DEF;
 
 # Append to end of file
-@a.ts
+@@ a.ts
 + EOF
 {{hsep}}export const done = true;
 
 # Delete a single line
-@a.ts
+@@ a.ts
 - {{hrefr 2}}..{{hrefr 2}}
 
 # Blank a line in place (no payload required)
-@a.ts
+@@ a.ts
 = {{hrefr 2}}..{{hrefr 2}}
 </examples>
 
 <anti-pattern>
 # WRONG — replaces 5 lines just to add one. Use `+` at the boundary instead.
-@a.ts
+@@ a.ts
 = {{hrefr 1}}..{{hrefr 5}}
 {{hsep}}const DEF = "guest";
 {{hsep}}const DEBUG = false;
@@ -123,12 +123,12 @@ When your edit involves brace boundaries (`{` / `}`), prefer these shapes:
 {{hsep}}	return clean.trim();
 
 # RIGHT — same effect, one-line insert
-@a.ts
+@@ a.ts
 + {{hrefr 1}}
 {{hsep}}const DEBUG = false;
 
 # WRONG — continuation-fragment payload from the middle of a larger statement.
-@b.ts
+@@ b.ts
 = {{hrefr 5}}..{{hrefr 7}}
 {{hsep}}} = await getStreamResponse(
 {{hsep}}	request,
@@ -136,7 +136,7 @@ When your edit involves brace boundaries (`{` / `}`), prefer these shapes:
 {{hsep}}	onEvent,
 
 # RIGHT — widen to the full statement so the payload starts at a self-contained boundary.
-@b.ts
+@@ b.ts
 = {{hrefr 1}}..{{hrefr 8}}
 {{hsep}}const {
 {{hsep}}	events,
@@ -154,7 +154,7 @@ If your replacement payload would render with even one unchanged line in the dif
 <critical>
 - Always copy anchors exactly from tool output, but **NEVER** include line content after the `{{hsep}}` separator in the op line.
 - Every inserted/replacement content line **MUST** start with `{{hsep}}`; raw content lines are invalid.
-- Do not write unified diff syntax (`@@`, `-OLD`, `+NEW`).
+- Do not write unified diff syntax (`@@ -X,Y +X,Y @@`, `-OLD`, `+NEW`). The header is `@@ PATH`; line ops are `<`/`+`/`-`/`=`.
 - `= A..B` deletes the range; payload is what's written. If a payload edge line already exists immediately outside `A..B`, widen the range to cover it — otherwise it duplicates.
 - Multiple ops in one patch are cheap. Prefer two narrow ops over one wide `=`.
   - Before choosing a `= A..B` range, mentally delete lines A through B. If that would split an unclosed bracket, paren, brace, or string/template from a line above A, or orphan a closing delimiter that belongs to an opener inside the range, you are bisecting a syntactic construct. Widen the range to a self-contained boundary, or use `+`/`-` instead.

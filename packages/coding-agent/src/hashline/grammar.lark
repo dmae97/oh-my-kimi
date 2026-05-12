@@ -3,7 +3,7 @@ begin_patch: "*** Begin Patch" LF
 end_patch: "*** End Patch" LF?
 
 hunk: update_hunk
-update_hunk: "@" filename LF line_op*
+update_hunk: "@@ " filename LF line_op*
 
 filename: /(.+)/
 

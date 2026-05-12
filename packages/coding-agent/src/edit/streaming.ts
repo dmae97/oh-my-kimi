@@ -287,7 +287,7 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 			sections = splitHashlineInputs(args.input, { cwd: ctx.cwd, path: args.path });
 		} catch {
 			// Single-section fallback keeps the original error rendering for the
-			// "haven't typed `@PATH` yet" case.
+			// "haven't typed `@@ PATH` yet" case.
 			const result = await computeHashlineDiff({ input: args.input, path: args.path }, ctx.cwd, {
 				autoDropPureInsertDuplicates: ctx.hashlineAutoDropPureInsertDuplicates,
 			});

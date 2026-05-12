@@ -391,6 +391,14 @@ describe("splitHashlineInput — @ headers", () => {
 			{ path: "b.ts", diff: `+ EOF\n${pl("b")}` },
 		]);
 	});
+
+	it("tolerates extra '@' chars on the section header", () => {
+		const input = ["@@ a.ts", "+ BOF", pl("a"), "@@@b.ts", "+ EOF", pl("b")].join("\n");
+		expect(splitHashlineInputs(input)).toEqual([
+			{ path: "a.ts", diff: `+ BOF\n${pl("a")}` },
+			{ path: "b.ts", diff: `+ EOF\n${pl("b")}` },
+		]);
+	});
 });
 
 describe("hashline executor", () => {

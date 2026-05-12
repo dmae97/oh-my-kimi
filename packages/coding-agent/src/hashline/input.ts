@@ -27,11 +27,17 @@ function normalizeHashlinePath(rawPath: string, cwd?: string): string {
 
 function parseHashlineHeaderLine(line: string, cwd?: string): HashlineInputSection | null {
 	const trimmed = line.trimEnd();
-	if (trimmed === FILE_HEADER_PREFIX) {
+	if (!trimmed.startsWith(FILE_HEADER_PREFIX)) return null;
+	// Some models occasionally emit unified-diff-style "@@ path" (or even longer
+	// runs of "@"). Strip every leading "@" before resolving the path so those
+	// stray headers still route to the right file.
+	let prefixEnd = 0;
+	while (prefixEnd < trimmed.length && trimmed[prefixEnd] === FILE_HEADER_PREFIX) prefixEnd++;
+	const rest = trimmed.slice(prefixEnd);
+	if (rest.trim().length === 0) {
 		throw new Error(`Input header "${FILE_HEADER_PREFIX}" is empty; provide a file path.`);
 	}
-	if (!trimmed.startsWith(FILE_HEADER_PREFIX)) return null;
-	const parsedPath = normalizeHashlinePath(trimmed.slice(1), cwd);
+	const parsedPath = normalizeHashlinePath(rest, cwd);
 	if (parsedPath.length === 0) {
 		throw new Error(`Input header "${FILE_HEADER_PREFIX}" is empty; provide a file path.`);
 	}
@@ -91,8 +97,8 @@ export function splitHashlineInputs(input: string, options: SplitHashlineOptions
 	if (parseHashlineHeaderLine(firstLine, options.cwd) === null) {
 		const preview = JSON.stringify(firstLine.slice(0, 120));
 		throw new Error(
-			`input must begin with "@PATH" on the first non-blank line; got: ${preview}. ` +
-				`Example: "@src/foo.ts" then edit ops.`,
+			`input must begin with "@@ PATH" on the first non-blank line; got: ${preview}. ` +
+				`Example: "@@ src/foo.ts" then edit ops.`,
 		);
 	}
 
