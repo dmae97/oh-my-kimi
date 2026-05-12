@@ -98,6 +98,11 @@ fn score_fuzzy_path(
 		return if is_directory { 11 } else { 1 };
 	}
 
+	// Match against the full relative path only when the user typed a path-style
+	// query (contains '/'). Plain queries should match by basename only, otherwise
+	// '@plan' surfaces every file whose ancestor directories contain 'plan'.
+	let query_has_slash = query_lower.contains('/');
+
 	let file_name = Path::new(path)
 		.file_name()
 		.and_then(|name| name.to_str())
@@ -110,6 +115,14 @@ fn score_fuzzy_path(
 		100
 	} else if lower_file_name.contains(query_lower) {
 		80
+	} else if !query_has_slash {
+		let normalized_file_name = normalize_fuzzy_text(file_name);
+		let file_name_fuzzy = fuzzy_subsequence_score(query_chars, &normalized_file_name);
+		if file_name_fuzzy > 0 {
+			50 + file_name_fuzzy
+		} else {
+			0
+		}
 	} else {
 		let lower_path = path.to_lowercase();
 		if lower_path.contains(query_lower) {
@@ -198,6 +211,7 @@ fn fuzzy_find_sync(config: FuzzyFindConfig, ct: task::CancelToken) -> Result<Fuz
 		include_hidden,
 		use_gitignore: respect_gitignore,
 		skip_node_modules: true,
+		follow_links: true,
 		detail: fs_cache::ScanDetail::Minimal,
 	};
 	let mut scored = if use_cache {

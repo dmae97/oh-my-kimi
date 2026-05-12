@@ -115,7 +115,7 @@ describe("executeJs", () => {
 			[
 				"const uuid = crypto.randomUUID();",
 				"const digest = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode('ok'));",
-				"const base = process.cwd();",
+				"const base = __omp_session__.cwd;",
 				"fs.mkdirSync(base + '/nested', { recursive: true });",
 				"fs.writeFileSync(base + '/nested/value.txt', 'hello');",
 				"await fs.promises.copyFile(base + '/nested/value.txt', base + '/nested/copy.txt');",

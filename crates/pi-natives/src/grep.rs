@@ -1347,7 +1347,7 @@ fn run_streaming_grep(
 	ct: &task::CancelToken,
 ) -> Result<Vec<FileSearchResult>> {
 	let mut builder =
-		fs_cache::build_walker(search_path, include_hidden, use_gitignore, skip_node_modules);
+		fs_cache::build_walker(search_path, include_hidden, use_gitignore, skip_node_modules, false);
 	let workers = fs_cache::grep_workers();
 	if workers > 0 {
 		builder.threads(workers);
@@ -1709,6 +1709,7 @@ fn grep_sync(
 		include_hidden,
 		use_gitignore,
 		skip_node_modules: !mentions_node_modules,
+		follow_links: false,
 		detail: fs_cache::ScanDetail::Minimal,
 	};
 	let entries = if use_cache {

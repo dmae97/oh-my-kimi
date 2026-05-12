@@ -173,6 +173,7 @@ fn run_glob(
 		include_hidden: config.include_hidden,
 		use_gitignore: config.use_gitignore,
 		skip_node_modules,
+		follow_links: false,
 		detail: if config.sort_by_mtime {
 			fs_cache::ScanDetail::Full
 		} else {

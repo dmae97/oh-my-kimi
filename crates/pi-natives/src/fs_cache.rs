@@ -113,6 +113,7 @@ pub struct ScanOptions {
 	pub include_hidden:    bool,
 	pub use_gitignore:     bool,
 	pub skip_node_modules: bool,
+	pub follow_links:      bool,
 	pub detail:            ScanDetail,
 }
 
@@ -241,16 +242,18 @@ pub fn classify_file_type(path: &Path) -> Option<(FileType, Option<f64>, Option<
 ///
 /// When `skip_node_modules` is true, `node_modules` directories are pruned at
 /// traversal time (not just filtered post-scan). `.git` is always skipped.
+#[allow(clippy::fn_params_excessive_bools, reason = "matches WalkBuilder option fields")]
 pub fn build_walker(
 	root: &Path,
 	include_hidden: bool,
 	use_gitignore: bool,
 	skip_node_modules: bool,
+	follow_links: bool,
 ) -> WalkBuilder {
 	let mut builder = WalkBuilder::new(root);
 	builder
 		.hidden(!include_hidden)
-		.follow_links(false)
+		.follow_links(follow_links)
 		.sort_by_file_path(|a, b| a.cmp(b))
 		// filter_entry controls whether to yield an entry AND whether to descend
 		// into a directory. Returning false for a directory skips the entire subtree.
@@ -362,8 +365,13 @@ fn collect_entries(
 	options: ScanOptions,
 	ct: &task::CancelToken,
 ) -> Result<Vec<GlobMatch>> {
-	let mut builder =
-		build_walker(root, options.include_hidden, options.use_gitignore, options.skip_node_modules);
+	let mut builder = build_walker(
+		root,
+		options.include_hidden,
+		options.use_gitignore,
+		options.skip_node_modules,
+		options.follow_links,
+	);
 	let workers = grep_workers();
 	if workers > 0 {
 		builder.threads(workers);
@@ -633,7 +641,7 @@ mod tests {
 		fs::write(root.path().join("real.txt"), "ok").unwrap();
 
 		// skip_node_modules: true -> should only see real.txt
-		let walker = super::build_walker(root.path(), true, false, true);
+		let walker = super::build_walker(root.path(), true, false, true, false);
 		let paths: Vec<String> = walker
 			.build()
 			.filter_map(|e| e.ok())
@@ -655,7 +663,7 @@ mod tests {
 		assert!(paths.iter().any(|p| p == "real.txt"), "expected real.txt, got: {paths:?}");
 
 		// skip_node_modules: false -> should see node_modules but not .git
-		let walker = super::build_walker(root.path(), true, false, false);
+		let walker = super::build_walker(root.path(), true, false, false, false);
 		let paths: Vec<String> = walker
 			.build()
 			.filter_map(|e| e.ok())
@@ -692,6 +700,7 @@ mod tests {
 				include_hidden:    true,
 				use_gitignore:     false,
 				skip_node_modules: true,
+				follow_links:      false,
 				detail:            super::ScanDetail::Full,
 			},
 			&ct,
@@ -718,6 +727,7 @@ mod tests {
 				include_hidden:    true,
 				use_gitignore:     false,
 				skip_node_modules: true,
+				follow_links:      false,
 				detail:            super::ScanDetail::Minimal,
 			},
 			&ct,
@@ -752,6 +762,7 @@ mod tests {
 				include_hidden:    true,
 				use_gitignore:     false,
 				skip_node_modules: true,
+				follow_links:      false,
 				detail:            super::ScanDetail::Full,
 			},
 			false,
@@ -768,6 +779,7 @@ mod tests {
 				include_hidden:    true,
 				use_gitignore:     false,
 				skip_node_modules: false,
+				follow_links:      false,
 				detail:            super::ScanDetail::Full,
 			},
 			false,
@@ -789,6 +801,7 @@ mod tests {
 				include_hidden:    true,
 				use_gitignore:     false,
 				skip_node_modules: true,
+				follow_links:      false,
 				detail:            super::ScanDetail::Minimal,
 			},
 			&ct,
@@ -807,6 +820,7 @@ mod tests {
 				include_hidden:    true,
 				use_gitignore:     false,
 				skip_node_modules: true,
+				follow_links:      false,
 				detail:            super::ScanDetail::Full,
 			},
 			&ct,
