@@ -143,6 +143,7 @@ function renderDescription(
 	asyncEnabled: boolean,
 	disabledAgents: string[],
 	simpleMode: TaskSimpleMode,
+	ircEnabled: boolean,
 ): string {
 	const filteredAgents = disabledAgents.length > 0 ? agents.filter(a => !disabledAgents.includes(a.name)) : agents;
 	const { contextEnabled, customSchemaEnabled } = getTaskSimpleModeCapabilities(simpleMode);
@@ -153,6 +154,7 @@ function renderDescription(
 		asyncEnabled,
 		contextEnabled,
 		customSchemaEnabled,
+		ircEnabled,
 		defaultMode: simpleMode === "default",
 		schemaFreeMode: simpleMode === "schema-free",
 		independentMode: simpleMode === "independent",
@@ -231,6 +233,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 			this.session.settings.get("async.enabled"),
 			disabledAgents,
 			this.#getTaskSimpleMode(),
+			this.session.settings.get("irc.enabled") === true,
 		);
 	}
 	private constructor(
