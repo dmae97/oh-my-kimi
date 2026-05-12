@@ -1,9 +1,33 @@
 import { LRUCache } from "lru-cache/raw";
-import { marked, type Token, type Tokens } from "marked";
+import { Marked, marked, type Token, Tokenizer, type Tokens } from "marked";
 import type { SymbolTheme } from "../symbols";
 import { TERMINAL } from "../terminal-capabilities";
 import type { Component } from "../tui";
 import { applyBackgroundToLine, padding, replaceTabs, visibleWidth, wrapTextWithAnsi } from "../utils";
+
+const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
+
+class StrictStrikethroughTokenizer extends Tokenizer {
+	override del(src: string): Tokens.Del | undefined {
+		const match = STRICT_STRIKETHROUGH_REGEX.exec(src);
+		if (!match) {
+			return undefined;
+		}
+
+		const text = match[2];
+		return {
+			type: "del",
+			raw: match[0],
+			text,
+			tokens: this.lexer.inlineTokens(text),
+		};
+	}
+}
+
+const markdownParser = new Marked();
+markdownParser.setOptions({
+	tokenizer: new StrictStrikethroughTokenizer(),
+});
 
 // ---------------------------------------------------------------------------
 // Module-level LRU render cache
@@ -183,7 +207,7 @@ export class Markdown implements Component {
 		}
 
 		// Parse markdown to HTML-like tokens
-		const tokens = marked.lexer(normalizedText);
+		const tokens = markdownParser.lexer(normalizedText);
 
 		// Convert tokens to styled terminal output
 		const renderedLines: string[] = [];
