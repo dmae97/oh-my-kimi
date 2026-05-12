@@ -180,6 +180,14 @@ function isCompleteApcSequence(data: string): "complete" | "incomplete" {
 /**
  * Split accumulated buffer into complete sequences
  */
+function parseUnmodifiedKittyPrintableCodepoint(sequence: string): number | undefined {
+	const match = sequence.match(/^\x1b\[(\d+)(?::\d*)?(?::\d+)?u$/);
+	if (!match) return undefined;
+
+	const codepoint = parseInt(match[1]!, 10);
+	return codepoint >= 32 ? codepoint : undefined;
+}
+
 function extractCompleteSequences(buffer: string): { sequences: string[]; remainder: string } {
 	const sequences: string[] = [];
 	let pos = 0;
@@ -245,6 +253,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	readonly #timeoutMs: number;
 	#pasteMode: boolean = false;
 	#pasteBuffer: string = "";
+	#pendingKittyPrintableCodepoint: number | undefined;
 
 	constructor(options: StdinBufferOptions = {}) {
 		super();
@@ -273,7 +282,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		}
 
 		if (str.length === 0 && this.#buffer.length === 0) {
-			this.emit("data", "");
+			this.#emitDataSequence("");
 			return;
 		}
 
@@ -290,6 +299,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 
 				this.#pasteMode = false;
 				this.#pasteBuffer = "";
+				this.#pendingKittyPrintableCodepoint = undefined;
 
 				this.emit("paste", pastedContent);
 
@@ -306,10 +316,11 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 				const beforePaste = this.#buffer.slice(0, startIndex);
 				const result = extractCompleteSequences(beforePaste);
 				for (const sequence of result.sequences) {
-					this.emit("data", sequence);
+					this.#emitDataSequence(sequence);
 				}
 			}
 
+			this.#pendingKittyPrintableCodepoint = undefined;
 			this.#buffer = this.#buffer.slice(startIndex + BRACKETED_PASTE_START.length);
 			this.#pasteMode = true;
 			this.#pasteBuffer = this.#buffer;
@@ -322,6 +333,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 
 				this.#pasteMode = false;
 				this.#pasteBuffer = "";
+				this.#pendingKittyPrintableCodepoint = undefined;
 
 				this.emit("paste", pastedContent);
 
@@ -336,7 +348,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		this.#buffer = result.remainder;
 
 		for (const sequence of result.sequences) {
-			this.emit("data", sequence);
+			this.#emitDataSequence(sequence);
 		}
 
 		if (this.#buffer.length > 0) {
@@ -344,10 +356,21 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 				const flushed = this.flush();
 
 				for (const sequence of flushed) {
-					this.emit("data", sequence);
+					this.#emitDataSequence(sequence);
 				}
 			}, this.#timeoutMs);
 		}
+	}
+
+	#emitDataSequence(sequence: string): void {
+		const rawCodepoint = sequence.length === 1 ? sequence.codePointAt(0) : undefined;
+		if (rawCodepoint !== undefined && rawCodepoint === this.#pendingKittyPrintableCodepoint) {
+			this.#pendingKittyPrintableCodepoint = undefined;
+			return;
+		}
+
+		this.#pendingKittyPrintableCodepoint = parseUnmodifiedKittyPrintableCodepoint(sequence);
+		this.emit("data", sequence);
 	}
 
 	flush(): string[] {
@@ -362,6 +385,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 
 		const sequences = [this.#buffer];
 		this.#buffer = "";
+		this.#pendingKittyPrintableCodepoint = undefined;
 		return sequences;
 	}
 
@@ -373,6 +397,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		this.#buffer = "";
 		this.#pasteMode = false;
 		this.#pasteBuffer = "";
+		this.#pendingKittyPrintableCodepoint = undefined;
 	}
 
 	getBuffer(): string {

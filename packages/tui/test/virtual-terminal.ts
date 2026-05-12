@@ -108,6 +108,11 @@ export class VirtualTerminal implements Terminal {
 		this.xterm.write(`\x1b]0;${title}\x07`);
 	}
 
+	setProgress(active: boolean): void {
+		// OSC 9;4 progress sequence; no-op in tests beyond writing through to xterm.
+		this.xterm.write(active ? "\x1b]9;4;3\x07" : "\x1b]9;4;0;\x07");
+	}
+
 	// Test-specific methods not in Terminal interface
 
 	/**

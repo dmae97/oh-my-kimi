@@ -1,7 +1,23 @@
 # Changelog
 
 ## [Unreleased]
+### Added
 
+- Allowed `SlashCommand.getArgumentCompletions` to return asynchronous results by accepting Promise-based completions
+- Added `argumentHint` support to slash command definitions and displayed it in command suggestion descriptions
+- Added support for xterm `modifyOtherKeys` printable key sequences by decoding `CSI 27;mod;key~` into text input
+
+### Changed
+
+- Changed slash-command autocomplete list rendering to combine command hint and description in a single displayed suggestion text
+- Changed render scheduling to throttle `requestRender` calls to roughly 60fps by batching updates
+- Changed terminal input handling to process complete cell-size responses without buffering partial input
+- Changed `KeyId` to accept super-modifier combinations and improve typed key-id validation
+
+### Fixed
+
+- Normalized line output during rendering to correct Thai/Lao AM glyph composition for displayed text
+- Fixed duplicated Kitty key input emissions by dropping the matching unmodified follow-up sequence after a Kitty CSI-u printable-key event
 
 ## [14.9.5] - 2026-05-12
 ### Fixed

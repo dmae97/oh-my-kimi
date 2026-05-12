@@ -156,12 +156,15 @@ export interface AutocompleteItem {
 	hint?: string;
 }
 
+type Awaitable<T> = T | Promise<T>;
+
 export interface SlashCommand {
 	name: string;
 	description?: string;
+	argumentHint?: string;
 	// Function to get argument completions for this command
 	// Returns null if no argument completion is available
-	getArgumentCompletions?(argumentPrefix: string): AutocompleteItem[] | null;
+	getArgumentCompletions?(argumentPrefix: string): Awaitable<AutocompleteItem[] | null>;
 	/** Return inline hint text for the current argument state (shown as dim ghost text after cursor) */
 	getInlineHint?(argumentText: string): string | null;
 }
@@ -268,11 +271,14 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 						// Score name matches higher than description matches
 						const nameScore = fuzzyMatch(lowerPrefix, lowerName) ? fuzzyScore(lowerPrefix, lowerName) : 0;
 						const descScore = fuzzyMatch(lowerPrefix, lowerDesc) ? fuzzyScore(lowerPrefix, lowerDesc) * 0.5 : 0;
+						const hint = "argumentHint" in cmd && cmd.argumentHint ? cmd.argumentHint : undefined;
+						const desc = cmd.description ?? "";
+						const fullDesc = hint ? (desc ? `${hint} — ${desc}` : hint) : desc;
 						return {
 							value: name,
 							label: "name" in cmd ? cmd.name : cmd.label,
 							score: Math.max(nameScore, descScore),
-							...(cmd.description && { description: cmd.description }),
+							...(fullDesc && { description: fullDesc }),
 						};
 					})
 					.sort((a, b) => b.score - a.score)
@@ -297,8 +303,8 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 					return null; // No argument completion for this command
 				}
 
-				const argumentSuggestions = command.getArgumentCompletions(argumentText);
-				if (!argumentSuggestions || argumentSuggestions.length === 0) {
+				const argumentSuggestions = await command.getArgumentCompletions(argumentText);
+				if (!Array.isArray(argumentSuggestions) || argumentSuggestions.length === 0) {
 					return null;
 				}
 
@@ -802,11 +808,14 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				const lowerDesc = cmd.description?.toLowerCase() ?? "";
 				const nameScore = fuzzyMatch(lowerPrefix, lowerName) ? fuzzyScore(lowerPrefix, lowerName) : 0;
 				const descScore = fuzzyMatch(lowerPrefix, lowerDesc) ? fuzzyScore(lowerPrefix, lowerDesc) * 0.5 : 0;
+				const hint = "argumentHint" in cmd && cmd.argumentHint ? cmd.argumentHint : undefined;
+				const desc = cmd.description ?? "";
+				const fullDesc = hint ? (desc ? `${hint} — ${desc}` : hint) : desc;
 				return {
 					value: name,
 					label: "name" in cmd ? cmd.name : cmd.label,
 					score: Math.max(nameScore, descScore),
-					...(cmd.description && { description: cmd.description }),
+					...(fullDesc && { description: fullDesc }),
 				} as AutocompleteItem & { score: number };
 			})
 			.sort((a, b) => b.score - a.score)

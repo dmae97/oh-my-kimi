@@ -3,11 +3,20 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { performance } from "node:perf_hooks";
 import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import { isKeyRelease, matchesKey } from "./keys";
 import type { Terminal } from "./terminal";
 import { ImageProtocol, setCellDimensions, setTerminalImageProtocol, TERMINAL } from "./terminal-capabilities";
-import { Ellipsis, extractSegments, sliceByColumn, sliceWithWidth, truncateToWidth, visibleWidth } from "./utils";
+import {
+	Ellipsis,
+	extractSegments,
+	normalizeTerminalOutput,
+	sliceByColumn,
+	sliceWithWidth,
+	truncateToWidth,
+	visibleWidth,
+} from "./utils";
 
 const SEGMENT_RESET = "\x1b[0m";
 
@@ -218,11 +227,12 @@ export class TUI extends Container {
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	onDebug?: () => void;
 	#renderRequested = false;
+	#renderTimer: NodeJS.Timeout | undefined;
+	#lastRenderAt = 0;
+	static readonly #MIN_RENDER_INTERVAL_MS = 16;
 	#cursorRow = 0; // Logical cursor row (end of rendered content)
 	#hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
 	#viewportTopRow = 0; // Content row currently mapped to screen row 0
-	#inputBuffer = ""; // Buffer for parsing terminal responses
-	#cellSizeQueryPending = false;
 	#sixelProbePendingDa = false;
 	#sixelProbePendingGraphics = false;
 	#sixelProbeBuffer = "";
@@ -540,13 +550,16 @@ export class TUI extends Container {
 		}
 		// Query terminal for cell size in pixels: CSI 16 t
 		// Response format: CSI 6 ; height ; width t
-		this.#cellSizeQueryPending = true;
 		this.terminal.write("\x1b[16t");
 	}
 
 	stop(): void {
 		this.#clearSixelProbeState();
 		this.#stopped = true;
+		if (this.#renderTimer) {
+			clearTimeout(this.#renderTimer);
+			this.#renderTimer = undefined;
+		}
 		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
 		if (this.#previousLines.length > 0) {
 			const targetRow = this.#previousLines.length; // Line after the last content
@@ -572,13 +585,44 @@ export class TUI extends Container {
 			this.#hardwareCursorRow = 0;
 			this.#viewportTopRow = 0;
 			this.#maxLinesRendered = 0;
+			if (this.#renderTimer) {
+				clearTimeout(this.#renderTimer);
+				this.#renderTimer = undefined;
+			}
+			this.#renderRequested = true;
+			process.nextTick(() => {
+				if (this.#stopped || !this.#renderRequested) {
+					return;
+				}
+				this.#renderRequested = false;
+				this.#lastRenderAt = performance.now();
+				this.#doRender();
+			});
+			return;
 		}
 		if (this.#renderRequested) return;
 		this.#renderRequested = true;
-		process.nextTick(() => {
+		process.nextTick(() => this.#scheduleRender());
+	}
+
+	#scheduleRender(): void {
+		if (this.#stopped || this.#renderTimer || !this.#renderRequested) {
+			return;
+		}
+		const elapsed = performance.now() - this.#lastRenderAt;
+		const delay = Math.max(0, TUI.#MIN_RENDER_INTERVAL_MS - elapsed);
+		this.#renderTimer = setTimeout(() => {
+			this.#renderTimer = undefined;
+			if (this.#stopped || !this.#renderRequested) {
+				return;
+			}
 			this.#renderRequested = false;
+			this.#lastRenderAt = performance.now();
 			this.#doRender();
-		});
+			if (this.#renderRequested) {
+				this.#scheduleRender();
+			}
+		}, delay);
 	}
 
 	#handleInput(data: string): void {
@@ -599,12 +643,9 @@ export class TUI extends Container {
 			data = current;
 		}
 
-		// If we're waiting for cell size response, buffer input and parse
-		if (this.#cellSizeQueryPending) {
-			this.#inputBuffer += data;
-			const filtered = this.#parseCellSizeResponse();
-			if (filtered.length === 0) return;
-			data = filtered;
+		// Consume terminal cell size responses without blocking unrelated input.
+		if (this.#consumeCellSizeResponse(data)) {
+			return;
 		}
 
 		// Global debug key handler (Shift+Ctrl+D)
@@ -639,46 +680,24 @@ export class TUI extends Container {
 		}
 	}
 
-	#parseCellSizeResponse(): string {
+	#consumeCellSizeResponse(data: string): boolean {
 		// Response format: ESC [ 6 ; height ; width t
-		// Match the response pattern
-		const responsePattern = /\x1b\[6;(\d+);(\d+)t/;
-		const match = this.#inputBuffer.match(responsePattern);
-
-		if (match) {
-			const heightPx = parseInt(match[1], 10);
-			const widthPx = parseInt(match[2], 10);
-
-			if (heightPx > 0 && widthPx > 0) {
-				setCellDimensions({ widthPx, heightPx });
-				// Invalidate all components so images re-render with correct dimensions
-				this.invalidate();
-				this.requestRender();
-			}
-
-			// Remove the response from buffer
-			this.#inputBuffer = this.#inputBuffer.replace(responsePattern, "");
-			this.#cellSizeQueryPending = false;
+		const match = data.match(/^\x1b\[6;(\d+);(\d+)t$/);
+		if (!match) {
+			return false;
 		}
 
-		// Check if we have a partial cell size response starting (wait for more data)
-		// Patterns that could be incomplete cell size response: \x1b, \x1b[, \x1b[6, \x1b[6;...(no t yet)
-		const partialCellSizePattern = /\x1b(\[6?;?[\d;]*)?$/;
-		if (partialCellSizePattern.test(this.#inputBuffer)) {
-			// Check if it's actually a complete different escape sequence (ends with a letter)
-			// Cell size response ends with 't', Kitty keyboard ends with 'u', arrows end with A-D, etc.
-			const lastChar = this.#inputBuffer[this.#inputBuffer.length - 1];
-			if (!/[a-zA-Z~]/.test(lastChar)) {
-				// Doesn't end with a terminator, might be incomplete - wait for more
-				return "";
-			}
+		const heightPx = parseInt(match[1], 10);
+		const widthPx = parseInt(match[2], 10);
+		if (heightPx <= 0 || widthPx <= 0) {
+			return true;
 		}
 
-		// No cell size response found, return buffered data as user input
-		const result = this.#inputBuffer;
-		this.#inputBuffer = "";
-		this.#cellSizeQueryPending = false; // Give up waiting
-		return result;
+		setCellDimensions({ widthPx, heightPx });
+		// Invalidate all components so images re-render with correct dimensions.
+		this.invalidate();
+		this.requestRender();
+		return true;
 	}
 
 	/**
@@ -1016,7 +1035,7 @@ export class TUI extends Container {
 			for (let i = 0; i < newLines.length; i++) {
 				if (i > 0) buffer += "\r\n";
 				const line = newLines[i];
-				buffer += TERMINAL.isImageLine(line) ? line : line + reset;
+				buffer += TERMINAL.isImageLine(line) ? line : normalizeTerminalOutput(line) + reset;
 			}
 			this.#cursorRow = Math.max(0, newLines.length - 1);
 			const { seq, toRow } = this.#cursorControlSequence(cursorPos, newLines.length, this.#cursorRow);
@@ -1229,7 +1248,7 @@ export class TUI extends Container {
 				}
 				truncatedLine = truncateToWidth(line, width, Ellipsis.Omit);
 			}
-			buffer += isImage ? truncatedLine : truncatedLine + SEGMENT_RESET;
+			buffer += isImage ? truncatedLine : normalizeTerminalOutput(truncatedLine) + SEGMENT_RESET;
 		}
 
 		// Track where cursor ended up after rendering
