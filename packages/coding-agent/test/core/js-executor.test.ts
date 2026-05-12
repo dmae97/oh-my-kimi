@@ -110,6 +110,17 @@ describe("executeJs", () => {
 		}
 	});
 
+	it("ignores user-assigned final expression markers without a rewritten final expression", async () => {
+		const result = await executeJs("globalThis.__omp_final_expr__ = 'manual'; return 'actual';", {
+			sessionId,
+			session,
+			sessionFile,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("actual");
+	});
+
 	it("exposes the worker's real process object", async () => {
 		const result = await executeJs(
 			[

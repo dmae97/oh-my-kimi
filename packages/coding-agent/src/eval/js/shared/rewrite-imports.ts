@@ -216,14 +216,15 @@ export function stripTypeScript(code: string): string {
 const LOOKS_LIKE_TS =
 	/(?:\binterface\s+\w|\btype\s+\w+\s*=|\b(?:as|satisfies)\s+(?:[A-Z]|\bconst\b)|:\s*(?:string|number|boolean|any|unknown|void|never|object|[A-Z]\w*)\b|<\s*[A-Z]\w*\s*[,>])/;
 
-export function wrapCode(code: string): { source: string; asyncWrapped: boolean } {
+export function wrapCode(code: string): { source: string; asyncWrapped: boolean; finalExpressionReturned: boolean } {
 	const rewritten = returnFinalExpression(demoteTopLevelLexicals(rewriteStaticImports(stripTypeScript(code))));
 	const needsAsyncWrapper = /\bawait\b|\breturn\b/.test(rewritten.source);
 	if (!needsAsyncWrapper) {
-		return { source: rewritten.source, asyncWrapped: false };
+		return { source: rewritten.source, asyncWrapped: false, finalExpressionReturned: rewritten.returned };
 	}
 	return {
 		source: `(async () => {\n${rewritten.source}\n})()`,
 		asyncWrapped: true,
+		finalExpressionReturned: rewritten.returned,
 	};
 }
