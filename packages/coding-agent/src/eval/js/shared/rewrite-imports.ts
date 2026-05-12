@@ -29,6 +29,7 @@ type BabelExpressionStatement = {
 	type: "ExpressionStatement";
 	start: number;
 	end: number;
+	expression?: { type?: string };
 };
 
 type BabelProgramNode = BabelImportDeclaration | BabelLexicalDecl | BabelExpressionStatement | { type: string };
@@ -186,7 +187,10 @@ function returnFinalExpression(code: string): { source: string; returned: boolea
 	const suffix = code.slice(expression.end);
 	const semicolonMatch = statement.match(/;\s*$/);
 	const trimmedStatement = semicolonMatch ? statement.slice(0, semicolonMatch.index) : statement;
-	return { source: `${prefix}__omp_display__(${trimmedStatement});${suffix}`, returned: true };
+	const needsAwait =
+		expression.expression?.type === "AwaitExpression" || expression.expression?.type === "CallExpression";
+	const displayExpression = needsAwait ? `await (${trimmedStatement})` : trimmedStatement;
+	return { source: `${prefix}__omp_display__(${displayExpression});${suffix}`, returned: true };
 }
 
 /**
