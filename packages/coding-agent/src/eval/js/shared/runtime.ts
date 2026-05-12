@@ -86,7 +86,7 @@ export class JsRuntime {
 		const wrapped = wrapCode(code);
 		const value = indirectEval(wrapped.source, filename);
 		const awaited = await awaitMaybePromise(value);
-		if (Reflect.has(globalThis, "__omp_final_expr__")) {
+		if (Object.hasOwn(globalThis, "__omp_final_expr__")) {
 			const finalValue = (globalThis as { __omp_final_expr__?: unknown }).__omp_final_expr__;
 			Reflect.deleteProperty(globalThis, "__omp_final_expr__");
 			return await awaitMaybePromise(finalValue);

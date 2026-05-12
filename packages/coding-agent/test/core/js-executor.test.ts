@@ -94,6 +94,22 @@ describe("executeJs", () => {
 		expect(persisted.output.trim()).toBe("41");
 	});
 
+	it("ignores inherited final expression markers", async () => {
+		try {
+			await executeJs("Object.prototype.__omp_final_expr__ = 'poisoned';", { sessionId, session, sessionFile });
+
+			const result = await executeJs("const localOnly = 7;", { sessionId, session, sessionFile });
+			expect(result.exitCode).toBe(0);
+			expect(result.output.trim()).toBe("");
+
+			const persisted = await executeJs("return localOnly;", { sessionId, session, sessionFile });
+			expect(persisted.exitCode).toBe(0);
+			expect(persisted.output.trim()).toBe("7");
+		} finally {
+			await executeJs("delete Object.prototype.__omp_final_expr__;", { sessionId, session, sessionFile });
+		}
+	});
+
 	it("exposes the worker's real process object", async () => {
 		const result = await executeJs(
 			[
