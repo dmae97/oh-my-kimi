@@ -20,6 +20,9 @@ type ToolValue =
 			hasError?: boolean;
 	  };
 function toolResultHasError(result: AgentToolResult): boolean {
+	if ((result as { isError?: unknown }).isError === true) {
+		return true;
+	}
 	if (!(result.details && typeof result.details === "object")) {
 		return false;
 	}

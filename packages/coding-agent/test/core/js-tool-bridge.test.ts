@@ -109,6 +109,36 @@ describe("callSessionTool", () => {
 		]);
 	});
 
+	it("marks results with top-level isError", async () => {
+		const session = createSession([
+			createTool(
+				"custom",
+				async () =>
+					({
+						content: [{ type: "text", text: "preview mismatch" }],
+						isError: true,
+					}) as AgentToolResult,
+			),
+		]);
+		const statuses: Array<Record<string, unknown>> = [];
+
+		const result = await callSessionTool("custom", {}, { session, emitStatus: event => statuses.push(event) });
+
+		expect(result).toEqual({
+			text: "preview mismatch",
+			details: undefined,
+			hasError: true,
+		});
+		expect(statuses).toEqual([
+			expect.objectContaining({
+				op: "custom",
+				chars: 16,
+				hasError: true,
+				error: "preview mismatch",
+			}),
+		]);
+	});
+
 	it("throws when the requested tool is not available in the session registry", async () => {
 		const session = createSession([]);
 
