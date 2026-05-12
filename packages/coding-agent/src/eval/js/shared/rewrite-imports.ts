@@ -172,8 +172,35 @@ export function demoteTopLevelLexicals(code: string): string {
 	return result;
 }
 
+
+/**
+ * Strip TypeScript syntax (type annotations, `interface`, `as`, `satisfies`, generics in
+ * call expressions, etc.) before the import/lexical rewriters parse the code. We use Bun's
+ * native transpiler in `ts` loader mode — fast, no JSX transforms, preserves `import`/
+ * `export` declarations so the downstream Babel rewrites keep working.
+ *
+ * Skipped when the code parses as plain JavaScript already (Babel can accept it), so the
+ * common case avoids an extra transpile pass. We detect "looks like TS" with a cheap regex
+ * before invoking the transpiler.
+ */
+export function stripTypeScript(code: string): string {
+	if (!LOOKS_LIKE_TS.test(code)) return code;
+	try {
+		return new Bun.Transpiler({ loader: "ts" }).transformSync(code);
+	} catch {
+		// Transpiler failed (e.g. unrecoverable syntax). Hand the original source back so the
+		// downstream rewriter / VM surfaces the real error to the user.
+		return code;
+	}
+}
+
+// Heuristic: any of the obvious TS-only tokens. Plain JS using `as` only inside strings
+// won't match because we require a leading word boundary plus a colon/keyword neighbor.
+const LOOKS_LIKE_TS =
+	/(?:\binterface\s+\w|\btype\s+\w+\s*=|\b(?:as|satisfies)\s+(?:[A-Z]|\bconst\b)|:\s*(?:string|number|boolean|any|unknown|void|never|object|[A-Z]\w*)\b|<\s*[A-Z]\w*\s*[,>])/;
+
 export function wrapCode(code: string): { source: string; asyncWrapped: boolean } {
-	const rewritten = demoteTopLevelLexicals(rewriteStaticImports(code));
+	const rewritten = demoteTopLevelLexicals(rewriteStaticImports(stripTypeScript(code)));
 	const needsAsyncWrapper = /\bawait\b|\breturn\b/.test(rewritten);
 	if (!needsAsyncWrapper) {
 		return { source: rewritten, asyncWrapped: false };

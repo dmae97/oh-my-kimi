@@ -268,4 +268,18 @@ describe("executeJs", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe(path.join("a", "b"));
 	});
+
+	it("strips TypeScript syntax before executing user code", async () => {
+		const result = await executeJs(
+			[
+				"interface Pair { a: number; b: number }",
+				"const make = (a: number, b: number): Pair => ({ a, b });",
+				"const p = make(3, 4) as Pair;",
+				"return p.a + p.b;",
+			].join("\n"),
+			{ sessionId, session, sessionFile },
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("7");
+	});
 });
