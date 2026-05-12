@@ -179,6 +179,10 @@
       color: var(--accent);
     }
 
+    .tree-role-developer {
+      color: var(--dim);
+    }
+
     .tree-role-assistant {
       color: var(--success);
     }
@@ -314,6 +318,14 @@
       padding: var(--line-height);
       border-radius: 4px;
       position: relative;
+    }
+
+    .user-message.developer-message {
+      opacity: 0.7;
+    }
+
+    .user-message.developer-message .markdown-content {
+      color: var(--dim);
     }
 
     .assistant-message {
