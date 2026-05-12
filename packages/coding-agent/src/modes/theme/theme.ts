@@ -387,51 +387,51 @@ const NERD_SYMBOLS: SymbolMap = {
 	"nav.back": "\uf060",
 	// Tree Connectors (same as unicode)
 	// pick: ├─ | alt: ├╴ ├╌ ╠═ ┣━
-	"tree.branch": "\u251c\u2500",
+	"tree.branch": "├─",
 	// pick: └─ | alt: └╴ └╌ ╚═ ┗━
-	"tree.last": "\u2514\u2500",
+	"tree.last": "└─",
 	// pick: │ | alt: ┃ ║ ▏ ▕
-	"tree.vertical": "\u2502",
+	"tree.vertical": "│",
 	// pick: ─ | alt: ━ ═ ╌ ┄
-	"tree.horizontal": "\u2500",
+	"tree.horizontal": "─",
 	// pick: └ | alt: ╰ ⎿ ↳
-	"tree.hook": "\u2514",
+	"tree.hook": "└",
 	// Box Drawing - Rounded (same as unicode)
 	// pick: ╭ | alt: ┌ ┏ ╔
-	"boxRound.topLeft": "\u256d",
+	"boxRound.topLeft": "╭",
 	// pick: ╮ | alt: ┐ ┓ ╗
-	"boxRound.topRight": "\u256e",
+	"boxRound.topRight": "╮",
 	// pick: ╰ | alt: └ ┗ ╚
-	"boxRound.bottomLeft": "\u2570",
+	"boxRound.bottomLeft": "╰",
 	// pick: ╯ | alt: ┘ ┛ ╝
-	"boxRound.bottomRight": "\u256f",
+	"boxRound.bottomRight": "╯",
 	// pick: ─ | alt: ━ ═ ╌
-	"boxRound.horizontal": "\u2500",
+	"boxRound.horizontal": "─",
 	// pick: │ | alt: ┃ ║ ▏
-	"boxRound.vertical": "\u2502",
+	"boxRound.vertical": "│",
 	// Box Drawing - Sharp (same as unicode)
 	// pick: ┌ | alt: ┏ ╭ ╔
-	"boxSharp.topLeft": "\u250c",
+	"boxSharp.topLeft": "┌",
 	// pick: ┐ | alt: ┓ ╮ ╗
-	"boxSharp.topRight": "\u2510",
+	"boxSharp.topRight": "┐",
 	// pick: └ | alt: ┗ ╰ ╚
-	"boxSharp.bottomLeft": "\u2514",
+	"boxSharp.bottomLeft": "└",
 	// pick: ┘ | alt: ┛ ╯ ╝
-	"boxSharp.bottomRight": "\u2518",
+	"boxSharp.bottomRight": "┘",
 	// pick: ─ | alt: ━ ═ ╌
-	"boxSharp.horizontal": "\u2500",
+	"boxSharp.horizontal": "─",
 	// pick: │ | alt: ┃ ║ ▏
-	"boxSharp.vertical": "\u2502",
+	"boxSharp.vertical": "│",
 	// pick: ┼ | alt: ╋ ╬ ┿
-	"boxSharp.cross": "\u253c",
+	"boxSharp.cross": "┼",
 	// pick: ┬ | alt: ╦ ┯ ┳
-	"boxSharp.teeDown": "\u252c",
+	"boxSharp.teeDown": "┬",
 	// pick: ┴ | alt: ╩ ┷ ┻
-	"boxSharp.teeUp": "\u2534",
+	"boxSharp.teeUp": "┴",
 	// pick: ├ | alt: ╠ ┝ ┣
-	"boxSharp.teeRight": "\u251c",
+	"boxSharp.teeRight": "├",
 	// pick: ┤ | alt: ╣ ┥ ┫
-	"boxSharp.teeLeft": "\u2524",
+	"boxSharp.teeLeft": "┤",
 	// Separators - Nerd Font specific
 	// pick:  | alt:   
 	"sep.powerline": "\ue0b0",
@@ -446,7 +446,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	// pick:  | alt: 
 	"sep.powerlineThinRight": "\ue0b3",
 	// pick: █ | alt: ▓ ▒ ░ ▉ ▌
-	"sep.block": "\u2588",
+	"sep.block": "█",
 	// pick: space | alt: ␠ ·
 	"sep.space": " ",
 	// pick: > | alt: › » ▸
@@ -454,7 +454,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	// pick: < | alt: ‹ « ◂
 	"sep.asciiRight": "<",
 	// pick: · | alt: • ⋅
-	"sep.dot": " \u00b7 ",
+	"sep.dot": " · ",
 	// pick:  | alt: / ∕ ⁄
 	"sep.slash": "\ue0bb",
 	// pick:  | alt: │ ┃ |
@@ -545,16 +545,16 @@ const NERD_SYMBOLS: SymbolMap = {
 	// pick:  | alt:   •
 	"format.bullet": "\uf111",
 	// pick: – | alt: — ― -
-	"format.dash": "\u2013",
+	"format.dash": "–",
 	// pick: ⟨ | alt: [ ⟦
 	"format.bracketLeft": "⟨",
 	// pick: ⟩ | alt: ] ⟧
 	"format.bracketRight": "⟩",
 	// Markdown-specific
 	// pick: │ | alt: ┃ ║
-	"md.quoteBorder": "\u2502",
+	"md.quoteBorder": "│",
 	// pick: ─ | alt: ━ ═
-	"md.hrChar": "\u2500",
+	"md.hrChar": "─",
 	// pick:  | alt:  •
 	"md.bullet": "\uf111",
 	// Language icons (nerd font devicons)

@@ -147,17 +147,16 @@ export class UiHelpers {
 						if (message.customType === "irc:incoming") {
 							const peer = details?.from ?? "?";
 							body = details?.message ?? "";
-							arrow = `\u21e6 ${peer}`;
+							arrow = `⇦ ${peer}`;
 						} else if (message.customType === "irc:autoreply") {
 							const peer = details?.to ?? "?";
 							body = details?.reply ?? "";
-							arrow = `\u21e8 ${peer} (auto)`;
+							arrow = `⇨ ${peer}`;
 						} else {
 							const from = details?.from ?? "?";
 							const to = details?.to ?? "?";
 							body = details?.body ?? "";
-							const suffix = details?.kind === "reply" ? " (auto)" : "";
-							arrow = `${from} \u21e8 ${to}${suffix}`;
+							arrow = `${from} ⇨ ${to}`;
 						}
 						const components: Component[] = [];
 						const header = `${theme.fg("accent", `[IRC] ${arrow}`)}`;

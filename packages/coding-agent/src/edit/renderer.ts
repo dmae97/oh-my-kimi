@@ -274,7 +274,7 @@ function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: T
 	const parts: string[] = [];
 	for (const preview of previews) {
 		if (!preview.diff && !preview.error) continue;
-		const header = uiTheme.fg("dim", `\n\n\u2500\u2500 ${shortenPath(preview.path)} \u2500\u2500`);
+		const header = uiTheme.fg("dim", `\n\n── ${shortenPath(preview.path)} ──`);
 		if (preview.error) {
 			parts.push(`${header}\n${uiTheme.fg("error", replaceTabs(preview.error, preview.path))}`);
 			continue;

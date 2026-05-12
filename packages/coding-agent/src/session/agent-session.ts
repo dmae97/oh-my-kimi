@@ -6680,7 +6680,7 @@ export class AgentSession {
 		const incomingRecord: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",
-			content: `[IRC \`${args.from}\` \u2192 you]\n\n${args.message}`,
+			content: `[IRC \`${args.from}\` → you]\n\n${args.message}`,
 			display: true,
 			details: { from: args.from, message: args.message },
 			attribution: "agent",
@@ -6712,7 +6712,7 @@ export class AgentSession {
 		const replyRecord: CustomMessage = {
 			role: "custom",
 			customType: "irc:autoreply",
-			content: `[IRC you \u2192 \`${args.from}\` (auto)]\n\n${replyText}`,
+			content: `[IRC you → \`${args.from}\` (auto)]\n\n${replyText}`,
 			display: true,
 			details: { to: args.from, reply: replyText },
 			attribution: "agent",
@@ -6751,7 +6751,7 @@ export class AgentSession {
 		const mainRef = registry.get(MAIN_AGENT_ID);
 		const mainSession = mainRef?.session;
 		if (!mainSession || mainSession === this) return;
-		const arrow = args.kind === "reply" ? "\u2192 (auto)" : "\u2192";
+		const arrow = args.kind === "reply" ? "→ (auto)" : "→";
 		const relayRecord: CustomMessage = {
 			role: "custom",
 			customType: "irc:relay",

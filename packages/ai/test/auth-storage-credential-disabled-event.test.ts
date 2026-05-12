@@ -155,9 +155,7 @@ describe("AuthStorage onCredentialDisabled callback", () => {
 		process.on("unhandledRejection", onUnhandled);
 		try {
 			await withEnv(SUPPRESS_ANTHROPIC_ENV, async () => {
-				await expect(
-					authStorage!.getApiKey("anthropic", "session-async-handler-throws"),
-				).resolves.toBeUndefined();
+				await expect(authStorage!.getApiKey("anthropic", "session-async-handler-throws")).resolves.toBeUndefined();
 				// Wait for the handler's microtask + our internal .catch to run.
 				await settled.promise;
 				await Bun.sleep(0);

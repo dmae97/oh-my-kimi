@@ -335,10 +335,10 @@ mod platform {
 				return Vec::new();
 			}
 			// `proc_listchildpids` (the obvious choice) is broken on recent macOS
-			// kernels when queried for the *calling* process \u2014 it returns one byte of
+			// kernels when queried for the *calling* process — it returns one byte of
 			// padding regardless of how many children the process actually has, so a
 			// process can never list its own descendants. Confirmed on darwin 25.4
-			// from C, Rust, and Bun callers via `proc_listchildpids(getpid(), \u2026)`,
+			// from C, Rust, and Bun callers via `proc_listchildpids(getpid(), …)`,
 			// while `ps -P` and `pgrep -P` still see the same children. Walk the
 			// whole pid table via `proc_listallpids` and filter on `pbi_ppid`
 			// instead; this is the same approach we already use for `find_by_path`
@@ -381,8 +381,8 @@ mod platform {
 		/// Walk the descendant tree in post-order (leaves first), de-duplicating
 		/// by PID so concurrent reparenting cannot trap us in a cycle.
 		pub fn descendants(&self) -> Vec<Self> {
-			// One process-table snapshot per walk \u2014 building it inside the recursion
-			// would re-scan every pid for every visited node, producing an `O(N \u00b7 D)`
+			// One process-table snapshot per walk — building it inside the recursion
+			// would re-scan every pid for every visited node, producing an `O(N · D)`
 			// kernel call pattern. Mirrors the Windows implementation.
 			let tree = build_process_tree();
 			let mut out = Vec::new();
@@ -476,9 +476,8 @@ mod platform {
 		let mut buffer = vec![0i32; cap];
 		// SAFETY: `buffer` is valid for `buffer.len() * size_of::<i32>()` bytes and
 		// is properly aligned for `i32`; libproc writes at most the supplied size.
-		let actual = unsafe {
-			proc_listallpids(buffer.as_mut_ptr(), (buffer.len() * size_of::<i32>()) as i32)
-		};
+		let actual =
+			unsafe { proc_listallpids(buffer.as_mut_ptr(), (buffer.len() * size_of::<i32>()) as i32) };
 		if actual <= 0 {
 			return Vec::new();
 		}
@@ -1318,7 +1317,9 @@ impl Process {
 		timeout_ms: u32,
 		ct: CancelToken,
 	) -> Result<bool> {
-		self.terminate_tree_impl(group, graceful_ms, timeout_ms, ct).await
+		self
+			.terminate_tree_impl(group, graceful_ms, timeout_ms, ct)
+			.await
 	}
 
 	/// Wait until this process exits, optionally bounded by `timeout`.
@@ -1579,14 +1580,14 @@ pub fn add_new_descendants<S: std::hash::BuildHasher>(
 
 	let selection = select_termination_targets(&descendants_info, baseline);
 	for pgid in selection.pgids {
-			targets.add_pgid(pgid);
+		targets.add_pgid(pgid);
 	}
 	for pid in selection.pids {
 		targets.add_pid(pid);
 	}
 }
 
-/// Light view of a descendant for target classification \u2014 just enough to
+/// Light view of a descendant for target classification — just enough to
 /// decide which pgids/pids belong in the kill set without holding any
 /// platform-specific process handles.
 #[derive(Debug, Clone, Copy)]
@@ -1608,8 +1609,8 @@ struct TargetSelection {
 ///
 /// **Critical**: a `pgid` is only adopted when its leader is itself one of the
 /// new descendants. Without that check, a descendant that inherited the
-/// harness's pgid \u2014 any subprocess started via APIs that do not call `setpgid`,
-/// such as a sibling LSP/MCP helper spawned outside of brush \u2014 would drag
+/// harness's pgid — any subprocess started via APIs that do not call `setpgid`,
+/// such as a sibling LSP/MCP helper spawned outside of brush — would drag
 /// `harness.pgid` into the kill set, and the subsequent
 /// `kill(-harness.pgid, SIGTERM)` would terminate the harness alongside the
 /// intended targets. Pids of new descendants are still tracked individually so
@@ -1650,8 +1651,8 @@ mod tests {
 	///
 	/// When the descendant walk harvested each descendant's `pgid` and pushed
 	/// it onto the kill list, a descendant that inherited the harness's pgid
-	/// \u2014 any subprocess started via APIs that do not call `setpgid`, such as a
-	/// sibling LSP/MCP helper \u2014 dragged `harness.pgid` into the kill set, and
+	/// — any subprocess started via APIs that do not call `setpgid`, such as a
+	/// sibling LSP/MCP helper — dragged `harness.pgid` into the kill set, and
 	/// the subsequent `kill(-harness.pgid, SIGTERM)` killed the harness.
 	///
 	/// Encode the dangerous shape directly: a new descendant whose `pgid`
@@ -1666,10 +1667,10 @@ mod tests {
 		// Harness pgid is *not* a new descendant; a baseline helper happens to
 		// lead a group that a new descendant inherited. Neither pgid is safe to
 		// signal as a group.
-		let descendants = [
-			DescendantInfo { pid: 2000, pgid: Some(HARNESS_PGID) },
-			DescendantInfo { pid: 2001, pgid: Some(BASELINE_HELPER_PID) },
-		];
+		let descendants = [DescendantInfo { pid: 2000, pgid: Some(HARNESS_PGID) }, DescendantInfo {
+			pid:  2001,
+			pgid: Some(BASELINE_HELPER_PID),
+		}];
 		let baseline: HashSet<i32> = std::iter::once(BASELINE_HELPER_PID).collect();
 
 		let selection = select_termination_targets(&descendants, &baseline);
@@ -1688,8 +1689,8 @@ mod tests {
 
 	#[test]
 	fn select_targets_adopts_owned_process_group() {
-		// A new descendant that *is* the group leader \u2014 brush's `NewProcessGroup`
-		// path \u2014 contributes both its pid and its pgid, so grandchildren in the
+		// A new descendant that *is* the group leader — brush's `NewProcessGroup`
+		// path — contributes both its pid and its pgid, so grandchildren in the
 		// same group get reaped in one signal wave.
 		let leader = DescendantInfo { pid: 3000, pgid: Some(3000) };
 		let grandchild = DescendantInfo { pid: 3001, pgid: Some(3000) };
@@ -1742,8 +1743,8 @@ mod tests {
 		assert!(self_pgid > 0, "getpgid(0) failed");
 		assert!(
 			!kill_process_group(self_pgid, TERM_SIGNAL),
-			"kill_process_group must refuse the harness pgid; otherwise the test process \
-			 would have been SIGTERMed",
+			"kill_process_group must refuse the harness pgid; otherwise the test process would have \
+			 been SIGTERMed",
 		);
 		assert!(
 			!kill_process_group(0, TERM_SIGNAL),
@@ -1793,8 +1794,8 @@ mod tests {
 		assert!(
 			found,
 			"freshly spawned child pid {child_pid} must appear in `live_descendants` so the \
-			 cancellation cleanup can reach it; this regressed on macOS when the walk relied on \
-			 the broken `proc_listchildpids`",
+			 cancellation cleanup can reach it; this regressed on macOS when the walk relied on the \
+			 broken `proc_listchildpids`",
 		);
 	}
 }

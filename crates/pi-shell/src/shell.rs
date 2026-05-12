@@ -1,5 +1,7 @@
 //! Runtime-agnostic brush shell execution.
 
+#[cfg(windows)]
+use std::collections::HashSet;
 use std::{
 	collections::HashMap,
 	fs,
@@ -8,8 +10,6 @@ use std::{
 	sync::Arc,
 	time::Duration,
 };
-#[cfg(windows)]
-use std::collections::HashSet;
 
 use anyhow::{Error, Result};
 use brush_builtins::{BuiltinSet, default_builtins};
@@ -191,12 +191,8 @@ pub async fn execute_shell(
 		snapshot_path: options.snapshot_path,
 		minimizer:     minimizer.clone(),
 	};
-	let run_config = ShellRunConfig {
-		command: options.command,
-		cwd: options.cwd,
-		env: options.env,
-		minimizer,
-	};
+	let run_config =
+		ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env, minimizer };
 	run_shell_oneshot(config, run_config, on_chunk, cancel_token).await
 }
 
@@ -598,7 +594,7 @@ async fn run_shell_command(
 			// during the previous wave's grace period, then exits early as soon
 			// as no descendants remain. The first wave is SIGTERM so well-behaved
 			// programs get a chance to clean up; subsequent waves escalate to
-			// SIGKILL. Cheaper than the previous 20\u202fHz tracker loop and avoids
+			// SIGKILL. Cheaper than the previous 20 Hz tracker loop and avoids
 			// the constant kernel chatter when no cancellation ever happens.
 			const WAVES: u32 = 3;
 			for wave in 0..WAVES {
@@ -607,7 +603,11 @@ async fn run_shell_command(
 				if targets.is_empty() {
 					return;
 				}
-				let signal = if wave == 0 { process::TERM_SIGNAL } else { process::KILL_SIGNAL };
+				let signal = if wave == 0 {
+					process::TERM_SIGNAL
+				} else {
+					process::KILL_SIGNAL
+				};
 				targets.signal(signal);
 				if wave + 1 < WAVES {
 					let pause = if wave == 0 {
@@ -687,8 +687,17 @@ async fn run_shell_command(
 	}
 	cancel_bridge.abort();
 	let _ = cancel_bridge.await;
-	process_cancel_bridge.abort();
-	let _ = process_cancel_bridge.await;
+	if cancel_token.is_cancelled() {
+		// Cancel fired — the bridge is actively running its rescan-and-signal
+		// loop. Let it run to completion so all three waves get a chance to
+		// reach stragglers; aborting here would cut the kill loop short.
+		let _ = process_cancel_bridge.await;
+	} else {
+		// Happy path — the bridge is still parked on `cancel_token.cancelled()`
+		// and would never exit on its own. Tear it down.
+		process_cancel_bridge.abort();
+		let _ = process_cancel_bridge.await;
+	}
 
 	let result = result.map_err(|err| Error::msg(format!("Shell execution failed: {err}")))?;
 	let mut minimized_out: Option<MinimizerResult> = None;
@@ -720,7 +729,6 @@ async fn run_shell_command(
 	Ok((result, minimized_out))
 }
 
-
 fn terminate_background_jobs(shell: &BrushShell) {
 	let mut targets = process::TerminationTargets::new();
 	for job in &shell.jobs().jobs {
@@ -734,7 +742,7 @@ fn terminate_background_jobs(shell: &BrushShell) {
 	if targets.is_empty() {
 		// Pure descendant cleanup is handled by `process_cancel_bridge` while
 		// the cancel was still in flight. Here we only signal brush's own
-		// job-tracked targets \u2014 pgids of background-group leaders that may have
+		// job-tracked targets — pgids of background-group leaders that may have
 		// already exited (so the descendant walk would no longer find them as
 		// new descendants, but their group still holds live grandchildren).
 		return;
