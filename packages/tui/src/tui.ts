@@ -1018,10 +1018,12 @@ export class TUI extends Container {
 				const line = newLines[i];
 				buffer += TERMINAL.isImageLine(line) ? line : line + reset;
 			}
+			this.#cursorRow = Math.max(0, newLines.length - 1);
+			const { seq, toRow } = this.#cursorControlSequence(cursorPos, newLines.length, this.#cursorRow);
+			this.#hardwareCursorRow = toRow;
+			buffer += seq;
 			buffer += "\x1b[?2026l"; // End synchronized output
 			this.terminal.write(buffer);
-			this.#cursorRow = Math.max(0, newLines.length - 1);
-			this.#hardwareCursorRow = this.#cursorRow;
 			// Reset max lines when clearing, otherwise track growth
 			if (clear) {
 				this.#maxLinesRendered = newLines.length;
@@ -1029,7 +1031,6 @@ export class TUI extends Container {
 				this.#maxLinesRendered = Math.max(this.#maxLinesRendered, newLines.length);
 			}
 			this.#viewportTopRow = Math.max(0, this.#maxLinesRendered - height);
-			this.#positionHardwareCursor(cursorPos, newLines.length);
 			this.#previousLines = newLines;
 			this.#previousWidth = width;
 			this.#previousHeight = height;
@@ -1101,7 +1102,7 @@ export class TUI extends Container {
 
 		// No changes - but still need to update hardware cursor position if it moved
 		if (firstChanged === -1) {
-			this.#positionHardwareCursor(cursorPos, newLines.length);
+			this.#writeCursorPosition(cursorPos, newLines.length);
 			this.#viewportTopRow = Math.max(0, this.#maxLinesRendered - height);
 			return;
 		}
@@ -1135,12 +1136,13 @@ export class TUI extends Container {
 				if (moveUp > 0) {
 					buffer += `\x1b[${moveUp}A`;
 				}
+				this.#cursorRow = targetRow;
+				const { seq, toRow } = this.#cursorControlSequence(cursorPos, newLines.length, targetRow);
+				this.#hardwareCursorRow = toRow;
+				buffer += seq;
 				buffer += "\x1b[?2026l";
 				this.terminal.write(buffer);
-				this.#cursorRow = targetRow;
-				this.#hardwareCursorRow = targetRow;
 			}
-			this.#positionHardwareCursor(cursorPos, newLines.length);
 			this.#previousLines = newLines;
 			this.#previousWidth = width;
 			this.#previousHeight = height;
@@ -1166,7 +1168,7 @@ export class TUI extends Container {
 				this.#cursorRow = Math.max(0, newLines.length - 1);
 				this.#maxLinesRendered = newLines.length;
 				this.#viewportTopRow = Math.max(0, newLines.length - height);
-				this.#positionHardwareCursor(cursorPos, newLines.length);
+				this.#writeCursorPosition(cursorPos, newLines.length);
 				this.#previousLines = newLines;
 				this.#previousWidth = width;
 				this.#previousHeight = height;
@@ -1249,6 +1251,9 @@ export class TUI extends Container {
 			buffer += `\x1b[${extraLines}A`;
 		}
 
+		const { seq, toRow } = this.#cursorControlSequence(cursorPos, newLines.length, finalCursorRow);
+		this.#hardwareCursorRow = toRow;
+		buffer += seq;
 		buffer += "\x1b[?2026l"; // End synchronized output
 
 		if ($flag("PI_TUI_DEBUG")) {
@@ -1262,6 +1267,7 @@ export class TUI extends Container {
 				`height: ${height}`,
 				`lineDiff: ${lineDiff}`,
 				`hardwareCursorRow: ${hardwareCursorRow}`,
+				`hardwareCursorRow (post): ${this.#hardwareCursorRow}`,
 				`renderEnd: ${renderEnd}`,
 				`finalCursorRow: ${finalCursorRow}`,
 				`cursorPos: ${JSON.stringify(cursorPos)}`,
@@ -1283,17 +1289,13 @@ export class TUI extends Container {
 		// Write entire buffer at once
 		this.terminal.write(buffer);
 
-		// Track cursor position for next render
-		// cursorRow tracks end of content (for viewport calculation)
-		// hardwareCursorRow tracks actual terminal cursor position (for movement)
+		// Track cursor position for next render.
+		// cursorRow tracks end of content (for viewport calculation).
+		// #hardwareCursorRow was already updated by #cursorControlSequence above.
 		this.#cursorRow = Math.max(0, newLines.length - 1);
-		this.#hardwareCursorRow = finalCursorRow;
 		// Track content height for viewport calculation
 		this.#maxLinesRendered = newLines.length;
 		this.#viewportTopRow = Math.max(0, newLines.length - height);
-
-		// Position hardware cursor for IME
-		this.#positionHardwareCursor(cursorPos, newLines.length);
 
 		this.#previousLines = newLines;
 		this.#previousWidth = width;
@@ -1301,33 +1303,51 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Position the hardware cursor for IME candidate window.
-	 * @param cursorPos The cursor position extracted from rendered output, or null
-	 * @param totalLines Total number of rendered lines
+	 * Build cursor control sequences to position the hardware cursor for the IME
+	 * candidate window. Returns escape sequences and the resulting cursor row for
+	 * the caller to update `#hardwareCursorRow`. The sequences should be appended
+	 * into the caller's own synchronized output block to avoid a flicker between
+	 * content and cursor frames.
 	 */
-	#positionHardwareCursor(cursorPos: { row: number; col: number } | null, totalLines: number): void {
-		if (!cursorPos || totalLines <= 0) {
-			this.terminal.hideCursor();
-			return;
-		}
+	#cursorControlSequence(
+		cursorPos: { row: number; col: number } | null,
+		totalLines: number,
+		fromRow: number,
+	): { seq: string; toRow: number } {
+		// No IME target or no content — hide cursor regardless of preference
+		if (!cursorPos || totalLines <= 0) return { seq: "\x1b[?25l", toRow: fromRow };
 
 		// Clamp cursor position to valid range
 		const targetRow = Math.max(0, Math.min(cursorPos.row, totalLines - 1));
 		const targetCol = Math.max(0, cursorPos.col);
 
 		// Move cursor from current position to target
-		const rowDelta = targetRow - this.#hardwareCursorRow;
-		let buffer = "";
+		const rowDelta = targetRow - fromRow;
+		let seq = "";
 		if (rowDelta > 0) {
-			buffer += `\x1b[${rowDelta}B`; // Move down
+			seq += `\x1b[${rowDelta}B`; // Move down
 		} else if (rowDelta < 0) {
-			buffer += `\x1b[${-rowDelta}A`; // Move up
+			seq += `\x1b[${-rowDelta}A`; // Move up
 		}
 		// Move to absolute column (1-indexed)
-		buffer += `\x1b[${targetCol + 1}G`;
-		buffer += this.#showHardwareCursor ? "\x1b[?25h" : "\x1b[?25l";
+		seq += `\x1b[${targetCol + 1}G`;
+		seq += this.#showHardwareCursor ? "\x1b[?25h" : "\x1b[?25l";
 
-		this.terminal.write(`\x1b[?2026h${buffer}\x1b[?2026l`);
-		this.#hardwareCursorRow = targetRow;
+		return { seq, toRow: targetRow };
+	}
+
+	/**
+	 * Write the hardware cursor position to the terminal as a standalone
+	 * synchronized output block. Use when there is no surrounding render buffer
+	 * to embed the sequences into.
+	 */
+	#writeCursorPosition(cursorPos: { row: number; col: number } | null, totalLines: number): void {
+		if (!cursorPos || totalLines <= 0) {
+			this.terminal.hideCursor();
+			return;
+		}
+		const { seq, toRow } = this.#cursorControlSequence(cursorPos, totalLines, this.#hardwareCursorRow);
+		this.#hardwareCursorRow = toRow;
+		this.terminal.write(`\x1b[?2026h${seq}\x1b[?2026l`);
 	}
 }
