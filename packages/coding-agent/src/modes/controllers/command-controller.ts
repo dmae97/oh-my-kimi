@@ -37,6 +37,7 @@ import { buildHotkeysMarkdown } from "../../modes/utils/hotkeys-markdown";
 import { buildToolsMarkdown } from "../../modes/utils/tools-markdown";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
 import type { AuthStorage } from "../../session/auth-storage";
+import { CompactionCancelledError, type CompactionOutcome } from "../../session/compaction";
 import type { NewSessionOptions } from "../../session/session-manager";
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd, stripOuterDoubleQuotes } from "../../tools/path-utils";
@@ -1071,16 +1072,16 @@ export class CommandController {
 		this.ctx.ui.requestRender();
 	}
 
-	async handleCompactCommand(customInstructions?: string): Promise<void> {
+	async handleCompactCommand(customInstructions?: string): Promise<CompactionOutcome> {
 		const entries = this.ctx.sessionManager.getEntries();
 		const messageCount = entries.filter(e => e.type === "message").length;
 
 		if (messageCount < 2) {
 			this.ctx.showWarning("Nothing to compact (no messages yet)");
-			return;
+			return "ok";
 		}
 
-		await this.executeCompaction(customInstructions, false);
+		return this.executeCompaction(customInstructions, false);
 	}
 
 	async handleSkillCommand(skillPath: string, args: string): Promise<void> {
@@ -1098,7 +1099,10 @@ export class CommandController {
 		}
 	}
 
-	async executeCompaction(customInstructionsOrOptions?: string | CompactOptions, isAuto = false): Promise<void> {
+	async executeCompaction(
+		customInstructionsOrOptions?: string | CompactOptions,
+		isAuto = false,
+	): Promise<CompactionOutcome> {
 		if (this.ctx.loadingAnimation) {
 			this.ctx.loadingAnimation.stop();
 			this.ctx.loadingAnimation = undefined;
@@ -1122,6 +1126,7 @@ export class CommandController {
 		this.ctx.statusContainer.addChild(compactingLoader);
 		this.ctx.ui.requestRender();
 
+		let outcome: CompactionOutcome = "ok";
 		try {
 			const instructions = typeof customInstructionsOrOptions === "string" ? customInstructionsOrOptions : undefined;
 			const options =
@@ -1135,10 +1140,12 @@ export class CommandController {
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorTopBorder();
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			if (message === "Compaction cancelled" || (error instanceof Error && error.name === "AbortError")) {
+			if (error instanceof CompactionCancelledError) {
+				outcome = "cancelled";
 				this.ctx.showError("Compaction cancelled");
 			} else {
+				outcome = "failed";
+				const message = error instanceof Error ? error.message : String(error);
 				this.ctx.showError(`Compaction failed: ${message}`);
 			}
 		} finally {
@@ -1147,6 +1154,7 @@ export class CommandController {
 			this.ctx.editor.onEscape = originalOnEscape;
 		}
 		await this.ctx.flushCompactionQueue({ willRetry: false });
+		return outcome;
 	}
 
 	async handleHandoffCommand(customInstructions?: string): Promise<void> {

@@ -42,6 +42,7 @@ import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
+import type { CompactionOutcome } from "../session/compaction";
 import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
@@ -1727,7 +1728,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		await controller.handle(text);
 	}
 
-	handleCompactCommand(customInstructions?: string): Promise<void> {
+	handleCompactCommand(customInstructions?: string): Promise<CompactionOutcome> {
 		return this.#commandController.handleCompactCommand(customInstructions);
 	}
 
@@ -1735,7 +1736,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleHandoffCommand(customInstructions);
 	}
 
-	executeCompaction(customInstructionsOrOptions?: string | CompactOptions, isAuto?: boolean): Promise<void> {
+	executeCompaction(
+		customInstructionsOrOptions?: string | CompactOptions,
+		isAuto?: boolean,
+	): Promise<CompactionOutcome> {
 		return this.#commandController.executeCompaction(customInstructionsOrOptions, isAuto);
 	}
 

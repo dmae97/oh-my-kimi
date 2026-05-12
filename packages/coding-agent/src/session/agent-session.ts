@@ -152,6 +152,7 @@ import { extractFileMentions, generateFileMentionMessages } from "../utils/file-
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { AuthStorage } from "./auth-storage";
 import {
+	CompactionCancelledError,
 	type CompactionPreparation,
 	type CompactionResult,
 	calculateContextTokens,
@@ -4503,7 +4504,7 @@ export class AgentSession {
 				})) as SessionBeforeCompactResult | undefined;
 
 				if (result?.cancel) {
-					throw new Error("Compaction cancelled");
+					throw new CompactionCancelledError();
 				}
 
 				if (result?.compaction) {
@@ -4545,27 +4546,47 @@ export class AgentSession {
 				details = hookCompaction.details;
 				preserveData ??= hookCompaction.preserveData;
 			} else {
-				// Generate compaction result
-				const result = await this.#compactWithFallbackModel(
-					preparation,
-					customInstructions,
-					compactionAbortController.signal,
-					{
-						promptOverride: hookPrompt,
-						extraContext: hookContext,
-						remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
-					},
-				);
-				summary = result.summary;
-				shortSummary = result.shortSummary;
-				firstKeptEntryId = result.firstKeptEntryId;
-				tokensBefore = result.tokensBefore;
-				details = result.details;
-				preserveData = { ...(preserveData ?? {}), ...(result.preserveData ?? {}) };
+				// Generate compaction result. Only convert known abort-shaped
+				// rejections (AbortError raised while the abort signal is set,
+				// or an already-typed sentinel) into `CompactionCancelledError`
+				// so downstream callers can discriminate cancel from generic
+				// failure via `instanceof` without inspecting message strings.
+				// Real compaction bugs (network, server, parsing, etc.) keep
+				// their original shape — they must not be silently relabeled
+				// as cancellations even if the signal happens to be aborted
+				// for an unrelated reason. Assignments live inside the try
+				// block because every catch path throws — the post-try reads
+				// of the result-derived locals are reachable only on success.
+				try {
+					const result = await this.#compactWithFallbackModel(
+						preparation,
+						customInstructions,
+						compactionAbortController.signal,
+						{
+							promptOverride: hookPrompt,
+							extraContext: hookContext,
+							remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
+						},
+					);
+					summary = result.summary;
+					shortSummary = result.shortSummary;
+					firstKeptEntryId = result.firstKeptEntryId;
+					tokensBefore = result.tokensBefore;
+					details = result.details;
+					preserveData = { ...(preserveData ?? {}), ...(result.preserveData ?? {}) };
+				} catch (err) {
+					if (err instanceof CompactionCancelledError) {
+						throw err;
+					}
+					if (compactionAbortController.signal.aborted && err instanceof Error && err.name === "AbortError") {
+						throw new CompactionCancelledError();
+					}
+					throw err;
+				}
 			}
 
 			if (compactionAbortController.signal.aborted) {
-				throw new Error("Compaction cancelled");
+				throw new CompactionCancelledError();
 			}
 
 			this.sessionManager.appendCompaction(
