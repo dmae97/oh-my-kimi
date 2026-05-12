@@ -234,6 +234,32 @@ describe("executeJs", () => {
 		expect(execute.mock.calls[1]?.[1]).toEqual({ path: "agent://agent-42", _i: "js prelude" });
 	});
 
+	it("auto-displays the final awaited expression result", async () => {
+		const execute = vi.fn(
+			async (): Promise<AgentToolResult> => ({
+				content: [{ type: "text", text: "tool output" }],
+				details: { kind: "tool-result" },
+			}),
+		);
+		const toolSession: ToolSession = {
+			...session,
+			getToolByName: name => (name === "read" ? createTool("read", execute) : undefined),
+		};
+
+		const result = await executeJs("await tool.read({ path: 'package.json' });", {
+			sessionId,
+			session: toolSession,
+			sessionFile,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(getJsonData(result)).toEqual({
+			text: "tool output",
+			details: { kind: "tool-result" },
+			images: undefined,
+		});
+	});
+
 	it("auto-displays returned objects as structured output", async () => {
 		const result = await executeJs("return { answer: 42, nested: { ok: true } };", {
 			sessionId,
