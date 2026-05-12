@@ -12,7 +12,6 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	const counter = (items, opts = {}) => callHelper("counter", items, toOptions(opts));
 	const diff = (a, b) => callHelper("diff", a, b);
 	const tree = (path = ".", opts = {}) => callHelper("tree", path, toOptions(opts));
-	const run = (cmd, opts = {}) => callHelper("run", cmd, toOptions(opts));
 	const env = (key, value) => callHelper("env", key, value);
 
 	const tool = new Proxy(
@@ -67,6 +66,5 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	globalThis.counter = counter;
 	globalThis.diff = diff;
 	globalThis.tree = tree;
-	globalThis.run = run;
 	globalThis.env = env;
 }

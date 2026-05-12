@@ -46,8 +46,6 @@ tree(path?=".", max_depth?=3, show_hidden?=False) → str
     Render a directory tree.
 diff(a, b) → str
     Unified diff between two files.
-run(cmd, cwd?=None, timeout?=None) → {stdout, stderr, exit_code}
-    Run a shell command.
 env(key?=None, value?=None) → str | None | dict
     No args → full environment as dict. One arg → value of `key`. Two args → set `key=value` and return value.
 output(*ids, format?="raw", query?=None, offset?=None, limit?=None) → str | dict | list[dict]
@@ -63,7 +61,7 @@ Cells render like a Jupyter notebook. `display(value)` renders non-presentable d
 
 <caution>
 - In session mode, use `*** Reset` on a cell to wipe its language's kernel before running.{{#ifAll py js}} Reset is per-language: a python cell's `*** Reset` does not touch the JavaScript kernel and vice versa.{{/ifAll}}
-{{#if js}}- **js**: the VM exposes a selective `process` subset, Web APIs, `Buffer`, `fs/promises`.
+{{#if js}}- **js**: the VM exposes a selective `process` subset, Web APIs, `Buffer`, `fs/promises`, and the `Bun` global.
 {{/if}}</caution>
 
 <example>
