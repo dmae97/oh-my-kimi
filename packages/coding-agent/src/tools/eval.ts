@@ -26,7 +26,7 @@ export const EVAL_DEFAULT_PREVIEW_LINES = 10;
 
 export const evalSchema = Type.Object({
 	input: Type.String({
-		description: "eval input as a sequence of `*** Begin <LANG>` cell headers followed by code",
+		description: 'eval input as a sequence of `*** Cell <lang>:"title"` cell headers followed by code',
 	}),
 });
 export type EvalToolParams = Static<typeof evalSchema>;

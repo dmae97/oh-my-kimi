@@ -1,16 +1,36 @@
-start: cell+
+// Canonical Eval input. Each cell is introduced by a single header line:
+//
+//   *** Cell <LANG>:"<title>" [t:<duration>] [rst]
+//
+// Attribute order is fixed: language+title, then optional timeout, then
+// optional reset flag. Title may be empty (`py:""`).
+//
+// Tokens:
+//
+//   py:"..." | js:"..."             language plus title (required)
+//   t:<digits>(ms|s|m)?             per-cell timeout (default 30s)
+//   rst                             reset this language's kernel before running
+//
+// Everything between one header line and the next (or the optional trailing
+// `*** End`, or end of input) is the cell's code, verbatim. The runtime
+// parser additionally accepts content before the first header as an implicit
+// default-language cell, but that is lenient fallback and MUST NOT be relied
+// on.
 
-cell: begin_cell attr* code_line* end_cell
-begin_cell: "*** Begin " LANG LF
-end_cell: "*** End Cell" LF?
+start: cell+ end_marker
 
-attr: title | timeout | reset
-title:   "*** Title: " /(.+)/ LF
-timeout: "*** Timeout: " /\d+(ms|s|m)?/ LF
-reset:   "*** Reset" LF
+cell: cell_header code_line*
 
-code_line: /[^\r\n]*/ LF
+cell_header: "*** Cell" WS_INLINE LANG_TITLE (WS_INLINE T_ATTR)? (WS_INLINE RST_FLAG)? LF
 
-LANG: "JS" | "TS" | "PY"
+end_marker: "*** End" LF?
+
+code_line: CODE_TEXT LF | LF
+CODE_TEXT: /([^*\r\n]|\*\*?[^*\r\n])+\*{0,2}|\*{1,2}/
+
+LANG_TITLE: ("py" | "js") ":\"" /[^"\r\n]*/ "\""
+T_ATTR:     "t:" /\d+(ms|s|m)?/
+RST_FLAG:   "rst"
 
 %import common.LF
+%import common.WS_INLINE

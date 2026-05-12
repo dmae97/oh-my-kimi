@@ -1,6 +1,23 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Changed the `eval` tool input format to a single-line `*** Cell <lang>:"<title>" [t:<duration>] [rst]` header per cell, replacing the `*** Begin <LANG>` / `*** End <LANG>` envelope and the standalone `*** Title:` / `*** Timeout:` / `*** Reset` directives. The lark grammar enforces a fixed attribute order; the runtime parser remains lenient (alias keys, bare positional tokens, single-quoted titles).
+
+### Added
+
+- Added support for explicit boolean `rst` values (`rst:true`, `rst:false`, `rst:1`, `rst:0`, `rst:yes`, `rst:no`, `rst:on`, `rst:off`) in `*** Cell` headers
+
+### Changed
+
+- Changed the HTML transcript renderer to parse the new `*** Cell` headers while keeping the older `*** Begin <LANG>` and `===== ... =====` formats renderable for historical sessions.
+- Changed the `eval` tool parser so a stray non-marker line between cells no longer crashes with `null is not an object (evaluating 'BEGIN_RE.exec(lines[i])[1]')`; stray content is consumed without aborting parsing.
+- Changed `*** End` to be an optional, undocumented per-cell terminator (kept in the lark to satisfy GPT-trained models' natural terminator habit during constrained sampling).
+
+### Fixed
+
+- Improved `*** Cell` header parsing to reject invalid `rst` values with a clear `invalid rst value` error
 
 ## [14.9.7] - 2026-05-12
 
