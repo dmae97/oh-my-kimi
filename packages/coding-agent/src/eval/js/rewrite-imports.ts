@@ -26,10 +26,9 @@ type BabelLexicalDecl =
 	| { type: "ClassDeclaration"; start: number; end: number; id: { start: number; end: number; name: string } | null };
 
 function buildDynamicImportCall(sourceLiteral: string, withClause: string | undefined): string {
-	// Emit `import(...)` as text into the user's source so vm.runInContext can parse it as
-	// a script-mode expression. This is not a real ESM dynamic import in our own code.
-	const call = "import";
-	return withClause ? `${call}(${sourceLiteral}, { with: ${withClause} })` : `${call}(${sourceLiteral})`;
+	// Route every static import through the worker-injected `__omp_import__` helper so the
+	// specifier resolves against the session cwd (and `with`-attribute imports keep working).
+	return withClause ? `__omp_import__(${sourceLiteral}, ${withClause})` : `__omp_import__(${sourceLiteral})`;
 }
 
 function buildWithClause(node: BabelImportDeclaration): string | undefined {

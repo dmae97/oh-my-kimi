@@ -120,6 +120,7 @@ export class WorkerCore {
 			__omp_session__: { cwd: snapshot.cwd, sessionId: snapshot.sessionId },
 			__omp_helpers__: helpers,
 			__omp_call_tool__: async (name: string, args: unknown) => this.#callTool(state, name, args),
+			__omp_import__: (source: string, attrs?: Record<string, string>) => this.#resolveImport(state, source, attrs),
 			__omp_emit_status__: (op: string, data: Record<string, unknown> = {}) =>
 				this.#emitStatus(state, { op, ...data }),
 			__omp_log__: (level: string, ...args: unknown[]) => {
@@ -186,6 +187,11 @@ export class WorkerCore {
 		state.pendingTools.set(id, { resolve, reject });
 		this.#transport.send({ type: "tool-call", id, runId: current.runId, name, args });
 		return await promise;
+	}
+
+	async #resolveImport(state: VmState, source: string, attrs?: Record<string, string>): Promise<unknown> {
+		const target = resolveImportSpecifier(state.cwd, source);
+		return attrs ? await import(target, { with: attrs }) : await import(target);
 	}
 
 	#deliverToolReply(id: string, reply: ToolReply): void {
@@ -484,6 +490,22 @@ function createProcessSubset(cwd: string, state: VmState): Record<string, unknow
 
 function buildRequire(cwd: string): NodeJS.Require {
 	return createRequire(pathToFileURL(path.join(cwd, "[eval]")).href);
+}
+
+/**
+ * Resolve an import specifier emitted by `rewriteStaticImports` against the active session
+ * cwd. Relative paths (`./`, `../`, `/`) and bare specifiers (`pkg`, `@scope/pkg`) both go
+ * through `Bun.resolveSync` rooted at the cwd so user-pasted ESM behaves as if it lived in
+ * the project — not next to the worker module. URL-like specifiers (`file://`, `data:`,
+ * `node:`, `http:`) are passed through unchanged.
+ */
+function resolveImportSpecifier(cwd: string, source: string): string {
+	if (/^[a-z][a-z0-9+.-]*:/i.test(source)) return source;
+	try {
+		return Bun.resolveSync(source, cwd);
+	} catch {
+		return source;
+	}
 }
 
 async function awaitMaybePromise<T>(value: T | Promise<T>): Promise<T> {
