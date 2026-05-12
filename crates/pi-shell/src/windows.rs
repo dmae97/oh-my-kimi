@@ -5,8 +5,8 @@ use std::{
 	process::Command,
 };
 
+use anyhow::{Error, Result};
 use brush_core::{Shell as BrushShell, ShellValue, ShellVariable};
-use napi::{Error, Result};
 use winreg::{RegKey, enums::HKEY_LOCAL_MACHINE};
 
 pub fn configure_windows_path(shell: &mut BrushShell) -> Result<()> {
@@ -68,7 +68,7 @@ pub fn configure_windows_path(shell: &mut BrushShell) -> Result<()> {
 	shell
 		.env_mut()
 		.set_global("PATH", var)
-		.map_err(|err| Error::from_reason(format!("Failed to set PATH: {err}")))?;
+		.map_err(|err| Error::msg(format!("Failed to set PATH: {err}")))?;
 
 	Ok(())
 }
