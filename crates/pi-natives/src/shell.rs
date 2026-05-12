@@ -212,12 +212,16 @@ impl Shell {
 			timeout_ms: options.timeout_ms,
 		};
 		task::future(env, "shell.run", async move {
-			let chunk_tx = bridge_chunks(on_chunk);
-			inner
+			let (chunk_tx, drain_handle) = bridge_chunks(on_chunk);
+			let result = inner
 				.run(run_options, chunk_tx, cancel_token.into_core())
 				.await
 				.map(Into::into)
-				.map_err(|err| Error::from_reason(err.to_string()))
+				.map_err(|err| Error::from_reason(err.to_string()));
+			if let Some(handle) = drain_handle {
+				let _ = handle.await;
+			}
+			result
 		})
 	}
 
@@ -254,25 +258,31 @@ pub fn execute_shell<'env>(
 		minimizer:     options.minimizer.map(Into::into),
 	};
 	task::future(env, "shell.execute", async move {
-		let chunk_tx = bridge_chunks(on_chunk);
-		core_execute_shell(exec_options, chunk_tx, cancel_token.into_core())
+		let (chunk_tx, drain_handle) = bridge_chunks(on_chunk);
+		let result = core_execute_shell(exec_options, chunk_tx, cancel_token.into_core())
 			.await
 			.map(Into::into)
-			.map_err(|err| Error::from_reason(err.to_string()))
+			.map_err(|err| Error::from_reason(err.to_string()));
+		if let Some(handle) = drain_handle {
+			let _ = handle.await;
+		}
+		result
 	})
 }
 
 fn bridge_chunks(
 	on_chunk: Option<ThreadsafeFunction<String>>,
-) -> Option<mpsc::UnboundedSender<String>> {
-	let on_chunk = on_chunk?;
+) -> (Option<mpsc::UnboundedSender<String>>, Option<napi::tokio::task::JoinHandle<()>>) {
+	let Some(on_chunk) = on_chunk else {
+		return (None, None);
+	};
 	let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-	napi::tokio::spawn(async move {
+	let handle = napi::tokio::spawn(async move {
 		while let Some(chunk) = rx.recv().await {
 			on_chunk.call(Ok(chunk), ThreadsafeFunctionCallMode::NonBlocking);
 		}
 	});
-	Some(tx)
+	(Some(tx), Some(handle))
 }
 
 #[cfg(test)]
