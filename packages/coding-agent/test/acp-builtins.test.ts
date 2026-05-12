@@ -142,7 +142,9 @@ function createRuntime() {
 				output.push(text);
 			},
 			refreshCommands: () => {},
+			reloadPlugins: async () => {},
 			notifyTitleChanged: undefined as (() => Promise<void> | void) | undefined,
+			notifyConfigChanged: undefined as (() => Promise<void> | void) | undefined,
 		},
 	};
 }
@@ -274,6 +276,41 @@ describe("ACP builtin slash commands", () => {
 
 		expect(result).toEqual({ consumed: true });
 		expect(output[0]?.toLowerCase()).toContain("acp");
+	});
+
+	it("model: applies known id and emits both title + config change notifications", async () => {
+		const { output, runtime, session } = createRuntime();
+		const available = [{ provider: "anthropic", id: "claude-3-5-sonnet", contextWindow: 200_000 }];
+		session.getAvailableModels = () => available;
+		let titleNotified = 0;
+		let configNotified = 0;
+		runtime.notifyTitleChanged = () => {
+			titleNotified++;
+		};
+		runtime.notifyConfigChanged = () => {
+			configNotified++;
+		};
+		const setModelSpy = spyOn(session, "setModel").mockResolvedValue(undefined);
+
+		const result = await executeAcpBuiltinSlashCommand("/model claude-3-5-sonnet", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(setModelSpy).toHaveBeenCalledWith(available[0]);
+		expect(output[0]).toContain("Model set to anthropic/claude-3-5-sonnet");
+		expect(titleNotified).toBe(1);
+		expect(configNotified).toBe(1);
+	});
+
+	it("model: does not emit config change when id is unknown", async () => {
+		const { runtime } = createRuntime();
+		let configNotified = 0;
+		runtime.notifyConfigChanged = () => {
+			configNotified++;
+		};
+
+		await executeAcpBuiltinSlashCommand("/model nonexistent", runtime);
+
+		expect(configNotified).toBe(0);
 	});
 
 	// Removed TUI-only and dropped commands fall through as false
@@ -705,6 +742,17 @@ describe("wave 5 — adapters and polish", () => {
 			expect(result).toEqual({ consumed: true });
 			expect(output[0]).toContain('Added MCP server "foo" (project).');
 			expect(spy).toHaveBeenCalledTimes(1);
+			// Lock in the parsed call shape so future regressions in
+			// `--url` / `--token` / `--scope` parsing fail this test instead of
+			// silently writing a different config.
+			const [configPath, serverName, serverConfig] = spy.mock.calls[0]!;
+			expect(configPath).toContain("project");
+			expect(serverName).toBe("foo");
+			expect(serverConfig).toMatchObject({
+				type: "http",
+				url: "https://example.com",
+				headers: { Authorization: "Bearer X" },
+			});
 		} finally {
 			spy.mockRestore();
 		}
@@ -728,6 +776,13 @@ describe("wave 5 — adapters and polish", () => {
 			const result = await executeAcpBuiltinSlashCommand("/ssh add foo --host x --user y --scope user", runtime);
 			expect(result).toEqual({ consumed: true });
 			expect(output[0]).toContain('Added SSH host "foo" (user).');
+			// Without this assertion, the command could succeed via a side-effect-free
+			// path that prints the success message without writing the host config.
+			expect(spy).toHaveBeenCalledTimes(1);
+			const [configPath, name, hostConfig] = spy.mock.calls[0]!;
+			expect(typeof configPath).toBe("string");
+			expect(name).toBe("foo");
+			expect(hostConfig).toMatchObject({ host: "x", username: "y" });
 		} finally {
 			spy.mockRestore();
 		}

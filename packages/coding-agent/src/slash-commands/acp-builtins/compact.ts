@@ -1,4 +1,4 @@
-import { commandConsumed } from "./shared";
+import { commandConsumed, errorMessage, usage } from "./shared";
 import type { AcpBuiltinCommandSpec } from "./types";
 
 export const compactCommand: AcpBuiltinCommandSpec = {
@@ -8,7 +8,14 @@ export const compactCommand: AcpBuiltinCommandSpec = {
 	handle: async (command, runtime) => {
 		const before = runtime.session.getContextUsage?.();
 		const beforeTokens = before?.tokens;
-		await runtime.session.compact(command.args || undefined);
+		try {
+			await runtime.session.compact(command.args || undefined);
+		} catch (err) {
+			// Compaction precondition failures (no model, already compacted, too
+			// small) and provider errors propagate as plain Errors; surface them
+			// via runtime.output so they don't fail the ACP prompt turn.
+			return usage(`Compaction failed: ${errorMessage(err)}`, runtime);
+		}
 		const after = runtime.session.getContextUsage?.();
 		const afterTokens = after?.tokens;
 		if (beforeTokens != null && afterTokens != null) {

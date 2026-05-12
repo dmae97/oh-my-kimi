@@ -6,6 +6,7 @@ import type {
 	ToolKind,
 } from "@agentclientprotocol/sdk";
 import type { AgentSessionEvent } from "../../session/agent-session";
+import { resolveToCwd } from "../../tools/path-utils";
 import type { TodoStatus } from "../../tools/todo-write";
 
 interface MessageProgress {
@@ -16,6 +17,13 @@ interface MessageProgress {
 interface AcpEventMapperOptions {
 	getMessageId?: (message: unknown) => string | undefined;
 	getMessageProgress?: (message: unknown) => MessageProgress | undefined;
+	/**
+	 * Session cwd. Tool call locations sent to ACP clients must be absolute
+	 * (the editor host needs them to open or focus files). When provided,
+	 * the mapper resolves raw `path`/`file`/etc. args against this cwd
+	 * before emitting `ToolCallLocation` entries.
+	 */
+	cwd?: string;
 }
 
 interface ContentArrayContainer {
@@ -144,7 +152,7 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 				status: "pending",
 				rawInput: event.args,
 			};
-			const locations = extractToolLocations(event.args);
+			const locations = extractToolLocations(event.args, options.cwd);
 			if (locations.length > 0) {
 				update.locations = locations;
 			}
@@ -163,7 +171,7 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 			if (content.length > 0) {
 				update.content = content;
 			}
-			const locations = extractToolLocations(event.args);
+			const locations = extractToolLocations(event.args, options.cwd);
 			if (locations.length > 0) {
 				update.locations = locations;
 			}
@@ -183,7 +191,7 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 			if (content.length > 0) {
 				update.content = content;
 			}
-			const locations = extractToolLocationsFromResult(event.result);
+			const locations = extractToolLocationsFromResult(event.result, options.cwd);
 			if (locations.length > 0) {
 				update.locations = locations;
 			}
@@ -322,32 +330,45 @@ function buildToolTitle(toolName: string, args: unknown, intent: string | undefi
 	return toolName;
 }
 
-function extractToolLocations(args: unknown): ToolCallLocation[] {
+/**
+ * Resolve a single raw path against cwd for an ACP location. When `cwd` is
+ * omitted we pass the value through unchanged (callers without session
+ * context, e.g. some legacy entry points and tests); the ACP-side caller
+ * always supplies cwd so notifications carry absolute paths.
+ */
+function toAcpLocationPath(value: string, cwd?: string): string {
+	if (!cwd) return value;
+	try {
+		return resolveToCwd(value, cwd);
+	} catch {
+		return value;
+	}
+}
+
+function extractToolLocations(args: unknown, cwd?: string): ToolCallLocation[] {
 	const locations: ToolCallLocation[] = [];
-	const path = extractStringProperty<PathContainer>(args, "path");
-	if (path) {
+	const seen = new Set<string>();
+	const pushPath = (raw: string | undefined) => {
+		if (!raw) return;
+		const path = toAcpLocationPath(raw, cwd);
+		if (seen.has(path)) return;
+		seen.add(path);
 		locations.push({ path });
-	}
+	};
 
-	const oldPath = extractStringProperty<OldPathContainer>(args, "oldPath");
-	if (oldPath && oldPath !== path) {
-		locations.push({ path: oldPath });
-	}
-
-	const newPath = extractStringProperty<NewPathContainer>(args, "newPath");
-	if (newPath && newPath !== path && newPath !== oldPath) {
-		locations.push({ path: newPath });
-	}
+	pushPath(extractStringProperty<PathContainer>(args, "path"));
+	pushPath(extractStringProperty<OldPathContainer>(args, "oldPath"));
+	pushPath(extractStringProperty<NewPathContainer>(args, "newPath"));
 
 	return locations;
 }
 
 /** Pull locations from a tool result's details (e.g. EditToolDetails.perFileResults[].path). */
-function extractToolLocationsFromResult(result: unknown): ToolCallLocation[] {
+function extractToolLocationsFromResult(result: unknown, cwd?: string): ToolCallLocation[] {
 	if (typeof result !== "object" || result === null) return [];
 	const details = (result as { details?: unknown }).details;
 	if (typeof details !== "object" || details === null) return [];
-	const direct = extractToolLocations(details);
+	const direct = extractToolLocations(details, cwd);
 	const perFile = (details as { perFileResults?: unknown }).perFileResults;
 	if (!Array.isArray(perFile)) {
 		return direct;
@@ -355,11 +376,12 @@ function extractToolLocationsFromResult(result: unknown): ToolCallLocation[] {
 	const seen = new Set(direct.map(loc => loc.path));
 	const locations = [...direct];
 	for (const entry of perFile) {
-		const path = extractStringProperty<PathContainer>(entry, "path");
-		if (path && !seen.has(path)) {
-			seen.add(path);
-			locations.push({ path });
-		}
+		const raw = extractStringProperty<PathContainer>(entry, "path");
+		if (!raw) continue;
+		const path = toAcpLocationPath(raw, cwd);
+		if (seen.has(path)) continue;
+		seen.add(path);
+		locations.push({ path });
 	}
 	return locations;
 }

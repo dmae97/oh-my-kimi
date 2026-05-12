@@ -11,7 +11,7 @@ import { InternalUrlRouter } from "../internal-urls";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import type { Theme } from "../modes/theme/theme";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
-import type { ClientBridgeTerminalExitStatus } from "../session/client-bridge";
+import type { ClientBridgeTerminalExitStatus, ClientBridgeTerminalOutput } from "../session/client-bridge";
 import { DEFAULT_MAX_BYTES, streamTailUpdates, TailBuffer } from "../session/streaming-output";
 import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
@@ -648,15 +648,29 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				| { kind: "timeout" }
 				| { kind: "aborted" };
 
-			// Set up abort listener before entering the poll loop.
+			// Set up abort listener before entering the poll loop. The listener
+			// kicks off `handle.kill()` synchronously so a `session/cancel`
+			// arriving mid-poll terminates the remote command immediately,
+			// instead of waiting for the next `currentOutput()` to return.
 			const { promise: abortedP, resolve: resolveAborted } = Promise.withResolvers<void>();
-			const onAbortSignal = () => resolveAborted();
+			let killStarted = false;
+			const fireKill = (): Promise<void> => {
+				if (killStarted) return Promise.resolve();
+				killStarted = true;
+				return handle.kill().catch((error: unknown) => {
+					logger.warn("ACP terminal kill failed", { terminalId: handle.terminalId, error });
+				});
+			};
+			const onAbortSignal = () => {
+				resolveAborted();
+				void fireKill();
+			};
 			signal?.addEventListener("abort", onAbortSignal, { once: true });
 
 			try {
 				try {
 					if (signal?.aborted) {
-						await handle.kill();
+						await fireKill();
 						throw new ToolAbortError("Command aborted");
 					}
 
@@ -674,16 +688,24 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						const raced = await Promise.race(racers);
 
 						if (raced.kind === "aborted" || signal?.aborted) {
-							await handle.kill();
+							await fireKill();
 							throw new ToolAbortError("Command aborted");
 						}
 
 						if (raced.kind === "timeout") {
+							// Kill before reading final output so a slow `terminal/output`
+							// RPC cannot let a timed-out command keep running past the
+							// enforced timeout. The handle stays valid post-kill so the
+							// buffered output is still readable.
+							await fireKill();
 							let current = { output: "", truncated: false };
 							try {
 								current = await handle.currentOutput();
-							} finally {
-								await handle.kill();
+							} catch (error) {
+								logger.warn("ACP terminal final output read failed", {
+									terminalId: handle.terminalId,
+									error,
+								});
 							}
 							const timedOutResult: BashInteractiveResult = {
 								output: current.output,
@@ -709,9 +731,19 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						}
 
 						// Poll tick: push current output so agent-loop transcript stays consistent.
-						const current = await handle.currentOutput();
+						// Race the read against abort so a stuck `terminal/output` RPC does not
+						// delay cancellation.
+						const pollOutput = await Promise.race([
+							handle.currentOutput(),
+							abortedP.then(() => undefined as ClientBridgeTerminalOutput | undefined),
+						]);
+						if (pollOutput === undefined) {
+							// Abort fired during the poll-tick read; let the next loop iteration
+							// observe `signal?.aborted` and exit via the abort branch.
+							continue;
+						}
 						onUpdate?.({
-							content: [{ type: "text", text: current.output }],
+							content: [{ type: "text", text: pollOutput.output }],
 							details: { terminalId: handle.terminalId },
 						});
 					}

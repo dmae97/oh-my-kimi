@@ -19,9 +19,16 @@ export const moveCommand: AcpBuiltinCommandSpec = {
 			return usage(`Directory does not exist or is not a directory: ${resolvedPath}`, runtime);
 		}
 		if (!isDirectory) return usage(`Directory does not exist or is not a directory: ${resolvedPath}`, runtime);
-		await runtime.sessionManager.flush();
-		await runtime.sessionManager.moveTo(resolvedPath);
+		try {
+			await runtime.sessionManager.flush();
+			await runtime.sessionManager.moveTo(resolvedPath);
+		} catch (err) {
+			return usage(`Move failed: ${err instanceof Error ? err.message : String(err)}`, runtime);
+		}
 		setProjectDir(resolvedPath);
+		// Reload plugin/capability caches so the next prompt sees commands and
+		// capabilities scoped to the new cwd.
+		await runtime.reloadPlugins();
 		await runtime.notifyTitleChanged?.();
 		await runtime.output(`Session moved to ${runtime.sessionManager.getCwd()}.`);
 		return commandConsumed();

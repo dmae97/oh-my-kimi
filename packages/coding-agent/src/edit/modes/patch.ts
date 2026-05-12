@@ -1779,7 +1779,11 @@ export async function executePatchSingle(
 		content: [{ type: "text", text: resultText }],
 		details: {
 			diff: diffResult.diff,
-			path: resolvedPath,
+			// When the patch moves the file, anchor the diff to the destination
+			// path. ACP `ToolCallContent.diff.path` comes from this field, and
+			// clients use it to open or focus the file post-change; pointing at
+			// the (now-deleted) source navigates to nothing.
+			path: result.change.newPath ?? resolvedPath,
 			firstChangedLine: diffResult.firstChangedLine,
 			diagnostics: mergedDiagnostics,
 			op,

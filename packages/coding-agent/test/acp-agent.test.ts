@@ -128,6 +128,10 @@ class FakeAgentSession {
 		this.thinkingLevel = level;
 	}
 
+	setSlashCommands(_commands: unknown[]): void {
+		// no-op for tests
+	}
+
 	async setModel(model: Model): Promise<void> {
 		this.model = model;
 	}
@@ -382,6 +386,14 @@ describe("ACP agent", () => {
 			configId: "thinking",
 			value: "high",
 		});
+		// Both model and thinking-level changes must surface as ACP
+		// `config_option_update` notifications scoped to the right session;
+		// the schema check alone would still pass if either method stopped
+		// emitting notifications entirely.
+		const configUpdatesForFirst = harness.updates.filter(
+			n => n.sessionId === first.sessionId && n.update.sessionUpdate === "config_option_update",
+		);
+		expect(configUpdatesForFirst.length).toBeGreaterThanOrEqual(2);
 		expectAcpNotifications(harness.updates);
 
 		const firstSession = harness.findSession(first.sessionId);

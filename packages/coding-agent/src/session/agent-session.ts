@@ -556,14 +556,23 @@ function derivePermissionTitle(toolName: string, args: unknown): string {
 	return toolName;
 }
 
-function extractPermissionLocations(args: unknown): { path: string; line?: number }[] {
+function extractPermissionLocations(args: unknown, cwd: string): { path: string; line?: number }[] {
 	if (!args || typeof args !== "object") return [];
 	const a = args as Record<string, unknown>;
 	const out: { path: string; line?: number }[] = [];
 	const pushPath = (value: unknown) => {
 		if (typeof value !== "string" || value.length === 0) return;
-		if (out.some(location => location.path === value)) return;
-		out.push({ path: value });
+		// ACP locations carry file paths that the editor host will open or focus;
+		// they must be absolute or the client cannot resolve them. Resolve raw
+		// tool args (often cwd-relative) against the session cwd before sending.
+		let resolved: string;
+		try {
+			resolved = resolveToCwd(value, cwd);
+		} catch {
+			return;
+		}
+		if (out.some(location => location.path === resolved)) return;
+		out.push({ path: resolved });
 	};
 	pushPath(a.path);
 	pushPath(a.file);
@@ -2640,7 +2649,8 @@ export class AgentSession {
 	 */
 	#wrapToolForAcpPermission<T extends AgentTool>(tool: T): T {
 		const bridge = this.#clientBridge;
-		if (!bridge?.requestPermission) return tool;
+		// Match the capability+method gating pattern used by read/write/bash.
+		if (!bridge?.capabilities.requestPermission || !bridge.requestPermission) return tool;
 		if (!PERMISSION_REQUIRED_TOOLS.has(tool.name)) return tool;
 		return new Proxy(tool, {
 			get: (target, prop, receiver) => {
@@ -2677,7 +2687,7 @@ export class AgentSession {
 								toolName: target.name,
 								title: derivePermissionTitle(target.name, args),
 								rawInput: args,
-								locations: extractPermissionLocations(args),
+								locations: extractPermissionLocations(args, this.sessionManager.getCwd()),
 							},
 							PERMISSION_OPTIONS,
 							signal,

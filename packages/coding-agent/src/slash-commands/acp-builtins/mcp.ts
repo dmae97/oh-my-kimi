@@ -1,4 +1,4 @@
-import { getMCPConfigPath } from "@oh-my-pi/pi-utils";
+import { getMCPConfigPath, logger } from "@oh-my-pi/pi-utils";
 import { connectToServer, disconnectServer, listPrompts, listResources, listTools } from "../../mcp/client";
 import {
 	addMCPServer,
@@ -15,6 +15,24 @@ import type { MCPServerConfig, MCPServerConnection } from "../../mcp/types";
 import { parseCommandArgs } from "../../utils/command-args";
 import { commandConsumed, errorMessage, parseNamedScopeArgs, parseSubcommand, usage } from "./shared";
 import type { AcpBuiltinCommandRuntime, AcpBuiltinCommandSpec } from "./types";
+
+/**
+ * Strip query/userinfo from MCP URLs before emitting them to ACP clients.
+ * MCP server URLs frequently carry API keys in the query string (e.g.
+ * `https://mcp.exa.ai/?exaApiKey=…`), so the raw URL is unsafe to leak.
+ * Show origin only; fall back to `(hidden)` for unparseable inputs.
+ */
+function redactMcpUrl(url: string | undefined): string | undefined {
+	if (!url) return url;
+	try {
+		const parsed = new URL(url);
+		const origin = parsed.origin;
+		const pathOnly = parsed.pathname && parsed.pathname !== "/" ? parsed.pathname : "";
+		return `${origin}${pathOnly}`;
+	} catch {
+		return "(hidden)";
+	}
+}
 
 type AcpMcpScope = "user" | "project";
 
@@ -208,11 +226,26 @@ async function withPreparedMcpConnection<T>(
 	let connection: MCPServerConnection | undefined;
 	try {
 		const manager = new MCPManager(runtime.cwd);
+		// Auth storage must be wired in before prepareConfig so OAuth-backed
+		// servers can refresh credentials and inject Authorization headers.
+		// Without this, `/mcp test|resources|prompts` silently fails for any
+		// server saved by the TUI/reauth path.
+		manager.setAuthStorage(runtime.session.modelRegistry.authStorage);
 		const resolvedConfig = await manager.prepareConfig(config);
 		connection = await connectToServer(name, resolvedConfig);
 		return await fn(connection);
 	} finally {
-		if (connection) void disconnectServer(connection);
+		if (connection) {
+			// Await cleanup so the stdio subprocess / HTTP DELETE has actually
+			// released the resource before this helper returns. Fire-and-forget
+			// here races with subsequent connect attempts and turns close
+			// failures into unhandled rejections.
+			try {
+				await disconnectServer(connection);
+			} catch (err) {
+				logger.warn("MCP disconnect after temporary connection failed", { name, err });
+			}
+		}
 	}
 }
 
@@ -376,7 +409,7 @@ async function handleListCommand(runtime: AcpBuiltinCommandRuntime) {
 					const enabled = config.enabled !== false && !disabledSet.has(name) ? "enabled" : "disabled";
 					const location =
 						config.type === "http" || config.type === "sse"
-							? (config as { url: string }).url
+							? redactMcpUrl((config as { url: string }).url)
 							: (config as { command: string }).command;
 					return `${name} | ${type} | ${enabled} | ${location ?? "(unknown)"} [${scope}]`;
 				})

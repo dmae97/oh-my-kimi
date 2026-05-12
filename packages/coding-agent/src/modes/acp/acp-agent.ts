@@ -41,8 +41,9 @@ import {
 } from "@agentclientprotocol/sdk";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { logger, VERSION } from "@oh-my-pi/pi-utils";
-import { disableProvider, enableProvider } from "../../capability";
+import { disableProvider, enableProvider, reset as resetCapabilities } from "../../capability";
 import { Settings } from "../../config/settings";
+import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import type { ExtensionUIContext } from "../../extensibility/extensions";
 import { runExtensionCompact } from "../../extensibility/extensions/compact-handler";
 import { buildSkillPromptMessage, getSkillSlashCommandName } from "../../extensibility/skills";
@@ -217,7 +218,15 @@ export class AcpAgent implements Agent {
 		};
 	}
 
-	async authenticate(_params: AuthenticateRequest): Promise<AuthenticateResponse> {
+	async authenticate(params: AuthenticateRequest): Promise<AuthenticateResponse> {
+		// ACP spec: `methodId` must be one of the methods advertised by `initialize`.
+		// Reject anything else so malformed clients fail fast rather than appearing
+		// authenticated and surfacing a downstream model failure later.
+		const supportsTerminalAuth = this.#clientCapabilities?.auth?.terminal === true;
+		const validMethods = supportsTerminalAuth ? ["agent", "terminal"] : ["agent"];
+		if (!validMethods.includes(params.methodId)) {
+			throw new Error(`Unknown ACP auth method: ${params.methodId}`);
+		}
 		return {};
 	}
 
@@ -335,6 +344,16 @@ export class AcpAgent implements Agent {
 				throw new Error(`Unknown ACP config option: ${params.configId}`);
 		}
 
+		// When mode is changed via the generic config-option API, mirror the
+		// `current_mode_update` notification that `setSessionMode` emits so
+		// ACP clients tracking session-mode state see a consistent transition.
+		if (params.configId === MODE_CONFIG_ID) {
+			await this.#connection.sessionUpdate({
+				sessionId: record.session.sessionId,
+				update: this.#buildCurrentModeUpdate(record.session),
+			});
+		}
+
 		const configOptions = this.#buildConfigOptions(record.session);
 		await this.#connection.sessionUpdate({
 			sessionId: record.session.sessionId,
@@ -401,6 +420,7 @@ export class AcpAgent implements Agent {
 			cwd: record.session.sessionManager.getCwd(),
 			output: output => this.#emitCommandOutput(record, output),
 			refreshCommands: () => this.#emitAvailableCommandsUpdate(record),
+			reloadPlugins: () => this.#reloadPluginState(record),
 			notifyTitleChanged: async () => {
 				await this.#connection.sessionUpdate({
 					sessionId: record.session.sessionId,
@@ -408,6 +428,15 @@ export class AcpAgent implements Agent {
 						sessionUpdate: "session_info_update",
 						title: record.session.sessionName,
 						updatedAt: new Date().toISOString(),
+					},
+				});
+			},
+			notifyConfigChanged: async () => {
+				await this.#connection.sessionUpdate({
+					sessionId: record.session.sessionId,
+					update: {
+						sessionUpdate: "config_option_update",
+						configOptions: this.#buildConfigOptions(record.session),
 					},
 				});
 			},
@@ -729,6 +758,7 @@ export class AcpAgent implements Agent {
 		for (const notification of mapAgentSessionEventToAcpSessionUpdates(event, record.session.sessionId, {
 			getMessageId: message => this.#getLiveMessageId(record, message),
 			getMessageProgress: message => this.#getLiveMessageProgress(record, message),
+			cwd: record.session.sessionManager.getCwd(),
 		})) {
 			await this.#connection.sessionUpdate(notification);
 		}
@@ -858,6 +888,12 @@ export class AcpAgent implements Agent {
 				case "resource":
 					if ("text" in block.resource) {
 						textParts.push(block.resource.text);
+					} else if (typeof block.resource.mimeType === "string" && block.resource.mimeType.startsWith("image/")) {
+						// `embeddedContext: true` covers both text and blob resources, but
+						// blobs aren't directly consumable by the LLM. Route image blobs
+						// to the images array so the user's intent survives; everything
+						// else falls back to the URI placeholder below.
+						images.push({ type: "image", data: block.resource.blob, mimeType: block.resource.mimeType });
 					} else {
 						textParts.push(`[embedded resource: ${block.resource.uri}]`);
 					}
@@ -1038,14 +1074,10 @@ export class AcpAgent implements Agent {
 			commands.push(command);
 		};
 
-		for (const command of session.customCommands) {
-			appendCommand({
-				name: command.command.name,
-				description: command.command.description,
-				input: { hint: "arguments" },
-			});
-		}
-
+		// Advertise in the order dispatch resolves them: ACP builtins first
+		// (so core commands like `/model`, `/mcp`, `/todo` cannot be shadowed),
+		// then skills, then custom/user commands, then file-based slash
+		// commands. `appendCommand` dedupes by name so earlier entries win.
 		for (const command of ACP_BUILTIN_SLASH_COMMANDS) {
 			appendCommand(command);
 		}
@@ -1058,6 +1090,14 @@ export class AcpAgent implements Agent {
 					input: { hint: "arguments" },
 				});
 			}
+		}
+
+		for (const command of session.customCommands) {
+			appendCommand({
+				name: command.command.name,
+				description: command.command.description,
+				input: { hint: "arguments" },
+			});
 		}
 
 		for (const command of await loadSlashCommands({ cwd: session.sessionManager.getCwd() })) {
@@ -1125,6 +1165,23 @@ export class AcpAgent implements Agent {
 				availableCommands: await this.#buildAvailableCommands(record.session),
 			},
 		});
+	}
+
+	/**
+	 * Reload plugin/registry state for an ACP session. Mirrors the interactive
+	 * `/reload-plugins` and `/move` flows: invalidates the plugin-roots cache,
+	 * resets the capability cache, refreshes the session's slash-command state,
+	 * then re-advertises commands so the client sees newly installed/disabled
+	 * plugins.
+	 */
+	async #reloadPluginState(record: ManagedSessionRecord): Promise<void> {
+		const cwd = record.session.sessionManager.getCwd();
+		const projectPath = await resolveActiveProjectRegistryPath(cwd);
+		clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+		resetCapabilities();
+		const fileCommands = await loadSlashCommands({ cwd });
+		record.session.setSlashCommands(fileCommands);
+		await this.#emitAvailableCommandsUpdate(record);
 	}
 
 	async #emitEndOfTurnUpdates(record: ManagedSessionRecord): Promise<void> {
@@ -1217,14 +1274,15 @@ export class AcpAgent implements Agent {
 	}
 
 	async #replaySessionHistory(record: ManagedSessionRecord): Promise<void> {
+		const cwd = record.session.sessionManager.getCwd();
 		for (const message of record.session.sessionManager.buildSessionContext().messages as ReplayableMessage[]) {
-			for (const notification of this.#messageToReplayNotifications(record.session.sessionId, message)) {
+			for (const notification of this.#messageToReplayNotifications(record.session.sessionId, message, cwd)) {
 				await this.#connection.sessionUpdate(notification);
 			}
 		}
 	}
 
-	#messageToReplayNotifications(sessionId: string, message: ReplayableMessage): SessionNotification[] {
+	#messageToReplayNotifications(sessionId: string, message: ReplayableMessage, cwd: string): SessionNotification[] {
 		if (message.role === "assistant") {
 			return this.#replayAssistantMessage(sessionId, message);
 		}
@@ -1246,7 +1304,7 @@ export class AcpAgent implements Agent {
 			typeof message.toolCallId === "string" &&
 			typeof message.toolName === "string"
 		) {
-			return this.#replayToolResult(sessionId, {
+			return this.#replayToolResult(sessionId, cwd, {
 				...message,
 				toolCallId: message.toolCallId,
 				toolName: message.toolName,
@@ -1338,6 +1396,7 @@ export class AcpAgent implements Agent {
 
 	#replayToolResult(
 		sessionId: string,
+		cwd: string,
 		message: Required<Pick<ReplayableMessage, "toolCallId" | "toolName">> & ReplayableMessage,
 	): SessionNotification[] {
 		const args = this.#buildReplayToolArgs(message.details);
@@ -1359,8 +1418,8 @@ export class AcpAgent implements Agent {
 			},
 		};
 		return [
-			...mapAgentSessionEventToAcpSessionUpdates(startEvent, sessionId),
-			...mapAgentSessionEventToAcpSessionUpdates(endEvent, sessionId),
+			...mapAgentSessionEventToAcpSessionUpdates(startEvent, sessionId, { cwd }),
+			...mapAgentSessionEventToAcpSessionUpdates(endEvent, sessionId, { cwd }),
 		];
 	}
 

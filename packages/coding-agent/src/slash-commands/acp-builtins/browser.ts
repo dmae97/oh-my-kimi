@@ -19,7 +19,16 @@ export const browserCommand: AcpBuiltinCommandSpec = {
 		runtime.settings.set("browser.headless" as SettingPath, next as SettingValue<SettingPath>);
 		const tool = runtime.session.getToolByName("browser");
 		if (tool && "restartForModeChange" in tool) {
-			await (tool as { restartForModeChange: () => Promise<void> }).restartForModeChange();
+			try {
+				await (tool as { restartForModeChange: () => Promise<void> }).restartForModeChange();
+			} catch (err) {
+				// Setting was already mutated; surface the restart failure so the
+				// user knows the browser is in an inconsistent state.
+				await runtime.output(
+					`Browser mode set to ${next ? "headless" : "visible"}, but restart failed: ${err instanceof Error ? err.message : String(err)}`,
+				);
+				return commandConsumed();
+			}
 		}
 		await runtime.output(`Browser mode: ${next ? "headless" : "visible"}`);
 		return commandConsumed();

@@ -17,8 +17,8 @@ export function commandConsumed(): AcpBuiltinSlashCommandResult {
 	return { consumed: true };
 }
 
-export function usage(text: string, runtime: AcpBuiltinCommandRuntime): AcpBuiltinSlashCommandResult {
-	void runtime.output(text);
+export async function usage(text: string, runtime: AcpBuiltinCommandRuntime): Promise<AcpBuiltinSlashCommandResult> {
+	await runtime.output(text);
 	return commandConsumed();
 }
 

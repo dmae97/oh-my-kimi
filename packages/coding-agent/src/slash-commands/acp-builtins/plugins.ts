@@ -14,6 +14,7 @@ async function handleEnableDisableCommand(
 	const manager = await createMarketplaceManager(runtime);
 	const isEnable = sub === "enable";
 	await manager.setPluginEnabled(parsed.pluginId, isEnable, parsed.scope);
+	await runtime.reloadPlugins();
 	await runtime.output(`${isEnable ? "Enabled" : "Disabled"} ${parsed.pluginId}`);
 	return commandConsumed();
 }

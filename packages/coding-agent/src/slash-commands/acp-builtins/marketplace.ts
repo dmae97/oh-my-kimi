@@ -79,6 +79,7 @@ async function handleInstallCommand(
 	const pluginName = parsed.installSpec.slice(0, atIndex);
 	const marketplace = parsed.installSpec.slice(atIndex + 1);
 	await manager.installPlugin(pluginName, marketplace, { force: parsed.force, scope: parsed.scope });
+	await runtime.reloadPlugins();
 	await runtime.output(`Installed ${pluginName} from ${marketplace}`);
 	return commandConsumed();
 }
@@ -91,6 +92,7 @@ async function handleUninstallCommand(
 	const parsed = parsePluginScopeArgs(rest, "Usage: /marketplace uninstall [--scope user|project] <name@marketplace>");
 	if ("error" in parsed) return usage(parsed.error, runtime);
 	await manager.uninstallPlugin(parsed.pluginId, parsed.scope);
+	await runtime.reloadPlugins();
 	await runtime.output(`Uninstalled ${parsed.pluginId}`);
 	return commandConsumed();
 }
@@ -124,6 +126,7 @@ async function handleUpgradeCommand(
 		);
 		if ("error" in parsed) return usage(parsed.error, runtime);
 		const result = await manager.upgradePlugin(parsed.pluginId, parsed.scope);
+		await runtime.reloadPlugins();
 		await runtime.output(`Upgraded ${parsed.pluginId} to ${result.version}`);
 		return commandConsumed();
 	}
@@ -132,6 +135,7 @@ async function handleUpgradeCommand(
 	if (results.length === 0) {
 		await runtime.output("All marketplace plugins are up to date");
 	} else {
+		await runtime.reloadPlugins();
 		const lines = results.map(result => `  ${result.pluginId}: ${result.from} -> ${result.to}`);
 		await runtime.output(`Upgraded ${results.length} plugin(s):\n${lines.join("\n")}`);
 	}

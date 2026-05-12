@@ -22,6 +22,7 @@ export const modelCommand: AcpBuiltinCommandSpec = {
 				await runtime.session.setModel(match);
 				await runtime.output(`Model set to ${match.provider}/${match.id}.`);
 				await runtime.notifyTitleChanged?.();
+				await runtime.notifyConfigChanged?.();
 				return commandConsumed();
 			} catch (err) {
 				return usage(`Failed to set model: ${errorMessage(err)}`, runtime);

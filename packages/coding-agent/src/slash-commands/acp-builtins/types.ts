@@ -15,7 +15,15 @@ export interface AcpBuiltinCommandRuntime {
 	cwd: string;
 	output: (text: string) => Promise<void> | void;
 	refreshCommands: () => Promise<void> | void;
+	/**
+	 * Reload plugin state (caches, slash command registry, project registries)
+	 * and emit a fresh `available_commands_update`. Called by `/reload-plugins`,
+	 * `/move`, and `/marketplace`/`/plugins` mutations so the session and the
+	 * ACP client see a consistent view after plugin or project-scope changes.
+	 */
+	reloadPlugins: () => Promise<void>;
 	notifyTitleChanged?: () => Promise<void> | void;
+	notifyConfigChanged?: () => Promise<void> | void;
 }
 
 export type AcpBuiltinSlashCommandResult = false | { consumed: true } | { prompt: string };
