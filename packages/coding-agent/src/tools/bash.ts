@@ -326,7 +326,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		}
 		lines.push(`Background job ${jobId} started: ${label}`);
 		lines.push("Result will be delivered automatically when complete.");
-		lines.push(`Use \`job\` (with \`poll\` or \`cancel\`) or \`read jobs://${jobId}\` if needed.`);
+		lines.push(`If blocked, use \`job\` with \`poll\`; inspect with \`read jobs://${jobId}\` or cancel with \`job\`.`);
 		return {
 			content: [{ type: "text", text: lines.join("\n") }],
 			details,

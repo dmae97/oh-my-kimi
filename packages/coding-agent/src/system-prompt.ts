@@ -12,7 +12,6 @@ import type { SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
 import { loadSkills, type Skill } from "./extensibility/skills";
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
-import nowPromptTemplate from "./prompts/system/now-prompt.md" with { type: "text" };
 import projectPromptTemplate from "./prompts/system/project-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 import { shortenPath } from "./tools/render-utils";
@@ -574,10 +573,6 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const projectPrompt = resolvedCustomPrompt ? "" : prompt.render(projectPromptTemplate, data).trim();
 	if (projectPrompt) {
 		systemPrompt.push(projectPrompt);
-	}
-	const nowPrompt = prompt.render(nowPromptTemplate, data).trim();
-	if (nowPrompt) {
-		systemPrompt.push(nowPrompt);
 	}
 
 	return { systemPrompt };
