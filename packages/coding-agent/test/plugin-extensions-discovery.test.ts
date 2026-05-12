@@ -138,4 +138,50 @@ describe("plugin extension discovery", () => {
 		expect(extension).toBeDefined();
 		expect(extension?.tools.has("legacy-pi-ext")).toBe(true);
 	});
+
+	it("loads installed plugin extensions whose manifest entry points at a directory with index.ts", async () => {
+		const pluginsDir = getPluginsDir();
+		const pluginDir = path.join(pluginsDir, "node_modules", "dir-entry-plugin");
+		const extensionDir = path.join(pluginDir, ".pi", "extensions", "dir-entry");
+		const extensionPath = path.join(extensionDir, "index.ts");
+		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		fs.mkdirSync(extensionDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(pluginsDir, "package.json"),
+			JSON.stringify({
+				name: "omp-plugins",
+				private: true,
+				dependencies: {
+					"dir-entry-plugin": "1.0.0",
+				},
+			}),
+		);
+		fs.writeFileSync(
+			path.join(pluginDir, "package.json"),
+			JSON.stringify({
+				name: "dir-entry-plugin",
+				version: "1.0.0",
+				pi: {
+					// Directory entry — loader must resolve to the directory's index file.
+					extensions: [".pi/extensions/dir-entry"],
+				},
+			}),
+		);
+		fs.writeFileSync(
+			extensionPath,
+			[
+				"export default function(pi) {",
+				'\tpi.registerCommand("dir-entry-ext", { handler: async () => {} });',
+				"}",
+			].join("\n"),
+		);
+
+		const result = await discoverAndLoadExtensions([], projectDir.path());
+		const extension = result.extensions.find(ext => ext.path === extensionPath);
+		const pluginError = result.errors.find(err => err.path.includes(path.join("dir-entry-plugin", ".pi")));
+
+		expect(pluginError).toBeUndefined();
+		expect(extension).toBeDefined();
+		expect(extension?.commands.has("dir-entry-ext")).toBe(true);
+	});
 });
