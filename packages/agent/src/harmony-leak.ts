@@ -397,7 +397,7 @@ function truncateAtLineAndAppendSentinel(
 }
 
 function sha8(text: string): string {
-	return new Bun.CryptoHasher("sha256").update(text).digest("hex").slice(0, 8);
+	return Bun.sha(text, "hex").slice(0, 8);
 }
 
 const PREVIEW_KEEP_RE = new RegExp(`[${SCRIPT_CLASS}\\s】【”“…」「、。]`, "u");

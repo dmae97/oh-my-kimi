@@ -148,7 +148,19 @@ export function parseEvalInput(input: string): ParsedEvalInput {
 	}
 
 	while (i < lines.length) {
-		const beginMatch = BEGIN_RE.exec(lines[i])!;
+		const beginMatch = BEGIN_RE.exec(lines[i]);
+		if (!beginMatch) {
+			// Stray content between/after cells (blank lines were already
+			// consumed). `*** Abort` here terminates parsing; anything else
+			// — typically a harmony-leak fragment or model garbage — is
+			// skipped rather than crashing the parser.
+			if (ABORT_RE.test(lines[i])) {
+				aborted = true;
+				break;
+			}
+			i++;
+			continue;
+		}
 		const langToken = beginMatch[1];
 		const explicitLanguage = resolveLang(langToken);
 		i++;

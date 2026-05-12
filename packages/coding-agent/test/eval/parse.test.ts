@@ -270,4 +270,35 @@ print(1)
 			expect(result.aborted).toBeUndefined();
 		});
 	});
+
+	it("does not crash on stray non-marker lines between cells", () => {
+		// Regression: prior to fix, the outer parse loop unconditionally ran
+		// `BEGIN_RE.exec(lines[i])!` on whatever followed a closed cell, so a
+		// stray line — common in harmony-leak fragments — threw
+		// "null is not an object (evaluating 'BEGIN_RE.exec(lines[i])[1]')".
+		const result = parseEvalInput(`*** Begin PY
+print("a")
+*** End PY
+stray junk that is not a marker
+*** Begin PY
+print("b")
+*** End PY
+`);
+		expect(result.aborted).toBeUndefined();
+		expect(result.cells).toHaveLength(2);
+		expect(result.cells[0].code).toBe('print("a")');
+		expect(result.cells[1].code).toBe('print("b")');
+	});
+
+	it("does not crash on trailing stray content after the final cell", () => {
+		const result = parseEvalInput(`*** Begin PY
+print(1)
+*** End PY
+leftover model chatter
+more junk
+`);
+		expect(result.aborted).toBeUndefined();
+		expect(result.cells).toHaveLength(1);
+		expect(result.cells[0].code).toBe("print(1)");
+	});
 });
