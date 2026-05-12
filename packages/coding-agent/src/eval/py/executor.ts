@@ -1,5 +1,7 @@
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { OutputSink } from "../../session/streaming-output";
+import type { ToolSession } from "../../tools";
+import type { JsStatusEvent } from "../js/shared/types";
 import { shutdownSharedGateway } from "./gateway-coordinator";
 import {
 	checkPythonKernelAvailability,
@@ -8,6 +10,7 @@ import {
 	type KernelExecuteResult,
 	PythonKernel,
 } from "./kernel";
+import { ensurePyToolBridge, registerPyToolBridge } from "./tool-bridge";
 
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_KERNEL_SESSIONS = 4;
@@ -49,6 +52,18 @@ export interface PythonExecutorOptions {
 	/** Artifact path/id for full output storage */
 	artifactPath?: string;
 	artifactId?: string;
+	/**
+	 * ToolSession used to resolve host-side `tool.<name>(args)` calls made from
+	 * the Python prelude's bridge proxy. When omitted, the bridge env vars are
+	 * not injected and any `tool.foo(...)` raises in Python.
+	 */
+	toolSession?: ToolSession;
+	/** Callback for status events emitted by tool bridge invocations. */
+	emitStatus?: (event: JsStatusEvent) => void;
+	/** @internal Bridge session id, set by `executePython` before delegating. */
+	bridgeSessionId?: string;
+	/** @internal Bridge endpoint info, set by `executePython` before delegating. */
+	bridge?: { url: string; token: string };
 }
 
 export interface PythonKernelExecutor {
@@ -113,6 +128,10 @@ interface KernelSessionExecutionOptions {
 	signal?: AbortSignal;
 	deadlineMs?: number;
 	kernelOwnerId?: string;
+	/** Bridge session identifier exported into the kernel env as PI_TOOL_BRIDGE_SESSION. */
+	bridgeSessionId?: string;
+	/** Cached bridge connection info. When present, env vars for tool.<name>() get injected. */
+	bridge?: { url: string; token: string };
 }
 
 class PythonExecutionCancelledError extends Error {
@@ -137,10 +156,20 @@ function getExecutionDeadlineMs(options?: Pick<PythonExecutorOptions, "deadlineM
  * directory (preferred by the prelude when resolving output IDs, so subagents
  * see the parent's flat dir instead of a non-existent sibling).
  */
-function buildKernelEnv(options: { sessionFile?: string; artifactsDir?: string }): Record<string, string> | undefined {
+function buildKernelEnv(options: {
+	sessionFile?: string;
+	artifactsDir?: string;
+	bridgeSessionId?: string;
+	bridge?: { url: string; token: string };
+}): Record<string, string> | undefined {
 	const env: Record<string, string> = {};
 	if (options.sessionFile) env.PI_SESSION_FILE = options.sessionFile;
 	if (options.artifactsDir) env.PI_ARTIFACTS_DIR = options.artifactsDir;
+	if (options.bridge && options.bridgeSessionId) {
+		env.PI_TOOL_BRIDGE_URL = options.bridge.url;
+		env.PI_TOOL_BRIDGE_TOKEN = options.bridge.token;
+		env.PI_TOOL_BRIDGE_SESSION = options.bridgeSessionId;
+	}
 	return Object.keys(env).length > 0 ? env : undefined;
 }
 
@@ -871,6 +900,20 @@ async function executeWithKernel(
 	const deadlineMs = getExecutionDeadlineMs(options);
 	let executionTimeoutMs: number | undefined;
 
+	const emitStatus =
+		options?.emitStatus ??
+		((event: JsStatusEvent) => {
+			displayOutputs.push({ type: "status", event });
+		});
+	const unregisterBridge =
+		options?.toolSession && options?.bridgeSessionId
+			? registerPyToolBridge(options.bridgeSessionId, {
+					toolSession: options.toolSession,
+					signal: options.signal,
+					emitStatus,
+				})
+			: null;
+
 	try {
 		executionTimeoutMs = requireRemainingTimeoutMs(deadlineMs);
 		const result = await kernel.execute(code, {
@@ -923,6 +966,8 @@ async function executeWithKernel(
 		const error = err instanceof Error ? err : new Error(String(err));
 		logger.error("Python execution failed", { error: error.message });
 		throw error;
+	} finally {
+		unregisterBridge?.();
 	}
 }
 
@@ -954,7 +999,20 @@ export async function executePython(code: string, options?: PythonExecutorOption
 
 		const kernelMode = executionOptions.kernelMode ?? "session";
 
+		if (executionOptions.toolSession && !executionOptions.bridge) {
+			try {
+				executionOptions.bridge = await ensurePyToolBridge();
+			} catch (err) {
+				logger.warn("Failed to start Python tool bridge", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+		}
+
 		if (kernelMode === "per-call") {
+			if (executionOptions.bridge && !executionOptions.bridgeSessionId) {
+				executionOptions.bridgeSessionId = `py-bridge:${crypto.randomUUID()}`;
+			}
 			const env = buildKernelEnv(executionOptions);
 			requireRemainingTimeoutMs(deadlineMs);
 			const startOptions = buildKernelStartOptions(cwd, env, executionOptions);
@@ -967,6 +1025,9 @@ export async function executePython(code: string, options?: PythonExecutorOption
 		}
 
 		const sessionId = executionOptions.sessionId ?? `session:${cwd}`;
+		if (executionOptions.bridge && !executionOptions.bridgeSessionId) {
+			executionOptions.bridgeSessionId = sessionId;
+		}
 		if (executionOptions.reset) {
 			const existing = kernelSessions.get(sessionId);
 			if (existing) {

@@ -41,6 +41,7 @@ export default {
 			artifactPath: opts.artifactPath,
 			artifactId: opts.artifactId,
 			onChunk: opts.onChunk,
+			toolSession: opts.session,
 		};
 		const result = await executePython(code, executorOptions);
 		return {

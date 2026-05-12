@@ -1,13 +1,15 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Changed the `timeoutMs` execution option to no longer be enforced during worker-based JS runs, so callers must rely on external cancellation signals for time limits
 
 ### Added
 
+- Added Python `tool.<name>(args)` support to `executePython` sessions so evaluated Python code can invoke session tools through the prelude `tool` proxy
+- Added per-execution Python tool bridge session registration and loopback endpoint wiring so Python tool calls resolve to host tools and return tool results
+- Added status-event forwarding for Python tool bridge calls so `tool` invocations can emit execution status updates
 - Added browser-tab JavaScript execution through the shared runtime so tab runs now expose the standard helper globals (`read`, `write`, `sort`, `uniq`, `counter`, `diff`, `tree`, `env`, `output`, `display`, and `tool`)
 - Added static ESM `import` support to browser-tab JavaScript by rewriting top-level imports and resolving them against the tab session context
 - Added substring fallback matching to `HistoryStorage.search` so infix and short-token queries that FTS5 prefix matching misses are still returned

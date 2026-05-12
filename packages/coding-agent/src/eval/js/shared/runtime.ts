@@ -34,7 +34,6 @@ export interface RuntimeOptions {
 	 * via `setRunScope()` instead.
 	 */
 	extraGlobals?: Record<string, unknown>;
-
 }
 
 /**
@@ -147,7 +146,6 @@ function formatConsoleArgs(args: unknown[]): string {
 		.map(arg => (typeof arg === "string" ? arg : util.inspect(arg, { depth: 6, colors: false, breakLength: 120 })))
 		.join(" ");
 }
-
 
 function buildRequire(cwd: string): NodeJS.Require {
 	return createRequire(pathToFileURL(path.join(cwd, "[eval]")).href);

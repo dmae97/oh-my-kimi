@@ -172,7 +172,6 @@ export function demoteTopLevelLexicals(code: string): string {
 	return result;
 }
 
-
 /**
  * Strip TypeScript syntax (type annotations, `interface`, `as`, `satisfies`, generics in
  * call expressions, etc.) before the import/lexical rewriters parse the code. We use Bun's

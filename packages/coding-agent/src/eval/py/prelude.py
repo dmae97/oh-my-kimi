@@ -372,3 +372,87 @@ if "__omp_prelude_loaded__" not in globals():
         
         return current
 
+
+    class _ToolCallable:
+        """Invokes one host-side tool via the loopback HTTP bridge."""
+
+        __slots__ = ("_proxy", "_name")
+
+        def __init__(self, proxy: "_ToolProxy", name: str):
+            self._proxy = proxy
+            self._name = name
+
+        def __repr__(self) -> str:
+            return f"<tool.{self._name}>"
+
+        def __call__(self, args=None, /, **kwargs):
+            import urllib.request, urllib.error
+            if args is None:
+                merged: dict = {}
+            elif isinstance(args, dict):
+                merged = dict(args)
+            else:
+                raise TypeError(
+                    f"tool.{self._name}(...) expects a dict of arguments (got {type(args).__name__})"
+                )
+            merged.update(kwargs)
+            if "_i" not in merged:
+                merged["_i"] = "py prelude"
+            payload = json.dumps(
+                {"session": self._proxy._session, "name": self._name, "args": merged}
+            ).encode("utf-8")
+            req = urllib.request.Request(
+                f"{self._proxy._base}/v1/tool",
+                data=payload,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self._proxy._token}",
+                },
+            )
+            try:
+                with urllib.request.urlopen(req) as resp:
+                    body = resp.read()
+            except urllib.error.HTTPError as exc:
+                body = exc.read()
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                raise RuntimeError(
+                    f"tool.{self._name}: bridge returned non-JSON response: {body[:200]!r}"
+                ) from None
+            if not isinstance(data, dict) or not data.get("ok"):
+                msg = (data or {}).get("error") if isinstance(data, dict) else None
+                raise RuntimeError(msg or f"tool.{self._name} failed")
+            return data.get("value")
+
+    class _ToolProxy:
+        """`tool.<name>(args)` proxy mirroring the JS runtime bridge."""
+
+        __slots__ = ("_base", "_token", "_session")
+
+        def __init__(self, base: str, token: str, session: str):
+            self._base = base.rstrip("/")
+            self._token = token
+            self._session = session
+
+        def __getattr__(self, name: str) -> _ToolCallable:
+            if name.startswith("_"):
+                raise AttributeError(name)
+            return _ToolCallable(self, name)
+
+        def __getitem__(self, name: str) -> _ToolCallable:
+            return _ToolCallable(self, name)
+
+        def __repr__(self) -> str:
+            return f"<tool proxy session={self._session}>"
+
+    if all(
+        _k in os.environ
+        for _k in ("PI_TOOL_BRIDGE_URL", "PI_TOOL_BRIDGE_TOKEN", "PI_TOOL_BRIDGE_SESSION")
+    ):
+        tool = _ToolProxy(
+            os.environ["PI_TOOL_BRIDGE_URL"],
+            os.environ["PI_TOOL_BRIDGE_TOKEN"],
+            os.environ["PI_TOOL_BRIDGE_SESSION"],
+        )

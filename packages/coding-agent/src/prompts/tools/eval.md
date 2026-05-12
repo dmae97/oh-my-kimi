@@ -50,10 +50,10 @@ env(key?=None, value?=None) → str | None | dict
     No args → full environment as dict. One arg → value of `key`. Two args → set `key=value` and return value.
 output(*ids, format?="raw", query?=None, offset?=None, limit?=None) → str | dict | list[dict]
     Read task/agent output by ID. Single id returns text/dict; multiple ids return a list.
+tool.<name>(args) → unknown
+    Invoke any session tool by name. `args` is the tool's parameter object.
 ```
-
-{{#if js}}**JavaScript only:** `tool.<name>(args)` invokes any session tool directly (e.g. `await tool.read({ path: "src/foo.ts" })`).
-{{/if}}</prelude>
+</prelude>
 
 <output>
 Cells render like a Jupyter notebook. `display(value)` renders non-presentable data as an interactive JSON tree. Presentable values (figures, images, dataframes, etc.) use their native representation.
