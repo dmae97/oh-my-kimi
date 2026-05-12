@@ -209,33 +209,55 @@ export function getConflictHistory(session: ToolSession): ConflictHistory {
 	return session.conflictHistory;
 }
 
-/** Parsed `conflict://<N>` URI. */
+/** A side of a conflict block that `read conflict://N/<scope>` can render. */
+export type ConflictScope = "ours" | "theirs" | "base";
+
+const CONFLICT_SCOPES = new Set<ConflictScope>(["ours", "theirs", "base"]);
+
+/** Parsed `conflict://<N>` or `conflict://<N>/<scope>` URI. */
 export interface ParsedConflictUri {
 	id: number;
+	scope?: ConflictScope;
 }
 
 const CONFLICT_URI_RE = /^conflict:\/\/(.+)$/;
 
 /**
- * Parse a `conflict://<N>` URI. Returns `null` for non-conflict paths;
- * throws `ToolError` for a well-formed scheme with an invalid id so the
- * agent gets a clear actionable message rather than a confusing "not
- * found" later.
+ * Parse a `conflict://<N>` or `conflict://<N>/<scope>` URI.
+ *
+ * Returns `null` for non-conflict paths; throws `ToolError` for a
+ * well-formed scheme with an invalid id or scope so the agent gets a
+ * clear actionable message rather than a confusing "not found" later.
  */
 export function parseConflictUri(raw: string): ParsedConflictUri | null {
 	const match = raw.match(CONFLICT_URI_RE);
 	if (!match) return null;
 	const tail = match[1];
-	if (!/^\d+$/.test(tail)) {
+	const slashIdx = tail.indexOf("/");
+	const idPart = slashIdx === -1 ? tail : tail.slice(0, slashIdx);
+	const scopePart = slashIdx === -1 ? undefined : tail.slice(slashIdx + 1);
+
+	if (!/^\d+$/.test(idPart)) {
 		throw new ToolError(
-			`Invalid conflict URI '${raw}': must be 'conflict://<N>' where N is a positive integer surfaced by a prior \`read\`.`,
+			`Invalid conflict URI '${raw}': must be 'conflict://<N>' (or 'conflict://<N>/<scope>') where N is a positive integer surfaced by a prior \`read\`.`,
 		);
 	}
-	const id = Number.parseInt(tail, 10);
+	const id = Number.parseInt(idPart, 10);
 	if (!Number.isFinite(id) || id < 1) {
 		throw new ToolError(`Invalid conflict URI '${raw}': id must be ≥ 1.`);
 	}
-	return { id };
+
+	let scope: ConflictScope | undefined;
+	if (scopePart !== undefined) {
+		if (!CONFLICT_SCOPES.has(scopePart as ConflictScope)) {
+			throw new ToolError(
+				`Invalid conflict URI '${raw}': scope must be one of 'ours', 'theirs', 'base', or omitted (e.g. 'conflict://${id}/theirs').`,
+			);
+		}
+		scope = scopePart as ConflictScope;
+	}
+
+	return { id, scope };
 }
 
 /**
@@ -322,6 +344,56 @@ export function expandContentTokens(content: string, entry: ConflictEntry): stri
 		}
 	}
 	return out.join("\n");
+}
+
+/** Reconstruct a conflict-marker line from prefix and optional label. */
+function markerLine(prefix: string, label: string | undefined): string {
+	return label && label.length > 0 ? `${prefix} ${label}` : prefix;
+}
+
+/**
+ * Materialise a conflict block for `read conflict://<N>` (and its
+ * `/ours` / `/theirs` / `/base` scopes).
+ *
+ * Returns:
+ * - `lines`: the lines to render, ordered top-to-bottom.
+ * - `startLine`: the 1-indexed file line number `lines[0]` corresponds
+ *   to, so the read formatter can label hashline anchors with the
+ *   original file positions.
+ *
+ * Bare (no scope) returns the full block including marker lines. A
+ * scoped view returns only that side's body — `base` throws when the
+ * recorded conflict is a 2-way merge with no base section.
+ */
+export function renderConflictRegion(
+	entry: ConflictEntry,
+	scope: ConflictScope | undefined,
+): { lines: string[]; startLine: number } {
+	if (scope === "ours") {
+		return { lines: [...entry.oursLines], startLine: entry.startLine + 1 };
+	}
+	if (scope === "theirs") {
+		return { lines: [...entry.theirsLines], startLine: entry.separatorLine + 1 };
+	}
+	if (scope === "base") {
+		if (entry.baseLines === undefined || entry.baseLine === undefined) {
+			throw new ToolError(
+				`Conflict #${entry.id} has no base section (2-way merge). 'conflict://${entry.id}/base' is only valid for diff3 conflicts.`,
+			);
+		}
+		return { lines: [...entry.baseLines], startLine: entry.baseLine + 1 };
+	}
+	const out: string[] = [];
+	out.push(markerLine("<<<<<<<", entry.oursLabel));
+	out.push(...entry.oursLines);
+	if (entry.baseLines !== undefined) {
+		out.push(markerLine("|||||||", entry.baseLabel));
+		out.push(...entry.baseLines);
+	}
+	out.push("=======");
+	out.push(...entry.theirsLines);
+	out.push(markerLine(">>>>>>>", entry.theirsLabel));
+	return { lines: out, startLine: entry.startLine };
 }
 
 const PREVIEW_SIDE_LINES = 6;

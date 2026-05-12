@@ -501,6 +501,11 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			const { text: cleanContent, stripped } = stripWriteContent(this.session, content);
 			const conflictUri = parseConflictUri(path);
 			if (conflictUri) {
+				if (conflictUri.scope) {
+					throw new ToolError(
+						`Conflict URI scope '/${conflictUri.scope}' is read-only — use \`read conflict://${conflictUri.id}/${conflictUri.scope}\` to inspect that side. To write, drop the scope (\`conflict://${conflictUri.id}\`) and put the chosen content (or shorthand like \`@${conflictUri.scope}\`) in \`content\`.`,
+					);
+				}
 				const entry = getConflictHistory(this.session).get(conflictUri.id);
 				if (!entry) {
 					throw new ToolError(

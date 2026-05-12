@@ -1,13 +1,13 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Changed the `eval` tool input format to a single-line `*** Cell <lang>:"<title>" [t:<duration>] [rst]` header per cell, replacing the `*** Begin <LANG>` / `*** End <LANG>` envelope and the standalone `*** Title:` / `*** Timeout:` / `*** Reset` directives. The lark grammar enforces a fixed attribute order; the runtime parser remains lenient (alias keys, bare positional tokens, single-quoted titles).
 
 ### Added
 
+- Added `read` support for `conflict://<N>` and `read conflict://<N>/<scope>` to inspect unresolved conflict regions captured by a prior read, including `ours`, `theirs`, and `base` side views with original file line alignment
 - Added shorthand content tokens `@ours`, `@theirs`, `@both`, and `@base` to conflict-resolution writes using `path: "conflict://<N>"` so replacement content can be composed from recorded conflict sections
 - Added conflict count metadata to read results so conflict files now show a warning badge (`⚠ N`) in the read tool UI
 - Added support for explicit boolean `rst` values (`rst:true`, `rst:false`, `rst:1`, `rst:0`, `rst:yes`, `rst:no`, `rst:on`, `rst:off`) in `*** Cell` headers

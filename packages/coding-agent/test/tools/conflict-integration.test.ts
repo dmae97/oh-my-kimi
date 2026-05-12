@@ -161,6 +161,72 @@ describe("read surfaces conflicts as a warning footer", () => {
 		expect(session.conflictHistory?.get(1)).toBeDefined();
 		expect(session.conflictHistory?.get(2)).toBeUndefined();
 	});
+
+	it("renders the full conflict block via `read conflict://<N>`", async () => {
+		const filePath = path.join(tempDir, "full.ts");
+		await Bun.write(filePath, TWO_WAY);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+
+		await read.execute("read-full-init", { path: "full.ts" });
+		const result = await read.execute("read-full", { path: "conflict://1" });
+		const text = getText(result);
+		expect(text).toContain("<<<<<<< HEAD");
+		expect(text).toContain("oldApi(x)");
+		expect(text).toContain("=======");
+		expect(text).toContain("newApi(x)");
+		expect(text).toContain(">>>>>>> feature/x");
+		// No conflict warning footer when expanding a single block by id.
+		expect(text).not.toContain("⚠");
+	});
+
+	it("renders only the theirs body via `read conflict://<N>/theirs`", async () => {
+		const filePath = path.join(tempDir, "theirs.ts");
+		await Bun.write(filePath, TWO_WAY);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+
+		await read.execute("read-theirs-init", { path: "theirs.ts" });
+		const result = await read.execute("read-theirs", { path: "conflict://1/theirs" });
+		const text = getText(result);
+		expect(text).toContain("newApi(x)");
+		expect(text).not.toContain("<<<<<<<");
+		expect(text).not.toContain("=======");
+		expect(text).not.toContain(">>>>>>>");
+		expect(text).not.toContain("oldApi(x)");
+	});
+
+	it("renders the base body for a diff3 conflict via `/base`", async () => {
+		const filePath = path.join(tempDir, "base.ts");
+		await Bun.write(filePath, THREE_WAY);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+
+		await read.execute("read-base-init", { path: "base.ts" });
+		const result = await read.execute("read-base", { path: "conflict://1/base" });
+		const text = getText(result);
+		expect(text).toContain("base body");
+		expect(text).not.toContain("ours body");
+		expect(text).not.toContain("theirs body");
+	});
+
+	it("rejects `/base` on a 2-way conflict with a clear error", async () => {
+		const filePath = path.join(tempDir, "no-base.ts");
+		await Bun.write(filePath, TWO_WAY);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+
+		await read.execute("read-no-base-init", { path: "no-base.ts" });
+		const promise = read.execute("read-no-base", { path: "conflict://1/base" });
+		await expect(promise).rejects.toThrow(/no base section/);
+	});
+
+	it("errors clearly when the conflict id is unknown", async () => {
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const promise = read.execute("read-missing", { path: "conflict://99" });
+		await expect(promise).rejects.toThrow(/Conflict #99 not found/);
+	});
 });
 
 describe("write resolves conflicts via conflict://N", () => {
@@ -294,6 +360,21 @@ describe("write resolves conflicts via conflict://N", () => {
 		await expect(write.execute("write-bad-frac", { path: "conflict://1.5", content: "x" })).rejects.toThrow(
 			/Invalid conflict URI/,
 		);
+	});
+
+	it("rejects scoped conflict URIs on write (read-only)", async () => {
+		const filePath = path.join(tempDir, "scoped.ts");
+		await Bun.write(filePath, TWO_WAY);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-scoped", { path: "scoped.ts" });
+		await expect(write.execute("write-scoped", { path: "conflict://1/theirs", content: "x" })).rejects.toThrow(
+			/read-only/,
+		);
+		// File untouched.
+		expect(await Bun.file(filePath).text()).toBe(TWO_WAY);
 	});
 
 	it("rejects stale resolutions when the file changed out of band", async () => {

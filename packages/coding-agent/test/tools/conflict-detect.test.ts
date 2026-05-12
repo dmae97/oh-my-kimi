@@ -5,6 +5,7 @@ import {
 	expandContentTokens,
 	formatConflictWarning,
 	parseConflictUri,
+	renderConflictRegion,
 	scanConflictLines,
 	spliceConflict,
 } from "@oh-my-pi/pi-coding-agent/tools/conflict-detect";
@@ -186,6 +187,17 @@ describe("parseConflictUri", () => {
 		expect(parseConflictUri("conflict://")).toBeNull();
 	});
 
+	it("parses an optional scope segment", () => {
+		expect(parseConflictUri("conflict://1/ours")).toEqual({ id: 1, scope: "ours" });
+		expect(parseConflictUri("conflict://2/theirs")).toEqual({ id: 2, scope: "theirs" });
+		expect(parseConflictUri("conflict://3/base")).toEqual({ id: 3, scope: "base" });
+	});
+
+	it("rejects unknown scope tokens", () => {
+		expect(() => parseConflictUri("conflict://1/both")).toThrow(/scope must be one of/);
+		expect(() => parseConflictUri("conflict://1/extras")).toThrow(/scope must be one of/);
+	});
+
 	it("rejects malformed ids with a ToolError", () => {
 		expect(() => parseConflictUri("conflict://0")).toThrow(ToolError);
 		expect(() => parseConflictUri("conflict://-1")).toThrow(ToolError);
@@ -234,6 +246,87 @@ describe("spliceConflict", () => {
 
 	it("rejects ranges past end of file", () => {
 		expect(() => spliceConflict("short\n", makeEntry({ startLine: 10, endLine: 15 }), "x\n")).toThrow(ToolError);
+	});
+});
+
+describe("renderConflictRegion", () => {
+	const twoWay = makeEntry({
+		startLine: 10,
+		separatorLine: 13,
+		endLine: 15,
+		oursLabel: "HEAD",
+		theirsLabel: "feature/x",
+		oursLines: ["ours-1", "ours-2"],
+		theirsLines: ["theirs-1"],
+	});
+	const threeWay = makeEntry({
+		startLine: 20,
+		baseLine: 22,
+		separatorLine: 24,
+		endLine: 26,
+		oursLabel: "HEAD",
+		baseLabel: "common ancestor",
+		theirsLabel: "feat",
+		oursLines: ["o"],
+		baseLines: ["b"],
+		theirsLines: ["t"],
+	});
+
+	it("returns full block with marker lines reconstructed from labels", () => {
+		const region = renderConflictRegion(twoWay, undefined);
+		expect(region.startLine).toBe(10);
+		expect(region.lines).toEqual(["<<<<<<< HEAD", "ours-1", "ours-2", "=======", "theirs-1", ">>>>>>> feature/x"]);
+	});
+
+	it("includes the base section in a diff3 full block", () => {
+		const region = renderConflictRegion(threeWay, undefined);
+		expect(region.startLine).toBe(20);
+		expect(region.lines).toEqual([
+			"<<<<<<< HEAD",
+			"o",
+			"||||||| common ancestor",
+			"b",
+			"=======",
+			"t",
+			">>>>>>> feat",
+		]);
+	});
+
+	it("omits the label when none was recorded", () => {
+		const noLabels = makeEntry({
+			startLine: 1,
+			separatorLine: 3,
+			endLine: 5,
+			oursLabel: undefined,
+			theirsLabel: undefined,
+			oursLines: ["o"],
+			theirsLines: ["t"],
+		});
+		const region = renderConflictRegion(noLabels, undefined);
+		expect(region.lines[0]).toBe("<<<<<<<");
+		expect(region.lines[region.lines.length - 1]).toBe(">>>>>>>");
+	});
+
+	it("returns just the ours body with the line number after `<<<<<<<`", () => {
+		const region = renderConflictRegion(twoWay, "ours");
+		expect(region.startLine).toBe(11);
+		expect(region.lines).toEqual(["ours-1", "ours-2"]);
+	});
+
+	it("returns just the theirs body with the line number after `=======`", () => {
+		const region = renderConflictRegion(twoWay, "theirs");
+		expect(region.startLine).toBe(14);
+		expect(region.lines).toEqual(["theirs-1"]);
+	});
+
+	it("returns just the base body for a diff3 conflict", () => {
+		const region = renderConflictRegion(threeWay, "base");
+		expect(region.startLine).toBe(23);
+		expect(region.lines).toEqual(["b"]);
+	});
+
+	it("rejects `base` scope for a 2-way conflict", () => {
+		expect(() => renderConflictRegion(twoWay, "base")).toThrow(/no base section/);
 	});
 });
 
