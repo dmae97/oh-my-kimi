@@ -175,10 +175,10 @@ export function demoteTopLevelLexicals(code: string): string {
 	return result;
 }
 
-function returnFinalExpression(code: string): string {
+function returnFinalExpression(code: string): { source: string; returned: boolean } {
 	const ast = parseProgram(code);
 	const last = ast?.program.body.at(-1);
-	if (last?.type !== "ExpressionStatement") return code;
+	if (last?.type !== "ExpressionStatement") return { source: code, returned: false };
 
 	const expression = last as BabelExpressionStatement;
 	const prefix = code.slice(0, expression.start);
@@ -186,7 +186,7 @@ function returnFinalExpression(code: string): string {
 	const suffix = code.slice(expression.end);
 	const semicolonMatch = statement.match(/;\s*$/);
 	const trimmedStatement = semicolonMatch ? statement.slice(0, semicolonMatch.index) : statement;
-	return `${prefix}return (${trimmedStatement});${suffix}`;
+	return { source: `${prefix}__omp_display__(${trimmedStatement});${suffix}`, returned: true };
 }
 
 /**
@@ -217,12 +217,12 @@ const LOOKS_LIKE_TS =
 
 export function wrapCode(code: string): { source: string; asyncWrapped: boolean } {
 	const rewritten = returnFinalExpression(demoteTopLevelLexicals(rewriteStaticImports(stripTypeScript(code))));
-	const needsAsyncWrapper = /\bawait\b|\breturn\b/.test(rewritten);
+	const needsAsyncWrapper = /\bawait\b|\breturn\b/.test(rewritten.source);
 	if (!needsAsyncWrapper) {
-		return { source: rewritten, asyncWrapped: false };
+		return { source: rewritten.source, asyncWrapped: false };
 	}
 	return {
-		source: `(async () => {\n${rewritten}\n})()`,
+		source: `(async () => {\n${rewritten.source}\n})()`,
 		asyncWrapped: true,
 	};
 }

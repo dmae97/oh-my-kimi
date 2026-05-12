@@ -84,6 +84,16 @@ describe("executeJs", () => {
 		expect(resetResult.output.trim()).toBe("undefined");
 	});
 
+	it("persists bindings when auto-displaying the final expression", async () => {
+		const first = await executeJs("const inspected = 40; inspected + 2;", { sessionId, session, sessionFile });
+		expect(first.exitCode).toBe(0);
+		expect(first.output.trim()).toBe("42");
+
+		const persisted = await executeJs("return inspected + 1;", { sessionId, session, sessionFile });
+		expect(persisted.exitCode).toBe(0);
+		expect(persisted.output.trim()).toBe("41");
+	});
+
 	it("exposes the worker's real process object", async () => {
 		const result = await executeJs(
 			[
