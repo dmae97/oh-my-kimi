@@ -6,6 +6,7 @@
 
 - Added new `task.isolation.mode` values `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, and `rcopy` for native PAL-backed task isolation backends
 - Added automatic PAL-backed isolation backend selection so `task.isolation.mode` uses the host's best-available backend
+- Added input-token and output-token totals to `omp stats --summary`.
 
 ### Changed
 
