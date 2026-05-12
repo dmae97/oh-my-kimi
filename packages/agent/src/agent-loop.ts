@@ -58,12 +58,17 @@ function coerceToolResult(raw: unknown): { result: AgentToolResult<any>; malform
 	const rawObj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
 	const rawContent = rawObj?.content;
 	const details = rawObj && "details" in rawObj ? rawObj.details : {};
+	// Tools may flag a non-throwing failure on the result itself (e.g. an
+	// aggregator that catches per-entry errors and synthesizes a combined
+	// result). Preserve the flag so agent-loop can surface it on the wire.
+	const explicitError = Boolean(rawObj && "isError" in rawObj && rawObj.isError);
 
 	if (!Array.isArray(rawContent)) {
 		return {
 			result: {
 				content: [{ type: "text", text: "Tool returned an invalid result: missing content array." }],
 				details,
+				isError: true,
 			},
 			malformed: true,
 		};
@@ -82,7 +87,7 @@ function coerceToolResult(raw: unknown): { result: AgentToolResult<any>; malform
 			content.push(block as { type: "image"; data: string; mimeType: string });
 		}
 	}
-	return { result: { content, details }, malformed: false };
+	return { result: { content, details, ...(explicitError ? { isError: true } : {}) }, malformed: false };
 }
 
 /**
@@ -827,7 +832,7 @@ async function executeToolCalls(
 			);
 			const coerced = coerceToolResult(rawResult);
 			result = coerced.result;
-			if (coerced.malformed) isError = true;
+			if (coerced.malformed || result.isError) isError = true;
 		} catch (e) {
 			result = {
 				content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }],
