@@ -1,7 +1,9 @@
 # Changelog
 
-
 ## [Unreleased]
+
+
+## [14.9.5] - 2026-05-12
 ### Fixed
 
 - Fixed rapidly blinking cursor artifact during task execution by consolidating cursor control sequences into the synchronized output buffer ([#992](https://github.com/can1357/oh-my-pi/issues/992))

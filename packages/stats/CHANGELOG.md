@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.9.5] - 2026-05-12
+
 ### Added
 
 - Added time range selection options (1h, 24h, 7d, 30d, 90d, All) to the dashboard header and bound them to reloading statistics for the selected window
