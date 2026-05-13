@@ -484,8 +484,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const env = normalizeBashEnv(rawEnv);
 
 		// Extract leading `cd <path> && ...` into cwd when the model ignores the cwd parameter.
+		// Constrained to a single line so a `&&` that sits on a later line of a multiline
+		// script can't pull the entire script into the "cwd" capture.
 		if (!cwd) {
-			const cdMatch = command.match(/^cd\s+((?:[^&\\]|\\.)+?)\s*&&\s*/);
+			const cdMatch = command.match(/^cd[ \t]+((?:[^&\\\n\r]|\\.)+?)[ \t]*&&[ \t]*/);
 			if (cdMatch) {
 				cwd = cdMatch[1].trim().replace(/^["']|["']$/g, "");
 				command = command.slice(cdMatch[0].length);
