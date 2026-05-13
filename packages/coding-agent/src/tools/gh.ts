@@ -103,35 +103,81 @@ const GH_PR_CHECKOUT_FIELDS = [
 	"title",
 	"url",
 ];
-const GH_SEARCH_FIELDS = [
-	"author",
-	"createdAt",
-	"labels",
-	"number",
-	"repository",
-	"state",
-	"title",
-	"updatedAt",
-	"url",
-];
-const GH_SEARCH_CODE_FIELDS = ["path", "repository", "sha", "textMatches", "url"];
-const GH_SEARCH_COMMITS_FIELDS = ["author", "commit", "committer", "id", "repository", "sha", "url"];
-const GH_SEARCH_REPOS_FIELDS = [
-	"createdAt",
-	"description",
-	"forksCount",
-	"fullName",
-	"isArchived",
-	"isFork",
-	"isPrivate",
-	"language",
-	"openIssuesCount",
-	"owner",
-	"stargazersCount",
-	"updatedAt",
-	"url",
-	"visibility",
-];
+// /search/<endpoint> API response shapes (subset). Used when projecting raw
+// REST results into the normalized `GhSearch*Result` shapes the formatters
+// consume. We talk to the API directly because `gh search prs`/`issues`
+// quotes multi-token positional queries (`is:"merged is:pr"`) and returns 0
+// hits — see https://github.com/cli/cli for the upstream regression.
+interface GhApiSearchResponse<T> {
+	total_count?: number;
+	incomplete_results?: boolean;
+	items?: T[];
+}
+interface GhApiUser {
+	login?: string;
+	name?: string | null;
+}
+interface GhApiLabel {
+	name?: string;
+}
+interface GhApiPullRequestRef {
+	merged_at?: string | null;
+}
+interface GhApiSearchIssueItem {
+	number?: number;
+	title?: string;
+	state?: string;
+	state_reason?: string | null;
+	user?: GhApiUser | null;
+	labels?: GhApiLabel[];
+	created_at?: string;
+	updated_at?: string;
+	html_url?: string;
+	repository_url?: string;
+	pull_request?: GhApiPullRequestRef | null;
+}
+interface GhApiSearchCodeItem {
+	name?: string;
+	path?: string;
+	sha?: string;
+	html_url?: string;
+	repository?: { full_name?: string } | null;
+	text_matches?: Array<{ fragment?: string; property?: string }>;
+}
+interface GhApiSearchCommitGitActor {
+	name?: string;
+	email?: string;
+	date?: string;
+}
+interface GhApiSearchCommitItem {
+	sha?: string;
+	node_id?: string;
+	html_url?: string;
+	author?: GhApiUser | null;
+	committer?: GhApiUser | null;
+	commit?: {
+		author?: GhApiSearchCommitGitActor | null;
+		committer?: GhApiSearchCommitGitActor | null;
+		message?: string;
+	} | null;
+	repository?: { full_name?: string } | null;
+}
+interface GhApiSearchRepoItem {
+	full_name?: string;
+	description?: string | null;
+	language?: string | null;
+	stargazers_count?: number;
+	forks_count?: number;
+	open_issues_count?: number;
+	archived?: boolean;
+	fork?: boolean;
+	private?: boolean;
+	visibility?: string | null;
+	updated_at?: string;
+	created_at?: string;
+	html_url?: string;
+	owner?: GhApiUser | null;
+}
 const SEARCH_LIMIT_DEFAULT = 10;
 const SEARCH_LIMIT_MAX = 50;
 const FILE_PREVIEW_LIMIT = 50;
@@ -699,13 +745,7 @@ function appendRepoFlag(args: string[], repo: string | undefined, identifier?: s
 	args.push("--repo", repo);
 }
 
-const SEARCH_FIELDS_BY_COMMAND: Record<"issues" | "prs" | "code" | "commits" | "repos", readonly string[]> = {
-	issues: GH_SEARCH_FIELDS,
-	prs: GH_SEARCH_FIELDS,
-	code: GH_SEARCH_CODE_FIELDS,
-	commits: GH_SEARCH_COMMITS_FIELDS,
-	repos: GH_SEARCH_REPOS_FIELDS,
-};
+const REPO_API_URL_PREFIX = "https://api.github.com/repos/";
 
 const RELATIVE_DURATION_PATTERN = /^(\d+)\s*(m|h|d|w|mo|y)$/i;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -811,19 +851,96 @@ function composeSearchQuery(parts: ReadonlyArray<string | undefined>): string {
 	return cleaned.join(" ");
 }
 
-function buildGhSearchArgs(
-	command: "issues" | "prs" | "code" | "commits" | "repos",
+function buildGhApiSearchArgs(
+	endpoint: "issues" | "code" | "commits" | "repositories",
 	query: string,
 	limit: number,
-	repo: string | undefined,
+	extraHeaders?: ReadonlyArray<string>,
 ): string[] {
-	const fields = SEARCH_FIELDS_BY_COMMAND[command];
-	const args = ["search", command, "--limit", String(limit), "--json", fields.join(",")];
-	if (command !== "repos") {
-		appendRepoFlag(args, repo);
+	const args = ["api", "-X", "GET", `/search/${endpoint}`, "-f", `q=${query}`, "-F", `per_page=${limit}`];
+	for (const header of extraHeaders ?? []) {
+		args.push("-H", header);
 	}
-	args.push("--", query);
 	return args;
+}
+
+function repoFromRepositoryUrl(value: string | undefined): string | undefined {
+	if (!value?.startsWith(REPO_API_URL_PREFIX)) return undefined;
+	return value.slice(REPO_API_URL_PREFIX.length);
+}
+
+function apiUserToGhUser(user: GhApiUser | null | undefined): GhUser | undefined {
+	if (!user) return undefined;
+	const login = user.login ?? undefined;
+	const name = user.name ?? undefined;
+	if (login === undefined && name === undefined) return undefined;
+	return { login, name };
+}
+
+function apiLabelsToGhLabels(labels: GhApiLabel[] | undefined): GhLabel[] {
+	return labels?.map(label => ({ name: label.name })) ?? [];
+}
+
+function apiIssueToSearchResult(item: GhApiSearchIssueItem): GhSearchResult {
+	const merged = Boolean(item.pull_request?.merged_at);
+	return {
+		author: apiUserToGhUser(item.user) ?? null,
+		createdAt: item.created_at,
+		labels: apiLabelsToGhLabels(item.labels),
+		number: item.number,
+		repository: { nameWithOwner: repoFromRepositoryUrl(item.repository_url) },
+		state: merged ? "merged" : item.state,
+		title: item.title,
+		updatedAt: item.updated_at,
+		url: item.html_url,
+	};
+}
+
+function apiCodeToSearchResult(item: GhApiSearchCodeItem): GhSearchCodeResult {
+	return {
+		path: item.path,
+		repository: { nameWithOwner: item.repository?.full_name },
+		sha: item.sha,
+		textMatches: item.text_matches?.map(match => ({ fragment: match.fragment, property: match.property })),
+		url: item.html_url,
+	};
+}
+
+function apiCommitToSearchResult(item: GhApiSearchCommitItem): GhSearchCommitResult {
+	return {
+		author: apiUserToGhUser(item.author) ?? null,
+		commit: item.commit
+			? {
+					author: item.commit.author ?? null,
+					committer: item.commit.committer ?? null,
+					message: item.commit.message,
+				}
+			: null,
+		committer: apiUserToGhUser(item.committer) ?? null,
+		id: item.node_id,
+		repository: { nameWithOwner: item.repository?.full_name },
+		sha: item.sha,
+		url: item.html_url,
+	};
+}
+
+function apiRepoToSearchResult(item: GhApiSearchRepoItem): GhSearchRepoResult {
+	return {
+		createdAt: item.created_at,
+		description: item.description,
+		forksCount: item.forks_count,
+		fullName: item.full_name,
+		isArchived: item.archived,
+		isFork: item.fork,
+		isPrivate: item.private,
+		language: item.language,
+		openIssuesCount: item.open_issues_count,
+		owner: apiUserToGhUser(item.owner) ?? null,
+		stargazersCount: item.stargazers_count,
+		updatedAt: item.updated_at,
+		url: item.html_url,
+		visibility: item.visibility ?? null,
+	};
 }
 
 function sanitizeRemoteName(value: string): string {
@@ -2765,13 +2882,13 @@ async function executeSearchIssues(
 	const limit = resolveSearchLimit(params.limit);
 	const dateField = resolveSearchDateField("issues", params.dateField);
 	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
-	const query = composeSearchQuery([params.query, dateQualifier]);
-	const args = buildGhSearchArgs("issues", query, limit, repo);
+	const displayQuery = composeSearchQuery([params.query, dateQualifier]);
+	const apiQuery = composeSearchQuery([displayQuery, repo ? `repo:${repo}` : undefined, "is:issue"]);
+	const args = buildGhApiSearchArgs("issues", apiQuery, limit);
 
-	const items = await git.github.json<GhSearchResult[]>(session.cwd, args, signal, {
-		repoProvided: Boolean(repo),
-	});
-	return buildTextResult(formatSearchResults("issues", query, repo, items));
+	const response = await git.github.json<GhApiSearchResponse<GhApiSearchIssueItem>>(session.cwd, args, signal);
+	const items = (response.items ?? []).map(apiIssueToSearchResult);
+	return buildTextResult(formatSearchResults("issues", displayQuery, repo, items));
 }
 
 async function executeSearchPrs(
@@ -2783,13 +2900,13 @@ async function executeSearchPrs(
 	const limit = resolveSearchLimit(params.limit);
 	const dateField = resolveSearchDateField("prs", params.dateField);
 	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
-	const query = composeSearchQuery([params.query, dateQualifier]);
-	const args = buildGhSearchArgs("prs", query, limit, repo);
+	const displayQuery = composeSearchQuery([params.query, dateQualifier]);
+	const apiQuery = composeSearchQuery([displayQuery, repo ? `repo:${repo}` : undefined, "is:pr"]);
+	const args = buildGhApiSearchArgs("issues", apiQuery, limit);
 
-	const items = await git.github.json<GhSearchResult[]>(session.cwd, args, signal, {
-		repoProvided: Boolean(repo),
-	});
-	return buildTextResult(formatSearchResults("pull requests", query, repo, items));
+	const response = await git.github.json<GhApiSearchResponse<GhApiSearchIssueItem>>(session.cwd, args, signal);
+	const items = (response.items ?? []).map(apiIssueToSearchResult);
+	return buildTextResult(formatSearchResults("pull requests", displayQuery, repo, items));
 }
 
 async function executeSearchCode(
@@ -2803,11 +2920,11 @@ async function executeSearchCode(
 	}
 	const repo = normalizeOptionalString(params.repo);
 	const limit = resolveSearchLimit(params.limit);
-	const args = buildGhSearchArgs("code", query, limit, repo);
+	const apiQuery = composeSearchQuery([query, repo ? `repo:${repo}` : undefined]);
+	const args = buildGhApiSearchArgs("code", apiQuery, limit, ["Accept: application/vnd.github.text-match+json"]);
 
-	const items = await git.github.json<GhSearchCodeResult[]>(session.cwd, args, signal, {
-		repoProvided: Boolean(repo),
-	});
+	const response = await git.github.json<GhApiSearchResponse<GhApiSearchCodeItem>>(session.cwd, args, signal);
+	const items = (response.items ?? []).map(apiCodeToSearchResult);
 	return buildTextResult(formatSearchCodeResults(query, repo, items));
 }
 
@@ -2820,13 +2937,13 @@ async function executeSearchCommits(
 	const limit = resolveSearchLimit(params.limit);
 	const dateField = resolveSearchDateField("commits", params.dateField);
 	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
-	const query = composeSearchQuery([params.query, dateQualifier]);
-	const args = buildGhSearchArgs("commits", query, limit, repo);
+	const displayQuery = composeSearchQuery([params.query, dateQualifier]);
+	const apiQuery = composeSearchQuery([displayQuery, repo ? `repo:${repo}` : undefined]);
+	const args = buildGhApiSearchArgs("commits", apiQuery, limit);
 
-	const items = await git.github.json<GhSearchCommitResult[]>(session.cwd, args, signal, {
-		repoProvided: Boolean(repo),
-	});
-	return buildTextResult(formatSearchCommitsResults(query, repo, items));
+	const response = await git.github.json<GhApiSearchResponse<GhApiSearchCommitItem>>(session.cwd, args, signal);
+	const items = (response.items ?? []).map(apiCommitToSearchResult);
+	return buildTextResult(formatSearchCommitsResults(displayQuery, repo, items));
 }
 
 async function executeSearchRepos(
@@ -2838,9 +2955,10 @@ async function executeSearchRepos(
 	const dateField = resolveSearchDateField("repos", params.dateField);
 	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
 	const query = composeSearchQuery([params.query, dateQualifier]);
-	const args = buildGhSearchArgs("repos", query, limit, undefined);
+	const args = buildGhApiSearchArgs("repositories", query, limit);
 
-	const items = await git.github.json<GhSearchRepoResult[]>(session.cwd, args, signal);
+	const response = await git.github.json<GhApiSearchResponse<GhApiSearchRepoItem>>(session.cwd, args, signal);
+	const items = (response.items ?? []).map(apiRepoToSearchResult);
 	return buildTextResult(formatSearchReposResults(query, items));
 }
 

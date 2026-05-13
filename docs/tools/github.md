@@ -183,7 +183,7 @@ Push target resolution reads the `branch.<name>.ompPrHeadRef`, `pushRemote`/`rem
 | --- | --- |
 | Required fields | `op`, `query` |
 | Optional fields | `repo`, `limit` |
-| `gh` command | `gh search issues --limit <limit> --json <GH_SEARCH_FIELDS> [--repo <repo>] -- <query>` |
+| `gh` command | `gh api -X GET /search/issues -f q="<query> [repo:<repo>] is:issue" -F per_page=<limit>` |
 | Batching | None |
 | Output | `# GitHub issues search`, echoed query, optional repo, result count, then one bullet per issue with repo/state/author/labels/timestamps/URL. |
 
@@ -193,7 +193,7 @@ Push target resolution reads the `branch.<name>.ompPrHeadRef`, `pushRemote`/`rem
 | --- | --- |
 | Required fields | `op`, `query` |
 | Optional fields | `repo`, `limit` |
-| `gh` command | `gh search prs --limit <limit> --json <GH_SEARCH_FIELDS> [--repo <repo>] -- <query>` |
+| `gh` command | `gh api -X GET /search/issues -f q="<query> [repo:<repo>] is:pr" -F per_page=<limit>` |
 | Batching | None |
 | Output | Same shape as `search_issues`, labeled as pull requests. |
 
@@ -203,7 +203,7 @@ Push target resolution reads the `branch.<name>.ompPrHeadRef`, `pushRemote`/`rem
 | --- | --- |
 | Required fields | `op`, `query` |
 | Optional fields | `repo`, `limit` |
-| `gh` command | `gh search code --limit <limit> --json <GH_SEARCH_CODE_FIELDS> [--repo <repo>] -- <query>` |
+| `gh` command | `gh api -X GET /search/code -f q="<query> [repo:<repo>]" -F per_page=<limit> -H "Accept: application/vnd.github.text-match+json"` |
 | Batching | None |
 | Output | `# GitHub code search`, result count, then one bullet per match with path, repo, short commit SHA, URL, and first normalized text-match fragment line when present. |
 
@@ -213,7 +213,7 @@ Push target resolution reads the `branch.<name>.ompPrHeadRef`, `pushRemote`/`rem
 | --- | --- |
 | Required fields | `op`, `query` |
 | Optional fields | `repo`, `limit` |
-| `gh` command | `gh search commits --limit <limit> --json <GH_SEARCH_COMMITS_FIELDS> [--repo <repo>] -- <query>` |
+| `gh` command | `gh api -X GET /search/commits -f q="<query> [repo:<repo>]" -F per_page=<limit>` |
 | Batching | None |
 | Output | `# GitHub commits search`, result count, then one bullet per commit: short SHA + first commit-message line, repo, author, date, URL. |
 
@@ -223,7 +223,7 @@ Push target resolution reads the `branch.<name>.ompPrHeadRef`, `pushRemote`/`rem
 | --- | --- |
 | Required fields | `op`, `query` |
 | Optional fields | `limit` |
-| `gh` command | `gh search repos --limit <limit> --json <GH_SEARCH_REPOS_FIELDS> -- <query>` |
+| `gh` command | `gh api -X GET /search/repositories -f q="<query>" -F per_page=<limit>` |
 | Batching | None |
 | Output | `# GitHub repositories search`, result count, then one bullet per repo with first description line, language, stars, forks, open issues, visibility, archive/fork flags, updated time, URL. |
 
