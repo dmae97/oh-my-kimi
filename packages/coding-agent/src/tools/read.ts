@@ -56,7 +56,7 @@ import {
 import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
 import { expandPath, formatPathRelativeToCwd, resolveReadPath, splitPathAndSel } from "./path-utils";
-import { formatBytes, shortenPath, wrapBrackets } from "./render-utils";
+import { formatBytes, replaceTabs, shortenPath, wrapBrackets } from "./render-utils";
 import {
 	executeReadQuery,
 	getRowByKey,
@@ -1806,7 +1806,7 @@ export const readToolRenderer = {
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: ReadToolDetails },
+		result: { content: Array<{ type: string; text?: string }>; details?: ReadToolDetails; isError?: boolean },
 		options: RenderResultOptions,
 		uiTheme: Theme,
 		args?: ReadRenderArgs,
@@ -1814,12 +1814,39 @@ export const readToolRenderer = {
 		const urlDetails = result.details as ReadUrlToolDetails | undefined;
 		if (urlDetails?.kind === "url" || isReadableUrlPath(args?.file_path || args?.path || "")) {
 			return renderReadUrlResult(
-				result as { content: Array<{ type: string; text?: string }>; details?: ReadUrlToolDetails },
+				result as {
+					content: Array<{ type: string; text?: string }>;
+					details?: ReadUrlToolDetails;
+					isError?: boolean;
+				},
 				options,
 				uiTheme,
 			);
 		}
 
+		if (result.isError) {
+			const rawErrorText = result.content?.find(c => c.type === "text")?.text ?? "";
+			const errorText = (rawErrorText || "Unknown error").replace(/^Error:\s*/, "");
+			const rawPath = args?.file_path || args?.path || "";
+			const filePath = shortenPath(rawPath);
+			let title = filePath ? `Read ${filePath}` : "Read";
+			if (args?.offset !== undefined || args?.limit !== undefined) {
+				const startLine = args.offset ?? 1;
+				const endLine = args.limit !== undefined ? startLine + args.limit - 1 : "";
+				title += `:${startLine}${endLine ? `-${endLine}` : ""}`;
+			}
+			const header = renderStatusLine({ icon: "error", title }, uiTheme);
+			const errorLines = errorText.split("\n").map(line => uiTheme.fg("error", replaceTabs(line)));
+			const outputBlock = new CachedOutputBlock();
+			return {
+				render: (width: number) =>
+					outputBlock.render(
+						{ header, state: "error", sections: [{ lines: errorLines }], width },
+						uiTheme,
+					),
+				invalidate: () => outputBlock.invalidate(),
+			};
+		}
 		const details = result.details;
 		const rawText = result.content?.find(c => c.type === "text")?.text ?? "";
 		// Prefer structured `displayContent` from details when available so the TUI

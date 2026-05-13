@@ -354,6 +354,21 @@ describe("issue:// / pr:// listing", () => {
 		expect(args).toEqual(expect.arrayContaining(["--state", "open"]));
 	});
 
+	it("treats `diff` as a repository name in repo-scoped listing URLs", async () => {
+		const spy = vi.spyOn(git.github, "json").mockResolvedValue([] as never);
+
+		const router = InternalUrlRouter.instance();
+		await router.resolve("issue://owner/diff");
+		await router.resolve("pr://owner/diff");
+
+		const issueArgs = spy.mock.calls[0]?.[1] as string[];
+		const prArgs = spy.mock.calls[1]?.[1] as string[];
+		expect(issueArgs.slice(0, 2)).toEqual(["issue", "list"]);
+		expect(prArgs.slice(0, 2)).toEqual(["pr", "list"]);
+		expect(issueArgs).toEqual(expect.arrayContaining(["--repo", "owner/diff"]));
+		expect(prArgs).toEqual(expect.arrayContaining(["--repo", "owner/diff"]));
+	});
+
 	it("issue:// (no repo, no session) surfaces a friendly resolution error", async () => {
 		// resolveDefaultRepoMemoized calls `gh repo view`; intercept it.
 		vi.spyOn(git.github, "text").mockRejectedValue(new Error("not a git repository"));

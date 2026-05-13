@@ -64,7 +64,6 @@ function ensureParentDir(filePath: string): void {
 	try {
 		const dir = path.dirname(filePath);
 		fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-		fs.chmodSync(dir, 0o700);
 	} catch (err) {
 		logger.debug("github cache: failed to create private parent dir", { err: String(err) });
 	}

@@ -179,6 +179,20 @@ describe("github-cache db layer", () => {
 		const db = openDb();
 		expect(db).not.toBeNull();
 	});
+
+	it("does not chmod an existing cache parent directory", async () => {
+		const parent = path.join(tempDir, "caller-owned-parent");
+		await fs.mkdir(parent, { recursive: true, mode: 0o755 });
+		await fs.chmod(parent, 0o755);
+		process.env.OMP_GITHUB_CACHE_DB = path.join(parent, "github-cache.db");
+		resetCacheForTests();
+
+		const db = openDb();
+
+		expect(db).not.toBeNull();
+		const stat = await fs.stat(parent);
+		expect(stat.mode & 0o777).toBe(0o755);
+	});
 });
 
 describe("getOrFetchView (TTL semantics)", () => {

@@ -6,7 +6,12 @@ import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { buildSearchDateQualifier, GithubTool, parseSearchDateBound } from "@oh-my-pi/pi-coding-agent/tools/gh";
+import {
+	buildSearchDateQualifier,
+	GithubTool,
+	parsePrUnifiedDiff,
+	parseSearchDateBound,
+} from "@oh-my-pi/pi-coding-agent/tools/gh";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
 
@@ -150,6 +155,52 @@ async function expectedWorktreePath(home: string, primaryRoot: string, localBran
 		.replace(/[/\\:]/g, "-");
 	return fs.realpath(path.join(home, ".omp", "wt", encoded, localBranch));
 }
+
+describe("parsePrUnifiedDiff", () => {
+	it("parses quoted diff headers instead of falling back to unknown paths", () => {
+		const diff = [
+			'diff --git "a/src/file with spaces.ts" "b/src/file with spaces.ts"',
+			"index 0000000..1111111 100644",
+			'--- "a/src/file with spaces.ts"',
+			'+++ "b/src/file with spaces.ts"',
+			"@@ -1 +1 @@",
+			"-old",
+			"+new",
+		].join("\n");
+
+		const parsed = parsePrUnifiedDiff(diff);
+
+		expect(parsed.files).toHaveLength(1);
+		expect(parsed.files[0]).toMatchObject({
+			path: "src/file with spaces.ts",
+			additions: 1,
+			deletions: 1,
+			changeType: "modified",
+		});
+		expect(parsed.files[0]?.oldPath).toBeUndefined();
+	});
+
+	it("counts hunk lines whose content starts with file-header markers", () => {
+		const diff = [
+			"diff --git a/src/headings.md b/src/headings.md",
+			"index 0000000..1111111 100644",
+			"--- a/src/headings.md",
+			"+++ b/src/headings.md",
+			"@@ -1 +1 @@",
+			"---- removed heading marker",
+			"++++ added heading marker",
+		].join("\n");
+
+		const parsed = parsePrUnifiedDiff(diff);
+
+		expect(parsed.files[0]).toMatchObject({
+			path: "src/headings.md",
+			additions: 1,
+			deletions: 1,
+			changeType: "modified",
+		});
+	});
+});
 
 describe("github tool", () => {
 	afterEach(() => {
