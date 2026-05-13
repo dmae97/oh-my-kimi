@@ -154,8 +154,17 @@ export function requestRpcEditor(
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
-export async function runRpcMode(session: AgentSession): Promise<never> {
+export async function runRpcMode(
+	session: AgentSession,
+	setToolUIContext?: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
+): Promise<never> {
 	// Signal to RPC clients that the server is ready to accept commands
+	// Suppress terminal notifications: they write \x07 (BEL) or OSC sequences directly to
+	// process.stdout with no newline, which the reader merges with the next JSON line and
+	// breaks JSON.parse. In RPC mode stdout is the JSON protocol channel — nothing else
+	// may write there.
+	process.env.PI_NOTIFICATIONS = "off";
+
 	process.stdout.write(`${JSON.stringify({ type: "ready" })}\n`);
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		process.stdout.write(`${JSON.stringify(obj)}\n`);
@@ -405,6 +414,12 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 		}
 	}
 
+	// Wire up UI context for tool execution (ask tool, etc.) and extensions.
+	// A single shared instance routes all responses received on stdin to the
+	// correct waiting promise regardless of which code path created the request.
+	const rpcUiContext = new RpcExtensionUIContext(pendingExtensionRequests, output);
+	setToolUIContext?.(rpcUiContext, true);
+
 	// Set up extensions with RPC-based UI context
 	const extensionRunner = session.extensionRunner;
 	if (extensionRunner) {
@@ -481,7 +496,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 				},
 				compact: instructionsOrOptions => runExtensionCompact(session, instructionsOrOptions),
 			},
-			new RpcExtensionUIContext(pendingExtensionRequests, output),
+			rpcUiContext,
 		);
 		extensionRunner.onError(err => {
 			output({ type: "extension_error", extensionPath: err.extensionPath, event: err.event, error: err.error });

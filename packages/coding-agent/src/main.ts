@@ -638,7 +638,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		process.exit(0);
 	}
 
-	if (parsedArgs.mode === "rpc" && parsedArgs.fileArgs.length > 0) {
+	if ((parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") && parsedArgs.fileArgs.length > 0) {
 		process.stderr.write(`${chalk.red("Error: @file arguments are not supported in RPC mode")}\n`);
 		process.exit(1);
 	}
@@ -656,13 +656,13 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 
 	const cwd = getProjectDir();
 	const settingsInstance = await logger.time("settings:init", Settings.init, { cwd });
-	if (parsedArgs.mode === "rpc") {
+	if (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") {
 		applyRpcDefaultSettingOverrides();
 	}
-	if (parsedArgs.noPty) {
+	if (parsedArgs.noPty || parsedArgs.mode === "rpc-ui") {
 		Bun.env.PI_NO_PTY = "1";
 	}
-	if (parsedArgs.noTitle || parsedArgs.mode === "rpc") {
+	if (parsedArgs.noTitle || parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") {
 		Bun.env.PI_NO_TITLE = "1";
 	}
 	const { pipedInput, fileText, fileImages } = await logger.time("prepareInitialMessage", async () => {
@@ -783,7 +783,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	);
 	sessionOptions.authStorage = authStorage;
 	sessionOptions.modelRegistry = modelRegistry;
-	sessionOptions.hasUI = isInteractive;
+	sessionOptions.hasUI = isInteractive || mode === "rpc-ui";
 	sessionOptions.settings = settingsInstance;
 
 	// Handle CLI --api-key as runtime override (not persisted)
@@ -879,8 +879,8 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		return nextSession;
 	};
 
-	if (mode === "rpc") {
-		await runRpcMode(session);
+	if (mode === "rpc" || mode === "rpc-ui") {
+		await runRpcMode(session, mode === "rpc-ui" ? setToolUIContext : undefined);
 	} else if (mode === "acp") {
 		await runAcpMode(session, createAcpSession);
 	} else if (isInteractive) {
