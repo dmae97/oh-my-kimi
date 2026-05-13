@@ -322,4 +322,43 @@ describe("InteractiveMode plan review rendering", () => {
 		// markPlanReferenceSent fires on this dispatch path.
 		expect(markSentSpy).toHaveBeenCalledTimes(1);
 	});
+	it("Approve and compact context: setPlanReferencePath is pinned BEFORE compaction flushes the queue", async () => {
+		// Regression: handleCompactCommand internally awaits flushCompactionQueue,
+		// which can deliver a user-queued message back to the session. If
+		// setPlanReferencePath had not been called yet, that queued turn would
+		// hit #buildPlanReferenceMessage with the stale plan-mode path. Pin it
+		// before the compaction await.
+		const planFilePath = "local://PLAN.md";
+		const finalPlanFilePath = "local://APPROVED.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nQueue race.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(mode, "showHookSelector").mockResolvedValue("Approve and compact context");
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		const setPlanRefSpy = vi.spyOn(session, "setPlanReferencePath");
+		let planRefSetWhenCompactionRan = false;
+		vi.spyOn(mode, "handleCompactCommand").mockImplementation(async () => {
+			planRefSetWhenCompactionRan = setPlanRefSpy.mock.calls.some(call => call[0] === finalPlanFilePath);
+			return "ok";
+		});
+
+		await mode.handleExitPlanModeTool({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath,
+		});
+
+		// The contract: by the time handleCompactCommand runs (and flushes the
+		// compaction queue inside), setPlanReferencePath has already pinned the
+		// approved plan path, so any user message queued during compaction is
+		// dispatched against the approved plan, not the plan-mode draft.
+		expect(planRefSetWhenCompactionRan).toBe(true);
+	});
 });

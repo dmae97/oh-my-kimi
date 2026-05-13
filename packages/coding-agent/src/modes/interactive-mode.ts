@@ -1150,6 +1150,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			const compactionPrompt = prompt.render(planModeCompactInstructionsPrompt, {
 				planFilePath: options.finalPlanFilePath,
 			});
+			// Pin the plan reference path BEFORE compaction so any user messages
+			// queued during the compaction await (which `handleCompactCommand`
+			// flushes via `flushCompactionQueue` before returning) see the
+			// approved plan in `#buildPlanReferenceMessage`. Reassignment at
+			// line 1161 below is idempotent and kept for the !compactBeforeExecute
+			// branch.
+			this.session.setPlanReferencePath(options.finalPlanFilePath);
 			compactOutcome = await this.handleCompactCommand(compactionPrompt);
 		}
 
