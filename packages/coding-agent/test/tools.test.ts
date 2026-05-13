@@ -280,6 +280,33 @@ describe("Coding Agent Tools", () => {
 			expect(result.details?.truncation).toBeUndefined();
 		});
 
+		it("truncates lines wider than the read column cap, leaving narrow lines untouched", async () => {
+			const wideLine = "x".repeat(1500);
+			const testFile = path.join(testDir, "wide.txt");
+			fs.writeFileSync(testFile, `header\n${wideLine}\nfooter`);
+
+			const result = await readTool.execute("test-call-column-truncate", { path: testFile });
+			const output = getTextOutput(result);
+
+			expect(output).toContain("header");
+			expect(output).toContain("footer");
+			expect(output).not.toContain(wideLine); // verbatim wide line is gone
+			expect(output).toContain("…"); // ellipsis marker
+			expect(output).toContain("Some lines truncated to 768 chars");
+		});
+
+		it("returns wide lines verbatim with the :raw selector", async () => {
+			const wideLine = "y".repeat(1500);
+			const testFile = path.join(testDir, "wide-raw.txt");
+			fs.writeFileSync(testFile, `head\n${wideLine}\ntail`);
+
+			const result = await readTool.execute("test-call-column-raw", { path: `${testFile}:raw` });
+			const output = getTextOutput(result);
+
+			expect(output).toContain(wideLine);
+			expect(output).not.toContain("Some lines truncated to 768 chars");
+		});
+
 		it("should read ipynb files as editable cell text", async () => {
 			const notebookPath = path.join(testDir, "notebook.ipynb");
 			const notebook = {

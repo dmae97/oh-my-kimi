@@ -7,6 +7,7 @@ import * as fs from "node:fs/promises";
 import { executeShell, type MinimizerOptions, Shell } from "@oh-my-pi/pi-natives";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
+import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/output-meta";
 import { getOrCreateSnapshot } from "../utils/shell-snapshot";
 import { NON_INTERACTIVE_ENV } from "./non-interactive-env";
 
@@ -94,6 +95,8 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
+		headBytes: resolveOutputSinkHeadBytes(settings),
+		maxColumns: resolveOutputMaxColumns(settings),
 		// Throttle the streaming preview callback to avoid saturating the
 		// event loop when commands produce massive output (e.g. seq 1 50M).
 		chunkThrottleMs: options?.onChunk ? 50 : 0,

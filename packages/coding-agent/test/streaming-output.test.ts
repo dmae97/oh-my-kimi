@@ -4,12 +4,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	formatHeadTruncationNotice,
+	formatMiddleElisionMarker,
 	formatTailTruncationNotice,
 	OutputSink,
 	TailBuffer,
 	truncateHead,
 	truncateHeadBytes,
 	truncateLine,
+	truncateMiddle,
 	truncateTail,
 	truncateTailBytes,
 } from "../src/session/streaming-output";
@@ -333,5 +335,151 @@ describe("truncation notice formatting", () => {
 				totalFileLines: 500,
 			}),
 		).toBe("\n\n[Showing lines 100-100 of 500. Use :101 to continue]");
+	});
+});
+
+describe("truncateMiddle", () => {
+	test("returns content unchanged when within budget", () => {
+		const result = truncateMiddle("a\nb\nc", { maxBytes: 100, maxLines: 10 });
+		expect(result.truncated).toBeFalsy();
+		expect(result.content).toBe("a\nb\nc");
+	});
+
+	test("keeps head and tail with marker for byte-overflow content", () => {
+		const lines = Array.from({ length: 12 }, (_, i) => `line-${i + 1}`).join("\n");
+		const result = truncateMiddle(lines, {
+			maxBytes: 24, // 12 bytes head + 12 bytes tail
+			maxLines: 12,
+			maxHeadBytes: 12,
+			maxHeadLines: 3,
+		});
+		expect(result.truncated).toBe(true);
+		expect(result.truncatedBy).toBe("middle");
+		// Must contain first line and last line, plus the elision marker.
+		expect(result.content.startsWith("line-1\n")).toBe(true);
+		expect(result.content.endsWith("line-12")).toBe(true);
+		expect(result.content).toContain("elided");
+		expect(result.content).not.toContain("line-7"); // a middle line
+		expect(result.elidedLines).toBeGreaterThan(0);
+		expect(result.elidedBytes).toBeGreaterThan(0);
+	});
+
+	test("falls back to tail-only when head budget cannot accept the first line", () => {
+		const giantFirstLine = `${"x".repeat(200)}\nshort-2\nshort-3`;
+		const result = truncateMiddle(giantFirstLine, {
+			maxBytes: 40,
+			maxLines: 10,
+			maxHeadBytes: 8, // first line is 200 bytes — exceeds head budget
+			maxHeadLines: 1,
+		});
+		expect(result.truncated).toBe(true);
+		// Should not contain the elision marker; it's a regular tail truncation.
+		expect(result.content).not.toContain("elided");
+	});
+
+	test("formatMiddleElisionMarker pluralises and formats bytes", () => {
+		expect(formatMiddleElisionMarker(1, 100)).toBe("[… 1 line elided (100B) …]");
+		expect(formatMiddleElisionMarker(123, 4096)).toBe("[… 123 lines elided (4.0KB) …]");
+	});
+});
+
+describe("OutputSink head-retain mode", () => {
+	test("middle elision splices head, marker, and tail", async () => {
+		const sink = new OutputSink({ spillThreshold: 6, headBytes: 6 });
+		// Total 36 bytes: head ~6, tail ~6, middle ~24 elided.
+		const lines = Array.from({ length: 12 }, (_, i) => `L${i}`).join("\n");
+		await sink.push(lines);
+
+		const dumped = await sink.dump();
+		expect(dumped.truncated).toBe(true);
+		expect(dumped.elidedBytes ?? 0).toBeGreaterThan(0);
+		expect(dumped.elidedLines ?? 0).toBeGreaterThan(0);
+		expect(dumped.output.startsWith("L0\n")).toBe(true);
+		expect(dumped.output.endsWith("L11")).toBe(true);
+		expect(dumped.output).toContain("elided");
+		expect(dumped.totalBytes).toBe(byteLength(lines));
+	});
+
+	test("disabled (headBytes=0) preserves tail-only behavior", async () => {
+		const sink = new OutputSink({ spillThreshold: 5, headBytes: 0 });
+		await sink.push("abc");
+		await sink.push("def");
+
+		const dumped = await sink.dump();
+		expect(dumped.truncated).toBe(true);
+		expect(dumped.output).toBe("bcdef");
+		expect(dumped.elidedBytes).toBeUndefined();
+	});
+
+	test("head fills cleanly across chunks without elision when total fits", async () => {
+		const sink = new OutputSink({ spillThreshold: 50, headBytes: 4 });
+		await sink.push("abcdefgh");
+		const dumped = await sink.dump();
+		expect(dumped.output).toBe("abcdefgh");
+		expect(dumped.truncated).toBe(false);
+		expect(dumped.elidedBytes).toBeUndefined();
+	});
+});
+
+describe("OutputSink maxColumns (per-line cap)", () => {
+	test("truncates a single overlong line with an ellipsis and drops the rest", async () => {
+		const sink = new OutputSink({ maxColumns: 8, spillThreshold: 1000 });
+		await sink.push(`short\n${"x".repeat(50)}\nfooter`);
+
+		const dumped = await sink.dump();
+		expect(dumped.truncated).toBe(true);
+		expect(dumped.output).toContain("short\n");
+		expect(dumped.output).toContain("\nfooter");
+		expect(dumped.output).toContain("…");
+		// The wide line shouldn't appear verbatim.
+		expect(dumped.output).not.toContain("x".repeat(50));
+		expect(dumped.columnTruncatedLines).toBe(1);
+		expect(dumped.columnDroppedBytes ?? 0).toBeGreaterThan(0);
+		// totalBytes still reflects the raw stream, not the post-cap view.
+		expect(dumped.totalBytes).toBe(byteLength(`short\n${"x".repeat(50)}\nfooter`));
+	});
+
+	test("persists per-line state across chunk boundaries", async () => {
+		const sink = new OutputSink({ maxColumns: 4, spillThreshold: 1000 });
+		await sink.push("ab"); // 2 bytes into the current line
+		await sink.push("cd"); // 4 bytes total — still within cap
+		await sink.push("efgh"); // tips over → ellipsis once, then drop rest
+		await sink.push("ijkl\n");
+		await sink.push("next");
+
+		const dumped = await sink.dump();
+		const lines = dumped.output.split("\n");
+		expect(lines[0]).toMatch(/^(abcd)?…$|^abcd…$/);
+		expect(lines[1]).toBe("next");
+		expect(dumped.columnTruncatedLines).toBe(1);
+	});
+
+	test("disabled by default — maxColumns: 0 is a passthrough", async () => {
+		const sink = new OutputSink({ spillThreshold: 4000 });
+		const wide = "y".repeat(2000);
+		await sink.push(wide);
+		const dumped = await sink.dump();
+		expect(dumped.output).toBe(wide);
+		expect(dumped.columnTruncatedLines).toBeUndefined();
+		expect(dumped.columnDroppedBytes).toBeUndefined();
+	});
+
+	test("middle elision math subtracts column-dropped bytes", async () => {
+		// Head + tail buffers are tiny; the wide middle line gets column-capped,
+		// so its dropped bytes shouldn't be double-counted as "elided from middle".
+		const sink = new OutputSink({
+			maxColumns: 4,
+			spillThreshold: 6,
+			headBytes: 6,
+		});
+		const wideMiddle = "M".repeat(200);
+		const input = `head\n${wideMiddle}\ntail`;
+		await sink.push(input);
+		const dumped = await sink.dump();
+		const elided = dumped.elidedBytes ?? 0;
+		const dropped = dumped.columnDroppedBytes ?? 0;
+		expect(dropped).toBeGreaterThan(0);
+		// elided + dropped + kept ≤ totalBytes (with a small slack for the marker/newlines).
+		expect(elided + dropped).toBeLessThan(dumped.totalBytes);
 	});
 });

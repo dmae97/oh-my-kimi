@@ -1,6 +1,8 @@
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
+import { Settings } from "../../config/settings";
 import { OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
+import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/output-meta";
 import type { JsStatusEvent } from "../js/shared/types";
 import type { KernelDisplayOutput } from "./display";
 import {
@@ -815,10 +817,13 @@ async function executeWithKernel(
 	code: string,
 	options: PythonExecutorOptions | undefined,
 ): Promise<PythonResult> {
+	const settings = await Settings.init();
 	const sink = new OutputSink({
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
+		headBytes: resolveOutputSinkHeadBytes(settings),
+		maxColumns: resolveOutputMaxColumns(settings),
 	});
 	const displayOutputs: KernelDisplayOutput[] = [];
 	const deadlineMs = getExecutionDeadlineMs(options);
