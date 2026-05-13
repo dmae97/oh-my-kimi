@@ -1,3 +1,4 @@
+import { abortableSleep } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import { getEnvApiKey } from "../stream";
 import type {
@@ -14,7 +15,6 @@ import type {
 	ToolResultMessage,
 	UserMessage,
 } from "../types";
-import { abortableSleep } from "@oh-my-pi/pi-utils";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";

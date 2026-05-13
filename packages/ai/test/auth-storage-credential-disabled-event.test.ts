@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { AuthCredentialStore, AuthStorage, type CredentialDisabledEvent } from "../src/auth-storage";
 import * as oauthUtils from "../src/utils/oauth";
+
 // Env vars short-circuit AuthStorage.getApiKey before the OAuth refresh path runs; suppress
 // them for every test in this file so the credential-disable code path can be exercised.
 const SUPPRESS_ANTHROPIC_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"] as const;
