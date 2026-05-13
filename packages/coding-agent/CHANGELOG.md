@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `credential_disabled` extension event so extensions can subscribe via `pi.on("credential_disabled", handler)` and react when `AuthStorage` automatically soft-disables a credential (e.g. OAuth `invalid_grant`). Replaces the current `agent_end` errorMessage regex pattern downstream extensions have to match against. Handler payload is `{ type, provider, disabledCause }`. `createAgentSession()` subscribes the per-session extension runner to the shared `AuthStorage` via `authStorage.onCredentialDisabled(...)` at the very top of session creation — before any startup model probes run — so events fire on every disable regardless of whether the embedder also has a constructor `onCredentialDisabled` handler attached. The SDK forwards through `ExtensionRunner.emitCredentialDisabled(event)`, which buffers events until `runner.initialize(...)` runs in the mode controller and then flushes them through `emit()` so extension handlers see populated UI/runtime context (rather than the constructor's no-op default with `hasUI=false`, an unset model, and no-op runtime actions). On `session.dispose()` the subscription is unsubscribed; the embedder's constructor-attached listener keeps firing through its own permanent subscription. The outer `createAgentSession()` catch also releases the subscription if startup throws before the dispose-wrap is wired, so repeated retries don't accumulate dead listeners.
+
+### Fixed
+
+- Fixed `createAgentSession()` subscribing the `credential_disabled` bridge to a freshly discovered `AuthStorage` orphan when an embedder supplied only `options.modelRegistry` (no `options.authStorage`). Refresh failures emitted by `modelRegistry.getApiKey()` flow through `modelRegistry.authStorage`, so a divergent local instance silently swallowed every disable event and also leaked into the `mcpManager` and session result. The SDK now reconciles `authStorage` to `modelRegistry.authStorage` up front and rejects mismatched `options.authStorage`/`options.modelRegistry.authStorage` pairs at session construction.
+- Fixed `runSubagent` (subagent task executor) carrying the same latent `AuthStorage`/`ModelRegistry` divergence as `createAgentSession()`: when only `options.modelRegistry` was supplied, the executor previously fell through to a fresh `discoverAuthStorage()` and handed that orphan into `createAgentSession()` alongside a registry whose `.authStorage` was a different instance. The executor now reconciles to `modelRegistry.authStorage` before any further work and rejects mismatched `options.authStorage`/`options.modelRegistry.authStorage` pairs the same way the SDK does, so subagents can no longer silently observe a different storage view than their parent.
+
 ## [14.9.9] - 2026-05-12
 
 ### Added
@@ -9,7 +18,6 @@
 - Added new `task.isolation.mode` values `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, and `rcopy` for native PAL-backed task isolation backends
 - Added automatic PAL-backed isolation backend selection so `task.isolation.mode` uses the host's best-available backend
 - Added input-token and output-token totals to `omp stats --summary`.
-- Added a `credential_disabled` extension event so extensions can subscribe via `pi.on("credential_disabled", handler)` and react when `AuthStorage` automatically soft-disables a credential (e.g. OAuth `invalid_grant`). Replaces the current `agent_end` errorMessage regex pattern downstream extensions have to match against. Handler payload is `{ type, provider, disabledCause }`. `createAgentSession()` subscribes the per-session extension runner to the shared `AuthStorage` via `authStorage.onCredentialDisabled(...)` at the very top of session creation — before any startup model probes run — so events fire on every disable regardless of whether the embedder also has a constructor `onCredentialDisabled` handler attached. The SDK forwards through `ExtensionRunner.emitCredentialDisabled(event)`, which buffers events until `runner.initialize(...)` runs in the mode controller and then flushes them through `emit()` so extension handlers see populated UI/runtime context (rather than the constructor's no-op default with `hasUI=false`, an unset model, and no-op runtime actions). On `session.dispose()` the subscription is unsubscribed; the embedder's constructor-attached listener keeps firing through its own permanent subscription. The outer `createAgentSession()` catch also releases the subscription if startup throws before the dispose-wrap is wired, so repeated retries don't accumulate dead listeners.
 
 ### Changed
 
@@ -21,8 +29,120 @@
 - Fixed worktree delta capture to include previously untracked file state by baselining untracked patches for both snapshots
 - Fixed task isolation startup to try alternate PAL backends when the preferred one is unavailable, allowing successful fallback instead of immediate failure
 - Mapped legacy `task.isolation.mode` values `worktree`, `fuse-overlay`, and `fuse-projfs` to their new equivalents during settings migration to preserve behavior with older configs
-- Fixed `createAgentSession()` subscribing the `credential_disabled` bridge to a freshly discovered `AuthStorage` orphan when an embedder supplied only `options.modelRegistry` (no `options.authStorage`). Refresh failures emitted by `modelRegistry.getApiKey()` flow through `modelRegistry.authStorage`, so a divergent local instance silently swallowed every disable event and also leaked into the `mcpManager` and session result. The SDK now reconciles `authStorage` to `modelRegistry.authStorage` up front and rejects mismatched `options.authStorage`/`options.modelRegistry.authStorage` pairs at session construction.
-- Fixed `runSubagent` (subagent task executor) carrying the same latent `AuthStorage`/`ModelRegistry` divergence as `createAgentSession()`: when only `options.modelRegistry` was supplied, the executor previously fell through to a fresh `discoverAuthStorage()` and handed that orphan into `createAgentSession()` alongside a registry whose `.authStorage` was a different instance. The executor now reconciles to `modelRegistry.authStorage` before any further work and rejects mismatched `options.authStorage`/`options.modelRegistry.authStorage` pairs the same way the SDK does, so subagents can no longer silently observe a different storage view than their parent.
+
+## [14.9.8] - 2026-05-12
+
+### Breaking Changes
+
+- Changed the `eval` tool input format to a single-line `*** Cell <lang>:"<title>" [t:<duration>] [rst]` header per cell, replacing the `*** Begin <LANG>` / `*** End <LANG>` envelope and the standalone `*** Title:` / `*** Timeout:` / `*** Reset` directives. The lark grammar enforces a fixed attribute order; the runtime parser remains lenient (alias keys, bare positional tokens, single-quoted titles).
+
+### Added
+
+- Added `:conflicts` read selector (`read <path>:conflicts`) to return a one-line index of all unresolved merge conflicts with stable `#N` IDs for quick inspection
+- Added bulk conflict resolution with `write({ path: "conflict://*", content })` to resolve all currently registered conflicts across files in one call, expanding `@ours`/`@theirs`/`@base`/`@both` per conflict and returning per-file counts
+- Added `read` support for `conflict://<N>` and `read conflict://<N>/<scope>` to inspect unresolved conflict regions captured by a prior read, including `ours`, `theirs`, and `base` side views with original file line alignment
+- Added shorthand content tokens `@ours`, `@theirs`, `@both`, and `@base` to conflict-resolution writes using `path: "conflict://<N>"` so replacement content can be composed from recorded conflict sections
+- Added conflict count metadata to read results so conflict files now show a warning badge (`⚠ N`) in the read tool UI
+- Added support for explicit boolean `rst` values (`rst:true`, `rst:false`, `rst:1`, `rst:0`, `rst:yes`, `rst:no`, `rst:on`, `rst:off`) in `*** Cell` headers
+- Added detection of unresolved git merge conflicts in `read` output: each marker block is registered with a session-stable id and surfaced in a footer with `ours`/`theirs` previews. Resolve a block by calling `write({ path: "conflict://<id>", content })` — the tool splices the recorded marker region (markers and all sides) with the supplied content and routes through the normal writethrough (LSP format/diagnostics, fs-cache invalidation).
+
+### Changed
+
+- Changed `read` conflict warning footers to show `X of Y` unresolved conflicts when a range only captures part of a file and provide a `read <path>:conflicts` hint for the full list
+- Changed conflict scanning in conflict read paths to inspect the whole file (with a 10 MB cap) so totals better reflect hidden conflicts and truncated scans are called out
+- Changed conflict marker scanning during `read` to only register fully formed, column-0 merge-marker blocks, so indented or malformed marker-like lines are no longer treated as conflicts
+- Changed `write` conflict resolution to validate `conflict://` IDs and report clear errors for malformed or unknown conflict URIs
+- Changed the HTML transcript renderer to parse the new `*** Cell` headers while keeping the older `*** Begin <LANG>` and `===== ... =====` formats renderable for historical sessions.
+- Changed the `eval` tool parser so a stray non-marker line between cells no longer crashes with `null is not an object (evaluating 'BEGIN_RE.exec(lines[i])[1]')`; stray content is consumed without aborting parsing.
+- Changed `*** End` to be an optional, undocumented per-cell terminator (kept in the lark to satisfy GPT-trained models' natural terminator habit during constrained sampling).
+
+### Fixed
+
+- Fixed single-conflict `write` retries to re-locate the recorded conflict block by exact marker content so shifted line numbers from out-of-band edits no longer prevent resolution
+- Fixed `read conflict://*` handling by rejecting wildcard reads with a clear write-only guidance error
+- Fixed conflict resolution to verify the live file still contains recorded `<<<<<<<` and `>>>>>>>` markers before splicing, preventing stale conflict IDs from silently corrupting out-of-band-edited files
+- Fixed `@base` token handling so two-way conflicts without a base section now return a clear error
+- Improved `*** Cell` header parsing to reject invalid `rst` values with a clear `invalid rst value` error
+
+## [14.9.7] - 2026-05-12
+
+### Breaking Changes
+
+- Changed the `timeoutMs` execution option to no longer be enforced during worker-based JS runs, so callers must rely on external cancellation signals for time limits
+- Replaced the Jupyter kernel gateway + WebSocket protocol behind the Python `eval` backend with a subprocess-backed runner that speaks NDJSON over stdin/stdout; removed the `jupyter_kernel_gateway`/`ipykernel` pip dependencies, the `python.sharedGateway` setting, the `omp jupyter` CLI command, and the `PI_PYTHON_GATEWAY_URL` / `PI_PYTHON_GATEWAY_TOKEN` environment variables
+
+### Added
+
+- Added Python `tool.<name>(args)` support to `executePython` sessions so evaluated Python code can invoke session tools through the prelude `tool` proxy
+- Added per-execution Python tool bridge session registration and loopback endpoint wiring so Python tool calls resolve to host tools and return tool results
+- Added status-event forwarding for Python tool bridge calls so `tool` invocations can emit execution status updates
+- Added browser-tab JavaScript execution through the shared runtime so tab runs now expose the standard helper globals (`read`, `write`, `sort`, `uniq`, `counter`, `diff`, `tree`, `env`, `output`, `display`, and `tool`)
+- Added static ESM `import` support to browser-tab JavaScript by rewriting top-level imports and resolving them against the tab session context
+- Added substring fallback matching to `HistoryStorage.search` so infix and short-token queries that FTS5 prefix matching misses are still returned
+- Added a live single-line sync progress display to the stats command showing current/total sessions while syncing
+- Added automatic inline JS evaluation fallback when worker creation failed so script execution still works in environments without worker support
+
+### Changed
+
+- Changed `setup python` to only verify a reachable Python 3 interpreter instead of installing Jupyter dependencies
+- Changed `info` output to remove the obsolete Python Gateway status block now that shared gateway management is no longer available
+- Changed JavaScript execution in `executeJs` to expose the worker\u2019s real `process` object instead of a restricted, frozen subset
+- Changed JavaScript evaluation to run per session in a worker-backed runner with explicit initialization and teardown handling
+- Changed the Python backend to launch one `python -u runner.py` subprocess per kernel; cancellation now sends `SIGINT` which raises a real `KeyboardInterrupt` in user code, and the same subprocess is reused across cells in session mode
+- Changed Python magic handling so `%pip`, `%cd`, `%env`, `%pwd`, `%ls`, `%time`, `%timeit`, `%who`, `%reset`, `%load`, `%run`, `%%bash`, `%%capture`, `%%timeit`, `%%writefile`, and `!shell` work without depending on IPython
+
+### Fixed
+
+- Fixed Python output rendering so `text/markdown` takes precedence over `text/plain` and status bundles are emitted as status updates rather than plain text
+- Fixed query tokenization in `HistoryStorage.search` so punctuation-delimited terms like `git-commit` are aligned with indexing and matched correctly
+- Fixed history search result merging to de-duplicate matches and return full-text matches before substring-only matches while still respecting the requested limit
+- Fixed JS run cancellation so aborting a run now also cancels in-flight tool calls and terminates the active worker session
+- Fixed top-level `const`, `let`, and `class` declarations in evaluated JavaScript to persist across subsequent runs by rewriting top-level declarations
+
+## [14.9.5] - 2026-05-12
+### Breaking Changes
+
+- Removed the `jobs://` internal URL protocol; inspect background jobs via the `job` tool's `list: true` operation instead
+
+### Added
+
+- Added `since` and `until` date-range filters to `search_issues`, `search_prs`, `search_commits`, and `search_repos`, accepting relative durations (`m`/`h`/`d`/`w`/`mo`/`y`), ISO dates, and ISO datetimes
+- Added `dateField` support for date filtering (`created` or `updated`) so search results can be constrained by creation, update, pushed (for repos), or committer date (for commits)
+- Added owner-based scoping to async job registration and queries so background jobs can be registered with an `ownerId` and filtered per agent in `getRunningJobs`, `getRecentJobs`, `getAllJobs`, and `cancelAll`
+- Added agent ownership metadata to async jobs started by `task` and `bash` tools so their lifecycle and cancellation is attributed to the creating agent
+- Added `list: true` operation to the `job` tool, returning an immediate snapshot of every job spawned by the calling agent without waiting (replaces the deleted `jobs://` URL)
+- Added per-agent visibility scoping to the `job` tool so `list`, `poll`, and `cancel` only see and act on jobs owned by the calling agent; cross-agent operations now return `not_found`
+
+### Changed
+
+- Changed `search_issues`, `search_prs`, `search_commits`, and `search_repos` to allow date-only queries where `query` is omitted if `since`/`until` is provided
+- Changed `search_code` to return a validation error when `since`/`until` is supplied because GitHub code search does not support date qualifiers
+- Changed async job manager ownership so subagents inherit the parent session’s global `AsyncJobManager` instead of creating and owning separate instances
+- Changed session lifecycle cleanup so the global async-job manager is disposed only by the owning top-level session
+- Changed subagent session switches and handoff paths to stop global async-job cancellation and cancel only jobs owned by that session
+- Changed `agent://` and `artifact://` URL resolution to search artifact outputs across all active sessions instead of only the current session, allowing parent and subagent sessions to read each other’s generated outputs by ID
+- Changed `memory://` URL resolution to walk all active sessions’ memory roots and return the first matching file, so worktree-based subagents can access their own memory views as well as shared roots
+- Changed internal URL routing to use a shared process-global `InternalUrlRouter` and protocol handlers, so built-in tools resolve `agent://`, `artifact://`, `memory://`, `skill://`, `rule://`, `mcp://`, and `local://` URLs without requiring session-specific router wiring
+- Changed `mcp://` handler to use the globally registered MCP manager so MCP resource links work for agents sharing session context
+
+### Changed
+
+- Changed the `ask.timeout` default from `30` (seconds) to `0` (wait indefinitely). Auto-selecting the recommended option after a fixed delay was surprising users mid-deliberation; the timer is now strictly opt-in. The legacy auto-select behavior is preserved when `ask.timeout` is set to a non-zero value, and the `ask` tool's prompt has been updated so the model expects unlimited reply time by default.
+
+### Fixed
+
+- Added `ModelRegistry.hasConfiguredAuth(model)` to mirror the upstream `@mariozechner/pi-coding-agent` API surface; external plugins and downstream wrappers that pre-flight auth before launching a subagent no longer crash with `this._modelRegistry.hasConfiguredAuth is not a function` on the direct agent-launch path. ([#993](https://github.com/can1357/oh-my-pi/issues/993))
+- Fixed an ESM circular-import TDZ that crashed test suites when modules from the `task/` and `tools/` graphs were evaluated together (e.g. `executor-warnings.test.ts` + `task-simple-mode.test.ts`) by deferring `BUILTIN_TOOLS.task`'s `TaskTool.create` dereference to factory-call time and sourcing `truncateTail` from `session/streaming-output` instead of the `tools/` barrel
+- Treat keyless-by-design providers (llama.cpp, ollama, lm-studio) as authenticated in subagent model resolution; fixes silent fallback to parent remote model when a local model is configured. ([#1008](https://github.com/can1357/oh-my-pi/issues/1008))
+- Fixed subagent disposal and session transitions that previously canceled all running async jobs, preventing inadvertent termination of a parent agent’s background work
+- Fixed multi-entry edits silently rendering a fake success when every entry failed (e.g. all hit the auto-generated guard), by surfacing `isError: true` from the single-path edit orchestrator so the renderer takes the error branch instead of falling through to the streaming-preview fallback that displays the *proposed* diff
+- Fixed the auto-generated streaming guard being gated behind `edit.streamingAbort` (default false), so it now pre-empts streaming edit tool calls targeting auto-generated files regardless of that setting
+- Fixed subagents launched in the same parallel batch not seeing each other in their initial `# IRC Peers` system-prompt block by pre-registering the agent in the global `AgentRegistry` before `rebuildSystemPrompt` runs and attaching the live session afterwards
+- Fixed plugin manifest extensions whose entry points at a directory (e.g. `pi-goal`'s `"pi": { "extensions": [".pi/extensions/pi-goal"] }`) failing to load with `Failed to load extension: Directories cannot be read like files`. The plugin path resolver now resolves directory entries to their `index.{ts,js,mjs,cjs}` file, matching the behavior of native auto-discovery via `resolveExtensionEntries`.
+- Fixed the SSH tool on native Windows by avoiding OpenSSH ControlMaster multiplexing, which Win32-OpenSSH does not support and reports as `getsockname failed` ([#154](https://github.com/can1357/oh-my-pi/issues/154)).
+- Fixed `/export` and `/tree` not showing developer-role messages (including the plan content injected after `/plan` approval) so the HTML export and TUI session tree now render developer messages dimmed with their actual content instead of hiding them entirely ([#753](https://github.com/can1357/oh-my-pi/issues/753))
+- Fixed `Timed out initializing browser tab worker` on prebuilt binaries by rewriting `spawnTabWorker` to import the worker entry with `with { type: "file" }` so Bun's `--compile` bundler statically discovers and embeds `tab-worker-entry.ts` in the single-file binary ([#1011](https://github.com/can1357/oh-my-pi/issues/1011))
+
 ## [14.9.3] - 2026-05-10
 ### Breaking Changes
 
