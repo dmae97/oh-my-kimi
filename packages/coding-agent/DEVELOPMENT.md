@@ -51,7 +51,7 @@ createAgentSession(...)
 
 1. **Command router layer** (`packages/coding-agent/src/cli.ts`)
    - Defines the root command table (`commands: CommandEntry[]`) and lazy-loads subcommands like `launch`, `commit`, `config`, `shell`, `stats`, and `search`.
-   - Performs an early Bun runtime guard (`Bun.stringWidth("\x1b[0m\x1b]8;;\x07") !== 0`) and exits on known errata.
+   - Performs an early Bun runtime guard (`Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0`) and exits if the runtime is too old.
    - Exposes `runCli(argv: string[])`, which rewrites argv so non-subcommand invocations default to `launch`.
 
 2. **Application orchestration layer** (`packages/coding-agent/src/main.ts`)

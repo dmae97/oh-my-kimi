@@ -20,37 +20,10 @@ procmgr.scrubProcessEnv();
  */
 import { type CommandEntry, run } from "@oh-my-pi/pi-utils/cli";
 
-function parseSemver(version: string): [number, number, number] {
-	function toint(value: string): number {
-		const int = Number.parseInt(value, 10);
-		if (Number.isNaN(int) || !Number.isFinite(int)) return 0;
-		return int;
-	}
-	const [majorRaw, minorRaw, patchRaw] = version.split(".").map(toint);
-	return [majorRaw, minorRaw, patchRaw];
-}
-
-function isAtLeastBunVersion(minimum: string): boolean {
-	const ver = parseSemver(Bun.version);
-	const min = parseSemver(minimum);
-	for (let i = 0; i < 3; i++) {
-		if (ver[i] !== min[i]) {
-			return ver[i] > min[i];
-		}
-	}
-	return true;
-}
-
-if (typeof Bun.JSONL?.parseChunk !== "function" || !isAtLeastBunVersion(MIN_BUN_VERSION)) {
+if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
-		`error: Bun runtime must be >= ${MIN_BUN_VERSION} (found v${Bun.version}). Please update Bun: bun upgrade\n`,
+		`error: Bun runtime must be >= ${MIN_BUN_VERSION} (found v${Bun.version}). Please upgrade: bun upgrade\n`,
 	);
-	process.exit(1);
-}
-
-// Detect known Bun errata that cause TUI crashes (e.g. Bun.stringWidth mishandling OSC sequences).
-if (Bun.stringWidth("\x1b[0m\x1b]8;;\x07") !== 0) {
-	process.stderr.write(`error: Bun runtime errata detected (v${Bun.version}). Please update Bun: bun upgrade\n`);
 	process.exit(1);
 }
 
