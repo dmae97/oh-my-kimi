@@ -1538,7 +1538,7 @@ export const SETTINGS_SCHEMA = {
 
 	"read.defaultLimit": {
 		type: "number",
-		default: 500,
+		default: 300,
 		ui: {
 			tab: "editing",
 			label: "Default Read Limit",

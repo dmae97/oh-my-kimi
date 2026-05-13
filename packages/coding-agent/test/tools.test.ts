@@ -432,10 +432,11 @@ describe("Coding Agent Tools", () => {
 			const result = await readTool.execute("test-call-5", { path: `${testFile}:L51` });
 			const output = getTextOutput(result);
 
-			// Read tool widens by ±3 unanchored context lines so anchors at
-			// the boundary stay fresh. Lines 48..50 are leading context.
-			expect(output).not.toContain("Line 47");
-			expect(output).toContain("Line 48");
+			// Read tool widens by 1 leading + 3 trailing unanchored context lines
+			// so anchors at the boundary stay fresh. Line 50 is the single leading
+			// context line; lines 47..49 are NOT included.
+			expect(output).not.toContain("Line 49");
+			expect(output).toContain("Line 50");
 			expect(output).toContain("Line 51");
 			expect(output).toContain("Line 100");
 			// No truncation message since file fits within limits
@@ -483,7 +484,7 @@ describe("Coding Agent Tools", () => {
 			const lines = Array.from({ length: 50 }, (_, i) => `Line ${i + 1}`);
 			fs.writeFileSync(testFile, lines.join("\n"));
 
-			// :L2-L5: offset=2 → expand by min(1, 3) = 1 leading line.
+			// :L2-L5: offset=2 → expand by min(1, 1) = 1 leading line.
 			const result = await readTool.execute("test-leading-clamp", {
 				path: `${testFile}:L2-L5`,
 			});
@@ -496,7 +497,7 @@ describe("Coding Agent Tools", () => {
 			expect(output).not.toContain("Line 9");
 		});
 
-		it("should handle offset + limit together (expanding ±3 lines on both sides)", async () => {
+		it("should handle offset + limit together (1 leading + 3 trailing)", async () => {
 			const testFile = path.join(testDir, "offset-limit-test.txt");
 			const lines = Array.from({ length: 100 }, (_, i) => `Line ${i + 1}`);
 			fs.writeFileSync(testFile, lines.join("\n"));
@@ -506,14 +507,14 @@ describe("Coding Agent Tools", () => {
 			});
 			const output = getTextOutput(result);
 
-			// Both endpoints are user-constrained, so expand on both sides.
-			expect(output).not.toContain("Line 37");
-			expect(output).toContain("Line 38");
+			// Both endpoints are user-constrained: 1 leading + 3 trailing.
+			expect(output).not.toContain("Line 39");
+			expect(output).toContain("Line 40");
 			expect(output).toContain("Line 41");
 			expect(output).toContain("Line 60");
 			expect(output).toContain("Line 63");
 			expect(output).not.toContain("Line 64");
-			expect(output).toContain("[Showing lines 38-63 of 100. Use :64 to continue]");
+			expect(output).toContain("[Showing lines 40-63 of 100. Use :64 to continue]");
 		});
 
 		it("should show error when offset is beyond file length", async () => {

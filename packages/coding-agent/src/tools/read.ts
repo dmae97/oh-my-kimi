@@ -175,18 +175,25 @@ function countTextLines(text: string): number {
 const READ_CHUNK_SIZE = 8 * 1024;
 
 /**
- * Number of unanchored context lines to include before/after a user-requested
- * range. Anchor-stale failures are heavily concentrated on edits whose anchors
- * land just outside the most recent read window — a few lines of pre-anchored
- * context covers off-by-one anchor selection without much cost.
+ * Context lines added around an explicit range read. Anchor-stale failures
+ * cluster on edits whose anchors land just outside the most recent read
+ * window, but the data (`scripts/session-stats/analyze_selector_reads.py`)
+ * shows most follow-up reads are disjoint hops, not adjacent extensions —
+ * so symmetric padding rarely pays for itself.
+ *
+ * Leading=1 catches accidental single-line reads where the anchor is the
+ * line immediately above the requested start. Trailing=3 buffers the
+ * common case where the agent asks for a narrow range and then needs the
+ * next few lines to disambiguate an anchor.
  */
-const RANGE_CONTEXT_LINES = 3;
+const RANGE_LEADING_CONTEXT_LINES = 1;
+const RANGE_TRAILING_CONTEXT_LINES = 3;
 
 /**
- * Expand a [start, end) range with ±RANGE_CONTEXT_LINES context lines on the
+ * Expand a [start, end) range with leading/trailing context lines on the
  * sides where the user actually constrained the range. A start of 0 (no
- * explicit offset) does not get leading context — that's already an open-ended
- * read from the top.
+ * explicit offset) does not get leading context — that's already an
+ * open-ended read from the top.
  */
 function expandRangeWithContext(
 	requestedStart: number,
@@ -196,8 +203,8 @@ function expandRangeWithContext(
 	expandEnd: boolean,
 ): { startLine: number; endLine: number } {
 	return {
-		startLine: expandStart ? Math.max(0, requestedStart - RANGE_CONTEXT_LINES) : requestedStart,
-		endLine: expandEnd ? Math.min(totalLines, requestedEnd + RANGE_CONTEXT_LINES) : requestedEnd,
+		startLine: expandStart ? Math.max(0, requestedStart - RANGE_LEADING_CONTEXT_LINES) : requestedStart,
+		endLine: expandEnd ? Math.min(totalLines, requestedEnd + RANGE_TRAILING_CONTEXT_LINES) : requestedEnd,
 	};
 }
 
@@ -1467,8 +1474,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				const requestedStart = offset ? Math.max(0, offset - 1) : 0;
 				const expandStart = offset !== undefined && offset > 1;
 				const expandEnd = limit !== undefined;
-				const leadingContext = expandStart ? Math.min(requestedStart, RANGE_CONTEXT_LINES) : 0;
-				const trailingContext = expandEnd ? RANGE_CONTEXT_LINES : 0;
+				const leadingContext = expandStart ? Math.min(requestedStart, RANGE_LEADING_CONTEXT_LINES) : 0;
+				const trailingContext = expandEnd ? RANGE_TRAILING_CONTEXT_LINES : 0;
 				const startLine = requestedStart - leadingContext;
 				const startLineDisplay = startLine + 1;
 
