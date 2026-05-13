@@ -2,7 +2,7 @@
  * Extension runner - executes extensions and manages their lifecycle.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent, Model, ProviderResponseMetadata } from "@oh-my-pi/pi-ai";
+import type { CredentialDisabledEvent, ImageContent, Model, ProviderResponseMetadata } from "@oh-my-pi/pi-ai";
 import type { KeyId } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -68,6 +68,8 @@ export function __test_setExtensionHandlerTimeoutMs(timeoutMs: number): void {
 }
 
 const EXTENSION_HANDLER_TIMEOUT = Symbol("extensionHandlerTimeout");
+
+const MAX_PENDING_CREDENTIAL_DISABLED = 32;
 
 /**
  * Events handled by the generic emit() method.
@@ -185,6 +187,15 @@ export class ExtensionRunner {
 	#reloadHandler: () => Promise<void> = async () => {};
 	#shutdownHandler: ShutdownHandler = () => {};
 	#commandDiagnostics: Array<{ type: string; message: string; path: string }> = [];
+	#initialized = false;
+	/**
+	 * Buffer for `credential_disabled` events received via {@link emitCredentialDisabled}
+	 * before {@link initialize} has run. Drained through {@link emit} once initialize sets
+	 * up the runtime context, so extension handlers see a populated UI/runtime context
+	 * rather than the constructor's no-op default. Bounded at
+	 * {@link MAX_PENDING_CREDENTIAL_DISABLED}; oldest entries are dropped under pressure.
+	 */
+	#pendingCredentialDisabled: CredentialDisabledEvent[] = [];
 
 	constructor(
 		private readonly extensions: Extension[],
@@ -237,6 +248,43 @@ export class ExtensionRunner {
 		}
 
 		this.#uiContext = uiContext ?? noOpUIContext;
+		this.#initialized = true;
+
+		// Drain events buffered by emitCredentialDisabled() before initialize ran. The
+		// spread adds the `type` discriminator — `event` is the pi-ai shape (no `type`).
+		for (const event of this.#pendingCredentialDisabled.splice(0)) {
+			this.emit({ type: "credential_disabled", ...event }).catch((error: unknown) => {
+				logger.warn("credential_disabled handler threw during initialize flush", {
+					provider: event.provider,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			});
+		}
+	}
+
+	/**
+	 * Forward a `credential_disabled` event from `AuthStorage` to extension handlers.
+	 *
+	 * If {@link initialize} has not yet run, the event is buffered and replayed once
+	 * initialize wires the runtime/UI context. This matters because mode controllers
+	 * (interactive, RPC, ACP, print, subagent) call `initialize()` AFTER `createAgentSession`
+	 * returns, but `AuthStorage` can fire `credential_disabled` during startup model probes
+	 * inside `createAgentSession()`. Without deferral, extension handlers would observe
+	 * `hasUI=false`, an unset model, and no-op runtime actions on exactly the headline
+	 * "OAuth invalid_grant during startup" path the event was designed to surface.
+	 *
+	 * Always returns; never throws. Errors from handlers are routed through
+	 * {@link onError} via {@link emit}'s normal isolation.
+	 */
+	async emitCredentialDisabled(event: CredentialDisabledEvent): Promise<void> {
+		if (!this.#initialized) {
+			if (this.#pendingCredentialDisabled.length >= MAX_PENDING_CREDENTIAL_DISABLED) {
+				this.#pendingCredentialDisabled.shift();
+			}
+			this.#pendingCredentialDisabled.push(event);
+			return;
+		}
+		await this.emit({ type: "credential_disabled", ...event });
 	}
 
 	getUIContext(): ExtensionUIContext {

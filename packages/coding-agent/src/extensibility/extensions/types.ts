@@ -624,6 +624,15 @@ export interface TodoReminderEvent {
 	maxAttempts: number;
 }
 
+/** Fired when AuthStorage automatically soft-disables a credential (e.g. OAuth `invalid_grant`). Not fired for user-initiated `remove()` or duplicate-credential dedup. */
+export interface CredentialDisabledEvent {
+	type: "credential_disabled";
+	/** Provider id whose credential was disabled (e.g. "anthropic"). */
+	provider: string;
+	/** Verbatim error captured for forensics (truncated upstream). */
+	disabledCause: string;
+}
+
 // ============================================================================
 // User Bash Events
 // ============================================================================
@@ -831,6 +840,7 @@ export type ExtensionEvent =
 	| AutoRetryEndEvent
 	| TtsrTriggeredEvent
 	| TodoReminderEvent
+	| CredentialDisabledEvent
 	| UserBashEvent
 	| UserPythonEvent
 	| InputEvent
@@ -1012,6 +1022,7 @@ export interface ExtensionAPI {
 	on(event: "auto_retry_end", handler: ExtensionHandler<AutoRetryEndEvent>): void;
 	on(event: "ttsr_triggered", handler: ExtensionHandler<TtsrTriggeredEvent>): void;
 	on(event: "todo_reminder", handler: ExtensionHandler<TodoReminderEvent>): void;
+	on(event: "credential_disabled", handler: ExtensionHandler<CredentialDisabledEvent>): void;
 	on(event: "input", handler: ExtensionHandler<InputEvent, InputEventResult>): void;
 	on(event: "tool_call", handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
 	on(event: "tool_result", handler: ExtensionHandler<ToolResultEvent, ToolResultEventResult>): void;
