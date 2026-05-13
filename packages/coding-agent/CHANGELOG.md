@@ -1,11 +1,17 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added middle elision for streaming tool outputs (bash, ssh, python, js eval) and post-execution tool result spill. When `tools.artifactHeadBytes` is set (default 20 KB), large outputs now keep both the first N KB and the last N KB with an inline `[… N lines elided (M KB) …]` marker between them, instead of dropping everything before the trailing tail. Setting `tools.artifactHeadBytes = 0` reverts to the previous tail-only behavior. The full output is still mirrored to the session artifact (`artifact://<id>`) regardless of elision mode. Exposes `truncateMiddle` and `formatMiddleElisionMarker` from `@oh-my-pi/pi-coding-agent/session/streaming-output`, extends `OutputSinkOptions` with `headBytes`, and adds `direction: "middle"` plus `headRange` / `tailRange` / `elidedLines` / `elidedBytes` to `TruncationMeta`.
 - Added per-line column cap shared across streaming tool outputs (`bash`, `ssh`, `python`, `js eval`) and the `read` tool. Lines wider than `tools.outputMaxColumns` bytes (default **768**) are ellipsis-truncated at write time and remaining bytes up to the next `\n` are dropped — bounded memory even on multi-MB single-line outputs (e.g. `cat /dev/urandom`). The cap lives on `OutputSink` as the new `maxColumns` option, persists state across chunk boundaries so split-mid-line writes still respect the budget, and exposes `columnDroppedBytes` / `columnTruncatedLines` on `OutputSummary`. Middle-elision byte math subtracts column drops so the "elided from middle" count stays honest. `read` reuses the same setting but trims its already-collected lines via `truncateLine`. Skipped when the read selector is `:raw`. The artifact file (`artifact://<id>`) keeps the full uncapped stream. Set `tools.outputMaxColumns = 0` to disable.
+
+### Changed
+
+- Changed `search` pagination in multi-file scopes so `skip` now skips entire files and pages results in groups of up to 20 files, with output guiding the next `skip` value via `Showing files X-Y of N`
+- Changed multi-file search result selection to cap each file at 20 matches and round-robin across files, so one noisy file no longer suppresses visibility of hits in other files and truncation now reports per-file limits
+- Changed search truncation metadata/renderer output from match/result-based limits to file-based limits (`fileLimitReached`, `perFileLimitReached`) and updated truncation labels accordingly
+- Lowered `read.defaultLimit` default from `500` to `300` lines, and split the per-range context padding into asymmetric `RANGE_LEADING_CONTEXT_LINES = 1` / `RANGE_TRAILING_CONTEXT_LINES = 3` (was symmetric `RANGE_CONTEXT_LINES = 3`). Replay analysis over post-summarizer sessions (`scripts/session-stats/optimize_read_config.py`) showed that bare-path reads are over-provisioned at the median (file p50 = 220 lines) and that most follow-up reads are disjoint hops rather than adjacent extensions — so a smaller default plus narrower leading context reclaims tokens without measurably changing first-cover rate. Trailing context stays at 3 lines to keep anchor-stale recovery on narrow reads. Explicit `read.defaultLimit` overrides in settings are honoured unchanged.
 
 ## [15.0.0] - 2026-05-13
 ### Breaking Changes

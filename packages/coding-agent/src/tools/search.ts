@@ -47,17 +47,36 @@ const searchSchema = Type.Object({
 	}),
 	i: Type.Optional(Type.Boolean({ description: "case-insensitive search", default: false })),
 	gitignore: Type.Optional(Type.Boolean({ description: "respect gitignore", default: true })),
-	skip: Type.Optional(Type.Number({ description: "matches to skip", default: 0 })),
+	skip: Type.Optional(
+		Type.Number({
+			description:
+				"files to skip before collecting results — use to paginate when the prior call hit the file limit",
+			default: 0,
+		}),
+	),
 });
 
 export type SearchToolInput = Static<typeof searchSchema>;
 
-export const DEFAULT_MATCH_LIMIT = 100;
+/** Maximum number of distinct files surfaced in a single response. The
+ * agent paginates further pages via `skip`. */
+export const DEFAULT_FILE_LIMIT = 20;
+/** Per-file match cap for multi-file searches — keeps a single hot file
+ * from crowding out diverse hits. Applied in JS after grep returns. */
+export const MULTI_FILE_PER_FILE_MATCHES = 20;
+/** Per-file match cap for single-file searches — there's no diversity
+ * concern when the scope is one file. */
+export const SINGLE_FILE_MATCHES = 200;
+/** Hard safety ceiling on how many matches we fetch from native grep
+ * before JS-side grouping. Sized to comfortably cover the file window
+ * (DEFAULT_FILE_LIMIT files × MULTI_FILE_PER_FILE_MATCHES matches) plus
+ * pagination headroom so the caller can see total file count. */
+const INTERNAL_TOTAL_CAP = 2000;
 
 export interface SearchToolDetails {
 	truncation?: TruncationResult;
-	matchLimitReached?: number;
-	resultLimitReached?: number;
+	fileLimitReached?: number;
+	perFileLimitReached?: number;
 	linesTruncated?: boolean;
 	meta?: OutputMeta;
 	scopePath?: string;
@@ -196,8 +215,12 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			}
 
 			const effectiveOutputMode = GrepOutputMode.Content;
-			const effectiveLimit = DEFAULT_MATCH_LIMIT;
-			const internalLimit = Math.min(effectiveLimit * 5, 2000);
+			// Multi-scope = more than one file may match. We fetch up to
+			// INTERNAL_TOTAL_CAP matches from native grep, then in JS group by
+			// file, apply a per-file cap (so one hot file doesn't crowd the
+			// window), and round-robin emit from up to DEFAULT_FILE_LIMIT files.
+			const isMultiScope = isDirectory || Boolean(exactFilePaths) || Boolean(multiTargets);
+			const perFileMatchCap = isMultiScope ? MULTI_FILE_PER_FILE_MATCHES : SINGLE_FILE_MATCHES;
 
 			// Run grep
 			let result: GrepResult;
@@ -221,7 +244,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 								hidden: true,
 								gitignore: useGitignore,
 								cache: false,
-								maxCount: exactFilePaths ? undefined : internalLimit,
+								maxCount: INTERNAL_TOTAL_CAP,
 								contextBefore: normalizedContextBefore,
 								contextAfter: normalizedContextAfter,
 								maxColumns: DEFAULT_MAX_COLUMN,
@@ -238,11 +261,10 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 							matches.push({ ...match, path: rebased });
 						}
 					}
-					const offsetMatches = matches.slice(normalizedSkip);
 					result = {
-						matches: offsetMatches,
-						totalMatches: exactFilePaths ? offsetMatches.length : totalMatches,
-						filesWithMatches: new Set(offsetMatches.map(match => match.path)).size,
+						matches,
+						totalMatches: exactFilePaths ? matches.length : totalMatches,
+						filesWithMatches: new Set(matches.map(match => match.path)).size,
 						filesSearched: exactFilePaths ? exactFilePaths.length : filesSearched,
 						limitReached,
 					};
@@ -257,8 +279,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 							hidden: true,
 							gitignore: useGitignore,
 							cache: false,
-							maxCount: internalLimit,
-							offset: normalizedSkip > 0 ? normalizedSkip : undefined,
+							maxCount: INTERNAL_TOTAL_CAP,
 							contextBefore: normalizedContextBefore,
 							contextAfter: normalizedContextAfter,
 							maxColumns: DEFAULT_MAX_COLUMN,
@@ -277,42 +298,51 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			const formatPath = (filePath: string): string =>
 				formatResultPath(filePath, isDirectory, searchPath, this.session.cwd);
 
-			// Build output
-			const roundRobinSelect = (matches: GrepMatch[], limit: number): GrepMatch[] => {
-				if (matches.length <= limit) return matches;
-				const fileOrder: string[] = [];
-				const byFile = new Map<string, GrepMatch[]>();
-				for (const match of matches) {
-					if (!byFile.has(match.path)) {
-						fileOrder.push(match.path);
-						byFile.set(match.path, []);
-					}
-					byFile.get(match.path)!.push(match);
+			// Group matches by file in encounter order. Detect per-file overflow
+			// BEFORE truncation so the renderer can surface that a hot file was
+			// trimmed for diversity.
+			const fileOrder: string[] = [];
+			const matchesByPath = new Map<string, GrepMatch[]>();
+			for (const match of result.matches) {
+				if (!matchesByPath.has(match.path)) {
+					fileOrder.push(match.path);
+					matchesByPath.set(match.path, []);
 				}
-				const selected: GrepMatch[] = [];
-				const indices = new Map<string, number>(fileOrder.map(file => [file, 0]));
-				while (selected.length < limit) {
-					let anyAdded = false;
-					for (const file of fileOrder) {
-						if (selected.length >= limit) break;
-						const fileMatches = byFile.get(file)!;
-						const idx = indices.get(file)!;
-						if (idx < fileMatches.length) {
-							selected.push(fileMatches[idx]);
-							indices.set(file, idx + 1);
+				matchesByPath.get(match.path)!.push(match);
+			}
+			let perFileLimitReached = false;
+			for (const file of fileOrder) {
+				const list = matchesByPath.get(file)!;
+				if (list.length > perFileMatchCap) {
+					perFileLimitReached = true;
+					list.length = perFileMatchCap;
+				}
+			}
+			const totalFiles = fileOrder.length;
+			// Single-file scopes can't paginate — there is one file by definition.
+			const canPaginate = isMultiScope;
+			const skipFiles = canPaginate ? Math.min(normalizedSkip, totalFiles) : 0;
+			const windowFiles = canPaginate ? fileOrder.slice(skipFiles, skipFiles + DEFAULT_FILE_LIMIT) : fileOrder;
+			const fileLimitReached = canPaginate && totalFiles > skipFiles + DEFAULT_FILE_LIMIT;
+			const selectedMatches: GrepMatch[] = [];
+			if (windowFiles.length > 0) {
+				const lists = windowFiles.map(file => matchesByPath.get(file) ?? []);
+				const cursors = new Array<number>(lists.length).fill(0);
+				let anyAdded = true;
+				while (anyAdded) {
+					anyAdded = false;
+					for (let i = 0; i < lists.length; i++) {
+						if (cursors[i] < lists[i].length) {
+							selectedMatches.push(lists[i][cursors[i]++]);
 							anyAdded = true;
 						}
 					}
-					if (!anyAdded) break;
 				}
-				return selected;
-			};
-			const selectedMatches = isDirectory
-				? roundRobinSelect(result.matches, effectiveLimit)
-				: result.matches.slice(0, effectiveLimit);
-			const matchLimitReached = result.matches.length > effectiveLimit;
-			const nextSkip = normalizedSkip + selectedMatches.length;
-			const limitMessage = `Result limit reached; narrow paths or use skip=${nextSkip}.`;
+			}
+			const nextSkip = skipFiles + windowFiles.length;
+			const limitMessage = fileLimitReached
+				? `Showing files ${skipFiles + 1}-${nextSkip} of ${totalFiles}. Use skip=${nextSkip} for the next page, or narrow paths/pattern.`
+				: "";
 			const { record: recordFile, list: fileList } = createFileRecorder();
 			const fileMatchCounts = new Map<string, number>();
 			const missingPathsNote =
@@ -405,7 +435,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					displayLines.push(...rendered.display);
 				}
 			}
-			if (matchLimitReached || result.limitReached) {
+			if (limitMessage) {
 				outputLines.push("", limitMessage);
 			}
 			if (missingPathsNote) {
@@ -414,7 +444,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			const rawOutput = outputLines.join("\n");
 			const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 			const output = truncation.content;
-			const truncated = Boolean(matchLimitReached || result.limitReached || truncation.truncated || linesTruncated);
+			const truncated = Boolean(
+				fileLimitReached || perFileLimitReached || result.limitReached || truncation.truncated || linesTruncated,
+			);
 			const details: SearchToolDetails = {
 				scopePath,
 				matchCount: selectedMatches.length,
@@ -425,8 +457,8 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					count: fileMatchCounts.get(path) ?? 0,
 				})),
 				truncated,
-				matchLimitReached: matchLimitReached ? effectiveLimit : undefined,
-				resultLimitReached: result.limitReached ? internalLimit : undefined,
+				fileLimitReached: fileLimitReached ? DEFAULT_FILE_LIMIT : undefined,
+				perFileLimitReached: perFileLimitReached ? perFileMatchCap : undefined,
 				displayContent: displayLines.join("\n"),
 				missingPaths: missingPaths.length > 0 ? missingPaths : undefined,
 			};
@@ -530,9 +562,7 @@ export const searchToolRenderer = {
 		const fileCount = details?.fileCount ?? 0;
 		const truncation = details?.meta?.truncation;
 		const limits = details?.meta?.limits;
-		const truncated = Boolean(
-			details?.truncated || truncation || limits?.matchLimit || limits?.resultLimit || limits?.columnTruncated,
-		);
+		const truncated = Boolean(details?.truncated || truncation || limits?.columnTruncated);
 
 		const missingPathsList = details?.missingPaths ?? [];
 		const missingNote =
@@ -584,11 +614,11 @@ export const searchToolRenderer = {
 			}
 		}
 
-		const renderedMatchLimit = details?.matchLimitReached ?? limits?.matchLimit?.reached;
-		const renderedResultLimit = details?.resultLimitReached ?? limits?.resultLimit?.reached;
+		const renderedFileLimit = details?.fileLimitReached;
+		const renderedPerFileLimit = details?.perFileLimitReached;
 		const truncationReasons: string[] = [];
-		if (renderedMatchLimit) truncationReasons.push(`first ${renderedMatchLimit} matches`);
-		if (renderedResultLimit) truncationReasons.push(`first ${renderedResultLimit} results`);
+		if (renderedFileLimit) truncationReasons.push(`first ${renderedFileLimit} files (skip to paginate)`);
+		if (renderedPerFileLimit) truncationReasons.push(`first ${renderedPerFileLimit} matches per file`);
 		if (truncation) truncationReasons.push(truncation.truncatedBy === "lines" ? "line limit" : "size limit");
 		if (limits?.columnTruncated) truncationReasons.push(`line length ${limits.columnTruncated.maxColumn}`);
 		if (truncation?.artifactId) truncationReasons.push(formatFullOutputReference(truncation.artifactId));

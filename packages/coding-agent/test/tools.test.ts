@@ -15,7 +15,7 @@ import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
 import { JobTool } from "@oh-my-pi/pi-coding-agent/tools/job";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
-import { DEFAULT_MATCH_LIMIT, SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
+import { DEFAULT_FILE_LIMIT, MULTI_FILE_PER_FILE_MATCHES, SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import { $which, Snowflake } from "@oh-my-pi/pi-utils";
 import { unzipSync } from "fflate";
@@ -1402,20 +1402,30 @@ function b() {
 			expect(output).toMatch(/\*5\|match two/);
 		});
 
-		it("should skip matches with the skip parameter", async () => {
-			const testFile = path.join(testDir, "skip.txt");
-			fs.writeFileSync(testFile, ["needle one", "needle two", "needle three"].join("\n"));
+		it("should paginate files via the skip parameter", async () => {
+			const skipDir = path.join(testDir, "skip-dir");
+			fs.mkdirSync(skipDir, { recursive: true });
+			for (let i = 1; i <= 4; i++) {
+				fs.writeFileSync(path.join(skipDir, `file-${i}.txt`), `needle ${i}`);
+			}
 
-			const result = await searchTool.execute("test-call-12-skip", {
+			const first = await searchTool.execute("test-call-12-skip-first", {
 				pattern: "needle",
-				paths: [testFile],
-				skip: 1,
+				paths: [skipDir],
 			});
+			expect(first.details?.fileCount).toBe(4);
 
-			const output = getTextOutput(result);
-			expect(output).not.toContain("needle one");
-			expect(output).toContain("needle two");
-			expect(output).toContain("needle three");
+			const second = await searchTool.execute("test-call-12-skip-page", {
+				pattern: "needle",
+				paths: [skipDir],
+				skip: 2,
+			});
+			const secondOutput = getTextOutput(second);
+			expect(second.details?.fileCount).toBe(2);
+			expect(secondOutput).not.toContain("# file-1.txt");
+			expect(secondOutput).not.toContain("# file-2.txt");
+			expect(secondOutput).toContain("# file-3.txt");
+			expect(secondOutput).toContain("# file-4.txt");
 		});
 
 		it("should group multi-file matches", async () => {
@@ -1541,19 +1551,60 @@ function b() {
 			expect(result.details?.fileCount).toBe(1);
 			expect(result.details?.matchCount).toBe(1);
 		});
-		it("should apply the fixed default match cap", async () => {
-			const lines = Array.from({ length: DEFAULT_MATCH_LIMIT + 100 }, (_, i) => `needle ${i + 1}`);
-			fs.writeFileSync(path.join(testDir, "default-limit.txt"), lines.join("\n"));
+		it("should cap distinct files and surface pagination", async () => {
+			const limitDir = path.join(testDir, "file-limit-dir");
+			fs.mkdirSync(limitDir, { recursive: true });
+			const totalFiles = DEFAULT_FILE_LIMIT + 4;
+			for (let i = 1; i <= totalFiles; i++) {
+				fs.writeFileSync(path.join(limitDir, `f-${String(i).padStart(2, "0")}.txt`), `needle ${i}`);
+			}
 
-			const result = await searchTool.execute("test-call-14-default-limit", {
+			const result = await searchTool.execute("test-call-14-file-limit", {
 				pattern: "needle",
-				paths: [testDir],
+				paths: [limitDir],
 			});
 
 			const output = getTextOutput(result);
-			expect(output).toContain(`Result limit reached; narrow paths or use skip=${DEFAULT_MATCH_LIMIT}.`);
-			expect(result.details?.matchCount).toBe(DEFAULT_MATCH_LIMIT);
-			expect(result.details?.matchLimitReached).toBe(DEFAULT_MATCH_LIMIT);
+			expect(result.details?.fileCount).toBe(DEFAULT_FILE_LIMIT);
+			expect(result.details?.matchCount).toBe(DEFAULT_FILE_LIMIT);
+			expect(result.details?.fileLimitReached).toBe(DEFAULT_FILE_LIMIT);
+			expect(output).toContain(`Showing files 1-${DEFAULT_FILE_LIMIT} of ${totalFiles}`);
+			expect(output).toContain(`Use skip=${DEFAULT_FILE_LIMIT}`);
+		});
+
+		it("should cap matches per file in multi-file scopes", async () => {
+			const concDir = path.join(testDir, "concentration-dir");
+			fs.mkdirSync(concDir, { recursive: true });
+			const hotMatches = MULTI_FILE_PER_FILE_MATCHES + 30;
+			fs.writeFileSync(
+				path.join(concDir, "hot.txt"),
+				Array.from({ length: hotMatches }, (_, i) => `needle ${i + 1}`).join("\n"),
+			);
+			fs.writeFileSync(path.join(concDir, "cool.txt"), "needle cool");
+
+			const result = await searchTool.execute("test-call-14-per-file-cap", {
+				pattern: "needle",
+				paths: [concDir],
+			});
+
+			const hotCount = result.details?.fileMatches?.find(entry => entry.path.endsWith("hot.txt"))?.count ?? 0;
+			expect(hotCount).toBe(MULTI_FILE_PER_FILE_MATCHES);
+			expect(result.details?.perFileLimitReached).toBe(MULTI_FILE_PER_FILE_MATCHES);
+		});
+
+		it("should let a single-file scope exceed the multi-file per-file cap", async () => {
+			const single = path.join(testDir, "single-file.txt");
+			const count = MULTI_FILE_PER_FILE_MATCHES + 30;
+			fs.writeFileSync(single, Array.from({ length: count }, (_, i) => `needle ${i + 1}`).join("\n"));
+
+			const result = await searchTool.execute("test-call-14-single-file-cap", {
+				pattern: "needle",
+				paths: [single],
+			});
+
+			expect(result.details?.matchCount).toBe(count);
+			expect(result.details?.fileLimitReached).toBeUndefined();
+			expect(result.details?.perFileLimitReached).toBeUndefined();
 		});
 	});
 
