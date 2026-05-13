@@ -125,7 +125,10 @@ export interface InteractiveModeNotify {
 }
 
 export async function submitInteractiveInput(
-	mode: Pick<InteractiveMode, "markPendingSubmissionStarted" | "finishPendingSubmission" | "showError">,
+	mode: Pick<
+		InteractiveMode,
+		"markPendingSubmissionStarted" | "finishPendingSubmission" | "showError" | "checkShutdownRequested"
+	>,
 	session: Pick<AgentSession, "prompt">,
 	input: SubmittedUserInput,
 ): Promise<void> {
@@ -144,6 +147,7 @@ export async function submitInteractiveInput(
 		mode.showError(errorMessage);
 	} finally {
 		mode.finishPendingSubmission(input);
+		await mode.checkShutdownRequested();
 	}
 }
 

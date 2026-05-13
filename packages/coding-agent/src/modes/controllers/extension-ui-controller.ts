@@ -119,7 +119,10 @@ export class ExtensionUiController {
 			abort: () => this.ctx.session.abort(),
 			hasPendingMessages: () => this.ctx.session.queuedMessageCount > 0,
 			shutdown: () => {
-				// Signal shutdown request (will be handled by main loop)
+				// Defer the actual teardown to the main loop, which calls
+				// `checkShutdownRequested()` at idle boundaries so any queued
+				// steering / follow-up messages drain first (see issue #1020).
+				this.ctx.shutdownRequested = true;
 			},
 			getContextUsage: () => this.ctx.session.getContextUsage(),
 			compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),

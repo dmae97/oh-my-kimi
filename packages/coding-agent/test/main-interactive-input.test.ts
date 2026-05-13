@@ -18,6 +18,7 @@ describe("submitInteractiveInput", () => {
 			markPendingSubmissionStarted: vi.fn(() => false),
 			finishPendingSubmission: vi.fn(),
 			showError: vi.fn(),
+			checkShutdownRequested: vi.fn(async () => {}),
 		};
 		const session = {
 			prompt: vi.fn(async () => {}),
@@ -37,6 +38,7 @@ describe("submitInteractiveInput", () => {
 			markPendingSubmissionStarted: vi.fn(() => false),
 			finishPendingSubmission: vi.fn(),
 			showError: vi.fn(),
+			checkShutdownRequested: vi.fn(async () => {}),
 		};
 		const session = {
 			prompt: vi.fn(async () => {}),

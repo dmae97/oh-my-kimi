@@ -50,4 +50,48 @@ describe("issue #1020 - ctx.shutdown() in interactive mode", () => {
 
 		expect(ctxStub.shutdownRequested).toBe(true);
 	});
+
+	test("initHooksAndCustomTools wires shutdown to set shutdownRequested", async () => {
+		let capturedContextActions: ExtensionContextActions | undefined;
+
+		const fakeExtensionRunner = {
+			initialize(
+				_actions: ExtensionActions,
+				contextActions: ExtensionContextActions,
+				_commandContextActions?: ExtensionCommandContextActions,
+				_uiContext?: ExtensionUIContext,
+			): void {
+				capturedContextActions = contextActions;
+			},
+			onError(_handler: (error: unknown) => void): void {},
+			async emit(_event: unknown): Promise<void> {},
+		};
+
+		const ctxStub = {
+			shutdownRequested: false,
+			session: {
+				extensionRunner: fakeExtensionRunner,
+			},
+			setToolUIContext: () => {},
+			editor: {
+				setText: () => {},
+				handleInput: () => {},
+				getText: () => "",
+			},
+			setWorkingMessage: () => {},
+			setEditorComponent: () => {},
+			toolOutputExpanded: false,
+			setToolsExpanded: () => {},
+		} as unknown as InteractiveModeContext;
+
+		const controller = new ExtensionUiController(ctxStub);
+		await controller.initHooksAndCustomTools();
+
+		expect(capturedContextActions).toBeDefined();
+		expect(typeof capturedContextActions?.shutdown).toBe("function");
+
+		capturedContextActions?.shutdown();
+
+		expect(ctxStub.shutdownRequested).toBe(true);
+	});
 });
