@@ -38,6 +38,7 @@ const BACKFILL_COMPLETE = "complete";
 const BACKFILL_PENDING = "pending";
 const USER_MESSAGES_BACKFILL_KEY = "user_messages_v5";
 const USER_MESSAGE_LINKS_REPAIR_KEY = "user_message_links_v1";
+const PRIORITY_PREMIUM_REQUESTS_BACKFILL_KEY = "premium_requests_priority_v1";
 function shouldResetBackfill(value: string | undefined): boolean {
 	return value !== BACKFILL_COMPLETE && value !== BACKFILL_PENDING;
 }
@@ -179,6 +180,7 @@ export async function initDb(): Promise<Database> {
 	}
 	backfillUserMessages(db);
 	repairUserMessageLinks(db);
+	backfillPriorityPremiumRequests(db);
 	backfillMissingCatalogCosts(db);
 	return db;
 }
@@ -300,13 +302,21 @@ export function setFileOffset(sessionFile: string, offset: number, lastModified:
 export function insertMessageStats(stats: MessageStats[]): number {
 	if (!db || stats.length === 0) return 0;
 
+	// Use UPSERT so a re-sync can fix up `premium_requests` for rows persisted
+	// before priority service-tier traffic was counted as premium. The guard
+	// `WHERE messages.premium_requests < excluded.premium_requests` keeps every
+	// other column immutable and never demotes an existing count (e.g. when a
+	// later parse drops back to 0 for the same row).
 	const stmt = db.prepare(`
-		INSERT OR IGNORE INTO messages (
+		INSERT INTO messages (
 			session_file, entry_id, folder, model, provider, api, timestamp,
 			duration, ttft, stop_reason, error_message,
 			input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens, premium_requests,
 			cost_input, cost_output, cost_cache_read, cost_cache_write, cost_total
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(session_file, entry_id) DO UPDATE SET
+			premium_requests = excluded.premium_requests
+		WHERE messages.premium_requests < excluded.premium_requests
 	`);
 
 	let inserted = 0;
@@ -778,6 +788,36 @@ function repairUserMessageLinks(database: Database): void {
 	database
 		.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
 		.run(USER_MESSAGE_LINKS_REPAIR_KEY, BACKFILL_PENDING);
+}
+
+/**
+ * One-shot wipe of `file_offsets` so the next sync re-parses every session
+ * and re-derives `premium_requests` from recorded `service_tier_change`
+ * entries. Earlier ingestions captured priority OpenAI traffic with
+ * `premium_requests = 0` because the AI layer only set the field for GitHub
+ * Copilot traffic. The parser now folds priority requests into the same
+ * counter; combined with the UPSERT in `insertMessageStats`, a single sync
+ * pass brings the messages table up to date without touching any other
+ * column. Idempotent: gated by a sentinel row in `meta`.
+ */
+function backfillPriorityPremiumRequests(database: Database): void {
+	const row = database.prepare("SELECT value FROM meta WHERE key = ?").get(PRIORITY_PREMIUM_REQUESTS_BACKFILL_KEY) as
+		| { value: string }
+		| undefined;
+	if (!shouldResetBackfill(row?.value)) return;
+
+	database.exec("DELETE FROM file_offsets");
+	database
+		.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
+		.run(PRIORITY_PREMIUM_REQUESTS_BACKFILL_KEY, BACKFILL_PENDING);
+}
+
+export function markPriorityPremiumRequestsBackfillComplete(): void {
+	if (!db) return;
+	db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(
+		PRIORITY_PREMIUM_REQUESTS_BACKFILL_KEY,
+		BACKFILL_COMPLETE,
+	);
 }
 
 export function markUserMessagesBackfillComplete(): void {

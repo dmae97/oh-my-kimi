@@ -1,4 +1,4 @@
-import type { AssistantMessage, StopReason, Usage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ServiceTier, StopReason, Usage } from "@oh-my-pi/pi-ai";
 
 /**
  * Extracted stats from an assistant message.
@@ -194,7 +194,15 @@ export interface SessionMessageEntry {
 	message: AssistantMessage | { role: "user" | "toolResult" };
 }
 
-export type SessionEntry = SessionHeader | SessionMessageEntry | { type: string };
+export interface SessionServiceTierChangeEntry {
+	type: "service_tier_change";
+	id: string;
+	parentId?: string | null;
+	timestamp: string;
+	serviceTier: ServiceTier | null;
+}
+
+export type SessionEntry = SessionHeader | SessionMessageEntry | SessionServiceTierChangeEntry | { type: string };
 
 /**
  * Behavioral stats extracted from a single user message.

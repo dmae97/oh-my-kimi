@@ -11,6 +11,7 @@ import {
 	type AssistantMessage,
 	type CacheRetention,
 	type Context,
+	getPriorityPremiumRequests,
 	type MessageAttribution,
 	type Model,
 	type OpenAICompat,
@@ -221,6 +222,11 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				cacheSessionId,
 				options?.onSseEvent,
 			);
+			const priorityPremiumRequests = getPriorityPremiumRequests(options?.serviceTier, model.provider);
+			const premiumRequestsTotal =
+				copilotPremiumRequests !== undefined || priorityPremiumRequests > 0
+					? (copilotPremiumRequests ?? 0) + priorityPremiumRequests
+					: undefined;
 			const providerSessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
 			const { params } = buildParams(model, context, options, providerSessionState, baseUrl);
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
@@ -247,7 +253,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs),
 				() => abortTracker.abortLocally(firstEventTimeoutAbortError),
 			);
-			if (copilotPremiumRequests !== undefined) output.usage.premiumRequests = copilotPremiumRequests;
+			if (premiumRequestsTotal !== undefined) output.usage.premiumRequests = premiumRequestsTotal;
 			stream.push({ type: "start", partial: output });
 
 			const nativeOutputItems: Array<Record<string, unknown>> = [];
@@ -272,7 +278,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					},
 				},
 			);
-			if (copilotPremiumRequests !== undefined) output.usage.premiumRequests = copilotPremiumRequests;
+			if (premiumRequestsTotal !== undefined) output.usage.premiumRequests = premiumRequestsTotal;
 
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			if (firstEventTimeoutError) {
