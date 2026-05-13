@@ -661,8 +661,10 @@ function renderReviewResult(
 				lines.push(`${continuePrefix}  ${theme.fg("dim", replaceTabs(line))}`);
 			}
 		} else {
-			// Preview: first sentence or ~100 chars
-			const preview = truncateToWidth(`${summary.explanation.split(/[.!?]/)[0]}.`, 100);
+			// Preview: first sentence or ~100 chars (flatten tabs/newlines first)
+			const flat = replaceTabs(summary.explanation).replace(/[\r\n]+/g, " ");
+			const firstSentence = flat.split(/[.!?]/)[0].trim();
+			const preview = truncateToWidth(`${firstSentence}.`, 100);
 			lines.push(`${continuePrefix}${theme.fg("dim", preview)}`);
 		}
 	}
@@ -701,7 +703,8 @@ function renderFindings(
 		const findingContinue = isLastFinding ? "   " : `${theme.tree.vertical}  `;
 
 		const { color } = getPriorityInfo(finding.priority);
-		const titleText = finding.title?.replace(/^\[P\d\]\s*/, "") ?? "Untitled";
+		const rawTitle = finding.title?.replace(/^\[P\d\]\s*/, "") ?? "Untitled";
+		const titleText = replaceTabs(rawTitle).replace(/[\r\n]+/g, " ");
 		const loc = `${path.basename(finding.file_path || "<unknown>")}:${finding.line_start}`;
 
 		lines.push(
