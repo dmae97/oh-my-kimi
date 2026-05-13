@@ -44,11 +44,16 @@ export interface SkillPromptDetails {
  *  and must NOT surface as a red "Operation aborted" line. Distinct from
  *  `undefined` (default) so user-cancel aborts with no errorMessage still
  *  render normally. Persists through SessionManager so history replay
- *  branches identically. */
+ *  branches identically.
+ *
+ *  Consumers: `AgentSession.#handleAgentEvent` (stamper) writes this value;
+ *  `EventController.#handleMessageEnd`, `AssistantMessageComponent`, and
+ *  `ui-helpers.addMessageToChat` (renderers) read it via `isSilentAbort`. */
 export const SILENT_ABORT_MARKER = "__omp.silent_abort__";
 
-/** Type-guard for the marker. Renderers should branch on this rather than
- *  string-comparing inline. */
+/** Type-guard for `SILENT_ABORT_MARKER`. Renderers MUST branch on this rather
+ *  than string-comparing inline so refactors to the marker constant (e.g.,
+ *  namespacing changes) propagate through every consumer in lockstep. */
 export function isSilentAbort(errorMessage: string | undefined): boolean {
 	return errorMessage === SILENT_ABORT_MARKER;
 }

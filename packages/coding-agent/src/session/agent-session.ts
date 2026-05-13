@@ -1142,18 +1142,18 @@ export class AgentSession {
 			}
 		}
 
-		// Plan-mode → compaction transition: stamp the silent-abort marker on the
-		// persisted message BEFORE the obfuscator's display-side copy below. Both
-		// `displayEvent` (used for emit) and `event.message` (used for persistence
-		// via SessionManager.appendMessage / appendCustomMessageEntry) carry the
-		// marker afterward — `displayEvent.message` inherits via the `{...message}`
-		// spread inside the obfuscator branch; persistence sees the in-place
-		// mutation on `event.message`. The flag is consumed here, scoped strictly
-		// to this aborted message_end; the caller's `finally` (in
-		// InteractiveMode.#approvePlan) clears it again on every terminal
-		// compaction outcome so a leaked flag cannot silence a later unrelated
-		// abort. NOTE: if a future refactor reorders this site relative to the
-		// obfuscator copy, the stamp must remain BEFORE the copy.
+		// Plan-mode → compaction transition: stamp `SILENT_ABORT_MARKER` on the
+		// persisted message BEFORE the obfuscator's display-side copy below.
+		// Invariant (must hold across refactors): this branch precedes the
+		// `let displayEvent = event; ... displayEvent = { ...event, message: { ...message, content: deobfuscated } }`
+		// block. After stamping, both `displayEvent.message` (via the spread)
+		// and `event.message` (in-place mutation, used by SessionManager
+		// persistence) carry the marker, guaranteeing streaming render and
+		// history replay branch identically. The one-shot flag is consumed
+		// here, scoped strictly to this aborted message_end; the caller's
+		// `finally` (in `InteractiveMode.#approvePlan`) clears it again on
+		// every terminal compaction outcome (`ok` / `cancelled` / `failed` /
+		// throw) so a leaked flag cannot silence a later unrelated abort.
 		if (
 			event.type === "message_end" &&
 			event.message.role === "assistant" &&
