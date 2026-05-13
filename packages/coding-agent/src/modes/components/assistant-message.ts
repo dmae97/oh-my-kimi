@@ -4,7 +4,6 @@ import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { resolveImageOptions } from "../../tools/render-utils";
-import { convertToPng } from "../../utils/image-convert";
 
 /**
  * Component that renders a complete assistant message
@@ -76,14 +75,15 @@ export class AssistantMessageComponent extends Container {
 			const key = `${toolCallId}:${index}`;
 			if (this.#convertedKittyImages.has(key) || this.#kittyConversionsInFlight.has(key)) continue;
 			this.#kittyConversionsInFlight.add(key);
-			convertToPng(image.data, image.mimeType)
-				.then(converted => {
+			new Bun.Image(Buffer.from(image.data, "base64"))
+				.png()
+				.toBase64()
+				.then(data => {
 					this.#kittyConversionsInFlight.delete(key);
-					if (!converted) return;
 					this.#convertedKittyImages.set(key, {
 						type: "image",
-						data: converted.data,
-						mimeType: converted.mimeType,
+						data,
+						mimeType: "image/png",
 					});
 					if (this.#lastMessage) {
 						this.updateContent(this.#lastMessage);

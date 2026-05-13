@@ -1,5 +1,13 @@
 #!/usr/bin/env bun
+import { installH2Fetch } from "@oh-my-pi/pi-ai";
 import { APP_NAME, MIN_BUN_VERSION, procmgr, VERSION } from "@oh-my-pi/pi-utils";
+
+// Activate HTTP/2 for all `fetch()` calls (provider streams, OAuth, model
+// discovery, web tools). Bun's HTTP/2 client is gated on a startup flag we
+// can't toggle from JS, so we patch globalThis.fetch to pass
+// `protocol: "http2"` per request, with transparent HTTP/1.1 fallback on
+// `HTTP2Unsupported`. See @oh-my-pi/pi-ai/utils/h2-fetch for details.
+installH2Fetch();
 
 // Strip macOS malloc-stack-logging env vars before any subprocess is spawned.
 // Otherwise every child bun process (subagents, plugin installs, ptree spawns,

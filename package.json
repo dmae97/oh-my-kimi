@@ -2,7 +2,7 @@
 	"name": "omp-monorepo",
 	"private": true,
 	"type": "module",
-	"packageManager": "bun@1.3.13",
+	"packageManager": "bun@1.3.14",
 	"workspaces": {
 		"packages": [
 			"packages/*"
@@ -35,7 +35,7 @@
 			"@tailwindcss/node": "^4.2.4",
 			"@types/babel__generator": "^7.27.0",
 			"@types/babel__traverse": "^7.28.0",
-			"@types/bun": "^1.3.13",
+			"@types/bun": "^1.3.14",
 			"@types/react": "^19.2.14",
 			"@types/react-dom": "^19.2.3",
 			"@types/turndown": "5.0.6",

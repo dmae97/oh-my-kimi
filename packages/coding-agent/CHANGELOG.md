@@ -1,13 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added middle elision for streaming tool outputs (bash, ssh, python, js eval) and post-execution tool result spill. When `tools.artifactHeadBytes` is set (default 20 KB), large outputs now keep both the first N KB and the last N KB with an inline `[… N lines elided (M KB) …]` marker between them, instead of dropping everything before the trailing tail. Setting `tools.artifactHeadBytes = 0` reverts to the previous tail-only behavior. The full output is still mirrored to the session artifact (`artifact://<id>`) regardless of elision mode. Exposes `truncateMiddle` and `formatMiddleElisionMarker` from `@oh-my-pi/pi-coding-agent/session/streaming-output`, extends `OutputSinkOptions` with `headBytes`, and adds `direction: "middle"` plus `headRange` / `tailRange` / `elidedLines` / `elidedBytes` to `TruncationMeta`.
 - Added per-line column cap shared across streaming tool outputs (`bash`, `ssh`, `python`, `js eval`) and the `read` tool. Lines wider than `tools.outputMaxColumns` bytes (default **768**) are ellipsis-truncated at write time and remaining bytes up to the next `\n` are dropped — bounded memory even on multi-MB single-line outputs (e.g. `cat /dev/urandom`). The cap lives on `OutputSink` as the new `maxColumns` option, persists state across chunk boundaries so split-mid-line writes still respect the budget, and exposes `columnDroppedBytes` / `columnTruncatedLines` on `OutputSummary`. Middle-elision byte math subtracts column drops so the "elided from middle" count stays honest. `read` reuses the same setting but trims its already-collected lines via `truncateLine`. Skipped when the read selector is `:raw`. The artifact file (`artifact://<id>`) keeps the full uncapped stream. Set `tools.outputMaxColumns = 0` to disable.
+- Added Bun HTTP/2 fetch opt-in. Dev scripts (`bun run dev`, `bun run stats`) now pass `bun --experimental-http2-fetch` so every `fetch()` advertises `h2` in the TLS ALPN list and falls back to HTTP/1.1 when the server doesn't select it. Multiplexing collapses parallel requests to the same origin onto one TLS connection. For the installed `omp` binary, export `BUN_FEATURE_FLAG_EXPERIMENTAL_HTTP2_CLIENT=1` in your shell to enable the same behavior (the flag has to be set before Bun starts; `process.env` from inside JS is too late). Requires Bun **1.3.14**.
 
 ### Changed
 
+- Raised the image downscaling default JPEG quality from 75 to 80 in `resizeImage` output generation
+- Changed image resize metadata notes from coordinate-scale hints to a simple `Image resized from <original> to <displayed>` message and hide the note when the resized dimensions are unchanged
+- Removed `utils/image-convert.ts` and its `convertToPng` helper; callers now inline `new Bun.Image(bytes).png().toBase64()` from [`Bun.Image`](https://bun.com/docs/runtime/image) (Bun 1.3.14+).
+- Changed image decode/resize/encode in `utils/image-resize.ts` from the native `PhotonImage` binding to [`Bun.Image`](https://bun.com/docs/runtime/image). Same PNG/JPEG/WebP quality+dimension ladder, but pipelines run off-thread on Bun's statically-linked codecs with no native-addon round-trip. Bumped the minimum Bun runtime requirement to **1.3.14**.
 - Changed `search` pagination in multi-file scopes so `skip` now skips entire files and pages results in groups of up to 20 files, with output guiding the next `skip` value via `Showing files X-Y of N`
 - Changed multi-file search result selection to cap each file at 20 matches and round-robin across files, so one noisy file no longer suppresses visibility of hits in other files and truncation now reports per-file limits
 - Changed search truncation metadata/renderer output from match/result-based limits to file-based limits (`fileLimitReached`, `perFileLimitReached`) and updated truncation labels accordingly

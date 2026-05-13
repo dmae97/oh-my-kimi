@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Increased the minimum required Bun version for the TUI package from >=1.3.7 to >=1.3.14
 
 ## [14.9.8] - 2026-05-12
 

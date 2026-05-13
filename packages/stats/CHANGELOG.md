@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Raised the minimum required Bun version to >=1.3.14 in package metadata
 
 ### Changed
 

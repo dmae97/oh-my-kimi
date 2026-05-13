@@ -1,17 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import { ImageFormat, PhotonImage, SamplingFilter } from "@oh-my-pi/pi-natives";
 import { resizeImage } from "../../src/utils/image-resize";
 
-// 1x1 red PNG (69 bytes) — used as a Photon seed to synthesize larger fixtures
+// 1x1 red PNG (69 bytes) — used as a Bun.Image seed to synthesize larger fixtures
 // without checking binary blobs into the repo.
 const RED_1X1_PNG_BASE64 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 
 async function makeRedPng(width: number, height: number): Promise<string> {
-	const seed = await PhotonImage.parse(new Uint8Array(Buffer.from(RED_1X1_PNG_BASE64, "base64")));
-	const upscaled = await seed.resize(width, height, SamplingFilter.Nearest);
-	const bytes = await upscaled.encode(ImageFormat.PNG, 100);
-	return Buffer.from(bytes).toBase64();
+	const seed = Buffer.from(RED_1X1_PNG_BASE64, "base64");
+	const upscaled = await new Bun.Image(seed).resize(width, height, { filter: "nearest" }).png().bytes();
+	return Buffer.from(upscaled).toBase64();
 }
 
 describe("resizeImage defaults", () => {

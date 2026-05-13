@@ -1,11 +1,10 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { ImageFormat, PhotonImage, SamplingFilter } from "@oh-my-pi/pi-natives";
 
 export interface ImageResizeOptions {
-	maxWidth?: number; // Default: 1568
-	maxHeight?: number; // Default: 1568
-	maxBytes?: number; // Default: 500KB
-	jpegQuality?: number; // Default: 75
+	maxWidth?: number;
+	maxHeight?: number;
+	maxBytes?: number;
+	jpegQuality?: number;
 }
 
 export interface ResizedImage {
@@ -24,12 +23,12 @@ export interface ResizedImage {
 const DEFAULT_MAX_BYTES = 500 * 1024;
 
 const DEFAULT_OPTIONS: Required<ImageResizeOptions> = {
-	// 1568px — Anthropic downscales anything larger; OpenAI tiles at 768px;
-	// sending bigger pixels wastes bandwidth the model never sees.
+	// Anthropic's "internal recommended size" — Claude internally caps images at
+	// 1568px on the longest edge before vision processing.
 	maxWidth: 1568,
 	maxHeight: 1568,
 	maxBytes: DEFAULT_MAX_BYTES,
-	jpegQuality: 75,
+	jpegQuality: 80,
 };
 
 /** Pick the smallest of N encoded buffers. */
@@ -48,43 +47,34 @@ Buffer.prototype.toBase64 = function (this: Buffer) {
 /**
  * Resize and recompress an image to fit within the specified max dimensions and file size.
  *
- * Defaults target Anthropic's internal 1568px downscale threshold and produce small
- * lossy JPEG output suitable for tool-call payloads (~100–500KB typical).
- *
  * Strategy:
- * 1. Fast path — if input already fits dimensions AND is at <=25% of byte budget,
- *    return as-is. Avoids re-encoding tiny icons/diagrams.
- * 2. Resize to maxWidth/maxHeight, encode both PNG and JPEG at default quality,
- *    pick whichever is smaller. PNG wins for line art / few-color UI; JPEG wins
- *    for photographic content.
- * 3. If still too large, JPEG-only quality ladder (PNG quality is a no-op).
- * 4. If still too large, progressively reduce dimensions and retry the JPEG ladder.
- * 5. Last resort: ship the smallest variant produced.
+ *  1. Probe metadata. If already within all limits, return original.
+ *  2. Resize to fit max dimensions and encode at high quality across PNG/JPEG/WebP — return smallest.
+ *  3. If still too large, walk a lossy JPEG/WebP quality ladder.
+ *  4. If still too large, walk a dimension-scale ladder × quality ladder.
+ *  5. If still too large, return the smallest variant produced.
  *
- * On any decode failure, returns the original bytes unchanged with wasResized=false.
+ * Backed by `Bun.Image`: a chainable native pipeline that runs decode/transform/encode
+ * off the JS thread when the terminal (`.bytes()`) is awaited.
  */
 export async function resizeImage(img: ImageContent, options?: ImageResizeOptions): Promise<ResizedImage> {
 	const opts = { ...DEFAULT_OPTIONS, ...options };
 	const inputBuffer = Buffer.from(img.data, "base64");
 
 	try {
-		const image = await PhotonImage.parse(inputBuffer);
+		const { width: originalWidth, height: originalHeight, format } = await new Bun.Image(inputBuffer).metadata();
+		const sourceMime = img.mimeType ?? `image/${format}`;
 
-		const originalWidth = image.width;
-		const originalHeight = image.height;
-		const format = img.mimeType?.split("/")[1] ?? "png";
-
-		// Check if already within all limits (dimensions AND size)
-		const originalSize = inputBuffer.length;
-		// Fast path: skip if already within dimensions AND well under budget.
+		// Fast path: already within dimensions AND well under budget.
 		// Threshold is 1/4 of budget — if already that compact, don't re-encode.
 		// Avoids wasted work on tiny icons/diagrams while ensuring larger PNGs
 		// still get JPEG-compressed.
+		const originalSize = inputBuffer.length;
 		const comfortableSize = opts.maxBytes / 4;
 		if (originalWidth <= opts.maxWidth && originalHeight <= opts.maxHeight && originalSize <= comfortableSize) {
 			return {
 				buffer: inputBuffer,
-				mimeType: img.mimeType ?? `image/${format}`,
+				mimeType: sourceMime,
 				originalWidth,
 				originalHeight,
 				width: originalWidth,
@@ -117,14 +107,11 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 			height: number,
 			quality: number,
 		): Promise<{ buffer: Uint8Array; mimeType: string }> {
-			const resized = await image.resize(width, height, SamplingFilter.Lanczos3);
-
 			const [pngBuffer, jpegBuffer, webpBuffer] = await Promise.all([
-				resized.encode(ImageFormat.PNG, quality),
-				resized.encode(ImageFormat.JPEG, quality),
-				resized.encode(ImageFormat.WEBP, quality),
+				new Bun.Image(inputBuffer).resize(width, height).png().bytes(),
+				new Bun.Image(inputBuffer).resize(width, height).jpeg({ quality }).bytes(),
+				new Bun.Image(inputBuffer).resize(width, height).webp({ quality }).bytes(),
 			]);
-
 			return pickSmallest(
 				{ buffer: pngBuffer, mimeType: "image/png" },
 				{ buffer: jpegBuffer, mimeType: "image/jpeg" },
@@ -140,10 +127,9 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 			height: number,
 			quality: number,
 		): Promise<{ buffer: Uint8Array; mimeType: string }> {
-			const resized = await image.resize(width, height, SamplingFilter.Lanczos3);
 			const [jpegBuffer, webpBuffer] = await Promise.all([
-				resized.encode(ImageFormat.JPEG, quality),
-				resized.encode(ImageFormat.WEBP, quality),
+				new Bun.Image(inputBuffer).resize(width, height).jpeg({ quality }).bytes(),
+				new Bun.Image(inputBuffer).resize(width, height).webp({ quality }).bytes(),
 			]);
 			return pickSmallest(
 				{ buffer: jpegBuffer, mimeType: "image/jpeg" },
@@ -159,7 +145,7 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 		let finalWidth = targetWidth;
 		let finalHeight = targetHeight;
 
-		// First attempt: resize to target, try both PNG and JPEG, pick smaller
+		// First attempt: resize to target, try PNG/JPEG/WebP, pick smallest
 		best = await encodeSmallest(targetWidth, targetHeight, opts.jpegQuality);
 
 		if (best.buffer.length <= opts.maxBytes) {
@@ -264,9 +250,11 @@ export function formatDimensionNote(result: ResizedImage): string | undefined {
 	if (!result.wasResized) {
 		return undefined;
 	}
-
-	const scale = result.originalWidth / result.width;
-	return `[Image: original ${result.originalWidth}x${result.originalHeight}, displayed at ${result.width}x${
-		result.height
-	}. Multiply coordinates by ${scale.toFixed(2)} to map to original image.]`;
+	if (!result.originalWidth || !result.originalHeight || !result.width || !result.height) {
+		return undefined;
+	}
+	if (result.width === result.originalWidth && result.height === result.originalHeight) {
+		return undefined;
+	}
+	return `Image resized from ${result.originalWidth}x${result.originalHeight} to ${result.width}x${result.height}.`;
 }

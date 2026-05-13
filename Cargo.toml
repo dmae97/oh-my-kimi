@@ -280,7 +280,6 @@ syntect = { version = "5.3", default-features = false, features = [
    "default-themes",
    "regex-fancy",
 ] }
-webp = "0.3"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Markup Conversion

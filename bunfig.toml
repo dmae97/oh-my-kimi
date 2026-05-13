@@ -2,6 +2,7 @@ telemetry = false
 
 [install]
 minimumReleaseAge = 259200 # 3 days in seconds
+minimumReleaseAgeExcludes = ["@types/bun"]
 linker = "hoisted"
 exact = true
 saveTextLockfile = true
