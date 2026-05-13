@@ -137,9 +137,21 @@ async function resolveCargoBinary(): Promise<string> {
 
 async function runCommand(command: readonly string[]): Promise<number> {
 	const [head, ...rest] = command;
-	const argv = head === "cargo" ? [cargoBinary, ...rest] : [head, ...rest];
+	const isCargo = head === "cargo";
+	const argv = isCargo ? [cargoBinary, ...rest] : [head, ...rest];
+	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+	if (isCargo) {
+		// Cargo subprocesses (notably `rustc -vV` from `cargo metadata`) resolve
+		// via PATH; ensure the active toolchain bin dir wins over Homebrew's
+		// rustup-init shadow on macOS runners.
+		const toolchainBin = path.dirname(cargoBinary);
+		const pathSep = process.platform === "win32" ? ";" : ":";
+		const currentPath = env.PATH ?? env.Path ?? "";
+		env.PATH = currentPath === "" ? toolchainBin : `${toolchainBin}${pathSep}${currentPath}`;
+	}
 	const proc = Bun.spawn(argv, {
 		cwd: repoRoot,
+		env,
 		stdin: "inherit",
 		stdout: "inherit",
 		stderr: "inherit",
