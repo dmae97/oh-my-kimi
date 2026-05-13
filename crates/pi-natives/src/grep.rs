@@ -592,10 +592,12 @@ fn read_file_bytes(path: &Path) -> io::Result<Option<FileBytes>> {
 		return Ok(Some(FileBytes::Owned(buffer)));
 	}
 
-	// SAFETY: The mapping is read-only and tied to the opened file handle.
-	// We do not mutate through this view; the map is dropped immediately
-	// after search for each file.
-	let mapping = unsafe { memmap2::Mmap::map(&file) };
+	let mapping = unsafe {
+		// SAFETY: The mapping is read-only and tied to the opened file handle.
+		// We do not mutate through this view; the map is dropped immediately
+		// after search for each file.
+		memmap2::Mmap::map(&file)
+	};
 
 	let bytes = if let Ok(mapped) = mapping {
 		FileBytes::Mapped(mapped)
