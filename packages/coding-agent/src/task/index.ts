@@ -306,6 +306,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 				recentOutput: [],
 				toolCount: 0,
 				tokens: 0,
+				cost: 0,
 				durationMs: 0,
 			});
 		}
@@ -831,6 +832,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 					recentOutput: [],
 					toolCount: 0,
 					tokens: 0,
+					cost: 0,
 					durationMs: 0,
 					modelOverride,
 					description: taskItem.description,

@@ -267,7 +267,10 @@ export class SessionObserverOverlayComponent extends Container {
 		if (progress.toolCount > 0) stats.push(`${formatNumber(progress.toolCount)} tools`);
 		if (progress.tokens > 0) stats.push(`${formatNumber(progress.tokens)} tokens`);
 		if (progress.durationMs > 0) stats.push(formatDuration(progress.durationMs));
-		return stats.length > 0 ? theme.fg("dim", stats.join(theme.sep.dot)) : "";
+		const parts: string[] = [];
+		if (stats.length > 0) parts.push(theme.fg("dim", stats.join(theme.sep.dot)));
+		if (progress.cost > 0) parts.push(theme.fg("statusLineCost", `$${progress.cost.toFixed(2)}`));
+		return parts.join(theme.sep.dot);
 	}
 
 	#buildTranscriptLines(messageEntries: SessionMessageEntry[], lines: string[]): void {

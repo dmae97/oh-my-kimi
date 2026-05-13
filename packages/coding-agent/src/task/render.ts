@@ -532,12 +532,18 @@ function renderAgentProgress(
 		if (progress.tokens > 0) {
 			statusLine += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(progress.tokens)} tokens`)}`;
 		}
+		if (progress.cost > 0) {
+			statusLine += `${theme.sep.dot}${theme.fg("statusLineCost", `$${progress.cost.toFixed(2)}`)}`;
+		}
 	} else if (progress.status === "completed") {
 		if (progress.toolCount > 0) {
 			statusLine += `${theme.sep.dot}${theme.fg("dim", `${progress.toolCount} tools`)}`;
 		}
 		if (progress.tokens > 0) {
 			statusLine += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(progress.tokens)} tokens`)}`;
+		}
+		if (progress.cost > 0) {
+			statusLine += `${theme.sep.dot}${theme.fg("statusLineCost", `$${progress.cost.toFixed(2)}`)}`;
 		}
 	}
 

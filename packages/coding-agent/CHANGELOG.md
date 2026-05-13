@@ -8,6 +8,8 @@
 - Added per-line column cap shared across streaming tool outputs (`bash`, `ssh`, `python`, `js eval`) and the `read` tool. Lines wider than `tools.outputMaxColumns` bytes (default **768**) are ellipsis-truncated at write time and remaining bytes up to the next `\n` are dropped — bounded memory even on multi-MB single-line outputs (e.g. `cat /dev/urandom`). The cap lives on `OutputSink` as the new `maxColumns` option, persists state across chunk boundaries so split-mid-line writes still respect the budget, and exposes `columnDroppedBytes` / `columnTruncatedLines` on `OutputSummary`. Middle-elision byte math subtracts column drops so the "elided from middle" count stays honest. `read` reuses the same setting but trims its already-collected lines via `truncateLine`. Skipped when the read selector is `:raw`. The artifact file (`artifact://<id>`) keeps the full uncapped stream. Set `tools.outputMaxColumns = 0` to disable.
 - Added Bun HTTP/2 fetch opt-in. Dev scripts (`bun run dev`, `bun run stats`) now pass `bun --experimental-http2-fetch` so every `fetch()` advertises `h2` in the TLS ALPN list and falls back to HTTP/1.1 when the server doesn't select it. Multiplexing collapses parallel requests to the same origin onto one TLS connection. For the installed `omp` binary, export `BUN_FEATURE_FLAG_EXPERIMENTAL_HTTP2_CLIENT=1` in your shell to enable the same behavior (the flag has to be set before Bun starts; `process.env` from inside JS is too late). Requires Bun **1.3.14**.
 
+- Added per-subagent cost display (`$X.XX` in the task progress tree and the session-observer stats line). Cost is accumulated incrementally from `message_end` events and shown only when non-zero, using the `statusLineCost` theme color. Providers that do not report per-turn cost data (e.g. subscription/OAuth usage) continue to show nothing.
+
 ### Changed
 
 - Raised the image downscaling default JPEG quality from 75 to 80 in `resizeImage` output generation
@@ -18,6 +20,10 @@
 - Changed multi-file search result selection to cap each file at 20 matches and round-robin across files, so one noisy file no longer suppresses visibility of hits in other files and truncation now reports per-file limits
 - Changed search truncation metadata/renderer output from match/result-based limits to file-based limits (`fileLimitReached`, `perFileLimitReached`) and updated truncation labels accordingly
 - Lowered `read.defaultLimit` default from `500` to `300` lines, and split the per-range context padding into asymmetric `RANGE_LEADING_CONTEXT_LINES = 1` / `RANGE_TRAILING_CONTEXT_LINES = 3` (was symmetric `RANGE_CONTEXT_LINES = 3`). Replay analysis over post-summarizer sessions (`scripts/session-stats/optimize_read_config.py`) showed that bare-path reads are over-provisioned at the median (file p50 = 220 lines) and that most follow-up reads are disjoint hops rather than adjacent extensions — so a smaller default plus narrower leading context reclaims tokens without measurably changing first-cover rate. Trailing context stays at 3 lines to keep anchor-stale recovery on narrow reads. Explicit `read.defaultLimit` overrides in settings are honoured unchanged.
+
+### Fixed
+
+- Fixed token display for sessions and subagents inflating far beyond the context window. `token_total` status-line segment and the subagent overlay token counter now show `input + output + cacheWrite` instead of `input + output + cacheRead + cacheWrite`. With prompt caching, `cacheRead` per turn equals the full cached context — summing it across all turns produces a cumulative total that is N×context_size (e.g. a 5-turn session with a 1 M-token context reported ~5 M tokens). Cache activity is still visible via the dedicated `cache_read`/`cache_write` status-line segments; billing cost is unaffected.
 
 ## [15.0.0] - 2026-05-13
 ### Breaking Changes
