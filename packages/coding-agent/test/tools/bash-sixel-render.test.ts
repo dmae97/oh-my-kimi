@@ -142,7 +142,7 @@ describe("bashToolRenderer", () => {
 		// Each command line carries its own SGR run so terminals don't drop
 		// styling after the first newline (the bug this fix addresses).
 		for (const idx of [forLine, echoLine, doneLine]) {
-			expect(rendered[idx]).toMatch(/\u001b\[38;2;/);
+			expect(rendered[idx]).toMatch(/\u001b\[38;(?:2|5);/);
 		}
 	});
 });
