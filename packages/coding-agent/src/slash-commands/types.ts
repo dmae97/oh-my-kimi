@@ -113,7 +113,6 @@ export interface SlashCommandSpec extends BuiltinSlashCommand {
 	handleTui?: (
 		command: ParsedSlashCommand,
 		runtime: TuiSlashCommandRuntime,
-		// biome-ignore lint/suspicious/noConfusingVoidType: void needed so async handlers returning nothing are assignable
 	) => Promise<SlashCommandResult> | SlashCommandResult;
 }
 
