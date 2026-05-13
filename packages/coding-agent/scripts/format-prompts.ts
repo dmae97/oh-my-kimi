@@ -25,7 +25,7 @@ const PROMPT_DIRS = [PROMPTS_DIR, COMMIT_PROMPTS_DIR, AGENTIC_PROMPTS_DIR];
 const PROMPT_FORMAT_OPTIONS = {
 	renderPhase: "pre-render",
 	replaceAsciiSymbols: true,
-	boldRfc2119Keywords: true,
+	stripRfc2119Bold: true,
 } as const;
 
 async function main() {

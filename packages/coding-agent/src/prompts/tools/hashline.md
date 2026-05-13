@@ -1,8 +1,8 @@
 Your patch language is a compact, line-anchored edit format.
 
-A patch contains one or more file sections. The first non-blank line of every edit section **MUST** be `@@ PATH`.
+A patch contains one or more file sections. The first non-blank line of every edit section MUST be `@@ PATH`.
 Operations reference lines in the file by their line number and hash, called "Anchors", e.g. `5th`, `123ab`.
-You **MUST** copy them verbatim from the latest output for the file you're editing.
+You MUST copy them verbatim from the latest output for the file you're editing.
 
 Purely textual format. The tool has NO awareness of language, indentation, brackets, fences, or table widths. Emit valid syntax in replacements/insertions.
 
@@ -15,7 +15,7 @@ Purely textual format. The tool has NO awareness of language, indentation, brack
 </ops>
 
 <rules>
-- Every line of inserted/replacement content **MUST** be emitted as a payload line starting with `{{hsep}}`.
+- Every line of inserted/replacement content MUST be emitted as a payload line starting with `{{hsep}}`.
 - `{{hsep}}` is syntax, not content. The inserted text begins after the first `{{hsep}}`; use a bare `{{hsep}}` to insert a blank line.
 - Payload is verbatim — don't escape unicode (write `—`, not `\u2014`).
 - `< A` inserts before line A; `+ A` inserts after line A. `< BOF` / `+ BOF` both prepend; `< EOF` / `+ EOF` both append.
@@ -153,7 +153,7 @@ If your replacement payload would render with even one unchanged line in the dif
 
 <critical>
 - Always copy anchors exactly from tool output, but **NEVER** include line content after the `{{hsep}}` separator in the op line.
-- Every inserted/replacement content line **MUST** start with `{{hsep}}`; raw content lines are invalid.
+- Every inserted/replacement content line MUST start with `{{hsep}}`; raw content lines are invalid.
 - Do not write unified diff syntax (`@@ -X,Y +X,Y @@`, `-OLD`, `+NEW`). The header is `@@ PATH`; line ops are `<`/`+`/`-`/`=`.
 - `= A..B` deletes the range; payload is what's written. If a payload edge line already exists immediately outside `A..B`, widen the range to cover it — otherwise it duplicates.
 - Multiple ops in one patch are cheap. Prefer two narrow ops over one wide `=`.

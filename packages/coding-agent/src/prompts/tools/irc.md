@@ -9,7 +9,7 @@ Sends short text messages to other live agents in this process and receives thei
 </instruction>
 
 <when_to_use>
-You **SHOULD** reach for `irc` proactively when continuing alone is wasteful or wrong. When in doubt, prefer messaging.
+You SHOULD reach for `irc` proactively when continuing alone is wasteful or wrong. When in doubt, prefer messaging.
 - **Unexpected state.** You hit something the original task did not describe — a missing file, a config that contradicts the assignment, an API behaving differently than you were told, a tool failing in a way that suggests the spec is wrong. DM `0-Main` (or the spawning agent) for guidance instead of guessing.
 - **Blocked by another agent.** A peer holds the file/branch/resource you need, has already started the change you are about to make, or owns a decision you depend on. DM that peer (or broadcast to discover who) before duplicating or stepping on work.
 - **Decision points outside your scope.** A genuine fork in the road that the assignment did not pre-decide (e.g. which of two viable APIs to use, whether to refactor adjacent code). Ask the requester rather than picking unilaterally.

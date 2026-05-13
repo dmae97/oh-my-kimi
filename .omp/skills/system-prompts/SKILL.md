@@ -286,15 +286,15 @@ Good: "Critical: X."
 
 ### Normative Language (RFC 2119)
 
-All prompt prose that prescribes behavior MUST use RFC 2119 key words in **full caps**. This removes ambiguity about whether an instruction is absolute or advisory.
+All prompt prose that prescribes behavior MUST use RFC 2119 key words in full caps (no bold). Bold adds visual noise without changing semantics — the all-caps form is the marker.
 
 | Keyword | Meaning | Replaces |
 | --- | --- | --- |
-| **MUST** / **REQUIRED** | Absolute requirement | "always", "make sure", "ensure", "do" |
-| **MUST NOT** / **PROHIBITED** | Absolute prohibition | "never", "do not", "don't", "strictly prohibited" |
-| **SHOULD** / **RECOMMENDED** | Strong preference; deviation allowed with known tradeoffs | "prefer", "recommend", "it's best to" |
-| **SHOULD NOT** / **NOT RECOMMENDED** | Strong discouragement; deviation allowed with known tradeoffs | "avoid", "try not to" |
-| **MAY** / **OPTIONAL** | Truly optional | "can", "may", "you could" |
+| MUST / REQUIRED | Absolute requirement | "always", "make sure", "ensure", "do" |
+| MUST NOT / PROHIBITED | Absolute prohibition | "never", "do not", "don't", "strictly prohibited" |
+| SHOULD / RECOMMENDED | Strong preference; deviation allowed with known tradeoffs | "prefer", "recommend", "it's best to" |
+| SHOULD NOT / NOT RECOMMENDED | Strong discouragement; deviation allowed with known tradeoffs | "avoid", "try not to" |
+| MAY / OPTIONAL | Truly optional | "can", "may", "you could" |
 
 ```
 Bad:  "Never edit from a grep snippet alone"

@@ -6,7 +6,7 @@ Your patch language is a stripped‑down, file‑oriented diff format designed t
 *** End Patch
 
 Within that envelope, you get a sequence of file operations.
-You **MUST** include a header to specify the action you are taking.
+You MUST include a header to specify the action you are taking.
 Each operation starts with one of three headers:
 
 *** Add File: <path> - create a new file. Every following line is a + line (the initial contents).

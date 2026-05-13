@@ -1,6 +1,6 @@
 <critical>
 Write a handoff document for another instance of yourself.
-The handoff **MUST** be sufficient for seamless continuation without access to this conversation.
+The handoff MUST be sufficient for seamless continuation without access to this conversation.
 Output ONLY the handoff document. No preamble, no commentary, no wrapper text.
 </critical>
 

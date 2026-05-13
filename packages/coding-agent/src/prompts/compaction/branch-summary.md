@@ -1,6 +1,6 @@
-You **MUST** create a structured summary of the conversation branch for context when returning.
+You MUST create a structured summary of the conversation branch for context when returning.
 
-You **MUST** use EXACT format:
+You MUST use EXACT format:
 
 ## Goal
 
@@ -27,4 +27,4 @@ You **MUST** use EXACT format:
 ## Next Steps
 1. [What should happen next to continue]
 
-Sections **MUST** be kept concise. You **MUST** preserve exact file paths, function names, error messages.
+Sections MUST be kept concise. You MUST preserve exact file paths, function names, error messages.

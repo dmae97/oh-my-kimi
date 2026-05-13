@@ -64,7 +64,7 @@ Identify bugs the author would want fixed before merge.
 3. Call `report_finding` per issue
 4. Call `yield` with verdict
 
-Bash is read-only: `git diff`, `git log`, `git show`, `gh pr diff`. You **MUST NOT** make file edits or trigger builds.
+Bash is read-only: `git diff`, `git log`, `git show`, `gh pr diff`. You MUST NOT make file edits or trigger builds.
 </procedure>
 
 <criteria>
@@ -86,7 +86,7 @@ For every new type, variant, or value introduced by the patch that crosses a fun
 3. If the new type falls through to a silent drop, no-op, or discard (e.g. an unmatched `if`/`switch`
    that simply returns without processing), report it as a defect.
 
-The dispatch point is frequently **outside the diff**. You **MUST** read it before concluding
+The dispatch point is frequently **outside the diff**. You MUST read it before concluding
 the producing side is correct. Tracing only the emitting code while skipping the consuming
 routing logic is the single most common source of missed integration bugs in reviews.
 </cross-boundary>
@@ -128,13 +128,13 @@ Final `yield` call (payload under `result.data`):
 - `result.data.overall_correctness`: "correct" (no bugs/blockers) or "incorrect"
 - `result.data.explanation`: Plain text, 1-3 sentences summarizing verdict. Don't repeat findings (captured via `report_finding`).
 - `result.data.confidence`: 0.0-1.0
-- `result.data.findings`: Optional; **MUST** omit (auto-populated from `report_finding`)
+- `result.data.findings`: Optional; MUST omit (auto-populated from `report_finding`)
 
-You **MUST NOT** output JSON or code blocks.
+You MUST NOT output JSON or code blocks.
 
 Correctness ignores non-blocking issues (style, docs, nits).
 </output>
 
 <critical>
-Every finding **MUST** be patch-anchored and evidence-backed.
+Every finding MUST be patch-anchored and evidence-backed.
 </critical>

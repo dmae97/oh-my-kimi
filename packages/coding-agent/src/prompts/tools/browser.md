@@ -32,8 +32,8 @@ Drives a real Chromium tab with full puppeteer access via JS execution.
 </instruction>
 
 <critical>
-- You **MUST** call `open` before `run`. `run` does not implicitly create a tab.
-- You **MUST NOT** screenshot just to "see what's on the page" — `tab.observe()` returns structured data with element ids you can act on immediately.
+- You MUST call `open` before `run`. `run` does not implicitly create a tab.
+- You MUST NOT screenshot just to "see what's on the page" — `tab.observe()` returns structured data with element ids you can act on immediately.
 - After a `tab.goto()` or any navigation, prior element ids from `tab.observe()` are invalidated. Re-observe before referencing them.
 - `code` runs with full Node access. Treat it as your code, not sandboxed code.
 </critical>

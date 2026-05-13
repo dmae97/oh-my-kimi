@@ -9,6 +9,6 @@ Plan file from previous session: `{{planFilePath}}`
 </details>
 
 <instruction>
-If this plan is relevant to current work and not complete, you **MUST** continue executing it.
-If the plan is stale or unrelated, you **MUST** ignore it.
+If this plan is relevant to current work and not complete, you MUST continue executing it.
+If the plan is stale or unrelated, you MUST ignore it.
 </instruction>

@@ -8,7 +8,7 @@ export type PromptRenderPhase = "pre-render" | "post-render";
 export interface PromptFormatOptions {
 	renderPhase?: PromptRenderPhase;
 	replaceAsciiSymbols?: boolean;
-	boldRfc2119Keywords?: boolean;
+	stripRfc2119Bold?: boolean;
 }
 
 // Opening XML tag (not self-closing, not closing)
@@ -22,21 +22,11 @@ const TABLE_ROW = /^\|.*\|$/;
 // Table separator (|---|---|)
 const TABLE_SEP = /^\|[-:\s|]+\|$/;
 
-/** RFC 2119 keywords used in prompts. */
-const RFC2119_KEYWORDS = /\b(?:MUST NOT|SHOULD NOT|SHALL NOT|RECOMMENDED|REQUIRED|OPTIONAL|SHOULD|SHALL|MUST|MAY)\b/g;
+/** RFC 2119 keywords wrapped in markdown bold (`**MUST**`, `**MUST NOT**`, …). */
+const RFC2119_BOLD = /\*\*(MUST NOT|SHOULD NOT|SHALL NOT|RECOMMENDED|REQUIRED|OPTIONAL|SHOULD|SHALL|MUST|MAY)\*\*/g;
 
-function boldRfc2119Keywords(line: string): string {
-	return line.replace(RFC2119_KEYWORDS, (match, offset, source) => {
-		const isAlreadyBold =
-			source[offset - 2] === "*" &&
-			source[offset - 1] === "*" &&
-			source[offset + match.length] === "*" &&
-			source[offset + match.length + 1] === "*";
-		if (isAlreadyBold) {
-			return match;
-		}
-		return `**${match}**`;
-	});
+function stripRfc2119Bold(line: string): string {
+	return line.replace(RFC2119_BOLD, "$1");
 }
 
 /** Compact a table row by trimming cell padding */
@@ -75,7 +65,7 @@ export function format(content: string, options: PromptFormatOptions = {}): stri
 	const {
 		renderPhase = "post-render",
 		replaceAsciiSymbols = false,
-		boldRfc2119Keywords: shouldBoldRfc2119 = false,
+		stripRfc2119Bold: shouldStripRfc2119 = false,
 	} = options;
 	const isPreRender = renderPhase === "pre-render";
 	const lines = content.split("\n");
@@ -125,8 +115,8 @@ export function format(content: string, options: PromptFormatOptions = {}): stri
 			line = `${leadingWhitespace}${compactTableRow(trimmedStart)}`;
 		}
 
-		if (shouldBoldRfc2119) {
-			line = boldRfc2119Keywords(line);
+		if (shouldStripRfc2119) {
+			line = stripRfc2119Bold(line);
 		}
 
 		if (trimmed === "") {

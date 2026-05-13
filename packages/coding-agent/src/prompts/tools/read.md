@@ -2,8 +2,8 @@ Reads the content at the specified path or URL.
 
 <instruction>
 The `read` tool is multi-purpose and more capable than it looks — inspects files, directories, archives, SQLite databases, images, documents (PDF/DOCX/PPTX/XLSX/RTF/EPUB/ipynb), **and URLs**.
-- You **MUST** parallelize reads when exploring related files
-- For URLs, `read` fetches the page and returns clean extracted text/markdown by default (reader-mode). It handles HTML pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom, JSON endpoints, PDFs, etc. You **SHOULD** reach for `read` — not a browser/puppeteer tool — for fetching and inspecting web content.
+- You MUST parallelize reads when exploring related files
+- For URLs, `read` fetches the page and returns clean extracted text/markdown by default (reader-mode). It handles HTML pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom, JSON endpoints, PDFs, etc. You SHOULD reach for `read` — not a browser/puppeteer tool — for fetching and inspecting web content.
 
 ## Parameters
 - `path` — file path or URL (required). Append `:<sel>` for line ranges or raw mode (for example `src/foo.ts:50-200` or `src/foo.ts:raw`).
@@ -55,9 +55,9 @@ Extracts content from web pages, GitHub issues/PRs, Stack Overflow, Wikipedia, R
 </instruction>
 
 <critical>
-- You **MUST** use `read` for every file, directory, archive, and URL read. `cat`, `head`, `tail`, `less`, `more`, `ls`, `tar`, `unzip`, `curl`, and `wget` are **FORBIDDEN** for inspection — any such Bash call is a bug, regardless of how short or convenient it looks.
-- You **MUST** prefer `read` over a browser/puppeteer tool for fetching URL content; only use a browser if `read` fails to deliver reasonable content.
-- You **MUST** always include the `path` parameter — never call `read` with an empty argument object `{}`.
+- You MUST use `read` for every file, directory, archive, and URL read. `cat`, `head`, `tail`, `less`, `more`, `ls`, `tar`, `unzip`, `curl`, and `wget` are **FORBIDDEN** for inspection — any such Bash call is a bug, regardless of how short or convenient it looks.
+- You MUST prefer `read` over a browser/puppeteer tool for fetching URL content; only use a browser if `read` fails to deliver reasonable content.
+- You MUST always include the `path` parameter — never call `read` with an empty argument object `{}`.
 - For specific line ranges, append the selector to `path` (e.g. `path="src/foo.ts:50-200"`, `path="src/foo.ts:50+150"`) — do **NOT** reach for `sed -n`, `awk NR`, or `head`/`tail` pipelines.
-- You **MAY** use path suffix selectors with URL reads; the tool paginates cached fetched output.
+- You MAY use path suffix selectors with URL reads; the tool paginates cached fetched output.
 </critical>
