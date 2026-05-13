@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { ExtensionUiController } from "../src/modes/controllers/extension-ui-controller";
 import type {
 	ExtensionActions,
 	ExtensionCommandContextActions,
 	ExtensionContextActions,
 	ExtensionUIContext,
 } from "../src/extensibility/extensions";
+import { ExtensionUiController } from "../src/modes/controllers/extension-ui-controller";
 import type { InteractiveModeContext } from "../src/modes/types";
 
 /**

@@ -5,7 +5,7 @@ You MUST return strict JSON only — no markdown, no commentary.
 Extraction goals:
 - You MUST distill reusable durable knowledge from rollout history.
 - You MUST keep concrete technical signal (constraints, decisions, workflows, pitfalls, resolved failures).
-- You MUST NOT include transient chatter and low-signal noise.
+- You NEVER include transient chatter and low-signal noise.
 
 Output contract (required keys):
 {

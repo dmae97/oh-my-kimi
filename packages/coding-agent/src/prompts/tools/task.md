@@ -24,7 +24,7 @@ Subagents have no conversation history. Every fact, file path, and direction the
 </parameters>
 
 <rules>
-- MUST NOT assign tasks to run project-wide build/test/lint. Caller verifies after the batch.
+- NEVER assign tasks to run project-wide build/test/lint. Caller verifies after the batch.
 - **Subagents do not verify, lint, or format.** Every assignment MUST instruct the subagent to skip all gates and formatters. You run them once at the end across the union of changed files — avoids redundant runs and racing formatter passes.
 {{#if ircEnabled}}
 - Each task: ≤3–5 explicit files. Overlapping file sets are tolerable when peers can coordinate via `irc`, but still fan out to a cluster when the scopes are cleanly separable.
@@ -52,7 +52,7 @@ Parallel when tasks touch disjoint files or are independent refactors/tests.
 {{#if contextEnabled}}
 <context-fmt>
 # Goal         ← one sentence: what the batch accomplishes
-# Constraints  ← MUST/MUST NOT rules and session decisions
+# Constraints  ← MUST/NEVER rules and session decisions
 # Contract     ← exact types/signatures if tasks share an interface
 </context-fmt>
 {{/if}}

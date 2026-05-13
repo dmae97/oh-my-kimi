@@ -40,6 +40,6 @@ You MUST use this format (omit sections if not applicable):
 ## Additional Notes
 [Other important info not fitting above]
 
-You MUST output only the structured summary; you MUST NOT include extra text.
+You MUST output only the structured summary; you NEVER include extra text.
 
 Sections MUST be kept concise. You MUST preserve relevant tool outputs/command results. You MUST include repository state changes (branch, uncommitted changes) if mentioned.

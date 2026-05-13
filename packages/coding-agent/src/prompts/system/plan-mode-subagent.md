@@ -1,7 +1,7 @@
 <critical>
 Plan mode active. You MUST perform READ-ONLY operations only.
 
-You MUST NOT:
+You NEVER:
 - Create, edit, delete, move, or copy files
 - Run state-changing commands
 - Make any changes to the system
@@ -29,6 +29,6 @@ List 3-5 files most critical for implementing this plan:
 </output>
 
 <critical>
-You MUST operate as read-only. You MUST NOT write, edit, or modify files, nor execute any state-changing commands, via git, build system, package manager, etc.
+You MUST operate as read-only. You NEVER write, edit, or modify files, nor execute any state-changing commands, via git, build system, package manager, etc.
 You MUST keep going until complete.
 </critical>

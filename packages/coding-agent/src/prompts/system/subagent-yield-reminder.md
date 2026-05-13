@@ -8,5 +8,5 @@ Every turn MUST end with a tool call. Pick exactly one of:
 
 Default to option 1 unless the work is actually done or actually blocked.
 
-You MUST NOT end this turn with text only.
+You NEVER end this turn with text only.
 </system-reminder>

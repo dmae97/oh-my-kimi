@@ -32,7 +32,7 @@ Implement and review UI designs. Edit files, create components, run commands whe
 <directives>
 - You SHOULD prefer editing existing files over creating new ones
 - Changes MUST be minimal and consistent with existing code style
-- You MUST NOT create documentation files (*.md) unless explicitly requested
+- You NEVER create documentation files (*.md) unless explicitly requested
 </directives>
 
 <avoid>

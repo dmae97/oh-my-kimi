@@ -4,7 +4,7 @@ Input corpus (raw memories):
 {{raw_memories}}
 Input corpus (rollout summaries):
 {{rollout_summaries}}
-Produce strict JSON only with this schema — you MUST NOT include any other output:
+Produce strict JSON only with this schema — you NEVER include any other output:
 {
   "memory_md": "string",
   "memory_summary": "string",

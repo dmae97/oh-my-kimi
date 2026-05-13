@@ -8,7 +8,7 @@ export type PromptRenderPhase = "pre-render" | "post-render";
 export interface PromptFormatOptions {
 	renderPhase?: PromptRenderPhase;
 	replaceAsciiSymbols?: boolean;
-	stripRfc2119Bold?: boolean;
+	normalizeRfc2119?: boolean;
 }
 
 // Opening XML tag (not self-closing, not closing)
@@ -22,11 +22,27 @@ const TABLE_ROW = /^\|.*\|$/;
 // Table separator (|---|---|)
 const TABLE_SEP = /^\|[-:\s|]+\|$/;
 
-/** RFC 2119 keywords wrapped in markdown bold (`**MUST**`, `**MUST NOT**`, …). */
-const RFC2119_BOLD = /\*\*(MUST NOT|SHOULD NOT|SHALL NOT|RECOMMENDED|REQUIRED|OPTIONAL|SHOULD|SHALL|MUST|MAY)\*\*/g;
+/**
+ * RFC 2119 keywords (plus project aliases NEVER/AVOID) wrapped in markdown bold
+ * — `**MUST**`, `**MUST NOT**`, `**NEVER**`, etc.
+ */
+const RFC2119_BOLD = /\*\*(MUST NOT|SHOULD NOT|RECOMMENDED|REQUIRED|OPTIONAL|SHOULD|MUST|MAY|NEVER|AVOID)\*\*/g;
 
-function stripRfc2119Bold(line: string): string {
-	return line.replace(RFC2119_BOLD, "$1");
+/**
+ * Normalize RFC 2119 markers per project convention:
+ *   - Strip `**KEYWORD**` bold (visual noise, no semantics).
+ *   - Alias `MUST NOT` → `NEVER` and `SHOULD NOT` → `AVOID` (single-token equivalents).
+ * Skips spans inside inline code (`` `…` ``) so alias definitions can be quoted literally.
+ */
+function normalizeRfc2119(line: string): string {
+	const segments = line.split("`");
+	for (let i = 0; i < segments.length; i += 2) {
+		segments[i] = segments[i]
+			.replace(RFC2119_BOLD, "$1")
+			.replace(/\bMUST NOT\b/g, "NEVER")
+			.replace(/\bSHOULD NOT\b/g, "AVOID");
+	}
+	return segments.join("`");
 }
 
 /** Compact a table row by trimming cell padding */
@@ -65,7 +81,7 @@ export function format(content: string, options: PromptFormatOptions = {}): stri
 	const {
 		renderPhase = "post-render",
 		replaceAsciiSymbols = false,
-		stripRfc2119Bold: shouldStripRfc2119 = false,
+		normalizeRfc2119: shouldNormalizeRfc2119 = false,
 	} = options;
 	const isPreRender = renderPhase === "pre-render";
 	const lines = content.split("\n");
@@ -115,8 +131,8 @@ export function format(content: string, options: PromptFormatOptions = {}): stri
 			line = `${leadingWhitespace}${compactTableRow(trimmedStart)}`;
 		}
 
-		if (shouldStripRfc2119) {
-			line = stripRfc2119Bold(line);
+		if (shouldNormalizeRfc2119) {
+			line = normalizeRfc2119(line);
 		}
 
 		if (trimmed === "") {

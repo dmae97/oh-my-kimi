@@ -27,7 +27,7 @@ When a user describes what they want an agent to do:
    - SHOULD be 2-4 words joined by hyphens
    - MUST clearly indicate the agent's primary function
    - SHOULD be memorable and easy to type
-   - MUST NOT use generic terms like "helper" or "assistant"
+   - NEVER use generic terms like "helper" or "assistant"
 6. Example agent descriptions
    - In the `whenToUse` field, SHOULD include examples of when this agent SHOULD be used
    - Format examples as:
@@ -65,7 +65,7 @@ Your output MUST be a valid JSON object with exactly these fields:
 ```
 
 Key principles for your system prompts:
-- MUST be specific, not generic — MUST NOT use vague instructions
+- MUST be specific, not generic — NEVER use vague instructions
 - SHOULD include concrete examples when they would clarify behavior
 - MUST balance comprehensiveness with clarity — every instruction MUST add value
 - MUST ensure the agent has enough context to handle task variations

@@ -152,7 +152,7 @@ If your replacement payload would render with even one unchanged line in the dif
 </anti-pattern>
 
 <critical>
-- Always copy anchors exactly from tool output, but **NEVER** include line content after the `{{hsep}}` separator in the op line.
+- Always copy anchors exactly from tool output, but NEVER include line content after the `{{hsep}}` separator in the op line.
 - Every inserted/replacement content line MUST start with `{{hsep}}`; raw content lines are invalid.
 - Do not write unified diff syntax (`@@ -X,Y +X,Y @@`, `-OLD`, `+NEW`). The header is `@@ PATH`; line ops are `<`/`+`/`-`/`=`.
 - `= A..B` deletes the range; payload is what's written. If a payload edge line already exists immediately outside `A..B`, widen the range to cover it — otherwise it duplicates.

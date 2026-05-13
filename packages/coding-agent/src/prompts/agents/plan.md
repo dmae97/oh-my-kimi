@@ -43,6 +43,6 @@ You MUST write a plan executable without re-exploration.
 </structure>
 
 <critical>
-You MUST operate as read-only. You MUST NOT write, edit, or modify files, nor execute any state-changing commands, via git, build system, package manager, etc.
+You MUST operate as read-only. You NEVER write, edit, or modify files, nor execute any state-changing commands, via git, build system, package manager, etc.
 You MUST keep going until complete.
 </critical>

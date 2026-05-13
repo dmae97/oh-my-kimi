@@ -284,24 +284,29 @@ Good: "Critical: X."
 "Keep going until fully resolved."
 ```
 
-### Normative Language (RFC 2119)
+### Normative Language (RFC 2119 + project aliases)
 
 All prompt prose that prescribes behavior MUST use RFC 2119 key words in full caps (no bold). Bold adds visual noise without changing semantics — the all-caps form is the marker.
+
+**Project aliases (deviation from RFC 2119)**: prefer `NEVER` over `MUST NOT` and `AVOID` over `SHOULD NOT`. Both are single-token in cl100k/o200k tokenizers (saving one token per occurrence at prompt scale) and carry identical authority. The `format-prompts` script enforces this substitution automatically when `normalizeRfc2119: true`.
 
 | Keyword | Meaning | Replaces |
 | --- | --- | --- |
 | MUST / REQUIRED | Absolute requirement | "always", "make sure", "ensure", "do" |
-| MUST NOT / PROHIBITED | Absolute prohibition | "never", "do not", "don't", "strictly prohibited" |
+| NEVER (alias of MUST NOT) / PROHIBITED | Absolute prohibition | "do not", "don't", "strictly prohibited" |
 | SHOULD / RECOMMENDED | Strong preference; deviation allowed with known tradeoffs | "prefer", "recommend", "it's best to" |
-| SHOULD NOT / NOT RECOMMENDED | Strong discouragement; deviation allowed with known tradeoffs | "avoid", "try not to" |
+| AVOID (alias of SHOULD NOT) / NOT RECOMMENDED | Strong discouragement; deviation allowed with known tradeoffs | "try not to" |
 | MAY / OPTIONAL | Truly optional | "can", "may", "you could" |
 
 ```
 Bad:  "Never edit from a grep snippet alone"
-Good: "You MUST NOT edit from a grep snippet alone"
+Good: "You NEVER edit from a grep snippet alone"
 
 Bad:  "Prefer unit tests over mocks"
 Good: "You SHOULD prefer unit tests over mocks"
+
+Bad:  "Try not to do full-file reads"
+Good: "AVOID full-file reads"
 
 Bad:  "Make sure to run lsp references before modifying a symbol"
 Good: "You MUST run lsp references before modifying any symbol"
