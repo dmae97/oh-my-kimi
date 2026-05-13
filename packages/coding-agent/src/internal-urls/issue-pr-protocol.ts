@@ -115,10 +115,12 @@ function parseUrl(url: InternalUrl, scheme: Scheme): Parsed {
 	if (host && parts.length === 0) {
 		// scheme://N (numeric) or scheme://owner (host-only, no repo segment)
 		numberPart = host;
-	} else if (scheme === "pr" && parts[0] === "diff" && parsePositiveDecimalInt(host) !== undefined) {
-		// pr://N/diff[/<sub>] — short form with diff suffix. Restrict this
-		// ambiguity to numeric hosts so `pr://owner/diff` remains the valid
-		// repo-scoped listing for a repository named `diff`.
+	} else if (parts[0] === "diff" && parsePositiveDecimalInt(host) !== undefined) {
+		// <scheme>://N/diff[/<sub>] — short form with diff suffix. Restrict this
+		// ambiguity to numeric hosts so `<scheme>://owner/diff` remains the valid
+		// repo-scoped listing for a repository named `diff`. `issue://` falls
+		// through to the `scheme === "issue"` branch below for the "issues have
+		// no diff" rejection rather than being misparsed as repo `<N>/diff`.
 		numberPart = host;
 		diffParts = parts;
 	} else if (host && parts.length === 1) {

@@ -282,6 +282,16 @@ describe("issue://.../diff rejection", () => {
 		const router = InternalUrlRouter.instance();
 		await expect(router.resolve("issue://owner/example/9/diff")).rejects.toThrow(/Invalid issue:\/\/ URL/);
 	});
+
+	it("issue://<N>/diff short form rejects with the same 'no diff' error (not a repo lookup)", async () => {
+		// Regression: previously fell through to the `host && parts.length === 1`
+		// branch and was misparsed as a repo named `<N>/diff`, producing a
+		// confusing GraphQL "Could not resolve to a Repository" error instead.
+		const router = InternalUrlRouter.instance();
+		await expect(router.resolve("issue://9/diff")).rejects.toThrow(/Issue views do not have a diff/);
+		await expect(router.resolve("issue://9/diff/all")).rejects.toThrow(/Issue views do not have a diff/);
+		await expect(router.resolve("issue://9/diff/3")).rejects.toThrow(/Issue views do not have a diff/);
+	});
 });
 
 describe("issue:// / pr:// listing", () => {
