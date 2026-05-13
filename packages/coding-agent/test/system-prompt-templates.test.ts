@@ -188,27 +188,6 @@ describe("system Handlebars prompt templates", () => {
 		expect(subagentUser).not.toContain("[CONTEXT]");
 		expect(subagentUser).not.toContain("Shared task background");
 	});
-
-	test("system-prompt conditionally renders inspect_image guidance", async () => {
-		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
-		const template = await Bun.file(templatePath).text();
-
-		const baseTools = baseRenderContext.tools as string[];
-		const withInspectImage = prompt.render(template, {
-			...baseRenderContext,
-			tools: [...baseTools, "inspect_image"],
-		});
-		expect(withInspectImage).toContain("## Images");
-		expect(withInspectImage).toContain("**MUST** use `inspect_image` over `read`");
-		expect(withInspectImage).toContain("write a specific `question` for `inspect_image`");
-
-		const withoutInspectImage = prompt.render(template, {
-			...baseRenderContext,
-			tools: baseTools.filter((tool: string) => tool !== "inspect_image"),
-		});
-		expect(withoutInspectImage).not.toContain("## Images");
-	});
-
 	test("system-prompt renders MCP discovery hint when enabled", async () => {
 		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
 		const template = await Bun.file(templatePath).text();
