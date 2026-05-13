@@ -84,6 +84,9 @@ export class StatusLineComponent implements Component {
 	} | null = null;
 	#usageFetchedAt = 0;
 	#usageInFlight = false;
+	// Context breakdown caching (2s TTL — aligns with /context command output)
+	#cachedBreakdown: { usedTokens: number; contextWindow: number } | null = null;
+	#breakdownFetchedAt = 0;
 
 	constructor(private readonly session: AgentSession) {
 		this.#settings = {
@@ -396,6 +399,19 @@ export class StatusLineComponent implements Component {
 		}
 		if (!fiveHour && !sevenDay) return null;
 		return { fiveHour, sevenDay };
+	}
+
+	#getCachedContextBreakdown(): { usedTokens: number; contextWindow: number } {
+		const now = Date.now();
+		if (!this.#cachedBreakdown || now - this.#breakdownFetchedAt > 2_000) {
+			const breakdown = computeContextBreakdown(this.session);
+			this.#cachedBreakdown = {
+				usedTokens: breakdown.usedTokens,
+				contextWindow: breakdown.contextWindow,
+			};
+			this.#breakdownFetchedAt = now;
+		}
+		return this.#cachedBreakdown;
 	}
 
 	#buildSegmentContext(width: number): SegmentContext {
