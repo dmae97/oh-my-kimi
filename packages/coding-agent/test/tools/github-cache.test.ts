@@ -193,6 +193,82 @@ describe("github-cache db layer", () => {
 		const stat = await fs.stat(parent);
 		expect(stat.mode & 0o777).toBe(0o755);
 	});
+
+	it("preserves rows across openDb() and honors the configured hard TTL via per-lookup sweep", async () => {
+		const DAY_MS = 86_400_000;
+		const fourteenDaysAgo = Date.now() - 14 * DAY_MS;
+		putCached({
+			authKey: TEST_AUTH_KEY,
+			repo: TEST_REPO,
+			kind: "issue",
+			number: 314,
+			includeComments: true,
+			payload: issuePayload(314, "old-body"),
+			rendered: "fourteen-days-old",
+			fetchedAt: fourteenDaysAgo,
+		});
+
+		// Reopen the DB. Pre-fix, openDb() called evictExpired() with the 7-day
+		// default and would nuke this row. Post-fix, the row must survive.
+		resetCacheForTests();
+		const reopened = openDb();
+		expect(reopened).not.toBeNull();
+		expect(getCached(TEST_REPO, "issue", 314, true, TEST_AUTH_KEY)?.rendered).toBe("fourteen-days-old");
+
+		// Configured retention of 30 days: row is well within hard TTL. Use a
+		// soft TTL >= 14d so the lookup returns "fresh" and does NOT schedule a
+		// background refresh that would clobber `fetched_at`.
+		const generousSettings = Settings.isolated({
+			"github.cache.softTtlSec": 30 * 86_400,
+			"github.cache.hardTtlSec": 30 * 86_400,
+		});
+		const noopFetch = vi.fn(async () => ({
+			rendered: "should-not-run",
+			sourceUrl: undefined,
+			payload: issuePayload(314, "should-not-run"),
+		}));
+		const lenient = await getOrFetchView({
+			authKey: TEST_AUTH_KEY,
+			repo: TEST_REPO,
+			kind: "issue",
+			number: 314,
+			includeComments: true,
+			fetchFresh: noopFetch,
+			settings: generousSettings,
+		});
+		expect(lenient.status).toBe("fresh");
+		expect(noopFetch).not.toHaveBeenCalled();
+		expect(getCached(TEST_REPO, "issue", 314, true, TEST_AUTH_KEY)?.fetchedAt).toBe(fourteenDaysAgo);
+
+		// Reset so the throttled `sweepIfDue` is allowed to run again under
+		// the stricter configuration.
+		resetCacheForTests();
+		const strictSettings = Settings.isolated({
+			"github.cache.softTtlSec": 86_400,
+			"github.cache.hardTtlSec": 86_400,
+		});
+		const refreshFetch = vi.fn(async () => ({
+			rendered: "refreshed-content",
+			sourceUrl: undefined,
+			payload: issuePayload(314, "refreshed"),
+		}));
+		const strict = await getOrFetchView({
+			authKey: TEST_AUTH_KEY,
+			repo: TEST_REPO,
+			kind: "issue",
+			number: 314,
+			includeComments: true,
+			fetchFresh: refreshFetch,
+			settings: strictSettings,
+		});
+		expect(strict.status).toBe("miss");
+		expect(refreshFetch).toHaveBeenCalledTimes(1);
+		const after = getCached(TEST_REPO, "issue", 314, true, TEST_AUTH_KEY);
+		// The 14-day-old row is gone; only the fresh write from this call
+		// remains.
+		expect(after?.rendered).toBe("refreshed-content");
+		expect(after?.fetchedAt).not.toBe(fourteenDaysAgo);
+	});
 });
 
 describe("getOrFetchView (TTL semantics)", () => {

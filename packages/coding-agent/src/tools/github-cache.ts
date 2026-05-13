@@ -124,11 +124,11 @@ export function openDb(): Database | null {
 		`);
 		protectDbFiles(dbPath);
 		cachedDb = db;
-		// One-shot eviction on open. The default `DEFAULT_HARD_TTL_SEC` is a
-		// coarse backstop only — when settings load with a stricter
-		// `github.cache.hardTtlSec`, the per-lookup sweep in `getOrFetchView()`
-		// enforces the configured retention against the on-disk file.
-		evictExpired(db, DEFAULT_HARD_TTL_SEC * 1000);
+		// No eviction on open: the default `DEFAULT_HARD_TTL_SEC` is a coarse
+		// backstop that runs before user settings load, so applying it here
+		// would nuke rows still valid under a stricter-or-laxer configured
+		// `github.cache.hardTtlSec`. The per-lookup `sweepIfDue()` in
+		// `getOrFetchView()` enforces the *configured* retention instead.
 		return db;
 	} catch (err) {
 		logger.warn("github cache: failed to open DB; cache disabled", { err: String(err) });
