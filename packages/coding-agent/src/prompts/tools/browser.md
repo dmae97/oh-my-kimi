@@ -20,7 +20,7 @@ Drives a real Chromium tab with full puppeteer access via JS execution.
   - `tab.waitFor(selector)` — waits until the selector is attached, returns the resolved `ElementHandle` for chaining (e.g. `const btn = await tab.waitFor('text/Submit'); await btn.click();`).
   - `tab.drag(from, to)` — drag from one point to another. Each endpoint is either a selector string (drag center-to-center) or a `{ x, y }` viewport-coordinate point (e.g. for canvases, sliders).
   - `tab.scrollIntoView(selector)` — scroll the matching element to the center of the viewport (use before clicking off-screen elements).
-  - `tab.select(selector, …values)` — set the selected option(s) on a `<select>`. Returns the values that ended up selected. `tab.fill` does **NOT** work for selects.
+  - `tab.select(selector, …values)` — set the selected option(s) on a `<select>`. Returns the values that ended up selected. `tab.fill` NEVER works for selects.
   - `tab.uploadFile(selector, …filePaths)` — attach files to an `<input type="file">`. Paths resolve relative to cwd.
   - `tab.waitForUrl(pattern, { timeout? })` — pattern is a substring or `RegExp`. Polls `location.href` so it works for SPA pushState navigations, not just real navigations. Returns the matched URL.
   - `tab.waitForResponse(pattern, { timeout? })` — pattern is a substring, `RegExp`, or `(response) => boolean`. Returns the raw puppeteer `HTTPResponse` (call `.text()` / `.json()` / `.status()` / `.headers()` on it).

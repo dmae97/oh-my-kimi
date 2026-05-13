@@ -6,7 +6,7 @@ Performs structural code search using AST matching via native ast-grep.
 - Language is inferred from `paths`; narrow each call to one language when mixed-language trees could cause parse noise
 - `pat` is a single AST pattern. Run separate calls for distinct unrelated patterns
 - **Patterns match AST structure, not text** — whitespace/formatting is ignored
-- `$NAME` captures one node; `$_` matches one without binding; `$$$NAME` captures zero-or-more (lazy — stops at next matchable element); `$$$` matches zero-or-more without binding. Use `$$$NAME`, **NOT** `$$NAME` — the two-dollar form is invalid and produces a parse error
+- `$NAME` captures one node; `$_` matches one without binding; `$$$NAME` captures zero-or-more (lazy — stops at next matchable element); `$$$` matches zero-or-more without binding. Use `$$$NAME`, NOT `$$NAME` — the two-dollar form is invalid and produces a parse error
 - Metavariable names are UPPERCASE and must be the whole AST node — partial-text like `prefix$VAR`, `"hello $NAME"`, or `a $OP b` does NOT work; match the whole node instead
 - When the same metavariable appears twice, both occurrences MUST match identical code (`$A == $A` matches `x == x`, not `x == y`)
 - Patterns MUST parse as a single valid AST node for the inferred target language. For method fragments or body snippets that don't parse standalone, wrap in valid context (e.g. `class $_ { … }`)

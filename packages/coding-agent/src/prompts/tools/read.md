@@ -58,6 +58,6 @@ Extracts content from web pages, GitHub issues/PRs, Stack Overflow, Wikipedia, R
 - You MUST use `read` for every file, directory, archive, and URL read. `cat`, `head`, `tail`, `less`, `more`, `ls`, `tar`, `unzip`, `curl`, and `wget` are **FORBIDDEN** for inspection — any such Bash call is a bug, regardless of how short or convenient it looks.
 - You MUST prefer `read` over a browser/puppeteer tool for fetching URL content; only use a browser if `read` fails to deliver reasonable content.
 - You MUST always include the `path` parameter — never call `read` with an empty argument object `{}`.
-- For specific line ranges, append the selector to `path` (e.g. `path="src/foo.ts:50-200"`, `path="src/foo.ts:50+150"`) — do **NOT** reach for `sed -n`, `awk NR`, or `head`/`tail` pipelines.
+- For specific line ranges, append the selector to `path` (e.g. `path="src/foo.ts:50-200"`, `path="src/foo.ts:50+150"`) — NEVER reach for `sed -n`, `awk NR`, or `head`/`tail` pipelines.
 - You MAY use path suffix selectors with URL reads; the tool paginates cached fetched output.
 </critical>

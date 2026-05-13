@@ -38,7 +38,7 @@ When your edit involves brace boundaries (`{` / `}`), prefer these shapes:
 - **Do not duplicate chunks inside one payload.** When emitting a long `=` payload, never paste the same multi-line block twice. If you catch yourself re-emitting an earlier run of lines, stop and rewrite the op.
 - **Anchor only inside the visible region.** If the read output around your `=`/`-` end anchor is truncated (you cannot see the line at B+1), issue a fresh `read` before editing — anchoring blind drops or duplicates the boundary line.
 - **Prefer the narrowest self-contained edit.** Once your range cleanly contains the construct you are changing, a `+`/`<` insert plus a small `-` delete is almost always clearer and safer than a single wide `= A..B` that re-emits unchanged context.
-- **Anchors always reference the file as you last read it.** When stacking multiple `+`/`<`/`-`/`=` ops in one patch, do **NOT** mentally shift line numbers to account for prior ops in the same patch. Every op resolves against the original line numbering.
+- **Anchors always reference the file as you last read it.** When stacking multiple `+`/`<`/`-`/`=` ops in one patch, NEVER mentally shift line numbers to account for prior ops in the same patch. Every op resolves against the original line numbering.
 </common-failures>
 
 <case file="a.ts">
