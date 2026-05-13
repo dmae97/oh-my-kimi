@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { callWithCopilotModelRetry, isCopilotTransientModelError, isRetryableError } from "@oh-my-pi/pi-ai/utils/retry";
+import { callWithCopilotModelRetry, isCopilotTransientModelError } from "@oh-my-pi/pi-ai/utils/retry";
+import { isRetryableError } from "@oh-my-pi/pi-utils";
 
 type ErrorShape = { status: number; code?: string; error?: { code?: string; message?: string }; message: string };
 
@@ -132,7 +133,7 @@ describe("callWithCopilotModelRetry", () => {
 				{ provider: "github-copilot", signal: controller.signal },
 			),
 		).rejects.toBeDefined();
-		// fn runs once; abortableSleep rejects before a second attempt.
+		// fn runs once; scheduler.wait rejects before a second attempt.
 		expect(calls).toBe(1);
 	});
 });

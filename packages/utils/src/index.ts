@@ -1,8 +1,9 @@
-export { abortableSleep, createAbortableStream, once, untilAborted } from "./abortable";
+export { createAbortableStream, once, untilAborted } from "./abortable";
 export * from "./async";
 export * from "./color";
 export * from "./dirs";
 export * from "./env";
+export * from "./fetch-retry";
 export * from "./format";
 export * from "./frontmatter";
 export * from "./fs-error";

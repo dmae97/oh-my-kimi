@@ -244,7 +244,7 @@ describe("Google Gemini CLI alignment", () => {
 			const result = await stream.result();
 			expect(fetchCalls).toBe(1);
 			expect(result.stopReason).toBe("error");
-			expect(result.errorMessage).toContain("Server requested 121s retry delay (max: 1s)");
+			expect(result.errorMessage).toContain("Cloud Code Assist API error (503)");
 		});
 	});
 });

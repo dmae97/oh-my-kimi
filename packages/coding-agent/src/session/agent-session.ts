@@ -16,7 +16,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-
+import { scheduler } from "node:timers/promises";
 import {
 	type Agent,
 	AgentBusyError,
@@ -47,14 +47,20 @@ import {
 	calculateRateLimitBackoffMs,
 	getSupportedEfforts,
 	isContextOverflow,
-	isUnexpectedSocketCloseMessage,
 	isUsageLimitError,
 	modelsAreEqual,
 	parseRateLimitReason,
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
-import { abortableSleep, getAgentDbPath, isEnoent, logger, prompt, Snowflake } from "@oh-my-pi/pi-utils";
+import {
+	getAgentDbPath,
+	isEnoent,
+	isUnexpectedSocketCloseMessage,
+	logger,
+	prompt,
+	Snowflake,
+} from "@oh-my-pi/pi-utils";
 import { type AsyncJob, AsyncJobManager } from "../async";
 import type { Rule } from "../capability/rule";
 import { MODEL_ROLE_IDS, type ModelRegistry } from "../config/model-registry";
@@ -1446,7 +1452,7 @@ export class AgentSession {
 		const scheduled = (async () => {
 			if (delayMs > 0) {
 				try {
-					await abortableSleep(delayMs, signal);
+					await scheduler.wait(delayMs, { signal });
 				} catch {
 					return;
 				}
@@ -5976,7 +5982,7 @@ export class AgentSession {
 								error: message,
 								model: `${candidate.provider}/${candidate.id}`,
 							});
-							await abortableSleep(delayMs, autoCompactionSignal);
+							await scheduler.wait(delayMs, { signal: autoCompactionSignal });
 						}
 					}
 
@@ -6502,7 +6508,7 @@ export class AgentSession {
 		this.#retryAbortController?.abort();
 		this.#retryAbortController = retryAbortController;
 		try {
-			await abortableSleep(delayMs, retryAbortController.signal);
+			await scheduler.wait(delayMs, { signal: retryAbortController.signal });
 		} catch {
 			if (this.#retryAbortController !== retryAbortController) {
 				return false;

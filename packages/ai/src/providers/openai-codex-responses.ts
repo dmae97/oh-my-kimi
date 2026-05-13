@@ -1,5 +1,6 @@
 import * as os from "node:os";
-import { $env, $flag, abortableSleep, asRecord, logger, readSseJson, structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { scheduler } from "node:timers/promises";
+import { $env, $flag, asRecord, fetchWithRetry, logger, readSseJson, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import type OpenAI from "openai";
 import type {
 	ResponseCustomToolCall,
@@ -13,7 +14,6 @@ import type {
 } from "openai/resources/responses/responses";
 import packageJson from "../../package.json" with { type: "json" };
 import { calculateCost } from "../models";
-import { isUsageLimitError } from "../rate-limit-utils";
 import { getEnvApiKey } from "../stream";
 import {
 	type Api,
@@ -76,7 +76,6 @@ export interface OpenAICodexResponsesOptions extends StreamOptions {
 
 const CODEX_DEBUG = $flag("PI_CODEX_DEBUG");
 const CODEX_MAX_RETRIES = 5;
-const CODEX_RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 const CODEX_RETRY_DELAY_MS = 500;
 const CODEX_WEBSOCKET_CONNECT_TIMEOUT_MS = 10000;
 const CODEX_WEBSOCKET_IDLE_TIMEOUT_MS = 300000;
@@ -661,7 +660,9 @@ async function openInitialCodexEventStream(
 				});
 				if (!activateFallback) {
 					websocketRetries += 1;
-					await abortableSleep(getCodexWebSocketRetryDelayMs(websocketRetries), requestSetup.requestSignal);
+					await scheduler.wait(getCodexWebSocketRetryDelayMs(websocketRetries), {
+						signal: requestSetup.requestSignal,
+					});
 					continue;
 				}
 				break;
@@ -1407,10 +1408,9 @@ async function tryReplayWebsocketFailureOverSse(
 
 	if (!activateFallback) {
 		runtime.websocketStreamRetries += 1;
-		await abortableSleep(
-			getCodexWebSocketRetryDelayMs(runtime.websocketStreamRetries),
-			context.requestSetup.requestSignal,
-		);
+		await scheduler.wait(getCodexWebSocketRetryDelayMs(runtime.websocketStreamRetries), {
+			signal: context.requestSetup.requestSignal,
+		});
 		await reopenCodexWebSocketRuntimeStream(context, runtime, state);
 		return true;
 	}
@@ -1461,7 +1461,9 @@ async function tryRetryCodexProviderError(
 	runtime.sawTerminalEvent = false;
 	resetOutputState(context.output);
 	context.firstTokenTime = undefined;
-	await abortableSleep(CODEX_RETRY_DELAY_MS * runtime.providerRetryAttempt, context.requestSetup.requestSignal);
+	await scheduler.wait(CODEX_RETRY_DELAY_MS * runtime.providerRetryAttempt, {
+		signal: context.requestSetup.requestSignal,
+	});
 
 	if (runtime.transport === "websocket" && websocketState) {
 		await reopenCodexWebSocketRuntimeStream(context, runtime, websocketState);
@@ -2194,15 +2196,15 @@ async function openCodexSseEventStream(
 		sentTurnStateHeader: headers.has(X_CODEX_TURN_STATE_HEADER),
 		sentModelsEtagHeader: headers.has(X_MODELS_ETAG_HEADER),
 	});
-	const response = await fetchWithRetry(
-		url,
-		{
-			method: "POST",
-			headers,
-			body: JSON.stringify(body),
-		},
+	const response = await fetchWithRetry(url, {
+		method: "POST",
+		headers,
+		body: JSON.stringify(body),
 		signal,
-	);
+		maxAttempts: CODEX_MAX_RETRIES + 1,
+		defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),
+		maxDelayMs: CODEX_RATE_LIMIT_BUDGET_MS,
+	});
 	logCodexDebug("codex response", {
 		url: response.url,
 		status: response.status,
@@ -2290,75 +2292,6 @@ function createCodexHeaders(
 function logCodexDebug(message: string, details?: Record<string, unknown>): void {
 	if (!CODEX_DEBUG) return;
 	logger.debug(`[codex] ${message}`, details ?? {});
-}
-
-function getRetryDelayMs(
-	response: Response | null,
-	attempt: number,
-	errorBody?: string,
-): { delay: number; serverProvided: boolean } {
-	const retryAfter = response?.headers?.get("retry-after") || null;
-	if (retryAfter) {
-		const seconds = Number(retryAfter);
-		if (Number.isFinite(seconds)) {
-			return { delay: Math.max(0, seconds * 1000), serverProvided: true };
-		}
-		const parsedDate = Date.parse(retryAfter);
-		if (!Number.isNaN(parsedDate)) {
-			return { delay: Math.max(0, parsedDate - Date.now()), serverProvided: true };
-		}
-	}
-	if (errorBody) {
-		const msMatch = /try again in\s+(\d+(?:\.\d+)?)\s*ms/i.exec(errorBody);
-		if (msMatch) {
-			const ms = Number(msMatch[1]);
-			if (Number.isFinite(ms)) return { delay: Math.max(ms, 100), serverProvided: true };
-		}
-		const sMatch = /try again in\s+(\d+(?:\.\d+)?)\s*s(?:ec)?/i.exec(errorBody);
-		if (sMatch) {
-			const seconds = Number(sMatch[1]);
-			if (Number.isFinite(seconds)) return { delay: Math.max(seconds * 1000, 100), serverProvided: true };
-		}
-	}
-	return { delay: CODEX_RETRY_DELAY_MS * (attempt + 1), serverProvided: false };
-}
-
-async function fetchWithRetry(url: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
-	let attempt = 0;
-	let rateLimitTimeSpent = 0;
-	while (true) {
-		try {
-			const response = await fetch(url, { ...init, signal: signal ?? init.signal });
-			if (!CODEX_RETRYABLE_STATUS.has(response.status)) {
-				return response;
-			}
-			if (signal?.aborted) return response;
-			const errorBody = await response.clone().text();
-			// Usage-limit errors are persistent (account allocation exhausted) — retrying with the
-			// same credential is futile. Bail out immediately so the error propagates to the agent
-			// session layer where credential switching happens.
-			if (response.status === 429 && isUsageLimitError(errorBody)) {
-				return response;
-			}
-			const { delay, serverProvided } = getRetryDelayMs(response, attempt, errorBody);
-			if (response.status === 429 && serverProvided) {
-				if (rateLimitTimeSpent + delay > CODEX_RATE_LIMIT_BUDGET_MS) {
-					return response;
-				}
-				rateLimitTimeSpent += delay;
-			} else if (attempt >= CODEX_MAX_RETRIES) {
-				return response;
-			}
-			await abortableSleep(delay, signal);
-		} catch (error) {
-			if (attempt >= CODEX_MAX_RETRIES || signal?.aborted) {
-				throw error;
-			}
-			const delay = CODEX_RETRY_DELAY_MS * (attempt + 1);
-			await abortableSleep(delay, signal);
-		}
-		attempt += 1;
-	}
 }
 
 function redactHeaders(headers: Headers): Record<string, string> {
