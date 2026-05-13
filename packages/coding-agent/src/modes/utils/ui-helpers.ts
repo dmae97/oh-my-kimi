@@ -9,7 +9,7 @@ import { CompactionSummaryMessageComponent } from "../../modes/components/compac
 import { CustomMessageComponent } from "../../modes/components/custom-message";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { EvalExecutionComponent } from "../../modes/components/eval-execution";
-import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
+import { ReadToolGroupComponent, readArgsTargetInternalUrl } from "../../modes/components/read-tool-group";
 import { SkillMessageComponent } from "../../modes/components/skill-message";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { UserMessageComponent } from "../../modes/components/user-message";
@@ -302,7 +302,7 @@ export class UiHelpers {
 						continue;
 					}
 
-					if (content.name === "read") {
+					if (content.name === "read" && !readArgsTargetInternalUrl(content.arguments)) {
 						if (hasErrorStop && errorMessage) {
 							if (!readGroup) {
 								readGroup = new ReadToolGroupComponent({
@@ -364,7 +364,11 @@ export class UiHelpers {
 					}
 				}
 			} else if (message.role === "toolResult") {
-				if (message.toolName === "read") {
+				const pendingReadComponent = this.ctx.pendingTools.get(message.toolCallId);
+				const isReadGroupResult =
+					message.toolName === "read" &&
+					(!pendingReadComponent || pendingReadComponent instanceof ReadToolGroupComponent);
+				if (isReadGroupResult) {
 					const assistantComponent = readToolCallAssistantComponents.get(message.toolCallId);
 					const images: ImageContent[] = message.content.filter(
 						(content): content is ImageContent => content.type === "image",

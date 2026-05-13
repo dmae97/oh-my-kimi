@@ -1757,10 +1757,14 @@ export async function resolveDefaultRepoMemoized(cwd: string, signal?: AbortSign
 		pending = (async () => {
 			// No caller signal: this lookup is shared across every concurrent
 			// waiter on the same cwd.
-			const resolved = await git.github.text(
-				cwd,
-				["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
-			);
+			const resolved = await git.github.text(cwd, [
+				"repo",
+				"view",
+				"--json",
+				"nameWithOwner",
+				"-q",
+				".nameWithOwner",
+			]);
 			const value = requireNonEmpty(resolved, "repo");
 			DEFAULT_REPO_RESOLVED.set(key, value);
 			return value;

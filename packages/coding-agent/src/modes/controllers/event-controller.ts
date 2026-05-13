@@ -3,7 +3,7 @@ import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { type Component, Loader, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
-import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
+import { ReadToolGroupComponent, readArgsTargetInternalUrl } from "../../modes/components/read-tool-group";
 import { TodoReminderComponent } from "../../modes/components/todo-reminder";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
@@ -273,7 +273,7 @@ export class EventController {
 
 			for (const content of this.ctx.streamingMessage.content) {
 				if (content.type !== "toolCall") continue;
-				if (content.name === "read") {
+				if (content.name === "read" && !readArgsTargetInternalUrl(content.arguments)) {
 					this.#trackReadToolCall(content.id, content.arguments);
 					const component = this.ctx.pendingTools.get(content.id);
 					if (component) {
@@ -384,7 +384,7 @@ export class EventController {
 	async #handleToolExecutionStart(event: Extract<AgentSessionEvent, { type: "tool_execution_start" }>): Promise<void> {
 		this.#updateWorkingMessageFromIntent(event.intent);
 		if (!this.ctx.pendingTools.has(event.toolCallId)) {
-			if (event.toolName === "read") {
+			if (event.toolName === "read" && !readArgsTargetInternalUrl(event.args)) {
 				this.#trackReadToolCall(event.toolCallId, event.args);
 				const component = this.ctx.pendingTools.get(event.toolCallId);
 				if (component) {

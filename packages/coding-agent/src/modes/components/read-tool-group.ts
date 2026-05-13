@@ -1,9 +1,29 @@
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Container, Text } from "@oh-my-pi/pi-tui";
+import { InternalUrlRouter } from "../../internal-urls";
 import { getLanguageFromPath, theme } from "../../modes/theme/theme";
 import { PREVIEW_LIMITS, shortenPath } from "../../tools/render-utils";
 import { renderCodeCell } from "../../tui";
 import type { ToolExecutionHandle } from "./tool-execution";
+
+/**
+ * Read calls whose target is resolved through {@link InternalUrlRouter} are
+ * rendered as full tool executions (not collapsed into the read group) so the
+ * resolved content is visible. `path` is the canonical arg; `file_path` is the
+ * legacy alias still tolerated by the read tool schema.
+ */
+export function readArgsTargetInternalUrl(args: unknown): boolean {
+	if (!args || typeof args !== "object" || Array.isArray(args)) return false;
+	const record = args as Record<string, unknown>;
+	const target =
+		typeof record.path === "string"
+			? record.path
+			: typeof record.file_path === "string"
+				? record.file_path
+				: undefined;
+	if (!target) return false;
+	return InternalUrlRouter.instance().canHandle(target);
+}
 
 type ReadRenderArgs = {
 	path?: string;

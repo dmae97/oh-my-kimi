@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { getDefault } from "../src/config/settings-schema";
-import { ReadToolGroupComponent } from "../src/modes/components/read-tool-group";
+import { ReadToolGroupComponent, readArgsTargetInternalUrl } from "../src/modes/components/read-tool-group";
 import * as themeModule from "../src/modes/theme/theme";
 
 describe("ReadToolGroupComponent", () => {
@@ -92,5 +92,42 @@ describe("ReadToolGroupComponent", () => {
 		const matches = rendered.match(/Read \/tmp\/example\.ts:L10-L20/g) ?? [];
 
 		expect(matches).toHaveLength(1);
+	});
+});
+
+describe("readArgsTargetInternalUrl", () => {
+	it.each([
+		["skill://my-skill"],
+		["skill://my-skill/file.md"],
+		["pi://docs/tools/read.md"],
+		["issue://123"],
+		["pr://can1357/oh-my-pi/456"],
+		["agent://abc"],
+		["artifact://abc"],
+		["memory://root"],
+		["rule://name"],
+		["mcp://server/resource"],
+		["local://PLAN.md"],
+	])("treats %s as an internal URL read", target => {
+		expect(readArgsTargetInternalUrl({ path: target })).toBe(true);
+		expect(readArgsTargetInternalUrl({ file_path: target })).toBe(true);
+	});
+
+	it.each([
+		["/tmp/example.ts"],
+		["./relative/path.md"],
+		["https://example.com/file"],
+		[""],
+	])("treats %s as a filesystem/external target", target => {
+		expect(readArgsTargetInternalUrl({ path: target })).toBe(false);
+	});
+
+	it("returns false for non-record / missing arguments", () => {
+		expect(readArgsTargetInternalUrl(undefined)).toBe(false);
+		expect(readArgsTargetInternalUrl(null)).toBe(false);
+		expect(readArgsTargetInternalUrl("skill://x")).toBe(false);
+		expect(readArgsTargetInternalUrl(["skill://x"])).toBe(false);
+		expect(readArgsTargetInternalUrl({})).toBe(false);
+		expect(readArgsTargetInternalUrl({ path: 42 })).toBe(false);
 	});
 });

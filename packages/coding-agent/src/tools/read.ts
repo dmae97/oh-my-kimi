@@ -1703,7 +1703,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		}
 
 		// Resolve the internal URL
-		const resource = await internalRouter.resolve(url);
+		const resource = await internalRouter.resolve(url, {
+			cwd: this.session.cwd,
+			settings: this.session.settings,
+		});
 		const details: ReadToolDetails = { resolvedPath: resource.sourcePath };
 
 		// If extraction was used, return directly (no pagination)
