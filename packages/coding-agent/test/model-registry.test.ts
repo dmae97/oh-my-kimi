@@ -2121,4 +2121,48 @@ describe("ModelRegistry", () => {
 			expect(model?.isOAuth).toBeUndefined();
 		});
 	});
+
+	test("cached discovery with UNK contextWindow preserves bundled value", () => {
+		// Configure openai as a discoverable provider through models.json
+		writeRawModelsJson({
+			openai: {
+				baseUrl: "https://my-proxy.example.com/v1",
+				apiKey: "TEST_KEY",
+				api: "openai-completions",
+				discovery: { type: "openai-models-list" },
+				models: [],
+			},
+		});
+		// Pre-populate the cache with a model that has UNK sentinel values
+		// (simulating a discovery that didn't return limit.context)
+		writeModelCache<"openai-completions">(
+			"openai",
+			Date.now(),
+			[
+				{
+					id: "gpt-4o",
+					name: "GPT-4o",
+					api: "openai-completions",
+					provider: "openai",
+					baseUrl: "https://my-proxy.example.com/v1",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 222_222, // UNK_CONTEXT_WINDOW
+					maxTokens: 8_888, // UNK_MAX_TOKENS
+				},
+			],
+			true,
+			cacheDbPath,
+		);
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const model = registry.find("openai", "gpt-4o");
+
+		expect(model).toBeDefined();
+		// The bundled gpt-4o has a correct contextWindow, not the UNK sentinel
+		expect(model!.contextWindow).not.toBe(222_222);
+		expect(model!.contextWindow).toBeGreaterThan(100_000);
+		expect(model!.maxTokens).not.toBe(8_888);
+		expect(model!.maxTokens).toBeGreaterThan(1000);
+	});
 });
