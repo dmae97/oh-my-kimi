@@ -1864,6 +1864,37 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"github.cache.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			label: "GitHub view cache",
+			description: "Cache rendered issue/PR view output in ~/.omp/cache/github-cache.db so repeated reads are free",
+		},
+	},
+
+	"github.cache.softTtlSec": {
+		type: "number",
+		default: 300,
+		ui: {
+			tab: "tools",
+			label: "GitHub cache soft TTL (seconds)",
+			description: "Within this window, cached issue/PR view rows are returned directly. Default 5 minutes.",
+		},
+	},
+
+	"github.cache.hardTtlSec": {
+		type: "number",
+		default: 604800,
+		ui: {
+			tab: "tools",
+			label: "GitHub cache hard TTL (seconds)",
+			description:
+				"Past soft TTL but within hard TTL, the tool returns the cached row and refreshes it in the background. Past hard TTL, the row is dropped. Default 7 days.",
+		},
+	},
+
 	"web_search.enabled": {
 		type: "boolean",
 		default: true,

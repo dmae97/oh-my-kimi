@@ -17,12 +17,10 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `op` | `"repo_view" \| "issue_view" \| "pr_create" \| "pr_view" \| "pr_diff" \| "pr_checkout" \| "pr_push" \| "search_issues" \| "search_prs" \| "search_code" \| "search_commits" \| "search_repos" \| "run_watch"` | Yes | Dispatch selector. `GithubTool.execute()` switches only on this field. |
+| `op` | `"repo_view" \| "pr_create" \| "pr_diff" \| "pr_checkout" \| "pr_push" \| "search_issues" \| "search_prs" \| "search_code" \| "search_commits" \| "search_repos" \| "run_watch"` | Yes | Dispatch selector. `GithubTool.execute()` switches only on this field. |
 | `repo` | `string` | No | `owner/repo` override. Ignored when the identifier argument is already a full GitHub URL. Required in practice when `gh` cannot infer repo context from the current checkout. |
 | `branch` | `string` | No | Used by `repo_view`, `pr_push`, and `run_watch`. `run_watch` falls back to current git branch when `run` is omitted; `pr_push` falls back to current branch. |
-| `issue` | `string` | No | Used only by `issue_view`. Required there; accepts an issue number or GitHub issue URL. |
-| `pr` | `string \| string[]` | No | Used by `pr_view`, `pr_diff`, `pr_checkout`. Each item may be a PR number, branch name, or GitHub PR URL. Array form enables batching. Omitted means current branch PR. |
-| `comments` | `boolean` | No | Used by `issue_view` and `pr_view`. Defaults to `true`. |
+| `pr` | `string \| string[]` | No | Used by `pr_diff`, `pr_checkout`. Each item may be a PR number, branch name, or GitHub PR URL. Array form enables batching. Omitted means current branch PR. |
 | `nameOnly` | `boolean` | No | Used only by `pr_diff`; adds `--name-only`. |
 | `exclude` | `string[]` | No | Used only by `pr_diff`; each entry becomes `--exclude <pattern>`. Empty strings are rejected. |
 | `force` | `boolean` | No | Used only by `pr_checkout`. Defaults to `false`; allows resetting an existing `pr-<number>` local branch to the PR head commit. |
@@ -45,7 +43,7 @@
 The tool returns a single text result built by `buildTextResult()` in `packages/coding-agent/src/tools/gh.ts`.
 
 - `content`: one text block. Multi-item ops join sections with blank lines and `---` separators.
-- `sourceUrl`: set for single repo/issue/PR/run results when a canonical URL is known.
+- `sourceUrl`: set for single repo/PR/run results when a canonical URL is known.
 - `details`: optional structured metadata used by the TUI renderer.
   - Common fields: `artifactId`, `repo`, `branch`, `worktreePath`, `remote`, `remoteBranch`, `headSha`, `runId`, `runIds`, `status`, `conclusion`, `failedJobs`.
   - `pr_checkout` adds `checkouts: GhPrCheckoutSummary[]`.
@@ -64,12 +62,11 @@ The tool returns a single text result built by `buildTextResult()` in `packages/
    - trims stdout/stderr unless `trimOutput: false`;
    - maps common auth/repo-context failures into tool-facing `ToolError` messages;
    - `json()` rejects empty or invalid JSON.
-5. Read-style ops (`repo_view`, `issue_view`, `pr_view`, `search_*`) fetch JSON and format Markdown-like text summaries.
-6. `pr_view` optionally makes an extra REST call to `/repos/<repo>/pulls/<n>/comments` so inline review comments are included; this is separate from `gh pr view --json`.
+5. Read-style ops (`repo_view`, `search_*`) fetch JSON and format Markdown-like text summaries. Single-issue and single-PR views were moved out of the tool and now resolve through the `issue://` / `pr://` internal URL schemes, which share the same SQLite cache.
 7. `pr_diff` fetches raw text from `gh pr diff`; multi-PR batches are handled with `Promise.all()`.
 8. `pr_checkout` resolves PR metadata first, then enters `git.withRepoLock()` before any git mutation so parallel checkout calls for the same primary repo do not race on shared `.git` state.
 9. `pr_push` reads PR head metadata back from git branch config, derives a refspec, then pushes with `git.push()`.
-10. `pr_create` shells out once, then best-effort re-reads the created PR with `gh pr view` for a richer summary.
+10. `pr_create` shells out once, then best-effort re-reads the created PR for a richer summary.
 11. `run_watch` chooses either run mode (`run` supplied) or commit mode (`run` omitted), polls GitHub Actions APIs every 3 seconds, emits streaming updates, and may save a full failed-log artifact before returning.
 12. Final text goes through `toolResult().text(...)`; if `session.allocateOutputArtifact()` returns a slot, failed-log text is persisted with `Bun.write()`.
 
@@ -87,17 +84,7 @@ The tool returns a single text result built by `buildTextResult()` in `packages/
 
 If `repo` is omitted, `gh` repository resolution is used.
 
-### `issue_view`
-
-| Aspect | Value |
-| --- | --- |
-| Required fields | `op`, `issue` |
-| Optional fields | `repo`, `comments` |
-| `gh` command | `gh issue view <issue> [--repo <repo>] --json <GH_ISSUE_FIELDS or GH_ISSUE_FIELDS_NO_COMMENTS>` |
-| Batching | None |
-| Output | Single issue summary with metadata, `## Body`, and optional `## Comments`. `sourceUrl = data.url`. |
-
-`comments: false` switches the requested JSON field set and suppresses comment rendering.
+Single-issue and single-PR reads live in the `issue://<N>` / `pr://<N>` URL schemes (see `docs/tools/read.md`). They share `~/.omp/cache/github-cache.db` (override via `OMP_GITHUB_CACHE_DB`) and the `github.cache.softTtlSec` / `github.cache.hardTtlSec` / `github.cache.enabled` settings. Root and repo-scoped reads (`issue://`, `pr://owner/repo`) issue a live `gh issue list` / `gh pr list` for browsing; query params `state`, `limit`, `author`, `label` pass through to `gh`.
 
 ### `pr_create`
 
@@ -114,18 +101,6 @@ Branches:
 - Non-empty `body` is written under a temp dir `gh-pr-body-*` in `os.tmpdir()`, passed as `--body-file`, then removed in `finally`.
 - After creation, the tool parses the returned URL and best-effort runs `gh pr view <number> --repo <repo> --json <GH_PR_FIELDS_NO_COMMENTS>`; failures there are swallowed.
 
-### `pr_view`
-
-| Aspect | Value |
-| --- | --- |
-| Required fields | `op` |
-| Optional fields | `repo`, `pr`, `comments` |
-| `gh` command | For each requested PR: `gh pr view [<pr>] [--repo <repo>] --json <GH_PR_FIELDS or GH_PR_FIELDS_NO_COMMENTS>` |
-| Batching | Yes. `pr` may be `string[]`; each entry is fetched independently with `Promise.all()`. Omitted `pr` means one fetch for current branch PR. |
-| Output | Single PR: one PR summary with body, up to 50 files, optional reviews, inline review comments, and issue comments. Batched: `# <n> Pull Requests` plus per-PR sections. |
-
-When comments are enabled and both repo + PR number are known, the tool paginates `/repos/<repo>/pulls/<n>/comments` with `per_page=100` to supplement `gh pr view` output.
-
 ### `pr_diff`
 
 | Aspect | Value |
@@ -133,7 +108,7 @@ When comments are enabled and both repo + PR number are known, the tool paginate
 | Required fields | `op` |
 | Optional fields | `repo`, `pr`, `nameOnly`, `exclude[]` |
 | `gh` command | For each requested PR: `gh pr diff [<pr>] [--repo <repo>] --color never [--name-only] [--exclude <glob> ...]` |
-| Batching | Yes. Same `pr` normalization as `pr_view`; fetched with `Promise.all()`. |
+| Batching | Yes. `pr` normalization mirrors `pr_checkout`; each requested PR is launched with `Promise.all()`. |
 | Output | Single PR: `# Pull Request Diff` or `# Pull Request Files` followed by raw CLI output. Batched: `# <n> Pull Request Diffs` / `File Lists` plus labeled sections. |
 
 Diff stdout is preserved without trimming. Empty output becomes `No diff output.` or `No changed files.`.
@@ -272,7 +247,7 @@ Watch flow:
 ## Limits & Caps
 - Search result default: `10` (`SEARCH_LIMIT_DEFAULT` in `packages/coding-agent/src/tools/gh.ts`).
 - Search result max: `50` (`SEARCH_LIMIT_MAX`).
-- PR file preview inside `pr_view`: first `50` files only (`FILE_PREVIEW_LIMIT`).
+- PR file preview inside the `pr://` view: first `50` files only (`FILE_PREVIEW_LIMIT` in `gh.ts`).
 - Run-watch poll interval: `3s` (`RUN_WATCH_INTERVAL_DEFAULT`).
 - Run-watch failure grace period: `5s` (`RUN_WATCH_GRACE_DEFAULT`).
 - Run-watch failed-log tail default: `15` lines (`RUN_WATCH_TAIL_DEFAULT`).
@@ -280,7 +255,7 @@ Watch flow:
 - PR review comments page size: `100` (`REVIEW_COMMENTS_PAGE_SIZE`).
 - Actions jobs page size: `100` (`RUN_JOBS_PAGE_SIZE`).
 - Search and tail numeric inputs are floored with `Math.floor()`, clamped to the max, and rejected when non-finite or `<= 0`.
-- `pr_view`/`pr_diff`/`pr_checkout` batch fan-out is unbounded in tool code; all requested PRs are launched with `Promise.all()`.
+- `pr_diff`/`pr_checkout` batch fan-out is unbounded in tool code; all requested PRs are launched with `Promise.all()`.
 
 ## Errors
 - Tool creation is skipped entirely when `gh` is not installed.

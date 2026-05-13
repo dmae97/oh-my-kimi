@@ -27,7 +27,6 @@ type GithubToolRenderArgs = {
 	run?: string;
 	branch?: string;
 	repo?: string;
-	issue?: string;
 	pr?: string | string[];
 	query?: string;
 };
@@ -40,8 +39,6 @@ const FALLBACK_WIDTH = 80;
 
 const OP_TITLES: Record<string, string> = {
 	repo_view: "GitHub Repo",
-	issue_view: "GitHub Issue",
-	pr_view: "GitHub PR",
 	pr_diff: "GitHub PR Diff",
 	pr_checkout: "GitHub PR Checkout",
 	pr_push: "GitHub PR Push",
@@ -85,13 +82,6 @@ function buildOpMeta(args: GithubToolRenderArgs): string[] {
 	const meta: string[] = [];
 	const op = args.op;
 	switch (op) {
-		case "issue_view": {
-			const id = extractIssueId(args.issue);
-			if (id) meta.push(id);
-			if (args.repo) meta.push(args.repo);
-			break;
-		}
-		case "pr_view":
 		case "pr_diff":
 		case "pr_checkout":
 		case "pr_push": {

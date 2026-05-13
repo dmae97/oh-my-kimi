@@ -47,6 +47,23 @@ export interface InternalUrl extends URL {
 }
 
 /**
+ * Caller-supplied context that the router threads into protocol handlers.
+ *
+ * Read tool calls `InternalUrlRouter.resolve(url, { cwd, settings, signal })`
+ * so handlers can resolve relative defaults (e.g. `issue://N` → which repo?)
+ * against the actual session that initiated the read, not whichever session
+ * happens to be registered first in the global `AgentRegistry`.
+ */
+export interface ResolveContext {
+	/** Working directory of the calling session. */
+	cwd?: string;
+	/** Settings of the calling session (used by `issue://`/`pr://` for cache TTLs). */
+	settings?: unknown;
+	/** Caller's abort signal. */
+	signal?: AbortSignal;
+}
+
+/**
  * Handler for a specific internal URL scheme (e.g., agent://, memory://, skill://, mcp://).
  */
 export interface ProtocolHandler {
@@ -61,8 +78,12 @@ export interface ProtocolHandler {
 	/**
 	 * Resolve an internal URL to its content. The router stamps the
 	 * {@link InternalResource.immutable} flag from {@link ProtocolHandler.immutable}.
+	 *
 	 * @param url Parsed URL object
+	 * @param context Optional caller context. Handlers that depend on caller
+	 *   identity (working directory, settings) **MUST** consume this in
+	 *   preference to global state.
 	 * @throws Error with user-friendly message if resolution fails
 	 */
-	resolve(url: InternalUrl): Promise<InternalResource>;
+	resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource>;
 }

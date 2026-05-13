@@ -7,6 +7,7 @@
  */
 import { AgentProtocolHandler } from "./agent-protocol";
 import { ArtifactProtocolHandler } from "./artifact-protocol";
+import { IssueProtocolHandler, PrProtocolHandler } from "./issue-pr-protocol";
 import { LocalProtocolHandler } from "./local-protocol";
 import { McpProtocolHandler } from "./mcp-protocol";
 import { MemoryProtocolHandler } from "./memory-protocol";
@@ -14,7 +15,7 @@ import { parseInternalUrl } from "./parse";
 import { PiProtocolHandler } from "./pi-protocol";
 import { RuleProtocolHandler } from "./rule-protocol";
 import { SkillProtocolHandler } from "./skill-protocol";
-import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
+import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext } from "./types";
 
 export class InternalUrlRouter {
 	static #instance: InternalUrlRouter | undefined;
@@ -30,6 +31,8 @@ export class InternalUrlRouter {
 		this.register(new SkillProtocolHandler());
 		this.register(new RuleProtocolHandler());
 		this.register(new McpProtocolHandler());
+		this.register(new IssueProtocolHandler());
+		this.register(new PrProtocolHandler());
 	}
 
 	/** Process-global router instance. */
@@ -53,7 +56,7 @@ export class InternalUrlRouter {
 		return this.#handlers.has(match[1].toLowerCase());
 	}
 
-	async resolve(input: string): Promise<InternalResource> {
+	async resolve(input: string, context?: ResolveContext): Promise<InternalResource> {
 		const parsed = parseInternalUrl(input);
 		const scheme = parsed.protocol.replace(/:$/, "").toLowerCase();
 		const handler = this.#handlers.get(scheme);
@@ -65,7 +68,7 @@ export class InternalUrlRouter {
 			throw new Error(`Unknown protocol: ${scheme}://\nSupported: ${available || "none"}`);
 		}
 
-		const resource = await handler.resolve(parsed as InternalUrl);
+		const resource = await handler.resolve(parsed as InternalUrl, context);
 		return { ...resource, immutable: resource.immutable ?? handler.immutable };
 	}
 }

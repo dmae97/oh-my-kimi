@@ -1,11 +1,9 @@
-GitHub CLI tool with a single op-based dispatch. Wraps `gh` for repository, issue, pull request, search, checkout, push, and Actions watch workflows.
+GitHub CLI tool with a single op-based dispatch. Wraps `gh` for repositories, pull requests, search, checkout, push, and Actions watch workflows. For reading a single issue or PR view, use the `issue://<N>` or `pr://<N>` URL schemes (cached automatically) — they replace what used to be `op: issue_view` and `op: pr_view`.
 
 <instruction>
 Pick the operation via `op`. Each op uses a subset of the parameters:
 - `repo_view` — Read repository metadata. Optional `repo` (owner/repo) and `branch`. Falls back to the current checkout or default `gh` repo.
-- `issue_view` — Read an issue. Required `issue` (number or URL). Optional `repo`. Set `comments: false` to skip discussion.
 - `pr_create` — Create a pull request. Either provide `title` (and optional `body`) or set `fill: true` to auto-fill from commits. Optional `base` (target, defaults to repo default), `head` (source, defaults to current branch), `draft`, `repo`, `reviewer[]`, `assignee[]`, `label[]`. Returns the new PR URL plus a summary.
-- `pr_view` — Read one or more pull requests, including reviews and inline review comments. Optional `pr` (number, URL, branch, or array of any — pass an array to fetch multiple PRs in one call); omitting it targets the current branch's PR. Optional `repo`. Set `comments: false` for a lighter summary.
 - `pr_diff` — Read one or more pull request diffs. Optional `pr` (single identifier or array for batch). Optional `repo`. Set `nameOnly: true` for changed file names. Use `exclude` to drop generated paths from the diff.
 - `pr_checkout` — Check one or more pull requests out into dedicated git worktrees. Optional `pr` (number, URL, branch, or array of any of those — pass an array to batch-check-out multiple PRs in one call), `repo`, `force` (reset existing local branch).
 - `pr_push` — Push a checked-out PR branch back to its source branch. Requires the branch to have been checked out via `op: pr_checkout` (carries push metadata). Optional `branch`; defaults to the current checked-out git branch. Optional `forceWithLease`.
@@ -19,5 +17,5 @@ Pick the operation via `op`. Each op uses a subset of the parameters:
 </instruction>
 
 <output>
-Returns a concise readable summary tailored to the chosen op (repo/issue/PR metadata, diff text, search results, checkout info, push target, or workflow run snapshot). For `run_watch`, the full failed-job logs are saved as a session artifact when failures occur.
+Returns a concise readable summary tailored to the chosen op (repo metadata, PR metadata, diff text, search results, checkout info, push target, or workflow run snapshot). For `run_watch`, the full failed-job logs are saved as a session artifact when failures occur.
 </output>

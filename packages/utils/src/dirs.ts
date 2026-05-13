@@ -324,6 +324,17 @@ export function getGpuCachePath(): string {
 	return dirs.rootSubdir("gpu_cache.json", "cache");
 }
 
+/**
+ * Get the GitHub view cache database path (~/.omp/cache/github-cache.db).
+ * Honors the `OMP_GITHUB_CACHE_DB` env var when set so tests can isolate the
+ * cache file without touching the rest of the config root.
+ */
+export function getGithubCacheDbPath(): string {
+	const override = process.env.OMP_GITHUB_CACHE_DB;
+	if (override) return override;
+	return dirs.rootSubdir(path.join("cache", "github-cache.db"), "cache");
+}
+
 /** Get the natives directory (~/.omp/natives). */
 export function getNativesDir(): string {
 	return dirs.rootSubdir("natives", "cache");

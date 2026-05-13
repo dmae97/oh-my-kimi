@@ -194,13 +194,14 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 
 ### Internal URLs
 - `read` does not resolve these itself; it delegates to `session.internalRouter.resolve()`.
-- Registered protocols are outside this file, but the router in `packages/coding-agent/src/internal-urls/router.ts` is built for `agent://`, `artifact://`, `jobs://`, `local://`, `mcp://`, `memory://`, `pi://`, `rule://`, and `skill://`.
+- Registered protocols are outside this file, but the router in `packages/coding-agent/src/internal-urls/router.ts` is built for `agent://`, `artifact://`, `issue://`, `jobs://`, `local://`, `mcp://`, `memory://`, `pi://`, `pr://`, `rule://`, and `skill://`.
 - `#handleInternalUrl()` behavior:
   - parses the URL with `parseInternalUrl()` so colons inside the host segment are legal
   - for `agent://`, treats non-root path extraction or `?q=` extraction as a special no-pagination mode
   - otherwise paginates the resolved text in memory
   - passes `immutable` through to `resolveFileDisplayMode()` so anchors are suppressed for immutable resources such as artifacts, skills, memory, and agent outputs
   - sets `ignoreResultLimits: true` for `skill://` so the full skill text is paginated only by explicit selectors, not by the normal default line limit
+- `issue://<N>` / `pr://<N>` (and the long form `issue://<owner>/<repo>/<N>` / `pr://<owner>/<repo>/<N>`) route through the same SQLite cache the `github` tool writes to; `?comments=0` selects the no-comments rendering. Bare `issue://` / `pr://` (and `issue://<owner>/<repo>` / `pr://<owner>/<repo>`) issue a live `gh issue list` / `gh pr list` for browsing, accepting `?state=`, `?limit=`, `?author=`, `?label=`. Soft TTL `github.cache.softTtlSec` (default 5 minutes), hard TTL `github.cache.hardTtlSec` (default 7 days). Stale-hit returns the cached row and schedules a background refresh.
 
 ### Web URLs
 - `parseReadUrlTarget()` accepts `http://`, `https://`, or `www.` targets.

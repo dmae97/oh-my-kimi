@@ -5,10 +5,12 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import { StringEnum } from "@oh-my-pi/pi-ai";
 import { abortableSleep, getWorktreesDir, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import type { Settings } from "../config/settings";
 import githubDescription from "../prompts/tools/github.md" with { type: "text" };
 import * as git from "../utils/git";
 import type { ToolSession } from ".";
 import { formatShortSha } from "./gh-format";
+import { type CacheStatus, getOrFetchView } from "./github-cache";
 import type { OutputMeta } from "./output-meta";
 import { ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -188,6 +190,7 @@ const RUN_WATCH_TAIL_MAX = 200;
 const REVIEW_COMMENTS_PAGE_SIZE = 100;
 const RUN_JOBS_PAGE_SIZE = 100;
 const PR_URL_PATTERN = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)(?:\/.*)?$/;
+const ISSUE_URL_PATTERN = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)(?:\/.*)?$/;
 const RUN_URL_PATTERN = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/actions\/runs\/(\d+)(?:\/.*)?$/;
 const RUN_SUCCESS_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 const RUN_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
@@ -197,9 +200,7 @@ const githubSchema = Type.Object({
 	op: StringEnum(
 		[
 			"repo_view",
-			"issue_view",
 			"pr_create",
-			"pr_view",
 			"pr_diff",
 			"pr_checkout",
 			"pr_push",
@@ -224,12 +225,6 @@ const githubSchema = Type.Object({
 			examples: ["main", "develop"],
 		}),
 	),
-	issue: Type.Optional(
-		Type.String({
-			description: "issue number or url (issue_view)",
-			examples: ["123", "https://github.com/owner/repo/issues/123"],
-		}),
-	),
 	pr: Type.Optional(
 		Type.Union(
 			[
@@ -240,11 +235,10 @@ const githubSchema = Type.Object({
 			],
 			{
 				description:
-					"pr number, url, or branch (pr_view, pr_diff, pr_checkout); pass an array to batch-process multiple pull requests in one call",
+					"pr number, url, or branch (pr_diff, pr_checkout); pass an array to batch-process multiple pull requests in one call",
 			},
 		),
 	),
-	comments: Type.Optional(Type.Boolean({ description: "include comments (issue_view, pr_view)", default: true })),
 	nameOnly: Type.Optional(Type.Boolean({ description: "return file names only (pr_diff)" })),
 	exclude: Type.Optional(
 		Type.Array(Type.String({ description: "glob to exclude" }), {
@@ -1203,6 +1197,29 @@ function parsePullRequestUrl(value: string | undefined): { repo?: string; prNumb
 	};
 }
 
+/**
+ * Parse a digit-only decimal positive integer or return undefined. Rejects
+ * `1e2`, `0x10`, `12.0`, leading +/-, or any other shape `Number()` would
+ * accept — those would otherwise key the cache against the wrong row.
+ */
+export function parsePositiveDecimalInt(value: string | undefined): number | undefined {
+	if (!value || !/^\d+$/.test(value)) return undefined;
+	const num = Number(value);
+	if (!Number.isSafeInteger(num) || num <= 0) return undefined;
+	return num;
+}
+
+function parseIssueUrl(value: string | undefined): { repo?: string; issueNumber?: number } {
+	const normalized = normalizeOptionalString(value);
+	if (!normalized) return {};
+	const match = normalized.match(ISSUE_URL_PATTERN);
+	if (!match) return {};
+	return {
+		repo: match[1],
+		issueNumber: Number(match[2]),
+	};
+}
+
 function normalizePrReviewComment(comment: GhPrReviewCommentApi): GhPrReviewComment | null {
 	if (typeof comment.id !== "number") {
 		return null;
@@ -1715,6 +1732,45 @@ async function resolveGitHubRepo(
 		signal,
 	);
 	return requireNonEmpty(resolved, "repo");
+}
+
+/**
+ * Process-lifetime cache of `gh repo view --json nameWithOwner` lookups keyed
+ * by absolute cwd. Avoids repeated `gh` chatter when the same protocol handler
+ * or tool call resolves the default repo many times in a row.
+ *
+ * The shared lookup is intentionally **not** bound to any caller's
+ * AbortSignal. Cancelling one caller would otherwise kill the underlying
+ * `gh repo view` for every concurrent waiter on the same cwd. Each caller's
+ * signal is honored at the wait point via `untilAborted` instead, so an abort
+ * unwinds only that caller.
+ */
+const DEFAULT_REPO_RESOLVED = new Map<string, string>();
+const DEFAULT_REPO_INFLIGHT = new Map<string, Promise<string>>();
+
+export async function resolveDefaultRepoMemoized(cwd: string, signal?: AbortSignal): Promise<string> {
+	const key = path.resolve(cwd);
+	const ready = DEFAULT_REPO_RESOLVED.get(key);
+	if (ready) return ready;
+	let pending = DEFAULT_REPO_INFLIGHT.get(key);
+	if (!pending) {
+		pending = (async () => {
+			// No caller signal: this lookup is shared across every concurrent
+			// waiter on the same cwd.
+			const resolved = await git.github.text(
+				cwd,
+				["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+			);
+			const value = requireNonEmpty(resolved, "repo");
+			DEFAULT_REPO_RESOLVED.set(key, value);
+			return value;
+		})();
+		// Drop the in-flight slot on settle so failures don't poison the cache
+		// and so a successful resolution survives only in `DEFAULT_REPO_RESOLVED`.
+		pending.finally(() => DEFAULT_REPO_INFLIGHT.delete(key));
+		DEFAULT_REPO_INFLIGHT.set(key, pending);
+	}
+	return untilAborted(signal, pending);
 }
 
 async function resolveGitHubBranchHead(
@@ -2354,12 +2410,8 @@ export class GithubTool implements AgentTool<typeof githubSchema, GhToolDetails>
 			switch (params.op) {
 				case "repo_view":
 					return executeRepoView(this.session, params, signal);
-				case "issue_view":
-					return executeIssueView(this.session, params, signal);
 				case "pr_create":
 					return executePrCreate(this.session, params, signal);
-				case "pr_view":
-					return executePrView(this.session, params, signal);
 				case "pr_diff":
 					return executePrDiff(this.session, params, signal);
 				case "pr_checkout":
@@ -2405,63 +2457,149 @@ async function executeRepoView(
 	return buildTextResult(formatRepoView(data, { repo, branch }), data.url);
 }
 
-async function executeIssueView(
-	session: ToolSession,
-	params: GithubInput,
-	signal: AbortSignal | undefined,
-): Promise<AgentToolResult<GhToolDetails>> {
-	const issue = requireNonEmpty(params.issue, "issue");
-	const repo = normalizeOptionalString(params.repo);
-	const includeComments = params.comments ?? true;
-	const args = ["issue", "view", issue];
-	appendRepoFlag(args, repo, issue);
-	args.push("--json", (includeComments ? GH_ISSUE_FIELDS : GH_ISSUE_FIELDS_NO_COMMENTS).join(","));
+// ────────────────────────────────────────────────────────────────────────────
+// Cached issue/PR view fetchers
+//
+// Used by `executeIssueView`/`executePrView` and by the `issue://` / `pr://`
+// internal-URL protocol handlers. The cache wrapper lives in `./github-cache`;
+// the fresh fetchers stay here to share the existing formatter helpers.
+// ────────────────────────────────────────────────────────────────────────────
 
-	const data = await git.github.json<GhIssueViewData>(session.cwd, args, signal, {
-		repoProvided: Boolean(repo),
-	});
-	return buildTextResult(formatIssueView(data, { issue, repo, comments: includeComments }), data.url);
+export interface IssueViewLookupOptions {
+	cwd: string;
+	repo?: string;
+	/** Issue number or GitHub issue URL. */
+	issue: string;
+	includeComments?: boolean;
+	signal?: AbortSignal;
+	settings?: Settings;
 }
 
-async function executePrView(
-	session: ToolSession,
-	params: GithubInput,
+export interface PrViewLookupOptions {
+	cwd: string;
+	repo: string;
+	number: number;
+	includeComments?: boolean;
+	signal?: AbortSignal;
+	settings?: Settings;
+}
+
+export interface ViewLookupResult<T> {
+	rendered: string;
+	sourceUrl: string | undefined;
+	payload: T;
+	status: CacheStatus;
+	fetchedAt: number;
+}
+
+async function fetchIssueViewFresh(
+	cwd: string,
+	repo: string | undefined,
+	identifier: string,
+	includeComments: boolean,
 	signal: AbortSignal | undefined,
-): Promise<AgentToolResult<GhToolDetails>> {
-	const repo = normalizeOptionalString(params.repo);
-	const includeComments = params.comments ?? true;
-	const prList = normalizePrIdentifierList(params.pr);
-	const prRefs: (string | undefined)[] = prList.length > 0 ? prList : [undefined];
+): Promise<{ rendered: string; sourceUrl: string | undefined; payload: GhIssueViewData }> {
+	const args = ["issue", "view", identifier];
+	appendRepoFlag(args, repo, identifier);
+	args.push("--json", (includeComments ? GH_ISSUE_FIELDS : GH_ISSUE_FIELDS_NO_COMMENTS).join(","));
+	const data = await git.github.json<GhIssueViewData>(cwd, args, signal, {
+		repoProvided: Boolean(repo),
+	});
+	const rendered = formatIssueView(data, { issue: identifier, repo, comments: includeComments });
+	return { rendered, sourceUrl: data.url, payload: data };
+}
 
-	const views = await Promise.all(
-		prRefs.map(async prRef => {
-			const args = ["pr", "view"];
-			if (prRef) args.push(prRef);
-			appendRepoFlag(args, repo, prRef);
-			args.push("--json", (includeComments ? GH_PR_FIELDS : GH_PR_FIELDS_NO_COMMENTS).join(","));
+async function fetchPrViewFresh(
+	cwd: string,
+	repo: string,
+	number: number,
+	includeComments: boolean,
+	signal: AbortSignal | undefined,
+): Promise<{ rendered: string; sourceUrl: string | undefined; payload: GhPrViewData }> {
+	const args = ["pr", "view", String(number)];
+	appendRepoFlag(args, repo, String(number));
+	args.push("--json", (includeComments ? GH_PR_FIELDS : GH_PR_FIELDS_NO_COMMENTS).join(","));
+	const data = await git.github.json<GhPrViewData>(cwd, args, signal, { repoProvided: true });
+	if (includeComments && typeof data.number === "number") {
+		data.reviewComments = await fetchPrReviewComments(cwd, repo, data.number, signal);
+	}
+	const rendered = formatPrView(data, { pr: String(number), repo, comments: includeComments });
+	return { rendered, sourceUrl: data.url, payload: data };
+}
 
-			const data = await git.github.json<GhPrViewData>(session.cwd, args, signal, {
-				repoProvided: Boolean(repo),
-			});
-			const resolvedRepo = repo ?? parsePullRequestUrl(data.url).repo;
-			if (includeComments && resolvedRepo && typeof data.number === "number") {
-				data.reviewComments = await fetchPrReviewComments(session.cwd, resolvedRepo, data.number, signal);
-			}
-			return { prRef, data };
-		}),
-	);
-
-	if (views.length === 1) {
-		const [view] = views;
-		return buildTextResult(
-			formatPrView(view.data, { pr: view.prRef, repo, comments: includeComments }),
-			view.data.url,
-		);
+/**
+ * Cache-aware issue/view fetcher. Used by both the `github` tool op and the
+ * `issue://` protocol handler so a single shared row services both surfaces.
+ */
+export async function getOrFetchIssue(options: IssueViewLookupOptions): Promise<ViewLookupResult<GhIssueViewData>> {
+	const identifier = requireNonEmpty(options.issue, "issue");
+	const includeComments = options.includeComments ?? true;
+	const urlParse = parseIssueUrl(identifier);
+	// Prefer the URL's repo when the identifier is a full URL; fall back to the
+	// explicit `repo` option, then to the cwd's default repo.
+	let repo = urlParse.repo ?? normalizeOptionalString(options.repo);
+	let cacheNumber = urlParse.issueNumber;
+	if (cacheNumber === undefined) {
+		cacheNumber = parsePositiveDecimalInt(identifier);
+	}
+	if (cacheNumber !== undefined && !repo) {
+		try {
+			repo = await resolveDefaultRepoMemoized(options.cwd, options.signal);
+		} catch {
+			// Resolution failure leaves `repo` undefined: we'll fall through to a
+			// direct fetch below so gh produces its own error message instead of
+			// us masking it with a friendlier one.
+			repo = undefined;
+		}
 	}
 
-	const sections = views.map(view => formatPrView(view.data, { pr: view.prRef, repo, comments: includeComments }));
-	const text = [`# ${views.length} Pull Requests`, "", ...joinSections(sections)].join("\n").trim();
-	return buildTextResult(text);
+	const doFetch = () => fetchIssueViewFresh(options.cwd, repo, identifier, includeComments, options.signal);
+
+	if (!repo || cacheNumber === undefined) {
+		const fresh = await doFetch();
+		return { ...fresh, status: "miss", fetchedAt: Date.now() };
+	}
+
+	const lookup = await getOrFetchView<GhIssueViewData>({
+		repo,
+		kind: "issue",
+		number: cacheNumber,
+		includeComments,
+		settings: options.settings,
+		fetchFresh: doFetch,
+	});
+	return {
+		rendered: lookup.rendered,
+		sourceUrl: lookup.sourceUrl,
+		payload: lookup.payload,
+		status: lookup.status,
+		fetchedAt: lookup.fetchedAt,
+	};
+}
+
+/**
+ * Cache-aware PR view fetcher. Caller must supply a numeric PR number;
+ * branch-name / current-branch lookups bypass the cache entirely upstream
+ * (see `executePrView`).
+ */
+export async function getOrFetchPr(options: PrViewLookupOptions): Promise<ViewLookupResult<GhPrViewData>> {
+	const includeComments = options.includeComments ?? true;
+	const doFetch = () => fetchPrViewFresh(options.cwd, options.repo, options.number, includeComments, options.signal);
+	const lookup = await getOrFetchView<GhPrViewData>({
+		repo: options.repo,
+		kind: "pr",
+		number: options.number,
+		includeComments,
+		settings: options.settings,
+		fetchFresh: doFetch,
+	});
+	return {
+		rendered: lookup.rendered,
+		sourceUrl: lookup.sourceUrl,
+		payload: lookup.payload,
+		status: lookup.status,
+		fetchedAt: lookup.fetchedAt,
+	};
 }
 
 async function executePrDiff(
