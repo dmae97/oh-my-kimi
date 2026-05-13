@@ -252,14 +252,19 @@ export class ExtensionRunner {
 
 		// Drain events buffered by emitCredentialDisabled() before initialize ran. The
 		// spread adds the `type` discriminator — `event` is the pi-ai shape (no `type`).
-		for (const event of this.#pendingCredentialDisabled.splice(0)) {
-			this.emit({ type: "credential_disabled", ...event }).catch((error: unknown) => {
-				logger.warn("credential_disabled handler threw during initialize flush", {
-					provider: event.provider,
-					error: error instanceof Error ? error.message : String(error),
+		// Deferred by one microtask so callers that register an onError listener
+		// synchronously after initialize() see handler errors routed through it.
+		const pending = this.#pendingCredentialDisabled.splice(0);
+		queueMicrotask(() => {
+			for (const event of pending) {
+				this.emit({ type: "credential_disabled", ...event }).catch((error: unknown) => {
+					logger.warn("credential_disabled handler threw during initialize flush", {
+						provider: event.provider,
+						error: error instanceof Error ? error.message : String(error),
+					});
 				});
-			});
-		}
+			}
+		});
 	}
 
 	/**

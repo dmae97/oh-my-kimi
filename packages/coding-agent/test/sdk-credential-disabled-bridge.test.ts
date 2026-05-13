@@ -6,8 +6,11 @@ import { AuthStorage, type CredentialDisabledEvent } from "@oh-my-pi/pi-ai";
 import * as oauthUtils from "@oh-my-pi/pi-ai/utils/oauth";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { ExtensionFactory, ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import type { Extension, ExtensionError, ExtensionFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
 interface SessionDirs {
@@ -451,5 +454,94 @@ describe("createAgentSession credential_disabled subscription", () => {
 				enableLsp: false,
 			}),
 		).rejects.toThrow(/options\.authStorage.*modelRegistry\.authStorage/);
+	});
+
+	it("routes handler errors through onError when listener is registered synchronously after initialize()", async () => {
+		// Regression: the flush of #pendingCredentialDisabled used to run synchronously
+		// inside initialize(), before mode controllers had a chance to call onError().
+		// Handler exceptions were therefore silently dropped. The flush is now deferred
+		// by one microtask so a sync onError() registration lands in time.
+		const dirs = makeDirs("error-routing");
+		const authStorage = await AuthStorage.create(path.join(dirs.agentDir, "agent.db"));
+		const modelRegistry = new ModelRegistry(authStorage);
+		try {
+			const throwingExtension: Extension = {
+				path: "test://throwing-credential-disabled",
+				resolvedPath: "test://throwing-credential-disabled",
+				handlers: new Map([
+					[
+						"credential_disabled",
+						[
+							async () => {
+								throw new Error("boom");
+							},
+						],
+					],
+				]),
+				tools: new Map(),
+				messageRenderers: new Map(),
+				commands: new Map(),
+				flags: new Map(),
+				shortcuts: new Map(),
+			};
+			const runtime = new ExtensionRuntime();
+			const sessionManager = SessionManager.inMemory();
+			const runner = new ExtensionRunner([throwingExtension], runtime, dirs.cwd, sessionManager, modelRegistry);
+
+			// 1. Buffer the event BEFORE initialize so it lands in #pendingCredentialDisabled.
+			await runner.emitCredentialDisabled({ provider: "anthropic", disabledCause: "test" });
+
+			// 2. initialize(); the flush is queued as a microtask.
+			runner.initialize(
+				{
+					sendMessage: () => {},
+					sendUserMessage: () => {},
+					appendEntry: () => {},
+					setLabel: () => {},
+					getActiveTools: () => [],
+					getAllTools: () => [],
+					setActiveTools: async () => {},
+					getCommands: () => [],
+					setModel: async () => false,
+					getThinkingLevel: () => undefined,
+					setThinkingLevel: () => {},
+					getSessionName: () => undefined,
+					setSessionName: async () => {},
+				},
+				{
+					getModel: () => undefined,
+					isIdle: () => true,
+					abort: () => {},
+					hasPendingMessages: () => false,
+					shutdown: () => {},
+					getContextUsage: () => undefined,
+					compact: async () => {},
+					getSystemPrompt: () => [],
+				},
+				undefined,
+				undefined,
+			);
+
+			// 3. Synchronous onError registration — must land before the deferred flush
+			// invokes the throwing handler. This is the contract this test defends.
+			const errors: ExtensionError[] = [];
+			runner.onError(error => {
+				errors.push(error);
+			});
+
+			// 4. Let the deferred flush microtask run, then the handler's async throw,
+			// then emitError, which calls our listener. A handful of microtask turns
+			// covers the await Promise.race inside #runHandlerWithTimeout.
+			for (let i = 0; i < 5; i++) await Promise.resolve();
+
+			expect(errors).toHaveLength(1);
+			expect(errors[0]).toMatchObject({
+				extensionPath: "test://throwing-credential-disabled",
+				event: "credential_disabled",
+				error: "boom",
+			});
+		} finally {
+			authStorage.close();
+		}
 	});
 });

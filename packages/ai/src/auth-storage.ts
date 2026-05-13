@@ -667,18 +667,30 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Disables credential at index (used when OAuth refresh fails).
-	 * The credential remains in the database but is excluded from active queries.
-	 * Cleans up provider entry if last credential disabled.
+	 * CAS-style disable used when OAuth refresh definitively fails: only disables
+	 * persisted `data` still matches the credential we attempted to refresh.
+	 * Returns `false` when a peer rotated the row between our pre-check and the
+	 * disable, so the caller can reload and retry instead of clobbering the
+	 * freshly-rotated credential.
 	 */
-	#disableCredentialAt(provider: string, index: number, disabledCause: string): void {
+	#tryDisableCredentialAtIfMatches(
+		provider: string,
+		index: number,
+		expectedCredential: AuthCredential,
+		disabledCause: string,
+	): boolean {
 		const entries = this.#getStoredCredentials(provider);
-		if (index < 0 || index >= entries.length) return;
-		this.#store.deleteAuthCredential(entries[index].id, disabledCause);
+		if (index < 0 || index >= entries.length) return false;
+		const target = entries[index];
+		const serialized = serializeCredential(provider, expectedCredential);
+		if (!serialized) return false;
+		const disabled = this.#store.tryDisableAuthCredentialIfMatches(target.id, serialized.data, disabledCause);
+		if (!disabled) return false;
 		const updated = entries.filter((_value, idx) => idx !== index);
 		this.#setStoredCredentials(provider, updated);
 		this.#resetProviderAssignments(provider);
 		this.#emitCredentialDisabled({ provider, disabledCause });
+		return true;
 	}
 
 	#emitCredentialDisabled(event: CredentialDisabledEvent): void {
@@ -2086,8 +2098,24 @@ export class AuthStorage {
 						return this.getApiKey(provider, sessionId, options);
 					}
 				}
-				// Permanently disable invalid credentials with an explicit cause for inspection/debugging
-				this.#disableCredentialAt(provider, selection.index, `oauth refresh failed: ${errorMsg}`);
+				// Permanently disable invalid credentials with an explicit cause for inspection/debugging.
+				// Use a CAS-style disable conditioned on the row still containing the stale credential
+				// we tried to refresh, so a peer rotation that lands between the pre-check above and
+				// this disable doesn't soft-delete the freshly-rotated row.
+				const disabled = this.#tryDisableCredentialAtIfMatches(
+					provider,
+					selection.index,
+					selection.credential,
+					`oauth refresh failed: ${errorMsg}`,
+				);
+				if (!disabled) {
+					logger.debug("OAuth refresh disable lost CAS; reloading after peer rotation", {
+						provider,
+						index: selection.index,
+					});
+					await this.reload();
+					return this.getApiKey(provider, sessionId, options);
+				}
 				if (this.#getCredentialsForProvider(provider).some(credential => credential.type === "oauth")) {
 					return this.getApiKey(provider, sessionId, options);
 				}
@@ -2373,6 +2401,7 @@ export class AuthCredentialStore {
 	#insertStmt: Statement;
 	#updateStmt: Statement;
 	#deleteStmt: Statement;
+	#deleteIfMatchesStmt: Statement;
 	#deleteByProviderStmt: Statement;
 	#hardDeleteStmt: Statement;
 	#getCacheStmt: Statement;
@@ -2401,6 +2430,9 @@ export class AuthCredentialStore {
 		);
 		this.#deleteStmt = this.#db.prepare(
 			`UPDATE auth_credentials SET disabled_cause = ?, updated_at = ${SQLITE_NOW_EPOCH} WHERE id = ?`,
+		);
+		this.#deleteIfMatchesStmt = this.#db.prepare(
+			`UPDATE auth_credentials SET disabled_cause = ?, updated_at = ${SQLITE_NOW_EPOCH} WHERE id = ? AND data = ? AND disabled_cause IS NULL`,
 		);
 		this.#deleteByProviderStmt = this.#db.prepare(
 			`UPDATE auth_credentials SET disabled_cause = ?, updated_at = ${SQLITE_NOW_EPOCH} WHERE provider = ? AND disabled_cause IS NULL`,
@@ -2800,6 +2832,23 @@ export class AuthCredentialStore {
 		}
 	}
 
+	/**
+	 * CAS-style disable: only soft-deletes the row when its `data` column still
+	 * matches `expectedData` and the row has not already been disabled. Used by
+	 * the OAuth refresh-failure path to avoid clobbering a peer that rotated the
+	 * row between our pre-check and the disable.
+	 */
+	tryDisableAuthCredentialIfMatches(id: number, expectedData: string, disabledCause: string): boolean {
+		try {
+			const result = this.#deleteIfMatchesStmt.run(normalizeDisabledCause(disabledCause), id, expectedData) as {
+				changes: number;
+			};
+			return result.changes === 1;
+		} catch {
+			return false;
+		}
+	}
+
 	deleteAuthCredentialsForProvider(provider: string, disabledCause: string): void {
 		try {
 			this.#deleteByProviderStmt.run(normalizeDisabledCause(disabledCause), provider);
@@ -2909,6 +2958,7 @@ export class AuthCredentialStore {
 		this.#insertStmt.finalize();
 		this.#updateStmt.finalize();
 		this.#deleteStmt.finalize();
+		this.#deleteIfMatchesStmt.finalize();
 		this.#deleteByProviderStmt.finalize();
 		this.#hardDeleteStmt.finalize();
 		this.#getCacheStmt.finalize();

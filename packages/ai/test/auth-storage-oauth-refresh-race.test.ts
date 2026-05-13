@@ -99,6 +99,72 @@ describe("AuthStorage OAuth refresh race", () => {
 		});
 	});
 
+	test("does not disable when peer rotates between pre-check and CAS disable", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+
+		await authStorage.set("anthropic", [
+			{
+				type: "oauth",
+				access: "stale-access",
+				refresh: "stale-refresh",
+				expires: Date.now() - 60_000,
+			},
+		]);
+		const storedBefore = store.listAuthCredentials("anthropic");
+		expect(storedBefore).toHaveLength(1);
+		const credentialId = storedBefore[0]!.id;
+
+		// Refresh genuinely fails — the pre-check that compares the persisted
+		// refresh token to our snapshot will therefore see the SAME stale token
+		// and fall through to the disable. We then race a peer rotation into the
+		// window between the pre-check and the CAS, which the CAS must detect.
+		vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (provider, creds) => {
+			const credential = creds[provider];
+			if (credential?.refresh === "stale-refresh") {
+				throw new Error(
+					'HTTP 400 invalid_grant {"error":"invalid_grant","error_description":"Refresh token not found or invalid"}',
+				);
+			}
+			return { newCredentials: credential!, apiKey: credential!.access };
+		});
+
+		const sharedStore = store;
+		const originalTryDisable = sharedStore.tryDisableAuthCredentialIfMatches.bind(sharedStore);
+		const tryDisableSpy = vi
+			.spyOn(sharedStore, "tryDisableAuthCredentialIfMatches")
+			.mockImplementation((id, expectedData, disabledCause) => {
+				// Simulate the peer's successful rotation landing in the window
+				// between the pre-check (which saw the stale token) and the CAS
+				// disable. The CAS predicate `data = expectedData` must now miss.
+				sharedStore.updateAuthCredential(id, {
+					type: "oauth",
+					access: "fresh-access-from-peer",
+					refresh: "fresh-refresh-from-peer",
+					expires: Date.now() + 60 * 60_000,
+				});
+				return originalTryDisable(id, expectedData, disabledCause);
+			});
+
+		await withEnv(SUPPRESS_ANTHROPIC_ENV, async () => {
+			const apiKey = await authStorage!.getApiKey("anthropic", "session-cas-race");
+
+			// CAS lost → reload → pick up the peer-rotated credential.
+			expect(apiKey).toBe("fresh-access-from-peer");
+			expect(events).toHaveLength(0);
+			expect(tryDisableSpy).toHaveBeenCalled();
+
+			// Row must still be active, with the peer's rotated tokens.
+			const stored = sharedStore.listAuthCredentials("anthropic");
+			expect(stored).toHaveLength(1);
+			expect(stored[0]?.id).toBe(credentialId);
+			expect(stored[0]?.credential.type).toBe("oauth");
+			if (stored[0]?.credential.type === "oauth") {
+				expect(stored[0].credential.refresh).toBe("fresh-refresh-from-peer");
+				expect(stored[0].credential.access).toBe("fresh-access-from-peer");
+			}
+		});
+	});
+
 	test("still disables when the failure is real (no concurrent rotation)", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
