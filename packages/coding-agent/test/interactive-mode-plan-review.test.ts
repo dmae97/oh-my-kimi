@@ -12,6 +12,18 @@ import { AgentSession } from "../src/session/agent-session";
 import { AuthStorage } from "../src/session/auth-storage";
 import { SessionManager } from "../src/session/session-manager";
 
+/**
+ * Matches the plan-approved synthetic-prompt dispatch. `#approvePlan` calls
+ * `session.prompt(rendered, { synthetic: true })` exclusively for that case,
+ * so the `synthetic: true` option flag is the unique discriminator.
+ */
+const isPlanApprovedCall = (args: unknown[]): boolean =>
+	args.length >= 2 &&
+	typeof args[0] === "string" &&
+	typeof args[1] === "object" &&
+	args[1] !== null &&
+	(args[1] as { synthetic?: boolean }).synthetic === true;
+
 describe("InteractiveMode plan review rendering", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
@@ -123,7 +135,13 @@ describe("InteractiveMode plan review rendering", () => {
 
 		expect(selector).toHaveBeenCalledWith(
 			"Plan mode - next step",
-			["Approve and execute", "Approve and keep context", "Refine plan", "Stay in plan mode"],
+			[
+				"Approve and execute",
+				"Approve and compact context",
+				"Approve and keep context",
+				"Refine plan",
+				"Stay in plan mode",
+			],
 			expect.any(Object),
 		);
 	});
@@ -187,5 +205,121 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(prompt).toHaveBeenCalledWith(expect.any(String), {
 			synthetic: true,
 		});
+	});
+
+	it("Approve and compact context: ok outcome dispatches plan-approved after compaction", async () => {
+		const planFilePath = "local://PLAN.md";
+		const finalPlanFilePath = "local://APPROVED.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nCompact and execute.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(mode, "showHookSelector").mockResolvedValue("Approve and compact context");
+		const compactSpy = vi.spyOn(mode, "handleCompactCommand").mockResolvedValue("ok");
+		const markSentSpy = vi.spyOn(session, "markPlanReferenceSent");
+		const promptSpy = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		await mode.handleExitPlanModeTool({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath,
+		});
+
+		// Compaction was run with the rendered planning-specific custom instruction.
+		expect(compactSpy).toHaveBeenCalledTimes(1);
+		const [compactInstruction] = compactSpy.mock.calls[0]!;
+		expect(typeof compactInstruction).toBe("string");
+		expect(compactInstruction as string).toContain("Preparing to execute the approved plan");
+		expect(compactInstruction as string).toContain(finalPlanFilePath);
+
+		// Plan-approved synthetic prompt was dispatched.
+		const planApprovedIdx = promptSpy.mock.calls.findIndex(isPlanApprovedCall);
+		expect(planApprovedIdx).toBeGreaterThanOrEqual(0);
+
+		// markPlanReferenceSent fires on the dispatch path so the executor's first
+		// turn doesn't double-inject the plan reference (it was just dispatched
+		// inside the synthetic prompt).
+		expect(markSentSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("Approve and compact context: cancelled outcome skips plan-approved dispatch", async () => {
+		// Mock `handleCompactCommand` to surface the "cancelled" outcome directly.
+		// (Testing the consumer — `#approvePlan`'s outcome handling — at the
+		// CompactionOutcome boundary; the underlying executeCompaction → sentinel
+		// classification path is producer-layer and not under T3's contract.)
+		const planFilePath = "local://PLAN.md";
+		const finalPlanFilePath = "local://APPROVED.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nCancel mid-compact.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(mode, "showHookSelector").mockResolvedValue("Approve and compact context");
+		vi.spyOn(mode, "handleCompactCommand").mockResolvedValue("cancelled");
+		const showWarningSpy = vi.spyOn(mode, "showWarning");
+		const setPlanRefSpy = vi.spyOn(session, "setPlanReferencePath");
+		const markSentSpy = vi.spyOn(session, "markPlanReferenceSent");
+		const promptSpy = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		await mode.handleExitPlanModeTool({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath,
+		});
+
+		// Operator was told the dispatch was deferred.
+		expect(showWarningSpy).toHaveBeenCalledWith(
+			expect.stringContaining("Plan approved, but compaction was cancelled"),
+		);
+		// Plan reference path was recorded so the session knows about the approved
+		// plan at its final destination …
+		expect(setPlanRefSpy).toHaveBeenCalledWith(finalPlanFilePath);
+		// … but markPlanReferenceSent was NOT called, so the next operator turn
+		// will inject the reference fresh via #buildPlanReferenceMessage. This is
+		// the load-bearing assertion that the cancel path leaves the executor
+		// with the plan in its first turn.
+		expect(markSentSpy).not.toHaveBeenCalled();
+		// And — the contract — the plan-approved synthetic prompt was NOT dispatched.
+		expect(promptSpy.mock.calls.some(isPlanApprovedCall)).toBe(false);
+	});
+
+	it("Approve and compact context: failed outcome still dispatches plan-approved (best-effort)", async () => {
+		// Mock `handleCompactCommand` to surface the "failed" outcome directly.
+		// Failure → approval intent stands → synthetic dispatch fires.
+		const planFilePath = "local://PLAN.md";
+		const finalPlanFilePath = "local://APPROVED.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nFail mid-compact.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(mode, "showHookSelector").mockResolvedValue("Approve and compact context");
+		vi.spyOn(mode, "handleCompactCommand").mockResolvedValue("failed");
+		const markSentSpy = vi.spyOn(session, "markPlanReferenceSent");
+		const promptSpy = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		await mode.handleExitPlanModeTool({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath,
+		});
+
+		// Plan-approved synthetic prompt WAS dispatched despite the failure.
+		expect(promptSpy.mock.calls.some(isPlanApprovedCall)).toBe(true);
+		// markPlanReferenceSent fires on this dispatch path.
+		expect(markSentSpy).toHaveBeenCalledTimes(1);
 	});
 });

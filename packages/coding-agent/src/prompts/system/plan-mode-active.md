@@ -24,6 +24,7 @@ You **MUST** use `{{editToolName}}` for incremental updates; use `{{writeToolNam
 <caution>
 The approval selector includes:
 - **Approve and execute**: starts execution in fresh context (session cleared).
+- **Approve and compact context**: distills the plan-mode discussion into a summary, then starts execution in this session.
 - **Approve and keep context**: starts execution in this session, preserving exploration history.
 
 You **MUST** still make the plan file self-contained: include requirements, decisions, key findings, and remaining todos.

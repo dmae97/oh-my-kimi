@@ -41,7 +41,11 @@ import { resolveLocalUrlToPath } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
+import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
+	type: "text",
+};
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
+import type { CompactionOutcome } from "../session/compaction";
 import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
@@ -1109,7 +1113,12 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #approvePlan(
 		planContent: string,
-		options: { planFilePath: string; finalPlanFilePath: string; preserveContext?: boolean },
+		options: {
+			planFilePath: string;
+			finalPlanFilePath: string;
+			preserveContext?: boolean;
+			compactBeforeExecute?: boolean;
+		},
 	): Promise<void> {
 		await renameApprovedPlanFile({
 			planFilePath: options.planFilePath,
@@ -1119,6 +1128,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 		const previousTools = this.#planModePreviousTools ?? this.session.getActiveToolNames();
 		await this.#exitPlanMode({ silent: true, paused: false });
+
+		let compactOutcome: CompactionOutcome | undefined;
 		if (!options.preserveContext) {
 			await this.handleClearCommand();
 			// The new session has a fresh local:// root — persist the approved plan there
@@ -1128,11 +1139,43 @@ export class InteractiveMode implements InteractiveModeContext {
 				getSessionId: () => this.sessionManager.getSessionId(),
 			});
 			await Bun.write(newLocalPath, planContent);
+		} else if (options.compactBeforeExecute) {
+			// Distill the plan-mode transcript before the execution turn is queued so
+			// the plan-approved synthetic prompt lands as a fresh cache anchor.
+			// Outcome is consumed after tool-restoration and plan-reference-path
+			// bookkeeping below; `markPlanReferenceSent` is intentionally deferred
+			// past the cancel guard — see the comment at the cancel branch.
+			// Cancellation skips the synthetic-prompt dispatch (operator's explicit
+			// abort is honored); failure proceeds best-effort — approval intent stands.
+			const compactionPrompt = prompt.render(planModeCompactInstructionsPrompt, {
+				planFilePath: options.finalPlanFilePath,
+			});
+			compactOutcome = await this.handleCompactCommand(compactionPrompt);
 		}
+
+		// Tool restoration runs on every path — the plan mode tools must be
+		// retired regardless of whether the synthetic prompt fires.
 		if (previousTools.length > 0) {
 			await this.session.setActiveToolsByName(previousTools);
 		}
 		this.session.setPlanReferencePath(options.finalPlanFilePath);
+
+		if (compactOutcome === "cancelled") {
+			// Explicit abort: honor it. `executeCompaction` already surfaced
+			// `showError("Compaction cancelled")` to the operator; we add the
+			// deferred-dispatch warning and exit. `markPlanReferenceSent` is
+			// intentionally skipped here: `#planReferenceSent` stays false, so
+			// `AgentSession.#buildPlanReferenceMessage` will inject the plan
+			// reference on the operator's next `prompt()` call. If we marked it
+			// sent here, the executor's first turn would have no plan context.
+			this.showWarning(
+				"Plan approved, but compaction was cancelled — execution not dispatched. Submit a turn to continue.",
+			);
+			return;
+		}
+
+		// markPlanReferenceSent fires only on the dispatch path so the synthetic
+		// plan-approved prompt is the source of the reference injection.
 		this.session.markPlanReferenceSent();
 		const planModePrompt = prompt.render(planModeApprovedPrompt, {
 			planContent,
@@ -1185,14 +1228,24 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#renderPlanPreview(planContent, { append: true });
 		const choice = await this.showHookSelector(
 			"Plan mode - next step",
-			["Approve and execute", "Approve and keep context", "Refine plan", "Stay in plan mode"],
+			[
+				"Approve and execute",
+				"Approve and compact context",
+				"Approve and keep context",
+				"Refine plan",
+				"Stay in plan mode",
+			],
 			{
 				helpText: this.#getPlanReviewHelpText(),
 				onExternalEditor: () => void this.#openPlanInExternalEditor(planFilePath),
 			},
 		);
 
-		if (choice === "Approve and execute" || choice === "Approve and keep context") {
+		if (
+			choice === "Approve and execute" ||
+			choice === "Approve and compact context" ||
+			choice === "Approve and keep context"
+		) {
 			const finalPlanFilePath = details.finalPlanFilePath || planFilePath;
 			try {
 				const latestPlanContent = await this.#readPlanFile(planFilePath);
@@ -1203,7 +1256,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				await this.#approvePlan(latestPlanContent, {
 					planFilePath,
 					finalPlanFilePath,
-					preserveContext: choice === "Approve and keep context",
+					preserveContext: choice !== "Approve and execute",
+					compactBeforeExecute: choice === "Approve and compact context",
 				});
 			} catch (error) {
 				this.showError(
@@ -1727,7 +1781,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		await controller.handle(text);
 	}
 
-	handleCompactCommand(customInstructions?: string): Promise<void> {
+	handleCompactCommand(customInstructions?: string): Promise<CompactionOutcome> {
 		return this.#commandController.handleCompactCommand(customInstructions);
 	}
 
@@ -1735,7 +1789,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleHandoffCommand(customInstructions);
 	}
 
-	executeCompaction(customInstructionsOrOptions?: string | CompactOptions, isAuto?: boolean): Promise<void> {
+	executeCompaction(
+		customInstructionsOrOptions?: string | CompactOptions,
+		isAuto?: boolean,
+	): Promise<CompactionOutcome> {
 		return this.#commandController.executeCompaction(customInstructionsOrOptions, isAuto);
 	}
 
