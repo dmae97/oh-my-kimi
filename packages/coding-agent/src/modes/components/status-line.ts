@@ -6,10 +6,11 @@ import { settings } from "../../config/settings";
 import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "../../config/settings-schema";
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
+import { estimateTokens } from "../../session/compaction/compaction";
 import * as git from "../../utils/git";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../utils/session-color";
 import { sanitizeStatusText } from "../shared";
-import { computeContextBreakdown } from "../utils/context-usage";
+import { computeNonMessageTokens } from "../utils/context-usage";
 import {
 	canReuseCachedPr,
 	createPrCacheContext,
@@ -84,9 +85,23 @@ export class StatusLineComponent implements Component {
 	} | null = null;
 	#usageFetchedAt = 0;
 	#usageInFlight = false;
-	// Context breakdown caching (2s TTL — aligns with /context command output)
+	// Context breakdown — incremental cache. Replaces the previous 2-second
+	// TTL design (which re-walked every message on each refresh and produced
+	// ~1.1 s sync freezes on 2,000+ message sessions because `updateEditorTopBorder`
+	// is called on every agent event in event-controller). The new scheme
+	// exploits the fact that `session.messages` is append-only during a turn
+	// and only shrinks on compaction.
 	#cachedBreakdown: { usedTokens: number; contextWindow: number } | null = null;
-	#breakdownFetchedAt = 0;
+	// Per-message token counts indexed by `session.messages` position. Entries
+	// here are immutable: a message at index `i` is finalized (its content
+	// no longer mutates) once index `i+1` exists. We therefore cache all but
+	// the LAST message (which may still be growing during streaming).
+	#messageTokenCache: number[] = [];
+	// Cached non-message total (system prompt + tools + skills). Invalidated
+	// when the inputs-identity fingerprint changes (model swap, skill toggle,
+	// tool registration).
+	#nonMessageTokensCache: number | undefined;
+	#nonMessageInputsKey: string | undefined;
 
 	constructor(private readonly session: AgentSession) {
 		this.#settings = {
@@ -382,17 +397,13 @@ export class StatusLineComponent implements Component {
 					fiveHour = {
 						percent: fraction * 100,
 						resetMinutes:
-							typeof resetsAt === "number"
-								? Math.max(0, Math.round((resetsAt - now) / 60_000))
-								: undefined,
+							typeof resetsAt === "number" ? Math.max(0, Math.round((resetsAt - now) / 60_000)) : undefined,
 					};
 				} else if (windowId === "7d" && !tier && !sevenDay) {
 					sevenDay = {
 						percent: fraction * 100,
 						resetHours:
-							typeof resetsAt === "number"
-								? Math.max(0, Math.round((resetsAt - now) / 3_600_000))
-								: undefined,
+							typeof resetsAt === "number" ? Math.max(0, Math.round((resetsAt - now) / 3_600_000)) : undefined,
 					};
 				}
 			}
@@ -401,17 +412,62 @@ export class StatusLineComponent implements Component {
 		return { fiveHour, sevenDay };
 	}
 
-	#getCachedContextBreakdown(): { usedTokens: number; contextWindow: number } {
-		const now = Date.now();
-		if (!this.#cachedBreakdown || now - this.#breakdownFetchedAt > 2_000) {
-			const breakdown = computeContextBreakdown(this.session);
-			this.#cachedBreakdown = {
-				usedTokens: breakdown.usedTokens,
-				contextWindow: breakdown.contextWindow,
-			};
-			this.#breakdownFetchedAt = now;
+	/**
+	 * Compute the (cached) used-tokens / context-window totals for the
+	 * status-line context% segment. Exposed (non-private) so unit tests can
+	 * verify the incremental-cache invariants; not part of any external
+	 * API.
+	 */
+	getCachedContextBreakdown(): { usedTokens: number; contextWindow: number } {
+		const messages = this.session.messages;
+		const contextWindow = this.session.model?.contextWindow ?? 0;
+
+		// 1) Non-message tokens (system prompt + tools + skills). Refresh only
+		//    when the inputs identity fingerprint changes — usually never
+		//    during a streaming turn. ~10-30 ms when it does refresh.
+		const inputsKey = this.#computeNonMessageInputsKey();
+		if (this.#nonMessageTokensCache === undefined || this.#nonMessageInputsKey !== inputsKey) {
+			this.#nonMessageTokensCache = computeNonMessageTokens(this.session);
+			this.#nonMessageInputsKey = inputsKey;
 		}
+
+		// 2) Message tokens — incremental.
+		//    Compaction handling: if messages.length shrank, the array was
+		//    truncated. Reset cache; the next iteration rebuilds from scratch.
+		if (this.#messageTokenCache.length > Math.max(0, messages.length - 1)) {
+			this.#messageTokenCache.length = 0;
+		}
+		//    Cache all but the last message. The last message may still be
+		//    growing during streaming (assistant delta blocks append to the
+		//    existing message); recomputing it each refresh is one
+		//    `estimateTokens` call (~0.5 ms) and stays correct.
+		while (this.#messageTokenCache.length < Math.max(0, messages.length - 1)) {
+			const idx = this.#messageTokenCache.length;
+			this.#messageTokenCache.push(estimateTokens(messages[idx]));
+		}
+		let messagesTokens = 0;
+		for (const t of this.#messageTokenCache) messagesTokens += t;
+		if (messages.length > 0) {
+			messagesTokens += estimateTokens(messages[messages.length - 1]);
+		}
+
+		const usedTokens = this.#nonMessageTokensCache + messagesTokens;
+		this.#cachedBreakdown = { usedTokens, contextWindow };
 		return this.#cachedBreakdown;
+	}
+
+	/**
+	 * Build an identity fingerprint for the non-message inputs (system prompt,
+	 * tools, skills). When this changes, the non-message token cache must be
+	 * recomputed. Cheap: just lengths + first-string-length. Doesn't need to
+	 * be cryptographically unique — only stable for the same inputs.
+	 */
+	#computeNonMessageInputsKey(): string {
+		const sp = this.session.systemPrompt;
+		const tools = this.session.agent.state.tools;
+		const skills = this.session.skills;
+		const modelId = this.session.model?.id ?? "";
+		return `${modelId}|${sp.length}:${sp[0]?.length ?? 0}|${tools.length}|${skills.length}`;
 	}
 
 	#buildSegmentContext(width: number): SegmentContext {
@@ -435,7 +491,7 @@ export class StatusLineComponent implements Component {
 		};
 
 		// Context usage — aligned with /context command so both surfaces report the same value
-		const breakdown = this.#getCachedContextBreakdown();
+		const breakdown = this.getCachedContextBreakdown();
 		const contextTokens = breakdown.usedTokens;
 		const contextWindow = breakdown.contextWindow || state.model?.contextWindow || 0;
 		const contextPercent = contextWindow > 0 ? (contextTokens / contextWindow) * 100 : 0;
