@@ -7,6 +7,10 @@ import { executeBash } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
 import * as shellSnapshot from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
 
+// Matches the schema default for `tools.artifactHeadBytes` (20 KB) used by
+// OutputSink when bash-executor pulls settings via resolveOutputSinkHeadBytes.
+const ARTIFACT_HEAD_BYTES_DEFAULT = 20 * 1024;
+
 function makeTempDir(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), "omp-bash-exec-"));
 }
@@ -261,8 +265,9 @@ describe("executeBash", () => {
 		// Output summary should reflect all lines
 		expect(result.totalLines).toBeGreaterThanOrEqual(lineCount);
 
-		// Truncated output should be within the spill threshold
-		expect(result.outputBytes).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
+		// Truncated output should be bounded by head + tail + marker overhead
+		// (middle-elision keeps the head budget plus the tail spill window).
+		expect(result.outputBytes).toBeLessThanOrEqual(DEFAULT_MAX_BYTES + ARTIFACT_HEAD_BYTES_DEFAULT + 1024);
 
 		// The tail should still contain numeric values near the end of the range.
 		// BSD `seq` on macOS formats large numbers in scientific notation, so parse
