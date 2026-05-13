@@ -1828,7 +1828,7 @@ export const readToolRenderer = {
 		const imageContent = result.content?.find(c => c.type === "image");
 		const rawPath = args?.file_path || args?.path || "";
 		const filePath = shortenPath(rawPath);
-		const lang = getLanguageFromPath(rawPath);
+		const lang = getLanguageFromPath(splitPathAndSel(rawPath).path);
 
 		const warningLines: string[] = [];
 		const truncation = details?.meta?.truncation;
