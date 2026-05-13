@@ -84,6 +84,85 @@ describe("executeJs", () => {
 		expect(resetResult.output.trim()).toBe("undefined");
 	});
 
+	it("persists bindings when auto-displaying the final expression", async () => {
+		const first = await executeJs("const inspected = 40; inspected + 2;", { sessionId, session, sessionFile });
+		expect(first.exitCode).toBe(0);
+		expect(first.output.trim()).toBe("42");
+
+		const persisted = await executeJs("return inspected + 1;", { sessionId, session, sessionFile });
+		expect(persisted.exitCode).toBe(0);
+		expect(persisted.output.trim()).toBe("41");
+	});
+
+	it("does not expose the final expression marker as a global property", async () => {
+		const result = await executeJs("const localOnly = 7; localOnly;", { sessionId, session, sessionFile });
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("7");
+
+		const marker = await executeJs("return Object.hasOwn(globalThis, '__omp_final_expr__');", {
+			sessionId,
+			session,
+			sessionFile,
+		});
+		expect(marker.exitCode).toBe(0);
+		expect(marker.output.trim()).toBe("false");
+
+		const persisted = await executeJs("return localOnly;", { sessionId, session, sessionFile });
+		expect(persisted.exitCode).toBe(0);
+		expect(persisted.output.trim()).toBe("7");
+	});
+
+	it("ignores user-assigned final expression markers without a rewritten final expression", async () => {
+		const result = await executeJs("globalThis.__omp_final_expr__ = 'manual'; return 'actual';", {
+			sessionId,
+			session,
+			sessionFile,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("actual");
+	});
+
+	it("captures promise-valued final expression before promise callbacks can mutate the marker", async () => {
+		const result = await executeJs(
+			"const pending = Promise.resolve(1).then(value => { globalThis.__omp_final_expr__ = 999; return value; }); pending;",
+			{ sessionId, session, sessionFile },
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("1");
+	});
+
+	it("awaits rewritten thenable final expressions once", async () => {
+		const result = await executeJs(
+			[
+				"globalThis.thenCalls = 0;",
+				"const thenable = {",
+				"  then(resolve) {",
+				"    globalThis.thenCalls++;",
+				"    resolve('done');",
+				"  },",
+				"};",
+				"thenable;",
+			].join("\n"),
+			{ sessionId, session, sessionFile },
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("done");
+
+		const calls = await executeJs("return globalThis.thenCalls;", { sessionId, session, sessionFile });
+		expect(calls.exitCode).toBe(0);
+		expect(calls.output.trim()).toBe("1");
+	});
+
+	it("does not auto-display side-effect import rewrites", async () => {
+		const result = await executeJs('import "node:path";', { sessionId, session, sessionFile });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("");
+		expect(result.displayOutputs).toEqual([]);
+	});
+
 	it("exposes the worker's real process object", async () => {
 		const result = await executeJs(
 			[
@@ -232,6 +311,54 @@ describe("executeJs", () => {
 		expect(execute).toHaveBeenCalledTimes(2);
 		expect(execute.mock.calls[0]?.[1]).toEqual({ path: "package.json", _i: "js prelude" });
 		expect(execute.mock.calls[1]?.[1]).toEqual({ path: "agent://agent-42", _i: "js prelude" });
+	});
+
+	it("auto-displays the final awaited expression result", async () => {
+		const execute = vi.fn(
+			async (): Promise<AgentToolResult> => ({
+				content: [{ type: "text", text: "tool output" }],
+				details: { kind: "tool-result" },
+			}),
+		);
+		const toolSession: ToolSession = {
+			...session,
+			getToolByName: name => (name === "read" ? createTool("read", execute) : undefined),
+		};
+
+		const result = await executeJs("await tool.read({ path: 'package.json' });", {
+			sessionId,
+			session: toolSession,
+			sessionFile,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(getJsonData(result)).toEqual({
+			text: "tool output",
+			details: { kind: "tool-result" },
+			images: undefined,
+		});
+	});
+
+	it("awaits promise-valued final expressions before displaying", async () => {
+		const result = await executeJs("read('config.json');", {
+			sessionId,
+			session,
+			sessionFile,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe('{\n  "name": "demo",\n  "enabled": true\n}');
+	});
+
+	it("awaits identifier promise final expressions before displaying", async () => {
+		const result = await executeJs("const pending = read('config.json'); pending;", {
+			sessionId,
+			session,
+			sessionFile,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe('{\n  "name": "demo",\n  "enabled": true\n}');
 	});
 
 	it("auto-displays returned objects as structured output", async () => {

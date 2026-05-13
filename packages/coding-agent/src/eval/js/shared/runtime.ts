@@ -48,6 +48,8 @@ export class JsRuntime {
 	readonly sessionId: string;
 	#env: Map<string, string>;
 	#getHooks: () => RuntimeHooks | null;
+	#finalExpressionSet = false;
+	#finalExpressionValue: unknown;
 
 	constructor(opts: RuntimeOptions) {
 		this.#cwd = opts.initialCwd;
@@ -82,8 +84,20 @@ export class JsRuntime {
 	}
 
 	async run(code: string, filename?: string): Promise<unknown> {
+		this.#finalExpressionSet = false;
+		this.#finalExpressionValue = undefined;
 		const wrapped = wrapCode(code);
 		const value = indirectEval(wrapped.source, filename);
+		if (wrapped.finalExpressionReturned) {
+			const awaited = await awaitMaybePromise(value);
+			if (this.#finalExpressionSet) {
+				const finalValue = this.#finalExpressionValue;
+				this.#finalExpressionSet = false;
+				this.#finalExpressionValue = undefined;
+				return await awaitMaybePromise(finalValue);
+			}
+			return awaited;
+		}
 		return await awaitMaybePromise(value);
 	}
 
@@ -126,6 +140,10 @@ export class JsRuntime {
 				this.#getHooks()?.onText(text.endsWith("\n") ? text : `${text}\n`);
 			},
 			__omp_display__: (value: unknown) => this.displayValue(value),
+			__omp_set_final_expr__: (value: unknown) => {
+				this.#finalExpressionSet = true;
+				this.#finalExpressionValue = value;
+			},
 			webcrypto: crypto,
 			// `process` is intentionally not overridden — user code gets the host worker's real
 			// `process` object. Subsetting it caused segfaults in workers that share state with

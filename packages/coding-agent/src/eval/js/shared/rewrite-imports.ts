@@ -25,6 +25,32 @@ type BabelLexicalDecl =
 	| { type: "VariableDeclaration"; kind: "const" | "let" | "var"; start: number; end: number }
 	| { type: "ClassDeclaration"; start: number; end: number; id: { start: number; end: number; name: string } | null };
 
+type BabelExpressionStatement = {
+	type: "ExpressionStatement";
+	start: number;
+	end: number;
+	expression?: { type?: string };
+};
+
+type BabelProgramNode = BabelImportDeclaration | BabelLexicalDecl | BabelExpressionStatement | { type: string };
+
+function parseProgram(code: string): { program: { body: ReadonlyArray<BabelProgramNode> } } | null {
+	try {
+		return babelParse(code, {
+			sourceType: "module",
+			allowAwaitOutsideFunction: true,
+			allowReturnOutsideFunction: true,
+			allowImportExportEverywhere: true,
+			allowNewTargetOutsideFunction: true,
+			allowSuperOutsideMethod: true,
+			allowUndeclaredExports: true,
+			errorRecovery: true,
+		}) as unknown as { program: { body: ReadonlyArray<BabelProgramNode> } };
+	} catch {
+		return null;
+	}
+}
+
 function buildDynamicImportCall(sourceLiteral: string, withClause: string | undefined): string {
 	// Route every static import through the worker-injected `__omp_import__` helper so the
 	// specifier resolves against the session cwd (and `with`-attribute imports keep working).
@@ -76,19 +102,8 @@ function rewriteImportNode(node: BabelImportDeclaration): string {
 export function rewriteStaticImports(code: string): string {
 	if (!code.includes("import")) return code;
 
-	let ast: { program: { body: ReadonlyArray<{ type: string }> } };
-	try {
-		ast = babelParse(code, {
-			sourceType: "module",
-			allowAwaitOutsideFunction: true,
-			allowReturnOutsideFunction: true,
-			allowImportExportEverywhere: true,
-			allowNewTargetOutsideFunction: true,
-			allowSuperOutsideMethod: true,
-			allowUndeclaredExports: true,
-			errorRecovery: true,
-		}) as unknown as typeof ast;
-	} catch {
+	const ast = parseProgram(code);
+	if (!ast) {
 		// Parser bailed entirely — let the VM surface the real syntax error.
 		return code;
 	}
@@ -124,19 +139,8 @@ export function rewriteStaticImports(code: string): string {
 export function demoteTopLevelLexicals(code: string): string {
 	if (!/\b(?:const|let|class)\b/.test(code)) return code;
 
-	let ast: { program: { body: ReadonlyArray<{ type: string }> } };
-	try {
-		ast = babelParse(code, {
-			sourceType: "module",
-			allowAwaitOutsideFunction: true,
-			allowReturnOutsideFunction: true,
-			allowImportExportEverywhere: true,
-			allowNewTargetOutsideFunction: true,
-			allowSuperOutsideMethod: true,
-			allowUndeclaredExports: true,
-			errorRecovery: true,
-		}) as unknown as typeof ast;
-	} catch {
+	const ast = parseProgram(code);
+	if (!ast) {
 		return code;
 	}
 
@@ -172,6 +176,20 @@ export function demoteTopLevelLexicals(code: string): string {
 	return result;
 }
 
+function returnFinalExpression(code: string): { source: string; returned: boolean } {
+	const ast = parseProgram(code);
+	const last = ast?.program.body.at(-1);
+	if (last?.type !== "ExpressionStatement") return { source: code, returned: false };
+
+	const expression = last as BabelExpressionStatement;
+	const prefix = code.slice(0, expression.start);
+	const statement = code.slice(expression.start, expression.end);
+	const suffix = code.slice(expression.end);
+	const semicolonMatch = statement.match(/;\s*$/);
+	const trimmedStatement = semicolonMatch ? statement.slice(0, semicolonMatch.index) : statement;
+	return { source: `${prefix}__omp_set_final_expr__((${trimmedStatement}));${suffix}`, returned: true };
+}
+
 /**
  * Strip TypeScript syntax (type annotations, `interface`, `as`, `satisfies`, generics in
  * call expressions, etc.) before the import/lexical rewriters parse the code. We use Bun's
@@ -198,14 +216,20 @@ export function stripTypeScript(code: string): string {
 const LOOKS_LIKE_TS =
 	/(?:\binterface\s+\w|\btype\s+\w+\s*=|\b(?:as|satisfies)\s+(?:[A-Z]|\bconst\b)|:\s*(?:string|number|boolean|any|unknown|void|never|object|[A-Z]\w*)\b|<\s*[A-Z]\w*\s*[,>])/;
 
-export function wrapCode(code: string): { source: string; asyncWrapped: boolean } {
-	const rewritten = demoteTopLevelLexicals(rewriteStaticImports(stripTypeScript(code)));
-	const needsAsyncWrapper = /\bawait\b|\breturn\b/.test(rewritten);
+export function wrapCode(code: string): { source: string; asyncWrapped: boolean; finalExpressionReturned: boolean } {
+	const stripped = stripTypeScript(code);
+	const finalExpression = returnFinalExpression(stripped);
+	const rewritten = {
+		source: demoteTopLevelLexicals(rewriteStaticImports(finalExpression.source)),
+		returned: finalExpression.returned,
+	};
+	const needsAsyncWrapper = /\bawait\b|\breturn\b/.test(rewritten.source);
 	if (!needsAsyncWrapper) {
-		return { source: rewritten, asyncWrapped: false };
+		return { source: rewritten.source, asyncWrapped: false, finalExpressionReturned: rewritten.returned };
 	}
 	return {
-		source: `(async () => {\n${rewritten}\n})()`,
+		source: `(async () => {\n${rewritten.source}\n})()`,
 		asyncWrapped: true,
+		finalExpressionReturned: rewritten.returned,
 	};
 }
