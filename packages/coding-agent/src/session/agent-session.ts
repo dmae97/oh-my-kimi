@@ -174,6 +174,7 @@ import {
 	convertToLlm,
 	type FileMentionMessage,
 	type PythonExecutionMessage,
+	readPendingDisplayTag,
 } from "./messages";
 import { formatSessionDumpText } from "./session-dump-format";
 import type {
@@ -594,6 +595,13 @@ function extractPermissionLocations(args: unknown, cwd: string): { path: string;
 // AgentSession Class
 // ============================================================================
 
+/** Internal record stored in the steering/followUp display queues. The optional
+ *  `tag` is set only by `enqueueCustomMessageDisplay` (used for skill-prompt
+ *  custom messages queued during streaming) and is matched by the custom-role
+ *  `message_start` dequeue branch; user-message pushes leave it undefined and
+ *  rely on the existing text-equality match. */
+type QueuedDisplayEntry = { text: string; tag?: string };
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -612,10 +620,15 @@ export class AgentSession {
 	#unsubscribeAgent?: () => void;
 	#eventListeners: AgentSessionEventListener[] = [];
 
-	/** Tracks pending steering messages for UI display. Removed when delivered. */
-	#steeringMessages: string[] = [];
-	/** Tracks pending follow-up messages for UI display. Removed when delivered. */
-	#followUpMessages: string[] = [];
+	/** Tracks pending steering messages for UI display. Removed when delivered.
+	 *  Entry shape: `{ text }` for plain-text steers (user-message dequeue
+	 *  matches by `.text`); `{ text, tag }` for queued custom messages (skill
+	 *  invocations dispatched while streaming) — the custom-role dequeue
+	 *  matches by `.tag` so duplicate-args queued skills cannot collide. */
+	#steeringMessages: QueuedDisplayEntry[] = [];
+	/** Tracks pending follow-up messages for UI display. Removed when delivered.
+	 *  See `#steeringMessages` for entry shape. */
+	#followUpMessages: QueuedDisplayEntry[] = [];
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	#pendingNextTurnMessages: CustomMessage[] = [];
 	#scheduledHiddenNextTurnGeneration: number | undefined = undefined;
@@ -729,6 +742,11 @@ export class AgentSession {
 	#ttsrRetryToken = 0;
 	#ttsrResumePromise: Promise<void> | undefined = undefined;
 	#ttsrResumeResolve: (() => void) | undefined = undefined;
+
+	/** Monotonic counter for `enqueueCustomMessageDisplay` tag generation;
+	 *  combined with `Date.now()` so tags stay unique even across rapid
+	 *  same-tick enqueues. */
+	#customDisplayTagCounter = 0;
 	#postPromptTasks = new Set<Promise<void>>();
 	#postPromptTasksPromise: Promise<void> | undefined = undefined;
 	#postPromptTasksResolve: (() => void) | undefined = undefined;
@@ -950,6 +968,28 @@ export class AgentSession {
 		return this.#ttsrAbortPending;
 	}
 
+	/** Register a compact display string for a custom message that the caller is
+	 *  about to dispatch via `promptCustomMessage` / `sendCustomMessage`.
+	 *  Returns a stable tag the caller MUST embed in
+	 *  `CustomMessage.details.__pendingDisplayTag` so the agent-side
+	 *  `message_start` handler can remove the matching display entry when the
+	 *  queued message is consumed.
+	 *
+	 *  Does NOT push to the agent's steering/followUp queue — that happens
+	 *  separately inside `sendCustomMessage`. */
+	enqueueCustomMessageDisplay(text: string, mode: "steer" | "followUp"): string {
+		const tag = `omp-cmd-${Date.now()}-${++this.#customDisplayTagCounter}`;
+		const displayText = text.trim();
+		if (!displayText) return tag;
+		const entry: QueuedDisplayEntry = { text: displayText, tag };
+		if (mode === "steer") {
+			this.#steeringMessages.push(entry);
+		} else {
+			this.#followUpMessages.push(entry);
+		}
+		return tag;
+	}
+
 	getAsyncJobSnapshot(options?: { recentLimit?: number }): AsyncJobSnapshot | null {
 		const manager = AsyncJobManager.instance();
 		if (!manager) return null;
@@ -1038,15 +1078,35 @@ export class AgentSession {
 		if (event.type === "message_start" && event.message.role === "user") {
 			const messageText = this.#getUserMessageText(event.message);
 			if (messageText) {
-				// Check steering queue first
-				const steeringIndex = this.#steeringMessages.indexOf(messageText);
+				// Check steering queue first (match by .text on tagged records)
+				const steeringIndex = this.#steeringMessages.findIndex(e => e.text === messageText);
 				if (steeringIndex !== -1) {
 					this.#steeringMessages.splice(steeringIndex, 1);
 				} else {
 					// Check follow-up queue
-					const followUpIndex = this.#followUpMessages.indexOf(messageText);
+					const followUpIndex = this.#followUpMessages.findIndex(e => e.text === messageText);
 					if (followUpIndex !== -1) {
 						this.#followUpMessages.splice(followUpIndex, 1);
+					}
+				}
+			}
+		}
+
+		// Tag-based dequeue for custom messages (skills queued via promptCustomMessage).
+		// The InputController attached a stable tag via CustomMessage.details when it
+		// registered the display chip; pull it back here to remove the matching entry
+		// from the pending bar atomically with the agent's queue consumption. Match by
+		// tag (not text) — two queued skills with identical args cannot collide.
+		if (event.type === "message_start" && event.message.role === "custom") {
+			const tag = readPendingDisplayTag(event.message.details);
+			if (tag) {
+				const steerIdx = this.#steeringMessages.findIndex(e => e.tag === tag);
+				if (steerIdx !== -1) {
+					this.#steeringMessages.splice(steerIdx, 1);
+				} else {
+					const followUpIdx = this.#followUpMessages.findIndex(e => e.tag === tag);
+					if (followUpIdx !== -1) {
+						this.#followUpMessages.splice(followUpIdx, 1);
 					}
 				}
 			}
@@ -3719,7 +3779,7 @@ export class AgentSession {
 	 */
 	async #queueSteer(text: string, images?: ImageContent[]): Promise<void> {
 		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
-		this.#steeringMessages.push(displayText);
+		this.#steeringMessages.push({ text: displayText });
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images && images.length > 0) {
 			content.push(...images);
@@ -3737,7 +3797,7 @@ export class AgentSession {
 	 */
 	async #queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
 		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
-		this.#followUpMessages.push(displayText);
+		this.#followUpMessages.push({ text: displayText });
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images && images.length > 0) {
 			content.push(...images);
@@ -3973,8 +4033,8 @@ export class AgentSession {
 	 * Useful for restoring to editor when user aborts.
 	 */
 	clearQueue(): { steering: string[]; followUp: string[] } {
-		const steering = [...this.#steeringMessages];
-		const followUp = [...this.#followUpMessages];
+		const steering = this.#steeringMessages.map(e => e.text);
+		const followUp = this.#followUpMessages.map(e => e.text);
 		this.#steeringMessages = [];
 		this.#followUpMessages = [];
 		this.agent.clearAllQueues();
@@ -3986,27 +4046,35 @@ export class AgentSession {
 		return this.#steeringMessages.length + this.#followUpMessages.length + this.#pendingNextTurnMessages.length;
 	}
 
-	/** Get pending messages (read-only) */
+	/** Get pending messages (read-only). Returns the public text-only view;
+	 *  internal `{text, tag?}` records are mapped to `.text` so callers
+	 *  (`updatePendingMessagesDisplay`, `restoreQueuedMessagesToEditor`) see
+	 *  the unchanged historical shape. */
 	getQueuedMessages(): { steering: readonly string[]; followUp: readonly string[] } {
-		return { steering: this.#steeringMessages, followUp: this.#followUpMessages };
+		return {
+			steering: this.#steeringMessages.map(e => e.text),
+			followUp: this.#followUpMessages.map(e => e.text),
+		};
 	}
 
 	/**
 	 * Pop the last queued message (steering first, then follow-up).
 	 * Used by dequeue keybinding to restore messages to editor one at a time.
+	 * Returns the popped entry's `.text`; the tag (if any) dies with the
+	 * record — no orphan state can outlive the queue entry.
 	 */
 	popLastQueuedMessage(): string | undefined {
 		// Pop from steering first (LIFO)
 		if (this.#steeringMessages.length > 0) {
-			const message = this.#steeringMessages.pop();
+			const entry = this.#steeringMessages.pop();
 			this.agent.popLastSteer();
-			return message;
+			return entry?.text;
 		}
 		// Then from follow-up
 		if (this.#followUpMessages.length > 0) {
-			const message = this.#followUpMessages.pop();
+			const entry = this.#followUpMessages.pop();
 			this.agent.popLastFollowUp();
-			return message;
+			return entry?.text;
 		}
 		return undefined;
 	}

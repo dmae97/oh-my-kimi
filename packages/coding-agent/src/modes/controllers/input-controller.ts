@@ -443,6 +443,15 @@ export class InputController {
 				args: args || undefined,
 				lineCount: body ? body.split("\n").length : 0,
 			};
+			// When the agent is streaming, register the compact slash-form text as
+			// the pending-display twin BEFORE dispatching the CustomMessage. The
+			// returned tag is embedded in details so AgentSession.#handleAgentEvent
+			// can remove the matching display entry when the agent consumes this
+			// message (mirrors the user-message dequeue path).
+			if (this.ctx.session.isStreaming) {
+				const tag = this.ctx.session.enqueueCustomMessageDisplay(text, streamingBehavior);
+				details.__pendingDisplayTag = tag;
+			}
 			await this.ctx.session.promptCustomMessage(
 				{
 					customType: SKILL_PROMPT_MESSAGE_TYPE,
@@ -453,6 +462,10 @@ export class InputController {
 				},
 				{ streamingBehavior },
 			);
+			if (this.ctx.session.isStreaming) {
+				this.ctx.updatePendingMessagesDisplay();
+				this.ctx.ui.requestRender();
+			}
 		} catch (err) {
 			this.ctx.showError(`Failed to load skill: ${err instanceof Error ? err.message : String(err)}`);
 		}

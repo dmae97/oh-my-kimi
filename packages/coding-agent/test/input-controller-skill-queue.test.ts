@@ -1,0 +1,431 @@
+/**
+ * Phase 6 — E layer.
+ *
+ * Tests the skill-queue + custom-role dequeue contract that ties together:
+ *   - InputController.#invokeSkillCommand (tag generation when streaming);
+ *   - AgentSession.enqueueCustomMessageDisplay + #handleAgentEvent's
+ *     custom-role `message_start` dequeue;
+ *   - UiHelpers.updatePendingMessagesDisplay (compact slash-form rendering);
+ *   - InputController.restoreQueuedMessagesToEditor (recovery of the slash-form
+ *     into the editor).
+ *
+ * Tests split into:
+ *   - E1-E3: InputController-side tag generation, stubbed session;
+ *   - E4-E7: Real AgentSession driving synthetic `message_start` events
+ *            for the tag-based custom-role dequeue;
+ *   - E8: real UiHelpers render against a queued-display entry;
+ *   - E9: real InputController.restoreQueuedMessagesToEditor.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { Agent } from "@oh-my-pi/pi-agent-core";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import {
+	SKILL_PROMPT_MESSAGE_TYPE,
+	type SkillPromptDetails,
+} from "@oh-my-pi/pi-coding-agent/session/messages";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { Container } from "@oh-my-pi/pi-tui";
+import { TempDir } from "@oh-my-pi/pi-utils";
+
+// ============================================================================
+// Shared helpers
+// ============================================================================
+
+function writeSkillFile(dir: string, skillName: string, body: string): string {
+	const skillPath = path.join(dir, `${skillName}.md`);
+	fs.writeFileSync(skillPath, `---\nname: ${skillName}\n---\n${body}\n`);
+	return skillPath;
+}
+
+// ============================================================================
+// E1-E3: InputController tag generation with a stubbed session.
+// ============================================================================
+
+type StubEditor = {
+	setText: (text: string) => void;
+	getText: () => string;
+	addToHistory: ReturnType<typeof vi.fn>;
+	onSubmit?: (text: string) => Promise<void>;
+};
+
+function createStubInputControllerContext(opts: {
+	skillCommands: Map<string, string>;
+	isStreaming: boolean;
+}) {
+	let editorText = "";
+	const editor: StubEditor = {
+		setText(text) {
+			editorText = text;
+		},
+		getText() {
+			return editorText;
+		},
+		addToHistory: vi.fn(),
+	};
+	const enqueueCustomMessageDisplay = vi.fn((_text: string, _mode: "steer" | "followUp") => "sk-test-0");
+	// Annotate parameters so `mock.calls[N]` is typed as a tuple (not `[]`) —
+	// avoids TS2352/TS2493 when casting `.calls[0]` to a destructured shape.
+	const promptCustomMessage = vi.fn(
+		async (_message: { details?: SkillPromptDetails }, _options?: unknown) => {},
+	);
+	const updatePendingMessagesDisplay = vi.fn();
+	const requestRender = vi.fn();
+	const showError = vi.fn();
+
+	const ctx = {
+		editor,
+		ui: { requestRender },
+		skillCommands: opts.skillCommands,
+		session: {
+			isStreaming: opts.isStreaming,
+			isCompacting: false,
+			isBashRunning: false,
+			isEvalRunning: false,
+			extensionRunner: undefined,
+			enqueueCustomMessageDisplay,
+			promptCustomMessage,
+		},
+		showError,
+		updatePendingMessagesDisplay,
+		// Defaults that InputController touches on submit but don't matter here.
+		isBashMode: false,
+		isPythonMode: false,
+		pendingImages: [],
+		isBackgrounded: false,
+		loopModeEnabled: false,
+		compactionQueuedMessages: [],
+		locallySubmittedUserSignatures: new Set<string>(),
+		withLocalSubmission: async (_text: string, fn: () => unknown) => fn(),
+	} as unknown as InteractiveModeContext;
+
+	return { ctx, editor, enqueueCustomMessageDisplay, promptCustomMessage };
+}
+
+describe("InputController #invokeSkillCommand (E1-E3)", () => {
+	let tempDir: TempDir;
+	let skillCommands: Map<string, string>;
+
+	beforeEach(() => {
+		tempDir = TempDir.createSync("@pi-skill-queue-stub-");
+		const skillPath = writeSkillFile(tempDir.path(), "test-skill", "Do the thing.");
+		skillCommands = new Map<string, string>([["skill:test-skill", skillPath]]);
+	});
+
+	afterEach(() => {
+		tempDir.removeSync();
+		vi.restoreAllMocks();
+	});
+
+	it("E1: streaming + steer -> enqueueCustomMessageDisplay called and details.__pendingDisplayTag set", async () => {
+		const { ctx, editor, enqueueCustomMessageDisplay, promptCustomMessage } =
+			createStubInputControllerContext({ skillCommands, isStreaming: true });
+
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+		editor.setText("/skill:test-skill arg1 arg2");
+		await editor.onSubmit?.("/skill:test-skill arg1 arg2");
+
+		expect(enqueueCustomMessageDisplay).toHaveBeenCalledTimes(1);
+		expect(enqueueCustomMessageDisplay).toHaveBeenCalledWith("/skill:test-skill arg1 arg2", "steer");
+
+		expect(promptCustomMessage).toHaveBeenCalledTimes(1);
+		const firstCall = promptCustomMessage.mock.calls[0];
+		expect(firstCall).toBeDefined();
+		// biome-ignore lint/style/noNonNullAssertion: just asserted non-undefined
+		const messageArg = firstCall![0] as { details: SkillPromptDetails };
+		expect(messageArg.details.__pendingDisplayTag).toBe("sk-test-0");
+	});
+
+	it("E2: streaming + followUp -> enqueueCustomMessageDisplay called with mode 'followUp', tag embedded", async () => {
+		const { ctx, editor, enqueueCustomMessageDisplay, promptCustomMessage } =
+			createStubInputControllerContext({ skillCommands, isStreaming: true });
+
+		const controller = new InputController(ctx);
+		editor.setText("/skill:test-skill arg1 arg2");
+		// `handleFollowUp` is the Ctrl+Enter dispatcher; it routes through the same
+		// `#invokeSkillCommand` helper with mode "followUp".
+		await controller.handleFollowUp();
+
+		expect(enqueueCustomMessageDisplay).toHaveBeenCalledWith("/skill:test-skill arg1 arg2", "followUp");
+
+		const firstCall = promptCustomMessage.mock.calls[0];
+		expect(firstCall).toBeDefined();
+		// biome-ignore lint/style/noNonNullAssertion: just asserted non-undefined
+		const messageArg = firstCall![0] as { details: SkillPromptDetails };
+		expect(messageArg.details.__pendingDisplayTag).toBe("sk-test-0");
+	});
+
+	it("E3: not streaming -> enqueueCustomMessageDisplay NOT called and tag absent", async () => {
+		const { ctx, editor, enqueueCustomMessageDisplay, promptCustomMessage } =
+			createStubInputControllerContext({ skillCommands, isStreaming: false });
+
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+		editor.setText("/skill:test-skill arg1 arg2");
+		await editor.onSubmit?.("/skill:test-skill arg1 arg2");
+
+		expect(enqueueCustomMessageDisplay).not.toHaveBeenCalled();
+		const firstCall = promptCustomMessage.mock.calls[0];
+		expect(firstCall).toBeDefined();
+		// biome-ignore lint/style/noNonNullAssertion: just asserted non-undefined
+		const messageArg = firstCall![0] as { details: SkillPromptDetails };
+		expect(messageArg.details.__pendingDisplayTag).toBeUndefined();
+	});
+});
+
+// ============================================================================
+// E4-E7: Real AgentSession driving synthetic `message_start` events.
+// ============================================================================
+
+interface SessionFixture {
+	tempDir: TempDir;
+	authStorage: AuthStorage;
+	session: AgentSession;
+}
+
+async function createRealSession(): Promise<SessionFixture> {
+	const tempDir = TempDir.createSync("@pi-skill-queue-real-");
+	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	const modelRegistry = new ModelRegistry(authStorage);
+	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+	if (!model) throw new Error("Expected built-in anthropic model to exist");
+
+	const agent = new Agent({
+		initialState: {
+			model,
+			systemPrompt: ["Test"],
+			tools: [],
+			messages: [],
+		},
+	});
+
+	const session = new AgentSession({
+		agent,
+		sessionManager: SessionManager.inMemory(),
+		settings: Settings.isolated(),
+		modelRegistry,
+	});
+
+	return { tempDir, authStorage, session };
+}
+
+/** Emit a `message_start` for a custom message whose `details` carries the supplied tag. */
+function emitCustomMessageStart(session: AgentSession, content: string, tag?: string): void {
+	const details: { __pendingDisplayTag?: string } | undefined =
+		tag === undefined ? undefined : { __pendingDisplayTag: tag };
+	session.agent.emitExternalEvent({
+		type: "message_start",
+		message: {
+			role: "custom",
+			customType: SKILL_PROMPT_MESSAGE_TYPE,
+			content,
+			display: true,
+			details,
+			timestamp: Date.now(),
+		},
+	});
+}
+
+describe("AgentSession custom-role tag dequeue (E4-E7)", () => {
+	let fixture: SessionFixture | undefined;
+
+	afterEach(async () => {
+		if (fixture) {
+			await fixture.session.dispose();
+			fixture.authStorage.close();
+			fixture.tempDir.removeSync();
+			fixture = undefined;
+		}
+		vi.restoreAllMocks();
+	});
+
+	it("E4: message_start with role=custom + matching tag removes the tagged display entry", async () => {
+		fixture = await createRealSession();
+		const { session } = fixture;
+		const tag = session.enqueueCustomMessageDisplay("/skill:foo bar", "steer");
+		expect(tag).not.toBe("");
+		expect(session.getQueuedMessages().steering).toEqual(["/skill:foo bar"]);
+
+		emitCustomMessageStart(session, "irrelevant content", tag);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(session.getQueuedMessages().steering).toEqual([]);
+		// And internal queue counters reflect the empty steer/followUp arrays. The
+		// pending-next-turn store stays at zero too because this test never queued one.
+		expect(session.queuedMessageCount).toBe(0);
+	});
+
+	it("E5: message_start with role=custom but no tag is a no-op", async () => {
+		fixture = await createRealSession();
+		const { session } = fixture;
+		session.enqueueCustomMessageDisplay("/skill:foo bar", "steer");
+		const beforeCount = session.queuedMessageCount;
+		expect(beforeCount).toBe(1);
+
+		emitCustomMessageStart(session, "irrelevant content"); // no tag
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(session.getQueuedMessages().steering).toEqual(["/skill:foo bar"]);
+		expect(session.queuedMessageCount).toBe(beforeCount);
+	});
+
+	it("E6: two queued skills with identical args text are dequeued independently by tag", async () => {
+		fixture = await createRealSession();
+		const { session } = fixture;
+		const tag1 = session.enqueueCustomMessageDisplay("/skill:foo bar", "steer");
+		const tag2 = session.enqueueCustomMessageDisplay("/skill:foo bar", "steer");
+		expect(tag1).not.toBe(tag2);
+		expect(session.getQueuedMessages().steering).toEqual(["/skill:foo bar", "/skill:foo bar"]);
+
+		// Consume the SECOND-enqueued tag. After dequeue, the SURVIVING entry must be
+		// the one that was added FIRST — proves the dequeue keys off `tag`, not off
+		// `indexOf(text)` (which would always have removed the first match).
+		emitCustomMessageStart(session, "any", tag2);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(session.getQueuedMessages().steering).toEqual(["/skill:foo bar"]);
+
+		// Now dequeue the first; nothing left.
+		emitCustomMessageStart(session, "any", tag1);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(session.getQueuedMessages().steering).toEqual([]);
+	});
+
+	it("E7: popLastQueuedMessage on a tagged entry leaves no orphan tag state", async () => {
+		fixture = await createRealSession();
+		const { session } = fixture;
+		const firstTag = session.enqueueCustomMessageDisplay("/skill:foo bar", "steer");
+		const popped = session.popLastQueuedMessage();
+		expect(popped).toBe("/skill:foo bar");
+		expect(session.getQueuedMessages().steering).toEqual([]);
+
+		// Push a NEW tagged entry with the same text. Emitting `message_start` for the
+		// FIRST (popped) tag must be a no-op — the dequeue cannot reach into the new
+		// entry because the popped tag died with its record.
+		const secondTag = session.enqueueCustomMessageDisplay("/skill:foo bar", "steer");
+		expect(secondTag).not.toBe(firstTag);
+
+		emitCustomMessageStart(session, "any", firstTag);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(session.getQueuedMessages().steering).toEqual(["/skill:foo bar"]);
+
+		// Sanity: the second tag still works.
+		emitCustomMessageStart(session, "any", secondTag);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(session.getQueuedMessages().steering).toEqual([]);
+	});
+});
+
+// ============================================================================
+// E8-E9: Real UiHelpers / InputController against a session populated through
+// enqueueCustomMessageDisplay.
+// ============================================================================
+
+function createStubInteractiveModeContextForUiHelpers(session: AgentSession) {
+	let editorText = "";
+	const editor: StubEditor = {
+		setText(text) {
+			editorText = text;
+		},
+		getText() {
+			return editorText;
+		},
+		addToHistory: vi.fn(),
+	};
+	const pendingMessagesContainer = new Container();
+	const requestRender = vi.fn();
+	const updatePendingMessagesDisplay = vi.fn();
+
+	const ctx = {
+		editor,
+		ui: { requestRender },
+		pendingMessagesContainer,
+		session,
+		compactionQueuedMessages: [],
+		keybindings: {
+			getDisplayString: (_action: string) => "Alt+Up",
+		},
+		updatePendingMessagesDisplay,
+		locallySubmittedUserSignatures: new Set<string>(),
+	} as unknown as InteractiveModeContext;
+
+	return { ctx, editor, pendingMessagesContainer };
+}
+
+describe("UiHelpers / InputController against the queued-display layer (E8-E9)", () => {
+	let fixture: SessionFixture | undefined;
+
+	beforeEach(async () => {
+		// E8 invokes the real `theme.fg(...)` codepath inside
+		// updatePendingMessagesDisplay; without an initialized theme module the
+		// global `theme` variable is undefined. Installs `dark` per-test —
+		// matches the established suite convention used by other test files
+		// (bash-execution-clamp.test.ts, bash-execution-sixel.test.ts) where
+		// `dark` is the agreed default for every test that needs a theme.
+		// No `afterEach` restore is required by that convention; the theme
+		// module exposes no reset API, and `dark` is the suite-wide assumed
+		// post-state.
+		const themeInstance = await getThemeByName("dark");
+		expect(themeInstance).toBeDefined();
+		setThemeInstance(themeInstance!);
+	});
+
+	afterEach(async () => {
+		if (fixture) {
+			await fixture.session.dispose();
+			fixture.authStorage.close();
+			fixture.tempDir.removeSync();
+			fixture = undefined;
+		}
+		vi.restoreAllMocks();
+	});
+
+	it("E8: updatePendingMessagesDisplay renders the compact slash form for queued skills", async () => {
+		fixture = await createRealSession();
+		const { session } = fixture;
+		session.enqueueCustomMessageDisplay("/skill:test-skill arg1 arg2", "steer");
+
+		const { ctx, pendingMessagesContainer } = createStubInteractiveModeContextForUiHelpers(session);
+		const uiHelpers = new UiHelpers(ctx);
+		uiHelpers.updatePendingMessagesDisplay();
+
+		// Render the container at a generous width and assert the compact slash-form
+		// chip appears verbatim. Matches the user-facing "Steer: /skill:..." format.
+		const rendered = pendingMessagesContainer.render(120).join("\n");
+		expect(rendered).toMatch(/Steer: \/skill:test-skill arg1 arg2/);
+	});
+
+	it("E9: restoreQueuedMessagesToEditor recovers the compact slash form into the editor and clears the queue", async () => {
+		fixture = await createRealSession();
+		const { session } = fixture;
+		session.enqueueCustomMessageDisplay("/skill:test-skill arg1 arg2", "steer");
+
+		const { ctx, editor } = createStubInteractiveModeContextForUiHelpers(session);
+		const controller = new InputController(ctx);
+		const count = controller.restoreQueuedMessagesToEditor();
+		expect(count).toBe(1);
+		expect(editor.getText()).toBe("/skill:test-skill arg1 arg2");
+		// Queue cleared on both arrays.
+		const { steering, followUp } = session.getQueuedMessages();
+		expect(steering).toEqual([]);
+		expect(followUp).toEqual([]);
+	});
+});
