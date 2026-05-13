@@ -119,6 +119,16 @@ jobs:
          - name: Ensure cross-compilation target is installed
            if: matrix.target
            run: rustup target add ${{ matrix.target }}
+         - name: Prepend rustup toolchain bin to PATH
+           shell: bash
+           run: |
+              # Homebrew on macOS runners ships rustup-init with shadow proxies
+              # for `cargo`/`rustc`/etc. that error out as the installer
+              # ("unexpected argument 'metadata' found"). Force the real
+              # toolchain binaries to win on PATH.
+              toolchain_bin="$(dirname "$(rustup which cargo)")"
+              echo "$toolchain_bin" >> "$GITHUB_PATH"
+              echo "Prepended $toolchain_bin to PATH"
          - uses: Swatinem/rust-cache@v2
            with:
               shared-key: native-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.variant
