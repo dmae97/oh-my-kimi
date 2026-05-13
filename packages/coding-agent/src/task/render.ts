@@ -777,6 +777,10 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 	if (result.tokens > 0) {
 		statusLine += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(result.tokens)} tokens`)}`;
 	}
+	const resultCost = result.usage?.cost.total ?? 0;
+	if (resultCost > 0) {
+		statusLine += `${theme.sep.dot}${theme.fg("statusLineCost", `$${resultCost.toFixed(2)}`)}`;
+	}
 	statusLine += `${theme.sep.dot}${theme.fg("dim", formatDuration(result.durationMs))}`;
 
 	if (result.truncated) {
