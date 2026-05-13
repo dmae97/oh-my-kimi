@@ -95,8 +95,25 @@ function parseListOptions(url: InternalUrl, scheme: Scheme, repo: string | undef
 
 function parseUrl(url: InternalUrl, scheme: Scheme): Parsed {
 	const host = url.rawHost || url.hostname;
-	const pathname = (url.rawPathname ?? url.pathname).replace(/^\/+/, "");
-	const parts = pathname ? pathname.split("/").filter(Boolean) : [];
+	const rawPath = url.rawPathname ?? url.pathname;
+	// Strip a single leading slash so we can detect empty internal segments
+	// (e.g. `pr://owner//77` → pathname `//77` → stripped `/77` → ["", "77"]).
+	const stripped = rawPath.startsWith("/") ? rawPath.slice(1) : rawPath;
+	const parts: string[] = [];
+	if (stripped !== "") {
+		for (const seg of stripped.split("/")) {
+			let decoded: string;
+			try {
+				decoded = decodeURIComponent(seg);
+			} catch {
+				throw new Error(`Invalid ${scheme}:// URL: empty or unsafe path segment`);
+			}
+			if (decoded === "" || decoded === "." || decoded === "..") {
+				throw new Error(`Invalid ${scheme}:// URL: empty or unsafe path segment`);
+			}
+			parts.push(seg);
+		}
+	}
 
 	// Shapes:
 	//   scheme://                    → list default repo
@@ -191,7 +208,7 @@ function parseUrl(url: InternalUrl, scheme: Scheme): Parsed {
  *
  * The earlier-fallback drives `gh repo view` and any `gh issue list` /
  * `gh pr list` for short-form URLs, so getting this right is what keeps
- * `read issue://N` from picking the wrong repo across concurrent sessions.
+ * reads of `issue://N` from picking the wrong repo across concurrent sessions.
  */
 function resolveCwd(context: ResolveContext | undefined): string {
 	if (context?.cwd) return context.cwd;
@@ -453,6 +470,9 @@ export class IssueProtocolHandler implements ProtocolHandler {
 	readonly immutable = true;
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
+		if (context?.signal?.aborted) {
+			throw new Error("aborted");
+		}
 		const parsed = parseUrl(url, "issue");
 		if (parsed.kind === "list") {
 			try {
@@ -499,6 +519,9 @@ export class PrProtocolHandler implements ProtocolHandler {
 	readonly immutable = true;
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
+		if (context?.signal?.aborted) {
+			throw new Error("aborted");
+		}
 		const parsed = parseUrl(url, "pr");
 		if (parsed.kind === "list") {
 			try {

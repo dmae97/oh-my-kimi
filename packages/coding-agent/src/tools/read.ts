@@ -1173,7 +1173,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (conflictUri) {
 			if (conflictUri.id === "*") {
 				throw new ToolError(
-					"`read conflict://*` is not supported — wildcards are write-only. Use `read <path>:conflicts` for the full list of conflicts in a file, or `read conflict://<N>` to inspect a single block.",
+					"Reading `conflict://*` is not supported — wildcards are write-only. Use the `<path>:conflicts` read selector for the full list of conflicts in a file, or read `conflict://<N>` to inspect a single block.",
 				);
 			}
 			return this.#readConflictRegion(conflictUri.id, conflictUri.scope);
@@ -1211,7 +1211,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (internalRouter.canHandle(internalTarget.path)) {
 			const parsed = parseSel(internalTarget.sel);
 			const { offset, limit } = selToOffsetLimit(parsed);
-			return this.#handleInternalUrl(internalTarget.path, offset, limit, { raw: isRawSelector(parsed) });
+			return this.#handleInternalUrl(internalTarget.path, offset, limit, { raw: isRawSelector(parsed) }, signal);
 		}
 
 		const archivePath = await this.#resolveArchiveReadPath(readPath, signal);
@@ -1633,7 +1633,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	}
 
 	/**
-	 * Implement `read <path>:conflicts`: scan the whole file once, register
+	 * Implement the `<path>:conflicts` read selector: scan the whole file once, register
 	 * every block in the session's conflict history, and return a compact
 	 * `#N L_a-L_b` index instead of file content. Designed for heavily
 	 * conflicted files where dumping every body would be wasteful.
@@ -1677,6 +1677,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		offset?: number,
 		limit?: number,
 		options?: { raw?: boolean },
+		signal?: AbortSignal,
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		const internalRouter = InternalUrlRouter.instance();
 
@@ -1706,6 +1707,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const resource = await internalRouter.resolve(url, {
 			cwd: this.session.cwd,
 			settings: this.session.settings,
+			signal,
 		});
 		const details: ReadToolDetails = { resolvedPath: resource.sourcePath, contentType: resource.contentType };
 
@@ -1920,7 +1922,8 @@ export const readToolRenderer = {
 			const n = details.conflictCount;
 			title += ` ${uiTheme.fg("warning", `(⚠ ${n} conflict${n === 1 ? "" : "s"})`)}`;
 		}
-		const isMarkdown = details?.contentType === "text/markdown";
+		const rawRequested = args?.raw === true || isRawSelector(parseSel(splitPathAndSel(rawPath).sel));
+		const isMarkdown = details?.contentType === "text/markdown" && !rawRequested;
 		let cachedWidth: number | undefined;
 		let cachedExpanded: boolean | undefined;
 		let cachedLines: string[] | undefined;
