@@ -2371,7 +2371,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "14.9.9"
+version = "15.0.0"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -2439,7 +2439,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "14.9.9"
+version = "15.0.0"
 dependencies = [
  "async-trait",
  "libc",
@@ -2451,7 +2451,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "14.9.9"
+version = "15.0.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2499,7 +2499,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "14.9.9"
+version = "15.0.0"
 dependencies = [
  "anyhow",
  "brush-builtins",

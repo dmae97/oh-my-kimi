@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.0.0] - 2026-05-13
 ### Breaking Changes
 
 - Removed `op: issue_view` and `op: pr_view` from the `github` tool. Read single issues/PRs via the `read` tool against `issue://<N>` / `pr://<N>` (or the long form `issue://<owner>/<repo>/<N>` / `pr://<owner>/<repo>/<N>`); append `?comments=0` to drop the comments section. The `issue` and `comments` parameters were removed from the tool schema since no remaining op consumes them. Mutating ops (`pr_create`, `pr_checkout`, `pr_push`), `repo_view`, `search_*`, and `run_watch` are unchanged.
