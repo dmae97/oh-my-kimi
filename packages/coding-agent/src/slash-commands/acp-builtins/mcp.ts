@@ -102,14 +102,14 @@ async function getMcpConfiguredServers(
 	const [userConfig, projectConfig] = await Promise.all([readMCPConfigFile(userPath), readMCPConfigFile(projectPath)]);
 	const servers: Array<{ name: string; config: MCPServerConfig; scope: AcpMcpScope }> = [];
 	const seen = new Set<string>();
-	for (const [name, config] of Object.entries(userConfig.mcpServers ?? {})) {
+	for (const [name, config] of Object.entries(projectConfig.mcpServers ?? {})) {
 		if (config.enabled !== false) {
-			servers.push({ name, config, scope: "user" });
+			servers.push({ name, config, scope: "project" });
 			seen.add(name);
 		}
 	}
-	for (const [name, config] of Object.entries(projectConfig.mcpServers ?? {})) {
-		if (!seen.has(name) && config.enabled !== false) servers.push({ name, config, scope: "project" });
+	for (const [name, config] of Object.entries(userConfig.mcpServers ?? {})) {
+		if (!seen.has(name) && config.enabled !== false) servers.push({ name, config, scope: "user" });
 	}
 	return servers;
 }
@@ -432,14 +432,14 @@ async function handleEnableDisableCommand(verb: "enable" | "disable", rest: stri
 			readMCPConfigFile(userPath),
 			readMCPConfigFile(projectPath),
 		]);
-		if (userConfig.mcpServers?.[name] !== undefined) {
-			await updateMCPServer(userPath, name, { ...userConfig.mcpServers[name], enabled } as MCPServerConfig);
-			await runtime.output(`Server "${name}" ${enabled ? "enabled" : "disabled"} (user config).`);
-			return commandConsumed();
-		}
 		if (projectConfig.mcpServers?.[name] !== undefined) {
 			await updateMCPServer(projectPath, name, { ...projectConfig.mcpServers[name], enabled } as MCPServerConfig);
 			await runtime.output(`Server "${name}" ${enabled ? "enabled" : "disabled"} (project config).`);
+			return commandConsumed();
+		}
+		if (userConfig.mcpServers?.[name] !== undefined) {
+			await updateMCPServer(userPath, name, { ...userConfig.mcpServers[name], enabled } as MCPServerConfig);
+			await runtime.output(`Server "${name}" ${enabled ? "enabled" : "disabled"} (user config).`);
 			return commandConsumed();
 		}
 		const disabledList = await readDisabledServers(userPath);
