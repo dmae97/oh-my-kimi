@@ -222,7 +222,11 @@ export function demoteTopLevelLexicals(code: string): string {
 
 function returnFinalExpression(code: string): { source: string; returned: boolean } {
 	const ast = parseProgram(code);
-	const last = ast?.program.body.at(-1);
+	const body = ast?.program.body;
+	if (!body) return { source: code, returned: false };
+	let lastIndex = body.length - 1;
+	while (lastIndex >= 0 && body[lastIndex]?.type === "EmptyStatement") lastIndex--;
+	const last = lastIndex >= 0 ? body[lastIndex] : undefined;
 	if (last?.type !== "ExpressionStatement") return { source: code, returned: false };
 
 	const expression = last as BabelExpressionStatement;

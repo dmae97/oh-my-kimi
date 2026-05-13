@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { rewriteImports } from "../../src/eval/js/context-manager";
+import { rewriteImports, wrapCode } from "../../src/eval/js/context-manager";
 
 // Test fixtures embed user-supplied `import(...)` syntax that the rewriter must
 // transform. The strings are split so static-analysis heuristics don't read them
@@ -123,5 +123,11 @@ describe("rewriteImports", () => {
 		const code = `${IMPORT} { foo from broken syntax 'unterminated`;
 		// Should not throw; should fall through to the VM which will surface the syntax error.
 		expect(() => rewriteImports(code)).not.toThrow();
+	});
+
+	it("captures the final expression even when trailing empty statements follow", () => {
+		const wrapped = wrapCode("await Promise.resolve(1);;");
+		expect(wrapped.finalExpressionReturned).toBe(true);
+		expect(wrapped.source).toContain("__omp_set_final_expr__((await Promise.resolve(1)))");
 	});
 });

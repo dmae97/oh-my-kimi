@@ -17,7 +17,7 @@ import type {
 	WorkerOutbound,
 } from "./worker-protocol";
 
-export { rewriteImports } from "./shared/rewrite-imports";
+export { rewriteImports, wrapCode } from "./shared/rewrite-imports";
 export type { JsDisplayOutput } from "./worker-protocol";
 
 export interface VmRunState {
