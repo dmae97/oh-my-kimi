@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InternalUrlRouter, LocalProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
 import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 
@@ -147,6 +148,24 @@ describe("SearchTool internal URL resolution", () => {
 		expect(text).toContain("needle");
 		// No hashline anchors (LINE+ID|content) for immutable sources
 		expect(text).not.toMatch(/^\*?\s*\d+[a-z]{2}\|/m);
+	});
+
+	it("resolves local:// URLs before file-name lookup", async () => {
+		const localRoot = path.join(artifactsDir, "local");
+		await fs.mkdir(localRoot, { recursive: true });
+		await Bun.write(path.join(localRoot, "PLAN.md"), "# Plan\n");
+
+		LocalProtocolHandler.setOverride({ getArtifactsDir: () => artifactsDir, getSessionId: () => "session" });
+
+		const session = createSession();
+		const tool = new FindTool(session);
+
+		const result = await tool.execute("test-call", {
+			paths: ["local://PLAN.md"],
+		});
+
+		const text = getResultText(result);
+		expect(text).toContain("PLAN.md");
 	});
 
 	it("keeps hashline anchors when searching mutable local:// sources", async () => {

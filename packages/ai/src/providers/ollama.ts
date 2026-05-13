@@ -1,3 +1,4 @@
+import { abortableSleep } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import { getEnvApiKey } from "../stream";
 import type {
@@ -199,7 +200,18 @@ function convertMessages(model: Model<"ollama-chat">, context: Context): OllamaM
 		});
 	}
 	messages.push(...context.messages);
-	return transformMessages(messages, model).map(convertMessage);
+	const isCloud = model.provider === "ollama-cloud";
+	return transformMessages(messages, model).map(msg => {
+		const converted = convertMessage(msg);
+		// Ollama cloud rejects requests when assistant history messages contain the `thinking`
+		// field — it's valid in model responses but not accepted as a history input. Strip it
+		// to prevent HTTP 400 errors. Local Ollama instances are unaffected.
+		if (isCloud && converted.role === "assistant" && converted.thinking) {
+			const { thinking: _t, ...rest } = converted;
+			return rest;
+		}
+		return converted;
+	});
 }
 
 function convertTools(tools: Tool[] | undefined): OllamaFunctionTool[] | undefined {
@@ -320,6 +332,18 @@ function mapDoneReason(doneReason: string | undefined, output: AssistantMessage)
 	return "stop";
 }
 
+const OLLAMA_RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
+
+async function fetchChatWithRetry(url: string, init: RequestInit): Promise<Response> {
+	const signal = init.signal as AbortSignal | undefined;
+	for (let attempt = 0; attempt < OLLAMA_RETRY_DELAYS_MS.length; attempt++) {
+		const response = await fetch(url, init);
+		if (response.ok || response.status < 500) return response;
+		await abortableSleep(OLLAMA_RETRY_DELAYS_MS[attempt]!, signal);
+	}
+	return fetch(url, init);
+}
+
 export const streamOllama: StreamFunction<"ollama-chat"> = (
 	model: Model<"ollama-chat">,
 	context: Context,
@@ -353,7 +377,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 				url: `${baseUrl}/api/chat`,
 				body,
 			};
-			const response = await fetch(`${baseUrl}/api/chat`, {
+			const response = await fetchChatWithRetry(`${baseUrl}/api/chat`, {
 				method: "POST",
 				headers: {
 					...model.headers,

@@ -415,6 +415,65 @@ describe("ollama-cloud provider support", () => {
 		});
 	});
 
+	test("strips `thinking` from assistant history messages on ollama-cloud", async () => {
+		let requestBody: Record<string, unknown> | undefined;
+		global.fetch = vi.fn(async (_input, init) => {
+			requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+			return createNdjsonResponse([
+				{ model: "gpt-oss:120b", message: { role: "assistant", content: "ok" }, done: false },
+				{ model: "gpt-oss:120b", done: true, done_reason: "stop", prompt_eval_count: 1, eval_count: 1 },
+			]);
+		}) as unknown as typeof fetch;
+
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "kick off", timestamp: Date.now() },
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "internal reasoning" },
+						{ type: "toolCall", id: "tool-1", name: "read_file", arguments: { path: "README.md" } },
+					],
+					api: "ollama-chat",
+					provider: "ollama-cloud",
+					model: "gpt-oss:120b",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				{
+					role: "toolResult",
+					toolCallId: "tool-1",
+					toolName: "read_file",
+					content: [{ type: "text", text: "README contents" }],
+					isError: false,
+					timestamp: Date.now(),
+				},
+			],
+			tools: [readFileTool],
+		};
+
+		await stream(cloudModel, context, { apiKey: "cloud-test-key" }).result();
+
+		const messages = requestBody?.messages as Array<Record<string, unknown>> | undefined;
+		const assistant = messages?.find(message => message.role === "assistant");
+		expect(assistant).toBeDefined();
+		expect(assistant).not.toHaveProperty("thinking");
+		expect(assistant?.tool_calls).toEqual([
+			{
+				type: "function",
+				function: { name: "read_file", arguments: { path: "README.md" } },
+			},
+		]);
+	});
+
 	test("emits one Ollama system message per ordered system prompt entry", async () => {
 		let requestBody: Record<string, unknown> | undefined;
 		global.fetch = vi.fn(async (_input, init) => {

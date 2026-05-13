@@ -7,7 +7,7 @@ import chalk from "chalk";
 import { parseEffort } from "../thinking";
 import { BUILTIN_TOOLS } from "../tools";
 
-export type Mode = "text" | "json" | "rpc" | "acp";
+export type Mode = "text" | "json" | "rpc" | "acp" | "rpc-ui";
 
 export interface Args {
 	cwd?: string;
@@ -79,7 +79,7 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.allowHome = true;
 		} else if (arg === "--mode" && i + 1 < args.length) {
 			const mode = args[++i];
-			if (mode === "text" || mode === "json" || mode === "rpc" || mode === "acp") {
+			if (mode === "text" || mode === "json" || mode === "rpc" || mode === "acp" || mode === "rpc-ui") {
 				result.mode = mode;
 			}
 		} else if (arg === "--continue" || arg === "-c") {

@@ -154,6 +154,12 @@ const USAGE_CACHE_PREFIX = "usage_cache:";
 const USAGE_REPORT_TTL_MS = 30_000;
 const DEFAULT_USAGE_REQUEST_TIMEOUT_MS = 3_000;
 const DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 10_000;
+/**
+ * Cap on the buffered credential_disabled backlog held while no handler is attached.
+ * In practice the backlog is 0–N where N ≈ active providers (≤ ~20). The cap exists so
+ * pathological detach-without-reattach loops can't grow memory unboundedly.
+ */
+const MAX_PENDING_DISABLED_EVENTS = 32;
 
 type UsageCacheEntry<T> = {
 	value: T;
@@ -283,7 +289,16 @@ export class AuthStorage {
 	#fallbackResolver?: (provider: string) => string | undefined;
 	#store: AuthCredentialStore;
 	#configValueResolver: (config: string) => Promise<string | undefined>;
-	#onCredentialDisabled?: (event: CredentialDisabledEvent) => void | Promise<void>;
+	#credentialDisabledListeners: Set<(event: CredentialDisabledEvent) => void | Promise<void>> = new Set();
+	/**
+	 * Buffer for credential_disabled events fired while no listener is subscribed.
+	 * Drained (in insertion order) to the first listener that triggers the empty→non-empty
+	 * transition via {@link AuthStorage.onCredentialDisabled}. Bounded at
+	 * {@link MAX_PENDING_DISABLED_EVENTS}; oldest entries are dropped to keep memory predictable
+	 * if a long-lived AuthStorage somehow accumulates a backlog (provider count is naturally small,
+	 * but a process that runs without subscribers for a long time shouldn't grow this unboundedly).
+	 */
+	#pendingDisabledEvents: CredentialDisabledEvent[] = [];
 	#closed = false;
 
 	constructor(store: AuthCredentialStore, options: AuthStorageOptions = {}) {
@@ -294,7 +309,11 @@ export class AuthStorage {
 		this.#usageCache = new AuthStorageUsageCache(this.#store);
 		this.#usageFetch = options.usageFetch ?? fetch;
 		this.#usageRequestTimeoutMs = options.usageRequestTimeoutMs ?? DEFAULT_USAGE_REQUEST_TIMEOUT_MS;
-		this.#onCredentialDisabled = options.onCredentialDisabled;
+		if (options.onCredentialDisabled) {
+			// Constructor-registered subscribers are permanent for this AuthStorage's lifetime;
+			// the unsubscribe handle is intentionally discarded.
+			this.onCredentialDisabled(options.onCredentialDisabled);
+		}
 		this.#usageLogger =
 			options.usageLogger ??
 			({
@@ -322,6 +341,39 @@ export class AuthStorage {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#store.close();
+	}
+
+	/**
+	 * Subscribe to {@link CredentialDisabledEvent}s. Multiple subscribers are supported and
+	 * each fires for every disable event; subscribers are invoked in registration order with
+	 * exceptions and async rejections isolated per-listener so a misbehaving subscriber
+	 * cannot break the disable path or starve the rest of the chain.
+	 *
+	 * If `credential_disabled` events were emitted while no listener was subscribed, they are
+	 * replayed (in insertion order) to the listener that triggers the empty→non-empty
+	 * transition. The drain is one-shot — listeners that subscribe after that no longer see
+	 * past events.
+	 *
+	 * Returns an unsubscribe function. The function is idempotent: calling it more than once
+	 * is a no-op. After every subscriber has unsubscribed, subsequent disable events buffer
+	 * again until the next subscribe.
+	 *
+	 * @param listener Callback invoked with each disable event. May be sync or async.
+	 * @returns A function that removes this listener from the subscriber set.
+	 */
+	onCredentialDisabled(listener: (event: CredentialDisabledEvent) => void | Promise<void>): () => void {
+		const wasEmpty = this.#credentialDisabledListeners.size === 0;
+		this.#credentialDisabledListeners.add(listener);
+		if (wasEmpty && this.#pendingDisabledEvents.length > 0) {
+			const drained = this.#pendingDisabledEvents;
+			this.#pendingDisabledEvents = [];
+			for (const event of drained) {
+				this.#invokeListener(listener, event);
+			}
+		}
+		return () => {
+			this.#credentialDisabledListeners.delete(listener);
+		};
 	}
 
 	/**
@@ -630,18 +682,38 @@ export class AuthStorage {
 	}
 
 	#emitCredentialDisabled(event: CredentialDisabledEvent): void {
-		const handler = this.#onCredentialDisabled;
-		if (!handler) return;
-		const logHandlerError = (error: unknown): void => {
-			logger.warn("onCredentialDisabled handler threw", { provider: event.provider, error: String(error) });
+		if (this.#credentialDisabledListeners.size === 0) {
+			// No subscribers — buffer for later replay. Cap the backlog so a process that runs
+			// without subscribers for a long time can't grow memory unboundedly; drop oldest
+			// under pressure.
+			if (this.#pendingDisabledEvents.length >= MAX_PENDING_DISABLED_EVENTS) {
+				this.#pendingDisabledEvents.shift();
+			}
+			this.#pendingDisabledEvents.push(event);
+			return;
+		}
+		// Snapshot before iteration so a listener that subscribes/unsubscribes during fan-out
+		// can't observe a partially-mutated set or receive an event it just registered for.
+		const listeners = [...this.#credentialDisabledListeners];
+		for (const listener of listeners) {
+			this.#invokeListener(listener, event);
+		}
+	}
+
+	#invokeListener(
+		listener: (event: CredentialDisabledEvent) => void | Promise<void>,
+		event: CredentialDisabledEvent,
+	): void {
+		const logListenerError = (error: unknown): void => {
+			logger.warn("onCredentialDisabled listener threw", { provider: event.provider, error: String(error) });
 		};
 		try {
-			const result = handler(event);
+			const result = listener(event);
 			if (result && typeof (result as PromiseLike<void>).then === "function") {
-				(result as Promise<void>).catch(logHandlerError);
+				(result as Promise<void>).catch(logListenerError);
 			}
 		} catch (error) {
-			logHandlerError(error);
+			logListenerError(error);
 		}
 	}
 
@@ -1993,6 +2065,27 @@ export class AuthStorage {
 			});
 
 			if (isDefinitiveFailure) {
+				// The credential at this index may have been rotated by another process between
+				// our in-memory snapshot and the refresh attempt: Anthropic rotates refresh
+				// tokens on every use, so the peer's success leaves our stored token invalid.
+				// Re-read the row from disk before marking it disabled — if the persisted
+				// refresh token has changed, the peer rotation succeeded and we should pick
+				// up the new credential instead of soft-deleting the row that the peer just
+				// updated.
+				const credentialId = this.#getStoredCredentials(provider)[selection.index]?.id;
+				if (credentialId !== undefined) {
+					const latestRow = this.#store.listAuthCredentials(provider).find(row => row.id === credentialId);
+					const latestCredential = latestRow?.credential;
+					if (latestCredential?.type === "oauth" && latestCredential.refresh !== selection.credential.refresh) {
+						logger.debug("OAuth refresh race detected; another process rotated token first", {
+							provider,
+							index: selection.index,
+							credentialId,
+						});
+						await this.reload();
+						return this.getApiKey(provider, sessionId, options);
+					}
+				}
 				// Permanently disable invalid credentials with an explicit cause for inspection/debugging
 				this.#disableCredentialAt(provider, selection.index, `oauth refresh failed: ${errorMsg}`);
 				if (this.#getCredentialsForProvider(provider).some(credential => credential.type === "oauth")) {

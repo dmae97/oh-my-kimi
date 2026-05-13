@@ -109,7 +109,6 @@ describe("runSubprocess yield reminders", () => {
 		index: 0,
 		id: "subagent-1",
 		settings: Settings.isolated(),
-		authStorage: {} as unknown as AuthStorage,
 		modelRegistry: { refresh: async () => {} } as unknown as import("../../src/config/model-registry").ModelRegistry,
 		enableLsp: false,
 	};
@@ -418,5 +417,52 @@ describe("runSubprocess yield reminders", () => {
 		expect(result.aborted).toBe(true);
 		expect(result.abortReason).toBe("Cancelled before start");
 		expect(result.stderr).toBe("Cancelled before start");
+	});
+	it("uses modelRegistry.authStorage when only options.modelRegistry is provided", async () => {
+		const session = createMockSession(({ emit }) => {
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-registry-only",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+		const createAgentSessionSpy = mockCreateAgentSession(session);
+		const fakeAuthStorage = { sentinel: "registry-storage" } as unknown as AuthStorage;
+		const modelRegistry = {
+			authStorage: fakeAuthStorage,
+			refresh: async () => {},
+		} as unknown as import("../../src/config/model-registry").ModelRegistry;
+
+		await runSubprocess({ ...baseOptions, id: "subagent-registry-only", modelRegistry });
+
+		expect(createAgentSessionSpy).toHaveBeenCalledTimes(1);
+		expect(createAgentSessionSpy.mock.calls[0]?.[0]?.authStorage).toBe(fakeAuthStorage);
+	});
+
+	it("rejects when options.authStorage and options.modelRegistry.authStorage are different instances", async () => {
+		// Mismatch fails via runSubprocess's standard catch path (exitCode=1 + stderr), not a thrown promise.
+		const createAgentSessionSpy = vi.spyOn(sdkModule, "createAgentSession");
+		const registryStorage = { sentinel: "registry" } as unknown as AuthStorage;
+		const otherStorage = { sentinel: "other" } as unknown as AuthStorage;
+		const modelRegistry = {
+			authStorage: registryStorage,
+			refresh: async () => {},
+		} as unknown as import("../../src/config/model-registry").ModelRegistry;
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-mismatch",
+			authStorage: otherStorage,
+			modelRegistry,
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toMatch(/options\.authStorage.*modelRegistry\.authStorage/);
+		expect(createAgentSessionSpy).not.toHaveBeenCalled();
 	});
 });
