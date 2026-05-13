@@ -40,6 +40,7 @@ const TASK_COMMANDS = {
 type RustTaskName = keyof typeof TASK_COMMANDS;
 
 const repoRoot = path.join(import.meta.dir, "..");
+const cargoBinary = await resolveCargoBinary();
 const taskName = process.argv[2];
 
 if (!isRustTaskName(taskName)) {
@@ -121,8 +122,23 @@ function isOneOf<T extends string>(value: string, values: readonly T[]): value i
 	return values.some(entry => entry === value);
 }
 
+async function resolveCargoBinary(): Promise<string> {
+	// On macOS runners, Homebrew's `rustup-init` binary is on PATH before the
+	// rustup proxies in `$CARGO_HOME/bin`, and invoking it as `cargo` falls
+	// through to its installer mode ("unexpected argument 'nextest' found").
+	// Ask rustup directly for the cargo binary in the active toolchain.
+	const result = await $`rustup which cargo`.cwd(repoRoot).quiet().nothrow();
+	if (result.exitCode === 0) {
+		const resolved = result.stdout.toString().trim();
+		if (resolved !== "") return resolved;
+	}
+	return "cargo";
+}
+
 async function runCommand(command: readonly string[]): Promise<number> {
-	const proc = Bun.spawn([...command], {
+	const [head, ...rest] = command;
+	const argv = head === "cargo" ? [cargoBinary, ...rest] : [head, ...rest];
+	const proc = Bun.spawn(argv, {
 		cwd: repoRoot,
 		stdin: "inherit",
 		stdout: "inherit",
