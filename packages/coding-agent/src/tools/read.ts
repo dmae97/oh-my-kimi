@@ -1840,10 +1840,7 @@ export const readToolRenderer = {
 			const outputBlock = new CachedOutputBlock();
 			return {
 				render: (width: number) =>
-					outputBlock.render(
-						{ header, state: "error", sections: [{ lines: errorLines }], width },
-						uiTheme,
-					),
+					outputBlock.render({ header, state: "error", sections: [{ lines: errorLines }], width }, uiTheme),
 				invalidate: () => outputBlock.invalidate(),
 			};
 		}
@@ -1938,7 +1935,7 @@ export const readToolRenderer = {
 								title,
 								status: "complete",
 								output: warningLines.length > 0 ? warningLines.join("\n") : undefined,
-								expanded: true,
+								expanded,
 								width,
 							},
 							uiTheme,

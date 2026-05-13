@@ -2674,7 +2674,6 @@ export function parsePrUnifiedDiff(text: string): PrDiffPayload {
 	return { unified: text, files };
 }
 
-
 interface ParsedDiffHeaderToken {
 	value: string;
 	nextIndex: number;
@@ -2719,7 +2718,7 @@ function parseDiffQuotedEscape(text: string, slashIndex: number): ParsedDiffHead
 		case "v":
 			return { value: "\v", nextIndex: slashIndex + 2 };
 		case "\\":
-		case "\"":
+		case '"':
 			return { value: next, nextIndex: slashIndex + 2 };
 		default:
 			return { value: next, nextIndex: slashIndex + 2 };
@@ -2727,11 +2726,11 @@ function parseDiffQuotedEscape(text: string, slashIndex: number): ParsedDiffHead
 }
 
 function parseDiffQuotedToken(text: string, startIndex: number): ParsedDiffHeaderToken | undefined {
-	if (text.charAt(startIndex) !== "\"") return undefined;
+	if (text.charAt(startIndex) !== '"') return undefined;
 	let value = "";
 	for (let i = startIndex + 1; i < text.length; i += 1) {
 		const ch = text.charAt(i);
-		if (ch === "\"") return { value, nextIndex: i + 1 };
+		if (ch === '"') return { value, nextIndex: i + 1 };
 		if (ch !== "\\") {
 			value += ch;
 			continue;
@@ -2759,7 +2758,7 @@ function stripPrDiffPathPrefix(value: string, prefix: "a/" | "b/"): string | und
 
 function parsePrDiffHeaderPaths(header: string): { oldPath?: string; newPath?: string } {
 	const trail = header.slice("diff --git ".length);
-	if (trail.startsWith("\"")) {
+	if (trail.startsWith('"')) {
 		const oldToken = parseDiffQuotedToken(trail, 0);
 		if (!oldToken) return {};
 		const newToken = parseDiffHeaderToken(trail, oldToken.nextIndex);
@@ -2786,8 +2785,8 @@ function isPrDiffFileHeaderLine(line: string): boolean {
 		line === "+++ /dev/null" ||
 		line.startsWith("--- a/") ||
 		line.startsWith("+++ b/") ||
-		line.startsWith("--- \"a/") ||
-		line.startsWith("+++ \"b/")
+		line.startsWith('--- "a/') ||
+		line.startsWith('+++ "b/')
 	);
 }
 

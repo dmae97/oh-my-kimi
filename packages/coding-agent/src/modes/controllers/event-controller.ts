@@ -277,21 +277,26 @@ export class EventController {
 
 			for (const content of this.ctx.streamingMessage.content) {
 				if (content.type !== "toolCall") continue;
-				if (
-					content.name === "read" &&
-					readArgsHaveTarget(content.arguments) &&
-					!readArgsTargetInternalUrl(content.arguments)
-				) {
-					this.#trackReadToolCall(content.id, content.arguments);
-					const component = this.ctx.pendingTools.get(content.id);
-					if (component) {
-						component.updateArgs(content.arguments, content.id);
-					} else {
-						const group = this.#getReadGroup();
-						group.updateArgs(content.arguments, content.id);
-						this.ctx.pendingTools.set(content.id, group);
+				if (content.name === "read") {
+					if (!readArgsHaveTarget(content.arguments)) {
+						// Args still streaming — defer until path is parseable so we can route to the
+						// read group (regular files) vs ToolExecutionComponent (internal URLs).
+						// Creating either component now would lock the read into the wrong shape.
+						continue;
 					}
-					continue;
+					if (!readArgsTargetInternalUrl(content.arguments)) {
+						this.#trackReadToolCall(content.id, content.arguments);
+						const component = this.ctx.pendingTools.get(content.id);
+						if (component) {
+							component.updateArgs(content.arguments, content.id);
+						} else {
+							const group = this.#getReadGroup();
+							group.updateArgs(content.arguments, content.id);
+							this.ctx.pendingTools.set(content.id, group);
+						}
+						continue;
+					}
+					// Internal URL read falls through to ToolExecutionComponent below.
 				}
 
 				// Preserve the raw partial JSON for renderers that need to surface fields before the JSON object closes.

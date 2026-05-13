@@ -1378,10 +1378,7 @@ export function renderReadUrlResult(
 		const outputBlock = new CachedOutputBlock();
 		return {
 			render: (width: number) =>
-				outputBlock.render(
-					{ header, state: "error", sections: [{ lines: errorLines }], width },
-					uiTheme,
-				),
+				outputBlock.render({ header, state: "error", sections: [{ lines: errorLines }], width }, uiTheme),
 			invalidate: () => outputBlock.invalidate(),
 		};
 	}
