@@ -42,6 +42,7 @@
 - Fixed extension `ctx.shutdown()` being a no-op in the primary interactive path. The handler in `initHooksAndCustomTools` now sets `shutdownRequested` (mirroring the backgrounded-reinit path), and the main REPL loop drains the flag at the post-stream idle boundary so queued steering messages still flush before teardown.
 - Fixed plan-mode "Approve and compact context" dispatching queued user input against the stale plan-mode reference path. `setPlanReferencePath(finalPlanFilePath)` now runs before `handleCompactCommand` flushes the compaction queue, so any message typed during compaction is delivered with the approved plan context attached.
 - Fixed `.omp/commands/fix-issues.md` and `.omp/commands/review-prs.md` still instructing agents to call the removed `github issue_view` / `pr_view` / `pr_diff` ops; they now reference `read issue://<N>` and `read pr://<N>[/diff[/all|<i>]]`.
+- Fixed `ExtensionRunner.initialize()` flushing buffered `credential_disabled` events before mode controllers had a chance to register their `onError` listener. Mode controllers call `runner.initialize(...)` immediately followed by `runner.onError(...)` synchronously; the flush now runs in a microtask after splicing the buffer, so a synchronously throwing `credential_disabled` handler is routed through the registered error listener instead of being silently dropped.
 
 ### Security
 
