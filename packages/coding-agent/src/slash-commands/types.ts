@@ -36,7 +36,7 @@ export interface ParsedSlashCommand {
  * - `{ prompt: string }` — command handled, pass `prompt` through as the new
  *   user input (e.g. `/force <tool> <prompt>` keeps `<prompt>` as the message).
  */
-export type SlashCommandResult = void | { consumed: true } | { prompt: string };
+export type SlashCommandResult = undefined | { consumed: true } | { prompt: string };
 
 /**
  * Runtime visible to slash-command handlers that run in text/ACP mode.

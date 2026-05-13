@@ -39,7 +39,7 @@ export async function executeAcpBuiltinSlashCommand(
 	const parsed = parseSlashCommand(text);
 	if (!parsed) return false;
 	const command = lookupBuiltinSlashCommand(parsed.name);
-	if (!command || !command.handle) return false;
+	if (!command?.handle) return false;
 	const result = await command.handle(parsed, runtime);
 	if (result === undefined) return { consumed: true };
 	return result;

@@ -4,7 +4,6 @@ import { sanitizeText } from "@oh-my-pi/pi-natives";
 import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
-import { buildSkillPromptMessage } from "../../extensibility/skills";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import { theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
