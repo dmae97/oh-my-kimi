@@ -23,10 +23,11 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import {
 	SKILL_PROMPT_MESSAGE_TYPE,
@@ -427,5 +428,108 @@ describe("UiHelpers / InputController against the queued-display layer (E8-E9)",
 		const { steering, followUp } = session.getQueuedMessages();
 		expect(steering).toEqual([]);
 		expect(followUp).toEqual([]);
+	});
+});
+
+// ============================================================================
+// E10: EventController refreshes the pending-messages bar on tagged custom
+// dequeue.
+//
+// Regression guard for the Codex P2 review finding on PR #1043: the
+// custom-role `message_start` branch in AgentSession.#handleAgentEvent spliced
+// the matching entry out of #steeringMessages / #followUpMessages correctly,
+// but EventController.#handleMessageStart only called updatePendingMessagesDisplay
+// from the `role === "user"` branch. The custom branch — which is where queued
+// /skill: invocations flow — never rebuilt `pendingMessagesContainer`, so the
+// chip kept painting until an unrelated trigger fired a refresh.
+//
+// The fix: in EventController's custom branch, when the dequeued message
+// carries the `__pendingDisplayTag` (proof it was queued via
+// enqueueCustomMessageDisplay), call updatePendingMessagesDisplay() before
+// requestRender(). E10 covers both gate branches:
+//   - positive: tagged custom -> refresh fires once
+//   - negative: untagged custom (ttsr-injection, irc:*, async-result, hookMessage)
+//     -> refresh NOT fired (over-refresh guard)
+// ============================================================================
+
+function createEventControllerFixtureForE10() {
+	const updatePendingMessagesDisplay = vi.fn();
+	const addMessageToChat = vi.fn();
+	const requestRender = vi.fn();
+	const ctx = {
+		isInitialized: true,
+		init: vi.fn(async () => {}),
+		ui: { requestRender },
+		statusLine: { invalidate: vi.fn() },
+		updateEditorTopBorder: vi.fn(),
+		addMessageToChat,
+		updatePendingMessagesDisplay,
+		session: {},
+	} as unknown as InteractiveModeContext;
+
+	const controller = new EventController(ctx);
+	return { controller, updatePendingMessagesDisplay, addMessageToChat };
+}
+
+describe("EventController custom-role dequeue refresh (E10)", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("E10: message_start with role=custom refreshes pending bar ONLY when __pendingDisplayTag is present", async () => {
+		const { controller, updatePendingMessagesDisplay, addMessageToChat } =
+			createEventControllerFixtureForE10();
+
+		// Positive case: tagged custom => refresh fires exactly once. The tag is the
+		// unambiguous signal "this message was queued via enqueueCustomMessageDisplay";
+		// AgentSession.#handleAgentEvent has already spliced the matching entry out of
+		// the display arrays (ran before this emit), so the rebuild repaints the now-
+		// correct queue state.
+		const taggedEvent: Extract<AgentSessionEvent, { type: "message_start" }> = {
+			type: "message_start",
+			message: {
+				role: "custom",
+				customType: SKILL_PROMPT_MESSAGE_TYPE,
+				content: "first",
+				display: true,
+				details: {
+					__pendingDisplayTag: "sk-test-0",
+					name: "foo",
+					path: "/s.md",
+					args: "bar",
+					lineCount: 1,
+				} satisfies SkillPromptDetails,
+				timestamp: Date.now(),
+			},
+		};
+		await controller.handleEvent(taggedEvent);
+		expect(updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
+		// Chat rendering still ran — refresh is additive, not a replacement for the
+		// chat path.
+		expect(addMessageToChat).toHaveBeenCalledTimes(1);
+
+		// Negative case: untagged custom => refresh NOT fired. Over-refresh guard.
+		// Non-queued customs (ttsr-injection, irc:*, async-result, hookMessage) never
+		// registered a pending chip, so rebuilding pendingMessagesContainer for them
+		// would be pure waste. Distinct timestamp avoids the #renderedCustomMessages
+		// signature-dedup early-return.
+		const untaggedEvent: Extract<AgentSessionEvent, { type: "message_start" }> = {
+			type: "message_start",
+			message: {
+				role: "custom",
+				customType: SKILL_PROMPT_MESSAGE_TYPE,
+				content: "second",
+				display: true,
+				details: undefined,
+				timestamp: Date.now() + 1,
+			},
+		};
+		await controller.handleEvent(untaggedEvent);
+		// Still exactly 1 — no additional call from the untagged path.
+		expect(updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
+		// Chat rendering still ran for the untagged custom (the chat-add path is
+		// unconditional inside the custom branch; only the pending-bar refresh is
+		// tag-gated).
+		expect(addMessageToChat).toHaveBeenCalledTimes(2);
 	});
 });
