@@ -39,7 +39,6 @@ const FALLBACK_WIDTH = 80;
 
 const OP_TITLES: Record<string, string> = {
 	repo_view: "GitHub Repo",
-	pr_diff: "GitHub PR Diff",
 	pr_checkout: "GitHub PR Checkout",
 	pr_push: "GitHub PR Push",
 	search_issues: "GitHub Search Issues",
@@ -82,7 +81,6 @@ function buildOpMeta(args: GithubToolRenderArgs): string[] {
 	const meta: string[] = [];
 	const op = args.op;
 	switch (op) {
-		case "pr_diff":
 		case "pr_checkout":
 		case "pr_push": {
 			const id = formatPrIdentifier(args.pr);

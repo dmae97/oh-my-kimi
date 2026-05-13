@@ -22,6 +22,7 @@ import {
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 
 const TEST_REPO = "owner/example";
+const TEST_AUTH_KEY = "test-auth";
 
 let tempDir: string;
 let originalEnv: string | undefined;
@@ -135,6 +136,32 @@ describe("github-cache db layer", () => {
 		const noComments = getCached(TEST_REPO, "issue", 9, false);
 		expect(withComments?.rendered).toBe("with-comments-rendering");
 		expect(noComments?.rendered).toBe("no-comments-rendering");
+	});
+
+	it("keys rows by GitHub auth identity", () => {
+		putCached({
+			authKey: "identity-a",
+			repo: TEST_REPO,
+			kind: "issue",
+			number: 12,
+			includeComments: true,
+			payload: issuePayload(12, "a"),
+			rendered: "from-a",
+			fetchedAt: 1000,
+		});
+		putCached({
+			authKey: "identity-b",
+			repo: TEST_REPO,
+			kind: "issue",
+			number: 12,
+			includeComments: true,
+			payload: issuePayload(12, "b"),
+			rendered: "from-b",
+			fetchedAt: 1000,
+		});
+
+		expect(getCached(TEST_REPO, "issue", 12, true, "identity-a")?.rendered).toBe("from-a");
+		expect(getCached(TEST_REPO, "issue", 12, true, "identity-b")?.rendered).toBe("from-b");
 	});
 
 	it("clearAll wipes every row but the schema survives", () => {
@@ -256,6 +283,40 @@ describe("getOrFetchView (TTL semantics)", () => {
 		expect(fetchFresh).toHaveBeenCalledTimes(1);
 	});
 
+	it("does not return soft-fresh rows past a shorter hard TTL", async () => {
+		const settings = Settings.isolated({
+			"github.cache.softTtlSec": 300,
+			"github.cache.hardTtlSec": 10,
+		});
+		const fetchFresh = vi.fn(async () => ({
+			rendered: "fresh-after-hard-expiry",
+			sourceUrl: undefined,
+			payload: { number: 88 },
+		}));
+		putCached({
+			repo: TEST_REPO,
+			kind: "issue",
+			number: 88,
+			includeComments: true,
+			payload: { number: 88 },
+			rendered: "hard-expired",
+			fetchedAt: Date.now() - 20_000,
+		});
+
+		const result = await getOrFetchView({
+			repo: TEST_REPO,
+			kind: "issue",
+			number: 88,
+			includeComments: true,
+			fetchFresh,
+			settings,
+		});
+
+		expect(result.status).toBe("miss");
+		expect(result.rendered).toBe("fresh-after-hard-expiry");
+		expect(fetchFresh).toHaveBeenCalledTimes(1);
+	});
+
 	it("bypasses the cache entirely when github.cache.enabled = false", async () => {
 		const settings = Settings.isolated({ "github.cache.enabled": false });
 		const fetchFresh = vi.fn(async () => ({
@@ -296,6 +357,7 @@ describe("getOrFetchIssue (gh-wired wrapper)", () => {
 			repo: TEST_REPO,
 			issue: "123",
 			includeComments: true,
+			cacheAuthKey: TEST_AUTH_KEY,
 		});
 		expect(first.status).toBe("miss");
 		expect(spy).toHaveBeenCalledTimes(1);
@@ -305,6 +367,7 @@ describe("getOrFetchIssue (gh-wired wrapper)", () => {
 			repo: TEST_REPO,
 			issue: "123",
 			includeComments: true,
+			cacheAuthKey: TEST_AUTH_KEY,
 		});
 		expect(second.status).toBe("fresh");
 		expect(second.rendered).toBe(first.rendered);
@@ -315,12 +378,12 @@ describe("getOrFetchIssue (gh-wired wrapper)", () => {
 		const spy = vi.spyOn(git.github, "json").mockResolvedValue(issuePayload(7, "from-url") as never);
 		const url = `https://github.com/${TEST_REPO}/issues/7`;
 
-		await getOrFetchIssue({ cwd: "/tmp/test", issue: url });
+		await getOrFetchIssue({ cwd: "/tmp/test", issue: url, cacheAuthKey: TEST_AUTH_KEY });
 		// Second hit by plain number + explicit repo must read the same row.
-		await getOrFetchIssue({ cwd: "/tmp/test", repo: TEST_REPO, issue: "7" });
+		await getOrFetchIssue({ cwd: "/tmp/test", repo: TEST_REPO, issue: "7", cacheAuthKey: TEST_AUTH_KEY });
 		expect(spy).toHaveBeenCalledTimes(1);
 
-		const cached = getCached(TEST_REPO, "issue", 7, true);
+		const cached = getCached(TEST_REPO, "issue", 7, true, TEST_AUTH_KEY);
 		expect(cached).not.toBeNull();
 		expect(cached?.rendered).toContain("Issue #7");
 	});
@@ -328,14 +391,38 @@ describe("getOrFetchIssue (gh-wired wrapper)", () => {
 	it("caches comments-on and comments-off separately", async () => {
 		const spy = vi.spyOn(git.github, "json").mockResolvedValue(issuePayload(5, "no-comments-body") as never);
 
-		await getOrFetchIssue({ cwd: "/tmp/test", repo: TEST_REPO, issue: "5", includeComments: false });
-		await getOrFetchIssue({ cwd: "/tmp/test", repo: TEST_REPO, issue: "5", includeComments: true });
+		await getOrFetchIssue({
+			cwd: "/tmp/test",
+			repo: TEST_REPO,
+			issue: "5",
+			includeComments: false,
+			cacheAuthKey: TEST_AUTH_KEY,
+		});
+		await getOrFetchIssue({
+			cwd: "/tmp/test",
+			repo: TEST_REPO,
+			issue: "5",
+			includeComments: true,
+			cacheAuthKey: TEST_AUTH_KEY,
+		});
 		// Different keys → two underlying fetches.
 		expect(spy).toHaveBeenCalledTimes(2);
 
 		// Each subsequent same-key call hits the cache.
-		await getOrFetchIssue({ cwd: "/tmp/test", repo: TEST_REPO, issue: "5", includeComments: false });
-		await getOrFetchIssue({ cwd: "/tmp/test", repo: TEST_REPO, issue: "5", includeComments: true });
+		await getOrFetchIssue({
+			cwd: "/tmp/test",
+			repo: TEST_REPO,
+			issue: "5",
+			includeComments: false,
+			cacheAuthKey: TEST_AUTH_KEY,
+		});
+		await getOrFetchIssue({
+			cwd: "/tmp/test",
+			repo: TEST_REPO,
+			issue: "5",
+			includeComments: true,
+			cacheAuthKey: TEST_AUTH_KEY,
+		});
 		expect(spy).toHaveBeenCalledTimes(2);
 	});
 });
@@ -349,6 +436,7 @@ describe("getOrFetchPr (gh-wired wrapper)", () => {
 			repo: TEST_REPO,
 			number: 77,
 			includeComments: false,
+			cacheAuthKey: TEST_AUTH_KEY,
 		});
 		expect(first.status).toBe("miss");
 		expect(spy).toHaveBeenCalledTimes(1);
@@ -358,6 +446,7 @@ describe("getOrFetchPr (gh-wired wrapper)", () => {
 			repo: TEST_REPO,
 			number: 77,
 			includeComments: false,
+			cacheAuthKey: TEST_AUTH_KEY,
 		});
 		expect(second.status).toBe("fresh");
 		expect(second.rendered).toBe(first.rendered);

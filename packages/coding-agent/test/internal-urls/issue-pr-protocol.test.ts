@@ -16,10 +16,13 @@ import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 let tempDir: string;
 let originalEnv: string | undefined;
 
+let originalGhToken: string | undefined;
 beforeEach(async () => {
 	tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "issue-pr-protocol-"));
 	originalEnv = process.env.OMP_GITHUB_CACHE_DB;
 	process.env.OMP_GITHUB_CACHE_DB = path.join(tempDir, "github-cache.db");
+	originalGhToken = process.env.GH_TOKEN;
+	process.env.GH_TOKEN = "test-token";
 	resetCacheForTests();
 	InternalUrlRouter.resetForTests();
 });
@@ -31,6 +34,11 @@ afterEach(async () => {
 		delete process.env.OMP_GITHUB_CACHE_DB;
 	} else {
 		process.env.OMP_GITHUB_CACHE_DB = originalEnv;
+	}
+	if (originalGhToken === undefined) {
+		delete process.env.GH_TOKEN;
+	} else {
+		process.env.GH_TOKEN = originalGhToken;
 	}
 	vi.restoreAllMocks();
 	await fs.rm(tempDir, { recursive: true, force: true });
@@ -76,6 +84,40 @@ function prPayload(number: number, body: string) {
 		reviews: [],
 		comments: [],
 	};
+}
+
+interface DiffFileSpec {
+	name: string;
+	adds?: number;
+	dels?: number;
+	mode?: "modified" | "added" | "deleted";
+	oldName?: string;
+	binary?: boolean;
+}
+
+function makePrDiff(files: DiffFileSpec[]): string {
+	return files
+		.map(f => {
+			const oldPath = f.oldName ?? f.name;
+			const lines: string[] = [`diff --git a/${oldPath} b/${f.name}`];
+			if (f.mode === "added") lines.push("new file mode 100644");
+			if (f.mode === "deleted") lines.push("deleted file mode 100644");
+			if (f.oldName) {
+				lines.push(`rename from ${oldPath}`, `rename to ${f.name}`);
+			}
+			lines.push("index 0000000..1111111 100644");
+			lines.push(`--- a/${oldPath}`);
+			lines.push(`+++ b/${f.name}`);
+			if (f.binary) {
+				lines.push(`Binary files a/${oldPath} and b/${f.name} differ`);
+			} else {
+				lines.push("@@ -1,1 +1,1 @@");
+				for (let i = 0; i < (f.dels ?? 0); i += 1) lines.push(`-old line ${i}`);
+				for (let i = 0; i < (f.adds ?? 0); i += 1) lines.push(`+new line ${i}`);
+			}
+			return lines.join("\n");
+		})
+		.join("\n");
 }
 
 describe("issue:// protocol handler", () => {
@@ -140,6 +182,7 @@ describe("pr:// protocol handler", () => {
 		expect(first.contentType).toBe("text/markdown");
 		expect(first.content).toContain("# Pull Request #77: PR #77");
 		expect(first.immutable).toBe(true);
+		expect(first.notes).toContain("Diff: pr://owner/example/77/diff");
 		// First call hits gh twice (view JSON + review-comments page).
 		expect(spy).toHaveBeenCalledTimes(2);
 
@@ -154,6 +197,90 @@ describe("pr:// protocol handler", () => {
 		const router = InternalUrlRouter.instance();
 		await expect(router.resolve("pr://owner/example/foo/bar")).rejects.toThrow(/Invalid pr:\/\/ URL/);
 		await expect(router.resolve("pr://owner/example/abc")).rejects.toThrow(/Invalid pr:\/\/ number/);
+	});
+});
+
+describe("pr://.../diff family", () => {
+	const diffText = makePrDiff([
+		{ name: "src/one.ts", adds: 3, dels: 1 },
+		{ name: "src/two.ts", adds: 2, dels: 0, mode: "added" },
+	]);
+
+	it("pr://owner/repo/<n>/diff lists files with per-file hint URLs", async () => {
+		const textSpy = vi.spyOn(git.github, "text").mockResolvedValue(diffText);
+
+		const router = InternalUrlRouter.instance();
+		const resource = await router.resolve("pr://owner/example/77/diff");
+
+		expect(resource.contentType).toBe("text/markdown");
+		expect(resource.content).toContain("# Pull Request Diff: owner/example#77 (2 files)");
+		expect(resource.content).toContain("1. src/one.ts  +3 -1  [modified]");
+		expect(resource.content).toContain("pr://owner/example/77/diff/1");
+		expect(resource.content).toContain("2. src/two.ts  +2 -0  [added]");
+		expect(resource.content).toContain("pr://owner/example/77/diff/2");
+		expect(resource.notes?.[0]).toBe("Fetched live");
+		expect(textSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("pr://owner/repo/<n>/diff renders an empty-file body when the PR has no changes", async () => {
+		vi.spyOn(git.github, "text").mockResolvedValue("");
+
+		const router = InternalUrlRouter.instance();
+		const resource = await router.resolve("pr://owner/example/77/diff");
+		expect(resource.content).toContain("# Pull Request Diff: owner/example#77 (0 files)");
+		expect(resource.content).toContain("_No file changes._");
+	});
+
+	it("pr://owner/repo/<n>/diff/all returns the verbatim unified diff as text/plain", async () => {
+		vi.spyOn(git.github, "text").mockResolvedValue(diffText);
+
+		const router = InternalUrlRouter.instance();
+		const resource = await router.resolve("pr://owner/example/77/diff/all");
+		expect(resource.contentType).toBe("text/plain");
+		expect(resource.content).toBe(diffText);
+	});
+
+	it("pr://owner/repo/<n>/diff/<i> slices the i-th file (1-indexed) as text/plain", async () => {
+		vi.spyOn(git.github, "text").mockResolvedValue(diffText);
+
+		const router = InternalUrlRouter.instance();
+		const first = await router.resolve("pr://owner/example/77/diff/1");
+		expect(first.contentType).toBe("text/plain");
+		expect(first.content.startsWith("diff --git a/src/one.ts b/src/one.ts")).toBe(true);
+		expect(first.content).not.toContain("src/two.ts");
+		expect(first.notes).toEqual(
+			expect.arrayContaining(["Showing file 1/2: src/one.ts", "Read all: pr://owner/example/77/diff/all"]),
+		);
+
+		const second = await router.resolve("pr://owner/example/77/diff/2");
+		expect(second.content.startsWith("diff --git a/src/two.ts b/src/two.ts")).toBe(true);
+		expect(second.content).not.toContain("src/one.ts");
+	});
+
+	it("rejects out-of-range and non-decimal diff indices with friendly errors", async () => {
+		vi.spyOn(git.github, "text").mockResolvedValue(diffText);
+
+		const router = InternalUrlRouter.instance();
+		await expect(router.resolve("pr://owner/example/77/diff/9")).rejects.toThrow(/out of range/);
+		await expect(router.resolve("pr://owner/example/77/diff/foo")).rejects.toThrow(/Invalid pr:\/\/ diff sub-path/);
+	});
+
+	it("shares one `gh pr diff` invocation across /diff, /diff/all, and /diff/<i> reads", async () => {
+		const textSpy = vi.spyOn(git.github, "text").mockResolvedValue(diffText);
+
+		const router = InternalUrlRouter.instance();
+		await router.resolve("pr://owner/example/77/diff");
+		await router.resolve("pr://owner/example/77/diff/all");
+		await router.resolve("pr://owner/example/77/diff/1");
+		// One row services all three variants — `gh pr diff` runs once.
+		expect(textSpy).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("issue://.../diff rejection", () => {
+	it("issue://owner/example/9/diff rejects with 'Invalid issue:// URL'", async () => {
+		const router = InternalUrlRouter.instance();
+		await expect(router.resolve("issue://owner/example/9/diff")).rejects.toThrow(/Invalid issue:\/\/ URL/);
 	});
 });
 
@@ -190,7 +317,7 @@ describe("issue:// / pr:// listing", () => {
 		expect(resource.content).toContain("#1");
 		expect(resource.content).toContain("Hello");
 		expect(resource.content).toContain("labels: bug");
-		expect(resource.content).toContain("issue://1");
+		expect(resource.content).toContain("issue://owner/example/1");
 		expect(resource.notes?.[0]).toContain("Live listing for owner/example");
 
 		expect(spy).toHaveBeenCalledTimes(1);

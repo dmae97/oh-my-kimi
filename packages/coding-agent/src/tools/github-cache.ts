@@ -17,6 +17,7 @@
 
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { getGithubCacheDbPath, logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
@@ -25,9 +26,12 @@ import type { Settings } from "../config/settings";
 // Storage layer
 // ────────────────────────────────────────────────────────────────────────────
 
-export type CacheKind = "issue" | "pr";
+export type CacheKind = "issue" | "pr" | "pr-diff";
+
+const DEFAULT_CACHE_AUTH_KEY = "default";
 
 export interface CachedView<T = unknown> {
+	authKey: string;
 	repo: string;
 	kind: CacheKind;
 	number: number;
@@ -39,6 +43,7 @@ export interface CachedView<T = unknown> {
 }
 
 interface Row {
+	auth_key: string;
 	repo: string;
 	kind: CacheKind;
 	number: number;
@@ -57,10 +62,28 @@ let openAttempted = false;
 
 function ensureParentDir(filePath: string): void {
 	try {
-		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		const dir = path.dirname(filePath);
+		fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+		fs.chmodSync(dir, 0o700);
 	} catch (err) {
-		logger.debug("github cache: failed to create parent dir", { err: String(err) });
+		logger.debug("github cache: failed to create private parent dir", { err: String(err) });
 	}
+}
+
+function chmodIfExists(filePath: string, mode: number): void {
+	try {
+		fs.chmodSync(filePath, mode);
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+			logger.debug("github cache: chmod failed", { err: String(err), path: filePath });
+		}
+	}
+}
+
+function protectDbFiles(dbPath: string): void {
+	chmodIfExists(dbPath, 0o600);
+	chmodIfExists(`${dbPath}-wal`, 0o600);
+	chmodIfExists(`${dbPath}-shm`, 0o600);
 }
 
 export function openDb(): Database | null {
@@ -75,20 +98,32 @@ export function openDb(): Database | null {
 			PRAGMA journal_mode=WAL;
 			PRAGMA synchronous=NORMAL;
 			PRAGMA busy_timeout=5000;
+		`);
+		// Migrate any pre-existing table whose key/check constraint predates
+		// the current schema. The cache is regenerable, so we drop rows rather
+		// than running an in-place ALTER dance.
+		const userVersion = (db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)
+			?.user_version;
+		if (userVersion !== undefined && userVersion < 3) {
+			db.run("DROP TABLE IF EXISTS github_view_cache");
+		}
+		db.run(`
 			CREATE TABLE IF NOT EXISTS github_view_cache (
+				auth_key        TEXT    NOT NULL,
 				repo             TEXT    NOT NULL,
-				kind             TEXT    NOT NULL CHECK (kind IN ('issue','pr')),
+				kind             TEXT    NOT NULL CHECK (kind IN ('issue','pr','pr-diff')),
 				number           INTEGER NOT NULL,
 				include_comments INTEGER NOT NULL,
 				fetched_at       INTEGER NOT NULL,
 				payload          TEXT    NOT NULL,
 				rendered         TEXT    NOT NULL,
 				source_url       TEXT,
-				PRIMARY KEY (repo, kind, number, include_comments)
+				PRIMARY KEY (auth_key, repo, kind, number, include_comments)
 			);
 			CREATE INDEX IF NOT EXISTS idx_github_view_cache_fetched ON github_view_cache(fetched_at);
-			PRAGMA user_version = 1;
+			PRAGMA user_version = 3;
 		`);
+		protectDbFiles(dbPath);
 		cachedDb = db;
 		// One-shot eviction on open. The default `DEFAULT_HARD_TTL_SEC` is a
 		// coarse backstop only — when settings load with a stricter
@@ -128,6 +163,51 @@ function sweepIfDue(hardTtlMs: number): void {
 	evictExpired(db, hardTtlMs);
 }
 
+function getGhConfigDir(): string {
+	const override = process.env.GH_CONFIG_DIR;
+	if (override) return override;
+	const xdg = process.env.XDG_CONFIG_HOME;
+	if (xdg) return path.join(xdg, "gh");
+	return path.join(os.homedir(), ".config", "gh");
+}
+
+function hashCacheIdentity(parts: string[]): string {
+	return Bun.hash(parts.map(part => `${part.length}:${part}`).join("|")).toString(36);
+}
+
+/**
+ * Best-effort local fingerprint for the active GitHub CLI credentials.
+ *
+ * Cache hits must not cross account/token boundaries, but doing a `gh api user`
+ * probe before every cached read would defeat the soft-TTL contract that cache
+ * hits avoid a gh round-trip. Instead, key rows by credential material that the
+ * GitHub CLI itself consumes: token environment variables and/or hosts.yml.
+ * The DB stores only a hash, never the token or hosts.yml contents. If no
+ * credential source is visible, callers should pass `null` to bypass caching.
+ */
+export function resolveGithubCacheAuthKey(host: string = process.env.GH_HOST || "github.com"): string | undefined {
+	const parts: string[] = [`host:${host}`];
+	let hasCredentialMaterial = false;
+	for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]) {
+		const value = process.env[name];
+		if (!value) continue;
+		hasCredentialMaterial = true;
+		parts.push(`${name}:${value}`);
+	}
+	try {
+		const hostsPath = path.join(getGhConfigDir(), "hosts.yml");
+		const hosts = fs.readFileSync(hostsPath, "utf8");
+		hasCredentialMaterial = true;
+		parts.push(`hosts:${hosts}`);
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+			logger.debug("github cache: failed to read gh hosts config for cache identity", { err: String(err) });
+		}
+	}
+	if (!hasCredentialMaterial) return undefined;
+	return `${host}:${hashCacheIdentity(parts)}`;
+}
+
 function normalizeRepo(repo: string): string {
 	return repo.toLowerCase();
 }
@@ -137,15 +217,16 @@ export function getCached<T = unknown>(
 	kind: CacheKind,
 	number: number,
 	includeComments: boolean,
+	authKey: string = DEFAULT_CACHE_AUTH_KEY,
 ): CachedView<T> | null {
 	const db = openDb();
 	if (!db) return null;
 	try {
 		const row = db
 			.prepare(
-				"SELECT repo, kind, number, include_comments, fetched_at, payload, rendered, source_url FROM github_view_cache WHERE repo = ? AND kind = ? AND number = ? AND include_comments = ?",
+				"SELECT auth_key, repo, kind, number, include_comments, fetched_at, payload, rendered, source_url FROM github_view_cache WHERE auth_key = ? AND repo = ? AND kind = ? AND number = ? AND include_comments = ?",
 			)
-			.get(normalizeRepo(repo), kind, number, includeComments ? 1 : 0) as Row | undefined;
+			.get(authKey, normalizeRepo(repo), kind, number, includeComments ? 1 : 0) as Row | undefined;
 		if (!row) return null;
 		let payload: T;
 		try {
@@ -155,6 +236,7 @@ export function getCached<T = unknown>(
 			return null;
 		}
 		return {
+			authKey: row.auth_key,
 			repo: row.repo,
 			kind: row.kind,
 			number: row.number,
@@ -171,6 +253,7 @@ export function getCached<T = unknown>(
 }
 
 export interface PutCachedInput<T = unknown> {
+	authKey?: string;
 	repo: string;
 	kind: CacheKind;
 	number: number;
@@ -188,8 +271,9 @@ export function putCached<T = unknown>(input: PutCachedInput<T>): void {
 		const fetchedAt = input.fetchedAt ?? Date.now();
 		const payloadJson = JSON.stringify(input.payload);
 		db.prepare(
-			"INSERT OR REPLACE INTO github_view_cache (repo, kind, number, include_comments, fetched_at, payload, rendered, source_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			"INSERT OR REPLACE INTO github_view_cache (auth_key, repo, kind, number, include_comments, fetched_at, payload, rendered, source_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		).run(
+			input.authKey ?? DEFAULT_CACHE_AUTH_KEY,
 			normalizeRepo(input.repo),
 			input.kind,
 			input.number,
@@ -199,26 +283,34 @@ export function putCached<T = unknown>(input: PutCachedInput<T>): void {
 			input.rendered,
 			input.sourceUrl ?? null,
 		);
+		protectDbFiles(getGithubCacheDbPath());
 	} catch (err) {
 		logger.debug("github cache: write failed", { err: String(err) });
 	}
 }
 
 /** Drop a specific cache entry. */
-export function invalidate(repo: string, kind: CacheKind, number: number, includeComments?: boolean): void {
+export function invalidate(
+	repo: string,
+	kind: CacheKind,
+	number: number,
+	includeComments?: boolean,
+	authKey: string = DEFAULT_CACHE_AUTH_KEY,
+): void {
 	const db = openDb();
 	if (!db) return;
 	try {
 		if (includeComments === undefined) {
-			db.prepare("DELETE FROM github_view_cache WHERE repo = ? AND kind = ? AND number = ?").run(
+			db.prepare("DELETE FROM github_view_cache WHERE auth_key = ? AND repo = ? AND kind = ? AND number = ?").run(
+				authKey,
 				normalizeRepo(repo),
 				kind,
 				number,
 			);
 		} else {
 			db.prepare(
-				"DELETE FROM github_view_cache WHERE repo = ? AND kind = ? AND number = ? AND include_comments = ?",
-			).run(normalizeRepo(repo), kind, number, includeComments ? 1 : 0);
+				"DELETE FROM github_view_cache WHERE auth_key = ? AND repo = ? AND kind = ? AND number = ? AND include_comments = ?",
+			).run(authKey, normalizeRepo(repo), kind, number, includeComments ? 1 : 0);
 		}
 	} catch (err) {
 		logger.debug("github cache: invalidate failed", { err: String(err) });
@@ -268,6 +360,12 @@ export interface CacheLookupOptions<T> {
 	kind: CacheKind;
 	number: number;
 	includeComments: boolean;
+	/**
+	 * Auth/credential namespace for cache rows. Omit only in storage-layer
+	 * tests; pass `null` when production code cannot determine an identity and
+	 * must bypass persistent cache reads/writes.
+	 */
+	authKey?: string | null;
 	fetchFresh: () => Promise<FreshResult<T>>;
 	settings?: Settings | undefined;
 	now?: number;
@@ -324,6 +422,7 @@ export function resolveCacheTtl(settings?: Settings): CacheTtl {
 }
 
 function storeResult<T>(
+	authKey: string,
 	repo: string,
 	kind: CacheKind,
 	number: number,
@@ -332,6 +431,7 @@ function storeResult<T>(
 	fetchedAt: number,
 ): void {
 	putCached<T>({
+		authKey,
 		repo,
 		kind,
 		number,
@@ -344,6 +444,7 @@ function storeResult<T>(
 }
 
 function scheduleBackgroundRefresh<T>(
+	authKey: string,
 	repo: string,
 	kind: CacheKind,
 	number: number,
@@ -354,7 +455,7 @@ function scheduleBackgroundRefresh<T>(
 		const promise = fetchFresh();
 		promise
 			.then(fresh => {
-				storeResult(repo, kind, number, includeComments, fresh, Date.now());
+				storeResult(authKey, repo, kind, number, includeComments, fresh, Date.now());
 			})
 			.catch(err => {
 				logger.debug("github cache: background refresh failed", {
@@ -370,8 +471,9 @@ function scheduleBackgroundRefresh<T>(
 export async function getOrFetchView<T>(options: CacheLookupOptions<T>): Promise<CacheLookupResult<T>> {
 	const ttl = resolveCacheTtl(options.settings);
 	const now = options.now ?? Date.now();
+	const authKey = options.authKey === undefined ? DEFAULT_CACHE_AUTH_KEY : options.authKey;
 
-	if (!ttl.enabled) {
+	if (!ttl.enabled || authKey === null) {
 		const fresh = await options.fetchFresh();
 		return { ...fresh, status: "disabled", fetchedAt: now };
 	}
@@ -386,11 +488,17 @@ export async function getOrFetchView<T>(options: CacheLookupOptions<T>): Promise
 		options.kind,
 		options.number,
 		options.includeComments,
+		authKey,
 	);
 
 	if (cached) {
 		const age = now - cached.fetchedAt;
-		if (age <= ttl.softMs) {
+		if (age > ttl.hardMs) {
+			// Past hard TTL: drop the row eagerly so the on-disk exposure window
+			// is bounded even if `fetchFresh()` then fails (network down, gh
+			// auth lapse, etc.) and we never get to overwrite it.
+			invalidate(options.repo, options.kind, options.number, options.includeComments, authKey);
+		} else if (age <= ttl.softMs) {
 			return {
 				rendered: cached.rendered,
 				sourceUrl: cached.sourceUrl,
@@ -398,9 +506,9 @@ export async function getOrFetchView<T>(options: CacheLookupOptions<T>): Promise
 				status: "fresh",
 				fetchedAt: cached.fetchedAt,
 			};
-		}
-		if (age <= ttl.hardMs) {
+		} else {
 			scheduleBackgroundRefresh(
+				authKey,
 				options.repo,
 				options.kind,
 				options.number,
@@ -415,15 +523,11 @@ export async function getOrFetchView<T>(options: CacheLookupOptions<T>): Promise
 				fetchedAt: cached.fetchedAt,
 			};
 		}
-		// Past hard TTL: drop the row eagerly so the on-disk exposure window
-		// is bounded even if `fetchFresh()` then fails (network down, gh
-		// auth lapse, etc.) and we never get to overwrite it.
-		invalidate(options.repo, options.kind, options.number, options.includeComments);
 	}
 
 	const fresh = await options.fetchFresh();
 	const fetchedAt = Date.now();
-	storeResult(options.repo, options.kind, options.number, options.includeComments, fresh, fetchedAt);
+	storeResult(authKey, options.repo, options.kind, options.number, options.includeComments, fresh, fetchedAt);
 	return { ...fresh, status: "miss", fetchedAt };
 }
 

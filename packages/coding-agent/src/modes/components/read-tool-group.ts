@@ -12,15 +12,22 @@ import type { ToolExecutionHandle } from "./tool-execution";
  * resolved content is visible. `path` is the canonical arg; `file_path` is the
  * legacy alias still tolerated by the read tool schema.
  */
-export function readArgsTargetInternalUrl(args: unknown): boolean {
-	if (!args || typeof args !== "object" || Array.isArray(args)) return false;
+function readArgsTarget(args: unknown): string | undefined {
+	if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
 	const record = args as Record<string, unknown>;
-	const target =
-		typeof record.path === "string"
-			? record.path
-			: typeof record.file_path === "string"
-				? record.file_path
-				: undefined;
+	return typeof record.path === "string"
+		? record.path
+		: typeof record.file_path === "string"
+			? record.file_path
+			: undefined;
+}
+
+export function readArgsHaveTarget(args: unknown): boolean {
+	return readArgsTarget(args) !== undefined;
+}
+
+export function readArgsTargetInternalUrl(args: unknown): boolean {
+	const target = readArgsTarget(args);
 	if (!target) return false;
 	return InternalUrlRouter.instance().canHandle(target);
 }

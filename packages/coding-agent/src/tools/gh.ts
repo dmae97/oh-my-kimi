@@ -10,7 +10,7 @@ import githubDescription from "../prompts/tools/github.md" with { type: "text" }
 import * as git from "../utils/git";
 import type { ToolSession } from ".";
 import { formatShortSha } from "./gh-format";
-import { type CacheStatus, getOrFetchView } from "./github-cache";
+import { type CacheStatus, getOrFetchView, resolveGithubCacheAuthKey } from "./github-cache";
 import type { OutputMeta } from "./output-meta";
 import { ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -201,7 +201,6 @@ const githubSchema = Type.Object({
 		[
 			"repo_view",
 			"pr_create",
-			"pr_diff",
 			"pr_checkout",
 			"pr_push",
 			"search_issues",
@@ -235,15 +234,9 @@ const githubSchema = Type.Object({
 			],
 			{
 				description:
-					"pr number, url, or branch (pr_diff, pr_checkout); pass an array to batch-process multiple pull requests in one call",
+					"pr number, url, or branch (pr_checkout); pass an array to batch-process multiple pull requests in one call",
 			},
 		),
-	),
-	nameOnly: Type.Optional(Type.Boolean({ description: "return file names only (pr_diff)" })),
-	exclude: Type.Optional(
-		Type.Array(Type.String({ description: "glob to exclude" }), {
-			description: "file globs to exclude (pr_diff)",
-		}),
 	),
 	force: Type.Optional(Type.Boolean({ description: "reset existing local branch (pr_checkout)" })),
 	forceWithLease: Type.Optional(Type.Boolean({ description: "force-with-lease push (pr_push)" })),
@@ -2416,8 +2409,6 @@ export class GithubTool implements AgentTool<typeof githubSchema, GhToolDetails>
 					return executeRepoView(this.session, params, signal);
 				case "pr_create":
 					return executePrCreate(this.session, params, signal);
-				case "pr_diff":
-					return executePrDiff(this.session, params, signal);
 				case "pr_checkout":
 					return executePrCheckout(this.session, params, signal);
 				case "pr_push":
@@ -2477,6 +2468,7 @@ export interface IssueViewLookupOptions {
 	includeComments?: boolean;
 	signal?: AbortSignal;
 	settings?: Settings;
+	cacheAuthKey?: string | null;
 }
 
 export interface PrViewLookupOptions {
@@ -2486,6 +2478,7 @@ export interface PrViewLookupOptions {
 	includeComments?: boolean;
 	signal?: AbortSignal;
 	settings?: Settings;
+	cacheAuthKey?: string | null;
 }
 
 export interface ViewLookupResult<T> {
@@ -2538,6 +2531,7 @@ async function fetchPrViewFresh(
 export async function getOrFetchIssue(options: IssueViewLookupOptions): Promise<ViewLookupResult<GhIssueViewData>> {
 	const identifier = requireNonEmpty(options.issue, "issue");
 	const includeComments = options.includeComments ?? true;
+	const authKey = options.cacheAuthKey === undefined ? (resolveGithubCacheAuthKey() ?? null) : options.cacheAuthKey;
 	const urlParse = parseIssueUrl(identifier);
 	// Prefer the URL's repo when the identifier is a full URL; fall back to the
 	// explicit `repo` option, then to the cwd's default repo.
@@ -2570,6 +2564,7 @@ export async function getOrFetchIssue(options: IssueViewLookupOptions): Promise<
 		number: cacheNumber,
 		includeComments,
 		settings: options.settings,
+		authKey,
 		fetchFresh: doFetch,
 	});
 	return {
@@ -2588,6 +2583,7 @@ export async function getOrFetchIssue(options: IssueViewLookupOptions): Promise<
  */
 export async function getOrFetchPr(options: PrViewLookupOptions): Promise<ViewLookupResult<GhPrViewData>> {
 	const includeComments = options.includeComments ?? true;
+	const authKey = options.cacheAuthKey === undefined ? (resolveGithubCacheAuthKey() ?? null) : options.cacheAuthKey;
 	const doFetch = () => fetchPrViewFresh(options.cwd, options.repo, options.number, includeComments, options.signal);
 	const lookup = await getOrFetchView<GhPrViewData>({
 		repo: options.repo,
@@ -2595,6 +2591,7 @@ export async function getOrFetchPr(options: PrViewLookupOptions): Promise<ViewLo
 		number: options.number,
 		includeComments,
 		settings: options.settings,
+		authKey,
 		fetchFresh: doFetch,
 	});
 	return {
@@ -2606,52 +2603,187 @@ export async function getOrFetchPr(options: PrViewLookupOptions): Promise<ViewLo
 	};
 }
 
-async function executePrDiff(
-	session: ToolSession,
-	params: GithubInput,
-	signal: AbortSignal | undefined,
-): Promise<AgentToolResult<GhToolDetails>> {
-	const repo = normalizeOptionalString(params.repo);
-	const prList = normalizePrIdentifierList(params.pr);
-	const prRefs: (string | undefined)[] = prList.length > 0 ? prList : [undefined];
+// ────────────────────────────────────────────────────────────────────────────
+// PR diff fetcher
+//
+// Used by the `pr://<n>/diff[/…]` internal-URL family. Stores the verbatim
+// `gh pr diff` text plus a parsed file index so the listing, full-diff, and
+// per-file slice variants all share one cache row.
+// ────────────────────────────────────────────────────────────────────────────
 
-	const diffs = await Promise.all(
-		prRefs.map(async prRef => {
-			const args = ["pr", "diff"];
-			if (prRef) args.push(prRef);
-			appendRepoFlag(args, repo, prRef);
-			args.push("--color", "never");
-			if (params.nameOnly) args.push("--name-only");
-			for (const pattern of params.exclude ?? []) {
-				args.push("--exclude", requireNonEmpty(pattern, "exclude pattern"));
-			}
-			const output = await git.github.text(session.cwd, args, signal, {
-				repoProvided: Boolean(repo),
-				trimOutput: false,
-			});
-			return { prRef, output };
-		}),
-	);
+export interface PrDiffFile {
+	/** Display path. Prefers the post-image (`b/<path>`) when present. */
+	path: string;
+	additions: number;
+	deletions: number;
+	changeType: "modified" | "added" | "deleted" | "renamed" | "binary";
+	/** Pre-image path for renames/deletes; same as `path` otherwise. */
+	oldPath?: string;
+	/** Byte offset of the section's `diff --git` line in the unified diff. */
+	startOffset: number;
+	/** Byte offset of the next section (or end-of-text). */
+	endOffset: number;
+}
 
-	const singleTitle = params.nameOnly ? "# Pull Request Files" : "# Pull Request Diff";
-	const emptyBody = params.nameOnly ? "No changed files." : "No diff output.";
+export interface PrDiffPayload {
+	/** Full unified diff text as returned by `gh pr diff --color never`. */
+	unified: string;
+	files: PrDiffFile[];
+}
 
-	if (diffs.length === 1) {
-		const [diff] = diffs;
-		const body = diff.output.length > 0 ? diff.output : emptyBody;
-		return buildTextResult(`${singleTitle}\n\n${body}`);
+export interface PrDiffLookupOptions {
+	cwd: string;
+	repo: string;
+	number: number;
+	signal?: AbortSignal;
+	settings?: Settings;
+	cacheAuthKey?: string | null;
+}
+/**
+ * Split `gh pr diff` output on `^diff --git ` boundaries and parse per-file
+ * metadata. The unified diff is preserved verbatim so callers can slice it by
+ * byte offsets without re-running gh.
+ */
+export function parsePrUnifiedDiff(text: string): PrDiffPayload {
+	const files: PrDiffFile[] = [];
+	if (text.length === 0) {
+		return { unified: text, files };
 	}
 
-	const header = params.nameOnly
-		? `# ${diffs.length} Pull Request File Lists`
-		: `# ${diffs.length} Pull Request Diffs`;
-	const sections = diffs.map(diff => {
-		const label = diff.prRef ? `PR ${diff.prRef}` : "PR (current branch)";
-		const body = diff.output.length > 0 ? diff.output : emptyBody;
-		return `## ${label}\n\n${body}`;
+	// Walk match positions manually so we capture each section's byte range.
+	const sectionStarts: number[] = [];
+	const re = /^diff --git /gm;
+	let m: RegExpExecArray | null = re.exec(text);
+	while (m !== null) {
+		sectionStarts.push(m.index);
+		// Avoid zero-length match infinite loop (regex has fixed prefix, but
+		// be explicit).
+		if (re.lastIndex === m.index) re.lastIndex += 1;
+		m = re.exec(text);
+	}
+
+	for (let i = 0; i < sectionStarts.length; i += 1) {
+		const startOffset = sectionStarts[i] ?? 0;
+		const endOffset = sectionStarts[i + 1] ?? text.length;
+		const section = text.slice(startOffset, endOffset);
+		files.push(parsePrDiffSection(section, startOffset, endOffset));
+	}
+	return { unified: text, files };
+}
+
+function parsePrDiffSection(section: string, startOffset: number, endOffset: number): PrDiffFile {
+	const lines = section.split("\n");
+	const header = lines[0] ?? "";
+	// `diff --git a/<old> b/<new>` — paths may contain spaces, but gh emits
+	// them quoted with a leading `"`. We accept the common unquoted shape and
+	// fall back to the whole tail for quoted/exotic forms.
+	let oldPath: string | undefined;
+	let newPath: string | undefined;
+	const trail = header.slice("diff --git ".length);
+	const aIdx = trail.indexOf("a/");
+	const bIdx = trail.indexOf(" b/");
+	if (aIdx === 0 && bIdx > 0) {
+		oldPath = trail.slice(2, bIdx);
+		newPath = trail.slice(bIdx + 3);
+	}
+
+	let changeType: PrDiffFile["changeType"] = "modified";
+	let isBinary = false;
+	let additions = 0;
+	let deletions = 0;
+
+	for (let li = 1; li < lines.length; li += 1) {
+		const line = lines[li] ?? "";
+		if (line.startsWith("new file mode")) {
+			changeType = "added";
+			continue;
+		}
+		if (line.startsWith("deleted file mode")) {
+			changeType = "deleted";
+			continue;
+		}
+		if (line.startsWith("rename from ")) {
+			changeType = "renamed";
+			oldPath = line.slice("rename from ".length);
+			continue;
+		}
+		if (line.startsWith("rename to ")) {
+			newPath = line.slice("rename to ".length);
+			continue;
+		}
+		if (line.startsWith("Binary files ") && line.endsWith(" differ")) {
+			isBinary = true;
+			continue;
+		}
+		// `+++ b/<path>` / `--- a/<path>` are headers, not content.
+		if (line.startsWith("+++") || line.startsWith("---")) continue;
+		if (line.startsWith("+")) {
+			additions += 1;
+		} else if (line.startsWith("-")) {
+			deletions += 1;
+		}
+	}
+
+	if (isBinary) {
+		if (changeType === "modified") changeType = "binary";
+		additions = 0;
+		deletions = 0;
+	}
+
+	const displayPath =
+		changeType === "deleted" ? (oldPath ?? newPath ?? "(unknown)") : (newPath ?? oldPath ?? "(unknown)");
+	const file: PrDiffFile = {
+		path: displayPath,
+		additions,
+		deletions,
+		changeType,
+		startOffset,
+		endOffset,
+	};
+	if (oldPath && oldPath !== displayPath) {
+		file.oldPath = oldPath;
+	}
+	return file;
+}
+
+async function fetchPrDiffFresh(
+	cwd: string,
+	repo: string,
+	number: number,
+	signal: AbortSignal | undefined,
+): Promise<{ rendered: string; sourceUrl: string | undefined; payload: PrDiffPayload }> {
+	const args = ["pr", "diff", String(number), "--color", "never"];
+	appendRepoFlag(args, repo, String(number));
+	const text = await git.github.text(cwd, args, signal, { repoProvided: true, trimOutput: false });
+	const payload = parsePrUnifiedDiff(text);
+	return { rendered: text, sourceUrl: undefined, payload };
+}
+
+/**
+ * Cache-aware PR diff fetcher. Stores the full unified diff plus a parsed
+ * file index in a single `pr-diff` cache row so the listing, full-diff, and
+ * per-file slice variants of `pr://<n>/diff` share one `gh pr diff`
+ * invocation.
+ */
+export async function getOrFetchPrDiff(options: PrDiffLookupOptions): Promise<ViewLookupResult<PrDiffPayload>> {
+	const authKey = options.cacheAuthKey === undefined ? (resolveGithubCacheAuthKey() ?? null) : options.cacheAuthKey;
+	const doFetch = () => fetchPrDiffFresh(options.cwd, options.repo, options.number, options.signal);
+	const lookup = await getOrFetchView<PrDiffPayload>({
+		repo: options.repo,
+		kind: "pr-diff",
+		number: options.number,
+		includeComments: false,
+		settings: options.settings,
+		authKey,
+		fetchFresh: doFetch,
 	});
-	const text = [header, "", ...joinSections(sections)].join("\n").trim();
-	return buildTextResult(text);
+	return {
+		rendered: lookup.rendered,
+		sourceUrl: lookup.sourceUrl,
+		payload: lookup.payload,
+		status: lookup.status,
+		fetchedAt: lookup.fetchedAt,
+	};
 }
 
 function joinSections(sections: string[]): string[] {

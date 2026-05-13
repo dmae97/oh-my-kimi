@@ -7,7 +7,6 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { buildSearchDateQualifier, GithubTool, parseSearchDateBound } from "@oh-my-pi/pi-coding-agent/tools/gh";
-import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
 
@@ -36,7 +35,7 @@ function createSession(
 	};
 }
 
-function createToolContext(settings: Settings): AgentToolContext {
+function _createToolContext(settings: Settings): AgentToolContext {
 	return {
 		sessionManager: SessionManager.inMemory(),
 		settings,
@@ -572,46 +571,6 @@ describe("github tool", () => {
 		expect(reposArgs.some(arg => typeof arg === "string" && arg.includes("repo:ignored/value"))).toBe(false);
 	});
 
-	it("returns diff output under a stable heading without rewriting patch content", async () => {
-		vi.spyOn(git.github, "text").mockResolvedValue("diff --git a/Makefile b/Makefile\n+\tgo test ./... \n");
-
-		const tool = new GithubTool(createSession());
-		const result = await tool.execute("pr-diff", { op: "pr_diff", pr: "7", repo: "owner/repo" });
-		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-
-		expect(text).toContain("# Pull Request Diff");
-		expect(text).toContain("diff --git a/Makefile b/Makefile");
-		expect(text).toContain("+\tgo test ./... ");
-		expect(text).not.toContain("+    go test ./... ");
-	});
-
-	it("lets wrapped GitHub diff output spill to an artifact tail instead of head-truncating", async () => {
-		const diffOutput = Array.from({ length: 400 }, (_, index) => `diff line ${index + 1}`).join("\n");
-		vi.spyOn(git.github, "text").mockResolvedValue(diffOutput);
-
-		const settings = Settings.isolated({
-			"github.enabled": true,
-			"tools.artifactSpillThreshold": 1,
-			"tools.artifactTailBytes": 1,
-			"tools.artifactTailLines": 20,
-		});
-		const tool = wrapToolWithMetaNotice(new GithubTool(createSession("/tmp/test", settings)));
-		const result = await tool.execute(
-			"pr-diff",
-			{ op: "pr_diff", pr: "7", repo: "owner/repo" },
-			undefined,
-			undefined,
-			createToolContext(settings),
-		);
-		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-
-		expect(text).toContain("diff line 400");
-		expect(text).not.toContain("diff line 1");
-		expect(text).toContain("Read artifact://");
-		expect(text).not.toContain("Use offset=");
-		expect(result.details?.meta?.truncation?.direction).toBe("tail");
-	});
-
 	it("checks out a pull request into a worktree and configures contributor push metadata", async () => {
 		const fixture = await createPrFixture();
 		const tempHome = await setupTempHome();
@@ -771,24 +730,6 @@ describe("github tool", () => {
 			await tempHome.cleanup();
 			await fs.rm(fixture.baseDir, { recursive: true, force: true });
 		}
-	});
-
-	it("aggregates multiple pull request diffs when pr is an array", async () => {
-		vi.spyOn(git.github, "text")
-			.mockResolvedValueOnce("diff --git a/one.ts b/one.ts\n+content one\n")
-			.mockResolvedValueOnce("diff --git a/two.ts b/two.ts\n+content two\n");
-
-		const tool = new GithubTool(createSession());
-		const result = await tool.execute("pr-diff", { op: "pr_diff", pr: ["10", "20"], repo: "owner/repo" });
-		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-
-		expect(text).toContain("# 2 Pull Request Diffs");
-		expect(text).toContain("## PR 10");
-		expect(text).toContain("## PR 20");
-		expect(text).toContain("content one");
-		expect(text).toContain("content two");
-		// Sections are separated by a horizontal rule.
-		expect(text.match(/\n---\n/g)?.length).toBe(1);
 	});
 
 	it("rejects PR pushes from branches without checkout metadata", async () => {

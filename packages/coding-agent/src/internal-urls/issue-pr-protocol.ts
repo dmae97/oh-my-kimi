@@ -19,7 +19,14 @@
  */
 import type { Settings } from "../config/settings";
 import { AgentRegistry } from "../registry/agent-registry";
-import { getOrFetchIssue, getOrFetchPr, parsePositiveDecimalInt, resolveDefaultRepoMemoized } from "../tools/gh";
+import {
+	getOrFetchIssue,
+	getOrFetchPr,
+	getOrFetchPrDiff,
+	type PrDiffFile,
+	parsePositiveDecimalInt,
+	resolveDefaultRepoMemoized,
+} from "../tools/gh";
 import { formatFreshnessNote } from "../tools/github-cache";
 import * as git from "../utils/git";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext } from "./types";
@@ -33,6 +40,19 @@ interface ParsedSingle {
 	comments: boolean;
 }
 
+interface ParsedPrDiff {
+	kind: "pr-diff";
+	repo?: string;
+	number: number;
+	/**
+	 * `list` → enumerate changed files.
+	 * `all`  → full unified diff.
+	 * `slice`→ single file's diff section (1-indexed `index`).
+	 */
+	mode: "list" | "all" | "slice";
+	index?: number;
+}
+
 interface ParsedList {
 	kind: "list";
 	repo?: string;
@@ -42,7 +62,7 @@ interface ParsedList {
 	label: string | undefined;
 }
 
-type Parsed = ParsedSingle | ParsedList;
+type Parsed = ParsedSingle | ParsedList | ParsedPrDiff;
 
 const LIST_LIMIT_DEFAULT = 30;
 const LIST_LIMIT_MAX = 100;
@@ -78,42 +98,83 @@ function parseUrl(url: InternalUrl, scheme: Scheme): Parsed {
 	const pathname = (url.rawPathname ?? url.pathname).replace(/^\/+/, "");
 	const parts = pathname ? pathname.split("/").filter(Boolean) : [];
 
-	// scheme://             → list default repo
-	// scheme://N            → single item, default repo
-	// scheme://owner/repo   → list specific repo
-	// scheme://owner/repo/N → single item, specific repo
+	// Shapes:
+	//   scheme://                    → list default repo
+	//   scheme://N                   → single item, default repo
+	//   scheme://owner/repo          → list specific repo
+	//   scheme://owner/repo/N        → single item, specific repo
+	//   pr://N/diff[/<sub>]          → diff family, default repo
+	//   pr://owner/repo/N/diff[/<sub>] → diff family, specific repo
 	let repo: string | undefined;
-	let tail: string | undefined;
+	let numberPart: string | undefined;
+	let diffParts: string[] = [];
 
 	if (!host && parts.length === 0) {
 		return parseListOptions(url, scheme, undefined);
 	}
 	if (host && parts.length === 0) {
 		// scheme://N (numeric) or scheme://owner (host-only, no repo segment)
-		tail = host;
+		numberPart = host;
+	} else if (host && parts[0] === "diff") {
+		// pr://N/diff[/<sub>] — short form with diff suffix
+		numberPart = host;
+		diffParts = parts;
 	} else if (host && parts.length === 1) {
 		// scheme://owner/repo  → list
 		repo = `${host}/${parts[0]}`;
 		return parseListOptions(url, scheme, repo);
-	} else if (host && parts.length === 2) {
-		// scheme://owner/repo/N → single
+	} else if (host && parts.length >= 2) {
+		// scheme://owner/repo/N[/diff[/<sub>]]
 		repo = `${host}/${parts[0]}`;
-		tail = parts[1];
+		numberPart = parts[1];
+		diffParts = parts.slice(2);
 	} else {
 		throw new Error(
 			`Invalid ${scheme}:// URL. Expected ${scheme}://, ${scheme}://<number>, ${scheme}://<owner>/<repo>, or ${scheme}://<owner>/<repo>/<number>`,
 		);
 	}
 
-	const num = parsePositiveDecimalInt(tail);
-	if (num === undefined) {
-		throw new Error(`Invalid ${scheme}:// number: ${tail ?? "(missing)"}`);
+	// Reject unrecognized trailing segments before parsing the number so
+	// shapes like `issue://owner/repo/foo/bar` surface as "Invalid URL"
+	// rather than the misleading "Invalid number: foo".
+	if (diffParts.length > 0) {
+		if (scheme === "issue") {
+			throw new Error(
+				`Invalid issue:// URL. Issue views do not have a diff; use pr://<owner>/<repo>/<n>/diff for pull requests.`,
+			);
+		}
+		if (diffParts[0] !== "diff" || diffParts.length > 2) {
+			throw new Error(
+				`Invalid pr:// URL. Expected pr://<n>, pr://<n>/diff, pr://<n>/diff/all, or pr://<n>/diff/<i>`,
+			);
+		}
 	}
 
-	const commentsParam = url.searchParams.get("comments");
-	const comments = commentsParam === null ? true : !(commentsParam === "0" || commentsParam.toLowerCase() === "false");
+	const num = parsePositiveDecimalInt(numberPart);
+	if (num === undefined) {
+		throw new Error(`Invalid ${scheme}:// number: ${numberPart ?? "(missing)"}`);
+	}
 
-	return { kind: "single", repo, number: num, comments };
+	if (diffParts.length === 0) {
+		const commentsParam = url.searchParams.get("comments");
+		const comments =
+			commentsParam === null ? true : !(commentsParam === "0" || commentsParam.toLowerCase() === "false");
+		return { kind: "single", repo, number: num, comments };
+	}
+
+	// diffParts has already been validated above; scheme is `pr`.
+	if (diffParts.length === 1) {
+		return { kind: "pr-diff", repo, number: num, mode: "list" };
+	}
+	const sub = diffParts[1] ?? "";
+	if (sub === "all") {
+		return { kind: "pr-diff", repo, number: num, mode: "all" };
+	}
+	const idx = parsePositiveDecimalInt(sub);
+	if (idx === undefined) {
+		throw new Error(`Invalid pr:// diff sub-path '${sub}'. Use 'all' or a 1-indexed file number.`);
+	}
+	return { kind: "pr-diff", repo, number: num, mode: "slice", index: idx };
 }
 
 /**
@@ -179,7 +240,7 @@ interface PrListItem extends IssueListItem {
 	headRefName?: string;
 }
 
-function formatListItem(scheme: Scheme, item: IssueListItem | PrListItem): string {
+function formatListItem(scheme: Scheme, repo: string, item: IssueListItem | PrListItem): string {
 	const number = item.number ?? "?";
 	const title = item.title ?? "(no title)";
 	const state = item.state?.toLowerCase() ?? "?";
@@ -191,7 +252,8 @@ function formatListItem(scheme: Scheme, item: IssueListItem | PrListItem): strin
 		.filter(Boolean)
 		.join(", ");
 	const labelSuffix = labels ? `  labels: ${labels}` : "";
-	return `- [${state}${draftSuffix}] #${number}  @${author}  ${updated}\n    ${title}${labelSuffix}\n    ${scheme}://${number}`;
+	const itemUrl = number === "?" ? `${scheme}://${repo}` : `${scheme}://${repo}/${number}`;
+	return `- [${state}${draftSuffix}] #${number}  @${author}  ${updated}\n    ${title}${labelSuffix}\n    ${itemUrl}`;
 }
 
 async function fetchAndRenderList(
@@ -240,7 +302,8 @@ async function fetchAndRenderList(
 		scheme === "issue"
 			? `# Issues in ${repo} (${options.state}, up to ${options.limit})`
 			: `# Pull Requests in ${repo} (${options.state}, up to ${options.limit})`;
-	const body = items.length === 0 ? "_No matches._" : items.map(item => formatListItem(scheme, item)).join("\n\n");
+	const body =
+		items.length === 0 ? "_No matches._" : items.map(item => formatListItem(scheme, repo, item)).join("\n\n");
 	const footer = `\n\n---\nRead a specific item: \`${scheme}://${repo}/<N>\` (or \`${scheme}://<N>\` for the current repo).`;
 	const rendered = `${header}\n\n${body}${footer}`;
 
@@ -255,21 +318,126 @@ async function fetchAndRenderList(
 
 interface BuildSingleArgs {
 	url: InternalUrl;
+	scheme: Scheme;
 	parsed: ParsedSingle;
 	rendered: string;
 	status: "miss" | "fresh" | "stale" | "disabled";
 	fetchedAt: number;
+	/** Resolved repo (post short-form expansion) — used for the PR-only diff hint. */
+	repo?: string;
 }
 
-function buildSingleResource({ url, parsed, rendered, status, fetchedAt }: BuildSingleArgs): InternalResource {
+function buildSingleResource({
+	url,
+	scheme,
+	parsed,
+	rendered,
+	status,
+	fetchedAt,
+	repo,
+}: BuildSingleArgs): InternalResource {
 	const notes: string[] = [formatFreshnessNote(status, fetchedAt)];
 	if (!parsed.comments) notes.push("Comments disabled");
+	if (scheme === "pr") {
+		const repoSegment = repo ?? parsed.repo;
+		const diffUrl = repoSegment ? `pr://${repoSegment}/${parsed.number}/diff` : `pr://${parsed.number}/diff`;
+		notes.push(`Diff: ${diffUrl}`);
+	}
 	return {
 		url: url.href,
 		content: rendered,
 		contentType: "text/markdown",
 		size: Buffer.byteLength(rendered, "utf-8"),
 		notes,
+	};
+}
+
+function formatFileLine(idx: number, file: PrDiffFile, repo: string, prNumber: number): string {
+	const stats = file.changeType === "binary" ? "(binary)" : `+${file.additions} -${file.deletions}`;
+	const rename = file.oldPath ? `  (renamed from ${file.oldPath})` : "";
+	return `${idx}. ${file.path}  ${stats}  [${file.changeType}]${rename}\n   pr://${repo}/${prNumber}/diff/${idx}`;
+}
+
+async function fetchAndRenderPrDiff(
+	url: InternalUrl,
+	parsed: ParsedPrDiff,
+	context: ResolveContext | undefined,
+): Promise<InternalResource> {
+	const cwd = resolveCwd(context);
+	let repo = parsed.repo;
+	if (!repo) {
+		try {
+			repo = await resolveDefaultRepoMemoized(cwd, context?.signal);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			throw new Error(
+				`pr://${parsed.number}/diff could not resolve a default repo from the current session: ${message}\nUse pr://<owner>/<repo>/${parsed.number}/diff.`,
+			);
+		}
+	}
+	const lookup = await getOrFetchPrDiff({
+		cwd,
+		repo,
+		number: parsed.number,
+		signal: context?.signal,
+		settings: settingsFromContext(context),
+	});
+	const files = lookup.payload.files;
+	const freshness = formatFreshnessNote(lookup.status, lookup.fetchedAt);
+
+	if (parsed.mode === "all") {
+		const content = lookup.payload.unified;
+		return {
+			url: url.href,
+			content,
+			contentType: "text/plain",
+			size: Buffer.byteLength(content, "utf-8"),
+			notes: [
+				freshness,
+				`Full diff for pr://${repo}/${parsed.number} (${files.length} file${files.length === 1 ? "" : "s"})`,
+			],
+		};
+	}
+
+	if (parsed.mode === "slice") {
+		const index = parsed.index ?? 0;
+		if (index < 1 || index > files.length) {
+			throw new Error(
+				`pr://${repo}/${parsed.number}/diff/${index} is out of range; PR has ${files.length} file${files.length === 1 ? "" : "s"}. Use pr://${repo}/${parsed.number}/diff to list available indices.`,
+			);
+		}
+		const file = files[index - 1];
+		if (!file) {
+			throw new Error(`pr://${repo}/${parsed.number}/diff/${index} resolved to a missing slice (parser bug).`);
+		}
+		const content = lookup.payload.unified.slice(file.startOffset, file.endOffset);
+		return {
+			url: url.href,
+			content,
+			contentType: "text/plain",
+			size: Buffer.byteLength(content, "utf-8"),
+			notes: [
+				freshness,
+				`Showing file ${index}/${files.length}: ${file.path}`,
+				`Read all: pr://${repo}/${parsed.number}/diff/all`,
+			],
+		};
+	}
+
+	// mode === "list"
+	const header = `# Pull Request Diff: ${repo}#${parsed.number} (${files.length} file${files.length === 1 ? "" : "s"})`;
+	const body =
+		files.length === 0
+			? "_No file changes._"
+			: files.map((f, i) => formatFileLine(i + 1, f, repo, parsed.number)).join("\n\n");
+	const footer = `\n\n---\nRead all: \`pr://${repo}/${parsed.number}/diff/all\`. Each file is also available as \`pr://${repo}/${parsed.number}/diff/<i>\`.`;
+	const content = `${header}\n\n${body}${footer}`;
+	return {
+		url: url.href,
+		content,
+		contentType: "text/markdown",
+		size: Buffer.byteLength(content, "utf-8"),
+		notes: [freshness, `File listing for pr://${repo}/${parsed.number}`],
 	};
 }
 
@@ -290,6 +458,11 @@ export class IssueProtocolHandler implements ProtocolHandler {
 				throw new Error(`issue:// listing failed: ${message}`);
 			}
 		}
+		// parseUrl already rejects `issue://.../diff`; this guard is a belt-and-
+		// suspenders catch in case the union grows.
+		if (parsed.kind !== "single") {
+			throw new Error(`Invalid issue:// URL: unexpected variant '${parsed.kind}'`);
+		}
 		try {
 			const lookup = await getOrFetchIssue({
 				cwd: resolveCwd(context),
@@ -301,6 +474,7 @@ export class IssueProtocolHandler implements ProtocolHandler {
 			});
 			return buildSingleResource({
 				url,
+				scheme: "issue",
 				parsed,
 				rendered: lookup.rendered,
 				status: lookup.status,
@@ -330,6 +504,14 @@ export class PrProtocolHandler implements ProtocolHandler {
 				throw new Error(`pr:// listing failed: ${message}`);
 			}
 		}
+		if (parsed.kind === "pr-diff") {
+			try {
+				return await fetchAndRenderPrDiff(url, parsed, context);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				throw new Error(`pr:// diff resolution failed: ${message}`);
+			}
+		}
 		const cwd = resolveCwd(context);
 		let repo = parsed.repo;
 		if (!repo) {
@@ -353,10 +535,12 @@ export class PrProtocolHandler implements ProtocolHandler {
 			});
 			return buildSingleResource({
 				url,
+				scheme: "pr",
 				parsed,
 				rendered: lookup.rendered,
 				status: lookup.status,
 				fetchedAt: lookup.fetchedAt,
+				repo,
 			});
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);

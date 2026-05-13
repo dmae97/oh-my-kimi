@@ -26,7 +26,7 @@ import {
 	truncateHead,
 	truncateHeadBytes,
 } from "../session/streaming-output";
-import { renderCodeCell, renderStatusLine } from "../tui";
+import { renderCodeCell, renderMarkdownCell, renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { ImageInputTooLargeError, loadImageInput, MAX_IMAGE_INPUT_BYTES } from "../utils/image-loading";
@@ -1707,7 +1707,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			cwd: this.session.cwd,
 			settings: this.session.settings,
 		});
-		const details: ReadToolDetails = { resolvedPath: resource.sourcePath };
+		const details: ReadToolDetails = { resolvedPath: resource.sourcePath, contentType: resource.contentType };
 
 		// If extraction was used, return directly (no pagination)
 		if (hasExtraction) {
@@ -1807,7 +1807,7 @@ export const readToolRenderer = {
 
 	renderResult(
 		result: { content: Array<{ type: string; text?: string }>; details?: ReadToolDetails },
-		_options: RenderResultOptions,
+		options: RenderResultOptions,
 		uiTheme: Theme,
 		args?: ReadRenderArgs,
 	): Component {
@@ -1815,7 +1815,7 @@ export const readToolRenderer = {
 		if (urlDetails?.kind === "url" || isReadableUrlPath(args?.file_path || args?.path || "")) {
 			return renderReadUrlResult(
 				result as { content: Array<{ type: string; text?: string }>; details?: ReadUrlToolDetails },
-				_options,
+				options,
 				uiTheme,
 			);
 		}
@@ -1896,28 +1896,45 @@ export const readToolRenderer = {
 			const n = details.conflictCount;
 			title += ` ${uiTheme.fg("warning", `(⚠ ${n} conflict${n === 1 ? "" : "s"})`)}`;
 		}
+		const isMarkdown = details?.contentType === "text/markdown";
 		let cachedWidth: number | undefined;
+		let cachedExpanded: boolean | undefined;
 		let cachedLines: string[] | undefined;
 		return {
 			render: (width: number) => {
-				if (cachedLines && cachedWidth === width) return cachedLines;
-				cachedLines = renderCodeCell(
-					{
-						code: contentText,
-						language: lang,
-						title,
-						status: "complete",
-						output: warningLines.length > 0 ? warningLines.join("\n") : undefined,
-						expanded: true,
-						width,
-					},
-					uiTheme,
-				);
+				const expanded = options.expanded;
+				if (cachedLines && cachedWidth === width && cachedExpanded === expanded) return cachedLines;
+				cachedLines = isMarkdown
+					? renderMarkdownCell(
+							{
+								content: contentText,
+								title,
+								status: "complete",
+								output: warningLines.length > 0 ? warningLines.join("\n") : undefined,
+								expanded: true,
+								width,
+							},
+							uiTheme,
+						)
+					: renderCodeCell(
+							{
+								code: contentText,
+								language: lang,
+								title,
+								status: "complete",
+								output: warningLines.length > 0 ? warningLines.join("\n") : undefined,
+								expanded,
+								width,
+							},
+							uiTheme,
+						);
 				cachedWidth = width;
+				cachedExpanded = expanded;
 				return cachedLines;
 			},
 			invalidate: () => {
 				cachedWidth = undefined;
+				cachedExpanded = undefined;
 				cachedLines = undefined;
 			},
 		};
