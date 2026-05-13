@@ -19,6 +19,10 @@
 - Changed search truncation metadata/renderer output from match/result-based limits to file-based limits (`fileLimitReached`, `perFileLimitReached`) and updated truncation labels accordingly
 - Lowered `read.defaultLimit` default from `500` to `300` lines, and split the per-range context padding into asymmetric `RANGE_LEADING_CONTEXT_LINES = 1` / `RANGE_TRAILING_CONTEXT_LINES = 3` (was symmetric `RANGE_CONTEXT_LINES = 3`). Replay analysis over post-summarizer sessions (`scripts/session-stats/optimize_read_config.py`) showed that bare-path reads are over-provisioned at the median (file p50 = 220 lines) and that most follow-up reads are disjoint hops rather than adjacent extensions — so a smaller default plus narrower leading context reclaims tokens without measurably changing first-cover rate. Trailing context stays at 3 lines to keep anchor-stale recovery on narrow reads. Explicit `read.defaultLimit` overrides in settings are honoured unchanged.
 
+### Fixed
+
+- Fixed ACP clients missing `config_option_update` notifications when the thinking level changed via any path other than the client's own `session/set_session_config_option` call (slash commands, model auto-adjust, extension UI). `AgentSession` now emits a `thinking_level_changed` event from `setThinkingLevel`, and `AcpAgent` subscribes to each managed session for the session's lifetime — independent of any active prompt turn — and pushes a fresh `config_option_update` whenever the effective level changes. The `session/set_session_config_option` handler no longer pushes its own duplicate notification for the `thinking` config; clients still get the new state both via the lifetime subscription and the response payload. Subscriptions are released in `#disposeSessionRecord`.
+
 ## [15.0.0] - 2026-05-13
 ### Breaking Changes
 

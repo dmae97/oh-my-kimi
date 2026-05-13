@@ -97,6 +97,8 @@ type ManagedSessionRecord = {
 	liveMessageId: string | undefined;
 	liveMessageProgress: { textEmitted: boolean; thoughtEmitted: boolean } | undefined;
 	extensionsConfigured: boolean;
+	// Independent of prompt-turn lifecycle — see `#handleLifetimeEvent`.
+	lifetimeUnsubscribe: (() => void) | undefined;
 };
 
 type ReplayableMessage = {
@@ -314,13 +316,7 @@ export class AcpAgent implements Agent {
 			sessionId: record.session.sessionId,
 			update: this.#buildCurrentModeUpdate(record.session),
 		});
-		await this.#connection.sessionUpdate({
-			sessionId: record.session.sessionId,
-			update: {
-				sessionUpdate: "config_option_update",
-				configOptions: this.#buildConfigOptions(record.session),
-			},
-		});
+		await this.#pushConfigOptionUpdate(record);
 		return {};
 	}
 
@@ -354,27 +350,18 @@ export class AcpAgent implements Agent {
 			});
 		}
 
-		const configOptions = this.#buildConfigOptions(record.session);
-		await this.#connection.sessionUpdate({
-			sessionId: record.session.sessionId,
-			update: {
-				sessionUpdate: "config_option_update",
-				configOptions,
-			},
-		});
-		return { configOptions };
+		// Thinking-level changes are pushed via the lifetime subscription on
+		// `thinking_level_changed`; skipping the push here avoids a duplicate.
+		if (params.configId !== THINKING_CONFIG_ID) {
+			await this.#pushConfigOptionUpdate(record);
+		}
+		return { configOptions: this.#buildConfigOptions(record.session) };
 	}
 
 	async unstable_setSessionModel(params: SetSessionModelRequest): Promise<SetSessionModelResponse> {
 		const record = this.#getSessionRecord(params.sessionId);
 		await this.#setModelById(record.session, params.modelId);
-		await this.#connection.sessionUpdate({
-			sessionId: record.session.sessionId,
-			update: {
-				sessionUpdate: "config_option_update",
-				configOptions: this.#buildConfigOptions(record.session),
-			},
-		});
+		await this.#pushConfigOptionUpdate(record);
 		return {};
 	}
 
@@ -432,13 +419,7 @@ export class AcpAgent implements Agent {
 				});
 			},
 			notifyConfigChanged: async () => {
-				await this.#connection.sessionUpdate({
-					sessionId: record.session.sessionId,
-					update: {
-						sessionUpdate: "config_option_update",
-						configOptions: this.#buildConfigOptions(record.session),
-					},
-				});
+				await this.#pushConfigOptionUpdate(record);
 			},
 		});
 		if (builtinResult !== false) {
@@ -688,6 +669,9 @@ export class AcpAgent implements Agent {
 	async #registerPreparedSession(session: AgentSession, mcpServers: McpServer[]): Promise<ManagedSessionRecord> {
 		const record = this.#createManagedSessionRecord(session);
 		session.setClientBridge(createAcpClientBridge(this.#connection, session.sessionId, this.#clientCapabilities));
+		record.lifetimeUnsubscribe = session.subscribe(event => {
+			void this.#handleLifetimeEvent(record, event);
+		});
 		try {
 			await this.#configureExtensions(record);
 			await this.#configureMcpServers(record, mcpServers);
@@ -707,7 +691,22 @@ export class AcpAgent implements Agent {
 			liveMessageId: undefined,
 			liveMessageProgress: undefined,
 			extensionsConfigured: false,
+			lifetimeUnsubscribe: undefined,
 		};
+	}
+
+	async #handleLifetimeEvent(record: ManagedSessionRecord, event: AgentSessionEvent): Promise<void> {
+		if (event.type !== "thinking_level_changed") {
+			return;
+		}
+		try {
+			await this.#pushConfigOptionUpdate(record);
+		} catch (error) {
+			logger.warn("Failed to push thinking-level config_option_update", {
+				sessionId: record.session.sessionId,
+				error,
+			});
+		}
 	}
 
 	#getSessionRecord(sessionId: string): ManagedSessionRecord {
@@ -910,6 +909,16 @@ export class AcpAgent implements Agent {
 			text: textParts.join("\n\n").trim(),
 			images,
 		};
+	}
+
+	async #pushConfigOptionUpdate(record: ManagedSessionRecord): Promise<void> {
+		await this.#connection.sessionUpdate({
+			sessionId: record.session.sessionId,
+			update: {
+				sessionUpdate: "config_option_update",
+				configOptions: this.#buildConfigOptions(record.session),
+			},
+		});
 	}
 
 	#buildConfigOptions(session: AgentSession): SessionConfigOption[] {
@@ -1674,6 +1683,7 @@ export class AcpAgent implements Agent {
 	}
 
 	async #disposeSessionRecord(record: ManagedSessionRecord): Promise<void> {
+		record.lifetimeUnsubscribe?.();
 		if (record.mcpManager) {
 			try {
 				await record.mcpManager.disconnectAll();

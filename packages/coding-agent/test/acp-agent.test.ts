@@ -125,7 +125,16 @@ class FakeAgentSession {
 	}
 
 	setThinkingLevel(level: string | undefined): void {
+		const isChanging = this.thinkingLevel !== level;
 		this.thinkingLevel = level;
+		if (isChanging) {
+			for (const listener of this.#listeners) {
+				listener({
+					type: "thinking_level_changed",
+					thinkingLevel: level,
+				} as AgentSessionEvent);
+			}
+		}
 	}
 
 	setSlashCommands(_commands: unknown[]): void {
@@ -472,6 +481,81 @@ describe("ACP agent", () => {
 
 		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "default" });
 		expect(session.planModeState).toBeUndefined();
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("pushes config_option_update when thinking level changes internally", async () => {
+		// Internal callers (slash commands, model auto-adjust, extension UI) call
+		// AgentSession.setThinkingLevel directly without going through the ACP
+		// setSessionConfigOption surface. The session-lifetime subscription on
+		// AcpAgent must surface those changes to clients as `config_option_update`
+		// so TORTAS-style fleet views stay in sync.
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+
+		const updatesBefore = harness.updates.length;
+		session.setThinkingLevel("high");
+
+		const pushedAfter = harness.updates.slice(updatesBefore);
+		const configUpdates = pushedAfter.filter(
+			notification =>
+				notification.sessionId === created.sessionId &&
+				notification.update.sessionUpdate === "config_option_update",
+		);
+		expect(configUpdates.length).toBeGreaterThanOrEqual(1);
+		expectAcpNotifications(configUpdates);
+		const firstUpdate = configUpdates[0]!.update;
+		if (firstUpdate.sessionUpdate !== "config_option_update") {
+			throw new Error("expected config_option_update");
+		}
+		const thinkingConfig = firstUpdate.configOptions.find(option => option.id === "thinking") as
+			| { currentValue?: unknown }
+			| undefined;
+		expect(thinkingConfig?.currentValue).toBe("high");
+
+		// Setting to the same level must not produce a redundant notification.
+		const updatesBeforeRedundant = harness.updates.length;
+		session.setThinkingLevel("high");
+		expect(harness.updates.length).toBe(updatesBeforeRedundant);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("emits a single config_option_update per setSessionConfigOption(thinking) call", async () => {
+		// Client-initiated thinking changes flow through #setThinkingLevelById,
+		// which fires `thinking_level_changed` and lets the lifetime subscription
+		// push the notification. The ACP surface must not also push a duplicate
+		// `config_option_update` of its own.
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+
+		const updatesBefore = harness.updates.length;
+		const response = await harness.agent.setSessionConfigOption({
+			sessionId: created.sessionId,
+			configId: "thinking",
+			value: "high",
+		});
+
+		const configUpdates = harness.updates
+			.slice(updatesBefore)
+			.filter(
+				notification =>
+					notification.sessionId === created.sessionId &&
+					notification.update.sessionUpdate === "config_option_update",
+			);
+		expect(configUpdates.length).toBe(1);
+		expectAcpNotifications(configUpdates);
+
+		// The response still carries the fresh configOptions tree so the caller
+		// gets the new state without relying on the notification.
+		const thinkingOption = response.configOptions.find(option => option.id === "thinking") as
+			| { currentValue?: unknown }
+			| undefined;
+		expect(thinkingOption?.currentValue).toBe("high");
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
