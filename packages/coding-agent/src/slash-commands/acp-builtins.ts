@@ -1,45 +1,46 @@
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
-import { ACP_BUILTIN_COMMANDS } from "./acp-builtins/commands";
-import type {
-	AcpBuiltinCommandRuntime,
-	AcpBuiltinCommandSpec,
-	AcpBuiltinSlashCommandResult,
-	ParsedAcpCommand,
-} from "./acp-builtins/types";
+import { BUILTIN_SLASH_COMMANDS_INTERNAL, lookupBuiltinSlashCommand } from "./builtin-registry";
+import { parseSlashCommand } from "./helpers/parse";
+import type { AcpBuiltinCommandRuntime, AcpBuiltinSlashCommandResult } from "./types";
 
-export type { AcpBuiltinCommandRuntime, AcpBuiltinSlashCommandResult } from "./acp-builtins/types";
+export type { AcpBuiltinCommandRuntime, AcpBuiltinSlashCommandResult } from "./types";
 
-function parseAcpBuiltinSlashCommand(text: string): ParsedAcpCommand | null {
-	if (!text.startsWith("/")) return null;
-	const body = text.slice(1);
-	if (!body) return null;
-	const firstWhitespace = body.search(/\s/);
-	const firstColon = body.indexOf(":");
-	const firstSeparator =
-		firstWhitespace === -1 ? firstColon : firstColon === -1 ? firstWhitespace : Math.min(firstWhitespace, firstColon);
-	if (firstSeparator === -1) return { name: body, args: "", text };
-	return { name: body.slice(0, firstSeparator), args: body.slice(firstSeparator + 1).trim(), text };
-}
+/**
+ * Commands advertised to ACP clients. Entries without a text-mode `handle`
+ * (e.g. `/quit`, `/login`, dashboards) are filtered out so the client doesn't
+ * see commands it cannot drive.
+ */
+export const ACP_BUILTIN_SLASH_COMMANDS: AvailableCommand[] = BUILTIN_SLASH_COMMANDS_INTERNAL.filter(
+	command => command.handle !== undefined,
+).map(command => {
+	// Honor mode-specific copy: ACP clients receive concise text-mode
+	// descriptions/hints when the spec sets `acpDescription` / `acpInputHint`,
+	// otherwise fall back to the unified `description` / `inlineHint`.
+	const hint = command.acpInputHint ?? command.inlineHint;
+	return {
+		name: command.name,
+		description: command.acpDescription ?? command.description,
+		input: hint ? { hint } : undefined,
+	};
+});
 
-export const ACP_BUILTIN_SLASH_COMMANDS: AvailableCommand[] = ACP_BUILTIN_COMMANDS.map(command => ({
-	name: command.name,
-	description: command.description,
-	input: command.inputHint ? { hint: command.inputHint } : undefined,
-}));
-
-const COMMAND_LOOKUP = new Map<string, AcpBuiltinCommandSpec>();
-for (const command of ACP_BUILTIN_COMMANDS) {
-	COMMAND_LOOKUP.set(command.name, command);
-	for (const alias of command.aliases ?? []) COMMAND_LOOKUP.set(alias, command);
-}
-
+/**
+ * Dispatch a slash command in ACP/text mode. Returns:
+ * - `false` when no builtin matched (or matched a TUI-only entry); the caller
+ *   should forward the input as a prompt.
+ * - `{ consumed: true }` when the command handled the input entirely.
+ * - `{ prompt }` when the command was handled but a residual prompt should be
+ *   sent to the model.
+ */
 export async function executeAcpBuiltinSlashCommand(
 	text: string,
 	runtime: AcpBuiltinCommandRuntime,
 ): Promise<AcpBuiltinSlashCommandResult> {
-	const parsed = parseAcpBuiltinSlashCommand(text);
+	const parsed = parseSlashCommand(text);
 	if (!parsed) return false;
-	const command = COMMAND_LOOKUP.get(parsed.name);
-	if (!command) return false;
-	return await command.handle(parsed, runtime);
+	const command = lookupBuiltinSlashCommand(parsed.name);
+	if (!command || !command.handle) return false;
+	const result = await command.handle(parsed, runtime);
+	if (result === undefined) return { consumed: true };
+	return result;
 }

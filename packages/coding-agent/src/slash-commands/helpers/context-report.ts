@@ -1,9 +1,13 @@
 import { computeContextBreakdown } from "../../modes/utils/context-usage";
+import type { SlashCommandRuntime } from "../types";
 import { renderAsciiBar } from "./format";
-import { commandConsumed } from "./shared";
-import type { AcpBuiltinCommandRuntime, AcpBuiltinCommandSpec } from "./types";
 
-function getContext(runtime: AcpBuiltinCommandRuntime): string {
+/**
+ * Build the `/context` ACP-mode text. Tries the rich breakdown first
+ * (categories + auto-compact buffer + free slack) and falls back to the
+ * minimal "window/used" lines when the breakdown helper throws.
+ */
+export function buildContextReportText(runtime: SlashCommandRuntime): string {
 	try {
 		const breakdown = computeContextBreakdown(runtime.session);
 		if (breakdown.contextWindow <= 0) {
@@ -28,17 +32,8 @@ function getContext(runtime: AcpBuiltinCommandRuntime): string {
 		}
 		return lines.join("\n");
 	} catch {
-		const usage = runtime.session.getContextUsage();
-		if (!usage) return "Context usage is unavailable.";
-		return ["Context", `Window: ${usage.contextWindow}`, `Used: ${usage.tokens ?? 0}`].join("\n");
+		const fallback = runtime.session.getContextUsage();
+		if (!fallback) return "Context usage is unavailable.";
+		return ["Context", `Window: ${fallback.contextWindow}`, `Used: ${fallback.tokens ?? 0}`].join("\n");
 	}
 }
-
-export const contextCommand: AcpBuiltinCommandSpec = {
-	name: "context",
-	description: "Show context usage",
-	handle: async (_command, runtime) => {
-		await runtime.output(getContext(runtime));
-		return commandConsumed();
-	},
-};

@@ -1,8 +1,8 @@
 import { getSSHConfigPath } from "@oh-my-pi/pi-utils";
 import { addSSHHost, readSSHConfigFile, removeSSHHost, type SSHHostConfig } from "../../ssh/config-writer";
 import { parseCommandArgs } from "../../utils/command-args";
-import { commandConsumed, parseNamedScopeArgs, parseSubcommand, usage } from "./shared";
-import type { AcpBuiltinCommandRuntime, AcpBuiltinCommandSpec } from "./types";
+import type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime } from "../types";
+import { commandConsumed, errorMessage, parseNamedScopeArgs, parseSubcommand, usage } from "./parse";
 
 interface ParsedSshAddArgs {
 	name?: string;
@@ -72,10 +72,6 @@ const SSH_ADD_OPTION_PARSERS = new Map<string, SshAddOptionParser>([
 	],
 ]);
 
-function sshAddArgError(parsed: ParsedSshAddArgs, error: string): ParsedSshAddArgs {
-	return { ...parsed, error };
-}
-
 function parseSshAddArgs(rest: string): ParsedSshAddArgs {
 	const tokens = parseCommandArgs(rest);
 	const parsed: ParsedSshAddArgs = { scope: "project" };
@@ -87,25 +83,23 @@ function parseSshAddArgs(rest: string): ParsedSshAddArgs {
 	while (index < tokens.length) {
 		const arg = tokens[index]!;
 		const parser = SSH_ADD_OPTION_PARSERS.get(arg);
-		if (!parser) return sshAddArgError(parsed, `Unknown option: ${arg}`);
+		if (!parser) return { ...parsed, error: `Unknown option: ${arg}` };
 		const error = parser(parsed, tokens[index + 1]);
-		if (error) return sshAddArgError(parsed, error);
+		if (error) return { ...parsed, error };
 		index += 2;
 	}
 	return parsed;
 }
 
-function sshHelpText(): string {
-	return [
-		"SSH host management (ACP mode)",
-		"  /ssh add <name> --host <host> [--user <user>] [--port <port>] [--key <keyPath>] [--scope project|user]",
-		"  /ssh list                                       List configured SSH hosts",
-		"  /ssh remove <name> [--scope project|user]       Remove an SSH host",
-		"  /ssh help                                        Show this help",
-	].join("\n");
-}
+const SSH_HELP_TEXT = [
+	"SSH host management (ACP mode)",
+	"  /ssh add <name> --host <host> [--user <user>] [--port <port>] [--key <keyPath>] [--scope project|user]",
+	"  /ssh list                                       List configured SSH hosts",
+	"  /ssh remove <name> [--scope project|user]       Remove an SSH host",
+	"  /ssh help                                        Show this help",
+].join("\n");
 
-async function handleListCommand(runtime: AcpBuiltinCommandRuntime) {
+async function handleListCommand(runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
 	try {
 		const userPath = getSSHConfigPath("user", runtime.cwd);
 		const projectPath = getSSHConfigPath("project", runtime.cwd);
@@ -137,11 +131,11 @@ async function handleListCommand(runtime: AcpBuiltinCommandRuntime) {
 		);
 		return commandConsumed();
 	} catch (err) {
-		return usage(`Failed to list SSH hosts: ${err instanceof Error ? err.message : String(err)}`, runtime);
+		return usage(`Failed to list SSH hosts: ${errorMessage(err)}`, runtime);
 	}
 }
 
-async function handleRemoveCommand(rest: string, runtime: AcpBuiltinCommandRuntime) {
+async function handleRemoveCommand(rest: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
 	const parsed = parseNamedScopeArgs(rest, "Invalid --scope value. Use project or user.");
 	if (parsed.error) return usage(parsed.error, runtime);
 	if (!parsed.name) return usage("Usage: /ssh remove <name> [--scope project|user]", runtime);
@@ -151,11 +145,11 @@ async function handleRemoveCommand(rest: string, runtime: AcpBuiltinCommandRunti
 		await runtime.output(`Removed SSH host "${parsed.name}" from ${parsed.scope} config.`);
 		return commandConsumed();
 	} catch (err) {
-		return usage(`Failed to remove SSH host: ${err instanceof Error ? err.message : String(err)}`, runtime);
+		return usage(`Failed to remove SSH host: ${errorMessage(err)}`, runtime);
 	}
 }
 
-async function handleAddCommand(rest: string, runtime: AcpBuiltinCommandRuntime) {
+async function handleAddCommand(rest: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
 	if (!rest) return usage(SSH_ADD_USAGE, runtime);
 	const parsed = parseSshAddArgs(rest);
 	if (parsed.error) return usage(parsed.error, runtime);
@@ -171,30 +165,29 @@ async function handleAddCommand(rest: string, runtime: AcpBuiltinCommandRuntime)
 		await runtime.output(`Added SSH host "${parsed.name}" (${parsed.scope}).`);
 		return commandConsumed();
 	} catch (err) {
-		return usage(`Failed to add SSH host: ${err instanceof Error ? err.message : String(err)}`, runtime);
+		return usage(`Failed to add SSH host: ${errorMessage(err)}`, runtime);
 	}
 }
 
-export const sshCommand: AcpBuiltinCommandSpec = {
-	name: "ssh",
-	description: "Manage SSH connections",
-	inputHint: "<subcommand>",
-	handle: async (command, runtime) => {
-		const { verb, rest } = parseSubcommand(command.args);
-		if (!verb || verb === "help") {
-			await runtime.output(sshHelpText());
-			return commandConsumed();
-		}
-		switch (verb) {
-			case "list":
-				return await handleListCommand(runtime);
-			case "remove":
-			case "rm":
-				return await handleRemoveCommand(rest, runtime);
-			case "add":
-				return await handleAddCommand(rest, runtime);
-			default:
-				return usage(`Unknown /ssh subcommand: ${verb}. Use /ssh help for available subcommands.`, runtime);
-		}
-	},
-};
+/** ACP/text-mode `/ssh` handler. Shared by both dispatchers via the spec. */
+export async function handleSshAcp(
+	command: ParsedSlashCommand,
+	runtime: SlashCommandRuntime,
+): Promise<SlashCommandResult> {
+	const { verb, rest } = parseSubcommand(command.args);
+	if (!verb || verb === "help") {
+		await runtime.output(SSH_HELP_TEXT);
+		return commandConsumed();
+	}
+	switch (verb) {
+		case "list":
+			return await handleListCommand(runtime);
+		case "remove":
+		case "rm":
+			return await handleRemoveCommand(rest, runtime);
+		case "add":
+			return await handleAddCommand(rest, runtime);
+		default:
+			return usage(`Unknown /ssh subcommand: ${verb}. Use /ssh help for available subcommands.`, runtime);
+	}
+}

@@ -6,9 +6,14 @@ import {
 	getPluginsCacheDir,
 	MarketplaceManager,
 } from "../../extensibility/plugins/marketplace";
-import type { AcpBuiltinCommandRuntime } from "./types";
+import type { SlashCommandRuntime } from "../types";
 
-export async function createMarketplaceManager(runtime: AcpBuiltinCommandRuntime): Promise<MarketplaceManager> {
+/**
+ * Build a `MarketplaceManager` wired up with the active project's registry
+ * paths and the shared plugin-root cache invalidator. Reused by both `/plugins`
+ * and `/marketplace` handlers so cache invalidation stays consistent.
+ */
+export async function createMarketplaceManager(runtime: SlashCommandRuntime): Promise<MarketplaceManager> {
 	return new MarketplaceManager({
 		marketplacesRegistryPath: getMarketplacesRegistryPath(),
 		installedRegistryPath: getInstalledPluginsRegistryPath(),

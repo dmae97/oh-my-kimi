@@ -1,7 +1,6 @@
 import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
+import type { SlashCommandRuntime } from "../types";
 import { formatDuration, renderAsciiBar } from "./format";
-import { commandConsumed } from "./shared";
-import type { AcpBuiltinCommandRuntime, AcpBuiltinCommandSpec } from "./types";
 
 function formatProviderName(provider: string): string {
 	return provider
@@ -65,8 +64,13 @@ function renderUsageReports(reports: UsageReport[], nowMs: number): string {
 	return ["```", ...lines, "```"].join("\n");
 }
 
-async function getUsageStatistics(runtime: AcpBuiltinCommandRuntime): Promise<string> {
-	const provider = runtime.session as AcpBuiltinCommandRuntime["session"] & {
+/**
+ * Build the `/usage` ACP-mode text. Prefers provider-reported limits when the
+ * session exposes `fetchUsageReports`; otherwise falls back to the local
+ * session-manager tallies.
+ */
+export async function buildUsageReportText(runtime: SlashCommandRuntime): Promise<string> {
+	const provider = runtime.session as SlashCommandRuntime["session"] & {
 		fetchUsageReports?: () => Promise<UsageReport[] | null>;
 	};
 	if (provider.fetchUsageReports) {
@@ -85,12 +89,3 @@ async function getUsageStatistics(runtime: AcpBuiltinCommandRuntime): Promise<st
 		`Cost: $${stats.cost.toFixed(6)}`,
 	].join("\n");
 }
-
-export const usageCommand: AcpBuiltinCommandSpec = {
-	name: "usage",
-	description: "Show token usage",
-	handle: async (_command, runtime) => {
-		await runtime.output(await getUsageStatistics(runtime));
-		return commandConsumed();
-	},
-};
