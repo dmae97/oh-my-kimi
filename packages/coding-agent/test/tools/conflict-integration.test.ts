@@ -101,7 +101,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 		expect(text).toContain("──── #1  L2-6 ────");
 		expect(text).toContain("<<< ours");
 		expect(text).toContain(">>> theirs");
-		expect(text).toContain("NOTICE: Inspect a block with `read conflict://<N>`");
+		expect(text).toContain("NOTICE: Inspect a block by reading `conflict://<N>`");
 		expect(text).toContain('`write({ path: "conflict://<N>", content })`');
 		expect(text).toContain('`write({ path: "conflict://*", content })`');
 		expect(text).toContain("@ours");
@@ -164,7 +164,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 		expect(session.conflictHistory?.get(2)).toBeUndefined();
 	});
 
-	it("renders the full conflict block via `read conflict://<N>`", async () => {
+	it("renders the full conflict block via reads of `conflict://<N>`", async () => {
 		const filePath = path.join(tempDir, "full.ts");
 		await Bun.write(filePath, TWO_WAY);
 		const session = createTestSession(tempDir);
@@ -182,7 +182,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 		expect(text).not.toContain("⚠");
 	});
 
-	it("renders only the theirs body via `read conflict://<N>/theirs`", async () => {
+	it("renders only the theirs body via reads of `conflict://<N>/theirs`", async () => {
 		const filePath = path.join(tempDir, "theirs.ts");
 		await Bun.write(filePath, TWO_WAY);
 		const session = createTestSession(tempDir);
@@ -230,14 +230,14 @@ describe("read surfaces conflicts as a warning footer", () => {
 		await expect(promise).rejects.toThrow(/Conflict #99 not found/);
 	});
 
-	it("rejects `read conflict://*` (wildcard is write-only)", async () => {
+	it("rejects reads of `conflict://*` (wildcard is write-only)", async () => {
 		const session = createTestSession(tempDir);
 		const read = await getTool(session, "read");
 		const promise = read.execute("read-wildcard", { path: "conflict://*" });
 		await expect(promise).rejects.toThrow(/wildcards are write-only/);
 	});
 
-	it("`read <path>:conflicts` lists every conflict in the file with stable ids", async () => {
+	it("the `<path>:conflicts` read selector lists every conflict in the file with stable ids", async () => {
 		const filePath = path.join(tempDir, "many.ts");
 		await Bun.write(filePath, TWO_BLOCKS);
 		const session = createTestSession(tempDir);
@@ -287,7 +287,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 		const result = await read.execute("read-window", { path: "wide.ts:1-5" });
 		const text = getText(result);
 		expect(text).toContain("1 of 2 unresolved");
-		expect(text).toContain("read wide.ts:conflicts");
+		expect(text).toContain("read `wide.ts:conflicts`");
 	});
 });
 

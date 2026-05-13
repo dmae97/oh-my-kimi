@@ -3,7 +3,7 @@
 Skills are file-backed capability packs discovered at startup and exposed to the model as:
 
 - lightweight metadata in the system prompt (name + description)
-- on-demand content via `read skill://...`
+- on-demand content via the `read` tool against `skill://...`
 - optional interactive `/skill:<name>` commands
 
 This document covers current runtime behavior in `src/extensibility/skills.ts`, `src/discovery/builtin.ts`, `src/internal-urls/skill-protocol.ts`, and `src/discovery/agents-md.ts`.

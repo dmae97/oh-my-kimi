@@ -240,7 +240,7 @@ export function getConflictHistory(session: ToolSession): ConflictHistory {
 	return session.conflictHistory;
 }
 
-/** A side of a conflict block that `read conflict://N/<scope>` can render. */
+/** A side of a conflict block that the `read` tool can render via `conflict://N/<scope>`. */
 export type ConflictScope = "ours" | "theirs" | "base";
 
 const CONFLICT_SCOPES = new Set<ConflictScope>(["ours", "theirs", "base"]);
@@ -440,7 +440,7 @@ function markerLine(prefix: string, label: string | undefined): string {
 }
 
 /**
- * Materialise a conflict block for `read conflict://<N>` (and its
+ * Materialise a conflict block for `conflict://<N>` reads (and their
  * `/ours` / `/theirs` / `/base` scopes).
  *
  * Returns:
@@ -534,7 +534,7 @@ export function formatConflictWarning(
 	if (partial) {
 		const hintPath = options.displayPath ?? "<file>";
 		out.push(
-			`⚠ ${entries.length} of ${total} unresolved ${word} visible in this window (run \`read ${hintPath}:conflicts\` for the full list).`,
+			`⚠ ${entries.length} of ${total} unresolved ${word} visible in this window (read \`${hintPath}:conflicts\` for the full list).`,
 		);
 	} else {
 		out.push(`⚠ ${total} unresolved ${word} detected`);
@@ -551,7 +551,7 @@ export function formatConflictWarning(
 	if (theirsLabel) out.push(`- theirs = ${theirsLabel}`);
 	if (anyBase) out.push(`- base = ${baseLabel ?? "(no label)"}`);
 	out.push(
-		'NOTICE: Inspect a block with `read conflict://<N>` (add `/ours` / `/theirs` / `/base` to render a single side). Resolve with `write({ path: "conflict://<N>", content })`, or bulk-resolve every registered conflict with `write({ path: "conflict://*", content })`. Writes replace the whole conflict region (markers + all sides).',
+		'NOTICE: Inspect a block by reading `conflict://<N>` (add `/ours` / `/theirs` / `/base` to render a single side). Resolve with `write({ path: "conflict://<N>", content })`, or bulk-resolve every registered conflict with `write({ path: "conflict://*", content })`. Writes replace the whole conflict region (markers + all sides).',
 	);
 	out.push(
 		'`content` shorthand: a line that is exactly `@ours` / `@theirs` / `@base` / `@both` expands to that recorded section. `@both` is ours-then-theirs with no separator. Lines that are not a token pass through verbatim, so `"// keep both\\n@ours\\n@theirs"` literally writes the comment, then ours, then theirs.',
@@ -592,7 +592,7 @@ export function formatConflictWarning(
 
 /**
  * Render a single-line-per-block index of every conflict in a file.
- * Used by `read <path>:conflicts` to give the agent a cheap overview
+ * Used by the `<path>:conflicts` read selector to give the agent a cheap overview
  * of a heavily-conflicted file without dumping every body.
  */
 export function formatConflictSummary(
@@ -614,7 +614,7 @@ export function formatConflictSummary(
 	if (theirsLabel) lines.push(`- theirs = ${theirsLabel}`);
 	if (anyBase) lines.push(`- base = ${baseLabel ?? "(no label)"}`);
 	lines.push(
-		'NOTICE: Bulk-resolve with `write({ path: "conflict://*", content })`, or address a single block with `write({ path: "conflict://<N>", content })`. Inspect a block with `read conflict://<N>` (add `/ours` / `/theirs` / `/base` for a single side).',
+		'NOTICE: Bulk-resolve with `write({ path: "conflict://*", content })`, or address a single block with `write({ path: "conflict://<N>", content })`. Inspect a block by reading `conflict://<N>` (add `/ours` / `/theirs` / `/base` for a single side).',
 	);
 	lines.push(
 		"`content` shorthand: `@ours` / `@theirs` / `@base` / `@both` lines expand to the recorded sections; `@both` = ours-then-theirs. Non-token lines pass through verbatim.",

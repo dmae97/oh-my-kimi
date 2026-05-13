@@ -35,7 +35,7 @@ Each subagent **MUST** follow this exact workflow:
 
 #### a. Read & decide
 
-1. `github pr_view` (with comments) and `github pr_diff` for the PR.
+1. Read `pr://<N>` (with comments by default; append `?comments=0` to skip) and `pr://<N>/diff` for the changed-files listing — use `pr://<N>/diff/all` when you need the full unified diff, or `pr://<N>/diff/<i>` for a single file slice.
 2. Check `git log origin/main` and `gh search prs` for whether the same change already landed.
 3. Classify into one of:
    - **slop** — AI-generated noise, broken, off-spec, or net-negative. Drop, write a 1–2 line justification, do not check out.

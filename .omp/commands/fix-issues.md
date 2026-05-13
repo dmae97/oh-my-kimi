@@ -35,7 +35,7 @@ Each subagent **MUST** follow this exact workflow:
 
 #### a. Read everything
 
-1. `github issue_view` (with comments) — comments often carry the real repro and fix hints.
+1. Read `issue://<N>` (or `issue://<owner>/<repo>/<N>` for cross-repo) — fetches the issue body plus comments; comments often carry the real repro and fix hints. Append `?comments=0` only if you explicitly want to skip them.
 2. `gh search prs` for the issue number to see if a fix is already in flight.
    - If a PR exists and looks reasonable → switch tracks: review that PR per `.omp/commands/review-prs.md` instead, and report back as `existing-pr`. Do **not** open a competing fix.
 

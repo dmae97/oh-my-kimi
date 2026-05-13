@@ -380,7 +380,7 @@ describe("formatConflictWarning", () => {
 		expect(text).toContain(">>> theirs");
 		expect(text).toContain("\nc");
 		// NOTICE line with shorthand tokens.
-		expect(text).toContain("NOTICE: Inspect a block with `read conflict://<N>`");
+		expect(text).toContain("NOTICE: Inspect a block by reading `conflict://<N>`");
 		expect(text).toContain('`write({ path: "conflict://<N>", content })`');
 		expect(text).toContain('`write({ path: "conflict://*", content })`');
 		expect(text).toContain("@ours");

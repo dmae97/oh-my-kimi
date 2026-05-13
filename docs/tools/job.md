@@ -42,8 +42,8 @@ Streaming behavior:
 - Final return is single-shot after a completion, timeout, abort, or immediate fast path.
 
 Related read path:
-- `read jobs://` lists all current jobs.
-- `read jobs://<id>` renders one job with status, label, start time, duration, and stored result/error text.
+- Reading `jobs://` lists all current jobs.
+- Reading `jobs://<id>` renders one job with status, label, start time, duration, and stored result/error text.
 
 ## Flow
 1. `JobTool.createIf(...)` in `packages/coding-agent/src/tools/job.ts` only exposes the tool when `isBackgroundJobSupportEnabled(...)` returns true for either `async.enabled` or `bash.autoBackground.enabled`.
@@ -129,15 +129,15 @@ Lifecycle and exact state names:
 - Cancelling a non-running job is not an exception; it reports `already_completed` even if the actual status is `completed`, `failed`, or `cancelled`.
 - Tool-call abort during polling stops waiting and returns a final snapshot through `#buildResult(...)`; it does not cancel watched jobs.
 - Failures inside the underlying async work are stored on the job (`status: "failed"`, `errorText`) and reported in normal tool output, not rethrown by `job`.
-- `read jobs://<id>` missing job returns markdown content headed `# Job Not Found` rather than throwing.
+- Reading `jobs://<id>` for a missing job returns markdown content headed `# Job Not Found` rather than throwing.
 
 ## Notes
 - `job` waits for the first watched running job to settle, not for all watched jobs. If others remain `running`, they are reported under `## Still Running`; the caller must invoke `job` again to continue waiting.
 - Delivery suppression is the key difference between snapshot and automatic delivery:
-  - snapshots (`job`, `read jobs://`) read current manager state;
+  - snapshots (`job`, reads of `jobs://`) read current manager state;
   - follow-up delivery comes from `AsyncJobManager.#enqueueDelivery(...)` and `sdk.ts` `onJobComplete`;
   - watched or acknowledged ids are suppressed via `isDeliverySuppressed(...)`.
 - `manager.cancel(id)` sets `status = "cancelled"` before the underlying promise settles. The job function may later populate `resultText` or `errorText`; `job-manager.ts` preserves that text but does not transition the status away from `cancelled`.
 - `jobs://` is implemented by `JobsProtocolHandler` with `immutable = true`, but each resolve call reads live manager state at access time.
 - `jobs://<id>` shows a cancellation section only when a cancelled job has `errorText`; cancelled jobs with `resultText` are not rendered with a result section there.
-- Retention eviction removes the job record, suppression flags, and watch flag together. After eviction, both `job` and `read jobs://<id>` behave as if the id never existed.
+- Retention eviction removes the job record, suppression flags, and watch flag together. After eviction, both `job` and reads of `jobs://<id>` behave as if the id never existed.
