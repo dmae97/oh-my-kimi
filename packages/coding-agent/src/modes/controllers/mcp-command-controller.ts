@@ -49,6 +49,22 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
 	return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * Outcome of {@link MCPCommandController}'s OAuth handler.
+ *
+ * `clientId`/`clientSecret` are populated when the OAuth provider required (or
+ * accepted) dynamic client registration; callers MUST persist them alongside
+ * `credentialId` so subsequent token refreshes and reauthorizations can reuse
+ * the same registered client. Both are also set when the caller pre-supplied a
+ * client id via the wizard or `oauth.clientId` in `mcp.json`, in which case the
+ * write-back is a no-op.
+ */
+interface OAuthFlowResult {
+	credentialId: string;
+	clientId?: string;
+	clientSecret?: string;
+}
+
 type MCPAddScope = "user" | "project";
 type MCPAddTransport = "http" | "sse";
 
@@ -406,7 +422,7 @@ export class MCPCommandController {
 
 						try {
 							const oauthClientSecret = finalConfig.oauth?.clientSecret ?? "";
-							const credentialId = await this.#handleOAuthFlow(
+							const oauthResult = await this.#handleOAuthFlow(
 								oauth.authorizationUrl,
 								oauth.tokenUrl,
 								oauth.clientId ?? finalConfig.oauth?.clientId ?? "",
@@ -416,14 +432,21 @@ export class MCPCommandController {
 								finalConfig.oauth?.callbackPath,
 								finalConfig.oauth?.redirectUri,
 							);
+							const persistedClientId = oauthResult.clientId ?? oauth.clientId ?? finalConfig.oauth?.clientId;
+							const persistedClientSecret = oauthResult.clientSecret ?? finalConfig.oauth?.clientSecret;
 							finalConfig = {
 								...finalConfig,
 								auth: {
 									type: "oauth",
-									credentialId,
+									credentialId: oauthResult.credentialId,
 									tokenUrl: oauth.tokenUrl,
-									clientId: oauth.clientId ?? finalConfig.oauth?.clientId,
-									clientSecret: finalConfig.oauth?.clientSecret,
+									clientId: persistedClientId,
+									clientSecret: persistedClientSecret,
+								},
+								oauth: {
+									...finalConfig.oauth,
+									clientId: persistedClientId ?? finalConfig.oauth?.clientId,
+									clientSecret: persistedClientSecret ?? finalConfig.oauth?.clientSecret,
 								},
 							};
 						} catch (oauthError) {
@@ -488,7 +511,7 @@ export class MCPCommandController {
 		callbackPort?: number,
 		callbackPath?: string,
 		redirectUri?: string,
-	): Promise<string> {
+	): Promise<OAuthFlowResult> {
 		const authStorage = this.ctx.session.modelRegistry.authStorage;
 		let parsedAuthUrl: URL;
 
@@ -600,7 +623,11 @@ export class MCPCommandController {
 			// Store under a synthetic provider name
 			await authStorage.set(credentialId, oauthCredential);
 
-			return credentialId;
+			return {
+				credentialId,
+				clientId: flow.resolvedClientId,
+				clientSecret: flow.registeredClientSecret,
+			};
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : String(error);
 
@@ -1348,7 +1375,7 @@ export class MCPCommandController {
 
 			this.#showMessage(["", theme.fg("muted", `Reauthorizing "${name}"...`), ""].join("\n"));
 
-			const credentialId = await this.#handleOAuthFlow(
+			const oauthResult = await this.#handleOAuthFlow(
 				oauth.authorizationUrl,
 				oauth.tokenUrl,
 				oauth.clientId ?? found.config.oauth?.clientId ?? "",
@@ -1359,14 +1386,22 @@ export class MCPCommandController {
 				found.config.oauth?.redirectUri,
 			);
 
+			const persistedClientId = oauthResult.clientId ?? oauth.clientId ?? found.config.oauth?.clientId;
+			const persistedClientSecret = oauthResult.clientSecret ?? (oauthClientSecret || undefined);
+
 			const updated: MCPServerConfig = {
 				...baseConfig,
 				auth: {
 					type: "oauth",
-					credentialId,
+					credentialId: oauthResult.credentialId,
 					tokenUrl: oauth.tokenUrl,
-					clientId: oauth.clientId ?? found.config.oauth?.clientId,
-					clientSecret: oauthClientSecret || undefined,
+					clientId: persistedClientId,
+					clientSecret: persistedClientSecret,
+				},
+				oauth: {
+					...found.config.oauth,
+					clientId: persistedClientId ?? found.config.oauth?.clientId,
+					clientSecret: persistedClientSecret ?? found.config.oauth?.clientSecret,
 				},
 			};
 			await updateMCPServer(found.filePath, name, updated);
