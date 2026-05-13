@@ -1124,6 +1124,18 @@ export class AcpAgent implements Agent {
 	}
 
 	#scheduleBootstrapUpdates(sessionId: string): void {
+		// Delay the bootstrap so the client has time to handle the `session/new`
+		// (or `session/load` / `session/resume`) RPC response and register the
+		// new sessionId before we start firing notifications against it. Zed's
+		// agent-client-protocol reader dispatches responses and notifications
+		// to different async tasks; sending the first `available_commands_update`
+		// from `setTimeout(0)` reliably loses the race against the response
+		// handler and Zed logs `Received session notification for unknown
+		// session` then drops the update — leaving the slash-command palette
+		// empty (#1015 follow-up; see zed-industries/zed#55965 for the same
+		// race biting other ACP agents). 50ms is invisible to the operator and
+		// large enough that the response future has scheduled before our timer
+		// fires on stdio-only transports.
 		setTimeout(() => {
 			if (this.#connection.signal.aborted) {
 				return;
@@ -1133,7 +1145,7 @@ export class AcpAgent implements Agent {
 				return;
 			}
 			void this.#emitBootstrapUpdates(sessionId, record);
-		}, 0);
+		}, 50);
 	}
 
 	async #emitBootstrapUpdates(sessionId: string, record: ManagedSessionRecord): Promise<void> {
