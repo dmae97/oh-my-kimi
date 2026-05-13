@@ -73,6 +73,15 @@ const MODEL_CONFIG_ID = "model";
 const THINKING_CONFIG_ID = "thinking";
 const THINKING_OFF = "off";
 const SESSION_PAGE_SIZE = 50;
+/**
+ * Delay between `session/new` (or `session/load` / `session/resume` /
+ * `unstable_session/fork`) returning and the agent firing the first
+ * notifications against the new session id. Mitigates Zed's
+ * `Received session notification for unknown session` race — see
+ * `#scheduleBootstrapUpdates`. Exported so the ACP test harness can
+ * wait past this guard without hard-coding the literal.
+ */
+export const ACP_BOOTSTRAP_RACE_GUARD_MS = 50;
 
 type AgentImageContent = {
 	type: "image";
@@ -97,9 +106,8 @@ type ManagedSessionRecord = {
 	liveMessageId: string | undefined;
 	liveMessageProgress: { textEmitted: boolean; thoughtEmitted: boolean } | undefined;
 	extensionsConfigured: boolean;
-	// Installed by `#scheduleBootstrapUpdates` (after the 50ms response-race
-	// guard) and torn down by `#disposeSessionRecord`. Independent of the
-	// prompt-turn lifecycle — see `#handleLifetimeEvent`.
+	// Installed inside `#scheduleBootstrapUpdates` (post-race-guard); released
+	// in `#disposeSessionRecord`. Lives independent of any prompt turn.
 	lifetimeUnsubscribe: (() => void) | undefined;
 };
 
@@ -352,12 +360,9 @@ export class AcpAgent implements Agent {
 			});
 		}
 
-		// For `thinking` the lifetime subscription pushes a fresh
-		// `config_option_update` whenever the effective level changes. Skip the
-		// handler's own push when that subscription is already installed
-		// (post-bootstrap) to avoid a duplicate notification. Pre-bootstrap we
-		// still need to push here so the client sees the change — the
-		// subscription only starts firing once `#scheduleBootstrapUpdates` runs.
+		// For `thinking` the lifetime subscription pushes post-bootstrap; only
+		// push here when it's not yet installed so pre-bootstrap callers still
+		// see the change without a post-bootstrap duplicate.
 		const thinkingHandledBySubscription =
 			params.configId === THINKING_CONFIG_ID && record.lifetimeUnsubscribe !== undefined;
 		if (!thinkingHandledBySubscription) {
@@ -677,14 +682,8 @@ export class AcpAgent implements Agent {
 	async #registerPreparedSession(session: AgentSession, mcpServers: McpServer[]): Promise<ManagedSessionRecord> {
 		const record = this.#createManagedSessionRecord(session);
 		session.setClientBridge(createAcpClientBridge(this.#connection, session.sessionId, this.#clientCapabilities));
-		// Lifetime subscription is installed in `#scheduleBootstrapUpdates` so it
-		// shares the 50ms guard that protects against Zed's
-		// `Received session notification for unknown session` race — the
-		// `session/new` (or fork) response has to land before we start pushing
-		// `config_option_update` notifications for this session id. The
-		// post-extension thinking level is already reported in the response's
-		// `configOptions`, so no notifications are dropped — they're just
-		// deferred until the client knows the session id.
+		// `record.lifetimeUnsubscribe` is installed in `#scheduleBootstrapUpdates`
+		// so it shares the bootstrap race guard — see that comment for why.
 		try {
 			await this.#configureExtensions(record);
 			await this.#configureMcpServers(record, mcpServers);
@@ -1146,18 +1145,25 @@ export class AcpAgent implements Agent {
 	}
 
 	#scheduleBootstrapUpdates(sessionId: string): void {
-		// Delay the bootstrap so the client has time to handle the `session/new`
-		// (or `session/load` / `session/resume`) RPC response and register the
-		// new sessionId before we start firing notifications against it. Zed's
-		// agent-client-protocol reader dispatches responses and notifications
-		// to different async tasks; sending the first `available_commands_update`
-		// from `setTimeout(0)` reliably loses the race against the response
-		// handler and Zed logs `Received session notification for unknown
-		// session` then drops the update — leaving the slash-command palette
-		// empty (#1015 follow-up; see zed-industries/zed#55965 for the same
-		// race biting other ACP agents). 50ms is invisible to the operator and
-		// large enough that the response future has scheduled before our timer
-		// fires on stdio-only transports.
+		// Defer first notifications until the response has reached the client.
+		// Zed's agent-client-protocol reader dispatches responses and
+		// notifications to different async tasks; sending the first
+		// `available_commands_update` from `setTimeout(0)` reliably loses the
+		// race against the response handler and Zed logs `Received session
+		// notification for unknown session` then drops the update — leaving
+		// the slash-command palette empty (#1015 follow-up; see
+		// zed-industries/zed#55965 for the same race biting other ACP agents).
+		// `ACP_BOOTSTRAP_RACE_GUARD_MS` is invisible to the operator and large
+		// enough that the response future has scheduled before our timer fires
+		// on stdio-only transports.
+		//
+		// The session-lifetime subscription is installed inside the same timer
+		// so it shares this guard — without it, an extension's `session_start`
+		// handler (or any async work it schedules) calling `setThinkingLevel`
+		// would push a `config_option_update` for a session id the client
+		// hasn't been told about yet. The pre-bootstrap thinking level is
+		// reported in the response's `configOptions`, so deferring the
+		// notification loses no state.
 		setTimeout(() => {
 			if (this.#connection.signal.aborted) {
 				return;
@@ -1166,21 +1172,13 @@ export class AcpAgent implements Agent {
 			if (!record) {
 				return;
 			}
-			// Install the session-lifetime subscription now — same 50ms guard.
-			// Subscribing earlier in `#registerPreparedSession` would let an
-			// extension's `session_start` handler (or any async work it
-			// schedules) call `setThinkingLevel` and push a
-			// `config_option_update` for a session id the client hasn't been
-			// told about yet (same Zed race the bootstrap delay solves).
-			// `#disposeSessionRecord` releases this and tolerates `undefined`
-			// when the session is closed before the timer fires.
 			if (!record.lifetimeUnsubscribe) {
 				record.lifetimeUnsubscribe = record.session.subscribe(event => {
 					void this.#handleLifetimeEvent(record, event);
 				});
 			}
 			void this.#emitBootstrapUpdates(sessionId, record);
-		}, 50);
+		}, ACP_BOOTSTRAP_RACE_GUARD_MS);
 	}
 
 	async #emitBootstrapUpdates(sessionId: string, record: ManagedSessionRecord): Promise<void> {

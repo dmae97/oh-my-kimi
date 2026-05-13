@@ -13,7 +13,7 @@ import {
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import { _resetSettingsForTest, Settings } from "../src/config/settings";
-import { AcpAgent } from "../src/modes/acp/acp-agent";
+import { ACP_BOOTSTRAP_RACE_GUARD_MS, AcpAgent } from "../src/modes/acp/acp-agent";
 import type { PlanModeState } from "../src/plan-mode/state";
 import type { AgentSession, AgentSessionEvent } from "../src/session/agent-session";
 import { SessionManager } from "../src/session/session-manager";
@@ -374,6 +374,15 @@ async function createHarness(): Promise<AgentHarness> {
 	};
 }
 
+/**
+ * Wait until `#scheduleBootstrapUpdates`'s timer has fired and the
+ * session-lifetime subscription is installed. 30 ms of slack absorbs
+ * `setTimeout` drift without slowing tests meaningfully.
+ */
+async function waitForBootstrapGuard(): Promise<void> {
+	await Bun.sleep(ACP_BOOTSTRAP_RACE_GUARD_MS + 30);
+}
+
 describe("ACP agent", () => {
 	it("supports multiple live ACP sessions with model and lifecycle handlers", async () => {
 		const harness = await createHarness();
@@ -498,7 +507,7 @@ describe("ACP agent", () => {
 		const session = harness.findSession(created.sessionId)!;
 		// Wait past the 50ms bootstrap timer so the lifetime subscription is
 		// installed before we drive an internal thinking-level change.
-		await Bun.sleep(80);
+		await waitForBootstrapGuard();
 
 		const updatesBefore = harness.updates.length;
 		session.setThinkingLevel("high");
@@ -557,7 +566,7 @@ describe("ACP agent", () => {
 
 		// After the 50ms bootstrap timer fires the subscription is installed,
 		// and subsequent changes do surface.
-		await Bun.sleep(80);
+		await waitForBootstrapGuard();
 		const baseline = harness.updates.length;
 		session.setThinkingLevel("medium");
 		const afterBootstrap = harness.updates
@@ -583,7 +592,7 @@ describe("ACP agent", () => {
 		// Wait past the bootstrap guard so the lifetime subscription is
 		// installed and the client-driven setSessionConfigOption produces
 		// exactly one notification through it.
-		await Bun.sleep(80);
+		await waitForBootstrapGuard();
 
 		const updatesBefore = harness.updates.length;
 		const response = await harness.agent.setSessionConfigOption({
