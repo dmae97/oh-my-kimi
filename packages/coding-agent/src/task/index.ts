@@ -483,11 +483,27 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 				? ` Failed to schedule ${failedSchedules.length} task${failedSchedules.length === 1 ? "" : "s"}.`
 				: "";
 
+		const ircEnabled = this.session.settings.get("irc.enabled") === true;
+		const taskIdByItemId = new Map<string, string>();
+		for (let i = 0; i < taskItems.length; i++) {
+			taskIdByItemId.set(taskItems[i].id, uniqueIds[i]);
+		}
+		const startedListing = startedJobs
+			.map(({ taskId }) => {
+				const id = taskIdByItemId.get(taskId) ?? taskId;
+				const desc = progressByTaskId.get(taskId)?.description;
+				return desc ? `- \`${id}\` — ${desc}` : `- \`${id}\``;
+			})
+			.join("\n");
+		const coordinationHint = ircEnabled
+			? ` DM these ids via \`irc\` to coordinate while they run; reach for \`job\` only to inspect (\`list\`), wait (\`poll\`), or cancel a stuck task.`
+			: ` Use \`job\` to inspect (\`list\`), wait (\`poll\`), or cancel a stuck task by id.`;
+
 		return {
 			content: [
 				{
 					type: "text",
-					text: `Started ${startedJobs.length} background task job${startedJobs.length === 1 ? "" : "s"} using ${params.agent}.${scheduleFailureSummary} Results will be delivered when complete.`,
+					text: `Started ${startedJobs.length} background task job${startedJobs.length === 1 ? "" : "s"} using ${params.agent}.${scheduleFailureSummary} Results will be delivered when complete.\n${startedListing}\n${coordinationHint}`,
 				},
 			],
 			details: {
