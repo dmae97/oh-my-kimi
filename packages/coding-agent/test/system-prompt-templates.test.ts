@@ -351,7 +351,7 @@ describe("system Handlebars prompt templates", () => {
 		const promptText = systemPrompt.join("\n\n");
 
 		expect(promptText).toContain("Edit: `apply_patch`");
-		expect(promptText).toContain("use `apply_patch` for surgical text changes");
+		expect(promptText).toContain("surgical text edits → `apply_patch`");
 		expect(promptText).not.toContain("Edit: `edit`");
 	});
 
