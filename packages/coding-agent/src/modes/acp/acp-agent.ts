@@ -97,7 +97,9 @@ type ManagedSessionRecord = {
 	liveMessageId: string | undefined;
 	liveMessageProgress: { textEmitted: boolean; thoughtEmitted: boolean } | undefined;
 	extensionsConfigured: boolean;
-	// Independent of prompt-turn lifecycle — see `#handleLifetimeEvent`.
+	// Installed by `#scheduleBootstrapUpdates` (after the 50ms response-race
+	// guard) and torn down by `#disposeSessionRecord`. Independent of the
+	// prompt-turn lifecycle — see `#handleLifetimeEvent`.
 	lifetimeUnsubscribe: (() => void) | undefined;
 };
 
@@ -350,9 +352,15 @@ export class AcpAgent implements Agent {
 			});
 		}
 
-		// Thinking-level changes are pushed via the lifetime subscription on
-		// `thinking_level_changed`; skipping the push here avoids a duplicate.
-		if (params.configId !== THINKING_CONFIG_ID) {
+		// For `thinking` the lifetime subscription pushes a fresh
+		// `config_option_update` whenever the effective level changes. Skip the
+		// handler's own push when that subscription is already installed
+		// (post-bootstrap) to avoid a duplicate notification. Pre-bootstrap we
+		// still need to push here so the client sees the change — the
+		// subscription only starts firing once `#scheduleBootstrapUpdates` runs.
+		const thinkingHandledBySubscription =
+			params.configId === THINKING_CONFIG_ID && record.lifetimeUnsubscribe !== undefined;
+		if (!thinkingHandledBySubscription) {
 			await this.#pushConfigOptionUpdate(record);
 		}
 		return { configOptions: this.#buildConfigOptions(record.session) };
@@ -669,9 +677,14 @@ export class AcpAgent implements Agent {
 	async #registerPreparedSession(session: AgentSession, mcpServers: McpServer[]): Promise<ManagedSessionRecord> {
 		const record = this.#createManagedSessionRecord(session);
 		session.setClientBridge(createAcpClientBridge(this.#connection, session.sessionId, this.#clientCapabilities));
-		record.lifetimeUnsubscribe = session.subscribe(event => {
-			void this.#handleLifetimeEvent(record, event);
-		});
+		// Lifetime subscription is installed in `#scheduleBootstrapUpdates` so it
+		// shares the 50ms guard that protects against Zed's
+		// `Received session notification for unknown session` race — the
+		// `session/new` (or fork) response has to land before we start pushing
+		// `config_option_update` notifications for this session id. The
+		// post-extension thinking level is already reported in the response's
+		// `configOptions`, so no notifications are dropped — they're just
+		// deferred until the client knows the session id.
 		try {
 			await this.#configureExtensions(record);
 			await this.#configureMcpServers(record, mcpServers);
@@ -1152,6 +1165,19 @@ export class AcpAgent implements Agent {
 			const record = this.#sessions.get(sessionId);
 			if (!record) {
 				return;
+			}
+			// Install the session-lifetime subscription now — same 50ms guard.
+			// Subscribing earlier in `#registerPreparedSession` would let an
+			// extension's `session_start` handler (or any async work it
+			// schedules) call `setThinkingLevel` and push a
+			// `config_option_update` for a session id the client hasn't been
+			// told about yet (same Zed race the bootstrap delay solves).
+			// `#disposeSessionRecord` releases this and tolerates `undefined`
+			// when the session is closed before the timer fires.
+			if (!record.lifetimeUnsubscribe) {
+				record.lifetimeUnsubscribe = record.session.subscribe(event => {
+					void this.#handleLifetimeEvent(record, event);
+				});
 			}
 			void this.#emitBootstrapUpdates(sessionId, record);
 		}, 50);

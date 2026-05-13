@@ -489,12 +489,16 @@ describe("ACP agent", () => {
 	it("pushes config_option_update when thinking level changes internally", async () => {
 		// Internal callers (slash commands, model auto-adjust, extension UI) call
 		// AgentSession.setThinkingLevel directly without going through the ACP
-		// setSessionConfigOption surface. The session-lifetime subscription on
-		// AcpAgent must surface those changes to clients as `config_option_update`
-		// so TORTAS-style fleet views stay in sync.
+		// setSessionConfigOption surface. Once the session-lifetime subscription
+		// is installed (after the 50ms bootstrap guard so the response has
+		// reached the client first), those changes must surface to clients as
+		// `config_option_update` so TORTAS-style fleet views stay in sync.
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
+		// Wait past the 50ms bootstrap timer so the lifetime subscription is
+		// installed before we drive an internal thinking-level change.
+		await Bun.sleep(80);
 
 		const updatesBefore = harness.updates.length;
 		session.setThinkingLevel("high");
@@ -525,6 +529,50 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("suppresses lifetime config_option_update during the bootstrap window", async () => {
+		// Regression for codex review on #1060: an extension `session_start`
+		// handler calling `setThinkingLevel` must not push a
+		// `config_option_update` for a session id the client has not been told
+		// about yet (matches Zed's `Received session notification for unknown
+		// session` race that `#scheduleBootstrapUpdates` already guards).
+		// The fake harness lets us simulate that pre-bootstrap window by
+		// driving the change before sleeping past the 50ms guard.
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+
+		const updatesBefore = harness.updates.length;
+		// Synchronously after `newSession` returns, the bootstrap timer has
+		// not fired yet, so the lifetime subscription is not installed.
+		session.setThinkingLevel("high");
+
+		const beforeBootstrap = harness.updates
+			.slice(updatesBefore)
+			.filter(
+				notification =>
+					notification.sessionId === created.sessionId &&
+					notification.update.sessionUpdate === "config_option_update",
+			);
+		expect(beforeBootstrap.length).toBe(0);
+
+		// After the 50ms bootstrap timer fires the subscription is installed,
+		// and subsequent changes do surface.
+		await Bun.sleep(80);
+		const baseline = harness.updates.length;
+		session.setThinkingLevel("medium");
+		const afterBootstrap = harness.updates
+			.slice(baseline)
+			.filter(
+				notification =>
+					notification.sessionId === created.sessionId &&
+					notification.update.sessionUpdate === "config_option_update",
+			);
+		expect(afterBootstrap.length).toBeGreaterThanOrEqual(1);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("emits a single config_option_update per setSessionConfigOption(thinking) call", async () => {
 		// Client-initiated thinking changes flow through #setThinkingLevelById,
 		// which fires `thinking_level_changed` and lets the lifetime subscription
@@ -532,6 +580,10 @@ describe("ACP agent", () => {
 		// `config_option_update` of its own.
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		// Wait past the bootstrap guard so the lifetime subscription is
+		// installed and the client-driven setSessionConfigOption produces
+		// exactly one notification through it.
+		await Bun.sleep(80);
 
 		const updatesBefore = harness.updates.length;
 		const response = await harness.agent.setSessionConfigOption({
