@@ -6,10 +6,24 @@ import type {
 	ToolKind,
 } from "@agentclientprotocol/sdk";
 import type { AgentSessionEvent } from "../../session/agent-session";
+import { resolveToCwd } from "../../tools/path-utils";
 import type { TodoStatus } from "../../tools/todo-write";
+
+interface MessageProgress {
+	textEmitted: boolean;
+	thoughtEmitted: boolean;
+}
 
 interface AcpEventMapperOptions {
 	getMessageId?: (message: unknown) => string | undefined;
+	getMessageProgress?: (message: unknown) => MessageProgress | undefined;
+	/**
+	 * Session cwd. Tool call locations sent to ACP clients must be absolute
+	 * (the editor host needs them to open or focus files). When provided,
+	 * the mapper resolves raw `path`/`file`/etc. args against this cwd
+	 * before emitting `ToolCallLocation` entries.
+	 */
+	cwd?: string;
 }
 
 interface ContentArrayContainer {
@@ -127,6 +141,8 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 	switch (event.type) {
 		case "message_update":
 			return mapAssistantMessageUpdate(event, sessionId, options);
+		case "message_end":
+			return mapAssistantMessageEnd(event, sessionId, options);
 		case "tool_execution_start": {
 			const update: SessionUpdate = {
 				sessionUpdate: "tool_call",
@@ -136,14 +152,16 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 				status: "pending",
 				rawInput: event.args,
 			};
-			const locations = extractToolLocations(event.args);
+			const locations = extractToolLocations(event.args, options.cwd);
 			if (locations.length > 0) {
 				update.locations = locations;
 			}
 			return [toSessionNotification(sessionId, update)];
 		}
 		case "tool_execution_update": {
-			const content = extractToolCallContent(event.partialResult);
+			const terminalContent = extractTerminalToolCallContent(event.partialResult);
+			const otherContent = terminalContent.length > 0 ? [] : extractToolCallContent(event.partialResult);
+			const content = [...terminalContent, ...otherContent];
 			const update: SessionUpdate = {
 				sessionUpdate: "tool_call_update",
 				toolCallId: event.toolCallId,
@@ -153,10 +171,17 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 			if (content.length > 0) {
 				update.content = content;
 			}
+			const locations = extractToolLocations(event.args, options.cwd);
+			if (locations.length > 0) {
+				update.locations = locations;
+			}
 			return [toSessionNotification(sessionId, update)];
 		}
 		case "tool_execution_end": {
-			const content = extractToolCallContent(event.result);
+			const diffContent = extractDiffToolCallContent(event.result);
+			const terminalContent = extractTerminalToolCallContent(event.result);
+			const otherContent = extractToolCallContent(event.result);
+			const content = [...diffContent, ...terminalContent, ...otherContent];
 			const update: SessionUpdate = {
 				sessionUpdate: "tool_call_update",
 				toolCallId: event.toolCallId,
@@ -165,6 +190,10 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 			};
 			if (content.length > 0) {
 				update.content = content;
+			}
+			const locations = extractToolLocationsFromResult(event.result, options.cwd);
+			if (locations.length > 0) {
+				update.locations = locations;
 			}
 			return [toSessionNotification(sessionId, update)];
 		}
@@ -194,14 +223,31 @@ function mapAssistantMessageUpdate(
 
 	let sessionUpdate: "agent_message_chunk" | "agent_thought_chunk";
 	let text: string;
+	const progress = options.getMessageProgress?.(event.message);
 	switch (event.assistantMessageEvent.type) {
 		case "text_delta":
 			sessionUpdate = "agent_message_chunk";
 			text = event.assistantMessageEvent.delta;
+			if (text.length > 0 && progress) {
+				progress.textEmitted = true;
+			}
 			break;
 		case "thinking_delta":
 			sessionUpdate = "agent_thought_chunk";
 			text = event.assistantMessageEvent.delta;
+			if (text.length > 0 && progress) {
+				progress.thoughtEmitted = true;
+			}
+			break;
+		case "done":
+			if (progress?.textEmitted) {
+				return [];
+			}
+			sessionUpdate = "agent_message_chunk";
+			text = extractAssistantMessageText(event.assistantMessageEvent.message);
+			if (text.length > 0 && progress) {
+				progress.textEmitted = true;
+			}
 			break;
 		case "error":
 			sessionUpdate = "agent_message_chunk";
@@ -218,6 +264,33 @@ function mapAssistantMessageUpdate(
 	return [
 		toSessionNotification(sessionId, {
 			sessionUpdate,
+			content: { type: "text", text },
+			messageId,
+		}),
+	];
+}
+
+function mapAssistantMessageEnd(
+	event: Extract<AgentSessionEvent, { type: "message_end" }>,
+	sessionId: string,
+	options: AcpEventMapperOptions,
+): SessionNotification[] {
+	if (!isAssistantMessage(event.message)) {
+		return [];
+	}
+	const progress = options.getMessageProgress?.(event.message);
+	if (!progress || progress.textEmitted) {
+		return [];
+	}
+	const text = extractAssistantMessageText(event.message);
+	if (text.length === 0) {
+		return [];
+	}
+	progress.textEmitted = true;
+	const messageId = options.getMessageId?.(event.message);
+	return [
+		toSessionNotification(sessionId, {
+			sessionUpdate: "agent_message_chunk",
 			content: { type: "text", text },
 			messageId,
 		}),
@@ -257,24 +330,102 @@ function buildToolTitle(toolName: string, args: unknown, intent: string | undefi
 	return toolName;
 }
 
-function extractToolLocations(args: unknown): ToolCallLocation[] {
+/**
+ * Resolve a single raw path against cwd for an ACP location. When `cwd` is
+ * omitted we pass the value through unchanged (callers without session
+ * context, e.g. some legacy entry points and tests); the ACP-side caller
+ * always supplies cwd so notifications carry absolute paths.
+ */
+function toAcpLocationPath(value: string, cwd?: string): string {
+	if (!cwd) return value;
+	try {
+		return resolveToCwd(value, cwd);
+	} catch {
+		return value;
+	}
+}
+
+function extractToolLocations(args: unknown, cwd?: string): ToolCallLocation[] {
 	const locations: ToolCallLocation[] = [];
-	const path = extractStringProperty<PathContainer>(args, "path");
-	if (path) {
+	const seen = new Set<string>();
+	const pushPath = (raw: string | undefined) => {
+		if (!raw) return;
+		const path = toAcpLocationPath(raw, cwd);
+		if (seen.has(path)) return;
+		seen.add(path);
 		locations.push({ path });
-	}
+	};
 
-	const oldPath = extractStringProperty<OldPathContainer>(args, "oldPath");
-	if (oldPath && oldPath !== path) {
-		locations.push({ path: oldPath });
-	}
-
-	const newPath = extractStringProperty<NewPathContainer>(args, "newPath");
-	if (newPath && newPath !== path && newPath !== oldPath) {
-		locations.push({ path: newPath });
-	}
+	pushPath(extractStringProperty<PathContainer>(args, "path"));
+	pushPath(extractStringProperty<OldPathContainer>(args, "oldPath"));
+	pushPath(extractStringProperty<NewPathContainer>(args, "newPath"));
 
 	return locations;
+}
+
+/** Pull locations from a tool result's details (e.g. EditToolDetails.perFileResults[].path). */
+function extractToolLocationsFromResult(result: unknown, cwd?: string): ToolCallLocation[] {
+	if (typeof result !== "object" || result === null) return [];
+	const details = (result as { details?: unknown }).details;
+	if (typeof details !== "object" || details === null) return [];
+	const direct = extractToolLocations(details, cwd);
+	const perFile = (details as { perFileResults?: unknown }).perFileResults;
+	if (!Array.isArray(perFile)) {
+		return direct;
+	}
+	const seen = new Set(direct.map(loc => loc.path));
+	const locations = [...direct];
+	for (const entry of perFile) {
+		const raw = extractStringProperty<PathContainer>(entry, "path");
+		if (!raw) continue;
+		const path = toAcpLocationPath(raw, cwd);
+		if (seen.has(path)) continue;
+		seen.add(path);
+		locations.push({ path });
+	}
+	return locations;
+}
+
+/** Emit a `diff` ToolCallContent for each per-file edit result that carries oldText/newText. */
+function extractDiffToolCallContent(result: unknown): ToolCallContent[] {
+	if (typeof result !== "object" || result === null) return [];
+	const details = (result as { details?: unknown }).details;
+	if (typeof details !== "object" || details === null) return [];
+	const blocks: ToolCallContent[] = [];
+	const perFile = (details as { perFileResults?: unknown }).perFileResults;
+	const entries: unknown[] = Array.isArray(perFile) ? perFile : [details];
+	for (const entry of entries) {
+		const block = buildDiffContent(entry);
+		if (block) blocks.push(block);
+	}
+	return blocks;
+}
+
+function buildDiffContent(entry: unknown): ToolCallContent | undefined {
+	if (typeof entry !== "object" || entry === null) return undefined;
+	const candidate = entry as { path?: unknown; oldText?: unknown; newText?: unknown; isError?: unknown };
+	if (candidate.isError === true) return undefined;
+	const path = typeof candidate.path === "string" && candidate.path.length > 0 ? candidate.path : undefined;
+	if (!path) return undefined;
+	const oldText = typeof candidate.oldText === "string" ? candidate.oldText : undefined;
+	const newText = typeof candidate.newText === "string" ? candidate.newText : undefined;
+	if (oldText === undefined && newText === undefined) return undefined;
+	return {
+		type: "diff",
+		path,
+		oldText: oldText ?? null,
+		newText: newText ?? "",
+	};
+}
+
+/** Emit a `terminal` ToolCallContent when a tool result carries a `details.terminalId` (e.g. bash routed through ACP terminal/*). */
+function extractTerminalToolCallContent(result: unknown): ToolCallContent[] {
+	if (typeof result !== "object" || result === null) return [];
+	const details = (result as { details?: unknown }).details;
+	if (typeof details !== "object" || details === null) return [];
+	const terminalId = (details as { terminalId?: unknown }).terminalId;
+	if (typeof terminalId !== "string" || terminalId.length === 0) return [];
+	return [{ type: "terminal", terminalId }];
 }
 
 function extractToolCallContent(value: unknown): ToolCallContent[] {
@@ -477,6 +628,20 @@ function extractReadableText(value: unknown): string | undefined {
 
 	const serialized = safeJsonStringify(value);
 	return normalizeText(serialized);
+}
+
+function extractAssistantMessageText(value: unknown): string {
+	if (typeof value !== "object" || value === null || !("content" in value)) {
+		return "";
+	}
+	const content = (value as ContentArrayContainer).content;
+	if (!Array.isArray(content)) {
+		return "";
+	}
+	return content
+		.map(block => extractStructuredText(block))
+		.filter((chunk): chunk is string => typeof chunk === "string" && chunk.length > 0)
+		.join("\n");
 }
 
 function extractStructuredText(value: unknown): string | undefined {

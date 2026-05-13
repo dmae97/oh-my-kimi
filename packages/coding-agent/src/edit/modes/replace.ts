@@ -1094,9 +1094,12 @@ export async function executeReplaceSingle(
 		content: [{ type: "text", text: resultText }],
 		details: {
 			diff: diffResult.diff,
+			path: absolutePath,
 			firstChangedLine: diffResult.firstChangedLine,
 			diagnostics,
 			meta,
+			oldText: rawContent,
+			newText: finalContent,
 		},
 	};
 }

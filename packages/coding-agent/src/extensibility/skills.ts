@@ -6,8 +6,8 @@ import type { SourceMeta } from "../capability/types";
 import type { SkillsSettings } from "../config/settings";
 import { type Skill as CapabilitySkill, loadCapability } from "../discovery";
 import { compareSkillOrder, scanSkillsFromDir } from "../discovery/helpers";
+import type { SkillPromptDetails } from "../session/messages";
 import { expandTilde } from "../tools/path-utils";
-
 export interface Skill {
 	name: string;
 	description: string;
@@ -268,5 +268,37 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	return {
 		skills,
 		warnings: [...(result.warnings ?? []).map(w => ({ skillPath: "", message: w })), ...collisionWarnings],
+	};
+}
+
+export interface BuiltSkillPromptMessage {
+	message: string;
+	details: SkillPromptDetails;
+}
+
+export function getSkillSlashCommandName(skill: Pick<Skill, "name">): string {
+	return `skill:${skill.name}`;
+}
+
+export async function buildSkillPromptMessage(
+	skill: Pick<Skill, "name" | "filePath">,
+	args: string,
+): Promise<BuiltSkillPromptMessage> {
+	const content = await Bun.file(skill.filePath).text();
+	const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
+	const metaLines = [`Skill: ${skill.filePath}`];
+	const trimmedArgs = args.trim();
+	if (trimmedArgs) {
+		metaLines.push(`User: ${trimmedArgs}`);
+	}
+	const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
+	return {
+		message,
+		details: {
+			name: skill.name,
+			path: skill.filePath,
+			args: trimmedArgs || undefined,
+			lineCount: body ? body.split("\n").length : 0,
+		},
 	};
 }

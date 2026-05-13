@@ -143,7 +143,7 @@ import { outputMeta } from "../tools/output-meta";
 import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
 import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo-write";
-import { ToolError } from "../tools/tool-errors";
+import { ToolAbortError, ToolError } from "../tools/tool-errors";
 import { clampTimeout } from "../tools/tool-timeouts";
 import { parseCommandArgs } from "../utils/command-args";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
@@ -151,6 +151,7 @@ import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { AuthStorage } from "./auth-storage";
+import type { ClientBridge, ClientBridgePermissionOption, ClientBridgePermissionOutcome } from "./client-bridge";
 import {
 	CompactionCancelledError,
 	type CompactionPreparation,
@@ -500,6 +501,96 @@ const noOpUIContext: ExtensionUIContext = {
 };
 
 // ============================================================================
+// ACP Permission Gate
+// ============================================================================
+
+/** Tools that require user permission before execution when an ACP client is connected. */
+const PERMISSION_REQUIRED_TOOLS = new Set(["bash", "edit", "write", "ast_edit", "delete", "move"]);
+
+/** Permission options presented to the client on each gated tool call. */
+const PERMISSION_OPTIONS: ClientBridgePermissionOption[] = [
+	{ optionId: "allow_once", name: "Allow once", kind: "allow_once" },
+	{ optionId: "allow_always", name: "Always allow", kind: "allow_always" },
+	{ optionId: "reject_once", name: "Reject", kind: "reject_once" },
+	{ optionId: "reject_always", name: "Always reject", kind: "reject_always" },
+];
+
+const PERMISSION_OPTIONS_BY_ID = new Map(PERMISSION_OPTIONS.map(option => [option.optionId, option]));
+
+function derivePermissionTitle(toolName: string, args: unknown): string {
+	const a = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+	if (toolName === "bash") {
+		const cmd = typeof a.command === "string" ? a.command.slice(0, 80) : undefined;
+		if (cmd) return cmd;
+	} else if (toolName === "edit" || toolName === "write" || toolName === "delete") {
+		const p = typeof a.path === "string" ? a.path : undefined;
+		if (p) {
+			const verb = toolName === "edit" ? "Edit" : toolName === "write" ? "Write" : "Delete";
+			return `${verb} ${p}`;
+		}
+	} else if (toolName === "move") {
+		const from =
+			typeof a.oldPath === "string"
+				? a.oldPath
+				: typeof a.path === "string"
+					? a.path
+					: typeof a.from === "string"
+						? a.from
+						: undefined;
+		const to =
+			typeof a.newPath === "string"
+				? a.newPath
+				: typeof a.to === "string"
+					? a.to
+					: typeof a.destination === "string"
+						? a.destination
+						: undefined;
+		if (from && to) return `Move ${from} to ${to}`;
+		if (from) return `Move ${from}`;
+	} else if (toolName === "ast_edit") {
+		const paths = Array.isArray(a.paths)
+			? (a.paths as unknown[]).filter(x => typeof x === "string").join(", ")
+			: undefined;
+		if (paths) return `AST edit ${paths}`;
+	}
+	return toolName;
+}
+
+function extractPermissionLocations(args: unknown, cwd: string): { path: string; line?: number }[] {
+	if (!args || typeof args !== "object") return [];
+	const a = args as Record<string, unknown>;
+	const out: { path: string; line?: number }[] = [];
+	const pushPath = (value: unknown) => {
+		if (typeof value !== "string" || value.length === 0) return;
+		// ACP locations carry file paths that the editor host will open or focus;
+		// they must be absolute or the client cannot resolve them. Resolve raw
+		// tool args (often cwd-relative) against the session cwd before sending.
+		let resolved: string;
+		try {
+			resolved = resolveToCwd(value, cwd);
+		} catch {
+			return;
+		}
+		if (out.some(location => location.path === resolved)) return;
+		out.push({ path: resolved });
+	};
+	pushPath(a.path);
+	pushPath(a.file);
+	if (Array.isArray(a.paths)) {
+		for (const p of a.paths) {
+			pushPath(p);
+		}
+	}
+	pushPath(a.oldPath);
+	pushPath(a.newPath);
+	pushPath(a.from);
+	pushPath(a.to);
+	pushPath(a.source);
+	pushPath(a.destination);
+	return out;
+}
+
+// ============================================================================
 // AgentSession Class
 // ============================================================================
 
@@ -531,6 +622,9 @@ export class AgentSession {
 	#planModeState: PlanModeState | undefined;
 	#planReferenceSent = false;
 	#planReferencePath = "local://PLAN.md";
+	#clientBridge: ClientBridge | undefined;
+	/** Per-session memory of allow_always / reject_always decisions for gated tools. */
+	#acpPermissionDecisions: Map<string, "allow_always" | "reject_always"> = new Map();
 
 	// Compaction state
 	#compactionAbortController: AbortController | undefined = undefined;
@@ -2548,6 +2642,85 @@ export class AgentSession {
 		return [...new Set(activated)];
 	}
 
+	/**
+	 * Wrap a tool with a permission-gate proxy when an ACP client is connected.
+	 * Only wraps tools whose name is in PERMISSION_REQUIRED_TOOLS and only when
+	 * the bridge exposes `requestPermission`. No-ops for all other cases.
+	 */
+	#wrapToolForAcpPermission<T extends AgentTool>(tool: T): T {
+		const bridge = this.#clientBridge;
+		// Match the capability+method gating pattern used by read/write/bash.
+		if (!bridge?.capabilities.requestPermission || !bridge.requestPermission) return tool;
+		if (!PERMISSION_REQUIRED_TOOLS.has(tool.name)) return tool;
+		return new Proxy(tool, {
+			get: (target, prop, receiver) => {
+				if (prop !== "execute") return Reflect.get(target, prop, receiver);
+				return async (
+					toolCallId: string,
+					args: unknown,
+					signal: AbortSignal | undefined,
+					onUpdate: never,
+					ctx: never,
+				) => {
+					// Short-circuit on persisted decisions.
+					const persisted = this.#acpPermissionDecisions.get(target.name);
+					if (persisted === "allow_always") {
+						return await target.execute(toolCallId, args as never, signal, onUpdate, ctx);
+					}
+					if (persisted === "reject_always") {
+						throw new ToolError(`Tool call rejected by user (preference)`);
+					}
+					if (signal?.aborted) {
+						throw new ToolAbortError("Permission request cancelled");
+					}
+					type PermissionRaceResult =
+						| { kind: "permission"; outcome: ClientBridgePermissionOutcome }
+						| { kind: "aborted" };
+					const { promise: abortPromise, resolve: resolveAbort } = Promise.withResolvers<PermissionRaceResult>();
+					const onAbort = () => resolveAbort({ kind: "aborted" });
+					signal?.addEventListener("abort", onAbort, { once: true });
+					let raced: PermissionRaceResult;
+					try {
+						const permissionPromise = bridge.requestPermission!(
+							{
+								toolCallId,
+								toolName: target.name,
+								title: derivePermissionTitle(target.name, args),
+								rawInput: args,
+								locations: extractPermissionLocations(args, this.sessionManager.getCwd()),
+							},
+							PERMISSION_OPTIONS,
+							signal,
+						).then(outcome => ({ kind: "permission" as const, outcome }));
+						raced = await Promise.race([permissionPromise, abortPromise]);
+					} finally {
+						signal?.removeEventListener("abort", onAbort);
+					}
+					if (raced.kind === "aborted" || signal?.aborted) {
+						throw new ToolAbortError("Permission request cancelled");
+					}
+					const outcome = raced.outcome;
+					if (outcome.outcome === "cancelled") {
+						throw new ToolAbortError("Permission request cancelled");
+					}
+					const selectedOption = PERMISSION_OPTIONS_BY_ID.get(outcome.optionId);
+					if (!selectedOption) {
+						throw new ToolError(`Tool permission response used unknown option ID: ${outcome.optionId}`);
+					}
+					if (selectedOption.kind === "allow_always") {
+						this.#acpPermissionDecisions.set(target.name, "allow_always");
+					} else if (selectedOption.kind === "reject_always") {
+						this.#acpPermissionDecisions.set(target.name, "reject_always");
+					}
+					if (selectedOption.kind === "reject_once" || selectedOption.kind === "reject_always") {
+						throw new ToolError(`Tool call rejected by user (${target.name})`);
+					}
+					return await target.execute(toolCallId, args as never, signal, onUpdate, ctx);
+				};
+			},
+		}) as T;
+	}
+
 	async #applyActiveToolsByName(
 		toolNames: string[],
 		options?: { persistMCPSelection?: boolean; previousSelectedMCPToolNames?: string[] },
@@ -2559,7 +2732,7 @@ export class AgentSession {
 		for (const name of toolNames) {
 			const tool = this.#toolRegistry.get(name);
 			if (tool) {
-				tools.push(tool);
+				tools.push(this.#wrapToolForAcpPermission(tool));
 				validToolNames.push(name);
 			}
 		}
@@ -2567,7 +2740,7 @@ export class AgentSession {
 		if (isAutoQaEnabled(this.settings) && !validToolNames.includes("report_tool_issue")) {
 			const qaTool = this.#toolRegistry.get("report_tool_issue");
 			if (qaTool) {
-				tools.push(qaTool);
+				tools.push(this.#wrapToolForAcpPermission(qaTool));
 				validToolNames.push("report_tool_issue");
 			}
 		}
@@ -2973,6 +3146,21 @@ export class AgentSession {
 
 	setPlanReferencePath(path: string): void {
 		this.#planReferencePath = path;
+	}
+
+	get clientBridge(): ClientBridge | undefined {
+		return this.#clientBridge;
+	}
+
+	setClientBridge(bridge: ClientBridge | undefined): void {
+		this.#clientBridge = bridge;
+		this.#acpPermissionDecisions.clear();
+		const activeToolNames = this.getActiveToolNames();
+		const activeTools = activeToolNames
+			.map(name => this.#toolRegistry.get(name))
+			.filter((tool): tool is AgentTool => tool !== undefined)
+			.map(tool => this.#wrapToolForAcpPermission(tool));
+		this.agent.setTools(activeTools);
 	}
 
 	getCheckpointState(): CheckpointState | undefined {
