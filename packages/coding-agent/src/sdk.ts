@@ -29,7 +29,13 @@ import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
 import { ModelRegistry } from "./config/model-registry";
-import { formatModelString, parseModelPattern, parseModelString, resolveModelRoleValue } from "./config/model-resolver";
+import {
+	formatModelString,
+	parseModelPattern,
+	parseModelString,
+	resolveAllowedModels,
+	resolveModelRoleValue,
+} from "./config/model-resolver";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./config/prompt-templates";
 import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
@@ -800,8 +806,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const modelMatchPreferences = {
 		usageOrder: settings.getStorage()?.getModelUsageOrder(),
 	};
+	const allowedModels = await logger.time("resolveAllowedModels", () =>
+		resolveAllowedModels(modelRegistry, settings, modelMatchPreferences),
+	);
 	const defaultRoleSpec = logger.time("resolveDefaultModelRole", () =>
-		resolveModelRoleValue(settings.getModelRole("default"), modelRegistry.getAvailable(), {
+		resolveModelRoleValue(settings.getModelRole("default"), allowedModels, {
 			settings,
 			matchPreferences: modelMatchPreferences,
 			modelRegistry,
@@ -1258,11 +1267,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
-		// Fall back to first available model with a valid API key.
-		// Skip fallback if the user explicitly requested a model via --model that wasn't found.
+		// Fall back to first available model with a valid API key, honoring the
+		// path-scoped `enabledModels` allow-list when configured. Skip when the
+		// user explicitly requested a model via --model that wasn't found.
 		if (!model && !options.modelPattern) {
-			const allModels = modelRegistry.getAll();
-			for (const candidate of allModels) {
+			// Re-resolve the allowed set: extension factories above may have
+			// registered providers/models that weren't visible at startup.
+			const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
+			for (const candidate of fallbackCandidates) {
 				if (await hasModelApiKey(candidate)) {
 					model = candidate;
 					break;
@@ -1273,8 +1285,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					modelFallbackMessage += `. Using ${model.provider}/${model.id}`;
 				}
 			} else {
+				const patterns = settings.get("enabledModels");
 				modelFallbackMessage =
-					"No models available. Use /login or set an API key environment variable. Then use /model to select a model.";
+					patterns && patterns.length > 0
+						? `No model available matching enabledModels (${patterns.join(", ")}) with usable credentials. Configure auth for an allowed provider or adjust enabledModels.`
+						: "No models available. Use /login or set an API key environment variable. Then use /model to select a model.";
 			}
 		}
 

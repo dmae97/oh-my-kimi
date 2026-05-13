@@ -956,6 +956,36 @@ export async function resolveModelScope(
 	return scopedModels;
 }
 
+/**
+ * Resolve the set of models a session is allowed to use, given the active
+ * settings. Starts from `modelRegistry.getAvailable()` (so disabled providers
+ * and providers without credentials are already filtered out) and, when
+ * `enabledModels` is configured for the current path scope, further restricts
+ * the result to models matching those patterns.
+ *
+ * Returns the unfiltered available list when `enabledModels` is empty.
+ * Returns an empty list when `enabledModels` is configured but no available
+ * model matches any pattern — callers MUST treat this as "no usable model"
+ * rather than falling back to the global default (see issue #1022).
+ */
+export async function resolveAllowedModels(
+	modelRegistry: Pick<ModelRegistry, "getAvailable" | "getCanonicalVariants">,
+	settings: Settings | undefined,
+	preferences?: ModelMatchPreferences,
+): Promise<Model<Api>[]> {
+	const available = modelRegistry.getAvailable();
+	const patterns = settings?.get("enabledModels");
+	if (!patterns || patterns.length === 0) {
+		return available;
+	}
+	const scoped = await resolveModelScope(patterns, modelRegistry, preferences);
+	if (scoped.length === 0) {
+		return [];
+	}
+	const allowed = new Set(scoped.map(entry => `${entry.model.provider}/${entry.model.id}`));
+	return available.filter(model => allowed.has(`${model.provider}/${model.id}`));
+}
+
 export interface ResolveCliModelResult {
 	model: Model<Api> | undefined;
 	selector?: string;
