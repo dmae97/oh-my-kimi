@@ -1764,7 +1764,10 @@ export async function resolveDefaultRepoMemoized(cwd: string, signal?: AbortSign
 		})();
 		// Drop the in-flight slot on settle so failures don't poison the cache
 		// and so a successful resolution survives only in `DEFAULT_REPO_RESOLVED`.
-		pending.finally(() => DEFAULT_REPO_INFLIGHT.delete(key));
+		void pending.then(
+			() => DEFAULT_REPO_INFLIGHT.delete(key),
+			() => DEFAULT_REPO_INFLIGHT.delete(key),
+		);
 		DEFAULT_REPO_INFLIGHT.set(key, pending);
 	}
 	return untilAborted(signal, pending);

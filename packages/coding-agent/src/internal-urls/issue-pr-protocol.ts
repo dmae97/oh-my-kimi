@@ -192,7 +192,7 @@ function parseUrl(url: InternalUrl, scheme: Scheme): Parsed {
 function resolveCwd(context: ResolveContext | undefined): string {
 	if (context?.cwd) return context.cwd;
 	for (const ref of AgentRegistry.global().list()) {
-		const cwd = ref.session?.sessionManager.getCwd();
+		const cwd = ref.session?.sessionManager?.getCwd();
 		if (cwd) return cwd;
 	}
 	return process.cwd();
