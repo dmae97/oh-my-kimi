@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Raised the minimum required Bun runtime version to >=1.3.14
+- Removed `PhotonImage` class, `ImageFormat` enum, and `SamplingFilter` enum from native exports. General-purpose image decode/resize/encode now uses [`Bun.Image`](https://bun.com/docs/runtime/image), which ships in Bun 1.3.14+ with statically-linked libjpeg-turbo, libspng, and libwebp plus SIMD geometry kernels — same operations, zero native-addon footprint. `encodeSixel` stays (no Bun equivalent for the SIXEL terminal protocol).
+- Removed `webp` Rust workspace dependency along with `PhotonImage`'s WebP encoder.
 
 ## [14.9.9] - 2026-05-12
 ### Breaking Changes

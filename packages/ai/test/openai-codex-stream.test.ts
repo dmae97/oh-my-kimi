@@ -1395,6 +1395,7 @@ describe("openai-codex streaming", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 		expect(sentRequests[0]?.type).toBe("response.create");
 		expect(sentRequests[0]?.service_tier).toBe("priority");
+		expect(result.usage.premiumRequests).toBe(1);
 	});
 
 	it("sends websocket continuation deltas after prior assistant response items and records stats", async () => {

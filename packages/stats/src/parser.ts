@@ -1,8 +1,15 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { type AssistantMessage, getPriorityPremiumRequests, type ServiceTier } from "@oh-my-pi/pi-ai";
 import { getSessionsDir, isEnoent } from "@oh-my-pi/pi-utils";
-import type { MessageStats, SessionEntry, SessionMessageEntry, UserMessageLink, UserMessageStats } from "./types";
+import type {
+	MessageStats,
+	SessionEntry,
+	SessionMessageEntry,
+	SessionServiceTierChangeEntry,
+	UserMessageLink,
+	UserMessageStats,
+} from "./types";
 import { computeUserMessageMetrics } from "./user-metrics";
 
 /**
@@ -34,6 +41,13 @@ function isUserMessage(entry: SessionEntry): entry is SessionMessageEntry {
 	if (entry.type !== "message") return false;
 	const msgEntry = entry as SessionMessageEntry;
 	return msgEntry.message?.role === "user";
+}
+
+/**
+ * Check if an entry is a service-tier change.
+ */
+function isServiceTierChange(entry: SessionEntry): entry is SessionServiceTierChangeEntry {
+	return entry.type === "service_tier_change";
 }
 
 /**
@@ -83,9 +97,24 @@ function extractUserStats(sessionFile: string, folder: string, entry: SessionMes
 /**
  * Extract stats from an assistant message entry.
  */
-function extractStats(sessionFile: string, folder: string, entry: SessionMessageEntry): MessageStats | null {
+function extractStats(
+	sessionFile: string,
+	folder: string,
+	entry: SessionMessageEntry,
+	currentServiceTier: ServiceTier | undefined,
+): MessageStats | null {
 	const msg = entry.message as AssistantMessage;
 	if (!msg || msg.role !== "assistant") return null;
+
+	// Backfill: when the session recorded `priority` as the active service tier
+	// at this point but the AI usage payload was captured before priority
+	// requests were folded into `premiumRequests`, derive the count here so the
+	// "Premium Reqs" stat aggregates priority traffic on re-sync. Trust any
+	// non-zero value already in `usage.premiumRequests` (Copilot multipliers or
+	// the new AI code path) and only synthesise when the field is missing/zero.
+	const recorded = msg.usage.premiumRequests ?? 0;
+	const derived = recorded > 0 ? recorded : getPriorityPremiumRequests(currentServiceTier, msg.provider);
+	const usage = derived === recorded ? msg.usage : { ...msg.usage, premiumRequests: derived };
 
 	return {
 		sessionFile,
@@ -99,7 +128,7 @@ function extractStats(sessionFile: string, folder: string, entry: SessionMessage
 		ttft: msg.ttft ?? null,
 		stopReason: msg.stopReason,
 		errorMessage: msg.errorMessage ?? null,
-		usage: msg.usage,
+		usage,
 	};
 }
 
@@ -158,7 +187,12 @@ export async function parseSessionFile(sessionPath: string, fromOffset = 0): Pro
 	const start = Math.max(0, Math.min(fromOffset, bytes.length));
 	const unprocessed = bytes.subarray(start);
 	const { entries, read } = parseSessionEntriesLenient(unprocessed);
+	let currentServiceTier: ServiceTier | undefined;
 	for (const entry of entries) {
+		if (isServiceTierChange(entry)) {
+			currentServiceTier = entry.serviceTier ?? undefined;
+			continue;
+		}
 		if (isUserMessage(entry)) {
 			const userMsg = extractUserStats(sessionPath, folder, entry);
 			if (userMsg) {
@@ -168,7 +202,7 @@ export async function parseSessionFile(sessionPath: string, fromOffset = 0): Pro
 			continue;
 		}
 		if (isAssistantMessage(entry)) {
-			const msgStats = extractStats(sessionPath, folder, entry);
+			const msgStats = extractStats(sessionPath, folder, entry, currentServiceTier);
 			if (msgStats) stats.push(msgStats);
 			// Link assistant's responding model back to the user message it answered.
 			const parentId = (entry as SessionMessageEntry).parentId;

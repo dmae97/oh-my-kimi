@@ -208,7 +208,6 @@ const nativeBindings = loadNative();
 // classes
 export const MacAppearanceObserver = nativeBindings.MacAppearanceObserver;
 export const MacOSPowerAssertion = nativeBindings.MacOSPowerAssertion;
-export const PhotonImage = nativeBindings.PhotonImage;
 export const Process = nativeBindings.Process;
 export const PtySession = nativeBindings.PtySession;
 export const Shell = nativeBindings.Shell;
@@ -282,12 +281,6 @@ export const GrepOutputMode = {
 	Count: "count",
 	FilesWithMatches: "filesWithMatches",
 };
-export const ImageFormat = {
-	PNG: 0,
-	JPEG: 1,
-	WEBP: 2,
-	GIF: 3,
-};
 export const IsoBackendKind = {
 	Apfs: 0,
 	Btrfs: 1,
@@ -315,12 +308,5 @@ export const MacOSAppearance = {
 export const ProcessStatus = {
 	Running: "running",
 	Exited: "exited",
-};
-export const SamplingFilter = {
-	Nearest: 1,
-	Triangle: 2,
-	CatmullRom: 3,
-	Gaussian: 4,
-	Lanczos3: 5,
 };
 // --- end generated native exports ---

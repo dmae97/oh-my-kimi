@@ -1,5 +1,6 @@
 import { DEFAULT_MAX_BYTES, OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
+import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/output-meta";
 import { executeInVmContext, type JsDisplayOutput } from "./context-manager";
 
 export interface JsExecutorOptions {
@@ -49,6 +50,8 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
 		spillThreshold: DEFAULT_MAX_BYTES,
+		headBytes: resolveOutputSinkHeadBytes(options.session.settings),
+		maxColumns: resolveOutputMaxColumns(options.session.settings),
 		onChunk: chunk => options.onChunk?.(chunk),
 	});
 	const timeoutMs = getExecutionTimeoutMs(options);

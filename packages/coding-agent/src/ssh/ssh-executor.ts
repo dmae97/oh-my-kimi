@@ -1,5 +1,7 @@
 import { logger, ptree } from "@oh-my-pi/pi-utils";
+import { Settings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
+import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/output-meta";
 import { buildRemoteCommand, ensureConnection, ensureHostInfo, type SSHConnectionTarget } from "./connection-manager";
 import { hasSshfs, mountRemote } from "./sshfs-mount";
 
@@ -83,10 +85,13 @@ export async function executeSSH(
 		stderr: "full",
 	});
 
+	const settings = await Settings.init();
 	const sink = new OutputSink({
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
+		headBytes: resolveOutputSinkHeadBytes(settings),
+		maxColumns: resolveOutputMaxColumns(settings),
 	});
 
 	const streams = [child.stdout.pipeTo(sink.createInput())];

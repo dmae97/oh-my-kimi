@@ -41,6 +41,7 @@ Current retryable inputs are regex/string-classified:
 - rate limit / usage limit / too many requests
 - HTTP-like server classes: 429, 500, 502, 503, 504
 - service unavailable / server/internal error
+- provider-suggested retry wording, including OpenAI `retry your request` failures
 - network/connection/socket failures, refused/closed connections, upstream connect/reset-before-headers, socket hang up, timeout/timed out, fetch failed, terminated, retry delay wording, and unexpected socket close messages
 
 This is string-pattern classification, not typed provider error codes.

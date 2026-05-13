@@ -2,7 +2,6 @@ import * as fs from "node:fs/promises";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { formatBytes, readImageMetadata, SUPPORTED_IMAGE_MIME_TYPES } from "@oh-my-pi/pi-utils";
 import { resolveReadPath } from "../tools/path-utils";
-import { convertToPng } from "./image-convert";
 import { formatDimensionNote, resizeImage } from "./image-resize";
 
 export const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
@@ -42,8 +41,13 @@ export async function ensureSupportedImageInput(image: ImageContent): Promise<Im
 	if (SUPPORTED_INPUT_IMAGE_MIME_TYPES.has(image.mimeType)) {
 		return image;
 	}
-	const converted = await convertToPng(image.data, image.mimeType);
-	return converted ? { type: "image", data: converted.data, mimeType: converted.mimeType } : null;
+	try {
+		const bytes = Buffer.from(image.data, "base64");
+		const data = await new Bun.Image(bytes).png().toBase64();
+		return { type: "image", data, mimeType: "image/png" };
+	} catch {
+		return null;
+	}
 }
 
 export async function loadImageInput(options: LoadImageInputOptions): Promise<LoadedImageInput | null> {

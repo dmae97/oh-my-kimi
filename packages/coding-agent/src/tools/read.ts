@@ -25,6 +25,7 @@ import {
 	type TruncationResult,
 	truncateHead,
 	truncateHeadBytes,
+	truncateLine,
 } from "../session/streaming-output";
 import { renderCodeCell, renderMarkdownCell, renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
@@ -54,7 +55,12 @@ import {
 	renderReadUrlResult,
 } from "./fetch";
 import { applyListLimit } from "./list-limit";
-import { formatFullOutputReference, formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
+import {
+	formatFullOutputReference,
+	formatStyledTruncationWarning,
+	type OutputMeta,
+	resolveOutputMaxColumns,
+} from "./output-meta";
 import { expandPath, formatPathRelativeToCwd, resolveReadPath, splitPathAndSel } from "./path-utils";
 import { formatBytes, replaceTabs, shortenPath, wrapBrackets } from "./render-utils";
 import {
@@ -81,6 +87,12 @@ const CONVERTIBLE_EXTENSIONS = new Set([".pdf", ".doc", ".docx", ".ppt", ".pptx"
 
 const MAX_SUMMARY_BYTES = 2 * 1024 * 1024;
 const MAX_SUMMARY_LINES = 20_000;
+/**
+ * Per-line column cap for file reads. Lines wider than the value of
+ * `tools.outputMaxColumns` are ellipsis-truncated at display time; the file
+ * on disk is unchanged. Shared with the streaming sink path so one setting
+ * covers `bash`/`ssh`/`python`/`js eval` and `read` uniformly.
+ */
 const PROSE_SUMMARY_EXTENSIONS = new Set([".md", ".txt"]);
 // Remote mount path prefix (sshfs mounts) - skip fuzzy matching to avoid hangs
 const REMOTE_MOUNT_PREFIX = getRemoteDir() + path.sep;
@@ -163,18 +175,25 @@ function countTextLines(text: string): number {
 const READ_CHUNK_SIZE = 8 * 1024;
 
 /**
- * Number of unanchored context lines to include before/after a user-requested
- * range. Anchor-stale failures are heavily concentrated on edits whose anchors
- * land just outside the most recent read window — a few lines of pre-anchored
- * context covers off-by-one anchor selection without much cost.
+ * Context lines added around an explicit range read. Anchor-stale failures
+ * cluster on edits whose anchors land just outside the most recent read
+ * window, but the data (`scripts/session-stats/analyze_selector_reads.py`)
+ * shows most follow-up reads are disjoint hops, not adjacent extensions —
+ * so symmetric padding rarely pays for itself.
+ *
+ * Leading=1 catches accidental single-line reads where the anchor is the
+ * line immediately above the requested start. Trailing=3 buffers the
+ * common case where the agent asks for a narrow range and then needs the
+ * next few lines to disambiguate an anchor.
  */
-const RANGE_CONTEXT_LINES = 3;
+const RANGE_LEADING_CONTEXT_LINES = 1;
+const RANGE_TRAILING_CONTEXT_LINES = 3;
 
 /**
- * Expand a [start, end) range with ±RANGE_CONTEXT_LINES context lines on the
+ * Expand a [start, end) range with leading/trailing context lines on the
  * sides where the user actually constrained the range. A start of 0 (no
- * explicit offset) does not get leading context — that's already an open-ended
- * read from the top.
+ * explicit offset) does not get leading context — that's already an
+ * open-ended read from the top.
  */
 function expandRangeWithContext(
 	requestedStart: number,
@@ -184,8 +203,8 @@ function expandRangeWithContext(
 	expandEnd: boolean,
 ): { startLine: number; endLine: number } {
 	return {
-		startLine: expandStart ? Math.max(0, requestedStart - RANGE_CONTEXT_LINES) : requestedStart,
-		endLine: expandEnd ? Math.min(totalLines, requestedEnd + RANGE_CONTEXT_LINES) : requestedEnd,
+		startLine: expandStart ? Math.max(0, requestedStart - RANGE_LEADING_CONTEXT_LINES) : requestedStart,
+		endLine: expandEnd ? Math.min(totalLines, requestedEnd + RANGE_TRAILING_CONTEXT_LINES) : requestedEnd,
 	};
 }
 
@@ -1309,6 +1328,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		let content: Array<TextContent | ImageContent> | undefined;
 		let details: ReadToolDetails = {};
 		let sourcePath: string | undefined;
+		let columnTruncated = 0;
 		let truncationInfo:
 			| { result: TruncationResult; options: { direction: "head"; startLine?: number; totalFileLines?: number } }
 			| undefined;
@@ -1454,8 +1474,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				const requestedStart = offset ? Math.max(0, offset - 1) : 0;
 				const expandStart = offset !== undefined && offset > 1;
 				const expandEnd = limit !== undefined;
-				const leadingContext = expandStart ? Math.min(requestedStart, RANGE_CONTEXT_LINES) : 0;
-				const trailingContext = expandEnd ? RANGE_CONTEXT_LINES : 0;
+				const leadingContext = expandStart ? Math.min(requestedStart, RANGE_LEADING_CONTEXT_LINES) : 0;
+				const trailingContext = expandEnd ? RANGE_TRAILING_CONTEXT_LINES : 0;
 				const startLine = requestedStart - leadingContext;
 				const startLineDisplay = startLine + 1;
 
@@ -1498,6 +1518,22 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						.done();
 				}
 
+				// Per-line column cap. Skipped in raw mode so `:raw` always returns
+				// verbatim bytes for paste-back-into-tool workflows. Total byte/line
+				// counts in `truncation` keep reflecting the source, not the trimmed
+				// view — column truncation surfaces separately via `.limits()`.
+				const rawSelector = isRawSelector(parsed);
+				const maxColumns = resolveOutputMaxColumns(this.session.settings);
+				if (!rawSelector && maxColumns > 0) {
+					for (let i = 0; i < collectedLines.length; i++) {
+						const { text, wasTruncated } = truncateLine(collectedLines[i], maxColumns);
+						if (wasTruncated) {
+							collectedLines[i] = text;
+							columnTruncated = maxColumns;
+						}
+					}
+				}
+
 				const selectedContent = collectedLines.join("\n");
 				const userLimitedLines = collectedLines.length;
 
@@ -1522,9 +1558,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					getFileReadCache(this.session).recordContiguous(absolutePath, startLineDisplay, collectedLines);
 				}
 
-				const isRawMode = isRawSelector(parsed);
-				const shouldAddHashLines = !isRawMode && displayMode.hashLines;
-				const shouldAddLineNumbers = isRawMode ? false : shouldAddHashLines ? false : displayMode.lineNumbers;
+				const shouldAddHashLines = !rawSelector && displayMode.hashLines;
+				const shouldAddLineNumbers = rawSelector ? false : shouldAddHashLines ? false : displayMode.lineNumbers;
 				let capturedDisplayContent: { text: string; startLine: number } | undefined;
 				const formatText = (text: string, startNum: number): string => {
 					capturedDisplayContent = { text, startLine: startNum };
@@ -1635,6 +1670,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		}
 		if (truncationInfo) {
 			resultBuilder.truncation(truncationInfo.result, truncationInfo.options);
+		}
+		if (columnTruncated > 0) {
+			resultBuilder.limits({ columnMax: columnTruncated });
 		}
 		return resultBuilder.done();
 	}

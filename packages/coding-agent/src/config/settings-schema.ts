@@ -460,6 +460,46 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
+	"tools.artifactHeadBytes": {
+		type: "number",
+		default: 20,
+		ui: {
+			tab: "tools",
+			label: "Artifact head size (KB)",
+			description:
+				"Amount of head content kept inline alongside the tail when output spills to artifact (middle elision). 0 disables — keep tail only.",
+			options: [
+				{ value: "0", label: "0 KB", description: "Disabled; tail-only truncation" },
+				{ value: "1", label: "1 KB", description: "~250 tokens" },
+				{ value: "2.5", label: "2.5 KB", description: "~625 tokens" },
+				{ value: "5", label: "5 KB", description: "~1.25K tokens" },
+				{ value: "10", label: "10 KB", description: "~2.5K tokens" },
+				{ value: "20", label: "20 KB", description: "Default; ~5K tokens" },
+				{ value: "50", label: "50 KB", description: "~12.5K tokens" },
+				{ value: "100", label: "100 KB", description: "~25K tokens" },
+				{ value: "200", label: "200 KB", description: "~50K tokens" },
+			],
+		},
+	},
+	"tools.outputMaxColumns": {
+		type: "number",
+		default: 768,
+		ui: {
+			tab: "tools",
+			label: "Output column cap",
+			description:
+				"Per-line byte cap for streaming tool outputs (bash, ssh, python, js eval) and `read`. Lines wider than this are ellipsis-truncated; remaining bytes up to the next newline are dropped. 0 disables.",
+			options: [
+				{ value: "0", label: "Off", description: "No per-line cap" },
+				{ value: "256", label: "256", description: "Tight" },
+				{ value: "512", label: "512" },
+				{ value: "768", label: "768", description: "Default" },
+				{ value: "1024", label: "1024" },
+				{ value: "2048", label: "2048" },
+				{ value: "4096", label: "4096", description: "Loose" },
+			],
+		},
+	},
 	"tools.artifactTailLines": {
 		type: "number",
 		default: 500,
@@ -1498,7 +1538,7 @@ export const SETTINGS_SCHEMA = {
 
 	"read.defaultLimit": {
 		type: "number",
-		default: 500,
+		default: 300,
 		ui: {
 			tab: "editing",
 			label: "Default Read Limit",

@@ -37,6 +37,7 @@ export * from "./usage/zai";
 export * from "./utils/anthropic-auth";
 export * from "./utils/discovery";
 export * from "./utils/event-stream";
+export * from "./utils/h2-fetch";
 export * from "./utils/overflow";
 export * from "./utils/retry";
 export * from "./utils/schema";

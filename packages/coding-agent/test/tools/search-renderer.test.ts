@@ -19,11 +19,7 @@ describe("searchToolRenderer", () => {
 			details: {
 				matchCount: 6,
 				fileCount: 3,
-				meta: {
-					limits: {
-						matchLimit: { reached: 6 },
-					},
-				},
+				fileLimitReached: 3,
 			},
 		};
 
@@ -39,7 +35,7 @@ describe("searchToolRenderer", () => {
 		const bodyLines = renderedLines.slice(1);
 
 		expect(bodyLines).toHaveLength(6);
-		expect(bodyLines.at(-1)).toContain("truncated: first 6 matches");
+		expect(bodyLines.at(-1)).toContain("truncated: first 3 files (skip to paginate)");
 		expect(bodyLines.some(line => line.includes("1 more match"))).toBe(true);
 		expect(bodyLines.some(line => line.includes("gamma:1"))).toBe(false);
 	});

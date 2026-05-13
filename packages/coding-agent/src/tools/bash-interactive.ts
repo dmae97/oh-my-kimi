@@ -12,10 +12,12 @@ import {
 } from "@oh-my-pi/pi-tui";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import xterm from "@xterm/headless";
+import { Settings } from "../config/settings";
 import { NON_INTERACTIVE_ENV } from "../exec/non-interactive-env";
 import type { Theme } from "../modes/theme/theme";
 import { OutputSink, type OutputSummary } from "../session/streaming-output";
 import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
+import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "./output-meta";
 import { formatStatusIcon, replaceTabs } from "./render-utils";
 
 export interface BashInteractiveResult extends OutputSummary {
@@ -294,7 +296,13 @@ export async function runInteractiveBashPty(
 		artifactId?: string;
 	},
 ): Promise<BashInteractiveResult> {
-	const sink = new OutputSink({ artifactPath: options.artifactPath, artifactId: options.artifactId });
+	const settings = await Settings.init();
+	const sink = new OutputSink({
+		artifactPath: options.artifactPath,
+		artifactId: options.artifactId,
+		headBytes: resolveOutputSinkHeadBytes(settings),
+		maxColumns: resolveOutputMaxColumns(settings),
+	});
 	const result = await ui.custom<BashInteractiveResult>(
 		(tui, uiTheme, _keybindings, done) => {
 			const session = new PtySession();

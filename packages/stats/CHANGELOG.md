@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Raised the minimum required Bun version to >=1.3.14 in package metadata
+
+### Changed
+
+- Changed the "Premium Reqs" dashboard card to also include OpenAI priority service-tier requests (`serviceTier: "priority"`), counting each as 1 premium request alongside GitHub Copilot premium calls. Pre-existing sessions are backfilled on the next `omp stats` run: a one-shot `premium_requests_priority_v1` sentinel wipes `file_offsets` so every session re-parses, and `insertMessageStats` now `UPSERT`s `premium_requests` (other columns untouched) using the `service_tier_change` entries already in the session log to retroactively credit priority traffic.
 
 ## [14.9.9] - 2026-05-12
 

@@ -32,7 +32,6 @@ import {
 import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
 import { toolRenderers } from "../../tools/renderers";
 import { renderStatusLine } from "../../tui";
-import { convertToPng } from "../../utils/image-convert";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import { renderDiff } from "./diff";
 
@@ -295,13 +294,13 @@ export class ToolExecutionComponent extends Container {
 
 			// Convert async - catch errors from processing
 			const index = i;
-			convertToPng(img.data, img.mimeType)
-				.then(converted => {
-					if (converted) {
-						this.#convertedImages.set(index, converted);
-						this.#updateDisplay();
-						this.#ui.requestRender();
-					}
+			new Bun.Image(Buffer.from(img.data, "base64"))
+				.png()
+				.toBase64()
+				.then(data => {
+					this.#convertedImages.set(index, { data, mimeType: "image/png" });
+					this.#updateDisplay();
+					this.#ui.requestRender();
 				})
 				.catch(() => {
 					// Ignore conversion failures - display will use original image format

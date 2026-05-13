@@ -6,12 +6,17 @@ Native Rust functionality via N-API.
 
 - **Grep**: Regex-based search powered by ripgrep's engine with native file walking and matching
 - **Find**: Glob-based file/directory discovery with gitignore support (pure TypeScript via `globPaths`)
-- **Image**: Image processing via photon-rs (resize, format conversion) exposed through N-API
+- **SIXEL**: Terminal image encoding for SIXEL-capable terminals (decode, resize, encode in one pass)
+
+General-purpose image processing (decode/resize/encode for files and buffers)
+lives in [`Bun.Image`](https://bun.com/docs/runtime/image) on the JS side; this
+crate only ships the SIXEL encoder because no built-in equivalent exists for
+that terminal protocol.
 
 ## Usage
 
 ```typescript
-import { grep, find, PhotonImage, SamplingFilter, ImageFormat } from "@oh-my-pi/pi-natives";
+import { grep, find, encodeSixel } from "@oh-my-pi/pi-natives";
 
 // Grep for a pattern
 const results = await grep({
@@ -28,10 +33,8 @@ const files = await find({
 	fileType: "file",
 });
 
-// Image processing
-const image = await PhotonImage.parse(bytes);
-const resized = await image.resize(800, 600, SamplingFilter.Lanczos3);
-const pngBytes = await resized.encode(ImageFormat.PNG, 100);
+// SIXEL encode for a terminal cell box (px)
+const sequence = encodeSixel(pngBytes, widthPx, heightPx);
 ```
 
 ## Building
@@ -49,7 +52,7 @@ bun run check
 ```
 crates/pi-natives/       # Rust source (workspace member)
   src/lib.rs             # N-API exports
-  src/image.rs           # Image processing (photon-rs)
+  src/sixel.rs           # SIXEL terminal-image encoding
   Cargo.toml             # Rust dependencies
 native/                  # Native addon binaries
   pi_natives.<platform>-<arch>-modern.node   # x64 modern ISA (AVX2)

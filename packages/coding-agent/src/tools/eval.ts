@@ -16,7 +16,7 @@ import evalDescription from "../prompts/tools/eval.md" with { type: "text" };
 import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../session/streaming-output";
 import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
 import { resolveEvalBackends, type ToolSession } from ".";
-import { formatStyledTruncationWarning } from "./output-meta";
+import { formatStyledTruncationWarning, resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "./output-meta";
 import { formatTitle, replaceTabs, shortenPath, truncateToWidth, wrapBrackets } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -358,6 +358,8 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 				outputSink = new OutputSink({
 					artifactPath,
 					artifactId,
+					headBytes: resolveOutputSinkHeadBytes(session.settings),
+					maxColumns: resolveOutputMaxColumns(session.settings),
 					onChunk: chunk => {
 						appendTail(chunk);
 						pushUpdate();

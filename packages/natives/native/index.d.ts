@@ -39,34 +39,6 @@ export declare class MacOSPowerAssertion {
   stop(): void
 }
 
-/** Image container for native interop. */
-export declare class PhotonImage {
-  /**
-   * Create a new `PhotonImage` from encoded image bytes (PNG, JPEG, WebP,
-   * GIF). Returns the decoded image handle on success.
-   *
-   * # Errors
-   * Returns an error if the image format cannot be detected or decoded.
-   */
-  static parse(bytes: Uint8Array): ImageTask
-  /** Get the image width in pixels. */
-  get width(): number
-  /** Get the image height in pixels. */
-  get height(): number
-  /**
-   * Encode the image to bytes in the specified format.
-   *
-   * # Errors
-   * Returns an error if encoding fails or format is invalid.
-   */
-  encode(format: ImageFormat, quality: number): Promise<Array<number>>
-  /**
-   * Resize the image to the specified pixel dimensions using the filter.
-   * Returns a new `PhotonImage` containing the resized image.
-   */
-  resize(width: number, height: number, filter: SamplingFilter): ImageTask
-}
-
 /** Stable process reference. */
 export declare class Process {
   /** Open a stable process reference from a PID. */
@@ -742,18 +714,6 @@ export interface HtmlToMarkdownOptions {
   skipImages?: boolean
 }
 
-/** Output format for [`PhotonImage::encode`]. */
-export declare enum ImageFormat {
-  /** PNG encoded bytes. */
-  PNG = 0,
-  /** JPEG encoded bytes. */
-  JPEG = 1,
-  /** WebP encoded bytes. */
-  WEBP = 2,
-  /** GIF encoded bytes. */
-  GIF = 3
-}
-
 /**
  * Invalidate the filesystem scan cache.
  *
@@ -1148,20 +1108,6 @@ export interface PtyStartOptions {
  * Returns an error if clipboard access fails or image encoding fails.
  */
 export declare function readImageFromClipboard(): Promise<ClipboardImage | undefined | null>
-
-/** Sampling filter for resize operations. */
-export declare enum SamplingFilter {
-  /** Nearest-neighbor sampling (fast, low quality). */
-  Nearest = 1,
-  /** Triangle filter (linear interpolation). */
-  Triangle = 2,
-  /** Catmull-Rom filter with sharper edges. */
-  CatmullRom = 3,
-  /** Gaussian filter for smoother results. */
-  Gaussian = 4,
-  /** Lanczos3 filter for high-quality downscaling. */
-  Lanczos3 = 5
-}
 
 /**
  * Strip ANSI escape sequences, remove control characters / lone surrogates,

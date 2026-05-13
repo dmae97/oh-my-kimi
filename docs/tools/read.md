@@ -99,7 +99,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
   - When an elided block sits between matching brace lines, `#renderSummary()` may merge them into one anchored line rather than emitting separate opener/closer lines.
 - Explicit selector or summarization miss: streamed text read.
   - Default open-ended limit is `min(session setting read.defaultLimit, DEFAULT_MAX_LINES)`.
-  - Explicit ranges expand by `RANGE_CONTEXT_LINES = 3` on the constrained sides only.
+  - Explicit ranges expand by `RANGE_LEADING_CONTEXT_LINES = 1` / `RANGE_TRAILING_CONTEXT_LINES = 3` on the constrained sides only.
   - Non-raw output uses `resolveFileDisplayMode()`:
     - hashline anchors when edit mode is hashline, read is not raw, source is mutable, edit tool exists, and `readHashLines !== false`
     - otherwise optional line numbers when `readLineNumbers === true`
@@ -254,7 +254,7 @@ Notes: ...
   - `DEFAULT_MAX_LINES = 3000`
   - `DEFAULT_MAX_BYTES = 50 * 1024`
 - Local text open-ended default line limit: `read.defaultLimit`, clamped to `[1, DEFAULT_MAX_LINES]`.
-- Explicit line ranges add `3` context lines on each constrained side (`RANGE_CONTEXT_LINES`).
+- Explicit line ranges add `1` leading and `3` trailing context lines on the constrained sides (`RANGE_LEADING_CONTEXT_LINES` / `RANGE_TRAILING_CONTEXT_LINES`).
 - File streaming chunk size: `8 * 1024` bytes (`READ_CHUNK_SIZE`).
 - Local streamed byte budget for line reads: `max(DEFAULT_MAX_BYTES, maxLinesToCollect * 512)`.
 - Structural summaries only run when file size `<= 2 MiB` and line count `<= 20_000`.

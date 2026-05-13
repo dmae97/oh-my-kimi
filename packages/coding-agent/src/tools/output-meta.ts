@@ -15,7 +15,7 @@ import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { getDefault, type Settings } from "../config/settings";
 import { formatGroupedDiagnosticMessages } from "../lsp/utils";
 import type { Theme } from "../modes/theme/theme";
-import { type OutputSummary, type TruncationResult, truncateTail } from "../session/streaming-output";
+import { type OutputSummary, type TruncationResult, truncateMiddle, truncateTail } from "../session/streaming-output";
 import { formatBytes, wrapBrackets } from "./render-utils";
 import { renderError } from "./tool-errors";
 
@@ -23,15 +23,22 @@ import { renderError } from "./tool-errors";
  * Truncation metadata for the output notice.
  */
 export interface TruncationMeta {
-	direction: "head" | "tail";
-	truncatedBy: "lines" | "bytes";
+	direction: "head" | "tail" | "middle";
+	truncatedBy: "lines" | "bytes" | "middle";
 	totalLines: number;
 	totalBytes: number;
 	outputLines: number;
 	outputBytes: number;
 	maxBytes?: number;
-	/** Line range shown (1-indexed, inclusive) */
+	/** Line range shown (1-indexed, inclusive). Omitted for middle elision. */
 	shownRange?: { start: number; end: number };
+	/** Head/tail line ranges shown when direction === "middle". */
+	headRange?: { start: number; end: number };
+	tailRange?: { start: number; end: number };
+	/** Bytes elided from the middle. */
+	elidedBytes?: number;
+	/** Lines elided from the middle. */
+	elidedLines?: number;
 	/** Artifact ID if full output was saved */
 	artifactId?: string;
 	/** Next offset for pagination (head truncation only) */
@@ -79,20 +86,20 @@ export interface OutputMeta {
 // =============================================================================
 
 export interface TruncationOptions {
-	direction: "head" | "tail";
+	direction: "head" | "tail" | "middle";
 	startLine?: number;
 	totalFileLines?: number;
 	artifactId?: string;
 }
 
 export interface TruncationSummaryOptions {
-	direction: "head" | "tail";
+	direction: "head" | "tail" | "middle";
 	startLine?: number;
 	totalFileLines?: number;
 }
 
 export interface TruncationTextOptions {
-	direction: "head" | "tail";
+	direction: "head" | "tail" | "middle";
 	totalLines?: number;
 	totalBytes?: number;
 	maxBytes?: number;
@@ -120,7 +127,40 @@ export class OutputMetaBuilder {
 		const { direction, startLine = 1, totalFileLines, artifactId } = options;
 		const outputLines = result.outputLines ?? result.totalLines;
 		const outputBytes = result.outputBytes ?? result.totalBytes;
-		const truncatedBy: "lines" | "bytes" = result.truncatedBy === "lines" ? "lines" : "bytes";
+		const isMiddle = direction === "middle" || result.truncatedBy === "middle";
+		const truncatedBy: "lines" | "bytes" | "middle" = isMiddle
+			? "middle"
+			: result.truncatedBy === "lines"
+				? "lines"
+				: "bytes";
+
+		const effectiveTotalLines = totalFileLines ?? result.totalLines;
+
+		if (isMiddle) {
+			const elidedLines = result.elidedLines ?? Math.max(0, effectiveTotalLines - outputLines);
+			const elidedBytes = result.elidedBytes ?? Math.max(0, result.totalBytes - outputBytes);
+			// Reconstruct head/tail line ranges. The kept output spans the first
+			// `headLines` lines and the last `tailLines` lines of the source; lines
+			// in the middle (count == elidedLines) are dropped.
+			const keptLines = Math.max(0, outputLines - 1); // -1 for marker line
+			const headLines = Math.ceil(keptLines / 2);
+			const tailLines = keptLines - headLines;
+			this.#meta.truncation = {
+				direction: "middle",
+				truncatedBy: "middle",
+				totalLines: effectiveTotalLines,
+				totalBytes: result.totalBytes,
+				outputLines,
+				outputBytes,
+				headRange: headLines > 0 ? { start: 1, end: headLines } : undefined,
+				tailRange:
+					tailLines > 0 ? { start: effectiveTotalLines - tailLines + 1, end: effectiveTotalLines } : undefined,
+				elidedLines,
+				elidedBytes,
+				artifactId,
+			};
+			return this;
+		}
 
 		let shownStart: number;
 		let shownEnd: number;
@@ -136,7 +176,7 @@ export class OutputMetaBuilder {
 		this.#meta.truncation = {
 			direction,
 			truncatedBy,
-			totalLines: totalFileLines ?? result.totalLines,
+			totalLines: effectiveTotalLines,
 			totalBytes: result.totalBytes,
 			outputLines,
 			outputBytes,
@@ -154,6 +194,29 @@ export class OutputMetaBuilder {
 
 		const { direction, startLine = 1, totalFileLines } = options;
 		const totalLines = totalFileLines ?? summary.totalLines;
+
+		// Middle elision: the sink retained head + tail with an elision marker.
+		if (summary.elidedBytes != null && summary.elidedBytes > 0) {
+			const elidedLines = summary.elidedLines ?? Math.max(0, totalLines - summary.outputLines);
+			const keptLines = Math.max(0, summary.outputLines - 1); // -1 for marker line
+			const headLines = Math.ceil(keptLines / 2);
+			const tailLines = keptLines - headLines;
+			this.#meta.truncation = {
+				direction: "middle",
+				truncatedBy: "middle",
+				totalLines,
+				totalBytes: summary.totalBytes,
+				outputLines: summary.outputLines,
+				outputBytes: summary.outputBytes,
+				headRange: headLines > 0 ? { start: 1, end: headLines } : undefined,
+				tailRange: tailLines > 0 ? { start: totalLines - tailLines + 1, end: totalLines } : undefined,
+				elidedBytes: summary.elidedBytes,
+				elidedLines,
+				artifactId: summary.artifactId,
+			};
+			return this;
+		}
+
 		const truncatedBy: "lines" | "bytes" =
 			summary.outputBytes < summary.totalBytes
 				? "bytes"
@@ -322,9 +385,28 @@ export function formatFullOutputReference(artifactId: string): string {
 }
 
 export function formatTruncationMetaNotice(truncation: TruncationMeta): string {
-	const range = truncation.shownRange;
 	let notice: string;
 
+	if (truncation.direction === "middle") {
+		const head = truncation.headRange;
+		const tail = truncation.tailRange;
+		const totalLines = truncation.totalLines;
+		const elidedBytes = truncation.elidedBytes ?? Math.max(0, truncation.totalBytes - truncation.outputBytes);
+		const elidedLines = truncation.elidedLines ?? Math.max(0, totalLines - truncation.outputLines);
+		const headPart = head ? `lines ${head.start}-${head.end}` : "";
+		const tailPart = tail ? `${tail.start}-${tail.end}` : "";
+		if (headPart && tailPart) {
+			notice = `Showing ${headPart} and ${tailPart} of ${totalLines}; ${elidedLines.toLocaleString()} middle line${elidedLines === 1 ? "" : "s"} (${formatBytes(elidedBytes)}) elided`;
+		} else {
+			notice = `Showing ${truncation.outputLines} of ${totalLines} lines; middle elided`;
+		}
+		if (truncation.artifactId != null) {
+			notice += `. ${formatFullOutputReference(truncation.artifactId)}`;
+		}
+		return notice;
+	}
+
+	const range = truncation.shownRange;
 	if (range && range.end >= range.start) {
 		notice = `Showing lines ${range.start}-${range.end} of ${truncation.totalLines}`;
 	} else {
@@ -442,21 +524,44 @@ const kUnwrappedExecute = Symbol("OutputMeta.UnwrappedExecute");
 
 /** Resolved artifact spill config sourced from the session settings (or schema defaults). */
 function getSpillConfig(s: Settings | undefined) {
-	const get = <P extends "tools.artifactSpillThreshold" | "tools.artifactTailBytes" | "tools.artifactTailLines">(
-		path: P,
-	) => s?.get(path) ?? getDefault(path);
+	type Path =
+		| "tools.artifactSpillThreshold"
+		| "tools.artifactTailBytes"
+		| "tools.artifactTailLines"
+		| "tools.artifactHeadBytes";
+	const get = <P extends Path>(path: P) => s?.get(path) ?? getDefault(path);
 	return {
 		threshold: get("tools.artifactSpillThreshold") * 1024,
 		tailBytes: get("tools.artifactTailBytes") * 1024,
 		tailLines: get("tools.artifactTailLines"),
+		headBytes: get("tools.artifactHeadBytes") * 1024,
 	};
 }
 
 /**
- * If the tool result text exceeds RESULT_ARTIFACT_THRESHOLD, save the full
- * output as a session artifact and replace the content with a tail-truncated
- * version plus an artifact reference. Skips when the tool already saved its
- * own artifact (e.g. bash/python via OutputSink).
+ * Resolve the OutputSink `headBytes` budget from session settings.
+ * Exposed so streaming executors (bash/python/ssh/eval) can opt into
+ * middle elision with the same per-user configuration.
+ */
+export function resolveOutputSinkHeadBytes(s: Settings | undefined): number {
+	return getSpillConfig(s).headBytes;
+}
+
+/**
+ * Resolve the per-line column cap from session settings. Shared by streaming
+ * executors (bash/python/ssh/eval via OutputSink) and the `read` tool's
+ * line-buffer post-processing, so one setting controls both surfaces.
+ */
+export function resolveOutputMaxColumns(s: Settings | undefined): number {
+	return s?.get("tools.outputMaxColumns") ?? getDefault("tools.outputMaxColumns");
+}
+
+/**
+ * If the tool result text exceeds the spill threshold, save the full output
+ * as a session artifact and replace the content with a head+tail (middle
+ * elision) view plus an artifact reference. When `tools.artifactHeadBytes`
+ * is 0, falls back to tail-only truncation. Skips when the tool already
+ * saved its own artifact (e.g. bash/python via OutputSink).
  */
 async function spillLargeResultToArtifact(
 	result: AgentToolResult,
@@ -466,7 +571,7 @@ async function spillLargeResultToArtifact(
 	const sessionManager = context?.sessionManager;
 	if (!sessionManager) return result;
 	if (toolName === "read") return result;
-	const { threshold, tailBytes, tailLines } = getSpillConfig(context?.settings);
+	const { threshold, tailBytes, tailLines, headBytes } = getSpillConfig(context?.settings);
 
 	// Skip if tool already saved an artifact
 	const existingMeta: OutputMeta | undefined = result.details?.meta;
@@ -489,13 +594,21 @@ async function spillLargeResultToArtifact(
 	const artifactId = await sessionManager.saveArtifact(fullText, toolName);
 	if (!artifactId) return result;
 
-	// Truncate to tail
-	const truncated = truncateTail(fullText, {
-		maxBytes: tailBytes,
-		maxLines: tailLines,
-	});
+	// Truncate: middle elision when a head budget is configured, otherwise tail-only.
+	const useMiddle = headBytes > 0;
+	const truncated = useMiddle
+		? truncateMiddle(fullText, {
+				maxBytes: headBytes + tailBytes,
+				maxLines: tailLines * 2,
+				maxHeadBytes: headBytes,
+				maxHeadLines: tailLines,
+			})
+		: truncateTail(fullText, {
+				maxBytes: tailBytes,
+				maxLines: tailLines,
+			});
 
-	// Replace text blocks with single tail-truncated block, keep images
+	// Replace text blocks with single truncated block, keep images
 	const newContent: (TextContent | ImageContent)[] = [];
 	for (const block of result.content) {
 		if (block.type !== "text") {
@@ -507,18 +620,44 @@ async function spillLargeResultToArtifact(
 	// Build truncation meta
 	const outputLines = truncated.outputLines ?? truncated.totalLines;
 	const outputBytes = truncated.outputBytes ?? truncated.totalBytes;
-	const shownStart = truncated.totalLines - outputLines + 1;
-	const truncationMeta: TruncationMeta = {
-		direction: "tail",
-		truncatedBy: truncated.truncatedBy ?? "bytes",
-		totalLines: truncated.totalLines,
-		totalBytes: truncated.totalBytes,
-		outputLines,
-		outputBytes,
-		maxBytes: tailBytes,
-		shownRange: { start: shownStart, end: truncated.totalLines },
-		artifactId,
-	};
+	let truncationMeta: TruncationMeta;
+	if (truncated.truncatedBy === "middle") {
+		const elidedLines = truncated.elidedLines ?? Math.max(0, truncated.totalLines - outputLines);
+		const elidedBytes = truncated.elidedBytes ?? Math.max(0, truncated.totalBytes - outputBytes);
+		const keptLines = Math.max(0, outputLines - 1); // -1 for marker line
+		const headLines = Math.ceil(keptLines / 2);
+		const tailLineCount = keptLines - headLines;
+		truncationMeta = {
+			direction: "middle",
+			truncatedBy: "middle",
+			totalLines: truncated.totalLines,
+			totalBytes: truncated.totalBytes,
+			outputLines,
+			outputBytes,
+			maxBytes: headBytes + tailBytes,
+			headRange: headLines > 0 ? { start: 1, end: headLines } : undefined,
+			tailRange:
+				tailLineCount > 0
+					? { start: truncated.totalLines - tailLineCount + 1, end: truncated.totalLines }
+					: undefined,
+			elidedLines,
+			elidedBytes,
+			artifactId,
+		};
+	} else {
+		const shownStart = truncated.totalLines - outputLines + 1;
+		truncationMeta = {
+			direction: "tail",
+			truncatedBy: truncated.truncatedBy ?? "bytes",
+			totalLines: truncated.totalLines,
+			totalBytes: truncated.totalBytes,
+			outputLines,
+			outputBytes,
+			maxBytes: tailBytes,
+			shownRange: { start: shownStart, end: truncated.totalLines },
+			artifactId,
+		};
+	}
 
 	const newMeta: OutputMeta = { ...(existingMeta ?? {}), truncation: truncationMeta };
 	const newDetails = { ...(result.details ?? {}), meta: newMeta };

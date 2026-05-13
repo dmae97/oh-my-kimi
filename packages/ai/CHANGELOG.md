@@ -1,6 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Increased the minimum Bun runtime version to `>=1.3.14` for the `@aws-?` package
+
+### Added
+
+- Added `installH2Fetch` to patch `globalThis.fetch` so HTTPS requests attempt HTTP/2 over ALPN with automatic HTTP/1.1 fallback when HTTP/2 is unsupported
+- Added priority service-tier traffic to the `premiumRequests` accounting on OpenAI and OpenAI Codex providers. Sending `serviceTier: "priority"` now increments `usage.premiumRequests` by 1 per request, matching the existing GitHub Copilot premium-request budget semantics so downstream consumers (e.g. the `omp stats` "Premium Reqs" card and `/usage`) reflect priority traffic alongside Copilot premium calls.
 
 ## [15.0.0] - 2026-05-13
 
