@@ -23,6 +23,8 @@
 
 ### Fixed
 
+- Fixed `eval` tool dynamic `await import("./relative.ts")` calls failing with `Cannot find module ... from .../eval/js/shared/runtime.ts`. The static-import rewriter only handled `ImportDeclaration` nodes, so dynamic-import call expressions resolved their specifier against the worker module's URL instead of the session cwd. The rewriter now walks the full AST and additionally swaps `import` callees in `CallExpression` nodes for `__omp_import__`, which forwards the optional options bag verbatim to native `import()` so `{ with: { type: "json" } }` round-trips. Renamed `rewriteStaticImports` → `rewriteImports`.
+
 - Fixed `pr://<owner>/<repo>/diff` URLs for repositories named `diff` to continue resolving to PR list lookups instead of being parsed as short-form diff links
 - Fixed PR unified diff parsing so changed-file headers with quoted paths (such as paths containing spaces) are now detected correctly and hunk content lines beginning with `---`/`+++` are counted in additions/deletions
 - Fixed GitHub view caching to account for active credential identity and avoid serving cached issue/PR data across different account/token contexts

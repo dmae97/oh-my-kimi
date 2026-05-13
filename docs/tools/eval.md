@@ -134,7 +134,7 @@ Implemented in `packages/coding-agent/src/eval/js/context-manager.ts` and `packa
 - Persistent `vm.Context` instances keyed by `js:${sessionId}` in `vmContexts`
 - `rst` calls `resetVmContext(sessionKey)` before the cell executes
 - Top-level `await` and bare `return` are supported by wrapping code in an async IIFE when `wrapCode()` sees `await` or `return`
-- Top-level static `import ... from ...` is rewritten to `await import(...)` by `rewriteStaticImports()`
+- Top-level static `import ... from ...` and dynamic `import(...)` calls are routed through `rewriteImports()`, which sends them via `__omp_import__` so the specifier resolves against the session cwd
 - The prelude installs globals:
   - `display`, `print`
   - `read`, `write`, `append`, `sort`, `uniq`, `counter`, `diff`, `tree`, `env`, `output`

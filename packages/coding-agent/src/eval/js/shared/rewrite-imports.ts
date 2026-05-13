@@ -1,9 +1,10 @@
 import { parse as babelParse } from "@babel/parser";
 
-// Static ESM `import` declarations are not valid inside vm.runInContext (script-mode parsing).
-// We rewrite top-level imports to dynamic-import expressions in the user-supplied source so
-// pasted ESM runs verbatim. A real parser keeps imports embedded in string literals, template
-// literals, or comments intact.
+// Static ESM `import` declarations are not valid inside vm.runInContext (script-mode parsing),
+// and dynamic `import(...)` would otherwise resolve specifiers against the worker module's URL
+// instead of the session cwd. We rewrite both forms so they route through the worker-injected
+// `__omp_import__` helper, which resolves the specifier against the active session cwd. A real
+// parser keeps imports embedded in string literals, template literals, or comments intact.
 
 type BabelImportDeclaration = {
 	type: "ImportDeclaration";
@@ -34,6 +35,8 @@ type BabelExpressionStatement = {
 
 type BabelProgramNode = BabelImportDeclaration | BabelLexicalDecl | BabelExpressionStatement | { type: string };
 
+type BabelNode = { type: string; start: number; end: number; [key: string]: unknown };
+
 function parseProgram(code: string): { program: { body: ReadonlyArray<BabelProgramNode> } } | null {
 	try {
 		return babelParse(code, {
@@ -51,26 +54,50 @@ function parseProgram(code: string): { program: { body: ReadonlyArray<BabelProgr
 	}
 }
 
-function buildDynamicImportCall(sourceLiteral: string, withClause: string | undefined): string {
+function buildOmpImportCall(sourceLiteral: string, optionsLiteral: string | undefined): string {
 	// Route every static import through the worker-injected `__omp_import__` helper so the
 	// specifier resolves against the session cwd (and `with`-attribute imports keep working).
-	return withClause ? `__omp_import__(${sourceLiteral}, ${withClause})` : `__omp_import__(${sourceLiteral})`;
+	return optionsLiteral ? `__omp_import__(${sourceLiteral}, ${optionsLiteral})` : `__omp_import__(${sourceLiteral})`;
 }
 
-function buildWithClause(node: BabelImportDeclaration): string | undefined {
+// Walks every node in `root`, depth-first, invoking `visit` on each one. Skips Babel's
+// non-AST bookkeeping fields so we don't recurse into source locations or comment arrays.
+function walkNodes(root: unknown, visit: (node: BabelNode) => void): void {
+	const stack: unknown[] = [root];
+	while (stack.length > 0) {
+		const current = stack.pop();
+		if (!current || typeof current !== "object") continue;
+		if (Array.isArray(current)) {
+			for (let i = current.length - 1; i >= 0; i--) stack.push(current[i]);
+			continue;
+		}
+		const node = current as Record<string, unknown>;
+		if (typeof node.type === "string") visit(node as unknown as BabelNode);
+		for (const key in node) {
+			if (key === "loc" || key === "extra" || key === "range") continue;
+			if (key === "leadingComments" || key === "trailingComments" || key === "innerComments") continue;
+			const value = node[key];
+			if (value && typeof value === "object") stack.push(value);
+		}
+	}
+}
+
+function buildOptionsLiteral(node: BabelImportDeclaration): string | undefined {
 	const attrs = node.attributes;
 	if (!attrs || attrs.length === 0) return undefined;
 	const pairs = attrs.map(attr => {
 		const key = attr.key.type === "Identifier" ? attr.key.name : JSON.stringify(attr.key.value);
 		return `${key}: ${JSON.stringify(attr.value.value)}`;
 	});
-	return `{ ${pairs.join(", ")} }`;
+	// Native dynamic import takes options as `{ with: { ... } }`. `__omp_import__` forwards the
+	// options bag verbatim, so we wrap the attribute pairs accordingly.
+	return `{ with: { ${pairs.join(", ")} } }`;
 }
 
 function rewriteImportNode(node: BabelImportDeclaration): string {
 	const sourceLiteral = JSON.stringify(node.source.value);
-	const withClause = buildWithClause(node);
-	const importCall = buildDynamicImportCall(sourceLiteral, withClause);
+	const optionsLiteral = buildOptionsLiteral(node);
+	const importCall = buildOmpImportCall(sourceLiteral, optionsLiteral);
 
 	let defaultName: string | undefined;
 	let namespaceName: string | undefined;
@@ -99,7 +126,7 @@ function rewriteImportNode(node: BabelImportDeclaration): string {
 	return `await ${importCall};`;
 }
 
-export function rewriteStaticImports(code: string): string {
+export function rewriteImports(code: string): string {
 	if (!code.includes("import")) return code;
 
 	const ast = parseProgram(code);
@@ -108,17 +135,34 @@ export function rewriteStaticImports(code: string): string {
 		return code;
 	}
 
-	const imports: BabelImportDeclaration[] = [];
+	type Edit = { start: number; end: number; text: string };
+	const edits: Edit[] = [];
+
+	// Top-level static `import` declarations become `await __omp_import__(...)` calls.
 	for (const node of ast.program.body) {
-		if (node.type === "ImportDeclaration") imports.push(node as unknown as BabelImportDeclaration);
+		if (node.type !== "ImportDeclaration") continue;
+		const decl = node as unknown as BabelImportDeclaration;
+		edits.push({ start: decl.start, end: decl.end, text: rewriteImportNode(decl) });
 	}
-	if (imports.length === 0) return code;
+
+	// Dynamic `import(...)` expressions (anywhere) get their callee swapped for `__omp_import__`
+	// so the specifier resolves against the session cwd instead of the worker module's URL.
+	walkNodes(ast, node => {
+		if (node.type !== "CallExpression") return;
+		const call = node as unknown as { callee?: { type?: string; start?: number; end?: number } };
+		const callee = call.callee;
+		if (!callee || callee.type !== "Import" || typeof callee.start !== "number" || typeof callee.end !== "number")
+			return;
+		edits.push({ start: callee.start, end: callee.end, text: "__omp_import__" });
+	});
+
+	if (edits.length === 0) return code;
 
 	// Splice from the back so earlier offsets stay valid.
-	imports.sort((a, b) => b.start - a.start);
+	edits.sort((a, b) => b.start - a.start);
 	let result = code;
-	for (const node of imports) {
-		result = result.slice(0, node.start) + rewriteImportNode(node) + result.slice(node.end);
+	for (const edit of edits) {
+		result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
 	}
 	return result;
 }
@@ -220,7 +264,7 @@ export function wrapCode(code: string): { source: string; asyncWrapped: boolean;
 	const stripped = stripTypeScript(code);
 	const finalExpression = returnFinalExpression(stripped);
 	const rewritten = {
-		source: demoteTopLevelLexicals(rewriteStaticImports(finalExpression.source)),
+		source: demoteTopLevelLexicals(rewriteImports(finalExpression.source)),
 		returned: finalExpression.returned,
 	};
 	const needsAsyncWrapper = /\bawait\b|\breturn\b/.test(rewritten.source);

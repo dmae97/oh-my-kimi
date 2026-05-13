@@ -126,9 +126,9 @@ export class JsRuntime {
 				if (!hooks) throw new ToolError("Tool calls are only valid inside an active run");
 				return await hooks.callTool(name, args);
 			},
-			__omp_import__: async (source: string, attrs?: Record<string, string>) => {
+			__omp_import__: async (source: string, options?: ImportCallOptions) => {
 				const target = resolveImportSpecifier(this.#cwd, source);
-				return attrs ? await import(target, { with: attrs }) : await import(target);
+				return options !== undefined ? await import(target, options) : await import(target);
 			},
 			__omp_emit_status__: (op: string, data: Record<string, unknown> = {}) => {
 				const event: JsStatusEvent = { op, ...data };
@@ -170,7 +170,7 @@ function buildRequire(cwd: string): NodeJS.Require {
 }
 
 /**
- * Resolve an import specifier emitted by `rewriteStaticImports` against the active session
+ * Resolve an import specifier emitted by `rewriteImports` against the active session
  * cwd. Relative paths (`./`, `../`, `/`) and bare specifiers (`pkg`, `@scope/pkg`) both go
  * through `Bun.resolveSync` rooted at the cwd so user-pasted ESM behaves as if it lived in
  * the project — not next to the worker module. URL-like specifiers (`file://`, `data:`,
