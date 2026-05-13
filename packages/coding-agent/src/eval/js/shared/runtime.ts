@@ -4,6 +4,8 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as util from "node:util";
 
+import { logger } from "@oh-my-pi/pi-utils";
+
 import { ToolError } from "../../../tools/tool-errors";
 import { createHelpers, type HelperBundle } from "./helpers";
 import { awaitMaybePromise, indirectEval } from "./indirect-eval";
@@ -111,7 +113,14 @@ export class JsRuntime {
 				hooks.onDisplay({ type: "image", data: record.data, mimeType: record.mimeType });
 				return;
 			}
-			hooks.onDisplay({ type: "json", data: structuredClone(value) });
+			try {
+				hooks.onDisplay({ type: "json", data: structuredClone(value) });
+			} catch (err) {
+				logger.debug("js displayValue: value is not structured-cloneable, falling back to text", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+				hooks.onText(`${Object.prototype.toString.call(value)}\n`);
+			}
 			return;
 		}
 		hooks.onText(`${String(value)}\n`);
