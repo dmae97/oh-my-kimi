@@ -3,6 +3,7 @@ import { Container, Image, ImageProtocol, Markdown, Spacer, TERMINAL, Text } fro
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
+import { isSilentAbort } from "../../session/messages";
 import { resolveImageOptions } from "../../tools/render-utils";
 import { convertToPng } from "../../utils/image-convert";
 
@@ -184,7 +185,7 @@ export class AssistantMessageComponent extends Container {
 		// But only if there are no tool calls (tool execution components will show the error)
 		const hasToolCalls = message.content.some(c => c.type === "toolCall");
 		if (!hasToolCalls) {
-			if (message.stopReason === "aborted") {
+			if (message.stopReason === "aborted" && !isSilentAbort(message.errorMessage)) {
 				const abortMessage =
 					message.errorMessage && message.errorMessage !== "Request was aborted"
 						? message.errorMessage
@@ -201,7 +202,12 @@ export class AssistantMessageComponent extends Container {
 				this.#contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), 1, 0));
 			}
 		}
-		if (message.errorMessage && message.stopReason !== "aborted" && message.stopReason !== "error") {
+		if (
+			message.errorMessage &&
+			!isSilentAbort(message.errorMessage) &&
+			message.stopReason !== "aborted" &&
+			message.stopReason !== "error"
+		) {
 			this.#contentContainer.addChild(new Spacer(1));
 			this.#contentContainer.addChild(new Text(theme.fg("error", `Error: ${message.errorMessage}`), 1, 0));
 		}

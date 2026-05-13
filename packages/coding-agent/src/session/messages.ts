@@ -39,6 +39,20 @@ export interface SkillPromptDetails {
 	__pendingDisplayTag?: string;
 }
 
+/** Sentinel value for `AssistantMessage.errorMessage` indicating that the abort
+ *  was an *expected internal transition* (plan-mode → execution compaction)
+ *  and must NOT surface as a red "Operation aborted" line. Distinct from
+ *  `undefined` (default) so user-cancel aborts with no errorMessage still
+ *  render normally. Persists through SessionManager so history replay
+ *  branches identically. */
+export const SILENT_ABORT_MARKER = "__omp.silent_abort__";
+
+/** Type-guard for the marker. Renderers should branch on this rather than
+ *  string-comparing inline. */
+export function isSilentAbort(errorMessage: string | undefined): boolean {
+	return errorMessage === SILENT_ABORT_MARKER;
+}
+
 /** Extract the optional `__pendingDisplayTag` field from a CustomMessage's
  *  `details` blob. Safe over `unknown`; returns undefined when the field is
  *  absent or non-string. */

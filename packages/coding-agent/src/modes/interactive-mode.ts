@@ -1127,37 +1127,55 @@ export class InteractiveMode implements InteractiveModeContext {
 			getSessionId: () => this.sessionManager.getSessionId(),
 		});
 		const previousTools = this.#planModePreviousTools ?? this.session.getActiveToolNames();
-		await this.#exitPlanMode({ silent: true, paused: false });
 
+		// Mark the pending abort caused by the plan-mode → compaction transition as
+		// silent BEFORE #exitPlanMode raises it. The `finally` below clears the
+		// flag on every terminal compaction outcome (ok / cancelled / failed /
+		// throw) so a leaked flag cannot silence a later unrelated abort.
+		// Branchless mark+clear when !compactBeforeExecute: mark is gated; clear
+		// is unconditional and idempotent.
+		if (options.compactBeforeExecute) {
+			this.session.markPlanCompactAbortPending();
+		}
 		let compactOutcome: CompactionOutcome | undefined;
-		if (!options.preserveContext) {
-			await this.handleClearCommand();
-			// The new session has a fresh local:// root — persist the approved plan there
-			// so `local://<title>.md` resolves correctly in the execution session.
-			const newLocalPath = resolveLocalUrlToPath(options.finalPlanFilePath, {
-				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-				getSessionId: () => this.sessionManager.getSessionId(),
-			});
-			await Bun.write(newLocalPath, planContent);
-		} else if (options.compactBeforeExecute) {
-			// Distill the plan-mode transcript before the execution turn is queued so
-			// the plan-approved synthetic prompt lands as a fresh cache anchor.
-			// Outcome is consumed after tool-restoration and plan-reference-path
-			// bookkeeping below; `markPlanReferenceSent` is intentionally deferred
-			// past the cancel guard — see the comment at the cancel branch.
-			// Cancellation skips the synthetic-prompt dispatch (operator's explicit
-			// abort is honored); failure proceeds best-effort — approval intent stands.
-			const compactionPrompt = prompt.render(planModeCompactInstructionsPrompt, {
-				planFilePath: options.finalPlanFilePath,
-			});
-			// Pin the plan reference path BEFORE compaction so any user messages
-			// queued during the compaction await (which `handleCompactCommand`
-			// flushes via `flushCompactionQueue` before returning) see the
-			// approved plan in `#buildPlanReferenceMessage`. Reassignment at
-			// line 1161 below is idempotent and kept for the !compactBeforeExecute
-			// branch.
-			this.session.setPlanReferencePath(options.finalPlanFilePath);
-			compactOutcome = await this.handleCompactCommand(compactionPrompt);
+		try {
+			await this.#exitPlanMode({ silent: true, paused: false });
+
+			if (!options.preserveContext) {
+				await this.handleClearCommand();
+				// The new session has a fresh local:// root — persist the approved plan there
+				// so `local://<title>.md` resolves correctly in the execution session.
+				const newLocalPath = resolveLocalUrlToPath(options.finalPlanFilePath, {
+					getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
+					getSessionId: () => this.sessionManager.getSessionId(),
+				});
+				await Bun.write(newLocalPath, planContent);
+			} else if (options.compactBeforeExecute) {
+				// Distill the plan-mode transcript before the execution turn is queued so
+				// the plan-approved synthetic prompt lands as a fresh cache anchor.
+				// Outcome is consumed after tool-restoration and plan-reference-path
+				// bookkeeping below; `markPlanReferenceSent` is intentionally deferred
+				// past the cancel guard — see the comment at the cancel branch.
+				// Cancellation skips the synthetic-prompt dispatch (operator's explicit
+				// abort is honored); failure proceeds best-effort — approval intent stands.
+				const compactionPrompt = prompt.render(planModeCompactInstructionsPrompt, {
+					planFilePath: options.finalPlanFilePath,
+				});
+				// Pin the plan reference path BEFORE compaction so any user messages
+				// queued during the compaction await (which `handleCompactCommand`
+				// flushes via `flushCompactionQueue` before returning) see the
+				// approved plan in `#buildPlanReferenceMessage`. Reassignment after
+				// the try/finally is idempotent and kept for the !compactBeforeExecute
+				// branch.
+				this.session.setPlanReferencePath(options.finalPlanFilePath);
+				compactOutcome = await this.handleCompactCommand(compactionPrompt);
+			}
+		} finally {
+			// Unconditional clear. Idempotent: a no-op when the flag was never set
+			// (i.e., the !compactBeforeExecute branch), and a no-op when the flag
+			// was already consumed by AgentSession.#handleAgentEvent's aborted
+			// message_end stamping. Guarantees the flag is dead at every exit.
+			this.session.clearPlanCompactAbortPending();
 		}
 
 		// Tool restoration runs on every path — the plan mode tools must be

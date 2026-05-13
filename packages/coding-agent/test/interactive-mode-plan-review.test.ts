@@ -1,9 +1,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { Text } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../src/config/model-registry";
@@ -360,5 +363,161 @@ describe("InteractiveMode plan review rendering", () => {
 		// approved plan path, so any user message queued during compaction is
 		// dispatched against the approved plan, not the plan-mode draft.
 		expect(planRefSetWhenCompactionRan).toBe(true);
+	});
+
+	// ==========================================================================
+	// Phase 6 — B layer: #approvePlan flag lifecycle via try/finally.
+	//
+	// Drives `handleExitPlanModeTool` with each CompactionOutcome variant and
+	// asserts `session.isPlanCompactAbortPending === false` after `#approvePlan`
+	// resolves/rejects. The flag is the only state that can leak into later
+	// unrelated aborts; the `try/finally` in `#approvePlan` is what protects it.
+	// ==========================================================================
+
+	/**
+	 * Drives `handleExitPlanModeTool` with the "Approve and compact context"
+	 * picker outcome and the given compaction-outcome mock. Returns the promise
+	 * the harness produces so the caller decides between `await` (B1-B3 happy
+	 * paths) and `expect(...).rejects` (B4 throw path). Does NOT swallow errors.
+	 */
+	async function approveWithCompact(
+		compactOutcome: "ok" | "cancelled" | "failed" | "throw",
+		throwError?: Error,
+	): Promise<void> {
+		const planFilePath = "local://PLAN.md";
+		const finalPlanFilePath = "local://APPROVED.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nBody.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(mode, "showHookSelector").mockResolvedValue("Approve and compact context");
+		if (compactOutcome === "throw") {
+			vi.spyOn(mode, "handleCompactCommand").mockRejectedValue(throwError ?? new Error("compact boom"));
+		} else {
+			vi.spyOn(mode, "handleCompactCommand").mockResolvedValue(compactOutcome);
+		}
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		await mode.handleExitPlanModeTool({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath,
+		});
+	}
+
+	it("B1: Approve and compact context + ok outcome → flag cleared by finally", async () => {
+		await approveWithCompact("ok");
+		expect(session.isPlanCompactAbortPending).toBe(false);
+	});
+
+	it("B2: Approve and compact context + cancelled outcome → flag cleared by finally even without aborted message_end", async () => {
+		await approveWithCompact("cancelled");
+		// The leak-guard contract: no aborted message_end consumed the flag,
+		// but `finally` still cleared it so the next real abort cannot be
+		// silenced.
+		expect(session.isPlanCompactAbortPending).toBe(false);
+	});
+
+	it("B3: Approve and compact context + failed outcome → flag cleared by finally", async () => {
+		await approveWithCompact("failed");
+		expect(session.isPlanCompactAbortPending).toBe(false);
+	});
+
+	it("B4: Approve and compact context + handleCompactCommand throws → showError surfaces the failure AND flag cleared by finally before the outer catch", async () => {
+		// `handleExitPlanModeTool` wraps `#approvePlan` in a try/catch
+		// (interactive-mode.ts:1287) that consumes the throw and reports via
+		// `showError`. The contract under test is:
+		//   1. `#approvePlan`'s own `try/finally` clears the flag BEFORE the
+		//      throw bubbles up to that outer catch.
+		//   2. The outer catch surfaces the failure via `showError` (not
+		//      silenced).
+		const showErrorSpy = vi.spyOn(mode, "showError");
+		await approveWithCompact("throw", new Error("synthetic compaction failure"));
+		expect(session.isPlanCompactAbortPending).toBe(false);
+		expect(showErrorSpy).toHaveBeenCalledWith(
+			expect.stringContaining("synthetic compaction failure"),
+		);
+	});
+
+	it("B5: Approve and execute (no compact) → markPlanCompactAbortPending never called; flag stays false", async () => {
+		const planFilePath = "local://PLAN.md";
+		const finalPlanFilePath = "local://APPROVED.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nBody.");
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(mode, "showHookSelector").mockResolvedValue("Approve and execute");
+		const markSpy = vi.spyOn(session, "markPlanCompactAbortPending");
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		await mode.handleExitPlanModeTool({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath,
+		});
+
+		expect(markSpy).not.toHaveBeenCalled();
+		expect(session.isPlanCompactAbortPending).toBe(false);
+	});
+
+	// ==========================================================================
+	// Phase 6 — D layer: replay-side render branches in AssistantMessageComponent.
+	//
+	// D1 asserts that the persisted `SILENT_ABORT_MARKER` suppresses the red
+	// "Operation aborted" line. D2 is the over-suppression regression guard —
+	// an aborted message with NO marker must still render the line.
+	// ==========================================================================
+
+	function renderAssistant(message: AssistantMessage, width = 120): string {
+		const component = new AssistantMessageComponent(message);
+		return Bun.stripANSI(component.render(width).join("\n"));
+	}
+
+	/** Build an aborted assistant message with the minimum required fields. */
+	function buildAbortedAssistantMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
+		return {
+			role: "assistant",
+			content: [{ type: "text", text: "Approved plan; transitioning to compaction." }],
+			api: "openai-completions",
+			provider: "github-copilot",
+			model: "gpt-4o",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "aborted",
+			timestamp: Date.now(),
+			...overrides,
+		};
+	}
+
+	it("D1: Replay of an assistant message with SILENT_ABORT_MARKER + aborted: rendered component contains no /Operation aborted/", () => {
+		const message = buildAbortedAssistantMessage({ errorMessage: SILENT_ABORT_MARKER });
+		const rendered = renderAssistant(message);
+		expect(rendered).not.toMatch(/Operation aborted/);
+		// The marker itself MUST NOT leak into rendered output either.
+		expect(rendered).not.toContain(SILENT_ABORT_MARKER);
+	});
+
+	it("D2: Replay of an aborted message with no marker + empty content: rendered component DOES contain 'Operation aborted'", () => {
+		// Over-suppression regression guard: silent path is opt-in via the
+		// persisted marker. A user-cancel abort with no marker and no content
+		// still surfaces the standard label.
+		const message = buildAbortedAssistantMessage({ content: [], errorMessage: undefined });
+		const rendered = renderAssistant(message);
+		expect(rendered).toContain("Operation aborted");
 	});
 });

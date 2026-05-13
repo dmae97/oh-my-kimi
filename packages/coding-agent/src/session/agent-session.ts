@@ -175,6 +175,7 @@ import {
 	type FileMentionMessage,
 	type PythonExecutionMessage,
 	readPendingDisplayTag,
+	SILENT_ABORT_MARKER,
 } from "./messages";
 import { formatSessionDumpText } from "./session-dump-format";
 import type {
@@ -743,6 +744,14 @@ export class AgentSession {
 	#ttsrResumePromise: Promise<void> | undefined = undefined;
 	#ttsrResumeResolve: (() => void) | undefined = undefined;
 
+	/** One-shot flag set in InteractiveMode.#approvePlan(compactBeforeExecute=true)
+	 *  before the plan-mode → compaction transition. Consumed inside
+	 *  #handleAgentEvent for the matching `message_end` + `stopReason: "aborted"`;
+	 *  cleared unconditionally by the caller's `finally` so it cannot leak into
+	 *  later unrelated aborts (e.g. when compaction returns cancelled/failed
+	 *  without producing an aborted message_end). */
+	#planCompactAbortPending = false;
+
 	/** Monotonic counter for `enqueueCustomMessageDisplay` tag generation;
 	 *  combined with `Date.now()` so tags stay unique even across rapid
 	 *  same-tick enqueues. */
@@ -968,6 +977,27 @@ export class AgentSession {
 		return this.#ttsrAbortPending;
 	}
 
+	/** Whether the plan-mode → compaction transition's expected internal abort is
+	 *  pending. Consumed by `#handleAgentEvent` to stamp `SILENT_ABORT_MARKER`
+	 *  on the next aborted assistant message_end; cleared unconditionally by
+	 *  `InteractiveMode.#approvePlan`'s `finally` block. */
+	get isPlanCompactAbortPending(): boolean {
+		return this.#planCompactAbortPending;
+	}
+
+	/** Arm the silent-abort marker for the next aborted assistant message_end.
+	 *  Caller MUST clear via `clearPlanCompactAbortPending()` in a `finally`
+	 *  to guarantee no leak. */
+	markPlanCompactAbortPending(): void {
+		this.#planCompactAbortPending = true;
+	}
+
+	/** Unconditionally clear the silent-abort flag. Idempotent: safe when the
+	 *  flag was never set OR was already consumed by `#handleAgentEvent`. */
+	clearPlanCompactAbortPending(): void {
+		this.#planCompactAbortPending = false;
+	}
+
 	/** Register a compact display string for a custom message that the caller is
 	 *  about to dispatch via `promptCustomMessage` / `sendCustomMessage`.
 	 *  Returns a stable tag the caller MUST embed in
@@ -1110,6 +1140,28 @@ export class AgentSession {
 					}
 				}
 			}
+		}
+
+		// Plan-mode → compaction transition: stamp the silent-abort marker on the
+		// persisted message BEFORE the obfuscator's display-side copy below. Both
+		// `displayEvent` (used for emit) and `event.message` (used for persistence
+		// via SessionManager.appendMessage / appendCustomMessageEntry) carry the
+		// marker afterward — `displayEvent.message` inherits via the `{...message}`
+		// spread inside the obfuscator branch; persistence sees the in-place
+		// mutation on `event.message`. The flag is consumed here, scoped strictly
+		// to this aborted message_end; the caller's `finally` (in
+		// InteractiveMode.#approvePlan) clears it again on every terminal
+		// compaction outcome so a leaked flag cannot silence a later unrelated
+		// abort. NOTE: if a future refactor reorders this site relative to the
+		// obfuscator copy, the stamp must remain BEFORE the copy.
+		if (
+			event.type === "message_end" &&
+			event.message.role === "assistant" &&
+			event.message.stopReason === "aborted" &&
+			this.#planCompactAbortPending
+		) {
+			(event.message as AssistantMessage).errorMessage = SILENT_ABORT_MARKER;
+			this.#planCompactAbortPending = false;
 		}
 
 		// Deobfuscate assistant message content for display emission — the LLM echoes back
