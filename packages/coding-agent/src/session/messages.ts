@@ -47,8 +47,10 @@ export interface SkillPromptDetails {
  *  branches identically.
  *
  *  Consumers: `AgentSession.#handleAgentEvent` (stamper) writes this value;
- *  `EventController.#handleMessageEnd`, `AssistantMessageComponent`, and
- *  `ui-helpers.addMessageToChat` (renderers) read it via `isSilentAbort`. */
+ *  `EventController.#handleMessageEnd`, `AssistantMessageComponent`,
+ *  `ui-helpers.addMessageToChat` (renderers), `SessionObserverOverlay
+ *  #buildTranscriptLines`, `runPrintMode`, and `AcpAgent#replayAssistantMessage`
+ *  (fallback error emission) read it via `isSilentAbort`. */
 export const SILENT_ABORT_MARKER = "__omp.silent_abort__";
 
 /** Type-guard for `SILENT_ABORT_MARKER`. Renderers MUST branch on this rather

@@ -53,7 +53,7 @@ import type { MCPServerConfig } from "../../mcp/types";
 import { loadAllExtensions } from "../../modes/components/extensions/state-manager";
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
-import { SKILL_PROMPT_MESSAGE_TYPE } from "../../session/messages";
+import { isSilentAbort, SKILL_PROMPT_MESSAGE_TYPE } from "../../session/messages";
 import {
 	SessionManager,
 	type SessionInfo as StoredSessionInfo,
@@ -1393,7 +1393,7 @@ export class AcpAgent implements Agent {
 				}
 			}
 		}
-		if (notifications.length === 0 && message.errorMessage) {
+		if (notifications.length === 0 && message.errorMessage && !isSilentAbort(message.errorMessage)) {
 			notifications.push({
 				sessionId,
 				update: {
