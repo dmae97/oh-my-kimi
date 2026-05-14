@@ -12,6 +12,12 @@ Executes bash command in shell session for terminal operations like git, bun, ca
 {{/if}}
 </instruction>
 
+<critical>
+- NEVER use Linux coreutils (`cat`, `head`, `tail`, `less`, `more`, `ls`, `grep`, `rg`, `awk`, `sed`, `find`, `fd`, etc.) when a dedicated tool suffices — ALWAYS prefer `read`, `search`, `find`, `edit`, `write`.
+- NEVER pipe through `| head -n N` or `| tail -n N` — output is already truncated with the full result available via `artifact://<id>`.
+- NEVER redirect with `2>&1` or `2>/dev/null` — stdout and stderr are already merged.
+</critical>
+
 <output>
 - Returns output and exit code.
 - Truncated output is retrievable from `artifact://<id>` (linked in metadata)
