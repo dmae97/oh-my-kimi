@@ -19,6 +19,21 @@ function createCodexToken(accountId: string): string {
 	return `${header}.${payload}.signature`;
 }
 
+/**
+ * Returns the bundled `gpt-5-mini` model with its `name` renamed so it doesn't
+ * lowercase-startWith("gpt-5") and therefore doesn't trigger the GPT-5 "Juice: 0"
+ * developer-message hack injected by `applyResponsesReasoningParams`. The hack
+ * is exercised by its own targeted tests; these history-replay tests assert raw
+ * payload shape and should stay independent of it.
+ */
+function getOpenAIReasoningModel<Provider extends string>(
+	provider: Provider,
+	id: string,
+): Model<"openai-responses"> {
+	const base = getBundledModel(provider, id) as Model<"openai-responses">;
+	return { ...base, name: "Reasoning Mini" };
+}
+
 const preservedHistoryItems = [
 	{ type: "message", role: "user", content: [{ type: "input_text", text: "Preserved user" }] },
 	{ type: "compaction", encrypted_content: "enc_123" },
@@ -288,7 +303,7 @@ function containsUserInputText(input: unknown[] | undefined, text: string): bool
 
 describe("OpenAI responses history payload", () => {
 	it("prepends multiple OpenAI developer instructions in order without changing prompt cache key routing", async () => {
-		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const payload = (await captureResponsesPayload(
 			model,
 			{
@@ -309,7 +324,7 @@ describe("OpenAI responses history payload", () => {
 
 	it("falls back to system instructions for OpenAI-compatible endpoints without developer-role support", async () => {
 		const model = {
-			...(getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">),
+			...(getOpenAIReasoningModel("openai", "gpt-5-mini")),
 			baseUrl: "https://proxy.example.com/v1",
 		};
 		const payload = (await captureResponsesPayload(model, {
@@ -325,7 +340,7 @@ describe("OpenAI responses history payload", () => {
 	});
 
 	it("keeps system instruction order ahead of replayed native history", async () => {
-		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const payload = (await captureResponsesPayload(model, {
 			...assistantSnapshotContext,
 			systemPrompt: ["stable instructions", "second instructions"],
@@ -340,13 +355,13 @@ describe("OpenAI responses history payload", () => {
 	});
 
 	it("inlines preserved replacement history for openai-responses", async () => {
-		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const payload = (await captureResponsesPayload(model, preservedHistoryContext)) as { input?: unknown[] };
 		expect(payload.input).toEqual(preservedHistoryItems);
 	});
 
 	it("prefers assistant native history snapshots for openai-responses", async () => {
-		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const payload = (await captureResponsesPayload(model, assistantSnapshotContext)) as { input?: unknown[] };
 		expect(payload.input).toEqual([
 			...snapshotHistoryItems,
@@ -355,7 +370,7 @@ describe("OpenAI responses history payload", () => {
 	});
 
 	it("falls back to rebuilt history on resumed same-provider sessions with fresh session state", async () => {
-		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const payload = (await captureResponsesPayload(model, resumedSameProviderContext, providerSessionState)) as {
 			input?: unknown[];
@@ -367,7 +382,7 @@ describe("OpenAI responses history payload", () => {
 	});
 
 	it("does not replay stale thinking signatures when native replay is cold", async () => {
-		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const payload = (await captureResponsesPayload(
 			model,
@@ -383,7 +398,7 @@ describe("OpenAI responses history payload", () => {
 	});
 
 	it("preserves remote replacement history on cold openai session state", async () => {
-		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const payload = (await captureResponsesPayload(
 			model,
@@ -407,7 +422,7 @@ describe("OpenAI responses history payload", () => {
 	});
 
 	it("replays native history after the same-provider session state is warmed", async () => {
-		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		await captureResponsesPayload(model, resumedSameProviderContext, providerSessionState);
 		markResponsesProviderSessionStateWarmed(providerSessionState);
@@ -422,7 +437,7 @@ describe("OpenAI responses history payload", () => {
 	});
 
 	it("does not warm GitHub Copilot replay when only OpenAI replay state is warmed", async () => {
-		const openAiModel = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const openAiModel = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const copilotModel = getBundledModel("github-copilot", "gpt-5.4") as Model<"openai-responses">;
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		await captureResponsesPayload(openAiModel, resumedSameProviderContext, providerSessionState);
@@ -455,7 +470,7 @@ describe("OpenAI responses history payload", () => {
 	});
 
 	it("builds up history incrementally from multiple assistant messages", async () => {
-		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const payload = (await captureResponsesPayload(model, incrementalContext)) as { input?: unknown[] };
 		expect(payload.input).toEqual([
 			{ role: "user", content: [{ type: "input_text", text: "first question" }] },
@@ -496,7 +511,7 @@ describe("OpenAI responses history payload", () => {
 				{ role: "user", content: "follow-up", timestamp: Date.now() },
 			],
 		};
-		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
 		expect(payload.input).toEqual([
 			{ role: "user", content: [{ type: "input_text", text: "first user" }] },
@@ -536,7 +551,7 @@ describe("OpenAI responses history payload", () => {
 				{ role: "user", content: "follow-up", timestamp: Date.now() },
 			],
 		};
-		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
 		expect(payload.input).toEqual([
 			{ role: "user", content: [{ type: "input_text", text: "first user" }] },
@@ -583,7 +598,7 @@ describe("OpenAI responses history payload", () => {
 			],
 		};
 
-		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
 		const reasoningItem = findResponsesInputItem(payload.input, "reasoning");
 		const messageItem = findResponsesInputItem(payload.input, "message");
@@ -635,7 +650,7 @@ describe("OpenAI responses history payload", () => {
 				{ role: "user", content: "follow-up", timestamp: Date.now() },
 			],
 		};
-		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
 		expect(payload.input).toEqual([
 			...fullSnapshotItems,
@@ -676,7 +691,7 @@ describe("OpenAI responses history payload", () => {
 				{ role: "user", content: "Resume", timestamp: Date.now() },
 			],
 		};
-		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
 		const functionCallItem = findResponsesInputItem(payload.input, "function_call");
 		const functionCallOutputItem = findResponsesInputItem(payload.input, "function_call_output");
