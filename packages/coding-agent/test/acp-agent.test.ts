@@ -1052,7 +1052,11 @@ describe("ACP agent", () => {
 				action: "accept",
 				content: { value: "yes" },
 			}));
-			const boolCtx = createAcpExtensionUiContext(stringForBool.connection, () => "session-wrongtype-bool", FORM_CAPABILITIES);
+			const boolCtx = createAcpExtensionUiContext(
+				stringForBool.connection,
+				() => "session-wrongtype-bool",
+				FORM_CAPABILITIES,
+			);
 			expect(await boolCtx.confirm("Proceed?", "")).toBe(false);
 
 			// select expects a string; a boolean `value` must narrow to `undefined`.
@@ -1060,7 +1064,11 @@ describe("ACP agent", () => {
 				action: "accept",
 				content: { value: true },
 			}));
-			const selectCtx = createAcpExtensionUiContext(boolForString.connection, () => "session-wrongtype-str", FORM_CAPABILITIES);
+			const selectCtx = createAcpExtensionUiContext(
+				boolForString.connection,
+				() => "session-wrongtype-str",
+				FORM_CAPABILITIES,
+			);
 			expect(await selectCtx.select("Pick", ["a"])).toBeUndefined();
 		});
 
