@@ -362,6 +362,8 @@ const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;
 const LABEL_MAX_WIDTH = 60;
 const PREVIEW_LINES_COLLAPSED = 1;
 const PREVIEW_LINES_EXPANDED = 4;
+const LABEL_LINES_COLLAPSED = 1;
+const LABEL_LINES_EXPANDED = 3;
 const PREVIEW_LINE_WIDTH = 80;
 
 function statusToIcon(status: JobSnapshot["status"]): ToolUIStatus {
@@ -488,14 +490,21 @@ export const jobToolRenderer = {
 							);
 							const typeBadge = formatBadge(job.type, statusToColor(job.status), uiTheme);
 							const idText = uiTheme.fg("muted", job.id);
-							const label = truncateToWidth(
-								replaceTabs(job.label || "(no label)"),
-								LABEL_MAX_WIDTH,
-								Ellipsis.Unicode,
-							);
-							const labelText = uiTheme.fg("toolOutput", label);
+							const rawLabelLines = (job.label || "(no label)").split(/\r?\n/);
+							const maxLabelLines = expanded ? LABEL_LINES_EXPANDED : LABEL_LINES_COLLAPSED;
+							const visibleLabelLines = rawLabelLines
+								.slice(0, maxLabelLines)
+								.map(l => truncateToWidth(replaceTabs(l), LABEL_MAX_WIDTH, Ellipsis.Unicode));
+							if (rawLabelLines.length > maxLabelLines && visibleLabelLines.length > 0) {
+								const last = visibleLabelLines[visibleLabelLines.length - 1]!;
+								visibleLabelLines[visibleLabelLines.length - 1] = `${last} …`;
+							}
 							const durationText = uiTheme.fg("dim", formatDuration(job.durationMs));
-							lines.push(`${icon} ${idText} ${typeBadge} ${labelText} ${durationText}`);
+							const headLabel = uiTheme.fg("toolOutput", visibleLabelLines[0] ?? "");
+							lines.push(`${icon} ${idText} ${typeBadge} ${headLabel} ${durationText}`);
+							for (let i = 1; i < visibleLabelLines.length; i++) {
+								lines.push(`  ${uiTheme.fg("toolOutput", visibleLabelLines[i]!)}`);
+							}
 
 							const preview = job.errorText?.trim() || job.resultText?.trim();
 							if (preview) {
