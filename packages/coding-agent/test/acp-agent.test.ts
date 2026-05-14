@@ -13,7 +13,7 @@ import {
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import { resetSettingsForTest, Settings } from "../src/config/settings";
-import { AcpAgent } from "../src/modes/acp/acp-agent";
+import { ACP_BOOTSTRAP_RACE_GUARD_MS, AcpAgent } from "../src/modes/acp/acp-agent";
 import type { PlanModeState } from "../src/plan-mode/state";
 import type { AgentSession, AgentSessionEvent } from "../src/session/agent-session";
 import { SILENT_ABORT_MARKER } from "../src/session/messages";

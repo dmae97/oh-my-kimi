@@ -94,7 +94,7 @@ describe("Observer overlay silent-abort regression", () => {
 			},
 		]);
 
-		const overlay = new SessionObserverOverlayComponent(registry, () => {}, ["Ctrl+S"]);
+		const overlay = new SessionObserverOverlayComponent(registry, () => {}, ["ctrl+s"]);
 
 		// Render with a reasonable width — the overlay reads the session file
 		// and calls #buildTranscriptLines internally.
@@ -154,7 +154,7 @@ describe("Observer overlay silent-abort regression", () => {
 			},
 		]);
 
-		const overlay = new SessionObserverOverlayComponent(registry, () => {}, ["Ctrl+S"]);
+		const overlay = new SessionObserverOverlayComponent(registry, () => {}, ["ctrl+s"]);
 
 		const rendered = overlay.render(120);
 		const renderedText = rendered.join("\n");

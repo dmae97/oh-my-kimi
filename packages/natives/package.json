@@ -40,6 +40,7 @@
     "bench": "bun bench/grep.ts"
   },
   "devDependencies": {
+    "@napi-rs/cli": "catalog:",
     "@types/bun": "catalog:"
   },
   "engines": {
