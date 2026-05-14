@@ -166,7 +166,17 @@ pub fn compact_listing(input: &str, max_lines: usize) -> String {
 }
 
 /// Truncate a single line to at most `max_chars` characters (Unicode scalars,
-/// not bytes). Appends a single `…` marker when truncation happens.
+/// not bytes).
+///
+/// When truncation happens, appends a `…[+N]` marker where `N` is the number
+/// of dropped Unicode scalars. The bracketed tally lets agents and humans
+/// distinguish minimizer truncation from genuine `…` in the source data
+/// (see issue #1046), and gives a concrete count so the agent can decide
+/// whether the missing tail is recoverable inline or needs the
+/// `artifact://<id>` footer surfaced by the bash wrapper.
+///
+/// `max_chars == 0` is treated as "drop the line"; no marker is emitted in
+/// that case since the caller asked for an empty result.
 pub fn truncate_line(line: &str, max_chars: usize) -> String {
 	if max_chars == 0 {
 		return String::new();
@@ -179,8 +189,11 @@ pub fn truncate_line(line: &str, max_chars: usize) -> String {
 			None => return out,
 		}
 	}
-	if chars.next().is_some() {
-		out.push('…');
+	let dropped = chars.count();
+	if dropped > 0 {
+		use std::fmt::Write as _;
+		// 5–6 bytes typical; this avoids pulling `itoa` for a marker tally.
+		let _ = write!(out, "…[+{dropped}]");
 	}
 	out
 }
@@ -289,5 +302,32 @@ mod tests {
 	fn groups_file_diagnostics() {
 		let out = group_by_file("src/a.ts:1:2 error one\nsrc/a.ts:2:3 error two\n", 10);
 		assert_eq!(out, "src/a.ts:\n  1:2 error one\n  2:3 error two\n");
+	}
+
+	#[test]
+	fn truncate_line_short_passes_through() {
+		assert_eq!(truncate_line("hi", 10), "hi");
+	}
+
+	#[test]
+	fn truncate_line_at_exact_length_emits_no_marker() {
+		assert_eq!(truncate_line("abcde", 5), "abcde");
+	}
+
+	#[test]
+	fn truncate_line_appends_dropped_char_tally() {
+		// "abcdefghij" (10 chars) capped at 4 drops 6 chars.
+		assert_eq!(truncate_line("abcdefghij", 4), "abcd\u{2026}[+6]");
+	}
+
+	#[test]
+	fn truncate_line_counts_unicode_scalars_not_bytes() {
+		// "aaaα" is 4 scalars, 5 bytes. Cap at 2 drops 2 scalars.
+		assert_eq!(truncate_line("aaaα", 2), "aa\u{2026}[+2]");
+	}
+
+	#[test]
+	fn truncate_line_max_zero_yields_empty() {
+		assert_eq!(truncate_line("anything", 0), "");
 	}
 }

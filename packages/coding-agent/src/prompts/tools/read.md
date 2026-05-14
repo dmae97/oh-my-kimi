@@ -1,46 +1,58 @@
-Reads the content at the specified path or URL.
+Read files, directories, archives, SQLite databases, images, documents, internal resources, and web URLs through a single `path` string.
 
 <instruction>
-The `read` tool is multi-purpose and more capable than it looks — inspects files, directories, archives, SQLite databases, images, documents (PDF/DOCX/PPTX/XLSX/RTF/EPUB/ipynb), **and URLs**.
-- You MUST parallelize reads when exploring related files
-- For URLs, `read` fetches the page and returns clean extracted text/markdown by default (reader-mode). It handles HTML pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom, JSON endpoints, PDFs, etc. You SHOULD reach for `read` — not a browser/puppeteer tool — for fetching and inspecting web content.
+- One tool for filesystem, archives, SQLite, images, documents (PDF/DOCX/PPTX/XLSX/RTF/EPUB/ipynb), internal URIs, and web URLs (reader-mode by default).
+- You SHOULD parallelize independent reads when exploring related files.
+- You SHOULD reach for `read` — not a browser/puppeteer tool — for fetching web content.
+</instruction>
 
 ## Parameters
-- `path` — file path or URL (required). Append `:<sel>` for line ranges or raw mode (for example `src/foo.ts:50-200` or `src/foo.ts:raw`).
+
+- `path` — required. Local path, internal URI (`skill://`, `agent://`, `artifact://`, `memory://`, `rule://`, `local://`, `mcp://`), or URL. Append `:<sel>` for line ranges, raw mode, or special modes (e.g. `src/foo.ts:50-200`, `src/foo.ts:raw`, `db.sqlite:users:42`).
 
 ## Selectors
 
-|`path` suffix|Behavior|
-|---|---|
-|_(omitted)_|For parseable code files, return a structural summary. Otherwise read from the start (up to {{DEFAULT_LIMIT}} lines).|
-|`:50`|Read from line 50 onward|
-|`:50-200`|Read lines 50-200|
-|`:50+150`|Read 150 lines starting at line 50|
-|`:20+1`|Read exactly one line|
-|`:5-16,960-973`|Read multiple ranges in one call (comma-separated; ranges sort and merge automatically)|
-|`:raw`|Read verbatim text without anchors or summarization|
-|`:conflicts`|Return a one-line-per-block index of every merge conflict in the file|
+Append `:<sel>` to `path`. The bare path falls back to the default mode.
 
-# Filesystem
-- Reading a directory path returns a list of dirents.
-  {{#if IS_HL_MODE}}
-- Reading a file with an explicit selector returns lines prefixed with anchors (line+hash): `41th|def alpha():`
-  {{else}}
-  {{#if IS_LINE_NUMBER_MODE}}
-- Reading a file with an explicit selector returns lines prefixed with line numbers: `41|def alpha():`
-  {{/if}}
-  {{/if}}
-- Reading a parseable code file without a selector returns a structural summary with signatures/declarations kept and large bodies collapsed to `…`. Use `:raw` or an explicit range such as `:1-9999` for verbatim content.
+- _(none)_ — parseable code → structural summary (signatures kept, bodies elided); other files → read from the start (up to {{DEFAULT_LIMIT}} lines).
+- `:50` — read from line 50 onward.
+- `:50-200` — lines 50–200 inclusive.
+- `:50+150` — 150 lines starting at line 50.
+- `:20+1` — exactly one line.
+- `:5-16,960-973` — multiple ranges in one call (sorted, overlaps merged).
+- `:raw` — verbatim text; no anchors, no summary, no line prefixes.
+- `:2-4:raw` or `:raw:2-4` — range AND verbatim; the two compose in either order.
+- `:conflicts` — one-line-per-block index of every unresolved git merge conflict.
 
-# Inspection
+# Files
 
-Extracts text from PDF, Word, PowerPoint, Excel, RTF, EPUB, and Jupyter notebook files. Notebooks are shown as editable `# %% [type] cell:N` text; edits to that text are applied back to the underlying `.ipynb` JSON while preserving notebook metadata where possible. Can inspect images.
+- Reading a directory path returns a depth-limited dirent listing.
+{{#if IS_HL_MODE}}
+- Reading a file with an explicit selector returns lines prefixed with `line+hash` anchors: `41th|def alpha():`. The 2-char hash is a content fingerprint that `edit` / `apply_patch` consume — copy it verbatim, NEVER fabricate.
+{{else}}
+{{#if IS_LINE_NUMBER_MODE}}
+- Reading a file with an explicit selector returns lines prefixed with line numbers: `41|def alpha():`.
+{{/if}}
+{{/if}}
+- Parseable code without a selector returns a **structural summary**: declarations kept, large bodies collapsed to `..` (merged brace pair) or `…` (standalone). Summarized output ends with a footer of the form:
 
-# Directories & Archives
+  `[NN lines across MM elided regions; read <path>:raw or a line range like <path>:1-9999 for verbatim content]`
 
-Directories and archive roots return a list of entries. Supports `.tar`, `.tar.gz`, `.tgz`, `.zip`. Use `archive.ext:path/inside/archive` to read contents, and append a selector to the archive entry such as `archive.zip:dir/file.ts:50-60`.
+  If the elided body is what you actually need, re-issue the **exact selector the footer names**. NEVER guess what's inside `..` / `…` — those markers carry no content.
 
-# SQLite Databases
+# Documents & Notebooks
+
+Extracts text from PDF, Word, PowerPoint, Excel, RTF, and EPUB. Notebooks (`.ipynb`) are shown as editable `# %% [type] cell:N` text; edits round-trip back to the underlying JSON preserving notebook metadata. Add `:raw` to a notebook to bypass the converter and read the JSON directly.
+
+# Images
+
+Reading an image path returns metadata (mime, bytes, dimensions, channels, alpha). For actual visual analysis, call `inspect_image` with the path and a question describing what to inspect.
+
+# Archives
+
+Supports `.tar`, `.tar.gz`, `.tgz`, `.zip`. Use `archive.ext:path/inside/archive` to read a member, and append a normal selector to the inner path: `archive.zip:dir/file.ts:50-60`.
+
+# SQLite
 
 For `.sqlite`, `.sqlite3`, `.db`, `.db3`:
 - `file.db` — list tables with row counts
@@ -52,13 +64,19 @@ For `.sqlite`, `.sqlite3`, `.db`, `.db3`:
 
 # URLs
 
-Extracts content from web pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom feeds, JSON endpoints, PDFs at URLs, and similar text-based resources. Returns clean reader-mode text/markdown — no browser required. Use a `:raw` suffix for untouched HTML. URL line selectors mirror the file form (`:50`, `:50-100`, `:50+150`, `:raw`). If a URL would otherwise look like `host:port`, add a trailing slash before the selector (e.g. `https://example.com/:80`).
-</instruction>
+- Default reader-mode: HTML pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom, JSON endpoints, PDFs → clean text/markdown.
+- `:raw` returns untouched HTML; line selectors (`:50`, `:50-100`, `:50+150`) paginate the cached fetched output.
+- Bare `host:port` URLs collide with the selector grammar — add a trailing slash before the selector: `https://example.com/:80`.
+
+# Internal URIs
+
+`skill://<name>`, `agent://<id>`, `artifact://<id>`, `memory://root`, `rule://<name>`, `local://<name>.md`, `mcp://<uri>` resolve transparently and accept the same line selectors as filesystem paths. Use `artifact://<id>` to recover full output that a previous bash/eval/tool result spilled or truncated.
 
 <critical>
-- You MUST use `read` for every file, directory, archive, and URL read. `cat`, `head`, `tail`, `less`, `more`, `ls`, `tar`, `unzip`, `curl`, and `wget` are **FORBIDDEN** for inspection — any such Bash call is a bug, regardless of how short or convenient it looks.
-- You MUST prefer `read` over a browser/puppeteer tool for fetching URL content; only use a browser if `read` fails to deliver reasonable content.
-- You MUST always include the `path` parameter — never call `read` with an empty argument object `{}`.
-- For specific line ranges, append the selector to `path` (e.g. `path="src/foo.ts:50-200"`, `path="src/foo.ts:50+150"`) — NEVER reach for `sed -n`, `awk NR`, or `head`/`tail` pipelines.
-- You MAY use path suffix selectors with URL reads; the tool paginates cached fetched output.
+- You MUST use `read` for every file, directory, archive, and URL inspection. `cat`, `head`, `tail`, `less`, `more`, `ls`, `tar`, `unzip`, `curl`, `wget` are FORBIDDEN — any such bash call is a bug, regardless of how short or convenient it looks.
+- You MUST prefer `read` over a browser/puppeteer tool for URL content; only reach for a browser when `read` cannot deliver reasonable content.
+- You MUST always include `path`. NEVER call `read` with `{}`.
+- For line ranges, append the selector to `path` (`path="src/foo.ts:50-200"`, `path="src/foo.ts:50+150"`). NEVER substitute `sed -n`, `awk NR`, or `head`/`tail` pipelines.
+- Summary footer says `read <path>:raw …`? Re-issue the exact selector it names. NEVER guess what's inside `..` / `…` markers — they carry no content.
+- You MAY combine selectors with URL reads and internal URIs; both paginate the cached resolved output.
 </critical>

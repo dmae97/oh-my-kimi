@@ -55,7 +55,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
   - URL fields: `url`, `finalUrl`, `contentType`, `method`, `notes`
   - `truncation`
   - `displayContent` (unprefixed text + starting line for TUI rendering)
-  - `summary` (`lines`, `elidedSpans`) for structural summaries
+  - `summary` (`lines`, `elidedSpans`, `elidedLines`) for structural summaries
   - `meta` from `packages/coding-agent/src/tools/output-meta.ts`
 - `details.meta.source` is set to the backing path, URL, or internal URL.
 - `details.meta.truncation` carries shown range, total lines/bytes, next offset, and optional `artifactId` for cached URL output.
@@ -95,7 +95,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 ### Local text files
 - No selector: if summarization is enabled and the file is small enough, `#trySummarize()` calls `summarizeCode()`.
   - Guards: file size `<= 2 MiB` (`MAX_SUMMARY_BYTES`), line count `<= 20_000` (`MAX_SUMMARY_LINES`).
-  - Summary output keeps selected declarations and replaces elided spans with `...`.
+  - Summary output keeps selected declarations and replaces elided spans with `...`. When at least one span is elided, the text content ends with a footer like `[NN lines across MM elided regions; read <path>:raw or a line range like <path>:1-9999 for verbatim content]` so the agent has a concrete recovery selector instead of a bare marker.
   - When an elided block sits between matching brace lines, `#renderSummary()` may merge them into one anchored line rather than emitting separate opener/closer lines.
 - Explicit selector or summarization miss: streamed text read.
   - Default open-ended limit is `min(session setting read.defaultLimit, DEFAULT_MAX_LINES)`.

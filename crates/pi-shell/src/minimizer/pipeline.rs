@@ -472,12 +472,12 @@ on_empty = "demo: ok"
 [[tests.demo]]
 name = "basic"
 input = "\u001b[31mfirst\u001b[0m\nDownloading foo\nA_really_long_line_indeed\n"
-expected = "first\nA_really_l\u2026\n"
+expected = "first\nA_really_l\u2026[+15]\n"
 "#;
 		let pipeline = compile_one(src);
 		let out =
 			pipeline.apply("\u{1b}[31mfirst\u{1b}[0m\nDownloading foo\nA_really_long_line_indeed\n");
-		assert_eq!(out.as_ref(), "first\nA_really_l\u{2026}\n");
+		assert_eq!(out.as_ref(), "first\nA_really_l\u{2026}[+15]\n");
 	}
 
 	#[test]

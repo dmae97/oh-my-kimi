@@ -172,6 +172,19 @@ function countTextLines(text: string): number {
 	if (text.length === 0) return 0;
 	return text.split("\n").length;
 }
+
+/**
+ * Footer appended to summarized reads telling the model how to recover the
+ * elided body. Without this hint, agents either ignore the `...`/`{ .. }`
+ * markers or burn a turn guessing the right selector (see issue #1046).
+ */
+function formatSummaryElisionFooter(readPath: string, elidedSpans: number, elidedLines: number): string {
+	if (elidedSpans <= 0) return "";
+	const spanWord = elidedSpans === 1 ? "region" : "regions";
+	const lineWord = elidedLines === 1 ? "line" : "lines";
+	const linePart = elidedLines > 0 ? `${elidedLines} ${lineWord} across ` : "";
+	return `[${linePart}${elidedSpans} elided ${spanWord}; read ${readPath}:raw or a line range like ${readPath}:1-9999 for verbatim content]`;
+}
 const READ_CHUNK_SIZE = 8 * 1024;
 
 /**
@@ -484,7 +497,7 @@ export interface ReadToolDetails {
 	 * Mirrors the same lines the model receives but without hashline/line-number prefixes,
 	 * so the TUI can render the file content with its own gutter without re-parsing the formatted text. */
 	displayContent?: { text: string; startLine: number };
-	summary?: { lines: number; elidedSpans: number };
+	summary?: { lines: number; elidedSpans: number; elidedLines: number };
 	/** Number of unresolved git conflicts surfaced by this read (TUI uses for inline `⚠ N` badge). */
 	conflictCount?: number;
 }
@@ -1317,6 +1330,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		text: string;
 		displayText: string;
 		elidedSpans: number;
+		elidedLines: number;
 	} {
 		const displayMode = resolveFileDisplayMode(this.session);
 		const shouldAddHashLines = displayMode.hashLines;
@@ -1377,11 +1391,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const modelParts: string[] = [];
 		const displayParts: string[] = [];
 		let elidedSpans = 0;
+		let elidedLines = 0;
 		for (const unit of units) {
 			if (unit.kind === "elided") {
 				modelParts.push("...");
 				displayParts.push("...");
 				elidedSpans++;
+				elidedLines += unit.endLine - unit.startLine + 1;
 				continue;
 			}
 			if (unit.kind === "merged") {
@@ -1396,13 +1412,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				modelParts.push(formatted.model);
 				displayParts.push(formatted.display);
 				elidedSpans++;
+				// Merged brace pair encloses (start+1)..(end-1) as elided.
+				elidedLines += Math.max(0, unit.endLine - unit.startLine - 1);
 				continue;
 			}
 			modelParts.push(formatSingleLine(unit.line, unit.text, shouldAddHashLines, shouldAddLineNumbers));
 			displayParts.push(unit.text);
 		}
 
-		return { text: modelParts.join("\n"), displayText: displayParts.join("\n"), elidedSpans };
+		return { text: modelParts.join("\n"), displayText: displayParts.join("\n"), elidedSpans, elidedLines };
 	}
 
 	async execute(
@@ -1646,16 +1664,23 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				const summary = await this.#trySummarize(absolutePath, fileSize, signal);
 				if (summary?.parsed && summary.elided) {
 					const renderedSummary = this.#renderSummary(summary);
+					const footer = formatSummaryElisionFooter(
+						localReadPath,
+						renderedSummary.elidedSpans,
+						renderedSummary.elidedLines,
+					);
+					const modelText = footer ? `${renderedSummary.text}\n\n${footer}` : renderedSummary.text;
 					details = {
 						displayContent: { text: renderedSummary.displayText, startLine: 1 },
 						summary: {
 							lines: countTextLines(renderedSummary.text),
 							elidedSpans: renderedSummary.elidedSpans,
+							elidedLines: renderedSummary.elidedLines,
 						},
 					};
 
 					sourcePath = absolutePath;
-					content = [{ type: "text", text: renderedSummary.text }];
+					content = [{ type: "text", text: modelText }];
 				}
 			}
 

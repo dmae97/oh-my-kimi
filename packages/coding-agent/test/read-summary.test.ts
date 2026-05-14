@@ -239,4 +239,41 @@ describe("read summary", () => {
 		expect(text).toContain("\n...\n");
 		expect(text).not.toContain(" .. ");
 	});
+
+	it("appends an elision footer that names the path and `:raw` recovery selector", async () => {
+		// Regression for issue #1046: summarized reads must tell the model how
+		// to recover the elided body so it does not stall on `...` / `{ .. }`
+		// markers and burn a turn guessing the selector.
+		const fixture = path.join(tmpDir, "footer.ts");
+		await fs.writeFile(
+			fixture,
+			"export function alpha(value: string): string {\n\tconst clean = value.trim();\n\tconst label = clean || 'alpha';\n\treturn label.toUpperCase();\n}\n\nexport function beta(): number {\n\tconst one = 1;\n\tconst two = 2;\n\treturn one + two;\n}\n",
+		);
+
+		const tool = new ReadTool(createSession(tmpDir));
+		const result = await tool.execute("read-summary-footer", { path: fixture });
+		const text = textOutput(result);
+
+		expect(result.details?.summary?.elidedSpans).toBe(2);
+		expect(result.details?.summary?.elidedLines).toBeGreaterThan(0);
+		expect(text).toContain("elided regions");
+		expect(text).toContain(`${fixture}:raw`);
+		expect(text).toContain(`${fixture}:1-9999`);
+		// Footer must be the LAST block of output so the recovery hint sits
+		// next to the structural summary it describes.
+		expect(text.trimEnd().endsWith("for verbatim content]")).toBe(true);
+	});
+
+	it("does not append a footer when the file has no elision", async () => {
+		const fixture = path.join(tmpDir, "noelide.ts");
+		await fs.writeFile(fixture, "export const x = 1;\n");
+
+		const tool = new ReadTool(createSession(tmpDir));
+		const result = await tool.execute("read-summary-no-footer", { path: fixture });
+		const text = textOutput(result);
+
+		expect(text).not.toContain("elided regions");
+		expect(text).not.toContain(":raw");
+		expect(result.details?.summary).toBeUndefined();
+	});
 });
