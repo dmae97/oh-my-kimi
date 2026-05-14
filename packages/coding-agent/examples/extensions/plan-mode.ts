@@ -334,7 +334,6 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		}
 
 		// Remove any previous plan-mode-context messages
-		const _beforeCount = event.messages.length;
 		const filtered = event.messages.filter(m => {
 			if (m.role === "user" && Array.isArray(m.content)) {
 				const hasOldContext = m.content.some(

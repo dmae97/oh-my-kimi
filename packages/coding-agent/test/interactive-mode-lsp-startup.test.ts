@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../src/config/model-registry";
@@ -37,7 +37,7 @@ describe("InteractiveMode LSP startup welcome banner", () => {
 			vi.spyOn(process.stdin, "setRawMode").mockReturnValue(process.stdin);
 		}
 
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-interactive-mode-lsp-startup-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
@@ -77,7 +77,7 @@ describe("InteractiveMode LSP startup welcome banner", () => {
 		await session?.dispose();
 		authStorage?.close();
 		tempDir?.removeSync();
-		_resetSettingsForTest();
+		resetSettingsForTest();
 	});
 
 	it("updates the welcome banner when startup warmup completes", async () => {

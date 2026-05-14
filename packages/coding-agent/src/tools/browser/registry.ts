@@ -26,10 +26,6 @@ export interface BrowserHandle {
 
 const browsers = new Map<string, BrowserHandle>();
 
-export function listBrowsers(): BrowserHandle[] {
-	return [...browsers.values()];
-}
-
 function browserKey(kind: BrowserKind): string {
 	switch (kind.kind) {
 		case "headless":
@@ -166,7 +162,7 @@ export async function releaseBrowser(handle: BrowserHandle, opts: { kill: boolea
 	}
 }
 
-export async function disposeBrowserHandle(handle: BrowserHandle, opts: { kill: boolean }): Promise<void> {
+async function disposeBrowserHandle(handle: BrowserHandle, opts: { kill: boolean }): Promise<void> {
 	if (handle.kind.kind === "headless") {
 		if (handle.browser.connected) {
 			try {

@@ -4,11 +4,17 @@
  */
 
 import { sanitizeText } from "@oh-my-pi/pi-natives";
-import { Container, Loader, Spacer, Text, type TUI } from "@oh-my-pi/pi-tui";
-import { getSymbolTheme, highlightCode, theme } from "../../modes/theme/theme";
-import { formatTruncationMetaNotice, type TruncationMeta } from "../../tools/output-meta";
-import { DynamicBorder } from "./dynamic-border";
-import { truncateToVisualLines } from "./visual-truncate";
+import { Container, type Loader, Text, type TUI } from "@oh-my-pi/pi-tui";
+import { highlightCode, theme } from "../../modes/theme/theme";
+import type { TruncationMeta } from "../../tools/output-meta";
+import {
+	buildExecutionFrame,
+	buildStatusFooter,
+	createCollapsedPreview,
+	type ExecutionColorKey,
+	type ExecutionStatus,
+	resolveExecutionStatus,
+} from "./execution-shared";
 
 const PREVIEW_LINES = 20;
 const MAX_DISPLAY_LINE_CHARS = 4000;
@@ -17,7 +23,7 @@ export type EvalExecutionLanguage = "python" | "js";
 
 export class EvalExecutionComponent extends Container {
 	#outputLines: string[] = [];
-	#status: "running" | "complete" | "cancelled" | "error" = "running";
+	#status: ExecutionStatus = "running";
 	#exitCode: number | undefined = undefined;
 	#loader: Loader;
 	#truncation?: TruncationMeta;
@@ -28,7 +34,7 @@ export class EvalExecutionComponent extends Container {
 		return this.language === "js" ? "javascript" : "python";
 	}
 
-	#formatHeader(colorKey: "dim" | "pythonMode"): Text {
+	#formatHeader(colorKey: ExecutionColorKey): Text {
 		const prompt = theme.fg(colorKey, theme.bold(">>>"));
 		const continuation = theme.fg(colorKey, "    ");
 		const codeLines = highlightCode(this.code, this.#highlightLang());
@@ -46,26 +52,13 @@ export class EvalExecutionComponent extends Container {
 	) {
 		super();
 
-		const colorKey = this.excludeFromContext ? "dim" : "pythonMode";
-		const borderColor = (str: string) => theme.fg(colorKey, str);
+		const colorKey: ExecutionColorKey = this.excludeFromContext ? "dim" : "pythonMode";
+		const { contentContainer, loader } = buildExecutionFrame(this, ui, colorKey);
+		this.#contentContainer = contentContainer;
+		this.#loader = loader;
 
-		this.addChild(new Spacer(1));
-		this.addChild(new DynamicBorder(borderColor));
-
-		this.#contentContainer = new Container();
-		this.addChild(this.#contentContainer);
 		this.#contentContainer.addChild(this.#formatHeader(colorKey));
-
-		this.#loader = new Loader(
-			ui,
-			spinner => theme.fg(colorKey, spinner),
-			text => theme.fg("muted", text),
-			`Running… (esc to cancel)`,
-			getSymbolTheme().spinnerFrames,
-		);
 		this.#contentContainer.addChild(this.#loader);
-
-		this.addChild(new DynamicBorder(borderColor));
 	}
 
 	setExpanded(expanded: boolean): void {
@@ -99,11 +92,7 @@ export class EvalExecutionComponent extends Container {
 		options?: { output?: string; truncation?: TruncationMeta },
 	): void {
 		this.#exitCode = exitCode;
-		this.#status = cancelled
-			? "cancelled"
-			: exitCode !== 0 && exitCode !== undefined && exitCode !== null
-				? "error"
-				: "complete";
+		this.#status = resolveExecutionStatus(exitCode, cancelled);
 		this.#truncation = options?.truncation;
 		if (options?.output !== undefined) {
 			this.#setOutput(options.output);
@@ -120,7 +109,7 @@ export class EvalExecutionComponent extends Container {
 
 		this.#contentContainer.clear();
 
-		const colorKey = this.excludeFromContext ? "dim" : "pythonMode";
+		const colorKey: ExecutionColorKey = this.excludeFromContext ? "dim" : "pythonMode";
 		this.#contentContainer.addChild(this.#formatHeader(colorKey));
 
 		if (availableLines.length > 0) {
@@ -129,39 +118,20 @@ export class EvalExecutionComponent extends Container {
 				this.#contentContainer.addChild(new Text(`\n${displayText}`, 1, 0));
 			} else {
 				const styledOutput = previewLogicalLines.map(line => theme.fg("muted", line)).join("\n");
-				const previewText = `\n${styledOutput}`;
-				this.#contentContainer.addChild({
-					render: (width: number) => {
-						const { visualLines } = truncateToVisualLines(previewText, PREVIEW_LINES, width, 1);
-						return visualLines;
-					},
-					invalidate: () => {},
-				});
+				this.#contentContainer.addChild(createCollapsedPreview(`\n${styledOutput}`, PREVIEW_LINES));
 			}
 		}
 
 		if (this.#status === "running") {
 			this.#contentContainer.addChild(this.#loader);
 		} else {
-			const statusParts: string[] = [];
-
-			if (hiddenLineCount > 0) {
-				statusParts.push(theme.fg("dim", `… ${hiddenLineCount} more lines (ctrl+o to expand)`));
-			}
-
-			if (this.#status === "cancelled") {
-				statusParts.push(theme.fg("warning", "(cancelled)"));
-			} else if (this.#status === "error") {
-				statusParts.push(theme.fg("error", `(exit ${this.#exitCode})`));
-			}
-
-			if (this.#truncation) {
-				statusParts.push(theme.fg("warning", formatTruncationMetaNotice(this.#truncation)));
-			}
-
-			if (statusParts.length > 0) {
-				this.#contentContainer.addChild(new Text(`\n${statusParts.join("\n")}`, 1, 0));
-			}
+			const footer = buildStatusFooter({
+				status: this.#status,
+				exitCode: this.#exitCode,
+				truncation: this.#truncation,
+				hiddenLineCount,
+			});
+			if (footer) this.#contentContainer.addChild(footer);
 		}
 	}
 

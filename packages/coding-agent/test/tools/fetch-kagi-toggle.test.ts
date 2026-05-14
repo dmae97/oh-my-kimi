@@ -435,7 +435,7 @@ describe("read tool URL handling", () => {
 		const pageUrl = "https://bun.com/reference/bun/UnixSocketOptions";
 		const pageHtml = "<html><body><main><h1>UnixSocketOptions</h1><p>Page-specific docs.</p></main></body></html>";
 		const renderedMarkdown = `# UnixSocketOptions\n\n${"Page-specific API docs. ".repeat(8)}`;
-		using _missingSystemPython = withMissingSystemPython();
+		using missingSystemPython = withMissingSystemPython();
 		const loadPageSpy = vi.spyOn(scrapers, "loadPage").mockImplementation(async (requestedUrl: string) => {
 			if (requestedUrl === pageUrl) {
 				return {
@@ -475,7 +475,7 @@ describe("read tool URL handling", () => {
 				content: "",
 			};
 		});
-		using _hook = hookFetch(() => new Response("blocked", { status: 500, statusText: "Blocked" }));
+		using hook = hookFetch(() => new Response("blocked", { status: 500, statusText: "Blocked" }));
 		vi.spyOn(toolsManager, "ensureTool").mockResolvedValue(undefined);
 		vi.spyOn(natives, "htmlToMarkdown").mockResolvedValue(renderedMarkdown);
 
@@ -489,6 +489,8 @@ describe("read tool URL handling", () => {
 		expect(requestedUrls).not.toContain("https://bun.com/.well-known/llms.txt");
 		expect(requestedUrls).not.toContain("https://bun.com/llms.txt");
 		expect(requestedUrls).not.toContain("https://bun.com/llms.md");
+		void missingSystemPython;
+		void hook;
 	});
 
 	it("uses section-scoped llms.txt fallback without requesting the site-wide file", async () => {
@@ -497,8 +499,8 @@ describe("read tool URL handling", () => {
 		const pageUrl = "https://example.com/docs/reference/widget";
 		const pageHtml = "<html><body><nav>Docs</nav><main><h1>Widget</h1></main></body></html>";
 		const lowQualityRender = `${"Please enable JavaScript to view this page.\n".repeat(6)}${"navigation\n".repeat(4)}`;
-		using _missingSystemPython = withMissingSystemPython();
-		const _execSpy = vi.spyOn(ptree, "exec").mockResolvedValue({ ok: true, stdout: lowQualityRender } as never);
+		using missingSystemPython = withMissingSystemPython();
+		vi.spyOn(ptree, "exec").mockResolvedValue({ ok: true, stdout: lowQualityRender } as never);
 		const loadPageSpy = vi.spyOn(scrapers, "loadPage").mockImplementation(async (requestedUrl: string) => {
 			if (requestedUrl === pageUrl) {
 				return {
@@ -555,7 +557,7 @@ describe("read tool URL handling", () => {
 				content: "",
 			};
 		});
-		using _hook = hookFetch(() => new Response("blocked", { status: 500, statusText: "Blocked" }));
+		using hook = hookFetch(() => new Response("blocked", { status: 500, statusText: "Blocked" }));
 		vi.spyOn(toolsManager, "ensureTool").mockResolvedValue("/usr/bin/trafilatura");
 
 		const result = await tool.execute("fetch-section-llms", { path: pageUrl });
@@ -570,6 +572,8 @@ describe("read tool URL handling", () => {
 		expect(requestedUrls).not.toContain("https://example.com/.well-known/llms.txt");
 		expect(requestedUrls).not.toContain("https://example.com/llms.txt");
 		expect(requestedUrls).not.toContain("https://example.com/llms.md");
+		void missingSystemPython;
+		void hook;
 	});
 	it("prefers Parallel extract before other HTML renderers when configured", async () => {
 		process.env.PARALLEL_API_KEY = "test-parallel-key";
@@ -608,7 +612,7 @@ describe("read tool URL handling", () => {
 				content: "",
 			};
 		});
-		using _hook = hookFetch(input => {
+		using parallelExtractHook = hookFetch(input => {
 			const requestedUrl = String(input);
 			if (requestedUrl === "https://api.parallel.ai/v1beta/extract") {
 				return new Response(
@@ -645,6 +649,7 @@ describe("read tool URL handling", () => {
 		expect(textBlock?.text).toContain("Parallel-rendered content");
 		expect(ensureToolSpy).not.toHaveBeenCalled();
 		expect(htmlToMarkdownSpy).not.toHaveBeenCalled();
+		void parallelExtractHook;
 	});
 
 	it("reuses cached output for repeated plain URL reads", async () => {

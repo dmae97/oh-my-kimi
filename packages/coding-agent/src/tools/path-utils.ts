@@ -3,6 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import { InternalUrlRouter } from "../internal-urls";
+import { ToolError } from "./tool-errors";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const FILE_LINE_RANGE_RE = /^(?:L?\d+(?:[-+]L?\d+)?|raw|conflicts)$/i;
@@ -566,4 +568,125 @@ export function resolveReadPath(filePath: string, cwd: string): string {
 	}
 
 	return resolved;
+}
+
+// =============================================================================
+// Tool-scope resolution (search/ast tools)
+// =============================================================================
+
+export interface ToolScopeOptions {
+	rawPaths: string[];
+	cwd: string;
+	/** Verb used in the "Cannot {action} internal URL without a backing file: …" message. */
+	internalUrlAction: string;
+	/** Collect absolute paths flagged immutable by their internal-URL handler. */
+	trackImmutableSources?: boolean;
+	/** Honor `exactFilePaths` from {@link resolveExplicitSearchPaths} (search-only). */
+	surfaceExactFilePaths?: boolean;
+	/** Extra hint appended to "Path not found" when stat fails and the user supplied multiple paths. */
+	multipathStatHint?: string;
+}
+
+export interface ToolScopeResolution {
+	searchPath: string;
+	scopePath: string;
+	globFilter: string | undefined;
+	isDirectory: boolean;
+	multiTargets?: ResolvedSearchTarget[];
+	exactFilePaths?: string[];
+	missingPaths: string[];
+	immutableSourcePaths: Set<string>;
+}
+
+/**
+ * Shared path-input pipeline for `search`, `ast_grep`, and `ast_edit`:
+ *  1. normalize + reject empty paths,
+ *  2. resolve internal URLs through {@link InternalUrlRouter} to backing files,
+ *  3. partition existing vs missing when multiple paths are supplied,
+ *  4. derive a single search base path / glob, or a multi-target list,
+ *  5. stat the resolved base path so callers can branch on directory vs file scope.
+ */
+export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<ToolScopeResolution> {
+	const { rawPaths: inputs, cwd, internalUrlAction } = opts;
+	const rawPaths = inputs.map(normalizePathLikeInput);
+	if (rawPaths.some(rawPath => rawPath.length === 0)) {
+		throw new ToolError("`paths` must contain non-empty paths or globs");
+	}
+	const internalRouter = InternalUrlRouter.instance();
+	const resolvedPathInputs: string[] = [];
+	const immutableSourcePaths = new Set<string>();
+	for (const rawPath of rawPaths) {
+		if (!internalRouter.canHandle(rawPath)) {
+			resolvedPathInputs.push(rawPath);
+			continue;
+		}
+		if (hasGlobPathChars(rawPath)) {
+			throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
+		}
+		const resource = await internalRouter.resolve(rawPath);
+		if (!resource.sourcePath) {
+			throw new ToolError(`Cannot ${internalUrlAction} internal URL without a backing file: ${rawPath}`);
+		}
+		if (opts.trackImmutableSources && resource.immutable) {
+			immutableSourcePaths.add(path.resolve(resource.sourcePath));
+		}
+		resolvedPathInputs.push(resource.sourcePath);
+	}
+
+	let missingPaths: string[] = [];
+	let effectivePaths = resolvedPathInputs;
+	if (resolvedPathInputs.length > 1) {
+		const partition = await partitionExistingPaths(resolvedPathInputs, cwd, parseSearchPath);
+		if (partition.valid.length === 0) {
+			throw new ToolError(`Path not found: ${partition.missing.join(", ")}`);
+		}
+		effectivePaths = partition.valid;
+		missingPaths = partition.missing;
+	}
+
+	let searchPath: string;
+	let scopePath: string;
+	let globFilter: string | undefined;
+	let multiTargets: ResolvedSearchTarget[] | undefined;
+	let exactFilePaths: string[] | undefined;
+	if (effectivePaths.length === 1) {
+		const parsedPath = parseSearchPath(effectivePaths[0] ?? ".");
+		searchPath = resolveToCwd(parsedPath.basePath, cwd);
+		globFilter = parsedPath.glob;
+		scopePath = formatPathRelativeToCwd(searchPath, cwd);
+	} else {
+		const multiSearchPath = await resolveExplicitSearchPaths(effectivePaths, cwd);
+		if (!multiSearchPath) {
+			throw new ToolError("`paths` must contain at least one path or glob");
+		}
+		searchPath = multiSearchPath.basePath;
+		multiTargets = multiSearchPath.targets;
+		if (opts.surfaceExactFilePaths) {
+			exactFilePaths = multiSearchPath.exactFilePaths;
+			globFilter = exactFilePaths || multiTargets ? undefined : multiSearchPath.glob;
+		} else {
+			globFilter = multiTargets ? undefined : multiSearchPath.glob;
+		}
+		scopePath = multiSearchPath.scopePath;
+	}
+
+	let isDirectory: boolean;
+	try {
+		const stat = await Bun.file(searchPath).stat();
+		isDirectory = stat.isDirectory();
+	} catch {
+		const hint = opts.multipathStatHint && rawPaths.length > 1 ? opts.multipathStatHint : "";
+		throw new ToolError(`Path not found: ${scopePath}${hint}`);
+	}
+
+	return {
+		searchPath,
+		scopePath,
+		globFilter,
+		isDirectory,
+		multiTargets,
+		exactFilePaths,
+		missingPaths,
+		immutableSourcePaths,
+	};
 }

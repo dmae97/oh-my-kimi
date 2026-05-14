@@ -27,7 +27,7 @@ export function pushAlphaThenDoneEvent(
 	}
 }
 
-export function createUsage(): Usage {
+function createUsage(): Usage {
 	return {
 		input: 0,
 		output: 0,

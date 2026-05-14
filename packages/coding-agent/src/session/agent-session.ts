@@ -4684,8 +4684,6 @@ export class AgentSession {
 
 			let hookCompaction: CompactionResult | undefined;
 			let fromExtension = false;
-			let hookContext: string[] | undefined;
-			let hookPrompt: string | undefined;
 			let preserveData: Record<string, unknown> | undefined;
 
 			if (this.#extensionRunner?.hasHandlers("session_before_compact")) {
@@ -4707,23 +4705,7 @@ export class AgentSession {
 				}
 			}
 
-			if (!hookCompaction && this.#extensionRunner?.hasHandlers("session.compacting")) {
-				const compactMessages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
-				const result = (await this.#extensionRunner.emit({
-					type: "session.compacting",
-					sessionId: this.sessionId,
-					messages: compactMessages,
-				})) as { context?: string[]; prompt?: string; preserveData?: Record<string, unknown> } | undefined;
-
-				hookContext = result?.context;
-				hookPrompt = result?.prompt;
-				preserveData = result?.preserveData;
-			}
-
-			const memoryBackendContext = await this.#collectMemoryBackendContext(preparation);
-			if (memoryBackendContext) {
-				hookContext = hookContext ? [...hookContext, memoryBackendContext] : [memoryBackendContext];
-			}
+			const compactionPrep = await this.#prepareCompactionFromHooks(preparation, hookCompaction);
 
 			let summary: string;
 			let shortSummary: string | undefined;
@@ -4731,14 +4713,13 @@ export class AgentSession {
 			let tokensBefore: number;
 			let details: unknown;
 
-			if (hookCompaction) {
-				// Extension provided compaction content
-				summary = hookCompaction.summary;
-				shortSummary = hookCompaction.shortSummary;
-				firstKeptEntryId = hookCompaction.firstKeptEntryId;
-				tokensBefore = hookCompaction.tokensBefore;
-				details = hookCompaction.details;
-				preserveData ??= hookCompaction.preserveData;
+			if (compactionPrep.kind === "fromHook") {
+				summary = compactionPrep.summary;
+				shortSummary = compactionPrep.shortSummary;
+				firstKeptEntryId = compactionPrep.firstKeptEntryId;
+				tokensBefore = compactionPrep.tokensBefore;
+				details = compactionPrep.details;
+				preserveData = compactionPrep.preserveData;
 			} else {
 				// Generate compaction result. Only convert known abort-shaped
 				// rejections (AbortError raised while the abort signal is set,
@@ -4757,8 +4738,8 @@ export class AgentSession {
 						customInstructions,
 						compactionAbortController.signal,
 						{
-							promptOverride: hookPrompt,
-							extraContext: hookContext,
+							promptOverride: compactionPrep.hookPrompt,
+							extraContext: compactionPrep.hookContext,
 							remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
 						},
 					);
@@ -4767,7 +4748,7 @@ export class AgentSession {
 					firstKeptEntryId = result.firstKeptEntryId;
 					tokensBefore = result.tokensBefore;
 					details = result.details;
-					preserveData = { ...(preserveData ?? {}), ...(result.preserveData ?? {}) };
+					preserveData = { ...(compactionPrep.preserveData ?? {}), ...(result.preserveData ?? {}) };
 				} catch (err) {
 					if (err instanceof CompactionCancelledError) {
 						throw err;
@@ -5727,6 +5708,64 @@ export class AgentSession {
 		throw this.#buildCompactionAuthError();
 	}
 
+	async #prepareCompactionFromHooks(
+		preparation: CompactionPreparation,
+		hookCompaction: CompactionResult | undefined,
+	): Promise<
+		| {
+				kind: "fromHook";
+				summary: string;
+				shortSummary: string | undefined;
+				firstKeptEntryId: string;
+				tokensBefore: number;
+				details: unknown;
+				preserveData: Record<string, unknown> | undefined;
+		  }
+		| {
+				kind: "needsLlm";
+				hookContext: string[] | undefined;
+				hookPrompt: string | undefined;
+				preserveData: Record<string, unknown> | undefined;
+		  }
+	> {
+		let hookContext: string[] | undefined;
+		let hookPrompt: string | undefined;
+		let preserveData: Record<string, unknown> | undefined;
+
+		if (!hookCompaction && this.#extensionRunner?.hasHandlers("session.compacting")) {
+			const compactMessages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
+			const result = (await this.#extensionRunner.emit({
+				type: "session.compacting",
+				sessionId: this.sessionId,
+				messages: compactMessages,
+			})) as { context?: string[]; prompt?: string; preserveData?: Record<string, unknown> } | undefined;
+
+			hookContext = result?.context;
+			hookPrompt = result?.prompt;
+			preserveData = result?.preserveData;
+		}
+
+		const memoryBackendContext = await this.#collectMemoryBackendContext(preparation);
+		if (memoryBackendContext) {
+			hookContext = hookContext ? [...hookContext, memoryBackendContext] : [memoryBackendContext];
+		}
+
+		if (hookCompaction) {
+			preserveData ??= hookCompaction.preserveData;
+			return {
+				kind: "fromHook",
+				summary: hookCompaction.summary,
+				shortSummary: hookCompaction.shortSummary,
+				firstKeptEntryId: hookCompaction.firstKeptEntryId,
+				tokensBefore: hookCompaction.tokensBefore,
+				details: hookCompaction.details,
+				preserveData,
+			};
+		}
+
+		return { kind: "needsLlm", hookContext, hookPrompt, preserveData };
+	}
+
 	/**
 	 * Internal: Run auto-compaction with events.
 	 */
@@ -5848,8 +5887,6 @@ export class AgentSession {
 
 			let hookCompaction: CompactionResult | undefined;
 			let fromExtension = false;
-			let hookContext: string[] | undefined;
-			let hookPrompt: string | undefined;
 			let preserveData: Record<string, unknown> | undefined;
 
 			if (this.#extensionRunner?.hasHandlers("session_before_compact")) {
@@ -5878,23 +5915,7 @@ export class AgentSession {
 				}
 			}
 
-			if (!hookCompaction && this.#extensionRunner?.hasHandlers("session.compacting")) {
-				const compactMessages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
-				const result = (await this.#extensionRunner.emit({
-					type: "session.compacting",
-					sessionId: this.sessionId,
-					messages: compactMessages,
-				})) as { context?: string[]; prompt?: string; preserveData?: Record<string, unknown> } | undefined;
-
-				hookContext = result?.context;
-				hookPrompt = result?.prompt;
-				preserveData = result?.preserveData;
-			}
-
-			const memoryBackendContext = await this.#collectMemoryBackendContext(preparation);
-			if (memoryBackendContext) {
-				hookContext = hookContext ? [...hookContext, memoryBackendContext] : [memoryBackendContext];
-			}
+			const compactionPrep = await this.#prepareCompactionFromHooks(preparation, hookCompaction);
 
 			let summary: string;
 			let shortSummary: string | undefined;
@@ -5902,14 +5923,13 @@ export class AgentSession {
 			let tokensBefore: number;
 			let details: unknown;
 
-			if (hookCompaction) {
-				// Extension provided compaction content
-				summary = hookCompaction.summary;
-				shortSummary = hookCompaction.shortSummary;
-				firstKeptEntryId = hookCompaction.firstKeptEntryId;
-				tokensBefore = hookCompaction.tokensBefore;
-				details = hookCompaction.details;
-				preserveData ??= hookCompaction.preserveData;
+			if (compactionPrep.kind === "fromHook") {
+				summary = compactionPrep.summary;
+				shortSummary = compactionPrep.shortSummary;
+				firstKeptEntryId = compactionPrep.firstKeptEntryId;
+				tokensBefore = compactionPrep.tokensBefore;
+				details = compactionPrep.details;
+				preserveData = compactionPrep.preserveData;
 			} else {
 				const candidates = this.#getCompactionModelCandidates(availableModels);
 				const retrySettings = this.settings.getGroup("retry");
@@ -5924,8 +5944,8 @@ export class AgentSession {
 					while (true) {
 						try {
 							compactResult = await compact(preparation, candidate, apiKey, undefined, autoCompactionSignal, {
-								promptOverride: hookPrompt,
-								extraContext: hookContext,
+								promptOverride: compactionPrep.hookPrompt,
+								extraContext: compactionPrep.hookContext,
 								remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
 								metadata: this.agent.metadataForProvider(candidate.provider),
 								initiatorOverride: "agent",
@@ -6003,7 +6023,7 @@ export class AgentSession {
 				firstKeptEntryId = compactResult.firstKeptEntryId;
 				tokensBefore = compactResult.tokensBefore;
 				details = compactResult.details;
-				preserveData = { ...(preserveData ?? {}), ...(compactResult.preserveData ?? {}) };
+				preserveData = { ...(compactionPrep.preserveData ?? {}), ...(compactResult.preserveData ?? {}) };
 			}
 
 			if (autoCompactionSignal.aborted) {

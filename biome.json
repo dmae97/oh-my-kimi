@@ -7,10 +7,16 @@
 	},
 	"linter": {
 		"enabled": true,
+		"includes": ["**"],
 		"rules": {
 			"recommended": true,
+			"a11y": "off",
 			"correctness": {
 				"noUnusedImports": "error",
+				"noUnusedVariables": {
+					"level": "warn",
+					"fix": "none"
+				},
 				"noVoidTypeReturn": "off"
 			},
 			"style": {

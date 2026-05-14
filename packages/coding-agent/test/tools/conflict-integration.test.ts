@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ConflictHistory } from "@oh-my-pi/pi-coding-agent/tools/conflict-detect";
 
@@ -69,7 +69,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 	let tempDir: string;
 
 	beforeAll(async () => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
 	});
 
@@ -295,7 +295,7 @@ describe("write resolves conflicts via conflict://N", () => {
 	let tempDir: string;
 
 	beforeAll(async () => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
 	});
 

@@ -64,7 +64,7 @@ type _CheckExhaustive =
 			? true
 			: ["ApiOptionsMap is missing some KnownApi values", Exclude<KnownApi, keyof ApiOptionsMap>]
 		: ["ApiOptionsMap doesn't extend Record<KnownApi, StreamOptions>"];
-const _exhaustive: _CheckExhaustive = true;
+true satisfies _CheckExhaustive;
 export type OptionsForApi<TApi extends Api> =
 	| StreamOptions
 	| (TApi extends keyof ApiOptionsMap ? ApiOptionsMap[TApi] : never);

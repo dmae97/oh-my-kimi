@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Effort } from "@oh-my-pi/pi-ai";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getProjectAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 
@@ -14,7 +14,7 @@ describe("Settings", () => {
 
 	beforeEach(() => {
 		// Reset global singleton so each test gets a fresh instance
-		_resetSettingsForTest();
+		resetSettingsForTest();
 
 		// Use snowflake to isolate parallel test runs (SQLite files can't be shared)
 		testDir = path.join(os.tmpdir(), "test-settings-tmp", Snowflake.next());
@@ -103,7 +103,7 @@ describe("Settings", () => {
 			expect(workSettings.get("enabledModels")).toEqual(["claude-sonnet-4-5", "anthropic/claude-opus-4-5"]);
 			expect(workSettings.get("disabledProviders")).toEqual(["ollama", "openai"]);
 
-			_resetSettingsForTest();
+			resetSettingsForTest();
 			const privateSettings = await Settings.init({ cwd: privateDir, agentDir });
 			expect(privateSettings.get("enabledModels")).toEqual(["claude-sonnet-4-5", "openai/gpt-5.2-codex"]);
 			expect(privateSettings.get("disabledProviders")).toEqual(["ollama", "anthropic"]);

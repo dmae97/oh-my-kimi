@@ -29,17 +29,22 @@ import { ANTIGRAVITY_SYSTEM_INSTRUCTION, getAntigravityUserAgent, getGeminiCliHe
 import {
 	convertMessages,
 	convertTools,
+	type GoogleThinkingLevel,
 	isThinkingPart,
 	mapStopReasonString,
 	mapToolChoice,
+	nextToolCallId,
+	pushBlockEndEvent,
+	pushToolCallEvents,
 	retainThoughtSignature,
+	startTextOrThinkingBlock,
 } from "./google-shared";
 
 /**
- * Thinking level for Gemini 3 models.
- * Mirrors Google's ThinkingLevel enum values.
+ * Thinking level for Gemini 3 models. Re-exported from `google-shared` so existing
+ * `import { GoogleThinkingLevel } from "./google-gemini-cli"` callers keep working.
  */
-export type GoogleThinkingLevel = "THINKING_LEVEL_UNSPECIFIED" | "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
+export type { GoogleThinkingLevel };
 
 export interface GoogleGeminiCliOptions extends StreamOptions {
 	toolChoice?: "auto" | "none" | "any";
@@ -71,9 +76,6 @@ export {
 	getGeminiCliHeaders,
 	getGeminiCliUserAgent,
 } from "./google-gemini-headers";
-
-// Counter for generating unique tool call IDs
-let toolCallCounter = 0;
 
 // Retry configuration
 const MAX_RETRIES = 3;
@@ -426,37 +428,9 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 									(!isThinking && currentBlock.type !== "text")
 								) {
 									if (currentBlock) {
-										if (currentBlock.type === "text") {
-											stream.push({
-												type: "text_end",
-												contentIndex: blocks.length - 1,
-												content: currentBlock.text,
-												partial: output,
-											});
-										} else {
-											stream.push({
-												type: "thinking_end",
-												contentIndex: blockIndex(),
-												content: currentBlock.thinking,
-												partial: output,
-											});
-										}
+										pushBlockEndEvent(currentBlock, blockIndex(), output, stream);
 									}
-									if (isThinking) {
-										currentBlock = { type: "thinking", thinking: "", thinkingSignature: undefined };
-										output.content.push(currentBlock);
-										ensureStarted();
-										stream.push({
-											type: "thinking_start",
-											contentIndex: blockIndex(),
-											partial: output,
-										});
-									} else {
-										currentBlock = { type: "text", text: "" };
-										output.content.push(currentBlock);
-										ensureStarted();
-										stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
-									}
+									currentBlock = startTextOrThinkingBlock(isThinking, output, stream, ensureStarted);
 								}
 								if (currentBlock.type === "thinking") {
 									currentBlock.thinking += part.text;
@@ -488,30 +462,14 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 							if (part.functionCall) {
 								hasContent = true;
 								if (currentBlock) {
-									if (currentBlock.type === "text") {
-										stream.push({
-											type: "text_end",
-											contentIndex: blockIndex(),
-											content: currentBlock.text,
-											partial: output,
-										});
-									} else {
-										stream.push({
-											type: "thinking_end",
-											contentIndex: blockIndex(),
-											content: currentBlock.thinking,
-											partial: output,
-										});
-									}
+									pushBlockEndEvent(currentBlock, blockIndex(), output, stream);
 									currentBlock = null;
 								}
 
 								const providedId = part.functionCall.id;
 								const needsNewId =
 									!providedId || output.content.some(b => b.type === "toolCall" && b.id === providedId);
-								const toolCallId = needsNewId
-									? `${part.functionCall.name}_${Date.now()}_${++toolCallCounter}`
-									: providedId;
+								const toolCallId = needsNewId ? nextToolCallId(part.functionCall.name || "tool") : providedId;
 
 								const toolCall: ToolCall = {
 									type: "toolCall",
@@ -523,19 +481,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 
 								output.content.push(toolCall);
 								ensureStarted();
-								stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
-								stream.push({
-									type: "toolcall_delta",
-									contentIndex: blockIndex(),
-									delta: JSON.stringify(toolCall.arguments),
-									partial: output,
-								});
-								stream.push({
-									type: "toolcall_end",
-									contentIndex: blockIndex(),
-									toolCall,
-									partial: output,
-								});
+								pushToolCallEvents(toolCall, blockIndex(), output, stream);
 							}
 						}
 					}
@@ -572,21 +518,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				}
 
 				if (currentBlock) {
-					if (currentBlock.type === "text") {
-						stream.push({
-							type: "text_end",
-							contentIndex: blockIndex(),
-							content: currentBlock.text,
-							partial: output,
-						});
-					} else {
-						stream.push({
-							type: "thinking_end",
-							contentIndex: blockIndex(),
-							content: currentBlock.thinking,
-							partial: output,
-						});
-					}
+					pushBlockEndEvent(currentBlock, blockIndex(), output, stream);
 				}
 
 				return hasContent;

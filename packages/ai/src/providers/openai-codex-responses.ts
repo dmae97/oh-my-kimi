@@ -7,8 +7,6 @@ import type {
 	ResponseFunctionToolCall,
 	ResponseInput,
 	ResponseInputContent,
-	ResponseInputImage,
-	ResponseInputText,
 	ResponseOutputMessage,
 	ResponseReasoningItem,
 } from "openai/resources/responses/responses";
@@ -35,7 +33,6 @@ import {
 	createOpenAIResponsesHistoryPayload,
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
-	normalizeResponsesToolCallId,
 	normalizeSystemPrompts,
 } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
@@ -54,14 +51,15 @@ import {
 import { parseCodexError } from "./openai-codex/response-handler";
 import { normalizeOpenAIResponsesPromptCacheKey } from "./openai-responses";
 import {
+	appendResponsesToolResultMessages,
+	convertResponsesAssistantMessage,
 	convertResponsesInputContent,
 	encodeResponsesToolCallId,
 	encodeTextSignatureV1,
 	mapOpenAIResponsesStopReason,
-	parseTextSignature,
+	populateResponsesUsageFromResponse,
 } from "./openai-responses-shared";
 import { transformMessages } from "./transform-messages";
-import { joinTextWithImagePlaceholder } from "./vision-guard";
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
 	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -1233,19 +1231,7 @@ function handleResponseCompleted(
 		}
 	).response;
 
-	if (response?.usage) {
-		const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
-		const reasoningTokens = response.usage.output_tokens_details?.reasoning_tokens || 0;
-		output.usage = {
-			input: (response.usage.input_tokens || 0) - cachedTokens,
-			output: response.usage.output_tokens || 0,
-			cacheRead: cachedTokens,
-			cacheWrite: 0,
-			totalTokens: response.usage.total_tokens || 0,
-			...(reasoningTokens > 0 ? { reasoningTokens } : {}),
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		};
-	}
+	populateResponsesUsageFromResponse(output, response?.usage);
 	if (typeof response?.id === "string" && response.id.length > 0) {
 		output.responseId = response.id;
 	}
@@ -2356,6 +2342,7 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 	// messages can be replayed as `custom_tool_call_output` rather than
 	// `function_call_output` (OpenAI rejects mismatched pairs).
 	const customCallIds = new Set<string>();
+	const knownCallIds = new Set<string>();
 
 	for (const msg of transformedMessages) {
 		if (msg.role === "user" || msg.role === "developer") {
@@ -2407,57 +2394,14 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 				continue;
 			}
 
-			const outputItems: ResponseInput = [];
-			for (const block of msg.content) {
-				if (block.type === "thinking" && msg.stopReason !== "error") {
-					if (block.thinkingSignature) {
-						outputItems.push(JSON.parse(block.thinkingSignature) as ResponseReasoningItem);
-					}
-					continue;
-				}
-				if (block.type === "text") {
-					const textBlock = block as TextContent;
-					const parsedSignature = parseTextSignature(textBlock.textSignature);
-					let msgId = parsedSignature?.id;
-					if (!msgId) {
-						msgId = `msg_${msgIndex}`;
-					} else if (msgId.length > 64) {
-						msgId = `msg_${Bun.hash(msgId).toString(36)}`;
-					}
-					outputItems.push({
-						type: "message",
-						role: "assistant",
-						content: [{ type: "output_text", text: textBlock.text.toWellFormed(), annotations: [] }],
-						status: "completed",
-						id: msgId,
-						phase: parsedSignature?.phase,
-					} satisfies ResponseOutputMessage);
-					continue;
-				}
-				if (block.type === "toolCall") {
-					const toolCall = block as ToolCall;
-					const normalized = normalizeResponsesToolCallId(toolCall.id, toolCall.customWireName ? "ctc" : "fc");
-					if (toolCall.customWireName) {
-						const rawInput = typeof toolCall.arguments?.input === "string" ? toolCall.arguments.input : "";
-						customCallIds.add(normalized.callId);
-						outputItems.push({
-							type: "custom_tool_call",
-							id: normalized.itemId,
-							call_id: normalized.callId,
-							name: toolCall.customWireName,
-							input: rawInput,
-						} as ResponseInput[number]);
-						continue;
-					}
-					outputItems.push({
-						type: "function_call",
-						id: normalized.itemId,
-						call_id: normalized.callId,
-						name: toolCall.name,
-						arguments: JSON.stringify(toolCall.arguments),
-					});
-				}
-			}
+			const outputItems = convertResponsesAssistantMessage(
+				msg as AssistantMessage,
+				model,
+				msgIndex,
+				knownCallIds,
+				true,
+				customCallIds,
+			);
 			if (outputItems.length > 0) {
 				messages.push(...outputItems);
 			}
@@ -2466,49 +2410,7 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 		}
 
 		if (msg.role === "toolResult") {
-			const supportsImages = model.input.includes("image");
-			const textResult = msg.content
-				.filter(content => content.type === "text")
-				.map(content => content.text)
-				.join("\n");
-			const hasImages = msg.content.some(content => content.type === "image");
-			const omittedImages = hasImages && !supportsImages;
-			const normalized = normalizeResponsesToolCallId(msg.toolCallId);
-			const output = (
-				omittedImages
-					? joinTextWithImagePlaceholder(textResult, true)
-					: textResult.length > 0
-						? textResult
-						: "(see attached image)"
-			).toWellFormed();
-			if (customCallIds.has(normalized.callId)) {
-				messages.push({
-					type: "custom_tool_call_output",
-					call_id: normalized.callId,
-					output,
-				} as ResponseInput[number]);
-			} else {
-				messages.push({
-					type: "function_call_output",
-					call_id: normalized.callId,
-					output,
-				});
-			}
-			if (hasImages && supportsImages) {
-				const contentParts: ResponseInputContent[] = [
-					{ type: "input_text", text: "Attached image(s) from tool result:" } satisfies ResponseInputText,
-				];
-				for (const block of msg.content) {
-					if (block.type === "image") {
-						contentParts.push({
-							type: "input_image",
-							detail: "auto",
-							image_url: `data:${block.mimeType};base64,${block.data}`,
-						} satisfies ResponseInputImage);
-					}
-				}
-				messages.push({ role: "user", content: contentParts });
-			}
+			appendResponsesToolResultMessages(messages, msg, model, false, knownCallIds, customCallIds);
 		}
 
 		msgIndex += 1;

@@ -37,11 +37,11 @@ import type { MCPAuthConfig, MCPServerConfig, MCPServerConnection } from "../../
 import type { OAuthCredential } from "../../session/auth-storage";
 import { shortenPath } from "../../tools/render-utils";
 import { openPath } from "../../utils/open";
-import { DynamicBorder } from "../components/dynamic-border";
 import { MCPAddWizard } from "../components/mcp-add-wizard";
 import { parseCommandArgs } from "../shared";
 import { theme } from "../theme/theme";
 import type { InteractiveModeContext } from "../types";
+import { groupBySource, parseRemoveArgs, readScopeFlag, showCommandMessage } from "./command-controller-shared";
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
 	const { promise: timeoutPromise, reject } = Promise.withResolvers<T>();
@@ -207,11 +207,11 @@ export class MCPCommandController {
 				break;
 			}
 			if (argToken === "--scope") {
-				const value = tokens[i + 1];
-				if (!value || (value !== "project" && value !== "user")) {
-					return { scope, error: "Invalid --scope value. Use project or user." };
+				const r = readScopeFlag(tokens[i + 1]);
+				if (!r.ok) {
+					return { scope, error: r.error };
 				}
-				scope = value;
+				scope = r.scope;
 				i += 2;
 				continue;
 			}
@@ -984,23 +984,7 @@ export class MCPCommandController {
 
 			// Show discovered servers (from .claude.json, .cursor/mcp.json, .vscode/mcp.json, etc.)
 			if (discoveredServers.length > 0) {
-				// Group by source display name + path
-				const bySource = new Map<string, typeof discoveredServers>();
-				for (const entry of discoveredServers) {
-					const key = `${entry.source.providerName}|${entry.source.path}`;
-					let group = bySource.get(key);
-					if (!group) {
-						group = [];
-						bySource.set(key, group);
-					}
-					group.push(entry);
-				}
-
-				for (const [key, entries] of bySource) {
-					const sepIdx = key.indexOf("|");
-					const providerName = key.slice(0, sepIdx);
-					const sourcePath = key.slice(sepIdx + 1);
-					const shortPath = shortenPath(sourcePath);
+				for (const { providerName, shortPath, items: entries } of groupBySource(discoveredServers, e => e.source)) {
 					lines.push(theme.fg("accent", providerName) + theme.fg("muted", ` (${shortPath}):`));
 					for (const { name } of entries) {
 						const state = this.ctx.mcpManager!.getConnectionStatus(name);
@@ -1037,32 +1021,12 @@ export class MCPCommandController {
 	async #handleRemove(text: string): Promise<void> {
 		const match = text.match(/^\/mcp\s+(?:remove|rm)\b\s*(.*)$/i);
 		const rest = match?.[1]?.trim() ?? "";
-		const tokens = parseCommandArgs(rest);
-
-		let name: string | undefined;
-		let scope: "project" | "user" = "project";
-		let i = 0;
-
-		if (tokens.length > 0 && !tokens[0].startsWith("-")) {
-			name = tokens[0];
-			i = 1;
-		}
-
-		while (i < tokens.length) {
-			const token = tokens[i];
-			if (token === "--scope") {
-				const value = tokens[i + 1];
-				if (!value || (value !== "project" && value !== "user")) {
-					this.ctx.showError("Invalid --scope value. Use project or user.");
-					return;
-				}
-				scope = value;
-				i += 2;
-				continue;
-			}
-			this.ctx.showError(`Unknown option: ${token}`);
+		const parsed = parseRemoveArgs(rest);
+		if (!parsed.ok) {
+			this.ctx.showError(parsed.error);
 			return;
 		}
+		const { name, scope } = parsed.value;
 
 		if (!name) {
 			this.ctx.showError("Server name required. Usage: /mcp remove <name> [--scope project|user]");
@@ -1929,10 +1893,6 @@ export class MCPCommandController {
 	 * Show a message in the chat
 	 */
 	#showMessage(text: string): void {
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.chatContainer.addChild(new Text(text, 1, 1));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.ui.requestRender();
+		showCommandMessage(this.ctx, text);
 	}
 }

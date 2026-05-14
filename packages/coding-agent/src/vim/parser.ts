@@ -124,10 +124,6 @@ export function parseKeySequences(sequences: string[]): VimKeyToken[] {
 	return tokens;
 }
 
-export function tokensToReplay(tokens: readonly VimKeyToken[]): string[] {
-	return tokens.map(token => token.value);
-}
-
 export function replayTokens(values: readonly string[]): VimKeyToken[] {
 	return values.map((value, index) => ({
 		value,
@@ -135,17 +131,4 @@ export function replayTokens(values: readonly string[]): VimKeyToken[] {
 		sequenceIndex: 0,
 		offset: index,
 	}));
-}
-
-export function formatVimError(error: unknown): string {
-	if (!(error instanceof VimError)) {
-		return error instanceof Error ? error.message : String(error);
-	}
-
-	const base = error.message;
-	if (!error.location) {
-		return base;
-	}
-
-	return `${base} (sequence ${error.location.sequenceIndex + 1}, token ${error.location.offset + 1})`;
 }

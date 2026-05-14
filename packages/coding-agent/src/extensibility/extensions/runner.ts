@@ -63,7 +63,7 @@ export type ExtensionErrorListener = (error: ExtensionError) => void;
 export const EXTENSION_HANDLER_TIMEOUT_MS = 30_000;
 let extensionHandlerTimeoutMs = EXTENSION_HANDLER_TIMEOUT_MS;
 
-export function __test_setExtensionHandlerTimeoutMs(timeoutMs: number): void {
+export function testSetExtensionHandlerTimeoutMs(timeoutMs: number): void {
 	extensionHandlerTimeoutMs = timeoutMs;
 }
 
