@@ -8,6 +8,7 @@
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
 import type { AgentSession } from "../session/agent-session";
+import { isSilentAbort } from "../session/messages";
 import { initializeExtensions } from "./runtime-init";
 
 /**
@@ -76,8 +77,11 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 		if (lastMessage?.role === "assistant") {
 			const assistantMsg = lastMessage as AssistantMessage;
 
-			// Check for error/aborted
-			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
+			// Check for error/aborted — skip silent-abort (plan-mode compaction transition)
+			if (
+				(assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") &&
+				!isSilentAbort(assistantMsg.errorMessage)
+			) {
 				const errorLine = sanitizeText(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
 				const flushed = process.stderr.write(`${errorLine}\n`);
 				if (flushed) {

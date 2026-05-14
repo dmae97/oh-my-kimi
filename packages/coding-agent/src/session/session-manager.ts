@@ -47,6 +47,7 @@ import {
 	type HookMessage,
 	type PythonExecutionMessage,
 	sanitizeRehydratedOpenAIResponsesAssistantMessage,
+	stripInternalDetailsFields,
 } from "./messages";
 import type { SessionStorage, SessionStorageWriter } from "./session-storage";
 import { FileSessionStorage, MemorySessionStorage } from "./session-storage";
@@ -2544,7 +2545,10 @@ export class SessionManager {
 			customType,
 			content,
 			display,
-			details,
+			// Drop AgentSession-internal transient fields (allowlist in
+			// `INTERNAL_DETAILS_FIELDS`) before disk persistence. Single
+			// chokepoint covers every CustomMessage write path.
+			details: stripInternalDetailsFields(details),
 			attribution,
 			id: generateId(this.#byId),
 			parentId: this.#leafId,

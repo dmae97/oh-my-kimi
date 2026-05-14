@@ -15,6 +15,7 @@ import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { calculatePromptTokens } from "../../session/compaction/compaction";
+import { isSilentAbort, readPendingDisplayTag } from "../../session/messages";
 import type { ExitPlanModeDetails } from "../../tools";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
@@ -179,6 +180,17 @@ export class EventController {
 			this.#renderedCustomMessages.add(signature);
 			this.#resetReadGroup();
 			this.ctx.addMessageToChat(event.message);
+			// Tag-keyed pending-bar refresh: when AgentSession.#handleAgentEvent
+			// spliced this dequeued custom message out of #steeringMessages /
+			// #followUpMessages (it ran before this emit), the array state is
+			// already correct — pendingMessagesContainer just needs to be
+			// re-rendered to match. Gated on tag presence so non-queued customs
+			// (ttsr-injection, irc:*, async-result, hookMessage) skip the
+			// rebuild; their dispatch path never registered a pending chip.
+			// Mirrors the user-role refresh at the bottom of this function.
+			if (event.message.role === "custom" && readPendingDisplayTag(event.message.details)) {
+				this.ctx.updatePendingMessagesDisplay();
+			}
 			this.ctx.ui.requestRender();
 		} else if (event.message.role === "user") {
 			const textContent = this.ctx.getUserMessageText(event.message);
@@ -365,7 +377,15 @@ export class EventController {
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
 			this.ctx.streamingMessage = event.message;
 			let errorMessage: string | undefined;
-			if (this.ctx.streamingMessage.stopReason === "aborted" && !this.ctx.session.isTtsrAbortPending) {
+			const aborted = this.ctx.streamingMessage.stopReason === "aborted";
+			const silentlyAborted = aborted && isSilentAbort(this.ctx.streamingMessage.errorMessage);
+			const ttsrSilenced = aborted && this.ctx.session.isTtsrAbortPending;
+			if (aborted && !silentlyAborted && !ttsrSilenced) {
+				// Real user-cancel / network / provider abort: surface the standard
+				// operator-facing label. AgentSession.#handleAgentEvent already stamped
+				// SILENT_ABORT_MARKER for the plan-compact transition before this
+				// controller ran, so reaching this branch implies the abort was NOT a
+				// silent internal transition.
 				const retryAttempt = this.ctx.session.retryAttempt;
 				errorMessage =
 					retryAttempt > 0
@@ -373,7 +393,10 @@ export class EventController {
 						: "Operation aborted";
 				this.ctx.streamingMessage.errorMessage = errorMessage;
 			}
-			if (this.ctx.session.isTtsrAbortPending && this.ctx.streamingMessage.stopReason === "aborted") {
+			if (silentlyAborted || ttsrSilenced) {
+				// Silence the streaming render by downgrading stopReason to "stop" for
+				// display only — does NOT mutate the persisted message's stopReason
+				// (the marker on errorMessage drives replay-side suppression).
 				const msgWithoutAbort = { ...this.ctx.streamingMessage, stopReason: "stop" as const };
 				this.ctx.streamingComponent.updateContent(msgWithoutAbort);
 			} else {

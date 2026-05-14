@@ -19,7 +19,12 @@ import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { UserMessageComponent } from "../../modes/components/user-message";
 import { theme } from "../../modes/theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "../../modes/types";
-import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
+import {
+	type CustomMessage,
+	isSilentAbort,
+	SKILL_PROMPT_MESSAGE_TYPE,
+	type SkillPromptDetails,
+} from "../../session/messages";
 import type { SessionContext } from "../../session/session-manager";
 import { formatBytes, formatDuration } from "../../tools/render-utils";
 
@@ -288,7 +293,9 @@ export class UiHelpers {
 					assistantComponent.setUsageInfo(message.usage);
 				}
 				readGroup = null;
-				const hasErrorStop = message.stopReason === "aborted" || message.stopReason === "error";
+				const isAbortedSilently = message.stopReason === "aborted" && isSilentAbort(message.errorMessage);
+				const hasErrorStop =
+					!isAbortedSilently && (message.stopReason === "aborted" || message.stopReason === "error");
 				const errorMessage = hasErrorStop
 					? message.stopReason === "aborted"
 						? (() => {

@@ -16,6 +16,7 @@ import { resetSettingsForTest, Settings } from "../src/config/settings";
 import { AcpAgent } from "../src/modes/acp/acp-agent";
 import type { PlanModeState } from "../src/plan-mode/state";
 import type { AgentSession, AgentSessionEvent } from "../src/session/agent-session";
+import { SILENT_ABORT_MARKER } from "../src/session/messages";
 import { SessionManager } from "../src/session/session-manager";
 import { expectAcpStructure } from "./helpers/acp-schema";
 
@@ -697,6 +698,54 @@ describe("ACP agent", () => {
 				update => typeof getChunkMessageId(update) === "string" && getChunkMessageId(update)!.length > 0,
 			),
 		).toBe(true);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("does not replay silent-abort marker as agent_message_chunk to ACP clients", async () => {
+		const harness = await createHarness();
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "start", timestamp: Date.now() });
+		// Simulate a silent-abort assistant message: empty content, errorMessage = marker
+		stored.sessionManager.appendMessage({
+			role: "assistant",
+			content: [],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: TEST_MODELS[0].id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "aborted",
+			errorMessage: SILENT_ABORT_MARKER,
+			timestamp: Date.now(),
+		});
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+		const replayChunks = harness.updates.filter(
+			update => update.sessionId === stored.sessionId && update.update.sessionUpdate === "agent_message_chunk",
+		);
+		// The silent-abort marker MUST NOT surface as a replayed message chunk
+		const markerChunks = replayChunks.filter(
+			update =>
+				update.update.sessionUpdate === "agent_message_chunk" &&
+				update.update.content.type === "text" &&
+				update.update.content.text === SILENT_ABORT_MARKER,
+		);
+		expect(markerChunks).toHaveLength(0);
 
 		harness.abortController.abort();
 		await Bun.sleep(0);

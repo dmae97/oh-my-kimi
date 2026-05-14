@@ -30,6 +30,72 @@ export interface SkillPromptDetails {
 	path: string;
 	args?: string;
 	lineCount: number;
+	/** Internal: tag used by AgentSession to remove the pending-display chip
+	 *  from `#steeringMessages` / `#followUpMessages` when the agent consumes
+	 *  this message. Not surfaced to renderers; the `__` prefix signals
+	 *  "private". Optional — non-streaming skill prompts never set it. Stripped
+	 *  from persisted `details` by `SessionManager.appendCustomMessageEntry`
+	 *  via the `INTERNAL_DETAILS_FIELDS` allowlist below. */
+	__pendingDisplayTag?: string;
+}
+
+/** Sentinel value for `AssistantMessage.errorMessage` indicating that the abort
+ *  was an *expected internal transition* (plan-mode → execution compaction)
+ *  and must NOT surface as a red "Operation aborted" line. Distinct from
+ *  `undefined` (default) so user-cancel aborts with no errorMessage still
+ *  render normally. Persists through SessionManager so history replay
+ *  branches identically.
+ *
+ *  Consumers: `AgentSession.#handleAgentEvent` (stamper) writes this value;
+ *  `EventController.#handleMessageEnd`, `AssistantMessageComponent`,
+ *  `ui-helpers.addMessageToChat` (renderers), `SessionObserverOverlay
+ *  #buildTranscriptLines`, `runPrintMode`, and `AcpAgent#replayAssistantMessage`
+ *  (fallback error emission) read it via `isSilentAbort`. */
+export const SILENT_ABORT_MARKER = "__omp.silent_abort__";
+
+/** Type-guard for `SILENT_ABORT_MARKER`. Renderers MUST branch on this rather
+ *  than string-comparing inline so refactors to the marker constant (e.g.,
+ *  namespacing changes) propagate through every consumer in lockstep. */
+export function isSilentAbort(errorMessage: string | undefined): boolean {
+	return errorMessage === SILENT_ABORT_MARKER;
+}
+
+/** Extract the optional `__pendingDisplayTag` field from a CustomMessage's
+ *  `details` blob. Safe over `unknown`; returns undefined when the field is
+ *  absent or non-string. */
+export function readPendingDisplayTag(details: unknown): string | undefined {
+	if (typeof details !== "object" || details === null) return undefined;
+	const candidate = (details as { __pendingDisplayTag?: unknown }).__pendingDisplayTag;
+	return typeof candidate === "string" ? candidate : undefined;
+}
+
+/** Explicit allowlist of `details` field names that are AgentSession-internal
+ *  transient bookkeeping and MUST be removed before SessionManager persists
+ *  the CustomMessageEntry to disk. Scoped intentionally narrow: only fields
+ *  declared here are stripped. Adding a new entry is a deliberate, reviewed
+ *  change — unrelated future payload fields are never silently dropped. */
+export const INTERNAL_DETAILS_FIELDS = ["__pendingDisplayTag"] as const;
+
+/** Return a `details` copy with every key in `INTERNAL_DETAILS_FIELDS`
+ *  removed. Returns the input unchanged when there is nothing to strip
+ *  (null/non-object, or no listed fields present) so callers don't pay a
+ *  clone cost on the common path. */
+export function stripInternalDetailsFields<T>(details: T | undefined): T | undefined {
+	if (details == null || typeof details !== "object") return details;
+	const obj = details as Record<string, unknown>;
+	let hit = false;
+	for (const key of INTERNAL_DETAILS_FIELDS) {
+		if (key in obj) {
+			hit = true;
+			break;
+		}
+	}
+	if (!hit) return details;
+	const cleaned: Record<string, unknown> = { ...obj };
+	for (const key of INTERNAL_DETAILS_FIELDS) {
+		delete cleaned[key];
+	}
+	return cleaned as T;
 }
 
 function getPrunedToolResultContent(message: ToolResultMessage): (TextContent | ImageContent)[] {

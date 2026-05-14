@@ -18,6 +18,7 @@ import type { ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { Container, Markdown, type MarkdownTheme, matchesKey } from "@oh-my-pi/pi-tui";
 import { formatDuration, formatNumber, logger } from "@oh-my-pi/pi-utils";
 import type { KeyId } from "../../config/keybindings";
+import { isSilentAbort } from "../../session/messages";
 import type { SessionMessageEntry } from "../../session/session-manager";
 import { parseSessionEntries } from "../../session/session-manager";
 import { PREVIEW_LIMITS, replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
@@ -288,7 +289,7 @@ export class SessionObserverOverlayComponent extends Container {
 
 			if (msg.role === "assistant") {
 				// Handle error messages with empty content
-				if (msg.content.length === 0 && msg.errorMessage) {
+				if (msg.content.length === 0 && msg.errorMessage && !isSilentAbort(msg.errorMessage)) {
 					const startLine = lines.length;
 					const isSelected = entryIndex === this.#selectedEntryIndex;
 					const cursor = isSelected ? theme.fg("accent", "▶") : " ";
