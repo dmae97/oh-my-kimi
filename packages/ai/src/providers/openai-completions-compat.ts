@@ -53,6 +53,12 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 	const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
 	const isKilo = provider === "kilo" || baseUrl.includes("api.kilo.ai");
 	const isKimiModel = model.id.includes("moonshotai/kimi") || /^kimi[-.]/i.test(model.id);
+	const isMoonshotKimi =
+		isKimiModel &&
+		(provider === "moonshot" ||
+			provider === "kimi-code" ||
+			baseUrl.includes("api.moonshot.ai") ||
+			baseUrl.includes("api.kimi.com"));
 	const isAnthropicModel =
 		provider === "anthropic" ||
 		baseUrl.includes("api.anthropic.com") ||
@@ -173,13 +179,14 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		requiresAssistantAfterToolResult: false,
 		requiresThinkingAsText: isMistral,
 		requiresMistralToolIds: isMistral,
-		thinkingFormat: isZai
-			? "zai"
-			: provider === "openrouter" || baseUrl.includes("openrouter.ai")
-				? "openrouter"
-				: isAlibaba || isQwen
-					? "qwen"
-					: "openai",
+		thinkingFormat:
+			isZai || isMoonshotKimi
+				? "zai"
+				: provider === "openrouter" || baseUrl.includes("openrouter.ai")
+					? "openrouter"
+					: isAlibaba || isQwen
+						? "qwen"
+						: "openai",
 		reasoningContentField: "reasoning_content",
 		// Backends that 400 follow-up requests when prior assistant tool-call turns lack `reasoning_content`:
 		//   - Kimi: documented invariant on its native API and via OpenCode-Go.

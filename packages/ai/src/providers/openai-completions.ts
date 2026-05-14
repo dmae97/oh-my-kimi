@@ -1019,12 +1019,14 @@ function buildParams(
 	}
 
 	if (compat.disableReasoningOnForcedToolChoice && isForcedToolChoice(params.tool_choice)) {
-		// Mirrors anthropic.ts:disableThinkingIfToolChoiceForced — backends like
-		// Kimi 400 with `tool_choice 'specified' is incompatible with thinking
-		// enabled`. Drop reasoning for this turn instead of dropping tool_choice;
-		// the agent still gets the forced tool call, just without thinking.
+		// Backends like Kimi 400 with `tool_choice 'specified' is incompatible
+		// with thinking enabled`. Suppress thinking for this single forced-tool
+		// turn while keeping the tool-selection contract intact.
 		delete params.reasoning_effort;
 		delete params.reasoning;
+		if (compat.thinkingFormat === "zai") {
+			params.thinking = { type: "disabled" };
+		}
 	}
 
 	// OpenRouter provider routing preferences
@@ -1362,7 +1364,9 @@ export function convertMessages(
 			const canUseSyntheticReasoningContent =
 				compat.requiresReasoningContentForToolCalls &&
 				compat.allowsSyntheticReasoningContentForToolCalls &&
-				(compat.thinkingFormat === "openai" || compat.thinkingFormat === "openrouter");
+				(compat.thinkingFormat === "openai" ||
+					compat.thinkingFormat === "openrouter" ||
+					compat.thinkingFormat === "zai");
 			// DeepSeek reasoning models require reasoning_content on ALL assistant turns,
 			// not just tool-call turns. Other providers (Kimi, OpenRouter) only require it
 			// on tool-call turns.

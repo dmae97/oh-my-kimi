@@ -79,6 +79,7 @@ interface CompletionsBody {
 	tools?: unknown[];
 	reasoning_effort?: unknown;
 	reasoning?: unknown;
+	thinking?: unknown;
 }
 
 describe("issue #827 — kimi reasoning models drop reasoning under forced tool_choice", () => {
@@ -111,6 +112,25 @@ describe("issue #827 — kimi reasoning models drop reasoning under forced tool_
 		})) as CompletionsBody;
 
 		expect(body.tool_choice).toMatchObject({ type: "function", function: { name: "echo" } });
+		expect(body.reasoning).toBeUndefined();
+		expect(body.reasoning_effort).toBeUndefined();
+	});
+	it("sends explicit thinking disabled for Moonshot Kimi K2.6 when a named tool is forced", async () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "moonshot",
+			baseUrl: "https://api.moonshot.ai/v1",
+			id: "kimi-k2.6",
+			name: "Kimi K2.6",
+			reasoning: false,
+		};
+		const body = (await captureBody(model, {
+			toolChoice: { type: "tool", name: "echo" },
+		})) as CompletionsBody;
+
+		expect(body.tool_choice).toMatchObject({ type: "function", function: { name: "echo" } });
+		expect(body.thinking).toEqual({ type: "disabled" });
 		expect(body.reasoning).toBeUndefined();
 		expect(body.reasoning_effort).toBeUndefined();
 	});
