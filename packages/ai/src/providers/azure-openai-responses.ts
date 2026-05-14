@@ -6,17 +6,15 @@ import type {
 	ResponseInput,
 } from "openai/resources/responses/responses";
 import { getEnvApiKey } from "../stream";
-import {
-	type Api,
-	type AssistantMessage,
-	type Context,
-	type Model,
-	type ServiceTier,
-	type StreamFunction,
-	type StreamOptions,
-	shouldSendServiceTier,
-	type Tool,
-	type ToolChoice,
+import type {
+	AssistantMessage,
+	Context,
+	Model,
+	ServiceTier,
+	StreamFunction,
+	StreamOptions,
+	Tool,
+	ToolChoice,
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
@@ -33,8 +31,11 @@ import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
 import { normalizeOpenAIResponsesPromptCacheKey, supportsDeveloperRole } from "./openai-responses";
 import {
 	appendResponsesToolResultMessages,
+	applyCommonResponsesSamplingParams,
+	applyResponsesReasoningParams,
 	convertResponsesAssistantMessage,
 	convertResponsesInputContent,
+	createInitialResponsesAssistantMessage,
 	normalizeResponsesToolCallIdForTransform,
 	processResponsesStream,
 } from "./openai-responses-shared";
@@ -101,23 +102,11 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 		let firstTokenTime: number | undefined;
 		const deploymentName = resolveDeploymentName(model, options);
 
-		const output: AssistantMessage = {
-			role: "assistant",
-			content: [],
-			api: "azure-openai-responses" as Api,
-			provider: model.provider,
-			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			stopReason: "stop",
-			timestamp: Date.now(),
-		};
+		const output: AssistantMessage = createInitialResponsesAssistantMessage(
+			"azure-openai-responses",
+			model.provider,
+			model.id,
+		);
 		let rawRequestDump: RawHttpRequestDump | undefined;
 		const abortTracker = createAbortSourceTracker(options?.signal);
 		const firstEventTimeoutAbortError = new Error(AZURE_OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE);
@@ -279,31 +268,7 @@ function buildParams(
 		prompt_cache_key: normalizeOpenAIResponsesPromptCacheKey(options?.sessionId),
 	};
 
-	if (options?.maxTokens) {
-		params.max_output_tokens = options?.maxTokens;
-	}
-
-	if (options?.temperature !== undefined) {
-		params.temperature = options?.temperature;
-	}
-	if (options?.topP !== undefined) {
-		params.top_p = options.topP;
-	}
-	if (options?.topK !== undefined) {
-		params.top_k = options.topK;
-	}
-	if (options?.minP !== undefined) {
-		params.min_p = options.minP;
-	}
-	if (options?.presencePenalty !== undefined) {
-		params.presence_penalty = options.presencePenalty;
-	}
-	if (options?.repetitionPenalty !== undefined) {
-		params.repetition_penalty = options.repetitionPenalty;
-	}
-	if (shouldSendServiceTier(options?.serviceTier, model.provider)) {
-		params.service_tier = options.serviceTier;
-	}
+	applyCommonResponsesSamplingParams(params, options, model.provider);
 
 	if (context.tools) {
 		params.tools = convertTools(context.tools);
@@ -312,36 +277,7 @@ function buildParams(
 		}
 	}
 
-	if (model.reasoning) {
-		// Always request encrypted reasoning content so reasoning items can be
-		// replayed in multi-turn conversations when store is false (items aren't
-		// persisted server-side, so we must include the full content).
-		// See: https://github.com/can1357/oh-my-pi/issues/41
-		params.include = ["reasoning.encrypted_content"];
-
-		if (options?.reasoning || options?.reasoningSummary !== undefined) {
-			const reasoningParams: NonNullable<typeof params.reasoning> = {
-				effort: options?.reasoning || "medium",
-			};
-			if (options?.reasoningSummary !== null) {
-				reasoningParams.summary = options?.reasoningSummary || "auto";
-			}
-			params.reasoning = reasoningParams;
-		} else {
-			if (model.name.toLowerCase().startsWith("gpt-5")) {
-				// Jesus Christ, see https://community.openai.com/t/need-reasoning-false-option-for-gpt-5/1351588/7
-				messages.push({
-					role: "developer",
-					content: [
-						{
-							type: "input_text",
-							text: "# Juice: 0 !important",
-						},
-					],
-				});
-			}
-		}
-	}
+	applyResponsesReasoningParams(params, model, options, messages);
 
 	return params;
 }

@@ -242,6 +242,11 @@ describe("AgentSession handoff", () => {
 			.map(line => JSON.parse(line) as PersistedEntry);
 
 		expect(result?.document).toBe(handoffText);
+		expect(session.getLastAssistantText()).toBeUndefined();
+		expect(session.hasCopyCandidateAssistantMessage()).toBe(false);
+		expect(session.getLastVisibleHandoffText()).toBe(
+			`<handoff-context>\n${handoffText}\n</handoff-context>\n\nThe above is a handoff document from a previous session. Use this context to continue the work seamlessly.`,
+		);
 		expect(handoffSessionFile).not.toBe(previousSessionFile);
 		expect(handoffEntries[0]).toMatchObject({ type: "session", parentSession: previousSessionFile });
 		expect(

@@ -50,6 +50,24 @@ function getStatusIcon(status: AgentProgress["status"], theme: Theme, spinnerFra
 	}
 }
 
+/** Append tool-count, token, and cost stats to a status line string. */
+function appendAgentStats(
+	line: string,
+	opts: { toolCount?: number; tokens: number; cost: number },
+	theme: Theme,
+): string {
+	if (opts.toolCount) {
+		line += `${theme.sep.dot}${theme.fg("dim", `${opts.toolCount} tools`)}`;
+	}
+	if (opts.tokens > 0) {
+		line += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(opts.tokens)} tokens`)}`;
+	}
+	if (opts.cost > 0) {
+		line += `${theme.sep.dot}${theme.fg("statusLineCost", `$${opts.cost.toFixed(2)}`)}`;
+	}
+	return line;
+}
+
 function formatFindingSummary(findings: ReportFindingDetails[], theme: Theme): string {
 	if (findings.length === 0) return theme.fg("dim", "Findings: none");
 
@@ -526,19 +544,9 @@ function renderAgentProgress(
 			const taskPreview = truncateToWidth(progress.assignment ?? progress.task, 40);
 			statusLine += ` ${theme.fg("muted", taskPreview)}`;
 		}
-		if (progress.toolCount > 0) {
-			statusLine += `${theme.sep.dot}${theme.fg("dim", `${progress.toolCount} tools`)}`;
-		}
-		if (progress.tokens > 0) {
-			statusLine += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(progress.tokens)} tokens`)}`;
-		}
+		statusLine = appendAgentStats(statusLine, progress, theme);
 	} else if (progress.status === "completed") {
-		if (progress.toolCount > 0) {
-			statusLine += `${theme.sep.dot}${theme.fg("dim", `${progress.toolCount} tools`)}`;
-		}
-		if (progress.tokens > 0) {
-			statusLine += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(progress.tokens)} tokens`)}`;
-		}
+		statusLine = appendAgentStats(statusLine, progress, theme);
 	}
 
 	lines.push(statusLine);
@@ -768,9 +776,7 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 		iconColor,
 		theme,
 	)}`;
-	if (result.tokens > 0) {
-		statusLine += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(result.tokens)} tokens`)}`;
-	}
+	statusLine = appendAgentStats(statusLine, { tokens: result.tokens, cost: result.usage?.cost.total ?? 0 }, theme);
 	statusLine += `${theme.sep.dot}${theme.fg("dim", formatDuration(result.durationMs))}`;
 
 	if (result.truncated) {

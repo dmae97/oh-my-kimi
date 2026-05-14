@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { hindsightBackend, reloadMentalModelsForSession } from "@oh-my-pi/pi-coding-agent/hindsight/backend";
 import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import type { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state";
@@ -76,7 +76,7 @@ function makeFakeSession(deps: FakeSessionDeps) {
 
 describe("hindsightBackend.start", () => {
 	beforeEach(() => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 	});
 
 	afterEach(() => {
@@ -235,7 +235,7 @@ describe("hindsightBackend.start", () => {
 
 describe("hindsightBackend.preCompactionContext", () => {
 	beforeEach(() => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 	});
 
 	afterEach(() => {
@@ -297,7 +297,7 @@ describe("hindsightBackend.preCompactionContext", () => {
 
 describe("hindsightBackend first-turn injection", () => {
 	beforeEach(() => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 	});
 
 	afterEach(() => {
@@ -480,7 +480,7 @@ describe("hindsightBackend first-turn injection", () => {
 
 describe("hindsightBackend.clear", () => {
 	beforeEach(() => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 	});
 
 	afterEach(() => {

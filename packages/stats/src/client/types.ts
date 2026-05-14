@@ -1,7 +1,27 @@
 /**
  * Client-side type definitions.
- * Duplicated from ../types.ts to avoid pulling in server dependencies.
+ *
+ * Shared shapes (aggregations, time-series, dashboard payloads) live in
+ * `../shared-types` and are re-exported here. The types declared inline below
+ * are deliberately client-only because:
+ *   - `Usage` is redeclared locally so the client bundle avoids importing
+ *     `@oh-my-pi/pi-ai` (the server-side AI types package).
+ *   - `MessageStats.stopReason` is widened from the server's `StopReason`
+ *     enum to `string`, again to keep the client free of pi-ai types.
+ *   - `TimeRange`, `OverviewStats`, `ModelDashboardStats`,
+ *     `CostDashboardStats` are UI-only view shapes the server never produces.
  */
+
+import type {
+	AggregatedStats,
+	CostTimeSeriesPoint,
+	ModelPerformancePoint,
+	ModelStats,
+	ModelTimeSeriesPoint,
+	TimeSeriesPoint,
+} from "../shared-types";
+
+export * from "../shared-types";
 
 export interface Usage {
 	input: number;
@@ -40,80 +60,7 @@ export interface RequestDetails extends MessageStats {
 	output: unknown;
 }
 
-export interface AggregatedStats {
-	totalRequests: number;
-	successfulRequests: number;
-	failedRequests: number;
-	errorRate: number;
-	totalInputTokens: number;
-	totalOutputTokens: number;
-	totalCacheReadTokens: number;
-	totalCacheWriteTokens: number;
-	cacheRate: number;
-	totalCost: number;
-	totalPremiumRequests: number;
-	avgDuration: number | null;
-	avgTtft: number | null;
-	avgTokensPerSecond: number | null;
-	firstTimestamp: number;
-	lastTimestamp: number;
-}
-
 export type TimeRange = "1h" | "24h" | "7d" | "30d" | "90d" | "all";
-export interface ModelStats extends AggregatedStats {
-	model: string;
-	provider: string;
-}
-
-export interface FolderStats extends AggregatedStats {
-	folder: string;
-}
-
-export interface TimeSeriesPoint {
-	timestamp: number;
-	requests: number;
-	errors: number;
-	tokens: number;
-	cost: number;
-}
-
-export interface ModelTimeSeriesPoint {
-	timestamp: number;
-	model: string;
-	provider: string;
-	requests: number;
-}
-
-export interface ModelPerformancePoint {
-	timestamp: number;
-	model: string;
-	provider: string;
-	requests: number;
-	avgTtft: number | null;
-	avgTokensPerSecond: number | null;
-}
-
-export interface CostTimeSeriesPoint {
-	timestamp: number;
-	model: string;
-	provider: string;
-	cost: number;
-	costInput: number;
-	costOutput: number;
-	costCacheRead: number;
-	costCacheWrite: number;
-	requests: number;
-}
-
-export interface DashboardStats {
-	overall: AggregatedStats;
-	byModel: ModelStats[];
-	byFolder: FolderStats[];
-	timeSeries: TimeSeriesPoint[];
-	modelSeries: ModelTimeSeriesPoint[];
-	modelPerformanceSeries: ModelPerformancePoint[];
-	costSeries: CostTimeSeriesPoint[];
-}
 
 export interface OverviewStats {
 	overall: AggregatedStats;
@@ -128,51 +75,4 @@ export interface ModelDashboardStats {
 
 export interface CostDashboardStats {
 	costSeries: CostTimeSeriesPoint[];
-}
-
-export interface BehaviorTimeSeriesPoint {
-	timestamp: number;
-	model: string;
-	provider: string;
-	messages: number;
-	yelling: number;
-	profanity: number;
-	anguish: number;
-	negation: number;
-	repetition: number;
-	blame: number;
-	chars: number;
-}
-
-export interface BehaviorOverallStats {
-	totalMessages: number;
-	totalYelling: number;
-	totalProfanity: number;
-	totalAnguish: number;
-	totalNegation: number;
-	totalRepetition: number;
-	totalBlame: number;
-	totalChars: number;
-	firstTimestamp: number;
-	lastTimestamp: number;
-}
-
-export interface BehaviorModelStats {
-	model: string;
-	provider: string;
-	totalMessages: number;
-	totalYelling: number;
-	totalProfanity: number;
-	totalAnguish: number;
-	totalNegation: number;
-	totalRepetition: number;
-	totalBlame: number;
-	totalChars: number;
-	lastTimestamp: number;
-}
-
-export interface BehaviorDashboardStats {
-	overall: BehaviorOverallStats;
-	byModel: BehaviorModelStats[];
-	behaviorSeries: BehaviorTimeSeriesPoint[];
 }

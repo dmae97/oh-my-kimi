@@ -18,6 +18,8 @@ import {
 	killTree,
 	parseAsiLines,
 	parseMetricLines,
+	tryGitPrefix,
+	tryGitStatus,
 } from "../helpers";
 import { buildExperimentState } from "../state";
 import { openAutoresearchStorageIfExists } from "../storage";
@@ -265,23 +267,6 @@ export function createRunExperimentTool(
 		},
 	};
 }
-
-async function tryGitStatus(cwd: string): Promise<string> {
-	try {
-		return await git.status(cwd, { porcelainV1: true, untrackedFiles: "all", z: true });
-	} catch {
-		return "";
-	}
-}
-
-async function tryGitPrefix(cwd: string): Promise<string> {
-	try {
-		return await git.show.prefix(cwd);
-	} catch {
-		return "";
-	}
-}
-
 async function executeProcess(opts: {
 	command: string[];
 	cwd: string;

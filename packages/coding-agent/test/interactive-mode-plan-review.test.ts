@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { Text } from "@oh-my-pi/pi-tui";
@@ -35,7 +35,7 @@ describe("InteractiveMode plan review rendering", () => {
 	});
 
 	beforeEach(async () => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-plan-review-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
@@ -67,7 +67,7 @@ describe("InteractiveMode plan review rendering", () => {
 		await session?.dispose();
 		authStorage?.close();
 		tempDir?.removeSync();
-		_resetSettingsForTest();
+		resetSettingsForTest();
 	});
 
 	it("appends each submitted plan review preview to preserve scrollback", async () => {

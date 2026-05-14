@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _resolveUpdateMethodForTest } from "../src/cli/update-cli";
+import { resolveUpdateMethodForTest } from "../src/cli/update-cli";
 
 // Issue #845: on Windows with Bun installed via Scoop, ~/.bun is a junction
 // to scoop\persist\Oven-sh.Bun\.bun. `bun pm bin -g` and the omp path that
@@ -40,13 +40,13 @@ describe("issue-845: resolveUpdateMethod follows symlinks/junctions", () => {
 	it("classifies omp reached through a symlinked bin dir as bun-managed", () => {
 		// $which resolves through the symlink, `bun pm bin -g` returns the real path
 		// (or vice versa). Either direction must be recognized.
-		const method = _resolveUpdateMethodForTest(ompPathViaLink, realBinDir);
+		const method = resolveUpdateMethodForTest(ompPathViaLink, realBinDir);
 		expect(method).toBe("bun");
 	});
 
 	it("classifies omp at the real bin dir as bun-managed when bunBinDir is symlinked", () => {
 		const ompAtReal = path.join(realBinDir, "omp");
-		const method = _resolveUpdateMethodForTest(ompAtReal, linkedBinDir);
+		const method = resolveUpdateMethodForTest(ompAtReal, linkedBinDir);
 		expect(method).toBe("bun");
 	});
 });

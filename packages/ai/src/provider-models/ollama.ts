@@ -1,4 +1,4 @@
-import { abortableSleep } from "@oh-my-pi/pi-utils";
+import { fetchWithRetry } from "@oh-my-pi/pi-utils";
 import type { ModelManagerOptions } from "../model-manager";
 import { Effort } from "../model-thinking";
 import type { ThinkingConfig } from "../types";
@@ -19,16 +19,7 @@ type OllamaShowResponse = {
 	model_info?: Record<string, unknown>;
 };
 
-const MODEL_RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
-
-async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
-	for (let attempt = 0; attempt < MODEL_RETRY_DELAYS_MS.length; attempt++) {
-		const response = await fetch(url, init);
-		if (response.ok || response.status < 500) return response;
-		await abortableSleep(MODEL_RETRY_DELAYS_MS[attempt]!);
-	}
-	return fetch(url, init);
-}
+const OLLAMA_RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
 
 function trimTrailingSlash(value: string): string {
 	return value.endsWith("/") ? value.slice(0, -1) : value;
@@ -109,6 +100,7 @@ export function ollamaCloudModelManagerOptions(
 			const response = await fetchWithRetry(`${baseUrl}/api/tags`, {
 				method: "GET",
 				headers: createCloudHeaders(apiKey),
+				defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
 			});
 			if (!response.ok) {
 				throw new Error(`HTTP ${response.status} from ${baseUrl}/api/tags`);

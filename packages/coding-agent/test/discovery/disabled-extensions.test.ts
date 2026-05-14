@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type ContextFile, contextFileCapability } from "@oh-my-pi/pi-coding-agent/capability/context-file";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initializeWithSettings, loadCapability } from "@oh-my-pi/pi-coding-agent/discovery";
 
 describe("disabledExtensions runtime filtering", () => {
@@ -12,7 +12,7 @@ describe("disabledExtensions runtime filtering", () => {
 	let originalHome: string | undefined;
 
 	beforeEach(async () => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		originalHome = process.env.HOME;
 		tempHomeDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-disabled-ext-home-"));
 		process.env.HOME = tempHomeDir;
@@ -32,7 +32,7 @@ describe("disabledExtensions runtime filtering", () => {
 	});
 
 	afterEach(async () => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		vi.restoreAllMocks();
 		if (originalHome === undefined) {
 			delete process.env.HOME;

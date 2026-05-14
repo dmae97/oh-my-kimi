@@ -9,46 +9,31 @@ import {
 	Tooltip,
 } from "chart.js";
 import { format } from "date-fns";
-import { ChevronDown, ChevronUp } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Line } from "react-chartjs-2";
 import type { ModelPerformancePoint, ModelStats } from "../types";
 import { useSystemTheme } from "../useSystemTheme";
+import {
+	DetailChartEmpty,
+	detailChartPlugins,
+	detailChartScalesDualAxis,
+	ExpandableModelRow,
+	lineSeriesStyle,
+	MiniSparkline,
+	MODEL_COLORS,
+	ModelNameCell,
+	ModelTableBody,
+	ModelTableHeader,
+	ModelTableShell,
+	TABLE_CHART_THEMES,
+	type TableChartTheme,
+	TrendEmpty,
+} from "./models-table-shared";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
 
-const MODEL_COLORS = [
-	"#a78bfa", // violet
-	"#22d3ee", // cyan
-	"#ec4899", // pink
-	"#4ade80", // green
-	"#fbbf24", // amber
-	"#f87171", // red
-	"#60a5fa", // blue
-];
+const GRID_TEMPLATE = "2fr 0.9fr 0.9fr 1fr 0.8fr 0.8fr 140px 40px";
 
-const CHART_THEMES = {
-	dark: {
-		legendLabel: "#cbd5e1",
-		tooltipBackground: "#16161e",
-		tooltipTitle: "#f8fafc",
-		tooltipBody: "#94a3b8",
-		tooltipBorder: "rgba(255, 255, 255, 0.1)",
-		grid: "rgba(255, 255, 255, 0.06)",
-		tick: "#94a3b8",
-	},
-	light: {
-		legendLabel: "#334155",
-		tooltipBackground: "#ffffff",
-		tooltipTitle: "#0f172a",
-		tooltipBody: "#334155",
-		tooltipBorder: "rgba(15, 23, 42, 0.18)",
-		grid: "rgba(15, 23, 42, 0.08)",
-		tick: "#475569",
-	},
-} as const;
-
-type ChartTheme = (typeof CHART_THEMES)[keyof typeof CHART_THEMES];
 interface ModelsTableProps {
 	models: ModelStats[];
 	performanceSeries: ModelPerformancePoint[];
@@ -69,182 +54,127 @@ export function ModelsTable({ models, performanceSeries }: ModelsTableProps) {
 
 	const performanceSeriesByKey = useMemo(() => buildModelPerformanceLookup(performanceSeries), [performanceSeries]);
 	const theme = useSystemTheme();
-	const chartTheme = CHART_THEMES[theme];
+	const chartTheme = TABLE_CHART_THEMES[theme];
 	const sortedModels = [...models].sort(
 		(a, b) => b.totalInputTokens + b.totalOutputTokens - (a.totalInputTokens + a.totalOutputTokens),
 	);
 
 	return (
-		<div className="surface overflow-hidden">
-			<div className="px-5 py-4 border-b border-[var(--border-subtle)]">
-				<h3 className="text-sm font-semibold text-[var(--text-primary)]">Model Statistics</h3>
-			</div>
+		<ModelTableShell title="Model Statistics">
+			<ModelTableHeader
+				gridTemplate={GRID_TEMPLATE}
+				columns={[
+					{ label: "Model" },
+					{ label: "Requests", align: "right" },
+					{ label: "Cost", align: "right" },
+					{ label: "Tokens", align: "right" },
+					{ label: "Tokens/s", align: "right" },
+					{ label: "TTFT", align: "right" },
+					{ label: "14d Trend", align: "center" },
+				]}
+			/>
 
-			<div className="overflow-x-auto">
-				<div
-					className="grid gap-3 px-5 py-3 text-[var(--text-muted)] text-xs uppercase tracking-wider font-semibold"
-					style={{ gridTemplateColumns: "2fr 0.9fr 0.9fr 1fr 0.8fr 0.8fr 140px 40px" }}
-				>
-					<div>Model</div>
-					<div className="text-right">Requests</div>
-					<div className="text-right">Cost</div>
-					<div className="text-right">Tokens</div>
-					<div className="text-right">Tokens/s</div>
-					<div className="text-right">TTFT</div>
-					<div className="text-center">14d Trend</div>
-					<div />
-				</div>
+			<ModelTableBody>
+				{sortedModels.map((model, index) => {
+					const key = `${model.model}::${model.provider}`;
+					const performance = performanceSeriesByKey.get(key);
+					const trendData = performance?.data ?? [];
+					const trendColor = MODEL_COLORS[index % MODEL_COLORS.length];
+					const isExpanded = expandedKey === key;
+					const errorRate = model.errorRate * 100;
 
-				<div className="max-h-[calc(100vh-300px)] overflow-y-auto">
-					{sortedModels.map((model, index) => {
-						const key = `${model.model}::${model.provider}`;
-						const performance = performanceSeriesByKey.get(key);
-						const trendData = performance?.data ?? [];
-						const trendColor = MODEL_COLORS[index % MODEL_COLORS.length];
-						const isExpanded = expandedKey === key;
-						const errorRate = model.errorRate * 100;
-
-						return (
-							<div key={key} className="border-t border-[var(--border-subtle)]">
-								<button
-									type="button"
-									onClick={() => setExpandedKey(isExpanded ? null : key)}
-									className="w-full bg-transparent border-none text-left px-5 py-3 cursor-pointer hover:bg-[var(--bg-hover)] transition-colors"
-								>
-									<div
-										className="grid gap-3 items-center"
-										style={{ gridTemplateColumns: "2fr 0.9fr 0.9fr 1fr 0.8fr 0.8fr 140px 40px" }}
-									>
+					return (
+						<ExpandableModelRow
+							key={key}
+							gridTemplate={GRID_TEMPLATE}
+							isExpanded={isExpanded}
+							onToggle={() => setExpandedKey(isExpanded ? null : key)}
+							cells={[
+								<ModelNameCell key="name" model={model.model} provider={model.provider} />,
+								<div key="requests" className="text-right text-[var(--text-secondary)] font-mono text-sm">
+									{model.totalRequests.toLocaleString()}
+								</div>,
+								<div key="cost" className="text-right text-[var(--text-secondary)] font-mono text-sm">
+									${model.totalCost.toFixed(2)}
+								</div>,
+								<div key="tokens" className="text-right text-[var(--text-secondary)] font-mono text-sm">
+									{(model.totalInputTokens + model.totalOutputTokens).toLocaleString()}
+								</div>,
+								<div key="tps" className="text-right text-[var(--text-secondary)] font-mono text-sm">
+									{model.avgTokensPerSecond?.toFixed(1) ?? "-"}
+								</div>,
+								<div key="ttft" className="text-right text-[var(--text-secondary)] font-mono text-sm">
+									{model.avgTtft ? `${(model.avgTtft / 1000).toFixed(2)}s` : "-"}
+								</div>,
+							]}
+							trendCell={
+								trendData.length === 0 ? (
+									<TrendEmpty />
+								) : (
+									<MiniSparkline
+										timestamps={trendData.map(d => d.timestamp)}
+										values={trendData.map(d => d.avgTokensPerSecond ?? 0)}
+										color={trendColor}
+									/>
+								)
+							}
+							expandedContent={
+								<div className="grid gap-4" style={{ gridTemplateColumns: "200px 1fr" }}>
+									<div className="space-y-4 text-sm">
 										<div>
-											<div className="font-medium text-[var(--text-primary)]">{model.model}</div>
-											<div className="text-xs text-[var(--text-muted)]">{model.provider}</div>
-										</div>
-										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
-											{model.totalRequests.toLocaleString()}
-										</div>
-										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
-											${model.totalCost.toFixed(2)}
-										</div>
-										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
-											{(model.totalInputTokens + model.totalOutputTokens).toLocaleString()}
-										</div>
-										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
-											{model.avgTokensPerSecond?.toFixed(1) ?? "-"}
-										</div>
-										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
-											{model.avgTtft ? `${(model.avgTtft / 1000).toFixed(2)}s` : "-"}
-										</div>
-										<div className="h-10">
-											{trendData.length === 0 ? (
-												<div className="text-[var(--text-muted)] text-center text-sm">-</div>
-											) : (
-												<TrendChart data={trendData} color={trendColor} />
-											)}
-										</div>
-										<div className="flex justify-center text-[var(--text-muted)]">
-											{isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-										</div>
-									</div>
-								</button>
-
-								{isExpanded && (
-									<div className="px-5 py-4 bg-[var(--bg-elevated)] border-t border-[var(--border-subtle)]">
-										<div className="grid gap-4" style={{ gridTemplateColumns: "200px 1fr" }}>
-											<div className="space-y-4 text-sm">
-												<div>
-													<div className="text-[var(--text-primary)] font-medium mb-2">Quality</div>
-													<div className="space-y-1 text-[var(--text-secondary)]">
-														<div className="flex items-center justify-between">
-															<span>Error rate</span>
-															<span
-																className={
-																	errorRate > 5
-																		? "text-[var(--accent-red)]"
-																		: "text-[var(--accent-green)]"
-																}
-															>
-																{errorRate.toFixed(1)}%
-															</span>
-														</div>
-														<div className="flex items-center justify-between">
-															<span>Cache rate</span>
-															<span className="text-[var(--accent-cyan)]">
-																{(model.cacheRate * 100).toFixed(1)}%
-															</span>
-														</div>
-													</div>
+											<div className="text-[var(--text-primary)] font-medium mb-2">Quality</div>
+											<div className="space-y-1 text-[var(--text-secondary)]">
+												<div className="flex items-center justify-between">
+													<span>Error rate</span>
+													<span
+														className={
+															errorRate > 5 ? "text-[var(--accent-red)]" : "text-[var(--accent-green)]"
+														}
+													>
+														{errorRate.toFixed(1)}%
+													</span>
 												</div>
-												<div>
-													<div className="text-[var(--text-primary)] font-medium mb-2">Latency</div>
-													<div className="space-y-1 text-[var(--text-secondary)]">
-														<div className="flex items-center justify-between">
-															<span>Avg duration</span>
-															<span className="font-mono">
-																{model.avgDuration ? `${(model.avgDuration / 1000).toFixed(2)}s` : "-"}
-															</span>
-														</div>
-														<div className="flex items-center justify-between">
-															<span>Avg TTFT</span>
-															<span className="font-mono">
-																{model.avgTtft ? `${(model.avgTtft / 1000).toFixed(2)}s` : "-"}
-															</span>
-														</div>
-													</div>
+												<div className="flex items-center justify-between">
+													<span>Cache rate</span>
+													<span className="text-[var(--accent-cyan)]">
+														{(model.cacheRate * 100).toFixed(1)}%
+													</span>
 												</div>
 											</div>
-											<div className="h-[200px]">
-												{trendData.length === 0 ? (
-													<div className="h-full flex items-center justify-center text-[var(--text-muted)] text-sm">
-														No data available
-													</div>
-												) : (
-													<PerformanceChart data={trendData} color={trendColor} chartTheme={chartTheme} />
-												)}
+										</div>
+										<div>
+											<div className="text-[var(--text-primary)] font-medium mb-2">Latency</div>
+											<div className="space-y-1 text-[var(--text-secondary)]">
+												<div className="flex items-center justify-between">
+													<span>Avg duration</span>
+													<span className="font-mono">
+														{model.avgDuration ? `${(model.avgDuration / 1000).toFixed(2)}s` : "-"}
+													</span>
+												</div>
+												<div className="flex items-center justify-between">
+													<span>Avg TTFT</span>
+													<span className="font-mono">
+														{model.avgTtft ? `${(model.avgTtft / 1000).toFixed(2)}s` : "-"}
+													</span>
+												</div>
 											</div>
 										</div>
 									</div>
-								)}
-							</div>
-						);
-					})}
-				</div>
-			</div>
-		</div>
+									<div className="h-[200px]">
+										{trendData.length === 0 ? (
+											<DetailChartEmpty />
+										) : (
+											<PerformanceChart data={trendData} color={trendColor} chartTheme={chartTheme} />
+										)}
+									</div>
+								</div>
+							}
+						/>
+					);
+				})}
+			</ModelTableBody>
+		</ModelTableShell>
 	);
-}
-
-function TrendChart({
-	data,
-	color,
-}: {
-	data: Array<{ timestamp: number; avgTokensPerSecond: number | null }>;
-	color: string;
-}) {
-	const chartData = {
-		labels: data.map(d => format(new Date(d.timestamp), "MMM d")),
-		datasets: [
-			{
-				data: data.map(d => d.avgTokensPerSecond ?? 0),
-				borderColor: color,
-				backgroundColor: "transparent",
-				tension: 0.4,
-				pointRadius: 0,
-				borderWidth: 2,
-			},
-		],
-	};
-
-	const options = {
-		responsive: true,
-		maintainAspectRatio: false,
-		plugins: { legend: { display: false }, tooltip: { enabled: false } },
-		scales: {
-			x: { display: false },
-			y: { display: false, min: 0 },
-		},
-	};
-
-	return <Line data={chartData} options={options} />;
 }
 
 function PerformanceChart({
@@ -254,7 +184,7 @@ function PerformanceChart({
 }: {
 	data: Array<{ timestamp: number; avgTtftSeconds: number | null; avgTokensPerSecond: number | null }>;
 	color: string;
-	chartTheme: ChartTheme;
+	chartTheme: TableChartTheme;
 }) {
 	const chartData = {
 		labels: data.map(d => format(new Date(d.timestamp), "MMM d")),
@@ -262,21 +192,13 @@ function PerformanceChart({
 			{
 				label: "TTFT",
 				data: data.map(d => d.avgTtftSeconds ?? null),
-				borderColor: "#fbbf24",
-				backgroundColor: "transparent",
-				tension: 0.4,
-				pointRadius: 0,
-				borderWidth: 2,
+				...lineSeriesStyle("#fbbf24"),
 				yAxisID: "y" as const,
 			},
 			{
 				label: "Tokens/s",
 				data: data.map(d => d.avgTokensPerSecond ?? null),
-				borderColor: color,
-				backgroundColor: "transparent",
-				tension: 0.4,
-				pointRadius: 0,
-				borderWidth: 2,
+				...lineSeriesStyle(color),
 				yAxisID: "y1" as const,
 			},
 		],
@@ -285,46 +207,8 @@ function PerformanceChart({
 	const options = {
 		responsive: true,
 		maintainAspectRatio: false,
-		plugins: {
-			legend: {
-				display: true,
-				position: "top" as const,
-				labels: {
-					color: chartTheme.legendLabel,
-					usePointStyle: true,
-					padding: 16,
-					font: { size: 12 },
-				},
-			},
-			tooltip: {
-				backgroundColor: chartTheme.tooltipBackground,
-				titleColor: chartTheme.tooltipTitle,
-				bodyColor: chartTheme.tooltipBody,
-				borderColor: chartTheme.tooltipBorder,
-				borderWidth: 1,
-				cornerRadius: 8,
-			},
-		},
-		scales: {
-			x: {
-				grid: { color: chartTheme.grid },
-				ticks: { color: chartTheme.tick, font: { size: 11 } },
-			},
-			y: {
-				type: "linear" as const,
-				display: true,
-				position: "left" as const,
-				grid: { color: chartTheme.grid },
-				ticks: { color: chartTheme.tick, font: { size: 11 } },
-			},
-			y1: {
-				type: "linear" as const,
-				display: true,
-				position: "right" as const,
-				grid: { drawOnChartArea: false },
-				ticks: { color: chartTheme.tick, font: { size: 11 } },
-			},
-		},
+		plugins: detailChartPlugins(chartTheme),
+		scales: detailChartScalesDualAxis(chartTheme),
 	};
 
 	return <Line data={chartData} options={options} />;

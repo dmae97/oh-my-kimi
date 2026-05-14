@@ -47,6 +47,18 @@ type WizardStep =
 	| "scope"
 	| "confirm";
 
+/**
+ * Result of the wizard's OAuth callback. `credentialId` is mandatory;
+ * `clientId`/`clientSecret` are populated when the OAuth provider performed
+ * dynamic client registration (or when the caller pre-supplied them) so the
+ * wizard can fold them into the final `mcp.json` entry for refresh.
+ */
+export interface MCPAddWizardOAuthResult {
+	credentialId: string;
+	clientId?: string;
+	clientSecret?: string;
+}
+
 interface WizardState {
 	name: string;
 	transport: TransportType | null;
@@ -104,7 +116,13 @@ export class MCPAddWizard extends Container {
 	#onCompleteCallback: (name: string, config: MCPServerConfig, scope: Scope) => void;
 	#onCancelCallback: () => void;
 	#onOAuthCallback:
-		| ((authUrl: string, tokenUrl: string, clientId: string, clientSecret: string, scopes: string) => Promise<string>)
+		| ((
+				authUrl: string,
+				tokenUrl: string,
+				clientId: string,
+				clientSecret: string,
+				scopes: string,
+		  ) => Promise<MCPAddWizardOAuthResult>)
 		| null = null;
 	#onTestConnectionCallback: ((config: MCPServerConfig) => Promise<void>) | null = null;
 	#onRenderCallback: (() => void) | null = null;
@@ -118,7 +136,7 @@ export class MCPAddWizard extends Container {
 			clientId: string,
 			clientSecret: string,
 			scopes: string,
-		) => Promise<string>,
+		) => Promise<MCPAddWizardOAuthResult>,
 		onTestConnection?: (config: MCPServerConfig) => Promise<void>,
 		onRender?: () => void,
 		initialName?: string,
@@ -1120,7 +1138,7 @@ export class MCPAddWizard extends Container {
 
 		try {
 			// Call OAuth handler
-			const credentialId = await this.#onOAuthCallback(
+			const oauthResult = await this.#onOAuthCallback(
 				this.#state.oauthAuthUrl,
 				this.#state.oauthTokenUrl,
 				this.#state.oauthClientId,
@@ -1128,8 +1146,11 @@ export class MCPAddWizard extends Container {
 				this.#state.oauthScopes,
 			);
 
-			// Store credential ID
-			this.#state.oauthCredentialId = credentialId;
+			// Store credential ID + any dynamically-registered client credentials,
+			// so the final mcp.json entry persists everything needed for refresh.
+			this.#state.oauthCredentialId = oauthResult.credentialId;
+			if (oauthResult.clientId) this.#state.oauthClientId = oauthResult.clientId;
+			if (oauthResult.clientSecret) this.#state.oauthClientSecret = oauthResult.clientSecret;
 
 			// Show success message
 			this.#contentContainer.clear();

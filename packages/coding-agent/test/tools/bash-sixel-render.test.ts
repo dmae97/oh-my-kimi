@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
-import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { bashToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
 import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
@@ -116,5 +116,33 @@ describe("bashToolRenderer", () => {
 
 		expect(lines.filter(line => line === sixel)).toHaveLength(1);
 		expect(lines.some(line => line.includes("ctrl+o to expand"))).toBe(false);
+	});
+
+	it("highlights every line of a multi-line bash command in renderResult", async () => {
+		const uiTheme = await getThemeByName("dark");
+		expect(uiTheme).toBeDefined();
+		setThemeInstance(uiTheme!);
+		const command = 'for f in a b; do\n\techo "$f"\ndone';
+		const component = bashToolRenderer.renderResult(
+			{ content: [{ type: "text", text: "" }], details: {}, isError: false },
+			{ expanded: false, isPartial: false },
+			uiTheme!,
+			{ command },
+		);
+		const rendered = component.render(120);
+		const sanitized = rendered.map(line => sanitizeText(line));
+		// Every command line must appear in the output, untruncated.
+		const findLine = (needle: string) => sanitized.findIndex(line => line.includes(needle));
+		const forLine = findLine("for f in a b; do");
+		const echoLine = findLine('echo "$f"');
+		const doneLine = findLine("done");
+		expect(forLine).toBeGreaterThanOrEqual(0);
+		expect(echoLine).toBeGreaterThanOrEqual(0);
+		expect(doneLine).toBeGreaterThanOrEqual(0);
+		// Each command line carries its own SGR run so terminals don't drop
+		// styling after the first newline (the bug this fix addresses).
+		for (const idx of [forLine, echoLine, doneLine]) {
+			expect(rendered[idx]).toMatch(/\u001b\[38;(?:2|5);/);
+		}
 	});
 });

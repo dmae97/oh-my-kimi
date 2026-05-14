@@ -306,6 +306,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 				recentOutput: [],
 				toolCount: 0,
 				tokens: 0,
+				cost: 0,
 				durationMs: 0,
 			});
 		}
@@ -390,6 +391,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 										: "failed";
 								progress.durationMs = singleResult?.durationMs ?? Math.max(0, Date.now() - startedAt);
 								progress.tokens = singleResult?.tokens ?? 0;
+								progress.cost = singleResult?.usage?.cost.total ?? 0;
 								progress.extractedToolData = singleResult?.extractedToolData;
 							}
 							completedJobs += 1;
@@ -831,6 +833,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 					recentOutput: [],
 					toolCount: 0,
 					tokens: 0,
+					cost: 0,
 					durationMs: 0,
 					modelOverride,
 					description: taskItem.description,
