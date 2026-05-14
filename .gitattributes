@@ -52,3 +52,6 @@ poetry.lock -text
 *.cmd text eol=crlf
 *.bat text eol=crlf
 
+# Changelogs are append-mostly; auto-merge by unioning both sides.
+packages/*/CHANGELOG.md merge=union
+
