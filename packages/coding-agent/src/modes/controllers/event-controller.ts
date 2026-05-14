@@ -64,6 +64,7 @@ export class EventController {
 			irc_message: e => this.#handleIrcMessage(e),
 			notice: e => this.#handleNotice(e),
 			thinking_level_changed: async () => {},
+			goal_updated: async () => {},
 		} satisfies AgentSessionEventHandlers;
 	}
 

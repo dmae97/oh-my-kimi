@@ -129,7 +129,7 @@ export async function submitInteractiveInput(
 		InteractiveMode,
 		"markPendingSubmissionStarted" | "finishPendingSubmission" | "showError" | "checkShutdownRequested"
 	>,
-	session: Pick<AgentSession, "prompt">,
+	session: Pick<AgentSession, "prompt" | "promptCustomMessage">,
 	input: SubmittedUserInput,
 ): Promise<void> {
 	if (input.cancelled) {
@@ -141,7 +141,16 @@ export async function submitInteractiveInput(
 		if (!input.started && !mode.markPendingSubmissionStarted(input)) {
 			return;
 		}
-		await session.prompt(input.text, { images: input.images });
+		if (input.customType) {
+			await session.promptCustomMessage({
+				customType: input.customType,
+				content: input.text,
+				display: input.display ?? false,
+				attribution: "agent",
+			});
+		} else {
+			await session.prompt(input.text, { images: input.images });
+		}
 	} catch (error: unknown) {
 		const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 		mode.showError(errorMessage);

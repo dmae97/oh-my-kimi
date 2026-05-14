@@ -129,6 +129,8 @@
       "thinking.xhigh": "●",
       "icon.model": "◇",
       "icon.plan": "◈",
+      "icon.goal": "⊙",
+      "icon.pause": "‖",
       "icon.loop": "↻",
       "icon.folder": "▸",
       "icon.pi": "π",

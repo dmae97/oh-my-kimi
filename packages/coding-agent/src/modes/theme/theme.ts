@@ -91,6 +91,8 @@ export type SymbolKey =
 	// Icons
 	| "icon.model"
 	| "icon.plan"
+	| "icon.goal"
+	| "icon.pause"
 	| "icon.loop"
 	| "icon.folder"
 	| "icon.file"
@@ -252,6 +254,8 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	// Icons
 	"icon.model": "⬢",
 	"icon.plan": "🗺",
+	"icon.goal": "🎯",
+	"icon.pause": "⏸",
 	"icon.loop": "↻",
 	"icon.folder": "📁",
 	"icon.file": "📄",
@@ -464,6 +468,10 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.model": "\uec19",
 	// pick:  | alt:  
 	"icon.plan": "\uf2d2",
+	// pick:  (nf-fa-bullseye) | alt:  (nf-md-target) ◎ ⌖
+	"icon.goal": "\uf140",
+	// pick:  (nf-fa-pause) | alt: ⏸ ||
+	"icon.pause": "\uf04c",
 	// pick: ↻ | alt: ⟳
 	"icon.loop": "\uf021",
 	// pick:  | alt:  
@@ -666,6 +674,8 @@ const ASCII_SYMBOLS: SymbolMap = {
 	// Icons
 	"icon.model": "[M]",
 	"icon.plan": "plan",
+	"icon.goal": "goal",
+	"icon.pause": "||",
 	"icon.loop": "loop",
 	"icon.folder": "[D]",
 	"icon.file": "[F]",
@@ -1443,6 +1453,8 @@ export class Theme {
 		return {
 			model: this.#symbols["icon.model"],
 			plan: this.#symbols["icon.plan"],
+			goal: this.#symbols["icon.goal"],
+			pause: this.#symbols["icon.pause"],
 			loop: this.#symbols["icon.loop"],
 			folder: this.#symbols["icon.folder"],
 			file: this.#symbols["icon.file"],

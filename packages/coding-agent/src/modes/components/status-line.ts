@@ -58,6 +58,7 @@ export class StatusLineComponent implements Component {
 	#sessionStartTime: number = Date.now();
 	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#loopModeStatus: { enabled: boolean } | null = null;
+	#goalModeStatus: { enabled: boolean; paused: boolean } | null = null;
 
 	// Git status caching (1s TTL)
 	#cachedGitStatus: { staged: number; unstaged: number; untracked: number } | null = null;
@@ -110,6 +111,10 @@ export class StatusLineComponent implements Component {
 
 	setLoopModeStatus(status: { enabled: boolean } | undefined): void {
 		this.#loopModeStatus = status ?? null;
+	}
+
+	setGoalModeStatus(status: { enabled: boolean; paused: boolean } | undefined): void {
+		this.#goalModeStatus = status ?? null;
 	}
 
 	setHookStatus(key: string, text: string | undefined): void {
@@ -346,6 +351,7 @@ export class StatusLineComponent implements Component {
 			options: this.#resolveSettings().segmentOptions ?? {},
 			planMode: this.#planModeStatus,
 			loopMode: this.#loopModeStatus,
+			goalMode: this.#goalModeStatus,
 			usageStats,
 			contextPercent,
 			contextWindow,

@@ -27,6 +27,10 @@ export interface SegmentContext {
 	loopMode: {
 		enabled: boolean;
 	} | null;
+	goalMode: {
+		enabled: boolean;
+		paused: boolean;
+	} | null;
 	// Cached values for performance (computed once per render)
 	usageStats: {
 		input: number;

@@ -6,6 +6,7 @@
 import type { Component } from "@oh-my-pi/pi-tui";
 import { editToolRenderer } from "../edit/renderer";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import { goalToolRenderer } from "../goals/tools/goal-tool";
 import { lspToolRenderer } from "../lsp/render";
 import type { Theme } from "../modes/theme/theme";
 import { taskToolRenderer } from "../task/render";
@@ -68,6 +69,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	task: taskToolRenderer as ToolRenderer,
 	todo_write: todoWriteToolRenderer as ToolRenderer,
 	github: githubToolRenderer as ToolRenderer,
+	goal: goalToolRenderer as ToolRenderer,
 	web_search: webSearchToolRenderer as ToolRenderer,
 	write: writeToolRenderer as ToolRenderer,
 };

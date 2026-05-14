@@ -38,6 +38,8 @@ export type CompactionQueuedMessage = {
 export type SubmittedUserInput = {
 	text: string;
 	images?: ImageContent[];
+	customType?: string;
+	display?: boolean;
 	cancelled: boolean;
 	started: boolean;
 };
@@ -87,6 +89,8 @@ export interface InteractiveModeContext {
 	toolOutputExpanded: boolean;
 	todoExpanded: boolean;
 	planModeEnabled: boolean;
+	goalModeEnabled: boolean;
+	goalModePaused: boolean;
 	loopModeEnabled: boolean;
 	loopPrompt?: string;
 	loopLimit?: LoopLimitRuntime;
@@ -154,7 +158,12 @@ export interface InteractiveModeContext {
 	setWorkingMessage(message?: string): void;
 	applyPendingWorkingMessage(): void;
 	ensureLoadingAnimation(): void;
-	startPendingSubmission(input: { text: string; images?: ImageContent[] }): SubmittedUserInput;
+	startPendingSubmission(input: {
+		text: string;
+		images?: ImageContent[];
+		customType?: string;
+		display?: boolean;
+	}): SubmittedUserInput;
 	cancelPendingSubmission(): boolean;
 	markPendingSubmissionStarted(input: SubmittedUserInput): boolean;
 	finishPendingSubmission(input: SubmittedUserInput): void;
@@ -258,6 +267,7 @@ export interface InteractiveModeContext {
 	openExternalEditor(): void;
 	registerExtensionShortcuts(): void;
 	handlePlanModeCommand(initialPrompt?: string): Promise<void>;
+	handleGoalModeCommand(rest?: string): Promise<void>;
 	handleLoopCommand(args?: string): Promise<void>;
 	disableLoopMode(): void;
 	pauseLoop(): void;

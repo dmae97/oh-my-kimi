@@ -2135,6 +2135,36 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"goal.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tasks",
+			label: "Goal Mode",
+			description: "Enable per-session goal mode and the hidden goal tool",
+		},
+	},
+
+	"goal.statusInFooter": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tasks",
+			label: "Goal Status In Footer",
+			description: "Show token budget alongside the goal indicator in the status line",
+		},
+	},
+
+	"goal.continuationModes": {
+		type: "array",
+		default: ["interactive"],
+		ui: {
+			tab: "tasks",
+			label: "Goal Continuation Modes",
+			description: "Run modes where active goals may auto-continue between turns",
+		},
+	},
+
 	// Delegation
 	"task.isolation.mode": {
 		type: "enum",

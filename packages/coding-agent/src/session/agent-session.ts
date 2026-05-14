@@ -110,6 +110,8 @@ import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
+import { GoalRuntime } from "../goals/runtime";
+import type { Goal, GoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
 import {
@@ -217,7 +219,8 @@ export type AgentSessionEvent =
 	| { type: "todo_auto_clear" }
 	| { type: "irc_message"; message: CustomMessage }
 	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string }
-	| { type: "thinking_level_changed"; thinkingLevel: ThinkingLevel | undefined };
+	| { type: "thinking_level_changed"; thinkingLevel: ThinkingLevel | undefined }
+	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -641,6 +644,9 @@ export class AgentSession {
 	#pendingNextTurnMessages: CustomMessage[] = [];
 	#scheduledHiddenNextTurnGeneration: number | undefined = undefined;
 	#planModeState: PlanModeState | undefined;
+	#goalModeState: GoalModeState | undefined;
+	#goalRuntime: GoalRuntime;
+	#goalTurnCounter = 0;
 	#planReferenceSent = false;
 	#planReferencePath = "local://PLAN.md";
 	#clientBridge: ClientBridge | undefined;
@@ -912,6 +918,44 @@ export class AgentSession {
 		this.agent.providerSessionState = this.#providerSessionState;
 		this.#syncAgentSessionId();
 		this.#syncTodoPhasesFromBranch();
+		this.#goalRuntime = new GoalRuntime({
+			getState: () => this.#goalModeState,
+			setState: state => {
+				this.#goalModeState = state;
+			},
+			getCurrentUsage: () => {
+				const usage = this.getSessionStats().tokens;
+				return {
+					input: usage.input,
+					output: usage.output,
+					cacheRead: usage.cacheRead,
+					cacheWrite: usage.cacheWrite,
+				};
+			},
+			emit: event => {
+				if (event.type === "goal_updated") {
+					return this.#emitSessionEvent({ type: "goal_updated", goal: event.goal, state: event.state });
+				}
+			},
+			persist: (mode, state) => {
+				if (mode === "none") {
+					this.sessionManager.appendModeChange("none");
+				} else if (state) {
+					this.sessionManager.appendModeChange(mode, { goal: state.goal });
+				}
+			},
+			sendHiddenMessage: async message => {
+				await this.sendCustomMessage(
+					{
+						customType: message.customType,
+						content: message.content,
+						display: false,
+						attribution: "agent",
+					},
+					{ deliverAs: message.deliverAs },
+				);
+			},
+		});
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, hooks, auto-compaction, retry logic)
@@ -1199,6 +1243,16 @@ export class AgentSession {
 			}
 		}
 
+		if (event.type === "turn_start") {
+			const usage = this.getSessionStats().tokens;
+			this.#goalRuntime.onTurnStart(`turn-${++this.#goalTurnCounter}`, {
+				input: usage.input,
+				output: usage.output,
+				cacheRead: usage.cacheRead,
+				cacheWrite: usage.cacheWrite,
+			});
+		}
+
 		await this.#emitSessionEvent(displayEvent);
 
 		if (event.type === "turn_start") {
@@ -1220,6 +1274,13 @@ export class AgentSession {
 				this.#toolChoiceQueue.reject(msg.stopReason === "error" ? "error" : "aborted");
 			} else {
 				this.#toolChoiceQueue.resolve();
+			}
+		}
+		if (event.type === "tool_execution_end") {
+			if (event.toolName === "goal") {
+				await this.#goalRuntime.onGoalToolCompleted();
+			} else {
+				await this.#goalRuntime.onToolCompleted(event.toolName);
 			}
 		}
 		if (event.type === "tool_execution_end" && event.toolName === "yield" && !event.isError) {
@@ -1457,6 +1518,15 @@ export class AgentSession {
 
 		// Check auto-retry and auto-compaction after agent completes
 		if (event.type === "agent_end") {
+			const usage = this.getSessionStats().tokens;
+			await this.#goalRuntime.onAgentEnd({
+				currentUsage: {
+					input: usage.input,
+					output: usage.output,
+					cacheRead: usage.cacheRead,
+					cacheWrite: usage.cacheWrite,
+				},
+			});
 			const fallbackAssistant = [...event.messages]
 				.reverse()
 				.find((message): message is AssistantMessage => message.role === "assistant");
@@ -1612,7 +1682,10 @@ export class AgentSession {
 				try {
 					await this.#maybeRestoreRetryFallbackPrimary();
 					await this.agent.continue();
-				} catch {
+				} catch (error) {
+					logger.warn("agent.continue failed after scheduling", {
+						error: error instanceof Error ? error.message : String(error),
+					});
 					options?.onError?.();
 				}
 			},
@@ -2311,6 +2384,12 @@ export class AgentSession {
 				todos: event.todos,
 				attempt: event.attempt,
 				maxAttempts: event.maxAttempts,
+			});
+		} else if (event.type === "goal_updated") {
+			await this.#extensionRunner.emit({
+				type: "goal_updated",
+				goal: event.goal,
+				state: event.state,
 			});
 		}
 	}
@@ -3272,6 +3351,18 @@ export class AgentSession {
 		}
 	}
 
+	getGoalModeState(): GoalModeState | undefined {
+		return this.#goalModeState;
+	}
+
+	setGoalModeState(state: GoalModeState | undefined): void {
+		this.#goalModeState = state;
+	}
+
+	get goalRuntime(): GoalRuntime {
+		return this.#goalRuntime;
+	}
+
 	markPlanReferenceSent(): void {
 		this.#planReferenceSent = true;
 	}
@@ -3318,6 +3409,21 @@ export class AgentSession {
 				content: message.content,
 				display: message.display,
 				details: message.details,
+			},
+			options ? { deliverAs: options.deliverAs } : undefined,
+		);
+	}
+
+	async sendGoalModeContext(options?: { deliverAs?: "steer" | "followUp" | "nextTurn" }): Promise<void> {
+		const message = this.#buildGoalModeMessage();
+		if (!message) return;
+		await this.sendCustomMessage(
+			{
+				customType: message.customType,
+				content: message.content,
+				display: message.display,
+				details: message.details,
+				attribution: message.attribution,
 			},
 			options ? { deliverAs: options.deliverAs } : undefined,
 		);
@@ -3425,6 +3531,19 @@ export class AgentSession {
 		return {
 			role: "custom",
 			customType: "plan-mode-context",
+			content,
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+	}
+
+	#buildGoalModeMessage(): CustomMessage | null {
+		const content = this.#goalRuntime.buildActivePrompt();
+		if (!content) return null;
+		return {
+			role: "custom",
+			customType: "goal-mode-context",
 			content,
 			display: false,
 			attribution: "agent",
@@ -3606,6 +3725,10 @@ export class AgentSession {
 			const planModeMessage = await this.#buildPlanModeMessage();
 			if (planModeMessage) {
 				messages.push(planModeMessage);
+			}
+			const goalModeMessage = this.#buildGoalModeMessage();
+			if (goalModeMessage) {
+				messages.push(goalModeMessage);
 			}
 			if (options?.prependMessages) {
 				messages.push(...options.prependMessages);
@@ -4259,7 +4382,7 @@ export class AgentSession {
 	/**
 	 * Abort current operation and wait for agent to become idle.
 	 */
-	async abort(): Promise<void> {
+	async abort(options?: { goalReason?: "interrupted" | "internal" }): Promise<void> {
 		this.abortRetry();
 		this.#promptGeneration++;
 		this.#scheduledHiddenNextTurnGeneration = undefined;
@@ -4271,6 +4394,7 @@ export class AgentSession {
 		this.agent.abort();
 		await postPromptDrain;
 		await this.agent.waitForIdle();
+		await this.#goalRuntime.onTaskAborted({ reason: options?.goalReason ?? "interrupted" });
 		// Clear prompt-in-flight state: waitForIdle resolves when the agent loop's finally
 		// block runs, but nested prompt setup/finalizers may still be unwinding. Without this,
 		// a subsequent prompt() can incorrectly observe the session as busy after an abort.

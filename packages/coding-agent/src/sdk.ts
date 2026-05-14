@@ -1044,7 +1044,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getSessionSpawns: () => options.spawns ?? "*",
 			getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
 			getActiveModelString,
-			getPlanModeState: () => session.getPlanModeState(),
+			getPlanModeState: () => session?.getPlanModeState(),
+			getGoalModeState: () => session?.getGoalModeState(),
+			getGoalRuntime: () => session?.goalRuntime,
 			getClientBridge: () => session?.clientBridge,
 			getCompactContext: () => session.formatCompactContext(),
 			getTodoPhases: () => session.getTodoPhases(),
@@ -1379,6 +1381,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		for (const tool of builtinTools) {
 			toolRegistry.set(tool.name, tool);
 		}
+		if (!toolRegistry.has("goal") && settings.get("goal.enabled")) {
+			const goalTool = await logger.time("createTools:goal:session", HIDDEN_TOOLS.goal, toolSession);
+			if (goalTool) {
+				toolRegistry.set(goalTool.name, wrapToolWithMetaNotice(goalTool));
+			}
+		}
 		for (const tool of wrappedExtensionTools) {
 			toolRegistry.set(tool.name, tool);
 		}
@@ -1517,7 +1525,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const defaultInactiveToolNames = new Set(
 			registeredTools.filter(tool => tool.definition.defaultInactive).map(tool => tool.definition.name),
 		);
-		const requestedActiveToolNames = normalizedRequested;
+		const requestedActiveToolNames = normalizedRequested.filter(name => name !== "goal");
 		const initialRequestedActiveToolNames = options.toolNames
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));

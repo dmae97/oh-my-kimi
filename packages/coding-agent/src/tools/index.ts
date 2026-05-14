@@ -6,6 +6,8 @@ import type { Settings } from "../config/settings";
 import { EditTool } from "../edit";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import type { Skill } from "../extensibility/skills";
+import type { GoalModeState, GoalRuntime } from "../goals";
+import { GoalTool } from "../goals/tools/goal-tool";
 import type { HindsightSessionState } from "../hindsight/state";
 import { LspTool } from "../lsp";
 import type { PlanModeState } from "../plan-mode/state";
@@ -56,6 +58,7 @@ import { YieldTool } from "./yield";
 export * from "../edit";
 export * from "../exa";
 export type * from "../exa/types";
+export * from "../goals";
 export * from "../lsp";
 export * from "../session/streaming-output";
 export * from "../task";
@@ -177,6 +180,10 @@ export interface ToolSession {
 	settings: Settings;
 	/** Plan mode state (if active) */
 	getPlanModeState?: () => PlanModeState | undefined;
+	/** Goal mode state (if active or paused) */
+	getGoalModeState?: () => GoalModeState | undefined;
+	/** Goal runtime for the active agent session. */
+	getGoalRuntime?: () => GoalRuntime | undefined;
 	/** Bridge to the connected client (e.g. ACP editor host). Tools should route fs/terminal/permission requests through this when available. */
 	getClientBridge?: () => ClientBridge | undefined;
 	/** Get compact conversation context for subagents (excludes tool results, system prompts) */
@@ -308,6 +315,7 @@ export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	report_finding: () => reportFindingTool,
 	report_tool_issue: s => createReportToolIssueTool(s),
 	resolve: s => new ResolveTool(s),
+	goal: s => new GoalTool(s),
 };
 
 export type ToolName = keyof typeof BUILTIN_TOOLS;
@@ -354,8 +362,13 @@ export function resolveEvalBackends(session: ToolSession): EvalBackendsAllowance
 export async function createTools(session: ToolSession, toolNames?: string[]): Promise<Tool[]> {
 	const includeYield = session.requireYieldTool === true;
 	const enableLsp = session.enableLsp ?? true;
-	const requestedTools =
+	let requestedTools =
 		toolNames && toolNames.length > 0 ? [...new Set(toolNames.map(name => name.toLowerCase()))] : undefined;
+	const goalEnabled = session.settings.get("goal.enabled");
+	const goalModeActive = goalEnabled && session.getGoalModeState?.()?.enabled === true;
+	if (goalModeActive && requestedTools && !requestedTools.includes("goal")) {
+		requestedTools = [...requestedTools, "goal"];
+	}
 	const backends = resolveEvalBackends(session);
 	const allowPython = backends.python;
 	const allowJs = backends.js;
@@ -427,6 +440,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 
 	const allTools: Record<string, ToolFactory> = { ...BUILTIN_TOOLS, ...HIDDEN_TOOLS };
 	const isToolAllowed = (name: string) => {
+		if (name === "goal") return goalEnabled && goalModeActive;
 		if (name === "lsp") return enableLsp && session.settings.get("lsp.enabled");
 		if (name === "bash") return true;
 		if (name === "eval") return allowEval;
@@ -476,6 +490,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 						.filter(([name]) => isToolAllowed(name))
 						.map(([name, factory]) => [name, factory] as const),
 					...(includeYield ? ([["yield", HIDDEN_TOOLS.yield]] as const) : []),
+					...(goalModeActive ? ([["goal", HIDDEN_TOOLS.goal]] as const) : []),
 				];
 
 	const baseResults = await Promise.all(
