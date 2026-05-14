@@ -8,6 +8,7 @@ Purely textual format. The tool has NO awareness of language, indentation, brack
 
 <ops>
 @@ PATH          header: subsequent ops apply to PATH
+Each op line is ONE of:
 + ANCHOR         insert lines AFTER  the anchored line (or EOF); payload follows as `{{hsep}}TEXT` lines
 < ANCHOR         insert lines BEFORE the anchored line (or BOF); payload follows as `{{hsep}}TEXT` lines
 - A..B           delete the line range (inclusive).
@@ -15,15 +16,11 @@ Purely textual format. The tool has NO awareness of language, indentation, brack
 </ops>
 
 <format-reminder>
-Each op line is ONE of:
-  + ANCHOR        ← nothing after the anchor! Content goes on ~ lines below.
-  < ANCHOR        ← same rule.
-  - A..B          ← no content needed (deletion).
-  = A..B          ← followed by ~TEXT payload lines.
+Op lines carry no content — payload goes on the next line.
 
-WRONG:  + 129pg|                 some code here
-RIGHT:  + 129pg
-        ~                some code here
+WRONG: + 5pg| some code
+RIGHT: + 5pg
+       {{hsep}} some code
 </format-reminder>
 
 <rules>
