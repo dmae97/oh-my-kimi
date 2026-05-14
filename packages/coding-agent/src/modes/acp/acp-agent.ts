@@ -97,6 +97,7 @@ type PromptTurnState = {
 	unsubscribe: (() => void) | undefined;
 	resolve: (value: PromptResponse) => void;
 	reject: (reason?: unknown) => void;
+	promise: Promise<PromptResponse>;
 };
 
 type ManagedSessionRecord = {
@@ -380,8 +381,12 @@ export class AcpAgent implements Agent {
 
 	async prompt(params: PromptRequest): Promise<PromptResponse> {
 		const record = this.#getSessionRecord(params.sessionId);
-		if (record.promptTurn && !record.promptTurn.settled) {
-			throw new Error("ACP prompt already in progress for this session");
+		const activeTurn = record.promptTurn;
+		if (activeTurn && !activeTurn.settled) {
+			if (record.session.isStreaming) {
+				throw new Error("ACP prompt already in progress for this session");
+			}
+			await activeTurn.promise.catch(() => undefined);
 		}
 
 		const converted = this.#convertPromptBlocks(params.prompt);
@@ -394,6 +399,7 @@ export class AcpAgent implements Agent {
 			unsubscribe: undefined,
 			resolve: pendingPrompt.resolve,
 			reject: pendingPrompt.reject,
+			promise: pendingPrompt.promise,
 		};
 
 		record.promptTurn.unsubscribe = record.session.subscribe(event => {
@@ -777,6 +783,7 @@ export class AcpAgent implements Agent {
 
 		if (event.type === "agent_end") {
 			await this.#emitEndOfTurnUpdates(record);
+			await record.session.waitForIdle();
 			this.#finishPrompt(record, {
 				stopReason: this.#resolveStopReason(event, promptTurn.cancelRequested),
 				usage: this.#buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),

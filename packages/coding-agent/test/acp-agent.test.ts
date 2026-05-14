@@ -92,6 +92,8 @@ class FakeAgentSession {
 	skillsSettings = { enableSkillCommands: true };
 	skills: Array<{ name: string; description: string; filePath: string; baseDir: string; source: string }> = [];
 	planModeState: PlanModeState | undefined;
+	waitForIdleCalls = 0;
+	waitForIdleBlocker: (() => Promise<void>) | undefined;
 	#listeners = new Set<(event: AgentSessionEvent) => void>();
 
 	constructor(
@@ -102,7 +104,9 @@ class FakeAgentSession {
 		this.sessionId = this.sessionManager.getSessionId();
 		this.agent = {
 			sessionId: this.sessionId,
-			waitForIdle: async () => {},
+			waitForIdle: async () => {
+				await this.waitForIdle();
+			},
 		};
 		this.model = models[0];
 	}
@@ -173,6 +177,11 @@ class FakeAgentSession {
 			} as AgentSessionEvent);
 		}
 		this.isStreaming = false;
+	}
+
+	async waitForIdle(): Promise<void> {
+		this.waitForIdleCalls++;
+		await this.waitForIdleBlocker?.();
 	}
 
 	async abort(): Promise<void> {
@@ -838,6 +847,77 @@ describe("ACP agent", () => {
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
+	});
+
+	it("waits for AgentSession idle cleanup after agent_end before returning", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		const { promise: idleBlocked, resolve: markIdleBlocked } = Promise.withResolvers<void>();
+		const { promise: releaseIdle, resolve: unblockIdle } = Promise.withResolvers<void>();
+		session.waitForIdleBlocker = async () => {
+			markIdleBlocked();
+			await releaseIdle;
+		};
+
+		const firstPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000029",
+			prompt: [{ type: "text", text: "wait for cleanup" }],
+		} as PromptRequest);
+		await idleBlocked;
+
+		try {
+			const returnedBeforeIdle = await Promise.race([firstPrompt.then(() => true), Bun.sleep(0).then(() => false)]);
+			expect(returnedBeforeIdle).toBe(false);
+			expect(session.waitForIdleCalls).toBe(1);
+
+			unblockIdle();
+			const response = await firstPrompt;
+			expect(response.userMessageId).toBe("00000000-0000-4000-8000-000000000029");
+		} finally {
+			unblockIdle();
+			harness.abortController.abort();
+			await Bun.sleep(0);
+		}
+	});
+
+	it("queues next prompt until AgentSession idle cleanup completes", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		const { promise: idleBlocked, resolve: markIdleBlocked } = Promise.withResolvers<void>();
+		const { promise: releaseIdle, resolve: unblockIdle } = Promise.withResolvers<void>();
+		session.waitForIdleBlocker = async () => {
+			markIdleBlocked();
+			await releaseIdle;
+		};
+
+		const firstPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000030",
+			prompt: [{ type: "text", text: "wait for cleanup" }],
+		} as PromptRequest);
+		await idleBlocked;
+
+		try {
+			const secondPrompt = harness.agent.prompt({
+				sessionId: created.sessionId,
+				messageId: "00000000-0000-4000-8000-000000000031",
+				prompt: [{ type: "text", text: "after cleanup" }],
+			} as PromptRequest);
+			await Bun.sleep(0);
+			expect(session.promptCalls).toEqual(["wait for cleanup"]);
+
+			unblockIdle();
+			await firstPrompt;
+			await secondPrompt;
+			expect(session.promptCalls).toEqual(["wait for cleanup", "after cleanup"]);
+		} finally {
+			unblockIdle();
+			harness.abortController.abort();
+			await Bun.sleep(0);
+		}
 	});
 
 	it("executes consumed ACP builtins without prompting the agent", async () => {
