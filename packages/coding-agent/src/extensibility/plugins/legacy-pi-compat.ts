@@ -3,21 +3,46 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
 
-const LEGACY_PI_PACKAGE_MAP = {
-	"@mariozechner/pi-agent-core": "@oh-my-pi/pi-agent-core",
-	"@mariozechner/pi-ai": "@oh-my-pi/pi-ai",
-	"@mariozechner/pi-coding-agent": "@oh-my-pi/pi-coding-agent",
-	"@mariozechner/pi-tui": "@oh-my-pi/pi-tui",
-} as const;
+// Canonical scope for in-process pi packages. Plugins published against any of
+// the aliased scopes below (mariozechner's original publish, earendil-works'
+// fork, or the canonical @oh-my-pi scope itself) are remapped to this scope and
+// resolved against the bundled copy that ships inside the omp binary. This
+// keeps plugins running against the exact runtime state of the host (single
+// module registry, single tool registry, etc.) regardless of which historical
+// scope name they happened to declare in their peerDependencies.
+const CANONICAL_PI_SCOPE = "@oh-my-pi";
 
-const LEGACY_PI_CODING_AGENT_SUBPATH_MAP = {
-	"extensibility/extensions": "@oh-my-pi/pi-coding-agent/extensibility/extensions",
-	"extensibility/hooks": "@oh-my-pi/pi-coding-agent/extensibility/hooks",
-} as const;
+// Scopes that have historically been used to publish (or alias) the same set
+// of internal pi-* packages. `@oh-my-pi` is intentionally included so that
+// direct imports of the canonical name still flow through `Bun.resolveSync`
+// against the host binary, avoiding a duplicate copy being pulled in from a
+// plugin's own node_modules tree at install time.
+const PI_SCOPE_ALIASES = ["oh-my-pi", "mariozechner", "earendil-works"] as const;
 
-const LEGACY_PI_SPECIFIER_FILTER = /^@mariozechner\/pi-(agent-core|ai|coding-agent|tui)(\/.*)?$/;
-const LEGACY_PI_IMPORT_SPECIFIER_REGEX =
-	/((?:from\s+|import\s*\(\s*)["'])(@mariozechner\/pi-(?:agent-core|ai|coding-agent|tui)(?:\/[^"'()\s]+)?)(["'])/g;
+// Internal pi-* package basenames bundled inside the omp binary.
+const PI_PACKAGE_NAMES = ["pi-agent-core", "pi-ai", "pi-coding-agent", "pi-natives", "pi-tui", "pi-utils"] as const;
+
+const PI_SCOPE_ALTERNATION = PI_SCOPE_ALIASES.join("|");
+const PI_PACKAGE_ALTERNATION = PI_PACKAGE_NAMES.join("|");
+
+// Upstream `@mariozechner/*` packages exposed a few subpaths at the package
+// root that we relocated under a different folder. Each entry rewrites
+// `<pkg>/<from>` → `<pkg>/<to>` after the scope has been canonicalised, so
+// plugins importing the upstream layout still resolve to a real file in our
+// bundled copy. Add new entries as `pkg/from -> pkg/to` whenever a plugin
+// surfaces another upstream-only subpath that breaks resolution.
+const PI_SUBPATH_REMAPS: ReadonlyMap<string, string> = new Map<string, string>([
+	// `@mariozechner/pi-ai/oauth` re-exported `./utils/oauth/index.js`.
+	// Our pi-ai keeps the implementation under `utils/oauth` but never added a
+	// root-level re-export, so map the upstream subpath onto it directly.
+	["pi-ai/oauth", "pi-ai/utils/oauth"],
+]);
+
+const LEGACY_PI_SPECIFIER_FILTER = new RegExp(`^@(?:${PI_SCOPE_ALTERNATION})/(?:${PI_PACKAGE_ALTERNATION})(?:/.*)?$`);
+const LEGACY_PI_IMPORT_SPECIFIER_REGEX = new RegExp(
+	`((?:from\\s+|import\\s*\\(\\s*)["'])(@(?:${PI_SCOPE_ALTERNATION})/(?:${PI_PACKAGE_ALTERNATION})(?:/[^"'()\\s]+)?)(["'])`,
+	"g",
+);
 const LEGACY_PI_FILE_PREFIX = "omp-legacy-pi-file:";
 const LEGACY_PI_FILE_NAMESPACE = "omp-legacy-pi-file";
 const resolvedSpecifierFallbacks = new Map<string, string>();
@@ -25,25 +50,17 @@ const resolvedSpecifierFallbacks = new Map<string, string>();
 let isLegacyPiSpecifierShimInstalled = false;
 
 function remapLegacyPiSpecifier(specifier: string): string | null {
-	const [legacyScope, packageName, ...subpathParts] = specifier.split("/");
-	const legacyPackageName = `${legacyScope}/${packageName}`;
-	const mappedPackageName = LEGACY_PI_PACKAGE_MAP[legacyPackageName as keyof typeof LEGACY_PI_PACKAGE_MAP];
-	if (!mappedPackageName) {
+	if (!LEGACY_PI_SPECIFIER_FILTER.test(specifier)) {
 		return null;
 	}
-	if (subpathParts.length === 0) {
-		return mappedPackageName;
+	const slashIdx = specifier.indexOf("/", 1);
+	// Filter guarantees a slash exists, but guard anyway to keep the type narrow.
+	if (slashIdx === -1) {
+		return null;
 	}
-
-	const subpath = subpathParts.join("/");
-	if (legacyPackageName === "@mariozechner/pi-coding-agent") {
-		return (
-			LEGACY_PI_CODING_AGENT_SUBPATH_MAP[subpath as keyof typeof LEGACY_PI_CODING_AGENT_SUBPATH_MAP] ??
-			`${mappedPackageName}/${subpath}`
-		);
-	}
-
-	return `${mappedPackageName}/${subpath}`;
+	const rest = specifier.slice(slashIdx + 1);
+	const remappedSubpath = PI_SUBPATH_REMAPS.get(rest) ?? rest;
+	return `${CANONICAL_PI_SCOPE}/${remappedSubpath}`;
 }
 
 function getResolvedSpecifier(specifier: string): string {

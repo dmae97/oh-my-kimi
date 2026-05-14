@@ -186,6 +186,100 @@ type ModifiedKeyId<Key extends string, RemainingModifiers extends ModifierName =
  */
 export type KeyId = BaseKey | ModifiedKeyId<BaseKey>;
 
+/**
+ * Typed helper for constructing key identifiers with autocomplete.
+ *
+ * The runtime values are just the canonical key-name strings (so `Key.enter`
+ * is literally `"enter"`); the value of `Key` over a bag of magic strings is
+ * that each property is typed to the exact `KeyId` literal it produces and the
+ * modifier methods return precisely-typed concatenations (e.g. `Key.ctrl("c")`
+ * is `"ctrl+c"`, not just `string`). This mirrors the upstream
+ * `@mariozechner/pi-tui` `Key` export verbatim so plugins built against any
+ * scope alias (`@mariozechner`, `@earendil-works`, `@oh-my-pi`) keep working
+ * once the specifier shim remaps them to this package.
+ */
+export const Key = {
+	escape: "escape",
+	esc: "esc",
+	enter: "enter",
+	return: "return",
+	tab: "tab",
+	space: "space",
+	backspace: "backspace",
+	delete: "delete",
+	insert: "insert",
+	clear: "clear",
+	home: "home",
+	end: "end",
+	pageUp: "pageUp",
+	pageDown: "pageDown",
+	up: "up",
+	down: "down",
+	left: "left",
+	right: "right",
+	f1: "f1",
+	f2: "f2",
+	f3: "f3",
+	f4: "f4",
+	f5: "f5",
+	f6: "f6",
+	f7: "f7",
+	f8: "f8",
+	f9: "f9",
+	f10: "f10",
+	f11: "f11",
+	f12: "f12",
+	backtick: "`",
+	hyphen: "-",
+	equals: "=",
+	leftbracket: "[",
+	rightbracket: "]",
+	backslash: "\\",
+	semicolon: ";",
+	quote: "'",
+	comma: ",",
+	period: ".",
+	slash: "/",
+	exclamation: "!",
+	at: "@",
+	hash: "#",
+	dollar: "$",
+	percent: "%",
+	caret: "^",
+	ampersand: "&",
+	asterisk: "*",
+	leftparen: "(",
+	rightparen: ")",
+	underscore: "_",
+	plus: "+",
+	pipe: "|",
+	tilde: "~",
+	leftbrace: "{",
+	rightbrace: "}",
+	colon: ":",
+	lessthan: "<",
+	greaterthan: ">",
+	question: "?",
+	ctrl: <K extends BaseKey>(key: K) => `ctrl+${key}` as const,
+	shift: <K extends BaseKey>(key: K) => `shift+${key}` as const,
+	alt: <K extends BaseKey>(key: K) => `alt+${key}` as const,
+	super: <K extends BaseKey>(key: K) => `super+${key}` as const,
+	ctrlShift: <K extends BaseKey>(key: K) => `ctrl+shift+${key}` as const,
+	shiftCtrl: <K extends BaseKey>(key: K) => `shift+ctrl+${key}` as const,
+	ctrlAlt: <K extends BaseKey>(key: K) => `ctrl+alt+${key}` as const,
+	altCtrl: <K extends BaseKey>(key: K) => `alt+ctrl+${key}` as const,
+	shiftAlt: <K extends BaseKey>(key: K) => `shift+alt+${key}` as const,
+	altShift: <K extends BaseKey>(key: K) => `alt+shift+${key}` as const,
+	ctrlSuper: <K extends BaseKey>(key: K) => `ctrl+super+${key}` as const,
+	superCtrl: <K extends BaseKey>(key: K) => `super+ctrl+${key}` as const,
+	shiftSuper: <K extends BaseKey>(key: K) => `shift+super+${key}` as const,
+	superShift: <K extends BaseKey>(key: K) => `super+shift+${key}` as const,
+	altSuper: <K extends BaseKey>(key: K) => `alt+super+${key}` as const,
+	superAlt: <K extends BaseKey>(key: K) => `super+alt+${key}` as const,
+	ctrlShiftAlt: <K extends BaseKey>(key: K) => `ctrl+shift+alt+${key}` as const,
+	ctrlShiftSuper: <K extends BaseKey>(key: K) => `ctrl+shift+super+${key}` as const,
+} as const;
+
 // =============================================================================
 // Kitty Protocol Parsing
 // =============================================================================
