@@ -14,6 +14,18 @@ Purely textual format. The tool has NO awareness of language, indentation, brack
 = A..B           replace the range with payload `{{hsep}}TEXT` lines, or with one blank line if no payload follows.
 </ops>
 
+<format-reminder>
+Each op line is ONE of:
+  + ANCHOR        ← nothing after the anchor! Content goes on ~ lines below.
+  < ANCHOR        ← same rule.
+  - A..B          ← no content needed (deletion).
+  = A..B          ← followed by ~TEXT payload lines.
+
+WRONG:  + 129pg|                 some code here
+RIGHT:  + 129pg
+        ~                some code here
+</format-reminder>
+
 <rules>
 - Every line of inserted/replacement content MUST be emitted as a payload line starting with `{{hsep}}`.
 - `{{hsep}}` is syntax, not content. The inserted text begins after the first `{{hsep}}`; use a bare `{{hsep}}` to insert a blank line.
