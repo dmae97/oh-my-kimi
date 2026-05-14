@@ -94,6 +94,35 @@ describe("editToolRenderer", () => {
 		expect(quotedRendered).toContain("baz qux.ts");
 	});
 
+	it("strips canonical `@@` and longer `@` runs from hashline input headers", async () => {
+		const uiTheme = await getUiTheme();
+
+		// Canonical `@@ PATH` form (two `@`s) — the parser strips both, the
+		// renderer used to keep one. Regression: title displayed `@ /path/...`.
+		const canonical = editToolRenderer.renderCall(
+			{
+				input: "@@ packages/coding-agent/src/slash-commands/builtin-registry.ts\n+ BOF\n~// preview",
+			},
+			{ expanded: true, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
+			uiTheme,
+		);
+
+		// Even longer runs should still produce the clean path.
+		const triple = editToolRenderer.renderCall(
+			{ input: "@@@ a/b/c.ts\n+ BOF\n~// preview" },
+			{ expanded: true, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
+			uiTheme,
+		);
+
+		const canonicalRendered = Bun.stripANSI(canonical.render(160).join("\n"));
+		const tripleRendered = Bun.stripANSI(triple.render(160).join("\n"));
+
+		expect(canonicalRendered).toContain("packages/coding-agent/src/slash-commands/builtin-registry.ts");
+		expect(canonicalRendered).not.toMatch(/@ packages\/coding-agent/);
+		expect(tripleRendered).toContain("a/b/c.ts");
+		expect(tripleRendered).not.toMatch(/@+ a\/b\/c\.ts/);
+	});
+
 	it("uses hashline input headers for completed single-file result path", async () => {
 		const uiTheme = await getUiTheme();
 		const component = editToolRenderer.renderResult(

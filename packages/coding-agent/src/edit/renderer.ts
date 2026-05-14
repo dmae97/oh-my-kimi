@@ -340,7 +340,13 @@ function normalizeHashlineInputPreviewPath(rawPath: string): string {
 
 function parseHashlineInputPreviewHeader(line: string): string | null {
 	if (!line.startsWith(HL_INPUT_HEADER_PREFIX)) return null;
-	const body = line.slice(HL_INPUT_HEADER_PREFIX.length).trim();
+	// The real parser (`parseHashlineHeaderLine` in `hashline/input.ts`) strips
+	// every leading "@" before resolving the path so canonical "@@ PATH" headers
+	// (and stray "@ PATH" / "@@@ PATH" runs) all route to the same file. Mirror
+	// that here so the renderer doesn't surface a literal "@ " in the title.
+	let prefixEnd = 0;
+	while (prefixEnd < line.length && line[prefixEnd] === HL_INPUT_HEADER_PREFIX) prefixEnd++;
+	const body = line.slice(prefixEnd).trim();
 	const previewPath = normalizeHashlineInputPreviewPath(body);
 	return previewPath.length > 0 ? previewPath : null;
 }
