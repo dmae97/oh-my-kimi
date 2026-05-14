@@ -161,9 +161,9 @@ type CreateAcpSession = (cwd: string) => Promise<AgentSession>;
  *
  * `dialogOptions.timeout` mirrors `RpcExtensionUIContext.#createDialogPromise`:
  * when the timer fires before the client responds, `onTimeout` is invoked and
- * the caller's promise resolves to the stub fallback. Late SDK rejections that
- * arrive after abort/timeout are dropped silently (no `logger.warn`) to keep
- * operator logs clean.
+ * the caller's promise resolves to the stub fallback. Late SDK responses that
+ * arrive after abort/timeout — both rejections and successful `accept`s —
+ * are dropped silently (no `logger.warn`) to keep operator logs clean.
  */
 async function elicitFromAcpClient(
 	connection: AgentSideConnection,
@@ -180,17 +180,6 @@ async function elicitFromAcpClient(
 	const { promise, resolve } = Promise.withResolvers<CreateElicitationResponse | undefined>();
 	let settled = false;
 	let timeoutId: NodeJS.Timeout | undefined;
-	const onAbort = () => {
-		if (settled) return;
-		settled = true;
-		if (timeoutId !== undefined) clearTimeout(timeoutId);
-		// `{ once: true }` auto-detaches this listener after firing, but call
-		// `removeEventListener` explicitly so the cleanup is symmetric with
-		// `finish()` and the doc-comment above is literally true even if the
-		// option is ever changed.
-		signal?.removeEventListener("abort", onAbort);
-		resolve(undefined);
-	};
 	const finish = (value: CreateElicitationResponse | undefined) => {
 		if (settled) return;
 		settled = true;
@@ -198,6 +187,7 @@ async function elicitFromAcpClient(
 		signal?.removeEventListener("abort", onAbort);
 		resolve(value);
 	};
+	const onAbort = () => finish(undefined);
 	signal?.addEventListener("abort", onAbort, { once: true });
 	if (dialogOptions?.timeout !== undefined) {
 		timeoutId = setTimeout(() => {
@@ -243,16 +233,23 @@ async function elicitFromAcpClient(
 
 /**
  * Build an {@link ExtensionUIContext} that translates skill/extension UI
- * requests into ACP elicitations against `connection` for `sessionId`. The
- * non-elicitation surface (custom components, editor, theming, terminal input)
- * remains stubbed — ACP clients render those themselves or not at all. The
- * factory is invoked per session so each `select` / `confirm` / `input` call
- * is scoped to the session that triggered it, and capability gating respects
- * the client's `initialize` advertisement.
+ * requests into ACP elicitations against `connection` for the session
+ * returned by `getSessionId()`. The id is read lazily at each elicitation
+ * because `AgentSession.sessionId` is a getter over `sessionManager` state
+ * that mutates when an extension command calls `ctx.newSession` /
+ * `ctx.switchSession` — snapshotting it once at factory time would route
+ * later elicitations to the pre-switch id. Live reads keep the bridge
+ * symmetric with every other `sessionUpdate` call in this file
+ * (`record.session.sessionId` is always evaluated at emit time).
+ *
+ * The non-elicitation surface (custom components, editor, theming,
+ * terminal input) remains stubbed — ACP clients render those themselves
+ * or not at all. Capability gating respects the client's `initialize`
+ * advertisement.
  */
 export function createAcpExtensionUiContext(
 	connection: AgentSideConnection,
-	sessionId: string,
+	getSessionId: () => string,
 	clientCapabilities: ClientCapabilities | undefined,
 ): ExtensionUIContext {
 	const supportsForm = clientCapabilities?.elicitation?.form != null;
@@ -261,7 +258,7 @@ export function createAcpExtensionUiContext(
 			if (!supportsForm) return undefined;
 			const value = await elicitFromAcpClient(
 				connection,
-				sessionId,
+				getSessionId(),
 				"select",
 				title,
 				{ type: "string", enum: options },
@@ -273,7 +270,7 @@ export function createAcpExtensionUiContext(
 			if (!supportsForm) return false;
 			const value = await elicitFromAcpClient(
 				connection,
-				sessionId,
+				getSessionId(),
 				"confirm",
 				message.trim().length > 0 ? `${title}\n\n${message}` : title,
 				{ type: "boolean" },
@@ -285,7 +282,7 @@ export function createAcpExtensionUiContext(
 			if (!supportsForm) return undefined;
 			const value = await elicitFromAcpClient(
 				connection,
-				sessionId,
+				getSessionId(),
 				"input",
 				title,
 				// ACP's `StringPropertySchema` has no `placeholder` field, so we
@@ -1763,10 +1760,15 @@ export class AcpAgent implements Agent {
 				},
 				compact: instructionsOrOptions => runExtensionCompact(record.session, instructionsOrOptions),
 			},
-			// Per-session: the factory bakes `sessionId` into every elicitation, so
-			// hoisting this to a field on AcpAgent would silently route all
-			// elicitations to the first session that ever ran.
-			createAcpExtensionUiContext(this.#connection, record.session.sessionId, this.#clientCapabilities),
+			// Per-session getter: `record.session.sessionId` reads through to
+			// `sessionManager.getSessionId()` (it's a getter, not a field), so an
+			// extension command that calls `ctx.newSession` / `ctx.switchSession`
+			// — both exposed in the block just above — mutates the underlying id
+			// mid-flight. Reading lazily on each elicitation matches every other
+			// `sessionUpdate` call in this file. Hoisting the factory to an
+			// `AcpAgent` field would still be wrong because it would also lose
+			// the per-`record` binding.
+			createAcpExtensionUiContext(this.#connection, () => record.session.sessionId, this.#clientCapabilities),
 		);
 		await extensionRunner.emit({ type: "session_start" });
 		record.extensionsConfigured = true;

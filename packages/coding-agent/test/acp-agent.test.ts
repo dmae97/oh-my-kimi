@@ -916,7 +916,7 @@ describe("ACP agent", () => {
 				action: "accept",
 				content: { value: "second" },
 			}));
-			const ctx = createAcpExtensionUiContext(connection, "session-select", FORM_CAPABILITIES);
+			const ctx = createAcpExtensionUiContext(connection, () => "session-select", FORM_CAPABILITIES);
 
 			const result = await ctx.select("Pick one", ["first", "second", "third"]);
 
@@ -941,7 +941,7 @@ describe("ACP agent", () => {
 				action: "accept",
 				content: { value: true },
 			}));
-			const ctx = createAcpExtensionUiContext(connection, "session-confirm", FORM_CAPABILITIES);
+			const ctx = createAcpExtensionUiContext(connection, () => "session-confirm", FORM_CAPABILITIES);
 
 			const result = await ctx.confirm("Proceed?", "This will overwrite the file.");
 
@@ -961,7 +961,7 @@ describe("ACP agent", () => {
 				action: "accept",
 				content: { value: "claude" },
 			}));
-			const ctx = createAcpExtensionUiContext(connection, "session-input", FORM_CAPABILITIES);
+			const ctx = createAcpExtensionUiContext(connection, () => "session-input", FORM_CAPABILITIES);
 
 			const result = await ctx.input("Your name?", "e.g. claude");
 
@@ -981,7 +981,7 @@ describe("ACP agent", () => {
 		it("returns undefined / false for decline and cancel actions", async () => {
 			let nextAction: "decline" | "cancel" = "decline";
 			const { connection } = createElicitConnection(async () => ({ action: nextAction }));
-			const ctx = createAcpExtensionUiContext(connection, "session-cancel", FORM_CAPABILITIES);
+			const ctx = createAcpExtensionUiContext(connection, () => "session-cancel", FORM_CAPABILITIES);
 
 			for (const action of ["decline", "cancel"] as const) {
 				nextAction = action;
@@ -996,7 +996,7 @@ describe("ACP agent", () => {
 				action: "accept",
 				content: { value: "ignored" },
 			}));
-			const ctx = createAcpExtensionUiContext(connection, "session-nocaps", {});
+			const ctx = createAcpExtensionUiContext(connection, () => "session-nocaps", {});
 
 			expect(await ctx.select("X", ["a"])).toBeUndefined();
 			expect(await ctx.confirm("X", "Y")).toBe(false);
@@ -1008,7 +1008,7 @@ describe("ACP agent", () => {
 			const { connection, calls } = createElicitConnection(async () => {
 				throw new Error("connection closed");
 			});
-			const ctx = createAcpExtensionUiContext(connection, "session-throw", FORM_CAPABILITIES);
+			const ctx = createAcpExtensionUiContext(connection, () => "session-throw", FORM_CAPABILITIES);
 
 			expect(await ctx.select("X", ["a"])).toBeUndefined();
 			expect(await ctx.confirm("X", "Y")).toBe(false);
@@ -1021,7 +1021,7 @@ describe("ACP agent", () => {
 				action: "accept",
 				content: { value: "ignored" },
 			}));
-			const ctx = createAcpExtensionUiContext(connection, "session-preabort", FORM_CAPABILITIES);
+			const ctx = createAcpExtensionUiContext(connection, () => "session-preabort", FORM_CAPABILITIES);
 			const controller = new AbortController();
 			controller.abort();
 
@@ -1034,7 +1034,7 @@ describe("ACP agent", () => {
 		it("resolves to the stub fallback when dialogOptions.signal aborts mid-flight", async () => {
 			const { resolve, promise: never } = Promise.withResolvers<CreateElicitationResponse>();
 			const { connection, calls } = createElicitConnection(() => never);
-			const ctx = createAcpExtensionUiContext(connection, "session-midabort", FORM_CAPABILITIES);
+			const ctx = createAcpExtensionUiContext(connection, () => "session-midabort", FORM_CAPABILITIES);
 			const controller = new AbortController();
 
 			const pending = ctx.select("X", ["a"], { signal: controller.signal });
@@ -1052,11 +1052,7 @@ describe("ACP agent", () => {
 				action: "accept",
 				content: { value: "yes" },
 			}));
-			const boolCtx = createAcpExtensionUiContext(
-				stringForBool.connection,
-				"session-wrongtype-bool",
-				FORM_CAPABILITIES,
-			);
+			const boolCtx = createAcpExtensionUiContext(stringForBool.connection, () => "session-wrongtype-bool", FORM_CAPABILITIES);
 			expect(await boolCtx.confirm("Proceed?", "")).toBe(false);
 
 			// select expects a string; a boolean `value` must narrow to `undefined`.
@@ -1064,11 +1060,7 @@ describe("ACP agent", () => {
 				action: "accept",
 				content: { value: true },
 			}));
-			const selectCtx = createAcpExtensionUiContext(
-				boolForString.connection,
-				"session-wrongtype-str",
-				FORM_CAPABILITIES,
-			);
+			const selectCtx = createAcpExtensionUiContext(boolForString.connection, () => "session-wrongtype-str", FORM_CAPABILITIES);
 			expect(await selectCtx.select("Pick", ["a"])).toBeUndefined();
 		});
 
@@ -1079,7 +1071,7 @@ describe("ACP agent", () => {
 				action: "accept",
 				content: { other: "noise" } as never,
 			}));
-			const ctx = createAcpExtensionUiContext(missingKey.connection, "session-missingkey", FORM_CAPABILITIES);
+			const ctx = createAcpExtensionUiContext(missingKey.connection, () => "session-missingkey", FORM_CAPABILITIES);
 			expect(await ctx.select("Pick", ["a"])).toBeUndefined();
 			expect(await ctx.confirm("Proceed?", "")).toBe(false);
 			expect(await ctx.input("Name?")).toBeUndefined();
@@ -1089,7 +1081,7 @@ describe("ACP agent", () => {
 			// content omitted entirely — the `!response.content` guard short-circuits
 			// before the per-method narrow has a chance to run.
 			const noContent = createElicitConnection(async () => ({ action: "accept" }));
-			const ctx = createAcpExtensionUiContext(noContent.connection, "session-nocontent", FORM_CAPABILITIES);
+			const ctx = createAcpExtensionUiContext(noContent.connection, () => "session-nocontent", FORM_CAPABILITIES);
 			expect(await ctx.select("Pick", ["a"])).toBeUndefined();
 			expect(await ctx.confirm("Proceed?", "")).toBe(false);
 			expect(await ctx.input("Name?")).toBeUndefined();
@@ -1098,7 +1090,7 @@ describe("ACP agent", () => {
 		it("fires onTimeout and resolves to the stub fallback when dialogOptions.timeout expires", async () => {
 			const { promise: never } = Promise.withResolvers<CreateElicitationResponse>();
 			const { connection, calls } = createElicitConnection(() => never);
-			const ctx = createAcpExtensionUiContext(connection, "session-timeout", FORM_CAPABILITIES);
+			const ctx = createAcpExtensionUiContext(connection, () => "session-timeout", FORM_CAPABILITIES);
 			let timeoutFired = 0;
 			const result = await ctx.select("Pick", ["a"], { timeout: 1, onTimeout: () => timeoutFired++ });
 			expect(result).toBeUndefined();
@@ -1111,7 +1103,7 @@ describe("ACP agent", () => {
 				action: "accept",
 				content: { value: "n" },
 			}));
-			const ctx = createAcpExtensionUiContext(connection, "session-ws-placeholder", FORM_CAPABILITIES);
+			const ctx = createAcpExtensionUiContext(connection, () => "session-ws-placeholder", FORM_CAPABILITIES);
 
 			await ctx.input("Name?", "   ");
 
@@ -1126,7 +1118,7 @@ describe("ACP agent", () => {
 				action: "accept",
 				content: { value: true },
 			}));
-			const ctx = createAcpExtensionUiContext(connection, "session-confirm-empty", FORM_CAPABILITIES);
+			const ctx = createAcpExtensionUiContext(connection, () => "session-confirm-empty", FORM_CAPABILITIES);
 
 			await ctx.confirm("Proceed?", "");
 			// Whitespace-only message must follow the same branch as empty —
@@ -1141,7 +1133,7 @@ describe("ACP agent", () => {
 		it("still resolves to the stub fallback when dialogOptions.onTimeout throws", async () => {
 			const { promise: never } = Promise.withResolvers<CreateElicitationResponse>();
 			const { connection } = createElicitConnection(() => never);
-			const ctx = createAcpExtensionUiContext(connection, "session-timeout-throw", FORM_CAPABILITIES);
+			const ctx = createAcpExtensionUiContext(connection, () => "session-timeout-throw", FORM_CAPABILITIES);
 
 			const result = await ctx.select("Pick", ["a"], {
 				timeout: 1,
@@ -1151,6 +1143,31 @@ describe("ACP agent", () => {
 			});
 
 			expect(result).toBeUndefined();
+		});
+
+		it("reads the sessionId getter on every elicitation so mid-flight session changes are reflected", async () => {
+			// `record.session.sessionId` mutates when an extension command calls
+			// `ctx.switchSession` / `ctx.newSession`. Snapshotting it once at
+			// factory time would route later elicitations to the pre-switch id.
+			const { connection, calls } = createElicitConnection(async () => ({
+				action: "accept",
+				content: { value: "ok" },
+			}));
+			let currentSessionId = "session-before-switch";
+			const ctx = createAcpExtensionUiContext(connection, () => currentSessionId, FORM_CAPABILITIES);
+
+			await ctx.select("Pick", ["a"]);
+			currentSessionId = "session-after-switch";
+			await ctx.confirm("Continue?", "post-switch");
+			await ctx.input("Name?");
+
+			expect(calls).toHaveLength(3);
+			if (calls[0]!.mode !== "form" || calls[1]!.mode !== "form" || calls[2]!.mode !== "form") {
+				throw new Error("expected form-mode elicitations");
+			}
+			expect(calls[0]!.sessionId).toBe("session-before-switch");
+			expect(calls[1]!.sessionId).toBe("session-after-switch");
+			expect(calls[2]!.sessionId).toBe("session-after-switch");
 		});
 	});
 });
