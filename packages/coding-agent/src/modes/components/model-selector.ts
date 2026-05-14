@@ -2,6 +2,7 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getSupportedEfforts, type Model, modelsAreEqual } from "@oh-my-pi/pi-ai";
 import {
 	Container,
+	fuzzyFilter,
 	getKeybindings,
 	Input,
 	matchesKey,
@@ -18,7 +19,6 @@ import { resolveModelRoleValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import { type ThemeColor, theme } from "../../modes/theme/theme";
 import { getThinkingLevelMetadata } from "../../thinking";
-import { fuzzyFilter } from "../../utils/fuzzy";
 import { getTabBarTheme } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
 

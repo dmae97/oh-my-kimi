@@ -13,7 +13,7 @@ import type {
 
 export const VIM_OPEN_VIEWPORT_LINES = 80;
 export const VIM_DEFAULT_VIEWPORT_LINES = 10;
-export const VIM_TAB_DISPLAY = "→";
+const VIM_TAB_DISPLAY = "→";
 const VIM_INLINE_CURSOR = "▏";
 
 const VIM_VIEWPORT_WIDTH = 140;

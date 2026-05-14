@@ -14,11 +14,9 @@ import {
 import { sanitizeText } from "@oh-my-pi/pi-natives";
 import {
 	createHarmonyAuditEvent,
-	extractHarmonyRemoved,
 	type HarmonyDetection,
 	type HarmonyRecoveredToolCall,
 	isHarmonyLeakMitigationTarget,
-	recoverHarmonyToolCall,
 	signalListLabel,
 } from "./harmony-leak";
 import type {
@@ -502,26 +500,6 @@ async function streamAssistantResponse(
 
 	const responseIterator = response[Symbol.asyncIterator]();
 
-	const _interruptForHarmonyLeak = (message: AssistantMessage, detection: HarmonyDetection): never => {
-		const recovered = recoverHarmonyToolCall(message, detection);
-		const removed = recovered?.removed ?? extractHarmonyRemoved(message, detection);
-		harmonyAbortController?.abort();
-		responseIterator.return?.()?.catch(() => {});
-		if (recovered) {
-			if (addedPartial) {
-				context.messages[context.messages.length - 1] = recovered.message;
-			} else {
-				context.messages.push(recovered.message);
-				stream.push({ type: "message_start", message: { ...recovered.message } });
-			}
-			stream.push({ type: "message_end", message: recovered.message });
-			throw new HarmonyLeakInterruption(detection, removed, recovered);
-		}
-		if (addedPartial) {
-			context.messages.pop();
-		}
-		throw new HarmonyLeakInterruption(detection, removed);
-	};
 	// Set up a single abort race: register the abort listener once for the whole
 	// stream and reuse the same race promise for every iterator.next() instead of
 	// allocating Promise.withResolvers and add/removeEventListener per event.

@@ -36,15 +36,6 @@ function createAssistantMessage(
 	};
 }
 
-async function _waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (predicate()) return;
-		await Bun.sleep(10);
-	}
-	throw new Error("Timed out waiting for condition");
-}
-
 type AutoRetryStartEvent = Extract<AgentSessionEvent, { type: "auto_retry_start" }>;
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
 

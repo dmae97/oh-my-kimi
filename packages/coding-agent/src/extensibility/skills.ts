@@ -14,6 +14,12 @@ export interface Skill {
 	filePath: string;
 	baseDir: string;
 	source: string;
+	/**
+	 * When `true`, the skill is loaded and reachable via `skill://<name>` and
+	 * (when enabled) `/skill:<name>`, but is excluded from the rendered system
+	 * prompt's `<skills>` listing.
+	 */
+	hide?: boolean;
 	/** Source metadata for display */
 	_source?: SourceMeta;
 }
@@ -76,6 +82,7 @@ export async function loadSkillsFromDir(options: LoadSkillsFromDirOptions): Prom
 			filePath: capSkill.path,
 			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 			source: options.source,
+			hide: capSkill.frontmatter?.hide === true,
 			_source: capSkill._source,
 		})),
 		warnings: (result.warnings ?? []).map(message => ({ skillPath: options.dir, message })),
@@ -190,6 +197,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 				filePath: capSkill.path,
 				baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 				source: `${capSkill._source.provider}:${capSkill.level}`,
+				hide: capSkill.frontmatter?.hide === true,
 				_source: capSkill._source,
 			});
 			realPathSet.add(resolvedPath);
@@ -226,6 +234,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 					filePath: capSkill.path,
 					baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 					source: "custom:user",
+					hide: capSkill.frontmatter?.hide === true,
 					_source: { ...capSkill._source, providerName: "Custom" },
 				},
 				path: capSkill.path,

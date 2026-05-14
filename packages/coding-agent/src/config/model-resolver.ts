@@ -12,10 +12,10 @@ import {
 	type Model,
 	modelsAreEqual,
 } from "@oh-my-pi/pi-ai";
+import { fuzzyMatch } from "@oh-my-pi/pi-tui";
 import chalk from "chalk";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { parseThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
-import { fuzzyMatch } from "../utils/fuzzy";
 import { isAuthenticated, kNoAuth, MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "./model-registry";
 import type { Settings } from "./settings";
 
@@ -607,9 +607,6 @@ export function resolveModelRoleValue(
 		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
 	}
 
-	const lastColonIndex = normalized.lastIndexOf(":");
-	const _thinkingSelector =
-		lastColonIndex > PREFIX_MODEL_ROLE.length ? parseThinkingLevel(normalized.slice(lastColonIndex + 1)) : undefined;
 	const effectivePatterns = resolveConfiguredRolePattern(normalized, options?.settings);
 	if (!effectivePatterns || effectivePatterns.length === 0) {
 		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };

@@ -1,7 +1,7 @@
 /**
  * GitHub Copilot OAuth flow (opencode OAuth app)
  */
-import { abortableSleep } from "@oh-my-pi/pi-utils";
+import { scheduler } from "node:timers/promises";
 import { getBundledModels } from "../../models";
 import type { OAuthCredentials } from "./types";
 
@@ -159,14 +159,6 @@ async function startDeviceFlow(domain: string): Promise<DeviceCodeResponse> {
 	};
 }
 
-async function sleepForGitHubAccessTokenPoll(ms: number, signal?: AbortSignal): Promise<void> {
-	try {
-		await abortableSleep(ms, signal);
-	} catch {
-		throw new Error("Login cancelled");
-	}
-}
-
 async function pollForGitHubAccessToken(
 	domain: string,
 	deviceCode: string,
@@ -187,7 +179,11 @@ async function pollForGitHubAccessToken(
 
 		const remainingMs = deadline - Date.now();
 		const waitMs = Math.min(Math.ceil(intervalMs * intervalMultiplier), remainingMs);
-		await sleepForGitHubAccessTokenPoll(waitMs, signal);
+		try {
+			await scheduler.wait(waitMs, { signal });
+		} catch {
+			throw new Error("Login cancelled");
+		}
 
 		const raw = await fetchJson(urls.accessTokenUrl, {
 			method: "POST",

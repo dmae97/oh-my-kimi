@@ -1,28 +1,44 @@
-/**
- * Hook system types.
- *
- * Hooks are TypeScript modules that can subscribe to agent lifecycle events
- * and interact with the user via UI primitives.
- */
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent, Message, Model, TextContent, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import type { ImageContent, Message, Model, TextContent } from "@oh-my-pi/pi-ai";
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
-import type { Rule } from "../../capability/rule";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { EditToolDetails } from "../../edit";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
 import type { Theme } from "../../modes/theme/theme";
-import type { CompactionPreparation, CompactionResult } from "../../session/compaction";
 import type { HookMessage } from "../../session/messages";
-import type {
-	BranchSummaryEntry,
-	CompactionEntry,
-	ReadonlySessionManager,
-	SessionEntry,
-	SessionManager,
-} from "../../session/session-manager";
+import type { ReadonlySessionManager, SessionManager } from "../../session/session-manager";
 import type { BashToolDetails, FindToolDetails, ReadToolDetails, SearchToolDetails } from "../../tools";
-import type { TodoItem } from "../../tools/todo-write";
+import type {
+	AgentEndEvent,
+	AgentStartEvent,
+	AutoCompactionEndEvent,
+	AutoCompactionStartEvent,
+	AutoRetryEndEvent,
+	AutoRetryStartEvent,
+	ContextEvent,
+	SessionBeforeBranchEvent,
+	SessionBeforeBranchResult,
+	SessionBeforeCompactEvent,
+	SessionBeforeCompactResult,
+	SessionBeforeSwitchEvent,
+	SessionBeforeSwitchResult,
+	SessionBeforeTreeEvent,
+	SessionBeforeTreeResult,
+	SessionBranchEvent,
+	SessionCompactEvent,
+	SessionCompactingEvent,
+	SessionCompactingResult,
+	SessionEvent,
+	SessionShutdownEvent,
+	SessionStartEvent,
+	SessionSwitchEvent,
+	SessionTreeEvent,
+	TodoReminderEvent,
+	ToolCallEventResult,
+	ToolResultEventResult,
+	TtsrTriggeredEvent,
+	TurnEndEvent,
+	TurnStartEvent,
+} from "../shared-events";
 
 // Re-export for backward compatibility
 export type { ExecOptions, ExecResult } from "../../exec/exec";
@@ -31,6 +47,11 @@ export type { ExecOptions, ExecResult } from "../../exec/exec";
  * UI context for hooks to request interactive UI from the harness.
  * Each mode (interactive, RPC, print) provides its own implementation.
  */
+// fallow-ignore-next-line code-duplication
+// Parallel to ExtensionUIContext: hooks expose a deliberately narrower UI
+// surface — no terminal-input listener, no editor component override, no
+// theme management — because hooks are invoked from inside the agent loop
+// and must not be able to seize ownership of the editor.
 export interface HookUIContext {
 	/**
 	 * Show a selector and return the user's choice.
@@ -137,6 +158,11 @@ export interface HookUIContext {
  * Context passed to hook event handlers.
  * For command handlers, see HookCommandContext which extends this with session control methods.
  */
+// fallow-ignore-next-line code-duplication
+// Parallel to ExtensionContext: hooks see a narrower runtime context (no
+// model registry mutation, no system prompt access, no shutdown). The
+// overlap in field names is intentional API symmetry; widening hooks to
+// match extensions would let hooks call methods that deadlock the agent.
 export interface HookContext {
 	/** UI methods for user interaction */
 	ui: HookUIContext;
@@ -165,6 +191,11 @@ export interface HookContext {
  * These methods are not available in event handlers because they can cause
  * deadlocks when called from within the agent loop (e.g., tool_call, context events).
  */
+// fallow-ignore-next-line code-duplication
+// Parallel to ExtensionCommandContext: hooks intentionally omit
+// `switchSession`, `reload`, `compact`, and `getContextUsage` — those are
+// safe only from extension command handlers, not from the hook execution
+// context.
 export interface HookCommandContext extends HookContext {
 	/** Wait for the agent to finish streaming */
 	waitForIdle(): Promise<void>;
@@ -210,138 +241,25 @@ export interface HookCommandContext extends HookContext {
 }
 
 // ============================================================================
-// Session Events
+// Session Events (shared with extensions subsystem)
 // ============================================================================
 
-/** Fired on initial session load */
-export interface SessionStartEvent {
-	type: "session_start";
-}
-
-/** Fired before switching to another session (can be cancelled) */
-export interface SessionBeforeSwitchEvent {
-	type: "session_before_switch";
-	/** Reason for the switch */
-	reason: "new" | "resume" | "fork";
-	/** Session file we're switching to (only for "resume") */
-	targetSessionFile?: string;
-}
-
-/** Fired after switching to another session */
-export interface SessionSwitchEvent {
-	type: "session_switch";
-	/** Reason for the switch */
-	reason: "new" | "resume" | "fork";
-	/** Session file we came from */
-	previousSessionFile: string | undefined;
-}
-
-/** Fired before branching a session (can be cancelled) */
-export interface SessionBeforeBranchEvent {
-	type: "session_before_branch";
-	/** ID of the entry to branch from */
-	entryId: string;
-}
-
-/** Fired after branching a session */
-export interface SessionBranchEvent {
-	type: "session_branch";
-	previousSessionFile: string | undefined;
-}
-
-/** Fired before context compaction (can be cancelled) */
-export interface SessionBeforeCompactEvent {
-	type: "session_before_compact";
-	/** Compaction preparation with messages to summarize, file ops, previous summary, etc. */
-	preparation: CompactionPreparation;
-	/** Branch entries (root to current leaf). Use to inspect custom state or previous compactions. */
-	branchEntries: SessionEntry[];
-	/** Optional user-provided instructions for the summary */
-	customInstructions?: string;
-	/** Abort signal - hooks should pass this to LLM calls and check it periodically */
-	signal: AbortSignal;
-}
-
-/** Fired before compaction summarization to customize prompts/context */
-export interface SessionCompactingEvent {
-	type: "session.compacting";
-	sessionId: string;
-	messages: AgentMessage[];
-}
-
-/** Fired after context compaction */
-export interface SessionCompactEvent {
-	type: "session_compact";
-	compactionEntry: CompactionEntry;
-	/** Whether the compaction entry was provided by a hook */
-	fromExtension: boolean;
-}
-
-/** Fired on process exit (SIGINT/SIGTERM) */
-export interface SessionShutdownEvent {
-	type: "session_shutdown";
-}
-
-/** Preparation data for tree navigation (used by session_before_tree event) */
-export interface TreePreparation {
-	/** Node being switched to */
-	targetId: string;
-	/** Current active leaf (being abandoned), null if no current position */
-	oldLeafId: string | null;
-	/** Common ancestor of target and old leaf, null if no common ancestor */
-	commonAncestorId: string | null;
-	/** Entries to summarize (old leaf back to common ancestor or compaction) */
-	entriesToSummarize: SessionEntry[];
-	/** Whether user chose to summarize */
-	userWantsSummary: boolean;
-}
-
-/** Fired before navigating to a different node in the session tree (can be cancelled) */
-export interface SessionBeforeTreeEvent {
-	type: "session_before_tree";
-	/** Preparation data for the navigation */
-	preparation: TreePreparation;
-	/** Abort signal - honors Escape during summarization (model available via ctx.model) */
-	signal: AbortSignal;
-}
-
-/** Fired after navigating to a different node in the session tree */
-export interface SessionTreeEvent {
-	type: "session_tree";
-	/** The new active leaf, null if navigated to before first entry */
-	newLeafId: string | null;
-	/** Previous active leaf, null if there was no position */
-	oldLeafId: string | null;
-	/** Branch summary entry if one was created */
-	summaryEntry?: BranchSummaryEntry;
-	/** Whether summary came from hook */
-	fromExtension?: boolean;
-}
-
-/** Union of all session event types */
-export type SessionEvent =
-	| SessionStartEvent
-	| SessionBeforeSwitchEvent
-	| SessionSwitchEvent
-	| SessionBeforeBranchEvent
-	| SessionBranchEvent
-	| SessionBeforeCompactEvent
-	| SessionCompactingEvent
-	| SessionCompactEvent
-	| SessionShutdownEvent
-	| SessionBeforeTreeEvent
-	| SessionTreeEvent;
-
-/**
- * Event data for context event.
- * Fired before each LLM call, allowing hooks to modify context non-destructively.
- * Original session messages are NOT modified - only the messages sent to the LLM are affected.
- */
-export interface ContextEvent {
-	type: "context";
-	/** Messages about to be sent to the LLM (deep copy, safe to modify) */
-	messages: AgentMessage[];
-}
+export type {
+	ContextEvent,
+	SessionBeforeBranchEvent,
+	SessionBeforeCompactEvent,
+	SessionBeforeSwitchEvent,
+	SessionBeforeTreeEvent,
+	SessionBranchEvent,
+	SessionCompactEvent,
+	SessionCompactingEvent,
+	SessionEvent,
+	SessionShutdownEvent,
+	SessionStartEvent,
+	SessionSwitchEvent,
+	SessionTreeEvent,
+	TreePreparation,
+} from "../shared-events";
 
 /**
  * Event data for before_agent_start event.
@@ -356,90 +274,18 @@ export interface BeforeAgentStartEvent {
 	images?: ImageContent[];
 }
 
-/**
- * Event data for agent_start event.
- * Fired when an agent loop starts (once per user prompt).
- */
-export interface AgentStartEvent {
-	type: "agent_start";
-}
-
-/**
- * Event data for agent_end event.
- */
-export interface AgentEndEvent {
-	type: "agent_end";
-	messages: AgentMessage[];
-}
-
-/**
- * Event data for turn_start event.
- */
-export interface TurnStartEvent {
-	type: "turn_start";
-	turnIndex: number;
-	timestamp: number;
-}
-
-/**
- * Event data for turn_end event.
- */
-export interface TurnEndEvent {
-	type: "turn_end";
-	turnIndex: number;
-	message: AgentMessage;
-	toolResults: ToolResultMessage[];
-}
-
-/** Event data for auto_compaction_start event. */
-export interface AutoCompactionStartEvent {
-	type: "auto_compaction_start";
-	reason: "threshold" | "overflow" | "idle";
-	action: "context-full" | "handoff";
-}
-
-/** Event data for auto_compaction_end event. */
-export interface AutoCompactionEndEvent {
-	type: "auto_compaction_end";
-	action: "context-full" | "handoff";
-	result: CompactionResult | undefined;
-	aborted: boolean;
-	willRetry: boolean;
-	errorMessage?: string;
-	/** True when compaction was skipped for a benign reason (no model, no candidates, nothing to compact). */
-	skipped?: boolean;
-}
-
-/** Event data for auto_retry_start event. */
-export interface AutoRetryStartEvent {
-	type: "auto_retry_start";
-	attempt: number;
-	maxAttempts: number;
-	delayMs: number;
-	errorMessage: string;
-}
-
-/** Event data for auto_retry_end event. */
-export interface AutoRetryEndEvent {
-	type: "auto_retry_end";
-	success: boolean;
-	attempt: number;
-	finalError?: string;
-}
-
-/** Event data for ttsr_triggered event. */
-export interface TtsrTriggeredEvent {
-	type: "ttsr_triggered";
-	rules: Rule[];
-}
-
-/** Event data for todo_reminder event. */
-export interface TodoReminderEvent {
-	type: "todo_reminder";
-	todos: TodoItem[];
-	attempt: number;
-	maxAttempts: number;
-}
+export type {
+	AgentEndEvent,
+	AgentStartEvent,
+	AutoCompactionEndEvent,
+	AutoCompactionStartEvent,
+	AutoRetryEndEvent,
+	AutoRetryStartEvent,
+	TodoReminderEvent,
+	TtsrTriggeredEvent,
+	TurnEndEvent,
+	TurnStartEvent,
+} from "../shared-events";
 
 /**
  * Event data for tool_call event.
@@ -559,29 +405,7 @@ export interface ContextEventResult {
 	messages?: Message[];
 }
 
-/**
- * Return type for tool_call event handlers.
- * Allows hooks to block tool execution.
- */
-export interface ToolCallEventResult {
-	/** If true, block the tool from executing */
-	block?: boolean;
-	/** Reason for blocking (returned to LLM as error) */
-	reason?: string;
-}
-
-/**
- * Return type for tool_result event handlers.
- * Allows hooks to modify tool results.
- */
-export interface ToolResultEventResult {
-	/** Replacement content array (text and images) */
-	content?: (TextContent | ImageContent)[];
-	/** Replacement details */
-	details?: unknown;
-	/** Override isError flag */
-	isError?: boolean;
-}
+export type { ToolCallEventResult, ToolResultEventResult } from "../shared-events";
 
 /**
  * Return type for before_agent_start event handlers.
@@ -592,65 +416,13 @@ export interface BeforeAgentStartEventResult {
 	message?: Pick<HookMessage, "customType" | "content" | "display" | "details" | "attribution">;
 }
 
-/** Return type for session_before_switch handlers */
-export interface SessionBeforeSwitchResult {
-	/** If true, cancel the switch */
-	cancel?: boolean;
-}
-
-/** Return type for session_before_branch handlers */
-export interface SessionBeforeBranchResult {
-	/**
-	 * If true, abort the branch entirely. No new session file is created,
-	 * conversation stays unchanged.
-	 */
-	cancel?: boolean;
-	/**
-	 * If true, the branch proceeds (new session file created, session state updated)
-	 * but the in-memory conversation is NOT rewound to the branch point.
-	 *
-	 * Use case: git-checkpoint hook that restores code state separately.
-	 * The hook handles state restoration itself, so it doesn't want the
-	 * agent's conversation to be rewound (which would lose recent context).
-	 *
-	 * - `cancel: true` → nothing happens, user stays in current session
-	 * - `skipConversationRestore: true` → branch happens, but messages stay as-is
-	 * - neither → branch happens AND messages rewind to branch point (default)
-	 */
-	skipConversationRestore?: boolean;
-}
-
-/** Return type for session_before_compact handlers */
-export interface SessionBeforeCompactResult {
-	/** If true, cancel the compaction */
-	cancel?: boolean;
-	/** Custom compaction result - SessionManager adds id/parentId */
-	compaction?: CompactionResult;
-}
-
-/** Return type for session.compacting handlers */
-export interface SessionCompactingResult {
-	/** Additional context lines to include in summary */
-	context?: string[];
-	/** Override the default compaction prompt */
-	prompt?: string;
-	/** Custom data to store in compaction entry */
-	preserveData?: Record<string, unknown>;
-}
-
-/** Return type for session_before_tree handlers */
-export interface SessionBeforeTreeResult {
-	/** If true, cancel the navigation entirely */
-	cancel?: boolean;
-	/**
-	 * Custom summary (skips default summarizer).
-	 * Only used if preparation.userWantsSummary is true.
-	 */
-	summary?: {
-		summary: string;
-		details?: unknown;
-	};
-}
+export type {
+	SessionBeforeBranchResult,
+	SessionBeforeCompactResult,
+	SessionBeforeSwitchResult,
+	SessionBeforeTreeResult,
+	SessionCompactingResult,
+} from "../shared-events";
 
 // ============================================================================
 // Hook API
@@ -681,6 +453,9 @@ export type HookMessageRenderer<T = unknown> = (
 /**
  * Command registration options.
  */
+// fallow-ignore-next-line code-duplication
+// Parallel to extensions' RegisteredCommand: hooks bind to
+// HookCommandContext and have no argument-completion hook.
 export interface RegisteredCommand {
 	name: string;
 	description?: string;

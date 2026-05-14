@@ -5,15 +5,11 @@
  * Requires OAuth credentials stored in agent.db for provider "google-gemini-cli" or "google-antigravity".
  * Returns synthesized answers with citations and source metadata from grounding chunks.
  */
-import {
-	ANTIGRAVITY_SYSTEM_INSTRUCTION,
-	extractRetryDelay,
-	getAntigravityUserAgent,
-	getGeminiCliHeaders,
-} from "@oh-my-pi/pi-ai";
+import { ANTIGRAVITY_SYSTEM_INSTRUCTION, getAntigravityUserAgent, getGeminiCliHeaders } from "@oh-my-pi/pi-ai";
 import { refreshAntigravityToken } from "@oh-my-pi/pi-ai/utils/oauth/google-antigravity";
 import { refreshGoogleCloudToken } from "@oh-my-pi/pi-ai/utils/oauth/google-gemini-cli";
-import { getAgentDbPath } from "@oh-my-pi/pi-utils";
+import { fetchWithRetry, getAgentDbPath } from "@oh-my-pi/pi-utils";
+
 import { AgentStorage } from "../../../session/agent-storage";
 import type { SearchCitation, SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
@@ -303,96 +299,40 @@ async function callGeminiSearch(
 		}
 		(requestBody.request as Record<string, unknown>).generationConfig = generationConfig;
 	}
-	let response: Response | undefined;
-	let rateLimitTimeSpent = 0;
-	let lastError: Error | undefined;
+	const buildInit = (): RequestInit => ({
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${auth.accessToken}`,
+			"Content-Type": "application/json",
+			Accept: "text/event-stream",
+			...headers,
+		},
+		body: JSON.stringify(requestBody),
+	});
+	const urlFor = (attempt: number) =>
+		`${endpoints[Math.min(attempt, endpoints.length - 1)]}/v1internal:streamGenerateContent?alt=sse`;
 
-	for (let endpointIndex = 0; endpointIndex < endpoints.length; endpointIndex++) {
-		const url = `${endpoints[endpointIndex]}/v1internal:streamGenerateContent?alt=sse`;
+	let response = await fetchWithRetry(urlFor, {
+		...buildInit(),
+		maxAttempts: MAX_RETRIES + 1,
+		defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
+		maxDelayMs: RATE_LIMIT_BUDGET_MS,
+	});
 
-		for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-			try {
-				response = await fetch(url, {
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${auth.accessToken}`,
-						"Content-Type": "application/json",
-						Accept: "text/event-stream",
-						...headers,
-					},
-					body: JSON.stringify(requestBody),
-				});
-			} catch (error) {
-				if (attempt < MAX_RETRIES) {
-					await Bun.sleep(BASE_DELAY_MS * 2 ** attempt);
-					continue;
-				}
-
-				if (auth.isAntigravity && endpointIndex < endpoints.length - 1) {
-					break;
-				}
-
-				throw error;
-			}
-
-			if (response.ok) {
-				break;
-			}
-
-			const errorText = await response.text();
-			const canRefreshAuth =
-				response.status === 401 ||
-				response.status === 403 ||
-				(response.status === 400 &&
-					/api key not valid|invalid credentials|invalid authentication/i.test(errorText));
-			if (canRefreshAuth && attempt === 0 && (await refreshGeminiAuth(auth))) {
-				continue;
-			}
-			const isRetryableStatus =
-				response.status === 429 ||
-				response.status === 500 ||
-				response.status === 502 ||
-				response.status === 503 ||
-				response.status === 504;
-
-			if (isRetryableStatus && attempt < MAX_RETRIES) {
-				const serverDelay = extractRetryDelay(errorText, response);
-				if (response.status === 429) {
-					if (serverDelay && rateLimitTimeSpent + serverDelay <= RATE_LIMIT_BUDGET_MS) {
-						rateLimitTimeSpent += serverDelay;
-						await Bun.sleep(serverDelay);
-						continue;
-					}
-					if (!serverDelay) {
-						await Bun.sleep(BASE_DELAY_MS * 2 ** attempt);
-						continue;
-					}
-				} else {
-					await Bun.sleep(serverDelay ?? BASE_DELAY_MS * 2 ** attempt);
-					continue;
-				}
-			}
-
-			lastError = new SearchProviderError(
-				"gemini",
-				`Gemini Cloud Code API error (${response.status}): ${errorText}`,
-				response.status,
-			);
-
-			if (auth.isAntigravity && isRetryableStatus && endpointIndex < endpoints.length - 1) {
-				break;
-			}
-
-			throw lastError;
+	if (!response.ok) {
+		const errorText = await response.clone().text();
+		const canRefreshAuth =
+			response.status === 401 ||
+			response.status === 403 ||
+			(response.status === 400 && /api key not valid|invalid credentials|invalid authentication/i.test(errorText));
+		if (canRefreshAuth && (await refreshGeminiAuth(auth))) {
+			response = await fetchWithRetry(urlFor, {
+				...buildInit(),
+				maxAttempts: MAX_RETRIES + 1,
+				defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
+				maxDelayMs: RATE_LIMIT_BUDGET_MS,
+			});
 		}
-
-		if (response?.ok) {
-			break;
-		}
-	}
-
-	if (!response) {
-		throw new SearchProviderError("gemini", "Gemini API request failed", 500);
 	}
 
 	if (!response.ok) {

@@ -18,6 +18,8 @@ import {
 	registerCustomApi,
 	type SimpleStreamOptions,
 	type ThinkingConfig,
+	UNK_CONTEXT_WINDOW,
+	UNK_MAX_TOKENS,
 	unregisterCustomApis,
 } from "@oh-my-pi/pi-ai";
 
@@ -1053,7 +1055,16 @@ export class ModelRegistry {
 			const key = `${replacementModel.provider}\u0000${replacementModel.id}`;
 			const existingIndex = indexByKey.get(key);
 			if (existingIndex !== undefined) {
-				merged[existingIndex] = replacementModel;
+				const existing = merged[existingIndex];
+				merged[existingIndex] = {
+					...replacementModel,
+					contextWindow:
+						replacementModel.contextWindow === UNK_CONTEXT_WINDOW
+							? existing.contextWindow
+							: replacementModel.contextWindow,
+					maxTokens:
+						replacementModel.maxTokens === UNK_MAX_TOKENS ? existing.maxTokens : replacementModel.maxTokens,
+				};
 			} else {
 				merged.push(replacementModel);
 				indexByKey.set(key, merged.length - 1);

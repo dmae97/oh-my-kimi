@@ -1,9 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { StringEnum } from "@oh-my-pi/pi-ai";
-import { abortableSleep, getWorktreesDir, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { getWorktreesDir, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { Settings } from "../config/settings";
 import githubDescription from "../prompts/tools/github.md" with { type: "text" };
@@ -3400,7 +3401,7 @@ async function executeRunWatch(
 							note,
 						}),
 					});
-					await abortableSleep(graceSeconds * 1000, signal);
+					await scheduler.wait(graceSeconds * 1000, { signal });
 					run = await fetchRunSnapshot(session.cwd, repo, runId, signal);
 				}
 
@@ -3435,7 +3436,7 @@ async function executeRunWatch(
 				return buildTextResult(formatRunWatchResult(repo, run, [], tail), run.url, finalDetails);
 			}
 
-			await abortableSleep(intervalSeconds * 1000, signal);
+			await scheduler.wait(intervalSeconds * 1000, { signal });
 		}
 	}
 
@@ -3477,7 +3478,7 @@ async function executeRunWatch(
 						note,
 					}),
 				});
-				await abortableSleep(graceSeconds * 1000, signal);
+				await scheduler.wait(graceSeconds * 1000, { signal });
 				runs = await fetchRunsForCommit(session.cwd, repo, headSha, branch, signal);
 			}
 
@@ -3533,11 +3534,11 @@ async function executeRunWatch(
 					note,
 				}),
 			});
-			await abortableSleep(intervalSeconds * 1000, signal);
+			await scheduler.wait(intervalSeconds * 1000, { signal });
 			continue;
 		}
 
 		settledSuccessSignature = undefined;
-		await abortableSleep(intervalSeconds * 1000, signal);
+		await scheduler.wait(intervalSeconds * 1000, { signal });
 	}
 }

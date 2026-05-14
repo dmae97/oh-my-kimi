@@ -7,9 +7,9 @@
  */
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
-import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import type { AgentSession } from "../session/agent-session";
 import { isSilentAbort } from "../session/messages";
+import { initializeExtensions } from "./runtime-init";
 
 /**
  * Options for print mode.
@@ -40,90 +40,16 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 		}
 	}
 	// Set up extensions for print mode (no UI, no command context)
-	const extensionRunner = session.extensionRunner;
-	if (extensionRunner) {
-		extensionRunner.initialize(
-			// ExtensionActions
-			{
-				sendMessage: (message, options) => {
-					session.sendCustomMessage(message, options).catch(e => {
-						process.stderr.write(`Extension sendMessage failed: ${e instanceof Error ? e.message : String(e)}\n`);
-					});
-				},
-				sendUserMessage: (content, options) => {
-					session.sendUserMessage(content, options).catch(e => {
-						process.stderr.write(
-							`Extension sendUserMessage failed: ${e instanceof Error ? e.message : String(e)}\n`,
-						);
-					});
-				},
-				appendEntry: (customType, data) => {
-					session.sessionManager.appendCustomEntry(customType, data);
-				},
-				setLabel: (targetId, label) => {
-					session.sessionManager.appendLabelChange(targetId, label);
-				},
-				getActiveTools: () => session.getActiveToolNames(),
-				getAllTools: () => session.getAllToolNames(),
-				setActiveTools: (toolNames: string[]) => session.setActiveToolsByName(toolNames),
-				getCommands: () => [],
-				setModel: model => runExtensionSetModel(session, model),
-				getThinkingLevel: () => session.thinkingLevel,
-				setThinkingLevel: level => session.setThinkingLevel(level),
-				getSessionName: () => session.sessionManager.getSessionName(),
-				setSessionName: async name => {
-					await session.sessionManager.setSessionName(name, "user");
-				},
-			},
-			// ExtensionContextActions
-			{
-				getModel: () => session.model,
-				isIdle: () => !session.isStreaming,
-				abort: () => session.abort(),
-				hasPendingMessages: () => session.queuedMessageCount > 0,
-				shutdown: () => {},
-				getContextUsage: () => session.getContextUsage(),
-				getSystemPrompt: () => session.systemPrompt,
-				compact: instructionsOrOptions => runExtensionCompact(session, instructionsOrOptions),
-			},
-			// ExtensionCommandContextActions - commands invokable via prompt("/command")
-			{
-				getContextUsage: () => session.getContextUsage(),
-				waitForIdle: () => session.agent.waitForIdle(),
-				newSession: async options => {
-					const success = await session.newSession({ parentSession: options?.parentSession });
-					if (success && options?.setup) {
-						await options.setup(session.sessionManager);
-					}
-					return { cancelled: !success };
-				},
-				branch: async entryId => {
-					const result = await session.branch(entryId);
-					return { cancelled: result.cancelled };
-				},
-				navigateTree: async (targetId, options) => {
-					const result = await session.navigateTree(targetId, { summarize: options?.summarize });
-					return { cancelled: result.cancelled };
-				},
-				switchSession: async sessionPath => {
-					const success = await session.switchSession(sessionPath);
-					return { cancelled: !success };
-				},
-				reload: async () => {
-					await session.reload();
-				},
-				compact: instructionsOrOptions => runExtensionCompact(session, instructionsOrOptions),
-			},
-			// No UI context
-		);
-		extensionRunner.onError(err => {
+	await initializeExtensions(session, {
+		reportSendError: (action, err) => {
+			process.stderr.write(
+				`Extension ${action === "extension_send" ? "sendMessage" : "sendUserMessage"} failed: ${err.message}\n`,
+			);
+		},
+		reportRuntimeError: err => {
 			process.stderr.write(`Extension error (${err.extensionPath}): ${err.error}\n`);
-		});
-		// Emit session_start event
-		await extensionRunner.emit({
-			type: "session_start",
-		});
-	}
+		},
+	});
 
 	// Always subscribe to enable session persistence via _handleAgentEvent
 	session.subscribe(event => {

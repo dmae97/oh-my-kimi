@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { clearMermaidCache } from "@oh-my-pi/pi-coding-agent/modes/theme/mermaid-cache";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
@@ -42,14 +42,14 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-	_resetSettingsForTest();
+	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
 	clearMermaidCache();
 	setTerminalImageProtocol(null);
 });
 
 afterEach(() => {
-	_resetSettingsForTest();
+	resetSettingsForTest();
 	setTerminalImageProtocol(originalImageProtocol);
 	clearMermaidCache();
 });

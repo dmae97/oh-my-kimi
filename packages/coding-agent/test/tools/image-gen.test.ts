@@ -21,30 +21,6 @@ afterEach(async () => {
 	setPreferredImageProvider("auto");
 });
 
-function _getHeaderValue(headers: RequestInit["headers"] | undefined, name: string): string | undefined {
-	if (!headers) return undefined;
-	if (headers instanceof Headers) {
-		return headers.get(name) ?? headers.get(name.toLowerCase()) ?? headers.get(name.toUpperCase()) ?? undefined;
-	}
-	if (Array.isArray(headers)) {
-		for (const [key, value] of headers) {
-			if (key.toLowerCase() === name.toLowerCase()) {
-				return value;
-			}
-		}
-		return undefined;
-	}
-	for (const [key, value] of Object.entries(headers)) {
-		if (key.toLowerCase() === name.toLowerCase()) {
-			if (typeof value === "string") {
-				return value;
-			}
-			return value.join(",");
-		}
-	}
-	return undefined;
-}
-
 describe("imageGenTool", () => {
 	it("e2e writes OpenAI Responses image_generation WebP output to a temp file", async () => {
 		let requestUrl: string | undefined;

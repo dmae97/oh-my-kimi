@@ -164,7 +164,7 @@ export function clonePosition(position: Position): Position {
 	return { line: position.line, col: position.col };
 }
 
-export function comparePositions(left: Position, right: Position): number {
+function comparePositions(left: Position, right: Position): number {
 	if (left.line !== right.line) {
 		return left.line - right.line;
 	}

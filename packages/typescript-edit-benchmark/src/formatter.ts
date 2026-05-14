@@ -5,7 +5,7 @@ import * as path from "node:path";
 import * as prettier from "prettier";
 import { listFiles } from "./shared";
 
-export const PRETTIER_OPTIONS: prettier.Options = {
+const PRETTIER_OPTIONS: prettier.Options = {
 	printWidth: 100,
 	tabWidth: 2,
 	useTabs: false,

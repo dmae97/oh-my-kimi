@@ -3,7 +3,7 @@ import { Process, ProcessStatus } from "@oh-my-pi/pi-natives";
 import type { Browser, Page } from "puppeteer-core";
 import { ToolError, throwIfAborted } from "../tool-errors";
 
-export const ATTACH_TARGET_SKIP_PATTERN =
+const ATTACH_TARGET_SKIP_PATTERN =
 	/request[\s_-]?handler|devtools|background[\s_-]?(?:page|host)|service[\s_-]?worker/i;
 
 /**
@@ -62,7 +62,7 @@ export async function waitForCdp(cdpUrl: string, timeoutMs: number, signal?: Abo
  * accepts both `--flag=value` and `--flag value`). Returns null if absent or
  * malformed.
  */
-export function findCdpPortInArgs(args: string[]): number | null {
+function findCdpPortInArgs(args: string[]): number | null {
 	for (const arg of args) {
 		const m = /^--remote-debugging-port=(\d+)$/.exec(arg);
 		if (m) {
@@ -80,7 +80,7 @@ export function findCdpPortInArgs(args: string[]): number | null {
 }
 
 /** One-shot probe: returns true when `/json/version` answers 200 within the timeout. */
-export async function probeCdpAt(port: number, signal?: AbortSignal): Promise<boolean> {
+async function probeCdpAt(port: number, signal?: AbortSignal): Promise<boolean> {
 	const probeTimeout = AbortSignal.timeout(1500);
 	const probeSignal = signal ? AbortSignal.any([signal, probeTimeout]) : probeTimeout;
 	try {

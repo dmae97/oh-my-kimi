@@ -250,7 +250,7 @@ export class UiHelpers {
 				break;
 			}
 			default: {
-				const _exhaustive: never = message;
+				message satisfies never;
 			}
 		}
 		return [];

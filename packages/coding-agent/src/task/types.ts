@@ -217,7 +217,10 @@ export interface AgentProgress {
 	recentTools: Array<{ tool: string; args: string; endMs: number }>;
 	recentOutput: string[];
 	toolCount: number;
+	/** Cumulative input + output + cacheWrite tokens across all turns. Excludes cacheRead (re-reads cached context every turn, making cumulative sum misleading). */
 	tokens: number;
+	/** Cumulative billing cost in USD, accumulated incrementally from message_end events. */
+	cost: number;
 	durationMs: number;
 	modelOverride?: string | string[];
 	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
@@ -239,6 +242,7 @@ export interface SingleResult {
 	stderr: string;
 	truncated: boolean;
 	durationMs: number;
+	/** Cumulative input + output + cacheWrite tokens across all turns. Excludes cacheRead (re-reads cached context every turn, making cumulative sum misleading). */
 	tokens: number;
 	modelOverride?: string | string[];
 	error?: string;

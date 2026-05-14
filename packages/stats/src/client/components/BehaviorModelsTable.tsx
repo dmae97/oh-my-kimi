@@ -9,23 +9,28 @@ import {
 	Tooltip,
 } from "chart.js";
 import { format } from "date-fns";
-import { ChevronDown, ChevronUp } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Line } from "react-chartjs-2";
 import type { BehaviorModelStats, BehaviorTimeSeriesPoint } from "../types";
 import { useSystemTheme } from "../useSystemTheme";
+import {
+	DetailChartEmpty,
+	detailChartPlugins,
+	detailChartScalesSingleAxis,
+	ExpandableModelRow,
+	lineSeriesStyle,
+	MiniSparkline,
+	MODEL_COLORS,
+	ModelNameCell,
+	ModelTableBody,
+	ModelTableHeader,
+	ModelTableShell,
+	TABLE_CHART_THEMES,
+	type TableChartTheme,
+	TrendEmpty,
+} from "./models-table-shared";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
-
-const MODEL_COLORS = [
-	"#a78bfa", // violet
-	"#22d3ee", // cyan
-	"#ec4899", // pink
-	"#4ade80", // green
-	"#fbbf24", // amber
-	"#f87171", // red
-	"#60a5fa", // blue
-];
 
 const SERIES_COLORS = {
 	yelling: "#fbbf24", // amber
@@ -33,29 +38,6 @@ const SERIES_COLORS = {
 	anguish: "#a78bfa", // violet
 	frustration: "#22d3ee", // cyan - new semantic signals
 } as const;
-
-const CHART_THEMES = {
-	dark: {
-		legendLabel: "#cbd5e1",
-		tooltipBackground: "#16161e",
-		tooltipTitle: "#f8fafc",
-		tooltipBody: "#94a3b8",
-		tooltipBorder: "rgba(255, 255, 255, 0.1)",
-		grid: "rgba(255, 255, 255, 0.06)",
-		tick: "#94a3b8",
-	},
-	light: {
-		legendLabel: "#334155",
-		tooltipBackground: "#ffffff",
-		tooltipTitle: "#0f172a",
-		tooltipBody: "#334155",
-		tooltipBorder: "rgba(15, 23, 42, 0.18)",
-		grid: "rgba(15, 23, 42, 0.08)",
-		tick: "#475569",
-	},
-} as const;
-
-type ChartTheme = (typeof CHART_THEMES)[keyof typeof CHART_THEMES];
 
 interface BehaviorModelsTableProps {
 	models: BehaviorModelStats[];
@@ -107,7 +89,7 @@ function formatRate(total: number, messages: number): string {
 export function BehaviorModelsTable({ models, behaviorSeries }: BehaviorModelsTableProps) {
 	const [expandedKey, setExpandedKey] = useState<string | null>(null);
 	const theme = useSystemTheme();
-	const chartTheme = CHART_THEMES[theme];
+	const chartTheme = TABLE_CHART_THEMES[theme];
 
 	const trendByKey = useMemo(() => buildTrendLookup(behaviorSeries), [behaviorSeries]);
 
@@ -119,153 +101,137 @@ export function BehaviorModelsTable({ models, behaviorSeries }: BehaviorModelsTa
 	});
 
 	return (
-		<div className="surface overflow-hidden">
-			<div className="px-5 py-4 border-b border-[var(--border-subtle)]">
-				<h3 className="text-sm font-semibold text-[var(--text-primary)]">Behavior by Model</h3>
-				<p className="text-xs text-[var(--text-muted)] mt-1">
-					How often each model elicited a tantrum — rates are per user message
-				</p>
-			</div>
+		<ModelTableShell
+			title="Behavior by Model"
+			subtitle="How often each model elicited a tantrum — rates are per user message"
+		>
+			<ModelTableHeader
+				gridTemplate={GRID_TEMPLATE}
+				columns={[
+					{ label: "Model" },
+					{ label: "Messages", align: "right" },
+					{ label: "CAPS %", align: "right" },
+					{ label: "Profanity %", align: "right" },
+					{ label: "Anguish %", align: "right" },
+					{ label: "Frustration %", align: "right" },
+					{ label: "Hits %", align: "right" },
+					{ label: "Trend", align: "center" },
+				]}
+			/>
 
-			<div className="overflow-x-auto">
-				<div
-					className="grid gap-3 px-5 py-3 text-[var(--text-muted)] text-xs uppercase tracking-wider font-semibold"
-					style={{ gridTemplateColumns: GRID_TEMPLATE }}
-				>
-					<div>Model</div>
-					<div className="text-right">Messages</div>
-					<div className="text-right">CAPS %</div>
-					<div className="text-right">Profanity %</div>
-					<div className="text-right">Anguish %</div>
-					<div className="text-right">Frustration %</div>
-					<div className="text-right">Hits %</div>
-					<div className="text-center">Trend</div>
-					<div />
-				</div>
+			<ModelTableBody>
+				{sortedModels.map((model, index) => {
+					const key = `${model.model}::${model.provider}`;
+					const trend = trendByKey.get(key)?.data ?? [];
+					const trendColor = MODEL_COLORS[index % MODEL_COLORS.length];
+					const isExpanded = expandedKey === key;
+					const totalFrustration = model.totalNegation + model.totalRepetition + model.totalBlame;
+					const totalHits = model.totalYelling + model.totalProfanity + model.totalAnguish + totalFrustration;
 
-				<div className="max-h-[calc(100vh-300px)] overflow-y-auto">
-					{sortedModels.map((model, index) => {
-						const key = `${model.model}::${model.provider}`;
-						const trend = trendByKey.get(key)?.data ?? [];
-						const trendColor = MODEL_COLORS[index % MODEL_COLORS.length];
-						const isExpanded = expandedKey === key;
-						const totalFrustration = model.totalNegation + model.totalRepetition + model.totalBlame;
-						const totalHits = model.totalYelling + model.totalProfanity + model.totalAnguish + totalFrustration;
-
-						return (
-							<div key={key} className="border-t border-[var(--border-subtle)]">
-								<button
-									type="button"
-									onClick={() => setExpandedKey(isExpanded ? null : key)}
-									className="w-full bg-transparent border-none text-left px-5 py-3 cursor-pointer hover:bg-[var(--bg-hover)] transition-colors"
-								>
-									<div className="grid gap-3 items-center" style={{ gridTemplateColumns: GRID_TEMPLATE }}>
-										<div>
-											<div className="font-medium text-[var(--text-primary)]">{model.model}</div>
-											<div className="text-xs text-[var(--text-muted)]">{model.provider}</div>
-										</div>
-										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
-											{formatInt(model.totalMessages)}
-										</div>
-										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
-											{formatRate(model.totalYelling, model.totalMessages)}
-										</div>
-										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
-											{formatRate(model.totalProfanity, model.totalMessages)}
-										</div>
-										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
-											{formatRate(model.totalAnguish, model.totalMessages)}
-										</div>
-										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
-											{formatRate(totalFrustration, model.totalMessages)}
-										</div>
-										<div className="text-right text-[var(--text-secondary)] font-mono text-sm">
-											{formatRate(totalHits, model.totalMessages)}
-										</div>
-										<div className="h-10">
-											{trend.length === 0 ? (
-												<div className="text-[var(--text-muted)] text-center text-sm">-</div>
-											) : (
-												<TrendSparkline data={trend} color={trendColor} />
-											)}
-										</div>
-										<div className="flex justify-center text-[var(--text-muted)]">
-											{isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-										</div>
+					return (
+						<ExpandableModelRow
+							key={key}
+							gridTemplate={GRID_TEMPLATE}
+							isExpanded={isExpanded}
+							onToggle={() => setExpandedKey(isExpanded ? null : key)}
+							cells={[
+								<ModelNameCell key="name" model={model.model} provider={model.provider} />,
+								<div key="messages" className="text-right text-[var(--text-secondary)] font-mono text-sm">
+									{formatInt(model.totalMessages)}
+								</div>,
+								<div key="caps" className="text-right text-[var(--text-secondary)] font-mono text-sm">
+									{formatRate(model.totalYelling, model.totalMessages)}
+								</div>,
+								<div key="profanity" className="text-right text-[var(--text-secondary)] font-mono text-sm">
+									{formatRate(model.totalProfanity, model.totalMessages)}
+								</div>,
+								<div key="anguish" className="text-right text-[var(--text-secondary)] font-mono text-sm">
+									{formatRate(model.totalAnguish, model.totalMessages)}
+								</div>,
+								<div key="frustration" className="text-right text-[var(--text-secondary)] font-mono text-sm">
+									{formatRate(totalFrustration, model.totalMessages)}
+								</div>,
+								<div key="hits" className="text-right text-[var(--text-secondary)] font-mono text-sm">
+									{formatRate(totalHits, model.totalMessages)}
+								</div>,
+							]}
+							trendCell={
+								trend.length === 0 ? (
+									<TrendEmpty />
+								) : (
+									<MiniSparkline
+										timestamps={trend.map(d => d.timestamp)}
+										values={trend.map(d => d.total)}
+										color={trendColor}
+									/>
+								)
+							}
+							expandedContent={
+								<div className="grid gap-4" style={{ gridTemplateColumns: "220px 1fr" }}>
+									<div className="space-y-4 text-sm">
+										<DetailRow
+											label="Yelling (CAPS)"
+											total={model.totalYelling}
+											messages={model.totalMessages}
+											valueClass="text-[var(--accent-amber,#fbbf24)]"
+										/>
+										<DetailRow
+											label="Profanity"
+											total={model.totalProfanity}
+											messages={model.totalMessages}
+											valueClass="text-[var(--accent-red,#f87171)]"
+										/>
+										<DetailRow
+											label="Anguish (!!!, nooo, dude, ..)"
+											total={model.totalAnguish}
+											messages={model.totalMessages}
+											valueClass="text-[var(--accent-violet,#a78bfa)]"
+										/>
+										<DetailRow
+											label="Negation (no/nope/wrong)"
+											total={model.totalNegation}
+											messages={model.totalMessages}
+											valueClass="text-[var(--accent-cyan,#22d3ee)]"
+										/>
+										<DetailRow
+											label="Repetition (i meant, still doesnt)"
+											total={model.totalRepetition}
+											messages={model.totalMessages}
+											valueClass="text-[var(--accent-cyan,#22d3ee)]"
+										/>
+										<DetailRow
+											label="Blame (you didnt, stop X-ing)"
+											total={model.totalBlame}
+											messages={model.totalMessages}
+											valueClass="text-[var(--accent-cyan,#22d3ee)]"
+										/>
+										<DetailRow
+											label="Avg chars / msg"
+											total={model.totalChars}
+											messages={model.totalMessages}
+											valueClass="text-[var(--text-secondary)]"
+											mode="average"
+										/>
 									</div>
-								</button>
-
-								{isExpanded && (
-									<div className="px-5 py-4 bg-[var(--bg-elevated)] border-t border-[var(--border-subtle)]">
-										<div className="grid gap-4" style={{ gridTemplateColumns: "220px 1fr" }}>
-											<div className="space-y-4 text-sm">
-												<DetailRow
-													label="Yelling (CAPS)"
-													total={model.totalYelling}
-													messages={model.totalMessages}
-													valueClass="text-[var(--accent-amber,#fbbf24)]"
-												/>
-												<DetailRow
-													label="Profanity"
-													total={model.totalProfanity}
-													messages={model.totalMessages}
-													valueClass="text-[var(--accent-red,#f87171)]"
-												/>
-												<DetailRow
-													label="Anguish (!!!, nooo, dude, ..)"
-													total={model.totalAnguish}
-													messages={model.totalMessages}
-													valueClass="text-[var(--accent-violet,#a78bfa)]"
-												/>
-												<DetailRow
-													label="Negation (no/nope/wrong)"
-													total={model.totalNegation}
-													messages={model.totalMessages}
-													valueClass="text-[var(--accent-cyan,#22d3ee)]"
-												/>
-												<DetailRow
-													label="Repetition (i meant, still doesnt)"
-													total={model.totalRepetition}
-													messages={model.totalMessages}
-													valueClass="text-[var(--accent-cyan,#22d3ee)]"
-												/>
-												<DetailRow
-													label="Blame (you didnt, stop X-ing)"
-													total={model.totalBlame}
-													messages={model.totalMessages}
-													valueClass="text-[var(--accent-cyan,#22d3ee)]"
-												/>
-												<DetailRow
-													label="Avg chars / msg"
-													total={model.totalChars}
-													messages={model.totalMessages}
-													valueClass="text-[var(--text-secondary)]"
-													mode="average"
-												/>
-											</div>
-											<div className="h-[200px]">
-												{trend.length === 0 ? (
-													<div className="h-full flex items-center justify-center text-[var(--text-muted)] text-sm">
-														No data available
-													</div>
-												) : (
-													<BreakdownChart data={trend} chartTheme={chartTheme} />
-												)}
-											</div>
-										</div>
+									<div className="h-[200px]">
+										{trend.length === 0 ? (
+											<DetailChartEmpty />
+										) : (
+											<BreakdownChart data={trend} chartTheme={chartTheme} />
+										)}
 									</div>
-								)}
-							</div>
-						);
-					})}
-					{sortedModels.length === 0 && (
-						<div className="border-t border-[var(--border-subtle)] px-5 py-8 text-center text-[var(--text-muted)] text-sm">
-							No user behavior recorded for this range yet.
-						</div>
-					)}
-				</div>
-			</div>
-		</div>
+								</div>
+							}
+						/>
+					);
+				})}
+				{sortedModels.length === 0 ? (
+					<div className="border-t border-[var(--border-subtle)] px-5 py-8 text-center text-[var(--text-muted)] text-sm">
+						No user behavior recorded for this range yet.
+					</div>
+				) : null}
+			</ModelTableBody>
+		</ModelTableShell>
 	);
 }
 
@@ -302,111 +268,22 @@ function DetailRow({
 	);
 }
 
-function TrendSparkline({ data, color }: { data: DailyPoint[]; color: string }) {
+function BreakdownChart({ data, chartTheme }: { data: DailyPoint[]; chartTheme: TableChartTheme }) {
 	const chartData = {
 		labels: data.map(d => format(new Date(d.timestamp), "MMM d")),
 		datasets: [
-			{
-				data: data.map(d => d.total),
-				borderColor: color,
-				backgroundColor: "transparent",
-				tension: 0.4,
-				pointRadius: 0,
-				borderWidth: 2,
-			},
+			{ label: "CAPS", data: data.map(d => d.yelling), ...lineSeriesStyle(SERIES_COLORS.yelling) },
+			{ label: "Profanity", data: data.map(d => d.profanity), ...lineSeriesStyle(SERIES_COLORS.profanity) },
+			{ label: "Anguish", data: data.map(d => d.anguish), ...lineSeriesStyle(SERIES_COLORS.anguish) },
+			{ label: "Frustration", data: data.map(d => d.frustration), ...lineSeriesStyle(SERIES_COLORS.frustration) },
 		],
 	};
 
 	const options = {
 		responsive: true,
 		maintainAspectRatio: false,
-		plugins: { legend: { display: false }, tooltip: { enabled: false } },
-		scales: {
-			x: { display: false },
-			y: { display: false, min: 0 },
-		},
-	};
-
-	return <Line data={chartData} options={options} />;
-}
-
-function BreakdownChart({ data, chartTheme }: { data: DailyPoint[]; chartTheme: ChartTheme }) {
-	const chartData = {
-		labels: data.map(d => format(new Date(d.timestamp), "MMM d")),
-		datasets: [
-			{
-				label: "CAPS",
-				data: data.map(d => d.yelling),
-				borderColor: SERIES_COLORS.yelling,
-				backgroundColor: "transparent",
-				tension: 0.4,
-				pointRadius: 0,
-				borderWidth: 2,
-			},
-			{
-				label: "Profanity",
-				data: data.map(d => d.profanity),
-				borderColor: SERIES_COLORS.profanity,
-				backgroundColor: "transparent",
-				tension: 0.4,
-				pointRadius: 0,
-				borderWidth: 2,
-			},
-			{
-				label: "Anguish",
-				data: data.map(d => d.anguish),
-				borderColor: SERIES_COLORS.anguish,
-				backgroundColor: "transparent",
-				tension: 0.4,
-				pointRadius: 0,
-				borderWidth: 2,
-			},
-			{
-				label: "Frustration",
-				data: data.map(d => d.frustration),
-				borderColor: SERIES_COLORS.frustration,
-				backgroundColor: "transparent",
-				tension: 0.4,
-				pointRadius: 0,
-				borderWidth: 2,
-			},
-		],
-	};
-
-	const options = {
-		responsive: true,
-		maintainAspectRatio: false,
-		plugins: {
-			legend: {
-				display: true,
-				position: "top" as const,
-				labels: {
-					color: chartTheme.legendLabel,
-					usePointStyle: true,
-					padding: 16,
-					font: { size: 12 },
-				},
-			},
-			tooltip: {
-				backgroundColor: chartTheme.tooltipBackground,
-				titleColor: chartTheme.tooltipTitle,
-				bodyColor: chartTheme.tooltipBody,
-				borderColor: chartTheme.tooltipBorder,
-				borderWidth: 1,
-				cornerRadius: 8,
-			},
-		},
-		scales: {
-			x: {
-				grid: { color: chartTheme.grid },
-				ticks: { color: chartTheme.tick, font: { size: 11 } },
-			},
-			y: {
-				grid: { color: chartTheme.grid },
-				ticks: { color: chartTheme.tick, font: { size: 11 } },
-				min: 0,
-			},
-		},
+		plugins: detailChartPlugins(chartTheme),
+		scales: detailChartScalesSingleAxis(chartTheme),
 	};
 
 	return <Line data={chartData} options={options} />;

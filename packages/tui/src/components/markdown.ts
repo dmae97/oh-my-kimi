@@ -48,13 +48,13 @@ export function clearRenderCache(): void {
 
 // Stable numeric IDs for structural theme/style objects (no ID field on type).
 // WeakMap so GC can collect orphaned themes/styles without a leak.
-const _objectIds = new WeakMap<object, number>();
-let _nextObjectId = 0;
+const objectIds = new WeakMap<object, number>();
+let nextObjectId = 0;
 function objectId(o: object): number {
-	let id = _objectIds.get(o);
+	let id = objectIds.get(o);
 	if (id === undefined) {
-		id = _nextObjectId++;
-		_objectIds.set(o, id);
+		id = nextObjectId++;
+		objectIds.set(o, id);
 	}
 	return id;
 }
