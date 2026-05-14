@@ -73,14 +73,13 @@ URI_SERVER = textwrap.dedent(
             pending_uri_id += 1
             respond(request_id, "trigger_write", {})
         elif command_type == "host_uri_result":
-            # Echo back as response so the test can assert on the wire frame
+            # Re-emit the host_uri_result frame as an unknown notification
+            # so the test can capture it through on_unknown_notification.
             print(
                 json.dumps(
                     {
-                        "type": "response",
-                        "command": "uri_echo",
-                        "success": True,
-                        "data": {"frame": command},
+                        "type": "uri_echo",
+                        "frame": command,
                     }
                 ),
                 flush=True,
@@ -132,12 +131,14 @@ class HostUriHelperTests(unittest.TestCase):
 
 class RpcHostUriBridgeTests(unittest.TestCase):
     def _make_client(self, **kwargs: object) -> RpcClient:
-        return RpcClient(
+        client = RpcClient(
             command=[sys.executable, "-u", "-c", URI_SERVER],
             startup_timeout=2.0,
             request_timeout=2.0,
             **kwargs,
         )
+        self._attach_capture(client)
+        return client
 
     def test_set_host_uris_registers_schemes_on_start(self) -> None:
         captured: list[tuple[str, str]] = []
@@ -218,17 +219,28 @@ class RpcHostUriBridgeTests(unittest.TestCase):
             self.assertEqual(frame["error"], "boom")
 
     def _await_echo(self, client: RpcClient) -> dict:
-        # The fake server echoes the host_uri_result frame back as an
-        # `uri_echo` response. We poll the events history to surface it.
+        captured = getattr(client, "_test_uri_echos", None)
+        if captured is None:
+            self.fail("_capture was not called for this client")
         deadline = time.time() + 2.0
         while time.time() < deadline:
-            with client._state_lock:  # type: ignore[attr-defined]
-                events = client._events.snapshot()  # type: ignore[attr-defined]
-            for event in events:
-                if event.get("command") == "uri_echo" and event.get("data"):
-                    return event["data"]["frame"]
+            if captured:
+                return captured.pop(0)
             time.sleep(0.02)
         self.fail("Timed out waiting for host_uri_result echo")
+
+    def _attach_capture(self, client: RpcClient) -> None:
+        captured: list[dict] = []
+        client._test_uri_echos = captured  # type: ignore[attr-defined]
+
+        def on_notification(notification) -> None:
+            payload = notification.payload
+            if payload.get("type") == "uri_echo":
+                frame = payload.get("frame")
+                if isinstance(frame, dict):
+                    captured.append(frame)
+
+        client.on_unknown_notification(on_notification)
 
 
 if __name__ == "__main__":
