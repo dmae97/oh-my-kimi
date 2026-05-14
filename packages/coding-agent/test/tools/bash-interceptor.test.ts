@@ -83,13 +83,9 @@ describe("BashTool head/tail stripping", () => {
 		// `seq 1 100 | head -3` would emit "1\n2\n3"; stripped, it emits 1..100.
 		// We assert on the tail of the output rather than head, so a successful
 		// strip is observable: line "100" only appears when head is gone.
-		const result = await tool.execute(
-			"tool-call",
-			{ command: "seq 1 100 | head -3" },
-			undefined,
-			undefined,
-			{ toolNames: ["bash"] } as AgentToolContext,
-		);
+		const result = await tool.execute("tool-call", { command: "seq 1 100 | head -3" }, undefined, undefined, {
+			toolNames: ["bash"],
+		} as AgentToolContext);
 		const text = result.content.find(b => b.type === "text")?.text ?? "";
 		expect(text).toContain("100");
 		expect(text).toContain("Stripped trailing `| head -3`");
@@ -97,13 +93,9 @@ describe("BashTool head/tail stripping", () => {
 
 	it("does not strip when the setting is disabled", async () => {
 		const tool = createBashToolWithStrip(false);
-		const result = await tool.execute(
-			"tool-call",
-			{ command: "seq 1 100 | head -3" },
-			undefined,
-			undefined,
-			{ toolNames: ["bash"] } as AgentToolContext,
-		);
+		const result = await tool.execute("tool-call", { command: "seq 1 100 | head -3" }, undefined, undefined, {
+			toolNames: ["bash"],
+		} as AgentToolContext);
 		const text = result.content.find(b => b.type === "text")?.text ?? "";
 		expect(text).toContain("1\n2\n3");
 		expect(text).not.toContain("100");

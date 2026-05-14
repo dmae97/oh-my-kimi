@@ -21,6 +21,7 @@ import { type Theme, theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
 import { initializeExtensions } from "../runtime-init";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
+import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
 import type {
 	RpcCommand,
 	RpcExtensionUIRequest,
@@ -28,6 +29,8 @@ import type {
 	RpcHostToolCallRequest,
 	RpcHostToolCancelRequest,
 	RpcHostToolDefinition,
+	RpcHostUriCancelRequest,
+	RpcHostUriRequest,
 	RpcResponse,
 	RpcSessionState,
 } from "./rpc-types";
@@ -41,7 +44,14 @@ export type PendingExtensionRequest = {
 };
 
 type RpcOutput = (
-	obj: RpcResponse | RpcExtensionUIRequest | RpcHostToolCallRequest | RpcHostToolCancelRequest | object,
+	obj:
+		| RpcResponse
+		| RpcExtensionUIRequest
+		| RpcHostToolCallRequest
+		| RpcHostToolCancelRequest
+		| RpcHostUriRequest
+		| RpcHostUriCancelRequest
+		| object,
 ) => void;
 
 function normalizeHostToolDefinitions(tools: RpcHostToolDefinition[]): RpcHostToolDefinition[] {
@@ -188,6 +198,7 @@ export async function runRpcMode(
 
 	const pendingExtensionRequests = new Map<string, PendingExtensionRequest>();
 	const hostToolBridge = new RpcHostToolBridge(output);
+	const hostUriBridge = new RpcHostUriBridge(output);
 
 	// Shutdown request flag (wrapped in object to allow mutation with const)
 	const shutdownState = { requested: false };
@@ -533,6 +544,15 @@ export async function runRpcMode(
 				return success(id, "set_host_tools", { toolNames: tools.map(tool => tool.name) });
 			}
 
+			case "set_host_uri_schemes": {
+				try {
+					const schemes = hostUriBridge.setSchemes(command.schemes);
+					return success(id, "set_host_uri_schemes", { schemes });
+				} catch (err) {
+					return error(id, "set_host_uri_schemes", err instanceof Error ? err.message : String(err));
+				}
+			}
+
 			// =================================================================
 			// Model
 			// =================================================================
@@ -807,6 +827,11 @@ export async function runRpcMode(
 				continue;
 			}
 
+			if (isRpcHostUriResult(parsed)) {
+				hostUriBridge.handleResult(parsed);
+				continue;
+			}
+
 			// Handle regular commands
 			const command = parsed as RpcCommand;
 			const response = await handleCommand(command);
@@ -821,5 +846,6 @@ export async function runRpcMode(
 
 	// stdin closed — RPC client is gone, exit cleanly
 	hostToolBridge.rejectAllPending("RPC client disconnected before host tool execution completed");
+	hostUriBridge.clear("RPC client disconnected before host URI request completed");
 	process.exit(0);
 }

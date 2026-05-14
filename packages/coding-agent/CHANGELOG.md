@@ -1,9 +1,12 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added the `set_host_uri_schemes` RPC command so hosts can register and replace writable/read-only internal URI schemes with scheme metadata (`writable`, `immutable`) at runtime
+- Enabled the `write` tool to dispatch `write(url, content)` to registered internal URL handlers, allowing edits to non-filesystem resources via host-managed URI schemes
+- Added host-owned internal URI read/write over RPC, including abort support, so URI operations are resolved by the host transport for `read` and `write` requests
+- Added handling of host URI request results in RPC mode so host services can stream completion frames for internal URI operations
 - Added scratch-directory awareness to the status-line `path` segment. When the project directory is inside an OS-level scratch root (the platform `os.tmpdir()`, `/tmp` and `/var/tmp` plus their macOS `/private/...` aliases, `~/tmp`, or — on Windows — `%TEMP%` / `%TMP%` / `%SystemRoot%\Temp`), the segment now (1) renders the new `icon.scratchFolder` symbol instead of `icon.folder`, and (2) strips the scratch root from the displayed path so only the trailing folder (and any subpath beneath it) is shown — mirroring how `/work` and `~/Projects` are already abbreviated. Both behaviors honor the existing `stripWorkPrefix` option. Icon defaults: 🗑 (emoji), `` (nf-fa-trash) for Nerd Font, `[T]` for ASCII, `◌` in the poimandres themes; themes can override `icon.scratchFolder` independently of `icon.folder`.
 
 ### Changed

@@ -142,6 +142,47 @@ If you want runtime conversion into a richer Python type, pass `decode=` to
 `host_tool(...)`. That lets you keep the JSON Schema contract on the wire while
 parsing the incoming argument object into a dataclass or model in the handler.
 
+## Host-Owned URI Schemes
+
+Hosts can also expose custom URL schemes that behave like virtual files.
+Registered schemes are routed through the agent's `read` (and `write`) tools
+over the same RPC transport — handlers do the actual I/O on the Python side:
+
+```python
+from omp_rpc import RpcClient, host_uri
+
+rows: dict[str, str] = {"42": "id=42\nname=Alice\n"}
+
+
+def read_row(url: str, _ctx) -> str:
+	row_id = url.removeprefix("db://users/")
+	return rows[row_id]
+
+
+def write_row(url: str, content: str, _ctx) -> None:
+	row_id = url.removeprefix("db://users/")
+	rows[row_id] = content
+
+
+with RpcClient(
+	no_session=True,
+	host_uris=(
+		host_uri(
+			scheme="db",
+			description="Virtual db row files",
+			read=read_row,
+			write=write_row,
+		),
+	),
+) as client:
+	client.prompt_and_wait("Read db://users/42 and rewrite it with name=Bob")
+```
+
+Schemes registered as read-only (no `write=`) reject `write` calls with a
+clear error. The agent's `edit` tool does not target host URIs — hosts that
+want mutation expose `write` and the model uses the `write` tool with the
+full replacement content.
+
 ## Extension UI Requests
 
 Extensions in RPC mode can ask the host for input. Those requests are available as

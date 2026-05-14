@@ -42,13 +42,15 @@ There is no envelope beyond the object shape itself.
 3. `AgentSessionEvent` objects (`agent_start`, `message_update`, etc.)
 4. `RpcExtensionUIRequest` (`{ type: "extension_ui_request", ... }`)
 5. Host tool requests/cancellations (`host_tool_call`, `host_tool_cancel`)
-6. Extension errors (`{ type: "extension_error", extensionPath, event, error }`)
+6. Host URI requests/cancellations (`host_uri_request`, `host_uri_cancel`)
+7. Extension errors (`{ type: "extension_error", extensionPath, event, error }`)
 
 ### Inbound frame categories (stdin)
 
 1. `RpcCommand`
 2. `RpcExtensionUIResponse` (`{ type: "extension_ui_response", ... }`)
 3. Host tool updates/results (`host_tool_update`, `host_tool_result`)
+4. Host URI results (`host_uri_result`)
 
 ## Request/Response Correlation
 
@@ -81,6 +83,7 @@ Important edge behavior from runtime:
 - `{ id?, type: "get_state" }`
 - `{ id?, type: "set_todos", phases: TodoPhase[] }`
 - `{ id?, type: "set_host_tools", tools: RpcHostToolDefinition[] }`
+- `{ id?, type: "set_host_uri_schemes", schemes: RpcHostUriSchemeDefinition[] }`
 
 ### Model
 
@@ -246,6 +249,38 @@ The response payload is:
 
 These tools are added to the active session tool registry before the next model
 call. Re-sending `set_host_tools` replaces the previous host-owned set.
+
+### `set_host_uri_schemes` payload
+
+Replaces the current set of host-owned URL schemes the RPC server should
+dispatch reads/writes through:
+
+```json
+{
+  "id": "req_4",
+  "type": "set_host_uri_schemes",
+  "schemes": [
+    {
+      "scheme": "db",
+      "description": "Virtual db row files",
+      "writable": true,
+      "immutable": false
+    }
+  ]
+}
+```
+
+The response payload is:
+
+```json
+{
+  "schemes": ["db"]
+}
+```
+
+Schemes are case-insensitive on the wire and normalized to lowercase before
+the response is sent. Re-sending `set_host_uri_schemes` replaces the entire
+previous set — schemes missing from the new list are unregistered.
 
 ## Event Stream Schema
 
@@ -416,6 +451,82 @@ Completion uses:
 ```
 
 Set top-level `isError: true` on `host_tool_result` to reject the pending host tool call and surface the returned text content as a tool error.
+
+## Host URI Sub-Protocol
+
+RPC hosts can also own custom URL schemes (virtual files). After
+`set_host_uri_schemes`, every read of `<scheme>://…` and write of
+`<scheme>://…` (when registered as `writable`) is bounced back to the host
+over the same transport.
+
+### Outbound request
+
+When a session tool resolves a host-owned URL, RPC mode emits:
+
+```json
+{
+  "type": "host_uri_request",
+  "id": "uri_1",
+  "operation": "read",
+  "url": "db://users/42"
+}
+```
+
+Writes look the same with `"operation": "write"` and an additional
+`"content": "..."` field carrying the full replacement bytes.
+
+If the request is later aborted (caller cancels, session ends), RPC mode
+emits:
+
+```json
+{
+  "type": "host_uri_cancel",
+  "id": "uri_cancel_1",
+  "targetId": "uri_1"
+}
+```
+
+### Inbound result
+
+For successful reads:
+
+```json
+{
+  "type": "host_uri_result",
+  "id": "uri_1",
+  "content": "id=42\nname=Alice\n",
+  "contentType": "text/plain",
+  "notes": ["fresh from cache"],
+  "immutable": false
+}
+```
+
+For successful writes, omit content:
+
+```json
+{ "type": "host_uri_result", "id": "uri_1" }
+```
+
+To reject the request, set `isError: true` and either populate `error` with
+a message or fall back to `content` for textual error surfacing:
+
+```json
+{
+  "type": "host_uri_result",
+  "id": "uri_1",
+  "isError": true,
+  "error": "row 42 not found"
+}
+```
+
+### Constraints
+
+- The agent's `edit` tool does not target host URIs. Hosts that want to
+  mutate virtual files expose `write` and let the model use the `write` tool
+  with replacement content.
+- Schemes are global to the process; `set_host_uri_schemes` replaces the
+  previous set, unregistering anything not in the new list.
+- Schemes are normalized to lowercase before registration.
 
 ## Error Model and Recoverability
 

@@ -50,6 +50,14 @@ export class InternalUrlRouter {
 		this.#handlers.set(handler.scheme.toLowerCase(), handler);
 	}
 
+	unregister(scheme: string): boolean {
+		return this.#handlers.delete(scheme.toLowerCase());
+	}
+
+	getHandler(scheme: string): ProtocolHandler | undefined {
+		return this.#handlers.get(scheme.toLowerCase());
+	}
+
 	canHandle(input: string): boolean {
 		const match = input.match(/^([a-z][a-z0-9+.-]*):\/\//i);
 		if (!match) return false;

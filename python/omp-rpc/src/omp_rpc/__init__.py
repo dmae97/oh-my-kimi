@@ -17,6 +17,16 @@ from .client import (
     UiRequestListener,
 )
 from .host_tools import HostTool, HostToolContext, HostToolResultPayload, HostToolResultValue, host_tool
+from .host_uris import (
+    HostUri,
+    HostUriContentType,
+    HostUriContext,
+    HostUriReadHandler,
+    HostUriReadResult,
+    HostUriReadValue,
+    HostUriWriteHandler,
+    host_uri,
+)
 from .protocol import (
     AgentEndEvent,
     AgentMessage,
@@ -106,6 +116,13 @@ __all__ = [
     "HostToolContext",
     "HostToolResultPayload",
     "HostToolResultValue",
+    "HostUri",
+    "HostUriContentType",
+    "HostUriContext",
+    "HostUriReadHandler",
+    "HostUriReadResult",
+    "HostUriReadValue",
+    "HostUriWriteHandler",
     "HookMessage",
     "ImageContent",
     "ListenerErrorEvent",
@@ -162,4 +179,5 @@ __all__ = [
     "parse_session_state",
     "parse_todo_phases",
     "host_tool",
+    "host_uri",
 ]

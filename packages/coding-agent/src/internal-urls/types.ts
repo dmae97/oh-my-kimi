@@ -64,6 +64,18 @@ export interface ResolveContext {
 }
 
 /**
+ * Caller context for write operations dispatched to host-owned URI handlers.
+ * Mirrors {@link ResolveContext} so handlers that share read/write state can
+ * accept the same shape.
+ */
+export interface WriteContext {
+	/** Working directory of the calling session. */
+	cwd?: string;
+	/** Caller's abort signal. */
+	signal?: AbortSignal;
+}
+
+/**
  * Handler for a specific internal URL scheme (e.g., agent://, memory://, skill://, mcp://).
  */
 export interface ProtocolHandler {
@@ -86,4 +98,13 @@ export interface ProtocolHandler {
 	 * @throws Error with user-friendly message if resolution fails
 	 */
 	resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource>;
+	/**
+	 * Optional write hook. When present, the write tool dispatches
+	 * `write(url, content)` to this handler instead of writing to a filesystem
+	 * path. The handler is responsible for any persistence and validation.
+	 *
+	 * Handlers that omit this method are treated as read-only; the write tool
+	 * surfaces a clear "not writable" error when invoked against them.
+	 */
+	write?(url: InternalUrl, content: string, context?: WriteContext): Promise<void>;
 }

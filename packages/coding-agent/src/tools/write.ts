@@ -8,6 +8,8 @@ import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { stripHashlinePrefixes } from "../edit";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import { InternalUrlRouter } from "../internal-urls";
+import { parseInternalUrl } from "../internal-urls/parse";
 import { createLspWritethrough, type FileDiagnosticsResult, type WritethroughCallback, writethroughNoop } from "../lsp";
 import { getLanguageFromPath, highlightCode, type Theme } from "../modes/theme/theme";
 import writeDescription from "../prompts/tools/write.md" with { type: "text" };
@@ -658,6 +660,24 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		return untilAborted(signal, async () => {
 			// Strip hashline display prefixes (LINE+ID|) if the model copied them from read output
 			const { text: cleanContent, stripped } = stripWriteContent(this.session, content);
+			const internalRouter = InternalUrlRouter.instance();
+			if (internalRouter.canHandle(path)) {
+				const parsed = parseInternalUrl(path);
+				const scheme = parsed.protocol.replace(/:$/, "").toLowerCase();
+				const handler = internalRouter.getHandler(scheme);
+				if (handler?.write) {
+					await handler.write(parsed, cleanContent, { cwd: this.session.cwd, signal });
+					let resultText = `Successfully wrote ${cleanContent.length} bytes to ${path}`;
+					if (stripped) {
+						resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
+					}
+					return { content: [{ type: "text", text: resultText }], details: {} };
+				}
+				// Schemes without a `write` hook fall through to existing logic
+				// (local:// resolves to a backing file via plan-mode-guard) or are
+				// rejected downstream when no backing file exists.
+			}
+
 			const conflictUri = parseConflictUri(path);
 			if (conflictUri) {
 				if (conflictUri.scope) {
