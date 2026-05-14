@@ -84,15 +84,8 @@ function replaceCommonAsciiSymbols(line: string): string {
 		.replace(/>=/g, "≥");
 }
 
-function replaceCommonAsciiSymbolsOutsideHtmlComments(
-	line: string,
-	state: HtmlCommentState,
-): string {
-	if (
-		!state.inHtmlComment &&
-		!line.includes(HTML_COMMENT_OPEN) &&
-		!line.includes(HTML_COMMENT_CLOSE)
-	) {
+function replaceCommonAsciiSymbolsOutsideHtmlComments(line: string, state: HtmlCommentState): string {
+	if (!state.inHtmlComment && !line.includes(HTML_COMMENT_OPEN) && !line.includes(HTML_COMMENT_CLOSE)) {
 		return replaceCommonAsciiSymbols(line);
 	}
 

@@ -63,9 +63,9 @@ export class HashlineMismatchError extends Error {
 	}
 
 	private static rejectionHeader(mismatches: HashMismatch[]): string[] {
-		const noun = mismatches.length > 1 ? "lines have" : "line has";
+		const noun = mismatches.length > 1 ? "anchors do" : "anchor does";
 		return [
-			`Edit rejected: ${mismatches.length} ${noun} changed since the last read (marked *).`,
+			`Edit rejected: ${mismatches.length} ${noun} not match the current file (marked *).`,
 			"The edit was NOT applied, please use the updated file content shown below, and issue another edit tool-call.",
 		];
 	}

@@ -271,7 +271,8 @@ _RE_SUCCESS = re.compile(
     re.I,
 )
 _RE_ANCHOR_STALE = re.compile(
-    r"(Edit rejected:.*line[s]? .* changed since the last read|"
+    r"(Edit rejected:.*anchor[s]? do(es)? not match the current file|"
+    r"Edit rejected:.*line[s]? .* changed since the last read|"
     r"line[s]? ha(s|ve) changed since last read)",
     re.I,
 )

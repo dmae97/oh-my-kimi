@@ -445,7 +445,7 @@ describe("hashline executor", () => {
 			].join("\n");
 
 			await expect(executeHashlineSingle(hashlineExecuteOptions(tempDir, input))).rejects.toThrow(
-				/changed since the last read/,
+				/anchor(s)? do(es)? not match the current file/,
 			);
 			expect(await Bun.file(aPath).text()).toBe("aaa\n");
 			expect(await Bun.file(bPath).text()).toBe("bbb\n");
