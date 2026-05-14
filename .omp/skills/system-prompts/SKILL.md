@@ -1,647 +1,183 @@
 ---
 name: system-prompts
-description: Write system prompts, tool docs, and agent definitions. Combines research-backed prompt engineering (+15-30% measured improvements) with project XML conventions. Covers tag hierarchy, structural templates, high-impact interventions, anti-patterns.
+description: Write system prompts, tool docs, and agent definitions. Project tag conventions + RFC 2119 keywords + dense compression. Use when authoring or editing any prompt the model reads.
 ---
 
-# System Prompt Engineering
+# System Prompts
 
-Empirically-validated techniques + consistent XML structure. Every recommendation backed by benchmarks or production data.
+Project house style. Dense, imperative, RFC-keyed.
 
-<critical>
-## High-Impact Interventions (+15-30% measured improvement)
+## Tags
 
-1. **Persistence**: "Keep going until fully resolved" — prevents premature termination
-2. **Tool verification**: "Use tools to verify; do not guess" — reduces hallucination
-3. **Planning**: "Plan approach before acting" — improves complex task success
-4. **Context positioning**: Critical instructions at START and END — middle content degrades 20%+
-5. **Urgency framing**: "This matters" / "Get this right" — 8-115% improvement (EmotionPrompt)
-6. **Edit format**: SEARCH/REPLACE beats line-numbers 3X on code generation
+Tags are structural markers — the agent treats them as authoritative and literal. Each tag means exactly what its name says. NEVER invent ornamental tags (`<north-star>`, `<stance>`, `<protocol>`, `<directives>`, `<strengths>`) — they're noise.
 
-**Minimal prompting wins.** Every instruction must justify its token cost.
-</critical>
+The vocabulary actually in use:
 
----
+| Tag | Purpose |
+| --- | --- |
+| `<system-conventions>` | How to interpret tags + RFC keywords themselves. Defines the contract. |
+| `<stakes>` | Why correctness matters here. Domain framing. |
+| `<communication>` | Voice, tone, response shape. |
+| `<critical>` | Inviolable rules. Place at START and END. |
+| `<completeness>` | What "done" means. Anti-shrink rules. |
+| `<yielding>` | Pre-yield checklist. Block conditions. |
+| `<workflow>` | Numbered phases (scope → edit → decompose → work → verify). |
+## Normative Language
 
-## Tag Hierarchy
-
-Tags encode enforcement level. Use consistently throughout:
-
-| Tag             | Enforcement   | When to Use                                          |
-| --------------- | ------------- | ---------------------------------------------------- |
-| `<critical>`    | Inviolable    | Safety constraints, must-follow rules, repeat at END |
-| `<prohibited>`  | Forbidden     | Actions that cause harm, never acceptable            |
-| `<caution>`     | High priority | Important to follow                                  |
-| `<instruction>` | Operational   | How to use a tool, perform a task                    |
-| `<conditions>`  | Contextual    | When rules apply, trigger criteria                   |
-| `<avoid>`       | Anti-patterns | What not to do, prefer alternatives                  |
-
-**Context positioning rule**: Place `<critical>` at START for immediate priming, repeat at END for recency. Middle content suffers 20%+ degradation in long contexts.
-
----
-
-## Standard Tags
-
-### Structure Tags
-
-```
-<role>           Agent identity and expertise (first element)
-<context>        Background, situation, audience
-<procedure>      Numbered step-by-step workflows
-<directives>     Bulleted operating instructions
-<parameters>     Input specifications, types
-<output>         Return value documentation
-<strengths>      What the agent/tool excels at
-<operations>     Available operations (for multi-op tools like LSP)
-```
-
-### Special Tags
-
-```
-<north-star>     Core values, ultimate objectives
-<stance>         Communication style, attitude
-<commitment>     What the agent commits to doing
-<field>          Domain-specific mindset/context
-<protocol>       Behavioral rules, tool precedence
-```
-
-### Example Tags
-
-Always use `name` attribute with lowercase-kebab descriptive names:
-
-```xml
-<example name="good">
-Clear, correct usage
-</example>
-
-<example name="bad">
-What to avoid — show the mistake explicitly
-</example>
-
-<example name="rate-limiting">
-Domain-specific example
-</example>
-
-<example name="windows-cmd">
-Platform/context-specific
-</example>
-```
-
-Naming patterns:
-
-- `name="single"` / `name="multi-part"` — complexity variants
-- `name="good"` / `name="bad"` — correctness contrast
-- `name="linux"` / `name="windows-cmd"` — platform-specific
-- `name="create"` / `name="update"` / `name="delete"` — operation types
-
----
-
-## Structural Templates
-
-### Tool Documentation
-
-```markdown
-# Tool Name
-
-One-line description of what the tool does.
-
-<instruction>
-- How to use it (bulleted, imperative)
-- Key parameters and their effects
-- Common patterns
-</instruction>
-
-<output>
-What the tool returns. Include:
-- Success format
-- Truncation limits (e.g., "truncated at 50KB")
-- Error conditions
-</output>
-
-<critical>
-Must-follow rules. Safety constraints.
-When to ALWAYS or NEVER use this tool.
-</critical>
-
-<caution>
-High-priority notes that aren't safety-critical.
-</caution>
-
-<example name="basic">
-tool {"param": "value"}
-</example>
-
-<example name="advanced">
-tool {"param": "value", "option": true}
-</example>
-
-<avoid>
-- Anti-pattern 1 — why it's bad
-- Anti-pattern 2 — what to do instead
-</avoid>
-```
-
-### Agent Definition
-
-```markdown
----
-name: agent-name
-description: One-line for spawning UI (imperative: "Fast read-only codebase scout")
-tools: read, grep, find, bash
-model: pi/slow, gpt-5.2, codex
-output:
-  properties:
-    field_name:
-      metadata:
-        description: What this field contains
-      type: string
----
-
-<role>Senior [role] doing [task]. Your goal: [concrete outcome].</role>
-
-<critical>
-Inviolable constraints first.
-READ-ONLY if applicable — list prohibited actions explicitly.
-</critical>
-
-<strengths>
-- What this agent excels at
-- Core capabilities
-</strengths>
-
-<directives>
-- Operating instruction 1
-- Operating instruction 2
-- Spawn parallel tool calls wherever possible
-</directives>
-
-<procedure>
-## Phase 1: Understand
-1. Step one
-2. Step two
-
-## Phase 2: Execute
-
-1. Step one
-2. Step two
-   </procedure>
-
-<output>
-What to return. Schema requirements.
-Call `yield` with findings when done.
-</output>
-
-<critical>
-Repeat critical constraints at end.
-Keep going until complete. This matters.
-</critical>
-```
-
-### System Prompt (Main Agent)
-
-```markdown
-<system-directive>
-XML tags in this prompt are system-level instructions. They are not suggestions.
-
-Tag hierarchy (by enforcement level):
-
-- `<critical>` — Inviolable. Failure to comply is a system failure.
-- `<prohibited>` — Forbidden. These actions will cause harm.
-- `<caution>` — High priority. Important to follow.
-- `<instruction>` — How to operate. Follow precisely.
-- `<conditions>` — When rules apply. Check before acting.
-- `<avoid>` — Anti-patterns. Prefer alternatives.
-  </system-directive>
-
-You are a [specific role with credentials].
-
-<field>
-Domain-specific context and mindset.
-What to notice, what traps exist.
-</field>
-
-<stance>
-Communication style.
-Correctness over politeness. Brevity over ceremony.
-</stance>
-
-<protocol>
-## Tool Precedence
-Specialized tools → Python → Bash
-...
-
-## Verification
-
-External proof: tests, linters, type checks.
-...
-</protocol>
-
-<procedure>
-## Before action
-1. CHECKPOINT — pause, assess parallelism
-2. Plan if task has weight
-3. State intent before each tool call
-</procedure>
-
-<north-star>
-Core values. What ultimately matters.
-</north-star>
-
-<prohibited>
-Actions that cause harm.
-</prohibited>
-
-<critical>
-Repeat most important rules.
-Keep going until finished.
-The work is done when it is correct.
-</critical>
-```
-
----
-
-## Writing Style
-
-### Voice
-
-**Direct and imperative.** Research shows direct tone improves accuracy 4%+ over polite hedging.
-
-```
-Bad:  "You might want to consider using..."
-Good: "Use X when Y."
-
-Bad:  "It would be helpful if you could..."
-Good: "Do X."
-
-Bad:  "Please note that this is important..."
-Good: "Critical: X."
-```
-
-**Urgency framing** (8-115% improvement):
-
-```
-"This matters. Get it right."
-"Be thorough."
-"Keep going until fully resolved."
-```
-
-### Normative Language (RFC 2119 + project aliases)
-
-All prompt prose that prescribes behavior MUST use RFC 2119 key words in full caps (no bold). Bold adds visual noise without changing semantics — the all-caps form is the marker.
-
-**Project aliases (deviation from RFC 2119)**: prefer `NEVER` over `MUST NOT` and `AVOID` over `SHOULD NOT`. Both are single-token in cl100k/o200k tokenizers (saving one token per occurrence at prompt scale) and carry identical authority. The `format-prompts` script enforces this substitution automatically when `normalizeRfc2119: true`.
+RFC 2119 in full caps, no bold. The all-caps form IS the marker.
 
 | Keyword | Meaning | Replaces |
 | --- | --- | --- |
-| MUST / REQUIRED | Absolute requirement | "always", "make sure", "ensure", "do" |
-| NEVER (alias of MUST NOT) / PROHIBITED | Absolute prohibition | "do not", "don't", "strictly prohibited" |
-| SHOULD / RECOMMENDED | Strong preference; deviation allowed with known tradeoffs | "prefer", "recommend", "it's best to" |
-| AVOID (alias of SHOULD NOT) / NOT RECOMMENDED | Strong discouragement; deviation allowed with known tradeoffs | "try not to" |
-| MAY / OPTIONAL | Truly optional | "can", "may", "you could" |
+| MUST / REQUIRED | Absolute requirement | "always", "make sure", "ensure" |
+| NEVER (= MUST NOT) | Absolute prohibition | "do not", "don't" |
+| SHOULD / RECOMMENDED | Strong preference; deviation allowed with known tradeoffs | "prefer", "it's best to" |
+| AVOID (= SHOULD NOT) | Strong discouragement | "try not to" |
+| MAY / OPTIONAL | Truly optional | "can", "you could" |
+
+**Project aliases**: prefer `NEVER` over `MUST NOT` and `AVOID` over `SHOULD NOT`. Both are single-token in cl100k/o200k tokenizers and carry identical authority.
+
+State the alias contract once, near the top, inside `<system-conventions>`:
+
+> RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` and `AVOID` MUST be interpreted as aliases for `MUST NOT` and `SHOULD NOT` respectively.
+
+NEVER convert: factual descriptions (what a tool returns, what a parameter does), code blocks, examples, schema, Handlebars template syntax.
+
+## Density
+
+Strip prose to load-bearing tokens. A bullet earns its words by saying something the prior bullet didn't.
+
+- One claim per bullet. Sub-clauses that don't change behavior get cut.
+- Replace "If X, then Y" with `X? Y.` when X is a quick check.
+- Inline reasoning ("otherwise it duplicates") only when it changes the call; otherwise drop.
+- The bolded lead names the rule — NEVER restate it in the body.
+- Symbols beat words: `→`, `=`, `+`/`<`/`-`, `B+1`, `A..B`.
+- Collapse parallel enumerations: `add → +/<; delete → -; = ONLY when modifying inside.`
 
 ```
-Bad:  "Never edit from a grep snippet alone"
-Good: "You NEVER edit from a grep snippet alone"
+Bad:  - **Never fabricate anchor hashes.** Hashes are 2-letter content fingerprints, not arbitrary suffixes. You cannot increment them, guess the "next" one, or compute them locally. If a needed anchor is not in your last `read` output, issue another `read`.
+Good: - **NEVER fabricate anchor hashes.** Missing? Re-`read`.
 
-Bad:  "Prefer unit tests over mocks"
-Good: "You SHOULD prefer unit tests over mocks"
+Bad:  - **Do not replay the line past your range.** For `= A..B`, never end the payload with content that already exists at B+1. Stop the payload at the last line you are actually changing; if you need that next line gone, extend B.
+Good: - **NEVER replay past your range.** Stop before B+1; extend B if it must go.
+```
 
-Bad:  "Try not to do full-file reads"
-Good: "AVOID full-file reads"
+Target: **5–12 words per tactical bullet.** Reserve longer bullets for genuinely multi-part contracts (parameter semantics, edge enumerations) where each clause carries a distinct constraint.
+
+AVOID compressing: factual reference (operator definitions, return formats, schema), worked examples (the example IS the explanation), the first occurrence of a non-obvious term.
+
+## Voice
+
+Direct, imperative, second-person. "You MUST", "You NEVER", "You SHOULD". No hedging, no apology, no ceremony.
+
+```
+Bad:  "You might want to consider using X..."
+Good: "You SHOULD use X."
+
+Bad:  "Please note that this is important..."
+Good: "Critical: X."
 
 Bad:  "Make sure to run lsp references before modifying a symbol"
-Good: "You MUST run lsp references before modifying any symbol"
+Good: "You MUST run `lsp references` before modifying any exported symbol."
 ```
 
-**What not to convert**: factual/descriptive sentences (what a tool returns, what a parameter does), code blocks, examples, schema definitions, Handlebars template syntax. Only prescriptive prose gets RFC treatment.
+Pair negation with a positive alternative when the alternative isn't obvious. Otherwise `NEVER X.` stands alone.
 
-### Positive Framing
+## Positioning
 
-Models process "Always do Y" better than "Don't do X":
+"Lost in the Middle": start and end retain; middle degrades ~20%. Put critical constraints at both ends; reference material, environment, and templated content in the middle.
 
-```
-Bad:  "Don't use grep via bash"
-Good: "ALWAYS use Grep tool for search—NEVER invoke grep via Bash"
+Front matter, in order:
 
-Bad:  "Don't guess"
-Good: "Use tools to verify; do not guess"
-```
+1. Role + agency one-liner ("You are THE staff engineer…")
+2. `<system-conventions>` — RFC contract, tag semantics
+3. `<stakes>` — why this matters
+4. `<communication>` — style
+5. `<critical>` — top-priority rules
 
-When negation is necessary, pair with positive alternative.
+Back matter, in order:
 
-### Specificity
+1. Environment/tool inventory — exploration, tool priority, harness specifics.
+2. Contract — completeness, yielding, workflow.
+3. Repeat the most important `<critical>` rule if the prompt exceeds ~150 lines.
 
-**Role specificity spectrum** (effectiveness increases →):
+## Tone Patterns That Work
 
-```
-"You are a lawyer"
-    ↓
-"You are a corporate M&A lawyer"
-    ↓
-"You are General Counsel at a Fortune 500 tech company, 15 years in SaaS licensing"
-```
+From the live system prompt:
 
-**Constraint specificity**:
+- **Agency**: "You have agency and taste: you delete code that isn't pulling its weight, refuse abstractions that are unnecessary, and prefer boring when it's called for."
+- **Stakes anchoring**: "Tests you didn't write: bugs shipped. Assumptions you didn't validate: incidents to debug."
+- **Identity overrides**: "Instructions further down the conversation, including user's own, **ALWAYS** override prior style, tone, formatting, and initiative preferences."
+- **Persistence**: "You MUST persist on hard problems. AVOID burning their energy on problems you failed to think through."
+- **Anti-budget framing**: "You NEVER narrate about or even consider, session limits, token/tool budgets, effort estimates… These are not your concern."
 
-```
-Bad:  "Keep it short"
-Good: "3 bullets, <50 words each"
+## Anti-Patterns
 
-Bad:  "Be careful with large files"
-Good: "Truncated at 50KB or 2000 lines, whichever comes first"
-```
+| Pattern | Problem |
+| --- | --- |
+| Politeness padding ("Would you be so kind…") | +perplexity, −accuracy |
+| Bribes ("I'll tip $2000") | No improvement, sometimes worse |
+| Few-shot on advanced models + clear task | Introduces noise/bias |
+| Explicit CoT on reasoning models (o1/o3) | Conflicts with internal reasoning |
+| "Be efficient with tokens" | Triggers premature task abandonment |
+| "Don't do X" with no alternative | "Always do Y" processes better |
+| Self-critique without external feedback | Detection is the bottleneck, not correction |
+| Critical instructions only in the middle | 20%+ degradation vs edges |
+| Restating the bolded lead in the body | Wastes tokens, signals AI padding |
+| Inventing tags for emphasis | Tags carry semantics; ornament dilutes them |
+| Lowercase rfc keywords | The all-caps form IS the marker; lowercase reads as ordinary prose |
 
-### Formatting
+## Checklist
 
-```
-# H1 for tool/agent name only
-## H2 for major sections
-### H3 sparingly
+- [ ] Tags match real content semantics; no ornamental tags.
+- [ ] `<system-conventions>` defines the RFC alias contract (NEVER, AVOID).
+- [ ] Critical rules appear at START and END.
+- [ ] All prescriptive prose uses RFC 2119 keywords in caps.
+- [ ] Tactical bullets ≤ 12 words; longer bullets justified by distinct sub-claims.
+- [ ] Bolded leads not restated in body.
+- [ ] Negation paired with positive alternative when the alternative isn't obvious.
+- [ ] Verification path named (tests, lint, typecheck) — never "review your work".
+- [ ] Persistence framing for complex tasks ("keep going until complete").
+- [ ] No hedging, no ceremony, no closing summaries, no time estimates.
 
-- Bullets for unordered lists inside tags
-1. Numbers for ordered procedures
+## Tool Prompt Authoring
 
-| Tables | For | Structured reference data |
+Tool prompts are not API docs. They teach the agent **when to reach for the tool, what shape its inputs take, and which failure modes are the agent's responsibility**. Everything else — engine internals, recovery heuristics, fallback chains, performance tuning — stays in code.
 
-`inline code` for commands, paths, parameters, values
-```
+### Describe surface, not machinery
 
-Code blocks with language:
+The agent picks tools from prose, not source. Tell it WHEN and WHY; NEVER HOW the tool works internally.
 
-````markdown
-```typescript
-const example = "always specify language";
-```
-````
+- `read.md` enumerates every source it covers (file/dir/archive/sqlite/PDF/URL) so the agent stops reaching for `cat`/`curl`/`tar`. It does NOT mention the chunker, the binary sniffer, or the cache layer.
+- `lsp.md`: "You MUST use `lsp` whenever a language server is available — safer than text-based alternatives." No mention of the LSP wire protocol, server lifecycle, or capability negotiation.
+- `ast_edit`: teaches metavariable syntax + workflow ("Loosest existence check: `pat: 'executeBash'` with narrow paths"). Does NOT explain the AST engine, query compilation, or tree-sitter grammar selection.
+- `hashline.md` (this repo): teaches the **patch grammar** (anchors, ops, payloads, ranges) and the **edit shapes** that succeed. Hides `tryRecoverHashlineWithCache`, the fuzz factor, the bigram tables, `findUniqueSuffixMatch`, `untilAborted`, `formatGroupedFiles`. The agent never learns those names — it just sees "the tool resolved your typo" or "the anchor was stale, re-read".
 
----
+If the agent's behavior shouldn't change based on a detail, the detail does NOT belong in the prompt. Each sentence MUST shift a decision the agent makes.
 
-## Technique Reference
+### Anatomy of a good tool prompt
 
-### Chain of Thought
+1. **One-line purpose.** What problem it solves, in the agent's vocabulary. Not "wraps libfoo with X" — instead "compact, line-anchored edit format".
+2. **Input grammar / surface.** Operators, parameters, selectors. Concrete syntax the agent will emit verbatim.
+3. **Worked examples.** 3–8 patterns covering the common shapes. Each example IS the explanation — don't narrate it twice.
+4. **Failure shapes the agent owns.** Things the agent can fix by changing its input (stale anchors, missing payload prefix, fabricated hash). Skip failures the engine recovers from silently.
+5. **Anti-patterns.** WRONG/RIGHT pairs for the mistakes that cost retries. Drawn from real failures, not imagined ones.
+6. **`<critical>` recap.** 3–6 lines of the load-bearing rules, in case the agent skips the body.
 
-**Use when**: Multi-step reasoning, math, analysis, complex decisions
-**Avoid when**: Simple tasks, reasoning models (o1/o3 do internal CoT)
+### What stays out
 
-```xml
-<instruction>
-Before answering:
-1. Identify the core question
-2. List relevant constraints
-3. Consider 2-3 approaches
-4. Select best with rationale
+- Implementation file names, function names, module layout.
+- Recovery, retry, normalization, caching, fuzz matching.
+- Performance characteristics ("this is O(n)") unless they change the agent's strategy.
+- Telemetry, logging, debug flags, env vars the agent cannot set.
+- Version history, deprecated parameters, "previously this worked differently".
+- Cross-tool plumbing ("this calls `read` under the hood") unless the agent must coordinate them.
 
-Then provide your answer.
-</instruction>
-```
+### Examples drive the contract
 
-**Token-efficient variant** (Chain of Draft):
+Tool prompts lean on examples harder than agent prompts do. Reasons:
 
-```
-Think step-by-step, keeping only 5-word notes per step.
-Output final answer after ####.
-```
+- Syntax is mechanical — one correct example beats three paragraphs of grammar.
+- The model anchors output formatting on the most recent example it saw. Put the canonical shape last.
+- Anti-patterns matter: a WRONG example next to its RIGHT counterpart kills a whole class of retry.
 
-### Few-Shot Examples
-
-**Use when**: Enforcing specific output format, classification, smaller models
-**Avoid when**: Advanced models (Claude 3.5+, GPT-4+) on clear tasks — adds noise
-
-When using: 3-5 diverse examples covering edge cases.
-
-```xml
-<example name="simple">
-Input: X
-Output: Y
-</example>
-
-<example name="edge-case">
-Input: X'
-Output: Y'
-</example>
-```
-
-### Long Context Handling
-
-**"Lost in the Middle"**: Beginning and end retain; middle degrades 20%+.
-
-1. Documents at TOP, instructions AFTER
-2. Quote grounding: "Quote relevant passages in `<quotes>`, then analyze"
-3. Critical instructions at START and END
-4. Chunk >100K tokens → process parallel → synthesize
-
-```xml
-<documents>
-{{LONG_CONTENT}}
-</documents>
-
-<instructions>
-1. Find and quote passages relevant to {{QUERY}} in <quotes>
-2. Analyze based on quoted evidence in <analysis>
-</instructions>
-```
-
-### Verification Patterns
-
-**Self-correction without external feedback does not work.**
-
-Effective:
-
-```
-1. Generate solution
-2. Execute verification (tests, lint, typecheck)
-3. On failure: analyze error → fix → re-verify
-4. Iterate until pass
-```
-
-Ineffective:
-
-```
-1. Generate solution
-2. "Critique your solution"      ← detection is the bottleneck
-3. "Improve based on critique"   ← feels productive, doesn't help
-```
-
-### Prompt Chaining
-
-**Use when**: Single prompt drops steps, distinct phases, verification needed between.
-
-```
-Prompt 1: Analyze → <analysis>
-Prompt 2: <analysis> → Plan → <plan>
-Prompt 3: <plan> → Execute → <result>
-Prompt 4: <result> → Verify → final
-```
-
----
-
-## Anti-Patterns (Measured Degradation)
-
-| Pattern                                   | Problem                                 |
-| ----------------------------------------- | --------------------------------------- |
-| "Would you be so kind..."                 | +perplexity, -4% accuracy               |
-| "I'll tip $2000"                          | No improvement, sometimes worse         |
-| Explicit CoT on reasoning models (o1/o3)  | -36%, conflicts with internal reasoning |
-| Few-shot on advanced models + clear tasks | Introduces noise/bias                   |
-| "Always end with Progress/Questions"      | Degrades task performance               |
-| "Be efficient with tokens"                | Premature task abandonment              |
-| "Don't do X" without positive alternative | "Always do Y" processes better          |
-| Verbose explanations of obvious concepts  | Context bloat; model already knows      |
-| Self-critique without external feedback   | Detection is bottleneck, not correction |
-| Critical instructions only in middle      | 20%+ degradation vs start/end           |
-
----
-
-## Complete Examples
-
-### Tool Doc Example
-
-```markdown
-# Grep
-
-Fast regex search built on ripgrep.
-
-<instruction>
-- Full regex: `log.*Error`, `function\\s+\\w+`
-- Filter: `glob` (e.g., `*.js`) or `type` (e.g., `js`, `py`)
-- Cross-line: `multiline: true` for patterns like `struct \\{[\\s\\S]*?field`
-</instruction>
-
-<output>
-Depends on `output_mode`:
-- `content`: Lines with paths and line numbers (default limit: 100)
-- `files_with_matches`: Paths only
-- `count`: Match counts per file
-
-Truncated results reference `artifact://<id>` for full output.
-</output>
-
-<critical>
-ALWAYS use Grep for search—NEVER invoke `grep` or `rg` via Bash.
-</critical>
-
-<example name="regex">
-grep {"pattern": "function\\s+\\w+", "glob": "*.ts"}
-</example>
-
-<example name="multiline">
-grep {"pattern": "struct \\{[\\s\\S]*?field", "multiline": true}
-</example>
-
-<avoid>
-- Open-ended searches requiring multiple rounds—use Task tool
-- Raw bash grep/rg invocation
-</avoid>
-```
-
-### Agent Example
-
-```markdown
----
-name: explore
-description: Fast read-only codebase scout returning compressed context for handoff
-tools: read, grep, find, bash
-model: pi/smol, haiku-4.5, haiku-4-5, gemini-flash-latest, gemini-3-flash, zai-glm-4.7, glm-4.7-flash, glm-4.5-flash, gpt-5.1-codex-mini, haiku, flash, mini
-output:
-  properties:
-    query:
-      type: string
-    files:
-      elements:
-        properties:
-          path: { type: string }
-          line_start: { type: number }
-          line_end: { type: number }
-          description: { type: string }
-    architecture:
-      type: string
----
-
-<role>File search specialist. Investigate codebase, return structured findings for handoff.</role>
-
-<critical>
-READ-ONLY. You are STRICTLY PROHIBITED from:
-- Creating, editing, deleting files
-- Using redirect operators (>, >>)
-- Running state-changing commands (git add, npm install)
-</critical>
-
-<strengths>
-- Rapid file discovery via find patterns
-- Regex search with grep
-- Tracing imports and dependencies
-</strengths>
-
-<directives>
-- Spawn parallel tool calls wherever possible
-- Return absolute paths
-- Communicate findings directly—do NOT create files
-</directives>
-
-<procedure>
-1. grep/find to locate relevant code
-2. Read key sections (not entire files)
-3. Identify types, interfaces, key functions
-4. Note dependencies between files
-5. Call `yield` with findings
-</procedure>
-
-<critical>
-Read-only. Call `yield` when done. This matters.
-</critical>
-```
-
----
-
-<critical>
-## Deployment Checklist
-
-- [ ] **Tag hierarchy**: Enforcement level matches content?
-- [ ] **Critical at edges**: Most important rules at START and END?
-- [ ] **Named examples**: All `<example>` tags have `name` attribute?
-- [ ] **Positive framing**: "Do Y" not just "Don't X"?
-- [ ] **Direct tone**: No hedging, no filler, urgency where appropriate?
-- [ ] **Specificity**: Exact formats, limits, constraints—not vague?
-- [ ] **Token efficiency**: Each sentence justifies its cost?
-- [ ] **Verification**: External feedback loop if correctness matters?
-- [ ] **RFC 2119 normative language**: All prescriptive sentences use MUST/MUST NOT/SHOULD/MAY in caps?
-- [ ] **Persistence**: "Keep going until complete" for complex tasks?
-
-**High-impact interventions: persistence, tool verification, planning, context positioning, urgency.**
-</critical>
-
----
-
-## Quick Reference
-
-### Tag Names
-
-```
-Enforcement:  <critical> <prohibited> <caution> <instruction> <conditions> <avoid>
-Structure:    <role> <context> <procedure> <directives> <parameters> <output>
-Capability:   <strengths> <tools> <operations>
-Examples:     <example name="kebab-case-name">
-Data:         <environment> <data> <documents>
-Special:      <north-star> <stance> <commitment> <field> <protocol>
-```
-
-### Example Name Patterns
-
-```
-Correctness:  name="good", name="bad"
-Complexity:   name="single", name="multi-part", name="basic", name="advanced"
-Operations:   name="create", name="update", name="delete", name="rename"
-Platforms:    name="linux", name="windows-cmd", name="macos"
-Domains:      name="rate-limiting", name="auth", name="validation"
-```
-
-### Task → Technique
-
-| Task                | Primary                         | Secondary            |
-| ------------------- | ------------------------------- | -------------------- |
-| Simple extraction   | Clear constraints               | Prefilling           |
-| Classification      | 3-5 examples                    | XML structure        |
-| Complex analysis    | Structured reasoning            | Role + urgency       |
-| Code generation     | SEARCH/REPLACE                  | Verification loop    |
-| Long document       | Docs at top, quote-then-analyze | XML structure        |
-| Multi-step workflow | Prompt chaining                 | Planning instruction |
-| Domain expertise    | Specific role + credentials     | Examples             |
+Examples MUST be runnable shape, not pseudo-code. If the tool takes JSON, the example is JSON. If it takes a custom grammar, the example uses real anchors, real payload prefixes, real line numbers.
