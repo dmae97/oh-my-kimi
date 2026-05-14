@@ -214,7 +214,8 @@ export type AgentSessionEvent =
 	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
 	| { type: "todo_auto_clear" }
 	| { type: "irc_message"; message: CustomMessage }
-	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string };
+	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string }
+	| { type: "thinking_level_changed"; thinkingLevel: ThinkingLevel | undefined };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -4551,6 +4552,7 @@ export class AgentSession {
 			if (persist && effectiveLevel !== undefined && effectiveLevel !== ThinkingLevel.Off) {
 				this.settings.set("defaultThinkingLevel", effectiveLevel);
 			}
+			this.#emit({ type: "thinking_level_changed", thinkingLevel: effectiveLevel });
 		}
 	}
 
