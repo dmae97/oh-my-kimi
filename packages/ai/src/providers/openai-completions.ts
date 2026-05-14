@@ -1364,7 +1364,9 @@ export function convertMessages(
 			const canUseSyntheticReasoningContent =
 				compat.requiresReasoningContentForToolCalls &&
 				compat.allowsSyntheticReasoningContentForToolCalls &&
-				(compat.thinkingFormat === "openai" || compat.thinkingFormat === "openrouter");
+				(compat.thinkingFormat === "openai" ||
+					compat.thinkingFormat === "openrouter" ||
+					compat.thinkingFormat === "zai");
 			// DeepSeek reasoning models require reasoning_content on ALL assistant turns,
 			// not just tool-call turns. Other providers (Kimi, OpenRouter) only require it
 			// on tool-call turns.
