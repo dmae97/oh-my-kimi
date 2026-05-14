@@ -54,4 +54,28 @@ describe("prompt.format renderPhase", () => {
 			'|`cat <<\'EOF\' > file`|`write(path="file", content="…")`|\n|`sed -i \'s/old/new/\' file`|`edit(path="file", edits=[…])`|',
 		);
 	});
+	test("does not mutate HTML comment markers when replacing ascii symbols", () => {
+		const input = "<!-- Hidden continuation steer. role=user, suppressed from visible transcript. -->";
+		const output = prompt.format(input, {
+			renderPhase: "pre-render",
+			replaceAsciiSymbols: true,
+		});
+		expect(output).toBe(input);
+	});
+	test("replaces arrows outside but not inside HTML comments", () => {
+		const input = "<!-- -> in comment -->\nvalue -> value";
+		const output = prompt.format(input, {
+			renderPhase: "pre-render",
+			replaceAsciiSymbols: true,
+		});
+		expect(output).toBe("<!-- -> in comment -->\nvalue → value");
+	});
+	test("handles multi-line HTML comments", () => {
+		const input = "<!--\nA -> B\n-->";
+		const output = prompt.format(input, {
+			renderPhase: "pre-render",
+			replaceAsciiSymbols: true,
+		});
+		expect(output).toBe("<!--\nA -> B\n-->");
+	});
 });

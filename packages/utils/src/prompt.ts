@@ -66,6 +66,13 @@ function compactTableSep(line: string): string {
 	return `|${normalized.join("|")}|`;
 }
 
+const HTML_COMMENT_OPEN = "<!--";
+const HTML_COMMENT_CLOSE = "-->";
+
+type HtmlCommentState = {
+	inHtmlComment: boolean;
+};
+
 function replaceCommonAsciiSymbols(line: string): string {
 	return line
 		.replace(/\.{3}/g, "…")
@@ -75,6 +82,54 @@ function replaceCommonAsciiSymbols(line: string): string {
 		.replace(/!=/g, "≠")
 		.replace(/<=/g, "≤")
 		.replace(/>=/g, "≥");
+}
+
+function replaceCommonAsciiSymbolsOutsideHtmlComments(
+	line: string,
+	state: HtmlCommentState,
+): string {
+	if (
+		!state.inHtmlComment &&
+		!line.includes(HTML_COMMENT_OPEN) &&
+		!line.includes(HTML_COMMENT_CLOSE)
+	) {
+		return replaceCommonAsciiSymbols(line);
+	}
+
+	let result = "";
+	let cursor = 0;
+
+	while (cursor < line.length) {
+		if (state.inHtmlComment) {
+			const closeIndex = line.indexOf(HTML_COMMENT_CLOSE, cursor);
+			if (closeIndex === -1) {
+				return result + line.slice(cursor);
+			}
+			result += line.slice(cursor, closeIndex + HTML_COMMENT_CLOSE.length);
+			cursor = closeIndex + HTML_COMMENT_CLOSE.length;
+			state.inHtmlComment = false;
+			continue;
+		}
+
+		const openIndex = line.indexOf(HTML_COMMENT_OPEN, cursor);
+		if (openIndex === -1) {
+			result += replaceCommonAsciiSymbols(line.slice(cursor));
+			return result;
+		}
+
+		result += replaceCommonAsciiSymbols(line.slice(cursor, openIndex));
+		const closeIndex = line.indexOf(HTML_COMMENT_CLOSE, openIndex + HTML_COMMENT_OPEN.length);
+		if (closeIndex === -1) {
+			result += line.slice(openIndex);
+			state.inHtmlComment = true;
+			return result;
+		}
+
+		result += line.slice(openIndex, closeIndex + HTML_COMMENT_CLOSE.length);
+		cursor = closeIndex + HTML_COMMENT_CLOSE.length;
+	}
+
+	return result;
 }
 
 export function format(content: string, options: PromptFormatOptions = {}): string {
@@ -87,6 +142,8 @@ export function format(content: string, options: PromptFormatOptions = {}): stri
 	const lines = content.split("\n");
 	const result: string[] = [];
 	let inCodeBlock = false;
+
+	const htmlCommentState: HtmlCommentState = { inHtmlComment: false };
 	const topLevelTags: string[] = [];
 
 	for (let i = 0; i < lines.length; i++) {
@@ -104,7 +161,7 @@ export function format(content: string, options: PromptFormatOptions = {}): stri
 		}
 
 		if (replaceAsciiSymbols) {
-			line = replaceCommonAsciiSymbols(line);
+			line = replaceCommonAsciiSymbolsOutsideHtmlComments(line, htmlCommentState);
 		}
 		trimmedStart = line.trimStart();
 		const trimmed = line.trim();
