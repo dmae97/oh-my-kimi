@@ -190,7 +190,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	readonly concurrency = "exclusive";
 	readonly loadMode = "discoverable";
 	readonly summary = "Write content to a file (creates or overwrites)";
-	readonly intent = (args: Partial<WriteToolInput>) => (args.path ? `writing ${args.path}` : "writing");
 
 	readonly #writethrough: WritethroughCallback;
 
