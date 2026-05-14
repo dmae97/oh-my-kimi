@@ -4,7 +4,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { type Agent, type AgentMessage, type AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import {
 	type AssistantMessage,
 	type ImageContent,
@@ -52,7 +52,7 @@ import { getRecentSessions } from "../session/session-manager";
 import { STTController, type SttState } from "../stt";
 import type { LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
-import { runResolveInvocation } from "../tools/resolve";
+import { type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
 import { formatPhaseDisplayName } from "../tools/todo-write";
 import { ToolError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
@@ -962,10 +962,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 *  submits the finalized plan by calling `resolve { action: "apply", extra: { title } }`;
 	 *  this handler validates the plan file exists, normalizes the title, and shapes the
 	 *  payload that `event-controller` forwards to `handlePlanApproval`. */
-	#runPlanApprovalResolve(input: unknown): Promise<{
-		content: Array<{ type: string; text: string }>;
-		details?: unknown;
-	}> {
+	#runPlanApprovalResolve(input: unknown): Promise<AgentToolResult<ResolveToolDetails>> {
 		return runResolveInvocation(input as Parameters<typeof runResolveInvocation>[0], {
 			sourceToolName: "plan_approval",
 			label: "Plan ready for approval",
