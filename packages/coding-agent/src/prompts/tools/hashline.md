@@ -30,6 +30,10 @@ RIGHT: + 5pg
 - `< A` inserts before line A; `+ A` inserts after line A. `< BOF` / `+ BOF` both prepend; `< EOF` / `+ EOF` both append.
 - `= A..B` replaces the inclusive range with the following payload lines. `= A..B` with no payload blanks the range to a single empty line.
 - `- A..B` deletes the inclusive range; `A..A` for one line.
+- **Payloads are only what is NEW. Never emit source that already exists in the file.** The patch describes a *delta*, not the file's new state. Unchanged lines stay in place automatically — they are not "consumed" by adjacent ops and do not need to be "preserved", "restored", or "re-emitted":
+  - `= A..B` replaces ONLY the lines inside the range. Lines outside `A..B` stay as-is. Do not include any of them in the payload.
+  - `+ A` / `< A` add NEW lines at the anchor. Line A itself stays in place. Do not put its content (or content of lines adjacent to A) into the payload.
+  - If any payload line matches the current file content at or adjacent to the op's target, you are about to duplicate that line. Drop it from the payload, or widen the range so the op actually consumes it.
 - **Choose a self-contained syntactic unit first.** If the change touches part of a multiline call, destructuring assignment, control-flow header, wrapper, or other construct, widen the range to include the whole construct before optimizing for size.
 - Only after the range is self-contained, pick the smallest op for the change: pure addition → `+`/`<`; pure deletion → `-`; `= A..B` ONLY when content inside `A..B` is actually being modified or removed.
 </rules>
