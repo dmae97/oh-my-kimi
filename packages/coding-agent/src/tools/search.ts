@@ -8,32 +8,25 @@ import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { getFileReadCache } from "../edit/file-read-cache";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { InternalUrlRouter } from "../internal-urls";
 import type { Theme } from "../modes/theme/theme";
 import searchDescription from "../prompts/tools/search.md" with { type: "text" };
 import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead } from "../session/streaming-output";
-import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
+import { Ellipsis, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { formatGroupedFiles } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
+import { resolveToolSearchScope } from "./path-utils";
 import {
-	formatPathRelativeToCwd,
-	hasGlobPathChars,
-	normalizePathLikeInput,
-	parseSearchPath,
-	partitionExistingPaths,
-	resolveExplicitSearchPaths,
-	resolveToCwd,
-} from "./path-utils";
-import {
+	createCachedComponent,
 	formatCodeFrameLine,
 	formatCount,
 	formatEmptyMessage,
 	formatErrorMessage,
 	PREVIEW_LIMITS,
+	splitGroupsByBlankLine,
 } from "./render-utils";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -141,78 +134,26 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			const patternHasNewline = normalizedPattern.includes("\n") || normalizedPattern.includes("\\n");
 			const effectiveMultiline = patternHasNewline;
 
-			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
-			let searchPath: string;
-			let scopePath: string;
-			let exactFilePaths: string[] | undefined;
-			let multiTargets: Array<{ basePath: string; glob?: string }> | undefined;
-			let globFilter: string | undefined;
-			const rawPaths = paths.map(normalizePathLikeInput);
-			if (rawPaths.some(rawPath => rawPath.length === 0)) {
-				throw new ToolError("`paths` must contain non-empty paths or globs");
-			}
-			const internalRouter = InternalUrlRouter.instance();
-			const resolvedPathInputs: string[] = [];
-			// Absolute filesystem paths whose source is immutable (e.g. artifact://,
-			// pi://, skill://). Hashline anchors are suppressed for these on a
-			// per-file basis, leaving editable mixed-in files untouched.
-			const immutableSourcePaths = new Set<string>();
-			for (const rawPath of rawPaths) {
-				if (!internalRouter.canHandle(rawPath)) {
-					resolvedPathInputs.push(rawPath);
-					continue;
-				}
-				if (hasGlobPathChars(rawPath)) {
-					throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
-				}
-				const resource = await internalRouter.resolve(rawPath);
-				if (!resource.sourcePath) {
-					throw new ToolError(`Cannot search internal URL without a backing file: ${rawPath}`);
-				}
-				if (resource.immutable) {
-					immutableSourcePaths.add(path.resolve(resource.sourcePath));
-				}
-				resolvedPathInputs.push(resource.sourcePath);
-			}
+			const scope = await resolveToolSearchScope({
+				rawPaths: paths,
+				cwd: this.session.cwd,
+				internalUrlAction: "search",
+				trackImmutableSources: true,
+				surfaceExactFilePaths: true,
+				multipathStatHint: " (`paths` entries must each exist relative to cwd)",
+			});
+			const {
+				searchPath,
+				scopePath,
+				isDirectory,
+				multiTargets,
+				exactFilePaths,
+				missingPaths,
+				immutableSourcePaths,
+			} = scope;
+			const { globFilter } = scope;
 			const baseDisplayMode = resolveFileDisplayMode(this.session);
 			const immutableDisplayMode = resolveFileDisplayMode(this.session, { immutable: true });
-			// Tolerate missing entries in a multi-path call: skip ones whose base
-			// directory is gone, and only error if every entry is missing. Single
-			// missing path keeps the original ENOENT semantics.
-			let missingPaths: string[] = [];
-			let effectivePaths = resolvedPathInputs;
-			if (resolvedPathInputs.length > 1) {
-				const partition = await partitionExistingPaths(resolvedPathInputs, this.session.cwd, parseSearchPath);
-				if (partition.valid.length === 0) {
-					throw new ToolError(`Path not found: ${partition.missing.join(", ")}`);
-				}
-				effectivePaths = partition.valid;
-				missingPaths = partition.missing;
-			}
-			if (effectivePaths.length === 1) {
-				const parsedPath = parseSearchPath(effectivePaths[0] ?? ".");
-				searchPath = resolveToCwd(parsedPath.basePath, this.session.cwd);
-				globFilter = parsedPath.glob;
-				scopePath = formatScopePath(searchPath);
-			} else {
-				const multiSearchPath = await resolveExplicitSearchPaths(effectivePaths, this.session.cwd, globFilter);
-				if (!multiSearchPath) {
-					throw new ToolError("`paths` must contain at least one path or glob");
-				}
-				searchPath = multiSearchPath.basePath;
-				exactFilePaths = multiSearchPath.exactFilePaths;
-				multiTargets = multiSearchPath.targets;
-				globFilter = exactFilePaths || multiTargets ? undefined : multiSearchPath.glob;
-				scopePath = multiSearchPath.scopePath;
-			}
-			let isDirectory: boolean;
-			try {
-				const stat = await Bun.file(searchPath).stat();
-				isDirectory = stat.isDirectory();
-			} catch {
-				const hint = rawPaths.length > 1 ? " (`paths` entries must each exist relative to cwd)" : "";
-				throw new ToolError(`Path not found: ${scopePath}${hint}`);
-			}
 
 			const effectiveOutputMode = GrepOutputMode.Content;
 			// Multi-scope = more than one file may match. We fetch up to
@@ -531,16 +472,13 @@ export const searchToolRenderer = {
 				{ icon: "success", title: "Search", description, meta: [formatCount("item", lines.length)] },
 				uiTheme,
 			);
-			let cached: RenderCache | undefined;
-			return {
-				render(width: number): string[] {
-					const { expanded } = options;
-					const key = new Hasher().bool(expanded).u32(width).digest();
-					if (cached?.key === key) return cached.lines;
+			return createCachedComponent(
+				() => options.expanded,
+				width => {
 					const listLines = renderTreeList(
 						{
 							items: lines,
-							expanded,
+							expanded: options.expanded,
 							maxCollapsed: COLLAPSED_TEXT_LIMIT,
 							maxCollapsedLines: COLLAPSED_TEXT_LIMIT,
 							itemType: "item",
@@ -548,14 +486,9 @@ export const searchToolRenderer = {
 						},
 						uiTheme,
 					);
-					const result = [header, ...listLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
-					cached = { key, lines: result };
-					return result;
+					return [header, ...listLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 				},
-				invalidate() {
-					cached = undefined;
-				},
-			};
+			);
 		}
 
 		const matchCount = details?.matchCount ?? 0;
@@ -591,28 +524,7 @@ export const searchToolRenderer = {
 		);
 
 		const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text ?? "";
-		const rawLines = textContent.split("\n");
-		const hasSeparators = rawLines.some(line => line.trim().length === 0);
-		const matchGroups: string[][] = [];
-		if (hasSeparators) {
-			let current: string[] = [];
-			for (const line of rawLines) {
-				if (line.trim().length === 0) {
-					if (current.length > 0) {
-						matchGroups.push(current);
-						current = [];
-					}
-					continue;
-				}
-				current.push(line);
-			}
-			if (current.length > 0) matchGroups.push(current);
-		} else {
-			const nonEmpty = rawLines.filter(line => line.trim().length > 0);
-			if (nonEmpty.length > 0) {
-				matchGroups.push(nonEmpty);
-			}
-		}
+		const matchGroups = splitGroupsByBlankLine(textContent.split("\n"));
 
 		const renderedFileLimit = details?.fileLimitReached;
 		const renderedPerFileLimit = details?.perFileLimitReached;
@@ -629,17 +541,14 @@ export const searchToolRenderer = {
 		}
 		if (missingNote) extraLines.push(missingNote);
 
-		let cached: RenderCache | undefined;
-		return {
-			render(width: number): string[] {
-				const { expanded } = options;
-				const key = new Hasher().bool(expanded).u32(width).digest();
-				if (cached?.key === key) return cached.lines;
+		return createCachedComponent(
+			() => options.expanded,
+			width => {
 				const collapsedMatchLineBudget = Math.max(COLLAPSED_TEXT_LIMIT - extraLines.length, 0);
 				const matchLines = renderTreeList(
 					{
 						items: matchGroups,
-						expanded,
+						expanded: options.expanded,
 						maxCollapsed: matchGroups.length,
 						maxCollapsedLines: collapsedMatchLineBudget,
 						itemType: "match",
@@ -652,14 +561,9 @@ export const searchToolRenderer = {
 					},
 					uiTheme,
 				);
-				const result = [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
-				cached = { key, lines: result };
-				return result;
+				return [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 			},
-			invalidate() {
-				cached = undefined;
-			},
-		};
+		);
 	},
 	mergeCallAndResult: true,
 };

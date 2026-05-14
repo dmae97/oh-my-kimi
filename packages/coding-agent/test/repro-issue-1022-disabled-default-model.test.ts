@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -23,7 +23,7 @@ describe("issue #1022 — path-scoped enabledModels respected by default fallbac
 	let cwd: string;
 
 	beforeEach(() => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		testDir = path.join(os.tmpdir(), `pi-issue-1022-${Snowflake.next()}`);
 		agentDir = path.join(testDir, "agent");
 		cwd = path.join(testDir, "private", "sub");
@@ -32,7 +32,7 @@ describe("issue #1022 — path-scoped enabledModels respected by default fallbac
 	});
 
 	afterEach(() => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		if (fs.existsSync(testDir)) fs.rmSync(testDir, { recursive: true, force: true });
 	});
 

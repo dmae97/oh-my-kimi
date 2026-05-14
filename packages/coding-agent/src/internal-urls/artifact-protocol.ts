@@ -12,26 +12,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { AgentRegistry } from "../registry/agent-registry";
+import { artifactsDirsFromRegistry } from "./registry-helpers";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
-
-/**
- * Snapshot of artifacts dirs across all registered sessions, deduped.
- *
- * Subagents adopt their parent's `ArtifactManager`, so their
- * `sessionManager.getArtifactsDir()` returns the parent's dir; dedup
- * collapses parent + N subagents to a single entry.
- */
-function artifactsDirsFromRegistry(): string[] {
-	const dirs: string[] = [];
-	for (const ref of AgentRegistry.global().list()) {
-		const dir =
-			ref.session?.sessionManager.getArtifactsDir() ?? (ref.sessionFile ? ref.sessionFile.slice(0, -6) : null);
-		if (!dir) continue;
-		if (!dirs.includes(dir)) dirs.push(dir);
-	}
-	return dirs;
-}
 
 export class ArtifactProtocolHandler implements ProtocolHandler {
 	readonly scheme = "artifact";

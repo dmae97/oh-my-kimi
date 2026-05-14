@@ -779,7 +779,7 @@ it("refreshes tools and system prompt between same-turn model calls", async () =
 	};
 
 	const stream = agentLoop([userPrompt], context, config, undefined, streamFn);
-	for await (const _event of stream) {
+	for await (const _ of stream) {
 		// consume
 	}
 

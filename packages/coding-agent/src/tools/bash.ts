@@ -9,7 +9,7 @@ import { type BashResult, executeBash } from "../exec/bash-executor";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
-import type { Theme } from "../modes/theme/theme";
+import { highlightCode, type Theme } from "../modes/theme/theme";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
 import type { ClientBridgeTerminalExitStatus, ClientBridgeTerminalOutput } from "../session/client-bridge";
 import { DEFAULT_MAX_BYTES, streamTailUpdates, TailBuffer } from "../session/streaming-output";
@@ -484,8 +484,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const env = normalizeBashEnv(rawEnv);
 
 		// Extract leading `cd <path> && ...` into cwd when the model ignores the cwd parameter.
+		// Constrained to a single line so a `&&` that sits on a later line of a multiline
+		// script can't pull the entire script into the "cwd" capture.
 		if (!cwd) {
-			const cdMatch = command.match(/^cd\s+((?:[^&\\]|\\.)+?)\s*&&\s*/);
+			const cdMatch = command.match(/^cd[ \t]+((?:[^&\\\n\r]|\\.)+?)[ \t]*&&[ \t]*/);
 			if (cdMatch) {
 				cwd = cdMatch[1].trim().replace(/^["']|["']$/g, "");
 				command = command.slice(cdMatch[0].length);
@@ -892,6 +894,27 @@ export function formatBashCommand(args: BashRenderArgs): string {
 	return displayWorkdir ? `${prompt} cd ${displayWorkdir} && ${renderedCommand}` : `${prompt} ${renderedCommand}`;
 }
 
+/**
+ * Returns the bash command formatted for the result body: the dim `$ cd … &&`
+ * prefix joined with syntax-highlighted command lines. The prefix is applied
+ * only to the first line so multi-line commands display cleanly — terminals
+ * reset SGR state at line boundaries, which made the previous single-string
+ * `theme.fg("dim", ...)` form render only the first line as dim.
+ */
+export function formatBashCommandLines(args: BashRenderArgs, uiTheme: Theme): string[] {
+	const command = replaceTabs(args.command || "…");
+	const cwd = getProjectDir();
+	const displayWorkdir = formatToolWorkingDirectory(args.cwd, cwd);
+	const envAssignments = formatBashEnvAssignments(getBashEnvForDisplay(args));
+	const prefixParts = ["$"];
+	if (displayWorkdir) prefixParts.push(`cd ${displayWorkdir} &&`);
+	if (envAssignments) prefixParts.push(envAssignments);
+	const prefix = uiTheme.fg("dim", `${prefixParts.join(" ")} `);
+	const highlightedLines = highlightCode(command, "bash");
+	if (highlightedLines.length === 0) return [prefix.trimEnd()];
+	return highlightedLines.map((line, i) => (i === 0 ? `${prefix}${line}` : line));
+}
+
 function toBashRenderArgs<TArgs>(args: TArgs | undefined, config: ShellRendererConfig<TArgs>): BashRenderArgs {
 	return {
 		command: config.resolveCommand?.(args),
@@ -922,7 +945,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			args?: TArgs,
 		): Component {
 			const renderArgs = toBashRenderArgs(args, config);
-			const cmdText = args ? formatBashCommand(renderArgs) : undefined;
+			const cmdLines = args ? formatBashCommandLines(renderArgs, uiTheme) : undefined;
 			const isError = result.isError === true;
 			const icon = options.isPartial ? "pending" : isError ? "error" : "success";
 			const title = config.resolveTitle(args, options);
@@ -1000,7 +1023,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 							header,
 							state: options.isPartial ? "pending" : isError ? "error" : "success",
 							sections: [
-								{ lines: cmdText ? [uiTheme.fg("dim", cmdText)] : [] },
+								{ lines: cmdLines ?? [] },
 								{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
 							],
 							width,

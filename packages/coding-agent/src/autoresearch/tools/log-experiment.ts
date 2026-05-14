@@ -8,7 +8,15 @@ import type { Theme } from "../../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
 import * as git from "../../utils/git";
 import { computeRunModifiedPaths, getCurrentAutoresearchBranch, parseWorkDirDirtyPaths } from "../git";
-import { ensureNumericMetricMap, formatNum, mergeAsi, pathMatchesSpec, sanitizeAsi } from "../helpers";
+import {
+	ensureNumericMetricMap,
+	formatNum,
+	mergeAsi,
+	pathMatchesSpec,
+	sanitizeAsi,
+	tryGitPrefix,
+	tryGitStatus,
+} from "../helpers";
 import {
 	buildExperimentState,
 	computeConfidence,
@@ -442,22 +450,6 @@ async function tryReadHeadSha(cwd: string): Promise<string | null> {
 		return (await git.head.sha(cwd)) ?? null;
 	} catch {
 		return null;
-	}
-}
-
-async function tryGitStatus(cwd: string): Promise<string> {
-	try {
-		return await git.status(cwd, { porcelainV1: true, untrackedFiles: "all", z: true });
-	} catch {
-		return "";
-	}
-}
-
-async function tryGitPrefix(cwd: string): Promise<string> {
-	try {
-		return await git.show.prefix(cwd);
-	} catch {
-		return "";
 	}
 }
 

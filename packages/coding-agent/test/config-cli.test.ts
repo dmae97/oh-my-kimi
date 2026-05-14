@@ -4,21 +4,21 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import { runConfigCommand } from "../src/cli/config-cli";
-import { _resetSettingsForTest } from "../src/config/settings";
+import { resetSettingsForTest } from "../src/config/settings";
 
 let testAgentDir = "";
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
 
 beforeEach(async () => {
-	_resetSettingsForTest();
+	resetSettingsForTest();
 	testAgentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-config-cli-"));
 	setAgentDir(testAgentDir);
 });
 
 afterEach(async () => {
 	vi.restoreAllMocks();
-	_resetSettingsForTest();
+	resetSettingsForTest();
 	if (originalAgentDir) {
 		setAgentDir(originalAgentDir);
 	} else {

@@ -16,7 +16,7 @@ import { $flag, getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
  * E2E tests require explicit opt-in via E2E=1 environment variable.
  * This prevents accidental API calls when keys happen to be in the environment.
  */
-export const E2E_ENABLED = $flag("E2E");
+const E2E_ENABLED = $flag("E2E");
 
 /**
  * Get an API key from environment, but only if E2E tests are enabled.

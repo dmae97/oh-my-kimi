@@ -35,13 +35,11 @@ export function RequestDetail({ id, onClose }: RequestDetailProps) {
 	if (!details) return null;
 
 	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: modal backdrop dismissal
 		<div
 			role="presentation"
 			className="fixed inset-0 bg-[var(--bg-overlay)] backdrop-blur-sm flex justify-end z-[100] animate-fade-in"
 			onClick={onClose}
 		>
-			{/* biome-ignore lint/a11y/useKeyWithClickEvents: stopPropagation for modal content */}
 			<div
 				role="dialog"
 				aria-modal="true"

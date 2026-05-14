@@ -256,12 +256,21 @@ export class CommandController {
 	}
 
 	#copyLastMessage() {
-		const text = this.ctx.session.getLastAssistantText();
-		if (!text) {
-			this.ctx.showError("No agent messages to copy yet.");
+		const assistantText = this.ctx.session.getLastAssistantText();
+		if (assistantText) {
+			this.#doCopy(assistantText, "Copied last agent message to clipboard");
 			return;
 		}
-		this.#doCopy(text, "Copied last agent message to clipboard");
+
+		if (!this.ctx.session.hasCopyCandidateAssistantMessage()) {
+			const handoffText = this.ctx.session.getLastVisibleHandoffText();
+			if (handoffText) {
+				this.#doCopy(handoffText, "Copied handoff context to clipboard");
+				return;
+			}
+		}
+
+		this.ctx.showError("No agent messages to copy yet.");
 	}
 
 	#copyCode() {

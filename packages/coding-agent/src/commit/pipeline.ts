@@ -25,8 +25,8 @@ import type { CommitCommandArgs, ConventionalAnalysis } from "./types";
 
 const SUMMARY_MAX_CHARS = 72;
 const RECENT_COMMITS_COUNT = 8;
-let _typesDescription: string | undefined;
-const TYPES_DESCRIPTION = (): string => (_typesDescription ??= prompt.render(typesDescriptionPrompt));
+let typesDescription: string | undefined;
+const TYPES_DESCRIPTION = (): string => (typesDescription ??= prompt.render(typesDescriptionPrompt));
 
 /**
  * Execute the omp commit pipeline for staged changes.

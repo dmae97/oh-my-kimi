@@ -850,7 +850,7 @@ export function isSettingsInitialized(): boolean {
  * Reset the global singleton for testing.
  * @internal
  */
-export function _resetSettingsForTest(): void {
+export function resetSettingsForTest(): void {
 	globalInstance = null;
 	globalInstancePromise = null;
 }

@@ -1,19 +1,17 @@
 import * as os from "node:os";
-import { $env, $flag, abortableSleep, asRecord, logger, readSseJson, structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { scheduler } from "node:timers/promises";
+import { $env, $flag, asRecord, fetchWithRetry, logger, readSseJson, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import type OpenAI from "openai";
 import type {
 	ResponseCustomToolCall,
 	ResponseFunctionToolCall,
 	ResponseInput,
 	ResponseInputContent,
-	ResponseInputImage,
-	ResponseInputText,
 	ResponseOutputMessage,
 	ResponseReasoningItem,
 } from "openai/resources/responses/responses";
 import packageJson from "../../package.json" with { type: "json" };
 import { calculateCost } from "../models";
-import { isUsageLimitError } from "../rate-limit-utils";
 import { getEnvApiKey } from "../stream";
 import {
 	type Api,
@@ -35,7 +33,6 @@ import {
 	createOpenAIResponsesHistoryPayload,
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
-	normalizeResponsesToolCallId,
 	normalizeSystemPrompts,
 } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
@@ -54,14 +51,15 @@ import {
 import { parseCodexError } from "./openai-codex/response-handler";
 import { normalizeOpenAIResponsesPromptCacheKey } from "./openai-responses";
 import {
+	appendResponsesToolResultMessages,
+	convertResponsesAssistantMessage,
 	convertResponsesInputContent,
 	encodeResponsesToolCallId,
 	encodeTextSignatureV1,
 	mapOpenAIResponsesStopReason,
-	parseTextSignature,
+	populateResponsesUsageFromResponse,
 } from "./openai-responses-shared";
 import { transformMessages } from "./transform-messages";
-import { joinTextWithImagePlaceholder } from "./vision-guard";
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
 	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -76,7 +74,6 @@ export interface OpenAICodexResponsesOptions extends StreamOptions {
 
 const CODEX_DEBUG = $flag("PI_CODEX_DEBUG");
 const CODEX_MAX_RETRIES = 5;
-const CODEX_RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 const CODEX_RETRY_DELAY_MS = 500;
 const CODEX_WEBSOCKET_CONNECT_TIMEOUT_MS = 10000;
 const CODEX_WEBSOCKET_IDLE_TIMEOUT_MS = 300000;
@@ -661,7 +658,9 @@ async function openInitialCodexEventStream(
 				});
 				if (!activateFallback) {
 					websocketRetries += 1;
-					await abortableSleep(getCodexWebSocketRetryDelayMs(websocketRetries), requestSetup.requestSignal);
+					await scheduler.wait(getCodexWebSocketRetryDelayMs(websocketRetries), {
+						signal: requestSetup.requestSignal,
+					});
 					continue;
 				}
 				break;
@@ -1232,19 +1231,7 @@ function handleResponseCompleted(
 		}
 	).response;
 
-	if (response?.usage) {
-		const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
-		const reasoningTokens = response.usage.output_tokens_details?.reasoning_tokens || 0;
-		output.usage = {
-			input: (response.usage.input_tokens || 0) - cachedTokens,
-			output: response.usage.output_tokens || 0,
-			cacheRead: cachedTokens,
-			cacheWrite: 0,
-			totalTokens: response.usage.total_tokens || 0,
-			...(reasoningTokens > 0 ? { reasoningTokens } : {}),
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		};
-	}
+	populateResponsesUsageFromResponse(output, response?.usage);
 	if (typeof response?.id === "string" && response.id.length > 0) {
 		output.responseId = response.id;
 	}
@@ -1407,10 +1394,9 @@ async function tryReplayWebsocketFailureOverSse(
 
 	if (!activateFallback) {
 		runtime.websocketStreamRetries += 1;
-		await abortableSleep(
-			getCodexWebSocketRetryDelayMs(runtime.websocketStreamRetries),
-			context.requestSetup.requestSignal,
-		);
+		await scheduler.wait(getCodexWebSocketRetryDelayMs(runtime.websocketStreamRetries), {
+			signal: context.requestSetup.requestSignal,
+		});
 		await reopenCodexWebSocketRuntimeStream(context, runtime, state);
 		return true;
 	}
@@ -1461,7 +1447,9 @@ async function tryRetryCodexProviderError(
 	runtime.sawTerminalEvent = false;
 	resetOutputState(context.output);
 	context.firstTokenTime = undefined;
-	await abortableSleep(CODEX_RETRY_DELAY_MS * runtime.providerRetryAttempt, context.requestSetup.requestSignal);
+	await scheduler.wait(CODEX_RETRY_DELAY_MS * runtime.providerRetryAttempt, {
+		signal: context.requestSetup.requestSignal,
+	});
 
 	if (runtime.transport === "websocket" && websocketState) {
 		await reopenCodexWebSocketRuntimeStream(context, runtime, websocketState);
@@ -2194,15 +2182,15 @@ async function openCodexSseEventStream(
 		sentTurnStateHeader: headers.has(X_CODEX_TURN_STATE_HEADER),
 		sentModelsEtagHeader: headers.has(X_MODELS_ETAG_HEADER),
 	});
-	const response = await fetchWithRetry(
-		url,
-		{
-			method: "POST",
-			headers,
-			body: JSON.stringify(body),
-		},
+	const response = await fetchWithRetry(url, {
+		method: "POST",
+		headers,
+		body: JSON.stringify(body),
 		signal,
-	);
+		maxAttempts: CODEX_MAX_RETRIES + 1,
+		defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),
+		maxDelayMs: CODEX_RATE_LIMIT_BUDGET_MS,
+	});
 	logCodexDebug("codex response", {
 		url: response.url,
 		status: response.status,
@@ -2292,75 +2280,6 @@ function logCodexDebug(message: string, details?: Record<string, unknown>): void
 	logger.debug(`[codex] ${message}`, details ?? {});
 }
 
-function getRetryDelayMs(
-	response: Response | null,
-	attempt: number,
-	errorBody?: string,
-): { delay: number; serverProvided: boolean } {
-	const retryAfter = response?.headers?.get("retry-after") || null;
-	if (retryAfter) {
-		const seconds = Number(retryAfter);
-		if (Number.isFinite(seconds)) {
-			return { delay: Math.max(0, seconds * 1000), serverProvided: true };
-		}
-		const parsedDate = Date.parse(retryAfter);
-		if (!Number.isNaN(parsedDate)) {
-			return { delay: Math.max(0, parsedDate - Date.now()), serverProvided: true };
-		}
-	}
-	if (errorBody) {
-		const msMatch = /try again in\s+(\d+(?:\.\d+)?)\s*ms/i.exec(errorBody);
-		if (msMatch) {
-			const ms = Number(msMatch[1]);
-			if (Number.isFinite(ms)) return { delay: Math.max(ms, 100), serverProvided: true };
-		}
-		const sMatch = /try again in\s+(\d+(?:\.\d+)?)\s*s(?:ec)?/i.exec(errorBody);
-		if (sMatch) {
-			const seconds = Number(sMatch[1]);
-			if (Number.isFinite(seconds)) return { delay: Math.max(seconds * 1000, 100), serverProvided: true };
-		}
-	}
-	return { delay: CODEX_RETRY_DELAY_MS * (attempt + 1), serverProvided: false };
-}
-
-async function fetchWithRetry(url: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
-	let attempt = 0;
-	let rateLimitTimeSpent = 0;
-	while (true) {
-		try {
-			const response = await fetch(url, { ...init, signal: signal ?? init.signal });
-			if (!CODEX_RETRYABLE_STATUS.has(response.status)) {
-				return response;
-			}
-			if (signal?.aborted) return response;
-			const errorBody = await response.clone().text();
-			// Usage-limit errors are persistent (account allocation exhausted) — retrying with the
-			// same credential is futile. Bail out immediately so the error propagates to the agent
-			// session layer where credential switching happens.
-			if (response.status === 429 && isUsageLimitError(errorBody)) {
-				return response;
-			}
-			const { delay, serverProvided } = getRetryDelayMs(response, attempt, errorBody);
-			if (response.status === 429 && serverProvided) {
-				if (rateLimitTimeSpent + delay > CODEX_RATE_LIMIT_BUDGET_MS) {
-					return response;
-				}
-				rateLimitTimeSpent += delay;
-			} else if (attempt >= CODEX_MAX_RETRIES) {
-				return response;
-			}
-			await abortableSleep(delay, signal);
-		} catch (error) {
-			if (attempt >= CODEX_MAX_RETRIES || signal?.aborted) {
-				throw error;
-			}
-			const delay = CODEX_RETRY_DELAY_MS * (attempt + 1);
-			await abortableSleep(delay, signal);
-		}
-		attempt += 1;
-	}
-}
-
 function redactHeaders(headers: Headers): Record<string, string> {
 	const redacted: Record<string, string> = {};
 	for (const [key, value] of headers.entries()) {
@@ -2423,6 +2342,7 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 	// messages can be replayed as `custom_tool_call_output` rather than
 	// `function_call_output` (OpenAI rejects mismatched pairs).
 	const customCallIds = new Set<string>();
+	const knownCallIds = new Set<string>();
 
 	for (const msg of transformedMessages) {
 		if (msg.role === "user" || msg.role === "developer") {
@@ -2474,57 +2394,14 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 				continue;
 			}
 
-			const outputItems: ResponseInput = [];
-			for (const block of msg.content) {
-				if (block.type === "thinking" && msg.stopReason !== "error") {
-					if (block.thinkingSignature) {
-						outputItems.push(JSON.parse(block.thinkingSignature) as ResponseReasoningItem);
-					}
-					continue;
-				}
-				if (block.type === "text") {
-					const textBlock = block as TextContent;
-					const parsedSignature = parseTextSignature(textBlock.textSignature);
-					let msgId = parsedSignature?.id;
-					if (!msgId) {
-						msgId = `msg_${msgIndex}`;
-					} else if (msgId.length > 64) {
-						msgId = `msg_${Bun.hash(msgId).toString(36)}`;
-					}
-					outputItems.push({
-						type: "message",
-						role: "assistant",
-						content: [{ type: "output_text", text: textBlock.text.toWellFormed(), annotations: [] }],
-						status: "completed",
-						id: msgId,
-						phase: parsedSignature?.phase,
-					} satisfies ResponseOutputMessage);
-					continue;
-				}
-				if (block.type === "toolCall") {
-					const toolCall = block as ToolCall;
-					const normalized = normalizeResponsesToolCallId(toolCall.id, toolCall.customWireName ? "ctc" : "fc");
-					if (toolCall.customWireName) {
-						const rawInput = typeof toolCall.arguments?.input === "string" ? toolCall.arguments.input : "";
-						customCallIds.add(normalized.callId);
-						outputItems.push({
-							type: "custom_tool_call",
-							id: normalized.itemId,
-							call_id: normalized.callId,
-							name: toolCall.customWireName,
-							input: rawInput,
-						} as ResponseInput[number]);
-						continue;
-					}
-					outputItems.push({
-						type: "function_call",
-						id: normalized.itemId,
-						call_id: normalized.callId,
-						name: toolCall.name,
-						arguments: JSON.stringify(toolCall.arguments),
-					});
-				}
-			}
+			const outputItems = convertResponsesAssistantMessage(
+				msg as AssistantMessage,
+				model,
+				msgIndex,
+				knownCallIds,
+				true,
+				customCallIds,
+			);
 			if (outputItems.length > 0) {
 				messages.push(...outputItems);
 			}
@@ -2533,49 +2410,7 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 		}
 
 		if (msg.role === "toolResult") {
-			const supportsImages = model.input.includes("image");
-			const textResult = msg.content
-				.filter(content => content.type === "text")
-				.map(content => content.text)
-				.join("\n");
-			const hasImages = msg.content.some(content => content.type === "image");
-			const omittedImages = hasImages && !supportsImages;
-			const normalized = normalizeResponsesToolCallId(msg.toolCallId);
-			const output = (
-				omittedImages
-					? joinTextWithImagePlaceholder(textResult, true)
-					: textResult.length > 0
-						? textResult
-						: "(see attached image)"
-			).toWellFormed();
-			if (customCallIds.has(normalized.callId)) {
-				messages.push({
-					type: "custom_tool_call_output",
-					call_id: normalized.callId,
-					output,
-				} as ResponseInput[number]);
-			} else {
-				messages.push({
-					type: "function_call_output",
-					call_id: normalized.callId,
-					output,
-				});
-			}
-			if (hasImages && supportsImages) {
-				const contentParts: ResponseInputContent[] = [
-					{ type: "input_text", text: "Attached image(s) from tool result:" } satisfies ResponseInputText,
-				];
-				for (const block of msg.content) {
-					if (block.type === "image") {
-						contentParts.push({
-							type: "input_image",
-							detail: "auto",
-							image_url: `data:${block.mimeType};base64,${block.data}`,
-						} satisfies ResponseInputImage);
-					}
-				}
-				messages.push({ role: "user", content: contentParts });
-			}
+			appendResponsesToolResultMessages(messages, msg, model, false, knownCallIds, customCallIds);
 		}
 
 		msgIndex += 1;

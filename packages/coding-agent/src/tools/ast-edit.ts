@@ -7,33 +7,27 @@ import { $envpos, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { computeLineHash, HL_BODY_SEP } from "../hashline/hash";
-import { InternalUrlRouter } from "../internal-urls";
 import type { Theme } from "../modes/theme/theme";
 import astEditDescription from "../prompts/tools/ast-edit.md" with { type: "text" };
-import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
+import { Ellipsis, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { formatGroupedFiles } from "./grouped-file-output";
 import type { OutputMeta } from "./output-meta";
+import { resolveToolSearchScope } from "./path-utils";
 import {
-	formatPathRelativeToCwd,
-	hasGlobPathChars,
-	normalizePathLikeInput,
-	parseSearchPath,
-	partitionExistingPaths,
-	resolveExplicitSearchPaths,
-	resolveToCwd,
-} from "./path-utils";
-import {
+	appendParseErrorsBulletList,
+	createCachedComponent,
 	dedupeParseErrors,
 	formatCodeFrameLine,
 	formatCount,
 	formatEmptyMessage,
 	formatErrorMessage,
 	formatParseErrors,
-	PARSE_ERRORS_LIMIT,
+	formatParseErrorsCountLabel,
 	PREVIEW_LIMITS,
+	splitGroupsByBlankLine,
 } from "./render-utils";
 import { queueResolveHandler } from "./resolve";
 import { ToolError } from "./tool-errors";
@@ -205,63 +199,12 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			const normalizedRewrites = Object.fromEntries(ops);
 			const maxFiles = $envpos("PI_MAX_AST_FILES", 1000);
 
-			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
-			let searchPath: string;
-			let scopePath: string;
-			let globFilter: string | undefined;
-			let multiTargets: Array<{ basePath: string; glob?: string }> | undefined;
-			const rawPaths = params.paths.map(normalizePathLikeInput);
-			if (rawPaths.some(rawPath => rawPath.length === 0)) {
-				throw new ToolError("`paths` must contain non-empty paths or globs");
-			}
-			const internalRouter = InternalUrlRouter.instance();
-			const resolvedPathInputs: string[] = [];
-			for (const rawPath of rawPaths) {
-				if (!internalRouter.canHandle(rawPath)) {
-					resolvedPathInputs.push(rawPath);
-					continue;
-				}
-				if (hasGlobPathChars(rawPath)) {
-					throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
-				}
-				const resource = await internalRouter.resolve(rawPath);
-				if (!resource.sourcePath) {
-					throw new ToolError(`Cannot rewrite internal URL without backing file: ${rawPath}`);
-				}
-				resolvedPathInputs.push(resource.sourcePath);
-			}
-			let effectivePathInputs = resolvedPathInputs;
-			if (resolvedPathInputs.length > 1) {
-				const partition = await partitionExistingPaths(resolvedPathInputs, this.session.cwd, parseSearchPath);
-				if (partition.valid.length === 0) {
-					throw new ToolError(`Path not found: ${partition.missing.join(", ")}`);
-				}
-				effectivePathInputs = partition.valid;
-			}
-			if (effectivePathInputs.length === 1) {
-				const parsedPath = parseSearchPath(effectivePathInputs[0] ?? ".");
-				searchPath = resolveToCwd(parsedPath.basePath, this.session.cwd);
-				globFilter = parsedPath.glob;
-				scopePath = formatScopePath(searchPath);
-			} else {
-				const multiSearchPath = await resolveExplicitSearchPaths(effectivePathInputs, this.session.cwd, globFilter);
-				if (!multiSearchPath) {
-					throw new ToolError("`paths` must contain at least one path or glob");
-				}
-				searchPath = multiSearchPath.basePath;
-				globFilter = multiSearchPath.targets ? undefined : multiSearchPath.glob;
-				multiTargets = multiSearchPath.targets;
-				scopePath = multiSearchPath.scopePath;
-			}
-			const resolvedSearchPath = searchPath;
-			scopePath = scopePath ?? formatScopePath(resolvedSearchPath);
-			let isDirectory: boolean;
-			try {
-				const stat = await Bun.file(resolvedSearchPath).stat();
-				isDirectory = stat.isDirectory();
-			} catch {
-				throw new ToolError(`Path not found: ${scopePath}`);
-			}
+			const scope = await resolveToolSearchScope({
+				rawPaths: params.paths,
+				cwd: this.session.cwd,
+				internalUrlAction: "rewrite",
+			});
+			const { searchPath: resolvedSearchPath, scopePath, isDirectory, multiTargets, globFilter } = scope;
 
 			const result = await runAstEditOnce(multiTargets, resolvedSearchPath, globFilter, {
 				rewrites: normalizedRewrites,
@@ -502,15 +445,7 @@ export const astEditToolRenderer = {
 			if (filesSearched > 0) meta.push(`searched ${filesSearched}`);
 			const header = renderStatusLine({ icon: "warning", title: "AST Edit", description, meta }, uiTheme);
 			const lines = [header, formatEmptyMessage("No replacements made", uiTheme)];
-			if (details?.parseErrors?.length) {
-				const capped = details.parseErrors.slice(0, PARSE_ERRORS_LIMIT);
-				for (const err of capped) {
-					lines.push(uiTheme.fg("warning", `  - ${err}`));
-				}
-				if (details.parseErrors.length > PARSE_ERRORS_LIMIT) {
-					lines.push(uiTheme.fg("dim", `  … ${details.parseErrors.length - PARSE_ERRORS_LIMIT} more`));
-				}
-			}
+			appendParseErrorsBulletList(lines, details?.parseErrors, uiTheme);
 			return new Text(lines.join("\n"), 0, 0);
 		}
 
@@ -523,28 +458,7 @@ export const astEditToolRenderer = {
 		const description = rewriteCount === 1 ? args?.ops?.[0]?.pat : undefined;
 
 		const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text ?? "";
-		const rawLines = textContent.split("\n");
-		const hasSeparators = rawLines.some(line => line.trim().length === 0);
-		const allGroups: string[][] = [];
-		if (hasSeparators) {
-			let current: string[] = [];
-			for (const line of rawLines) {
-				if (line.trim().length === 0) {
-					if (current.length > 0) {
-						allGroups.push(current);
-						current = [];
-					}
-					continue;
-				}
-				current.push(line);
-			}
-			if (current.length > 0) allGroups.push(current);
-		} else {
-			const nonEmpty = rawLines.filter(line => line.trim().length > 0);
-			if (nonEmpty.length > 0) {
-				allGroups.push(nonEmpty);
-			}
-		}
+		const allGroups = splitGroupsByBlankLine(textContent.split("\n"));
 		const changeGroups = allGroups.filter(
 			group => !group[0]?.startsWith("Safety cap reached") && !group[0]?.startsWith("Parse issues:"),
 		);
@@ -560,23 +474,15 @@ export const astEditToolRenderer = {
 			extraLines.push(uiTheme.fg("warning", "limit reached; narrow path"));
 		}
 		if (details?.parseErrors?.length) {
-			const total = details.parseErrors.length;
-			const label =
-				total > PARSE_ERRORS_LIMIT
-					? `${PARSE_ERRORS_LIMIT} / ${total} parse issues`
-					: `${total} parse issue${total !== 1 ? "s" : ""}`;
-			extraLines.push(uiTheme.fg("warning", label));
+			extraLines.push(uiTheme.fg("warning", formatParseErrorsCountLabel(details.parseErrors)));
 		}
-		let cached: RenderCache | undefined;
-		return {
-			render(width: number): string[] {
-				const { expanded } = options;
-				const key = new Hasher().bool(expanded).u32(width).digest();
-				if (cached?.key === key) return cached.lines;
+		return createCachedComponent(
+			() => options.expanded,
+			width => {
 				const changeLines = renderTreeList(
 					{
 						items: changeGroups,
-						expanded,
+						expanded: options.expanded,
 						maxCollapsed: changeGroups.length,
 						maxCollapsedLines: COLLAPSED_CHANGE_LIMIT,
 						itemType: "change",
@@ -591,14 +497,9 @@ export const astEditToolRenderer = {
 					},
 					uiTheme,
 				);
-				const rendered = [header, ...changeLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
-				cached = { key, lines: rendered };
-				return rendered;
+				return [header, ...changeLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 			},
-			invalidate() {
-				cached = undefined;
-			},
-		};
+		);
 	},
 	mergeCallAndResult: true,
 };

@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
 import { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state";
@@ -94,7 +94,7 @@ function registerState(client: HindsightApi, settings?: Settings, opts: Register
 
 describe("Hindsight tool factories", () => {
 	beforeEach(() => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		registeredState = undefined;
 	});
 
@@ -122,7 +122,7 @@ describe("Hindsight tool factories", () => {
 
 describe("retain.execute", () => {
 	beforeEach(() => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		registeredState = undefined;
 	});
 
@@ -210,7 +210,7 @@ describe("retain.execute", () => {
 
 describe("recall.execute", () => {
 	beforeEach(() => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		registeredState = undefined;
 	});
 
@@ -278,7 +278,7 @@ describe("recall.execute", () => {
 
 describe("reflect.execute", () => {
 	beforeEach(() => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		registeredState = undefined;
 	});
 

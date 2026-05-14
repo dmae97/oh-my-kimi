@@ -30,12 +30,12 @@ export const DEFAULT_VIEWPORT = { width: 1365, height: 768, deviceScaleFactor: 1
  * connection dropped, etc.).
  */
 export const BROWSER_PROTOCOL_TIMEOUT_MS = 60_000;
-export const STEALTH_IGNORE_DEFAULT_ARGS = [
+const STEALTH_IGNORE_DEFAULT_ARGS = [
 	"--disable-extensions",
 	"--disable-default-apps",
 	"--disable-component-extensions-with-background-pages",
 ];
-export const STEALTH_ACCEPT_LANGUAGE = "en-US,en";
+const STEALTH_ACCEPT_LANGUAGE = "en-US,en";
 
 const USER_AGENT_TARGET_TIMEOUT_MS = 5_000;
 const USER_AGENT_TARGET_TYPES = new Set(["page", "webview", "background_page"]);
@@ -84,7 +84,7 @@ export async function loadPuppeteerInWorker(safeDir: string): Promise<typeof Pup
  * The browser is cached under ~/.omp/puppeteer (getPuppeteerDir).
  */
 let chromiumExecutablePromise: Promise<string | undefined> | undefined;
-export async function ensureChromiumExecutable(): Promise<string | undefined> {
+async function ensureChromiumExecutable(): Promise<string | undefined> {
 	const sysChrome = resolveSystemChromium();
 	if (sysChrome) return sysChrome;
 	const envPath = process.env.PUPPETEER_EXECUTABLE_PATH;
@@ -140,7 +140,7 @@ export async function ensureChromiumExecutable(): Promise<string | undefined> {
 	return chromiumExecutablePromise;
 }
 
-let _resolvedChromium: string | null | undefined; // undefined = unchecked; null = not found
+let resolvedChromium: string | null | undefined; // undefined = unchecked; null = not found
 
 function isExecutableFile(p: string): boolean {
 	try {
@@ -211,19 +211,19 @@ function systemChromiumCandidates(): string[] {
 	return candidates;
 }
 
-export function resolveSystemChromium(): string | undefined {
-	if (_resolvedChromium !== undefined) return _resolvedChromium ?? undefined;
+function resolveSystemChromium(): string | undefined {
+	if (resolvedChromium !== undefined) return resolvedChromium ?? undefined;
 	const seen = new Set<string>();
 	for (const candidate of systemChromiumCandidates()) {
 		if (!candidate || seen.has(candidate)) continue;
 		seen.add(candidate);
 		if (isExecutableFile(candidate)) {
-			_resolvedChromium = candidate;
+			resolvedChromium = candidate;
 			logger.debug("Using system Chrome/Chromium", { path: candidate });
 			return candidate;
 		}
 	}
-	_resolvedChromium = null;
+	resolvedChromium = null;
 	return undefined;
 }
 

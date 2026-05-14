@@ -227,7 +227,7 @@ Watch flow:
   - `gh` interactive editor fallback is suppressed for `pr_create` by forcing either `--body-file` or `--body ""`.
   - `gh-renderer` provides compact headers for all ops and a custom live watch view for `run_watch`.
 - Background work / cancellation
-  - `run_watch` loops until success/failure and uses `abortableSleep()` between polls.
+  - `run_watch` loops until success/failure and uses `scheduler.wait()` between polls.
   - `GithubTool.execute()` is wrapped in `untilAborted()`; `git.github.run()` forwards the abort signal into `Bun.spawn()`.
 
 ## Limits & Caps

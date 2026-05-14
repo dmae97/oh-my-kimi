@@ -18,6 +18,28 @@ import { e2eApiKey } from "../../ai/test/oauth";
 export { e2eApiKey };
 
 /**
+ * Options for creating a test session.
+ */
+export interface TestSessionOptions {
+	/** Use in-memory session (no file persistence) */
+	inMemory?: boolean;
+	/** Custom system prompt */
+	systemPrompt?: string | string[];
+	/** Custom settings overrides */
+	settingsOverrides?: Record<string, unknown>;
+}
+
+/**
+ * Resources returned by createTestSession that need cleanup.
+ */
+export interface TestSessionContext {
+	session: AgentSession;
+	sessionManager: SessionManager;
+	tempDir: string;
+	cleanup: () => Promise<void>;
+}
+
+/**
  * Create a minimal user message for testing.
  */
 export function userMsg(text: string) {
@@ -45,28 +67,6 @@ export function assistantMsg(text: string) {
 		stopReason: "stop" as const,
 		timestamp: Date.now(),
 	};
-}
-
-/**
- * Options for creating a test session.
- */
-export interface TestSessionOptions {
-	/** Use in-memory session (no file persistence) */
-	inMemory?: boolean;
-	/** Custom system prompt */
-	systemPrompt?: string | string[];
-	/** Custom settings overrides */
-	settingsOverrides?: Record<string, unknown>;
-}
-
-/**
- * Resources returned by createTestSession that need cleanup.
- */
-export interface TestSessionContext {
-	session: AgentSession;
-	sessionManager: SessionManager;
-	tempDir: string;
-	cleanup: () => Promise<void>;
 }
 
 /**
@@ -122,41 +122,4 @@ export async function createTestSession(options: TestSessionOptions = {}): Promi
 	};
 
 	return { session, sessionManager, tempDir, cleanup };
-}
-
-/**
- * Build a session tree for testing using SessionManager.
- * Returns the IDs of all created entries.
- *
- * Example tree structure:
- * ```
- * u1 -> a1 -> u2 -> a2
- *          -> u3 -> a3  (branch from a1)
- * u4 -> a4              (another root)
- * ```
- */
-export function buildTestTree(
-	session: SessionManager,
-	structure: {
-		messages: Array<{ role: "user" | "assistant"; text: string; branchFrom?: string }>;
-	},
-): Map<string, string> {
-	const ids = new Map<string, string>();
-
-	for (const msg of structure.messages) {
-		if (msg.branchFrom) {
-			const branchFromId = ids.get(msg.branchFrom);
-			if (!branchFromId) {
-				throw new Error(`Cannot branch from unknown entry: ${msg.branchFrom}`);
-			}
-			session.branch(branchFromId);
-		}
-
-		const id =
-			msg.role === "user" ? session.appendMessage(userMsg(msg.text)) : session.appendMessage(assistantMsg(msg.text));
-
-		ids.set(msg.text, id);
-	}
-
-	return ids;
 }

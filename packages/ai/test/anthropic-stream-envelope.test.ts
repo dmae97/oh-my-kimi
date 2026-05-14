@@ -470,7 +470,7 @@ describe("anthropic stream envelope handling", () => {
 		vi.spyOn(Messages.prototype, "create").mockImplementation(() => createRawSseRequest(frames) as never);
 
 		const stream = streamAnthropic(model, context, { apiKey: "sk-ant-test" });
-		for await (const _event of stream) {
+		for await (const _ of stream) {
 			// drain stream
 		}
 		const result = await stream.result();
@@ -497,7 +497,7 @@ describe("anthropic stream envelope handling", () => {
 		});
 
 		const eagerStream = streamAnthropic(model, toolContext, { apiKey: "sk-ant-test" });
-		for await (const _event of eagerStream) {
+		for await (const _ of eagerStream) {
 			// drain stream
 		}
 		await eagerStream.result();
@@ -507,7 +507,7 @@ describe("anthropic stream envelope handling", () => {
 			toolContext,
 			{ apiKey: "sk-ant-test" },
 		);
-		for await (const _event of disabledStream) {
+		for await (const _ of disabledStream) {
 			// drain stream
 		}
 		await disabledStream.result();
@@ -534,7 +534,7 @@ describe("anthropic stream envelope handling", () => {
 				apiKey: "sk-ant-test",
 				cacheRetention: "long",
 			});
-			for await (const _event of stream) {
+			for await (const _ of stream) {
 				// drain stream
 			}
 			await stream.result();

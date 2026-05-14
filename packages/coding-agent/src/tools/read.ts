@@ -1321,8 +1321,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const imageMetadata = await readImageMetadata(absolutePath);
 		const mimeType = imageMetadata?.mimeType;
 		const ext = path.extname(absolutePath).toLowerCase();
-		const _hasEditTool = this.session.hasEditTool ?? true;
-		const _language = getLanguageFromPath(absolutePath);
 		const shouldConvertWithMarkit = CONVERTIBLE_EXTENSIONS.has(ext);
 		// Read the file based on type
 		let content: Array<TextContent | ImageContent> | undefined;

@@ -89,10 +89,6 @@ export function getTab(name: string): TabSession | undefined {
 	return tabs.get(name);
 }
 
-export function listTabs(): TabSession[] {
-	return [...tabs.values()];
-}
-
 export async function acquireTab(
 	name: string,
 	browser: BrowserHandle,

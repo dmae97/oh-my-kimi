@@ -1,5 +1,6 @@
 import * as nodeCrypto from "node:crypto";
 import * as fs from "node:fs";
+import { scheduler } from "node:timers/promises";
 import * as tls from "node:tls";
 import Anthropic, { type ClientOptions as AnthropicSdkClientOptions } from "@anthropic-ai/sdk";
 import type {
@@ -8,7 +9,14 @@ import type {
 	MessageParam,
 	RawMessageStreamEvent,
 } from "@anthropic-ai/sdk/resources/messages";
-import { $env, abortableSleep, isEnoent, readSseEvents } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	extractHttpStatusFromError,
+	isEnoent,
+	isRetryableError,
+	isUnexpectedSocketCloseMessage,
+	readSseEvents,
+} from "@oh-my-pi/pi-utils";
 import { hasOpus47ApiRestrictions, mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
 import { calculateCost } from "../models";
 import { getEnvApiKey, OUTPUT_FALLBACK_BUFFER } from "../stream";
@@ -48,12 +56,7 @@ import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTi
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
-import {
-	extractHttpStatusFromError,
-	isCopilotRetryableError,
-	isRetryableError,
-	isUnexpectedSocketCloseMessage,
-} from "../utils/retry";
+import { isCopilotTransientModelError } from "../utils/retry";
 import { COMBINATOR_KEYS, NO_STRICT } from "../utils/schema";
 import { notifyRawSseEvent, wrapFetchForSseDebug } from "../utils/sse-debug";
 import {
@@ -844,7 +847,7 @@ function isProviderRetryableStreamEnvelopeError(error: unknown): boolean {
 
 export function isProviderRetryableError(error: unknown, provider?: string): boolean {
 	if (!(error instanceof Error)) return false;
-	if (provider === "github-copilot" && isCopilotRetryableError(error)) return true;
+	if (provider === "github-copilot" && isCopilotTransientModelError(error)) return true;
 	const msg = error.message.toLowerCase();
 	if (
 		isUnexpectedSocketCloseMessage(msg) ||
@@ -1287,7 +1290,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					}
 					providerRetryAttempt++;
 					const delayMs = PROVIDER_BASE_DELAY_MS * 2 ** (providerRetryAttempt - 1);
-					await abortableSleep(delayMs, options?.signal);
+					await scheduler.wait(delayMs, { signal: options?.signal });
 					output.content.length = 0;
 					output.responseId = undefined;
 					output.errorMessage = strictFallbackErrorMessage;

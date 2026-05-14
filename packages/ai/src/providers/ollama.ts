@@ -1,4 +1,4 @@
-import { abortableSleep } from "@oh-my-pi/pi-utils";
+import { fetchWithRetry } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import { getEnvApiKey } from "../stream";
 import type {
@@ -334,16 +334,6 @@ function mapDoneReason(doneReason: string | undefined, output: AssistantMessage)
 
 const OLLAMA_RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
 
-async function fetchChatWithRetry(url: string, init: RequestInit): Promise<Response> {
-	const signal = init.signal as AbortSignal | undefined;
-	for (let attempt = 0; attempt < OLLAMA_RETRY_DELAYS_MS.length; attempt++) {
-		const response = await fetch(url, init);
-		if (response.ok || response.status < 500) return response;
-		await abortableSleep(OLLAMA_RETRY_DELAYS_MS[attempt]!, signal);
-	}
-	return fetch(url, init);
-}
-
 export const streamOllama: StreamFunction<"ollama-chat"> = (
 	model: Model<"ollama-chat">,
 	context: Context,
@@ -377,7 +367,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 				url: `${baseUrl}/api/chat`,
 				body,
 			};
-			const response = await fetchChatWithRetry(`${baseUrl}/api/chat`, {
+			const response = await fetchWithRetry(`${baseUrl}/api/chat`, {
 				method: "POST",
 				headers: {
 					...model.headers,
@@ -387,6 +377,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 				},
 				body: JSON.stringify(body),
 				signal: options.signal,
+				defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
 			});
 			if (!response.ok) {
 				throw new Error(`HTTP ${response.status} from ${baseUrl}/api/chat`);
