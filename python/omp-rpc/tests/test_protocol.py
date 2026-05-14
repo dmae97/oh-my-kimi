@@ -82,6 +82,8 @@ class ProtocolParsingTests(unittest.TestCase):
         self.assertEqual(state.follow_up_mode, "all")
         self.assertEqual(state.model.id if state.model else None, "claude-sonnet-4-5")
         self.assertEqual(state.todo_phases[0].tasks[0].status, "in_progress")
+        # Legacy bare-string systemPrompt is accepted and wrapped to a tuple.
+        self.assertEqual(state.system_prompt, ("You are useful.",))
         self.assertEqual(state.dump_tools[0].name, "read")
 
     def test_parse_agent_end_notification(self) -> None:
@@ -179,6 +181,53 @@ class ProtocolParsingTests(unittest.TestCase):
                     "steeringMode": "one-at-a-time",
                     "followUpMode": "one-at-a-time",
                     "interruptMode": "immediate",
+                }
+            )
+
+    def test_parse_session_state_accepts_system_prompt_array(self) -> None:
+        state = parse_session_state(
+            {
+                "sessionId": "session-abc",
+                "steeringMode": "one-at-a-time",
+                "followUpMode": "one-at-a-time",
+                "interruptMode": "immediate",
+                "systemPrompt": ["base instructions", "extra policy"],
+            }
+        )
+        self.assertEqual(state.system_prompt, ("base instructions", "extra policy"))
+
+    def test_parse_session_state_defaults_system_prompt_to_empty_tuple(self) -> None:
+        state = parse_session_state(
+            {
+                "sessionId": "session-abc",
+                "steeringMode": "one-at-a-time",
+                "followUpMode": "one-at-a-time",
+                "interruptMode": "immediate",
+            }
+        )
+        self.assertEqual(state.system_prompt, ())
+
+    def test_parse_session_state_rejects_non_string_in_system_prompt_array(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_session_state(
+                {
+                    "sessionId": "session-abc",
+                    "steeringMode": "one-at-a-time",
+                    "followUpMode": "one-at-a-time",
+                    "interruptMode": "immediate",
+                    "systemPrompt": ["ok", 42],
+                }
+            )
+
+    def test_parse_session_state_rejects_invalid_system_prompt_shape(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_session_state(
+                {
+                    "sessionId": "session-abc",
+                    "steeringMode": "one-at-a-time",
+                    "followUpMode": "one-at-a-time",
+                    "interruptMode": "immediate",
+                    "systemPrompt": {"unexpected": "object"},
                 }
             )
 

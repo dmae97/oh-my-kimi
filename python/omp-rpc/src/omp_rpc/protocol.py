@@ -164,6 +164,29 @@ def _optional_str(payload: JsonObject, field: str) -> str | None:
     return value
 
 
+def _optional_str_list(payload: JsonObject, field: str) -> tuple[str, ...]:
+    """Parse an optional string-or-array-of-strings field.
+
+    The agent's `systemPrompt` (and similar) became `string[]` server-side
+    when multi-prompt support landed. Older daemons still emit a bare string,
+    so we accept either shape. Returns an empty tuple when the field is
+    absent or null.
+    """
+    value = payload.get(field)
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, list):
+        items: list[str] = []
+        for index, item in enumerate(value):
+            if not isinstance(item, str):
+                raise ValueError(f"{field}[{index}] must be a string")
+            items.append(item)
+        return tuple(items)
+    raise ValueError(f"{field} must be a string or an array of strings")
+
+
 def _optional_bool(payload: JsonObject, field: str) -> bool | None:
     value = payload.get(field)
     if value is None:
@@ -669,7 +692,7 @@ class SessionState:
     message_count: int
     queued_message_count: int
     todo_phases: tuple[TodoPhase, ...] = ()
-    system_prompt: str | None = None
+    system_prompt: tuple[str, ...] = ()
     dump_tools: tuple[ToolDescriptor, ...] = ()
 
 
@@ -1133,7 +1156,7 @@ def parse_session_state(payload: JsonObject) -> SessionState:
         message_count=int(payload.get("messageCount", 0)),
         queued_message_count=int(payload.get("queuedMessageCount", 0)),
         todo_phases=parse_todo_phases(cast(JsonValue | None, payload.get("todoPhases"))),
-        system_prompt=_optional_str(payload, "systemPrompt"),
+        system_prompt=_optional_str_list(payload, "systemPrompt"),
         dump_tools=dump_tools,
     )
 
