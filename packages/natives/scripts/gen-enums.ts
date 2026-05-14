@@ -19,7 +19,6 @@ import * as path from "node:path";
 const nativeDir = path.resolve(import.meta.dir, "../native");
 const dtsPath = path.join(nativeDir, "index.d.ts");
 const jsPath = path.join(nativeDir, "index.js");
-const templatePath = path.join(import.meta.dir, "native-index.template.js");
 
 const MARKER_START = "// --- generated native exports (do not edit) ---";
 const MARKER_END = "// --- end generated native exports ---";
@@ -111,9 +110,22 @@ function buildGeneratedBlock(dts: string): string {
 
 export async function generateEnumExports(): Promise<void> {
 	const dts = await Bun.file(dtsPath).text();
-	const template = await Bun.file(templatePath).text();
+	const existing = await Bun.file(jsPath).text();
 	const generatedBlock = buildGeneratedBlock(dts);
-	const js = [template, `const nativeBindings = loadNative();`, generatedBlock].join("\n");
+
+	// Patch the generated block in place. `native/index.js` is the hand-edited
+	// loader; only the block between MARKER_START and MARKER_END is owned by
+	// this script. The markers are committed to disk so the patch is purely
+	// content replacement — no scaffold, no template file.
+	const blockStart = existing.indexOf(MARKER_START);
+	const blockEnd = existing.indexOf(MARKER_END);
+	if (blockStart === -1 || blockEnd === -1 || blockEnd < blockStart) {
+		throw new Error(
+			`gen-enums: ${jsPath} is missing the generated marker block. ` +
+				`Add\n\n${MARKER_START}\n${MARKER_END}\n\nplaceholders before running.`,
+		);
+	}
+	const js = existing.slice(0, blockStart) + generatedBlock + existing.slice(blockEnd + MARKER_END.length);
 
 	await Bun.write(jsPath, js);
 

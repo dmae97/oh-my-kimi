@@ -45,3 +45,5 @@ export interface ResolveLoaderCandidatesInput {
 }
 
 export function resolveLoaderCandidates(input: ResolveLoaderCandidatesInput): string[];
+
+export function loadNative(): Record<string, unknown>;
