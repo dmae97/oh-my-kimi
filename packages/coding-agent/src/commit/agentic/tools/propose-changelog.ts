@@ -130,8 +130,15 @@ export function createProposeChangelogTool(
 				state.changelogProposal = { entries: normalized };
 			}
 
+			let text = response.valid ? "Changelog entries accepted." : "Changelog validation failed.";
+			if (response.errors.length > 0) {
+				text += `\n\nErrors:\n${response.errors.map(e => `- ${e}`).join("\n")}`;
+			}
+			if (response.warnings.length > 0) {
+				text += `\n\nWarnings:\n${response.warnings.map(w => `- ${w}`).join("\n")}`;
+			}
 			return {
-				content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
+				content: [{ type: "text", text }],
 				details: response,
 			};
 		},
