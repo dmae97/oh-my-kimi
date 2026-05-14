@@ -157,6 +157,10 @@ class FakeAgentSession {
 		};
 	}
 
+	listeners(): Array<(event: AgentSessionEvent) => void> {
+		return [...this.#listeners];
+	}
+
 	async prompt(text: string): Promise<void> {
 		this.promptCalls.push(text);
 		this.isStreaming = true;
@@ -301,6 +305,34 @@ class FakeAgentSession {
 		this.agent.sessionId = this.sessionId;
 		return true;
 	}
+}
+
+function holdPromptStreaming(session: FakeAgentSession): () => void {
+	let finishPrompt!: () => void;
+	session.prompt = async (text: string): Promise<void> => {
+		session.promptCalls.push(text);
+		session.isStreaming = true;
+		const blocker = Promise.withResolvers<void>();
+		finishPrompt = blocker.resolve;
+		await blocker.promise;
+		const assistantMessage = makeAssistantMessage("pong");
+		for (const listener of session.listeners()) {
+			listener({
+				type: "message_update",
+				message: assistantMessage,
+				assistantMessageEvent: { type: "text_delta", delta: "pong" },
+			} as AgentSessionEvent);
+		}
+		session.sessionManager.appendMessage(assistantMessage);
+		for (const listener of session.listeners()) {
+			listener({
+				type: "agent_end",
+				messages: [assistantMessage],
+			} as AgentSessionEvent);
+		}
+		session.isStreaming = false;
+	};
+	return () => finishPrompt();
 }
 
 interface AgentHarness {
@@ -847,6 +879,36 @@ describe("ACP agent", () => {
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
+	});
+
+	it("rejects overlapping prompts while AgentSession is still streaming", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		const finishPrompt = holdPromptStreaming(session);
+
+		const firstPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000035",
+			prompt: [{ type: "text", text: "long running" }],
+		} as PromptRequest);
+		await Bun.sleep(0);
+
+		try {
+			await expect(
+				harness.agent.prompt({
+					sessionId: created.sessionId,
+					messageId: "00000000-0000-4000-8000-000000000036",
+					prompt: [{ type: "text", text: "overlap" }],
+				} as PromptRequest),
+			).rejects.toThrow("ACP prompt already in progress for this session");
+			expect(session.promptCalls).toEqual(["long running"]);
+		} finally {
+			finishPrompt();
+			await firstPrompt;
+			harness.abortController.abort();
+			await Bun.sleep(0);
+		}
 	});
 
 	it("waits for AgentSession idle cleanup after agent_end before returning", async () => {
