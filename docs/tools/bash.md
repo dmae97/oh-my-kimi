@@ -100,7 +100,7 @@ Stdout and stderr are merged before the model sees them. Non-zero exit codes are
   - Uses `session.allocateOutputArtifact()` for spill files.
 - User-visible prompts / interactive UI
   - PTY mode opens a TUI overlay titled `Console` and forwards input to the PTY.
-  - Background start messages direct the agent to `job` and to read `jobs://<id>`.
+  - Background start messages direct the agent to the `job` tool (use `list: true` for a snapshot, or pass `poll: [id]` to wait).
 - Background work / cancellation
   - Async and auto-background jobs continue after the initial tool return.
   - Cancellation aborts the native run; PTY overlay dismissal also kills the PTY.

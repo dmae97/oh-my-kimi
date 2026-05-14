@@ -393,7 +393,7 @@ Headless browser automation with 14 stealth scripts to evade bot detection:
 - **Selector flexibility**: CSS, `aria/`, `text/`, `xpath/`, `pierce/` query handlers for Shadow DOM piercing
 - **Reader mode**: `tab.extract()` uses Mozilla Readability for clean article extraction
 - **Headless/visible toggle**: Switch modes at runtime via `/browser` command or `browser.headless` setting
-- **One-command Chromium fetch**: `omp setup browser` downloads a known-good Chromium; prebuilt binaries embed the tab worker entry via `with { type: "file" }` so single-file binaries no longer fail with `Timed out initializing browser tab worker`
+- **One-command Chromium fetch**: the browser tool auto-downloads a known-good Chromium on first use; prebuilt binaries embed the tab worker entry via `with { type: "file" }` so single-file binaries no longer fail with `Timed out initializing browser tab worker`
 - **NixOS support**: Automatically detects NixOS (`/etc/NIXOS`) and resolves a system Chromium since Puppeteer's bundled binary cannot run on a non-FHS system
 
 ### + Cursor Provider
@@ -412,7 +412,7 @@ Distribute load across multiple API keys:
 - **Round-robin distribution**: Automatically cycles through credentials per session
 - **Usage-aware selection**: For OpenAI Codex, checks account limits before credential selection
 - **Automatic fallback**: Switches credentials mid-session when rate limits are hit
-- **Consistent hashing**: FNV-1a hashing ensures stable credential assignment per session
+- **Consistent hashing**: `Bun.hash.xxHash32` over the session id ensures stable credential assignment per session
 - **Disable events**: Extensions can subscribe to `credential_disabled` to react when an OAuth token is soft-disabled (e.g. `invalid_grant`) without regex-matching error messages
 
 ### + Image Generation
@@ -502,7 +502,7 @@ Supported platforms: `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, `
 
 - **`omp acp` subcommand**: Run as an Agent Client Protocol server over stdio
 - **`omp config` subcommand**: Manage settings from CLI (`list`, `get`, `set`, `reset`, `path`)
-- **`omp setup` subcommand**: Install optional dependencies (`omp setup python`, `omp setup browser`)
+- **`omp setup` subcommand**: Install optional dependencies (`omp setup python`, `omp setup stt`)
 - **`omp stats` subcommand**: Local observability dashboard for AI usage (requests, cost, cache rate, tokens/s) with input/output token totals
 - **`omp jupyter` was removed**: the Python `eval` backend now runs as a subprocess (no Jupyter dependency)
 - **`xhigh` thinking level**: Extended reasoning for Anthropic models with increased token budgets
@@ -521,7 +521,7 @@ Supported platforms: `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, `
 - **Per-command PTY control**: `bash` tool supports `pty: true` for commands requiring a real terminal (sudo, ssh)
 - **@file auto-read**: Type `@path/to/file` in prompts to inject file contents inline
 - **AST tools**: `ast_grep` and `ast_edit` for syntax-aware code search and codemods via ast-grep
-- **Plan mode**: ExitPlanMode offers three approvals — execute (purge), keep full transcript, or compact context (re-anchors plan on a fresh cache breakpoint)
+- **Plan mode**: approval surface offers three outcomes — execute (purge), keep full transcript, or compact context (re-anchors plan on a fresh cache breakpoint). Completion routes through the existing `resolve` tool with `action: "apply"` and an `extra: { title }` payload
 - **`/btw` ephemeral turns**: One-shot model query that doesn't pollute the session transcript
 - **Sampling controls**: `topP`, `topK`, `minP`, `presencePenalty`, `repetitionPenalty` settings for fine-grained model tuning
 
@@ -531,7 +531,7 @@ Supported platforms: `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, `
 
 ### Via Bun (recommended)
 
-Requires [Bun](https://bun.sh) **>= 1.3.7**:
+Requires [Bun](https://bun.sh) **>= 1.3.14**:
 
 ```bash
 bun install -g @oh-my-pi/pi-coding-agent

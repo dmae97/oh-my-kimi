@@ -278,7 +278,6 @@ Extra conditional behavior:
 | `PI_TASK_MAX_OUTPUT_BYTES`   | Max captured output bytes per subagent (default `500000`)                                          |
 | `PI_TASK_MAX_OUTPUT_LINES`   | Max captured output lines per subagent (default `5000`)                                            |
 | `PI_TIMING`                  | If `1`, enables startup/tool timing instrumentation logs                                           |
-| `PI_DEBUG_STARTUP`           | Enables startup stage debug prints to stderr in multiple startup paths                             |
 | `PI_PACKAGE_DIR`             | Overrides package asset base dir resolution (docs/examples/changelog path lookup)                  |
 | `PI_DISABLE_LSPMUX`          | If `1`, disables lspmux detection/integration and forces direct LSP server spawning                |
 | `PI_RPC_EMIT_TITLE`          | Boolean-like flag enabling title events in RPC mode                                                |

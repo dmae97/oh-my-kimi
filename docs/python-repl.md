@@ -238,4 +238,3 @@ Output is streamed through `OutputSink` and may be persisted to artifact storage
 - `PI_PYTHON_SKIP_CHECK=1` — bypass Python preflight/warm checks
 - `PI_PYTHON_INTEGRATION=1` — enable gated integration tests that spawn a real Python
 - `PI_PYTHON_IPC_TRACE=1` — log NDJSON frames exchanged with the runner subprocess
-- `PI_DEBUG_STARTUP=1` — emit startup-stage debug markers

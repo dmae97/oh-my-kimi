@@ -8,7 +8,6 @@
 - Key collaborators:
   - `packages/coding-agent/src/async/job-manager.ts` — job registry, cancellation, delivery suppression.
   - `packages/coding-agent/src/async/support.ts` — feature gating for background jobs.
-  - `packages/coding-agent/src/internal-urls/jobs-protocol.ts` — `jobs://` listing and per-job detail.
   - `packages/coding-agent/src/tools/bash.ts` — explicit async bash and auto-backgrounded bash jobs.
   - `packages/coding-agent/src/task/index.ts` — async task-job scheduling.
   - `packages/coding-agent/src/sdk.ts` — automatic follow-up delivery for unsuppressed completions.
@@ -18,8 +17,9 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `poll` | `string[]` | No | Job ids to watch. If omitted and `cancel` is also omitted, the tool watches all running jobs. If provided, missing ids are silently filtered out before waiting. |
+| `poll` | `string[]` | No | Job ids to watch. Cannot be combined with `list`. If omitted (and `cancel` is also omitted), the tool watches all running jobs. If provided, missing ids are silently filtered out before waiting. |
 | `cancel` | `string[]` | No | Job ids to cancel before any polling. Missing ids are reported as `not_found`; non-running ids as `already_completed`. |
+| `list` | `boolean` | No | Return an immediate snapshot of every job spawned by the calling agent (running + completed within retention) without waiting. Read-only — cannot be combined with `poll` or `cancel`. |
 
 ## Outputs
 The tool returns one text block plus `details`.
@@ -41,9 +41,8 @@ Streaming behavior:
 - During a polling wait, `execute(...)` emits `onUpdate(...)` every 500 ms with an empty text block and fresh `details.jobs` snapshots.
 - Final return is single-shot after a completion, timeout, abort, or immediate fast path.
 
-Related read path:
-- Reading `jobs://` lists all current jobs.
-- Reading `jobs://<id>` renders one job with status, label, start time, duration, and stored result/error text.
+Read-only snapshot path:
+- Calling `job` with `list: true` returns a markdown summary of every job spawned by the calling agent (running + completed within retention) without waiting.
 
 ## Flow
 1. `JobTool.createIf(...)` in `packages/coding-agent/src/tools/job.ts` only exposes the tool when `isBackgroundJobSupportEnabled(...)` returns true for either `async.enabled` or `bash.autoBackground.enabled`.
@@ -77,7 +76,7 @@ Related read path:
 - Poll explicit ids: call with `poll` only.
 - Cancel only: call with `cancel` only; cancellations happen and the tool returns immediately.
 - Cancel then poll: call with both. Cancellations are applied first, then the tool watches the remaining resolved `poll` ids.
-- Read-only inspection outside the tool: `jobs://` and `jobs://<id>` expose the same manager state without waiting.
+- Read-only inspection: call with `list: true` for the same snapshot data without waiting on completion.
 
 Spawn paths that produce jobs:
 - `packages/coding-agent/src/tools/bash.ts`
@@ -129,15 +128,13 @@ Lifecycle and exact state names:
 - Cancelling a non-running job is not an exception; it reports `already_completed` even if the actual status is `completed`, `failed`, or `cancelled`.
 - Tool-call abort during polling stops waiting and returns a final snapshot through `#buildResult(...)`; it does not cancel watched jobs.
 - Failures inside the underlying async work are stored on the job (`status: "failed"`, `errorText`) and reported in normal tool output, not rethrown by `job`.
-- Reading `jobs://<id>` for a missing job returns markdown content headed `# Job Not Found` rather than throwing.
+- Calling `list: true` against an empty manager returns a normal empty-list result rather than throwing; missing ids passed to `poll` are silently filtered.
 
 ## Notes
 - `job` waits for the first watched running job to settle, not for all watched jobs. If others remain `running`, they are reported under `## Still Running`; the caller must invoke `job` again to continue waiting.
 - Delivery suppression is the key difference between snapshot and automatic delivery:
-  - snapshots (`job`, reads of `jobs://`) read current manager state;
+  - snapshots (`job` calls with `poll` or `list: true`) read current manager state;
   - follow-up delivery comes from `AsyncJobManager.#enqueueDelivery(...)` and `sdk.ts` `onJobComplete`;
   - watched or acknowledged ids are suppressed via `isDeliverySuppressed(...)`.
 - `manager.cancel(id)` sets `status = "cancelled"` before the underlying promise settles. The job function may later populate `resultText` or `errorText`; `job-manager.ts` preserves that text but does not transition the status away from `cancelled`.
-- `jobs://` is implemented by `JobsProtocolHandler` with `immutable = true`, but each resolve call reads live manager state at access time.
-- `jobs://<id>` shows a cancellation section only when a cancelled job has `errorText`; cancelled jobs with `resultText` are not rendered with a result section there.
-- Retention eviction removes the job record, suppression flags, and watch flag together. After eviction, both `job` and reads of `jobs://<id>` behave as if the id never existed.
+- Retention eviction removes the job record, suppression flags, and watch flag together. After eviction, both `job` calls and `list: true` snapshots behave as if the id never existed.

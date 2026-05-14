@@ -10,7 +10,7 @@
   - `packages/coding-agent/src/tools/archive-reader.ts` — detect `archive.ext:inner/path`, index archives, list/read entries.
   - `packages/coding-agent/src/tools/sqlite-reader.ts` — detect SQLite targets, parse selectors, render tables.
   - `packages/coding-agent/src/tools/fetch.ts` — URL parsing, fetch/render pipeline, URL cache/artifacts.
-  - `packages/coding-agent/src/internal-urls/router.ts` — resolve `agent://`, `artifact://`, `jobs://`, `local://`, `mcp://`, `memory://`, `pi://`, `rule://`, `skill://`.
+  - `packages/coding-agent/src/internal-urls/router.ts` — resolve `agent://`, `artifact://`, `local://`, `mcp://`, `memory://`, `pi://`, `rule://`, `skill://`.
   - `packages/coding-agent/src/edit/notebook.ts` — convert `.ipynb` to editable `# %% [...] cell:N` text.
   - `packages/coding-agent/src/utils/file-display-mode.ts` — decide hashline vs line-number vs raw display.
   - `packages/coding-agent/src/workspace-tree.ts` — render directory trees.
@@ -194,7 +194,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 
 ### Internal URLs
 - `read` does not resolve these itself; it delegates to `session.internalRouter.resolve()`.
-- Registered protocols are outside this file, but the router in `packages/coding-agent/src/internal-urls/router.ts` is built for `agent://`, `artifact://`, `issue://`, `jobs://`, `local://`, `mcp://`, `memory://`, `pi://`, `pr://`, `rule://`, and `skill://`.
+- Registered protocols are outside this file, but the router in `packages/coding-agent/src/internal-urls/router.ts` is built for `agent://`, `artifact://`, `issue://`, `local://`, `mcp://`, `memory://`, `pi://`, `pr://`, `rule://`, and `skill://`.
 - `#handleInternalUrl()` behavior:
   - parses the URL with `parseInternalUrl()` so colons inside the host segment are legal
   - for `agent://`, treats non-root path extraction or `?q=` extraction as a special no-pagination mode
