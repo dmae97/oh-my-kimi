@@ -31,10 +31,10 @@ import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { type ConfigError, ConfigFile } from "../config";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
 import { isValidThemeColor, type ThemeColor } from "../modes/theme/theme";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
+import { type ConfigError, ConfigFile } from "./config-file";
 import {
 	buildCanonicalModelIndex,
 	type CanonicalModelIndex,

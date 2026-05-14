@@ -68,9 +68,9 @@ function createStubInputControllerContext(opts: { skillCommands: Map<string, str
 		addToHistory: vi.fn(),
 	};
 	const enqueueCustomMessageDisplay = vi.fn((_text: string, _mode: "steer" | "followUp") => "sk-test-0");
-	// Annotate parameters so `mock.calls[N]` is typed as a tuple (not `[]`) —
-	// avoids TS2352/TS2493 when casting `.calls[0]` to a destructured shape.
-	const promptCustomMessage = vi.fn(async (_message: { details?: SkillPromptDetails }, _options?: unknown) => {});
+	// Annotate parameters so `mock.calls[N]` is typed as a tuple (not `[]`) and
+	// `message` carries required skill prompt details for assertion below.
+	const promptCustomMessage = vi.fn(async (_message: { details: SkillPromptDetails }, _options?: unknown) => {});
 	const updatePendingMessagesDisplay = vi.fn();
 	const requestRender = vi.fn();
 	const showError = vi.fn();
@@ -136,8 +136,10 @@ describe("InputController #invokeSkillCommand (E1-E3)", () => {
 		expect(promptCustomMessage).toHaveBeenCalledTimes(1);
 		const firstCall = promptCustomMessage.mock.calls[0];
 		expect(firstCall).toBeDefined();
-		// biome-ignore lint/style/noNonNullAssertion: just asserted non-undefined
-		const messageArg = firstCall![0] as { details: SkillPromptDetails };
+		if (!firstCall) {
+			throw new Error("expected promptCustomMessage to be called");
+		}
+		const messageArg = firstCall[0];
 		expect(messageArg.details.__pendingDisplayTag).toBe("sk-test-0");
 	});
 
@@ -157,8 +159,10 @@ describe("InputController #invokeSkillCommand (E1-E3)", () => {
 
 		const firstCall = promptCustomMessage.mock.calls[0];
 		expect(firstCall).toBeDefined();
-		// biome-ignore lint/style/noNonNullAssertion: just asserted non-undefined
-		const messageArg = firstCall![0] as { details: SkillPromptDetails };
+		if (!firstCall) {
+			throw new Error("expected promptCustomMessage to be called");
+		}
+		const messageArg = firstCall[0];
 		expect(messageArg.details.__pendingDisplayTag).toBe("sk-test-0");
 	});
 
@@ -176,8 +180,10 @@ describe("InputController #invokeSkillCommand (E1-E3)", () => {
 		expect(enqueueCustomMessageDisplay).not.toHaveBeenCalled();
 		const firstCall = promptCustomMessage.mock.calls[0];
 		expect(firstCall).toBeDefined();
-		// biome-ignore lint/style/noNonNullAssertion: just asserted non-undefined
-		const messageArg = firstCall![0] as { details: SkillPromptDetails };
+		if (!firstCall) {
+			throw new Error("expected promptCustomMessage to be called");
+		}
+		const messageArg = firstCall[0];
 		expect(messageArg.details.__pendingDisplayTag).toBeUndefined();
 	});
 });

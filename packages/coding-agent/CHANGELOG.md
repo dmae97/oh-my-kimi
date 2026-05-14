@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Removed the dedicated `exit_plan_mode` tool and its prompt, requiring plan-mode completion to use the existing `resolve` tool path instead
@@ -29,6 +30,7 @@
 
 ### Fixed
 
+- Fixed `--help` startup to avoid a config/model-registry load cycle so the root CLI help command now exits successfully in a clean environment
 - Queued `/skill:<name> [args]` invocations now show as compact `Steer: /skill:<name> [args]` / `Follow-up: /skill:<name> [args]` chips in the pending-messages bar and disappear when the agent consumes the queued message (parity with plain-text steer/follow-up). Previously the queued skill was invisible while queued and rendered as a full skill block at consumption with no chip ever appearing.
 - Plan-mode "Approve and compact context" no longer surfaces a red "Operation aborted" line on the plan-mode assistant message; the silent transition into compaction now renders cleanly on both live and replay paths. Real user-cancel aborts on unrelated turns and the existing "Compaction cancelled" path are unchanged.
 - Auto-recover conflict-resolution `write`/`read` paths that the agent malformed as `<file>:conflict://<N>` (or `<file>:conflict://*`) by mixing the `:conflicts` read selector with the `conflict://` scheme. The stripped `<file>:` prefix is stored on `ParsedConflictUri.recoveredPrefix` and, for writes, surfaces as a trailing note in the result text so the agent learns the correct shape. Clean `conflict://…` URIs are unchanged.

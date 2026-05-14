@@ -203,12 +203,14 @@ describe("AgentSession silent-abort marker stamping", () => {
 
 		// The emitted display event ALSO carries the marker because the spread copy
 		// happened AFTER the stamp.
-		const emitted = seen.find(e => e.type === "message_end") as
-			| Extract<AgentSessionEvent, { type: "message_end" }>
-			| undefined;
+		const emitted = seen.find(
+			(event): event is Extract<AgentSessionEvent, { type: "message_end" }> => event.type === "message_end",
+		);
 		expect(emitted).toBeDefined();
-		// biome-ignore lint/style/noNonNullAssertion: just asserted defined above
-		const emittedMessage = emitted!.message;
+		if (!emitted) {
+			throw new Error("expected a message_end event to be emitted");
+		}
+		const emittedMessage = emitted.message;
 		// `message_end` events are typed against AgentMessage (union over
 		// custom/exec/etc. roles too); narrow by asserting `role` so the
 		// `errorMessage` / `content` accesses below type-check.
