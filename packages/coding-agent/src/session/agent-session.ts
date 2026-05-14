@@ -16,7 +16,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-
+import { scheduler } from "node:timers/promises";
 import {
 	type Agent,
 	AgentBusyError,
@@ -47,14 +47,20 @@ import {
 	calculateRateLimitBackoffMs,
 	getSupportedEfforts,
 	isContextOverflow,
-	isUnexpectedSocketCloseMessage,
 	isUsageLimitError,
 	modelsAreEqual,
 	parseRateLimitReason,
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
-import { abortableSleep, getAgentDbPath, isEnoent, logger, prompt, Snowflake } from "@oh-my-pi/pi-utils";
+import {
+	getAgentDbPath,
+	isEnoent,
+	isUnexpectedSocketCloseMessage,
+	logger,
+	prompt,
+	Snowflake,
+} from "@oh-my-pi/pi-utils";
 import { type AsyncJob, AsyncJobManager } from "../async";
 import type { Rule } from "../capability/rule";
 import { MODEL_ROLE_IDS, type ModelRegistry } from "../config/model-registry";
@@ -208,7 +214,8 @@ export type AgentSessionEvent =
 	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
 	| { type: "todo_auto_clear" }
 	| { type: "irc_message"; message: CustomMessage }
-	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string };
+	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string }
+	| { type: "thinking_level_changed"; thinkingLevel: ThinkingLevel | undefined };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -1446,7 +1453,7 @@ export class AgentSession {
 		const scheduled = (async () => {
 			if (delayMs > 0) {
 				try {
-					await abortableSleep(delayMs, signal);
+					await scheduler.wait(delayMs, { signal });
 				} catch {
 					return;
 				}
@@ -4545,6 +4552,7 @@ export class AgentSession {
 			if (persist && effectiveLevel !== undefined && effectiveLevel !== ThinkingLevel.Off) {
 				this.settings.set("defaultThinkingLevel", effectiveLevel);
 			}
+			this.#emit({ type: "thinking_level_changed", thinkingLevel: effectiveLevel });
 		}
 	}
 
@@ -4678,8 +4686,6 @@ export class AgentSession {
 
 			let hookCompaction: CompactionResult | undefined;
 			let fromExtension = false;
-			let hookContext: string[] | undefined;
-			let hookPrompt: string | undefined;
 			let preserveData: Record<string, unknown> | undefined;
 
 			if (this.#extensionRunner?.hasHandlers("session_before_compact")) {
@@ -4701,23 +4707,7 @@ export class AgentSession {
 				}
 			}
 
-			if (!hookCompaction && this.#extensionRunner?.hasHandlers("session.compacting")) {
-				const compactMessages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
-				const result = (await this.#extensionRunner.emit({
-					type: "session.compacting",
-					sessionId: this.sessionId,
-					messages: compactMessages,
-				})) as { context?: string[]; prompt?: string; preserveData?: Record<string, unknown> } | undefined;
-
-				hookContext = result?.context;
-				hookPrompt = result?.prompt;
-				preserveData = result?.preserveData;
-			}
-
-			const memoryBackendContext = await this.#collectMemoryBackendContext(preparation);
-			if (memoryBackendContext) {
-				hookContext = hookContext ? [...hookContext, memoryBackendContext] : [memoryBackendContext];
-			}
+			const compactionPrep = await this.#prepareCompactionFromHooks(preparation, hookCompaction);
 
 			let summary: string;
 			let shortSummary: string | undefined;
@@ -4725,14 +4715,13 @@ export class AgentSession {
 			let tokensBefore: number;
 			let details: unknown;
 
-			if (hookCompaction) {
-				// Extension provided compaction content
-				summary = hookCompaction.summary;
-				shortSummary = hookCompaction.shortSummary;
-				firstKeptEntryId = hookCompaction.firstKeptEntryId;
-				tokensBefore = hookCompaction.tokensBefore;
-				details = hookCompaction.details;
-				preserveData ??= hookCompaction.preserveData;
+			if (compactionPrep.kind === "fromHook") {
+				summary = compactionPrep.summary;
+				shortSummary = compactionPrep.shortSummary;
+				firstKeptEntryId = compactionPrep.firstKeptEntryId;
+				tokensBefore = compactionPrep.tokensBefore;
+				details = compactionPrep.details;
+				preserveData = compactionPrep.preserveData;
 			} else {
 				// Generate compaction result. Only convert known abort-shaped
 				// rejections (AbortError raised while the abort signal is set,
@@ -4751,8 +4740,8 @@ export class AgentSession {
 						customInstructions,
 						compactionAbortController.signal,
 						{
-							promptOverride: hookPrompt,
-							extraContext: hookContext,
+							promptOverride: compactionPrep.hookPrompt,
+							extraContext: compactionPrep.hookContext,
 							remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
 						},
 					);
@@ -4761,7 +4750,7 @@ export class AgentSession {
 					firstKeptEntryId = result.firstKeptEntryId;
 					tokensBefore = result.tokensBefore;
 					details = result.details;
-					preserveData = { ...(preserveData ?? {}), ...(result.preserveData ?? {}) };
+					preserveData = { ...(compactionPrep.preserveData ?? {}), ...(result.preserveData ?? {}) };
 				} catch (err) {
 					if (err instanceof CompactionCancelledError) {
 						throw err;
@@ -5721,6 +5710,64 @@ export class AgentSession {
 		throw this.#buildCompactionAuthError();
 	}
 
+	async #prepareCompactionFromHooks(
+		preparation: CompactionPreparation,
+		hookCompaction: CompactionResult | undefined,
+	): Promise<
+		| {
+				kind: "fromHook";
+				summary: string;
+				shortSummary: string | undefined;
+				firstKeptEntryId: string;
+				tokensBefore: number;
+				details: unknown;
+				preserveData: Record<string, unknown> | undefined;
+		  }
+		| {
+				kind: "needsLlm";
+				hookContext: string[] | undefined;
+				hookPrompt: string | undefined;
+				preserveData: Record<string, unknown> | undefined;
+		  }
+	> {
+		let hookContext: string[] | undefined;
+		let hookPrompt: string | undefined;
+		let preserveData: Record<string, unknown> | undefined;
+
+		if (!hookCompaction && this.#extensionRunner?.hasHandlers("session.compacting")) {
+			const compactMessages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
+			const result = (await this.#extensionRunner.emit({
+				type: "session.compacting",
+				sessionId: this.sessionId,
+				messages: compactMessages,
+			})) as { context?: string[]; prompt?: string; preserveData?: Record<string, unknown> } | undefined;
+
+			hookContext = result?.context;
+			hookPrompt = result?.prompt;
+			preserveData = result?.preserveData;
+		}
+
+		const memoryBackendContext = await this.#collectMemoryBackendContext(preparation);
+		if (memoryBackendContext) {
+			hookContext = hookContext ? [...hookContext, memoryBackendContext] : [memoryBackendContext];
+		}
+
+		if (hookCompaction) {
+			preserveData ??= hookCompaction.preserveData;
+			return {
+				kind: "fromHook",
+				summary: hookCompaction.summary,
+				shortSummary: hookCompaction.shortSummary,
+				firstKeptEntryId: hookCompaction.firstKeptEntryId,
+				tokensBefore: hookCompaction.tokensBefore,
+				details: hookCompaction.details,
+				preserveData,
+			};
+		}
+
+		return { kind: "needsLlm", hookContext, hookPrompt, preserveData };
+	}
+
 	/**
 	 * Internal: Run auto-compaction with events.
 	 */
@@ -5842,8 +5889,6 @@ export class AgentSession {
 
 			let hookCompaction: CompactionResult | undefined;
 			let fromExtension = false;
-			let hookContext: string[] | undefined;
-			let hookPrompt: string | undefined;
 			let preserveData: Record<string, unknown> | undefined;
 
 			if (this.#extensionRunner?.hasHandlers("session_before_compact")) {
@@ -5872,23 +5917,7 @@ export class AgentSession {
 				}
 			}
 
-			if (!hookCompaction && this.#extensionRunner?.hasHandlers("session.compacting")) {
-				const compactMessages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
-				const result = (await this.#extensionRunner.emit({
-					type: "session.compacting",
-					sessionId: this.sessionId,
-					messages: compactMessages,
-				})) as { context?: string[]; prompt?: string; preserveData?: Record<string, unknown> } | undefined;
-
-				hookContext = result?.context;
-				hookPrompt = result?.prompt;
-				preserveData = result?.preserveData;
-			}
-
-			const memoryBackendContext = await this.#collectMemoryBackendContext(preparation);
-			if (memoryBackendContext) {
-				hookContext = hookContext ? [...hookContext, memoryBackendContext] : [memoryBackendContext];
-			}
+			const compactionPrep = await this.#prepareCompactionFromHooks(preparation, hookCompaction);
 
 			let summary: string;
 			let shortSummary: string | undefined;
@@ -5896,14 +5925,13 @@ export class AgentSession {
 			let tokensBefore: number;
 			let details: unknown;
 
-			if (hookCompaction) {
-				// Extension provided compaction content
-				summary = hookCompaction.summary;
-				shortSummary = hookCompaction.shortSummary;
-				firstKeptEntryId = hookCompaction.firstKeptEntryId;
-				tokensBefore = hookCompaction.tokensBefore;
-				details = hookCompaction.details;
-				preserveData ??= hookCompaction.preserveData;
+			if (compactionPrep.kind === "fromHook") {
+				summary = compactionPrep.summary;
+				shortSummary = compactionPrep.shortSummary;
+				firstKeptEntryId = compactionPrep.firstKeptEntryId;
+				tokensBefore = compactionPrep.tokensBefore;
+				details = compactionPrep.details;
+				preserveData = compactionPrep.preserveData;
 			} else {
 				const candidates = this.#getCompactionModelCandidates(availableModels);
 				const retrySettings = this.settings.getGroup("retry");
@@ -5918,8 +5946,8 @@ export class AgentSession {
 					while (true) {
 						try {
 							compactResult = await compact(preparation, candidate, apiKey, undefined, autoCompactionSignal, {
-								promptOverride: hookPrompt,
-								extraContext: hookContext,
+								promptOverride: compactionPrep.hookPrompt,
+								extraContext: compactionPrep.hookContext,
 								remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
 								metadata: this.agent.metadataForProvider(candidate.provider),
 								initiatorOverride: "agent",
@@ -5976,7 +6004,7 @@ export class AgentSession {
 								error: message,
 								model: `${candidate.provider}/${candidate.id}`,
 							});
-							await abortableSleep(delayMs, autoCompactionSignal);
+							await scheduler.wait(delayMs, { signal: autoCompactionSignal });
 						}
 					}
 
@@ -5997,7 +6025,7 @@ export class AgentSession {
 				firstKeptEntryId = compactResult.firstKeptEntryId;
 				tokensBefore = compactResult.tokensBefore;
 				details = compactResult.details;
-				preserveData = { ...(preserveData ?? {}), ...(compactResult.preserveData ?? {}) };
+				preserveData = { ...(compactionPrep.preserveData ?? {}), ...(compactResult.preserveData ?? {}) };
 			}
 
 			if (autoCompactionSignal.aborted) {
@@ -6502,7 +6530,7 @@ export class AgentSession {
 		this.#retryAbortController?.abort();
 		this.#retryAbortController = retryAbortController;
 		try {
-			await abortableSleep(delayMs, retryAbortController.signal);
+			await scheduler.wait(delayMs, { signal: retryAbortController.signal });
 		} catch {
 			if (this.#retryAbortController !== retryAbortController) {
 				return false;
@@ -7834,27 +7862,65 @@ export class AgentSession {
 	 * @returns Text content, or undefined if no assistant message exists
 	 */
 	getLastAssistantText(): string | undefined {
-		const lastAssistant = this.messages
-			.slice()
-			.reverse()
-			.find(m => {
-				if (m.role !== "assistant") return false;
-				const msg = m as AssistantMessage;
-				// Skip aborted messages with no content
-				if (msg.stopReason === "aborted" && msg.content.length === 0) return false;
-				return true;
-			});
-
+		const lastAssistant = this.#getLastCopyCandidateAssistantMessage();
 		if (!lastAssistant) return undefined;
 
 		let text = "";
-		for (const content of (lastAssistant as AssistantMessage).content) {
+		for (const content of lastAssistant.content) {
 			if (content.type === "text") {
 				text += content.text;
 			}
 		}
 
 		return text.trim() || undefined;
+	}
+
+	hasCopyCandidateAssistantMessage(): boolean {
+		return this.#getLastCopyCandidateAssistantMessage() !== undefined;
+	}
+
+	#getLastCopyCandidateAssistantMessage(): AssistantMessage | undefined {
+		for (let i = this.messages.length - 1; i >= 0; i--) {
+			const message = this.messages[i];
+			if (message.role !== "assistant") continue;
+
+			const assistantMessage = message as AssistantMessage;
+			// Skip aborted messages with no content
+			if (assistantMessage.stopReason === "aborted" && assistantMessage.content.length === 0) continue;
+
+			return assistantMessage;
+		}
+
+		return undefined;
+	}
+	/**
+	 * Get text content of the most recent visible handoff message.
+	 * Fresh handoff sessions store the handoff context as a custom message, not
+	 * an assistant message, so callers that copy the "last" message can use this
+	 * as a fallback before the new session has an assistant response.
+	 */
+	getLastVisibleHandoffText(): string | undefined {
+		for (let i = this.messages.length - 1; i >= 0; i--) {
+			const message = this.messages[i];
+			if (message.role !== "custom") continue;
+
+			const customMessage = message as CustomMessage;
+			if (customMessage.customType !== "handoff" || !customMessage.display) continue;
+
+			if (typeof customMessage.content === "string") {
+				return customMessage.content.trim() || undefined;
+			}
+
+			let text = "";
+			for (const content of customMessage.content) {
+				if (content.type === "text") {
+					text += content.text;
+				}
+			}
+			return text.trim() || undefined;
+		}
+
+		return undefined;
 	}
 
 	/**

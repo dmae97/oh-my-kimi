@@ -3,18 +3,20 @@
  *
  * Handles /ssh subcommands for managing SSH host configurations.
  */
-import { Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getProjectDir, getSSHConfigPath } from "@oh-my-pi/pi-utils";
 import { type SSHHost, sshCapability } from "../../capability/ssh";
 import { loadCapability } from "../../discovery";
 import { addSSHHost, readSSHConfigFile, removeSSHHost, type SSHHostConfig } from "../../ssh/config-writer";
-import { shortenPath } from "../../tools/render-utils";
-import { DynamicBorder } from "../components/dynamic-border";
 import { parseCommandArgs } from "../shared";
 import { theme } from "../theme/theme";
 import type { InteractiveModeContext } from "../types";
-
-type SSHAddScope = "user" | "project";
+import {
+	groupBySource,
+	parseRemoveArgs,
+	readScopeFlag,
+	type ScopeValue,
+	showCommandMessage,
+} from "./command-controller-shared";
 
 export class SSHCommandController {
 	constructor(private ctx: InteractiveModeContext) {}
@@ -90,7 +92,7 @@ export class SSHCommandController {
 		}
 
 		let name: string | undefined;
-		let scope: SSHAddScope = "project";
+		let scope: ScopeValue = "project";
 		let host: string | undefined;
 		let username: string | undefined;
 		let port: number | undefined;
@@ -167,12 +169,12 @@ export class SSHCommandController {
 				continue;
 			}
 			if (argToken === "--scope") {
-				const value = tokens[i + 1];
-				if (!value || (value !== "project" && value !== "user")) {
-					this.ctx.showError("Invalid --scope value. Use project or user.");
+				const r = readScopeFlag(tokens[i + 1]);
+				if (!r.ok) {
+					this.ctx.showError(r.error);
 					return;
 				}
-				scope = value;
+				scope = r.scope;
 				i += 2;
 				continue;
 			}
@@ -300,23 +302,7 @@ export class SSHCommandController {
 
 			// Show discovered hosts (from ssh.json, .ssh.json in project root, etc.)
 			if (discoveredHosts.length > 0) {
-				// Group by source
-				const bySource = new Map<string, SSHHost[]>();
-				for (const host of discoveredHosts) {
-					const key = `${host._source.providerName}|${host._source.path}`;
-					let group = bySource.get(key);
-					if (!group) {
-						group = [];
-						bySource.set(key, group);
-					}
-					group.push(host);
-				}
-
-				for (const [key, hosts] of bySource) {
-					const sepIdx = key.indexOf("|");
-					const providerName = key.slice(0, sepIdx);
-					const sourcePath = key.slice(sepIdx + 1);
-					const shortPath = shortenPath(sourcePath);
+				for (const { providerName, shortPath, items: hosts } of groupBySource(discoveredHosts, h => h._source)) {
 					lines.push(
 						theme.fg("accent", "Discovered") +
 							theme.fg("muted", ` (${providerName}: ${shortPath}):`) +
@@ -357,33 +343,12 @@ export class SSHCommandController {
 	async #handleRemove(text: string): Promise<void> {
 		const match = text.match(/^\/ssh\s+(?:remove|rm)\b\s*(.*)$/i);
 		const rest = match?.[1]?.trim() ?? "";
-		const tokens = parseCommandArgs(rest);
-
-		let name: string | undefined;
-		let scope: "project" | "user" = "project";
-		let i = 0;
-
-		if (tokens.length > 0 && !tokens[0].startsWith("-")) {
-			name = tokens[0];
-			i = 1;
-		}
-
-		while (i < tokens.length) {
-			const token = tokens[i];
-			if (token === "--scope") {
-				const value = tokens[i + 1];
-				if (!value || (value !== "project" && value !== "user")) {
-					this.ctx.showError("Invalid --scope value. Use project or user.");
-					return;
-				}
-				scope = value;
-				i += 2;
-				continue;
-			}
-			this.ctx.showError(`Unknown option: ${token}`);
+		const parsed = parseRemoveArgs(rest);
+		if (!parsed.ok) {
+			this.ctx.showError(parsed.error);
 			return;
 		}
-
+		const { name, scope } = parsed.value;
 		if (!name) {
 			this.ctx.showError("Host name required. Usage: /ssh remove <name> [--scope project|user]");
 			return;
@@ -412,10 +377,6 @@ export class SSHCommandController {
 	 * Show a message in the chat
 	 */
 	#showMessage(text: string): void {
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.chatContainer.addChild(new Text(text, 1, 1));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.ui.requestRender();
+		showCommandMessage(this.ctx, text);
 	}
 }

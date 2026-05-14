@@ -3,13 +3,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { hookFetch } from "@oh-my-pi/pi-utils";
-import { _resetSettingsForTest, Settings } from "../../src/config/settings";
+import { resetSettingsForTest, Settings } from "../../src/config/settings";
 import { searchSearXNG } from "../../src/web/search/providers/searxng";
 
 describe("SearXNG web search provider", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		delete process.env.SEARXNG_ENDPOINT;
 		delete process.env.SEARXNG_TOKEN;
 		delete process.env.SEARXNG_BASIC_USERNAME;

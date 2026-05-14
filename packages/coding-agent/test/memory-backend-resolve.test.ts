@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveMemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend";
 
 describe("resolveMemoryBackend", () => {
 	beforeEach(() => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 	});
 
 	afterEach(() => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 	});
 
 	it("returns the hindsight backend when memory.backend is hindsight, regardless of legacy memories.enabled", () => {

@@ -9,10 +9,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ToolCallContext } from "@oh-my-pi/pi-agent-core";
 import type { Ellipsis } from "@oh-my-pi/pi-natives";
+import type { Component } from "@oh-my-pi/pi-tui";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { pluralize } from "@oh-my-pi/pi-utils";
 import { settings } from "../config/settings";
 import type { Theme } from "../modes/theme/theme";
+import { Hasher } from "../tui/utils";
 import { formatDimensionNote, type ResizedImage } from "../utils/image-resize";
 
 export { Ellipsis } from "@oh-my-pi/pi-natives";
@@ -640,6 +642,96 @@ export function formatParseErrors(errors: string[]): string[] {
 			? `Parse issues (${PARSE_ERRORS_LIMIT} / ${deduped.length}):`
 			: "Parse issues:";
 	return [header, ...capped.map(err => `- ${err}`)];
+}
+
+// =============================================================================
+// Renderer helpers shared by search / find / ast tools
+// =============================================================================
+
+/**
+ * Group `rawLines` by blank-line separators, mirroring the historical search /
+ * ast-grep / ast-edit renderer behavior: if any blank line is present, splits on
+ * runs of blank lines; otherwise collapses non-empty lines into a single group.
+ */
+export function splitGroupsByBlankLine(rawLines: string[]): string[][] {
+	const hasSeparators = rawLines.some(line => line.trim().length === 0);
+	const groups: string[][] = [];
+	if (hasSeparators) {
+		let current: string[] = [];
+		for (const line of rawLines) {
+			if (line.trim().length === 0) {
+				if (current.length > 0) {
+					groups.push(current);
+					current = [];
+				}
+				continue;
+			}
+			current.push(line);
+		}
+		if (current.length > 0) groups.push(current);
+	} else {
+		const nonEmpty = rawLines.filter(line => line.trim().length > 0);
+		if (nonEmpty.length > 0) {
+			groups.push(nonEmpty);
+		}
+	}
+	return groups;
+}
+
+/**
+ * Standard width+expand keyed render cache used by every search-style tool
+ * renderer. `compute` re-runs only when the cache key changes; the returned
+ * Component is the canonical `{ render, invalidate }` pair.
+ */
+export function createCachedComponent(
+	getExpanded: () => boolean,
+	compute: (width: number, expanded: boolean) => string[],
+): Component {
+	let cached: { key: bigint; lines: string[] } | undefined;
+	return {
+		render(width: number): string[] {
+			const expanded = getExpanded();
+			const key = new Hasher().bool(expanded).u32(width).digest();
+			if (cached?.key === key) return cached.lines;
+			const lines = compute(width, expanded);
+			cached = { key, lines };
+			return lines;
+		},
+		invalidate() {
+			cached = undefined;
+		},
+	};
+}
+
+/**
+ * Append the indented bullet list of parse errors (capped at
+ * {@link PARSE_ERRORS_LIMIT}) to `lines`, with an overflow summary line if the
+ * total exceeds the cap. No-op when `parseErrors` is empty.
+ */
+export function appendParseErrorsBulletList(
+	lines: string[],
+	parseErrors: readonly string[] | undefined,
+	theme: Theme,
+): void {
+	if (!parseErrors || parseErrors.length === 0) return;
+	const capped = parseErrors.slice(0, PARSE_ERRORS_LIMIT);
+	for (const err of capped) {
+		lines.push(theme.fg("warning", `  - ${err}`));
+	}
+	if (parseErrors.length > PARSE_ERRORS_LIMIT) {
+		lines.push(theme.fg("dim", `  … ${parseErrors.length - PARSE_ERRORS_LIMIT} more`));
+	}
+}
+
+/**
+ * Human-readable summary string for the parse-issues count, capped by
+ * {@link PARSE_ERRORS_LIMIT}.
+ */
+export function formatParseErrorsCountLabel(parseErrors: readonly string[]): string {
+	const total = parseErrors.length;
+	return total > PARSE_ERRORS_LIMIT
+		? `${PARSE_ERRORS_LIMIT} / ${total} parse issues`
+		: `${total} parse issue${total !== 1 ? "s" : ""}`;
 }
 
 // =============================================================================

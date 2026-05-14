@@ -1,6 +1,7 @@
 import {
 	type Component,
 	Container,
+	fuzzyFilter,
 	Input,
 	matchesKey,
 	padding,
@@ -14,7 +15,6 @@ import { formatBytes } from "@oh-my-pi/pi-utils";
 import { theme } from "../../modes/theme/theme";
 import { matchesAppInterrupt } from "../../modes/utils/keybinding-matchers";
 import type { SessionInfo } from "../../session/session-manager";
-import { fuzzyFilter } from "../../utils/fuzzy";
 import { DynamicBorder } from "./dynamic-border";
 import { HookSelectorComponent } from "./hook-selector";
 

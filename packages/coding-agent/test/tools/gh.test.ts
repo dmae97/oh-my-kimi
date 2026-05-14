@@ -2,9 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
 	buildSearchDateQualifier,
@@ -38,22 +36,6 @@ function createSession(
 		getSessionSpawns: () => null,
 		settings,
 	};
-}
-
-function _createToolContext(settings: Settings): AgentToolContext {
-	return {
-		sessionManager: SessionManager.inMemory(),
-		settings,
-		modelRegistry: {
-			find: () => undefined,
-			getAll: () => [],
-			getApiKey: async () => undefined,
-		} as unknown as AgentToolContext["modelRegistry"],
-		model: undefined,
-		isIdle: () => true,
-		hasQueuedMessages: () => false,
-		abort: () => {},
-	} as AgentToolContext;
 }
 
 function runGit(cwd: string, args: string[]): string {

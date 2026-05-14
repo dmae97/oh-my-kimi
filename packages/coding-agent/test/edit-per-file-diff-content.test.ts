@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	DEFAULT_FUZZY_THRESHOLD,
 	EditTool,
@@ -40,13 +40,13 @@ const noopBeginDeferred = (_p: string) => ({
 let tempDir: string;
 
 beforeEach(async () => {
-	_resetSettingsForTest();
+	resetSettingsForTest();
 	tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-edit-diff-"));
 	await Settings.init({ inMemory: true, cwd: tempDir });
 });
 
 afterEach(async () => {
-	_resetSettingsForTest();
+	resetSettingsForTest();
 	await fs.rm(tempDir, { recursive: true, force: true });
 });
 

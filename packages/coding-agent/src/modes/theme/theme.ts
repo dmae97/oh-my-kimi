@@ -2332,12 +2332,12 @@ export function getSymbolTheme(): SymbolTheme {
 	};
 }
 
-let _markdownTheme: MarkdownTheme | undefined;
-let _markdownThemeRef: Theme | undefined;
+let cachedMarkdownTheme: MarkdownTheme | undefined;
+let cachedMarkdownThemeRef: Theme | undefined;
 
 export function getMarkdownTheme(): MarkdownTheme {
-	if (_markdownTheme !== undefined && _markdownThemeRef === theme) {
-		return _markdownTheme;
+	if (cachedMarkdownTheme !== undefined && cachedMarkdownThemeRef === theme) {
+		return cachedMarkdownTheme;
 	}
 	const markdownTheme: MarkdownTheme = {
 		heading: (text: string) => theme.fg("mdHeading", text),
@@ -2365,8 +2365,8 @@ export function getMarkdownTheme(): MarkdownTheme {
 			}
 		},
 	};
-	_markdownTheme = markdownTheme;
-	_markdownThemeRef = theme;
+	cachedMarkdownTheme = markdownTheme;
+	cachedMarkdownThemeRef = theme;
 	return markdownTheme;
 }
 

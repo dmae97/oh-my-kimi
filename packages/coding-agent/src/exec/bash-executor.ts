@@ -65,7 +65,8 @@ async function resolveShellCwd(cwd: string | undefined): Promise<string | undefi
 	}
 }
 
-function buildMinimizerOptions(group: ShellMinimizerSettings): MinimizerOptions | undefined {
+/** Translate `ShellMinimizerSettings` into native `MinimizerOptions`, or `undefined` when disabled. */
+export function buildMinimizerOptions(group: ShellMinimizerSettings): MinimizerOptions | undefined {
 	if (!group.enabled) return undefined;
 	return {
 		enabled: true,

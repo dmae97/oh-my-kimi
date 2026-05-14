@@ -1,3 +1,4 @@
+import * as git from "../utils/git";
 import type { ASIData, ASIValue, MetricDirection, NumericMetricMap } from "./types";
 
 export const METRIC_LINE_PREFIX = "METRIC";
@@ -198,4 +199,20 @@ function sanitizeAsiValue(value: unknown): ASIValue | undefined {
 		return result;
 	}
 	return undefined;
+}
+
+export async function tryGitStatus(cwd: string): Promise<string> {
+	try {
+		return await git.status(cwd, { porcelainV1: true, untrackedFiles: "all", z: true });
+	} catch {
+		return "";
+	}
+}
+
+export async function tryGitPrefix(cwd: string): Promise<string> {
+	try {
+		return await git.show.prefix(cwd);
+	} catch {
+		return "";
+	}
 }

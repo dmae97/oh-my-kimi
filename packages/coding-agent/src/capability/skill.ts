@@ -14,6 +14,13 @@ export interface SkillFrontmatter {
 	description?: string;
 	globs?: string[];
 	alwaysApply?: boolean;
+	/**
+	 * When `true`, the skill is loaded and accessible via `skill://<name>` (and
+	 * `/skill:<name>` slash commands), but is omitted from the rendered system
+	 * prompt's skill listing. Use for skills the user opts into explicitly
+	 * rather than ones the model should auto-discover.
+	 */
+	hide?: boolean;
 	[key: string]: unknown;
 }
 

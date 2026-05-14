@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 
@@ -26,7 +26,7 @@ function createAssistantMessage(): AssistantMessage {
 
 describe("EventController idle compaction teardown", () => {
 	beforeEach(async () => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		await Settings.init({
 			inMemory: true,
 			overrides: {
@@ -41,7 +41,7 @@ describe("EventController idle compaction teardown", () => {
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
-		_resetSettingsForTest();
+		resetSettingsForTest();
 	});
 
 	it("cancels scheduled idle compaction when disposed", async () => {

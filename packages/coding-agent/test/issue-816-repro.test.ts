@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../src/config/model-registry";
@@ -22,7 +22,7 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 	});
 
 	beforeEach(async () => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-issue-816-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
@@ -52,7 +52,7 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		await session?.dispose();
 		authStorage?.close();
 		tempDir?.removeSync();
-		_resetSettingsForTest();
+		resetSettingsForTest();
 	});
 
 	it("does not switch to the plan-role model after exit when the entry switch was deferred by streaming", async () => {

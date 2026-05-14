@@ -8,9 +8,9 @@ import * as path from "node:path";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { discoverAndLoadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import {
-	__test_setExtensionHandlerTimeoutMs,
 	EXTENSION_HANDLER_TIMEOUT_MS,
 	ExtensionRunner,
+	testSetExtensionHandlerTimeoutMs,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -34,7 +34,7 @@ describe("ExtensionRunner", () => {
 	});
 
 	afterEach(() => {
-		__test_setExtensionHandlerTimeoutMs(EXTENSION_HANDLER_TIMEOUT_MS);
+		testSetExtensionHandlerTimeoutMs(EXTENSION_HANDLER_TIMEOUT_MS);
 		authStorage.close();
 		tempDir.removeSync();
 	});
@@ -644,7 +644,7 @@ describe("ExtensionRunner", () => {
 			runner.onError(err => {
 				errors.push(err);
 			});
-			__test_setExtensionHandlerTimeoutMs(50);
+			testSetExtensionHandlerTimeoutMs(50);
 
 			const startedAt = performance.now();
 			await runner.emit({ type: "session_start" });

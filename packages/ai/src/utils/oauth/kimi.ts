@@ -6,7 +6,8 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $env, abortableSleep, getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { scheduler } from "node:timers/promises";
+import { $env, getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
 import packageJson from "../../../package.json" with { type: "json" };
 import type { OAuthController, OAuthCredentials } from "./types";
 
@@ -185,7 +186,7 @@ async function pollForToken(
 
 		const error = payload.error;
 		if (error === "authorization_pending") {
-			await abortableSleep(waitMs, signal);
+			await scheduler.wait(waitMs, { signal });
 			continue;
 		}
 
@@ -193,7 +194,7 @@ async function pollForToken(
 			waitMs += 5000;
 			const retryAfter = typeof payload.interval === "number" ? payload.interval * 1000 : undefined;
 			if (retryAfter && retryAfter > waitMs) waitMs = retryAfter;
-			await abortableSleep(waitMs, signal);
+			await scheduler.wait(waitMs, { signal });
 			continue;
 		}
 

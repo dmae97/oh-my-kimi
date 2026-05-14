@@ -36,7 +36,6 @@ const FENCE_RE = /^\s*(?:```+|~~~+)/;
 const SCRIPT_CLASS =
 	"\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u0400-\u04FF\u0E00-\u0E7F\u10A0-\u10FF\u0530-\u058F\u0C80-\u0CFF\u0C00-\u0C7F\u0900-\u097F\u0600-\u06FF\u0D00-\u0D7F";
 const SCRIPT_RUN_RE = new RegExp(`[${SCRIPT_CLASS}]{2,}`, "u");
-const _SCRIPT_CHAR_RE = new RegExp(`[${SCRIPT_CLASS}]`, "u");
 
 // Recovery registry. Each entry's parser must recognize the configured
 // sentinel (per-tool, see eval/parse.ts and hashline/parser.ts) and surface

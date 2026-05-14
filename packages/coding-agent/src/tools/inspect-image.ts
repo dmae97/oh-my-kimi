@@ -1,7 +1,8 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { type Api, type AssistantMessage, completeSimple, type Model } from "@oh-my-pi/pi-ai";
+import { type Api, completeSimple, type Model } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import { extractTextContent } from "../commit/utils";
 import { expandRoleAlias, resolveModelFromString } from "../config/model-resolver";
 import inspectImageDescription from "../prompts/tools/inspect-image.md" with { type: "text" };
 import inspectImageSystemPromptTemplate from "../prompts/tools/inspect-image-system.md" with { type: "text" };
@@ -28,14 +29,6 @@ export interface InspectImageToolDetails {
 	model: string;
 	imagePath: string;
 	mimeType: string;
-}
-
-function extractResponseText(message: AssistantMessage): string {
-	return message.content
-		.filter(content => content.type === "text")
-		.map(content => content.text)
-		.join("")
-		.trim();
 }
 
 export class InspectImageTool implements AgentTool<typeof inspectImageSchema, InspectImageToolDetails> {
@@ -151,7 +144,7 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 			throw new ToolError("inspect_image request aborted.");
 		}
 
-		const text = extractResponseText(response);
+		const text = extractTextContent(response);
 		if (!text) {
 			throw new ToolError("inspect_image model returned no text output.");
 		}

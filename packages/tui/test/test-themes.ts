@@ -48,7 +48,7 @@ const defaultSymbols: SymbolTheme = {
 	spinnerFrames: ["-", "\\", "|", "/"],
 };
 
-export const defaultSelectListTheme: SelectListTheme = {
+const defaultSelectListTheme: SelectListTheme = {
 	selectedPrefix: (text: string) => chalk.blue(text),
 	selectedText: (text: string) => chalk.bold(text),
 	description: (text: string) => chalk.dim(text),

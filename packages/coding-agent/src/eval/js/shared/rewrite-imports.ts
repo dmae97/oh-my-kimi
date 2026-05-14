@@ -180,7 +180,7 @@ export function rewriteImports(code: string): string {
  * Nested declarations (inside functions, blocks, classes) are left alone \u2014 they're
  * scoped to their enclosing function/block regardless of `var` vs `let`/`const`.
  */
-export function demoteTopLevelLexicals(code: string): string {
+function demoteTopLevelLexicals(code: string): string {
 	if (!/\b(?:const|let|class)\b/.test(code)) return code;
 
 	const ast = parseProgram(code);
@@ -248,7 +248,7 @@ function returnFinalExpression(code: string): { source: string; returned: boolea
  * common case avoids an extra transpile pass. We detect "looks like TS" with a cheap regex
  * before invoking the transpiler.
  */
-export function stripTypeScript(code: string): string {
+function stripTypeScript(code: string): string {
 	if (!LOOKS_LIKE_TS.test(code)) return code;
 	try {
 		return new Bun.Transpiler({ loader: "ts" }).transformSync(code);

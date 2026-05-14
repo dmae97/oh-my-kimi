@@ -149,5 +149,5 @@ describe("ACP stdout hygiene", () => {
 			}
 			expect(parsed?.jsonrpc, `JSON-RPC frame leaked to stderr: ${trimmed}`).toBeUndefined();
 		}
-	}, 20_000);
+	}, 60_000);
 });

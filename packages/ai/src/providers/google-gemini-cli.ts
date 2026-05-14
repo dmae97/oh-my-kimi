@@ -4,8 +4,9 @@
  * Uses the Cloud Code Assist API endpoint to access Gemini and Claude models.
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { scheduler } from "node:timers/promises";
 import type { Content, FunctionCallingConfigMode, ThinkingConfig } from "@google/genai";
-import { abortableSleep, readSseJson } from "@oh-my-pi/pi-utils";
+import { fetchWithRetry, readSseJson } from "@oh-my-pi/pi-utils";
 import { calculateCost } from "../models";
 import type {
 	Api,
@@ -23,28 +24,27 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
 import { refreshAntigravityToken } from "../utils/oauth/google-antigravity";
 import { refreshGoogleCloudToken } from "../utils/oauth/google-gemini-cli";
-import { extractHttpStatusFromError } from "../utils/retry";
 import { sanitizeSchemaForCCA } from "../utils/schema";
-import {
-	ANTIGRAVITY_SYSTEM_INSTRUCTION,
-	extractRetryDelay,
-	getAntigravityUserAgent,
-	getGeminiCliHeaders,
-} from "./google-gemini-headers";
+import { ANTIGRAVITY_SYSTEM_INSTRUCTION, getAntigravityUserAgent, getGeminiCliHeaders } from "./google-gemini-headers";
 import {
 	convertMessages,
 	convertTools,
+	type GoogleThinkingLevel,
 	isThinkingPart,
 	mapStopReasonString,
 	mapToolChoice,
+	nextToolCallId,
+	pushBlockEndEvent,
+	pushToolCallEvents,
 	retainThoughtSignature,
+	startTextOrThinkingBlock,
 } from "./google-shared";
 
 /**
- * Thinking level for Gemini 3 models.
- * Mirrors Google's ThinkingLevel enum values.
+ * Thinking level for Gemini 3 models. Re-exported from `google-shared` so existing
+ * `import { GoogleThinkingLevel } from "./google-gemini-cli"` callers keep working.
  */
-export type GoogleThinkingLevel = "THINKING_LEVEL_UNSPECIFIED" | "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
+export type { GoogleThinkingLevel };
 
 export interface GoogleGeminiCliOptions extends StreamOptions {
 	toolChoice?: "auto" | "none" | "any";
@@ -72,14 +72,10 @@ const ANTIGRAVITY_ENDPOINT_FALLBACKS = [ANTIGRAVITY_DAILY_ENDPOINT, ANTIGRAVITY_
 
 export {
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
-	extractRetryDelay,
 	getAntigravityUserAgent,
 	getGeminiCliHeaders,
 	getGeminiCliUserAgent,
 } from "./google-gemini-headers";
-
-// Counter for generating unique tool call IDs
-let toolCallCounter = 0;
 
 // Retry configuration
 const MAX_RETRIES = 3;
@@ -102,16 +98,6 @@ function needsClaudeThinkingBetaHeader(model: Model<"google-gemini-cli">): boole
 function shouldInjectAntigravitySystemInstruction(modelId: string): boolean {
 	const normalized = modelId.toLowerCase();
 	return normalized.includes("claude") || normalized.includes("gemini-3-pro-high");
-}
-
-/**
- * Check if an error is retryable (rate limit, server error, network error, etc.)
- */
-function isRetryableError(status: number, errorText: string): boolean {
-	if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) {
-		return true;
-	}
-	return /resource.?exhausted|rate.?limit|overloaded|service.?unavailable|other.?side.?closed/i.test(errorText);
 }
 
 /**
@@ -366,109 +352,26 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				headers: requestHeaders,
 			};
 
-			// Fetch with retry logic for rate limits and transient errors
-			let response: Response | undefined;
-			let lastError: Error | undefined;
-			let requestUrl: string | undefined;
-			let rateLimitTimeSpent = 0;
-
-			for (let attempt = 0; ; attempt++) {
-				if (options?.signal?.aborted) {
-					throw new Error("Request was aborted");
-				}
-
-				try {
-					const endpoint = endpoints[Math.min(attempt, endpoints.length - 1)];
-					requestUrl = `${endpoint}/v1internal:streamGenerateContent?alt=sse`;
-					response = await fetch(requestUrl, {
-						method: "POST",
-						headers: requestHeaders,
-						body: requestBodyJson,
-						signal: options?.signal,
-					});
-
-					if (response.ok) {
-						break; // Success, exit retry loop
-					}
-
-					const errorText = await response.text();
-
-					// Handle 429 rate limits with time budget
-					if (response.status === 429) {
-						if (/quota|exhausted/i.test(errorText)) {
-							throw withHttpStatus(
-								new Error(`Cloud Code Assist API error (429): ${extractErrorMessage(errorText)}`),
-								429,
-							);
-						}
-						const serverDelay = extractRetryDelay(errorText, response);
-						if (serverDelay && rateLimitTimeSpent + serverDelay <= RATE_LIMIT_BUDGET_MS) {
-							rateLimitTimeSpent += serverDelay;
-							await abortableSleep(serverDelay, options?.signal);
-							continue;
-						}
-						// Fallback: use exponential backoff if no server delay, up to MAX_RETRIES
-						if (!serverDelay && attempt < MAX_RETRIES) {
-							await abortableSleep(BASE_DELAY_MS * 2 ** attempt, options?.signal);
-							continue;
-						}
-					} else if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
-						// Non-429 retryable errors use standard attempt cap
-						const serverDelay = extractRetryDelay(errorText, response);
-						const delayMs = serverDelay ?? BASE_DELAY_MS * 2 ** attempt;
-
-						// Check if server delay exceeds max allowed (default: 60s) for non-429 errors
-						const maxDelayMs = options?.maxRetryDelayMs ?? 60000;
-						if (maxDelayMs > 0 && serverDelay && serverDelay > maxDelayMs) {
-							const delaySeconds = Math.ceil(serverDelay / 1000);
-							throw withHttpStatus(
-								new Error(
-									`Server requested ${delaySeconds}s retry delay (max: ${Math.ceil(maxDelayMs / 1000)}s). ${extractErrorMessage(errorText)}`,
-								),
-								response.status,
-							);
-						}
-
-						await abortableSleep(delayMs, options?.signal);
-						continue;
-					}
-
-					// Not retryable or budget exceeded
-					throw withHttpStatus(
-						new Error(`Cloud Code Assist API error (${response.status}): ${extractErrorMessage(errorText)}`),
-						response.status,
-					);
-				} catch (error) {
-					// Check for abort - fetch throws AbortError, our code throws "Request was aborted"
-					if (error instanceof Error) {
-						if (error.name === "AbortError" || error.message === "Request was aborted") {
-							throw new Error("Request was aborted");
-						}
-					}
-
-					// HTTP responses are handled inside the try block.
-					// If we intentionally throw with status metadata, don't convert it into a network retry.
-					if (extractHttpStatusFromError(error) !== undefined) {
-						throw error;
-					}
-					// Extract detailed error message from fetch errors (Node includes cause)
-					lastError = error instanceof Error ? error : new Error(String(error));
-					if (lastError.message === "fetch failed" && lastError.cause instanceof Error) {
-						lastError = new Error(`Network error: ${lastError.cause.message}`);
-					}
-					// Network errors are retryable
-					if (attempt < MAX_RETRIES) {
-						const delayMs = BASE_DELAY_MS * 2 ** attempt;
-						await abortableSleep(delayMs, options?.signal);
-						continue;
-					}
-					throw lastError;
-				}
+			const response = await fetchWithRetry(
+				attempt => `${endpoints[Math.min(attempt, endpoints.length - 1)]}/v1internal:streamGenerateContent?alt=sse`,
+				{
+					method: "POST",
+					headers: requestHeaders,
+					body: requestBodyJson,
+					signal: options?.signal,
+					maxAttempts: MAX_RETRIES + 1,
+					defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
+					maxDelayMs: options?.maxRetryDelayMs ?? RATE_LIMIT_BUDGET_MS,
+				},
+			);
+			if (!response.ok) {
+				const errorText = await response.text();
+				throw withHttpStatus(
+					new Error(`Cloud Code Assist API error (${response.status}): ${extractErrorMessage(errorText)}`),
+					response.status,
+				);
 			}
-
-			if (!response?.ok) {
-				throw lastError ?? new Error("Failed to get response after retries");
-			}
+			const requestUrl = response.url;
 
 			let started = false;
 			const ensureStarted = () => {
@@ -525,37 +428,9 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 									(!isThinking && currentBlock.type !== "text")
 								) {
 									if (currentBlock) {
-										if (currentBlock.type === "text") {
-											stream.push({
-												type: "text_end",
-												contentIndex: blocks.length - 1,
-												content: currentBlock.text,
-												partial: output,
-											});
-										} else {
-											stream.push({
-												type: "thinking_end",
-												contentIndex: blockIndex(),
-												content: currentBlock.thinking,
-												partial: output,
-											});
-										}
+										pushBlockEndEvent(currentBlock, blockIndex(), output, stream);
 									}
-									if (isThinking) {
-										currentBlock = { type: "thinking", thinking: "", thinkingSignature: undefined };
-										output.content.push(currentBlock);
-										ensureStarted();
-										stream.push({
-											type: "thinking_start",
-											contentIndex: blockIndex(),
-											partial: output,
-										});
-									} else {
-										currentBlock = { type: "text", text: "" };
-										output.content.push(currentBlock);
-										ensureStarted();
-										stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
-									}
+									currentBlock = startTextOrThinkingBlock(isThinking, output, stream, ensureStarted);
 								}
 								if (currentBlock.type === "thinking") {
 									currentBlock.thinking += part.text;
@@ -587,30 +462,14 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 							if (part.functionCall) {
 								hasContent = true;
 								if (currentBlock) {
-									if (currentBlock.type === "text") {
-										stream.push({
-											type: "text_end",
-											contentIndex: blockIndex(),
-											content: currentBlock.text,
-											partial: output,
-										});
-									} else {
-										stream.push({
-											type: "thinking_end",
-											contentIndex: blockIndex(),
-											content: currentBlock.thinking,
-											partial: output,
-										});
-									}
+									pushBlockEndEvent(currentBlock, blockIndex(), output, stream);
 									currentBlock = null;
 								}
 
 								const providedId = part.functionCall.id;
 								const needsNewId =
 									!providedId || output.content.some(b => b.type === "toolCall" && b.id === providedId);
-								const toolCallId = needsNewId
-									? `${part.functionCall.name}_${Date.now()}_${++toolCallCounter}`
-									: providedId;
+								const toolCallId = needsNewId ? nextToolCallId(part.functionCall.name || "tool") : providedId;
 
 								const toolCall: ToolCall = {
 									type: "toolCall",
@@ -622,19 +481,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 
 								output.content.push(toolCall);
 								ensureStarted();
-								stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
-								stream.push({
-									type: "toolcall_delta",
-									contentIndex: blockIndex(),
-									delta: JSON.stringify(toolCall.arguments),
-									partial: output,
-								});
-								stream.push({
-									type: "toolcall_end",
-									contentIndex: blockIndex(),
-									toolCall,
-									partial: output,
-								});
+								pushToolCallEvents(toolCall, blockIndex(), output, stream);
 							}
 						}
 					}
@@ -671,21 +518,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				}
 
 				if (currentBlock) {
-					if (currentBlock.type === "text") {
-						stream.push({
-							type: "text_end",
-							contentIndex: blockIndex(),
-							content: currentBlock.text,
-							partial: output,
-						});
-					} else {
-						stream.push({
-							type: "thinking_end",
-							contentIndex: blockIndex(),
-							content: currentBlock.thinking,
-							partial: output,
-						});
-					}
+					pushBlockEndEvent(currentBlock, blockIndex(), output, stream);
 				}
 
 				return hasContent;
@@ -702,7 +535,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				if (emptyAttempt > 0) {
 					const backoffMs = EMPTY_STREAM_BASE_DELAY_MS * 2 ** (emptyAttempt - 1);
 					try {
-						await abortableSleep(backoffMs, options?.signal);
+						await scheduler.wait(backoffMs, { signal: options?.signal });
 					} catch {
 						// Normalize AbortError to expected message for consistent error handling
 						throw new Error("Request was aborted");

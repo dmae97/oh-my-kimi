@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
-import { _resetSettingsForTest, Settings } from "../src/config/settings";
+import { resetSettingsForTest, Settings } from "../src/config/settings";
 import type { StatusLineSegmentId } from "../src/config/settings-schema";
 import { StatusLineComponent } from "../src/modes/components/status-line";
 import type { SegmentContext } from "../src/modes/components/status-line/segments";
@@ -15,13 +15,13 @@ import { getSessionAccentAnsi, getSessionAccentHex } from "../src/utils/session-
 const originalProjectDir = getProjectDir();
 
 beforeAll(async () => {
-	_resetSettingsForTest();
+	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
 	await initTheme();
 });
 
 afterAll(() => {
-	_resetSettingsForTest();
+	resetSettingsForTest();
 	setProjectDir(originalProjectDir);
 });
 

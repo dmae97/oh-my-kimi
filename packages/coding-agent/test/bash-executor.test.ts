@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { executeBash } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
 import * as shellSnapshot from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
@@ -20,12 +20,12 @@ describe("executeBash", () => {
 
 	beforeEach(async () => {
 		tempDir = makeTempDir();
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		await Settings.init({ inMemory: true, cwd: tempDir });
 	});
 
 	afterEach(() => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		vi.restoreAllMocks();
 		if (fs.existsSync(tempDir)) {
 			fs.rmSync(tempDir, { recursive: true });
