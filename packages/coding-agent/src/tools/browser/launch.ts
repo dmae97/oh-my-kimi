@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { $which, getPuppeteerDir, logger } from "@oh-my-pi/pi-utils";
 import * as browsers from "@puppeteer/browsers";
-import type { Browser, CDPSession, Page, default as Puppeteer } from "puppeteer-core";
+import type { Browser, CDPSession, Page, default as Puppeteer, Target } from "puppeteer-core";
 import { PUPPETEER_REVISIONS } from "puppeteer-core/internal/revisions.js";
 import stealthTamperingScript from "../puppeteer/00_stealth_tampering.txt" with { type: "text" };
 import stealthActivityScript from "../puppeteer/01_stealth_activity.txt" with { type: "text" };
@@ -37,6 +37,8 @@ const STEALTH_IGNORE_DEFAULT_ARGS = [
 ];
 const STEALTH_ACCEPT_LANGUAGE = "en-US,en";
 
+const USER_AGENT_TARGET_TIMEOUT_MS = 5_000;
+const USER_AGENT_TARGET_TYPES = new Set(["page", "webview", "background_page"]);
 const PUPPETEER_SOURCE_URL_SUFFIX = "//# sourceURL=__puppeteer_evaluation_script__";
 
 /**
@@ -463,6 +465,7 @@ export interface UserAgentSession {
 async function configureUserAgentTargets(
 	browser: Browser,
 	state: { browserSession: CDPSession | null; override: UserAgentOverride },
+	targetTimeoutMs = USER_AGENT_TARGET_TIMEOUT_MS,
 ): Promise<void> {
 	if (!state.browserSession) {
 		state.browserSession = await browser.target().createCDPSession();
@@ -471,21 +474,70 @@ async function configureUserAgentTargets(
 			waitForDebuggerOnStart: false,
 			flatten: true,
 		});
-		state.browserSession.on("Target.attachedToTarget", async (event: { sessionId: string }) => {
-			const connection = state.browserSession?.connection();
-			const session = connection?.session(event.sessionId);
-			if (!session) return;
-			await sendUserAgentOverride(wrapSession(session), state.override);
-		});
+		state.browserSession.on(
+			"Target.attachedToTarget",
+			async (event: { sessionId: string; targetInfo?: { type?: string } }) => {
+				if (!targetInfoSupportsUserAgentOverride(event.targetInfo)) return;
+				const connection = state.browserSession?.connection();
+				const session = connection?.session(event.sessionId);
+				if (!session) return;
+				await withSoftTimeout(
+					sendUserAgentOverride(wrapSession(session), state.override),
+					targetTimeoutMs,
+					"new target user-agent override",
+				);
+			},
+		);
 	}
 
-	const targets = browser.targets();
+	const targets = browser.targets().filter(targetSupportsUserAgentOverride);
 	await Promise.all(
 		targets.map(async target => {
-			const session = await target.createCDPSession();
-			await sendUserAgentOverride(wrapSession(session), state.override);
+			await withSoftTimeout(
+				applyTargetUserAgentOverride(target, state.override),
+				targetTimeoutMs,
+				"target user-agent override",
+			);
 		}),
 	);
+}
+
+function targetSupportsUserAgentOverride(target: Target): boolean {
+	return targetInfoSupportsUserAgentOverride({ type: target.type() });
+}
+
+function targetInfoSupportsUserAgentOverride(targetInfo: { type?: string } | undefined): boolean {
+	return Boolean(targetInfo?.type && USER_AGENT_TARGET_TYPES.has(targetInfo.type));
+}
+
+async function applyTargetUserAgentOverride(target: Target, override: UserAgentOverride): Promise<void> {
+	const session = await target.createCDPSession();
+	try {
+		await sendUserAgentOverride(wrapSession(session), override);
+	} finally {
+		await session.detach().catch(() => undefined);
+	}
+}
+
+async function withSoftTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T | undefined> {
+	let timeout: NodeJS.Timeout | undefined;
+	const timeoutPromise = new Promise<undefined>(resolve => {
+		timeout = setTimeout(() => {
+			logger.debug(`Timed out applying ${label}`);
+			resolve(undefined);
+		}, timeoutMs);
+	});
+	try {
+		return await Promise.race([
+			promise.catch(error => {
+				logger.debug(`Failed to apply ${label}`, { error: error instanceof Error ? error.message : String(error) });
+				return undefined;
+			}),
+			timeoutPromise,
+		]);
+	} finally {
+		if (timeout) clearTimeout(timeout);
+	}
 }
 
 async function injectStealthScripts(page: Page): Promise<void> {
@@ -573,4 +625,15 @@ export async function applyStealthPatches(
 	await configureUserAgentTargets(browser, targetState);
 	state.browserSession = targetState.browserSession;
 	await injectStealthScripts(page);
+}
+
+export function targetSupportsUserAgentOverrideForTest(target: Target): boolean {
+	return targetSupportsUserAgentOverride(target);
+}
+export async function configureUserAgentTargetsForTest(
+	browser: Browser,
+	state: { browserSession: CDPSession | null; override: UserAgentOverride },
+	targetTimeoutMs?: number,
+): Promise<void> {
+	await configureUserAgentTargets(browser, state, targetTimeoutMs);
 }
