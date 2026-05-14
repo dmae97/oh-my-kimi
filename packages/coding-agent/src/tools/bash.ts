@@ -17,7 +17,7 @@ import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import { getSixelLineMask } from "../utils/sixel";
 import type { ToolSession } from ".";
-import { formatHeadTailStripNotice, stripTrailingHeadTail } from "./bash-command-fixup";
+import { applyBashFixups, formatBashFixupNotice } from "./bash-command-fixup";
 import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-interactive";
 import { checkBashInterception } from "./bash-interceptor";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
@@ -292,7 +292,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	#buildCompletedResult(
 		result: BashResult | BashInteractiveResult,
 		timeoutSec: number,
-		options: { requestedTimeoutSec?: number; notices?: string[]; terminalId?: string } = {},
+		options: { requestedTimeoutSec?: number; notices?: readonly string[]; terminalId?: string } = {},
 	): AgentToolResult<BashToolDetails> {
 		const outputLines = [this.#formatResultOutput(result)];
 		const notices = options.notices?.filter(Boolean) ?? [];
@@ -315,7 +315,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		label: string,
 		previewText: string,
 		timeoutSec: number,
-		options: { requestedTimeoutSec?: number; notices?: string[] } = {},
+		options: { requestedTimeoutSec?: number; notices?: readonly string[] } = {},
 	): AgentToolResult<BashToolDetails> {
 		const details: BashToolDetails = {
 			timeoutSeconds: timeoutSec,
@@ -484,15 +484,15 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		let command = rawCommand;
 		const env = normalizeBashEnv(rawEnv);
 
-		// Drop trailing `| head|tail` pipes that exist purely to limit output —
-		// the harness already truncates bash output. Single-line only; the helper
-		// refuses anything that could change semantics.
-		let headTailStripped: string | undefined;
+		// Apply conservative bash fixups (strip trailing `| head|tail` and redundant
+		// `2>&1`). The helper is single-line only and refuses anything that could
+		// change semantics.
+		let bashFixups: string[] = [];
 		if (this.session.settings.get("bash.stripTrailingHeadTail")) {
-			const fixup = stripTrailingHeadTail(command);
-			if (fixup.stripped) {
+			const fixup = applyBashFixups(command);
+			if (fixup.stripped.length > 0) {
 				command = fixup.command;
-				headTailStripped = fixup.stripped;
+				bashFixups = fixup.stripped;
 			}
 		}
 
@@ -574,8 +574,8 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const pendingNotices: string[] = [];
 		const timeoutClampNotice = formatTimeoutClampNotice(requestedTimeoutSec, timeoutSec);
 		if (timeoutClampNotice) pendingNotices.push(timeoutClampNotice);
-		const headTailStripNotice = formatHeadTailStripNotice(headTailStripped);
-		if (headTailStripNotice) pendingNotices.push(headTailStripNotice);
+		const bashFixupNotice = formatBashFixupNotice(bashFixups);
+		if (bashFixupNotice) pendingNotices.push(bashFixupNotice);
 
 		if (asyncRequested) {
 			if (!AsyncJobManager.instance()) {
