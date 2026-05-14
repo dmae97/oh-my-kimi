@@ -17,6 +17,7 @@ import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import { getSixelLineMask } from "../utils/sixel";
 import type { ToolSession } from ".";
+import { formatHeadTailStripNotice, stripTrailingHeadTail } from "./bash-command-fixup";
 import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-interactive";
 import { checkBashInterception } from "./bash-interceptor";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
@@ -352,7 +353,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		timeoutMs: number;
 		timeoutSec: number;
 		requestedTimeoutSec?: number;
-		timeoutClampNotice?: string;
+		notices?: readonly string[];
 
 		resolvedEnv?: Record<string, string>;
 		onUpdate?: AgentToolUpdateCallback<BashToolDetails>;
@@ -392,7 +393,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					});
 					const finalResult = this.#buildCompletedResult(result, options.timeoutSec, {
 						requestedTimeoutSec: options.requestedTimeoutSec,
-						notices: [options.timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+						notices: options.notices ?? [],
 					});
 					const finalText = this.#extractTextResult(finalResult);
 					latestText = finalText;
@@ -483,6 +484,18 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		let command = rawCommand;
 		const env = normalizeBashEnv(rawEnv);
 
+		// Drop trailing `| head|tail` pipes that exist purely to limit output —
+		// the harness already truncates bash output. Single-line only; the helper
+		// refuses anything that could change semantics.
+		let headTailStripped: string | undefined;
+		if (this.session.settings.get("bash.stripTrailingHeadTail")) {
+			const fixup = stripTrailingHeadTail(command);
+			if (fixup.stripped) {
+				command = fixup.command;
+				headTailStripped = fixup.stripped;
+			}
+		}
+
 		// Extract leading `cd <path> && ...` into cwd when the model ignores the cwd parameter.
 		// Constrained to a single line so a `&&` that sits on a later line of a multiline
 		// script can't pull the entire script into the "cwd" capture.
@@ -558,7 +571,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const requestedTimeoutSec = rawTimeout;
 		const timeoutSec = clampTimeout("bash", requestedTimeoutSec);
 		const timeoutMs = timeoutSec * 1000;
+		const pendingNotices: string[] = [];
 		const timeoutClampNotice = formatTimeoutClampNotice(requestedTimeoutSec, timeoutSec);
+		if (timeoutClampNotice) pendingNotices.push(timeoutClampNotice);
+		const headTailStripNotice = formatHeadTailStripNotice(headTailStripped);
+		if (headTailStripNotice) pendingNotices.push(headTailStripNotice);
 
 		if (asyncRequested) {
 			if (!AsyncJobManager.instance()) {
@@ -570,7 +587,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				timeoutMs,
 				timeoutSec,
 				requestedTimeoutSec,
-				timeoutClampNotice,
+				notices: pendingNotices,
 
 				resolvedEnv,
 				onUpdate,
@@ -578,7 +595,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			});
 			return this.#buildBackgroundStartResult(job.jobId, job.label, "", timeoutSec, {
 				requestedTimeoutSec,
-				notices: [timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+				notices: pendingNotices,
 			});
 		}
 
@@ -592,7 +609,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				timeoutMs,
 				timeoutSec,
 				requestedTimeoutSec,
-				timeoutClampNotice,
+				notices: pendingNotices,
 
 				resolvedEnv,
 				onUpdate,
@@ -601,7 +618,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			if (startBackgrounded) {
 				return this.#buildBackgroundStartResult(job.jobId, job.label, "", timeoutSec, {
 					requestedTimeoutSec,
-					notices: [timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+					notices: pendingNotices,
 				});
 			}
 			const waitResult = await this.#waitForManagedBashJob(job, autoBackgroundWaitMs, signal);
@@ -621,7 +638,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			job.setBackgrounded(true);
 			return this.#buildBackgroundStartResult(job.jobId, job.label, job.getLatestText(), timeoutSec, {
 				requestedTimeoutSec,
-				notices: [timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+				notices: pendingNotices,
 			});
 		}
 
@@ -722,7 +739,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 							};
 							return this.#buildCompletedResult(timedOutResult, timeoutSec, {
 								requestedTimeoutSec,
-								notices: [timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+								notices: pendingNotices,
 								terminalId: handle.terminalId,
 							});
 						}
@@ -778,7 +795,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 
 				const bridgeNotices: string[] = [];
 				if (finalOutput.truncated) bridgeNotices.push("(output truncated)");
-				if (timeoutClampNotice) bridgeNotices.push(timeoutClampNotice);
+				for (const notice of pendingNotices) bridgeNotices.push(notice);
 
 				return this.#buildCompletedResult(bridgeResult, timeoutSec, {
 					requestedTimeoutSec,
@@ -833,7 +850,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		}
 		return this.#buildCompletedResult(result, timeoutSec, {
 			requestedTimeoutSec,
-			notices: [timeoutClampNotice].filter((notice): notice is string => Boolean(notice)),
+			notices: pendingNotices,
 		});
 	}
 }

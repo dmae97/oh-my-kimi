@@ -56,3 +56,56 @@ describe("BashTool interception", () => {
 		).rejects.toThrow("Use read instead");
 	});
 });
+
+describe("BashTool head/tail stripping", () => {
+	function createBashToolWithStrip(stripEnabled: boolean): BashTool {
+		const session = {
+			cwd: process.cwd(),
+			settings: {
+				get(key: string) {
+					if (key === "bashInterceptor.enabled") return false;
+					if (key === "async.enabled") return false;
+					if (key === "bash.autoBackground.enabled") return false;
+					if (key === "bash.autoBackground.thresholdMs") return 60_000;
+					if (key === "bash.stripTrailingHeadTail") return stripEnabled;
+					return undefined;
+				},
+				getBashInterceptorRules() {
+					return [];
+				},
+			},
+		} as unknown as ToolSession;
+		return new BashTool(session);
+	}
+
+	it("executes the stripped command and surfaces a notice", async () => {
+		const tool = createBashToolWithStrip(true);
+		// `seq 1 100 | head -3` would emit "1\n2\n3"; stripped, it emits 1..100.
+		// We assert on the tail of the output rather than head, so a successful
+		// strip is observable: line "100" only appears when head is gone.
+		const result = await tool.execute(
+			"tool-call",
+			{ command: "seq 1 100 | head -3" },
+			undefined,
+			undefined,
+			{ toolNames: ["bash"] } as AgentToolContext,
+		);
+		const text = result.content.find(b => b.type === "text")?.text ?? "";
+		expect(text).toContain("100");
+		expect(text).toContain("Stripped trailing `| head -3`");
+	});
+
+	it("does not strip when the setting is disabled", async () => {
+		const tool = createBashToolWithStrip(false);
+		const result = await tool.execute(
+			"tool-call",
+			{ command: "seq 1 100 | head -3" },
+			undefined,
+			undefined,
+			{ toolNames: ["bash"] } as AgentToolContext,
+		);
+		const text = result.content.find(b => b.type === "text")?.text ?? "";
+		expect(text).toContain("1\n2\n3");
+		expect(text).not.toContain("100");
+	});
+});
