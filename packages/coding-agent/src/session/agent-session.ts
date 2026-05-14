@@ -7840,27 +7840,65 @@ export class AgentSession {
 	 * @returns Text content, or undefined if no assistant message exists
 	 */
 	getLastAssistantText(): string | undefined {
-		const lastAssistant = this.messages
-			.slice()
-			.reverse()
-			.find(m => {
-				if (m.role !== "assistant") return false;
-				const msg = m as AssistantMessage;
-				// Skip aborted messages with no content
-				if (msg.stopReason === "aborted" && msg.content.length === 0) return false;
-				return true;
-			});
-
+		const lastAssistant = this.#getLastCopyCandidateAssistantMessage();
 		if (!lastAssistant) return undefined;
 
 		let text = "";
-		for (const content of (lastAssistant as AssistantMessage).content) {
+		for (const content of lastAssistant.content) {
 			if (content.type === "text") {
 				text += content.text;
 			}
 		}
 
 		return text.trim() || undefined;
+	}
+
+	hasCopyCandidateAssistantMessage(): boolean {
+		return this.#getLastCopyCandidateAssistantMessage() !== undefined;
+	}
+
+	#getLastCopyCandidateAssistantMessage(): AssistantMessage | undefined {
+		for (let i = this.messages.length - 1; i >= 0; i--) {
+			const message = this.messages[i];
+			if (message.role !== "assistant") continue;
+
+			const assistantMessage = message as AssistantMessage;
+			// Skip aborted messages with no content
+			if (assistantMessage.stopReason === "aborted" && assistantMessage.content.length === 0) continue;
+
+			return assistantMessage;
+		}
+
+		return undefined;
+	}
+	/**
+	 * Get text content of the most recent visible handoff message.
+	 * Fresh handoff sessions store the handoff context as a custom message, not
+	 * an assistant message, so callers that copy the "last" message can use this
+	 * as a fallback before the new session has an assistant response.
+	 */
+	getLastVisibleHandoffText(): string | undefined {
+		for (let i = this.messages.length - 1; i >= 0; i--) {
+			const message = this.messages[i];
+			if (message.role !== "custom") continue;
+
+			const customMessage = message as CustomMessage;
+			if (customMessage.customType !== "handoff" || !customMessage.display) continue;
+
+			if (typeof customMessage.content === "string") {
+				return customMessage.content.trim() || undefined;
+			}
+
+			let text = "";
+			for (const content of customMessage.content) {
+				if (content.type === "text") {
+					text += content.text;
+				}
+			}
+			return text.trim() || undefined;
+		}
+
+		return undefined;
 	}
 
 	/**
