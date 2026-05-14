@@ -26,10 +26,7 @@ function createCodexToken(accountId: string): string {
  * is exercised by its own targeted tests; these history-replay tests assert raw
  * payload shape and should stay independent of it.
  */
-function getOpenAIReasoningModel<Provider extends string>(
-	provider: Provider,
-	id: string,
-): Model<"openai-responses"> {
+function getOpenAIReasoningModel<Provider extends string>(provider: Provider, id: string): Model<"openai-responses"> {
 	const base = getBundledModel(provider, id) as Model<"openai-responses">;
 	return { ...base, name: "Reasoning Mini" };
 }
@@ -324,7 +321,7 @@ describe("OpenAI responses history payload", () => {
 
 	it("falls back to system instructions for OpenAI-compatible endpoints without developer-role support", async () => {
 		const model = {
-			...(getOpenAIReasoningModel("openai", "gpt-5-mini")),
+			...getOpenAIReasoningModel("openai", "gpt-5-mini"),
 			baseUrl: "https://proxy.example.com/v1",
 		};
 		const payload = (await captureResponsesPayload(model, {

@@ -60,14 +60,6 @@ function estimateToolSchemaTokens(tools: ReadonlyArray<Pick<Tool, "name" | "desc
 	return countTokens(fragments);
 }
 
-function estimateMessagesTokens(session: AgentSession): number {
-	let total = 0;
-	for (const message of session.messages) {
-		total += estimateTokens(message);
-	}
-	return total;
-}
-
 /**
  * Compute a breakdown of estimated context usage by category for the active
  * session and model.
@@ -76,9 +68,16 @@ export function computeContextBreakdown(session: AgentSession): ContextBreakdown
 	const model = session.model;
 	const contextWindow = model?.contextWindow ?? 0;
 
-	const skillsTokens = estimateSkillsTokens(session.skills);
-	const toolsTokens = estimateToolSchemaTokens(session.agent.state.tools);
-	const messagesTokens = estimateMessagesTokens(session);
+	const skillsTokens = estimateSkillsTokens(session.skills ?? []);
+	const toolsTokens = estimateToolSchemaTokens(session.agent?.state?.tools ?? []);
+
+	let messagesTokens = 0;
+	const convo = session.messages;
+	if (convo) {
+		for (const message of convo) {
+			messagesTokens += estimateTokens(message);
+		}
+	}
 
 	// The rendered system prompt already contains the skill descriptions and the
 	// markdown tool descriptions. To present a non-overlapping breakdown:
@@ -86,8 +85,9 @@ export function computeContextBreakdown(session: AgentSession): ContextBreakdown
 	//   Tools         = JSON tool schema sent separately on the wire
 	//   Skills        = the skill list embedded in the system prompt
 	//   Messages      = conversation messages
-	const systemPromptTokens = Math.max(0, countTokens(session.systemPrompt[0] ?? "") - skillsTokens);
-	const systemContextTokens = countTokens(session.systemPrompt.slice(1));
+	const systemPromptParts = session.systemPrompt;
+	const systemPromptTokens = Math.max(0, countTokens(systemPromptParts?.[0] ?? "") - skillsTokens);
+	const systemContextTokens = countTokens(systemPromptParts?.slice(1) ?? []);
 
 	const categories: CategoryInfo[] = [
 		{ id: "systemPrompt", label: "System prompt", tokens: systemPromptTokens, color: "accent", glyph: CELL_FILLED },
