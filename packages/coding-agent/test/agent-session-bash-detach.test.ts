@@ -45,7 +45,7 @@ import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-cor
 import { type AssistantMessage, getBundledModel, type ToolCall } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -165,7 +165,7 @@ describe("BashTool through AgentSession runs children in their own session (e2e)
 		tempDir = path.join(os.tmpdir(), `pi-bash-detach-test-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
 
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		// Fresh isolated Settings rooted in tempDir so we don't pick up the
 		// developer's real config (snapshots, shell prefix, etc).
 		await Settings.init({ inMemory: true, cwd: tempDir });
@@ -243,7 +243,7 @@ describe("BashTool through AgentSession runs children in their own session (e2e)
 	});
 
 	afterAll(() => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 	});
 
 	it.skipIf(skip)("spawned child runs as its own session leader, not in the host's session", async () => {

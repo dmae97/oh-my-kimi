@@ -14,28 +14,9 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { AgentRegistry } from "../registry/agent-registry";
 import { applyQuery, pathToQuery } from "./json-query";
+import { artifactsDirsFromRegistry } from "./registry-helpers";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
-
-/**
- * Snapshot of artifacts dirs for every registered session, deduped.
- *
- * Prefers `sessionManager.getArtifactsDir()` because subagents adopt the
- * parent's manager and report the parent's dir there; dedup then collapses
- * the whole agent tree to one entry. Falls back to the raw session file
- * when no live session reference is attached.
- */
-function artifactsDirsFromRegistry(): string[] {
-	const dirs: string[] = [];
-	for (const ref of AgentRegistry.global().list()) {
-		const dir =
-			ref.session?.sessionManager.getArtifactsDir() ?? (ref.sessionFile ? ref.sessionFile.slice(0, -6) : null);
-		if (!dir) continue;
-		if (!dirs.includes(dir)) dirs.push(dir);
-	}
-	return dirs;
-}
 
 /**
  * Handler for agent:// URLs.

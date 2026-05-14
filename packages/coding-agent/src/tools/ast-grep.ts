@@ -6,34 +6,28 @@ import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { InternalUrlRouter } from "../internal-urls";
 import type { Theme } from "../modes/theme/theme";
 import astGrepDescription from "../prompts/tools/ast-grep.md" with { type: "text" };
-import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
+import { Ellipsis, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { formatGroupedFiles } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
 import type { OutputMeta } from "./output-meta";
+import { resolveToolSearchScope } from "./path-utils";
 import {
-	formatPathRelativeToCwd,
-	hasGlobPathChars,
-	normalizePathLikeInput,
-	parseSearchPath,
-	partitionExistingPaths,
-	resolveExplicitSearchPaths,
-	resolveToCwd,
-} from "./path-utils";
-import {
+	appendParseErrorsBulletList,
+	createCachedComponent,
 	dedupeParseErrors,
 	formatCodeFrameLine,
 	formatCount,
 	formatEmptyMessage,
 	formatErrorMessage,
 	formatParseErrors,
-	PARSE_ERRORS_LIMIT,
+	formatParseErrorsCountLabel,
 	PREVIEW_LIMITS,
+	splitGroupsByBlankLine,
 } from "./render-utils";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -150,64 +144,12 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 			if (!Number.isFinite(skip) || skip < 0) {
 				throw new ToolError("skip must be a non-negative number");
 			}
-			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
-			let searchPath: string;
-			let scopePath: string;
-			let globFilter: string | undefined;
-			let multiTargets: Array<{ basePath: string; glob?: string }> | undefined;
-			const rawPaths = params.paths.map(normalizePathLikeInput);
-			if (rawPaths.some(rawPath => rawPath.length === 0)) {
-				throw new ToolError("`paths` must contain non-empty paths or globs");
-			}
-			const internalRouter = InternalUrlRouter.instance();
-			const resolvedPathInputs: string[] = [];
-			for (const rawPath of rawPaths) {
-				if (!internalRouter.canHandle(rawPath)) {
-					resolvedPathInputs.push(rawPath);
-					continue;
-				}
-				if (hasGlobPathChars(rawPath)) {
-					throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
-				}
-				const resource = await internalRouter.resolve(rawPath);
-				if (!resource.sourcePath) {
-					throw new ToolError(`Cannot search internal URL without backing file: ${rawPath}`);
-				}
-				resolvedPathInputs.push(resource.sourcePath);
-			}
-			let effectivePathInputs = resolvedPathInputs;
-			if (resolvedPathInputs.length > 1) {
-				const partition = await partitionExistingPaths(resolvedPathInputs, this.session.cwd, parseSearchPath);
-				if (partition.valid.length === 0) {
-					throw new ToolError(`Path not found: ${partition.missing.join(", ")}`);
-				}
-				effectivePathInputs = partition.valid;
-			}
-			if (effectivePathInputs.length === 1) {
-				const parsedPath = parseSearchPath(effectivePathInputs[0] ?? ".");
-				searchPath = resolveToCwd(parsedPath.basePath, this.session.cwd);
-				globFilter = parsedPath.glob;
-				scopePath = formatScopePath(searchPath);
-			} else {
-				const multiSearchPath = await resolveExplicitSearchPaths(effectivePathInputs, this.session.cwd, globFilter);
-				if (!multiSearchPath) {
-					throw new ToolError("`paths` must contain at least one path or glob");
-				}
-				searchPath = multiSearchPath.basePath;
-				globFilter = multiSearchPath.targets ? undefined : multiSearchPath.glob;
-				multiTargets = multiSearchPath.targets;
-				scopePath = multiSearchPath.scopePath;
-			}
-
-			const resolvedSearchPath = searchPath;
-			scopePath = scopePath ?? formatScopePath(resolvedSearchPath);
-			let isDirectory: boolean;
-			try {
-				const stat = await Bun.file(resolvedSearchPath).stat();
-				isDirectory = stat.isDirectory();
-			} catch {
-				throw new ToolError(`Path not found: ${scopePath}`);
-			}
+			const scope = await resolveToolSearchScope({
+				rawPaths: params.paths,
+				cwd: this.session.cwd,
+				internalUrlAction: "search",
+			});
+			const { searchPath: resolvedSearchPath, scopePath, isDirectory, multiTargets, globFilter } = scope;
 
 			const DEFAULT_AST_LIMIT = 50;
 			const result = multiTargets
@@ -388,13 +330,7 @@ export const astGrepToolRenderer = {
 			const lines = [header, formatEmptyMessage("No matches found", uiTheme)];
 			if (details?.parseErrors?.length) {
 				lines.push(uiTheme.fg("warning", "Query may be mis-scoped; narrow `paths` before concluding absence"));
-				const capped = details.parseErrors.slice(0, PARSE_ERRORS_LIMIT);
-				for (const err of capped) {
-					lines.push(uiTheme.fg("warning", `  - ${err}`));
-				}
-				if (details.parseErrors.length > PARSE_ERRORS_LIMIT) {
-					lines.push(uiTheme.fg("dim", `  … ${details.parseErrors.length - PARSE_ERRORS_LIMIT} more`));
-				}
+				appendParseErrorsBulletList(lines, details.parseErrors, uiTheme);
 			}
 			return new Text(lines.join("\n"), 0, 0);
 		}
@@ -411,28 +347,7 @@ export const astGrepToolRenderer = {
 		);
 
 		const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text ?? "";
-		const rawLines = textContent.split("\n");
-		const hasSeparators = rawLines.some(line => line.trim().length === 0);
-		const allGroups: string[][] = [];
-		if (hasSeparators) {
-			let current: string[] = [];
-			for (const line of rawLines) {
-				if (line.trim().length === 0) {
-					if (current.length > 0) {
-						allGroups.push(current);
-						current = [];
-					}
-					continue;
-				}
-				current.push(line);
-			}
-			if (current.length > 0) allGroups.push(current);
-		} else {
-			const nonEmpty = rawLines.filter(line => line.trim().length > 0);
-			if (nonEmpty.length > 0) {
-				allGroups.push(nonEmpty);
-			}
-		}
+		const allGroups = splitGroupsByBlankLine(textContent.split("\n"));
 		const matchGroups = allGroups.filter(
 			group => !group[0]?.startsWith("Result limit reached") && !group[0]?.startsWith("Parse issues:"),
 		);
@@ -442,24 +357,16 @@ export const astGrepToolRenderer = {
 			extraLines.push(uiTheme.fg("warning", "limit reached; narrow paths or increase limit"));
 		}
 		if (details?.parseErrors?.length) {
-			const total = details.parseErrors.length;
-			const label =
-				total > PARSE_ERRORS_LIMIT
-					? `${PARSE_ERRORS_LIMIT} / ${total} parse issues`
-					: `${total} parse issue${total !== 1 ? "s" : ""}`;
-			extraLines.push(uiTheme.fg("warning", label));
+			extraLines.push(uiTheme.fg("warning", formatParseErrorsCountLabel(details.parseErrors)));
 		}
 
-		let cached: RenderCache | undefined;
-		return {
-			render(width: number): string[] {
-				const { expanded } = options;
-				const key = new Hasher().bool(expanded).u32(width).digest();
-				if (cached?.key === key) return cached.lines;
+		return createCachedComponent(
+			() => options.expanded,
+			width => {
 				const matchLines = renderTreeList(
 					{
 						items: matchGroups,
-						expanded,
+						expanded: options.expanded,
 						maxCollapsed: matchGroups.length,
 						maxCollapsedLines: COLLAPSED_MATCH_LIMIT,
 						itemType: "match",
@@ -473,14 +380,9 @@ export const astGrepToolRenderer = {
 					},
 					uiTheme,
 				);
-				const rendered = [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
-				cached = { key, lines: rendered };
-				return rendered;
+				return [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 			},
-			invalidate() {
-				cached = undefined;
-			},
-		};
+		);
 	},
 	mergeCallAndResult: true,
 };

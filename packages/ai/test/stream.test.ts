@@ -501,7 +501,7 @@ describe("Generate E2E Tests", () => {
 			);
 
 			const drain = (async () => {
-				for await (const _event of events) {
+				for await (const _ of events) {
 				}
 			})();
 

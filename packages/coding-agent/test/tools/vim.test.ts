@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -257,7 +257,7 @@ describe("vim tool", () => {
 	let tmpDir: string;
 
 	beforeEach(async () => {
-		_resetSettingsForTest();
+		resetSettingsForTest();
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "vim-tool-"));
 		await Settings.init({ inMemory: true, cwd: tmpDir });
 	});

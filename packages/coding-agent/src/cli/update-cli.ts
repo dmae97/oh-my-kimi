@@ -91,7 +91,7 @@ function resolveUpdateMethod(ompPath: string, bunBinDir: string | undefined): "b
 	return isPathInDirectory(ompPath, bunBinDir) ? "bun" : "binary";
 }
 
-export function _resolveUpdateMethodForTest(ompPath: string, bunBinDir: string | undefined): "bun" | "binary" {
+export function resolveUpdateMethodForTest(ompPath: string, bunBinDir: string | undefined): "bun" | "binary" {
 	return resolveUpdateMethod(ompPath, bunBinDir);
 }
 async function resolveUpdateTarget(): Promise<UpdateTarget> {

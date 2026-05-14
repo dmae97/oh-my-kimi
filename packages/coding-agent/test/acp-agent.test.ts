@@ -12,8 +12,8 @@ import {
 } from "@agentclientprotocol/sdk/dist/schema/zod.gen.js";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
-import { _resetSettingsForTest, Settings } from "../src/config/settings";
-import { ACP_BOOTSTRAP_RACE_GUARD_MS, AcpAgent } from "../src/modes/acp/acp-agent";
+import { resetSettingsForTest, Settings } from "../src/config/settings";
+import { AcpAgent } from "../src/modes/acp/acp-agent";
 import type { PlanModeState } from "../src/plan-mode/state";
 import type { AgentSession, AgentSessionEvent } from "../src/session/agent-session";
 import { SessionManager } from "../src/session/session-manager";
@@ -325,7 +325,7 @@ afterEach(async () => {
 		setAgentDir(fallbackAgentDir);
 		delete process.env.PI_CODING_AGENT_DIR;
 	}
-	_resetSettingsForTest();
+	resetSettingsForTest();
 
 	for (const root of cleanupRoots.splice(0)) {
 		await fs.promises.rm(root, { recursive: true, force: true });

@@ -16,7 +16,6 @@ import * as path from "node:path";
 const nativeDir = path.join(import.meta.dir, "..", "native");
 const indexJsPath = path.join(nativeDir, "index.js");
 const indexDtsPath = path.join(nativeDir, "index.d.ts");
-const _packageJsonPath = path.join(import.meta.dir, "..", "package.json");
 
 const PUBLIC_SYMBOL_RE = /^export declare (?:class|function|enum) (\w+)/gm;
 

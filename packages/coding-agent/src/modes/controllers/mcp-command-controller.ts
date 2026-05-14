@@ -37,16 +37,32 @@ import type { MCPAuthConfig, MCPServerConfig, MCPServerConnection } from "../../
 import type { OAuthCredential } from "../../session/auth-storage";
 import { shortenPath } from "../../tools/render-utils";
 import { openPath } from "../../utils/open";
-import { DynamicBorder } from "../components/dynamic-border";
 import { MCPAddWizard } from "../components/mcp-add-wizard";
 import { parseCommandArgs } from "../shared";
 import { theme } from "../theme/theme";
 import type { InteractiveModeContext } from "../types";
+import { groupBySource, parseRemoveArgs, readScopeFlag, showCommandMessage } from "./command-controller-shared";
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
 	const { promise: timeoutPromise, reject } = Promise.withResolvers<T>();
 	const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
 	return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Outcome of {@link MCPCommandController}'s OAuth handler.
+ *
+ * `clientId`/`clientSecret` are populated when the OAuth provider required (or
+ * accepted) dynamic client registration; callers MUST persist them alongside
+ * `credentialId` so subsequent token refreshes and reauthorizations can reuse
+ * the same registered client. Both are also set when the caller pre-supplied a
+ * client id via the wizard or `oauth.clientId` in `mcp.json`, in which case the
+ * write-back is a no-op.
+ */
+interface OAuthFlowResult {
+	credentialId: string;
+	clientId?: string;
+	clientSecret?: string;
 }
 
 type MCPAddScope = "user" | "project";
@@ -207,11 +223,11 @@ export class MCPCommandController {
 				break;
 			}
 			if (argToken === "--scope") {
-				const value = tokens[i + 1];
-				if (!value || (value !== "project" && value !== "user")) {
-					return { scope, error: "Invalid --scope value. Use project or user." };
+				const r = readScopeFlag(tokens[i + 1]);
+				if (!r.ok) {
+					return { scope, error: r.error };
 				}
-				scope = value;
+				scope = r.scope;
 				i += 2;
 				continue;
 			}
@@ -406,7 +422,7 @@ export class MCPCommandController {
 
 						try {
 							const oauthClientSecret = finalConfig.oauth?.clientSecret ?? "";
-							const credentialId = await this.#handleOAuthFlow(
+							const oauthResult = await this.#handleOAuthFlow(
 								oauth.authorizationUrl,
 								oauth.tokenUrl,
 								oauth.clientId ?? finalConfig.oauth?.clientId ?? "",
@@ -416,14 +432,21 @@ export class MCPCommandController {
 								finalConfig.oauth?.callbackPath,
 								finalConfig.oauth?.redirectUri,
 							);
+							const persistedClientId = oauthResult.clientId ?? oauth.clientId ?? finalConfig.oauth?.clientId;
+							const persistedClientSecret = oauthResult.clientSecret ?? finalConfig.oauth?.clientSecret;
 							finalConfig = {
 								...finalConfig,
 								auth: {
 									type: "oauth",
-									credentialId,
+									credentialId: oauthResult.credentialId,
 									tokenUrl: oauth.tokenUrl,
-									clientId: oauth.clientId ?? finalConfig.oauth?.clientId,
-									clientSecret: finalConfig.oauth?.clientSecret,
+									clientId: persistedClientId,
+									clientSecret: persistedClientSecret,
+								},
+								oauth: {
+									...finalConfig.oauth,
+									clientId: persistedClientId ?? finalConfig.oauth?.clientId,
+									clientSecret: persistedClientSecret ?? finalConfig.oauth?.clientSecret,
 								},
 							};
 						} catch (oauthError) {
@@ -488,7 +511,7 @@ export class MCPCommandController {
 		callbackPort?: number,
 		callbackPath?: string,
 		redirectUri?: string,
-	): Promise<string> {
+	): Promise<OAuthFlowResult> {
 		const authStorage = this.ctx.session.modelRegistry.authStorage;
 		let parsedAuthUrl: URL;
 
@@ -600,7 +623,11 @@ export class MCPCommandController {
 			// Store under a synthetic provider name
 			await authStorage.set(credentialId, oauthCredential);
 
-			return credentialId;
+			return {
+				credentialId,
+				clientId: flow.resolvedClientId,
+				clientSecret: flow.registeredClientSecret,
+			};
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : String(error);
 
@@ -984,23 +1011,7 @@ export class MCPCommandController {
 
 			// Show discovered servers (from .claude.json, .cursor/mcp.json, .vscode/mcp.json, etc.)
 			if (discoveredServers.length > 0) {
-				// Group by source display name + path
-				const bySource = new Map<string, typeof discoveredServers>();
-				for (const entry of discoveredServers) {
-					const key = `${entry.source.providerName}|${entry.source.path}`;
-					let group = bySource.get(key);
-					if (!group) {
-						group = [];
-						bySource.set(key, group);
-					}
-					group.push(entry);
-				}
-
-				for (const [key, entries] of bySource) {
-					const sepIdx = key.indexOf("|");
-					const providerName = key.slice(0, sepIdx);
-					const sourcePath = key.slice(sepIdx + 1);
-					const shortPath = shortenPath(sourcePath);
+				for (const { providerName, shortPath, items: entries } of groupBySource(discoveredServers, e => e.source)) {
 					lines.push(theme.fg("accent", providerName) + theme.fg("muted", ` (${shortPath}):`));
 					for (const { name } of entries) {
 						const state = this.ctx.mcpManager!.getConnectionStatus(name);
@@ -1037,32 +1048,12 @@ export class MCPCommandController {
 	async #handleRemove(text: string): Promise<void> {
 		const match = text.match(/^\/mcp\s+(?:remove|rm)\b\s*(.*)$/i);
 		const rest = match?.[1]?.trim() ?? "";
-		const tokens = parseCommandArgs(rest);
-
-		let name: string | undefined;
-		let scope: "project" | "user" = "project";
-		let i = 0;
-
-		if (tokens.length > 0 && !tokens[0].startsWith("-")) {
-			name = tokens[0];
-			i = 1;
-		}
-
-		while (i < tokens.length) {
-			const token = tokens[i];
-			if (token === "--scope") {
-				const value = tokens[i + 1];
-				if (!value || (value !== "project" && value !== "user")) {
-					this.ctx.showError("Invalid --scope value. Use project or user.");
-					return;
-				}
-				scope = value;
-				i += 2;
-				continue;
-			}
-			this.ctx.showError(`Unknown option: ${token}`);
+		const parsed = parseRemoveArgs(rest);
+		if (!parsed.ok) {
+			this.ctx.showError(parsed.error);
 			return;
 		}
+		const { name, scope } = parsed.value;
 
 		if (!name) {
 			this.ctx.showError("Server name required. Usage: /mcp remove <name> [--scope project|user]");
@@ -1348,7 +1339,7 @@ export class MCPCommandController {
 
 			this.#showMessage(["", theme.fg("muted", `Reauthorizing "${name}"...`), ""].join("\n"));
 
-			const credentialId = await this.#handleOAuthFlow(
+			const oauthResult = await this.#handleOAuthFlow(
 				oauth.authorizationUrl,
 				oauth.tokenUrl,
 				oauth.clientId ?? found.config.oauth?.clientId ?? "",
@@ -1359,14 +1350,22 @@ export class MCPCommandController {
 				found.config.oauth?.redirectUri,
 			);
 
+			const persistedClientId = oauthResult.clientId ?? oauth.clientId ?? found.config.oauth?.clientId;
+			const persistedClientSecret = oauthResult.clientSecret ?? (oauthClientSecret || undefined);
+
 			const updated: MCPServerConfig = {
 				...baseConfig,
 				auth: {
 					type: "oauth",
-					credentialId,
+					credentialId: oauthResult.credentialId,
 					tokenUrl: oauth.tokenUrl,
-					clientId: oauth.clientId ?? found.config.oauth?.clientId,
-					clientSecret: oauthClientSecret || undefined,
+					clientId: persistedClientId,
+					clientSecret: persistedClientSecret,
+				},
+				oauth: {
+					...found.config.oauth,
+					clientId: persistedClientId ?? found.config.oauth?.clientId,
+					clientSecret: persistedClientSecret ?? found.config.oauth?.clientSecret,
 				},
 			};
 			await updateMCPServer(found.filePath, name, updated);
@@ -1929,10 +1928,6 @@ export class MCPCommandController {
 	 * Show a message in the chat
 	 */
 	#showMessage(text: string): void {
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.chatContainer.addChild(new Text(text, 1, 1));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.ui.requestRender();
+		showCommandMessage(this.ctx, text);
 	}
 }

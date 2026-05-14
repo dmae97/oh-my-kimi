@@ -12,15 +12,7 @@ import { InternalUrlRouter } from "../internal-urls";
 import type { Theme } from "../modes/theme/theme";
 import findDescription from "../prompts/tools/find.md" with { type: "text" };
 import { type TruncationResult, truncateHead } from "../session/streaming-output";
-import {
-	Ellipsis,
-	Hasher,
-	type RenderCache,
-	renderFileList,
-	renderStatusLine,
-	renderTreeList,
-	truncateToWidth,
-} from "../tui";
+import { Ellipsis, renderFileList, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import type { ToolSession } from ".";
 import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
@@ -33,7 +25,13 @@ import {
 	resolveExplicitFindPatterns,
 	resolveToCwd,
 } from "./path-utils";
-import { formatCount, formatEmptyMessage, formatErrorMessage, PREVIEW_LIMITS } from "./render-utils";
+import {
+	createCachedComponent,
+	formatCount,
+	formatEmptyMessage,
+	formatErrorMessage,
+	PREVIEW_LIMITS,
+} from "./render-utils";
 import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
@@ -401,30 +399,22 @@ export const findToolRenderer = {
 				},
 				uiTheme,
 			);
-			let cached: RenderCache | undefined;
-			return {
-				render(width: number): string[] {
-					const { expanded } = options;
-					const key = new Hasher().bool(expanded).u32(width).digest();
-					if (cached?.key === key) return cached.lines;
+			return createCachedComponent(
+				() => options.expanded,
+				width => {
 					const listLines = renderTreeList(
 						{
 							items: lines,
-							expanded,
+							expanded: options.expanded,
 							maxCollapsed: COLLAPSED_LIST_LIMIT,
 							itemType: "file",
 							renderItem: line => uiTheme.fg("accent", line),
 						},
 						uiTheme,
 					);
-					const result = [header, ...listLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
-					cached = { key, lines: result };
-					return result;
+					return [header, ...listLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 				},
-				invalidate() {
-					cached = undefined;
-				},
-			};
+			);
 		}
 
 		const fileCount = details?.fileCount ?? 0;
@@ -467,28 +457,20 @@ export const findToolRenderer = {
 		}
 		if (missingNote) extraLines.push(missingNote);
 
-		let cached: RenderCache | undefined;
-		return {
-			render(width: number): string[] {
-				const { expanded } = options;
-				const key = new Hasher().bool(expanded).u32(width).digest();
-				if (cached?.key === key) return cached.lines;
+		return createCachedComponent(
+			() => options.expanded,
+			width => {
 				const fileLines = renderFileList(
 					{
 						files: files.map(entry => ({ path: entry, isDirectory: entry.endsWith("/") })),
-						expanded,
+						expanded: options.expanded,
 						maxCollapsed: COLLAPSED_LIST_LIMIT,
 					},
 					uiTheme,
 				);
-				const result = [header, ...fileLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
-				cached = { key, lines: result };
-				return result;
+				return [header, ...fileLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 			},
-			invalidate() {
-				cached = undefined;
-			},
-		};
+		);
 	},
 	mergeCallAndResult: true,
 };

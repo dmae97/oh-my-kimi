@@ -72,15 +72,12 @@ const TRAILING_MARKER_SUFFIXES: readonly string[] = (() => {
 })();
 const WRAPPER_PREFIXES = ["duo-chat-"] as const;
 
-let __referenceDataCache: CanonicalReferenceData | undefined;
+let referenceDataCache: CanonicalReferenceData | undefined;
 const EMPTY_COMPILED_EQUIVALENCE: CompiledEquivalenceConfig = {
 	overrides: new Map<string, string>(),
 	exclude: new Set<string>(),
 };
-const __resolutionCache: WeakMap<
-	CompiledEquivalenceConfig,
-	WeakMap<Model<Api>, ResolvedCanonicalModel>
-> = new WeakMap();
+const resolutionCache: WeakMap<CompiledEquivalenceConfig, WeakMap<Model<Api>, ResolvedCanonicalModel>> = new WeakMap();
 const FAMILY_EXTRACTION_PATTERNS = [
 	/(?:^|[/:._-])((?:claude|gemini|gpt|grok|glm|qwen|minimax|kimi|deepseek|llama|gemma|nova|mistral|ministral|pixtral|codestral|devstral|magistral|ernie|doubao|seed|aion|olmo|molmo|nemotron|palmyra|command|codex|coder|o[1345])[-a-z0-9.]+)(?::|$)/i,
 	/(?:^|[/:._-])((?:claude|gemini|gpt|grok|glm|qwen|minimax|kimi|deepseek|llama|gemma|nova|mistral|ministral|pixtral|codestral|devstral|magistral|ernie|doubao|seed|aion|olmo|molmo|nemotron|palmyra|command|codex|coder|o[1345])[-a-z0-9.]+(?:[-_/][a-z0-9.]+)*)(?::|$)/i,
@@ -98,8 +95,8 @@ function shouldReplaceReference(existing: Model<Api> | undefined, candidate: Mod
 }
 
 function createCanonicalReferenceData(): CanonicalReferenceData {
-	if (__referenceDataCache) {
-		return __referenceDataCache;
+	if (referenceDataCache) {
+		return referenceDataCache;
 	}
 	const references = new Map<string, Model<Api>>();
 	for (const provider of getBundledProviders()) {
@@ -112,11 +109,11 @@ function createCanonicalReferenceData(): CanonicalReferenceData {
 		}
 	}
 	const officialIds = new Set(references.keys());
-	__referenceDataCache = {
+	referenceDataCache = {
 		references: Object.freeze(references) as Map<string, Model<Api>>,
 		officialIds: Object.freeze(officialIds) as Set<string>,
 	};
-	return __referenceDataCache;
+	return referenceDataCache;
 }
 
 function normalizeSelectorKey(selector: string): string {
@@ -668,10 +665,10 @@ export function buildCanonicalModelIndex(
 	const byId = new Map<string, CanonicalModelRecord>();
 	const bySelector = new Map<string, string>();
 
-	let modelCache = __resolutionCache.get(compiledEquivalence);
+	let modelCache = resolutionCache.get(compiledEquivalence);
 	if (!modelCache) {
 		modelCache = new WeakMap<Model<Api>, ResolvedCanonicalModel>();
-		__resolutionCache.set(compiledEquivalence, modelCache);
+		resolutionCache.set(compiledEquivalence, modelCache);
 	}
 
 	for (const model of models) {

@@ -379,4 +379,4 @@ export const MENTAL_MODEL_FIRST_TURN_DEADLINE_MS = 1500;
 export const MENTAL_MODEL_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 /** Need-only export of the raw seed list for tests. */
-export const __builtinSeedsForTest: ReadonlyArray<Readonly<RawSeed>> = BUILTIN_SEEDS;
+export const builtinSeedsForTest: ReadonlyArray<Readonly<RawSeed>> = BUILTIN_SEEDS;

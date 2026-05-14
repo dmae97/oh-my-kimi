@@ -7,19 +7,23 @@ import {
 	Container,
 	Ellipsis,
 	ImageProtocol,
-	Loader,
-	Spacer,
+	type Loader,
 	TERMINAL,
 	Text,
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
-import { getSymbolTheme, theme } from "../../modes/theme/theme";
-import { formatTruncationMetaNotice, type TruncationMeta } from "../../tools/output-meta";
+import { theme } from "../../modes/theme/theme";
+import type { TruncationMeta } from "../../tools/output-meta";
 import { getSixelLineMask, isSixelPassthroughEnabled, sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
-import { DynamicBorder } from "./dynamic-border";
-import { truncateToVisualLines } from "./visual-truncate";
+import {
+	buildExecutionFrame,
+	buildStatusFooter,
+	createCollapsedPreview,
+	type ExecutionStatus,
+	resolveExecutionStatus,
+} from "./execution-shared";
 
 // Preview line limit when not expanded (matches tool execution behavior)
 const PREVIEW_LINES = 20;
@@ -31,7 +35,7 @@ const CHUNK_THROTTLE_MS = 50;
 
 export class BashExecutionComponent extends Container {
 	#outputLines: string[] = [];
-	#status: "running" | "complete" | "cancelled" | "error" = "running";
+	#status: ExecutionStatus = "running";
 	#exitCode: number | undefined = undefined;
 	#loader: Loader;
 	#truncation?: TruncationMeta;
@@ -50,34 +54,14 @@ export class BashExecutionComponent extends Container {
 
 		// Use dim border for excluded-from-context commands (!! prefix)
 		const colorKey = excludeFromContext ? "dim" : "bashMode";
-		const borderColor = (str: string) => theme.fg(colorKey, str);
-
-		// Add spacer
-		this.addChild(new Spacer(1));
-
-		// Top border
-		this.addChild(new DynamicBorder(borderColor));
-
-		// Content container (holds dynamic content between borders)
-		this.#contentContainer = new Container();
-		this.addChild(this.#contentContainer);
+		const { contentContainer, loader } = buildExecutionFrame(this, ui, colorKey);
+		this.#contentContainer = contentContainer;
+		this.#loader = loader;
 
 		// Command header
 		this.#headerText = new Text(theme.fg(colorKey, theme.bold(`$ ${command}`)), 1, 0);
 		this.#contentContainer.addChild(this.#headerText);
-
-		// Loader
-		this.#loader = new Loader(
-			ui,
-			spinner => theme.fg(colorKey, spinner),
-			text => theme.fg("muted", text),
-			`Running… (esc to cancel)`,
-			getSymbolTheme().spinnerFrames,
-		);
 		this.#contentContainer.addChild(this.#loader);
-
-		// Bottom border
-		this.addChild(new DynamicBorder(borderColor));
 	}
 
 	/**
@@ -130,11 +114,7 @@ export class BashExecutionComponent extends Container {
 		options?: { output?: string; truncation?: TruncationMeta },
 	): void {
 		this.#exitCode = exitCode;
-		this.#status = cancelled
-			? "cancelled"
-			: exitCode !== 0 && exitCode !== undefined && exitCode !== null
-				? "error"
-				: "complete";
+		this.#status = resolveExecutionStatus(exitCode, cancelled);
 		this.#truncation = options?.truncation;
 		if (options?.output !== undefined) {
 			this.#setOutput(options.output);
@@ -182,14 +162,7 @@ export class BashExecutionComponent extends Container {
 			} else {
 				// Use shared visual truncation utility, recomputed per render width
 				const styledOutput = previewLogicalLines.map(line => theme.fg("muted", line)).join("\n");
-				const previewText = `\n${styledOutput}`;
-				this.#contentContainer.addChild({
-					render: (width: number) => {
-						const { visualLines } = truncateToVisualLines(previewText, PREVIEW_LINES, width, 1);
-						return visualLines;
-					},
-					invalidate: () => {},
-				});
+				this.#contentContainer.addChild(createCollapsedPreview(`\n${styledOutput}`, PREVIEW_LINES));
 			}
 		}
 
@@ -197,26 +170,14 @@ export class BashExecutionComponent extends Container {
 		if (this.#status === "running") {
 			this.#contentContainer.addChild(this.#loader);
 		} else {
-			const statusParts: string[] = [];
-
-			// Show how many lines are hidden (collapsed preview)
-			if (hiddenLineCount > 0 && !hasSixelOutput) {
-				statusParts.push(theme.fg("dim", `… ${hiddenLineCount} more lines (ctrl+o to expand)`));
-			}
-
-			if (this.#status === "cancelled") {
-				statusParts.push(theme.fg("warning", "(cancelled)"));
-			} else if (this.#status === "error") {
-				statusParts.push(theme.fg("error", `(exit ${this.#exitCode})`));
-			}
-
-			if (this.#truncation) {
-				statusParts.push(theme.fg("warning", formatTruncationMetaNotice(this.#truncation)));
-			}
-
-			if (statusParts.length > 0) {
-				this.#contentContainer.addChild(new Text(`\n${statusParts.join("\n")}`, 1, 0));
-			}
+			const footer = buildStatusFooter({
+				status: this.#status,
+				exitCode: this.#exitCode,
+				truncation: this.#truncation,
+				hiddenLineCount,
+				suppressHiddenCount: hasSixelOutput,
+			});
+			if (footer) this.#contentContainer.addChild(footer);
 		}
 	}
 

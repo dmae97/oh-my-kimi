@@ -10,8 +10,6 @@
 import type { OAuthController, OAuthProvider } from "./types";
 
 const PROVIDER_ID: OAuthProvider = "lm-studio";
-const _AUTH_URL = "https://lmstudio.ai/docs/api";
-const _DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:1234/v1";
 export const DEFAULT_LOCAL_TOKEN = "lm-studio-local";
 
 /**

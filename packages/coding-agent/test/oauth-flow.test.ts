@@ -309,4 +309,74 @@ describe("mcp oauth flow", () => {
 
 		await expect(flow.login()).rejects.toThrow("cannot fall back to a random port when oauth.redirectUri is set");
 	});
+
+	it("exposes the dynamically registered client_id and client_secret after generateAuthUrl", async () => {
+		using _hook = hookFetch(input => {
+			const url = String(input);
+			if (url === "https://www.figma.com/.well-known/oauth-authorization-server") {
+				return new Response(
+					JSON.stringify({ registration_endpoint: "https://api.figma.com/v1/oauth/mcp/register" }),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url === "https://api.figma.com/v1/oauth/mcp/register") {
+				return new Response(
+					JSON.stringify({
+						client_id: "registered-client-id",
+						client_secret: "registered-client-secret",
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response("not found", { status: 404 });
+		});
+
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://www.figma.com/oauth/mcp",
+				tokenUrl: "https://api.figma.com/v1/oauth/token",
+			},
+			{},
+		);
+
+		expect(flow.resolvedClientId).toBeUndefined();
+		expect(flow.registeredClientSecret).toBeUndefined();
+
+		await flow.generateAuthUrl("test-state", "http://127.0.0.1:53173/callback");
+
+		expect(flow.resolvedClientId).toBe("registered-client-id");
+		expect(flow.registeredClientSecret).toBe("registered-client-secret");
+	});
+
+	it("returns the configured client_id from resolvedClientId without triggering registration", async () => {
+		let registrationCalled = false;
+		using _hook = hookFetch(input => {
+			const url = String(input);
+			if (url.includes("/.well-known/")) {
+				return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+			}
+			if (url.endsWith("/register")) {
+				registrationCalled = true;
+			}
+			return new Response("not found", { status: 404 });
+		});
+
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://provider.example/authorize",
+				tokenUrl: "https://provider.example/token",
+				clientId: "configured-client-id",
+			},
+			{},
+		);
+
+		expect(flow.resolvedClientId).toBe("configured-client-id");
+		expect(flow.registeredClientSecret).toBeUndefined();
+
+		await flow.generateAuthUrl("test-state", "http://127.0.0.1:53174/callback");
+
+		expect(flow.resolvedClientId).toBe("configured-client-id");
+		expect(flow.registeredClientSecret).toBeUndefined();
+		expect(registrationCalled).toBe(false);
+	});
 });
