@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added scratch-directory awareness to the status-line `path` segment. When the project directory is inside an OS-level scratch root (the platform `os.tmpdir()`, `/tmp` and `/var/tmp` plus their macOS `/private/...` aliases, `~/tmp`, or — on Windows — `%TEMP%` / `%TMP%` / `%SystemRoot%\Temp`), the segment now (1) renders the new `icon.scratchFolder` symbol instead of `icon.folder`, and (2) strips the scratch root from the displayed path so only the trailing folder (and any subpath beneath it) is shown — mirroring how `/work` and `~/Projects` are already abbreviated. Both behaviors honor the existing `stripWorkPrefix` option. Icon defaults: 🗑 (emoji), `` (nf-fa-trash) for Nerd Font, `[T]` for ASCII, `◌` in the poimandres themes; themes can override `icon.scratchFolder` independently of `icon.folder`.
+
 ### Changed
 
 - Changed shell-minimizer per-line truncation marker from a bare `…` to `…[+N]`, where `N` is the count of dropped Unicode scalars. The bracketed tally disambiguates minimizer-driven cuts from genuine `…` characters in the source (paths, JSON, stack traces, etc.) and gives the agent an exact count so it can decide whether the missing tail is recoverable inline or warrants reading the `[raw output: artifact://<id>]` footer the bash wrapper already emits when the minimizer rewrites output. Affects pipeline Stage 5 (`truncate_lines_at` in `defs/*.toml`) and the internal callers in `filters/git.rs`, `filters/listing.rs`, and `filters/lint.rs`. ([#1046](https://github.com/can1357/oh-my-pi/issues/1046))

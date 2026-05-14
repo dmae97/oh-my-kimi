@@ -6,7 +6,7 @@ import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import type { SegmentContext } from "../src/modes/components/status-line/segments";
 import { renderSegment } from "../src/modes/components/status-line/segments";
 
-import { initTheme } from "../src/modes/theme/theme";
+import { initTheme, theme } from "../src/modes/theme/theme";
 
 const originalProjectDir = getProjectDir();
 beforeAll(async () => {
@@ -86,6 +86,56 @@ describe("status line path segment", () => {
 			expect(rendered.content).not.toContain(`${path.sep}Projects${path.sep}`);
 		} finally {
 			fs.rmSync(aliasRoot, { recursive: true, force: true });
+			fs.rmSync(realProjectDir, { recursive: true, force: true });
+		}
+	});
+
+	it("strips the scratch root and shows only the trailing folder inside the OS tmp dir", () => {
+		const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-status-line-scratch-"));
+		try {
+			setProjectDir(scratchDir);
+
+			const rendered = renderSegment("path", createPathContext());
+			expect(rendered.visible).toBe(true);
+			expect(rendered.content).toContain(theme.icon.scratchFolder);
+			expect(rendered.content).not.toContain(theme.icon.folder);
+			// Display is just the scratch-relative tail — no leading tmpdir, no ancestor segments.
+			expect(rendered.content).toContain(path.basename(scratchDir));
+			expect(rendered.content).not.toContain(os.tmpdir());
+		} finally {
+			fs.rmSync(scratchDir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps nested subpaths visible under a scratch root", () => {
+		const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-status-line-scratch-nest-"));
+		const nested = path.join(scratchDir, "sub", "deep");
+		fs.mkdirSync(nested, { recursive: true });
+		try {
+			setProjectDir(nested);
+
+			const rendered = renderSegment("path", createPathContext());
+			const tail = `${path.basename(scratchDir)}${path.sep}sub${path.sep}deep`;
+			expect(rendered.content).toContain(theme.icon.scratchFolder);
+			expect(rendered.content).toContain(tail);
+			expect(rendered.content).not.toContain(os.tmpdir());
+		} finally {
+			fs.rmSync(scratchDir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the folder icon for paths outside any scratch root", () => {
+		const projectsRoot = path.join(os.homedir(), "Projects");
+		fs.mkdirSync(projectsRoot, { recursive: true });
+		const realProjectDir = fs.mkdtempSync(path.join(projectsRoot, "omp-status-line-real-"));
+		try {
+			setProjectDir(realProjectDir);
+
+			const rendered = renderSegment("path", createPathContext());
+			expect(rendered.visible).toBe(true);
+			expect(rendered.content).toContain(theme.icon.folder);
+			expect(rendered.content).not.toContain(theme.icon.scratchFolder);
+		} finally {
 			fs.rmSync(realProjectDir, { recursive: true, force: true });
 		}
 	});

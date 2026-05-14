@@ -95,6 +95,7 @@ export type SymbolKey =
 	| "icon.pause"
 	| "icon.loop"
 	| "icon.folder"
+	| "icon.scratchFolder"
 	| "icon.file"
 	| "icon.git"
 	| "icon.branch"
@@ -258,6 +259,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.pause": "⏸",
 	"icon.loop": "↻",
 	"icon.folder": "📁",
+	"icon.scratchFolder": "🗑",
 	"icon.file": "📄",
 	"icon.git": "⎇",
 	"icon.branch": "⑂",
@@ -476,6 +478,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.loop": "\uf021",
 	// pick:  | alt:  
 	"icon.folder": "\uf115",
+	// pick:  | alt:
+	"icon.scratchFolder": "\uf014",
 	// pick:  | alt:  
 	"icon.file": "\uf15b",
 	// pick:  | alt:  ⎇
@@ -678,6 +682,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.pause": "||",
 	"icon.loop": "loop",
 	"icon.folder": "[D]",
+	"icon.scratchFolder": "[T]",
 	"icon.file": "[F]",
 	"icon.git": "git:",
 	"icon.branch": "@",
@@ -1457,6 +1462,7 @@ export class Theme {
 			pause: this.#symbols["icon.pause"],
 			loop: this.#symbols["icon.loop"],
 			folder: this.#symbols["icon.folder"],
+			scratchFolder: this.#symbols["icon.scratchFolder"],
 			file: this.#symbols["icon.file"],
 			git: this.#symbols["icon.git"],
 			branch: this.#symbols["icon.branch"],

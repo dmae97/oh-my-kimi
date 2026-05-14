@@ -2,7 +2,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
-import { formatDuration, formatNumber, getProjectDir, relativePathWithinRoot } from "@oh-my-pi/pi-utils";
+import { formatDuration, formatNumber, getProjectDir, pathIsWithin, relativePathWithinRoot } from "@oh-my-pi/pi-utils";
 import { type ThemeColor, theme } from "../../../modes/theme/theme";
 import { shortenPath } from "../../../tools/render-utils";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../../utils/session-color";
@@ -30,6 +30,33 @@ function stripDisplayRoot(pwd: string): string {
 
 function normalizePremiumRequests(value: number): number {
 	return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+const SCRATCH_ROOTS: readonly string[] = (() => {
+	const roots = new Set<string>([os.tmpdir(), path.join(os.homedir(), "tmp")]);
+	if (process.platform === "win32") {
+		const { TEMP, TMP, SystemRoot } = process.env;
+		if (TEMP) roots.add(TEMP);
+		if (TMP) roots.add(TMP);
+		if (SystemRoot) roots.add(path.join(SystemRoot, "Temp"));
+	} else {
+		roots.add("/tmp");
+		roots.add("/var/tmp");
+		if (process.platform === "darwin") {
+			roots.add("/private/tmp");
+			roots.add("/private/var/tmp");
+		}
+	}
+	return [...roots];
+})();
+
+function classifyProjectDir(pwd: string): { scratch: boolean; relative: string | null } {
+	for (const root of SCRATCH_ROOTS) {
+		if (pathIsWithin(root, pwd)) {
+			return { scratch: true, relative: relativePathWithinRoot(root, pwd) };
+		}
+	}
+	return { scratch: false, relative: null };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -150,10 +177,16 @@ const pathSegment: StatusLineSegment = {
 	render(ctx) {
 		const opts = ctx.options.path ?? {};
 
-		let pwd = getProjectDir();
+		const projectDir = getProjectDir();
+		const { scratch, relative } = classifyProjectDir(projectDir);
+		let pwd = projectDir;
 
 		if (opts.stripWorkPrefix !== false) {
-			pwd = stripDisplayRoot(pwd);
+			if (scratch) {
+				if (relative) pwd = relative;
+			} else {
+				pwd = stripDisplayRoot(pwd);
+			}
 		}
 		if (opts.abbreviate !== false) {
 			pwd = shortenPath(pwd);
@@ -166,7 +199,8 @@ const pathSegment: StatusLineSegment = {
 			pwd = `${ellipsis}${pwd.slice(-sliceLen)}`;
 		}
 
-		const content = withIcon(theme.icon.folder, pwd);
+		const icon = scratch ? theme.icon.scratchFolder : theme.icon.folder;
+		const content = withIcon(icon, pwd);
 		return { content: theme.fg("statusLinePath", content), visible: true };
 	},
 };
