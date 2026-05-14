@@ -1155,16 +1155,6 @@
         return html;
       }
 
-      function renderExitPlanMode(name, args, result, ctx) {
-        const badges = args.title ? [String(args.title)] : null;
-        let html = toolHead('exit_plan_mode', '', badges);
-        if (result) {
-          const output = ctx.getResultText();
-          if (output) html += formatExpandableOutput(output, 8);
-        }
-        return html;
-      }
-
       function renderResolve(name, args, result, ctx) {
         const action = str(args.action) || '?';
         let html = toolHead('resolve', '', [action]);
@@ -1562,7 +1552,6 @@
         inspect_image: renderInspectImage,
         generate_image: renderGenerateImage,
         ask: renderAsk,
-        exit_plan_mode: renderExitPlanMode,
         resolve: renderResolve,
         github: renderGh,
         render_mermaid: renderMermaid,

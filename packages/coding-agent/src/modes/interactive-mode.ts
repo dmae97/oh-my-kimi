@@ -39,7 +39,7 @@ import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
-import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
+import { normalizePlanTitle, type PlanApprovalDetails, renameApprovedPlanFile } from "../plan-mode/approved-plan";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
 	type: "text",
@@ -50,9 +50,11 @@ import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
 import { STTController, type SttState } from "../stt";
-import type { ExitPlanModeDetails, LspStartupServerInfo } from "../tools";
+import type { LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
+import { runResolveInvocation } from "../tools/resolve";
 import { formatPhaseDisplayName } from "../tools/todo-write";
+import { ToolError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../utils/session-color";
@@ -930,8 +932,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		const planFilePath = options?.planFilePath ?? (await this.#getPlanFilePath());
 		const previousTools = this.session.getActiveToolNames();
-		const hasExitTool = this.session.getToolByName("exit_plan_mode") !== undefined;
-		const planTools = hasExitTool ? [...previousTools, "exit_plan_mode"] : previousTools;
+		const hasResolveTool = this.session.getToolByName("resolve") !== undefined;
+		const planTools = hasResolveTool ? [...previousTools, "resolve"] : previousTools;
 		const uniquePlanTools = [...new Set(planTools)];
 
 		this.#planModePreviousTools = previousTools;
@@ -945,6 +947,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			workflow: options?.workflow ?? "parallel",
 			reentry: this.#planModeHasEntered,
 		});
+		this.session.setStandingResolveHandler?.(input => this.#runPlanApprovalResolve(input));
 		if (this.session.isStreaming) {
 			await this.session.sendPlanModeContext({ deliverAs: "steer" });
 		}
@@ -953,6 +956,50 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#updatePlanModeStatus();
 		this.sessionManager.appendModeChange("plan", { planFilePath });
 		this.showStatus(`Plan mode enabled. Plan file: ${planFilePath}`);
+	}
+
+	/** Standing resolve dispatcher registered while plan mode is active. The agent
+	 *  submits the finalized plan by calling `resolve { action: "apply", extra: { title } }`;
+	 *  this handler validates the plan file exists, normalizes the title, and shapes the
+	 *  payload that `event-controller` forwards to `handlePlanApproval`. */
+	#runPlanApprovalResolve(input: unknown): Promise<{
+		content: Array<{ type: string; text: string }>;
+		details?: unknown;
+	}> {
+		return runResolveInvocation(input as Parameters<typeof runResolveInvocation>[0], {
+			sourceToolName: "plan_approval",
+			label: "Plan ready for approval",
+			apply: async (_reason, extra) => {
+				const state = this.session.getPlanModeState?.();
+				if (!state?.enabled) {
+					throw new ToolError("Plan mode is not active.");
+				}
+				const title = extra?.title;
+				if (typeof title !== "string" || title.trim() === "") {
+					throw new ToolError(
+						'Plan approval requires `extra: { title: "<PLAN_TITLE>" }`. Provide a title with letters, numbers, underscores, or hyphens only.',
+					);
+				}
+				const normalized = normalizePlanTitle(title);
+				const planFilePath = state.planFilePath;
+				const planContent = await this.#readPlanFile(planFilePath);
+				if (planContent === null) {
+					throw new ToolError(
+						`Plan file not found at ${planFilePath}. Write the finalized plan to ${planFilePath} before requesting approval.`,
+					);
+				}
+				const details: PlanApprovalDetails = {
+					planFilePath,
+					finalPlanFilePath: `local://${normalized.fileName}`,
+					title: normalized.title,
+					planExists: true,
+				};
+				return {
+					content: [{ type: "text" as const, text: "Plan ready for approval." }],
+					details,
+				};
+			},
+		});
 	}
 
 	async #exitPlanMode(options?: { silent?: boolean; paused?: boolean }): Promise<void> {
@@ -990,6 +1037,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				}
 			}
 		}
+		this.session.setStandingResolveHandler?.(null);
 		this.session.setPlanModeState(undefined);
 		this.planModeEnabled = false;
 		this.planModePaused = options?.paused ?? false;
@@ -1230,16 +1278,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	async handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void> {
+	async handlePlanApproval(details: PlanApprovalDetails): Promise<void> {
 		if (!this.planModeEnabled) {
 			this.showWarning("Plan mode is not active.");
 			return;
 		}
 
-		// Abort the agent to prevent it from continuing (e.g., calling exit_plan_mode
-		// again) while the popup is showing. The event listener fires asynchronously
-		// (agent's #emit is fire-and-forget), so without this the model sees "Plan
-		// ready for approval." and immediately calls exit_plan_mode in a loop.
+		// Abort the agent to prevent it from continuing (e.g., re-submitting the
+		// plan) while the popup is showing. The event listener fires asynchronously
+		// (agent's #emit is fire-and-forget), so without this the model sees
+		// "Plan ready for approval." and immediately re-invokes `resolve` in a loop.
 		await this.session.abort();
 
 		const planFilePath = details.planFilePath || this.planModePlanFilePath || (await this.#getPlanFilePath());

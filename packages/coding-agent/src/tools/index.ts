@@ -29,7 +29,6 @@ import { CalculatorTool } from "./calculator";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 import { DebugTool } from "./debug";
 import { EvalTool } from "./eval";
-import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FindTool } from "./find";
 import { GithubTool } from "./gh";
 import { HindsightRecallTool } from "./hindsight-recall";
@@ -70,7 +69,6 @@ export * from "./calculator";
 export * from "./checkpoint";
 export * from "./debug";
 export * from "./eval";
-export * from "./exit-plan-mode";
 export * from "./find";
 export * from "./gh";
 export * from "./hindsight-recall";
@@ -220,6 +218,12 @@ export interface ToolSession {
 	steer?(message: { customType: string; content: string; details?: unknown }): void;
 	/** Peek the currently in-flight tool-choice queue directive's invocation handler. Used by the `resolve` tool to dispatch to the pending action. */
 	peekQueueInvoker?(): ((input: unknown) => Promise<unknown> | unknown) | undefined;
+	/** Peek the long-lived "standing" resolve handler registered by a mode (e.g. plan mode).
+	 *  Consulted by the `resolve` tool as a fallback when no queue invoker is in flight,
+	 *  letting modes accept `resolve` invocations without forcing the tool choice every turn. */
+	peekStandingResolveHandler?(): ((input: unknown) => Promise<unknown> | unknown) | undefined;
+	/** Register or clear the standing resolve handler. Passing `null` clears it. */
+	setStandingResolveHandler?(handler: ((input: unknown) => Promise<unknown> | unknown) | null): void;
 	/** Get active checkpoint state if any. */
 	getCheckpointState?: () => CheckpointState | undefined;
 	/** Set or clear active checkpoint state. */
@@ -303,7 +307,6 @@ export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	yield: s => new YieldTool(s),
 	report_finding: () => reportFindingTool,
 	report_tool_issue: s => createReportToolIssueTool(s),
-	exit_plan_mode: s => new ExitPlanModeTool(s),
 	resolve: s => new ResolveTool(s),
 };
 
@@ -353,10 +356,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const enableLsp = session.enableLsp ?? true;
 	const requestedTools =
 		toolNames && toolNames.length > 0 ? [...new Set(toolNames.map(name => name.toLowerCase()))] : undefined;
-	const planEnabled = session.settings.get("plan.enabled");
-	if (planEnabled && requestedTools && !requestedTools.includes("exit_plan_mode")) {
-		requestedTools.push("exit_plan_mode");
-	}
 	const backends = resolveEvalBackends(session);
 	const allowPython = backends.python;
 	const allowJs = backends.js;
@@ -428,7 +427,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 
 	const allTools: Record<string, ToolFactory> = { ...BUILTIN_TOOLS, ...HIDDEN_TOOLS };
 	const isToolAllowed = (name: string) => {
-		if (name === "exit_plan_mode") return planEnabled;
 		if (name === "lsp") return enableLsp && session.settings.get("lsp.enabled");
 		if (name === "bash") return true;
 		if (name === "eval") return allowEval;
@@ -478,7 +476,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 						.filter(([name]) => isToolAllowed(name))
 						.map(([name, factory]) => [name, factory] as const),
 					...(includeYield ? ([["yield", HIDDEN_TOOLS.yield]] as const) : []),
-					...(planEnabled ? ([["exit_plan_mode", HIDDEN_TOOLS.exit_plan_mode]] as const) : []),
 				];
 
 	const baseResults = await Promise.all(
@@ -488,8 +485,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		}),
 	);
 	const tools = baseResults.filter((r): r is Tool => r !== null);
-	const hasDeferrableTools = tools.some(tool => tool.deferrable === true);
-	if (hasDeferrableTools && !tools.some(tool => tool.name === "resolve")) {
+	if (!tools.some(tool => tool.name === "resolve")) {
 		const resolveTool = await logger.time("createTools:resolve", HIDDEN_TOOLS.resolve, session);
 		if (resolveTool) {
 			tools.push(wrapToolWithMetaNotice(resolveTool));

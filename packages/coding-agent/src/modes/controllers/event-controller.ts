@@ -13,10 +13,11 @@ import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
+import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { calculatePromptTokens } from "../../session/compaction/compaction";
 import { isSilentAbort, readPendingDisplayTag } from "../../session/messages";
-import type { ExitPlanModeDetails } from "../../tools";
+import type { ResolveToolDetails } from "../../tools/resolve";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
 
@@ -546,10 +547,13 @@ export class EventController {
 				`Todo update failed${textContent ? `: ${textContent}` : ". Progress may be stale until todo_write succeeds."}`,
 			);
 		}
-		if (event.toolName === "exit_plan_mode" && !event.isError) {
-			const details = event.result.details as ExitPlanModeDetails | undefined;
-			if (details) {
-				await this.ctx.handleExitPlanModeTool(details);
+		if (event.toolName === "resolve" && !event.isError) {
+			const details = event.result.details as ResolveToolDetails | undefined;
+			if (details?.sourceToolName === "plan_approval" && details.action === "apply") {
+				const planDetails = details.sourceResultDetails as PlanApprovalDetails | undefined;
+				if (planDetails) {
+					await this.ctx.handlePlanApproval(planDetails);
+				}
 			}
 		}
 	}

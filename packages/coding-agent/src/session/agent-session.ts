@@ -959,6 +959,19 @@ export class AgentSession {
 		return this.#toolChoiceQueue.peekInFlightInvoker();
 	}
 
+	/** Standing (long-lived) handler the `resolve` tool falls back to when no
+	 *  queue invoker is in flight. Used by plan mode so the agent can submit
+	 *  approval via `resolve` without forcing the tool choice every turn. */
+	#standingResolveHandler: ((input: unknown) => Promise<unknown> | unknown) | undefined;
+
+	peekStandingResolveHandler(): ((input: unknown) => Promise<unknown> | unknown) | undefined {
+		return this.#standingResolveHandler;
+	}
+
+	setStandingResolveHandler(handler: ((input: unknown) => Promise<unknown> | unknown) | null): void {
+		this.#standingResolveHandler = handler ?? undefined;
+	}
+
 	/** Provider-scoped mutable state store for transport/session caches. */
 	get providerSessionState(): Map<string, ProviderSessionState> {
 		return this.#providerSessionState;
@@ -2691,7 +2704,7 @@ export class AgentSession {
 
 	/** Collect built-in tools the model can discover via search_tool_bm25. Restricted to tool
 	 *  definitions whose `loadMode === "discoverable"`. This keeps hidden/internal tools
-	 *  (resolve, yield, exit_plan_mode, report_finding, report_tool_issue) out of the index
+	 *  (resolve, yield, report_finding, report_tool_issue) out of the index
 	 *  and avoids mislabeling extension/custom default-inactive tools as built-ins. */
 	#collectDiscoverableBuiltinTools(): DiscoverableTool[] {
 		const activeNames = new Set(this.getActiveToolNames());
@@ -3405,7 +3418,6 @@ export class AgentSession {
 			askToolName: "ask",
 			writeToolName: "write",
 			editToolName: "edit",
-			exitToolName: "exit_plan_mode",
 			reentry: state.reentry ?? false,
 			iterative: state.workflow === "iterative",
 		});
@@ -5308,14 +5320,14 @@ export class AgentSession {
 		}
 
 		const calledRequiredTool = assistantMessage.content.some(
-			content => content.type === "toolCall" && (content.name === "ask" || content.name === "exit_plan_mode"),
+			content => content.type === "toolCall" && (content.name === "ask" || content.name === "resolve"),
 		);
 		if (calledRequiredTool) {
 			return;
 		}
-		const hasRequiredTools = this.#toolRegistry.has("ask") && this.#toolRegistry.has("exit_plan_mode");
+		const hasRequiredTools = this.#toolRegistry.has("ask") && this.#toolRegistry.has("resolve");
 		if (!hasRequiredTools) {
-			logger.warn("Plan mode enforcement skipped because ask/exit tools are unavailable", {
+			logger.warn("Plan mode enforcement skipped because ask/resolve tools are unavailable", {
 				activeToolNames: this.agent.state.tools.map(tool => tool.name),
 			});
 			return;
@@ -5323,7 +5335,6 @@ export class AgentSession {
 
 		const reminder = prompt.render(planModeToolDecisionReminderPrompt, {
 			askToolName: "ask",
-			exitToolName: "exit_plan_mode",
 		});
 
 		await this.prompt(reminder, {

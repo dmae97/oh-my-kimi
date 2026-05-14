@@ -1078,6 +1078,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					timestamp: Date.now(),
 				}),
 			peekQueueInvoker: () => session.peekQueueInvoker(),
+			peekStandingResolveHandler: () => session.peekStandingResolveHandler(),
+			setStandingResolveHandler: handler => session.setStandingResolveHandler(handler),
 			allocateOutputArtifact: async toolType => {
 				try {
 					return await sessionManager.allocateArtifactPath(toolType);
@@ -1503,7 +1505,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			(options.toolNames ? [...new Set(options.toolNames.map(name => name.toLowerCase()))] : undefined) ??
 			toolNamesFromRegistry;
 		const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
-		const includeExitPlanMode = requestedToolNames.includes("exit_plan_mode");
 		// Effective discovery mode: tools.discoveryMode takes precedence; mcp.discoveryMode is back-compat alias.
 		const toolsDiscoveryModeSetting = settings.get("tools.discoveryMode");
 		const effectiveDiscoveryMode: "off" | "mcp-only" | "all" =
@@ -1516,9 +1517,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const defaultInactiveToolNames = new Set(
 			registeredTools.filter(tool => tool.definition.defaultInactive).map(tool => tool.definition.name),
 		);
-		const requestedActiveToolNames = includeExitPlanMode
-			? normalizedRequested
-			: normalizedRequested.filter(name => name !== "exit_plan_mode");
+		const requestedActiveToolNames = normalizedRequested;
 		const initialRequestedActiveToolNames = options.toolNames
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));

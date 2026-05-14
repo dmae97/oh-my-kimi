@@ -11,11 +11,12 @@ import type {
 } from "../extensibility/extensions";
 import type { CompactOptions } from "../extensibility/extensions/types";
 import type { MCPManager } from "../mcp";
+import type { PlanApprovalDetails } from "../plan-mode/approved-plan";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { CompactionOutcome } from "../session/compaction";
 import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
-import type { ExitPlanModeDetails, LspStartupServerInfo } from "../tools";
+import type { LspStartupServerInfo } from "../tools";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import type { CustomEditor } from "./components/custom-editor";
@@ -260,7 +261,7 @@ export interface InteractiveModeContext {
 	handleLoopCommand(args?: string): Promise<void>;
 	disableLoopMode(): void;
 	pauseLoop(): void;
-	handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void>;
+	handlePlanApproval(details: PlanApprovalDetails): Promise<void>;
 
 	// Hook UI methods
 	initHooksAndCustomTools(): Promise<void>;

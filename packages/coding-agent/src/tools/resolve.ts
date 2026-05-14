@@ -14,6 +14,12 @@ import { ToolError } from "./tool-errors";
 const resolveSchema = Type.Object({
 	action: Type.Union([Type.Literal("apply"), Type.Literal("discard")]),
 	reason: Type.String({ description: "reason for action", examples: ["approved by user"] }),
+	extra: Type.Optional(
+		Type.Record(Type.String(), Type.Unknown(), {
+			description:
+				'Free-form metadata interpreted by the resolving tool (e.g. plan-mode approval requires `{ title: "<PLAN_TITLE>" }`).',
+		}),
+	),
 });
 
 type ResolveParams = Static<typeof resolveSchema>;
@@ -21,15 +27,10 @@ type ResolveParams = Static<typeof resolveSchema>;
 export interface ResolveToolDetails {
 	action: "apply" | "discard";
 	reason: string;
+	extra?: Record<string, unknown>;
 	sourceToolName?: string;
 	label?: string;
 	sourceResultDetails?: unknown;
-}
-
-function resolveReasonPreview(reason?: string): string | undefined {
-	const trimmed = reason?.trim();
-	if (!trimmed) return undefined;
-	return truncateToWidth(trimmed, 72, Ellipsis.Omit);
 }
 
 /**
@@ -47,49 +48,25 @@ export function queueResolveHandler(
 	options: {
 		label: string;
 		sourceToolName: string;
-		apply(reason: string): Promise<AgentToolResult<unknown>>;
-		reject?(reason: string): Promise<AgentToolResult<unknown> | undefined>;
+		apply(reason: string, extra?: Record<string, unknown>): Promise<AgentToolResult<unknown>>;
+		reject?(reason: string, extra?: Record<string, unknown>): Promise<AgentToolResult<unknown> | undefined>;
 	},
 ): void {
 	const queue = session.getToolChoiceQueue?.();
 	const forced = session.buildToolChoice?.("resolve");
 	if (!queue || !forced || typeof forced === "string") return;
 
-	const detailsFor = (params: ResolveParams): ResolveToolDetails => ({
-		action: params.action,
-		reason: params.reason,
-		sourceToolName: options.sourceToolName,
-		label: options.label,
-	});
-
 	queue.pushOnce(forced, {
 		label: `pending-action:${options.sourceToolName}`,
 		now: true,
 		onRejected: () => "requeue",
-		onInvoked: async (input: unknown) => {
-			const params = input as ResolveParams;
-			const withResolveDetails = (result: AgentToolResult<unknown>): AgentToolResult<ResolveToolDetails> => ({
-				...result,
-				details: {
-					...detailsFor(params),
-					...(result.details != null ? { sourceResultDetails: result.details } : {}),
-				},
-			});
-			if (params.action === "apply") {
-				const result = await options.apply(params.reason);
-				return withResolveDetails(result);
-			}
-			if (params.action === "discard" && options.reject != null) {
-				const result = await options.reject(params.reason);
-				if (result != null) {
-					return withResolveDetails(result);
-				}
-			}
-			return {
-				content: [{ type: "text" as const, text: `Discarded: ${options.label}. Reason: ${params.reason}` }],
-				details: detailsFor(params),
-			};
-		},
+		onInvoked: async (input: unknown) =>
+			runResolveInvocation(input as ResolveParams, {
+				sourceToolName: options.sourceToolName,
+				label: options.label,
+				apply: options.apply,
+				reject: options.reject,
+			}),
 	});
 
 	session.steer?.({
@@ -103,6 +80,57 @@ export function queueResolveHandler(
 	});
 }
 
+/**
+ * Shared invocation runner used by both queued (in-flight) handlers and
+ * standing handlers (e.g. plan-mode approval). Discriminates on action,
+ * routes through the caller's apply/reject, and wraps the resulting tool
+ * payload with `ResolveToolDetails` so the renderer and event-controller
+ * see a consistent shape.
+ */
+export async function runResolveInvocation(
+	params: ResolveParams,
+	options: {
+		sourceToolName: string;
+		label: string;
+		apply(reason: string, extra?: Record<string, unknown>): Promise<AgentToolResult<unknown>>;
+		reject?(reason: string, extra?: Record<string, unknown>): Promise<AgentToolResult<unknown> | undefined>;
+	},
+): Promise<AgentToolResult<ResolveToolDetails>> {
+	const baseDetails: ResolveToolDetails = {
+		action: params.action,
+		reason: params.reason,
+		sourceToolName: options.sourceToolName,
+		label: options.label,
+		...(params.extra != null ? { extra: params.extra } : {}),
+	};
+	if (params.action === "apply") {
+		const result = await options.apply(params.reason, params.extra);
+		return {
+			...result,
+			details: {
+				...baseDetails,
+				...(result.details != null ? { sourceResultDetails: result.details } : {}),
+			},
+		};
+	}
+	if (params.action === "discard" && options.reject != null) {
+		const result = await options.reject(params.reason, params.extra);
+		if (result != null) {
+			return {
+				...result,
+				details: {
+					...baseDetails,
+					...(result.details != null ? { sourceResultDetails: result.details } : {}),
+				},
+			};
+		}
+	}
+	return {
+		content: [{ type: "text" as const, text: `Discarded: ${options.label}. Reason: ${params.reason}` }],
+		details: baseDetails,
+	};
+}
+
 export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveToolDetails> {
 	readonly name = "resolve";
 	readonly label = "Resolve";
@@ -112,10 +140,9 @@ export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveToolD
 	readonly strict = true;
 	readonly intent = (args: Partial<ResolveParams>) => {
 		if (args.action === "discard") {
-			return args.reason ? `discarding: ${args.reason}` : "aiscarding changes";
-		} else {
-			return args.reason ? `accepting: ${args.reason}` : "accepting changes";
+			return args.reason ? `discarding: ${args.reason}` : "discarding changes";
 		}
+		return args.reason ? `accepting: ${args.reason}` : "accepting changes";
 	};
 
 	constructor(private readonly session: ToolSession) {
@@ -130,7 +157,7 @@ export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveToolD
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<ResolveToolDetails>> {
 		return untilAborted(signal, async () => {
-			const invoker = this.session.peekQueueInvoker?.();
+			const invoker = this.session.peekQueueInvoker?.() ?? this.session.peekStandingResolveHandler?.();
 			if (!invoker) {
 				throw new ToolError("No pending action to resolve. Nothing to apply or discard.");
 			}
@@ -142,7 +169,8 @@ export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveToolD
 
 export const resolveToolRenderer = {
 	renderCall(args: ResolveParams, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const reason = resolveReasonPreview(args.reason);
+		const reasonTrimmed = args.reason?.trim();
+		const reason = reasonTrimmed ? truncateToWidth(reasonTrimmed, 72, Ellipsis.Omit) : undefined;
 		const text = renderStatusLine(
 			{
 				icon: "pending",

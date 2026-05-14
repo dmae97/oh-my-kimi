@@ -85,7 +85,7 @@ describe("InteractiveMode plan review rendering", () => {
 		mode.planModePlanFilePath = planFilePath;
 		vi.spyOn(mode, "showHookSelector").mockResolvedValue("Stay in plan mode");
 
-		await mode.handleExitPlanModeTool({
+		await mode.handlePlanApproval({
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
@@ -100,7 +100,7 @@ describe("InteractiveMode plan review rendering", () => {
 		mode.chatContainer.addChild(marker);
 		await Bun.write(resolvedPlanPath, "# Second plan\n\nbeta");
 
-		await mode.handleExitPlanModeTool({
+		await mode.handlePlanApproval({
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
@@ -129,7 +129,7 @@ describe("InteractiveMode plan review rendering", () => {
 		mode.planModePlanFilePath = planFilePath;
 		const selector = vi.spyOn(mode, "showHookSelector").mockResolvedValue("Stay in plan mode");
 
-		await mode.handleExitPlanModeTool({
+		await mode.handlePlanApproval({
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
@@ -168,7 +168,7 @@ describe("InteractiveMode plan review rendering", () => {
 		const clear = vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
 		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
-		await mode.handleExitPlanModeTool({
+		await mode.handlePlanApproval({
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
@@ -197,7 +197,7 @@ describe("InteractiveMode plan review rendering", () => {
 		const clear = vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
 		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
-		await mode.handleExitPlanModeTool({
+		await mode.handlePlanApproval({
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
@@ -226,7 +226,7 @@ describe("InteractiveMode plan review rendering", () => {
 		const markSentSpy = vi.spyOn(session, "markPlanReferenceSent");
 		const promptSpy = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
-		await mode.handleExitPlanModeTool({
+		await mode.handlePlanApproval({
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
@@ -272,7 +272,7 @@ describe("InteractiveMode plan review rendering", () => {
 		const markSentSpy = vi.spyOn(session, "markPlanReferenceSent");
 		const promptSpy = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
-		await mode.handleExitPlanModeTool({
+		await mode.handlePlanApproval({
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
@@ -313,7 +313,7 @@ describe("InteractiveMode plan review rendering", () => {
 		const markSentSpy = vi.spyOn(session, "markPlanReferenceSent");
 		const promptSpy = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
-		await mode.handleExitPlanModeTool({
+		await mode.handlePlanApproval({
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
@@ -351,7 +351,7 @@ describe("InteractiveMode plan review rendering", () => {
 			return "ok";
 		});
 
-		await mode.handleExitPlanModeTool({
+		await mode.handlePlanApproval({
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
@@ -368,14 +368,14 @@ describe("InteractiveMode plan review rendering", () => {
 	// ==========================================================================
 	// Phase 6 — B layer: #approvePlan flag lifecycle via try/finally.
 	//
-	// Drives `handleExitPlanModeTool` with each CompactionOutcome variant and
+	// Drives `handlePlanApproval` with each CompactionOutcome variant and
 	// asserts `session.isPlanCompactAbortPending === false` after `#approvePlan`
 	// resolves/rejects. The flag is the only state that can leak into later
 	// unrelated aborts; the `try/finally` in `#approvePlan` is what protects it.
 	// ==========================================================================
 
 	/**
-	 * Drives `handleExitPlanModeTool` with the "Approve and compact context"
+	 * Drives `handlePlanApproval` with the "Approve and compact context"
 	 * picker outcome and the given compaction-outcome mock. Returns the promise
 	 * the harness produces so the caller decides between `await` (B1-B3 happy
 	 * paths) and `expect(...).rejects` (B4 throw path). Does NOT swallow errors.
@@ -402,7 +402,7 @@ describe("InteractiveMode plan review rendering", () => {
 		}
 		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
-		await mode.handleExitPlanModeTool({
+		await mode.handlePlanApproval({
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
@@ -429,8 +429,8 @@ describe("InteractiveMode plan review rendering", () => {
 	});
 
 	it("B4: Approve and compact context + handleCompactCommand throws → showError surfaces the failure AND flag cleared by finally before the outer catch", async () => {
-		// `handleExitPlanModeTool` wraps `#approvePlan` in a try/catch
-		// (interactive-mode.ts:1287) that consumes the throw and reports via
+		// `handlePlanApproval` wraps `#approvePlan` in a try/catch
+		// in `InteractiveMode` that consumes the throw and reports via
 		// `showError`. The contract under test is:
 		//   1. `#approvePlan`'s own `try/finally` clears the flag BEFORE the
 		//      throw bubbles up to that outer catch.
@@ -456,7 +456,7 @@ describe("InteractiveMode plan review rendering", () => {
 		const markSpy = vi.spyOn(session, "markPlanCompactAbortPending");
 		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
-		await mode.handleExitPlanModeTool({
+		await mode.handlePlanApproval({
 			planFilePath,
 			planExists: true,
 			title: "PLAN",

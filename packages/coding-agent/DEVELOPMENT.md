@@ -389,7 +389,7 @@ A `ToolFactory` is `(session: ToolSession) => Tool | null | Promise<Tool | null>
 
 `createTools(session, toolNames?)` is the entry point. It:
 
-1. Normalizes requested tool names (`toolNames`) and injects `exit_plan_mode` while `plan.enabled` is true.
+1. Normalizes requested tool names (`toolNames`).
 2. Resolves eval backend allowance via `PI_PY` override (`getEvalBackendsFromEnv()`) or `eval.py` / `eval.js` settings.
 3. Performs Python kernel preflight when applicable (`checkPythonKernelAvailability`).
 4. Computes effective gating (`isToolAllowed`) from settings and runtime state:
@@ -397,7 +397,7 @@ A `ToolFactory` is `(session: ToolSession) => Tool | null | Promise<Tool | null>
    - recursion guard for `task` (`task.maxRecursionDepth` vs `session.taskDepth`)
    - yield mode (`requireYieldTool`) and `todo_write` suppression
 5. Instantiates selected tools in parallel with `Promise.all`, records slow factory timings when `PI_TIMING=1`, and wraps results with `wrapToolWithMetaNotice`.
-6. Includes `resolve` only when at least one instantiated tool has `deferrable: true` (deferred preview/apply workflows).
+6. Includes `resolve` unconditionally so plan mode and deferred preview/apply workflows always have it available.
 
 The wrapper step is not cosmetic: it enforces uniform meta-notice behavior and normalized error rendering across all tools.
 
@@ -1129,15 +1129,14 @@ Primary file: `packages/coding-agent/src/tools/index.ts`.
    - `export const BUILTIN_TOOLS: Record<string, ToolFactory> = { ... }`
    - Key is the external tool name (e.g. `"read"`, `"web_search"`).
 4. If it should be hidden/system-only, register under `HIDDEN_TOOLS` instead.
-   - Existing hidden names: `yield`, `report_finding`, `exit_plan_mode`, `resolve`.
+   - Existing hidden names: `yield`, `report_finding`, `resolve`.
 5. Wire feature gates in `isToolAllowed(name)` when the tool needs runtime enable/disable behavior.
    - Existing gates use `session.settings.get("<tool>.enabled")` and recursion limits for `task`.
 6. If the tool should be selectable by type, update `ToolName = keyof typeof BUILTIN_TOOLS` consumers as needed.
 
 Notes from current behavior:
 
-- `createTools()` injects `exit_plan_mode` when `toolNames` are specified and `plan.enabled` is true.
-- `resolve` is included only when at least one active tool is marked `deferrable: true` (built-in or extension/custom).
+- `createTools()` always includes `resolve`. Plan mode uses it (via the agent calling `resolve` with `extra: { title }`) to submit a finalized plan for user approval; preview/apply tools (e.g. `ast_edit`) use it to gate apply/discard.
 - `yield` is force-added when `session.requireYieldTool === true`.
 - Eval availability is mode-driven (`PI_PY`, `eval.py`, `eval.js`); eval falls back to JavaScript when Python is unavailable and JavaScript is enabled. The standalone `bash` tool is always available.
 

@@ -2,6 +2,40 @@ import * as fs from "node:fs/promises";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { normalizeLocalScheme } from "../tools/path-utils";
+import { ToolError } from "../tools/tool-errors";
+
+/** Shape forwarded from the plan-mode resolve handler to InteractiveMode's
+ *  approval popup. Populated by the standing handler that the resolve tool
+ *  dispatches to when the agent submits `resolve { action: "apply" }`. */
+export interface PlanApprovalDetails {
+	planFilePath: string;
+	finalPlanFilePath: string;
+	title: string;
+	planExists: boolean;
+}
+
+/** Validate the agent-supplied plan title and derive the destination filename.
+ *  Filename uses the title with a `.md` suffix; characters are restricted to
+ *  letters, numbers, underscores, and hyphens so the value is safe to splice
+ *  into a `local://` URL without escaping. */
+export function normalizePlanTitle(title: string): { title: string; fileName: string } {
+	const trimmed = title.trim();
+	if (!trimmed) {
+		throw new ToolError("Plan title is required and must not be empty.");
+	}
+
+	if (trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("..")) {
+		throw new ToolError("Plan title must not contain path separators or '..'.");
+	}
+
+	const withExtension = trimmed.toLowerCase().endsWith(".md") ? trimmed : `${trimmed}.md`;
+	if (!/^[A-Za-z0-9_-]+\.md$/.test(withExtension)) {
+		throw new ToolError("Plan title may only contain letters, numbers, underscores, or hyphens.");
+	}
+
+	const normalizedTitle = withExtension.slice(0, -3);
+	return { title: normalizedTitle, fileName: withExtension };
+}
 
 interface RenameApprovedPlanFileOptions {
 	planFilePath: string;
@@ -36,7 +70,7 @@ export async function renameApprovedPlanFile(options: RenameApprovedPlanFileOpti
 		const destinationStat = await fs.stat(resolvedDestination);
 		if (destinationStat.isFile()) {
 			throw new Error(
-				`Plan destination already exists at ${finalPlanFilePath}. Choose a different title and call exit_plan_mode again.`,
+				`Plan destination already exists at ${finalPlanFilePath}. Choose a different title and submit the plan for approval again.`,
 			);
 		}
 		throw new Error(`Plan destination exists but is not a file: ${finalPlanFilePath}`);
