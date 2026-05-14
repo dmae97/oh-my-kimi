@@ -45,7 +45,7 @@ export function createExaTool(
 
 				return {
 					content: [{ type: "text" as const, text: formatGenericResponse(response) }],
-					details: { response, toolName: name },
+					details: { raw: response, toolName: name },
 				};
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);

@@ -334,7 +334,7 @@ export class MCPWrappedTool implements CustomTool<TSchema, ExaRenderDetails> {
 
 			return {
 				content: [{ type: "text" as const, text: formatGenericResponse(response) }],
-				details: { response, toolName: this.config.name },
+				details: { raw: response, toolName: this.config.name },
 			};
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
