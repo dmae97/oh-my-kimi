@@ -13,6 +13,14 @@ export interface SessionStorageStat {
 
 export interface SessionStorageWriter {
 	writeLine(line: string): Promise<void>;
+	/**
+	 * Synchronously append a single line. Returns once the bytes are handed to the kernel
+	 * (page cache), so the data survives a non-graceful process death (OOM, SIGKILL, etc.)
+	 * even though it has not yet been fsynced to the underlying disk.
+	 *
+	 * `line` MUST already include the trailing newline. Throws synchronously on I/O error.
+	 */
+	writeLineSync(line: string): void;
 	flush(): Promise<void>;
 	fsync(): Promise<void>;
 	close(): Promise<void>;
@@ -23,6 +31,7 @@ export interface SessionStorage {
 	ensureDirSync(dir: string): void;
 	existsSync(path: string): boolean;
 	writeTextSync(path: string, content: string): void;
+	readTextSync(path: string): string;
 	statSync(path: string): SessionStorageStat;
 	listFilesSync(dir: string, pattern: string): string[];
 
@@ -72,7 +81,7 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 		return error;
 	}
 
-	async writeLine(line: string): Promise<void> {
+	writeLineSync(line: string): void {
 		if (this.#closed) throw new Error("Writer closed");
 		if (this.#error) throw this.#error;
 		try {
@@ -88,6 +97,10 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 		} catch (err) {
 			throw this.#recordError(err);
 		}
+	}
+
+	async writeLine(line: string): Promise<void> {
+		this.writeLineSync(line);
 	}
 
 	async flush(): Promise<void> {
@@ -136,6 +149,10 @@ export class FileSessionStorage implements SessionStorage {
 	writeTextSync(fpath: string, content: string): void {
 		this.ensureDirSync(path.dirname(fpath));
 		fs.writeFileSync(fpath, content);
+	}
+
+	readTextSync(fpath: string): string {
+		return fs.readFileSync(fpath, "utf-8");
 	}
 
 	statSync(path: string): SessionStorageStat {
@@ -230,7 +247,6 @@ class MemorySessionStorageWriter implements SessionStorageWriter {
 	#closed = false;
 	#error: Error | undefined;
 	#onError: ((err: Error) => void) | undefined;
-	#ready: Promise<void>;
 
 	constructor(
 		storage: MemorySessionStorage,
@@ -240,12 +256,8 @@ class MemorySessionStorageWriter implements SessionStorageWriter {
 		this.#storage = storage;
 		this.#path = path;
 		this.#onError = options?.onError;
-		this.#ready = this.#initialize(options?.flags ?? "a");
-	}
-
-	async #initialize(flags: "a" | "w"): Promise<void> {
-		if (flags === "w") {
-			await this.#storage.writeText(this.#path, "");
+		if ((options?.flags ?? "a") === "w") {
+			this.#storage.writeTextSync(path, "");
 		}
 	}
 
@@ -256,32 +268,32 @@ class MemorySessionStorageWriter implements SessionStorageWriter {
 		return error;
 	}
 
-	async writeLine(line: string): Promise<void> {
+	writeLineSync(line: string): void {
 		if (this.#closed) throw new Error("Writer closed");
-		await this.#ready;
 		if (this.#error) throw this.#error;
 		try {
-			const existing = this.#storage.existsSync(this.#path) ? await this.#storage.readText(this.#path) : "";
-			await this.#storage.writeText(this.#path, `${existing}${line}`);
+			const existing = this.#storage.existsSync(this.#path) ? this.#storage.readTextSync(this.#path) : "";
+			this.#storage.writeTextSync(this.#path, `${existing}${line}`);
 		} catch (err) {
 			throw this.#recordError(err);
 		}
 	}
 
+	async writeLine(line: string): Promise<void> {
+		this.writeLineSync(line);
+	}
+
 	async flush(): Promise<void> {
-		await this.#ready;
 		if (this.#error) throw this.#error;
 	}
 
 	async fsync(): Promise<void> {
 		// No-op for in-memory storage
-		await this.#ready;
 		if (this.#error) throw this.#error;
 	}
 
 	async close(): Promise<void> {
 		if (this.#closed) return;
-		await this.#ready;
 		this.#closed = true;
 	}
 
@@ -303,6 +315,12 @@ export class MemorySessionStorage implements SessionStorage {
 
 	writeTextSync(path: string, content: string): void {
 		this.#files.set(path, { content, mtimeMs: Date.now() });
+	}
+
+	readTextSync(path: string): string {
+		const entry = this.#files.get(path);
+		if (!entry) throw new Error(`File not found: ${path}`);
+		return entry.content;
 	}
 
 	statSync(path: string): SessionStorageStat {

@@ -105,7 +105,7 @@ describe("SessionManager signature persistence", () => {
 		});
 		await session.flush();
 
-		const expectedBlobHash = new Bun.CryptoHasher("sha256").update(Buffer.from(largeImageUrl, "utf8")).digest("hex");
+		const expectedBlobHash = new Bun.SHA256().update(Buffer.from(largeImageUrl, "utf8")).digest("hex");
 		const persistedBlob = await fs.readFile(path.join(getBlobsDir(), expectedBlobHash), "utf8");
 		expect(persistedBlob).toBe(largeImageUrl);
 

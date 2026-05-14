@@ -1,4 +1,5 @@
-import * as fs from "node:fs/promises";
+import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 
@@ -25,7 +26,7 @@ export class BlobStore {
 	 * @returns SHA-256 hex hash of the data
 	 */
 	async put(data: Buffer): Promise<BlobPutResult> {
-		const hash = new Bun.CryptoHasher("sha256").update(data).digest("hex");
+		const hash = new Bun.SHA256().update(data).digest("hex");
 		const blobPath = path.join(this.dir, hash);
 		const result = {
 			hash,
@@ -36,6 +37,26 @@ export class BlobStore {
 		};
 
 		await Bun.write(blobPath, data);
+		return result;
+	}
+
+	/**
+	 * Synchronous variant of {@link put}. Use on persistence hot paths where the caller
+	 * cannot afford the microtask hops of the async version (e.g. OOM-safe session writes).
+	 * Returns once the bytes are in the kernel page cache.
+	 */
+	putSync(data: Buffer): BlobPutResult {
+		const hash = new Bun.SHA256().update(data).digest("hex");
+		const blobPath = path.join(this.dir, hash);
+		const result = {
+			hash,
+			path: blobPath,
+			get ref() {
+				return `${BLOB_PREFIX}${hash}`;
+			},
+		};
+		fs.mkdirSync(this.dir, { recursive: true });
+		fs.writeFileSync(blobPath, data);
 		return result;
 	}
 
@@ -55,7 +76,7 @@ export class BlobStore {
 	/** Check if a blob exists. */
 	async has(hash: string): Promise<boolean> {
 		try {
-			await fs.access(path.join(this.dir, hash));
+			await fsp.access(path.join(this.dir, hash));
 			return true;
 		} catch {
 			return false;
@@ -89,6 +110,12 @@ export async function externalizeImageDataUrl(blobStore: BlobStore, dataUrl: str
 	return ref;
 }
 
+/** Synchronous variant of {@link externalizeImageDataUrl}. */
+export function externalizeImageDataUrlSync(blobStore: BlobStore, dataUrl: string): string {
+	if (isBlobRef(dataUrl)) return dataUrl;
+	return blobStore.putSync(Buffer.from(dataUrl, "utf8")).ref;
+}
+
 /**
  * Externalize an image's base64 data to the blob store, returning a blob reference.
  * If the data is already a blob reference, returns it unchanged.
@@ -98,6 +125,12 @@ export async function externalizeImageData(blobStore: BlobStore, base64Data: str
 	const buffer = Buffer.from(base64Data, "base64");
 	const { ref } = await blobStore.put(buffer);
 	return ref;
+}
+
+/** Synchronous variant of {@link externalizeImageData}. */
+export function externalizeImageDataSync(blobStore: BlobStore, base64Data: string): string {
+	if (isBlobRef(base64Data)) return base64Data;
+	return blobStore.putSync(Buffer.from(base64Data, "base64")).ref;
 }
 
 /**

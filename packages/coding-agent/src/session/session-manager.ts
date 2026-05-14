@@ -31,7 +31,9 @@ import {
 	type BlobPutResult,
 	BlobStore,
 	externalizeImageData,
+	externalizeImageDataSync,
 	externalizeImageDataUrl,
+	externalizeImageDataUrlSync,
 	isBlobRef,
 	isImageDataUrl,
 	resolveImageData,
@@ -1128,6 +1130,92 @@ async function prepareEntryForPersistence(entry: FileEntry, blobStore: BlobStore
 	return truncateForPersistence(entry, blobStore);
 }
 
+/**
+ * Synchronous variant of {@link truncateForPersistence}.
+ *
+ * The async version's overhead — `Promise.all` over `Object.entries`/`Array.prototype.map`,
+ * one microtask hop per nested node — is pure waste for entries without image blobs
+ * (the vast majority). The fast path runs in one synchronous tick so an OOM/SIGKILL
+ * landing right after `_persist` returns cannot lose the entry. Image externalization
+ * still happens, but via the synchronous blob-store path (`fs.writeFileSync`), so the
+ * blob bytes are in the kernel page cache before the JSONL line referencing them is
+ * written.
+ */
+function truncateForPersistenceSync(obj: unknown, blobStore: BlobStore, key?: string): unknown {
+	if (obj === null || obj === undefined) return obj;
+
+	if (typeof obj === "string") {
+		if (key === "image_url" && isImageDataUrl(obj)) {
+			return externalizeImageDataUrlSync(blobStore, obj);
+		}
+		if (obj.length > MAX_PERSIST_CHARS) {
+			if (key === "thinkingSignature" || key === "thoughtSignature" || key === "textSignature") {
+				return "";
+			}
+			const limit = Math.max(0, MAX_PERSIST_CHARS - TRUNCATION_NOTICE.length);
+			return `${truncateString(obj, limit)}${TRUNCATION_NOTICE}`;
+		}
+		return obj;
+	}
+
+	if (Array.isArray(obj)) {
+		let changed = false;
+		const result: unknown[] = new Array(obj.length);
+		for (let i = 0; i < obj.length; i++) {
+			const item = obj[i];
+			if (key === TEXT_CONTENT_KEY && isImageBlock(item)) {
+				if (!isBlobRef(item.data) && item.data.length >= BLOB_EXTERNALIZE_THRESHOLD) {
+					changed = true;
+					const blobRef = externalizeImageDataSync(blobStore, item.data);
+					result[i] = { ...item, data: blobRef };
+					continue;
+				}
+			}
+			const newItem = truncateForPersistenceSync(item, blobStore, key);
+			if (newItem !== item) changed = true;
+			result[i] = newItem;
+		}
+		return changed ? result : obj;
+	}
+
+	if (typeof obj === "object") {
+		let changed = false;
+		const entries: Array<readonly [string, unknown]> = [];
+		for (const [childKey, value] of Object.entries(obj)) {
+			if (childKey === "partialJson" || childKey === "jsonlEvents") {
+				changed = true;
+				continue;
+			}
+			const newValue = truncateForPersistenceSync(value, blobStore, childKey);
+			if (newValue !== value) changed = true;
+			entries.push([childKey, newValue]);
+		}
+		if (!changed) return obj;
+
+		const contentEntry = entries.find(([childKey]) => childKey === "content");
+		const lineCountEntry = entries.find(([childKey]) => childKey === "lineCount");
+		if (
+			contentEntry &&
+			typeof contentEntry[1] === "string" &&
+			lineCountEntry &&
+			typeof lineCountEntry[1] === "number"
+		) {
+			const content = contentEntry[1];
+			const updatedEntries = entries.map(([childKey, value]) =>
+				childKey === "lineCount" ? ([childKey, content.split("\n").length] as const) : ([childKey, value] as const),
+			);
+			return Object.fromEntries(updatedEntries);
+		}
+		return Object.fromEntries(entries);
+	}
+
+	return obj;
+}
+
+function prepareEntryForPersistenceSync(entry: FileEntry, blobStore: BlobStore): FileEntry {
+	return truncateForPersistenceSync(entry, blobStore) as FileEntry;
+}
+
 class NdjsonFileWriter {
 	#writer: SessionStorageWriter;
 	#closed = false;
@@ -1179,6 +1267,26 @@ class NdjsonFileWriter {
 		if (this.#error) throw this.#error;
 		const line = `${JSON.stringify(entry)}\n`;
 		return this.#enqueue(() => this.#writeLine(line));
+	}
+
+	/**
+	 * Synchronously serialize and append the entry. Returns once `fs.writeSync` has handed
+	 * the bytes to the kernel page cache — durable across OOM/SIGKILL even before fsync.
+	 *
+	 * Callers MUST NOT mix this with pending async `write()` calls on the same writer:
+	 * the async path is queued through `#pendingWrites`, but this method bypasses the
+	 * queue. Use only when no concurrent async write is in flight (the session-manager
+	 * persist path enforces this via `#flushed`/`#needsFullRewriteOnNextPersist`).
+	 */
+	writeSync(entry: FileEntry): void {
+		if (this.#closed || this.#closing) throw new Error("Writer closed");
+		if (this.#error) throw this.#error;
+		const line = `${JSON.stringify(entry)}\n`;
+		try {
+			this.#writer.writeLineSync(line);
+		} catch (err) {
+			throw this.#recordError(err);
+		}
 	}
 
 	/** Flush all buffered data to disk. Waits for all queued writes. */
@@ -2333,20 +2441,27 @@ export class SessionManager {
 		}
 
 		if (this.#needsFullRewriteOnNextPersist || !this.#flushed) {
-			// Full flush: rewrite the entire file atomically to avoid
-			// duplicating entries if the file already exists (e.g. from ensureOnDisk).
-			// Errors are already surfaced through #persistChain/#persistError; the
-			// caller intentionally fires-and-forgets, so swallow the awaited rejection
+			// Cold path: rewrite the whole file atomically. Async — the writer is
+			// closed/reopened and every entry is re-prepared. Errors flow through
+			// `#persistChain` → `#recordPersistError`; we swallow the rejection
 			// here to avoid an unhandled rejection when the persist dir races with
 			// test-level tempDir cleanup.
 			this.#rewriteFile().catch(() => {});
-		} else {
-			this.#queuePersistTask(async () => {
-				const writer = this.#ensurePersistWriter();
-				if (!writer) return;
-				const persistedEntry = await prepareEntryForPersistence(entry, this.#blobStore);
-				await writer.write(persistedEntry);
-			}).catch(() => {});
+			return;
+		}
+
+		// Hot path: synchronously truncate + append. `fs.writeSync` returns once the
+		// bytes are in the kernel page cache, so the entry survives an OOM/SIGKILL
+		// landing immediately after this call. Image externalization (rare) runs via
+		// the synchronous blob-store path so blob bytes are durable before the JSONL
+		// line referencing them is written.
+		try {
+			const writer = this.#ensurePersistWriter();
+			if (!writer) return;
+			const persistedEntry = prepareEntryForPersistenceSync(entry, this.#blobStore);
+			writer.writeSync(persistedEntry);
+		} catch (err) {
+			this.#recordPersistError(err);
 		}
 	}
 
