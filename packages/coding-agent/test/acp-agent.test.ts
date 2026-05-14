@@ -1170,12 +1170,21 @@ describe("ACP agent", () => {
 			await ctx.input("Name?");
 
 			expect(calls).toHaveLength(3);
-			if (calls[0]!.mode !== "form" || calls[1]!.mode !== "form" || calls[2]!.mode !== "form") {
-				throw new Error("expected form-mode elicitations");
-			}
-			expect(calls[0]!.sessionId).toBe("session-before-switch");
-			expect(calls[1]!.sessionId).toBe("session-after-switch");
-			expect(calls[2]!.sessionId).toBe("session-after-switch");
+			// Each call must be a session-scoped form elicitation. Spelled as three
+			// separate narrows because `mode === "form"` alone leaves both
+			// `ElicitationRequestScope` and `ElicitationSessionScope` in the union —
+			// only `"sessionId" in call` picks the session-scoped variant — and
+			// loop-style narrows don't propagate to the assertions below.
+			const [first, second, third] = calls;
+			if (!first || first.mode !== "form" || !("sessionId" in first))
+				throw new Error("first call missing sessionId");
+			if (!second || second.mode !== "form" || !("sessionId" in second))
+				throw new Error("second call missing sessionId");
+			if (!third || third.mode !== "form" || !("sessionId" in third))
+				throw new Error("third call missing sessionId");
+			expect(first.sessionId).toBe("session-before-switch");
+			expect(second.sessionId).toBe("session-after-switch");
+			expect(third.sessionId).toBe("session-after-switch");
 		});
 	});
 });
