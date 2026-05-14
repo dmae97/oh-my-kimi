@@ -216,8 +216,11 @@ const tokenOutSegment: StatusLineSegment = {
 const tokenTotalSegment: StatusLineSegment = {
 	id: "token_total",
 	render(ctx) {
-		const { input, output, cacheRead, cacheWrite } = ctx.usageStats;
-		const total = input + output + cacheRead + cacheWrite;
+		// Excludes cacheRead: that field re-reads the full cached context every
+		// turn, making the cumulative sum N×context_size. The dedicated cache_read
+		// segment handles cache monitoring; the cost segment handles billing.
+		const { input, output, cacheWrite } = ctx.usageStats;
+		const total = input + output + cacheWrite;
 		if (!total) return { content: "", visible: false };
 
 		const content = withIcon(theme.icon.tokens, formatNumber(total));
