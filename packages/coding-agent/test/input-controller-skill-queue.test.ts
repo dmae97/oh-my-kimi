@@ -25,16 +25,13 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import {
-	SKILL_PROMPT_MESSAGE_TYPE,
-	type SkillPromptDetails,
-} from "@oh-my-pi/pi-coding-agent/session/messages";
+import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { Container } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -59,10 +56,7 @@ type StubEditor = {
 	onSubmit?: (text: string) => Promise<void>;
 };
 
-function createStubInputControllerContext(opts: {
-	skillCommands: Map<string, string>;
-	isStreaming: boolean;
-}) {
+function createStubInputControllerContext(opts: { skillCommands: Map<string, string>; isStreaming: boolean }) {
 	let editorText = "";
 	const editor: StubEditor = {
 		setText(text) {
@@ -76,9 +70,7 @@ function createStubInputControllerContext(opts: {
 	const enqueueCustomMessageDisplay = vi.fn((_text: string, _mode: "steer" | "followUp") => "sk-test-0");
 	// Annotate parameters so `mock.calls[N]` is typed as a tuple (not `[]`) —
 	// avoids TS2352/TS2493 when casting `.calls[0]` to a destructured shape.
-	const promptCustomMessage = vi.fn(
-		async (_message: { details?: SkillPromptDetails }, _options?: unknown) => {},
-	);
+	const promptCustomMessage = vi.fn(async (_message: { details?: SkillPromptDetails }, _options?: unknown) => {});
 	const updatePendingMessagesDisplay = vi.fn();
 	const requestRender = vi.fn();
 	const showError = vi.fn();
@@ -128,8 +120,10 @@ describe("InputController #invokeSkillCommand (E1-E3)", () => {
 	});
 
 	it("E1: streaming + steer -> enqueueCustomMessageDisplay called and details.__pendingDisplayTag set", async () => {
-		const { ctx, editor, enqueueCustomMessageDisplay, promptCustomMessage } =
-			createStubInputControllerContext({ skillCommands, isStreaming: true });
+		const { ctx, editor, enqueueCustomMessageDisplay, promptCustomMessage } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming: true,
+		});
 
 		const controller = new InputController(ctx);
 		controller.setupEditorSubmitHandler();
@@ -148,8 +142,10 @@ describe("InputController #invokeSkillCommand (E1-E3)", () => {
 	});
 
 	it("E2: streaming + followUp -> enqueueCustomMessageDisplay called with mode 'followUp', tag embedded", async () => {
-		const { ctx, editor, enqueueCustomMessageDisplay, promptCustomMessage } =
-			createStubInputControllerContext({ skillCommands, isStreaming: true });
+		const { ctx, editor, enqueueCustomMessageDisplay, promptCustomMessage } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming: true,
+		});
 
 		const controller = new InputController(ctx);
 		editor.setText("/skill:test-skill arg1 arg2");
@@ -167,8 +163,10 @@ describe("InputController #invokeSkillCommand (E1-E3)", () => {
 	});
 
 	it("E3: not streaming -> enqueueCustomMessageDisplay NOT called and tag absent", async () => {
-		const { ctx, editor, enqueueCustomMessageDisplay, promptCustomMessage } =
-			createStubInputControllerContext({ skillCommands, isStreaming: false });
+		const { ctx, editor, enqueueCustomMessageDisplay, promptCustomMessage } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming: false,
+		});
 
 		const controller = new InputController(ctx);
 		controller.setupEditorSubmitHandler();
@@ -477,8 +475,7 @@ describe("EventController custom-role dequeue refresh (E10)", () => {
 	});
 
 	it("E10: message_start with role=custom refreshes pending bar ONLY when __pendingDisplayTag is present", async () => {
-		const { controller, updatePendingMessagesDisplay, addMessageToChat } =
-			createEventControllerFixtureForE10();
+		const { controller, updatePendingMessagesDisplay, addMessageToChat } = createEventControllerFixtureForE10();
 
 		// Positive case: tagged custom => refresh fires exactly once. The tag is the
 		// unambiguous signal "this message was queued via enqueueCustomMessageDisplay";

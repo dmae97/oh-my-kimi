@@ -439,9 +439,7 @@ describe("InteractiveMode plan review rendering", () => {
 		const showErrorSpy = vi.spyOn(mode, "showError");
 		await approveWithCompact("throw", new Error("synthetic compaction failure"));
 		expect(session.isPlanCompactAbortPending).toBe(false);
-		expect(showErrorSpy).toHaveBeenCalledWith(
-			expect.stringContaining("synthetic compaction failure"),
-		);
+		expect(showErrorSpy).toHaveBeenCalledWith(expect.stringContaining("synthetic compaction failure"));
 	});
 
 	it("B5: Approve and execute (no compact) → markPlanCompactAbortPending never called; flag stays false", async () => {

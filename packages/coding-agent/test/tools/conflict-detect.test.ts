@@ -213,6 +213,27 @@ describe("parseConflictUri", () => {
 		expect(() => parseConflictUri("conflict://abc")).toThrow(ToolError);
 		expect(() => parseConflictUri("conflict://1/extra")).toThrow(ToolError);
 	});
+
+	it("recovers an erroneous `<file>:` prefix and surfaces it as `recoveredPrefix`", () => {
+		expect(parseConflictUri("src/foo.ts:conflict://3")).toEqual({
+			id: 3,
+			recoveredPrefix: "src/foo.ts",
+		});
+		expect(parseConflictUri("packages/coding-agent/src/x.ts:conflict://*")).toEqual({
+			id: "*",
+			recoveredPrefix: "packages/coding-agent/src/x.ts",
+		});
+		expect(parseConflictUri("a.ts:conflict://2/theirs")).toEqual({
+			id: 2,
+			scope: "theirs",
+			recoveredPrefix: "a.ts",
+		});
+	});
+
+	it("does not set `recoveredPrefix` on clean URIs", () => {
+		expect(parseConflictUri("conflict://1")).not.toHaveProperty("recoveredPrefix");
+		expect(parseConflictUri("conflict://*")).not.toHaveProperty("recoveredPrefix");
+	});
 });
 
 function makeEntry(overrides: Partial<ConflictEntry> = {}): ConflictEntry {

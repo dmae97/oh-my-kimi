@@ -12,18 +12,12 @@
  * `__`-prefixed fields not in the allowlist) is preserved verbatim.
  */
 import { describe, expect, it } from "bun:test";
-import {
-	type SkillPromptDetails,
-	stripInternalDetailsFields,
-} from "@oh-my-pi/pi-coding-agent/session/messages";
+import { type SkillPromptDetails, stripInternalDetailsFields } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { type CustomMessageEntry, SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 
 const SKILL_TYPE = "skill-prompt";
 
-function readPersistedCustomMessageEntry<T>(
-	session: SessionManager,
-	id: string,
-): CustomMessageEntry<T> {
+function readPersistedCustomMessageEntry<T>(session: SessionManager, id: string): CustomMessageEntry<T> {
 	const branch = session.getBranch();
 	const entry = branch.find(e => e.id === id);
 	if (!entry || entry.type !== "custom_message") {
@@ -110,9 +104,7 @@ describe("SessionManager.appendCustomMessageEntry (allowlist strip + persistence
 		// `null as never` here only because the public signature is `T | undefined`,
 		// but the runtime contract has to tolerate `null` defensively.
 		expect(stripInternalDetailsFields(null as unknown as undefined)).toBeNull();
-		expect(stripInternalDetailsFields("string" as unknown as undefined)).toBe(
-			"string" as unknown as undefined,
-		);
+		expect(stripInternalDetailsFields("string" as unknown as undefined)).toBe("string" as unknown as undefined);
 	});
 
 	it("F5: stripInternalDetailsFields preserves the input shape verbatim when no allowlisted field is present", () => {

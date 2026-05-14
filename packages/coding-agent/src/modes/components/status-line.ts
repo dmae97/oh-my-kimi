@@ -6,10 +6,10 @@ import { settings } from "../../config/settings";
 import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "../../config/settings-schema";
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
-import { computeContextBreakdown } from "../utils/context-usage";
 import * as git from "../../utils/git";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../utils/session-color";
 import { sanitizeStatusText } from "../shared";
+import { computeContextBreakdown } from "../utils/context-usage";
 import {
 	canReuseCachedPr,
 	createPrCacheContext,

@@ -250,9 +250,19 @@ export interface ParsedConflictUri {
 	/** `"*"` selects every currently-registered conflict (bulk write only). */
 	id: number | "*";
 	scope?: ConflictScope;
+	/**
+	 * When `raw` was a malformed `<file-prefix>:conflict://…` path, the
+	 * stripped prefix is preserved here so callers can surface a gentle
+	 * "you don't need the file path" note. `undefined` for clean URIs.
+	 */
+	recoveredPrefix?: string;
 }
 
-const CONFLICT_URI_RE = /^conflict:\/\/(.+)$/;
+// Accept an optional `<prefix>:` before the scheme so paths like
+// `path/to/file.ts:conflict://3` (where the agent mixed the `:conflicts`
+// read selector with the `conflict://` scheme) still resolve. The prefix
+// is greedy so the LAST `:conflict://` wins for multi-colon inputs.
+const CONFLICT_URI_RE = /^(?:(.+):)?conflict:\/\/(.+)$/;
 
 /**
  * Parse a `conflict://<N>`, `conflict://<N>/<scope>`, or `conflict://*` URI.
@@ -269,7 +279,8 @@ const CONFLICT_URI_RE = /^conflict:\/\/(.+)$/;
 export function parseConflictUri(raw: string): ParsedConflictUri | null {
 	const match = raw.match(CONFLICT_URI_RE);
 	if (!match) return null;
-	const tail = match[1];
+	const recoveredPrefix = match[1];
+	const tail = match[2];
 	const slashIdx = tail.indexOf("/");
 	const idPart = slashIdx === -1 ? tail : tail.slice(0, slashIdx);
 	const scopePart = slashIdx === -1 ? undefined : tail.slice(slashIdx + 1);
@@ -280,7 +291,7 @@ export function parseConflictUri(raw: string): ParsedConflictUri | null {
 				`Invalid conflict URI '${raw}': wildcard 'conflict://*' does not accept a scope segment. Drop '/${scopePart}' or use a numeric id.`,
 			);
 		}
-		return { id: "*" };
+		return recoveredPrefix !== undefined ? { id: "*", recoveredPrefix } : { id: "*" };
 	}
 
 	if (!/^\d+$/.test(idPart)) {
@@ -303,7 +314,7 @@ export function parseConflictUri(raw: string): ParsedConflictUri | null {
 		scope = scopePart as ConflictScope;
 	}
 
-	return { id, scope };
+	return recoveredPrefix !== undefined ? { id, scope, recoveredPrefix } : { id, scope };
 }
 
 /**

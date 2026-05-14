@@ -85,6 +85,21 @@ function stripWriteContent(session: ToolSession, content: string): { text: strin
 	return { text: cleaned.join("\n"), stripped: true };
 }
 
+/**
+ * Append a trailing note line to the first text block of a tool result.
+ * Mutates `result` in place (the result object is owned by this call).
+ */
+function appendNoteToResult(result: AgentToolResult<WriteToolDetails>, note: string): void {
+	const firstText = result.content.find(
+		(block): block is { type: "text"; text: string } => block.type === "text" && typeof block.text === "string",
+	);
+	if (firstText) {
+		firstText.text = firstText.text.length > 0 ? `${firstText.text}\n${note}` : note;
+	} else {
+		result.content.push({ type: "text", text: note });
+	}
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Tool Class
 // ═══════════════════════════════════════════════════════════════════════════
@@ -490,6 +505,26 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	}
 
 	/**
+	 * Look up a single conflict entry by id and dispatch to {@link #resolveConflict}.
+	 * Throws a clear `not found` error when the id has been invalidated.
+	 */
+	async #resolveSingleConflictById(
+		id: number,
+		replacementContent: string,
+		stripped: boolean,
+		signal: AbortSignal | undefined,
+		context: AgentToolContext | undefined,
+	): Promise<AgentToolResult<WriteToolDetails>> {
+		const entry = getConflictHistory(this.session).get(id);
+		if (!entry) {
+			throw new ToolError(
+				`Conflict #${id} not found. Conflict ids are registered when \`read\` surfaces a marker block; re-read the file to get a current id.`,
+			);
+		}
+		return this.#resolveConflict(entry, replacementContent, stripped, signal, context);
+	}
+
+	/**
 	 * Bulk-resolve every registered conflict via `conflict://*`.
 	 *
 	 * Entries are grouped by file and applied bottom-up by recorded start
@@ -631,16 +666,17 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 						`Conflict URI scope '/${conflictUri.scope}' is read-only — read \`conflict://${conflictUri.id}/${conflictUri.scope}\` to inspect that side. To write, drop the scope (\`conflict://${conflictUri.id}\`) and put the chosen content (or shorthand like \`@${conflictUri.scope}\`) in \`content\`.`,
 					);
 				}
-				if (conflictUri.id === "*") {
-					return this.#resolveAllConflicts(cleanContent, stripped, signal, context);
-				}
-				const entry = getConflictHistory(this.session).get(conflictUri.id);
-				if (!entry) {
-					throw new ToolError(
-						`Conflict #${conflictUri.id} not found. Conflict ids are registered when \`read\` surfaces a marker block; re-read the file to get a current id.`,
+				const result =
+					conflictUri.id === "*"
+						? await this.#resolveAllConflicts(cleanContent, stripped, signal, context)
+						: await this.#resolveSingleConflictById(conflictUri.id, cleanContent, stripped, signal, context);
+				if (conflictUri.recoveredPrefix !== undefined) {
+					appendNoteToResult(
+						result,
+						`Note: stripped erroneous '${conflictUri.recoveredPrefix}:' prefix from path; conflict URIs are global (use \`conflict://${conflictUri.id}\`, not \`<file>:conflict://${conflictUri.id}\`).`,
 					);
 				}
-				return this.#resolveConflict(entry, cleanContent, stripped, signal, context);
+				return result;
 			}
 			const resolvedArchivePath = await this.#resolveArchiveWritePath(path);
 			if (resolvedArchivePath) {

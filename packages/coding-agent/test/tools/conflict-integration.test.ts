@@ -327,6 +327,46 @@ describe("write resolves conflicts via conflict://N", () => {
 		expect(session.conflictHistory?.get(1)).toBeUndefined();
 	});
 
+	it("auto-recovers a `<file>:conflict://N` path and resolves the conflict", async () => {
+		const filePath = path.join(tempDir, "prefix.ts");
+		await Bun.write(filePath, TWO_WAY);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-prefix", { path: "prefix.ts" });
+		const result = await write.execute("write-prefix", {
+			// Malformed path mixing the `:conflicts` read selector with the
+			// `conflict://` scheme — the write tool MUST recover and resolve.
+			path: "prefix.ts:conflict://1",
+			content: "@theirs",
+		});
+
+		const text = getText(result);
+		expect(text).toContain("Resolved conflict #1");
+		expect(text).toContain("stripped erroneous 'prefix.ts:' prefix");
+		expect(await Bun.file(filePath).text()).toBe("line 1\nnewApi(x)\nline N\n");
+	});
+
+	it("auto-recovers a `<file>:conflict://*` path and bulk-resolves", async () => {
+		const filePath = path.join(tempDir, "bulk-prefix.ts");
+		await Bun.write(filePath, TWO_WAY);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-bulk-prefix", { path: "bulk-prefix.ts" });
+		const result = await write.execute("write-bulk-prefix", {
+			path: "bulk-prefix.ts:conflict://*",
+			content: "@ours",
+		});
+
+		const text = getText(result);
+		expect(text).toContain("Resolved 1 conflict");
+		expect(text).toContain("stripped erroneous 'bulk-prefix.ts:' prefix");
+		expect(await Bun.file(filePath).text()).toBe("line 1\noldApi(x)\nline N\n");
+	});
+
 	it("can resolve two blocks in the same file by id, in either order", async () => {
 		const filePath = path.join(tempDir, "two.ts");
 		await Bun.write(filePath, TWO_BLOCKS);
