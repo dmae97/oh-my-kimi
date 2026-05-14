@@ -162,6 +162,11 @@ export class GoalRuntime {
 		return this.#host.now?.() ?? Date.now();
 	}
 
+	#hasAccountingState(): boolean {
+		const state = this.#host.getState();
+		return Boolean(state?.enabled && isAccountingStatus(state.goal));
+	}
+
 	async #withAccounting<T>(fn: () => Promise<T> | T): Promise<T> {
 		const previous = this.#accountingTail;
 		const { promise, resolve } = Promise.withResolvers<void>();
@@ -225,31 +230,44 @@ export class GoalRuntime {
 
 	async onToolCompleted(toolName: string): Promise<void> {
 		if (toolName === "goal") return;
+		if (!this.#hasAccountingState()) return;
 		await this.flushUsage("allowed");
 	}
 
 	async onGoalToolCompleted(): Promise<void> {
+		if (!this.#hasAccountingState()) return;
 		await this.flushUsage("suppressed");
 	}
 
 	async onAgentEnd(options?: { turnCompleted?: boolean; currentUsage?: GoalTokenUsage }): Promise<void> {
+		if (!this.#hasAccountingState()) {
+			this.#turnSnapshot = undefined;
+			return;
+		}
 		await this.flushUsage("suppressed", options?.currentUsage);
 		this.#turnSnapshot = undefined;
 	}
 
 	async onTaskAborted(options?: { reason?: "interrupted" | "internal" }): Promise<void> {
+		const state = this.#host.getState();
+		const needsAccounting = state?.enabled && isAccountingStatus(state.goal);
+		const needsPause = options?.reason === "interrupted" && state?.enabled && state.goal.status === "active";
+		if (!needsAccounting && !needsPause) {
+			this.#turnSnapshot = undefined;
+			return;
+		}
 		await this.#withAccounting(async () => {
 			await this.#flushUsageLocked("suppressed");
 			this.#turnSnapshot = undefined;
 			if (options?.reason !== "interrupted") return;
-			const state = this.#getStateClone();
-			if (!state?.enabled || state.goal.status !== "active") return;
-			state.enabled = false;
-			state.goal.status = "paused";
-			state.goal.updatedAt = this.#now();
+			const cloned = this.#getStateClone();
+			if (!cloned?.enabled || cloned.goal.status !== "active") return;
+			cloned.enabled = false;
+			cloned.goal.status = "paused";
+			cloned.goal.updatedAt = this.#now();
 			this.#clearActiveAccounting();
 			this.#budgetReportedFor = undefined;
-			await this.#commitState(state, { persist: "goal_paused" });
+			await this.#commitState(cloned, { persist: "goal_paused" });
 		});
 	}
 

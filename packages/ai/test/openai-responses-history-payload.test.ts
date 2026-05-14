@@ -26,7 +26,10 @@ function createCodexToken(accountId: string): string {
  * is exercised by its own targeted tests; these history-replay tests assert raw
  * payload shape and should stay independent of it.
  */
-function getOpenAIReasoningModel<Provider extends string>(provider: Provider, id: string): Model<"openai-responses"> {
+function getOpenAIReasoningModel(
+	provider: Parameters<typeof getBundledModel>[0],
+	id: string,
+): Model<"openai-responses"> {
 	const base = getBundledModel(provider, id) as Model<"openai-responses">;
 	return { ...base, name: "Reasoning Mini" };
 }
