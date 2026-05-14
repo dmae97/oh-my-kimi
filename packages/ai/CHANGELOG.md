@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.0.1] - 2026-05-14
 ### Breaking Changes
 
 - Increased the minimum Bun runtime version to `>=1.3.14` for the `@aws-?` package

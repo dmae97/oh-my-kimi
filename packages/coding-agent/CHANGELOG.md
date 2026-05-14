@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.0.1] - 2026-05-14
 ### Breaking Changes
 
 - Removed the dedicated `exit_plan_mode` tool and its prompt, requiring plan-mode completion to use the existing `resolve` tool path instead

@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.0.1] - 2026-05-14
 ### Breaking Changes
 
 - Raised the minimum required Bun version from >=1.3.7 to >=1.3.14
