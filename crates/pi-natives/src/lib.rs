@@ -52,3 +52,24 @@ pub mod text;
 pub mod tokens;
 pub(crate) mod utils;
 pub mod workspace;
+
+use napi_derive::napi;
+
+/// Version sentinel — exists solely so the JS loader can prove at load time
+/// that the `.node` file on disk is from the same package release as the
+/// `index.js` ESM wrapper invoking it.
+///
+/// The `js_name` is bumped by `scripts/release.ts` to match the new
+/// `Cargo.toml` / `package.json` version on every release. The JS loader
+/// computes the expected name from `package.json#version` and refuses to use
+/// a `.node` that doesn't expose it, turning the silent
+/// `<sym> is not a function` crash from a locked-file update (the canonical
+/// Windows `bun install -g` failure mode) into a clear load-time error.
+///
+/// Bump policy: `__piNativesV{major}_{minor}_{patch}` — non-alphanumerics in
+/// the version string are mapped to `_` to keep it a valid JS identifier.
+/// MUST stay in sync with `VERSION_SENTINEL_EXPORT` in
+/// `packages/natives/native/index.js` (which derives the name from
+/// `package.json#version`).
+#[napi(js_name = "__piNativesV15_0_1")]
+pub const fn pi_natives_version_sentinel() {}

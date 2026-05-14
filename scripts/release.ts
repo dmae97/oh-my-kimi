@@ -269,6 +269,33 @@ async function cmdRelease(version: string): Promise<void> {
 	}
 	console.log();
 
+	// 3b. Rename the pi-natives version sentinel so any `.node` left on disk from
+	// a previous release physically cannot expose the symbol the new `index.js`
+	// expects. The JS loader derives `VERSION_SENTINEL_EXPORT` from `package.json`
+	// at runtime, so the only thing that has to move on the Rust side is the
+	// `js_name = "__piNativesV…"` literal. `gen-enums.ts` regenerates the matching
+	// entries in `packages/natives/native/{index.d.ts,index.js}` on the next napi
+	// build, but bump them here too so the committed surface tracks the version
+	// without waiting for a local rebuild on the release host.
+	console.log(`Bumping pi-natives version sentinel to v${version}…`);
+	const sentinelJsId = version.replace(/[^A-Za-z0-9]/g, "_");
+	const sentinelName = `__piNativesV${sentinelJsId}`;
+	const sentinelFiles = [
+		"crates/pi-natives/src/lib.rs",
+		"packages/natives/native/index.d.ts",
+		"packages/natives/native/index.js",
+	];
+	await $`sd '__piNativesV[A-Za-z0-9_]+' ${sentinelName} ${sentinelFiles}`;
+	const libRs = await Bun.file("crates/pi-natives/src/lib.rs").text();
+	if (!libRs.includes(`js_name = "${sentinelName}"`)) {
+		console.error(
+			`Error: pi-natives version sentinel did not move to ${sentinelName} in crates/pi-natives/src/lib.rs. ` +
+				"The `__piNativesV…` literal may have been removed or renamed; restore it before releasing.",
+		);
+		process.exit(1);
+	}
+	console.log(`  sentinel: ${sentinelName}\n`);
+
 	// 4. Regenerate lockfiles
 	console.log("Regenerating lockfiles...");
 	await $`rm -f bun.lock`;

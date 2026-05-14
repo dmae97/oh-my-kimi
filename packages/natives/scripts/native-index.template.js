@@ -5,7 +5,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import packageJson from "../package.json" with { type: "json" };
 import { embeddedAddon } from "./embedded-addon.js";
-import { detectCompiledBinary, getAddonFilenames, resolveLoaderCandidates } from "./loader-state.js";
+import {
+	detectCompiledBinary,
+	getAddonFilenames,
+	resolveLoaderCandidates,
+	shouldStageNodeModulesAddon,
+} from "./loader-state.js";
 
 /**
  * Native addon loader and bindings.
@@ -36,6 +41,11 @@ const isCompiledBinary = detectCompiledBinary({
 	embeddedAddon,
 	env: process.env,
 	importMetaUrl: import.meta.url,
+});
+const stageFromNodeModules = shouldStageNodeModulesAddon({
+	platform: process.platform,
+	isCompiledBinary,
+	nativeDir,
 });
 const SUPPORTED_PLATFORMS = ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64"];
 
@@ -96,6 +106,7 @@ const addonLabel = selectedVariant ? `${platformTag} (${selectedVariant})` : pla
 const dedupedCandidates = resolveLoaderCandidates({
 	addonFilenames,
 	isCompiledBinary,
+	stageFromNodeModules,
 	nativeDir,
 	execDir,
 	versionedDir,
@@ -158,13 +169,58 @@ function maybeExtractEmbeddedAddon(errors) {
 	}
 }
 
+/**
+ * Mirror `nativeDir/<filename>.node` to `versionedDir/<filename>.node` on Windows
+ * installs so the running process keeps its OS-level handle on a versioned
+ * cache path, never on the `node_modules` copy that bun must overwrite on
+ * update. No-op on non-Windows, in workspace dev, and for compiled binaries —
+ * see `shouldStageNodeModulesAddon` for the gating rules.
+ */
+function maybeStageNodeModulesAddon(errors) {
+	if (!stageFromNodeModules) return null;
+
+	let stagedPath = null;
+	for (const filename of addonFilenames) {
+		const sourcePath = path.join(nativeDir, filename);
+		const targetPath = path.join(versionedDir, filename);
+
+		if (fs.existsSync(targetPath)) {
+			stagedPath = stagedPath || targetPath;
+			continue;
+		}
+		if (!fs.existsSync(sourcePath)) continue;
+
+		try {
+			fs.mkdirSync(versionedDir, { recursive: true });
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			errors.push(`staged addon dir: ${message}`);
+			continue;
+		}
+
+		try {
+			// `copyFileSync` is atomic on Windows (CopyFileW) and avoids holding
+			// two large buffers in JS for the read/write dance.
+			fs.copyFileSync(sourcePath, targetPath);
+			stagedPath = stagedPath || targetPath;
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			errors.push(`staged addon copy (${filename}): ${message}`);
+		}
+	}
+	return stagedPath;
+}
+
 function loadNative() {
 	const errors = [];
 	const embeddedCandidate = maybeExtractEmbeddedAddon(errors);
-	const runtimeCandidates = embeddedCandidate ? [embeddedCandidate, ...dedupedCandidates] : dedupedCandidates;
+	const stagedCandidate = embeddedCandidate ? null : maybeStageNodeModulesAddon(errors);
+	const prepended = [embeddedCandidate, stagedCandidate].filter(c => typeof c === "string");
+	const runtimeCandidates = prepended.length > 0 ? [...prepended, ...dedupedCandidates] : dedupedCandidates;
 	for (const candidate of runtimeCandidates) {
 		try {
 			const bindings = require_(candidate);
+			validateLoadedBindings(bindings, candidate);
 			return bindings;
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
@@ -201,4 +257,33 @@ function loadNative() {
 	}
 
 	throw new Error(`Failed to load pi_natives native addon for ${addonLabel}.\n\nTried:\n${details}\n\n${helpMessage}`);
+}
+
+// Version sentinel emitted by the Rust addon under a `js_name` that encodes
+// the package version (`__piNativesV{major}_{minor}_{patch}`).
+// `scripts/release.ts` bumps the name in `crates/pi-natives/src/lib.rs` in
+// lock-step with the version, so a `.node` from a different release physically
+// cannot expose the symbol this loader is looking for. That turns the silent
+// `<sym> is not a function` crash from a Windows locked-file update into an
+// actionable load-time error.
+const VERSION_SENTINEL_EXPORT = `__piNativesV${packageVersion.replace(/[^A-Za-z0-9]/g, "_")}`;
+
+// In workspace dev (running out of `packages/natives/native/` rather than a
+// `node_modules` install or a compiled bundle) the local `.node` only gains
+// the renamed sentinel after `bun --cwd=packages/natives run build`. Skip
+// validation there so a stale post-pull dev tree boots while the rebuild
+// completes; install and compiled-binary paths still validate.
+const isWorkspaceLoad =
+	!isCompiledBinary &&
+	!nativeDir.includes("\\node_modules\\") &&
+	!nativeDir.includes("/node_modules/");
+
+function validateLoadedBindings(bindings, candidate) {
+	if (isWorkspaceLoad) return;
+	if (typeof bindings[VERSION_SENTINEL_EXPORT] === "function") return;
+	throw new Error(
+		`Loaded ${candidate} but it does not expose the @oh-my-pi/pi-natives@${packageVersion} ` +
+			`version sentinel \`${VERSION_SENTINEL_EXPORT}\`. The .node file on disk is from a different ` +
+			"release than this loader — reinstall to re-sync.",
+	);
 }

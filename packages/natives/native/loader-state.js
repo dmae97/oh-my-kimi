@@ -53,9 +53,39 @@ export function getAddonFilenames({ tag, arch, variant }) {
 }
 
 /**
+ * Decide whether the loader should mirror the package's `native/<filename>.node`
+ * into the per-version cache directory (`~/.omp/natives/<version>/`) before loading.
+ *
+ * Windows-only safety net for `bun install -g` updates: when a previous `omp`
+ * process is running, bun cannot overwrite the locked `.node` inside
+ * `node_modules/@oh-my-pi/pi-natives/native/`, leaving an old binary next to a
+ * newer `index.js` and producing `<sym> is not a function` crashes on the next
+ * launch. Staging into the version-pinned cache:
+ *   1. Gives every package version its own filesystem path, so concurrent omp
+ *      processes never collide on the same file.
+ *   2. Makes the running process keep its handle on the cache copy, freeing bun
+ *      to overwrite the `node_modules` copy on subsequent updates.
+ * Disabled on non-Windows (no file-lock problem), in workspace dev (`nativeDir`
+ * is not inside a `node_modules` segment), and for compiled binaries (handled
+ * by `maybeExtractEmbeddedAddon`).
+ *
+ * @param {{ platform: NodeJS.Platform | string; isCompiledBinary: boolean; nativeDir: string }} input
+ * @returns {boolean}
+ */
+export function shouldStageNodeModulesAddon({ platform, isCompiledBinary, nativeDir }) {
+	if (platform !== "win32") return false;
+	if (isCompiledBinary) return false;
+	// Check both separators independently of the host's `path.sep`: this helper
+	// is shared by the loader (running on Windows with `\`) and the test suite
+	// (typically running on POSIX hosts when CI executes the regression test).
+	return nativeDir.includes("\\node_modules\\") || nativeDir.includes("/node_modules/");
+}
+
+/**
  * @param {{
  *   addonFilenames: string[];
  *   isCompiledBinary: boolean;
+ *   stageFromNodeModules?: boolean;
  *   nativeDir: string;
  *   execDir: string;
  *   versionedDir: string;
@@ -63,7 +93,15 @@ export function getAddonFilenames({ tag, arch, variant }) {
  * }} input
  * @returns {string[]}
  */
-export function resolveLoaderCandidates({ addonFilenames, isCompiledBinary, nativeDir, execDir, versionedDir, userDataDir }) {
+export function resolveLoaderCandidates({
+	addonFilenames,
+	isCompiledBinary,
+	stageFromNodeModules = false,
+	nativeDir,
+	execDir,
+	versionedDir,
+	userDataDir,
+}) {
 	const baseReleaseCandidates = addonFilenames.flatMap(filename => [
 		path.join(nativeDir, filename),
 		path.join(execDir, filename),
@@ -72,9 +110,17 @@ export function resolveLoaderCandidates({ addonFilenames, isCompiledBinary, nati
 		path.join(versionedDir, filename),
 		path.join(userDataDir, filename),
 	]);
-	const releaseCandidates = isCompiledBinary
-		? [...compiledCandidates, ...baseReleaseCandidates]
-		: baseReleaseCandidates;
+	const stagedCandidates = stageFromNodeModules
+		? addonFilenames.map(filename => path.join(versionedDir, filename))
+		: [];
+	let releaseCandidates;
+	if (isCompiledBinary) {
+		releaseCandidates = [...compiledCandidates, ...baseReleaseCandidates];
+	} else if (stageFromNodeModules) {
+		releaseCandidates = [...stagedCandidates, ...baseReleaseCandidates];
+	} else {
+		releaseCandidates = baseReleaseCandidates;
+	}
 	return [...new Set(releaseCandidates)];
 }
 
