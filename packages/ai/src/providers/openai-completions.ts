@@ -411,6 +411,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				options?.initiatorOverride,
 				options?.onSseEvent,
 				options?.fetch,
+				options?.streamFirstEventTimeoutMs,
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			getCapturedErrorResponse = captureErrorResponse;
@@ -630,6 +631,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 			const kimiHealer = modelMayLeakKimiToolCalls(model.provider, model.id) ? new ToolCallHealer() : undefined;
 			let healedToolCallEmitted = false;
+			let sawStructuredToolCalls = false;
 			const emitHealedToolCall = (call: HealedToolCall): void => {
 				finishCurrentBlock(currentBlock);
 				const block: ToolCall & { partialArgs: string } = {
@@ -706,9 +708,20 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 							deepseekStripBuffer += normalizedDeltaText;
 							flushDeepseekStripBuffer(false);
 						} else if (kimiHealer) {
-							const clean = kimiHealer.feed(normalizedDeltaText);
-							if (clean.length > 0) appendTextDelta(clean);
-							flushHealedToolCalls();
+							const hasStructuredToolCalls =
+								Array.isArray(choice.delta.tool_calls) && choice.delta.tool_calls.length > 0;
+							if (hasStructuredToolCalls) {
+								// Same chunk leaks markers AND carries structured tool_calls.
+								// Strip the marker text from visible output, but drop any
+								// synthesized calls so the structured payload stays the
+								// single source of truth (avoids double-dispatch).
+								const clean = kimiHealer.consumeWithoutCalls(normalizedDeltaText);
+								if (clean.length > 0) appendTextDelta(clean);
+							} else {
+								const clean = kimiHealer.feed(normalizedDeltaText);
+								if (clean.length > 0) appendTextDelta(clean);
+								flushHealedToolCalls();
+							}
 						} else {
 							appendTextDelta(normalizedDeltaText);
 						}
@@ -738,7 +751,8 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 						appendThinkingDelta(delta, foundReasoningField);
 					}
 
-					if (choice?.delta?.tool_calls) {
+					if (choice?.delta?.tool_calls && choice.delta.tool_calls.length > 0) {
+						sawStructuredToolCalls = true;
 						for (const toolCall of choice.delta.tool_calls) {
 							if (
 								!currentBlock ||
@@ -812,12 +826,20 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			if (kimiHealer) {
 				const trailing = kimiHealer.flushPending();
 				if (trailing.length > 0) appendTextDelta(trailing);
-				flushHealedToolCalls();
-				if (healedToolCallEmitted && output.stopReason !== "toolUse") {
-					// Hosts that leak Kimi tool tokens often still report
-					// `finish_reason: stop` for the surrounding turn. Promote
-					// the stop reason so the agent loop dispatches the call.
-					output.stopReason = "toolUse";
+				if (sawStructuredToolCalls) {
+					// Structured tool_calls already carried the truth — discard
+					// anything the healer synthesized so callers don't see the
+					// same call twice with different IDs.
+					kimiHealer.drainCompleted();
+				} else {
+					flushHealedToolCalls();
+					if (healedToolCallEmitted && output.stopReason === "stop") {
+						// Hosts that leak Kimi tool tokens often still report
+						// `finish_reason: stop` for the surrounding turn. Promote
+						// only that natural-completion finish — leave `error`,
+						// `length`, `aborted`, etc. untouched.
+						output.stopReason = "toolUse";
+					}
 				}
 			}
 
@@ -872,6 +894,7 @@ async function createClient(
 	initiatorOverride?: MessageAttribution,
 	onSseEvent?: OpenAICompletionsOptions["onSseEvent"],
 	fetchOverride?: FetchImpl,
+	streamFirstEventTimeoutOverride?: number,
 ): Promise<{
 	client: OpenAI;
 	copilotPremiumRequests: number | undefined;
@@ -977,7 +1000,15 @@ async function createClient(
 	// Using the first-event timeout keeps both layers aligned: the SDK gives up
 	// before the agent watchdog would have, surfacing a real error to the catch
 	// in the IIFE.
-	const sdkTimeoutMs = getStreamFirstEventTimeoutMs(getOpenAIStreamIdleTimeoutMs());
+	// A caller may raise `StreamOptions.streamFirstEventTimeoutMs` for a slow-
+	// before-headers provider; respect it so the SDK doesn't give up before the
+	// wrapping watchdog arms. We take the max so the env default still acts as
+	// a floor (the SDK timeout must never undershoot the agent watchdog).
+	const envSdkTimeoutMs = getStreamFirstEventTimeoutMs(getOpenAIStreamIdleTimeoutMs());
+	const sdkTimeoutMs =
+		streamFirstEventTimeoutOverride !== undefined
+			? Math.max(envSdkTimeoutMs ?? 0, streamFirstEventTimeoutOverride)
+			: envSdkTimeoutMs;
 	return {
 		client: new OpenAI({
 			apiKey,

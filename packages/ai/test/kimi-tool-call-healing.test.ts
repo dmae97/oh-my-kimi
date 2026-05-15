@@ -9,8 +9,16 @@ afterEach(() => {
 	global.fetch = originalFetch;
 });
 
+interface SseToolCallDelta {
+	index: number;
+	id?: string;
+	type?: "function";
+	function?: { name?: string; arguments?: string };
+}
+
 interface SseChoiceDelta {
 	content?: string;
+	tool_calls?: SseToolCallDelta[];
 }
 
 interface SseChunk {
@@ -21,7 +29,7 @@ interface SseChunk {
 	choices: Array<{
 		index: number;
 		delta: SseChoiceDelta;
-		finish_reason?: "stop" | "tool_calls" | "length" | null;
+		finish_reason?: "stop" | "tool_calls" | "length" | "content_filter" | null;
 	}>;
 }
 
@@ -215,5 +223,80 @@ describe("Kimi K2 leaked tool-call healing", () => {
 
 		expect(text).toBe("before <|hello|> after");
 		expect(result.content.some(b => b.type === "toolCall")).toBe(false);
+	});
+
+	it("does NOT promote an error finish_reason to toolUse even when healed calls exist", async () => {
+		// `content_filter` maps to `stopReason: "error"`. The promotion path used
+		// to clobber any non-toolUse stop reason; it must now leave error alone.
+		const leaked =
+			"<|tool_calls_section_begin|>" +
+			"<|tool_call_begin|>functions.read:0<|tool_call_argument_begin|>" +
+			'{"path":"src/x.ts"}' +
+			"<|tool_call_end|>" +
+			"<|tool_calls_section_end|>";
+
+		global.fetch = mockFetch([chunk(model.id, { content: leaked }), chunk(model.id, {}, "content_filter"), "[DONE]"]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test" }).result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("content_filter");
+	});
+
+	it("drops synthesized calls when the same chunk also carries structured tool_calls", async () => {
+		// The host leaks Kimi markers AND emits the structured tool_calls payload
+		// in the same delta. Without the suppression, the agent would see TWO
+		// calls (same intent, different IDs). We want exactly one.
+		const leaked =
+			"<|tool_calls_section_begin|>" +
+			"<|tool_call_begin|>functions.read:0<|tool_call_argument_begin|>" +
+			'{"path":"src/index.ts"}' +
+			"<|tool_call_end|>" +
+			"<|tool_calls_section_end|>";
+
+		global.fetch = mockFetch([
+			chunk(model.id, {
+				content: leaked,
+				tool_calls: [
+					{
+						index: 0,
+						id: "call_structured_abc",
+						type: "function",
+						function: { name: "read", arguments: '{"path":"src/index.ts"}' },
+					},
+				],
+			}),
+			chunk(model.id, {}, "tool_calls"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test" }).result();
+		const toolCalls = result.content.filter((b): b is ToolCall => b.type === "toolCall");
+		expect(toolCalls).toHaveLength(1);
+		expect(toolCalls[0].id).toBe("call_structured_abc");
+		expect(toolCalls[0].name).toBe("read");
+		expect(toolCalls[0].arguments).toEqual({ path: "src/index.ts" });
+
+		const text = result.content
+			.filter(b => b.type === "text")
+			.map(b => b.text)
+			.join("");
+		expect(text).not.toContain("<|");
+		// Structured calls drove the finish reason themselves; promotion path
+		// is bypassed because the synthesized calls were discarded.
+		expect(result.stopReason).toBe("toolUse");
+	});
+
+	it("passes a literal <|tool_call_end|> through as text when no section is active", async () => {
+		const prose = "Use <|tool_call_end|> to close a call.";
+		global.fetch = mockFetch([chunk(model.id, { content: prose }), chunk(model.id, {}, "stop"), "[DONE]"]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test" }).result();
+		const text = result.content
+			.filter(b => b.type === "text")
+			.map(b => b.text)
+			.join("");
+		expect(text).toBe(prose);
+		expect(result.content.some(b => b.type === "toolCall")).toBe(false);
+		expect(result.stopReason).toBe("stop");
 	});
 });

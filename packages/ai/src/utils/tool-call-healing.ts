@@ -71,6 +71,19 @@ export class ToolCallHealer {
 	}
 
 	/**
+	 * Like {@link feed}, but discards any tool calls that the chunk completes.
+	 * Used when the upstream provider also emits structured `delta.tool_calls`
+	 * for the same chunk: the healer still strips leaked marker text from the
+	 * visible output, but the structured payload remains the single source of
+	 * truth for the call list.
+	 */
+	consumeWithoutCalls(text: string): string {
+		const clean = this.feed(text);
+		if (this.#completed.length > 0) this.#completed.length = 0;
+		return clean;
+	}
+
+	/**
 	 * Drain accumulated tool calls. The internal list is cleared so a
 	 * subsequent section in the same stream (rare) yields fresh calls.
 	 */
@@ -126,6 +139,13 @@ export class ToolCallHealer {
 				continue;
 			}
 			if (this.#matches(TOK_CALL_BEGIN)) {
+				if (!this.#inSection) {
+					// Literal mention outside a section — pass through as text so
+					// docs/examples explaining tool tokens are not silently eaten.
+					clean += TOK_CALL_BEGIN;
+					this.#offset += TOK_CALL_BEGIN.length;
+					continue;
+				}
 				this.#inCall = true;
 				this.#inArgs = false;
 				this.#pendingId = "";
@@ -134,11 +154,24 @@ export class ToolCallHealer {
 				continue;
 			}
 			if (this.#matches(TOK_ARG_BEGIN)) {
+				if (!this.#inSection) {
+					clean += TOK_ARG_BEGIN;
+					this.#offset += TOK_ARG_BEGIN.length;
+					continue;
+				}
 				this.#inArgs = true;
 				this.#offset += TOK_ARG_BEGIN.length;
 				continue;
 			}
 			if (this.#matches(TOK_CALL_END)) {
+				if (!this.#inSection || !this.#inCall) {
+					// Token appeared outside an active call (e.g. an assistant
+					// turn explaining the Kimi format). Emit it verbatim instead
+					// of synthesizing a bogus empty tool call.
+					clean += TOK_CALL_END;
+					this.#offset += TOK_CALL_END.length;
+					continue;
+				}
 				this.#finalizeCall();
 				this.#offset += TOK_CALL_END.length;
 				continue;
