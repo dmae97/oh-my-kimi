@@ -21,6 +21,7 @@ const ReasoningEffortMapSchema = z.object({
 export const OpenAICompatSchema = z.object({
 	supportsStore: z.boolean().optional(),
 	supportsDeveloperRole: z.boolean().optional(),
+	supportsMultipleSystemMessages: z.boolean().optional(),
 	supportsReasoningEffort: z.boolean().optional(),
 	reasoningEffortMap: ReasoningEffortMapSchema.optional(),
 	maxTokensField: z.enum(["max_completion_tokens", "max_tokens"]).optional(),
@@ -31,9 +32,11 @@ export const OpenAICompatSchema = z.object({
 	requiresThinkingAsText: z.boolean().optional(),
 	reasoningContentField: z.enum(["reasoning_content", "reasoning", "reasoning_text"]).optional(),
 	requiresReasoningContentForToolCalls: z.boolean().optional(),
+	allowsSyntheticReasoningContentForToolCalls: z.boolean().optional(),
 	requiresAssistantContentForToolCalls: z.boolean().optional(),
 	supportsToolChoice: z.boolean().optional(),
 	disableReasoningOnForcedToolChoice: z.boolean().optional(),
+	disableReasoningOnToolChoice: z.boolean().optional(),
 	thinkingFormat: z.enum(["openai", "openrouter", "zai", "qwen", "qwen-chat-template"]).optional(),
 	openRouterRouting: OpenRouterRoutingSchema.optional(),
 	vercelGatewayRouting: VercelGatewayRoutingSchema.optional(),
@@ -57,6 +60,7 @@ const ModelThinkingSchema = z.object({
 	maxLevel: EffortSchema,
 	mode: ThinkingControlModeSchema,
 	defaultLevel: EffortSchema.optional(),
+	levels: z.array(EffortSchema).optional(),
 });
 
 const ModelDefinitionSchema = z.object({

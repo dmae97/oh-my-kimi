@@ -78,6 +78,76 @@ describe("Tool argument coercion", () => {
 		expect(result.payload).toEqual({ a: 1 });
 	});
 
+	it("preserves unknown root fields after Zod validation so tools can reject disabled arguments", () => {
+		const tool: Tool = {
+			name: "t4b",
+			description: "",
+			parameters: z.object({ command: z.string() }),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-4b",
+			name: "t4b",
+			arguments: { command: "echo hi", async: true },
+		});
+
+		expect(result).toEqual({ command: "echo hi", async: true });
+	});
+
+	it("coerces JSON-stringified records emitted for Zod record fields", () => {
+		const tool: Tool = {
+			name: "t4c",
+			description: "",
+			parameters: z.object({ env: z.record(z.string(), z.string()) }),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-4c",
+			name: "t4c",
+			arguments: { env: '{"FOO":"bar"}' },
+		});
+
+		expect(result).toEqual({ env: { FOO: "bar" } });
+	});
+
+	it("validates legacy draft-07 JSON Schema without converting it through Zod", () => {
+		const tool: Tool = {
+			name: "legacy_schema",
+			description: "",
+			parameters: {
+				type: "object",
+				properties: {
+					item: { $ref: "#/definitions/Item" },
+					name: { type: "string", nullable: true },
+					ids: { type: "array", items: { type: "string" }, uniqueItems: true },
+				},
+				required: ["item", "name", "ids"],
+				definitions: {
+					Item: { type: "string" },
+				},
+			},
+		};
+
+		const valid = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-legacy-ok",
+			name: "legacy_schema",
+			arguments: { item: "ok", name: null, ids: ["a", "b"] },
+		});
+		expect(valid).toEqual({ item: "ok", name: null, ids: ["a", "b"] });
+
+		expect(() =>
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "call-legacy-bad",
+				name: "legacy_schema",
+				arguments: { item: "ok", name: null, ids: ["a", "a"] },
+			}),
+		).toThrow("unique");
+	});
+
 	it("parses nested JSON arrays in string values", () => {
 		const tool: Tool = {
 			name: "t5",

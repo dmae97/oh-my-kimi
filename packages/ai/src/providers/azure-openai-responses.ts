@@ -26,7 +26,7 @@ import {
 	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
-import { toolWireSchema } from "../utils/schema/wire";
+import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { wrapFetchForSseDebug } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
 import { normalizeOpenAIResponsesPromptCacheKey, supportsDeveloperRole } from "./openai-responses";
@@ -331,7 +331,7 @@ function convertTools(tools: Tool[]): OpenAITool[] {
 		type: "function",
 		name: tool.name,
 		description: tool.description || "",
-		parameters: toolWireSchema(tool),
+		parameters: sanitizeSchemaForOpenAIResponses(toolWireSchema(tool)),
 		strict: false,
 	}));
 }

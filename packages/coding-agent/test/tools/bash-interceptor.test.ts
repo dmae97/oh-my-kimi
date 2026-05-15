@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
 import type { BashInterceptorRule } from "../../src/config/settings-schema";
 import type { ToolSession } from "../../src/tools";
 import { BashTool } from "../../src/tools/bash";
@@ -54,6 +55,20 @@ describe("BashTool interception", () => {
 				toolNames: ["read"],
 			} as AgentToolContext),
 		).rejects.toThrow("Use read instead");
+	});
+});
+
+describe("BashTool argument validation", () => {
+	it("preserves async requests so disabled async mode returns the explicit error", async () => {
+		const tool = createBashTool([]);
+		const args = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "tool-call",
+			name: tool.name,
+			arguments: { command: "echo should-not-run", async: true },
+		});
+
+		await expect(tool.execute("tool-call", args)).rejects.toThrow("Async bash execution is disabled");
 	});
 });
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { type AzureOpenAIResponsesOptions, streamAzureOpenAIResponses } from "../src/providers/azure-openai-responses";
-import type { Context, Model } from "../src/types";
+import type { Context, Model, Tool } from "../src/types";
 
 const originalFetch = global.fetch;
 
@@ -131,6 +131,44 @@ describe("azure openai responses streaming", () => {
 		expect(payload.prompt_cache_key).toBe("azure-session");
 		expect(payload.prompt_cache_retention).toBeUndefined();
 		expect(payload.cache_control).toBeUndefined();
+	});
+
+	it("rewrites oneOf tool schemas to anyOf for Azure Responses", async () => {
+		const tool: Tool = {
+			name: "choose",
+			description: "choose a branch",
+			parameters: {
+				type: "object",
+				properties: {
+					item: {
+						oneOf: [
+							{
+								type: "object",
+								properties: { kind: { const: "a" }, value: { type: "string" } },
+								required: ["kind", "value"],
+								additionalProperties: false,
+							},
+							{
+								type: "object",
+								properties: { kind: { const: "b" }, count: { type: "integer" } },
+								required: ["kind", "count"],
+								additionalProperties: false,
+							},
+						],
+					},
+				},
+				required: ["item"],
+			},
+		};
+
+		const payload = await captureAzurePayload({
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+			tools: [tool],
+		});
+
+		const tools = payload.tools as Array<{ parameters: { properties: { item: Record<string, unknown> } } }>;
+		expect(tools[0].parameters.properties.item.oneOf).toBeUndefined();
+		expect(Array.isArray(tools[0].parameters.properties.item.anyOf)).toBe(true);
 	});
 
 	it("surfaces nested response.failed provider errors", async () => {

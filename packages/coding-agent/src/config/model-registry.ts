@@ -165,12 +165,13 @@ function validateProviderConfiguration(
 				!config.baseUrl &&
 				!config.headers &&
 				!config.compat &&
+				!config.apiKey &&
 				!config.disableStrictTools &&
 				!hasModelOverrides &&
 				!config.discovery
 			) {
 				throw new Error(
-					`Provider ${providerName}: must specify "baseUrl", "headers", "compat", "disableStrictTools", "modelOverrides", "discovery", or "models"`,
+					`Provider ${providerName}: must specify "baseUrl", "headers", "apiKey", "compat", "disableStrictTools", "modelOverrides", "discovery", or "models"`,
 				);
 			}
 		}

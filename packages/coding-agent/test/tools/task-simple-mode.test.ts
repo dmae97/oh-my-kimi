@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
 import { Settings } from "../../src/config/settings";
 import { TaskTool } from "../../src/task";
 import * as discoveryModule from "../../src/task/discovery";
@@ -93,6 +94,18 @@ describe("task.simple", () => {
 			tasks: [{ id: "One", description: "label", assignment: "Do the thing." }],
 		} as TaskParams);
 		expect(getFirstText(schemaFreeResult)).toContain("does not accept `schema`");
+		const validatedSchemaFreeParams = validateToolArguments(schemaFreeTool, {
+			type: "toolCall",
+			id: "tool-1-validated",
+			name: schemaFreeTool.name,
+			arguments: {
+				agent: "task",
+				schema: '{"properties":{"ok":{"type":"boolean"}}}',
+				tasks: [{ id: "One", description: "label", assignment: "Do the thing." }],
+			},
+		});
+		const validatedSchemaFreeResult = await schemaFreeTool.execute("tool-1-validated", validatedSchemaFreeParams);
+		expect(getFirstText(validatedSchemaFreeResult)).toContain("does not accept `schema`");
 
 		const independentTool = await TaskTool.create(createSession({ "task.simple": "independent" }));
 		const independentResult = await independentTool.execute("tool-2", {
@@ -101,5 +114,17 @@ describe("task.simple", () => {
 			tasks: [{ id: "Two", description: "label", assignment: "Do the independent thing." }],
 		} as TaskParams);
 		expect(getFirstText(independentResult)).toContain("does not accept `context`");
+		const validatedIndependentParams = validateToolArguments(independentTool, {
+			type: "toolCall",
+			id: "tool-2-validated",
+			name: independentTool.name,
+			arguments: {
+				agent: "task",
+				context: "Shared background",
+				tasks: [{ id: "Two", description: "label", assignment: "Do the independent thing." }],
+			},
+		});
+		const validatedIndependentResult = await independentTool.execute("tool-2-validated", validatedIndependentParams);
+		expect(getFirstText(validatedIndependentResult)).toContain("does not accept `context`");
 	});
 });

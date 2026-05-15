@@ -488,6 +488,26 @@ describe("ModelRegistry", () => {
 			}
 		});
 
+		test("apiKey-only override supplies fallback auth for built-in models", async () => {
+			const originalOpenAiKey = Bun.env.OPENAI_API_KEY;
+			delete Bun.env.OPENAI_API_KEY;
+			try {
+				writeRawModelsJson({
+					openai: {
+						apiKey: "issue-typed-key",
+					},
+				});
+
+				const registry = new ModelRegistry(authStorage, modelsJsonPath);
+				const openaiModels = getModelsForProvider(registry, "openai");
+
+				expect(openaiModels.length).toBeGreaterThan(0);
+				await expect(registry.getApiKey(openaiModels[0])).resolves.toBe("issue-typed-key");
+			} finally {
+				if (originalOpenAiKey === undefined) delete Bun.env.OPENAI_API_KEY;
+				else Bun.env.OPENAI_API_KEY = originalOpenAiKey;
+			}
+		});
 		test("baseUrl-only override does not affect other providers", () => {
 			writeRawModelsJson({
 				anthropic: overrideConfig("https://my-proxy.example.com/v1"),
@@ -551,6 +571,9 @@ describe("ModelRegistry", () => {
 					compat: {
 						supportsUsageInStreaming: false,
 						supportsStrictMode: false,
+						supportsMultipleSystemMessages: false,
+						disableReasoningOnToolChoice: true,
+						allowsSyntheticReasoningContentForToolCalls: false,
 					},
 				},
 			});
@@ -561,6 +584,9 @@ describe("ModelRegistry", () => {
 			for (const model of models) {
 				expect(getOpenAICompat(model)?.supportsUsageInStreaming).toBe(false);
 				expect(getOpenAICompat(model)?.supportsStrictMode).toBe(false);
+				expect(getOpenAICompat(model)?.supportsMultipleSystemMessages).toBe(false);
+				expect(getOpenAICompat(model)?.disableReasoningOnToolChoice).toBe(true);
+				expect(getOpenAICompat(model)?.allowsSyntheticReasoningContentForToolCalls).toBe(false);
 			}
 		});
 
@@ -1043,6 +1069,7 @@ describe("ModelRegistry", () => {
 				mode: "anthropic-adaptive",
 				minLevel: Effort.Minimal,
 				maxLevel: Effort.High,
+				levels: [Effort.Minimal, Effort.High],
 			};
 
 			writeModelsJson({

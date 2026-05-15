@@ -7,7 +7,7 @@
 import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentTelemetryConfig, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
-import { fromTypeBox } from "@oh-my-pi/pi-ai/utils/schema";
+import { isJsonSchemaValueValid } from "@oh-my-pi/pi-ai/utils/schema";
 import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveModelOverrideWithAuthFallback } from "../config/model-resolver";
@@ -209,12 +209,7 @@ function buildOutputValidator(schema: unknown): { validate?: (value: unknown) =>
 	if (error) return { error };
 	if (normalized === undefined) return {};
 	const jsonSchema = jtdToJsonSchema(normalized);
-	try {
-		const zod = fromTypeBox(jsonSchema);
-		return { validate: value => zod.safeParse(value).success };
-	} catch (err) {
-		return { error: err instanceof Error ? err.message : String(err) };
-	}
+	return { validate: value => isJsonSchemaValueValid(jsonSchema, value) };
 }
 
 function tryParseJsonOutput(text: string): unknown | undefined {

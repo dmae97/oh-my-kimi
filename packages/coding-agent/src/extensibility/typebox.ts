@@ -21,6 +21,7 @@
  * `@sinclair/typebox` directly in their own package.
  */
 
+import { areJsonValuesEqual } from "@oh-my-pi/pi-ai/utils/schema";
 import {
 	type ZodArray,
 	type ZodEnum,
@@ -105,6 +106,13 @@ function withMeta<T extends ZodType>(schema: T, opts: Meta | undefined): T {
 	let out: ZodType = schema;
 	if (typeof opts.description === "string") out = out.describe(opts.description);
 	if ("default" in opts) out = out.default(opts.default as never) as unknown as ZodType;
+
+	const metadata: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(opts)) {
+		if (key === "description" || key === "default" || key === "additionalProperties") continue;
+		metadata[key] = value;
+	}
+	if (Object.keys(metadata).length > 0) out = out.meta(metadata);
 	return out as T;
 }
 
@@ -213,22 +221,59 @@ function tIntersect(schemas: readonly ZodType[], opts?: Meta): ZodType {
 	return withMeta(out, opts);
 }
 
-function tEnum<T extends Record<string, string | number>>(values: T, opts?: Meta): ZodType {
-	// Accepts either a plain object (TS enum / record of name→value) or a
-	// pre-built array; both are tolerated by `z.enum`. We collapse to values
-	// because TypeBox's `Type.Enum` discards the keys for the JSON Schema.
-	const list = Array.isArray(values) ? (values as unknown as (string | number)[]) : Object.values(values);
-	return withMeta(z.enum(list as [string, ...string[]]), opts);
+function isArrayIndexKey(key: string): boolean {
+	if (!/^(?:0|[1-9]\\d*)$/.test(key)) return false;
+	const index = Number(key);
+	return Number.isSafeInteger(index) && index >= 0;
+}
+
+function uniqueLiteralValues(values: readonly (string | number | boolean)[]): Array<string | number | boolean> {
+	const unique: Array<string | number | boolean> = [];
+	for (const value of values) {
+		if (!unique.some(existing => existing === value)) unique.push(value);
+	}
+	return unique;
+}
+
+function literalUnion(values: readonly (string | number | boolean)[], opts?: Meta): ZodType {
+	const unique = uniqueLiteralValues(values);
+	if (unique.length === 0) return withMeta(z.never(), opts);
+	if (unique.length === 1) return withMeta(z.literal(unique[0] as string | number | boolean), opts);
+	const schemas = unique.map(value => z.literal(value as string | number | boolean)) as unknown as [
+		ZodType,
+		ZodType,
+		...ZodType[],
+	];
+	return withMeta(z.union(schemas), opts);
+}
+function tEnum<T extends Record<string, string | number> | readonly (string | number)[]>(
+	values: T,
+	opts?: Meta,
+): ZodType {
+	const list = Array.isArray(values)
+		? values
+		: Object.entries(values)
+				.filter(([key, value]) => !(isArrayIndexKey(key) && typeof value === "string"))
+				.map(([, value]) => value);
+	return literalUnion(list, opts);
 }
 
 function tArray<E extends ZodType>(item: E, opts?: ArrayOpts): ZodType {
-	let arr = z.array(item);
+	let arr: ZodType = z.array(item);
 	if (opts) {
-		if (typeof opts.minItems === "number") arr = arr.min(opts.minItems);
-		if (typeof opts.maxItems === "number") arr = arr.max(opts.maxItems);
-		// `uniqueItems` is observably useful only at JSON Schema emit time —
-		// providers either honor it or ignore it. Zod has no native equivalent,
-		// so we encode it as schema metadata for the wire output to surface.
+		if (typeof opts.minItems === "number") arr = (arr as ZodArray<E>).min(opts.minItems);
+		if (typeof opts.maxItems === "number") arr = (arr as ZodArray<E>).max(opts.maxItems);
+		if (opts.uniqueItems === true) {
+			arr = arr.refine(items => {
+				if (!Array.isArray(items)) return true;
+				for (let i = 0; i < items.length; i += 1) {
+					for (let j = i + 1; j < items.length; j += 1) {
+						if (areJsonValuesEqual(items[i], items[j])) return false;
+					}
+				}
+				return true;
+			}, "Expected array items to be unique");
+		}
 	}
 	return withMeta(arr, opts);
 }
@@ -249,9 +294,7 @@ function tObject<P extends ZodRawShape>(properties: P, opts?: ObjectOpts): ZodOb
 	let obj = z.object(properties);
 	if (opts && opts.additionalProperties !== undefined) {
 		if (opts.additionalProperties === false) {
-			// `.strict()` would *reject* extra keys; for parity with the looser
-			// real-TypeBox behavior we keep the default (strip-on-parse) which
-			// still serializes to `additionalProperties: false`.
+			obj = obj.strict() as unknown as ZodObject<P>;
 		} else if (opts.additionalProperties === true) {
 			obj = obj.catchall(z.any()) as unknown as ZodObject<P>;
 		} else {
@@ -261,11 +304,8 @@ function tObject<P extends ZodRawShape>(properties: P, opts?: ObjectOpts): ZodOb
 	return withMeta(obj, opts);
 }
 
-function tRecord<V extends ZodType>(_key: ZodType, value: V, opts?: Meta): ZodType {
-	// JSON Schema `Type.Record(K, V)` is always keyed by strings on the wire
-	// (no provider honors numeric keys), so we ignore the key schema beyond
-	// the implicit string constraint.
-	return withMeta(z.record(z.string(), value) as unknown as ZodType, opts);
+function tRecord<V extends ZodType>(key: ZodType, value: V, opts?: Meta): ZodType {
+	return withMeta(z.record(key as never, value as never) as unknown as ZodType, opts);
 }
 
 function tOptional<E extends ZodType>(schema: E, _opts?: Meta): ZodOptional<E> {
@@ -299,13 +339,15 @@ function tOmit<P extends ZodRawShape, K extends keyof P>(obj: ZodObject<P>, keys
 	return obj.omit(mask as never) as unknown as ZodObject<Omit<P, K>>;
 }
 
-function tComposite<A extends ZodRawShape, B extends ZodRawShape>(
-	objects: readonly [ZodObject<A>, ZodObject<B>],
-): ZodObject<A & B> {
-	// `Type.Composite([A, B])` flattens objects into a single object schema
-	// rather than producing an intersection. Mirror that via Zod's extend.
-	const [a, b] = objects;
-	return a.extend(b.shape) as unknown as ZodObject<A & B>;
+function tComposite(objects: readonly ZodObject<ZodRawShape>[], opts?: Meta): ZodObject<ZodRawShape> {
+	// `Type.Composite([...])` flattens every object schema into one object schema
+	// rather than producing an intersection. Mirror that via repeated `extend`.
+	if (objects.length === 0) return withMeta(z.object({}), opts) as ZodObject<ZodRawShape>;
+	let out = objects[0] as ZodObject<ZodRawShape>;
+	for (let i = 1; i < objects.length; i += 1) {
+		out = out.extend(objects[i].shape) as ZodObject<ZodRawShape>;
+	}
+	return withMeta(out, opts) as ZodObject<ZodRawShape>;
 }
 
 // ---------------------------------------------------------------------------

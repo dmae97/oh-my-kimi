@@ -5,9 +5,14 @@
  */
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { TSchema } from "@oh-my-pi/pi-ai/types";
-import { dereferenceJsonSchema, fromTypeBox, sanitizeSchemaForStrictMode } from "@oh-my-pi/pi-ai/utils/schema";
-import type { ZodType } from "zod/v4";
-import type { $ZodIssue as ZodIssue } from "zod/v4/core";
+import {
+	dereferenceJsonSchema,
+	isValidJsonSchema,
+	type JsonSchemaValidationIssue,
+	type JsonSchemaValidationResult,
+	sanitizeSchemaForStrictMode,
+	validateJsonSchemaValue,
+} from "@oh-my-pi/pi-ai/utils/schema";
 import { subprocessToolRegistry } from "../task/subprocess-tool-registry";
 import type { ToolSession } from ".";
 import { jtdToJsonSchema, normalizeSchema } from "./jtd-to-json-schema";
@@ -28,12 +33,12 @@ function formatSchema(schema: unknown): string {
 	}
 }
 
-function formatZodIssues(issues: ReadonlyArray<ZodIssue> | undefined): string {
+function formatJsonSchemaIssues(issues: ReadonlyArray<JsonSchemaValidationIssue> | undefined): string {
 	if (!issues || issues.length === 0) return "Unknown schema validation error.";
 	return issues
 		.map(issue => {
 			const path = issue.path.length === 0 ? "" : `${issue.path.map(seg => String(seg)).join("/")}: `;
-			return `${path}${issue.message ?? "invalid"}`;
+			return `${path}${issue.message}`;
 		})
 		.join("; ");
 }
@@ -88,11 +93,11 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 	readonly intent = "omit" as const;
 	lenientArgValidation = true;
 
-	readonly #validate?: ZodType;
+	readonly #validate?: (value: unknown) => JsonSchemaValidationResult;
 	#schemaValidationFailures = 0;
 
 	constructor(session: ToolSession) {
-		let validate: ZodType | undefined;
+		let validate: ((value: unknown) => JsonSchemaValidationResult) | undefined;
 		let parameters: TSchema;
 
 		try {
@@ -106,10 +111,10 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 			}
 
 			if (normalizedSchema !== undefined && normalizedSchema !== false && !schemaError) {
-				try {
-					validate = fromTypeBox(normalizedSchema as Record<string, unknown> | boolean);
-				} catch (err) {
-					schemaError = err instanceof Error ? err.message : String(err);
+				if (!isValidJsonSchema(normalizedSchema)) {
+					schemaError = "invalid JSON schema";
+				} else {
+					validate = value => validateJsonSchemaValue(normalizedSchema, value);
 				}
 			}
 
@@ -141,7 +146,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 			}
 			parameters = wrapYieldParameters(dataSchema);
 			JSON.stringify(parameters);
-			fromTypeBox(parameters as Record<string, unknown>);
+			if (!isValidJsonSchema(parameters)) throw new Error("yield parameters schema is invalid");
 		} catch (err) {
 			const errorMsg = err instanceof Error ? err.message : String(err);
 			parameters = wrapYieldParameters(
@@ -188,11 +193,11 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 				throw new Error("data is required when yield indicates success");
 			}
 			if (this.#validate) {
-				const parsed = this.#validate.safeParse(data);
+				const parsed = this.#validate(data);
 				if (!parsed.success) {
 					this.#schemaValidationFailures++;
 					if (this.#schemaValidationFailures <= 1) {
-						throw new Error(`Output does not match schema: ${formatZodIssues(parsed.error.issues)}`);
+						throw new Error(`Output does not match schema: ${formatJsonSchemaIssues(parsed.issues)}`);
 					}
 					schemaValidationOverridden = true;
 				}

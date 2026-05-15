@@ -552,7 +552,7 @@ export type TJsonSchema = Record<string, unknown>;
 export type TSchema = ZodType | TJsonSchema;
 
 /** Resolve parameter types for tool execution / handlers. */
-export type Static<S> = S extends ZodType ? z.infer<S> : unknown;
+export type Static<S> = S extends ZodType ? z.infer<S> : S extends { static: infer T } ? T : unknown;
 
 export interface Tool<TParameters extends TSchema = TSchema> {
 	name: string;

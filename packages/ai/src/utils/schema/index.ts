@@ -3,7 +3,7 @@ export * from "./compatibility";
 export * from "./dereference";
 export * from "./equality";
 export * from "./fields";
-export * from "./from-typebox";
+export * from "./json-schema-validator";
 export * from "./meta-validator";
 export * from "./normalize-cca";
 export * from "./sanitize-google";

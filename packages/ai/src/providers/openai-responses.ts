@@ -6,20 +6,20 @@ import type {
 	ResponseInput,
 } from "openai/resources/responses/responses";
 import { getEnvApiKey } from "../stream";
-import {
-	type AssistantMessage,
-	type CacheRetention,
-	type Context,
-	type FetchImpl,
-	type MessageAttribution,
-	type Model,
-	type OpenAICompat,
-	type ProviderSessionState,
-	type ServiceTier,
-	type StreamFunction,
-	type StreamOptions,
-	type Tool,
-	type ToolChoice,
+import type {
+	AssistantMessage,
+	CacheRetention,
+	Context,
+	FetchImpl,
+	MessageAttribution,
+	Model,
+	OpenAICompat,
+	ProviderSessionState,
+	ServiceTier,
+	StreamFunction,
+	StreamOptions,
+	Tool,
+	ToolChoice,
 } from "../types";
 import {
 	createOpenAIResponsesHistoryPayload,

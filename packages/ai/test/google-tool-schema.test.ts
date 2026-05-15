@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { convertTools } from "@oh-my-pi/pi-ai/providers/google-shared";
 import type { Model, TJsonSchema, Tool } from "@oh-my-pi/pi-ai/types";
-import { sanitizeSchemaForCCA, sanitizeSchemaForGoogle } from "@oh-my-pi/pi-ai/utils/schema";
+import { prepareSchemaForCCA, sanitizeSchemaForCCA, sanitizeSchemaForGoogle } from "@oh-my-pi/pi-ai/utils/schema";
 
 function createModel(id: string): Model<"google-gemini-cli"> {
 	return {
@@ -42,6 +42,29 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 			properties: {
 				value: {
 					type: "string",
+				},
+			},
+		});
+	});
+
+	it("strips propertyNames before sending legacy CCA parameters", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				env: {
+					type: "object",
+					propertyNames: { type: "string", pattern: "^[A-Z_]+$" },
+					additionalProperties: { type: "string" },
+				},
+			},
+		} as unknown;
+
+		expect(sanitizeSchemaForCCA(schema)).toEqual({
+			type: "object",
+			properties: {
+				env: {
+					type: "object",
+					properties: {},
 				},
 			},
 		});
@@ -252,6 +275,22 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 		>;
 
 		expect(claudeDeclaration.parameters).toEqual({
+			type: "object",
+			properties: {},
+		});
+	});
+
+	it("falls back when CCA schema meta-validation catches malformed keywords", () => {
+		const parameters = {
+			type: "object",
+			properties: {
+				mode: { type: "string", enum: ["read", "read"] },
+				tags: { type: "array", items: { type: "string" }, uniqueItems: "true" },
+			},
+			required: ["mode"],
+		} as unknown;
+
+		expect(prepareSchemaForCCA(parameters)).toEqual({
 			type: "object",
 			properties: {},
 		});

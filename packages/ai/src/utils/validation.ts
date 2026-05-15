@@ -1,8 +1,12 @@
 import { structuredCloneJSON } from "@oh-my-pi/pi-utils";
-import { type ZodType, z } from "zod/v4";
+import type { ZodType } from "zod/v4";
 import type { $ZodIssue as ZodIssue } from "zod/v4/core";
 import type { Tool, ToolCall } from "../types";
-import { fromTypeBox } from "./schema/from-typebox";
+import {
+	isJsonSchemaValueValid,
+	type JsonSchemaValidationIssue,
+	validateJsonSchemaValue,
+} from "./schema/json-schema-validator";
 import { isZodSchema, zodToWireSchema } from "./schema/wire";
 
 // ============================================================================
@@ -473,23 +477,12 @@ function setValueAtPointer(root: unknown, pointer: string, value: unknown): unkn
 // ============================================================================
 
 /**
- * Resolve a JSON-Schema branch (used inside `anyOf`/`oneOf`) into a Zod
- * schema we can probe for branch-membership during nullable-strip
- * normalization. Cached so repeated traversals of the same schema reuse the
- * compiled Zod schema.
+ * Test a JSON-Schema branch during nullable normalization. Kept deliberately
+ * small and synchronous so validation does not need to compile legacy schemas
+ * into another schema language.
  */
-const branchZodCache = new WeakMap<object, ZodType>();
-function branchAsZod(branch: unknown): ZodType | null {
-	if (!branch || typeof branch !== "object") return null;
-	let cached = branchZodCache.get(branch as object);
-	if (cached) return cached;
-	try {
-		cached = z.fromJSONSchema(branch as Parameters<typeof z.fromJSONSchema>[0]) as ZodType;
-	} catch {
-		return null;
-	}
-	branchZodCache.set(branch as object, cached);
-	return cached;
+function branchMatchesSchema(branch: unknown, value: unknown): boolean {
+	return isJsonSchemaValueValid(branch, value);
 }
 
 function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { value: unknown; changed: boolean } {
@@ -508,8 +501,7 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 			const normalized = normalizeOptionalNullsForSchema(branch, value);
 			if (!normalized.changed) continue;
 
-			const branchSchema = branchAsZod(branch);
-			if (branchSchema?.safeParse(normalized.value).success) {
+			if (branchMatchesSchema(branch, normalized.value)) {
 				return normalized;
 			}
 
@@ -668,6 +660,8 @@ function mapZodExpectedToJsonSchemaType(expected: unknown): string | null {
 		case "object":
 		case "null":
 			return expected;
+		case "record":
+			return "object";
 		case "int":
 		case "bigint":
 			return "integer";
@@ -754,13 +748,19 @@ function coerceArgsFromIssues(args: unknown, issues: FlatIssue[]): { value: unkn
 // Public API
 // ============================================================================
 
-interface ValidationContext {
-	zod: ZodType;
-	json: Record<string, unknown>;
-}
+type ValidationContext =
+	| {
+			kind: "zod";
+			zod: ZodType;
+			json: Record<string, unknown>;
+	  }
+	| {
+			kind: "json";
+			json: Record<string, unknown>;
+	  };
 
 /**
- * Cache the (zod, json) pair derived from a tool's parameters schema.
+ * Cache the validation context derived from a tool's parameters schema.
  * Keyed by the parameters object identity, which is stable across tool
  * registrations.
  */
@@ -770,13 +770,59 @@ function getValidationContext(tool: Tool): ValidationContext {
 	let ctx = validationContextCache.get(params);
 	if (ctx) return ctx;
 	if (isZodSchema(params)) {
-		ctx = { zod: params, json: zodToWireSchema(params) };
+		ctx = { kind: "zod", zod: params, json: zodToWireSchema(params) };
 	} else {
-		const json = params as unknown as Record<string, unknown>;
-		ctx = { zod: fromTypeBox(json), json };
+		ctx = { kind: "json", json: params as unknown as Record<string, unknown> };
 	}
 	validationContextCache.set(params, ctx);
 	return ctx;
+}
+
+type ContextValidationResult =
+	| { success: true; value: unknown }
+	| { success: false; flatIssues: FlatIssue[]; messages: string[] };
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function preserveUnknownRootFields(input: unknown, parsed: unknown): unknown {
+	if (!isPlainRecord(input) || !isPlainRecord(parsed)) return parsed;
+	return { ...input, ...parsed };
+}
+
+function flattenJsonSchemaIssues(issues: ReadonlyArray<JsonSchemaValidationIssue>): FlatIssue[] {
+	return issues.map(issue => ({
+		keyword: issue.keyword === "type" ? "type" : "other",
+		instancePath: pathToPointer(issue.path),
+		expectedTypes: issue.expectedTypes ?? [],
+	}));
+}
+
+function formatIssuePath(path: ReadonlyArray<PropertyKey>): string {
+	return path.length === 0 ? "root" : path.map(seg => String(seg)).join("/");
+}
+
+function validateContext(ctx: ValidationContext, value: unknown): ContextValidationResult {
+	if (ctx.kind === "zod") {
+		const result = ctx.zod.safeParse(value);
+		if (result.success) {
+			return { success: true, value: preserveUnknownRootFields(value, result.data) };
+		}
+		return {
+			success: false,
+			flatIssues: flattenIssues(result.error.issues),
+			messages: result.error.issues.map(issue => `  - ${formatIssuePath(issue.path)}: ${issue.message}`),
+		};
+	}
+
+	const result = validateJsonSchemaValue(ctx.json, value);
+	if (result.success) return { success: true, value };
+	return {
+		success: false,
+		flatIssues: flattenJsonSchemaIssues(result.issues),
+		messages: result.issues.map(issue => `  - ${formatIssuePath(issue.path)}: ${issue.message}`),
+	};
 }
 
 const MAX_COERCION_PASSES = 5;
@@ -797,15 +843,16 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): ToolCall["a
 }
 
 /**
- * Validates tool call arguments against the tool's schema (Zod, or TypeBox
- * lifted into Zod). Applies LLM-quirk coercions (numeric strings, JSON-string
+ * Validates tool call arguments against the tool's schema (Zod or plain JSON
+ * Schema). Applies LLM-quirk coercions (numeric strings, JSON-string
  * containers, null-for-optional, null-for-default) before declaring failure.
  *
  * @throws Error with a formatted message when validation cannot be reconciled.
  */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall["arguments"] {
 	const originalArgs = toolCall.arguments;
-	const { zod, json } = getValidationContext(tool);
+	const ctx = getValidationContext(tool);
+	const { json } = ctx;
 
 	// Always normalize first — strip null and string "null" from optional
 	// fields and substitute defaults. Handles LLM outputting string "null"
@@ -818,12 +865,11 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		changed = true;
 	}
 
-	let result = zod.safeParse(normalizedArgs);
-	if (result.success) return result.data as ToolCall["arguments"];
+	let result = validateContext(ctx, normalizedArgs);
+	if (result.success) return result.value as ToolCall["arguments"];
 
 	for (let pass = 0; pass < MAX_COERCION_PASSES; pass += 1) {
-		const flat = flattenIssues(result.error.issues);
-		const coercion = coerceArgsFromIssues(normalizedArgs, flat);
+		const coercion = coerceArgsFromIssues(normalizedArgs, result.flatIssues);
 		if (!coercion.changed) break;
 
 		normalizedArgs = coercion.value;
@@ -834,19 +880,13 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 			normalizedArgs = nullNormalization.value;
 		}
 
-		result = zod.safeParse(normalizedArgs);
-		if (result.success) return result.data as ToolCall["arguments"];
+		result = validateContext(ctx, normalizedArgs);
+		if (result.success) return result.value as ToolCall["arguments"];
 	}
 
 	// Format validation errors nicely. The header phrase is asserted by
 	// existing tests; the detailed body is informational.
-	const errors =
-		result.error.issues
-			.map(issue => {
-				const path = issue.path.length === 0 ? "root" : issue.path.map(seg => String(seg)).join("/");
-				return `  - ${path}: ${issue.message}`;
-			})
-			.join("\n") || "Unknown validation error";
+	const errors = result.messages.join("\n") || "Unknown validation error";
 
 	const receivedArgs = changed
 		? {

@@ -21,6 +21,7 @@ export const UNSUPPORTED_SCHEMA_FIELDS = new Set([
 	"unevaluatedItems",
 	"patternProperties",
 	"additionalProperties",
+	"propertyNames",
 	"minItems",
 	"maxItems",
 	"minLength",
@@ -142,6 +143,13 @@ export const COMBINATOR_KEYS = ["anyOf", "allOf", "oneOf"] as const;
  * Cloud Code Assist Claude unsupported schema fields.
  * Much smaller than UNSUPPORTED_SCHEMA_FIELDS (Google) because CCA supports
  * validation keywords like additionalProperties, minLength, pattern, etc.
- * Only meta/reference keywords that CCA cannot resolve are stripped.
+ * Meta/reference keywords plus object-key validators that CCA cannot resolve are stripped.
  */
-export const CCA_UNSUPPORTED_SCHEMA_FIELDS = new Set(["$schema", "$ref", "$defs", "$dynamicRef", "$dynamicAnchor"]);
+export const CCA_UNSUPPORTED_SCHEMA_FIELDS = new Set([
+	"$schema",
+	"$ref",
+	"$defs",
+	"$dynamicRef",
+	"$dynamicAnchor",
+	"propertyNames",
+]);

@@ -20,20 +20,18 @@ const changelogCategoryLiteral = z.enum([
  * are identical across phases — only the surrounding tool `description`
  * differs to reflect the input the phase is summarizing.
  */
-export const conventionalAnalysisParameters = z
-	.object({
-		type: z.enum(["feat", "fix", "refactor", "docs", "test", "chore", "style", "perf", "build", "ci", "revert"]),
-		scope: z.union([z.string(), z.null()]),
-		details: z.array(
-			z.object({
-				text: z.string(),
-				changelog_category: changelogCategoryLiteral.optional(),
-				user_visible: z.boolean().optional(),
-			}),
-		),
-		issue_refs: z.array(z.string()),
-	})
-	.strict();
+export const conventionalAnalysisParameters = z.object({
+	type: z.enum(["feat", "fix", "refactor", "docs", "test", "chore", "style", "perf", "build", "ci", "revert"]),
+	scope: z.union([z.string(), z.null()]),
+	details: z.array(
+		z.object({
+			text: z.string(),
+			changelog_category: changelogCategoryLiteral.optional(),
+			user_visible: z.boolean().optional(),
+		}),
+	),
+	issue_refs: z.array(z.string()),
+});
 
 export interface ConventionalAnalysisTool {
 	name: "create_conventional_analysis";

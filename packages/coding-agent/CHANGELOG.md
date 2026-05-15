@@ -1,19 +1,27 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Changed the extension and hook runtime API by moving schema typing from direct TypeBox imports to `TSchema` from `@oh-my-pi/pi-ai`, requiring callers who use TypeScript imports of `Type` to migrate via provided injected modules
 
 ### Added
 
+- Added `apiKey` as a supported provider override field in model config, allowing API-key-only overrides to provide fallback credentials for built-in models
+- Added `supportsMultipleSystemMessages`, `allowsSyntheticReasoningContentForToolCalls`, `disableReasoningOnToolChoice`, and `levels` model-thinking compatibility fields to model configuration schemas
 - Added `zod` to the Extension, Custom Tool, Hook, and Custom Command APIs as `pi.zod` so extension and plugin authors can define tool schemas with Zod without separate imports
 - Added `pi.zod` as a canonical schema API for examples and extension plugins while keeping `typebox` available as legacy compatibility
 - Added a `telemetry` option to `createAgentSession` for passing OpenTelemetry configuration through to the underlying Agent
 
 ### Changed
 
-- Changed tool parameter schemas across the agent to use the shared Pi schema pipeline (`TSchema` and `fromTypeBox`) instead of direct AJV/TypeBox compilation for stricter schema validation compatibility
+- Changed `pi.typebox.Type.Composite` to merge all object schemas in the provided list, enabling more than two object inputs
+- Changed `pi.typebox.Type.Record` to validate record keys against the provided key schema instead of forcing string keys
+- Changed `pi.typebox.Type.Array` with `uniqueItems: true` to reject duplicate items while preserving the constraint in wire schemas
+- Changed `pi.typebox.Type.Object` with `additionalProperties: false` to reject unknown properties during parsing
+- Changed `pi.typebox.Type.Enum` in the compatibility shim to preserve numeric TypeScript enum values
+- Changed tool parameter schemas across the agent to use the shared Pi schema pipeline (`TSchema` plus Zod/JSON Schema validation) instead of direct AJV/TypeBox compilation for stricter schema validation compatibility
 - Changed GitHub tool input schema shape to expose operation fields in a flat schema form without legacy `run_watch`-style nesting
 - Changed Python session pooling to remove the previous 4-session retention cap and 5-minute idle-session eviction, so kernels now stay alive for a session until explicitly disposed via `disposeKernelSessionsByOwner` or `disposeAllKernelSessions`
 - Changed kernel cleanup behavior to avoid automatic eviction by idle timeout and capacity pressure, so additional Python sessions are not queued behind retained-session shutdown retries
@@ -25,14 +33,14 @@
 
 ### Fixed
 
+- Fixed `create_conventional_analysis` parsing to ignore harmless extra fields and still parse the required conventional fields
+- Fixed BashTool async request validation flow so async execution remains disabled and returns the explicit `Async bash execution is disabled` error
+- Fixed `task.simple` invalid `schema` and `context` argument handling to still reject unsupported fields after tool-argument validation
 - Fixed subagent execution hangs by enforcing `task.maxRuntimeMs` as a wall-clock limit even when inference streaming stalls, so stuck subagents now abort and report runtime-limit exceeded
 - Fixed tool schema compatibility validation by routing TypeBox schemas through shared conversion and Zod-based validation to avoid strict-schema provider mismatches
 - Fixed Python execution cancellation and timeouts by escalating to kernel shutdown if `SIGINT` did not terminate a running cell within 2 seconds, preventing indefinite hangs in queued or stuck sessions
 - Fixed cleanup blocking during long-running executions by forcing a kernel shutdown path when interrupt-based cancellation is ignored
 - Fixed bash output emitting a spurious `[… 0 lines elided (NB) …]` marker (and reordering the artifact link before the command output) when the shell minimizer rewrote a small command's output. After `OutputSink.replace()` swapped the minimized text into the buffer, the subsequent `sink.push("[raw output: artifact://N]\n")` chunk was funneled back into the (now empty) head-retention window while the pre-replace `#totalBytes` still tracked the original raw stream — so `dump()` composed `<head=artifact-link> + <middle-elision marker against stale totals> + <tail=minimized text>` instead of `<minimized text> + <artifact link>`. `replace()` now realigns `#totalBytes`/`#totalLines`/`#sawData`/`#truncated` to the authoritative buffer and disables head retention for the lifetime of the sink, so further pushes append to the tail buffer in order. The bash executor also drops the leading `\n` on the artifact-link push when the minimized text already ends with one so the separator stays single-newline.
-
-### Fixed
-
 - Fixed legacy plugin extensions failing to load on Windows when they import a bare-specifier dependency from their own `node_modules` (e.g. `import YAML from "yaml"` in `supipowers`). The legacy-pi mirror resolved the dependency to its absolute path and then ran the path through `isUrlLikeSpecifier`, whose `^[A-Za-z][A-Za-z\d+.-]*:` regex matched the Windows drive letter (`C:`) and short-circuited the `pathToFileURL` conversion. The raw path was emitted into the mirrored TS source as `import x from "C:\\Users\\...\\dep\\dist\\index.js"`, where `\n`, `\U`, `\y` and other backslash sequences were eaten by the TS string-literal parser, producing nonsense package specifiers like `C:Usersjames.ompagentextensionssupipowers\node_modulesyamldistindex.js` that Bun's resolver rejected with `Cannot find package …`. `isUrlLikeSpecifier` now rejects `^[A-Za-z]:[\\/]` first, so Windows absolute paths flow through `pathToFileURL` like every other absolute path and reach the mirror as proper `file:///C:/...` URLs.
 
 ## [15.0.2] - 2026-05-15
