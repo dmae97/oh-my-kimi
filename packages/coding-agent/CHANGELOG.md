@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.0.2] - 2026-05-15
+
 ### Added
 
 - Added the `set_host_uri_schemes` RPC command so hosts can register and replace writable/read-only internal URI schemes with scheme metadata (`writable`, `immutable`) at runtime

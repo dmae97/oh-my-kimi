@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.0.2] - 2026-05-15
 ### Fixed
 
 - Fixed `StreamOptions.fetch` typing to accept fetch-compatible override functions that do not expose `preconnect`, allowing custom fetch implementations to be used without type errors across runtimes

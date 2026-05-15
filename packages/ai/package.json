@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-ai",
-	"version": "15.0.1",
+	"version": "15.0.2",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"homepage": "https://omp.sh",
 	"author": "Can Boluk",
