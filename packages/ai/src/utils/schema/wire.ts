@@ -92,9 +92,10 @@ function walk(node: unknown): void {
 export function zodToWireSchema(schema: ZodType): Record<string, unknown> {
 	let json = wireCache.get(schema);
 	if (json) return json;
-	// `target: "draft-7"` keeps the output compatible with downstream sanitizers
-	// (OpenAI strict, Google, Anthropic CCA) that already understand draft-07.
-	const raw = z.toJSONSchema(schema, { target: "draft-7" }) as Record<string, unknown>;
+	// `target: "draft-2020-12"` matches what Anthropic's `input_schema` validator
+	// requires out of the box; our other provider sanitizers (OpenAI strict,
+	// Google, Anthropic CCA) already handle the superset structurally.
+	const raw = z.toJSONSchema(schema, { target: "draft-2020-12" }) as Record<string, unknown>;
 	json = postProcess(raw);
 	wireCache.set(schema, json);
 	return json;
