@@ -419,4 +419,26 @@ describe("YieldTool", () => {
 		const tool = new YieldTool(createSession());
 		expect(tool.lenientArgValidation).toBe(true);
 	});
+	it("falls back to loose schema when outputSchema contains unresolved external $ref", async () => {
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					type: "object",
+					properties: {
+						item: { $ref: "https://example.com/missing-schema.json" },
+					},
+					required: ["item"],
+				},
+			}),
+		);
+		expect(tool.strict).toBe(false);
+		const result = await tool.execute("call-unresolved-ref", {
+			result: { data: { item: { whatever: true }, extra: 1 } },
+		} as never);
+		expect(result.details).toEqual({
+			data: { item: { whatever: true }, extra: 1 },
+			status: "success",
+			error: undefined,
+		});
+	});
 });

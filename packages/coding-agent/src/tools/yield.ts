@@ -51,6 +51,23 @@ function looseRecordSchema(description: string): Record<string, unknown> {
 	};
 }
 
+function hasUnresolvedRefs(schema: unknown): boolean {
+	if (schema == null) return false;
+	if (Array.isArray(schema)) {
+		for (const item of schema) {
+			if (hasUnresolvedRefs(item)) return true;
+		}
+		return false;
+	}
+	if (typeof schema !== "object") return false;
+	const record = schema as Record<string, unknown>;
+	if (typeof record.$ref === "string") return true;
+	for (const key in record) {
+		if (hasUnresolvedRefs(record[key])) return true;
+	}
+	return false;
+}
+
 function wrapYieldParameters(dataSchema: Record<string, unknown>): Record<string, unknown> {
 	return {
 		type: "object",
@@ -138,6 +155,9 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 					...sanitizedSchema,
 					description: schemaDescription,
 				}) as Record<string, unknown>;
+				if (hasUnresolvedRefs(resolved)) {
+					throw new Error("schema contains unresolved $ref after dereferencing");
+				}
 				dataSchema = resolved;
 			} else {
 				dataSchema = looseRecordSchema(
