@@ -183,6 +183,26 @@ export interface CostDelta {
 	readonly costUnavailableReason: string | undefined;
 }
 
+/**
+ * Event fired for every chat step that produced usage, regardless of whether
+ * a {@link AgentTelemetryConfig.costEstimator} is configured. Use this to
+ * forward token usage to metrics pipelines or dashboards without taking a
+ * dependency on the cost estimator path.
+ */
+export interface ChatUsageEvent {
+	readonly span: Span;
+	readonly agent: AgentIdentity | undefined;
+	readonly conversationId: string | undefined;
+	readonly stepNumber: number | undefined;
+	readonly model: string;
+	readonly provider: string | undefined;
+	readonly serviceTier: ServiceTier | undefined;
+	readonly usage: ChatUsageSnapshot;
+	readonly cost: CostEstimate | undefined;
+	/** Resolved dynamic attributes for this chat span (from `resolveAttributes`). */
+	readonly attributes: Attributes | undefined;
+}
+
 export type TelemetryContentCapture = boolean | "none" | "summary" | "full";
 
 export type ResolvedTelemetryContentCapture = "none" | "summary" | "full";
@@ -207,6 +227,7 @@ export interface AgentTelemetryWarning {
 		| "resolve_attributes_failed"
 		| "content_serializer_failed"
 		| "on_cost_delta_failed"
+		| "on_chat_usage_failed"
 		| "cost_estimator_failed"
 		| "on_run_end_failed"
 		| "normalize_agent_name_failed"
@@ -280,6 +301,16 @@ export interface AgentTelemetryConfig {
 	readonly costEstimator?: (input: CostEstimatorContext) => CostEstimate | undefined;
 	/** Called after cost estimation for a chat step. */
 	readonly onCostDelta?: (delta: CostDelta) => void;
+	/**
+	 * Fired once per chat step that produced usage, regardless of whether a
+	 * {@link costEstimator} is configured. Use this for usage-only metrics
+	 * pipelines (token counters, cache-hit ratios) without paying the cost of
+	 * estimating dollars per call.
+	 *
+	 * **Non-fatal.** Synchronous and asynchronous failures are caught, surfaced
+	 * via {@link onTelemetryWarning}, and swallowed.
+	 */
+	readonly onChatUsage?: (event: ChatUsageEvent) => void | Promise<void>;
 	/** Override provider labels before they are emitted or passed to cost hooks. */
 	readonly normalizeProvider?: (provider: string | undefined) => string | undefined;
 	/** Override agent names before they are emitted on spans. */
@@ -837,16 +868,32 @@ function serializeToolCallResultForTelemetry(telemetry: AgentTelemetry, result: 
  * Stamp the final response onto a chat span, fire the cost estimator hook,
  * and end the span. No-op when `span` is undefined.
  */
-export function finishChatSpan(
+export async function finishChatSpan(
 	telemetry: AgentTelemetry | undefined,
 	span: Span | undefined,
 	message: AssistantMessage,
 	options: { readonly stepNumber: number; readonly serviceTier?: ServiceTier },
-): void {
+): Promise<void> {
 	if (!span) return;
 	applyChatResponseAttributes(span, message);
 	applyUsageAttributes(span, message.usage);
 	const cost = applyCostEstimate(telemetry, span, message, options.serviceTier, options.stepNumber);
+	if (telemetry) {
+		await emitChatUsage(telemetry, span, {
+			model: message.model,
+			provider: message.provider,
+			serviceTier: options.serviceTier,
+			stepNumber: options.stepNumber,
+			usage: message.usage,
+			applied: cost,
+		}).catch(err => {
+			emitTelemetryWarning(telemetry, {
+				code: "on_chat_usage_failed",
+				message: "onChatUsage rejected; swallowing telemetry callback failure",
+				error: err,
+			});
+		});
+	}
 	if (telemetry && telemetry.contentCapture !== "none") {
 		applyContentCaptureForResponse(telemetry, span, message);
 	}
@@ -1046,6 +1093,56 @@ function emitCostDelta(telemetry: AgentTelemetry, delta: CostDelta): void {
 	}
 }
 
+async function emitChatUsage(
+	telemetry: AgentTelemetry,
+	span: Span,
+	input: {
+		readonly model: string;
+		readonly provider: string | undefined;
+		readonly serviceTier: ServiceTier | undefined;
+		readonly stepNumber: number | undefined;
+		readonly usage: Usage | undefined;
+		readonly applied: AppliedCostEstimate;
+	},
+): Promise<void> {
+	const hook = telemetry.config.onChatUsage;
+	if (!hook || !input.usage) return;
+	const event: ChatUsageEvent = {
+		span,
+		agent: normalizedTelemetryAgent(telemetry),
+		conversationId: telemetry.conversationId,
+		stepNumber: input.stepNumber,
+		model: input.model,
+		provider: normalizeProviderName(telemetry, input.provider),
+		serviceTier: input.serviceTier,
+		usage: buildUsageSnapshot(input.usage),
+		cost: costEstimateFromApplied(input.applied),
+		attributes: resolveDynamicAttributes(
+			telemetry,
+			buildTelemetryAttributeContext(telemetry, "chat", { stepNumber: input.stepNumber }),
+		),
+	};
+	try {
+		await hook(event);
+	} catch (err) {
+		emitTelemetryWarning(telemetry, {
+			code: "on_chat_usage_failed",
+			message: "onChatUsage threw; swallowing telemetry callback failure",
+			error: err,
+		});
+	}
+}
+
+function costEstimateFromApplied(applied: AppliedCostEstimate): CostEstimate | undefined {
+	if (applied.costUsd != null) {
+		return { usd: applied.costUsd, inputUsd: applied.inputUsd, outputUsd: applied.outputUsd };
+	}
+	if (applied.costUnavailableReason != null) {
+		return { unavailable: applied.costUnavailableReason };
+	}
+	return undefined;
+}
+
 const EMPTY_COST: AppliedCostEstimate = Object.freeze({
 	costUsd: undefined,
 	inputUsd: undefined,
@@ -1098,10 +1195,10 @@ export interface ManualChatTelemetryOptions {
 	readonly endSpan?: boolean;
 }
 
-export function recordManualChatTelemetry(
+export async function recordManualChatTelemetry(
 	telemetry: AgentTelemetry | undefined,
 	options: ManualChatTelemetryOptions,
-): Span | undefined {
+): Promise<Span | undefined> {
 	const span =
 		options.span ??
 		startSpan(telemetry, "chat", `chat ${options.model.id}`, {
@@ -1120,12 +1217,26 @@ export function recordManualChatTelemetry(
 	if (finishReason) span.setAttribute(GenAIAttr.ResponseFinishReasons, [finishReason]);
 	applyUsageAttributes(span, options.usage);
 	if (telemetry) {
-		applyCostEstimateForUsage(telemetry, span, {
+		const applied = applyCostEstimateForUsage(telemetry, span, {
 			model: options.responseModel ?? options.model.id,
 			provider: options.model.provider,
 			serviceTier: options.serviceTier,
 			stepNumber: options.stepNumber,
 			usage: options.usage,
+		});
+		await emitChatUsage(telemetry, span, {
+			model: options.responseModel ?? options.model.id,
+			provider: options.model.provider,
+			serviceTier: options.serviceTier,
+			stepNumber: options.stepNumber,
+			usage: options.usage,
+			applied,
+		}).catch(err => {
+			emitTelemetryWarning(telemetry, {
+				code: "on_chat_usage_failed",
+				message: "onChatUsage rejected; swallowing telemetry callback failure",
+				error: err,
+			});
 		});
 	}
 	if (options.responseText) {

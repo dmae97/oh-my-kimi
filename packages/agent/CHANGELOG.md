@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added `onChatUsage` to `AgentTelemetryConfig`, an always-fired hook receiving a `ChatUsageEvent` for every chat step that produced usage. The event carries the chat `span`, `agent`, `conversationId`, `stepNumber`, `model`, `provider`, `serviceTier`, `usage`, optional `cost`, and resolved dynamic `attributes` — independent of whether a `costEstimator` is configured.
+
 - Added `agentLoopDetailed(...)` and `agentLoopContinueDetailed(...)` helpers that return the same event stream plus a `detailed()` result with run `telemetry` and `coverage`
 - Added `onRunEnd` to `AgentTelemetryConfig` to receive `AgentRunSummary` and `AgentRunCoverage` at the end of each invocation
 - Added run-level telemetry and coverage types/helpers (for example `AgentRunSummary`, `AgentRunCoverage`, `aggregateAgentRunSummaries`, and `aggregateAgentRunCoverage`) to package exports

@@ -680,8 +680,8 @@ async function streamAssistantResponse(
 		},
 	});
 
-	const finishChat = (message: AssistantMessage): void => {
-		finishChatSpan(telemetry, chatSpan, message, {
+	const finishChat = async (message: AssistantMessage): Promise<void> => {
+		await finishChatSpan(telemetry, chatSpan, message, {
 			stepNumber: chatStepNumber,
 			serviceTier: config.serviceTier,
 		});
@@ -712,7 +712,7 @@ async function streamAssistantResponse(
 			if (requestSignal) {
 				if (requestSignal.aborted) {
 					const aborted = emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
-					finishChat(aborted);
+					await finishChat(aborted);
 					return aborted;
 				}
 				const { promise, resolve } = Promise.withResolvers<typeof ABORTED>();
@@ -730,7 +730,7 @@ async function streamAssistantResponse(
 						if (result === ABORTED) {
 							responseIterator.return?.()?.catch(() => {});
 							const aborted = emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
-							finishChat(aborted);
+							await finishChat(aborted);
 							return aborted;
 						}
 						next = result;
@@ -739,7 +739,7 @@ async function streamAssistantResponse(
 					}
 					if (requestSignal?.aborted) {
 						const aborted = emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
-						finishChat(aborted);
+						await finishChat(aborted);
 						return aborted;
 					}
 					if (next.done) break;
@@ -790,7 +790,7 @@ async function streamAssistantResponse(
 								stream.push({ type: "message_start", message: { ...finalMessage } });
 							}
 							stream.push({ type: "message_end", message: finalMessage });
-							finishChat(finalMessage);
+							await finishChat(finalMessage);
 							return finalMessage;
 						}
 					}
@@ -800,7 +800,7 @@ async function streamAssistantResponse(
 			}
 
 			const trailing = await response.result();
-			finishChat(trailing);
+			await finishChat(trailing);
 			return trailing;
 		});
 	} catch (err) {
