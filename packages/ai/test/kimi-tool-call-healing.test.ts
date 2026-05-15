@@ -286,6 +286,39 @@ describe("Kimi K2 leaked tool-call healing", () => {
 		expect(result.stopReason).toBe("toolUse");
 	});
 
+	it("promotes a later healed call even if an earlier chunk had structured tool_calls", async () => {
+		const leaked =
+			"<|tool_calls_section_begin|>" +
+			"<|tool_call_begin|>functions.write:0<|tool_call_argument_begin|>" +
+			'{"path":"out.txt","content":"ok"}' +
+			"<|tool_call_end|>" +
+			"<|tool_calls_section_end|>";
+
+		global.fetch = mockFetch([
+			chunk(model.id, {
+				tool_calls: [
+					{
+						index: 0,
+						id: "call_structured_first",
+						type: "function",
+						function: { name: "read", arguments: '{"path":"src/index.ts"}' },
+					},
+				],
+			}),
+			chunk(model.id, { content: leaked }),
+			chunk(model.id, {}, "stop"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test" }).result();
+		const toolCalls = result.content.filter((b): b is ToolCall => b.type === "toolCall");
+		expect(toolCalls).toHaveLength(2);
+		expect(toolCalls.map(call => call.name)).toEqual(["read", "write"]);
+		expect(toolCalls[0].id).toBe("call_structured_first");
+		expect(toolCalls[1].arguments).toEqual({ path: "out.txt", content: "ok" });
+		expect(result.stopReason).toBe("toolUse");
+	});
+
 	it("passes a literal <|tool_call_end|> through as text when no section is active", async () => {
 		const prose = "Use <|tool_call_end|> to close a call.";
 		global.fetch = mockFetch([chunk(model.id, { content: prose }), chunk(model.id, {}, "stop"), "[DONE]"]);

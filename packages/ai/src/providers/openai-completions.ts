@@ -631,7 +631,6 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 			const kimiHealer = modelMayLeakKimiToolCalls(model.provider, model.id) ? new ToolCallHealer() : undefined;
 			let healedToolCallEmitted = false;
-			let sawStructuredToolCalls = false;
 			const emitHealedToolCall = (call: HealedToolCall): void => {
 				finishCurrentBlock(currentBlock);
 				const block: ToolCall & { partialArgs: string } = {
@@ -752,7 +751,6 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					}
 
 					if (choice?.delta?.tool_calls && choice.delta.tool_calls.length > 0) {
-						sawStructuredToolCalls = true;
 						for (const toolCall of choice.delta.tool_calls) {
 							if (
 								!currentBlock ||
@@ -826,20 +824,13 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			if (kimiHealer) {
 				const trailing = kimiHealer.flushPending();
 				if (trailing.length > 0) appendTextDelta(trailing);
-				if (sawStructuredToolCalls) {
-					// Structured tool_calls already carried the truth — discard
-					// anything the healer synthesized so callers don't see the
-					// same call twice with different IDs.
-					kimiHealer.drainCompleted();
-				} else {
-					flushHealedToolCalls();
-					if (healedToolCallEmitted && output.stopReason === "stop") {
-						// Hosts that leak Kimi tool tokens often still report
-						// `finish_reason: stop` for the surrounding turn. Promote
-						// only that natural-completion finish — leave `error`,
-						// `length`, `aborted`, etc. untouched.
-						output.stopReason = "toolUse";
-					}
+				flushHealedToolCalls();
+				if (healedToolCallEmitted && output.stopReason === "stop") {
+					// Hosts that leak Kimi tool tokens often still report
+					// `finish_reason: stop` for the surrounding turn. Promote
+					// only that natural-completion finish — leave `error`,
+					// `length`, `aborted`, etc. untouched.
+					output.stopReason = "toolUse";
 				}
 			}
 
@@ -1002,13 +993,16 @@ async function createClient(
 	// in the IIFE.
 	// A caller may raise `StreamOptions.streamFirstEventTimeoutMs` for a slow-
 	// before-headers provider; respect it so the SDK doesn't give up before the
-	// wrapping watchdog arms. We take the max so the env default still acts as
-	// a floor (the SDK timeout must never undershoot the agent watchdog).
+	// wrapping watchdog arms. An explicit `0` disables the first-event watchdog,
+	// and the SDK treats `timeout: 0` as an immediate timeout, so do not pass a
+	// request timeout in that case.
 	const envSdkTimeoutMs = getStreamFirstEventTimeoutMs(getOpenAIStreamIdleTimeoutMs());
 	const sdkTimeoutMs =
-		streamFirstEventTimeoutOverride !== undefined
-			? Math.max(envSdkTimeoutMs ?? 0, streamFirstEventTimeoutOverride)
-			: envSdkTimeoutMs;
+		streamFirstEventTimeoutOverride === 0
+			? undefined
+			: streamFirstEventTimeoutOverride !== undefined
+				? Math.max(envSdkTimeoutMs ?? 0, streamFirstEventTimeoutOverride)
+				: envSdkTimeoutMs;
 	return {
 		client: new OpenAI({
 			apiKey,
