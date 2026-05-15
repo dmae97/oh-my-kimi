@@ -878,4 +878,83 @@ describe("Tool argument coercion", () => {
 			},
 		});
 	});
+
+	it("tolerates extra keys on .strict() Zod object schemas (loose-recursive)", () => {
+		const tool: Tool = {
+			name: "t-strict-root",
+			description: "",
+			parameters: z
+				.object({
+					op: z.string(),
+				})
+				.strict(),
+		};
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-strict-root",
+			name: "t-strict-root",
+			arguments: { op: "fix", timeout: "300" },
+		};
+
+		// Extras on strict schemas are dropped during validation rather than
+		// surfaced as a hard error — equivalent to converting every object to
+		// loose semantics for the purposes of tool dispatch.
+		const result = validateToolArguments(tool, toolCall) as Record<string, unknown>;
+		expect(result.op).toBe("fix");
+		expect(result.timeout).toBeUndefined();
+	});
+
+	it("tolerates extra keys on nested .strict() Zod object schemas", () => {
+		const tool: Tool = {
+			name: "t-strict-nested",
+			description: "",
+			parameters: z
+				.object({
+					config: z
+						.object({
+							host: z.string(),
+						})
+						.strict(),
+				})
+				.strict(),
+		};
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-strict-nested",
+			name: "t-strict-nested",
+			arguments: { config: { host: "example.com", port: 443 } },
+		};
+
+		// Nested strict objects also tolerate extras; the inner key is stripped
+		// so validation succeeds against the schema's declared shape.
+		const result = validateToolArguments(tool, toolCall) as { config: Record<string, unknown> };
+		expect(result.config.host).toBe("example.com");
+	});
+
+	it("tolerates extras on JSON Schema parameters with additionalProperties: false", () => {
+		const tool: Tool = {
+			name: "t-json-strict",
+			description: "",
+			parameters: {
+				type: "object",
+				properties: {
+					op: { type: "string" },
+				},
+				required: ["op"],
+				additionalProperties: false,
+			},
+		};
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-json-strict",
+			name: "t-json-strict",
+			arguments: { op: "fix", timeout: 300 },
+		};
+
+		const result = validateToolArguments(tool, toolCall) as Record<string, unknown>;
+		expect(result.op).toBe("fix");
+	});
 });

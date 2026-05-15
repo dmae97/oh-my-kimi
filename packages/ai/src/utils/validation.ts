@@ -472,6 +472,51 @@ function setValueAtPointer(root: unknown, pointer: string, value: unknown): unkn
 	return root;
 }
 
+/**
+ * Returns a new structure with the key at `pointer` removed. Only the
+ * containers along the path are shallow-cloned (`O(depth)` allocations);
+ * every sibling subtree is shared with the input. Returns the input
+ * reference unchanged when the pointer is empty, the path is invalid, or
+ * the final key is absent — so callers can detect a no-op via identity.
+ */
+function deleteValueAtPointer(root: unknown, pointer: string): unknown {
+	if (!pointer) return root;
+	const segments = decodeJsonPointer(pointer);
+	if (segments.length === 0) return root;
+	return deleteAtSegment(root, segments, 0);
+}
+
+function deleteAtSegment(node: unknown, segments: string[], depth: number): unknown {
+	const segment = segments[depth];
+	const isLeaf = depth === segments.length - 1;
+
+	if (Array.isArray(node)) {
+		const index = Number(segment);
+		if (!Number.isInteger(index) || index < 0 || index >= node.length) return node;
+		if (isLeaf) {
+			const next = node.slice();
+			next.splice(index, 1);
+			return next;
+		}
+		const child = deleteAtSegment(node[index], segments, depth + 1);
+		if (child === node[index]) return node;
+		const next = node.slice();
+		next[index] = child;
+		return next;
+	}
+
+	if (typeof node !== "object" || node === null) return node;
+	const obj = node as Record<string, unknown>;
+	if (!Object.hasOwn(obj, segment)) return node;
+	if (isLeaf) {
+		const { [segment]: _omit, ...rest } = obj;
+		return rest;
+	}
+	const child = deleteAtSegment(obj[segment], segments, depth + 1);
+	if (child === obj[segment]) return node;
+	return { ...obj, [segment]: child };
+}
+
 // ============================================================================
 // JSON-Schema-driven normalization passes (LLM quirks).
 // ============================================================================
@@ -651,7 +696,7 @@ function normalizeOptionalNullsForSchema(
 // ============================================================================
 
 interface FlatIssue {
-	keyword: "type" | "other";
+	keyword: "type" | "unrecognized" | "other";
 	instancePath: string;
 	expectedTypes: string[];
 }
@@ -698,6 +743,17 @@ function flattenIssues(issues: ReadonlyArray<ZodIssue>): FlatIssue[] {
 				return;
 			}
 		}
+		if (issue.code === "unrecognized_keys") {
+			const keys = (issue as { keys?: ReadonlyArray<string> }).keys ?? [];
+			for (const key of keys) {
+				out.push({
+					keyword: "unrecognized",
+					instancePath: pathToPointer([...fullPath, key]),
+					expectedTypes: [],
+				});
+			}
+			return;
+		}
 		if (issue.code === "invalid_union") {
 			const inner = (issue as unknown as { errors?: ReadonlyArray<ReadonlyArray<ZodIssue>> }).errors;
 			if (inner) {
@@ -716,15 +772,20 @@ function flattenIssues(issues: ReadonlyArray<ZodIssue>): FlatIssue[] {
 }
 
 /**
- * Attempts to fix type errors by parsing JSON-encoded strings.
+ * Repair issues raised by the validator before we surface them to the caller.
  *
- * For each `type` issue where the offending value is a string that contains
- * valid JSON matching the expected type, returns a new args object with
- * those strings replaced by their parsed values.
+ * Two kinds of repair are applied:
+ *  - **type**: when a value is a JSON-encoded string and the schema wants
+ *    something else, parse it and substitute the parsed value.
+ *  - **unrecognized**: when a strict object received an extra key (Zod's
+ *    `unrecognized_keys` or JSON Schema's `additionalProperties: false`),
+ *    drop that key so re-validation succeeds. This effectively coerces every
+ *    object schema to loose semantics recursively without rebuilding the
+ *    underlying Zod tree.
  *
  * The function is safe and conservative:
- *   - Only processes "type" errors (not format, pattern, etc.)
- *   - Only attempts coercion on string values
+ *   - Only processes "type" and "unrecognized" issues
+ *   - Only attempts JSON coercion on string values
  *   - Only accepts parsed results that match the expected type
  *   - Clones the args object before mutation (copy-on-write)
  */
@@ -732,9 +793,20 @@ function coerceArgsFromIssues(args: unknown, issues: FlatIssue[]): { value: unkn
 	if (issues.length === 0) return { value: args, changed: false };
 
 	let changed = false;
+	// Tracks whether `nextArgs` is a fully owned deep copy (safe to mutate
+	// leaves). The unrecognized-key path uses path-shallow immutable updates
+	// and does NOT require ownership, so we only pay for the deep clone when
+	// a type coercion actually needs to write into a leaf.
+	let owned = false;
 	let nextArgs: unknown = args;
 
 	for (const issue of issues) {
+		if (issue.keyword === "unrecognized") {
+			const previous = nextArgs;
+			nextArgs = deleteValueAtPointer(nextArgs, issue.instancePath);
+			if (nextArgs !== previous) changed = true;
+			continue;
+		}
 		if (issue.keyword !== "type") continue;
 		if (issue.expectedTypes.length === 0) continue;
 
@@ -744,8 +816,9 @@ function coerceArgsFromIssues(args: unknown, issues: FlatIssue[]): { value: unkn
 		const result = tryParseJsonForTypes(currentValue, issue.expectedTypes);
 		if (!result.changed) continue;
 
-		if (!changed) {
+		if (!owned) {
 			nextArgs = structuredCloneJSON(nextArgs);
+			owned = true;
 			changed = true;
 		}
 		nextArgs = setValueAtPointer(nextArgs, issue.instancePath, result.value);
@@ -802,11 +875,20 @@ function preserveUnknownRootFields(input: unknown, parsed: unknown): unknown {
 }
 
 function flattenJsonSchemaIssues(issues: ReadonlyArray<JsonSchemaValidationIssue>): FlatIssue[] {
-	return issues.map(issue => ({
-		keyword: issue.keyword === "type" ? "type" : "other",
-		instancePath: pathToPointer(issue.path),
-		expectedTypes: issue.expectedTypes ?? [],
-	}));
+	return issues.map(issue => {
+		if (issue.keyword === "additionalProperties") {
+			return {
+				keyword: "unrecognized",
+				instancePath: pathToPointer(issue.path),
+				expectedTypes: [],
+			};
+		}
+		return {
+			keyword: issue.keyword === "type" ? "type" : "other",
+			instancePath: pathToPointer(issue.path),
+			expectedTypes: issue.expectedTypes ?? [],
+		};
+	});
 }
 
 function formatIssuePath(path: ReadonlyArray<PropertyKey>): string {
