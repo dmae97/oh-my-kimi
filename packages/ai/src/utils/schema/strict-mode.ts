@@ -459,11 +459,13 @@ function enforceStrictSchemaBody(
 			result[defsKey] = nextDefs;
 		}
 	}
-	// Strict mode requires every schema node to declare a concrete type (or combinator/$ref).
+	// Strict mode requires every schema node to declare a concrete type (or combinator/$ref/enum/const).
 	// Schemas like `{}` (match anything) or `{items: {}}` are not representable in strict mode.
 	if (
 		result.type === undefined &&
 		result.$ref === undefined &&
+		result.enum === undefined &&
+		result.const === undefined &&
 		!COMBINATOR_KEYS.some(key => Array.isArray(result[key])) &&
 		!isJsonObject(result.not)
 	) {
