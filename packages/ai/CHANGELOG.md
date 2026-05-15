@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.1.0] - 2026-05-15
+
 ### Breaking Changes
 
 - Removed TypeBox root exports (`Type`, `Static`, and `TSchema`) from the package entrypoint, so callers importing those symbols from `@oh-my-pi/pi-ai` must migrate to `zod` or `@oh-my-pi/pi-ai/types`

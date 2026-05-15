@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.1.0] - 2026-05-15
+
 ### Fixed
 
 - Fixed incremental `parseSessionFile(path, fromOffset)` losing the active service tier when resuming past a `service_tier_change` entry, so priority OpenAI replies appended after the offset are now credited with `premiumRequests: 1` (regression introduced by 13f59162e which stopped folding priority-tier into per-message premium counts)
