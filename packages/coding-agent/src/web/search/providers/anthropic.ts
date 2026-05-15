@@ -38,6 +38,7 @@ export interface AnthropicSearchParams {
 	max_tokens?: number;
 	/** Sampling temperature (0–1). Lower = more focused/factual. */
 	temperature?: number;
+	signal?: AbortSignal;
 }
 
 /**
@@ -86,6 +87,7 @@ async function callSearch(
 	systemPrompt?: string,
 	maxTokens?: number,
 	temperature?: number,
+	signal?: AbortSignal,
 ): Promise<AnthropicApiResponse> {
 	const url = buildAnthropicUrl(auth);
 	const headers = buildAnthropicSearchHeaders(auth);
@@ -116,6 +118,7 @@ async function callSearch(
 		method: "POST",
 		headers,
 		body: JSON.stringify(body),
+		signal,
 	});
 
 	if (!response.ok) {
@@ -253,6 +256,7 @@ export async function searchAnthropic(params: AnthropicSearchParams): Promise<Se
 		params.system_prompt,
 		params.max_tokens,
 		params.temperature,
+		params.signal,
 	);
 
 	const result = parseResponse(response);
@@ -281,6 +285,7 @@ export class AnthropicProvider extends SearchProvider {
 			num_results: params.numSearchResults ?? params.limit,
 			max_tokens: params.maxOutputTokens,
 			temperature: params.temperature,
+			signal: params.signal,
 		});
 	}
 }
