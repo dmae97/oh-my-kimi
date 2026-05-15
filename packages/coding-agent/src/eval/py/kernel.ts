@@ -43,6 +43,11 @@ async function ensureRunnerScript(): Promise<string> {
 
 const SHUTDOWN_GRACE_MS = 1_000;
 const STARTUP_TIMEOUT_MS = 10_000;
+// How long to wait after SIGINT for the runner to emit `done`. If the cell is
+// stuck in code that ignores Python signals (e.g. a C extension holding the
+// GIL), we escalate to a full subprocess shutdown so the host queue unblocks
+// instead of hanging the session forever.
+const INTERRUPT_ESCALATION_MS = 2_000;
 
 export interface KernelExecuteOptions {
 	signal?: AbortSignal;
@@ -158,6 +163,7 @@ interface PendingExecution {
 	timedOut: boolean;
 	stdinRequested: boolean;
 	settled: boolean;
+	escalationTimer?: NodeJS.Timeout;
 }
 
 export class PythonKernel {
@@ -273,22 +279,41 @@ export class PythonKernel {
 			});
 		};
 
+		const requestCancel = () => {
+			if (pending.settled || pending.escalationTimer) return;
+			void this.interrupt();
+			const escalation = setTimeout(() => {
+				if (pending.settled) return;
+				logger.warn("Python runner did not respond to SIGINT; terminating subprocess", {
+					kernelId: this.id,
+				});
+				// `shutdown()` aborts pending executions immediately and escalates to
+				// SIGTERM/SIGKILL, so the host queue unblocks even if the runner is
+				// stuck in a non-interruptible state.
+				void this.shutdown();
+			}, INTERRUPT_ESCALATION_MS);
+			escalation.unref?.();
+			pending.escalationTimer = escalation;
+		};
+
 		const onAbort = () => {
 			pending.cancelled = true;
 			pending.timedOut = pending.timedOut || isTimeoutReason(options?.signal?.reason);
-			void this.interrupt();
+			requestCancel();
 		};
 		const timeoutId =
 			typeof options?.timeoutMs === "number" && options.timeoutMs > 0
 				? setTimeout(() => {
 						pending.timedOut = true;
 						pending.cancelled = true;
-						void this.interrupt();
+						requestCancel();
 					}, options.timeoutMs)
 				: undefined;
 
 		const cleanup = () => {
 			if (timeoutId) clearTimeout(timeoutId);
+			if (pending.escalationTimer) clearTimeout(pending.escalationTimer);
+			pending.escalationTimer = undefined;
 			options?.signal?.removeEventListener("abort", onAbort);
 		};
 
