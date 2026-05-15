@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7-labs
 ###############################################################################
 # oh-my-pi — build-artifacts image
 #
@@ -45,7 +45,7 @@ WORKDIR /pi
 # Editing source files (under `packages/<x>/src/…` or `crates/<x>/src/…`) won't
 # bust the `bun install` layer below, because none of those globs match. Only
 # touching a `package.json`, `Cargo.toml`, or a root lockfile invalidates this
-# layer. `--parents` preserves the matched path under /pi/ (BuildKit 1.7+).
+# layer. `--parents` preserves the matched path under /pi/ (dockerfile 1.7-labs).
 COPY --parents \
     package.json bun.lock bunfig.toml \
     tsconfig.base.json tsconfig.json \
