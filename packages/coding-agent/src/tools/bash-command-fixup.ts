@@ -43,5 +43,5 @@ export function applyBashFixups(command: string): BashFixupResult {
 export function formatBashFixupNotice(stripped: readonly string[]): string | undefined {
 	if (!stripped.length) return undefined;
 	const quoted = stripped.map(s => `\`${s}\``).join(", ");
-	return `Stripped redundant ${quoted} — bash output is truncated automatically and stderr is already merged into stdout.`;
+	return `<system-warning>Stripped redundant ${quoted} — bash output is already truncated and stderr is already merged into stdout. NEVER use these patterns.</system-warning>`;
 }
