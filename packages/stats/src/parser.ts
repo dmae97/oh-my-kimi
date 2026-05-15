@@ -31,6 +31,10 @@ function extractFolderFromPath(sessionPath: string): string {
 function isAssistantMessage(entry: SessionEntry): entry is SessionMessageEntry {
 	if (entry.type !== "message") return false;
 	const msgEntry = entry as SessionMessageEntry;
+	// Legacy sessions (pre-id tracking) recorded message entries without an `id`.
+	// They're not linkable and would violate the messages.entry_id NOT NULL
+	// constraint, so skip them at the parser boundary.
+	if (typeof msgEntry.id !== "string" || msgEntry.id.length === 0) return false;
 	return msgEntry.message?.role === "assistant";
 }
 
@@ -40,6 +44,7 @@ function isAssistantMessage(entry: SessionEntry): entry is SessionMessageEntry {
 function isUserMessage(entry: SessionEntry): entry is SessionMessageEntry {
 	if (entry.type !== "message") return false;
 	const msgEntry = entry as SessionMessageEntry;
+	if (typeof msgEntry.id !== "string" || msgEntry.id.length === 0) return false;
 	return msgEntry.message?.role === "user";
 }
 

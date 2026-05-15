@@ -88,7 +88,8 @@ describe("BashTool head/tail stripping", () => {
 		} as AgentToolContext);
 		const text = result.content.find(b => b.type === "text")?.text ?? "";
 		expect(text).toContain("100");
-		expect(text).toContain("Stripped trailing `| head -3`");
+		expect(text).toContain("<system-warning>");
+		expect(text).toContain("Stripped redundant `| head -3`");
 	});
 
 	it("does not strip when the setting is disabled", async () => {

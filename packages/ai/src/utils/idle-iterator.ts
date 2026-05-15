@@ -1,6 +1,6 @@
 import { $env } from "@oh-my-pi/pi-utils";
 
-const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 30_000;
 const DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS = 100_000;
 
 function normalizeIdleTimeoutMs(value: string | undefined, fallback: number): number | undefined {

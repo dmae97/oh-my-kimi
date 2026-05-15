@@ -489,6 +489,32 @@ export function formatStyledTruncationWarning(meta: OutputMeta | undefined, them
 	return theme.fg("warning", wrapBrackets(message, theme));
 }
 
+/**
+ * Strip the trailing notice that {@link appendOutputNotice} bakes into the
+ * LLM-facing content body. Renderers should call this before printing
+ * `result.content` text in the TUI, because they emit a styled warning line of
+ * their own; without this, users see the same `[Showing lines …]` string twice
+ * (once verbatim from the body, once as the styled `⟨…⟩` warning).
+ *
+ * Safe to call eagerly: returns the input unchanged when no notice is present
+ * (e.g. during streaming, before {@link wrappedExecute} runs).
+ */
+export function stripOutputNotice(text: string, meta: OutputMeta | undefined): string {
+	const notice = formatOutputNotice(meta);
+	if (!notice) return text;
+	// Trim trailing whitespace from `text` and from the notice itself so we
+	// match regardless of whether: (a) the caller already trimEnd()'d, (b)
+	// extra blank lines slipped in after the notice (diagnostics blocks add
+	// `\n\n` between sections, OutputSink may pad), or (c) neither. Returns
+	// the prefix before the notice so the caller can re-trim as needed.
+	const trimmedText = text.trimEnd();
+	const trimmedNotice = notice.trimEnd();
+	if (trimmedText.endsWith(trimmedNotice)) {
+		return trimmedText.slice(0, -trimmedNotice.length);
+	}
+	return text;
+}
+
 // =============================================================================
 // Tool wrapper
 // =============================================================================

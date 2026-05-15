@@ -66,36 +66,35 @@ When braces bound your edit, you SHOULD prefer these shapes:
 </common-failures>
 
 <case file="mod.ts">
-{{hline 1 "const DEF = \"guest\";"}}
-{{hline 2 "export function label(name) {"}}
+{{hline 1 "const TITLE = \"Mr\";"}}
+{{hline 2 "export function greet(name) {"}}
 {{hline 3 "\treturn ["}}
-{{hline 4 "\t\tname?.trim() || DEF,"}}
-{{hline 5 "\t\t\" • \","}}
-{{hline 6 "\t].join(\"\");"}}
+{{hline 4 "\t\tTITLE,"}}
+{{hline 5 "\t\tname?.trim() || \"guest\","}}
+{{hline 6 "\t].join(\" \");"}}
 {{hline 7 "}"}}
 </case>
 
 <examples>
 # Replace one line (the payload must re-emit the original indentation)
 @@ mod.ts
-= {{hrefr 4}}..{{hrefr 4}}
-{{hsep}}		name?.trim().toUpperCase() || DEF,
+= {{hrefr 1}}..{{hrefr 1}}
+{{hsep}}const TITLE = "Mrs";
 
 # Replace a full multiline statement (widen to a self-contained boundary)
 @@ mod.ts
 = {{hrefr 3}}..{{hrefr 6}}
 {{hsep}}	return [
-{{hsep}}		name?.trim() || DEF,
-{{hsep}}		"·",
-{{hsep}}		" • ",
-{{hsep}}	].join("");
+{{hsep}}		"Mrs",
+{{hsep}}		name?.trim() || "guest",
+{{hsep}}	].join(" ");
 
 # Insert AFTER/BEFORE a line
 @@ mod.ts
-+ {{hrefr 3}}
-{{hsep}}		"·",
++ {{hrefr 4}}
+{{hsep}}		"Dr",
 < {{hrefr 5}}
-{{hsep}}		"·",
+{{hsep}}		"Dr",
 
 # Append to file
 @@ mod.ts
@@ -112,13 +111,12 @@ When braces bound your edit, you SHOULD prefer these shapes:
 </examples>
 
 <anti-pattern>
-# WRONG — replaces 3 lines just to add one.
+# WRONG — replaces 2 lines just to add one.
 @@ mod.ts
-= {{hrefr 1}}..{{hrefr 3}}
-{{hsep}}const DEF = "guest";
+= {{hrefr 1}}..{{hrefr 2}}
+{{hsep}}const TITLE = "Mr";
 {{hsep}}const DEBUG = false;
-{{hsep}}export function label(name) {
-{{hsep}}	return [
+{{hsep}}export function greet(name) {
 # RIGHT — same effect, one-line insert
 @@ mod.ts
 + {{hrefr 1}}
@@ -127,17 +125,15 @@ When braces bound your edit, you SHOULD prefer these shapes:
 # WRONG — replace from the middle of a larger statement (error-prone)
 @@ mod.ts
 = {{hrefr 4}}..{{hrefr 5}}
-{{hsep}}		name?.trim() || DEF,
-{{hsep}}		"·",
-{{hsep}}		" • ",
+{{hsep}}		"Dr",
+{{hsep}}		name?.trim() || "guest",
 # RIGHT — widen to the full statement
 @@ mod.ts
 = {{hrefr 3}}..{{hrefr 6}}
 {{hsep}}	return [
-{{hsep}}		name?.trim() || DEF,
-{{hsep}}		"·",
-{{hsep}}		" • ",
-{{hsep}}	].join("");
+{{hsep}}		"Dr",
+{{hsep}}		name?.trim() || "guest",
+{{hsep}}	].join(" ");
 </anti-pattern>
 
 <critical>

@@ -60,6 +60,7 @@ import {
 	formatStyledTruncationWarning,
 	type OutputMeta,
 	resolveOutputMaxColumns,
+	stripOutputNotice,
 } from "./output-meta";
 import { expandPath, formatPathRelativeToCwd, resolveReadPath, splitPathAndSel } from "./path-utils";
 import { formatBytes, replaceTabs, shortenPath, wrapBrackets } from "./render-utils";
@@ -2194,7 +2195,9 @@ export const readToolRenderer = {
 		const rawText = result.content?.find(c => c.type === "text")?.text ?? "";
 		// Prefer structured `displayContent` from details when available so the TUI
 		// shows clean file content (no model-only hashline anchors) without parsing the formatted text.
-		const contentText = details?.displayContent?.text ?? rawText;
+		// Fall back to the raw text, but strip the LLM-facing notice so it doesn't
+		// echo next to the styled warning line below.
+		const contentText = details?.displayContent?.text ?? stripOutputNotice(rawText, details?.meta);
 		const imageContent = result.content?.find(c => c.type === "image");
 		const rawPath = args?.file_path || args?.path || "";
 		const filePath = shortenPath(rawPath);

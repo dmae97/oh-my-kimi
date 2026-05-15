@@ -604,6 +604,80 @@ describe("github tool", () => {
 		expect(reposArgs.some(arg => typeof arg === "string" && arg.includes("repo:ignored/value"))).toBe(false);
 	});
 
+	it("search_prs: defaults `repo:` to the current checkout when `repo` is omitted", async () => {
+		const textSpy = vi.spyOn(git.github, "text").mockResolvedValue("acme/widgets\n");
+		const jsonSpy = vi.spyOn(git.github, "json").mockResolvedValue({ items: [] });
+		const tool = new GithubTool(createSession("/tmp/gh-default-prs"));
+		await tool.execute("search-prs", {
+			op: "search_prs",
+			query: "is:open",
+			limit: 1,
+		});
+
+		// `gh repo view --json nameWithOwner` runs against the session cwd to fetch the
+		// default scope; the resolved owner/repo gets layered onto the API query.
+		expect(textSpy).toHaveBeenCalled();
+		const repoViewArgs = textSpy.mock.calls[0]?.[1] ?? [];
+		expect(repoViewArgs.slice(0, 2)).toEqual(["repo", "view"]);
+		expect(repoViewArgs).toContain("nameWithOwner");
+
+		const apiArgs = jsonSpy.mock.calls[0]?.[1] ?? [];
+		expect(apiArgs).toContain("q=is:open repo:acme/widgets is:pr");
+	});
+
+	it("search_issues: skips the current-repo default when the query already carries a scope qualifier", async () => {
+		const textSpy = vi.spyOn(git.github, "text").mockResolvedValue("acme/widgets\n");
+		const jsonSpy = vi.spyOn(git.github, "json").mockResolvedValue({ items: [] });
+		const tool = new GithubTool(createSession("/tmp/gh-default-skip-qualifier"));
+		await tool.execute("search-issues", {
+			op: "search_issues",
+			query: "is:open org:torvalds",
+			limit: 1,
+		});
+
+		// Explicit `org:` qualifier suppresses the auto-resolved `repo:` injection.
+		expect(textSpy).not.toHaveBeenCalled();
+		const apiArgs = jsonSpy.mock.calls[0]?.[1] ?? [];
+		expect(apiArgs).toContain("q=is:open org:torvalds is:issue");
+		expect(apiArgs.some(a => typeof a === "string" && a.startsWith("q=") && a.includes("repo:acme/widgets"))).toBe(
+			false,
+		);
+	});
+
+	it("search_code: falls back to global search when `gh repo view` cannot resolve the current checkout", async () => {
+		const textSpy = vi.spyOn(git.github, "text").mockRejectedValue(new Error("not a git repository"));
+		const jsonSpy = vi.spyOn(git.github, "json").mockResolvedValue({ items: [] });
+		const tool = new GithubTool(createSession("/tmp/gh-default-no-remote"));
+		await tool.execute("search-code", {
+			op: "search_code",
+			query: "findThing",
+			limit: 1,
+		});
+
+		expect(textSpy).toHaveBeenCalled();
+		const apiArgs = jsonSpy.mock.calls[0]?.[1] ?? [];
+		// No `repo:` should be injected — resolution failed, so the search proceeds globally.
+		expect(apiArgs).toContain("q=findThing");
+		expect(apiArgs.some(a => typeof a === "string" && a.startsWith("q=") && a.includes("repo:"))).toBe(false);
+	});
+
+	it("search_commits: honors an explicit `repo` override over the current-checkout default", async () => {
+		const textSpy = vi.spyOn(git.github, "text").mockResolvedValue("acme/widgets\n");
+		const jsonSpy = vi.spyOn(git.github, "json").mockResolvedValue({ items: [] });
+		const tool = new GithubTool(createSession("/tmp/gh-default-explicit-override"));
+		await tool.execute("search-commits", {
+			op: "search_commits",
+			query: "fix",
+			repo: "other/project",
+			limit: 1,
+		});
+
+		// Explicit `repo` short-circuits resolution — no `gh repo view` invocation.
+		expect(textSpy).not.toHaveBeenCalled();
+		const apiArgs = jsonSpy.mock.calls[0]?.[1] ?? [];
+		expect(apiArgs).toContain("q=fix repo:other/project");
+	});
+
 	it("checks out a pull request into a worktree and configures contributor push metadata", async () => {
 		const fixture = await createPrFixture();
 		const tempHome = await setupTempHome();

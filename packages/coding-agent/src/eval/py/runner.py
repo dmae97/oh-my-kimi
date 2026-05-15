@@ -25,9 +25,11 @@ when installed.
 
 from __future__ import annotations
 
+import asyncio
 import ast
 import base64
 import builtins
+import inspect
 import io
 import json
 import os
@@ -120,6 +122,7 @@ class _RunnerState:
             "__builtins__": builtins,
         }
         self.last_install_marker: int = 0
+        self.loop: asyncio.AbstractEventLoop | None = None
 
 
 _STATE = _RunnerState()
@@ -688,13 +691,41 @@ _install_builtins(_STATE.user_ns)
 # ---------------------------------------------------------------------------
 
 
+_TLA_FLAG = getattr(ast, "PyCF_ALLOW_TOP_LEVEL_AWAIT", 0x2000)
+
+
+def _get_event_loop() -> asyncio.AbstractEventLoop:
+    loop = _STATE.loop
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _STATE.loop = loop
+    return loop
+
+
+def _run_compiled(code, ns: dict, *, want_value: bool) -> Any:
+    """Execute a code object, awaiting it if compiled as a coroutine.
+
+    ``want_value`` is True for the trailing expression — we return ``eval``'s
+    result (or the awaited coroutine's value). For statement blocks the
+    return is always ``None``.
+    """
+    if code.co_flags & inspect.CO_COROUTINE:
+        coro = eval(code, ns)
+        result = _get_event_loop().run_until_complete(coro)
+        return result if want_value else None
+    if want_value:
+        return eval(code, ns)
+    exec(code, ns)
+    return None
+
+
 def _exec_source(source: str, ns: dict) -> None:
     """Compile + execute ``source``; if the last node is an expression, route
-    its value through ``__omp_display`` so dataframes/figures render rich."""
-    try:
-        module = ast.parse(source, mode="exec")
-    except SyntaxError:
-        raise
+    its value through ``__omp_display`` so dataframes/figures render rich.
+    Top-level ``await`` / ``async for`` / ``async with`` is permitted; the
+    cell is driven through the runner's persistent event loop."""
+    module = ast.parse(source, mode="exec")
 
     if not module.body:
         return
@@ -704,16 +735,16 @@ def _exec_source(source: str, ns: dict) -> None:
         body_module = ast.Module(body=module.body[:-1], type_ignores=[])
         expr_module = ast.Expression(body=last.value)
         ast.copy_location(expr_module, last)
-        body_code = compile(body_module, "<cell>", "exec")
-        expr_code = compile(expr_module, "<cell>", "eval")
-        exec(body_code, ns)
-        value = eval(expr_code, ns)
+        body_code = compile(body_module, "<cell>", "exec", flags=_TLA_FLAG)
+        expr_code = compile(expr_module, "<cell>", "eval", flags=_TLA_FLAG)
+        _run_compiled(body_code, ns, want_value=False)
+        value = _run_compiled(expr_code, ns, want_value=True)
         if value is not None:
             __omp_display(value, kind="result")
         return
 
-    code = compile(module, "<cell>", "exec")
-    exec(code, ns)
+    code = compile(module, "<cell>", "exec", flags=_TLA_FLAG)
+    _run_compiled(code, ns, want_value=False)
 
 
 # ---------------------------------------------------------------------------

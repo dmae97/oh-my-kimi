@@ -2,6 +2,8 @@
 
 > Execute Python or JavaScript code in persistent cell-based runtimes.
 
+> **Notice:** Do not shell out to `python -c`/`python -e`, `bun -e`, or `node -e` via the `bash` tool for ad-hoc code execution. Use this tool instead — it gives you persistent state across cells, structured `display()` output, image/JSON capture, and proper cancellation/timeout handling that one-shot `-e`/`-c` invocations cannot provide.
+
 ## Source
 - Entry: `packages/coding-agent/src/tools/eval.ts`
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/eval.md`
