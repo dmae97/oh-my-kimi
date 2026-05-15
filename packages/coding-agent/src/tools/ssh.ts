@@ -16,7 +16,7 @@ import { executeSSH } from "../ssh/ssh-executor";
 import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import type { ToolSession } from ".";
-import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
+import { formatStyledTruncationWarning, type OutputMeta, stripOutputNotice } from "./output-meta";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
@@ -253,7 +253,8 @@ export const sshToolRenderer = {
 			render: (width: number): string[] => {
 				// REACTIVE: read mutable options at render time
 				const { expanded, renderContext } = options;
-				const output = textContent.trimEnd();
+				// Strip LLM-facing notice so we don't echo it next to the styled warning.
+				const output = stripOutputNotice(textContent, details?.meta).trimEnd();
 				const outputLines: string[] = [];
 
 				if (output) {

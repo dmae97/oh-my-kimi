@@ -11,7 +11,7 @@ import type { RenderResultOptions } from "../../extensibility/custom-tools/types
 import type { Theme } from "../../modes/theme/theme";
 import { Hasher, renderCodeCell, renderStatusLine } from "../../tui";
 import type { BrowserToolDetails } from "../browser";
-import { formatStyledTruncationWarning } from "../output-meta";
+import { formatStyledTruncationWarning, stripOutputNotice } from "../output-meta";
 import { replaceTabs, shortenPath } from "../render-utils";
 
 const BROWSER_DEFAULT_PREVIEW_LINES = 10;
@@ -195,7 +195,7 @@ export const browserToolRenderer = {
 		const details = result.details;
 		const action = details?.action ?? argsObj.action;
 		const isError = result.isError === true;
-		const output = extractTextOutput(result.content);
+		const output = stripOutputNotice(extractTextOutput(result.content), details?.meta);
 
 		if (action === "run") {
 			let component = renderRunCell(argsObj, details, options, output, isError, theme);

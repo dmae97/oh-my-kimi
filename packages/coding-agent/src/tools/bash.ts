@@ -21,7 +21,7 @@ import { applyBashFixups, formatBashFixupNotice } from "./bash-command-fixup";
 import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-interactive";
 import { checkBashInterception } from "./bash-interceptor";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
-import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
+import { formatStyledTruncationWarning, type OutputMeta, stripOutputNotice } from "./output-meta";
 import { resolveToCwd } from "./path-utils";
 import { formatToolWorkingDirectory, replaceTabs } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
@@ -977,8 +977,11 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const expanded = renderContext?.expanded ?? options.expanded;
 					const previewLines = renderContext?.previewLines ?? BASH_DEFAULT_PREVIEW_LINES;
 
-					// Get output from context (preferred) or fall back to result content
-					const output = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
+					// Get output from context (preferred) or fall back to result content.
+					// Strip the LLM-facing notice appended by wrappedExecute so we don't
+					// double-print it alongside the styled warning line below.
+					const rawOutput = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
+					const output = stripOutputNotice(rawOutput, details?.meta);
 					const displayOutput = output.trimEnd();
 					const showingFullOutput = expanded && renderContext?.isFullOutput === true;
 
