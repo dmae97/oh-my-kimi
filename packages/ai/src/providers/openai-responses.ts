@@ -11,7 +11,6 @@ import {
 	type CacheRetention,
 	type Context,
 	type FetchImpl,
-	getPriorityPremiumRequests,
 	type MessageAttribution,
 	type Model,
 	type OpenAICompat,
@@ -213,11 +212,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				options?.onSseEvent,
 				options?.fetch,
 			);
-			const priorityPremiumRequests = getPriorityPremiumRequests(options?.serviceTier, model.provider);
-			const premiumRequestsTotal =
-				copilotPremiumRequests !== undefined || priorityPremiumRequests > 0
-					? (copilotPremiumRequests ?? 0) + priorityPremiumRequests
-					: undefined;
+			const premiumRequestsTotal = copilotPremiumRequests;
 			const providerSessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
 			const { params } = buildParams(model, context, options, providerSessionState, baseUrl);
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
