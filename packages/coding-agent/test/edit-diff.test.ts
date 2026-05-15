@@ -8,6 +8,7 @@ import {
 	computeHashlineDiff,
 	DEFAULT_FUZZY_THRESHOLD,
 	findMatch,
+	formatLineHash,
 } from "@oh-my-pi/pi-coding-agent/edit";
 import { HL_EDIT_SEP } from "@oh-my-pi/pi-coding-agent/hashline/hash";
 
@@ -233,9 +234,14 @@ describe("computeHashlineDiff", () => {
 
 	test("returns no-op error for unchanged content when move is absent", async () => {
 		const sourcePath = path.join(tempDir, "source.txt");
-		await Bun.write(sourcePath, "unchanged content\n");
+		const line = "unchanged content";
+		await Bun.write(sourcePath, `${line}\n`);
 
-		const result = await computeHashlineDiff({ input: `@${sourcePath}\n` }, tempDir);
+		// `= 1<hash>..1<hash>` with the same line as payload is a true no-op: the
+		// edit fires through computeHashlineDiff but produces identical content.
+		const anchor = formatLineHash(1, line);
+		const input = `@${sourcePath}\n= ${anchor}..${anchor}\n${HL_EDIT_SEP}${line}\n`;
+		const result = await computeHashlineDiff({ input }, tempDir);
 		expect("error" in result).toBe(true);
 		if ("error" in result) {
 			expect(result.error).toContain("No changes would be made");
@@ -253,7 +259,7 @@ describe("computeHashlineDiff", () => {
 		}
 	});
 	test("returns a handled error when the source path is a local URL", async () => {
-		const result = await computeHashlineDiff({ input: "@local://PLAN.md\n" }, tempDir);
+		const result = await computeHashlineDiff({ input: "@local://PLAN.md\n+ EOF\n" }, tempDir);
 
 		expect("error" in result).toBe(true);
 		if ("error" in result) {
