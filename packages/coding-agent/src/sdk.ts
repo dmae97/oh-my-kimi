@@ -932,18 +932,24 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// it. On timeout we forward `undefined` to ToolSession; buildSystemPromptInternal
 	// will re-race the same promise through its own withDeadline path. Background
 	// work continues so caches still warm.
-	const raceWithDeadline = <T>(name: string, work: Promise<T>): Promise<T | undefined> =>
-		Promise.race([
+	const raceWithDeadline = async <T>(name: string, work: Promise<T>): Promise<T | undefined> => {
+		let timedOut = false;
+		const result = await Promise.race([
 			work,
 			Bun.sleep(STARTUP_SCAN_DEADLINE_MS).then(() => {
-				logger.warn("Startup scan exceeded deadline; deferring to system prompt fallback", {
-					name,
-					timeoutMs: STARTUP_SCAN_DEADLINE_MS,
-					cwd,
-				});
+				timedOut = true;
 				return undefined;
 			}),
 		]);
+		if (timedOut) {
+			logger.warn("Startup scan exceeded deadline; deferring to system prompt fallback", {
+				name,
+				timeoutMs: STARTUP_SCAN_DEADLINE_MS,
+				cwd,
+			});
+		}
+		return result;
+	};
 	const [contextFiles, resolvedWorkspaceTree] = await Promise.all([
 		contextFilesPromise,
 		raceWithDeadline("buildWorkspaceTree", workspaceTreePromise),
