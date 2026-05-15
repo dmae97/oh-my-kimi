@@ -2165,4 +2165,24 @@ describe("ModelRegistry", () => {
 		expect(model!.maxTokens).not.toBe(8_888);
 		expect(model!.maxTokens).toBeGreaterThan(1000);
 	});
+
+	test("loads cached standard provider discovery models on startup", () => {
+		const cachedModel: Model<"ollama-chat"> = {
+			id: "deepseek-v4-pro",
+			name: "DeepSeek V4 Pro",
+			api: "ollama-chat",
+			provider: "ollama-cloud",
+			baseUrl: "https://ollama.com",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_000_000,
+			maxTokens: 384_000,
+		};
+		writeModelCache("ollama-cloud", Date.now(), [cachedModel], true, cacheDbPath);
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+
+		expect(registry.find("ollama-cloud", "deepseek-v4-pro")?.maxTokens).toBe(384_000);
+	});
 });

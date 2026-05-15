@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { type AssistantMessage, Effort, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
+import { type AssistantMessage, Effort, getBundledModel, type Model, writeModelCache } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -826,6 +826,51 @@ describe("AgentSession retry fallback", () => {
 		expect(session.model?.provider).toBe(primaryModel.provider);
 		expect(session.model?.id).toBe(primaryModel.id);
 		expect(session.thinkingLevel).toBeUndefined();
+	});
+
+	it("accepts cached Ollama Cloud fallback selectors during startup validation", () => {
+		const primaryModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!primaryModel) {
+			throw new Error("Expected bundled OpenAI test model to exist");
+		}
+		const cachedModel: Model<"ollama-chat"> = {
+			id: "deepseek-v4-pro",
+			name: "DeepSeek V4 Pro",
+			api: "ollama-chat",
+			provider: "ollama-cloud",
+			baseUrl: "https://ollama.com",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_000_000,
+			maxTokens: 384_000,
+		};
+		writeModelCache("ollama-cloud", Date.now(), [cachedModel], true, path.join(tempDir.path(), "models.db"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.json"));
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.fallbackChains": { default: ["ollama-cloud/deepseek-v4-pro"] },
+		});
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		const agent = new Agent({
+			getApiKey: provider => `${provider}-test-key`,
+			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: () => {
+				throw new Error("Not exercised");
+			},
+		});
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		expect(session.configWarnings).not.toContain(
+			"Fallback chain for role 'default' references unknown model: ollama-cloud/deepseek-v4-pro",
+		);
 	});
 
 	it("normalizes suppression by base selector and clears it on model refresh", async () => {
