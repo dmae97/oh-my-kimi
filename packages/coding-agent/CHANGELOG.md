@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed legacy plugin extensions failing to load on Windows when they import a bare-specifier dependency from their own `node_modules` (e.g. `import YAML from "yaml"` in `supipowers`). The legacy-pi mirror resolved the dependency to its absolute path and then ran the path through `isUrlLikeSpecifier`, whose `^[A-Za-z][A-Za-z\d+.-]*:` regex matched the Windows drive letter (`C:`) and short-circuited the `pathToFileURL` conversion. The raw path was emitted into the mirrored TS source as `import x from "C:\\Users\\...\\dep\\dist\\index.js"`, where `\n`, `\U`, `\y` and other backslash sequences were eaten by the TS string-literal parser, producing nonsense package specifiers like `C:Usersjames.ompagentextensionssupipowers\node_modulesyamldistindex.js` that Bun's resolver rejected with `Cannot find package …`. `isUrlLikeSpecifier` now rejects `^[A-Za-z]:[\\/]` first, so Windows absolute paths flow through `pathToFileURL` like every other absolute path and reach the mirror as proper `file:///C:/...` URLs.
+
 ## [15.0.2] - 2026-05-15
 
 ### Added

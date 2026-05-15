@@ -99,6 +99,12 @@ const ANY_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s*\(\s*)["'])([^"']+)(["'
 
 /** Resolve bare imports against the extension directory before loading mirrored legacy Pi files. */
 function isUrlLikeSpecifier(specifier: string): boolean {
+	// Windows drive-letter paths (e.g. `C:\foo` or `C:/foo`) also match the URL
+	// scheme shape `[A-Za-z][A-Za-z\d+.-]*:`. Treat them as filesystem paths so
+	// `toRewrittenImportSpecifier` converts them to `file://` URLs instead of
+	// emitting raw paths whose `\n`, `\U`, ... get eaten by TS string-literal
+	// escapes inside the mirrored extension file.
+	if (/^[a-zA-Z]:[\\/]/.test(specifier)) return false;
 	return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(specifier);
 }
 
