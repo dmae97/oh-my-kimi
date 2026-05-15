@@ -168,6 +168,53 @@ function hasToolHistory(messages: Message[]): boolean {
 	return false;
 }
 
+/**
+ * Identify "real progress" stream chunks vs. keepalives, role-only preambles,
+ * and empty `{choices:[]}` no-ops emitted by some OpenAI-compatible endpoints.
+ * Without this filter, every keepalive resets `iterateWithIdleTimeout`'s
+ * deadline, so a provider that streams nothing but pings keeps the watchdog
+ * asleep indefinitely — observed against z.ai/GLM via OpenRouter where a
+ * subagent stalled for hours with no error surfaced.
+ *
+ * A chunk counts as progress when it carries terminal usage, a finish reason,
+ * or any model-produced delta (content / tool calls / reasoning / refusal).
+ * Role-only `delta: { role: "assistant" }` preambles do NOT count; we want the
+ * (longer) first-event timeout to keep governing until real output appears.
+ */
+function isOpenAICompletionsProgressChunk(chunk: unknown): boolean {
+	if (!chunk || typeof chunk !== "object") return false;
+	const record = chunk as {
+		usage?: unknown;
+		choices?: ReadonlyArray<{
+			finish_reason?: unknown;
+			usage?: unknown;
+			delta?: {
+				content?: unknown;
+				tool_calls?: unknown;
+				reasoning?: unknown;
+				reasoning_content?: unknown;
+				reasoning_text?: unknown;
+				refusal?: unknown;
+			};
+		}>;
+	};
+	if (record.usage) return true;
+	const choice = Array.isArray(record.choices) ? record.choices[0] : undefined;
+	if (!choice) return false;
+	if (choice.finish_reason) return true;
+	if (choice.usage) return true;
+	const delta = choice.delta;
+	if (!delta) return false;
+	const content = delta.content;
+	if (typeof content === "string" ? content.length > 0 : Array.isArray(content) && content.length > 0) return true;
+	if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) return true;
+	if (typeof delta.reasoning === "string" && delta.reasoning.length > 0) return true;
+	if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) return true;
+	if (typeof delta.reasoning_text === "string" && delta.reasoning_text.length > 0) return true;
+	if (typeof delta.refusal === "string" && delta.refusal.length > 0) return true;
+	return false;
+}
+
 export interface OpenAICompletionsOptions extends StreamOptions {
 	toolChoice?: ToolChoice;
 	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -618,6 +665,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				errorMessage: "OpenAI completions stream stalled while waiting for the next event",
 				onIdle: () => requestAbortController.abort(),
 				abortSignal: options?.signal,
+				isProgressItem: isOpenAICompletionsProgressChunk,
 			})) {
 				if (!chunk || typeof chunk !== "object") continue;
 
@@ -922,6 +970,14 @@ async function createClient(
 		baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {},
 	);
 	const debugFetch = onSseEvent ? wrapFetchForSseDebug(wrappedFetch, event => onSseEvent(event, model)) : wrappedFetch;
+	// Bound HTTP request timeout to roughly the first-event watchdog window.
+	// The OpenAI SDK's default is 10 minutes per attempt × `maxRetries`, which
+	// turns a stalled-before-headers fetch into a multi-minute hang invisible
+	// to the agent loop (the iterator watchdog only arms AFTER `create()` returns).
+	// Using the first-event timeout keeps both layers aligned: the SDK gives up
+	// before the agent watchdog would have, surfacing a real error to the catch
+	// in the IIFE.
+	const sdkTimeoutMs = getStreamFirstEventTimeoutMs(getOpenAIStreamIdleTimeoutMs());
 	return {
 		client: new OpenAI({
 			apiKey,
@@ -931,6 +987,7 @@ async function createClient(
 			defaultHeaders: headers,
 			defaultQuery: azureDefaultQuery,
 			fetch: debugFetch,
+			...(sdkTimeoutMs !== undefined ? { timeout: sdkTimeoutMs } : {}),
 		}),
 		copilotPremiumRequests,
 		baseUrl,
