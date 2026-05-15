@@ -237,6 +237,20 @@ describe("hashline parser — block op syntax", () => {
 		expect(applyDiff(source, diff)).toBe(["   });", "added();", "next();"].join("\n"));
 	});
 
+	it("auto-drops a non-structural anchor echo for `+ ANCHOR` by default", () => {
+		const source = ["aaa", "bbb", "ccc"].join("\n");
+		const diff = [`+ ${tag(2, "bbb")}`, pl("bbb"), pl("NEW")].join("\n");
+
+		expect(applyDiff(source, diff)).toBe("aaa\nbbb\nNEW\nccc");
+	});
+
+	it("auto-drops a non-structural anchor echo for `< ANCHOR` by default", () => {
+		const source = ["aaa", "bbb", "ccc"].join("\n");
+		const diff = [`< ${tag(2, "bbb")}`, pl("NEW"), pl("bbb")].join("\n");
+
+		expect(applyDiff(source, diff)).toBe("aaa\nNEW\nbbb\nccc");
+	});
+
 	it("does not drop a single structural pure-insert suffix when it preserves balance", () => {
 		const source = ["if outer {", "}"].join("\n");
 		const diff = [`< ${tag(2, "}")}`, pl("if inner {"), pl("}")].join("\n");
@@ -283,12 +297,11 @@ describe("hashline parser — block op syntax", () => {
 		expect(applyDiffWithPureInsertAutoDrop(source, diff)).toBe("NEW\naaa\nbbb\nccc");
 	});
 
-	it("does not auto-absorb a single duplicated boundary line in a pure insert", () => {
-		// One-line echo should NOT trigger absorb (matches replacement-absorb threshold).
+	it("auto-drops a single duplicated anchor line in a pure insert", () => {
 		const source = ["aaa", "bbb", "ccc"].join("\n");
 		const diff = [`+ ${tag(2, "bbb")}`, pl("bbb"), pl("NEW")].join("\n");
-		// Only "bbb" matches above; that's a 1-line dup, not absorbed.
-		expect(applyDiffWithPureInsertAutoDrop(source, diff)).toBe("aaa\nbbb\nbbb\nNEW\nccc");
+
+		expect(applyDiffWithPureInsertAutoDrop(source, diff)).toBe("aaa\nbbb\nNEW\nccc");
 	});
 
 	it("surfaces a warning when pure-insert duplicates are auto-dropped", () => {
