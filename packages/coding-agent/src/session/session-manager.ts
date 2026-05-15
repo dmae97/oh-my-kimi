@@ -1351,6 +1351,11 @@ class NdjsonFileWriter {
 	getError(): Error | undefined {
 		return this.#error;
 	}
+
+	/** True while the writer accepts new writes (not closing or closed). */
+	isOpen(): boolean {
+		return !this.#closed && !this.#closing;
+	}
 }
 
 /** Get recent sessions for display in welcome screen */
@@ -2106,7 +2111,15 @@ export class SessionManager {
 	#ensurePersistWriter(): NdjsonFileWriter | undefined {
 		if (!this.persist || !this.#sessionFile) return undefined;
 		if (this.#persistError) throw this.#persistError;
-		if (this.#persistWriter && this.#persistWriterPath === this.#sessionFile) return this.#persistWriter;
+		if (this.#persistWriter && this.#persistWriterPath === this.#sessionFile) {
+			if (this.#persistWriter.isOpen()) return this.#persistWriter;
+			// Cached writer for the current file is mid-close (queued
+			// `#closePersistWriterInternal` has flipped `#closing` but not yet
+			// cleared `#persistWriter`). Returning it would make `writeSync`
+			// throw "Writer closed". Defer to the caller — `_persist` routes
+			// the entry through the async rewrite path so it still lands on disk.
+			return undefined;
+		}
 		// Note: caller must await _closePersistWriter() before calling this if switching files
 		this.#persistWriter = new NdjsonFileWriter(this.storage, this.#sessionFile, {
 			onError: err => {
@@ -2457,7 +2470,14 @@ export class SessionManager {
 		// line referencing them is written.
 		try {
 			const writer = this.#ensurePersistWriter();
-			if (!writer) return;
+			if (!writer) {
+				// `#ensurePersistWriter` returns undefined here only when the cached
+				// writer is mid-close (the `!persist`/`!sessionFile` cases are
+				// rejected above). Route through `#rewriteFile` so the entry — which
+				// is already in `#fileEntries` — persists once the close drains.
+				this.#rewriteFile().catch(() => {});
+				return;
+			}
 			const persistedEntry = prepareEntryForPersistenceSync(entry, this.#blobStore);
 			writer.writeSync(persistedEntry);
 		} catch (err) {
