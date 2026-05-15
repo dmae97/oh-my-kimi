@@ -1774,6 +1774,39 @@ export async function resolveDefaultRepoMemoized(cwd: string, signal?: AbortSign
 	return untilAborted(signal, pending);
 }
 
+/**
+ * Matches search-query qualifiers that already scope to a repository, org, or
+ * user. When present, callers should avoid layering a default `repo:<current>`
+ * on top — the user has already expressed an explicit scope.
+ *
+ * Only the leading `repo:`/`org:`/`user:`/`owner:` token is treated as a
+ * scope marker; arbitrary substrings (e.g. inside quoted text) are ignored.
+ */
+const REPO_SCOPE_QUALIFIER_PATTERN = /(?:^|\s)-?(?:repo|org|user|owner):\S/i;
+
+/**
+ * Resolve the effective `repo:` scope for a search op. Returns the explicit
+ * `repo` when set, `undefined` when the query already carries a scoping
+ * qualifier, and otherwise the current checkout's `owner/repo` via
+ * `resolveDefaultRepoMemoized`. Resolution failures (no git/gh context, no
+ * configured remote) silently fall back to `undefined` so the search proceeds
+ * across all of GitHub instead of throwing.
+ */
+async function resolveSearchRepoScope(
+	cwd: string,
+	repo: string | undefined,
+	query: string | undefined,
+	signal: AbortSignal | undefined,
+): Promise<string | undefined> {
+	if (repo) return repo;
+	if (query && REPO_SCOPE_QUALIFIER_PATTERN.test(query)) return undefined;
+	try {
+		return await resolveDefaultRepoMemoized(cwd, signal);
+	} catch {
+		return undefined;
+	}
+}
+
 async function resolveGitHubBranchHead(
 	cwd: string,
 	repo: string,
@@ -3267,11 +3300,11 @@ async function executeSearchIssues(
 	params: GithubInput,
 	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<GhToolDetails>> {
-	const repo = normalizeOptionalString(params.repo);
 	const limit = resolveSearchLimit(params.limit);
 	const dateField = resolveSearchDateField("issues", params.dateField);
 	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
 	const displayQuery = composeSearchQuery([params.query, dateQualifier]);
+	const repo = await resolveSearchRepoScope(session.cwd, normalizeOptionalString(params.repo), displayQuery, signal);
 	const apiQuery = composeSearchQuery([displayQuery, repo ? `repo:${repo}` : undefined, "is:issue"]);
 	const args = buildGhApiSearchArgs("issues", apiQuery, limit);
 
@@ -3285,11 +3318,11 @@ async function executeSearchPrs(
 	params: GithubInput,
 	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<GhToolDetails>> {
-	const repo = normalizeOptionalString(params.repo);
 	const limit = resolveSearchLimit(params.limit);
 	const dateField = resolveSearchDateField("prs", params.dateField);
 	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
 	const displayQuery = composeSearchQuery([params.query, dateQualifier]);
+	const repo = await resolveSearchRepoScope(session.cwd, normalizeOptionalString(params.repo), displayQuery, signal);
 	const apiQuery = composeSearchQuery([displayQuery, repo ? `repo:${repo}` : undefined, "is:pr"]);
 	const args = buildGhApiSearchArgs("issues", apiQuery, limit);
 
@@ -3307,8 +3340,8 @@ async function executeSearchCode(
 	if (params.since !== undefined || params.until !== undefined) {
 		throw new ToolError("search_code does not support since/until; GitHub code search has no date qualifier.");
 	}
-	const repo = normalizeOptionalString(params.repo);
 	const limit = resolveSearchLimit(params.limit);
+	const repo = await resolveSearchRepoScope(session.cwd, normalizeOptionalString(params.repo), query, signal);
 	const apiQuery = composeSearchQuery([query, repo ? `repo:${repo}` : undefined]);
 	const args = buildGhApiSearchArgs("code", apiQuery, limit, ["Accept: application/vnd.github.text-match+json"]);
 
@@ -3322,11 +3355,11 @@ async function executeSearchCommits(
 	params: GithubInput,
 	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<GhToolDetails>> {
-	const repo = normalizeOptionalString(params.repo);
 	const limit = resolveSearchLimit(params.limit);
 	const dateField = resolveSearchDateField("commits", params.dateField);
 	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
 	const displayQuery = composeSearchQuery([params.query, dateQualifier]);
+	const repo = await resolveSearchRepoScope(session.cwd, normalizeOptionalString(params.repo), displayQuery, signal);
 	const apiQuery = composeSearchQuery([displayQuery, repo ? `repo:${repo}` : undefined]);
 	const args = buildGhApiSearchArgs("commits", apiQuery, limit);
 

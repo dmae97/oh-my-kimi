@@ -18,7 +18,7 @@
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `op` | `"repo_view" \| "pr_create" \| "pr_checkout" \| "pr_push" \| "search_issues" \| "search_prs" \| "search_code" \| "search_commits" \| "search_repos" \| "run_watch"` | Yes | Dispatch selector. `GithubTool.execute()` switches only on this field. |
-| `repo` | `string` | No | `owner/repo` override. Ignored when the identifier argument is already a full GitHub URL. Required in practice when `gh` cannot infer repo context from the current checkout. |
+| `repo` | `string` | No | `owner/repo` override. Ignored when the identifier argument is already a full GitHub URL. For `search_issues`/`search_prs`/`search_code`/`search_commits`, defaults to the current checkout's `owner/repo` when omitted (skipped when the query already contains a `repo:`/`org:`/`user:`/`owner:` qualifier or when current-repo resolution fails). Required in practice when `gh` cannot infer repo context from the current checkout. |
 | `branch` | `string` | No | Used by `repo_view`, `pr_push`, and `run_watch`. `run_watch` falls back to current git branch when `run` is omitted; `pr_push` falls back to current branch. |
 | `pr` | `string \| string[]` | No | Used by `pr_checkout`. Each item may be a PR number, branch name, or GitHub PR URL. Array form enables batching. Omitted means current branch PR. |
 | `force` | `boolean` | No | Used only by `pr_checkout`. Defaults to `false`; allows resetting an existing `pr-<number>` local branch to the PR head commit. |
@@ -148,6 +148,8 @@ Push target resolution reads the `branch.<name>.ompPrHeadRef`, `pushRemote`/`rem
 | Batching | None |
 | Output | `# GitHub issues search`, echoed query, optional repo, result count, then one bullet per issue with repo/state/author/labels/timestamps/URL. |
 
+`repo` defaults to the current checkout's `owner/repo` via `resolveSearchRepoScope()` when omitted. The default is suppressed when the query already contains a leading `repo:`/`org:`/`user:`/`owner:` qualifier or when `gh repo view` fails to resolve the current checkout (e.g. outside a github remote).
+
 ### `search_prs`
 
 | Aspect | Value |
@@ -157,6 +159,8 @@ Push target resolution reads the `branch.<name>.ompPrHeadRef`, `pushRemote`/`rem
 | `gh` command | `gh api -X GET /search/issues -f q="<query> [repo:<repo>] is:pr" -F per_page=<limit>` |
 | Batching | None |
 | Output | Same shape as `search_issues`, labeled as pull requests. |
+
+`repo` defaults to the current checkout's `owner/repo` as in `search_issues`.
 
 ### `search_code`
 
@@ -168,6 +172,8 @@ Push target resolution reads the `branch.<name>.ompPrHeadRef`, `pushRemote`/`rem
 | Batching | None |
 | Output | `# GitHub code search`, result count, then one bullet per match with path, repo, short commit SHA, URL, and first normalized text-match fragment line when present. |
 
+`repo` defaults to the current checkout's `owner/repo` as in `search_issues`.
+
 ### `search_commits`
 
 | Aspect | Value |
@@ -177,6 +183,8 @@ Push target resolution reads the `branch.<name>.ompPrHeadRef`, `pushRemote`/`rem
 | `gh` command | `gh api -X GET /search/commits -f q="<query> [repo:<repo>]" -F per_page=<limit>` |
 | Batching | None |
 | Output | `# GitHub commits search`, result count, then one bullet per commit: short SHA + first commit-message line, repo, author, date, URL. |
+
+`repo` defaults to the current checkout's `owner/repo` as in `search_issues`.
 
 ### `search_repos`
 
