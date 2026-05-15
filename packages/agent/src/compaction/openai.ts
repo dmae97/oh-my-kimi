@@ -12,21 +12,21 @@
  *   with `{ summary, shortSummary? }`.
  */
 
-import { logger } from "@oh-my-pi/pi-utils";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
-} from "./providers/openai-codex/constants";
-import { parseTextSignature } from "./providers/openai-responses-shared";
-import { transformMessages } from "./providers/transform-messages";
-import type { AssistantMessage, Message, Model } from "./types";
+} from "@oh-my-pi/pi-ai/providers/openai-codex/constants";
+import { parseTextSignature } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
+import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
+import type { AssistantMessage, Message, Model } from "@oh-my-pi/pi-ai/types";
 import {
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
 	normalizeResponsesToolCallId,
-} from "./utils";
+} from "@oh-my-pi/pi-ai/utils";
+import { logger } from "@oh-my-pi/pi-utils";
 
 // ============================================================================
 // Public types
@@ -200,13 +200,12 @@ function trimOpenAiCompactInput(
 	const trimmed = [...input];
 	while (trimmed.length > 0 && estimateOpenAiCompactInputTokens(trimmed, instructions) > contextWindow) {
 		const last = trimmed[trimmed.length - 1];
-		if (last?.type === "function_call_output") {
+		if (last?.type === "function_call_output" || last?.type === "custom_tool_call_output") {
 			const callId = typeof last.call_id === "string" ? last.call_id : undefined;
+			const callType = last.type === "custom_tool_call_output" ? "custom_tool_call" : "function_call";
 			trimmed.pop();
 			if (callId) {
-				const matchingCallIndex = trimmed.findLastIndex(
-					item => item.type === "function_call" && item.call_id === callId,
-				);
+				const matchingCallIndex = trimmed.findLastIndex(item => item.type === callType && item.call_id === callId);
 				if (matchingCallIndex >= 0) {
 					trimmed.splice(matchingCallIndex, 1);
 				}

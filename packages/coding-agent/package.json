@@ -471,14 +471,6 @@
 			"types": "./src/session/*.ts",
 			"import": "./src/session/*.ts"
 		},
-		"./session/compaction": {
-			"types": "./src/session/compaction/index.ts",
-			"import": "./src/session/compaction/index.ts"
-		},
-		"./session/compaction/*": {
-			"types": "./src/session/compaction/*.ts",
-			"import": "./src/session/compaction/*.ts"
-		},
 		"./slash-commands/*": {
 			"types": "./src/slash-commands/*.ts",
 			"import": "./src/slash-commands/*.ts"

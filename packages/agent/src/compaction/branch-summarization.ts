@@ -4,20 +4,22 @@
  * When navigating to a different point in the session tree, this generates
  * a summary of the branch being left so context isn't lost.
  */
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+
 import type { Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
-import branchSummaryPrompt from "../../prompts/compaction/branch-summary.md" with { type: "text" };
-import branchSummaryPreamble from "../../prompts/compaction/branch-summary-preamble.md" with { type: "text" };
+import type { AgentMessage } from "../types";
+import { estimateTokens } from "./compaction";
+import type { ReadonlySessionManager, SessionEntry } from "./entries";
 import {
+	type ConvertToLlm,
 	convertToLlm,
 	createBranchSummaryMessage,
 	createCompactionSummaryMessage,
 	createCustomMessage,
-} from "../../session/messages";
-import type { ReadonlySessionManager, SessionEntry } from "../../session/session-manager";
-import { estimateTokens } from "./compaction";
+} from "./messages";
+import branchSummaryPrompt from "./prompts/branch-summary.md" with { type: "text" };
+import branchSummaryPreamble from "./prompts/branch-summary-preamble.md" with { type: "text" };
 import {
 	computeFileLists,
 	createFileOps,
@@ -77,6 +79,8 @@ export interface GenerateBranchSummaryOptions {
 	reserveTokens?: number;
 	/** Optional metadata forwarded to the underlying API request (e.g. user_id for session attribution). */
 	metadata?: Record<string, unknown>;
+	/** Convert app-specific messages before serializing the branch summary prompt. */
+	convertToLlm?: ConvertToLlm;
 }
 
 // ============================================================================
@@ -171,6 +175,11 @@ function getMessageFromEntry(entry: SessionEntry): AgentMessage | undefined {
 		case "model_change":
 		case "custom":
 		case "label":
+		case "service_tier_change":
+		case "ttsr_injection":
+		case "mcp_tool_selection":
+		case "session_init":
+		case "mode_change":
 			return undefined;
 	}
 }
@@ -274,7 +283,7 @@ export async function generateBranchSummary(
 
 	// Transform to LLM-compatible messages, then serialize to text
 	// Serialization prevents the model from treating it as a conversation to continue
-	const llmMessages = convertToLlm(messages);
+	const llmMessages = (options.convertToLlm ?? convertToLlm)(messages);
 	const conversationText = serializeConversation(llmMessages);
 
 	// Build prompt

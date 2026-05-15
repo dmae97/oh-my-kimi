@@ -1,10 +1,10 @@
+import type { CompactionSettings } from "@oh-my-pi/pi-agent-core/compaction";
+import { effectiveReserveTokens, estimateTokens, resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { countTokens } from "@oh-my-pi/pi-natives";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import type { Skill } from "../../extensibility/skills";
 import type { AgentSession } from "../../session/agent-session";
-import type { CompactionSettings } from "../../session/compaction";
-import { effectiveReserveTokens, estimateTokens, resolveThresholdTokens } from "../../session/compaction";
 import type { Tool } from "../../tools";
 import type { theme as Theme } from "../theme/theme";
 

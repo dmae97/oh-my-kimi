@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildOpenAiNativeHistory, requestOpenAiRemoteCompaction } from "@oh-my-pi/pi-ai/remote-compaction";
+import { buildOpenAiNativeHistory, requestOpenAiRemoteCompaction } from "@oh-my-pi/pi-agent-core/compaction/openai";
 import type { AssistantMessage, Model, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { hookFetch } from "@oh-my-pi/pi-utils";
 
@@ -105,21 +105,47 @@ describe("buildOpenAiNativeHistory custom tool calls", () => {
 	});
 });
 
+describe("remote compaction input trimming", () => {
+	test("trims custom tool outputs with their matching custom calls", async () => {
+		let requestInput: Array<Record<string, unknown>> | undefined;
+		using _hook = hookFetch(async (_input, init) => {
+			const body = JSON.parse(String(init?.body)) as { input: Array<Record<string, unknown>> };
+			requestInput = body.input;
+			return Response.json({
+				output: [{ type: "compaction_summary", summary: "compact" }],
+			});
+		});
+
+		await requestOpenAiRemoteCompaction(
+			makeOpenAiModel({ contextWindow: 1 }),
+			"test-key",
+			[
+				{ type: "custom_tool_call", call_id: "call_apply_1", name: "apply_patch", input: "x".repeat(10_000) },
+				{ type: "custom_tool_call_output", call_id: "call_apply_1", output: "patch applied".repeat(1_000) },
+			],
+			"compact",
+		);
+
+		expect(requestInput?.some(item => item.type === "custom_tool_call")).toBe(false);
+		expect(requestInput?.some(item => item.type === "custom_tool_call_output")).toBe(false);
+	});
+});
+
 describe("requestOpenAiRemoteCompaction abort", () => {
 	test("rejects when the abort signal is aborted mid-fetch", async () => {
 		const controller = new AbortController();
 		using _hook = hookFetch((_input, init) => {
 			// Honor the provided abort signal: hang until aborted, then reject.
 			const signal = init?.signal as AbortSignal | undefined;
-			return new Promise<Response>((_resolve, reject) => {
-				if (signal?.aborted) {
-					reject(signal.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError"));
-					return;
-				}
-				signal?.addEventListener("abort", () => {
-					reject(signal.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError"));
-				});
+			const { promise, reject } = Promise.withResolvers<Response>();
+			if (signal?.aborted) {
+				reject(signal.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError"));
+				return promise;
+			}
+			signal?.addEventListener("abort", () => {
+				reject(signal.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError"));
 			});
+			return promise;
 		});
 
 		const promise = requestOpenAiRemoteCompaction(

@@ -59,7 +59,7 @@ The returned tool result is not the final rewind. `AgentSession` waits until `tu
   - Session files are named `<ISO-timestamp-with-:-and-.-replaced>_<uuidv7>.jsonl` in the session directory; default directory selection is documented in `SessionManager.create()` as `~/.omp/agent/sessions/<encoded-cwd>/` when no override is passed.
 - User-visible prompts / interactive UI
   - The tool result itself is visible.
-  - The persisted `branch_summary` becomes an LLM-visible `branchSummary` message when context is rebuilt from `SessionManager.buildSessionContext()`; `messages.ts` renders it as a user-role text message using `prompts/compaction/branch-summary-context.md`.
+  - The persisted `branch_summary` becomes an LLM-visible `branchSummary` message when context is rebuilt from `SessionManager.buildSessionContext()`; `messages.ts` renders it as a user-role text message using `packages/agent/src/compaction/prompts/branch-summary-context.md`.
   - The persisted `rewind-report` custom message also participates in rebuilt LLM context because `custom_message` entries are converted through `createCustomMessage()`.
 - Background work / cancellation
   - Rewind application is deferred to `turn_end`. There is no separate job object or cancel handle.

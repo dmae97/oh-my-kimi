@@ -1,10 +1,11 @@
 /**
  * Tool output pruning utilities for compaction.
  */
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+
 import type { ToolResultMessage } from "@oh-my-pi/pi-ai";
-import type { SessionEntry, SessionMessageEntry } from "../session-manager";
+import type { AgentMessage } from "../types";
 import { estimateTokens } from "./compaction";
+import type { SessionEntry, SessionMessageEntry } from "./entries";
 
 export interface PruneConfig {
 	/** Keep the most recent tool output tokens intact. */

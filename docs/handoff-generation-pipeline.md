@@ -22,6 +22,7 @@ Does not cover:
 - [`../src/modes/controllers/input-controller.ts`](../packages/coding-agent/src/modes/controllers/input-controller.ts)
 - [`../src/modes/controllers/command-controller.ts`](../packages/coding-agent/src/modes/controllers/command-controller.ts)
 - [`../src/session/agent-session.ts`](../packages/coding-agent/src/session/agent-session.ts)
+- [`packages/agent/src/compaction/handoff.ts`](../packages/agent/src/compaction/handoff.ts)
 - [`../src/session/session-manager.ts`](../packages/coding-agent/src/session/session-manager.ts)
 - [`../src/extensibility/slash-commands.ts`](../packages/coding-agent/src/extensibility/slash-commands.ts)
 
@@ -45,7 +46,7 @@ The same minimum-content guard exists again inside `AgentSession.handoff()` and 
 - Reads current branch entries (`sessionManager.getBranch()`)
 - Validates minimum message count (`>= 2`)
 - Creates `#handoffAbortController`
-- Renders the fixed prompt template `prompts/system/handoff-document.md` with optional `additionalFocus`
+- Renders the fixed prompt template `packages/agent/src/compaction/prompts/handoff-document.md` via `renderHandoffPrompt(...)` with optional `additionalFocus`
 - Appends `Additional focus: ...` if custom instructions are provided
 
 Prompt is sent as an agent-authored developer message via:
@@ -67,7 +68,7 @@ Because handoff bypasses `prompt(...)`, normal slash/prompt-template expansion i
 
 Before sending prompt, `handoff()` subscribes to session events and waits for `agent_end`.
 
-On `agent_end`, it extracts handoff text from agent state by scanning backward for the most recent `assistant` message, then concatenating all `content` blocks where `type === "text"` with `\n`.
+On `agent_end`, it calls `extractHandoffDocument(...)`, which scans agent state backward for the most recent `assistant` message, then concatenates all `content` blocks where `type === "text"` with `\n`.
 
 Important extraction assumptions:
 
@@ -100,7 +101,7 @@ If text was captured and not aborted:
 
 ### 5) Handoff-context injection
 
-The generated handoff document is wrapped and appended to the new session as a `custom_message` entry:
+The generated handoff document is wrapped by `createHandoffContext(...)` and appended to the new session as a `custom_message` entry:
 
 ```text
 <handoff-context>

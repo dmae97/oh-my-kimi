@@ -9,15 +9,17 @@ Both are persisted as session entries and converted back into user-context messa
 
 ## Key implementation files
 
-- `src/session/compaction/compaction.ts`
-- `src/session/compaction/branch-summarization.ts`
-- `src/session/compaction/pruning.ts`
-- `src/session/compaction/utils.ts`
-- `src/session/session-manager.ts`
-- `src/session/agent-session.ts`
-- `src/session/messages.ts`
-- `src/extensibility/hooks/types.ts`
-- `src/config/settings-schema.ts`
+- `packages/agent/src/compaction/compaction.ts`
+- `packages/agent/src/compaction/branch-summarization.ts`
+- `packages/agent/src/compaction/pruning.ts`
+- `packages/agent/src/compaction/utils.ts`
+- `packages/agent/src/compaction/openai.ts`
+- `packages/agent/src/compaction/handoff.ts`
+- `packages/coding-agent/src/session/session-manager.ts`
+- `packages/coding-agent/src/session/agent-session.ts`
+- `packages/coding-agent/src/session/messages.ts`
+- `packages/coding-agent/src/extensibility/hooks/types.ts`
+- `packages/coding-agent/src/config/settings-schema.ts`
 
 ## Session entry model
 
@@ -44,8 +46,9 @@ When context is rebuilt (`buildSessionContext`):
 
 Those custom roles are then transformed into LLM-facing user messages in `convertToLlm()` using the static templates:
 
-- `prompts/compaction/compaction-summary-context.md`
-- `prompts/compaction/branch-summary-context.md`
+- `packages/agent/src/compaction/prompts/compaction-summary-context.md`
+- `packages/agent/src/compaction/prompts/branch-summary-context.md`
+- `packages/agent/src/compaction/prompts/handoff-document.md`
 
 ## Compaction pipeline
 

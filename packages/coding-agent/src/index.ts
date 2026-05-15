@@ -43,8 +43,6 @@ export * from "./sdk";
 export * from "./session/agent-session";
 // Auth and model registry
 export * from "./session/auth-storage";
-// Compaction
-export * from "./session/compaction";
 export * from "./session/messages";
 export * from "./session/session-dump-format";
 export * from "./session/session-manager";

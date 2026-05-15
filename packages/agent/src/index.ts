@@ -2,6 +2,8 @@
 export * from "./agent";
 // Loop functions
 export * from "./agent-loop";
+// Compaction
+export * from "./compaction";
 export * from "./harmony-leak";
 // Proxy utilities
 export * from "./proxy";

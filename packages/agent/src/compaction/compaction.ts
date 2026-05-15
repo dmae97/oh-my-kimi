@@ -4,29 +4,32 @@
  * Pure functions for compaction logic. The session manager handles I/O,
  * and after compaction the session is reloaded.
  */
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+
 import {
 	type AssistantMessage,
-	buildOpenAiNativeHistory,
 	completeSimple,
 	Effort,
-	getPreservedOpenAiRemoteCompactionData,
 	type MessageAttribution,
 	type Model,
-	requestOpenAiRemoteCompaction,
-	requestRemoteCompaction,
-	shouldUseOpenAiRemoteCompaction,
 	type Usage,
-	withOpenAiRemoteCompactionPreserveData,
 } from "@oh-my-pi/pi-ai";
 import { countTokens } from "@oh-my-pi/pi-natives";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
-import compactionShortSummaryPrompt from "../../prompts/compaction/compaction-short-summary.md" with { type: "text" };
-import compactionSummaryPrompt from "../../prompts/compaction/compaction-summary.md" with { type: "text" };
-import compactionTurnPrefixPrompt from "../../prompts/compaction/compaction-turn-prefix.md" with { type: "text" };
-import compactionUpdateSummaryPrompt from "../../prompts/compaction/compaction-update-summary.md" with { type: "text" };
-import { convertToLlm, createBranchSummaryMessage, createCustomMessage } from "../../session/messages";
-import type { CompactionEntry, SessionEntry } from "../../session/session-manager";
+import type { AgentMessage } from "../types";
+import type { CompactionEntry, SessionEntry } from "./entries";
+import { type ConvertToLlm, convertToLlm, createBranchSummaryMessage, createCustomMessage } from "./messages";
+import {
+	buildOpenAiNativeHistory,
+	getPreservedOpenAiRemoteCompactionData,
+	requestOpenAiRemoteCompaction,
+	requestRemoteCompaction,
+	shouldUseOpenAiRemoteCompaction,
+	withOpenAiRemoteCompactionPreserveData,
+} from "./openai";
+import compactionShortSummaryPrompt from "./prompts/compaction-short-summary.md" with { type: "text" };
+import compactionSummaryPrompt from "./prompts/compaction-summary.md" with { type: "text" };
+import compactionTurnPrefixPrompt from "./prompts/compaction-turn-prefix.md" with { type: "text" };
+import compactionUpdateSummaryPrompt from "./prompts/compaction-update-summary.md" with { type: "text" };
 
 import {
 	computeFileLists,
@@ -247,6 +250,12 @@ const IMAGE_TOKEN_ESTIMATE = 1200;
 export function estimateTokens(message: AgentMessage): number {
 	const fragments: string[] = [];
 	let extra = 0;
+	if ((message as { role?: string }).role === "bashExecution") {
+		const bash = message as { command?: unknown; output?: unknown };
+		if (typeof bash.command === "string") fragments.push(bash.command);
+		if (typeof bash.output === "string") fragments.push(bash.output);
+		return fragments.length === 0 ? 0 : countTokens(fragments);
+	}
 
 	switch (message.role) {
 		case "user": {
@@ -291,11 +300,6 @@ export function estimateTokens(message: AgentMessage): number {
 			}
 			break;
 		}
-		case "bashExecution": {
-			fragments.push(message.command);
-			fragments.push(message.output);
-			break;
-		}
 		case "branchSummary":
 		case "compactionSummary": {
 			fragments.push(message.summary);
@@ -333,7 +337,7 @@ function findValidCutPoints(entries: SessionEntry[], startIndex: number, endInde
 		const entry = entries[i];
 		switch (entry.type) {
 			case "message": {
-				const role = entry.message.role;
+				const role = entry.message.role as string;
 				switch (role) {
 					case "bashExecution":
 					case "hookMessage":
@@ -377,7 +381,7 @@ export function findTurnStartIndex(entries: SessionEntry[], entryIndex: number, 
 			return i;
 		}
 		if (entry.type === "message") {
-			const role = entry.message.role;
+			const role = entry.message.role as string;
 			if (role === "user" || role === "bashExecution") {
 				return i;
 			}
@@ -502,6 +506,7 @@ export interface SummaryOptions {
 	remoteInstructions?: string;
 	initiatorOverride?: MessageAttribution;
 	metadata?: Record<string, unknown>;
+	convertToLlm?: ConvertToLlm;
 }
 
 export async function generateSummary(
@@ -526,8 +531,8 @@ export async function generateSummary(
 	}
 
 	// Serialize conversation to text so model doesn't try to continue it
-	// Convert to LLM messages first (handles custom types like bashExecution, hookMessage, etc.)
-	const llmMessages = convertToLlm(currentMessages);
+	// Convert to LLM messages first (handles custom app messages when caller provides a transformer).
+	const llmMessages = (options?.convertToLlm ?? convertToLlm)(currentMessages);
 	const conversationText = serializeConversation(llmMessages);
 
 	// Build the prompt with conversation wrapped in tags
@@ -593,7 +598,7 @@ async function generateShortSummary(
 	options?: SummaryOptions,
 ): Promise<string> {
 	const maxTokens = Math.min(512, Math.floor(0.2 * reserveTokens));
-	const llmMessages = convertToLlm(recentMessages);
+	const llmMessages = (options?.convertToLlm ?? convertToLlm)(recentMessages);
 	const conversationText = serializeConversation(llmMessages);
 
 	let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
@@ -809,6 +814,7 @@ export async function compact(
 		remoteInstructions: options?.remoteInstructions,
 		initiatorOverride: options?.initiatorOverride,
 		metadata: options?.metadata,
+		convertToLlm: options?.convertToLlm,
 	};
 
 	let preserveData = withOpenAiRemoteCompactionPreserveData(previousPreserveData, undefined);
@@ -819,7 +825,11 @@ export async function compact(
 			previousRemoteCompaction?.provider === model.provider
 				? previousRemoteCompaction.replacementHistory
 				: undefined;
-		const remoteHistory = buildOpenAiNativeHistory(convertToLlm(remoteMessages), model, previousReplacementHistory);
+		const remoteHistory = buildOpenAiNativeHistory(
+			(summaryOptions.convertToLlm ?? convertToLlm)(remoteMessages),
+			model,
+			previousReplacementHistory,
+		);
 		if (remoteHistory.length > 0) {
 			try {
 				const remote = await requestOpenAiRemoteCompaction(
@@ -858,15 +868,7 @@ export async function compact(
 						summaryOptions,
 					)
 				: Promise.resolve("No prior history."),
-			generateTurnPrefixSummary(
-				turnPrefixMessages,
-				model,
-				settings.reserveTokens,
-				apiKey,
-				signal,
-				summaryOptions.initiatorOverride,
-				summaryOptions.metadata,
-			),
+			generateTurnPrefixSummary(turnPrefixMessages, model, settings.reserveTokens, apiKey, signal, summaryOptions),
 		]);
 		// Merge into single summary
 		summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
@@ -932,12 +934,11 @@ async function generateTurnPrefixSummary(
 	reserveTokens: number,
 	apiKey: string,
 	signal?: AbortSignal,
-	initiatorOverride?: MessageAttribution,
-	metadata?: Record<string, unknown>,
+	options?: SummaryOptions,
 ): Promise<string> {
 	const maxTokens = Math.floor(0.5 * reserveTokens); // Smaller budget for turn prefix
 
-	const llmMessages = convertToLlm(messages);
+	const llmMessages = (options?.convertToLlm ?? convertToLlm)(messages);
 	const conversationText = serializeConversation(llmMessages);
 	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
 	const summarizationMessages = [
@@ -951,7 +952,14 @@ async function generateTurnPrefixSummary(
 	const response = await completeSimple(
 		model,
 		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
-		{ maxTokens, signal, apiKey, reasoning: Effort.High, initiatorOverride, metadata },
+		{
+			maxTokens,
+			signal,
+			apiKey,
+			reasoning: Effort.High,
+			initiatorOverride: options?.initiatorOverride,
+			metadata: options?.metadata,
+		},
 	);
 
 	if (response.stopReason === "error") {

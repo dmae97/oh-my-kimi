@@ -5,11 +5,11 @@
  * Responses and events are emitted as JSON lines on stdout.
  */
 import type { AgentMessage, AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Effort, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { SessionStats } from "../../session/agent-session";
-import type { CompactionResult } from "../../session/compaction";
 import type { TodoPhase } from "../../tools/todo-write";
 
 // ============================================================================

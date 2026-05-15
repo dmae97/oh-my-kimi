@@ -26,6 +26,28 @@ import {
 	type AgentTool,
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
+import {
+	AUTO_HANDOFF_THRESHOLD_FOCUS,
+	CompactionCancelledError,
+	type CompactionPreparation,
+	type CompactionResult,
+	calculateContextTokens,
+	calculatePromptTokens,
+	collectEntriesForBranchSummary,
+	compact,
+	createHandoffContext,
+	createHandoffFileName,
+	estimateTokens,
+	extractHandoffDocument,
+	generateBranchSummary,
+	type HandoffOptions,
+	type HandoffResult,
+	prepareCompaction,
+	renderHandoffPrompt,
+	type SummaryOptions,
+	shouldCompact,
+} from "@oh-my-pi/pi-agent-core/compaction";
+import { DEFAULT_PRUNE_CONFIG, pruneToolOutputs } from "@oh-my-pi/pi-agent-core/compaction/pruning";
 import type {
 	AssistantMessage,
 	Context,
@@ -126,9 +148,7 @@ import { resolveMemoryBackend } from "../memory-backend";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import type { PlanModeState } from "../plan-mode/state";
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
-import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
-import handoffDocumentPrompt from "../prompts/system/handoff-document.md" with { type: "text" };
 import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
@@ -160,21 +180,6 @@ import { extractFileMentions, generateFileMentionMessages } from "../utils/file-
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { AuthStorage } from "./auth-storage";
 import type { ClientBridge, ClientBridgePermissionOption, ClientBridgePermissionOutcome } from "./client-bridge";
-import {
-	CompactionCancelledError,
-	type CompactionPreparation,
-	type CompactionResult,
-	calculateContextTokens,
-	calculatePromptTokens,
-	collectEntriesForBranchSummary,
-	compact,
-	estimateTokens,
-	generateBranchSummary,
-	prepareCompaction,
-	type SummaryOptions,
-	shouldCompact,
-} from "./compaction";
-import { DEFAULT_PRUNE_CONFIG, pruneToolOutputs } from "./compaction/pruning";
 import {
 	type BashExecutionMessage,
 	type CompactionSummaryMessage,
@@ -369,25 +374,12 @@ export interface SessionStats {
 	cost: number;
 }
 
-/** Result from handoff() */
-export interface HandoffResult {
-	document: string;
-	savedPath?: string;
-}
-
-interface HandoffOptions {
-	autoTriggered?: boolean;
-	signal?: AbortSignal;
-}
-
 /** Internal marker for hook messages queued through the agent loop */
 // ============================================================================
 // Constants
 // ============================================================================
 
 /** Standard thinking levels */
-
-const AUTO_HANDOFF_THRESHOLD_FOCUS = prompt.render(autoHandoffThresholdFocusPrompt);
 
 type RetryFallbackChains = Record<string, string[]>;
 
@@ -4999,6 +4991,7 @@ export class AgentSession {
 							promptOverride: compactionPrep.hookPrompt,
 							extraContext: compactionPrep.hookContext,
 							remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
+							convertToLlm,
 						},
 					);
 					summary = result.summary;
@@ -5175,9 +5168,7 @@ export class AgentSession {
 		}
 
 		// Build the handoff prompt
-		const handoffPrompt = prompt.render(handoffDocumentPrompt, {
-			additionalFocus: customInstructions,
-		});
+		const handoffPrompt = renderHandoffPrompt(customInstructions);
 
 		// Create a promise that resolves when the agent completes
 		let handoffText: string | undefined;
@@ -5198,21 +5189,7 @@ export class AgentSession {
 			if (event.type === "agent_end") {
 				unsubscribe?.();
 				handoffSignal.removeEventListener("abort", onCompletionAbort);
-				// Extract text from the last assistant message
-				const messages = this.agent.state.messages;
-				for (let i = messages.length - 1; i >= 0; i--) {
-					const msg = messages[i];
-					if (msg.role === "assistant") {
-						const content = (msg as AssistantMessage).content;
-						const textParts = content
-							.filter((c): c is { type: "text"; text: string } => c.type === "text")
-							.map(c => c.text);
-						if (textParts.length > 0) {
-							handoffText = textParts.join("\n");
-							break;
-						}
-					}
-				}
+				handoffText = extractHandoffDocument(this.agent.state.messages);
 				resolveCompletion();
 			}
 		});
@@ -5261,15 +5238,14 @@ export class AgentSession {
 			this.#todoReminderCount = 0;
 
 			// Inject the handoff document as a custom message
-			const handoffContent = `<handoff-context>\n${handoffText}\n</handoff-context>\n\nThe above is a handoff document from a previous session. Use this context to continue the work seamlessly.`;
+			const handoffContent = createHandoffContext(handoffText);
 			this.sessionManager.appendCustomMessageEntry("handoff", handoffContent, true, undefined, "agent");
 			await this.sessionManager.ensureOnDisk();
 			let savedPath: string | undefined;
 			if (options?.autoTriggered && this.settings.get("compaction.handoffSaveToDisk")) {
 				const artifactsDir = this.sessionManager.getArtifactsDir();
 				if (artifactsDir) {
-					const fileTimestamp = new Date().toISOString().replace(/[:.]/g, "-");
-					const handoffFilePath = path.join(artifactsDir, `handoff-${fileTimestamp}.md`);
+					const handoffFilePath = path.join(artifactsDir, createHandoffFileName());
 					try {
 						await Bun.write(handoffFilePath, `${handoffText}\n`);
 						savedPath = handoffFilePath;
@@ -5954,6 +5930,7 @@ export class AgentSession {
 				return await compact(preparation, candidate, apiKey, customInstructions, signal, {
 					...options,
 					metadata: this.agent.metadataForProvider(candidate.provider),
+					convertToLlm,
 				});
 			} catch (error) {
 				if (!this.#isCompactionAuthFailure(error)) {
@@ -6206,6 +6183,7 @@ export class AgentSession {
 								remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
 								metadata: this.agent.metadataForProvider(candidate.provider),
 								initiatorOverride: "agent",
+								convertToLlm,
 							});
 							break;
 						} catch (error) {
@@ -7809,6 +7787,7 @@ export class AgentSession {
 				customInstructions: options.customInstructions,
 				reserveTokens: branchSummarySettings.reserveTokens,
 				metadata: this.agent.metadataForProvider(model.provider),
+				convertToLlm,
 			});
 			this.#branchSummaryAbortController = undefined;
 			if (result.aborted) {

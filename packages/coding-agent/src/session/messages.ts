@@ -5,23 +5,30 @@
  * and provides a transformer to convert them to LLM-compatible messages.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import {
+	type BranchSummaryMessage,
+	type CompactionSummaryMessage,
+	renderBranchSummaryContext,
+	renderCompactionSummaryContext,
+} from "@oh-my-pi/pi-agent-core/compaction/messages";
 import type {
 	AssistantMessage,
 	ImageContent,
 	Message,
 	MessageAttribution,
-	ProviderPayload,
 	TextContent,
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
-import { prompt } from "@oh-my-pi/pi-utils";
-import branchSummaryContextPrompt from "../prompts/compaction/branch-summary-context.md" with { type: "text" };
-import compactionSummaryContextPrompt from "../prompts/compaction/compaction-summary-context.md" with { type: "text" };
+
+export {
+	type BranchSummaryMessage,
+	type CompactionSummaryMessage,
+	createBranchSummaryMessage,
+	createCompactionSummaryMessage,
+} from "@oh-my-pi/pi-agent-core/compaction/messages";
+
 import type { OutputMeta } from "../tools/output-meta";
 import { formatOutputNotice } from "../tools/output-meta";
-
-const COMPACTION_SUMMARY_TEMPLATE = compactionSummaryContextPrompt;
-const BRANCH_SUMMARY_TEMPLATE = branchSummaryContextPrompt;
 
 export const SKILL_PROMPT_MESSAGE_TYPE = "skill-prompt";
 
@@ -168,22 +175,6 @@ export interface HookMessage<T = unknown> {
 	timestamp: number;
 }
 
-export interface BranchSummaryMessage {
-	role: "branchSummary";
-	summary: string;
-	fromId: string;
-	timestamp: number;
-}
-
-export interface CompactionSummaryMessage {
-	role: "compactionSummary";
-	summary: string;
-	shortSummary?: string;
-	tokensBefore: number;
-	providerPayload?: ProviderPayload;
-	timestamp: number;
-}
-
 /**
  * Message type for auto-read file mentions via @filepath syntax.
  */
@@ -252,32 +243,6 @@ export function pythonExecutionToText(msg: PythonExecutionMessage): string {
 	}
 	text += formatOutputNotice(msg.meta);
 	return text;
-}
-
-export function createBranchSummaryMessage(summary: string, fromId: string, timestamp: string): BranchSummaryMessage {
-	return {
-		role: "branchSummary",
-		summary,
-		fromId,
-		timestamp: new Date(timestamp).getTime(),
-	};
-}
-
-export function createCompactionSummaryMessage(
-	summary: string,
-	tokensBefore: number,
-	timestamp: string,
-	shortSummary?: string,
-	providerPayload?: ProviderPayload,
-): CompactionSummaryMessage {
-	return {
-		role: "compactionSummary",
-		summary,
-		shortSummary,
-		tokensBefore,
-		providerPayload,
-		timestamp: new Date(timestamp).getTime(),
-	};
 }
 
 export function sanitizeRehydratedOpenAIResponsesAssistantMessage(message: AssistantMessage): AssistantMessage {
@@ -376,7 +341,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 						content: [
 							{
 								type: "text" as const,
-								text: prompt.render(BRANCH_SUMMARY_TEMPLATE, { summary: m.summary }),
+								text: renderBranchSummaryContext(m.summary),
 							},
 						],
 						attribution: "agent",
@@ -388,7 +353,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 						content: [
 							{
 								type: "text" as const,
-								text: prompt.render(COMPACTION_SUMMARY_TEMPLATE, { summary: m.summary }),
+								text: renderCompactionSummaryContext(m.summary),
 							},
 						],
 						attribution: "agent",

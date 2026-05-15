@@ -1,11 +1,12 @@
 /**
  * Shared utilities for compaction and branch summarization.
  */
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+
 import type { Message } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
-import fileOperationsTemplate from "../../prompts/system/file-operations.md" with { type: "text" };
-import summarizationSystemPrompt from "../../prompts/system/summarization-system.md" with { type: "text" };
+import type { AgentMessage } from "../types";
+import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
+import summarizationSystemPrompt from "./prompts/summarization-system.md" with { type: "text" };
 
 // ============================================================================
 // File Operation Tracking

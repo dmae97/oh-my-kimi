@@ -14,9 +14,6 @@
 - Added `streamMock` and `registerMockApi` so mock responses can be consumed through `stream()` and the global custom API registry without an external model backend
 - Added async/sync response scripting with optional context-based handlers, and new `push()`/`reset()` controls to drive multi-turn mock interactions and inspect per-call invocation state
 - Added support in mock responses for simulating tool calls, usage metadata, custom stop reasons, delayed emissions, and terminal error/aborted outcomes
-- Added `requestOpenAiRemoteCompaction` and `shouldUseOpenAiRemoteCompaction` to call OpenAI-compatible `/responses/compact` endpoints, with replacement-history and preserve-data handling for remote compaction flows
-- Added `buildOpenAiNativeHistory`, `getPreservedOpenAiRemoteCompactionData`, and `withOpenAiRemoteCompactionPreserveData` to construct OpenAI-native compaction payloads and persist compaction context across turns
-- Added generic `requestRemoteCompaction` for POSTing `{systemPrompt,prompt}` to self-hosted compaction endpoints and retrieving `{summary, shortSummary}` responses
 
 ### Changed
 
@@ -43,8 +40,6 @@
 - Fixed recursive `$ref` schemas being treated as universally valid: the validator previously short-circuited on the second occurrence of any ref it had already seen, so nested values violating the referenced sub-schema passed. Cycle detection now keys on (ref, value-identity) pairs with a depth cap for primitive values, so genuine sub-tree violations are still caught.
 - Fixed JSON Schema meta-validator accepting malformed `if`/`then`/`else` and `dependencies` keywords; each conditional sub-schema is now structurally validated and draft-07 `dependencies` accepts either a schema or a string array of dependent keys.
 - Fixed Zod-emitted wire schemas dropping null-valued unknown root fields before `preserveUnknownRootFields` could snapshot them, so callers like `task.simple` no longer lose a `schema: null` argument and downstream rejection paths fire as intended.
-- Fixed `buildOpenAiNativeHistory` to serialize freeform tool calls (e.g. `apply_patch`) as `custom_tool_call` / `custom_tool_call_output` items matching the live Responses provider, instead of demoting them to `function_call` and breaking remote-compaction replay
-- Threaded an `AbortSignal` through `requestOpenAiRemoteCompaction` and `requestRemoteCompaction` so canceled compaction requests no longer keep the underlying `fetch` alive
 - Fixed mock provider partial `Usage` to recompute `totalTokens` (and `cost.total` when cost components are supplied) when omitted, instead of reporting 0
 - Fixed mock provider auto-generated tool-call IDs to use a per-instance counter (now reset by `reset()`), so test order no longer affects IDs across `createMockModel()` instances
 
