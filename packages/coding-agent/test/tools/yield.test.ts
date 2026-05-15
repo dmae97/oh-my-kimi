@@ -441,4 +441,25 @@ describe("YieldTool", () => {
 			error: undefined,
 		});
 	});
+
+	it("does not treat literal $ref fields inside enum values as unresolved schema references", async () => {
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					enum: [{ $ref: "literal" }],
+				},
+			}),
+		);
+
+		expect(tool.strict).toBe(true);
+		const result = await tool.execute("call-literal-ref-enum", {
+			result: { data: { $ref: "literal" } },
+		} as never);
+		expect(result.details?.data).toEqual({ $ref: "literal" });
+		await expect(
+			tool.execute("call-invalid-literal-ref-enum", {
+				result: { data: { $ref: "different" } },
+			} as never),
+		).rejects.toThrow("Output does not match schema");
+	});
 });

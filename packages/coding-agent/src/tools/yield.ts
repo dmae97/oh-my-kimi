@@ -63,6 +63,7 @@ function hasUnresolvedRefs(schema: unknown): boolean {
 	const record = schema as Record<string, unknown>;
 	if (typeof record.$ref === "string") return true;
 	for (const key in record) {
+		if (key === "const" || key === "default" || key === "enum" || key === "examples") continue;
 		if (hasUnresolvedRefs(record[key])) return true;
 	}
 	return false;
