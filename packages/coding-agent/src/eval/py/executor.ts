@@ -339,9 +339,19 @@ async function runQueued<T>(
 // ---------------------------------------------------------------------------
 
 export async function disposeAllKernelSessions(): Promise<void> {
-	const all = [...sessions.values()];
-	sessions.clear();
-	await Promise.allSettled(all.map(session => session.kernel.shutdown().catch(() => undefined)));
+	const all = [...sessions.entries()];
+	const results = await Promise.allSettled(all.map(([, session]) => session.kernel.shutdown()));
+	for (let i = 0; i < all.length; i += 1) {
+		const [id, session] = all[i];
+		const result = results[i];
+		if (result.status === "fulfilled" && result.value?.confirmed !== false) {
+			if (sessions.get(id) === session) sessions.delete(id);
+			continue;
+		}
+		const reason = result.status === "rejected" ? result.reason : "not confirmed";
+		logger.warn("Python kernel shutdown not confirmed", { sessionId: id, reason });
+		if (!sessions.has(id)) sessions.set(id, session);
+	}
 }
 
 export async function disposeKernelSessionsByOwner(ownerId: string): Promise<void> {
@@ -353,7 +363,15 @@ export async function disposeKernelSessionsByOwner(ownerId: string): Promise<voi
 	for (const session of toShutdown) {
 		if (sessions.get(session.sessionId) === session) sessions.delete(session.sessionId);
 	}
-	await Promise.allSettled(toShutdown.map(session => session.kernel.shutdown().catch(() => undefined)));
+	const results = await Promise.allSettled(toShutdown.map(session => session.kernel.shutdown()));
+	for (let i = 0; i < toShutdown.length; i += 1) {
+		const session = toShutdown[i];
+		const result = results[i];
+		if (result.status === "fulfilled" && result.value?.confirmed !== false) continue;
+		const reason = result.status === "rejected" ? result.reason : "not confirmed";
+		logger.warn("Python kernel shutdown not confirmed", { sessionId: session.sessionId, reason });
+		if (!sessions.has(session.sessionId)) sessions.set(session.sessionId, session);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -491,6 +509,9 @@ async function executeOnSession(code: string, cwd: string, options: PythonExecut
 		if (options.signal?.aborted) {
 			throw new PythonExecutionCancelledError(isTimedOutCancellation(options.signal.reason, options.signal));
 		}
+		if (sessions.get(session.sessionId) !== session) {
+			throw new PythonExecutionCancelledError(false);
+		}
 		if (!session.kernel.isAlive()) {
 			await replaceSessionKernel(session, cwd, options);
 		}
@@ -499,6 +520,9 @@ async function executeOnSession(code: string, cwd: string, options: PythonExecut
 		} catch (err) {
 			if (isCancellationError(err) || options.signal?.aborted) throw err;
 			if (session.kernel.isAlive()) throw err;
+			if (sessions.get(session.sessionId) !== session) {
+				throw new PythonExecutionCancelledError(false);
+			}
 			// Kernel died during execute. Replace it and retry once on a fresh one.
 			await replaceSessionKernel(session, cwd, options);
 			return await executeWithKernel(session.kernel, code, options);
