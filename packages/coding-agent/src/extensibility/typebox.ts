@@ -93,7 +93,10 @@ interface ArrayOpts extends Meta {
 }
 
 interface ObjectOpts extends Meta {
-	/** When false (TypeBox default), forbid extra keys. When true, allow any. */
+	/**
+	 * TypeBox default: extra keys are preserved. Set `false` to reject unknowns,
+	 * `true` to allow any, or a schema to validate them.
+	 */
 	additionalProperties?: boolean | ZodType;
 }
 
@@ -154,12 +157,13 @@ function tString(opts?: StringOpts): ZodType {
 			default:
 				break;
 		}
-		// All TypeBox string formats are still ZodString subclasses, so .min/.max/.regex apply.
-		if (s instanceof z.ZodString) {
-			if (typeof opts.minLength === "number") s = s.min(opts.minLength);
-			if (typeof opts.maxLength === "number") s = (s as z.ZodString).max(opts.maxLength);
-			if (typeof opts.pattern === "string") s = (s as z.ZodString).regex(new RegExp(opts.pattern));
-		}
+		// Length/pattern constraints live on the `_ZodString` base that every
+		// format-specific schema (ZodEmail, ZodURL, ZodISODateTime, ...) extends,
+		// so we apply them regardless of which concrete subclass `s` ended up as.
+		const sf = s as z.ZodString;
+		if (typeof opts.minLength === "number") s = sf.min(opts.minLength);
+		if (typeof opts.maxLength === "number") s = (s as z.ZodString).max(opts.maxLength);
+		if (typeof opts.pattern === "string") s = (s as z.ZodString).regex(new RegExp(opts.pattern));
 	}
 	return withMeta(s, opts);
 }
@@ -292,14 +296,14 @@ function tObject<P extends ZodRawShape>(properties: P, opts?: ObjectOpts): ZodOb
 	// so `Type.Optional(...)` flows through unchanged (Zod treats `.optional()`
 	// and `Type.Optional`-style wrappers identically).
 	let obj = z.object(properties);
-	if (opts && opts.additionalProperties !== undefined) {
-		if (opts.additionalProperties === false) {
-			obj = obj.strict() as unknown as ZodObject<P>;
-		} else if (opts.additionalProperties === true) {
-			obj = obj.catchall(z.any()) as unknown as ZodObject<P>;
-		} else {
-			obj = obj.catchall(opts.additionalProperties) as unknown as ZodObject<P>;
-		}
+	const ap = opts?.additionalProperties;
+	if (ap === false) {
+		obj = obj.strict() as unknown as ZodObject<P>;
+	} else if (ap === undefined || ap === true) {
+		// TypeBox preserves unknown keys by default; Zod's default is `.strip()`.
+		obj = obj.loose() as unknown as ZodObject<P>;
+	} else {
+		obj = obj.catchall(ap) as unknown as ZodObject<P>;
 	}
 	return withMeta(obj, opts);
 }

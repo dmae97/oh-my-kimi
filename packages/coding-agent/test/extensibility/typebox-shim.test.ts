@@ -44,4 +44,28 @@ describe("pi.typebox compatibility shim", () => {
 		expect(schema.safeParse({ a: "a", b: "b", c: "c" }).success).toBe(true);
 		expect(schema.safeParse({ a: "a", b: "b" }).success).toBe(false);
 	});
+
+	it("applies minLength on top of a string format", () => {
+		const schema = Type.String({ format: "email", minLength: 20 });
+
+		expect(schema.safeParse("a@b.co").success).toBe(false);
+		expect(schema.safeParse("longer-address@example.com").success).toBe(true);
+	});
+
+	it("applies pattern on top of a url format", () => {
+		const schema = Type.String({ format: "url", pattern: "^https://" });
+
+		expect(schema.safeParse("http://example.com").success).toBe(false);
+		expect(schema.safeParse("https://example.com").success).toBe(true);
+	});
+
+	it("preserves unknown properties by default on Type.Object", () => {
+		const schema = Type.Object({ a: Type.String() });
+		const parsed = schema.safeParse({ a: "x", extra: 1 });
+
+		expect(parsed.success).toBe(true);
+		if (parsed.success) {
+			expect((parsed.data as { extra?: unknown }).extra).toBe(1);
+		}
+	});
 });

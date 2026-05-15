@@ -49,6 +49,8 @@
 - Fixed async-task progress consumer to copy `contextTokens` and `contextWindow` from the completed `SingleResult` onto `AgentProgress`, so UI gauges keep showing per-turn context after a backgrounded task finishes
 - Fixed the status-line `path` segment ignoring `stripWorkPrefix: false` when selecting the folder icon for scratch directories. The icon selection now respects the same gate as the scratch path stripping, so disabling `stripWorkPrefix` keeps the regular `folder` icon even when the project directory is inside a scratch root.
 - Fixed `YieldTool` constructor to fall back to the loose record schema when the session `outputSchema` contains unresolved `$ref` strings (e.g. external or cyclic references that survive dereferencing), instead of installing a validator that would reject every payload with an unresolved-reference error
+- Fixed `pi.typebox.Type.String` dropping `minLength`/`maxLength`/`pattern` constraints when a `format` (e.g. `email`, `url`, `uuid`) was also supplied; length and pattern checks are now applied to the format-specific schema instead of being gated on an `instanceof z.ZodString` check that never matched the format subclasses.
+- Fixed `pi.typebox.Type.Object` stripping unknown properties when constructed without explicit `additionalProperties`. TypeBox preserves extras by default, so the shim now installs `.loose()` for the omitted/`true` cases while keeping `.strict()` for `additionalProperties: false` and `.catchall(schema)` for a schema value.
 
 ## [15.0.2] - 2026-05-15
 
