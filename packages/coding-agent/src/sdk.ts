@@ -1428,6 +1428,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
+		const reloadSshTool = async (): Promise<AgentTool | null> => {
+			if (!requestedToolNameSet.has("ssh")) return null;
+			const sshTool = (await loadSshTool({
+				...toolSession,
+				cwd: sessionManager.getCwd(),
+			})) as unknown as AgentTool | null;
+			if (!sshTool) return null;
+			const wrapped = wrapToolWithMetaNotice(sshTool);
+			return (extensionRunner ? new ExtensionToolWrapper(wrapped, extensionRunner) : wrapped) as AgentTool;
+		};
+
 		let cursorEventEmitter: ((event: AgentEvent) => void) | undefined;
 		const cursorExecHandlers = new CursorExecHandlers({
 			cwd,
@@ -1532,6 +1543,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			(options.toolNames ? [...new Set(options.toolNames.map(name => name.toLowerCase()))] : undefined) ??
 			toolNamesFromRegistry;
 		const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
+		const requestedToolNameSet = new Set(normalizedRequested);
 		// Effective discovery mode: tools.discoveryMode takes precedence; mcp.discoveryMode is back-compat alias.
 		const toolsDiscoveryModeSetting = settings.get("tools.discoveryMode");
 		const effectiveDiscoveryMode: "off" | "mcp-only" | "all" =
@@ -1810,6 +1822,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			onResponse,
 			convertToLlm: convertToLlmFinal,
 			rebuildSystemPrompt,
+			reloadSshTool,
+			requestedToolNames: requestedToolNameSet,
 			getMcpServerInstructions: mcpManager
 				? () => {
 						const raw = mcpManager.getServerInstructions();

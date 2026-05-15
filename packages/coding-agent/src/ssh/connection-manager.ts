@@ -55,6 +55,16 @@ function getHostInfoPath(name: string): string {
 	return path.join(HOST_INFO_DIR, `${sanitizeHostName(name)}.json`);
 }
 
+async function deleteHostInfoFromDisk(hostName: string): Promise<void> {
+	const path = getHostInfoPath(hostName);
+	try {
+		await fs.promises.unlink(path);
+	} catch (err) {
+		if (isEnoent(err)) return;
+		logger.warn("Failed to delete SSH host info", { host: hostName, error: String(err) });
+	}
+}
+
 async function validateKeyPermissions(keyPath?: string): Promise<void> {
 	if (!keyPath) return;
 	let stats: fs.Stats;
@@ -429,6 +439,23 @@ export async function ensureConnection(host: SSHConnectionTarget): Promise<void>
 	}
 }
 
+export async function invalidateHostMetadata(hostNames: Iterable<string>): Promise<void> {
+	const names = [...hostNames];
+	for (const hostName of names) {
+		hostInfoCache.delete(hostName);
+		await deleteHostInfoFromDisk(hostName);
+	}
+	for (const hostName of names) {
+		const activeHost = activeHosts.get(hostName);
+		if (activeHost) {
+			await closeConnectionInternal(activeHost);
+			activeHosts.delete(hostName);
+			continue;
+		}
+		await closeConnectionInternal({ name: hostName, host: hostName });
+	}
+}
+
 async function closeConnectionInternal(host: SSHConnectionTarget): Promise<void> {
 	if (!supportsSshControlMaster()) return;
 	const target = buildSshTarget(host.username, host.host);
@@ -436,13 +463,7 @@ async function closeConnectionInternal(host: SSHConnectionTarget): Promise<void>
 }
 
 export async function closeConnection(hostName: string): Promise<void> {
-	const host = activeHosts.get(hostName);
-	if (!host) {
-		await closeConnectionInternal({ name: hostName, host: hostName });
-		return;
-	}
-	await closeConnectionInternal(host);
-	activeHosts.delete(hostName);
+	await invalidateHostMetadata([hostName]);
 }
 
 export async function closeAllConnections(): Promise<void> {

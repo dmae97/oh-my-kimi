@@ -29,6 +29,7 @@ interface FakeAcpBuiltinSession {
 	getTodoPhases(): Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
 	setTodoPhases(phases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }>): void;
 	refreshBaseSystemPrompt(): Promise<void>;
+	refreshSshTool(options?: { activateIfAvailable?: boolean }): Promise<void>;
 	getToolByName(name: string): unknown;
 	compact(args?: string): Promise<void>;
 	getContextUsage(): { tokens?: number; contextWindow: number } | undefined;
@@ -88,6 +89,7 @@ function createRuntime() {
 		getContextUsage: () => undefined,
 		getAvailableModels: () => [] as Array<{ provider: string; id: string; contextWindow?: number }>,
 		async setModel(_model: unknown) {},
+		async refreshSshTool(_options?: { activateIfAvailable?: boolean }) {},
 	};
 	const typedSession = session as unknown as AgentSession & FakeAcpBuiltinSession;
 	const fakeSessionManager = {

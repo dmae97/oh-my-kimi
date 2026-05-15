@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { buildRemoteCommand, supportsSshControlMaster } from "../../src/ssh/connection-manager";
+import * as connectionManager from "../../src/ssh/connection-manager";
 
 describe("buildRemoteCommand", () => {
 	it("includes -n and OpenSSH ControlMaster options on Unix-like platforms", async () => {
-		const args = await buildRemoteCommand(
+		const args = await connectionManager.buildRemoteCommand(
 			{
 				name: "host",
 				host: "192.168.3.146",
@@ -19,7 +19,7 @@ describe("buildRemoteCommand", () => {
 	});
 
 	it("omits OpenSSH ControlMaster options on Windows", async () => {
-		const args = await buildRemoteCommand(
+		const args = await connectionManager.buildRemoteCommand(
 			{
 				name: "host",
 				host: "192.168.3.146",
@@ -40,11 +40,11 @@ describe("buildRemoteCommand", () => {
 
 describe("supportsSshControlMaster", () => {
 	it("disables OpenSSH connection multiplexing on native Windows", () => {
-		expect(supportsSshControlMaster("win32")).toBe(false);
+		expect(connectionManager.supportsSshControlMaster("win32")).toBe(false);
 	});
 
 	it("keeps OpenSSH connection multiplexing on Unix-like platforms", () => {
-		expect(supportsSshControlMaster("linux")).toBe(true);
-		expect(supportsSshControlMaster("darwin")).toBe(true);
+		expect(connectionManager.supportsSshControlMaster("linux")).toBe(true);
+		expect(connectionManager.supportsSshControlMaster("darwin")).toBe(true);
 	});
 });
