@@ -419,6 +419,30 @@ describe("OutputSink head-retain mode", () => {
 		expect(dumped.truncated).toBe(false);
 		expect(dumped.elidedBytes).toBeUndefined();
 	});
+
+	test("replace + push appends to tail and emits no elision marker", async () => {
+		// Simulates the bash-minimizer flow: large raw stream is replaced with a
+		// short minimized text, then an artifact-link line is pushed. The push
+		// must land at the END of the buffer (after the minimized text), and the
+		// stale pre-replace totals must NOT trigger the middle-elision branch in
+		// dump().
+		const sink = new OutputSink({ spillThreshold: 1024, headBytes: 64 });
+		// Feed a long original stream so #totalBytes/#totalLines climb high.
+		const noisy = Array.from({ length: 50 }, (_, i) => `noise line ${i}`).join("\n");
+		await sink.push(noisy);
+
+		sink.replace("OK\n");
+		await sink.push("[raw output: artifact://8]\n");
+
+		const dumped = await sink.dump();
+		expect(dumped.output).toBe("OK\n[raw output: artifact://8]\n");
+		expect(dumped.output).not.toContain("elided");
+		expect(dumped.elidedBytes).toBeUndefined();
+		expect(dumped.elidedLines).toBeUndefined();
+		expect(dumped.truncated).toBe(false);
+		// Counters realign to the authoritative buffer + the subsequent push.
+		expect(dumped.totalBytes).toBe(byteLength("OK\n[raw output: artifact://8]\n"));
+	});
 });
 
 describe("OutputSink maxColumns (per-line cap)", () => {

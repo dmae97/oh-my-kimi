@@ -644,6 +644,7 @@ export class OutputSink {
 	#head = "";
 	#headBytes = 0;
 	#headLines = 0; // newline count inside #head
+	#headRetentionDisabled = false;
 	#totalLines = 0; // newline count
 	#totalBytes = 0;
 	#sawData = false;
@@ -740,7 +741,7 @@ export class OutputSink {
 		// exhausted, then forward any leftover to the tail buffer.
 		let tailChunk = capped;
 		let tailBytes = cappedBytes;
-		if (this.#headLimit > 0 && this.#headBytes < this.#headLimit) {
+		if (this.#headLimit > 0 && !this.#headRetentionDisabled && this.#headBytes < this.#headLimit) {
 			const room = this.#headLimit - this.#headBytes;
 			if (cappedBytes <= room) {
 				this.#head += capped;
@@ -919,12 +920,16 @@ export class OutputSink {
 	}
 
 	/**
-	 * Replace the in-memory buffer with the given text while preserving the
-	 * streaming counters (totalLines/totalBytes reflect the raw chunks that
-	 * already reached the sink). Used when an upstream minimizer rewrites the
-	 * captured output after the raw bytes have already been streamed.
+	 * Replace the in-memory buffer with the given text. Used when an upstream
+	 * minimizer rewrites the captured output after the raw bytes have already
+	 * been streamed.
 	 *
-	 * Clears any retained head window — the minimized text is authoritative.
+	 * After this call the buffer is authoritative: streaming counters realign
+	 * to the replacement, the retained head window is cleared, and head
+	 * retention is disabled so subsequent `push()` calls append directly to the
+	 * tail buffer instead of repopulating the (now meaningless) head window
+	 * — which would otherwise reorder content and trip the middle-elision
+	 * branch in `dump()` against stale totals.
 	 */
 	replace(text: string): void {
 		this.#buffer = text;
@@ -932,6 +937,11 @@ export class OutputSink {
 		this.#head = "";
 		this.#headBytes = 0;
 		this.#headLines = 0;
+		this.#headRetentionDisabled = true;
+		this.#totalBytes = this.#bufferBytes;
+		this.#totalLines = countNewlines(text);
+		this.#sawData = text.length > 0;
+		this.#truncated = false;
 		this.#currentLineBytes = 0;
 		this.#columnEllipsisAdded = false;
 		this.#columnDroppedBytes = 0;

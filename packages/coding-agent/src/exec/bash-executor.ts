@@ -252,7 +252,8 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 					outputBytes: minimized.outputBytes,
 				});
 				if (artifactId) {
-					sink.push(`\n[raw output: artifact://${artifactId}]\n`);
+					const sep = minimized.text.endsWith("\n") ? "" : "\n";
+					sink.push(`${sep}[raw output: artifact://${artifactId}]\n`);
 				}
 			}
 		}
