@@ -341,6 +341,17 @@ describe("hashline parser — block op syntax", () => {
 		expect(() => parseHashline(pl("orphan"))).toThrow(/payload line has no preceding/);
 	});
 
+	it("leniently treats a bare blank line after + / < as an empty payload", () => {
+		const hash = computeLineHash(5, "aaa");
+		const anchor = { line: 5, hash };
+		expect(parseHashline(`< ${tag(5, "aaa")}\n`)).toEqual([
+			{ kind: "insert", cursor: { kind: "before_anchor", anchor }, text: "", lineNum: 1, index: 0 },
+		]);
+		expect(parseHashline(`+ ${tag(5, "aaa")}\n`)).toEqual([
+			{ kind: "insert", cursor: { kind: "after_anchor", anchor }, text: "", lineNum: 1, index: 0 },
+		]);
+	});
+
 	it("rejects old cursor and equals-inline syntax after cutover", () => {
 		expect(() => parseHashline(`@${tag(1, "aaa")}\n+old`)).toThrow(/unrecognized op/);
 		expect(() => parseHashline(`${tag(1, "aaa")}=AAA`)).toThrow(/unrecognized op/);

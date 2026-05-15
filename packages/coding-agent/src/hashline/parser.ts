@@ -94,13 +94,19 @@ function collectPayload(
 		// Silently recover from a missing payload prefix on an otherwise blank
 		// line: if more payload follows (possibly past further blanks), treat
 		// each intervening blank as an empty `${HL_EDIT_SEP}` payload line.
-		// Trailing blanks before a non-payload op stay as section separators.
+		// Additionally, when the op explicitly requires payload (`+`/`<`) and
+		// we have not collected any yet, accept the blank(s) themselves as the
+		// empty payload — common typo of forgetting the `${HL_EDIT_SEP}` prefix
+		// when inserting a blank line.
 		if (line.length === 0) {
 			let lookahead = index + 1;
 			while (lookahead < lines.length && stripTrailingCarriageReturn(lines[lookahead]).length === 0) {
 				lookahead++;
 			}
-			if (lookahead < lines.length && stripTrailingCarriageReturn(lines[lookahead]).startsWith(HL_EDIT_SEP)) {
+			const followedByPayload =
+				lookahead < lines.length && stripTrailingCarriageReturn(lines[lookahead]).startsWith(HL_EDIT_SEP);
+			const acceptBareBlank = requirePayload && payload.length === 0;
+			if (followedByPayload || acceptBareBlank) {
 				for (let j = index; j < lookahead; j++) payload.push("");
 				index = lookahead;
 				continue;
