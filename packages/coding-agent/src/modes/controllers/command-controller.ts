@@ -1175,8 +1175,29 @@ export class CommandController {
 			return;
 		}
 
+		if (this.ctx.loadingAnimation) {
+			this.ctx.loadingAnimation.stop();
+			this.ctx.loadingAnimation = undefined;
+		}
+		this.ctx.statusContainer.clear();
+
+		const originalOnEscape = this.ctx.editor.onEscape;
+		this.ctx.editor.onEscape = () => {
+			this.ctx.session.abortHandoff();
+		};
+
+		const handoffLoader = new Loader(
+			this.ctx.ui,
+			spinner => theme.fg("accent", spinner),
+			text => theme.fg("muted", text),
+			"Generating handoff… (esc to cancel)",
+			getSymbolTheme().spinnerFrames,
+		);
+		this.ctx.statusContainer.addChild(handoffLoader);
+		this.ctx.ui.requestRender();
+
 		try {
-			// The agent will visibly generate the handoff document in chat
+			// Handoff generation runs as a oneshot request; the new session is shown after it completes.
 			const result = await this.ctx.session.handoff(customInstructions);
 
 			if (!result) {
@@ -1206,6 +1227,10 @@ export class CommandController {
 			} else {
 				this.ctx.showError(`Handoff failed: ${message}`);
 			}
+		} finally {
+			handoffLoader.stop();
+			this.ctx.statusContainer.clear();
+			this.ctx.editor.onEscape = originalOnEscape;
 		}
 		this.ctx.ui.requestRender();
 	}

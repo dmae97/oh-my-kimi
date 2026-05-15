@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ToolCall } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
@@ -92,40 +93,13 @@ describe("AgentSession handoff", () => {
 	});
 
 	it("does not run auto-compaction after handoff turn completes", async () => {
-		const model = session.model;
-		if (!model) {
-			throw new Error("Expected model to be set");
-		}
-
 		const handoffText = "## Goal\nContinue from here";
-		const handoffAssistant: AssistantMessage = {
-			role: "assistant",
-			content: [{ type: "text", text: handoffText }],
-			api: model.api,
-			provider: model.provider,
-			model: model.id,
-			stopReason: "stop",
-			usage: {
-				input: 190_000,
-				output: 1_000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191_000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			timestamp: Date.now(),
-		};
-
-		const promptSpy = vi.spyOn(session.agent, "prompt").mockImplementation(async () => {
-			session.agent.replaceMessages([handoffAssistant]);
-			session.agent.emitExternalEvent({ type: "message_end", message: handoffAssistant });
-			session.agent.emitExternalEvent({ type: "agent_end", messages: [handoffAssistant] });
-		});
+		const generateHandoffSpy = vi.spyOn(compactionModule, "generateHandoff").mockResolvedValue(handoffText);
 
 		const result = await session.handoff();
 		await Bun.sleep(20);
 
-		expect(promptSpy).toHaveBeenCalledTimes(1);
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		expect(result?.document).toBe(handoffText);
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
 		expect(events.filter(event => event.type === "auto_compaction_end")).toHaveLength(0);
@@ -192,35 +166,8 @@ describe("AgentSession handoff", () => {
 			throw new Error("Expected previous session file");
 		}
 
-		const model = session.model;
-		if (!model) {
-			throw new Error("Expected model to be set");
-		}
-
 		const handoffText = "## Goal\nContinue from here";
-		const handoffAssistant: AssistantMessage = {
-			role: "assistant",
-			content: [{ type: "text", text: handoffText }],
-			api: model.api,
-			provider: model.provider,
-			model: model.id,
-			stopReason: "stop",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			timestamp: Date.now(),
-		};
-
-		vi.spyOn(session.agent, "prompt").mockImplementation(async () => {
-			session.agent.replaceMessages([handoffAssistant]);
-			session.agent.emitExternalEvent({ type: "message_end", message: handoffAssistant });
-			session.agent.emitExternalEvent({ type: "agent_end", messages: [handoffAssistant] });
-		});
+		vi.spyOn(compactionModule, "generateHandoff").mockResolvedValue(handoffText);
 
 		const result = await session.handoff();
 		const handoffSessionFile = session.sessionFile;
@@ -441,18 +388,6 @@ describe("AgentSession handoff", () => {
 						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 					},
 				},
-				{
-					content: [{ type: "text", text: "## Goal\nContinue from here" }],
-					stopReason: "stop",
-					usage: {
-						input: 8_000,
-						output: 500,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 8_500,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
-				},
 			],
 		});
 
@@ -483,9 +418,13 @@ describe("AgentSession handoff", () => {
 			events.push(event);
 		});
 
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoff")
+			.mockResolvedValue("## Goal\nContinue from here");
 		await session.prompt("Trigger threshold handoff");
 
-		expect(mock.calls).toHaveLength(2);
+		expect(mock.calls).toHaveLength(1);
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		const endEvents = events.filter(event => event.type === "auto_compaction_end");
 		expect(endEvents).toHaveLength(1);
 		expect(endEvents[0]).toMatchObject({ type: "auto_compaction_end", action: "handoff", aborted: false });
@@ -563,7 +502,7 @@ describe("AgentSession handoff", () => {
 		vi.spyOn(extensionRunner, "emit").mockResolvedValue(undefined);
 
 		const mock = createMockModel({
-			responses: [{ content: ["normal response"] }, { content: ["## Goal\nContinue from here"] }],
+			responses: [{ content: ["normal response"] }],
 		});
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -607,44 +546,23 @@ describe("AgentSession handoff", () => {
 		});
 
 		await session.prompt("hello from user");
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoff")
+			.mockResolvedValue("## Goal\nContinue from here");
 		await session.handoff();
 
 		expect(emitBeforeAgentStart).toHaveBeenCalledTimes(1);
-		expect(mock.calls.map(c => c.context.systemPrompt?.join("\n\n") ?? "")).toEqual(["Hook override", "Test"]);
+		expect(mock.calls.map(c => c.context.systemPrompt?.join("\n\n") ?? "")).toEqual(["Hook override"]);
+		const handoffCall = generateHandoffSpy.mock.calls[0];
+		if (!handoffCall) throw new Error("Expected generateHandoff call");
+		expect(handoffCall[3].systemPrompt).toEqual(["Test"]);
 	});
 
 	it("saves auto-handoff document to disk when enabled", async () => {
 		session.settings.set("compaction.handoffSaveToDisk", true);
 
-		const model = session.model;
-		if (!model) {
-			throw new Error("Expected model to be set");
-		}
-
 		const handoffText = "## Goal\nContinue from here";
-		const handoffAssistant: AssistantMessage = {
-			role: "assistant",
-			content: [{ type: "text", text: handoffText }],
-			api: model.api,
-			provider: model.provider,
-			model: model.id,
-			stopReason: "stop",
-			usage: {
-				input: 190_000,
-				output: 1_000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191_000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			timestamp: Date.now(),
-		};
-
-		vi.spyOn(session.agent, "prompt").mockImplementation(async () => {
-			session.agent.replaceMessages([handoffAssistant]);
-			session.agent.emitExternalEvent({ type: "message_end", message: handoffAssistant });
-			session.agent.emitExternalEvent({ type: "agent_end", messages: [handoffAssistant] });
-		});
+		vi.spyOn(compactionModule, "generateHandoff").mockResolvedValue(handoffText);
 
 		const result = await session.handoff(undefined, { autoTriggered: true });
 		expect(result?.savedPath).toBeDefined();
@@ -657,34 +575,7 @@ describe("AgentSession handoff", () => {
 	it("does not save manual handoff document when save setting is enabled", async () => {
 		session.settings.set("compaction.handoffSaveToDisk", true);
 
-		const model = session.model;
-		if (!model) {
-			throw new Error("Expected model to be set");
-		}
-
-		const handoffAssistant: AssistantMessage = {
-			role: "assistant",
-			content: [{ type: "text", text: "## Goal\nManual handoff" }],
-			api: model.api,
-			provider: model.provider,
-			model: model.id,
-			stopReason: "stop",
-			usage: {
-				input: 190_000,
-				output: 1_000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191_000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			timestamp: Date.now(),
-		};
-
-		vi.spyOn(session.agent, "prompt").mockImplementation(async () => {
-			session.agent.replaceMessages([handoffAssistant]);
-			session.agent.emitExternalEvent({ type: "message_end", message: handoffAssistant });
-			session.agent.emitExternalEvent({ type: "agent_end", messages: [handoffAssistant] });
-		});
+		vi.spyOn(compactionModule, "generateHandoff").mockResolvedValue("## Goal\nManual handoff");
 
 		const result = await session.handoff();
 		expect(result?.savedPath).toBeUndefined();
@@ -694,30 +585,39 @@ describe("AgentSession handoff", () => {
 		const controller = new AbortController();
 		controller.abort();
 
-		const promptSpy = vi.spyOn(session.agent, "prompt");
-		const abortSpy = vi.spyOn(session.agent, "abort");
+		const generateHandoffSpy = vi.spyOn(compactionModule, "generateHandoff");
 
 		await expect(session.handoff(undefined, { signal: controller.signal })).rejects.toThrow("Handoff cancelled");
-		expect(promptSpy).not.toHaveBeenCalled();
-		expect(abortSpy).toHaveBeenCalledTimes(1);
+		expect(generateHandoffSpy).not.toHaveBeenCalled();
 	});
 
 	it("aborts handoff generation when provided signal is cancelled", async () => {
 		const controller = new AbortController();
-		const { promise: promptPromise, resolve: resolvePrompt } = Promise.withResolvers<void>();
-		const promptSpy = vi.spyOn(session.agent, "prompt").mockImplementation(async () => {
-			await promptPromise;
-		});
-		const abortSpy = vi.spyOn(session.agent, "abort").mockImplementation(() => {
-			resolvePrompt();
-		});
+		const started = Promise.withResolvers<void>();
+		const cancelled = Promise.withResolvers<string>();
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoff")
+			.mockImplementation((_messages, _model, _apiKey, _options, signal) => {
+				started.resolve();
+				const onAbort = () => {
+					const error = new Error("aborted");
+					error.name = "AbortError";
+					cancelled.reject(error);
+				};
+				if (signal?.aborted) {
+					onAbort();
+				} else {
+					signal?.addEventListener("abort", onAbort, { once: true });
+				}
+				return cancelled.promise;
+			});
 
 		const handoffPromise = session.handoff(undefined, { signal: controller.signal });
-		await Bun.sleep(10);
+		await started.promise;
 		controller.abort();
 
 		await expect(handoffPromise).rejects.toThrow("Handoff cancelled");
-		expect(promptSpy).toHaveBeenCalledTimes(1);
-		expect(abortSpy).toHaveBeenCalled();
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
+		expect(generateHandoffSpy.mock.calls[0]?.[4]?.aborted).toBe(true);
 	});
 });

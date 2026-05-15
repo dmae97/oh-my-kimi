@@ -719,9 +719,8 @@ export class EventController {
 
 	#scheduleIdleCompaction(): void {
 		this.#cancelIdleCompaction();
-		// Don't schedule while compaction/handoff is already running — the agent_end from a
-		// handoff agent turn still has the old session's bloated token counts, and scheduling
-		// here would fire after the session resets, trying to handoff an empty session.
+		// Don't schedule idle work while context maintenance is already running; the
+		// maintenance flow may reset the session before this timer fires.
 		if (this.ctx.session.isCompacting) return;
 
 		const idleSettings = settings.getGroup("compaction");

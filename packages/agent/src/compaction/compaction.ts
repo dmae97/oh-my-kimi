@@ -9,13 +9,14 @@ import {
 	type AssistantMessage,
 	completeSimple,
 	Effort,
+	type Message,
 	type MessageAttribution,
 	type Model,
 	type Usage,
 } from "@oh-my-pi/pi-ai";
 import { countTokens } from "@oh-my-pi/pi-natives";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
-import type { AgentMessage } from "../types";
+import type { AgentMessage, AgentTool } from "../types";
 import type { CompactionEntry, SessionEntry } from "./entries";
 import { type ConvertToLlm, convertToLlm, createBranchSummaryMessage, createCustomMessage } from "./messages";
 import {
@@ -26,10 +27,12 @@ import {
 	shouldUseOpenAiRemoteCompaction,
 	withOpenAiRemoteCompactionPreserveData,
 } from "./openai";
+import autoHandoffThresholdFocusPrompt from "./prompts/auto-handoff-threshold-focus.md" with { type: "text" };
 import compactionShortSummaryPrompt from "./prompts/compaction-short-summary.md" with { type: "text" };
 import compactionSummaryPrompt from "./prompts/compaction-summary.md" with { type: "text" };
 import compactionTurnPrefixPrompt from "./prompts/compaction-turn-prefix.md" with { type: "text" };
 import compactionUpdateSummaryPrompt from "./prompts/compaction-update-summary.md" with { type: "text" };
+import handoffDocumentPrompt from "./prompts/handoff-document.md" with { type: "text" };
 
 import {
 	computeFileLists,
@@ -489,6 +492,10 @@ const UPDATE_SUMMARIZATION_PROMPT = prompt.render(compactionUpdateSummaryPrompt)
 
 const SHORT_SUMMARY_PROMPT = prompt.render(compactionShortSummaryPrompt);
 
+const HANDOFF_DOCUMENT_PROMPT = prompt.render(handoffDocumentPrompt);
+
+export const AUTO_HANDOFF_THRESHOLD_FOCUS = prompt.render(autoHandoffThresholdFocusPrompt);
+
 function formatAdditionalContext(context: string[] | undefined): string {
 	if (!context || context.length === 0) return "";
 	const lines = context.map(line => `- ${line}`).join("\n");
@@ -586,6 +593,73 @@ export async function generateSummary(
 		.join("\n");
 
 	return textContent;
+}
+
+// ============================================================================
+// Handoff generation
+// ============================================================================
+
+export interface HandoffOptions {
+	/** Live agent system prompt — passed verbatim so providers hit the cached prefix. */
+	systemPrompt: string[];
+	/** Live agent tool list — same purpose. Forced to `toolChoice: "none"`. */
+	tools?: AgentTool<any>[];
+	customInstructions?: string;
+	convertToLlm?: ConvertToLlm;
+	initiatorOverride?: MessageAttribution;
+	metadata?: Record<string, unknown>;
+}
+
+export function renderHandoffPrompt(customInstructions?: string): string {
+	if (!customInstructions) return HANDOFF_DOCUMENT_PROMPT;
+	return prompt.render(handoffDocumentPrompt, {
+		additionalFocus: customInstructions,
+	});
+}
+
+export async function generateHandoff(
+	messages: AgentMessage[],
+	model: Model,
+	apiKey: string,
+	options: HandoffOptions,
+	signal?: AbortSignal,
+): Promise<string> {
+	const llmMessages = (options.convertToLlm ?? convertToLlm)(messages);
+	const requestMessages: Message[] = [
+		...llmMessages,
+		{
+			role: "user",
+			content: [{ type: "text", text: renderHandoffPrompt(options.customInstructions) }],
+			attribution: "agent",
+			timestamp: Date.now(),
+		},
+	];
+
+	const response = await completeSimple(
+		model,
+		{
+			systemPrompt: options.systemPrompt,
+			messages: requestMessages,
+			tools: options.tools,
+		},
+		{
+			apiKey,
+			signal,
+			reasoning: Effort.High,
+			toolChoice: "none",
+			initiatorOverride: options.initiatorOverride,
+			metadata: options.metadata,
+		},
+	);
+
+	if (response.stopReason === "error") {
+		throw new Error(`Handoff generation failed: ${response.errorMessage || "Unknown error"}`);
+	}
+
+	return response.content
+		.filter((c): c is { type: "text"; text: string } => c.type === "text")
+		.map(c => c.text)
+		.join("\n");
 }
 
 async function generateShortSummary(

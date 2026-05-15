@@ -1,13 +1,13 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Changed the extension and hook runtime API by moving schema typing from direct TypeBox imports to `TSchema` from `@oh-my-pi/pi-ai`, requiring callers who use TypeScript imports of `Type` to migrate via provided injected modules
 
 ### Added
 
+- Added a cancellable handoff progress indicator in `/handoff` that displays while handoff generation runs and can be aborted with `Esc`
 - Added `apiKey` as a supported provider override field in model config, allowing API-key-only overrides to provide fallback credentials for built-in models
 - Added `supportsMultipleSystemMessages`, `allowsSyntheticReasoningContentForToolCalls`, `disableReasoningOnToolChoice`, and `levels` model-thinking compatibility fields to model configuration schemas
 - Added `zod` to the Extension, Custom Tool, Hook, and Custom Command APIs as `pi.zod` so extension and plugin authors can define tool schemas with Zod without separate imports
@@ -16,6 +16,7 @@
 
 ### Changed
 
+- Changed handoff generation to run as a one-shot handoff request and switch to the new session only after it completes, avoiding an extra assistant handoff turn in chat history
 - Changed `pi.typebox.Type.Composite` to merge all object schemas in the provided list, enabling more than two object inputs
 - Changed `pi.typebox.Type.Record` to validate record keys against the provided key schema instead of forcing string keys
 - Changed `pi.typebox.Type.Array` with `uniqueItems: true` to reject duplicate items while preserving the constraint in wire schemas
@@ -33,6 +34,8 @@
 
 ### Fixed
 
+- Fixed auto-triggered handoff flow to perform only a single handoff-generation model call instead of an extra prompt cycle
+- Fixed handoff cancellation behavior so a pre-cancelled signal returns `Handoff cancelled` without starting generation and aborting handoff now propagates through the handoff request signal
 - Fixed `create_conventional_analysis` parsing to ignore harmless extra fields and still parse the required conventional fields
 - Fixed BashTool async request validation flow so async execution remains disabled and returns the explicit `Async bash execution is disabled` error
 - Fixed `task.simple` invalid `schema` and `context` argument handling to still reject unsupported fields after tool-argument validation

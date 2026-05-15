@@ -35,15 +35,10 @@ import {
 	calculatePromptTokens,
 	collectEntriesForBranchSummary,
 	compact,
-	createHandoffContext,
-	createHandoffFileName,
 	estimateTokens,
-	extractHandoffDocument,
 	generateBranchSummary,
-	type HandoffOptions,
-	type HandoffResult,
+	generateHandoff,
 	prepareCompaction,
-	renderHandoffPrompt,
 	type SummaryOptions,
 	shouldCompact,
 } from "@oh-my-pi/pi-agent-core/compaction";
@@ -339,6 +334,17 @@ export interface PromptOptions {
 	skipCompactionCheck?: boolean;
 }
 
+/** Result from a handoff operation. */
+export interface HandoffResult {
+	document: string;
+	savedPath?: string;
+}
+
+export interface SessionHandoffOptions {
+	autoTriggered?: boolean;
+	signal?: AbortSignal;
+}
+
 /** Result from cycleModel() */
 export interface ModelCycleResult {
 	model: Model;
@@ -503,6 +509,15 @@ const noOpUIContext: ExtensionUIContext = {
 	getToolsExpanded: () => false,
 	setToolsExpanded: () => {},
 };
+
+function createHandoffContext(document: string): string {
+	return `<handoff-context>\n${document}\n</handoff-context>\n\nThe above is a handoff document from a previous session. Use this context to continue the work seamlessly.`;
+}
+
+function createHandoffFileName(date = new Date()): string {
+	const fileTimestamp = date.toISOString().replace(/[:.]/g, "-");
+	return `handoff-${fileTimestamp}.md`;
+}
 
 // ============================================================================
 // ACP Permission Gate
@@ -5128,16 +5143,13 @@ export class AgentSession {
 	}
 
 	/**
-	 * Generate a handoff document by asking the agent, then start a new session with it.
-	 *
-	 * This prompts the current agent to write a comprehensive handoff document,
-	 * waits for completion, then starts a fresh session with the handoff as context.
+	 * Generate a handoff document with a oneshot LLM call, then start a new session with it.
 	 *
 	 * @param customInstructions Optional focus for the handoff document
 	 * @param options Handoff execution options
 	 * @returns The handoff document text, or undefined if cancelled/failed
 	 */
-	async handoff(customInstructions?: string, options?: HandoffOptions): Promise<HandoffResult | undefined> {
+	async handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
 		const entries = this.sessionManager.getBranch();
 		const messageCount = entries.filter(e => e.type === "message").length;
 
@@ -5151,10 +5163,6 @@ export class AgentSession {
 		const handoffAbortController = this.#handoffAbortController;
 		const handoffSignal = handoffAbortController.signal;
 		const sourceSignal = options?.signal;
-		const onHandoffAbort = () => {
-			this.agent.abort();
-		};
-		handoffSignal.addEventListener("abort", onHandoffAbort, { once: true });
 		const onSourceAbort = () => {
 			if (!handoffSignal.aborted) {
 				handoffAbortController.abort();
@@ -5167,55 +5175,36 @@ export class AgentSession {
 			}
 		}
 
-		// Build the handoff prompt
-		const handoffPrompt = renderHandoffPrompt(customInstructions);
-
-		// Create a promise that resolves when the agent completes
-		let handoffText: string | undefined;
-		const { promise: completionPromise, resolve: resolveCompletion } = Promise.withResolvers<void>();
-		let handoffCancelled = false;
-		let unsubscribe: (() => void) | undefined;
-		const onCompletionAbort = () => {
-			unsubscribe?.();
-			handoffCancelled = true;
-			resolveCompletion();
-		};
-		if (handoffSignal.aborted) {
-			onCompletionAbort();
-		} else {
-			handoffSignal.addEventListener("abort", onCompletionAbort, { once: true });
-		}
-		unsubscribe = this.subscribe(event => {
-			if (event.type === "agent_end") {
-				unsubscribe?.();
-				handoffSignal.removeEventListener("abort", onCompletionAbort);
-				handoffText = extractHandoffDocument(this.agent.state.messages);
-				resolveCompletion();
-			}
-		});
-
 		try {
-			// Send the prompt and wait for completion
 			if (handoffSignal.aborted) {
 				throw new Error("Handoff cancelled");
 			}
-			this.#beginInFlight();
-			try {
-				this.agent.setSystemPrompt(this.#baseSystemPrompt);
-				await this.#promptAgentWithIdleRetry([
-					{
-						role: "developer",
-						content: [{ type: "text", text: handoffPrompt }],
-						attribution: "agent",
-						timestamp: Date.now(),
-					},
-				]);
-			} finally {
-				this.#endInFlight();
-			}
-			await completionPromise;
 
-			if (handoffCancelled || handoffSignal.aborted) {
+			const model = this.model;
+			if (!model) {
+				throw new Error("No model selected for handoff");
+			}
+			const apiKey = await this.#modelRegistry.getApiKey(model, this.sessionId);
+			if (!apiKey) {
+				throw new Error(`No API key for ${model.provider}`);
+			}
+
+			const handoffText = await generateHandoff(
+				this.agent.state.messages,
+				model,
+				apiKey,
+				{
+					systemPrompt: this.#baseSystemPrompt,
+					tools: this.agent.state.tools,
+					customInstructions,
+					convertToLlm,
+					initiatorOverride: "agent",
+					metadata: this.agent.metadataForProvider(model.provider),
+				},
+				handoffSignal,
+			);
+
+			if (handoffSignal.aborted) {
 				throw new Error("Handoff cancelled");
 			}
 			if (!handoffText) {
@@ -5266,10 +5255,12 @@ export class AgentSession {
 			this.#syncTodoPhasesFromBranch();
 
 			return { document: handoffText, savedPath };
+		} catch (error) {
+			if (handoffSignal.aborted || (error instanceof Error && error.name === "AbortError")) {
+				throw new Error("Handoff cancelled");
+			}
+			throw error;
 		} finally {
-			unsubscribe?.();
-			handoffSignal.removeEventListener("abort", onCompletionAbort);
-			handoffSignal.removeEventListener("abort", onHandoffAbort);
 			sourceSignal?.removeEventListener("abort", onSourceAbort);
 			this.#handoffAbortController = undefined;
 		}

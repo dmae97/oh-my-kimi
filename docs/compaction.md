@@ -9,12 +9,11 @@ Both are persisted as session entries and converted back into user-context messa
 
 ## Key implementation files
 
-- `packages/agent/src/compaction/compaction.ts`
+- `packages/agent/src/compaction/compaction.ts` (context-full summarization and handoff generation)
 - `packages/agent/src/compaction/branch-summarization.ts`
 - `packages/agent/src/compaction/pruning.ts`
 - `packages/agent/src/compaction/utils.ts`
 - `packages/agent/src/compaction/openai.ts`
-- `packages/agent/src/compaction/handoff.ts`
 - `packages/coding-agent/src/session/session-manager.ts`
 - `packages/coding-agent/src/session/agent-session.ts`
 - `packages/coding-agent/src/session/messages.ts`
@@ -198,6 +197,7 @@ Prompt selection:
 - iterative compaction with prior summary: `compaction-update-summary.md`
 - split-turn second pass: `compaction-turn-prefix.md`
 - short UI summary: `compaction-short-summary.md`
+- handoff document: `handoff-document.md` (used by `generateHandoff(...)`, not serialized compaction)
 
 Remote summarization modes:
 
@@ -205,6 +205,12 @@ Remote summarization modes:
   - `{ systemPrompt, prompt }`
 - Expects JSON containing at least `{ summary }`.
 - For OpenAI/OpenAI Codex models, compaction first tries the provider-native `/responses/compact` endpoint when remote compaction is enabled. It preserves provider replacement history in `preserveData.openaiRemoteCompaction` and falls back to local summarization if that native request fails.
+
+### Handoff generation
+
+`packages/agent/src/compaction/compaction.ts` also exports `generateHandoff(...)`. Handoff generation uses the same `completeSimple(...)` oneshot style as summarization, but it preserves the live agent cache prefix by sending the active system prompt, tool array, and real LLM message history, then appending one agent-attributed `user` message containing the handoff prompt. It forces `toolChoice: "none"` and returns joined text blocks directly.
+
+Handoff does not write a `CompactionEntry`. `AgentSession.handoff()` owns the session transition: it starts a new session, injects the generated document as a visible `custom_message` with `customType: "handoff"`, and rebuilds agent messages from that new session.
 
 ### File-operation context in summaries
 
