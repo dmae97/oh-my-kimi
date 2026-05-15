@@ -92,4 +92,84 @@ describe("register-builtins lazy streams", () => {
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("bedrock exploded");
 	});
+
+	it("turns idle lazy provider streams into retryable terminal errors", async () => {
+		const partialMessage = createAssistantMessage("stop");
+		let providerSignal: AbortSignal | undefined;
+		const source = {
+			async *[Symbol.asyncIterator]() {
+				yield { type: "start", partial: partialMessage } as const;
+				const { promise, reject } = Promise.withResolvers<never>();
+				if (providerSignal?.aborted) {
+					reject(new Error("Request was aborted"));
+				}
+				providerSignal?.addEventListener("abort", () => reject(new Error("Request was aborted")), {
+					once: true,
+				});
+				await promise;
+			},
+		} as unknown as AssistantMessageEventStream;
+
+		setBedrockProviderModule({
+			streamBedrock: (_model, _context, options) => {
+				providerSignal = options.signal;
+				return source;
+			},
+		});
+
+		const stream = streamBedrock(createModel(), baseContext, { streamIdleTimeoutMs: 10 });
+		const result = await Promise.race([stream.result(), Bun.sleep(500).then(() => "timeout" as const)]);
+
+		expect(result).not.toBe("timeout");
+		if (result === "timeout") {
+			throw new Error("Timed out waiting for forwarded stream stall result");
+		}
+		expect(providerSignal?.aborted).toBe(true);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("Provider stream stalled while waiting for the next event");
+	});
+
+	it("preserves caller aborts while forwarding lazy provider streams", async () => {
+		const abortController = new AbortController();
+		const partialMessage = createAssistantMessage("stop");
+		let providerSignal: AbortSignal | undefined;
+		const source = {
+			async *[Symbol.asyncIterator]() {
+				yield { type: "start", partial: partialMessage } as const;
+				const { promise, reject } = Promise.withResolvers<never>();
+				if (providerSignal?.aborted) {
+					reject(new Error("Request was aborted"));
+				}
+				providerSignal?.addEventListener("abort", () => reject(new Error("Request was aborted")), {
+					once: true,
+				});
+				await promise;
+			},
+		} as unknown as AssistantMessageEventStream;
+
+		setBedrockProviderModule({
+			streamBedrock: (_model, _context, options) => {
+				providerSignal = options.signal;
+				return source;
+			},
+		});
+
+		const stream = streamBedrock(createModel(), baseContext, {
+			signal: abortController.signal,
+			streamIdleTimeoutMs: 500,
+		});
+		const iterator = stream[Symbol.asyncIterator]();
+		const firstEvent = await iterator.next();
+		expect(firstEvent.value?.type).toBe("start");
+
+		abortController.abort();
+		const result = await Promise.race([stream.result(), Bun.sleep(500).then(() => "timeout" as const)]);
+
+		expect(result).not.toBe("timeout");
+		if (result === "timeout") {
+			throw new Error("Timed out waiting for forwarded caller abort result");
+		}
+		expect(result.stopReason).toBe("aborted");
+		expect(result.errorMessage).toBe("Request was aborted");
+	});
 });

@@ -17,11 +17,11 @@ import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import { getSixelLineMask } from "../utils/sixel";
 import type { ToolSession } from ".";
-import { formatHeadTailStripNotice, stripTrailingHeadTail } from "./bash-command-fixup";
+import { applyBashFixups, formatBashFixupNotice } from "./bash-command-fixup";
 import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-interactive";
 import { checkBashInterception } from "./bash-interceptor";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
-import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
+import { formatStyledTruncationWarning, type OutputMeta, stripOutputNotice } from "./output-meta";
 import { resolveToCwd } from "./path-utils";
 import { formatToolWorkingDirectory, replaceTabs } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
@@ -246,6 +246,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	readonly #asyncEnabled: boolean;
 	readonly #autoBackgroundEnabled: boolean;
 	readonly #autoBackgroundThresholdMs: number;
+	#bashFixupNoticeEmitted = false;
 
 	constructor(private readonly session: ToolSession) {
 		this.#asyncEnabled = this.session.settings.get("async.enabled");
@@ -484,15 +485,15 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		let command = rawCommand;
 		const env = normalizeBashEnv(rawEnv);
 
-		// Drop trailing `| head|tail` pipes that exist purely to limit output —
-		// the harness already truncates bash output. Single-line only; the helper
-		// refuses anything that could change semantics.
-		let headTailStripped: string | undefined;
+		// Apply conservative bash fixups (strip trailing `| head|tail` and redundant
+		// `2>&1`). The helper is single-line only and refuses anything that could
+		// change semantics.
+		let bashFixups: string[] = [];
 		if (this.session.settings.get("bash.stripTrailingHeadTail")) {
-			const fixup = stripTrailingHeadTail(command);
-			if (fixup.stripped) {
+			const fixup = applyBashFixups(command);
+			if (fixup.stripped.length > 0) {
 				command = fixup.command;
-				headTailStripped = fixup.stripped;
+				bashFixups = fixup.stripped;
 			}
 		}
 
@@ -574,8 +575,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const pendingNotices: string[] = [];
 		const timeoutClampNotice = formatTimeoutClampNotice(requestedTimeoutSec, timeoutSec);
 		if (timeoutClampNotice) pendingNotices.push(timeoutClampNotice);
-		const headTailStripNotice = formatHeadTailStripNotice(headTailStripped);
-		if (headTailStripNotice) pendingNotices.push(headTailStripNotice);
+		const bashFixupNotice = this.#bashFixupNoticeEmitted ? undefined : formatBashFixupNotice(bashFixups);
+		if (bashFixupNotice) {
+			pendingNotices.push(bashFixupNotice);
+			this.#bashFixupNoticeEmitted = true;
+		}
 
 		if (asyncRequested) {
 			if (!AsyncJobManager.instance()) {
@@ -977,8 +981,11 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const expanded = renderContext?.expanded ?? options.expanded;
 					const previewLines = renderContext?.previewLines ?? BASH_DEFAULT_PREVIEW_LINES;
 
-					// Get output from context (preferred) or fall back to result content
-					const output = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
+					// Get output from context (preferred) or fall back to result content.
+					// Strip the LLM-facing notice appended by wrappedExecute so we don't
+					// double-print it alongside the styled warning line below.
+					const rawOutput = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
+					const output = stripOutputNotice(rawOutput, details?.meta);
 					const displayOutput = output.trimEnd();
 					const showingFullOutput = expanded && renderContext?.isFullOutput === true;
 

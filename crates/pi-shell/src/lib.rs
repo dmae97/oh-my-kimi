@@ -1,4 +1,5 @@
 pub mod cancel;
+pub mod fixup;
 pub mod minimizer;
 pub mod process;
 pub mod shell;

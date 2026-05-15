@@ -31,6 +31,7 @@ const PRIORITY = 70; // Below claude.ts (80) so user .claude/ overrides win
 interface ClaudePluginManifest {
 	skills?: string;
 	"slash-commands"?: string;
+	commands?: string;
 }
 
 interface ResolvedPluginDir {
@@ -59,24 +60,35 @@ function isWithinPluginRoot(rootPath: string, targetPath: string): boolean {
 
 async function resolvePluginDir(
 	root: ClaudePluginRoot,
-	manifestKey: keyof ClaudePluginManifest,
+	manifestKeys: ReadonlyArray<keyof ClaudePluginManifest>,
 	fallback: string,
 ): Promise<ResolvedPluginDir> {
 	const manifest = await readPluginManifest(root);
 	const fallbackDir = path.join(root.path, fallback);
-	const configured = manifest?.[manifestKey];
-	if (typeof configured !== "string" || !configured.trim()) {
+
+	let configured: string | undefined;
+	let matchedKey: keyof ClaudePluginManifest | undefined;
+	for (const key of manifestKeys) {
+		const val = manifest?.[key];
+		if (typeof val === "string" && val.trim()) {
+			configured = val.trim();
+			matchedKey = key;
+			break;
+		}
+	}
+
+	if (configured === undefined) {
 		return { dir: fallbackDir };
 	}
 
-	const resolved = path.resolve(root.path, configured.trim());
+	const resolved = path.resolve(root.path, configured);
 	if (isWithinPluginRoot(root.path, resolved)) {
 		return { dir: resolved };
 	}
 
 	return {
 		dir: fallbackDir,
-		warning: `[claude-plugins] Ignoring ${String(manifestKey)} path outside plugin root for ${root.id}: ${configured}`,
+		warning: `[claude-plugins] Ignoring ${String(matchedKey)} path outside plugin root for ${root.id}: ${configured}`,
 	};
 }
 
@@ -93,7 +105,7 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 
 	const results = await Promise.all(
 		roots.map(async root => {
-			const { dir: skillsDir, warning } = await resolvePluginDir(root, "skills", "skills");
+			const { dir: skillsDir, warning } = await resolvePluginDir(root, ["skills"], "skills");
 			const result = await scanSkillsFromDir(ctx, {
 				dir: skillsDir,
 				providerId: PROVIDER_ID,
@@ -128,7 +140,7 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 
 	const results = await Promise.all(
 		roots.map(async root => {
-			const { dir: commandsDir, warning } = await resolvePluginDir(root, "slash-commands", "commands");
+			const { dir: commandsDir, warning } = await resolvePluginDir(root, ["commands", "slash-commands"], "commands");
 			const result = await loadFilesFromDir<SlashCommand>(ctx, commandsDir, PROVIDER_ID, root.scope, {
 				extensions: ["md"],
 				transform: (name, content, filePath, source) => {

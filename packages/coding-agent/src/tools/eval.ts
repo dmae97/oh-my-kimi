@@ -16,7 +16,12 @@ import evalDescription from "../prompts/tools/eval.md" with { type: "text" };
 import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../session/streaming-output";
 import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
 import { resolveEvalBackends, type ToolSession } from ".";
-import { formatStyledTruncationWarning, resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "./output-meta";
+import {
+	formatStyledTruncationWarning,
+	resolveOutputMaxColumns,
+	resolveOutputSinkHeadBytes,
+	stripOutputNotice,
+} from "./output-meta";
 import { formatTitle, replaceTabs, shortenPath, truncateToWidth, wrapBrackets } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -922,8 +927,11 @@ export const evalToolRenderer = {
 	): Component {
 		const details = result.details;
 
-		const output =
+		const rawOutput =
 			options.renderContext?.output ?? (result.content?.find(c => c.type === "text")?.text ?? "").trimEnd();
+		// Strip the LLM-facing notice (appended by wrappedExecute) before display;
+		// the styled `warningLine` below carries the same text in ⟨…⟩ form.
+		const output = stripOutputNotice(rawOutput, details?.meta).trimEnd();
 
 		const jsonOutputs = details?.jsonOutputs ?? [];
 		const jsonLines = jsonOutputs.flatMap((value, index) => {

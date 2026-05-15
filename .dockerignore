@@ -1,0 +1,63 @@
+# Heavy build outputs — must never reach the build context. `target/` alone is
+# >100 GB on a dev machine.
+target/
+node_modules/
+dist/
+runs/
+
+# Per-host scratch the pi codebase uses for parallel agents / worktrees.
+.fallow/
+.worktrees/
+.wt/
+.opencode/
+.pi_config/
+.omp/plugins/
+
+# VCS, editors, IDEs — irrelevant to the build, churn on every IDE keystroke.
+.git/
+.npm/
+.vscode/
+.zed/
+.idea/
+
+# OS + transient noise. Finder rewrites .DS_Store whenever you peek at a
+# folder; profilers drop `CPU.*` blobs at random times. Letting any of these
+# into the build context busts BuildKit's content hash and forces a full
+# native rebuild for no good reason.
+.DS_Store
+*.swp
+*.swo
+*~
+*.tmp
+
+# Logs + profiling artifacts.
+*.log
+*.cpuprofile
+*.heapprofile
+*.heapsnapshot
+CPU.*
+
+# Build / test side outputs.
+*.tsbuildinfo
+coverage/
+.nyc_output/
+__pycache__/
+compaction-results/
+changes/
+
+# Generated files (the in-image build regenerates them).
+packages/coding-agent/src/internal-urls/docs-index.generated.ts
+packages/natives/native/.build/
+packages/natives/native/pi_natives.darwin-*.node
+packages/natives/native/pi_natives.dev.node
+packages/ai/test/.temp-images/
+python/omp-rpc/src/omp_rpc.egg-info/
+
+# Scratch files the repo creates ad-hoc.
+syntax.jsonl
+out.jsonl
+out.html
+pi-*.html
+
+# Secrets. Should never be in the image regardless.
+.env

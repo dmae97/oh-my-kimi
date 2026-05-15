@@ -90,6 +90,24 @@ describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 		}
 	});
 
+	it("supports top-level await across cells", async () => {
+		using tempDir = TempDir.createSync("@python-runner-await-");
+		const kernel = await PythonKernel.start({ cwd: tempDir.path() });
+		try {
+			const first = await executePythonWithKernel(
+				kernel,
+				["import asyncio", "x = await asyncio.sleep(0, result=21)", "x * 2"].join("\n"),
+			);
+			expect(first.exitCode).toBe(0);
+			expect(first.output).toContain("42");
+			const second = await executePythonWithKernel(kernel, "x + 1");
+			expect(second.exitCode).toBe(0);
+			expect(second.output).toContain("22");
+		} finally {
+			await kernel.shutdown();
+		}
+	});
+
 	it("translates %pwd magic to the user namespace", async () => {
 		using tempDir = TempDir.createSync("@python-runner-magic-");
 		const kernel = await PythonKernel.start({ cwd: tempDir.path() });
