@@ -513,7 +513,7 @@ type ParsedSelector =
 	| { kind: "conflicts" }
 	| { kind: "lines"; ranges: [LineRange, ...LineRange[]]; raw?: boolean };
 
-const LINE_RANGE_RE = /^L?(\d+)(?:([-+])L?(\d+))?$/i;
+const LINE_RANGE_RE = /^L?(\d+)(?:([-+])L?(\d+)?)?$/i;
 
 /** Returns true when the selector requested verbatim/raw output (alone or combined with a range). */
 function isRawSelector(parsed: ParsedSelector): boolean {
@@ -541,10 +541,13 @@ function parseLineRangeChunk(sel: string): LineRange | null {
 		}
 		rawEnd = rawStart + rhs - 1;
 	} else if (sep === "-") {
-		if (rhs === undefined || rhs < rawStart) {
-			throw new ToolError(`Invalid range ${rawStart}-${rhs ?? 0}: end must be >= start.`);
+		// `301-` is shorthand for "from 301 onward" — equivalent to bare `301`.
+		if (rhs !== undefined) {
+			if (rhs < rawStart) {
+				throw new ToolError(`Invalid range ${rawStart}-${rhs}: end must be >= start.`);
+			}
+			rawEnd = rhs;
 		}
-		rawEnd = rhs;
 	}
 	return { startLine: rawStart, endLine: rawEnd };
 }

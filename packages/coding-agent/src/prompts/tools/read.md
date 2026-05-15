@@ -15,7 +15,7 @@ Read files, directories, archives, SQLite databases, images, documents, internal
 Append `:<sel>` to `path`. The bare path falls back to the default mode.
 
 - _(none)_ — parseable code → structural summary (signatures kept, bodies elided); other files → read from the start (up to {{DEFAULT_LIMIT}} lines).
-- `:50` — read from line 50 onward.
+- `:50` / `:50-` — read from line 50 onward.
 - `:50-200` — lines 50–200 inclusive.
 - `:50+150` — 150 lines starting at line 50.
 - `:20+1` — exactly one line.
