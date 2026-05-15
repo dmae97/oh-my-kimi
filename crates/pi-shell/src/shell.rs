@@ -538,6 +538,7 @@ async fn create_session(config: &ShellConfig) -> Result<ShellSessionCore> {
 				.map_err(|err| Error::msg(format!("Failed to set env: {err}")))?;
 		}
 	}
+	apply_env_fallback(&mut shell)?;
 
 	#[cfg(windows)]
 	configure_windows_path(&mut shell)?;
@@ -578,31 +579,7 @@ async fn run_shell_command(
 			.map_err(|err| Error::msg(format!("Failed to set cwd: {err}")))?;
 	}
 
-	let mut env_scope_pushed = false;
-	if let Some(env) = options.env.as_ref() {
-		session
-			.shell
-			.env_mut()
-			.push_scope(EnvironmentScope::Command);
-		env_scope_pushed = true;
-		for (key, value) in env {
-			let normalized_key = normalize_env_key(key);
-			if should_skip_env_var(normalized_key) {
-				continue;
-			}
-			let mut var = ShellVariable::new(ShellValue::String(value.clone()));
-			var.export();
-			if let Err(err) =
-				session
-					.shell
-					.env_mut()
-					.add(normalized_key, var, EnvironmentScope::Command)
-			{
-				let _ = session.shell.env_mut().pop_scope(EnvironmentScope::Command);
-				return Err(Error::msg(format!("Failed to set env: {err}")));
-			}
-		}
-	}
+	let env_scope_pushed = apply_command_env(&mut session.shell, options.env.as_ref())?;
 
 	let minimizer_mode = if let Some(config) = options.minimizer.as_ref() {
 		minimizer::engine::mode_for(&options.command, config)
@@ -824,31 +801,7 @@ async fn run_shell_command_streams(
 			.map_err(|err| Error::msg(format!("Failed to set cwd: {err}")))?;
 	}
 
-	let mut env_scope_pushed = false;
-	if let Some(env) = options.env.as_ref() {
-		session
-			.shell
-			.env_mut()
-			.push_scope(EnvironmentScope::Command);
-		env_scope_pushed = true;
-		for (key, value) in env {
-			let normalized_key = normalize_env_key(key);
-			if should_skip_env_var(normalized_key) {
-				continue;
-			}
-			let mut var = ShellVariable::new(ShellValue::String(value.clone()));
-			var.export();
-			if let Err(err) =
-				session
-					.shell
-					.env_mut()
-					.add(normalized_key, var, EnvironmentScope::Command)
-			{
-				let _ = session.shell.env_mut().pop_scope(EnvironmentScope::Command);
-				return Err(Error::msg(format!("Failed to set env: {err}")));
-			}
-		}
-	}
+	let env_scope_pushed = apply_command_env(&mut session.shell, options.env.as_ref())?;
 
 	let (stdout_reader, stdout_writer) = pipe_to_files("stdout")?;
 	let (stderr_reader, stderr_writer) = pipe_to_files("stderr")?;
@@ -1087,6 +1040,56 @@ fn terminate_background_jobs(shell: &BrushShell) {
 		targets.signal(process::KILL_SIGNAL);
 	});
 }
+
+/// Apply per-command environment variables onto a freshly pushed
+/// `Command` scope. Returns `true` when a scope was pushed (so the caller
+/// can pop it after the command runs), `false` when there were no vars and
+/// the existing scopes remain untouched.
+fn apply_command_env(shell: &mut BrushShell, env: Option<&HashMap<String, String>>) -> Result<bool> {
+	let Some(env) = env else {
+		return Ok(false);
+	};
+	shell.env_mut().push_scope(EnvironmentScope::Command);
+	for (key, value) in env {
+		let normalized_key = normalize_env_key(key);
+		if should_skip_env_var(normalized_key) {
+			continue;
+		}
+		let mut var = ShellVariable::new(ShellValue::String(value.clone()));
+		var.export();
+		if let Err(err) = shell
+			.env_mut()
+			.add(normalized_key, var, EnvironmentScope::Command)
+		{
+			let _ = shell.env_mut().pop_scope(EnvironmentScope::Command);
+			return Err(Error::msg(format!("Failed to set env: {err}")));
+		}
+	}
+	Ok(true)
+}
+
+/// Define `env` as a shell variable expanding to the literal `$env` so that
+/// brush-core's POSIX parameter expansion preserves PowerShell-style
+/// `$env:NAME` references when commands are dispatched through brush to a
+/// PowerShell (or any) subprocess. The variable is not exported, so it only
+/// influences brush's own expansion; the child process environment is
+/// unaffected.
+///
+/// User-driven assignments (`env=prod; echo "$env:8080"`) push their own
+/// binding in the command scope and shadow this global default, preserving
+/// the bash POSIX contract for callers that genuinely use a variable named
+/// `env`.
+fn apply_env_fallback(shell: &mut BrushShell) -> Result<()> {
+	if shell.env().get("env").is_some() {
+		return Ok(());
+	}
+	let var = ShellVariable::new(ShellValue::String("$env".to_string()));
+	shell
+		.env_mut()
+		.set_global("env", var)
+		.map_err(|err| Error::msg(format!("Failed to set env fallback: {err}")))
+}
+
 fn should_skip_env_var(key: &str) -> bool {
 	if key.starts_with("BASH_FUNC_") && key.ends_with("%%") {
 		return true;
@@ -1879,5 +1882,55 @@ mod tests {
 			.await
 			.expect("execute should succeed");
 		assert_eq!(result.exit_code, Some(0));
+	}
+
+	/// Brush expands `$env:NAME` against the `env` shell variable by default,
+	/// collapsing PowerShell references like `Write-Host $env:OMPCODE` to
+	/// `:OMPCODE`. The session-level fallback below defines `env=$env` so the
+	/// expansion is the literal `$env:OMPCODE`, preserving the PowerShell
+	/// token when the command is forwarded to a child shell.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn powershell_env_reference_survives_brush_expansion() {
+		let (tx, mut rx) = mpsc::unbounded_channel::<Bytes>();
+		let options = ShellExecuteOptions {
+			command: "printf '%s' \"$env:SystemRoot\"".to_string(),
+			..Default::default()
+		};
+		let streams = StreamSinks { stdout: Some(tx), stderr: None };
+		let result = execute_shell_streams(options, streams, CancelToken::default())
+			.await
+			.expect("execute should succeed");
+		assert_eq!(result.exit_code, Some(0));
+
+		let mut stdout = Vec::new();
+		while let Some(chunk) = rx.recv().await {
+			stdout.extend_from_slice(&chunk);
+		}
+		assert_eq!(stdout, b"$env:SystemRoot");
+	}
+
+	/// A user assignment to `env` in the command itself must shadow the
+	/// session-level fallback so callers that genuinely use a POSIX variable
+	/// named `env` see their value, not the literal `$env`.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn user_env_assignment_shadows_powershell_fallback() {
+		let (tx, mut rx) = mpsc::unbounded_channel::<Bytes>();
+		let options = ShellExecuteOptions {
+			command: "env=prod; printf '%s' \"$env:8080\"".to_string(),
+			..Default::default()
+		};
+		let streams = StreamSinks { stdout: Some(tx), stderr: None };
+		let result = execute_shell_streams(options, streams, CancelToken::default())
+			.await
+			.expect("execute should succeed");
+		assert_eq!(result.exit_code, Some(0));
+
+		let mut stdout = Vec::new();
+		while let Some(chunk) = rx.recv().await {
+			stdout.extend_from_slice(&chunk);
+		}
+		assert_eq!(stdout, b"prod:8080");
 	}
 }
