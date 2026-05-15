@@ -422,6 +422,16 @@ describe("splitHashlineInput — @ headers", () => {
 			{ path: "b.ts", diff: `+ EOF\n${pl("b")}` },
 		]);
 	});
+
+	it("silently drops a duplicate header with no operations between them", () => {
+		const input = ["@@ src/foo.ts", "@@ src/foo.ts", `+ BOF`, pl("x")].join("\n");
+		expect(splitHashlineInputs(input)).toEqual([{ path: "src/foo.ts", diff: `+ BOF\n${pl("x")}` }]);
+	});
+
+	it("silently drops a trailing header with no operations", () => {
+		const input = ["@@ a.ts", "+ BOF", pl("a"), "@@ b.ts"].join("\n");
+		expect(splitHashlineInputs(input)).toEqual([{ path: "a.ts", diff: `+ BOF\n${pl("a")}` }]);
+	});
 });
 
 describe("hashline executor", () => {

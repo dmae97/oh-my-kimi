@@ -108,7 +108,8 @@ export function splitHashlineInputs(input: string, options: SplitHashlineOptions
 
 	const flush = () => {
 		if (currentPath.length === 0) return;
-		sections.push({ path: currentPath, diff: currentLines.join("\n") });
+		const hasOps = currentLines.some(rawLine => stripTrailingCarriageReturn(rawLine).trim().length > 0);
+		if (hasOps) sections.push({ path: currentPath, diff: currentLines.join("\n") });
 		currentLines = [];
 	};
 
