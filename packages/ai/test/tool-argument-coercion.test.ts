@@ -682,4 +682,130 @@ describe("Tool argument coercion", () => {
 			},
 		]);
 	});
+	it("substitutes the schema default when a required field arrives as null", () => {
+		const tool: Tool = {
+			name: "t-defaulted-null",
+			description: "",
+			parameters: Type.Object({
+				note: Type.Union([Type.String(), Type.Null()]),
+				tags: Type.Array(Type.String(), { default: [] }),
+			}),
+		};
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-defaulted-null",
+			name: "t-defaulted-null",
+			arguments: { note: null, tags: null },
+		};
+
+		const result = validateToolArguments(tool, toolCall) as { note: string | null; tags: string[] };
+		expect(result).toEqual({ note: null, tags: [] });
+	});
+
+	it("clones the substituted default so per-call mutations stay local", () => {
+		const tool: Tool = {
+			name: "t-defaulted-isolation",
+			description: "",
+			parameters: Type.Object({
+				tags: Type.Array(Type.String(), { default: [] }),
+			}),
+		};
+
+		const first = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-iso-1",
+			name: "t-defaulted-isolation",
+			arguments: { tags: null },
+		}) as { tags: string[] };
+		first.tags.push("leak");
+
+		const second = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-iso-2",
+			name: "t-defaulted-isolation",
+			arguments: { tags: null },
+		}) as { tags: string[] };
+
+		expect(second.tags).toEqual([]);
+	});
+
+	it("strips null from optional properties without defaults", () => {
+		const tool: Tool = {
+			name: "t-optional-nulls",
+			description: "",
+			parameters: Type.Object({
+				path: Type.String(),
+				offset: Type.Optional(Type.Number()),
+				limit: Type.Optional(Type.Number()),
+			}),
+		};
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-optional-nulls",
+			name: "t-optional-nulls",
+			arguments: { path: "foo", offset: null, limit: null },
+		};
+
+		const result = validateToolArguments(tool, toolCall);
+		expect(result).toEqual({ path: "foo" });
+	});
+
+	it("deserializes a stringified JSON root with null and stringified-array fields together", () => {
+		const tool: Tool = {
+			name: "t-root-json-null",
+			description: "",
+			parameters: Type.Object({
+				note: Type.Union([Type.String(), Type.Null()]),
+				tags: Type.Array(Type.String(), { default: [] }),
+			}),
+		};
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-root-json-null",
+			name: "t-root-json-null",
+			arguments: JSON.stringify({ note: null, tags: JSON.stringify(["a", "b"]) }) as unknown as Record<
+				string,
+				unknown
+			>,
+		};
+
+		const result = validateToolArguments(tool, toolCall);
+		expect(result).toEqual({ note: null, tags: ["a", "b"] });
+	});
+
+	it("deserializes nested JSON strings at multiple levels", () => {
+		const tool: Tool = {
+			name: "t-nested-json",
+			description: "",
+			parameters: Type.Object({
+				payload: Type.Object({
+					flags: Type.Array(Type.Boolean()),
+					meta: Type.Object({ count: Type.Number() }),
+				}),
+			}),
+		};
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-nested-json",
+			name: "t-nested-json",
+			arguments: {
+				payload: JSON.stringify({
+					flags: JSON.stringify([true, false]),
+					meta: JSON.stringify({ count: 3 }),
+				}),
+			},
+		};
+
+		const result = validateToolArguments(tool, toolCall);
+		expect(result).toEqual({
+			payload: {
+				flags: [true, false],
+				meta: { count: 3 },
+			},
+		});
+	});
 });

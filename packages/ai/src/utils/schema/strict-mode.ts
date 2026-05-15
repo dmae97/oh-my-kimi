@@ -316,6 +316,10 @@ export function enforceStrictSchema(
 					) {
 						return [key, processed];
 					}
+					if (isJsonObject(processed) && typeof processed.description === "string") {
+						const { description, ...withoutDescription } = processed;
+						return [key, { anyOf: [withoutDescription, { type: "null" }], description }];
+					}
 					return [key, { anyOf: [processed, { type: "null" }] }];
 				}
 				return [key, processed];

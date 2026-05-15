@@ -564,16 +564,34 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 	for (const [key, propertySchema] of Object.entries(properties)) {
 		if (!(key in nextValue)) continue;
 		const currentValue = nextValue[key];
+		const isNullish = currentValue === null || currentValue === "null";
 
 		// Strip null and the string "null" from optional fields.
 		// The LLM sometimes outputs string "null" to mean "no value".
-		if ((currentValue === null || currentValue === "null") && !required.has(key)) {
+		if (isNullish && !required.has(key)) {
 			if (!changed) {
 				nextValue = { ...nextValue };
 				changed = true;
 			}
 			delete nextValue[key];
 			continue;
+		}
+
+		// Substitute the schema-supplied default when a required field arrives
+		// as null/"null". LLMs commonly emit null for "I have nothing to say
+		// here"; if the schema documents a default, honor it instead of
+		// rejecting the whole call. The default is cloned so mutations on the
+		// validated value never bleed back into the schema.
+		if (isNullish && propertySchema && typeof propertySchema === "object") {
+			const propertyObject = propertySchema as Record<string, unknown>;
+			if ("default" in propertyObject) {
+				if (!changed) {
+					nextValue = { ...nextValue };
+					changed = true;
+				}
+				nextValue[key] = structuredCloneJSON(propertyObject.default);
+				continue;
+			}
 		}
 		const normalized = normalizeOptionalNullsForSchema(propertySchema, currentValue);
 		if (!normalized.changed) continue;
