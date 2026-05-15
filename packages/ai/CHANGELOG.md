@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.1.2] - 2026-05-15
 ### Breaking Changes
 
 - Rejected draft-07 tuple and dependency keywords (`items` arrays, `dependencies`, `additionalItems`) in JSON Schema validation

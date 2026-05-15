@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.1.2] - 2026-05-15
 ### Added
 
 - Added `responseHeaders` to `ChatUsageEvent` and `ManualChatTelemetryOptions` so telemetry hooks receive captured lowercase upstream response headers for each chat span
