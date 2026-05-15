@@ -4,29 +4,26 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-ai";
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { createMockModel, type MockModelHandle } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { queueResolveHandler } from "@oh-my-pi/pi-coding-agent/tools/resolve";
 import { buildNamedToolChoice } from "@oh-my-pi/pi-coding-agent/utils/tool-choice";
 import { Snowflake } from "@oh-my-pi/pi-utils";
-import { createAssistantMessage } from "./helpers/agent-session-setup";
-
-class MockAssistantStream extends AssistantMessageEventStream {}
 
 describe("AgentSession resolve reminder", () => {
 	let session: AgentSession;
 	let tempDir: string;
-	let streamCallCount = 0;
+	let mock: MockModelHandle;
 	let authStorage: AuthStorage | undefined;
 
 	beforeEach(async () => {
 		tempDir = path.join(os.tmpdir(), `pi-resolve-reminder-test-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
-		streamCallCount = 0;
 
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) {
@@ -37,16 +34,9 @@ describe("AgentSession resolve reminder", () => {
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 
-		const agent = new Agent({
-			initialState: {
-				model,
-				systemPrompt: ["Test"],
-				tools: [],
-				messages: [],
-			},
-			streamFn: () => {
-				streamCallCount += 1;
-				if (streamCallCount === 1) {
+		mock = createMockModel({
+			handler: () => {
+				if (mock.calls.length === 1) {
 					queueResolveHandler(
 						{
 							getToolChoiceQueue: () => session.toolChoiceQueue,
@@ -61,7 +51,7 @@ describe("AgentSession resolve reminder", () => {
 									attribution: "agent",
 									timestamp: Date.now(),
 								}),
-						} as any,
+						} as unknown as ToolSession,
 						{
 							label: "AST Edit: 1 replacement in 1 file",
 							sourceToolName: "ast_edit",
@@ -69,13 +59,18 @@ describe("AgentSession resolve reminder", () => {
 						},
 					);
 				}
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					stream.push({ type: "start", partial: createAssistantMessage("") });
-					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("Done") });
-				});
-				return stream;
+				return { content: ["Done"] };
 			},
+		});
+
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: mock.stream,
 		});
 
 		session = new AgentSession({
@@ -99,7 +94,7 @@ describe("AgentSession resolve reminder", () => {
 	it("forces an immediate steering turn and injects resolve reminder before second assistant response", async () => {
 		await session.prompt("run preview");
 
-		expect(streamCallCount).toBe(2);
+		expect(mock.calls).toHaveLength(2);
 
 		const messages = session.agent.state.messages;
 		const assistantIndices = messages

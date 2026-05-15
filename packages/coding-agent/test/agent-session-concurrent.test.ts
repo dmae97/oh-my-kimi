@@ -8,6 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, AgentBusyError, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { type AssistantMessage, getBundledModel, type Message, type ToolCall } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -22,7 +23,6 @@ import { Type } from "@sinclair/typebox";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 // Mock stream that mimics AssistantMessageEventStream
-class MockAssistantStream extends AssistantMessageEventStream {}
 
 describe("AgentSession concurrent prompt guard", () => {
 	let session: AgentSession;
@@ -61,7 +61,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			},
 			streamFn: (_model, _context, options) => {
 				abortSignal = options?.signal;
-				const stream = new MockAssistantStream();
+				const stream = new AssistantMessageEventStream();
 				queueMicrotask(() => {
 					stream.push({ type: "start", partial: createAssistantMessage("") });
 					const checkAbort = () => {
@@ -158,7 +158,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 	it("delivers hidden nextTurn stop reactions through the next LLM call without exposing them in the visible queue", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		let firstStream: MockAssistantStream | undefined;
+		let firstStream: AssistantMessageEventStream | undefined;
 		const callMessages: Message[][] = [];
 
 		const agent = new Agent({
@@ -171,7 +171,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			convertToLlm,
 			streamFn: (_model, context) => {
 				callMessages.push([...context.messages]);
-				const stream = new MockAssistantStream();
+				const stream = new AssistantMessageEventStream();
 				queueMicrotask(() => {
 					stream.push({ type: "start", partial: createAssistantMessage("") });
 					if (callMessages.length > 1) {
@@ -235,6 +235,7 @@ describe("AgentSession concurrent prompt guard", () => {
 	it("should allow prompt() after previous completes", async () => {
 		// Create session with a stream that completes immediately
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: {
@@ -242,14 +243,7 @@ describe("AgentSession concurrent prompt guard", () => {
 				systemPrompt: ["Test"],
 				tools: [],
 			},
-			streamFn: () => {
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					stream.push({ type: "start", partial: createAssistantMessage("") });
-					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("Done") });
-				});
-				return stream;
-			},
+			streamFn: mock.stream,
 		});
 
 		const sessionManager = SessionManager.inMemory();
@@ -327,7 +321,7 @@ describe("AgentSession TTSR resume gate", () => {
 		};
 	}
 
-	function pushContinuationStream(stream: MockAssistantStream, onComplete: () => void): void {
+	function pushContinuationStream(stream: AssistantMessageEventStream, onComplete: () => void): void {
 		setTimeout(() => {
 			const partial = makeMsg("");
 			stream.push({ type: "start", partial });
@@ -342,7 +336,7 @@ describe("AgentSession TTSR resume gate", () => {
 		}, 10);
 	}
 
-	function pushAbortableTtsrStream(stream: MockAssistantStream, signal: AbortSignal | undefined): void {
+	function pushAbortableTtsrStream(stream: AssistantMessageEventStream, signal: AbortSignal | undefined): void {
 		queueMicrotask(() => {
 			const partial = makeMsg("");
 			stream.push({ type: "start", partial });
@@ -387,7 +381,7 @@ describe("AgentSession TTSR resume gate", () => {
 			initialState: { model, systemPrompt: ["Test"], tools: [] },
 			streamFn: (_model, _context, options) => {
 				streamCallCount++;
-				const stream = new MockAssistantStream();
+				const stream = new AssistantMessageEventStream();
 				const signal = options?.signal;
 
 				if (streamCallCount === 1) {
@@ -448,7 +442,7 @@ describe("AgentSession TTSR resume gate", () => {
 			initialState: { model, systemPrompt: ["Test"], tools: [] },
 			streamFn: (_model, _context, _options) => {
 				streamCallCount++;
-				const stream = new MockAssistantStream();
+				const stream = new AssistantMessageEventStream();
 
 				if (streamCallCount === 1) {
 					// First stream: emit matching text and complete normally
@@ -519,7 +513,7 @@ describe("AgentSession TTSR resume gate", () => {
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: ["Test"], tools: [] },
 			streamFn: (_model, _context, options) => {
-				const stream = new MockAssistantStream();
+				const stream = new AssistantMessageEventStream();
 				const signal = options?.signal;
 
 				queueMicrotask(() => {
@@ -636,7 +630,7 @@ describe("AgentSession TTSR resume gate", () => {
 			initialState: { model, systemPrompt: ["Test"], tools: [mockTool] },
 			streamFn: (_model, _context, options) => {
 				streamCallCount++;
-				const stream = new MockAssistantStream();
+				const stream = new AssistantMessageEventStream();
 				const signal = options?.signal;
 
 				if (streamCallCount === 1) {
@@ -746,7 +740,7 @@ describe("AgentSession TTSR resume gate", () => {
 			initialState: { model: sparkModel, systemPrompt: ["Test"], tools: [] },
 			streamFn: () => {
 				streamCallCount++;
-				const stream = new MockAssistantStream();
+				const stream = new AssistantMessageEventStream();
 				if (streamCallCount === 1) {
 					queueMicrotask(() => {
 						const message = makeOverflowMessage();

@@ -19,8 +19,6 @@ import { ToolError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { Type } from "@sinclair/typebox";
 
-class MockAssistantStream extends AssistantMessageEventStream {}
-
 function createAssistantMessage(content: AssistantMessage["content"], stopReason: StopReason): AssistantMessage {
 	return {
 		role: "assistant",
@@ -143,7 +141,7 @@ function createStreamForDiff(
 	let callIndex = 0;
 	return (_model, _context, options) => {
 		abortSignalRef.current = options?.signal;
-		const stream = new MockAssistantStream();
+		const stream = new AssistantMessageEventStream();
 		const toolCallId = "call_edit_1";
 		let diffSoFar = "";
 		let aborted = false;

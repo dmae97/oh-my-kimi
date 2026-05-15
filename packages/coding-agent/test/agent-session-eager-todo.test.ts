@@ -15,8 +15,6 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import { Type } from "@sinclair/typebox";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
-class MockAssistantStream extends AssistantMessageEventStream {}
-
 type ObservedPromptCall = {
 	toolChoice: string | undefined;
 	toolNames: string[];
@@ -152,7 +150,7 @@ describe("AgentSession eager todo enforcement", () => {
 					lastMessageText: getMessageText(lastMessage),
 				});
 				const response = scriptedResponses.shift() ?? createAssistantMessage("done");
-				const stream = new MockAssistantStream();
+				const stream = new AssistantMessageEventStream();
 				queueMicrotask(() => {
 					stream.push({ type: "start", partial: response });
 					const reason =

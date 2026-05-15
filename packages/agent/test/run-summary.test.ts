@@ -17,8 +17,8 @@ import {
 } from "@oh-my-pi/pi-agent-core/run-collector";
 import { AGGREGATE_ATTR, EXECUTE_TOOL_STATUS_ATTR, GenAIAttr } from "@oh-my-pi/pi-agent-core/telemetry";
 import type { AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core/types";
-import type { AssistantMessage, Context, Message, Model, UserMessage } from "@oh-my-pi/pi-ai";
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import type { AssistantMessage, Message } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import type {
 	AttributeValue,
 	Context as OtelContext,
@@ -29,9 +29,7 @@ import type {
 	Tracer,
 } from "@opentelemetry/api";
 import { Type } from "@sinclair/typebox";
-import { createAssistantMessage } from "./helpers";
-
-class MockAssistantStream extends AssistantMessageEventStream {}
+import { createUserMessage } from "./helpers";
 
 interface RecordedSpan {
 	readonly name: string;
@@ -101,25 +99,6 @@ function makeFakeSpan(record: RecordedSpan): Span {
 	return span;
 }
 
-function createModel(): Model<"openai-responses"> {
-	return {
-		id: "mock-model",
-		name: "mock",
-		api: "openai-responses",
-		provider: "mock-provider",
-		baseUrl: "https://example.invalid",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 8192,
-		maxTokens: 2048,
-	};
-}
-
-function createUserMessage(text: string): UserMessage {
-	return { role: "user", content: text, timestamp: Date.now() };
-}
-
 function identityConverter(messages: AgentMessage[]): Message[] {
 	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
 }
@@ -139,10 +118,6 @@ function makeUsage(
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		...extras,
 	};
-}
-
-function withUsage(message: AssistantMessage, usage: AssistantMessage["usage"]): AssistantMessage {
-	return { ...message, usage };
 }
 
 interface TestTool {
@@ -176,55 +151,14 @@ function buildTool(spec: TestTool): AgentTool {
 	} satisfies AgentTool;
 }
 
-/**
- * Build a stream factory that walks the agent through `script` — one
- * assistant message per call. Each entry is either a final text response
- * (`{ text }`) or a tool-call message (`{ toolCalls }`).
- */
-function scriptedStreamFn(
-	script: readonly (
-		| { readonly text: string; readonly usage?: AssistantMessage["usage"] }
-		| {
-				readonly toolCalls: readonly {
-					readonly id: string;
-					readonly name: string;
-					readonly args?: Record<string, unknown>;
-				}[];
-				readonly usage?: AssistantMessage["usage"];
-		  }
-	)[],
-) {
-	let callIndex = 0;
-	return (_model: Model, _ctx: Context) => {
-		const stream = new MockAssistantStream();
-		const entry = script[callIndex++] ?? script[script.length - 1];
-		queueMicrotask(() => {
-			const base =
-				"text" in entry
-					? createAssistantMessage([{ type: "text", text: entry.text }], "stop")
-					: createAssistantMessage(
-							entry.toolCalls.map(tc => ({
-								type: "toolCall",
-								id: tc.id,
-								name: tc.name,
-								arguments: tc.args ?? { value: "x" },
-							})),
-							"toolUse",
-						);
-			const message = entry.usage ? withUsage(base, entry.usage) : base;
-			const reason =
-				message.stopReason === "toolUse" || message.stopReason === "length" ? message.stopReason : "stop";
-			stream.push({ type: "done", reason, message });
-		});
-		return stream;
-	};
-}
-
 describe("AgentRunSummary delivery", () => {
 	it("populates telemetry/coverage on agent_end when telemetry: {} is supplied", async () => {
 		const tracer = new RecordingTracer();
+		const mock = createMockModel({
+			responses: [{ content: ["ok"], usage: makeUsage(7, 3) }],
+		});
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			telemetry: { tracer },
 		};
@@ -234,7 +168,7 @@ describe("AgentRunSummary delivery", () => {
 			{ systemPrompt: ["sys"], messages: [], tools: [] },
 			config,
 			undefined,
-			scriptedStreamFn([{ text: "ok", usage: makeUsage(7, 3) }]),
+			mock.stream,
 		);
 		for await (const event of stream) events.push(event);
 		const endEvent = events.find((e): e is Extract<AgentEvent, { type: "agent_end" }> => e.type === "agent_end");
@@ -248,8 +182,9 @@ describe("AgentRunSummary delivery", () => {
 
 	it("emits no spans and no summary when telemetry is unset", async () => {
 		const tracer = new RecordingTracer();
+		const mock = createMockModel({ responses: [{ content: ["ok"] }] });
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			// telemetry intentionally unset.
 		};
@@ -259,7 +194,7 @@ describe("AgentRunSummary delivery", () => {
 			{ systemPrompt: ["sys"], messages: [], tools: [] },
 			config,
 			undefined,
-			scriptedStreamFn([{ text: "ok" }]),
+			mock.stream,
 		);
 		for await (const event of stream) events.push(event);
 		expect(tracer.spans.length).toBe(0);
@@ -270,8 +205,9 @@ describe("AgentRunSummary delivery", () => {
 
 	it("preserves agentLoop().result() backwards-compat (still resolves to AgentMessage[])", async () => {
 		const tracer = new RecordingTracer();
+		const mock = createMockModel({ responses: [{ content: ["ok"] }] });
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			telemetry: { tracer },
 		};
@@ -280,7 +216,7 @@ describe("AgentRunSummary delivery", () => {
 			{ systemPrompt: ["sys"], messages: [], tools: [] },
 			config,
 			undefined,
-			scriptedStreamFn([{ text: "ok" }]),
+			mock.stream,
 		);
 		const messages = await stream.result();
 		// 1 user prompt + 1 assistant message.
@@ -294,11 +230,20 @@ describe("AgentRunSummary aggregation", () => {
 	it("sums token + cost totals across multiple chats and counts stop_reasons", async () => {
 		const tracer = new RecordingTracer();
 		const tool = buildTool({ name: "alpha", behavior: "ok" });
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [{ type: "toolCall", id: "a-1", name: "alpha", arguments: { value: "x" } }],
+					usage: makeUsage(5, 2),
+				},
+				{ content: ["wrap"], usage: makeUsage(8, 1) },
+			],
+		});
 		const detailed = agentLoopDetailed(
 			[createUserMessage("hi")],
 			{ systemPrompt: ["sys"], messages: [], tools: [tool] },
 			{
-				model: createModel(),
+				model: mock.model,
 				convertToLlm: identityConverter,
 				telemetry: {
 					tracer,
@@ -306,10 +251,7 @@ describe("AgentRunSummary aggregation", () => {
 				},
 			},
 			undefined,
-			scriptedStreamFn([
-				{ toolCalls: [{ id: "a-1", name: "alpha" }], usage: makeUsage(5, 2) },
-				{ text: "wrap", usage: makeUsage(8, 1) },
-			]),
+			mock.stream,
 		);
 		for await (const _ of detailed.stream) {
 			// drain
@@ -335,11 +277,23 @@ describe("AgentRunSummary aggregation", () => {
 			buildTool({ name: "err-tool", behavior: "throw" }),
 			buildTool({ name: "blocked-tool", behavior: "block" }),
 		];
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "t-1", name: "ok-tool", arguments: { value: "x" } },
+						{ type: "toolCall", id: "t-2", name: "err-tool", arguments: { value: "x" } },
+						{ type: "toolCall", id: "t-3", name: "blocked-tool", arguments: { value: "x" } },
+					],
+				},
+				{ content: ["done"] },
+			],
+		});
 		const detailed = agentLoopDetailed(
 			[createUserMessage("hi")],
 			{ systemPrompt: ["sys"], messages: [], tools },
 			{
-				model: createModel(),
+				model: mock.model,
 				convertToLlm: identityConverter,
 				telemetry: { tracer },
 				beforeToolCall: async ctx => {
@@ -348,16 +302,7 @@ describe("AgentRunSummary aggregation", () => {
 				},
 			},
 			undefined,
-			scriptedStreamFn([
-				{
-					toolCalls: [
-						{ id: "t-1", name: "ok-tool" },
-						{ id: "t-2", name: "err-tool" },
-						{ id: "t-3", name: "blocked-tool" },
-					],
-				},
-				{ text: "done" },
-			]),
+			mock.stream,
 		);
 		for await (const _ of detailed.stream) {
 			// drain
@@ -379,15 +324,21 @@ describe("AgentRunSummary aggregation", () => {
 	it("populates aggregate gen_ai.agent.* attributes on the invoke_agent span", async () => {
 		const tracer = new RecordingTracer();
 		const tool = buildTool({ name: "alpha", behavior: "ok" });
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [{ type: "toolCall", id: "a-1", name: "alpha", arguments: { value: "x" } }],
+					usage: makeUsage(4, 6),
+				},
+				{ content: ["done"], usage: makeUsage(2, 1) },
+			],
+		});
 		const detailed = agentLoopDetailed(
 			[createUserMessage("hi")],
 			{ systemPrompt: ["sys"], messages: [], tools: [tool] },
-			{ model: createModel(), convertToLlm: identityConverter, telemetry: { tracer } },
+			{ model: mock.model, convertToLlm: identityConverter, telemetry: { tracer } },
 			undefined,
-			scriptedStreamFn([
-				{ toolCalls: [{ id: "a-1", name: "alpha" }], usage: makeUsage(4, 6) },
-				{ text: "done", usage: makeUsage(2, 1) },
-			]),
+			mock.stream,
 		);
 		for await (const _ of detailed.stream) {
 			// drain
@@ -412,22 +363,25 @@ describe("AgentRunCoverage", () => {
 			buildTool({ name: "alpha", behavior: "ok" }),
 			buildTool({ name: "mu", behavior: "ok" }),
 		];
-		const detailed = agentLoopDetailed(
-			[createUserMessage("hi")],
-			{ systemPrompt: ["sys"], messages: [], tools },
-			{ model: createModel(), convertToLlm: identityConverter, telemetry: { tracer } },
-			undefined,
-			scriptedStreamFn([
+		const mock = createMockModel({
+			responses: [
 				// Step 1 invokes alpha and mu.
 				{
-					toolCalls: [
-						{ id: "t-1", name: "alpha" },
-						{ id: "t-2", name: "mu" },
+					content: [
+						{ type: "toolCall", id: "t-1", name: "alpha", arguments: { value: "x" } },
+						{ type: "toolCall", id: "t-2", name: "mu", arguments: { value: "x" } },
 					],
 				},
 				// Step 2 wraps up with a text response — zeta is never invoked.
-				{ text: "done" },
-			]),
+				{ content: ["done"] },
+			],
+		});
+		const detailed = agentLoopDetailed(
+			[createUserMessage("hi")],
+			{ systemPrompt: ["sys"], messages: [], tools },
+			{ model: mock.model, convertToLlm: identityConverter, telemetry: { tracer } },
+			undefined,
+			mock.stream,
 		);
 		for await (const _ of detailed.stream) {
 			// drain
@@ -555,11 +509,12 @@ describe("onRunEnd is non-fatal", () => {
 			warnings.push(args);
 		};
 		try {
+			const mock = createMockModel({ responses: [{ content: ["ok"] }] });
 			const stream = agentLoop(
 				[createUserMessage("hi")],
 				{ systemPrompt: ["sys"], messages: [], tools: [] },
 				{
-					model: createModel(),
+					model: mock.model,
 					convertToLlm: identityConverter,
 					telemetry: {
 						tracer,
@@ -569,7 +524,7 @@ describe("onRunEnd is non-fatal", () => {
 					},
 				},
 				undefined,
-				scriptedStreamFn([{ text: "ok" }]),
+				mock.stream,
 			);
 			const messages = await stream.result();
 			expect(messages.length).toBe(2);
@@ -617,11 +572,22 @@ describe("skipped tools without spans", () => {
 		};
 		let triggered = false;
 		let getSteeringCallCount = 0;
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "tool-fast", name: "fast", arguments: { value: "x" } },
+						{ type: "toolCall", id: "tool-slow", name: "slow", arguments: { value: "x" } },
+					],
+				},
+				{ content: ["wrap"] },
+			],
+		});
 		const detailed = agentLoopDetailed(
 			[createUserMessage("hi")],
 			{ systemPrompt: ["sys"], messages: [], tools: [fastTool, slowTool] },
 			{
-				model: createModel(),
+				model: mock.model,
 				convertToLlm: identityConverter,
 				telemetry: { tracer },
 				interruptMode: "immediate",
@@ -637,15 +603,7 @@ describe("skipped tools without spans", () => {
 				},
 			},
 			undefined,
-			scriptedStreamFn([
-				{
-					toolCalls: [
-						{ id: "tool-fast", name: "fast" },
-						{ id: "tool-slow", name: "slow" },
-					],
-				},
-				{ text: "wrap" },
-			]),
+			mock.stream,
 		);
 		for await (const _ of detailed.stream) {
 			// drain

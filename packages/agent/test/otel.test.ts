@@ -9,6 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { agentLoop } from "@oh-my-pi/pi-agent-core/agent-loop";
 import {
 	type AgentTelemetryConfig,
+	type ChatUsageEvent,
 	GenAIAttr,
 	GenAIOperation,
 	recordHandoff,
@@ -17,8 +18,9 @@ import {
 	type TelemetryHookContext,
 } from "@oh-my-pi/pi-agent-core/telemetry";
 import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core/types";
-import type { Message, Model, UserMessage } from "@oh-my-pi/pi-ai";
-import { AssistantMessageEventStream, type EventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import type { Message } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import type { EventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { context, SpanStatusCode, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import {
@@ -28,9 +30,9 @@ import {
 	SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { Type } from "@sinclair/typebox";
-import { createAssistantMessage } from "./helpers";
+import { createUserMessage } from "./helpers";
 
-class MockAssistantStream extends AssistantMessageEventStream {}
+const MOCK_IDENT = { id: "mock-model", provider: "mock-provider" } as const;
 
 const exporter = new InMemorySpanExporter();
 let provider: BasicTracerProvider;
@@ -52,25 +54,6 @@ afterAll(async () => {
 	context.disable();
 });
 
-function createModel(): Model<"openai-responses"> {
-	return {
-		id: "mock-model",
-		name: "mock",
-		api: "openai-responses",
-		provider: "mock-provider",
-		baseUrl: "https://example.invalid",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 8192,
-		maxTokens: 2048,
-	};
-}
-
-function createUserMessage(text: string): UserMessage {
-	return { role: "user", content: text, timestamp: Date.now() };
-}
-
 function identityConverter(messages: AgentMessage[]): Message[] {
 	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
 }
@@ -91,38 +74,34 @@ function spansByName(spans: ReadableSpan[], name: string): ReadableSpan[] {
 
 describe("agent-loop OTEL instrumentation", () => {
 	it("emits no spans when telemetry is unset (zero-cost path)", async () => {
-		const config: AgentLoopConfig = {
-			model: createModel(),
-			convertToLlm: identityConverter,
-		};
-		const streamFn = () => {
-			const s = new MockAssistantStream();
-			queueMicrotask(() => {
-				s.push({ type: "done", reason: "stop", message: createAssistantMessage([{ type: "text", text: "ok" }]) });
-			});
-			return s;
-		};
+		const mock = createMockModel({ ...MOCK_IDENT, responses: [{ content: ["ok"] }] });
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
 		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
-		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		expect(exporter.getFinishedSpans()).toHaveLength(0);
 	});
 
 	it("emits invoke_agent → chat hierarchy with full gen_ai.* attribute envelope", async () => {
-		const finalMsg = createAssistantMessage([{ type: "text", text: "hello" }]);
-		finalMsg.usage = {
-			input: 12,
-			output: 34,
-			cacheRead: 5,
-			cacheWrite: 7,
-			totalTokens: 58,
-			reasoningTokens: 11,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		};
-		finalMsg.stopReason = "stop";
-
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [
+				{
+					content: ["hello"],
+					stopReason: "stop",
+					usage: {
+						input: 12,
+						output: 34,
+						cacheRead: 5,
+						cacheWrite: 7,
+						totalTokens: 58,
+						reasoningTokens: 11,
+					},
+				},
+			],
+		});
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			sessionId: "conv-42",
 			temperature: 0.7,
@@ -131,13 +110,8 @@ describe("agent-loop OTEL instrumentation", () => {
 			presencePenalty: 0.1,
 			telemetry: { agent: { id: "agent-1", name: "researcher", description: "test-agent" } },
 		};
-		const streamFn = () => {
-			const s = new MockAssistantStream();
-			queueMicrotask(() => s.push({ type: "done", reason: "stop", message: finalMsg }));
-			return s;
-		};
 		const ctx: AgentContext = { systemPrompt: ["you are helpful"], messages: [], tools: [] };
-		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		const finished = exporter.getFinishedSpans();
 		const invoke = findSpan(finished, "invoke_agent researcher");
@@ -179,9 +153,15 @@ describe("agent-loop OTEL instrumentation", () => {
 	});
 
 	it("emits execute_tool spans parented to invoke_agent (not chat) per semconv", async () => {
-		let callIndex = 0;
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [
+				{ content: [{ type: "toolCall", id: "tc-1", name: "alpha", arguments: { value: "x" } }] },
+				{ content: ["done"] },
+			],
+		});
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			telemetry: {},
 		};
@@ -193,28 +173,8 @@ describe("agent-loop OTEL instrumentation", () => {
 			parameters: alphaSchema,
 			execute: async () => ({ content: [{ type: "text", text: "alpha-result" }], details: {} }),
 		};
-		const streamFn = () => {
-			const s = new MockAssistantStream();
-			queueMicrotask(() => {
-				if (callIndex === 0) {
-					const m = createAssistantMessage(
-						[{ type: "toolCall", id: "tc-1", name: "alpha", arguments: { value: "x" } }],
-						"toolUse",
-					);
-					s.push({ type: "done", reason: "toolUse", message: m });
-				} else {
-					s.push({
-						type: "done",
-						reason: "stop",
-						message: createAssistantMessage([{ type: "text", text: "done" }]),
-					});
-				}
-				callIndex++;
-			});
-			return s;
-		};
 		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [alphaTool] };
-		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		const finished = exporter.getFinishedSpans();
 		const invoke = findSpan(finished, "invoke_agent");
@@ -237,10 +197,16 @@ describe("agent-loop OTEL instrumentation", () => {
 	});
 
 	it("parents downstream spans created during tool execution (active-context propagation)", async () => {
-		let callIndex = 0;
 		const userTracer = trace.getTracer("user-tool");
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [
+				{ content: [{ type: "toolCall", id: "tc-1", name: "probe", arguments: { value: "x" } }] },
+				{ content: ["done"] },
+			],
+		});
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			telemetry: {},
 		};
@@ -256,28 +222,8 @@ describe("agent-loop OTEL instrumentation", () => {
 				return { content: [{ type: "text", text: "ok" }], details: {} };
 			},
 		};
-		const streamFn = () => {
-			const s = new MockAssistantStream();
-			queueMicrotask(() => {
-				if (callIndex === 0) {
-					const m = createAssistantMessage(
-						[{ type: "toolCall", id: "tc-1", name: "probe", arguments: { value: "x" } }],
-						"toolUse",
-					);
-					s.push({ type: "done", reason: "toolUse", message: m });
-				} else {
-					s.push({
-						type: "done",
-						reason: "stop",
-						message: createAssistantMessage([{ type: "text", text: "done" }]),
-					});
-				}
-				callIndex++;
-			});
-			return s;
-		};
 		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [probeTool] };
-		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		const finished = exporter.getFinishedSpans();
 		const tool = findSpan(finished, "execute_tool probe");
@@ -288,9 +234,15 @@ describe("agent-loop OTEL instrumentation", () => {
 	});
 
 	it("records ERROR status + exception when a tool throws", async () => {
-		let callIndex = 0;
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [
+				{ content: [{ type: "toolCall", id: "tc-1", name: "fail", arguments: { value: "x" } }] },
+				{ content: ["done"] },
+			],
+		});
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			telemetry: {},
 		};
@@ -304,28 +256,8 @@ describe("agent-loop OTEL instrumentation", () => {
 				throw new Error("boom");
 			},
 		};
-		const streamFn = () => {
-			const s = new MockAssistantStream();
-			queueMicrotask(() => {
-				if (callIndex === 0) {
-					const m = createAssistantMessage(
-						[{ type: "toolCall", id: "tc-1", name: "fail", arguments: { value: "x" } }],
-						"toolUse",
-					);
-					s.push({ type: "done", reason: "toolUse", message: m });
-				} else {
-					s.push({
-						type: "done",
-						reason: "stop",
-						message: createAssistantMessage([{ type: "text", text: "done" }]),
-					});
-				}
-				callIndex++;
-			});
-			return s;
-		};
 		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [failTool] };
-		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		const tool = findSpan(exporter.getFinishedSpans(), "execute_tool fail");
 		expect(tool).toBeDefined();
@@ -335,21 +267,17 @@ describe("agent-loop OTEL instrumentation", () => {
 	});
 
 	it("emits ERROR status on chat spans when stopReason is error", async () => {
-		const errMsg = createAssistantMessage([{ type: "text", text: "" }], "error");
-		errMsg.errorMessage = "provider returned 500";
-
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [{ throw: "provider returned 500" }],
+		});
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			telemetry: {},
 		};
-		const streamFn = () => {
-			const s = new MockAssistantStream();
-			queueMicrotask(() => s.push({ type: "error", reason: "error", error: errMsg }));
-			return s;
-		};
 		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
-		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
 		expect(chat).toBeDefined();
@@ -359,21 +287,17 @@ describe("agent-loop OTEL instrumentation", () => {
 	});
 
 	it("captures request/response content when captureMessageContent is true", async () => {
-		const finalMsg = createAssistantMessage([{ type: "text", text: "hi back" }]);
-		finalMsg.stopReason = "stop";
-
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [{ content: ["hi back"], stopReason: "stop" }],
+		});
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			telemetry: { captureMessageContent: true },
 		};
-		const streamFn = () => {
-			const s = new MockAssistantStream();
-			queueMicrotask(() => s.push({ type: "done", reason: "stop", message: finalMsg }));
-			return s;
-		};
 		const ctx: AgentContext = { systemPrompt: ["sys-instruction"], messages: [], tools: [] };
-		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
 		const inputs = chat?.attributes[GenAIAttr.InputMessages] as string | undefined;
@@ -387,21 +311,17 @@ describe("agent-loop OTEL instrumentation", () => {
 	});
 
 	it("captures bounded dashboard summary content when requested", async () => {
-		const finalMsg = createAssistantMessage([{ type: "text", text: "hi back" }]);
-		finalMsg.stopReason = "stop";
-
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [{ content: ["hi back"], stopReason: "stop" }],
+		});
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			telemetry: { captureMessageContent: "summary" },
 		};
-		const streamFn = () => {
-			const s = new MockAssistantStream();
-			queueMicrotask(() => s.push({ type: "done", reason: "stop", message: finalMsg }));
-			return s;
-		};
 		const ctx: AgentContext = { systemPrompt: ["sys-instruction"], messages: [], tools: [] };
-		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
 		const request = JSON.parse(chat?.attributes[GenAIAttr.RequestMessages] as string) as Array<{
@@ -416,19 +336,24 @@ describe("agent-loop OTEL instrumentation", () => {
 	});
 
 	it("invokes costEstimator and stamps gen_ai.cost.estimated_usd", async () => {
-		const finalMsg = createAssistantMessage([{ type: "text", text: "ok" }]);
-		finalMsg.usage = {
-			input: 1000,
-			output: 500,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 1500,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		};
-		finalMsg.stopReason = "stop";
-
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [
+				{
+					content: ["ok"],
+					stopReason: "stop",
+					usage: {
+						input: 1000,
+						output: 500,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 1500,
+					},
+				},
+			],
+		});
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			telemetry: {
 				costEstimator: input => ({
@@ -438,13 +363,8 @@ describe("agent-loop OTEL instrumentation", () => {
 				}),
 			},
 		};
-		const streamFn = () => {
-			const s = new MockAssistantStream();
-			queueMicrotask(() => s.push({ type: "done", reason: "stop", message: finalMsg }));
-			return s;
-		};
 		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
-		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
 		expect(chat?.attributes[GenAIAttr.CostEstimatedUsd]).toBeCloseTo(0.0105, 6);
@@ -453,16 +373,22 @@ describe("agent-loop OTEL instrumentation", () => {
 	});
 
 	it("applies dynamic attributes, normalization hooks, and cost deltas", async () => {
-		const finalMsg = createAssistantMessage([{ type: "text", text: "ok" }]);
-		finalMsg.usage = {
-			input: 200,
-			output: 100,
-			cacheRead: 5,
-			cacheWrite: 0,
-			totalTokens: 305,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		};
-		finalMsg.stopReason = "stop";
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [
+				{
+					content: ["ok"],
+					stopReason: "stop",
+					usage: {
+						input: 200,
+						output: 100,
+						cacheRead: 5,
+						cacheWrite: 0,
+						totalTokens: 305,
+					},
+				},
+			],
+		});
 		const deltas: Array<{
 			costUsd: number | undefined;
 			model: string;
@@ -471,25 +397,19 @@ describe("agent-loop OTEL instrumentation", () => {
 		}> = [];
 
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			telemetry: {
 				agent: { name: "prefix.worker" },
 				normalizeAgentName: name => name?.replace(/^prefix\./, ""),
-				normalizeProvider: provider =>
-					provider === "mock-provider" || provider === "mock" ? "normalized-provider" : provider,
+				normalizeProvider: provider => (provider === "mock-provider" ? "normalized-provider" : provider),
 				resolveAttributes: ctx => ({ "tenant.id": "tenant-1", "telemetry.kind": ctx.kind }),
 				costEstimator: () => ({ usd: 0.25 }),
 				onCostDelta: delta => deltas.push(delta),
 			},
 		};
-		const streamFn = () => {
-			const s = new MockAssistantStream();
-			queueMicrotask(() => s.push({ type: "done", reason: "stop", message: finalMsg }));
-			return s;
-		};
 		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
-		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		const invoke = findSpan(exporter.getFinishedSpans(), "invoke_agent worker");
 		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
@@ -504,33 +424,188 @@ describe("agent-loop OTEL instrumentation", () => {
 	});
 
 	it("emits gen_ai.cost.unavailable_reason when the estimator declines", async () => {
-		const finalMsg = createAssistantMessage([{ type: "text", text: "ok" }]);
-		finalMsg.stopReason = "stop";
-
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [{ content: ["ok"], stopReason: "stop" }],
+		});
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			telemetry: { costEstimator: () => ({ unavailable: "unsupported_tier" }) },
 		};
-		const streamFn = () => {
-			const s = new MockAssistantStream();
-			queueMicrotask(() => s.push({ type: "done", reason: "stop", message: finalMsg }));
-			return s;
-		};
 		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
-		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
 		expect(chat?.attributes[GenAIAttr.CostUnavailableReason]).toBe("unsupported_tier");
 		expect(chat?.attributes[GenAIAttr.CostEstimatedUsd]).toBeUndefined();
 	});
 
+	it("fires onChatUsage for every chat step regardless of cost estimator", async () => {
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [
+				{
+					content: ["ok"],
+					stopReason: "stop",
+					usage: { input: 50, output: 25, cacheRead: 10, totalTokens: 85 },
+				},
+			],
+		});
+		const events: ChatUsageEvent[] = [];
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			telemetry: {
+				agent: { id: "agent-1", name: "worker" },
+				resolveAttributes: ctx => ({ "tenant.id": "tenant-7", "telemetry.kind": ctx.kind }),
+				normalizeProvider: provider => (provider === "mock-provider" ? "normalized-provider" : provider),
+				onChatUsage: event => {
+					events.push(event);
+				},
+			},
+		};
+		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
+
+		expect(events).toHaveLength(1);
+		const ev = events[0];
+		expect(ev?.model).toBe("mock-model");
+		expect(ev?.provider).toBe("normalized-provider");
+		expect(ev?.stepNumber).toBe(0);
+		expect(ev?.agent).toEqual({ id: "agent-1", name: "worker" });
+		expect(ev?.usage.inputTokens).toBe(50);
+		expect(ev?.usage.outputTokens).toBe(25);
+		expect(ev?.usage.cachedInputTokens).toBe(10);
+		expect(ev?.usage.totalTokens).toBe(85);
+		expect(ev?.cost).toBeUndefined();
+		expect(ev?.attributes?.["tenant.id"]).toBe("tenant-7");
+		expect(ev?.attributes?.["telemetry.kind"]).toBe("chat");
+		expect(ev?.span).toBeDefined();
+	});
+
+	it("forwards cost estimate to onChatUsage when estimator is configured", async () => {
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [{ content: ["ok"], stopReason: "stop", usage: { input: 100, output: 50, totalTokens: 150 } }],
+		});
+		const events: ChatUsageEvent[] = [];
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			telemetry: {
+				costEstimator: () => ({ usd: 0.05, inputUsd: 0.01, outputUsd: 0.04 }),
+				onChatUsage: event => {
+					events.push(event);
+				},
+			},
+		};
+		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
+
+		expect(events).toHaveLength(1);
+		const cost = events[0]?.cost;
+		expect(cost && "usd" in cost ? cost.usd : undefined).toBe(0.05);
+		expect(cost && "usd" in cost ? cost.inputUsd : undefined).toBe(0.01);
+		expect(cost && "usd" in cost ? cost.outputUsd : undefined).toBe(0.04);
+	});
+
+	it("propagates unavailable cost reason to onChatUsage", async () => {
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [{ content: ["ok"], stopReason: "stop", usage: { input: 10, output: 5, totalTokens: 15 } }],
+		});
+		const events: ChatUsageEvent[] = [];
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			telemetry: {
+				costEstimator: () => ({ unavailable: "unsupported_tier" }),
+				onChatUsage: event => {
+					events.push(event);
+				},
+			},
+		};
+		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
+
+		expect(events).toHaveLength(1);
+		const cost = events[0]?.cost;
+		expect(cost && "unavailable" in cost ? cost.unavailable : undefined).toBe("unsupported_tier");
+	});
+
+	it("skips onChatUsage in recordManualChatTelemetry when usage is undefined", async () => {
+		const events: ChatUsageEvent[] = [];
+		const telemetry = resolveTelemetry(
+			{
+				onChatUsage: event => {
+					events.push(event);
+				},
+			},
+			undefined,
+		);
+		const mock = createMockModel({ ...MOCK_IDENT, responses: [] });
+		await recordManualChatTelemetry(telemetry, {
+			model: mock.model,
+			responseModel: "manual-model",
+			stepNumber: 0,
+		});
+		expect(events).toHaveLength(0);
+
+		await recordManualChatTelemetry(telemetry, {
+			model: mock.model,
+			responseModel: "manual-model",
+			usage: {
+				input: 7,
+				output: 3,
+				totalTokens: 10,
+				cacheRead: 0,
+				cacheWrite: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stepNumber: 1,
+		});
+		expect(events).toHaveLength(1);
+		expect(events[0]?.model).toBe("manual-model");
+		expect(events[0]?.stepNumber).toBe(1);
+		expect(events[0]?.usage.inputTokens).toBe(7);
+	});
+
+	it("captures async onChatUsage rejections via onTelemetryWarning", async () => {
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [{ content: ["ok"], stopReason: "stop", usage: { input: 1, output: 1, totalTokens: 2 } }],
+		});
+		const warnings: string[] = [];
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			telemetry: {
+				onChatUsage: async () => {
+					throw new Error("async boom");
+				},
+				onTelemetryWarning: warning => warnings.push(warning.code),
+			},
+		};
+		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
+		await Bun.sleep(1);
+
+		expect(warnings).toContain("on_chat_usage_failed");
+	});
+
 	it("fires onSpanStart and onSpanEnd for every kind", async () => {
-		let callIndex = 0;
 		const starts: TelemetryHookContext[] = [];
 		const ends: TelemetryHookContext[] = [];
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [
+				{ content: [{ type: "toolCall", id: "tc-1", name: "echo", arguments: { value: "x" } }] },
+				{ content: ["done"] },
+			],
+		});
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			telemetry: {
 				agent: { id: "a", name: "main" },
@@ -546,28 +621,8 @@ describe("agent-loop OTEL instrumentation", () => {
 			parameters: echoSchema,
 			execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
 		};
-		const streamFn = () => {
-			const s = new MockAssistantStream();
-			queueMicrotask(() => {
-				if (callIndex === 0) {
-					const m = createAssistantMessage(
-						[{ type: "toolCall", id: "tc-1", name: "echo", arguments: { value: "x" } }],
-						"toolUse",
-					);
-					s.push({ type: "done", reason: "toolUse", message: m });
-				} else {
-					s.push({
-						type: "done",
-						reason: "stop",
-						message: createAssistantMessage([{ type: "text", text: "done" }]),
-					});
-				}
-				callIndex++;
-			});
-			return s;
-		};
 		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [echoTool] };
-		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		const startKinds = starts.map(s => s.kind);
 		const endKinds = ends.map(s => s.kind);
@@ -593,7 +648,7 @@ describe("agent-loop OTEL instrumentation", () => {
 		expect(span?.attributes[GenAIAttr.ConversationId]).toBe("conv-1");
 	});
 
-	it("records manual chat telemetry for non-loop model calls", () => {
+	it("records manual chat telemetry for non-loop model calls", async () => {
 		const telemetry = resolveTelemetry(
 			{
 				costEstimator: () => ({ usd: 0.02 }),
@@ -602,8 +657,9 @@ describe("agent-loop OTEL instrumentation", () => {
 		);
 		expect(telemetry).toBeDefined();
 
-		recordManualChatTelemetry(telemetry, {
-			model: createModel(),
+		const mock = createMockModel({ ...MOCK_IDENT });
+		await recordManualChatTelemetry(telemetry, {
+			model: mock.model,
 			usage: {
 				input: 10,
 				output: 5,
@@ -645,12 +701,18 @@ describe("agent-loop OTEL instrumentation", () => {
 	});
 
 	it("attaches user-supplied attributes to every span", async () => {
-		let callIndex = 0;
 		const cfg: AgentTelemetryConfig = {
 			attributes: { "deployment.environment": "prod", "service.name": "test-svc" },
 		};
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [
+				{ content: [{ type: "toolCall", id: "tc-1", name: "echo", arguments: { value: "x" } }] },
+				{ content: ["done"] },
+			],
+		});
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: mock.model,
 			convertToLlm: identityConverter,
 			telemetry: cfg,
 		};
@@ -662,31 +724,8 @@ describe("agent-loop OTEL instrumentation", () => {
 			parameters: echoSchema,
 			execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
 		};
-		const streamFn = () => {
-			const s = new MockAssistantStream();
-			queueMicrotask(() => {
-				if (callIndex === 0) {
-					s.push({
-						type: "done",
-						reason: "toolUse",
-						message: createAssistantMessage(
-							[{ type: "toolCall", id: "tc-1", name: "echo", arguments: { value: "x" } }],
-							"toolUse",
-						),
-					});
-				} else {
-					s.push({
-						type: "done",
-						reason: "stop",
-						message: createAssistantMessage([{ type: "text", text: "done" }]),
-					});
-				}
-				callIndex++;
-			});
-			return s;
-		};
 		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [tool] };
-		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		for (const span of exporter.getFinishedSpans()) {
 			expect(span.attributes["deployment.environment"]).toBe("prod");

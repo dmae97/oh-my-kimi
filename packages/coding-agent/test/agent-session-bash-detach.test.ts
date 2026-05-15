@@ -42,8 +42,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import { type AssistantMessage, getBundledModel, type ToolCall } from "@oh-my-pi/pi-ai";
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { getBundledModel } from "@oh-my-pi/pi-ai";
+import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -53,53 +53,19 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { BashTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
-class MockAssistantStream extends AssistantMessageEventStream {}
-
-/** Build an assistant turn that issues a single `bash` tool call. */
-function bashCall(command: string, callId: string): AssistantMessage {
-	const toolCall: ToolCall = {
-		type: "toolCall",
-		id: callId,
-		name: "bash",
-		arguments: { command, timeout: 10 },
-	};
+/** Scripted assistant turn that issues a single `bash` tool call. */
+function bashCall(command: string, callId: string): MockResponse {
 	return {
-		role: "assistant",
-		content: [toolCall],
-		api: "anthropic-messages",
-		provider: "anthropic",
-		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		content: [{ type: "toolCall", id: callId, name: "bash", arguments: { command, timeout: 10 } }],
 		stopReason: "toolUse",
-		timestamp: Date.now(),
 	};
 }
 
-/** Build a plain text assistant turn with `stopReason: "stop"`. */
-function stopReply(text: string): AssistantMessage {
+/** Scripted plain-text assistant turn with `stopReason: "stop"`. */
+function stopReply(text: string): MockResponse {
 	return {
-		role: "assistant",
 		content: [{ type: "text", text }],
-		api: "anthropic-messages",
-		provider: "anthropic",
-		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
 		stopReason: "stop",
-		timestamp: Date.now(),
 	};
 }
 
@@ -151,7 +117,7 @@ describe("BashTool through AgentSession runs children in their own session (e2e)
 	let session: AgentSession;
 	let tempDir: string;
 	let authStorage: AuthStorage | undefined;
-	let scriptedResponses: AssistantMessage[];
+	let scriptedResponses: MockResponse[];
 	let hostSid: number;
 
 	beforeAll(() => {
@@ -201,6 +167,10 @@ describe("BashTool through AgentSession runs children in their own session (e2e)
 
 		scriptedResponses = [];
 
+		const mock = createMockModel({
+			handler: () => scriptedResponses.shift() ?? stopReply("done"),
+		});
+
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: {
@@ -210,17 +180,7 @@ describe("BashTool through AgentSession runs children in their own session (e2e)
 				messages: [],
 			},
 			convertToLlm,
-			streamFn: () => {
-				const response = scriptedResponses.shift() ?? stopReply("done");
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					stream.push({ type: "start", partial: response });
-					const reason =
-						response.stopReason === "toolUse" || response.stopReason === "length" ? response.stopReason : "stop";
-					stream.push({ type: "done", reason, message: response });
-				});
-				return stream;
-			},
+			streamFn: mock.stream,
 		});
 
 		session = new AgentSession({

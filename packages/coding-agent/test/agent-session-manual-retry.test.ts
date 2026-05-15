@@ -1,40 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { type AssistantMessage, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { type AssistantMessage, getBundledModel } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
-
-class MockAssistantStream extends AssistantMessageEventStream {}
-
-function createAssistantMessage(
-	model: Model,
-	options: { text?: string; stopReason: "stop" | "error" | "aborted"; errorMessage?: string },
-): AssistantMessage {
-	return {
-		role: "assistant",
-		content: options.text ? [{ type: "text", text: options.text }] : [],
-		api: model.api,
-		provider: model.provider,
-		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: options.stopReason,
-		errorMessage: options.errorMessage,
-		timestamp: Date.now(),
-	};
-}
 
 function lastAgentMessage(session: AgentSession): AssistantMessage {
 	const message = session.agent.state.messages.at(-1);
@@ -70,7 +44,12 @@ describe("AgentSession manual retry", () => {
 			throw new Error("Expected bundled Anthropic test model to exist");
 		}
 
-		let streamCalls = 0;
+		const mock = createMockModel({
+			responses: [
+				{ throw: "manual retry test failure" },
+				{ content: ["recovered after manual retry"], stopReason: "stop" },
+			],
+		});
 		const agent = new Agent({
 			getApiKey: provider => `${provider}-test-key`,
 			initialState: {
@@ -79,32 +58,7 @@ describe("AgentSession manual retry", () => {
 				tools: [],
 				messages: [],
 			},
-			streamFn: requestedModel => {
-				streamCalls += 1;
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					if (streamCalls === 1) {
-						const message = createAssistantMessage(requestedModel, {
-							stopReason: "error",
-							errorMessage: "manual retry test failure",
-						});
-						stream.push({ type: "start", partial: message });
-						stream.push({ type: "error", reason: "error", error: message });
-						return;
-					}
-
-					const message = createAssistantMessage(requestedModel, {
-						text: "recovered after manual retry",
-						stopReason: "stop",
-					});
-					stream.push({
-						type: "start",
-						partial: createAssistantMessage(requestedModel, { text: "", stopReason: "stop" }),
-					});
-					stream.push({ type: "done", reason: "stop", message });
-				});
-				return stream;
-			},
+			streamFn: mock.stream,
 		});
 		session = new AgentSession({
 			agent,
@@ -121,7 +75,7 @@ describe("AgentSession manual retry", () => {
 		await expect(session.retry()).resolves.toBe(true);
 		await session.waitForIdle();
 
-		expect(streamCalls).toBe(2);
+		expect(mock.calls.length).toBe(2);
 		expect(lastAgentMessage(session).stopReason).toBe("stop");
 		expect(lastAgentMessage(session).content).toContainEqual({ type: "text", text: "recovered after manual retry" });
 	});
@@ -132,7 +86,9 @@ describe("AgentSession manual retry", () => {
 			throw new Error("Expected bundled Anthropic test model to exist");
 		}
 
-		let streamCalls = 0;
+		const mock = createMockModel({
+			responses: [{ content: ["already done"], stopReason: "stop" }],
+		});
 		const agent = new Agent({
 			getApiKey: provider => `${provider}-test-key`,
 			initialState: {
@@ -141,19 +97,7 @@ describe("AgentSession manual retry", () => {
 				tools: [],
 				messages: [],
 			},
-			streamFn: requestedModel => {
-				streamCalls += 1;
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					const message = createAssistantMessage(requestedModel, { text: "already done", stopReason: "stop" });
-					stream.push({
-						type: "start",
-						partial: createAssistantMessage(requestedModel, { text: "", stopReason: "stop" }),
-					});
-					stream.push({ type: "done", reason: "stop", message });
-				});
-				return stream;
-			},
+			streamFn: mock.stream,
 		});
 		session = new AgentSession({
 			agent,
@@ -167,7 +111,7 @@ describe("AgentSession manual retry", () => {
 		await session.waitForIdle();
 
 		await expect(session.retry()).resolves.toBe(false);
-		expect(streamCalls).toBe(1);
+		expect(mock.calls.length).toBe(1);
 		expect(lastAgentMessage(session).content).toContainEqual({ type: "text", text: "already done" });
 	});
 });

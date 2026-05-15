@@ -24,8 +24,6 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Type } from "@sinclair/typebox";
 
-class MockAssistantStream extends AssistantMessageEventStream {}
-
 // ---------------------------------------------------------------------------
 // Shared setup
 // ---------------------------------------------------------------------------
@@ -77,7 +75,7 @@ async function createSession(tools: AgentTool[], bridge?: ClientBridge): Promise
 			messages: [],
 		},
 		convertToLlm,
-		streamFn: () => new MockAssistantStream(),
+		streamFn: () => new AssistantMessageEventStream(),
 	});
 
 	const sess = new AgentSession({

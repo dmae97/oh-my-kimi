@@ -1,11 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { Agent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { getBundledModel, type SimpleStreamOptions } from "@oh-my-pi/pi-ai";
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import type { SimpleStreamOptions } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { Type } from "@sinclair/typebox";
-import { createAssistantMessage, pushAlphaThenDoneEvent } from "./helpers";
-
-class MockAssistantStream extends AssistantMessageEventStream {}
+import { createAssistantMessage } from "./helpers";
 
 describe("Agent", () => {
 	it("should support steering message queueing", async () => {
@@ -19,19 +17,8 @@ describe("Agent", () => {
 	});
 
 	it("continue() should process queued follow-up messages after an assistant turn", async () => {
-		const agent = new Agent({
-			streamFn: () => {
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					stream.push({
-						type: "done",
-						reason: "stop",
-						message: createAssistantMessage([{ type: "text", text: "Processed" }]),
-					});
-				});
-				return stream;
-			},
-		});
+		const mock = createMockModel({ responses: [{ content: ["Processed"] }] });
+		const agent = new Agent({ streamFn: mock.stream });
 
 		agent.replaceMessages([
 			{
@@ -61,21 +48,10 @@ describe("Agent", () => {
 	});
 
 	it("continue() should keep one-at-a-time steering semantics from assistant tail", async () => {
-		let responseCount = 0;
-		const agent = new Agent({
-			streamFn: () => {
-				const stream = new MockAssistantStream();
-				responseCount++;
-				queueMicrotask(() => {
-					stream.push({
-						type: "done",
-						reason: "stop",
-						message: createAssistantMessage([{ type: "text", text: `Processed ${responseCount}` }]),
-					});
-				});
-				return stream;
-			},
+		const mock = createMockModel({
+			responses: [{ content: ["Processed 1"] }, { content: ["Processed 2"] }],
 		});
+		const agent = new Agent({ streamFn: mock.stream });
 
 		agent.replaceMessages([
 			{
@@ -101,14 +77,12 @@ describe("Agent", () => {
 
 		const recentMessages = agent.state.messages.slice(-4);
 		expect(recentMessages.map(m => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
-		expect(responseCount).toBe(2);
+		expect(mock.calls.length).toBe(2);
 	});
 
 	it("prompt() refreshes tools and system prompt between same-turn model calls", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		type Details = { value: string };
-		let callIndex = 0;
-		const callContexts: Array<{ systemPrompt: string; toolNames: string[] }> = [];
 
 		const betaTool: AgentTool<typeof toolSchema, Details> = {
 			name: "beta",
@@ -129,25 +103,21 @@ describe("Agent", () => {
 			},
 		};
 
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "alpha", arguments: { value: "hello" } }] },
+				{ content: ["done"] },
+			],
+		});
+
 		const agent = new Agent({
 			initialState: {
-				model: getBundledModel("openai", "gpt-4o-mini"),
+				model: mock.model,
 				systemPrompt: ["prompt-one"],
 				tools: [alphaTool],
 				messages: [],
 			},
-			streamFn: (_model, context) => {
-				callContexts.push({
-					systemPrompt: context.systemPrompt?.join("\n\n") ?? "",
-					toolNames: (context.tools ?? []).map(tool => tool.name),
-				});
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					pushAlphaThenDoneEvent(stream, callIndex, createAssistantMessage);
-					callIndex += 1;
-				});
-				return stream;
-			},
+			streamFn: mock.stream,
 		});
 
 		const unsubscribe = agent.subscribe(event => {
@@ -160,7 +130,11 @@ describe("Agent", () => {
 		await agent.prompt("refresh tools");
 		unsubscribe();
 
-		expect(callContexts).toEqual([
+		const observed = mock.calls.map(call => ({
+			systemPrompt: call.context.systemPrompt?.join("\n\n") ?? "",
+			toolNames: (call.context.tools ?? []).map(tool => tool.name),
+		}));
+		expect(observed).toEqual([
 			{ systemPrompt: "prompt-one", toolNames: ["alpha"] },
 			{ systemPrompt: "prompt-two", toolNames: ["alpha", "beta"] },
 		]);
@@ -169,8 +143,6 @@ describe("Agent", () => {
 	it("prompt() drops stale forced toolChoice after same-turn tool refresh", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		type Details = { value: string };
-		let callIndex = 0;
-		const providerCalls: Array<{ toolNames: string[]; toolChoice: SimpleStreamOptions["toolChoice"] }> = [];
 
 		const betaTool: AgentTool<typeof toolSchema, Details> = {
 			name: "beta",
@@ -191,24 +163,20 @@ describe("Agent", () => {
 			},
 		};
 
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "alpha", arguments: { value: "hello" } }] },
+				{ content: ["done"] },
+			],
+		});
+
 		const agent = new Agent({
 			initialState: {
-				model: getBundledModel("openai", "gpt-4o-mini"),
+				model: mock.model,
 				tools: [alphaTool],
 				messages: [],
 			},
-			streamFn: (_model, context, options) => {
-				providerCalls.push({
-					toolNames: (context.tools ?? []).map(tool => tool.name),
-					toolChoice: options?.toolChoice,
-				});
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					pushAlphaThenDoneEvent(stream, callIndex, createAssistantMessage);
-					callIndex += 1;
-				});
-				return stream;
-			},
+			streamFn: mock.stream,
 		});
 
 		const unsubscribe = agent.subscribe(event => {
@@ -220,7 +188,11 @@ describe("Agent", () => {
 		await agent.prompt("refresh tools", { toolChoice: { type: "function", name: "alpha" } });
 		unsubscribe();
 
-		expect(providerCalls).toEqual([
+		const observed = mock.calls.map(call => ({
+			toolNames: (call.context.tools ?? []).map(tool => tool.name),
+			toolChoice: call.options?.toolChoice,
+		}));
+		expect(observed).toEqual([
 			{ toolNames: ["alpha"], toolChoice: { type: "function", name: "alpha" } },
 			{ toolNames: ["beta"], toolChoice: undefined },
 		]);
@@ -239,25 +211,21 @@ describe("Agent", () => {
 			},
 		};
 
-		let callIndex = 0;
-		const reasoningPerCall: Array<SimpleStreamOptions["reasoning"]> = [];
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "alpha", arguments: { value: "hello" } }] },
+				{ content: ["done"] },
+			],
+		});
 
 		const agent = new Agent({
 			initialState: {
-				model: getBundledModel("openai", "gpt-4o-mini"),
+				model: mock.model,
 				thinkingLevel: ThinkingLevel.Low,
 				tools: [alphaTool],
 				messages: [],
 			},
-			streamFn: (_model, _context, options) => {
-				reasoningPerCall.push(options?.reasoning);
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					pushAlphaThenDoneEvent(stream, callIndex, createAssistantMessage);
-					callIndex += 1;
-				});
-				return stream;
-			},
+			streamFn: mock.stream,
 		});
 
 		// Bump thinking level mid-run, after the first assistant turn finishes
@@ -271,6 +239,7 @@ describe("Agent", () => {
 		await agent.prompt("run");
 		unsubscribe();
 
+		const reasoningPerCall: Array<SimpleStreamOptions["reasoning"]> = mock.calls.map(call => call.options?.reasoning);
 		expect(reasoningPerCall).toEqual([ThinkingLevel.Low, ThinkingLevel.High]);
 	});
 
