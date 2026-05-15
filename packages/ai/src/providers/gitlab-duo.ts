@@ -172,13 +172,16 @@ interface DirectAccessToken {
 
 const directAccessCache = new Map<string, DirectAccessToken>();
 
-async function getDirectAccessToken(gitlabAccessToken: string): Promise<DirectAccessToken> {
+async function getDirectAccessToken(
+	gitlabAccessToken: string,
+	fetchImpl: typeof fetch = fetch,
+): Promise<DirectAccessToken> {
 	const cached = directAccessCache.get(gitlabAccessToken);
 	if (cached && cached.expiresAt > Date.now()) {
 		return cached;
 	}
 
-	const response = await fetch(`${GITLAB_COM_URL}/api/v4/ai/third_party_agents/direct_access`, {
+	const response = await fetchImpl(`${GITLAB_COM_URL}/api/v4/ai/third_party_agents/direct_access`, {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${gitlabAccessToken}`,
@@ -240,7 +243,7 @@ export function streamGitLabDuo(
 				throw new Error(`Unsupported GitLab Duo model: ${model.id}`);
 			}
 
-			const directAccess = await getDirectAccessToken(options.apiKey);
+			const directAccess = await getDirectAccessToken(options.apiKey, options.fetch);
 			const headers = {
 				...directAccess.headers,
 				...options.headers,
@@ -278,6 +281,7 @@ export function streamGitLabDuo(
 								onPayload: options.onPayload,
 								onResponse: options.onResponse,
 								onSseEvent: options.onSseEvent,
+								fetch: options.fetch,
 								thinkingEnabled: Boolean(reasoningEffort) && model.reasoning,
 								thinkingBudgetTokens: reasoningEffort
 									? (options.thinkingBudgets?.[reasoningEffort] ?? ANTHROPIC_THINKING[reasoningEffort])
@@ -314,6 +318,7 @@ export function streamGitLabDuo(
 									onPayload: options.onPayload,
 									onResponse: options.onResponse,
 									onSseEvent: options.onSseEvent,
+									fetch: options.fetch,
 									reasoning: reasoningEffort,
 									toolChoice: options.toolChoice,
 								} satisfies OpenAIResponsesOptions,
@@ -345,6 +350,7 @@ export function streamGitLabDuo(
 									onPayload: options.onPayload,
 									onResponse: options.onResponse,
 									onSseEvent: options.onSseEvent,
+									fetch: options.fetch,
 									reasoning: reasoningEffort,
 									toolChoice: options.toolChoice,
 								} satisfies OpenAICompletionsOptions,

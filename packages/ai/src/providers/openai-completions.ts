@@ -362,6 +362,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				options?.headers,
 				options?.initiatorOverride,
 				options?.onSseEvent,
+				options?.fetch,
 			);
 			const priorityPremiumRequests = getPriorityPremiumRequests(options?.serviceTier, model.provider);
 			const premiumRequestsTotal =
@@ -778,6 +779,7 @@ async function createClient(
 	extraHeaders?: Record<string, string>,
 	initiatorOverride?: MessageAttribution,
 	onSseEvent?: OpenAICompletionsOptions["onSseEvent"],
+	fetchOverride?: typeof fetch,
 ): Promise<{
 	client: OpenAI;
 	copilotPremiumRequests: number | undefined;
@@ -847,9 +849,10 @@ async function createClient(
 		azureDefaultQuery = { "api-version": apiVersion };
 	}
 	let capturedErrorResponse: CapturedHttpErrorResponse | undefined;
+	const baseFetch = fetchOverride ?? fetch;
 	const wrappedFetch = Object.assign(
 		async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-			const response = await fetch(input, init);
+			const response = await baseFetch(input, init);
 			if (response.ok) {
 				capturedErrorResponse = undefined;
 				return response;
@@ -872,7 +875,7 @@ async function createClient(
 			};
 			return response;
 		},
-		{ preconnect: fetch.preconnect },
+		baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {},
 	);
 	const debugFetch = onSseEvent ? wrapFetchForSseDebug(wrappedFetch, event => onSseEvent(event, model)) : wrappedFetch;
 	return {

@@ -96,6 +96,12 @@ export interface FetchWithRetryOptions extends RequestInit {
 	 * token refresh or user-agent rotation.
 	 */
 	prepareInit?: (attempt: number) => RequestInit | Promise<RequestInit>;
+	/**
+	 * Optional `fetch` implementation override. Defaults to `globalThis.fetch`.
+	 * Useful for routing requests through a proxy, instrumented transport, or
+	 * mock during tests.
+	 */
+	fetch?: typeof fetch;
 }
 
 const DEFAULT_MAX_DELAY_MS = 60_000;
@@ -119,6 +125,7 @@ export async function fetchWithRetry(
 		maxDelayMs = DEFAULT_MAX_DELAY_MS,
 		defaultDelayMs,
 		prepareInit,
+		fetch: fetchImpl = fetch,
 		...baseInit
 	} = options;
 	const signal = baseInit.signal as AbortSignal | undefined;
@@ -130,7 +137,7 @@ export async function fetchWithRetry(
 
 		let response: Response;
 		try {
-			response = await fetch(requestUrl, init);
+			response = await fetchImpl(requestUrl, init);
 		} catch (error) {
 			if (signal?.aborted) throw new Error("Request was aborted");
 			const wrapped = wrapNetworkError(error);

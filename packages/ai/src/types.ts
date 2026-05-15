@@ -275,6 +275,14 @@ export interface StreamOptions {
 	 * Set to 0 to disable the inter-event idle watchdog for this request.
 	 */
 	streamIdleTimeoutMs?: number;
+	/**
+	 * Optional `fetch` implementation override. Providers route every HTTP
+	 * request — direct calls, SDK clients, and retry helpers — through this
+	 * implementation when set. Defaults to `globalThis.fetch`. Providers that
+	 * do not use `fetch` (Bedrock's AWS SDK transport, Cursor's HTTP/2
+	 * channel) silently ignore the override.
+	 */
+	fetch?: typeof fetch;
 	/** Cursor exec/MCP tool handlers (cursor-agent only). */
 	execHandlers?: CursorExecHandlers;
 }

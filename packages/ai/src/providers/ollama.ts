@@ -378,6 +378,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 				body: JSON.stringify(body),
 				signal: options.signal,
 				defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
+				fetch: options.fetch,
 			});
 			if (!response.ok) {
 				throw new Error(`HTTP ${response.status} from ${baseUrl}/api/chat`);

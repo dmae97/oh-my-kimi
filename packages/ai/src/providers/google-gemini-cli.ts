@@ -362,6 +362,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					maxAttempts: MAX_RETRIES + 1,
 					defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
 					maxDelayMs: options?.maxRetryDelayMs ?? RATE_LIMIT_BUDGET_MS,
+					fetch: options?.fetch,
 				},
 			);
 			if (!response.ok) {
@@ -545,7 +546,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 						throw new Error("Missing request URL");
 					}
 
-					currentResponse = await fetch(requestUrl, {
+					currentResponse = await (options?.fetch ?? fetch)(requestUrl, {
 						method: "POST",
 						headers: requestHeaders,
 						body: requestBodyJson,

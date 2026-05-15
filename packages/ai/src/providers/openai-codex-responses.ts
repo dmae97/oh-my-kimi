@@ -735,6 +735,7 @@ async function openCodexSseTransport(
 			state,
 			requestSetup.requestSignal,
 			event => options?.onSseEvent?.(event, model),
+			options?.fetch,
 		),
 	);
 	return { eventStream, requestBodyForState: structuredCloneJSON(body), transport: "sse" };
@@ -2173,6 +2174,7 @@ async function openCodexSseEventStream(
 	state: CodexWebSocketSessionState | undefined,
 	signal?: AbortSignal,
 	onSseEvent?: OpenAICodexResponsesOptions["onSseEvent"],
+	fetchOverride?: typeof fetch,
 ): Promise<AsyncGenerator<Record<string, unknown>>> {
 	const headers = createCodexHeaders(requestHeaders, accountId, apiKey, sessionId, "sse", state);
 	logCodexDebug("codex request", {
@@ -2190,6 +2192,7 @@ async function openCodexSseEventStream(
 		maxAttempts: CODEX_MAX_RETRIES + 1,
 		defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),
 		maxDelayMs: CODEX_RATE_LIMIT_BUDGET_MS,
+		fetch: fetchOverride,
 	});
 	logCodexDebug("codex response", {
 		url: response.url,

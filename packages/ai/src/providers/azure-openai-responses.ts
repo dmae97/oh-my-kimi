@@ -241,6 +241,7 @@ function createClient(model: Model<"azure-openai-responses">, apiKey: string, op
 
 	const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
 
+	const baseFetch = options?.fetch ?? fetch;
 	return new AzureOpenAI({
 		apiKey,
 		apiVersion,
@@ -248,7 +249,9 @@ function createClient(model: Model<"azure-openai-responses">, apiKey: string, op
 		maxRetries: 5,
 		defaultHeaders: headers,
 		baseURL: baseUrl,
-		fetch: options?.onSseEvent ? wrapFetchForSseDebug(fetch, event => options.onSseEvent?.(event, model)) : fetch,
+		fetch: options?.onSseEvent
+			? wrapFetchForSseDebug(baseFetch, event => options.onSseEvent?.(event, model))
+			: baseFetch,
 	});
 }
 

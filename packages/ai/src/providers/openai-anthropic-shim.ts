@@ -88,6 +88,7 @@ export function streamOpenAIAnthropicShim(
 					onPayload: options?.onPayload,
 					onResponse: options?.onResponse,
 					onSseEvent: options?.onSseEvent,
+					fetch: options?.fetch,
 					thinkingEnabled,
 					thinkingBudgetTokens: thinkingBudget,
 				});
@@ -116,6 +117,7 @@ export function streamOpenAIAnthropicShim(
 					onPayload: options?.onPayload,
 					onResponse: options?.onResponse,
 					onSseEvent: options?.onSseEvent,
+					fetch: options?.fetch,
 					reasoning: reasoningEffort,
 				});
 
