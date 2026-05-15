@@ -219,6 +219,15 @@ export interface AgentProgress {
 	toolCount: number;
 	/** Cumulative input + output + cacheWrite tokens across all turns. Excludes cacheRead (re-reads cached context every turn, making cumulative sum misleading). */
 	tokens: number;
+	/**
+	 * Current per-turn context size: latest assistant message's `usage.totalTokens`.
+	 * This is the number to compare against `contextWindow` — what compaction
+	 * decides on, what the user typically reads as "how full is the context".
+	 * Distinct from `tokens`, which is a lifetime billing-volume counter.
+	 */
+	contextTokens?: number;
+	/** Model's context window in tokens, when known. Lets the UI render `<curr>/<window>` gauges. */
+	contextWindow?: number;
 	/** Cumulative billing cost in USD, accumulated incrementally from message_end events. */
 	cost: number;
 	durationMs: number;
@@ -244,6 +253,10 @@ export interface SingleResult {
 	durationMs: number;
 	/** Cumulative input + output + cacheWrite tokens across all turns. Excludes cacheRead (re-reads cached context every turn, making cumulative sum misleading). */
 	tokens: number;
+	/** Latest per-turn context size at task completion. See `AgentProgress.contextTokens`. */
+	contextTokens?: number;
+	/** Model's context window in tokens, when known. */
+	contextWindow?: number;
 	modelOverride?: string | string[];
 	error?: string;
 	aborted?: boolean;

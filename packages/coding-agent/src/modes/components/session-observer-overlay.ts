@@ -266,7 +266,18 @@ export class SessionObserverOverlayComponent extends Container {
 		if (!progress) return "";
 		const stats: string[] = [];
 		if (progress.toolCount > 0) stats.push(`${formatNumber(progress.toolCount)} tools`);
-		if (progress.tokens > 0) stats.push(`${formatNumber(progress.tokens)} tokens`);
+		// Current per-turn context — what the user reads as "how full is the context".
+		// Falls back to cumulative billing volume (Σ-prefixed) when context size is unknown.
+		if (progress.contextTokens && progress.contextTokens > 0) {
+			const ctx =
+				progress.contextWindow && progress.contextWindow > 0
+					? `${formatNumber(progress.contextTokens)}/${formatNumber(progress.contextWindow)} ctx`
+					: `${formatNumber(progress.contextTokens)} ctx`;
+			stats.push(ctx);
+			if (progress.tokens > 0) stats.push(`Σ${formatNumber(progress.tokens)}`);
+		} else if (progress.tokens > 0) {
+			stats.push(`Σ${formatNumber(progress.tokens)}`);
+		}
 		if (progress.durationMs > 0) stats.push(formatDuration(progress.durationMs));
 		const parts: string[] = [];
 		if (stats.length > 0) parts.push(theme.fg("dim", stats.join(theme.sep.dot)));

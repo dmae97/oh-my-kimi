@@ -553,6 +553,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const settings = options.settings ?? Settings.isolated();
 	const subagentSettings = createSubagentSettings(settings);
 	const maxRecursionDepth = settings.get("task.maxRecursionDepth") ?? 2;
+	const maxRuntimeMs = Math.max(0, Math.trunc(Number(settings.get("task.maxRuntimeMs") ?? 0) || 0));
 	const parentDepth = options.taskDepth ?? 0;
 	const childDepth = parentDepth + 1;
 	const atMaxDepth = maxRecursionDepth >= 0 && childDepth >= maxRecursionDepth;
@@ -600,7 +601,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	let recentOutputTail = "";
 	let stderr = "";
 	let resolved = false;
-	type AbortReason = "signal" | "terminate";
+	type AbortReason = "signal" | "terminate" | "timeout";
 	let abortSent = false;
 	let abortReason: AbortReason | undefined;
 	const listenerController = new AbortController();
@@ -646,6 +647,24 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		signal.addEventListener("abort", onAbort, { once: true, signal: listenerSignal });
 	}
 
+	// Wall-clock hard limit. Defense-in-depth for the case where a provider stream
+	// hang escapes the inference-layer watchdog (see openai-completions
+	// `isOpenAICompletionsProgressChunk`). Disabled by default; set
+	// `task.maxRuntimeMs > 0` to cap each subagent's lifetime.
+	let runtimeTimeoutId: NodeJS.Timeout | undefined;
+	if (maxRuntimeMs > 0) {
+		runtimeTimeoutId = setTimeout(() => {
+			if (!resolved) {
+				logger.warn("Subagent runtime limit exceeded; aborting", {
+					id,
+					agent: agent.name,
+					maxRuntimeMs,
+				});
+				requestAbort("timeout");
+			}
+		}, maxRuntimeMs);
+	}
+
 	const resolveSignalAbortReason = (): string => {
 		const reason = signal?.reason;
 		if (reason instanceof Error) {
@@ -656,6 +675,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			if (message.length > 0) return message;
 		}
 		return "Cancelled by caller";
+	};
+	const resolveAbortReasonText = (): string => {
+		if (abortReason === "timeout") {
+			return `Subagent runtime limit exceeded (task.maxRuntimeMs=${maxRuntimeMs})`;
+		}
+		return resolveSignalAbortReason();
 	};
 	const PROGRESS_COALESCE_MS = 150;
 	let lastProgressEmitMs = 0;
@@ -917,6 +942,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					}
 					// Accumulate tokens for progress display
 					progress.tokens += getUsageTokens(messageUsage);
+					// Track latest per-turn context size so the UI can show
+					// "current context", not just cumulative billing volume.
+					if (role === "assistant") {
+						const perTurnTotal = getNumberField(messageUsage as Record<string, unknown>, "totalTokens");
+						if (perTurnTotal !== undefined && perTurnTotal > 0) {
+							progress.contextTokens = perTurnTotal;
+						}
+					}
 				}
 				break;
 			}
@@ -957,9 +990,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		let abortReasonText: string | undefined;
 		const checkAbort = () => {
 			if (abortSignal.aborted) {
-				aborted = abortReason === "signal" || abortReason === undefined;
+				aborted = abortReason === "signal" || abortReason === "timeout" || abortReason === undefined;
 				if (aborted) {
-					abortReasonText ??= resolveSignalAbortReason();
+					abortReasonText ??= resolveAbortReasonText();
 				}
 				exitCode = 1;
 				throw new ToolAbortError();
@@ -1004,6 +1037,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					resolvedProvider: model.provider,
 					resolvedModel: model.id,
 				});
+			}
+			if (model?.contextWindow && model.contextWindow > 0) {
+				progress.contextWindow = model.contextWindow;
 			}
 			const effectiveThinkingLevel = explicitThinkingLevel
 				? resolvedThinkingLevel
@@ -1236,9 +1272,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const lastAssistant = session.getLastAssistantMessage();
 			if (lastAssistant) {
 				if (lastAssistant.stopReason === "aborted") {
-					aborted = abortReason === "signal" || abortReason === undefined;
+					aborted = abortReason === "signal" || abortReason === "timeout" || abortReason === undefined;
 					if (aborted) {
-						abortReasonText ??= resolveSignalAbortReason();
+						abortReasonText ??= resolveAbortReasonText();
 					}
 					exitCode = 1;
 				} else if (lastAssistant.stopReason === "error") {
@@ -1253,9 +1289,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 		} finally {
 			if (abortSignal.aborted) {
-				aborted = abortReason === "signal" || abortReason === undefined;
+				aborted = abortReason === "signal" || abortReason === "timeout" || abortReason === undefined;
 				if (aborted) {
-					abortReasonText ??= resolveSignalAbortReason();
+					abortReasonText ??= resolveAbortReasonText();
 				}
 				if (exitCode === 0) exitCode = 1;
 			}
@@ -1291,6 +1327,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const done = await runSubagent();
 	resolved = true;
 	listenerController.abort();
+	if (runtimeTimeoutId !== undefined) {
+		clearTimeout(runtimeTimeoutId);
+		runtimeTimeoutId = undefined;
+	}
 
 	if (progressTimeoutId) {
 		clearTimeout(progressTimeoutId);
@@ -1349,7 +1389,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const finalAbortReason = wasAborted
 		? abortedViaYield
 			? yieldAbortReason
-			: (done.abortReason ?? (signal?.aborted ? resolveSignalAbortReason() : "Subagent aborted task"))
+			: (done.abortReason ?? (signal?.aborted ? resolveSignalAbortReason() : resolveAbortReasonText()))
 		: undefined;
 	progress.status = wasAborted ? "aborted" : exitCode === 0 ? "completed" : "failed";
 	scheduleProgress(true);
@@ -1382,6 +1422,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		truncated: Boolean(truncated),
 		durationMs: Date.now() - startTime,
 		tokens: progress.tokens,
+		contextTokens: progress.contextTokens,
+		contextWindow: progress.contextWindow,
 		modelOverride,
 		error: exitCode !== 0 && stderr ? stderr : undefined,
 		aborted: wasAborted,

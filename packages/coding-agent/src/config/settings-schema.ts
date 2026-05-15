@@ -2329,6 +2329,24 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"task.maxRuntimeMs": {
+		type: "number",
+		default: 0,
+		ui: {
+			tab: "tasks",
+			label: "Max Subagent Runtime",
+			description:
+				"Hard wall-clock limit per subagent (ms). 0 disables it. Defense-in-depth against provider-side stream hangs that escape the inference-layer watchdog; triggers a normal subagent abort with a 'timed out' reason.",
+			options: [
+				{ value: "0", label: "Unlimited", description: "Default" },
+				{ value: "300000", label: "5 minutes" },
+				{ value: "900000", label: "15 minutes" },
+				{ value: "1800000", label: "30 minutes" },
+				{ value: "3600000", label: "1 hour" },
+			],
+		},
+	},
+
 	"task.disabledAgents": {
 		type: "array",
 		default: [] as string[],

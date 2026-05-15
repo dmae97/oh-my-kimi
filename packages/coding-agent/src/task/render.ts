@@ -50,17 +50,35 @@ function getStatusIcon(status: AgentProgress["status"], theme: Theme, spinnerFra
 	}
 }
 
-/** Append tool-count, token, and cost stats to a status line string. */
+/** Append tool-count, context, cumulative-tokens, and cost stats to a status line string. */
 function appendAgentStats(
 	line: string,
-	opts: { toolCount?: number; tokens: number; cost: number },
+	opts: {
+		toolCount?: number;
+		tokens: number;
+		contextTokens?: number;
+		contextWindow?: number;
+		cost: number;
+	},
 	theme: Theme,
 ): string {
 	if (opts.toolCount) {
 		line += `${theme.sep.dot}${theme.fg("dim", `${opts.toolCount} tools`)}`;
 	}
-	if (opts.tokens > 0) {
-		line += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(opts.tokens)} tokens`)}`;
+	// Current per-turn context — what the user reads as "how full is the context".
+	// Cumulative tokens (billing volume) renders separately with a Σ sigil to avoid
+	// being mistaken for current window pressure.
+	if (opts.contextTokens && opts.contextTokens > 0) {
+		const ctx =
+			opts.contextWindow && opts.contextWindow > 0
+				? `${formatNumber(opts.contextTokens)}/${formatNumber(opts.contextWindow)} ctx`
+				: `${formatNumber(opts.contextTokens)} ctx`;
+		line += `${theme.sep.dot}${theme.fg("dim", ctx)}`;
+		if (opts.tokens > 0) {
+			line += `${theme.sep.dot}${theme.fg("dim", `Σ${formatNumber(opts.tokens)}`)}`;
+		}
+	} else if (opts.tokens > 0) {
+		line += `${theme.sep.dot}${theme.fg("dim", `Σ${formatNumber(opts.tokens)}`)}`;
 	}
 	if (opts.cost > 0) {
 		line += `${theme.sep.dot}${theme.fg("statusLineCost", `$${opts.cost.toFixed(2)}`)}`;
@@ -776,7 +794,16 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 		iconColor,
 		theme,
 	)}`;
-	statusLine = appendAgentStats(statusLine, { tokens: result.tokens, cost: result.usage?.cost.total ?? 0 }, theme);
+	statusLine = appendAgentStats(
+		statusLine,
+		{
+			tokens: result.tokens,
+			contextTokens: result.contextTokens,
+			contextWindow: result.contextWindow,
+			cost: result.usage?.cost.total ?? 0,
+		},
+		theme,
+	);
 	statusLine += `${theme.sep.dot}${theme.fg("dim", formatDuration(result.durationMs))}`;
 
 	if (result.truncated) {
