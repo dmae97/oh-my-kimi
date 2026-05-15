@@ -153,6 +153,8 @@ class FakeAgentSession {
 		// no-op for tests
 	}
 
+	async refreshSshTool(_options?: { activateIfAvailable?: boolean }): Promise<void> {}
+
 	async setModel(model: Model): Promise<void> {
 		this.model = model;
 	}

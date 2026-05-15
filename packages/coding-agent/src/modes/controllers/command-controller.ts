@@ -968,6 +968,7 @@ export class CommandController {
 			clearClaudePluginRootsCache(); // re-warms preloadedPluginRoots with new project dir (async)
 			resetCapabilities();
 			await this.ctx.refreshSlashCommandState(resolvedPath);
+			await this.ctx.session.refreshSshTool({ activateIfAvailable: true });
 
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorTopBorder();

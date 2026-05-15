@@ -79,6 +79,7 @@ import {
 	Snowflake,
 } from "@oh-my-pi/pi-utils";
 import { type AsyncJob, AsyncJobManager } from "../async";
+import { reset as resetCapabilities } from "../capability";
 import type { Rule } from "../capability/rule";
 import { MODEL_ROLE_IDS, type ModelRegistry } from "../config/model-registry";
 import {
@@ -92,6 +93,7 @@ import {
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
+import { loadCapability } from "../discovery";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
 import {
 	disposeKernelSessionsByOwner,
@@ -153,6 +155,7 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { deobfuscateSessionContext, type SecretObfuscator } from "../secrets/obfuscator";
+import { invalidateHostMetadata } from "../ssh/connection-manager";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import {
 	buildDiscoverableToolSearchIndex,
@@ -274,6 +277,9 @@ export interface AgentSessionConfig {
 	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	/** System prompt builder that can consider tool availability. Returns ordered provider-facing blocks. */
 	rebuildSystemPrompt?: (toolNames: string[], tools: Map<string, AgentTool>) => Promise<{ systemPrompt: string[] }>;
+	/** Rebuild the SSH tool from current capability discovery results. */
+	reloadSshTool?: () => Promise<AgentTool | null>;
+	requestedToolNames?: ReadonlySet<string>;
 	/**
 	 * Optional accessor for live MCP server instructions. Read by the session's
 	 * `rebuildSystemPrompt`-skip optimization to detect server-side instruction
@@ -736,6 +742,8 @@ export class AgentSession {
 		| ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<{ systemPrompt: string[] }>)
 		| undefined;
 	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
+	#reloadSshTool: (() => Promise<AgentTool | null>) | undefined;
+	#requestedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
 	/**
 	 * Signature of the (toolNames, tool descriptions) tuple passed to the most
@@ -868,6 +876,7 @@ export class AgentSession {
 		this.#modelRegistry = config.modelRegistry;
 		this.#validateRetryFallbackChains();
 		this.#toolRegistry = config.toolRegistry ?? new Map();
+		this.#requestedToolNames = config.requestedToolNames;
 		this.#transformContext = config.transformContext ?? (messages => messages);
 		this.#onPayload = config.onPayload;
 		this.rawSseDebugBuffer = config.rawSseDebugBuffer ?? new RawSseDebugBuffer();
@@ -886,6 +895,7 @@ export class AgentSession {
 		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
 		this.#rebuildSystemPrompt = config.rebuildSystemPrompt;
 		this.#getMcpServerInstructions = config.getMcpServerInstructions;
+		this.#reloadSshTool = config.reloadSshTool;
 		this.#baseSystemPrompt = this.agent.state.systemPrompt;
 		this.#mcpDiscoveryEnabled = config.mcpDiscoveryEnabled ?? false;
 		this.#setDiscoverableMCPTools(this.#collectDiscoverableMCPToolsFromRegistry());
@@ -2998,6 +3008,45 @@ export class AgentSession {
 		if (options?.persistMCPSelection !== false) {
 			this.#persistSelectedMCPToolNamesIfChanged(previousSelectedMCPToolNames);
 		}
+	}
+
+	/**
+	 * Reload the SSH tool from disk-backed capability discovery and make the
+	 * refreshed definition visible to the next model call without restarting.
+	 */
+	async refreshSshTool(options?: { activateIfAvailable?: boolean }): Promise<void> {
+		resetCapabilities();
+		if (!this.#reloadSshTool) return;
+		const previousSshTool = this.#toolRegistry.get("ssh");
+		const previousActiveToolNames = this.getActiveToolNames();
+		const hadSshTool = previousSshTool !== undefined;
+		const wasActive = previousActiveToolNames.includes("ssh");
+		const previousHostNames =
+			previousSshTool && "hostNames" in previousSshTool && Array.isArray(previousSshTool.hostNames)
+				? [...previousSshTool.hostNames]
+				: [];
+		const candidateHostNames = new Set(previousHostNames);
+		const capability = await loadCapability<{ name: string }>("ssh", { cwd: this.sessionManager.getCwd() });
+		for (const host of capability.items) {
+			if (typeof host?.name === "string") {
+				candidateHostNames.add(host.name);
+			}
+		}
+		await invalidateHostMetadata(candidateHostNames);
+		const sshAllowed = this.#requestedToolNames === undefined || this.#requestedToolNames.has("ssh");
+		const refreshedTool = await this.#reloadSshTool();
+		if (refreshedTool) {
+			this.#toolRegistry.set(refreshedTool.name, refreshedTool);
+		} else {
+			this.#toolRegistry.delete("ssh");
+			this.#selectedDiscoveredToolNames.delete("ssh");
+		}
+
+		const nextActive = previousActiveToolNames.filter(name => name !== "ssh" && this.#toolRegistry.has(name));
+		if (refreshedTool && sshAllowed && (wasActive || (options?.activateIfAvailable && !hadSshTool))) {
+			nextActive.push(refreshedTool.name);
+		}
+		await this.#applyActiveToolsByName(nextActive);
 	}
 
 	/**
