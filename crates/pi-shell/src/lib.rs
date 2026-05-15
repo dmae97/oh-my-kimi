@@ -1,6 +1,6 @@
 pub mod cancel;
-pub mod minimizer;
 pub mod fixup;
+pub mod minimizer;
 pub mod process;
 pub mod shell;
 #[cfg(windows)]

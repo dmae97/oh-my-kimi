@@ -8,10 +8,10 @@
 //!     truncates bash output and exposes the full result via an artifact, so
 //!     the pipe just hides content the agent wanted.
 //!
-//!  2. A redundant trailing `2>&1` on a segment that has no remaining pipe
-//!     or other redirect. The harness already merges stderr into stdout, so
-//!     the duplication is purely cosmetic — and often a leftover after fixup
-//!     (1) drops a downstream pipe.
+//!  2. A redundant trailing `2>&1` on a segment that has no remaining pipe or
+//!     other redirect. The harness already merges stderr into stdout, so the
+//!     duplication is purely cosmetic — and often a leftover after fixup (1)
+//!     drops a downstream pipe.
 //!
 //! The implementation is AST-driven: `brush-parser` handles tokenization,
 //! quoting, heredocs, command substitution, and nested compound commands. We
@@ -142,7 +142,9 @@ fn try_strip_head_tail(
 	if !is_safe_head_tail(last) {
 		return default;
 	}
-	let Some(last_loc) = last.location() else { return default };
+	let Some(last_loc) = last.location() else {
+		return default;
+	};
 
 	// Pipeline-internal separators are always `|` or `|&` — never `||`. The
 	// real parser already validated structure, so scanning backwards from the
@@ -153,8 +155,12 @@ fn try_strip_head_tail(
 	// (e.g. the synthetic `2>&1` inserted by `|&`).
 	let bytes = cmd.as_bytes();
 	let last_start = last_loc.start.index;
-	let Some(head) = cmd.get(..last_start) else { return default };
-	let Some(pipe_pos) = head.rfind('|') else { return default };
+	let Some(head) = cmd.get(..last_start) else {
+		return default;
+	};
+	let Some(pipe_pos) = head.rfind('|') else {
+		return default;
+	};
 	// Defense in depth against `||`.
 	if pipe_pos > 0 && bytes[pipe_pos - 1] == b'|' {
 		return default;
@@ -198,8 +204,12 @@ fn try_strip_2to1(
 	}
 
 	let target = &p.seq[outcome.last_idx];
-	let Command::Simple(simple) = target else { return };
-	let Some(name_word) = simple.word_or_name.as_ref() else { return };
+	let Command::Simple(simple) = target else {
+		return;
+	};
+	let Some(name_word) = simple.word_or_name.as_ref() else {
+		return;
+	};
 	if name_word.value.is_empty() {
 		return;
 	}
@@ -210,8 +220,12 @@ fn try_strip_2to1(
 
 	// The last suffix item must be the `2>&1` redirect, and it must be the
 	// only redirect on the command (no `> file 2>&1` or `2>&1 > file`).
-	let Some(last_item) = suffix.0.last() else { return };
-	let CommandPrefixOrSuffixItem::IoRedirect(io) = last_item else { return };
+	let Some(last_item) = suffix.0.last() else {
+		return;
+	};
+	let CommandPrefixOrSuffixItem::IoRedirect(io) = last_item else {
+		return;
+	};
 	if !is_stderr_to_stdout(io) {
 		return;
 	}
@@ -236,7 +250,9 @@ fn try_strip_2to1(
 	// accounted for by the AST; the gap between the anchor and `2>&1` is
 	// guaranteed to be just whitespace by the precondition that `2>&1` is
 	// the last suffix item and no other redirects exist.
-	let Some(name_loc) = name_word.loc.as_ref() else { return };
+	let Some(name_loc) = name_word.loc.as_ref() else {
+		return;
+	};
 	let mut anchor = name_loc.end.index;
 	for item in &suffix.0 {
 		if let Some(loc) = item.location() {
@@ -279,8 +295,12 @@ fn is_stderr_to_stdout(io: &IoRedirect) -> bool {
 }
 
 fn is_safe_head_tail(c: &Command) -> bool {
-	let Command::Simple(simple) = c else { return false };
-	let Some(name) = simple.word_or_name.as_ref() else { return false };
+	let Command::Simple(simple) = c else {
+		return false;
+	};
+	let Some(name) = simple.word_or_name.as_ref() else {
+		return false;
+	};
 	if name.value != "head" && name.value != "tail" {
 		return false;
 	}
@@ -291,9 +311,13 @@ fn is_safe_head_tail(c: &Command) -> bool {
 	{
 		return false;
 	}
-	let Some(suffix) = &simple.suffix else { return true };
+	let Some(suffix) = &simple.suffix else {
+		return true;
+	};
 	for item in &suffix.0 {
-		let CommandPrefixOrSuffixItem::Word(w) = item else { return false };
+		let CommandPrefixOrSuffixItem::Word(w) = item else {
+			return false;
+		};
 		if !SAFE_ARG_RE.is_match(&w.value) {
 			return false;
 		}
@@ -314,8 +338,10 @@ fn is_safe_head_tail(c: &Command) -> bool {
 /// `--help`, and any filename token are deliberately rejected — they would
 /// change semantics if their host command were removed.
 static SAFE_ARG_RE: LazyLock<Regex> = LazyLock::new(|| {
-	Regex::new(r"^(?:-[nc]=?\d+|-[nc]|-\d+|-[qv]|--lines(?:=\d+)?|--bytes(?:=\d+)?|--quiet|--verbose|\d+)$")
-		.expect("static safe-arg regex compiles")
+	Regex::new(
+		r"^(?:-[nc]=?\d+|-[nc]|-\d+|-[qv]|--lines(?:=\d+)?|--bytes(?:=\d+)?|--quiet|--verbose|\d+)$",
+	)
+	.expect("static safe-arg regex compiles")
 });
 
 #[cfg(test)]
@@ -359,16 +385,8 @@ mod tests {
 		let cases: &[(&str, &str, &[&str])] = &[
 			("cmd 2>&1", "cmd", &["2>&1"]),
 			("just build 2>&1", "just build", &["2>&1"]),
-			(
-				"just build 2>&1 | tail -3",
-				"just build",
-				&["| tail -3", "2>&1"],
-			),
-			(
-				"cargo build 2>&1 | head -50",
-				"cargo build",
-				&["| head -50", "2>&1"],
-			),
+			("just build 2>&1 | tail -3", "just build", &["| tail -3", "2>&1"]),
+			("cargo build 2>&1 | head -50", "cargo build", &["| head -50", "2>&1"]),
 		];
 		for (input, want_cmd, want_stripped) in cases {
 			let (cmd, stripped) = run(input);
@@ -385,26 +403,13 @@ mod tests {
 				"just build && just up && sleep 4 && just healthz",
 				&["| tail -3", "2>&1"],
 			),
-			(
-				"cmd1 | head -5 && cmd2 && cmd3 | tail -3",
-				"cmd1 && cmd2 && cmd3",
-				&["| head -5", "| tail -3"],
-			),
-			(
-				"echo a; cmd | head -5; echo b",
-				"echo a; cmd; echo b",
-				&["| head -5"],
-			),
-			(
-				"cmd | head -5 || fallback | tail -3",
-				"cmd || fallback",
-				&["| head -5", "| tail -3"],
-			),
-			(
-				"cmd1 | head -5 && cmd2 2>&1 | grep err",
-				"cmd1 && cmd2 2>&1 | grep err",
-				&["| head -5"],
-			),
+			("cmd1 | head -5 && cmd2 && cmd3 | tail -3", "cmd1 && cmd2 && cmd3", &[
+				"| head -5",
+				"| tail -3",
+			]),
+			("echo a; cmd | head -5; echo b", "echo a; cmd; echo b", &["| head -5"]),
+			("cmd | head -5 || fallback | tail -3", "cmd || fallback", &["| head -5", "| tail -3"]),
+			("cmd1 | head -5 && cmd2 2>&1 | grep err", "cmd1 && cmd2 2>&1 | grep err", &["| head -5"]),
 		];
 		for (input, want_cmd, want_stripped) in cases {
 			let (cmd, stripped) = run(input);
