@@ -1105,6 +1105,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			settings,
 			authStorage,
 			modelRegistry,
+			getTelemetry: () => agent?.telemetry,
 		};
 
 		// Wire process-wide internal URL singletons owned by their real classes.

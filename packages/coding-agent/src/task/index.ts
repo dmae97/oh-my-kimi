@@ -881,6 +881,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						localProtocolOptions,
 						parentArtifactManager,
 						parentHindsightSessionState: this.session.getHindsightSessionState?.(),
+						parentTelemetry: this.session.getTelemetry?.(),
 					});
 				}
 
@@ -934,6 +935,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						localProtocolOptions,
 						parentArtifactManager,
 						parentHindsightSessionState: this.session.getHindsightSessionState?.(),
+						parentTelemetry: this.session.getTelemetry?.(),
 					});
 					if (mergeMode === "branch" && result.exitCode === 0) {
 						try {
