@@ -15,7 +15,7 @@
     },
     "packages/agent": {
       "name": "@oh-my-pi/pi-agent-core",
-      "version": "15.1.0",
+      "version": "15.1.1",
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
         "@oh-my-pi/pi-natives": "catalog:",
@@ -30,7 +30,7 @@
     },
     "packages/ai": {
       "name": "@oh-my-pi/pi-ai",
-      "version": "15.1.0",
+      "version": "15.1.1",
       "bin": {
         "pi-ai": "./src/cli.ts",
       },
@@ -54,7 +54,7 @@
     },
     "packages/coding-agent": {
       "name": "@oh-my-pi/pi-coding-agent",
-      "version": "15.1.0",
+      "version": "15.1.1",
       "bin": {
         "omp": "src/cli.ts",
       },
@@ -89,7 +89,7 @@
     },
     "packages/natives": {
       "name": "@oh-my-pi/pi-natives",
-      "version": "15.1.0",
+      "version": "15.1.1",
       "devDependencies": {
         "@napi-rs/cli": "catalog:",
         "@types/bun": "catalog:",
@@ -97,7 +97,7 @@
     },
     "packages/stats": {
       "name": "@oh-my-pi/omp-stats",
-      "version": "15.1.0",
+      "version": "15.1.1",
       "bin": {
         "omp-stats": "./src/index.ts",
       },
@@ -122,7 +122,7 @@
     },
     "packages/swarm-extension": {
       "name": "@oh-my-pi/swarm-extension",
-      "version": "15.1.0",
+      "version": "15.1.1",
       "bin": {
         "omp-swarm": "src/cli.ts",
       },
@@ -138,7 +138,7 @@
     },
     "packages/tui": {
       "name": "@oh-my-pi/pi-tui",
-      "version": "15.1.0",
+      "version": "15.1.1",
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
@@ -178,7 +178,7 @@
     },
     "packages/utils": {
       "name": "@oh-my-pi/pi-utils",
-      "version": "15.1.0",
+      "version": "15.1.1",
       "dependencies": {
         "beautiful-mermaid": "catalog:",
         "handlebars": "catalog:",
@@ -206,13 +206,13 @@
     "@google/genai": "^1.52.0",
     "@mozilla/readability": "^0.6.0",
     "@napi-rs/cli": "3.6.2",
-    "@oh-my-pi/omp-stats": "15.1.0",
-    "@oh-my-pi/pi-agent-core": "15.1.0",
-    "@oh-my-pi/pi-ai": "15.1.0",
-    "@oh-my-pi/pi-coding-agent": "15.1.0",
-    "@oh-my-pi/pi-natives": "15.1.0",
-    "@oh-my-pi/pi-tui": "15.1.0",
-    "@oh-my-pi/pi-utils": "15.1.0",
+    "@oh-my-pi/omp-stats": "15.1.1",
+    "@oh-my-pi/pi-agent-core": "15.1.1",
+    "@oh-my-pi/pi-ai": "15.1.1",
+    "@oh-my-pi/pi-coding-agent": "15.1.1",
+    "@oh-my-pi/pi-natives": "15.1.1",
+    "@oh-my-pi/pi-tui": "15.1.1",
+    "@oh-my-pi/pi-utils": "15.1.1",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/context-async-hooks": "^2.0.0",
     "@opentelemetry/sdk-trace-base": "^2.0.0",
