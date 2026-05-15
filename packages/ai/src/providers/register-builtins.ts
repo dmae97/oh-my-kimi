@@ -184,6 +184,12 @@ function forwardStream<TApi extends Api>(
 				onIdle: () => abortTracker.abortLocally(new Error(LAZY_STREAM_IDLE_TIMEOUT_ERROR)),
 				onFirstItemTimeout: () => abortTracker.abortLocally(new Error(LAZY_STREAM_FIRST_EVENT_TIMEOUT_ERROR)),
 				abortSignal: options.signal,
+				// The synthetic `start` event is yielded immediately by every provider before
+				// the upstream model has emitted any tokens. Treating it as the first "real"
+				// item would flip the watchdog from `firstItemTimeoutMs` to the much shorter
+				// `idleTimeoutMs` while we're still legitimately waiting on the model's
+				// first response (slow first-token from reasoning models, cold proxies, etc.).
+				isProgressItem: event => (event as AssistantMessageEvent).type !== "start",
 			});
 
 			for await (const event of watchedSource) {

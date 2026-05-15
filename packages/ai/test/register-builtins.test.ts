@@ -99,6 +99,7 @@ describe("register-builtins lazy streams", () => {
 		const source = {
 			async *[Symbol.asyncIterator]() {
 				yield { type: "start", partial: partialMessage } as const;
+				yield { type: "text_delta", contentIndex: 0, delta: "hello", partial: partialMessage } as const;
 				const { promise, reject } = Promise.withResolvers<never>();
 				if (providerSignal?.aborted) {
 					reject(new Error("Request was aborted"));
