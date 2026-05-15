@@ -11,6 +11,7 @@ import {
 	type JsonSchemaValidationIssue,
 	type JsonSchemaValidationResult,
 	sanitizeSchemaForStrictMode,
+	tryEnforceStrictSchema,
 	validateJsonSchemaValue,
 } from "@oh-my-pi/pi-ai/utils/schema";
 import { subprocessToolRegistry } from "../task/subprocess-tool-registry";
@@ -140,15 +141,25 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 			const schemaDescription = schemaError
 				? `Structured JSON output (output schema invalid; accepting unconstrained object): ${schemaError}`
 				: `Structured output matching the schema:\n${schemaHint}`;
-			const sanitizedSchema =
+			let sanitizedSchema: Record<string, unknown> | undefined;
+			if (
 				!schemaError &&
 				normalizedSchema != null &&
 				typeof normalizedSchema === "object" &&
 				!Array.isArray(normalizedSchema)
-					? sanitizeSchemaForStrictMode(normalizedSchema as Record<string, unknown>)
-					: !schemaError && normalizedSchema === true
-						? {}
-						: undefined;
+			) {
+				const normalizedRecord = normalizedSchema as Record<string, unknown>;
+				const strictProbe = tryEnforceStrictSchema(normalizedRecord);
+				if (strictProbe.strict) {
+					sanitizedSchema = sanitizeSchemaForStrictMode(normalizedRecord);
+				} else {
+					sanitizedSchema = normalizedRecord;
+					this.strict = false;
+				}
+			} else if (!schemaError && normalizedSchema === true) {
+				sanitizedSchema = {};
+				this.strict = false;
+			}
 
 			let dataSchema: Record<string, unknown>;
 			if (sanitizedSchema !== undefined) {
@@ -161,6 +172,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 				}
 				dataSchema = resolved;
 			} else {
+				this.strict = false;
 				dataSchema = looseRecordSchema(
 					schemaError ? schemaDescription : "Structured JSON output (no schema specified)",
 				);

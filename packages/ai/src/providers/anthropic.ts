@@ -2120,15 +2120,15 @@ function normalizeAnthropicToolSchema(
 	const canBeObject =
 		type === "object" || (Array.isArray(type) && type.includes("object")) || isRecord(result.properties);
 	if (canBeObject) {
-		// Preserve an explicit `additionalProperties` schema (e.g. Zod's
-		// `z.record(z.string(), z.unknown())` compiles to `additionalProperties: {}`
-		// — an open record-style map). Only close objects that left it unspecified
-		// or set the JSON-Schema "true" alias, so we don't silently strip a valid
-		// open-map declaration along with the unsupported `patternProperties` /
+		// Preserve explicit open-map declarations: `additionalProperties: true`
+		// and schema values such as `{}` (Zod's
+		// `z.record(z.string(), z.unknown())` output). Only close objects that
+		// left the field unspecified, so we don't silently strip a valid
+		// open-map declaration along with unsupported `patternProperties` /
 		// `propertyNames` keywords. Without this, fields like the resolve tool's
 		// `extra` are flattened to `{ type: "object", additionalProperties: false }`,
 		// which forbids every key and breaks plan approval (`extra: { title }`).
-		if (result.additionalProperties === undefined || result.additionalProperties === true) {
+		if (result.additionalProperties === undefined) {
 			result.additionalProperties = false;
 		} else if (isRecord(result.additionalProperties)) {
 			result.additionalProperties = normalizeAnthropicToolSchema(result.additionalProperties, cache);
@@ -2233,6 +2233,12 @@ function normalizeAnthropicStrictSchemaNode(
 
 	const cached = cache.get(schema);
 	if (cached) return cached;
+
+	// Strict tool use only supports closed objects. Open maps stay available on
+	// the non-strict schema plan instead of producing an Anthropic 400.
+	if (isJsonSchemaObjectNode(schema) && schema.additionalProperties !== false) {
+		return undefined;
+	}
 
 	const result: Record<string, unknown> = { ...schema };
 	cache.set(schema, result);

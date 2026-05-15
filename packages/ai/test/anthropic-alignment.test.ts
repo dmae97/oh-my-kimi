@@ -19,6 +19,7 @@ import {
 } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
 import type { Context, Model, TJsonSchema, Tool } from "@oh-my-pi/pi-ai/types";
+import * as z from "zod/v4";
 import { withEnv } from "./helpers";
 
 const ANTHROPIC_MODEL: Model<"anthropic-messages"> = {
@@ -397,11 +398,11 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(originalNestedSchema).toHaveProperty("patternProperties");
 	});
 
-	it("preserves an explicit additionalProperties schema for record-style fields (issue #1104)", async () => {
-		// Mirrors the shape Zod's `z.record(z.string(), z.unknown())` emits — the
-		// resolve tool's `extra` parameter and any other free-form map. Without
-		// preservation the model sees `additionalProperties: false` and cannot
-		// pass `{ title: "..." }`, blocking plan approval.
+	it("preserves explicit additionalProperties schemas and true for open record fields", async () => {
+		// Mirrors open record-style shapes: Zod's `z.record(z.string(), z.unknown())`
+		// emits `additionalProperties: {}`, typed maps use a schema, and the yield
+		// fallback uses `additionalProperties: true`. Each must remain open after
+		// unsupported key-schema keywords are stripped.
 		const tools: Tool[] = [
 			{
 				name: "resolve",
@@ -418,6 +419,10 @@ describe("Anthropic request fingerprint alignment", () => {
 						extraTyped: {
 							type: "object",
 							additionalProperties: { type: "string" },
+						},
+						extraLoose: {
+							type: "object",
+							additionalProperties: true,
 						},
 					},
 					required: ["action"],
@@ -442,6 +447,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		const properties = inputSchema?.properties as Record<string, Record<string, unknown>>;
 		const extra = properties.extra as { additionalProperties?: unknown; propertyNames?: unknown };
 		const extraTyped = properties.extraTyped as { additionalProperties?: unknown };
+		const extraLoose = properties.extraLoose as { additionalProperties?: unknown };
 
 		expect(inputSchema?.additionalProperties).toBe(false);
 		// The unsupported `propertyNames` keyword is still stripped …
@@ -451,6 +457,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		// A typed value schema is preserved verbatim (and would be recursed into
 		// if it were an object — covered separately).
 		expect(extraTyped.additionalProperties).toEqual({ type: "string" });
+		expect(extraLoose.additionalProperties).toBe(true);
 	});
 
 	it("removes Anthropic-unsupported array item count constraints", async () => {
@@ -572,6 +579,98 @@ describe("Anthropic request fingerprint alignment", () => {
 
 		expect(strictNames).toEqual(["bash", "python", "edit", "find"]);
 		expect(payload.tools?.find(tool => tool.name === "bash")?.input_schema?.required).toEqual(["requiredValue"]);
+	});
+
+	it("marks regular two-field Zod object tools strict", async () => {
+		const tools: Tool[] = [
+			{
+				name: "bash",
+				description: "bash tool",
+				strict: true,
+				parameters: z.object({
+					command: z.string(),
+					cwd: z.string(),
+				}),
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				tools,
+			},
+			{ isOAuth: false },
+		)) as {
+			tools?: Array<{
+				name?: string;
+				strict?: boolean;
+				input_schema?: { properties?: Record<string, unknown>; required?: string[] };
+			}>;
+		};
+
+		const bashTool = payload.tools?.find(tool => tool.name === "bash");
+
+		expect(bashTool?.strict).toBe(true);
+		expect(Object.keys(bashTool?.input_schema?.properties ?? {})).toEqual(["command", "cwd"]);
+		expect(bashTool?.input_schema?.required).toEqual(["command", "cwd"]);
+	});
+
+	it("does not mark allowlisted Anthropic tools strict when schemas contain open object maps", async () => {
+		const tools: Tool[] = [
+			{
+				name: "bash",
+				description: "bash tool",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: {
+						command: { type: "string" },
+						env: {
+							type: "object",
+							additionalProperties: { type: "string" },
+						},
+					},
+					required: ["command"],
+				} as TJsonSchema,
+			},
+			{
+				name: "python",
+				description: "python tool",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: { requiredValue: { type: "string" } },
+					required: ["requiredValue"],
+				} as TJsonSchema,
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				tools,
+			},
+			{ isOAuth: false },
+		)) as {
+			tools?: Array<{
+				name?: string;
+				strict?: boolean;
+				input_schema?: { properties?: Record<string, unknown>; required?: string[] };
+			}>;
+		};
+
+		const bashTool = payload.tools?.find(tool => tool.name === "bash");
+		const pythonTool = payload.tools?.find(tool => tool.name === "python");
+		const env = bashTool?.input_schema?.properties?.env as { additionalProperties?: unknown } | undefined;
+
+		expect(bashTool?.strict).toBeUndefined();
+		expect(env?.additionalProperties).toEqual({ type: "string" });
+		expect(pythonTool?.strict).toBe(true);
+		expect(pythonTool?.input_schema?.required).toEqual(["requiredValue"]);
 	});
 
 	it("honors strict=false and skips non-allowlisted Anthropic tools", async () => {
