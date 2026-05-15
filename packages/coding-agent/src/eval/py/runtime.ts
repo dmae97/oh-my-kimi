@@ -151,6 +151,7 @@ export function filterEnv(env: Record<string, string | undefined>): Record<strin
  */
 export function resolveVenvPath(cwd: string): string | undefined {
 	if ($env.VIRTUAL_ENV) return $env.VIRTUAL_ENV;
+	if ($env.CONDA_PREFIX) return $env.CONDA_PREFIX;
 	const candidates = [path.join(cwd, ".venv"), path.join(cwd, "venv")];
 	for (const candidate of candidates) {
 		if (fs.existsSync(candidate)) {
