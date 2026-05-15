@@ -92,6 +92,11 @@ type AgentImageContent = {
 	mimeType: string;
 };
 
+type PromptQueueState = {
+	promise: Promise<void>;
+	release: (() => void) | undefined;
+};
+
 type PromptTurnState = {
 	userMessageId: string;
 	cancelRequested: boolean;
@@ -100,12 +105,14 @@ type PromptTurnState = {
 	unsubscribe: (() => void) | undefined;
 	resolve: (value: PromptResponse) => void;
 	reject: (reason?: unknown) => void;
+	promise: Promise<PromptResponse>;
 };
 
 type ManagedSessionRecord = {
 	session: AgentSession;
 	mcpManager: MCPManager | undefined;
 	promptTurn: PromptTurnState | undefined;
+	promptQueue: PromptQueueState;
 	liveMessageId: string | undefined;
 	liveMessageProgress: { textEmitted: boolean; thoughtEmitted: boolean } | undefined;
 	extensionsConfigured: boolean;
@@ -533,31 +540,58 @@ export class AcpAgent implements Agent {
 
 	async prompt(params: PromptRequest): Promise<PromptResponse> {
 		const record = this.#getSessionRecord(params.sessionId);
-		if (record.promptTurn && !record.promptTurn.settled) {
+		const activeTurn = record.promptTurn;
+		if (activeTurn && !activeTurn.settled && record.session.isStreaming) {
 			throw new Error("ACP prompt already in progress for this session");
 		}
+		return await this.#queuePrompt(record, async () => {
+			const queuedTurn = record.promptTurn;
+			if (queuedTurn && !queuedTurn.settled) {
+				await queuedTurn.promise.catch(() => undefined);
+			}
 
-		const converted = this.#convertPromptBlocks(params.prompt);
-		const pendingPrompt = Promise.withResolvers<PromptResponse>();
-		record.promptTurn = {
-			userMessageId: params.messageId ?? crypto.randomUUID(),
-			cancelRequested: false,
-			settled: false,
-			usageBaseline: this.#cloneUsageStatistics(record.session.sessionManager.getUsageStatistics()),
-			unsubscribe: undefined,
-			resolve: pendingPrompt.resolve,
-			reject: pendingPrompt.reject,
+			const converted = this.#convertPromptBlocks(params.prompt);
+			const pendingPrompt = Promise.withResolvers<PromptResponse>();
+			record.promptTurn = {
+				userMessageId: params.messageId ?? crypto.randomUUID(),
+				cancelRequested: false,
+				settled: false,
+				usageBaseline: this.#cloneUsageStatistics(record.session.sessionManager.getUsageStatistics()),
+				unsubscribe: undefined,
+				resolve: pendingPrompt.resolve,
+				reject: pendingPrompt.reject,
+				promise: pendingPrompt.promise,
+			};
+
+			record.promptTurn.unsubscribe = record.session.subscribe(event => {
+				void this.#handlePromptEvent(record, event);
+			});
+
+			this.#runPromptOrCommand(record, converted.text, converted.images).catch((error: unknown) => {
+				this.#finishPrompt(record, undefined, error);
+			});
+
+			return await pendingPrompt.promise;
+		});
+	}
+
+	async #queuePrompt(record: ManagedSessionRecord, run: () => Promise<PromptResponse>): Promise<PromptResponse> {
+		const nextQueue = Promise.withResolvers<void>();
+		const releaseQueue = nextQueue.resolve;
+		const previousQueue = record.promptQueue;
+		record.promptQueue = {
+			promise: nextQueue.promise,
+			release: releaseQueue,
 		};
-
-		record.promptTurn.unsubscribe = record.session.subscribe(event => {
-			void this.#handlePromptEvent(record, event);
-		});
-
-		this.#runPromptOrCommand(record, converted.text, converted.images).catch((error: unknown) => {
-			this.#finishPrompt(record, undefined, error);
-		});
-
-		return await pendingPrompt.promise;
+		await previousQueue.promise;
+		try {
+			return await run();
+		} finally {
+			releaseQueue();
+			if (record.promptQueue.release === releaseQueue) {
+				record.promptQueue.release = undefined;
+			}
+		}
 	}
 
 	async #runPromptOrCommand(record: ManagedSessionRecord, text: string, images: AgentImageContent[]): Promise<void> {
@@ -853,6 +887,7 @@ export class AcpAgent implements Agent {
 			session,
 			mcpManager: undefined,
 			promptTurn: undefined,
+			promptQueue: { promise: Promise.resolve(), release: undefined },
 			liveMessageId: undefined,
 			liveMessageProgress: undefined,
 			extensionsConfigured: false,
@@ -930,6 +965,7 @@ export class AcpAgent implements Agent {
 
 		if (event.type === "agent_end") {
 			await this.#emitEndOfTurnUpdates(record);
+			await record.session.waitForIdle();
 			this.#finishPrompt(record, {
 				stopReason: this.#resolveStopReason(event, promptTurn.cancelRequested),
 				usage: this.#buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),
