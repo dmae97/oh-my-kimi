@@ -208,6 +208,18 @@ export interface AgentOptions {
 	 * Cursor tool result callback for exec tool responses.
 	 */
 	cursorOnToolResult?: CursorToolResultHandler;
+
+	/**
+	 * Called after a tool call has been validated and is about to execute.
+	 * See {@link AgentLoopConfig.beforeToolCall} for full semantics.
+	 */
+	beforeToolCall?: AgentLoopConfig["beforeToolCall"];
+
+	/**
+	 * Called after a tool finishes executing, before `tool_execution_end` and the tool-result
+	 * message are emitted. See {@link AgentLoopConfig.afterToolCall} for full semantics.
+	 */
+	afterToolCall?: AgentLoopConfig["afterToolCall"];
 }
 
 export interface AgentPromptOptions {
@@ -277,6 +289,16 @@ export class Agent {
 
 	streamFn: StreamFn;
 	getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+	/**
+	 * Hook invoked after tool arguments are validated and before execution.
+	 * Reassign at any time to swap the implementation (e.g. on extension reload).
+	 */
+	beforeToolCall?: AgentLoopConfig["beforeToolCall"];
+	/**
+	 * Hook invoked after tool execution and before `tool_execution_end` / tool-result
+	 * message emission. Reassign at any time to swap the implementation.
+	 */
+	afterToolCall?: AgentLoopConfig["afterToolCall"];
 
 	constructor(opts: AgentOptions = {}) {
 		this.#state = { ...this.#state, ...opts.initialState };
@@ -312,6 +334,8 @@ export class Agent {
 		this.#getToolChoice = opts.getToolChoice;
 		this.#onAssistantMessageEvent = opts.onAssistantMessageEvent;
 		this.#onHarmonyLeak = opts.onHarmonyLeak;
+		this.beforeToolCall = opts.beforeToolCall;
+		this.afterToolCall = opts.afterToolCall;
 	}
 
 	/**
@@ -868,6 +892,8 @@ export class Agent {
 			cursorOnToolResult,
 			transformToolCallArguments: this.#transformToolCallArguments,
 			intentTracing: this.#intentTracing,
+			beforeToolCall: this.beforeToolCall ? (ctx, signal) => this.beforeToolCall?.(ctx, signal) : undefined,
+			afterToolCall: this.afterToolCall ? (ctx, signal) => this.afterToolCall?.(ctx, signal) : undefined,
 			onAssistantMessageEvent: this.#onAssistantMessageEvent,
 			onHarmonyLeak: this.#onHarmonyLeak,
 			getToolChoice,

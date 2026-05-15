@@ -375,17 +375,7 @@ async function runLoop(
 
 			const toolResults: ToolResultMessage[] = [];
 			if (hasMoreToolCalls) {
-				const executionResult = await executeToolCalls(
-					currentContext.tools,
-					message,
-					signal,
-					stream,
-					config.getSteeringMessages,
-					config.interruptMode,
-					config.getToolContext,
-					config.transformToolCallArguments,
-					config.intentTracing,
-				);
+				const executionResult = await executeToolCalls(currentContext, message, signal, stream, config);
 
 				toolResults.push(...executionResult.toolResults);
 				steeringMessagesFromExecution = executionResult.steeringMessages;
@@ -633,16 +623,22 @@ function emitAbortedAssistantMessage(
  * Execute tool calls from an assistant message.
  */
 async function executeToolCalls(
-	tools: AgentTool<any>[] | undefined,
+	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
 	signal: AbortSignal | undefined,
 	stream: EventStream<AgentEvent, AgentMessage[]>,
-	getSteeringMessages?: AgentLoopConfig["getSteeringMessages"],
-	interruptMode: AgentLoopConfig["interruptMode"] = "immediate",
-	getToolContext?: AgentLoopConfig["getToolContext"],
-	transformToolCallArguments?: AgentLoopConfig["transformToolCallArguments"],
-	intentTracing?: AgentLoopConfig["intentTracing"],
+	config: AgentLoopConfig,
 ): Promise<{ toolResults: ToolResultMessage[]; steeringMessages?: AgentMessage[] }> {
+	const tools = currentContext.tools;
+	const {
+		getSteeringMessages,
+		interruptMode = "immediate",
+		getToolContext,
+		transformToolCallArguments,
+		intentTracing,
+		beforeToolCall,
+		afterToolCall,
+	} = config;
 	type ToolCallContent = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
 	const toolCalls = assistantMessage.content.filter((c): c is ToolCallContent => c.type === "toolCall");
 	const emittedToolResults: ToolResultMessage[] = [];
@@ -785,6 +781,24 @@ async function executeToolCalls(
 					throw validationError;
 				}
 			}
+
+			if (beforeToolCall) {
+				const beforeResult = await beforeToolCall(
+					{
+						assistantMessage,
+						toolCall,
+						args: effectiveArgs,
+						context: currentContext,
+					},
+					toolSignal,
+				);
+				if (beforeResult?.block) {
+					throw new Error(beforeResult.reason || "Tool execution was blocked");
+				}
+			}
+			// Reflect post-hook args so emitted tool results / afterToolCall see what actually executed.
+			record.args = effectiveArgs;
+
 			const toolContext = getToolContext
 				? getToolContext({
 						batchId,
@@ -802,7 +816,7 @@ async function executeToolCalls(
 						type: "tool_execution_update",
 						toolCallId: toolCall.id,
 						toolName: toolCall.name,
-						args: argsForExecution,
+						args: effectiveArgs,
 						partialResult: coerceToolResult(partialResult).result,
 					});
 				},
@@ -817,6 +831,36 @@ async function executeToolCalls(
 				details: {},
 			};
 			isError = true;
+		}
+
+		if (afterToolCall) {
+			try {
+				const after = await afterToolCall(
+					{
+						assistantMessage,
+						toolCall,
+						args: record.args,
+						result,
+						isError,
+						context: currentContext,
+					},
+					toolSignal,
+				);
+				if (after) {
+					result = {
+						content: after.content ?? result.content,
+						details: after.details ?? result.details,
+						isError: after.isError ?? result.isError,
+					};
+					isError = after.isError ?? isError;
+				}
+			} catch (e) {
+				result = {
+					content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }],
+					details: {},
+				};
+				isError = true;
+			}
 		}
 
 		if (interruptState.triggered) {
