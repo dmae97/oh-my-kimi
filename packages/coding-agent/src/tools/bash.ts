@@ -246,6 +246,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	readonly #asyncEnabled: boolean;
 	readonly #autoBackgroundEnabled: boolean;
 	readonly #autoBackgroundThresholdMs: number;
+	#bashFixupNoticeEmitted = false;
 
 	constructor(private readonly session: ToolSession) {
 		this.#asyncEnabled = this.session.settings.get("async.enabled");
@@ -574,8 +575,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const pendingNotices: string[] = [];
 		const timeoutClampNotice = formatTimeoutClampNotice(requestedTimeoutSec, timeoutSec);
 		if (timeoutClampNotice) pendingNotices.push(timeoutClampNotice);
-		const bashFixupNotice = formatBashFixupNotice(bashFixups);
-		if (bashFixupNotice) pendingNotices.push(bashFixupNotice);
+		const bashFixupNotice = this.#bashFixupNoticeEmitted ? undefined : formatBashFixupNotice(bashFixups);
+		if (bashFixupNotice) {
+			pendingNotices.push(bashFixupNotice);
+			this.#bashFixupNoticeEmitted = true;
+		}
 
 		if (asyncRequested) {
 			if (!AsyncJobManager.instance()) {
