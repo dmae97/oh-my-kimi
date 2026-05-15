@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import type { AgentTelemetryConfig, Tracer } from "@oh-my-pi/pi-agent-core";
 import { type AssistantMessage, Effort } from "@oh-my-pi/pi-ai";
 import { Settings } from "../../src/config/settings";
 import type { LoadExtensionsResult } from "../../src/extensibility/extensions/types";
@@ -464,5 +465,91 @@ describe("runSubprocess yield reminders", () => {
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toMatch(/options\.authStorage.*modelRegistry\.authStorage/);
 		expect(createAgentSessionSpy).not.toHaveBeenCalled();
+	});
+});
+
+describe("runSubprocess telemetry propagation", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	const baseAgent: AgentDefinition = {
+		name: "reviewer",
+		description: "code review specialist",
+		systemPrompt: "you are a reviewer",
+		source: "bundled",
+	};
+
+	const baseOptions = {
+		cwd: "/tmp",
+		agent: baseAgent,
+		task: "do work",
+		index: 0,
+		id: "subagent-telemetry",
+		settings: Settings.isolated(),
+		modelRegistry: { refresh: async () => {} } as unknown as import("../../src/config/model-registry").ModelRegistry,
+		enableLsp: false,
+	};
+
+	function buildSession() {
+		return createMockSession(({ emit }) => {
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-telemetry",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+	}
+
+	it("derives subagent telemetry from parent: keeps tracer/hooks, swaps agent identity, clears conversationId", async () => {
+		const createAgentSessionSpy = mockCreateAgentSession(buildSession());
+		const onSpanStart = () => {};
+		const onSpanEnd = () => {};
+		const costEstimator = () => undefined;
+		const tracer = { startSpan: () => undefined } as unknown as Tracer;
+		const parentTelemetry: AgentTelemetryConfig = {
+			tracer,
+			captureMessageContent: true,
+			attributes: { "deployment.id": "prod" },
+			agent: { id: "0-Main", name: "main", description: "primary agent" },
+			conversationId: "parent-conversation",
+			onSpanStart,
+			onSpanEnd,
+			costEstimator,
+		};
+
+		await runSubprocess({ ...baseOptions, id: "subagent-telemetry-derive", parentTelemetry });
+
+		expect(createAgentSessionSpy).toHaveBeenCalledTimes(1);
+		const forwarded = createAgentSessionSpy.mock.calls[0]?.[0]?.telemetry;
+		expect(forwarded).toBeDefined();
+		if (!forwarded) throw new Error("expected telemetry on createAgentSession call");
+		expect(forwarded.tracer).toBe(tracer);
+		expect(forwarded.captureMessageContent).toBe(true);
+		expect(forwarded.attributes).toEqual({ "deployment.id": "prod" });
+		expect(forwarded.onSpanStart).toBe(onSpanStart);
+		expect(forwarded.onSpanEnd).toBe(onSpanEnd);
+		expect(forwarded.costEstimator).toBe(costEstimator);
+		expect(forwarded.agent).toEqual({
+			id: "subagent-telemetry-derive",
+			name: baseAgent.name,
+			description: baseAgent.description,
+		});
+		// Child loop falls back to its own session id for gen_ai.conversation.id.
+		expect(forwarded.conversationId).toBeUndefined();
+	});
+
+	it("forwards no telemetry when the parent has none", async () => {
+		const createAgentSessionSpy = mockCreateAgentSession(buildSession());
+
+		await runSubprocess({ ...baseOptions, id: "subagent-telemetry-none" });
+
+		expect(createAgentSessionSpy).toHaveBeenCalledTimes(1);
+		expect(createAgentSessionSpy.mock.calls[0]?.[0]?.telemetry).toBeUndefined();
 	});
 });

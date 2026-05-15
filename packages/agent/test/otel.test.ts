@@ -344,7 +344,7 @@ describe("agent-loop OTEL instrumentation", () => {
 		};
 		const streamFn = () => {
 			const s = new MockAssistantStream();
-			queueMicrotask(() => s.push({ type: "done", reason: "error", message: errMsg }));
+			queueMicrotask(() => s.push({ type: "error", reason: "error", error: errMsg }));
 			return s;
 		};
 		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
