@@ -1,7 +1,32 @@
+/**
+ * Tool-call argument validation pipeline.
+ *
+ * Tools may declare their parameters as either Zod schemas (canonical) or
+ * plain JSON Schema (legacy / extensions). This module is the single
+ * entrypoint the agent calls before dispatching a tool — it:
+ *
+ *   1. Builds (or fetches from cache) a `ValidationContext` for the tool —
+ *      the Zod schema if available plus the equivalent wire JSON Schema, or
+ *      just the JSON Schema for non-Zod tools.
+ *   2. Normalizes LLM quirks (null / "null" → omit-or-default substitution)
+ *      against the JSON Schema before validation.
+ *   3. Validates with the Zod or JSON-Schema validator.
+ *   4. On failure, walks the resulting issues and coerces JSON-stringified
+ *      values (`"[1,2]"` → `[1,2]`), drops unrecognized keys, and retries up
+ *      to `MAX_COERCION_PASSES` times.
+ *   5. Throws a formatted error if reconciliation fails; otherwise returns
+ *      the parsed arguments with original unknown root fields preserved (so
+ *      hallucinated top-level keys still surface to the caller).
+ *
+ * The goal is to be conservative: every coercion is a structural rewrite that
+ * keeps the schema in charge of acceptance — we never invent values, only
+ * massage shapes the LLM almost got right.
+ */
 import { structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import type { ZodType } from "zod/v4";
 import type { $ZodIssue as ZodIssue } from "zod/v4/core";
 import type { Tool, ToolCall } from "../types";
+import { upgradeJsonSchemaTo202012 } from "./schema/draft";
 import {
 	isJsonSchemaValueValid,
 	type JsonSchemaValidationIssue,
@@ -855,7 +880,7 @@ function getValidationContext(tool: Tool): ValidationContext {
 	if (isZodSchema(params)) {
 		ctx = { kind: "zod", zod: params, json: zodToWireSchema(params) };
 	} else {
-		ctx = { kind: "json", json: params as unknown as Record<string, unknown> };
+		ctx = { kind: "json", json: upgradeJsonSchemaTo202012(params) as Record<string, unknown> };
 	}
 	validationContextCache.set(params, ctx);
 	return ctx;

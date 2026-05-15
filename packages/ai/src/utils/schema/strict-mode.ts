@@ -1,7 +1,9 @@
 import { $flag } from "@oh-my-pi/pi-utils";
 import { type ZodType, z } from "zod/v4";
+import { upgradeJsonSchemaTo202012 } from "./draft";
 import { areJsonValuesEqual } from "./equality";
 import { COMBINATOR_KEYS, NON_STRUCTURAL_SCHEMA_KEYS } from "./fields";
+import { enter, epochNext, exit, once, stamp } from "./stamps";
 import { isJsonObject } from "./types";
 
 /**
@@ -37,15 +39,38 @@ export function StringEnum<const T extends readonly string[]>(
 }
 
 export const NO_STRICT = $flag("PI_NO_STRICT");
+/**
+ * Per-schema-object memoization slot. The result of `tryEnforceStrictSchema`
+ * is stamped directly onto the input via `stamp(target, kStrictSchema, …)`
+ * so repeated calls (different providers, retries, batching) reuse the same
+ * computed pair without re-walking the tree.
+ */
+const kStrictSchema = Symbol("pi.schema.strict");
 
-const strictSchemaCache = new WeakMap<Record<string, unknown>, { schema: Record<string, unknown>; strict: boolean }>();
-function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, seen?: WeakSet<object>): boolean {
-	if (!seen) seen = new WeakSet();
-	if (seen.has(schema)) return false;
-	seen.add(schema);
+/**
+ * Detect schemas that strict mode *cannot* represent.
+ *
+ * Strict mode requires closed object shapes — every property is declared in
+ * `properties` and listed in `required`. That is incompatible with:
+ *  - `patternProperties` (open keyset matched by regex),
+ *  - `additionalProperties: true` or `additionalProperties: <schema>` (open
+ *    keyset with optional further constraint).
+ *
+ * This check recurses into every place a child schema may live (properties,
+ * items/prefixItems, combinator branches, $defs) so a single offender deep
+ * in the tree disqualifies the whole schema. Used to fail-open early in
+ * `tryEnforceStrictSchema` rather than throwing during enforcement.
+ */
+function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, epoch: number = epochNext()): boolean {
+	if (!once(schema, epoch)) return false;
 
-	const hasPatternProperties =
-		isJsonObject(schema.patternProperties) && Object.keys(schema.patternProperties).length > 0;
+	let hasPatternProperties = false;
+	if (isJsonObject(schema.patternProperties)) {
+		for (const _ in schema.patternProperties) {
+			hasPatternProperties = true;
+			break;
+		}
+	}
 	const additionalPropertiesValue = schema.additionalProperties;
 	const hasSchemaAdditionalProperties = additionalPropertiesValue === true || isJsonObject(additionalPropertiesValue);
 	if (hasPatternProperties || hasSchemaAdditionalProperties) {
@@ -53,27 +78,29 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, seen
 	}
 
 	if (isJsonObject(schema.properties)) {
-		for (const propertySchema of Object.values(schema.properties)) {
-			if (isJsonObject(propertySchema) && hasUnrepresentableStrictObjectMap(propertySchema, seen)) {
+		const properties = schema.properties;
+		for (const k in properties) {
+			const propertySchema = properties[k];
+			if (isJsonObject(propertySchema) && hasUnrepresentableStrictObjectMap(propertySchema, epoch)) {
 				return true;
 			}
 		}
 	}
 
 	if (isJsonObject(schema.items)) {
-		if (hasUnrepresentableStrictObjectMap(schema.items, seen)) {
+		if (hasUnrepresentableStrictObjectMap(schema.items, epoch)) {
 			return true;
 		}
 	} else if (Array.isArray(schema.items)) {
 		for (const itemSchema of schema.items) {
-			if (isJsonObject(itemSchema) && hasUnrepresentableStrictObjectMap(itemSchema, seen)) {
+			if (isJsonObject(itemSchema) && hasUnrepresentableStrictObjectMap(itemSchema, epoch)) {
 				return true;
 			}
 		}
 	}
 	if (Array.isArray(schema.prefixItems)) {
 		for (const itemSchema of schema.prefixItems) {
-			if (isJsonObject(itemSchema) && hasUnrepresentableStrictObjectMap(itemSchema, seen)) {
+			if (isJsonObject(itemSchema) && hasUnrepresentableStrictObjectMap(itemSchema, epoch)) {
 				return true;
 			}
 		}
@@ -83,7 +110,7 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, seen
 		const variants = schema[key];
 		if (!Array.isArray(variants)) continue;
 		for (const variant of variants) {
-			if (isJsonObject(variant) && hasUnrepresentableStrictObjectMap(variant, seen)) {
+			if (isJsonObject(variant) && hasUnrepresentableStrictObjectMap(variant, epoch)) {
 				return true;
 			}
 		}
@@ -92,8 +119,9 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, seen
 	for (const defsKey of ["$defs", "definitions"] as const) {
 		const defs = schema[defsKey];
 		if (!isJsonObject(defs)) continue;
-		for (const defSchema of Object.values(defs)) {
-			if (isJsonObject(defSchema) && hasUnrepresentableStrictObjectMap(defSchema, seen)) {
+		for (const k in defs) {
+			const defSchema = defs[k];
+			if (isJsonObject(defSchema) && hasUnrepresentableStrictObjectMap(defSchema, epoch)) {
 				return true;
 			}
 		}
@@ -101,29 +129,46 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, seen
 
 	return false;
 }
+/**
+ * First pass of strict-mode preparation.
+ *
+ * Rewrites everything strict mode forbids into something it accepts:
+ *  - Drops non-structural keywords (`format`, `pattern`, `examples`, …),
+ *    `const`, `nullable`, and `additionalProperties` (re-added by
+ *    `enforceStrictSchema` as `false`).
+ *  - `type: [a, b]` → `anyOf: [{type: a, …}, {type: b, …}]`, copying only the
+ *    keywords each variant can use (e.g. `properties` stays only on the
+ *    object variant).
+ *  - `const` → single-entry `enum`.
+ *  - Description carries a `(default: X)` suffix so the model still sees the
+ *    documented default after the keyword is stripped.
+ *  - `nullable: true` wraps the whole node in `anyOf:[T,{type:"null"}]`.
+ *
+ * Recurses into properties, items, prefixItems, combinators, and $defs. The
+ * `cache` WeakMap dedupes shared subgraphs; the `epoch` is the cycle guard.
+ */
 export function sanitizeSchemaForStrictMode(
 	schema: Record<string, unknown>,
-	seen?: WeakSet<object>,
-	cache?: WeakMap<Record<string, unknown>, Record<string, unknown>>,
+	epoch: number = epochNext(),
+	cache: WeakMap<Record<string, unknown>, Record<string, unknown>> = new WeakMap(),
 ): Record<string, unknown> {
-	if (!seen) seen = new WeakSet();
-	if (!cache) cache = new WeakMap();
 	const cached = cache.get(schema);
 	if (cached) return cached;
-	if (seen.has(schema)) return {};
-	seen.add(schema);
+	if (!once(schema, epoch)) return {};
 	const typeValue = schema.type;
 	if (Array.isArray(typeValue)) {
 		const typeVariants = typeValue.filter((entry): entry is string => typeof entry === "string");
 		const schemaWithoutType = { ...schema };
 		delete schemaWithoutType.type;
 
-		const sanitizedWithoutType = sanitizeSchemaForStrictMode(schemaWithoutType, seen, cache);
+		const sanitizedWithoutType = sanitizeSchemaForStrictMode(schemaWithoutType, epoch, cache);
 		if (typeVariants.length === 0) {
 			cache.set(schema, sanitizedWithoutType);
-			seen.delete(schema);
 			return sanitizedWithoutType;
 		}
+		// Build one variant schema per type. Each variant keeps only the keywords
+		// relevant to that type — object-only keywords stay on the object variant,
+		// array-only keywords on the array variant, etc.
 
 		const variants = typeVariants.map(variantType => {
 			const variantSchema: Record<string, unknown> = { ...sanitizedWithoutType, type: variantType };
@@ -135,12 +180,11 @@ export function sanitizeSchemaForStrictMode(
 			if (variantType !== "array") {
 				delete variantSchema.items;
 			}
-			return sanitizeSchemaForStrictMode(variantSchema, seen, cache);
+			return sanitizeSchemaForStrictMode(variantSchema, epoch, cache);
 		});
 
 		if (variants.length === 1) {
 			cache.set(schema, variants[0] as Record<string, unknown>);
-			seen.delete(schema);
 			return variants[0] as Record<string, unknown>;
 		}
 
@@ -148,66 +192,74 @@ export function sanitizeSchemaForStrictMode(
 			anyOf: variants,
 		};
 		cache.set(schema, result);
-		seen.delete(schema);
 		return result;
 	}
+	// Scalar `type`: walk the keys, rewriting or stripping per strict-mode rules.
 
 	const sanitized: Record<string, unknown> = {};
 	cache.set(schema, sanitized);
-	for (const [key, value] of Object.entries(schema)) {
-		if (NON_STRUCTURAL_SCHEMA_KEYS.has(key) || key === "type" || key === "const" || key === "nullable") {
+	for (const key in schema) {
+		const value = schema[key];
+		if (key in NON_STRUCTURAL_SCHEMA_KEYS || key === "type" || key === "const" || key === "nullable") {
 			continue;
 		}
+		// `properties` map — recurse into each property schema.
 
 		if (key === "properties" && isJsonObject(value)) {
-			const properties = Object.fromEntries(
-				Object.entries(value).map(([propertyName, propertySchema]) => [
-					propertyName,
-					isJsonObject(propertySchema) ? sanitizeSchemaForStrictMode(propertySchema, seen, cache) : propertySchema,
-				]),
-			);
+			const properties: Record<string, unknown> = {};
+			for (const propertyName in value) {
+				const propertySchema = value[propertyName];
+				properties[propertyName] = isJsonObject(propertySchema)
+					? sanitizeSchemaForStrictMode(propertySchema, epoch, cache)
+					: propertySchema;
+			}
 			sanitized.properties = properties;
 			continue;
 		}
+		// `items` can be schema, tuple-array, or scalar boolean — recurse where applicable.
 
 		if (key === "items") {
 			if (isJsonObject(value)) {
-				sanitized.items = sanitizeSchemaForStrictMode(value, seen, cache);
+				sanitized.items = sanitizeSchemaForStrictMode(value, epoch, cache);
 			} else if (Array.isArray(value)) {
 				sanitized.items = value.map(entry =>
-					isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, seen, cache) : entry,
+					isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache) : entry,
 				);
 			} else {
 				sanitized.items = value;
 			}
 			continue;
 		}
+		// `prefixItems` is always an array of schemas (draft 2020-12).
 
 		if (key === "prefixItems" && Array.isArray(value)) {
 			sanitized.prefixItems = value.map(entry =>
-				isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, seen, cache) : entry,
+				isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache) : entry,
 			);
 			continue;
 		}
+		// `anyOf`/`oneOf`/`allOf` arrays — recurse into each branch.
 
 		if (COMBINATOR_KEYS.includes(key as (typeof COMBINATOR_KEYS)[number]) && Array.isArray(value)) {
 			sanitized[key] = value.map(entry =>
-				isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, seen, cache) : entry,
+				isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache) : entry,
 			);
 			continue;
 		}
+		// Definition maps — recurse into each named schema.
 
 		if ((key === "$defs" || key === "definitions") && isJsonObject(value)) {
-			sanitized[key] = Object.fromEntries(
-				Object.entries(value).map(([definitionName, definitionSchema]) => [
-					definitionName,
-					isJsonObject(definitionSchema)
-						? sanitizeSchemaForStrictMode(definitionSchema, seen, cache)
-						: definitionSchema,
-				]),
-			);
+			const defs: Record<string, unknown> = {};
+			for (const definitionName in value) {
+				const definitionSchema = value[definitionName];
+				defs[definitionName] = isJsonObject(definitionSchema)
+					? sanitizeSchemaForStrictMode(definitionSchema, epoch, cache)
+					: definitionSchema;
+			}
+			sanitized[key] = defs;
 			continue;
 		}
+		// `additionalProperties` is owned by `enforceStrictSchema`, which sets it to false.
 
 		if (key === "additionalProperties") {
 			continue;
@@ -225,6 +277,7 @@ export function sanitizeSchemaForStrictMode(
 
 		sanitized[key] = value;
 	}
+	// Post-pass: re-derive `type` and turn dropped keywords into a representable shape.
 
 	if (Object.hasOwn(schema, "const")) {
 		const constVal = schema.const;
@@ -235,6 +288,7 @@ export function sanitizeSchemaForStrictMode(
 		sanitized.enum = existingEnum;
 	}
 
+	// Preserve the original scalar type after the strip-and-rebuild loop.
 	if (typeof typeValue === "string") {
 		sanitized.type = typeValue;
 	}
@@ -247,34 +301,39 @@ export function sanitizeSchemaForStrictMode(
 		sanitized.type = "array";
 	}
 
+	// Last-resort inference: a bare `enum` with homogeneous primitives gets a `type`.
 	if (sanitized.type === undefined && Array.isArray(sanitized.enum)) {
-		const enumTypes = new Set(
-			sanitized.enum
-				.map(v =>
-					v === null
-						? "null"
-						: typeof v === "string"
-							? "string"
-							: typeof v === "number"
-								? "number"
-								: typeof v === "boolean"
-									? "boolean"
-									: undefined,
-				)
-				.filter((t): t is "null" | "string" | "number" | "boolean" => t !== undefined),
-		);
-		if (enumTypes.size === 1) {
-			sanitized.type = [...enumTypes][0];
+		let inferredType: "null" | "string" | "number" | "boolean" | undefined;
+		let conflicting = false;
+		for (const v of sanitized.enum) {
+			const t =
+				v === null
+					? "null"
+					: typeof v === "string"
+						? "string"
+						: typeof v === "number"
+							? "number"
+							: typeof v === "boolean"
+								? "boolean"
+								: undefined;
+			if (t === undefined) continue;
+			if (inferredType === undefined) inferredType = t;
+			else if (inferredType !== t) {
+				conflicting = true;
+				break;
+			}
+		}
+		if (!conflicting && inferredType !== undefined) {
+			sanitized.type = inferredType;
 		}
 	}
 
+	// `nullable: true` was stripped above — re-introduce it as an `anyOf` wrapper.
 	if (schema.nullable === true) {
 		const { nullable: _, ...withoutNullable } = sanitized;
-		seen.delete(schema);
 		return { anyOf: [withoutNullable, { type: "null" }] };
 	}
 
-	seen.delete(schema);
 	return sanitized;
 }
 
@@ -294,21 +353,27 @@ export function sanitizeSchemaForStrictMode(
  */
 export function enforceStrictSchema(
 	schema: Record<string, unknown>,
-	seen?: WeakSet<object>,
-	cache?: WeakMap<Record<string, unknown>, Record<string, unknown>>,
+	cache: WeakMap<Record<string, unknown>, Record<string, unknown>> = new WeakMap(),
 ): Record<string, unknown> {
-	if (!seen) seen = new WeakSet();
-	if (!cache) cache = new WeakMap();
-	if (seen.has(schema)) {
+	if (!enter(schema)) {
 		throw new Error("Schema contains a circular object graph — cannot enforce strict mode");
 	}
-	const cached = cache.get(schema);
-	if (cached) {
-		return cached;
+	try {
+		const cached = cache.get(schema);
+		if (cached) return cached;
+		const result = { ...schema };
+		cache.set(schema, result);
+		return enforceStrictSchemaBody(schema, result, cache);
+	} finally {
+		exit(schema);
 	}
-	seen.add(schema);
-	const result = { ...schema };
-	cache.set(schema, result);
+}
+
+function enforceStrictSchemaBody(
+	_schema: Record<string, unknown>,
+	result: Record<string, unknown>,
+	cache: WeakMap<Record<string, unknown>, Record<string, unknown>>,
+): Record<string, unknown> {
 	const isObjectType = result.type === "object";
 	if (isObjectType) {
 		result.additionalProperties = false;
@@ -317,36 +382,39 @@ export function enforceStrictSchema(
 			propertiesValue != null && typeof propertiesValue === "object" && !Array.isArray(propertiesValue)
 				? (propertiesValue as Record<string, unknown>)
 				: {};
-		const originalRequired = new Set(
+		const originalRequired = new Set<string>(
 			Array.isArray(result.required)
 				? result.required.filter((value): value is string => typeof value === "string")
 				: [],
 		);
-		const strictProperties = Object.fromEntries(
-			Object.entries(props).map(([key, value]) => {
-				const processed =
-					value != null && typeof value === "object" && !Array.isArray(value)
-						? enforceStrictSchema(value as Record<string, unknown>, seen, cache)
-						: value;
-				// Optional property — wrap as nullable so strict mode accepts it
-				if (!originalRequired.has(key)) {
-					// Don't double-wrap if already nullable
-					if (
-						isJsonObject(processed) &&
-						Array.isArray(processed.anyOf) &&
-						processed.anyOf.some(v => isJsonObject(v) && v.type === "null")
-					) {
-						return [key, processed];
-					}
-					if (isJsonObject(processed) && typeof processed.description === "string") {
-						const { description, ...withoutDescription } = processed;
-						return [key, { anyOf: [withoutDescription, { type: "null" }], description }];
-					}
-					return [key, { anyOf: [processed, { type: "null" }] }];
+		const strictProperties: Record<string, unknown> = {};
+		for (const key in props) {
+			const value = props[key];
+			const processed =
+				value != null && typeof value === "object" && !Array.isArray(value)
+					? enforceStrictSchema(value as Record<string, unknown>, cache)
+					: value;
+			// Optional property — wrap as nullable so strict mode accepts it
+			if (!originalRequired.has(key)) {
+				// Don't double-wrap if already nullable
+				if (
+					isJsonObject(processed) &&
+					Array.isArray(processed.anyOf) &&
+					processed.anyOf.some(v => isJsonObject(v) && v.type === "null")
+				) {
+					strictProperties[key] = processed;
+					continue;
 				}
-				return [key, processed];
-			}),
-		);
+				if (isJsonObject(processed) && typeof processed.description === "string") {
+					const { description, ...withoutDescription } = processed;
+					strictProperties[key] = { anyOf: [withoutDescription, { type: "null" }], description };
+					continue;
+				}
+				strictProperties[key] = { anyOf: [processed, { type: "null" }] };
+				continue;
+			}
+			strictProperties[key] = processed;
+		}
 		result.properties = strictProperties;
 		result.required = Object.keys(strictProperties);
 	}
@@ -354,17 +422,17 @@ export function enforceStrictSchema(
 		if (Array.isArray(result.items)) {
 			result.items = result.items.map(entry =>
 				entry != null && typeof entry === "object" && !Array.isArray(entry)
-					? enforceStrictSchema(entry as Record<string, unknown>, seen, cache)
+					? enforceStrictSchema(entry as Record<string, unknown>, cache)
 					: entry,
 			);
 		} else {
-			result.items = enforceStrictSchema(result.items as Record<string, unknown>, seen, cache);
+			result.items = enforceStrictSchema(result.items as Record<string, unknown>, cache);
 		}
 	}
 	if (Array.isArray(result.prefixItems)) {
 		result.prefixItems = result.prefixItems.map(entry =>
 			entry != null && typeof entry === "object" && !Array.isArray(entry)
-				? enforceStrictSchema(entry as Record<string, unknown>, seen, cache)
+				? enforceStrictSchema(entry as Record<string, unknown>, cache)
 				: entry,
 		);
 	}
@@ -372,7 +440,7 @@ export function enforceStrictSchema(
 		if (Array.isArray(result[key])) {
 			result[key] = (result[key] as unknown[]).map(entry =>
 				entry != null && typeof entry === "object" && !Array.isArray(entry)
-					? enforceStrictSchema(entry as Record<string, unknown>, seen, cache)
+					? enforceStrictSchema(entry as Record<string, unknown>, cache)
 					: entry,
 			);
 		}
@@ -380,14 +448,15 @@ export function enforceStrictSchema(
 	for (const defsKey of ["$defs", "definitions"] as const) {
 		if (result[defsKey] != null && typeof result[defsKey] === "object" && !Array.isArray(result[defsKey])) {
 			const defs = result[defsKey] as Record<string, unknown>;
-			result[defsKey] = Object.fromEntries(
-				Object.entries(defs).map(([name, def]) => [
-					name,
+			const nextDefs: Record<string, unknown> = {};
+			for (const name in defs) {
+				const def = defs[name];
+				nextDefs[name] =
 					def != null && typeof def === "object" && !Array.isArray(def)
-						? enforceStrictSchema(def as Record<string, unknown>, seen, cache)
-						: def,
-				]),
-			);
+						? enforceStrictSchema(def as Record<string, unknown>, cache)
+						: def;
+			}
+			result[defsKey] = nextDefs;
 		}
 	}
 	// Strict mode requires every schema node to declare a concrete type (or combinator/$ref).
@@ -400,30 +469,20 @@ export function enforceStrictSchema(
 	) {
 		throw new Error("Schema node has no type, combinator, or $ref — cannot enforce strict mode");
 	}
-	seen.delete(schema);
 	return result;
 }
 
-export function tryEnforceStrictSchema(schema: Record<string, unknown>): {
-	schema: Record<string, unknown>;
-	strict: boolean;
-} {
-	const cached = strictSchemaCache.get(schema);
-	if (cached) {
-		return cached;
-	}
-
-	try {
-		if (hasUnrepresentableStrictObjectMap(schema)) {
-			throw new Error("Schema uses dynamic object keys that are not representable in strict mode");
+export function tryEnforceStrictSchema(schema: Record<string, unknown>) {
+	return stamp(schema, kStrictSchema, s => {
+		const upgraded = upgradeJsonSchemaTo202012(s) as Record<string, unknown>;
+		if (hasUnrepresentableStrictObjectMap(upgraded)) {
+			return { schema: upgraded, strict: false };
 		}
-		const sanitized = sanitizeSchemaForStrictMode(schema);
-		const result = { schema: enforceStrictSchema(sanitized), strict: true };
-		strictSchemaCache.set(schema, result);
-		return result;
-	} catch {
-		const result = { schema, strict: false };
-		strictSchemaCache.set(schema, result);
-		return result;
-	}
+		try {
+			const sanitized = sanitizeSchemaForStrictMode(upgraded);
+			return { schema: enforceStrictSchema(sanitized), strict: true };
+		} catch {
+			return { schema: upgraded, strict: false };
+		}
+	});
 }

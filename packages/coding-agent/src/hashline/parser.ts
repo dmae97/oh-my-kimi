@@ -102,8 +102,7 @@ function collectPayload(
 			while (lookahead < lines.length && lines[lookahead].length === 0) {
 				lookahead++;
 			}
-			const followedByPayload =
-				lookahead < lines.length && lines[lookahead].startsWith(HL_EDIT_SEP);
+			const followedByPayload = lookahead < lines.length && lines[lookahead].startsWith(HL_EDIT_SEP);
 			const acceptBareBlank = requirePayload && payload.length === 0;
 			if (followedByPayload || acceptBareBlank) {
 				for (let j = index; j < lookahead; j++) payload.push("");

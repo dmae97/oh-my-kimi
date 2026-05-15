@@ -1,8 +1,32 @@
+/**
+ * Cloud Code Assist (CCA) for Claude rejects most JSON Schema combinator and
+ * nullable shapes. This module is the multi-pass rewriter that turns whatever
+ * the tool author authored into the narrow subset CCA accepts:
+ *
+ *   1. `sanitizeSchemaForCCA` — strip Google-incompatible keywords, normalize
+ *      `type: [..., "null"]` arrays into a scalar + nullable.
+ *   2. `mergeObjectCombinerVariants` — collapse `anyOf` of object variants
+ *      into a single merged object.
+ *   3. `collapseMixedTypeCombinerVariants` — `anyOf` of distinct scalar types
+ *      collapses to the first non-null type (lossy, intentional).
+ *   4. `collapseSameTypeCombinerVariants` — `anyOf` of variants with one
+ *      shared type collapses to that variant (lossy, intentional).
+ *   5. `stripResidualCombiners` — fixpoint loop applying 3+4 to combiners that
+ *      pass-1 merging produced from inside merged subtrees.
+ *   6. `normalizeNullablePropertiesForCloudCodeAssist` — extract `nullable: T`
+ *      from `anyOf:[T,null]`-shaped property schemas and demote those keys
+ *      from `required`.
+ *
+ * If any incompatibility survives, we ship a stub `{type:"object",properties:{}}`
+ * fallback for that tool — CCA will accept the call but the model will see no
+ * arguments documented. Better than rejecting the whole turn.
+ */
 import { logger } from "@oh-my-pi/pi-utils";
 import { areJsonValuesEqual, mergePropertySchemas } from "./equality";
 import { CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS, CLOUD_CODE_ASSIST_TYPE_SPECIFIC_KEYS } from "./fields";
 import { isValidJsonSchema } from "./meta-validator";
 import { sanitizeSchemaForCCA } from "./sanitize-google";
+import { epochNext, once } from "./stamps";
 import type { JsonObject } from "./types";
 import { isJsonObject } from "./types";
 
@@ -49,13 +73,14 @@ function mergeObjectCombinerVariants(schema: JsonObject, combiner: "anyOf" | "on
 
 	const mergedProperties: JsonObject = {};
 	const ownProperties = isJsonObject(schema.properties) ? schema.properties : {};
-	for (const [name, propertySchema] of Object.entries(ownProperties)) {
-		mergedProperties[name] = propertySchema;
+	for (const name in ownProperties) {
+		mergedProperties[name] = ownProperties[name];
 	}
 
 	for (const variant of variants) {
 		const properties = isJsonObject(variant.properties) ? variant.properties : {};
-		for (const [name, propertySchema] of Object.entries(properties)) {
+		for (const name in properties) {
+			const propertySchema = properties[name];
 			const existingSchema = mergedProperties[name];
 			mergedProperties[name] =
 				existingSchema === undefined ? propertySchema : mergePropertySchemas(existingSchema, propertySchema);
@@ -67,7 +92,11 @@ function mergeObjectCombinerVariants(schema: JsonObject, combiner: "anyOf" | "on
 	nextSchema.type = "object";
 	nextSchema.properties = mergedProperties;
 
-	// Compute intersection of all variants' required arrays
+	// Compute the `required` set for the merged object. We intersect each
+	// variant's required keys (a property is only required if every variant
+	// required it) and then union in the parent's own required keys for
+	// properties that lived on the parent. Filter against `mergedProperties`
+	// so we never reference a key that does not exist on the result.
 	let requiredIntersection: string[] | undefined;
 	for (const variant of variants) {
 		const variantRequired = Array.isArray(variant.required)
@@ -83,17 +112,20 @@ function mergeObjectCombinerVariants(schema: JsonObject, combiner: "anyOf" | "on
 	const parentRequired = Array.isArray(schema.required)
 		? schema.required.filter((r): r is string => typeof r === "string")
 		: [];
-	const ownPropertyNames = new Set(Object.keys(ownProperties));
 	const safeRequired = new Set<string>();
 	for (const name of requiredIntersection ?? []) {
 		if (name in mergedProperties) safeRequired.add(name);
 	}
 	for (const name of parentRequired) {
-		if (ownPropertyNames.has(name) && name in mergedProperties) {
+		if (name in ownProperties && name in mergedProperties) {
 			safeRequired.add(name);
 		}
 	}
-	const requiredInPropertyOrder = Object.keys(mergedProperties).filter(name => safeRequired.has(name));
+	// Emit required in property-insertion order so the wire payload is stable.
+	const requiredInPropertyOrder: string[] = [];
+	for (const name in mergedProperties) {
+		if (safeRequired.has(name)) requiredInPropertyOrder.push(name);
+	}
 	if (requiredInPropertyOrder.length > 0) {
 		nextSchema.required = requiredInPropertyOrder;
 	} else {
@@ -133,9 +165,10 @@ function collapseMixedTypeCombinerVariants(schema: JsonObject, combiner: "anyOf"
 			return schema;
 		}
 
-		for (const [key, variantValue] of Object.entries(entry)) {
+		for (const key in entry) {
+			const variantValue = entry[key];
 			if (key === "type") continue;
-			if (!allowedKeys.has(key) && !CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS.has(key)) {
+			if (!(key in allowedKeys) && !(key in CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS)) {
 				return schema;
 			}
 
@@ -160,7 +193,8 @@ function collapseMixedTypeCombinerVariants(schema: JsonObject, combiner: "anyOf"
 	// Lossy: when multiple non-null types exist we pick the first. CCA requires
 	// a scalar type and keeping the anyOf would cause an API rejection at runtime.
 	nextSchema.type = nonNullTypes[0] ?? variantTypes[0];
-	for (const [key, value] of Object.entries(mergedVariantFields)) {
+	for (const key in mergedVariantFields) {
+		const value = mergedVariantFields[key];
 		const existingValue = nextSchema[key];
 		if (existingValue !== undefined && !areJsonValuesEqual(existingValue, value)) {
 			return schema;
@@ -192,8 +226,8 @@ function collapseSameTypeCombinerVariants(schema: JsonObject, combiner: "anyOf" 
 	}
 	if (!firstEntry) return schema;
 	const nextSchema = copySchemaWithout(schema, combiner);
-	for (const [key, value] of Object.entries(firstEntry)) {
-		if (!(key in nextSchema)) nextSchema[key] = value;
+	for (const key in firstEntry) {
+		if (!(key in nextSchema)) nextSchema[key] = firstEntry[key];
 	}
 	return nextSchema;
 }
@@ -203,18 +237,16 @@ function collapseSameTypeCombinerVariants(schema: JsonObject, combiner: "anyOf" 
  * This is needed because mergeObjectCombinerVariants can create new anyOf in merged
  * properties AFTER the recursive normalization pass has already processed children.
  */
-export function stripResidualCombiners(value: unknown, seen = new WeakSet<object>()): unknown {
+export function stripResidualCombiners(value: unknown, epoch: number = epochNext()): unknown {
 	if (Array.isArray(value)) {
-		if (seen.has(value)) return [];
-		seen.add(value);
-		return value.map(entry => stripResidualCombiners(entry, seen));
+		if (!once(value, epoch)) return [];
+		return value.map(entry => stripResidualCombiners(entry, epoch));
 	}
 	if (!isJsonObject(value)) return value;
-	if (seen.has(value)) return {};
-	seen.add(value);
+	if (!once(value, epoch)) return {};
 	const result: JsonObject = {};
-	for (const [key, entry] of Object.entries(value)) {
-		result[key] = stripResidualCombiners(entry, seen);
+	for (const key in value) {
+		result[key] = stripResidualCombiners(value[key], epoch);
 	}
 	let current: JsonObject = result;
 	let changed = true;
@@ -236,22 +268,19 @@ export function stripResidualCombiners(value: unknown, seen = new WeakSet<object
 	return current;
 }
 
-function normalizeSchemaForCCA(value: unknown, seen?: WeakSet<object>): unknown {
-	if (!seen) seen = new WeakSet();
+function normalizeSchemaForCCA(value: unknown, epoch: number = epochNext()): unknown {
 	if (Array.isArray(value)) {
-		if (seen.has(value)) return [];
-		seen.add(value);
-		return value.map(entry => normalizeSchemaForCCA(entry, seen));
+		if (!once(value, epoch)) return [];
+		return value.map(entry => normalizeSchemaForCCA(entry, epoch));
 	}
 	if (!isJsonObject(value)) {
 		return value;
 	}
-	if (seen.has(value)) return {};
-	seen.add(value);
+	if (!once(value, epoch)) return {};
 
 	const normalized: JsonObject = {};
-	for (const [key, entry] of Object.entries(value)) {
-		normalized[key] = normalizeSchemaForCCA(entry, seen);
+	for (const key in value) {
+		normalized[key] = normalizeSchemaForCCA(value[key], epoch);
 	}
 
 	const mergedAnyOf = mergeObjectCombinerVariants(normalized, "anyOf");
@@ -294,9 +323,15 @@ function extractNullableUnionSchema(schema: unknown): NullableExtractionResult {
 		let hasNullVariant = false;
 		const nonNullVariants: unknown[] = [];
 		for (const variant of variantsRaw) {
-			if (isJsonObject(variant) && variant.type === "null" && Object.keys(variant).length === 1) {
-				hasNullVariant = true;
-				continue;
+			if (isJsonObject(variant) && variant.type === "null") {
+				let keyCount = 0;
+				for (const _k in variant) {
+					if (++keyCount > 1) break;
+				}
+				if (keyCount === 1) {
+					hasNullVariant = true;
+					continue;
+				}
 			}
 			nonNullVariants.push(variant);
 		}
@@ -306,7 +341,9 @@ function extractNullableUnionSchema(schema: unknown): NullableExtractionResult {
 		}
 
 		const nextSchema = copySchemaWithout(schema, combiner);
-		for (const [key, value] of Object.entries(nonNullVariants[0])) {
+		const nonNullVariant = nonNullVariants[0];
+		for (const key in nonNullVariant) {
+			const value = nonNullVariant[key];
 			const existingValue = nextSchema[key];
 			if (existingValue !== undefined && !areJsonValuesEqual(existingValue, value)) {
 				return { schema, nullable: false };
@@ -329,41 +366,39 @@ interface NullableNormalizationResult {
 function normalizeNullablePropertiesForCloudCodeAssist(
 	value: unknown,
 	isPropertySchema = false,
-	seen?: WeakSet<object>,
+	epoch: number = epochNext(),
 ): NullableNormalizationResult {
-	if (!seen) seen = new WeakSet();
 	if (Array.isArray(value)) {
-		if (seen.has(value)) {
+		if (!once(value, epoch)) {
 			return { schema: [], nullable: false };
 		}
-		seen.add(value);
 		return {
-			schema: value.map(entry => normalizeNullablePropertiesForCloudCodeAssist(entry, false, seen).schema),
+			schema: value.map(entry => normalizeNullablePropertiesForCloudCodeAssist(entry, false, epoch).schema),
 			nullable: false,
 		};
 	}
 	if (!isJsonObject(value)) {
 		return { schema: value, nullable: false };
 	}
-	if (seen.has(value)) {
+	if (!once(value, epoch)) {
 		return { schema: {}, nullable: false };
 	}
-	seen.add(value);
 
 	const normalized: JsonObject = {};
-	for (const [key, entry] of Object.entries(value)) {
-		normalized[key] = normalizeNullablePropertiesForCloudCodeAssist(entry, false, seen).schema;
+	for (const key in value) {
+		normalized[key] = normalizeNullablePropertiesForCloudCodeAssist(value[key], false, epoch).schema;
 	}
 
 	if (isJsonObject(normalized.properties)) {
+		const properties = normalized.properties;
 		const required = new Set(
 			Array.isArray(normalized.required)
 				? normalized.required.filter((entry): entry is string => typeof entry === "string")
 				: [],
 		);
 		const nextProperties: JsonObject = {};
-		for (const [name, propertySchema] of Object.entries(normalized.properties)) {
-			const normalizedProperty = normalizeNullablePropertiesForCloudCodeAssist(propertySchema, true, seen);
+		for (const name in properties) {
+			const normalizedProperty = normalizeNullablePropertiesForCloudCodeAssist(properties[name], true, epoch);
 			nextProperties[name] = normalizedProperty.schema;
 			if (normalizedProperty.nullable) {
 				required.delete(name);
@@ -393,21 +428,19 @@ function isValidCCASchema(schema: unknown): boolean {
 }
 
 /** See COMBINATOR_KEYS in fields.ts — CCA forbids all three combiners. */
-const CCA_FORBIDDEN_COMBINERS = new Set(["anyOf", "oneOf", "allOf"] as const);
+const CCA_FORBIDDEN_COMBINERS: Record<string, true> = { anyOf: true, oneOf: true, allOf: true };
 
-function hasResidualCloudCodeAssistIncompatibilities(value: unknown, seen = new WeakSet<object>()): boolean {
+function hasResidualCloudCodeAssistIncompatibilities(value: unknown, epoch: number = epochNext()): boolean {
 	if (Array.isArray(value)) {
-		if (seen.has(value)) return false;
-		seen.add(value);
-		return value.some(entry => hasResidualCloudCodeAssistIncompatibilities(entry, seen));
+		if (!once(value, epoch)) return false;
+		return value.some(entry => hasResidualCloudCodeAssistIncompatibilities(entry, epoch));
 	}
 	if (!isJsonObject(value)) {
 		return false;
 	}
-	if (seen.has(value)) {
+	if (!once(value, epoch)) {
 		return false;
 	}
-	seen.add(value);
 
 	if (Array.isArray(value.type) || value.type === "null") {
 		return true;
@@ -415,13 +448,13 @@ function hasResidualCloudCodeAssistIncompatibilities(value: unknown, seen = new 
 	if (Object.hasOwn(value, "nullable")) {
 		return true;
 	}
-	for (const combiner of CCA_FORBIDDEN_COMBINERS) {
+	for (const combiner in CCA_FORBIDDEN_COMBINERS) {
 		if (Array.isArray(value[combiner])) {
 			return true;
 		}
 	}
-	for (const entry of Object.values(value)) {
-		if (hasResidualCloudCodeAssistIncompatibilities(entry, seen)) {
+	for (const k in value) {
+		if (hasResidualCloudCodeAssistIncompatibilities(value[k], epoch)) {
 			return true;
 		}
 	}

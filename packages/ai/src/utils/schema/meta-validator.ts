@@ -1,4 +1,5 @@
 import { areJsonValuesEqual } from "./equality";
+import { epochNext, once } from "./stamps";
 
 /**
  * Hand-rolled JSON Schema meta-validator.
@@ -15,7 +16,15 @@ function isPlainObject(value: Json): value is Record<string, Json> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-const TYPE_NAMES = new Set<string>(["string", "number", "integer", "boolean", "object", "array", "null"]);
+const TYPE_NAMES: Record<string, true> = {
+	string: true,
+	number: true,
+	integer: true,
+	boolean: true,
+	object: true,
+	array: true,
+	null: true,
+};
 
 function isNonNegativeInteger(value: Json): value is number {
 	return typeof value === "number" && Number.isInteger(value) && value >= 0;
@@ -31,49 +40,51 @@ function hasUniqueJsonValues(values: readonly unknown[]): boolean {
 }
 
 function checkTypeKeyword(value: Json): boolean {
-	if (typeof value === "string") return TYPE_NAMES.has(value);
+	if (typeof value === "string") return value in TYPE_NAMES;
 	if (!Array.isArray(value) || value.length === 0) return false;
 	const seen = new Set<string>();
 	for (const entry of value) {
-		if (typeof entry !== "string" || !TYPE_NAMES.has(entry) || seen.has(entry)) return false;
+		if (typeof entry !== "string" || !(entry in TYPE_NAMES) || seen.has(entry)) return false;
 		seen.add(entry);
 	}
 	return true;
 }
 
-function checkSchemaArray(value: Json, seen: WeakSet<object>): boolean {
-	return Array.isArray(value) && value.every(entry => checkNode(entry, seen));
+function checkSchemaArray(value: Json, epoch: number): boolean {
+	return Array.isArray(value) && value.every(entry => checkNode(entry, epoch));
 }
 
-function checkSchemaMap(value: Json, seen: WeakSet<object>): boolean {
+function checkSchemaMap(value: Json, epoch: number): boolean {
 	if (!isPlainObject(value)) return false;
-	return Object.values(value).every(sub => checkNode(sub, seen));
+	for (const k in value) {
+		if (!checkNode(value[k], epoch)) return false;
+	}
+	return true;
 }
 
 /** Validate a single sub-schema node. */
-function checkNode(node: Json, seen: WeakSet<object>): boolean {
+function checkNode(node: Json, epoch: number): boolean {
 	// Boolean schemas (`true` / `false`) are valid JSON Schema.
 	if (node === true || node === false) return true;
 	if (!isPlainObject(node)) return false;
-	if (seen.has(node)) return true;
-	seen.add(node);
+	if (!once(node, epoch)) return true;
 
 	if ("type" in node && !checkTypeKeyword(node.type)) return false;
 
 	for (const key of ["anyOf", "oneOf", "allOf"] as const) {
-		if (key in node && !checkSchemaArray(node[key], seen)) return false;
+		if (key in node && !checkSchemaArray(node[key], epoch)) return false;
 	}
-	if ("not" in node && !checkNode(node.not, seen)) return false;
+	if ("not" in node && !checkNode(node.not, epoch)) return false;
 	for (const key of ["if", "then", "else"] as const) {
-		if (key in node && !checkNode(node[key], seen)) return false;
+		if (key in node && !checkNode(node[key], epoch)) return false;
 	}
 
 	for (const key of ["properties", "patternProperties", "$defs", "definitions"] as const) {
-		if (key in node && !checkSchemaMap(node[key], seen)) return false;
+		if (key in node && !checkSchemaMap(node[key], epoch)) return false;
 	}
 
-	if ("propertyNames" in node && !checkNode(node.propertyNames, seen)) return false;
-	if ("contains" in node && !checkNode(node.contains, seen)) return false;
+	if ("propertyNames" in node && !checkNode(node.propertyNames, epoch)) return false;
+	if ("contains" in node && !checkNode(node.contains, epoch)) return false;
 
 	if ("required" in node) {
 		const value = node.required;
@@ -88,9 +99,9 @@ function checkNode(node: Json, seen: WeakSet<object>): boolean {
 	if ("items" in node) {
 		const items = node.items;
 		if (Array.isArray(items)) return false;
-		if (!checkNode(items, seen)) return false;
+		if (!checkNode(items, epoch)) return false;
 	}
-	if ("prefixItems" in node && !checkSchemaArray(node.prefixItems, seen)) return false;
+	if ("prefixItems" in node && !checkSchemaArray(node.prefixItems, epoch)) return false;
 	// Obsolete tuple/dependency keywords are not valid in the 2020-12 schema
 	// shape we emit and forward.
 	if ("additionalItems" in node || "dependencies" in node) return false;
@@ -98,14 +109,15 @@ function checkNode(node: Json, seen: WeakSet<object>): boolean {
 	for (const key of ["additionalProperties", "unevaluatedProperties", "unevaluatedItems"] as const) {
 		if (!(key in node)) continue;
 		const value = node[key];
-		if (typeof value !== "boolean" && !checkNode(value, seen)) return false;
+		if (typeof value !== "boolean" && !checkNode(value, epoch)) return false;
 	}
 
-	if ("dependentSchemas" in node && !checkSchemaMap(node.dependentSchemas, seen)) return false;
+	if ("dependentSchemas" in node && !checkSchemaMap(node.dependentSchemas, epoch)) return false;
 	if ("dependentRequired" in node) {
 		const value = node.dependentRequired;
 		if (!isPlainObject(value)) return false;
-		for (const entry of Object.values(value)) {
+		for (const k in value) {
+			const entry = value[k];
 			if (!Array.isArray(entry) || !entry.every(item => typeof item === "string")) return false;
 		}
 	}
@@ -148,7 +160,7 @@ function checkNode(node: Json, seen: WeakSet<object>): boolean {
 /** Validate that `schema` is structurally a valid JSON Schema (subset). */
 export function isValidJsonSchema(schema: unknown): boolean {
 	try {
-		return checkNode(schema, new WeakSet<object>());
+		return checkNode(schema, epochNext());
 	} catch {
 		return false;
 	}

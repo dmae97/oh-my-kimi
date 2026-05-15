@@ -7,6 +7,17 @@ import {
 import { isValidJsonSchema } from "./meta-validator";
 import { isJsonObject, type JsonObject } from "./types";
 
+/**
+ * Schema compatibility audits.
+ *
+ * Each provider has a different idea of what JSON Schema features it accepts
+ * for tool definitions. The sanitizers in `normalize-cca`, `sanitize-google`,
+ * and `strict-mode` rewrite incoming schemas to fit. This module is the
+ * *audit* counterpart: it walks a (presumably already-sanitized) schema and
+ * reports any feature the target provider would reject. Tests use it to lock
+ * down the contract; the runtime uses it to fail-open with diagnostic logs
+ * rather than silently shipping a broken tool definition.
+ */
 export type SchemaCompatibilityProvider = "openai-strict" | "google" | "cloud-code-assist-claude";
 
 export interface SchemaCompatibilityViolation {
@@ -28,12 +39,24 @@ export interface StrictSchemaEnforcementResult {
 	strict: boolean;
 }
 
-const STRICT_FORBIDDEN_KEYS = new Set([...NON_STRUCTURAL_SCHEMA_KEYS, "const", "nullable"]);
-const GOOGLE_FORBIDDEN_KEYS = new Set([...UNSUPPORTED_SCHEMA_FIELDS, "const"]);
-const CCA_FORBIDDEN_KEYS = new Set([...CCA_UNSUPPORTED_SCHEMA_FIELDS, "const"]);
+// Per-provider forbidden-key sets. Subsets of the shared `fields.ts` constants
+// plus a few provider-specific extras (`const`, `nullable`) folded in here so
+// each rule is defined in exactly one place.
+const STRICT_FORBIDDEN_KEYS: Record<string, true> = { ...NON_STRUCTURAL_SCHEMA_KEYS, const: true, nullable: true };
+const GOOGLE_FORBIDDEN_KEYS: Record<string, true> = { ...UNSUPPORTED_SCHEMA_FIELDS, const: true };
+const CCA_FORBIDDEN_KEYS: Record<string, true> = { ...CCA_UNSUPPORTED_SCHEMA_FIELDS, const: true };
 
-const NON_SCHEMA_CONTAINER_ARRAY_KEYS = new Set(["enum", "required", "examples", "type"]);
-const NON_SCHEMA_CONTAINER_OBJECT_KEYS = new Set(["const", "default", "example"]);
+// Keys whose values are JSON-Schema *containers* (arrays of values, scalars,
+// etc.) rather than nested schemas. The traversal must skip these — recursing
+// would walk into `enum` strings or `default` objects and emit spurious
+// violations against keys that happen to share JSON-Schema keyword names.
+const NON_SCHEMA_CONTAINER_ARRAY_KEYS: Record<string, true> = {
+	enum: true,
+	required: true,
+	examples: true,
+	type: true,
+};
+const NON_SCHEMA_CONTAINER_OBJECT_KEYS: Record<string, true> = { const: true, default: true, example: true };
 
 interface TraversalState {
 	path: string;
@@ -55,6 +78,14 @@ function createViolation(
 	};
 }
 
+/**
+ * Recursively visit every schema node in a JSON Schema tree.
+ *
+ * The walker is *structural*, not type-aware: it knows which keywords contain
+ * nested schemas vs. plain values, so it descends into `properties.*`,
+ * `$defs.*`, `items`, combinator arrays, etc. but never into `enum`, `const`,
+ * `default`, or `type` arrays.
+ */
 function walkSchema(
 	value: unknown,
 	state: TraversalState,
@@ -73,19 +104,25 @@ function walkSchema(
 
 	visitNode(value, state);
 
-	for (const [key, entry] of Object.entries(value)) {
+	for (const key in value) {
+		// Schema-map keywords: value is `{ name: schema, … }`. Recurse into each
+		// entry's schema rather than the map object itself.
+		const entry = value[key];
 		if (key === "properties" || key === "$defs" || key === "definitions" || key === "dependentSchemas") {
 			if (isJsonObject(entry)) {
-				for (const [name, child] of Object.entries(entry)) {
+				for (const name in entry) {
+					const child = entry[name];
 					walkSchema(child, { path: `${state.path}.${key}.${name}` }, visitNode);
 				}
 			}
 			continue;
 		}
+		// Non-schema container keywords — values are not schemas, do not descend.
 
-		if (NON_SCHEMA_CONTAINER_ARRAY_KEYS.has(key) || NON_SCHEMA_CONTAINER_OBJECT_KEYS.has(key)) {
+		if (key in NON_SCHEMA_CONTAINER_ARRAY_KEYS || key in NON_SCHEMA_CONTAINER_OBJECT_KEYS) {
 			continue;
 		}
+		// Array-of-schemas keywords (e.g. `allOf`, `anyOf`, `oneOf`, `prefixItems`).
 
 		if (Array.isArray(entry)) {
 			for (let index = 0; index < entry.length; index++) {
@@ -100,11 +137,23 @@ function walkSchema(
 	}
 }
 
+/**
+ * Strict-mode audit (OpenAI Responses / Codex `strict: true`):
+ *  1. Forbid keywords that strict mode disallows (`format`, `pattern`, `const`,
+ *     `nullable`, etc. — see `STRICT_FORBIDDEN_KEYS`).
+ *  2. Every node must declare *something* concrete: a `type`, a combinator,
+ *     a `$ref`, or a `not` branch. Empty `{}` is rejected.
+ *  3. Object nodes must set `additionalProperties: false`, declare a real
+ *     `properties` map, and require every property in that map. Required
+ *     properties not in `properties` are also rejected — strict mode demands
+ *     a closed object shape.
+ */
 function validateStrictNode(node: JsonObject, state: TraversalState): SchemaCompatibilityViolation[] {
 	const violations: SchemaCompatibilityViolation[] = [];
 
-	for (const [key, value] of Object.entries(node)) {
-		if (!STRICT_FORBIDDEN_KEYS.has(key)) {
+	for (const key in node) {
+		const value = node[key];
+		if (!(key in STRICT_FORBIDDEN_KEYS)) {
 			continue;
 		}
 
@@ -118,6 +167,7 @@ function validateStrictNode(node: JsonObject, state: TraversalState): SchemaComp
 			),
 		);
 	}
+	// Rule 2: node must declare at least one concrete shape descriptor.
 
 	const hasCombinator = COMBINATOR_KEYS.some(key => Array.isArray(node[key]));
 	const hasRef = typeof node.$ref === "string";
@@ -131,6 +181,7 @@ function validateStrictNode(node: JsonObject, state: TraversalState): SchemaComp
 			),
 		);
 	}
+	// Rules 3a-3d apply only to object-shaped nodes.
 
 	const isObjectNode = node.type === "object" || isJsonObject(node.properties);
 	if (!isObjectNode) {
@@ -148,6 +199,7 @@ function validateStrictNode(node: JsonObject, state: TraversalState): SchemaComp
 			),
 		);
 	}
+	// 3b: `properties` must exist and be an object — without it strict mode has nothing to validate.
 
 	if (!isJsonObject(node.properties)) {
 		violations.push(
@@ -182,6 +234,7 @@ function validateStrictNode(node: JsonObject, state: TraversalState): SchemaComp
 			),
 		);
 	}
+	// 3d: any property declared in `required` but missing from `properties` is unrepresentable.
 
 	const propertyNameSet = new Set(propertyNames);
 	for (const requiredKey of requiredValues) {
@@ -205,8 +258,9 @@ function validateStrictNode(node: JsonObject, state: TraversalState): SchemaComp
 function validateGoogleNode(node: JsonObject, state: TraversalState): SchemaCompatibilityViolation[] {
 	const violations: SchemaCompatibilityViolation[] = [];
 
-	for (const [key, value] of Object.entries(node)) {
-		if (!GOOGLE_FORBIDDEN_KEYS.has(key)) {
+	for (const key in node) {
+		const value = node[key];
+		if (!(key in GOOGLE_FORBIDDEN_KEYS)) {
 			continue;
 		}
 		violations.push(
@@ -238,8 +292,9 @@ function validateGoogleNode(node: JsonObject, state: TraversalState): SchemaComp
 function validateCloudCodeAssistNode(node: JsonObject, state: TraversalState): SchemaCompatibilityViolation[] {
 	const violations: SchemaCompatibilityViolation[] = [];
 
-	for (const [key, value] of Object.entries(node)) {
-		if (CCA_FORBIDDEN_KEYS.has(key)) {
+	for (const key in node) {
+		const value = node[key];
+		if (key in CCA_FORBIDDEN_KEYS) {
 			violations.push(
 				createViolation(
 					`${state.path}.${key}`,

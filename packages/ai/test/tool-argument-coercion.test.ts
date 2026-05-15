@@ -112,19 +112,23 @@ describe("Tool argument coercion", () => {
 		expect(result).toEqual({ env: { FOO: "bar" } });
 	});
 
-	it("validates JSON Schema without converting it through Zod", () => {
+	it("upgrades draft-07-shaped JSON Schema without $schema before validation", () => {
 		const tool: Tool = {
 			name: "json_schema",
 			description: "",
 			parameters: {
 				type: "object",
 				properties: {
-					item: { $ref: "#/$defs/Item" },
-					name: { type: ["string", "null"] },
-					ids: { type: "array", items: { type: "string" }, uniqueItems: true },
+					item: { $ref: "#/definitions/Item" },
+					name: { type: "string", nullable: true },
+					pair: {
+						type: "array",
+						items: [{ type: "string" }, { type: "integer" }],
+						additionalItems: false,
+					},
 				},
-				required: ["item", "name", "ids"],
-				$defs: {
+				required: ["item", "name", "pair"],
+				definitions: {
 					Item: { type: "string" },
 				},
 			},
@@ -134,18 +138,27 @@ describe("Tool argument coercion", () => {
 			type: "toolCall",
 			id: "call-json-ok",
 			name: "json_schema",
-			arguments: { item: "ok", name: null, ids: ["a", "b"] },
+			arguments: { item: "ok", name: null, pair: ["a", 1] },
 		});
-		expect(valid).toEqual({ item: "ok", name: null, ids: ["a", "b"] });
+		expect(valid).toEqual({ item: "ok", name: null, pair: ["a", 1] });
 
 		expect(() =>
 			validateToolArguments(tool, {
 				type: "toolCall",
 				id: "call-json-bad",
 				name: "json_schema",
-				arguments: { item: "ok", name: null, ids: ["a", "a"] },
+				arguments: { item: "ok", name: null, pair: ["a", "not-an-integer"] },
 			}),
-		).toThrow("unique");
+		).toThrow("integer");
+
+		expect(() =>
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "call-json-extra",
+				name: "json_schema",
+				arguments: { item: "ok", name: null, pair: ["a", 1, "extra"] },
+			}),
+		).toThrow("false schema");
 	});
 
 	it("parses nested JSON arrays in string values", () => {
