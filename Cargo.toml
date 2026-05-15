@@ -8,6 +8,7 @@ version = "15.1.0"
 edition = "2024"
 license = "MIT"
 authors = ["Can Boluk"]
+homepage = "https://omp.sh/"
 repository = "https://github.com/can1357/oh-my-pi"
 
 [patch.crates-io]

@@ -348,7 +348,7 @@ function updateCodexSessionMetadataFromHeaders(
 	}
 }
 
-function extractCodexWebSocketHandshakeHeaders(socket: WebSocket, openEvent?: Event): Headers | undefined {
+function extractCodexWebSocketHandshakeHeaders(socket: Bun.WebSocket, openEvent?: Event): Headers | undefined {
 	const eventRecord = openEvent as Record<string, unknown> | undefined;
 	const eventResponse = eventRecord?.response as Record<string, unknown> | undefined;
 	const socketRecord = socket as unknown as Record<string, unknown>;
@@ -1889,7 +1889,7 @@ class CodexWebSocketConnection {
 	#idleTimeoutMs: number;
 	#firstEventTimeoutMs: number;
 	#onHandshakeHeaders?: (headers: Headers) => void;
-	#socket: WebSocket | null = null;
+	#socket: Bun.WebSocket | null = null;
 	#queue: Array<Record<string, unknown> | Error | null> = [];
 	#waiters: Array<() => void> = [];
 	#connectPromise?: Promise<void>;
@@ -1930,7 +1930,10 @@ class CodexWebSocketConnection {
 		}
 		const { promise, resolve, reject } = Promise.withResolvers<void>();
 		this.#connectPromise = promise;
-		const socket = new WebSocket(this.#url, { headers: this.#headers });
+		const socket = new (WebSocket as unknown as new (url: string, opts: Bun.WebSocketOptions) => Bun.WebSocket)(
+			this.#url,
+			{ headers: this.#headers },
+		);
 		socket.binaryType = "nodebuffer";
 		this.#socket = socket;
 		let settled = false;
@@ -2092,7 +2095,7 @@ class CodexWebSocketConnection {
 		}
 	}
 
-	#captureHandshakeHeaders(socket: WebSocket, openEvent?: Event): void {
+	#captureHandshakeHeaders(socket: Bun.WebSocket, openEvent?: Event): void {
 		if (!this.#onHandshakeHeaders) return;
 		const headers = extractCodexWebSocketHandshakeHeaders(socket, openEvent);
 		if (!headers) return;

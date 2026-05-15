@@ -914,7 +914,7 @@ async function createClient(
 		// SDK UA so traffic is identifiable in upstream provider logs.
 		// https://openrouter.ai/docs/app-attribution
 		headers["User-Agent"] = `Oh-My-Pi/${packageJson.version}`;
-		headers["HTTP-Referer"] = "https://github.com/can1357/oh-my-pi";
+		headers["HTTP-Referer"] = "https://omp.sh/";
 		headers["X-OpenRouter-Title"] = "Oh-My-Pi";
 		headers["X-OpenRouter-Categories"] = "cli-agent";
 		// Always-on response caching: identical requests return cached responses for free.
