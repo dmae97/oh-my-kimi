@@ -292,7 +292,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	#buildCompletedResult(
 		result: BashResult | BashInteractiveResult,
 		timeoutSec: number,
-		options: { requestedTimeoutSec?: number; notices?: string[]; terminalId?: string } = {},
+		options: { requestedTimeoutSec?: number; notices?: readonly string[]; terminalId?: string } = {},
 	): AgentToolResult<BashToolDetails> {
 		const outputLines = [this.#formatResultOutput(result)];
 		const notices = options.notices?.filter(Boolean) ?? [];
@@ -315,7 +315,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		label: string,
 		previewText: string,
 		timeoutSec: number,
-		options: { requestedTimeoutSec?: number; notices?: string[] } = {},
+		options: { requestedTimeoutSec?: number; notices?: readonly string[] } = {},
 	): AgentToolResult<BashToolDetails> {
 		const details: BashToolDetails = {
 			timeoutSeconds: timeoutSec,

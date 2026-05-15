@@ -1015,8 +1015,12 @@ export class ModelRegistry {
 
 		this.#addImplicitDiscoverableProviders(configuredProviders);
 		const builtInModels = this.#applyHardcodedModelPolicies(this.#loadBuiltInModels(overrides));
+		const cachedStandardModels = this.#applyHardcodedModelPolicies(this.#loadCachedStandardProviderModels());
 		const cachedDiscoveries = this.#applyHardcodedModelPolicies(this.#loadCachedDiscoverableModels());
-		const resolvedDefaults = this.#mergeResolvedModels(builtInModels, cachedDiscoveries);
+		const resolvedDefaults = this.#mergeResolvedModels(
+			this.#mergeResolvedModels(builtInModels, cachedStandardModels),
+			cachedDiscoveries,
+		);
 		const withConfigModels = this.#mergeCustomModels(resolvedDefaults, this.#customModelOverlays);
 		// Merge runtime extension models so they survive refresh() cycles
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
@@ -1113,6 +1117,32 @@ export class ModelRegistry {
 			}
 		}
 		return merged;
+	}
+
+	#loadCachedStandardProviderModels(): Model<Api>[] {
+		const configuredDiscoveryProviders = new Set(this.#discoverableProviders.map(provider => provider.provider));
+		const cachedModels: Model<Api>[] = [];
+		for (const descriptor of PROVIDER_DESCRIPTORS) {
+			if (configuredDiscoveryProviders.has(descriptor.providerId)) {
+				continue;
+			}
+			const cache = readModelCache<Api>(descriptor.providerId, 24 * 60 * 60 * 1000, Date.now, this.#cacheDbPath);
+			if (!cache) {
+				continue;
+			}
+			const models = cache.models.map(model =>
+				model.provider === descriptor.providerId ? model : { ...model, provider: descriptor.providerId },
+			);
+			const providerOverride = this.#providerOverrides.get(descriptor.providerId);
+			const withTransport = providerOverride
+				? models.map(model => this.#applyProviderTransportOverride(model, providerOverride))
+				: models;
+			const withCompat = providerOverride?.compat
+				? withTransport.map(model => ({ ...model, compat: mergeCompat(model.compat, providerOverride.compat) }))
+				: withTransport;
+			cachedModels.push(...this.#applyProviderModelOverrides(descriptor.providerId, withCompat));
+		}
+		return cachedModels;
 	}
 
 	#loadCachedDiscoverableModels(): Model<Api>[] {
