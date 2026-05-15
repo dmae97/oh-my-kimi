@@ -10,6 +10,7 @@ import { agentLoop } from "@oh-my-pi/pi-agent-core/agent-loop";
 import {
 	type AgentTelemetryConfig,
 	type ChatUsageEvent,
+	detectGatewayFromHeaders,
 	GenAIAttr,
 	GenAIOperation,
 	OpenAIAttr,
@@ -781,5 +782,214 @@ describe("agent-loop OTEL instrumentation", () => {
 			expect(span.attributes["deployment.environment"]).toBe("prod");
 			expect(span.attributes["service.name"]).toBe("test-svc");
 		}
+	});
+});
+
+describe("detectGatewayFromHeaders", () => {
+	it("identifies LiteLLM via x-litellm-call-id and resolves routed_to from x-litellm-model-id", () => {
+		const detection = detectGatewayFromHeaders({
+			"x-litellm-call-id": "call-abc-123",
+			"x-litellm-model-id": "anthropic/claude-sonnet-4-7",
+			"x-litellm-version": "1.59.2",
+		});
+		expect(detection).toEqual({
+			name: "litellm",
+			callId: "call-abc-123",
+			routedTo: "anthropic/claude-sonnet-4-7",
+		});
+	});
+
+	it("falls back to x-litellm-model-group when model-id is absent", () => {
+		const detection = detectGatewayFromHeaders({
+			"x-litellm-call-id": "call-xyz",
+			"x-litellm-model-group": "claude-fast",
+		});
+		expect(detection?.routedTo).toBe("claude-fast");
+	});
+
+	it("identifies Helicone via helicone-id", () => {
+		const detection = detectGatewayFromHeaders({
+			"helicone-id": "req_42",
+			"helicone-target-provider": "openai",
+		});
+		expect(detection).toEqual({ name: "helicone", callId: "req_42", routedTo: "openai" });
+	});
+
+	it("identifies Portkey via x-portkey-trace-id with provider routing", () => {
+		const detection = detectGatewayFromHeaders({
+			"x-portkey-trace-id": "trace_99",
+			"x-portkey-llm-provider": "anthropic",
+		});
+		expect(detection).toEqual({ name: "portkey", callId: "trace_99", routedTo: "anthropic" });
+	});
+
+	it("identifies OpenRouter via x-generation-id with gen- prefix", () => {
+		expect(detectGatewayFromHeaders({ "x-generation-id": "gen-1234567890" })).toEqual({
+			name: "openrouter",
+			callId: "gen-1234567890",
+			routedTo: undefined,
+		});
+	});
+
+	it("ignores x-generation-id without the OpenRouter gen- prefix", () => {
+		expect(detectGatewayFromHeaders({ "x-generation-id": "1234567890" })).toBeUndefined();
+	});
+
+	it("falls back to x-portkey-request-id when trace id is absent", () => {
+		expect(detectGatewayFromHeaders({ "x-portkey-request-id": "rq_1" })?.callId).toBe("rq_1");
+	});
+
+	it("returns undefined when no known gateway header is present", () => {
+		expect(detectGatewayFromHeaders({})).toBeUndefined();
+		expect(
+			detectGatewayFromHeaders({
+				"content-type": "application/json",
+				"x-request-id": "rid",
+			}),
+		).toBeUndefined();
+		expect(detectGatewayFromHeaders(undefined)).toBeUndefined();
+	});
+
+	it("prefers LiteLLM detection over Helicone when both header families are present", () => {
+		const detection = detectGatewayFromHeaders({
+			"x-litellm-call-id": "ll-1",
+			"helicone-id": "he-1",
+		});
+		expect(detection?.name).toBe("litellm");
+	});
+});
+
+describe("ChatUsageEvent.headers and pi.gen_ai.gateway.* span attributes", () => {
+	it("forwards captured response headers to onChatUsage", async () => {
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [
+				{
+					content: ["ok"],
+					usage: { input: 10, output: 5, totalTokens: 15 },
+					responseHeaders: {
+						"X-Request-Id": "upstream-req-77",
+						"content-type": "application/json",
+					},
+				},
+			],
+		});
+		const events: ChatUsageEvent[] = [];
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			telemetry: { onChatUsage: event => void events.push(event) },
+		};
+		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
+
+		expect(events).toHaveLength(1);
+		// Header keys are normalized to lowercase to match `ProviderResponseMetadata.headers`.
+		expect(events[0]?.headers).toEqual({
+			"x-request-id": "upstream-req-77",
+			"content-type": "application/json",
+		});
+	});
+
+	it("leaves ChatUsageEvent.headers undefined when the provider does not surface headers", async () => {
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [{ content: ["ok"], usage: { input: 1, output: 1, totalTokens: 2 } }],
+		});
+		const events: ChatUsageEvent[] = [];
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			telemetry: { onChatUsage: event => void events.push(event) },
+		};
+		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
+
+		expect(events).toHaveLength(1);
+		expect(events[0]?.headers).toBeUndefined();
+	});
+
+	it("auto-stamps pi.gen_ai.gateway.* on the chat span when LiteLLM headers are present", async () => {
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [
+				{
+					content: ["ok"],
+					usage: { input: 4, output: 2, totalTokens: 6 },
+					responseHeaders: {
+						"x-litellm-call-id": "ll-call-abc",
+						"x-litellm-model-id": "anthropic/claude-sonnet-4-7",
+						"x-litellm-version": "1.59.2",
+					},
+				},
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			telemetry: {},
+		};
+		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
+
+		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
+		expect(chat?.attributes[PiGenAIAttr.GatewayName]).toBe("litellm");
+		expect(chat?.attributes[PiGenAIAttr.GatewayCallId]).toBe("ll-call-abc");
+		expect(chat?.attributes[PiGenAIAttr.GatewayRoutedTo]).toBe("anthropic/claude-sonnet-4-7");
+		expect(chat?.attributes[PiGenAIAttr.GatewayEndpoint]).toBe(mock.model.baseUrl);
+	});
+
+	it("does not stamp gateway attributes when headers carry no known pattern", async () => {
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [
+				{
+					content: ["ok"],
+					usage: { input: 4, output: 2, totalTokens: 6 },
+					responseHeaders: { "x-request-id": "rid-1" },
+				},
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			telemetry: {},
+		};
+		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
+
+		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
+		expect(chat?.attributes[PiGenAIAttr.GatewayName]).toBeUndefined();
+		expect(chat?.attributes[PiGenAIAttr.GatewayCallId]).toBeUndefined();
+		expect(chat?.attributes[PiGenAIAttr.GatewayEndpoint]).toBeUndefined();
+	});
+
+	it("still invokes the user-supplied onResponse alongside header capture", async () => {
+		const seen: Array<Record<string, string>> = [];
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [
+				{
+					content: ["ok"],
+					usage: { input: 1, output: 1, totalTokens: 2 },
+					responseHeaders: { "x-litellm-call-id": "ll-2" },
+				},
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			onResponse: response => {
+				seen.push({ ...response.headers });
+			},
+			telemetry: {},
+		};
+		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
+
+		expect(seen).toHaveLength(1);
+		expect(seen[0]?.["x-litellm-call-id"]).toBe("ll-2");
+		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
+		expect(chat?.attributes[PiGenAIAttr.GatewayName]).toBe("litellm");
 	});
 });

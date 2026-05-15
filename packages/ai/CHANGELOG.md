@@ -1,13 +1,14 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Rejected draft-07 tuple and dependency keywords (`items` arrays, `dependencies`, `additionalItems`) in JSON Schema validation
 
 ### Added
 
+- Added `responseHeaders`, `responseStatus`, and `responseRequestId` fields to `MockResponse` so mock providers can provide synthetic `ProviderResponseMetadata`
+- Added `onResponse` metadata emission for mocks that sends lowercased headers and a default status of 200 before streaming when response headers are configured
 - Added recursive strict-mode sanitization for array `prefixItems` entries so tuple schemas now enforce object constraints per item
 
 ### Changed
