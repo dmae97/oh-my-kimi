@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `requestOpenAiRemoteCompaction` and `shouldUseOpenAiRemoteCompaction` to call OpenAI-compatible `/responses/compact` endpoints, with replacement-history and preserve-data handling for remote compaction flows
+- Added `buildOpenAiNativeHistory`, `getPreservedOpenAiRemoteCompactionData`, and `withOpenAiRemoteCompactionPreserveData` to construct OpenAI-native compaction payloads and persist compaction context across turns
+- Added generic `requestRemoteCompaction` for POSTing `{systemPrompt,prompt}` to self-hosted compaction endpoints and retrieving `{summary, shortSummary}` responses
 
 ### Fixed
 
