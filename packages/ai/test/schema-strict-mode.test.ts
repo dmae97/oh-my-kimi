@@ -583,6 +583,17 @@ describe("json-schema validator unsupported-keyword regressions", () => {
 		expect(isJsonSchemaValueValid(schema, { name: "root", child: { name: 123 } })).toBe(false);
 		expect(isJsonSchemaValueValid(schema, { name: "root", child: { child: { name: "x" } } })).toBe(false);
 	});
+
+	it("fails primitive $ref chains that exceed the recursion cap instead of accepting invalid values", () => {
+		const definitions: Record<string, unknown> = {};
+		for (let i = 0; i < 66; i += 1) {
+			definitions[`A${i}`] = { $ref: `#/definitions/A${i + 1}` };
+		}
+		definitions.A66 = { type: "number" };
+
+		const schema = { $ref: "#/definitions/A0", definitions };
+		expect(isJsonSchemaValueValid(schema, "not-a-number")).toBe(false);
+	});
 });
 
 describe("meta-validator conditional keywords", () => {

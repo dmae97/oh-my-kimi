@@ -153,7 +153,10 @@ function validateSchemaNode(
 			if (ctx.seenPairs.has(pairKey)) return true;
 			ctx.seenPairs.add(pairKey);
 		} else {
-			if (ctx.refDepth >= MAX_REF_DEPTH) return true;
+			if (ctx.refDepth >= MAX_REF_DEPTH) {
+				pushIssue(issues, path, "reference depth exceeded", { keyword: "$ref" });
+				return false;
+			}
 			ctx.refDepth += 1;
 		}
 		const ok = validateSchemaNode(resolved, value, path, ctx, issues);
