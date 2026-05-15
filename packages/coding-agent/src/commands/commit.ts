@@ -1,6 +1,7 @@
 /**
  * Generate and optionally push a commit with changelog updates.
  */
+import { postmortem } from "@oh-my-pi/pi-utils";
 import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { runCommitCommand } from "../commit";
 import type { CommitCommandArgs } from "../commit/types";
@@ -31,6 +32,15 @@ export default class Commit extends Command {
 		};
 
 		await initTheme();
+		// The agentic commit flow opens HTTP/2 keep-alive sockets to the model
+		// provider (via `installH2Fetch`) and spins up an AgentSession with
+		// background async-job + extension machinery. `session.dispose()` releases
+		// what it can, but Bun's fetch keeps idle connections warm and a few
+		// timers (Settings autosave, OAuth refresh) stay armed long enough to
+		// pin the event loop after the commit is already written. Mirror the
+		// `runPrintMode` exit pattern from `main.ts` so the CLI returns to the
+		// shell instead of stranding the user on Ctrl+C (issue #1041).
 		await runCommitCommand(cmd);
+		await postmortem.quit(0);
 	}
 }
