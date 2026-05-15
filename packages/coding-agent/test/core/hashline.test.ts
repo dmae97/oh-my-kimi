@@ -313,6 +313,29 @@ describe("hashline parser — block op syntax", () => {
 		expect(applyDiff(content, diff)).toBe("aaa\n\n# not a header\n+ not an op\n  spaced\nccc");
 	});
 
+	it("treats blank lines inside a payload run as empty payload lines", () => {
+		// Truly blank lines (no leading separator) inside an active payload run
+		// are silently rewritten to empty payload lines as long as more payload
+		// follows. This recovers from a common typo where the model forgets the
+		// separator on what should be a blank inserted line.
+		const diff = [`= ${sameLineRange(tag(2, "bbb"))}`, pl("first"), "", "", pl("after")].join("\n");
+		expect(applyDiff(content, diff)).toBe("aaa\nfirst\n\n\nafter\nccc");
+	});
+
+	it("does not consume trailing blank lines between sections as payload", () => {
+		// Blanks that precede a non-payload op (here, another `=`) end the
+		// payload run cleanly — they're section separators, not payload.
+		const diff = [
+			`= ${sameLineRange(tag(1, "aaa"))}`,
+			pl("AAA"),
+			"",
+			"",
+			`= ${sameLineRange(tag(3, "ccc"))}`,
+			pl("CCC"),
+		].join("\n");
+		expect(applyDiff(content, diff)).toBe("AAA\nbbb\nCCC");
+	});
+
 	it("rejects missing payloads and orphan payload lines", () => {
 		expect(() => parseHashline(`+ ${tag(1, "aaa")}`)).toThrow(/require at least one/);
 		expect(() => parseHashline(pl("orphan"))).toThrow(/payload line has no preceding/);
