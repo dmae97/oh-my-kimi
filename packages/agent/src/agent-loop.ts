@@ -26,6 +26,7 @@ import {
 	finishChatSpan,
 	finishExecuteToolSpan,
 	finishInvokeAgentSpan,
+	fireOnRunEnd,
 	recordSkippedTool,
 	resolveTelemetry,
 	runInActiveSpan,
@@ -201,6 +202,9 @@ function buildAgentEndEvent(
 ): Extract<AgentEvent, { type: "agent_end" }> {
 	if (!telemetry) return { type: "agent_end", messages };
 	const snapshot = telemetry.collector.snapshot({ stepCount });
+	if (telemetry.collector.markRunEnded()) {
+		fireOnRunEnd(telemetry, snapshot.summary, snapshot.coverage);
+	}
 	return { type: "agent_end", messages, telemetry: snapshot.summary, coverage: snapshot.coverage };
 }
 

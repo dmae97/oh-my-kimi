@@ -683,19 +683,26 @@ export function finishExecuteToolSpan(
 	});
 	const status: ToolStatus = options.status ?? (options.isError ? "error" : "ok");
 	let errorType: string | undefined;
-	if (options.errorObject instanceof Error) {
-		span.recordException(options.errorObject);
-		errorType = options.errorObject.name || "Error";
+	// `status` is the source of truth for the wire-level `error.type`. The
+	// underlying `errorObject` (if any) still gets a `recordException` so the
+	// stack trace is preserved, but the attribute reflects the run-level
+	// category (`tool_blocked`, `tool_aborted`, …) instead of the JS class
+	// name. This keeps dashboards groupable on one column.
+	if (status !== "ok") {
+		errorType =
+			status === "error" && options.errorObject instanceof Error
+				? options.errorObject.name || "Error"
+				: STATUS_ERROR_TYPE[status];
 		span.setAttribute(GenAIAttr.ErrorType, errorType);
 		span.setAttribute(EXECUTE_TOOL_STATUS_ATTR, status);
-		span.setStatus({ code: SpanStatusCode.ERROR, message: options.errorObject.message });
-	} else if (status !== "ok") {
-		errorType = STATUS_ERROR_TYPE[status];
-		span.setAttribute(GenAIAttr.ErrorType, errorType);
-		span.setAttribute(EXECUTE_TOOL_STATUS_ATTR, status);
-		span.setStatus({ code: SpanStatusCode.ERROR, message: options.errorMessage ?? errorType });
+		const msg =
+			options.errorObject instanceof Error ? options.errorObject.message : (options.errorMessage ?? errorType);
+		span.setStatus({ code: SpanStatusCode.ERROR, message: msg });
 	} else {
 		span.setAttribute(EXECUTE_TOOL_STATUS_ATTR, status);
+	}
+	if (options.errorObject instanceof Error) {
+		span.recordException(options.errorObject);
 	}
 	telemetry?.collector.endTool(span, { status, errorType });
 	span.end();
@@ -761,13 +768,8 @@ export function finishInvokeAgentSpan(
 		agent: telemetry.agent,
 		conversationId: telemetry.conversationId,
 	});
-	if (telemetry?.config.onRunEnd && snapshot) {
-		try {
-			telemetry.config.onRunEnd(snapshot.summary, snapshot.coverage);
-		} catch (err) {
-			// Telemetry consumers cannot turn a successful run into a failed one.
-			console.warn("[pi-agent] onRunEnd threw; swallowing:", err);
-		}
+	if (telemetry && snapshot && telemetry.collector.markRunEnded()) {
+		fireOnRunEnd(telemetry, snapshot.summary, snapshot.coverage);
 	}
 	if (options.errorObject instanceof Error) {
 		span.recordException(options.errorObject);
@@ -778,31 +780,48 @@ export function finishInvokeAgentSpan(
 	return snapshot;
 }
 
+/**
+ * Invoke {@link AgentTelemetryConfig.onRunEnd} on `telemetry` if set. Throws
+ are caught and logged via `console.warn` — telemetry callbacks NEVER turn a
+ * successful agent run into a failed one. Idempotent at the call site via
+ * {@link AgentRunCollector.markRunEnded}; callers must check that before
+ * calling this helper.
+ */
+export function fireOnRunEnd(telemetry: AgentTelemetry, summary: AgentRunSummary, coverage: AgentRunCoverage): void {
+	const hook = telemetry.config.onRunEnd;
+	if (!hook) return;
+	try {
+		hook(summary, coverage);
+	} catch (err) {
+		console.warn("[pi-agent] onRunEnd threw; swallowing:", err);
+	}
+}
+
 /** Aggregate `gen_ai.agent.*` attributes stamped on the `invoke_agent` span. */
-export const AGGREGATE_ATTR = {
-	ChatsCount: "gen_ai.agent.chats.count",
-	ChatsTotalLatencyMs: "gen_ai.agent.chats.total_latency_ms",
-	ChatsStopReasonPrefix: "gen_ai.agent.chats.stop_reason.",
-	ToolsCount: "gen_ai.agent.tools.count",
-	ToolsOkCount: "gen_ai.agent.tools.ok.count",
-	ToolsErrorCount: "gen_ai.agent.tools.error.count",
-	ToolsSkippedCount: "gen_ai.agent.tools.skipped.count",
-	ToolsBlockedCount: "gen_ai.agent.tools.blocked.count",
-	ToolsTimeoutCount: "gen_ai.agent.tools.timeout.count",
-	ToolsAbortedCount: "gen_ai.agent.tools.aborted.count",
-	ToolsTotalLatencyMs: "gen_ai.agent.tools.total_latency_ms",
-	ToolsInvoked: "gen_ai.agent.tools.invoked",
-	ToolsAvailable: "gen_ai.agent.tools.available",
-	ToolsUnused: "gen_ai.agent.tools.unused",
-	UsageInputTokensTotal: "gen_ai.agent.usage.input_tokens.total",
-	UsageOutputTokensTotal: "gen_ai.agent.usage.output_tokens.total",
-	UsageCachedInputTokensTotal: "gen_ai.agent.usage.cached_input_tokens.total",
-	UsageCacheWriteTokensTotal: "gen_ai.agent.usage.cache_write_tokens.total",
-	UsageReasoningOutputTokensTotal: "gen_ai.agent.usage.reasoning_output_tokens.total",
-	UsageTotalTokensTotal: "gen_ai.agent.usage.total_tokens.total",
-	CostEstimatedUsdTotal: "gen_ai.agent.cost.estimated_usd.total",
-	ErrorsCount: "gen_ai.agent.errors.count",
-} as const;
+export const enum AGGREGATE_ATTR {
+	ChatsCount = "gen_ai.agent.chats.count",
+	ChatsTotalLatencyMs = "gen_ai.agent.chats.total_latency_ms",
+	ChatsStopReasonPrefix = "gen_ai.agent.chats.stop_reason.",
+	ToolsCount = "gen_ai.agent.tools.count",
+	ToolsOkCount = "gen_ai.agent.tools.ok.count",
+	ToolsErrorCount = "gen_ai.agent.tools.error.count",
+	ToolsSkippedCount = "gen_ai.agent.tools.skipped.count",
+	ToolsBlockedCount = "gen_ai.agent.tools.blocked.count",
+	ToolsTimeoutCount = "gen_ai.agent.tools.timeout.count",
+	ToolsAbortedCount = "gen_ai.agent.tools.aborted.count",
+	ToolsTotalLatencyMs = "gen_ai.agent.tools.total_latency_ms",
+	ToolsInvoked = "gen_ai.agent.tools.invoked",
+	ToolsAvailable = "gen_ai.agent.tools.available",
+	ToolsUnused = "gen_ai.agent.tools.unused",
+	UsageInputTokensTotal = "gen_ai.agent.usage.input_tokens.total",
+	UsageOutputTokensTotal = "gen_ai.agent.usage.output_tokens.total",
+	UsageCachedInputTokensTotal = "gen_ai.agent.usage.cached_input_tokens.total",
+	UsageCacheWriteTokensTotal = "gen_ai.agent.usage.cache_write_tokens.total",
+	UsageReasoningOutputTokensTotal = "gen_ai.agent.usage.reasoning_output_tokens.total",
+	UsageTotalTokensTotal = "gen_ai.agent.usage.total_tokens.total",
+	CostEstimatedUsdTotal = "gen_ai.agent.cost.estimated_usd.total",
+	ErrorsCount = "gen_ai.agent.errors.count",
+}
 
 /** Stamp the aggregate `gen_ai.agent.*` attributes on the given span. */
 function applyAggregateAttributes(span: Span, summary: AgentRunSummary, coverage: AgentRunCoverage): void {

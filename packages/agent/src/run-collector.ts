@@ -148,6 +148,25 @@ export class AgentRunCollector {
 	readonly #invokedTools = new Set<string>();
 	readonly #modelsUsed = new Set<string>();
 	readonly #providersUsed = new Set<string>();
+	#runEnded = false;
+
+	/** True once `markRunEnded()` has been called for this invocation. */
+	get runEnded(): boolean {
+		return this.#runEnded;
+	}
+
+	/**
+	 * Mark this run as logically ended. Callers use this to coordinate the
+	 * `onRunEnd` hook between the success path (fires inside
+	 * `buildAgentEndEvent`, before `stream.end()`) and the error path (fires
+	 * inside `finishInvokeAgentSpan`'s finally). Idempotent — returns `true`
+	 * the first time, `false` on subsequent calls.
+	 */
+	markRunEnded(): boolean {
+		if (this.#runEnded) return false;
+		this.#runEnded = true;
+		return true;
+	}
 
 	/** Record the tool names exposed on a single chat step. */
 	noteAvailableTools(tools: readonly { readonly name: string }[] | undefined): void {
