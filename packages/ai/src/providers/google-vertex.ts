@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { $env } from "@oh-my-pi/pi-utils";
-import type { Context, Model, StreamFunction } from "../types";
+import type { Context, FetchImpl, Model, StreamFunction } from "../types";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
 import { buildGoogleGenerateContentParams, type GoogleSharedStreamOptions, streamGoogleGenAI } from "./google-shared";
 
@@ -38,9 +38,9 @@ export const streamGoogleVertex: StreamFunction<"google-vertex"> = (
 
 function buildHttpOptions(
 	model: Model<"google-vertex">,
-	fetchOverride: typeof fetch | undefined,
-): { headers?: Record<string, string>; fetch?: typeof fetch } | undefined {
-	const options: { headers?: Record<string, string>; fetch?: typeof fetch } = {};
+	fetchOverride: FetchImpl | undefined,
+): { headers?: Record<string, string>; fetch?: FetchImpl } | undefined {
+	const options: { headers?: Record<string, string>; fetch?: FetchImpl } = {};
 	if (model.headers) {
 		options.headers = { ...model.headers };
 	}
@@ -54,7 +54,7 @@ function createClient(
 	model: Model<"google-vertex">,
 	project: string,
 	location: string,
-	fetchOverride: typeof fetch | undefined,
+	fetchOverride: FetchImpl | undefined,
 ): GoogleGenAI {
 	return new GoogleGenAI({
 		vertexai: true,
@@ -68,7 +68,7 @@ function createClient(
 function createClientWithApiKey(
 	model: Model<"google-vertex">,
 	apiKey: string,
-	fetchOverride: typeof fetch | undefined,
+	fetchOverride: FetchImpl | undefined,
 ): GoogleGenAI {
 	return new GoogleGenAI({
 		vertexai: true,

@@ -16,6 +16,7 @@ import { getEnvApiKey } from "../stream";
 import {
 	type AssistantMessage,
 	type Context,
+	type FetchImpl,
 	getPriorityPremiumRequests,
 	type Message,
 	type MessageAttribution,
@@ -779,7 +780,7 @@ async function createClient(
 	extraHeaders?: Record<string, string>,
 	initiatorOverride?: MessageAttribution,
 	onSseEvent?: OpenAICompletionsOptions["onSseEvent"],
-	fetchOverride?: typeof fetch,
+	fetchOverride?: FetchImpl,
 ): Promise<{
 	client: OpenAI;
 	copilotPremiumRequests: number | undefined;

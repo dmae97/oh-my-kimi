@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { getEnvApiKey } from "../stream";
-import type { Context, Model, StreamFunction } from "../types";
+import type { Context, FetchImpl, Model, StreamFunction } from "../types";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
 import { buildGoogleGenerateContentParams, type GoogleSharedStreamOptions, streamGoogleGenAI } from "./google-shared";
 
@@ -24,16 +24,12 @@ export const streamGoogle: StreamFunction<"google-generative-ai"> = (
 		},
 	});
 
-function createClient(
-	model: Model<"google-generative-ai">,
-	apiKey?: string,
-	fetchOverride?: typeof fetch,
-): GoogleGenAI {
+function createClient(model: Model<"google-generative-ai">, apiKey?: string, fetchOverride?: FetchImpl): GoogleGenAI {
 	const httpOptions: {
 		baseUrl?: string;
 		apiVersion?: string;
 		headers?: Record<string, string>;
-		fetch?: typeof fetch;
+		fetch?: FetchImpl;
 	} = {};
 	if (model.baseUrl) {
 		httpOptions.baseUrl = model.baseUrl;

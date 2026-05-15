@@ -17,6 +17,7 @@ import {
 	type Api,
 	type AssistantMessage,
 	type Context,
+	type FetchImpl,
 	type Model,
 	type ProviderSessionState,
 	type ServiceTier,
@@ -2174,7 +2175,7 @@ async function openCodexSseEventStream(
 	state: CodexWebSocketSessionState | undefined,
 	signal?: AbortSignal,
 	onSseEvent?: OpenAICodexResponsesOptions["onSseEvent"],
-	fetchOverride?: typeof fetch,
+	fetchOverride?: FetchImpl,
 ): Promise<AsyncGenerator<Record<string, unknown>>> {
 	const headers = createCodexHeaders(requestHeaders, accountId, apiKey, sessionId, "sse", state);
 	logCodexDebug("codex request", {

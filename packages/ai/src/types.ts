@@ -204,6 +204,15 @@ export interface RawSseEvent {
 	raw: string[];
 }
 
+/**
+ * `fetch`-compatible function. Accepts any callable matching the standard
+ * fetch signature; `preconnect` is optional because non-Bun runtimes (browsers,
+ * test mocks) won't expose it.
+ */
+export type FetchImpl = ((input: string | URL | Request, init?: RequestInit) => Promise<Response>) & {
+	preconnect?: typeof globalThis.fetch.preconnect;
+};
+
 export interface StreamOptions {
 	temperature?: number;
 	topP?: number;
@@ -282,7 +291,7 @@ export interface StreamOptions {
 	 * do not use `fetch` (Bedrock's AWS SDK transport, Cursor's HTTP/2
 	 * channel) silently ignore the override.
 	 */
-	fetch?: typeof fetch;
+	fetch?: FetchImpl;
 	/** Cursor exec/MCP tool handlers (cursor-agent only). */
 	execHandlers?: CursorExecHandlers;
 }

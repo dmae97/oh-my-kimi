@@ -101,7 +101,7 @@ export interface FetchWithRetryOptions extends RequestInit {
 	 * Useful for routing requests through a proxy, instrumented transport, or
 	 * mock during tests.
 	 */
-	fetch?: typeof fetch;
+	fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 }
 
 const DEFAULT_MAX_DELAY_MS = 60_000;

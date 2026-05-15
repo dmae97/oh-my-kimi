@@ -25,6 +25,7 @@ import type {
 	AssistantMessage,
 	CacheRetention,
 	Context,
+	FetchImpl,
 	ImageContent,
 	Message,
 	Model,
@@ -541,7 +542,7 @@ export type AnthropicClientOptionsArgs = {
 	isOAuth?: boolean;
 	hasTools?: boolean;
 	onSseEvent?: AnthropicOptions["onSseEvent"];
-	fetch?: typeof fetch;
+	fetch?: FetchImpl;
 };
 
 export type AnthropicClientOptionsResult = {

@@ -1,5 +1,5 @@
 import { ANTHROPIC_THINKING, mapAnthropicToolChoice } from "../stream";
-import type { Api, Context, Model, SimpleStreamOptions } from "../types";
+import type { Api, Context, FetchImpl, Model, SimpleStreamOptions } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import type { OpenAICompletionsOptions } from "./openai-completions";
 import type { OpenAIResponsesOptions } from "./openai-responses";
@@ -174,7 +174,7 @@ const directAccessCache = new Map<string, DirectAccessToken>();
 
 async function getDirectAccessToken(
 	gitlabAccessToken: string,
-	fetchImpl: typeof fetch = fetch,
+	fetchImpl: FetchImpl = fetch,
 ): Promise<DirectAccessToken> {
 	const cached = directAccessCache.get(gitlabAccessToken);
 	if (cached && cached.expiresAt > Date.now()) {

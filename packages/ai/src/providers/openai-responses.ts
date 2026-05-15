@@ -10,6 +10,7 @@ import {
 	type AssistantMessage,
 	type CacheRetention,
 	type Context,
+	type FetchImpl,
 	getPriorityPremiumRequests,
 	type MessageAttribution,
 	type Model,
@@ -313,7 +314,7 @@ function createClient(
 	initiatorOverride?: MessageAttribution,
 	sessionId?: string,
 	onSseEvent?: OpenAIResponsesOptions["onSseEvent"],
-	fetchOverride?: typeof fetch,
+	fetchOverride?: FetchImpl,
 ): {
 	client: OpenAI;
 	copilotPremiumRequests: number | undefined;
