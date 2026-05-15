@@ -1,3 +1,4 @@
+import { upgradeJsonSchemaTo202012 } from "./draft";
 import { tryEnforceStrictSchema } from "./strict-mode";
 import type { JsonObject } from "./types";
 /**
@@ -5,7 +6,8 @@ import type { JsonObject } from "./types";
  *
  * Each provider computes its own `strict` boolean (logic differs), then calls
  * this to handle the tryEnforceStrictSchema dance uniformly:
- * - If `strict` is false, passes the schema through unchanged.
+ * - Draft-07-shaped inputs are upgraded to draft 2020-12 first.
+ * - If `strict` is false, passes the upgraded schema through unchanged.
  * - If `strict` is true, attempts to enforce strict mode; falls back to
  *   non-strict if the schema isn't representable.
  */
@@ -13,11 +15,12 @@ export function adaptSchemaForStrict(
 	schema: Record<string, unknown>,
 	strict: boolean,
 ): { schema: Record<string, unknown>; strict: boolean } {
+	const upgraded = upgradeJsonSchemaTo202012(schema) as Record<string, unknown>;
 	if (!strict) {
-		return { schema, strict: false };
+		return { schema: upgraded, strict: false };
 	}
 
-	return tryEnforceStrictSchema(schema);
+	return tryEnforceStrictSchema(upgraded);
 }
 
 /**
@@ -29,6 +32,13 @@ export function sanitizeSchemaForOpenAIResponses(schema: JsonObject): JsonObject
 	return rewriteOneOfToAnyOf(schema) as JsonObject;
 }
 
+/**
+ * Recursively replace every `oneOf` keyword with `anyOf`. Identity-preserving:
+ * returns the input reference unchanged when no rewrite occurred so callers
+ * can dedupe via reference equality (and the strict-mode cache stays warm).
+ * If a node has both `oneOf` and `anyOf`, the two are concatenated (the wire
+ * payload accepts a single union; preserving both would not survive).
+ */
 function rewriteOneOfToAnyOf(value: unknown): unknown {
 	if (Array.isArray(value)) {
 		let changed = false;
@@ -47,7 +57,10 @@ function rewriteOneOfToAnyOf(value: unknown): unknown {
 	const input = value as Record<string, unknown>;
 	let changed = false;
 	const output: Record<string, unknown> = {};
-	for (const [key, child] of Object.entries(input)) {
+	for (const key in input) {
+		const child = input[key];
+		// Skip `oneOf` here; it is re-emitted as `anyOf` after the loop so
+		// neighboring `anyOf` entries can be folded in.
 		if (key === "oneOf") {
 			changed = true;
 			continue;
@@ -57,6 +70,8 @@ function rewriteOneOfToAnyOf(value: unknown): unknown {
 		output[key] = next;
 	}
 
+	// Re-emit `oneOf` content under `anyOf`, concatenating with any existing
+	// `anyOf` branches in the original node.
 	if (Array.isArray(input.oneOf)) {
 		const rewrittenOneOf = rewriteOneOfToAnyOf(input.oneOf);
 		const existingAnyOf = output.anyOf;

@@ -86,7 +86,7 @@ export function parseFrontmatter(
 	const loc = location ?? source;
 	const frontmatter: Record<string, unknown> = { ...fallback };
 
-	const normalized = normalize ? stripHtmlComments(content.replace(/\r\n/g, "\n").replace(/\r/g, "\n")) : content;
+	const normalized = normalize ? stripHtmlComments(content.replace(/\r\n?/g, "\n")) : content;
 	if (!normalized.startsWith("---")) {
 		return { frontmatter, body: normalized };
 	}

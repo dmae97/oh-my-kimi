@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [15.1.2] - 2026-05-15
+### Fixed
+
+- Fixed bash tool calls with `pty: true` hanging indefinitely on Windows by falling back to the non-PTY executor instead of entering the ConPTY-backed interactive path. ([#1103](https://github.com/can1357/oh-my-pi/issues/1103))
+### Changed
+
+- Updated MCP and theme schema metadata to reference JSON Schema draft-2020-12
+
 ## [15.1.0] - 2026-05-15
 ### Breaking Changes
 

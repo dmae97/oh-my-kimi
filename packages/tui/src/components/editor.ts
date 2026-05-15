@@ -25,10 +25,8 @@ const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 };
 
 function sanitizeLoadedText(text: string): string {
-	return replaceTabs(text.replace(/\r\n/g, "\n").replace(/\r/g, "\n"))
-		.split("")
-		.filter(char => char === "\n" || char.charCodeAt(0) >= 32)
-		.join("");
+	// Normalize CRLF/CR → LF, then strip C0 control chars except \n.
+	return replaceTabs(text.replace(/\r\n?/g, "\n")).replace(/[\x00-\x09\x0b-\x1f]/g, "");
 }
 
 const segmenter = getSegmenter();
@@ -1556,7 +1554,7 @@ export class Editor implements Component, Focusable {
 			});
 
 			// Clean the pasted text
-			const cleanText = decodedText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+			const cleanText = decodedText.replace(/\r\n?/g, "\n");
 
 			// Convert tabs to spaces (4 spaces per tab)
 			const tabExpandedText = cleanText.replace(/\t/g, "    ");
@@ -1906,7 +1904,7 @@ export class Editor implements Component, Focusable {
 		this.#resetKillSequence();
 		this.#recordUndoState();
 
-		const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+		const normalized = text.replace(/\r\n?/g, "\n");
 		const lines = normalized.split("\n");
 
 		if (lines.length === 1) {

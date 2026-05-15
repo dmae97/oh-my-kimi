@@ -559,6 +559,7 @@ describe("json-schema validator unsupported-keyword regressions", () => {
 		const schema = { type: "array", prefixItems: [{ type: "string" }, { type: "number" }] };
 		expect(isJsonSchemaValueValid(schema, ["x", 1])).toBe(true);
 		expect(isJsonSchemaValueValid(schema, [1, "x"])).toBe(false);
+		expect(isJsonSchemaValueValid({ type: "array", items: [{ type: "string" }] }, ["x"])).toBe(false);
 	});
 
 	it("recursively validates nested values through self-referential $ref", () => {
@@ -618,10 +619,19 @@ describe("meta-validator conditional keywords", () => {
 		expect(isValidJsonSchema({ type: "object", then: "not-a-schema" })).toBe(false);
 	});
 
-	it("accepts draft-07 dependencies as schemas or string arrays", () => {
-		expect(isValidJsonSchema({ type: "object", dependencies: { a: ["b"], c: { type: "object" } } })).toBe(true);
-		expect(isValidJsonSchema({ type: "object", dependencies: { a: 1 } })).toBe(false);
-		expect(isValidJsonSchema({ type: "object", dependencies: { a: [1] } })).toBe(false);
+	it("accepts 2020-12 dependent keywords and rejects obsolete tuple/dependency keywords", () => {
+		expect(
+			isValidJsonSchema({
+				type: "object",
+				dependentRequired: { a: ["b"] },
+				dependentSchemas: { c: { type: "object" } },
+			}),
+		).toBe(true);
+		expect(isValidJsonSchema({ type: "object", dependentRequired: { a: [1] } })).toBe(false);
+		expect(isValidJsonSchema({ type: "object", dependentSchemas: { a: 1 } })).toBe(false);
+		expect(isValidJsonSchema({ type: "object", dependencies: { a: ["b"] } })).toBe(false);
+		expect(isValidJsonSchema({ type: "array", items: [{ type: "string" }] })).toBe(false);
+		expect(isValidJsonSchema({ type: "array", additionalItems: false })).toBe(false);
 	});
 });
 

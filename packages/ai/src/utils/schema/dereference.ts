@@ -47,17 +47,22 @@ function dereferenceNode(node: unknown, root: JsonObject, visiting: Set<string>)
 
 		// Merge sibling keywords (e.g. description, default) from the
 		// referencing node. In draft 2020-12 these are valid alongside $ref.
-		const hasSiblings = Object.keys(node).some(k => k !== "$ref");
-		if (!hasSiblings || !isJsonObject(inlined)) return inlined;
-		const merged: JsonObject = { ...inlined };
-		for (const [key, value] of Object.entries(node)) {
-			if (key !== "$ref") merged[key] = value;
+		let hasSiblings = false;
+		for (const k in node) {
+			if (k !== "$ref") {
+				hasSiblings = true;
+				break;
+			}
 		}
+		if (!hasSiblings || !isJsonObject(inlined)) return inlined;
+		const merged: JsonObject = { ...inlined, ...node };
+		delete merged.$ref;
 		return merged;
 	}
 
 	const result: JsonObject = {};
-	for (const [key, value] of Object.entries(node)) {
+	for (const key in node) {
+		const value = node[key];
 		// Skip $defs/definitions — they get inlined into consumers
 		if (key === "$defs" || key === "definitions") continue;
 

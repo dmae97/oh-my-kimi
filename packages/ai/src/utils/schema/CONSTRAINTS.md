@@ -25,7 +25,7 @@ When strict mode is requested (`strict=true` at call site), the schema MUST sati
      - `minItems`, `maxItems`, `uniqueItems`, `multipleOf`
      - `$schema`, `examples`, `default`, `title`, `$comment`
      - `if`, `then`, `else`, `not`
-     - `prefixItems`, `unevaluatedProperties`, `unevaluatedItems`, `patternProperties`
+     - `unevaluatedProperties`, `unevaluatedItems`, `patternProperties`
      - `propertyNames`, `contains`, `minContains`, `maxContains`
      - `dependentRequired`, `dependentSchemas`
      - `contentEncoding`, `contentMediaType`, `contentSchema`
@@ -37,11 +37,12 @@ When strict mode is requested (`strict=true` at call site), the schema MUST sati
 2. **`const` is normalized to `enum`**
    - If a node contains `const`, strict sanitization converts it to `enum: [const]`.
 
-3. **Object strictness is enforced recursively**
+3. **Object and tuple strictness is enforced recursively**
    - Every object node gets `additionalProperties: false`.
    - Every property key is included in `required`.
    - Optional properties are wrapped as nullable unions:
      - `anyOf: [<original schema>, { "type": "null" }]`.
+   - Tuple entries in `prefixItems` are strictified recursively.
 
 4. **Schema nodes must be representable in strict mode**
    - Nodes without `type`, combinator, `$ref`, or `not` are invalid in strict enforcement and MUST throw.

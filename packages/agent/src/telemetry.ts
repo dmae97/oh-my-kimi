@@ -139,6 +139,14 @@ export const enum PiGenAIAttr {
 	HandoffFromAgentId = "pi.gen_ai.handoff.from_agent.id",
 	HandoffToAgentName = "pi.gen_ai.handoff.to_agent.name",
 	HandoffToAgentId = "pi.gen_ai.handoff.to_agent.id",
+	// Gateway / proxy (LiteLLM, Helicone, Portkey, …) — populated when a known
+	// gateway header pattern is detected on the upstream response. The base
+	// `gen_ai.provider.name` continues to track the *upstream* provider (e.g.
+	// `anthropic`) that the gateway routed to.
+	GatewayName = "pi.gen_ai.gateway.name",
+	GatewayEndpoint = "pi.gen_ai.gateway.endpoint",
+	GatewayCallId = "pi.gen_ai.gateway.call_id",
+	GatewayRoutedTo = "pi.gen_ai.gateway.routed_to",
 }
 
 /** GenAI operation names — values for {@link GenAIAttr.OperationName}. */
@@ -223,6 +231,17 @@ export interface ChatUsageEvent {
 	readonly cost: CostEstimate | undefined;
 	/** Resolved dynamic attributes for this chat span (from `resolveAttributes`). */
 	readonly attributes: Attributes | undefined;
+	/**
+	 * Response headers captured from the upstream HTTP response, with keys
+	 * lowercased (mirrors {@link ProviderResponseMetadata.headers}). `undefined`
+	 * when the provider transport did not surface headers (non-HTTP providers,
+	 * mocked streams, requests that aborted before headers arrived).
+	 *
+	 * Use this to reconcile gateway-issued ids (e.g. `x-litellm-call-id`) with
+	 * downstream billing / spend dashboards. Known gateway patterns are also
+	 * auto-stamped on the chat span as `pi.gen_ai.gateway.*` attributes.
+	 */
+	readonly headers: Readonly<Record<string, string>> | undefined;
 }
 
 export type TelemetryContentCapture = boolean | "none" | "summary" | "full";
@@ -1078,11 +1097,17 @@ export async function finishChatSpan(
 	telemetry: AgentTelemetry | undefined,
 	span: Span | undefined,
 	message: AssistantMessage,
-	options: { readonly stepNumber: number; readonly serviceTier?: ServiceTier },
+	options: {
+		readonly stepNumber: number;
+		readonly serviceTier?: ServiceTier;
+		readonly responseHeaders?: Readonly<Record<string, string>>;
+		readonly baseUrl?: string;
+	},
 ): Promise<void> {
 	if (!span) return;
 	applyChatResponseAttributes(span, message);
 	applyUsageAttributes(span, message.usage);
+	applyGatewayAttributes(span, options.responseHeaders, options.baseUrl);
 	const cost = applyCostEstimate(telemetry, span, message, options.serviceTier, options.stepNumber);
 	if (telemetry) {
 		await emitChatUsage(telemetry, span, {
@@ -1092,6 +1117,7 @@ export async function finishChatSpan(
 			stepNumber: options.stepNumber,
 			usage: message.usage,
 			applied: cost,
+			headers: options.responseHeaders,
 		}).catch(err => {
 			emitTelemetryWarning(telemetry, {
 				code: "on_chat_usage_failed",
@@ -1125,9 +1151,15 @@ export async function finishChatSpan(
 export function failChatSpan(
 	telemetry: AgentTelemetry | undefined,
 	span: Span | undefined,
-	options: { readonly errorObject: unknown; readonly errorType?: string },
+	options: {
+		readonly errorObject: unknown;
+		readonly errorType?: string;
+		readonly responseHeaders?: Readonly<Record<string, string>>;
+		readonly baseUrl?: string;
+	},
 ): void {
 	if (!span) return;
+	applyGatewayAttributes(span, options.responseHeaders, options.baseUrl);
 	const err = options.errorObject;
 	if (err instanceof Error) {
 		span.recordException(err);
@@ -1170,6 +1202,74 @@ function applyUsageAttributes(span: Span, usage: Usage | undefined): void {
 		const sums = (usage.server.webSearch ?? 0) + (usage.server.webFetch ?? 0);
 		if (sums > 0) span.setAttribute(PiGenAIAttr.UsageServerSideTools, sums);
 	}
+}
+
+/**
+ * Result of {@link detectGatewayFromHeaders}. `callId` and `routedTo` are
+ * populated only when the gateway surfaces them; consumers should treat
+ * `undefined` as "unknown for this gateway" rather than "no value".
+ */
+export interface GatewayHeaderDetection {
+	readonly name: string;
+	readonly callId: string | undefined;
+	readonly routedTo: string | undefined;
+}
+
+/**
+ * Identify a known LLM gateway / proxy from response headers (LiteLLM,
+ * Helicone, Portkey). Returns `undefined` when no recognizable pattern is
+ * present so direct-API traffic stays unaffected.
+ *
+ * Header keys are matched case-insensitively against the lowercased map that
+ * {@link ProviderResponseMetadata.headers} produces.
+ */
+export function detectGatewayFromHeaders(
+	headers: Readonly<Record<string, string>> | undefined,
+): GatewayHeaderDetection | undefined {
+	if (!headers) return undefined;
+	const litellmCallId = headers["x-litellm-call-id"];
+	if (litellmCallId) {
+		return {
+			name: "litellm",
+			callId: litellmCallId,
+			routedTo: headers["x-litellm-model-id"] ?? headers["x-litellm-model-group"],
+		};
+	}
+	const heliconeId = headers["helicone-id"];
+	if (heliconeId) {
+		return { name: "helicone", callId: heliconeId, routedTo: headers["helicone-target-provider"] };
+	}
+	const portkeyId = headers["x-portkey-trace-id"] ?? headers["x-portkey-request-id"];
+	if (portkeyId) {
+		return {
+			name: "portkey",
+			callId: portkeyId,
+			routedTo: headers["x-portkey-llm-provider"] ?? headers["x-portkey-provider"],
+		};
+	}
+	const openRouterGenerationId = headers["x-generation-id"];
+	if (openRouterGenerationId?.startsWith("gen-")) {
+		// OpenRouter does not surface the upstream provider in response headers
+		// (only the body's `provider` field carries it), so `routedTo` is left
+		// undefined here. The `gen-` prefix on `x-generation-id` is OpenRouter-
+		// specific and disambiguates from other proxies that also expose a
+		// `x-generation-id` header.
+		return { name: "openrouter", callId: openRouterGenerationId, routedTo: undefined };
+	}
+	return undefined;
+}
+
+function applyGatewayAttributes(
+	span: Span,
+	headers: Readonly<Record<string, string>> | undefined,
+	baseUrl: string | undefined,
+): void {
+	const gateway = detectGatewayFromHeaders(headers);
+	if (!gateway) return;
+	span.setAttribute(PiGenAIAttr.GatewayName, gateway.name);
+	if (baseUrl) span.setAttribute(PiGenAIAttr.GatewayEndpoint, baseUrl);
+	if (gateway.callId) span.setAttribute(PiGenAIAttr.GatewayCallId, gateway.callId);
+	if (gateway.routedTo) span.setAttribute(PiGenAIAttr.GatewayRoutedTo, gateway.routedTo);
 }
 
 interface AppliedCostEstimate {
@@ -1314,6 +1414,7 @@ async function emitChatUsage(
 		readonly stepNumber: number | undefined;
 		readonly usage: Usage | undefined;
 		readonly applied: AppliedCostEstimate;
+		readonly headers: Readonly<Record<string, string>> | undefined;
 	},
 ): Promise<void> {
 	const hook = telemetry.config.onChatUsage;
@@ -1332,6 +1433,7 @@ async function emitChatUsage(
 			telemetry,
 			buildTelemetryAttributeContext(telemetry, "chat", { stepNumber: input.stepNumber }),
 		),
+		headers: input.headers,
 	};
 	try {
 		await hook(event);
@@ -1403,6 +1505,7 @@ export interface ManualChatTelemetryOptions {
 	readonly responseText?: string;
 	readonly responseToolCalls?: readonly ManualChatToolCallTelemetry[];
 	readonly attributes?: Attributes;
+	readonly responseHeaders?: Readonly<Record<string, string>>;
 	readonly endSpan?: boolean;
 }
 
@@ -1427,6 +1530,7 @@ export async function recordManualChatTelemetry(
 	const finishReason = mapStopReason(options.finishReason);
 	if (finishReason) span.setAttribute(GenAIAttr.ResponseFinishReasons, [finishReason]);
 	applyUsageAttributes(span, options.usage);
+	applyGatewayAttributes(span, options.responseHeaders, options.model.baseUrl);
 	if (telemetry) {
 		const applied = applyCostEstimateForUsage(telemetry, span, {
 			model: options.responseModel ?? options.model.id,
@@ -1442,6 +1546,7 @@ export async function recordManualChatTelemetry(
 			stepNumber: options.stepNumber,
 			usage: options.usage,
 			applied,
+			headers: options.responseHeaders,
 		}).catch(err => {
 			emitTelemetryWarning(telemetry, {
 				code: "on_chat_usage_failed",
