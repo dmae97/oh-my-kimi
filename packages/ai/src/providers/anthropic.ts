@@ -2120,7 +2120,19 @@ function normalizeAnthropicToolSchema(
 	const canBeObject =
 		type === "object" || (Array.isArray(type) && type.includes("object")) || isRecord(result.properties);
 	if (canBeObject) {
-		result.additionalProperties = false;
+		// Preserve an explicit `additionalProperties` schema (e.g. Zod's
+		// `z.record(z.string(), z.unknown())` compiles to `additionalProperties: {}`
+		// — an open record-style map). Only close objects that left it unspecified
+		// or set the JSON-Schema "true" alias, so we don't silently strip a valid
+		// open-map declaration along with the unsupported `patternProperties` /
+		// `propertyNames` keywords. Without this, fields like the resolve tool's
+		// `extra` are flattened to `{ type: "object", additionalProperties: false }`,
+		// which forbids every key and breaks plan approval (`extra: { title }`).
+		if (result.additionalProperties === undefined || result.additionalProperties === true) {
+			result.additionalProperties = false;
+		} else if (isRecord(result.additionalProperties)) {
+			result.additionalProperties = normalizeAnthropicToolSchema(result.additionalProperties, cache);
+		}
 	}
 
 	if (isRecord(result.properties)) {

@@ -397,27 +397,30 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(originalNestedSchema).toHaveProperty("patternProperties");
 	});
 
-	it("recurses into 2020-12 prefixItems when sanitizing Anthropic tool schemas", async () => {
+	it("preserves an explicit additionalProperties schema for record-style fields (issue #1104)", async () => {
+		// Mirrors the shape Zod's `z.record(z.string(), z.unknown())` emits — the
+		// resolve tool's `extra` parameter and any other free-form map. Without
+		// preservation the model sees `additionalProperties: false` and cannot
+		// pass `{ title: "..." }`, blocking plan approval.
 		const tools: Tool[] = [
 			{
-				name: "tuple_tool",
-				description: "tool with tuple input",
+				name: "resolve",
+				description: "resolve a pending action",
 				parameters: {
 					type: "object",
 					properties: {
-						pair: {
-							type: "array",
-							prefixItems: [
-								{
-									type: "object",
-									properties: { id: { type: "string" } },
-									required: ["id"],
-									patternProperties: { "^x-": { type: "string" } },
-								},
-							],
+						action: { type: "string" },
+						extra: {
+							type: "object",
+							propertyNames: { type: "string" },
+							additionalProperties: {},
+						},
+						extraTyped: {
+							type: "object",
+							additionalProperties: { type: "string" },
 						},
 					},
-					required: ["pair"],
+					required: ["action"],
 				} as TJsonSchema,
 			},
 		];
@@ -428,17 +431,26 @@ describe("Anthropic request fingerprint alignment", () => {
 			tools,
 		})) as {
 			tools?: Array<{
-				input_schema?: { properties?: Record<string, unknown> };
+				input_schema?: {
+					additionalProperties?: boolean;
+					properties?: Record<string, unknown>;
+				};
 			}>;
 		};
 
-		const pair = payload.tools?.[0]?.input_schema?.properties?.pair as Record<string, unknown> | undefined;
-		const tupleItem = (pair?.prefixItems as Array<Record<string, unknown>> | undefined)?.[0];
+		const inputSchema = payload.tools?.[0]?.input_schema;
+		const properties = inputSchema?.properties as Record<string, Record<string, unknown>>;
+		const extra = properties.extra as { additionalProperties?: unknown; propertyNames?: unknown };
+		const extraTyped = properties.extraTyped as { additionalProperties?: unknown };
 
-		expect(pair?.type).toBe("array");
-		expect(tupleItem?.additionalProperties).toBe(false);
-		expect(tupleItem?.required).toEqual(["id"]);
-		expect(tupleItem).not.toHaveProperty("patternProperties");
+		expect(inputSchema?.additionalProperties).toBe(false);
+		// The unsupported `propertyNames` keyword is still stripped …
+		expect(extra).not.toHaveProperty("propertyNames");
+		// … but the explicit open-map schema survives.
+		expect(extra.additionalProperties).toEqual({});
+		// A typed value schema is preserved verbatim (and would be recursed into
+		// if it were an object — covered separately).
+		expect(extraTyped.additionalProperties).toEqual({ type: "string" });
 	});
 
 	it("removes Anthropic-unsupported array item count constraints", async () => {
