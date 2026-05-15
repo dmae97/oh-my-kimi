@@ -96,6 +96,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		provider === "opencode-zen" ||
 		provider === "opencode-go" ||
 		baseUrl.includes("opencode.ai");
+	const isOpenCodeProvider = provider === "opencode-go" || provider === "opencode-zen";
 
 	const useMaxTokens =
 		provider === "mistral" ||
@@ -189,13 +190,15 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 						: "openai",
 		reasoningContentField: "reasoning_content",
 		// Backends that 400 follow-up requests when prior assistant tool-call turns lack `reasoning_content`:
-		//   - Kimi: documented invariant on its native API and via OpenCode-Go.
+		//   - Kimi: documented invariant on its native API.
 		//   - Any reasoning-capable model reached through OpenRouter: DeepSeek V4 Pro and similar enforce
 		//     this server-side whenever the request is in thinking mode. We can't translate Anthropic's
 		//     redacted/encrypted reasoning into DeepSeek's plaintext form, so cross-provider continuations
 		//     rely on a placeholder — see `convertMessages` for the placeholder injection.
+		//   - OpenCode-Go and OpenCode-Zen handle reasoning content internally and reject
+		//     `reasoning_content` in client-sent messages — exclude them even for Kimi models.
 		requiresReasoningContentForToolCalls:
-			isKimiModel ||
+			(isKimiModel && !isOpenCodeProvider) ||
 			(isDeepseekFamily && Boolean(model.reasoning)) ||
 			((provider === "openrouter" || baseUrl.includes("openrouter.ai")) && Boolean(model.reasoning)),
 		// DeepSeek V4 rejects synthetic reasoning_content placeholders (".") on tool-call turns.
