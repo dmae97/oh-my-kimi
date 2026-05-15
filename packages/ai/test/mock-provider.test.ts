@@ -190,6 +190,68 @@ describe("AssistantMessage shape", () => {
 		expect(result.usage.input).toBe(5);
 		expect(result.usage.output).toBe(2);
 	});
+
+	test("partial usage without totalTokens recomputes the total from components", async () => {
+		const mock = createMockModel({
+			responses: [{ content: ["x"], usage: { input: 5, output: 2 } }],
+		});
+		const result = await mock.stream(mock.model, emptyContext()).result();
+		expect(result.usage.totalTokens).toBe(7);
+	});
+
+	test("partial usage with explicit totalTokens is respected", async () => {
+		const mock = createMockModel({
+			responses: [{ content: ["x"], usage: { input: 5, output: 2, totalTokens: 999 } }],
+		});
+		const result = await mock.stream(mock.model, emptyContext()).result();
+		expect(result.usage.totalTokens).toBe(999);
+	});
+
+	test("partial cost components recompute cost.total when total is omitted", async () => {
+		const mock = createMockModel({
+			responses: [
+				{
+					content: ["x"],
+					usage: { input: 5, output: 2, cost: { input: 0.5, output: 0.25, cacheRead: 0, cacheWrite: 0 } },
+				},
+			],
+		});
+		const result = await mock.stream(mock.model, emptyContext()).result();
+		expect(result.usage.cost.total).toBeCloseTo(0.75, 10);
+	});
+
+	test("tool-call ID counter is scoped per mock instance and resets with reset()", async () => {
+		const makeMock = () =>
+			createMockModel({
+				responses: [
+					{ content: [{ type: "toolCall", name: "read", arguments: { path: "/x" } }] },
+					{ content: [{ type: "toolCall", name: "read", arguments: { path: "/y" } }] },
+				],
+			});
+
+		const a = makeMock();
+		const b = makeMock();
+
+		const a1 = await a.stream(a.model, emptyContext()).result();
+		const a2 = await a.stream(a.model, emptyContext()).result();
+		const b1 = await b.stream(b.model, emptyContext()).result();
+		const b2 = await b.stream(b.model, emptyContext()).result();
+
+		const idOf = (m: AssistantMessage): string => {
+			const tc = m.content.find(c => c.type === "toolCall") as ToolCall;
+			return tc.id;
+		};
+
+		expect(idOf(a1)).toBe("mock-tc-1");
+		expect(idOf(a2)).toBe("mock-tc-2");
+		expect(idOf(b1)).toBe("mock-tc-1");
+		expect(idOf(b2)).toBe("mock-tc-2");
+
+		a.reset();
+		a.push({ content: [{ type: "toolCall", name: "read", arguments: { path: "/z" } }] });
+		const a3 = await a.stream(a.model, emptyContext()).result();
+		expect(idOf(a3)).toBe("mock-tc-1");
+	});
 });
 
 describe("mock provider — async-iterable response sources", () => {

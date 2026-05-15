@@ -45,6 +45,8 @@
 - Fixed Zod-emitted wire schemas dropping null-valued unknown root fields before `preserveUnknownRootFields` could snapshot them, so callers like `task.simple` no longer lose a `schema: null` argument and downstream rejection paths fire as intended.
 - Fixed `buildOpenAiNativeHistory` to serialize freeform tool calls (e.g. `apply_patch`) as `custom_tool_call` / `custom_tool_call_output` items matching the live Responses provider, instead of demoting them to `function_call` and breaking remote-compaction replay
 - Threaded an `AbortSignal` through `requestOpenAiRemoteCompaction` and `requestRemoteCompaction` so canceled compaction requests no longer keep the underlying `fetch` alive
+- Fixed mock provider partial `Usage` to recompute `totalTokens` (and `cost.total` when cost components are supplied) when omitted, instead of reporting 0
+- Fixed mock provider auto-generated tool-call IDs to use a per-instance counter (now reset by `reset()`), so test order no longer affects IDs across `createMockModel()` instances
 
 ## [15.0.2] - 2026-05-15
 ### Fixed

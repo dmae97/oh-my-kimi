@@ -81,8 +81,8 @@ export interface MockResponse {
 	content?: ReadonlyArray<MockContent>;
 	/** Stop reason. Defaults to `"toolUse"` when content has tool calls, else `"stop"`. */
 	stopReason?: StopReason;
-	/** Usage stats. Missing fields default to 0. */
-	usage?: Partial<Usage>;
+	/** Usage stats. Missing fields default to 0; missing `cost.total` is recomputed from components. */
+	usage?: Partial<Omit<Usage, "cost">> & { cost?: Partial<Usage["cost"]> };
 	/** Pre-set responseId. */
 	responseId?: string;
 	/** If set, the stream emits a terminal error event instead of completing. */
@@ -159,6 +159,7 @@ interface MockState {
 	readonly extras: MockHandler[];
 	fallback?: MockHandler;
 	readonly calls: MockCall[];
+	toolCallCounter: number;
 }
 
 const STATE_BY_MODEL = new WeakMap<Model<Api>, MockState>();
@@ -196,6 +197,7 @@ export function createMockModel(options: MockModelOptions = {}): MockModelHandle
 		extras: [],
 		fallback: options.handler,
 		calls: [],
+		toolCallCounter: 0,
 	};
 	STATE_BY_MODEL.set(model, state);
 
@@ -209,6 +211,7 @@ export function createMockModel(options: MockModelOptions = {}): MockModelHandle
 		reset() {
 			state.extras.length = 0;
 			state.calls.length = 0;
+			state.toolCallCounter = 0;
 		},
 	};
 }
@@ -334,7 +337,7 @@ async function runMock(
 	stream.push({ type: "start", partial });
 
 	for (const input of response.content ?? []) {
-		const block = normalizeContent(input);
+		const block = normalizeContent(input, state);
 		blocks.push(block);
 		const contentIndex = blocks.length - 1;
 
@@ -372,14 +375,14 @@ async function runMock(
 	stream.push({ type: "done", reason: reason as "stop" | "length" | "toolUse", message: partial });
 }
 
-function normalizeContent(input: MockContent): TextContent | ThinkingContent | ToolCall {
+function normalizeContent(input: MockContent, state: MockState): TextContent | ThinkingContent | ToolCall {
 	if (typeof input === "string") {
 		return { type: "text", text: input };
 	}
 	if (input.type === "toolCall") {
 		return {
 			type: "toolCall",
-			id: input.id ?? generateToolCallId(),
+			id: input.id ?? generateToolCallId(state),
 			name: input.name,
 			arguments: typeof input.arguments === "string" ? input.arguments : { ...input.arguments },
 		} as ToolCall;
@@ -398,12 +401,22 @@ function emptyUsage(): Usage {
 	} as Usage;
 }
 
-function mergeUsage(partial?: Partial<Usage>): Usage {
+function mergeUsage(partial?: Partial<Omit<Usage, "cost">> & { cost?: Partial<Usage["cost"]> }): Usage {
 	const base = emptyUsage();
 	if (!partial) return base;
 	const merged = { ...base, ...partial } as Usage;
-	if (partial.cost) {
+	const costProvided = partial.cost !== undefined;
+	if (costProvided) {
 		merged.cost = { ...base.cost, ...partial.cost } as Usage["cost"];
+	}
+	// Recompute totalTokens when not explicitly provided (canonical formula matches types.ts:
+	// input + output + cacheRead + cacheWrite).
+	if (partial.totalTokens === undefined) {
+		merged.totalTokens = merged.input + merged.output + merged.cacheRead + merged.cacheWrite;
+	}
+	// Recompute cost.total when cost components were supplied without an explicit total.
+	if (costProvided && partial.cost?.total === undefined) {
+		merged.cost.total = merged.cost.input + merged.cost.output + merged.cost.cacheRead + merged.cost.cacheWrite;
 	}
 	return merged;
 }
@@ -450,8 +463,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	return promise;
 }
 
-let toolCallCounter = 0;
-function generateToolCallId(): string {
-	toolCallCounter += 1;
-	return `mock-tc-${toolCallCounter}`;
+function generateToolCallId(state: MockState): string {
+	state.toolCallCounter += 1;
+	return `mock-tc-${state.toolCallCounter}`;
 }
