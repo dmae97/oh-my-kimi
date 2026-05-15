@@ -174,15 +174,19 @@ export class AgentRunCollector {
 		for (const tool of tools) this.#availableTools.add(tool.name);
 	}
 
-	beginChat(span: Span, init: { readonly stepNumber: number; readonly model: Model }): void {
+	beginChat(
+		span: Span,
+		init: { readonly stepNumber: number; readonly model: Model; readonly provider?: string },
+	): void {
+		const provider = init.provider ?? init.model.provider;
 		this.#chatStarts.set(span, {
 			stepNumber: init.stepNumber,
 			startedAtMs: performance.now(),
 			model: init.model.id,
-			provider: init.model.provider,
+			provider,
 		});
 		this.#modelsUsed.add(init.model.id);
-		if (init.model.provider) this.#providersUsed.add(init.model.provider);
+		if (provider) this.#providersUsed.add(provider);
 	}
 
 	endChat(

@@ -44,6 +44,12 @@ export const DEFAULT_TRACER_NAME = "@oh-my-pi/pi-agent-core";
 /** Env var matching the OTEL semconv content-capture toggle. */
 const CONTENT_CAPTURE_ENV = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT";
 
+const MAX_TELEMETRY_ARRAY_ITEMS = 64;
+const MAX_TELEMETRY_MESSAGE_COUNT = 16;
+const MAX_TELEMETRY_OBJECT_DEPTH = 3;
+const MAX_TELEMETRY_OBJECT_KEYS = 12;
+const MAX_TELEMETRY_TEXT_CHARS = 240;
+
 /**
  * GenAI semantic-convention attribute keys grouped by operation. Hoisted so
  * call sites stay typo-proof and easy to grep.
@@ -76,11 +82,14 @@ export const enum GenAIAttr {
 	RequestReasoningEffort = "gen_ai.request.reasoning.effort",
 	RequestToolChoice = "gen_ai.request.tool.choice",
 	RequestAvailableTools = "gen_ai.request.available_tools",
+	RequestMessages = "gen_ai.request.messages",
 	// Response shape
 	ResponseModel = "gen_ai.response.model",
 	ResponseId = "gen_ai.response.id",
 	ResponseFinishReasons = "gen_ai.response.finish_reasons",
 	ResponseServiceTier = "gen_ai.response.service_tier",
+	ResponseText = "gen_ai.response.text",
+	ResponseToolCalls = "gen_ai.response.tool_calls",
 	// Usage
 	UsageInputTokens = "gen_ai.usage.input_tokens",
 	UsageOutputTokens = "gen_ai.usage.output_tokens",
@@ -160,6 +169,32 @@ export type CostEstimate =
 	| { readonly usd: number; readonly inputUsd?: number; readonly outputUsd?: number }
 	| { readonly unavailable: string };
 
+export interface CostDelta {
+	readonly conversationId: string | undefined;
+	readonly agent: AgentIdentity | undefined;
+	readonly stepNumber: number | undefined;
+	readonly provider: string;
+	readonly model: string;
+	readonly serviceTier: ServiceTier | undefined;
+	readonly usage: ChatUsageSnapshot;
+	readonly costUsd: number | undefined;
+	readonly inputUsd: number | undefined;
+	readonly outputUsd: number | undefined;
+	readonly costUnavailableReason: string | undefined;
+}
+
+export type TelemetryContentCapture = boolean | "none" | "summary" | "full";
+
+export type ResolvedTelemetryContentCapture = "none" | "summary" | "full";
+
+export interface TelemetryContentSerializer {
+	readonly requestMessages?: (request: ChatRequestSnapshot) => string | undefined;
+	readonly responseText?: (message: AssistantMessage) => string | undefined;
+	readonly responseToolCalls?: (message: AssistantMessage) => string | undefined;
+	readonly toolCallArguments?: (args: unknown) => string | undefined;
+	readonly toolCallResult?: (result: unknown) => string | undefined;
+}
+
 /** Identity recorded on every invoke_agent and on emitted handoff spans. */
 export interface AgentIdentity {
 	readonly id?: string;
@@ -167,9 +202,22 @@ export interface AgentIdentity {
 	readonly description?: string;
 }
 
-/** Context passed to {@link AgentTelemetryConfig.onSpanStart} / `onSpanEnd`. */
-export interface TelemetryHookContext {
-	readonly span: Span;
+export interface AgentTelemetryWarning {
+	readonly code:
+		| "resolve_attributes_failed"
+		| "content_serializer_failed"
+		| "on_cost_delta_failed"
+		| "cost_estimator_failed"
+		| "on_run_end_failed"
+		| "normalize_agent_name_failed"
+		| "normalize_provider_failed"
+		| "on_telemetry_warning_failed";
+	readonly message: string;
+	readonly error?: unknown;
+}
+
+/** Context passed to attribute resolvers and lifecycle hooks. */
+export interface TelemetryAttributeContext {
 	readonly kind: TelemetrySpanKind;
 	readonly model: Model | undefined;
 	readonly agent: AgentIdentity | undefined;
@@ -181,6 +229,10 @@ export interface TelemetryHookContext {
 	readonly toolName?: string;
 }
 
+/** Context passed to {@link AgentTelemetryConfig.onSpanStart} / `onSpanEnd`. */
+export interface TelemetryHookContext extends TelemetryAttributeContext {
+	readonly span: Span;
+}
 /**
  * Opt-in OpenTelemetry configuration accepted by the agent loop.
  *
@@ -198,15 +250,22 @@ export interface AgentTelemetryConfig {
 	/** Override the tracer name passed to `trace.getTracer`. */
 	readonly tracerName?: string;
 	/**
-	 * Capture full request/response message payloads on chat spans and tool
-	 * call argument/result payloads on execute_tool spans.
+	 * Capture request/response content. `true` preserves the historical full
+	 * payload capture; `"summary"` emits bounded dashboard-friendly summaries;
+	 * `"full"` emits both summaries and full OTEL message payloads.
 	 *
 	 * Defaults to the value of the `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`
-	 * env var (case-insensitive `true`/`1`/`yes`). Set `true`/`false` to override.
+	 * env var (`true`/`1`/`yes` => `"full"`, `"summary"` => `"summary"`).
 	 */
-	readonly captureMessageContent?: boolean;
+	readonly captureMessageContent?: TelemetryContentCapture;
 	/** Extra attributes merged onto every emitted span. */
 	readonly attributes?: Attributes;
+	/**
+	 * Attribute resolver merged onto every emitted span after static
+	 * `attributes` and before span-specific attributes. Use this for ambient
+	 * run, tenant, deployment, or request metadata.
+	 */
+	readonly resolveAttributes?: (ctx: TelemetryAttributeContext) => Attributes | undefined;
 	/** Agent identity stamped onto invoke_agent + propagated to children. */
 	readonly agent?: AgentIdentity;
 	/**
@@ -219,6 +278,14 @@ export interface AgentTelemetryConfig {
 	 * span's finish path. Return `undefined` to emit no cost attribute.
 	 */
 	readonly costEstimator?: (input: CostEstimatorContext) => CostEstimate | undefined;
+	/** Called after cost estimation for a chat step. */
+	readonly onCostDelta?: (delta: CostDelta) => void;
+	/** Override provider labels before they are emitted or passed to cost hooks. */
+	readonly normalizeProvider?: (provider: string | undefined) => string | undefined;
+	/** Override agent names before they are emitted on spans. */
+	readonly normalizeAgentName?: (name: string | undefined) => string | undefined;
+	/** Override the default bounded JSON serializers used by summary capture. */
+	readonly contentSerializer?: TelemetryContentSerializer;
 	/**
 	 * Called immediately after a span starts. Use to stamp request-side
 	 * context (user id, deployment id, route name) without forking the loop.
@@ -240,6 +307,8 @@ export interface AgentTelemetryConfig {
 	 * NEVER turn a successful agent run into a failed one.
 	 */
 	readonly onRunEnd?: (summary: AgentRunSummary, coverage: AgentRunCoverage) => void;
+	/** Receives non-fatal telemetry callback failures and host-defined warnings. */
+	readonly onTelemetryWarning?: (warning: AgentTelemetryWarning) => void;
 }
 
 /**
@@ -250,6 +319,7 @@ export interface AgentTelemetry {
 	readonly config: AgentTelemetryConfig;
 	readonly tracer: Tracer;
 	readonly captureMessageContent: boolean;
+	readonly contentCapture: ResolvedTelemetryContentCapture;
 	readonly conversationId: string | undefined;
 	readonly agent: AgentIdentity | undefined;
 	/** Per-invocation event collector. See {@link AgentRunCollector}. */
@@ -263,27 +333,41 @@ export function resolveTelemetry(
 ): AgentTelemetry | undefined {
 	if (!config) return undefined;
 	const tracer = config.tracer ?? trace.getTracer(config.tracerName ?? DEFAULT_TRACER_NAME);
+	const contentCapture = resolveContentCapture(config.captureMessageContent);
 	return {
 		config,
 		tracer,
-		captureMessageContent: config.captureMessageContent ?? readContentCaptureEnv(),
+		captureMessageContent: contentCapture === "full",
+		contentCapture,
 		conversationId: config.conversationId ?? sessionId,
 		agent: config.agent,
 		collector: new AgentRunCollector(),
 	};
 }
 
-let contentCaptureEnvCache: boolean | undefined;
-function readContentCaptureEnv(): boolean {
+let contentCaptureEnvCache: ResolvedTelemetryContentCapture | undefined;
+function readContentCaptureEnv(): ResolvedTelemetryContentCapture {
 	if (contentCaptureEnvCache !== undefined) return contentCaptureEnvCache;
 	const raw = process.env[CONTENT_CAPTURE_ENV];
 	if (!raw) {
-		contentCaptureEnvCache = false;
-		return false;
+		contentCaptureEnvCache = "none";
+		return "none";
 	}
 	const normalized = raw.trim().toLowerCase();
-	contentCaptureEnvCache = normalized === "true" || normalized === "1" || normalized === "yes";
+	if (normalized === "summary") {
+		contentCaptureEnvCache = "summary";
+	} else {
+		contentCaptureEnvCache =
+			normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "full" ? "full" : "none";
+	}
 	return contentCaptureEnvCache;
+}
+
+function resolveContentCapture(value: TelemetryContentCapture | undefined): ResolvedTelemetryContentCapture {
+	const capture = value ?? readContentCaptureEnv();
+	if (capture === true || capture === "full") return "full";
+	if (capture === "summary") return "summary";
+	return "none";
 }
 
 /**
@@ -306,12 +390,13 @@ function startSpan(
 	},
 ): Span | undefined {
 	if (!telemetry) return undefined;
+	const attrCtx = buildTelemetryAttributeContext(telemetry, kind, options);
 	const attrs: Attributes = {};
 	const operation = kindToOperation(kind);
 	if (operation) attrs[GenAIAttr.OperationName] = operation;
 	if (options.model) {
 		attrs[GenAIAttr.RequestModel] = options.model.id;
-		const provider = options.model.provider;
+		const provider = normalizeProviderName(telemetry, options.model.provider);
 		if (provider) {
 			attrs[GenAIAttr.System] = provider;
 			attrs[GenAIAttr.ProviderName] = provider;
@@ -320,23 +405,52 @@ function startSpan(
 	if (telemetry.conversationId) {
 		attrs[GenAIAttr.ConversationId] = telemetry.conversationId;
 	}
-	if (telemetry.agent) applyAgentAttributes(attrs, telemetry.agent);
+	if (attrCtx.agent) applyAgentAttributes(attrs, attrCtx.agent);
 	if (telemetry.config.attributes) Object.assign(attrs, telemetry.config.attributes);
+	const dynamicAttributes = resolveDynamicAttributes(telemetry, attrCtx);
+	if (dynamicAttributes) Object.assign(attrs, dynamicAttributes);
 	if (options.attributes) Object.assign(attrs, options.attributes);
 
 	const ctx = options.parent ? trace.setSpan(context.active(), options.parent) : context.active();
 	const span = telemetry.tracer.startSpan(name, { kind: options.spanKind, attributes: attrs }, ctx);
-	telemetry.config.onSpanStart?.({
-		span,
+	telemetry.config.onSpanStart?.({ ...attrCtx, span });
+	return span;
+}
+
+function buildTelemetryAttributeContext(
+	telemetry: AgentTelemetry,
+	kind: TelemetrySpanKind,
+	options: {
+		readonly model?: Model;
+		readonly stepNumber?: number;
+		readonly toolCallId?: string;
+		readonly toolName?: string;
+	},
+): TelemetryAttributeContext {
+	return {
 		kind,
 		model: options.model,
-		agent: telemetry.agent,
+		agent: normalizedTelemetryAgent(telemetry),
 		conversationId: telemetry.conversationId,
 		stepNumber: options.stepNumber,
 		toolCallId: options.toolCallId,
 		toolName: options.toolName,
-	});
-	return span;
+	};
+}
+
+function resolveDynamicAttributes(telemetry: AgentTelemetry, ctx: TelemetryAttributeContext): Attributes | undefined {
+	const resolver = telemetry.config.resolveAttributes;
+	if (!resolver) return undefined;
+	try {
+		return resolver(ctx);
+	} catch (err) {
+		emitTelemetryWarning(telemetry, {
+			code: "resolve_attributes_failed",
+			message: "resolveAttributes threw; ignoring dynamic telemetry attributes",
+			error: err,
+		});
+		return undefined;
+	}
 }
 
 function kindToOperation(kind: TelemetrySpanKind): GenAIOperationName | undefined {
@@ -358,12 +472,72 @@ function applyAgentAttributes(attrs: Attributes, agent: AgentIdentity): void {
 	if (agent.description) attrs[GenAIAttr.AgentDescription] = agent.description;
 }
 
+function normalizeProviderName(
+	telemetry: AgentTelemetry | undefined,
+	provider: string | undefined,
+): string | undefined {
+	const normalize = telemetry?.config.normalizeProvider;
+	if (!normalize) return provider;
+	try {
+		return normalize(provider) ?? provider;
+	} catch (err) {
+		emitTelemetryWarning(telemetry, {
+			code: "normalize_provider_failed",
+			message: "normalizeProvider threw; using the original provider label",
+			error: err,
+		});
+		return provider;
+	}
+}
+
+function normalizeAgentIdentity(telemetry: AgentTelemetry, agent: AgentIdentity): AgentIdentity {
+	const normalize = telemetry.config.normalizeAgentName;
+	if (!normalize || !agent.name) return agent;
+	try {
+		const name = normalize(agent.name);
+		if (name === agent.name) return agent;
+		return {
+			...agent,
+			name,
+		};
+	} catch (err) {
+		emitTelemetryWarning(telemetry, {
+			code: "normalize_agent_name_failed",
+			message: "normalizeAgentName threw; using the original agent name",
+			error: err,
+		});
+		return agent;
+	}
+}
+
+function normalizedTelemetryAgent(telemetry: AgentTelemetry | undefined): AgentIdentity | undefined {
+	return telemetry?.agent ? normalizeAgentIdentity(telemetry, telemetry.agent) : undefined;
+}
+
+export function recordTelemetryWarning(telemetry: AgentTelemetry | undefined, warning: AgentTelemetryWarning): void {
+	emitTelemetryWarning(telemetry, warning);
+}
+
+function emitTelemetryWarning(telemetry: AgentTelemetry | undefined, warning: AgentTelemetryWarning): void {
+	const hook = telemetry?.config.onTelemetryWarning;
+	if (!hook) {
+		if (warning.error === undefined) console.warn(`[pi-agent] ${warning.message}`);
+		else console.warn(`[pi-agent] ${warning.message}`, warning.error);
+		return;
+	}
+	try {
+		hook(warning);
+	} catch (err) {
+		console.warn("[pi-agent] onTelemetryWarning threw; swallowing:", err);
+	}
+}
+
 /**
  * Start the outer `invoke_agent` span that wraps a full `runLoop` invocation.
  * Returns `undefined` when telemetry is disabled.
  */
 export function startInvokeAgentSpan(telemetry: AgentTelemetry | undefined, model: Model): Span | undefined {
-	const agentName = telemetry?.agent?.name;
+	const agentName = telemetry?.agent ? normalizeAgentIdentity(telemetry, telemetry.agent).name : undefined;
 	const name = agentName ? `invoke_agent ${agentName}` : "invoke_agent";
 	return startSpan(telemetry, "invoke_agent", name, { spanKind: SpanKind.INTERNAL, model });
 }
@@ -395,10 +569,14 @@ export function startChatSpan(
 		attributes: buildChatRequestAttributes(options.stepNumber, options.request),
 	});
 	if (span) {
-		telemetry?.collector.beginChat(span, { stepNumber: options.stepNumber, model });
+		telemetry?.collector.beginChat(span, {
+			stepNumber: options.stepNumber,
+			model,
+			provider: normalizeProviderName(telemetry, model.provider),
+		});
 		telemetry?.collector.noteAvailableTools(options.request.tools);
-		if (telemetry?.captureMessageContent) {
-			applyContentCaptureForRequest(span, options.request);
+		if (telemetry && telemetry.contentCapture !== "none") {
+			applyContentCaptureForRequest(telemetry, span, options.request);
 		}
 	}
 	return span;
@@ -459,13 +637,200 @@ function serializeToolChoice(toolChoice: ToolChoice | undefined): string | undef
 	return undefined;
 }
 
-function applyContentCaptureForRequest(span: Span, request: ChatRequestSnapshot): void {
+function applyContentCaptureForRequest(telemetry: AgentTelemetry, span: Span, request: ChatRequestSnapshot): void {
+	const requestMessages = serializeRequestMessagesForTelemetry(telemetry, request);
+	if (requestMessages) span.setAttribute(GenAIAttr.RequestMessages, requestMessages);
+	if (telemetry.contentCapture !== "full") return;
 	if (request.systemPrompt && request.systemPrompt.length > 0) {
 		span.setAttribute(GenAIAttr.SystemInstructions, JSON.stringify(request.systemPrompt));
 	}
 	if (request.messages && request.messages.length > 0) {
 		span.setAttribute(GenAIAttr.InputMessages, JSON.stringify(request.messages));
 	}
+}
+
+function applyContentCaptureForResponse(telemetry: AgentTelemetry, span: Span, message: AssistantMessage): void {
+	const responseText = serializeResponseTextForTelemetry(telemetry, message);
+	if (responseText) span.setAttribute(GenAIAttr.ResponseText, responseText);
+	const responseToolCalls = serializeResponseToolCallsForTelemetry(telemetry, message);
+	if (responseToolCalls) span.setAttribute(GenAIAttr.ResponseToolCalls, responseToolCalls);
+	if (telemetry.contentCapture === "full") {
+		span.setAttribute(GenAIAttr.OutputMessages, JSON.stringify([message]));
+	}
+}
+
+function serializeRequestMessagesForTelemetry(
+	telemetry: AgentTelemetry,
+	request: ChatRequestSnapshot,
+): string | undefined {
+	const serializer = telemetry.config.contentSerializer?.requestMessages;
+	if (serializer) return callContentSerializer(telemetry, "requestMessages", () => serializer(request));
+	const messages: TelemetryMessageSummary[] = [];
+	if (request.systemPrompt) {
+		for (const text of request.systemPrompt)
+			messages.push({ role: "system", content: summarizeTelemetryValue(text) });
+	}
+	if (request.messages) {
+		for (const message of request.messages) {
+			messages.push({ role: message.role, content: summarizeTelemetryValue(message.content) });
+		}
+	}
+	return messages.length === 0 ? undefined : stringifyJsonAttribute(limitTelemetryMessages(messages));
+}
+
+function serializeResponseTextForTelemetry(telemetry: AgentTelemetry, message: AssistantMessage): string | undefined {
+	const serializer = telemetry.config.contentSerializer?.responseText;
+	if (serializer) return callContentSerializer(telemetry, "responseText", () => serializer(message));
+	const texts: string[] = [];
+	for (const part of message.content) {
+		if (part.type === "text") texts.push(part.text);
+	}
+	return texts.length === 0 ? undefined : stringifyJsonAttribute(summarizeTelemetryTexts(texts));
+}
+
+function serializeResponseToolCallsForTelemetry(
+	telemetry: AgentTelemetry,
+	message: AssistantMessage,
+): string | undefined {
+	const serializer = telemetry.config.contentSerializer?.responseToolCalls;
+	if (serializer) return callContentSerializer(telemetry, "responseToolCalls", () => serializer(message));
+	const toolCalls: TelemetryToolCallSummary[] = [];
+	for (const part of message.content) {
+		if (part.type === "toolCall") {
+			toolCalls.push({
+				input: summarizeTelemetryValue(part.arguments),
+				toolCallId: part.id,
+				toolName: part.name,
+			});
+		}
+	}
+	return toolCalls.length === 0 ? undefined : stringifyJsonAttribute(limitTelemetryToolCalls(toolCalls));
+}
+
+interface TelemetryMessageSummary {
+	readonly role: string;
+	readonly content: unknown;
+}
+
+interface TelemetryToolCallSummary {
+	readonly toolCallId: string;
+	readonly toolName: string;
+	readonly input: unknown;
+}
+
+function callContentSerializer(
+	telemetry: AgentTelemetry,
+	name: keyof TelemetryContentSerializer,
+	serialize: () => string | undefined,
+): string | undefined {
+	try {
+		return serialize();
+	} catch (err) {
+		emitTelemetryWarning(telemetry, {
+			code: "content_serializer_failed",
+			message: `${name} content serializer threw; omitting telemetry content`,
+			error: err,
+		});
+		return undefined;
+	}
+}
+
+function limitTelemetryMessages(messages: readonly TelemetryMessageSummary[]): TelemetryMessageSummary[] {
+	const limited = messages.slice(0, MAX_TELEMETRY_MESSAGE_COUNT);
+	if (messages.length > MAX_TELEMETRY_MESSAGE_COUNT) {
+		limited.push({
+			role: "system",
+			content: { kind: "truncated", omittedMessages: messages.length - MAX_TELEMETRY_MESSAGE_COUNT },
+		});
+	}
+	return limited;
+}
+
+function limitTelemetryToolCalls(toolCalls: readonly TelemetryToolCallSummary[]): TelemetryToolCallSummary[] {
+	const limited = toolCalls.slice(0, MAX_TELEMETRY_ARRAY_ITEMS);
+	if (toolCalls.length > MAX_TELEMETRY_ARRAY_ITEMS) {
+		limited.push({
+			toolCallId: "[truncated]",
+			toolName: "[truncated]",
+			input: { kind: "truncated", omittedToolCalls: toolCalls.length - MAX_TELEMETRY_ARRAY_ITEMS },
+		});
+	}
+	return limited;
+}
+
+function summarizeTelemetryTexts(texts: readonly string[]): string[] {
+	const summarized = texts.slice(0, MAX_TELEMETRY_ARRAY_ITEMS).map(text => summarizeTelemetryText(text));
+	if (texts.length > MAX_TELEMETRY_ARRAY_ITEMS) {
+		summarized.push(`[${texts.length - MAX_TELEMETRY_ARRAY_ITEMS} additional text entries omitted]`);
+	}
+	return summarized;
+}
+
+function summarizeTelemetryText(text: string): string {
+	if (text.length <= MAX_TELEMETRY_TEXT_CHARS) return text;
+	return `${text.slice(0, MAX_TELEMETRY_TEXT_CHARS)} [${text.length - MAX_TELEMETRY_TEXT_CHARS} chars omitted]`;
+}
+
+function summarizeTelemetryValue(value: unknown, depth = 0): unknown {
+	if (typeof value === "string") return summarizeTelemetryText(value);
+	if (typeof value === "number" || typeof value === "boolean" || value == null) return value;
+	if (typeof value === "bigint") return value.toString();
+	if (typeof value === "function") return "[Function]";
+	if (value instanceof Error) {
+		return { name: value.name, message: summarizeTelemetryText(value.message) };
+	}
+	if (Array.isArray(value)) {
+		const items = value.slice(0, MAX_TELEMETRY_ARRAY_ITEMS).map(item => summarizeTelemetryValue(item, depth + 1));
+		if (value.length > MAX_TELEMETRY_ARRAY_ITEMS) {
+			items.push({ kind: "truncated", omittedItems: value.length - MAX_TELEMETRY_ARRAY_ITEMS });
+		}
+		return items;
+	}
+	if (!isPlainTelemetryRecord(value)) return String(value);
+	const entries = Object.entries(value);
+	if (depth >= MAX_TELEMETRY_OBJECT_DEPTH) {
+		return summarizeTelemetryObjectKeys(entries);
+	}
+	const summary: Record<string, unknown> = {};
+	for (const [key, item] of entries.slice(0, MAX_TELEMETRY_OBJECT_KEYS)) {
+		summary[key] = summarizeTelemetryValue(item, depth + 1);
+	}
+	if (entries.length > MAX_TELEMETRY_OBJECT_KEYS) {
+		summary.telemetrySummary = { omittedKeys: entries.length - MAX_TELEMETRY_OBJECT_KEYS };
+	}
+	return summary;
+}
+
+function summarizeTelemetryObjectKeys(entries: readonly (readonly [string, unknown])[]): Record<string, unknown> {
+	const keys = entries.slice(0, MAX_TELEMETRY_OBJECT_KEYS).map(([key]) => key);
+	return entries.length > MAX_TELEMETRY_OBJECT_KEYS
+		? { kind: "object", keys, telemetrySummary: { omittedKeys: entries.length - MAX_TELEMETRY_OBJECT_KEYS } }
+		: { kind: "object", keys };
+}
+
+function isPlainTelemetryRecord(value: unknown): value is Record<string, unknown> {
+	if (typeof value !== "object" || value === null) return false;
+	const prototype = Object.getPrototypeOf(value);
+	return prototype === Object.prototype || prototype === null;
+}
+
+function stringifyJsonAttribute(value: unknown): string | undefined {
+	const serialized = JSON.stringify(value);
+	return serialized === undefined ? undefined : serialized;
+}
+
+function serializeToolCallArgumentsForTelemetry(telemetry: AgentTelemetry, args: unknown): string | undefined {
+	const serializer = telemetry.config.contentSerializer?.toolCallArguments;
+	if (serializer) return callContentSerializer(telemetry, "toolCallArguments", () => serializer(args));
+	return telemetry.contentCapture === "full" ? safeJson(args) : stringifyJsonAttribute(summarizeTelemetryValue(args));
+}
+
+function serializeToolCallResultForTelemetry(telemetry: AgentTelemetry, result: unknown): string | undefined {
+	const serializer = telemetry.config.contentSerializer?.toolCallResult;
+	if (serializer) return callContentSerializer(telemetry, "toolCallResult", () => serializer(result));
+	return telemetry.contentCapture === "full"
+		? safeJson(result)
+		: stringifyJsonAttribute(summarizeTelemetryValue(result));
 }
 
 /**
@@ -481,15 +846,15 @@ export function finishChatSpan(
 	if (!span) return;
 	applyChatResponseAttributes(span, message);
 	applyUsageAttributes(span, message.usage);
-	const cost = applyCostEstimate(telemetry, span, message, options.serviceTier);
-	if (telemetry?.captureMessageContent) {
-		span.setAttribute(GenAIAttr.OutputMessages, JSON.stringify([message]));
+	const cost = applyCostEstimate(telemetry, span, message, options.serviceTier, options.stepNumber);
+	if (telemetry && telemetry.contentCapture !== "none") {
+		applyContentCaptureForResponse(telemetry, span, message);
 	}
 	telemetry?.config.onSpanEnd?.({
 		span,
 		kind: "chat",
 		model: undefined,
-		agent: telemetry.agent,
+		agent: normalizedTelemetryAgent(telemetry),
 		conversationId: telemetry.conversationId,
 		stepNumber: options.stepNumber,
 	});
@@ -551,17 +916,113 @@ function applyUsageAttributes(span: Span, usage: Usage | undefined): void {
 	}
 }
 
+interface AppliedCostEstimate {
+	readonly costUsd: number | undefined;
+	readonly inputUsd: number | undefined;
+	readonly outputUsd: number | undefined;
+	readonly costUnavailableReason: string | undefined;
+}
+
 function applyCostEstimate(
 	telemetry: AgentTelemetry | undefined,
 	span: Span,
 	message: AssistantMessage,
 	serviceTier: ServiceTier | undefined,
-): { readonly costUsd: number | undefined; readonly costUnavailableReason: string | undefined } {
-	const estimator = telemetry?.config.costEstimator;
-	if (!estimator) return EMPTY_COST;
-	const usage = message.usage;
-	if (!usage) return EMPTY_COST;
-	const snapshot: ChatUsageSnapshot = {
+	stepNumber: number | undefined,
+): AppliedCostEstimate {
+	if (!telemetry) return EMPTY_COST;
+	return applyCostEstimateForUsage(telemetry, span, {
+		model: message.model,
+		provider: message.provider,
+		serviceTier,
+		stepNumber,
+		usage: message.usage,
+	});
+}
+
+function applyCostEstimateForUsage(
+	telemetry: AgentTelemetry,
+	span: Span,
+	input: {
+		readonly model: string;
+		readonly provider: string | undefined;
+		readonly serviceTier: ServiceTier | undefined;
+		readonly stepNumber: number | undefined;
+		readonly usage: Usage | undefined;
+	},
+): AppliedCostEstimate {
+	const estimator = telemetry.config.costEstimator;
+	if (!estimator || !input.usage) return EMPTY_COST;
+	const provider = normalizeProviderName(telemetry, input.provider);
+	if (!provider) return EMPTY_COST;
+	const usage = buildUsageSnapshot(input.usage);
+	let result: CostEstimate | undefined;
+	try {
+		result = estimator({
+			provider,
+			model: input.model,
+			serviceTier: input.serviceTier,
+			usage,
+		});
+	} catch (err) {
+		emitTelemetryWarning(telemetry, {
+			code: "cost_estimator_failed",
+			message: "costEstimator threw; omitting cost telemetry",
+			error: err,
+		});
+		return EMPTY_COST;
+	}
+	if (!result) return EMPTY_COST;
+	if ("unavailable" in result) {
+		span.setAttribute(GenAIAttr.CostUnavailableReason, result.unavailable);
+		const cost: AppliedCostEstimate = {
+			costUsd: undefined,
+			inputUsd: undefined,
+			outputUsd: undefined,
+			costUnavailableReason: result.unavailable,
+		};
+		emitCostDelta(telemetry, {
+			agent: normalizedTelemetryAgent(telemetry),
+			conversationId: telemetry.conversationId,
+			costUsd: undefined,
+			costUnavailableReason: result.unavailable,
+			inputUsd: undefined,
+			model: input.model,
+			outputUsd: undefined,
+			provider,
+			serviceTier: input.serviceTier,
+			stepNumber: input.stepNumber,
+			usage,
+		});
+		return cost;
+	}
+	span.setAttribute(GenAIAttr.CostEstimatedUsd, result.usd);
+	if (result.inputUsd != null) span.setAttribute(GenAIAttr.CostInputUsd, result.inputUsd);
+	if (result.outputUsd != null) span.setAttribute(GenAIAttr.CostOutputUsd, result.outputUsd);
+	const cost: AppliedCostEstimate = {
+		costUsd: result.usd,
+		inputUsd: result.inputUsd,
+		outputUsd: result.outputUsd,
+		costUnavailableReason: undefined,
+	};
+	emitCostDelta(telemetry, {
+		agent: normalizedTelemetryAgent(telemetry),
+		conversationId: telemetry.conversationId,
+		costUsd: result.usd,
+		costUnavailableReason: undefined,
+		inputUsd: result.inputUsd,
+		model: input.model,
+		outputUsd: result.outputUsd,
+		provider,
+		serviceTier: input.serviceTier,
+		stepNumber: input.stepNumber,
+		usage,
+	});
+	return cost;
+}
+
+function buildUsageSnapshot(usage: Usage): ChatUsageSnapshot {
+	return {
 		inputTokens: usage.input ?? 0,
 		outputTokens: usage.output ?? 0,
 		totalTokens: usage.totalTokens ?? 0,
@@ -569,24 +1030,28 @@ function applyCostEstimate(
 		cacheWriteTokens: usage.cacheWrite,
 		reasoningOutputTokens: usage.reasoningTokens,
 	};
-	const result = estimator({
-		provider: message.provider,
-		model: message.model,
-		serviceTier,
-		usage: snapshot,
-	});
-	if (!result) return EMPTY_COST;
-	if ("unavailable" in result) {
-		span.setAttribute(GenAIAttr.CostUnavailableReason, result.unavailable);
-		return { costUsd: undefined, costUnavailableReason: result.unavailable };
-	}
-	span.setAttribute(GenAIAttr.CostEstimatedUsd, result.usd);
-	if (result.inputUsd != null) span.setAttribute(GenAIAttr.CostInputUsd, result.inputUsd);
-	if (result.outputUsd != null) span.setAttribute(GenAIAttr.CostOutputUsd, result.outputUsd);
-	return { costUsd: result.usd, costUnavailableReason: undefined };
 }
 
-const EMPTY_COST = Object.freeze({ costUsd: undefined, costUnavailableReason: undefined });
+function emitCostDelta(telemetry: AgentTelemetry, delta: CostDelta): void {
+	const hook = telemetry.config.onCostDelta;
+	if (!hook) return;
+	try {
+		hook(delta);
+	} catch (err) {
+		emitTelemetryWarning(telemetry, {
+			code: "on_cost_delta_failed",
+			message: "onCostDelta threw; swallowing telemetry callback failure",
+			error: err,
+		});
+	}
+}
+
+const EMPTY_COST: AppliedCostEstimate = Object.freeze({
+	costUsd: undefined,
+	inputUsd: undefined,
+	outputUsd: undefined,
+	costUnavailableReason: undefined,
+});
 
 function mapStopReason(reason: StopReason | undefined): string | undefined {
 	switch (reason) {
@@ -609,6 +1074,76 @@ function applyTerminalStatus(span: Span, stopReason: StopReason | undefined, err
 		span.setAttribute(GenAIAttr.ErrorType, stopReason);
 		span.setStatus({ code: SpanStatusCode.ERROR, message: errorMessage ?? stopReason });
 	}
+}
+
+export interface ManualChatToolCallTelemetry {
+	readonly toolCallId: string;
+	readonly toolName: string;
+	readonly input?: unknown;
+}
+
+export interface ManualChatTelemetryOptions {
+	readonly span?: Span;
+	readonly parent?: Span;
+	readonly model: Model;
+	readonly usage?: Usage;
+	readonly finishReason?: StopReason;
+	readonly serviceTier?: ServiceTier;
+	readonly stepNumber?: number;
+	readonly responseId?: string;
+	readonly responseModel?: string;
+	readonly responseText?: string;
+	readonly responseToolCalls?: readonly ManualChatToolCallTelemetry[];
+	readonly attributes?: Attributes;
+	readonly endSpan?: boolean;
+}
+
+export function recordManualChatTelemetry(
+	telemetry: AgentTelemetry | undefined,
+	options: ManualChatTelemetryOptions,
+): Span | undefined {
+	const span =
+		options.span ??
+		startSpan(telemetry, "chat", `chat ${options.model.id}`, {
+			spanKind: SpanKind.CLIENT,
+			model: options.model,
+			parent: options.parent,
+			stepNumber: options.stepNumber,
+			attributes: options.attributes,
+		});
+	if (!span) return undefined;
+	if (options.span && options.attributes) span.setAttributes(options.attributes);
+	if (options.stepNumber != null) span.setAttribute(GenAIAttr.AgentStepNumber, options.stepNumber);
+	span.setAttribute(GenAIAttr.ResponseModel, options.responseModel ?? options.model.name);
+	if (options.responseId) span.setAttribute(GenAIAttr.ResponseId, options.responseId);
+	const finishReason = mapStopReason(options.finishReason);
+	if (finishReason) span.setAttribute(GenAIAttr.ResponseFinishReasons, [finishReason]);
+	applyUsageAttributes(span, options.usage);
+	if (telemetry) {
+		applyCostEstimateForUsage(telemetry, span, {
+			model: options.responseModel ?? options.model.id,
+			provider: options.model.provider,
+			serviceTier: options.serviceTier,
+			stepNumber: options.stepNumber,
+			usage: options.usage,
+		});
+	}
+	if (options.responseText) {
+		const responseText = stringifyJsonAttribute(summarizeTelemetryTexts([options.responseText]));
+		if (responseText) span.setAttribute(GenAIAttr.ResponseText, responseText);
+	}
+	if (options.responseToolCalls && options.responseToolCalls.length > 0) {
+		const calls = options.responseToolCalls.map(call => ({
+			toolCallId: call.toolCallId,
+			toolName: call.toolName,
+			input: summarizeTelemetryValue(call.input),
+		}));
+		const responseToolCalls = stringifyJsonAttribute(limitTelemetryToolCalls(calls));
+		if (responseToolCalls) span.setAttribute(GenAIAttr.ResponseToolCalls, responseToolCalls);
+	}
+	applyTerminalStatus(span, options.finishReason, undefined);
+	if (options.endSpan ?? options.span === undefined) span.end();
+	return span;
 }
 
 /**
@@ -641,8 +1176,9 @@ export function startExecuteToolSpan(
 	});
 	if (span) {
 		telemetry?.collector.beginTool(span, { toolCallId: options.toolCallId, toolName: options.toolName });
-		if (telemetry?.captureMessageContent) {
-			span.setAttribute(GenAIAttr.ToolCallArguments, safeJson(options.args));
+		if (telemetry && telemetry.contentCapture !== "none") {
+			const args = serializeToolCallArgumentsForTelemetry(telemetry, options.args);
+			if (args) span.setAttribute(GenAIAttr.ToolCallArguments, args);
 		}
 	}
 	return span;
@@ -669,14 +1205,15 @@ export function finishExecuteToolSpan(
 	},
 ): void {
 	if (!span) return;
-	if (telemetry?.captureMessageContent && options.result !== undefined) {
-		span.setAttribute(GenAIAttr.ToolCallResult, safeJson(options.result));
+	if (telemetry && telemetry.contentCapture !== "none" && options.result !== undefined) {
+		const result = serializeToolCallResultForTelemetry(telemetry, options.result);
+		if (result) span.setAttribute(GenAIAttr.ToolCallResult, result);
 	}
 	telemetry?.config.onSpanEnd?.({
 		span,
 		kind: "execute_tool",
 		model: undefined,
-		agent: telemetry.agent,
+		agent: normalizedTelemetryAgent(telemetry),
 		conversationId: telemetry.conversationId,
 		toolCallId: options.toolCallId,
 		toolName: options.toolName,
@@ -765,7 +1302,7 @@ export function finishInvokeAgentSpan(
 		span,
 		kind: "invoke_agent",
 		model: undefined,
-		agent: telemetry.agent,
+		agent: normalizedTelemetryAgent(telemetry),
 		conversationId: telemetry.conversationId,
 	});
 	if (telemetry && snapshot && telemetry.collector.markRunEnded()) {
@@ -793,7 +1330,11 @@ export function fireOnRunEnd(telemetry: AgentTelemetry, summary: AgentRunSummary
 	try {
 		hook(summary, coverage);
 	} catch (err) {
-		console.warn("[pi-agent] onRunEnd threw; swallowing:", err);
+		emitTelemetryWarning(telemetry, {
+			code: "on_run_end_failed",
+			message: "onRunEnd threw; swallowing telemetry callback failure",
+			error: err,
+		});
 	}
 }
 
@@ -889,14 +1430,16 @@ export function recordHandoff(
 ): void {
 	if (!telemetry) return;
 	const attrs: Attributes = {};
-	if (options.fromAgent?.name) attrs["gen_ai.handoff.from_agent.name"] = options.fromAgent.name;
-	if (options.fromAgent?.id) attrs["gen_ai.handoff.from_agent.id"] = options.fromAgent.id;
-	if (options.toAgent.name) attrs["gen_ai.handoff.to_agent.name"] = options.toAgent.name;
-	if (options.toAgent.id) attrs["gen_ai.handoff.to_agent.id"] = options.toAgent.id;
-	const name = options.toAgent.name
-		? options.fromAgent?.name
-			? `handoff ${options.fromAgent.name} → ${options.toAgent.name}`
-			: `handoff to ${options.toAgent.name}`
+	const fromAgent = options.fromAgent ? normalizeAgentIdentity(telemetry, options.fromAgent) : undefined;
+	const toAgent = normalizeAgentIdentity(telemetry, options.toAgent);
+	if (fromAgent?.name) attrs["gen_ai.handoff.from_agent.name"] = fromAgent.name;
+	if (fromAgent?.id) attrs["gen_ai.handoff.from_agent.id"] = fromAgent.id;
+	if (toAgent.name) attrs["gen_ai.handoff.to_agent.name"] = toAgent.name;
+	if (toAgent.id) attrs["gen_ai.handoff.to_agent.id"] = toAgent.id;
+	const name = toAgent.name
+		? fromAgent?.name
+			? `handoff ${fromAgent.name} → ${toAgent.name}`
+			: `handoff to ${toAgent.name}`
 		: "handoff";
 	const span = startSpan(telemetry, "handoff", name, {
 		spanKind: SpanKind.INTERNAL,
@@ -908,7 +1451,7 @@ export function recordHandoff(
 		span,
 		kind: "handoff",
 		model: undefined,
-		agent: options.toAgent,
+		agent: toAgent,
 		conversationId: telemetry.conversationId,
 	});
 	span.end();

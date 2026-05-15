@@ -12,6 +12,7 @@ import {
 	GenAIAttr,
 	GenAIOperation,
 	recordHandoff,
+	recordManualChatTelemetry,
 	resolveTelemetry,
 	type TelemetryHookContext,
 } from "@oh-my-pi/pi-agent-core/telemetry";
@@ -167,7 +168,7 @@ describe("agent-loop OTEL instrumentation", () => {
 		expect(chat?.attributes[GenAIAttr.OutputType]).toBe("text");
 
 		// chat response/usage
-		expect(chat?.attributes[GenAIAttr.ResponseModel]).toBe("mock");
+		expect(chat?.attributes[GenAIAttr.ResponseModel]).toBe("mock-model");
 		expect(chat?.attributes[GenAIAttr.ResponseFinishReasons]).toEqual(["stop"]);
 		expect(chat?.attributes[GenAIAttr.UsageInputTokens]).toBe(12);
 		expect(chat?.attributes[GenAIAttr.UsageOutputTokens]).toBe(34);
@@ -385,6 +386,35 @@ describe("agent-loop OTEL instrumentation", () => {
 		expect(JSON.parse(systemAttr!)).toEqual(["sys-instruction"]);
 	});
 
+	it("captures bounded dashboard summary content when requested", async () => {
+		const finalMsg = createAssistantMessage([{ type: "text", text: "hi back" }]);
+		finalMsg.stopReason = "stop";
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			telemetry: { captureMessageContent: "summary" },
+		};
+		const streamFn = () => {
+			const s = new MockAssistantStream();
+			queueMicrotask(() => s.push({ type: "done", reason: "stop", message: finalMsg }));
+			return s;
+		};
+		const ctx: AgentContext = { systemPrompt: ["sys-instruction"], messages: [], tools: [] };
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+
+		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
+		const request = JSON.parse(chat?.attributes[GenAIAttr.RequestMessages] as string) as Array<{
+			content: unknown;
+			role: string;
+		}>;
+		const responseText = JSON.parse(chat?.attributes[GenAIAttr.ResponseText] as string);
+		expect(request.map(message => message.role)).toEqual(["system", "user"]);
+		expect(responseText).toEqual(["hi back"]);
+		expect(chat?.attributes[GenAIAttr.InputMessages]).toBeUndefined();
+		expect(chat?.attributes[GenAIAttr.OutputMessages]).toBeUndefined();
+	});
+
 	it("invokes costEstimator and stamps gen_ai.cost.estimated_usd", async () => {
 		const finalMsg = createAssistantMessage([{ type: "text", text: "ok" }]);
 		finalMsg.usage = {
@@ -420,6 +450,57 @@ describe("agent-loop OTEL instrumentation", () => {
 		expect(chat?.attributes[GenAIAttr.CostEstimatedUsd]).toBeCloseTo(0.0105, 6);
 		expect(chat?.attributes[GenAIAttr.CostInputUsd]).toBeCloseTo(0.003, 6);
 		expect(chat?.attributes[GenAIAttr.CostOutputUsd]).toBeCloseTo(0.0075, 6);
+	});
+
+	it("applies dynamic attributes, normalization hooks, and cost deltas", async () => {
+		const finalMsg = createAssistantMessage([{ type: "text", text: "ok" }]);
+		finalMsg.usage = {
+			input: 200,
+			output: 100,
+			cacheRead: 5,
+			cacheWrite: 0,
+			totalTokens: 305,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		finalMsg.stopReason = "stop";
+		const deltas: Array<{
+			costUsd: number | undefined;
+			model: string;
+			provider: string;
+			stepNumber: number | undefined;
+		}> = [];
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			telemetry: {
+				agent: { name: "prefix.worker" },
+				normalizeAgentName: name => name?.replace(/^prefix\./, ""),
+				normalizeProvider: provider =>
+					provider === "mock-provider" || provider === "mock" ? "normalized-provider" : provider,
+				resolveAttributes: ctx => ({ "tenant.id": "tenant-1", "telemetry.kind": ctx.kind }),
+				costEstimator: () => ({ usd: 0.25 }),
+				onCostDelta: delta => deltas.push(delta),
+			},
+		};
+		const streamFn = () => {
+			const s = new MockAssistantStream();
+			queueMicrotask(() => s.push({ type: "done", reason: "stop", message: finalMsg }));
+			return s;
+		};
+		const ctx: AgentContext = { systemPrompt: [], messages: [], tools: [] };
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, streamFn));
+
+		const invoke = findSpan(exporter.getFinishedSpans(), "invoke_agent worker");
+		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
+		expect(invoke?.attributes[GenAIAttr.AgentName]).toBe("worker");
+		expect(chat?.attributes[GenAIAttr.System]).toBe("normalized-provider");
+		expect(chat?.attributes["tenant.id"]).toBe("tenant-1");
+		expect(deltas).toHaveLength(1);
+		expect(deltas[0]?.costUsd).toBe(0.25);
+		expect(deltas[0]?.model).toBe("mock-model");
+		expect(deltas[0]?.provider).toBe("normalized-provider");
+		expect(deltas[0]?.stepNumber).toBe(0);
 	});
 
 	it("emits gen_ai.cost.unavailable_reason when the estimator declines", async () => {
@@ -510,6 +591,38 @@ describe("agent-loop OTEL instrumentation", () => {
 		expect(span?.attributes["gen_ai.handoff.from_agent.name"]).toBe("main");
 		expect(span?.attributes["gen_ai.handoff.to_agent.name"]).toBe("specialist");
 		expect(span?.attributes[GenAIAttr.ConversationId]).toBe("conv-1");
+	});
+
+	it("records manual chat telemetry for non-loop model calls", () => {
+		const telemetry = resolveTelemetry(
+			{
+				costEstimator: () => ({ usd: 0.02 }),
+			},
+			"manual-conv",
+		);
+		expect(telemetry).toBeDefined();
+
+		recordManualChatTelemetry(telemetry, {
+			model: createModel(),
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 2,
+				cacheWrite: 0,
+				totalTokens: 17,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			finishReason: "stop",
+			responseText: "manual ok",
+			stepNumber: 7,
+		});
+
+		const span = findSpan(exporter.getFinishedSpans(), "chat mock-model");
+		expect(span?.attributes[GenAIAttr.ConversationId]).toBe("manual-conv");
+		expect(span?.attributes[GenAIAttr.AgentStepNumber]).toBe(7);
+		expect(span?.attributes[GenAIAttr.UsageTotalTokens]).toBe(17);
+		expect(span?.attributes[GenAIAttr.CostEstimatedUsd]).toBe(0.02);
+		expect(JSON.parse(span?.attributes[GenAIAttr.ResponseText] as string)).toEqual(["manual ok"]);
 	});
 
 	it("reads OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT once at first resolveTelemetry call", () => {

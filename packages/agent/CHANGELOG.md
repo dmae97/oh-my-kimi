@@ -7,6 +7,7 @@
 - Added `agentLoopDetailed(...)` and `agentLoopContinueDetailed(...)` helpers that return the same event stream plus a `detailed()` result with run `telemetry` and `coverage`
 - Added `onRunEnd` to `AgentTelemetryConfig` to receive `AgentRunSummary` and `AgentRunCoverage` at the end of each invocation
 - Added run-level telemetry and coverage types/helpers (for example `AgentRunSummary`, `AgentRunCoverage`, `aggregateAgentRunSummaries`, and `aggregateAgentRunCoverage`) to package exports
+- Added generic telemetry extension hooks for dynamic span attributes, provider/agent-name normalization, per-step cost deltas, warning callbacks, bounded summary content capture, and manual chat telemetry for non-loop model calls.
 - Added opt-in OpenTelemetry instrumentation on the agent loop. Pass `telemetry: {}` (or a richer `AgentTelemetryConfig`) on `AgentLoopConfig` / `AgentOptions` / `createAgentSession({ telemetry })` to emit GenAI-semantic-convention spans:
 - `invoke_agent {agent.name}` wraps each `agentLoop` invocation with `gen_ai.operation.name=invoke_agent`, agent identity, conversation id, and `gen_ai.agent.step.count`.
 - `chat {model}` per provider call, parented under `invoke_agent`, with full request/response envelope (`gen_ai.request.{model,temperature,top_p,top_k,max_tokens,presence_penalty,stop_sequences,service_tier,tool.choice,available_tools}`, `gen_ai.response.{model,id,finish_reasons,service_tier}`, `gen_ai.usage.{input_tokens,output_tokens,input_tokens.cached,input_tokens.cache_write,output_tokens.reasoning,total_tokens}`).
